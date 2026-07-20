@@ -15,7 +15,6 @@ from src.engine.daily_threshold_cycle_report import THRESHOLD_CYCLE_DIR
 from src.utils.constants import DATA_DIR
 from src.utils.threshold_cycle_registry import threshold_family_for_stage
 
-
 DEFAULT_MAX_INPUT_LINES_PER_CHUNK = 20_000
 DEFAULT_MAX_COMPRESSED_INPUT_LINES_PER_CHUNK = 5_000
 DEFAULT_MAX_OUTPUT_LINES_PER_PARTITION = 25_000
@@ -23,6 +22,7 @@ DEFAULT_MAX_CHUNK_READ_MB = 128.0
 DEFAULT_MAX_IOWAIT_PCT = 20.0
 DEFAULT_MAX_CPU_BUSY_PCT = 95.0
 DEFAULT_MIN_MEM_AVAILABLE_MB = 512.0
+
 
 def raw_pipeline_path(target_date: str) -> Path:
     return DATA_DIR / "pipeline_events" / f"pipeline_events_{target_date}.jsonl"
@@ -95,16 +95,22 @@ def _same_logical_source(checkpoint_path: object, source_path: object) -> bool:
     return left + ".gz" == right or right + ".gz" == left
 
 
-def _checkpoint_compatible(checkpoint: dict[str, Any], source_fp: dict[str, Any]) -> bool:
+def _checkpoint_compatible(
+    checkpoint: dict[str, Any], source_fp: dict[str, Any]
+) -> bool:
     if not checkpoint:
         return True
-    if not _same_logical_source(checkpoint.get("source_path"), source_fp["source_path"]):
+    if not _same_logical_source(
+        checkpoint.get("source_path"), source_fp["source_path"]
+    ):
         return False
     if checkpoint.get("completed"):
         return True
     if int(checkpoint.get("source_size", 0) or 0) != int(source_fp["source_size"]):
         return False
-    return float(checkpoint.get("source_mtime", 0.0) or 0.0) == float(source_fp["source_mtime"])
+    return float(checkpoint.get("source_mtime", 0.0) or 0.0) == float(
+        source_fp["source_mtime"]
+    )
 
 
 def _open_text_jsonl(path: Path):
@@ -121,7 +127,9 @@ def _sample_metrics() -> dict[str, Any]:
     return sample if isinstance(sample, dict) else {"sample_error": "invalid-sample"}
 
 
-def _metric_value(sample: dict[str, Any], section: str, key: str, default: float = 0.0) -> float:
+def _metric_value(
+    sample: dict[str, Any], section: str, key: str, default: float = 0.0
+) -> float:
     value = (sample.get(section) or {}).get(key)
     try:
         return float(value)
@@ -165,9 +173,13 @@ def _recommend_next_input_line_cap(
         return max(1_000, int(current_cap * 0.5))
     iowait_pct = _metric_value(after_sample, "cpu", "iowait_pct")
     read_mb = _metric_value(after_sample, "io", "disk_read_mb_delta")
-    mem_available = _metric_value(after_sample, "memory", "mem_available_mb", default=999999.0)
+    mem_available = _metric_value(
+        after_sample, "memory", "mem_available_mb", default=999999.0
+    )
     if iowait_pct <= 5.0 and read_mb <= 64.0 and mem_available >= 1024.0:
-        return min(DEFAULT_MAX_INPUT_LINES_PER_CHUNK, max(current_cap, int(current_cap * 1.25)))
+        return min(
+            DEFAULT_MAX_INPUT_LINES_PER_CHUNK, max(current_cap, int(current_cap * 1.25))
+        )
     return current_cap
 
 
@@ -176,7 +188,11 @@ def _partition_path(target_date: str, family: str, part_number: int) -> Path:
 
 
 def _initial_partition_state(checkpoint: dict[str, Any]) -> dict[str, dict[str, int]]:
-    state = checkpoint.get("partitions") if isinstance(checkpoint.get("partitions"), dict) else {}
+    state = (
+        checkpoint.get("partitions")
+        if isinstance(checkpoint.get("partitions"), dict)
+        else {}
+    )
     result: dict[str, dict[str, int]] = {}
     for family, payload in state.items():
         if not isinstance(payload, dict):
@@ -196,7 +212,10 @@ def _write_compact_payload(
     max_output_lines_per_partition: int,
 ) -> tuple[bool, str | None]:
     stage = str(payload.get("stage") or "")
-    family = threshold_family_for_stage(stage, payload.get("fields") if isinstance(payload.get("fields"), dict) else None)
+    family = threshold_family_for_stage(
+        stage,
+        payload.get("fields") if isinstance(payload.get("fields"), dict) else None,
+    )
     if not family:
         return False, "not_threshold_cycle_stage"
     state = partition_state.setdefault(family, {"part": 1, "line_count": 0})
@@ -251,12 +270,21 @@ def backfill_threshold_cycle_events(
     max_chunk_read_mb: float = DEFAULT_MAX_CHUNK_READ_MB,
     min_mem_available_mb: float = DEFAULT_MIN_MEM_AVAILABLE_MB,
 ) -> dict[str, Any]:
-    source = Path(source_path).expanduser().resolve() if source_path else _resolve_default_source(target_date)
+    source = (
+        Path(source_path).expanduser().resolve()
+        if source_path
+        else _resolve_default_source(target_date)
+    )
     checkpoint_file = checkpoint_path(target_date)
     if overwrite:
         _reset_outputs(target_date)
     if not source.exists():
-        return {"target_date": target_date, "source_exists": False, "written": 0, "checkpoint": str(checkpoint_file)}
+        return {
+            "target_date": target_date,
+            "source_exists": False,
+            "written": 0,
+            "checkpoint": str(checkpoint_file),
+        }
 
     source_fp = _source_fingerprint(source)
     source_compressed = bool(source_fp.get("source_compressed"))
@@ -283,9 +311,13 @@ def backfill_threshold_cycle_events(
     raw_line_count = int(checkpoint.get("raw_line_count", 0) or 0)
     written_total = int(checkpoint.get("written_count", 0) or 0)
     partition_state = _initial_partition_state(checkpoint)
-    if checkpoint and (checkpoint.get("completed") or (not source_compressed and byte_offset >= int(source_fp["source_size"]))):
+    if checkpoint and (
+        checkpoint.get("completed")
+        or (not source_compressed and byte_offset >= int(source_fp["source_size"]))
+    ):
         recommended_next_input_lines_per_chunk = int(
-            checkpoint.get("recommended_next_input_lines_per_chunk") or max_input_lines_per_chunk
+            checkpoint.get("recommended_next_input_lines_per_chunk")
+            or max_input_lines_per_chunk
         )
         checkpoint_payload = {
             **source_fp,
@@ -355,7 +387,11 @@ def backfill_threshold_cycle_events(
                 continue
             if not threshold_family_for_stage(
                 str(payload.get("stage") or ""),
-                payload.get("fields") if isinstance(payload.get("fields"), dict) else None,
+                (
+                    payload.get("fields")
+                    if isinstance(payload.get("fields"), dict)
+                    else None
+                ),
             ):
                 continue
             wrote, reason = _write_compact_payload(
@@ -388,8 +424,14 @@ def backfill_threshold_cycle_events(
         after_sample,
     )
 
-    completed = pause_reason is None and (reached_eof if source_compressed else byte_offset >= source_fp["source_size"])
-    status = "completed" if completed else "paused_by_availability_guard" if pause_reason else "paused_by_chunk_limit"
+    completed = pause_reason is None and (
+        reached_eof if source_compressed else byte_offset >= source_fp["source_size"]
+    )
+    status = (
+        "completed"
+        if completed
+        else "paused_by_availability_guard" if pause_reason else "paused_by_chunk_limit"
+    )
     checkpoint_payload = {
         **source_fp,
         "target_date": target_date,
@@ -435,25 +477,60 @@ def backfill_threshold_cycle_range(
     end_date: str,
     **kwargs: Any,
 ) -> list[dict[str, Any]]:
-    return [backfill_threshold_cycle_events(target_date, **kwargs) for target_date in _date_range(start_date, end_date)]
+    return [
+        backfill_threshold_cycle_events(target_date, **kwargs)
+        for target_date in _date_range(start_date, end_date)
+    ]
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Backfill compact threshold-cycle events from raw pipeline events.")
+    parser = argparse.ArgumentParser(
+        description="Backfill compact threshold-cycle events from raw pipeline events."
+    )
     single_or_range = parser.add_mutually_exclusive_group(required=True)
     single_or_range.add_argument("--date", help="Target date (YYYY-MM-DD)")
-    single_or_range.add_argument("--from-date", dest="from_date", help="Start date for range bootstrap (YYYY-MM-DD)")
-    parser.add_argument("--to-date", dest="to_date", help="End date for range bootstrap (YYYY-MM-DD)")
-    parser.add_argument("--mode", choices=["bootstrap", "incremental"], default="bootstrap")
-    parser.add_argument("--source-path", dest="source_path", help="Immutable pipeline_events jsonl snapshot to read instead of the live date file")
+    single_or_range.add_argument(
+        "--from-date",
+        dest="from_date",
+        help="Start date for range bootstrap (YYYY-MM-DD)",
+    )
+    parser.add_argument(
+        "--to-date", dest="to_date", help="End date for range bootstrap (YYYY-MM-DD)"
+    )
+    parser.add_argument(
+        "--mode", choices=["bootstrap", "incremental"], default="bootstrap"
+    )
+    parser.add_argument(
+        "--source-path",
+        dest="source_path",
+        help="Immutable pipeline_events jsonl snapshot to read instead of the live date file",
+    )
     parser.add_argument("--resume", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--overwrite", action="store_true", help="Replace existing compact output/checkpoint")
-    parser.add_argument("--max-input-lines-per-chunk", type=int, default=DEFAULT_MAX_INPUT_LINES_PER_CHUNK)
-    parser.add_argument("--max-output-lines-per-partition", type=int, default=DEFAULT_MAX_OUTPUT_LINES_PER_PARTITION)
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Replace existing compact output/checkpoint",
+    )
+    parser.add_argument(
+        "--max-input-lines-per-chunk",
+        type=int,
+        default=DEFAULT_MAX_INPUT_LINES_PER_CHUNK,
+    )
+    parser.add_argument(
+        "--max-output-lines-per-partition",
+        type=int,
+        default=DEFAULT_MAX_OUTPUT_LINES_PER_PARTITION,
+    )
     parser.add_argument("--max-iowait-pct", type=float, default=DEFAULT_MAX_IOWAIT_PCT)
-    parser.add_argument("--max-cpu-busy-pct", type=float, default=DEFAULT_MAX_CPU_BUSY_PCT)
-    parser.add_argument("--max-chunk-read-mb", type=float, default=DEFAULT_MAX_CHUNK_READ_MB)
-    parser.add_argument("--min-mem-available-mb", type=float, default=DEFAULT_MIN_MEM_AVAILABLE_MB)
+    parser.add_argument(
+        "--max-cpu-busy-pct", type=float, default=DEFAULT_MAX_CPU_BUSY_PCT
+    )
+    parser.add_argument(
+        "--max-chunk-read-mb", type=float, default=DEFAULT_MAX_CHUNK_READ_MB
+    )
+    parser.add_argument(
+        "--min-mem-available-mb", type=float, default=DEFAULT_MIN_MEM_AVAILABLE_MB
+    )
     args = parser.parse_args(argv)
 
     options = {
@@ -469,11 +546,15 @@ def main(argv: list[str] | None = None) -> int:
         "min_mem_available_mb": args.min_mem_available_mb,
     }
     if args.date:
-        summary: dict[str, Any] | list[dict[str, Any]] = backfill_threshold_cycle_events(args.date, **options)
+        summary: dict[str, Any] | list[dict[str, Any]] = (
+            backfill_threshold_cycle_events(args.date, **options)
+        )
     else:
         if not args.to_date:
             parser.error("--to-date is required with --from-date")
-        summary = backfill_threshold_cycle_range(args.from_date, args.to_date, **options)
+        summary = backfill_threshold_cycle_range(
+            args.from_date, args.to_date, **options
+        )
     print(json.dumps(summary, ensure_ascii=False))
     return 0
 

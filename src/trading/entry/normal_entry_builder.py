@@ -12,9 +12,23 @@ class NormalEntryBuilder:
     def __init__(self, config: EntryConfig) -> None:
         self.config = config
 
-    def build(self, *, snapshot: SignalSnapshot, latest_price: int, defensive_ticks: int | None = None) -> PlannedOrder:
-        tif = TimeInForce.IOC.value if self.config.enable_ioc_for_normal else TimeInForce.DAY.value
-        ticks = self.config.normal_defensive_ticks if defensive_ticks is None else int(defensive_ticks)
+    def build(
+        self,
+        *,
+        snapshot: SignalSnapshot,
+        latest_price: int,
+        defensive_ticks: int | None = None,
+    ) -> PlannedOrder:
+        tif = (
+            TimeInForce.IOC.value
+            if self.config.enable_ioc_for_normal
+            else TimeInForce.DAY.value
+        )
+        ticks = (
+            self.config.normal_defensive_ticks
+            if defensive_ticks is None
+            else int(defensive_ticks)
+        )
         defensive_price = move_price_by_ticks(latest_price, -ticks)
         return PlannedOrder(
             symbol=snapshot.symbol,

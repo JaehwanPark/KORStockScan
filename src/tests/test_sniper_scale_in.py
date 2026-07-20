@@ -28527,10 +28527,7 @@ def test_add_execution_marks_above_average_fill_as_recovery_add(monkeypatch):
 
     assert target_stock["avg_down_count"] == 1
     assert target_stock["buy_price"] > 60_867
-    assert (
-        target_stock["last_add_economic_direction"]
-        == "recovery_add_above_average"
-    )
+    assert target_stock["last_add_economic_direction"] == "recovery_add_above_average"
     assert target_stock["last_add_avg_price_improved"] is False
     event = next(
         fields for stage, fields in pipeline_events if stage == "scale_in_executed"

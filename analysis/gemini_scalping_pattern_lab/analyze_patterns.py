@@ -80,7 +80,9 @@ def _normalize_sequence_flags(seq_df: pd.DataFrame) -> pd.DataFrame:
         if col in seq_df.columns:
             seq_df[col] = seq_df[col].astype(str).str.lower().isin(["true", "1"])
     if "rebase_count" in seq_df.columns:
-        seq_df["rebase_count"] = pd.to_numeric(seq_df["rebase_count"], errors="coerce").fillna(0)
+        seq_df["rebase_count"] = pd.to_numeric(
+            seq_df["rebase_count"], errors="coerce"
+        ).fillna(0)
     return seq_df
 
 
@@ -99,7 +101,9 @@ def cohort_summary(trade_df: pd.DataFrame) -> list[dict]:
             {
                 "cohort": str(cohort),
                 "n": int(count),
-                "diagnostic_win_rate_pct": round((win / count) * 100, 1) if count else 0.0,
+                "diagnostic_win_rate_pct": (
+                    round((win / count) * 100, 1) if count else 0.0
+                ),
                 "median_profit": round(_safe_median(group["profit_rate"]), 3),
                 "equal_weight_avg_profit_pct": mean_profit,
                 "simple_sum_profit_pct": simple_sum,
@@ -131,12 +135,16 @@ def extract_loss_patterns(trade_df: pd.DataFrame, seq_df: pd.DataFrame) -> list[
             "same_ts_multi_rebase_flag",
             "rebase_count",
         ]
-        seq_view = seq_df[[col for col in join_cols if col in seq_df.columns]].drop_duplicates("trade_id")
+        seq_view = seq_df[
+            [col for col in join_cols if col in seq_df.columns]
+        ].drop_duplicates("trade_id")
         seq_view["trade_id"] = seq_view["trade_id"].astype("string").str.strip()
         loss_df = loss_df.merge(seq_view, on="trade_id", how="left")
 
     rows: list[dict] = []
-    for (cohort, exit_rule), group in loss_df.groupby(["cohort", "exit_rule"], dropna=False):
+    for (cohort, exit_rule), group in loss_df.groupby(
+        ["cohort", "exit_rule"], dropna=False
+    ):
         if not exit_rule:
             continue
         preconditions = {}
@@ -162,7 +170,9 @@ def extract_loss_patterns(trade_df: pd.DataFrame, seq_df: pd.DataFrame) -> list[
                 "n": int(len(group)),
                 "median_profit": round(_safe_median(group["profit_rate"]), 3),
                 "mean_profit": round(_safe_mean(group["profit_rate"]), 3),
-                "equal_weight_avg_profit_pct": round(_safe_mean(group["profit_rate"]), 3),
+                "equal_weight_avg_profit_pct": round(
+                    _safe_mean(group["profit_rate"]), 3
+                ),
                 "simple_sum_profit_pct": round(float(group["profit_rate"].sum()), 3),
                 "contrib_profit": round(float(group["profit_rate"].sum()), 3),
                 "median_held_sec": round(_safe_median(group["held_sec"]), 1),
@@ -197,7 +207,9 @@ def extract_profit_patterns(trade_df: pd.DataFrame) -> list[dict]:
                 "n": int(len(group)),
                 "median_profit": round(_safe_median(group["profit_rate"]), 3),
                 "mean_profit": round(_safe_mean(group["profit_rate"]), 3),
-                "equal_weight_avg_profit_pct": round(_safe_mean(group["profit_rate"]), 3),
+                "equal_weight_avg_profit_pct": round(
+                    _safe_mean(group["profit_rate"]), 3
+                ),
                 "simple_sum_profit_pct": round(float(group["profit_rate"].sum()), 3),
                 "contrib_profit": round(float(group["profit_rate"].sum()), 3),
                 "median_held_sec": round(_safe_median(group["held_sec"]), 1),
@@ -220,9 +232,15 @@ def decompose_opportunity_cost(funnel_df: pd.DataFrame) -> list[dict]:
     ]:
         if column not in funnel_df.columns:
             continue
-        total_blocked = int(pd.to_numeric(funnel_df[column], errors="coerce").fillna(0).sum())
+        total_blocked = int(
+            pd.to_numeric(funnel_df[column], errors="coerce").fillna(0).sum()
+        )
         if "submitted_events" in funnel_df.columns:
-            submitted = int(pd.to_numeric(funnel_df["submitted_events"], errors="coerce").fillna(0).sum())
+            submitted = int(
+                pd.to_numeric(funnel_df["submitted_events"], errors="coerce")
+                .fillna(0)
+                .sum()
+            )
         else:
             submitted = 0
         total = total_blocked + submitted
@@ -230,8 +248,14 @@ def decompose_opportunity_cost(funnel_df: pd.DataFrame) -> list[dict]:
             {
                 "blocker": blocker,
                 "total_blocked": total_blocked,
-                "block_ratio": round((total_blocked / total) * 100, 1) if total else 0.0,
-                "days": int(funnel_df["date"].nunique()) if "date" in funnel_df.columns else 0,
+                "block_ratio": (
+                    round((total_blocked / total) * 100, 1) if total else 0.0
+                ),
+                "days": (
+                    int(funnel_df["date"].nunique())
+                    if "date" in funnel_df.columns
+                    else 0
+                ),
             }
         )
     rows.sort(key=lambda row: row["total_blocked"], reverse=True)
@@ -268,7 +292,11 @@ def build_ev_backlog(
             }
         )
     for item in opportunity_cost[:2]:
-        stage = "canary_only_candidate_after_workorder" if item["blocker"] == "AI threshold miss" else "report_only_observation"
+        stage = (
+            "canary_only_candidate_after_workorder"
+            if item["blocker"] == "AI threshold miss"
+            else "report_only_observation"
+        )
         backlog.append(
             {
                 "title": f"{item['blocker']} EV 회수 조건 점검",

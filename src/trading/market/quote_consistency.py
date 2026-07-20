@@ -7,7 +7,6 @@ import time
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-
 RUNTIME_FAMILY = "quote_consistency_normalization"
 
 
@@ -51,17 +50,23 @@ def _best_levels(data: Mapping[str, Any] | None) -> tuple[int, int]:
     data = data or {}
     best_bid = _to_int(data.get("best_bid"))
     best_ask = _to_int(data.get("best_ask"))
-    orderbook = data.get("orderbook") if isinstance(data.get("orderbook"), Mapping) else {}
+    orderbook = (
+        data.get("orderbook") if isinstance(data.get("orderbook"), Mapping) else {}
+    )
     if best_bid <= 0:
         bids = orderbook.get("bids") if isinstance(orderbook, Mapping) else None
         if isinstance(bids, list) and bids:
             first = bids[0]
-            best_bid = _to_int(first.get("price") if isinstance(first, Mapping) else first)
+            best_bid = _to_int(
+                first.get("price") if isinstance(first, Mapping) else first
+            )
     if best_ask <= 0:
         asks = orderbook.get("asks") if isinstance(orderbook, Mapping) else None
         if isinstance(asks, list) and asks:
             first = asks[0]
-            best_ask = _to_int(first.get("price") if isinstance(first, Mapping) else first)
+            best_ask = _to_int(
+                first.get("price") if isinstance(first, Mapping) else first
+            )
     return best_bid, best_ask
 
 
@@ -94,7 +99,9 @@ class QuoteConsistencyConfig:
     def from_env(cls) -> "QuoteConsistencyConfig":
         return cls(
             max_ws_age_ms=_env_int("KORSTOCKSCAN_QUOTE_CONSISTENCY_MAX_WS_AGE_MS", 700),
-            max_rest_age_ms=_env_int("KORSTOCKSCAN_QUOTE_CONSISTENCY_MAX_REST_AGE_MS", 1500),
+            max_rest_age_ms=_env_int(
+                "KORSTOCKSCAN_QUOTE_CONSISTENCY_MAX_REST_AGE_MS", 1500
+            ),
             ok_gap_bps=_env_int("KORSTOCKSCAN_QUOTE_CONSISTENCY_OK_GAP_BPS", 30),
             warn_gap_bps=_env_int("KORSTOCKSCAN_QUOTE_CONSISTENCY_WARN_GAP_BPS", 80),
             emergency_rest_timeout_ms=_env_int(
@@ -160,25 +167,35 @@ class QuoteConsistencySnapshot:
             f"{prefix}passive_buy_price": self.passive_buy_price,
             f"{prefix}passive_sell_price": self.passive_sell_price,
             f"{prefix}ws_rest_gap_bps": (
-                None if self.ws_rest_gap_bps is None else round(float(self.ws_rest_gap_bps), 4)
+                None
+                if self.ws_rest_gap_bps is None
+                else round(float(self.ws_rest_gap_bps), 4)
             ),
             f"{prefix}price_source": self.source,
-            f"{prefix}normalization_runtime_effect": bool(self.normalization_runtime_effect),
+            f"{prefix}normalization_runtime_effect": bool(
+                self.normalization_runtime_effect
+            ),
             f"{prefix}quote_consistency_reason": self.reason,
             f"{prefix}quote_consistency_runtime_action": self.runtime_action,
-            f"{prefix}quote_consistency_age_ms": None if self.age_ms is None else round(float(self.age_ms), 3),
+            f"{prefix}quote_consistency_age_ms": (
+                None if self.age_ms is None else round(float(self.age_ms), 3)
+            ),
             f"{prefix}quote_consistency_ws_age_ms": (
                 None if self.ws_age_ms is None else round(float(self.ws_age_ms), 3)
             ),
             f"{prefix}quote_consistency_rest_age_ms": (
                 None if self.rest_age_ms is None else round(float(self.rest_age_ms), 3)
             ),
-            f"{prefix}quote_consistency_safety_exit_allowed": bool(self.safety_exit_allowed),
+            f"{prefix}quote_consistency_safety_exit_allowed": bool(
+                self.safety_exit_allowed
+            ),
             f"{prefix}quote_consistency_entry_blocked": bool(self.entry_blocked),
         }
 
 
-def quote_input_from_ws(data: Mapping[str, Any] | None, *, now_ts: float | None = None) -> QuoteInput:
+def quote_input_from_ws(
+    data: Mapping[str, Any] | None, *, now_ts: float | None = None
+) -> QuoteInput:
     now_ts = float(now_ts or time.time())
     data = data or {}
     best_bid, best_ask = _best_levels(data)
@@ -217,22 +234,32 @@ def quote_input_from_rest_orderbook(
     now_ts = float(now_ts or time.time())
     data = data or {}
     best_bid, best_ask = _best_levels(data)
-    rest_current = _to_int(data.get("rest_current_price")) or _to_int(data.get("current_price"))
+    rest_current = _to_int(data.get("rest_current_price")) or _to_int(
+        data.get("current_price")
+    )
     midpoint = _to_int(data.get("rest_mid_price"))
     if midpoint <= 0 and best_bid > 0 and best_ask > 0:
         midpoint = int(round((best_bid + best_ask) / 2.0))
     mark = rest_current or midpoint
     received_ts = _to_float(data.get("rest_received_ts") or data.get("received_ts"))
-    received_ms = _to_float(data.get("rest_received_ts_ms") or data.get("received_at_ms"))
+    received_ms = _to_float(
+        data.get("rest_received_ts_ms") or data.get("received_at_ms")
+    )
     if received_ms > 0:
         age_ms = max(0.0, (now_ts * 1000.0) - received_ms)
     elif received_ts > 0:
         age_ms = max(0.0, (now_ts - received_ts) * 1000.0)
     else:
         age_ms = data.get("pre_submit_rest_orderbook_refresh_age_ms")
-        is_ka10004_snapshot = str(data.get("source") or "").strip() == "ka10004_rest_orderbook"
+        is_ka10004_snapshot = (
+            str(data.get("source") or "").strip() == "ka10004_rest_orderbook"
+        )
         raw_time_authority = str(data.get("bid_req_base_tm_authority") or "").strip()
-        if age_ms is None and not is_ka10004_snapshot and raw_time_authority != "raw_not_freshness_input":
+        if (
+            age_ms is None
+            and not is_ka10004_snapshot
+            and raw_time_authority != "raw_not_freshness_input"
+        ):
             age_ms = data.get("age_ms")
     age_ms = None if age_ms is None else max(0.0, _to_float(age_ms))
     return QuoteInput(
@@ -275,13 +302,19 @@ def build_quote_consistency_snapshot(
 ) -> QuoteConsistencySnapshot:
     config = config or QuoteConsistencyConfig.from_env()
     if runtime_enabled is None:
-        runtime_enabled = _env_bool("KORSTOCKSCAN_QUOTE_CONSISTENCY_RUNTIME_ENABLED", False)
+        runtime_enabled = _env_bool(
+            "KORSTOCKSCAN_QUOTE_CONSISTENCY_RUNTIME_ENABLED", False
+        )
     ws_fresh = _fresh(ws, config.max_ws_age_ms)
     rest_fresh = _fresh(rest, config.max_rest_age_ms)
     ws_mark = ws.mark_price if ws else 0
     rest_mark = rest.mark_price if rest else 0
-    best_bid = _fallback_price((ws.best_bid if ws else 0), (rest.best_bid if rest else 0))
-    best_ask = _fallback_price((ws.best_ask if ws else 0), (rest.best_ask if rest else 0))
+    best_bid = _fallback_price(
+        (ws.best_bid if ws else 0), (rest.best_bid if rest else 0)
+    )
+    best_ask = _fallback_price(
+        (ws.best_ask if ws else 0), (rest.best_ask if rest else 0)
+    )
     buy_price = _fallback_price(
         (rest.executable_buy_price if rest and rest_fresh else 0),
         (ws.executable_buy_price if ws and ws_fresh else 0),
@@ -318,7 +351,9 @@ def build_quote_consistency_snapshot(
     state = "missing"
     reason = "quote_missing"
     source = "none"
-    canonical = _fallback_price(ws_mark if ws_fresh else 0, rest_mark if rest_fresh else 0, ws_mark, rest_mark)
+    canonical = _fallback_price(
+        ws_mark if ws_fresh else 0, rest_mark if rest_fresh else 0, ws_mark, rest_mark
+    )
     runtime_action = "observe_missing"
     entry_blocked = True
     safety_exit_allowed = bool(safety_exit and sell_price > 0)
@@ -327,8 +362,14 @@ def build_quote_consistency_snapshot(
         mid = max((ws_mark + rest_mark) / 2.0, 1.0)
         gap_bps = abs(ws_mark - rest_mark) / mid * 10000.0
         reference = int(round(mid))
-        ok_gap = max(float(config.ok_gap_bps), (2 * _tick_size(reference)) / max(reference, 1) * 10000.0)
-        warn_gap = max(float(config.warn_gap_bps), (5 * _tick_size(reference)) / max(reference, 1) * 10000.0)
+        ok_gap = max(
+            float(config.ok_gap_bps),
+            (2 * _tick_size(reference)) / max(reference, 1) * 10000.0,
+        )
+        warn_gap = max(
+            float(config.warn_gap_bps),
+            (5 * _tick_size(reference)) / max(reference, 1) * 10000.0,
+        )
         canonical = int(round(mid)) if gap_bps <= warn_gap else ws_mark
         source = "ws_rest_mid" if gap_bps <= warn_gap else "ws_primary_rest_diverged"
         if gap_bps <= ok_gap:
@@ -344,7 +385,11 @@ def build_quote_consistency_snapshot(
         else:
             state = "diverged"
             reason = "ws_rest_gap_diverged"
-            runtime_action = "allow_safety_exit_pessimistic" if safety_exit else "block_entry_reprice_scale_in"
+            runtime_action = (
+                "allow_safety_exit_pessimistic"
+                if safety_exit
+                else "block_entry_reprice_scale_in"
+            )
             entry_blocked = bool(config.block_entry_on_divergence and not safety_exit)
     elif ws_fresh and ws_mark > 0:
         state = "single_source"
@@ -364,7 +409,11 @@ def build_quote_consistency_snapshot(
         state = "stale"
         reason = "quote_stale"
         source = "stale_cached"
-        runtime_action = "allow_safety_exit_cached" if safety_exit and sell_price > 0 else "block_stale_quote"
+        runtime_action = (
+            "allow_safety_exit_cached"
+            if safety_exit and sell_price > 0
+            else "block_stale_quote"
+        )
         entry_blocked = not safety_exit
     age_candidates = [
         float(value)

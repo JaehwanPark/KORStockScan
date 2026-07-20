@@ -30,7 +30,9 @@ def _load_telegram_config() -> tuple[str, str]:
     return token, admin_id
 
 
-def _build_message(payload: dict, *, target_date: str, profile: str, log_file: str) -> str:
+def _build_message(
+    payload: dict, *, target_date: str, profile: str, log_file: str
+) -> str:
     status = str(payload.get("status") or "success")
     if payload.get("skipped") or status == "skipped":
         reason = payload.get("reason") or "-"
@@ -73,7 +75,11 @@ def _build_message(payload: dict, *, target_date: str, profile: str, log_file: s
         and not key.startswith("server_comparison_")
     ]
     trend_max_dates = snapshots.get("trend_max_dates", "-")
-    server_status = snapshots.get("server_comparison_status") or snapshots.get("server_comparison_error") or "-"
+    server_status = (
+        snapshots.get("server_comparison_status")
+        or snapshots.get("server_comparison_error")
+        or "-"
+    )
     error_kind = payload.get("error_kind") or "-"
     error_message = payload.get("error") or "-"
 
@@ -111,7 +117,9 @@ def _send_telegram(token: str, admin_id: str, message: str) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Notify admin that monitor snapshot completed.")
+    parser = argparse.ArgumentParser(
+        description="Notify admin that monitor snapshot completed."
+    )
     parser.add_argument("--target-date", required=True)
     parser.add_argument("--profile", required=True)
     parser.add_argument("--result-file", required=True)
@@ -127,15 +135,21 @@ def main() -> int:
             target_date=args.target_date,
             profile=args.profile,
             result_file=args.result_file,
-            output_text=Path(args.result_file).read_text(encoding="utf-8", errors="replace")
-            if Path(args.result_file).exists()
-            else "",
+            output_text=(
+                Path(args.result_file).read_text(encoding="utf-8", errors="replace")
+                if Path(args.result_file).exists()
+                else ""
+            ),
             log_file=args.log_file,
         )
-        payload["completion_artifact"] = str(completion_artifact_path(args.target_date, args.profile))
+        payload["completion_artifact"] = str(
+            completion_artifact_path(args.target_date, args.profile)
+        )
     token, admin_id = _load_telegram_config()
     if not token or not admin_id:
-        print("[WARN] monitor snapshot Telegram notice skipped: TELEGRAM_TOKEN or ADMIN_ID missing")
+        print(
+            "[WARN] monitor snapshot Telegram notice skipped: TELEGRAM_TOKEN or ADMIN_ID missing"
+        )
         return 0
 
     message = _build_message(

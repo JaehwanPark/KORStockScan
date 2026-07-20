@@ -57,9 +57,7 @@ def _write_pattern_report(ev_result: dict, observability: dict) -> None:
         lines.append("- 분석 대상 없음")
     for index, row in enumerate(loss_patterns, 1):
         lines.append(f"### {index}. {row['cohort']} / {row['exit_rule']}")
-        lines.append(
-            f"- 판정: 음수 EV 기여 패턴"
-        )
+        lines.append(f"- 판정: 음수 EV 기여 패턴")
         lines.append(
             f"- 근거: 발생 {row['n']}건, 중앙손익 {row['median_profit']:+.3f}%, 평균손익 {row['mean_profit']:+.3f}%, 기여손익 {row['contrib_profit']:+.3f}%"
         )
@@ -72,7 +70,9 @@ def _write_pattern_report(ev_result: dict, observability: dict) -> None:
     if not profit_patterns:
         lines.append("- 분석 대상 없음")
     for index, row in enumerate(profit_patterns, 1):
-        lines.append(f"### {index}. {row['cohort']} / {row['exit_rule']} / {row['entry_mode']}")
+        lines.append(
+            f"### {index}. {row['cohort']} / {row['exit_rule']} / {row['entry_mode']}"
+        )
         lines.append("- 판정: 양수 EV 기여 패턴")
         lines.append(
             f"- 근거: 발생 {row['n']}건, 중앙손익 {row['median_profit']:+.3f}%, 평균손익 {row['mean_profit']:+.3f}%, 기여손익 {row['contrib_profit']:+.3f}%"
@@ -85,9 +85,7 @@ def _write_pattern_report(ev_result: dict, observability: dict) -> None:
         lines.append("- 데이터 없음")
     for index, row in enumerate(opportunity_cost, 1):
         lines.append(f"### {index}. {row['blocker']}")
-        lines.append(
-            f"- 판정: EV 회수 우선 후보"
-        )
+        lines.append(f"- 판정: EV 회수 우선 후보")
         lines.append(
             f"- 근거: 차단건수 {row['total_blocked']}건, 차단비율 {row['block_ratio']}%, 관찰일수 {row['days']}일"
         )
@@ -142,7 +140,9 @@ def _write_ev_backlog(ev_result: dict, observability: dict) -> None:
     )
 
 
-def _write_final_review(ev_result: dict, trade_df: pd.DataFrame, seq_df: pd.DataFrame, observability: dict) -> None:
+def _write_final_review(
+    ev_result: dict, trade_df: pd.DataFrame, seq_df: pd.DataFrame, observability: dict
+) -> None:
     loss_patterns = ev_result.get("loss_patterns", [])
     profit_patterns = ev_result.get("profit_patterns", [])
     opportunity_cost = ev_result.get("opportunity_cost", [])
@@ -151,7 +151,9 @@ def _write_final_review(ev_result: dict, trade_df: pd.DataFrame, seq_df: pd.Data
 
     insufficient_note = ""
     if not trade_df.empty:
-        valid_mask = trade_df["profit_valid_flag"].astype(str).str.lower().isin(["true", "1"])
+        valid_mask = (
+            trade_df["profit_valid_flag"].astype(str).str.lower().isin(["true", "1"])
+        )
         valid_count = int(valid_mask.sum())
         if valid_count < config.MIN_VALID_SAMPLES:
             insufficient_note = (
@@ -173,14 +175,16 @@ def _write_final_review(ev_result: dict, trade_df: pd.DataFrame, seq_df: pd.Data
 
     lines += ["### 1-1. 코호트별 EV 요약", ""]
     if cohort_rows:
-        lines.append("| 코호트 | 거래수 | 승률 | 손익 중앙값 | 손익 평균값 | 기여손익 합 | 표본충분 |")
+        lines.append(
+            "| 코호트 | 거래수 | 승률 | 손익 중앙값 | 손익 평균값 | 기여손익 합 | 표본충분 |"
+        )
         lines.append("|---|---:|---:|---:|---:|---:|---|")
         for row in cohort_rows:
             sufficient = "✓" if row.get("sufficient") else "⚠️부족"
             lines.append(
-            f"| {row['cohort']} | {row['n']} | {row.get('diagnostic_win_rate_pct', 0.0)}% | "
-            f"{row['median_profit']:+.3f}% | {row.get('equal_weight_avg_profit_pct', row.get('mean_profit', 0.0)):+.3f}% | "
-            f"{row.get('simple_sum_profit_pct', row.get('contrib_profit', 0.0)):+.3f}% | {sufficient} |"
+                f"| {row['cohort']} | {row['n']} | {row.get('diagnostic_win_rate_pct', 0.0)}% | "
+                f"{row['median_profit']:+.3f}% | {row.get('equal_weight_avg_profit_pct', row.get('mean_profit', 0.0)):+.3f}% | "
+                f"{row.get('simple_sum_profit_pct', row.get('contrib_profit', 0.0)):+.3f}% | {sufficient} |"
             )
     else:
         lines.append("- 분석 대상 없음")
@@ -205,10 +209,13 @@ def _write_final_review(ev_result: dict, trade_df: pd.DataFrame, seq_df: pd.Data
     if not loss_patterns:
         lines.append("- 분석 대상 없음")
     for index, row in enumerate(loss_patterns, 1):
-        preconditions = ", ".join(
-            f"{key}={value['count']}건({value['pct']}%)"
-            for key, value in row.get("preconditions", {}).items()
-        ) or "없음"
+        preconditions = (
+            ", ".join(
+                f"{key}={value['count']}건({value['pct']}%)"
+                for key, value in row.get("preconditions", {}).items()
+            )
+            or "없음"
+        )
         lines += [
             f"**#{index}** — 코호트: `{row['cohort']}` / 청산규칙: `{row['exit_rule']}`",
             f"- 빈도: {row['n']}건 | 중앙손익: {row['median_profit']:+.3f}% | 평균손익: {row['mean_profit']:+.3f}% | 기여손익: {row['contrib_profit']:+.3f}%",
@@ -259,7 +266,9 @@ def _write_final_review(ev_result: dict, trade_df: pd.DataFrame, seq_df: pd.Data
             "same_ts_multi_rebase_flag",
         ]:
             if column in seq_df.columns:
-                count = int(seq_df[column].astype(str).str.lower().isin(["true", "1"]).sum())
+                count = int(
+                    seq_df[column].astype(str).str.lower().isin(["true", "1"]).sum()
+                )
                 lines.append(f"- {column}: {count}건")
     else:
         lines.append("- sequence_fact 없음")

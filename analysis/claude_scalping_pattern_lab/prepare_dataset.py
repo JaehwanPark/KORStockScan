@@ -68,6 +68,7 @@ except Exception:
 
 try:
     from src.engine.tuning_duckdb_repository import TuningDuckDBRepository
+
     DUCKDB_AVAILABLE = True
 except Exception:
     TuningDuckDBRepository = None
@@ -257,6 +258,7 @@ def _load_pipeline_rows(target_date: str) -> tuple[Iterable[dict[str, Any]], str
 
 # ── 날짜 범위 생성 ────────────────────────────────────────────────────────────
 
+
 def _date_range(start: date, end: date) -> list[date]:
     days = []
     cur = start
@@ -267,6 +269,7 @@ def _date_range(start: date, end: date) -> list[date]:
 
 
 # ── trade_fact 파싱 ───────────────────────────────────────────────────────────
+
 
 def _parse_trade_review(data: dict[str, Any], server: str) -> list[dict]:
     rows = []
@@ -290,23 +293,25 @@ def _parse_trade_review(data: dict[str, Any], server: str) -> list[dict]:
             1 for ev in timeline if ev.get("stage") == "holding_started"
         )
 
-        rows.append({
-            "server":        server,
-            "trade_id":      t.get("id"),
-            "symbol":        t.get("code", ""),
-            "name":          t.get("name", ""),
-            "entry_time":    t.get("buy_time", ""),
-            "exit_time":     t.get("sell_time", ""),
-            "held_sec":      t.get("holding_seconds"),
-            "entry_mode":    t.get("entry_mode", ""),
-            "position_tag":  t.get("position_tag", ""),
-            "exit_rule":     exit_rule,
-            "status":        status,
-            "profit_rate":   profit_rate if profit_valid else None,
-            "profit_valid_flag": profit_valid,
-            "holding_started_count": holding_started_count,
-            "rec_date":      t.get("rec_date", ""),
-        })
+        rows.append(
+            {
+                "server": server,
+                "trade_id": t.get("id"),
+                "symbol": t.get("code", ""),
+                "name": t.get("name", ""),
+                "entry_time": t.get("buy_time", ""),
+                "exit_time": t.get("sell_time", ""),
+                "held_sec": t.get("holding_seconds"),
+                "entry_mode": t.get("entry_mode", ""),
+                "position_tag": t.get("position_tag", ""),
+                "exit_rule": exit_rule,
+                "status": status,
+                "profit_rate": profit_rate if profit_valid else None,
+                "profit_valid_flag": profit_valid,
+                "holding_started_count": holding_started_count,
+                "rec_date": t.get("rec_date", ""),
+            }
+        )
     return rows
 
 
@@ -351,7 +356,10 @@ def build_trade_fact() -> pd.DataFrame:
 
 # ── funnel_fact 파싱 ──────────────────────────────────────────────────────────
 
-def _parse_performance_tuning(data: dict[str, Any], target_date: str, server: str) -> dict:
+
+def _parse_performance_tuning(
+    data: dict[str, Any], target_date: str, server: str
+) -> dict:
     metrics = data.get("metrics", {})
     date_str = data.get("date", target_date)
 
@@ -394,6 +402,7 @@ def build_funnel_fact() -> pd.DataFrame:
 
 # ── sequence_fact 파싱 (JSONL 스트리밍) ──────────────────────────────────────
 
+
 def _stream_sequence_events(
     rows: Iterable[dict[str, Any]],
     date_str: str,
@@ -404,16 +413,18 @@ def _stream_sequence_events(
     메모리 효율을 위해 필요한 stage만 필터링한다.
     """
     # record_id → 집계 버킷
-    buckets: dict[int, dict] = defaultdict(lambda: {
-        "server":                server,
-        "date":                  date_str,
-        "trade_id":              None,
-        "symbol":                "",
-        "holding_started_times": [],
-        "rebase_events":         [],   # list of fields dicts
-        "exit_rules":            [],
-        "exit_times":            [],
-    })
+    buckets: dict[int, dict] = defaultdict(
+        lambda: {
+            "server": server,
+            "date": date_str,
+            "trade_id": None,
+            "symbol": "",
+            "holding_started_times": [],
+            "rebase_events": [],  # list of fields dicts
+            "exit_rules": [],
+            "exit_times": [],
+        }
+    )
 
     # 동일 종목 repeat soft-stop 추적 (date 단위)
     soft_stop_by_symbol: dict[str, int] = defaultdict(int)  # symbol → count
@@ -441,15 +452,17 @@ def _stream_sequence_events(
 
             elif stage == "position_rebased_after_fill":
                 fields = ev.get("fields", {})
-                b["rebase_events"].append({
-                    "ts":              ts,
-                    "fill_qty":        fields.get("fill_qty"),
-                    "cum_filled_qty":  fields.get("cum_filled_qty"),
-                    "requested_qty":   fields.get("requested_qty"),
-                    "remaining_qty":   fields.get("remaining_qty"),
-                    "fill_quality":    fields.get("fill_quality", ""),
-                    "entry_mode":      fields.get("entry_mode", ""),
-                })
+                b["rebase_events"].append(
+                    {
+                        "ts": ts,
+                        "fill_qty": fields.get("fill_qty"),
+                        "cum_filled_qty": fields.get("cum_filled_qty"),
+                        "requested_qty": fields.get("requested_qty"),
+                        "remaining_qty": fields.get("remaining_qty"),
+                        "fill_quality": fields.get("fill_quality", ""),
+                        "entry_mode": fields.get("entry_mode", ""),
+                    }
+                )
 
             elif stage in ("exit_signal", "sell_completed"):
                 fields = ev.get("fields", {})
@@ -481,8 +494,7 @@ def _stream_sequence_events(
 
         # partial 이후 확대: PARTIAL_FILL 이후 추가 rebase 발생
         had_partial = any(
-            r.get("fill_quality", "").upper() == "PARTIAL_FILL"
-            for r in rebase_events
+            r.get("fill_quality", "").upper() == "PARTIAL_FILL" for r in rebase_events
         )
         had_expand = rebase_count >= 2
         partial_then_expand_flag = had_partial and had_expand
@@ -493,7 +505,7 @@ def _stream_sequence_events(
             try:
                 cum = int(r.get("cum_filled_qty") or 0)
                 req = int(r.get("requested_qty") or 0)
-                fq  = r.get("fill_quality", "").upper()
+                fq = r.get("fill_quality", "").upper()
                 if cum > req and req > 0:
                     rebase_integrity_flag = True
                 if req == 0 and fq == "UNKNOWN":
@@ -503,7 +515,9 @@ def _stream_sequence_events(
 
         # same_ts 다중 rebase (동일 초에 2건 이상)
         ts_seconds = [r["ts"][:19] for r in rebase_events if r.get("ts")]
-        same_ts_multi_rebase = len(ts_seconds) != len(set(ts_seconds)) if ts_seconds else False
+        same_ts_multi_rebase = (
+            len(ts_seconds) != len(set(ts_seconds)) if ts_seconds else False
+        )
 
         same_symbol_repeat_flag = b["symbol"] in repeat_symbols
 
@@ -516,22 +530,24 @@ def _stream_sequence_events(
         # event_seq: holding_count + rebase_count 표현
         event_seq = f"h{holding_count}_r{rebase_count}"
 
-        rows.append({
-            "server":                  server,
-            "trade_id":                rid,
-            "date":                    date_str,
-            "symbol":                  b["symbol"],
-            "event_seq":               event_seq,
-            "holding_started_count":   holding_count,
-            "rebase_count":            rebase_count,
-            "entry_mode":              entry_mode,
-            "final_exit_rule":         final_exit_rule,
-            "partial_then_expand_flag": partial_then_expand_flag,
-            "multi_rebase_flag":       multi_rebase_flag,
-            "rebase_integrity_flag":   rebase_integrity_flag,
-            "same_ts_multi_rebase_flag": same_ts_multi_rebase,
-            "same_symbol_repeat_flag": same_symbol_repeat_flag,
-        })
+        rows.append(
+            {
+                "server": server,
+                "trade_id": rid,
+                "date": date_str,
+                "symbol": b["symbol"],
+                "event_seq": event_seq,
+                "holding_started_count": holding_count,
+                "rebase_count": rebase_count,
+                "entry_mode": entry_mode,
+                "final_exit_rule": final_exit_rule,
+                "partial_then_expand_flag": partial_then_expand_flag,
+                "multi_rebase_flag": multi_rebase_flag,
+                "rebase_integrity_flag": rebase_integrity_flag,
+                "same_ts_multi_rebase_flag": same_ts_multi_rebase,
+                "same_symbol_repeat_flag": same_symbol_repeat_flag,
+            }
+        )
     return rows
 
 
@@ -570,6 +586,7 @@ def build_sequence_fact() -> tuple[pd.DataFrame, dict[str, Any]]:
 
 # ── trade_fact 코호트 갱신 (sequence_fact join) ───────────────────────────────
 
+
 def enrich_trade_cohort(
     trade_df: pd.DataFrame,
     seq_df: pd.DataFrame,
@@ -603,8 +620,13 @@ def enrich_trade_cohort(
 
     merged["cohort"] = merged.apply(classify, axis=1)
     # suffix 컬럼 정리
-    for col in ["multi_rebase_flag", "partial_then_expand_flag",
-                "rebase_integrity_flag", "same_symbol_repeat_flag", "rebase_count"]:
+    for col in [
+        "multi_rebase_flag",
+        "partial_then_expand_flag",
+        "rebase_integrity_flag",
+        "same_symbol_repeat_flag",
+        "rebase_count",
+    ]:
         if col in merged.columns:
             merged[col] = merged[col].fillna(False)
 
@@ -613,6 +635,7 @@ def enrich_trade_cohort(
 
 
 # ── 품질 보고서 ───────────────────────────────────────────────────────────────
+
 
 def build_quality_report(
     trade_df: pd.DataFrame,
@@ -641,7 +664,9 @@ def build_quality_report(
         valid_profit = int(trade_df["profit_valid_flag"].sum())
         excluded = total - valid_profit
         by_server = trade_df.groupby("server").size().to_dict()
-        by_cohort = trade_df.groupby("cohort").size().to_dict() if "cohort" in trade_df else {}
+        by_cohort = (
+            trade_df.groupby("cohort").size().to_dict() if "cohort" in trade_df else {}
+        )
 
         lines += [
             f"| 항목 | 값 |",
@@ -667,7 +692,9 @@ def build_quality_report(
         lines.append("")
         for srv in trade_df["server"].unique():
             srv_valid = int(
-                trade_df[(trade_df["server"] == srv) & trade_df["profit_valid_flag"]].shape[0]
+                trade_df[
+                    (trade_df["server"] == srv) & trade_df["profit_valid_flag"]
+                ].shape[0]
             )
             if srv_valid < 30:
                 lines.append(
@@ -691,11 +718,31 @@ def build_quality_report(
         lines.append("- **데이터 없음**")
     else:
         total_seq = len(seq_df)
-        multi_r = int(seq_df["multi_rebase_flag"].sum()) if "multi_rebase_flag" in seq_df else 0
-        partial_exp = int(seq_df["partial_then_expand_flag"].sum()) if "partial_then_expand_flag" in seq_df else 0
-        integrity = int(seq_df["rebase_integrity_flag"].sum()) if "rebase_integrity_flag" in seq_df else 0
-        same_ts = int(seq_df["same_ts_multi_rebase_flag"].sum()) if "same_ts_multi_rebase_flag" in seq_df else 0
-        repeat = int(seq_df["same_symbol_repeat_flag"].sum()) if "same_symbol_repeat_flag" in seq_df else 0
+        multi_r = (
+            int(seq_df["multi_rebase_flag"].sum())
+            if "multi_rebase_flag" in seq_df
+            else 0
+        )
+        partial_exp = (
+            int(seq_df["partial_then_expand_flag"].sum())
+            if "partial_then_expand_flag" in seq_df
+            else 0
+        )
+        integrity = (
+            int(seq_df["rebase_integrity_flag"].sum())
+            if "rebase_integrity_flag" in seq_df
+            else 0
+        )
+        same_ts = (
+            int(seq_df["same_ts_multi_rebase_flag"].sum())
+            if "same_ts_multi_rebase_flag" in seq_df
+            else 0
+        )
+        repeat = (
+            int(seq_df["same_symbol_repeat_flag"].sum())
+            if "same_symbol_repeat_flag" in seq_df
+            else 0
+        )
 
         lines += [
             f"| 플래그 | 건수 |",
@@ -744,20 +791,24 @@ def write_source_manifest(source_meta: dict[str, Any]) -> None:
         "data_source_mode": data_source_mode,
         "history_coverage_start": covered_dates[0] if covered_dates else None,
         "history_coverage_end": covered_dates[-1] if covered_dates else None,
-        "history_coverage_ok": len(covered_dates) == len(expected_dates) and len(expected_dates) > 0,
+        "history_coverage_ok": len(covered_dates) == len(expected_dates)
+        and len(expected_dates) > 0,
         "local_pipeline_source_stats": stats,
     }
     manifest_path = OUTPUT_DIR / "source_manifest.json"
-    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    manifest_path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     print(f"  → {manifest_path}")
 
 
 # ── 진입점 ────────────────────────────────────────────────────────────────────
 
+
 def main() -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    trade_df  = build_trade_fact()
+    trade_df = build_trade_fact()
     funnel_df = build_funnel_fact()
     seq_df, source_meta = build_sequence_fact()
 

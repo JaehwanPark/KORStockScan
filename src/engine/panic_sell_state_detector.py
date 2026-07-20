@@ -13,7 +13,6 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Iterable
 
-
 REPORT_NORMAL = "NORMAL"
 REPORT_PANIC_SELL = "PANIC_SELL"
 REPORT_RECOVERY_WATCH = "RECOVERY_WATCH"
@@ -154,7 +153,9 @@ def _safe_float(value: Any, default: float | None = None) -> float | None:
     if value in (None, "", "-", "None"):
         return default
     try:
-        result = float(str(value).replace("%", "").replace("+", "").replace(",", "").strip())
+        result = float(
+            str(value).replace("%", "").replace("+", "").replace(",", "").strip()
+        )
     except Exception:
         return default
     return result if math.isfinite(result) else default
@@ -307,7 +308,9 @@ def _spread_ratio(orderbooks: list[PanicOrderbookMicro]) -> float | None:
     previous_spreads = [
         max(0.0, float(item.best_ask) - float(item.best_bid))
         for item in orderbooks[:-1]
-        if item.best_bid is not None and item.best_ask is not None and float(item.best_ask) > 0
+        if item.best_bid is not None
+        and item.best_ask is not None
+        and float(item.best_ask) > 0
     ]
     baseline = _avg(previous_spreads)
     if baseline is None or baseline <= 0:
@@ -333,7 +336,9 @@ def _bid_depth_drop(orderbooks: list[PanicOrderbookMicro]) -> float | None:
     return max(0.0, 1.0 - (float(current.bid_depth_l5) / baseline))
 
 
-def _bid_depth_refill(orderbooks: list[PanicOrderbookMicro], panic_baseline: float | None = None) -> float | None:
+def _bid_depth_refill(
+    orderbooks: list[PanicOrderbookMicro], panic_baseline: float | None = None
+) -> float | None:
     if not orderbooks:
         return None
     current = orderbooks[-1]
@@ -401,8 +406,14 @@ def compute_panic_features(
     if len(trades) >= 2 and trades[-2].total_volume > 0:
         prev_sell_ratio = trades[-2].sell_volume / trades[-2].total_volume
     volumes = [max(0.0, item.volume) for item in candles]
-    volume_base = _avg(volumes[-max(config.long_window_bars, config.mid_window_bars) : -1])
-    volume_ratio = (candle.volume / volume_base) if volume_base and volume_base > 0 else (1.0 if candle.volume > 0 else 0.0)
+    volume_base = _avg(
+        volumes[-max(config.long_window_bars, config.mid_window_bars) : -1]
+    )
+    volume_ratio = (
+        (candle.volume / volume_base)
+        if volume_base and volume_base > 0
+        else (1.0 if candle.volume > 0 else 0.0)
+    )
     volume_z = _zscore(candle.volume, volumes[:-1])
     short_return = _return_pct(candles, config.short_window_bars)
     mid_return = _return_pct(candles, config.mid_window_bars)
@@ -411,14 +422,18 @@ def compute_panic_features(
     lower_wick = _lower_wick_ratio(candle)
     spread_ratio = _spread_ratio(orderbooks)
     bid_depth_drop = _bid_depth_drop(orderbooks)
-    bid_depth_refill = _bid_depth_refill(orderbooks, panic_baseline=panic_bid_depth_baseline)
+    bid_depth_refill = _bid_depth_refill(
+        orderbooks, panic_baseline=panic_bid_depth_baseline
+    )
     current_orderbook = orderbooks[-1] if orderbooks else None
     ofi_z = current_orderbook.ofi_z if current_orderbook else None
     ofi_values = [float(item.ofi_z) for item in orderbooks if item.ofi_z is not None]
     ofi_cusum = _ofi_cusum(ofi_values, direction="negative")
     qi_ewma = current_orderbook.qi_ewma if current_orderbook else None
     micro_state = current_orderbook.micro_state if current_orderbook else "missing"
-    observer_healthy = current_orderbook.observer_healthy if current_orderbook else False
+    observer_healthy = (
+        current_orderbook.observer_healthy if current_orderbook else False
+    )
     orderbook_ready = current_orderbook.ready if current_orderbook else False
     recent_lows = [item.low for item in candles[-max(1, config.no_new_low_bars) :]]
     no_new_low = False
@@ -434,8 +449,10 @@ def compute_panic_features(
             ofi_z is not None and float(ofi_z) <= -2.5,
             sell_ratio is not None and float(sell_ratio) >= config.sell_ratio_threshold,
             volume_ratio >= config.volume_spike_threshold,
-            bid_depth_drop is not None and float(bid_depth_drop) >= config.bid_depth_drop_threshold,
-            spread_ratio is not None and float(spread_ratio) >= config.spread_widen_threshold,
+            bid_depth_drop is not None
+            and float(bid_depth_drop) >= config.bid_depth_drop_threshold,
+            spread_ratio is not None
+            and float(spread_ratio) >= config.spread_widen_threshold,
         )
         if passed
     )
@@ -445,21 +462,33 @@ def compute_panic_features(
         "mid_return_pct": round(mid_return, 6),
         "long_return_pct": round(long_return, 6),
         "short_return_z": round(_zscore(current_return, recent_returns), 6),
-        "downside_velocity": round(max(0.0, -short_return) / max(1, config.short_window_bars), 6),
+        "downside_velocity": round(
+            max(0.0, -short_return) / max(1, config.short_window_bars), 6
+        ),
         "downside_acceleration": round(max(0.0, -current_return), 6),
         "close_location_value": round(close_location, 6),
         "lower_wick_ratio": round(lower_wick, 6),
-        "range_expansion_ratio": round((max(0.0, candle.high - candle.low) / range_baseline), 6)
-        if range_baseline and range_baseline > 0
-        else 1.0,
+        "range_expansion_ratio": (
+            round((max(0.0, candle.high - candle.low) / range_baseline), 6)
+            if range_baseline and range_baseline > 0
+            else 1.0
+        ),
         "volume_ratio_short": round(volume_ratio, 6),
         "volume_z": round(volume_z, 6),
         "total_volume": round(candle.volume, 6),
         "sell_ratio": None if sell_ratio is None else round(sell_ratio, 6),
         "buy_ratio": None if buy_ratio is None else round(buy_ratio, 6),
-        "sell_pressure_decay": bool(prev_sell_ratio is not None and sell_ratio is not None and sell_ratio < prev_sell_ratio),
-        "bid_depth_drop_ratio": None if bid_depth_drop is None else round(bid_depth_drop, 6),
-        "bid_depth_refill_ratio": None if bid_depth_refill is None else round(bid_depth_refill, 6),
+        "sell_pressure_decay": bool(
+            prev_sell_ratio is not None
+            and sell_ratio is not None
+            and sell_ratio < prev_sell_ratio
+        ),
+        "bid_depth_drop_ratio": (
+            None if bid_depth_drop is None else round(bid_depth_drop, 6)
+        ),
+        "bid_depth_refill_ratio": (
+            None if bid_depth_refill is None else round(bid_depth_refill, 6)
+        ),
         "spread_ratio": None if spread_ratio is None else round(spread_ratio, 6),
         "ofi_z": None if ofi_z is None else round(float(ofi_z), 6),
         "ofi_cusum_direction": ofi_cusum["direction"],
@@ -483,7 +512,9 @@ def compute_panic_features(
     }
 
 
-def compute_panic_score(features: dict[str, Any], config: PanicSellDetectorConfig) -> tuple[float, list[str]]:
+def compute_panic_score(
+    features: dict[str, Any], config: PanicSellDetectorConfig
+) -> tuple[float, list[str]]:
     reasons: list[str] = []
     short_return = float(features.get("short_return_pct") or 0.0)
     mid_return = float(features.get("mid_return_pct") or 0.0)
@@ -516,27 +547,40 @@ def compute_panic_score(features: dict[str, Any], config: PanicSellDetectorConfi
 
     trade_flow_score = 0.0
     if sell_ratio is not None:
-        trade_flow_score = _clamp01((float(sell_ratio) - 0.50) / max(config.sell_ratio_threshold - 0.50, 1e-9))
+        trade_flow_score = _clamp01(
+            (float(sell_ratio) - 0.50) / max(config.sell_ratio_threshold - 0.50, 1e-9)
+        )
         if float(sell_ratio) >= config.sell_ratio_threshold:
             reasons.append("sell_ratio_high")
 
     orderbook_score = 0.0
     if ofi_z is not None:
-        orderbook_score = max(orderbook_score, _clamp01((-float(ofi_z)) / max(abs(config.ofi_z_panic_threshold), 1e-9)))
+        orderbook_score = max(
+            orderbook_score,
+            _clamp01((-float(ofi_z)) / max(abs(config.ofi_z_panic_threshold), 1e-9)),
+        )
         if float(ofi_z) <= config.ofi_z_panic_threshold:
             reasons.append("ofi_panic")
     if bid_drop is not None:
-        orderbook_score = max(orderbook_score, _clamp01(float(bid_drop) / max(config.bid_depth_drop_threshold, 1e-9)))
+        orderbook_score = max(
+            orderbook_score,
+            _clamp01(float(bid_drop) / max(config.bid_depth_drop_threshold, 1e-9)),
+        )
         if float(bid_drop) >= config.bid_depth_drop_threshold:
             reasons.append("bid_depth_drop")
 
     spread_score = 0.0
     if spread_ratio is not None:
-        spread_score = _clamp01((float(spread_ratio) - 1.0) / max(config.spread_widen_threshold - 1.0, 1e-9))
+        spread_score = _clamp01(
+            (float(spread_ratio) - 1.0) / max(config.spread_widen_threshold - 1.0, 1e-9)
+        )
         if float(spread_ratio) >= config.spread_widen_threshold:
             reasons.append("spread_widen")
 
-    candle_score = _clamp01((config.close_near_low_threshold - clv) / max(config.close_near_low_threshold, 1e-9))
+    candle_score = _clamp01(
+        (config.close_near_low_threshold - clv)
+        / max(config.close_near_low_threshold, 1e-9)
+    )
     if clv <= config.close_near_low_threshold:
         reasons.append("close_near_low")
 
@@ -558,7 +602,9 @@ def compute_panic_score(features: dict[str, Any], config: PanicSellDetectorConfi
     return round(_clamp01(panic_score), 6), reasons
 
 
-def compute_recovery_score(features: dict[str, Any], config: PanicSellDetectorConfig) -> tuple[float, list[str]]:
+def compute_recovery_score(
+    features: dict[str, Any], config: PanicSellDetectorConfig
+) -> tuple[float, list[str]]:
     reasons: list[str] = []
     sell_ratio = features.get("sell_ratio")
     ofi_z = features.get("ofi_z")
@@ -571,7 +617,9 @@ def compute_recovery_score(features: dict[str, Any], config: PanicSellDetectorCo
     no_new_low_score = 1.0 if bool(features.get("no_new_low")) else 0.0
     if no_new_low_score:
         reasons.append("no_new_low")
-    velocity_easing = _clamp01(1.0 - abs(min(short_return, 0.0)) / max(config.min_abs_drop_short_pct, 1e-9))
+    velocity_easing = _clamp01(
+        1.0 - abs(min(short_return, 0.0)) / max(config.min_abs_drop_short_pct, 1e-9)
+    )
     bounce_score = _clamp01(float(features.get("bounce_from_low_pct") or 0.0) / 1.0)
     price_stabilization_score = max(no_new_low_score, velocity_easing, bounce_score)
 
@@ -581,12 +629,17 @@ def compute_recovery_score(features: dict[str, Any], config: PanicSellDetectorCo
             (config.sell_ratio_threshold - float(sell_ratio))
             / max(config.sell_ratio_threshold - config.sell_ratio_recovery_max, 1e-9)
         )
-        if float(sell_ratio) <= config.sell_ratio_recovery_max or bool(features.get("sell_pressure_decay")):
+        if float(sell_ratio) <= config.sell_ratio_recovery_max or bool(
+            features.get("sell_pressure_decay")
+        ):
             reasons.append("sell_pressure_easing")
 
     orderbook_recovery_score = 0.0
     if bid_refill is not None:
-        orderbook_recovery_score = max(orderbook_recovery_score, _clamp01(float(bid_refill) / max(config.bid_depth_refill_min, 1e-9)))
+        orderbook_recovery_score = max(
+            orderbook_recovery_score,
+            _clamp01(float(bid_refill) / max(config.bid_depth_refill_min, 1e-9)),
+        )
         if float(bid_refill) >= config.bid_depth_refill_min:
             reasons.append("bid_depth_refill")
     if ofi_z is not None:
@@ -615,7 +668,9 @@ def compute_recovery_score(features: dict[str, Any], config: PanicSellDetectorCo
     if clv >= config.close_location_recovery_min:
         reasons.append("close_location_recovery")
 
-    vwap_reclaim_score = 1.0 if bool(features.get("panic_anchored_vwap_reclaim")) else 0.0
+    vwap_reclaim_score = (
+        1.0 if bool(features.get("panic_anchored_vwap_reclaim")) else 0.0
+    )
     if vwap_reclaim_score:
         reasons.append("panic_anchored_vwap_reclaim")
 
@@ -627,18 +682,29 @@ def compute_recovery_score(features: dict[str, Any], config: PanicSellDetectorCo
         + 0.15 * candle_reversal_score
         + 0.10 * vwap_reclaim_score
     )
-    if bid_refill is not None and spread_ratio is not None and float(bid_refill) < 0.45 and float(spread_ratio) > 1.5:
+    if (
+        bid_refill is not None
+        and spread_ratio is not None
+        and float(bid_refill) < 0.45
+        and float(spread_ratio) > 1.5
+    ):
         recovery_score *= 0.75
         reasons.append("recovery_blocked_by_unstable_microstructure")
     if bid_refill is not None and sell_ratio is not None:
-        if float(bid_refill) >= config.bid_depth_refill_min and float(sell_ratio) >= config.sell_ratio_threshold:
+        if (
+            float(bid_refill) >= config.bid_depth_refill_min
+            and float(sell_ratio) >= config.sell_ratio_threshold
+        ):
             recovery_score *= 0.85
             reasons.append("bid_refill_but_sell_flow_still_dominant")
     return round(_clamp01(recovery_score), 6), reasons
 
 
 def _report_state(internal_state: PanicInternalState) -> str:
-    if internal_state in {PanicInternalState.PANIC_CANDIDATE, PanicInternalState.PANIC_ACTIVE}:
+    if internal_state in {
+        PanicInternalState.PANIC_CANDIDATE,
+        PanicInternalState.PANIC_ACTIVE,
+    }:
         return REPORT_PANIC_SELL
     if internal_state == PanicInternalState.RECOVERY_CANDIDATE:
         return REPORT_RECOVERY_WATCH
@@ -656,8 +722,12 @@ class PanicSellStateDetector:
         self.panic_low: float | None = None
         self.panic_bid_depth_baseline: float | None = None
         self.max_panic_score = 0.0
-        self.recent_panic_scores: deque[float] = deque(maxlen=max(1, self.config.panic_entry_confirm_window))
-        self.recent_recovery_scores: deque[float] = deque(maxlen=max(1, self.config.recovery_confirm_window))
+        self.recent_panic_scores: deque[float] = deque(
+            maxlen=max(1, self.config.panic_entry_confirm_window)
+        )
+        self.recent_recovery_scores: deque[float] = deque(
+            maxlen=max(1, self.config.recovery_confirm_window)
+        )
         self.cooldown_remaining = 0
         self._candles: list[PanicCandle] = []
         self._trades: list[PanicTradeFlow] = []
@@ -672,7 +742,9 @@ class PanicSellStateDetector:
         orderbook_micro: PanicOrderbookMicro | None = None,
     ) -> PanicSignal:
         self._candles.append(candle)
-        self._candles = self._candles[-max(self.config.long_window_bars, self.config.mid_window_bars, 10) :]
+        self._candles = self._candles[
+            -max(self.config.long_window_bars, self.config.mid_window_bars, 10) :
+        ]
         if trade_flow is not None:
             self._trades.append(trade_flow)
             self._trades = self._trades[-max(self.config.long_window_bars, 10) :]
@@ -706,7 +778,9 @@ class PanicSellStateDetector:
         if self._panic_vwap_volume > 0:
             panic_anchored_vwap = self._panic_vwap_value / self._panic_vwap_volume
             features["panic_anchored_vwap"] = round(panic_anchored_vwap, 6)
-            features["panic_anchored_vwap_reclaim"] = candle.close >= panic_anchored_vwap
+            features["panic_anchored_vwap_reclaim"] = (
+                candle.close >= panic_anchored_vwap
+            )
         else:
             features["panic_anchored_vwap"] = None
             features["panic_anchored_vwap_reclaim"] = False
@@ -724,11 +798,22 @@ class PanicSellStateDetector:
             or float(features["short_return_z"]) <= self.config.return_z_panic_threshold
         )
         flow_confirmation = (
-            float(features.get("volume_ratio_short") or 0.0) >= self.config.volume_spike_threshold
-            or (features.get("sell_ratio") is not None and float(features["sell_ratio"]) >= self.config.sell_ratio_threshold)
-            or (features.get("ofi_z") is not None and float(features["ofi_z"]) <= self.config.ofi_z_panic_threshold)
+            float(features.get("volume_ratio_short") or 0.0)
+            >= self.config.volume_spike_threshold
+            or (
+                features.get("sell_ratio") is not None
+                and float(features["sell_ratio"]) >= self.config.sell_ratio_threshold
+            )
+            or (
+                features.get("ofi_z") is not None
+                and float(features["ofi_z"]) <= self.config.ofi_z_panic_threshold
+            )
         )
-        panic_candidate = price_breakdown and flow_confirmation and panic_score >= self.config.panic_entry_score_threshold
+        panic_candidate = (
+            price_breakdown
+            and flow_confirmation
+            and panic_score >= self.config.panic_entry_score_threshold
+        )
         low_break = self._panic_low_broken(candle.low)
         recovery_candidate = self._recovery_candidate(features, recovery_score)
         panic_resumed = low_break or panic_candidate
@@ -741,7 +826,10 @@ class PanicSellStateDetector:
                 self._transition(PanicInternalState.PANIC_ACTIVE)
                 self._initialize_panic_tracking(candle)
                 panic_entered = True
-            elif not panic_candidate and panic_score < self.config.panic_entry_score_threshold * 0.80:
+            elif (
+                not panic_candidate
+                and panic_score < self.config.panic_entry_score_threshold * 0.80
+            ):
                 self._transition(PanicInternalState.NORMAL)
         elif self.state == PanicInternalState.PANIC_ACTIVE:
             self._update_panic_tracking(candle, orderbook_micro)
@@ -773,7 +861,11 @@ class PanicSellStateDetector:
             panic_score=panic_score,
             recovery_score=recovery_score,
             reasons=reasons,
-            metrics={**features, "panic_score": panic_score, "recovery_score": recovery_score},
+            metrics={
+                **features,
+                "panic_score": panic_score,
+                "recovery_score": recovery_score,
+            },
             panic_entered=panic_entered,
             previous_state=previous_state,
         )
@@ -786,11 +878,22 @@ class PanicSellStateDetector:
             self.bars_in_state += 1
 
     def _confirm_panic_entry(self) -> bool:
-        return sum(1 for score in self.recent_panic_scores if score >= self.config.panic_entry_score_threshold) >= self.config.panic_entry_confirm_bars
+        return (
+            sum(
+                1
+                for score in self.recent_panic_scores
+                if score >= self.config.panic_entry_score_threshold
+            )
+            >= self.config.panic_entry_confirm_bars
+        )
 
     def _confirm_recovery(self) -> bool:
         return (
-            sum(1 for score in self.recent_recovery_scores if score >= self.config.recovery_score_threshold)
+            sum(
+                1
+                for score in self.recent_recovery_scores
+                if score >= self.config.recovery_score_threshold
+            )
             >= self.config.recovery_confirm_bars
         )
 
@@ -800,23 +903,35 @@ class PanicSellStateDetector:
         tolerance = float(self.config.low_break_tolerance_pct) / 100.0
         return current_low < self.panic_low * (1.0 - tolerance)
 
-    def _recovery_candidate(self, features: dict[str, Any], recovery_score: float) -> bool:
+    def _recovery_candidate(
+        self, features: dict[str, Any], recovery_score: float
+    ) -> bool:
         if recovery_score < self.config.recovery_score_threshold:
             return False
         if not bool(features.get("no_new_low")):
             return False
         sell_ratio = features.get("sell_ratio")
-        if sell_ratio is not None and float(sell_ratio) > self.config.sell_ratio_threshold:
+        if (
+            sell_ratio is not None
+            and float(sell_ratio) > self.config.sell_ratio_threshold
+        ):
             return False
-        ofi_ok = features.get("ofi_z") is not None and float(features["ofi_z"]) >= self.config.ofi_z_recovery_min
+        ofi_ok = (
+            features.get("ofi_z") is not None
+            and float(features["ofi_z"]) >= self.config.ofi_z_recovery_min
+        )
         depth_ok = (
             features.get("bid_depth_refill_ratio") is not None
-            and float(features["bid_depth_refill_ratio"]) >= self.config.bid_depth_refill_min
+            and float(features["bid_depth_refill_ratio"])
+            >= self.config.bid_depth_refill_min
         )
         if not (ofi_ok or depth_ok):
             return False
         spread_ratio = features.get("spread_ratio")
-        if spread_ratio is not None and float(spread_ratio) > self.config.spread_widen_threshold:
+        if (
+            spread_ratio is not None
+            and float(spread_ratio) > self.config.spread_widen_threshold
+        ):
             return False
         return True
 
@@ -825,15 +940,27 @@ class PanicSellStateDetector:
         self.panic_low = candle.low
         self._panic_vwap_value = 0.0
         self._panic_vwap_volume = 0.0
-        self._update_panic_tracking(candle, self._orderbooks[-1] if self._orderbooks else None)
+        self._update_panic_tracking(
+            candle, self._orderbooks[-1] if self._orderbooks else None
+        )
 
-    def _update_panic_tracking(self, candle: PanicCandle, orderbook_micro: PanicOrderbookMicro | None) -> None:
-        self.panic_low = candle.low if self.panic_low is None else min(self.panic_low, candle.low)
-        price_for_vwap = candle.vwap if candle.vwap and candle.vwap > 0 else candle.close
+    def _update_panic_tracking(
+        self, candle: PanicCandle, orderbook_micro: PanicOrderbookMicro | None
+    ) -> None:
+        self.panic_low = (
+            candle.low if self.panic_low is None else min(self.panic_low, candle.low)
+        )
+        price_for_vwap = (
+            candle.vwap if candle.vwap and candle.vwap > 0 else candle.close
+        )
         if candle.volume > 0 and price_for_vwap > 0:
             self._panic_vwap_value += price_for_vwap * candle.volume
             self._panic_vwap_volume += candle.volume
-        if self.panic_bid_depth_baseline is None and orderbook_micro is not None and orderbook_micro.bid_depth_l5:
+        if (
+            self.panic_bid_depth_baseline is None
+            and orderbook_micro is not None
+            and orderbook_micro.bid_depth_l5
+        ):
             self.panic_bid_depth_baseline = float(orderbook_micro.bid_depth_l5)
 
     def _reset_panic_tracking(self) -> None:
@@ -864,7 +991,10 @@ class PanicSellStateDetector:
             PanicInternalState.COOLDOWN,
         }
         allow_new_long = not risk_off
-        if self.state == PanicInternalState.RECOVERY_CANDIDATE and not self.config.block_long_during_recovery_candidate:
+        if (
+            self.state == PanicInternalState.RECOVERY_CANDIDATE
+            and not self.config.block_long_during_recovery_candidate
+        ):
             allow_new_long = True
         confidence = 0.5
         if metrics.get("sell_ratio") is not None:
@@ -885,8 +1015,18 @@ class PanicSellStateDetector:
             panic_score=round(float(panic_score), 6),
             recovery_score=round(float(recovery_score), 6),
             panic_active=self.state
-            in {PanicInternalState.PANIC_CANDIDATE, PanicInternalState.PANIC_ACTIVE, PanicInternalState.RECOVERY_CANDIDATE},
-            panic_entered=bool(panic_entered or (previous_state != PanicInternalState.PANIC_ACTIVE and self.state == PanicInternalState.PANIC_ACTIVE)),
+            in {
+                PanicInternalState.PANIC_CANDIDATE,
+                PanicInternalState.PANIC_ACTIVE,
+                PanicInternalState.RECOVERY_CANDIDATE,
+            },
+            panic_entered=bool(
+                panic_entered
+                or (
+                    previous_state != PanicInternalState.PANIC_ACTIVE
+                    and self.state == PanicInternalState.PANIC_ACTIVE
+                )
+            ),
             recovery_candidate=self.state == PanicInternalState.RECOVERY_CANDIDATE,
             recovery_confirmed=self.state == PanicInternalState.RECOVERED,
             risk_off=bool(risk_off),
@@ -895,8 +1035,14 @@ class PanicSellStateDetector:
             allow_new_long_advisory=bool(allow_new_long),
             confidence=confidence,
             severity=severity,
-            panic_low=None if self.panic_low is None else round(float(self.panic_low), 6),
-            panic_start_ts=self.panic_start_ts.isoformat(timespec="seconds") if self.panic_start_ts else None,
+            panic_low=(
+                None if self.panic_low is None else round(float(self.panic_low), 6)
+            ),
+            panic_start_ts=(
+                self.panic_start_ts.isoformat(timespec="seconds")
+                if self.panic_start_ts
+                else None
+            ),
             cooldown_remaining=int(self.cooldown_remaining),
             reasons=list(dict.fromkeys(reasons)),
             metrics=metrics,
@@ -931,16 +1077,38 @@ def candle_from_event(row: dict[str, Any]) -> PanicCandle | None:
     )
     if close is None or close <= 0:
         return None
-    open_value = _safe_float(_field(fields, "open", "open_price", "candle_open"), close) or close
-    high = _safe_float(_field(fields, "high", "high_price", "candle_high"), max(open_value, close)) or max(open_value, close)
-    low = _safe_float(_field(fields, "low", "low_price", "candle_low"), min(open_value, close)) or min(open_value, close)
-    volume = _safe_float(_field(fields, "volume", "today_vol", "trade_volume", "total_volume"), None)
+    open_value = (
+        _safe_float(_field(fields, "open", "open_price", "candle_open"), close) or close
+    )
+    high = _safe_float(
+        _field(fields, "high", "high_price", "candle_high"), max(open_value, close)
+    ) or max(open_value, close)
+    low = _safe_float(
+        _field(fields, "low", "low_price", "candle_low"), min(open_value, close)
+    ) or min(open_value, close)
+    volume = _safe_float(
+        _field(fields, "volume", "today_vol", "trade_volume", "total_volume"), None
+    )
     if volume is None:
-        buy_volume = _safe_float(_field(fields, "buy_exec_volume", "buy_volume"), 0.0) or 0.0
-        sell_volume = _safe_float(_field(fields, "sell_exec_volume", "sell_volume"), 0.0) or 0.0
+        buy_volume = (
+            _safe_float(_field(fields, "buy_exec_volume", "buy_volume"), 0.0) or 0.0
+        )
+        sell_volume = (
+            _safe_float(_field(fields, "sell_exec_volume", "sell_volume"), 0.0) or 0.0
+        )
         volume = buy_volume + sell_volume
-    vwap = _safe_float(_field(fields, "vwap", "vwap_price", "panic_anchored_vwap"), None)
-    return PanicCandle(ts=ts, open=open_value, high=max(high, low, close), low=min(low, high, close), close=close, volume=max(0.0, volume or 0.0), vwap=vwap)
+    vwap = _safe_float(
+        _field(fields, "vwap", "vwap_price", "panic_anchored_vwap"), None
+    )
+    return PanicCandle(
+        ts=ts,
+        open=open_value,
+        high=max(high, low, close),
+        low=min(low, high, close),
+        close=close,
+        volume=max(0.0, volume or 0.0),
+        vwap=vwap,
+    )
 
 
 def trade_flow_from_event(row: dict[str, Any]) -> PanicTradeFlow | None:
@@ -950,16 +1118,28 @@ def trade_flow_from_event(row: dict[str, Any]) -> PanicTradeFlow | None:
         return None
     buy_volume = _safe_float(_field(fields, "buy_exec_volume", "buy_volume"), None)
     sell_volume = _safe_float(_field(fields, "sell_exec_volume", "sell_volume"), None)
-    total_volume = _safe_float(_field(fields, "total_volume", "volume", "today_vol"), None)
-    if (buy_volume is None or sell_volume is None) and total_volume is not None and total_volume > 0:
-        buy_ratio = _safe_float(_field(fields, "exec_buy_ratio", "buy_ratio", "buy_ratio_ws"), None)
+    total_volume = _safe_float(
+        _field(fields, "total_volume", "volume", "today_vol"), None
+    )
+    if (
+        (buy_volume is None or sell_volume is None)
+        and total_volume is not None
+        and total_volume > 0
+    ):
+        buy_ratio = _safe_float(
+            _field(fields, "exec_buy_ratio", "buy_ratio", "buy_ratio_ws"), None
+        )
         if buy_ratio is not None:
             ratio = buy_ratio / 100.0 if buy_ratio > 1.0 else buy_ratio
             buy_volume = total_volume * _clamp01(ratio)
             sell_volume = total_volume - buy_volume
     if buy_volume is None and sell_volume is None:
         return None
-    return PanicTradeFlow(ts=ts, buy_volume=max(0.0, buy_volume or 0.0), sell_volume=max(0.0, sell_volume or 0.0))
+    return PanicTradeFlow(
+        ts=ts,
+        buy_volume=max(0.0, buy_volume or 0.0),
+        sell_volume=max(0.0, sell_volume or 0.0),
+    )
 
 
 def orderbook_micro_from_event(row: dict[str, Any]) -> PanicOrderbookMicro | None:
@@ -971,21 +1151,46 @@ def orderbook_micro_from_event(row: dict[str, Any]) -> PanicOrderbookMicro | Non
     best_ask = _safe_float(_field(fields, "best_ask", "ask_price"), None)
     ofi_z = _safe_float(_field(fields, "orderbook_micro_ofi_z", "ofi_z"), None)
     qi_ewma = _safe_float(_field(fields, "orderbook_micro_qi_ewma", "qi_ewma"), None)
-    spread_ratio = _safe_float(_field(fields, "panic_spread_ratio", "micro_spread_ratio"), None)
+    spread_ratio = _safe_float(
+        _field(fields, "panic_spread_ratio", "micro_spread_ratio"), None
+    )
     if spread_ratio is None:
         raw_spread_ratio = _safe_float(_field(fields, "spread_ratio"), None)
         if raw_spread_ratio is not None and raw_spread_ratio >= 1.0:
             spread_ratio = raw_spread_ratio
-    bid_depth = _safe_float(_field(fields, "bid_depth_l5", "bid_tot", "net_bid_depth"), None)
-    ask_depth = _safe_float(_field(fields, "ask_depth_l5", "ask_tot", "net_ask_depth"), None)
+    bid_depth = _safe_float(
+        _field(fields, "bid_depth_l5", "bid_tot", "net_bid_depth"), None
+    )
+    ask_depth = _safe_float(
+        _field(fields, "ask_depth_l5", "ask_tot", "net_ask_depth"), None
+    )
     bid_drop = _safe_float(_field(fields, "bid_depth_drop_ratio"), None)
     bid_refill = _safe_float(_field(fields, "bid_depth_refill_ratio"), None)
-    micro_state = str(_field(fields, "orderbook_micro_state", "micro_state") or "missing")
-    ready = _safe_bool(_field(fields, "orderbook_micro_ready", "orderbook_ready"), default=False)
-    healthy = _safe_bool(_field(fields, "orderbook_micro_observer_healthy", "orderbook_observer_healthy"), default=False)
+    micro_state = str(
+        _field(fields, "orderbook_micro_state", "micro_state") or "missing"
+    )
+    ready = _safe_bool(
+        _field(fields, "orderbook_micro_ready", "orderbook_ready"), default=False
+    )
+    healthy = _safe_bool(
+        _field(
+            fields, "orderbook_micro_observer_healthy", "orderbook_observer_healthy"
+        ),
+        default=False,
+    )
     has_orderbook_signal = any(
         value is not None
-        for value in (best_bid, best_ask, ofi_z, qi_ewma, spread_ratio, bid_depth, ask_depth, bid_drop, bid_refill)
+        for value in (
+            best_bid,
+            best_ask,
+            ofi_z,
+            qi_ewma,
+            spread_ratio,
+            bid_depth,
+            ask_depth,
+            bid_drop,
+            bid_refill,
+        )
     ) or micro_state not in {"", "missing"}
     if not has_orderbook_signal:
         return None
@@ -1074,7 +1279,9 @@ def summarize_microstructure_detector_from_events(
         reverse=True,
     )
     risk_off_count = sum(1 for item in symbol_signals if item.signal.risk_off_advisory)
-    allow_false_count = sum(1 for item in symbol_signals if not item.signal.allow_new_long_advisory)
+    allow_false_count = sum(
+        1 for item in symbol_signals if not item.signal.allow_new_long_advisory
+    )
     panic_scores = [item.signal.panic_score for item in symbol_signals]
     recovery_scores = [item.signal.recovery_score for item in symbol_signals]
     cusum_triggered = [
@@ -1119,13 +1326,22 @@ def summarize_microstructure_detector_from_events(
         "evaluated_symbol_count": len(symbol_signals),
         "risk_off_advisory_count": risk_off_count,
         "allow_new_long_false_count": allow_false_count,
-        "panic_signal_count": sum(1 for item in symbol_signals if item.signal.state == REPORT_PANIC_SELL),
-        "recovery_candidate_count": sum(1 for item in symbol_signals if item.signal.recovery_candidate),
-        "recovery_confirmed_count": sum(1 for item in symbol_signals if item.signal.recovery_confirmed),
+        "panic_signal_count": sum(
+            1 for item in symbol_signals if item.signal.state == REPORT_PANIC_SELL
+        ),
+        "recovery_candidate_count": sum(
+            1 for item in symbol_signals if item.signal.recovery_candidate
+        ),
+        "recovery_confirmed_count": sum(
+            1 for item in symbol_signals if item.signal.recovery_confirmed
+        ),
         "missing_orderbook_count": missing_orderbook,
         "degraded_orderbook_count": degraded_orderbook,
         "state_counts": dict(sorted(state_counter.items())),
-        "top_reasons": [{"reason": key, "count": value} for key, value in reason_counter.most_common(12)],
+        "top_reasons": [
+            {"reason": key, "count": value}
+            for key, value in reason_counter.most_common(12)
+        ],
         "micro_cusum_observer": {
             "metric_role": "source_quality_gate",
             "decision_authority": "source_quality_only",
@@ -1147,9 +1363,17 @@ def summarize_microstructure_detector_from_events(
         },
         "metrics": {
             "max_panic_score": round(max(panic_scores), 6) if panic_scores else 0.0,
-            "max_recovery_score": round(max(recovery_scores), 6) if recovery_scores else 0.0,
-            "avg_panic_score": round(sum(panic_scores) / len(panic_scores), 6) if panic_scores else 0.0,
-            "avg_recovery_score": round(sum(recovery_scores) / len(recovery_scores), 6) if recovery_scores else 0.0,
+            "max_recovery_score": (
+                round(max(recovery_scores), 6) if recovery_scores else 0.0
+            ),
+            "avg_panic_score": (
+                round(sum(panic_scores) / len(panic_scores), 6) if panic_scores else 0.0
+            ),
+            "avg_recovery_score": (
+                round(sum(recovery_scores) / len(recovery_scores), 6)
+                if recovery_scores
+                else 0.0
+            ),
         },
         "latest_signals": [item.to_dict() for item in ordered[:max_symbols]],
     }

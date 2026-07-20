@@ -4519,7 +4519,7 @@ def test_dynamic_entry_price_uses_own_counterfactual_join_rate():
                     "events_without_counterfactual": 21,
                     "events_without_counterfactual_event_count": 21,
                     "counterfactual_unmatched_row_count": 0,
-                }
+                },
             },
         },
     }

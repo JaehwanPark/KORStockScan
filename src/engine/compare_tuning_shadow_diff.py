@@ -19,7 +19,6 @@ from typing import Any, Dict, Iterable
 from src.engine.tuning_duckdb_repository import TuningDuckDBRepository
 from src.utils.constants import DATA_DIR
 
-
 PIPELINE_DIR = DATA_DIR / "pipeline_events"
 POST_SELL_DIR = DATA_DIR / "post_sell"
 
@@ -109,7 +108,10 @@ def _count_jsonl_metrics(start_date: date, end_date: date) -> Dict[str, int]:
                     or "ai_threshold" in stage
                 ):
                     metrics["funnel_ai_threshold_block"] += 1
-                if "blocked_overbought" in stage or str(fields.get("overbought_blocked", "")).lower() == "true":
+                if (
+                    "blocked_overbought" in stage
+                    or str(fields.get("overbought_blocked", "")).lower() == "true"
+                ):
                     metrics["funnel_overbought_block"] += 1
                 if "submitted" in stage:
                     metrics["submitted_events"] += 1
@@ -134,7 +136,9 @@ def _count_jsonl_metrics(start_date: date, end_date: date) -> Dict[str, int]:
                     seen_post_sell_ids.add(event_id)
                 outcome = str(event.get("outcome") or "")
                 profit_rate = event.get("profit_rate")
-                if outcome in {"GOOD_EXIT", "COMPLETED"} and isinstance(profit_rate, (int, float)):
+                if outcome in {"GOOD_EXIT", "COMPLETED"} and isinstance(
+                    profit_rate, (int, float)
+                ):
                     metrics["trade_count"] += 1
                     metrics["completed_count"] += 1
                 if outcome == "MISSED_UPSIDE":
@@ -213,19 +217,29 @@ def _count_duckdb_metrics(start_date: date, end_date: date) -> Dict[str, int]:
         )
 
     metrics = _empty_metrics()
-    pipeline_row = pipeline_df.fillna(0).iloc[0].to_dict() if not pipeline_df.empty else {}
-    post_sell_row = post_sell_df.fillna(0).iloc[0].to_dict() if not post_sell_df.empty else {}
+    pipeline_row = (
+        pipeline_df.fillna(0).iloc[0].to_dict() if not pipeline_df.empty else {}
+    )
+    post_sell_row = (
+        post_sell_df.fillna(0).iloc[0].to_dict() if not post_sell_df.empty else {}
+    )
     for key in metrics:
         value = pipeline_row.get(key, post_sell_row.get(key, 0))
         if key in post_sell_row:
             value = post_sell_row.get(key, 0)
-        if key in pipeline_row and key not in {"trade_count", "completed_count", "missed_upside"}:
+        if key in pipeline_row and key not in {
+            "trade_count",
+            "completed_count",
+            "missed_upside",
+        }:
             value = pipeline_row.get(key, 0)
         metrics[key] = int(value or 0)
     return metrics
 
 
-def _build_diff(jsonl_metrics: Dict[str, int], duckdb_metrics: Dict[str, int]) -> Dict[str, Any]:
+def _build_diff(
+    jsonl_metrics: Dict[str, int], duckdb_metrics: Dict[str, int]
+) -> Dict[str, Any]:
     diff: Dict[str, Any] = {}
     all_equal = True
     for key in jsonl_metrics:
@@ -267,7 +281,9 @@ def main():
 
     out_path = Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+    out_path.write_text(
+        json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     print(json.dumps(result, ensure_ascii=False, indent=2))
     print(f"saved: {out_path}")
 

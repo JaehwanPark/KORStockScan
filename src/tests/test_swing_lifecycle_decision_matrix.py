@@ -795,7 +795,9 @@ def test_swing_ldm_workorder_ids_keep_digest_for_long_bucket_keys():
     )
 
     assert len({item["workorder_id"] for item in workorders}) == 2
-    assert all(len(item["workorder_id"].rsplit("_", 1)[-1]) == 10 for item in workorders)
+    assert all(
+        len(item["workorder_id"].rsplit("_", 1)[-1]) == 10 for item in workorders
+    )
 
 
 def test_swing_ldm_reports_clean_baseline_discovery_filter(tmp_path, monkeypatch):

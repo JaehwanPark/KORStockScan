@@ -26,7 +26,6 @@ from src.engine.pipeline_event_summary import (
 from src.engine.sentinel_event_cache import update_and_load_cached_event_rows
 from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
 
-
 MANUAL_EXCLUDED_STOCKS = {
     ("제룡전기", "033100"),
 }
@@ -206,7 +205,10 @@ def _is_truthy_text(value: Any) -> bool:
 
 def _contains_text_token(value: Any, token: str) -> bool:
     if isinstance(value, dict):
-        return any(token in str(key) or _contains_text_token(item, token) for key, item in value.items())
+        return any(
+            token in str(key) or _contains_text_token(item, token)
+            for key, item in value.items()
+        )
     if isinstance(value, (list, tuple, set)):
         return any(_contains_text_token(item, token) for item in value)
     return token in _safe_str(value)
@@ -217,13 +219,16 @@ def _is_early_accel_recheck_retry_fields(fields: dict[str, Any]) -> bool:
         _safe_str(fields.get("ai_call_trigger_reason")) == "early_accel_recheck"
         or _safe_str(fields.get("tuning_authority_excluded_reason"))
         == "early_accel_recheck_operator_retry"
-        or _safe_str(fields.get("ai_call_trigger_reason")) == "ai_numeric_consistency_recheck"
+        or _safe_str(fields.get("ai_call_trigger_reason"))
+        == "ai_numeric_consistency_recheck"
         or _safe_str(fields.get("tuning_authority_excluded_reason"))
         == "ai_numeric_consistency_recheck_operator_retry"
     )
 
 
-def _payload_requires_lossless_cache(payload: dict[str, Any], fields: dict[str, Any]) -> bool:
+def _payload_requires_lossless_cache(
+    payload: dict[str, Any], fields: dict[str, Any]
+) -> bool:
     for key in ("actual_order_submitted", "broker_order_submitted", "order_submitted"):
         if _is_truthy_text(payload.get(key)) or _is_truthy_text(fields.get(key)):
             return True
@@ -248,7 +253,11 @@ def _payload_to_cache_row(
     raw_field_dict = raw_fields if isinstance(raw_fields, dict) else {}
     if _is_early_accel_recheck_retry_fields(raw_field_dict):
         return None
-    if exclude_summary_stages and stage in SUMMARY_STAGES and not _payload_requires_lossless_cache(payload, raw_field_dict):
+    if (
+        exclude_summary_stages
+        and stage in SUMMARY_STAGES
+        and not _payload_requires_lossless_cache(payload, raw_field_dict)
+    ):
         return None
     if not (
         stage in ENTRY_STAGES
@@ -296,7 +305,11 @@ def _event_from_cache_row(row: dict[str, Any]) -> PipelineEvent | None:
     if emitted_at is None:
         return None
     raw_fields = row.get("fields") or {}
-    fields = {str(k): _safe_str(v) for k, v in raw_fields.items()} if isinstance(raw_fields, dict) else {}
+    fields = (
+        {str(k): _safe_str(v) for k, v in raw_fields.items()}
+        if isinstance(raw_fields, dict)
+        else {}
+    )
     return PipelineEvent(
         emitted_at=emitted_at,
         pipeline=_safe_str(row.get("pipeline")),
@@ -319,7 +332,9 @@ def load_pipeline_events(
         return []
     if use_cache:
         cache_schema_version = (
-            LOSSLESS_EVENT_CACHE_SCHEMA_VERSION if exclude_summary_stages else EVENT_CACHE_SCHEMA_VERSION
+            LOSSLESS_EVENT_CACHE_SCHEMA_VERSION
+            if exclude_summary_stages
+            else EVENT_CACHE_SCHEMA_VERSION
         )
         rows, _ = update_and_load_cached_event_rows(
             raw_path=path,
@@ -332,7 +347,9 @@ def load_pipeline_events(
                 exclude_summary_stages=exclude_summary_stages,
             ),
         )
-        events = [event for row in rows if (event := _event_from_cache_row(row)) is not None]
+        events = [
+            event for row in rows if (event := _event_from_cache_row(row)) is not None
+        ]
         events.sort(key=lambda event: event.emitted_at)
         return events
 
@@ -372,7 +389,9 @@ def load_pipeline_events(
     return events
 
 
-def load_pipeline_event_summaries(target_date: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+def load_pipeline_event_summaries(
+    target_date: str,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     return update_and_load_pipeline_event_summaries(
         raw_path=_pipeline_events_path(target_date),
         summary_dir=_event_summary_dir(),
@@ -397,7 +416,9 @@ def _load_event_sources(
     }
     exclude_summary_stages = False
     if use_summary:
-        loaded_summary_rows, loaded_summary_meta = load_pipeline_event_summaries(target_date)
+        loaded_summary_rows, loaded_summary_meta = load_pipeline_event_summaries(
+            target_date
+        )
         summary_meta = loaded_summary_meta
         if loaded_summary_meta.get("status") == "ok":
             summary_rows = loaded_summary_rows
@@ -408,32 +429,48 @@ def _load_event_sources(
         use_cache=use_cache,
         exclude_summary_stages=exclude_summary_stages,
     )
-    return events, summary_rows, {
-        "cache_enabled": bool(use_cache),
-        "cache_name": EVENT_CACHE_NAME if use_cache else None,
-        "cache_schema_version": (
-            LOSSLESS_EVENT_CACHE_SCHEMA_VERSION if exclude_summary_stages and use_cache else EVENT_CACHE_SCHEMA_VERSION
-        )
-        if use_cache
-        else None,
-        "summary_enabled": bool(use_summary),
-        "summary_status": summary_meta.get("status"),
-        "summary_schema_version": SUMMARY_SCHEMA_VERSION if use_summary else None,
-        "summary_target_stages": sorted(SUMMARY_STAGES) if use_summary else [],
-        "summary_row_count": summary_meta.get("summary_row_count"),
-        "summary_appended_source_events": summary_meta.get("appended_source_events"),
-        "summary_appended_rows": summary_meta.get("appended_summary_rows"),
-        "summary_rebuilt": summary_meta.get("rebuilt"),
-        "summary_path": summary_meta.get("summary_path"),
-        "summary_manifest_raw_offset": summary_meta.get("raw_offset"),
-        "summary_manifest_raw_size": summary_meta.get("raw_size"),
-        "summary_raw_suppression_enabled": bool(summary_meta.get("raw_suppression_enabled", False)),
-        "summary_lossless_cache_excludes_summary_stages": bool(exclude_summary_stages),
-        "fallback_to_raw_cache": bool(use_summary and not exclude_summary_stages),
-    }
+    return (
+        events,
+        summary_rows,
+        {
+            "cache_enabled": bool(use_cache),
+            "cache_name": EVENT_CACHE_NAME if use_cache else None,
+            "cache_schema_version": (
+                (
+                    LOSSLESS_EVENT_CACHE_SCHEMA_VERSION
+                    if exclude_summary_stages and use_cache
+                    else EVENT_CACHE_SCHEMA_VERSION
+                )
+                if use_cache
+                else None
+            ),
+            "summary_enabled": bool(use_summary),
+            "summary_status": summary_meta.get("status"),
+            "summary_schema_version": SUMMARY_SCHEMA_VERSION if use_summary else None,
+            "summary_target_stages": sorted(SUMMARY_STAGES) if use_summary else [],
+            "summary_row_count": summary_meta.get("summary_row_count"),
+            "summary_appended_source_events": summary_meta.get(
+                "appended_source_events"
+            ),
+            "summary_appended_rows": summary_meta.get("appended_summary_rows"),
+            "summary_rebuilt": summary_meta.get("rebuilt"),
+            "summary_path": summary_meta.get("summary_path"),
+            "summary_manifest_raw_offset": summary_meta.get("raw_offset"),
+            "summary_manifest_raw_size": summary_meta.get("raw_size"),
+            "summary_raw_suppression_enabled": bool(
+                summary_meta.get("raw_suppression_enabled", False)
+            ),
+            "summary_lossless_cache_excludes_summary_stages": bool(
+                exclude_summary_stages
+            ),
+            "fallback_to_raw_cache": bool(use_summary and not exclude_summary_stages),
+        },
+    )
 
 
-def previous_trading_day_with_events(target_date: str, *, max_lookback_days: int = 10) -> str | None:
+def previous_trading_day_with_events(
+    target_date: str, *, max_lookback_days: int = 10
+) -> str | None:
     current = _parse_target_date(target_date)
     for offset in range(1, max_lookback_days + 1):
         candidate = current - timedelta(days=offset)
@@ -469,8 +506,13 @@ def _blocker_label(event: PipelineEvent) -> str:
     fields = event.fields
     if event.stage == "blocked_ai_score":
         score = _field_first(fields, ("score", "ai_score", "current_ai_score"))
-        reason = _field_first(fields, ("reason", "block_reason", "blocked_reason", "decision"))
-        if "ai_score_50_buy_hold_override" in reason or fields.get("ai_score_50_buy_hold_override") == "True":
+        reason = _field_first(
+            fields, ("reason", "block_reason", "blocked_reason", "decision")
+        )
+        if (
+            "ai_score_50_buy_hold_override" in reason
+            or fields.get("ai_score_50_buy_hold_override") == "True"
+        ):
             return "blocked_ai_score:ai_score_50_buy_hold_override"
         if score:
             return f"blocked_ai_score:score_{score}"
@@ -478,7 +520,9 @@ def _blocker_label(event: PipelineEvent) -> str:
         reason = _field_first(fields, ("reason", "latency_danger_reasons", "decision"))
         return f"latency_block:{reason or '-'}"
     if event.stage in PRICE_GUARD_STAGES:
-        reason = _field_first(fields, ("reason", "block_reason", "resolution_reason", "action"))
+        reason = _field_first(
+            fields, ("reason", "block_reason", "resolution_reason", "action")
+        )
         return f"{event.stage}:{reason or '-'}"
     if event.stage == "wait65_79_ev_candidate":
         score = _field_first(fields, ("ai_score", "score", "current_ai_score"))
@@ -509,13 +553,33 @@ def _post_refresh_downstream_bucket(event: PipelineEvent | None) -> str:
     label = _blocker_label(event).lower()
     if stage == "order_bundle_submitted":
         return "order_bundle_submitted"
-    if stage in PRICE_GUARD_STAGES or "price" in label or "slippage" in label or "gap" in label:
+    if (
+        stage in PRICE_GUARD_STAGES
+        or "price" in label
+        or "slippage" in label
+        or "gap" in label
+    ):
         return "price_guard_or_revalidation"
-    if stage in {"entry_armed_expired", "entry_armed_expired_after_wait", "entry_arm_expired"}:
+    if stage in {
+        "entry_armed_expired",
+        "entry_armed_expired_after_wait",
+        "entry_arm_expired",
+    }:
         return "armed_expired_before_submit"
     if stage == "budget_pass":
         return "budget_pass_no_submit_event"
-    if any(token in label for token in ("broker", "account", "order", "cooldown", "budget", "deposit", "cash")):
+    if any(
+        token in label
+        for token in (
+            "broker",
+            "account",
+            "order",
+            "cooldown",
+            "budget",
+            "deposit",
+            "cash",
+        )
+    ):
         return "broker_account_order_budget_cooldown"
     if stage.startswith(BLOCKER_STAGE_PREFIXES):
         return "upstream_block_after_latency_recovery"
@@ -530,7 +594,9 @@ def _count_unique(events: list[PipelineEvent], stage: str) -> int:
     return len({_attempt_key(event) for event in events if event.stage == stage})
 
 
-def _summary_row_count_in_range(row: dict[str, Any], *, start_at: datetime, end_at: datetime) -> tuple[int, datetime | None]:
+def _summary_row_count_in_range(
+    row: dict[str, Any], *, start_at: datetime, end_at: datetime
+) -> tuple[int, datetime | None]:
     second_counts = row.get("second_counts")
     count = 0
     latest: datetime | None = None
@@ -552,7 +618,12 @@ def _summary_row_count_in_range(row: dict[str, Any], *, start_at: datetime, end_
 
     first_seen = _parse_iso_datetime(_safe_str(row.get("first_seen")))
     last_seen = _parse_iso_datetime(_safe_str(row.get("last_seen")))
-    if first_seen is None or last_seen is None or last_seen < start_at or first_seen > end_at:
+    if (
+        first_seen is None
+        or last_seen is None
+        or last_seen < start_at
+        or first_seen > end_at
+    ):
         return 0, None
     try:
         return int(row.get("event_count") or 0), min(last_seen, end_at)
@@ -570,11 +641,14 @@ def _summarize_events(
     scoped = [
         event
         for event in events
-        if start_at <= event.emitted_at <= end_at and not _is_early_accel_recheck_retry_event(event)
+        if start_at <= event.emitted_at <= end_at
+        and not _is_early_accel_recheck_retry_event(event)
     ]
     has_summary_rows = bool(summary_rows)
     lossless_scoped = [
-        event for event in scoped if not (has_summary_rows and event.stage in SUMMARY_STAGES)
+        event
+        for event in scoped
+        if not (has_summary_rows and event.stage in SUMMARY_STAGES)
     ]
     stage_event_counts = Counter(event.stage for event in lossless_scoped)
     summary_event_count = 0
@@ -582,7 +656,9 @@ def _summarize_events(
     summary_blocker_counter: Counter[str] = Counter()
     summary_swing_blocker_counter: Counter[str] = Counter()
     for row in summary_rows or []:
-        count, latest = _summary_row_count_in_range(row, start_at=start_at, end_at=end_at)
+        count, latest = _summary_row_count_in_range(
+            row, start_at=start_at, end_at=end_at
+        )
         if count <= 0:
             continue
         stage = _safe_str(row.get("stage"))
@@ -597,13 +673,23 @@ def _summarize_events(
             else:
                 summary_blocker_counter[label] += count
     stage_unique_counts = {
-        stage: len({_attempt_key(event) for event in lossless_scoped if event.stage == stage})
+        stage: len(
+            {_attempt_key(event) for event in lossless_scoped if event.stage == stage}
+        )
         for stage in sorted(set(stage_event_counts) | ENTRY_STAGES | HOLDING_STAGES)
     }
-    raw_blocker_labels = [_blocker_label(event) for event in lossless_scoped if _is_blocker_stage(event.stage)]
-    blocker_counter = Counter(label for label in raw_blocker_labels if not _is_swing_blocker_label(label))
+    raw_blocker_labels = [
+        _blocker_label(event)
+        for event in lossless_scoped
+        if _is_blocker_stage(event.stage)
+    ]
+    blocker_counter = Counter(
+        label for label in raw_blocker_labels if not _is_swing_blocker_label(label)
+    )
     blocker_counter.update(summary_blocker_counter)
-    swing_blocker_counter = Counter(label for label in raw_blocker_labels if _is_swing_blocker_label(label))
+    swing_blocker_counter = Counter(
+        label for label in raw_blocker_labels if _is_swing_blocker_label(label)
+    )
     swing_blocker_counter.update(summary_swing_blocker_counter)
     upstream_events = [
         event
@@ -611,7 +697,9 @@ def _summarize_events(
         if event.stage in UPSTREAM_BLOCK_STAGES
         or _contains_text_token(event.fields, "ai_score_50_buy_hold_override")
     ]
-    price_guard_events = [event for event in lossless_scoped if event.stage in PRICE_GUARD_STAGES]
+    price_guard_events = [
+        event for event in lossless_scoped if event.stage in PRICE_GUARD_STAGES
+    ]
     latency_blocks = [
         event
         for event in lossless_scoped
@@ -640,12 +728,22 @@ def _summarize_events(
         for event in lossless_scoped
         if event.stage in {"latency_block", "latency_pass", "order_bundle_submitted"}
     ]
-    refresh_attempt_keys = {_attempt_key(event) for event in refresh_scope_events if _event_refresh_attempted(event)}
-    refresh_applied_keys = {_attempt_key(event) for event in refresh_scope_events if _event_refresh_applied(event)}
+    refresh_attempt_keys = {
+        _attempt_key(event)
+        for event in refresh_scope_events
+        if _event_refresh_attempted(event)
+    }
+    refresh_applied_keys = {
+        _attempt_key(event)
+        for event in refresh_scope_events
+        if _event_refresh_applied(event)
+    }
     refresh_blocked_after_attempt_keys = {
         _attempt_key(event)
         for event in refresh_scope_events
-        if event.stage == "latency_block" and _event_refresh_attempted(event) and not _event_refresh_applied(event)
+        if event.stage == "latency_block"
+        and _event_refresh_attempted(event)
+        and not _event_refresh_applied(event)
     }
     refresh_latency_pass_count = len(
         {
@@ -701,7 +799,11 @@ def _summarize_events(
     submitted_unique = stage_unique_counts.get("order_bundle_submitted", 0)
     latest_candidates = [lossless_scoped[-1].emitted_at] if lossless_scoped else []
     latest_candidates.extend(summary_latest_candidates)
-    latest_event_at = max(latest_candidates).isoformat(timespec="seconds") if latest_candidates else None
+    latest_event_at = (
+        max(latest_candidates).isoformat(timespec="seconds")
+        if latest_candidates
+        else None
+    )
 
     return {
         "start_at": start_at.isoformat(timespec="seconds"),
@@ -732,7 +834,9 @@ def _summarize_events(
             {"label": label, "count": count}
             for label, count in latency_danger_reason_counts.most_common(10)
         ],
-        "latency_danger_reason_counts": dict(sorted(latency_danger_reason_counts.items())),
+        "latency_danger_reason_counts": dict(
+            sorted(latency_danger_reason_counts.items())
+        ),
         "price_guard_top": [
             {"label": label, "count": count}
             for label, count in price_guard_counter.most_common(10)
@@ -746,10 +850,14 @@ def _summarize_events(
         "price_guard_events": len(price_guard_events),
         "quote_freshness_refresh_attempted_count": len(refresh_attempt_keys),
         "quote_freshness_refresh_applied_count": len(refresh_applied_keys),
-        "quote_freshness_still_latency_blocked_after_refresh_count": len(refresh_blocked_after_attempt_keys),
+        "quote_freshness_still_latency_blocked_after_refresh_count": len(
+            refresh_blocked_after_attempt_keys
+        ),
         "quote_freshness_refresh_latency_pass_count": refresh_latency_pass_count,
         "quote_freshness_refresh_order_bundle_submitted_count": refresh_order_bundle_submitted_count,
-        "quote_freshness_recovered_downstream_counts": dict(sorted(post_refresh_downstream_counter.items())),
+        "quote_freshness_recovered_downstream_counts": dict(
+            sorted(post_refresh_downstream_counter.items())
+        ),
         "quote_freshness_recovered_downstream_stage_counts": dict(
             sorted(post_refresh_downstream_stage_counter.items())
         ),
@@ -764,7 +872,9 @@ def _summarize_events(
             "entry_armed": _count_unique(lossless_scoped, "entry_armed"),
             "budget_pass": _count_unique(lossless_scoped, "budget_pass"),
             "latency_pass": _count_unique(lossless_scoped, "latency_pass"),
-            "order_bundle_submitted": _count_unique(lossless_scoped, "order_bundle_submitted"),
+            "order_bundle_submitted": _count_unique(
+                lossless_scoped, "order_bundle_submitted"
+            ),
             "holding_started": _count_unique(lossless_scoped, "holding_started"),
         },
     }
@@ -778,28 +888,30 @@ def _same_time_on_date(target_date: str, source: datetime) -> datetime:
 def _event_refresh_attempted(event: PipelineEvent) -> bool:
     for prefix in ("pre_submit_ws_snapshot_refresh", "pre_submit_quote_refresh"):
         reason = _safe_str(event.fields.get(f"{prefix}_reason")).lower()
-        if _event_refresh_applied(event) or reason not in PRE_SUBMIT_REFRESH_NOOP_REASONS:
+        if (
+            _event_refresh_applied(event)
+            or reason not in PRE_SUBMIT_REFRESH_NOOP_REASONS
+        ):
             return True
     return False
 
 
 def _event_refresh_applied(event: PipelineEvent) -> bool:
-    return (
-        _is_truthy_text(event.fields.get("pre_submit_quote_refresh_applied"))
-        or _is_truthy_text(event.fields.get("pre_submit_ws_snapshot_refresh_applied"))
-    )
+    return _is_truthy_text(
+        event.fields.get("pre_submit_quote_refresh_applied")
+    ) or _is_truthy_text(event.fields.get("pre_submit_ws_snapshot_refresh_applied"))
 
 
 def _latency_danger_reason_labels(event: PipelineEvent) -> list[str]:
     raw = _safe_str(event.fields.get("latency_danger_reasons"))
     labels = [
-        label.strip()
-        for label in raw.replace(";", ",").split(",")
-        if label.strip()
+        label.strip() for label in raw.replace(";", ",").split(",") if label.strip()
     ]
     if _safe_str(event.fields.get("quote_stale")).lower() == "true":
         labels.append("quote_stale")
-    observer_reason = _safe_str(event.fields.get("orderbook_micro_observer_missing_reason"))
+    observer_reason = _safe_str(
+        event.fields.get("orderbook_micro_observer_missing_reason")
+    )
     if observer_reason and observer_reason not in {"ok", "-", "None"}:
         labels.append(f"observer_{observer_reason}")
     micro_bucket = _safe_str(
@@ -807,12 +919,18 @@ def _latency_danger_reason_labels(event: PipelineEvent) -> list[str]:
         or event.fields.get("orderbook_micro_calibration_bucket")
     ).lower()
     micro_spread_ticks = _safe_float(event.fields.get("orderbook_micro_spread_ticks"))
-    if "spread=wide" in micro_bucket or (micro_spread_ticks is not None and micro_spread_ticks >= 5.0):
+    if "spread=wide" in micro_bucket or (
+        micro_spread_ticks is not None and micro_spread_ticks >= 5.0
+    ):
         labels.append("orderbook_micro_spread_wide")
-    refresh_reason = _safe_str(event.fields.get("pre_submit_quote_refresh_reason")).lower()
+    refresh_reason = _safe_str(
+        event.fields.get("pre_submit_quote_refresh_reason")
+    ).lower()
     if refresh_reason and refresh_reason not in PRE_SUBMIT_REFRESH_NOOP_REASONS:
         labels.append(f"pre_submit_quote_refresh_{refresh_reason}")
-    ws_refresh_reason = _safe_str(event.fields.get("pre_submit_ws_snapshot_refresh_reason")).lower()
+    ws_refresh_reason = _safe_str(
+        event.fields.get("pre_submit_ws_snapshot_refresh_reason")
+    ).lower()
     if ws_refresh_reason and ws_refresh_reason not in PRE_SUBMIT_REFRESH_NOOP_REASONS:
         labels.append(f"pre_submit_ws_snapshot_refresh_{ws_refresh_reason}")
     return labels or [_blocker_label(event)]
@@ -864,7 +982,9 @@ def _latency_root_cause_bucket(label: str) -> str:
     refresh_bucket = _refresh_reason_bucket(label)
     if refresh_bucket == "refresh_disabled_or_alias_gap":
         return "observer_unhealthy"
-    if refresh_bucket and any(token in refresh_bucket for token in ("missing", "invalid")):
+    if refresh_bucket and any(
+        token in refresh_bucket for token in ("missing", "invalid")
+    ):
         return "observer_unhealthy"
     if refresh_bucket and "stale" in refresh_bucket:
         return "quote_stale"
@@ -884,12 +1004,23 @@ def _latency_root_cause_bucket(label: str) -> str:
     # remaining source dimension is order RTT / transport execution health.
     if "other_danger" in text or "order_rtt" in text or "rtt" in text:
         return "order_rtt_guard"
-    if "quote_stale" in text or "stale" in text or "ws_age" in text or "quote_age" in text:
+    if (
+        "quote_stale" in text
+        or "stale" in text
+        or "ws_age" in text
+        or "quote_age" in text
+    ):
         return "quote_stale"
     if (
         "observer_unhealthy" in text
-        or ("observer" in text and any(token in text for token in ("unhealthy", "missing", "invalid")))
-        or ("ws_snapshot" in text and any(token in text for token in ("missing", "invalid")))
+        or (
+            "observer" in text
+            and any(token in text for token in ("unhealthy", "missing", "invalid"))
+        )
+        or (
+            "ws_snapshot" in text
+            and any(token in text for token in ("missing", "invalid"))
+        )
     ):
         return "observer_unhealthy"
     if "missing_trade" in text:
@@ -929,7 +1060,8 @@ def _latency_drought_root_cause_summary(current: dict[str, Any]) -> dict[str, An
         buckets[_latency_root_cause_bucket(label)] += count
     total = sum(buckets.values())
     refresh_attempted = int(
-        current.get("quote_freshness_refresh_attempted_count", 0) or sum(refresh_buckets.values())
+        current.get("quote_freshness_refresh_attempted_count", 0)
+        or sum(refresh_buckets.values())
     )
     refresh_applied = int(
         current.get("quote_freshness_refresh_applied_count", 0)
@@ -938,8 +1070,12 @@ def _latency_drought_root_cause_summary(current: dict[str, Any]) -> dict[str, An
             + refresh_buckets.get("observer_quote_refresh_applied", 0)
         )
     )
-    recovered_latency_pass = int(current.get("quote_freshness_refresh_latency_pass_count", 0) or 0)
-    submitted_after_refresh = int(current.get("quote_freshness_refresh_order_bundle_submitted_count", 0) or 0)
+    recovered_latency_pass = int(
+        current.get("quote_freshness_refresh_latency_pass_count", 0) or 0
+    )
+    submitted_after_refresh = int(
+        current.get("quote_freshness_refresh_order_bundle_submitted_count", 0) or 0
+    )
     still_blocked_after_refresh = int(
         current.get("quote_freshness_still_latency_blocked_after_refresh_count", 0)
         or max(refresh_attempted - refresh_applied, 0)
@@ -951,7 +1087,9 @@ def _latency_drought_root_cause_summary(current: dict[str, Any]) -> dict[str, An
     )
     recovered_downstream_stage_counts = (
         current.get("quote_freshness_recovered_downstream_stage_counts")
-        if isinstance(current.get("quote_freshness_recovered_downstream_stage_counts"), dict)
+        if isinstance(
+            current.get("quote_freshness_recovered_downstream_stage_counts"), dict
+        )
         else {}
     )
     submitted_after_refresh = max(
@@ -959,7 +1097,9 @@ def _latency_drought_root_cause_summary(current: dict[str, Any]) -> dict[str, An
         int(recovered_downstream_counts.get("order_bundle_submitted", 0) or 0),
     )
     return {
-        "latency_danger_event_count": int(current.get("latency_state_danger_events", 0) or 0),
+        "latency_danger_event_count": int(
+            current.get("latency_state_danger_events", 0) or 0
+        ),
         "latency_root_cause_counts": dict(buckets),
         "quote_freshness_attribution": {
             "runtime_effect": False,
@@ -983,13 +1123,16 @@ def _latency_drought_root_cause_summary(current: dict[str, Any]) -> dict[str, An
         },
         "unknown_latency_reason_count": buckets.get("unknown_latency_reason", 0),
         "known_latency_reason_count": total - buckets.get("unknown_latency_reason", 0),
-        "unknown_latency_workorder_required": buckets.get("unknown_latency_reason", 0) > 0,
+        "unknown_latency_workorder_required": buckets.get("unknown_latency_reason", 0)
+        > 0,
         "known_guard_route": "report_only_tuning_candidate",
         "unknown_guard_route": "implement_now_candidate",
     }
 
 
-def _classify(current: dict[str, Any], baseline: dict[str, Any] | None, *, as_of: datetime) -> dict[str, Any]:
+def _classify(
+    current: dict[str, Any], baseline: dict[str, Any] | None, *, as_of: datetime
+) -> dict[str, Any]:
     unique = current["stage_unique"]
     ratios = current["ratios"]
     ai_unique = int(unique.get("ai_confirmed", 0) or 0)
@@ -1003,8 +1146,12 @@ def _classify(current: dict[str, Any], baseline: dict[str, Any] | None, *, as_of
     baseline_budget_to_ai = None
     baseline_submitted_to_ai = None
     if baseline:
-        baseline_budget_to_ai = float(baseline["ratios"].get("budget_to_ai_unique_pct", 0.0) or 0.0)
-        baseline_submitted_to_ai = float(baseline["ratios"].get("submitted_to_ai_unique_pct", 0.0) or 0.0)
+        baseline_budget_to_ai = float(
+            baseline["ratios"].get("budget_to_ai_unique_pct", 0.0) or 0.0
+        )
+        baseline_submitted_to_ai = float(
+            baseline["ratios"].get("submitted_to_ai_unique_pct", 0.0) or 0.0
+        )
 
     reasons: list[str] = []
     matches: list[str] = []
@@ -1026,7 +1173,8 @@ def _classify(current: dict[str, Any], baseline: dict[str, Any] | None, *, as_of
     latency_drought = budget_unique >= 3 and (
         submitted_unique == 0
         or ratios["latency_to_budget_unique_pct"] < 25.0
-        or current["latency_state_danger_events"] >= max(3, submitted_unique + latency_unique)
+        or current["latency_state_danger_events"]
+        >= max(3, submitted_unique + latency_unique)
     )
     if latency_drought:
         matches.append("LATENCY_DROUGHT")
@@ -1036,7 +1184,9 @@ def _classify(current: dict[str, Any], baseline: dict[str, Any] | None, *, as_of
     upstream_block_events = int(current.get("upstream_block_events", 0) or 0)
     upstream_collapse = ai_unique >= 10 and budget_to_ai < 35.0
     if baseline_budget_to_ai is not None and baseline_budget_to_ai > 0:
-        upstream_collapse = upstream_collapse and budget_to_ai <= baseline_budget_to_ai * 0.6
+        upstream_collapse = (
+            upstream_collapse and budget_to_ai <= baseline_budget_to_ai * 0.6
+        )
     upstream_threshold = upstream_collapse or (
         ai_unique >= 10 and upstream_block_events >= max(5, budget_unique)
     )
@@ -1045,7 +1195,9 @@ def _classify(current: dict[str, Any], baseline: dict[str, Any] | None, *, as_of
         reasons.append("AI threshold/wait blockers suppress budget_pass before submit")
 
     submitted_to_ai = float(ratios.get("submitted_to_ai_unique_pct", 0.0) or 0.0)
-    submitted_to_budget = float(ratios.get("submitted_to_budget_unique_pct", 0.0) or 0.0)
+    submitted_to_budget = float(
+        ratios.get("submitted_to_budget_unique_pct", 0.0) or 0.0
+    )
     submit_drought_critical = (
         ai_unique >= SUBMIT_DROUGHT_MIN_AI_UNIQUE
         and submitted_to_ai < SUBMIT_TO_AI_CRITICAL_PCT
@@ -1096,7 +1248,9 @@ def _classify(current: dict[str, Any], baseline: dict[str, Any] | None, *, as_of
             "submitted_to_ai_critical_pct": SUBMIT_TO_AI_CRITICAL_PCT,
             "submitted_to_budget_critical_pct": SUBMIT_TO_BUDGET_CRITICAL_PCT,
         },
-        "submit_drought_handoff_state": "handoff_required" if submit_drought_critical else "not_required",
+        "submit_drought_handoff_state": (
+            "handoff_required" if submit_drought_critical else "not_required"
+        ),
         "submit_drought_root_cause": submit_drought_root_cause,
         "live_runtime_effect": False,
         "forbidden_automations": FORBIDDEN_AUTOMATIONS,
@@ -1105,7 +1259,11 @@ def _classify(current: dict[str, Any], baseline: dict[str, Any] | None, *, as_of
 
 def _recommend_actions(classification: dict[str, Any]) -> list[str]:
     primary = classification.get("primary")
-    matches = classification.get("matches") if isinstance(classification.get("matches"), list) else []
+    matches = (
+        classification.get("matches")
+        if isinstance(classification.get("matches"), list)
+        else []
+    )
     if "SUBMIT_DROUGHT_CRITICAL" in matches:
         primary = "SUBMIT_DROUGHT_CRITICAL"
     if primary == "RUNTIME_OPS":
@@ -1139,7 +1297,11 @@ def _recommend_actions(classification: dict[str, Any]) -> list[str]:
 
 def _followup_route(classification: dict[str, Any]) -> dict[str, Any]:
     primary = classification.get("primary")
-    matches = classification.get("matches") if isinstance(classification.get("matches"), list) else []
+    matches = (
+        classification.get("matches")
+        if isinstance(classification.get("matches"), list)
+        else []
+    )
     if "SUBMIT_DROUGHT_CRITICAL" in matches:
         primary = "SUBMIT_DROUGHT_CRITICAL"
     if primary == "RUNTIME_OPS":
@@ -1195,15 +1357,29 @@ def _entry_submit_drought_contract(
     classification: dict[str, Any],
     session_summary: dict[str, Any],
 ) -> dict[str, Any]:
-    matches = classification.get("matches") if isinstance(classification.get("matches"), list) else []
-    ratios = session_summary.get("ratios") if isinstance(session_summary.get("ratios"), dict) else {}
-    unique = session_summary.get("stage_unique") if isinstance(session_summary.get("stage_unique"), dict) else {}
+    matches = (
+        classification.get("matches")
+        if isinstance(classification.get("matches"), list)
+        else []
+    )
+    ratios = (
+        session_summary.get("ratios")
+        if isinstance(session_summary.get("ratios"), dict)
+        else {}
+    )
+    unique = (
+        session_summary.get("stage_unique")
+        if isinstance(session_summary.get("stage_unique"), dict)
+        else {}
+    )
     blocker_labels = [
         str(item.get("label") or "")
         for item in (session_summary.get("blocker_top") or [])
         if isinstance(item, dict)
     ]
-    taxonomy_leakage = any(label.startswith("blocked_swing_") for label in blocker_labels)
+    taxonomy_leakage = any(
+        label.startswith("blocked_swing_") for label in blocker_labels
+    )
     weak_contract_matches = []
     if "UPSTREAM_AI_THRESHOLD" in matches:
         weak_contract_matches.append("UPSTREAM_GATE")
@@ -1261,7 +1437,9 @@ def _entry_submit_drought_contract(
         },
         "ratios": {
             "submitted_to_ai_unique_pct": ratios.get("submitted_to_ai_unique_pct"),
-            "submitted_to_budget_unique_pct": ratios.get("submitted_to_budget_unique_pct"),
+            "submitted_to_budget_unique_pct": ratios.get(
+                "submitted_to_budget_unique_pct"
+            ),
             "budget_to_ai_unique_pct": ratios.get("budget_to_ai_unique_pct"),
             "latency_to_budget_unique_pct": ratios.get("latency_to_budget_unique_pct"),
         },
@@ -1287,8 +1465,16 @@ def _entry_submit_drought_observation_breakdown(
     taxonomy_leakage_labels: list[str],
     weak_contract_matches: list[str],
 ) -> dict[str, Any]:
-    unique = session_summary.get("stage_unique") if isinstance(session_summary.get("stage_unique"), dict) else {}
-    ratios = session_summary.get("ratios") if isinstance(session_summary.get("ratios"), dict) else {}
+    unique = (
+        session_summary.get("stage_unique")
+        if isinstance(session_summary.get("stage_unique"), dict)
+        else {}
+    )
+    ratios = (
+        session_summary.get("ratios")
+        if isinstance(session_summary.get("ratios"), dict)
+        else {}
+    )
     ai_unique = int(unique.get("ai_confirmed", 0) or 0)
     budget_unique = int(unique.get("budget_pass", 0) or 0)
     latency_unique = int(unique.get("latency_pass", 0) or 0)
@@ -1309,16 +1495,26 @@ def _entry_submit_drought_observation_breakdown(
 
     axes = {
         "UPSTREAM_GATE": {
-            "status": "observed" if "UPSTREAM_GATE" in weak_contract_matches else "no_current_signal",
+            "status": (
+                "observed"
+                if "UPSTREAM_GATE" in weak_contract_matches
+                else "no_current_signal"
+            ),
             "observed_count": int(session_summary.get("upstream_block_events", 0) or 0),
             "evidence": {
-                "upstream_blocker_top": upstream_blockers if isinstance(upstream_blockers, list) else [],
+                "upstream_blocker_top": (
+                    upstream_blockers if isinstance(upstream_blockers, list) else []
+                ),
                 "budget_to_ai_unique_pct": ratios.get("budget_to_ai_unique_pct"),
             },
             "next_repair_action": "split upstream AI terminal and score gate reasons before threshold interpretation",
         },
         "BUDGET_PASS_COLLAPSE": {
-            "status": "observed" if "BUDGET_PASS_COLLAPSE" in weak_contract_matches else "no_current_signal",
+            "status": (
+                "observed"
+                if "BUDGET_PASS_COLLAPSE" in weak_contract_matches
+                else "no_current_signal"
+            ),
             "observed_count": max(ai_unique - budget_unique, 0),
             "evidence": {
                 "ai_confirmed_unique": ai_unique,
@@ -1328,12 +1524,22 @@ def _entry_submit_drought_observation_breakdown(
             "next_repair_action": "preserve budget pass collapse as source attribution before EV approval",
         },
         "LATENCY_PRE_SUBMIT": {
-            "status": "observed" if "LATENCY_PRE_SUBMIT" in weak_contract_matches else "no_current_signal",
-            "observed_count": int(session_summary.get("latency_state_danger_events", 0) or 0),
+            "status": (
+                "observed"
+                if "LATENCY_PRE_SUBMIT" in weak_contract_matches
+                else "no_current_signal"
+            ),
+            "observed_count": int(
+                session_summary.get("latency_state_danger_events", 0) or 0
+            ),
             "evidence": {
-                "latency_blocker_top": latency_blockers if isinstance(latency_blockers, list) else [],
+                "latency_blocker_top": (
+                    latency_blockers if isinstance(latency_blockers, list) else []
+                ),
                 "latency_root_cause_counts": latency_root_cause_counts,
-                "unknown_latency_reason_count": int(root_cause.get("unknown_latency_reason_count", 0) or 0),
+                "unknown_latency_reason_count": int(
+                    root_cause.get("unknown_latency_reason_count", 0) or 0
+                ),
                 "unknown_latency_workorder_required": bool(
                     root_cause.get("unknown_latency_workorder_required")
                 ),
@@ -1342,18 +1548,30 @@ def _entry_submit_drought_observation_breakdown(
             "next_repair_action": "close unknown latency labels or route quote freshness gaps to LDM attribution",
         },
         "BROKER_RECEIPT": {
-            "status": "observed" if "BROKER_RECEIPT" in weak_contract_matches else "no_current_signal",
+            "status": (
+                "observed"
+                if "BROKER_RECEIPT" in weak_contract_matches
+                else "no_current_signal"
+            ),
             "observed_count": max(latency_unique - submitted_unique, 0),
             "evidence": {
                 "latency_pass_unique": latency_unique,
                 "order_bundle_submitted_unique": submitted_unique,
-                "submitted_to_budget_unique_pct": ratios.get("submitted_to_budget_unique_pct"),
+                "submitted_to_budget_unique_pct": ratios.get(
+                    "submitted_to_budget_unique_pct"
+                ),
             },
             "next_repair_action": "join post-submit broker receipt and fill provenance when submitted samples exist",
         },
         "SIM_REAL_AUTHORITY": {
-            "status": "observed" if "SIM_REAL_AUTHORITY" in weak_contract_matches else "no_current_signal",
-            "observed_count": 1 if "SUBMIT_DROUGHT_CRITICAL" in {str(item) for item in matches} else 0,
+            "status": (
+                "observed"
+                if "SIM_REAL_AUTHORITY" in weak_contract_matches
+                else "no_current_signal"
+            ),
+            "observed_count": (
+                1 if "SUBMIT_DROUGHT_CRITICAL" in {str(item) for item in matches} else 0
+            ),
             "evidence": {
                 "actual_order_submitted_authority": "not_granted_by_report",
                 "broker_order_submit_allowed": False,
@@ -1429,12 +1647,16 @@ def build_buy_funnel_sentinel_report(
     baseline_summary = None
     baseline_event_load = None
     if baseline_date:
-        baseline_events, baseline_summary_rows, baseline_event_load = _load_event_sources(
-            baseline_date,
-            use_cache=use_cache,
-            use_summary=use_summary,
+        baseline_events, baseline_summary_rows, baseline_event_load = (
+            _load_event_sources(
+                baseline_date,
+                use_cache=use_cache,
+                use_summary=use_summary,
+            )
         )
-        baseline_start = datetime.combine(_parse_target_date(baseline_date), SESSION_START)
+        baseline_start = datetime.combine(
+            _parse_target_date(baseline_date), SESSION_START
+        )
         baseline_end = _same_time_on_date(baseline_date, as_of)
         baseline_summary = _summarize_events(
             baseline_events,
@@ -1446,7 +1668,9 @@ def build_buy_funnel_sentinel_report(
     classification = _classify(session_summary, baseline_summary, as_of=as_of)
     followup = _followup_route(classification)
     recommended_actions = _recommend_actions(classification)
-    entry_submit_drought_contract = _entry_submit_drought_contract(classification, session_summary)
+    entry_submit_drought_contract = _entry_submit_drought_contract(
+        classification, session_summary
+    )
 
     return {
         "schema_version": 2,
@@ -1499,7 +1723,9 @@ def build_markdown(report: dict[str, Any]) -> str:
     unique = session["stage_unique"]
     classification = report["classification"]
     quote_freshness = (
-        (classification.get("submit_drought_root_cause") or {}).get("quote_freshness_attribution")
+        (classification.get("submit_drought_root_cause") or {}).get(
+            "quote_freshness_attribution"
+        )
         if isinstance(classification.get("submit_drought_root_cause"), dict)
         else {}
     )
@@ -1579,14 +1805,20 @@ def save_report_artifacts(report: dict[str, Any]) -> dict[str, str]:
     report_dir.mkdir(parents=True, exist_ok=True)
     json_path = report_dir / f"buy_funnel_sentinel_{target_date}.json"
     md_path = report_dir / f"buy_funnel_sentinel_{target_date}.md"
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     md_path.write_text(build_markdown(report), encoding="utf-8")
     return {"json": str(json_path), "markdown": str(md_path)}
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Build intraday BUY funnel sentinel report.")
-    parser.add_argument("--date", dest="target_date", default=datetime.now().strftime("%Y-%m-%d"))
+    parser = argparse.ArgumentParser(
+        description="Build intraday BUY funnel sentinel report."
+    )
+    parser.add_argument(
+        "--date", dest="target_date", default=datetime.now().strftime("%Y-%m-%d")
+    )
     parser.add_argument("--as-of", dest="as_of", default="")
     parser.add_argument(
         "--window-min",
@@ -1596,14 +1828,22 @@ def build_parser() -> argparse.ArgumentParser:
         default=[],
         help="Rolling window minutes. Repeatable. Defaults to 5/10/30.",
     )
-    parser.add_argument("--dry-run", action="store_true", help="Use latest event as as_of if omitted.")
-    parser.add_argument("--use-cache", action="store_true", help="Use slim incremental sentinel event cache.")
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Use latest event as as_of if omitted."
+    )
+    parser.add_argument(
+        "--use-cache",
+        action="store_true",
+        help="Use slim incremental sentinel event cache.",
+    )
     parser.add_argument(
         "--use-summary",
         action="store_true",
         help="Use high-volume blocked_* summary sidecar for BUY diagnostic blockers.",
     )
-    parser.add_argument("--print-json", action="store_true", help="Print final result JSON.")
+    parser.add_argument(
+        "--print-json", action="store_true", help="Print final result JSON."
+    )
     return parser
 
 

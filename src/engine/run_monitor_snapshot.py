@@ -14,7 +14,9 @@ from src.engine.log_archive_service import save_monitor_snapshots_for_date_with_
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Save monitor snapshots for a target date.")
+    parser = argparse.ArgumentParser(
+        description="Save monitor snapshots for a target date."
+    )
     parser.add_argument(
         "--date",
         dest="target_date",
@@ -42,7 +44,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--lock-file",
         dest="lock_file",
-        default=os.getenv("MONITOR_SNAPSHOT_LOCK_FILE", "tmp/run_monitor_snapshot.lock"),
+        default=os.getenv(
+            "MONITOR_SNAPSHOT_LOCK_FILE", "tmp/run_monitor_snapshot.lock"
+        ),
         help="Process lock file path to prevent concurrent snapshot jobs.",
     )
     parser.add_argument(
@@ -69,7 +73,9 @@ def _validate_wrapper_invocation(target_date: str | None) -> int | None:
                     "deploy/run_monitor_snapshot_safe.sh"
                 ),
                 "profile": os.getenv("MONITOR_SNAPSHOT_PROFILE", "full"),
-                "skip_server_comparison": os.getenv("MONITOR_SNAPSHOT_SKIP_SERVER_COMPARISON", "0")
+                "skip_server_comparison": os.getenv(
+                    "MONITOR_SNAPSHOT_SKIP_SERVER_COMPARISON", "0"
+                )
                 == "1",
                 "skip_lock": True,
                 "started_at": now,

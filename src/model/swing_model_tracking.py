@@ -7,7 +7,6 @@ from typing import Any
 
 from src.model.common_v2 import MODEL_REGISTRY_DIR
 
-
 EXPERIMENT_NAME = "korstockscan_swing_v2_model_upgrade"
 TRACKING_DIR = Path(MODEL_REGISTRY_DIR) / "mlruns"
 TRACKING_URI = "file:data/model_registry/swing_v2/mlruns"

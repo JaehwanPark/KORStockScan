@@ -34,10 +34,13 @@ from src.engine.lifecycle.bucket_taxonomy import (
     default_ai_tier2_proposal,
     normalize_lifecycle_bucket,
 )
-from src.engine.swing.sim_auto_approval_control_tower import refresh_swing_sim_auto_approval
-from src.engine.swing_lifecycle_decision_matrix import report_paths as matrix_report_paths
+from src.engine.swing.sim_auto_approval_control_tower import (
+    refresh_swing_sim_auto_approval,
+)
+from src.engine.swing_lifecycle_decision_matrix import (
+    report_paths as matrix_report_paths,
+)
 from src.utils.constants import DATA_DIR
-
 
 REPORT_DIR = Path(DATA_DIR) / "report" / "swing_lifecycle_bucket_discovery"
 REPORT_TYPE = "swing_lifecycle_bucket_discovery"
@@ -99,12 +102,16 @@ def _load_json(path: Path) -> dict[str, Any]:
 
 
 def _slug(value: Any) -> str:
-    text = re.sub(r"[^a-zA-Z0-9가-힣]+", "_", str(value or "").strip().lower()).strip("_")
+    text = re.sub(r"[^a-zA-Z0-9가-힣]+", "_", str(value or "").strip().lower()).strip(
+        "_"
+    )
     return text[:80] or "unknown"
 
 
 def _bucket_key_slug(value: Any) -> str:
-    text = re.sub(r"[^a-zA-Z0-9가-힣]+", "_", str(value or "").strip().lower()).strip("_")
+    text = re.sub(r"[^a-zA-Z0-9가-힣]+", "_", str(value or "").strip().lower()).strip(
+        "_"
+    )
     if not text:
         return "unknown"
     if len(text) <= 80:
@@ -114,7 +121,9 @@ def _bucket_key_slug(value: Any) -> str:
 
 
 def _matrix_candidate_slug(value: Any, *, max_len: int = 80) -> str:
-    text = re.sub(r"[^a-zA-Z0-9가-힣]+", "_", str(value or "").strip().lower()).strip("_")
+    text = re.sub(r"[^a-zA-Z0-9가-힣]+", "_", str(value or "").strip().lower()).strip(
+        "_"
+    )
     if not text:
         return "unknown"
     if len(text) <= max_len:
@@ -137,7 +146,10 @@ def _matrix_sim_auto_candidate_id(stage: str, bucket_type: str, bucket_key: str)
 
 
 def _is_implemented_source_quality_waiting(item: dict[str, Any]) -> bool:
-    return str(item.get("implementation_status") or "").strip() in IMPLEMENTED_SOURCE_QUALITY_STATUSES
+    return (
+        str(item.get("implementation_status") or "").strip()
+        in IMPLEMENTED_SOURCE_QUALITY_STATUSES
+    )
 
 
 def _would_require_source_quality_patch(bucket: dict[str, Any]) -> bool:
@@ -159,7 +171,13 @@ def _classification_from_bucket(section_name: str, bucket: dict[str, Any]) -> st
     except (TypeError, ValueError):
         ev = None
     if section_name == "swing_lifecycle_flow_bucket_attribution":
-        if route == "sim_auto_approved" and gate == "pass" and joined >= 3 and ev is not None and ev > 0:
+        if (
+            route == "sim_auto_approved"
+            and gate == "pass"
+            and joined >= 3
+            and ev is not None
+            and ev > 0
+        ):
             return "sim_auto_approved"
         if _would_require_source_quality_patch(bucket):
             if _is_implemented_source_quality_waiting(bucket):
@@ -202,9 +220,16 @@ def _candidate_from_bucket(section_name: str, bucket: dict[str, Any]) -> dict[st
     bucket_type = str(bucket.get("bucket_type") or section_name)
     bucket_key = str(bucket.get("bucket_key") or "-")
     state = _classification_from_bucket(section_name, bucket)
-    source_candidate_id = str(bucket.get("candidate_id") or bucket.get("bucket_id") or "").strip()
-    if section_name == "swing_lifecycle_flow_bucket_attribution" and state == "sim_auto_approved":
-        bucket_id = source_candidate_id or _matrix_sim_auto_candidate_id(stage, bucket_type, bucket_key)
+    source_candidate_id = str(
+        bucket.get("candidate_id") or bucket.get("bucket_id") or ""
+    ).strip()
+    if (
+        section_name == "swing_lifecycle_flow_bucket_attribution"
+        and state == "sim_auto_approved"
+    ):
+        bucket_id = source_candidate_id or _matrix_sim_auto_candidate_id(
+            stage, bucket_type, bucket_key
+        )
         source_candidate_id = source_candidate_id or bucket_id
     else:
         bucket_id = _bucket_id(stage, bucket_type, bucket_key)
@@ -244,7 +269,8 @@ def _candidate_from_bucket(section_name: str, bucket: dict[str, Any]) -> dict[st
         "source_candidate_id": source_candidate_id or None,
         "matrix_candidate_id": (
             bucket_id
-            if section_name == "swing_lifecycle_flow_bucket_attribution" and state == "sim_auto_approved"
+            if section_name == "swing_lifecycle_flow_bucket_attribution"
+            and state == "sim_auto_approved"
             else None
         ),
         "canonical_bucket": taxonomy["canonical_bucket"],
@@ -278,7 +304,11 @@ def _candidate_from_bucket(section_name: str, bucket: dict[str, Any]) -> dict[st
         "rollback_guard": bucket.get("rollback_guard"),
         "parent_bucket_id": bucket_id,
         "implementation_status": bucket.get("implementation_status"),
-        "implementation_provenance": bucket.get("implementation_provenance") if isinstance(bucket.get("implementation_provenance"), dict) else {},
+        "implementation_provenance": (
+            bucket.get("implementation_provenance")
+            if isinstance(bucket.get("implementation_provenance"), dict)
+            else {}
+        ),
         "source_quality_resolution": source_quality_resolution,
         "source_quality_adjusted_ev_pct": bucket.get("source_quality_adjusted_ev_pct"),
         "decision_authority": DECISION_AUTHORITY,
@@ -287,17 +317,23 @@ def _candidate_from_bucket(section_name: str, bucket: dict[str, Any]) -> dict[st
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
         "human_approval_required": False,
-        "next_route": "next_preopen_swing_sim_policy_input"
-        if state == "sim_auto_approved"
-        else "postclose_source_quality_or_sample_collection",
+        "next_route": (
+            "next_preopen_swing_sim_policy_input"
+            if state == "sim_auto_approved"
+            else "postclose_source_quality_or_sample_collection"
+        ),
         "forbidden_uses": FORBIDDEN_USES,
         "evidence_authority_contract": evidence_authority_contract(),
     }
 
 
-def _candidate_from_matrix_approval(section_name: str, item: dict[str, Any]) -> dict[str, Any]:
+def _candidate_from_matrix_approval(
+    section_name: str, item: dict[str, Any]
+) -> dict[str, Any]:
     candidate = _candidate_from_bucket(section_name, item)
-    matrix_candidate_id = str(item.get("candidate_id") or item.get("bucket_id") or "").strip()
+    matrix_candidate_id = str(
+        item.get("candidate_id") or item.get("bucket_id") or ""
+    ).strip()
     if matrix_candidate_id:
         candidate["candidate_id"] = matrix_candidate_id
         candidate["bucket_id"] = matrix_candidate_id
@@ -313,19 +349,33 @@ def _candidate_from_matrix_approval(section_name: str, item: dict[str, Any]) -> 
     candidate["next_route"] = (
         "next_preopen_swing_sim_policy_input"
         if candidate["classification_state"] == "sim_auto_approved"
-        else candidate.get("next_route") or "postclose_source_quality_or_sample_collection"
+        else candidate.get("next_route")
+        or "postclose_source_quality_or_sample_collection"
     )
     candidate["source_section"] = section_name
     return candidate
 
 
 def _swing_entry_bottleneck_candidate(matrix: dict[str, Any]) -> dict[str, Any] | None:
-    bottleneck = matrix.get("swing_entry_bottleneck") if isinstance(matrix.get("swing_entry_bottleneck"), dict) else {}
-    matches = bottleneck.get("matches") if isinstance(bottleneck.get("matches"), list) else []
-    if bottleneck.get("primary") != "SWING_ENTRY_DROUGHT_CRITICAL" and "SWING_ENTRY_DROUGHT_CRITICAL" not in matches:
+    bottleneck = (
+        matrix.get("swing_entry_bottleneck")
+        if isinstance(matrix.get("swing_entry_bottleneck"), dict)
+        else {}
+    )
+    matches = (
+        bottleneck.get("matches") if isinstance(bottleneck.get("matches"), list) else []
+    )
+    if (
+        bottleneck.get("primary") != "SWING_ENTRY_DROUGHT_CRITICAL"
+        and "SWING_ENTRY_DROUGHT_CRITICAL" not in matches
+    ):
         return None
-    counts = bottleneck.get("counts") if isinstance(bottleneck.get("counts"), dict) else {}
-    ratios = bottleneck.get("ratios") if isinstance(bottleneck.get("ratios"), dict) else {}
+    counts = (
+        bottleneck.get("counts") if isinstance(bottleneck.get("counts"), dict) else {}
+    )
+    ratios = (
+        bottleneck.get("ratios") if isinstance(bottleneck.get("ratios"), dict) else {}
+    )
     return {
         "candidate_id": "swing_entry_bottleneck_swing_entry_drought_critical",
         "bucket_id": "swing_entry_bottleneck_swing_entry_drought_critical",
@@ -372,12 +422,15 @@ def _normalize_explicit_workorder(item: dict[str, Any]) -> dict[str, Any]:
     return {
         **item,
         **_workorder_contract_fields(),
-        "source_workorder_id": item.get("source_workorder_id") or item.get("workorder_id"),
+        "source_workorder_id": item.get("source_workorder_id")
+        or item.get("workorder_id"),
         "parent_bucket_id": item.get("parent_bucket_id") or item.get("bucket_id"),
     }
 
 
-def _ai_review_followup_workorder(reasons: list[str], audit: dict[str, Any]) -> dict[str, Any]:
+def _ai_review_followup_workorder(
+    reasons: list[str], audit: dict[str, Any]
+) -> dict[str, Any]:
     reason_text = ", ".join(reasons) if reasons else "parsed_review_followup_required"
     return {
         "workorder_id": "swing_lifecycle_bucket_discovery_ai_review_followup",
@@ -429,13 +482,20 @@ def _ensure_candidate_taxonomy(candidate: dict[str, Any]) -> dict[str, Any]:
     if candidate.get("deterministic_proposal"):
         return _normalize_candidate_contract(candidate)
     stage = str(candidate.get("lifecycle_stage") or "swing")
-    bucket_type = str(candidate.get("bucket_type") or candidate.get("source_section") or "bucket")
-    bucket_key = str(candidate.get("bucket_key") or candidate.get("bucket_id") or "unknown")
+    bucket_type = str(
+        candidate.get("bucket_type") or candidate.get("source_section") or "bucket"
+    )
+    bucket_key = str(
+        candidate.get("bucket_key") or candidate.get("bucket_id") or "unknown"
+    )
     taxonomy = normalize_lifecycle_bucket(
         stage=stage,
         bucket_type=bucket_type,
         bucket_key=bucket_key,
-        source_dimensions={"source_section": candidate.get("source_section"), "classification_state": candidate.get("classification_state")},
+        source_dimensions={
+            "source_section": candidate.get("source_section"),
+            "classification_state": candidate.get("classification_state"),
+        },
     )
     if candidate.get("classification_state") == "code_patch_required":
         deterministic_proposal = _source_remediation_proposal(
@@ -444,16 +504,18 @@ def _ensure_candidate_taxonomy(candidate: dict[str, Any]) -> dict[str, Any]:
         )
     else:
         deterministic_proposal = taxonomy["deterministic_proposal"]
-    return _normalize_candidate_contract({
-        **candidate,
-        "canonical_bucket": taxonomy["canonical_bucket"],
-        "legacy_raw_bucket_key": taxonomy["legacy_raw_bucket_key"],
-        "bucket_alias_version": BUCKET_ALIAS_VERSION,
-        "dimension_set_version": DIMENSION_SET_VERSION,
-        "normalized_dimensions": taxonomy["normalized_dimensions"],
-        "normalized_metrics": taxonomy["normalized_metrics"],
-        "deterministic_proposal": deterministic_proposal,
-    })
+    return _normalize_candidate_contract(
+        {
+            **candidate,
+            "canonical_bucket": taxonomy["canonical_bucket"],
+            "legacy_raw_bucket_key": taxonomy["legacy_raw_bucket_key"],
+            "bucket_alias_version": BUCKET_ALIAS_VERSION,
+            "dimension_set_version": DIMENSION_SET_VERSION,
+            "normalized_dimensions": taxonomy["normalized_dimensions"],
+            "normalized_metrics": taxonomy["normalized_metrics"],
+            "deterministic_proposal": deterministic_proposal,
+        }
+    )
 
 
 def _normalize_candidate_contract(candidate: dict[str, Any]) -> dict[str, Any]:
@@ -462,7 +524,11 @@ def _normalize_candidate_contract(candidate: dict[str, Any]) -> dict[str, Any]:
     if not bucket_id:
         bucket_id = _bucket_id(
             stage,
-            str(candidate.get("bucket_type") or candidate.get("source_section") or "bucket"),
+            str(
+                candidate.get("bucket_type")
+                or candidate.get("source_section")
+                or "bucket"
+            ),
             str(candidate.get("bucket_key") or "unknown"),
         )
     return {
@@ -474,14 +540,29 @@ def _normalize_candidate_contract(candidate: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _ai_review_candidate_shards(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    sim_auto = [item for item in candidates if item.get("classification_state") == "sim_auto_approved"]
+def _ai_review_candidate_shards(
+    candidates: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    sim_auto = [
+        item
+        for item in candidates
+        if item.get("classification_state") == "sim_auto_approved"
+    ]
     gap = [
         item
         for item in candidates
-        if item.get("classification_state") in {"runtime_blocked_contract_gap", "automation_handoff_gap", "code_patch_required"}
+        if item.get("classification_state")
+        in {
+            "runtime_blocked_contract_gap",
+            "automation_handoff_gap",
+            "code_patch_required",
+        }
     ]
-    reviewed_ids = {str(item.get("bucket_id")) for item in [*sim_auto, *gap] if item.get("bucket_id")}
+    reviewed_ids = {
+        str(item.get("bucket_id"))
+        for item in [*sim_auto, *gap]
+        if item.get("bucket_id")
+    }
     taxonomy = [
         item
         for item in candidates
@@ -490,15 +571,23 @@ def _ai_review_candidate_shards(candidates: list[dict[str, Any]]) -> list[dict[s
     ][:10]
     sim_shards = [
         {
-            "shard_id": "sim_policy_review" if index == 0 else f"sim_policy_review_{index + 1}",
+            "shard_id": (
+                "sim_policy_review" if index == 0 else f"sim_policy_review_{index + 1}"
+            ),
             "review_scope": "sim_auto_candidate_review",
             "candidate_selection_policy": "all deterministic sim_auto_approved candidates",
             "review_authority": "fail-closed source-only sim policy reviewer",
             "critical_for_sim_policy": True,
-            "candidates": sim_auto[index * AI_REVIEW_SIM_SHARD_SIZE : (index + 1) * AI_REVIEW_SIM_SHARD_SIZE],
+            "candidates": sim_auto[
+                index
+                * AI_REVIEW_SIM_SHARD_SIZE : (index + 1)
+                * AI_REVIEW_SIM_SHARD_SIZE
+            ],
             "omitted_candidate_count": 0,
         }
-        for index in range((len(sim_auto) + AI_REVIEW_SIM_SHARD_SIZE - 1) // AI_REVIEW_SIM_SHARD_SIZE)
+        for index in range(
+            (len(sim_auto) + AI_REVIEW_SIM_SHARD_SIZE - 1) // AI_REVIEW_SIM_SHARD_SIZE
+        )
     ]
     return [
         *sim_shards,
@@ -518,13 +607,17 @@ def _ai_review_candidate_shards(candidates: list[dict[str, Any]]) -> list[dict[s
             "review_authority": "taxonomy reviewer for source-only tail sample",
             "critical_for_sim_policy": False,
             "candidates": taxonomy,
-            "omitted_candidate_count": max(len(candidates) - len(sim_auto) - len(gap[:40]) - len(taxonomy), 0),
+            "omitted_candidate_count": max(
+                len(candidates) - len(sim_auto) - len(gap[:40]) - len(taxonomy), 0
+            ),
         },
     ]
 
 
 def _build_ai_review_context(target_date: str, shard: dict[str, Any]) -> dict[str, Any]:
-    review_candidates = shard.get("candidates") if isinstance(shard.get("candidates"), list) else []
+    review_candidates = (
+        shard.get("candidates") if isinstance(shard.get("candidates"), list) else []
+    )
     review_candidate_ids = [
         str(item.get("candidate_id") or item.get("bucket_id"))
         for item in review_candidates
@@ -600,7 +693,9 @@ def _ai_review_config() -> PostcloseAIReviewConfig:
         primary_provider = "bedrock_qwen3"
     if not os.getenv(f"{config.env_prefix_name}_FAILBACK_PROVIDER"):
         failback_provider = "openai"
-    return replace(config, primary_provider=primary_provider, failback_provider=failback_provider)
+    return replace(
+        config, primary_provider=primary_provider, failback_provider=failback_provider
+    )
 
 
 def _call_openai_ai_review(
@@ -618,7 +713,8 @@ def _call_openai_ai_review(
         expected_ids = {
             str(item.get("candidate_id") or item.get("bucket_id") or "")
             for item in context.get("candidates", [])
-            if isinstance(item, dict) and (item.get("candidate_id") or item.get("bucket_id"))
+            if isinstance(item, dict)
+            and (item.get("candidate_id") or item.get("bucket_id"))
         }
         proposal_rows = payload.get("ai_tier2_proposals")
         comparative_rows = payload.get("comparative_reviews")
@@ -627,21 +723,39 @@ def _call_openai_ai_review(
         if not isinstance(comparative_rows, list):
             return False, "missing_comparative_reviews"
         if expected_ids:
-            proposal_ids = {str(item.get("candidate_id") or item.get("bucket_id") or "") for item in proposal_rows if isinstance(item, dict)}
-            comparative_ids = {str(item.get("candidate_id") or item.get("bucket_id") or "") for item in comparative_rows if isinstance(item, dict)}
-            repairable_proposal_ids = len(proposal_rows) == len(expected_ids) and all(isinstance(item, dict) for item in proposal_rows)
-            repairable_comparative_ids = len(comparative_rows) == len(expected_ids) and all(isinstance(item, dict) for item in comparative_rows)
+            proposal_ids = {
+                str(item.get("candidate_id") or item.get("bucket_id") or "")
+                for item in proposal_rows
+                if isinstance(item, dict)
+            }
+            comparative_ids = {
+                str(item.get("candidate_id") or item.get("bucket_id") or "")
+                for item in comparative_rows
+                if isinstance(item, dict)
+            }
+            repairable_proposal_ids = len(proposal_rows) == len(expected_ids) and all(
+                isinstance(item, dict) for item in proposal_rows
+            )
+            repairable_comparative_ids = len(comparative_rows) == len(
+                expected_ids
+            ) and all(isinstance(item, dict) for item in comparative_rows)
             if proposal_ids != expected_ids and not repairable_proposal_ids:
                 return False, "ai_tier2_proposals_id_mismatch"
             if comparative_ids != expected_ids and not repairable_comparative_ids:
                 return False, "comparative_reviews_id_mismatch"
-        if audit.get("status") not in {"pass", "correction_required", "insufficient_context"}:
+        if audit.get("status") not in {
+            "pass",
+            "correction_required",
+            "insufficient_context",
+        }:
             return False, "missing_audit_status"
         if warnings:
             return False, "warnings:" + ",".join(warnings[:3])
         return True, ""
 
-    from src.engine.ai.postclose_structured_review_provider import call_postclose_structured_review
+    from src.engine.ai.postclose_structured_review_provider import (
+        call_postclose_structured_review,
+    )
 
     return call_postclose_structured_review(
         context,
@@ -685,7 +799,9 @@ def _normalize_ai_review_payload_candidate_ids(
     return repair_count
 
 
-def _parse_ai_review_response(raw_response: Any | None) -> tuple[str, dict[str, Any], list[str]]:
+def _parse_ai_review_response(
+    raw_response: Any | None,
+) -> tuple[str, dict[str, Any], list[str]]:
     if raw_response in (None, ""):
         return "missing", {}, ["ai_review_response_missing"]
     if isinstance(raw_response, dict):
@@ -709,20 +825,44 @@ def _parse_ai_review_response(raw_response: Any | None) -> tuple[str, dict[str, 
             if not isinstance(item, dict):
                 warnings.append(f"ai_review_{key}_invalid")
                 continue
-            if item.get("candidate_id") and item.get("bucket_id") and str(item.get("candidate_id")) != str(item.get("bucket_id")):
-                warnings.append(f"ai_review_{key}_candidate_bucket_id_mismatch:{item.get('candidate_id')}")
-            decision_key = "proposal_decision" if key == "ai_tier2_proposals" else "selected_decision"
+            if (
+                item.get("candidate_id")
+                and item.get("bucket_id")
+                and str(item.get("candidate_id")) != str(item.get("bucket_id"))
+            ):
+                warnings.append(
+                    f"ai_review_{key}_candidate_bucket_id_mismatch:{item.get('candidate_id')}"
+                )
+            decision_key = (
+                "proposal_decision"
+                if key == "ai_tier2_proposals"
+                else "selected_decision"
+            )
             if str(item.get(decision_key) or "") not in TAXONOMY_DECISIONS:
-                warnings.append(f"ai_review_{key}_decision_invalid:{item.get('bucket_id')}")
-            missing_contract = missing_metric_contract_fields(item.get("required_source_fields"))
+                warnings.append(
+                    f"ai_review_{key}_decision_invalid:{item.get('bucket_id')}"
+                )
+            missing_contract = missing_metric_contract_fields(
+                item.get("required_source_fields")
+            )
             if missing_contract:
-                warnings.append(f"ai_review_{key}_contract_missing:{item.get('bucket_id')}:{','.join(missing_contract)}")
+                warnings.append(
+                    f"ai_review_{key}_contract_missing:{item.get('bucket_id')}:{','.join(missing_contract)}"
+                )
             if has_forbidden_runtime_leak(item):
-                warnings.append(f"ai_review_{key}_forbidden_use_leak:{item.get('bucket_id')}")
+                warnings.append(
+                    f"ai_review_{key}_forbidden_use_leak:{item.get('bucket_id')}"
+                )
             if has_evidence_authority_violation(item):
-                warnings.append(f"ai_review_{key}_evidence_authority_violation:{item.get('bucket_id')}")
+                warnings.append(
+                    f"ai_review_{key}_evidence_authority_violation:{item.get('bucket_id')}"
+                )
     audit = payload.get("audit") if isinstance(payload.get("audit"), dict) else {}
-    if str(audit.get("status") or "") not in {"pass", "correction_required", "insufficient_context"}:
+    if str(audit.get("status") or "") not in {
+        "pass",
+        "correction_required",
+        "insufficient_context",
+    }:
         warnings.append("ai_review_audit_status_invalid")
     if not isinstance(audit.get("forbidden_use_violations"), list):
         warnings.append("ai_review_forbidden_use_violations_missing")
@@ -740,16 +880,27 @@ def _run_ai_review_shards(
 ) -> dict[str, Any]:
     shards = _ai_review_candidate_shards(candidates)
     critical_shards = [item for item in shards if item.get("critical_for_sim_policy")]
-    optional_shards = [item for item in shards if not item.get("critical_for_sim_policy")]
+    optional_shards = [
+        item for item in shards if not item.get("critical_for_sim_policy")
+    ]
     run_optional_after_critical = os.getenv(
         "KORSTOCKSCAN_SWING_LIFECYCLE_BUCKET_DISCOVERY_AI_RUN_OPTIONAL_SHARDS",
         "false",
     ).strip().lower() in {"1", "true", "yes", "on"}
-    ordered_shards = [*critical_shards, *optional_shards] if (not critical_shards or run_optional_after_critical) else critical_shards
+    ordered_shards = (
+        [*critical_shards, *optional_shards]
+        if (not critical_shards or run_optional_after_critical)
+        else critical_shards
+    )
     combined_payload: dict[str, Any] = {
         "ai_tier2_proposals": [],
         "comparative_reviews": [],
-        "audit": {"status": "pass", "issues": [], "forbidden_use_violations": [], "reason": "all parsed shards passed"},
+        "audit": {
+            "status": "pass",
+            "issues": [],
+            "forbidden_use_violations": [],
+            "reason": "all parsed shards passed",
+        },
     }
     records: list[dict[str, Any]] = []
     reviewed_candidate_ids: list[str] = []
@@ -757,28 +908,49 @@ def _run_ai_review_shards(
     warnings: list[str] = []
     disabled = provider in {"none", "off", "false", "0"}
     for index, shard in enumerate(ordered_shards):
-        shard_candidates = shard.get("candidates") if isinstance(shard.get("candidates"), list) else []
+        shard_candidates = (
+            shard.get("candidates") if isinstance(shard.get("candidates"), list) else []
+        )
         if not shard_candidates:
             continue
         context = _build_ai_review_context(target_date, shard)
         shard_config = _ai_review_config()
-        candidate_ids = [str(item) for item in (context.get("candidate_ids") or []) if str(item)]
+        candidate_ids = [
+            str(item) for item in (context.get("candidate_ids") or []) if str(item)
+        ]
         provider_status: dict[str, Any] = {
             "provider": provider,
             "requested_provider": provider,
             "status": "disabled" if disabled else "not_called",
             "schema_name": AI_REVIEW_SCHEMA_NAME,
             "shard_id": shard.get("shard_id"),
-            "input_context_chars": len(json.dumps(context, ensure_ascii=True, default=str)),
-            **(shard_config.provider_status_fields() if not disabled else {"model": None}),
+            "input_context_chars": len(
+                json.dumps(context, ensure_ascii=True, default=str)
+            ),
+            **(
+                shard_config.provider_status_fields()
+                if not disabled
+                else {"model": None}
+            ),
         }
         if disabled:
-            provider_status.update({"reasoning_effort": None, "timeout_sec": None, "attempt_role": None, "retry_reason": None})
-        raw_response = ai_raw_response if index == 0 and ai_raw_response is not None else None
+            provider_status.update(
+                {
+                    "reasoning_effort": None,
+                    "timeout_sec": None,
+                    "attempt_role": None,
+                    "retry_reason": None,
+                }
+            )
+        raw_response = (
+            ai_raw_response if index == 0 and ai_raw_response is not None else None
+        )
         if raw_response is not None:
             provider_status["status"] = "provided_response"
         if raw_response is None and not disabled:
-            raw_response, provider_status = _call_openai_ai_review(context, config=shard_config)
+            raw_response, provider_status = _call_openai_ai_review(
+                context, config=shard_config
+            )
             provider_status = {
                 **shard_config.provider_status_fields(),
                 **provider_status,
@@ -788,31 +960,54 @@ def _run_ai_review_shards(
         status, payload, shard_warnings = _parse_ai_review_response(raw_response)
         id_repair_count = 0
         if status == "parsed":
-            id_repair_count = _normalize_ai_review_payload_candidate_ids(payload, candidate_ids)
+            id_repair_count = _normalize_ai_review_payload_candidate_ids(
+                payload, candidate_ids
+            )
         statuses.append(status)
         warnings.extend(f"{shard.get('shard_id')}:{item}" for item in shard_warnings)
         if status == "parsed":
             reviewed_candidate_ids.extend(candidate_ids)
-            combined_payload["ai_tier2_proposals"].extend(payload.get("ai_tier2_proposals") or [])
-            combined_payload["comparative_reviews"].extend(payload.get("comparative_reviews") or [])
-            audit = payload.get("audit") if isinstance(payload.get("audit"), dict) else {}
+            combined_payload["ai_tier2_proposals"].extend(
+                payload.get("ai_tier2_proposals") or []
+            )
+            combined_payload["comparative_reviews"].extend(
+                payload.get("comparative_reviews") or []
+            )
+            audit = (
+                payload.get("audit") if isinstance(payload.get("audit"), dict) else {}
+            )
             if audit.get("status") != "pass":
-                combined_payload["audit"]["status"] = audit.get("status") or "correction_required"
-            combined_payload["audit"]["issues"].extend(audit.get("issues") if isinstance(audit.get("issues"), list) else [])
+                combined_payload["audit"]["status"] = (
+                    audit.get("status") or "correction_required"
+                )
+            combined_payload["audit"]["issues"].extend(
+                audit.get("issues") if isinstance(audit.get("issues"), list) else []
+            )
             combined_payload["audit"]["forbidden_use_violations"].extend(
-                audit.get("forbidden_use_violations") if isinstance(audit.get("forbidden_use_violations"), list) else []
+                audit.get("forbidden_use_violations")
+                if isinstance(audit.get("forbidden_use_violations"), list)
+                else []
             )
         records.append(
             {
                 "shard_id": shard.get("shard_id"),
                 "critical_for_sim_policy": bool(shard.get("critical_for_sim_policy")),
                 "status": status,
-                "audit_status": (payload.get("audit") or {}).get("status") if isinstance(payload, dict) and isinstance(payload.get("audit"), dict) else None,
-                "forbidden_use_violation_count": len(
-                    (payload.get("audit") or {}).get("forbidden_use_violations") or []
-                )
-                if isinstance(payload, dict) and isinstance(payload.get("audit"), dict)
-                else 0,
+                "audit_status": (
+                    (payload.get("audit") or {}).get("status")
+                    if isinstance(payload, dict)
+                    and isinstance(payload.get("audit"), dict)
+                    else None
+                ),
+                "forbidden_use_violation_count": (
+                    len(
+                        (payload.get("audit") or {}).get("forbidden_use_violations")
+                        or []
+                    )
+                    if isinstance(payload, dict)
+                    and isinstance(payload.get("audit"), dict)
+                    else 0
+                ),
                 "candidate_ids": candidate_ids,
                 "candidate_count": len(candidate_ids),
                 "id_repair_count": id_repair_count,
@@ -823,14 +1018,22 @@ def _run_ai_review_shards(
         )
     critical_records = [item for item in records if item.get("critical_for_sim_policy")]
     critical_statuses = [str(item.get("status") or "") for item in critical_records]
-    critical_complete = bool(critical_records) and all(status == "parsed" for status in critical_statuses)
+    critical_complete = bool(critical_records) and all(
+        status == "parsed" for status in critical_statuses
+    )
     if critical_complete and not run_optional_after_critical:
         for shard in optional_shards:
-            shard_candidates = shard.get("candidates") if isinstance(shard.get("candidates"), list) else []
+            shard_candidates = (
+                shard.get("candidates")
+                if isinstance(shard.get("candidates"), list)
+                else []
+            )
             if not shard_candidates:
                 continue
             context = _build_ai_review_context(target_date, shard)
-            candidate_ids = [str(item) for item in (context.get("candidate_ids") or []) if str(item)]
+            candidate_ids = [
+                str(item) for item in (context.get("candidate_ids") or []) if str(item)
+            ]
             records.append(
                 {
                     "shard_id": shard.get("shard_id"),
@@ -848,23 +1051,38 @@ def _run_ai_review_shards(
                         "status": "deferred_after_critical_sim_policy",
                         "schema_name": AI_REVIEW_SCHEMA_NAME,
                         "shard_id": shard.get("shard_id"),
-                        "input_context_chars": len(json.dumps(context, ensure_ascii=True, default=str)),
+                        "input_context_chars": len(
+                            json.dumps(context, ensure_ascii=True, default=str)
+                        ),
                     },
-                    "warnings": ["optional_source_only_review_deferred_after_critical_sim_policy"],
+                    "warnings": [
+                        "optional_source_only_review_deferred_after_critical_sim_policy"
+                    ],
                 }
             )
-    optional_deferred_records = [item for item in records if item.get("status") == "deferred"]
-    optional_deferred_candidate_count = sum(int(item.get("candidate_count") or 0) for item in optional_deferred_records)
+    optional_deferred_records = [
+        item for item in records if item.get("status") == "deferred"
+    ]
+    optional_deferred_candidate_count = sum(
+        int(item.get("candidate_count") or 0) for item in optional_deferred_records
+    )
     if not records:
         return {
             "status": "missing",
             "payload": combined_payload,
-            "provider_status": {"provider": provider, "status": "disabled" if disabled else "not_called"},
+            "provider_status": {
+                "provider": provider,
+                "status": "disabled" if disabled else "not_called",
+            },
             "shards": [],
             "reviewed_candidate_ids": [],
             "warnings": ["ai_review_response_missing"],
         }
-    decision_statuses = critical_statuses if critical_records and not run_optional_after_critical else statuses
+    decision_statuses = (
+        critical_statuses
+        if critical_records and not run_optional_after_critical
+        else statuses
+    )
     if all(status == "parsed" for status in decision_statuses):
         status = "parsed"
     elif any(status == "parsed" for status in decision_statuses):
@@ -902,14 +1120,19 @@ def _map_by_id(items: Any, key: str) -> dict[str, dict[str, Any]]:
     return {
         str(item.get(key) or item.get("candidate_id") or item.get("bucket_id")): item
         for item in items or []
-        if isinstance(item, dict) and (item.get(key) or item.get("candidate_id") or item.get("bucket_id"))
+        if isinstance(item, dict)
+        and (item.get(key) or item.get("candidate_id") or item.get("bucket_id"))
     }
 
 
-def _ai_review_augmentation_points(*, matrix: dict[str, Any], candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _ai_review_augmentation_points(
+    *, matrix: dict[str, Any], candidates: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
     if not matrix:
         return []
-    candidate_states = {str(item.get("classification_state") or "") for item in candidates}
+    candidate_states = {
+        str(item.get("classification_state") or "") for item in candidates
+    }
     points = [
         {
             "point_id": "swing_ldm_bucket_semantic_two_pass_review",
@@ -936,13 +1159,18 @@ def _ai_review_augmentation_points(*, matrix: dict[str, Any], candidates: list[d
             "stage": "sim_policy_handoff",
             "audit_pass": True,
             "explicit_gap_type": None,
-            "source_paths": ["swing_lifecycle_bucket_discovery.sim_auto_approved_candidates"],
+            "source_paths": [
+                "swing_lifecycle_bucket_discovery.sim_auto_approved_candidates"
+            ],
             "forbidden_runtime_uses": FORBIDDEN_USES,
             "reason": "AI audit can verify sim_auto_approved remains sim-only and does not imply real/canary/provider/bot changes",
             "recommended_route": "code_improvement_workorder",
         },
     ]
-    if "source_only_keep_collecting" in candidate_states or "code_patch_required" in candidate_states:
+    if (
+        "source_only_keep_collecting" in candidate_states
+        or "code_patch_required" in candidate_states
+    ):
         points.append(
             {
                 "point_id": "swing_ldm_source_quality_gap_ai_triage",
@@ -973,7 +1201,9 @@ def _ai_audit_section(points: list[dict[str, Any]]) -> dict[str, Any]:
                 "auditor_pass": True,
                 "explicit_gap_type": item.get("explicit_gap_type"),
                 "source_paths": item.get("source_paths") or [],
-                "interpreted_state": "source_only_gap_triaged" if has_gap else "sim_policy_preserved",
+                "interpreted_state": (
+                    "source_only_gap_triaged" if has_gap else "sim_policy_preserved"
+                ),
                 "final_decision": "keep_source_only" if has_gap else "keep_sim_only",
                 "ambiguity_blocks_sim_auto_approval": False,
                 "actual_order_submitted": False,
@@ -985,7 +1215,9 @@ def _ai_audit_section(points: list[dict[str, Any]]) -> dict[str, Any]:
         )
     return {
         "schema_version": "swing_lifecycle_bucket_discovery_ai_audit_v1",
-        "status": "configured_deterministic_two_pass" if audit_points else "not_required",
+        "status": (
+            "configured_deterministic_two_pass" if audit_points else "not_required"
+        ),
         "provider": "deterministic_source_only",
         "required_flow_status": {
             "interpretation": "implemented",
@@ -999,15 +1231,21 @@ def _ai_audit_section(points: list[dict[str, Any]]) -> dict[str, Any]:
             "source_quality_triage",
         ],
         "audit_points": audit_points,
-        "auditor_pass_count": sum(1 for item in audit_points if item.get("auditor_pass") is True),
-        "explicit_gap_count": sum(1 for item in audit_points if item.get("explicit_gap_type")),
+        "auditor_pass_count": sum(
+            1 for item in audit_points if item.get("auditor_pass") is True
+        ),
+        "explicit_gap_count": sum(
+            1 for item in audit_points if item.get("explicit_gap_type")
+        ),
         "sim_auto_policy_preserved": True,
         "runtime_effect": False,
         "allowed_runtime_apply": False,
     }
 
 
-def _iter_attribution_sections(matrix: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+def _iter_attribution_sections(
+    matrix: dict[str, Any],
+) -> list[tuple[str, dict[str, Any]]]:
     sections = []
     for name in (
         "swing_lifecycle_flow_bucket_attribution",
@@ -1037,7 +1275,9 @@ def build_swing_lifecycle_bucket_discovery(
     seen_candidate_ids: set[str] = set()
 
     def _append_candidate(candidate: dict[str, Any]) -> None:
-        candidate_id = str(candidate.get("candidate_id") or candidate.get("bucket_id") or "").strip()
+        candidate_id = str(
+            candidate.get("candidate_id") or candidate.get("bucket_id") or ""
+        ).strip()
         if candidate_id and candidate_id in seen_candidate_ids:
             return
         if candidate_id:
@@ -1051,7 +1291,9 @@ def build_swing_lifecycle_bucket_discovery(
         for key in ("sim_auto_approval_candidates", "runtime_approval_candidates"):
             for item in section.get(key) or []:
                 if isinstance(item, dict):
-                    _append_candidate(_candidate_from_matrix_approval(section_name, item))
+                    _append_candidate(
+                        _candidate_from_matrix_approval(section_name, item)
+                    )
         for item in section.get("code_improvement_workorders") or []:
             if isinstance(item, dict):
                 explicit_workorders.append(item)
@@ -1060,17 +1302,29 @@ def build_swing_lifecycle_bucket_discovery(
         _append_candidate(entry_bottleneck_candidate)
     candidates = [_ensure_candidate_taxonomy(item) for item in candidates]
     active_explicit_workorders = [
-        item for item in explicit_workorders if not _is_implemented_source_quality_waiting(item)
+        item
+        for item in explicit_workorders
+        if not _is_implemented_source_quality_waiting(item)
     ]
     resolved_explicit_workorders = [
-        item for item in explicit_workorders if _is_implemented_source_quality_waiting(item)
+        item
+        for item in explicit_workorders
+        if _is_implemented_source_quality_waiting(item)
     ]
 
-    resolved_provider = str(
-        provider
-        if provider is not None
-        else os.getenv("KORSTOCKSCAN_SWING_LIFECYCLE_BUCKET_DISCOVERY_AI_PROVIDER", AI_REVIEW_DEFAULT_PROVIDER)
-    ).strip().lower() or "none"
+    resolved_provider = (
+        str(
+            provider
+            if provider is not None
+            else os.getenv(
+                "KORSTOCKSCAN_SWING_LIFECYCLE_BUCKET_DISCOVERY_AI_PROVIDER",
+                AI_REVIEW_DEFAULT_PROVIDER,
+            )
+        )
+        .strip()
+        .lower()
+        or "none"
+    )
     ai_review = _run_ai_review_shards(
         date_key,
         candidates,
@@ -1078,36 +1332,68 @@ def build_swing_lifecycle_bucket_discovery(
         ai_raw_response=ai_raw_response,
     )
     ai_status = str(ai_review.get("status") or "missing")
-    ai_payload = ai_review.get("payload") if isinstance(ai_review.get("payload"), dict) else {}
-    ai_warnings = ai_review.get("warnings") if isinstance(ai_review.get("warnings"), list) else []
-    ai_reviewed_candidate_ids = {
-        str(item) for item in (ai_review.get("reviewed_candidate_ids") or []) if str(item)
-    }
-    provider_status = ai_review.get("provider_status") if isinstance(ai_review.get("provider_status"), dict) else {}
-    ai_review_shards = ai_review.get("shards") if isinstance(ai_review.get("shards"), list) else []
-    optional_deferred_shard_count = sum(1 for item in ai_review_shards if item.get("status") == "deferred")
-    optional_deferred_candidate_count = sum(
-        int(item.get("candidate_count") or 0) for item in ai_review_shards if item.get("status") == "deferred"
+    ai_payload = (
+        ai_review.get("payload") if isinstance(ai_review.get("payload"), dict) else {}
     )
-    ai_review_id_repair_count = sum(int(item.get("id_repair_count") or 0) for item in ai_review_shards)
+    ai_warnings = (
+        ai_review.get("warnings") if isinstance(ai_review.get("warnings"), list) else []
+    )
+    ai_reviewed_candidate_ids = {
+        str(item)
+        for item in (ai_review.get("reviewed_candidate_ids") or [])
+        if str(item)
+    }
+    provider_status = (
+        ai_review.get("provider_status")
+        if isinstance(ai_review.get("provider_status"), dict)
+        else {}
+    )
+    ai_review_shards = (
+        ai_review.get("shards") if isinstance(ai_review.get("shards"), list) else []
+    )
+    optional_deferred_shard_count = sum(
+        1 for item in ai_review_shards if item.get("status") == "deferred"
+    )
+    optional_deferred_candidate_count = sum(
+        int(item.get("candidate_count") or 0)
+        for item in ai_review_shards
+        if item.get("status") == "deferred"
+    )
+    ai_review_id_repair_count = sum(
+        int(item.get("id_repair_count") or 0) for item in ai_review_shards
+    )
     ai_proposals = _map_by_id(
         [
             {**item, "proposal_source": "ai_tier2", "proposal_status": "provided"}
-            for item in (ai_payload.get("ai_tier2_proposals") if isinstance(ai_payload, dict) else []) or []
+            for item in (
+                ai_payload.get("ai_tier2_proposals")
+                if isinstance(ai_payload, dict)
+                else []
+            )
+            or []
             if isinstance(item, dict)
         ],
         "bucket_id",
     )
     ai_comparatives = _map_by_id(
-        (ai_payload.get("comparative_reviews") if isinstance(ai_payload, dict) else []) or [],
+        (ai_payload.get("comparative_reviews") if isinstance(ai_payload, dict) else [])
+        or [],
         "bucket_id",
     )
     enriched_candidates = []
     for candidate in candidates:
         bucket_id = str(candidate.get("bucket_id") or "")
-        ai_review_coverage = "reviewed" if bucket_id in ai_reviewed_candidate_ids else "unreviewed"
-        deterministic = candidate.get("deterministic_proposal") if isinstance(candidate.get("deterministic_proposal"), dict) else {}
-        ai_proposal = ai_proposals.get(bucket_id) or default_ai_tier2_proposal(bucket_id, deterministic)
+        ai_review_coverage = (
+            "reviewed" if bucket_id in ai_reviewed_candidate_ids else "unreviewed"
+        )
+        deterministic = (
+            candidate.get("deterministic_proposal")
+            if isinstance(candidate.get("deterministic_proposal"), dict)
+            else {}
+        )
+        ai_proposal = ai_proposals.get(bucket_id) or default_ai_tier2_proposal(
+            bucket_id, deterministic
+        )
         comparative = compare_taxonomy_proposals(
             bucket_id=bucket_id,
             deterministic_proposal=deterministic,
@@ -1135,58 +1421,85 @@ def build_swing_lifecycle_bucket_discovery(
     candidates = enriched_candidates
 
     source_contract_status = "missing" if not matrix else "pass"
-    contract = matrix.get("input_contract") if isinstance(matrix.get("input_contract"), dict) else {}
-    entry_bottleneck = matrix.get("swing_entry_bottleneck") if isinstance(matrix.get("swing_entry_bottleneck"), dict) else {}
+    contract = (
+        matrix.get("input_contract")
+        if isinstance(matrix.get("input_contract"), dict)
+        else {}
+    )
+    entry_bottleneck = (
+        matrix.get("swing_entry_bottleneck")
+        if isinstance(matrix.get("swing_entry_bottleneck"), dict)
+        else {}
+    )
     flow_section = (
         matrix.get("swing_lifecycle_flow_bucket_attribution")
         if isinstance(matrix.get("swing_lifecycle_flow_bucket_attribution"), dict)
         else {}
     )
-    flow_summary = flow_section.get("summary") if isinstance(flow_section.get("summary"), dict) else {}
+    flow_summary = (
+        flow_section.get("summary")
+        if isinstance(flow_section.get("summary"), dict)
+        else {}
+    )
     if contract and contract.get("swing_daily_simulation_consumed") is not False:
         source_contract_status = "fail"
         candidates.append(
             _ensure_candidate_taxonomy(
                 {
-                "bucket_id": "swing_bucket_contract_forbidden_daily_simulation",
-                "source_section": "input_contract",
-                "lifecycle_stage": "source_quality",
-                "bucket_type": "forbidden_source",
-                "bucket_key": "swing_daily_simulation",
-                "classification_state": "runtime_blocked_contract_gap",
-                "decision_authority": DECISION_AUTHORITY,
-                "runtime_effect": False,
-                "allowed_runtime_apply": False,
-                "actual_order_submitted": False,
-                "broker_order_forbidden": True,
-                "human_approval_required": False,
-                "next_route": "code_improvement_workorder",
-                "forbidden_uses": FORBIDDEN_USES,
+                    "bucket_id": "swing_bucket_contract_forbidden_daily_simulation",
+                    "source_section": "input_contract",
+                    "lifecycle_stage": "source_quality",
+                    "bucket_type": "forbidden_source",
+                    "bucket_key": "swing_daily_simulation",
+                    "classification_state": "runtime_blocked_contract_gap",
+                    "decision_authority": DECISION_AUTHORITY,
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "human_approval_required": False,
+                    "next_route": "code_improvement_workorder",
+                    "forbidden_uses": FORBIDDEN_USES,
                 }
             )
         )
 
-    ai_payload_audit = ai_payload.get("audit") if isinstance(ai_payload.get("audit"), dict) else {}
+    ai_payload_audit = (
+        ai_payload.get("audit") if isinstance(ai_payload.get("audit"), dict) else {}
+    )
     ai_forbidden = ai_payload_audit.get("forbidden_use_violations")
     if not isinstance(ai_forbidden, list):
         ai_forbidden = []
     reviewed_candidates = [
-        item for item in candidates if str(item.get("bucket_id") or "") in ai_reviewed_candidate_ids
+        item
+        for item in candidates
+        if str(item.get("bucket_id") or "") in ai_reviewed_candidate_ids
     ]
     unreviewed_sim_auto_candidate_count = sum(
-        1 for item in candidates if item.get("classification_state") == "sim_auto_approved" and item.get("ai_review_coverage") != "reviewed"
+        1
+        for item in candidates
+        if item.get("classification_state") == "sim_auto_approved"
+        and item.get("ai_review_coverage") != "reviewed"
     )
     missing_ai_proposal_count = sum(
-        1 for item in candidates if item.get("ai_tier2_proposal", {}).get("proposal_status") != "provided"
+        1
+        for item in candidates
+        if item.get("ai_tier2_proposal", {}).get("proposal_status") != "provided"
     )
     missing_comparative_review_count = sum(
-        1 for item in candidates if item.get("comparative_review", {}).get("selected_source") == "reject"
+        1
+        for item in candidates
+        if item.get("comparative_review", {}).get("selected_source") == "reject"
     )
     reviewed_missing_ai_proposal_count = sum(
-        1 for item in reviewed_candidates if item.get("ai_tier2_proposal", {}).get("proposal_status") != "provided"
+        1
+        for item in reviewed_candidates
+        if item.get("ai_tier2_proposal", {}).get("proposal_status") != "provided"
     )
     reviewed_missing_comparative_review_count = sum(
-        1 for item in reviewed_candidates if item.get("comparative_review", {}).get("selected_source") == "reject"
+        1
+        for item in reviewed_candidates
+        if item.get("comparative_review", {}).get("selected_source") == "reject"
     )
     sim_shards = [
         item
@@ -1209,24 +1522,37 @@ def build_swing_lifecycle_bucket_discovery(
         if str(candidate_id)
     }
     sim_reviewed_candidates = [
-        item for item in candidates if str(item.get("bucket_id") or "") in sim_reviewed_candidate_ids
+        item
+        for item in candidates
+        if str(item.get("bucket_id") or "") in sim_reviewed_candidate_ids
     ]
     sim_missing_ai_proposal_count = sum(
-        1 for item in sim_reviewed_candidates if item.get("ai_tier2_proposal", {}).get("proposal_status") != "provided"
+        1
+        for item in sim_reviewed_candidates
+        if item.get("ai_tier2_proposal", {}).get("proposal_status") != "provided"
     )
     sim_missing_comparative_review_count = sum(
-        1 for item in sim_reviewed_candidates if item.get("comparative_review", {}).get("selected_source") == "reject"
+        1
+        for item in sim_reviewed_candidates
+        if item.get("comparative_review", {}).get("selected_source") == "reject"
     )
-    sim_review_required = any(item.get("classification_state") == "sim_auto_approved" for item in candidates)
+    sim_review_required = any(
+        item.get("classification_state") == "sim_auto_approved" for item in candidates
+    )
     pre_review_sim_auto_candidate_count = sum(
-        1 for item in candidates if item.get("classification_state") == "sim_auto_approved"
+        1
+        for item in candidates
+        if item.get("classification_state") == "sim_auto_approved"
     )
     pre_review_sim_auto_candidate_ids = {
         str(item.get("bucket_id") or "")
         for item in candidates
-        if item.get("classification_state") == "sim_auto_approved" and item.get("bucket_id")
+        if item.get("classification_state") == "sim_auto_approved"
+        and item.get("bucket_id")
     }
-    missing_sim_review_candidate_ids = pre_review_sim_auto_candidate_ids - sim_reviewed_candidate_ids
+    missing_sim_review_candidate_ids = (
+        pre_review_sim_auto_candidate_ids - sim_reviewed_candidate_ids
+    )
     unreviewed_sim_auto_candidate_count = len(missing_sim_review_candidate_ids)
     sim_review_call_fail_closed = bool(
         sim_review_required
@@ -1240,28 +1566,40 @@ def build_swing_lifecycle_bucket_discovery(
         shard_reasons = parsed_review_followup_reasons(
             ai_status=str(shard.get("status") or "missing"),
             audit_status=shard.get("audit_status"),
-            forbidden_use_violations=(["forbidden_use_violation"] if int(shard.get("forbidden_use_violation_count") or 0) > 0 else []),
+            forbidden_use_violations=(
+                ["forbidden_use_violation"]
+                if int(shard.get("forbidden_use_violation_count") or 0) > 0
+                else []
+            ),
             missing_ai_proposal_count=0,
             missing_comparative_review_count=0,
         )
         if shard_reasons:
-            followup_sim_candidate_ids.update(str(item) for item in (shard.get("candidate_ids") or []) if str(item))
+            followup_sim_candidate_ids.update(
+                str(item) for item in (shard.get("candidate_ids") or []) if str(item)
+            )
         sim_review_followup_reasons.extend(shard_reasons)
     missing_sim_proposal_candidate_ids = {
         str(item.get("bucket_id"))
         for item in sim_reviewed_candidates
-        if item.get("bucket_id") and item.get("ai_tier2_proposal", {}).get("proposal_status") != "provided"
+        if item.get("bucket_id")
+        and item.get("ai_tier2_proposal", {}).get("proposal_status") != "provided"
     }
     missing_sim_comparative_candidate_ids = {
         str(item.get("bucket_id"))
         for item in sim_reviewed_candidates
-        if item.get("bucket_id") and item.get("comparative_review", {}).get("selected_source") == "reject"
+        if item.get("bucket_id")
+        and item.get("comparative_review", {}).get("selected_source") == "reject"
     }
     followup_sim_candidate_ids.update(missing_sim_proposal_candidate_ids)
     followup_sim_candidate_ids.update(missing_sim_comparative_candidate_ids)
     sim_review_followup_reasons.extend(
         parsed_review_followup_reasons(
-            ai_status="parsed" if sim_reviewed_candidate_ids else str(primary_sim_shard.get("status") or "missing"),
+            ai_status=(
+                "parsed"
+                if sim_reviewed_candidate_ids
+                else str(primary_sim_shard.get("status") or "missing")
+            ),
             audit_status=primary_sim_shard.get("audit_status"),
             forbidden_use_violations=[],
             missing_ai_proposal_count=sim_missing_ai_proposal_count,
@@ -1276,11 +1614,12 @@ def build_swing_lifecycle_bucket_discovery(
         missing_ai_proposal_count=reviewed_missing_ai_proposal_count,
         missing_comparative_review_count=reviewed_missing_comparative_review_count,
     )
-    followup_reasons = list(dict.fromkeys([*followup_reasons, *sim_review_followup_reasons]))
-    ai_fail_closed = (
-        (ai_status == "missing" and sim_review_required)
-        or sim_review_call_fail_closed
+    followup_reasons = list(
+        dict.fromkeys([*followup_reasons, *sim_review_followup_reasons])
     )
+    ai_fail_closed = (
+        ai_status == "missing" and sim_review_required
+    ) or sim_review_call_fail_closed
     sim_auto_blocked_by_review_followup = bool(sim_review_followup_reasons)
     sim_auto_downgrade_candidate_ids = set(failed_sim_candidate_ids)
     if ai_fail_closed and not sim_reviewed_candidate_ids:
@@ -1293,26 +1632,38 @@ def build_swing_lifecycle_bucket_discovery(
         ai_review_blocker_state = "sim_policy_followup_required"
     elif ai_status == "parse_rejected":
         ai_review_blocker_state = "parse_rejected"
-    elif ai_fail_closed and provider_disabled and pre_review_sim_auto_candidate_count > 0:
+    elif (
+        ai_fail_closed and provider_disabled and pre_review_sim_auto_candidate_count > 0
+    ):
         ai_review_blocker_state = "provider_disabled"
     elif ai_fail_closed:
         ai_review_blocker_state = "provider_unavailable"
     else:
         ai_review_blocker_state = "none"
-    if ai_fail_closed or sim_auto_blocked_by_review_followup or sim_auto_downgrade_candidate_ids:
+    if (
+        ai_fail_closed
+        or sim_auto_blocked_by_review_followup
+        or sim_auto_downgrade_candidate_ids
+    ):
         downgraded_candidates: list[dict[str, Any]] = []
         for candidate in candidates:
             bucket_id = str(candidate.get("bucket_id") or "")
-            if candidate.get("classification_state") == "sim_auto_approved" and bucket_id in sim_auto_downgrade_candidate_ids:
+            if (
+                candidate.get("classification_state") == "sim_auto_approved"
+                and bucket_id in sim_auto_downgrade_candidate_ids
+            ):
                 reason_key = (
                     "sim_auto_downgraded_by_ai_fail_closed"
                     if ai_fail_closed
-                    else "sim_auto_downgraded_by_ai_shard_failure"
-                    if bucket_id in failed_sim_candidate_ids
-                    else
-                    "sim_auto_blocked_by_ai_review_followup"
-                    if sim_auto_blocked_by_review_followup
-                    else "sim_auto_downgraded_by_ai_fail_closed"
+                    else (
+                        "sim_auto_downgraded_by_ai_shard_failure"
+                        if bucket_id in failed_sim_candidate_ids
+                        else (
+                            "sim_auto_blocked_by_ai_review_followup"
+                            if sim_auto_blocked_by_review_followup
+                            else "sim_auto_downgraded_by_ai_fail_closed"
+                        )
+                    )
                 )
                 downgraded_candidates.append(
                     {
@@ -1322,9 +1673,12 @@ def build_swing_lifecycle_bucket_discovery(
                         reason_key: True,
                         "ai_review_blocker_state": ai_review_blocker_state,
                         "pre_review_sim_auto_candidate_count": pre_review_sim_auto_candidate_count,
-                        "ai_review_required_but_provider_disabled": ai_review_blocker_state == "provider_disabled",
-                        "ai_review_provider_unavailable": ai_review_blocker_state == "provider_unavailable",
-                        "ai_review_parse_rejected": ai_review_blocker_state == "parse_rejected",
+                        "ai_review_required_but_provider_disabled": ai_review_blocker_state
+                        == "provider_disabled",
+                        "ai_review_provider_unavailable": ai_review_blocker_state
+                        == "provider_unavailable",
+                        "ai_review_parse_rejected": ai_review_blocker_state
+                        == "parse_rejected",
                     }
                 )
             else:
@@ -1336,7 +1690,11 @@ def build_swing_lifecycle_bucket_discovery(
         by_state[str(candidate.get("classification_state"))] += 1
         by_stage[str(candidate.get("lifecycle_stage") or "-")] += 1
 
-    sim_auto = [item for item in candidates if item.get("classification_state") == "sim_auto_approved"]
+    sim_auto = [
+        item
+        for item in candidates
+        if item.get("classification_state") == "sim_auto_approved"
+    ]
     flow_sim_auto = [
         item
         for item in sim_auto
@@ -1357,24 +1715,36 @@ def build_swing_lifecycle_bucket_discovery(
     code_patch = [
         item
         for item in candidates
-        if item.get("classification_state") in {"code_patch_required", "runtime_blocked_contract_gap", "automation_handoff_gap"}
+        if item.get("classification_state")
+        in {
+            "code_patch_required",
+            "runtime_blocked_contract_gap",
+            "automation_handoff_gap",
+        }
     ]
     resolved_source_quality_candidates = [
         item
         for item in candidates
         if isinstance(item.get("source_quality_resolution"), dict)
-        and item.get("source_quality_resolution", {}).get("status") == "implemented_source_quality_contract_waiting_sample"
+        and item.get("source_quality_resolution", {}).get("status")
+        == "implemented_source_quality_contract_waiting_sample"
     ]
     raw_implemented_source_quality_waiting = [
         item for item in candidates if _is_implemented_source_quality_waiting(item)
     ]
-    implemented_source_quality_waiting_sample_candidate_count = len(resolved_source_quality_candidates)
-    implemented_source_quality_waiting_sample_workorder_count = len(resolved_explicit_workorders)
+    implemented_source_quality_waiting_sample_candidate_count = len(
+        resolved_source_quality_candidates
+    )
+    implemented_source_quality_waiting_sample_workorder_count = len(
+        resolved_explicit_workorders
+    )
     implemented_source_quality_waiting_sample_total_count = (
         implemented_source_quality_waiting_sample_candidate_count
         + implemented_source_quality_waiting_sample_workorder_count
     )
-    ai_review_points = _ai_review_augmentation_points(matrix=matrix, candidates=candidates)
+    ai_review_points = _ai_review_augmentation_points(
+        matrix=matrix, candidates=candidates
+    )
     ai_audit = _ai_audit_section(ai_review_points)
     warnings: list[str] = []
     if not matrix:
@@ -1393,7 +1763,10 @@ def build_swing_lifecycle_bucket_discovery(
         warnings.append("ai_two_pass_review_followup_required_source_only")
     if sim_auto_blocked_by_review_followup:
         warnings.append("ai_two_pass_review_followup_sim_auto_blocked")
-    if ai_review_points and ai_audit.get("status") != "configured_deterministic_two_pass":
+    if (
+        ai_review_points
+        and ai_audit.get("status") != "configured_deterministic_two_pass"
+    ):
         warnings.append("swing_ldm_ai_review_not_configured")
     warnings = list(dict.fromkeys(warnings))
 
@@ -1423,7 +1796,11 @@ def build_swing_lifecycle_bucket_discovery(
             "allowed_runtime_apply": False,
         },
         "summary": {
-            "status": "missing" if not matrix else "pass" if source_contract_status == "pass" else "fail",
+            "status": (
+                "missing"
+                if not matrix
+                else "pass" if source_contract_status == "pass" else "fail"
+            ),
             "source_contract_status": source_contract_status,
             "candidate_count": len(candidates),
             "surfaced_candidate_count": len(candidates),
@@ -1436,9 +1813,15 @@ def build_swing_lifecycle_bucket_discovery(
             "join_contract_blocked": bool(flow_summary.get("join_contract_blocked")),
             "flow_sim_auto_approved_count": len(flow_sim_auto),
             "stage_only_source_only_count": len(stage_only_source_only),
-            "source_only_keep_collecting_count": by_state.get("source_only_keep_collecting", 0),
-            "code_patch_required_count": len(code_patch) + len(active_explicit_workorders) + (1 if followup_reasons else 0),
-            "raw_implemented_source_quality_waiting_sample_count": len(raw_implemented_source_quality_waiting),
+            "source_only_keep_collecting_count": by_state.get(
+                "source_only_keep_collecting", 0
+            ),
+            "code_patch_required_count": len(code_patch)
+            + len(active_explicit_workorders)
+            + (1 if followup_reasons else 0),
+            "raw_implemented_source_quality_waiting_sample_count": len(
+                raw_implemented_source_quality_waiting
+            ),
             "implemented_source_quality_waiting_sample_candidate_count": (
                 implemented_source_quality_waiting_sample_candidate_count
             ),
@@ -1451,7 +1834,9 @@ def build_swing_lifecycle_bucket_discovery(
             "implemented_source_quality_waiting_sample_count": (
                 implemented_source_quality_waiting_sample_total_count
             ),
-            "runtime_blocked_contract_gap_count": by_state.get("runtime_blocked_contract_gap", 0),
+            "runtime_blocked_contract_gap_count": by_state.get(
+                "runtime_blocked_contract_gap", 0
+            ),
             "automation_handoff_gap_count": by_state.get("automation_handoff_gap", 0),
             "ai_review_augmentation_point_count": len(ai_review_points),
             "ai_two_pass_review_status": ai_status,
@@ -1467,15 +1852,22 @@ def build_swing_lifecycle_bucket_discovery(
             "pre_review_sim_auto_candidate_count": pre_review_sim_auto_candidate_count,
             "sim_auto_reviewed_candidate_count": len(sim_reviewed_candidate_ids),
             "sim_auto_unreviewed_candidate_count": unreviewed_sim_auto_candidate_count,
-            "sim_auto_downgraded_by_review_count": len(sim_auto_downgrade_candidate_ids),
+            "sim_auto_downgraded_by_review_count": len(
+                sim_auto_downgrade_candidate_ids
+            ),
             "sim_auto_review_shard_count": len(sim_shards),
             "deterministic_proposal_count": len(candidates),
             "ai_tier2_proposal_count": sum(
-                1 for item in candidates if item.get("ai_tier2_proposal", {}).get("proposal_status") == "provided"
+                1
+                for item in candidates
+                if item.get("ai_tier2_proposal", {}).get("proposal_status")
+                == "provided"
             ),
             "comparative_review_count": len(candidates),
             "ai_reviewed_candidate_count": len(reviewed_candidates),
-            "ai_unreviewed_candidate_count": max(len(candidates) - len(reviewed_candidates), 0),
+            "ai_unreviewed_candidate_count": max(
+                len(candidates) - len(reviewed_candidates), 0
+            ),
             "unreviewed_sim_auto_candidate_count": unreviewed_sim_auto_candidate_count,
             "missing_ai_tier2_proposal_count": missing_ai_proposal_count,
             "missing_comparative_review_count": missing_comparative_review_count,
@@ -1494,7 +1886,9 @@ def build_swing_lifecycle_bucket_discovery(
             "ai_audit_explicit_gap_count": ai_audit.get("explicit_gap_count"),
             "sim_auto_policy_audited": bool(ai_audit.get("sim_auto_policy_preserved")),
             "swing_entry_bottleneck_primary": entry_bottleneck.get("primary"),
-            "swing_entry_bottleneck_candidate_present": bool(entry_bottleneck_candidate),
+            "swing_entry_bottleneck_candidate_present": bool(
+                entry_bottleneck_candidate
+            ),
             "state_counts": dict(by_state),
             "stage_counts": dict(by_stage),
             "human_intervention_required": False,
@@ -1505,7 +1899,8 @@ def build_swing_lifecycle_bucket_discovery(
             "provider": resolved_provider,
             "status": ai_status,
             "model": provider_status.get("model") or AI_REVIEW_MODEL,
-            "requested_provider": provider_status.get("requested_provider") or resolved_provider,
+            "requested_provider": provider_status.get("requested_provider")
+            or resolved_provider,
             "primary_provider": provider_status.get("primary_provider"),
             "failback_provider": provider_status.get("failback_provider"),
             "schema_name": AI_REVIEW_SCHEMA_NAME,
@@ -1517,17 +1912,25 @@ def build_swing_lifecycle_bucket_discovery(
             "optional_deferred_candidate_count": optional_deferred_candidate_count,
             "id_repair_count": ai_review_id_repair_count,
             "reviewed_candidate_ids": sorted(ai_reviewed_candidate_ids),
-            "omitted_candidate_count": max(len(candidates) - len(ai_reviewed_candidate_ids), 0),
+            "omitted_candidate_count": max(
+                len(candidates) - len(ai_reviewed_candidate_ids), 0
+            ),
             "shards": ai_review_shards,
             "audit": ai_payload_audit,
             "deterministic_proposals": [
-                item.get("deterministic_proposal") for item in candidates if item.get("deterministic_proposal")
+                item.get("deterministic_proposal")
+                for item in candidates
+                if item.get("deterministic_proposal")
             ],
             "ai_tier2_proposals": [
-                item.get("ai_tier2_proposal") for item in candidates if item.get("ai_tier2_proposal")
+                item.get("ai_tier2_proposal")
+                for item in candidates
+                if item.get("ai_tier2_proposal")
             ],
             "comparative_reviews": [
-                item.get("comparative_review") for item in candidates if item.get("comparative_review")
+                item.get("comparative_review")
+                for item in candidates
+                if item.get("comparative_review")
             ],
             "warnings": ai_warnings,
             "fail_closed": ai_fail_closed,
@@ -1538,7 +1941,9 @@ def build_swing_lifecycle_bucket_discovery(
             "pre_review_sim_auto_candidate_count": pre_review_sim_auto_candidate_count,
             "sim_auto_reviewed_candidate_count": len(sim_reviewed_candidate_ids),
             "sim_auto_unreviewed_candidate_count": unreviewed_sim_auto_candidate_count,
-            "sim_auto_downgraded_by_review_count": len(sim_auto_downgrade_candidate_ids),
+            "sim_auto_downgraded_by_review_count": len(
+                sim_auto_downgrade_candidate_ids
+            ),
             "sim_auto_review_shard_count": len(sim_shards),
             "missing_ai_tier2_proposal_count": missing_ai_proposal_count,
             "missing_comparative_review_count": missing_comparative_review_count,
@@ -1547,13 +1952,19 @@ def build_swing_lifecycle_bucket_discovery(
             "unreviewed_sim_auto_candidate_count": unreviewed_sim_auto_candidate_count,
         },
         "deterministic_proposals": [
-            item.get("deterministic_proposal") for item in candidates if item.get("deterministic_proposal")
+            item.get("deterministic_proposal")
+            for item in candidates
+            if item.get("deterministic_proposal")
         ],
         "ai_tier2_proposals": [
-            item.get("ai_tier2_proposal") for item in candidates if item.get("ai_tier2_proposal")
+            item.get("ai_tier2_proposal")
+            for item in candidates
+            if item.get("ai_tier2_proposal")
         ],
         "comparative_reviews": [
-            item.get("comparative_review") for item in candidates if item.get("comparative_review")
+            item.get("comparative_review")
+            for item in candidates
+            if item.get("comparative_review")
         ],
         "selected_decision_counts": proposal_counts(
             [item.get("comparative_review") or {} for item in candidates],
@@ -1563,7 +1974,9 @@ def build_swing_lifecycle_bucket_discovery(
             [item.get("comparative_review") or {} for item in candidates],
             key="selected_source",
         ),
-        "surfaced_candidate_ids": [str(item.get("bucket_id")) for item in candidates if item.get("bucket_id")],
+        "surfaced_candidate_ids": [
+            str(item.get("bucket_id")) for item in candidates if item.get("bucket_id")
+        ],
         "surfaced_candidates": candidates,
         "sim_auto_approved_candidates": sim_auto,
         "code_improvement_workorders": [
@@ -1575,18 +1988,25 @@ def build_swing_lifecycle_bucket_discovery(
                 "bucket_id": item.get("bucket_id"),
                 "stage": item.get("stage") or item.get("lifecycle_stage"),
                 "lifecycle_stage": item.get("lifecycle_stage") or item.get("stage"),
-                "source_workorder_id": item.get("source_workorder_id") or item.get("workorder_id"),
-                "parent_bucket_id": item.get("parent_bucket_id") or item.get("bucket_id"),
+                "source_workorder_id": item.get("source_workorder_id")
+                or item.get("workorder_id"),
+                "parent_bucket_id": item.get("parent_bucket_id")
+                or item.get("bucket_id"),
                 "classification_state": item.get("classification_state"),
                 "reason": "swing_ldm_bucket_contract_or_source_quality_gap",
                 "target_subsystem": "swing_lifecycle_bucket_discovery",
                 "implementation_status": item.get("implementation_status"),
-                "implementation_provenance": item.get("implementation_provenance") or {},
+                "implementation_provenance": item.get("implementation_provenance")
+                or {},
                 **_workorder_contract_fields(),
             }
             for item in code_patch
         ]
-        + ([_ai_review_followup_workorder(followup_reasons, ai_payload_audit)] if followup_reasons else [])
+        + (
+            [_ai_review_followup_workorder(followup_reasons, ai_payload_audit)]
+            if followup_reasons
+            else []
+        )
         + [_normalize_explicit_workorder(item) for item in active_explicit_workorders],
         "resolved_source_quality_candidates": resolved_source_quality_candidates,
         "resolved_source_quality_workorders": [
@@ -1597,7 +2017,9 @@ def build_swing_lifecycle_bucket_discovery(
             for item in resolved_explicit_workorders
         ],
         "sources": {
-            "swing_lifecycle_decision_matrix": str(matrix_json) if matrix_json.exists() else None,
+            "swing_lifecycle_decision_matrix": (
+                str(matrix_json) if matrix_json.exists() else None
+            ),
             "swing_daily_simulation": None,
         },
         "warnings": warnings,
@@ -1611,7 +2033,8 @@ def build_swing_lifecycle_bucket_discovery(
     report["summary"]["implemented_code_improvement_workorder_ids"] = [
         str(item.get("workorder_id"))
         for item in workorders
-        if isinstance(item, dict) and str(item.get("implementation_status") or "").startswith("implemented")
+        if isinstance(item, dict)
+        and str(item.get("implementation_status") or "").startswith("implemented")
     ]
     report["summary"]["pending_code_improvement_workorder_ids"] = [
         str(item.get("workorder_id"))
@@ -1623,7 +2046,8 @@ def build_swing_lifecycle_bucket_discovery(
     report["summary"]["ai_review_followup_workorder_ids"] = [
         str(item.get("workorder_id"))
         for item in workorders
-        if isinstance(item, dict) and str(item.get("source_workorder_id") or "") == "ai_review_followup"
+        if isinstance(item, dict)
+        and str(item.get("source_workorder_id") or "") == "ai_review_followup"
     ]
     return report
 
@@ -1700,14 +2124,21 @@ def write_report(report: dict[str, Any]) -> tuple[Path, Path]:
     json_path, md_path = report_paths(str(report.get("date")))
     json_path.parent.mkdir(parents=True, exist_ok=True)
     md_path.parent.mkdir(parents=True, exist_ok=True)
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
     md_path.write_text(render_markdown(report), encoding="utf-8")
-    refresh_swing_sim_auto_approval(str(report.get("date")), swing_lifecycle_bucket_report=report)
+    refresh_swing_sim_auto_approval(
+        str(report.get("date")), swing_lifecycle_bucket_report=report
+    )
     return json_path, md_path
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Build Swing lifecycle bucket discovery.")
+    parser = argparse.ArgumentParser(
+        description="Build Swing lifecycle bucket discovery."
+    )
     parser.add_argument("--date", dest="target_date", default=date.today().isoformat())
     parser.add_argument(
         "--ai-provider",
@@ -1721,7 +2152,9 @@ def main() -> None:
         ),
     )
     args = parser.parse_args()
-    report = build_swing_lifecycle_bucket_discovery(args.target_date, provider=args.ai_provider)
+    report = build_swing_lifecycle_bucket_discovery(
+        args.target_date, provider=args.ai_provider
+    )
     json_path, md_path = write_report(report)
     print(f"[swing-lifecycle-bucket-discovery] wrote {json_path} {md_path}")
 

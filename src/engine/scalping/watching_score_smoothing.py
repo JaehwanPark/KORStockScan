@@ -15,7 +15,6 @@ from typing import Any, Iterable
 
 from src.utils.jsonl_io import existing_or_gzip_path, read_jsonl
 
-
 POLICY_VERSION = "watching_score_smoothing_v1"
 VALID_MODES = frozenset({"off", "report_only", "applied"})
 MAX_OBSERVATIONS = 6
@@ -53,10 +52,21 @@ def _truthy(value: Any) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on", "stale"}
 
 
-def excluded_reason(ai_result: dict[str, Any], *, quote_stale: bool = False, context_stale: bool = False) -> str:
-    source = str(ai_result.get("ai_result_source") or ai_result.get("result_source") or "").strip().lower()
+def excluded_reason(
+    ai_result: dict[str, Any], *, quote_stale: bool = False, context_stale: bool = False
+) -> str:
+    source = (
+        str(ai_result.get("ai_result_source") or ai_result.get("result_source") or "")
+        .strip()
+        .lower()
+    )
     reason = str(ai_result.get("reason") or "").strip().lower()
-    if _truthy(quote_stale) or _truthy(context_stale) or _truthy(ai_result.get("quote_stale")) or _truthy(ai_result.get("tick_context_stale")):
+    if (
+        _truthy(quote_stale)
+        or _truthy(context_stale)
+        or _truthy(ai_result.get("quote_stale"))
+        or _truthy(ai_result.get("tick_context_stale"))
+    ):
         return "stale_context_or_quote"
     if source == "lock_contention" or "ai contention" in reason:
         return "lock_contention"
@@ -66,12 +76,16 @@ def excluded_reason(ai_result: dict[str, Any], *, quote_stale: bool = False, con
         return "fallback_score_50"
     if _truthy(ai_result.get("cache_hit")) or source == "cache":
         return "cache_hit_same_input"
-    if _truthy(ai_result.get("ai_parse_fail")) or not _truthy(ai_result.get("ai_parse_ok")):
+    if _truthy(ai_result.get("ai_parse_fail")) or not _truthy(
+        ai_result.get("ai_parse_ok")
+    ):
         return "parse_invalid"
     return ""
 
 
-def _trim_observations(observations: Iterable[dict[str, Any]], now_ts: float) -> list[dict[str, Any]]:
+def _trim_observations(
+    observations: Iterable[dict[str, Any]], now_ts: float
+) -> list[dict[str, Any]]:
     valid = [
         dict(item)
         for item in observations
@@ -139,28 +153,80 @@ def evaluate_watching_score(
 ) -> tuple[WatchingScoreDecision, list[dict[str, Any]]]:
     resolved_mode = normalize_mode(mode)
     raw = max(0.0, min(100.0, _float(raw_score, 50.0)))
-    reason = excluded_reason(ai_result, quote_stale=quote_stale, context_stale=context_stale)
+    reason = excluded_reason(
+        ai_result, quote_stale=quote_stale, context_stale=context_stale
+    )
     retained = _trim_observations(observations, now_ts)
     if resolved_mode == "off":
-        return WatchingScoreDecision(resolved_mode, raw, raw, raw, False, "off", len(retained), 0.0, 0.0, reason, False), retained
+        return (
+            WatchingScoreDecision(
+                resolved_mode,
+                raw,
+                raw,
+                raw,
+                False,
+                "off",
+                len(retained),
+                0.0,
+                0.0,
+                reason,
+                False,
+            ),
+            retained,
+        )
     if reason:
-        fail_closed = min(raw, 50.0, _float(previous_applied_score, 50.0)) if resolved_mode == "applied" else raw
-        return WatchingScoreDecision(resolved_mode, raw, raw, fail_closed, False, "excluded", len(retained), 0.0, 0.0, reason, False), retained
+        fail_closed = (
+            min(raw, 50.0, _float(previous_applied_score, 50.0))
+            if resolved_mode == "applied"
+            else raw
+        )
+        return (
+            WatchingScoreDecision(
+                resolved_mode,
+                raw,
+                raw,
+                fail_closed,
+                False,
+                "excluded",
+                len(retained),
+                0.0,
+                0.0,
+                reason,
+                False,
+            ),
+            retained,
+        )
 
-    retained.append({"observed_at": float(now_ts), "score": raw, "action": str(action or "WAIT").upper()})
+    retained.append(
+        {
+            "observed_at": float(now_ts),
+            "score": raw,
+            "action": str(action or "WAIT").upper(),
+        }
+    )
     retained = _trim_observations(retained, now_ts)
     scores = [_float(item.get("score"), 50.0) for item in retained]
     projected = raw if len(retained) == 1 else _time_weighted_score(retained, now_ts)
-    previous = raw if previous_applied_score is None else _float(previous_applied_score, raw)
+    previous = (
+        raw if previous_applied_score is None else _float(previous_applied_score, raw)
+    )
     if str(action or "").upper() == "DROP" or raw <= previous - SHARP_DROP_POINTS:
         projected = raw
     confidence = "ready" if len(retained) >= 3 else "warming_up"
-    recent_actions = [str(item.get("action") or "WAIT").upper() for item in retained[-3:]]
-    consistency = max(Counter(recent_actions).values()) / len(recent_actions) if recent_actions else 0.0
+    recent_actions = [
+        str(item.get("action") or "WAIT").upper() for item in retained[-3:]
+    ]
+    consistency = (
+        max(Counter(recent_actions).values()) / len(recent_actions)
+        if recent_actions
+        else 0.0
+    )
     dispersion = statistics.pstdev(scores) if len(scores) >= 2 else 0.0
     normalized_action = str(action or "WAIT").upper()
     buy_votes = sum(1 for item in recent_actions if item == "BUY")
-    buy_guard_blocked = normalized_action == "BUY" and (raw < 75.0 or len(retained) < 3 or buy_votes < 2)
+    buy_guard_blocked = normalized_action == "BUY" and (
+        raw < 75.0 or len(retained) < 3 or buy_votes < 2
+    )
     if normalized_action != "BUY" or raw < 75.0:
         projected = min(projected, raw)
     elif len(retained) < 3 or buy_votes < 2:
@@ -185,8 +251,14 @@ def evaluate_watching_score(
     )
 
 
-def diagnostic_artifact_path(target_date: str, root: Path = Path("data/report")) -> Path:
-    return root / "ai_watching_score_smoothing_diagnostic" / f"ai_watching_score_smoothing_diagnostic_{target_date}.json"
+def diagnostic_artifact_path(
+    target_date: str, root: Path = Path("data/report")
+) -> Path:
+    return (
+        root
+        / "ai_watching_score_smoothing_diagnostic"
+        / f"ai_watching_score_smoothing_diagnostic_{target_date}.json"
+    )
 
 
 def _date_text(day: date) -> str:
@@ -196,10 +268,18 @@ def _date_text(day: date) -> str:
 def _session_artifact_paths(target_date: str, data_root: Path) -> dict[str, Path]:
     report_root = data_root / "report"
     return {
-        "pipeline_events": existing_or_gzip_path(data_root / "pipeline_events" / f"pipeline_events_{target_date}.jsonl"),
-        "post_sell": report_root / "monitor_snapshots" / f"post_sell_feedback_{target_date}.json",
-        "post_sell_gz": report_root / "monitor_snapshots" / f"post_sell_feedback_{target_date}.json.gz",
-        "source_quality": report_root / "observation_source_quality_audit" / f"observation_source_quality_audit_{target_date}.json",
+        "pipeline_events": existing_or_gzip_path(
+            data_root / "pipeline_events" / f"pipeline_events_{target_date}.jsonl"
+        ),
+        "post_sell": report_root
+        / "monitor_snapshots"
+        / f"post_sell_feedback_{target_date}.json",
+        "post_sell_gz": report_root
+        / "monitor_snapshots"
+        / f"post_sell_feedback_{target_date}.json.gz",
+        "source_quality": report_root
+        / "observation_source_quality_audit"
+        / f"observation_source_quality_audit_{target_date}.json",
         "postclose_verification": report_root
         / "threshold_cycle_postclose_verification"
         / f"threshold_cycle_postclose_verification_{target_date}.json",
@@ -218,13 +298,17 @@ def _auto_guard_evidence(target_date: str, *, data_root: Path) -> dict[str, Any]
             break
         session_date = _date_text(end_date - timedelta(days=offset))
         paths = _session_artifact_paths(session_date, data_root)
-        post_sell_path = paths["post_sell"] if paths["post_sell"].exists() else paths["post_sell_gz"]
+        post_sell_path = (
+            paths["post_sell"] if paths["post_sell"].exists() else paths["post_sell_gz"]
+        )
         required = {
             "post_sell": post_sell_path,
             "source_quality": paths["source_quality"],
             "postclose_verification": paths["postclose_verification"],
         }
-        if not paths["pipeline_events"].exists() or not all(path.exists() for path in required.values()):
+        if not paths["pipeline_events"].exists() or not all(
+            path.exists() for path in required.values()
+        ):
             continue
         session_dates.append(session_date)
         for role, path in required.items():
@@ -265,8 +349,12 @@ def _load_json(path: Path) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
-def _artifact_check(path: Path, *, target_date: str = "", role: str = "", expected_sha256: str = "") -> dict[str, Any]:
-    actual_sha256 = hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else ""
+def _artifact_check(
+    path: Path, *, target_date: str = "", role: str = "", expected_sha256: str = ""
+) -> dict[str, Any]:
+    actual_sha256 = (
+        hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else ""
+    )
     expected = str(expected_sha256 or "").strip().lower()
     return {
         "path": str(path),
@@ -293,13 +381,17 @@ def _score_to_action(score: Any) -> str:
     return "BUY" if _float(score) >= BUY_THRESHOLD else "WAIT"
 
 
-def _build_symbol_sequences(rows: list[dict[str, Any]]) -> dict[tuple[str, str], list[dict[str, Any]]]:
+def _build_symbol_sequences(
+    rows: list[dict[str, Any]],
+) -> dict[tuple[str, str], list[dict[str, Any]]]:
     sequences: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
         key = (str(row.get("session_date") or ""), str(row.get("symbol") or "-"))
         sequences[key].append(row)
     for items in sequences.values():
-        items.sort(key=lambda item: _parse_emitted_at(item.get("emitted_at")) or datetime.min)
+        items.sort(
+            key=lambda item: _parse_emitted_at(item.get("emitted_at")) or datetime.min
+        )
     return sequences
 
 
@@ -310,9 +402,21 @@ def _buy_wait_flip_reduction_pct(rows: list[dict[str, Any]]) -> float | None:
         if len(items) < 2:
             continue
         raw_actions = [_score_to_action(item.get("ai_score_raw")) for item in items]
-        projected_actions = [_score_to_action(item.get("ai_score_projected")) for item in items]
-        raw_flips += sum(1 for prev, curr in zip(raw_actions, raw_actions[1:], strict=False) if prev != curr)
-        projected_flips += sum(1 for prev, curr in zip(projected_actions, projected_actions[1:], strict=False) if prev != curr)
+        projected_actions = [
+            _score_to_action(item.get("ai_score_projected")) for item in items
+        ]
+        raw_flips += sum(
+            1
+            for prev, curr in zip(raw_actions, raw_actions[1:], strict=False)
+            if prev != curr
+        )
+        projected_flips += sum(
+            1
+            for prev, curr in zip(
+                projected_actions, projected_actions[1:], strict=False
+            )
+            if prev != curr
+        )
     if raw_flips <= 0:
         return None
     return (raw_flips - projected_flips) / raw_flips * 100.0
@@ -375,9 +479,16 @@ def _parse_fallback_lock_contention_degradation_status(
     }
 
 
-def _safety_and_provenance_guard_status(session_dates: list[str], *, data_root: Path) -> dict[str, Any]:
+def _safety_and_provenance_guard_status(
+    session_dates: list[str], *, data_root: Path
+) -> dict[str, Any]:
     if not session_dates:
-        return {"required": "no_breach", "observed": None, "status": "pending", "session_statuses": []}
+        return {
+            "required": "no_breach",
+            "observed": None,
+            "status": "pending",
+            "session_statuses": [],
+        }
     session_statuses = []
     passed = True
     for session_date in session_dates:
@@ -394,7 +505,8 @@ def _safety_and_provenance_guard_status(session_dates: list[str], *, data_root: 
         session_passed = (
             source_quality_status in {"pass", "warning"}
             and tuning_input_allowed
-            and verification_status in {"pass", "warning", "pass_with_pending_done_marker"}
+            and verification_status
+            in {"pass", "warning", "pass_with_pending_done_marker"}
         )
         passed = passed and session_passed
         session_statuses.append(
@@ -414,9 +526,13 @@ def _safety_and_provenance_guard_status(session_dates: list[str], *, data_root: 
     }
 
 
-def _manual_review_value_matches(*, operator: str, observed: Any, threshold: Any) -> bool:
+def _manual_review_value_matches(
+    *, operator: str, observed: Any, threshold: Any
+) -> bool:
     if operator == "required":
-        return str(observed or "").strip().lower() == str(threshold or "").strip().lower()
+        return (
+            str(observed or "").strip().lower() == str(threshold or "").strip().lower()
+        )
     try:
         observed_value = float(observed)
         threshold_value = float(threshold)
@@ -436,7 +552,9 @@ def _same_scalar(left: Any, right: Any) -> bool:
         return str(left or "").strip().lower() == str(right or "").strip().lower()
 
 
-def _manual_review_threshold_matches(*, operator: str, actual: Any, expected: Any) -> bool:
+def _manual_review_threshold_matches(
+    *, operator: str, actual: Any, expected: Any
+) -> bool:
     if operator == "required":
         return _same_scalar(actual, expected)
     try:
@@ -469,7 +587,10 @@ def _manual_review_artifact_matches(
     for field_name in ("status", "observed", "threshold"):
         if field_name not in payload:
             return False
-    if str(payload.get("status") or "").strip().lower() != str(item.get("status") or "").strip().lower():
+    if (
+        str(payload.get("status") or "").strip().lower()
+        != str(item.get("status") or "").strip().lower()
+    ):
         return False
     if not _same_scalar(payload.get("observed"), item.get("observed")):
         return False
@@ -482,10 +603,14 @@ def _manual_review_artifact_matches(
     return True
 
 
-def _manual_review_criterion_passed(criterion: str, item: Any, *, session_dates: list[str]) -> bool:
+def _manual_review_criterion_passed(
+    criterion: str, item: Any, *, session_dates: list[str]
+) -> bool:
     if not isinstance(item, dict):
         return False
-    operator, expected_threshold = MANUAL_REVIEW_CRITERION_RULES.get(criterion, ("", None))
+    operator, expected_threshold = MANUAL_REVIEW_CRITERION_RULES.get(
+        criterion, ("", None)
+    )
     if not operator:
         return False
     if str(item.get("status") or "").strip().lower() != "pass":
@@ -500,7 +625,11 @@ def _manual_review_criterion_passed(criterion: str, item: Any, *, session_dates:
         expected=expected_threshold,
     ):
         return False
-    if not _manual_review_value_matches(operator=operator, observed=item.get("observed"), threshold=item.get("threshold")):
+    if not _manual_review_value_matches(
+        operator=operator,
+        observed=item.get("observed"),
+        threshold=item.get("threshold"),
+    ):
         return False
     artifact_path = Path(str(item.get("artifact_path") or ""))
     expected_sha256 = str(item.get("sha256") or "").strip().lower()
@@ -523,8 +652,18 @@ def build_diagnostic_artifact(
     write: bool = False,
     guard_evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    evidence = guard_evidence if isinstance(guard_evidence, dict) else _auto_guard_evidence(target_date, data_root=data_root)
-    session_dates = sorted({str(item) for item in (evidence.get("normal_session_dates") or []) if str(item)})
+    evidence = (
+        guard_evidence
+        if isinstance(guard_evidence, dict)
+        else _auto_guard_evidence(target_date, data_root=data_root)
+    )
+    session_dates = sorted(
+        {
+            str(item)
+            for item in (evidence.get("normal_session_dates") or [])
+            if str(item)
+        }
+    )
     artifact_checks = []
     for item in evidence.get("artifacts") or []:
         if not isinstance(item, dict):
@@ -538,10 +677,16 @@ def build_diagnostic_artifact(
                 expected_sha256=str(item.get("sha256") or ""),
             )
         )
-    artifact_dates = {item["target_date"] for item in artifact_checks if item["target_date"]}
+    artifact_dates = {
+        item["target_date"] for item in artifact_checks if item["target_date"]
+    }
     required_roles = {"post_sell", "source_quality", "postclose_verification"}
     roles_by_date = {
-        session_date: {item["role"] for item in artifact_checks if item["target_date"] == session_date}
+        session_date: {
+            item["role"]
+            for item in artifact_checks
+            if item["target_date"] == session_date
+        }
         for session_date in session_dates
     }
     evidence_accepted = bool(
@@ -551,11 +696,16 @@ def build_diagnostic_artifact(
         and len(artifact_checks) >= len(session_dates) * len(required_roles)
         and all(item["exists"] and item["sha256_match"] for item in artifact_checks)
         and set(session_dates).issubset(artifact_dates)
-        and all(required_roles.issubset(roles_by_date.get(session_date, set())) for session_date in session_dates)
+        and all(
+            required_roles.issubset(roles_by_date.get(session_date, set()))
+            for session_date in session_dates
+        )
     )
     selected_dates = session_dates if evidence_accepted else [target_date]
     source_paths = [
-        existing_or_gzip_path(data_root / "pipeline_events" / f"pipeline_events_{item}.jsonl")
+        existing_or_gzip_path(
+            data_root / "pipeline_events" / f"pipeline_events_{item}.jsonl"
+        )
         for item in selected_dates
     ]
     input_artifact_checks = [
@@ -593,13 +743,17 @@ def build_diagnostic_artifact(
             exclusion_counts[reason] += 1
 
     regular_rows = [row for row in rows if row.get("event_stage") == "ai_confirmed"]
-    projection_rows = [row for row in rows if row.get("event_stage") == "ai_watching_score_projection"]
+    projection_rows = [
+        row for row in rows if row.get("event_stage") == "ai_watching_score_projection"
+    ]
     regular_rows_by_session: dict[str, list[dict[str, Any]]] = defaultdict(list)
     projection_rows_by_session: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in regular_rows:
         regular_rows_by_session[str(row.get("session_date") or target_date)].append(row)
     for row in projection_rows:
-        projection_rows_by_session[str(row.get("session_date") or target_date)].append(row)
+        projection_rows_by_session[str(row.get("session_date") or target_date)].append(
+            row
+        )
     primary_observation_rows: list[dict[str, Any]] = []
     primary_observation_stages_by_session: dict[str, str] = {}
     for session_date in selected_dates:
@@ -614,14 +768,14 @@ def build_diagnostic_artifact(
             "ai_watching_score_projection" if session_projection_rows else "none"
         )
     observed_primary_stages = {
-        stage for stage in primary_observation_stages_by_session.values() if stage != "none"
+        stage
+        for stage in primary_observation_stages_by_session.values()
+        if stage != "none"
     }
     primary_observation_stage = (
         next(iter(observed_primary_stages))
         if len(observed_primary_stages) == 1
-        else "mixed_by_session"
-        if observed_primary_stages
-        else "none"
+        else "mixed_by_session" if observed_primary_stages else "none"
     )
     valid_rows = [
         row
@@ -636,9 +790,13 @@ def build_diagnostic_artifact(
     valid_projection_by_symbol: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in valid_rows:
         valid_projection_by_symbol[row["symbol"]].append(row)
-    sequence_count = sum(1 for items in valid_projection_by_symbol.values() if len(items) >= 3)
+    sequence_count = sum(
+        1 for items in valid_projection_by_symbol.values() if len(items) >= 3
+    )
     raw_stddev = statistics.pstdev(raw_scores) if len(raw_scores) >= 2 else None
-    projected_stddev = statistics.pstdev(projected_scores) if len(projected_scores) >= 2 else None
+    projected_stddev = (
+        statistics.pstdev(projected_scores) if len(projected_scores) >= 2 else None
+    )
     stddev_reduction_pct = (
         (raw_stddev - projected_stddev) / raw_stddev * 100.0
         if raw_stddev not in (None, 0.0) and projected_stddev is not None
@@ -656,17 +814,35 @@ def build_diagnostic_artifact(
     )
     contention_count = primary_exclusion_counts.get("lock_contention", 0)
     primary_observation_count = len(primary_observation_rows)
-    contention_rate = contention_count / primary_observation_count * 100.0 if primary_observation_count else None
+    contention_rate = (
+        contention_count / primary_observation_count * 100.0
+        if primary_observation_count
+        else None
+    )
     parse_invalid_count = primary_exclusion_counts.get("parse_invalid", 0)
     fallback_count = primary_exclusion_counts.get("fallback_score_50", 0)
     engine_disabled_count = primary_exclusion_counts.get("engine_disabled", 0)
     cache_hit_count = primary_exclusion_counts.get("cache_hit_same_input", 0)
-    parse_invalid_rate = parse_invalid_count / primary_observation_count * 100.0 if primary_observation_count else None
-    fallback_or_lock_contention_rate = (
-        (fallback_count + contention_count) / primary_observation_count * 100.0 if primary_observation_count else None
+    parse_invalid_rate = (
+        parse_invalid_count / primary_observation_count * 100.0
+        if primary_observation_count
+        else None
     )
-    engine_disabled_rate = engine_disabled_count / primary_observation_count * 100.0 if primary_observation_count else None
-    cache_hit_rate = cache_hit_count / primary_observation_count * 100.0 if primary_observation_count else None
+    fallback_or_lock_contention_rate = (
+        (fallback_count + contention_count) / primary_observation_count * 100.0
+        if primary_observation_count
+        else None
+    )
+    engine_disabled_rate = (
+        engine_disabled_count / primary_observation_count * 100.0
+        if primary_observation_count
+        else None
+    )
+    cache_hit_rate = (
+        cache_hit_count / primary_observation_count * 100.0
+        if primary_observation_count
+        else None
+    )
     stale_invalid_applied_count = sum(
         1
         for row in rows
@@ -674,47 +850,109 @@ def build_diagnostic_artifact(
         and str(row.get("ai_score_excluded_reason") or "-") != "-"
     )
     projection_session_count = len({row["session_date"] for row in valid_rows})
-    valid_row_sequences = [row for row in valid_rows if row.get("event_stage") in {"ai_confirmed", "ai_watching_score_projection"}]
+    valid_row_sequences = [
+        row
+        for row in valid_rows
+        if row.get("event_stage") in {"ai_confirmed", "ai_watching_score_projection"}
+    ]
     buy_wait_flip_rate_reduction_pct = _buy_wait_flip_reduction_pct(valid_row_sequences)
     sharp_drop_delay_p95_sec = _sharp_drop_delay_p95_sec(valid_row_sequences)
-    parse_fallback_lock_contention_degradation = _parse_fallback_lock_contention_degradation_status(
-        fallback_or_lock_contention_rate=fallback_or_lock_contention_rate,
-        contention_rate=contention_rate,
-        engine_disabled_rate=engine_disabled_rate,
+    parse_fallback_lock_contention_degradation = (
+        _parse_fallback_lock_contention_degradation_status(
+            fallback_or_lock_contention_rate=fallback_or_lock_contention_rate,
+            contention_rate=contention_rate,
+            engine_disabled_rate=engine_disabled_rate,
+        )
     )
-    safety_and_provenance_guards = _safety_and_provenance_guard_status(selected_dates, data_root=data_root)
+    safety_and_provenance_guards = _safety_and_provenance_guard_status(
+        selected_dates, data_root=data_root
+    )
     criteria = {
         "pipeline_input_integrity": {
             "required": "all_selected_pipeline_files_present",
             "observed": f"{sum(1 for item in input_artifact_checks if item['exists'])}/{len(input_artifact_checks)}",
             "status": "pass" if pipeline_input_integrity_passed else "fail",
         },
-        "normal_session_count": {"required": 3, "observed": projection_session_count, "status": "pass" if projection_session_count >= 3 else "pending"},
-        "valid_response_count": {"required": 300, "observed": len(valid_rows), "status": "pass" if len(valid_rows) >= 300 else "pending"},
-        "unique_symbol_count": {"required": 20, "observed": len(valid_projection_by_symbol), "status": "pass" if len(valid_projection_by_symbol) >= 20 else "pending"},
-        "sequence_3plus_count": {"required": 50, "observed": sequence_count, "status": "pass" if sequence_count >= 50 else "pending"},
-        "lock_contention_rate_pct": {"maximum": 1.0, "observed": contention_rate, "status": "pass" if contention_rate is not None and contention_rate <= 1.0 else "pending"},
+        "normal_session_count": {
+            "required": 3,
+            "observed": projection_session_count,
+            "status": "pass" if projection_session_count >= 3 else "pending",
+        },
+        "valid_response_count": {
+            "required": 300,
+            "observed": len(valid_rows),
+            "status": "pass" if len(valid_rows) >= 300 else "pending",
+        },
+        "unique_symbol_count": {
+            "required": 20,
+            "observed": len(valid_projection_by_symbol),
+            "status": "pass" if len(valid_projection_by_symbol) >= 20 else "pending",
+        },
+        "sequence_3plus_count": {
+            "required": 50,
+            "observed": sequence_count,
+            "status": "pass" if sequence_count >= 50 else "pending",
+        },
+        "lock_contention_rate_pct": {
+            "maximum": 1.0,
+            "observed": contention_rate,
+            "status": (
+                "pass"
+                if contention_rate is not None and contention_rate <= 1.0
+                else "pending"
+            ),
+        },
         "fallback_or_lock_contention_absolute_cap_pct": {
             "maximum": 2.0,
             "observed": fallback_or_lock_contention_rate,
-            "status": "pass" if fallback_or_lock_contention_rate is not None and fallback_or_lock_contention_rate <= 2.0 else "pending",
+            "status": (
+                "pass"
+                if fallback_or_lock_contention_rate is not None
+                and fallback_or_lock_contention_rate <= 2.0
+                else "pending"
+            ),
         },
         "engine_disabled_rate_pct": {
             "maximum": 0.0,
             "observed": engine_disabled_rate,
-            "status": "pass" if engine_disabled_rate is not None and engine_disabled_rate <= 0.0 else "pending",
+            "status": (
+                "pass"
+                if engine_disabled_rate is not None and engine_disabled_rate <= 0.0
+                else "pending"
+            ),
         },
-        "stale_invalid_included_count": {"maximum": 0, "observed": stale_invalid_applied_count, "status": "pass" if stale_invalid_applied_count == 0 else "fail"},
-        "score_stddev_reduction_pct": {"minimum": 20.0, "observed": stddev_reduction_pct, "status": "pass" if stddev_reduction_pct is not None and stddev_reduction_pct >= 20.0 else "pending"},
+        "stale_invalid_included_count": {
+            "maximum": 0,
+            "observed": stale_invalid_applied_count,
+            "status": "pass" if stale_invalid_applied_count == 0 else "fail",
+        },
+        "score_stddev_reduction_pct": {
+            "minimum": 20.0,
+            "observed": stddev_reduction_pct,
+            "status": (
+                "pass"
+                if stddev_reduction_pct is not None and stddev_reduction_pct >= 20.0
+                else "pending"
+            ),
+        },
         "buy_wait_flip_rate_reduction_pct": {
             "minimum": 20.0,
             "observed": buy_wait_flip_rate_reduction_pct,
-            "status": "pass" if buy_wait_flip_rate_reduction_pct is not None and buy_wait_flip_rate_reduction_pct >= 20.0 else "pending",
+            "status": (
+                "pass"
+                if buy_wait_flip_rate_reduction_pct is not None
+                and buy_wait_flip_rate_reduction_pct >= 20.0
+                else "pending"
+            ),
         },
         "sharp_drop_delay_p95_sec": {
             "maximum": 30.0,
             "observed": sharp_drop_delay_p95_sec,
-            "status": "pass" if sharp_drop_delay_p95_sec is None or sharp_drop_delay_p95_sec <= 30.0 else "fail",
+            "status": (
+                "pass"
+                if sharp_drop_delay_p95_sec is None or sharp_drop_delay_p95_sec <= 30.0
+                else "fail"
+            ),
         },
         "projected_buy_source_quality_adjusted_ev_pct": {
             "minimum_delta": 0.0,
@@ -736,18 +974,35 @@ def build_diagnostic_artifact(
     automatic_criteria = {
         key: item
         for key, item in criteria.items()
-        if item.get("status") not in {"manual_review_required", "auto_followup_required"}
+        if item.get("status")
+        not in {"manual_review_required", "auto_followup_required"}
     }
     manual_review_required = [
-        key for key, item in criteria.items() if item.get("status") == "manual_review_required"
+        key
+        for key, item in criteria.items()
+        if item.get("status") == "manual_review_required"
     ]
     auto_followup_required = [
-        key for key, item in criteria.items() if item.get("status") == "auto_followup_required"
+        key
+        for key, item in criteria.items()
+        if item.get("status") == "auto_followup_required"
     ]
-    manual_review_recoverable = sorted({*manual_review_required, *auto_followup_required})
-    manual_review = evidence.get("manual_review") if evidence_accepted and isinstance(evidence.get("manual_review"), dict) else {}
-    manual_review_criteria = manual_review.get("criteria") if isinstance(manual_review.get("criteria"), dict) else {}
-    manual_review_validation_keys = sorted({*manual_review_recoverable, *manual_review_criteria.keys()})
+    manual_review_recoverable = sorted(
+        {*manual_review_required, *auto_followup_required}
+    )
+    manual_review = (
+        evidence.get("manual_review")
+        if evidence_accepted and isinstance(evidence.get("manual_review"), dict)
+        else {}
+    )
+    manual_review_criteria = (
+        manual_review.get("criteria")
+        if isinstance(manual_review.get("criteria"), dict)
+        else {}
+    )
+    manual_review_validation_keys = sorted(
+        {*manual_review_recoverable, *manual_review_criteria.keys()}
+    )
     manual_review_passed = bool(
         manual_review
         and manual_review.get("reviewed") is True
@@ -766,26 +1021,42 @@ def build_diagnostic_artifact(
             criteria[key] = {
                 **criteria[key],
                 "status": "pass",
-                "manual_review_source": str(manual_review.get("source") or evidence.get("source") or "manual_postclose_review"),
+                "manual_review_source": str(
+                    manual_review.get("source")
+                    or evidence.get("source")
+                    or "manual_postclose_review"
+                ),
             }
     automatic_criteria_passed = bool(automatic_criteria) and all(
         item.get("status") == "pass" for item in automatic_criteria.values()
     )
     unresolved_auto_followup = [
-        key for key, item in criteria.items() if item.get("status") == "auto_followup_required"
+        key
+        for key, item in criteria.items()
+        if item.get("status") == "auto_followup_required"
     ]
     unresolved_manual_review = [
-        key for key, item in criteria.items() if item.get("status") == "manual_review_required"
+        key
+        for key, item in criteria.items()
+        if item.get("status") == "manual_review_required"
     ]
-    eligible = automatic_criteria_passed and not unresolved_auto_followup and not unresolved_manual_review
+    eligible = (
+        automatic_criteria_passed
+        and not unresolved_auto_followup
+        and not unresolved_manual_review
+    )
     applied_candidate_status = (
         "eligible"
         if eligible
-        else "auto_followup_required"
-        if automatic_criteria_passed and unresolved_auto_followup
-        else "manual_review_required"
-        if automatic_criteria_passed and unresolved_manual_review
-        else "await_required_evidence"
+        else (
+            "auto_followup_required"
+            if automatic_criteria_passed and unresolved_auto_followup
+            else (
+                "manual_review_required"
+                if automatic_criteria_passed and unresolved_manual_review
+                else "await_required_evidence"
+            )
+        )
     )
     payload = {
         "schema_version": 1,
@@ -794,9 +1065,20 @@ def build_diagnostic_artifact(
         "generated_at": datetime.now().isoformat(),
         "decision_authority": "report_only_postclose_automation_chain",
         "runtime_effect": False,
-        "forbidden_uses": ["threshold_cycle_input", "adm_ldm_input", "preopen_auto_apply", "order_authority"],
-        "source": str(source_paths[0]) if len(source_paths) == 1 else [str(item) for item in source_paths],
-        "guard_evidence_source": str(evidence.get("source") or "-") if evidence else "-",
+        "forbidden_uses": [
+            "threshold_cycle_input",
+            "adm_ldm_input",
+            "preopen_auto_apply",
+            "order_authority",
+        ],
+        "source": (
+            str(source_paths[0])
+            if len(source_paths) == 1
+            else [str(item) for item in source_paths]
+        ),
+        "guard_evidence_source": (
+            str(evidence.get("source") or "-") if evidence else "-"
+        ),
         "guard_evidence_accepted": evidence_accepted,
         "normal_session_dates": session_dates,
         "guard_evidence_artifact_checks": artifact_checks,
@@ -813,37 +1095,68 @@ def build_diagnostic_artifact(
             "valid_response_count": len(valid_rows),
             "unique_symbol_count": len(valid_projection_by_symbol),
             "sequence_3plus_count": sequence_count,
-            "raw_score_stddev": round(raw_stddev, 4) if raw_stddev is not None else None,
-            "projected_score_stddev": round(projected_stddev, 4) if projected_stddev is not None else None,
-            "score_stddev_reduction_pct": round(stddev_reduction_pct, 2) if stddev_reduction_pct is not None else None,
-            "lock_contention_rate_pct": round(contention_rate, 4) if contention_rate is not None else None,
-            "fallback_or_lock_contention_absolute_cap_pct": (
-                round(fallback_or_lock_contention_rate, 4) if fallback_or_lock_contention_rate is not None else None
+            "raw_score_stddev": (
+                round(raw_stddev, 4) if raw_stddev is not None else None
             ),
-            "parse_invalid_rate_observed_pct": round(parse_invalid_rate, 4) if parse_invalid_rate is not None else None,
-            "engine_disabled_rate_pct": round(engine_disabled_rate, 4) if engine_disabled_rate is not None else None,
-            "cache_hit_same_input_rate_observed_pct": round(cache_hit_rate, 4) if cache_hit_rate is not None else None,
+            "projected_score_stddev": (
+                round(projected_stddev, 4) if projected_stddev is not None else None
+            ),
+            "score_stddev_reduction_pct": (
+                round(stddev_reduction_pct, 2)
+                if stddev_reduction_pct is not None
+                else None
+            ),
+            "lock_contention_rate_pct": (
+                round(contention_rate, 4) if contention_rate is not None else None
+            ),
+            "fallback_or_lock_contention_absolute_cap_pct": (
+                round(fallback_or_lock_contention_rate, 4)
+                if fallback_or_lock_contention_rate is not None
+                else None
+            ),
+            "parse_invalid_rate_observed_pct": (
+                round(parse_invalid_rate, 4) if parse_invalid_rate is not None else None
+            ),
+            "engine_disabled_rate_pct": (
+                round(engine_disabled_rate, 4)
+                if engine_disabled_rate is not None
+                else None
+            ),
+            "cache_hit_same_input_rate_observed_pct": (
+                round(cache_hit_rate, 4) if cache_hit_rate is not None else None
+            ),
             "exclusion_counts": dict(sorted(exclusion_counts.items())),
             "primary_exclusion_counts": dict(sorted(primary_exclusion_counts.items())),
-            "projection_exclusion_counts": dict(sorted(projection_exclusion_counts.items())),
+            "projection_exclusion_counts": dict(
+                sorted(projection_exclusion_counts.items())
+            ),
         },
         "transition_guard": {
             "eligible": eligible,
             "status": (
                 "eligible_for_next_preopen_applied_review"
                 if eligible
-                else "auto_followup_required"
-                if automatic_criteria_passed and unresolved_auto_followup
-                else "manual_postclose_review_required"
-                if automatic_criteria_passed and unresolved_manual_review
-                else "await_required_evidence"
+                else (
+                    "auto_followup_required"
+                    if automatic_criteria_passed and unresolved_auto_followup
+                    else (
+                        "manual_postclose_review_required"
+                        if automatic_criteria_passed and unresolved_manual_review
+                        else "await_required_evidence"
+                    )
+                )
             ),
             "applied_candidate_status": applied_candidate_status,
             "automatic_criteria_passed": automatic_criteria_passed,
             "manual_review_passed": manual_review_passed,
             "manual_review_required_criteria": manual_review_required,
             "auto_followup_required_criteria": auto_followup_required,
-            "minimum_requirements": {"valid_response_count": 300, "unique_symbol_count": 20, "sequence_3plus_count": 50, "normal_session_count": 3},
+            "minimum_requirements": {
+                "valid_response_count": 300,
+                "unique_symbol_count": 20,
+                "sequence_3plus_count": 50,
+                "normal_session_count": 3,
+            },
             "criteria": criteria,
             "applied_rollback_guards": {
                 "fallback_or_lock_contention_rate_pct_max": 2.0,
@@ -865,13 +1178,17 @@ def build_diagnostic_artifact(
     if write:
         path = diagnostic_artifact_path(target_date, data_root / "report")
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
         payload["artifact_path"] = str(path)
     return payload
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Build report-only WATCHING score smoothing diagnostics")
+    parser = argparse.ArgumentParser(
+        description="Build report-only WATCHING score smoothing diagnostics"
+    )
     parser.add_argument("--target-date", default=date.today().isoformat())
     parser.add_argument("--write", action="store_true")
     parser.add_argument("--guard-evidence", type=Path)
@@ -881,7 +1198,9 @@ def main() -> int:
         guard_evidence = json.loads(args.guard_evidence.read_text(encoding="utf-8"))
     print(
         json.dumps(
-            build_diagnostic_artifact(args.target_date, write=args.write, guard_evidence=guard_evidence),
+            build_diagnostic_artifact(
+                args.target_date, write=args.write, guard_evidence=guard_evidence
+            ),
             ensure_ascii=False,
             indent=2,
         )

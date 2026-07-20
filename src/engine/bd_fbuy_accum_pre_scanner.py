@@ -22,7 +22,6 @@ from sqlalchemy import create_engine, text
 
 from src.utils.constants import DATA_DIR, POSTGRES_URL, PROJECT_ROOT
 
-
 SCHEMA_VERSION = "BD_FBUY_ACCUM_PRE_V1"
 ARTIFACT_DIR = DATA_DIR / "runtime" / "bd_fbuy_accum_pre"
 WS_SNAPSHOT_PATH = DATA_DIR / "runtime" / "kiwoom_ws_snapshot" / "latest.json"
@@ -180,7 +179,9 @@ def _score_liquidity(traded_value: float, median_value: float) -> float:
     return 0.0
 
 
-def compute_star_scores(row: dict[str, Any], live: dict[str, Any] | None = None) -> dict[str, Any]:
+def compute_star_scores(
+    row: dict[str, Any], live: dict[str, Any] | None = None
+) -> dict[str, Any]:
     qty_ratio = _safe_float(row.get("foreign_qty_medvol20_ratio"))
     amt_ratio = _safe_float(row.get("foreign_amt_medvalue20_ratio"))
     min_inflow_ratio = min(qty_ratio, amt_ratio)
@@ -190,7 +191,9 @@ def compute_star_scores(row: dict[str, Any], live: dict[str, Any] | None = None)
 
     parts = {
         "foreign_inflow_score": _score_foreign_inflow(min_inflow_ratio),
-        "foreign_persistence_score": _score_persistence(_safe_int(row.get("foreign_positive_streak"))),
+        "foreign_persistence_score": _score_persistence(
+            _safe_int(row.get("foreign_positive_streak"))
+        ),
         "bottoming_score": _score_bottoming(_safe_float(row.get("dist_low20_pct"))),
         "volume_quality_score": _score_volume_quality(vol_ratio),
         "liquidity_score": _score_liquidity(traded_value, median_value),
@@ -221,7 +224,9 @@ def _star_display(score: float) -> str:
     return "★" * full + "☆" * (5 - full)
 
 
-def _prepare_candidate_frame(df: pd.DataFrame, target_date: str | date | None = None) -> pd.DataFrame:
+def _prepare_candidate_frame(
+    df: pd.DataFrame, target_date: str | date | None = None
+) -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame()
     work = df.copy()
@@ -240,16 +245,38 @@ def _prepare_candidate_frame(df: pd.DataFrame, target_date: str | date | None = 
         ["stock_code", "quote_date"]
     )
     grouped = work.groupby("stock_code", group_keys=False)
-    work["low20"] = grouped["low_price"].rolling(20, min_periods=20).min().reset_index(level=0, drop=True)
-    work["med_vol20"] = grouped["volume"].rolling(20, min_periods=20).median().reset_index(level=0, drop=True)
+    work["low20"] = (
+        grouped["low_price"]
+        .rolling(20, min_periods=20)
+        .min()
+        .reset_index(level=0, drop=True)
+    )
+    work["med_vol20"] = (
+        grouped["volume"]
+        .rolling(20, min_periods=20)
+        .median()
+        .reset_index(level=0, drop=True)
+    )
     work["traded_value"] = work["close_price"] * work["volume"]
     work["med_value20"] = (
-        grouped["traded_value"].rolling(20, min_periods=20).median().reset_index(level=0, drop=True)
+        grouped["traded_value"]
+        .rolling(20, min_periods=20)
+        .median()
+        .reset_index(level=0, drop=True)
     )
     work["prior_low5"] = (
-        grouped["low_price"].rolling(5, min_periods=3).min().shift(1).reset_index(level=0, drop=True)
+        grouped["low_price"]
+        .rolling(5, min_periods=3)
+        .min()
+        .shift(1)
+        .reset_index(level=0, drop=True)
     )
-    work["n60"] = grouped["foreign_net"].rolling(60, min_periods=20).count().reset_index(level=0, drop=True)
+    work["n60"] = (
+        grouped["foreign_net"]
+        .rolling(60, min_periods=20)
+        .count()
+        .reset_index(level=0, drop=True)
+    )
     work["foreign_net_prev1"] = grouped["foreign_net"].shift(1)
     positive = (work["foreign_net"] > 0).astype(int)
     work["foreign_positive_streak"] = positive.groupby(work["stock_code"]).transform(
@@ -267,24 +294,37 @@ def _prepare_candidate_frame(df: pd.DataFrame, target_date: str | date | None = 
         & (current["med_value20"] > 0)
         & (current["n60"] >= 20)
     ].copy()
-    current["dist_low20_pct"] = (current["close_price"] - current["low20"]) / current["low20"] * 100.0
-    current["dist_ma5_pct"] = (current["close_price"] - current["ma5"]) / current["ma5"] * 100.0
+    current["dist_low20_pct"] = (
+        (current["close_price"] - current["low20"]) / current["low20"] * 100.0
+    )
+    current["dist_ma5_pct"] = (
+        (current["close_price"] - current["ma5"]) / current["ma5"] * 100.0
+    )
     current["vol_med20_ratio"] = current["volume"] / current["med_vol20"]
-    current["foreign_qty_medvol20_ratio"] = current["foreign_net"] / current["med_vol20"]
+    current["foreign_qty_medvol20_ratio"] = (
+        current["foreign_net"] / current["med_vol20"]
+    )
     current["foreign_amt_medvalue20_ratio"] = (
         current["foreign_net"] * current["close_price"] / current["med_value20"]
     )
     return current
 
 
-def filter_pass_candidates(frame: pd.DataFrame, thresholds: ScannerThresholds | None = None) -> pd.DataFrame:
+def filter_pass_candidates(
+    frame: pd.DataFrame, thresholds: ScannerThresholds | None = None
+) -> pd.DataFrame:
     thresholds = thresholds or ScannerThresholds()
     if frame.empty:
         return frame.copy()
     mask = (
-        frame["dist_low20_pct"].between(thresholds.low20_min_pct, thresholds.low20_max_pct)
+        frame["dist_low20_pct"].between(
+            thresholds.low20_min_pct, thresholds.low20_max_pct
+        )
         & (frame["close_price"] >= frame["ma5"] * thresholds.ma5_near_ratio)
-        & (frame["low_price"] >= frame["prior_low5"] * thresholds.recent_low_tolerance_ratio)
+        & (
+            frame["low_price"]
+            >= frame["prior_low5"] * thresholds.recent_low_tolerance_ratio
+        )
         & (frame["foreign_positive_streak"] >= thresholds.foreign_positive_streak_min)
         & (frame["foreign_qty_medvol20_ratio"] >= thresholds.foreign_inflow_min_ratio)
         & (frame["foreign_amt_medvalue20_ratio"] >= thresholds.foreign_inflow_min_ratio)
@@ -306,9 +346,14 @@ def filter_rebound_expansion_candidates(
     if frame.empty:
         return frame.copy()
     mask = (
-        frame["dist_low20_pct"].between(thresholds.low20_min_pct, thresholds.low20_max_pct)
+        frame["dist_low20_pct"].between(
+            thresholds.low20_min_pct, thresholds.low20_max_pct
+        )
         & (frame["close_price"] >= frame["ma5"] * thresholds.ma5_near_ratio)
-        & (frame["low_price"] >= frame["prior_low5"] * thresholds.recent_low_tolerance_ratio)
+        & (
+            frame["low_price"]
+            >= frame["prior_low5"] * thresholds.recent_low_tolerance_ratio
+        )
         & (frame["foreign_positive_streak"] >= thresholds.foreign_positive_streak_min)
         & (frame["foreign_qty_medvol20_ratio"] >= thresholds.foreign_inflow_min_ratio)
         & (frame["foreign_amt_medvalue20_ratio"] >= thresholds.foreign_inflow_min_ratio)
@@ -322,7 +367,9 @@ def filter_rebound_expansion_candidates(
     return frame[mask].copy()
 
 
-def compute_rebound_expansion_scores(row: dict[str, Any], live: dict[str, Any] | None = None) -> dict[str, Any]:
+def compute_rebound_expansion_scores(
+    row: dict[str, Any], live: dict[str, Any] | None = None
+) -> dict[str, Any]:
     qty_ratio = _safe_float(row.get("foreign_qty_medvol20_ratio"))
     amt_ratio = _safe_float(row.get("foreign_amt_medvalue20_ratio"))
     min_inflow_ratio = min(qty_ratio, amt_ratio)
@@ -331,11 +378,17 @@ def compute_rebound_expansion_scores(row: dict[str, Any], live: dict[str, Any] |
     traded_value = _safe_float(row.get("traded_value"))
     median_value = _safe_float(row.get("med_value20"))
 
-    rebound_position_score = 1.0 if 8 <= dist_low20_pct <= 18 else 0.75 if dist_low20_pct <= 28 else 0.45
-    volume_expansion_score = 0.75 if 1.50 <= vol_ratio <= 2.20 else 0.55 if vol_ratio <= 2.80 else 0.35
+    rebound_position_score = (
+        1.0 if 8 <= dist_low20_pct <= 18 else 0.75 if dist_low20_pct <= 28 else 0.45
+    )
+    volume_expansion_score = (
+        0.75 if 1.50 <= vol_ratio <= 2.20 else 0.55 if vol_ratio <= 2.80 else 0.35
+    )
     parts = {
         "foreign_inflow_score": _score_foreign_inflow(min_inflow_ratio),
-        "foreign_persistence_score": _score_persistence(_safe_int(row.get("foreign_positive_streak"))),
+        "foreign_persistence_score": _score_persistence(
+            _safe_int(row.get("foreign_positive_streak"))
+        ),
         "rebound_position_score": rebound_position_score,
         "volume_expansion_score": volume_expansion_score,
         "liquidity_score": _score_liquidity(traded_value, median_value),
@@ -360,14 +413,23 @@ def compute_rebound_expansion_scores(row: dict[str, Any], live: dict[str, Any] |
     }
 
 
-def _load_daily_quotes(db_url: str, target_date: str, lookback_days: int = 90) -> tuple[pd.DataFrame, str]:
-    engine = create_engine(db_url, pool_pre_ping=True, connect_args={"connect_timeout": 5})
+def _load_daily_quotes(
+    db_url: str, target_date: str, lookback_days: int = 90
+) -> tuple[pd.DataFrame, str]:
+    engine = create_engine(
+        db_url, pool_pre_ping=True, connect_args={"connect_timeout": 5}
+    )
     with engine.connect() as conn:
-        latest_db_date = conn.execute(text("SELECT max(quote_date) FROM daily_stock_quotes")).scalar()
-        anchor = min(pd.Timestamp(target_date).date(), latest_db_date) if target_date else latest_db_date
+        latest_db_date = conn.execute(
+            text("SELECT max(quote_date) FROM daily_stock_quotes")
+        ).scalar()
+        anchor = (
+            min(pd.Timestamp(target_date).date(), latest_db_date)
+            if target_date
+            else latest_db_date
+        )
         df = pd.read_sql(
-            text(
-                """
+            text("""
                 SELECT quote_date, stock_code, stock_name, open_price, high_price, low_price,
                        close_price, volume, ma5, foreign_net
                 FROM daily_stock_quotes
@@ -376,10 +438,12 @@ def _load_daily_quotes(db_url: str, target_date: str, lookback_days: int = 90) -
                   AND close_price IS NOT NULL
                   AND close_price > 0
                   AND stock_code ~ '^[0-9]{6}$'
-                """
-            ),
+                """),
             conn,
-            params={"start": pd.Timestamp(anchor) - pd.Timedelta(days=lookback_days), "anchor": anchor},
+            params={
+                "start": pd.Timestamp(anchor) - pd.Timedelta(days=lookback_days),
+                "anchor": anchor,
+            },
         )
     return df, str(anchor)
 
@@ -404,16 +468,26 @@ def _ws_live_for_code(code: str, snapshot: dict[str, Any]) -> dict[str, Any]:
             "today_foreign_broker_est_net_qty": 0,
         }
     now_ts = time.time()
-    age_sec = max(0.0, now_ts - _safe_float(row.get("last_foreign_broker_update_ts"), 0.0))
+    age_sec = max(
+        0.0, now_ts - _safe_float(row.get("last_foreign_broker_update_ts"), 0.0)
+    )
     source_quality = "ok" if age_sec <= 180 else "stale_ws_snapshot"
     best_ask = _safe_float(row.get("best_ask"))
     best_bid = _safe_float(row.get("best_bid"))
-    spread_bps = ((best_ask - best_bid) / best_bid * 10000.0) if best_ask > 0 and best_bid > 0 else 0.0
+    spread_bps = (
+        ((best_ask - best_bid) / best_bid * 10000.0)
+        if best_ask > 0 and best_bid > 0
+        else 0.0
+    )
     return {
         "source": "ws_snapshot",
         "source_quality": source_quality,
-        "today_foreign_broker_est_net_qty": _safe_int(row.get("foreign_broker_net_est_qty")),
-        "foreign_broker_est_delta_qty": _safe_int(row.get("foreign_broker_net_est_delta_qty")),
+        "today_foreign_broker_est_net_qty": _safe_int(
+            row.get("foreign_broker_net_est_qty")
+        ),
+        "foreign_broker_est_delta_qty": _safe_int(
+            row.get("foreign_broker_net_est_delta_qty")
+        ),
         "ws_age_sec": round(age_sec, 1),
         "curr": _safe_int(row.get("curr")),
         "best_bid": _safe_int(best_bid),
@@ -436,7 +510,9 @@ def _daily_db_foreign_fallback(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _resolve_live_for_row(row: dict[str, Any], snapshot: dict[str, Any], *, allow_db_fallback: bool = False) -> dict[str, Any]:
+def _resolve_live_for_row(
+    row: dict[str, Any], snapshot: dict[str, Any], *, allow_db_fallback: bool = False
+) -> dict[str, Any]:
     code = str(row.get("stock_code") or "")
     live = _ws_live_for_code(code, snapshot)
     if not allow_db_fallback:
@@ -448,30 +524,45 @@ def _resolve_live_for_row(row: dict[str, Any], snapshot: dict[str, Any], *, allo
     return {**live, **fallback}
 
 
-def _apply_live_confirmation(candidates: list[dict[str, Any]], live_intraday: bool = False) -> list[dict[str, Any]]:
+def _apply_live_confirmation(
+    candidates: list[dict[str, Any]], live_intraday: bool = False
+) -> list[dict[str, Any]]:
     ws_snapshot = _load_ws_snapshot()
     for row in candidates:
         live = _resolve_live_for_row(row, ws_snapshot, allow_db_fallback=live_intraday)
         row["live_confirmation"] = live
         score = compute_star_scores(row, live if live_intraday else {})
         row.update(score)
-        row["live_confirmed"] = _safe_int(live.get("today_foreign_broker_est_net_qty")) > 0
+        row["live_confirmed"] = (
+            _safe_int(live.get("today_foreign_broker_est_net_qty")) > 0
+        )
     return candidates
 
 
-def _apply_rebound_live_confirmation(candidates: list[dict[str, Any]], live_intraday: bool = False) -> list[dict[str, Any]]:
+def _apply_rebound_live_confirmation(
+    candidates: list[dict[str, Any]], live_intraday: bool = False
+) -> list[dict[str, Any]]:
     ws_snapshot = _load_ws_snapshot()
     for row in candidates:
         live = _resolve_live_for_row(row, ws_snapshot, allow_db_fallback=live_intraday)
         row["live_confirmation"] = live
         score = compute_rebound_expansion_scores(row, live if live_intraday else {})
         row.update(score)
-        row["live_confirmed"] = _safe_int(live.get("today_foreign_broker_est_net_qty")) > 0
+        row["live_confirmed"] = (
+            _safe_int(live.get("today_foreign_broker_est_net_qty")) > 0
+        )
     return candidates
 
 
-def _history_rows(df: pd.DataFrame, code: str, limit: int = 20) -> dict[str, list[dict[str, Any]]]:
-    hist = df[df["stock_code"].astype(str).eq(str(code))].copy().sort_values("quote_date").tail(limit)
+def _history_rows(
+    df: pd.DataFrame, code: str, limit: int = 20
+) -> dict[str, list[dict[str, Any]]]:
+    hist = (
+        df[df["stock_code"].astype(str).eq(str(code))]
+        .copy()
+        .sort_values("quote_date")
+        .tail(limit)
+    )
     if hist.empty:
         return {"price": [], "volume": [], "foreign": []}
     price = []
@@ -515,7 +606,9 @@ def build_report(
     source_df, effective_date = _load_daily_quotes(db_url, target)
     candidate_frame = _prepare_candidate_frame(source_df, effective_date)
     pass_frame = filter_pass_candidates(candidate_frame, thresholds)
-    rebound_frame = filter_rebound_expansion_candidates(candidate_frame, rebound_thresholds)
+    rebound_frame = filter_rebound_expansion_candidates(
+        candidate_frame, rebound_thresholds
+    )
     candidates: list[dict[str, Any]] = []
     for _, r in pass_frame.iterrows():
         row = {
@@ -537,10 +630,16 @@ def build_report(
             "foreign_net": _safe_int(r["foreign_net"]),
             "foreign_net_prev1": _safe_int(r["foreign_net_prev1"]),
             "foreign_positive_streak": _safe_int(r["foreign_positive_streak"]),
-            "foreign_qty_medvol20_ratio": round(_safe_float(r["foreign_qty_medvol20_ratio"]), 6),
-            "foreign_amt_medvalue20_ratio": round(_safe_float(r["foreign_amt_medvalue20_ratio"]), 6),
+            "foreign_qty_medvol20_ratio": round(
+                _safe_float(r["foreign_qty_medvol20_ratio"]), 6
+            ),
+            "foreign_amt_medvalue20_ratio": round(
+                _safe_float(r["foreign_amt_medvalue20_ratio"]), 6
+            ),
             "volume_bucket": _volume_bucket(_safe_float(r["vol_med20_ratio"])),
-            "liquidity_bucket": _liquidity_bucket(_safe_float(r["traded_value"]), _safe_float(r["med_value20"])),
+            "liquidity_bucket": _liquidity_bucket(
+                _safe_float(r["traded_value"]), _safe_float(r["med_value20"])
+            ),
             "history": _history_rows(source_df, str(r["stock_code"])),
         }
         row.update(compute_star_scores(row))
@@ -575,10 +674,16 @@ def build_report(
             "foreign_net": _safe_int(r["foreign_net"]),
             "foreign_net_prev1": _safe_int(r["foreign_net_prev1"]),
             "foreign_positive_streak": _safe_int(r["foreign_positive_streak"]),
-            "foreign_qty_medvol20_ratio": round(_safe_float(r["foreign_qty_medvol20_ratio"]), 6),
-            "foreign_amt_medvalue20_ratio": round(_safe_float(r["foreign_amt_medvalue20_ratio"]), 6),
+            "foreign_qty_medvol20_ratio": round(
+                _safe_float(r["foreign_qty_medvol20_ratio"]), 6
+            ),
+            "foreign_amt_medvalue20_ratio": round(
+                _safe_float(r["foreign_amt_medvalue20_ratio"]), 6
+            ),
             "volume_bucket": _volume_bucket(_safe_float(r["vol_med20_ratio"])),
-            "liquidity_bucket": _liquidity_bucket(_safe_float(r["traded_value"]), _safe_float(r["med_value20"])),
+            "liquidity_bucket": _liquidity_bucket(
+                _safe_float(r["traded_value"]), _safe_float(r["med_value20"])
+            ),
             "history": _history_rows(source_df, str(r["stock_code"])),
         }
         row.update(compute_rebound_expansion_scores(row))
@@ -612,8 +717,12 @@ def build_report(
             "db_candidate_frame_rows": int(len(candidate_frame)),
             "db_pass_count": int(len(candidates)),
             "rebound_expansion_count": int(len(rebound_candidates)),
-            "live_confirmed_count": int(sum(1 for row in candidates if row.get("live_confirmed"))),
-            "rebound_live_confirmed_count": int(sum(1 for row in rebound_candidates if row.get("live_confirmed"))),
+            "live_confirmed_count": int(
+                sum(1 for row in candidates if row.get("live_confirmed"))
+            ),
+            "rebound_live_confirmed_count": int(
+                sum(1 for row in rebound_candidates if row.get("live_confirmed"))
+            ),
             "source_quality_counts": source_quality_counts,
             "refresh_cadence": "10min",
             "refresh_window": "09:05~15:20",
@@ -632,7 +741,9 @@ def build_report(
         path = artifact_path(target)
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.write_text(
+            json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
         tmp.replace(path)
     return report
 
@@ -652,7 +763,9 @@ def load_or_build_report(
             return json.loads(path.read_text(encoding="utf-8"))
         except Exception:
             pass
-    return build_report(target_date, db_url=db_url, live_intraday=live_intraday, write=True)
+    return build_report(
+        target_date, db_url=db_url, live_intraday=live_intraday, write=True
+    )
 
 
 def _ws_snapshot_received_types(value: Any) -> list[str]:
@@ -721,25 +834,37 @@ def _ws_snapshot_last_trade_tick(value: Any) -> dict[str, Any]:
     return result
 
 
-def write_ws_snapshot(realtime_data: dict[str, Any], *, now_ts: float | None = None) -> Path | None:
+def write_ws_snapshot(
+    realtime_data: dict[str, Any], *, now_ts: float | None = None
+) -> Path | None:
     """Persist a read-only WS snapshot for dashboard and source-quality consumers."""
     now_ts = now_ts or time.time()
     stocks: dict[str, Any] = {}
     for code, row in (realtime_data or {}).items():
         if not isinstance(row, dict):
             continue
-        orderbook = row.get("orderbook") if isinstance(row.get("orderbook"), dict) else {}
+        orderbook = (
+            row.get("orderbook") if isinstance(row.get("orderbook"), dict) else {}
+        )
         asks = orderbook.get("asks") or []
         bids = orderbook.get("bids") or []
         best_ask = _safe_int((asks[0] or {}).get("price")) if asks else 0
         best_bid = _safe_int((bids[0] or {}).get("price")) if bids else 0
-        realtime_type_ts = _ws_snapshot_realtime_type_ts(row.get("last_realtime_type_ts"))
+        realtime_type_ts = _ws_snapshot_realtime_type_ts(
+            row.get("last_realtime_type_ts")
+        )
         last_trade_tick = _ws_snapshot_last_trade_tick(row.get("last_trade_tick"))
         stocks[str(code)] = {
             "curr": _safe_int(row.get("curr")),
-            "foreign_broker_net_est_qty": _safe_int(row.get("foreign_broker_net_est_qty")),
-            "foreign_broker_net_est_delta_qty": _safe_int(row.get("foreign_broker_net_est_delta_qty")),
-            "last_foreign_broker_update_ts": _safe_float(row.get("last_foreign_broker_update_ts")),
+            "foreign_broker_net_est_qty": _safe_int(
+                row.get("foreign_broker_net_est_qty")
+            ),
+            "foreign_broker_net_est_delta_qty": _safe_int(
+                row.get("foreign_broker_net_est_delta_qty")
+            ),
+            "last_foreign_broker_update_ts": _safe_float(
+                row.get("last_foreign_broker_update_ts")
+            ),
             "last_ws_update_ts": _safe_float(row.get("last_ws_update_ts")),
             "best_bid": best_bid,
             "best_ask": best_ask,
@@ -760,12 +885,15 @@ def write_ws_snapshot(realtime_data: dict[str, Any], *, now_ts: float | None = N
             "market_session_state": str(row.get("market_session_state") or ""),
             "market_session_remaining": str(row.get("market_session_remaining") or ""),
             "last_realtime_type_ages_ms": {
-                real_type: _ws_snapshot_age_ms(ts, now_ts) for real_type, ts in realtime_type_ts.items()
+                real_type: _ws_snapshot_age_ms(ts, now_ts)
+                for real_type, ts in realtime_type_ts.items()
             },
             "last_0b_ts": realtime_type_ts.get("0B", 0.0),
             "last_0b_age_ms": _ws_snapshot_age_ms(realtime_type_ts.get("0B"), now_ts),
             "last_trade_tick": last_trade_tick,
-            "last_trade_tick_age_ms": _ws_snapshot_age_ms(last_trade_tick.get("ts"), now_ts),
+            "last_trade_tick_age_ms": _ws_snapshot_age_ms(
+                last_trade_tick.get("ts"), now_ts
+            ),
         }
     payload = {
         "schema_version": "kiwoom_ws_dashboard_snapshot_v1",
@@ -778,7 +906,10 @@ def write_ws_snapshot(realtime_data: dict[str, Any], *, now_ts: float | None = N
     try:
         WS_SNAPSHOT_PATH.parent.mkdir(parents=True, exist_ok=True)
         tmp = WS_SNAPSHOT_PATH.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+        tmp.write_text(
+            json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+            encoding="utf-8",
+        )
         tmp.replace(WS_SNAPSHOT_PATH)
         return WS_SNAPSHOT_PATH
     except OSError:
@@ -786,13 +917,20 @@ def write_ws_snapshot(realtime_data: dict[str, Any], *, now_ts: float | None = N
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Build BD_FBUY_ACCUM_PRE_V1 DB-first candidate artifact.")
+    parser = argparse.ArgumentParser(
+        description="Build BD_FBUY_ACCUM_PRE_V1 DB-first candidate artifact."
+    )
     parser.add_argument("--date", dest="target_date", default=date.today().isoformat())
     parser.add_argument("--db-url", default=os.getenv("DATABASE_URL", POSTGRES_URL))
     parser.add_argument("--live-intraday", action="store_true")
     parser.add_argument("--print-json", action="store_true")
     args = parser.parse_args(argv)
-    report = build_report(args.target_date, db_url=args.db_url, live_intraday=args.live_intraday, write=True)
+    report = build_report(
+        args.target_date,
+        db_url=args.db_url,
+        live_intraday=args.live_intraday,
+        write=True,
+    )
     if args.print_json:
         print(json.dumps(report, ensure_ascii=False, indent=2))
     else:

@@ -44,8 +44,8 @@ class MarketRegimeSnapshot:
     market_regime_component_scores: Dict[str, float] = field(default_factory=dict)
     market_regime_score_version: str = "market_regime_continuous_v1"
     market_regime_source_quality: str = "unknown"
-    volatility_mode: str = "NORMAL"   # NORMAL / HIGH / EXTREME
-    risk_state: str = "NEUTRAL"       # RISK_ON / NEUTRAL / RISK_OFF
+    volatility_mode: str = "NORMAL"  # NORMAL / HIGH / EXTREME
+    risk_state: str = "NEUTRAL"  # RISK_ON / NEUTRAL / RISK_OFF
 
     # --- Diagnostics ---
     reasons: List[str] = field(default_factory=list)

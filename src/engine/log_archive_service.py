@@ -15,7 +15,6 @@ from src.engine.dashboard_data_repository import (
     load_monitor_snapshot_file_first,
 )
 
-
 LOG_ARCHIVE_DIR = DATA_DIR / "log_archive"
 MONITOR_SNAPSHOT_DIR = DATA_DIR / "report" / "monitor_snapshots"
 MONITOR_SNAPSHOT_MANIFEST_DIR = MONITOR_SNAPSHOT_DIR / "manifests"
@@ -40,7 +39,9 @@ def _env_float(name: str, default: float = 0.0) -> float:
 
 def _stage_io_delay_sec(base_delay: float, snapshot_kind: str) -> float:
     delay_map = {
-        "performance_tuning": _env_float("MONITOR_SNAPSHOT_PERFORMANCE_TUNING_IO_DELAY_SEC", base_delay),
+        "performance_tuning": _env_float(
+            "MONITOR_SNAPSHOT_PERFORMANCE_TUNING_IO_DELAY_SEC", base_delay
+        ),
         "server_comparison": _env_float(
             "MONITOR_SNAPSHOT_SERVER_COMPARISON_IO_DELAY_SEC",
             base_delay,
@@ -56,7 +57,10 @@ def _snapshot_path(kind: str, target_date: str) -> Path:
 
 def _snapshot_manifest_path(target_date: str, profile: str) -> Path:
     safe_profile = str(profile or "full").strip().lower().replace("-", "_")
-    return MONITOR_SNAPSHOT_MANIFEST_DIR / f"monitor_snapshot_manifest_{target_date}_{safe_profile}.json"
+    return (
+        MONITOR_SNAPSHOT_MANIFEST_DIR
+        / f"monitor_snapshot_manifest_{target_date}_{safe_profile}.json"
+    )
 
 
 def load_monitor_snapshot(kind: str, target_date: str) -> dict | None:
@@ -83,7 +87,9 @@ def save_monitor_snapshot(kind: str, target_date: str, payload: dict) -> Path:
     return path
 
 
-def save_monitor_snapshot_manifest(target_date: str, *, profile: str, snapshots: dict[str, str]) -> Path:
+def save_monitor_snapshot_manifest(
+    target_date: str, *, profile: str, snapshots: dict[str, str]
+) -> Path:
     manifest_path = _snapshot_manifest_path(target_date, profile)
     tracked_paths = {
         key: value
@@ -98,7 +104,9 @@ def save_monitor_snapshot_manifest(target_date: str, *, profile: str, snapshots:
         "snapshot_paths": tracked_paths,
     }
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    manifest_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    manifest_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     return manifest_path
 
 
@@ -150,17 +158,30 @@ def _save_server_comparison_artifacts(target_date: str) -> dict[str, str] | None
         target_date=target_date,
         remote_base_url="https://songstockscan.ddns.net",
         since_time="09:00:00",
-        include_sections=("trade_review", "performance_tuning", "post_sell_feedback", "entry_pipeline_flow"),
+        include_sections=(
+            "trade_review",
+            "performance_tuning",
+            "post_sell_feedback",
+            "entry_pipeline_flow",
+        ),
     )
     summary = build_snapshot_summary(comparison)
-    comparison_snapshot_path = save_monitor_snapshot("server_comparison", target_date, comparison)
+    comparison_snapshot_path = save_monitor_snapshot(
+        "server_comparison", target_date, comparison
+    )
 
     report_path = SERVER_COMPARISON_REPORT_DIR / f"server_comparison_{target_date}.md"
     report_path.write_text(render_markdown_report(comparison), encoding="utf-8")
 
-    nested_checklist_path = DOCS_DIR / "checklists" / f"{target_date}-stage2-todo-checklist.md"
+    nested_checklist_path = (
+        DOCS_DIR / "checklists" / f"{target_date}-stage2-todo-checklist.md"
+    )
     legacy_checklist_path = DOCS_DIR / f"{target_date}-stage2-todo-checklist.md"
-    checklist_path = nested_checklist_path if nested_checklist_path.exists() else legacy_checklist_path
+    checklist_path = (
+        nested_checklist_path
+        if nested_checklist_path.exists()
+        else legacy_checklist_path
+    )
     checklist_updated = False
     if checklist_path.exists():
         checklist_block = render_checklist_append_block(
@@ -178,7 +199,9 @@ def _save_server_comparison_artifacts(target_date: str) -> dict[str, str] | None
         "server_comparison_snapshot": str(comparison_snapshot_path),
         "server_comparison_report": str(report_path),
         "server_comparison_checklist_updated": str(checklist_updated).lower(),
-        "server_comparison_summary_generated_at": str(summary.get("generated_at") or ""),
+        "server_comparison_summary_generated_at": str(
+            summary.get("generated_at") or ""
+        ),
     }
 
 
@@ -190,14 +213,20 @@ def _iter_raw_candidate_paths(log_path: Path) -> list[Path]:
     candidates = [log_path]
     candidates.extend(
         sorted(
-            [path for path in log_path.parent.glob(f"{log_path.name}.*") if path.suffix != ".gz"],
+            [
+                path
+                for path in log_path.parent.glob(f"{log_path.name}.*")
+                if path.suffix != ".gz"
+            ],
             key=lambda path: path.name,
         )
     )
     return candidates
 
 
-def _read_matching_lines(path: Path, *, target_date: str, marker: str | None = None) -> list[str]:
+def _read_matching_lines(
+    path: Path, *, target_date: str, marker: str | None = None
+) -> list[str]:
     if not path.exists() or not path.is_file():
         return []
 
@@ -223,12 +252,16 @@ def iter_target_log_lines(
     for log_path in log_paths:
         raw_lines: list[str] = []
         for candidate in _iter_raw_candidate_paths(log_path):
-            raw_lines.extend(_read_matching_lines(candidate, target_date=target_date, marker=marker))
+            raw_lines.extend(
+                _read_matching_lines(candidate, target_date=target_date, marker=marker)
+            )
         if raw_lines:
             lines.extend(raw_lines)
             continue
         archive_path = archived_log_path(log_path, target_date)
-        lines.extend(_read_matching_lines(archive_path, target_date=target_date, marker=marker))
+        lines.extend(
+            _read_matching_lines(archive_path, target_date=target_date, marker=marker)
+        )
     return lines
 
 
@@ -254,7 +287,9 @@ def archive_target_date_logs(target_date: str, log_paths: Iterable[Path]) -> lis
                 "path": str(archive_path),
                 "line_count": len(lines),
                 "archived_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "size_bytes": archive_path.stat().st_size if archive_path.exists() else 0,
+                "size_bytes": (
+                    archive_path.stat().st_size if archive_path.exists() else 0
+                ),
             }
         )
     return archived
@@ -277,9 +312,15 @@ def save_monitor_snapshots_for_date_with_profile(
     include_server_comparison: bool | None = None,
 ) -> dict[str, str]:
     from src.engine.buy_pause_guard import evaluate_buy_pause_guard
-    from src.engine.holding_exit_observation_report import build_holding_exit_observation_report
-    from src.engine.sniper_missed_entry_counterfactual import build_missed_entry_counterfactual_report
-    from src.engine.sniper_performance_tuning_report import build_performance_tuning_report
+    from src.engine.holding_exit_observation_report import (
+        build_holding_exit_observation_report,
+    )
+    from src.engine.sniper_missed_entry_counterfactual import (
+        build_missed_entry_counterfactual_report,
+    )
+    from src.engine.sniper_performance_tuning_report import (
+        build_performance_tuning_report,
+    )
     from src.engine.sniper_post_sell_feedback import build_post_sell_feedback_report
     from src.engine.sniper_trade_review_report import build_trade_review_report
     from src.engine.wait6579_ev_cohort_report import build_wait6579_ev_cohort_report
@@ -287,14 +328,18 @@ def save_monitor_snapshots_for_date_with_profile(
     normalized_profile = str(profile or "full").strip().lower()
     if normalized_profile not in {"full", "intraday_light"}:
         raise ValueError(f"Unsupported monitor snapshot profile: {profile}")
-    server_comparison_policy_enabled = os.getenv("KORSTOCKSCAN_ENABLE_SERVER_COMPARISON", "").lower() in {
+    server_comparison_policy_enabled = os.getenv(
+        "KORSTOCKSCAN_ENABLE_SERVER_COMPARISON", ""
+    ).lower() in {
         "1",
         "true",
         "yes",
         "on",
     }
     if include_server_comparison is None:
-        include_server_comparison = normalized_profile == "full" and server_comparison_policy_enabled
+        include_server_comparison = (
+            normalized_profile == "full" and server_comparison_policy_enabled
+        )
 
     sleep_sec = max(0.0, float(io_delay_sec))
     trend_env_name = (
@@ -393,10 +438,14 @@ def save_monitor_snapshots_for_date_with_profile(
             time.sleep(stage_delay)
         payload = build_fn()
         payload.setdefault("meta", {})
-        payload["meta"]["saved_snapshot_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        payload["meta"]["saved_snapshot_at"] = datetime.now().strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
         payload["meta"]["snapshot_kind"] = snapshot_kind
         payload["meta"]["buy_pause_guard"] = buy_pause_guard
-        result[snapshot_kind] = str(save_monitor_snapshot(snapshot_kind, target_date, payload))
+        result[snapshot_kind] = str(
+            save_monitor_snapshot(snapshot_kind, target_date, payload)
+        )
 
     def _finalize_snapshot_manifest() -> dict[str, str]:
         manifest_path = save_monitor_snapshot_manifest(

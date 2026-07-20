@@ -16,6 +16,14 @@
 - `actual_order_submitted=false`인 sim/probe 표본은 EV/source-quality 입력이며 실주문 전환 근거가 아니다.
 - Project/Calendar 동기화는 사용자가 표준 동기화 명령으로 수행한다.
 
+## 코드베이스 유지보수
+
+- [x] `[BlackCodebaseBaseline0720] 전체 Python 코드베이스 Black 26.5.1 기준선 및 CI gate 고정` (`Due: 2026-07-20`, `Slot: INTRADAY`, `TimeWindow: 15:50~17:30`, `Track: RuntimeStability`)
+  - Source: [pyproject.toml](/home/ubuntu/KORStockScan/pyproject.toml), [black.yml](/home/ubuntu/KORStockScan/.github/workflows/black.yml), [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)
+  - 판정 기준: Python 3.11, Black `26.5.1`, line length `88`로 전체 `black --check .`, AST 동등성, compile, 전체 pytest, checklist parser, `git diff --check`를 통과하고 포맷 배치를 부분 롤백 가능한 독립 커밋으로 남긴다.
+  - 금지: 포맷 작업에 runtime report/cache, 주문·provider·threshold·bot 재기동 또는 기능 변경을 포함하지 않는다.
+  - 실행 결과 (`2026-07-20 KST`): `black_codebase_baseline_complete`. 전체 `547`개가 `black --check .`을 통과했고 변경 Python `252`개 중 `251`개는 위치 및 docstring 줄끝 공백을 제외한 AST가 `main`과 동일하다. 나머지 1개는 Black이 바꾼 Kiwoom source layout 뒤에도 동일 실행 순서를 검증하도록 source-order 테스트 검색 문자열만 보완한 변경이다. 전체 compile과 pytest는 포맷 전 기준선과 동일한 `4607 passed, 18 skipped, 5 warnings`, checklist parser와 `git diff --check`는 pass이며 review gate 미해결 finding은 `0`이다. runtime report/cache와 수동제어 파일은 커밋에서 제외했고 주문·provider·threshold·bot 재기동은 수행하지 않았다.
+
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_START -->
 ## 자동 생성 체크리스트 (`2026-07-16` postclose -> `2026-07-20`)
 

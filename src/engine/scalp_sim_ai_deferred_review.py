@@ -11,7 +11,6 @@ from pathlib import Path
 from src.utils.constants import DATA_DIR
 from src.utils.jsonl_io import read_jsonl
 
-
 REPORT_DIR = DATA_DIR / "report" / "scalp_sim_ai_deferred_review"
 
 
@@ -42,9 +41,16 @@ def _is_deferred_event(event: dict) -> bool:
 def build_report(target_date: str) -> dict:
     events = _load_events(target_date)
     deferred = [event for event in events if _is_deferred_event(event)]
-    reason_counts = Counter(str(_event_fields(event).get("defer_reason") or "-") for event in deferred)
-    source_counts = Counter(str(_event_fields(event).get("source_stage") or "-") for event in deferred)
-    critical_class_counts = Counter(str(_event_fields(event).get("critical_class") or "unknown") for event in deferred)
+    reason_counts = Counter(
+        str(_event_fields(event).get("defer_reason") or "-") for event in deferred
+    )
+    source_counts = Counter(
+        str(_event_fields(event).get("source_stage") or "-") for event in deferred
+    )
+    critical_class_counts = Counter(
+        str(_event_fields(event).get("critical_class") or "unknown")
+        for event in deferred
+    )
     critical_reason_counts = Counter()
     rows = []
     for event in deferred:
@@ -77,7 +83,9 @@ def build_report(target_date: str) -> dict:
     return {
         "target_date": target_date,
         "generated_at": datetime.now().isoformat(timespec="seconds"),
-        "source_path": str(DATA_DIR / "pipeline_events" / f"pipeline_events_{target_date}.jsonl"),
+        "source_path": str(
+            DATA_DIR / "pipeline_events" / f"pipeline_events_{target_date}.jsonl"
+        ),
         "artifact_role": "postclose_source_packet_for_sim_ai_quality_review",
         "runtime_effect": False,
         "decision_authority": "sim_observation_only",
@@ -104,7 +112,9 @@ def write_outputs(report: dict, output_dir: Path = REPORT_DIR) -> tuple[Path, Pa
     target_date = str(report.get("target_date") or datetime.now().date().isoformat())
     json_path = output_dir / f"scalp_sim_ai_deferred_review_{target_date}.json"
     md_path = output_dir / f"scalp_sim_ai_deferred_review_{target_date}.md"
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
 
     summary = report.get("summary") or {}
     lines = [
@@ -151,7 +161,9 @@ def write_outputs(report: dict, output_dir: Path = REPORT_DIR) -> tuple[Path, Pa
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--date", dest="target_date", default=datetime.now().date().isoformat())
+    parser.add_argument(
+        "--date", dest="target_date", default=datetime.now().date().isoformat()
+    )
     parser.add_argument("--output-dir", type=Path, default=REPORT_DIR)
     args = parser.parse_args(argv)
     json_path, md_path = write_outputs(build_report(args.target_date), args.output_dir)

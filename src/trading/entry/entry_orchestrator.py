@@ -12,7 +12,10 @@ from src.trading.entry.state_machine import EntryStateMachine
 from src.trading.logging.metrics_recorder import MetricsRecorder
 from src.trading.logging.trade_logger import TradeLogger
 from src.trading.market.market_data_cache import MarketDataCache
-from src.trading.market.quote_consistency import build_quote_consistency_snapshot, quote_input_from_ws
+from src.trading.market.quote_consistency import (
+    build_quote_consistency_snapshot,
+    quote_input_from_ws,
+)
 from src.trading.order.order_manager import OrderManager
 
 
@@ -46,7 +49,9 @@ class EntryOrchestrator:
 
     def process(self, snapshot: SignalSnapshot) -> dict[str, Any]:
         symbol = snapshot.symbol
-        self.state_machine.transition(symbol, "SIGNAL_DETECTED", reason="signal_received")
+        self.state_machine.transition(
+            symbol, "SIGNAL_DETECTED", reason="signal_received"
+        )
         self.trade_logger.log_signal(
             symbol=symbol,
             strategy_id=snapshot.strategy_id,
@@ -56,7 +61,9 @@ class EntryOrchestrator:
             signal_strength=snapshot.signal_strength,
         )
 
-        self.state_machine.transition(symbol, "POLICY_CHECKING", reason="start_policy_check")
+        self.state_machine.transition(
+            symbol, "POLICY_CHECKING", reason="start_policy_check"
+        )
         latest_price = self.market_data_cache.get_last_price(symbol)
         best_ask = self.market_data_cache.get_best_ask(symbol)
         best_bid = self.market_data_cache.get_best_bid(symbol)
@@ -83,8 +90,13 @@ class EntryOrchestrator:
             quote_stale=quote_health.quote_stale,
             spread_ratio=quote_health.spread_ratio,
         )
-        if quote_consistency.normalization_runtime_effect and quote_consistency.entry_blocked:
-            self.state_machine.transition(symbol, "REJECTED_DANGER", reason=quote_consistency.reason)
+        if (
+            quote_consistency.normalization_runtime_effect
+            and quote_consistency.entry_blocked
+        ):
+            self.state_machine.transition(
+                symbol, "REJECTED_DANGER", reason=quote_consistency.reason
+            )
             self.metrics_recorder.increment("entry.reject_quote_consistency")
             result = {
                 "status": "REJECTED_DANGER",
@@ -98,7 +110,9 @@ class EntryOrchestrator:
             self.trade_logger.log_policy(
                 symbol=symbol,
                 latest_price=latest_price,
-                elapsed_ms=int((datetime.now(UTC) - snapshot.signal_time).total_seconds() * 1000),
+                elapsed_ms=int(
+                    (datetime.now(UTC) - snapshot.signal_time).total_seconds() * 1000
+                ),
                 latency_state=latency.state.value,
                 ws_age_ms=latency.ws_age_ms,
                 ws_jitter_ms=latency.ws_jitter_ms,
@@ -120,7 +134,9 @@ class EntryOrchestrator:
         self.trade_logger.log_policy(
             symbol=symbol,
             latest_price=latest_price,
-            elapsed_ms=int((datetime.now(UTC) - snapshot.signal_time).total_seconds() * 1000),
+            elapsed_ms=int(
+                (datetime.now(UTC) - snapshot.signal_time).total_seconds() * 1000
+            ),
             latency_state=latency.state.value,
             ws_age_ms=latency.ws_age_ms,
             ws_jitter_ms=latency.ws_jitter_ms,
@@ -158,15 +174,25 @@ class EntryOrchestrator:
             return result
 
         if policy.decision == EntryDecision.ALLOW_NORMAL:
-            self.state_machine.transition(symbol, "NORMAL_ORDER_SUBMITTING", reason=policy.reason)
-            orders = [self.normal_entry_builder.build(snapshot=snapshot, latest_price=latest_price)]
+            self.state_machine.transition(
+                symbol, "NORMAL_ORDER_SUBMITTING", reason=policy.reason
+            )
+            orders = [
+                self.normal_entry_builder.build(
+                    snapshot=snapshot, latest_price=latest_price
+                )
+            ]
             mode = "normal"
         else:
             orders = []
             mode = "reject"
 
         if not orders:
-            self.state_machine.transition(symbol, "REJECTED_MARKET_CONDITION", reason="latency_fallback_deprecated")
+            self.state_machine.transition(
+                symbol,
+                "REJECTED_MARKET_CONDITION",
+                reason="latency_fallback_deprecated",
+            )
             self.metrics_recorder.increment("entry.reject_market_condition")
             result = {
                 "status": "REJECTED_MARKET_CONDITION",
@@ -199,7 +225,9 @@ class EntryOrchestrator:
             final_state = "ORDER_PARTIAL_FILLED"
         else:
             final_state = "ORDER_CANCELLED"
-        self.state_machine.transition(symbol, final_state, reason=f"{mode}_submission_complete")
+        self.state_machine.transition(
+            symbol, final_state, reason=f"{mode}_submission_complete"
+        )
 
         result = {
             "status": final_state,
@@ -214,7 +242,9 @@ class EntryOrchestrator:
             fallback_mode=False,
             scout_filled=False,
             main_filled=False,
-            partial_fill_ratio=(len(accepted) / len(broker_results)) if broker_results else 0.0,
+            partial_fill_ratio=(
+                (len(accepted) / len(broker_results)) if broker_results else 0.0
+            ),
             skipped_reason="",
             status=final_state,
             mode=mode,

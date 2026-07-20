@@ -26,7 +26,6 @@ from src.engine.sync_docs_backlog_to_project import (
 )
 from src.utils.market_day import get_krx_trading_day_status
 
-
 GITHUB_GRAPHQL_URL = "https://api.github.com/graphql"
 CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar"
 
@@ -81,9 +80,15 @@ def _status_allowed(status: str, allowed_statuses: set[str]) -> bool:
 
 def _managed_open_titles_from_docs() -> set[str] | None:
     try:
-        return {_managed_title_key(_title_for_project(task)) for task in collect_backlog_tasks()}
+        return {
+            _managed_title_key(_title_for_project(task))
+            for task in collect_backlog_tasks()
+        }
     except Exception as exc:
-        print(f"[PROJECT_CAL_SYNC_WARN] failed to parse docs backlog for managed title filter: {exc}", file=sys.stderr)
+        print(
+            f"[PROJECT_CAL_SYNC_WARN] failed to parse docs backlog for managed title filter: {exc}",
+            file=sys.stderr,
+        )
         return None
 
 
@@ -281,7 +286,9 @@ query($owner: String!, $number: Int!, $cursor: String) {
 """.strip()
 
 
-def _graphql_request(token: str, query: str, variables: dict[str, Any]) -> dict[str, Any]:
+def _graphql_request(
+    token: str, query: str, variables: dict[str, Any]
+) -> dict[str, Any]:
     payload = json.dumps({"query": query, "variables": variables}).encode("utf-8")
     req = request.Request(
         GITHUB_GRAPHQL_URL,
@@ -303,7 +310,7 @@ def _graphql_request(token: str, query: str, variables: dict[str, Any]) -> dict[
             last_err = exc
             status_code = getattr(exc, "code", None)
             if status_code in {502, 503, 504, 429} and attempt < 2:
-                delay = 0.8 * (2 ** attempt)
+                delay = 0.8 * (2**attempt)
                 print(
                     f"[CAL_GRAPHQL_RETRY] code={status_code} attempt={attempt + 1} retry_after={delay:.1f}s",
                     file=sys.stderr,
@@ -325,11 +332,12 @@ def _graphql_request(token: str, query: str, variables: dict[str, Any]) -> dict[
 
         if fatal_errors:
             retryable_internal = all(
-                "something went wrong while executing your query" in str(err.get("message") or "").lower()
+                "something went wrong while executing your query"
+                in str(err.get("message") or "").lower()
                 for err in fatal_errors
             )
             if retryable_internal and attempt < 2:
-                delay = 0.8 * (2 ** attempt)
+                delay = 0.8 * (2**attempt)
                 print(
                     f"[CAL_GRAPHQL_RETRY] graphql_internal_error attempt={attempt + 1} retry_after={delay:.1f}s",
                     file=sys.stderr,
@@ -339,7 +347,11 @@ def _graphql_request(token: str, query: str, variables: dict[str, Any]) -> dict[
             raise RuntimeError(f"github graphql errors: {fatal_errors}")
         return parsed["data"]
 
-    raise last_err if last_err is not None else RuntimeError("github graphql request failed")
+    raise (
+        last_err
+        if last_err is not None
+        else RuntimeError("github graphql request failed")
+    )
 
 
 def _project_node(data: dict[str, Any]) -> dict[str, Any]:
@@ -347,7 +359,9 @@ def _project_node(data: dict[str, Any]) -> dict[str, Any]:
     user_node = (data.get("user") or {}).get("projectV2")
     node = org_node or user_node
     if not node:
-        raise RuntimeError("project not found. check GH_PROJECT_OWNER / GH_PROJECT_NUMBER / token scope")
+        raise RuntimeError(
+            "project not found. check GH_PROJECT_OWNER / GH_PROJECT_NUMBER / token scope"
+        )
     return node
 
 
@@ -372,8 +386,12 @@ def _parse_project_item(
 
     url = str(content.get("url") or "").strip()
     state = str(content.get("state") or "").strip()
-    assignees_nodes = ((content.get("assignees") or {}).get("nodes") or []) if content else []
-    assignees = ", ".join(str(n.get("login") or "").strip() for n in assignees_nodes if n.get("login"))
+    assignees_nodes = (
+        ((content.get("assignees") or {}).get("nodes") or []) if content else []
+    )
+    assignees = ", ".join(
+        str(n.get("login") or "").strip() for n in assignees_nodes if n.get("login")
+    )
 
     due_date = ""
     status = ""
@@ -493,7 +511,9 @@ def _calendar_service(sa_json: str):
         ) from exc
 
     info = json.loads(sa_json)
-    creds = service_account.Credentials.from_service_account_info(info, scopes=[CALENDAR_SCOPE])
+    creds = service_account.Credentials.from_service_account_info(
+        info, scopes=[CALENDAR_SCOPE]
+    )
     return build("calendar", "v3", credentials=creds, cache_discovery=False)
 
 
@@ -514,13 +534,20 @@ def _event_body(
     due = date.fromisoformat(item.due_date)
     is_trading_day, trading_day_reason = get_krx_trading_day_status(due)
     slot_key = _norm_key(item.slot)
-    holiday_forced_intraday = bool(not is_trading_day and slot_key in {_norm_key("PREOPEN"), _norm_key("POSTCLOSE")})
+    holiday_forced_intraday = bool(
+        not is_trading_day
+        and slot_key in {_norm_key("PREOPEN"), _norm_key("POSTCLOSE")}
+    )
     slot_to_time = {
         _norm_key("PREOPEN"): slot_preopen_time,
         _norm_key("INTRADAY"): slot_intraday_time,
         _norm_key("POSTCLOSE"): slot_postclose_time,
     }
-    start_hhmm = slot_intraday_time if holiday_forced_intraday else slot_to_time.get(slot_key, "")
+    start_hhmm = (
+        slot_intraday_time
+        if holiday_forced_intraday
+        else slot_to_time.get(slot_key, "")
+    )
     end_hhmm = ""
     is_timed_event = bool(use_slot_time and start_hhmm)
     force_all_day = False
@@ -536,7 +563,12 @@ def _event_body(
 
     explicit_start_hhmm, explicit_end_hhmm = _extract_time_range_from_text(item.title)
     has_explicit_time = bool(explicit_start_hhmm)
-    if has_explicit_time and not force_all_day and mode != "timed" and not holiday_forced_intraday:
+    if (
+        has_explicit_time
+        and not force_all_day
+        and mode != "timed"
+        and not holiday_forced_intraday
+    ):
         start_hhmm = explicit_start_hhmm
         end_hhmm = explicit_end_hhmm
         is_timed_event = True
@@ -588,7 +620,9 @@ def _event_body(
         body["end"] = {"dateTime": end_dt.isoformat(), "timeZone": event_timezone}
         body["reminders"] = {
             "useDefault": False,
-            "overrides": [{"method": "popup", "minutes": max(0, slot_reminder_minutes)}],
+            "overrides": [
+                {"method": "popup", "minutes": max(0, slot_reminder_minutes)}
+            ],
         }
     else:
         body["start"] = {"date": due.isoformat()}
@@ -645,10 +679,12 @@ def upsert_events(
             )
             .execute()
         )
-        existing = (found.get("items") or [])
+        existing = found.get("items") or []
         if existing:
             event_id = existing[0]["id"]
-            service.events().update(calendarId=calendar_id, eventId=event_id, body=body).execute()
+            service.events().update(
+                calendarId=calendar_id, eventId=event_id, body=body
+            ).execute()
             updated += 1
         else:
             service.events().insert(calendarId=calendar_id, body=body).execute()
@@ -700,7 +736,7 @@ def prune_stale_events(
             .execute()
         )
         for event in resp.get("items", []):
-            private = ((event.get("extendedProperties") or {}).get("private") or {})
+            private = (event.get("extendedProperties") or {}).get("private") or {}
             item_id = str(private.get("gh_project_item_id") or "").strip()
             event_id = str(event.get("id") or "").strip()
             if event_id:
@@ -735,7 +771,7 @@ def prune_stale_events(
                 .execute()
             )
             for event in resp.get("items", []):
-                private = ((event.get("extendedProperties") or {}).get("private") or {})
+                private = (event.get("extendedProperties") or {}).get("private") or {}
                 if str(private.get("gh_project_item_id") or "").strip():
                     continue
                 event_id = str(event.get("id") or "").strip()
@@ -744,13 +780,17 @@ def prune_stale_events(
                 description = str(event.get("description") or "")
                 if project_marker not in description:
                     continue
-                title_key = _legacy_calendar_title_key(str(event.get("summary") or ""), event_prefix=event_prefix)
+                title_key = _legacy_calendar_title_key(
+                    str(event.get("summary") or ""), event_prefix=event_prefix
+                )
                 if not title_key or title_key in live_managed_title_keys:
                     continue
                 if dry_run:
                     legacy_dry_run_deleted += 1
                     continue
-                service.events().delete(calendarId=calendar_id, eventId=event_id).execute()
+                service.events().delete(
+                    calendarId=calendar_id, eventId=event_id
+                ).execute()
                 legacy_deleted += 1
 
             page_token = resp.get("nextPageToken")
@@ -759,7 +799,11 @@ def prune_stale_events(
 
         if live_codex_workorder_slots is not None:
             page_token = None
-            live_slots = {str(slot or "").strip().upper() for slot in live_codex_workorder_slots if str(slot or "").strip()}
+            live_slots = {
+                str(slot or "").strip().upper()
+                for slot in live_codex_workorder_slots
+                if str(slot or "").strip()
+            }
             while True:
                 resp = (
                     service.events()
@@ -775,7 +819,9 @@ def prune_stale_events(
                     .execute()
                 )
                 for event in resp.get("items", []):
-                    private = ((event.get("extendedProperties") or {}).get("private") or {})
+                    private = (event.get("extendedProperties") or {}).get(
+                        "private"
+                    ) or {}
                     if str(private.get("gh_project_item_id") or "").strip():
                         continue
                     event_id = str(event.get("id") or "").strip()
@@ -787,7 +833,9 @@ def prune_stale_events(
                     if dry_run:
                         codex_workorder_dry_run_deleted += 1
                         continue
-                    service.events().delete(calendarId=calendar_id, eventId=event_id).execute()
+                    service.events().delete(
+                        calendarId=calendar_id, eventId=event_id
+                    ).execute()
                     codex_workorder_deleted += 1
 
                 page_token = resp.get("nextPageToken")
@@ -805,8 +853,12 @@ def prune_stale_events(
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Sync GitHub Project to Google Calendar.")
-    parser.add_argument("--dry-run", action="store_true", help="Do not write to Google Calendar.")
+    parser = argparse.ArgumentParser(
+        description="Sync GitHub Project to Google Calendar."
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Do not write to Google Calendar."
+    )
     args = parser.parse_args()
 
     gh_token = _env("GH_PROJECT_TOKEN", os.getenv("GITHUB_TOKEN"))
@@ -872,19 +924,37 @@ def main() -> int:
         owner=owner,
         project_number=project_number,
         live_item_ids={item.item_id for item in items},
-        live_managed_title_keys={_managed_title_key(item.title) for item in items if _is_managed_project_title(item.title)}
-        if legacy_prune_enabled
-        else None,
-        live_codex_workorder_slots={item.slot.strip().upper() for item in items if item.slot.strip()}
-        if legacy_prune_enabled
-        else None,
+        live_managed_title_keys=(
+            {
+                _managed_title_key(item.title)
+                for item in items
+                if _is_managed_project_title(item.title)
+            }
+            if legacy_prune_enabled
+            else None
+        ),
+        live_codex_workorder_slots=(
+            {item.slot.strip().upper() for item in items if item.slot.strip()}
+            if legacy_prune_enabled
+            else None
+        ),
         event_prefix=event_prefix,
-        legacy_time_min=(datetime.now().astimezone() - timedelta(days=max(0, legacy_prune_past_days))).isoformat()
-        if legacy_prune_enabled
-        else "",
-        legacy_time_max=(datetime.now().astimezone() + timedelta(days=max(0, legacy_prune_future_days))).isoformat()
-        if legacy_prune_enabled
-        else "",
+        legacy_time_min=(
+            (
+                datetime.now().astimezone()
+                - timedelta(days=max(0, legacy_prune_past_days))
+            ).isoformat()
+            if legacy_prune_enabled
+            else ""
+        ),
+        legacy_time_max=(
+            (
+                datetime.now().astimezone()
+                + timedelta(days=max(0, legacy_prune_future_days))
+            ).isoformat()
+            if legacy_prune_enabled
+            else ""
+        ),
         dry_run=dry_run,
     )
 

@@ -48,10 +48,18 @@ def record_add_history_event(
                     order_no=order_no,
                     request_qty=int(request_qty or 0),
                     executed_qty=int(executed_qty or 0),
-                    request_price=float(request_price) if request_price is not None else None,
-                    executed_price=float(executed_price) if executed_price is not None else None,
-                    prev_buy_price=float(prev_buy_price) if prev_buy_price is not None else None,
-                    new_buy_price=float(new_buy_price) if new_buy_price is not None else None,
+                    request_price=(
+                        float(request_price) if request_price is not None else None
+                    ),
+                    executed_price=(
+                        float(executed_price) if executed_price is not None else None
+                    ),
+                    prev_buy_price=(
+                        float(prev_buy_price) if prev_buy_price is not None else None
+                    ),
+                    new_buy_price=(
+                        float(new_buy_price) if new_buy_price is not None else None
+                    ),
                     prev_buy_qty=int(prev_buy_qty or 0),
                     new_buy_qty=int(new_buy_qty or 0),
                     add_count_after=int(add_count_after or 0),
@@ -82,10 +90,12 @@ def find_latest_open_add_order_no(db, recommendation_id):
                 session.query(HoldingAddHistory)
                 .filter(
                     HoldingAddHistory.recommendation_id == int(recommendation_id),
-                    HoldingAddHistory.event_type == 'ORDER_SENT',
+                    HoldingAddHistory.event_type == "ORDER_SENT",
                     HoldingAddHistory.order_no.isnot(None),
                 )
-                .order_by(desc(HoldingAddHistory.event_time), desc(HoldingAddHistory.id))
+                .order_by(
+                    desc(HoldingAddHistory.event_time), desc(HoldingAddHistory.id)
+                )
                 .all()
             )
 
@@ -95,7 +105,9 @@ def find_latest_open_add_order_no(db, recommendation_id):
                     .filter(
                         HoldingAddHistory.recommendation_id == int(recommendation_id),
                         HoldingAddHistory.order_no == sent.order_no,
-                        HoldingAddHistory.event_type.in_(('EXECUTED', 'CANCELLED', 'RECONCILED')),
+                        HoldingAddHistory.event_type.in_(
+                            ("EXECUTED", "CANCELLED", "RECONCILED")
+                        ),
                     )
                     .first()
                 )
@@ -108,7 +120,9 @@ def find_latest_open_add_order_no(db, recommendation_id):
                     HoldingAddHistory.recommendation_id == int(recommendation_id),
                     HoldingAddHistory.order_no.isnot(None),
                 )
-                .order_by(desc(HoldingAddHistory.event_time), desc(HoldingAddHistory.id))
+                .order_by(
+                    desc(HoldingAddHistory.event_time), desc(HoldingAddHistory.id)
+                )
                 .first()
             )
             return latest_any[0] if latest_any else None

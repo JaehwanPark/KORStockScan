@@ -9,7 +9,6 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 REPORT_DIR = PROJECT_ROOT / "data" / "report" / "codebase_performance_workorder"
 SOURCE_DOC = PROJECT_ROOT / "docs" / "codebase-performance-bottleneck-analysis.md"
@@ -166,7 +165,10 @@ def _accepted_candidates() -> list[dict[str, Any]]:
             title="Recommendation and update_kospi vectorized membership checks",
             risk_tier="low",
             target_subsystem="swing_daily_recommendation",
-            files_likely_touched=["src/model/recommend_daily_v2.py", "src/utils/update_kospi.py"],
+            files_likely_touched=[
+                "src/model/recommend_daily_v2.py",
+                "src/utils/update_kospi.py",
+            ],
             acceptance_tests=[
                 "pytest src/tests/test_swing_retrain_automation.py src/tests/test_swing_feature_ssot.py",
                 "recommendation CSV and diagnostics parity",
@@ -195,7 +197,10 @@ def _accepted_candidates() -> list[dict[str, Any]]:
             risk_tier="low",
             target_subsystem="monitor_snapshot",
             files_likely_touched=["src/engine/monitor_snapshot_runtime.py"],
-            acceptance_tests=["pytest src/tests/test_log_archive_service.py", "last valid JSON line parity"],
+            acceptance_tests=[
+                "pytest src/tests/test_log_archive_service.py",
+                "last valid JSON line parity",
+            ],
             parity_contract="latest parsed snapshot payload and missing/malformed fallback behavior exact match",
             priority=6,
             state="accepted",
@@ -206,7 +211,10 @@ def _accepted_candidates() -> list[dict[str, Any]]:
             risk_tier="low",
             target_subsystem="final_ensemble_scanner",
             files_likely_touched=["src/scanners/final_ensemble_scanner.py"],
-            acceptance_tests=["pytest src/tests/test_swing_model_selection_funnel_repair.py", "V2 CSV pick list parity"],
+            acceptance_tests=[
+                "pytest src/tests/test_swing_model_selection_funnel_repair.py",
+                "V2 CSV pick list parity",
+            ],
             parity_contract="Code/Name record list, selection count, and diagnostics output exact match",
             priority=7,
             state="accepted",
@@ -222,7 +230,9 @@ def _deferred_candidates() -> list[dict[str, Any]]:
             risk_tier="high",
             target_subsystem="broker_transport",
             files_likely_touched=["src/engine/kiwoom_orders.py"],
-            acceptance_tests=["pytest src/tests/test_kiwoom_orders.py src/tests/test_sniper_scale_in.py"],
+            acceptance_tests=[
+                "pytest src/tests/test_kiwoom_orders.py src/tests/test_sniper_scale_in.py"
+            ],
             parity_contract="request headers/body/api-id, timeout, retry, auth failure handling, and receipt parsing exact match",
             priority=20,
             state="deferred",
@@ -233,7 +243,10 @@ def _deferred_candidates() -> list[dict[str, Any]]:
             title="Config cache scope review",
             risk_tier="medium",
             target_subsystem="config_loading",
-            files_likely_touched=["src/utils/constants.py", "src/utils/kiwoom_utils.py"],
+            files_likely_touched=[
+                "src/utils/constants.py",
+                "src/utils/kiwoom_utils.py",
+            ],
             acceptance_tests=["pytest config/import smoke tests"],
             parity_contract="runtime config reload semantics must be explicitly preserved or limited to one-shot/postclose modules",
             priority=21,
@@ -328,7 +341,9 @@ def _implementation_probe(item_id: str) -> dict[str, Any]:
             }
         )
     implemented = bool(results) and all(
-        item["exists"] and item["required_tokens_present"] and item["forbidden_tokens_absent"]
+        item["exists"]
+        and item["required_tokens_present"]
+        and item["forbidden_tokens_absent"]
         for item in results
     )
     return {
@@ -341,10 +356,15 @@ def build_codebase_performance_workorder_report(target_date: str) -> dict[str, A
     target_date = str(target_date).strip()
     source_hash = _source_doc_hash(SOURCE_DOC)
     accepted = _accepted_candidates()
-    accepted = [{**item, **_implementation_probe(str(item.get("item_id") or ""))} for item in accepted]
+    accepted = [
+        {**item, **_implementation_probe(str(item.get("item_id") or ""))}
+        for item in accepted
+    ]
     deferred = _deferred_candidates()
     rejected = _rejected_candidates()
-    implemented_count = sum(1 for item in accepted if item.get("implementation_status") == "implemented")
+    implemented_count = sum(
+        1 for item in accepted if item.get("implementation_status") == "implemented"
+    )
     report = {
         "schema_version": SCHEMA_VERSION,
         "date": target_date,
@@ -377,7 +397,9 @@ def build_codebase_performance_workorder_report(target_date: str) -> dict[str, A
     }
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
     json_path, md_path = output_paths(target_date)
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     md_path.write_text(render_markdown(report), encoding="utf-8")
     return report
 
@@ -411,17 +433,23 @@ def render_markdown(report: dict[str, Any]) -> str:
     lines.extend(["", "## Deferred Candidates"])
     for item in report.get("deferred_candidates") or []:
         if isinstance(item, dict):
-            lines.append(f"- `{item.get('item_id')}` reason=`{item.get('defer_reason')}`")
+            lines.append(
+                f"- `{item.get('item_id')}` reason=`{item.get('defer_reason')}`"
+            )
     lines.extend(["", "## Rejected Candidates"])
     for item in report.get("rejected_candidates") or []:
         if isinstance(item, dict):
-            lines.append(f"- `{item.get('item_id')}` reason=`{item.get('defer_reason')}`")
+            lines.append(
+                f"- `{item.get('item_id')}` reason=`{item.get('defer_reason')}`"
+            )
     lines.append("")
     return "\n".join(lines)
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Build codebase performance workorder source report.")
+    parser = argparse.ArgumentParser(
+        description="Build codebase performance workorder source report."
+    )
     parser.add_argument("--date", dest="target_date", default=date.today().isoformat())
     parser.add_argument("--print-json", action="store_true")
     args = parser.parse_args(argv)
@@ -435,7 +463,13 @@ def main(argv: list[str] | None = None) -> int:
         "deferred_count": len(report.get("deferred_candidates") or []),
         "rejected_count": len(report.get("rejected_candidates") or []),
     }
-    print(json.dumps(result if args.print_json else result, ensure_ascii=False, indent=2 if args.print_json else None))
+    print(
+        json.dumps(
+            result if args.print_json else result,
+            ensure_ascii=False,
+            indent=2 if args.print_json else None,
+        )
+    )
     return 0
 
 

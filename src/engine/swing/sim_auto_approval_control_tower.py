@@ -17,7 +17,6 @@ from typing import Any
 from src.engine.auto_promotion_contracts import tier2_validation_passed
 from src.utils.constants import DATA_DIR
 
-
 REPORT_TYPE = "swing_sim_auto_approval"
 SCHEMA_VERSION = "swing_sim_auto_approval_v1"
 POLICY_ID = "swing_sim_auto_approval"
@@ -25,11 +24,19 @@ DECISION_AUTHORITY = "swing_sim_auto_approval_control_tower"
 
 SIM_AUTO_APPROVAL_DIR = Path(DATA_DIR) / "threshold_cycle" / "sim_auto_approvals"
 SWING_SIM_POLICY_DIR = Path(DATA_DIR) / "threshold_cycle" / "swing_sim_policies"
-LDM_HYPOTHESIS_PLAN_DIR = Path(DATA_DIR) / "threshold_cycle" / "ldm_hypothesis_observation_plans"
-SWING_LIFECYCLE_BUCKET_REPORT_DIR = Path(DATA_DIR) / "report" / "swing_lifecycle_bucket_discovery"
-BOTTOM_REBOUND_POLICY_REPORT_DIR = Path(DATA_DIR) / "report" / "swing_bottom_rebound_policy_auto_loop"
+LDM_HYPOTHESIS_PLAN_DIR = (
+    Path(DATA_DIR) / "threshold_cycle" / "ldm_hypothesis_observation_plans"
+)
+SWING_LIFECYCLE_BUCKET_REPORT_DIR = (
+    Path(DATA_DIR) / "report" / "swing_lifecycle_bucket_discovery"
+)
+BOTTOM_REBOUND_POLICY_REPORT_DIR = (
+    Path(DATA_DIR) / "report" / "swing_bottom_rebound_policy_auto_loop"
+)
 SWING_RUNTIME_APPROVAL_REPORT_DIR = Path(DATA_DIR) / "report" / "swing_runtime_approval"
-SWING_STRATEGY_DISCOVERY_EV_REPORT_DIR = Path(DATA_DIR) / "report" / "swing_strategy_discovery_ev"
+SWING_STRATEGY_DISCOVERY_EV_REPORT_DIR = (
+    Path(DATA_DIR) / "report" / "swing_strategy_discovery_ev"
+)
 ACTIVE_ARM_PRIORITY_POLICY_VERSION = "active_swing_arm_priority_v1"
 
 FORBIDDEN_USES = [
@@ -68,12 +75,16 @@ def swing_sim_policy_catalog_path(target_date: str) -> Path:
 
 
 def _latest_hypothesis_observation_plan(target_date: str) -> dict[str, Any]:
-    exact = LDM_HYPOTHESIS_PLAN_DIR / f"ldm_hypothesis_observation_plan_{target_date}.json"
+    exact = (
+        LDM_HYPOTHESIS_PLAN_DIR / f"ldm_hypothesis_observation_plan_{target_date}.json"
+    )
     if exact.exists():
         return _load_json(exact)
     candidates: list[tuple[str, Path]] = []
     if LDM_HYPOTHESIS_PLAN_DIR.exists():
-        for path in LDM_HYPOTHESIS_PLAN_DIR.glob("ldm_hypothesis_observation_plan_*.json"):
+        for path in LDM_HYPOTHESIS_PLAN_DIR.glob(
+            "ldm_hypothesis_observation_plan_*.json"
+        ):
             plan_date = path.stem.removeprefix("ldm_hypothesis_observation_plan_")
             if plan_date <= target_date:
                 candidates.append((plan_date, path))
@@ -83,19 +94,30 @@ def _latest_hypothesis_observation_plan(target_date: str) -> dict[str, Any]:
 
 
 def swing_lifecycle_bucket_report_path(target_date: str) -> Path:
-    return SWING_LIFECYCLE_BUCKET_REPORT_DIR / f"swing_lifecycle_bucket_discovery_{target_date}.json"
+    return (
+        SWING_LIFECYCLE_BUCKET_REPORT_DIR
+        / f"swing_lifecycle_bucket_discovery_{target_date}.json"
+    )
 
 
 def bottom_rebound_policy_report_path(target_date: str) -> Path:
-    return BOTTOM_REBOUND_POLICY_REPORT_DIR / f"swing_bottom_rebound_policy_auto_loop_{target_date}.json"
+    return (
+        BOTTOM_REBOUND_POLICY_REPORT_DIR
+        / f"swing_bottom_rebound_policy_auto_loop_{target_date}.json"
+    )
 
 
 def swing_runtime_approval_report_path(target_date: str) -> Path:
-    return SWING_RUNTIME_APPROVAL_REPORT_DIR / f"swing_runtime_approval_{target_date}.json"
+    return (
+        SWING_RUNTIME_APPROVAL_REPORT_DIR / f"swing_runtime_approval_{target_date}.json"
+    )
 
 
 def swing_strategy_discovery_ev_report_path(target_date: str) -> Path:
-    return SWING_STRATEGY_DISCOVERY_EV_REPORT_DIR / f"swing_strategy_discovery_ev_{target_date}.json"
+    return (
+        SWING_STRATEGY_DISCOVERY_EV_REPORT_DIR
+        / f"swing_strategy_discovery_ev_{target_date}.json"
+    )
 
 
 def _source_contract_ok(payload: dict[str, Any], expected_report_type: str) -> bool:
@@ -110,17 +132,25 @@ def _source_contract_ok(payload: dict[str, Any], expected_report_type: str) -> b
 
 def _previous_active_arm_policies(target_date: str) -> dict[str, dict[str, Any]]:
     previous: dict[str, dict[str, Any]] = {}
-    for path in sorted(SWING_SIM_POLICY_DIR.glob("swing_sim_policy_catalog_*.json"), reverse=True):
+    for path in sorted(
+        SWING_SIM_POLICY_DIR.glob("swing_sim_policy_catalog_*.json"), reverse=True
+    ):
         if target_date and target_date in path.name:
             continue
         payload = _load_json(path)
-        policies = payload.get("active_arm_priority_policies") if isinstance(payload, dict) else []
+        policies = (
+            payload.get("active_arm_priority_policies")
+            if isinstance(payload, dict)
+            else []
+        )
         if not isinstance(policies, list):
             continue
         for item in policies:
             if not isinstance(item, dict):
                 continue
-            key = str(item.get("priority_arm_id") or item.get("priority_bucket_id") or "").strip()
+            key = str(
+                item.get("priority_arm_id") or item.get("priority_bucket_id") or ""
+            ).strip()
             if key and key not in previous:
                 previous[key] = item
         if previous:
@@ -191,7 +221,9 @@ def _active_arm_priority_policies(
             seen.add(priority_key)
             policies.append(
                 {
-                    "priority_policy_id": _priority_policy_id(priority_key, swing_source_date),
+                    "priority_policy_id": _priority_policy_id(
+                        priority_key, swing_source_date
+                    ),
                     "priority_bucket_id": bucket_id,
                     "policy_version": ACTIVE_ARM_PRIORITY_POLICY_VERSION,
                     "source_id": "swing_lifecycle_bucket_discovery",
@@ -201,7 +233,9 @@ def _active_arm_priority_policies(
                     "lifecycle_stage": candidate.get("lifecycle_stage"),
                     "bucket_type": candidate.get("bucket_type"),
                     "bucket_key": candidate.get("bucket_key"),
-                    "source_quality_adjusted_ev_pct": candidate.get("source_quality_adjusted_ev_pct"),
+                    "source_quality_adjusted_ev_pct": candidate.get(
+                        "source_quality_adjusted_ev_pct"
+                    ),
                     "runtime_effect": False,
                     "allowed_runtime_apply": False,
                     "actual_order_submitted": False,
@@ -210,7 +244,9 @@ def _active_arm_priority_policies(
                 }
             )
     for priority_key, old in previous.items():
-        old_key = str(old.get("priority_arm_id") or old.get("priority_bucket_id") or priority_key).strip()
+        old_key = str(
+            old.get("priority_arm_id") or old.get("priority_bucket_id") or priority_key
+        ).strip()
         if old_key in seen or f"bucket:{old_key}" in seen:
             continue
         missing = int(old.get("consecutive_missing_count") or 0) + 1
@@ -218,9 +254,7 @@ def _active_arm_priority_policies(
         status = (
             "retired"
             if old_status == "retired" or missing >= 5
-            else "cooldown"
-            if old_status == "cooldown" or missing >= 2
-            else "active"
+            else "cooldown" if old_status == "cooldown" or missing >= 2 else "active"
         )
         policies.append(
             {
@@ -231,13 +265,19 @@ def _active_arm_priority_policies(
                 "allowed_runtime_apply": False,
                 "actual_order_submitted": False,
                 "broker_order_forbidden": True,
-                "retired_reason": "consecutive_missing" if status == "retired" else str(old.get("retired_reason") or ""),
+                "retired_reason": (
+                    "consecutive_missing"
+                    if status == "retired"
+                    else str(old.get("retired_reason") or "")
+                ),
             }
         )
     return sorted(
         policies,
         key=lambda item: (
-            {"active": 0, "cooldown": 1, "retired": 2}.get(str(item.get("status") or ""), 9),
+            {"active": 0, "cooldown": 1, "retired": 2}.get(
+                str(item.get("status") or ""), 9
+            ),
             str(item.get("priority_arm_id") or item.get("priority_bucket_id") or ""),
         ),
     )
@@ -261,7 +301,9 @@ def _swing_ldm_policy_items(report: dict[str, Any]) -> list[dict[str, Any]]:
                 "lifecycle_stage": candidate.get("lifecycle_stage"),
                 "bucket_type": candidate.get("bucket_type"),
                 "bucket_key": candidate.get("bucket_key"),
-                "source_quality_adjusted_ev_pct": candidate.get("source_quality_adjusted_ev_pct"),
+                "source_quality_adjusted_ev_pct": candidate.get(
+                    "source_quality_adjusted_ev_pct"
+                ),
                 "classification_state": "sim_auto_approved",
                 "runtime_effect": False,
                 "allowed_runtime_apply": False,
@@ -276,9 +318,20 @@ def _swing_ldm_policy_items(report: dict[str, Any]) -> list[dict[str, Any]]:
 def _bottom_rebound_policy_item(report: dict[str, Any]) -> dict[str, Any] | None:
     if not _source_contract_ok(report, "swing_bottom_rebound_policy_auto_loop"):
         return None
-    conclusion = report.get("final_conclusion") if isinstance(report.get("final_conclusion"), dict) else {}
-    policy = report.get("sim_auto_approved_policy") if isinstance(report.get("sim_auto_approved_policy"), dict) else {}
-    if conclusion.get("classification_state") != "sim_auto_approved" or conclusion.get("promote_policy") is not True:
+    conclusion = (
+        report.get("final_conclusion")
+        if isinstance(report.get("final_conclusion"), dict)
+        else {}
+    )
+    policy = (
+        report.get("sim_auto_approved_policy")
+        if isinstance(report.get("sim_auto_approved_policy"), dict)
+        else {}
+    )
+    if (
+        conclusion.get("classification_state") != "sim_auto_approved"
+        or conclusion.get("promote_policy") is not True
+    ):
         return None
     if not policy:
         return None
@@ -289,7 +342,9 @@ def _bottom_rebound_policy_item(report: dict[str, Any]) -> dict[str, Any] | None
         "max_candidates": policy.get("max_candidates"),
         "min_backtest_rank_score": policy.get("min_backtest_rank_score"),
         "min_primary_adjusted_ev_pct": policy.get("min_primary_adjusted_ev_pct"),
-        "include_bottom_rebound_source": bool(policy.get("include_bottom_rebound_source", True)),
+        "include_bottom_rebound_source": bool(
+            policy.get("include_bottom_rebound_source", True)
+        ),
         "classification_state": "sim_auto_approved",
         "runtime_effect": False,
         "allowed_runtime_apply": False,
@@ -318,7 +373,10 @@ def _swing_runtime_pre_final_items(report: dict[str, Any]) -> list[dict[str, Any
         state = str(request.get("calibration_state") or "")
         auto_state = str(request.get("auto_approval_state") or "")
         family = str(request.get("family") or request.get("policy_id") or "")
-        if state == "dry_run_auto_apply_ready" and auto_state == "ai_tier2_auto_approved":
+        if (
+            state == "dry_run_auto_apply_ready"
+            and auto_state == "ai_tier2_auto_approved"
+        ):
             policy_kind = "swing_runtime_dry_run_pre_final_policy"
         else:
             continue
@@ -356,10 +414,14 @@ def build_swing_sim_auto_approval(
 ) -> dict[str, Any]:
     date_key = _date_text(target_date)
     default_paths = {
-        "swing_lifecycle_bucket_discovery": swing_lifecycle_bucket_report_path(date_key),
+        "swing_lifecycle_bucket_discovery": swing_lifecycle_bucket_report_path(
+            date_key
+        ),
         "bottom_rebound_policy_auto_loop": bottom_rebound_policy_report_path(date_key),
         "swing_runtime_approval": swing_runtime_approval_report_path(date_key),
-        "swing_strategy_discovery_ev": swing_strategy_discovery_ev_report_path(date_key),
+        "swing_strategy_discovery_ev": swing_strategy_discovery_ev_report_path(
+            date_key
+        ),
     }
     paths = {**default_paths, **(source_paths or {})}
     swing_report = (
@@ -427,19 +489,25 @@ def build_swing_sim_auto_approval(
             "swing_lifecycle_bucket_discovery": {
                 "path": str(paths["swing_lifecycle_bucket_discovery"]),
                 "present": bool(swing_report),
-                "contract_ok": _source_contract_ok(swing_report, "swing_lifecycle_bucket_discovery"),
+                "contract_ok": _source_contract_ok(
+                    swing_report, "swing_lifecycle_bucket_discovery"
+                ),
                 "sim_auto_approved_count": len(_swing_ldm_policy_items(swing_report)),
             },
             "bottom_rebound_policy_auto_loop": {
                 "path": str(paths["bottom_rebound_policy_auto_loop"]),
                 "present": bool(bottom_report),
-                "contract_ok": _source_contract_ok(bottom_report, "swing_bottom_rebound_policy_auto_loop"),
+                "contract_ok": _source_contract_ok(
+                    bottom_report, "swing_bottom_rebound_policy_auto_loop"
+                ),
                 "sim_auto_approved": bottom_policy is not None,
             },
             "swing_runtime_approval": {
                 "path": str(paths["swing_runtime_approval"]),
                 "present": bool(runtime_report),
-                "pre_final_auto_policy_count": len(_swing_runtime_pre_final_items(runtime_report)),
+                "pre_final_auto_policy_count": len(
+                    _swing_runtime_pre_final_items(runtime_report)
+                ),
             },
             "swing_strategy_discovery_ev": {
                 "path": str(paths["swing_strategy_discovery_ev"]),
@@ -465,10 +533,13 @@ def build_policy_catalog(approval: dict[str, Any]) -> dict[str, Any]:
         "allowed_runtime_apply": False,
         "approved_source_ids": approval.get("approved_source_ids") or [],
         "policies": approval.get("approved_policies") or [],
-        "active_arm_priority_policies": approval.get("active_arm_priority_policies") or [],
+        "active_arm_priority_policies": approval.get("active_arm_priority_policies")
+        or [],
         "active_priority_lineage": {
             "source": "swing_sim_auto_approval",
-            "active_arm_priority_policy_count": len(approval.get("active_arm_priority_policies") or []),
+            "active_arm_priority_policy_count": len(
+                approval.get("active_arm_priority_policies") or []
+            ),
             "lineage_artifact": f"data/report/key_lineage_ledger/key_lineage_ledger_{target_date}.json",
         },
         "hypothesis_observation_plan": hypothesis_plan or {},
@@ -482,9 +553,14 @@ def write_swing_sim_auto_approval(approval: dict[str, Any]) -> dict[str, Path]:
     SWING_SIM_POLICY_DIR.mkdir(parents=True, exist_ok=True)
     approval_path = swing_sim_auto_approval_path(date_key)
     catalog_path = swing_sim_policy_catalog_path(date_key)
-    approval_path.write_text(json.dumps(approval, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    approval_path.write_text(
+        json.dumps(approval, ensure_ascii=False, indent=2, default=str),
+        encoding="utf-8",
+    )
     catalog_path.write_text(
-        json.dumps(build_policy_catalog(approval), ensure_ascii=False, indent=2, default=str),
+        json.dumps(
+            build_policy_catalog(approval), ensure_ascii=False, indent=2, default=str
+        ),
         encoding="utf-8",
     )
     return {"approval": approval_path, "catalog": catalog_path}
@@ -516,16 +592,21 @@ def bottom_rebound_is_approved_by_control_tower(approval: dict[str, Any]) -> boo
         and approval.get("allowed_runtime_apply") is False
         and approval.get("actual_order_submitted") is False
         and approval.get("broker_order_forbidden") is True
-        and "bottom_rebound_policy_auto_loop" in set(approval.get("approved_source_ids") or [])
+        and "bottom_rebound_policy_auto_loop"
+        in set(approval.get("approved_source_ids") or [])
     )
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Build Swing sim-only auto-approval artifact")
+    parser = argparse.ArgumentParser(
+        description="Build Swing sim-only auto-approval artifact"
+    )
     parser.add_argument("--date", default=date.today().isoformat())
     args = parser.parse_args(argv)
     paths = refresh_swing_sim_auto_approval(args.date)
-    print(json.dumps({key: str(value) for key, value in paths.items()}, ensure_ascii=True))
+    print(
+        json.dumps({key: str(value) for key, value in paths.items()}, ensure_ascii=True)
+    )
     return 0
 
 

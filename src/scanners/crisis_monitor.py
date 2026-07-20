@@ -23,10 +23,29 @@ SOURCES = {
     "NYT_World": "https://rss.nytimes.com/services/xml/rss/nyt/World.xml",
     "BBC_World": "http://feeds.bbci.co.uk/news/world/rss.xml",
     "ReliefWeb_Disaster": "https://reliefweb.int/updates/rss.xml",
-    "WHO_Pandemic": "https://www.who.int/feeds/entity/csr/don/en/rss.xml"
+    "WHO_Pandemic": "https://www.who.int/feeds/entity/csr/don/en/rss.xml",
 }
-WAR_KEYWORDS = ['war', 'missile', 'strike', 'invasion', 'military', 'conflict', 'nuclear', 'attack']
-PANDEMIC_KEYWORDS = ['outbreak', 'virus', 'pandemic', 'epidemic', 'disease', 'quarantine', 'ebola', 'covid', 'h5n1']
+WAR_KEYWORDS = [
+    "war",
+    "missile",
+    "strike",
+    "invasion",
+    "military",
+    "conflict",
+    "nuclear",
+    "attack",
+]
+PANDEMIC_KEYWORDS = [
+    "outbreak",
+    "virus",
+    "pandemic",
+    "epidemic",
+    "disease",
+    "quarantine",
+    "ebola",
+    "covid",
+    "h5n1",
+]
 KST = ZoneInfo("Asia/Seoul")
 ALERT_STATE_PATH = PROJECT_ROOT / "data" / "runtime" / "crisis_monitor_alert_state.json"
 CRISIS_ALERT_WINDOWS = {
@@ -35,14 +54,17 @@ CRISIS_ALERT_WINDOWS = {
     "postclose": ("15:30", "16:30"),
 }
 
+
 def calculate_severity(title):
     title_lower = title.lower()
     is_war = any(kw in title_lower for kw in WAR_KEYWORDS)
     is_pandemic = any(kw in title_lower for kw in PANDEMIC_KEYWORDS)
-    if not (is_war or is_pandemic): return None, 0
+    if not (is_war or is_pandemic):
+        return None, 0
     category = "WAR" if is_war else "PANDEMIC"
     score = sum(1 for kw in WAR_KEYWORDS + PANDEMIC_KEYWORDS if kw in title_lower)
     return category, min(score, 5)
+
 
 def is_telegram_send_allowed(now=None):
     """
@@ -55,15 +77,18 @@ def is_telegram_send_allowed(now=None):
         return False
     return True
 
+
 def _env_bool(name, default=True):
     raw = os.getenv(name)
     if raw is None:
         return default
     return raw.strip().lower() not in {"0", "false", "no", "off"}
 
+
 def _minute_of_day(value):
     hour, minute = value.split(":", 1)
     return int(hour) * 60 + int(minute)
+
 
 def crisis_alert_slot_for(now):
     now_kst = _coerce_kst(now)
@@ -73,9 +98,11 @@ def crisis_alert_slot_for(now):
             return slot
     return None
 
+
 def _coerce_kst(now=None):
     current = now or datetime.now(KST)
     return current.astimezone(KST) if current.tzinfo else current.replace(tzinfo=KST)
+
 
 def _load_alert_state(path=ALERT_STATE_PATH):
     try:
@@ -87,6 +114,7 @@ def _load_alert_state(path=ALERT_STATE_PATH):
         log_error(f"위기 경보 throttle 상태 파일 로드 실패: {exc}")
         return {}
 
+
 def _save_alert_state(state, path=ALERT_STATE_PATH):
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_suffix(f"{path.suffix}.tmp")
@@ -96,10 +124,15 @@ def _save_alert_state(state, path=ALERT_STATE_PATH):
     )
     tmp_path.replace(path)
 
-def should_send_crisis_risk_alert(now=None, path=ALERT_STATE_PATH, throttle_enabled=None):
+
+def should_send_crisis_risk_alert(
+    now=None, path=ALERT_STATE_PATH, throttle_enabled=None
+):
     now_kst = _coerce_kst(now)
     if throttle_enabled is None:
-        throttle_enabled = _env_bool("KORSTOCKSCAN_CRISIS_ALERT_SLOT_THROTTLE_ENABLED", True)
+        throttle_enabled = _env_bool(
+            "KORSTOCKSCAN_CRISIS_ALERT_SLOT_THROTTLE_ENABLED", True
+        )
 
     if not throttle_enabled:
         if is_telegram_send_allowed(now_kst):
@@ -117,7 +150,10 @@ def should_send_crisis_risk_alert(now=None, path=ALERT_STATE_PATH, throttle_enab
         return False, f"slot_already_sent:{slot}", slot
     return True, f"slot_allowed:{slot}", slot
 
-def mark_crisis_risk_alert_sent(now=None, slot=None, risk_count=None, path=ALERT_STATE_PATH):
+
+def mark_crisis_risk_alert_sent(
+    now=None, slot=None, risk_count=None, path=ALERT_STATE_PATH
+):
     now_kst = _coerce_kst(now)
     slot = slot or crisis_alert_slot_for(now_kst) or "legacy"
     date_key = now_kst.strftime("%Y-%m-%d")
@@ -132,6 +168,7 @@ def mark_crisis_risk_alert_sent(now=None, slot=None, risk_count=None, path=ALERT
         "risk_count": risk_count,
     }
     _save_alert_state(state, path)
+
 
 def run_crisis_monitor(db_manager=None, event_bus=None):
     db_manager = db_manager or DBManager()
@@ -149,16 +186,22 @@ def run_crisis_monitor(db_manager=None, event_bus=None):
                 category, severity = calculate_severity(entry.title)
                 if severity > 0:
                     alert_data = {
-                        'alert_time': now, # 💡 PostgreSQL timestamp 형식 호환
-                        'category': category,
-                        'source': source_name,
-                        'title': entry.title,
-                        'link': entry.link,
-                        'severity_score': severity
+                        "alert_time": now,  # 💡 PostgreSQL timestamp 형식 호환
+                        "category": category,
+                        "source": source_name,
+                        "title": entry.title,
+                        "link": entry.link,
+                        "severity_score": severity,
                     }
                     if db_manager.save_macro_alert(alert_data):
                         if severity >= 2:
-                            new_severe_alerts.append({"category": category, "severity": severity, "en_title": entry.title})
+                            new_severe_alerts.append(
+                                {
+                                    "category": category,
+                                    "severity": severity,
+                                    "en_title": entry.title,
+                                }
+                            )
         except Exception as e:
             log_error(f"RSS 스크래핑 에러 ({source_name}): {e}")
         time.sleep(1)
@@ -166,25 +209,37 @@ def run_crisis_monitor(db_manager=None, event_bus=None):
     # 2. 리스크 평가 및 알림 (DBManager 위임)
     if new_severe_alerts:
         risk_count = db_manager.get_recent_risk_count(hours=12, min_severity=2)
-        
+
         if risk_count >= 4:
             # 💡 [우아한 개선] 번역 및 메시지 조립 로직
-            translator = GoogleTranslator(source='auto', target='ko')
+            translator = GoogleTranslator(source="auto", target="ko")
             msg = f"🚨 *[시스템 경보: 매매 리스크 감지]*\n최근 12시간 내 심각한 위기 경보가 **{risk_count}건** 누적되었습니다.\n\n"
-            
+
             for alert in new_severe_alerts[:3]:
-                try: ko_title = translator.translate(alert["en_title"])
-                except: ko_title = alert["en_title"]
+                try:
+                    ko_title = translator.translate(alert["en_title"])
+                except:
+                    ko_title = alert["en_title"]
                 msg += f"▪️ **[{alert['category']}]** {ko_title}\n"
 
             # ⏰ 수집은 계속하되 Telegram 경보는 장전/정오/장후 슬롯당 1회로 제한한다.
             allowed, throttle_reason, alert_slot = should_send_crisis_risk_alert(now)
             if allowed:
-                event_bus.publish('TELEGRAM_BROADCAST', {'message': msg, 'audience': 'ADMIN_ONLY', 'parse_mode': 'Markdown'})
+                event_bus.publish(
+                    "TELEGRAM_BROADCAST",
+                    {
+                        "message": msg,
+                        "audience": "ADMIN_ONLY",
+                        "parse_mode": "Markdown",
+                    },
+                )
                 mark_crisis_risk_alert_sent(now, alert_slot, risk_count)
-                print(f"📢 위기 경보 브로드캐스트 완료 (slot={alert_slot or 'legacy'}, 누적: {risk_count}건)")
+                print(
+                    f"📢 위기 경보 브로드캐스트 완료 (slot={alert_slot or 'legacy'}, 누적: {risk_count}건)"
+                )
             else:
                 print(f"⏸️ 위기 경보 텔레그램 전송 차단 ({throttle_reason})")
+
 
 if __name__ == "__main__":
     run_crisis_monitor()

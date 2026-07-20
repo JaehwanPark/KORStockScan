@@ -11,7 +11,6 @@ from pathlib import Path
 from src.engine.log_archive_service import iter_target_log_lines
 from src.utils.constants import LOGS_DIR
 
-
 _ENTRY_RE = re.compile(
     r"^\[(?P<timestamp>[^\]]+)\].*?\[ENTRY_PIPELINE\] "
     r"(?P<name>.+?)\((?P<code>[^)]+)\) "
@@ -45,14 +44,19 @@ def _parse_since_datetime(target_date: str, since_time: str | None) -> datetime 
 
 
 def _iter_target_lines(log_path: Path, *, target_date: str) -> list[str]:
-    return iter_target_log_lines([log_path], target_date=target_date, marker="[ENTRY_PIPELINE]")
+    return iter_target_log_lines(
+        [log_path], target_date=target_date, marker="[ENTRY_PIPELINE]"
+    )
 
 
 def _parse_entry_event(line: str) -> MomentumEvent | None:
     match = _ENTRY_RE.match(line.strip())
     if not match:
         return None
-    fields = {m.group("key"): m.group("value") for m in _FIELD_RE.finditer(match.group("rest") or "")}
+    fields = {
+        m.group("key"): m.group("value")
+        for m in _FIELD_RE.finditer(match.group("rest") or "")
+    }
     return MomentumEvent(
         timestamp=match.group("timestamp"),
         name=match.group("name"),
@@ -102,7 +106,9 @@ def _event_to_row(event: MomentumEvent) -> dict:
     }
 
 
-def build_strength_momentum_report(target_date: str, top_n: int = 10, since_time: str | None = None) -> dict:
+def build_strength_momentum_report(
+    target_date: str, top_n: int = 10, since_time: str | None = None
+) -> dict:
     log_path = LOGS_DIR / "sniper_state_handlers_info.log"
     lines = _iter_target_lines(log_path, target_date=target_date)
     events = [event for line in lines if (event := _parse_entry_event(line))]
@@ -168,8 +174,16 @@ def build_strength_momentum_report(target_date: str, top_n: int = 10, since_time
         for event in events
         if event.stage == "blocked_vpw"
     )
-    pass_stocks = {(event.name, event.code) for event in events if event.stage == "strength_momentum_pass"}
-    observed_stocks = {(event.name, event.code) for event in events if event.stage == "strength_momentum_observed"}
+    pass_stocks = {
+        (event.name, event.code)
+        for event in events
+        if event.stage == "strength_momentum_pass"
+    }
+    observed_stocks = {
+        (event.name, event.code)
+        for event in events
+        if event.stage == "strength_momentum_observed"
+    }
 
     latest_static_block_candidates: dict[tuple[str, str], MomentumEvent] = {}
     latest_pass_events: dict[tuple[str, str], MomentumEvent] = {}
@@ -179,7 +193,9 @@ def build_strength_momentum_report(target_date: str, top_n: int = 10, since_time
         key = (event.name, event.code)
         if event.stage == "dynamic_vpw_override_pass":
             latest_static_block_candidates[key] = event
-        if event.stage == "blocked_vpw" and _to_bool(event.fields.get("dynamic_allowed"), False):
+        if event.stage == "blocked_vpw" and _to_bool(
+            event.fields.get("dynamic_allowed"), False
+        ):
             latest_static_block_candidates[key] = event
         if event.stage == "strength_momentum_pass":
             latest_pass_events[key] = event
@@ -206,8 +222,10 @@ def build_strength_momentum_report(target_date: str, top_n: int = 10, since_time
 
     top_near_misses = sorted(
         (
-            event for event in latest_observed_events.values()
-            if event.fields.get("reason") in {
+            event
+            for event in latest_observed_events.values()
+            if event.fields.get("reason")
+            in {
                 "below_window_buy_value",
                 "below_buy_ratio",
                 "below_exec_buy_ratio",
@@ -235,11 +253,19 @@ def build_strength_momentum_report(target_date: str, top_n: int = 10, since_time
         "dynamic_override_unique_stocks": len(latest_static_block_candidates),
     }
     report["reason_breakdown"] = {
-        "observed": [{"reason": reason, "count": count} for reason, count in observed_reasons.most_common(10)],
-        "blocked_vpw_dynamic": [{"reason": reason, "count": count} for reason, count in blocked_dynamic_reasons.most_common(10)],
+        "observed": [
+            {"reason": reason, "count": count}
+            for reason, count in observed_reasons.most_common(10)
+        ],
+        "blocked_vpw_dynamic": [
+            {"reason": reason, "count": count}
+            for reason, count in blocked_dynamic_reasons.most_common(10)
+        ],
     }
     report["sections"] = {
-        "dynamic_override_candidates": [_event_to_row(event) for event in top_candidates],
+        "dynamic_override_candidates": [
+            _event_to_row(event) for event in top_candidates
+        ],
         "top_passes": [_event_to_row(event) for event in top_passes],
         "near_misses": [_event_to_row(event) for event in top_near_misses],
     }
@@ -270,7 +296,9 @@ def format_strength_momentum_report(report: dict) -> str:
     ]
     if report.get("since"):
         lines_out.append(f"- since 필터: {report['since']}")
-    lines_out.append(f"- 정적 120 구간에서 동적 통과한 후보 종목: {metrics.get('dynamic_override_unique_stocks', 0)}개")
+    lines_out.append(
+        f"- 정적 120 구간에서 동적 통과한 후보 종목: {metrics.get('dynamic_override_unique_stocks', 0)}개"
+    )
 
     observed = report.get("reason_breakdown", {}).get("observed", []) or []
     if observed:
@@ -286,7 +314,9 @@ def format_strength_momentum_report(report: dict) -> str:
             + ", ".join(f"{item['reason']} {item['count']}건" for item in blocked[:5])
         )
 
-    top_candidates = report.get("sections", {}).get("dynamic_override_candidates", []) or []
+    top_candidates = (
+        report.get("sections", {}).get("dynamic_override_candidates", []) or []
+    )
     if top_candidates:
         lines_out.append("")
         lines_out.append("1. 정적 120 구간에서 동적 통과한 후보")

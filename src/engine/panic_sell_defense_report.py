@@ -15,10 +15,11 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from src.engine.panic_sell_state_detector import summarize_microstructure_detector_from_events
+from src.engine.panic_sell_state_detector import (
+    summarize_microstructure_detector_from_events,
+)
 from src.utils.constants import DATA_DIR
 from src.utils.jsonl_io import read_jsonl
-
 
 SCHEMA_VERSION = 1
 REPORT_DIRNAME = "panic_sell_defense"
@@ -34,7 +35,11 @@ RECOVERY_CONFIRMED_ACTIVE_WIN_RATE_FLOOR_PCT = 60.0
 RECOVERY_CONFIRMED_REBOUND_ABOVE_BUY_FLOOR_PCT = 35.0
 
 PANIC_STATES = ("NORMAL", "PANIC_SELL", "RECOVERY_WATCH", "RECOVERY_CONFIRMED")
-HOLDING_EXIT_STAGES = {"exit_signal", "swing_probe_exit_signal", "scalp_sim_exit_signal"}
+HOLDING_EXIT_STAGES = {
+    "exit_signal",
+    "swing_probe_exit_signal",
+    "scalp_sim_exit_signal",
+}
 PANIC_STOP_LOSS_COUNT_QUANTILE = 0.95
 PANIC_STOP_LOSS_QUANTILE_SAMPLE_FLOOR = 3
 PANIC_STOP_LOSS_RATIO_QUANTILE = 0.95
@@ -90,11 +95,21 @@ def _market_regime_path() -> Path:
 
 
 def _market_panic_breadth_path(target_date: str) -> Path:
-    return DATA_DIR / "report" / "market_panic_breadth" / f"market_panic_breadth_{target_date}.json"
+    return (
+        DATA_DIR
+        / "report"
+        / "market_panic_breadth"
+        / f"market_panic_breadth_{target_date}.json"
+    )
 
 
 def _post_sell_feedback_path(target_date: str) -> Path:
-    return DATA_DIR / "report" / "monitor_snapshots" / f"post_sell_feedback_{target_date}.json"
+    return (
+        DATA_DIR
+        / "report"
+        / "monitor_snapshots"
+        / f"post_sell_feedback_{target_date}.json"
+    )
 
 
 def _swing_probe_state_path() -> Path:
@@ -113,7 +128,9 @@ def _safe_float(value: Any, default: float | None = None) -> float | None:
     try:
         if value in (None, "", "-", "None"):
             return default
-        numeric = float(str(value).replace("%", "").replace("+", "").replace(",", "").strip())
+        numeric = float(
+            str(value).replace("%", "").replace("+", "").replace(",", "").strip()
+        )
         return numeric if math.isfinite(numeric) else default
     except (TypeError, ValueError):
         return default
@@ -171,7 +188,11 @@ def _threshold_contract(
     threshold_mode: str | None = None,
 ) -> dict[str, Any]:
     sample_ready = sample_count >= sample_floor
-    mode = threshold_mode or ("dynamic_quantile" if sample_ready and dynamic_threshold_value is not None else "insufficient_sample")
+    mode = threshold_mode or (
+        "dynamic_quantile"
+        if sample_ready and dynamic_threshold_value is not None
+        else "insufficient_sample"
+    )
     return {
         "name": name,
         "static_fallback_value": static_fallback_value,
@@ -301,7 +322,10 @@ def _is_stop_loss_exit(row: dict[str, Any]) -> bool:
 
 
 def _is_holding_exit_signal(row: dict[str, Any]) -> bool:
-    return _safe_str(row.get("pipeline")) == "HOLDING_PIPELINE" and _safe_str(row.get("stage")) in HOLDING_EXIT_STAGES
+    return (
+        _safe_str(row.get("pipeline")) == "HOLDING_PIPELINE"
+        and _safe_str(row.get("stage")) in HOLDING_EXIT_STAGES
+    )
 
 
 def _profit_rate(row: dict[str, Any]) -> float | None:
@@ -332,15 +356,21 @@ def _rolling_stop_counts(events: list[dict[str, Any]], *, window_min: int) -> li
     counts: list[int] = []
     right = 0
     for left, start in enumerate(stop_times):
-        while right < len(stop_times) and stop_times[right] <= start + timedelta(minutes=window_min):
+        while right < len(stop_times) and stop_times[right] <= start + timedelta(
+            minutes=window_min
+        ):
             right += 1
         counts.append(right - left)
     return counts
 
 
-def _summarize_exit_metrics(events: list[dict[str, Any]], *, as_of: datetime | None) -> dict[str, Any]:
+def _summarize_exit_metrics(
+    events: list[dict[str, Any]], *, as_of: datetime | None
+) -> dict[str, Any]:
     exit_events = [row for row in events if _is_holding_exit_signal(row)]
-    holding_events = [row for row in events if _safe_str(row.get("pipeline")) == "HOLDING_PIPELINE"]
+    holding_events = [
+        row for row in events if _safe_str(row.get("pipeline")) == "HOLDING_PIPELINE"
+    ]
     non_real_keys = _non_real_attempt_keys(holding_events)
     real_exits = [
         row
@@ -349,20 +379,28 @@ def _summarize_exit_metrics(events: list[dict[str, Any]], *, as_of: datetime | N
         and _attempt_key(row) not in non_real_keys
         and not _is_non_real_observation(row)
     ]
-    non_real_exits = [
-        row
-        for row in exit_events
-        if row not in real_exits
-    ]
+    non_real_exits = [row for row in exit_events if row not in real_exits]
     unproven_exits = [
         row
         for row in exit_events
         if not _has_real_exit_provenance(row) and not _is_non_real_observation(row)
     ]
     stop_loss_real = [row for row in real_exits if _is_stop_loss_exit(row)]
-    profits = [value for row in real_exits for value in [_profit_rate(row)] if value is not None]
-    stop_profits = [value for row in stop_loss_real for value in [_profit_rate(row)] if value is not None]
-    current_window_start = as_of - timedelta(minutes=PANIC_WINDOW_MIN) if as_of else None
+    profits = [
+        value
+        for row in real_exits
+        for value in [_profit_rate(row)]
+        if value is not None
+    ]
+    stop_profits = [
+        value
+        for row in stop_loss_real
+        for value in [_profit_rate(row)]
+        if value is not None
+    ]
+    current_window_start = (
+        as_of - timedelta(minutes=PANIC_WINDOW_MIN) if as_of else None
+    )
     current_window_stop_loss = [
         row
         for row in stop_loss_real
@@ -370,22 +408,38 @@ def _summarize_exit_metrics(events: list[dict[str, Any]], *, as_of: datetime | N
         for dt in [_parse_dt(row.get("emitted_at"))]
         if dt is not None and current_window_start <= dt <= as_of
     ]
-    exit_rule_counts = Counter(_safe_str(_event_fields(row).get("exit_rule") or "-") for row in real_exits)
+    exit_rule_counts = Counter(
+        _safe_str(_event_fields(row).get("exit_rule") or "-") for row in real_exits
+    )
     eligible = [row for row in real_exits if is_confirmation_eligible_exit(row)]
     never_delay = [row for row in real_exits if is_hard_protect_emergency_exit(row)]
-    max_rolling_stop_loss = _max_rolling_stop_count(real_exits, window_min=PANIC_WINDOW_MIN)
+    max_rolling_stop_loss = _max_rolling_stop_count(
+        real_exits, window_min=PANIC_WINDOW_MIN
+    )
     rolling_stop_counts = _rolling_stop_counts(real_exits, window_min=PANIC_WINDOW_MIN)
-    stop_loss_count_quantile_threshold = _quantile(rolling_stop_counts, PANIC_STOP_LOSS_COUNT_QUANTILE)
-    quantile_sample_ready = len(rolling_stop_counts) >= PANIC_STOP_LOSS_QUANTILE_SAMPLE_FLOOR
+    stop_loss_count_quantile_threshold = _quantile(
+        rolling_stop_counts, PANIC_STOP_LOSS_COUNT_QUANTILE
+    )
+    quantile_sample_ready = (
+        len(rolling_stop_counts) >= PANIC_STOP_LOSS_QUANTILE_SAMPLE_FLOOR
+    )
     stop_loss_ratio = _ratio(len(stop_loss_real), len(real_exits))
     avg_exit_profit = _avg(profits)
-    stop_loss_ratio_samples = [100.0 if _is_stop_loss_exit(row) else 0.0 for row in real_exits]
-    stop_loss_ratio_threshold = _quantile_float(stop_loss_ratio_samples, PANIC_STOP_LOSS_RATIO_QUANTILE)
+    stop_loss_ratio_samples = [
+        100.0 if _is_stop_loss_exit(row) else 0.0 for row in real_exits
+    ]
+    stop_loss_ratio_threshold = _quantile_float(
+        stop_loss_ratio_samples, PANIC_STOP_LOSS_RATIO_QUANTILE
+    )
     if stop_loss_ratio_threshold is not None:
-        stop_loss_ratio_threshold = max(stop_loss_ratio_threshold, PANIC_STOP_LOSS_RATIO_FLOOR_PCT)
+        stop_loss_ratio_threshold = max(
+            stop_loss_ratio_threshold, PANIC_STOP_LOSS_RATIO_FLOOR_PCT
+        )
     avg_exit_profit_threshold = _quantile_float(profits, PANIC_AVG_EXIT_PROFIT_QUANTILE)
     if avg_exit_profit_threshold is not None:
-        avg_exit_profit_threshold = min(avg_exit_profit_threshold, PANIC_AVG_EXIT_PROFIT_CEILING_PCT)
+        avg_exit_profit_threshold = min(
+            avg_exit_profit_threshold, PANIC_AVG_EXIT_PROFIT_CEILING_PCT
+        )
     count_contract = _threshold_contract(
         name="rolling_30m_stop_loss_count",
         static_fallback_value=None,
@@ -418,12 +472,16 @@ def _summarize_exit_metrics(events: list[dict[str, Any]], *, as_of: datetime | N
             or max_rolling_stop_loss >= stop_loss_count_quantile_threshold
         )
     )
-    panic_by_ratio = bool(ratio_contract["sample_ready"]) and bool(avg_profit_contract["sample_ready"]) and (
-        stop_loss_ratio_threshold is not None
-        and avg_exit_profit_threshold is not None
-        and stop_loss_ratio >= stop_loss_ratio_threshold
-        and avg_exit_profit is not None
-        and avg_exit_profit <= avg_exit_profit_threshold
+    panic_by_ratio = (
+        bool(ratio_contract["sample_ready"])
+        and bool(avg_profit_contract["sample_ready"])
+        and (
+            stop_loss_ratio_threshold is not None
+            and avg_exit_profit_threshold is not None
+            and stop_loss_ratio >= stop_loss_ratio_threshold
+            and avg_exit_profit is not None
+            and avg_exit_profit <= avg_exit_profit_threshold
+        )
     )
     return {
         "panic_decision_basis": "real_exit_with_broker_provenance_only",
@@ -444,10 +502,16 @@ def _summarize_exit_metrics(events: list[dict[str, Any]], *, as_of: datetime | N
         "avg_exit_profit_rate_pct": avg_exit_profit,
         "avg_stop_loss_profit_rate_pct": _avg(stop_profits),
         "threshold_contract": {
-            "threshold_mode": "dynamic_quantile" if count_contract["sample_ready"] else "insufficient_sample",
-            "source_quality_blockers": []
-            if count_contract["sample_ready"]
-            else ["insufficient_quantile_baseline"],
+            "threshold_mode": (
+                "dynamic_quantile"
+                if count_contract["sample_ready"]
+                else "insufficient_sample"
+            ),
+            "source_quality_blockers": (
+                []
+                if count_contract["sample_ready"]
+                else ["insufficient_quantile_baseline"]
+            ),
             "thresholds": {
                 "rolling_30m_stop_loss_count": count_contract,
                 "stop_loss_exit_ratio_pct": ratio_contract,
@@ -460,8 +524,15 @@ def _summarize_exit_metrics(events: list[dict[str, Any]], *, as_of: datetime | N
         "exit_rule_counts": dict(sorted(exit_rule_counts.items())),
         "confirmation_eligible_exit_count": len(eligible),
         "never_delay_exit_count": len(never_delay),
-        "confirmation_eligible_rules": sorted({_safe_str(_event_fields(row).get("exit_rule") or "-") for row in eligible}),
-        "never_delay_rules": sorted({_safe_str(_event_fields(row).get("exit_rule") or "-") for row in never_delay}),
+        "confirmation_eligible_rules": sorted(
+            {_safe_str(_event_fields(row).get("exit_rule") or "-") for row in eligible}
+        ),
+        "never_delay_rules": sorted(
+            {
+                _safe_str(_event_fields(row).get("exit_rule") or "-")
+                for row in never_delay
+            }
+        ),
     }
 
 
@@ -518,18 +589,29 @@ def _active_position_row(position: dict[str, Any], *, source: str) -> dict[str, 
     }
 
 
-def _active_positions_from_state(path: Path, *, source: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+def _active_positions_from_state(
+    path: Path, *, source: str
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     payload = _load_json(path)
     if not isinstance(payload, dict):
         return [], {"path": str(path), "exists": path.exists(), "loaded": False}
-    raw_positions = payload.get("active_positions") or payload.get("positions") or payload.get("targets") or []
+    raw_positions = (
+        payload.get("active_positions")
+        or payload.get("positions")
+        or payload.get("targets")
+        or []
+    )
     if isinstance(raw_positions, dict):
         iterable = list(raw_positions.values())
     elif isinstance(raw_positions, list):
         iterable = raw_positions
     else:
         iterable = []
-    rows = [_active_position_row(item, source=source) for item in iterable if isinstance(item, dict)]
+    rows = [
+        _active_position_row(item, source=source)
+        for item in iterable
+        if isinstance(item, dict)
+    ]
     return rows, {
         "path": str(path),
         "exists": True,
@@ -542,22 +624,33 @@ def _active_positions_from_state(path: Path, *, source: str) -> tuple[list[dict[
 
 
 def _summarize_active_recovery() -> dict[str, Any]:
-    swing_rows, swing_meta = _active_positions_from_state(_swing_probe_state_path(), source="swing_probe")
-    scalp_rows, scalp_meta = _active_positions_from_state(_scalp_sim_state_path(), source="scalp_sim")
+    swing_rows, swing_meta = _active_positions_from_state(
+        _swing_probe_state_path(), source="swing_probe"
+    )
+    scalp_rows, scalp_meta = _active_positions_from_state(
+        _scalp_sim_state_path(), source="scalp_sim"
+    )
     rows = swing_rows + scalp_rows
-    profits = [row["profit_rate_pct"] for row in rows if row.get("profit_rate_pct") is not None]
+    profits = [
+        row["profit_rate_pct"] for row in rows if row.get("profit_rate_pct") is not None
+    ]
     win_rate = _ratio(sum(1 for value in profits if value > 0), len(profits))
     avg_threshold = _quantile_float(profits, RECOVERY_ACTIVE_AVG_QUANTILE)
     if avg_threshold is not None:
         avg_threshold = min(avg_threshold, RECOVERY_CONFIRMED_ACTIVE_AVG_FLOOR_PCT)
     win_rate_samples = [100.0 if value > 0 else 0.0 for value in profits]
-    win_rate_threshold = _quantile_float(win_rate_samples, RECOVERY_ACTIVE_WIN_RATE_QUANTILE)
+    win_rate_threshold = _quantile_float(
+        win_rate_samples, RECOVERY_ACTIVE_WIN_RATE_QUANTILE
+    )
     if win_rate_threshold is not None:
-        win_rate_threshold = min(win_rate_threshold, RECOVERY_CONFIRMED_ACTIVE_WIN_RATE_FLOOR_PCT)
+        win_rate_threshold = min(
+            win_rate_threshold, RECOVERY_CONFIRMED_ACTIVE_WIN_RATE_FLOOR_PCT
+        )
     provenance_violations = [
         row
         for row in rows
-        if not row.get("actual_order_submitted_false") or not row.get("broker_order_forbidden_true")
+        if not row.get("actual_order_submitted_false")
+        or not row.get("broker_order_forbidden_true")
     ]
     return {
         "active_positions": len(rows),
@@ -565,10 +658,16 @@ def _summarize_active_recovery() -> dict[str, Any]:
         "avg_unrealized_profit_rate_pct": _avg(profits),
         "win_rate_pct": win_rate if profits else None,
         "threshold_contract": {
-            "threshold_mode": "dynamic_quantile" if len(profits) >= PANIC_STOP_LOSS_QUANTILE_SAMPLE_FLOOR else "insufficient_sample",
-            "source_quality_blockers": []
-            if len(profits) >= PANIC_STOP_LOSS_QUANTILE_SAMPLE_FLOOR
-            else ["insufficient_quantile_baseline"],
+            "threshold_mode": (
+                "dynamic_quantile"
+                if len(profits) >= PANIC_STOP_LOSS_QUANTILE_SAMPLE_FLOOR
+                else "insufficient_sample"
+            ),
+            "source_quality_blockers": (
+                []
+                if len(profits) >= PANIC_STOP_LOSS_QUANTILE_SAMPLE_FLOOR
+                else ["insufficient_quantile_baseline"]
+            ),
             "thresholds": {
                 "active_avg_unrealized_profit_rate_pct": _threshold_contract(
                     name="active_avg_unrealized_profit_rate_pct",
@@ -602,7 +701,11 @@ def _summarize_active_recovery() -> dict[str, Any]:
         },
         "positions": sorted(
             rows,
-            key=lambda row: row["profit_rate_pct"] if row.get("profit_rate_pct") is not None else -999.0,
+            key=lambda row: (
+                row["profit_rate_pct"]
+                if row.get("profit_rate_pct") is not None
+                else -999.0
+            ),
             reverse=True,
         )[:20],
     }
@@ -615,19 +718,55 @@ def _post_sell_recovery_metrics(target_date: str) -> dict[str, Any]:
         payload = payload[-1] if payload and isinstance(payload[-1], dict) else {}
     if not isinstance(payload, dict):
         payload = {}
-    soft = payload.get("soft_stop_forensics") if isinstance(payload.get("soft_stop_forensics"), dict) else {}
-    above_sell = soft.get("rebound_above_sell_rate") if isinstance(soft.get("rebound_above_sell_rate"), dict) else {}
-    above_buy = soft.get("rebound_above_buy_rate") if isinstance(soft.get("rebound_above_buy_rate"), dict) else {}
-    sell_10_20 = max(_safe_float(above_sell.get("10m"), 0.0) or 0.0, _safe_float(above_sell.get("20m"), 0.0) or 0.0)
-    buy_10_20 = max(_safe_float(above_buy.get("10m"), 0.0) or 0.0, _safe_float(above_buy.get("20m"), 0.0) or 0.0)
-    sell_samples = [value for value in (_safe_float(above_sell.get("10m")), _safe_float(above_sell.get("20m"))) if value is not None]
-    buy_samples = [value for value in (_safe_float(above_buy.get("10m")), _safe_float(above_buy.get("20m"))) if value is not None]
+    soft = (
+        payload.get("soft_stop_forensics")
+        if isinstance(payload.get("soft_stop_forensics"), dict)
+        else {}
+    )
+    above_sell = (
+        soft.get("rebound_above_sell_rate")
+        if isinstance(soft.get("rebound_above_sell_rate"), dict)
+        else {}
+    )
+    above_buy = (
+        soft.get("rebound_above_buy_rate")
+        if isinstance(soft.get("rebound_above_buy_rate"), dict)
+        else {}
+    )
+    sell_10_20 = max(
+        _safe_float(above_sell.get("10m"), 0.0) or 0.0,
+        _safe_float(above_sell.get("20m"), 0.0) or 0.0,
+    )
+    buy_10_20 = max(
+        _safe_float(above_buy.get("10m"), 0.0) or 0.0,
+        _safe_float(above_buy.get("20m"), 0.0) or 0.0,
+    )
+    sell_samples = [
+        value
+        for value in (
+            _safe_float(above_sell.get("10m")),
+            _safe_float(above_sell.get("20m")),
+        )
+        if value is not None
+    ]
+    buy_samples = [
+        value
+        for value in (
+            _safe_float(above_buy.get("10m")),
+            _safe_float(above_buy.get("20m")),
+        )
+        if value is not None
+    ]
     sell_threshold = _quantile_float(sell_samples, RECOVERY_REBOUND_QUANTILE)
     if sell_threshold is not None:
-        sell_threshold = max(sell_threshold, RECOVERY_WATCH_REBOUND_ABOVE_SELL_FLOOR_PCT)
+        sell_threshold = max(
+            sell_threshold, RECOVERY_WATCH_REBOUND_ABOVE_SELL_FLOOR_PCT
+        )
     buy_threshold = _quantile_float(buy_samples, RECOVERY_REBOUND_QUANTILE)
     if buy_threshold is not None:
-        buy_threshold = max(buy_threshold, RECOVERY_CONFIRMED_REBOUND_ABOVE_BUY_FLOOR_PCT)
+        buy_threshold = max(
+            buy_threshold, RECOVERY_CONFIRMED_REBOUND_ABOVE_BUY_FLOOR_PCT
+        )
     return {
         "source_path": str(path),
         "source_exists": path.exists(),
@@ -635,12 +774,18 @@ def _post_sell_recovery_metrics(target_date: str) -> dict[str, Any]:
         "rebound_above_sell_10_20m_pct": sell_10_20,
         "rebound_above_buy_10_20m_pct": buy_10_20,
         "threshold_contract": {
-            "threshold_mode": "dynamic_quantile"
-            if len(sell_samples + buy_samples) >= PANIC_STOP_LOSS_QUANTILE_SAMPLE_FLOOR
-            else "insufficient_sample",
-            "source_quality_blockers": []
-            if len(sell_samples + buy_samples) >= PANIC_STOP_LOSS_QUANTILE_SAMPLE_FLOOR
-            else ["insufficient_quantile_baseline"],
+            "threshold_mode": (
+                "dynamic_quantile"
+                if len(sell_samples + buy_samples)
+                >= PANIC_STOP_LOSS_QUANTILE_SAMPLE_FLOOR
+                else "insufficient_sample"
+            ),
+            "source_quality_blockers": (
+                []
+                if len(sell_samples + buy_samples)
+                >= PANIC_STOP_LOSS_QUANTILE_SAMPLE_FLOOR
+                else ["insufficient_quantile_baseline"]
+            ),
             "thresholds": {
                 "rebound_above_sell_10_20m_pct": _threshold_contract(
                     name="rebound_above_sell_10_20m_pct",
@@ -679,61 +824,123 @@ def _load_source_summary(target_date: str) -> dict[str, Any]:
         "buy_funnel_sentinel": {
             "path": str(_json_report_path("buy_funnel_sentinel", target_date)),
             "exists": _json_report_path("buy_funnel_sentinel", target_date).exists(),
-            "primary": ((buy or {}).get("classification") or {}).get("primary") if isinstance(buy, dict) else None,
-            "followup_route": ((buy or {}).get("followup") or {}).get("route") if isinstance(buy, dict) else None,
+            "primary": (
+                ((buy or {}).get("classification") or {}).get("primary")
+                if isinstance(buy, dict)
+                else None
+            ),
+            "followup_route": (
+                ((buy or {}).get("followup") or {}).get("route")
+                if isinstance(buy, dict)
+                else None
+            ),
         },
         "holding_exit_sentinel": {
             "path": str(_json_report_path("holding_exit_sentinel", target_date)),
             "exists": _json_report_path("holding_exit_sentinel", target_date).exists(),
-            "primary": ((hold or {}).get("classification") or {}).get("primary") if isinstance(hold, dict) else None,
-            "followup_route": ((hold or {}).get("followup") or {}).get("route") if isinstance(hold, dict) else None,
-            "sell_execution_scope": ((hold or {}).get("classification") or {}).get("sell_execution_scope") if isinstance(hold, dict) else None,
+            "primary": (
+                ((hold or {}).get("classification") or {}).get("primary")
+                if isinstance(hold, dict)
+                else None
+            ),
+            "followup_route": (
+                ((hold or {}).get("followup") or {}).get("route")
+                if isinstance(hold, dict)
+                else None
+            ),
+            "sell_execution_scope": (
+                ((hold or {}).get("classification") or {}).get("sell_execution_scope")
+                if isinstance(hold, dict)
+                else None
+            ),
         },
         "market_regime": {
             "path": str(_market_regime_path()),
             "exists": _market_regime_path().exists(),
-            "risk_state": market.get("risk_state") if isinstance(market, dict) else None,
-            "allow_swing_entry": market.get("allow_swing_entry") if isinstance(market, dict) else None,
-            "swing_score": market.get("swing_score") if isinstance(market, dict) else None,
+            "risk_state": (
+                market.get("risk_state") if isinstance(market, dict) else None
+            ),
+            "allow_swing_entry": (
+                market.get("allow_swing_entry") if isinstance(market, dict) else None
+            ),
+            "swing_score": (
+                market.get("swing_score") if isinstance(market, dict) else None
+            ),
         },
         "market_panic_breadth": {
             "path": str(_market_panic_breadth_path(target_date)),
             "exists": _market_panic_breadth_path(target_date).exists(),
-            "as_of": market_breadth.get("as_of") if isinstance(market_breadth, dict) else None,
-            "source_quality_status": ((market_breadth or {}).get("source_quality") or {}).get("status")
-            if isinstance(market_breadth, dict)
-            else None,
-            "risk_off_advisory": panic_breadth.get("risk_off_advisory") if isinstance(panic_breadth, dict) else False,
-            "single_market_risk_off_advisory": panic_breadth.get("single_market_risk_off_advisory")
-            if isinstance(panic_breadth, dict)
-            else False,
-            "weighted_market_breadth": panic_breadth.get("weighted_market_breadth")
-            if isinstance(panic_breadth, dict)
-            else {},
-            "industry_breadth": panic_breadth.get("industry_breadth") if isinstance(panic_breadth, dict) else {},
-            "market_indices": panic_breadth.get("market_indices") if isinstance(panic_breadth, dict) else {},
-            "reasons": panic_breadth.get("reasons") if isinstance(panic_breadth, dict) else [],
+            "as_of": (
+                market_breadth.get("as_of")
+                if isinstance(market_breadth, dict)
+                else None
+            ),
+            "source_quality_status": (
+                ((market_breadth or {}).get("source_quality") or {}).get("status")
+                if isinstance(market_breadth, dict)
+                else None
+            ),
+            "risk_off_advisory": (
+                panic_breadth.get("risk_off_advisory")
+                if isinstance(panic_breadth, dict)
+                else False
+            ),
+            "single_market_risk_off_advisory": (
+                panic_breadth.get("single_market_risk_off_advisory")
+                if isinstance(panic_breadth, dict)
+                else False
+            ),
+            "weighted_market_breadth": (
+                panic_breadth.get("weighted_market_breadth")
+                if isinstance(panic_breadth, dict)
+                else {}
+            ),
+            "industry_breadth": (
+                panic_breadth.get("industry_breadth")
+                if isinstance(panic_breadth, dict)
+                else {}
+            ),
+            "market_indices": (
+                panic_breadth.get("market_indices")
+                if isinstance(panic_breadth, dict)
+                else {}
+            ),
+            "reasons": (
+                panic_breadth.get("reasons") if isinstance(panic_breadth, dict) else []
+            ),
         },
     }
 
 
-def _microstructure_market_context(microstructure_detector: dict[str, Any], source_summary: dict[str, Any]) -> dict[str, Any]:
-    market = source_summary.get("market_regime") if isinstance(source_summary.get("market_regime"), dict) else {}
+def _microstructure_market_context(
+    microstructure_detector: dict[str, Any], source_summary: dict[str, Any]
+) -> dict[str, Any]:
+    market = (
+        source_summary.get("market_regime")
+        if isinstance(source_summary.get("market_regime"), dict)
+        else {}
+    )
     market_breadth = (
         source_summary.get("market_panic_breadth")
         if isinstance(source_summary.get("market_panic_breadth"), dict)
         else {}
     )
     risk_state = _safe_str(market.get("risk_state") or "UNKNOWN").upper()
-    evaluated_count = _safe_int(microstructure_detector.get("evaluated_symbol_count"), 0)
-    risk_off_count = _safe_int(microstructure_detector.get("risk_off_advisory_count"), 0)
+    evaluated_count = _safe_int(
+        microstructure_detector.get("evaluated_symbol_count"), 0
+    )
+    risk_off_count = _safe_int(
+        microstructure_detector.get("risk_off_advisory_count"), 0
+    )
     risk_off_ratio = _ratio(risk_off_count, evaluated_count)
     risk_off_ratio_threshold = _quantile_float(
         [100.0 if idx < risk_off_count else 0.0 for idx in range(evaluated_count)],
         MICRO_RISK_OFF_RATIO_QUANTILE,
     )
     if risk_off_ratio_threshold is not None:
-        risk_off_ratio_threshold = max(risk_off_ratio_threshold, MICRO_RISK_OFF_RATIO_FLOOR_PCT)
+        risk_off_ratio_threshold = max(
+            risk_off_ratio_threshold, MICRO_RISK_OFF_RATIO_FLOOR_PCT
+        )
     evaluated_contract = _threshold_contract(
         name="microstructure_evaluated_symbol_count",
         static_fallback_value=MICRO_MARKET_BREADTH_SYMBOL_FLOOR,
@@ -794,13 +1001,17 @@ def _microstructure_market_context(microstructure_detector: dict[str, Any], sour
         "swing_score": market.get("swing_score"),
         "market_panic_breadth_source": market_breadth.get("path"),
         "market_panic_breadth_as_of": market_breadth.get("as_of"),
-        "market_panic_breadth_source_quality_status": market_breadth.get("source_quality_status"),
+        "market_panic_breadth_source_quality_status": market_breadth.get(
+            "source_quality_status"
+        ),
         "market_panic_breadth_risk_off_advisory": live_breadth_risk_off,
         "market_panic_breadth_single_market_risk_off_advisory": bool(
             market_breadth.get("single_market_risk_off_advisory")
         ),
-        "market_panic_breadth_weighted": market_breadth.get("weighted_market_breadth") or {},
-        "market_panic_breadth_industry_breadth": market_breadth.get("industry_breadth") or {},
+        "market_panic_breadth_weighted": market_breadth.get("weighted_market_breadth")
+        or {},
+        "market_panic_breadth_industry_breadth": market_breadth.get("industry_breadth")
+        or {},
         "market_panic_breadth_indices": market_breadth.get("market_indices") or {},
         "evaluated_symbol_count": evaluated_count,
         "risk_off_advisory_count": risk_off_count,
@@ -808,12 +1019,18 @@ def _microstructure_market_context(microstructure_detector: dict[str, Any], sour
         "breadth_symbol_floor": MICRO_MARKET_BREADTH_SYMBOL_FLOOR,
         "breadth_risk_off_ratio_floor_pct": MICRO_RISK_OFF_RATIO_FLOOR_PCT,
         "threshold_contract": {
-            "threshold_mode": "dynamic_quantile"
-            if evaluated_contract["sample_ready"] and risk_off_contract["sample_ready"]
-            else "insufficient_sample",
-            "source_quality_blockers": []
-            if evaluated_contract["sample_ready"] and risk_off_contract["sample_ready"]
-            else ["insufficient_quantile_baseline"],
+            "threshold_mode": (
+                "dynamic_quantile"
+                if evaluated_contract["sample_ready"]
+                and risk_off_contract["sample_ready"]
+                else "insufficient_sample"
+            ),
+            "source_quality_blockers": (
+                []
+                if evaluated_contract["sample_ready"]
+                and risk_off_contract["sample_ready"]
+                else ["insufficient_quantile_baseline"]
+            ),
             "thresholds": {
                 "microstructure_evaluated_symbol_count": evaluated_contract,
                 "microstructure_risk_off_advisory_ratio_pct": risk_off_contract,
@@ -837,14 +1054,22 @@ def _resolve_panic_state(
 ) -> tuple[str, list[str]]:
     reasons: list[str] = []
     micro = microstructure_detector if isinstance(microstructure_detector, dict) else {}
-    micro_context = microstructure_market_context if isinstance(microstructure_market_context, dict) else {}
+    micro_context = (
+        microstructure_market_context
+        if isinstance(microstructure_market_context, dict)
+        else {}
+    )
     raw_micro_risk_off = _safe_int(micro.get("risk_off_advisory_count"), 0) > 0
     micro_risk_off = bool(micro_context.get("confirmed_micro_risk_off_advisory"))
-    market_breadth_risk_off = bool(micro_context.get("market_panic_breadth_risk_off_advisory"))
+    market_breadth_risk_off = bool(
+        micro_context.get("market_panic_breadth_risk_off_advisory")
+    )
     micro_recovery_watch = _safe_int(micro.get("recovery_candidate_count"), 0) > 0
     micro_recovery_confirmed = _safe_int(micro.get("recovery_confirmed_count"), 0) > 0
     portfolio_stop_loss_cluster = bool(panic_metrics.get("panic_detected"))
-    confirmed_panic = portfolio_stop_loss_cluster and (micro_risk_off or market_breadth_risk_off)
+    confirmed_panic = portfolio_stop_loss_cluster and (
+        micro_risk_off or market_breadth_risk_off
+    )
     risk_off_active = micro_risk_off or market_breadth_risk_off
     market_breadth_only_risk_off = (
         market_breadth_risk_off
@@ -860,34 +1085,64 @@ def _resolve_panic_state(
     ):
         reasons.append("panic thresholds not breached")
         if raw_micro_risk_off:
-            reasons.append("microstructure risk_off unconfirmed by market/breadth context")
+            reasons.append(
+                "microstructure risk_off unconfirmed by market/breadth context"
+            )
         return "NORMAL", reasons
     if portfolio_stop_loss_cluster:
         reasons.append("portfolio stop-loss cluster observed")
     if portfolio_stop_loss_cluster and not confirmed_panic:
-        reasons.append("portfolio stop-loss cluster unconfirmed by market/breadth context")
+        reasons.append(
+            "portfolio stop-loss cluster unconfirmed by market/breadth context"
+        )
     if confirmed_panic:
-        reasons.append("panic thresholds breached with market/microstructure confirmation")
+        reasons.append(
+            "panic thresholds breached with market/microstructure confirmation"
+        )
     if micro_risk_off:
-        reasons.append("microstructure risk_off advisory confirmed by market/breadth context")
+        reasons.append(
+            "microstructure risk_off advisory confirmed by market/breadth context"
+        )
     if market_breadth_risk_off:
         reasons.append("live market panic breadth risk_off advisory")
     elif raw_micro_risk_off:
         reasons.append("microstructure risk_off unconfirmed by market/breadth context")
     active_avg = active_recovery.get("avg_unrealized_profit_rate_pct")
     active_win_rate = active_recovery.get("win_rate_pct")
-    post_sell_above_sell = _safe_float(post_sell_recovery.get("rebound_above_sell_10_20m_pct"), 0.0) or 0.0
-    post_sell_above_buy = _safe_float(post_sell_recovery.get("rebound_above_buy_10_20m_pct"), 0.0) or 0.0
-    active_thresholds = ((active_recovery.get("threshold_contract") or {}).get("thresholds") or {})
-    post_sell_thresholds = ((post_sell_recovery.get("threshold_contract") or {}).get("thresholds") or {})
-    active_avg_contract = active_thresholds.get("active_avg_unrealized_profit_rate_pct") or {}
+    post_sell_above_sell = (
+        _safe_float(post_sell_recovery.get("rebound_above_sell_10_20m_pct"), 0.0) or 0.0
+    )
+    post_sell_above_buy = (
+        _safe_float(post_sell_recovery.get("rebound_above_buy_10_20m_pct"), 0.0) or 0.0
+    )
+    active_thresholds = (active_recovery.get("threshold_contract") or {}).get(
+        "thresholds"
+    ) or {}
+    post_sell_thresholds = (post_sell_recovery.get("threshold_contract") or {}).get(
+        "thresholds"
+    ) or {}
+    active_avg_contract = (
+        active_thresholds.get("active_avg_unrealized_profit_rate_pct") or {}
+    )
     active_win_contract = active_thresholds.get("active_win_rate_pct") or {}
-    sell_rebound_contract = post_sell_thresholds.get("rebound_above_sell_10_20m_pct") or {}
-    buy_rebound_contract = post_sell_thresholds.get("rebound_above_buy_10_20m_pct") or {}
-    active_avg_threshold = _safe_float(active_avg_contract.get("dynamic_threshold_value"), None)
-    active_win_threshold = _safe_float(active_win_contract.get("dynamic_threshold_value"), None)
-    sell_rebound_threshold = _safe_float(sell_rebound_contract.get("dynamic_threshold_value"), None)
-    buy_rebound_threshold = _safe_float(buy_rebound_contract.get("dynamic_threshold_value"), None)
+    sell_rebound_contract = (
+        post_sell_thresholds.get("rebound_above_sell_10_20m_pct") or {}
+    )
+    buy_rebound_contract = (
+        post_sell_thresholds.get("rebound_above_buy_10_20m_pct") or {}
+    )
+    active_avg_threshold = _safe_float(
+        active_avg_contract.get("dynamic_threshold_value"), None
+    )
+    active_win_threshold = _safe_float(
+        active_win_contract.get("dynamic_threshold_value"), None
+    )
+    sell_rebound_threshold = _safe_float(
+        sell_rebound_contract.get("dynamic_threshold_value"), None
+    )
+    buy_rebound_threshold = _safe_float(
+        buy_rebound_contract.get("dynamic_threshold_value"), None
+    )
     active_confirmed = (
         active_recovery.get("profit_sample", 0) > 0
         and active_win_rate is not None
@@ -906,7 +1161,9 @@ def _resolve_panic_state(
     )
     micro_confirmed_allowed = micro_recovery_confirmed and not risk_off_active
     if active_confirmed or post_sell_confirmed or micro_confirmed_allowed:
-        reasons.append("recovery confirmed by active sim/probe or post-sell rebound above buy")
+        reasons.append(
+            "recovery confirmed by active sim/probe or post-sell rebound above buy"
+        )
         return "RECOVERY_CONFIRMED", reasons
     if micro_recovery_confirmed and risk_off_active:
         reasons.append("microstructure recovery confirmed but market risk-off remains")
@@ -921,14 +1178,23 @@ def _resolve_panic_state(
         and sell_rebound_threshold is not None
         and post_sell_above_sell >= sell_rebound_threshold
     )
-    if active_watch or post_sell_watch or micro_recovery_watch or micro_recovery_confirmed:
-        reasons.append("recovery watch triggered by active sim/probe or post-sell rebound above sell")
+    if (
+        active_watch
+        or post_sell_watch
+        or micro_recovery_watch
+        or micro_recovery_confirmed
+    ):
+        reasons.append(
+            "recovery watch triggered by active sim/probe or post-sell rebound above sell"
+        )
         return "RECOVERY_WATCH", reasons
     if market_breadth_only_risk_off:
         reasons.append("market breadth risk-off watch without panic confirmation")
         return "RECOVERY_WATCH", reasons
     if portfolio_stop_loss_cluster and not confirmed_panic:
-        reasons.append("portfolio-local stop-loss cluster watch without panic confirmation")
+        reasons.append(
+            "portfolio-local stop-loss cluster watch without panic confirmation"
+        )
         return "RECOVERY_WATCH", reasons
     reasons.append("recovery conditions not yet met")
     return "PANIC_SELL", reasons
@@ -939,7 +1205,11 @@ def _risk_regime_gate(
     panic_metrics: dict[str, Any],
     microstructure_market_context: dict[str, Any],
 ) -> dict[str, Any]:
-    threshold_contract = panic_metrics.get("threshold_contract") if isinstance(panic_metrics.get("threshold_contract"), dict) else {}
+    threshold_contract = (
+        panic_metrics.get("threshold_contract")
+        if isinstance(panic_metrics.get("threshold_contract"), dict)
+        else {}
+    )
     micro_contract = (
         microstructure_market_context.get("threshold_contract")
         if isinstance(microstructure_market_context.get("threshold_contract"), dict)
@@ -965,7 +1235,9 @@ def _risk_regime_gate(
         "risk_regime_gate_state": state,
         "risk_regime_gate_authority": "source_quality_only",
         "risk_regime_threshold_mode": mode,
-        "source_quality_blockers": sorted(set(str(item) for item in blockers if str(item))),
+        "source_quality_blockers": sorted(
+            set(str(item) for item in blockers if str(item))
+        ),
         "confirmed_evidence_count": 1 if state == "confirmed_panic" else 0,
     }
 
@@ -1030,7 +1302,9 @@ def _panic_regime_contract(mode: str) -> dict[str, Any]:
     }
 
 
-def _defense_actions(panic_state: str, panic_metrics: dict[str, Any]) -> list[dict[str, Any]]:
+def _defense_actions(
+    panic_state: str, panic_metrics: dict[str, Any]
+) -> list[dict[str, Any]]:
     actions = [
         {
             "id": "hard_protect_emergency_delay_forbidden",
@@ -1075,29 +1349,45 @@ def _defense_actions(panic_state: str, panic_metrics: dict[str, Any]) -> list[di
     return actions
 
 
-def _canary_candidates(panic_state: str, panic_metrics: dict[str, Any], active_recovery: dict[str, Any]) -> list[dict[str, Any]]:
+def _canary_candidates(
+    panic_state: str, panic_metrics: dict[str, Any], active_recovery: dict[str, Any]
+) -> list[dict[str, Any]]:
     return [
         {
             "family": "panic_entry_freeze_guard",
-            "status": "report_only_candidate" if panic_state != "NORMAL" else "inactive_no_panic",
+            "status": (
+                "report_only_candidate"
+                if panic_state != "NORMAL"
+                else "inactive_no_panic"
+            ),
             "allowed_runtime_apply": False,
             "next_owner": "postclose_threshold_cycle",
             "guard": "PANIC_SELL blocks entry relaxation; recovery probe must be separate from threshold relaxation",
         },
         {
             "family": "panic_stop_confirmation",
-            "status": "report_only_candidate" if panic_metrics.get("confirmation_eligible_exit_count", 0) else "hold_no_eligible_exit",
+            "status": (
+                "report_only_candidate"
+                if panic_metrics.get("confirmation_eligible_exit_count", 0)
+                else "hold_no_eligible_exit"
+            ),
             "allowed_runtime_apply": False,
             "next_owner": "postclose_holding_exit_attribution",
             "guard": "hard/protect/emergency stops excluded; soft/trailing/flow only; one-time 20-60s future canary",
         },
         {
             "family": "panic_rebound_probe",
-            "status": "report_only_candidate" if panic_state == "RECOVERY_CONFIRMED" else "hold_until_recovery_confirmed",
+            "status": (
+                "report_only_candidate"
+                if panic_state == "RECOVERY_CONFIRMED"
+                else "hold_until_recovery_confirmed"
+            ),
             "allowed_runtime_apply": False,
             "next_owner": "postclose_threshold_cycle",
             "guard": "sim/probe only with actual_order_submitted=false and broker_order_forbidden=true",
-            "provenance_check_passed": bool((active_recovery.get("provenance_check") or {}).get("passed", False)),
+            "provenance_check_passed": bool(
+                (active_recovery.get("provenance_check") or {}).get("passed", False)
+            ),
         },
         {
             "family": "panic_attribution_pack",
@@ -1116,16 +1406,25 @@ def build_panic_sell_defense_report(
     dry_run: bool = False,
 ) -> dict[str, Any]:
     events = _load_jsonl(_pipeline_events_path(target_date))
-    event_datetimes = [dt for row in events for dt in [_parse_dt(row.get("emitted_at"))] if dt is not None]
+    event_datetimes = [
+        dt
+        for row in events
+        for dt in [_parse_dt(row.get("emitted_at"))]
+        if dt is not None
+    ]
     latest_dt = max(event_datetimes) if event_datetimes else None
     if as_of is None:
         as_of = datetime.now()
     panic_metrics = _summarize_exit_metrics(events, as_of=as_of)
     active_recovery = _summarize_active_recovery()
     post_sell_recovery = _post_sell_recovery_metrics(target_date)
-    microstructure_detector = summarize_microstructure_detector_from_events(events, as_of=as_of)
+    microstructure_detector = summarize_microstructure_detector_from_events(
+        events, as_of=as_of
+    )
     source_summary = _load_source_summary(target_date)
-    microstructure_market_context = _microstructure_market_context(microstructure_detector, source_summary)
+    microstructure_market_context = _microstructure_market_context(
+        microstructure_detector, source_summary
+    )
     panic_state, reasons = _resolve_panic_state(
         panic_metrics,
         active_recovery,
@@ -1134,14 +1433,18 @@ def build_panic_sell_defense_report(
         microstructure_market_context,
     )
     panic_regime_mode = _panic_regime_mode(panic_state)
-    risk_regime_gate = _risk_regime_gate(panic_state, panic_metrics, microstructure_market_context)
+    risk_regime_gate = _risk_regime_gate(
+        panic_state, panic_metrics, microstructure_market_context
+    )
     return {
         "schema_version": SCHEMA_VERSION,
         "report_type": "panic_sell_defense",
         "target_date": target_date,
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "as_of": as_of.isoformat(timespec="seconds"),
-        "latest_event_at": latest_dt.isoformat(timespec="seconds") if latest_dt else None,
+        "latest_event_at": (
+            latest_dt.isoformat(timespec="seconds") if latest_dt else None
+        ),
         "dry_run": bool(dry_run),
         "policy": {
             "report_only": True,
@@ -1165,7 +1468,9 @@ def build_panic_sell_defense_report(
         "microstructure_detector": microstructure_detector,
         "microstructure_market_context": microstructure_market_context,
         "defense_actions": _defense_actions(panic_state, panic_metrics),
-        "canary_candidates": _canary_candidates(panic_state, panic_metrics, active_recovery),
+        "canary_candidates": _canary_candidates(
+            panic_state, panic_metrics, active_recovery
+        ),
         "source_summary": source_summary,
         "qna_policy": {
             "panic_detection_threshold": "portfolio stop-loss cluster uses rolling intraday quantile evidence only; PANIC_DETECTED requires market or confirmed microstructure risk-off context",
@@ -1189,7 +1494,11 @@ def build_markdown(report: dict[str, Any]) -> str:
     panic = report["panic_metrics"]
     active = report["recovery_metrics"]["active_sim_probe"]
     post_sell = report["recovery_metrics"]["post_sell_feedback"]
-    micro = report.get("microstructure_detector") if isinstance(report.get("microstructure_detector"), dict) else {}
+    micro = (
+        report.get("microstructure_detector")
+        if isinstance(report.get("microstructure_detector"), dict)
+        else {}
+    )
     micro_market = (
         report.get("microstructure_market_context")
         if isinstance(report.get("microstructure_market_context"), dict)
@@ -1298,7 +1607,9 @@ def save_report_artifacts(report: dict[str, Any]) -> dict[str, str]:
     target_date = report["target_date"]
     json_path = report_dir / f"panic_sell_defense_{target_date}.json"
     md_path = report_dir / f"panic_sell_defense_{target_date}.md"
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     md_path.write_text(build_markdown(report), encoding="utf-8")
     return {"json": str(json_path), "markdown": str(md_path)}
 
@@ -1313,8 +1624,12 @@ def _parse_as_of(value: str | None) -> datetime | None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Build report-only panic sell defense report.")
-    parser.add_argument("--date", dest="target_date", default=datetime.now().strftime("%Y-%m-%d"))
+    parser = argparse.ArgumentParser(
+        description="Build report-only panic sell defense report."
+    )
+    parser.add_argument(
+        "--date", dest="target_date", default=datetime.now().strftime("%Y-%m-%d")
+    )
     parser.add_argument("--as-of", dest="as_of", default="")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--print-json", action="store_true")
@@ -1337,7 +1652,11 @@ def main(argv: list[str] | None = None) -> int:
         "artifacts": artifacts,
     }
     if args.print_json:
-        print(json.dumps(report if args.dry_run else summary, ensure_ascii=False, indent=2))
+        print(
+            json.dumps(
+                report if args.dry_run else summary, ensure_ascii=False, indent=2
+            )
+        )
     else:
         print(json.dumps(summary, ensure_ascii=False))
     return 0

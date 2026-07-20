@@ -10,14 +10,15 @@ from typing import Any
 
 from src.utils.constants import DATA_DIR
 
-
 REPORT_TYPE = "source_quality_clean_baseline"
 POLICY_PATH = DATA_DIR / "source_quality" / "clean_baseline_policy.json"
 REPORT_QUARANTINE_DIR = DATA_DIR / "source_quality" / "report_quarantine"
 ANALYTICS_QUARANTINE_DIR = DATA_DIR / "source_quality" / "analytics_quarantine"
 DEFAULT_START_DATE = "2026-06-04"
 DEFAULT_START_TS_KST = "2026-06-04T14:29:09+09:00"
-DEFAULT_REASON = "operator_requested_clean_tuning_restart_after_sim_probe_provenance_patch"
+DEFAULT_REASON = (
+    "operator_requested_clean_tuning_restart_after_sim_probe_provenance_patch"
+)
 DATE_TOKEN_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 FORBIDDEN_USES = [
     "runtime_threshold_apply",
@@ -57,7 +58,10 @@ def clean_baseline_policy() -> dict[str, Any]:
     ).strip()
     return {
         "report_type": REPORT_TYPE,
-        "enabled": str(os.environ.get("KORSTOCKSCAN_CLEAN_TUNING_BASELINE_ENABLED") or payload.get("enabled", True))
+        "enabled": str(
+            os.environ.get("KORSTOCKSCAN_CLEAN_TUNING_BASELINE_ENABLED")
+            or payload.get("enabled", True)
+        )
         .strip()
         .lower()
         not in {"0", "false", "no", "off"},
@@ -81,20 +85,26 @@ def is_date_allowed(source_date: str, policy: dict[str, Any] | None = None) -> b
         return True
     try:
         source = date.fromisoformat(str(source_date).strip())
-        baseline = date.fromisoformat(str(policy.get("clean_tuning_baseline_date") or DEFAULT_START_DATE))
+        baseline = date.fromisoformat(
+            str(policy.get("clean_tuning_baseline_date") or DEFAULT_START_DATE)
+        )
     except ValueError:
         return False
     return source >= baseline
 
 
-def filter_allowed_dates(source_dates: list[str], policy: dict[str, Any] | None = None) -> tuple[list[str], list[str]]:
+def filter_allowed_dates(
+    source_dates: list[str], policy: dict[str, Any] | None = None
+) -> tuple[list[str], list[str]]:
     policy = policy or clean_baseline_policy()
     allowed = [item for item in source_dates if is_date_allowed(item, policy)]
     excluded = [item for item in source_dates if item not in allowed]
     return allowed, excluded
 
 
-def policy_warning_for_date(target_date: str, policy: dict[str, Any] | None = None) -> str | None:
+def policy_warning_for_date(
+    target_date: str, policy: dict[str, Any] | None = None
+) -> str | None:
     policy = policy or clean_baseline_policy()
     if is_date_allowed(target_date, policy):
         return None
@@ -105,7 +115,9 @@ def report_date_tokens(path: str | Path) -> list[str]:
     return list(dict.fromkeys(DATE_TOKEN_RE.findall(str(path))))
 
 
-def report_is_decision_allowed(path: str | Path, policy: dict[str, Any] | None = None) -> bool:
+def report_is_decision_allowed(
+    path: str | Path, policy: dict[str, Any] | None = None
+) -> bool:
     policy = policy or clean_baseline_policy()
     if not policy.get("enabled", True):
         return True
@@ -138,12 +150,16 @@ def _comparable_datetimes(left: datetime, right: datetime) -> tuple[datetime, da
     return left, right
 
 
-def file_modified_before_clean_baseline(path: str | Path, policy: dict[str, Any] | None = None) -> bool:
+def file_modified_before_clean_baseline(
+    path: str | Path, policy: dict[str, Any] | None = None
+) -> bool:
     path = Path(path)
     policy = policy or clean_baseline_policy()
     if not policy.get("enabled", True):
         return False
-    baseline_ts = _coerce_datetime(str(policy.get("clean_tuning_baseline_ts_kst") or DEFAULT_START_TS_KST))
+    baseline_ts = _coerce_datetime(
+        str(policy.get("clean_tuning_baseline_ts_kst") or DEFAULT_START_TS_KST)
+    )
     if baseline_ts is None:
         return False
     try:
@@ -154,7 +170,9 @@ def file_modified_before_clean_baseline(path: str | Path, policy: dict[str, Any]
     return modified_at < baseline_ts
 
 
-def report_generated_before_clean_baseline(path: str | Path, policy: dict[str, Any] | None = None) -> bool:
+def report_generated_before_clean_baseline(
+    path: str | Path, policy: dict[str, Any] | None = None
+) -> bool:
     path = Path(path)
     policy = policy or clean_baseline_policy()
     if not policy.get("enabled", True):
@@ -164,7 +182,9 @@ def report_generated_before_clean_baseline(path: str | Path, policy: dict[str, A
     baseline_date = str(policy.get("clean_tuning_baseline_date") or DEFAULT_START_DATE)
     if baseline_date not in report_date_tokens(path):
         return False
-    baseline_ts = _coerce_datetime(str(policy.get("clean_tuning_baseline_ts_kst") or DEFAULT_START_TS_KST))
+    baseline_ts = _coerce_datetime(
+        str(policy.get("clean_tuning_baseline_ts_kst") or DEFAULT_START_TS_KST)
+    )
     if baseline_ts is None:
         return False
     generated_at: datetime | None = None
@@ -184,7 +204,9 @@ def report_generated_before_clean_baseline(path: str | Path, policy: dict[str, A
     return generated_at < baseline_ts
 
 
-def analytics_quarantine_reason(path: str | Path, policy: dict[str, Any] | None = None) -> str | None:
+def analytics_quarantine_reason(
+    path: str | Path, policy: dict[str, Any] | None = None
+) -> str | None:
     path = Path(path)
     policy = policy or clean_baseline_policy()
     if not policy.get("enabled", True):
@@ -215,9 +237,13 @@ def report_quarantine_reason(
         return None
     tokens = report_date_tokens(path)
     if not tokens:
-        return "undated_report_not_allowed_for_clean_tuning" if include_undated else None
+        return (
+            "undated_report_not_allowed_for_clean_tuning" if include_undated else None
+        )
     try:
-        baseline = date.fromisoformat(str(policy.get("clean_tuning_baseline_date") or DEFAULT_START_DATE))
+        baseline = date.fromisoformat(
+            str(policy.get("clean_tuning_baseline_date") or DEFAULT_START_DATE)
+        )
     except ValueError:
         return "invalid_clean_tuning_baseline_policy"
     parsed = []
@@ -245,7 +271,9 @@ def quarantine_report_tree(
     dry_run: bool = False,
 ) -> dict[str, Any]:
     policy = policy or clean_baseline_policy()
-    run_id = datetime.now().astimezone().strftime("%Y-%m-%d_clean_report_quarantine_%H%M%S")
+    run_id = (
+        datetime.now().astimezone().strftime("%Y-%m-%d_clean_report_quarantine_%H%M%S")
+    )
     destination_root = quarantine_dir / run_id
     manifest_rows: list[dict[str, Any]] = []
     for path in sorted(report_dir.rglob("*")):
@@ -278,7 +306,10 @@ def quarantine_report_tree(
             shutil.move(str(source), str(dest))
         destination_root.mkdir(parents=True, exist_ok=True)
         manifest_path = destination_root / "manifest.json"
-        manifest_path.write_text(json.dumps(manifest_rows, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        manifest_path.write_text(
+            json.dumps(manifest_rows, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
         tsv_path = destination_root / "manifest.tsv"
         tsv_path.write_text(
             "source_path\tquarantine_path\treason\tdate_tokens\n"
@@ -321,5 +352,7 @@ def write_policy(
         "forbidden_uses": list(FORBIDDEN_USES),
     }
     POLICY_PATH.parent.mkdir(parents=True, exist_ok=True)
-    POLICY_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    POLICY_PATH.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
     return clean_baseline_policy()

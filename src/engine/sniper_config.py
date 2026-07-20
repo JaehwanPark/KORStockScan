@@ -9,7 +9,7 @@ from src.utils.logger import log_error
 def load_system_config():
     target = CONFIG_PATH if CONFIG_PATH.exists() else DEV_PATH
     try:
-        with open(target, 'r', encoding='utf-8') as f:
+        with open(target, "r", encoding="utf-8") as f:
             return json.load(f)
     except Exception as exc:
         log_error(f"Config load failed: {exc}")

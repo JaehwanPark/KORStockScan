@@ -29,11 +29,7 @@ def _safe_positive_delta(end_value: int | float, start_value: int | float) -> in
 
 
 def _normalized_tag_set(raw_tags) -> set[str]:
-    return {
-        str(tag).strip().upper()
-        for tag in (raw_tags or ())
-        if str(tag).strip()
-    }
+    return {str(tag).strip().upper() for tag in (raw_tags or ()) if str(tag).strip()}
 
 
 def _try_dynamic_strength_relief(
@@ -54,18 +50,31 @@ def _try_dynamic_strength_relief(
     if not bool(getattr(TRADING_RULES, "SCALP_DYNAMIC_STRENGTH_RELIEF_ENABLED", False)):
         return False
 
-    allow_tags = _normalized_tag_set(getattr(TRADING_RULES, "SCALP_DYNAMIC_STRENGTH_RELIEF_TAGS", ()))
+    allow_tags = _normalized_tag_set(
+        getattr(TRADING_RULES, "SCALP_DYNAMIC_STRENGTH_RELIEF_TAGS", ())
+    )
     if allow_tags and str(profile_tag or "").upper() not in allow_tags:
         return False
 
-    allowed_reasons = _normalized_tag_set(getattr(TRADING_RULES, "SCALP_DYNAMIC_STRENGTH_RELIEF_ALLOWED_REASONS", ()))
+    allowed_reasons = _normalized_tag_set(
+        getattr(TRADING_RULES, "SCALP_DYNAMIC_STRENGTH_RELIEF_ALLOWED_REASONS", ())
+    )
     if allowed_reasons and str(reason or "").upper() not in allowed_reasons:
         return False
 
-    min_buy_value_ratio = float(getattr(TRADING_RULES, "SCALP_DYNAMIC_STRENGTH_RELIEF_MIN_BUY_VALUE_RATIO", 0.85) or 0.85)
-    buy_ratio_tol = float(getattr(TRADING_RULES, "SCALP_DYNAMIC_STRENGTH_RELIEF_BUY_RATIO_TOL", 0.03) or 0.03)
+    min_buy_value_ratio = float(
+        getattr(
+            TRADING_RULES, "SCALP_DYNAMIC_STRENGTH_RELIEF_MIN_BUY_VALUE_RATIO", 0.85
+        )
+        or 0.85
+    )
+    buy_ratio_tol = float(
+        getattr(TRADING_RULES, "SCALP_DYNAMIC_STRENGTH_RELIEF_BUY_RATIO_TOL", 0.03)
+        or 0.03
+    )
     exec_buy_ratio_tol = float(
-        getattr(TRADING_RULES, "SCALP_DYNAMIC_STRENGTH_RELIEF_EXEC_BUY_RATIO_TOL", 0.03) or 0.03
+        getattr(TRADING_RULES, "SCALP_DYNAMIC_STRENGTH_RELIEF_EXEC_BUY_RATIO_TOL", 0.03)
+        or 0.03
     )
     min_base_floor = max(min_base - 1.5, 0.0)
 
@@ -104,30 +113,57 @@ def _try_dynamic_strength_relief(
     return True
 
 
-def evaluate_scalping_strength_momentum(ws_data: dict, *, now_ts: float | None = None) -> dict:
+def evaluate_scalping_strength_momentum(
+    ws_data: dict, *, now_ts: float | None = None
+) -> dict:
     ws_data = ws_data or {}
     window_sec = int(getattr(TRADING_RULES, "SCALP_VPW_WINDOW_SECONDS", 5) or 5)
     min_base = float(getattr(TRADING_RULES, "SCALP_VPW_MIN_BASE", 95.0) or 95.0)
     raw_target_delta = getattr(TRADING_RULES, "SCALP_VPW_TARGET_DELTA", 10.0)
     target_delta = float(10.0 if raw_target_delta is None else raw_target_delta)
-    min_buy_value = int(getattr(TRADING_RULES, "SCALP_VPW_MIN_BUY_VALUE", 20_000) or 20_000)
-    min_buy_ratio = float(getattr(TRADING_RULES, "SCALP_VPW_MIN_BUY_RATIO", 0.60) or 0.60)
-    min_exec_buy_ratio = float(getattr(TRADING_RULES, "SCALP_VPW_MIN_EXEC_BUY_RATIO", 0.56) or 0.56)
+    min_buy_value = int(
+        getattr(TRADING_RULES, "SCALP_VPW_MIN_BUY_VALUE", 20_000) or 20_000
+    )
+    min_buy_ratio = float(
+        getattr(TRADING_RULES, "SCALP_VPW_MIN_BUY_RATIO", 0.60) or 0.60
+    )
+    min_exec_buy_ratio = float(
+        getattr(TRADING_RULES, "SCALP_VPW_MIN_EXEC_BUY_RATIO", 0.56) or 0.56
+    )
     min_net_buy_qty = int(getattr(TRADING_RULES, "SCALP_VPW_MIN_NET_BUY_QTY", 1) or 1)
-    strong_absolute = float(getattr(TRADING_RULES, "SCALP_VPW_STRONG_ABSOLUTE", 115.0) or 115.0)
-    strong_buy_value = int(getattr(TRADING_RULES, "SCALP_VPW_STRONG_BUY_VALUE", 40_000) or 40_000)
-    profile_tag = str(ws_data.get("position_tag") or ws_data.get("_position_tag") or "").strip().upper()
+    strong_absolute = float(
+        getattr(TRADING_RULES, "SCALP_VPW_STRONG_ABSOLUTE", 115.0) or 115.0
+    )
+    strong_buy_value = int(
+        getattr(TRADING_RULES, "SCALP_VPW_STRONG_BUY_VALUE", 40_000) or 40_000
+    )
+    profile_tag = (
+        str(ws_data.get("position_tag") or ws_data.get("_position_tag") or "")
+        .strip()
+        .upper()
+    )
     relaxed_tags = {
         str(tag).strip().upper()
         for tag in (getattr(TRADING_RULES, "SCALP_VPW_RELAX_TAGS", ()) or ())
         if str(tag).strip()
     }
     if profile_tag and profile_tag in relaxed_tags:
-        min_base = float(getattr(TRADING_RULES, "SCALP_VPW_RELAX_MIN_BASE", min_base) or min_base)
-        min_buy_value = int(getattr(TRADING_RULES, "SCALP_VPW_RELAX_MIN_BUY_VALUE", min_buy_value) or min_buy_value)
-        min_buy_ratio = float(getattr(TRADING_RULES, "SCALP_VPW_RELAX_MIN_BUY_RATIO", min_buy_ratio) or min_buy_ratio)
+        min_base = float(
+            getattr(TRADING_RULES, "SCALP_VPW_RELAX_MIN_BASE", min_base) or min_base
+        )
+        min_buy_value = int(
+            getattr(TRADING_RULES, "SCALP_VPW_RELAX_MIN_BUY_VALUE", min_buy_value)
+            or min_buy_value
+        )
+        min_buy_ratio = float(
+            getattr(TRADING_RULES, "SCALP_VPW_RELAX_MIN_BUY_RATIO", min_buy_ratio)
+            or min_buy_ratio
+        )
         min_exec_buy_ratio = float(
-            getattr(TRADING_RULES, "SCALP_VPW_RELAX_MIN_EXEC_BUY_RATIO", min_exec_buy_ratio) or min_exec_buy_ratio
+            getattr(
+                TRADING_RULES, "SCALP_VPW_RELAX_MIN_EXEC_BUY_RATIO", min_exec_buy_ratio
+            )
+            or min_exec_buy_ratio
         )
         threshold_profile = "relaxed"
     else:
@@ -175,25 +211,33 @@ def evaluate_scalping_strength_momentum(ws_data: dict, *, now_ts: float | None =
         ts = _to_float(item.get("ts"), 0.0)
         if ts <= 0:
             continue
-        normalized.append({
-            "ts": ts,
-            "v_pw": _to_float(item.get("v_pw"), 0.0),
-            "tick_value": abs(_to_int(item.get("tick_value"), 0)),
-            "buy_tick_value": abs(_to_int(item.get("buy_tick_value"), 0)),
-            "sell_tick_value": abs(_to_int(item.get("sell_tick_value"), 0)),
-            "buy_qty": abs(_to_int(item.get("buy_qty"), 0)),
-            "sell_qty": abs(_to_int(item.get("sell_qty"), 0)),
-            "buy_exec_qty_cum": abs(_to_int(item.get("buy_exec_qty_cum", item.get("buy_qty")), 0)),
-            "sell_exec_qty_cum": abs(_to_int(item.get("sell_exec_qty_cum", item.get("sell_qty")), 0)),
-            "buy_ratio": _to_float(item.get("buy_ratio"), 0.0),
-        })
+        normalized.append(
+            {
+                "ts": ts,
+                "v_pw": _to_float(item.get("v_pw"), 0.0),
+                "tick_value": abs(_to_int(item.get("tick_value"), 0)),
+                "buy_tick_value": abs(_to_int(item.get("buy_tick_value"), 0)),
+                "sell_tick_value": abs(_to_int(item.get("sell_tick_value"), 0)),
+                "buy_qty": abs(_to_int(item.get("buy_qty"), 0)),
+                "sell_qty": abs(_to_int(item.get("sell_qty"), 0)),
+                "buy_exec_qty_cum": abs(
+                    _to_int(item.get("buy_exec_qty_cum", item.get("buy_qty")), 0)
+                ),
+                "sell_exec_qty_cum": abs(
+                    _to_int(item.get("sell_exec_qty_cum", item.get("sell_qty")), 0)
+                ),
+                "buy_ratio": _to_float(item.get("buy_ratio"), 0.0),
+            }
+        )
 
     if not normalized:
         result["reason"] = "insufficient_history"
         return result
 
     normalized.sort(key=lambda item: item["ts"])
-    current_ts = float(now_ts if now_ts is not None else normalized[-1]["ts"] or time.time())
+    current_ts = float(
+        now_ts if now_ts is not None else normalized[-1]["ts"] or time.time()
+    )
     window_start_ts = current_ts - window_sec
 
     base_sample = None
@@ -225,12 +269,15 @@ def evaluate_scalping_strength_momentum(ws_data: dict, *, now_ts: float | None =
     window_buy_qty = _safe_positive_delta(end_buy_qty_cum, base_buy_qty_cum)
     window_sell_qty = _safe_positive_delta(end_sell_qty_cum, base_sell_qty_cum)
     window_net_buy_qty = window_buy_qty - window_sell_qty
-    buy_ratio = (window_buy_value / window_total_value) if window_total_value > 0 else 0.0
+    buy_ratio = (
+        (window_buy_value / window_total_value) if window_total_value > 0 else 0.0
+    )
     exec_total_qty = window_buy_qty + window_sell_qty
     exec_buy_ratio = (window_buy_qty / exec_total_qty) if exec_total_qty > 0 else 0.0
     avg_buy_ratio = (
         sum(item["buy_ratio"] for item in window_samples) / len(window_samples)
-        if window_samples else 0.0
+        if window_samples
+        else 0.0
     )
 
     current_vpw = result["current_vpw"]
@@ -309,11 +356,19 @@ def evaluate_scalping_strength_momentum(ws_data: dict, *, now_ts: float | None =
     if window_net_buy_qty < min_net_buy_qty:
         result["reason"] = "below_net_buy_qty"
         return result
-    if current_vpw >= strong_absolute and window_buy_value >= min_buy_value and exec_buy_ratio >= min_exec_buy_ratio:
+    if (
+        current_vpw >= strong_absolute
+        and window_buy_value >= min_buy_value
+        and exec_buy_ratio >= min_exec_buy_ratio
+    ):
         result["allowed"] = True
         result["reason"] = "strong_absolute_override"
         return result
-    if window_buy_value >= strong_buy_value and buy_ratio >= min_buy_ratio and window_net_buy_qty > 0:
+    if (
+        window_buy_value >= strong_buy_value
+        and buy_ratio >= min_buy_ratio
+        and window_net_buy_qty > 0
+    ):
         result["allowed"] = True
         result["reason"] = "buy_value_override"
         return result

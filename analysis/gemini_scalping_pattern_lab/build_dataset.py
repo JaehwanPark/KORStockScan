@@ -19,6 +19,7 @@ except ImportError:  # pragma: no cover - direct script execution
 
 try:
     from src.engine.tuning_duckdb_repository import TuningDuckDBRepository
+
     DUCKDB_AVAILABLE = True
 except Exception:
     TuningDuckDBRepository = None
@@ -78,14 +79,20 @@ def _load_jsonl_rows(file_path: Path) -> list[dict]:
     return rows
 
 
-def _process_pipeline_events_rows(rows, server_name, funnel_counts, trade_info, seq_info):
+def _process_pipeline_events_rows(
+    rows, server_name, funnel_counts, trade_info, seq_info
+):
     for data in rows:
         stage = data.get("stage", "")
         record_id = data.get("record_id")
         if not record_id:
             continue
 
-        date_str = data.get("emitted_date") or str(data.get("emitted_at", ""))[:10] or "unknown"
+        date_str = (
+            data.get("emitted_date")
+            or str(data.get("emitted_at", ""))[:10]
+            or "unknown"
+        )
 
         if "latency_block" in stage:
             funnel_counts[date_str]["latency_block_events"] += 1
@@ -168,16 +175,13 @@ def _process_post_sell_rows(rows, server_name, trade_info, seq_info, trade_facts
             seq_flags=seq_flags,
         )
         rec_date = (
-            data.get("signal_date")
-            or str(entry_time)[:10]
-            or str(exit_time)[:10]
-            or ""
+            data.get("signal_date") or str(entry_time)[:10] or str(exit_time)[:10] or ""
         )
 
         outcome = data.get("outcome", "COMPLETED")
         profit_rate = data.get("profit_rate")
-        profit_valid_flag = (
-            outcome == "COMPLETED" and isinstance(profit_rate, (int, float))
+        profit_valid_flag = outcome == "COMPLETED" and isinstance(
+            profit_rate, (int, float)
         )
 
         trade_facts.append(
@@ -224,7 +228,7 @@ def _load_from_duckdb(target_date: str) -> list[dict]:
                 FROM v_pipeline_events
                 WHERE emitted_date = ?
                 """,
-                [target_date]
+                [target_date],
             )
         if df.empty:
             return []
@@ -276,7 +280,7 @@ def _extract_date_token(name: str) -> str | None:
         except ValueError:
             return None
     for idx in range(len(name) - 9):
-        token = name[idx:idx + 10]
+        token = name[idx : idx + 10]
         try:
             date.fromisoformat(token)
             return token
@@ -287,7 +291,9 @@ def _extract_date_token(name: str) -> str | None:
 
 def _discover_available_pipeline_dates() -> set[str]:
     dates: set[str] = set()
-    for path in _iter_jsonl_files(config.LOCAL_PIPELINE_DIR, name_contains="pipeline_events_"):
+    for path in _iter_jsonl_files(
+        config.LOCAL_PIPELINE_DIR, name_contains="pipeline_events_"
+    ):
         token = _extract_date_token(path.name)
         if token:
             dates.add(token)
@@ -329,10 +335,14 @@ def main():
         local_pipeline_sources[source] += 1
         if rows:
             covered_dates.add(date_str)
-            _process_pipeline_events_rows(rows, "local", funnel_counts, trade_info, seq_info)
+            _process_pipeline_events_rows(
+                rows, "local", funnel_counts, trade_info, seq_info
+            )
 
     # LOCAL post-sell: 파일(jsonl/jsonl.gz)
-    for file_path in _iter_jsonl_files(config.LOCAL_POST_SELL_EVAL_DIR, name_contains="evaluations"):
+    for file_path in _iter_jsonl_files(
+        config.LOCAL_POST_SELL_EVAL_DIR, name_contains="evaluations"
+    ):
         if not any(token in file_path.name for token in target_date_tokens):
             continue
         _process_post_sell_rows(
@@ -349,11 +359,19 @@ def main():
                 continue
             if "pipeline_events" in file_path.name:
                 _process_pipeline_events_rows(
-                    _load_jsonl_rows(file_path), "remote", funnel_counts, trade_info, seq_info
+                    _load_jsonl_rows(file_path),
+                    "remote",
+                    funnel_counts,
+                    trade_info,
+                    seq_info,
                 )
             if "post_sell_evaluations" in file_path.name:
                 _process_post_sell_rows(
-                    _load_jsonl_rows(file_path), "remote", trade_info, seq_info, trade_facts
+                    _load_jsonl_rows(file_path),
+                    "remote",
+                    trade_info,
+                    seq_info,
+                    trade_facts,
                 )
 
     trade_fact_path = config.OUTPUT_DIR / "trade_fact.csv"
@@ -424,11 +442,17 @@ def main():
                     "server": info.get("server", "unknown"),
                     "trade_id": rec_id,
                     "event_seq": "->".join(info["events"][:10]),
-                    "partial_then_expand_flag": str(info["partial_then_expand_flag"]).lower(),
+                    "partial_then_expand_flag": str(
+                        info["partial_then_expand_flag"]
+                    ).lower(),
                     "multi_rebase_flag": str(info["multi_rebase_flag"]).lower(),
                     "rebase_integrity_flag": str(info["rebase_integrity_flag"]).lower(),
-                    "same_symbol_repeat_flag": str(info["same_symbol_repeat_flag"]).lower(),
-                    "same_ts_multi_rebase_flag": str(info["same_ts_multi_rebase_flag"]).lower(),
+                    "same_symbol_repeat_flag": str(
+                        info["same_symbol_repeat_flag"]
+                    ).lower(),
+                    "same_ts_multi_rebase_flag": str(
+                        info["same_ts_multi_rebase_flag"]
+                    ).lower(),
                     "rebase_count": info["rebase_count"],
                 }
             )
@@ -450,7 +474,9 @@ def main():
         f.write(f"  - 로컬(local): {local_valid}\n")
         f.write(f"  - 원격(remote): {remote_valid}\n\n")
 
-        remote_sample_block = config.INCLUDE_REMOTE and remote_valid < config.MIN_VALID_SAMPLES
+        remote_sample_block = (
+            config.INCLUDE_REMOTE and remote_valid < config.MIN_VALID_SAMPLES
+        )
         if local_valid < config.MIN_VALID_SAMPLES or remote_sample_block:
             f.write("## ⚠️ 실패 조건 도달\n")
             f.write(
@@ -462,7 +488,9 @@ def main():
     import json
     from datetime import datetime
 
-    used_sources = {k for k, v in local_pipeline_sources.items() if v > 0 and k != "none"}
+    used_sources = {
+        k for k, v in local_pipeline_sources.items() if v > 0 and k != "none"
+    }
     if used_sources == {"duckdb"}:
         data_source_mode = "duckdb_primary"
     elif used_sources == {"jsonl"}:
@@ -479,7 +507,9 @@ def main():
         expected_dates = all_dates
     history_coverage_start = expected_dates[0] if expected_dates else None
     history_coverage_end = expected_dates[-1] if expected_dates else None
-    history_coverage_ok = set(expected_dates).issubset(covered_dates) and len(expected_dates) > 0
+    history_coverage_ok = (
+        set(expected_dates).issubset(covered_dates) and len(expected_dates) > 0
+    )
     manifest = {
         "run_at": datetime.now().isoformat(),
         "data_source_mode": data_source_mode,
@@ -494,7 +524,7 @@ def main():
     }
     with open(manifest_path, "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2, ensure_ascii=False)
-    
+
     print("Dataset built successfully.")
 
 

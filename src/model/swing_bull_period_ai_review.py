@@ -12,7 +12,6 @@ from sqlalchemy import text
 
 from src.model.common_v2 import DATA_DIR, engine, resolve_bull_specialist_mode
 
-
 REPORT_DIR = Path(DATA_DIR) / "report" / "swing_model_retrain"
 MIN_CALENDAR_DAYS = 180
 MIN_BULL_TRADING_DAYS = 60
@@ -51,11 +50,15 @@ def _load_ai_json_payload() -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
-def deterministic_bull_period_proposal(target_date: str | None = None) -> dict[str, Any]:
+def deterministic_bull_period_proposal(
+    target_date: str | None = None,
+) -> dict[str, Any]:
     dt = _target_date(target_date)
     end = dt - timedelta(days=LABEL_SAFETY_DAYS)
     start = end - timedelta(days=730)
-    mode = resolve_bull_specialist_mode(os.getenv("KORSTOCKSCAN_SWING_BULL_SPECIALIST_MODE"))
+    mode = resolve_bull_specialist_mode(
+        os.getenv("KORSTOCKSCAN_SWING_BULL_SPECIALIST_MODE")
+    )
     return {
         "source": "deterministic_fallback",
         "bull_specialist_mode": mode,
@@ -72,26 +75,33 @@ def load_ai_or_fallback_proposal(target_date: str | None = None) -> dict[str, An
     if payload:
         proposal = {
             "source": "ai_response_json",
-            "bull_specialist_mode": resolve_bull_specialist_mode(payload.get("bull_specialist_mode")),
+            "bull_specialist_mode": resolve_bull_specialist_mode(
+                payload.get("bull_specialist_mode")
+            ),
             "bull_base_start": payload.get("bull_base_start"),
             "bull_base_end": payload.get("bull_base_end"),
             "reason": payload.get("reason") or "",
             "expected_regime_fit": payload.get("expected_regime_fit") or "",
-            "risk_flags": payload.get("risk_flags") if isinstance(payload.get("risk_flags"), list) else [],
+            "risk_flags": (
+                payload.get("risk_flags")
+                if isinstance(payload.get("risk_flags"), list)
+                else []
+            ),
         }
         return proposal
     return deterministic_bull_period_proposal(target_date)
 
 
-def estimate_bull_period_stats(start: str, end: str, *, codes_limit: int = 300) -> dict[str, Any]:
+def estimate_bull_period_stats(
+    start: str, end: str, *, codes_limit: int = 300
+) -> dict[str, Any]:
     """Lightweight DB-based proxy stats used by deterministic guard.
 
     The full bull_regime feature is calculated in dataset_builder_v2. For the
     guard, we require enough quote rows and trading days, then classify the final
     model by ablation in the retrain pipeline.
     """
-    query = text(
-        """
+    query = text("""
         SELECT COUNT(*) AS rows_count,
                COUNT(DISTINCT quote_date) AS trading_days,
                MIN(quote_date) AS min_date,
@@ -107,11 +117,14 @@ def estimate_bull_period_stats(start: str, end: str, *, codes_limit: int = 300) 
               ORDER BY MAX(volume) DESC
               LIMIT :codes_limit
           )
-        """
-    )
+        """)
     try:
         with engine.connect() as conn:
-            row = pd.read_sql(query, conn, params={"start": start, "end": end, "codes_limit": codes_limit}).iloc[0]
+            row = pd.read_sql(
+                query,
+                conn,
+                params={"start": start, "end": end, "codes_limit": codes_limit},
+            ).iloc[0]
     except Exception as exc:
         return {
             "available": False,
@@ -125,8 +138,12 @@ def estimate_bull_period_stats(start: str, end: str, *, codes_limit: int = 300) 
         "available": True,
         "bull_rows": int(row.get("rows_count") or 0),
         "bull_trading_days": int(row.get("trading_days") or 0),
-        "min_date": str(row.get("min_date")) if row.get("min_date") is not None else None,
-        "max_date": str(row.get("max_date")) if row.get("max_date") is not None else None,
+        "min_date": (
+            str(row.get("min_date")) if row.get("min_date") is not None else None
+        ),
+        "max_date": (
+            str(row.get("max_date")) if row.get("max_date") is not None else None
+        ),
     }
 
 
@@ -167,8 +184,12 @@ def guard_bull_period_proposal(
 
     guard_passed = not reasons
     fallback = deterministic_bull_period_proposal(target.isoformat())
-    final_start = proposal.get("bull_base_start") if guard_passed else fallback["bull_base_start"]
-    final_end = proposal.get("bull_base_end") if guard_passed else fallback["bull_base_end"]
+    final_start = (
+        proposal.get("bull_base_start") if guard_passed else fallback["bull_base_start"]
+    )
+    final_end = (
+        proposal.get("bull_base_end") if guard_passed else fallback["bull_base_end"]
+    )
     final_mode = mode if guard_passed else "hold_current"
     return {
         "schema_version": 1,
@@ -223,13 +244,17 @@ def write_review(target_date: str | None = None) -> dict[str, Any]:
     report = guard_bull_period_proposal(proposal, target_date=target)
     json_path, md_path = review_paths(target)
     json_path.parent.mkdir(parents=True, exist_ok=True)
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2, default=str), encoding="utf-8"
+    )
     md_path.write_text(render_markdown(report), encoding="utf-8")
     return report
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Review swing bull specialist period proposal.")
+    parser = argparse.ArgumentParser(
+        description="Review swing bull specialist period proposal."
+    )
     parser.add_argument("--date", dest="target_date", default=date.today().isoformat())
     args = parser.parse_args(argv)
     write_review(args.target_date)

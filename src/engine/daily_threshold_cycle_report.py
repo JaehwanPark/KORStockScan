@@ -16,9 +16,14 @@ from pathlib import Path
 from typing import Any, Callable
 
 from src.engine.ai_response_contracts import build_openai_response_text_format
-from src.utils.constants import CONFIG_PATH, DATA_DIR, DEV_PATH, POSTGRES_URL, TRADING_RULES
+from src.utils.constants import (
+    CONFIG_PATH,
+    DATA_DIR,
+    DEV_PATH,
+    POSTGRES_URL,
+    TRADING_RULES,
+)
 from src.utils.threshold_cycle_registry import TARGET_STAGES, is_threshold_cycle_stage
-
 
 REPORT_DIR = DATA_DIR / "report"
 REPORT_DIR.mkdir(parents=True, exist_ok=True)
@@ -133,9 +138,25 @@ CALIBRATION_SAFETY_GUARDS = [
     "same-stage owner conflict",
     "severe loss guard breach",
 ]
-AI_CORRECTION_ALLOWED_STATES = {"adjust_up", "adjust_down", "hold", "hold_sample", "freeze"}
-AI_CORRECTION_ALLOWED_ROUTES = {"threshold_candidate", "incident", "instrumentation_gap", "normal_drift"}
-AI_CORRECTION_ALLOWED_SAMPLE_WINDOWS = {"daily_intraday", "rolling_5d", "rolling_10d", "cumulative"}
+AI_CORRECTION_ALLOWED_STATES = {
+    "adjust_up",
+    "adjust_down",
+    "hold",
+    "hold_sample",
+    "freeze",
+}
+AI_CORRECTION_ALLOWED_ROUTES = {
+    "threshold_candidate",
+    "incident",
+    "instrumentation_gap",
+    "normal_drift",
+}
+AI_CORRECTION_ALLOWED_SAMPLE_WINDOWS = {
+    "daily_intraday",
+    "rolling_5d",
+    "rolling_10d",
+    "cumulative",
+}
 AI_CORRECTION_ALLOWED_REVIEW_STATES = {
     "agree",
     "correction_proposed",
@@ -334,7 +355,11 @@ CALIBRATION_FAMILY_METADATA = {
             "use": "bid-1/bid-2/bid-3/best_bid/AI/reference/timeout 후보별 fill, cancel, late-fill, EV를 비교해 다음 PREOPEN bounded 후보만 만든다.",
             "daily_only_allowed": True,
         },
-        "sample_denominator_keys": ["candidate_observations", "sim_candidate_observations", "real_candidate_observations"],
+        "sample_denominator_keys": [
+            "candidate_observations",
+            "sim_candidate_observations",
+            "real_candidate_observations",
+        ],
         "primary_decision_metric": "source_quality_adjusted_ev_pct",
         "allowed_runtime_apply": True,
     },
@@ -356,7 +381,11 @@ CALIBRATION_FAMILY_METADATA = {
             "use": "기존 requested_qty는 position_sizing_dynamic_formula에 맡기고, 총 수량을 보존한 planned_orders leg 분해 policy만 다음 PREOPEN bounded env로 연결한다.",
             "daily_only_allowed": False,
         },
-        "sample_denominator_keys": ["real_sample_count", "sim_sample_count", "recommended_policy_candidate_count"],
+        "sample_denominator_keys": [
+            "real_sample_count",
+            "sim_sample_count",
+            "recommended_policy_candidate_count",
+        ],
         "primary_decision_metric": "source_quality_adjusted_ev_pct",
         "allowed_runtime_apply": True,
     },
@@ -378,7 +407,10 @@ CALIBRATION_FAMILY_METADATA = {
             "use": "모든 AVG_DOWN 물타기 실행에서 기존 scale-in qty를 보존한 50:50 1tick split policy만 다음 PREOPEN bounded env로 연결한다.",
             "daily_only_allowed": True,
         },
-        "sample_denominator_keys": ["avg_down_observation_count", "recommended_policy_candidate_count"],
+        "sample_denominator_keys": [
+            "avg_down_observation_count",
+            "recommended_policy_candidate_count",
+        ],
         "primary_decision_metric": "qty_preserving_execution_shape_seed",
         "allowed_runtime_apply": True,
     },
@@ -396,7 +428,11 @@ CALIBRATION_FAMILY_METADATA = {
             "use": "real-only 제출/체결/취소/late-fill/partial/full fill 품질을 감사한다. sim 후보 EV와 섞지 않는다.",
             "daily_only_allowed": True,
         },
-        "sample_denominator_keys": ["real_broker_events", "cancel_events", "fill_join_events"],
+        "sample_denominator_keys": [
+            "real_broker_events",
+            "cancel_events",
+            "fill_join_events",
+        ],
         "allowed_runtime_apply": False,
         "runtime_effect": False,
     },
@@ -425,7 +461,10 @@ CALIBRATION_FAMILY_METADATA = {
             "use": "BUY drought/score65~74는 당일 병목을 trigger로 쓰되, 회수축 부활과 EV/close 우위는 rolling/cumulative 전용 표본으로 확인한다.",
             "daily_only_allowed": False,
         },
-        "sample_denominator_keys": ["wait65_79_score65_74_candidate", "blocked_score65_74"],
+        "sample_denominator_keys": [
+            "wait65_79_score65_74_candidate",
+            "blocked_score65_74",
+        ],
         "allowed_runtime_apply": True,
     },
     "liquidity_gate_refined_candidate": {
@@ -597,7 +636,11 @@ CALIBRATION_FAMILY_METADATA = {
         "primary_key": "enabled",
         "bounds": {
             "max_promotes_per_day": {"min": 1, "max": 3, "max_step_per_day": 1},
-            "min_stage_confidence": {"min": 0.40, "max": 0.90, "max_step_per_day": 0.10},
+            "min_stage_confidence": {
+                "min": 0.40,
+                "max": 0.90,
+                "max_step_per_day": 0.10,
+            },
         },
         "sample_floor": 20,
         "sample_window": "same_day_source_bundle_plus_rolling_threshold_cycle_consumer",
@@ -623,9 +666,17 @@ CALIBRATION_FAMILY_METADATA = {
         "primary_key": "pyramid_max_micro_vwap_bps",
         "bounds": {
             "max_spread_bps": {"min": 40.0, "max": 100.0, "max_step_per_day": 5.0},
-            "pyramid_max_micro_vwap_bps": {"min": 30.0, "max": 80.0, "max_step_per_day": 5.0},
+            "pyramid_max_micro_vwap_bps": {
+                "min": 30.0,
+                "max": 80.0,
+                "max_step_per_day": 5.0,
+            },
             "pyramid_min_ai_score": {"min": 65, "max": 80, "max_step_per_day": 2},
-            "pyramid_min_buy_pressure": {"min": 55.0, "max": 75.0, "max_step_per_day": 2.5},
+            "pyramid_min_buy_pressure": {
+                "min": 55.0,
+                "max": 75.0,
+                "max_step_per_day": 2.5,
+            },
             "pyramid_min_tick_accel": {"min": 0.3, "max": 1.0, "max_step_per_day": 0.1},
         },
         "sample_floor": 20,
@@ -648,7 +699,11 @@ CALIBRATION_FAMILY_METADATA = {
         "sample_window": "rolling_10d_with_real_denominator",
         "window_policy": {
             "primary": "rolling_10d",
-            "secondary": ["daily", "cumulative_since_2026-04-21", "sim_probe_counterfactual_diagnostic"],
+            "secondary": [
+                "daily",
+                "cumulative_since_2026-04-21",
+                "sim_probe_counterfactual_diagnostic",
+            ],
             "use": "position_sizing_dynamic_formula는 신규 BUY와 scale-in에 주문가능금액 10~30% 산식 + 최소 1주 floor를 적용하는 단일 owner이며, 후보 산식 grid를 생성해 postclose 비교 후 PREOPEN bounded candidate를 만든다.",
             "daily_only_allowed": False,
         },
@@ -768,7 +823,9 @@ def _time_bucket(value: Any) -> str:
 
 
 def _percentile(values: list[float], pct: float, default: float = 0.0) -> float:
-    cleaned = sorted(float(v) for v in values if v is not None and math.isfinite(float(v)))
+    cleaned = sorted(
+        float(v) for v in values if v is not None and math.isfinite(float(v))
+    )
     if not cleaned:
         return default
     if len(cleaned) == 1:
@@ -819,20 +876,30 @@ def save_threshold_cycle_report(report: dict) -> Path:
 
 def calibration_report_path_for_date(target_date: str, run_phase: str) -> Path:
     phase = str(run_phase or "postclose").strip() or "postclose"
-    return THRESHOLD_CALIBRATION_REPORT_DIR / f"threshold_cycle_calibration_{target_date}_{phase}.json"
+    return (
+        THRESHOLD_CALIBRATION_REPORT_DIR
+        / f"threshold_cycle_calibration_{target_date}_{phase}.json"
+    )
 
 
 def threshold_ai_review_paths(target_date: str, run_phase: str) -> tuple[Path, Path]:
     phase = str(run_phase or "postclose").strip() or "postclose"
     return (
-        THRESHOLD_AI_REVIEW_DIR / f"threshold_cycle_ai_review_{target_date}_{phase}.json",
+        THRESHOLD_AI_REVIEW_DIR
+        / f"threshold_cycle_ai_review_{target_date}_{phase}.json",
         THRESHOLD_AI_REVIEW_DIR / f"threshold_cycle_ai_review_{target_date}_{phase}.md",
     )
 
 
-def save_threshold_calibration_report(report: dict, *, run_phase: str | None = None) -> Path:
+def save_threshold_calibration_report(
+    report: dict, *, run_phase: str | None = None
+) -> Path:
     target_date = str(report.get("date") or date.today().isoformat())
-    phase = str(run_phase or (report.get("meta") or {}).get("calibration_run_phase") or "postclose")
+    phase = str(
+        run_phase
+        or (report.get("meta") or {}).get("calibration_run_phase")
+        or "postclose"
+    )
     path = calibration_report_path_for_date(target_date, phase)
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
@@ -872,8 +939,10 @@ def holding_exit_decision_matrix_paths(target_date: str) -> tuple[Path, Path]:
 
 def cumulative_threshold_report_paths(target_date: str) -> tuple[Path, Path]:
     return (
-        CUMULATIVE_THRESHOLD_REPORT_DIR / f"threshold_cycle_cumulative_{target_date}.json",
-        CUMULATIVE_THRESHOLD_REPORT_DIR / f"threshold_cycle_cumulative_{target_date}.md",
+        CUMULATIVE_THRESHOLD_REPORT_DIR
+        / f"threshold_cycle_cumulative_{target_date}.json",
+        CUMULATIVE_THRESHOLD_REPORT_DIR
+        / f"threshold_cycle_cumulative_{target_date}.md",
     )
 
 
@@ -885,9 +954,10 @@ def _import_sqlalchemy():
 
 def _default_completed_rows_loader(start_date: str, end_date: str) -> list[dict]:
     create_engine, text = _import_sqlalchemy()
-    engine = create_engine(POSTGRES_URL, pool_pre_ping=True, connect_args={"connect_timeout": 5})
-    query = text(
-        """
+    engine = create_engine(
+        POSTGRES_URL, pool_pre_ping=True, connect_args={"connect_timeout": 5}
+    )
+    query = text("""
         SELECT
             rh.rec_date,
             rh.stock_code,
@@ -920,10 +990,16 @@ def _default_completed_rows_loader(start_date: str, end_date: str) -> list[dict]
           AND rh.status = 'COMPLETED'
           AND rh.profit_rate IS NOT NULL
         ORDER BY rh.rec_date DESC, rh.stock_code
-        """
-    )
+        """)
     with engine.connect() as conn:
-        return [dict(row) for row in conn.execute(query, {"start_date": start_date, "end_date": end_date}).mappings().all()]
+        return [
+            dict(row)
+            for row in conn.execute(
+                query, {"start_date": start_date, "end_date": end_date}
+            )
+            .mappings()
+            .all()
+        ]
 
 
 def _read_threshold_jsonl(path: Path) -> list[dict]:
@@ -942,7 +1018,11 @@ def _read_threshold_jsonl(path: Path) -> list[dict]:
                 continue
             if not is_threshold_cycle_stage(
                 str(payload.get("stage") or ""),
-                payload.get("fields") if isinstance(payload.get("fields"), dict) else None,
+                (
+                    payload.get("fields")
+                    if isinstance(payload.get("fields"), dict)
+                    else None
+                ),
             ):
                 continue
             rows.append(_compact_threshold_cycle_event(payload))
@@ -1044,7 +1124,9 @@ def _load_partitioned_pipeline_events(target_date: str) -> PipelineLoadResult | 
             "data_source": "partitioned_compact",
             "partition_count": len(paths),
             "line_count": len(rows),
-            "checkpoint_completed": bool(checkpoint.get("completed")) if checkpoint else None,
+            "checkpoint_completed": (
+                bool(checkpoint.get("completed")) if checkpoint else None
+            ),
             "paused_reason": checkpoint.get("paused_reason") if checkpoint else None,
             "read_bytes_estimate": read_bytes,
             "warnings": [],
@@ -1130,12 +1212,20 @@ def _dynamic_entry_price_counterfactual_join_diagnostics(
             reason_counts["not_join_eligible"] += 1
             continue
         eligible_events.append(event)
-        event_key_sets.append(_entry_counterfactual_join_keys_from_fields(_event_fields(event)))
+        event_key_sets.append(
+            _entry_counterfactual_join_keys_from_fields(_event_fields(event))
+        )
 
     source_path = (
-        _existing_or_gzip_path(REPORT_DIR / "monitor_snapshots" / f"missed_entry_counterfactual_{target_date}.json")
+        _existing_or_gzip_path(
+            REPORT_DIR
+            / "monitor_snapshots"
+            / f"missed_entry_counterfactual_{target_date}.json"
+        )
         if target_date
-        else REPORT_DIR / "monitor_snapshots" / "missed_entry_counterfactual_missing_date.json"
+        else REPORT_DIR
+        / "monitor_snapshots"
+        / "missed_entry_counterfactual_missing_date.json"
     )
     if not target_date or not source_path.exists():
         reason_counts["missing_counterfactual_artifact"] += len(eligible_events)
@@ -1173,7 +1263,9 @@ def _dynamic_entry_price_counterfactual_join_diagnostics(
             reason_counts["missing_attempt_key"] += 1
             continue
         matched_indexes = {
-            idx for idx, row_keys in enumerate(counterfactual_row_keys) if keys & row_keys
+            idx
+            for idx, row_keys in enumerate(counterfactual_row_keys)
+            if keys & row_keys
         }
         if matched_indexes:
             matched_event_count += 1
@@ -1214,29 +1306,57 @@ def _existing_or_gzip_path(path: Path) -> Path:
 
 def _calibration_report_source_paths(target_date: str) -> dict[str, Path]:
     return {
-        "buy_funnel_sentinel": REPORT_DIR / "buy_funnel_sentinel" / f"buy_funnel_sentinel_{target_date}.json",
-        "wait6579_ev_cohort": REPORT_DIR / "monitor_snapshots" / f"wait6579_ev_cohort_{target_date}.json",
+        "buy_funnel_sentinel": REPORT_DIR
+        / "buy_funnel_sentinel"
+        / f"buy_funnel_sentinel_{target_date}.json",
+        "wait6579_ev_cohort": REPORT_DIR
+        / "monitor_snapshots"
+        / f"wait6579_ev_cohort_{target_date}.json",
         "missed_entry_counterfactual": (
-            REPORT_DIR / "monitor_snapshots" / f"missed_entry_counterfactual_{target_date}.json"
+            REPORT_DIR
+            / "monitor_snapshots"
+            / f"missed_entry_counterfactual_{target_date}.json"
         ),
-        "performance_tuning": REPORT_DIR / "monitor_snapshots" / f"performance_tuning_{target_date}.json",
-        "holding_exit_observation": REPORT_DIR / "monitor_snapshots" / f"holding_exit_observation_{target_date}.json",
-        "post_sell_feedback": REPORT_DIR / "monitor_snapshots" / f"post_sell_feedback_{target_date}.json",
-        "trade_review": REPORT_DIR / "monitor_snapshots" / f"trade_review_{target_date}.json",
-        "holding_exit_sentinel": REPORT_DIR / "holding_exit_sentinel" / f"holding_exit_sentinel_{target_date}.json",
-        "panic_sell_defense": REPORT_DIR / "panic_sell_defense" / f"panic_sell_defense_{target_date}.json",
-        "panic_buying": REPORT_DIR / "panic_buying" / f"panic_buying_{target_date}.json",
+        "performance_tuning": REPORT_DIR
+        / "monitor_snapshots"
+        / f"performance_tuning_{target_date}.json",
+        "holding_exit_observation": REPORT_DIR
+        / "monitor_snapshots"
+        / f"holding_exit_observation_{target_date}.json",
+        "post_sell_feedback": REPORT_DIR
+        / "monitor_snapshots"
+        / f"post_sell_feedback_{target_date}.json",
+        "trade_review": REPORT_DIR
+        / "monitor_snapshots"
+        / f"trade_review_{target_date}.json",
+        "holding_exit_sentinel": REPORT_DIR
+        / "holding_exit_sentinel"
+        / f"holding_exit_sentinel_{target_date}.json",
+        "panic_sell_defense": REPORT_DIR
+        / "panic_sell_defense"
+        / f"panic_sell_defense_{target_date}.json",
+        "panic_buying": REPORT_DIR
+        / "panic_buying"
+        / f"panic_buying_{target_date}.json",
         "holding_exit_decision_matrix": (
-            REPORT_DIR / "holding_exit_decision_matrix" / f"holding_exit_decision_matrix_{target_date}.json"
+            REPORT_DIR
+            / "holding_exit_decision_matrix"
+            / f"holding_exit_decision_matrix_{target_date}.json"
         ),
         "statistical_action_weight": (
-            REPORT_DIR / "statistical_action_weight" / f"statistical_action_weight_{target_date}.json"
+            REPORT_DIR
+            / "statistical_action_weight"
+            / f"statistical_action_weight_{target_date}.json"
         ),
         "latency_classifier_recommendation": (
-            REPORT_DIR / "latency_classifier_recommendation" / f"latency_classifier_recommendation_{target_date}.json"
+            REPORT_DIR
+            / "latency_classifier_recommendation"
+            / f"latency_classifier_recommendation_{target_date}.json"
         ),
         "microstructure_reaction_context": (
-            REPORT_DIR / "microstructure_reaction_context" / f"microstructure_reaction_context_{target_date}.json"
+            REPORT_DIR
+            / "microstructure_reaction_context"
+            / f"microstructure_reaction_context_{target_date}.json"
         ),
         "market_regime_daily_report": REPORT_DIR / f"report_{target_date}.json",
     }
@@ -1278,7 +1398,9 @@ REPORT_ONLY_CLEANUP_AUDIT_REGISTRY: tuple[dict[str, str], ...] = (
 )
 
 
-def _audit_report_only_cleanup_candidates(target_date: str, source_paths: dict[str, Path]) -> dict:
+def _audit_report_only_cleanup_candidates(
+    target_date: str, source_paths: dict[str, Path]
+) -> dict:
     managed_source_names = sorted(source_paths)
     managed_source_paths = {path.resolve() for path in source_paths.values()}
     excluded_reports: list[dict] = []
@@ -1311,7 +1433,8 @@ def _audit_report_only_cleanup_candidates(target_date: str, source_paths: dict[s
         excluded_reports.append(entry)
 
         if exists and (
-            status.endswith("_cleanup_candidate") or status == "misconfigured_attached_to_current_source_bundle"
+            status.endswith("_cleanup_candidate")
+            or status == "misconfigured_attached_to_current_source_bundle"
         ):
             cleanup_candidates.append(entry)
 
@@ -1337,7 +1460,9 @@ def _audit_report_only_cleanup_candidates(target_date: str, source_paths: dict[s
     }
 
 
-def _recent_market_regime_daily_reports(target_date: str, days: int = 10) -> list[dict[str, Any]]:
+def _recent_market_regime_daily_reports(
+    target_date: str, days: int = 10
+) -> list[dict[str, Any]]:
     try:
         cutoff = datetime.strptime(target_date, "%Y-%m-%d").date()
     except Exception:
@@ -1356,8 +1481,14 @@ def _recent_market_regime_daily_reports(target_date: str, days: int = 10) -> lis
         if not payload:
             continue
         stats = payload.get("stats") if isinstance(payload.get("stats"), dict) else {}
-        perf = payload.get("performance") if isinstance(payload.get("performance"), dict) else {}
-        perf_summary = perf.get("summary") if isinstance(perf.get("summary"), dict) else {}
+        perf = (
+            payload.get("performance")
+            if isinstance(payload.get("performance"), dict)
+            else {}
+        )
+        perf_summary = (
+            perf.get("summary") if isinstance(perf.get("summary"), dict) else {}
+        )
         score = _safe_float(stats.get("market_regime_continuous_score"), None)
         label = str(stats.get("market_regime_continuous_label") or "")
         rows.append(
@@ -1365,19 +1496,28 @@ def _recent_market_regime_daily_reports(target_date: str, days: int = 10) -> lis
                 "date": stem_date,
                 "score": score,
                 "label": label,
-                "component_scores": stats.get("market_regime_component_scores")
-                if isinstance(stats.get("market_regime_component_scores"), dict)
-                else {},
+                "component_scores": (
+                    stats.get("market_regime_component_scores")
+                    if isinstance(stats.get("market_regime_component_scores"), dict)
+                    else {}
+                ),
                 "source_quality": str(stats.get("market_regime_source_quality") or ""),
                 "score_version": str(stats.get("market_regime_score_version") or ""),
-                "swing_entry_recovery_gate_score": _safe_int(stats.get("swing_entry_recovery_gate_score"), 0) or 0,
+                "swing_entry_recovery_gate_score": _safe_int(
+                    stats.get("swing_entry_recovery_gate_score"), 0
+                )
+                or 0,
                 "allow_swing_entry": bool(stats.get("allow_swing_entry")),
-                "completed_records": _safe_int(perf_summary.get("completed_records"), 0) or 0,
+                "completed_records": _safe_int(perf_summary.get("completed_records"), 0)
+                or 0,
                 "filled_records": _safe_int(perf_summary.get("filled_records"), 0) or 0,
                 "total_records": _safe_int(perf_summary.get("total_records"), 0) or 0,
                 "win_rate": _safe_float(perf_summary.get("win_rate"), None),
-                "avg_profit_rate": _safe_float(perf_summary.get("avg_profit_rate"), None),
-                "realized_pnl_krw": _safe_int(perf_summary.get("realized_pnl_krw"), 0) or 0,
+                "avg_profit_rate": _safe_float(
+                    perf_summary.get("avg_profit_rate"), None
+                ),
+                "realized_pnl_krw": _safe_int(perf_summary.get("realized_pnl_krw"), 0)
+                or 0,
             }
         )
         if len(rows) >= days:
@@ -1389,17 +1529,21 @@ def _market_regime_window_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     valid_rows = [
         row
         for row in rows
-        if row.get("score") is not None and str(row.get("label") or "") in {"RISK_ON", "NEUTRAL", "RISK_OFF"}
+        if row.get("score") is not None
+        and str(row.get("label") or "") in {"RISK_ON", "NEUTRAL", "RISK_OFF"}
     ]
     scores = [float(row["score"]) for row in valid_rows]
     labels = Counter(str(row.get("label") or "UNKNOWN") for row in valid_rows)
-    completed = sum(_safe_int(row.get("completed_records"), 0) or 0 for row in valid_rows)
+    completed = sum(
+        _safe_int(row.get("completed_records"), 0) or 0 for row in valid_rows
+    )
     filled = sum(_safe_int(row.get("filled_records"), 0) or 0 for row in valid_rows)
     total = sum(_safe_int(row.get("total_records"), 0) or 0 for row in valid_rows)
     profit_values = [
         float(row["avg_profit_rate"])
         for row in valid_rows
-        if row.get("avg_profit_rate") is not None and (_safe_int(row.get("completed_records"), 0) or 0) > 0
+        if row.get("avg_profit_rate") is not None
+        and (_safe_int(row.get("completed_records"), 0) or 0) > 0
     ]
     return {
         "sample_days": len(rows),
@@ -1409,18 +1553,37 @@ def _market_regime_window_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "max_score": round(max(scores), 4) if scores else None,
         "label_counts": dict(labels),
         "completed_records": completed,
-        "win_rate_avg": round(_avg([float(row["win_rate"]) for row in valid_rows if row.get("win_rate") is not None]) or 0.0, 4)
-        if valid_rows
-        else None,
+        "win_rate_avg": (
+            round(
+                _avg(
+                    [
+                        float(row["win_rate"])
+                        for row in valid_rows
+                        if row.get("win_rate") is not None
+                    ]
+                )
+                or 0.0,
+                4,
+            )
+            if valid_rows
+            else None
+        ),
         "entry_participation_pct": round((filled / total * 100.0) if total else 0.0, 4),
-        "source_quality_adjusted_ev_pct": round(_avg(profit_values) or 0.0, 4) if profit_values else None,
+        "source_quality_adjusted_ev_pct": (
+            round(_avg(profit_values) or 0.0, 4) if profit_values else None
+        ),
         "severe_downside_count": sum(
             1
             for row in valid_rows
-            if row.get("avg_profit_rate") is not None and float(row["avg_profit_rate"]) <= -2.0
+            if row.get("avg_profit_rate") is not None
+            and float(row["avg_profit_rate"]) <= -2.0
         ),
-        "market_regime_pass_opportunity": sum(1 for row in valid_rows if row.get("allow_swing_entry")),
-        "market_regime_block_opportunity": sum(1 for row in valid_rows if not row.get("allow_swing_entry")),
+        "market_regime_pass_opportunity": sum(
+            1 for row in valid_rows if row.get("allow_swing_entry")
+        ),
+        "market_regime_block_opportunity": sum(
+            1 for row in valid_rows if not row.get("allow_swing_entry")
+        ),
     }
 
 
@@ -1436,18 +1599,36 @@ def _market_regime_label_ev_breakdown(rows: list[dict[str, Any]]) -> dict[str, A
         profit_values = [
             float(row["avg_profit_rate"])
             for row in label_rows
-            if row.get("avg_profit_rate") is not None and (_safe_int(row.get("completed_records"), 0) or 0) > 0
+            if row.get("avg_profit_rate") is not None
+            and (_safe_int(row.get("completed_records"), 0) or 0) > 0
         ]
         breakdown[label] = {
             "sample_days": len(label_rows),
-            "completed_records": sum(_safe_int(row.get("completed_records"), 0) or 0 for row in label_rows),
-            "source_quality_adjusted_ev_pct": round(_avg(profit_values) or 0.0, 4) if profit_values else None,
-            "win_rate_avg": round(_avg([float(row["win_rate"]) for row in label_rows if row.get("win_rate") is not None]) or 0.0, 4),
-            "entry_participation_pct": _market_regime_window_summary(label_rows)["entry_participation_pct"],
+            "completed_records": sum(
+                _safe_int(row.get("completed_records"), 0) or 0 for row in label_rows
+            ),
+            "source_quality_adjusted_ev_pct": (
+                round(_avg(profit_values) or 0.0, 4) if profit_values else None
+            ),
+            "win_rate_avg": round(
+                _avg(
+                    [
+                        float(row["win_rate"])
+                        for row in label_rows
+                        if row.get("win_rate") is not None
+                    ]
+                )
+                or 0.0,
+                4,
+            ),
+            "entry_participation_pct": _market_regime_window_summary(label_rows)[
+                "entry_participation_pct"
+            ],
             "severe_downside_count": sum(
                 1
                 for row in label_rows
-                if row.get("avg_profit_rate") is not None and float(row["avg_profit_rate"]) <= -2.0
+                if row.get("avg_profit_rate") is not None
+                and float(row["avg_profit_rate"]) <= -2.0
             ),
         }
     return breakdown
@@ -1459,17 +1640,24 @@ def _summarize_market_regime_continuous_sources(target_date: str) -> dict[str, A
     valid_days = [
         row
         for row in rows
-        if row.get("score") is not None and str(row.get("label") or "") in {"RISK_ON", "NEUTRAL", "RISK_OFF"}
+        if row.get("score") is not None
+        and str(row.get("label") or "") in {"RISK_ON", "NEUTRAL", "RISK_OFF"}
     ]
-    latest_summary = {
-        "date": latest.get("date"),
-        "score": latest.get("score"),
-        "label": latest.get("label"),
-        "component_scores": latest.get("component_scores") or {},
-        "source_quality": latest.get("source_quality"),
-        "score_version": latest.get("score_version"),
-        "swing_entry_recovery_gate_score": latest.get("swing_entry_recovery_gate_score", 0),
-    } if latest else {}
+    latest_summary = (
+        {
+            "date": latest.get("date"),
+            "score": latest.get("score"),
+            "label": latest.get("label"),
+            "component_scores": latest.get("component_scores") or {},
+            "source_quality": latest.get("source_quality"),
+            "score_version": latest.get("score_version"),
+            "swing_entry_recovery_gate_score": latest.get(
+                "swing_entry_recovery_gate_score", 0
+            ),
+        }
+        if latest
+        else {}
+    )
     return {
         "schema_version": 1,
         "metric_role": "risk_context_feature",
@@ -1557,17 +1745,41 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
     panic_buying = _read_json_dict(source_paths["panic_buying"])
     decision_matrix = _read_json_dict(source_paths["holding_exit_decision_matrix"])
     stat_action = _read_json_dict(source_paths["statistical_action_weight"])
-    latency_recommendation = _read_json_dict(source_paths["latency_classifier_recommendation"])
-    microstructure_reaction_context = _read_json_dict(source_paths["microstructure_reaction_context"])
+    latency_recommendation = _read_json_dict(
+        source_paths["latency_classifier_recommendation"]
+    )
+    microstructure_reaction_context = _read_json_dict(
+        source_paths["microstructure_reaction_context"]
+    )
     market_regime_continuous = _summarize_market_regime_continuous_sources(target_date)
 
-    buy_current = buy_funnel_sentinel.get("current") if isinstance(buy_funnel_sentinel, dict) else {}
+    buy_current = (
+        buy_funnel_sentinel.get("current")
+        if isinstance(buy_funnel_sentinel, dict)
+        else {}
+    )
     buy_current = buy_current if isinstance(buy_current, dict) else {}
-    buy_session = buy_current.get("session") if isinstance(buy_current.get("session"), dict) else {}
-    buy_stage_events = buy_session.get("stage_events") if isinstance(buy_session.get("stage_events"), dict) else {}
-    buy_ratios = buy_session.get("ratios") if isinstance(buy_session.get("ratios"), dict) else {}
-    buy_classification = buy_funnel_sentinel.get("classification") if isinstance(buy_funnel_sentinel, dict) else {}
-    buy_classification = buy_classification if isinstance(buy_classification, dict) else {}
+    buy_session = (
+        buy_current.get("session")
+        if isinstance(buy_current.get("session"), dict)
+        else {}
+    )
+    buy_stage_events = (
+        buy_session.get("stage_events")
+        if isinstance(buy_session.get("stage_events"), dict)
+        else {}
+    )
+    buy_ratios = (
+        buy_session.get("ratios") if isinstance(buy_session.get("ratios"), dict) else {}
+    )
+    buy_classification = (
+        buy_funnel_sentinel.get("classification")
+        if isinstance(buy_funnel_sentinel, dict)
+        else {}
+    )
+    buy_classification = (
+        buy_classification if isinstance(buy_classification, dict) else {}
+    )
     buy_submit_drought_root = (
         buy_classification.get("submit_drought_root_cause")
         if isinstance(buy_classification.get("submit_drought_root_cause"), dict)
@@ -1578,21 +1790,47 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
         if isinstance(buy_submit_drought_root.get("latency_root_cause_counts"), dict)
         else {}
     )
-    wait_metrics = wait6579_ev.get("metrics") if isinstance(wait6579_ev.get("metrics"), dict) else {}
-    wait_approval = wait6579_ev.get("approval_gate") if isinstance(wait6579_ev.get("approval_gate"), dict) else {}
-    wait_rows = wait6579_ev.get("rows") if isinstance(wait6579_ev.get("rows"), list) else []
+    wait_metrics = (
+        wait6579_ev.get("metrics")
+        if isinstance(wait6579_ev.get("metrics"), dict)
+        else {}
+    )
+    wait_approval = (
+        wait6579_ev.get("approval_gate")
+        if isinstance(wait6579_ev.get("approval_gate"), dict)
+        else {}
+    )
+    wait_rows = (
+        wait6579_ev.get("rows") if isinstance(wait6579_ev.get("rows"), list) else []
+    )
     score_rows = [
         row
         for row in wait_rows
         if 65 <= int(_safe_float((row or {}).get("ai_score"), 0.0) or 0.0) <= 74
     ]
-    score_ev = [_safe_float(row.get("expected_ev_pct"), None) for row in score_rows if isinstance(row, dict)]
-    score_close = [_safe_float(row.get("close_10m_pct"), None) for row in score_rows if isinstance(row, dict)]
-    score_mfe = [_safe_float(row.get("mfe_10m_pct"), None) for row in score_rows if isinstance(row, dict)]
+    score_ev = [
+        _safe_float(row.get("expected_ev_pct"), None)
+        for row in score_rows
+        if isinstance(row, dict)
+    ]
+    score_close = [
+        _safe_float(row.get("close_10m_pct"), None)
+        for row in score_rows
+        if isinstance(row, dict)
+    ]
+    score_mfe = [
+        _safe_float(row.get("mfe_10m_pct"), None)
+        for row in score_rows
+        if isinstance(row, dict)
+    ]
     score_ev = [value for value in score_ev if value is not None]
     score_close = [value for value in score_close if value is not None]
     score_mfe = [value for value in score_mfe if value is not None]
-    missed_metrics = missed_entry.get("metrics") if isinstance(missed_entry.get("metrics"), dict) else {}
+    missed_metrics = (
+        missed_entry.get("metrics")
+        if isinstance(missed_entry.get("metrics"), dict)
+        else {}
+    )
     rising_refinement = (
         missed_metrics.get("rising_missed_refinement")
         if isinstance(missed_metrics.get("rising_missed_refinement"), dict)
@@ -1603,8 +1841,16 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
         if isinstance(missed_metrics.get("rising_missed_refinement_action_plan"), dict)
         else {}
     )
-    perf_metrics = performance_tuning.get("metrics") if isinstance(performance_tuning.get("metrics"), dict) else {}
-    perf_sections = performance_tuning.get("sections") if isinstance(performance_tuning.get("sections"), dict) else {}
+    perf_metrics = (
+        performance_tuning.get("metrics")
+        if isinstance(performance_tuning.get("metrics"), dict)
+        else {}
+    )
+    perf_sections = (
+        performance_tuning.get("sections")
+        if isinstance(performance_tuning.get("sections"), dict)
+        else {}
+    )
     perf_latency_section = (
         perf_sections.get("latency_guard_miss_ev_recovery")
         if isinstance(perf_sections.get("latency_guard_miss_ev_recovery"), dict)
@@ -1625,34 +1871,74 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
         if isinstance(microstructure_reaction_context.get("summary"), dict)
         else {}
     )
-    soft_stop = holding_exit_observation.get("soft_stop_rebound") if isinstance(holding_exit_observation, dict) else {}
+    soft_stop = (
+        holding_exit_observation.get("soft_stop_rebound")
+        if isinstance(holding_exit_observation, dict)
+        else {}
+    )
     soft_stop = soft_stop if isinstance(soft_stop, dict) else {}
-    post_sell_soft = post_sell_feedback.get("soft_stop_forensics") if isinstance(post_sell_feedback, dict) else {}
+    post_sell_soft = (
+        post_sell_feedback.get("soft_stop_forensics")
+        if isinstance(post_sell_feedback, dict)
+        else {}
+    )
     post_sell_soft = post_sell_soft if isinstance(post_sell_soft, dict) else {}
-    trailing = holding_exit_observation.get("trailing_continuation") if isinstance(holding_exit_observation, dict) else {}
+    trailing = (
+        holding_exit_observation.get("trailing_continuation")
+        if isinstance(holding_exit_observation, dict)
+        else {}
+    )
     trailing = trailing if isinstance(trailing, dict) else {}
-    same_symbol = holding_exit_observation.get("same_symbol_reentry") if isinstance(holding_exit_observation, dict) else {}
+    same_symbol = (
+        holding_exit_observation.get("same_symbol_reentry")
+        if isinstance(holding_exit_observation, dict)
+        else {}
+    )
     same_symbol = same_symbol if isinstance(same_symbol, dict) else {}
-    current = holding_exit_sentinel.get("current") if isinstance(holding_exit_sentinel, dict) else {}
+    current = (
+        holding_exit_sentinel.get("current")
+        if isinstance(holding_exit_sentinel, dict)
+        else {}
+    )
     current = current if isinstance(current, dict) else {}
     session = current.get("session") if isinstance(current.get("session"), dict) else {}
-    stage_events = session.get("stage_events") if isinstance(session.get("stage_events"), dict) else {}
-    classification = holding_exit_sentinel.get("classification") if isinstance(holding_exit_sentinel, dict) else {}
+    stage_events = (
+        session.get("stage_events")
+        if isinstance(session.get("stage_events"), dict)
+        else {}
+    )
+    classification = (
+        holding_exit_sentinel.get("classification")
+        if isinstance(holding_exit_sentinel, dict)
+        else {}
+    )
     classification = classification if isinstance(classification, dict) else {}
-    panic_metrics = panic_sell_defense.get("panic_metrics") if isinstance(panic_sell_defense, dict) else {}
+    panic_metrics = (
+        panic_sell_defense.get("panic_metrics")
+        if isinstance(panic_sell_defense, dict)
+        else {}
+    )
     panic_metrics = panic_metrics if isinstance(panic_metrics, dict) else {}
     panic_regime_contract = (
         panic_sell_defense.get("panic_regime_contract")
         if isinstance(panic_sell_defense.get("panic_regime_contract"), dict)
         else {}
     )
-    recovery_metrics = panic_sell_defense.get("recovery_metrics") if isinstance(panic_sell_defense, dict) else {}
+    recovery_metrics = (
+        panic_sell_defense.get("recovery_metrics")
+        if isinstance(panic_sell_defense, dict)
+        else {}
+    )
     recovery_metrics = recovery_metrics if isinstance(recovery_metrics, dict) else {}
     active_recovery = (
-        recovery_metrics.get("active_sim_probe") if isinstance(recovery_metrics.get("active_sim_probe"), dict) else {}
+        recovery_metrics.get("active_sim_probe")
+        if isinstance(recovery_metrics.get("active_sim_probe"), dict)
+        else {}
     )
     post_sell_recovery = (
-        recovery_metrics.get("post_sell_feedback") if isinstance(recovery_metrics.get("post_sell_feedback"), dict) else {}
+        recovery_metrics.get("post_sell_feedback")
+        if isinstance(recovery_metrics.get("post_sell_feedback"), dict)
+        else {}
     )
     microstructure_detector = (
         panic_sell_defense.get("microstructure_detector")
@@ -1696,20 +1982,42 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
     ]
     micro_market_followup_candidate = bool(
         microstructure_market_context.get("portfolio_local_risk_off_only")
-        or "micro_evaluated_symbol_count_below_breadth_floor" in {str(reason) for reason in micro_market_reasons}
-        or "market_regime_snapshot_missing_or_unknown" in {str(reason) for reason in micro_market_reasons}
+        or "micro_evaluated_symbol_count_below_breadth_floor"
+        in {str(reason) for reason in micro_market_reasons}
+        or "market_regime_snapshot_missing_or_unknown"
+        in {str(reason) for reason in micro_market_reasons}
     )
-    panic_buy_metrics = panic_buying.get("panic_buy_metrics") if isinstance(panic_buying, dict) else {}
+    panic_buy_metrics = (
+        panic_buying.get("panic_buy_metrics") if isinstance(panic_buying, dict) else {}
+    )
     panic_buy_metrics = panic_buy_metrics if isinstance(panic_buy_metrics, dict) else {}
-    panic_buy_exhaustion = panic_buying.get("exhaustion_metrics") if isinstance(panic_buying, dict) else {}
-    panic_buy_exhaustion = panic_buy_exhaustion if isinstance(panic_buy_exhaustion, dict) else {}
-    panic_buy_tp = panic_buying.get("tp_counterfactual_summary") if isinstance(panic_buying, dict) else {}
+    panic_buy_exhaustion = (
+        panic_buying.get("exhaustion_metrics") if isinstance(panic_buying, dict) else {}
+    )
+    panic_buy_exhaustion = (
+        panic_buy_exhaustion if isinstance(panic_buy_exhaustion, dict) else {}
+    )
+    panic_buy_tp = (
+        panic_buying.get("tp_counterfactual_summary")
+        if isinstance(panic_buying, dict)
+        else {}
+    )
     panic_buy_tp = panic_buy_tp if isinstance(panic_buy_tp, dict) else {}
-    panic_buy_micro = panic_buying.get("microstructure_detector") if isinstance(panic_buying, dict) else {}
+    panic_buy_micro = (
+        panic_buying.get("microstructure_detector")
+        if isinstance(panic_buying, dict)
+        else {}
+    )
     panic_buy_micro = panic_buy_micro if isinstance(panic_buy_micro, dict) else {}
-    panic_buy_market = panic_buying.get("market_breadth_context") if isinstance(panic_buying, dict) else {}
+    panic_buy_market = (
+        panic_buying.get("market_breadth_context")
+        if isinstance(panic_buying, dict)
+        else {}
+    )
     panic_buy_market = panic_buy_market if isinstance(panic_buy_market, dict) else {}
-    panic_buy_gate = panic_buying.get("risk_regime_gate") if isinstance(panic_buying, dict) else {}
+    panic_buy_gate = (
+        panic_buying.get("risk_regime_gate") if isinstance(panic_buying, dict) else {}
+    )
     panic_buy_gate = panic_buy_gate if isinstance(panic_buy_gate, dict) else {}
     panic_buy_candidates = (
         panic_buying.get("canary_candidates")
@@ -1723,26 +2031,49 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
     }
     panic_buy_source_quality_blockers: list[str] = []
     if isinstance(panic_buy_gate.get("source_quality_blockers"), list):
-        panic_buy_source_quality_blockers.extend(str(item) for item in panic_buy_gate["source_quality_blockers"])
-    panic_buy_signal_count = _safe_int(panic_buy_micro.get("panic_buy_signal_count"), 0) or 0
-    if panic_buy_signal_count > 0 and not bool(panic_buy_market.get("market_wide_panic_buy_confirmed")):
-        panic_buy_source_quality_blockers.append("panic_buy_local_unconfirmed_by_market_breadth")
+        panic_buy_source_quality_blockers.extend(
+            str(item) for item in panic_buy_gate["source_quality_blockers"]
+        )
+    panic_buy_signal_count = (
+        _safe_int(panic_buy_micro.get("panic_buy_signal_count"), 0) or 0
+    )
+    if panic_buy_signal_count > 0 and not bool(
+        panic_buy_market.get("market_wide_panic_buy_confirmed")
+    ):
+        panic_buy_source_quality_blockers.append(
+            "panic_buy_local_unconfirmed_by_market_breadth"
+        )
     if (_safe_int(panic_buy_micro.get("missing_orderbook_count"), 0) or 0) > 0:
-        panic_buy_source_quality_blockers.append("panic_buy_orderbook_collector_coverage_gap")
-    panic_buy_source_quality_blockers = list(dict.fromkeys(panic_buy_source_quality_blockers))
-    matrix_entries = decision_matrix.get("entries") if isinstance(decision_matrix.get("entries"), list) else []
+        panic_buy_source_quality_blockers.append(
+            "panic_buy_orderbook_collector_coverage_gap"
+        )
+    panic_buy_source_quality_blockers = list(
+        dict.fromkeys(panic_buy_source_quality_blockers)
+    )
+    matrix_entries = (
+        decision_matrix.get("entries")
+        if isinstance(decision_matrix.get("entries"), list)
+        else []
+    )
     non_clear_matrix_entries = [
         entry
         for entry in matrix_entries
-        if isinstance(entry, dict) and str(entry.get("recommended_bias") or "no_clear_edge") != "no_clear_edge"
+        if isinstance(entry, dict)
+        and str(entry.get("recommended_bias") or "no_clear_edge") != "no_clear_edge"
     ]
     matrix_counterfactual = (
         decision_matrix.get("counterfactual_coverage_summary")
         if isinstance(decision_matrix.get("counterfactual_coverage_summary"), dict)
         else _summarize_matrix_counterfactual_coverage(matrix_entries)
     )
-    saw_policy_counts = stat_action.get("policy_counts") if isinstance(stat_action.get("policy_counts"), dict) else {}
-    stat_action_sample = stat_action.get("sample") if isinstance(stat_action.get("sample"), dict) else {}
+    saw_policy_counts = (
+        stat_action.get("policy_counts")
+        if isinstance(stat_action.get("policy_counts"), dict)
+        else {}
+    )
+    stat_action_sample = (
+        stat_action.get("sample") if isinstance(stat_action.get("sample"), dict) else {}
+    )
     eligible_not_chosen = (
         stat_action.get("eligible_but_not_chosen")
         if isinstance(stat_action.get("eligible_but_not_chosen"), dict)
@@ -1754,26 +2085,40 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
         if isinstance(missed_metrics.get("blocker_outcome_metrics"), dict)
         else {}
     )
-    latency_outcome = blocker_outcomes.get("latency_block") if isinstance(blocker_outcomes.get("latency_block"), dict) else {}
+    latency_outcome = (
+        blocker_outcomes.get("latency_block")
+        if isinstance(blocker_outcomes.get("latency_block"), dict)
+        else {}
+    )
     ai_score_outcome = (
-        blocker_outcomes.get("blocked_ai_score") if isinstance(blocker_outcomes.get("blocked_ai_score"), dict) else {}
+        blocker_outcomes.get("blocked_ai_score")
+        if isinstance(blocker_outcomes.get("blocked_ai_score"), dict)
+        else {}
     )
     liquidity_outcome = (
-        blocker_outcomes.get("blocked_liquidity") if isinstance(blocker_outcomes.get("blocked_liquidity"), dict) else {}
+        blocker_outcomes.get("blocked_liquidity")
+        if isinstance(blocker_outcomes.get("blocked_liquidity"), dict)
+        else {}
     )
     overbought_outcome = (
-        blocker_outcomes.get("blocked_overbought") if isinstance(blocker_outcomes.get("blocked_overbought"), dict) else {}
+        blocker_outcomes.get("blocked_overbought")
+        if isinstance(blocker_outcomes.get("blocked_overbought"), dict)
+        else {}
     )
 
     source_metrics = {
         "buy_score65_74": {
             "sentinel_primary": buy_classification.get("primary"),
-            "sentinel_secondary": buy_classification.get("secondary")
-            if isinstance(buy_classification.get("secondary"), list)
-            else [],
-            "sentinel_matches": buy_classification.get("matches")
-            if isinstance(buy_classification.get("matches"), list)
-            else [],
+            "sentinel_secondary": (
+                buy_classification.get("secondary")
+                if isinstance(buy_classification.get("secondary"), list)
+                else []
+            ),
+            "sentinel_matches": (
+                buy_classification.get("matches")
+                if isinstance(buy_classification.get("matches"), list)
+                else []
+            ),
             "latency_root_cause_counts": buy_latency_root_counts,
             "latency_spread_microstructure_guard_count": _safe_int(
                 buy_latency_root_counts.get("spread_microstructure_guard"), 0
@@ -1783,57 +2128,130 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
                 buy_latency_root_counts.get("spread_or_slippage_guard"), 0
             )
             or 0,
-            "latency_quote_stale_count": _safe_int(buy_latency_root_counts.get("quote_stale"), 0) or 0,
-            "wait6579_total_candidates": _safe_int(wait_metrics.get("total_candidates"), 0) or 0,
-            "wait6579_entered_attempts": _safe_int(wait_metrics.get("entered_attempts"), 0) or 0,
-            "wait6579_missed_attempts": _safe_int(wait_metrics.get("missed_attempts"), 0) or 0,
-            "wait6579_avg_expected_ev_pct": _safe_float(wait_metrics.get("avg_expected_ev_pct"), None),
-            "wait6579_avg_close_10m_pct": _safe_float(wait_metrics.get("avg_close_10m_pct"), None),
+            "latency_quote_stale_count": _safe_int(
+                buy_latency_root_counts.get("quote_stale"), 0
+            )
+            or 0,
+            "wait6579_total_candidates": _safe_int(
+                wait_metrics.get("total_candidates"), 0
+            )
+            or 0,
+            "wait6579_entered_attempts": _safe_int(
+                wait_metrics.get("entered_attempts"), 0
+            )
+            or 0,
+            "wait6579_missed_attempts": _safe_int(
+                wait_metrics.get("missed_attempts"), 0
+            )
+            or 0,
+            "wait6579_avg_expected_ev_pct": _safe_float(
+                wait_metrics.get("avg_expected_ev_pct"), None
+            ),
+            "wait6579_avg_close_10m_pct": _safe_float(
+                wait_metrics.get("avg_close_10m_pct"), None
+            ),
             "score65_74_candidates": len(score_rows),
-            "score65_74_avg_expected_ev_pct": round(_avg(score_ev) or 0.0, 4) if score_ev else None,
-            "score65_74_avg_close_10m_pct": round(_avg(score_close) or 0.0, 4) if score_close else None,
-            "score65_74_avg_mfe_10m_pct": round(_avg(score_mfe) or 0.0, 4) if score_mfe else None,
+            "score65_74_avg_expected_ev_pct": (
+                round(_avg(score_ev) or 0.0, 4) if score_ev else None
+            ),
+            "score65_74_avg_close_10m_pct": (
+                round(_avg(score_close) or 0.0, 4) if score_close else None
+            ),
+            "score65_74_avg_mfe_10m_pct": (
+                round(_avg(score_mfe) or 0.0, 4) if score_mfe else None
+            ),
             "full_samples": _safe_int(wait_approval.get("full_samples"), 0) or 0,
             "partial_samples": _safe_int(wait_approval.get("partial_samples"), 0) or 0,
-            "threshold_relaxation_approved": bool(wait_approval.get("threshold_relaxation_approved")),
-            "partial_sample_zero_is_calibration_target": (_safe_int(wait_approval.get("partial_samples"), 0) or 0) == 0,
+            "threshold_relaxation_approved": bool(
+                wait_approval.get("threshold_relaxation_approved")
+            ),
+            "partial_sample_zero_is_calibration_target": (
+                _safe_int(wait_approval.get("partial_samples"), 0) or 0
+            )
+            == 0,
             "budget_pass": _safe_int(buy_stage_events.get("budget_pass"), 0) or 0,
             "latency_pass": _safe_int(buy_stage_events.get("latency_pass"), 0) or 0,
-            "order_bundle_submitted": _safe_int(buy_stage_events.get("order_bundle_submitted"), 0) or 0,
-            "position_rebased_after_fill": _safe_int(buy_stage_events.get("position_rebased_after_fill"), 0) or 0,
-            "submitted_to_budget_unique_pct": _safe_float(buy_ratios.get("submitted_to_budget_unique_pct"), None),
-            "submitted_to_ai_unique_pct": _safe_float(buy_ratios.get("submitted_to_ai_unique_pct"), None),
-            "panic_state": panic_sell_defense.get("panic_state") if isinstance(panic_sell_defense, dict) else None,
-            "panic_regime_mode": panic_sell_defense.get("panic_regime_mode")
-            if isinstance(panic_sell_defense, dict)
-            else None,
-            "risk_regime_gate_state": panic_sell_defense.get("risk_regime_gate_state")
-            if isinstance(panic_sell_defense, dict)
-            else None,
-            "risk_regime_gate_authority": panic_sell_defense.get("risk_regime_gate_authority")
-            if isinstance(panic_sell_defense, dict)
-            else None,
-            "risk_regime_threshold_mode": panic_sell_defense.get("risk_regime_threshold_mode")
-            if isinstance(panic_sell_defense, dict)
-            else None,
+            "order_bundle_submitted": _safe_int(
+                buy_stage_events.get("order_bundle_submitted"), 0
+            )
+            or 0,
+            "position_rebased_after_fill": _safe_int(
+                buy_stage_events.get("position_rebased_after_fill"), 0
+            )
+            or 0,
+            "submitted_to_budget_unique_pct": _safe_float(
+                buy_ratios.get("submitted_to_budget_unique_pct"), None
+            ),
+            "submitted_to_ai_unique_pct": _safe_float(
+                buy_ratios.get("submitted_to_ai_unique_pct"), None
+            ),
+            "panic_state": (
+                panic_sell_defense.get("panic_state")
+                if isinstance(panic_sell_defense, dict)
+                else None
+            ),
+            "panic_regime_mode": (
+                panic_sell_defense.get("panic_regime_mode")
+                if isinstance(panic_sell_defense, dict)
+                else None
+            ),
+            "risk_regime_gate_state": (
+                panic_sell_defense.get("risk_regime_gate_state")
+                if isinstance(panic_sell_defense, dict)
+                else None
+            ),
+            "risk_regime_gate_authority": (
+                panic_sell_defense.get("risk_regime_gate_authority")
+                if isinstance(panic_sell_defense, dict)
+                else None
+            ),
+            "risk_regime_threshold_mode": (
+                panic_sell_defense.get("risk_regime_threshold_mode")
+                if isinstance(panic_sell_defense, dict)
+                else None
+            ),
             "panic_detected": bool(panic_metrics.get("panic_detected")),
-            "panic_by_stop_loss_count": bool(panic_metrics.get("panic_by_stop_loss_count")),
-            "panic_stop_loss_exit_count": _safe_int(panic_metrics.get("stop_loss_exit_count"), 0) or 0,
-            "missed_winner_rate": _safe_float(missed_metrics.get("missed_winner_rate"), None),
-            "avoided_loser_rate": _safe_float(missed_metrics.get("avoided_loser_rate"), None),
-            "blocked_ai_score_evaluated": _safe_int(ai_score_outcome.get("evaluated_candidates"), 0) or 0,
-            "blocked_ai_score_missed_winner_rate": _safe_float(ai_score_outcome.get("missed_winner_rate"), None),
-            "blocked_ai_score_avoided_loser_rate": _safe_float(ai_score_outcome.get("avoided_loser_rate"), None),
-            "blocked_ai_score_avg_close_10m_pct": _safe_float(ai_score_outcome.get("avg_close_10m_pct"), None),
-            "performance_blocked_ai_score_events": _safe_int(perf_metrics.get("entry_blocked_ai_score_events"), 0) or 0,
-            "gatekeeper_eval_ms_p95": _safe_float(perf_metrics.get("gatekeeper_eval_ms_p95"), None),
+            "panic_by_stop_loss_count": bool(
+                panic_metrics.get("panic_by_stop_loss_count")
+            ),
+            "panic_stop_loss_exit_count": _safe_int(
+                panic_metrics.get("stop_loss_exit_count"), 0
+            )
+            or 0,
+            "missed_winner_rate": _safe_float(
+                missed_metrics.get("missed_winner_rate"), None
+            ),
+            "avoided_loser_rate": _safe_float(
+                missed_metrics.get("avoided_loser_rate"), None
+            ),
+            "blocked_ai_score_evaluated": _safe_int(
+                ai_score_outcome.get("evaluated_candidates"), 0
+            )
+            or 0,
+            "blocked_ai_score_missed_winner_rate": _safe_float(
+                ai_score_outcome.get("missed_winner_rate"), None
+            ),
+            "blocked_ai_score_avoided_loser_rate": _safe_float(
+                ai_score_outcome.get("avoided_loser_rate"), None
+            ),
+            "blocked_ai_score_avg_close_10m_pct": _safe_float(
+                ai_score_outcome.get("avg_close_10m_pct"), None
+            ),
+            "performance_blocked_ai_score_events": _safe_int(
+                perf_metrics.get("entry_blocked_ai_score_events"), 0
+            )
+            or 0,
+            "gatekeeper_eval_ms_p95": _safe_float(
+                perf_metrics.get("gatekeeper_eval_ms_p95"), None
+            ),
         },
         "market_regime_continuous": market_regime_continuous,
         "rising_missed_refinement_action_plan": {
             "metric_role": rising_action_plan.get("metric_role")
             or rising_refinement.get("metric_role")
             or "source_quality_gate",
-            "decision": rising_action_plan.get("decision") or "missing_counterfactual_action_plan",
+            "decision": rising_action_plan.get("decision")
+            or "missing_counterfactual_action_plan",
             "plan_type": rising_action_plan.get("plan_type")
             or "rising_missed_classifier_refinement_source_only",
             "operator_manual_query_required": _truthy(
@@ -1843,7 +2261,9 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
             or rising_refinement.get("window_policy")
             or "same_day_missed_entry_counterfactual_rows",
             "sample_floor": _safe_int(
-                rising_action_plan.get("sample_floor", rising_refinement.get("sample_floor")),
+                rising_action_plan.get(
+                    "sample_floor", rising_refinement.get("sample_floor")
+                ),
                 0,
             )
             or 0,
@@ -1854,7 +2274,9 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
             or rising_refinement.get("source_quality_gate")
             or "pipeline_stage_flow_and_counterfactual_outcome_present",
             "runtime_effect": _truthy(rising_action_plan.get("runtime_effect", False)),
-            "allowed_runtime_apply": _truthy(rising_action_plan.get("allowed_runtime_apply", False)),
+            "allowed_runtime_apply": _truthy(
+                rising_action_plan.get("allowed_runtime_apply", False)
+            ),
             "decision_authority": rising_action_plan.get("decision_authority")
             or rising_refinement.get("decision_authority")
             or "postclose_source_only_refinement_no_runtime_apply",
@@ -1888,7 +2310,9 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
             ),
             "exclusion_or_confirmation_candidates": (
                 rising_action_plan.get("exclusion_or_confirmation_candidates")[:5]
-                if isinstance(rising_action_plan.get("exclusion_or_confirmation_candidates"), list)
+                if isinstance(
+                    rising_action_plan.get("exclusion_or_confirmation_candidates"), list
+                )
                 else []
             ),
             "hold_sample_candidates": (
@@ -1908,7 +2332,8 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
             ),
         },
         "latency_guard_miss_ev_recovery": {
-            "instrumentation_status": perf_latency_section.get("instrumentation_status") or "missing_contract",
+            "instrumentation_status": perf_latency_section.get("instrumentation_status")
+            or "missing_contract",
             "instrumentation_contract_version": _safe_int(
                 perf_latency_section.get("instrumentation_contract_version"),
                 0,
@@ -1931,21 +2356,51 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
                 if isinstance(perf_latency_section.get("missing_contract_fields"), list)
                 else []
             ),
-            "evaluated_candidates": _safe_int(latency_outcome.get("evaluated_candidates"), 0) or 0,
-            "missed_winner_count": _safe_int(latency_outcome.get("missed_winner_count"), 0) or 0,
-            "avoided_loser_count": _safe_int(latency_outcome.get("avoided_loser_count"), 0) or 0,
-            "missed_winner_rate": _safe_float(latency_outcome.get("missed_winner_rate"), None),
-            "avoided_loser_rate": _safe_float(latency_outcome.get("avoided_loser_rate"), None),
-            "avg_close_10m_pct": _safe_float(latency_outcome.get("avg_close_10m_pct"), None),
-            "avg_mfe_10m_pct": _safe_float(latency_outcome.get("avg_mfe_10m_pct"), None),
-            "avg_mae_10m_pct": _safe_float(latency_outcome.get("avg_mae_10m_pct"), None),
-            "performance_latency_block_events": _safe_int(perf_metrics.get("latency_block_events"), 0) or 0,
-            "performance_latency_pass_events": _safe_int(perf_metrics.get("latency_pass_events"), 0) or 0,
-            "quote_fresh_latency_pass_rate": _safe_float(perf_metrics.get("quote_fresh_latency_pass_rate"), None),
-            "gatekeeper_eval_ms_p95": _safe_float(perf_metrics.get("gatekeeper_eval_ms_p95"), None),
+            "evaluated_candidates": _safe_int(
+                latency_outcome.get("evaluated_candidates"), 0
+            )
+            or 0,
+            "missed_winner_count": _safe_int(
+                latency_outcome.get("missed_winner_count"), 0
+            )
+            or 0,
+            "avoided_loser_count": _safe_int(
+                latency_outcome.get("avoided_loser_count"), 0
+            )
+            or 0,
+            "missed_winner_rate": _safe_float(
+                latency_outcome.get("missed_winner_rate"), None
+            ),
+            "avoided_loser_rate": _safe_float(
+                latency_outcome.get("avoided_loser_rate"), None
+            ),
+            "avg_close_10m_pct": _safe_float(
+                latency_outcome.get("avg_close_10m_pct"), None
+            ),
+            "avg_mfe_10m_pct": _safe_float(
+                latency_outcome.get("avg_mfe_10m_pct"), None
+            ),
+            "avg_mae_10m_pct": _safe_float(
+                latency_outcome.get("avg_mae_10m_pct"), None
+            ),
+            "performance_latency_block_events": _safe_int(
+                perf_metrics.get("latency_block_events"), 0
+            )
+            or 0,
+            "performance_latency_pass_events": _safe_int(
+                perf_metrics.get("latency_pass_events"), 0
+            )
+            or 0,
+            "quote_fresh_latency_pass_rate": _safe_float(
+                perf_metrics.get("quote_fresh_latency_pass_rate"), None
+            ),
+            "gatekeeper_eval_ms_p95": _safe_float(
+                perf_metrics.get("gatekeeper_eval_ms_p95"), None
+            ),
             "attribution_ready": bool(
                 (_safe_int(latency_outcome.get("evaluated_candidates"), 0) or 0) > 0
-                and _safe_float(latency_outcome.get("avg_close_10m_pct"), None) is not None
+                and _safe_float(latency_outcome.get("avg_close_10m_pct"), None)
+                is not None
             ),
             "attribution_gap": bool(
                 (_safe_int(perf_metrics.get("latency_block_events"), 0) or 0)
@@ -1962,26 +2417,45 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
                 > (_safe_int(latency_outcome.get("evaluated_candidates"), 0) or 0)
                 else "use_latency_block_ev_for_refined_guard_review"
             ),
-            "latency_classifier_recommendation_status": "loaded" if latency_recommendation else "missing",
-            "latency_classifier_selected_profile_id": latency_recommendation.get("selected_profile_id"),
-            "latency_classifier_runtime_semantics": latency_recommendation_metrics.get("profile_runtime_semantics"),
+            "latency_classifier_recommendation_status": (
+                "loaded" if latency_recommendation else "missing"
+            ),
+            "latency_classifier_selected_profile_id": latency_recommendation.get(
+                "selected_profile_id"
+            ),
+            "latency_classifier_runtime_semantics": latency_recommendation_metrics.get(
+                "profile_runtime_semantics"
+            ),
             "latency_classifier_profile_generation": (
-                latency_recommendation.get("profile_generation") if isinstance(latency_recommendation, dict) else {}
+                latency_recommendation.get("profile_generation")
+                if isinstance(latency_recommendation, dict)
+                else {}
             ),
             "latency_classifier_counterfactual_source": (
-                latency_recommendation.get("counterfactual_source") if isinstance(latency_recommendation, dict) else {}
+                latency_recommendation.get("counterfactual_source")
+                if isinstance(latency_recommendation, dict)
+                else {}
             ),
-            "recommended_action": latency_recommendation_metrics.get("recommended_action"),
-            "recommended_action_reason": latency_recommendation_metrics.get("recommended_action_reason"),
+            "recommended_action": latency_recommendation_metrics.get(
+                "recommended_action"
+            ),
+            "recommended_action_reason": latency_recommendation_metrics.get(
+                "recommended_action_reason"
+            ),
             "would_safe_pass_events": _safe_int(
                 latency_recommendation_metrics.get("would_safe_pass_events"),
                 0,
             )
             or 0,
             "would_caution_normal_events": _safe_int(
-                latency_recommendation_metrics.get("would_caution_normal_events")
-                if latency_recommendation_metrics.get("would_caution_normal_events") is not None
-                else latency_recommendation_metrics.get("would_caution_reject_events"),
+                (
+                    latency_recommendation_metrics.get("would_caution_normal_events")
+                    if latency_recommendation_metrics.get("would_caution_normal_events")
+                    is not None
+                    else latency_recommendation_metrics.get(
+                        "would_caution_reject_events"
+                    )
+                ),
                 0,
             )
             or 0,
@@ -1995,7 +2469,10 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
                 0,
             )
             or 0,
-            "hard_reject_events": _safe_int(latency_recommendation_metrics.get("hard_reject_events"), 0) or 0,
+            "hard_reject_events": _safe_int(
+                latency_recommendation_metrics.get("hard_reject_events"), 0
+            )
+            or 0,
             "stale_quote_override_events": _safe_int(
                 latency_recommendation_metrics.get("stale_quote_override_events"),
                 0,
@@ -2007,7 +2484,9 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
             )
             or 0,
             "fallback_deprecated_excluded_from_pass_events": _safe_int(
-                latency_recommendation_metrics.get("fallback_deprecated_excluded_from_pass_events"),
+                latency_recommendation_metrics.get(
+                    "fallback_deprecated_excluded_from_pass_events"
+                ),
                 0,
             )
             or 0,
@@ -2036,103 +2515,195 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
             or 0,
             "latency_submit_routing": (
                 "latency_submit_recovery_candidate"
-                if str(latency_recommendation_metrics.get("recommended_action") or "") == "bounded_apply"
-                else "latency_submit_recovery_hold"
-                if (_safe_int(latency_recommendation_metrics.get("would_recovery_canary_events"), 0) or 0) > 0
-                else "latency_classifier_runtime_semantics_gap"
+                if str(latency_recommendation_metrics.get("recommended_action") or "")
+                == "bounded_apply"
+                else (
+                    "latency_submit_recovery_hold"
+                    if (
+                        _safe_int(
+                            latency_recommendation_metrics.get(
+                                "would_recovery_canary_events"
+                            ),
+                            0,
+                        )
+                        or 0
+                    )
+                    > 0
+                    else "latency_classifier_runtime_semantics_gap"
+                )
             ),
         },
         "liquidity_gate_refined_candidate": {
-            "evaluated_candidates": _safe_int(liquidity_outcome.get("evaluated_candidates"), 0) or 0,
-            "missed_winner_count": _safe_int(liquidity_outcome.get("missed_winner_count"), 0) or 0,
-            "avoided_loser_count": _safe_int(liquidity_outcome.get("avoided_loser_count"), 0) or 0,
-            "missed_winner_rate": _safe_float(liquidity_outcome.get("missed_winner_rate"), None),
-            "avoided_loser_rate": _safe_float(liquidity_outcome.get("avoided_loser_rate"), None),
-            "avg_close_10m_pct": _safe_float(liquidity_outcome.get("avg_close_10m_pct"), None),
-            "avg_mfe_10m_pct": _safe_float(liquidity_outcome.get("avg_mfe_10m_pct"), None),
-            "avg_mae_10m_pct": _safe_float(liquidity_outcome.get("avg_mae_10m_pct"), None),
-            "performance_blocked_liquidity_events": _safe_int(perf_metrics.get("entry_blocked_liquidity_events"), 0) or 0,
+            "evaluated_candidates": _safe_int(
+                liquidity_outcome.get("evaluated_candidates"), 0
+            )
+            or 0,
+            "missed_winner_count": _safe_int(
+                liquidity_outcome.get("missed_winner_count"), 0
+            )
+            or 0,
+            "avoided_loser_count": _safe_int(
+                liquidity_outcome.get("avoided_loser_count"), 0
+            )
+            or 0,
+            "missed_winner_rate": _safe_float(
+                liquidity_outcome.get("missed_winner_rate"), None
+            ),
+            "avoided_loser_rate": _safe_float(
+                liquidity_outcome.get("avoided_loser_rate"), None
+            ),
+            "avg_close_10m_pct": _safe_float(
+                liquidity_outcome.get("avg_close_10m_pct"), None
+            ),
+            "avg_mfe_10m_pct": _safe_float(
+                liquidity_outcome.get("avg_mfe_10m_pct"), None
+            ),
+            "avg_mae_10m_pct": _safe_float(
+                liquidity_outcome.get("avg_mae_10m_pct"), None
+            ),
+            "performance_blocked_liquidity_events": _safe_int(
+                perf_metrics.get("entry_blocked_liquidity_events"), 0
+            )
+            or 0,
             "allowed_runtime_apply": False,
             "target_metric": "missed_upside 감소와 avoided_loser 보존의 trade-off",
         },
         "overbought_gate_refined_candidate": {
-            "evaluated_candidates": _safe_int(overbought_outcome.get("evaluated_candidates"), 0) or 0,
-            "missed_winner_count": _safe_int(overbought_outcome.get("missed_winner_count"), 0) or 0,
-            "avoided_loser_count": _safe_int(overbought_outcome.get("avoided_loser_count"), 0) or 0,
-            "missed_winner_rate": _safe_float(overbought_outcome.get("missed_winner_rate"), None),
-            "avoided_loser_rate": _safe_float(overbought_outcome.get("avoided_loser_rate"), None),
-            "avg_close_10m_pct": _safe_float(overbought_outcome.get("avg_close_10m_pct"), None),
-            "avg_mfe_10m_pct": _safe_float(overbought_outcome.get("avg_mfe_10m_pct"), None),
-            "avg_mae_10m_pct": _safe_float(overbought_outcome.get("avg_mae_10m_pct"), None),
-            "performance_blocked_overbought_events": _safe_int(perf_metrics.get("entry_blocked_overbought_events"), 0) or 0,
+            "evaluated_candidates": _safe_int(
+                overbought_outcome.get("evaluated_candidates"), 0
+            )
+            or 0,
+            "missed_winner_count": _safe_int(
+                overbought_outcome.get("missed_winner_count"), 0
+            )
+            or 0,
+            "avoided_loser_count": _safe_int(
+                overbought_outcome.get("avoided_loser_count"), 0
+            )
+            or 0,
+            "missed_winner_rate": _safe_float(
+                overbought_outcome.get("missed_winner_rate"), None
+            ),
+            "avoided_loser_rate": _safe_float(
+                overbought_outcome.get("avoided_loser_rate"), None
+            ),
+            "avg_close_10m_pct": _safe_float(
+                overbought_outcome.get("avg_close_10m_pct"), None
+            ),
+            "avg_mfe_10m_pct": _safe_float(
+                overbought_outcome.get("avg_mfe_10m_pct"), None
+            ),
+            "avg_mae_10m_pct": _safe_float(
+                overbought_outcome.get("avg_mae_10m_pct"), None
+            ),
+            "performance_blocked_overbought_events": _safe_int(
+                perf_metrics.get("entry_blocked_overbought_events"), 0
+            )
+            or 0,
             "allowed_runtime_apply": False,
             "target_metric": "과열 차단 후 missed_upside/avoided_loss trade-off",
         },
         "soft_stop": {
-            "holding_exit_observation_total": _safe_int(soft_stop.get("total_soft_stop"), 0) or 0,
+            "holding_exit_observation_total": _safe_int(
+                soft_stop.get("total_soft_stop"), 0
+            )
+            or 0,
             "holding_exit_observation_rebound_above_sell_10m_rate": _safe_float(
                 soft_stop.get("rebound_above_sell_10m_rate"), None
             ),
             "holding_exit_observation_rebound_above_buy_10m_rate": _safe_float(
                 soft_stop.get("rebound_above_buy_10m_rate"), None
             ),
-            "holding_exit_observation_whipsaw_signal": bool(soft_stop.get("whipsaw_signal")),
-            "cooldown_would_block_rate": _safe_float(soft_stop.get("cooldown_would_block_rate"), None),
-            "post_sell_soft_stop_total": _safe_int(post_sell_soft.get("total_soft_stop"), 0) or 0,
+            "holding_exit_observation_whipsaw_signal": bool(
+                soft_stop.get("whipsaw_signal")
+            ),
+            "cooldown_would_block_rate": _safe_float(
+                soft_stop.get("cooldown_would_block_rate"), None
+            ),
+            "post_sell_soft_stop_total": _safe_int(
+                post_sell_soft.get("total_soft_stop"), 0
+            )
+            or 0,
             "post_sell_rebound_above_sell_10m_rate": _safe_float(
-                (post_sell_soft.get("rebound_above_sell_rate") or {}).get("10m")
-                if isinstance(post_sell_soft.get("rebound_above_sell_rate"), dict)
-                else None,
+                (
+                    (post_sell_soft.get("rebound_above_sell_rate") or {}).get("10m")
+                    if isinstance(post_sell_soft.get("rebound_above_sell_rate"), dict)
+                    else None
+                ),
                 None,
             ),
             "post_sell_rebound_above_buy_10m_rate": _safe_float(
-                (post_sell_soft.get("rebound_above_buy_rate") or {}).get("10m")
-                if isinstance(post_sell_soft.get("rebound_above_buy_rate"), dict)
-                else None,
+                (
+                    (post_sell_soft.get("rebound_above_buy_rate") or {}).get("10m")
+                    if isinstance(post_sell_soft.get("rebound_above_buy_rate"), dict)
+                    else None
+                ),
                 None,
             ),
             "post_sell_rebound_above_sell_20m_rate": _safe_float(
-                (post_sell_soft.get("rebound_above_sell_rate") or {}).get("20m")
-                if isinstance(post_sell_soft.get("rebound_above_sell_rate"), dict)
-                else None,
+                (
+                    (post_sell_soft.get("rebound_above_sell_rate") or {}).get("20m")
+                    if isinstance(post_sell_soft.get("rebound_above_sell_rate"), dict)
+                    else None
+                ),
                 None,
             ),
             "post_sell_rebound_above_buy_20m_rate": _safe_float(
-                (post_sell_soft.get("rebound_above_buy_rate") or {}).get("20m")
-                if isinstance(post_sell_soft.get("rebound_above_buy_rate"), dict)
-                else None,
+                (
+                    (post_sell_soft.get("rebound_above_buy_rate") or {}).get("20m")
+                    if isinstance(post_sell_soft.get("rebound_above_buy_rate"), dict)
+                    else None
+                ),
                 None,
             ),
             "post_sell_rebound_above_sell_30m_rate": _safe_float(
-                (post_sell_soft.get("rebound_above_sell_rate") or {}).get("30m")
-                if isinstance(post_sell_soft.get("rebound_above_sell_rate"), dict)
-                else None,
+                (
+                    (post_sell_soft.get("rebound_above_sell_rate") or {}).get("30m")
+                    if isinstance(post_sell_soft.get("rebound_above_sell_rate"), dict)
+                    else None
+                ),
                 None,
             ),
             "post_sell_rebound_above_buy_30m_rate": _safe_float(
-                (post_sell_soft.get("rebound_above_buy_rate") or {}).get("30m")
-                if isinstance(post_sell_soft.get("rebound_above_buy_rate"), dict)
-                else None,
+                (
+                    (post_sell_soft.get("rebound_above_buy_rate") or {}).get("30m")
+                    if isinstance(post_sell_soft.get("rebound_above_buy_rate"), dict)
+                    else None
+                ),
                 None,
             ),
             "post_sell_rebound_above_sell_60m_rate": _safe_float(
-                (post_sell_soft.get("rebound_above_sell_rate") or {}).get("60m")
-                if isinstance(post_sell_soft.get("rebound_above_sell_rate"), dict)
-                else None,
+                (
+                    (post_sell_soft.get("rebound_above_sell_rate") or {}).get("60m")
+                    if isinstance(post_sell_soft.get("rebound_above_sell_rate"), dict)
+                    else None
+                ),
                 None,
             ),
             "post_sell_rebound_above_buy_60m_rate": _safe_float(
-                (post_sell_soft.get("rebound_above_buy_rate") or {}).get("60m")
-                if isinstance(post_sell_soft.get("rebound_above_buy_rate"), dict)
-                else None,
+                (
+                    (post_sell_soft.get("rebound_above_buy_rate") or {}).get("60m")
+                    if isinstance(post_sell_soft.get("rebound_above_buy_rate"), dict)
+                    else None
+                ),
                 None,
             ),
         },
         "holding_flow": {
             "sentinel_primary": classification.get("primary"),
-            "sentinel_secondary": classification.get("secondary") if isinstance(classification.get("secondary"), list) else [],
-            "holding_flow_override_defer_exit": _safe_int(stage_events.get("holding_flow_override_defer_exit"), 0) or 0,
-            "holding_flow_override_force_exit": _safe_int(stage_events.get("holding_flow_override_force_exit"), 0) or 0,
+            "sentinel_secondary": (
+                classification.get("secondary")
+                if isinstance(classification.get("secondary"), list)
+                else []
+            ),
+            "holding_flow_override_defer_exit": _safe_int(
+                stage_events.get("holding_flow_override_defer_exit"), 0
+            )
+            or 0,
+            "holding_flow_override_force_exit": _safe_int(
+                stage_events.get("holding_flow_override_force_exit"), 0
+            )
+            or 0,
             "holding_flow_override_exit_confirmed": _safe_int(
                 stage_events.get("holding_flow_override_exit_confirmed"), 0
             )
@@ -2141,80 +2712,136 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
                 stage_events.get("holding_flow_ofi_smoothing_applied"), 0
             )
             or 0,
-            "max_defer_worsen_pct": _safe_float(session.get("max_defer_worsen_pct"), None),
+            "max_defer_worsen_pct": _safe_float(
+                session.get("max_defer_worsen_pct"), None
+            ),
         },
         "trailing": {
             "evaluated_trailing": _safe_int(trailing.get("evaluated_trailing"), 0) or 0,
-            "qualifying_cohort_count": _safe_int(trailing.get("qualifying_cohort_count"), 0) or 0,
+            "qualifying_cohort_count": _safe_int(
+                trailing.get("qualifying_cohort_count"), 0
+            )
+            or 0,
             "missed_upside_rate": _safe_float(trailing.get("missed_upside_rate"), None),
             "good_exit_rate": _safe_float(trailing.get("good_exit_rate"), None),
             "eligible_for_live_review": bool(trailing.get("eligible_for_live_review")),
         },
         "safety": {
-            "same_symbol_reentry_loss_count": _safe_int(same_symbol.get("after_soft_stop_next_loss_count"), 0) or 0,
+            "same_symbol_reentry_loss_count": _safe_int(
+                same_symbol.get("after_soft_stop_next_loss_count"), 0
+            )
+            or 0,
             "sell_order_sent": _safe_int(stage_events.get("sell_order_sent"), 0) or 0,
             "sell_completed": _safe_int(stage_events.get("sell_completed"), 0) or 0,
-            "trade_review_completed_valid": _safe_int((trade_review.get("metrics") or {}).get("completed_valid"), 0)
-            if isinstance(trade_review.get("metrics"), dict)
-            else 0,
+            "trade_review_completed_valid": (
+                _safe_int((trade_review.get("metrics") or {}).get("completed_valid"), 0)
+                if isinstance(trade_review.get("metrics"), dict)
+                else 0
+            ),
         },
         "panic_sell_defense": {
-            "panic_state": panic_sell_defense.get("panic_state") if isinstance(panic_sell_defense, dict) else None,
-            "panic_regime_mode": panic_sell_defense.get("panic_regime_mode")
-            if isinstance(panic_sell_defense, dict)
-            else None,
-            "risk_regime_gate_state": panic_sell_defense.get("risk_regime_gate_state")
-            if isinstance(panic_sell_defense, dict)
-            else None,
-            "risk_regime_gate_authority": panic_sell_defense.get("risk_regime_gate_authority")
-            if isinstance(panic_sell_defense, dict)
-            else None,
-            "risk_regime_threshold_mode": panic_sell_defense.get("risk_regime_threshold_mode")
-            if isinstance(panic_sell_defense, dict)
-            else None,
+            "panic_state": (
+                panic_sell_defense.get("panic_state")
+                if isinstance(panic_sell_defense, dict)
+                else None
+            ),
+            "panic_regime_mode": (
+                panic_sell_defense.get("panic_regime_mode")
+                if isinstance(panic_sell_defense, dict)
+                else None
+            ),
+            "risk_regime_gate_state": (
+                panic_sell_defense.get("risk_regime_gate_state")
+                if isinstance(panic_sell_defense, dict)
+                else None
+            ),
+            "risk_regime_gate_authority": (
+                panic_sell_defense.get("risk_regime_gate_authority")
+                if isinstance(panic_sell_defense, dict)
+                else None
+            ),
+            "risk_regime_threshold_mode": (
+                panic_sell_defense.get("risk_regime_threshold_mode")
+                if isinstance(panic_sell_defense, dict)
+                else None
+            ),
             "risk_regime_confirmed_evidence_count": _safe_int(
-                ((panic_sell_defense.get("risk_regime_gate") or {}).get("confirmed_evidence_count"))
-                if isinstance(panic_sell_defense.get("risk_regime_gate"), dict)
-                else 0,
+                (
+                    (
+                        (panic_sell_defense.get("risk_regime_gate") or {}).get(
+                            "confirmed_evidence_count"
+                        )
+                    )
+                    if isinstance(panic_sell_defense.get("risk_regime_gate"), dict)
+                    else 0
+                ),
                 0,
             )
             or 0,
-            "panic_regime_decision_authority": panic_regime_contract.get("decision_authority"),
+            "panic_regime_decision_authority": panic_regime_contract.get(
+                "decision_authority"
+            ),
             "panic_regime_runtime_effect": panic_regime_contract.get("runtime_effect"),
-            "panic_regime_allowed_actions": [
-                str(item) for item in panic_regime_contract.get("allowed_actions", []) if str(item)
-            ]
-            if isinstance(panic_regime_contract.get("allowed_actions"), list)
-            else [],
-            "panic_regime_forbidden_uses": [
-                str(item) for item in panic_regime_contract.get("forbidden_uses", []) if str(item)
-            ]
-            if isinstance(panic_regime_contract.get("forbidden_uses"), list)
-            else [],
+            "panic_regime_allowed_actions": (
+                [
+                    str(item)
+                    for item in panic_regime_contract.get("allowed_actions", [])
+                    if str(item)
+                ]
+                if isinstance(panic_regime_contract.get("allowed_actions"), list)
+                else []
+            ),
+            "panic_regime_forbidden_uses": (
+                [
+                    str(item)
+                    for item in panic_regime_contract.get("forbidden_uses", [])
+                    if str(item)
+                ]
+                if isinstance(panic_regime_contract.get("forbidden_uses"), list)
+                else []
+            ),
             "runtime_effect": (
                 (panic_sell_defense.get("policy") or {}).get("runtime_effect")
                 if isinstance(panic_sell_defense.get("policy"), dict)
                 else None
             ),
             "real_exit_count": _safe_int(panic_metrics.get("real_exit_count"), 0) or 0,
-            "non_real_exit_count": _safe_int(panic_metrics.get("non_real_exit_count"), 0) or 0,
-            "stop_loss_exit_count": _safe_int(panic_metrics.get("stop_loss_exit_count"), 0) or 0,
+            "non_real_exit_count": _safe_int(
+                panic_metrics.get("non_real_exit_count"), 0
+            )
+            or 0,
+            "stop_loss_exit_count": _safe_int(
+                panic_metrics.get("stop_loss_exit_count"), 0
+            )
+            or 0,
             "max_rolling_30m_stop_loss_exit_count": _safe_int(
                 panic_metrics.get("max_rolling_30m_stop_loss_exit_count"), 0
             )
             or 0,
-            "stop_loss_exit_ratio_pct": _safe_float(panic_metrics.get("stop_loss_exit_ratio_pct"), None),
-            "avg_exit_profit_rate_pct": _safe_float(panic_metrics.get("avg_exit_profit_rate_pct"), None),
+            "stop_loss_exit_ratio_pct": _safe_float(
+                panic_metrics.get("stop_loss_exit_ratio_pct"), None
+            ),
+            "avg_exit_profit_rate_pct": _safe_float(
+                panic_metrics.get("avg_exit_profit_rate_pct"), None
+            ),
             "confirmation_eligible_exit_count": _safe_int(
                 panic_metrics.get("confirmation_eligible_exit_count"), 0
             )
             or 0,
-            "never_delay_exit_count": _safe_int(panic_metrics.get("never_delay_exit_count"), 0) or 0,
-            "active_sim_probe_positions": _safe_int(active_recovery.get("active_positions"), 0) or 0,
+            "never_delay_exit_count": _safe_int(
+                panic_metrics.get("never_delay_exit_count"), 0
+            )
+            or 0,
+            "active_sim_probe_positions": _safe_int(
+                active_recovery.get("active_positions"), 0
+            )
+            or 0,
             "active_sim_probe_avg_unrealized_profit_rate_pct": _safe_float(
                 active_recovery.get("avg_unrealized_profit_rate_pct"), None
             ),
-            "active_sim_probe_win_rate_pct": _safe_float(active_recovery.get("win_rate_pct"), None),
+            "active_sim_probe_win_rate_pct": _safe_float(
+                active_recovery.get("win_rate_pct"), None
+            ),
             "active_sim_probe_provenance_passed": bool(
                 ((active_recovery.get("provenance_check") or {}).get("passed"))
                 if isinstance(active_recovery.get("provenance_check"), dict)
@@ -2246,9 +2873,15 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
                 microstructure_detector.get("degraded_orderbook_count"), 0
             )
             or 0,
-            "microstructure_max_panic_score": _safe_float(microstructure_metrics.get("max_panic_score"), None),
-            "microstructure_max_recovery_score": _safe_float(microstructure_metrics.get("max_recovery_score"), None),
-            "microstructure_market_risk_state": microstructure_market_context.get("market_risk_state"),
+            "microstructure_max_panic_score": _safe_float(
+                microstructure_metrics.get("max_panic_score"), None
+            ),
+            "microstructure_max_recovery_score": _safe_float(
+                microstructure_metrics.get("max_recovery_score"), None
+            ),
+            "microstructure_market_risk_state": microstructure_market_context.get(
+                "market_risk_state"
+            ),
             "microstructure_market_confirms_risk_off": bool(
                 microstructure_market_context.get("market_confirms_risk_off")
             ),
@@ -2268,7 +2901,9 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
                 microstructure_market_context.get("breadth_symbol_floor"), 0
             )
             or 0,
-            "microstructure_source_quality_reasons": [str(reason) for reason in micro_market_reasons],
+            "microstructure_source_quality_reasons": [
+                str(reason) for reason in micro_market_reasons
+            ],
             "source_quality_blockers": micro_market_source_quality_blockers,
             "market_breadth_followup_candidate": micro_market_followup_candidate,
             "market_breadth_next_action": (
@@ -2280,62 +2915,127 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
             "allowed_runtime_apply": False,
         },
         "panic_buying": {
-            "panic_buy_state": panic_buying.get("panic_buy_state") if isinstance(panic_buying, dict) else None,
+            "panic_buy_state": (
+                panic_buying.get("panic_buy_state")
+                if isinstance(panic_buying, dict)
+                else None
+            ),
             "panic_buy_regime_mode": (
-                panic_buying.get("panic_buy_regime_mode") if isinstance(panic_buying, dict) else None
+                panic_buying.get("panic_buy_regime_mode")
+                if isinstance(panic_buying, dict)
+                else None
             ),
             "panic_buy_regime_decision_authority": (
-                (panic_buying.get("panic_buy_regime_contract") or {}).get("decision_authority")
+                (panic_buying.get("panic_buy_regime_contract") or {}).get(
+                    "decision_authority"
+                )
                 if isinstance(panic_buying.get("panic_buy_regime_contract"), dict)
                 else None
             ),
             "panic_buy_regime_runtime_effect": (
-                (panic_buying.get("panic_buy_regime_contract") or {}).get("runtime_effect")
+                (panic_buying.get("panic_buy_regime_contract") or {}).get(
+                    "runtime_effect"
+                )
                 if isinstance(panic_buying.get("panic_buy_regime_contract"), dict)
                 else None
             ),
             "panic_buy_regime_allowed_actions": (
-                (panic_buying.get("panic_buy_regime_contract") or {}).get("allowed_actions")
+                (panic_buying.get("panic_buy_regime_contract") or {}).get(
+                    "allowed_actions"
+                )
                 if isinstance(panic_buying.get("panic_buy_regime_contract"), dict)
                 else []
             ),
             "panic_buy_regime_forbidden_uses": (
-                (panic_buying.get("panic_buy_regime_contract") or {}).get("forbidden_uses")
+                (panic_buying.get("panic_buy_regime_contract") or {}).get(
+                    "forbidden_uses"
+                )
                 if isinstance(panic_buying.get("panic_buy_regime_contract"), dict)
                 else []
             ),
-            "risk_regime_gate_state": panic_buying.get("risk_regime_gate_state")
-            if isinstance(panic_buying, dict)
-            else None,
-            "risk_regime_gate_authority": panic_buying.get("risk_regime_gate_authority")
-            if isinstance(panic_buying, dict)
-            else None,
-            "risk_regime_threshold_mode": panic_buying.get("risk_regime_threshold_mode")
-            if isinstance(panic_buying, dict)
-            else None,
-            "confirmed_evidence_count": _safe_int(panic_buy_gate.get("confirmed_evidence_count"), 0) or 0,
+            "risk_regime_gate_state": (
+                panic_buying.get("risk_regime_gate_state")
+                if isinstance(panic_buying, dict)
+                else None
+            ),
+            "risk_regime_gate_authority": (
+                panic_buying.get("risk_regime_gate_authority")
+                if isinstance(panic_buying, dict)
+                else None
+            ),
+            "risk_regime_threshold_mode": (
+                panic_buying.get("risk_regime_threshold_mode")
+                if isinstance(panic_buying, dict)
+                else None
+            ),
+            "confirmed_evidence_count": _safe_int(
+                panic_buy_gate.get("confirmed_evidence_count"), 0
+            )
+            or 0,
             "runtime_effect": (
                 (panic_buying.get("policy") or {}).get("runtime_effect")
                 if isinstance(panic_buying.get("policy"), dict)
                 else None
             ),
-            "panic_buy_active_count": _safe_int(panic_buy_metrics.get("panic_buy_active_count"), 0) or 0,
-            "panic_buy_watch_count": _safe_int(panic_buy_metrics.get("panic_buy_watch_count"), 0) or 0,
-            "exhaustion_candidate_count": _safe_int(panic_buy_exhaustion.get("exhaustion_candidate_count"), 0) or 0,
-            "exhaustion_confirmed_count": _safe_int(panic_buy_exhaustion.get("exhaustion_confirmed_count"), 0) or 0,
-            "max_panic_buy_score": _safe_float(panic_buy_metrics.get("max_panic_buy_score"), None),
-            "max_exhaustion_score": _safe_float(panic_buy_exhaustion.get("max_exhaustion_score"), None),
-            "avg_confidence": _safe_float(panic_buy_metrics.get("avg_confidence"), None),
-            "tp_counterfactual_count": _safe_int(panic_buy_tp.get("candidate_context_count"), 0) or 0,
-            "tp_like_exit_count": _safe_int(panic_buy_tp.get("tp_like_exit_count"), 0) or 0,
-            "trailing_winner_count": _safe_int(panic_buy_tp.get("trailing_winner_count"), 0) or 0,
-            "market_breadth_source_quality_status": panic_buy_market.get("market_panic_breadth_source_quality_status"),
-            "market_breadth_risk_on_advisory": bool(panic_buy_market.get("market_panic_breadth_risk_on_advisory")),
-            "market_breadth_risk_off_advisory": bool(panic_buy_market.get("market_panic_breadth_risk_off_advisory")),
-            "market_wide_panic_buy_confirmed": bool(panic_buy_market.get("market_wide_panic_buy_confirmed")),
-            "missing_orderbook_count": _safe_int(panic_buy_micro.get("missing_orderbook_count"), 0) or 0,
-            "missing_trade_aggressor_count": _safe_int(panic_buy_micro.get("missing_trade_aggressor_count"), 0) or 0,
-            "carried_orderbook_snapshot_count": _safe_int(panic_buy_micro.get("carried_orderbook_snapshot_count"), 0) or 0,
+            "panic_buy_active_count": _safe_int(
+                panic_buy_metrics.get("panic_buy_active_count"), 0
+            )
+            or 0,
+            "panic_buy_watch_count": _safe_int(
+                panic_buy_metrics.get("panic_buy_watch_count"), 0
+            )
+            or 0,
+            "exhaustion_candidate_count": _safe_int(
+                panic_buy_exhaustion.get("exhaustion_candidate_count"), 0
+            )
+            or 0,
+            "exhaustion_confirmed_count": _safe_int(
+                panic_buy_exhaustion.get("exhaustion_confirmed_count"), 0
+            )
+            or 0,
+            "max_panic_buy_score": _safe_float(
+                panic_buy_metrics.get("max_panic_buy_score"), None
+            ),
+            "max_exhaustion_score": _safe_float(
+                panic_buy_exhaustion.get("max_exhaustion_score"), None
+            ),
+            "avg_confidence": _safe_float(
+                panic_buy_metrics.get("avg_confidence"), None
+            ),
+            "tp_counterfactual_count": _safe_int(
+                panic_buy_tp.get("candidate_context_count"), 0
+            )
+            or 0,
+            "tp_like_exit_count": _safe_int(panic_buy_tp.get("tp_like_exit_count"), 0)
+            or 0,
+            "trailing_winner_count": _safe_int(
+                panic_buy_tp.get("trailing_winner_count"), 0
+            )
+            or 0,
+            "market_breadth_source_quality_status": panic_buy_market.get(
+                "market_panic_breadth_source_quality_status"
+            ),
+            "market_breadth_risk_on_advisory": bool(
+                panic_buy_market.get("market_panic_breadth_risk_on_advisory")
+            ),
+            "market_breadth_risk_off_advisory": bool(
+                panic_buy_market.get("market_panic_breadth_risk_off_advisory")
+            ),
+            "market_wide_panic_buy_confirmed": bool(
+                panic_buy_market.get("market_wide_panic_buy_confirmed")
+            ),
+            "missing_orderbook_count": _safe_int(
+                panic_buy_micro.get("missing_orderbook_count"), 0
+            )
+            or 0,
+            "missing_trade_aggressor_count": _safe_int(
+                panic_buy_micro.get("missing_trade_aggressor_count"), 0
+            )
+            or 0,
+            "carried_orderbook_snapshot_count": _safe_int(
+                panic_buy_micro.get("carried_orderbook_snapshot_count"), 0
+            )
+            or 0,
             "carried_trade_aggressor_snapshot_count": _safe_int(
                 panic_buy_micro.get("carried_trade_aggressor_snapshot_count"), 0
             )
@@ -2348,8 +3048,12 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
             "matrix_version": decision_matrix.get("matrix_version"),
             "instrumentation_status": (
                 "implemented"
-                if isinstance(decision_matrix.get("counterfactual_coverage_summary"), dict)
-                and isinstance(decision_matrix.get("counterfactual_proxy_summary"), dict)
+                if isinstance(
+                    decision_matrix.get("counterfactual_coverage_summary"), dict
+                )
+                and isinstance(
+                    decision_matrix.get("counterfactual_proxy_summary"), dict
+                )
                 else "missing_contract"
             ),
             "instrumentation_contract_version": _safe_int(
@@ -2367,92 +3071,162 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
             "matrix_no_clear_edge": sum(
                 1
                 for entry in matrix_entries
-                if isinstance(entry, dict) and str(entry.get("recommended_bias") or "") == "no_clear_edge"
+                if isinstance(entry, dict)
+                and str(entry.get("recommended_bias") or "") == "no_clear_edge"
             ),
             "saw_weight_source_ready": bool(stat_action.get("weight_source_ready")),
-            "saw_candidate_weight_source": _safe_int(saw_policy_counts.get("candidate_weight_source"), 0) or 0,
+            "saw_candidate_weight_source": _safe_int(
+                saw_policy_counts.get("candidate_weight_source"), 0
+            )
+            or 0,
             "saw_defensive_only_high_loss_rate": _safe_int(
                 saw_policy_counts.get("defensive_only_high_loss_rate"), 0
             )
             or 0,
-            "saw_insufficient_sample": _safe_int(saw_policy_counts.get("insufficient_sample"), 0) or 0,
-            "counterfactual_entry_count": _safe_int(matrix_counterfactual.get("entry_count"), 0) or 0,
-            "counterfactual_ready_count": _safe_int(matrix_counterfactual.get("ready_count"), 0) or 0,
-            "counterfactual_gap_count": _safe_int(matrix_counterfactual.get("gap_count"), 0) or 0,
-            "counterfactual_ready_rate": _safe_float(matrix_counterfactual.get("ready_rate"), None),
+            "saw_insufficient_sample": _safe_int(
+                saw_policy_counts.get("insufficient_sample"), 0
+            )
+            or 0,
+            "counterfactual_entry_count": _safe_int(
+                matrix_counterfactual.get("entry_count"), 0
+            )
+            or 0,
+            "counterfactual_ready_count": _safe_int(
+                matrix_counterfactual.get("ready_count"), 0
+            )
+            or 0,
+            "counterfactual_gap_count": _safe_int(
+                matrix_counterfactual.get("gap_count"), 0
+            )
+            or 0,
+            "counterfactual_ready_rate": _safe_float(
+                matrix_counterfactual.get("ready_rate"), None
+            ),
             "counterfactual_per_action_samples": (
                 matrix_counterfactual.get("per_action_samples")
                 if isinstance(matrix_counterfactual.get("per_action_samples"), dict)
                 else {}
             ),
             "eligible_but_not_chosen_status": counterfactual_proxy.get("status"),
-            "eligible_but_not_chosen_sample_snapshots": counterfactual_proxy.get("sample_snapshots"),
-            "eligible_but_not_chosen_sample_candidates": counterfactual_proxy.get("sample_candidates"),
+            "eligible_but_not_chosen_sample_snapshots": counterfactual_proxy.get(
+                "sample_snapshots"
+            ),
+            "eligible_but_not_chosen_sample_candidates": counterfactual_proxy.get(
+                "sample_candidates"
+            ),
             "eligible_but_not_chosen_post_sell_joined_candidates": counterfactual_proxy.get(
                 "post_sell_joined_candidates"
             ),
             "counterfactual_proxy_ready": bool(counterfactual_proxy.get("ready")),
-            "counterfactual_proxy_actions_present": counterfactual_proxy.get("actions_present") or [],
-            "counterfactual_proxy_missing_actions": counterfactual_proxy.get("missing_actions") or [],
-            "counterfactual_proxy_per_action_samples": counterfactual_proxy.get("per_action_samples") or {},
-            "counterfactual_proxy_per_action_joined": counterfactual_proxy.get("per_action_joined") or {},
+            "counterfactual_proxy_actions_present": counterfactual_proxy.get(
+                "actions_present"
+            )
+            or [],
+            "counterfactual_proxy_missing_actions": counterfactual_proxy.get(
+                "missing_actions"
+            )
+            or [],
+            "counterfactual_proxy_per_action_samples": counterfactual_proxy.get(
+                "per_action_samples"
+            )
+            or {},
+            "counterfactual_proxy_per_action_joined": counterfactual_proxy.get(
+                "per_action_joined"
+            )
+            or {},
             "excluded_reports": {},
         },
         "scale_in_price_guard": {
-            "scale_in_price_resolved": _safe_int(stage_events.get("scale_in_price_resolved"), 0) or 0,
-            "scale_in_price_guard_block": _safe_int(stage_events.get("scale_in_price_guard_block"), 0) or 0,
-            "scale_in_price_p2_observe": _safe_int(stage_events.get("scale_in_price_p2_observe"), 0) or 0,
-            "compact_scale_in_executed": _safe_int(stat_action_sample.get("compact_scale_in_executed"), 0)
+            "scale_in_price_resolved": _safe_int(
+                stage_events.get("scale_in_price_resolved"), 0
+            )
+            or 0,
+            "scale_in_price_guard_block": _safe_int(
+                stage_events.get("scale_in_price_guard_block"), 0
+            )
+            or 0,
+            "scale_in_price_p2_observe": _safe_int(
+                stage_events.get("scale_in_price_p2_observe"), 0
+            )
+            or 0,
+            "compact_scale_in_executed": _safe_int(
+                stat_action_sample.get("compact_scale_in_executed"), 0
+            )
             or 0,
             "avg_down_wait": _safe_int(stat_action_sample.get("avg_down_wait"), 0) or 0,
             "pyramid_wait": _safe_int(stat_action_sample.get("pyramid_wait"), 0) or 0,
             "saw_weight_source_ready": bool(stat_action.get("weight_source_ready")),
-            "saw_candidate_weight_source": _safe_int(saw_policy_counts.get("candidate_weight_source"), 0) or 0,
+            "saw_candidate_weight_source": _safe_int(
+                saw_policy_counts.get("candidate_weight_source"), 0
+            )
+            or 0,
         },
         "bad_entry": {
-            "refined_candidate": _safe_int(stage_events.get("bad_entry_refined_candidate"), 0)
+            "refined_candidate": _safe_int(
+                stage_events.get("bad_entry_refined_candidate"), 0
+            )
             or _safe_int(buy_stage_events.get("bad_entry_refined_candidate"), 0)
             or 0,
-            "bad_entry_block_observed": _safe_int(stage_events.get("bad_entry_block_observed"), 0)
+            "bad_entry_block_observed": _safe_int(
+                stage_events.get("bad_entry_block_observed"), 0
+            )
             or _safe_int(buy_stage_events.get("bad_entry_block_observed"), 0)
             or 0,
-            "soft_stop_tail_sample": _safe_int(soft_stop.get("total_soft_stop"), 0) or 0,
+            "soft_stop_tail_sample": _safe_int(soft_stop.get("total_soft_stop"), 0)
+            or 0,
             "soft_stop_rebound_above_sell_10m_rate": _safe_float(
                 soft_stop.get("rebound_above_sell_10m_rate"), None
             ),
-            "holding_flow_override_defer_exit": _safe_int(stage_events.get("holding_flow_override_defer_exit"), 0)
+            "holding_flow_override_defer_exit": _safe_int(
+                stage_events.get("holding_flow_override_defer_exit"), 0
+            )
             or 0,
             "sell_order_sent": _safe_int(stage_events.get("sell_order_sent"), 0) or 0,
             "sell_completed": _safe_int(stage_events.get("sell_completed"), 0) or 0,
         },
         "microstructure_reaction_context": {
             "available": bool(microstructure_reaction_summary.get("available")),
-            "row_count": _safe_int(microstructure_reaction_summary.get("row_count"), 0) or 0,
-            "ok_count": _safe_int(microstructure_reaction_summary.get("ok_count"), 0) or 0,
+            "row_count": _safe_int(microstructure_reaction_summary.get("row_count"), 0)
+            or 0,
+            "ok_count": _safe_int(microstructure_reaction_summary.get("ok_count"), 0)
+            or 0,
             "missing_or_unusable_count": _safe_int(
                 microstructure_reaction_summary.get("missing_or_unusable_count"), 0
             )
             or 0,
-            "real_submitted_count": _safe_int(microstructure_reaction_summary.get("real_submitted_count"), 0)
+            "real_submitted_count": _safe_int(
+                microstructure_reaction_summary.get("real_submitted_count"), 0
+            )
             or 0,
             "status_counts": (
                 microstructure_reaction_summary.get("status_counts")
-                if isinstance(microstructure_reaction_summary.get("status_counts"), dict)
+                if isinstance(
+                    microstructure_reaction_summary.get("status_counts"), dict
+                )
                 else {}
             ),
             "entry_reaction_quality_counts": (
                 microstructure_reaction_summary.get("entry_reaction_quality_counts")
-                if isinstance(microstructure_reaction_summary.get("entry_reaction_quality_counts"), dict)
+                if isinstance(
+                    microstructure_reaction_summary.get(
+                        "entry_reaction_quality_counts"
+                    ),
+                    dict,
+                )
                 else {}
             ),
             "source_quality_counts": (
                 microstructure_reaction_summary.get("source_quality_counts")
-                if isinstance(microstructure_reaction_summary.get("source_quality_counts"), dict)
+                if isinstance(
+                    microstructure_reaction_summary.get("source_quality_counts"), dict
+                )
                 else {}
             ),
             "v_pw_source_counts": (
                 microstructure_reaction_summary.get("v_pw_source_counts")
-                if isinstance(microstructure_reaction_summary.get("v_pw_source_counts"), dict)
+                if isinstance(
+                    microstructure_reaction_summary.get("v_pw_source_counts"), dict
+                )
                 else {}
             ),
             "v_pw_rest_fallback_rate_pct": _safe_float(
@@ -2460,52 +3234,92 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
                 None,
             ),
             "ka10046_strength_runtime_effect_true_count": _safe_int(
-                microstructure_reaction_summary.get("ka10046_strength_runtime_effect_true_count"),
+                microstructure_reaction_summary.get(
+                    "ka10046_strength_runtime_effect_true_count"
+                ),
                 0,
             )
             or 0,
             "ka10046_strength_missing_received_ts_count": _safe_int(
-                microstructure_reaction_summary.get("ka10046_strength_missing_received_ts_count"),
+                microstructure_reaction_summary.get(
+                    "ka10046_strength_missing_received_ts_count"
+                ),
                 0,
             )
             or 0,
             "market_data_signed_tape_state_counts": (
-                microstructure_reaction_summary.get("market_data_signed_tape_state_counts")
-                if isinstance(microstructure_reaction_summary.get("market_data_signed_tape_state_counts"), dict)
+                microstructure_reaction_summary.get(
+                    "market_data_signed_tape_state_counts"
+                )
+                if isinstance(
+                    microstructure_reaction_summary.get(
+                        "market_data_signed_tape_state_counts"
+                    ),
+                    dict,
+                )
                 else {}
             ),
             "market_data_rest_signed_tape_pressure_usable_true_count": _safe_int(
-                microstructure_reaction_summary.get("market_data_rest_signed_tape_pressure_usable_true_count"),
+                microstructure_reaction_summary.get(
+                    "market_data_rest_signed_tape_pressure_usable_true_count"
+                ),
                 0,
             )
             or 0,
             "rest_signed_trade_ticks_row_count": _safe_int(
-                microstructure_reaction_summary.get("rest_signed_trade_ticks_row_count"),
+                microstructure_reaction_summary.get(
+                    "rest_signed_trade_ticks_row_count"
+                ),
                 0,
             )
             or 0,
             "rest_signed_trade_ticks_source_counts": (
-                microstructure_reaction_summary.get("rest_signed_trade_ticks_source_counts")
-                if isinstance(microstructure_reaction_summary.get("rest_signed_trade_ticks_source_counts"), dict)
+                microstructure_reaction_summary.get(
+                    "rest_signed_trade_ticks_source_counts"
+                )
+                if isinstance(
+                    microstructure_reaction_summary.get(
+                        "rest_signed_trade_ticks_source_counts"
+                    ),
+                    dict,
+                )
                 else {}
             ),
             "ka10003_buy_dominance_observation_source_counts": (
-                microstructure_reaction_summary.get("ka10003_buy_dominance_observation_source_counts")
-                if isinstance(microstructure_reaction_summary.get("ka10003_buy_dominance_observation_source_counts"), dict)
+                microstructure_reaction_summary.get(
+                    "ka10003_buy_dominance_observation_source_counts"
+                )
+                if isinstance(
+                    microstructure_reaction_summary.get(
+                        "ka10003_buy_dominance_observation_source_counts"
+                    ),
+                    dict,
+                )
                 else {}
             ),
             "ka10003_buy_dominance_observation_trade_value_source_counts": (
-                microstructure_reaction_summary.get("ka10003_buy_dominance_observation_trade_value_source_counts")
-                if isinstance(microstructure_reaction_summary.get("ka10003_buy_dominance_observation_trade_value_source_counts"), dict)
+                microstructure_reaction_summary.get(
+                    "ka10003_buy_dominance_observation_trade_value_source_counts"
+                )
+                if isinstance(
+                    microstructure_reaction_summary.get(
+                        "ka10003_buy_dominance_observation_trade_value_source_counts"
+                    ),
+                    dict,
+                )
                 else {}
             ),
             "ka10003_buy_dominance_observation_inside_spread_count": _safe_int(
-                microstructure_reaction_summary.get("ka10003_buy_dominance_observation_inside_spread_count"),
+                microstructure_reaction_summary.get(
+                    "ka10003_buy_dominance_observation_inside_spread_count"
+                ),
                 0,
             )
             or 0,
             "ka10003_buy_dominance_observation_split_vs_15_mismatch_rate_pct": _safe_float(
-                microstructure_reaction_summary.get("ka10003_buy_dominance_observation_split_vs_15_mismatch_rate_pct"),
+                microstructure_reaction_summary.get(
+                    "ka10003_buy_dominance_observation_split_vs_15_mismatch_rate_pct"
+                ),
                 None,
             ),
             "code_improvement_order_count": _safe_int(
@@ -2515,26 +3329,37 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
             or 0,
             "top_code_improvement_orders": (
                 microstructure_reaction_summary.get("top_code_improvement_orders")
-                if isinstance(microstructure_reaction_summary.get("top_code_improvement_orders"), list)
+                if isinstance(
+                    microstructure_reaction_summary.get("top_code_improvement_orders"),
+                    list,
+                )
                 else []
             ),
-            "avg_ask_sweep_score": _safe_float(microstructure_reaction_summary.get("avg_ask_sweep_score"), None),
+            "avg_ask_sweep_score": _safe_float(
+                microstructure_reaction_summary.get("avg_ask_sweep_score"), None
+            ),
             "avg_post_sweep_hold_score": _safe_float(
                 microstructure_reaction_summary.get("avg_post_sweep_hold_score"), None
             ),
             "avg_bid_replenishment_score": _safe_float(
                 microstructure_reaction_summary.get("avg_bid_replenishment_score"), None
             ),
-            "max_vi_proximity_risk": _safe_int(microstructure_reaction_summary.get("max_vi_proximity_risk"), 0)
+            "max_vi_proximity_risk": _safe_int(
+                microstructure_reaction_summary.get("max_vi_proximity_risk"), 0
+            )
             or 0,
             "decision_authority": str(
                 microstructure_reaction_context.get("decision_authority")
                 or "entry_confidence_modifier_source_only"
             ),
-            "runtime_effect": bool(microstructure_reaction_context.get("runtime_effect", False)),
+            "runtime_effect": bool(
+                microstructure_reaction_context.get("runtime_effect", False)
+            ),
             "forbidden_uses": (
                 microstructure_reaction_context.get("forbidden_uses")
-                if isinstance(microstructure_reaction_context.get("forbidden_uses"), list)
+                if isinstance(
+                    microstructure_reaction_context.get("forbidden_uses"), list
+                )
                 else []
             ),
         },
@@ -2565,7 +3390,8 @@ def _is_count_like_metric_key(key: str) -> bool:
         or text.endswith("_attempts")
         or text.endswith("_samples")
         or text.endswith("_records")
-        or text in {
+        or text
+        in {
             "matrix_entries",
             "matrix_non_clear_edge",
             "matrix_no_clear_edge",
@@ -2619,7 +3445,11 @@ def _aggregate_numeric_metric(key: str, values: list[Any], parents: list[dict]) 
         if weighted_pairs:
             total_weight = sum(weight for _, weight in weighted_pairs)
             if total_weight > 0:
-                return round(sum(value * weight for value, weight in weighted_pairs) / total_weight, 4)
+                return round(
+                    sum(value * weight for value, weight in weighted_pairs)
+                    / total_weight,
+                    4,
+                )
         return round(sum(numeric) / len(numeric), 4)
     return numeric[-1]
 
@@ -2628,7 +3458,9 @@ def _aggregate_metric_dicts(dicts: list[dict]) -> dict:
     result: dict[str, Any] = {}
     keys = sorted({key for item in dicts if isinstance(item, dict) for key in item})
     for key in keys:
-        values = [item.get(key) for item in dicts if isinstance(item, dict) and key in item]
+        values = [
+            item.get(key) for item in dicts if isinstance(item, dict) and key in item
+        ]
         if not values:
             continue
         dict_values = [value for value in values if isinstance(value, dict)]
@@ -2646,27 +3478,39 @@ def _aggregate_metric_dicts(dicts: list[dict]) -> dict:
         if bool_values and len(bool_values) == len(values):
             result[key] = any(bool_values)
             continue
-        numeric_values = [value for value in values if _safe_float(value, None) is not None]
+        numeric_values = [
+            value for value in values if _safe_float(value, None) is not None
+        ]
         if numeric_values and len(numeric_values) == len(values):
             result[key] = _aggregate_numeric_metric(key, values, dicts)
             continue
-        text_values = [str(value) for value in values if value not in (None, "", "-", "None")]
+        text_values = [
+            str(value) for value in values if value not in (None, "", "-", "None")
+        ]
         if text_values:
             result[key] = text_values[-1]
     return result
 
 
-def _aggregate_calibration_source_contexts(contexts: list[dict], *, target_date: str, window_label: str) -> dict:
+def _aggregate_calibration_source_contexts(
+    contexts: list[dict], *, target_date: str, window_label: str
+) -> dict:
     contexts = [context for context in contexts if isinstance(context, dict)]
     metrics_by_name: dict[str, list[dict]] = defaultdict(list)
     source_exists: dict[str, int] = Counter()
     warnings: list[str] = []
     for context in contexts:
-        metrics = context.get("source_metrics") if isinstance(context.get("source_metrics"), dict) else {}
+        metrics = (
+            context.get("source_metrics")
+            if isinstance(context.get("source_metrics"), dict)
+            else {}
+        )
         for name, payload in metrics.items():
             if isinstance(payload, dict):
                 metrics_by_name[str(name)].append(payload)
-        sources = context.get("sources") if isinstance(context.get("sources"), dict) else {}
+        sources = (
+            context.get("sources") if isinstance(context.get("sources"), dict) else {}
+        )
         for name, source in sources.items():
             if isinstance(source, dict) and source.get("exists"):
                 source_exists[str(name)] += 1
@@ -2714,15 +3558,24 @@ def _default_pipeline_load_result(target_date: str) -> PipelineLoadResult:
             },
         )
 
-    jsonl_path = _existing_or_gzip_path(DATA_DIR / "pipeline_events" / f"pipeline_events_{target_date}.jsonl")
-    if jsonl_path.exists() and jsonl_path.stat().st_size <= RAW_PIPELINE_FALLBACK_MAX_BYTES:
+    jsonl_path = _existing_or_gzip_path(
+        DATA_DIR / "pipeline_events" / f"pipeline_events_{target_date}.jsonl"
+    )
+    if (
+        jsonl_path.exists()
+        and jsonl_path.stat().st_size <= RAW_PIPELINE_FALLBACK_MAX_BYTES
+    ):
         rows: list[dict] = []
         for payload in _read_threshold_jsonl(jsonl_path):
             if not isinstance(payload, dict):
                 continue
             if not is_threshold_cycle_stage(
                 str(payload.get("stage") or ""),
-                payload.get("fields") if isinstance(payload.get("fields"), dict) else None,
+                (
+                    payload.get("fields")
+                    if isinstance(payload.get("fields"), dict)
+                    else None
+                ),
             ):
                 continue
             if payload.get("event_type") not in (None, "", "pipeline_event"):
@@ -2743,7 +3596,9 @@ def _default_pipeline_load_result(target_date: str) -> PipelineLoadResult:
         )
     warnings = []
     if jsonl_path.exists():
-        warnings.append(f"raw fallback skipped: file exceeds {RAW_PIPELINE_FALLBACK_MAX_BYTES} bytes")
+        warnings.append(
+            f"raw fallback skipped: file exceeds {RAW_PIPELINE_FALLBACK_MAX_BYTES} bytes"
+        )
     return PipelineLoadResult(
         rows=[],
         meta={
@@ -2763,7 +3618,9 @@ def _default_pipeline_loader(target_date: str) -> list[dict]:
     return _default_pipeline_load_result(target_date).rows
 
 
-def _extract_field_values(events: list[dict], stage: str, field_name: str) -> list[float]:
+def _extract_field_values(
+    events: list[dict], stage: str, field_name: str
+) -> list[float]:
     values: list[float] = []
     for event in events:
         if str(event.get("stage") or "") != stage:
@@ -2791,27 +3648,41 @@ def _event_fields(event: dict) -> dict:
 
 
 def _field_counter(events: list[dict], field_name: str, *, default: str = "-") -> dict:
-    counter = Counter(str(_event_fields(event).get(field_name) or default) for event in events)
+    counter = Counter(
+        str(_event_fields(event).get(field_name) or default) for event in events
+    )
     return dict(counter.most_common(10))
 
 
 def _record_ids(events: list[dict]) -> set[Any]:
-    return {event.get("record_id") for event in events if event.get("record_id") not in (None, "", "-")}
+    return {
+        event.get("record_id")
+        for event in events
+        if event.get("record_id") not in (None, "", "-")
+    }
 
 
 def _record_id_stage_count(events: list[dict], stage: str, record_ids: set[Any]) -> int:
     if not record_ids:
         return 0
-    return sum(1 for event in events if str(event.get("stage") or "") == stage and event.get("record_id") in record_ids)
+    return sum(
+        1
+        for event in events
+        if str(event.get("stage") or "") == stage
+        and event.get("record_id") in record_ids
+    )
 
 
-def _record_id_stage_field_counter(events: list[dict], stage: str, record_ids: set[Any], field_name: str) -> dict:
+def _record_id_stage_field_counter(
+    events: list[dict], stage: str, record_ids: set[Any], field_name: str
+) -> dict:
     if not record_ids:
         return {}
     counter = Counter(
         str(_event_fields(event).get(field_name) or "-")
         for event in events
-        if str(event.get("stage") or "") == stage and event.get("record_id") in record_ids
+        if str(event.get("stage") or "") == stage
+        and event.get("record_id") in record_ids
     )
     return dict(counter.most_common(10))
 
@@ -2859,7 +3730,9 @@ def _parse_rejected_action_reasons(value: Any) -> dict[str, str]:
 def _load_post_sell_evaluation_by_record_id(target_date: str | None) -> dict[str, dict]:
     if not target_date:
         return {}
-    path = _existing_or_gzip_path(POST_SELL_DIR / f"post_sell_evaluations_{target_date}.jsonl")
+    path = _existing_or_gzip_path(
+        POST_SELL_DIR / f"post_sell_evaluations_{target_date}.jsonl"
+    )
     if not path.exists():
         return {}
     rows: dict[str, dict] = {}
@@ -2876,7 +3749,9 @@ def _load_post_sell_evaluation_by_record_id(target_date: str | None) -> dict[str
 def _load_post_sell_candidate_by_record_id(target_date: str | None) -> dict[str, dict]:
     if not target_date:
         return {}
-    path = _existing_or_gzip_path(POST_SELL_DIR / f"post_sell_candidates_{target_date}.jsonl")
+    path = _existing_or_gzip_path(
+        POST_SELL_DIR / f"post_sell_candidates_{target_date}.jsonl"
+    )
     if not path.exists():
         return {}
     rows: dict[str, dict] = {}
@@ -2890,10 +3765,14 @@ def _load_post_sell_candidate_by_record_id(target_date: str | None) -> dict[str,
     return rows
 
 
-def _load_sim_post_sell_evaluation_by_sim_id(target_date: str | None) -> dict[str, dict]:
+def _load_sim_post_sell_evaluation_by_sim_id(
+    target_date: str | None,
+) -> dict[str, dict]:
     if not target_date:
         return {}
-    path = _existing_or_gzip_path(POST_SELL_DIR / f"sim_post_sell_evaluations_{target_date}.jsonl")
+    path = _existing_or_gzip_path(
+        POST_SELL_DIR / f"sim_post_sell_evaluations_{target_date}.jsonl"
+    )
     if not path.exists():
         return {}
     rows: dict[str, dict] = {}
@@ -2949,7 +3828,9 @@ def _classify_lifecycle_type(
     exit_decision_source: str,
     post_sell_outcome: str,
 ) -> str:
-    if stages.get("entry_order_cancel_confirmed", 0) and not stages.get("sell_completed", 0):
+    if stages.get("entry_order_cancel_confirmed", 0) and not stages.get(
+        "sell_completed", 0
+    ):
         return "entry_unfilled_cancelled"
     if stages.get("order_bundle_submitted", 0) and not stages.get("sell_completed", 0):
         return "entry_submitted_unresolved"
@@ -2960,19 +3841,69 @@ def _classify_lifecycle_type(
 
     rule = str(exit_rule or "-")
     if rule in {"scalp_soft_stop_pct", "scalp_soft_stop_whipsaw_confirmation"}:
-        return "soft_stop_good_exit" if post_sell_outcome == "GOOD_EXIT" else "soft_stop_missed_upside" if post_sell_outcome == "MISSED_UPSIDE" else "soft_stop_neutral"
+        return (
+            "soft_stop_good_exit"
+            if post_sell_outcome == "GOOD_EXIT"
+            else (
+                "soft_stop_missed_upside"
+                if post_sell_outcome == "MISSED_UPSIDE"
+                else "soft_stop_neutral"
+            )
+        )
     if rule in {"scalp_trailing_take_profit", "protect_trailing_stop"}:
-        return "trailing_good_exit" if post_sell_outcome == "GOOD_EXIT" else "trailing_early_exit" if post_sell_outcome == "MISSED_UPSIDE" else "trailing_neutral"
+        return (
+            "trailing_good_exit"
+            if post_sell_outcome == "GOOD_EXIT"
+            else (
+                "trailing_early_exit"
+                if post_sell_outcome == "MISSED_UPSIDE"
+                else "trailing_neutral"
+            )
+        )
     if rule in {"scalp_hard_stop_pct", "scalp_emergency_stop"}:
-        return "hard_stop_good_exit" if post_sell_outcome == "GOOD_EXIT" else "hard_stop_missed_upside" if post_sell_outcome == "MISSED_UPSIDE" else "hard_stop_neutral"
+        return (
+            "hard_stop_good_exit"
+            if post_sell_outcome == "GOOD_EXIT"
+            else (
+                "hard_stop_missed_upside"
+                if post_sell_outcome == "MISSED_UPSIDE"
+                else "hard_stop_neutral"
+            )
+        )
     if rule == "scalp_bad_entry_refined_canary":
-        return "bad_entry_refined_good_exit" if post_sell_outcome == "GOOD_EXIT" else "bad_entry_refined_missed_upside" if post_sell_outcome == "MISSED_UPSIDE" else "bad_entry_refined_neutral"
+        return (
+            "bad_entry_refined_good_exit"
+            if post_sell_outcome == "GOOD_EXIT"
+            else (
+                "bad_entry_refined_missed_upside"
+                if post_sell_outcome == "MISSED_UPSIDE"
+                else "bad_entry_refined_neutral"
+            )
+        )
     if str(exit_decision_source or "") == "HOLDING_FLOW_OVERRIDE":
-        return "holding_flow_good_exit" if post_sell_outcome == "GOOD_EXIT" else "holding_flow_missed_upside" if post_sell_outcome == "MISSED_UPSIDE" else "holding_flow_neutral"
-    return "closed_other_good_exit" if post_sell_outcome == "GOOD_EXIT" else "closed_other_missed_upside" if post_sell_outcome == "MISSED_UPSIDE" else "closed_other_neutral"
+        return (
+            "holding_flow_good_exit"
+            if post_sell_outcome == "GOOD_EXIT"
+            else (
+                "holding_flow_missed_upside"
+                if post_sell_outcome == "MISSED_UPSIDE"
+                else "holding_flow_neutral"
+            )
+        )
+    return (
+        "closed_other_good_exit"
+        if post_sell_outcome == "GOOD_EXIT"
+        else (
+            "closed_other_missed_upside"
+            if post_sell_outcome == "MISSED_UPSIDE"
+            else "closed_other_neutral"
+        )
+    )
 
 
-def _build_trade_lifecycle_attribution(events: list[dict], target_date: str | None) -> dict:
+def _build_trade_lifecycle_attribution(
+    events: list[dict], target_date: str | None
+) -> dict:
     material_stages = {
         "order_bundle_submitted",
         "entry_order_cancel_requested",
@@ -3016,7 +3947,9 @@ def _build_trade_lifecycle_attribution(events: list[dict], target_date: str | No
     examples: list[dict] = []
 
     for record_id, record_events in sorted(grouped.items()):
-        record_events = sorted(record_events, key=lambda item: str(item.get("emitted_at") or ""))
+        record_events = sorted(
+            record_events, key=lambda item: str(item.get("emitted_at") or "")
+        )
         stages = Counter(str(event.get("stage") or "-") for event in record_events)
         exit_event = _last_stage_event(record_events, "exit_signal")
         sell_completed = _last_stage_event(record_events, "sell_completed")
@@ -3058,7 +3991,11 @@ def _build_trade_lifecycle_attribution(events: list[dict], target_date: str | No
         else:
             phase_state = "pre_entry_or_holding_unresolved"
 
-        bad_candidates = [event for event in record_events if str(event.get("stage") or "") == "bad_entry_refined_candidate"]
+        bad_candidates = [
+            event
+            for event in record_events
+            if str(event.get("stage") or "") == "bad_entry_refined_candidate"
+        ]
         bad_signal_type = "-"
         if bad_candidates:
             exclusion_reasons = {
@@ -3084,7 +4021,11 @@ def _build_trade_lifecycle_attribution(events: list[dict], target_date: str | No
                 bad_signal_type = "candidate_signal_only"
             bad_entry_signal_types[bad_signal_type] += 1
 
-        if stages.get("scale_in_price_resolved") or stages.get("scale_in_price_guard_block") or stages.get("scale_in_executed"):
+        if (
+            stages.get("scale_in_price_resolved")
+            or stages.get("scale_in_price_guard_block")
+            or stages.get("scale_in_executed")
+        ):
             scale_in_outcomes[f"{post_sell_outcome}|{primary_type}"] += 1
 
         type_counts[primary_type] += 1
@@ -3097,8 +4038,12 @@ def _build_trade_lifecycle_attribution(events: list[dict], target_date: str | No
             examples.append(
                 {
                     "record_id": record_id,
-                    "stock_code": (exit_event or sell_completed or order_event or {}).get("stock_code"),
-                    "stock_name": (exit_event or sell_completed or order_event or {}).get("stock_name"),
+                    "stock_code": (
+                        exit_event or sell_completed or order_event or {}
+                    ).get("stock_code"),
+                    "stock_name": (
+                        exit_event or sell_completed or order_event or {}
+                    ).get("stock_name"),
                     "phase_state": phase_state,
                     "primary_type": primary_type,
                     "entry_lifecycle": entry_lifecycle,
@@ -3108,7 +4053,11 @@ def _build_trade_lifecycle_attribution(events: list[dict], target_date: str | No
                     "post_sell_candidate_registered": bool(post_sell_candidate),
                     "post_sell_joined": bool(post_sell),
                     "post_sell_outcome": post_sell_outcome,
-                    "profit_rate": _safe_float((post_sell or {}).get("profit_rate") or sell_fields.get("profit_rate"), None),
+                    "profit_rate": _safe_float(
+                        (post_sell or {}).get("profit_rate")
+                        or sell_fields.get("profit_rate"),
+                        None,
+                    ),
                     "mfe_10m_pct": _post_sell_metric(post_sell, "10m", "mfe_pct"),
                     "mae_10m_pct": _post_sell_metric(post_sell, "10m", "mae_pct"),
                     "bad_entry_signal_type": bad_signal_type,
@@ -3127,12 +4076,21 @@ def _build_trade_lifecycle_attribution(events: list[dict], target_date: str | No
         "family_views": {
             "entry_price": {
                 "entry_lifecycle_outcomes": dict(entry_lifecycle_outcomes),
-                "entry_unfilled_cancelled": _safe_int(type_counts.get("entry_unfilled_cancelled"), 0) or 0,
-                "submitted_unresolved": _safe_int(phase_counts.get("submitted_unresolved"), 0) or 0,
+                "entry_unfilled_cancelled": _safe_int(
+                    type_counts.get("entry_unfilled_cancelled"), 0
+                )
+                or 0,
+                "submitted_unresolved": _safe_int(
+                    phase_counts.get("submitted_unresolved"), 0
+                )
+                or 0,
             },
             "soft_stop": {
                 "good_exit": _safe_int(type_counts.get("soft_stop_good_exit"), 0) or 0,
-                "missed_upside": _safe_int(type_counts.get("soft_stop_missed_upside"), 0) or 0,
+                "missed_upside": _safe_int(
+                    type_counts.get("soft_stop_missed_upside"), 0
+                )
+                or 0,
                 "neutral": _safe_int(type_counts.get("soft_stop_neutral"), 0) or 0,
                 "pending_post_sell": sum(
                     count
@@ -3158,10 +4116,22 @@ def _build_trade_lifecycle_attribution(events: list[dict], target_date: str | No
             },
             "bad_entry_refined": {
                 "signal_type_counts": dict(bad_entry_signal_types),
-                "provisional_only": _safe_int(bad_entry_signal_types.get("pending_post_sell_outcome"), 0) or 0,
-                "false_positive_risk": _safe_int(bad_entry_signal_types.get("false_positive_risk_after_candidate"), 0) or 0,
-                "late_detected_soft_stop_zone": _safe_int(bad_entry_signal_types.get("late_detected_soft_stop_zone"), 0) or 0,
-                "preventable_candidate": _safe_int(bad_entry_signal_types.get("preventable_bad_entry_candidate"), 0) or 0,
+                "provisional_only": _safe_int(
+                    bad_entry_signal_types.get("pending_post_sell_outcome"), 0
+                )
+                or 0,
+                "false_positive_risk": _safe_int(
+                    bad_entry_signal_types.get("false_positive_risk_after_candidate"), 0
+                )
+                or 0,
+                "late_detected_soft_stop_zone": _safe_int(
+                    bad_entry_signal_types.get("late_detected_soft_stop_zone"), 0
+                )
+                or 0,
+                "preventable_candidate": _safe_int(
+                    bad_entry_signal_types.get("preventable_bad_entry_candidate"), 0
+                )
+                or 0,
             },
             "scale_in": {
                 "outcomes": dict(scale_in_outcomes),
@@ -3178,7 +4148,9 @@ def _build_trade_lifecycle_attribution(events: list[dict], target_date: str | No
     }
 
 
-def _build_bad_entry_lifecycle_attribution(events: list[dict], target_date: str | None) -> dict:
+def _build_bad_entry_lifecycle_attribution(
+    events: list[dict], target_date: str | None
+) -> dict:
     candidates = _events_for_stage(events, "bad_entry_refined_candidate")
     refined_exits = _events_for_stage(events, "bad_entry_refined_exit")
     post_sell_by_record = _load_post_sell_evaluation_by_record_id(target_date)
@@ -3207,7 +4179,11 @@ def _build_bad_entry_lifecycle_attribution(events: list[dict], target_date: str 
             post_sell_joined += 1
         else:
             post_sell_pending += 1
-        outcome = str(post_sell.get("outcome") or "PENDING_POST_SELL") if isinstance(post_sell, dict) else "PENDING_POST_SELL"
+        outcome = (
+            str(post_sell.get("outcome") or "PENDING_POST_SELL")
+            if isinstance(post_sell, dict)
+            else "PENDING_POST_SELL"
+        )
         outcome_counts[outcome] += 1
         exclusion_reasons = {
             str(_event_fields(event).get("exclusion_reason") or "-")
@@ -3242,10 +4218,16 @@ def _build_bad_entry_lifecycle_attribution(events: list[dict], target_date: str 
                     "refined_exit_applied": record_id in refined_exit_record_ids,
                     "post_sell_joined": isinstance(post_sell, dict),
                     "post_sell_outcome": outcome,
-                    "post_sell_exit_rule": post_sell.get("exit_rule") if isinstance(post_sell, dict) else None,
-                    "post_sell_profit_rate": _safe_float(post_sell.get("profit_rate"), None)
-                    if isinstance(post_sell, dict)
-                    else None,
+                    "post_sell_exit_rule": (
+                        post_sell.get("exit_rule")
+                        if isinstance(post_sell, dict)
+                        else None
+                    ),
+                    "post_sell_profit_rate": (
+                        _safe_float(post_sell.get("profit_rate"), None)
+                        if isinstance(post_sell, dict)
+                        else None
+                    ),
                     "mfe_10m_pct": _post_sell_metric(post_sell, "10m", "mfe_pct"),
                     "mae_10m_pct": _post_sell_metric(post_sell, "10m", "mae_pct"),
                     "final_type": final_type,
@@ -3273,7 +4255,9 @@ def _build_bad_entry_lifecycle_attribution(events: list[dict], target_date: str 
     }
 
 
-def _build_eligible_but_not_chosen_report(events: list[dict], target_date: str | None) -> dict:
+def _build_eligible_but_not_chosen_report(
+    events: list[dict], target_date: str | None
+) -> dict:
     snapshots = _events_for_stage(events, "stat_action_decision_snapshot")
     post_sell_by_record = _load_post_sell_evaluation_by_record_id(target_date)
     rows: list[dict] = []
@@ -3286,8 +4270,12 @@ def _build_eligible_but_not_chosen_report(events: list[dict], target_date: str |
         fields = _event_fields(event)
         chosen = str(fields.get("chosen_action") or "-").strip()
         eligible = _parse_action_list(fields.get("eligible_actions"))
-        rejected_reasons = _parse_rejected_action_reasons(fields.get("rejected_actions"))
-        snapshot_profit_rate_available = _safe_float(fields.get("profit_rate"), None) is not None
+        rejected_reasons = _parse_rejected_action_reasons(
+            fields.get("rejected_actions")
+        )
+        snapshot_profit_rate_available = (
+            _safe_float(fields.get("profit_rate"), None) is not None
+        )
         candidates = [action for action in eligible if action != chosen]
         for action in rejected_reasons:
             if action != chosen and action not in candidates:
@@ -3308,7 +4296,11 @@ def _build_eligible_but_not_chosen_report(events: list[dict], target_date: str |
         if not candidates:
             continue
         record_id = event.get("record_id")
-        post_sell = post_sell_by_record.get(str(record_id)) if record_id not in (None, "", "-") else None
+        post_sell = (
+            post_sell_by_record.get(str(record_id))
+            if record_id not in (None, "", "-")
+            else None
+        )
         if post_sell:
             joined_snapshot_count += 1
         profit_rate = _safe_float(fields.get("profit_rate"), None)
@@ -3320,7 +4312,9 @@ def _build_eligible_but_not_chosen_report(events: list[dict], target_date: str |
             if peak_profit is not None and profit_rate is not None
             else None
         )
-        snapshot_mae_proxy = round(min(0.0, -abs(drawdown)), 4) if drawdown is not None else None
+        snapshot_mae_proxy = (
+            round(min(0.0, -abs(drawdown)), 4) if drawdown is not None else None
+        )
         chosen_row = {
             "record_id": record_id,
             "stock_code": event.get("stock_code"),
@@ -3334,11 +4328,23 @@ def _build_eligible_but_not_chosen_report(events: list[dict], target_date: str |
             "snapshot_mae_proxy": snapshot_mae_proxy,
             "current_ai_score": current_ai_score,
             "post_sell_joined": bool(post_sell),
-            "post_sell_outcome": post_sell.get("outcome") if isinstance(post_sell, dict) else None,
-            "post_sell_exit_rule": post_sell.get("exit_rule") if isinstance(post_sell, dict) else None,
-            "post_sell_profit_rate": _safe_float(post_sell.get("profit_rate"), None) if isinstance(post_sell, dict) else None,
-            "post_decision_mfe_10m_proxy": _post_sell_metric(post_sell, "10m", "mfe_pct"),
-            "post_decision_mae_10m_proxy": _post_sell_metric(post_sell, "10m", "mae_pct"),
+            "post_sell_outcome": (
+                post_sell.get("outcome") if isinstance(post_sell, dict) else None
+            ),
+            "post_sell_exit_rule": (
+                post_sell.get("exit_rule") if isinstance(post_sell, dict) else None
+            ),
+            "post_sell_profit_rate": (
+                _safe_float(post_sell.get("profit_rate"), None)
+                if isinstance(post_sell, dict)
+                else None
+            ),
+            "post_decision_mfe_10m_proxy": _post_sell_metric(
+                post_sell, "10m", "mfe_pct"
+            ),
+            "post_decision_mae_10m_proxy": _post_sell_metric(
+                post_sell, "10m", "mae_pct"
+            ),
         }
         chosen_rows.append(chosen_row)
         chosen_action = _normalize_counterfactual_proxy_action(chosen)
@@ -3374,11 +4380,23 @@ def _build_eligible_but_not_chosen_report(events: list[dict], target_date: str |
                 "snapshot_mae_proxy": snapshot_mae_proxy,
                 "current_ai_score": current_ai_score,
                 "post_sell_joined": bool(post_sell),
-                "post_sell_outcome": post_sell.get("outcome") if isinstance(post_sell, dict) else None,
-                "post_sell_exit_rule": post_sell.get("exit_rule") if isinstance(post_sell, dict) else None,
-                "post_sell_profit_rate": _safe_float(post_sell.get("profit_rate"), None) if isinstance(post_sell, dict) else None,
-                "post_decision_mfe_10m_proxy": _post_sell_metric(post_sell, "10m", "mfe_pct"),
-                "post_decision_mae_10m_proxy": _post_sell_metric(post_sell, "10m", "mae_pct"),
+                "post_sell_outcome": (
+                    post_sell.get("outcome") if isinstance(post_sell, dict) else None
+                ),
+                "post_sell_exit_rule": (
+                    post_sell.get("exit_rule") if isinstance(post_sell, dict) else None
+                ),
+                "post_sell_profit_rate": (
+                    _safe_float(post_sell.get("profit_rate"), None)
+                    if isinstance(post_sell, dict)
+                    else None
+                ),
+                "post_decision_mfe_10m_proxy": _post_sell_metric(
+                    post_sell, "10m", "mfe_pct"
+                ),
+                "post_decision_mae_10m_proxy": _post_sell_metric(
+                    post_sell, "10m", "mae_pct"
+                ),
             }
             rows.append(row)
             normalized_action = _normalize_counterfactual_proxy_action(action)
@@ -3396,14 +4414,17 @@ def _build_eligible_but_not_chosen_report(events: list[dict], target_date: str |
                 value = _safe_float(row.get(key), None)
                 if value is not None:
                     bucket[key].append(value)
-            action_reasons.setdefault(normalized_action, Counter())[str(reason or "-")] += 1
+            action_reasons.setdefault(normalized_action, Counter())[
+                str(reason or "-")
+            ] += 1
 
     action_summary = []
     for action, values in sorted(action_values.items()):
         joined = sum(
             1
             for row in rows
-            if _normalize_counterfactual_proxy_action(row.get("candidate_action")) == action
+            if _normalize_counterfactual_proxy_action(row.get("candidate_action"))
+            == action
             and row.get("post_sell_joined")
         )
         action_summary.append(
@@ -3412,25 +4433,40 @@ def _build_eligible_but_not_chosen_report(events: list[dict], target_date: str |
                 "sample": sum(
                     1
                     for row in rows
-                    if _normalize_counterfactual_proxy_action(row.get("candidate_action")) == action
+                    if _normalize_counterfactual_proxy_action(
+                        row.get("candidate_action")
+                    )
+                    == action
                 ),
                 "post_sell_joined": joined,
-                "avg_snapshot_profit_rate": round(_avg(values["snapshot_profit_rate"]) or 0.0, 4)
-                if values["snapshot_profit_rate"]
-                else None,
-                "avg_snapshot_drawdown_from_peak": round(_avg(values["snapshot_drawdown_from_peak"]) or 0.0, 4)
-                if values["snapshot_drawdown_from_peak"]
-                else None,
-                "avg_current_ai_score": round(_avg(values["current_ai_score"]) or 0.0, 4)
-                if values["current_ai_score"]
-                else None,
-                "avg_post_decision_mfe_10m_proxy": round(_avg(values["post_decision_mfe_10m_proxy"]) or 0.0, 4)
-                if values["post_decision_mfe_10m_proxy"]
-                else None,
-                "avg_post_decision_mae_10m_proxy": round(_avg(values["post_decision_mae_10m_proxy"]) or 0.0, 4)
-                if values["post_decision_mae_10m_proxy"]
-                else None,
-                "top_not_chosen_reasons": dict(action_reasons.get(action, Counter()).most_common(5)),
+                "avg_snapshot_profit_rate": (
+                    round(_avg(values["snapshot_profit_rate"]) or 0.0, 4)
+                    if values["snapshot_profit_rate"]
+                    else None
+                ),
+                "avg_snapshot_drawdown_from_peak": (
+                    round(_avg(values["snapshot_drawdown_from_peak"]) or 0.0, 4)
+                    if values["snapshot_drawdown_from_peak"]
+                    else None
+                ),
+                "avg_current_ai_score": (
+                    round(_avg(values["current_ai_score"]) or 0.0, 4)
+                    if values["current_ai_score"]
+                    else None
+                ),
+                "avg_post_decision_mfe_10m_proxy": (
+                    round(_avg(values["post_decision_mfe_10m_proxy"]) or 0.0, 4)
+                    if values["post_decision_mfe_10m_proxy"]
+                    else None
+                ),
+                "avg_post_decision_mae_10m_proxy": (
+                    round(_avg(values["post_decision_mae_10m_proxy"]) or 0.0, 4)
+                    if values["post_decision_mae_10m_proxy"]
+                    else None
+                ),
+                "top_not_chosen_reasons": dict(
+                    action_reasons.get(action, Counter()).most_common(5)
+                ),
             }
         )
     chosen_action_summary = []
@@ -3438,7 +4474,8 @@ def _build_eligible_but_not_chosen_report(events: list[dict], target_date: str |
         joined = sum(
             1
             for row in chosen_rows
-            if _normalize_counterfactual_proxy_action(row.get("chosen_action")) == action
+            if _normalize_counterfactual_proxy_action(row.get("chosen_action"))
+            == action
             and row.get("post_sell_joined")
         )
         chosen_action_summary.append(
@@ -3447,24 +4484,35 @@ def _build_eligible_but_not_chosen_report(events: list[dict], target_date: str |
                 "sample": sum(
                     1
                     for row in chosen_rows
-                    if _normalize_counterfactual_proxy_action(row.get("chosen_action")) == action
+                    if _normalize_counterfactual_proxy_action(row.get("chosen_action"))
+                    == action
                 ),
                 "post_sell_joined": joined,
-                "avg_snapshot_profit_rate": round(_avg(values["snapshot_profit_rate"]) or 0.0, 4)
-                if values["snapshot_profit_rate"]
-                else None,
-                "avg_snapshot_drawdown_from_peak": round(_avg(values["snapshot_drawdown_from_peak"]) or 0.0, 4)
-                if values["snapshot_drawdown_from_peak"]
-                else None,
-                "avg_current_ai_score": round(_avg(values["current_ai_score"]) or 0.0, 4)
-                if values["current_ai_score"]
-                else None,
-                "avg_post_decision_mfe_10m_proxy": round(_avg(values["post_decision_mfe_10m_proxy"]) or 0.0, 4)
-                if values["post_decision_mfe_10m_proxy"]
-                else None,
-                "avg_post_decision_mae_10m_proxy": round(_avg(values["post_decision_mae_10m_proxy"]) or 0.0, 4)
-                if values["post_decision_mae_10m_proxy"]
-                else None,
+                "avg_snapshot_profit_rate": (
+                    round(_avg(values["snapshot_profit_rate"]) or 0.0, 4)
+                    if values["snapshot_profit_rate"]
+                    else None
+                ),
+                "avg_snapshot_drawdown_from_peak": (
+                    round(_avg(values["snapshot_drawdown_from_peak"]) or 0.0, 4)
+                    if values["snapshot_drawdown_from_peak"]
+                    else None
+                ),
+                "avg_current_ai_score": (
+                    round(_avg(values["current_ai_score"]) or 0.0, 4)
+                    if values["current_ai_score"]
+                    else None
+                ),
+                "avg_post_decision_mfe_10m_proxy": (
+                    round(_avg(values["post_decision_mfe_10m_proxy"]) or 0.0, 4)
+                    if values["post_decision_mfe_10m_proxy"]
+                    else None
+                ),
+                "avg_post_decision_mae_10m_proxy": (
+                    round(_avg(values["post_decision_mae_10m_proxy"]) or 0.0, 4)
+                    if values["post_decision_mae_10m_proxy"]
+                    else None
+                ),
             }
         )
     return {
@@ -3474,7 +4522,9 @@ def _build_eligible_but_not_chosen_report(events: list[dict], target_date: str |
         "join_status": "post_sell_10m_proxy_when_record_id_matches",
         "sample_snapshots": len(snapshots),
         "sample_candidates": len(rows),
-        "post_sell_joined_candidates": sum(1 for row in rows if row.get("post_sell_joined")),
+        "post_sell_joined_candidates": sum(
+            1 for row in rows if row.get("post_sell_joined")
+        ),
         "post_sell_joined_snapshots": joined_snapshot_count,
         "fields": [
             "candidate_action",
@@ -3498,7 +4548,9 @@ def _build_eligible_but_not_chosen_report(events: list[dict], target_date: str |
 
 def _completed_summary(rows: list[dict]) -> dict:
     total = len(rows)
-    losses = [row for row in rows if (_safe_float(row.get("profit_rate"), 0.0) or 0.0) < 0.0]
+    losses = [
+        row for row in rows if (_safe_float(row.get("profit_rate"), 0.0) or 0.0) < 0.0
+    ]
     return {
         "completed_valid": total,
         "loss_count": len(losses),
@@ -3520,7 +4572,9 @@ def _row_rec_date(row: dict) -> date | None:
         return None
 
 
-def _filter_completed_rows_by_date(rows: list[dict], start_date: str, end_date: str) -> list[dict]:
+def _filter_completed_rows_by_date(
+    rows: list[dict], start_date: str, end_date: str
+) -> list[dict]:
     start = datetime.strptime(start_date, "%Y-%m-%d").date()
     end = datetime.strptime(end_date, "%Y-%m-%d").date()
     filtered: list[dict] = []
@@ -3538,7 +4592,9 @@ def _filter_completed_rows_by_date(rows: list[dict], start_date: str, end_date: 
 
 
 def _valid_profit_rows(rows: list[dict]) -> list[dict]:
-    return [row for row in rows if _safe_float(row.get("profit_rate"), None) is not None]
+    return [
+        row for row in rows if _safe_float(row.get("profit_rate"), None) is not None
+    ]
 
 
 def _is_scalp_sim_event(event: dict) -> bool:
@@ -3552,8 +4608,14 @@ def _is_scalp_sim_event(event: dict) -> bool:
 
 def _is_synthetic_test_event(event: dict) -> bool:
     fields = _event_fields(event)
-    code = str(fields.get("code") or event.get("stock_code") or event.get("code") or "").strip()
-    name = str(fields.get("name") or event.get("stock_name") or event.get("name") or "").strip().upper()
+    code = str(
+        fields.get("code") or event.get("stock_code") or event.get("code") or ""
+    ).strip()
+    name = (
+        str(fields.get("name") or event.get("stock_name") or event.get("name") or "")
+        .strip()
+        .upper()
+    )
     return name == "TEST" or (code == "123456" and name.startswith("TEST"))
 
 
@@ -3573,7 +4635,9 @@ def _extract_scalp_sim_completed_rows(events: list[dict]) -> list[dict]:
         profit_rate = _safe_float(fields.get("profit_rate"), None)
         if profit_rate is None:
             continue
-        sim_record_id = str(fields.get("sim_record_id") or event.get("record_id") or "").strip()
+        sim_record_id = str(
+            fields.get("sim_record_id") or event.get("record_id") or ""
+        ).strip()
         key = sim_record_id or f"{event.get('stock_code')}-{event.get('emitted_at')}"
         if key in seen:
             continue
@@ -3605,12 +4669,16 @@ def _extract_scalp_sim_completed_rows(events: list[dict]) -> list[dict]:
     return rows
 
 
-def _extend_unique_scalp_sim_completed_rows(target: list[dict], rows: list[dict], seen: set[str]) -> None:
+def _extend_unique_scalp_sim_completed_rows(
+    target: list[dict], rows: list[dict], seen: set[str]
+) -> None:
     for row in rows or []:
         sim_record_id = str(row.get("sim_record_id") or "").strip()
         key = sim_record_id or str(row.get("source_event_key") or "").strip()
         if not key:
-            key = f"{row.get('stock_code')}-{row.get('rec_date')}-{row.get('sell_price')}"
+            key = (
+                f"{row.get('stock_code')}-{row.get('rec_date')}-{row.get('sell_price')}"
+            )
         if key in seen:
             continue
         seen.add(key)
@@ -3642,16 +4710,23 @@ def _scalp_simulator_post_sell_join_summary(
             str(row.get("sim_record_id") or "").strip(),
             str(row.get("sim_parent_record_id") or "").strip(),
         ]
-        evaluation = next((evaluations.get(key) for key in keys if key and evaluations.get(key)), None)
+        evaluation = next(
+            (evaluations.get(key) for key in keys if key and evaluations.get(key)), None
+        )
         if not evaluation:
             pending += 1
             continue
-        metrics_10m = evaluation.get("metrics_10m") if isinstance(evaluation.get("metrics_10m"), dict) else {}
+        metrics_10m = (
+            evaluation.get("metrics_10m")
+            if isinstance(evaluation.get("metrics_10m"), dict)
+            else {}
+        )
         joined.append(
             {
                 "stock_code": row.get("stock_code") or evaluation.get("stock_code"),
                 "stock_name": row.get("stock_name") or evaluation.get("stock_name"),
-                "sim_record_id": row.get("sim_record_id") or evaluation.get("sim_record_id"),
+                "sim_record_id": row.get("sim_record_id")
+                or evaluation.get("sim_record_id"),
                 "profit_rate": _safe_float(row.get("profit_rate"), None),
                 "outcome": str(evaluation.get("outcome") or "NEUTRAL"),
                 "mfe_10m_pct": _safe_float(metrics_10m.get("mfe_pct"), 0.0),
@@ -3659,7 +4734,9 @@ def _scalp_simulator_post_sell_join_summary(
                 "close_10m_pct": _safe_float(metrics_10m.get("close_ret_pct"), 0.0),
             }
         )
-    outcome_counts = Counter(str(item.get("outcome") or "NEUTRAL").upper() for item in joined)
+    outcome_counts = Counter(
+        str(item.get("outcome") or "NEUTRAL").upper() for item in joined
+    )
     mfe_values = [_safe_float(item.get("mfe_10m_pct"), None) for item in joined]
     mae_values = [_safe_float(item.get("mae_10m_pct"), None) for item in joined]
     close_values = [_safe_float(item.get("close_10m_pct"), None) for item in joined]
@@ -3668,8 +4745,16 @@ def _scalp_simulator_post_sell_join_summary(
     close_values = [value for value in close_values if value is not None]
     return {
         "join_status": "sim_record_id_to_sim_post_sell_evaluations_after_postclose",
-        "candidate_artifact": f"data/post_sell/sim_post_sell_candidates_{target_date}.jsonl" if target_date else None,
-        "evaluation_artifact": f"data/post_sell/sim_post_sell_evaluations_{target_date}.jsonl" if target_date else None,
+        "candidate_artifact": (
+            f"data/post_sell/sim_post_sell_candidates_{target_date}.jsonl"
+            if target_date
+            else None
+        ),
+        "evaluation_artifact": (
+            f"data/post_sell/sim_post_sell_evaluations_{target_date}.jsonl"
+            if target_date
+            else None
+        ),
         "completed_sample": len(completed_rows or []),
         "joined_completed": len(joined),
         "pending_completed": int(pending),
@@ -3697,8 +4782,12 @@ def _scalp_simulator_event_summary(
     target_date: str | None = None,
 ) -> dict:
     raw_sim_events = [event for event in events or [] if _is_scalp_sim_event(event)]
-    synthetic_excluded = [event for event in raw_sim_events if _is_synthetic_test_event(event)]
-    sim_events = [event for event in raw_sim_events if not _is_synthetic_test_event(event)]
+    synthetic_excluded = [
+        event for event in raw_sim_events if _is_synthetic_test_event(event)
+    ]
+    sim_events = [
+        event for event in raw_sim_events if not _is_synthetic_test_event(event)
+    ]
     stage_counts = Counter(str(event.get("stage") or "-") for event in sim_events)
     duplicate_events = _events_for_stage(sim_events, "scalp_sim_duplicate_buy_signal")
     duplicate_by_symbol = Counter(
@@ -3707,13 +4796,23 @@ def _scalp_simulator_event_summary(
     )
     duplicate_by_symbol_time_bucket = Counter(
         (
-            str(event.get("stock_code") or _event_fields(event).get("code") or "-").strip(),
-            _time_bucket(event.get("emitted_at") or _event_fields(event).get("emitted_at")),
+            str(
+                event.get("stock_code") or _event_fields(event).get("code") or "-"
+            ).strip(),
+            _time_bucket(
+                event.get("emitted_at") or _event_fields(event).get("emitted_at")
+            ),
         )
         for event in duplicate_events
     )
-    raw_completed_rows = sim_completed_rows if sim_completed_rows is not None else _extract_scalp_sim_completed_rows(events)
-    completed_rows = [row for row in raw_completed_rows or [] if not _is_synthetic_test_row(row)]
+    raw_completed_rows = (
+        sim_completed_rows
+        if sim_completed_rows is not None
+        else _extract_scalp_sim_completed_rows(events)
+    )
+    completed_rows = [
+        row for row in raw_completed_rows or [] if not _is_synthetic_test_row(row)
+    ]
     lifecycle_bucket_match = _sim_lifecycle_bucket_match_aggregation(sim_events)
     swing_micro_quality = _swing_micro_source_quality_breakdown(events)
     return {
@@ -3727,41 +4826,72 @@ def _scalp_simulator_event_summary(
         "entry_armed": int(stage_counts.get("scalp_sim_entry_armed", 0)),
         "buy_filled": int(stage_counts.get("scalp_sim_buy_order_assumed_filled", 0)),
         "holding_started": int(stage_counts.get("scalp_sim_holding_started", 0)),
-        "sell_completed": int(stage_counts.get("scalp_sim_sell_order_assumed_filled", 0)),
+        "sell_completed": int(
+            stage_counts.get("scalp_sim_sell_order_assumed_filled", 0)
+        ),
         "entry_expired": int(stage_counts.get("scalp_sim_entry_expired", 0)),
         "entry_unpriced": int(stage_counts.get("scalp_sim_entry_unpriced", 0)),
-        "duplicate_buy_signal": int(stage_counts.get("scalp_sim_duplicate_buy_signal", 0)),
+        "duplicate_buy_signal": int(
+            stage_counts.get("scalp_sim_duplicate_buy_signal", 0)
+        ),
         "duplicate_buy_signal_by_symbol_top": dict(duplicate_by_symbol.most_common(10)),
-        "duplicate_dominance_symbol_count": sum(1 for count in duplicate_by_symbol.values() if count >= 10),
+        "duplicate_dominance_symbol_count": sum(
+            1 for count in duplicate_by_symbol.values() if count >= 10
+        ),
         "duplicate_buy_signal_by_symbol_time_bucket_top": {
             f"{symbol}|{bucket}": count
-            for (symbol, bucket), count in duplicate_by_symbol_time_bucket.most_common(10)
+            for (symbol, bucket), count in duplicate_by_symbol_time_bucket.most_common(
+                10
+            )
         },
         "duplicate_dominance_symbol_time_bucket_count": sum(
             1 for count in duplicate_by_symbol_time_bucket.values() if count >= 5
         ),
-        "entry_ai_price_applied": int(stage_counts.get("scalp_sim_entry_ai_price_applied", 0)),
-        "entry_ai_price_skip_order": int(stage_counts.get("scalp_sim_entry_ai_price_skip_order", 0)),
+        "entry_ai_price_applied": int(
+            stage_counts.get("scalp_sim_entry_ai_price_applied", 0)
+        ),
+        "entry_ai_price_skip_order": int(
+            stage_counts.get("scalp_sim_entry_ai_price_skip_order", 0)
+        ),
         "entry_submit_revalidation_warning": int(
             stage_counts.get("scalp_sim_entry_submit_revalidation_warning", 0)
         ),
-        "entry_submit_revalidation_block": int(stage_counts.get("scalp_sim_entry_submit_revalidation_block", 0)),
-        "scale_in_filled": int(stage_counts.get("scalp_sim_scale_in_order_assumed_filled", 0)),
-        "scale_in_unfilled": int(stage_counts.get("scalp_sim_scale_in_order_unfilled", 0)),
-        "scalp_sim_ai_holding_live_call": int(stage_counts.get("scalp_sim_ai_holding_live_call", 0)),
-        "scalp_sim_ai_holding_reuse": int(stage_counts.get("scalp_sim_ai_holding_reuse", 0)),
-        "scalp_sim_ai_holding_deferred": int(stage_counts.get("scalp_sim_ai_holding_deferred", 0)),
+        "entry_submit_revalidation_block": int(
+            stage_counts.get("scalp_sim_entry_submit_revalidation_block", 0)
+        ),
+        "scale_in_filled": int(
+            stage_counts.get("scalp_sim_scale_in_order_assumed_filled", 0)
+        ),
+        "scale_in_unfilled": int(
+            stage_counts.get("scalp_sim_scale_in_order_unfilled", 0)
+        ),
+        "scalp_sim_ai_holding_live_call": int(
+            stage_counts.get("scalp_sim_ai_holding_live_call", 0)
+        ),
+        "scalp_sim_ai_holding_reuse": int(
+            stage_counts.get("scalp_sim_ai_holding_reuse", 0)
+        ),
+        "scalp_sim_ai_holding_deferred": int(
+            stage_counts.get("scalp_sim_ai_holding_deferred", 0)
+        ),
         "sim_ai_budget_exhausted": int(stage_counts.get("sim_ai_budget_exhausted", 0)),
         "sim_ai_critical_bypass": int(stage_counts.get("sim_ai_critical_bypass", 0)),
         "overnight_decision": int(stage_counts.get("scalp_sim_overnight_decision", 0)),
-        "overnight_sell_today": int(stage_counts.get("scalp_sim_overnight_sell_today", 0)),
+        "overnight_sell_today": int(
+            stage_counts.get("scalp_sim_overnight_sell_today", 0)
+        ),
         "overnight_hold": int(stage_counts.get("scalp_sim_overnight_hold", 0)),
-        "overnight_carry_restored": int(stage_counts.get("scalp_sim_overnight_carry_restored", 0)),
+        "overnight_carry_restored": int(
+            stage_counts.get("scalp_sim_overnight_carry_restored", 0)
+        ),
         "overnight_completed_sell": sum(
             1
             for event in sim_events
             if str(event.get("stage") or "") == "scalp_sim_sell_order_assumed_filled"
-            and ((event.get("fields") or {}).get("exit_rule") == "scalp_sim_overnight_sell_today")
+            and (
+                (event.get("fields") or {}).get("exit_rule")
+                == "scalp_sim_overnight_sell_today"
+            )
         ),
         "completed_profit_summary": _completed_profit_summary(completed_rows or []),
         "post_sell_join": _scalp_simulator_post_sell_join_summary(
@@ -3782,7 +4912,11 @@ def _is_normal_only_row(row: dict) -> bool:
         row.get("source"),
     ]
     joined = " ".join(str(value or "").lower() for value in markers)
-    return "fallback" not in joined and "remote" not in joined and "songstock" not in joined
+    return (
+        "fallback" not in joined
+        and "remote" not in joined
+        and "songstock" not in joined
+    )
 
 
 def _is_initial_only_row(row: dict) -> bool:
@@ -3790,7 +4924,12 @@ def _is_initial_only_row(row: dict) -> bool:
     avg_down_count = _safe_int(row.get("avg_down_count"), 0) or 0
     pyramid_count = _safe_int(row.get("pyramid_count"), 0) or 0
     last_add_type = str(row.get("last_add_type") or "").strip().upper()
-    return add_count <= 0 and avg_down_count <= 0 and pyramid_count <= 0 and not last_add_type
+    return (
+        add_count <= 0
+        and avg_down_count <= 0
+        and pyramid_count <= 0
+        and not last_add_type
+    )
 
 
 def _completed_profit_summary(rows: list[dict]) -> dict:
@@ -3803,13 +4942,25 @@ def _completed_profit_summary(rows: list[dict]) -> dict:
         "sample": len(profit_values),
         "win_count": len(wins),
         "loss_count": len(losses),
-        "avg_profit_rate": round(_avg(profit_values) or 0.0, 4) if profit_values else None,
-        "median_profit_rate": round(_percentile(profit_values, 50, 0.0), 4) if profit_values else None,
-        "downside_p10_profit_rate": round(_percentile(profit_values, 10, 0.0), 4) if profit_values else None,
-        "upside_p90_profit_rate": round(_percentile(profit_values, 90, 0.0), 4) if profit_values else None,
+        "avg_profit_rate": (
+            round(_avg(profit_values) or 0.0, 4) if profit_values else None
+        ),
+        "median_profit_rate": (
+            round(_percentile(profit_values, 50, 0.0), 4) if profit_values else None
+        ),
+        "downside_p10_profit_rate": (
+            round(_percentile(profit_values, 10, 0.0), 4) if profit_values else None
+        ),
+        "upside_p90_profit_rate": (
+            round(_percentile(profit_values, 90, 0.0), 4) if profit_values else None
+        ),
         "win_rate": round(len(wins) / len(profit_values), 4) if profit_values else None,
-        "loss_rate": round(len(losses) / len(profit_values), 4) if profit_values else None,
-        "stddev_profit_rate": round(_stddev(profit_values) or 0.0, 4) if len(profit_values) >= 2 else None,
+        "loss_rate": (
+            round(len(losses) / len(profit_values), 4) if profit_values else None
+        ),
+        "stddev_profit_rate": (
+            round(_stddev(profit_values) or 0.0, 4) if len(profit_values) >= 2 else None
+        ),
     }
 
 
@@ -3829,10 +4980,14 @@ def _completed_cohort_summary(rows: list[dict]) -> dict:
             row
             for row in valid_rows
             if (_safe_int(row.get("avg_down_count"), 0) or 0) > 0
-            or str(row.get("last_add_type") or "").strip().upper() in {"AVG_DOWN", "REVERSAL_ADD"}
+            or str(row.get("last_add_type") or "").strip().upper()
+            in {"AVG_DOWN", "REVERSAL_ADD"}
         ],
     }
-    return {name: _completed_profit_summary(cohort_rows) for name, cohort_rows in cohorts.items()}
+    return {
+        name: _completed_profit_summary(cohort_rows)
+        for name, cohort_rows in cohorts.items()
+    }
 
 
 def _field_bool(value: Any) -> bool:
@@ -3840,7 +4995,7 @@ def _field_bool(value: Any) -> bool:
         return value
     if value is None:
         return False
-    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"    }
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
 def _sim_lifecycle_bucket_match_aggregation(events: list[dict]) -> dict:
@@ -3888,7 +5043,10 @@ def _sim_lifecycle_bucket_match_aggregation(events: list[dict]) -> dict:
         eligible_stage = _is_lifecycle_match_eligible_stage(stage)
         if eligible_stage:
             eligible_event_count += 1
-        raw_match_status = str(fields.get("lifecycle_bucket_match_status") or "missing").strip() or "missing"
+        raw_match_status = (
+            str(fields.get("lifecycle_bucket_match_status") or "missing").strip()
+            or "missing"
+        )
         raw_match_status_counts[raw_match_status] += 1
 
         active_seed_val = fields.get("active_seed_matched")
@@ -3957,9 +5115,11 @@ def _sim_lifecycle_bucket_match_aggregation(events: list[dict]) -> dict:
         "eligible_lifecycle_match_event_count": eligible_event_count,
         "eligible_lifecycle_match_observed_count": eligible_observed_count,
         "eligible_lifecycle_match_gap_count": eligible_contract_gap_count,
-        "eligible_lifecycle_match_gap_rate": round(eligible_contract_gap_count / eligible_event_count, 4)
-        if eligible_event_count
-        else 0.0,
+        "eligible_lifecycle_match_gap_rate": (
+            round(eligible_contract_gap_count / eligible_event_count, 4)
+            if eligible_event_count
+            else 0.0
+        ),
         "no_match_count": raw_match_status_counts.get("no_match", 0),
         "natural_no_match_count": natural_no_match_count,
         "panic_scale_in_stage_excluded_count": panic_excluded_count,
@@ -3969,7 +5129,9 @@ def _sim_lifecycle_bucket_match_aggregation(events: list[dict]) -> dict:
         "not_instrumented_count": not_instrumented_count,
         "not_instrumented_count_scope": "non-lifecycle-match-eligible diagnostic/observation stages where lifecycle fields are not required",
         "policy_missing_count": reclassified_status_counts.get("policy_missing", 0),
-        "candidate_context_only_count": reclassified_status_counts.get("candidate_context_only", 0),
+        "candidate_context_only_count": reclassified_status_counts.get(
+            "candidate_context_only", 0
+        ),
         "missing_count": raw_match_status_counts.get("missing", 0),
         "raw_missing_count_scope": "all_scalp_sim_events_compatibility_counter",
         "decision_missing_count": eligible_contract_gap_count,
@@ -4031,7 +5193,9 @@ def _reclassify_match_status(
 
         match_reason = str(fields.get("lifecycle_bucket_match_reason") or "").strip()
         bucket_id = str(fields.get("lifecycle_bucket_bucket_id") or "").strip()
-        source_bucket_id = str(fields.get("lifecycle_bucket_source_bucket_id") or "").strip()
+        source_bucket_id = str(
+            fields.get("lifecycle_bucket_source_bucket_id") or ""
+        ).strip()
         if (
             match_reason != "parent_catalog_missing"
             and bucket_id
@@ -4056,10 +5220,16 @@ def _has_sim_only_lifecycle_context_contract(fields: dict) -> bool:
         "sim_submit_path_observation_only",
     }:
         return False
-    if "broker_order_forbidden" in fields and not _field_bool(fields.get("broker_order_forbidden")):
+    if "broker_order_forbidden" in fields and not _field_bool(
+        fields.get("broker_order_forbidden")
+    ):
         return False
     actual_submitted_value = fields.get("actual_order_submitted")
-    actual_submitted = "" if actual_submitted_value is None else str(actual_submitted_value).strip().lower()
+    actual_submitted = (
+        ""
+        if actual_submitted_value is None
+        else str(actual_submitted_value).strip().lower()
+    )
     if actual_submitted not in {"false", "0", "no"}:
         return False
     return True
@@ -4110,7 +5280,12 @@ def _notional_weighted_ev_pct(rows: list[dict]) -> float | None:
         buy_price = _safe_float(row.get("buy_price"), None)
         buy_qty = _safe_float(row.get("buy_qty"), None)
         notional = None
-        if buy_price is not None and buy_qty is not None and buy_price > 0 and buy_qty > 0:
+        if (
+            buy_price is not None
+            and buy_qty is not None
+            and buy_price > 0
+            and buy_qty > 0
+        ):
             notional = buy_price * buy_qty
         if notional is None:
             notional = _safe_float(row.get("notional_krw"), None)
@@ -4186,7 +5361,10 @@ def _compute_candidate_qty(
     elif formula_id == "portfolio_exposure_capped_10_30":
         base_ratio = min_ratio + (score / 100.0) * (max_ratio - min_ratio)
         exposure_penalty = 1.0
-        if portfolio_exposure_bucket and "high" in str(portfolio_exposure_bucket).lower():
+        if (
+            portfolio_exposure_bucket
+            and "high" in str(portfolio_exposure_bucket).lower()
+        ):
             exposure_penalty = 0.7
         ratio = base_ratio * exposure_penalty
     else:
@@ -4278,25 +5456,36 @@ def _build_candidate_metrics(
 
     for event in sizing_events:
         fields = dict(_event_fields(event))
-        score = _safe_float(
-            fields.get("score") or fields.get("ai_score") or fields.get("current_ai_score"),
-            50.0,
-        ) or 50.0
-        deposit = _safe_float(
-            fields.get("deposit")
-            or fields.get("orderable_amount")
-            or fields.get("orderable_cash")
-            or fields.get("virtual_budget_krw"),
-            0.0,
-        ) or 0.0
-        budget_from_event = _safe_float(
-            fields.get("target_budget")
-            or fields.get("safe_budget")
-            or fields.get("buy_budget")
-            or fields.get("scale_in_target_budget")
-            or fields.get("scale_in_safe_budget"),
-            0.0,
-        ) or 0.0
+        score = (
+            _safe_float(
+                fields.get("score")
+                or fields.get("ai_score")
+                or fields.get("current_ai_score"),
+                50.0,
+            )
+            or 50.0
+        )
+        deposit = (
+            _safe_float(
+                fields.get("deposit")
+                or fields.get("orderable_amount")
+                or fields.get("orderable_cash")
+                or fields.get("virtual_budget_krw"),
+                0.0,
+            )
+            or 0.0
+        )
+        budget_from_event = (
+            _safe_float(
+                fields.get("target_budget")
+                or fields.get("safe_budget")
+                or fields.get("buy_budget")
+                or fields.get("scale_in_target_budget")
+                or fields.get("scale_in_safe_budget"),
+                0.0,
+            )
+            or 0.0
+        )
         if deposit <= 0 and budget_from_event > 0:
             current_ratio = _safe_float(
                 fields.get("budget_ratio")
@@ -4310,14 +5499,27 @@ def _build_candidate_metrics(
             else:
                 deposit = budget_from_event
         target_budget = deposit if deposit > 0 else budget_from_event
-        price = _safe_float(
-            fields.get("resolved_price") or fields.get("buy_price") or fields.get("reference_price"),
-            0.0,
-        ) or 0.0
+        price = (
+            _safe_float(
+                fields.get("resolved_price")
+                or fields.get("buy_price")
+                or fields.get("reference_price"),
+                0.0,
+            )
+            or 0.0
+        )
         spread_bps = _safe_float(fields.get("spread_bps"), None)
-        liquidity_bucket = str(fields.get("liquidity_bucket") or fields.get("liquidity_value") or "")
-        recent_loss_bucket = str(fields.get("recent_loss_bucket") or fields.get("loss_bucket") or "")
-        portfolio_exposure_bucket = str(fields.get("portfolio_exposure_bucket") or fields.get("exposure_bucket") or "")
+        liquidity_bucket = str(
+            fields.get("liquidity_bucket") or fields.get("liquidity_value") or ""
+        )
+        recent_loss_bucket = str(
+            fields.get("recent_loss_bucket") or fields.get("loss_bucket") or ""
+        )
+        portfolio_exposure_bucket = str(
+            fields.get("portfolio_exposure_bucket")
+            or fields.get("exposure_bucket")
+            or ""
+        )
 
         input_missing = target_budget <= 0 or price <= 0
         if input_missing:
@@ -4330,18 +5532,28 @@ def _build_candidate_metrics(
             spread_bps=spread_bps,
             liquidity_bucket=liquidity_bucket if liquidity_bucket else None,
             recent_loss_bucket=recent_loss_bucket if recent_loss_bucket else None,
-            portfolio_exposure_bucket=portfolio_exposure_bucket if portfolio_exposure_bucket else None,
+            portfolio_exposure_bucket=(
+                portfolio_exposure_bucket if portfolio_exposure_bucket else None
+            ),
             formula_id=fid,
         )
 
         fields["formula_version"] = fid
         fields["formula_candidate_id"] = fid
         fields["input_score"] = score
-        fields["input_strategy"] = str(fields.get("strategy") or fields.get("trade_type") or "")
+        fields["input_strategy"] = str(
+            fields.get("strategy") or fields.get("trade_type") or ""
+        )
         fields["input_spread_bps"] = spread_bps
-        fields["input_liquidity_bucket"] = liquidity_bucket if liquidity_bucket else "unknown"
-        fields["input_recent_loss_bucket"] = recent_loss_bucket if recent_loss_bucket else "unknown"
-        fields["input_portfolio_exposure_bucket"] = portfolio_exposure_bucket if portfolio_exposure_bucket else "unknown"
+        fields["input_liquidity_bucket"] = (
+            liquidity_bucket if liquidity_bucket else "unknown"
+        )
+        fields["input_recent_loss_bucket"] = (
+            recent_loss_bucket if recent_loss_bucket else "unknown"
+        )
+        fields["input_portfolio_exposure_bucket"] = (
+            portfolio_exposure_bucket if portfolio_exposure_bucket else "unknown"
+        )
         fields["target_budget"] = int(target_budget)
         fields["safe_budget"] = int(target_budget * 0.95)
         fields["candidate_qty"] = result["candidate_qty"]
@@ -4355,12 +5567,17 @@ def _build_candidate_metrics(
         total_budget_used += float(result["candidate_budget"])
         total_target_budget += float(target_budget)
 
-        is_real = str(fields.get("actual_order_submitted") or "").strip().lower() == "true"
+        is_real = (
+            str(fields.get("actual_order_submitted") or "").strip().lower() == "true"
+        )
         is_sim = (
             str(fields.get("actual_order_submitted") or "").strip().lower() == "false"
-            or str(fields.get("budget_authority") or "").strip() == "sim_virtual_not_real_orderable_amount"
-            or str(fields.get("qty_source") or "").strip() == "sim_virtual_budget_dynamic_formula"
-            or str(fields.get("scalp_sim_entry_qty_source") or "").strip() == "sim_virtual_budget_dynamic_formula"
+            or str(fields.get("budget_authority") or "").strip()
+            == "sim_virtual_not_real_orderable_amount"
+            or str(fields.get("qty_source") or "").strip()
+            == "sim_virtual_budget_dynamic_formula"
+            or str(fields.get("scalp_sim_entry_qty_source") or "").strip()
+            == "sim_virtual_budget_dynamic_formula"
         )
 
         event_with_candidate = dict(event)
@@ -4369,7 +5586,11 @@ def _build_candidate_metrics(
 
         if is_real:
             candidate_real_rows.append(event_with_candidate)
-            fill_type = str(fields.get("fill_type") or fields.get("order_status") or "").strip().lower()
+            fill_type = (
+                str(fields.get("fill_type") or fields.get("order_status") or "")
+                .strip()
+                .lower()
+            )
             if "full" in fill_type or fields.get("full_fill"):
                 full_fill_count += 1
             elif "partial" in fill_type or fields.get("partial_fill"):
@@ -4382,7 +5603,9 @@ def _build_candidate_metrics(
                 order_fail_count += 1
         elif is_sim:
             candidate_sim_rows.append(event_with_candidate)
-            broker_forbidden = str(fields.get("broker_order_forbidden") or "").strip().lower()
+            broker_forbidden = (
+                str(fields.get("broker_order_forbidden") or "").strip().lower()
+            )
             if broker_forbidden == "true":
                 sim_broker_forbidden_true_count += 1
             elif broker_forbidden == "false":
@@ -4392,9 +5615,17 @@ def _build_candidate_metrics(
 
     real_sample = len(candidate_real_rows)
     sim_sample = len(candidate_sim_rows)
-    qty_avg = round(_avg(candidate_qty_values) or 0.0, 4) if candidate_qty_values else None
-    min_one_share_rate = round(min_one_share_count / total_events, 4) if total_events > 0 else None
-    cash_usage = round(total_budget_used / total_target_budget, 4) if total_target_budget > 0 else None
+    qty_avg = (
+        round(_avg(candidate_qty_values) or 0.0, 4) if candidate_qty_values else None
+    )
+    min_one_share_rate = (
+        round(min_one_share_count / total_events, 4) if total_events > 0 else None
+    )
+    cash_usage = (
+        round(total_budget_used / total_target_budget, 4)
+        if total_target_budget > 0
+        else None
+    )
 
     completed_by_code: list[dict] = [
         row
@@ -4419,19 +5650,34 @@ def _build_candidate_metrics(
         rows = completed_index.get(code)
         if not rows:
             continue
-        event_buy_ts = _safe_float(event.get("buy_time") or event.get("emitted_at"), None)
-        event_record_id = str(event.get("record_id") or event.get("trade_id") or event.get("order_id") or "")
+        event_buy_ts = _safe_float(
+            event.get("buy_time") or event.get("emitted_at"), None
+        )
+        event_record_id = str(
+            event.get("record_id")
+            or event.get("trade_id")
+            or event.get("order_id")
+            or ""
+        )
         matched = None
         if event_record_id:
             for row in rows:
-                row_trade_id = str(row.get("trade_id") or row.get("order_id") or row.get("record_id") or "")
+                row_trade_id = str(
+                    row.get("trade_id")
+                    or row.get("order_id")
+                    or row.get("record_id")
+                    or ""
+                )
                 if row_trade_id and row_trade_id == event_record_id:
                     matched = row
                     break
         if matched is None and event_buy_ts is not None:
             best_diff = float("inf")
             for row in rows:
-                row_buy_ts = _safe_float(row.get("buy_time") or row.get("rec_date") or row.get("sell_time"), None)
+                row_buy_ts = _safe_float(
+                    row.get("buy_time") or row.get("rec_date") or row.get("sell_time"),
+                    None,
+                )
                 if row_buy_ts is not None:
                     diff = abs(float(event_buy_ts) - float(row_buy_ts))
                     if diff < best_diff:
@@ -4449,7 +5695,12 @@ def _build_candidate_metrics(
         profit_rate = _safe_float(matched.get("profit_rate"), None)
         if profit_rate is None:
             continue
-        price = _safe_float(event.get("price") or event.get("resolved_price") or matched.get("buy_price"), None)
+        price = _safe_float(
+            event.get("price")
+            or event.get("resolved_price")
+            or matched.get("buy_price"),
+            None,
+        )
         cqty = _safe_float(event.get("candidate_qty"), None)
         if price is None or cqty is None or price <= 0 or cqty <= 0:
             continue
@@ -4461,25 +5712,61 @@ def _build_candidate_metrics(
             strong_weighted_sum += weighted
             strong_total_notional += notional
 
-    candidate_notional_ev = round(candidate_weighted_sum / candidate_total_notional, 4) if candidate_total_notional > 0 else None
-    strong_notional_ev = round(strong_weighted_sum / strong_total_notional, 4) if strong_total_notional > 0 else None
+    candidate_notional_ev = (
+        round(candidate_weighted_sum / candidate_total_notional, 4)
+        if candidate_total_notional > 0
+        else None
+    )
+    strong_notional_ev = (
+        round(strong_weighted_sum / strong_total_notional, 4)
+        if strong_total_notional > 0
+        else None
+    )
 
     real_completed = [r for r in completed_rows if _is_normal_only_row(r)]
     real_summary = _completed_profit_summary(real_completed)
     overall_ev = _notional_weighted_ev_pct(real_completed)
     win_rate = _safe_float(real_summary.get("win_rate"), None)
     downside_p10 = _safe_float(real_summary.get("downside_p10_profit_rate"), None)
-    source_quality_adjusted_ev = strong_notional_ev if strong_notional_ev is not None else candidate_notional_ev
+    source_quality_adjusted_ev = (
+        strong_notional_ev if strong_notional_ev is not None else candidate_notional_ev
+    )
     ev_match_total = strong_match_count + weak_match_count
-    weak_match_rate = round(weak_match_count / ev_match_total, 4) if ev_match_total > 0 else None
+    weak_match_rate = (
+        round(weak_match_count / ev_match_total, 4) if ev_match_total > 0 else None
+    )
     weak_match_included_in_ev = weak_match_count > 0
 
-    total_order_events = full_fill_count + partial_fill_count + cancel_count + late_fill_count + order_fail_count
-    full_fill_rate = round(full_fill_count / total_order_events, 4) if total_order_events > 0 else None
-    partial_fill_rate = round(partial_fill_count / total_order_events, 4) if total_order_events > 0 else None
-    cancel_rate = round(cancel_count / total_order_events, 4) if total_order_events > 0 else None
-    late_fill_rate = round(late_fill_count / total_order_events, 4) if total_order_events > 0 else None
-    order_failure_rate = round(order_fail_count / total_order_events, 4) if total_order_events > 0 else None
+    total_order_events = (
+        full_fill_count
+        + partial_fill_count
+        + cancel_count
+        + late_fill_count
+        + order_fail_count
+    )
+    full_fill_rate = (
+        round(full_fill_count / total_order_events, 4)
+        if total_order_events > 0
+        else None
+    )
+    partial_fill_rate = (
+        round(partial_fill_count / total_order_events, 4)
+        if total_order_events > 0
+        else None
+    )
+    cancel_rate = (
+        round(cancel_count / total_order_events, 4) if total_order_events > 0 else None
+    )
+    late_fill_rate = (
+        round(late_fill_count / total_order_events, 4)
+        if total_order_events > 0
+        else None
+    )
+    order_failure_rate = (
+        round(order_fail_count / total_order_events, 4)
+        if total_order_events > 0
+        else None
+    )
 
     return {
         "formula_candidate_id": fid,
@@ -4502,7 +5789,9 @@ def _build_candidate_metrics(
         "cash_usage_pct": cash_usage,
         "downside_p10_profit_rate": downside_p10,
         "candidate_qty_avg": qty_avg,
-        "candidate_notional_total": round(candidate_total_notional, 2) if candidate_total_notional > 0 else 0.0,
+        "candidate_notional_total": (
+            round(candidate_total_notional, 2) if candidate_total_notional > 0 else 0.0
+        ),
         "real_actual_order_submitted_count": real_sample,
         "sim_probe_actual_order_submitted_false_count": sim_sample,
         "sim_probe_broker_order_forbidden_true_count": sim_broker_forbidden_true_count,
@@ -4512,11 +5801,17 @@ def _build_candidate_metrics(
         "ev_match_weak_count": weak_match_count,
         "ev_weak_match_rate": weak_match_rate,
         "ev_weak_match_included_in_notional": weak_match_included_in_ev,
-        "budget_authority": "real_orderable_amount" if real_sample > 0 else "sim_virtual_not_real_orderable_amount",
+        "budget_authority": (
+            "real_orderable_amount"
+            if real_sample > 0
+            else "sim_virtual_not_real_orderable_amount"
+        ),
     }
 
 
-def _build_position_sizing_dynamic_formula_family(events: list[dict], completed_rows: list[dict]) -> dict:
+def _build_position_sizing_dynamic_formula_family(
+    events: list[dict], completed_rows: list[dict]
+) -> dict:
     sizing_stages = {
         "budget_pass",
         "blocked_zero_qty",
@@ -4527,8 +5822,12 @@ def _build_position_sizing_dynamic_formula_family(events: list[dict], completed_
         "swing_probe_entry_assumed_filled",
         "swing_sim_entry_assumed_filled",
     }
-    sizing_events = [event for event in events if str(event.get("stage") or "") in sizing_stages]
-    real_rows = [row for row in _valid_profit_rows(completed_rows) if _is_normal_only_row(row)]
+    sizing_events = [
+        event for event in events if str(event.get("stage") or "") in sizing_stages
+    ]
+    real_rows = [
+        row for row in _valid_profit_rows(completed_rows) if _is_normal_only_row(row)
+    ]
     real_summary = _completed_profit_summary(real_rows)
     real_sample = int(real_summary.get("sample") or 0)
     notional_ev = _notional_weighted_ev_pct(real_rows)
@@ -4542,39 +5841,60 @@ def _build_position_sizing_dynamic_formula_family(events: list[dict], completed_
     sim_probe_rows = [
         event
         for event in sizing_events
-        if str(_event_fields(event).get("actual_order_submitted") or "").strip().lower() == "false"
+        if str(_event_fields(event).get("actual_order_submitted") or "").strip().lower()
+        == "false"
         or str(_event_fields(event).get("budget_authority") or "").strip()
         == "sim_virtual_not_real_orderable_amount"
-        or str(_event_fields(event).get("qty_source") or "").strip() == "sim_virtual_budget_dynamic_formula"
+        or str(_event_fields(event).get("qty_source") or "").strip()
+        == "sim_virtual_budget_dynamic_formula"
         or str(_event_fields(event).get("scalp_sim_entry_qty_source") or "").strip()
         == "sim_virtual_budget_dynamic_formula"
     ]
     real_order_rows = [
         event
         for event in sizing_events
-        if str(_event_fields(event).get("actual_order_submitted") or "").strip().lower() == "true"
+        if str(_event_fields(event).get("actual_order_submitted") or "").strip().lower()
+        == "true"
     ]
 
     spread_values = _numeric_event_values(sizing_events, "spread_bps")
     liquidity_values = _numeric_event_values(sizing_events, "liquidity_value")
-    score_values = _numeric_event_values(sizing_events, "score", "ai_score", "current_ai_score")
+    score_values = _numeric_event_values(
+        sizing_events, "score", "ai_score", "current_ai_score"
+    )
 
     required_inputs = {
         "score": bool(score_values),
         "strategy": bool(_bucket_counter(sizing_events, "strategy", "trade_type")),
-        "volatility": bool(_bucket_counter(sizing_events, "volatility_bucket", "volatility_mode")),
-        "liquidity": bool(liquidity_values or _bucket_counter(sizing_events, "liquidity_bucket")),
+        "volatility": bool(
+            _bucket_counter(sizing_events, "volatility_bucket", "volatility_mode")
+        ),
+        "liquidity": bool(
+            liquidity_values or _bucket_counter(sizing_events, "liquidity_bucket")
+        ),
         "spread": bool(spread_values),
-        "price_band": bool(_bucket_counter(sizing_events, "price_band", "price_bucket")),
-        "recent_loss": bool(_bucket_counter(sizing_events, "recent_loss_bucket", "loss_bucket")),
-        "portfolio_exposure": bool(_bucket_counter(sizing_events, "portfolio_exposure_bucket", "exposure_bucket")),
+        "price_band": bool(
+            _bucket_counter(sizing_events, "price_band", "price_bucket")
+        ),
+        "recent_loss": bool(
+            _bucket_counter(sizing_events, "recent_loss_bucket", "loss_bucket")
+        ),
+        "portfolio_exposure": bool(
+            _bucket_counter(
+                sizing_events, "portfolio_exposure_bucket", "exposure_bucket"
+            )
+        ),
     }
     source_quality_blockers = [
-        f"missing_input_{key}" for key, present in required_inputs.items() if not bool(present)
+        f"missing_input_{key}"
+        for key, present in required_inputs.items()
+        if not bool(present)
     ]
     source_quality_passed = not source_quality_blockers
     source_quality_adjusted_ev = (
-        round(float(notional_ev) * 0.5, 4) if notional_ev is not None and source_quality_blockers else notional_ev
+        round(float(notional_ev) * 0.5, 4)
+        if notional_ev is not None and source_quality_blockers
+        else notional_ev
     )
     sample_ready = real_sample >= 30 and source_quality_passed
 
@@ -4618,19 +5938,27 @@ def _build_position_sizing_dynamic_formula_family(events: list[dict], completed_
             "input_coverage": required_inputs,
             "source_quality_passed": source_quality_passed,
             "source_quality_blockers": source_quality_blockers,
-            "primary_metric": "notional_weighted_ev_pct"
-            if notional_ev is not None
-            else "source_quality_adjusted_ev_pct",
+            "primary_metric": (
+                "notional_weighted_ev_pct"
+                if notional_ev is not None
+                else "source_quality_adjusted_ev_pct"
+            ),
             "notional_weighted_ev_pct": notional_ev,
             "source_quality_adjusted_ev_pct": source_quality_adjusted_ev,
             "real_completed_summary": real_summary,
             "score_avg": round(_avg(score_values) or 0.0, 4) if score_values else None,
-            "spread_bps_p90": round(_percentile(spread_values, 90, 0.0), 4) if spread_values else None,
-            "liquidity_value_p50": round(_percentile(liquidity_values, 50, 0.0), 4)
-            if liquidity_values
-            else None,
+            "spread_bps_p90": (
+                round(_percentile(spread_values, 90, 0.0), 4) if spread_values else None
+            ),
+            "liquidity_value_p50": (
+                round(_percentile(liquidity_values, 50, 0.0), 4)
+                if liquidity_values
+                else None
+            ),
             "strategy_counts": _bucket_counter(sizing_events, "strategy", "trade_type"),
-            "volatility_bucket_counts": _bucket_counter(sizing_events, "volatility_bucket", "volatility_mode"),
+            "volatility_bucket_counts": _bucket_counter(
+                sizing_events, "volatility_bucket", "volatility_mode"
+            ),
         },
         "apply_ready": sample_ready,
         "current": current,
@@ -4642,7 +5970,10 @@ def _build_position_sizing_dynamic_formula_family(events: list[dict], completed_
             "decision_authority": "candidate_grid_comparison_runtime_apply_blocked_until_guard_tests_pass",
             "window_policy": "rolling_10d_with_real_denominator",
             "sample_floor": 30,
-            "primary_decision_metric": ["notional_weighted_ev_pct", "source_quality_adjusted_ev_pct"],
+            "primary_decision_metric": [
+                "notional_weighted_ev_pct",
+                "source_quality_adjusted_ev_pct",
+            ],
             "source_quality_gate": "all_required_inputs_present_and_real_sim_probe_split",
             "forbidden_uses": [
                 "sim_probe_single_source_live_apply",
@@ -4661,12 +5992,54 @@ def _build_position_sizing_dynamic_formula_family(events: list[dict], completed_
 
 def _build_mechanical_entry_family(events: list[dict]) -> dict:
     current = {
-        "max_signal_score": float(getattr(TRADING_RULES, "SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_MAX_SIGNAL_SCORE", 75.0) or 75.0),
-        "min_strength": float(getattr(TRADING_RULES, "SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_MIN_STRENGTH", 110.0) or 110.0),
-        "min_buy_pressure": float(getattr(TRADING_RULES, "SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_MIN_BUY_PRESSURE", 50.0) or 50.0),
-        "max_ws_age_ms": int(getattr(TRADING_RULES, "SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_MAX_WS_AGE_MS", 1200) or 1200),
-        "max_ws_jitter_ms": int(getattr(TRADING_RULES, "SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_MAX_WS_JITTER_MS", 500) or 500),
-        "max_spread_ratio": float(getattr(TRADING_RULES, "SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_MAX_SPREAD_RATIO", 0.0085) or 0.0085),
+        "max_signal_score": float(
+            getattr(
+                TRADING_RULES,
+                "SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_MAX_SIGNAL_SCORE",
+                75.0,
+            )
+            or 75.0
+        ),
+        "min_strength": float(
+            getattr(
+                TRADING_RULES,
+                "SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_MIN_STRENGTH",
+                110.0,
+            )
+            or 110.0
+        ),
+        "min_buy_pressure": float(
+            getattr(
+                TRADING_RULES,
+                "SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_MIN_BUY_PRESSURE",
+                50.0,
+            )
+            or 50.0
+        ),
+        "max_ws_age_ms": int(
+            getattr(
+                TRADING_RULES,
+                "SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_MAX_WS_AGE_MS",
+                1200,
+            )
+            or 1200
+        ),
+        "max_ws_jitter_ms": int(
+            getattr(
+                TRADING_RULES,
+                "SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_MAX_WS_JITTER_MS",
+                500,
+            )
+            or 500
+        ),
+        "max_spread_ratio": float(
+            getattr(
+                TRADING_RULES,
+                "SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_MAX_SPREAD_RATIO",
+                0.0085,
+            )
+            or 0.0085
+        ),
     }
     budget_pass = _stage_count(events, "budget_pass")
     submitted = _stage_count(events, "order_bundle_submitted")
@@ -4679,12 +6052,41 @@ def _build_mechanical_entry_family(events: list[dict]) -> dict:
 
     sample_ready = budget_pass >= 500 and submitted >= 20
     recommended = {
-        "max_signal_score": round(_clamp(_percentile(signal_score, 90, current["max_signal_score"]), 65.0, 85.0), 1),
-        "min_strength": round(_clamp(_percentile(strength, 25, current["min_strength"]), 95.0, 130.0), 1),
-        "min_buy_pressure": round(_clamp(_percentile(buy_pressure, 25, current["min_buy_pressure"]), 45.0, 70.0), 1),
-        "max_ws_age_ms": int(round(_clamp(_percentile(ws_age, 90, current["max_ws_age_ms"]), 600.0, 1600.0))),
-        "max_ws_jitter_ms": int(round(_clamp(_percentile(ws_jitter, 90, current["max_ws_jitter_ms"]), 200.0, 700.0))),
-        "max_spread_ratio": round(_clamp(_percentile(spread, 90, current["max_spread_ratio"]), 0.0040, 0.0120), 4),
+        "max_signal_score": round(
+            _clamp(
+                _percentile(signal_score, 90, current["max_signal_score"]), 65.0, 85.0
+            ),
+            1,
+        ),
+        "min_strength": round(
+            _clamp(_percentile(strength, 25, current["min_strength"]), 95.0, 130.0), 1
+        ),
+        "min_buy_pressure": round(
+            _clamp(
+                _percentile(buy_pressure, 25, current["min_buy_pressure"]), 45.0, 70.0
+            ),
+            1,
+        ),
+        "max_ws_age_ms": int(
+            round(
+                _clamp(_percentile(ws_age, 90, current["max_ws_age_ms"]), 600.0, 1600.0)
+            )
+        ),
+        "max_ws_jitter_ms": int(
+            round(
+                _clamp(
+                    _percentile(ws_jitter, 90, current["max_ws_jitter_ms"]),
+                    200.0,
+                    700.0,
+                )
+            )
+        ),
+        "max_spread_ratio": round(
+            _clamp(
+                _percentile(spread, 90, current["max_spread_ratio"]), 0.0040, 0.0120
+            ),
+            4,
+        ),
     }
     return {
         "family": "entry_mechanical_momentum",
@@ -4712,7 +6114,8 @@ def _event_score(event: dict) -> float:
 
 def _build_score65_74_recovery_probe_family(events: list[dict]) -> dict:
     configured_min_micro_vwap_bp = float(
-        getattr(TRADING_RULES, "AI_SCORE65_74_RECOVERY_PROBE_MIN_MICRO_VWAP_BP", 0.0) or 0.0
+        getattr(TRADING_RULES, "AI_SCORE65_74_RECOVERY_PROBE_MIN_MICRO_VWAP_BP", 0.0)
+        or 0.0
     )
     effective_min_micro_vwap_bp = max(
         configured_min_micro_vwap_bp,
@@ -4726,23 +6129,39 @@ def _build_score65_74_recovery_probe_family(events: list[dict]) -> dict:
         ),
     )
     current = {
-        "enabled": bool(getattr(TRADING_RULES, "AI_SCORE65_74_RECOVERY_PROBE_ENABLED", False)),
-        "min_score": int(getattr(TRADING_RULES, "AI_SCORE65_74_RECOVERY_PROBE_MIN_SCORE", 60) or 60),
-        "max_score": int(getattr(TRADING_RULES, "AI_SCORE65_74_RECOVERY_PROBE_MAX_SCORE", 74) or 74),
+        "enabled": bool(
+            getattr(TRADING_RULES, "AI_SCORE65_74_RECOVERY_PROBE_ENABLED", False)
+        ),
+        "min_score": int(
+            getattr(TRADING_RULES, "AI_SCORE65_74_RECOVERY_PROBE_MIN_SCORE", 60) or 60
+        ),
+        "max_score": int(
+            getattr(TRADING_RULES, "AI_SCORE65_74_RECOVERY_PROBE_MAX_SCORE", 74) or 74
+        ),
         "min_buy_pressure": float(
-            getattr(TRADING_RULES, "AI_SCORE65_74_RECOVERY_PROBE_MIN_BUY_PRESSURE", 65.0) or 65.0
+            getattr(
+                TRADING_RULES, "AI_SCORE65_74_RECOVERY_PROBE_MIN_BUY_PRESSURE", 65.0
+            )
+            or 65.0
         ),
         "min_tick_accel": float(
-            getattr(TRADING_RULES, "AI_SCORE65_74_RECOVERY_PROBE_MIN_TICK_ACCEL", 1.20) or 1.20
+            getattr(TRADING_RULES, "AI_SCORE65_74_RECOVERY_PROBE_MIN_TICK_ACCEL", 1.20)
+            or 1.20
         ),
         "configured_min_micro_vwap_bp": configured_min_micro_vwap_bp,
         "effective_min_micro_vwap_bp": effective_min_micro_vwap_bp,
         "min_micro_vwap_bp": effective_min_micro_vwap_bp,
-        "max_budget_krw": int(getattr(TRADING_RULES, "AI_WAIT6579_PROBE_CANARY_MAX_BUDGET_KRW", 0) or 0),
-        "max_qty": int(getattr(TRADING_RULES, "AI_WAIT6579_PROBE_CANARY_MAX_QTY", 0) or 0),
+        "max_budget_krw": int(
+            getattr(TRADING_RULES, "AI_WAIT6579_PROBE_CANARY_MAX_BUDGET_KRW", 0) or 0
+        ),
+        "max_qty": int(
+            getattr(TRADING_RULES, "AI_WAIT6579_PROBE_CANARY_MAX_QTY", 0) or 0
+        ),
     }
     current["effective_score_range"] = f"{current['min_score']}-{current['max_score']}"
-    current["family_id_compat_note"] = "score65_74_recovery_probe id is retained for artifact compatibility"
+    current["family_id_compat_note"] = (
+        "score65_74_recovery_probe id is retained for artifact compatibility"
+    )
 
     def _is_early_accel_recheck_retry(event: dict) -> bool:
         fields = event.get("fields") if isinstance(event.get("fields"), dict) else {}
@@ -4750,7 +6169,8 @@ def _build_score65_74_recovery_probe_family(events: list[dict]) -> dict:
             str(fields.get("ai_call_trigger_reason") or "") == "early_accel_recheck"
             or str(fields.get("tuning_authority_excluded_reason") or "")
             == "early_accel_recheck_operator_retry"
-            or str(fields.get("ai_call_trigger_reason") or "") == "ai_numeric_consistency_recheck"
+            or str(fields.get("ai_call_trigger_reason") or "")
+            == "ai_numeric_consistency_recheck"
             or str(fields.get("tuning_authority_excluded_reason") or "")
             == "ai_numeric_consistency_recheck_operator_retry"
         )
@@ -4773,7 +6193,11 @@ def _build_score65_74_recovery_probe_family(events: list[dict]) -> dict:
     submitted = _events_for_stage(events, "order_bundle_submitted")
     filled = _events_for_stage(events, "position_rebased_after_fill")
     budget_pass = _events_for_stage(events, "budget_pass")
-    sample_ready = len(wait_candidates) >= 20 and bool(budget_pass) and len(submitted) < max(20, len(budget_pass) // 10)
+    sample_ready = (
+        len(wait_candidates) >= 20
+        and bool(budget_pass)
+        and len(submitted) < max(20, len(budget_pass) // 10)
+    )
     recommended = dict(current)
     if sample_ready:
         recommended["enabled"] = True
@@ -4796,7 +6220,9 @@ def _build_score65_74_recovery_probe_family(events: list[dict]) -> dict:
         "apply_ready": sample_ready,
         "current": current,
         "recommended": recommended,
-        "apply_mode": "efficient_tradeoff_canary_candidate" if sample_ready else "observe_only",
+        "apply_mode": (
+            "efficient_tradeoff_canary_candidate" if sample_ready else "observe_only"
+        ),
         "notes": [
             "family id는 호환성을 위해 score65_74를 유지하지만 현재 runtime floor 기준 score60~74 예산 bounded canary 후보만 만든다.",
             "min_micro_vwap_bp는 실효값이며 configured_min_micro_vwap_bp와 effective_min_micro_vwap_bp를 분리해 기록한다.",
@@ -4821,12 +6247,15 @@ ENTRY_PRICE_CANDIDATE_LABELS = [
 def _build_pre_submit_guard_family(events: list[dict]) -> dict:
     current = {
         "safety_guard_enabled": True,
-        "max_below_bid_bps": int(getattr(TRADING_RULES, "SCALPING_PRE_SUBMIT_MAX_BELOW_BID_BPS", 80) or 80),
+        "max_below_bid_bps": int(
+            getattr(TRADING_RULES, "SCALPING_PRE_SUBMIT_MAX_BELOW_BID_BPS", 80) or 80
+        ),
     }
     passive_probe_events = [
         event
         for event in events
-        if str(_event_fields(event).get("entry_order_lifecycle") or "") == "passive_probe"
+        if str(_event_fields(event).get("entry_order_lifecycle") or "")
+        == "passive_probe"
         or _field_bool(_event_fields(event).get("entry_passive_probe_applied"))
     ]
     revalidation_blocks = _events_for_stage(events, "entry_submit_revalidation_block")
@@ -4860,31 +6289,54 @@ def _candidate_metric_pack(
     cancel_stages: set[str],
     fill_metrics_available: bool = True,
 ) -> dict:
-    excluded = [event for event in events if _entry_price_unpriced_or_stale_warning(event)]
+    excluded = [
+        event for event in events if _entry_price_unpriced_or_stale_warning(event)
+    ]
     excluded_ids = {id(event) for event in excluded}
     priced_events = [event for event in events if id(event) not in excluded_ids]
-    submitted = [event for event in priced_events if str(event.get("stage") or "") in submitted_stages]
-    filled = [event for event in priced_events if str(event.get("stage") or "") in fill_stages]
-    canceled = [event for event in priced_events if str(event.get("stage") or "") in cancel_stages]
+    submitted = [
+        event
+        for event in priced_events
+        if str(event.get("stage") or "") in submitted_stages
+    ]
+    filled = [
+        event for event in priced_events if str(event.get("stage") or "") in fill_stages
+    ]
+    canceled = [
+        event
+        for event in priced_events
+        if str(event.get("stage") or "") in cancel_stages
+    ]
     partial = [
         event
         for event in priced_events
-        if str(_event_fields(event).get("fill_type") or _event_fields(event).get("entry_order_lifecycle") or "").lower()
+        if str(
+            _event_fields(event).get("fill_type")
+            or _event_fields(event).get("entry_order_lifecycle")
+            or ""
+        ).lower()
         == "partial_fill"
     ]
     full = [
         event
         for event in filled
-        if str(_event_fields(event).get("fill_type") or _event_fields(event).get("entry_order_lifecycle") or "").lower()
+        if str(
+            _event_fields(event).get("fill_type")
+            or _event_fields(event).get("entry_order_lifecycle")
+            or ""
+        ).lower()
         in {"", "filled", "full_fill", "assumed_filled"}
     ]
     late = [
         event
         for event in priced_events
         if _field_bool(_event_fields(event).get("late_fill"))
-        or str(_event_fields(event).get("entry_order_lifecycle") or "").lower() == "late_fill"
+        or str(_event_fields(event).get("entry_order_lifecycle") or "").lower()
+        == "late_fill"
     ]
-    excluded_reasons = Counter(_entry_price_exclusion_reason(event) for event in excluded)
+    excluded_reasons = Counter(
+        _entry_price_exclusion_reason(event) for event in excluded
+    )
     defect_breakdown: Counter[str] = Counter()
     forbidden_zero_price_count = 0
     limit_missing_assumed_present_count = 0
@@ -4898,7 +6350,9 @@ def _candidate_metric_pack(
             forbidden_zero_price_count += 1
         if classification == "limit_fill_price_missing_but_assumed_present":
             limit_missing_assumed_present_count += 1
-        if _field_bool(fields.get("actual_order_submitted")) or fields.get("broker_receipt_time"):
+        if _field_bool(fields.get("actual_order_submitted")) or fields.get(
+            "broker_receipt_time"
+        ):
             real_execution_quality_count += 1
     denominator = max(len(submitted), len(filled) + len(canceled), 1)
     stale_warning_reasons = {"stale_context_or_quote", "quote_stale_at_submit"}
@@ -4906,7 +6360,9 @@ def _candidate_metric_pack(
         "priced_sample_count": len(priced_events),
         "unpriced_sample_count": len(excluded),
         "stale_warning_count": sum(
-            1 for event in excluded if _entry_price_exclusion_reason(event) in stale_warning_reasons
+            1
+            for event in excluded
+            if _entry_price_exclusion_reason(event) in stale_warning_reasons
         ),
         "excluded_from_fill_ev_count": len(excluded),
         "excluded_from_fill_ev_reasons": dict(excluded_reasons),
@@ -4914,9 +6370,21 @@ def _candidate_metric_pack(
         "forbidden_zero_price_observation_count": forbidden_zero_price_count,
         "limit_fill_price_missing_but_assumed_present_count": limit_missing_assumed_present_count,
         "real_execution_quality_sample_count": real_execution_quality_count,
-        "fill_rate": round(len(filled) * 100.0 / denominator, 4) if fill_metrics_available else None,
-        "full_fill_rate": round(len(full) * 100.0 / denominator, 4) if fill_metrics_available else None,
-        "partial_fill_rate": round(len(partial) * 100.0 / denominator, 4) if fill_metrics_available else None,
+        "fill_rate": (
+            round(len(filled) * 100.0 / denominator, 4)
+            if fill_metrics_available
+            else None
+        ),
+        "full_fill_rate": (
+            round(len(full) * 100.0 / denominator, 4)
+            if fill_metrics_available
+            else None
+        ),
+        "partial_fill_rate": (
+            round(len(partial) * 100.0 / denominator, 4)
+            if fill_metrics_available
+            else None
+        ),
         "cancel_rate": round(len(canceled) * 100.0 / denominator, 4),
         "late_fill_rate": round(len(late) * 100.0 / denominator, 4),
         "missed_upside": None,
@@ -4936,7 +6404,9 @@ def _enrich_entry_price_sim_metrics_with_post_sell(
         return sim_metrics
 
     evaluations = _load_sim_post_sell_evaluation_by_sim_id(target_date)
-    artifact_path = str(POST_SELL_DIR / f"sim_post_sell_evaluations_{target_date}.jsonl")
+    artifact_path = str(
+        POST_SELL_DIR / f"sim_post_sell_evaluations_{target_date}.jsonl"
+    )
     sim_metrics["post_sell_evaluation_artifact"] = artifact_path
 
     join_key_priority = ("sim_record_id", "sim_parent_record_id", "candidate_id")
@@ -5007,16 +6477,26 @@ def _enrich_entry_price_sim_metrics_with_post_sell(
 
     sim_metrics["post_sell_joined_count"] = joined_eval_count
     sim_metrics["post_sell_join_pending_count"] = pending_count
-    sim_metrics["post_sell_join_status"] = "evaluated" if joined_eval_count > 0 else "no_joined_events"
-    sim_metrics["missed_upside"] = (
-        round(missed_upside_count * 100.0 / max(joined_eval_count, 1), 2) if joined_eval_count > 0 else None
+    sim_metrics["post_sell_join_status"] = (
+        "evaluated" if joined_eval_count > 0 else "no_joined_events"
     )
-    sim_metrics["missed_upside_source"] = "sim_post_sell_evaluations_10m" if joined_eval_count > 0 else "-"
+    sim_metrics["missed_upside"] = (
+        round(missed_upside_count * 100.0 / max(joined_eval_count, 1), 2)
+        if joined_eval_count > 0
+        else None
+    )
+    sim_metrics["missed_upside_source"] = (
+        "sim_post_sell_evaluations_10m" if joined_eval_count > 0 else "-"
+    )
     sim_metrics["source_quality_adjusted_ev_pct"] = (
         round(sum(profit_values) / len(profit_values), 4) if profit_values else None
     )
-    sim_metrics["ev_source"] = "joined_sim_post_sell_profit_rate" if profit_values else "-"
-    sim_metrics["post_sell_outcome_counts"] = dict(outcome_counter) if outcome_counter else {}
+    sim_metrics["ev_source"] = (
+        "joined_sim_post_sell_profit_rate" if profit_values else "-"
+    )
+    sim_metrics["post_sell_outcome_counts"] = (
+        dict(outcome_counter) if outcome_counter else {}
+    )
 
     return sim_metrics
 
@@ -5057,7 +6537,11 @@ def _entry_price_missing_metrics(
 ) -> dict[str, list[str]]:
     missing_by_book: dict[str, list[str]] = {}
     for book in required_books:
-        book_metrics = candidate_metrics.get(book) if isinstance(candidate_metrics.get(book), dict) else {}
+        book_metrics = (
+            candidate_metrics.get(book)
+            if isinstance(candidate_metrics.get(book), dict)
+            else {}
+        )
         required_names = (
             ENTRY_PRICE_REAL_PRIMARY_REQUIRED_METRIC_NAMES
             if book == "real"
@@ -5100,7 +6584,9 @@ def _entry_price_outcome_row_key(row: dict) -> str:
     return f"row:{id(row)}"
 
 
-def _entry_price_real_outcome_metrics(real_events: list[dict], completed_rows: list[dict]) -> dict:
+def _entry_price_real_outcome_metrics(
+    real_events: list[dict], completed_rows: list[dict]
+) -> dict:
     valid_rows = [
         row
         for row in _valid_profit_rows(completed_rows or [])
@@ -5144,16 +6630,24 @@ def _entry_price_real_outcome_metrics(real_events: list[dict], completed_rows: l
                 if row is not None:
                     break
         if row is None:
-            stock_code = str(fields.get("stock_code") or fields.get("code") or "").strip()
+            stock_code = str(
+                fields.get("stock_code") or fields.get("code") or ""
+            ).strip()
             stock_rows = rows_by_stock.get(stock_code) or []
-            if stock_code and len(stock_rows) == 1 and event_stock_counts.get(stock_code, 0) == 1:
+            if (
+                stock_code
+                and len(stock_rows) == 1
+                and event_stock_counts.get(stock_code, 0) == 1
+            ):
                 row = stock_rows[0]
         if row is not None:
             matched_rows[_entry_price_outcome_row_key(row)] = row
 
     profit_values = [
         float(value)
-        for value in (_safe_float(row.get("profit_rate"), None) for row in matched_rows.values())
+        for value in (
+            _safe_float(row.get("profit_rate"), None) for row in matched_rows.values()
+        )
         if value is not None
     ]
     joined_sample = len(profit_values)
@@ -5161,13 +6655,15 @@ def _entry_price_real_outcome_metrics(real_events: list[dict], completed_rows: l
     return {
         "real_outcome_joined_sample": joined_sample,
         "real_outcome_pending_count": max(0, submitted_count - joined_sample),
-        "real_outcome_join_rate": round(joined_sample / submitted_count, 4) if submitted_count else 0.0,
-        "real_source_quality_adjusted_ev_pct": round(sum(profit_values) / joined_sample, 4)
-        if joined_sample
-        else None,
-        "real_notional_weighted_ev_pct": round(sum(profit_values) / joined_sample, 4)
-        if joined_sample
-        else None,
+        "real_outcome_join_rate": (
+            round(joined_sample / submitted_count, 4) if submitted_count else 0.0
+        ),
+        "real_source_quality_adjusted_ev_pct": (
+            round(sum(profit_values) / joined_sample, 4) if joined_sample else None
+        ),
+        "real_notional_weighted_ev_pct": (
+            round(sum(profit_values) / joined_sample, 4) if joined_sample else None
+        ),
         "real_execution_quality_ready": submitted_count >= 20 and joined_sample > 0,
     }
 
@@ -5186,9 +6682,11 @@ def _entry_price_primary_sample_book(
         authority = str(metrics.get("decision_authority") or "").strip() or (
             "real_outcome_primary_next_preopen_bounded_entry_price_policy"
             if explicit == "real"
-            else "sim_diagnostic_or_preopen_bounded_fallback"
-            if explicit == "sim"
-            else "hold_sample"
+            else (
+                "sim_diagnostic_or_preopen_bounded_fallback"
+                if explicit == "sim"
+                else "hold_sample"
+            )
         )
         return explicit, authority
     real_count = _safe_int(metrics.get("real_candidate_observations"), 0) or 0
@@ -5196,8 +6694,13 @@ def _entry_price_primary_sample_book(
     real_joined = _safe_int(metrics.get("real_outcome_joined_sample"), 0) or 0
     real_ev = _safe_float(metrics.get("real_source_quality_adjusted_ev_pct"), None)
     if real_ev is None:
-        real_ev = _safe_float((candidate_metrics.get("real") or {}).get("source_quality_adjusted_ev_pct"), None)
-    sim_ready = sim_count >= 20 and _entry_price_candidate_metrics_ready(candidate_metrics, required_books=("sim",))
+        real_ev = _safe_float(
+            (candidate_metrics.get("real") or {}).get("source_quality_adjusted_ev_pct"),
+            None,
+        )
+    sim_ready = sim_count >= 20 and _entry_price_candidate_metrics_ready(
+        candidate_metrics, required_books=("sim",)
+    )
     if real_count >= 20 and real_joined > 0 and real_ev is not None and real_ev > 0:
         return "real", "real_outcome_primary_next_preopen_bounded_entry_price_policy"
     if sim_ready:
@@ -5209,7 +6712,10 @@ def _entry_price_primary_sample_book(
 
 def _entry_price_exclusion_reason(event: dict) -> str:
     fields = _event_fields(event)
-    if str(fields.get("entry_submit_revalidation_warning") or "").strip() == "stale_context_or_quote":
+    if (
+        str(fields.get("entry_submit_revalidation_warning") or "").strip()
+        == "stale_context_or_quote"
+    ):
         return "stale_context_or_quote"
     if _field_bool(fields.get("quote_stale_at_submit")):
         return "quote_stale_at_submit"
@@ -5236,7 +6742,8 @@ def _entry_price_unpriced_or_stale_warning(event: dict) -> bool:
     if submitted_price != 0:
         return False
     return (
-        str(fields.get("entry_submit_revalidation_warning") or "").strip() == "stale_context_or_quote"
+        str(fields.get("entry_submit_revalidation_warning") or "").strip()
+        == "stale_context_or_quote"
         or _field_bool(fields.get("quote_stale_at_submit"))
         or stage == "scalp_sim_entry_unpriced"
     )
@@ -5262,12 +6769,20 @@ def _classify_sim_fill_price_defect(fields: dict, stage: str) -> str:
 
     canonical = _canonical_sim_fill_price(fields)
     if canonical is not None and canonical > 0:
-        if limit_price is not None and limit_price <= 0 and assumed_price is not None and assumed_price > 0:
+        if (
+            limit_price is not None
+            and limit_price <= 0
+            and assumed_price is not None
+            and assumed_price > 0
+        ):
             return "limit_fill_price_missing_but_assumed_present"
         return "priced_valid"
 
     if submitted_price is not None and submitted_price <= 0:
-        stale = str(fields.get("entry_submit_revalidation_warning") or "").strip() == "stale_context_or_quote"
+        stale = (
+            str(fields.get("entry_submit_revalidation_warning") or "").strip()
+            == "stale_context_or_quote"
+        )
         quote_stale = _field_bool(fields.get("quote_stale_at_submit"))
         if stale or quote_stale or stage == "scalp_sim_entry_unpriced":
             return "sim_unpriced_stale_warning"
@@ -5307,7 +6822,11 @@ def _entry_price_ai_candidate_quality(events: list[dict]) -> dict:
         if str(event.get("stage") or "").startswith("entry_ai_price_canary_")
         or str(event.get("stage") or "").startswith("scalp_sim_entry_ai_price_")
     ]
-    failed = [event for event in candidate_events if _entry_price_candidate_failure_reasons(event)]
+    failed = [
+        event
+        for event in candidate_events
+        if _entry_price_candidate_failure_reasons(event)
+    ]
     reasons: Counter[str] = Counter()
     for event in failed:
         reasons.update(_entry_price_candidate_failure_reasons(event))
@@ -5316,7 +6835,9 @@ def _entry_price_ai_candidate_quality(events: list[dict]) -> dict:
         "candidate_label": "AI_candidate",
         "candidate_event_count": total,
         "candidate_failure_count": len(failed),
-        "candidate_failure_rate": round(len(failed) * 100.0 / total, 4) if total else 0.0,
+        "candidate_failure_rate": (
+            round(len(failed) * 100.0 / total, 4) if total else 0.0
+        ),
         "failure_reasons": {str(key): value for key, value in reasons.items() if key},
     }
 
@@ -5332,11 +6853,22 @@ def _entry_price_sim_submit_path_quality(events: list[dict]) -> dict:
     }
     summary: dict[str, dict[str, Any]] = {}
     for stage in sorted(stages):
-        stage_events = [event for event in events if str(event.get("stage") or "") == stage]
-        unpriced = [event for event in stage_events if _entry_price_unpriced_or_stale_warning(event)]
+        stage_events = [
+            event for event in events if str(event.get("stage") or "") == stage
+        ]
+        unpriced = [
+            event
+            for event in stage_events
+            if _entry_price_unpriced_or_stale_warning(event)
+        ]
         unpriced_ids = {id(event) for event in unpriced}
         priced = [event for event in stage_events if id(event) not in unpriced_ids]
-        stale = [event for event in unpriced if _entry_price_exclusion_reason(event) in {"stale_context_or_quote", "quote_stale_at_submit"}]
+        stale = [
+            event
+            for event in unpriced
+            if _entry_price_exclusion_reason(event)
+            in {"stale_context_or_quote", "quote_stale_at_submit"}
+        ]
         actual_order_violations = [
             event
             for event in stage_events
@@ -5368,27 +6900,47 @@ def _entry_price_sim_submit_path_quality(events: list[dict]) -> dict:
                 "stale_warning_count": len(stale),
                 "excluded_from_fill_ev_count": len(unpriced),
                 "actual_order_submitted_violation_count": len(actual_order_violations),
-                "broker_order_forbidden_violation_count": len(broker_forbidden_violations),
+                "broker_order_forbidden_violation_count": len(
+                    broker_forbidden_violations
+                ),
                 "canonical_sim_fill_price_defect_breakdown": dict(defect_breakdown),
                 "forbidden_zero_price_observation_count": forbidden_zero_price,
                 "limit_fill_price_missing_but_assumed_present_count": limit_missing_assumed_present,
-                "classification": "sim_unpriced_stale_warning" if unpriced else "sim_priced_observation",
+                "classification": (
+                    "sim_unpriced_stale_warning"
+                    if unpriced
+                    else "sim_priced_observation"
+                ),
             }
     return summary
 
 
-def _merged_entry_price_candidate_metrics(family_sample: dict, source_metrics: dict) -> dict:
-    base = family_sample.get("candidate_metrics") if isinstance(family_sample.get("candidate_metrics"), dict) else {}
-    source_pack = source_metrics.get("candidate_metrics") if isinstance(source_metrics.get("candidate_metrics"), dict) else {}
+def _merged_entry_price_candidate_metrics(
+    family_sample: dict, source_metrics: dict
+) -> dict:
+    base = (
+        family_sample.get("candidate_metrics")
+        if isinstance(family_sample.get("candidate_metrics"), dict)
+        else {}
+    )
+    source_pack = (
+        source_metrics.get("candidate_metrics")
+        if isinstance(source_metrics.get("candidate_metrics"), dict)
+        else {}
+    )
     merged: dict[str, dict] = {}
     for book in ("sim", "real"):
         book_base = base.get(book) if isinstance(base.get(book), dict) else {}
-        book_source = source_pack.get(book) if isinstance(source_pack.get(book), dict) else {}
+        book_source = (
+            source_pack.get(book) if isinstance(source_pack.get(book), dict) else {}
+        )
         merged[book] = {**book_base, **book_source}
     return merged
 
 
-def _entry_price_recommended_values_scope(source_metrics: dict, recommended: dict) -> str:
+def _entry_price_recommended_values_scope(
+    source_metrics: dict, recommended: dict
+) -> str:
     for key in (
         "recommended_values_decision_scope",
         "recommended_values_scope",
@@ -5421,13 +6973,17 @@ def _entry_price_recommended_values_scope_is_sim(scope: str) -> bool:
     }
 
 
-def _entry_price_source_recommended_values(source_metrics: dict, current: dict, metadata: dict) -> tuple[dict, dict]:
+def _entry_price_source_recommended_values(
+    source_metrics: dict, current: dict, metadata: dict
+) -> tuple[dict, dict]:
     recommended = (
         source_metrics.get("recommended_values")
         if isinstance(source_metrics.get("recommended_values"), dict)
-        else source_metrics.get("recommended_policy")
-        if isinstance(source_metrics.get("recommended_policy"), dict)
-        else {}
+        else (
+            source_metrics.get("recommended_policy")
+            if isinstance(source_metrics.get("recommended_policy"), dict)
+            else {}
+        )
     )
     clean: dict[str, Any] = {}
     audit: dict[str, Any] = {"accepted": {}, "clamped": {}, "rejected": {}}
@@ -5465,15 +7021,25 @@ def _entry_price_source_recommended_values(source_metrics: dict, current: dict, 
         upper = _safe_float(key_bounds.get("max"), numeric)
         max_step = _safe_float(key_bounds.get("max_step_per_day"), None)
         current_value = _safe_float(current.get(key), numeric)
-        bounded = _clamp(numeric, lower if lower is not None else numeric, upper if upper is not None else numeric)
+        bounded = _clamp(
+            numeric,
+            lower if lower is not None else numeric,
+            upper if upper is not None else numeric,
+        )
         if max_step is not None and current_value is not None:
-            bounded = _clamp(bounded, current_value - max_step, current_value + max_step)
+            bounded = _clamp(
+                bounded, current_value - max_step, current_value + max_step
+            )
         if key in {"normal_defensive_ticks", "max_below_bid_bps"}:
             bounded_value: Any = int(round(bounded))
         else:
             bounded_value = bounded
         clean[key] = bounded_value
-        raw_numeric_equivalent = int(round(numeric)) if key in {"normal_defensive_ticks", "max_below_bid_bps"} else numeric
+        raw_numeric_equivalent = (
+            int(round(numeric))
+            if key in {"normal_defensive_ticks", "max_below_bid_bps"}
+            else numeric
+        )
         if bounded_value != raw_numeric_equivalent:
             audit["clamped"][key] = {"requested": raw_value, "applied": bounded_value}
         else:
@@ -5485,8 +7051,14 @@ def _entry_price_recommendation_has_audit_entries(audit: dict) -> bool:
     return any(bool(audit.get(key)) for key in ("accepted", "clamped", "rejected"))
 
 
-def _entry_price_recommendation_has_runtime_change(recommended: dict, current: dict, metadata: dict) -> bool:
-    target_env_keys = metadata.get("target_env_keys") if isinstance(metadata.get("target_env_keys"), list) else []
+def _entry_price_recommendation_has_runtime_change(
+    recommended: dict, current: dict, metadata: dict
+) -> bool:
+    target_env_keys = (
+        metadata.get("target_env_keys")
+        if isinstance(metadata.get("target_env_keys"), list)
+        else []
+    )
     for target_key in target_env_keys:
         value_key = ENTRY_PRICE_TARGET_ENV_VALUE_KEYS.get(str(target_key))
         if not value_key or value_key not in recommended:
@@ -5503,9 +7075,18 @@ def _build_dynamic_entry_price_resolver_family(
     target_date: str | None = None,
 ) -> dict:
     current = {
-        "enabled": bool(getattr(TRADING_RULES, "SCALPING_ENTRY_PRICE_RESOLVER_ENABLED", True)),
-        "normal_defensive_ticks": int(getattr(TRADING_RULES, "SCALPING_NORMAL_DEFENSIVE_TICKS", 1) or 1),
-        "max_below_bid_bps": int(getattr(TRADING_RULES, "SCALPING_ENTRY_PRICE_RESOLVER_MAX_BELOW_BID_BPS", 80) or 80),
+        "enabled": bool(
+            getattr(TRADING_RULES, "SCALPING_ENTRY_PRICE_RESOLVER_ENABLED", True)
+        ),
+        "normal_defensive_ticks": int(
+            getattr(TRADING_RULES, "SCALPING_NORMAL_DEFENSIVE_TICKS", 1) or 1
+        ),
+        "max_below_bid_bps": int(
+            getattr(
+                TRADING_RULES, "SCALPING_ENTRY_PRICE_RESOLVER_MAX_BELOW_BID_BPS", 80
+            )
+            or 80
+        ),
         "conditional_1tick_real_enabled": bool(
             getattr(TRADING_RULES, "SCALPING_CONDITIONAL_1TICK_REAL_ENABLED", True)
         ),
@@ -5531,20 +7112,32 @@ def _build_dynamic_entry_price_resolver_family(
         "scalp_sim_entry_unpriced",
         "scalp_sim_entry_expired",
     }
-    real_stage_events = [event for event in events if str(event.get("stage") or "") in real_stages]
-    real_events = [
-        event
-        for event in real_stage_events
-        if _entry_price_real_execution_event(event)
+    real_stage_events = [
+        event for event in events if str(event.get("stage") or "") in real_stages
     ]
-    sim_events = [event for event in events if str(event.get("stage") or "") in sim_stages]
-    values = _extract_field_values(events, "order_bundle_submitted", "price_below_bid_bps")
+    real_events = [
+        event for event in real_stage_events if _entry_price_real_execution_event(event)
+    ]
+    sim_events = [
+        event for event in events if str(event.get("stage") or "") in sim_stages
+    ]
+    values = _extract_field_values(
+        events, "order_bundle_submitted", "price_below_bid_bps"
+    )
     if not values:
         values = _extract_field_values(events, "latency_pass", "price_below_bid_bps")
-    sim_values = _extract_field_values(events, "scalp_sim_buy_order_virtual_pending", "price_below_bid_bps")
+    sim_values = _extract_field_values(
+        events, "scalp_sim_buy_order_virtual_pending", "price_below_bid_bps"
+    )
     recommended = dict(current)
     if values:
-        recommended["max_below_bid_bps"] = int(round(_clamp(_percentile(values, 90, current["max_below_bid_bps"]), 60.0, 120.0)))
+        recommended["max_below_bid_bps"] = int(
+            round(
+                _clamp(
+                    _percentile(values, 90, current["max_below_bid_bps"]), 60.0, 120.0
+                )
+            )
+        )
     candidate_metrics = {
         "sim": _candidate_metric_pack(
             sim_events,
@@ -5568,26 +7161,40 @@ def _build_dynamic_entry_price_resolver_family(
     real_outcome = _entry_price_real_outcome_metrics(real_events, completed_rows or [])
     candidate_metrics["real"] = {
         **candidate_metrics.get("real", {}),
-        "missed_upside": 0.0 if real_outcome.get("real_outcome_joined_sample") else None,
-        "source_quality_adjusted_ev_pct": real_outcome.get("real_source_quality_adjusted_ev_pct"),
+        "missed_upside": (
+            0.0 if real_outcome.get("real_outcome_joined_sample") else None
+        ),
+        "source_quality_adjusted_ev_pct": real_outcome.get(
+            "real_source_quality_adjusted_ev_pct"
+        ),
         "notional_weighted_ev_pct": real_outcome.get("real_notional_weighted_ev_pct"),
         "real_outcome_joined_sample": real_outcome.get("real_outcome_joined_sample"),
         "real_outcome_pending_count": real_outcome.get("real_outcome_pending_count"),
         "real_outcome_join_rate": real_outcome.get("real_outcome_join_rate"),
-        "ev_source": "real_completed_profit_rate" if real_outcome.get("real_outcome_joined_sample") else "-",
+        "ev_source": (
+            "real_completed_profit_rate"
+            if real_outcome.get("real_outcome_joined_sample")
+            else "-"
+        ),
     }
-    counterfactual_join_diagnostics = _dynamic_entry_price_counterfactual_join_diagnostics(
-        real_stage_events + sim_events,
-        target_date=target_date,
+    counterfactual_join_diagnostics = (
+        _dynamic_entry_price_counterfactual_join_diagnostics(
+            real_stage_events + sim_events,
+            target_date=target_date,
+        )
     )
     candidate_quality = {
-        "AI_candidate": _entry_price_ai_candidate_quality(real_stage_events + sim_events),
+        "AI_candidate": _entry_price_ai_candidate_quality(
+            real_stage_events + sim_events
+        ),
     }
     sim_submit_path_quality = _entry_price_sim_submit_path_quality(events)
     sim_unpriced_or_stale_warning_count = int(
         candidate_metrics["sim"].get("excluded_from_fill_ev_count") or 0
     )
-    sim_metrics_ready = _entry_price_candidate_metrics_ready(candidate_metrics, required_books=("sim",))
+    sim_metrics_ready = _entry_price_candidate_metrics_ready(
+        candidate_metrics, required_books=("sim",)
+    )
     primary_sample_book, decision_authority = _entry_price_primary_sample_book(
         {
             "real_candidate_observations": len(real_events),
@@ -5599,7 +7206,11 @@ def _build_dynamic_entry_price_resolver_family(
     sample_floor_ready = primary_sample_book in {"real", "sim"}
     metrics_ready = _entry_price_candidate_metrics_ready(
         candidate_metrics,
-        required_books=(primary_sample_book,) if primary_sample_book in {"real", "sim"} else ("sim",),
+        required_books=(
+            (primary_sample_book,)
+            if primary_sample_book in {"real", "sim"}
+            else ("sim",)
+        ),
     )
     sample_ready = sample_floor_ready and metrics_ready
     return {
@@ -5609,18 +7220,34 @@ def _build_dynamic_entry_price_resolver_family(
             "candidate_observations": len(real_events) + len(sim_events),
             "real_candidate_observations": len(real_events),
             "sim_candidate_observations": len(sim_events),
-            "real_outcome_joined_sample": real_outcome.get("real_outcome_joined_sample"),
-            "real_source_quality_adjusted_ev_pct": real_outcome.get("real_source_quality_adjusted_ev_pct"),
-            "real_execution_quality_ready": real_outcome.get("real_execution_quality_ready"),
+            "real_outcome_joined_sample": real_outcome.get(
+                "real_outcome_joined_sample"
+            ),
+            "real_source_quality_adjusted_ev_pct": real_outcome.get(
+                "real_source_quality_adjusted_ev_pct"
+            ),
+            "real_execution_quality_ready": real_outcome.get(
+                "real_execution_quality_ready"
+            ),
             "primary_sample_book": primary_sample_book,
             "decision_authority": decision_authority,
             "price_below_bid_bps": len(values),
             "sim_price_below_bid_bps": len(sim_values),
-            "entry_ai_price_canary_applied": _stage_count(events, "entry_ai_price_canary_applied"),
-            "entry_ai_price_canary_skip_order": _stage_count(events, "entry_ai_price_canary_skip_order"),
-            "sim_entry_ai_price_applied": _stage_count(events, "scalp_sim_entry_ai_price_applied"),
-            "sim_entry_ai_price_skip_order": _stage_count(events, "scalp_sim_entry_ai_price_skip_order"),
-            "sim_submit_revalidation_block": _stage_count(events, "scalp_sim_entry_submit_revalidation_block"),
+            "entry_ai_price_canary_applied": _stage_count(
+                events, "entry_ai_price_canary_applied"
+            ),
+            "entry_ai_price_canary_skip_order": _stage_count(
+                events, "entry_ai_price_canary_skip_order"
+            ),
+            "sim_entry_ai_price_applied": _stage_count(
+                events, "scalp_sim_entry_ai_price_applied"
+            ),
+            "sim_entry_ai_price_skip_order": _stage_count(
+                events, "scalp_sim_entry_ai_price_skip_order"
+            ),
+            "sim_submit_revalidation_block": _stage_count(
+                events, "scalp_sim_entry_submit_revalidation_block"
+            ),
             "sim_actual_order_submitted": False,
             "sim_broker_order_forbidden": True,
             "candidate_labels": ENTRY_PRICE_CANDIDATE_LABELS,
@@ -5630,17 +7257,41 @@ def _build_dynamic_entry_price_resolver_family(
             "sim_candidate_metrics_ready": sim_metrics_ready,
             "sim_submit_path_quality": sim_submit_path_quality,
             "counterfactual_join_diagnostics": counterfactual_join_diagnostics,
-            "counterfactual_join_failure_reason_counts": counterfactual_join_diagnostics.get("reason_counts") or {},
+            "counterfactual_join_failure_reason_counts": counterfactual_join_diagnostics.get(
+                "reason_counts"
+            )
+            or {},
             "counterfactual_join_status": counterfactual_join_diagnostics.get("status"),
-            "counterfactual_joined_sample": _safe_int(counterfactual_join_diagnostics.get("joined_sample"), 0) or 0,
+            "counterfactual_joined_sample": _safe_int(
+                counterfactual_join_diagnostics.get("joined_sample"), 0
+            )
+            or 0,
             "events_without_counterfactual": (
-                _safe_int(counterfactual_join_diagnostics.get("events_without_counterfactual"), 0) or 0
+                _safe_int(
+                    counterfactual_join_diagnostics.get(
+                        "events_without_counterfactual"
+                    ),
+                    0,
+                )
+                or 0
             ),
             "events_without_counterfactual_event_count": (
-                _safe_int(counterfactual_join_diagnostics.get("events_without_counterfactual_event_count"), 0) or 0
+                _safe_int(
+                    counterfactual_join_diagnostics.get(
+                        "events_without_counterfactual_event_count"
+                    ),
+                    0,
+                )
+                or 0
             ),
             "counterfactual_unmatched_row_count": (
-                _safe_int(counterfactual_join_diagnostics.get("counterfactual_unmatched_row_count"), 0) or 0
+                _safe_int(
+                    counterfactual_join_diagnostics.get(
+                        "counterfactual_unmatched_row_count"
+                    ),
+                    0,
+                )
+                or 0
             ),
             "unpriced_or_stale_warning_count": sim_unpriced_or_stale_warning_count,
         },
@@ -5666,44 +7317,78 @@ def _entry_split_order_plan_path(target_date: str | None) -> Path | None:
 def _scale_in_split_order_plan_path(target_date: str | None) -> Path | None:
     if not target_date:
         return None
-    return SCALE_IN_SPLIT_ORDER_PLAN_DIR / f"scale_in_split_order_plan_{target_date}.json"
+    return (
+        SCALE_IN_SPLIT_ORDER_PLAN_DIR / f"scale_in_split_order_plan_{target_date}.json"
+    )
 
 
 def _build_entry_split_order_plan_family(*, target_date: str | None = None) -> dict:
     report_path = _entry_split_order_plan_path(target_date)
     payload = _read_json_dict(report_path) if report_path is not None else {}
     recommended_policy = (
-        payload.get("recommended_policy") if isinstance(payload.get("recommended_policy"), dict) else {}
+        payload.get("recommended_policy")
+        if isinstance(payload.get("recommended_policy"), dict)
+        else {}
     )
-    candidate_grid = payload.get("candidate_grid") if isinstance(payload.get("candidate_grid"), list) else []
-    source_quality = payload.get("source_quality") if isinstance(payload.get("source_quality"), dict) else {}
-    input_summary = payload.get("input_summary") if isinstance(payload.get("input_summary"), dict) else {}
-    candidates = recommended_policy.get("candidates") if isinstance(recommended_policy.get("candidates"), list) else []
+    candidate_grid = (
+        payload.get("candidate_grid")
+        if isinstance(payload.get("candidate_grid"), list)
+        else []
+    )
+    source_quality = (
+        payload.get("source_quality")
+        if isinstance(payload.get("source_quality"), dict)
+        else {}
+    )
+    input_summary = (
+        payload.get("input_summary")
+        if isinstance(payload.get("input_summary"), dict)
+        else {}
+    )
+    candidates = (
+        recommended_policy.get("candidates")
+        if isinstance(recommended_policy.get("candidates"), list)
+        else []
+    )
     bounded_equal_baseline_count = sum(
         1
         for item in candidates
-        if isinstance(item, dict) and item.get("policy_mode") == "bounded_equal_split_baseline"
+        if isinstance(item, dict)
+        and item.get("policy_mode") == "bounded_equal_split_baseline"
     )
     post_submit_tick_band_seed_count = sum(
         1
         for item in candidates
-        if isinstance(item, dict) and item.get("policy_mode") == "post_submit_tick_band_seed"
+        if isinstance(item, dict)
+        and item.get("policy_mode") == "post_submit_tick_band_seed"
     )
     real_primary_ev_candidate_count = sum(
         1
         for item in candidates
-        if isinstance(item, dict) and item.get("policy_mode") == "real_primary_ev_optimized"
+        if isinstance(item, dict)
+        and item.get("policy_mode") == "real_primary_ev_optimized"
     )
     best_candidate = max(
         [item for item in candidates if isinstance(item, dict)],
-        key=lambda item: _safe_float(item.get("source_quality_adjusted_ev_pct"), 0.0) or 0.0,
+        key=lambda item: _safe_float(item.get("source_quality_adjusted_ev_pct"), 0.0)
+        or 0.0,
         default={},
     )
     real_sample = max(
-        [_safe_int(item.get("real_sample_count"), 0) or 0 for item in candidate_grid if isinstance(item, dict)] or [0]
+        [
+            _safe_int(item.get("real_sample_count"), 0) or 0
+            for item in candidate_grid
+            if isinstance(item, dict)
+        ]
+        or [0]
     )
     sim_sample = max(
-        [_safe_int(item.get("sim_sample_count"), 0) or 0 for item in candidate_grid if isinstance(item, dict)] or [0]
+        [
+            _safe_int(item.get("sim_sample_count"), 0) or 0
+            for item in candidate_grid
+            if isinstance(item, dict)
+        ]
+        or [0]
     )
     real_outcome_sample = max(
         [
@@ -5960,9 +7645,16 @@ def _build_entry_price_execution_quality_family(events: list[dict]) -> dict:
     }
     real_events = [event for event in events if str(event.get("stage") or "") in stages]
     cancel_events = [
-        event for event in real_events if str(event.get("stage") or "").startswith("entry_order_cancel_")
+        event
+        for event in real_events
+        if str(event.get("stage") or "").startswith("entry_order_cancel_")
     ]
-    submitted = [event for event in real_events if str(event.get("stage") or "") in {"order_leg_request", "order_bundle_submitted"}]
+    submitted = [
+        event
+        for event in real_events
+        if str(event.get("stage") or "")
+        in {"order_leg_request", "order_bundle_submitted"}
+    ]
     return {
         "family": "entry_price_execution_quality",
         "stage": "entry",
@@ -5976,7 +7668,11 @@ def _build_entry_price_execution_quality_family(events: list[dict]) -> dict:
                 real_events,
                 submitted_stages={"order_leg_request", "order_bundle_submitted"},
                 fill_stages=set(),
-                cancel_stages={"entry_order_cancel_requested", "entry_order_cancel_confirmed", "entry_order_cancel_failed"},
+                cancel_stages={
+                    "entry_order_cancel_requested",
+                    "entry_order_cancel_confirmed",
+                    "entry_order_cancel_failed",
+                },
                 fill_metrics_available=False,
             ),
             "sim_mixed": False,
@@ -5992,7 +7688,9 @@ def _build_entry_price_execution_quality_family(events: list[dict]) -> dict:
     }
 
 
-def _build_entry_filter_refined_candidate_family(events: list[dict], stage: str, family_name: str, notes: list[str]) -> dict:
+def _build_entry_filter_refined_candidate_family(
+    events: list[dict], stage: str, family_name: str, notes: list[str]
+) -> dict:
     blocked = _events_for_stage(events, stage)
     sample_ready = len(blocked) >= 20
     current = {"enabled": False, "mode": "report_only_design"}
@@ -6001,7 +7699,12 @@ def _build_entry_filter_refined_candidate_family(events: list[dict], stage: str,
         "stage": "entry",
         "sample": {
             "blocked_events": len(blocked),
-            "unique_codes": len({str(event.get("stock_code") or event.get("code") or "") for event in blocked}),
+            "unique_codes": len(
+                {
+                    str(event.get("stock_code") or event.get("code") or "")
+                    for event in blocked
+                }
+            ),
         },
         "apply_ready": False,
         "current": current,
@@ -6038,7 +7741,9 @@ def _swing_micro_source_quality_breakdown(events: list[dict]) -> dict:
         micro_ready = _field_bool(fields.get("orderbook_micro_ready"))
         spread_ticks = _safe_float(fields.get("orderbook_micro_spread_ticks"), None)
         ofi_norm = _safe_float(fields.get("orderbook_micro_ofi_norm"), None)
-        sample_quote_count = _safe_int(fields.get("orderbook_micro_sample_quote_count"), None)
+        sample_quote_count = _safe_int(
+            fields.get("orderbook_micro_sample_quote_count"), None
+        )
 
         if ws_quote == "missing":
             missing_ws_quote_count += 1
@@ -6090,30 +7795,51 @@ def _build_entry_ofi_ai_smoothing_family(events: list[dict]) -> dict:
     snapshot_age_values = [
         value
         for value in (
-            _safe_float(_event_fields(event).get("orderbook_micro_snapshot_age_ms"), None)
+            _safe_float(
+                _event_fields(event).get("orderbook_micro_snapshot_age_ms"), None
+            )
             for event in raw_skip + demoted
         )
         if value is not None
     ]
     followup_mfe = [
         value
-        for value in (_safe_float(_event_fields(event).get("mfe_bps"), None) for event in followups)
+        for value in (
+            _safe_float(_event_fields(event).get("mfe_bps"), None)
+            for event in followups
+        )
         if value is not None
     ]
     followup_mae = [
         value
-        for value in (_safe_float(_event_fields(event).get("mae_bps"), None) for event in followups)
+        for value in (
+            _safe_float(_event_fields(event).get("mae_bps"), None)
+            for event in followups
+        )
         if value is not None
     ]
     sample_ready = (len(raw_skip) + len(demoted)) >= 20 and len(demoted) >= 5
     current = {
         "entry_skip_demotion_confidence_upper": int(
-            getattr(TRADING_RULES, "SCALPING_ENTRY_AI_PRICE_OFI_SKIP_DEMOTION_MAX_CONFIDENCE", 90) or 90
+            getattr(
+                TRADING_RULES,
+                "SCALPING_ENTRY_AI_PRICE_OFI_SKIP_DEMOTION_MAX_CONFIDENCE",
+                90,
+            )
+            or 90
         ),
-        "ofi_stale_threshold_ms": int(getattr(TRADING_RULES, "OFI_AI_SMOOTHING_STALE_THRESHOLD_MS", 700) or 700),
-        "ofi_persistence_required": int(getattr(TRADING_RULES, "OFI_AI_SMOOTHING_PERSISTENCE_REQUIRED", 2) or 2),
+        "ofi_stale_threshold_ms": int(
+            getattr(TRADING_RULES, "OFI_AI_SMOOTHING_STALE_THRESHOLD_MS", 700) or 700
+        ),
+        "ofi_persistence_required": int(
+            getattr(TRADING_RULES, "OFI_AI_SMOOTHING_PERSISTENCE_REQUIRED", 2) or 2
+        ),
         "bucket_calibration_enabled": bool(
-            getattr(TRADING_RULES, "SCALPING_ENTRY_PRICE_ORDERBOOK_MICRO_BUCKET_CALIBRATION_ENABLED", False)
+            getattr(
+                TRADING_RULES,
+                "SCALPING_ENTRY_PRICE_ORDERBOOK_MICRO_BUCKET_CALIBRATION_ENABLED",
+                False,
+            )
         ),
     }
     recommended = dict(current)
@@ -6123,18 +7849,30 @@ def _build_entry_ofi_ai_smoothing_family(events: list[dict]) -> dict:
         "sample": {
             "raw_skip": len(raw_skip),
             "demoted": len(demoted),
-            "demoted_submitted": _record_id_stage_count(events, "order_bundle_submitted", demoted_ids),
-            "demoted_fill": _record_id_stage_count(events, "position_rebased_after_fill", demoted_ids),
+            "demoted_submitted": _record_id_stage_count(
+                events, "order_bundle_submitted", demoted_ids
+            ),
+            "demoted_fill": _record_id_stage_count(
+                events, "position_rebased_after_fill", demoted_ids
+            ),
             "demoted_fill_quality": _record_id_stage_field_counter(
                 events, "position_rebased_after_fill", demoted_ids, "fill_quality"
             ),
-            "demoted_completed": _record_id_stage_count(events, "sell_completed", demoted_ids),
+            "demoted_completed": _record_id_stage_count(
+                events, "sell_completed", demoted_ids
+            ),
             "skip_followup": len(followups),
-            "skip_followup_avg_mfe_bps": round(_avg(followup_mfe) or 0.0, 4) if followup_mfe else None,
-            "skip_followup_avg_mae_bps": round(_avg(followup_mae) or 0.0, 4) if followup_mae else None,
-            "snapshot_age_p90_ms": round(_percentile(snapshot_age_values, 90, 0.0), 3)
-            if snapshot_age_values
-            else None,
+            "skip_followup_avg_mfe_bps": (
+                round(_avg(followup_mfe) or 0.0, 4) if followup_mfe else None
+            ),
+            "skip_followup_avg_mae_bps": (
+                round(_avg(followup_mae) or 0.0, 4) if followup_mae else None
+            ),
+            "snapshot_age_p90_ms": (
+                round(_percentile(snapshot_age_values, 90, 0.0), 3)
+                if snapshot_age_values
+                else None
+            ),
             "micro_state": _field_counter(raw_skip + demoted, "orderbook_micro_state"),
             "ofi_regime": _field_counter(demoted, "entry_ai_price_ofi_regime"),
         },
@@ -6153,44 +7891,97 @@ def _build_entry_ofi_ai_smoothing_family(events: list[dict]) -> dict:
 
 def _build_bad_entry_family(events: list[dict]) -> dict:
     current = {
-        "min_hold_sec": int(getattr(TRADING_RULES, "SCALP_BAD_ENTRY_BLOCK_MIN_HOLD_SEC", 60) or 60),
-        "min_loss_pct": float(getattr(TRADING_RULES, "SCALP_BAD_ENTRY_BLOCK_MIN_LOSS_PCT", -0.70) or -0.70),
-        "max_peak_profit_pct": float(getattr(TRADING_RULES, "SCALP_BAD_ENTRY_BLOCK_MAX_PEAK_PROFIT_PCT", 0.20) or 0.20),
-        "ai_score_limit": int(getattr(TRADING_RULES, "SCALP_BAD_ENTRY_BLOCK_AI_SCORE_LIMIT", 45) or 45),
+        "min_hold_sec": int(
+            getattr(TRADING_RULES, "SCALP_BAD_ENTRY_BLOCK_MIN_HOLD_SEC", 60) or 60
+        ),
+        "min_loss_pct": float(
+            getattr(TRADING_RULES, "SCALP_BAD_ENTRY_BLOCK_MIN_LOSS_PCT", -0.70) or -0.70
+        ),
+        "max_peak_profit_pct": float(
+            getattr(TRADING_RULES, "SCALP_BAD_ENTRY_BLOCK_MAX_PEAK_PROFIT_PCT", 0.20)
+            or 0.20
+        ),
+        "ai_score_limit": int(
+            getattr(TRADING_RULES, "SCALP_BAD_ENTRY_BLOCK_AI_SCORE_LIMIT", 45) or 45
+        ),
     }
-    observed = [event for event in events if str(event.get("stage") or "") == "bad_entry_block_observed"]
-    refined_candidates = [
-        event for event in events if str(event.get("stage") or "") == "bad_entry_refined_candidate"
+    observed = [
+        event
+        for event in events
+        if str(event.get("stage") or "") == "bad_entry_block_observed"
     ]
-    refined_exits = [event for event in events if str(event.get("stage") or "") == "bad_entry_refined_exit"]
+    refined_candidates = [
+        event
+        for event in events
+        if str(event.get("stage") or "") == "bad_entry_refined_candidate"
+    ]
+    refined_exits = [
+        event
+        for event in events
+        if str(event.get("stage") or "") == "bad_entry_refined_exit"
+    ]
     exclusion_counter = Counter(
-        str((event.get("fields") or {}).get("exclusion_reason") or "-") for event in refined_candidates
+        str((event.get("fields") or {}).get("exclusion_reason") or "-")
+        for event in refined_candidates
     )
     soft_stop_zone_candidates = [
         event
         for event in refined_candidates
-        if str((event.get("fields") or {}).get("exclusion_reason") or "") == "soft_stop_zone"
+        if str((event.get("fields") or {}).get("exclusion_reason") or "")
+        == "soft_stop_zone"
     ]
     early_capture_candidates = [
         event
         for event in refined_candidates
-        if str((event.get("fields") or {}).get("exclusion_reason") or "") not in ("soft_stop_zone", "-")
+        if str((event.get("fields") or {}).get("exclusion_reason") or "")
+        not in ("soft_stop_zone", "-")
         and str((event.get("fields") or {}).get("should_exit") or "").lower() == "true"
     ]
-    hold_values = [_safe_float((event.get("fields") or {}).get("held_sec"), None) for event in observed]
-    loss_values = [_safe_float((event.get("fields") or {}).get("profit_rate"), None) for event in observed]
-    peak_values = [_safe_float((event.get("fields") or {}).get("peak_profit"), None) for event in observed]
-    ai_values = [_safe_float((event.get("fields") or {}).get("ai_score"), None) for event in observed]
+    hold_values = [
+        _safe_float((event.get("fields") or {}).get("held_sec"), None)
+        for event in observed
+    ]
+    loss_values = [
+        _safe_float((event.get("fields") or {}).get("profit_rate"), None)
+        for event in observed
+    ]
+    peak_values = [
+        _safe_float((event.get("fields") or {}).get("peak_profit"), None)
+        for event in observed
+    ]
+    ai_values = [
+        _safe_float((event.get("fields") or {}).get("ai_score"), None)
+        for event in observed
+    ]
     hold_values = [v for v in hold_values if v is not None]
     loss_values = [v for v in loss_values if v is not None]
     peak_values = [v for v in peak_values if v is not None]
     ai_values = [v for v in ai_values if v is not None]
     sample_ready = len(observed) >= 30
     recommended = {
-        "min_hold_sec": int(round(_clamp(_percentile(hold_values, 25, current["min_hold_sec"]), 30.0, 180.0))),
-        "min_loss_pct": round(_clamp(_percentile(loss_values, 35, current["min_loss_pct"]), -1.5, -0.3), 2),
-        "max_peak_profit_pct": round(_clamp(_percentile(peak_values, 75, current["max_peak_profit_pct"]), 0.05, 0.5), 2),
-        "ai_score_limit": int(round(_clamp(_percentile(ai_values, 75, current["ai_score_limit"]), 30.0, 60.0))),
+        "min_hold_sec": int(
+            round(
+                _clamp(
+                    _percentile(hold_values, 25, current["min_hold_sec"]), 30.0, 180.0
+                )
+            )
+        ),
+        "min_loss_pct": round(
+            _clamp(_percentile(loss_values, 35, current["min_loss_pct"]), -1.5, -0.3), 2
+        ),
+        "max_peak_profit_pct": round(
+            _clamp(
+                _percentile(peak_values, 75, current["max_peak_profit_pct"]), 0.05, 0.5
+            ),
+            2,
+        ),
+        "ai_score_limit": int(
+            round(
+                _clamp(
+                    _percentile(ai_values, 75, current["ai_score_limit"]), 30.0, 60.0
+                )
+            )
+        ),
     }
     return {
         "family": "bad_entry_block",
@@ -6216,17 +8007,30 @@ def _build_bad_entry_family(events: list[dict]) -> dict:
     }
 
 
-def _build_bad_entry_refined_canary_family(events: list[dict], target_date: str | None = None) -> dict:
+def _build_bad_entry_refined_canary_family(
+    events: list[dict], target_date: str | None = None
+) -> dict:
     current = {
-        "enabled": bool(getattr(TRADING_RULES, "SCALP_BAD_ENTRY_REFINED_CANARY_ENABLED", False)),
-        "min_hold_sec": int(getattr(TRADING_RULES, "SCALP_BAD_ENTRY_REFINED_MIN_HOLD_SEC", 180) or 180),
-        "min_loss_pct": float(getattr(TRADING_RULES, "SCALP_BAD_ENTRY_REFINED_MIN_LOSS_PCT", -1.16) or -1.16),
-        "max_peak_profit_pct": float(
-            getattr(TRADING_RULES, "SCALP_BAD_ENTRY_REFINED_MAX_PEAK_PROFIT_PCT", 0.05) or 0.05
+        "enabled": bool(
+            getattr(TRADING_RULES, "SCALP_BAD_ENTRY_REFINED_CANARY_ENABLED", False)
         ),
-        "ai_score_limit": int(getattr(TRADING_RULES, "SCALP_BAD_ENTRY_REFINED_AI_SCORE_LIMIT", 45) or 45),
+        "min_hold_sec": int(
+            getattr(TRADING_RULES, "SCALP_BAD_ENTRY_REFINED_MIN_HOLD_SEC", 180) or 180
+        ),
+        "min_loss_pct": float(
+            getattr(TRADING_RULES, "SCALP_BAD_ENTRY_REFINED_MIN_LOSS_PCT", -1.16)
+            or -1.16
+        ),
+        "max_peak_profit_pct": float(
+            getattr(TRADING_RULES, "SCALP_BAD_ENTRY_REFINED_MAX_PEAK_PROFIT_PCT", 0.05)
+            or 0.05
+        ),
+        "ai_score_limit": int(
+            getattr(TRADING_RULES, "SCALP_BAD_ENTRY_REFINED_AI_SCORE_LIMIT", 45) or 45
+        ),
         "recovery_prob_max": float(
-            getattr(TRADING_RULES, "SCALP_BAD_ENTRY_REFINED_RECOVERY_PROB_MAX", 0.30) or 0.30
+            getattr(TRADING_RULES, "SCALP_BAD_ENTRY_REFINED_RECOVERY_PROB_MAX", 0.30)
+            or 0.30
         ),
     }
     refined_candidates = _events_for_stage(events, "bad_entry_refined_candidate")
@@ -6240,7 +8044,8 @@ def _build_bad_entry_refined_canary_family(events: list[dict], target_date: str 
     soft_stop_zone = [
         event
         for event in refined_candidates
-        if str((event.get("fields") or {}).get("exclusion_reason") or "") == "soft_stop_zone"
+        if str((event.get("fields") or {}).get("exclusion_reason") or "")
+        == "soft_stop_zone"
     ]
     sell_order_failed = _stage_count(events, "sell_order_failed")
     sell_order_sent = _stage_count(events, "sell_order_sent")
@@ -6266,7 +8071,9 @@ def _build_bad_entry_refined_canary_family(events: list[dict], target_date: str 
         "apply_ready": sample_ready,
         "current": current,
         "recommended": recommended,
-        "apply_mode": "efficient_tradeoff_canary_candidate" if sample_ready else "observe_only",
+        "apply_mode": (
+            "efficient_tradeoff_canary_candidate" if sample_ready else "observe_only"
+        ),
         "notes": [
             "bad_entry_refined_candidate는 postclose post_sell outcome join 전까지 provisional signal이다.",
             "naive bad_entry hard block은 재개하지 않고 refined candidate만 bounded canary 후보로 본다.",
@@ -6278,15 +8085,35 @@ def _build_bad_entry_refined_canary_family(events: list[dict], target_date: str 
 
 def _build_reversal_add_family(events: list[dict]) -> dict:
     current = {
-        "pnl_min": float(getattr(TRADING_RULES, "REVERSAL_ADD_PNL_MIN", -0.70) or -0.70),
-        "max_hold_sec": int(getattr(TRADING_RULES, "REVERSAL_ADD_MAX_HOLD_SEC", 180) or 180),
-        "min_ai_score": int(getattr(TRADING_RULES, "REVERSAL_ADD_MIN_AI_SCORE", 60) or 60),
-        "min_ai_recovery_delta": int(getattr(TRADING_RULES, "REVERSAL_ADD_MIN_AI_RECOVERY_DELTA", 15) or 15),
+        "pnl_min": float(
+            getattr(TRADING_RULES, "REVERSAL_ADD_PNL_MIN", -0.70) or -0.70
+        ),
+        "max_hold_sec": int(
+            getattr(TRADING_RULES, "REVERSAL_ADD_MAX_HOLD_SEC", 180) or 180
+        ),
+        "min_ai_score": int(
+            getattr(TRADING_RULES, "REVERSAL_ADD_MIN_AI_SCORE", 60) or 60
+        ),
+        "min_ai_recovery_delta": int(
+            getattr(TRADING_RULES, "REVERSAL_ADD_MIN_AI_RECOVERY_DELTA", 15) or 15
+        ),
     }
-    blocked = [event for event in events if str(event.get("stage") or "") == "reversal_add_blocked_reason"]
-    candidates = [event for event in events if str(event.get("stage") or "") == "reversal_add_candidate"]
+    blocked = [
+        event
+        for event in events
+        if str(event.get("stage") or "") == "reversal_add_blocked_reason"
+    ]
+    candidates = [
+        event
+        for event in events
+        if str(event.get("stage") or "") == "reversal_add_candidate"
+    ]
     reason_counter = Counter(
-        str((event.get("fields") or {}).get("blocked_reason") or (event.get("fields") or {}).get("reason") or "-")
+        str(
+            (event.get("fields") or {}).get("blocked_reason")
+            or (event.get("fields") or {}).get("reason")
+            or "-"
+        )
         for event in blocked
     )
     predicate_names = (
@@ -6302,7 +8129,11 @@ def _build_reversal_add_family(events: list[dict]) -> dict:
         "micro_vwap_ok",
     )
     predicate_pass_counts = {
-        name: sum(1 for event in blocked if str((event.get("fields") or {}).get(name) or "").lower() == "true")
+        name: sum(
+            1
+            for event in blocked
+            if str((event.get("fields") or {}).get(name) or "").lower() == "true"
+        )
         for name in predicate_names
     }
     all_but_hold = sum(
@@ -6325,20 +8156,52 @@ def _build_reversal_add_family(events: list[dict]) -> dict:
             if name != "ai_recover_ok"
         )
     )
-    pnl_values = [_safe_float((event.get("fields") or {}).get("profit_rate"), None) for event in blocked + candidates]
-    hold_values = [_safe_float((event.get("fields") or {}).get("held_sec"), None) for event in blocked + candidates]
-    ai_values = [_safe_float((event.get("fields") or {}).get("ai_score"), None) for event in blocked + candidates]
-    recovery_values = [_safe_float((event.get("fields") or {}).get("ai_recovery_delta"), None) for event in blocked + candidates]
+    pnl_values = [
+        _safe_float((event.get("fields") or {}).get("profit_rate"), None)
+        for event in blocked + candidates
+    ]
+    hold_values = [
+        _safe_float((event.get("fields") or {}).get("held_sec"), None)
+        for event in blocked + candidates
+    ]
+    ai_values = [
+        _safe_float((event.get("fields") or {}).get("ai_score"), None)
+        for event in blocked + candidates
+    ]
+    recovery_values = [
+        _safe_float((event.get("fields") or {}).get("ai_recovery_delta"), None)
+        for event in blocked + candidates
+    ]
     pnl_values = [v for v in pnl_values if v is not None]
     hold_values = [v for v in hold_values if v is not None]
     ai_values = [v for v in ai_values if v is not None]
     recovery_values = [v for v in recovery_values if v is not None]
     sample_ready = len(candidates) >= 20
     recommended = {
-        "pnl_min": round(_clamp(_percentile(pnl_values, 20, current["pnl_min"]), -1.3, -0.3), 2),
-        "max_hold_sec": int(round(_clamp(_percentile(hold_values, 80, current["max_hold_sec"]), 120.0, 900.0))),
-        "min_ai_score": int(round(_clamp(_percentile(ai_values, 30, current["min_ai_score"]), 45.0, 75.0))),
-        "min_ai_recovery_delta": int(round(_clamp(_percentile(recovery_values, 30, current["min_ai_recovery_delta"]), 5.0, 30.0))),
+        "pnl_min": round(
+            _clamp(_percentile(pnl_values, 20, current["pnl_min"]), -1.3, -0.3), 2
+        ),
+        "max_hold_sec": int(
+            round(
+                _clamp(
+                    _percentile(hold_values, 80, current["max_hold_sec"]), 120.0, 900.0
+                )
+            )
+        ),
+        "min_ai_score": int(
+            round(
+                _clamp(_percentile(ai_values, 30, current["min_ai_score"]), 45.0, 75.0)
+            )
+        ),
+        "min_ai_recovery_delta": int(
+            round(
+                _clamp(
+                    _percentile(recovery_values, 30, current["min_ai_recovery_delta"]),
+                    5.0,
+                    30.0,
+                )
+            )
+        ),
     }
     return {
         "family": "reversal_add",
@@ -6365,30 +8228,40 @@ def _build_reversal_add_family(events: list[dict]) -> dict:
 
 def _build_scalp_trailing_take_profit_family(events: list[dict]) -> dict:
     current = {
-        "start_pct": float(getattr(TRADING_RULES, "SCALP_TRAILING_START_PCT", 0.6) or 0.6),
-        "weak_limit": float(getattr(TRADING_RULES, "SCALP_TRAILING_LIMIT_WEAK", 0.4) or 0.4),
-        "strong_limit": float(getattr(TRADING_RULES, "SCALP_TRAILING_LIMIT_STRONG", 0.8) or 0.8),
+        "start_pct": float(
+            getattr(TRADING_RULES, "SCALP_TRAILING_START_PCT", 0.6) or 0.6
+        ),
+        "weak_limit": float(
+            getattr(TRADING_RULES, "SCALP_TRAILING_LIMIT_WEAK", 0.4) or 0.4
+        ),
+        "strong_limit": float(
+            getattr(TRADING_RULES, "SCALP_TRAILING_LIMIT_STRONG", 0.8) or 0.8
+        ),
         "strong_ai_score": 75,
     }
     trailing_exits = [
         event
         for event in events
         if str(event.get("stage") or "") == "exit_signal"
-        and str((event.get("fields") or {}).get("exit_rule") or "") == "scalp_trailing_take_profit"
+        and str((event.get("fields") or {}).get("exit_rule") or "")
+        == "scalp_trailing_take_profit"
     ]
     completed = [
         event
         for event in events
         if str(event.get("stage") or "") == "sell_completed"
-        and str((event.get("fields") or {}).get("exit_rule") or "") == "scalp_trailing_take_profit"
+        and str((event.get("fields") or {}).get("exit_rule") or "")
+        == "scalp_trailing_take_profit"
     ]
     pyramid_signaled_ids = {
         event.get("record_id")
         for event in events
         if str(event.get("stage") or "") == "stat_action_decision_snapshot"
         and (
-            str((event.get("fields") or {}).get("chosen_action") or "") == "pyramid_wait"
-            or str((event.get("fields") or {}).get("scale_in_action_type") or "") == "PYRAMID"
+            str((event.get("fields") or {}).get("chosen_action") or "")
+            == "pyramid_wait"
+            or str((event.get("fields") or {}).get("scale_in_action_type") or "")
+            == "PYRAMID"
         )
         and event.get("record_id") is not None
     }
@@ -6432,11 +8305,19 @@ def _build_scalp_trailing_take_profit_family(events: list[dict]) -> dict:
             continue
         drawdown = peak - profit
         drawdown_values.append(drawdown)
-        limit = current["strong_limit"] if (ai_score or 0) >= current["strong_ai_score"] else current["weak_limit"]
-        limit_bucket = "strong" if (ai_score or 0) >= current["strong_ai_score"] else "weak"
+        limit = (
+            current["strong_limit"]
+            if (ai_score or 0) >= current["strong_ai_score"]
+            else current["weak_limit"]
+        )
+        limit_bucket = (
+            "strong" if (ai_score or 0) >= current["strong_ai_score"] else "weak"
+        )
         if abs(drawdown - limit) <= 0.05:
             weak_borderline += 1
-        if (ai_score or 0) < current["strong_ai_score"] and drawdown < current["weak_limit"] + 0.10:
+        if (ai_score or 0) < current["strong_ai_score"] and drawdown < current[
+            "weak_limit"
+        ] + 0.10:
             would_hold_if_weak_plus_10bp += 1
         strong_ai_boundary = (
             ai_score is not None
@@ -6455,7 +8336,9 @@ def _build_scalp_trailing_take_profit_family(events: list[dict]) -> dict:
                     "profit_rate": round(profit, 4),
                     "peak_profit": round(peak, 4),
                     "drawdown_from_peak": round(drawdown, 4),
-                    "current_ai_score": round(ai_score, 2) if ai_score is not None else None,
+                    "current_ai_score": (
+                        round(ai_score, 2) if ai_score is not None else None
+                    ),
                     "active_limit": round(limit, 4),
                     "limit_bucket": limit_bucket,
                     "pyramid_state": pyramid_state,
@@ -6483,22 +8366,33 @@ def _build_scalp_trailing_take_profit_family(events: list[dict]) -> dict:
             )
     completed_profit_values = [
         value
-        for value in (_safe_float((event.get("fields") or {}).get("profit_rate"), None) for event in completed)
+        for value in (
+            _safe_float((event.get("fields") or {}).get("profit_rate"), None)
+            for event in completed
+        )
         if value is not None
     ]
     sample_ready = len(trailing_exits) >= 20
-    recommended_weak = _clamp(_percentile(drawdown_values, 60, current["weak_limit"]), 0.4, 0.8)
+    recommended_weak = _clamp(
+        _percentile(drawdown_values, 60, current["weak_limit"]), 0.4, 0.8
+    )
     return {
         "family": "scalp_trailing_take_profit",
         "stage": "holding_exit",
         "sample": {
             "exit_signal": len(trailing_exits),
             "completed": len(completed),
-            "avg_profit_rate_at_signal": round(_avg(profit_values) or 0.0, 4) if profit_values else None,
-            "avg_completed_profit_rate": round(_avg(completed_profit_values) or 0.0, 4)
-            if completed_profit_values
-            else None,
-            "avg_drawdown_from_peak": round(_avg(drawdown_values) or 0.0, 4) if drawdown_values else None,
+            "avg_profit_rate_at_signal": (
+                round(_avg(profit_values) or 0.0, 4) if profit_values else None
+            ),
+            "avg_completed_profit_rate": (
+                round(_avg(completed_profit_values) or 0.0, 4)
+                if completed_profit_values
+                else None
+            ),
+            "avg_drawdown_from_peak": (
+                round(_avg(drawdown_values) or 0.0, 4) if drawdown_values else None
+            ),
             "weak_borderline": weak_borderline,
             "would_hold_if_weak_limit_plus_10bp": would_hold_if_weak_plus_10bp,
             "would_hold_if_strong_ai_score_relaxed_5pt": would_hold_if_strong_ai_relaxed_5pt,
@@ -6527,18 +8421,42 @@ def _build_scalp_trailing_take_profit_family(events: list[dict]) -> dict:
 
 def _build_soft_stop_family(events: list[dict]) -> dict:
     current = {
-        "grace_sec": int(getattr(TRADING_RULES, "SCALP_SOFT_STOP_MICRO_GRACE_SEC", 20) or 20),
-        "emergency_pct": float(getattr(TRADING_RULES, "SCALP_SOFT_STOP_MICRO_GRACE_EMERGENCY_PCT", -2.0) or -2.0),
+        "grace_sec": int(
+            getattr(TRADING_RULES, "SCALP_SOFT_STOP_MICRO_GRACE_SEC", 20) or 20
+        ),
+        "emergency_pct": float(
+            getattr(TRADING_RULES, "SCALP_SOFT_STOP_MICRO_GRACE_EMERGENCY_PCT", -2.0)
+            or -2.0
+        ),
     }
-    touches = [event for event in events if str(event.get("stage") or "") == "soft_stop_micro_grace"]
-    profit_values = [_safe_float((event.get("fields") or {}).get("profit_rate"), None) for event in touches]
-    hold_values = [_safe_float((event.get("fields") or {}).get("held_sec"), None) for event in touches]
+    touches = [
+        event
+        for event in events
+        if str(event.get("stage") or "") == "soft_stop_micro_grace"
+    ]
+    profit_values = [
+        _safe_float((event.get("fields") or {}).get("profit_rate"), None)
+        for event in touches
+    ]
+    hold_values = [
+        _safe_float((event.get("fields") or {}).get("held_sec"), None)
+        for event in touches
+    ]
     profit_values = [v for v in profit_values if v is not None]
     hold_values = [v for v in hold_values if v is not None]
     sample_ready = len(touches) >= 30
     recommended = {
-        "grace_sec": int(round(_clamp(_percentile(hold_values, 25, current["grace_sec"]), 10.0, 60.0))),
-        "emergency_pct": round(_clamp(_percentile(profit_values, 10, current["emergency_pct"]), -2.5, -1.5), 2),
+        "grace_sec": int(
+            round(
+                _clamp(_percentile(hold_values, 25, current["grace_sec"]), 10.0, 60.0)
+            )
+        ),
+        "emergency_pct": round(
+            _clamp(
+                _percentile(profit_values, 10, current["emergency_pct"]), -2.5, -1.5
+            ),
+            2,
+        ),
     }
     return {
         "family": "soft_stop_micro_grace",
@@ -6557,11 +8475,27 @@ def _build_soft_stop_family(events: list[dict]) -> dict:
 
 def _build_soft_stop_whipsaw_confirmation_family(events: list[dict]) -> dict:
     current = {
-        "enabled": bool(getattr(TRADING_RULES, "SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_ENABLED", False)),
-        "confirm_sec": int(getattr(TRADING_RULES, "SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_SEC", 60) or 60),
-        "buffer_pct": float(getattr(TRADING_RULES, "SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_BUFFER_PCT", 0.20) or 0.20),
+        "enabled": bool(
+            getattr(
+                TRADING_RULES, "SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_ENABLED", False
+            )
+        ),
+        "confirm_sec": int(
+            getattr(TRADING_RULES, "SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_SEC", 60) or 60
+        ),
+        "buffer_pct": float(
+            getattr(
+                TRADING_RULES, "SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_BUFFER_PCT", 0.20
+            )
+            or 0.20
+        ),
         "max_worsen_pct": float(
-            getattr(TRADING_RULES, "SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_MAX_WORSEN_PCT", 0.30) or 0.30
+            getattr(
+                TRADING_RULES,
+                "SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_MAX_WORSEN_PCT",
+                0.30,
+            )
+            or 0.30
         ),
     }
     grace_touches = _events_for_stage(events, "soft_stop_micro_grace")
@@ -6597,10 +8531,16 @@ def _build_soft_stop_whipsaw_confirmation_family(events: list[dict]) -> dict:
         )
         if value is not None
     ]
-    sample_floor = int(CALIBRATION_FAMILY_METADATA["soft_stop_whipsaw_confirmation"]["sample_floor"])
+    sample_floor = int(
+        CALIBRATION_FAMILY_METADATA["soft_stop_whipsaw_confirmation"]["sample_floor"]
+    )
     sample_ready = len(grace_touches) >= sample_floor
-    recommended_confirm_sec = int(round(_clamp(_percentile(confirmation_elapsed_values, 75, 60.0), 20.0, 120.0)))
-    recommended_max_worsen = round(_clamp(_percentile(worsen_values, 75, current["max_worsen_pct"]), 0.10, 0.60), 2)
+    recommended_confirm_sec = int(
+        round(_clamp(_percentile(confirmation_elapsed_values, 75, 60.0), 20.0, 120.0))
+    )
+    recommended_max_worsen = round(
+        _clamp(_percentile(worsen_values, 75, current["max_worsen_pct"]), 0.10, 0.60), 2
+    )
     return {
         "family": "soft_stop_whipsaw_confirmation",
         "stage": "holding_exit",
@@ -6609,13 +8549,19 @@ def _build_soft_stop_whipsaw_confirmation_family(events: list[dict]) -> dict:
             "confirmation_started": len(confirmations),
             "confirmation_expired": len(expired),
             "soft_stop_completed": len(soft_stop_completed),
-            "completed_avg_profit_rate": round(_avg(completed_profit_values) or 0.0, 4)
-            if completed_profit_values
-            else None,
-            "avg_confirmation_elapsed_sec": round(_avg(confirmation_elapsed_values) or 0.0, 2)
-            if confirmation_elapsed_values
-            else None,
-            "avg_additional_worsen": round(_avg(worsen_values) or 0.0, 4) if worsen_values else None,
+            "completed_avg_profit_rate": (
+                round(_avg(completed_profit_values) or 0.0, 4)
+                if completed_profit_values
+                else None
+            ),
+            "avg_confirmation_elapsed_sec": (
+                round(_avg(confirmation_elapsed_values) or 0.0, 2)
+                if confirmation_elapsed_values
+                else None
+            ),
+            "avg_additional_worsen": (
+                round(_avg(worsen_values) or 0.0, 4) if worsen_values else None
+            ),
             "sample_floor": sample_floor,
         },
         "apply_ready": sample_ready,
@@ -6638,28 +8584,69 @@ def _build_soft_stop_whipsaw_confirmation_family(events: list[dict]) -> dict:
 
 def _build_protect_trailing_smoothing_family(events: list[dict]) -> dict:
     current = {
-        "window_sec": int(getattr(TRADING_RULES, "SCALP_PROTECT_TRAILING_SMOOTH_WINDOW_SEC", 20) or 20),
-        "min_span_sec": int(getattr(TRADING_RULES, "SCALP_PROTECT_TRAILING_SMOOTH_MIN_SPAN_SEC", 8) or 8),
-        "min_samples": int(getattr(TRADING_RULES, "SCALP_PROTECT_TRAILING_SMOOTH_MIN_SAMPLES", 3) or 3),
-        "below_ratio": float(getattr(TRADING_RULES, "SCALP_PROTECT_TRAILING_SMOOTH_BELOW_RATIO", 0.67) or 0.67),
-        "buffer_pct": float(getattr(TRADING_RULES, "SCALP_PROTECT_TRAILING_SMOOTH_BUFFER_PCT", 1.0) or 1.0),
-        "emergency_pct": float(getattr(TRADING_RULES, "SCALP_PROTECT_TRAILING_EMERGENCY_PCT", -2.0) or -2.0),
+        "window_sec": int(
+            getattr(TRADING_RULES, "SCALP_PROTECT_TRAILING_SMOOTH_WINDOW_SEC", 20) or 20
+        ),
+        "min_span_sec": int(
+            getattr(TRADING_RULES, "SCALP_PROTECT_TRAILING_SMOOTH_MIN_SPAN_SEC", 8) or 8
+        ),
+        "min_samples": int(
+            getattr(TRADING_RULES, "SCALP_PROTECT_TRAILING_SMOOTH_MIN_SAMPLES", 3) or 3
+        ),
+        "below_ratio": float(
+            getattr(TRADING_RULES, "SCALP_PROTECT_TRAILING_SMOOTH_BELOW_RATIO", 0.67)
+            or 0.67
+        ),
+        "buffer_pct": float(
+            getattr(TRADING_RULES, "SCALP_PROTECT_TRAILING_SMOOTH_BUFFER_PCT", 1.0)
+            or 1.0
+        ),
+        "emergency_pct": float(
+            getattr(TRADING_RULES, "SCALP_PROTECT_TRAILING_EMERGENCY_PCT", -2.0) or -2.0
+        ),
     }
-    holds = [event for event in events if str(event.get("stage") or "") == "protect_trailing_smooth_hold"]
-    confirmed = [event for event in events if str(event.get("stage") or "") == "protect_trailing_smooth_confirmed"]
+    holds = [
+        event
+        for event in events
+        if str(event.get("stage") or "") == "protect_trailing_smooth_hold"
+    ]
+    confirmed = [
+        event
+        for event in events
+        if str(event.get("stage") or "") == "protect_trailing_smooth_confirmed"
+    ]
     completed = [
         event
         for event in events
         if str(event.get("stage") or "") == "sell_completed"
-        and str((event.get("fields") or {}).get("exit_rule") or "") == "protect_trailing_stop"
+        and str((event.get("fields") or {}).get("exit_rule") or "")
+        == "protect_trailing_stop"
     ]
     candidate_events = holds + confirmed
-    span_values = [_safe_float((event.get("fields") or {}).get("sample_span_sec"), None) for event in candidate_events]
-    sample_values = [_safe_float((event.get("fields") or {}).get("sample_count"), None) for event in candidate_events]
-    below_values = [_safe_float((event.get("fields") or {}).get("below_ratio"), None) for event in candidate_events]
-    buffer_values = [_safe_float((event.get("fields") or {}).get("buffer_pct"), None) for event in candidate_events]
-    emergency_values = [_safe_float((event.get("fields") or {}).get("emergency_pct"), None) for event in candidate_events]
-    profit_values = [_safe_float((event.get("fields") or {}).get("profit_rate"), None) for event in completed]
+    span_values = [
+        _safe_float((event.get("fields") or {}).get("sample_span_sec"), None)
+        for event in candidate_events
+    ]
+    sample_values = [
+        _safe_float((event.get("fields") or {}).get("sample_count"), None)
+        for event in candidate_events
+    ]
+    below_values = [
+        _safe_float((event.get("fields") or {}).get("below_ratio"), None)
+        for event in candidate_events
+    ]
+    buffer_values = [
+        _safe_float((event.get("fields") or {}).get("buffer_pct"), None)
+        for event in candidate_events
+    ]
+    emergency_values = [
+        _safe_float((event.get("fields") or {}).get("emergency_pct"), None)
+        for event in candidate_events
+    ]
+    profit_values = [
+        _safe_float((event.get("fields") or {}).get("profit_rate"), None)
+        for event in completed
+    ]
     span_values = [v for v in span_values if v is not None]
     sample_values = [v for v in sample_values if v is not None]
     below_values = [v for v in below_values if v is not None]
@@ -6668,12 +8655,33 @@ def _build_protect_trailing_smoothing_family(events: list[dict]) -> dict:
     profit_values = [v for v in profit_values if v is not None]
     sample_ready = len(candidate_events) >= 20 and (len(confirmed) + len(holds)) >= 20
     recommended = {
-        "window_sec": int(round(_clamp(_percentile(span_values, 90, current["window_sec"]), 10.0, 45.0))),
-        "min_span_sec": int(round(_clamp(_percentile(span_values, 50, current["min_span_sec"]), 5.0, 20.0))),
-        "min_samples": int(round(_clamp(_percentile(sample_values, 50, current["min_samples"]), 3.0, 8.0))),
-        "below_ratio": round(_clamp(_percentile(below_values, 75, current["below_ratio"]), 0.50, 0.90), 2),
-        "buffer_pct": round(_clamp(_percentile(buffer_values, 50, current["buffer_pct"]), 0.50, 1.50), 2),
-        "emergency_pct": round(_clamp(_percentile(emergency_values, 10, current["emergency_pct"]), -2.5, -1.5), 2),
+        "window_sec": int(
+            round(
+                _clamp(_percentile(span_values, 90, current["window_sec"]), 10.0, 45.0)
+            )
+        ),
+        "min_span_sec": int(
+            round(
+                _clamp(_percentile(span_values, 50, current["min_span_sec"]), 5.0, 20.0)
+            )
+        ),
+        "min_samples": int(
+            round(
+                _clamp(_percentile(sample_values, 50, current["min_samples"]), 3.0, 8.0)
+            )
+        ),
+        "below_ratio": round(
+            _clamp(_percentile(below_values, 75, current["below_ratio"]), 0.50, 0.90), 2
+        ),
+        "buffer_pct": round(
+            _clamp(_percentile(buffer_values, 50, current["buffer_pct"]), 0.50, 1.50), 2
+        ),
+        "emergency_pct": round(
+            _clamp(
+                _percentile(emergency_values, 10, current["emergency_pct"]), -2.5, -1.5
+            ),
+            2,
+        ),
     }
     return {
         "family": "protect_trailing_smoothing",
@@ -6682,7 +8690,9 @@ def _build_protect_trailing_smoothing_family(events: list[dict]) -> dict:
             "smooth_hold": len(holds),
             "smooth_confirmed": len(confirmed),
             "protect_trailing_completed": len(completed),
-            "completed_avg_profit_rate": round(_avg(profit_values) or 0.0, 4) if profit_values else None,
+            "completed_avg_profit_rate": (
+                round(_avg(profit_values) or 0.0, 4) if profit_values else None
+            ),
         },
         "apply_ready": sample_ready,
         "current": current,
@@ -6700,29 +8710,40 @@ def _build_holding_flow_ofi_smoothing_family(events: list[dict]) -> dict:
     applied = _events_for_stage(events, "holding_flow_ofi_smoothing_applied")
     force_exit = _events_for_stage(events, "holding_flow_override_force_exit")
     debounced = [
-        event for event in applied if str(_event_fields(event).get("smoothing_action") or "") == "DEBOUNCE_EXIT"
+        event
+        for event in applied
+        if str(_event_fields(event).get("smoothing_action") or "") == "DEBOUNCE_EXIT"
     ]
     confirmed = [
-        event for event in applied if str(_event_fields(event).get("smoothing_action") or "") == "CONFIRM_EXIT"
+        event
+        for event in applied
+        if str(_event_fields(event).get("smoothing_action") or "") == "CONFIRM_EXIT"
     ]
     no_change = [
-        event for event in applied if str(_event_fields(event).get("smoothing_action") or "") == "NO_CHANGE"
+        event
+        for event in applied
+        if str(_event_fields(event).get("smoothing_action") or "") == "NO_CHANGE"
     ]
     effective_action_count = len(debounced) + len(confirmed)
     force_exit_before_smoothing = [
         event
         for event in force_exit
-        if str(_event_fields(event).get("ofi_force_exit_phase") or "pre_smoothing_guard") == "pre_smoothing_guard"
+        if str(
+            _event_fields(event).get("ofi_force_exit_phase") or "pre_smoothing_guard"
+        )
+        == "pre_smoothing_guard"
     ]
     force_exit_after_debounce = [
         event
         for event in force_exit
-        if str(_event_fields(event).get("ofi_force_exit_phase") or "") == "post_debounce_guard"
+        if str(_event_fields(event).get("ofi_force_exit_phase") or "")
+        == "post_debounce_guard"
     ]
     force_exit_source_quality_guard = [
         event
         for event in force_exit
-        if str(_event_fields(event).get("ofi_force_exit_phase") or "") == "source_quality_guard"
+        if str(_event_fields(event).get("ofi_force_exit_phase") or "")
+        == "source_quality_guard"
     ]
     applied_ids = _record_ids(applied)
     worsen_values = [
@@ -6738,7 +8759,8 @@ def _build_holding_flow_ofi_smoothing_family(events: list[dict]) -> dict:
         for value in (
             _safe_float(_event_fields(event).get("profit_rate"), None)
             for event in events
-            if str(event.get("stage") or "") == "sell_completed" and event.get("record_id") in applied_ids
+            if str(event.get("stage") or "") == "sell_completed"
+            and event.get("record_id") in applied_ids
         )
         if value is not None
     ]
@@ -6750,16 +8772,29 @@ def _build_holding_flow_ofi_smoothing_family(events: list[dict]) -> dict:
         )
         if value is not None
     ]
-    sample_ready = effective_action_count >= 20 and len(debounced) >= 5 and len(confirmed) >= 5
+    sample_ready = (
+        effective_action_count >= 20 and len(debounced) >= 5 and len(confirmed) >= 5
+    )
     current = {
-        "ofi_stale_threshold_ms": int(getattr(TRADING_RULES, "OFI_AI_SMOOTHING_STALE_THRESHOLD_MS", 700) or 700),
-        "ofi_persistence_required": int(getattr(TRADING_RULES, "OFI_AI_SMOOTHING_PERSISTENCE_REQUIRED", 2) or 2),
-        "holding_bearish_confirm_worsen_pct": float(
-            getattr(TRADING_RULES, "HOLDING_FLOW_OFI_BEARISH_CONFIRM_WORSEN_PCT", 0.30) or 0.30
+        "ofi_stale_threshold_ms": int(
+            getattr(TRADING_RULES, "OFI_AI_SMOOTHING_STALE_THRESHOLD_MS", 700) or 700
         ),
-        "max_defer_sec": int(getattr(TRADING_RULES, "HOLDING_FLOW_OVERRIDE_MAX_DEFER_SEC", 90) or 90),
-        "worsen_floor_pct": float(getattr(TRADING_RULES, "HOLDING_FLOW_OVERRIDE_WORSEN_PCT", 0.80) or 0.80),
-        "ofi_debounce_max_count": int(getattr(TRADING_RULES, "HOLDING_FLOW_OFI_DEBOUNCE_MAX_COUNT", 2) or 2),
+        "ofi_persistence_required": int(
+            getattr(TRADING_RULES, "OFI_AI_SMOOTHING_PERSISTENCE_REQUIRED", 2) or 2
+        ),
+        "holding_bearish_confirm_worsen_pct": float(
+            getattr(TRADING_RULES, "HOLDING_FLOW_OFI_BEARISH_CONFIRM_WORSEN_PCT", 0.30)
+            or 0.30
+        ),
+        "max_defer_sec": int(
+            getattr(TRADING_RULES, "HOLDING_FLOW_OVERRIDE_MAX_DEFER_SEC", 90) or 90
+        ),
+        "worsen_floor_pct": float(
+            getattr(TRADING_RULES, "HOLDING_FLOW_OVERRIDE_WORSEN_PCT", 0.80) or 0.80
+        ),
+        "ofi_debounce_max_count": int(
+            getattr(TRADING_RULES, "HOLDING_FLOW_OFI_DEBOUNCE_MAX_COUNT", 2) or 2
+        ),
     }
     recommended = dict(current)
     return {
@@ -6777,22 +8812,30 @@ def _build_holding_flow_ofi_smoothing_family(events: list[dict]) -> dict:
             "force_exit_after_debounce": len(force_exit_after_debounce),
             "force_exit_source_quality_guard": len(force_exit_source_quality_guard),
             "force_exit_reason": _field_counter(force_exit, "force_reason"),
-            "force_exit_phase": _field_counter(force_exit, "ofi_force_exit_phase", default="pre_smoothing_guard"),
+            "force_exit_phase": _field_counter(
+                force_exit, "ofi_force_exit_phase", default="pre_smoothing_guard"
+            ),
             "debounce_terminal_reason": _field_counter(
                 force_exit_after_debounce,
                 "ofi_force_exit_terminal_reason",
             ),
-            "debounce_profit_delta_avg": round(_avg(debounce_profit_delta_values) or 0.0, 4)
-            if debounce_profit_delta_values
-            else None,
-            "avg_worsen_from_candidate": round(_avg(worsen_values) or 0.0, 4) if worsen_values else None,
+            "debounce_profit_delta_avg": (
+                round(_avg(debounce_profit_delta_values) or 0.0, 4)
+                if debounce_profit_delta_values
+                else None
+            ),
+            "avg_worsen_from_candidate": (
+                round(_avg(worsen_values) or 0.0, 4) if worsen_values else None
+            ),
             "smoothing_action": _field_counter(applied, "smoothing_action"),
             "ofi_regime": _field_counter(applied, "holding_flow_ofi_regime"),
             "micro_state": _field_counter(applied, "orderbook_micro_state"),
             "completed_valid": len(completed_profit_values),
-            "completed_avg_profit_rate": round(_avg(completed_profit_values) or 0.0, 4)
-            if completed_profit_values
-            else None,
+            "completed_avg_profit_rate": (
+                round(_avg(completed_profit_values) or 0.0, 4)
+                if completed_profit_values
+                else None
+            ),
         },
         "apply_ready": sample_ready,
         "current": current,
@@ -6816,7 +8859,10 @@ def _build_scale_in_price_guard_family(events: list[dict]) -> dict:
     guard_events = resolved + blocked
     spread_values = [
         value
-        for value in (_safe_float(_event_fields(event).get("spread_bps"), None) for event in guard_events)
+        for value in (
+            _safe_float(_event_fields(event).get("spread_bps"), None)
+            for event in guard_events
+        )
         if value is not None
     ]
     micro_vwap_values = [
@@ -6849,11 +8895,15 @@ def _build_scale_in_price_guard_family(events: list[dict]) -> dict:
     ]
     sample_ready = len(guard_events) >= 20 and (len(blocked) >= 5 or len(resolved) >= 5)
     current = {
-        "max_spread_bps": float(getattr(TRADING_RULES, "SCALPING_SCALE_IN_MAX_SPREAD_BPS", 80.0) or 80.0),
+        "max_spread_bps": float(
+            getattr(TRADING_RULES, "SCALPING_SCALE_IN_MAX_SPREAD_BPS", 80.0) or 80.0
+        ),
         "pyramid_max_micro_vwap_bps": float(
             getattr(TRADING_RULES, "SCALPING_PYRAMID_MAX_MICRO_VWAP_BPS", 60.0) or 60.0
         ),
-        "pyramid_min_ai_score": int(getattr(TRADING_RULES, "SCALPING_PYRAMID_MIN_AI_SCORE", 70) or 70),
+        "pyramid_min_ai_score": int(
+            getattr(TRADING_RULES, "SCALPING_PYRAMID_MIN_AI_SCORE", 70) or 70
+        ),
         "pyramid_min_buy_pressure": float(
             getattr(TRADING_RULES, "SCALPING_PYRAMID_MIN_BUY_PRESSURE", 60.0) or 60.0
         ),
@@ -6863,7 +8913,9 @@ def _build_scale_in_price_guard_family(events: list[dict]) -> dict:
     }
     recommended = dict(current)
     if spread_values:
-        recommended["max_spread_bps_observed_p90"] = round(_percentile(spread_values, 90, current["max_spread_bps"]), 2)
+        recommended["max_spread_bps_observed_p90"] = round(
+            _percentile(spread_values, 90, current["max_spread_bps"]), 2
+        )
     if micro_vwap_values:
         recommended["micro_vwap_bps_observed_p90"] = round(
             _percentile(micro_vwap_values, 90, current["pyramid_max_micro_vwap_bps"]),
@@ -6876,22 +8928,34 @@ def _build_scale_in_price_guard_family(events: list[dict]) -> dict:
             "resolved": len(resolved),
             "guard_block": len(blocked),
             "p2_observe": len(p2_observe),
-            "resolved_executed": _record_id_stage_count(events, "scale_in_executed", resolved_ids),
-            "resolved_completed": _record_id_stage_count(events, "sell_completed", resolved_ids),
+            "resolved_executed": _record_id_stage_count(
+                events, "scale_in_executed", resolved_ids
+            ),
+            "resolved_completed": _record_id_stage_count(
+                events, "sell_completed", resolved_ids
+            ),
             "add_type": _field_counter(guard_events + p2_observe, "add_type"),
             "block_reason": _field_counter(blocked, "reason"),
             "qty_reason": _field_counter(resolved, "qty_reason"),
             "p2_action": _field_counter(p2_observe, "action"),
-            "spread_bps_p90": round(_percentile(spread_values, 90, 0.0), 3) if spread_values else None,
-            "micro_vwap_bps_p90": round(_percentile(micro_vwap_values, 90, 0.0), 3)
-            if micro_vwap_values
-            else None,
-            "resolved_vs_curr_bps_avg": round(_avg(curr_distance_values) or 0.0, 4)
-            if curr_distance_values
-            else None,
-            "effective_qty_avg": round(_avg(effective_qty_values) or 0.0, 4)
-            if effective_qty_values
-            else None,
+            "spread_bps_p90": (
+                round(_percentile(spread_values, 90, 0.0), 3) if spread_values else None
+            ),
+            "micro_vwap_bps_p90": (
+                round(_percentile(micro_vwap_values, 90, 0.0), 3)
+                if micro_vwap_values
+                else None
+            ),
+            "resolved_vs_curr_bps_avg": (
+                round(_avg(curr_distance_values) or 0.0, 4)
+                if curr_distance_values
+                else None
+            ),
+            "effective_qty_avg": (
+                round(_avg(effective_qty_values) or 0.0, 4)
+                if effective_qty_values
+                else None
+            ),
         },
         "apply_ready": sample_ready,
         "current": current,
@@ -6943,7 +9007,9 @@ def _summarize_action_rows(rows: list[dict]) -> dict:
     }
 
 
-def _confidence_adjusted_action_score(summary: dict, prior_summary: dict, *, prior_strength: int = 8) -> dict:
+def _confidence_adjusted_action_score(
+    summary: dict, prior_summary: dict, *, prior_strength: int = 8
+) -> dict:
     sample = int(summary.get("sample") or 0)
     avg_profit = _safe_float(summary.get("avg_profit_rate"), None)
     prior_avg = _safe_float(prior_summary.get("avg_profit_rate"), 0.0) or 0.0
@@ -6954,7 +9020,9 @@ def _confidence_adjusted_action_score(summary: dict, prior_summary: dict, *, pri
             "confidence_adjusted_score": None,
             "weight": 0.0,
         }
-    smoothed = ((avg_profit * sample) + (prior_avg * prior_strength)) / (sample + prior_strength)
+    smoothed = ((avg_profit * sample) + (prior_avg * prior_strength)) / (
+        sample + prior_strength
+    )
     stddev = _safe_float(summary.get("stddev_profit_rate"), None)
     if stddev is None or stddev <= 0:
         stddev = abs(avg_profit - prior_avg) or 0.5
@@ -6969,13 +9037,23 @@ def _confidence_adjusted_action_score(summary: dict, prior_summary: dict, *, pri
     }
 
 
-def _best_action_by_bucket(rows: list[dict], bucket_field: str, *, min_sample: int = 5) -> list[dict]:
+def _best_action_by_bucket(
+    rows: list[dict], bucket_field: str, *, min_sample: int = 5
+) -> list[dict]:
     grouped: dict[tuple[str, str], list[dict]] = {}
     for row in rows:
-        grouped.setdefault((str(row.get(bucket_field) or "unknown"), str(row.get("action_label") or "exit_only")), []).append(row)
+        grouped.setdefault(
+            (
+                str(row.get(bucket_field) or "unknown"),
+                str(row.get("action_label") or "exit_only"),
+            ),
+            [],
+        ).append(row)
 
     global_rows_by_action = {
-        action: [row for row in rows if str(row.get("action_label") or "exit_only") == action]
+        action: [
+            row for row in rows if str(row.get("action_label") or "exit_only") == action
+        ]
         for action in ("exit_only", "avg_down_wait", "pyramid_wait")
     }
     global_summary_by_action = {
@@ -6988,17 +9066,27 @@ def _best_action_by_bucket(rows: list[dict], bucket_field: str, *, min_sample: i
         action_summaries = []
         for action in ("exit_only", "avg_down_wait", "pyramid_wait"):
             summary = _summarize_action_rows(grouped.get((bucket, action), []))
-            score_pack = _confidence_adjusted_action_score(summary, global_summary_by_action[action])
+            score_pack = _confidence_adjusted_action_score(
+                summary, global_summary_by_action[action]
+            )
             action_summaries.append({"action": action, **summary, **score_pack})
         eligible = [
-            item for item in action_summaries
-            if item["sample"] >= min_sample and item["confidence_adjusted_score"] is not None
+            item
+            for item in action_summaries
+            if item["sample"] >= min_sample
+            and item["confidence_adjusted_score"] is not None
         ]
-        ranked = sorted(eligible, key=lambda item: item["confidence_adjusted_score"], reverse=True)
+        ranked = sorted(
+            eligible, key=lambda item: item["confidence_adjusted_score"], reverse=True
+        )
         best = ranked[0] if ranked else None
         runner_up = ranked[1] if len(ranked) > 1 else None
         margin = (
-            round(best["confidence_adjusted_score"] - runner_up["confidence_adjusted_score"], 4)
+            round(
+                best["confidence_adjusted_score"]
+                - runner_up["confidence_adjusted_score"],
+                4,
+            )
             if best and runner_up
             else None
         )
@@ -7015,7 +9103,9 @@ def _best_action_by_bucket(rows: list[dict], bucket_field: str, *, min_sample: i
                 "bucket": bucket,
                 "best_action": best["action"] if best else "insufficient_sample",
                 "best_avg_profit_rate": best["avg_profit_rate"] if best else None,
-                "best_confidence_adjusted_score": best["confidence_adjusted_score"] if best else None,
+                "best_confidence_adjusted_score": (
+                    best["confidence_adjusted_score"] if best else None
+                ),
                 "edge_margin": margin,
                 "policy_hint": policy_hint,
                 "actions": action_summaries,
@@ -7044,23 +9134,36 @@ def _build_statistical_action_weight_family(
             or row.get("acc_volume")
             or row.get("trade_volume")
         )
-        enriched["time_bucket"] = _time_bucket(row.get("buy_time") or row.get("sell_time"))
+        enriched["time_bucket"] = _time_bucket(
+            row.get("buy_time") or row.get("sell_time")
+        )
         completed_valid.append(enriched)
 
     action_counts = Counter(row["action_label"] for row in completed_valid)
     action_summary = {
-        action: _summarize_action_rows([row for row in completed_valid if row["action_label"] == action])
+        action: _summarize_action_rows(
+            [row for row in completed_valid if row["action_label"] == action]
+        )
         for action in ("exit_only", "avg_down_wait", "pyramid_wait")
     }
-    known_price = sum(1 for row in completed_valid if row["price_bucket"] != "price_unknown")
-    known_volume = sum(1 for row in completed_valid if row["volume_bucket"] != "volume_unknown")
-    known_time = sum(1 for row in completed_valid if row["time_bucket"] != "time_unknown")
+    known_price = sum(
+        1 for row in completed_valid if row["price_bucket"] != "price_unknown"
+    )
+    known_volume = sum(
+        1 for row in completed_valid if row["volume_bucket"] != "volume_unknown"
+    )
+    known_time = sum(
+        1 for row in completed_valid if row["time_bucket"] != "time_unknown"
+    )
     event_counts = Counter(str(event.get("stage") or "") for event in events)
     sample_ready = (
         len(completed_valid) >= 50
         and known_price >= 30
         and known_time >= 30
-        and (action_counts.get("avg_down_wait", 0) + action_counts.get("pyramid_wait", 0)) >= 10
+        and (
+            action_counts.get("avg_down_wait", 0) + action_counts.get("pyramid_wait", 0)
+        )
+        >= 10
     )
     return {
         "family": "statistical_action_weight",
@@ -7073,7 +9176,9 @@ def _build_statistical_action_weight_family(
             "compact_exit_signal": event_counts.get("exit_signal", 0),
             "compact_sell_completed": event_counts.get("sell_completed", 0),
             "compact_scale_in_executed": event_counts.get("scale_in_executed", 0),
-            "compact_decision_snapshot": event_counts.get("stat_action_decision_snapshot", 0),
+            "compact_decision_snapshot": event_counts.get(
+                "stat_action_decision_snapshot", 0
+            ),
         },
         "apply_ready": False,
         "weight_source_ready": sample_ready,
@@ -7086,7 +9191,9 @@ def _build_statistical_action_weight_family(
         "recommended": {
             "action_summary": action_summary,
             "by_price_bucket": _best_action_by_bucket(completed_valid, "price_bucket"),
-            "by_volume_bucket": _best_action_by_bucket(completed_valid, "volume_bucket"),
+            "by_volume_bucket": _best_action_by_bucket(
+                completed_valid, "volume_bucket"
+            ),
             "by_time_bucket": _best_action_by_bucket(completed_valid, "time_bucket"),
             "data_completeness": {
                 "price_known": known_price,
@@ -7099,7 +9206,9 @@ def _build_statistical_action_weight_family(
                 "clear_edge_margin": 0.15,
                 "high_loss_rate_guard": 0.65,
             },
-            "eligible_but_not_chosen": _build_eligible_but_not_chosen_report(events, target_date),
+            "eligible_but_not_chosen": _build_eligible_but_not_chosen_report(
+                events, target_date
+            ),
         },
         "apply_mode": "report_only_weight_source",
         "notes": [
@@ -7122,7 +9231,9 @@ def _build_family_reports(
         _build_mechanical_entry_family(events),
         _build_score65_74_recovery_probe_family(events),
         _build_pre_submit_guard_family(events),
-        _build_dynamic_entry_price_resolver_family(events, completed_rows, target_date=target_date),
+        _build_dynamic_entry_price_resolver_family(
+            events, completed_rows, target_date=target_date
+        ),
         _build_entry_split_order_plan_family(target_date=target_date),
         _build_scale_in_split_order_plan_family(target_date=target_date),
         _build_entry_price_execution_quality_family(events),
@@ -7164,7 +9275,9 @@ def _build_family_reports(
         _build_holding_flow_ofi_smoothing_family(events),
         _build_scale_in_price_guard_family(events),
         _build_position_sizing_dynamic_formula_family(events, completed_rows),
-        _build_statistical_action_weight_family(events, completed_rows, target_date=target_date),
+        _build_statistical_action_weight_family(
+            events, completed_rows, target_date=target_date
+        ),
         _build_lifecycle_decision_matrix_runtime_family(target_date),
     ]
 
@@ -7172,15 +9285,25 @@ def _build_family_reports(
 def _build_report_source_families(report_source_context: dict | None) -> list[dict]:
     metrics = (report_source_context or {}).get("source_metrics")
     metrics = metrics if isinstance(metrics, dict) else {}
-    decision_support = metrics.get("decision_support") if isinstance(metrics.get("decision_support"), dict) else {}
+    decision_support = (
+        metrics.get("decision_support")
+        if isinstance(metrics.get("decision_support"), dict)
+        else {}
+    )
     market_regime = (
-        metrics.get("market_regime_continuous") if isinstance(metrics.get("market_regime_continuous"), dict) else {}
+        metrics.get("market_regime_continuous")
+        if isinstance(metrics.get("market_regime_continuous"), dict)
+        else {}
     )
     market_source_quality = (
-        market_regime.get("source_quality") if isinstance(market_regime.get("source_quality"), dict) else {}
+        market_regime.get("source_quality")
+        if isinstance(market_regime.get("source_quality"), dict)
+        else {}
     )
     market_rolling_10d = (
-        market_regime.get("rolling_10d") if isinstance(market_regime.get("rolling_10d"), dict) else {}
+        market_regime.get("rolling_10d")
+        if isinstance(market_regime.get("rolling_10d"), dict)
+        else {}
     )
     market_valid_days = max(
         _safe_int(market_source_quality.get("valid_market_regime_days"), 0) or 0,
@@ -7188,7 +9311,9 @@ def _build_report_source_families(report_source_context: dict | None) -> list[di
     )
     matrix_entries = _safe_int(decision_support.get("matrix_entries"), 0) or 0
     non_clear_edge = _safe_int(decision_support.get("matrix_non_clear_edge"), 0) or 0
-    candidate_weight_source = _safe_int(decision_support.get("saw_candidate_weight_source"), 0) or 0
+    candidate_weight_source = (
+        _safe_int(decision_support.get("saw_candidate_weight_source"), 0) or 0
+    )
     sample_ready = non_clear_edge > 0 and candidate_weight_source > 0
     return [
         {
@@ -7197,19 +9322,36 @@ def _build_report_source_families(report_source_context: dict | None) -> list[di
             "sample": {
                 "matrix_entries": matrix_entries,
                 "matrix_non_clear_edge": non_clear_edge,
-                "matrix_no_clear_edge": _safe_int(decision_support.get("matrix_no_clear_edge"), 0) or 0,
+                "matrix_no_clear_edge": _safe_int(
+                    decision_support.get("matrix_no_clear_edge"), 0
+                )
+                or 0,
                 "saw_candidate_weight_source": candidate_weight_source,
                 "saw_defensive_only_high_loss_rate": _safe_int(
                     decision_support.get("saw_defensive_only_high_loss_rate"), 0
                 )
                 or 0,
-                "saw_insufficient_sample": _safe_int(decision_support.get("saw_insufficient_sample"), 0) or 0,
-                "counterfactual_entry_count": _safe_int(decision_support.get("counterfactual_entry_count"), 0) or 0,
-                "counterfactual_ready_count": _safe_int(decision_support.get("counterfactual_ready_count"), 0) or 0,
-                "counterfactual_gap_count": _safe_int(decision_support.get("counterfactual_gap_count"), 0) or 0,
+                "saw_insufficient_sample": _safe_int(
+                    decision_support.get("saw_insufficient_sample"), 0
+                )
+                or 0,
+                "counterfactual_entry_count": _safe_int(
+                    decision_support.get("counterfactual_entry_count"), 0
+                )
+                or 0,
+                "counterfactual_ready_count": _safe_int(
+                    decision_support.get("counterfactual_ready_count"), 0
+                )
+                or 0,
+                "counterfactual_gap_count": _safe_int(
+                    decision_support.get("counterfactual_gap_count"), 0
+                )
+                or 0,
                 "counterfactual_per_action_samples": (
                     decision_support.get("counterfactual_per_action_samples")
-                    if isinstance(decision_support.get("counterfactual_per_action_samples"), dict)
+                    if isinstance(
+                        decision_support.get("counterfactual_per_action_samples"), dict
+                    )
                     else {}
                 ),
             },
@@ -7221,11 +9363,19 @@ def _build_report_source_families(report_source_context: dict | None) -> list[di
             },
             "recommended": {
                 "enabled": sample_ready,
-                "mode": "advisory_canary_live_readiness" if sample_ready else "readiness_only",
+                "mode": (
+                    "advisory_canary_live_readiness"
+                    if sample_ready
+                    else "readiness_only"
+                ),
                 "matrix_version": decision_support.get("matrix_version"),
                 "candidate_bucket_count": non_clear_edge,
             },
-            "apply_mode": "efficient_tradeoff_canary_candidate" if sample_ready else "report_only_readiness",
+            "apply_mode": (
+                "efficient_tradeoff_canary_candidate"
+                if sample_ready
+                else "report_only_readiness"
+            ),
             "notes": [
                 "ADM은 shadow가 아니라 advisory canary/live-readiness 축으로만 본다.",
                 "recommended_bias가 전부 no_clear_edge이면 최소 edge 부재라 live AI 응답은 바꾸지 않는다.",
@@ -7237,14 +9387,19 @@ def _build_report_source_families(report_source_context: dict | None) -> list[di
             "stage": "risk_context",
             "sample": {
                 "valid_market_regime_days": market_valid_days,
-                "rolling_5d": market_regime.get("rolling_5d") if isinstance(market_regime.get("rolling_5d"), dict) else {},
+                "rolling_5d": (
+                    market_regime.get("rolling_5d")
+                    if isinstance(market_regime.get("rolling_5d"), dict)
+                    else {}
+                ),
                 "rolling_10d": market_rolling_10d,
                 "label_ev_breakdown": (
                     market_regime.get("label_ev_breakdown")
                     if isinstance(market_regime.get("label_ev_breakdown"), dict)
                     else {}
                 ),
-                "source_quality_status": market_source_quality.get("status") or "hold_sample",
+                "source_quality_status": market_source_quality.get("status")
+                or "hold_sample",
             },
             "apply_ready": False,
             "current": {
@@ -7273,11 +9428,17 @@ def _build_report_source_families(report_source_context: dict | None) -> list[di
 def _build_lifecycle_decision_matrix_runtime_family(target_date: str | None) -> dict:
     target = str(target_date or date.today().isoformat())
     path = LIFECYCLE_DECISION_MATRIX_DIR / f"lifecycle_decision_matrix_{target}.json"
-    context_path = REPORT_DIR / "lifecycle_ai_context" / f"lifecycle_ai_context_{target}.json"
+    context_path = (
+        REPORT_DIR / "lifecycle_ai_context" / f"lifecycle_ai_context_{target}.json"
+    )
     context_payload = _read_json_dict(context_path)
     payload = _read_json_dict(path)
     summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
-    policy_entries = payload.get("policy_entries") if isinstance(payload.get("policy_entries"), list) else []
+    policy_entries = (
+        payload.get("policy_entries")
+        if isinstance(payload.get("policy_entries"), list)
+        else []
+    )
     entry_bucket_attribution = (
         payload.get("entry_bucket_attribution")
         if isinstance(payload.get("entry_bucket_attribution"), dict)
@@ -7310,12 +9471,16 @@ def _build_lifecycle_decision_matrix_runtime_family(target_date: str | None) -> 
     )
     scale_in_bucket_candidates = (
         scale_in_bucket_attribution.get("runtime_approval_candidates")
-        if isinstance(scale_in_bucket_attribution.get("runtime_approval_candidates"), list)
+        if isinstance(
+            scale_in_bucket_attribution.get("runtime_approval_candidates"), list
+        )
         else []
     )
     scale_in_bucket_workorders = (
         scale_in_bucket_attribution.get("code_improvement_workorders")
-        if isinstance(scale_in_bucket_attribution.get("code_improvement_workorders"), list)
+        if isinstance(
+            scale_in_bucket_attribution.get("code_improvement_workorders"), list
+        )
         else []
     )
     overnight_bucket_attribution = (
@@ -7330,21 +9495,32 @@ def _build_lifecycle_decision_matrix_runtime_family(target_date: str | None) -> 
     )
     overnight_bucket_candidates = (
         overnight_bucket_attribution.get("runtime_approval_candidates")
-        if isinstance(overnight_bucket_attribution.get("runtime_approval_candidates"), list)
+        if isinstance(
+            overnight_bucket_attribution.get("runtime_approval_candidates"), list
+        )
         else []
     )
     overnight_bucket_workorders = (
         overnight_bucket_attribution.get("code_improvement_workorders")
-        if isinstance(overnight_bucket_attribution.get("code_improvement_workorders"), list)
+        if isinstance(
+            overnight_bucket_attribution.get("code_improvement_workorders"), list
+        )
         else []
     )
     total_rows = _safe_int(summary.get("total_rows"), 0) or 0
     joined_rows = _safe_int(summary.get("joined_rows"), 0) or 0
     policy_pass_count = _safe_int(summary.get("policy_pass_count"), 0) or 0
     promote_ready_count = _safe_int(summary.get("promote_ready_count"), 0) or 0
-    entry_bucket_runtime_candidate_count = _safe_int(entry_bucket_summary.get("runtime_candidate_count"), 0) or 0
+    entry_bucket_runtime_candidate_count = (
+        _safe_int(entry_bucket_summary.get("runtime_candidate_count"), 0) or 0
+    )
     matrix_version = str(payload.get("matrix_version") or "")
-    apply_ready = bool(payload) and total_rows >= 20 and joined_rows >= 10 and policy_pass_count > 0
+    apply_ready = (
+        bool(payload)
+        and total_rows >= 20
+        and joined_rows >= 10
+        and policy_pass_count > 0
+    )
     return {
         "family": "lifecycle_decision_matrix_runtime",
         "stage": "lifecycle",
@@ -7353,16 +9529,42 @@ def _build_lifecycle_decision_matrix_runtime_family(target_date: str | None) -> 
             "joined_rows": joined_rows,
             "policy_pass_count": policy_pass_count,
             "promote_ready_count": promote_ready_count,
-            "entry_bucket_actionable_count": _safe_int(entry_bucket_summary.get("actionable_bucket_count"), 0) or 0,
+            "entry_bucket_actionable_count": _safe_int(
+                entry_bucket_summary.get("actionable_bucket_count"), 0
+            )
+            or 0,
             "entry_bucket_runtime_candidate_count": entry_bucket_runtime_candidate_count,
-            "entry_bucket_workorder_count": _safe_int(entry_bucket_summary.get("workorder_count"), 0) or 0,
-            "scale_in_bucket_actionable_count": _safe_int(scale_in_bucket_summary.get("actionable_bucket_count"), 0) or 0,
-            "scale_in_bucket_runtime_candidate_count": _safe_int(scale_in_bucket_summary.get("runtime_candidate_count"), 0) or 0,
-            "scale_in_bucket_workorder_count": _safe_int(scale_in_bucket_summary.get("workorder_count"), 0) or 0,
-            "overnight_bucket_actionable_count": _safe_int(overnight_bucket_summary.get("actionable_bucket_count"), 0) or 0,
-            "overnight_bucket_runtime_candidate_count": _safe_int(overnight_bucket_summary.get("runtime_candidate_count"), 0) or 0,
-            "overnight_bucket_workorder_count": _safe_int(overnight_bucket_summary.get("workorder_count"), 0) or 0,
-            "policy_entry_count": len([item for item in policy_entries if isinstance(item, dict)]),
+            "entry_bucket_workorder_count": _safe_int(
+                entry_bucket_summary.get("workorder_count"), 0
+            )
+            or 0,
+            "scale_in_bucket_actionable_count": _safe_int(
+                scale_in_bucket_summary.get("actionable_bucket_count"), 0
+            )
+            or 0,
+            "scale_in_bucket_runtime_candidate_count": _safe_int(
+                scale_in_bucket_summary.get("runtime_candidate_count"), 0
+            )
+            or 0,
+            "scale_in_bucket_workorder_count": _safe_int(
+                scale_in_bucket_summary.get("workorder_count"), 0
+            )
+            or 0,
+            "overnight_bucket_actionable_count": _safe_int(
+                overnight_bucket_summary.get("actionable_bucket_count"), 0
+            )
+            or 0,
+            "overnight_bucket_runtime_candidate_count": _safe_int(
+                overnight_bucket_summary.get("runtime_candidate_count"), 0
+            )
+            or 0,
+            "overnight_bucket_workorder_count": _safe_int(
+                overnight_bucket_summary.get("workorder_count"), 0
+            )
+            or 0,
+            "policy_entry_count": len(
+                [item for item in policy_entries if isinstance(item, dict)]
+            ),
         },
         "apply_ready": apply_ready,
         "current": {
@@ -7373,14 +9575,24 @@ def _build_lifecycle_decision_matrix_runtime_family(target_date: str | None) -> 
             "max_promotes_per_day": 3,
             "min_stage_confidence": 0.60,
             "runtime_effect_enabled": bool(
-                getattr(TRADING_RULES, "LIFECYCLE_DECISION_MATRIX_RUNTIME_EFFECT_ENABLED", False)
+                getattr(
+                    TRADING_RULES,
+                    "LIFECYCLE_DECISION_MATRIX_RUNTIME_EFFECT_ENABLED",
+                    False,
+                )
             ),
-            "lifecycle_ai_context_enabled": bool(getattr(TRADING_RULES, "LIFECYCLE_AI_CONTEXT_ENABLED", False)),
-            "lifecycle_ai_context_file": str(getattr(TRADING_RULES, "LIFECYCLE_AI_CONTEXT_FILE", "") or ""),
+            "lifecycle_ai_context_enabled": bool(
+                getattr(TRADING_RULES, "LIFECYCLE_AI_CONTEXT_ENABLED", False)
+            ),
+            "lifecycle_ai_context_file": str(
+                getattr(TRADING_RULES, "LIFECYCLE_AI_CONTEXT_FILE", "") or ""
+            ),
             "lifecycle_ai_context_version": str(
                 getattr(TRADING_RULES, "LIFECYCLE_AI_CONTEXT_VERSION", "") or ""
             ),
-            "entry_adm_advisory_enabled": bool(getattr(TRADING_RULES, "SCALP_ENTRY_ADM_ADVISORY_ENABLED", True)),
+            "entry_adm_advisory_enabled": bool(
+                getattr(TRADING_RULES, "SCALP_ENTRY_ADM_ADVISORY_ENABLED", True)
+            ),
             "entry_adm_runtime_bias_enabled": bool(
                 getattr(TRADING_RULES, "SCALP_ENTRY_ADM_RUNTIME_BIAS_ENABLED", False)
             ),
@@ -7388,10 +9600,14 @@ def _build_lifecycle_decision_matrix_runtime_family(target_date: str | None) -> 
                 getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_ADVISORY_ENABLED", True)
             ),
             "holding_exit_matrix_runtime_bias_enabled": bool(
-                getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_RUNTIME_BIAS_ENABLED", False)
+                getattr(
+                    TRADING_RULES, "HOLDING_EXIT_MATRIX_RUNTIME_BIAS_ENABLED", False
+                )
             ),
             "holding_exit_matrix_scale_in_bias_enabled": bool(
-                getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_SCALE_IN_BIAS_ENABLED", False)
+                getattr(
+                    TRADING_RULES, "HOLDING_EXIT_MATRIX_SCALE_IN_BIAS_ENABLED", False
+                )
             ),
         },
         "recommended": {
@@ -7403,8 +9619,12 @@ def _build_lifecycle_decision_matrix_runtime_family(target_date: str | None) -> 
             "min_stage_confidence": 0.60,
             "runtime_effect_enabled": False,
             "lifecycle_ai_context_enabled": bool(context_payload),
-            "lifecycle_ai_context_file": str(context_path) if context_path.exists() else "",
-            "lifecycle_ai_context_version": str(context_payload.get("context_version") or ""),
+            "lifecycle_ai_context_file": (
+                str(context_path) if context_path.exists() else ""
+            ),
+            "lifecycle_ai_context_version": str(
+                context_payload.get("context_version") or ""
+            ),
             "entry_adm_advisory_enabled": True,
             "entry_adm_runtime_bias_enabled": False,
             "holding_exit_matrix_advisory_enabled": True,
@@ -7412,12 +9632,24 @@ def _build_lifecycle_decision_matrix_runtime_family(target_date: str | None) -> 
             "holding_exit_matrix_scale_in_bias_enabled": False,
             "entry_bucket_runtime_approval_candidates": entry_bucket_candidates[:10],
             "entry_bucket_code_improvement_workorders": entry_bucket_workorders[:10],
-            "scale_in_bucket_runtime_approval_candidates": scale_in_bucket_candidates[:10],
-            "scale_in_bucket_code_improvement_workorders": scale_in_bucket_workorders[:10],
-            "overnight_bucket_runtime_approval_candidates": overnight_bucket_candidates[:10],
-            "overnight_bucket_code_improvement_workorders": overnight_bucket_workorders[:10],
+            "scale_in_bucket_runtime_approval_candidates": scale_in_bucket_candidates[
+                :10
+            ],
+            "scale_in_bucket_code_improvement_workorders": scale_in_bucket_workorders[
+                :10
+            ],
+            "overnight_bucket_runtime_approval_candidates": overnight_bucket_candidates[
+                :10
+            ],
+            "overnight_bucket_code_improvement_workorders": overnight_bucket_workorders[
+                :10
+            ],
         },
-        "apply_mode": "efficient_tradeoff_canary_candidate" if apply_ready else "report_only_calibration",
+        "apply_mode": (
+            "efficient_tradeoff_canary_candidate"
+            if apply_ready
+            else "report_only_calibration"
+        ),
         "notes": [
             "umbrella family: entry/submit/holding/scale_in/exit stage arms를 하나의 policy version으로 관리한다.",
             "fixed threshold는 hard_safety/baseline_prior/bounded_tunable/legacy_archive role contract로만 해석한다.",
@@ -7429,7 +9661,9 @@ def _build_lifecycle_decision_matrix_runtime_family(target_date: str | None) -> 
 def _build_apply_candidate_list(families: list[dict]) -> list[dict]:
     candidates: list[dict] = []
     manifest_candidates = [
-        family for family in families if family["apply_ready"] and family.get("apply_mode") == "manifest_only"
+        family
+        for family in families
+        if family["apply_ready"] and family.get("apply_mode") == "manifest_only"
     ]
     for family in manifest_candidates:
         candidates.append(
@@ -7443,12 +9677,16 @@ def _build_apply_candidate_list(families: list[dict]) -> list[dict]:
     entry_candidates = [
         family
         for family in families
-        if family["stage"] == "entry" and family["apply_ready"] and family.get("apply_mode") != "manifest_only"
+        if family["stage"] == "entry"
+        and family["apply_ready"]
+        and family.get("apply_mode") != "manifest_only"
     ]
     holding_candidates = [
         family
         for family in families
-        if family["stage"] == "holding_exit" and family["apply_ready"] and family.get("apply_mode") != "manifest_only"
+        if family["stage"] == "holding_exit"
+        and family["apply_ready"]
+        and family.get("apply_mode") != "manifest_only"
     ]
     for group in (entry_candidates[:1], holding_candidates[:1]):
         for family in group:
@@ -7502,67 +9740,131 @@ def _family_sample_count(family: dict) -> int:
         value = _safe_int(sample.get(key), None)
         if value is not None:
             return int(value)
-    numeric_values = [_safe_int(value, None) for value in sample.values() if not isinstance(value, (dict, list))]
+    numeric_values = [
+        _safe_int(value, None)
+        for value in sample.values()
+        if not isinstance(value, (dict, list))
+    ]
     return max([int(value) for value in numeric_values if value is not None] or [0])
 
 
-def _source_metrics_for_family(output_family: str, report_source_context: dict | None) -> dict:
+def _source_metrics_for_family(
+    output_family: str, report_source_context: dict | None
+) -> dict:
     metrics = (report_source_context or {}).get("source_metrics")
     metrics = metrics if isinstance(metrics, dict) else {}
     if output_family == "score65_74_recovery_probe":
-        legacy = metrics.get("buy_score65_74") if isinstance(metrics.get("buy_score65_74"), dict) else {}
-        alias = metrics.get("buy_score60_74") if isinstance(metrics.get("buy_score60_74"), dict) else {}
+        legacy = (
+            metrics.get("buy_score65_74")
+            if isinstance(metrics.get("buy_score65_74"), dict)
+            else {}
+        )
+        alias = (
+            metrics.get("buy_score60_74")
+            if isinstance(metrics.get("buy_score60_74"), dict)
+            else {}
+        )
         combined = dict(legacy)
         combined.update(alias)
         return combined
     if output_family == "pre_submit_price_guard":
-        return metrics.get("pre_submit_price_guard") if isinstance(metrics.get("pre_submit_price_guard"), dict) else {}
+        return (
+            metrics.get("pre_submit_price_guard")
+            if isinstance(metrics.get("pre_submit_price_guard"), dict)
+            else {}
+        )
     if output_family == "dynamic_entry_price_resolver":
         return (
             metrics.get("dynamic_entry_price_resolver")
             if isinstance(metrics.get("dynamic_entry_price_resolver"), dict)
-            else metrics.get("latency_guard_miss_ev_recovery")
-            if isinstance(metrics.get("latency_guard_miss_ev_recovery"), dict)
-            else {}
+            else (
+                metrics.get("latency_guard_miss_ev_recovery")
+                if isinstance(metrics.get("latency_guard_miss_ev_recovery"), dict)
+                else {}
+            )
         )
     if output_family == "entry_split_order_plan":
-        return metrics.get("entry_split_order_plan") if isinstance(metrics.get("entry_split_order_plan"), dict) else {}
+        return (
+            metrics.get("entry_split_order_plan")
+            if isinstance(metrics.get("entry_split_order_plan"), dict)
+            else {}
+        )
     if output_family == "scale_in_split_order_plan":
-        return metrics.get("scale_in_split_order_plan") if isinstance(metrics.get("scale_in_split_order_plan"), dict) else {}
+        return (
+            metrics.get("scale_in_split_order_plan")
+            if isinstance(metrics.get("scale_in_split_order_plan"), dict)
+            else {}
+        )
     if output_family == "entry_price_execution_quality":
         return (
             metrics.get("entry_price_execution_quality")
             if isinstance(metrics.get("entry_price_execution_quality"), dict)
             else {}
         )
-    if output_family in {"liquidity_gate_refined_candidate", "liquidity_pre_submit_guard_p1"}:
+    if output_family in {
+        "liquidity_gate_refined_candidate",
+        "liquidity_pre_submit_guard_p1",
+    }:
         return (
             metrics.get("liquidity_gate_refined_candidate")
             if isinstance(metrics.get("liquidity_gate_refined_candidate"), dict)
             else {}
         )
-    if output_family in {"overbought_gate_refined_candidate", "overbought_pullback_guard_p1"}:
+    if output_family in {
+        "overbought_gate_refined_candidate",
+        "overbought_pullback_guard_p1",
+    }:
         return (
             metrics.get("overbought_gate_refined_candidate")
             if isinstance(metrics.get("overbought_gate_refined_candidate"), dict)
             else {}
         )
     if output_family == "bad_entry_refined_canary":
-        return metrics.get("bad_entry") if isinstance(metrics.get("bad_entry"), dict) else {}
+        return (
+            metrics.get("bad_entry")
+            if isinstance(metrics.get("bad_entry"), dict)
+            else {}
+        )
     if output_family == "holding_exit_decision_matrix_advisory":
-        return metrics.get("decision_support") if isinstance(metrics.get("decision_support"), dict) else {}
+        return (
+            metrics.get("decision_support")
+            if isinstance(metrics.get("decision_support"), dict)
+            else {}
+        )
     if output_family == "lifecycle_decision_matrix_runtime":
-        return metrics.get("lifecycle_decision_matrix") if isinstance(metrics.get("lifecycle_decision_matrix"), dict) else {}
+        return (
+            metrics.get("lifecycle_decision_matrix")
+            if isinstance(metrics.get("lifecycle_decision_matrix"), dict)
+            else {}
+        )
     if output_family == "market_regime_continuous_thresholds":
-        return metrics.get("market_regime_continuous") if isinstance(metrics.get("market_regime_continuous"), dict) else {}
+        return (
+            metrics.get("market_regime_continuous")
+            if isinstance(metrics.get("market_regime_continuous"), dict)
+            else {}
+        )
     if output_family == "scale_in_price_guard":
-        return metrics.get("scale_in_price_guard") if isinstance(metrics.get("scale_in_price_guard"), dict) else {}
+        return (
+            metrics.get("scale_in_price_guard")
+            if isinstance(metrics.get("scale_in_price_guard"), dict)
+            else {}
+        )
     if output_family == "soft_stop_whipsaw_confirmation":
-        return metrics.get("soft_stop") if isinstance(metrics.get("soft_stop"), dict) else {}
+        return (
+            metrics.get("soft_stop")
+            if isinstance(metrics.get("soft_stop"), dict)
+            else {}
+        )
     if output_family == "holding_flow_ofi_smoothing":
-        return metrics.get("holding_flow") if isinstance(metrics.get("holding_flow"), dict) else {}
+        return (
+            metrics.get("holding_flow")
+            if isinstance(metrics.get("holding_flow"), dict)
+            else {}
+        )
     if output_family in {"protect_trailing_smoothing", "trailing_continuation"}:
-        return metrics.get("trailing") if isinstance(metrics.get("trailing"), dict) else {}
+        return (
+            metrics.get("trailing") if isinstance(metrics.get("trailing"), dict) else {}
+        )
     return {}
 
 
@@ -7608,15 +9910,23 @@ def _source_sample_count_for_family(output_family: str, source_metrics: dict) ->
             _safe_int(source_metrics.get("cancel_events"), 0) or 0,
             _safe_int(source_metrics.get("fill_join_events"), 0) or 0,
         )
-    if output_family in {"liquidity_gate_refined_candidate", "liquidity_pre_submit_guard_p1"}:
+    if output_family in {
+        "liquidity_gate_refined_candidate",
+        "liquidity_pre_submit_guard_p1",
+    }:
         return max(
             _safe_int(source_metrics.get("evaluated_candidates"), 0) or 0,
-            _safe_int(source_metrics.get("performance_blocked_liquidity_events"), 0) or 0,
+            _safe_int(source_metrics.get("performance_blocked_liquidity_events"), 0)
+            or 0,
         )
-    if output_family in {"overbought_gate_refined_candidate", "overbought_pullback_guard_p1"}:
+    if output_family in {
+        "overbought_gate_refined_candidate",
+        "overbought_pullback_guard_p1",
+    }:
         return max(
             _safe_int(source_metrics.get("evaluated_candidates"), 0) or 0,
-            _safe_int(source_metrics.get("performance_blocked_overbought_events"), 0) or 0,
+            _safe_int(source_metrics.get("performance_blocked_overbought_events"), 0)
+            or 0,
         )
     if output_family == "bad_entry_refined_canary":
         return max(
@@ -7631,8 +9941,16 @@ def _source_sample_count_for_family(output_family: str, source_metrics: dict) ->
             _safe_int(source_metrics.get("joined_rows"), 0) or 0,
         )
     if output_family == "market_regime_continuous_thresholds":
-        source_quality = source_metrics.get("source_quality") if isinstance(source_metrics.get("source_quality"), dict) else {}
-        rolling_10d = source_metrics.get("rolling_10d") if isinstance(source_metrics.get("rolling_10d"), dict) else {}
+        source_quality = (
+            source_metrics.get("source_quality")
+            if isinstance(source_metrics.get("source_quality"), dict)
+            else {}
+        )
+        rolling_10d = (
+            source_metrics.get("rolling_10d")
+            if isinstance(source_metrics.get("rolling_10d"), dict)
+            else {}
+        )
         return max(
             _safe_int(source_quality.get("valid_market_regime_days"), 0) or 0,
             _safe_int(rolling_10d.get("valid_market_regime_days"), 0) or 0,
@@ -7646,7 +9964,11 @@ def _source_sample_count_for_family(output_family: str, source_metrics: dict) ->
         saw_actions = (_safe_int(source_metrics.get("avg_down_wait"), 0) or 0) + (
             _safe_int(source_metrics.get("pyramid_wait"), 0) or 0
         )
-        return max(guard_events, _safe_int(source_metrics.get("compact_scale_in_executed"), 0) or 0, saw_actions)
+        return max(
+            guard_events,
+            _safe_int(source_metrics.get("compact_scale_in_executed"), 0) or 0,
+            saw_actions,
+        )
     if output_family == "soft_stop_whipsaw_confirmation":
         return max(
             _safe_int(source_metrics.get("holding_exit_observation_total"), 0) or 0,
@@ -7662,30 +9984,42 @@ def _source_sample_count_for_family(output_family: str, source_metrics: dict) ->
     return 0
 
 
-def _score65_74_entry_unlock_probe_ready(source_metrics: dict, *, sample_count: int, sample_floor: int) -> bool:
+def _score65_74_entry_unlock_probe_ready(
+    source_metrics: dict, *, sample_count: int, sample_floor: int
+) -> bool:
     """Return True when the bounded low-score entry probe should open to collect applied samples."""
     if sample_count < sample_floor:
         return False
     avg_ev = _safe_float(
-        source_metrics.get("score60_74_avg_expected_ev_pct")
-        if source_metrics.get("score60_74_avg_expected_ev_pct") is not None
-        else source_metrics.get("score65_74_avg_expected_ev_pct"),
+        (
+            source_metrics.get("score60_74_avg_expected_ev_pct")
+            if source_metrics.get("score60_74_avg_expected_ev_pct") is not None
+            else source_metrics.get("score65_74_avg_expected_ev_pct")
+        ),
         None,
     )
     avg_close = _safe_float(
-        source_metrics.get("score60_74_avg_close_10m_pct")
-        if source_metrics.get("score60_74_avg_close_10m_pct") is not None
-        else source_metrics.get("score65_74_avg_close_10m_pct"),
+        (
+            source_metrics.get("score60_74_avg_close_10m_pct")
+            if source_metrics.get("score60_74_avg_close_10m_pct") is not None
+            else source_metrics.get("score65_74_avg_close_10m_pct")
+        ),
         None,
     )
     avg_mfe = _safe_float(
-        source_metrics.get("score60_74_avg_mfe_10m_pct")
-        if source_metrics.get("score60_74_avg_mfe_10m_pct") is not None
-        else source_metrics.get("score65_74_avg_mfe_10m_pct"),
+        (
+            source_metrics.get("score60_74_avg_mfe_10m_pct")
+            if source_metrics.get("score60_74_avg_mfe_10m_pct") is not None
+            else source_metrics.get("score65_74_avg_mfe_10m_pct")
+        ),
         None,
     )
-    submitted_to_budget = _safe_float(source_metrics.get("submitted_to_budget_unique_pct"), None)
-    order_bundle_submitted = _safe_float(source_metrics.get("order_bundle_submitted"), None)
+    submitted_to_budget = _safe_float(
+        source_metrics.get("submitted_to_budget_unique_pct"), None
+    )
+    order_bundle_submitted = _safe_float(
+        source_metrics.get("order_bundle_submitted"), None
+    )
     risk_gate = str(source_metrics.get("risk_regime_gate_state") or "").lower()
     if risk_gate == "confirmed_panic":
         return False
@@ -7712,27 +10046,48 @@ def _calibration_state_for_family(
     sample_ready: bool | None = None,
 ) -> tuple[str, str]:
     source_metrics = source_metrics if isinstance(source_metrics, dict) else {}
-    sample_count = _family_sample_count(family) if sample_count is None else int(sample_count)
+    sample_count = (
+        _family_sample_count(family) if sample_count is None else int(sample_count)
+    )
     sample_floor = int(metadata.get("sample_floor") or 0)
     if output_family == "trailing_continuation":
         return (
             "freeze",
             "GOOD_EXIT 훼손 리스크가 커서 1차 loop에서는 report/calibration만 수행하고 live apply는 금지한다.",
         )
-    ready = bool(family.get("apply_ready")) if sample_ready is None else bool(sample_ready)
+    ready = (
+        bool(family.get("apply_ready")) if sample_ready is None else bool(sample_ready)
+    )
     if output_family == "holding_exit_decision_matrix_advisory":
-        family_sample = family.get("sample") if isinstance(family.get("sample"), dict) else {}
+        family_sample = (
+            family.get("sample") if isinstance(family.get("sample"), dict) else {}
+        )
         non_clear_edge = _safe_int(family_sample.get("matrix_non_clear_edge"), 0) or 0
-        candidate_weight_source = _safe_int(family_sample.get("saw_candidate_weight_source"), 0) or 0
-        counterfactual_gap_count = _safe_int(family_sample.get("counterfactual_gap_count"), 0) or 0
+        candidate_weight_source = (
+            _safe_int(family_sample.get("saw_candidate_weight_source"), 0) or 0
+        )
+        counterfactual_gap_count = (
+            _safe_int(family_sample.get("counterfactual_gap_count"), 0) or 0
+        )
         if non_clear_edge <= 0:
-            return ("hold_no_edge", "ADM/SAW matrix가 전부 no_clear_edge라 최소 edge 부재; live AI 응답 변경 없음")
+            return (
+                "hold_no_edge",
+                "ADM/SAW matrix가 전부 no_clear_edge라 최소 edge 부재; live AI 응답 변경 없음",
+            )
         if candidate_weight_source <= 0:
-            return ("hold_sample", "SAW candidate_weight_source bucket이 없어 advisory canary 후보 유지")
+            return (
+                "hold_sample",
+                "SAW candidate_weight_source bucket이 없어 advisory canary 후보 유지",
+            )
         if counterfactual_gap_count > 0:
-            return ("hold_sample", "ADM action별 exit_only/avg_down/pyramid counterfactual coverage가 닫히지 않음")
+            return (
+                "hold_sample",
+                "ADM action별 exit_only/avg_down/pyramid counterfactual coverage가 닫히지 않음",
+            )
     if output_family == "lifecycle_decision_matrix_runtime":
-        family_sample = family.get("sample") if isinstance(family.get("sample"), dict) else {}
+        family_sample = (
+            family.get("sample") if isinstance(family.get("sample"), dict) else {}
+        )
         joined_rows = _safe_int(family_sample.get("joined_rows"), 0) or 0
         policy_pass_count = _safe_int(family_sample.get("policy_pass_count"), 0) or 0
         if sample_count < sample_floor or joined_rows < 10:
@@ -7741,13 +10096,20 @@ def _calibration_state_for_family(
                 f"lifecycle matrix source sample floor 미달(rows={sample_count}/{sample_floor}, joined={joined_rows}/10)",
             )
         if policy_pass_count <= 0:
-            return ("hold_no_edge", "stage policy 중 source-quality pass arm이 없어 runtime policy 적용 보류")
+            return (
+                "hold_no_edge",
+                "stage policy 중 source-quality pass arm이 없어 runtime policy 적용 보류",
+            )
         return (
             "adjust_up",
             "lifecycle matrix weighted ADM source가 balanced gate를 통과해 다음 장전 umbrella micro canary 후보",
         )
     if output_family == "market_regime_continuous_thresholds":
-        source_quality = source_metrics.get("source_quality") if isinstance(source_metrics.get("source_quality"), dict) else {}
+        source_quality = (
+            source_metrics.get("source_quality")
+            if isinstance(source_metrics.get("source_quality"), dict)
+            else {}
+        )
         valid_days = _safe_int(source_quality.get("valid_market_regime_days"), 0) or 0
         if valid_days < sample_floor:
             return (
@@ -7759,26 +10121,43 @@ def _calibration_state_for_family(
             "market regime continuous thresholds v1은 1차 개발에서 ADM/LDM risk_context 및 manifest-only 후보로만 유지한다.",
         )
     if output_family == "score65_74_recovery_probe":
-        family_sample = family.get("sample") if isinstance(family.get("sample"), dict) else {}
+        family_sample = (
+            family.get("sample") if isinstance(family.get("sample"), dict) else {}
+        )
         effective_range = str(family_sample.get("effective_score_range") or "60-74")
         avg_ev = _safe_float(
-            source_metrics.get("score60_74_avg_expected_ev_pct")
-            if source_metrics.get("score60_74_avg_expected_ev_pct") is not None
-            else source_metrics.get("score65_74_avg_expected_ev_pct"),
+            (
+                source_metrics.get("score60_74_avg_expected_ev_pct")
+                if source_metrics.get("score60_74_avg_expected_ev_pct") is not None
+                else source_metrics.get("score65_74_avg_expected_ev_pct")
+            ),
             None,
         )
         avg_close = _safe_float(
-            source_metrics.get("score60_74_avg_close_10m_pct")
-            if source_metrics.get("score60_74_avg_close_10m_pct") is not None
-            else source_metrics.get("score65_74_avg_close_10m_pct"),
+            (
+                source_metrics.get("score60_74_avg_close_10m_pct")
+                if source_metrics.get("score60_74_avg_close_10m_pct") is not None
+                else source_metrics.get("score65_74_avg_close_10m_pct")
+            ),
             None,
         )
         risk_gate = str(source_metrics.get("risk_regime_gate_state") or "").lower()
-        submitted_to_budget = _safe_float(source_metrics.get("submitted_to_budget_unique_pct"), None)
-        if sample_count >= sample_floor and ((avg_ev is not None and avg_ev < 2.0) or (avg_close is not None and avg_close < 1.0)):
-            return ("hold", f"score{effective_range} EV/close_10m 우위가 efficient trade-off gate에 미달해 값 유지")
+        submitted_to_budget = _safe_float(
+            source_metrics.get("submitted_to_budget_unique_pct"), None
+        )
+        if sample_count >= sample_floor and (
+            (avg_ev is not None and avg_ev < 2.0)
+            or (avg_close is not None and avg_close < 1.0)
+        ):
+            return (
+                "hold",
+                f"score{effective_range} EV/close_10m 우위가 efficient trade-off gate에 미달해 값 유지",
+            )
         if submitted_to_budget is not None and submitted_to_budget > 60.0:
-            return ("hold", "submitted drought가 아니므로 probe live 확대보다 baseline funnel 유지")
+            return (
+                "hold",
+                "submitted drought가 아니므로 probe live 확대보다 baseline funnel 유지",
+            )
         if _score65_74_entry_unlock_probe_ready(
             source_metrics,
             sample_count=sample_count,
@@ -7790,7 +10169,10 @@ def _calibration_state_for_family(
                 "submitted drought를 풀기 위해 기본 신규 BUY sizing을 쓰는 bounded entry probe를 연다.",
             )
         if risk_gate == "confirmed_panic":
-            return ("hold_sample", f"confirmed panic risk-regime에서는 score{effective_range} live 확대 없이 source-quality review로 보류")
+            return (
+                "hold_sample",
+                f"confirmed panic risk-regime에서는 score{effective_range} live 확대 없이 source-quality review로 보류",
+            )
         if sample_count >= sample_floor and ready:
             return (
                 "adjust_up",
@@ -7801,7 +10183,10 @@ def _calibration_state_for_family(
             or _safe_int(family_sample.get("wait65_79_score65_74_candidate"), 0)
             or 0
         ):
-            return ("hold_sample", f"score{effective_range} 후보는 있으나 source/report sample floor가 부족해 cap 유지")
+            return (
+                "hold_sample",
+                f"score{effective_range} 후보는 있으나 source/report sample floor가 부족해 cap 유지",
+            )
     if output_family == "pre_submit_price_guard":
         return (
             "hold",
@@ -7930,8 +10315,12 @@ def _calibration_state_for_family(
             "entry_price_execution_quality는 real-only 제출/체결/취소/late-fill 감사 전용이며 runtime threshold apply 권한이 없다.",
         )
     if output_family == "dynamic_entry_price_resolver":
-        family_sample = family.get("sample") if isinstance(family.get("sample"), dict) else {}
-        candidate_metrics = _merged_entry_price_candidate_metrics(family_sample, source_metrics)
+        family_sample = (
+            family.get("sample") if isinstance(family.get("sample"), dict) else {}
+        )
+        candidate_metrics = _merged_entry_price_candidate_metrics(
+            family_sample, source_metrics
+        )
         primary_metrics = {
             **family_sample,
             **source_metrics,
@@ -7943,15 +10332,23 @@ def _calibration_state_for_family(
             primary_metrics,
             candidate_metrics,
         )
-        real_count = _safe_int(source_metrics.get("real_candidate_observations"), 0) or 0
-        real_joined = _safe_int(source_metrics.get("real_outcome_joined_sample"), 0) or 0
+        real_count = (
+            _safe_int(source_metrics.get("real_candidate_observations"), 0) or 0
+        )
+        real_joined = (
+            _safe_int(source_metrics.get("real_outcome_joined_sample"), 0) or 0
+        )
         if primary_book == "real_outcome_pending":
             return (
                 "hold_real_outcome_pending",
                 f"real submit 표본은 충분하나 outcome join이 없어 PREOPEN apply 보류(real={real_count}/20, joined={real_joined})",
             )
-        required_books = (primary_book,) if primary_book in {"real", "sim"} else ("sim",)
-        missing_by_book = _entry_price_missing_metrics(candidate_metrics, required_books=required_books)
+        required_books = (
+            (primary_book,) if primary_book in {"real", "sim"} else ("sim",)
+        )
+        missing_by_book = _entry_price_missing_metrics(
+            candidate_metrics, required_books=required_books
+        )
         if sample_count < sample_floor:
             return (
                 "hold_sample",
@@ -7962,12 +10359,19 @@ def _calibration_state_for_family(
                 "hold_sample",
                 f"가격 후보별 fill/cancel/late-fill/EV 필수 지표 미완성({missing_by_book}); PREOPEN apply 보류",
             )
-        if primary_book != "real" and not bool(source_metrics.get("recommended_values_runtime_change_ready")):
+        if primary_book != "real" and not bool(
+            source_metrics.get("recommended_values_runtime_change_ready")
+        ):
             return (
                 "hold_sample",
                 "dynamic entry price 후보 지표는 준비됐지만 유효한 bounded 추천값 또는 runtime env 변경값이 없어 PREOPEN apply 보류",
             )
-        ev = _safe_float((candidate_metrics.get(primary_book) or {}).get("source_quality_adjusted_ev_pct"), None)
+        ev = _safe_float(
+            (candidate_metrics.get(primary_book) or {}).get(
+                "source_quality_adjusted_ev_pct"
+            ),
+            None,
+        )
         if ev is not None and ev > 0:
             return (
                 "adjust_up",
@@ -8000,21 +10404,48 @@ def _calibration_state_for_family(
             )
         missed_rate = _safe_float(source_metrics.get("missed_winner_rate"), None)
         avoided_rate = _safe_float(source_metrics.get("avoided_loser_rate"), None)
-        if missed_rate is not None and avoided_rate is not None and avoided_rate > missed_rate + 10.0:
-            return ("freeze", "차단이 손실 회피에 더 기여해 refined gate 완화 설계 중지")
-        return ("hold", "기존 관찰축 추가 없이 source bundle에 묶어 family design candidate로 유지")
+        if (
+            missed_rate is not None
+            and avoided_rate is not None
+            and avoided_rate > missed_rate + 10.0
+        ):
+            return (
+                "freeze",
+                "차단이 손실 회피에 더 기여해 refined gate 완화 설계 중지",
+            )
+        return (
+            "hold",
+            "기존 관찰축 추가 없이 source bundle에 묶어 family design candidate로 유지",
+        )
     if output_family == "bad_entry_refined_canary":
         lifecycle = source_metrics.get("lifecycle_attribution")
         lifecycle = lifecycle if isinstance(lifecycle, dict) else {}
         candidate_records = _safe_int(lifecycle.get("candidate_records"), 0) or 0
         if candidate_records > 0:
-            pending_records = _safe_int(lifecycle.get("post_sell_pending_records"), 0) or 0
-            joined_records = _safe_int(lifecycle.get("post_sell_joined_records"), 0) or 0
-            type_counts = lifecycle.get("final_type_counts") if isinstance(lifecycle.get("final_type_counts"), dict) else {}
-            false_positive_risk = _safe_int(type_counts.get("false_positive_risk_after_candidate"), 0) or 0
-            preventable = _safe_int(type_counts.get("preventable_bad_entry_candidate"), 0) or 0
-            refined_exit_finalized = _safe_int(type_counts.get("refined_exit_finalized"), 0) or 0
-            late_soft_stop_zone = _safe_int(type_counts.get("late_detected_soft_stop_zone"), 0) or 0
+            pending_records = (
+                _safe_int(lifecycle.get("post_sell_pending_records"), 0) or 0
+            )
+            joined_records = (
+                _safe_int(lifecycle.get("post_sell_joined_records"), 0) or 0
+            )
+            type_counts = (
+                lifecycle.get("final_type_counts")
+                if isinstance(lifecycle.get("final_type_counts"), dict)
+                else {}
+            )
+            false_positive_risk = (
+                _safe_int(type_counts.get("false_positive_risk_after_candidate"), 0)
+                or 0
+            )
+            preventable = (
+                _safe_int(type_counts.get("preventable_bad_entry_candidate"), 0) or 0
+            )
+            refined_exit_finalized = (
+                _safe_int(type_counts.get("refined_exit_finalized"), 0) or 0
+            )
+            late_soft_stop_zone = (
+                _safe_int(type_counts.get("late_detected_soft_stop_zone"), 0) or 0
+            )
             if pending_records > 0 or joined_records <= 0:
                 return (
                     "hold_sample",
@@ -8025,7 +10456,11 @@ def _calibration_state_for_family(
                     "freeze",
                     "post-sell MISSED_UPSIDE 후보가 있어 bad-entry live 확대 대신 false-positive risk를 먼저 calibration한다.",
                 )
-            if preventable <= 0 and refined_exit_finalized <= 0 and late_soft_stop_zone > 0:
+            if (
+                preventable <= 0
+                and refined_exit_finalized <= 0
+                and late_soft_stop_zone > 0
+            ):
                 return (
                     "hold",
                     "후보가 soft-stop zone에서 late-detected되어 조기 진입 차단 근거가 아니라 lifecycle attribution 표본으로 유지한다.",
@@ -8041,7 +10476,9 @@ def _calibration_state_for_family(
                 "postclose lifecycle attribution 또는 rolling aggregate가 통과한 refined canary를 한 단계 적용",
             )
     if output_family == "scale_in_price_guard":
-        family_sample = family.get("sample") if isinstance(family.get("sample"), dict) else {}
+        family_sample = (
+            family.get("sample") if isinstance(family.get("sample"), dict) else {}
+        )
         resolved_executed = max(
             _safe_int(family_sample.get("resolved_executed"), 0) or 0,
             _safe_int(source_metrics.get("compact_scale_in_executed"), 0) or 0,
@@ -8052,17 +10489,30 @@ def _calibration_state_for_family(
                 "물타기/불타기 resolved/executed cohort가 없어 가격·수량 guard 값은 유지하고 다음 장후 재산정",
             )
         if sample_count < sample_floor or not ready:
-            return ("hold_sample", f"scale-in sample floor 미달({sample_count}/{sample_floor}); 수량/가격 가드 유지")
+            return (
+                "hold_sample",
+                f"scale-in sample floor 미달({sample_count}/{sample_floor}); 수량/가격 가드 유지",
+            )
         return (
             "hold",
             "scale_in_price_guard는 별도 승인 전 report-only calibration으로만 산출하며 live apply는 금지한다.",
         )
     if output_family == "position_sizing_dynamic_formula":
         sample = family.get("sample") if isinstance(family.get("sample"), dict) else {}
-        blockers = sample.get("source_quality_blockers") if isinstance(sample.get("source_quality_blockers"), list) else []
-        candidate_grid = family.get("candidate_grid") if isinstance(family.get("candidate_grid"), list) else []
+        blockers = (
+            sample.get("source_quality_blockers")
+            if isinstance(sample.get("source_quality_blockers"), list)
+            else []
+        )
+        candidate_grid = (
+            family.get("candidate_grid")
+            if isinstance(family.get("candidate_grid"), list)
+            else []
+        )
         candidate_count = len(candidate_grid)
-        blocked_candidates = sum(1 for c in candidate_grid if c.get("source_quality_blocked"))
+        blocked_candidates = sum(
+            1 for c in candidate_grid if c.get("source_quality_blocked")
+        )
         if sample_count < sample_floor:
             return (
                 "hold_sample",
@@ -8071,7 +10521,8 @@ def _calibration_state_for_family(
         if blockers:
             return (
                 "hold_sample",
-                "position_sizing_dynamic_formula 입력 coverage 미충족: " + ",".join(str(item) for item in blockers[:8]),
+                "position_sizing_dynamic_formula 입력 coverage 미충족: "
+                + ",".join(str(item) for item in blockers[:8]),
             )
         if candidate_count == 0:
             return (
@@ -8095,55 +10546,97 @@ def _calibration_state_for_family(
                 f"post-sell/holding-exit soft-stop source sample floor 미달({source_count}/{sample_floor}); 단일 사례로 live enable 금지",
             )
     if sample_count < sample_floor or not ready:
-        return ("hold_sample", f"sample floor 미달({sample_count}/{sample_floor}); 값 유지 후 다음 장후 재산정")
+        return (
+            "hold_sample",
+            f"sample floor 미달({sample_count}/{sample_floor}); 값 유지 후 다음 장후 재산정",
+        )
 
     current = family.get("current") if isinstance(family.get("current"), dict) else {}
-    recommended = family.get("recommended") if isinstance(family.get("recommended"), dict) else {}
-    if "enabled" in current and "enabled" in recommended and bool(current.get("enabled")) != bool(
-        recommended.get("enabled")
+    recommended = (
+        family.get("recommended") if isinstance(family.get("recommended"), dict) else {}
+    )
+    if (
+        "enabled" in current
+        and "enabled" in recommended
+        and bool(current.get("enabled")) != bool(recommended.get("enabled"))
     ):
-        return ("adjust_up", "bounded live candidate: disabled -> enabled 전환은 다음 장전 단일 적용 후보")
+        return (
+            "adjust_up",
+            "bounded live candidate: disabled -> enabled 전환은 다음 장전 단일 적용 후보",
+        )
     primary_key = str(metadata.get("primary_key") or "")
     current_value = current.get(primary_key)
     recommended_value = recommended.get(primary_key)
     if isinstance(current_value, bool) or isinstance(recommended_value, bool):
         if bool(recommended_value) != bool(current_value):
-            return ("adjust_up", "bounded live candidate: disabled -> enabled 전환은 다음 장전 단일 적용 후보")
+            return (
+                "adjust_up",
+                "bounded live candidate: disabled -> enabled 전환은 다음 장전 단일 적용 후보",
+            )
     current_num = _safe_float(current_value, None)
     recommended_num = _safe_float(recommended_value, None)
     if current_num is None or recommended_num is None:
         return ("hold", "추천값과 현행값을 수치 방향으로 비교할 수 없어 값 유지")
     if recommended_num > current_num:
-        return ("adjust_up", "목표 미달 시 rollback이 아니라 max_step_per_day 안에서 상향 calibration")
+        return (
+            "adjust_up",
+            "목표 미달 시 rollback이 아니라 max_step_per_day 안에서 상향 calibration",
+        )
     if recommended_num < current_num:
-        return ("adjust_down", "목표 미달 시 rollback이 아니라 max_step_per_day 안에서 하향 calibration")
+        return (
+            "adjust_down",
+            "목표 미달 시 rollback이 아니라 max_step_per_day 안에서 하향 calibration",
+        )
     return ("hold", "현행값과 추천값이 같아 다음 장전 값 유지")
 
 
-def _build_calibration_candidates(families: list[dict], report_source_context: dict | None = None) -> list[dict]:
+def _build_calibration_candidates(
+    families: list[dict], report_source_context: dict | None = None
+) -> list[dict]:
     family_by_name = {str(family.get("family") or ""): family for family in families}
     candidates: list[dict] = []
     for output_family, metadata in sorted(
-        CALIBRATION_FAMILY_METADATA.items(), key=lambda item: int(item[1].get("priority") or 999)
+        CALIBRATION_FAMILY_METADATA.items(),
+        key=lambda item: int(item[1].get("priority") or 999),
     ):
         source_family = str(metadata.get("source_family") or output_family)
         family = family_by_name.get(source_family)
         if not family:
             continue
-        current = family.get("current") if isinstance(family.get("current"), dict) else {}
-        recommended = family.get("recommended") if isinstance(family.get("recommended"), dict) else {}
+        current = (
+            family.get("current") if isinstance(family.get("current"), dict) else {}
+        )
+        recommended = (
+            family.get("recommended")
+            if isinstance(family.get("recommended"), dict)
+            else {}
+        )
         if output_family == "dynamic_entry_price_resolver":
             recommended = dict(current)
-        source_metrics = dict(_source_metrics_for_family(output_family, report_source_context))
+        source_metrics = dict(
+            _source_metrics_for_family(output_family, report_source_context)
+        )
         if output_family == "lifecycle_decision_matrix_runtime":
-            family_sample = family.get("sample") if isinstance(family.get("sample"), dict) else {}
-            family_recommended = family.get("recommended") if isinstance(family.get("recommended"), dict) else {}
+            family_sample = (
+                family.get("sample") if isinstance(family.get("sample"), dict) else {}
+            )
+            family_recommended = (
+                family.get("recommended")
+                if isinstance(family.get("recommended"), dict)
+                else {}
+            )
             source_metrics.update(
                 {
                     "total_rows": _safe_int(family_sample.get("total_rows"), 0) or 0,
                     "joined_rows": _safe_int(family_sample.get("joined_rows"), 0) or 0,
-                    "policy_pass_count": _safe_int(family_sample.get("policy_pass_count"), 0) or 0,
-                    "promote_ready_count": _safe_int(family_sample.get("promote_ready_count"), 0) or 0,
+                    "policy_pass_count": _safe_int(
+                        family_sample.get("policy_pass_count"), 0
+                    )
+                    or 0,
+                    "promote_ready_count": _safe_int(
+                        family_sample.get("promote_ready_count"), 0
+                    )
+                    or 0,
                     "entry_bucket_actionable_count": _safe_int(
                         family_sample.get("entry_bucket_actionable_count"), 0
                     )
@@ -8157,33 +10650,75 @@ def _build_calibration_candidates(families: list[dict], report_source_context: d
                     )
                     or 0,
                     "entry_bucket_runtime_approval_candidates": (
-                        family_recommended.get("entry_bucket_runtime_approval_candidates")
-                        if isinstance(family_recommended.get("entry_bucket_runtime_approval_candidates"), list)
+                        family_recommended.get(
+                            "entry_bucket_runtime_approval_candidates"
+                        )
+                        if isinstance(
+                            family_recommended.get(
+                                "entry_bucket_runtime_approval_candidates"
+                            ),
+                            list,
+                        )
                         else []
                     ),
                     "entry_bucket_code_improvement_workorders": (
-                        family_recommended.get("entry_bucket_code_improvement_workorders")
-                        if isinstance(family_recommended.get("entry_bucket_code_improvement_workorders"), list)
+                        family_recommended.get(
+                            "entry_bucket_code_improvement_workorders"
+                        )
+                        if isinstance(
+                            family_recommended.get(
+                                "entry_bucket_code_improvement_workorders"
+                            ),
+                            list,
+                        )
                         else []
                     ),
                     "scale_in_bucket_runtime_approval_candidates": (
-                        family_recommended.get("scale_in_bucket_runtime_approval_candidates")
-                        if isinstance(family_recommended.get("scale_in_bucket_runtime_approval_candidates"), list)
+                        family_recommended.get(
+                            "scale_in_bucket_runtime_approval_candidates"
+                        )
+                        if isinstance(
+                            family_recommended.get(
+                                "scale_in_bucket_runtime_approval_candidates"
+                            ),
+                            list,
+                        )
                         else []
                     ),
                     "scale_in_bucket_code_improvement_workorders": (
-                        family_recommended.get("scale_in_bucket_code_improvement_workorders")
-                        if isinstance(family_recommended.get("scale_in_bucket_code_improvement_workorders"), list)
+                        family_recommended.get(
+                            "scale_in_bucket_code_improvement_workorders"
+                        )
+                        if isinstance(
+                            family_recommended.get(
+                                "scale_in_bucket_code_improvement_workorders"
+                            ),
+                            list,
+                        )
                         else []
                     ),
                     "overnight_bucket_runtime_approval_candidates": (
-                        family_recommended.get("overnight_bucket_runtime_approval_candidates")
-                        if isinstance(family_recommended.get("overnight_bucket_runtime_approval_candidates"), list)
+                        family_recommended.get(
+                            "overnight_bucket_runtime_approval_candidates"
+                        )
+                        if isinstance(
+                            family_recommended.get(
+                                "overnight_bucket_runtime_approval_candidates"
+                            ),
+                            list,
+                        )
                         else []
                     ),
                     "overnight_bucket_code_improvement_workorders": (
-                        family_recommended.get("overnight_bucket_code_improvement_workorders")
-                        if isinstance(family_recommended.get("overnight_bucket_code_improvement_workorders"), list)
+                        family_recommended.get(
+                            "overnight_bucket_code_improvement_workorders"
+                        )
+                        if isinstance(
+                            family_recommended.get(
+                                "overnight_bucket_code_improvement_workorders"
+                            ),
+                            list,
+                        )
                         else []
                     ),
                     "fixed_threshold_roles": {
@@ -8195,32 +10730,42 @@ def _build_calibration_candidates(families: list[dict], report_source_context: d
                 }
             )
         if output_family == "bad_entry_refined_canary":
-            family_sample = family.get("sample") if isinstance(family.get("sample"), dict) else {}
+            family_sample = (
+                family.get("sample") if isinstance(family.get("sample"), dict) else {}
+            )
             lifecycle_attribution = family_sample.get("lifecycle_attribution")
-            if isinstance(lifecycle_attribution, dict) and lifecycle_attribution.get("candidate_records"):
+            if isinstance(lifecycle_attribution, dict) and lifecycle_attribution.get(
+                "candidate_records"
+            ):
                 source_metrics["lifecycle_attribution"] = lifecycle_attribution
-                source_metrics["post_sell_joined_candidate_records"] = _safe_int(
-                    lifecycle_attribution.get("post_sell_joined_records"), 0
-                ) or 0
-                source_metrics["post_sell_pending_candidate_records"] = _safe_int(
-                    lifecycle_attribution.get("post_sell_pending_records"), 0
-                ) or 0
+                source_metrics["post_sell_joined_candidate_records"] = (
+                    _safe_int(lifecycle_attribution.get("post_sell_joined_records"), 0)
+                    or 0
+                )
+                source_metrics["post_sell_pending_candidate_records"] = (
+                    _safe_int(lifecycle_attribution.get("post_sell_pending_records"), 0)
+                    or 0
+                )
                 type_counts = (
                     lifecycle_attribution.get("final_type_counts")
                     if isinstance(lifecycle_attribution.get("final_type_counts"), dict)
                     else {}
                 )
-                source_metrics["preventable_bad_entry_candidate_records"] = _safe_int(
-                    type_counts.get("preventable_bad_entry_candidate"), 0
-                ) or 0
-                source_metrics["false_positive_risk_after_candidate_records"] = _safe_int(
-                    type_counts.get("false_positive_risk_after_candidate"), 0
-                ) or 0
-                source_metrics["late_detected_soft_stop_zone_records"] = _safe_int(
-                    type_counts.get("late_detected_soft_stop_zone"), 0
-                ) or 0
+                source_metrics["preventable_bad_entry_candidate_records"] = (
+                    _safe_int(type_counts.get("preventable_bad_entry_candidate"), 0)
+                    or 0
+                )
+                source_metrics["false_positive_risk_after_candidate_records"] = (
+                    _safe_int(type_counts.get("false_positive_risk_after_candidate"), 0)
+                    or 0
+                )
+                source_metrics["late_detected_soft_stop_zone_records"] = (
+                    _safe_int(type_counts.get("late_detected_soft_stop_zone"), 0) or 0
+                )
         if output_family == "entry_split_order_plan":
-            family_sample = family.get("sample") if isinstance(family.get("sample"), dict) else {}
+            family_sample = (
+                family.get("sample") if isinstance(family.get("sample"), dict) else {}
+            )
             source_metrics = {
                 **source_metrics,
                 "report_loaded": bool(family_sample.get("report_loaded")),
@@ -8379,7 +10924,9 @@ def _build_calibration_candidates(families: list[dict], report_source_context: d
             output_family, source_metrics
         )
         if output_family == "dynamic_entry_price_resolver":
-            family_sample = family.get("sample") if isinstance(family.get("sample"), dict) else {}
+            family_sample = (
+                family.get("sample") if isinstance(family.get("sample"), dict) else {}
+            )
             source_sample_count = max(
                 source_sample_count,
                 _safe_int(family_sample.get("real_candidate_observations"), 0) or 0,
@@ -8403,7 +10950,9 @@ def _build_calibration_candidates(families: list[dict], report_source_context: d
         elif output_family == "scale_in_split_order_plan":
             sample_count = source_sample_count
         elif output_family == "position_sizing_dynamic_formula":
-            family_sample = family.get("sample") if isinstance(family.get("sample"), dict) else {}
+            family_sample = (
+                family.get("sample") if isinstance(family.get("sample"), dict) else {}
+            )
             sample_count = _safe_int(family_sample.get("real_completed_valid"), 0) or 0
         else:
             sample_count = max(_family_sample_count(family), source_sample_count)
@@ -8414,7 +10963,9 @@ def _build_calibration_candidates(families: list[dict], report_source_context: d
             score_max = _safe_int(current.get("max_score"), 74) or 74
             source_metrics.setdefault("effective_score_min", score_min)
             source_metrics.setdefault("effective_score_max", score_max)
-            source_metrics.setdefault("effective_score_range", f"{score_min}-{score_max}")
+            source_metrics.setdefault(
+                "effective_score_range", f"{score_min}-{score_max}"
+            )
             source_metrics.setdefault(
                 "family_id_compat_note",
                 "score65_74_recovery_probe id is retained for artifact compatibility",
@@ -8434,8 +10985,12 @@ def _build_calibration_candidates(families: list[dict], report_source_context: d
                 recommended["enabled"] = True
                 source_metrics["entry_unlock_probe_ready"] = True
         if output_family == "dynamic_entry_price_resolver":
-            family_sample = family.get("sample") if isinstance(family.get("sample"), dict) else {}
-            candidate_metrics = _merged_entry_price_candidate_metrics(family_sample, source_metrics)
+            family_sample = (
+                family.get("sample") if isinstance(family.get("sample"), dict) else {}
+            )
+            candidate_metrics = _merged_entry_price_candidate_metrics(
+                family_sample, source_metrics
+            )
             primary_metrics = {
                 **family_sample,
                 **source_metrics,
@@ -8464,7 +11019,9 @@ def _build_calibration_candidates(families: list[dict], report_source_context: d
                     },
                 )
                 sample_count = source_sample_count
-            required_books = (primary_book,) if primary_book in {"real", "sim"} else ("sim",)
+            required_books = (
+                (primary_book,) if primary_book in {"real", "sim"} else ("sim",)
+            )
             source_ready = source_ready and _entry_price_candidate_metrics_ready(
                 candidate_metrics,
                 required_books=required_books,
@@ -8478,26 +11035,32 @@ def _build_calibration_candidates(families: list[dict], report_source_context: d
                     "real_source_quality_adjusted_ev_pct",
                     "real_execution_quality_ready",
                     "primary_sample_book",
-                        "decision_authority",
+                    "decision_authority",
                 ):
                     if key in family_sample and key not in source_metrics:
                         source_metrics[key] = family_sample.get(key)
                 source_metrics["primary_sample_book"] = primary_book
                 source_metrics["decision_authority"] = decision_authority
-                source_metrics["candidate_metrics_ready"] = _entry_price_candidate_metrics_ready(
-                    candidate_metrics,
-                    required_books=required_books,
+                source_metrics["candidate_metrics_ready"] = (
+                    _entry_price_candidate_metrics_ready(
+                        candidate_metrics,
+                        required_books=required_books,
+                    )
                 )
-                source_metrics["candidate_metrics_missing"] = _entry_price_missing_metrics(
-                    candidate_metrics,
-                    required_books=required_books,
+                source_metrics["candidate_metrics_missing"] = (
+                    _entry_price_missing_metrics(
+                        candidate_metrics,
+                        required_books=required_books,
+                    )
                 )
                 diagnostic_missing = _entry_price_missing_metrics(
                     candidate_metrics,
                     required_books=("real",),
                 )
                 if diagnostic_missing:
-                    source_metrics["candidate_metrics_diagnostic_missing"] = diagnostic_missing
+                    source_metrics["candidate_metrics_diagnostic_missing"] = (
+                        diagnostic_missing
+                    )
             for key in (
                 "candidate_quality",
                 "sim_submit_path_quality",
@@ -8511,7 +11074,9 @@ def _build_calibration_candidates(families: list[dict], report_source_context: d
                     source_metrics[key] = family_sample.get(key)
             diagnostics = (
                 source_metrics.get("counterfactual_join_diagnostics")
-                if isinstance(source_metrics.get("counterfactual_join_diagnostics"), dict)
+                if isinstance(
+                    source_metrics.get("counterfactual_join_diagnostics"), dict
+                )
                 else {}
             )
             if diagnostics:
@@ -8548,19 +11113,29 @@ def _build_calibration_candidates(families: list[dict], report_source_context: d
                     _safe_int(diagnostics.get("events_without_counterfactual"), 0) or 0
                 )
                 source_metrics["events_without_counterfactual_event_count"] = (
-                    _safe_int(diagnostics.get("events_without_counterfactual_event_count"), 0) or 0
+                    _safe_int(
+                        diagnostics.get("events_without_counterfactual_event_count"), 0
+                    )
+                    or 0
                 )
                 source_metrics["counterfactual_unmatched_row_count"] = (
-                    _safe_int(diagnostics.get("counterfactual_unmatched_row_count"), 0) or 0
+                    _safe_int(diagnostics.get("counterfactual_unmatched_row_count"), 0)
+                    or 0
                 )
-            source_recommended, source_recommended_audit = _entry_price_source_recommended_values(
-                source_metrics,
-                current,
-                metadata,
+            source_recommended, source_recommended_audit = (
+                _entry_price_source_recommended_values(
+                    source_metrics,
+                    current,
+                    metadata,
+                )
             )
-            runtime_change_ready = _entry_price_recommendation_has_runtime_change(source_recommended, current, metadata)
+            runtime_change_ready = _entry_price_recommendation_has_runtime_change(
+                source_recommended, current, metadata
+            )
             source_metrics = dict(source_metrics)
-            source_metrics["recommended_values_runtime_change_ready"] = runtime_change_ready
+            source_metrics["recommended_values_runtime_change_ready"] = (
+                runtime_change_ready
+            )
             source_metrics["recommended_values_valid"] = bool(source_recommended)
             if _entry_price_recommendation_has_audit_entries(source_recommended_audit):
                 source_metrics = dict(source_metrics)
@@ -8577,7 +11152,9 @@ def _build_calibration_candidates(families: list[dict], report_source_context: d
             sample_count=sample_count,
             sample_ready=sample_ready,
         )
-        sample_floor_status = "ready" if sample_count >= sample_floor and sample_ready else "hold_sample"
+        sample_floor_status = (
+            "ready" if sample_count >= sample_floor and sample_ready else "hold_sample"
+        )
         if calibration_state == "freeze":
             sample_floor_status = "direction_conflict_or_live_risk"
         if calibration_state == "hold_no_edge":
@@ -8588,12 +11165,21 @@ def _build_calibration_candidates(families: list[dict], report_source_context: d
             sample_floor_status = "hold_sample"
         if calibration_state == "hold_real_outcome_pending":
             sample_floor_status = "hold_real_outcome_pending"
-        confidence = round(min(1.0, sample_count / sample_floor), 4) if sample_floor > 0 else 0.0
+        confidence = (
+            round(min(1.0, sample_count / sample_floor), 4) if sample_floor > 0 else 0.0
+        )
         primary_key = str(metadata.get("primary_key") or "")
         runtime_apply_candidate = (
             sample_ready
             and bool(metadata.get("allowed_runtime_apply"))
-            and calibration_state not in {"freeze", "hold_sample", "hold_no_edge", "hold_real_outcome_pending", "source_quality_blocked"}
+            and calibration_state
+            not in {
+                "freeze",
+                "hold_sample",
+                "hold_no_edge",
+                "hold_real_outcome_pending",
+                "source_quality_blocked",
+            }
         )
         candidate = {
             "family": output_family,
@@ -8611,7 +11197,9 @@ def _build_calibration_candidates(families: list[dict], report_source_context: d
             "applied_values": current,
             "min_value": (metadata.get("bounds") or {}).get(primary_key, {}).get("min"),
             "max_value": (metadata.get("bounds") or {}).get(primary_key, {}).get("max"),
-            "max_step_per_day": (metadata.get("bounds") or {}).get(primary_key, {}).get("max_step_per_day"),
+            "max_step_per_day": (metadata.get("bounds") or {})
+            .get(primary_key, {})
+            .get("max_step_per_day"),
             "bounds": metadata.get("bounds") or {},
             "sample_window": metadata.get("sample_window", "daily"),
             "window_policy": dict(metadata.get("window_policy") or {}),
@@ -8623,28 +11211,34 @@ def _build_calibration_candidates(families: list[dict], report_source_context: d
             "source_metrics": source_metrics,
             "source_reports": {
                 name: source.get("path")
-                for name, source in ((report_source_context or {}).get("sources") or {}).items()
+                for name, source in (
+                    (report_source_context or {}).get("sources") or {}
+                ).items()
                 if isinstance(source, dict) and source.get("exists")
             },
             "calibration_state": calibration_state,
             "calibration_reason": calibration_reason,
             "safety_revert_required": False,
             "safety_guard": list(CALIBRATION_SAFETY_GUARDS),
-            "apply_mode": "efficient_tradeoff_canary_candidate"
-            if runtime_apply_candidate
-            and (
-                family.get("apply_mode") == "efficient_tradeoff_canary_candidate"
-                or output_family
-                in {
-                    "score65_74_recovery_probe",
-                    "bad_entry_refined_canary",
-                    "holding_exit_decision_matrix_advisory",
-                    "lifecycle_decision_matrix_runtime",
-                }
-            )
-            else "calibrated_apply_candidate"
-            if runtime_apply_candidate
-            else "report_only_calibration",
+            "apply_mode": (
+                "efficient_tradeoff_canary_candidate"
+                if runtime_apply_candidate
+                and (
+                    family.get("apply_mode") == "efficient_tradeoff_canary_candidate"
+                    or output_family
+                    in {
+                        "score65_74_recovery_probe",
+                        "bad_entry_refined_canary",
+                        "holding_exit_decision_matrix_advisory",
+                        "lifecycle_decision_matrix_runtime",
+                    }
+                )
+                else (
+                    "calibrated_apply_candidate"
+                    if runtime_apply_candidate
+                    else "report_only_calibration"
+                )
+            ),
             "allowed_runtime_apply": bool(metadata.get("allowed_runtime_apply")),
             "human_approval_required": bool(metadata.get("human_approval_required"))
             or calibration_state == "approval_required",
@@ -8688,12 +11282,22 @@ def _build_calibration_trigger_pack(calibration_candidates: list[dict]) -> list[
 
 def _build_post_apply_attribution(calibration_candidates: list[dict]) -> dict:
     return {
-        "status": "pending_applied_cohort" if calibration_candidates else "no_calibration_candidate",
+        "status": (
+            "pending_applied_cohort"
+            if calibration_candidates
+            else "no_calibration_candidate"
+        ),
         "runtime_change": False,
         "cohort_key": "threshold_family|threshold_version|calibration_state",
         "baseline_cohort": "current_values",
         "applied_cohort": "next_preopen_approved_values",
-        "metrics": ["GOOD_EXIT", "MISSED_UPSIDE", "soft_stop_tail", "defer_cost", "safety_breach"],
+        "metrics": [
+            "GOOD_EXIT",
+            "MISSED_UPSIDE",
+            "soft_stop_tail",
+            "defer_cost",
+            "safety_breach",
+        ],
         "soft_stop_balanced_policy": {
             "good_exit_regression_tolerance_pp": 10,
             "keep_condition": "soft-stop 손실 tail 감소 또는 MISSED_UPSIDE 감소가 있으면 유지/완만 조정",
@@ -8735,8 +11339,14 @@ def _normalize_ai_sample_window(value: Any) -> str | None:
 
 
 def _allowed_sample_windows_for_candidate(candidate: dict) -> set[str]:
-    policy = candidate.get("window_policy") if isinstance(candidate.get("window_policy"), dict) else {}
-    primary = _normalize_ai_sample_window(policy.get("primary") or candidate.get("sample_window"))
+    policy = (
+        candidate.get("window_policy")
+        if isinstance(candidate.get("window_policy"), dict)
+        else {}
+    )
+    primary = _normalize_ai_sample_window(
+        policy.get("primary") or candidate.get("sample_window")
+    )
     allowed: set[str] = set()
     if primary in AI_CORRECTION_ALLOWED_SAMPLE_WINDOWS:
         allowed.add(primary)
@@ -8750,14 +11360,26 @@ def _allowed_sample_windows_for_candidate(candidate: dict) -> set[str]:
 
 
 def _candidate_primary_window(candidate: dict) -> str | None:
-    policy = candidate.get("window_policy") if isinstance(candidate.get("window_policy"), dict) else {}
-    return _normalize_ai_sample_window(policy.get("primary") or candidate.get("sample_window"))
+    policy = (
+        candidate.get("window_policy")
+        if isinstance(candidate.get("window_policy"), dict)
+        else {}
+    )
+    return _normalize_ai_sample_window(
+        policy.get("primary") or candidate.get("sample_window")
+    )
 
 
 def _sample_denominator_keys_for_family(family: str) -> list[str]:
     metadata = CALIBRATION_FAMILY_METADATA.get(str(family) or "")
-    if isinstance(metadata, dict) and isinstance(metadata.get("sample_denominator_keys"), list):
-        return [str(value) for value in metadata.get("sample_denominator_keys") or [] if str(value or "").strip()]
+    if isinstance(metadata, dict) and isinstance(
+        metadata.get("sample_denominator_keys"), list
+    ):
+        return [
+            str(value)
+            for value in metadata.get("sample_denominator_keys") or []
+            if str(value or "").strip()
+        ]
     return []
 
 
@@ -8794,12 +11416,18 @@ def _snapshot_relevant_sample_count(family: str, snapshot: dict | None) -> int |
         value = _safe_int(sample.get(key), None)
         if value is not None:
             return int(value)
-    numeric_values = [_safe_int(value, None) for value in sample.values() if not isinstance(value, (dict, list))]
+    numeric_values = [
+        _safe_int(value, None)
+        for value in sample.values()
+        if not isinstance(value, (dict, list))
+    ]
     numeric_values = [int(value) for value in numeric_values if value is not None]
     return max(numeric_values) if numeric_values else None
 
 
-def _window_snapshot(cumulative_report: dict | None, family: str, window: str | None) -> dict | None:
+def _window_snapshot(
+    cumulative_report: dict | None, family: str, window: str | None
+) -> dict | None:
     if not isinstance(cumulative_report, dict) or not window:
         return None
     snapshots = cumulative_report.get("threshold_snapshot_by_window")
@@ -8825,7 +11453,9 @@ def _window_source_context(cumulative_report: dict | None, window: str | None) -
     return context if isinstance(context, dict) else {}
 
 
-def _sample_floor_status_for_candidate_state(state: str, sample_count: int, sample_floor: int, sample_ready: bool) -> str:
+def _sample_floor_status_for_candidate_state(
+    state: str, sample_count: int, sample_floor: int, sample_ready: bool
+) -> str:
     if state == "freeze":
         return "direction_conflict_or_live_risk"
     if state == "hold_no_edge":
@@ -8837,7 +11467,9 @@ def _sample_floor_status_for_candidate_state(state: str, sample_count: int, samp
     return "ready" if sample_count >= sample_floor and sample_ready else "hold_sample"
 
 
-def _runtime_apply_candidate_for_state(candidate: dict, state: str, sample_ready: bool) -> bool:
+def _runtime_apply_candidate_for_state(
+    candidate: dict, state: str, sample_ready: bool
+) -> bool:
     return (
         bool(sample_ready)
         and bool(candidate.get("allowed_runtime_apply"))
@@ -8845,7 +11477,9 @@ def _runtime_apply_candidate_for_state(candidate: dict, state: str, sample_ready
     )
 
 
-def _apply_mode_for_candidate_state(candidate: dict, state: str, sample_ready: bool) -> str:
+def _apply_mode_for_candidate_state(
+    candidate: dict, state: str, sample_ready: bool
+) -> str:
     if not _runtime_apply_candidate_for_state(candidate, state, sample_ready):
         return "report_only_calibration"
     if str(candidate.get("family") or "") in {
@@ -8872,7 +11506,11 @@ def _refresh_candidate_from_primary_window(
     if not isinstance(metadata, dict):
         return
     family_like = primary_snapshot if isinstance(primary_snapshot, dict) else {}
-    source_metrics = primary_source_metrics if primary_source_metrics else candidate.get("source_metrics")
+    source_metrics = (
+        primary_source_metrics
+        if primary_source_metrics
+        else candidate.get("source_metrics")
+    )
     source_metrics = source_metrics if isinstance(source_metrics, dict) else {}
     state, reason = _calibration_state_for_family(
         family,
@@ -8890,7 +11528,11 @@ def _refresh_candidate_from_primary_window(
         primary_ready,
     )
     primary_key = str(metadata.get("primary_key") or "")
-    current = family_like.get("current") if isinstance(family_like.get("current"), dict) else candidate.get("current_values")
+    current = (
+        family_like.get("current")
+        if isinstance(family_like.get("current"), dict)
+        else candidate.get("current_values")
+    )
     recommended = (
         family_like.get("recommended")
         if isinstance(family_like.get("recommended"), dict)
@@ -8910,7 +11552,11 @@ def _refresh_candidate_from_primary_window(
     candidate.update(
         {
             "sample_count": primary_sample_count,
-            "confidence": round(min(1.0, primary_sample_count / sample_floor), 4) if sample_floor > 0 else 0.0,
+            "confidence": (
+                round(min(1.0, primary_sample_count / sample_floor), 4)
+                if sample_floor > 0
+                else 0.0
+            ),
             "current_value": current.get(primary_key),
             "current_values": current,
             "recommended_value": recommended.get(primary_key),
@@ -8928,31 +11574,62 @@ def _refresh_candidate_from_primary_window(
         candidate["source_metrics"] = primary_source_metrics
 
 
-def _build_window_policy_resolution(candidate: dict, cumulative_report: dict | None) -> dict:
-    policy = candidate.get("window_policy") if isinstance(candidate.get("window_policy"), dict) else {}
+def _build_window_policy_resolution(
+    candidate: dict, cumulative_report: dict | None
+) -> dict:
+    policy = (
+        candidate.get("window_policy")
+        if isinstance(candidate.get("window_policy"), dict)
+        else {}
+    )
     primary = _candidate_primary_window(candidate)
     sample_floor = _safe_int(candidate.get("sample_floor"), 0) or 0
     daily_sample = _safe_int(candidate.get("source_sample_count"), None)
     if daily_sample is None:
         daily_sample = _safe_int(candidate.get("sample_count"), 0) or 0
-    primary_snapshot = _window_snapshot(cumulative_report, str(candidate.get("family") or ""), primary)
-    primary_sample = _snapshot_relevant_sample_count(str(candidate.get("family") or ""), primary_snapshot)
+    primary_snapshot = _window_snapshot(
+        cumulative_report, str(candidate.get("family") or ""), primary
+    )
+    primary_sample = _snapshot_relevant_sample_count(
+        str(candidate.get("family") or ""), primary_snapshot
+    )
     primary_source_context = _window_source_context(cumulative_report, primary)
-    primary_source_metrics = _source_metrics_for_family(str(candidate.get("family") or ""), primary_source_context)
-    primary_source_sample = _source_sample_count_for_family(str(candidate.get("family") or ""), primary_source_metrics)
+    primary_source_metrics = _source_metrics_for_family(
+        str(candidate.get("family") or ""), primary_source_context
+    )
+    primary_source_sample = _source_sample_count_for_family(
+        str(candidate.get("family") or ""), primary_source_metrics
+    )
     effective_primary_sample = max(
-        [value for value in (primary_sample, primary_source_sample) if value is not None],
+        [
+            value
+            for value in (primary_sample, primary_source_sample)
+            if value is not None
+        ],
         default=None,
     )
     if primary == "daily_intraday":
-        effective_primary_sample = daily_sample if effective_primary_sample is None else effective_primary_sample
+        effective_primary_sample = (
+            daily_sample
+            if effective_primary_sample is None
+            else effective_primary_sample
+        )
     elif primary == "latest_report":
-        effective_primary_sample = daily_sample if effective_primary_sample is None else effective_primary_sample
+        effective_primary_sample = (
+            daily_sample
+            if effective_primary_sample is None
+            else effective_primary_sample
+        )
         if primary_source_sample is None:
             primary_source_sample = daily_sample
-    snapshot_ready = bool(primary_snapshot.get("sample_ready")) if isinstance(primary_snapshot, dict) else False
+    snapshot_ready = (
+        bool(primary_snapshot.get("sample_ready"))
+        if isinstance(primary_snapshot, dict)
+        else False
+    )
     sample_count_ready = (
-        effective_primary_sample is not None and effective_primary_sample >= sample_floor
+        effective_primary_sample is not None
+        and effective_primary_sample >= sample_floor
         if sample_floor > 0
         else bool(effective_primary_sample)
     )
@@ -8962,22 +11639,39 @@ def _build_window_policy_resolution(candidate: dict, cumulative_report: dict | N
         window = _normalize_ai_sample_window(raw_window)
         if not window:
             continue
-        snapshot = _window_snapshot(cumulative_report, str(candidate.get("family") or ""), window)
-        sample = _snapshot_relevant_sample_count(str(candidate.get("family") or ""), snapshot)
+        snapshot = _window_snapshot(
+            cumulative_report, str(candidate.get("family") or ""), window
+        )
+        sample = _snapshot_relevant_sample_count(
+            str(candidate.get("family") or ""), snapshot
+        )
         source_context = _window_source_context(cumulative_report, window)
-        source_metrics = _source_metrics_for_family(str(candidate.get("family") or ""), source_context)
-        source_sample = _source_sample_count_for_family(str(candidate.get("family") or ""), source_metrics)
-        effective_sample = max([value for value in (sample, source_sample) if value is not None], default=None)
+        source_metrics = _source_metrics_for_family(
+            str(candidate.get("family") or ""), source_context
+        )
+        source_sample = _source_sample_count_for_family(
+            str(candidate.get("family") or ""), source_metrics
+        )
+        effective_sample = max(
+            [value for value in (sample, source_sample) if value is not None],
+            default=None,
+        )
         secondary[window] = {
             "sample_count": effective_sample,
             "snapshot_sample_count": sample,
             "source_sample_count": source_sample,
-            "sample_ready": bool(snapshot.get("sample_ready")) if isinstance(snapshot, dict) else None,
+            "sample_ready": (
+                bool(snapshot.get("sample_ready"))
+                if isinstance(snapshot, dict)
+                else None
+            ),
             "available": isinstance(snapshot, dict),
         }
     return {
         "primary": primary,
-        "daily_only_allowed": bool(policy.get("daily_only_allowed")) if policy else True,
+        "daily_only_allowed": (
+            bool(policy.get("daily_only_allowed")) if policy else True
+        ),
         "primary_sample_count": effective_primary_sample,
         "primary_snapshot_sample_count": primary_sample,
         "primary_source_sample_count": primary_source_sample,
@@ -8990,7 +11684,9 @@ def _build_window_policy_resolution(candidate: dict, cumulative_report: dict | N
     }
 
 
-def apply_window_policy_registry_to_report(report: dict, cumulative_report: dict | None) -> dict:
+def apply_window_policy_registry_to_report(
+    report: dict, cumulative_report: dict | None
+) -> dict:
     candidates = report.get("calibration_candidates")
     if not isinstance(candidates, list):
         return report
@@ -9002,7 +11698,10 @@ def apply_window_policy_registry_to_report(report: dict, cumulative_report: dict
         primary = resolution.get("primary")
         daily_only_allowed = bool(resolution.get("daily_only_allowed"))
         primary_ready = bool(resolution.get("primary_sample_ready"))
-        changes_value_or_state = str(candidate.get("calibration_state") or "") in {"adjust_up", "adjust_down"}
+        changes_value_or_state = str(candidate.get("calibration_state") or "") in {
+            "adjust_up",
+            "adjust_down",
+        }
         if (
             primary
             and primary not in {"daily_intraday", "latest_report"}
@@ -9017,10 +11716,14 @@ def apply_window_policy_registry_to_report(report: dict, cumulative_report: dict
             candidate["sample_floor_status"] = "window_policy_hold_sample"
             candidate["apply_mode"] = "report_only_calibration"
             candidate["runtime_apply_blocker"] = "window_policy_primary_not_ready"
-            candidate["threshold_version"] = f"{candidate.get('family')}:{candidate.get('apply_mode', 'observe_only')}:window_policy_hold_sample"
+            candidate["threshold_version"] = (
+                f"{candidate.get('family')}:{candidate.get('apply_mode', 'observe_only')}:window_policy_hold_sample"
+            )
         elif primary and primary != "daily_intraday" and primary_ready:
             primary_sample = _safe_int(resolution.get("primary_sample_count"), None)
-            primary_snapshot = _window_snapshot(cumulative_report, str(candidate.get("family") or ""), str(primary))
+            primary_snapshot = _window_snapshot(
+                cumulative_report, str(candidate.get("family") or ""), str(primary)
+            )
             primary_source_metrics = (
                 resolution.get("primary_source_metrics")
                 if isinstance(resolution.get("primary_source_metrics"), dict)
@@ -9050,7 +11753,11 @@ def _build_window_policy_audit(candidates: list[dict]) -> dict:
         if not isinstance(candidate, dict):
             continue
         family = str(candidate.get("family") or "")
-        resolution = candidate.get("window_policy_resolution") if isinstance(candidate.get("window_policy_resolution"), dict) else {}
+        resolution = (
+            candidate.get("window_policy_resolution")
+            if isinstance(candidate.get("window_policy_resolution"), dict)
+            else {}
+        )
         primary = str(resolution.get("primary") or "")
         daily_only_allowed = bool(resolution.get("daily_only_allowed"))
         primary_ready = bool(resolution.get("primary_sample_ready"))
@@ -9068,8 +11775,12 @@ def _build_window_policy_audit(candidates: list[dict]) -> dict:
             and not primary_source_available
         ):
             issues.append("rolling_consumer_gap")
-        snapshot_sample = _safe_int(resolution.get("primary_snapshot_sample_count"), None)
-        source_window_sample = _safe_int(resolution.get("primary_source_sample_count"), None)
+        snapshot_sample = _safe_int(
+            resolution.get("primary_snapshot_sample_count"), None
+        )
+        source_window_sample = _safe_int(
+            resolution.get("primary_source_sample_count"), None
+        )
         snapshot_alignment_status = "aligned"
         snapshot_alignment_reason = "primary snapshot/source denominator aligned"
         if (
@@ -9100,10 +11811,16 @@ def _build_window_policy_audit(candidates: list[dict]) -> dict:
                 "daily reporting floor; keep as lineage evidence instead of a runtime apply issue"
             )
             lineage_warning_counts["rolling_ready_daily_source_split"] += 1
-        if str(candidate.get("runtime_apply_blocker") or "") == "window_policy_primary_not_ready":
+        if (
+            str(candidate.get("runtime_apply_blocker") or "")
+            == "window_policy_primary_not_ready"
+        ):
             issues.append("daily_only_leak_blocked")
         denominator_keys = _sample_denominator_keys_for_family(family)
-        if family in {"score65_74_recovery_probe", "position_sizing_dynamic_formula"} and not denominator_keys:
+        if (
+            family in {"score65_74_recovery_probe", "position_sizing_dynamic_formula"}
+            and not denominator_keys
+        ):
             issues.append("sample_denominator_missing")
         for issue in issues:
             issue_counts[issue] += 1
@@ -9116,8 +11833,12 @@ def _build_window_policy_audit(candidates: list[dict]) -> dict:
                 "source_sample_count": source_sample,
                 "sample_floor": sample_floor,
                 "primary_sample_count": resolution.get("primary_sample_count"),
-                "primary_snapshot_sample_count": resolution.get("primary_snapshot_sample_count"),
-                "primary_source_sample_count": resolution.get("primary_source_sample_count"),
+                "primary_snapshot_sample_count": resolution.get(
+                    "primary_snapshot_sample_count"
+                ),
+                "primary_source_sample_count": resolution.get(
+                    "primary_source_sample_count"
+                ),
                 "primary_sample_ready": primary_ready,
                 "primary_snapshot_available": primary_available,
                 "primary_source_available": primary_source_available,
@@ -9137,7 +11858,9 @@ def _build_window_policy_audit(candidates: list[dict]) -> dict:
     }
 
 
-def _parse_ai_correction_response(ai_raw_response: Any) -> tuple[str, list[dict], list[str]]:
+def _parse_ai_correction_response(
+    ai_raw_response: Any,
+) -> tuple[str, list[dict], list[str]]:
     if ai_raw_response in (None, "", b""):
         return ("unavailable", [], ["ai correction response not provided"])
     if isinstance(ai_raw_response, (str, bytes)):
@@ -9152,7 +11875,13 @@ def _parse_ai_correction_response(ai_raw_response: Any) -> tuple[str, list[dict]
     allowed_top_keys = {"schema_version", "corrections"}
     unknown_top_keys = set(payload) - allowed_top_keys
     if unknown_top_keys:
-        return ("parse_rejected", [], [f"AI response has unsupported top-level fields: {sorted(unknown_top_keys)}"])
+        return (
+            "parse_rejected",
+            [],
+            [
+                f"AI response has unsupported top-level fields: {sorted(unknown_top_keys)}"
+            ],
+        )
     corrections = payload.get("corrections")
     if not isinstance(corrections, list):
         return ("parse_rejected", [], ["AI response must contain corrections list"])
@@ -9167,58 +11896,118 @@ def _parse_ai_correction_response(ai_raw_response: Any) -> tuple[str, list[dict]
         "required_evidence",
         "risk_flags",
     }
-    allowed_proposal_keys = {"proposed_state", "proposed_value", "anomaly_route", "sample_window"}
+    allowed_proposal_keys = {
+        "proposed_state",
+        "proposed_value",
+        "anomaly_route",
+        "sample_window",
+    }
     for index, item in enumerate(corrections):
         if not isinstance(item, dict):
             return ("parse_rejected", [], [f"corrections[{index}] must be an object"])
         unknown_keys = set(item) - allowed_item_keys
         if unknown_keys:
-            return ("parse_rejected", [], [f"corrections[{index}] has unsupported fields: {sorted(unknown_keys)}"])
+            return (
+                "parse_rejected",
+                [],
+                [
+                    f"corrections[{index}] has unsupported fields: {sorted(unknown_keys)}"
+                ],
+            )
         family = str(item.get("family") or "").strip()
         if not family:
             return ("parse_rejected", [], [f"corrections[{index}].family is required"])
         review_state = str(item.get("ai_review_state") or "correction_proposed").strip()
         if review_state not in AI_CORRECTION_ALLOWED_REVIEW_STATES:
-            return ("parse_rejected", [], [f"corrections[{index}].ai_review_state is invalid: {review_state}"])
+            return (
+                "parse_rejected",
+                [],
+                [f"corrections[{index}].ai_review_state is invalid: {review_state}"],
+            )
         proposal = item.get("correction_proposal") or {}
         if not isinstance(proposal, dict):
-            return ("parse_rejected", [], [f"corrections[{index}].correction_proposal must be an object"])
+            return (
+                "parse_rejected",
+                [],
+                [f"corrections[{index}].correction_proposal must be an object"],
+            )
         unknown_proposal_keys = set(proposal) - allowed_proposal_keys
         forbidden_proposal_keys = set(proposal) & AI_CORRECTION_FORBIDDEN_FIELDS
         if unknown_proposal_keys:
             return (
                 "parse_rejected",
                 [],
-                [f"corrections[{index}].correction_proposal has unsupported fields: {sorted(unknown_proposal_keys)}"],
+                [
+                    f"corrections[{index}].correction_proposal has unsupported fields: {sorted(unknown_proposal_keys)}"
+                ],
             )
         if forbidden_proposal_keys:
             return (
                 "parse_rejected",
                 [],
-                [f"corrections[{index}].correction_proposal has forbidden fields: {sorted(forbidden_proposal_keys)}"],
+                [
+                    f"corrections[{index}].correction_proposal has forbidden fields: {sorted(forbidden_proposal_keys)}"
+                ],
             )
         proposed_state = proposal.get("proposed_state")
-        if proposed_state not in (None, "") and str(proposed_state) not in AI_CORRECTION_ALLOWED_STATES:
-            return ("parse_rejected", [], [f"corrections[{index}].proposed_state is invalid: {proposed_state}"])
+        if (
+            proposed_state not in (None, "")
+            and str(proposed_state) not in AI_CORRECTION_ALLOWED_STATES
+        ):
+            return (
+                "parse_rejected",
+                [],
+                [f"corrections[{index}].proposed_state is invalid: {proposed_state}"],
+            )
         anomaly_route = proposal.get("anomaly_route")
-        if anomaly_route not in (None, "") and str(anomaly_route) not in AI_CORRECTION_ALLOWED_ROUTES:
-            return ("parse_rejected", [], [f"corrections[{index}].anomaly_route is invalid: {anomaly_route}"])
+        if (
+            anomaly_route not in (None, "")
+            and str(anomaly_route) not in AI_CORRECTION_ALLOWED_ROUTES
+        ):
+            return (
+                "parse_rejected",
+                [],
+                [f"corrections[{index}].anomaly_route is invalid: {anomaly_route}"],
+            )
         sample_window = _normalize_ai_sample_window(proposal.get("sample_window"))
-        if sample_window not in (None, "") and sample_window not in AI_CORRECTION_ALLOWED_SAMPLE_WINDOWS:
-            return ("parse_rejected", [], [f"corrections[{index}].sample_window is invalid: {sample_window}"])
+        if (
+            sample_window not in (None, "")
+            and sample_window not in AI_CORRECTION_ALLOWED_SAMPLE_WINDOWS
+        ):
+            return (
+                "parse_rejected",
+                [],
+                [f"corrections[{index}].sample_window is invalid: {sample_window}"],
+            )
         required_evidence = item.get("required_evidence") or []
         risk_flags = item.get("risk_flags") or []
-        if not isinstance(required_evidence, list) or not all(isinstance(value, str) for value in required_evidence):
-            return ("parse_rejected", [], [f"corrections[{index}].required_evidence must be a string list"])
-        if not isinstance(risk_flags, list) or not all(isinstance(value, str) for value in risk_flags):
-            return ("parse_rejected", [], [f"corrections[{index}].risk_flags must be a string list"])
+        if not isinstance(required_evidence, list) or not all(
+            isinstance(value, str) for value in required_evidence
+        ):
+            return (
+                "parse_rejected",
+                [],
+                [f"corrections[{index}].required_evidence must be a string list"],
+            )
+        if not isinstance(risk_flags, list) or not all(
+            isinstance(value, str) for value in risk_flags
+        ):
+            return (
+                "parse_rejected",
+                [],
+                [f"corrections[{index}].risk_flags must be a string list"],
+            )
         parsed.append(
             {
                 "family": family,
                 "anomaly_type": str(item.get("anomaly_type") or "-"),
                 "ai_review_state": review_state,
                 "correction_proposal": {
-                    key: _normalize_ai_sample_window(value) if key == "sample_window" else value
+                    key: (
+                        _normalize_ai_sample_window(value)
+                        if key == "sample_window"
+                        else value
+                    )
                     for key, value in proposal.items()
                 },
                 "correction_reason": str(item.get("correction_reason") or ""),
@@ -9287,7 +12076,11 @@ def _guard_ai_correction_proposal(candidate: dict, proposal: dict) -> dict:
                 "runtime_change": False,
             }
 
-    policy = candidate.get("window_policy") if isinstance(candidate.get("window_policy"), dict) else {}
+    policy = (
+        candidate.get("window_policy")
+        if isinstance(candidate.get("window_policy"), dict)
+        else {}
+    )
     sample_floor = _safe_int(candidate.get("sample_floor"), 0) or 0
     source_sample_count = _safe_int(candidate.get("source_sample_count"), 0) or 0
     needs_rolling_context = policy and not bool(policy.get("daily_only_allowed"))
@@ -9296,7 +12089,11 @@ def _guard_ai_correction_proposal(candidate: dict, proposal: dict) -> dict:
         or proposed_state in {"adjust_up", "adjust_down"}
         or anomaly_route == "threshold_candidate"
     )
-    if needs_rolling_context and 0 < source_sample_count < sample_floor and changes_value_or_state:
+    if (
+        needs_rolling_context
+        and 0 < source_sample_count < sample_floor
+        and changes_value_or_state
+    ):
         return {
             "guard_accepted": False,
             "guard_reject_reason": (
@@ -9347,7 +12144,10 @@ def _guard_ai_correction_proposal(candidate: dict, proposal: dict) -> dict:
     else:
         guard_reject_reason = "empty_proposal"
 
-    if candidate.get("allowed_runtime_apply") is False and proposed_state in {"adjust_up", "adjust_down"}:
+    if candidate.get("allowed_runtime_apply") is False and proposed_state in {
+        "adjust_up",
+        "adjust_down",
+    }:
         guard_accepted = False
         guard_reject_reason = "runtime_apply_not_allowed_for_family"
         effective_state = "hold_sample"
@@ -9366,7 +12166,9 @@ def _guard_ai_correction_proposal(candidate: dict, proposal: dict) -> dict:
 
 
 def _stable_json(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    return json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str
+    )
 
 
 def _json_chars(value: Any) -> int:
@@ -9405,7 +12207,9 @@ def _compact_json_value(
     if current_chars <= max_chars:
         return value
     if depth >= 4:
-        preview = json.dumps(value, ensure_ascii=False, default=str)[: max(200, max_chars - 300)]
+        preview = json.dumps(value, ensure_ascii=False, default=str)[
+            : max(200, max_chars - 300)
+        ]
         return {
             "_truncated": True,
             "original_type": type(value).__name__,
@@ -9426,7 +12230,9 @@ def _compact_json_value(
                 depth=depth + 1,
             )
         if len(keys) > max_dict_keys:
-            compact["_omitted_keys"] = [str(key) for key in keys[max_dict_keys : max_dict_keys + 20]]
+            compact["_omitted_keys"] = [
+                str(key) for key in keys[max_dict_keys : max_dict_keys + 20]
+            ]
         compact["_compact_meta"] = {
             "truncated": True,
             "original_type": "dict",
@@ -9471,7 +12277,9 @@ def _cap_ai_context_section(section_name: str, value: Any) -> Any:
     compact = _compact_json_value(value, max_chars=max_chars)
     if _json_chars(compact) <= max_chars:
         return compact
-    preview = json.dumps(compact, ensure_ascii=False, default=str)[: max(500, max_chars - 400)]
+    preview = json.dumps(compact, ensure_ascii=False, default=str)[
+        : max(500, max_chars - 400)
+    ]
     return {
         "_truncated": True,
         "section": section_name,
@@ -9492,7 +12300,11 @@ def _source_availability_summary(sources: Any) -> dict:
             "exists": bool(row.get("exists")),
             "status": row.get("status"),
             "path": row.get("path"),
-            "warning_count": len(row.get("warnings") or []) if isinstance(row.get("warnings"), list) else 0,
+            "warning_count": (
+                len(row.get("warnings") or [])
+                if isinstance(row.get("warnings"), list)
+                else 0
+            ),
         }
     return {
         "source_count": len(sources),
@@ -9511,7 +12323,9 @@ def _candidate_source_metrics_summary(source_metrics: Any) -> Any:
     )
 
 
-def _cumulative_family_window_context(cumulative_report: dict, families: set[str]) -> dict:
+def _cumulative_family_window_context(
+    cumulative_report: dict, families: set[str]
+) -> dict:
     snapshots = cumulative_report.get("threshold_snapshot_by_window")
     bundles = cumulative_report.get("calibration_source_bundle_by_window")
     result: dict[str, dict] = {}
@@ -9520,7 +12334,12 @@ def _cumulative_family_window_context(cumulative_report: dict, families: set[str
             if not isinstance(window_snapshot, dict):
                 continue
             result[str(window_name)] = {
-                family: _compact_json_value(window_snapshot.get(family), max_chars=2_500, max_dict_keys=10, max_list_items=6)
+                family: _compact_json_value(
+                    window_snapshot.get(family),
+                    max_chars=2_500,
+                    max_dict_keys=10,
+                    max_list_items=6,
+                )
                 for family in sorted(families)
                 if isinstance(window_snapshot.get(family), dict)
             }
@@ -9557,8 +12376,18 @@ def _finalize_ai_input_context_budget(context: dict) -> dict:
         _refresh_ai_context_budget_counts(context, hard_cap_applied=False)
         return context
 
-    for section_name in ("threshold_cycle_cumulative", "calibration_source_bundle", "trade_lifecycle_attribution", "recent_anomaly_report"):
-        context[section_name] = _compact_json_value(context.get(section_name), max_chars=8_000, max_dict_keys=8, max_list_items=4)
+    for section_name in (
+        "threshold_cycle_cumulative",
+        "calibration_source_bundle",
+        "trade_lifecycle_attribution",
+        "recent_anomaly_report",
+    ):
+        context[section_name] = _compact_json_value(
+            context.get(section_name),
+            max_chars=8_000,
+            max_dict_keys=8,
+            max_list_items=4,
+        )
         total_chars = _json_chars(context)
         if total_chars <= AI_CORRECTION_CONTEXT_TOTAL_CHAR_LIMIT:
             break
@@ -9628,18 +12457,30 @@ def _build_ai_correction_input_context(
                 "bounds": candidate.get("bounds"),
                 "max_step_per_day": candidate.get("max_step_per_day"),
                 "safety_revert_required": candidate.get("safety_revert_required"),
-                "source_metrics_summary": _candidate_source_metrics_summary(candidate.get("source_metrics")),
-                "source_metrics_full_hash": _json_sha256(candidate.get("source_metrics") or {}),
+                "source_metrics_summary": _candidate_source_metrics_summary(
+                    candidate.get("source_metrics")
+                ),
+                "source_metrics_full_hash": _json_sha256(
+                    candidate.get("source_metrics") or {}
+                ),
             }
         )
-    candidate_families = {str(candidate.get("family") or "") for candidate in candidates if isinstance(candidate, dict)}
+    candidate_families = {
+        str(candidate.get("family") or "")
+        for candidate in candidates
+        if isinstance(candidate, dict)
+    }
     cumulative_summary = {}
     if isinstance(cumulative_report, dict):
-        cumulative_json_path, _ = cumulative_threshold_report_paths(str(cumulative_report.get("date") or calibration_report.get("date") or ""))
+        cumulative_json_path, _ = cumulative_threshold_report_paths(
+            str(cumulative_report.get("date") or calibration_report.get("date") or "")
+        )
         cumulative_summary = {
             "date": cumulative_report.get("date"),
             "summary": cumulative_report.get("summary"),
-            "family_window_context": _cumulative_family_window_context(cumulative_report, candidate_families),
+            "family_window_context": _cumulative_family_window_context(
+                cumulative_report, candidate_families
+            ),
             "completed_by_source": _compact_json_value(
                 cumulative_report.get("completed_by_source") or {},
                 max_chars=6_000,
@@ -9659,33 +12500,68 @@ def _build_ai_correction_input_context(
                 "full_chars": _json_chars(cumulative_report),
             },
         }
-    calibration_source_bundle = calibration_report.get("calibration_source_bundle") or {}
-    trade_lifecycle_attribution = calibration_report.get("trade_lifecycle_attribution") or {}
+    calibration_source_bundle = (
+        calibration_report.get("calibration_source_bundle") or {}
+    )
+    trade_lifecycle_attribution = (
+        calibration_report.get("trade_lifecycle_attribution") or {}
+    )
     context = {
         "context_schema_version": 2,
-        "calibration_candidates": _cap_ai_context_section("calibration_candidates", candidate_context),
+        "calibration_candidates": _cap_ai_context_section(
+            "calibration_candidates", candidate_context
+        ),
         "calibration_source_bundle": _cap_ai_context_section(
             "calibration_source_bundle",
             {
-                "schema_version": calibration_source_bundle.get("schema_version") if isinstance(calibration_source_bundle, dict) else None,
-                "target_date": calibration_source_bundle.get("target_date") if isinstance(calibration_source_bundle, dict) else None,
-                "purpose": calibration_source_bundle.get("purpose") if isinstance(calibration_source_bundle, dict) else None,
-                "sources": _source_availability_summary(calibration_source_bundle.get("sources") if isinstance(calibration_source_bundle, dict) else {}),
+                "schema_version": (
+                    calibration_source_bundle.get("schema_version")
+                    if isinstance(calibration_source_bundle, dict)
+                    else None
+                ),
+                "target_date": (
+                    calibration_source_bundle.get("target_date")
+                    if isinstance(calibration_source_bundle, dict)
+                    else None
+                ),
+                "purpose": (
+                    calibration_source_bundle.get("purpose")
+                    if isinstance(calibration_source_bundle, dict)
+                    else None
+                ),
+                "sources": _source_availability_summary(
+                    calibration_source_bundle.get("sources")
+                    if isinstance(calibration_source_bundle, dict)
+                    else {}
+                ),
                 "source_metrics": _compact_json_value(
-                    calibration_source_bundle.get("source_metrics") if isinstance(calibration_source_bundle, dict) else {},
+                    (
+                        calibration_source_bundle.get("source_metrics")
+                        if isinstance(calibration_source_bundle, dict)
+                        else {}
+                    ),
                     max_chars=8_000,
                     max_dict_keys=AI_CORRECTION_SOURCE_METRIC_TOP_N,
                     max_list_items=6,
                 ),
                 "report_only_cleanup_audit": _compact_json_value(
-                    calibration_source_bundle.get("report_only_cleanup_audit") if isinstance(calibration_source_bundle, dict) else {},
+                    (
+                        calibration_source_bundle.get("report_only_cleanup_audit")
+                        if isinstance(calibration_source_bundle, dict)
+                        else {}
+                    ),
                     max_chars=2_000,
                     max_dict_keys=8,
                     max_list_items=4,
                 ),
-                "warnings": list(calibration_source_bundle.get("warnings") or [])[:20] if isinstance(calibration_source_bundle, dict) else [],
+                "warnings": (
+                    list(calibration_source_bundle.get("warnings") or [])[:20]
+                    if isinstance(calibration_source_bundle, dict)
+                    else []
+                ),
                 "full_bundle_reference": {
-                    "path": source_calibration_report_path or calibration_report.get("source_report"),
+                    "path": source_calibration_report_path
+                    or calibration_report.get("source_report"),
                     "full_hash": _json_content_sha256(calibration_source_bundle),
                     "full_chars": _json_chars(calibration_source_bundle),
                 },
@@ -9694,49 +12570,108 @@ def _build_ai_correction_input_context(
         "trade_lifecycle_attribution": _cap_ai_context_section(
             "trade_lifecycle_attribution",
             {
-                "schema_version": trade_lifecycle_attribution.get("schema_version") if isinstance(trade_lifecycle_attribution, dict) else None,
-                "status": trade_lifecycle_attribution.get("status") if isinstance(trade_lifecycle_attribution, dict) else None,
-                "runtime_change": trade_lifecycle_attribution.get("runtime_change") if isinstance(trade_lifecycle_attribution, dict) else None,
-                "join_key": trade_lifecycle_attribution.get("join_key") if isinstance(trade_lifecycle_attribution, dict) else None,
-                "phase_counts": trade_lifecycle_attribution.get("phase_counts") if isinstance(trade_lifecycle_attribution, dict) else {},
-                "primary_type_counts": trade_lifecycle_attribution.get("primary_type_counts") if isinstance(trade_lifecycle_attribution, dict) else {},
+                "schema_version": (
+                    trade_lifecycle_attribution.get("schema_version")
+                    if isinstance(trade_lifecycle_attribution, dict)
+                    else None
+                ),
+                "status": (
+                    trade_lifecycle_attribution.get("status")
+                    if isinstance(trade_lifecycle_attribution, dict)
+                    else None
+                ),
+                "runtime_change": (
+                    trade_lifecycle_attribution.get("runtime_change")
+                    if isinstance(trade_lifecycle_attribution, dict)
+                    else None
+                ),
+                "join_key": (
+                    trade_lifecycle_attribution.get("join_key")
+                    if isinstance(trade_lifecycle_attribution, dict)
+                    else None
+                ),
+                "phase_counts": (
+                    trade_lifecycle_attribution.get("phase_counts")
+                    if isinstance(trade_lifecycle_attribution, dict)
+                    else {}
+                ),
+                "primary_type_counts": (
+                    trade_lifecycle_attribution.get("primary_type_counts")
+                    if isinstance(trade_lifecycle_attribution, dict)
+                    else {}
+                ),
                 "decision_source_outcomes": _compact_json_value(
-                    trade_lifecycle_attribution.get("decision_source_outcomes") if isinstance(trade_lifecycle_attribution, dict) else {},
+                    (
+                        trade_lifecycle_attribution.get("decision_source_outcomes")
+                        if isinstance(trade_lifecycle_attribution, dict)
+                        else {}
+                    ),
                     max_chars=4_000,
                     max_dict_keys=10,
                     max_list_items=6,
                 ),
                 "exit_rule_outcomes": _compact_json_value(
-                    trade_lifecycle_attribution.get("exit_rule_outcomes") if isinstance(trade_lifecycle_attribution, dict) else {},
+                    (
+                        trade_lifecycle_attribution.get("exit_rule_outcomes")
+                        if isinstance(trade_lifecycle_attribution, dict)
+                        else {}
+                    ),
                     max_chars=4_000,
                     max_dict_keys=10,
                     max_list_items=6,
                 ),
                 "family_views": _compact_json_value(
-                    trade_lifecycle_attribution.get("family_views") if isinstance(trade_lifecycle_attribution, dict) else {},
+                    (
+                        trade_lifecycle_attribution.get("family_views")
+                        if isinstance(trade_lifecycle_attribution, dict)
+                        else {}
+                    ),
                     max_chars=4_000,
                     max_dict_keys=10,
                     max_list_items=6,
                 ),
                 "examples": _compact_json_value(
-                    trade_lifecycle_attribution.get("examples") if isinstance(trade_lifecycle_attribution, dict) else [],
+                    (
+                        trade_lifecycle_attribution.get("examples")
+                        if isinstance(trade_lifecycle_attribution, dict)
+                        else []
+                    ),
                     max_chars=3_000,
                     max_dict_keys=8,
                     max_list_items=5,
                 ),
                 "records_reference": {
-                    "record_count": len(trade_lifecycle_attribution.get("records") or []) if isinstance(trade_lifecycle_attribution, dict) and isinstance(trade_lifecycle_attribution.get("records"), list) else 0,
-                    "records_hash": _json_sha256(trade_lifecycle_attribution.get("records") if isinstance(trade_lifecycle_attribution, dict) else []),
+                    "record_count": (
+                        len(trade_lifecycle_attribution.get("records") or [])
+                        if isinstance(trade_lifecycle_attribution, dict)
+                        and isinstance(trade_lifecycle_attribution.get("records"), list)
+                        else 0
+                    ),
+                    "records_hash": _json_sha256(
+                        trade_lifecycle_attribution.get("records")
+                        if isinstance(trade_lifecycle_attribution, dict)
+                        else []
+                    ),
                 },
             },
         ),
-        "threshold_cycle_cumulative": _cap_ai_context_section("threshold_cycle_cumulative", cumulative_summary),
+        "threshold_cycle_cumulative": _cap_ai_context_section(
+            "threshold_cycle_cumulative", cumulative_summary
+        ),
         "recent_anomaly_report": _cap_ai_context_section(
             "recent_anomaly_report",
             {
-                "source_bundle_reports": _source_availability_summary(calibration_source_bundle.get("sources") if isinstance(calibration_source_bundle, dict) else {}),
+                "source_bundle_reports": _source_availability_summary(
+                    calibration_source_bundle.get("sources")
+                    if isinstance(calibration_source_bundle, dict)
+                    else {}
+                ),
                 "source_metrics_summary": _compact_json_value(
-                    calibration_source_bundle.get("source_metrics") if isinstance(calibration_source_bundle, dict) else {},
+                    (
+                        calibration_source_bundle.get("source_metrics")
+                        if isinstance(calibration_source_bundle, dict)
+                        else {}
+                    ),
                     max_chars=6_000,
                     max_dict_keys=AI_CORRECTION_SOURCE_METRIC_TOP_N,
                     max_list_items=6,
@@ -9745,14 +12680,22 @@ def _build_ai_correction_input_context(
         ),
         "source_artifact_references": {
             "calibration_report": {
-                "path": source_calibration_report_path or calibration_report.get("source_report"),
+                "path": source_calibration_report_path
+                or calibration_report.get("source_report"),
                 "full_hash": _json_content_sha256(calibration_report),
                 "full_chars": _json_chars(calibration_report),
             },
             "cumulative_report": {
-                "path": str(cumulative_threshold_report_paths(str(cumulative_report.get("date")))[0])
-                if isinstance(cumulative_report, dict) and cumulative_report.get("date")
-                else None,
+                "path": (
+                    str(
+                        cumulative_threshold_report_paths(
+                            str(cumulative_report.get("date"))
+                        )[0]
+                    )
+                    if isinstance(cumulative_report, dict)
+                    and cumulative_report.get("date")
+                    else None
+                ),
                 "full_hash": _json_content_sha256(cumulative_report or {}),
                 "full_chars": _json_chars(cumulative_report or {}),
             },
@@ -9780,7 +12723,9 @@ def _load_threshold_ai_gemini_keys() -> list[tuple[str, str]]:
     if not isinstance(payload, dict):
         return []
     keys: list[tuple[str, str]] = []
-    for name, value in sorted(payload.items(), key=lambda item: _gemini_key_sort_key(str(item[0]))):
+    for name, value in sorted(
+        payload.items(), key=lambda item: _gemini_key_sort_key(str(item[0]))
+    ):
         if not str(name).startswith("GEMINI_API_KEY"):
             continue
         if value in (None, "", "-"):
@@ -9808,7 +12753,9 @@ def _load_threshold_ai_openai_keys() -> list[tuple[str, str]]:
     if not isinstance(payload, dict):
         return []
     keys: list[tuple[str, str]] = []
-    for name, value in sorted(payload.items(), key=lambda item: _openai_key_sort_key(str(item[0]))):
+    for name, value in sorted(
+        payload.items(), key=lambda item: _openai_key_sort_key(str(item[0]))
+    ):
         if not str(name).startswith("OPENAI_API_KEY"):
             continue
         if value in (None, "", "-"):
@@ -9818,7 +12765,9 @@ def _load_threshold_ai_openai_keys() -> list[tuple[str, str]]:
 
 
 def _threshold_ai_openai_model_sequence() -> list[str]:
-    primary = str(getattr(TRADING_RULES, "GPT_THRESHOLD_CORRECTION_MODEL", "") or "gpt-5.5").strip()
+    primary = str(
+        getattr(TRADING_RULES, "GPT_THRESHOLD_CORRECTION_MODEL", "") or "gpt-5.5"
+    ).strip()
     fallback = getattr(
         TRADING_RULES,
         "GPT_THRESHOLD_CORRECTION_FALLBACK_MODELS",
@@ -9827,7 +12776,9 @@ def _threshold_ai_openai_model_sequence() -> list[str]:
     if isinstance(fallback, str):
         fallback_models = [item.strip() for item in fallback.split(",") if item.strip()]
     else:
-        fallback_models = [str(item).strip() for item in (fallback or ()) if str(item).strip()]
+        fallback_models = [
+            str(item).strip() for item in (fallback or ()) if str(item).strip()
+        ]
     models: list[str] = []
     for model in [primary, *fallback_models]:
         if model and model not in models:
@@ -9877,7 +12828,11 @@ def _build_ai_correction_prompt(input_context: dict) -> str:
 
 
 def _build_openai_ai_correction_instructions(run_phase: str) -> str:
-    reasoning_mode = "intraday calibration pass" if str(run_phase) == "intraday" else "postclose calibration pass"
+    reasoning_mode = (
+        "intraday calibration pass"
+        if str(run_phase) == "intraday"
+        else "postclose calibration pass"
+    )
     return (
         "You are the threshold-cycle calibration AI reviewer and anomaly correction proposer.\n"
         f"Run phase: {reasoning_mode}.\n"
@@ -9910,22 +12865,32 @@ def _extract_openai_response_text(response: Any) -> str:
         return raw_text
     fragments: list[str] = []
     for item in list(getattr(response, "output", []) or []):
-        content_items = item.get("content", []) if isinstance(item, dict) else getattr(item, "content", [])
+        content_items = (
+            item.get("content", [])
+            if isinstance(item, dict)
+            else getattr(item, "content", [])
+        )
         for content in list(content_items or []):
             if isinstance(content, dict):
                 text_value = content.get("text") or content.get("value")
             else:
-                text_value = getattr(content, "text", None) or getattr(content, "value", None)
+                text_value = getattr(content, "text", None) or getattr(
+                    content, "value", None
+                )
             if text_value:
                 fragments.append(str(text_value))
-    return "\n".join(fragment.strip() for fragment in fragments if fragment.strip()).strip()
+    return "\n".join(
+        fragment.strip() for fragment in fragments if fragment.strip()
+    ).strip()
 
 
 def _get_usage_value(usage: Any, *names: str) -> int | None:
     if usage is None:
         return None
     for name in names:
-        value = usage.get(name) if isinstance(usage, dict) else getattr(usage, name, None)
+        value = (
+            usage.get(name) if isinstance(usage, dict) else getattr(usage, name, None)
+        )
         parsed = _safe_int(value, None)
         if parsed is not None:
             return parsed
@@ -9933,9 +12898,15 @@ def _get_usage_value(usage: Any, *names: str) -> int | None:
 
 
 def _response_usage_telemetry(response: Any) -> dict:
-    usage = getattr(response, "usage", None) or getattr(response, "usage_metadata", None)
-    input_tokens = _get_usage_value(usage, "input_tokens", "prompt_tokens", "prompt_token_count")
-    output_tokens = _get_usage_value(usage, "output_tokens", "completion_tokens", "candidates_token_count")
+    usage = getattr(response, "usage", None) or getattr(
+        response, "usage_metadata", None
+    )
+    input_tokens = _get_usage_value(
+        usage, "input_tokens", "prompt_tokens", "prompt_token_count"
+    )
+    output_tokens = _get_usage_value(
+        usage, "output_tokens", "completion_tokens", "candidates_token_count"
+    )
     total_tokens = _get_usage_value(usage, "total_tokens", "total_token_count")
     if total_tokens is None and (input_tokens is not None or output_tokens is not None):
         total_tokens = (input_tokens or 0) + (output_tokens or 0)
@@ -9946,26 +12917,44 @@ def _response_usage_telemetry(response: Any) -> dict:
     }
 
 
-def _threshold_ai_estimated_cost(model_name: str, input_tokens: int | None, output_tokens: int | None) -> tuple[float | None, str]:
-    input_rate = _safe_float(os.getenv("KORSTOCKSCAN_THRESHOLD_AI_INPUT_COST_PER_1M_USD"), None)
-    output_rate = _safe_float(os.getenv("KORSTOCKSCAN_THRESHOLD_AI_OUTPUT_COST_PER_1M_USD"), None)
+def _threshold_ai_estimated_cost(
+    model_name: str, input_tokens: int | None, output_tokens: int | None
+) -> tuple[float | None, str]:
+    input_rate = _safe_float(
+        os.getenv("KORSTOCKSCAN_THRESHOLD_AI_INPUT_COST_PER_1M_USD"), None
+    )
+    output_rate = _safe_float(
+        os.getenv("KORSTOCKSCAN_THRESHOLD_AI_OUTPUT_COST_PER_1M_USD"), None
+    )
     if input_tokens is None or output_tokens is None:
         return None, "missing_token_usage"
     if input_rate is None or output_rate is None:
         return None, "missing_price_contract"
-    estimated = ((input_tokens * input_rate) + (output_tokens * output_rate)) / 1_000_000
+    estimated = (
+        (input_tokens * input_rate) + (output_tokens * output_rate)
+    ) / 1_000_000
     return round(float(estimated), 8), "estimated_from_env_price_contract"
 
 
-def _call_openai_threshold_ai_correction(input_context: dict, *, run_phase: str) -> tuple[str | None, dict]:
+def _call_openai_threshold_ai_correction(
+    input_context: dict, *, run_phase: str
+) -> tuple[str | None, dict]:
     try:
         from openai import OpenAI, RateLimitError
     except Exception as exc:
-        return None, {"provider": "openai", "status": "unavailable", "reason": f"openai import failed: {exc}"}
+        return None, {
+            "provider": "openai",
+            "status": "unavailable",
+            "reason": f"openai import failed: {exc}",
+        }
 
     api_keys = _load_threshold_ai_openai_keys()
     if not api_keys:
-        return None, {"provider": "openai", "status": "unavailable", "reason": "OPENAI_API_KEY not configured"}
+        return None, {
+            "provider": "openai",
+            "status": "unavailable",
+            "reason": "OPENAI_API_KEY not configured",
+        }
 
     model_sequence = _threshold_ai_openai_model_sequence()
     reasoning_effort = "medium" if str(run_phase) == "intraday" else "high"
@@ -9990,7 +12979,9 @@ def _call_openai_threshold_ai_correction(input_context: dict, *, run_phase: str)
                     instructions=instructions,
                     input=user_input,
                     text={
-                        "format": build_openai_response_text_format("threshold_ai_correction_v1"),
+                        "format": build_openai_response_text_format(
+                            "threshold_ai_correction_v1"
+                        ),
                         "verbosity": "low",
                     },
                     reasoning={"effort": reasoning_effort},
@@ -10041,10 +13032,14 @@ def _call_openai_threshold_ai_correction(input_context: dict, *, run_phase: str)
                     "cost_estimate_status": cost_status,
                 }
             except RateLimitError as exc:
-                errors.append({"key_name": key_name, "model": model_name, "error": str(exc)})
+                errors.append(
+                    {"key_name": key_name, "model": model_name, "error": str(exc)}
+                )
                 continue
             except Exception as exc:
-                errors.append({"key_name": key_name, "model": model_name, "error": str(exc)})
+                errors.append(
+                    {"key_name": key_name, "model": model_name, "error": str(exc)}
+                )
                 continue
     return None, {
         "provider": "openai",
@@ -10074,16 +13069,26 @@ def _call_openai_threshold_ai_correction(input_context: dict, *, run_phase: str)
     }
 
 
-def _call_gemini_threshold_ai_correction(input_context: dict) -> tuple[str | None, dict]:
+def _call_gemini_threshold_ai_correction(
+    input_context: dict,
+) -> tuple[str | None, dict]:
     try:
         from google import genai
         from google.genai import types
     except Exception as exc:
-        return None, {"provider": "gemini", "status": "unavailable", "reason": f"google.genai import failed: {exc}"}
+        return None, {
+            "provider": "gemini",
+            "status": "unavailable",
+            "reason": f"google.genai import failed: {exc}",
+        }
 
     api_keys = _load_threshold_ai_gemini_keys()
     if not api_keys:
-        return None, {"provider": "gemini", "status": "unavailable", "reason": "GEMINI_API_KEY not configured"}
+        return None, {
+            "provider": "gemini",
+            "status": "unavailable",
+            "reason": "GEMINI_API_KEY not configured",
+        }
 
     model_name = "models/gemini-3.1-pro-preview-customtools"
     prompt = _build_ai_correction_prompt(input_context)
@@ -10100,7 +13105,9 @@ def _call_gemini_threshold_ai_correction(input_context: dict) -> tuple[str | Non
             response = client.models.generate_content(
                 model=model_name,
                 contents=prompt,
-                config=types.GenerateContentConfig(response_mime_type="application/json"),
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json"
+                ),
             )
             response_text = str(response.text or "")
             elapsed_ms = int(round((time.monotonic() - started) * 1000))
@@ -10168,8 +13175,16 @@ def build_threshold_cycle_ai_correction_report(
     ai_input_context: dict | None = None,
 ) -> dict:
     target_date = str(calibration_report.get("date") or date.today().isoformat())
-    meta = calibration_report.get("meta") if isinstance(calibration_report.get("meta"), dict) else {}
-    run_phase = str(calibration_report.get("run_phase") or meta.get("calibration_run_phase") or "postclose")
+    meta = (
+        calibration_report.get("meta")
+        if isinstance(calibration_report.get("meta"), dict)
+        else {}
+    )
+    run_phase = str(
+        calibration_report.get("run_phase")
+        or meta.get("calibration_run_phase")
+        or "postclose"
+    )
     candidates = calibration_report.get("calibration_candidates") or []
     candidates = candidates if isinstance(candidates, list) else []
     input_context = ai_input_context or _build_ai_correction_input_context(
@@ -10179,7 +13194,9 @@ def build_threshold_cycle_ai_correction_report(
     )
     input_context_hash = _json_sha256(input_context)
     input_context_chars = _json_chars(input_context)
-    provider_status = dict(ai_provider_status or {"provider": "none", "status": "not_requested"})
+    provider_status = dict(
+        ai_provider_status or {"provider": "none", "status": "not_requested"}
+    )
     provider_status.setdefault("input_context_hash", input_context_hash)
     provider_status.setdefault("input_context_chars", input_context_chars)
     provider_status.setdefault("prompt_chars", input_context_chars)
@@ -10188,10 +13205,16 @@ def build_threshold_cycle_ai_correction_report(
     provider_status.setdefault("output_tokens", None)
     provider_status.setdefault("total_tokens", None)
     provider_status.setdefault("estimated_cost", None)
-    provider_status.setdefault("estimated_cost_usd", provider_status.get("estimated_cost"))
+    provider_status.setdefault(
+        "estimated_cost_usd", provider_status.get("estimated_cost")
+    )
     provider_status.setdefault("cost_estimate_status", "not_available")
-    ai_status, proposals, parse_warnings = _parse_ai_correction_response(ai_raw_response)
-    proposals_by_family = {str(item.get("family")): item for item in proposals if isinstance(item, dict)}
+    ai_status, proposals, parse_warnings = _parse_ai_correction_response(
+        ai_raw_response
+    )
+    proposals_by_family = {
+        str(item.get("family")): item for item in proposals if isinstance(item, dict)
+    }
 
     items: list[dict] = []
     for candidate in candidates:
@@ -10201,8 +13224,12 @@ def build_threshold_cycle_ai_correction_report(
         proposal_item = proposals_by_family.get(family)
         if proposal_item:
             correction_proposal = proposal_item.get("correction_proposal") or {}
-            guard_decision = _guard_ai_correction_proposal(candidate, correction_proposal)
-            ai_review_state = proposal_item.get("ai_review_state") or "correction_proposed"
+            guard_decision = _guard_ai_correction_proposal(
+                candidate, correction_proposal
+            )
+            ai_review_state = (
+                proposal_item.get("ai_review_state") or "correction_proposed"
+            )
             anomaly_type = proposal_item.get("anomaly_type") or "-"
             correction_reason = proposal_item.get("correction_reason") or ""
             required_evidence = proposal_item.get("required_evidence") or []
@@ -10211,7 +13238,11 @@ def build_threshold_cycle_ai_correction_report(
             correction_proposal = {}
             guard_decision = {
                 "guard_accepted": False,
-                "guard_reject_reason": "ai_unavailable" if ai_status == "unavailable" else "ai_proposal_missing_for_family",
+                "guard_reject_reason": (
+                    "ai_unavailable"
+                    if ai_status == "unavailable"
+                    else "ai_proposal_missing_for_family"
+                ),
                 "effective_state": candidate.get("calibration_state"),
                 "effective_value": candidate.get("current_value"),
                 "clamped": False,
@@ -10219,7 +13250,9 @@ def build_threshold_cycle_ai_correction_report(
                 "route_action": "deterministic_only",
                 "runtime_change": False,
             }
-            ai_review_state = "unavailable" if ai_status != "parsed" else "insufficient_context"
+            ai_review_state = (
+                "unavailable" if ai_status != "parsed" else "insufficient_context"
+            )
             anomaly_type = "-"
             correction_reason = ""
             required_evidence = []
@@ -10262,7 +13295,11 @@ def build_threshold_cycle_ai_correction_report(
         "input_context_hash": input_context_hash,
         "ai_input_context_hash": input_context_hash,
         "ai_input_context_chars": input_context_chars,
-        "ai_input_context_budget": input_context.get("_context_budget") if isinstance(input_context, dict) else {},
+        "ai_input_context_budget": (
+            input_context.get("_context_budget")
+            if isinstance(input_context, dict)
+            else {}
+        ),
         "parse_warnings": parse_warnings,
         "policy": {
             "authority": "proposal_only",
@@ -10296,13 +13333,23 @@ def build_threshold_cycle_ai_correction_report(
                     "required_evidence",
                     "risk_flags",
                 ],
-                "allowed_proposal_fields": ["proposed_state", "proposed_value", "anomaly_route", "sample_window"],
+                "allowed_proposal_fields": [
+                    "proposed_state",
+                    "proposed_value",
+                    "anomaly_route",
+                    "sample_window",
+                ],
             },
         },
         "ai_input_context": input_context,
         "source_reports": {
-            "calibration_report": source_calibration_report_path or calibration_report.get("source_report"),
-            "cumulative_report": (cumulative_report or {}).get("report_path") if isinstance(cumulative_report, dict) else None,
+            "calibration_report": source_calibration_report_path
+            or calibration_report.get("source_report"),
+            "cumulative_report": (
+                (cumulative_report or {}).get("report_path")
+                if isinstance(cumulative_report, dict)
+                else None
+            ),
         },
         "candidate_count": len(candidates),
         "items": items,
@@ -10310,7 +13357,11 @@ def build_threshold_cycle_ai_correction_report(
 
 
 def render_threshold_cycle_ai_correction_markdown(report: dict) -> str:
-    provider_status = report.get("ai_provider_status") if isinstance(report.get("ai_provider_status"), dict) else {}
+    provider_status = (
+        report.get("ai_provider_status")
+        if isinstance(report.get("ai_provider_status"), dict)
+        else {}
+    )
     lines = [
         f"# Threshold Cycle AI Correction - {report.get('date')} {report.get('run_phase')}",
         "",
@@ -10349,7 +13400,9 @@ def render_threshold_cycle_ai_correction_markdown(report: dict) -> str:
                     _markdown_value(proposal.get("ai_anomaly_route")),
                     proposal_text,
                     guard_text,
-                    _markdown_value(item.get("guard_reject_reason") or item.get("correction_reason")),
+                    _markdown_value(
+                        item.get("guard_reject_reason") or item.get("correction_reason")
+                    ),
                 ]
             )
             + " |"
@@ -10366,12 +13419,18 @@ def save_threshold_cycle_ai_correction_report(report: dict) -> tuple[Path, Path]
     run_phase = str(report.get("run_phase") or "postclose")
     json_path, md_path = threshold_ai_review_paths(target_date, run_phase)
     json_path.parent.mkdir(parents=True, exist_ok=True)
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-    md_path.write_text(render_threshold_cycle_ai_correction_markdown(report), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    md_path.write_text(
+        render_threshold_cycle_ai_correction_markdown(report), encoding="utf-8"
+    )
     return json_path, md_path
 
 
-def _load_reusable_threshold_ai_review(path: Path, *, input_context_hash: str) -> dict | None:
+def _load_reusable_threshold_ai_review(
+    path: Path, *, input_context_hash: str
+) -> dict | None:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
@@ -10384,11 +13443,26 @@ def _load_reusable_threshold_ai_review(path: Path, *, input_context_hash: str) -
         str(THRESHOLD_AI_CORRECTION_SCHEMA_VERSION),
         "threshold_ai_correction_v1",
     }:
-        provider_status = payload.get("ai_provider_status") if isinstance(payload.get("ai_provider_status"), dict) else {}
-        if str(provider_status.get("schema_name") or "") != "threshold_ai_correction_v1":
+        provider_status = (
+            payload.get("ai_provider_status")
+            if isinstance(payload.get("ai_provider_status"), dict)
+            else {}
+        )
+        if (
+            str(provider_status.get("schema_name") or "")
+            != "threshold_ai_correction_v1"
+        ):
             return None
-    provider_status_payload = payload.get("ai_provider_status") if isinstance(payload.get("ai_provider_status"), dict) else {}
-    existing_hash = payload.get("input_context_hash") or payload.get("ai_input_context_hash") or provider_status_payload.get("input_context_hash")
+    provider_status_payload = (
+        payload.get("ai_provider_status")
+        if isinstance(payload.get("ai_provider_status"), dict)
+        else {}
+    )
+    existing_hash = (
+        payload.get("input_context_hash")
+        or payload.get("ai_input_context_hash")
+        or provider_status_payload.get("input_context_hash")
+    )
     if str(existing_hash or "") != str(input_context_hash):
         return None
     provider_status = dict(payload.get("ai_provider_status") or {})
@@ -10483,7 +13557,9 @@ def _matrix_action_counterfactual_coverage(row: dict) -> dict:
             "sample": sample,
             "avg_profit_rate": _safe_float(action.get("avg_profit_rate"), None),
             "loss_rate": _safe_float(action.get("loss_rate"), None),
-            "confidence_adjusted_score": _safe_float(action.get("confidence_adjusted_score"), None),
+            "confidence_adjusted_score": _safe_float(
+                action.get("confidence_adjusted_score"), None
+            ),
         }
         action_metrics[action_name] = metric
         if sample > 0:
@@ -10505,14 +13581,24 @@ def _summarize_matrix_counterfactual_coverage(entries: list[dict]) -> dict:
     per_action_samples = {action: 0 for action in MATRIX_COUNTERFACTUAL_ACTIONS}
     ready_count = 0
     for entry in entries:
-        coverage = entry.get("counterfactual_coverage") if isinstance(entry, dict) else {}
+        coverage = (
+            entry.get("counterfactual_coverage") if isinstance(entry, dict) else {}
+        )
         if not isinstance(coverage, dict):
             continue
         if bool(coverage.get("ready")):
             ready_count += 1
-        action_metrics = coverage.get("action_metrics") if isinstance(coverage.get("action_metrics"), dict) else {}
+        action_metrics = (
+            coverage.get("action_metrics")
+            if isinstance(coverage.get("action_metrics"), dict)
+            else {}
+        )
         for action_name in MATRIX_COUNTERFACTUAL_ACTIONS:
-            metric = action_metrics.get(action_name) if isinstance(action_metrics.get(action_name), dict) else {}
+            metric = (
+                action_metrics.get(action_name)
+                if isinstance(action_metrics.get(action_name), dict)
+                else {}
+            )
             per_action_samples[action_name] += _safe_int(metric.get("sample"), 0) or 0
     entry_count = len(entries)
     return {
@@ -10529,8 +13615,16 @@ def _summarize_counterfactual_proxy_actions(eligible_report: dict | None) -> dic
     report = eligible_report if isinstance(eligible_report, dict) else {}
     per_action_samples = {action: 0 for action in MATRIX_COUNTERFACTUAL_PROXY_ACTIONS}
     per_action_joined = {action: 0 for action in MATRIX_COUNTERFACTUAL_PROXY_ACTIONS}
-    chosen_summary = report.get("chosen_action_summary") if isinstance(report.get("chosen_action_summary"), list) else []
-    candidate_summary = report.get("action_summary") if isinstance(report.get("action_summary"), list) else []
+    chosen_summary = (
+        report.get("chosen_action_summary")
+        if isinstance(report.get("chosen_action_summary"), list)
+        else []
+    )
+    candidate_summary = (
+        report.get("action_summary")
+        if isinstance(report.get("action_summary"), list)
+        else []
+    )
 
     for row in chosen_summary:
         if not isinstance(row, dict):
@@ -10550,14 +13644,24 @@ def _summarize_counterfactual_proxy_actions(eligible_report: dict | None) -> dic
         per_action_samples[action] += _safe_int(row.get("sample"), 0) or 0
         per_action_joined[action] += _safe_int(row.get("post_sell_joined"), 0) or 0
 
-    actions_present = [action for action, count in per_action_samples.items() if count > 0]
-    missing_actions = [action for action, count in per_action_samples.items() if count <= 0]
+    actions_present = [
+        action for action, count in per_action_samples.items() if count > 0
+    ]
+    missing_actions = [
+        action for action, count in per_action_samples.items() if count <= 0
+    ]
     return {
         "status": report.get("status") or "report_only",
         "sample_snapshots": _safe_int(report.get("sample_snapshots"), 0) or 0,
         "sample_candidates": _safe_int(report.get("sample_candidates"), 0) or 0,
-        "post_sell_joined_candidates": _safe_int(report.get("post_sell_joined_candidates"), 0) or 0,
-        "post_sell_joined_snapshots": _safe_int(report.get("post_sell_joined_snapshots"), 0) or 0,
+        "post_sell_joined_candidates": _safe_int(
+            report.get("post_sell_joined_candidates"), 0
+        )
+        or 0,
+        "post_sell_joined_snapshots": _safe_int(
+            report.get("post_sell_joined_snapshots"), 0
+        )
+        or 0,
         "per_action_samples": per_action_samples,
         "per_action_joined": per_action_joined,
         "actions_present": actions_present,
@@ -10602,7 +13706,9 @@ def _render_bucket_markdown(title: str, rows: list[dict]) -> list[str]:
     if not rows:
         lines.extend(["- 표본 없음", ""])
         return lines
-    lines.append("| bucket | best_action | score | edge | sample | avg_profit | loss_rate | policy |")
+    lines.append(
+        "| bucket | best_action | score | edge | sample | avg_profit | loss_rate | policy |"
+    )
     lines.append("| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |")
     for row in rows:
         best = _best_action_row(row)
@@ -10628,8 +13734,12 @@ def _render_bucket_markdown(title: str, rows: list[dict]) -> list[str]:
 
 def build_statistical_action_weight_artifact(report: dict) -> dict:
     target_date = str(report.get("date") or date.today().isoformat())
-    family = (report.get("threshold_snapshot") or {}).get("statistical_action_weight") or {}
-    recommended = family.get("recommended") if isinstance(family.get("recommended"), dict) else {}
+    family = (report.get("threshold_snapshot") or {}).get(
+        "statistical_action_weight"
+    ) or {}
+    recommended = (
+        family.get("recommended") if isinstance(family.get("recommended"), dict) else {}
+    )
     sample = family.get("sample") if isinstance(family.get("sample"), dict) else {}
     rows = []
     for axis, key in (
@@ -10666,9 +13776,21 @@ def build_statistical_action_weight_artifact(report: dict) -> dict:
 
 def render_statistical_action_weight_markdown(artifact: dict) -> str:
     sample = artifact.get("sample") if isinstance(artifact.get("sample"), dict) else {}
-    recommended = artifact.get("recommended") if isinstance(artifact.get("recommended"), dict) else {}
-    data_completeness = recommended.get("data_completeness") if isinstance(recommended.get("data_completeness"), dict) else {}
-    policy_counts = artifact.get("policy_counts") if isinstance(artifact.get("policy_counts"), dict) else {}
+    recommended = (
+        artifact.get("recommended")
+        if isinstance(artifact.get("recommended"), dict)
+        else {}
+    )
+    data_completeness = (
+        recommended.get("data_completeness")
+        if isinstance(recommended.get("data_completeness"), dict)
+        else {}
+    )
+    policy_counts = (
+        artifact.get("policy_counts")
+        if isinstance(artifact.get("policy_counts"), dict)
+        else {}
+    )
     eligible_report = artifact.get("eligible_but_not_chosen")
     eligible_report = eligible_report if isinstance(eligible_report, dict) else {}
     lines = [
@@ -10703,9 +13825,19 @@ def render_statistical_action_weight_markdown(artifact: dict) -> str:
     for key, value in sorted(policy_counts.items()):
         lines.append(f"| {key} | {_markdown_value(value)} |")
     lines.append("")
-    lines.extend(_render_bucket_markdown("Price Bucket", recommended.get("by_price_bucket") or []))
-    lines.extend(_render_bucket_markdown("Volume Bucket", recommended.get("by_volume_bucket") or []))
-    lines.extend(_render_bucket_markdown("Time Bucket", recommended.get("by_time_bucket") or []))
+    lines.extend(
+        _render_bucket_markdown(
+            "Price Bucket", recommended.get("by_price_bucket") or []
+        )
+    )
+    lines.extend(
+        _render_bucket_markdown(
+            "Volume Bucket", recommended.get("by_volume_bucket") or []
+        )
+    )
+    lines.extend(
+        _render_bucket_markdown("Time Bucket", recommended.get("by_time_bucket") or [])
+    )
     lines.extend(
         [
             "## Eligible But Not Chosen",
@@ -10738,7 +13870,11 @@ def render_statistical_action_weight_markdown(artifact: dict) -> str:
             )
             + " |"
         )
-    chosen_summary = eligible_report.get("chosen_action_summary") if isinstance(eligible_report.get("chosen_action_summary"), list) else []
+    chosen_summary = (
+        eligible_report.get("chosen_action_summary")
+        if isinstance(eligible_report.get("chosen_action_summary"), list)
+        else []
+    )
     lines.extend(
         [
             "",
@@ -10797,8 +13933,12 @@ def save_statistical_action_weight_artifact(report: dict) -> tuple[Path, Path]:
     artifact = build_statistical_action_weight_artifact(report)
     json_path, md_path = statistical_action_report_paths(str(artifact.get("date")))
     json_path.parent.mkdir(parents=True, exist_ok=True)
-    json_path.write_text(json.dumps(artifact, ensure_ascii=False, indent=2), encoding="utf-8")
-    md_path.write_text(render_statistical_action_weight_markdown(artifact), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(artifact, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    md_path.write_text(
+        render_statistical_action_weight_markdown(artifact), encoding="utf-8"
+    )
     return json_path, md_path
 
 
@@ -10832,8 +13972,12 @@ def _prompt_hint_for_matrix_entry(axis: str, row: dict, bias: str) -> str:
 
 def build_holding_exit_decision_matrix(report: dict) -> dict:
     target_date = str(report.get("date") or date.today().isoformat())
-    family = (report.get("threshold_snapshot") or {}).get("statistical_action_weight") or {}
-    recommended = family.get("recommended") if isinstance(family.get("recommended"), dict) else {}
+    family = (report.get("threshold_snapshot") or {}).get(
+        "statistical_action_weight"
+    ) or {}
+    recommended = (
+        family.get("recommended") if isinstance(family.get("recommended"), dict) else {}
+    )
     eligible_report = (
         recommended.get("eligible_but_not_chosen")
         if isinstance(recommended.get("eligible_but_not_chosen"), dict)
@@ -10856,7 +14000,9 @@ def build_holding_exit_decision_matrix(report: dict) -> dict:
                     "axis": axis,
                     "bucket": row.get("bucket"),
                     "recommended_bias": bias,
-                    "confidence_adjusted_score": row.get("best_confidence_adjusted_score"),
+                    "confidence_adjusted_score": row.get(
+                        "best_confidence_adjusted_score"
+                    ),
                     "edge_margin": row.get("edge_margin"),
                     "sample": best.get("sample"),
                     "loss_rate": best.get("loss_rate"),
@@ -10959,7 +14105,11 @@ def render_holding_exit_decision_matrix_markdown(matrix: dict) -> str:
         ]
     )
     for entry in matrix.get("entries") or []:
-        coverage = entry.get("counterfactual_coverage") if isinstance(entry.get("counterfactual_coverage"), dict) else {}
+        coverage = (
+            entry.get("counterfactual_coverage")
+            if isinstance(entry.get("counterfactual_coverage"), dict)
+            else {}
+        )
         lines.append(
             "| "
             + " | ".join(
@@ -10972,7 +14122,10 @@ def render_holding_exit_decision_matrix_markdown(matrix: dict) -> str:
                     _markdown_value(entry.get("sample")),
                     _markdown_value(entry.get("loss_rate")),
                     _markdown_value(coverage.get("ready")),
-                    ",".join(str(item) for item in coverage.get("missing_actions") or []) or "-",
+                    ",".join(
+                        str(item) for item in coverage.get("missing_actions") or []
+                    )
+                    or "-",
                     _markdown_value(entry.get("policy_hint")),
                 ]
             )
@@ -11000,14 +14153,22 @@ def render_holding_exit_decision_matrix_markdown(matrix: dict) -> str:
 
 def save_holding_exit_decision_matrix(report: dict) -> tuple[Path, Path]:
     matrix = build_holding_exit_decision_matrix(report)
-    json_path, md_path = holding_exit_decision_matrix_paths(str(matrix.get("source_date")))
+    json_path, md_path = holding_exit_decision_matrix_paths(
+        str(matrix.get("source_date"))
+    )
     json_path.parent.mkdir(parents=True, exist_ok=True)
-    json_path.write_text(json.dumps(matrix, ensure_ascii=False, indent=2), encoding="utf-8")
-    md_path.write_text(render_holding_exit_decision_matrix_markdown(matrix), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(matrix, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    md_path.write_text(
+        render_holding_exit_decision_matrix_markdown(matrix), encoding="utf-8"
+    )
     return json_path, md_path
 
 
-def _threshold_snapshot_from_families(families: list[dict], *, report_only: bool = False) -> dict:
+def _threshold_snapshot_from_families(
+    families: list[dict], *, report_only: bool = False
+) -> dict:
     snapshot: dict[str, dict] = {}
     for family in families:
         payload = {
@@ -11015,8 +14176,12 @@ def _threshold_snapshot_from_families(families: list[dict], *, report_only: bool
             "sample": family["sample"],
             "apply_ready": False if report_only else family["apply_ready"],
             "sample_ready": family["apply_ready"],
-            "weight_source_ready": family.get("weight_source_ready", family["apply_ready"]),
-            "apply_mode": "report_only_reference" if report_only else family.get("apply_mode"),
+            "weight_source_ready": family.get(
+                "weight_source_ready", family["apply_ready"]
+            ),
+            "apply_mode": (
+                "report_only_reference" if report_only else family.get("apply_mode")
+            ),
             "current": family["current"],
             "recommended": family["recommended"],
         }
@@ -11042,11 +14207,14 @@ def build_cumulative_threshold_cycle_report(
     custom_pipeline_loader = pipeline_loader
     completed_rows_loader = completed_rows_loader or _default_completed_rows_loader
 
-    window_dates: dict[str, list[str]] = {"cumulative": _date_range_between(start_date, target_date)}
+    window_dates: dict[str, list[str]] = {
+        "cumulative": _date_range_between(start_date, target_date)
+    }
     start_dt = datetime.strptime(start_date, "%Y-%m-%d").date()
     for days in rolling_days:
         window_dates[f"rolling_{days}d"] = [
-            value for value in _date_range(target_date, days)
+            value
+            for value in _date_range(target_date, days)
             if datetime.strptime(value, "%Y-%m-%d").date() >= start_dt
         ]
 
@@ -11061,11 +14229,15 @@ def build_cumulative_threshold_cycle_report(
                     rows.extend(load_result.rows)
                     pipeline_meta_by_date.setdefault(event_date, load_result.meta)
                     for warning in load_result.meta.get("warnings", []):
-                        ctx.warnings.append(f"pipeline event 로드 경고({label}/{event_date}): {warning}")
+                        ctx.warnings.append(
+                            f"pipeline event 로드 경고({label}/{event_date}): {warning}"
+                        )
                 else:
                     rows.extend(custom_pipeline_loader(event_date))
             except Exception as exc:
-                ctx.warnings.append(f"pipeline event 로드 실패({label}/{event_date}): {exc}")
+                ctx.warnings.append(
+                    f"pipeline event 로드 실패({label}/{event_date}): {exc}"
+                )
         return rows
 
     report_sources_by_window: dict[str, dict] = {}
@@ -11078,9 +14250,13 @@ def build_cumulative_threshold_cycle_report(
                     if isinstance(context, dict):
                         contexts.append(context)
                     else:
-                        ctx.warnings.append(f"calibration source loader non-dict({label}/{event_date})")
+                        ctx.warnings.append(
+                            f"calibration source loader non-dict({label}/{event_date})"
+                        )
                 except Exception as exc:
-                    ctx.warnings.append(f"calibration source 로드 실패({label}/{event_date}): {exc}")
+                    ctx.warnings.append(
+                        f"calibration source 로드 실패({label}/{event_date}): {exc}"
+                    )
             report_sources_by_window[label] = _aggregate_calibration_source_contexts(
                 contexts,
                 target_date=target_date,
@@ -11110,7 +14286,9 @@ def build_cumulative_threshold_cycle_report(
             completed_by_window[label] = []
             family_snapshots[label] = {}
             family_apply_candidates[label] = []
-            scalp_simulator_by_window[label] = _scalp_simulator_event_summary([], [], target_date=target_date)
+            scalp_simulator_by_window[label] = _scalp_simulator_event_summary(
+                [], [], target_date=target_date
+            )
             event_count_by_window[label] = 0
             continue
         window_events = load_events_for_window(label, dates)
@@ -11125,7 +14303,9 @@ def build_cumulative_threshold_cycle_report(
             real_completed_by_window.get(label, []),
             target_date=window_target_date,
         )
-        family_snapshots[label] = _threshold_snapshot_from_families(families, report_only=True)
+        family_snapshots[label] = _threshold_snapshot_from_families(
+            families, report_only=True
+        )
         family_apply_candidates[label] = []
         scalp_simulator_by_window[label] = _scalp_simulator_event_summary(
             window_events,
@@ -11168,7 +14348,9 @@ def build_cumulative_threshold_cycle_report(
         "windows": window_dates,
         "summary": {
             "event_count_by_window": event_count_by_window,
-            "completed_valid_cumulative": completed_summary_by_window["cumulative"]["all_completed_valid"]["sample"],
+            "completed_valid_cumulative": completed_summary_by_window["cumulative"][
+                "all_completed_valid"
+            ]["sample"],
             "rolling_windows": list(window_dates.keys()),
         },
         "completed_cohorts": completed_summary_by_window,
@@ -11206,7 +14388,11 @@ def render_cumulative_threshold_cycle_markdown(report: dict) -> str:
     ]
     windows = report.get("windows") if isinstance(report.get("windows"), dict) else {}
     event_counts = (report.get("summary") or {}).get("event_count_by_window") or {}
-    completed = report.get("completed_cohorts") if isinstance(report.get("completed_cohorts"), dict) else {}
+    completed = (
+        report.get("completed_cohorts")
+        if isinstance(report.get("completed_cohorts"), dict)
+        else {}
+    )
     for label, dates in windows.items():
         all_completed = (completed.get(label) or {}).get("all_completed_valid") or {}
         lines.append(
@@ -11224,7 +14410,11 @@ def render_cumulative_threshold_cycle_markdown(report: dict) -> str:
             )
             + " |"
         )
-    source_summary = report.get("completed_by_source") if isinstance(report.get("completed_by_source"), dict) else {}
+    source_summary = (
+        report.get("completed_by_source")
+        if isinstance(report.get("completed_by_source"), dict)
+        else {}
+    )
     if source_summary:
         lines.extend(
             [
@@ -11293,12 +14483,18 @@ def render_cumulative_threshold_cycle_markdown(report: dict) -> str:
             "| --- | --- | --- | ---: | --- | --- |",
         ]
     )
-    snapshots = report.get("threshold_snapshot_by_window") if isinstance(report.get("threshold_snapshot_by_window"), dict) else {}
+    snapshots = (
+        report.get("threshold_snapshot_by_window")
+        if isinstance(report.get("threshold_snapshot_by_window"), dict)
+        else {}
+    )
     for label, snapshot in snapshots.items():
         if not isinstance(snapshot, dict):
             continue
         for family, payload in snapshot.items():
-            sample = payload.get("sample") if isinstance(payload.get("sample"), dict) else {}
+            sample = (
+                payload.get("sample") if isinstance(payload.get("sample"), dict) else {}
+            )
             sample_value = _snapshot_relevant_sample_count(str(family), payload)
             lines.append(
                 "| "
@@ -11337,8 +14533,12 @@ def render_cumulative_threshold_cycle_markdown(report: dict) -> str:
 def save_cumulative_threshold_cycle_report(report: dict) -> tuple[Path, Path]:
     json_path, md_path = cumulative_threshold_report_paths(str(report.get("date")))
     json_path.parent.mkdir(parents=True, exist_ok=True)
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-    md_path.write_text(render_cumulative_threshold_cycle_markdown(report), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    md_path.write_text(
+        render_cumulative_threshold_cycle_markdown(report), encoding="utf-8"
+    )
     return json_path, md_path
 
 
@@ -11368,11 +14568,15 @@ def build_daily_threshold_cycle_report(
                 load_result = _default_pipeline_load_result(event_date)
                 pipeline_meta_by_date.setdefault(event_date, load_result.meta)
                 for warning in load_result.meta.get("warnings", []):
-                    ctx.warnings.append(f"pipeline event 로드 경고({label}/{event_date}): {warning}")
+                    ctx.warnings.append(
+                        f"pipeline event 로드 경고({label}/{event_date}): {warning}"
+                    )
                 return load_result.rows
             return list(custom_pipeline_loader(event_date))
         except Exception as exc:
-            ctx.warnings.append(f"pipeline event 로드 실패({label}/{event_date}): {exc}")
+            ctx.warnings.append(
+                f"pipeline event 로드 실패({label}/{event_date}): {exc}"
+            )
             return []
 
     same_day_events: list[dict] = []
@@ -11382,7 +14586,11 @@ def build_daily_threshold_cycle_report(
     sim_completed_rows: list[dict] = []
     sim_completed_seen: set[str] = set()
     for event_date in rolling_7d:
-        window_events = same_day_events if event_date == target_date else load_events_for_date(event_date, "rolling_7d")
+        window_events = (
+            same_day_events
+            if event_date == target_date
+            else load_events_for_date(event_date, "rolling_7d")
+        )
         _extend_unique_scalp_sim_completed_rows(
             sim_completed_rows,
             _extract_scalp_sim_completed_rows(window_events),
@@ -11412,7 +14620,9 @@ def build_daily_threshold_cycle_report(
 
     real_completed_rows = list(completed_rows)
     same_day_sim_completed_rows = _extract_scalp_sim_completed_rows(same_day_events)
-    families = _build_family_reports(same_day_events, real_completed_rows, target_date=target_date)
+    families = _build_family_reports(
+        same_day_events, real_completed_rows, target_date=target_date
+    )
     families.extend(_build_report_source_families(report_source_context))
     completed = _completed_summary(real_completed_rows)
     threshold_snapshot = {
@@ -11420,7 +14630,9 @@ def build_daily_threshold_cycle_report(
             "stage": family["stage"],
             "sample": family["sample"],
             "apply_ready": family["apply_ready"],
-            "weight_source_ready": family.get("weight_source_ready", family["apply_ready"]),
+            "weight_source_ready": family.get(
+                "weight_source_ready", family["apply_ready"]
+            ),
             "apply_mode": family.get("apply_mode"),
             "current": family["current"],
             "recommended": family["recommended"],
@@ -11439,8 +14651,12 @@ def build_daily_threshold_cycle_report(
         }
         for family in families
     ]
-    trade_lifecycle_attribution = _build_trade_lifecycle_attribution(same_day_events, target_date)
-    calibration_candidates = _build_calibration_candidates(families, report_source_context)
+    trade_lifecycle_attribution = _build_trade_lifecycle_attribution(
+        same_day_events, target_date
+    )
+    calibration_candidates = _build_calibration_candidates(
+        families, report_source_context
+    )
     report = {
         "date": target_date,
         "meta": {
@@ -11459,11 +14675,17 @@ def build_daily_threshold_cycle_report(
         "summary": {
             "completed_valid_rolling_7d": completed["completed_valid"],
             "loss_count_rolling_7d": completed["loss_count"],
-            "real_completed_valid_rolling_7d": len(_valid_profit_rows(real_completed_rows)),
-            "sim_completed_valid_rolling_7d": len(_valid_profit_rows(sim_completed_rows)),
+            "real_completed_valid_rolling_7d": len(
+                _valid_profit_rows(real_completed_rows)
+            ),
+            "sim_completed_valid_rolling_7d": len(
+                _valid_profit_rows(sim_completed_rows)
+            ),
             "event_count_same_day": len(same_day_events),
         },
-        "completed_by_source": _completed_by_source_summary(real_completed_rows, sim_completed_rows),
+        "completed_by_source": _completed_by_source_summary(
+            real_completed_rows, sim_completed_rows
+        ),
         "scalp_simulator": _scalp_simulator_event_summary(
             same_day_events,
             same_day_sim_completed_rows,
@@ -11485,7 +14707,9 @@ def build_daily_threshold_cycle_report(
         "calibration_candidates": calibration_candidates,
         "post_apply_attribution": _build_post_apply_attribution(calibration_candidates),
         "safety_guard_pack": _build_safety_guard_pack(calibration_candidates),
-        "calibration_trigger_pack": _build_calibration_trigger_pack(calibration_candidates),
+        "calibration_trigger_pack": _build_calibration_trigger_pack(
+            calibration_candidates
+        ),
         "rollback_guard_pack": _build_rollback_guard_pack(families),
         "warnings": ctx.warnings,
     }
@@ -11494,9 +14718,21 @@ def build_daily_threshold_cycle_report(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Build daily threshold cycle report.")
-    parser.add_argument("--date", dest="target_date", default=date.today().isoformat(), help="Target date (YYYY-MM-DD)")
-    parser.add_argument("--print", dest="print_stdout", action="store_true", help="Print JSON to stdout")
-    parser.add_argument("--skip-db", dest="skip_db", action="store_true", help="Skip completed trade DB lookup")
+    parser.add_argument(
+        "--date",
+        dest="target_date",
+        default=date.today().isoformat(),
+        help="Target date (YYYY-MM-DD)",
+    )
+    parser.add_argument(
+        "--print", dest="print_stdout", action="store_true", help="Print JSON to stdout"
+    )
+    parser.add_argument(
+        "--skip-db",
+        dest="skip_db",
+        action="store_true",
+        help="Skip completed trade DB lookup",
+    )
     parser.add_argument(
         "--calibration-run-phase",
         choices=["intraday", "postclose"],
@@ -11536,7 +14772,9 @@ def main(argv: list[str] | None = None) -> int:
         skip_completed_rows=args.skip_db,
     )
     apply_window_policy_registry_to_report(report, cumulative_report)
-    calibration_path = save_threshold_calibration_report(report, run_phase=args.calibration_run_phase)
+    calibration_path = save_threshold_calibration_report(
+        report, run_phase=args.calibration_run_phase
+    )
     ai_input_context = _build_ai_correction_input_context(
         report,
         cumulative_report,
@@ -11546,7 +14784,9 @@ def main(argv: list[str] | None = None) -> int:
     ai_raw_response = None
     ai_provider_status = {"provider": "none", "status": "not_requested"}
     ai_correction_report = None
-    existing_ai_review_path = threshold_ai_review_paths(args.target_date, args.calibration_run_phase)[0]
+    existing_ai_review_path = threshold_ai_review_paths(
+        args.target_date, args.calibration_run_phase
+    )[0]
     if (
         args.reuse_ai_review_if_valid
         and not args.ai_correction_response_json
@@ -11557,7 +14797,9 @@ def main(argv: list[str] | None = None) -> int:
             input_context_hash=ai_input_context_hash,
         )
     if args.ai_correction_response_json:
-        ai_raw_response = Path(args.ai_correction_response_json).read_text(encoding="utf-8")
+        ai_raw_response = Path(args.ai_correction_response_json).read_text(
+            encoding="utf-8"
+        )
         ai_provider_status = {
             "provider": "file",
             "status": "loaded",

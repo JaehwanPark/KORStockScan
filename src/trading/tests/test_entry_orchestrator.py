@@ -27,7 +27,13 @@ def _snapshot():
 
 def _build_orchestrator(config: EntryConfig, *, order_rtt_avg_ms: int = 100):
     cache = MarketDataCache(stale_after_ms=config.max_ws_age_ms_for_caution)
-    cache.update("005930", last_price=10_010, best_ask=10_020, best_bid=10_000, received_at=time.time())
+    cache.update(
+        "005930",
+        last_price=10_010,
+        best_ask=10_020,
+        best_bid=10_000,
+        received_at=time.time(),
+    )
     return EntryOrchestrator(
         market_data_cache=cache,
         latency_monitor=LatencyMonitor(config),

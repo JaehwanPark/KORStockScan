@@ -1,23 +1,38 @@
-from sqlalchemy import Column, Integer, BigInteger, Float, String, Text, Date, DateTime, Boolean, Index, UniqueConstraint, ForeignKey, text
+from sqlalchemy import (
+    Column,
+    Integer,
+    BigInteger,
+    Float,
+    String,
+    Text,
+    Date,
+    DateTime,
+    Boolean,
+    Index,
+    UniqueConstraint,
+    ForeignKey,
+    text,
+)
 from sqlalchemy.orm import declarative_base
 
 Base = declarative_base()
 
+
 class DailyStockQuote(Base):
-    __tablename__ = 'daily_stock_quotes'
+    __tablename__ = "daily_stock_quotes"
 
     # 💡 [핵심] Date -> quote_date, Code -> stock_code로 명확화 및 복합키 설정
     quote_date = Column(Date, primary_key=True)
     stock_code = Column(String(10), primary_key=True)
     stock_name = Column(Text)
-    
+
     # 가격 및 거래량
     open_price = Column(Float)
     high_price = Column(Float)
     low_price = Column(Float)
     close_price = Column(Float)
     volume = Column(Float)
-    
+
     # 기술적 지표
     ma5 = Column(Float)
     ma20 = Column(Float)
@@ -37,10 +52,10 @@ class DailyStockQuote(Base):
     vwap = Column(Float)
     obv = Column(Float)
     atr = Column(Float)
-    
+
     # 파이썬 예약어인 'return'과 충돌을 피하기 위해 변수명은 'daily_return'으로 명명
     daily_return = Column(Float)
-    
+
     # 수급 및 기타 지표
     marcap = Column(BigInteger, server_default=text("0"))
     retail_net = Column(Float, server_default=text("0"))
@@ -54,7 +69,7 @@ class DailyStockQuote(Base):
 
 
 class MacroAlert(Base):
-    __tablename__ = 'macro_alerts'
+    __tablename__ = "macro_alerts"
 
     # 💡 신규 추가된 거시경제 알림 테이블
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -62,7 +77,7 @@ class MacroAlert(Base):
     category = Column(Text)
     source = Column(Text)
     title = Column(Text)
-    link = Column(Text, unique=True) # UNIQUE 제약조건 반영
+    link = Column(Text, unique=True)  # UNIQUE 제약조건 반영
     severity_score = Column(Integer)
 
     def __repr__(self):
@@ -70,15 +85,15 @@ class MacroAlert(Base):
 
 
 class RecommendationHistory(Base):
-    __tablename__ = 'recommendation_history'
+    __tablename__ = "recommendation_history"
 
     # 💡 [핵심 교정] 새롭게 추가된 id를 Primary Key로 지정합니다.
     id = Column(Integer, primary_key=True, autoincrement=True)
-    
+
     # 기존에 PK 역할을 하던 두 컬럼은 일반 컬럼으로 강등(?) 시킵니다.
-    rec_date = Column(Date, nullable=False) 
+    rec_date = Column(Date, nullable=False)
     stock_code = Column(String(10), nullable=False)
-    
+
     stock_name = Column(Text)
     trade_type = Column(Text)
     status = Column(Text, server_default=text("'WATCHING'"))
@@ -87,11 +102,11 @@ class RecommendationHistory(Base):
     prob = Column(Float, server_default=text("0.70"))
     nxt = Column(Float)
     entry_armed_at_epoch = Column(Float)
-    
+
     buy_price = Column(Float)
     buy_qty = Column(Integer, server_default=text("0"))
-    buy_time = Column(DateTime) # DDL에 맞춰 진정한 DateTime으로 복귀!
-    
+    buy_time = Column(DateTime)  # DDL에 맞춰 진정한 DateTime으로 복귀!
+
     sell_price = Column(Integer, server_default=text("0"))
     sell_time = Column(DateTime)
     profit_rate = Column(Float, server_default=text("0.0"))
@@ -105,7 +120,9 @@ class RecommendationHistory(Base):
     last_add_type = Column(Text, nullable=True)
     last_add_reason = Column(Text, nullable=True)
     last_add_at = Column(DateTime, nullable=True)
-    shallow_volatility_avg_down_count = Column(Integer, nullable=True, server_default=text("0"))
+    shallow_volatility_avg_down_count = Column(
+        Integer, nullable=True, server_default=text("0")
+    )
     shallow_volatility_avg_down_last_at = Column(DateTime, nullable=True)
     scale_in_locked = Column(Boolean, nullable=True, server_default=text("false"))
     hard_stop_price = Column(Float, nullable=True)
@@ -116,7 +133,7 @@ class RecommendationHistory(Base):
 
 
 class HoldingAddHistory(Base):
-    __tablename__ = 'holding_add_history'
+    __tablename__ = "holding_add_history"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     recommendation_id = Column(Integer, nullable=False)
@@ -144,12 +161,14 @@ class HoldingAddHistory(Base):
 
 
 class TradePerformanceFact(Base):
-    __tablename__ = 'trade_performance_facts'
+    __tablename__ = "trade_performance_facts"
     __table_args__ = (
         Index("idx_tpf_rec_date", "rec_date"),
         Index("idx_tpf_rec_date_status", "rec_date", "status"),
         Index("idx_tpf_rec_date_strategy_tag", "rec_date", "strategy", "position_tag"),
-        Index("idx_tpf_rec_date_pnl_profit", "rec_date", "realized_pnl_krw", "profit_rate"),
+        Index(
+            "idx_tpf_rec_date_pnl_profit", "rec_date", "realized_pnl_krw", "profit_rate"
+        ),
     )
 
     recommendation_id = Column(Integer, primary_key=True)
@@ -182,9 +201,14 @@ class TradePerformanceFact(Base):
 
 
 class StrategyPositionPerformanceDaily(Base):
-    __tablename__ = 'strategy_position_performance_daily'
+    __tablename__ = "strategy_position_performance_daily"
     __table_args__ = (
-        Index("idx_sppd_rec_date_pnl_entered", "rec_date", "realized_pnl_krw", "entered_count"),
+        Index(
+            "idx_sppd_rec_date_pnl_entered",
+            "rec_date",
+            "realized_pnl_krw",
+            "entered_count",
+        ),
         Index("idx_sppd_strategy_tag_date", "strategy", "position_tag", "rec_date"),
     )
 
@@ -213,11 +237,18 @@ class StrategyPositionPerformanceDaily(Base):
 
 
 class SwingStrategyDiscoveryCandidate(Base):
-    __tablename__ = 'swing_strategy_discovery_candidates'
+    __tablename__ = "swing_strategy_discovery_candidates"
     __table_args__ = (
-        UniqueConstraint('source_date', 'stock_code', 'policy_version', name='uq_ssd_candidate_date_code_policy'),
-        Index('idx_ssd_candidate_date_arm', 'source_date', 'selection_arm'),
-        Index('idx_ssd_candidate_date_score', 'source_date', 'lifecycle_exploration_score'),
+        UniqueConstraint(
+            "source_date",
+            "stock_code",
+            "policy_version",
+            name="uq_ssd_candidate_date_code_policy",
+        ),
+        Index("idx_ssd_candidate_date_arm", "source_date", "selection_arm"),
+        Index(
+            "idx_ssd_candidate_date_score", "source_date", "lifecycle_exploration_score"
+        ),
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -241,7 +272,9 @@ class SwingStrategyDiscoveryCandidate(Base):
     legacy_hybrid_mean = Column(Float)
     lifecycle_exploration_score = Column(Float)
     source_features = Column(Text)
-    decision_authority = Column(Text, server_default=text("'swing_sim_exploration_only'"))
+    decision_authority = Column(
+        Text, server_default=text("'swing_sim_exploration_only'")
+    )
     actual_order_submitted = Column(Boolean, server_default=text("false"))
     broker_order_forbidden = Column(Boolean, server_default=text("true"))
     runtime_effect = Column(Boolean, server_default=text("false"))
@@ -253,15 +286,28 @@ class SwingStrategyDiscoveryCandidate(Base):
 
 
 class SwingStrategyDiscoveryArm(Base):
-    __tablename__ = 'swing_strategy_discovery_arms'
+    __tablename__ = "swing_strategy_discovery_arms"
     __table_args__ = (
-        UniqueConstraint('candidate_id', 'arm_id', 'policy_version', name='uq_ssd_arm_candidate_arm_policy'),
-        Index('idx_ssd_arm_date_status', 'source_date', 'status'),
-        Index('idx_ssd_arm_date_policy', 'source_date', 'entry_policy', 'sizing_policy', 'exit_policy'),
+        UniqueConstraint(
+            "candidate_id",
+            "arm_id",
+            "policy_version",
+            name="uq_ssd_arm_candidate_arm_policy",
+        ),
+        Index("idx_ssd_arm_date_status", "source_date", "status"),
+        Index(
+            "idx_ssd_arm_date_policy",
+            "source_date",
+            "entry_policy",
+            "sizing_policy",
+            "exit_policy",
+        ),
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    candidate_id = Column(Integer, ForeignKey('swing_strategy_discovery_candidates.id'), nullable=False)
+    candidate_id = Column(
+        Integer, ForeignKey("swing_strategy_discovery_candidates.id"), nullable=False
+    )
     source_date = Column(Date, nullable=False)
     stock_code = Column(String(10), nullable=False)
     policy_version = Column(Text, nullable=False)
@@ -289,15 +335,22 @@ class SwingStrategyDiscoveryArm(Base):
 
 
 class SwingStrategyDiscoveryLabel(Base):
-    __tablename__ = 'swing_strategy_discovery_labels'
+    __tablename__ = "swing_strategy_discovery_labels"
     __table_args__ = (
-        UniqueConstraint('arm_row_id', 'label_horizon', 'label_version', name='uq_ssd_label_arm_horizon_version'),
-        Index('idx_ssd_label_date_horizon', 'source_date', 'label_horizon'),
-        Index('idx_ssd_label_date_status', 'source_date', 'label_status'),
+        UniqueConstraint(
+            "arm_row_id",
+            "label_horizon",
+            "label_version",
+            name="uq_ssd_label_arm_horizon_version",
+        ),
+        Index("idx_ssd_label_date_horizon", "source_date", "label_horizon"),
+        Index("idx_ssd_label_date_status", "source_date", "label_status"),
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    arm_row_id = Column(Integer, ForeignKey('swing_strategy_discovery_arms.id'), nullable=False)
+    arm_row_id = Column(
+        Integer, ForeignKey("swing_strategy_discovery_arms.id"), nullable=False
+    )
     source_date = Column(Date, nullable=False)
     stock_code = Column(String(10), nullable=False)
     policy_version = Column(Text, nullable=False)
@@ -320,7 +373,7 @@ class SwingStrategyDiscoveryLabel(Base):
 
 
 class User(Base):
-    __tablename__ = 'users'
+    __tablename__ = "users"
 
     # 💡 Telegram ID를 위한 BigInteger
     chat_id = Column(BigInteger, primary_key=True)
@@ -328,7 +381,7 @@ class User(Base):
     auth_group = Column(Text, server_default=text("'USER'"))
     # 💡 [신규 추가] 봇 활성화 상태 (차단/나가기 감지용)
     is_active = Column(Boolean, default=True, server_default=text("true"))
-    
+
     # 💡 [신규 추가] 실시간 종목분석 일일 사용량 제한용
     daily_analyze_count = Column(Integer, default=0, server_default=text("0"))
     last_analyze_date = Column(Date)

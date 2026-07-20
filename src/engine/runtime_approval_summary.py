@@ -24,14 +24,15 @@ from src.engine.daily_threshold_cycle_report import REPORT_DIR
 from src.engine.lifecycle_bucket_discovery import discovery_report_path
 from src.engine.threshold_cycle_ev_report import ev_report_paths
 
-
 SUMMARY_DIR = REPORT_DIR / "runtime_approval_summary"
 SWING_RUNTIME_APPROVAL_DIR = REPORT_DIR / "swing_runtime_approval"
 PATTERN_LAB_CURRENTNESS_AUDIT_DIR = REPORT_DIR / "pattern_lab_currentness_audit"
 PATTERN_LAB_AI_REVIEW_DIR = REPORT_DIR / "pattern_lab_ai_review"
 PRODUCER_GAP_DISCOVERY_DIR = REPORT_DIR / "producer_gap_discovery"
 PATTERN_LAB_PROPAGATION_AUDIT_DIR = REPORT_DIR / "pattern_lab_propagation_audit"
-SWING_RUNTIME_APPROVAL_ARTIFACT_DIR = Path(__file__).resolve().parents[2] / "data" / "threshold_cycle" / "approvals"
+SWING_RUNTIME_APPROVAL_ARTIFACT_DIR = (
+    Path(__file__).resolve().parents[2] / "data" / "threshold_cycle" / "approvals"
+)
 BOT_HISTORY_LOG = Path(__file__).resolve().parents[2] / "logs" / "bot_history.log"
 LEGACY_PHASE0_REAL_CANARY_FAMILIES = {
     "swing_one_share_real_canary_phase0",
@@ -452,8 +453,14 @@ def _state_interpretation(state: str, selected: bool) -> str:
     return _STATE_INTERPRETATIONS.get(state, "판정 해석 미등록")
 
 
-def _gate_review(domain: str, family: str, reasons: list[Any] | None = None) -> dict[str, Any]:
-    reasons = [str(reason or "").strip() for reason in (reasons or []) if str(reason or "").strip()]
+def _gate_review(
+    domain: str, family: str, reasons: list[Any] | None = None
+) -> dict[str, Any]:
+    reasons = [
+        str(reason or "").strip()
+        for reason in (reasons or [])
+        if str(reason or "").strip()
+    ]
     if domain == "scalping":
         annotation = dict(_SCALPING_GATE_REVIEW.get(family) or {})
     elif domain == "swing":
@@ -470,7 +477,9 @@ def _gate_review(domain: str, family: str, reasons: list[Any] | None = None) -> 
         }
     if any(reason.startswith("same_stage_owner_conflict:") for reason in reasons):
         annotation.setdefault("legacy_hard_gate_risk", "same_stage_deferred")
-        annotation["gate_review_class"] = annotation.get("gate_review_class") or "same_stage_deferred"
+        annotation["gate_review_class"] = (
+            annotation.get("gate_review_class") or "same_stage_deferred"
+        )
     if "runtime_family_guard_missing" in reasons:
         annotation.setdefault("legacy_hard_gate_risk", "contract_gap")
     return annotation
@@ -483,14 +492,22 @@ def _sample_floor_status(sample_count: Any, sample_floor: Any) -> str:
     return "ready" if _as_int(sample_count) >= floor else "below_floor"
 
 
-def _hold_defer_breakdown(candidate: dict[str, Any], reasons: list[Any]) -> dict[str, Any]:
-    source_metrics = candidate.get("source_metrics") if isinstance(candidate.get("source_metrics"), dict) else {}
-    field_coverage = source_metrics.get("field_coverage") if isinstance(source_metrics.get("field_coverage"), dict) else {}
+def _hold_defer_breakdown(
+    candidate: dict[str, Any], reasons: list[Any]
+) -> dict[str, Any]:
+    source_metrics = (
+        candidate.get("source_metrics")
+        if isinstance(candidate.get("source_metrics"), dict)
+        else {}
+    )
+    field_coverage = (
+        source_metrics.get("field_coverage")
+        if isinstance(source_metrics.get("field_coverage"), dict)
+        else {}
+    )
     required_fields = ["flow_action", "defer_sec", "worsen_after_candidate"]
     missing_fields = [
-        field
-        for field in required_fields
-        if _as_int(field_coverage.get(field)) <= 0
+        field for field in required_fields if _as_int(field_coverage.get(field)) <= 0
     ]
     sample_count = candidate.get("sample_count", source_metrics.get("sample_count"))
     sample_floor = candidate.get("sample_floor")
@@ -498,13 +515,19 @@ def _hold_defer_breakdown(candidate: dict[str, Any], reasons: list[Any]) -> dict
         "sample_floor_status": _sample_floor_status(sample_count, sample_floor),
         "sample_count": _as_int(sample_count),
         "sample_floor": _as_int(sample_floor),
-        "field_coverage": {field: _as_int(field_coverage.get(field)) for field in required_fields},
+        "field_coverage": {
+            field: _as_int(field_coverage.get(field)) for field in required_fields
+        },
         "missing_component_fields": missing_fields,
         "runtime_guard_status": (
-            "missing" if "runtime_family_guard_missing" in [str(reason) for reason in reasons] else "available"
+            "missing"
+            if "runtime_family_guard_missing" in [str(reason) for reason in reasons]
+            else "available"
         ),
         "downside_guard_status": (
-            "blocked" if "severe_downside_guard" in [str(reason) for reason in reasons] else "clear"
+            "blocked"
+            if "severe_downside_guard" in [str(reason) for reason in reasons]
+            else "clear"
         ),
     }
 
@@ -516,12 +539,21 @@ def _refine_swing_gate_review(
     reasons: list[Any],
 ) -> dict[str, Any]:
     if family != "swing_holding_flow_defer":
-        sample_ready = _sample_floor_status(candidate.get("sample_count"), candidate.get("sample_floor")) == "ready"
+        sample_ready = (
+            _sample_floor_status(
+                candidate.get("sample_count"), candidate.get("sample_floor")
+            )
+            == "ready"
+        )
         current_class = str(annotation.get("gate_review_class") or "")
         if sample_ready and current_class.startswith("sample_or_contract_gap_"):
             reason_text = " ".join(str(reason) for reason in reasons)
             refined = dict(annotation)
-            if "source_quality" in reason_text or "invalid_micro_context" in reason_text or "severe_downside_guard" in reason_text:
+            if (
+                "source_quality" in reason_text
+                or "invalid_micro_context" in reason_text
+                or "severe_downside_guard" in reason_text
+            ):
                 refined["legacy_hard_gate_risk"] = "source_quality_or_contract_gap"
                 refined["gate_review_class"] = current_class.replace(
                     "sample_or_contract_gap_", "source_quality_or_contract_gap_", 1
@@ -545,7 +577,9 @@ def _refine_swing_gate_review(
     refined = dict(annotation)
     if sample_ready and (runtime_gap or downside_blocked or component_gap):
         if downside_blocked:
-            refined["gate_review_class"] = "source_quality_and_runtime_contract_gap_holding_axis"
+            refined["gate_review_class"] = (
+                "source_quality_and_runtime_contract_gap_holding_axis"
+            )
             refined["legacy_hard_gate_risk"] = "source_quality_or_contract_gap"
         else:
             refined["gate_review_class"] = "runtime_contract_gap_holding_axis"
@@ -554,11 +588,15 @@ def _refine_swing_gate_review(
             "hold defer 표본 floor는 충족했다. runtime guard, severe downside guard, "
             "flow_action/defer_sec/worsen_after_candidate coverage를 분리 판정해야 한다"
         )
-        refined["tuning_route"] = "hold-defer component decomposition before runtime guard approval"
+        refined["tuning_route"] = (
+            "hold-defer component decomposition before runtime guard approval"
+        )
     elif not sample_ready:
         refined["gate_review_class"] = "sample_gap_holding_axis"
         refined["legacy_hard_gate_risk"] = "sample_or_contract_gap"
-        refined["hard_gate_review"] = "hold defer 표본 floor 미달이라 runtime guard 검토 전에 표본 보강이 필요하다"
+        refined["hard_gate_review"] = (
+            "hold defer 표본 floor 미달이라 runtime guard 검토 전에 표본 보강이 필요하다"
+        )
     refined["hold_defer_breakdown"] = breakdown
     return refined
 
@@ -642,7 +680,11 @@ def _hold_sample_reasons(item: dict[str, Any]) -> list[str]:
     sample_count = _as_int(item.get("sample_count"))
     source_sample_count = _as_int(item.get("source_sample_count"))
     sample_floor = _as_int(item.get("sample_floor"))
-    source_metrics = item.get("source_metrics") if isinstance(item.get("source_metrics"), dict) else {}
+    source_metrics = (
+        item.get("source_metrics")
+        if isinstance(item.get("source_metrics"), dict)
+        else {}
+    )
     reasons: list[str] = []
     if sample_floor and sample_count < sample_floor:
         reasons.append("family_sample_floor_not_met")
@@ -651,9 +693,14 @@ def _hold_sample_reasons(item: dict[str, Any]) -> list[str]:
     coverage_gap = str(source_metrics.get("coverage_gap_type") or "").strip()
     if coverage_gap:
         reasons.append(coverage_gap)
-    if source_metrics.get("attribution_gap") is True and "counterfactual_join_gap" not in reasons:
+    if (
+        source_metrics.get("attribution_gap") is True
+        and "counterfactual_join_gap" not in reasons
+    ):
         reasons.append("counterfactual_join_gap")
-    recommended_reason = str(source_metrics.get("recommended_action_reason") or "").strip()
+    recommended_reason = str(
+        source_metrics.get("recommended_action_reason") or ""
+    ).strip()
     if "recovery_count=" in recommended_reason and "below floor=" in recommended_reason:
         reasons.append("recovery_floor_not_met")
     return list(dict.fromkeys(reasons or ["family_sample_floor_not_met"]))
@@ -667,11 +714,21 @@ def _count_field(rows: list[dict[str, Any]], field: str) -> dict[str, int]:
     return dict(sorted(counts.items()))
 
 
-def _scalping_rows(ev_report: dict[str, Any], calibration_report: dict[str, Any]) -> list[dict[str, Any]]:
-    outcome = ev_report.get("calibration_outcome") if isinstance(ev_report.get("calibration_outcome"), dict) else {}
-    decisions = outcome.get("decisions") if isinstance(outcome.get("decisions"), list) else []
+def _scalping_rows(
+    ev_report: dict[str, Any], calibration_report: dict[str, Any]
+) -> list[dict[str, Any]]:
+    outcome = (
+        ev_report.get("calibration_outcome")
+        if isinstance(ev_report.get("calibration_outcome"), dict)
+        else {}
+    )
+    decisions = (
+        outcome.get("decisions") if isinstance(outcome.get("decisions"), list) else []
+    )
     candidates = _candidate_by_family(calibration_report.get("calibration_candidates"))
-    selected = set((ev_report.get("runtime_apply") or {}).get("selected_families") or [])
+    selected = set(
+        (ev_report.get("runtime_apply") or {}).get("selected_families") or []
+    )
     lifecycle_matrix = (
         ev_report.get("lifecycle_decision_matrix")
         if isinstance(ev_report.get("lifecycle_decision_matrix"), dict)
@@ -702,11 +759,18 @@ def _scalping_rows(ev_report: dict[str, Any], calibration_report: dict[str, Any]
             "family": family,
             "description": _description(family),
             "state": state,
-            "current_application": _current_application(family, state, family in selected),
+            "current_application": _current_application(
+                family, state, family in selected
+            ),
             "state_interpretation": _state_interpretation(state, family in selected),
-            "score": item.get("tradeoff_score", item.get("confidence", candidate.get("confidence"))),
+            "score": item.get(
+                "tradeoff_score", item.get("confidence", candidate.get("confidence"))
+            ),
             "score_label": _format_score(
-                item.get("tradeoff_score", item.get("confidence", candidate.get("confidence")))
+                item.get(
+                    "tradeoff_score",
+                    item.get("confidence", candidate.get("confidence")),
+                )
             ),
             "sample": {
                 "count": item.get("sample_count"),
@@ -741,29 +805,51 @@ def _scalping_rows(ev_report: dict[str, Any], calibration_report: dict[str, Any]
             "family": "scalp_entry_action_decision_matrix_advisory",
             "description": _description("scalp_entry_action_decision_matrix_advisory"),
             "state": state,
-            "current_application": _current_application("scalp_entry_action_decision_matrix_advisory", state, False),
+            "current_application": _current_application(
+                "scalp_entry_action_decision_matrix_advisory", state, False
+            ),
             "state_interpretation": "운영 override runtime bias는 AI BUY를 WAIT/DROP 또는 defensive bias로 보정한다",
             "score": entry_adm.get("source_quality_adjusted_ev_pct"),
-            "score_label": _format_score(entry_adm.get("source_quality_adjusted_ev_pct")),
+            "score_label": _format_score(
+                entry_adm.get("source_quality_adjusted_ev_pct")
+            ),
             "sample": {"count": joined, "floor": floor},
             "reasons": reasons or ["hold"],
             "reason_label": _reason_text(reasons or ["hold"]),
             "selected_auto_bounded_live": False,
             "runtime_bias_scope": "force_wait_force_drop_buy_defensive_bias",
         }
-        row.update(_gate_review("scalping", "scalp_entry_action_decision_matrix_advisory", reasons))
+        row.update(
+            _gate_review(
+                "scalping", "scalp_entry_action_decision_matrix_advisory", reasons
+            )
+        )
         row["state_interpretation"] = (
             "운영 override runtime bias는 AI BUY를 WAIT/DROP 또는 defensive bias로 보정한다. "
             "daily action bucket EV와 runtime forced_action provenance가 충분해야 다음 env 튜닝 판단으로 넘어간다."
         )
         rows.append(row)
     if lifecycle_matrix:
-        metrics = lifecycle_matrix.get("metrics") if isinstance(lifecycle_matrix.get("metrics"), dict) else {}
-        total_rows = _as_int(metrics.get("total_rows", lifecycle_matrix.get("total_rows")))
-        joined = _as_int(metrics.get("joined_rows", lifecycle_matrix.get("joined_rows")))
+        metrics = (
+            lifecycle_matrix.get("metrics")
+            if isinstance(lifecycle_matrix.get("metrics"), dict)
+            else {}
+        )
+        total_rows = _as_int(
+            metrics.get("total_rows", lifecycle_matrix.get("total_rows"))
+        )
+        joined = _as_int(
+            metrics.get("joined_rows", lifecycle_matrix.get("joined_rows"))
+        )
         floor = _as_int(lifecycle_matrix.get("sample_floor")) or 20
-        pass_count = _as_int(metrics.get("policy_pass_count", lifecycle_matrix.get("policy_pass_count")))
-        promote_ready = _as_int(metrics.get("promote_ready_count", lifecycle_matrix.get("promote_ready_count")))
+        pass_count = _as_int(
+            metrics.get("policy_pass_count", lifecycle_matrix.get("policy_pass_count"))
+        )
+        promote_ready = _as_int(
+            metrics.get(
+                "promote_ready_count", lifecycle_matrix.get("promote_ready_count")
+            )
+        )
         selected_family = "lifecycle_decision_matrix_runtime" in selected
         if not lifecycle_matrix.get("available"):
             state = "freeze"
@@ -786,7 +872,8 @@ def _scalping_rows(ev_report: dict[str, Any], calibration_report: dict[str, Any]
             (
                 item.get("stage_ev_composite_pct")
                 for item in policy_entries
-                if isinstance(item, dict) and item.get("stage_ev_composite_pct") is not None
+                if isinstance(item, dict)
+                and item.get("stage_ev_composite_pct") is not None
             ),
             None,
         )
@@ -808,20 +895,34 @@ def _scalping_rows(ev_report: dict[str, Any], calibration_report: dict[str, Any]
             "reasons": reasons,
             "reason_label": _reason_text(reasons),
             "selected_auto_bounded_live": selected_family,
-            "runtime_bias_scope": lifecycle_matrix.get("runtime_bias_scope") or "stage_action_proposal_micro_canary",
-            "fixed_threshold_roles": lifecycle_matrix.get("fixed_threshold_roles") or {},
+            "runtime_bias_scope": lifecycle_matrix.get("runtime_bias_scope")
+            or "stage_action_proposal_micro_canary",
+            "fixed_threshold_roles": lifecycle_matrix.get("fixed_threshold_roles")
+            or {},
             "policy_pass_count": pass_count,
             "promote_ready_count": promote_ready,
         }
-        row.update(_gate_review("scalping", "lifecycle_decision_matrix_runtime", reasons))
+        row.update(
+            _gate_review("scalping", "lifecycle_decision_matrix_runtime", reasons)
+        )
         rows.append(row)
-    entry_funnel = ev_report.get("entry_funnel") if isinstance(ev_report.get("entry_funnel"), dict) else {}
-    if "latency_classifier_runtime_profile" in selected or entry_funnel.get("latency_submit_routing"):
+    entry_funnel = (
+        ev_report.get("entry_funnel")
+        if isinstance(ev_report.get("entry_funnel"), dict)
+        else {}
+    )
+    if "latency_classifier_runtime_profile" in selected or entry_funnel.get(
+        "latency_submit_routing"
+    ):
         selected_family = "latency_classifier_runtime_profile" in selected
         recommended_action = str(entry_funnel.get("recommended_action") or "")
         recommended_reason = str(entry_funnel.get("recommended_action_reason") or "")
         allowed_runtime_apply = bool(entry_funnel.get("allowed_runtime_apply"))
-        next_preopen_selected = selected_family and recommended_action == "bounded_apply" and allowed_runtime_apply
+        next_preopen_selected = (
+            selected_family
+            and recommended_action == "bounded_apply"
+            and allowed_runtime_apply
+        )
         recovery_candidates = _as_int(entry_funnel.get("would_recovery_canary_events"))
         recovery_attempts = _as_int(entry_funnel.get("would_recovery_canary_attempts"))
         caution_normal_semantics = _as_int(
@@ -833,7 +934,11 @@ def _scalping_rows(ev_report: dict[str, Any], calibration_report: dict[str, Any]
             state = "adjust_up"
             reasons = ["selected_auto_bounded_live"]
         elif recovery_candidates > 0:
-            state = "hold_sample" if _as_int(entry_funnel.get("counterfactual_joined_sample")) < 3 else "hold_no_edge"
+            state = (
+                "hold_sample"
+                if _as_int(entry_funnel.get("counterfactual_joined_sample")) < 3
+                else "hold_no_edge"
+            )
             reasons = ["latency_recovery_hold_by_counterfactual_ev"]
         else:
             state = "hold_sample"
@@ -857,43 +962,66 @@ def _scalping_rows(ev_report: dict[str, Any], calibration_report: dict[str, Any]
             "sample": {
                 "count": _as_int(entry_funnel.get("latency_block_events")),
                 "floor": 20,
-                "would_safe_pass_events": _as_int(entry_funnel.get("would_safe_pass_events")),
+                "would_safe_pass_events": _as_int(
+                    entry_funnel.get("would_safe_pass_events")
+                ),
                 "historical_caution_audit_events": caution_normal_semantics,
                 "would_recovery_canary_events": recovery_candidates,
                 "would_recovery_canary_attempts": recovery_attempts,
                 "latency_pass_events": _as_int(entry_funnel.get("latency_pass_events")),
-                "order_bundle_submitted_events": _as_int(entry_funnel.get("order_bundle_submitted_events")),
-                "counterfactual_joined_sample": _as_int(entry_funnel.get("counterfactual_joined_sample")),
+                "order_bundle_submitted_events": _as_int(
+                    entry_funnel.get("order_bundle_submitted_events")
+                ),
+                "counterfactual_joined_sample": _as_int(
+                    entry_funnel.get("counterfactual_joined_sample")
+                ),
                 "counterfactual_ev_pct": entry_funnel.get("counterfactual_ev_pct"),
-                "missed_winner_recovered": _as_int(entry_funnel.get("missed_winner_recovered")),
+                "missed_winner_recovered": _as_int(
+                    entry_funnel.get("missed_winner_recovered")
+                ),
                 "avoided_loser_lost": _as_int(entry_funnel.get("avoided_loser_lost")),
-                "stale_quote_override_events": _as_int(entry_funnel.get("stale_quote_override_events")),
-                "broker_guard_bypass_candidates": _as_int(entry_funnel.get("broker_guard_bypass_candidates")),
+                "stale_quote_override_events": _as_int(
+                    entry_funnel.get("stale_quote_override_events")
+                ),
+                "broker_guard_bypass_candidates": _as_int(
+                    entry_funnel.get("broker_guard_bypass_candidates")
+                ),
             },
             "reasons": reasons,
             "reason_label": _reason_text(reasons),
             "selected_auto_bounded_live": next_preopen_selected,
-            "previous_selected_auto_bounded_live": selected_family and not next_preopen_selected,
+            "previous_selected_auto_bounded_live": selected_family
+            and not next_preopen_selected,
             "allowed_runtime_apply": allowed_runtime_apply,
             "runtime_bias_scope": "latency_submit_recovery_bounded_canary",
             "latency_submit_routing": entry_funnel.get("latency_submit_routing"),
             "recommended_action": recommended_action,
             "recommended_action_reason": recommended_reason,
         }
-        row.update(_gate_review("scalping", "latency_classifier_runtime_profile", reasons))
+        row.update(
+            _gate_review("scalping", "latency_classifier_runtime_profile", reasons)
+        )
         rows.append(row)
     target_date = str(ev_report.get("date") or "").strip()
-    overnight_path = REPORT_DIR / "scalp_sim_overnight" / f"scalp_sim_overnight_{target_date}.json"
+    overnight_path = (
+        REPORT_DIR / "scalp_sim_overnight" / f"scalp_sim_overnight_{target_date}.json"
+    )
     overnight_report = _load_json(overnight_path)
     if overnight_report:
-        summary = overnight_report.get("summary") if isinstance(overnight_report.get("summary"), dict) else {}
+        summary = (
+            overnight_report.get("summary")
+            if isinstance(overnight_report.get("summary"), dict)
+            else {}
+        )
         sample = _as_int(summary.get("decision_target"))
         row = {
             "domain": "scalping",
             "family": "scalp_sim_overnight_ai_carry",
             "description": _description("scalp_sim_overnight_ai_carry"),
             "state": "observe_only",
-            "current_application": _current_application("scalp_sim_overnight_ai_carry", "observe_only", False),
+            "current_application": _current_application(
+                "scalp_sim_overnight_ai_carry", "observe_only", False
+            ),
             "state_interpretation": "runtime_effect=false source다. SELL_TODAY는 sim 가상 청산, HOLD_OVERNIGHT는 active_unrealized carry로만 남긴다.",
             "score": None,
             "score_label": "-",
@@ -910,7 +1038,9 @@ def _scalping_rows(ev_report: dict[str, Any], calibration_report: dict[str, Any]
             "decision_authority": overnight_report.get("decision_authority"),
             "artifact": str(overnight_path),
         }
-        row.update(_gate_review("scalping", "scalp_sim_overnight_ai_carry", ["observe_only"]))
+        row.update(
+            _gate_review("scalping", "scalp_sim_overnight_ai_carry", ["observe_only"])
+        )
         rows.append(row)
     return rows
 
@@ -920,9 +1050,16 @@ def _approved_swing_request_ids(target_date: str) -> set[str]:
         return set()
 
     approved_ids: set[str] = set()
-    artifact = _load_json(SWING_RUNTIME_APPROVAL_ARTIFACT_DIR / f"swing_runtime_approvals_{target_date}.json")
+    artifact = _load_json(
+        SWING_RUNTIME_APPROVAL_ARTIFACT_DIR
+        / f"swing_runtime_approvals_{target_date}.json"
+    )
     for item in artifact.get("approved_requests") or []:
-        if isinstance(item, dict) and bool(item.get("approved", True)) and item.get("approval_id"):
+        if (
+            isinstance(item, dict)
+            and bool(item.get("approved", True))
+            and item.get("approval_id")
+        ):
             approved_ids.add(str(item.get("approval_id")))
     return approved_ids
 
@@ -930,7 +1067,11 @@ def _approved_swing_request_ids(target_date: str) -> set[str]:
 def _swing_rows(swing_report: dict[str, Any]) -> list[dict[str, Any]]:
     candidates = _candidate_by_family(swing_report.get("candidates"))
     rows: list[dict[str, Any]] = []
-    blocked = swing_report.get("blocked_requests") if isinstance(swing_report.get("blocked_requests"), list) else []
+    blocked = (
+        swing_report.get("blocked_requests")
+        if isinstance(swing_report.get("blocked_requests"), list)
+        else []
+    )
     target_date = str(swing_report.get("date") or "").strip()
     legacy_phase0_seen: set[str] = set()
     for item in blocked:
@@ -950,14 +1091,24 @@ def _swing_rows(swing_report: dict[str, Any]) -> list[dict[str, Any]]:
             "domain": "swing",
             "family": family,
             "description": _description(family),
-            "state": item.get("calibration_state") or candidate.get("calibration_state") or "-",
+            "state": item.get("calibration_state")
+            or candidate.get("calibration_state")
+            or "-",
             "current_application": _current_application(
                 family,
-                str(item.get("calibration_state") or candidate.get("calibration_state") or "-"),
+                str(
+                    item.get("calibration_state")
+                    or candidate.get("calibration_state")
+                    or "-"
+                ),
                 False,
             ),
             "state_interpretation": _state_interpretation(
-                str(item.get("calibration_state") or candidate.get("calibration_state") or "-"),
+                str(
+                    item.get("calibration_state")
+                    or candidate.get("calibration_state")
+                    or "-"
+                ),
                 False,
             ),
             "score": item.get("tradeoff_score"),
@@ -977,9 +1128,15 @@ def _swing_rows(swing_report: dict[str, Any]) -> list[dict[str, Any]]:
             row["sample"]["status"] = gate_review["sample_floor_status"]
         if "hold_defer_breakdown" in gate_review:
             row["hold_defer_breakdown"] = gate_review["hold_defer_breakdown"]
-            row["sample"]["status"] = gate_review["hold_defer_breakdown"]["sample_floor_status"]
+            row["sample"]["status"] = gate_review["hold_defer_breakdown"][
+                "sample_floor_status"
+            ]
         rows.append(row)
-    requests = swing_report.get("approval_requests") if isinstance(swing_report.get("approval_requests"), list) else []
+    requests = (
+        swing_report.get("approval_requests")
+        if isinstance(swing_report.get("approval_requests"), list)
+        else []
+    )
     blocked_families = {row["family"] for row in rows}
     approved_ids = _approved_swing_request_ids(target_date)
     for item in requests:
@@ -1008,8 +1165,12 @@ def _swing_rows(swing_report: dict[str, Any]) -> list[dict[str, Any]]:
             "family": family,
             "description": _description(family),
             "state": item.get("calibration_state") or "approval_required",
-            "current_application": _current_application(family, str(item.get("calibration_state") or "approval_required"), False),
-            "state_interpretation": _state_interpretation(str(item.get("calibration_state") or "approval_required"), False),
+            "current_application": _current_application(
+                family, str(item.get("calibration_state") or "approval_required"), False
+            ),
+            "state_interpretation": _state_interpretation(
+                str(item.get("calibration_state") or "approval_required"), False
+            ),
             "score": item.get("tradeoff_score"),
             "score_label": _format_score(item.get("tradeoff_score")),
             "sample": {
@@ -1019,12 +1180,20 @@ def _swing_rows(swing_report: dict[str, Any]) -> list[dict[str, Any]]:
             "reasons": reasons,
             "reason_label": _reason_text(reasons),
             "approval_id": item.get("approval_id"),
-            "approval_artifact_approved": bool(approval_id and approval_id in approved_ids),
+            "approval_artifact_approved": bool(
+                approval_id and approval_id in approved_ids
+            ),
             "auto_approval_approved": False,
-            "approval_contract_status": item.get("approval_contract_status") or contract.get("approval_contract_status"),
-            "approval_live_ready": bool(item.get("approval_live_ready") or contract.get("approval_live_ready")),
-            "approval_artifact_path": item.get("approval_artifact_path") or contract.get("approval_artifact_path"),
-            "approval_contract_missing_components": item.get("approval_contract_missing_components")
+            "approval_contract_status": item.get("approval_contract_status")
+            or contract.get("approval_contract_status"),
+            "approval_live_ready": bool(
+                item.get("approval_live_ready") or contract.get("approval_live_ready")
+            ),
+            "approval_artifact_path": item.get("approval_artifact_path")
+            or contract.get("approval_artifact_path"),
+            "approval_contract_missing_components": item.get(
+                "approval_contract_missing_components"
+            )
             or contract.get("missing_components")
             or [],
             "selected_auto_bounded_live": False,
@@ -1071,7 +1240,10 @@ def _legacy_phase0_real_canary_row(item: dict[str, Any], family: str) -> dict[st
 def _swing_approval_artifact_reason(family: str, target_date: str) -> str:
     if not target_date:
         return "approval_artifact_missing"
-    artifact = SWING_RUNTIME_APPROVAL_ARTIFACT_DIR / f"swing_runtime_approvals_{target_date}.json"
+    artifact = (
+        SWING_RUNTIME_APPROVAL_ARTIFACT_DIR
+        / f"swing_runtime_approvals_{target_date}.json"
+    )
     return "" if artifact.exists() else "approval_artifact_missing"
 
 
@@ -1105,25 +1277,44 @@ def _panic_request_state(
 
 
 def _has_report_only_candidate(candidate_status: dict[str, Any]) -> bool:
-    return any(str(value or "") == "report_only_candidate" for value in candidate_status.values())
+    return any(
+        str(value or "") == "report_only_candidate"
+        for value in candidate_status.values()
+    )
 
 
-def _panic_rows(calibration_report: dict[str, Any], target_date: str) -> list[dict[str, Any]]:
+def _panic_rows(
+    calibration_report: dict[str, Any], target_date: str
+) -> list[dict[str, Any]]:
     bundle = (
         calibration_report.get("calibration_source_bundle")
         if isinstance(calibration_report.get("calibration_source_bundle"), dict)
         else {}
     )
-    source_metrics = bundle.get("source_metrics") if isinstance(bundle.get("source_metrics"), dict) else {}
+    source_metrics = (
+        bundle.get("source_metrics")
+        if isinstance(bundle.get("source_metrics"), dict)
+        else {}
+    )
     rows: list[dict[str, Any]] = []
 
-    panic_sell = source_metrics.get("panic_sell_defense") if isinstance(source_metrics.get("panic_sell_defense"), dict) else {}
+    panic_sell = (
+        source_metrics.get("panic_sell_defense")
+        if isinstance(source_metrics.get("panic_sell_defense"), dict)
+        else {}
+    )
     if panic_sell:
-        candidate_status = panic_sell.get("candidate_status") if isinstance(panic_sell.get("candidate_status"), dict) else {}
+        candidate_status = (
+            panic_sell.get("candidate_status")
+            if isinstance(panic_sell.get("candidate_status"), dict)
+            else {}
+        )
         risk_gate = str(panic_sell.get("risk_regime_gate_state") or "").lower()
         legacy_panic_state = str(panic_sell.get("panic_state") or "").upper()
         sample_count = _as_int(panic_sell.get("risk_regime_confirmed_evidence_count"))
-        if sample_count <= 0 and (risk_gate == "confirmed_panic" or legacy_panic_state == "PANIC_SELL"):
+        if sample_count <= 0 and (
+            risk_gate == "confirmed_panic" or legacy_panic_state == "PANIC_SELL"
+        ):
             sample_count = 1
         if sample_count <= 0 and not _has_report_only_candidate(candidate_status):
             sample_count = 1
@@ -1146,37 +1337,62 @@ def _panic_rows(calibration_report: dict[str, Any], target_date: str) -> list[di
                 "family": "panic_entry_freeze_guard",
                 "description": _description("panic_entry_freeze_guard"),
                 "state": state,
-                "current_application": _current_application("panic_entry_freeze_guard", state, False),
+                "current_application": _current_application(
+                    "panic_entry_freeze_guard", state, False
+                ),
                 "state_interpretation": (
                     "simulation/counterfactual 기반 runtime 전환 승인요청 후보이며 approval artifact 전 live 반영 없음"
                     if state == "approval_required"
                     else _state_interpretation(state, False)
                 ),
                 "score": panic_sell.get("microstructure_max_panic_score"),
-                "score_label": _format_score(panic_sell.get("microstructure_max_panic_score")),
+                "score_label": _format_score(
+                    panic_sell.get("microstructure_max_panic_score")
+                ),
                 "sample": {"count": sample_count, "floor": 1},
                 "reasons": reasons,
                 "reason_label": _reason_text(reasons),
                 "panic_regime_mode": panic_sell.get("panic_regime_mode"),
                 "risk_regime_gate_state": panic_sell.get("risk_regime_gate_state"),
-                "risk_regime_gate_authority": panic_sell.get("risk_regime_gate_authority"),
-                "risk_regime_threshold_mode": panic_sell.get("risk_regime_threshold_mode"),
-                "panic_regime_decision_authority": panic_sell.get("panic_regime_decision_authority"),
-                "panic_regime_runtime_effect": panic_sell.get("panic_regime_runtime_effect"),
+                "risk_regime_gate_authority": panic_sell.get(
+                    "risk_regime_gate_authority"
+                ),
+                "risk_regime_threshold_mode": panic_sell.get(
+                    "risk_regime_threshold_mode"
+                ),
+                "panic_regime_decision_authority": panic_sell.get(
+                    "panic_regime_decision_authority"
+                ),
+                "panic_regime_runtime_effect": panic_sell.get(
+                    "panic_regime_runtime_effect"
+                ),
                 "selected_auto_bounded_live": False,
                 "candidate_status": candidate_status,
                 "source_quality_blockers": source_quality_blockers,
-                "market_breadth_followup_candidate": bool(panic_sell.get("market_breadth_followup_candidate")),
+                "market_breadth_followup_candidate": bool(
+                    panic_sell.get("market_breadth_followup_candidate")
+                ),
                 "approval_contract_status": contract.get("approval_contract_status"),
                 "approval_live_ready": bool(contract.get("approval_live_ready")),
                 "approval_artifact_path": contract.get("approval_artifact_path"),
-                "approval_contract_missing_components": contract.get("missing_components") or [],
+                "approval_contract_missing_components": contract.get(
+                    "missing_components"
+                )
+                or [],
             }
         )
 
-    panic_buy = source_metrics.get("panic_buying") if isinstance(source_metrics.get("panic_buying"), dict) else {}
+    panic_buy = (
+        source_metrics.get("panic_buying")
+        if isinstance(source_metrics.get("panic_buying"), dict)
+        else {}
+    )
     if panic_buy:
-        candidate_status = panic_buy.get("candidate_status") if isinstance(panic_buy.get("candidate_status"), dict) else {}
+        candidate_status = (
+            panic_buy.get("candidate_status")
+            if isinstance(panic_buy.get("candidate_status"), dict)
+            else {}
+        )
         source_quality_blockers = (
             panic_buy.get("source_quality_blockers")
             if isinstance(panic_buy.get("source_quality_blockers"), list)
@@ -1201,7 +1417,9 @@ def _panic_rows(calibration_report: dict[str, Any], target_date: str) -> list[di
                 "family": "panic_buy_runner_tp_canary",
                 "description": _description("panic_buy_runner_tp_canary"),
                 "state": state,
-                "current_application": _current_application("panic_buy_runner_tp_canary", state, False),
+                "current_application": _current_application(
+                    "panic_buy_runner_tp_canary", state, False
+                ),
                 "state_interpretation": (
                     "TP counterfactual 기반 runtime 전환 승인요청 후보이며 approval artifact 전 live TP 변경 없음"
                     if state == "approval_required"
@@ -1213,21 +1431,38 @@ def _panic_rows(calibration_report: dict[str, Any], target_date: str) -> list[di
                 "reasons": reasons,
                 "reason_label": _reason_text(reasons),
                 "panic_buy_regime_mode": panic_buy.get("panic_buy_regime_mode"),
-                "panic_buy_regime_decision_authority": panic_buy.get("panic_buy_regime_decision_authority"),
-                "panic_buy_regime_runtime_effect": panic_buy.get("panic_buy_regime_runtime_effect"),
+                "panic_buy_regime_decision_authority": panic_buy.get(
+                    "panic_buy_regime_decision_authority"
+                ),
+                "panic_buy_regime_runtime_effect": panic_buy.get(
+                    "panic_buy_regime_runtime_effect"
+                ),
                 "risk_regime_gate_state": panic_buy.get("risk_regime_gate_state"),
-                "risk_regime_gate_authority": panic_buy.get("risk_regime_gate_authority"),
-                "risk_regime_threshold_mode": panic_buy.get("risk_regime_threshold_mode"),
-                "confirmed_evidence_count": _as_int(panic_buy.get("confirmed_evidence_count")),
-                "market_wide_panic_buy_confirmed": bool(panic_buy.get("market_wide_panic_buy_confirmed")),
-                "market_breadth_risk_on_advisory": bool(panic_buy.get("market_breadth_risk_on_advisory")),
+                "risk_regime_gate_authority": panic_buy.get(
+                    "risk_regime_gate_authority"
+                ),
+                "risk_regime_threshold_mode": panic_buy.get(
+                    "risk_regime_threshold_mode"
+                ),
+                "confirmed_evidence_count": _as_int(
+                    panic_buy.get("confirmed_evidence_count")
+                ),
+                "market_wide_panic_buy_confirmed": bool(
+                    panic_buy.get("market_wide_panic_buy_confirmed")
+                ),
+                "market_breadth_risk_on_advisory": bool(
+                    panic_buy.get("market_breadth_risk_on_advisory")
+                ),
                 "source_quality_blockers": source_quality_blockers,
                 "selected_auto_bounded_live": False,
                 "candidate_status": candidate_status,
                 "approval_contract_status": contract.get("approval_contract_status"),
                 "approval_live_ready": bool(contract.get("approval_live_ready")),
                 "approval_artifact_path": contract.get("approval_artifact_path"),
-                "approval_contract_missing_components": contract.get("missing_components") or [],
+                "approval_contract_missing_components": contract.get(
+                    "missing_components"
+                )
+                or [],
             }
         )
     return rows
@@ -1243,10 +1478,14 @@ def _parse_kst_log_time(value: str) -> datetime | None:
 def _bot_start_times(target_date: str) -> list[datetime]:
     if not BOT_HISTORY_LOG.exists():
         return []
-    pattern = re.compile(rf"^\[{re.escape(target_date)} (\d{{2}}:\d{{2}}:\d{{2}})\].*KORStockScan v")
+    pattern = re.compile(
+        rf"^\[{re.escape(target_date)} (\d{{2}}:\d{{2}}:\d{{2}})\].*KORStockScan v"
+    )
     starts: list[datetime] = []
     try:
-        for line in BOT_HISTORY_LOG.read_text(encoding="utf-8", errors="ignore").splitlines():
+        for line in BOT_HISTORY_LOG.read_text(
+            encoding="utf-8", errors="ignore"
+        ).splitlines():
             match = pattern.search(line)
             if not match:
                 continue
@@ -1259,22 +1498,37 @@ def _bot_start_times(target_date: str) -> list[datetime]:
 
 
 def _application_timing(target_date: str, ev_report: dict[str, Any]) -> dict[str, Any]:
-    runtime = ev_report.get("runtime_apply") if isinstance(ev_report.get("runtime_apply"), dict) else {}
+    runtime = (
+        ev_report.get("runtime_apply")
+        if isinstance(ev_report.get("runtime_apply"), dict)
+        else {}
+    )
     runtime_env_file = runtime.get("runtime_env_file")
     env_path = Path(str(runtime_env_file)) if runtime_env_file else None
     env_generated_at = None
     if env_path and env_path.exists():
-        env_generated_at = datetime.fromtimestamp(env_path.stat().st_mtime).isoformat(timespec="seconds")
+        env_generated_at = datetime.fromtimestamp(env_path.stat().st_mtime).isoformat(
+            timespec="seconds"
+        )
     starts = _bot_start_times(target_date)
     env_dt = datetime.fromisoformat(env_generated_at) if env_generated_at else None
     first_start = starts[0] if starts else None
-    first_after_env = next((item for item in starts if env_dt and item >= env_dt.replace(tzinfo=None)), None)
-    pre_env_boot_gap = bool(first_start and env_dt and first_start < env_dt.replace(tzinfo=None))
+    first_after_env = next(
+        (item for item in starts if env_dt and item >= env_dt.replace(tzinfo=None)),
+        None,
+    )
+    pre_env_boot_gap = bool(
+        first_start and env_dt and first_start < env_dt.replace(tzinfo=None)
+    )
     return {
         "runtime_env_file": str(env_path) if env_path else None,
         "env_generated_at": env_generated_at,
-        "first_bot_start_at": first_start.isoformat(timespec="seconds") if first_start else None,
-        "first_bot_start_after_env_at": first_after_env.isoformat(timespec="seconds") if first_after_env else None,
+        "first_bot_start_at": (
+            first_start.isoformat(timespec="seconds") if first_start else None
+        ),
+        "first_bot_start_after_env_at": (
+            first_after_env.isoformat(timespec="seconds") if first_after_env else None
+        ),
         "pre_env_boot_gap": pre_env_boot_gap,
     }
 
@@ -1293,7 +1547,9 @@ def _audit_summary(path: Path) -> dict[str, Any]:
     }
 
 
-def _entry_adm_summary(ev_report: dict[str, Any], source_path: str | None) -> dict[str, Any]:
+def _entry_adm_summary(
+    ev_report: dict[str, Any], source_path: str | None
+) -> dict[str, Any]:
     adm = (
         ev_report.get("scalp_entry_action_decision_matrix")
         if isinstance(ev_report.get("scalp_entry_action_decision_matrix"), dict)
@@ -1323,9 +1579,15 @@ def _entry_adm_summary(ev_report: dict[str, Any], source_path: str | None) -> di
 
     joined = _as_int(adm.get("joined_sample"))
     floor = _as_int(adm.get("sample_floor")) or 20
-    missing_actions = adm.get("missing_actions") if isinstance(adm.get("missing_actions"), list) else []
+    missing_actions = (
+        adm.get("missing_actions")
+        if isinstance(adm.get("missing_actions"), list)
+        else []
+    )
     prompt_applied_count = _as_int(adm.get("prompt_applied_count"))
-    top_actions = adm.get("top_actions") if isinstance(adm.get("top_actions"), list) else []
+    top_actions = (
+        adm.get("top_actions") if isinstance(adm.get("top_actions"), list) else []
+    )
     unknown_bucket_summary = (
         adm.get("unknown_bucket_summary")
         if isinstance(adm.get("unknown_bucket_summary"), dict)
@@ -1358,7 +1620,8 @@ def _entry_adm_summary(ev_report: dict[str, Any], source_path: str | None) -> di
         "decision_authority": "entry_adm_runtime_bias_operator_override",
         "runtime_bias_scope": "force_wait_force_drop_buy_defensive_bias",
         "application_mode": "operator_override_runtime_bias",
-        "primary_decision_metric": adm.get("primary_decision_metric") or "source_quality_adjusted_ev_pct",
+        "primary_decision_metric": adm.get("primary_decision_metric")
+        or "source_quality_adjusted_ev_pct",
         "source_quality_adjusted_ev_pct": adm.get("source_quality_adjusted_ev_pct"),
         "joined_action_ev_pct": joined_action_ev_pct,
         "top_actions": top_actions,
@@ -1398,11 +1661,17 @@ def _bucket_count_from_lifecycle_source(
         if isinstance(source_payload.get(attribution_key), dict)
         else {}
     )
-    summary = attribution.get("summary") if isinstance(attribution.get("summary"), dict) else {}
+    summary = (
+        attribution.get("summary")
+        if isinstance(attribution.get("summary"), dict)
+        else {}
+    )
     return _as_int(summary.get(summary_key))
 
 
-def _lifecycle_matrix_summary(ev_report: dict[str, Any], source_path: str | None) -> dict[str, Any]:
+def _lifecycle_matrix_summary(
+    ev_report: dict[str, Any], source_path: str | None
+) -> dict[str, Any]:
     matrix = (
         ev_report.get("lifecycle_decision_matrix")
         if isinstance(ev_report.get("lifecycle_decision_matrix"), dict)
@@ -1541,9 +1810,11 @@ def _lifecycle_matrix_summary(ev_report: dict[str, Any], source_path: str | None
     submit_attribution_summary = (
         matrix.get("submit_bucket_attribution_summary")
         if isinstance(matrix.get("submit_bucket_attribution_summary"), dict)
-        else submit_attribution.get("summary")
-        if isinstance(submit_attribution.get("summary"), dict)
-        else {}
+        else (
+            submit_attribution.get("summary")
+            if isinstance(submit_attribution.get("summary"), dict)
+            else {}
+        )
     )
     holding_attribution = (
         source_payload.get("holding_bucket_attribution")
@@ -1553,9 +1824,11 @@ def _lifecycle_matrix_summary(ev_report: dict[str, Any], source_path: str | None
     holding_attribution_summary = (
         matrix.get("holding_bucket_attribution_summary")
         if isinstance(matrix.get("holding_bucket_attribution_summary"), dict)
-        else holding_attribution.get("summary")
-        if isinstance(holding_attribution.get("summary"), dict)
-        else {}
+        else (
+            holding_attribution.get("summary")
+            if isinstance(holding_attribution.get("summary"), dict)
+            else {}
+        )
     )
     exit_attribution = (
         source_payload.get("exit_bucket_attribution")
@@ -1565,28 +1838,38 @@ def _lifecycle_matrix_summary(ev_report: dict[str, Any], source_path: str | None
     exit_attribution_summary = (
         matrix.get("exit_bucket_attribution_summary")
         if isinstance(matrix.get("exit_bucket_attribution_summary"), dict)
-        else exit_attribution.get("summary")
-        if isinstance(exit_attribution.get("summary"), dict)
-        else {}
+        else (
+            exit_attribution.get("summary")
+            if isinstance(exit_attribution.get("summary"), dict)
+            else {}
+        )
     )
     post_submit_contract_gaps = (
         matrix.get("post_submit_contract_gaps")
         if isinstance(matrix.get("post_submit_contract_gaps"), list)
-        else submit_attribution.get("post_submit_contract_gaps")
-        if isinstance(submit_attribution.get("post_submit_contract_gaps"), list)
-        else []
+        else (
+            submit_attribution.get("post_submit_contract_gaps")
+            if isinstance(submit_attribution.get("post_submit_contract_gaps"), list)
+            else []
+        )
     )
-    entry_bucket_runtime_candidate_count = _as_int(matrix.get("entry_bucket_runtime_candidate_count")) or _bucket_count_from_lifecycle_source(
+    entry_bucket_runtime_candidate_count = _as_int(
+        matrix.get("entry_bucket_runtime_candidate_count")
+    ) or _bucket_count_from_lifecycle_source(
         source_payload,
         "entry_bucket_attribution",
         "runtime_candidate_count",
     )
-    lifecycle_flow_bucket_count = _as_int(matrix.get("lifecycle_flow_bucket_count")) or _bucket_count_from_lifecycle_source(
+    lifecycle_flow_bucket_count = _as_int(
+        matrix.get("lifecycle_flow_bucket_count")
+    ) or _bucket_count_from_lifecycle_source(
         source_payload,
         "lifecycle_flow_bucket_attribution",
         "bucket_count",
     )
-    lifecycle_flow_complete_count = _as_int(matrix.get("lifecycle_flow_complete_count")) or _bucket_count_from_lifecycle_source(
+    lifecycle_flow_complete_count = _as_int(
+        matrix.get("lifecycle_flow_complete_count")
+    ) or _bucket_count_from_lifecycle_source(
         source_payload,
         "lifecycle_flow_bucket_attribution",
         "complete_flow_count",
@@ -1608,52 +1891,72 @@ def _lifecycle_matrix_summary(ev_report: dict[str, Any], source_path: str | None
         "lifecycle_flow_bucket_attribution",
         "runtime_candidate_count",
     )
-    lifecycle_flow_workorder_count = _as_int(matrix.get("lifecycle_flow_workorder_count")) or _bucket_count_from_lifecycle_source(
+    lifecycle_flow_workorder_count = _as_int(
+        matrix.get("lifecycle_flow_workorder_count")
+    ) or _bucket_count_from_lifecycle_source(
         source_payload,
         "lifecycle_flow_bucket_attribution",
         "workorder_count",
     )
-    entry_bucket_workorder_count = _as_int(matrix.get("entry_bucket_workorder_count")) or _bucket_count_from_lifecycle_source(
+    entry_bucket_workorder_count = _as_int(
+        matrix.get("entry_bucket_workorder_count")
+    ) or _bucket_count_from_lifecycle_source(
         source_payload,
         "entry_bucket_attribution",
         "workorder_count",
     )
-    scale_in_bucket_runtime_candidate_count = _as_int(matrix.get("scale_in_bucket_runtime_candidate_count")) or _bucket_count_from_lifecycle_source(
+    scale_in_bucket_runtime_candidate_count = _as_int(
+        matrix.get("scale_in_bucket_runtime_candidate_count")
+    ) or _bucket_count_from_lifecycle_source(
         source_payload,
         "scale_in_bucket_attribution",
         "runtime_candidate_count",
     )
-    scale_in_bucket_workorder_count = _as_int(matrix.get("scale_in_bucket_workorder_count")) or _bucket_count_from_lifecycle_source(
+    scale_in_bucket_workorder_count = _as_int(
+        matrix.get("scale_in_bucket_workorder_count")
+    ) or _bucket_count_from_lifecycle_source(
         source_payload,
         "scale_in_bucket_attribution",
         "workorder_count",
     )
-    overnight_bucket_runtime_candidate_count = _as_int(matrix.get("overnight_bucket_runtime_candidate_count")) or _bucket_count_from_lifecycle_source(
+    overnight_bucket_runtime_candidate_count = _as_int(
+        matrix.get("overnight_bucket_runtime_candidate_count")
+    ) or _bucket_count_from_lifecycle_source(
         source_payload,
         "overnight_bucket_attribution",
         "runtime_candidate_count",
     )
-    overnight_bucket_workorder_count = _as_int(matrix.get("overnight_bucket_workorder_count")) or _bucket_count_from_lifecycle_source(
+    overnight_bucket_workorder_count = _as_int(
+        matrix.get("overnight_bucket_workorder_count")
+    ) or _bucket_count_from_lifecycle_source(
         source_payload,
         "overnight_bucket_attribution",
         "workorder_count",
     )
-    holding_bucket_count = _as_int(matrix.get("holding_bucket_count")) or _bucket_count_from_lifecycle_source(
+    holding_bucket_count = _as_int(
+        matrix.get("holding_bucket_count")
+    ) or _bucket_count_from_lifecycle_source(
         source_payload,
         "holding_bucket_attribution",
         "bucket_count",
     )
-    holding_bucket_workorder_count = _as_int(matrix.get("holding_bucket_workorder_count")) or _bucket_count_from_lifecycle_source(
+    holding_bucket_workorder_count = _as_int(
+        matrix.get("holding_bucket_workorder_count")
+    ) or _bucket_count_from_lifecycle_source(
         source_payload,
         "holding_bucket_attribution",
         "workorder_count",
     )
-    exit_bucket_count = _as_int(matrix.get("exit_bucket_count")) or _bucket_count_from_lifecycle_source(
+    exit_bucket_count = _as_int(
+        matrix.get("exit_bucket_count")
+    ) or _bucket_count_from_lifecycle_source(
         source_payload,
         "exit_bucket_attribution",
         "bucket_count",
     )
-    exit_bucket_workorder_count = _as_int(matrix.get("exit_bucket_workorder_count")) or _bucket_count_from_lifecycle_source(
+    exit_bucket_workorder_count = _as_int(
+        matrix.get("exit_bucket_workorder_count")
+    ) or _bucket_count_from_lifecycle_source(
         source_payload,
         "exit_bucket_attribution",
         "workorder_count",
@@ -1670,18 +1973,23 @@ def _lifecycle_matrix_summary(ev_report: dict[str, Any], source_path: str | None
         "available": bool(matrix.get("available", True)),
         "artifact": source_path or matrix.get("artifact"),
         "status": matrix.get("status"),
-        "matrix_version": matrix.get("matrix_version") or source_payload.get("matrix_version"),
+        "matrix_version": matrix.get("matrix_version")
+        or source_payload.get("matrix_version"),
         "runtime_effect": bool(matrix.get("runtime_effect")),
-        "decision_authority": matrix.get("decision_authority") or "lifecycle_weighted_adm_runtime_policy",
+        "decision_authority": matrix.get("decision_authority")
+        or "lifecycle_weighted_adm_runtime_policy",
         "runtime_bias_scope": "stage_action_proposal_micro_canary",
         "application_mode": "auto_bounded_micro_canary",
-        "primary_decision_metric": matrix.get("primary_decision_metric") or "stage_ev_composite_pct",
+        "primary_decision_metric": matrix.get("primary_decision_metric")
+        or "stage_ev_composite_pct",
         "total_rows": total_rows,
         "joined_rows": joined_rows,
         "sample_floor": 20,
         "policy_pass_count": policy_pass_count,
         "promote_ready_count": promote_ready_count,
-        "entry_bucket_actionable_count": _as_int(matrix.get("entry_bucket_actionable_count")),
+        "entry_bucket_actionable_count": _as_int(
+            matrix.get("entry_bucket_actionable_count")
+        ),
         "lifecycle_flow_bucket_count": lifecycle_flow_bucket_count,
         "lifecycle_flow_complete_count": lifecycle_flow_complete_count,
         "complete_flow_count": complete_flow_count,
@@ -1692,17 +2000,23 @@ def _lifecycle_matrix_summary(ev_report: dict[str, Any], source_path: str | None
         "identity_join_rate": matrix.get("identity_join_rate"),
         "complete_flow_rate": matrix.get("complete_flow_rate"),
         "join_contract_blocked": bool(matrix.get("join_contract_blocked")),
-        "bundle_ev_tuning_state": matrix.get("bundle_ev_tuning_state") or "ready_for_bundle_ev_tuning",
+        "bundle_ev_tuning_state": matrix.get("bundle_ev_tuning_state")
+        or "ready_for_bundle_ev_tuning",
         "top_incomplete_reason": matrix.get("top_incomplete_reason"),
-        "incomplete_flow_reason_counts": matrix.get("incomplete_flow_reason_counts") or {},
+        "incomplete_flow_reason_counts": matrix.get("incomplete_flow_reason_counts")
+        or {},
         "lifecycle_flow_runtime_approval_candidates": lifecycle_flow_bucket_candidates,
         "lifecycle_flow_code_improvement_workorders": lifecycle_flow_bucket_workorders,
         "entry_bucket_runtime_candidate_count": entry_bucket_runtime_candidate_count,
         "entry_bucket_workorder_count": entry_bucket_workorder_count,
-        "scale_in_bucket_actionable_count": _as_int(matrix.get("scale_in_bucket_actionable_count")),
+        "scale_in_bucket_actionable_count": _as_int(
+            matrix.get("scale_in_bucket_actionable_count")
+        ),
         "scale_in_bucket_runtime_candidate_count": scale_in_bucket_runtime_candidate_count,
         "scale_in_bucket_workorder_count": scale_in_bucket_workorder_count,
-        "overnight_bucket_actionable_count": _as_int(matrix.get("overnight_bucket_actionable_count")),
+        "overnight_bucket_actionable_count": _as_int(
+            matrix.get("overnight_bucket_actionable_count")
+        ),
         "overnight_bucket_runtime_candidate_count": overnight_bucket_runtime_candidate_count,
         "overnight_bucket_workorder_count": overnight_bucket_workorder_count,
         "entry_bucket_runtime_approval_candidates": entry_bucket_candidates,
@@ -1723,8 +2037,16 @@ def _lifecycle_matrix_summary(ev_report: dict[str, Any], source_path: str | None
         "scale_in_bucket_code_improvement_workorders": scale_in_bucket_workorders,
         "overnight_bucket_runtime_approval_candidates": overnight_bucket_candidates,
         "overnight_bucket_code_improvement_workorders": overnight_bucket_workorders,
-        "policy_entries": matrix.get("policy_entries") if isinstance(matrix.get("policy_entries"), list) else [],
-        "fixed_threshold_roles": matrix.get("fixed_threshold_roles") if isinstance(matrix.get("fixed_threshold_roles"), dict) else {},
+        "policy_entries": (
+            matrix.get("policy_entries")
+            if isinstance(matrix.get("policy_entries"), list)
+            else []
+        ),
+        "fixed_threshold_roles": (
+            matrix.get("fixed_threshold_roles")
+            if isinstance(matrix.get("fixed_threshold_roles"), dict)
+            else {}
+        ),
         "tuning_cycle": "lifecycle_decision_matrix -> threshold_cycle_ev -> runtime_approval_summary -> next preopen bounded env",
         "warnings": warnings,
         "ready_for_bounded_apply": not warnings,
@@ -1735,7 +2057,11 @@ def _lifecycle_bucket_discovery_summary(target_date: str) -> dict[str, Any]:
     path = discovery_report_path(target_date)
     payload = _load_json(path)
     summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
-    candidates = payload.get("surfaced_candidates") if isinstance(payload.get("surfaced_candidates"), list) else []
+    candidates = (
+        payload.get("surfaced_candidates")
+        if isinstance(payload.get("surfaced_candidates"), list)
+        else []
+    )
     return {
         "available": bool(payload),
         "artifact": str(path) if path.exists() else None,
@@ -1746,9 +2072,15 @@ def _lifecycle_bucket_discovery_summary(target_date: str) -> dict[str, Any]:
         "candidate_count": _as_int(summary.get("candidate_count")),
         "surfaced_candidate_count": _as_int(summary.get("surfaced_candidate_count")),
         "sim_auto_approved_count": _as_int(summary.get("sim_auto_approved_count")),
-        "live_auto_apply_ready_count": _as_int(summary.get("live_auto_apply_ready_count")),
+        "live_auto_apply_ready_count": _as_int(
+            summary.get("live_auto_apply_ready_count")
+        ),
         "human_intervention_required": bool(summary.get("human_intervention_required")),
-        "state_counts": summary.get("state_counts") if isinstance(summary.get("state_counts"), dict) else {},
+        "state_counts": (
+            summary.get("state_counts")
+            if isinstance(summary.get("state_counts"), dict)
+            else {}
+        ),
         "surfaced_candidate_ids": [
             str(item.get("bucket_id"))
             for item in candidates
@@ -1763,13 +2095,21 @@ def _lifecycle_bucket_window_report_path(target_date: str, suffix: str) -> Path:
     return base.parent / f"lifecycle_bucket_discovery_{target_date}_{safe_suffix}.json"
 
 
-def _lifecycle_bucket_windows_summary(target_date: str, ev_report: dict[str, Any]) -> dict[str, Any]:
-    ev_windows = ev_report.get("lifecycle_bucket_windows") if isinstance(ev_report.get("lifecycle_bucket_windows"), dict) else {}
+def _lifecycle_bucket_windows_summary(
+    target_date: str, ev_report: dict[str, Any]
+) -> dict[str, Any]:
+    ev_windows = (
+        ev_report.get("lifecycle_bucket_windows")
+        if isinstance(ev_report.get("lifecycle_bucket_windows"), dict)
+        else {}
+    )
     windows: dict[str, Any] = {}
     for suffix in ("rolling5d", "rolling10d", "mtd"):
         path = _lifecycle_bucket_window_report_path(target_date, suffix)
         payload = _load_json(path)
-        summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+        summary = (
+            payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+        )
         from_ev = (
             (ev_windows.get("windows") or {}).get(suffix)
             if isinstance(ev_windows.get("windows"), dict)
@@ -1778,34 +2118,66 @@ def _lifecycle_bucket_windows_summary(target_date: str, ev_report: dict[str, Any
         windows[suffix] = {
             "available": bool(payload) or bool(from_ev.get("available")),
             "artifact": str(path) if path.exists() else from_ev.get("artifact"),
-            "window_role": "promotion_confirmation" if suffix == "mtd" else "rolling_confirmation",
-            "window_policy": payload.get("window_policy") or summary.get("source_window_policy") or from_ev.get("window_policy") or suffix,
-            "status": summary.get("status") or from_ev.get("status") or ("missing" if not payload else "unknown"),
-            "parent_bucket_count": _as_int(summary.get("parent_bucket_count") or from_ev.get("parent_bucket_count")),
-            "selected_parent_level": summary.get("selected_parent_level") or from_ev.get("selected_parent_level"),
-            "parent_granularity_status": summary.get("parent_granularity_status") or from_ev.get("parent_granularity_status"),
-            "absorbed_child_count": _as_int(summary.get("absorbed_child_count") or from_ev.get("absorbed_child_count")),
-            "absorbed_sample_count": _as_int(summary.get("absorbed_sample_count") or from_ev.get("absorbed_sample_count")),
+            "window_role": (
+                "promotion_confirmation" if suffix == "mtd" else "rolling_confirmation"
+            ),
+            "window_policy": payload.get("window_policy")
+            or summary.get("source_window_policy")
+            or from_ev.get("window_policy")
+            or suffix,
+            "status": summary.get("status")
+            or from_ev.get("status")
+            or ("missing" if not payload else "unknown"),
+            "parent_bucket_count": _as_int(
+                summary.get("parent_bucket_count") or from_ev.get("parent_bucket_count")
+            ),
+            "selected_parent_level": summary.get("selected_parent_level")
+            or from_ev.get("selected_parent_level"),
+            "parent_granularity_status": summary.get("parent_granularity_status")
+            or from_ev.get("parent_granularity_status"),
+            "absorbed_child_count": _as_int(
+                summary.get("absorbed_child_count")
+                or from_ev.get("absorbed_child_count")
+            ),
+            "absorbed_sample_count": _as_int(
+                summary.get("absorbed_sample_count")
+                or from_ev.get("absorbed_sample_count")
+            ),
             "child_conflict_warning_count": _as_int(
-                summary.get("child_conflict_warning_count") or from_ev.get("child_conflict_warning_count")
+                summary.get("child_conflict_warning_count")
+                or from_ev.get("child_conflict_warning_count")
             ),
             "live_auto_apply_ready_count": _as_int(
-                summary.get("live_auto_apply_ready_count") or from_ev.get("live_auto_apply_ready_count")
+                summary.get("live_auto_apply_ready_count")
+                or from_ev.get("live_auto_apply_ready_count")
             ),
-            "source_contract_status": summary.get("source_contract_status") or from_ev.get("source_contract_status"),
-            "ai_two_pass_review_status": summary.get("ai_two_pass_review_status") or from_ev.get("ai_two_pass_review_status"),
+            "source_contract_status": summary.get("source_contract_status")
+            or from_ev.get("source_contract_status"),
+            "ai_two_pass_review_status": summary.get("ai_two_pass_review_status")
+            or from_ev.get("ai_two_pass_review_status"),
         }
     return {
-        "daily": ev_windows.get("daily") if isinstance(ev_windows.get("daily"), dict) else {},
+        "daily": (
+            ev_windows.get("daily") if isinstance(ev_windows.get("daily"), dict) else {}
+        ),
         "windows": windows,
         "promotion_window": ev_windows.get("promotion_window") or "mtd",
-        "confirmation_windows": ev_windows.get("confirmation_windows") or ["rolling5d", "rolling10d"],
-        "warnings": ev_windows.get("warnings") if isinstance(ev_windows.get("warnings"), list) else [],
+        "confirmation_windows": ev_windows.get("confirmation_windows")
+        or ["rolling5d", "rolling10d"],
+        "warnings": (
+            ev_windows.get("warnings")
+            if isinstance(ev_windows.get("warnings"), list)
+            else []
+        ),
     }
 
 
 def _swing_strategy_discovery_summary(ev_report: dict[str, Any]) -> dict[str, Any]:
-    payload = ev_report.get("swing_strategy_discovery") if isinstance(ev_report.get("swing_strategy_discovery"), dict) else {}
+    payload = (
+        ev_report.get("swing_strategy_discovery")
+        if isinstance(ev_report.get("swing_strategy_discovery"), dict)
+        else {}
+    )
     available = bool(payload.get("available"))
     warnings = []
     if not available:
@@ -1820,11 +2192,14 @@ def _swing_strategy_discovery_summary(ev_report: dict[str, Any]) -> dict[str, An
         "baseline_application": _BASELINE_APPLICATION["swing_strategy_discovery_sim"],
         "runtime_effect": False,
         "runtime_mutation_allowed": False,
-        "decision_authority": payload.get("decision_authority") or "swing_sim_exploration_only",
+        "decision_authority": payload.get("decision_authority")
+        or "swing_sim_exploration_only",
         "candidate_count": int(payload.get("candidate_count") or 0),
         "arm_count": int(payload.get("arm_count") or 0),
         "labeled_sample_count": int(payload.get("labeled_sample_count") or 0),
-        "pending_future_quote_count": int(payload.get("pending_future_quote_count") or 0),
+        "pending_future_quote_count": int(
+            payload.get("pending_future_quote_count") or 0
+        ),
         "top_surviving_arm": payload.get("top_surviving_arm"),
         "avoid_bucket_count": int(payload.get("avoid_bucket_count") or 0),
         "state_interpretation": "source-only exploration. Surviving arms can create future source-quality/workorder inputs but cannot apply runtime env.",
@@ -1853,37 +2228,56 @@ def _swing_lifecycle_matrix_summary(ev_report: dict[str, Any]) -> dict[str, Any]
         "available": available,
         "artifact": payload.get("artifact"),
         "description": _FAMILY_DESCRIPTIONS["swing_lifecycle_decision_matrix"],
-        "baseline_application": _BASELINE_APPLICATION["swing_lifecycle_decision_matrix"],
+        "baseline_application": _BASELINE_APPLICATION[
+            "swing_lifecycle_decision_matrix"
+        ],
         "runtime_effect": False,
         "runtime_mutation_allowed": False,
-        "decision_authority": payload.get("decision_authority") or "swing_ldm_source_only",
+        "decision_authority": payload.get("decision_authority")
+        or "swing_ldm_source_only",
         "total_rows": _safe_int(payload.get("total_rows"), 0),
         "probe_rows": _safe_int(payload.get("probe_rows"), 0),
         "discovery_rows": _safe_int(payload.get("discovery_rows"), 0),
-        "swing_lifecycle_flow_bucket_count": _safe_int(payload.get("swing_lifecycle_flow_bucket_count"), 0),
+        "swing_lifecycle_flow_bucket_count": _safe_int(
+            payload.get("swing_lifecycle_flow_bucket_count"), 0
+        ),
         "complete_flow_count": _safe_int(payload.get("complete_flow_count"), 0),
         "incomplete_flow_count": _safe_int(payload.get("incomplete_flow_count"), 0),
         "identity_join_rate": payload.get("identity_join_rate"),
         "complete_flow_rate": payload.get("complete_flow_rate"),
         "join_contract_blocked": bool(payload.get("join_contract_blocked")),
-        "sim_auto_candidate_count": _safe_int(payload.get("sim_auto_candidate_count"), 0),
+        "sim_auto_candidate_count": _safe_int(
+            payload.get("sim_auto_candidate_count"), 0
+        ),
         "workorder_count": _safe_int(payload.get("workorder_count"), 0),
         "raw_swing_event_count": raw_event_count,
-        "ldm_consumed_event_count": _safe_int(payload.get("ldm_consumed_event_count"), 0),
+        "ldm_consumed_event_count": _safe_int(
+            payload.get("ldm_consumed_event_count"), 0
+        ),
         "ldm_event_coverage_rate": ldm_coverage_rate,
-        "unmapped_swing_stage_counts": payload.get("unmapped_swing_stage_counts")
-        if isinstance(payload.get("unmapped_swing_stage_counts"), dict)
-        else {},
+        "unmapped_swing_stage_counts": (
+            payload.get("unmapped_swing_stage_counts")
+            if isinstance(payload.get("unmapped_swing_stage_counts"), dict)
+            else {}
+        ),
         "daily_simulation_consumed": bool(payload.get("daily_simulation_consumed")),
         "swing_entry_bottleneck_primary": payload.get("swing_entry_bottleneck_primary"),
-        "swing_lifecycle_contract_gap_count": _safe_int(payload.get("swing_lifecycle_contract_gap_count"), 0),
-        "sim_auto_candidate_ids": payload.get("sim_auto_candidate_ids") if isinstance(payload.get("sim_auto_candidate_ids"), list) else [],
+        "swing_lifecycle_contract_gap_count": _safe_int(
+            payload.get("swing_lifecycle_contract_gap_count"), 0
+        ),
+        "sim_auto_candidate_ids": (
+            payload.get("sim_auto_candidate_ids")
+            if isinstance(payload.get("sim_auto_candidate_ids"), list)
+            else []
+        ),
         "state_interpretation": "source-only Swing LDM. sim-only candidates are auto-approved for simulation policy input only.",
         "warnings": warnings,
     }
 
 
-def _swing_lifecycle_bucket_discovery_summary(ev_report: dict[str, Any]) -> dict[str, Any]:
+def _swing_lifecycle_bucket_discovery_summary(
+    ev_report: dict[str, Any],
+) -> dict[str, Any]:
     payload = (
         ev_report.get("swing_lifecycle_bucket_discovery")
         if isinstance(ev_report.get("swing_lifecycle_bucket_discovery"), dict)
@@ -1918,60 +2312,111 @@ def _swing_lifecycle_bucket_discovery_summary(ev_report: dict[str, Any]) -> dict
         "available": available,
         "artifact": payload.get("artifact"),
         "description": _FAMILY_DESCRIPTIONS["swing_lifecycle_bucket_discovery"],
-        "baseline_application": _BASELINE_APPLICATION["swing_lifecycle_bucket_discovery"],
+        "baseline_application": _BASELINE_APPLICATION[
+            "swing_lifecycle_bucket_discovery"
+        ],
         "runtime_effect": False,
         "runtime_mutation_allowed": False,
-        "decision_authority": payload.get("decision_authority") or "swing_ldm_bucket_discovery_sim_auto",
+        "decision_authority": payload.get("decision_authority")
+        or "swing_ldm_bucket_discovery_sim_auto",
         "source_contract_status": payload.get("source_contract_status"),
         "ai_two_pass_review_status": ai_review_status or None,
         "ai_fail_closed": bool(payload.get("ai_fail_closed")),
         "ai_review_blocker_state": payload.get("ai_review_blocker_state"),
-        "pre_review_sim_auto_candidate_count": _safe_int(payload.get("pre_review_sim_auto_candidate_count"), 0),
-        "sim_auto_reviewed_candidate_count": _safe_int(payload.get("sim_auto_reviewed_candidate_count"), 0),
-        "sim_auto_unreviewed_candidate_count": _safe_int(payload.get("sim_auto_unreviewed_candidate_count"), 0),
-        "sim_auto_downgraded_by_review_count": _safe_int(payload.get("sim_auto_downgraded_by_review_count"), 0),
-        "sim_auto_review_shard_count": _safe_int(payload.get("sim_auto_review_shard_count"), 0),
+        "pre_review_sim_auto_candidate_count": _safe_int(
+            payload.get("pre_review_sim_auto_candidate_count"), 0
+        ),
+        "sim_auto_reviewed_candidate_count": _safe_int(
+            payload.get("sim_auto_reviewed_candidate_count"), 0
+        ),
+        "sim_auto_unreviewed_candidate_count": _safe_int(
+            payload.get("sim_auto_unreviewed_candidate_count"), 0
+        ),
+        "sim_auto_downgraded_by_review_count": _safe_int(
+            payload.get("sim_auto_downgraded_by_review_count"), 0
+        ),
+        "sim_auto_review_shard_count": _safe_int(
+            payload.get("sim_auto_review_shard_count"), 0
+        ),
         "ai_review_followup_required": bool(payload.get("ai_review_followup_required")),
-        "ai_review_followup_reasons": payload.get("ai_review_followup_reasons")
-        if isinstance(payload.get("ai_review_followup_reasons"), list)
-        else [],
-        "sim_auto_blocked_by_ai_review_followup": bool(payload.get("sim_auto_blocked_by_ai_review_followup")),
+        "ai_review_followup_reasons": (
+            payload.get("ai_review_followup_reasons")
+            if isinstance(payload.get("ai_review_followup_reasons"), list)
+            else []
+        ),
+        "sim_auto_blocked_by_ai_review_followup": bool(
+            payload.get("sim_auto_blocked_by_ai_review_followup")
+        ),
         "candidate_count": _safe_int(payload.get("candidate_count"), 0),
-        "surfaced_candidate_count": _safe_int(payload.get("surfaced_candidate_count"), 0),
+        "surfaced_candidate_count": _safe_int(
+            payload.get("surfaced_candidate_count"), 0
+        ),
         "sim_auto_approved_count": _safe_int(payload.get("sim_auto_approved_count"), 0),
-        "swing_lifecycle_flow_bucket_count": _safe_int(payload.get("swing_lifecycle_flow_bucket_count"), 0),
+        "swing_lifecycle_flow_bucket_count": _safe_int(
+            payload.get("swing_lifecycle_flow_bucket_count"), 0
+        ),
         "complete_flow_count": _safe_int(payload.get("complete_flow_count"), 0),
         "incomplete_flow_count": _safe_int(payload.get("incomplete_flow_count"), 0),
         "identity_join_rate": payload.get("identity_join_rate"),
         "complete_flow_rate": payload.get("complete_flow_rate"),
         "join_contract_blocked": bool(payload.get("join_contract_blocked")),
-        "flow_sim_auto_approved_count": _safe_int(payload.get("flow_sim_auto_approved_count"), 0),
-        "stage_only_source_only_count": _safe_int(payload.get("stage_only_source_only_count"), 0),
-        "code_patch_required_count": _safe_int(payload.get("code_patch_required_count"), 0),
-        "runtime_blocked_contract_gap_count": _safe_int(payload.get("runtime_blocked_contract_gap_count"), 0),
-        "automation_handoff_gap_count": _safe_int(payload.get("automation_handoff_gap_count"), 0),
+        "flow_sim_auto_approved_count": _safe_int(
+            payload.get("flow_sim_auto_approved_count"), 0
+        ),
+        "stage_only_source_only_count": _safe_int(
+            payload.get("stage_only_source_only_count"), 0
+        ),
+        "code_patch_required_count": _safe_int(
+            payload.get("code_patch_required_count"), 0
+        ),
+        "runtime_blocked_contract_gap_count": _safe_int(
+            payload.get("runtime_blocked_contract_gap_count"), 0
+        ),
+        "automation_handoff_gap_count": _safe_int(
+            payload.get("automation_handoff_gap_count"), 0
+        ),
         "swing_entry_bottleneck_primary": payload.get("swing_entry_bottleneck_primary"),
-        "swing_entry_bottleneck_candidate_present": bool(payload.get("swing_entry_bottleneck_candidate_present")),
+        "swing_entry_bottleneck_candidate_present": bool(
+            payload.get("swing_entry_bottleneck_candidate_present")
+        ),
         "code_improvement_workorder_ids": [
-            str(item) for item in (payload.get("code_improvement_workorder_ids") or []) if str(item)
+            str(item)
+            for item in (payload.get("code_improvement_workorder_ids") or [])
+            if str(item)
         ],
         "implemented_code_improvement_workorder_ids": [
-            str(item) for item in (payload.get("implemented_code_improvement_workorder_ids") or []) if str(item)
+            str(item)
+            for item in (
+                payload.get("implemented_code_improvement_workorder_ids") or []
+            )
+            if str(item)
         ],
         "pending_code_improvement_workorder_ids": [
-            str(item) for item in (payload.get("pending_code_improvement_workorder_ids") or []) if str(item)
+            str(item)
+            for item in (payload.get("pending_code_improvement_workorder_ids") or [])
+            if str(item)
         ],
         "ai_review_followup_workorder_ids": [
-            str(item) for item in (payload.get("ai_review_followup_workorder_ids") or []) if str(item)
+            str(item)
+            for item in (payload.get("ai_review_followup_workorder_ids") or [])
+            if str(item)
         ],
-        "surfaced_candidate_ids": payload.get("surfaced_candidate_ids") if isinstance(payload.get("surfaced_candidate_ids"), list) else [],
+        "surfaced_candidate_ids": (
+            payload.get("surfaced_candidate_ids")
+            if isinstance(payload.get("surfaced_candidate_ids"), list)
+            else []
+        ),
         "state_interpretation": "sim-only candidates are auto-approved and surfaced to the next PREOPEN swing sim policy input.",
         "warnings": warnings,
     }
 
 
 def _institutional_flow_context_summary(ev_report: dict[str, Any]) -> dict[str, Any]:
-    payload = ev_report.get("institutional_flow_context") if isinstance(ev_report.get("institutional_flow_context"), dict) else {}
+    payload = (
+        ev_report.get("institutional_flow_context")
+        if isinstance(ev_report.get("institutional_flow_context"), dict)
+        else {}
+    )
     available = bool(payload.get("available"))
     warnings = []
     if not available:
@@ -1986,7 +2431,8 @@ def _institutional_flow_context_summary(ev_report: dict[str, Any]) -> dict[str, 
         "baseline_application": _BASELINE_APPLICATION["institutional_flow_context"],
         "runtime_effect": False,
         "runtime_mutation_allowed": False,
-        "decision_authority": payload.get("decision_authority") or "source_only_lifecycle_feature",
+        "decision_authority": payload.get("decision_authority")
+        or "source_only_lifecycle_feature",
         "row_count": int(payload.get("row_count") or 0),
         "ok_count": int(payload.get("ok_count") or 0),
         "partial_count": int(payload.get("partial_count") or 0),
@@ -2000,7 +2446,9 @@ def _institutional_flow_context_summary(ev_report: dict[str, Any]) -> dict[str, 
     }
 
 
-def _microstructure_reaction_context_summary(ev_report: dict[str, Any]) -> dict[str, Any]:
+def _microstructure_reaction_context_summary(
+    ev_report: dict[str, Any],
+) -> dict[str, Any]:
     payload = (
         ev_report.get("microstructure_reaction_context")
         if isinstance(ev_report.get("microstructure_reaction_context"), dict)
@@ -2016,15 +2464,22 @@ def _microstructure_reaction_context_summary(ev_report: dict[str, Any]) -> dict[
         "family": "microstructure_reaction_context",
         "available": available,
         "description": _FAMILY_DESCRIPTIONS["microstructure_reaction_context"],
-        "baseline_application": _BASELINE_APPLICATION["microstructure_reaction_context"],
+        "baseline_application": _BASELINE_APPLICATION[
+            "microstructure_reaction_context"
+        ],
         "runtime_effect": False,
         "runtime_mutation_allowed": False,
-        "decision_authority": payload.get("decision_authority") or "entry_confidence_modifier_source_only",
+        "decision_authority": payload.get("decision_authority")
+        or "entry_confidence_modifier_source_only",
         "row_count": _as_int(payload.get("row_count")),
         "ok_count": _as_int(payload.get("ok_count")),
         "missing_or_unusable_count": _as_int(payload.get("missing_or_unusable_count")),
         "real_submitted_count": _as_int(payload.get("real_submitted_count")),
-        "status_counts": payload.get("status_counts") if isinstance(payload.get("status_counts"), dict) else {},
+        "status_counts": (
+            payload.get("status_counts")
+            if isinstance(payload.get("status_counts"), dict)
+            else {}
+        ),
         "entry_reaction_quality_counts": (
             payload.get("entry_reaction_quality_counts")
             if isinstance(payload.get("entry_reaction_quality_counts"), dict)
@@ -2039,7 +2494,11 @@ def _microstructure_reaction_context_summary(ev_report: dict[str, Any]) -> dict[
         "avg_post_sweep_hold_score": payload.get("avg_post_sweep_hold_score"),
         "avg_bid_replenishment_score": payload.get("avg_bid_replenishment_score"),
         "max_vi_proximity_risk": _as_int(payload.get("max_vi_proximity_risk")),
-        "forbidden_uses": payload.get("forbidden_uses") if isinstance(payload.get("forbidden_uses"), list) else [],
+        "forbidden_uses": (
+            payload.get("forbidden_uses")
+            if isinstance(payload.get("forbidden_uses"), list)
+            else []
+        ),
         "state_interpretation": "source-only entry confidence context. It cannot create standalone BUY or bypass submit safety.",
         "warnings": warnings,
     }
@@ -2049,7 +2508,9 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
     _JSON_LOAD_DIAGNOSTICS.clear()
     target_date = str(target_date).strip()
     ev_json, _ = ev_report_paths(target_date)
-    swing_path = SWING_RUNTIME_APPROVAL_DIR / f"swing_runtime_approval_{target_date}.json"
+    swing_path = (
+        SWING_RUNTIME_APPROVAL_DIR / f"swing_runtime_approval_{target_date}.json"
+    )
     ev_report = _load_json(ev_json)
     clean_policy = (
         ev_report.get("clean_tuning_baseline")
@@ -2059,20 +2520,44 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
     clean_policy_warning = policy_warning_for_date(target_date, clean_policy)
     source_quality_preflight_gate = load_source_quality_preflight(target_date)
     swing_report = _load_json(swing_path)
-    sources = ev_report.get("sources") if isinstance(ev_report.get("sources"), dict) else {}
+    sources = (
+        ev_report.get("sources") if isinstance(ev_report.get("sources"), dict) else {}
+    )
     calibration_source = sources.get("calibration")
     scalp_entry_adm_path = sources.get("scalp_entry_action_decision_matrix")
     buy_funnel_sentinel_path = sources.get("buy_funnel_sentinel")
     lifecycle_matrix_path = sources.get("lifecycle_decision_matrix")
     lifecycle_ai_context_path = sources.get("lifecycle_ai_context")
-    lifecycle_ai_context_attribution_path = sources.get("lifecycle_ai_context_attribution")
+    lifecycle_ai_context_attribution_path = sources.get(
+        "lifecycle_ai_context_attribution"
+    )
     institutional_flow_path = sources.get("institutional_flow_context")
     microstructure_reaction_path = sources.get("microstructure_reaction_context")
-    calibration_report = _load_json(Path(str(calibration_source))) if calibration_source else {}
-    currentness_path = Path(str(sources.get("pattern_lab_currentness_audit"))) if sources.get("pattern_lab_currentness_audit") else PATTERN_LAB_CURRENTNESS_AUDIT_DIR / f"pattern_lab_currentness_audit_{target_date}.json"
-    pattern_lab_ai_review_path = Path(str(sources.get("pattern_lab_ai_review"))) if sources.get("pattern_lab_ai_review") else PATTERN_LAB_AI_REVIEW_DIR / f"pattern_lab_ai_review_{target_date}.json"
-    producer_gap_discovery_path = Path(str(sources.get("producer_gap_discovery"))) if sources.get("producer_gap_discovery") else PRODUCER_GAP_DISCOVERY_DIR / f"producer_gap_discovery_{target_date}.json"
-    propagation_path = Path(str(sources.get("pattern_lab_propagation_audit"))) if sources.get("pattern_lab_propagation_audit") else PATTERN_LAB_PROPAGATION_AUDIT_DIR / f"pattern_lab_propagation_audit_{target_date}.json"
+    calibration_report = (
+        _load_json(Path(str(calibration_source))) if calibration_source else {}
+    )
+    currentness_path = (
+        Path(str(sources.get("pattern_lab_currentness_audit")))
+        if sources.get("pattern_lab_currentness_audit")
+        else PATTERN_LAB_CURRENTNESS_AUDIT_DIR
+        / f"pattern_lab_currentness_audit_{target_date}.json"
+    )
+    pattern_lab_ai_review_path = (
+        Path(str(sources.get("pattern_lab_ai_review")))
+        if sources.get("pattern_lab_ai_review")
+        else PATTERN_LAB_AI_REVIEW_DIR / f"pattern_lab_ai_review_{target_date}.json"
+    )
+    producer_gap_discovery_path = (
+        Path(str(sources.get("producer_gap_discovery")))
+        if sources.get("producer_gap_discovery")
+        else PRODUCER_GAP_DISCOVERY_DIR / f"producer_gap_discovery_{target_date}.json"
+    )
+    propagation_path = (
+        Path(str(sources.get("pattern_lab_propagation_audit")))
+        if sources.get("pattern_lab_propagation_audit")
+        else PATTERN_LAB_PROPAGATION_AUDIT_DIR
+        / f"pattern_lab_propagation_audit_{target_date}.json"
+    )
     currentness_audit = _audit_summary(currentness_path)
     pattern_lab_ai_review = _audit_summary(pattern_lab_ai_review_path)
     producer_gap_discovery = _audit_summary(producer_gap_discovery_path)
@@ -2081,14 +2566,24 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
     swing_rows = _swing_rows(swing_report)
     panic_rows = _panic_rows(calibration_report, target_date)
     scalp_entry_adm_summary = _entry_adm_summary(ev_report, scalp_entry_adm_path)
-    lifecycle_matrix_summary = _lifecycle_matrix_summary(ev_report, lifecycle_matrix_path)
-    lifecycle_bucket_discovery_summary = _lifecycle_bucket_discovery_summary(target_date)
-    lifecycle_bucket_windows_summary = _lifecycle_bucket_windows_summary(target_date, ev_report)
+    lifecycle_matrix_summary = _lifecycle_matrix_summary(
+        ev_report, lifecycle_matrix_path
+    )
+    lifecycle_bucket_discovery_summary = _lifecycle_bucket_discovery_summary(
+        target_date
+    )
+    lifecycle_bucket_windows_summary = _lifecycle_bucket_windows_summary(
+        target_date, ev_report
+    )
     swing_discovery_summary = _swing_strategy_discovery_summary(ev_report)
     swing_lifecycle_matrix_summary = _swing_lifecycle_matrix_summary(ev_report)
-    swing_lifecycle_bucket_discovery_summary = _swing_lifecycle_bucket_discovery_summary(ev_report)
+    swing_lifecycle_bucket_discovery_summary = (
+        _swing_lifecycle_bucket_discovery_summary(ev_report)
+    )
     institutional_flow_summary = _institutional_flow_context_summary(ev_report)
-    microstructure_reaction_summary = _microstructure_reaction_context_summary(ev_report)
+    microstructure_reaction_summary = _microstructure_reaction_context_summary(
+        ev_report
+    )
     scale_in_split_order_plan_summary = (
         ev_report.get("scale_in_split_order_plan")
         if isinstance(ev_report.get("scale_in_split_order_plan"), dict)
@@ -2098,8 +2593,12 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
         f"source_load_{item.get('status')}:{Path(str(item.get('path') or '')).name}"
         for item in _JSON_LOAD_DIAGNOSTICS
     ]
-    active_swing_rows = [row for row in swing_rows if row.get("state") != "legacy_archive"]
-    legacy_swing_rows = [row for row in swing_rows if row.get("state") == "legacy_archive"]
+    active_swing_rows = [
+        row for row in swing_rows if row.get("state") != "legacy_archive"
+    ]
+    legacy_swing_rows = [
+        row for row in swing_rows if row.get("state") == "legacy_archive"
+    ]
     report = {
         "date": target_date,
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
@@ -2110,7 +2609,9 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
         "source_quality_preflight_gate": source_quality_preflight_gate,
         "sources": {
             "threshold_cycle_ev": str(ev_json) if ev_json.exists() else None,
-            "observation_source_quality_audit": source_quality_preflight_gate.get("artifact"),
+            "observation_source_quality_audit": source_quality_preflight_gate.get(
+                "artifact"
+            ),
             "swing_runtime_approval": str(swing_path) if swing_path.exists() else None,
             "scalp_entry_action_decision_matrix": scalp_entry_adm_path,
             "entry_split_order_plan": (
@@ -2125,24 +2626,46 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
             ),
             "buy_funnel_sentinel": buy_funnel_sentinel_path,
             "lifecycle_decision_matrix": lifecycle_matrix_path,
-            "lifecycle_bucket_discovery": lifecycle_bucket_discovery_summary.get("artifact"),
+            "lifecycle_bucket_discovery": lifecycle_bucket_discovery_summary.get(
+                "artifact"
+            ),
             "lifecycle_bucket_windows": lifecycle_bucket_windows_summary,
             "lifecycle_ai_context": lifecycle_ai_context_path,
             "lifecycle_ai_context_attribution": lifecycle_ai_context_attribution_path,
-            "swing_lifecycle_decision_matrix": swing_lifecycle_matrix_summary.get("artifact"),
-            "swing_lifecycle_bucket_discovery": swing_lifecycle_bucket_discovery_summary.get("artifact"),
+            "swing_lifecycle_decision_matrix": swing_lifecycle_matrix_summary.get(
+                "artifact"
+            ),
+            "swing_lifecycle_bucket_discovery": swing_lifecycle_bucket_discovery_summary.get(
+                "artifact"
+            ),
             "institutional_flow_context": institutional_flow_path,
             "microstructure_reaction_context": microstructure_reaction_path,
-            "pattern_lab_currentness_audit": str(currentness_path) if currentness_path.exists() else None,
-            "pattern_lab_ai_review": str(pattern_lab_ai_review_path) if pattern_lab_ai_review_path.exists() else None,
-            "producer_gap_discovery": str(producer_gap_discovery_path) if producer_gap_discovery_path.exists() else None,
-            "pattern_lab_propagation_audit": str(propagation_path) if propagation_path.exists() else None,
+            "pattern_lab_currentness_audit": (
+                str(currentness_path) if currentness_path.exists() else None
+            ),
+            "pattern_lab_ai_review": (
+                str(pattern_lab_ai_review_path)
+                if pattern_lab_ai_review_path.exists()
+                else None
+            ),
+            "producer_gap_discovery": (
+                str(producer_gap_discovery_path)
+                if producer_gap_discovery_path.exists()
+                else None
+            ),
+            "pattern_lab_propagation_audit": (
+                str(propagation_path) if propagation_path.exists() else None
+            ),
         },
         "source_load_diagnostics": _JSON_LOAD_DIAGNOSTICS.copy(),
         "summary": {
             "scalping_items": len(scalping_rows),
-            "scalping_selected_auto_bounded_live": sum(1 for row in scalping_rows if row["selected_auto_bounded_live"]),
-            "scalping_legacy_hard_gate_risk_counts": _count_field(scalping_rows, "legacy_hard_gate_risk"),
+            "scalping_selected_auto_bounded_live": sum(
+                1 for row in scalping_rows if row["selected_auto_bounded_live"]
+            ),
+            "scalping_legacy_hard_gate_risk_counts": _count_field(
+                scalping_rows, "legacy_hard_gate_risk"
+            ),
             "swing_blocked": len(active_swing_rows),
             "swing_legacy_archive": len(legacy_swing_rows),
             "swing_legacy_phase0_ignored": sum(
@@ -2150,22 +2673,31 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
                 for row in legacy_swing_rows
                 if "legacy_phase0_real_canary_ignored" in (row.get("reasons") or [])
             ),
-            "swing_legacy_hard_gate_risk_counts": _count_field(active_swing_rows, "legacy_hard_gate_risk"),
-            "panic_approval_requested": sum(1 for row in panic_rows if row.get("state") == "approval_required"),
-            "swing_requested": int((swing_report.get("summary") or {}).get("requested") or 0)
-            if isinstance(swing_report.get("summary"), dict)
-            else 0,
+            "swing_legacy_hard_gate_risk_counts": _count_field(
+                active_swing_rows, "legacy_hard_gate_risk"
+            ),
+            "panic_approval_requested": sum(
+                1 for row in panic_rows if row.get("state") == "approval_required"
+            ),
+            "swing_requested": (
+                int((swing_report.get("summary") or {}).get("requested") or 0)
+                if isinstance(swing_report.get("summary"), dict)
+                else 0
+            ),
             "swing_approved": sum(
                 1
                 for row in swing_rows
-                if row.get("state") == "approval_required" and bool(row.get("approval_artifact_approved"))
+                if row.get("state") == "approval_required"
+                and bool(row.get("approval_artifact_approved"))
             ),
             "pattern_lab_currentness_status": currentness_audit.get("status"),
             "pattern_lab_ai_review_status": pattern_lab_ai_review.get("status"),
             "producer_gap_discovery_status": producer_gap_discovery.get("status"),
             "pattern_lab_propagation_status": propagation_audit.get("status"),
             "scalp_entry_adm_status": (
-                (ev_report.get("scalp_entry_action_decision_matrix") or {}).get("status")
+                (ev_report.get("scalp_entry_action_decision_matrix") or {}).get(
+                    "status"
+                )
                 if isinstance(ev_report.get("scalp_entry_action_decision_matrix"), dict)
                 else None
             ),
@@ -2196,7 +2728,9 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
                 else None
             ),
             "entry_submit_drought_handoff_selected": (
-                (ev_report.get("entry_funnel") or {}).get("entry_submit_drought_handoff_selected")
+                (ev_report.get("entry_funnel") or {}).get(
+                    "entry_submit_drought_handoff_selected"
+                )
                 if isinstance(ev_report.get("entry_funnel"), dict)
                 else False
             ),
@@ -2205,9 +2739,13 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
                 if isinstance(ev_report.get("lifecycle_decision_matrix"), dict)
                 else None
             ),
-            "lifecycle_matrix_ready_for_bounded_apply": lifecycle_matrix_summary.get("ready_for_bounded_apply"),
+            "lifecycle_matrix_ready_for_bounded_apply": lifecycle_matrix_summary.get(
+                "ready_for_bounded_apply"
+            ),
             "lifecycle_matrix_warnings": lifecycle_matrix_summary.get("warnings"),
-            "lifecycle_bucket_discovery_status": lifecycle_bucket_discovery_summary.get("status"),
+            "lifecycle_bucket_discovery_status": lifecycle_bucket_discovery_summary.get(
+                "status"
+            ),
             "lifecycle_bucket_discovery_surfaced_candidate_count": lifecycle_bucket_discovery_summary.get(
                 "surfaced_candidate_count"
             ),
@@ -2229,7 +2767,9 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
                 or {}
             ).get("parent_granularity_status"),
             "lifecycle_ai_context_applied_count": (
-                (ev_report.get("lifecycle_ai_context_attribution") or {}).get("context_applied_count")
+                (ev_report.get("lifecycle_ai_context_attribution") or {}).get(
+                    "context_applied_count"
+                )
                 if isinstance(ev_report.get("lifecycle_ai_context_attribution"), dict)
                 else 0
             ),
@@ -2238,37 +2778,61 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
                 if isinstance(ev_report.get("lifecycle_ai_context"), dict)
                 else 0
             ),
-            "swing_strategy_discovery_available": swing_discovery_summary.get("available"),
-            "swing_strategy_discovery_labeled_sample_count": swing_discovery_summary.get("labeled_sample_count"),
-            "swing_strategy_discovery_pending_future_quote_count": swing_discovery_summary.get("pending_future_quote_count"),
-            "swing_lifecycle_matrix_available": swing_lifecycle_matrix_summary.get("available"),
+            "swing_strategy_discovery_available": swing_discovery_summary.get(
+                "available"
+            ),
+            "swing_strategy_discovery_labeled_sample_count": swing_discovery_summary.get(
+                "labeled_sample_count"
+            ),
+            "swing_strategy_discovery_pending_future_quote_count": swing_discovery_summary.get(
+                "pending_future_quote_count"
+            ),
+            "swing_lifecycle_matrix_available": swing_lifecycle_matrix_summary.get(
+                "available"
+            ),
             "swing_lifecycle_matrix_sim_auto_candidate_count": swing_lifecycle_matrix_summary.get(
                 "sim_auto_candidate_count"
             ),
-            "swing_lifecycle_bucket_discovery_available": swing_lifecycle_bucket_discovery_summary.get("available"),
+            "swing_lifecycle_bucket_discovery_available": swing_lifecycle_bucket_discovery_summary.get(
+                "available"
+            ),
             "swing_lifecycle_bucket_discovery_sim_auto_approved_count": swing_lifecycle_bucket_discovery_summary.get(
                 "sim_auto_approved_count"
             ),
             "institutional_flow_available": institutional_flow_summary.get("available"),
-            "institutional_flow_join_rate_pct": institutional_flow_summary.get("join_rate_pct"),
-            "microstructure_reaction_available": microstructure_reaction_summary.get("available"),
-            "microstructure_reaction_row_count": microstructure_reaction_summary.get("row_count"),
-            "microstructure_reaction_ok_count": microstructure_reaction_summary.get("ok_count"),
+            "institutional_flow_join_rate_pct": institutional_flow_summary.get(
+                "join_rate_pct"
+            ),
+            "microstructure_reaction_available": microstructure_reaction_summary.get(
+                "available"
+            ),
+            "microstructure_reaction_row_count": microstructure_reaction_summary.get(
+                "row_count"
+            ),
+            "microstructure_reaction_ok_count": microstructure_reaction_summary.get(
+                "ok_count"
+            ),
         },
         "application_timing": _application_timing(target_date, ev_report),
         "scalp_entry_action_decision_matrix": scalp_entry_adm_summary,
-        "buy_funnel_sentinel": ev_report.get("buy_funnel_sentinel")
-        if isinstance(ev_report.get("buy_funnel_sentinel"), dict)
-        else {},
+        "buy_funnel_sentinel": (
+            ev_report.get("buy_funnel_sentinel")
+            if isinstance(ev_report.get("buy_funnel_sentinel"), dict)
+            else {}
+        ),
         "lifecycle_decision_matrix": lifecycle_matrix_summary,
         "lifecycle_bucket_discovery": lifecycle_bucket_discovery_summary,
         "lifecycle_bucket_windows": lifecycle_bucket_windows_summary,
-        "lifecycle_ai_context": ev_report.get("lifecycle_ai_context")
-        if isinstance(ev_report.get("lifecycle_ai_context"), dict)
-        else {},
-        "lifecycle_ai_context_attribution": ev_report.get("lifecycle_ai_context_attribution")
-        if isinstance(ev_report.get("lifecycle_ai_context_attribution"), dict)
-        else {},
+        "lifecycle_ai_context": (
+            ev_report.get("lifecycle_ai_context")
+            if isinstance(ev_report.get("lifecycle_ai_context"), dict)
+            else {}
+        ),
+        "lifecycle_ai_context_attribution": (
+            ev_report.get("lifecycle_ai_context_attribution")
+            if isinstance(ev_report.get("lifecycle_ai_context_attribution"), dict)
+            else {}
+        ),
         "swing_strategy_discovery": swing_discovery_summary,
         "swing_lifecycle_decision_matrix": swing_lifecycle_matrix_summary,
         "swing_lifecycle_bucket_discovery": swing_lifecycle_bucket_discovery_summary,
@@ -2286,23 +2850,67 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
             for message in [
                 "threshold_cycle_ev_missing" if not ev_json.exists() else "",
                 "swing_runtime_approval_missing" if not swing_path.exists() else "",
-                "scalp_entry_action_decision_matrix_missing" if not scalp_entry_adm_path else "",
-                "lifecycle_decision_matrix_missing" if not lifecycle_matrix_path else "",
-                "lifecycle_bucket_discovery_missing" if not lifecycle_bucket_discovery_summary.get("available") else "",
-                "swing_lifecycle_decision_matrix_missing" if not swing_lifecycle_matrix_summary.get("available") else "",
-                "swing_lifecycle_bucket_discovery_missing" if not swing_lifecycle_bucket_discovery_summary.get("available") else "",
-                "institutional_flow_context_missing" if not institutional_flow_path else "",
-                "pattern_lab_currentness_audit_missing" if not currentness_path.exists() else "",
-                "pattern_lab_ai_review_missing" if not pattern_lab_ai_review_path.exists() else "",
-                "producer_gap_discovery_missing" if not producer_gap_discovery_path.exists() else "",
-                "pattern_lab_propagation_audit_missing" if not propagation_path.exists() else "",
+                (
+                    "scalp_entry_action_decision_matrix_missing"
+                    if not scalp_entry_adm_path
+                    else ""
+                ),
+                (
+                    "lifecycle_decision_matrix_missing"
+                    if not lifecycle_matrix_path
+                    else ""
+                ),
+                (
+                    "lifecycle_bucket_discovery_missing"
+                    if not lifecycle_bucket_discovery_summary.get("available")
+                    else ""
+                ),
+                (
+                    "swing_lifecycle_decision_matrix_missing"
+                    if not swing_lifecycle_matrix_summary.get("available")
+                    else ""
+                ),
+                (
+                    "swing_lifecycle_bucket_discovery_missing"
+                    if not swing_lifecycle_bucket_discovery_summary.get("available")
+                    else ""
+                ),
+                (
+                    "institutional_flow_context_missing"
+                    if not institutional_flow_path
+                    else ""
+                ),
+                (
+                    "pattern_lab_currentness_audit_missing"
+                    if not currentness_path.exists()
+                    else ""
+                ),
+                (
+                    "pattern_lab_ai_review_missing"
+                    if not pattern_lab_ai_review_path.exists()
+                    else ""
+                ),
+                (
+                    "producer_gap_discovery_missing"
+                    if not producer_gap_discovery_path.exists()
+                    else ""
+                ),
+                (
+                    "pattern_lab_propagation_audit_missing"
+                    if not propagation_path.exists()
+                    else ""
+                ),
                 clean_policy_warning or "",
-                "source_quality_blocked_contract_gap"
-                if source_quality_preflight_blocked(source_quality_preflight_gate)
-                else "",
+                (
+                    "source_quality_blocked_contract_gap"
+                    if source_quality_preflight_blocked(source_quality_preflight_gate)
+                    else ""
+                ),
                 *[
                     f"swing_lifecycle_bucket_discovery:{item}"
-                    for item in (swing_lifecycle_bucket_discovery_summary.get("warnings") or [])
+                    for item in (
+                        swing_lifecycle_bucket_discovery_summary.get("warnings") or []
+                    )
                     if item
                 ],
                 *source_load_warnings,
@@ -2313,8 +2921,12 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
     report = apply_source_quality_preflight_block(report, source_quality_preflight_gate)
     SUMMARY_DIR.mkdir(parents=True, exist_ok=True)
     json_path, md_path = summary_paths(target_date)
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-    md_path.write_text(render_runtime_approval_summary_markdown(report), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    md_path.write_text(
+        render_runtime_approval_summary_markdown(report), encoding="utf-8"
+    )
     return report
 
 
@@ -2338,8 +2950,14 @@ def _render_rows(rows: list[dict[str, Any]]) -> list[str]:
 
 def render_runtime_approval_summary_markdown(report: dict[str, Any]) -> str:
     summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
-    timing = report.get("application_timing") if isinstance(report.get("application_timing"), dict) else {}
-    scalping = report.get("scalping") if isinstance(report.get("scalping"), list) else []
+    timing = (
+        report.get("application_timing")
+        if isinstance(report.get("application_timing"), dict)
+        else {}
+    )
+    scalping = (
+        report.get("scalping") if isinstance(report.get("scalping"), list) else []
+    )
     swing = report.get("swing") if isinstance(report.get("swing"), list) else []
     panic = report.get("panic") if isinstance(report.get("panic"), list) else []
     entry_adm = (
@@ -2392,12 +3010,30 @@ def render_runtime_approval_summary_markdown(report: dict[str, Any]) -> str:
         if isinstance(report.get("microstructure_reaction_context"), dict)
         else {}
     )
-    currentness = report.get("pattern_lab_currentness_audit") if isinstance(report.get("pattern_lab_currentness_audit"), dict) else {}
-    pattern_lab_ai_review = report.get("pattern_lab_ai_review") if isinstance(report.get("pattern_lab_ai_review"), dict) else {}
-    producer_gap_discovery = report.get("producer_gap_discovery") if isinstance(report.get("producer_gap_discovery"), dict) else {}
-    propagation = report.get("pattern_lab_propagation_audit") if isinstance(report.get("pattern_lab_propagation_audit"), dict) else {}
+    currentness = (
+        report.get("pattern_lab_currentness_audit")
+        if isinstance(report.get("pattern_lab_currentness_audit"), dict)
+        else {}
+    )
+    pattern_lab_ai_review = (
+        report.get("pattern_lab_ai_review")
+        if isinstance(report.get("pattern_lab_ai_review"), dict)
+        else {}
+    )
+    producer_gap_discovery = (
+        report.get("producer_gap_discovery")
+        if isinstance(report.get("producer_gap_discovery"), dict)
+        else {}
+    )
+    propagation = (
+        report.get("pattern_lab_propagation_audit")
+        if isinstance(report.get("pattern_lab_propagation_audit"), dict)
+        else {}
+    )
     source_load_diagnostics = (
-        report.get("source_load_diagnostics") if isinstance(report.get("source_load_diagnostics"), list) else []
+        report.get("source_load_diagnostics")
+        if isinstance(report.get("source_load_diagnostics"), list)
+        else []
     )
     lines = [
         f"# Runtime Approval Summary - {report.get('date')}",
@@ -2537,7 +3173,9 @@ def render_runtime_approval_summary_markdown(report: dict[str, Any]) -> str:
         f"- producer_gap_discovery: status=`{producer_gap_discovery.get('status')}` artifact=`{producer_gap_discovery.get('artifact') or '-'}`",
         f"- propagation: status=`{propagation.get('status')}` fail=`{propagation.get('fail_count')}` warnings=`{propagation.get('warning_count')}` artifact=`{propagation.get('artifact') or '-'}`",
     ]
-    warnings = report.get("warnings") if isinstance(report.get("warnings"), list) else []
+    warnings = (
+        report.get("warnings") if isinstance(report.get("warnings"), list) else []
+    )
     if warnings:
         lines.extend(["", "## Warnings"])
         lines.extend(f"- `{warning}`" for warning in warnings)
@@ -2555,7 +3193,9 @@ def render_runtime_approval_summary_markdown(report: dict[str, Any]) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Build read-only runtime approval summary report.")
+    parser = argparse.ArgumentParser(
+        description="Build read-only runtime approval summary report."
+    )
     parser.add_argument("--date", dest="target_date", default=date.today().isoformat())
     args = parser.parse_args(argv)
     report = build_runtime_approval_summary(args.target_date)

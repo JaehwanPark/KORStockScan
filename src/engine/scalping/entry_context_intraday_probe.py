@@ -14,7 +14,6 @@ from typing import Any
 from src.engine import scalp_entry_action_decision_matrix as adm_mod
 from src.engine.sniper_config import CONF
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DATA_DIR = PROJECT_ROOT / "data"
 REPORT_DIR = DATA_DIR / "report"
@@ -83,7 +82,11 @@ REQUIRED_CONTEXT_KEYS = (
 
 AI_DECISION_POINT_CONTRACTS = {
     "entry_screen": {
-        "schemas": {"entry_screen_hot_v1", "entry_screen_v2", "entry_screen_compact_v1"},
+        "schemas": {
+            "entry_screen_hot_v1",
+            "entry_screen_v2",
+            "entry_screen_compact_v1",
+        },
         "required_features": {
             "entry_liquidity_score",
             "fillability_score",
@@ -95,12 +98,21 @@ AI_DECISION_POINT_CONTRACTS = {
     },
     "entry_price": {
         "schemas": {"entry_price_compact_v1", "entry_price_v2", "entry_price_raw_v1"},
-        "required_features": {"entry_context_features", "price_context", "quote_freshness"},
+        "required_features": {
+            "entry_context_features",
+            "price_context",
+            "quote_freshness",
+        },
         "authority": "pre_submit_price_classifier_only",
     },
     "holding_score": {
         "schemas": {"holding_score_v2", "holding_score_v2_submit_authority_retry"},
-        "required_features": {"position_context", "pnl_context", "source_quality", "entry_time_context"},
+        "required_features": {
+            "position_context",
+            "pnl_context",
+            "source_quality",
+            "entry_time_context",
+        },
         "authority": "holding_quality_score_only",
     },
     "holding_flow": {
@@ -126,7 +138,11 @@ def _nonempty(value: Any) -> bool:
 def _api_keys() -> list[str]:
     raw = os.getenv("OPENAI_API_KEYS") or os.getenv("OPENAI_API_KEY") or ""
     keys = [part.strip() for part in raw.split(",") if part.strip()]
-    keys.extend(v for key, v in sorted(CONF.items()) if str(key).startswith("OPENAI_API_KEY") and v)
+    keys.extend(
+        v
+        for key, v in sorted(CONF.items())
+        if str(key).startswith("OPENAI_API_KEY") and v
+    )
     return keys
 
 
@@ -184,7 +200,14 @@ def _read_pipeline_events(target_date: str) -> dict[str, Any]:
 def _event_fields(row: dict[str, Any]) -> dict[str, Any]:
     fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}
     merged = dict(fields)
-    for key in ("stage", "event", "stock_code", "stock_name", "timestamp", "event_time"):
+    for key in (
+        "stage",
+        "event",
+        "stock_code",
+        "stock_name",
+        "timestamp",
+        "event_time",
+    ):
         if key in row and key not in merged:
             merged[key] = row.get(key)
     return merged
@@ -206,14 +229,27 @@ def _event_schema(fields: dict[str, Any]) -> str:
 def _classify_decision_point(fields: dict[str, Any]) -> str | None:
     schema = _event_schema(fields)
     stage = str(fields.get("stage") or fields.get("event") or "").lower()
-    endpoint = str(fields.get("openai_endpoint_name") or fields.get("bedrock_endpoint_name") or "").lower()
-    if schema.startswith("entry_screen") or stage == "scalp_entry_action_decision_snapshot":
+    endpoint = str(
+        fields.get("openai_endpoint_name") or fields.get("bedrock_endpoint_name") or ""
+    ).lower()
+    if (
+        schema.startswith("entry_screen")
+        or stage == "scalp_entry_action_decision_snapshot"
+    ):
         return "entry_screen"
-    if schema.startswith("entry_price") or endpoint == "entry_price" or "entry_ai_price_canary" in stage:
+    if (
+        schema.startswith("entry_price")
+        or endpoint == "entry_price"
+        or "entry_ai_price_canary" in stage
+    ):
         return "entry_price"
     if schema.startswith("holding_score") or endpoint == "holding_score":
         return "holding_score"
-    if schema.startswith("holding_flow") or endpoint == "holding_flow" or "holding_flow_override" in stage:
+    if (
+        schema.startswith("holding_flow")
+        or endpoint == "holding_flow"
+        or "holding_flow_override" in stage
+    ):
         return "holding_flow"
     return None
 
@@ -233,17 +269,33 @@ def _event_has_required_feature(fields: dict[str, Any], feature: str) -> bool:
             )
         )
     if feature == "price_context":
-        return any(_nonempty(fields.get(key)) for key in ("order_price", "resolved_order_price", "best_bid", "best_ask"))
+        return any(
+            _nonempty(fields.get(key))
+            for key in ("order_price", "resolved_order_price", "best_bid", "best_ask")
+        )
     if feature == "quote_freshness":
-        return any(_nonempty(fields.get(key)) for key in ("quote_age_ms", "quote_stale", "quote_fresh_for_entry"))
+        return any(
+            _nonempty(fields.get(key))
+            for key in ("quote_age_ms", "quote_stale", "quote_fresh_for_entry")
+        )
     if feature == "position_context":
-        return any(_nonempty(fields.get(key)) for key in ("profit_rate", "peak_profit", "held_sec", "current_ai_score"))
+        return any(
+            _nonempty(fields.get(key))
+            for key in ("profit_rate", "peak_profit", "held_sec", "current_ai_score")
+        )
     if feature == "pnl_context":
-        return any(_nonempty(fields.get(key)) for key in ("profit_rate", "peak_profit", "drawdown"))
+        return any(
+            _nonempty(fields.get(key))
+            for key in ("profit_rate", "peak_profit", "drawdown")
+        )
     if feature == "source_quality":
         return any(
             _nonempty(fields.get(key))
-            for key in ("ai_input_source_quality_status", "holding_score_data_quality", "data_quality")
+            for key in (
+                "ai_input_source_quality_status",
+                "holding_score_data_quality",
+                "data_quality",
+            )
         )
     if feature == "entry_time_context":
         return any(
@@ -269,9 +321,19 @@ def _decision_contract_probe(
     for point, contract in AI_DECISION_POINT_CONTRACTS.items():
         rows = rows_by_point.get(point, [])
         schema_counts = Counter(_event_schema(row) for row in rows)
-        action_counts = Counter(str(row.get("action") or row.get("ai_action") or row.get("flow_action") or "-") for row in rows)
+        action_counts = Counter(
+            str(
+                row.get("action")
+                or row.get("ai_action")
+                or row.get("flow_action")
+                or "-"
+            )
+            for row in rows
+        )
         missing_counts = {
-            feature: sum(1 for row in rows if not _event_has_required_feature(row, feature))
+            feature: sum(
+                1 for row in rows if not _event_has_required_feature(row, feature)
+            )
             for feature in contract["required_features"]
         }
         summary[point] = {
@@ -281,19 +343,23 @@ def _decision_contract_probe(
             "schema_counts": dict(schema_counts),
             "action_counts": dict(action_counts),
             "missing_required_feature_counts": missing_counts,
-            "coverage_status": "ok"
-            if rows and all(count == 0 for count in missing_counts.values())
-            else "missing_rows"
-            if not rows
-            else "missing_required_features",
+            "coverage_status": (
+                "ok"
+                if rows and all(count == 0 for count in missing_counts.values())
+                else "missing_rows" if not rows else "missing_required_features"
+            ),
             "sample_rows": [
                 {
                     "stage": row.get("stage"),
                     "stock_code": row.get("stock_code"),
                     "stock_name": row.get("stock_name"),
                     "schema": _event_schema(row),
-                    "action": row.get("action") or row.get("ai_action") or row.get("flow_action"),
-                    "score": row.get("score") or row.get("ai_score") or row.get("current_ai_score"),
+                    "action": row.get("action")
+                    or row.get("ai_action")
+                    or row.get("flow_action"),
+                    "score": row.get("score")
+                    or row.get("ai_score")
+                    or row.get("current_ai_score"),
                     "source_quality": row.get("ai_input_source_quality_status")
                     or row.get("holding_score_data_quality")
                     or row.get("data_quality"),
@@ -303,9 +369,11 @@ def _decision_contract_probe(
         }
     return {
         "decision_points": summary,
-        "overall_status": "ok"
-        if all(item["coverage_status"] == "ok" for item in summary.values())
-        else "missing_rows_or_features",
+        "overall_status": (
+            "ok"
+            if all(item["coverage_status"] == "ok" for item in summary.values())
+            else "missing_rows_or_features"
+        ),
     }
 
 
@@ -313,13 +381,18 @@ def _decision_point_rows(
     adm_rows: list[dict[str, Any]],
     pipeline_rows: list[dict[str, Any]],
 ) -> dict[str, list[dict[str, Any]]]:
-    rows_by_point: dict[str, list[dict[str, Any]]] = {key: [] for key in AI_DECISION_POINT_CONTRACTS}
+    rows_by_point: dict[str, list[dict[str, Any]]] = {
+        key: [] for key in AI_DECISION_POINT_CONTRACTS
+    }
     for row in adm_rows:
         if not isinstance(row, dict):
             continue
         stage = str(row.get("stage") or "")
         source_stage = str(row.get("source_stage") or "")
-        if stage == "scalp_entry_action_decision_snapshot" or source_stage == "ai_confirmed":
+        if (
+            stage == "scalp_entry_action_decision_snapshot"
+            or source_stage == "ai_confirmed"
+        ):
             rows_by_point["entry_screen"].append(row)
     for row in pipeline_rows:
         if not isinstance(row, dict):
@@ -329,15 +402,16 @@ def _decision_point_rows(
         if point:
             rows_by_point[point].append(fields)
     for rows in rows_by_point.values():
-        rows.sort(key=lambda item: str(item.get("event_time") or item.get("timestamp") or ""), reverse=True)
+        rows.sort(
+            key=lambda item: str(item.get("event_time") or item.get("timestamp") or ""),
+            reverse=True,
+        )
     return rows_by_point
 
 
 def _probe_payload(row: dict[str, Any], index: int) -> dict[str, Any]:
     context = {
-        key: row.get(key)
-        for key in PROBE_FEATURE_KEYS
-        if _nonempty(row.get(key))
+        key: row.get(key) for key in PROBE_FEATURE_KEYS if _nonempty(row.get(key))
     }
     return {
         "case_id": f"intraday_entry_context_{index:02d}",
@@ -357,7 +431,10 @@ def _candidate_rows(rows: list[dict[str, Any]], limit: int) -> list[dict[str, An
             continue
         stage = str(row.get("stage") or "")
         source_stage = str(row.get("source_stage") or "")
-        if stage != "scalp_entry_action_decision_snapshot" and source_stage != "ai_confirmed":
+        if (
+            stage != "scalp_entry_action_decision_snapshot"
+            and source_stage != "ai_confirmed"
+        ):
             continue
         if not any(_nonempty(row.get(key)) for key in REQUIRED_CONTEXT_KEYS):
             continue
@@ -372,13 +449,25 @@ def _coverage(rows: list[dict[str, Any]]) -> dict[str, Any]:
         key: sum(1 for row in rows if _nonempty(row.get(key)))
         for key in REQUIRED_CONTEXT_KEYS
     }
-    quality_counts = Counter(str(row.get("entry_context_quality") or "-") for row in rows)
-    liquidity_counts = Counter(str(row.get("entry_liquidity_status") or "-") for row in rows)
-    flow_counts = Counter(str(row.get("entry_order_flow_status") or "-") for row in rows)
-    momentum_counts = Counter(str(row.get("entry_momentum_status") or "-") for row in rows)
+    quality_counts = Counter(
+        str(row.get("entry_context_quality") or "-") for row in rows
+    )
+    liquidity_counts = Counter(
+        str(row.get("entry_liquidity_status") or "-") for row in rows
+    )
+    flow_counts = Counter(
+        str(row.get("entry_order_flow_status") or "-") for row in rows
+    )
+    momentum_counts = Counter(
+        str(row.get("entry_momentum_status") or "-") for row in rows
+    )
     missing_counts: Counter[str] = Counter()
     for row in rows:
-        for item in str(row.get("entry_context_missing_features") or "").replace("|", ",").split(","):
+        for item in (
+            str(row.get("entry_context_missing_features") or "")
+            .replace("|", ",")
+            .split(",")
+        ):
             token = item.strip()
             if token:
                 missing_counts[token] += 1
@@ -390,7 +479,9 @@ def _coverage(rows: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "row_count": total,
         "complete_or_partial_count": complete_or_partial,
-        "complete_or_partial_rate_pct": round((complete_or_partial / total) * 100.0, 2) if total else 0.0,
+        "complete_or_partial_rate_pct": (
+            round((complete_or_partial / total) * 100.0, 2) if total else 0.0
+        ),
         "required_field_counts": field_counts,
         "entry_context_quality_counts": dict(quality_counts),
         "entry_liquidity_status_counts": dict(liquidity_counts),
@@ -411,7 +502,9 @@ class _RulesProxy:
         return getattr(self._base, name)
 
 
-def _call_openai(rows: list[dict[str, Any]], *, model: str, effort: str) -> list[dict[str, Any]]:
+def _call_openai(
+    rows: list[dict[str, Any]], *, model: str, effort: str
+) -> list[dict[str, Any]]:
     from src.engine import ai_engine_openai as openai_module
     from src.engine.ai_engine_openai import GPTSniperEngine
 
@@ -443,7 +536,11 @@ def _call_openai(rows: list[dict[str, Any]], *, model: str, effort: str) -> list
             started = time.perf_counter()
             result = engine._call_openai_safe(
                 prompt,
-                json.dumps(_probe_payload(row, index), ensure_ascii=False, separators=(",", ":")),
+                json.dumps(
+                    _probe_payload(row, index),
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
                 require_json=True,
                 context_name=f"INTRADAY_ENTRY_CONTEXT_PROBE:{model}:{effort}:{row.get('stock_code')}",
                 model_override=model,
@@ -526,14 +623,25 @@ def _restore_env(original: dict[str, str | None]) -> None:
 
 
 def _fields_to_ws_data(fields: dict[str, Any]) -> dict[str, Any]:
-    curr = _first_nonempty(fields, "curr", "current_price", "order_price", "resolved_order_price", default=0)
+    curr = _first_nonempty(
+        fields,
+        "curr",
+        "current_price",
+        "order_price",
+        "resolved_order_price",
+        default=0,
+    )
     best_bid = _first_nonempty(fields, "best_bid", "top_bid", "bid_price", default=0)
     best_ask = _first_nonempty(fields, "best_ask", "top_ask", "ask_price", default=0)
     ws_data = {
         "curr": curr,
         "current_price": curr,
-        "v_pw": _first_nonempty(fields, "v_pw", "latest_strength", "execution_strength", default=0),
-        "buy_ratio": _first_nonempty(fields, "buy_ratio", "buy_pressure_10t", default=0),
+        "v_pw": _first_nonempty(
+            fields, "v_pw", "latest_strength", "execution_strength", default=0
+        ),
+        "buy_ratio": _first_nonempty(
+            fields, "buy_ratio", "buy_pressure_10t", default=0
+        ),
         "buy_exec_volume": _first_nonempty(fields, "buy_exec_volume", default=0),
         "sell_exec_volume": _first_nonempty(fields, "sell_exec_volume", default=0),
         "ask_tot": _first_nonempty(fields, "ask_tot", "top3_ask_notional", default=0),
@@ -543,31 +651,72 @@ def _fields_to_ws_data(fields: dict[str, Any]) -> dict[str, Any]:
     }
     if _nonempty(best_bid) or _nonempty(best_ask):
         ws_data["orderbook"] = {
-            "bids": [{"price": _int_or_zero(best_bid), "qty": _int_or_zero(_first_nonempty(fields, "best_bid_qty", default=0))}],
-            "asks": [{"price": _int_or_zero(best_ask), "qty": _int_or_zero(_first_nonempty(fields, "best_ask_qty", default=0))}],
+            "bids": [
+                {
+                    "price": _int_or_zero(best_bid),
+                    "qty": _int_or_zero(
+                        _first_nonempty(fields, "best_bid_qty", default=0)
+                    ),
+                }
+            ],
+            "asks": [
+                {
+                    "price": _int_or_zero(best_ask),
+                    "qty": _int_or_zero(
+                        _first_nonempty(fields, "best_ask_qty", default=0)
+                    ),
+                }
+            ],
         }
     return ws_data
 
 
 def _fields_to_price_ctx(fields: dict[str, Any]) -> dict[str, Any]:
-    current_price = _first_nonempty(fields, "curr", "current_price", "order_price", "resolved_order_price", default=0)
-    order_price = _first_nonempty(fields, "order_price", "resolved_order_price", "candidate_order_price", default=current_price)
+    current_price = _first_nonempty(
+        fields,
+        "curr",
+        "current_price",
+        "order_price",
+        "resolved_order_price",
+        default=0,
+    )
+    order_price = _first_nonempty(
+        fields,
+        "order_price",
+        "resolved_order_price",
+        "candidate_order_price",
+        default=current_price,
+    )
     return {
         "resolved_order_price": _int_or_zero(order_price),
-        "defensive_order_price": _int_or_zero(_first_nonempty(fields, "defensive_order_price", default=order_price)),
-        "reference_target_price": _int_or_zero(_first_nonempty(fields, "reference_target_price", default=order_price)),
-        "entry_price_guard": _first_nonempty(fields, "entry_price_guard", "price_resolution_reason", default="-"),
+        "defensive_order_price": _int_or_zero(
+            _first_nonempty(fields, "defensive_order_price", default=order_price)
+        ),
+        "reference_target_price": _int_or_zero(
+            _first_nonempty(fields, "reference_target_price", default=order_price)
+        ),
+        "entry_price_guard": _first_nonempty(
+            fields, "entry_price_guard", "price_resolution_reason", default="-"
+        ),
         "quote_age_ms": _first_nonempty(fields, "quote_age_ms", default=0),
         "quote_stale": _boolish(_first_nonempty(fields, "quote_stale", default=False)),
         "ws_age_ms": _first_nonempty(fields, "ws_age_ms", "quote_age_ms", default=0),
         "latency_state": _first_nonempty(fields, "latency_state", default="-"),
-        "entry_liquidity_score": _first_nonempty(fields, "entry_liquidity_score", default=None),
+        "entry_liquidity_score": _first_nonempty(
+            fields, "entry_liquidity_score", default=None
+        ),
         "fillability_score": _first_nonempty(fields, "fillability_score", default=None),
-        "order_flow_pressure_score": _first_nonempty(fields, "order_flow_pressure_score", default=None),
-        "entry_context_quality": _first_nonempty(fields, "entry_context_quality", default=None),
+        "order_flow_pressure_score": _first_nonempty(
+            fields, "order_flow_pressure_score", default=None
+        ),
+        "entry_context_quality": _first_nonempty(
+            fields, "entry_context_quality", default=None
+        ),
         "orderbook_micro": {
             "spread_bp": _first_nonempty(fields, "spread_bp", default=None),
-            "top_depth_ratio": _first_nonempty(fields, "top3_depth_ratio", default=None),
+            "top_depth_ratio": _first_nonempty(
+                fields, "top3_depth_ratio", default=None
+            ),
             "ofi": _first_nonempty(fields, "order_flow_pressure_score", default=None),
             "qi": _first_nonempty(fields, "fillability_score", default=None),
         },
@@ -575,26 +724,46 @@ def _fields_to_price_ctx(fields: dict[str, Any]) -> dict[str, Any]:
 
 
 def _fields_to_position_ctx(fields: dict[str, Any]) -> dict[str, Any]:
-    profit_rate = _float_or_zero(_first_nonempty(fields, "profit_rate", "pnl_pct", default=0.0))
-    peak_profit = _float_or_zero(_first_nonempty(fields, "peak_profit", default=profit_rate))
+    profit_rate = _float_or_zero(
+        _first_nonempty(fields, "profit_rate", "pnl_pct", default=0.0)
+    )
+    peak_profit = _float_or_zero(
+        _first_nonempty(fields, "peak_profit", default=profit_rate)
+    )
     return {
         "record_id": _first_nonempty(fields, "record_id", default=None),
-        "buy_price": _first_nonempty(fields, "buy_price", "avg_price", "average_entry_price", default=0),
+        "buy_price": _first_nonempty(
+            fields, "buy_price", "avg_price", "average_entry_price", default=0
+        ),
         "curr_price": _first_nonempty(fields, "curr", "current_price", default=0),
         "profit_rate": profit_rate,
         "peak_profit": peak_profit,
         "drawdown": max(0.0, peak_profit - profit_rate),
         "held_sec": _int_or_zero(_first_nonempty(fields, "held_sec", default=0)),
-        "current_ai_score": _first_nonempty(fields, "current_ai_score", "score", "ai_score", default=0),
-        "exit_rule": _first_nonempty(fields, "exit_rule", "candidate_exit_rule", default="-"),
+        "current_ai_score": _first_nonempty(
+            fields, "current_ai_score", "score", "ai_score", default=0
+        ),
+        "exit_rule": _first_nonempty(
+            fields, "exit_rule", "candidate_exit_rule", default="-"
+        ),
         "flow_state": _first_nonempty(fields, "flow_state", default="-"),
         "reason": _first_nonempty(fields, "reason", default="-"),
         "entry_time_context": {
-            "entry_context_quality": _first_nonempty(fields, "entry_context_quality", default=None),
-            "entry_liquidity_score": _first_nonempty(fields, "entry_liquidity_score", default=None),
-            "fillability_score": _first_nonempty(fields, "fillability_score", default=None),
-            "order_flow_pressure_score": _first_nonempty(fields, "order_flow_pressure_score", default=None),
-            "entry_momentum_score": _first_nonempty(fields, "entry_momentum_score", default=None),
+            "entry_context_quality": _first_nonempty(
+                fields, "entry_context_quality", default=None
+            ),
+            "entry_liquidity_score": _first_nonempty(
+                fields, "entry_liquidity_score", default=None
+            ),
+            "fillability_score": _first_nonempty(
+                fields, "fillability_score", default=None
+            ),
+            "order_flow_pressure_score": _first_nonempty(
+                fields, "order_flow_pressure_score", default=None
+            ),
+            "entry_momentum_score": _first_nonempty(
+                fields, "entry_momentum_score", default=None
+            ),
         },
     }
 
@@ -606,10 +775,18 @@ def _endpoint_summary(results: list[dict[str, Any]]) -> dict[str, Any]:
         "skipped_count": sum(1 for row in results if row.get("status") == "skipped"),
         "error_count": sum(1 for row in results if row.get("status") == "error"),
         "action_changed_count": sum(1 for row in ok_rows if row.get("action_changed")),
-        "order_price_changed_count": sum(1 for row in ok_rows if row.get("order_price_changed")),
-        "flow_state_changed_count": sum(1 for row in ok_rows if row.get("flow_state_changed")),
-        "bedrock_primary_used_count": sum(1 for row in ok_rows if row.get("bedrock_primary_used")),
-        "bedrock_failback_used_count": sum(1 for row in ok_rows if row.get("bedrock_failback_used")),
+        "order_price_changed_count": sum(
+            1 for row in ok_rows if row.get("order_price_changed")
+        ),
+        "flow_state_changed_count": sum(
+            1 for row in ok_rows if row.get("flow_state_changed")
+        ),
+        "bedrock_primary_used_count": sum(
+            1 for row in ok_rows if row.get("bedrock_primary_used")
+        ),
+        "bedrock_failback_used_count": sum(
+            1 for row in ok_rows if row.get("bedrock_failback_used")
+        ),
     }
 
 
@@ -665,7 +842,10 @@ def _pair_provider_endpoint_results(
                 "event_time": bedrock_row.get("event_time"),
                 "bedrock_action": bedrock_row.get("provider_action"),
                 "openai_action": openai_row.get("provider_action"),
-                "action_diff": bool(bedrock_row.get("provider_action") != openai_row.get("provider_action")),
+                "action_diff": bool(
+                    bedrock_row.get("provider_action")
+                    != openai_row.get("provider_action")
+                ),
                 "bedrock_primary_used": bool(bedrock_row.get("bedrock_primary_used")),
                 "bedrock_failback_used": bool(bedrock_row.get("bedrock_failback_used")),
             }
@@ -677,7 +857,8 @@ def _pair_provider_endpoint_results(
                         "order_price_diff": bool(
                             bedrock_row.get("provider_order_price")
                             and openai_row.get("provider_order_price")
-                            and bedrock_row.get("provider_order_price") != openai_row.get("provider_order_price")
+                            and bedrock_row.get("provider_order_price")
+                            != openai_row.get("provider_order_price")
                         ),
                     }
                 )
@@ -689,7 +870,8 @@ def _pair_provider_endpoint_results(
                         "flow_state_diff": bool(
                             bedrock_row.get("provider_flow_state")
                             and openai_row.get("provider_flow_state")
-                            and bedrock_row.get("provider_flow_state") != openai_row.get("provider_flow_state")
+                            and bedrock_row.get("provider_flow_state")
+                            != openai_row.get("provider_flow_state")
                         ),
                     }
                 )
@@ -699,10 +881,18 @@ def _pair_provider_endpoint_results(
             "summary": {
                 "pair_count": len(rows),
                 "action_diff_count": sum(1 for row in rows if row.get("action_diff")),
-                "order_price_diff_count": sum(1 for row in rows if row.get("order_price_diff")),
-                "flow_state_diff_count": sum(1 for row in rows if row.get("flow_state_diff")),
-                "bedrock_primary_used_pair_count": sum(1 for row in rows if row.get("bedrock_primary_used")),
-                "bedrock_failback_used_pair_count": sum(1 for row in rows if row.get("bedrock_failback_used")),
+                "order_price_diff_count": sum(
+                    1 for row in rows if row.get("order_price_diff")
+                ),
+                "flow_state_diff_count": sum(
+                    1 for row in rows if row.get("flow_state_diff")
+                ),
+                "bedrock_primary_used_pair_count": sum(
+                    1 for row in rows if row.get("bedrock_primary_used")
+                ),
+                "bedrock_failback_used_pair_count": sum(
+                    1 for row in rows if row.get("bedrock_failback_used")
+                ),
             },
         }
     return paired
@@ -724,7 +914,9 @@ def _run_endpoint_provider_compare(
     if not keys:
         return {
             point: {
-                "results": [{"status": "skipped", "reason": "OPENAI_API_KEY not configured"}],
+                "results": [
+                    {"status": "skipped", "reason": "OPENAI_API_KEY not configured"}
+                ],
                 "summary": _endpoint_summary([{"status": "skipped"}]),
             }
             for point in points
@@ -748,10 +940,19 @@ def _run_endpoint_provider_compare(
             rows = rows_by_point.get(point, [])[: max(1, int(sample_limit or 1))]
             for index, fields in enumerate(rows, start=1):
                 started = time.perf_counter()
-                stock_code = str(_first_nonempty(fields, "stock_code", default=f"{point.upper()}_{index}"))
-                stock_name = str(_first_nonempty(fields, "stock_name", default=stock_code))
+                stock_code = str(
+                    _first_nonempty(
+                        fields, "stock_code", default=f"{point.upper()}_{index}"
+                    )
+                )
+                stock_name = str(
+                    _first_nonempty(fields, "stock_name", default=stock_code)
+                )
                 baseline_action = str(
-                    _first_nonempty(fields, "action", "ai_action", "flow_action", default="-") or "-"
+                    _first_nonempty(
+                        fields, "action", "ai_action", "flow_action", default="-"
+                    )
+                    or "-"
                 ).upper()
                 try:
                     if point == "entry_price":
@@ -768,7 +969,9 @@ def _run_endpoint_provider_compare(
                         )
                         openai_action = str(result.get("action") or "-").upper()
                         baseline_order_price = _int_or_zero(
-                            _first_nonempty(fields, "order_price", "resolved_order_price", default=0)
+                            _first_nonempty(
+                                fields, "order_price", "resolved_order_price", default=0
+                            )
                         )
                         provider_order_price = _int_or_zero(result.get("order_price"))
                         point_results[point].append(
@@ -779,15 +982,21 @@ def _run_endpoint_provider_compare(
                                 "input_variant": "enriched_probe_context_v1",
                                 "stock_code": stock_code,
                                 "stock_name": stock_name,
-                                "event_time": fields.get("event_time") or fields.get("timestamp"),
+                                "event_time": fields.get("event_time")
+                                or fields.get("timestamp"),
                                 "model": model,
                                 "effort": effort,
-                                "elapsed_ms": int((time.perf_counter() - started) * 1000),
+                                "elapsed_ms": int(
+                                    (time.perf_counter() - started) * 1000
+                                ),
                                 "baseline_action": baseline_action,
                                 "provider_action": openai_action,
                                 "baseline_order_price": baseline_order_price,
                                 "provider_order_price": provider_order_price,
-                                "action_changed": bool(baseline_action != "-" and openai_action != baseline_action),
+                                "action_changed": bool(
+                                    baseline_action != "-"
+                                    and openai_action != baseline_action
+                                ),
                                 "order_price_changed": bool(
                                     baseline_order_price > 0
                                     and provider_order_price > 0
@@ -796,8 +1005,12 @@ def _run_endpoint_provider_compare(
                                 "confidence": result.get("confidence"),
                                 "reason": str(result.get("reason") or "")[:160],
                                 "transport_mode": result.get("openai_transport_mode"),
-                                "bedrock_primary_used": bool(result.get("bedrock_primary_used", False)),
-                                "bedrock_failback_used": bool(result.get("bedrock_failback_used", False)),
+                                "bedrock_primary_used": bool(
+                                    result.get("bedrock_primary_used", False)
+                                ),
+                                "bedrock_failback_used": bool(
+                                    result.get("bedrock_failback_used", False)
+                                ),
                             }
                         )
                     else:
@@ -815,7 +1028,9 @@ def _run_endpoint_provider_compare(
                             },
                         )
                         openai_action = str(result.get("action") or "-").upper()
-                        baseline_flow_state = str(_first_nonempty(fields, "flow_state", default="-") or "-")
+                        baseline_flow_state = str(
+                            _first_nonempty(fields, "flow_state", default="-") or "-"
+                        )
                         openai_flow_state = str(result.get("flow_state") or "-")
                         point_results[point].append(
                             {
@@ -825,15 +1040,21 @@ def _run_endpoint_provider_compare(
                                 "input_variant": "enriched_probe_context_v1",
                                 "stock_code": stock_code,
                                 "stock_name": stock_name,
-                                "event_time": fields.get("event_time") or fields.get("timestamp"),
+                                "event_time": fields.get("event_time")
+                                or fields.get("timestamp"),
                                 "model": model,
                                 "effort": effort,
-                                "elapsed_ms": int((time.perf_counter() - started) * 1000),
+                                "elapsed_ms": int(
+                                    (time.perf_counter() - started) * 1000
+                                ),
                                 "baseline_action": baseline_action,
                                 "provider_action": openai_action,
                                 "baseline_flow_state": baseline_flow_state,
                                 "provider_flow_state": openai_flow_state,
-                                "action_changed": bool(baseline_action != "-" and openai_action != baseline_action),
+                                "action_changed": bool(
+                                    baseline_action != "-"
+                                    and openai_action != baseline_action
+                                ),
                                 "flow_state_changed": bool(
                                     baseline_flow_state != "-"
                                     and openai_flow_state != "-"
@@ -843,8 +1064,12 @@ def _run_endpoint_provider_compare(
                                 "next_review_sec": result.get("next_review_sec"),
                                 "reason": str(result.get("reason") or "")[:160],
                                 "transport_mode": result.get("openai_transport_mode"),
-                                "bedrock_primary_used": bool(result.get("bedrock_primary_used", False)),
-                                "bedrock_failback_used": bool(result.get("bedrock_failback_used", False)),
+                                "bedrock_primary_used": bool(
+                                    result.get("bedrock_primary_used", False)
+                                ),
+                                "bedrock_failback_used": bool(
+                                    result.get("bedrock_failback_used", False)
+                                ),
                             }
                         )
                 except Exception as exc:
@@ -856,7 +1081,8 @@ def _run_endpoint_provider_compare(
                             "input_variant": "enriched_probe_context_v1",
                             "stock_code": stock_code,
                             "stock_name": stock_name,
-                            "event_time": fields.get("event_time") or fields.get("timestamp"),
+                            "event_time": fields.get("event_time")
+                            or fields.get("timestamp"),
                             "model": model,
                             "effort": effort,
                             "elapsed_ms": int((time.perf_counter() - started) * 1000),
@@ -945,9 +1171,15 @@ def build_probe_report(
     adm_report = _read_adm_report(target_date, build_adm=build_adm)
     rows = adm_report.get("rows") if isinstance(adm_report.get("rows"), list) else []
     pipeline_report = _read_pipeline_events(target_date)
-    pipeline_rows = pipeline_report.get("rows") if isinstance(pipeline_report.get("rows"), list) else []
+    pipeline_rows = (
+        pipeline_report.get("rows")
+        if isinstance(pipeline_report.get("rows"), list)
+        else []
+    )
     candidates = _candidate_rows(rows, sample_limit)
-    live_results = _call_openai(candidates, model=model, effort=effort) if live_openai else []
+    live_results = (
+        _call_openai(candidates, model=model, effort=effort) if live_openai else []
+    )
     rows_by_point = _decision_point_rows(rows, pipeline_rows)
     provider_endpoint_compare = (
         _call_provider_endpoint_compare(
@@ -960,7 +1192,9 @@ def build_probe_report(
         else {}
     )
     openai_endpoint_compare = (
-        provider_endpoint_compare.get("openai_gpt54_mini", {}).get("decision_points", {})
+        provider_endpoint_compare.get("openai_gpt54_mini", {}).get(
+            "decision_points", {}
+        )
         if compare_openai_endpoints
         else {}
     )
@@ -982,11 +1216,14 @@ def build_probe_report(
         ),
         "source": {
             "adm_status": adm_report.get("status"),
-            "adm_artifact": adm_report.get("artifact") or str(adm_mod.report_paths(target_date)[0]),
+            "adm_artifact": adm_report.get("artifact")
+            or str(adm_mod.report_paths(target_date)[0]),
             "build_adm": bool(build_adm),
             "pipeline_events_status": pipeline_report.get("status"),
             "pipeline_events_artifact": pipeline_report.get("artifact"),
-            "pipeline_events_parse_error_count": pipeline_report.get("parse_error_count", 0),
+            "pipeline_events_parse_error_count": pipeline_report.get(
+                "parse_error_count", 0
+            ),
         },
         "coverage": _coverage(candidates),
         "ai_decision_contract_probe": _decision_contract_probe(
@@ -1016,14 +1253,22 @@ def build_probe_report(
             "summary": {
                 "row_count": len(decision_results),
                 "skipped_count": len(live_results) - len(decision_results),
-                "buy_count": sum(1 for item in decision_results if item.get("action") == "BUY"),
-                "wait_count": sum(1 for item in decision_results if item.get("action") == "WAIT"),
-                "drop_count": sum(1 for item in decision_results if item.get("action") == "DROP"),
+                "buy_count": sum(
+                    1 for item in decision_results if item.get("action") == "BUY"
+                ),
+                "wait_count": sum(
+                    1 for item in decision_results if item.get("action") == "WAIT"
+                ),
+                "drop_count": sum(
+                    1 for item in decision_results if item.get("action") == "DROP"
+                ),
                 "action_score_mismatch_count": sum(
                     1 for item in decision_results if item.get("action_score_mismatch")
                 ),
                 "insufficient_context_count": sum(
-                    1 for item in decision_results if item.get("issue") == "insufficient_context"
+                    1
+                    for item in decision_results
+                    if item.get("issue") == "insufficient_context"
                 ),
             },
         },
@@ -1031,13 +1276,15 @@ def build_probe_report(
             "enabled": bool(compare_openai_endpoints),
             "model": endpoint_compare_model if compare_openai_endpoints else None,
             "effort": endpoint_compare_effort if compare_openai_endpoints else None,
-            "provider_override": {
-                "KORSTOCKSCAN_BEDROCK_ENTRY_PRICE_ROUTE_MODE": "off",
-                "KORSTOCKSCAN_BEDROCK_NOVA_LITE_ROUTE_MODE": "off",
-                "runtime_effect": False,
-            }
-            if compare_openai_endpoints
-            else {},
+            "provider_override": (
+                {
+                    "KORSTOCKSCAN_BEDROCK_ENTRY_PRICE_ROUTE_MODE": "off",
+                    "KORSTOCKSCAN_BEDROCK_NOVA_LITE_ROUTE_MODE": "off",
+                    "runtime_effect": False,
+                }
+                if compare_openai_endpoints
+                else {}
+            ),
             "decision_points": openai_endpoint_compare,
         },
         "provider_endpoint_compare": {
@@ -1064,11 +1311,21 @@ def _write_report(report: dict[str, Any]) -> Path:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Probe intraday scalping entry context quality.")
+    parser = argparse.ArgumentParser(
+        description="Probe intraday scalping entry context quality."
+    )
     parser.add_argument("--date", dest="target_date", default=_today())
-    parser.add_argument("--build-adm", action="store_true", help="Build same-day scalp entry ADM before probing.")
+    parser.add_argument(
+        "--build-adm",
+        action="store_true",
+        help="Build same-day scalp entry ADM before probing.",
+    )
     parser.add_argument("--sample-limit", type=int, default=12)
-    parser.add_argument("--live-openai", action="store_true", help="Run live OpenAI for selected probe rows.")
+    parser.add_argument(
+        "--live-openai",
+        action="store_true",
+        help="Run live OpenAI for selected probe rows.",
+    )
     parser.add_argument("--model", default="gpt-5-nano")
     parser.add_argument("--effort", default="minimal")
     parser.add_argument(
@@ -1083,7 +1340,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--endpoint-compare-model", default="gpt-5.4-mini")
     parser.add_argument("--endpoint-compare-effort", default="low")
-    parser.add_argument("--write", action="store_true", help="Write probe report artifact.")
+    parser.add_argument(
+        "--write", action="store_true", help="Write probe report artifact."
+    )
     args = parser.parse_args(argv)
 
     report = build_probe_report(
@@ -1093,7 +1352,9 @@ def main(argv: list[str] | None = None) -> int:
         live_openai=args.live_openai,
         model=args.model,
         effort=args.effort,
-        compare_openai_endpoints=bool(args.compare_openai_endpoints or args.compare_provider_endpoints),
+        compare_openai_endpoints=bool(
+            args.compare_openai_endpoints or args.compare_provider_endpoints
+        ),
         endpoint_compare_model=args.endpoint_compare_model,
         endpoint_compare_effort=args.endpoint_compare_effort,
     )

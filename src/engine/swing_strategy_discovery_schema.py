@@ -19,7 +19,6 @@ from src.database.models import (
 )
 from src.utils.constants import POSTGRES_URL
 
-
 DISCOVERY_TABLES = (
     SwingStrategyDiscoveryCandidate.__table__,
     SwingStrategyDiscoveryArm.__table__,
@@ -27,7 +26,9 @@ DISCOVERY_TABLES = (
 )
 
 
-def ensure_swing_strategy_discovery_schema(db_url: str = POSTGRES_URL) -> dict[str, Any]:
+def ensure_swing_strategy_discovery_schema(
+    db_url: str = POSTGRES_URL,
+) -> dict[str, Any]:
     """Create discovery sim tables and indexes when missing.
 
     The function is intentionally safe to rerun from preopen/postclose jobs.

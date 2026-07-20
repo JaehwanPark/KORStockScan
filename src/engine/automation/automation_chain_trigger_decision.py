@@ -10,7 +10,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 REPORT_TYPE = "automation_chain_trigger_decision"
 REPORT_DIR = PROJECT_ROOT / "data" / "report" / REPORT_TYPE
@@ -135,26 +134,44 @@ def _step_specs(target_date: str) -> list[StepSpec]:
 
     deep_steps = {
         "scalp_sim_ai_deferred_review": (
-            _pair("scalp_sim_ai_deferred_review", "scalp_sim_ai_deferred_review", target_date),
-            (
-                "data/threshold_cycle/snapshots",
+            _pair(
+                "scalp_sim_ai_deferred_review",
+                "scalp_sim_ai_deferred_review",
+                target_date,
             ),
+            ("data/threshold_cycle/snapshots",),
         ),
         "pattern_lab_currentness_audit": (
-            _pair("pattern_lab_currentness_audit", "pattern_lab_currentness_audit", target_date),
+            _pair(
+                "pattern_lab_currentness_audit",
+                "pattern_lab_currentness_audit",
+                target_date,
+            ),
             (
                 "analysis/claude_scalping_pattern_lab/outputs/tuning_observability_summary.json",
             ),
         ),
         "pattern_lab_ai_review": (
             _pair("pattern_lab_ai_review", "pattern_lab_ai_review", target_date),
-            _pair("pattern_lab_currentness_audit", "pattern_lab_currentness_audit", target_date),
+            _pair(
+                "pattern_lab_currentness_audit",
+                "pattern_lab_currentness_audit",
+                target_date,
+            ),
         ),
         "observation_source_quality_audit": (
-            _pair("observation_source_quality_audit", "observation_source_quality_audit", target_date),
+            _pair(
+                "observation_source_quality_audit",
+                "observation_source_quality_audit",
+                target_date,
+            ),
             (
                 "data/pipeline_events",
-                *_pair("lifecycle_decision_matrix", "lifecycle_decision_matrix", target_date),
+                *_pair(
+                    "lifecycle_decision_matrix",
+                    "lifecycle_decision_matrix",
+                    target_date,
+                ),
             ),
         ),
         "observation_source_quality_backfill_audit": (
@@ -166,7 +183,11 @@ def _step_specs(target_date: str) -> list[StepSpec]:
             (
                 "data/pipeline_events",
                 "data/threshold_cycle",
-                *_pair("observation_source_quality_audit", "observation_source_quality_audit", target_date),
+                *_pair(
+                    "observation_source_quality_audit",
+                    "observation_source_quality_audit",
+                    target_date,
+                ),
             ),
         ),
         "ai_watching_score_smoothing_diagnostic": (
@@ -178,40 +199,81 @@ def _step_specs(target_date: str) -> list[StepSpec]:
             ),
             (
                 "data/pipeline_events",
-                *_pair("observation_source_quality_audit", "observation_source_quality_audit", target_date),
+                *_pair(
+                    "observation_source_quality_audit",
+                    "observation_source_quality_audit",
+                    target_date,
+                ),
             ),
         ),
         "codebase_performance_workorder": (
-            _pair("codebase_performance_workorder", "codebase_performance_workorder", target_date),
+            _pair(
+                "codebase_performance_workorder",
+                "codebase_performance_workorder",
+                target_date,
+            ),
             ("src", "deploy"),
         ),
         "producer_gap_discovery": (
             _pair("producer_gap_discovery", "producer_gap_discovery", target_date),
             (
-                *_pair("producer_gap_source_bundle", "producer_gap_source_bundle", target_date),
-                *_pair("lifecycle_bucket_discovery", "lifecycle_bucket_discovery", target_date),
+                *_pair(
+                    "producer_gap_source_bundle",
+                    "producer_gap_source_bundle",
+                    target_date,
+                ),
+                *_pair(
+                    "lifecycle_bucket_discovery",
+                    "lifecycle_bucket_discovery",
+                    target_date,
+                ),
             ),
         ),
         "stage_hook_workorder_discovery": (
-            _pair("stage_hook_workorder_discovery", "stage_hook_workorder_discovery", target_date),
+            _pair(
+                "stage_hook_workorder_discovery",
+                "stage_hook_workorder_discovery",
+                target_date,
+            ),
             _pair("producer_gap_discovery", "producer_gap_discovery", target_date),
         ),
         "stage_hook_runtime_scaffold": (
-            _pair("stage_hook_runtime_scaffold", "stage_hook_runtime_scaffold", target_date),
-            _pair("stage_hook_workorder_discovery", "stage_hook_workorder_discovery", target_date),
+            _pair(
+                "stage_hook_runtime_scaffold",
+                "stage_hook_runtime_scaffold",
+                target_date,
+            ),
+            _pair(
+                "stage_hook_workorder_discovery",
+                "stage_hook_workorder_discovery",
+                target_date,
+            ),
         ),
         "pattern_lab_propagation_audit": (
-            _pair("pattern_lab_propagation_audit", "pattern_lab_propagation_audit", target_date),
+            _pair(
+                "pattern_lab_propagation_audit",
+                "pattern_lab_propagation_audit",
+                target_date,
+            ),
             (
-                *_pair("pattern_lab_currentness_audit", "pattern_lab_currentness_audit", target_date),
+                *_pair(
+                    "pattern_lab_currentness_audit",
+                    "pattern_lab_currentness_audit",
+                    target_date,
+                ),
                 *_pair("pattern_lab_ai_review", "pattern_lab_ai_review", target_date),
             ),
         ),
         "runtime_apply_gap_audit": (
             _pair("runtime_apply_gap_audit", "runtime_apply_gap_audit", target_date),
             (
-                *_pair("runtime_approval_summary", "runtime_approval_summary", target_date),
-                _artifact("code_improvement_workorder", f"code_improvement_workorder_{target_date}.json"),
+                *_pair(
+                    "runtime_approval_summary", "runtime_approval_summary", target_date
+                ),
+                _artifact(
+                    "code_improvement_workorder",
+                    f"code_improvement_workorder_{target_date}.json",
+                ),
                 f"docs/code-improvement-workorders/code_improvement_workorder_{target_date}.md",
                 *_pair("runtime_apply_bridge", "runtime_apply_bridge", target_date),
             ),
@@ -234,14 +296,25 @@ def _step_specs(target_date: str) -> list[StepSpec]:
             step_id="workorder_branch",
             scope="workorder_branch",
             output_paths=(
-                _artifact("code_improvement_workorder", f"code_improvement_workorder_{target_date}.json"),
+                _artifact(
+                    "code_improvement_workorder",
+                    f"code_improvement_workorder_{target_date}.json",
+                ),
                 f"docs/code-improvement-workorders/code_improvement_workorder_{target_date}.md",
             ),
             source_paths=(
                 *_pair("threshold_cycle_ev", "threshold_cycle_ev", target_date),
                 *_pair("producer_gap_discovery", "producer_gap_discovery", target_date),
-                *_pair("stage_hook_workorder_discovery", "stage_hook_workorder_discovery", target_date),
-                *_pair("pattern_lab_currentness_audit", "pattern_lab_currentness_audit", target_date),
+                *_pair(
+                    "stage_hook_workorder_discovery",
+                    "stage_hook_workorder_discovery",
+                    target_date,
+                ),
+                *_pair(
+                    "pattern_lab_currentness_audit",
+                    "pattern_lab_currentness_audit",
+                    target_date,
+                ),
                 *_pair("pattern_lab_ai_review", "pattern_lab_ai_review", target_date),
             ),
             force_env="THRESHOLD_CYCLE_FORCE_WORKORDER_BRANCH",
@@ -298,7 +371,9 @@ def _non_reusable_payload_reason(payload: Any) -> str | None:
         key_text = str(key)
         if key_text in STATUS_KEYS and isinstance(value, str):
             value_text = value.strip().lower()
-            if value_text and any(token in value_text for token in NON_REUSABLE_STATUS_TOKENS):
+            if value_text and any(
+                token in value_text for token in NON_REUSABLE_STATUS_TOKENS
+            ):
                 return f"non_reusable_status:{key_text}={value}"
     summary = payload.get("summary")
     if isinstance(summary, dict):
@@ -314,7 +389,12 @@ def _path_status(path_text: str, require_json_parse: bool = True) -> dict[str, A
         return {"path": path_text, "status": "missing", "mtime": None}
     if path.is_dir():
         max_mtime, entry_count = _directory_max_mtime(path)
-        return {"path": path_text, "status": "available_dir", "mtime": max_mtime, "entry_count": entry_count}
+        return {
+            "path": path_text,
+            "status": "available_dir",
+            "mtime": max_mtime,
+            "entry_count": entry_count,
+        }
     if path.stat().st_size <= 0:
         return {"path": path_text, "status": "empty", "mtime": path.stat().st_mtime}
     if path.suffix == ".json" and require_json_parse:
@@ -338,12 +418,20 @@ def _path_status(path_text: str, require_json_parse: bool = True) -> dict[str, A
 
 
 def _max_mtime(statuses: list[dict[str, Any]]) -> float | None:
-    mtimes = [item.get("mtime") for item in statuses if isinstance(item.get("mtime"), (int, float))]
+    mtimes = [
+        item.get("mtime")
+        for item in statuses
+        if isinstance(item.get("mtime"), (int, float))
+    ]
     return max(mtimes) if mtimes else None
 
 
 def _min_mtime(statuses: list[dict[str, Any]]) -> float | None:
-    mtimes = [item.get("mtime") for item in statuses if isinstance(item.get("mtime"), (int, float))]
+    mtimes = [
+        item.get("mtime")
+        for item in statuses
+        if isinstance(item.get("mtime"), (int, float))
+    ]
     return min(mtimes) if mtimes else None
 
 
@@ -380,13 +468,25 @@ def evaluate_step(spec: StepSpec, env: dict[str, str] | None = None) -> dict[str
     force = str(env.get(spec.force_env, "false")).lower() in {"1", "true", "yes", "on"}
     output_statuses = [_path_status(path) for path in spec.output_paths]
     source_statuses = [_path_status(path) for path in spec.source_paths]
-    output_missing = any(item["status"] not in {"available", "available_dir"} for item in output_statuses)
-    source_missing = any(item["status"] not in {"available", "available_dir"} for item in source_statuses)
-    output_non_reusable = any(item["status"] == "non_reusable_json" for item in output_statuses)
+    output_missing = any(
+        item["status"] not in {"available", "available_dir"} for item in output_statuses
+    )
+    source_missing = any(
+        item["status"] not in {"available", "available_dir"} for item in source_statuses
+    )
+    output_non_reusable = any(
+        item["status"] == "non_reusable_json" for item in output_statuses
+    )
     source_mtime = _max_mtime(source_statuses)
     output_mtime = _min_mtime(output_statuses)
-    upstream_newer = source_mtime is not None and output_mtime is not None and source_mtime > output_mtime
-    drift_signal = False if source_missing else _source_has_drift_signal(spec.source_paths)
+    upstream_newer = (
+        source_mtime is not None
+        and output_mtime is not None
+        and source_mtime > output_mtime
+    )
+    drift_signal = (
+        False if source_missing else _source_has_drift_signal(spec.source_paths)
+    )
 
     reasons: list[str] = []
     if force:
@@ -421,7 +521,9 @@ def evaluate_step(spec: StepSpec, env: dict[str, str] | None = None) -> dict[str
     }
 
 
-def build_report(target_date: str, scope: str = "all", env: dict[str, str] | None = None) -> dict[str, Any]:
+def build_report(
+    target_date: str, scope: str = "all", env: dict[str, str] | None = None
+) -> dict[str, Any]:
     if scope not in SCOPES:
         raise ValueError(f"unsupported scope: {scope}")
     decisions = [
@@ -442,8 +544,12 @@ def build_report(target_date: str, scope: str = "all", env: dict[str, str] | Non
             "total_steps": len(decisions),
             "run_count": sum(1 for item in decisions if item["decision"] == "run"),
             "skip_count": sum(1 for item in decisions if item["decision"] == "skip"),
-            "source_missing_count": sum(1 for item in decisions if item["source_missing"]),
-            "force_override_count": sum(1 for item in decisions if item["force_override"]),
+            "source_missing_count": sum(
+                1 for item in decisions if item["source_missing"]
+            ),
+            "force_override_count": sum(
+                1 for item in decisions if item["force_override"]
+            ),
         },
         "decisions": decisions,
     }
@@ -453,7 +559,10 @@ def write_report(report: dict[str, Any]) -> tuple[Path, Path]:
     target_date = str(report["target_date"])
     json_path, md_path = _report_paths(target_date)
     json_path.parent.mkdir(parents=True, exist_ok=True)
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
     md_path.write_text(_render_markdown(report), encoding="utf-8")
     return json_path, md_path
 
@@ -476,7 +585,9 @@ def _render_markdown(report: dict[str, Any]) -> str:
     ]
     for item in report.get("decisions", []):
         reasons = ", ".join(str(reason) for reason in item.get("trigger_reasons", []))
-        lines.append(f"| `{item.get('step_id')}` | `{item.get('decision')}` | {reasons} |")
+        lines.append(
+            f"| `{item.get('step_id')}` | `{item.get('decision')}` | {reasons} |"
+        )
     lines.append("")
     lines.append("Forbidden uses: " + ", ".join(f"`{item}`" for item in FORBIDDEN_USES))
     lines.append("")

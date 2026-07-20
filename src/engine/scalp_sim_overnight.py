@@ -15,11 +15,13 @@ from pathlib import Path
 from typing import Any
 
 from src.engine.sniper_config import CONF
-from src.engine.trade_profit import calculate_net_profit_rate, calculate_net_realized_pnl
+from src.engine.trade_profit import (
+    calculate_net_profit_rate,
+    calculate_net_realized_pnl,
+)
 from src.utils.constants import DATA_DIR, TRADING_RULES
 from src.utils.jsonl_io import read_jsonl
 from src.utils.pipeline_event_logger import emit_pipeline_event
-
 
 STATE_PATH = DATA_DIR / "runtime" / "scalp_live_simulator_state.json"
 LOCK_PATH = DATA_DIR / "runtime" / "scalp_live_simulator_state.lock"
@@ -101,10 +103,22 @@ def _load_state(path: Path = STATE_PATH) -> dict[str, Any]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
-        return {"schema_version": 1, "simulation_book": SIM_BOOK, "active_positions": []}
+        return {
+            "schema_version": 1,
+            "simulation_book": SIM_BOOK,
+            "active_positions": [],
+        }
     except Exception:
-        return {"schema_version": 1, "simulation_book": SIM_BOOK, "active_positions": []}
-    return payload if isinstance(payload, dict) else {"schema_version": 1, "simulation_book": SIM_BOOK, "active_positions": []}
+        return {
+            "schema_version": 1,
+            "simulation_book": SIM_BOOK,
+            "active_positions": [],
+        }
+    return (
+        payload
+        if isinstance(payload, dict)
+        else {"schema_version": 1, "simulation_book": SIM_BOOK, "active_positions": []}
+    )
 
 
 @contextlib.contextmanager
@@ -123,13 +137,19 @@ def _state_file_lock(path: Path = STATE_PATH, *, blocking: bool = True):
             handle.close()
 
 
-def _write_state(payload: dict[str, Any], path: Path = STATE_PATH, *, already_locked: bool = False) -> None:
+def _write_state(
+    payload: dict[str, Any], path: Path = STATE_PATH, *, already_locked: bool = False
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     payload["updated_at"] = _now_iso()
     tmp = path.with_suffix(".tmp")
+
     def _write() -> None:
-        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
         tmp.replace(path)
+
     if already_locked:
         _write()
     else:
@@ -169,7 +189,11 @@ def _price_snapshot(row: dict[str, Any]) -> dict[str, Any]:
     sample_price = _holding_sample_price(row)
     buy_price = _safe_int(row.get("buy_price"), 0)
     current_price = sample_price or _safe_int(row.get("curr_price"), 0) or buy_price
-    source = "holding_price_samples_last" if sample_price else ("curr_price" if row.get("curr_price") else "buy_price_fallback")
+    source = (
+        "holding_price_samples_last"
+        if sample_price
+        else ("curr_price" if row.get("curr_price") else "buy_price_fallback")
+    )
     return {
         "best_bid": None,
         "best_ask": None,
@@ -201,10 +225,15 @@ def _peak_profit_pct(row: dict[str, Any], profit_pct: float) -> float:
     explicit = _safe_float(row.get("last_ai_peak_profit"), None)
     if explicit is not None:
         return round(explicit, 4)
-    return round(max(profit_pct, _safe_float(row.get("peak_profit"), profit_pct) or profit_pct), 4)
+    return round(
+        max(profit_pct, _safe_float(row.get("peak_profit"), profit_pct) or profit_pct),
+        4,
+    )
 
 
-def _base_event_fields(row: dict[str, Any], target_date: str, price: dict[str, Any]) -> dict[str, Any]:
+def _base_event_fields(
+    row: dict[str, Any], target_date: str, price: dict[str, Any]
+) -> dict[str, Any]:
     lifecycle_fields = _lifecycle_bucket_contract_fields(row)
     return {
         "sim_record_id": row.get("sim_record_id"),
@@ -233,13 +262,21 @@ def _base_event_fields(row: dict[str, Any], target_date: str, price: dict[str, A
 
 def _lifecycle_bucket_contract_fields(row: dict[str, Any]) -> dict[str, Any]:
     source_bucket_id = str(row.get("lifecycle_bucket_source_bucket_id") or "").strip()
-    bucket_id = str(row.get("lifecycle_bucket_bucket_id") or row.get("lifecycle_flow_bucket_id") or "").strip()
+    bucket_id = str(
+        row.get("lifecycle_bucket_bucket_id")
+        or row.get("lifecycle_flow_bucket_id")
+        or ""
+    ).strip()
     status = str(row.get("lifecycle_bucket_match_status") or "").strip()
     if not status:
-        status = "no_match" if (source_bucket_id or bucket_id) else "candidate_context_only"
+        status = (
+            "no_match" if (source_bucket_id or bucket_id) else "candidate_context_only"
+        )
     fields = {
         "lifecycle_bucket_match_status": status,
-        "bucket_directed_sim_probe": bool(row.get("bucket_directed_sim_probe")) if status == "matched" else False,
+        "bucket_directed_sim_probe": (
+            bool(row.get("bucket_directed_sim_probe")) if status == "matched" else False
+        ),
     }
     if source_bucket_id:
         fields["lifecycle_bucket_source_bucket_id"] = source_bucket_id
@@ -323,13 +360,17 @@ def _build_ai_context(row: dict[str, Any], price: dict[str, Any]) -> dict[str, A
         "last_holding_ai_reason": row.get("last_ai_reason"),
         "entry_ai_action": row.get("original_ai_action") or row.get("ai_action"),
         "entry_ai_score": row.get("original_ai_score") or row.get("ai_score"),
-        "source_quality": row.get("last_ai_source_quality") or row.get("source_quality") or "state_snapshot",
+        "source_quality": row.get("last_ai_source_quality")
+        or row.get("source_quality")
+        or "state_snapshot",
         "price_source": price.get("price_source"),
         "order_status_note": "sim-only overnight decision; no broker order is allowed",
     }
 
 
-def _normalize_decision(decision: dict[str, Any] | None, *, fallback_reason: str = "decision_missing") -> dict[str, Any]:
+def _normalize_decision(
+    decision: dict[str, Any] | None, *, fallback_reason: str = "decision_missing"
+) -> dict[str, Any]:
     if not isinstance(decision, dict):
         fallback_class = _classify_ai_fallback(fallback_reason)
         return {
@@ -350,11 +391,15 @@ def _normalize_decision(decision: dict[str, Any] | None, *, fallback_reason: str
         confidence = int(float(decision.get("confidence") or 0))
     except (TypeError, ValueError):
         confidence = 0
-    fallback = (
-        decision.get("ai_parse_ok") is False
-        or str(decision.get("ai_result_source") or "") in {"fallback", "exception", "engine_disabled", "lock_contention"}
+    fallback = decision.get("ai_parse_ok") is False or str(
+        decision.get("ai_result_source") or ""
+    ) in {"fallback", "exception", "engine_disabled", "lock_contention"}
+    fallback_reason = str(
+        decision.get("ai_exception_message")
+        or decision.get("reason")
+        or decision.get("risk_note")
+        or ""
     )
-    fallback_reason = str(decision.get("ai_exception_message") or decision.get("reason") or decision.get("risk_note") or "")
     return {
         **decision,
         "action": action,
@@ -387,7 +432,9 @@ def _classify_ai_fallback(reason: str, *, result_source: str = "") -> str:
     return "none"
 
 
-def _call_overnight_ai(ai_engine: Any, row: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
+def _call_overnight_ai(
+    ai_engine: Any, row: dict[str, Any], ctx: dict[str, Any]
+) -> dict[str, Any]:
     if ai_engine is None:
         return _normalize_decision(None, fallback_reason="ai_engine_missing")
     try:
@@ -401,7 +448,9 @@ def _call_overnight_ai(ai_engine: Any, row: dict[str, Any], ctx: dict[str, Any])
         return _normalize_decision(None, fallback_reason=f"ai_exception:{exc}")
 
 
-def _mark_hold_overnight(row: dict[str, Any], target_date: str, decision: dict[str, Any]) -> None:
+def _mark_hold_overnight(
+    row: dict[str, Any], target_date: str, decision: dict[str, Any]
+) -> None:
     row["scalp_sim_overnight_status"] = "HOLD_OVERNIGHT"
     row["scalp_sim_overnight_decision_date"] = target_date
     row["scalp_sim_overnight_decision_at"] = _now_iso()
@@ -410,8 +459,17 @@ def _mark_hold_overnight(row: dict[str, Any], target_date: str, decision: dict[s
     row["scalp_sim_overnight_schema"] = OVERNIGHT_SCHEMA
 
 
-def _complete_sell_today(row: dict[str, Any], price: dict[str, Any], target_date: str, decision: dict[str, Any]) -> dict[str, Any]:
-    current_price = _safe_int(price.get("best_bid"), 0) or _safe_int(price.get("current_price"), 0) or _safe_int(row.get("buy_price"), 0)
+def _complete_sell_today(
+    row: dict[str, Any],
+    price: dict[str, Any],
+    target_date: str,
+    decision: dict[str, Any],
+) -> dict[str, Any]:
+    current_price = (
+        _safe_int(price.get("best_bid"), 0)
+        or _safe_int(price.get("current_price"), 0)
+        or _safe_int(row.get("buy_price"), 0)
+    )
     qty = _safe_int(row.get("buy_qty"), 0)
     profit = calculate_net_profit_rate(row.get("buy_price"), current_price)
     pnl_krw = calculate_net_realized_pnl(row.get("buy_price"), current_price, qty)
@@ -474,7 +532,9 @@ def run_sim_overnight(
             }
         except Exception as exc:
             if emit_events:
-                _emit_lock_skipped(target_date, state_path, f"state_lock_error:{type(exc).__name__}")
+                _emit_lock_skipped(
+                    target_date, state_path, f"state_lock_error:{type(exc).__name__}"
+                )
             return {
                 "target_date": target_date,
                 "generated_at": _now_iso(),
@@ -489,7 +549,9 @@ def run_sim_overnight(
                     "hold_overnight": 0,
                     "lock_skipped": 1,
                     "source_quality_status": "source_quality_blocker",
-                    "source_quality_warnings": [f"state_lock_error:{type(exc).__name__}"],
+                    "source_quality_warnings": [
+                        f"state_lock_error:{type(exc).__name__}"
+                    ],
                     "forbidden_uses": FORBIDDEN_USES,
                 },
                 "rows": [],
@@ -520,7 +582,11 @@ def _run_sim_overnight_locked(
     already_locked: bool,
 ) -> dict[str, Any]:
     payload = _load_state(state_path)
-    active = payload.get("active_positions") if isinstance(payload.get("active_positions"), list) else []
+    active = (
+        payload.get("active_positions")
+        if isinstance(payload.get("active_positions"), list)
+        else []
+    )
     remaining: list[dict[str, Any]] = []
     rows: list[dict[str, Any]] = []
     summary_counts: Counter[str] = Counter()
@@ -582,8 +648,11 @@ def _run_sim_overnight_locked(
             "ai_fallback_reason": decision.get("ai_fallback_reason"),
             "ai_result_source": decision.get("ai_result_source"),
             "openai_endpoint_name": decision.get("openai_endpoint_name"),
-            "openai_schema_name": decision.get("openai_schema_name") or OVERNIGHT_SCHEMA,
-            "openai_model": decision.get("ai_model") or decision.get("openai_model") or getattr(ai_engine, "report_model_name", None),
+            "openai_schema_name": decision.get("openai_schema_name")
+            or OVERNIGHT_SCHEMA,
+            "openai_model": decision.get("ai_model")
+            or decision.get("openai_model")
+            or getattr(ai_engine, "report_model_name", None),
             "openai_transport_mode": decision.get("openai_transport_mode"),
             "openai_ws_used": decision.get("openai_ws_used"),
             "openai_response_ms": decision.get("ai_response_ms"),
@@ -709,15 +778,25 @@ def _run_sim_overnight_locked(
             "ai_success": int(summary_counts.get("ai_success", 0)),
             "ai_failure_fallback": int(summary_counts.get("ai_failure_fallback", 0)),
             "ai_timeout_fallback": int(summary_counts.get("ai_timeout_fallback", 0)),
-            "ai_engine_disabled_fallback": int(summary_counts.get("ai_engine_disabled_fallback", 0)),
-            "ai_lock_contention_fallback": int(summary_counts.get("ai_lock_contention_fallback", 0)),
-            "ai_parse_fail_fallback": int(summary_counts.get("ai_parse_fail_fallback", 0)),
+            "ai_engine_disabled_fallback": int(
+                summary_counts.get("ai_engine_disabled_fallback", 0)
+            ),
+            "ai_lock_contention_fallback": int(
+                summary_counts.get("ai_lock_contention_fallback", 0)
+            ),
+            "ai_parse_fail_fallback": int(
+                summary_counts.get("ai_parse_fail_fallback", 0)
+            ),
             "price_fallback": int(summary_counts.get("price_fallback", 0)),
             "idempotent_skipped": int(summary_counts.get("idempotent_skipped", 0)),
             **dict(summary_counts),
             "active_before": len(active),
             "active_after": len(remaining),
-            "carry_open_count": sum(1 for row in remaining if str(row.get("scalp_sim_overnight_status") or "") == "HOLD_OVERNIGHT"),
+            "carry_open_count": sum(
+                1
+                for row in remaining
+                if str(row.get("scalp_sim_overnight_status") or "") == "HOLD_OVERNIGHT"
+            ),
             "source_quality_status": "pass",
             "source_quality_warnings": [],
             "forbidden_uses": FORBIDDEN_USES,
@@ -746,7 +825,12 @@ def _event_fallback_class(fields: dict[str, Any]) -> str:
         return explicit
     if _truthy(fields.get("ai_fallback")) or parse_state in {"false", "0"}:
         return _classify_ai_fallback(
-            str(fields.get("ai_fallback_reason") or fields.get("ai_reason") or fields.get("ai_risk_note") or ""),
+            str(
+                fields.get("ai_fallback_reason")
+                or fields.get("ai_reason")
+                or fields.get("ai_risk_note")
+                or ""
+            ),
             result_source=result_source,
         )
     return "none"
@@ -756,18 +840,23 @@ def build_report(target_date: str, state_path: Path = STATE_PATH) -> dict[str, A
     events_path = DATA_DIR / "pipeline_events" / f"pipeline_events_{target_date}.jsonl"
     events = read_jsonl(events_path, errors="ignore")
     overnight_events = [
-        event for event in events
+        event
+        for event in events
         if str(event.get("stage") or "").startswith("scalp_sim_overnight_")
         or (
             str(event.get("stage") or "") == "scalp_sim_sell_order_assumed_filled"
-            and _event_fields(event).get("exit_rule") == "scalp_sim_overnight_sell_today"
+            and _event_fields(event).get("exit_rule")
+            == "scalp_sim_overnight_sell_today"
         )
     ]
     stage_counts = Counter(str(event.get("stage") or "-") for event in overnight_events)
     action_counts = Counter(
         str(action)
         for event in overnight_events
-        for action in [_event_fields(event).get("ai_action") or _event_fields(event).get("overnight_ai_action")]
+        for action in [
+            _event_fields(event).get("ai_action")
+            or _event_fields(event).get("overnight_ai_action")
+        ]
         if action
     )
     fallback_counts = Counter(
@@ -789,16 +878,25 @@ def build_report(target_date: str, state_path: Path = STATE_PATH) -> dict[str, A
         for ts in [_safe_timestamp(event.get("emitted_at"))]
         if ts is not None
     ]
-    latest_decision_ts = max(decision_event_timestamps) if decision_event_timestamps else None
+    latest_decision_ts = (
+        max(decision_event_timestamps) if decision_event_timestamps else None
+    )
     state = _load_state(state_path)
-    active = state.get("active_positions") if isinstance(state.get("active_positions"), list) else []
+    active = (
+        state.get("active_positions")
+        if isinstance(state.get("active_positions"), list)
+        else []
+    )
     carry_open = [
-        row for row in active
+        row
+        for row in active
         if isinstance(row, dict)
         and str(row.get("scalp_sim_overnight_status") or "") == "HOLD_OVERNIGHT"
         and str(row.get("scalp_sim_overnight_decision_date") or "") == target_date
     ]
-    active_eligible = [row for row in active if isinstance(row, dict) and _is_active_sim_position(row)]
+    active_eligible = [
+        row for row in active if isinstance(row, dict) and _is_active_sim_position(row)
+    ]
     active_after_decision_window = [
         row
         for row in active_eligible
@@ -816,11 +914,16 @@ def build_report(target_date: str, state_path: Path = STATE_PATH) -> dict[str, A
         for row in active_eligible
         if str(row.get("scalp_sim_overnight_decision_date") or "") != target_date
         and str(row.get("sim_record_id") or "").strip() not in decided_sim_record_ids
-        and str(row.get("sim_record_id") or "").strip() not in active_after_decision_window_ids
+        and str(row.get("sim_record_id") or "").strip()
+        not in active_after_decision_window_ids
     ]
     decision_target = int(stage_counts.get("scalp_sim_overnight_decision", 0))
     coverage_denominator = decision_target + len(active_undecided)
-    decision_coverage_rate = 1.0 if coverage_denominator == 0 else round(decision_target / coverage_denominator, 4)
+    decision_coverage_rate = (
+        1.0
+        if coverage_denominator == 0
+        else round(decision_target / coverage_denominator, 4)
+    )
     source_quality_warnings: list[str] = []
     if active_undecided:
         source_quality_warnings.append("active_undecided_scalp_sim_overnight_positions")
@@ -845,7 +948,11 @@ def build_report(target_date: str, state_path: Path = STATE_PATH) -> dict[str, A
                 "ai_reason": fields.get("ai_reason"),
                 "ai_risk_note": fields.get("ai_risk_note"),
                 "ai_parse_ok": fields.get("ai_parse_ok"),
-                "ai_fallback": fields.get("ai_fallback") if fields.get("ai_fallback") is not None else (_event_fallback_class(fields) != "none"),
+                "ai_fallback": (
+                    fields.get("ai_fallback")
+                    if fields.get("ai_fallback") is not None
+                    else (_event_fallback_class(fields) != "none")
+                ),
                 "ai_fallback_class": _event_fallback_class(fields),
                 "ai_fallback_reason": fields.get("ai_fallback_reason"),
                 "ai_result_source": fields.get("ai_result_source"),
@@ -880,13 +987,21 @@ def build_report(target_date: str, state_path: Path = STATE_PATH) -> dict[str, A
             "decision_target": decision_target,
             "sell_today": int(stage_counts.get("scalp_sim_overnight_sell_today", 0)),
             "hold_overnight": int(stage_counts.get("scalp_sim_overnight_hold", 0)),
-            "sell_assumed_filled": int(stage_counts.get("scalp_sim_sell_order_assumed_filled", 0)),
-            "carry_restored": int(stage_counts.get("scalp_sim_overnight_carry_restored", 0)),
+            "sell_assumed_filled": int(
+                stage_counts.get("scalp_sim_sell_order_assumed_filled", 0)
+            ),
+            "carry_restored": int(
+                stage_counts.get("scalp_sim_overnight_carry_restored", 0)
+            ),
             "carry_open_count": len(carry_open),
             "ai_failure_fallback": sum(fallback_counts.values()),
             "ai_timeout_fallback": int(fallback_counts.get("timeout", 0)),
-            "ai_engine_disabled_fallback": int(fallback_counts.get("engine_disabled", 0)),
-            "ai_lock_contention_fallback": int(fallback_counts.get("lock_contention", 0)),
+            "ai_engine_disabled_fallback": int(
+                fallback_counts.get("engine_disabled", 0)
+            ),
+            "ai_lock_contention_fallback": int(
+                fallback_counts.get("lock_contention", 0)
+            ),
             "ai_parse_fail_fallback": int(fallback_counts.get("parse_fail", 0)),
             "ai_fallback_counts": dict(sorted(fallback_counts.items())),
             "stage_counts": dict(sorted(stage_counts.items())),
@@ -905,7 +1020,9 @@ def build_report(target_date: str, state_path: Path = STATE_PATH) -> dict[str, A
                 if str(row.get("sim_record_id") or "")
             ],
             "decision_coverage_rate": decision_coverage_rate,
-            "source_quality_status": "source_quality_blocker" if source_quality_warnings else "pass",
+            "source_quality_status": (
+                "source_quality_blocker" if source_quality_warnings else "pass"
+            ),
             "source_quality_warnings": source_quality_warnings,
             "forbidden_uses": FORBIDDEN_USES,
         },
@@ -913,12 +1030,16 @@ def build_report(target_date: str, state_path: Path = STATE_PATH) -> dict[str, A
     }
 
 
-def write_outputs(report: dict[str, Any], output_dir: Path = REPORT_DIR) -> tuple[Path, Path]:
+def write_outputs(
+    report: dict[str, Any], output_dir: Path = REPORT_DIR
+) -> tuple[Path, Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
     target_date = str(report.get("target_date") or datetime.now().date().isoformat())
     json_path = output_dir / f"scalp_sim_overnight_{target_date}.json"
     md_path = output_dir / f"scalp_sim_overnight_{target_date}.md"
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     summary = report.get("summary") or {}
     lines = [
         f"# Scalp Sim Overnight {target_date}",
@@ -968,7 +1089,9 @@ def write_outputs(report: dict[str, Any], output_dir: Path = REPORT_DIR) -> tupl
 def _openai_keys() -> list[str]:
     raw = os.getenv("OPENAI_API_KEYS") or os.getenv("OPENAI_API_KEY") or ""
     keys = [part.strip() for part in raw.split(",") if part.strip()]
-    keys.extend(v for k, v in sorted(CONF.items()) if str(k).startswith("OPENAI_API_KEY") and v)
+    keys.extend(
+        v for k, v in sorted(CONF.items()) if str(k).startswith("OPENAI_API_KEY") and v
+    )
     seen: set[str] = set()
     unique: list[str] = []
     for key in keys:
@@ -984,23 +1107,48 @@ def _build_openai_engine():
 
     keys = _openai_keys()
     if not keys:
-        raise RuntimeError("OPENAI_API_KEY or OPENAI_API_KEYS is required for --live-openai")
+        raise RuntimeError(
+            "OPENAI_API_KEY or OPENAI_API_KEYS is required for --live-openai"
+        )
     engine = GPTSniperEngine(keys, announce_startup=False)
-    fast_model = str(getattr(TRADING_RULES, "GPT_FAST_MODEL", "gpt-5-nano") or "gpt-5-nano")
+    fast_model = str(
+        getattr(TRADING_RULES, "GPT_FAST_MODEL", "gpt-5-nano") or "gpt-5-nano"
+    )
     deep_model = str(getattr(TRADING_RULES, "GPT_DEEP_MODEL", fast_model) or fast_model)
-    report_model = str(getattr(TRADING_RULES, "GPT_REPORT_MODEL", fast_model) or fast_model)
-    engine.set_model_names(fast_model=fast_model, deep_model=deep_model, report_model=report_model, announce=False)
+    report_model = str(
+        getattr(TRADING_RULES, "GPT_REPORT_MODEL", fast_model) or fast_model
+    )
+    engine.set_model_names(
+        fast_model=fast_model,
+        deep_model=deep_model,
+        report_model=report_model,
+        announce=False,
+    )
     return engine
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--date", dest="target_date", default=datetime.now().date().isoformat())
+    parser.add_argument(
+        "--date", dest="target_date", default=datetime.now().date().isoformat()
+    )
     parser.add_argument("--state-path", type=Path, default=STATE_PATH)
     parser.add_argument("--output-dir", type=Path, default=REPORT_DIR)
-    parser.add_argument("--live-openai", action="store_true", help="Run overnight_v1 through the live OpenAI engine.")
-    parser.add_argument("--report-only", action="store_true", help="Only rebuild the source artifact from events/state.")
-    parser.add_argument("--dry-run", action="store_true", help="Run decisions without mutating state or emitting events.")
+    parser.add_argument(
+        "--live-openai",
+        action="store_true",
+        help="Run overnight_v1 through the live OpenAI engine.",
+    )
+    parser.add_argument(
+        "--report-only",
+        action="store_true",
+        help="Only rebuild the source artifact from events/state.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Run decisions without mutating state or emitting events.",
+    )
     args = parser.parse_args(argv)
 
     if args.report_only:

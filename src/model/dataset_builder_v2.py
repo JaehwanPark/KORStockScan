@@ -4,9 +4,19 @@ import FinanceDataReader as fdr
 from sqlalchemy import text
 
 try:
-    from .common_v2 import calculate_all_features, engine, normalize_codes, sql_code_tuple
+    from .common_v2 import (
+        calculate_all_features,
+        engine,
+        normalize_codes,
+        sql_code_tuple,
+    )
 except ImportError:
-    from common_v2 import calculate_all_features, engine, normalize_codes, sql_code_tuple
+    from common_v2 import (
+        calculate_all_features,
+        engine,
+        normalize_codes,
+        sql_code_tuple,
+    )
 
 
 RAW_COLS = """
@@ -34,8 +44,14 @@ def fetch_raw_quotes(codes, start_date, end_date):
     if raw.empty:
         return raw
 
-    raw['quote_date'] = pd.to_datetime(raw['quote_date']).dt.normalize()
-    raw['stock_code'] = raw['stock_code'].astype(str).str.replace(r'\.0$', '', regex=True).str.strip().str.zfill(6)
+    raw["quote_date"] = pd.to_datetime(raw["quote_date"]).dt.normalize()
+    raw["stock_code"] = (
+        raw["stock_code"]
+        .astype(str)
+        .str.replace(r"\.0$", "", regex=True)
+        .str.strip()
+        .str.zfill(6)
+    )
     return raw
 
 
@@ -54,11 +70,11 @@ def build_path_targets(df, tp=0.045, sl=0.03, hold_days=3):
     strict = np.full(len(df), np.nan)
     loose = np.full(len(df), np.nan)
     realized_ret = np.full(len(df), np.nan)
-    exit_reason = np.array([''] * len(df), dtype=object)
+    exit_reason = np.array([""] * len(df), dtype=object)
 
     for i in range(len(df) - hold_days - 1):
         entry_idx = i + 1
-        buy_price = df.loc[entry_idx, 'open']
+        buy_price = df.loc[entry_idx, "open"]
 
         if pd.isna(buy_price) or buy_price <= 0:
             continue
@@ -71,10 +87,10 @@ def build_path_targets(df, tp=0.045, sl=0.03, hold_days=3):
         reason = ""
 
         for j in range(entry_idx, min(entry_idx + hold_days, len(df))):
-            op = df.loc[j, 'open']
-            hi = df.loc[j, 'high']
-            lo = df.loc[j, 'low']
-            cl = df.loc[j, 'close']
+            op = df.loc[j, "open"]
+            hi = df.loc[j, "high"]
+            lo = df.loc[j, "low"]
+            cl = df.loc[j, "close"]
 
             # 갭 처리
             if op >= tp_price:
@@ -122,59 +138,61 @@ def build_path_targets(df, tp=0.045, sl=0.03, hold_days=3):
             realized_ret[i] = final_ret
             exit_reason[i] = reason
 
-    df['target_strict'] = strict
-    df['target_loose'] = loose
-    df['realized_ret_3d'] = realized_ret
-    df['exit_reason_3d'] = exit_reason
+    df["target_strict"] = strict
+    df["target_loose"] = loose
+    df["realized_ret_3d"] = realized_ret
+    df["exit_reason_3d"] = exit_reason
 
     return df
 
 
 def fetch_kospi_index(start_date, end_date):
     try:
-        idx = fdr.DataReader('KS11', start_date, end_date).reset_index()
+        idx = fdr.DataReader("KS11", start_date, end_date).reset_index()
         idx.columns = [str(c).lower() for c in idx.columns]
-        idx = idx.rename(columns={'date': 'date'})
-        idx['date'] = pd.to_datetime(idx['date']).dt.normalize()
+        idx = idx.rename(columns={"date": "date"})
+        idx["date"] = pd.to_datetime(idx["date"]).dt.normalize()
 
-        idx['idx_ma20'] = idx['close'].rolling(20).mean()
-        idx['idx_ma60'] = idx['close'].rolling(60).mean()
-        idx['idx_ret20'] = idx['close'].pct_change(20)
+        idx["idx_ma20"] = idx["close"].rolling(20).mean()
+        idx["idx_ma60"] = idx["close"].rolling(60).mean()
+        idx["idx_ret20"] = idx["close"].pct_change(20)
 
-        tr1 = idx['high'] - idx['low']
-        tr2 = (idx['high'] - idx['close'].shift(1)).abs()
-        tr3 = (idx['low'] - idx['close'].shift(1)).abs()
-        idx['true_range'] = np.maximum(tr1, np.maximum(tr2, tr3))
-        idx['idx_atr_ratio'] = idx['true_range'].rolling(14).mean() / (idx['close'] + 1e-9)
+        tr1 = idx["high"] - idx["low"]
+        tr2 = (idx["high"] - idx["close"].shift(1)).abs()
+        tr3 = (idx["low"] - idx["close"].shift(1)).abs()
+        idx["true_range"] = np.maximum(tr1, np.maximum(tr2, tr3))
+        idx["idx_atr_ratio"] = idx["true_range"].rolling(14).mean() / (
+            idx["close"] + 1e-9
+        )
 
-        idx['bull_regime'] = (
-            (idx['close'] > idx['idx_ma20']) &
-            (idx['idx_ma20'] > idx['idx_ma60']) &
-            (idx['idx_ret20'] > 0)
+        idx["bull_regime"] = (
+            (idx["close"] > idx["idx_ma20"])
+            & (idx["idx_ma20"] > idx["idx_ma60"])
+            & (idx["idx_ret20"] > 0)
         ).astype(int)
 
-        return idx[['date', 'bull_regime', 'idx_ret20', 'idx_atr_ratio']].copy()
+        return idx[["date", "bull_regime", "idx_ret20", "idx_atr_ratio"]].copy()
 
     except Exception as e:
         # 이 프린트문을 추가하여 실제 에러 원인을 터미널에 출력합니다.
         print(f"⚠️ [오류] FinanceDataReader 지수 추출 실패: {e}")
-        
+
         # fallback: 전부 0
-        date_range = pd.date_range(start=start_date, end=end_date, freq='B')
-        idx = pd.DataFrame({'date': date_range})
-        idx['bull_regime'] = 0
-        idx['idx_ret20'] = 0.0
-        idx['idx_atr_ratio'] = 0.0
+        date_range = pd.date_range(start=start_date, end=end_date, freq="B")
+        idx = pd.DataFrame({"date": date_range})
+        idx["bull_regime"] = 0
+        idx["idx_ret20"] = 0.0
+        idx["idx_atr_ratio"] = 0.0
         return idx
 
 
 def add_market_features(panel, start_date, end_date):
     idx = fetch_kospi_index(start_date, end_date)
-    panel = panel.merge(idx, on='date', how='left')
-    panel['bull_regime'] = panel['bull_regime'].fillna(0).astype(int)
-    panel['idx_ret20'] = panel['idx_ret20'].fillna(0.0)
-    panel['idx_atr_ratio'] = panel['idx_atr_ratio'].fillna(0.0)
-    panel['rs_20_vs_index'] = panel['return_20d'].fillna(0.0) - panel['idx_ret20']
+    panel = panel.merge(idx, on="date", how="left")
+    panel["bull_regime"] = panel["bull_regime"].fillna(0).astype(int)
+    panel["idx_ret20"] = panel["idx_ret20"].fillna(0.0)
+    panel["idx_atr_ratio"] = panel["idx_atr_ratio"].fillna(0.0)
+    panel["rs_20_vs_index"] = panel["return_20d"].fillna(0.0) - panel["idx_ret20"]
     return panel
 
 
@@ -184,8 +202,8 @@ def build_panel_dataset(codes, start_date, end_date, min_rows=150, include_label
         return pd.DataFrame()
 
     frames = []
-    for code, g in raw.groupby('stock_code', sort=False):
-        g = g.sort_values('quote_date').reset_index(drop=True)
+    for code, g in raw.groupby("stock_code", sort=False):
+        g = g.sort_values("quote_date").reset_index(drop=True)
         if len(g) < min_rows:
             continue
 
@@ -193,7 +211,9 @@ def build_panel_dataset(codes, start_date, end_date, min_rows=150, include_label
 
         if include_labels:
             feat = build_path_targets(feat, tp=0.045, sl=0.03, hold_days=3)
-            feat = feat.dropna(subset=['target_strict', 'target_loose', 'realized_ret_3d'])
+            feat = feat.dropna(
+                subset=["target_strict", "target_loose", "realized_ret_3d"]
+            )
 
         frames.append(feat)
 

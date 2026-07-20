@@ -6,7 +6,6 @@ import threading
 import time
 from typing import Any
 
-
 ENTRY_LOCK = threading.RLock()
 # Kiwoom can report a fill several minutes after the local cancel/reconcile path
 # has terminalized the entry order. Keep the order-no bridge long enough for that
@@ -62,7 +61,9 @@ def move_orders_to_terminal(
         }
 
 
-def get_terminal_entry_order(ord_no: str, *, now_ts: float | None = None) -> dict[str, Any] | None:
+def get_terminal_entry_order(
+    ord_no: str, *, now_ts: float | None = None
+) -> dict[str, Any] | None:
     """Return active terminal mapping for a delayed receipt, if still within grace window."""
 
     normalized = str(ord_no or "").strip()
@@ -72,7 +73,9 @@ def get_terminal_entry_order(ord_no: str, *, now_ts: float | None = None) -> dic
     payload = TERMINAL_ENTRY_ORDERS.get(normalized)
     if not payload:
         return None
-    if float(payload.get("expire_at", 0) or 0) <= float(now_ts if now_ts is not None else time.time()):
+    if float(payload.get("expire_at", 0) or 0) <= float(
+        now_ts if now_ts is not None else time.time()
+    ):
         TERMINAL_ENTRY_ORDERS.pop(normalized, None)
         return None
     return dict(payload)

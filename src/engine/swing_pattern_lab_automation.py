@@ -63,7 +63,9 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
 
 
 def swing_pattern_lab_automation_report_paths(target_date: str) -> tuple[Path, Path]:
-    base = SWING_PATTERN_LAB_AUTOMATION_DIR / f"swing_pattern_lab_automation_{target_date}"
+    base = (
+        SWING_PATTERN_LAB_AUTOMATION_DIR / f"swing_pattern_lab_automation_{target_date}"
+    )
     return base.with_suffix(".json"), base.with_suffix(".md")
 
 
@@ -81,13 +83,23 @@ def _lab_output_paths() -> dict[str, Path]:
 
 def _lab_freshness(paths: dict[str, Path], target_date: str) -> dict[str, Any]:
     manifest = _load_json(paths["manifest"])
-    analysis_window = manifest.get("analysis_window", {}) if isinstance(manifest.get("analysis_window"), dict) else {}
-    coverage_start = str(analysis_window.get("start") or manifest.get("analysis_start") or "").strip()[:10]
-    coverage_end = str(analysis_window.get("end") or manifest.get("analysis_end") or "").strip()[:10]
+    analysis_window = (
+        manifest.get("analysis_window", {})
+        if isinstance(manifest.get("analysis_window"), dict)
+        else {}
+    )
+    coverage_start = str(
+        analysis_window.get("start") or manifest.get("analysis_start") or ""
+    ).strip()[:10]
+    coverage_end = str(
+        analysis_window.get("end") or manifest.get("analysis_end") or ""
+    ).strip()[:10]
     analysis_result_exists = paths["analysis_result"].exists()
     data_quality_exists = paths["data_quality"].exists()
     payload_summary_exists = paths["payload_summary"].exists()
-    required_outputs_present = analysis_result_exists and data_quality_exists and payload_summary_exists
+    required_outputs_present = (
+        analysis_result_exists and data_quality_exists and payload_summary_exists
+    )
     invalid_outputs: list[str] = []
     if required_outputs_present:
         analysis_result = _load_json(paths["analysis_result"])
@@ -95,24 +107,38 @@ def _lab_freshness(paths: dict[str, Path], target_date: str) -> dict[str, Any]:
         payload_summary = _load_json(paths["payload_summary"])
         if not isinstance(analysis_result, dict) or not analysis_result:
             invalid_outputs.append("analysis_result(empty_or_non_dict)")
-        elif not isinstance(analysis_result.get("stage_findings"), list) and not isinstance(analysis_result.get("code_improvement_orders"), list):
+        elif not isinstance(
+            analysis_result.get("stage_findings"), list
+        ) and not isinstance(analysis_result.get("code_improvement_orders"), list):
             invalid_outputs.append("analysis_result(missing_schema_keys)")
         if not isinstance(data_quality, dict) or not data_quality:
             invalid_outputs.append("data_quality_report(empty_or_non_dict)")
         if not isinstance(payload_summary, dict) or not payload_summary:
             invalid_outputs.append("deepseek_payload_summary(empty_or_non_dict)")
-        elif not isinstance(payload_summary.get("cases"), list) and not isinstance(payload_summary.get("total_cases"), (int, float)):
+        elif not isinstance(payload_summary.get("cases"), list) and not isinstance(
+            payload_summary.get("total_cases"), (int, float)
+        ):
             invalid_outputs.append("deepseek_payload_summary(missing_schema_keys)")
-    fresh = bool(manifest) and coverage_start == target_date and coverage_end == target_date and required_outputs_present and not invalid_outputs
+    fresh = (
+        bool(manifest)
+        and coverage_start == target_date
+        and coverage_end == target_date
+        and required_outputs_present
+        and not invalid_outputs
+    )
     stale_reason_parts: list[str] = []
     if not fresh:
         if not manifest:
             stale_reason_parts.append("manifest_missing")
         else:
             if coverage_start != target_date:
-                stale_reason_parts.append(f"analysis_start_mismatch(expected={target_date}, actual={coverage_start or 'none'})")
+                stale_reason_parts.append(
+                    f"analysis_start_mismatch(expected={target_date}, actual={coverage_start or 'none'})"
+                )
             if coverage_end != target_date:
-                stale_reason_parts.append(f"analysis_end_mismatch(expected={target_date}, actual={coverage_end or 'none'})")
+                stale_reason_parts.append(
+                    f"analysis_end_mismatch(expected={target_date}, actual={coverage_end or 'none'})"
+                )
         if not required_outputs_present:
             missing_outputs = []
             if not analysis_result_exists:
@@ -121,9 +147,13 @@ def _lab_freshness(paths: dict[str, Path], target_date: str) -> dict[str, Any]:
                 missing_outputs.append("data_quality_report")
             if not payload_summary_exists:
                 missing_outputs.append("deepseek_payload_summary")
-            stale_reason_parts.append(f"missing_required_output:{','.join(missing_outputs)}")
+            stale_reason_parts.append(
+                f"missing_required_output:{','.join(missing_outputs)}"
+            )
         if invalid_outputs:
-            stale_reason_parts.append(f"invalid_required_output:{','.join(invalid_outputs)}")
+            stale_reason_parts.append(
+                f"invalid_required_output:{','.join(invalid_outputs)}"
+            )
     return {
         "lab": "deepseek",
         "fresh": fresh,
@@ -136,7 +166,9 @@ def _lab_freshness(paths: dict[str, Path], target_date: str) -> dict[str, Any]:
     }
 
 
-def _classify_order(order: dict[str, Any], data_quality_warnings: list[str]) -> dict[str, Any]:
+def _classify_order(
+    order: dict[str, Any], data_quality_warnings: list[str]
+) -> dict[str, Any]:
     order_id = str(order.get("order_id") or "").strip()
     title = str(order.get("title") or "").strip()
     route = str(order.get("route") or "").strip()
@@ -195,10 +227,12 @@ def _classify_order(order: dict[str, Any], data_quality_warnings: list[str]) -> 
 
 def _extract_carryover_warnings(analysis_result: dict[str, Any]) -> list[str]:
     warnings: list[str] = []
-    for finding in (analysis_result.get("stage_findings") or []):
+    for finding in analysis_result.get("stage_findings") or []:
         if not isinstance(finding, dict):
             continue
-        ev = finding.get("evidence") if isinstance(finding.get("evidence"), dict) else {}
+        ev = (
+            finding.get("evidence") if isinstance(finding.get("evidence"), dict) else {}
+        )
         carry = _safe_int(ev.get("blocked_carryover_unique"))
         sel = _safe_int(ev.get("blocked_selection_unique"))
         if carry > 0 and sel == 0:
@@ -208,12 +242,16 @@ def _extract_carryover_warnings(analysis_result: dict[str, Any]) -> list[str]:
     return warnings
 
 
-def _source_quality_blocked_families(ofi_qi_quality: dict[str, Any]) -> list[dict[str, Any]]:
+def _source_quality_blocked_families(
+    ofi_qi_quality: dict[str, Any],
+) -> list[dict[str, Any]]:
     if not isinstance(ofi_qi_quality, dict):
         return []
     group_unique_counts = (
         ofi_qi_quality.get("stale_missing_group_unique_record_counts")
-        if isinstance(ofi_qi_quality.get("stale_missing_group_unique_record_counts"), dict)
+        if isinstance(
+            ofi_qi_quality.get("stale_missing_group_unique_record_counts"), dict
+        )
         else {}
     )
     group_to_family = {
@@ -243,8 +281,14 @@ def _source_quality_blocked_families(ofi_qi_quality: dict[str, Any]) -> list[dic
                     ofi_qi_quality.get("reason_combination_unique_record_counts") or {}
                 ),
                 "reason_counts": ofi_qi_quality.get("reason_counts") or {},
-                "reason_combination_counts": ofi_qi_quality.get("reason_combination_counts") or {},
-                "observer_unhealthy_overlap": ofi_qi_quality.get("observer_unhealthy_overlap") or {},
+                "reason_combination_counts": ofi_qi_quality.get(
+                    "reason_combination_counts"
+                )
+                or {},
+                "observer_unhealthy_overlap": ofi_qi_quality.get(
+                    "observer_unhealthy_overlap"
+                )
+                or {},
                 "automation_input": True,
                 "runtime_effect": False,
                 "allowed_runtime_apply": False,
@@ -274,9 +318,7 @@ def _micro_context_source_contract(
     contract_ready = all(present.values())
     sample_ready = sample_count >= MICRO_CONTEXT_SAMPLE_FLOOR
     tuning_input_allowed = (
-        contract_ready
-        and sample_ready
-        and not source_quality_blocked_families
+        contract_ready and sample_ready and not source_quality_blocked_families
     )
     blocked_reasons = []
     if not contract_ready:
@@ -288,7 +330,9 @@ def _micro_context_source_contract(
     return {
         "contract_id": "swing_micro_context_source_quality",
         "source_contract_version": MICRO_CONTEXT_SOURCE_CONTRACT_VERSION,
-        "source_contract_status": "implemented" if contract_ready else "instrumentation_gap",
+        "source_contract_status": (
+            "implemented" if contract_ready else "instrumentation_gap"
+        ),
         "metric_role": "source_quality_gate",
         "decision_authority": DECISION_AUTHORITY,
         "window_policy": "same_day_pattern_lab_source_quality",
@@ -305,17 +349,22 @@ def _micro_context_source_contract(
         "missing_metric_keys": [key for key, exists in present.items() if not exists],
         "sample_count": sample_count,
         "stale_missing_count": _safe_int(ofi_qi_quality.get("stale_missing_count"), 0),
-        "stale_missing_ratio": _safe_float(ofi_qi_quality.get("stale_missing_ratio"), 0.0),
+        "stale_missing_ratio": _safe_float(
+            ofi_qi_quality.get("stale_missing_ratio"), 0.0
+        ),
         "reason_counts": ofi_qi_quality.get("reason_counts") or {},
-        "reason_combination_counts": ofi_qi_quality.get("reason_combination_counts") or {},
+        "reason_combination_counts": ofi_qi_quality.get("reason_combination_counts")
+        or {},
         "reason_combination_unique_record_counts": (
             ofi_qi_quality.get("reason_combination_unique_record_counts") or {}
         ),
-        "stale_missing_group_counts": ofi_qi_quality.get("stale_missing_group_counts") or {},
+        "stale_missing_group_counts": ofi_qi_quality.get("stale_missing_group_counts")
+        or {},
         "stale_missing_group_unique_record_counts": (
             ofi_qi_quality.get("stale_missing_group_unique_record_counts") or {}
         ),
-        "observer_unhealthy_overlap": ofi_qi_quality.get("observer_unhealthy_overlap") or {},
+        "observer_unhealthy_overlap": ofi_qi_quality.get("observer_unhealthy_overlap")
+        or {},
         "source_quality_blocked_family_count": len(source_quality_blocked_families),
         "source_quality_blocked_families": [
             {
@@ -346,7 +395,9 @@ def _ofi_qi_instrumentation_provenance(
             if isinstance(item, dict):
                 scale_in_events += _safe_int(item.get("scale_in_events"), 0)
         return {
-            "implementation_status": "implemented" if scale_in_events > 0 else "instrumentation_gap",
+            "implementation_status": (
+                "implemented" if scale_in_events > 0 else "instrumentation_gap"
+            ),
             "implementation_checks": [
                 {
                     "name": "scale_in_events_metric_present",
@@ -373,8 +424,10 @@ def _ofi_qi_instrumentation_provenance(
                 "source_fields": ["scale_in_events", "swing_scale_in_quality_score"],
                 "source_metric_snapshot": {
                     "scale_in_events": scale_in_events,
-                    "next_postclose_metric": order.get("next_postclose_metric") or "swing_scale_in_quality_score",
-                    "mapped_family": order.get("mapped_family") or order.get("threshold_family"),
+                    "next_postclose_metric": order.get("next_postclose_metric")
+                    or "swing_scale_in_quality_score",
+                    "mapped_family": order.get("mapped_family")
+                    or order.get("threshold_family"),
                 },
             },
         }
@@ -390,13 +443,17 @@ def _ofi_qi_instrumentation_provenance(
         present = {key: key in snapshot for key in required_keys}
         implementation_ok = all(present.values())
         return {
-            "implementation_status": "implemented" if implementation_ok else "instrumentation_gap",
+            "implementation_status": (
+                "implemented" if implementation_ok else "instrumentation_gap"
+            ),
             "implementation_checks": [
                 {
                     "name": "entry_submission_gap_metric_contract",
                     "status": "pass" if implementation_ok else "fail",
                     "required_keys": required_keys,
-                    "missing_keys": [key for key, exists in present.items() if not exists],
+                    "missing_keys": [
+                        key for key, exists in present.items() if not exists
+                    ],
                 },
                 {
                     "name": "runtime_authority_contract",
@@ -418,7 +475,8 @@ def _ofi_qi_instrumentation_provenance(
                 "source_fields": required_keys,
                 "source_metric_snapshot": {
                     **snapshot,
-                    "next_postclose_metric": order.get("next_postclose_metric") or "swing_entry_quality_score",
+                    "next_postclose_metric": order.get("next_postclose_metric")
+                    or "swing_entry_quality_score",
                 },
             },
         }
@@ -441,7 +499,9 @@ def _ofi_qi_instrumentation_provenance(
                     "name": "selection_low_candidate_metric_contract",
                     "status": "pass" if implementation_ok else "fail",
                     "required_keys": required_keys,
-                    "missing_keys": [key for key, exists in present.items() if not exists],
+                    "missing_keys": [
+                        key for key, exists in present.items() if not exists
+                    ],
                     "low_selected_dates": low_selected_dates,
                     "total_dates": total_dates,
                 },
@@ -467,7 +527,8 @@ def _ofi_qi_instrumentation_provenance(
                 "source_metric_snapshot": {
                     **snapshot,
                     "low_selected_rate": low_selected_rate,
-                    "mapped_family": order.get("mapped_family") or order.get("threshold_family"),
+                    "mapped_family": order.get("mapped_family")
+                    or order.get("threshold_family"),
                     "candidate_handling": "source_only_top_k_floor_review",
                     "forbidden_runtime_change": True,
                 },
@@ -476,11 +537,17 @@ def _ofi_qi_instrumentation_provenance(
         }
     if order_id == "order_swing_pattern_lab_deepseek_ofi_qi_smoothing_review":
         snapshot = evidence[0] if evidence and isinstance(evidence[0], dict) else {}
-        actions = snapshot.get("smoothing_actions") if isinstance(snapshot.get("smoothing_actions"), dict) else {}
+        actions = (
+            snapshot.get("smoothing_actions")
+            if isinstance(snapshot.get("smoothing_actions"), dict)
+            else {}
+        )
         total_actions = sum(_safe_int(value, 0) for value in actions.values())
         implementation_ok = bool(actions) and total_actions > 0
         return {
-            "implementation_status": "implemented" if implementation_ok else "instrumentation_gap",
+            "implementation_status": (
+                "implemented" if implementation_ok else "instrumentation_gap"
+            ),
             "implementation_checks": [
                 {
                     "name": "ofi_qi_smoothing_distribution_metric",
@@ -508,8 +575,11 @@ def _ofi_qi_instrumentation_provenance(
                 "source_fields": ["smoothing_actions"],
                 "source_metric_snapshot": {
                     **snapshot,
-                    "next_postclose_metric": order.get("next_postclose_metric") or "swing_ofi_qi_quality_score",
-                    "source_quality_blocked_family_count": len(source_quality_blocked_families),
+                    "next_postclose_metric": order.get("next_postclose_metric")
+                    or "swing_ofi_qi_quality_score",
+                    "source_quality_blocked_family_count": len(
+                        source_quality_blocked_families
+                    ),
                 },
             },
         }
@@ -528,7 +598,9 @@ def _ofi_qi_instrumentation_provenance(
         "observer_unhealthy_overlap",
     )
     present = {key: key in ofi_qi_quality for key in required_metric_keys}
-    implementation_ok = all(present.values()) and isinstance(source_quality_blocked_families, list)
+    implementation_ok = all(present.values()) and isinstance(
+        source_quality_blocked_families, list
+    )
     checks = [
         {
             "name": "ofi_qi_quality_metric_contract",
@@ -538,10 +610,14 @@ def _ofi_qi_instrumentation_provenance(
         },
         {
             "name": "source_quality_blocked_family_provenance",
-            "status": "pass" if isinstance(source_quality_blocked_families, list) else "fail",
-            "blocked_family_count": len(source_quality_blocked_families)
-            if isinstance(source_quality_blocked_families, list)
-            else 0,
+            "status": (
+                "pass" if isinstance(source_quality_blocked_families, list) else "fail"
+            ),
+            "blocked_family_count": (
+                len(source_quality_blocked_families)
+                if isinstance(source_quality_blocked_families, list)
+                else 0
+            ),
         },
         {
             "name": "runtime_authority_contract",
@@ -552,7 +628,9 @@ def _ofi_qi_instrumentation_provenance(
         },
     ]
     return {
-        "implementation_status": "implemented" if implementation_ok else "instrumentation_gap",
+        "implementation_status": (
+            "implemented" if implementation_ok else "instrumentation_gap"
+        ),
         "implementation_checks": checks,
         "implementation_provenance": {
             "owner": "swing_pattern_lab_automation",
@@ -575,25 +653,49 @@ def build_swing_pattern_lab_automation_report(target_date: str) -> dict[str, Any
     data_quality = _load_json(paths["data_quality"])
     payload_summary = _load_json(paths["payload_summary"])
 
-    dq_warnings = data_quality.get("warnings", []) if isinstance(data_quality.get("warnings"), list) else []
-    ofi_qi_quality = data_quality.get("ofi_qi_quality") if isinstance(data_quality.get("ofi_qi_quality"), dict) else {}
+    dq_warnings = (
+        data_quality.get("warnings", [])
+        if isinstance(data_quality.get("warnings"), list)
+        else []
+    )
+    ofi_qi_quality = (
+        data_quality.get("ofi_qi_quality")
+        if isinstance(data_quality.get("ofi_qi_quality"), dict)
+        else {}
+    )
     source_quality_blocked_families = _source_quality_blocked_families(ofi_qi_quality)
-    micro_context_contract = _micro_context_source_contract(ofi_qi_quality, source_quality_blocked_families)
+    micro_context_contract = _micro_context_source_contract(
+        ofi_qi_quality, source_quality_blocked_families
+    )
     carryover_warnings = _extract_carryover_warnings(analysis_result)
 
     if freshness["fresh"]:
-        findings = analysis_result.get("stage_findings", []) if isinstance(analysis_result.get("stage_findings"), list) else []
-        raw_orders = analysis_result.get("code_improvement_orders", []) if isinstance(analysis_result.get("code_improvement_orders"), list) else []
+        findings = (
+            analysis_result.get("stage_findings", [])
+            if isinstance(analysis_result.get("stage_findings"), list)
+            else []
+        )
+        raw_orders = (
+            analysis_result.get("code_improvement_orders", [])
+            if isinstance(analysis_result.get("code_improvement_orders"), list)
+            else []
+        )
         data_quality_carryover_raw: list[str] = []
     else:
         findings = []
         raw_orders = []
         data_quality_carryover_raw = list(carryover_warnings)
         carryover_warnings = []
-        dq_warnings.append(f"swing_lab_stale: lab output blocked because {freshness['stale_reason']}")
+        dq_warnings.append(
+            f"swing_lab_stale: lab output blocked because {freshness['stale_reason']}"
+        )
 
     classified_orders = [_classify_order(order, dq_warnings) for order in raw_orders]
-    selected_orders = [o for o in classified_orders if o.get("decision") not in ("reject", "defer_evidence")]
+    selected_orders = [
+        o
+        for o in classified_orders
+        if o.get("decision") not in ("reject", "defer_evidence")
+    ]
     all_orders = [o for o in classified_orders if o.get("decision") != "reject"]
 
     decision_counts: dict[str, int] = {}
@@ -650,7 +752,9 @@ def build_swing_pattern_lab_automation_report(target_date: str) -> dict[str, Any
                 "route": f.get("route"),
                 "mapped_family": f.get("mapped_family"),
                 "lifecycle_stage": f.get("lifecycle_stage"),
-                "target_subsystem": SWING_TARGET_SUBSYSTEM_MAP.get(f.get("lifecycle_stage", ""), "swing_logic"),
+                "target_subsystem": SWING_TARGET_SUBSYSTEM_MAP.get(
+                    f.get("lifecycle_stage", ""), "swing_logic"
+                ),
             }
             for f in findings
             if isinstance(f, dict)
@@ -664,7 +768,9 @@ def build_swing_pattern_lab_automation_report(target_date: str) -> dict[str, Any
                 "sample_window": "rolling_10d_with_daily_guard",
                 "sample_floor": 5,
                 "target_metric": "daily_ev_delta_or_missed_upside_reduction",
-                "proposed_runtime_touchpoint": SWING_TARGET_SUBSYSTEM_MAP.get(f.get("lifecycle_stage", ""), "swing_logic"),
+                "proposed_runtime_touchpoint": SWING_TARGET_SUBSYSTEM_MAP.get(
+                    f.get("lifecycle_stage", ""), "swing_logic"
+                ),
                 "implementation_order_id": f"order_{f.get('finding_id', '')}",
                 "runtime_effect": False,
                 "allowed_runtime_apply": False,
@@ -683,7 +789,9 @@ def build_swing_pattern_lab_automation_report(target_date: str) -> dict[str, Any
                 "source_report_type": "swing_pattern_lab_automation",
                 "lifecycle_stage": o.get("lifecycle_stage"),
                 "threshold_family": o.get("threshold_family") or o.get("mapped_family"),
-                "improvement_type": o.get("improvement_type", "pattern_lab_observation"),
+                "improvement_type": o.get(
+                    "improvement_type", "pattern_lab_observation"
+                ),
                 "priority": o.get("priority"),
                 "decision": o.get("decision"),
                 "decision_reason": o.get("decision_reason"),
@@ -700,7 +808,9 @@ def build_swing_pattern_lab_automation_report(target_date: str) -> dict[str, Any
                 "runtime_effect": False,
                 "allowed_runtime_apply": False,
                 "forbidden_uses": FORBIDDEN_USES,
-                **_ofi_qi_instrumentation_provenance(o, ofi_qi_quality, source_quality_blocked_families),
+                **_ofi_qi_instrumentation_provenance(
+                    o, ofi_qi_quality, source_quality_blocked_families
+                ),
             }
             for o in all_orders
             if isinstance(o, dict)
@@ -721,7 +831,9 @@ def build_swing_pattern_lab_automation_report(target_date: str) -> dict[str, Any
 
     SWING_PATTERN_LAB_AUTOMATION_DIR.mkdir(parents=True, exist_ok=True)
     json_path, md_path = swing_pattern_lab_automation_report_paths(target_date)
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     md_path.write_text(_render_markdown(report), encoding="utf-8")
 
     return report
@@ -759,7 +871,11 @@ def _render_markdown(report: dict[str, Any]) -> str:
             )
     if not report.get("code_improvement_orders"):
         lines.append("- none")
-    ofi_qi_quality = report.get("data_quality", {}).get("ofi_qi_quality") if isinstance(report.get("data_quality"), dict) else {}
+    ofi_qi_quality = (
+        report.get("data_quality", {}).get("ofi_qi_quality")
+        if isinstance(report.get("data_quality"), dict)
+        else {}
+    )
     if ofi_qi_quality:
         lines.extend(
             [
@@ -788,7 +904,9 @@ def _render_markdown(report: dict[str, Any]) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Aggregate DeepSeek swing pattern lab into improvement orders.")
+    parser = argparse.ArgumentParser(
+        description="Aggregate DeepSeek swing pattern lab into improvement orders."
+    )
     parser.add_argument("--date", dest="target_date", default=date.today().isoformat())
     args = parser.parse_args(argv)
     report = build_swing_pattern_lab_automation_report(args.target_date)

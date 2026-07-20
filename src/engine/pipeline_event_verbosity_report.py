@@ -17,7 +17,6 @@ from src.engine.pipeline_event_summary import (
     update_and_load_pipeline_event_summaries,
 )
 
-
 REPORT_DIRNAME = "pipeline_event_verbosity"
 
 
@@ -79,13 +78,22 @@ def _line_count_and_stage_bytes(raw_path: Path) -> dict[str, Any]:
                 payload = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if not isinstance(payload, dict) or payload.get("event_type") != "pipeline_event":
+            if (
+                not isinstance(payload, dict)
+                or payload.get("event_type") != "pipeline_event"
+            ):
                 continue
-            latest_emitted_at = max(latest_emitted_at, _safe_str(payload.get("emitted_at")))
+            latest_emitted_at = max(
+                latest_emitted_at, _safe_str(payload.get("emitted_at"))
+            )
             stage = _safe_str(payload.get("stage"))
             if stage not in SUMMARY_STAGES:
                 continue
-            line_bytes = len(json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+            line_bytes = len(
+                json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode(
+                    "utf-8"
+                )
+            )
             high_volume_line_count += 1
             high_volume_bytes += line_bytes
             stage_counts[stage] += 1
@@ -99,17 +107,23 @@ def _line_count_and_stage_bytes(raw_path: Path) -> dict[str, Any]:
         "raw_line_count": raw_line_count,
         "high_volume_line_count": high_volume_line_count,
         "high_volume_bytes": high_volume_bytes,
-        "high_volume_line_share_pct": round((high_volume_line_count / raw_line_count) * 100.0, 2)
-        if raw_line_count
-        else 0.0,
-        "high_volume_byte_share_pct": round((high_volume_bytes / raw_size) * 100.0, 2) if raw_size else 0.0,
+        "high_volume_line_share_pct": (
+            round((high_volume_line_count / raw_line_count) * 100.0, 2)
+            if raw_line_count
+            else 0.0
+        ),
+        "high_volume_byte_share_pct": (
+            round((high_volume_bytes / raw_size) * 100.0, 2) if raw_size else 0.0
+        ),
         "high_volume_stage_counts": dict(sorted(stage_counts.items())),
         "high_volume_stage_bytes": dict(sorted(stage_bytes.items())),
         "latest_pipeline_event_at": latest_emitted_at or None,
     }
 
 
-def _summary_counts(rows: list[dict[str, Any]]) -> tuple[Counter[str], Counter[str], int]:
+def _summary_counts(
+    rows: list[dict[str, Any]],
+) -> tuple[Counter[str], Counter[str], int]:
     stage_counts: Counter[str] = Counter()
     blocker_counts: Counter[str] = Counter()
     total = 0
@@ -133,7 +147,11 @@ def _diff_counter(left: Counter[str], right: Counter[str]) -> dict[str, dict[str
         left_count = int(left.get(key, 0))
         right_count = int(right.get(key, 0))
         if left_count != right_count:
-            diff[key] = {"raw_derived": left_count, "producer": right_count, "delta": right_count - left_count}
+            diff[key] = {
+                "raw_derived": left_count,
+                "producer": right_count,
+                "delta": right_count - left_count,
+            }
     return diff
 
 
@@ -165,7 +183,9 @@ def build_pipeline_event_verbosity_report(target_date: str) -> dict[str, Any]:
         reason_labeler=default_reason_label,
         include_samples=False,
     )
-    producer_path, producer_manifest_path = producer_summary_paths(_summary_dir(), target_date)
+    producer_path, producer_manifest_path = producer_summary_paths(
+        _summary_dir(), target_date
+    )
     producer_actual_path = existing_or_gzip_path(producer_path)
     producer_manifest = _read_json(producer_manifest_path)
     producer_rows = load_summary_rows(producer_path, include_samples=False)
@@ -184,7 +204,12 @@ def build_pipeline_event_verbosity_report(target_date: str) -> dict[str, Any]:
         and producer_updated_at
         and latest_pipeline_event_at > producer_updated_at
     )
-    parity_ok = bool(producer_exists and not stage_diff and not blocker_diff and raw_total == producer_total)
+    parity_ok = bool(
+        producer_exists
+        and not stage_diff
+        and not blocker_diff
+        and raw_total == producer_total
+    )
     previous_pass_count = _previous_parity_pass_count(target_date)
     suppress_candidate = bool(parity_ok and previous_pass_count >= 1)
     if not raw_path.exists():
@@ -229,7 +254,9 @@ def build_pipeline_event_verbosity_report(target_date: str) -> dict[str, Any]:
         },
         "raw_derived_summary": {
             "path": raw_summary_meta.get("summary_path"),
-            "manifest": str(_summary_dir() / f"pipeline_event_summary_manifest_{target_date}.json"),
+            "manifest": str(
+                _summary_dir() / f"pipeline_event_summary_manifest_{target_date}.json"
+            ),
             "status": raw_summary_meta.get("status"),
             "row_count": raw_summary_meta.get("summary_row_count"),
             "event_count": raw_total,
@@ -263,7 +290,9 @@ def build_pipeline_event_verbosity_report(target_date: str) -> dict[str, Any]:
     }
     json_path, md_path = report_paths(target_date)
     json_path.parent.mkdir(parents=True, exist_ok=True)
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     md_path.write_text(render_markdown(report), encoding="utf-8")
     return report
 
@@ -271,7 +300,11 @@ def build_pipeline_event_verbosity_report(target_date: str) -> dict[str, Any]:
 def render_markdown(report: dict[str, Any]) -> str:
     raw = report.get("raw_stream") if isinstance(report.get("raw_stream"), dict) else {}
     parity = report.get("parity") if isinstance(report.get("parity"), dict) else {}
-    producer = report.get("producer_summary") if isinstance(report.get("producer_summary"), dict) else {}
+    producer = (
+        report.get("producer_summary")
+        if isinstance(report.get("producer_summary"), dict)
+        else {}
+    )
     return "\n".join(
         [
             f"# Pipeline Event Verbosity {report.get('target_date')}",
@@ -307,8 +340,12 @@ def render_markdown(report: dict[str, Any]) -> str:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Build pipeline event verbosity/compaction report.")
-    parser.add_argument("--date", dest="target_date", default=datetime.now().strftime("%Y-%m-%d"))
+    parser = argparse.ArgumentParser(
+        description="Build pipeline event verbosity/compaction report."
+    )
+    parser.add_argument(
+        "--date", dest="target_date", default=datetime.now().strftime("%Y-%m-%d")
+    )
     parser.add_argument("--print-json", action="store_true")
     return parser
 
@@ -325,7 +362,13 @@ def main() -> int:
             "markdown": str(report_paths(args.target_date)[1]),
         },
     }
-    print(json.dumps(result if args.print_json else result, ensure_ascii=False, indent=2 if args.print_json else None))
+    print(
+        json.dumps(
+            result if args.print_json else result,
+            ensure_ascii=False,
+            indent=2 if args.print_json else None,
+        )
+    )
     return 0
 
 

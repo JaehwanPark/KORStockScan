@@ -22,7 +22,6 @@ from src.utils.constants import DATA_DIR
 from src.utils.jsonl_io import existing_or_gzip_path, open_text_auto
 from src.utils.market_day import is_krx_trading_day
 
-
 REPORT_TYPE = "entry_hurdle_backtest"
 SCHEMA_VERSION = 1
 REPORT_DIR = DATA_DIR / "report" / REPORT_TYPE
@@ -98,9 +97,13 @@ def _tick_aggressor_pressure_usable(fields: dict[str, Any]) -> bool:
 
 
 def _event_micro_context_usable(fields: dict[str, Any]) -> bool:
-    if _stale_flag(fields.get("quote_stale")) or _stale_flag(fields.get("tick_context_stale")):
+    if _stale_flag(fields.get("quote_stale")) or _stale_flag(
+        fields.get("tick_context_stale")
+    ):
         return False
-    if _stale_flag(fields.get("quote_stale_at_submit")) or _stale_flag(fields.get("price_context_stale_at_submit")):
+    if _stale_flag(fields.get("quote_stale_at_submit")) or _stale_flag(
+        fields.get("price_context_stale_at_submit")
+    ):
         return False
     tick_quality = str(fields.get("tick_context_quality") or "").strip().lower()
     if tick_quality and tick_quality not in {
@@ -144,11 +147,16 @@ def _has_present_value(value: Any) -> bool:
 def _micro_vwap_usable(fields: dict[str, Any]) -> bool:
     if not _has_present_value(fields.get("curr_vs_micro_vwap_bp")):
         return False
-    minute_quality = str(fields.get("minute_candle_context_quality") or "").strip().lower()
+    minute_quality = (
+        str(fields.get("minute_candle_context_quality") or "").strip().lower()
+    )
     minute_quality_ok = bool(
         minute_quality
         and minute_quality != "-"
-        and not any(token in minute_quality for token in ("unknown", "missing", "stale", "unavailable"))
+        and not any(
+            token in minute_quality
+            for token in ("unknown", "missing", "stale", "unavailable")
+        )
     )
     return bool(
         _safe_bool(fields.get("micro_vwap_available"))
@@ -181,7 +189,9 @@ def _date_range(start_date: str, end_date: str) -> list[str]:
 
 
 def _buy_funnel_path(target_date: str) -> Path:
-    return existing_or_gzip_path(BUY_FUNNEL_DIR / f"buy_funnel_sentinel_{target_date}.json")
+    return existing_or_gzip_path(
+        BUY_FUNNEL_DIR / f"buy_funnel_sentinel_{target_date}.json"
+    )
 
 
 def _missed_entry_path(target_date: str) -> Path:
@@ -190,11 +200,15 @@ def _missed_entry_path(target_date: str) -> Path:
         actual_path = existing_or_gzip_path(path)
         if actual_path.exists():
             return actual_path
-    return existing_or_gzip_path(MISSED_ENTRY_DIRS[0] / f"missed_entry_counterfactual_{target_date}.json")
+    return existing_or_gzip_path(
+        MISSED_ENTRY_DIRS[0] / f"missed_entry_counterfactual_{target_date}.json"
+    )
 
 
 def _pipeline_events_path(target_date: str) -> Path:
-    return existing_or_gzip_path(PIPELINE_EVENTS_DIR / f"pipeline_events_{target_date}.jsonl")
+    return existing_or_gzip_path(
+        PIPELINE_EVENTS_DIR / f"pipeline_events_{target_date}.jsonl"
+    )
 
 
 def _iter_jsonl(path: Path, *, required_substrings: tuple[str, ...] = ()):
@@ -207,7 +221,9 @@ def _iter_jsonl(path: Path, *, required_substrings: tuple[str, ...] = ()):
                 line = line.strip()
                 if not line:
                     continue
-                if required_substrings and not any(marker in line for marker in required_substrings):
+                if required_substrings and not any(
+                    marker in line for marker in required_substrings
+                ):
                     continue
                 try:
                     yield json.loads(line)
@@ -260,12 +276,12 @@ def _quote_freshness_attribution(report: dict[str, Any]) -> dict[str, Any]:
 
 
 def _blocker_metrics(missed_report: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    metrics = ((missed_report.get("metrics") or {}).get("blocker_outcome_metrics") or {})
+    metrics = (missed_report.get("metrics") or {}).get("blocker_outcome_metrics") or {}
     return metrics if isinstance(metrics, dict) else {}
 
 
 def _cohort_metrics(missed_report: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    metrics = ((missed_report.get("metrics") or {}).get("cohort_outcome_metrics") or {})
+    metrics = (missed_report.get("metrics") or {}).get("cohort_outcome_metrics") or {}
     return metrics if isinstance(metrics, dict) else {}
 
 
@@ -283,7 +299,11 @@ def _hurdle_decision(row: dict[str, Any]) -> str:
 
 
 def _counter_to_plain(counter: Counter[str]) -> dict[str, int]:
-    return {str(key): _safe_int(value, 0) for key, value in sorted(counter.items()) if _safe_int(value, 0) > 0}
+    return {
+        str(key): _safe_int(value, 0)
+        for key, value in sorted(counter.items())
+        if _safe_int(value, 0) > 0
+    }
 
 
 def _truthy(value: Any) -> bool:
@@ -302,9 +322,8 @@ def _signature_strong_bundle(source_signature: Any) -> bool:
     tokens = _source_signature_tokens(source_signature)
     if {"PRICE_JUMP_START", "VOLUME_SURGE_POSITIVE"}.issubset(tokens):
         return True
-    return (
-        {"VALUE_TOP", "VOLUME_SURGE_POSITIVE"}.issubset(tokens)
-        and bool({"REALTIME_RANK_START", "OPEN_TOP"} & tokens)
+    return {"VALUE_TOP", "VOLUME_SURGE_POSITIVE"}.issubset(tokens) and bool(
+        {"REALTIME_RANK_START", "OPEN_TOP"} & tokens
     )
 
 
@@ -328,7 +347,9 @@ def _event_key(event: dict[str, Any]) -> tuple[str, str, str, str]:
     )
 
 
-def _top_overblocking(summary: dict[str, dict[str, Any]], keys: set[str]) -> dict[str, Any] | None:
+def _top_overblocking(
+    summary: dict[str, dict[str, Any]], keys: set[str]
+) -> dict[str, Any] | None:
     rows = []
     for key in keys:
         row = summary.get(key)
@@ -367,23 +388,28 @@ def _build_implemented_policy_backtest(
     latest_liquidity_relief_by_record: dict[tuple[str, str], dict[str, Any]] = {}
 
     for source_date in source_dates:
-        for event in _iter_jsonl(
-            _pipeline_events_path(source_date),
-            required_substrings=(
-                '"stage":"pre_submit_liquidity_guard_block"',
-                '"stage": "pre_submit_liquidity_guard_block"',
-                '"stage":"pre_submit_liquidity_relief_skipped"',
-                '"stage": "pre_submit_liquidity_relief_skipped"',
-                '"stage":"blocked_ai_score"',
-                '"stage": "blocked_ai_score"',
-                '"stage":"first_ai_wait"',
-                '"stage": "first_ai_wait"',
-            ),
-        ) or ():
+        for event in (
+            _iter_jsonl(
+                _pipeline_events_path(source_date),
+                required_substrings=(
+                    '"stage":"pre_submit_liquidity_guard_block"',
+                    '"stage": "pre_submit_liquidity_guard_block"',
+                    '"stage":"pre_submit_liquidity_relief_skipped"',
+                    '"stage": "pre_submit_liquidity_relief_skipped"',
+                    '"stage":"blocked_ai_score"',
+                    '"stage": "blocked_ai_score"',
+                    '"stage":"first_ai_wait"',
+                    '"stage": "first_ai_wait"',
+                ),
+            )
+            or ()
+        ):
             if not isinstance(event, dict):
                 continue
             stage = str(event.get("stage") or "")
-            fields = event.get("fields") if isinstance(event.get("fields"), dict) else {}
+            fields = (
+                event.get("fields") if isinstance(event.get("fields"), dict) else {}
+            )
             code = str(event.get("stock_code") or "")
             record_key = (code, str(event.get("record_id") or ""))
             if stage == "pre_submit_liquidity_relief_skipped":
@@ -397,10 +423,14 @@ def _build_implemented_policy_backtest(
                 ):
                     liquidity_excluded["stale_quote_or_context"] += 1
                     continue
-                if str(merged_fields.get("pre_submit_overbought_guard_action") or "").upper() not in {"", "PASS"}:
+                if str(
+                    merged_fields.get("pre_submit_overbought_guard_action") or ""
+                ).upper() not in {"", "PASS"}:
                     liquidity_excluded["overbought_guard_not_pass"] += 1
                     continue
-                if str(merged_fields.get("entry_submit_revalidation_warning") or "").strip():
+                if str(
+                    merged_fields.get("entry_submit_revalidation_warning") or ""
+                ).strip():
                     liquidity_excluded["submit_revalidation_warning"] += 1
                     continue
                 if str(merged_fields.get("latency_state") or "").upper() == "DANGER":
@@ -420,7 +450,9 @@ def _build_implemented_policy_backtest(
                     liquidity_attempts.add(candidate_key)
                     if code:
                         liquidity_symbols.add(code)
-                    liquidity_skip_reasons[str(merged_fields.get("liquidity_relief_skip_reason") or "-")] += 1
+                    liquidity_skip_reasons[
+                        str(merged_fields.get("liquidity_relief_skip_reason") or "-")
+                    ] += 1
                 continue
 
             if stage in {"blocked_ai_score", "first_ai_wait"}:
@@ -428,7 +460,9 @@ def _build_implemented_policy_backtest(
                 if score < 60.0 or score > 74.0:
                     ai_recheck_excluded["score_outside_60_74"] += 1
                     continue
-                if _stale_flag(fields.get("quote_stale")) or _stale_flag(fields.get("tick_context_stale")):
+                if _stale_flag(fields.get("quote_stale")) or _stale_flag(
+                    fields.get("tick_context_stale")
+                ):
                     ai_recheck_excluded["stale_quote_or_tick_context"] += 1
                     continue
                 if not _event_micro_context_usable(fields):
@@ -449,13 +483,21 @@ def _build_implemented_policy_backtest(
 
     submitted_unique = _safe_int(stage_totals.get("order_bundle_submitted"), 0)
     budget_unique = _safe_int(stage_totals.get("budget_pass"), 0)
-    conservative_submit_rate = submitted_unique / budget_unique if budget_unique else 0.0
-    blocked_ai = blocker_summary.get("blocked_ai_score") if isinstance(blocker_summary.get("blocked_ai_score"), dict) else {}
+    conservative_submit_rate = (
+        submitted_unique / budget_unique if budget_unique else 0.0
+    )
+    blocked_ai = (
+        blocker_summary.get("blocked_ai_score")
+        if isinstance(blocker_summary.get("blocked_ai_score"), dict)
+        else {}
+    )
     ai_missed_rate = _safe_float(blocked_ai.get("missed_winner_rate"), 0.0) / 100.0
     liquidity_count = len(liquidity_attempts)
     ai_recheck_count = len(ai_recheck_attempts)
     liquidity_conservative = round(liquidity_count * conservative_submit_rate)
-    ai_recheck_conservative = round(ai_recheck_count * conservative_submit_rate * max(ai_missed_rate, 0.0))
+    ai_recheck_conservative = round(
+        ai_recheck_count * conservative_submit_rate * max(ai_missed_rate, 0.0)
+    )
     return {
         "metric_role": "funnel_count",
         "decision_authority": "implemented_entry_logic_counterfactual_report_only",
@@ -486,7 +528,9 @@ def _build_implemented_policy_backtest(
         "ai_score_60_74_strong_bundle_recheck": {
             "eligible_recheck_attempts": ai_recheck_count,
             "unique_symbols": len(ai_recheck_symbols),
-            "blocked_ai_score_missed_winner_rate_used": round(ai_missed_rate * 100.0, 2),
+            "blocked_ai_score_missed_winner_rate_used": round(
+                ai_missed_rate * 100.0, 2
+            ),
             "conservative_estimated_order_submit_success": ai_recheck_conservative,
             "upper_bound_recheck_attempts": ai_recheck_count,
             "excluded_reasons": _counter_to_plain(ai_recheck_excluded),
@@ -494,11 +538,14 @@ def _build_implemented_policy_backtest(
         "total": {
             "eligible_attempts": liquidity_count + ai_recheck_count,
             "unique_symbols_upper_bound": len(liquidity_symbols | ai_recheck_symbols),
-            "conservative_estimated_order_submit_success": liquidity_conservative + ai_recheck_conservative,
+            "conservative_estimated_order_submit_success": liquidity_conservative
+            + ai_recheck_conservative,
             "upper_bound_order_submit_path_reentry": liquidity_count + ai_recheck_count,
             "baseline_order_bundle_submitted": submitted_unique,
             "baseline_budget_pass": budget_unique,
-            "baseline_submitted_to_budget_rate_pct": round(conservative_submit_rate * 100.0, 2),
+            "baseline_submitted_to_budget_rate_pct": round(
+                conservative_submit_rate * 100.0, 2
+            ),
         },
         "estimation_limits": [
             "second_ai_recheck_response_is_not_replayed",
@@ -520,11 +567,17 @@ def _next_action_diagnostics(
     refresh_attempted = _safe_int(quote_totals.get("refresh_attempted_count"), 0)
     refresh_applied = _safe_int(quote_totals.get("refresh_applied_count"), 0)
     recovered = _safe_int(quote_totals.get("latency_pass_recovered_count"), 0)
-    submitted_after_refresh = _safe_int(quote_totals.get("order_bundle_submitted_after_refresh_count"), 0)
-    still_blocked = _safe_int(quote_totals.get("still_latency_blocked_after_refresh_count"), 0)
+    submitted_after_refresh = _safe_int(
+        quote_totals.get("order_bundle_submitted_after_refresh_count"), 0
+    )
+    still_blocked = _safe_int(
+        quote_totals.get("still_latency_blocked_after_refresh_count"), 0
+    )
     recovered_downstream = (
         quote_totals.get("latency_pass_recovered_downstream_stage_counts")
-        if isinstance(quote_totals.get("latency_pass_recovered_downstream_stage_counts"), Counter)
+        if isinstance(
+            quote_totals.get("latency_pass_recovered_downstream_stage_counts"), Counter
+        )
         else Counter()
     )
 
@@ -549,7 +602,9 @@ def _next_action_diagnostics(
             }
         )
 
-    liquidity = _top_overblocking(blocker_summary, {"pre_submit_liquidity_guard_block", "blocked_liquidity"})
+    liquidity = _top_overblocking(
+        blocker_summary, {"pre_submit_liquidity_guard_block", "blocked_liquidity"}
+    )
     if liquidity:
         actions.append(
             {
@@ -588,7 +643,11 @@ def _next_action_diagnostics(
     ai_wait = _top_overblocking(blocker_summary, {"blocked_ai_score", "first_ai_wait"})
     ai_wait = ai_wait or _top_overblocking(
         cohort_summary,
-        {"entry_source_blocked_ai_score", "entry_source_wait6579", "entry_wait6579_score66_69"},
+        {
+            "entry_source_blocked_ai_score",
+            "entry_source_wait6579",
+            "entry_wait6579_score66_69",
+        },
     )
     if ai_wait:
         actions.append(
@@ -604,7 +663,9 @@ def _next_action_diagnostics(
             }
         )
 
-    drift = _top_overblocking(blocker_summary, {"pre_submit_late_entry_price_drift_guard_block"})
+    drift = _top_overblocking(
+        blocker_summary, {"pre_submit_late_entry_price_drift_guard_block"}
+    )
     if drift:
         actions.append(
             {
@@ -619,7 +680,12 @@ def _next_action_diagnostics(
             }
         )
 
-    actions.sort(key=lambda item: (_safe_int(item.get("priority"), 99), str(item.get("action_id") or "")))
+    actions.sort(
+        key=lambda item: (
+            _safe_int(item.get("priority"), 99),
+            str(item.get("action_id") or ""),
+        )
+    )
     return {
         "metric_role": "next_action_diagnostic",
         "decision_authority": "entry_hurdle_backtest_report_only",
@@ -638,7 +704,9 @@ def _next_action_diagnostics(
             "ai_confirmed": _safe_int(stage_totals.get("ai_confirmed"), 0),
             "budget_pass": _safe_int(stage_totals.get("budget_pass"), 0),
             "latency_pass": _safe_int(stage_totals.get("latency_pass"), 0),
-            "order_bundle_submitted": _safe_int(stage_totals.get("order_bundle_submitted"), 0),
+            "order_bundle_submitted": _safe_int(
+                stage_totals.get("order_bundle_submitted"), 0
+            ),
             "blocked_ai_score": _safe_int(stage_totals.get("blocked_ai_score"), 0),
             "first_ai_wait": _safe_int(stage_totals.get("first_ai_wait"), 0),
             "latency_block": _safe_int(stage_totals.get("latency_block"), 0),
@@ -665,7 +733,9 @@ def _next_action_diagnostics(
                 if isinstance(quote_totals.get("refresh_subreason_counts"), Counter)
                 else Counter()
             ),
-            "latency_pass_recovered_downstream_stage_counts": _counter_to_plain(recovered_downstream),
+            "latency_pass_recovered_downstream_stage_counts": _counter_to_plain(
+                recovered_downstream
+            ),
         },
         "recommended_next_actions": actions,
     }
@@ -682,10 +752,18 @@ def _overbought_gate_counterfactual(
         for key, row in sorted(blocker_summary.items())
         if key in OVERBOUGHT_BLOCKER_KEYS and isinstance(row, dict)
     }
-    evaluated = sum(_safe_int(row.get("evaluated_candidates"), 0) for row in blocker_rows.values())
-    missed = sum(_safe_int(row.get("missed_winner_count"), 0) for row in blocker_rows.values())
-    avoided = sum(_safe_int(row.get("avoided_loser_count"), 0) for row in blocker_rows.values())
-    neutral = sum(_safe_int(row.get("neutral_count"), 0) for row in blocker_rows.values())
+    evaluated = sum(
+        _safe_int(row.get("evaluated_candidates"), 0) for row in blocker_rows.values()
+    )
+    missed = sum(
+        _safe_int(row.get("missed_winner_count"), 0) for row in blocker_rows.values()
+    )
+    avoided = sum(
+        _safe_int(row.get("avoided_loser_count"), 0) for row in blocker_rows.values()
+    )
+    neutral = sum(
+        _safe_int(row.get("neutral_count"), 0) for row in blocker_rows.values()
+    )
     return {
         "metric_role": "sim_probe_ev",
         "decision_authority": "entry_hurdle_backtest_report_only",
@@ -703,11 +781,19 @@ def _overbought_gate_counterfactual(
         "missed_winner_count": missed,
         "avoided_loser_count": avoided,
         "neutral_count": neutral,
-        "missed_winner_rate": round(missed * 100.0 / evaluated, 2) if evaluated else 0.0,
-        "avoided_loser_rate": round(avoided * 100.0 / evaluated, 2) if evaluated else 0.0,
+        "missed_winner_rate": (
+            round(missed * 100.0 / evaluated, 2) if evaluated else 0.0
+        ),
+        "avoided_loser_rate": (
+            round(avoided * 100.0 / evaluated, 2) if evaluated else 0.0
+        ),
         "top_overblocking": top,
         "blocker_tradeoff": blocker_rows,
-        "decision": "source_only_recovery_design_candidate" if top else "hold_sample_or_balanced",
+        "decision": (
+            "source_only_recovery_design_candidate"
+            if top
+            else "hold_sample_or_balanced"
+        ),
         "allowed_next_step": (
             "Use this evidence to design a bounded source-only overbought recovery candidate; "
             "do not relax live overbought guards without a separate runtime apply contract."
@@ -825,9 +911,21 @@ def build_report(
         buy_report = _load_json(buy_path)
         missed_report = _load_json(missed_path)
         if not buy_report:
-            missing_artifacts.append({"date": source_date, "artifact": "buy_funnel_sentinel", "path": str(buy_path)})
+            missing_artifacts.append(
+                {
+                    "date": source_date,
+                    "artifact": "buy_funnel_sentinel",
+                    "path": str(buy_path),
+                }
+            )
         if not missed_report:
-            missing_artifacts.append({"date": source_date, "artifact": "missed_entry_counterfactual", "path": str(missed_path)})
+            missing_artifacts.append(
+                {
+                    "date": source_date,
+                    "artifact": "missed_entry_counterfactual",
+                    "path": str(missed_path),
+                }
+            )
 
         stage_unique = _stage_unique(buy_report)
         ratios = _ratios(buy_report)
@@ -837,17 +935,27 @@ def build_report(
         blocker_rows = _blocker_metrics(missed_report)
         for key, row in blocker_rows.items():
             bucket = blocker_totals[str(key)]
-            bucket["evaluated_candidates"] += _safe_int(row.get("evaluated_candidates"), 0)
-            bucket["missed_winner_count"] += _safe_int(row.get("missed_winner_count"), 0)
-            bucket["avoided_loser_count"] += _safe_int(row.get("avoided_loser_count"), 0)
+            bucket["evaluated_candidates"] += _safe_int(
+                row.get("evaluated_candidates"), 0
+            )
+            bucket["missed_winner_count"] += _safe_int(
+                row.get("missed_winner_count"), 0
+            )
+            bucket["avoided_loser_count"] += _safe_int(
+                row.get("avoided_loser_count"), 0
+            )
             bucket["neutral_count"] += _safe_int(row.get("neutral_count"), 0)
 
         cohort_rows = _cohort_metrics(missed_report)
         for key, row in cohort_rows.items():
             bucket = cohort_totals[str(key)]
             evaluated = _safe_int(row.get("evaluated_candidates"), 0)
-            missed = round(_safe_float(row.get("missed_winner_rate"), 0.0) * evaluated / 100.0)
-            avoided = round(_safe_float(row.get("avoided_loser_rate"), 0.0) * evaluated / 100.0)
+            missed = round(
+                _safe_float(row.get("missed_winner_rate"), 0.0) * evaluated / 100.0
+            )
+            avoided = round(
+                _safe_float(row.get("avoided_loser_rate"), 0.0) * evaluated / 100.0
+            )
             bucket["evaluated_candidates"] += evaluated
             bucket["missed_winner_count"] += missed
             bucket["avoided_loser_count"] += avoided
@@ -861,7 +969,9 @@ def build_report(
             "latency_pass_recovered_count",
             "order_bundle_submitted_after_refresh_count",
         ):
-            quote_totals[key] = _safe_int(quote_totals.get(key), 0) + _safe_int(quote_freshness.get(key), 0)
+            quote_totals[key] = _safe_int(quote_totals.get(key), 0) + _safe_int(
+                quote_freshness.get(key), 0
+            )
         for key in (
             "refresh_subreason_counts",
             "refresh_block_subreason_counts",
@@ -884,7 +994,9 @@ def build_report(
                 "stage_unique": stage_unique,
                 "ratios": ratios,
                 "classification_primary": classification.get("primary", "-"),
-                "submit_drought_handoff_state": classification.get("submit_drought_handoff_state", "-"),
+                "submit_drought_handoff_state": classification.get(
+                    "submit_drought_handoff_state", "-"
+                ),
                 "quote_freshness_attribution": quote_freshness,
             }
         )
@@ -899,8 +1011,12 @@ def build_report(
             "missed_winner_count": missed,
             "avoided_loser_count": avoided,
             "neutral_count": _safe_int(counter.get("neutral_count"), 0),
-            "missed_winner_rate": round(missed * 100.0 / evaluated, 2) if evaluated else 0.0,
-            "avoided_loser_rate": round(avoided * 100.0 / evaluated, 2) if evaluated else 0.0,
+            "missed_winner_rate": (
+                round(missed * 100.0 / evaluated, 2) if evaluated else 0.0
+            ),
+            "avoided_loser_rate": (
+                round(avoided * 100.0 / evaluated, 2) if evaluated else 0.0
+            ),
         }
         row["hurdle_decision"] = _hurdle_decision(row)
         blocker_summary[key] = row
@@ -914,8 +1030,12 @@ def build_report(
             "evaluated_candidates": evaluated,
             "missed_winner_count": missed,
             "avoided_loser_count": avoided,
-            "missed_winner_rate": round(missed * 100.0 / evaluated, 2) if evaluated else 0.0,
-            "avoided_loser_rate": round(avoided * 100.0 / evaluated, 2) if evaluated else 0.0,
+            "missed_winner_rate": (
+                round(missed * 100.0 / evaluated, 2) if evaluated else 0.0
+            ),
+            "avoided_loser_rate": (
+                round(avoided * 100.0 / evaluated, 2) if evaluated else 0.0
+            ),
         }
         row["hurdle_decision"] = _hurdle_decision(row)
         cohort_summary[key] = row
@@ -959,8 +1079,14 @@ def build_report(
         "missing_artifacts": missing_artifacts,
         "summary": {
             "stage_unique_totals": dict(sorted(stage_totals.items())),
-            "submitted_to_ai_unique_pct": round(submitted_unique * 100.0 / ai_unique, 2) if ai_unique else 0.0,
-            "submitted_to_budget_unique_pct": round(submitted_unique * 100.0 / budget_unique, 2) if budget_unique else 0.0,
+            "submitted_to_ai_unique_pct": (
+                round(submitted_unique * 100.0 / ai_unique, 2) if ai_unique else 0.0
+            ),
+            "submitted_to_budget_unique_pct": (
+                round(submitted_unique * 100.0 / budget_unique, 2)
+                if budget_unique
+                else 0.0
+            ),
             "blocker_tradeoff": blocker_summary,
             "cohort_tradeoff": cohort_summary,
             "next_action_diagnostics": next_action_diagnostics,
@@ -970,11 +1096,21 @@ def build_report(
         "date_rows": date_rows,
     }
     report["source_paths"] = [
-        *(str(row.get("buy_funnel_path")) for row in date_rows if row.get("buy_funnel_loaded")),
-        *(str(row.get("missed_entry_path")) for row in date_rows if row.get("missed_entry_loaded")),
+        *(
+            str(row.get("buy_funnel_path"))
+            for row in date_rows
+            if row.get("buy_funnel_loaded")
+        ),
+        *(
+            str(row.get("missed_entry_path"))
+            for row in date_rows
+            if row.get("missed_entry_loaded")
+        ),
     ]
     report["code_improvement_orders"] = _code_improvement_orders(report)
-    report["summary"]["code_improvement_order_count"] = len(report["code_improvement_orders"])
+    report["summary"]["code_improvement_order_count"] = len(
+        report["code_improvement_orders"]
+    )
     preflight = load_source_quality_preflight(target_date)
     if source_quality_preflight_blocked(preflight):
         blocked = apply_source_quality_preflight_block(report, preflight)
@@ -1010,10 +1146,16 @@ def build_markdown(report: dict[str, Any]) -> str:
         if isinstance(summary.get("implemented_policy_backtest"), dict)
         else {}
     )
-    total = policy_backtest.get("total") if isinstance(policy_backtest.get("total"), dict) else {}
+    total = (
+        policy_backtest.get("total")
+        if isinstance(policy_backtest.get("total"), dict)
+        else {}
+    )
     liquidity_backtest = (
         policy_backtest.get("liquidity_signature_micro_pressure_relief")
-        if isinstance(policy_backtest.get("liquidity_signature_micro_pressure_relief"), dict)
+        if isinstance(
+            policy_backtest.get("liquidity_signature_micro_pressure_relief"), dict
+        )
         else {}
     )
     ai_recheck_backtest = (
@@ -1041,7 +1183,11 @@ def build_markdown(report: dict[str, Any]) -> str:
             "## Recommended Next Actions",
         ]
     )
-    diagnostics = summary.get("next_action_diagnostics") if isinstance(summary.get("next_action_diagnostics"), dict) else {}
+    diagnostics = (
+        summary.get("next_action_diagnostics")
+        if isinstance(summary.get("next_action_diagnostics"), dict)
+        else {}
+    )
     for item in diagnostics.get("recommended_next_actions") or []:
         lines.append(
             f"- `{item.get('action_id', '-')}`: priority={item.get('priority', '-')}, "
@@ -1086,21 +1232,30 @@ def build_markdown(report: dict[str, Any]) -> str:
 
 def write_outputs(report: dict[str, Any]) -> tuple[Path, Path]:
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
-    json_path, md_path = report_paths(str(report.get("date") or date.today().isoformat()))
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    json_path, md_path = report_paths(
+        str(report.get("date") or date.today().isoformat())
+    )
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
     md_path.write_text(build_markdown(report), encoding="utf-8")
     return json_path, md_path
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Build report-only entry hurdle backtest.")
+    parser = argparse.ArgumentParser(
+        description="Build report-only entry hurdle backtest."
+    )
     parser.add_argument("--date", dest="target_date", default=date.today().isoformat())
     parser.add_argument("--start-date")
     parser.add_argument("--end-date")
     parser.add_argument("--write", action="store_true")
     parser.add_argument("--print", dest="print_stdout", action="store_true")
     args = parser.parse_args(argv)
-    report = build_report(args.target_date, start_date=args.start_date, end_date=args.end_date)
+    report = build_report(
+        args.target_date, start_date=args.start_date, end_date=args.end_date
+    )
     if args.write:
         json_path, md_path = write_outputs(report)
         print(f"Wrote {json_path}")

@@ -653,7 +653,11 @@ def test_discovery_report_normalizes_missing_optional_values_to_strict_json(
     )
     monkeypatch.setattr(mod, "load_safe_pool_rows", lambda target_date: _source_rows(1))
     monkeypatch.setattr(mod, "load_block_reason_map", lambda target_date: {})
-    monkeypatch.setattr(mod, "fetch_quote_features", lambda codes, db_url=mod.POSTGRES_URL: _quote_features(1))
+    monkeypatch.setattr(
+        mod,
+        "fetch_quote_features",
+        lambda codes, db_url=mod.POSTGRES_URL: _quote_features(1),
+    )
     monkeypatch.setattr(
         mod,
         "build_sector_theme_map",

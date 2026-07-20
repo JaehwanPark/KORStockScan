@@ -20,11 +20,18 @@ from src.engine.daily_threshold_cycle_report import REPORT_DIR
 from src.utils import kiwoom_utils
 from src.utils.jsonl_io import iter_jsonl
 
-
 REPORT_DIR_PATH = REPORT_DIR / "institutional_flow_context"
 PIPELINE_EVENTS_DIR = Path(__file__).resolve().parents[2] / "data" / "pipeline_events"
 
-STATUS_VALUES = {"OK", "MISSING", "STALE", "PARSE_ERROR", "PARTIAL", "RATE_LIMITED", "TOKEN_ERROR"}
+STATUS_VALUES = {
+    "OK",
+    "MISSING",
+    "STALE",
+    "PARSE_ERROR",
+    "PARTIAL",
+    "RATE_LIMITED",
+    "TOKEN_ERROR",
+}
 RUNTIME_FEATURE_KEYS = [
     "foreign_net_intraday_qty",
     "foreign_net_intraday_amt",
@@ -90,7 +97,9 @@ def _load_pipeline_event_codes(target_date: str, limit: int = 120) -> list[str]:
     return codes
 
 
-def _ws_age_sec(ws_data: dict[str, Any] | None, now_ts: float | None = None) -> float | None:
+def _ws_age_sec(
+    ws_data: dict[str, Any] | None, now_ts: float | None = None
+) -> float | None:
     if not isinstance(ws_data, dict):
         return None
     now_ts = float(now_ts or time.time())
@@ -119,8 +128,12 @@ def normalize_institutional_flow_context(
     code = _normalize_code(code)
     daily_summary = daily_summary if isinstance(daily_summary, dict) else {}
     period_summary = period_summary if isinstance(period_summary, dict) else {}
-    intraday_chart_qty = intraday_chart_qty if isinstance(intraday_chart_qty, dict) else {}
-    intraday_chart_amt = intraday_chart_amt if isinstance(intraday_chart_amt, dict) else {}
+    intraday_chart_qty = (
+        intraday_chart_qty if isinstance(intraday_chart_qty, dict) else {}
+    )
+    intraday_chart_amt = (
+        intraday_chart_amt if isinstance(intraday_chart_amt, dict) else {}
+    )
     ws_data = ws_data if isinstance(ws_data, dict) else {}
 
     foreign_intraday_qty = _safe_int(intraday_chart_qty.get("foreign_net"))
@@ -129,7 +142,9 @@ def normalize_institutional_flow_context(
     inst_intraday_amt = _safe_int(intraday_chart_amt.get("inst_net"))
     foreign_roll5 = _safe_int(period_summary.get("foreign_net"))
     inst_roll5 = _safe_int(period_summary.get("inst_net"))
-    smart_money_net = _safe_int(daily_summary.get("smart_money_net"), foreign_roll5 + inst_roll5)
+    smart_money_net = _safe_int(
+        daily_summary.get("smart_money_net"), foreign_roll5 + inst_roll5
+    )
     broker_net = _safe_int(ws_data.get("foreign_broker_net_est_qty"))
     broker_delta = _safe_int(ws_data.get("foreign_broker_net_est_delta_qty"))
     program_net_qty = _safe_int(ws_data.get("prog_net_qty"))
@@ -155,7 +170,9 @@ def normalize_institutional_flow_context(
         regime = "PROGRAM_SUPPORT"
     elif smart_money_net < 0 and broker_delta < 0:
         regime = "DISTRIBUTION"
-    elif any(value for value in (foreign_roll5, inst_roll5, broker_delta, program_delta_qty)):
+    elif any(
+        value for value in (foreign_roll5, inst_roll5, broker_delta, program_delta_qty)
+    ):
         regime = "MIXED"
     else:
         regime = "UNKNOWN"
@@ -168,14 +185,22 @@ def normalize_institutional_flow_context(
     if intraday_chart_qty or intraday_chart_amt:
         sources.append("ka10064")
     if ws_data:
-        if "0F" in (ws_data.get("received_types") or set()) or ws_data.get("foreign_broker_net_est_qty"):
+        if "0F" in (ws_data.get("received_types") or set()) or ws_data.get(
+            "foreign_broker_net_est_qty"
+        ):
             sources.append("WS_0F")
-        if "0w" in (ws_data.get("received_types") or set()) or ws_data.get("prog_net_qty"):
+        if "0w" in (ws_data.get("received_types") or set()) or ws_data.get(
+            "prog_net_qty"
+        ):
             sources.append("WS_0w")
 
     status = status_hint if status_hint in STATUS_VALUES else None
     if not status:
-        status = "OK" if {"ka10059", "ka10061"} <= set(sources) else "PARTIAL" if sources else "MISSING"
+        status = (
+            "OK"
+            if {"ka10059", "ka10061"} <= set(sources)
+            else "PARTIAL" if sources else "MISSING"
+        )
 
     return {
         "stock_code": code,
@@ -194,7 +219,9 @@ def normalize_institutional_flow_context(
         "smart_money_net": smart_money_net,
         "institutional_accumulation_score": score,
         "institutional_flow_regime": regime,
-        "institutional_flow_source": "+".join(dict.fromkeys(sources)) if sources else "none",
+        "institutional_flow_source": (
+            "+".join(dict.fromkeys(sources)) if sources else "none"
+        ),
         "institutional_flow_status": status,
         "institutional_flow_age_sec": _ws_age_sec(ws_data),
         "runtime_effect": False,
@@ -211,18 +238,30 @@ def resolve_institutional_flow_context(
     live_intraday: bool = False,
 ) -> dict[str, Any]:
     if not token:
-        return normalize_institutional_flow_context(code, ws_data=ws_data, status_hint="TOKEN_ERROR")
+        return normalize_institutional_flow_context(
+            code, ws_data=ws_data, status_hint="TOKEN_ERROR"
+        )
     code = _normalize_code(code)
     base_dt = str(target_date).replace("-", "")
-    start_dt = (datetime.strptime(base_dt, "%Y%m%d") - timedelta(days=7)).strftime("%Y%m%d")
+    start_dt = (datetime.strptime(base_dt, "%Y%m%d") - timedelta(days=7)).strftime(
+        "%Y%m%d"
+    )
     try:
-        daily = kiwoom_utils.get_investor_flow_summary_ka10059(token, code, base_dt=base_dt)
-        period = kiwoom_utils.get_investor_period_total_ka10061(token, code, start_dt, base_dt)
+        daily = kiwoom_utils.get_investor_flow_summary_ka10059(
+            token, code, base_dt=base_dt
+        )
+        period = kiwoom_utils.get_investor_period_total_ka10061(
+            token, code, start_dt, base_dt
+        )
         chart_qty: dict[str, Any] = {}
         chart_amt: dict[str, Any] = {}
         if live_intraday:
-            chart_qty = kiwoom_utils.get_intraday_investor_chart_ka10064(token, code, amt_qty_tp="2")
-            chart_amt = kiwoom_utils.get_intraday_investor_chart_ka10064(token, code, amt_qty_tp="1")
+            chart_qty = kiwoom_utils.get_intraday_investor_chart_ka10064(
+                token, code, amt_qty_tp="2"
+            )
+            chart_amt = kiwoom_utils.get_intraday_investor_chart_ka10064(
+                token, code, amt_qty_tp="1"
+            )
         return normalize_institutional_flow_context(
             code,
             daily_summary=daily,
@@ -232,7 +271,9 @@ def resolve_institutional_flow_context(
             ws_data=ws_data,
         )
     except Exception as exc:
-        context = normalize_institutional_flow_context(code, ws_data=ws_data, status_hint="PARSE_ERROR")
+        context = normalize_institutional_flow_context(
+            code, ws_data=ws_data, status_hint="PARSE_ERROR"
+        )
         context["error"] = str(exc)
         return context
 
@@ -266,7 +307,12 @@ def build_institutional_flow_context_report(
             token = None
     ws_data_by_code = ws_data_by_code if isinstance(ws_data_by_code, dict) else {}
     rows = []
-    sleep_sec = max(0.0, _safe_float(os.getenv("KORSTOCKSCAN_INSTITUTIONAL_FLOW_CONTEXT_SLEEP_SEC"), 0.15))
+    sleep_sec = max(
+        0.0,
+        _safe_float(
+            os.getenv("KORSTOCKSCAN_INSTITUTIONAL_FLOW_CONTEXT_SLEEP_SEC"), 0.15
+        ),
+    )
     for idx, code in enumerate(normalized_codes):
         rows.append(
             resolve_institutional_flow_context(
@@ -279,10 +325,16 @@ def build_institutional_flow_context_report(
         )
         if sleep_sec > 0 and idx < len(normalized_codes) - 1:
             time.sleep(sleep_sec)
-    status_counts = Counter(str(row.get("institutional_flow_status") or "MISSING") for row in rows)
-    source_counts = Counter(str(row.get("institutional_flow_source") or "none") for row in rows)
+    status_counts = Counter(
+        str(row.get("institutional_flow_status") or "MISSING") for row in rows
+    )
+    source_counts = Counter(
+        str(row.get("institutional_flow_source") or "none") for row in rows
+    )
     ok_count = status_counts.get("OK", 0)
-    top_net_buy = sorted(rows, key=lambda row: _safe_int(row.get("smart_money_net")), reverse=True)[:10]
+    top_net_buy = sorted(
+        rows, key=lambda row: _safe_int(row.get("smart_money_net")), reverse=True
+    )[:10]
     report = {
         "schema_version": 1,
         "date": target_date,
@@ -326,15 +378,23 @@ def build_institutional_flow_context_report(
             for message in [
                 "codes_missing" if not normalized_codes else "",
                 "token_error" if status_counts.get("TOKEN_ERROR", 0) else "",
-                "all_rows_missing" if rows and ok_count == 0 and status_counts.get("PARTIAL", 0) == 0 else "",
+                (
+                    "all_rows_missing"
+                    if rows and ok_count == 0 and status_counts.get("PARTIAL", 0) == 0
+                    else ""
+                ),
             ]
             if message
         ],
     }
     REPORT_DIR_PATH.mkdir(parents=True, exist_ok=True)
     json_path, md_path = report_paths(target_date)
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-    md_path.write_text(render_institutional_flow_context_markdown(report), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    md_path.write_text(
+        render_institutional_flow_context_markdown(report), encoding="utf-8"
+    )
     return report
 
 
@@ -366,7 +426,9 @@ def render_institutional_flow_context_markdown(report: dict[str, Any]) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Build source-only institutional flow context artifact.")
+    parser = argparse.ArgumentParser(
+        description="Build source-only institutional flow context artifact."
+    )
     parser.add_argument("--date", default=datetime.now().strftime("%Y-%m-%d"))
     parser.add_argument("--code", action="append", default=[])
     parser.add_argument("--max-codes", type=int, default=120)
@@ -378,7 +440,16 @@ def main(argv: list[str] | None = None) -> int:
         live_intraday=bool(args.live_intraday),
         max_codes=args.max_codes,
     )
-    print(json.dumps({"date": report.get("date"), "summary": report.get("summary"), "warnings": report.get("warnings")}, ensure_ascii=False))
+    print(
+        json.dumps(
+            {
+                "date": report.get("date"),
+                "summary": report.get("summary"),
+                "warnings": report.get("warnings"),
+            },
+            ensure_ascii=False,
+        )
+    )
     return 0
 
 

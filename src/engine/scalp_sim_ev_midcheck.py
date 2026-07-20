@@ -13,7 +13,6 @@ from pathlib import Path
 from src.utils.constants import DATA_DIR
 from src.utils.jsonl_io import read_jsonl
 
-
 SYNTHETIC_NAMES = {"TEST", "DUMMY", "MOCK"}
 
 
@@ -113,7 +112,10 @@ def _position_template(row: dict) -> dict:
 
 
 def _position_arm(position: dict) -> str:
-    add_types = {str(event.get("add_type") or "").upper() for event in position.get("scale_in_filled", [])}
+    add_types = {
+        str(event.get("add_type") or "").upper()
+        for event in position.get("scale_in_filled", [])
+    }
     has_avg_down = bool(add_types & {"AVG_DOWN", "REVERSAL_ADD"})
     has_pyramid = "PYRAMID" in add_types
     if has_avg_down and has_pyramid:
@@ -171,7 +173,9 @@ def _post_add_metrics(position: dict) -> dict:
         "mfe_after_add_pct": round(max(samples), 4) if samples else None,
         "mae_after_add_pct": round(min(samples), 4) if samples else None,
         "final_exit_profit_pct": final_profit,
-        "source": "sim_record_profit_fields" if samples else "no_post_add_profit_fields",
+        "source": (
+            "sim_record_profit_fields" if samples else "no_post_add_profit_fields"
+        ),
     }
 
 
@@ -192,7 +196,9 @@ def _build_scale_in_analysis(positions: dict[str, dict]) -> dict:
     for position in positions.values():
         all_filled_events.extend(position.get("scale_in_filled") or [])
         all_unfilled_events.extend(position.get("scale_in_unfilled") or [])
-        actual_order_values.extend(str(v) for v in position.get("actual_order_submitted_values") or [])
+        actual_order_values.extend(
+            str(v) for v in position.get("actual_order_submitted_values") or []
+        )
         completed = position.get("completed")
         if not completed:
             continue
@@ -232,13 +238,21 @@ def _build_scale_in_analysis(positions: dict[str, dict]) -> dict:
     for event in all_unfilled_events:
         unfilled_by_add_type[str(event.get("add_type") or "-")] += 1
 
-    unexpected_actual = sorted({value for value in actual_order_values if not _boolish_false(value)})
+    unexpected_actual = sorted(
+        {value for value in actual_order_values if not _boolish_false(value)}
+    )
     return {
-        "arm_metrics": {arm: _metrics(values) for arm, values in sorted(arm_values.items())},
+        "arm_metrics": {
+            arm: _metrics(values) for arm, values in sorted(arm_values.items())
+        },
         "scale_in_counts": {
             "positions_completed": len(rows),
-            "positions_with_scale_in": sum(1 for row in rows if row["scale_in_filled_count"] > 0),
-            "positions_without_scale_in": sum(1 for row in rows if row["scale_in_filled_count"] == 0),
+            "positions_with_scale_in": sum(
+                1 for row in rows if row["scale_in_filled_count"] > 0
+            ),
+            "positions_without_scale_in": sum(
+                1 for row in rows if row["scale_in_filled_count"] == 0
+            ),
             "filled_events": len(all_filled_events),
             "unfilled_events": len(all_unfilled_events),
             "completed_filled_events": len(completed_filled_events),
@@ -253,7 +267,11 @@ def _build_scale_in_analysis(positions: dict[str, dict]) -> dict:
         },
         "positions": sorted(
             rows,
-            key=lambda row: row["final_exit_profit_pct"] if row["final_exit_profit_pct"] is not None else -999,
+            key=lambda row: (
+                row["final_exit_profit_pct"]
+                if row["final_exit_profit_pct"] is not None
+                else -999
+            ),
             reverse=True,
         ),
         "filled_events": all_filled_events,
@@ -289,10 +307,21 @@ def _build_initial_qty_provenance(positions: dict[str, dict]) -> dict:
         entry_fill = position.get("entry_fill") or {}
         entry_fill_fields = entry_fill.get("fields") or {}
         profit_rate = _as_float(completed_fields.get("profit_rate"))
-        buy_price = _as_float(completed_fields.get("buy_price") or entry_fill_fields.get("assumed_fill_price"))
+        buy_price = _as_float(
+            completed_fields.get("buy_price")
+            or entry_fill_fields.get("assumed_fill_price")
+        )
 
-        sim_qty = _as_int(entry_fields.get("qty") or entry_fill_fields.get("qty") or completed_fields.get("qty"), 1)
-        uncapped_qty = _as_int(entry_fields.get("uncapped_qty") or entry_fields.get("qty") or sim_qty, sim_qty)
+        sim_qty = _as_int(
+            entry_fields.get("qty")
+            or entry_fill_fields.get("qty")
+            or completed_fields.get("qty"),
+            1,
+        )
+        uncapped_qty = _as_int(
+            entry_fields.get("uncapped_qty") or entry_fields.get("qty") or sim_qty,
+            sim_qty,
+        )
         qty_source = str(entry_fields.get("qty_source") or "-")
         cap_applied = not _boolish_false(entry_fields.get("cap_applied"))
         row = {
@@ -312,15 +341,21 @@ def _build_initial_qty_provenance(positions: dict[str, dict]) -> dict:
         summary["qty_sum"] += sim_qty
         summary["uncapped_qty_sum"] += uncapped_qty
         summary["cap_applied_count"] += int(cap_applied)
-        summary["uncapped_qty_source_count"] += int(qty_source == "uncapped_buy_capacity")
-        summary["virtual_budget_qty_source_count"] += int(qty_source == "sim_virtual_budget_dynamic_formula")
+        summary["uncapped_qty_source_count"] += int(
+            qty_source == "uncapped_buy_capacity"
+        )
+        summary["virtual_budget_qty_source_count"] += int(
+            qty_source == "sim_virtual_budget_dynamic_formula"
+        )
         summary["fixed_qty_source_count"] += int(qty_source == "fixed_config")
 
     return {
         "summary": summary,
         "positions": sorted(
             rows,
-            key=lambda row: row["profit_rate"] if row["profit_rate"] is not None else -999,
+            key=lambda row: (
+                row["profit_rate"] if row["profit_rate"] is not None else -999
+            ),
             reverse=True,
         ),
         "method": "actual_sim_qty_provenance_only",
@@ -350,7 +385,10 @@ def build_report(target_date: str) -> dict:
         latest = row.get("emitted_at") or latest
         stage = str(row.get("stage") or "")
         fields = row.get("fields") or {}
-        is_sim = stage.startswith("scalp_sim_") or fields.get("simulation_book") == "scalp_ai_buy_all"
+        is_sim = (
+            stage.startswith("scalp_sim_")
+            or fields.get("simulation_book") == "scalp_ai_buy_all"
+        )
         if is_sim and _is_synthetic_event(row):
             synthetic_excluded += 1
             continue
@@ -363,18 +401,26 @@ def build_report(target_date: str) -> dict:
             }:
                 critical_class = str(fields.get("critical_class") or "unknown")
                 sim_ai_critical_class_counts[critical_class] += 1
-                for reason in str(fields.get("critical_reason") or "unknown").split(","):
+                for reason in str(fields.get("critical_reason") or "unknown").split(
+                    ","
+                ):
                     cleaned = reason.strip() or "unknown"
                     sim_ai_critical_reason_counts[cleaned] += 1
             sim_id = _sim_record_id(row)
             if sim_id:
                 position = positions.setdefault(sim_id, _position_template(row))
                 position["events"].append(row)
-                position["stock_name"] = position.get("stock_name") or row.get("stock_name")
-                position["stock_code"] = position.get("stock_code") or row.get("stock_code")
+                position["stock_name"] = position.get("stock_name") or row.get(
+                    "stock_name"
+                )
+                position["stock_code"] = position.get("stock_code") or row.get(
+                    "stock_code"
+                )
                 actual_order_submitted = fields.get("actual_order_submitted")
                 if actual_order_submitted is not None:
-                    position["actual_order_submitted_values"].append(actual_order_submitted)
+                    position["actual_order_submitted_values"].append(
+                        actual_order_submitted
+                    )
                 if stage == "scalp_sim_scale_in_order_assumed_filled":
                     position["scale_in_filled"].append(_scale_in_event_row(row))
                 if stage == "scalp_sim_scale_in_order_unfilled":
@@ -422,7 +468,9 @@ def build_report(target_date: str) -> dict:
                 }
             )
 
-    profit_values = [row["profit_rate"] for row in completed if row["profit_rate"] is not None]
+    profit_values = [
+        row["profit_rate"] for row in completed if row["profit_rate"] is not None
+    ]
     scale_in_analysis = _build_scale_in_analysis(positions)
     initial_qty_provenance = _build_initial_qty_provenance(positions)
     ai_live_calls = int(sim_counts.get("scalp_sim_ai_holding_live_call", 0))
@@ -448,13 +496,19 @@ def build_report(target_date: str) -> dict:
             "scalp_sim_ai_holding_live_call": ai_live_calls,
             "scalp_sim_ai_holding_reuse": ai_reuse,
             "scalp_sim_ai_holding_deferred": ai_deferred,
-            "sim_ai_budget_exhausted": int(sim_counts.get("sim_ai_budget_exhausted", 0)),
+            "sim_ai_budget_exhausted": int(
+                sim_counts.get("sim_ai_budget_exhausted", 0)
+            ),
             "sim_ai_critical_bypass": ai_critical_bypass,
             "critical_class_counts": dict(sorted(sim_ai_critical_class_counts.items())),
-            "critical_reason_counts": dict(sorted(sim_ai_critical_reason_counts.items())),
+            "critical_reason_counts": dict(
+                sorted(sim_ai_critical_reason_counts.items())
+            ),
             "critical_bypass_ratio_pct": _ratio_pct(ai_critical_bypass, ai_live_calls),
             "deferred_ratio_pct": _ratio_pct(ai_deferred, ai_live_calls + ai_deferred),
-            "reuse_ratio_pct": _ratio_pct(ai_reuse, ai_live_calls + ai_reuse + ai_deferred),
+            "reuse_ratio_pct": _ratio_pct(
+                ai_reuse, ai_live_calls + ai_reuse + ai_deferred
+            ),
         },
         "overnight_counts": {
             "decision": overnight_decisions,
@@ -468,10 +522,20 @@ def build_report(target_date: str) -> dict:
         "metrics": _metrics(profit_values),
         "scale_in_analysis": scale_in_analysis,
         "initial_qty_provenance": initial_qty_provenance,
-        "completed": sorted(completed, key=lambda row: row["profit_rate"] if row["profit_rate"] is not None else -999, reverse=True),
+        "completed": sorted(
+            completed,
+            key=lambda row: (
+                row["profit_rate"] if row["profit_rate"] is not None else -999
+            ),
+            reverse=True,
+        ),
         "expired": expired,
         "real_completed": real_completed,
-        "judgement": "positive_ev_midcheck" if profit_values and statistics.mean(profit_values) > 0 else "non_positive_or_no_sample",
+        "judgement": (
+            "positive_ev_midcheck"
+            if profit_values and statistics.mean(profit_values) > 0
+            else "non_positive_or_no_sample"
+        ),
         "runtime_mutation": False,
     }
 
@@ -487,7 +551,9 @@ def write_outputs(report: dict, output_dir: Path) -> tuple[Path, Path]:
     target_date = report["target_date"]
     json_path = output_dir / f"scalp_sim_ev_midcheck_{target_date}.json"
     md_path = output_dir / f"scalp_sim_ev_midcheck_{target_date}.md"
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
 
     m = report["metrics"]
     lines = [
@@ -541,13 +607,17 @@ def write_outputs(report: dict, output_dir: Path) -> tuple[Path, Path]:
             "",
         ]
     )
-    class_counts = (report.get("sim_ai_budget_counts") or {}).get("critical_class_counts") or {}
+    class_counts = (report.get("sim_ai_budget_counts") or {}).get(
+        "critical_class_counts"
+    ) or {}
     if class_counts:
         lines.extend(["## AI Budget Critical Classes", ""])
         for label, count in class_counts.items():
             lines.append(f"- `{label}`: `{count}`")
         lines.append("")
-    reason_counts = (report.get("sim_ai_budget_counts") or {}).get("critical_reason_counts") or {}
+    reason_counts = (report.get("sim_ai_budget_counts") or {}).get(
+        "critical_reason_counts"
+    ) or {}
     if reason_counts:
         lines.extend(["## AI Budget Critical Reasons", ""])
         for label, count in reason_counts.items():
@@ -630,19 +700,43 @@ def write_outputs(report: dict, output_dir: Path) -> tuple[Path, Path]:
             f"{row.get('uncapped_qty', '-')} | `{row.get('qty_source') or '-'}` | "
             f"{str(row.get('cap_applied', False)).lower()} | {_fmt_pct(row.get('profit_rate'))} |"
         )
-    lines.extend(["", "## Completed Rows", "", "| 종목 | 수익률 | exit_rule | source |", "| --- | ---: | --- | --- |"])
+    lines.extend(
+        [
+            "",
+            "## Completed Rows",
+            "",
+            "| 종목 | 수익률 | exit_rule | source |",
+            "| --- | ---: | --- | --- |",
+        ]
+    )
     for row in report["completed"]:
         lines.append(
             f"| {row['stock_name']}({row['stock_code']}) | {_fmt_pct(row['profit_rate'])} | "
             f"{row.get('exit_rule') or '-'} | {row.get('exit_decision_source') or '-'} |"
         )
-    lines.extend(["", "## Expired Entries", "", "| 종목 | limit_price | parent |", "| --- | ---: | --- |"])
+    lines.extend(
+        [
+            "",
+            "## Expired Entries",
+            "",
+            "| 종목 | limit_price | parent |",
+            "| --- | ---: | --- |",
+        ]
+    )
     for row in report["expired"]:
         lines.append(
             f"| {row['stock_name']}({row['stock_code']}) | {row.get('limit_price') or '-'} | "
             f"{row.get('sim_parent_record_id') or '-'} |"
         )
-    lines.extend(["", "## Real Completed Reference", "", "| 종목 | 수익률 | exit_rule |", "| --- | ---: | --- |"])
+    lines.extend(
+        [
+            "",
+            "## Real Completed Reference",
+            "",
+            "| 종목 | 수익률 | exit_rule |",
+            "| --- | ---: | --- |",
+        ]
+    )
     for row in report["real_completed"]:
         lines.append(
             f"| {row['stock_name']}({row['stock_code']}) | {_fmt_pct(row['profit_rate'])} | "
@@ -653,7 +747,9 @@ def write_outputs(report: dict, output_dir: Path) -> tuple[Path, Path]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Build scalp simulator intraday EV midcheck report.")
+    parser = argparse.ArgumentParser(
+        description="Build scalp simulator intraday EV midcheck report."
+    )
     parser.add_argument("--date", default=datetime.now().strftime("%Y-%m-%d"))
     parser.add_argument(
         "--output-dir",
@@ -662,7 +758,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     report = build_report(args.date)
     json_path, md_path = write_outputs(report, Path(args.output_dir))
-    print(f"[SCALP_SIM_EV_MIDCHECK] json={json_path} md={md_path} judgement={report['judgement']}")
+    print(
+        f"[SCALP_SIM_EV_MIDCHECK] json={json_path} md={md_path} judgement={report['judgement']}"
+    )
     return 0
 
 

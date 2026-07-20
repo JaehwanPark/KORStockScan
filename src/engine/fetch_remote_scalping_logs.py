@@ -8,7 +8,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-
 DEFAULT_HOST = "songstockscan.ddns.net"
 DEFAULT_USER = "windy80xyt"
 DEFAULT_REMOTE_ROOT = "/home/windy80xyt/KORStockScan"
@@ -175,7 +174,9 @@ def fetch_remote_scalping_logs(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Fetch remote scalping logs via SSH.")
-    parser.add_argument("--date", required=True, help="Target date in YYYY-MM-DD format.")
+    parser.add_argument(
+        "--date", required=True, help="Target date in YYYY-MM-DD format."
+    )
     parser.add_argument("--host", default=DEFAULT_HOST)
     parser.add_argument("--user", default=DEFAULT_USER)
     parser.add_argument("--remote-root", default=DEFAULT_REMOTE_ROOT)

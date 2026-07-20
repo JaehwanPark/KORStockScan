@@ -30,7 +30,9 @@ def normalize_position_tag(strategy, position_tag) -> str:
 
 
 def is_default_position_tag(strategy, position_tag) -> bool:
-    return normalize_position_tag(strategy, position_tag) == default_position_tag_for_strategy(strategy)
+    return normalize_position_tag(
+        strategy, position_tag
+    ) == default_position_tag_for_strategy(strategy)
 
 
 def target_identity(code, strategy) -> tuple[str, str]:

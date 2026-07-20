@@ -10,7 +10,6 @@ from typing import Any
 
 from src.utils.constants import DATA_DIR, TRADING_RULES
 
-
 MATRIX_DIR = DATA_DIR / "report" / "lifecycle_decision_matrix"
 MATRIX_FILE_RE = re.compile(r"lifecycle_decision_matrix_(\d{4}-\d{2}-\d{2})\.json$")
 PANIC_SELL_DEFENSE_DIR = DATA_DIR / "report" / "panic_sell_defense"
@@ -55,7 +54,9 @@ def _session_cutoff_source_date(now: datetime) -> date:
 
 
 def _latest_matrix_path_on_or_before(target_date: date) -> Path | None:
-    explicit = str(getattr(TRADING_RULES, "LIFECYCLE_DECISION_MATRIX_POLICY_FILE", "") or "").strip()
+    explicit = str(
+        getattr(TRADING_RULES, "LIFECYCLE_DECISION_MATRIX_POLICY_FILE", "") or ""
+    ).strip()
     if explicit:
         path = Path(explicit)
         if path.exists():
@@ -119,7 +120,9 @@ def _payload_target_date(payload: dict[str, Any]) -> date | None:
     return generated_at.date() if generated_at else None
 
 
-def _freshness_status(payload: dict[str, Any], *, target_date: date, now: datetime, max_age_sec: int) -> tuple[bool, str]:
+def _freshness_status(
+    payload: dict[str, Any], *, target_date: date, now: datetime, max_age_sec: int
+) -> tuple[bool, str]:
     payload_date = _payload_target_date(payload)
     if payload_date != target_date:
         return False, "wrong_target_date"
@@ -147,10 +150,15 @@ def _panic_buying_report_path(target_date: date) -> Path:
 
 
 def _breadth_report_path(target_date: date) -> Path:
-    return MARKET_PANIC_BREADTH_DIR / f"market_panic_breadth_{target_date.isoformat()}.json"
+    return (
+        MARKET_PANIC_BREADTH_DIR
+        / f"market_panic_breadth_{target_date.isoformat()}.json"
+    )
 
 
-def _panic_epoch_id(target_date: date, panic_state: str, regime: str, level: int, generated_at: Any) -> str:
+def _panic_epoch_id(
+    target_date: date, panic_state: str, regime: str, level: int, generated_at: Any
+) -> str:
     generated = _parse_datetime(generated_at)
     if generated is None:
         bucket = "unknown"
@@ -160,7 +168,9 @@ def _panic_epoch_id(target_date: date, panic_state: str, regime: str, level: int
     return f"{target_date.isoformat()}|{panic_state or 'UNKNOWN'}|{regime or 'UNKNOWN'}|L{level}|{bucket}"
 
 
-def _euphoria_epoch_id(target_date: date, panic_buy_state: str, regime: str, level: int, generated_at: Any) -> str:
+def _euphoria_epoch_id(
+    target_date: date, panic_buy_state: str, regime: str, level: int, generated_at: Any
+) -> str:
     generated = _parse_datetime(generated_at)
     if generated is None:
         bucket = "unknown"
@@ -170,7 +180,9 @@ def _euphoria_epoch_id(target_date: date, panic_buy_state: str, regime: str, lev
     return f"{target_date.isoformat()}|{panic_buy_state or 'UNKNOWN'}|{regime or 'UNKNOWN'}|E{level}|{bucket}"
 
 
-def _resolve_panic_level(panic_payload: dict[str, Any], breadth_payload: dict[str, Any]) -> tuple[int, str]:
+def _resolve_panic_level(
+    panic_payload: dict[str, Any], breadth_payload: dict[str, Any]
+) -> tuple[int, str]:
     micro = panic_payload.get("microstructure_market_context")
     if not isinstance(micro, dict):
         micro = {}
@@ -183,7 +195,9 @@ def _resolve_panic_level(panic_payload: dict[str, Any], breadth_payload: dict[st
     panic_state = str(panic_payload.get("panic_state") or "").upper()
     regime = str(panic_payload.get("panic_regime_mode") or "").upper()
     market_state = str(micro.get("market_risk_state") or "").upper()
-    liquidity_state = str(micro.get("liquidity_state") or panic_payload.get("liquidity_state") or "").upper()
+    liquidity_state = str(
+        micro.get("liquidity_state") or panic_payload.get("liquidity_state") or ""
+    ).upper()
     breadth_risk_off = bool(
         micro.get("market_panic_breadth_risk_off_advisory")
         or breadth_payload.get("risk_off_advisory")
@@ -196,7 +210,9 @@ def _resolve_panic_level(panic_payload: dict[str, Any], breadth_payload: dict[st
     micro_risk_off_count = _safe_int(micro.get("risk_off_advisory_count"), 0)
     detector_risk_off_count = _safe_int(detector.get("risk_off_advisory_count"), 0)
     detector_panic_signal_count = _safe_int(detector.get("panic_signal_count"), 0)
-    current_stop_loss_count = _safe_int(panic_metrics.get("current_30m_stop_loss_exit_count"), 0)
+    current_stop_loss_count = _safe_int(
+        panic_metrics.get("current_30m_stop_loss_exit_count"), 0
+    )
     strict_micro_confirmed = (
         confirmed_micro
         or micro_risk_off_count > 0
@@ -208,9 +224,16 @@ def _resolve_panic_level(panic_payload: dict[str, Any], breadth_payload: dict[st
         return 3, "liquidity_broken"
     if panic_state == "PANIC_SELL" and (strict_micro_confirmed or hard_stop_cluster):
         return 2, "confirmed_panic_sell"
-    if strict_micro_confirmed and (breadth_risk_off or single_market_risk_off or market_state == "RISK_OFF"):
+    if strict_micro_confirmed and (
+        breadth_risk_off or single_market_risk_off or market_state == "RISK_OFF"
+    ):
         return 2, "confirmed_risk_off"
-    if breadth_risk_off or single_market_risk_off or market_state == "RISK_OFF" or regime == "STABILIZING":
+    if (
+        breadth_risk_off
+        or single_market_risk_off
+        or market_state == "RISK_OFF"
+        or regime == "STABILIZING"
+    ):
         return 1, "breadth_risk_off_watch"
     if panic_state == "PANIC_SELL":
         return 1, "panic_sell_unconfirmed_watch"
@@ -244,7 +267,11 @@ def resolve_panic_risk_regime_context(
     status = "OK"
     warnings: list[str] = []
     if not panic_path.exists() or not breadth_path.exists():
-        status = "MISSING" if not panic_path.exists() and not breadth_path.exists() else "PARTIAL"
+        status = (
+            "MISSING"
+            if not panic_path.exists() and not breadth_path.exists()
+            else "PARTIAL"
+        )
         warnings.append("missing_source_file")
     panic_payload = _read_payload(panic_path)
     breadth_payload = _read_payload(breadth_path)
@@ -256,8 +283,16 @@ def resolve_panic_risk_regime_context(
             status = "PARSE_ERROR" if status == "OK" else status
             warnings.append("market_panic_breadth_parse_error")
     if status == "OK":
-        for label, payload in (("panic_sell_defense", panic_payload), ("market_panic_breadth", breadth_payload)):
-            fresh, reason = _freshness_status(payload, target_date=resolved_date, now=current_dt, max_age_sec=age_limit)
+        for label, payload in (
+            ("panic_sell_defense", panic_payload),
+            ("market_panic_breadth", breadth_payload),
+        ):
+            fresh, reason = _freshness_status(
+                payload,
+                target_date=resolved_date,
+                now=current_dt,
+                max_age_sec=age_limit,
+            )
             if not fresh:
                 status = "STALE"
                 warnings.append(f"{label}:{reason}")
@@ -267,7 +302,9 @@ def resolve_panic_risk_regime_context(
             "panic_context_status": status,
             "panic_level": 0,
             "panic_level_reason": "context_not_ok",
-            "panic_epoch_id": _panic_epoch_id(resolved_date, "NORMAL", "NORMAL", 0, None),
+            "panic_epoch_id": _panic_epoch_id(
+                resolved_date, "NORMAL", "NORMAL", 0, None
+            ),
             "market_risk_state": "UNKNOWN",
             "breadth_risk_off": False,
             "single_market_risk_off": False,
@@ -290,7 +327,9 @@ def resolve_panic_risk_regime_context(
     level, reason = _resolve_panic_level(panic_payload, breadth_payload)
     panic_state = str(panic_payload.get("panic_state") or "NORMAL")
     regime = str(panic_payload.get("panic_regime_mode") or "NORMAL")
-    liquidity_state = str(micro.get("liquidity_state") or panic_payload.get("liquidity_state") or "NORMAL")
+    liquidity_state = str(
+        micro.get("liquidity_state") or panic_payload.get("liquidity_state") or "NORMAL"
+    )
     breadth_risk_off = bool(
         micro.get("market_panic_breadth_risk_off_advisory")
         or breadth_payload.get("risk_off_advisory")
@@ -304,11 +343,15 @@ def resolve_panic_risk_regime_context(
         "breadth_risk_off": breadth_risk_off,
         "single_market_risk_off": single_market_risk_off,
         "confirmed_risk_off": confirmed,
-        "confirmed_micro_risk_off": bool(micro.get("confirmed_micro_risk_off_advisory")),
+        "confirmed_micro_risk_off": bool(
+            micro.get("confirmed_micro_risk_off_advisory")
+        ),
         "market_confirms_risk_off": bool(micro.get("market_confirms_risk_off")),
         "breadth_confirms_risk_off": bool(micro.get("breadth_confirms_risk_off")),
         "micro_risk_off_count": _safe_int(micro.get("risk_off_advisory_count"), 0),
-        "detector_risk_off_count": _safe_int(detector.get("risk_off_advisory_count"), 0),
+        "detector_risk_off_count": _safe_int(
+            detector.get("risk_off_advisory_count"), 0
+        ),
         "detector_panic_signal_count": _safe_int(detector.get("panic_signal_count"), 0),
         "current_30m_stop_loss_exit_count": _safe_int(
             panic_metrics.get("current_30m_stop_loss_exit_count"), 0
@@ -344,7 +387,10 @@ def resolve_panic_risk_regime_context(
 def _resolve_euphoria_level(panic_buy_payload: dict[str, Any]) -> tuple[int, str, str]:
     mode = str(panic_buy_payload.get("panic_buy_regime_mode") or "NORMAL").upper()
     state = str(panic_buy_payload.get("panic_buy_state") or "NORMAL").upper()
-    if mode in {"PANIC_BUY_EXHAUSTION", "COOLDOWN"} or state in {"BUYING_EXHAUSTED", "EXHAUSTION_WATCH"}:
+    if mode in {"PANIC_BUY_EXHAUSTION", "COOLDOWN"} or state in {
+        "BUYING_EXHAUSTED",
+        "EXHAUSTION_WATCH",
+    }:
         return 3, mode.lower(), "exhaustion_reversal"
     if mode == "PANIC_BUY_CONTINUATION" or state == "PANIC_BUY":
         return 2, "confirmed_panic_buying", "risk_on_euphoria"
@@ -383,7 +429,8 @@ def resolve_euphoria_risk_context(
     age_limit = int(
         max_age_sec
         if max_age_sec is not None
-        else getattr(TRADING_RULES, "SCALP_SIM_EUPHORIA_CONTEXT_MAX_AGE_SEC", 180) or 180
+        else getattr(TRADING_RULES, "SCALP_SIM_EUPHORIA_CONTEXT_MAX_AGE_SEC", 180)
+        or 180
     )
     report_path = _panic_buying_report_path(resolved_date)
     source_files = {"panic_buying": str(report_path)}
@@ -397,18 +444,26 @@ def resolve_euphoria_risk_context(
         status = "PARSE_ERROR"
         warnings.append("panic_buying_parse_error")
     if status == "OK":
-        fresh, reason = _freshness_status(payload, target_date=resolved_date, now=current_dt, max_age_sec=age_limit)
+        fresh, reason = _freshness_status(
+            payload, target_date=resolved_date, now=current_dt, max_age_sec=age_limit
+        )
         if not fresh:
             status = "STALE"
             warnings.append(f"panic_buying:{reason}")
-    level, reason, direction = _resolve_euphoria_level(payload) if payload else (0, "context_not_ok", "risk_on_euphoria")
+    level, reason, direction = (
+        _resolve_euphoria_level(payload)
+        if payload
+        else (0, "context_not_ok", "risk_on_euphoria")
+    )
     blockers = _euphoria_source_quality_blockers(payload) if status == "OK" else []
     source_quality_status = "OK" if not blockers else "BLOCKED"
     if status == "OK" and blockers:
         status = "SOURCE_QUALITY_BLOCKED"
         warnings.extend(blockers)
     state = str(payload.get("panic_buy_state") or "NORMAL") if payload else "NORMAL"
-    mode = str(payload.get("panic_buy_regime_mode") or "NORMAL") if payload else "NORMAL"
+    mode = (
+        str(payload.get("panic_buy_regime_mode") or "NORMAL") if payload else "NORMAL"
+    )
     epoch_id = _euphoria_epoch_id(
         resolved_date,
         state,
@@ -416,8 +471,16 @@ def resolve_euphoria_risk_context(
         level,
         payload.get("generated_at") or payload.get("as_of") if payload else None,
     )
-    market = payload.get("market_breadth_context") if isinstance(payload.get("market_breadth_context"), dict) else {}
-    micro = payload.get("microstructure_detector") if isinstance(payload.get("microstructure_detector"), dict) else {}
+    market = (
+        payload.get("market_breadth_context")
+        if isinstance(payload.get("market_breadth_context"), dict)
+        else {}
+    )
+    micro = (
+        payload.get("microstructure_detector")
+        if isinstance(payload.get("microstructure_detector"), dict)
+        else {}
+    )
     return {
         "euphoria_context_status": status,
         "euphoria_risk_level": level,
@@ -431,13 +494,23 @@ def resolve_euphoria_risk_context(
         "action_namespace": "euphoria_lifecycle",
         "panic_buy_state": state,
         "panic_buy_regime_mode": mode,
-        "market_wide_panic_buy_confirmed": bool(market.get("market_wide_panic_buy_confirmed")),
-        "market_breadth_risk_on_advisory": bool(market.get("market_panic_breadth_risk_on_advisory")),
+        "market_wide_panic_buy_confirmed": bool(
+            market.get("market_wide_panic_buy_confirmed")
+        ),
+        "market_breadth_risk_on_advisory": bool(
+            market.get("market_panic_breadth_risk_on_advisory")
+        ),
         "panic_buy_signal_count": _safe_int(micro.get("panic_buy_signal_count"), 0),
         "missing_orderbook_count": _safe_int(micro.get("missing_orderbook_count"), 0),
-        "missing_trade_aggressor_count": _safe_int(micro.get("missing_trade_aggressor_count"), 0),
+        "missing_trade_aggressor_count": _safe_int(
+            micro.get("missing_trade_aggressor_count"), 0
+        ),
         "euphoria_source_files": source_files,
-        "decision_confidence": 1.0 if status == "OK" and level >= 2 else 0.7 if status == "OK" and level == 1 else 0.0,
+        "decision_confidence": (
+            1.0
+            if status == "OK" and level >= 2
+            else 0.7 if status == "OK" and level == 1 else 0.0
+        ),
         "generated_at": payload.get("generated_at") if payload else None,
         "as_of": payload.get("as_of") if payload else None,
         "warnings": warnings,
@@ -445,7 +518,11 @@ def resolve_euphoria_risk_context(
 
 
 def _policy_for_stage(payload: dict[str, Any], stage: str) -> dict[str, Any]:
-    entries = payload.get("policy_entries") if isinstance(payload.get("policy_entries"), list) else []
+    entries = (
+        payload.get("policy_entries")
+        if isinstance(payload.get("policy_entries"), list)
+        else []
+    )
     for entry in entries:
         if isinstance(entry, dict) and str(entry.get("stage") or "") == stage:
             return entry
@@ -470,12 +547,21 @@ def _has_hard_safety_veto(context: dict[str, Any]) -> bool:
     ):
         if bool(context.get(key)):
             return True
-    reason = str(context.get("blocked_reason") or context.get("source_quality_block_reason") or "").lower()
-    return any(token in reason for token in ("hard_stop", "emergency", "broker", "receipt_missing"))
+    reason = str(
+        context.get("blocked_reason")
+        or context.get("source_quality_block_reason")
+        or ""
+    ).lower()
+    return any(
+        token in reason
+        for token in ("hard_stop", "emergency", "broker", "receipt_missing")
+    )
 
 
 def _counter_key(now: datetime) -> str:
-    version = str(getattr(TRADING_RULES, "LIFECYCLE_DECISION_MATRIX_POLICY_VERSION", "") or "-")
+    version = str(
+        getattr(TRADING_RULES, "LIFECYCLE_DECISION_MATRIX_POLICY_VERSION", "") or "-"
+    )
     return f"{now.date().isoformat()}|{version}"
 
 
@@ -498,7 +584,10 @@ def resolve_lifecycle_decision(
     runtime_effect_enabled = bool(
         getattr(TRADING_RULES, "LIFECYCLE_DECISION_MATRIX_RUNTIME_EFFECT_ENABLED", True)
     )
-    min_confidence = float(getattr(TRADING_RULES, "LIFECYCLE_DECISION_MATRIX_MIN_STAGE_CONFIDENCE", 0.0) or 0.0)
+    min_confidence = float(
+        getattr(TRADING_RULES, "LIFECYCLE_DECISION_MATRIX_MIN_STAGE_CONFIDENCE", 0.0)
+        or 0.0
+    )
     result = {
         "lifecycle_matrix_enabled": enabled,
         "lifecycle_matrix_runtime_effect_enabled": runtime_effect_enabled,
@@ -514,20 +603,34 @@ def resolve_lifecycle_decision(
         "lifecycle_matrix_fixed_threshold_role": "baseline_prior",
         "lifecycle_matrix_safety_passthrough": False,
         "lifecycle_matrix_promote_counter": 0,
-        "risk_regime_context": ctx.get("risk_regime_context") if isinstance(ctx.get("risk_regime_context"), dict) else {},
+        "risk_regime_context": (
+            ctx.get("risk_regime_context")
+            if isinstance(ctx.get("risk_regime_context"), dict)
+            else {}
+        ),
     }
     if not result["risk_regime_context"]:
-        result["risk_regime_context"] = resolve_panic_risk_regime_context(now=current_dt)
+        result["risk_regime_context"] = resolve_panic_risk_regime_context(
+            now=current_dt
+        )
     if not enabled:
-        result["lifecycle_matrix_policy_key_gap_classification"] = "policy_key_not_applicable_matrix_disabled"
+        result["lifecycle_matrix_policy_key_gap_classification"] = (
+            "policy_key_not_applicable_matrix_disabled"
+        )
         return result
-    matrix_path = _latest_matrix_path_on_or_before(_session_cutoff_source_date(current_dt))
+    matrix_path = _latest_matrix_path_on_or_before(
+        _session_cutoff_source_date(current_dt)
+    )
     payload = _read_payload(matrix_path)
     if not payload:
         result["lifecycle_matrix_runtime_reason"] = "policy_missing"
-        result["lifecycle_matrix_policy_key_gap_classification"] = "policy_key_not_applicable_matrix_missing"
+        result["lifecycle_matrix_policy_key_gap_classification"] = (
+            "policy_key_not_applicable_matrix_missing"
+        )
         return result
-    result["lifecycle_matrix_policy_version"] = str(payload.get("matrix_version") or "-")
+    result["lifecycle_matrix_policy_version"] = str(
+        payload.get("matrix_version") or "-"
+    )
     result["lifecycle_matrix_policy_file"] = str(matrix_path or "-")
     if _has_hard_safety_veto(ctx):
         result.update(
@@ -537,12 +640,16 @@ def resolve_lifecycle_decision(
                 "lifecycle_matrix_safety_passthrough": True,
             }
         )
-        result["lifecycle_matrix_policy_key_gap_classification"] = "policy_key_not_applicable_hard_safety_passthrough"
+        result["lifecycle_matrix_policy_key_gap_classification"] = (
+            "policy_key_not_applicable_hard_safety_passthrough"
+        )
         return result
     policy = _policy_for_stage(payload, stage_name)
     if not policy:
         result["lifecycle_matrix_runtime_reason"] = "stage_policy_missing"
-        result["lifecycle_matrix_policy_key_gap_classification"] = "policy_key_not_applicable_matrix_missing"
+        result["lifecycle_matrix_policy_key_gap_classification"] = (
+            "policy_key_not_applicable_matrix_missing"
+        )
         return result
     confidence = _safe_float(policy.get("confidence"), 0.0)
     selected_action = str(policy.get("selected_action") or "NO_CHANGE").upper()
@@ -551,13 +658,17 @@ def resolve_lifecycle_decision(
             "lifecycle_matrix_policy_key": str(policy.get("policy_key") or "-"),
             "lifecycle_matrix_confidence": confidence,
             "lifecycle_matrix_selected_action": selected_action,
-            "lifecycle_matrix_fixed_threshold_role": "bounded_tunable"
-            if str(policy.get("source_quality_gate") or "") == "pass"
-            else "baseline_prior",
+            "lifecycle_matrix_fixed_threshold_role": (
+                "bounded_tunable"
+                if str(policy.get("source_quality_gate") or "") == "pass"
+                else "baseline_prior"
+            ),
         }
     )
     if confidence < min_confidence:
-        result["lifecycle_matrix_runtime_reason"] = "confidence_below_min_stage_confidence"
+        result["lifecycle_matrix_runtime_reason"] = (
+            "confidence_below_min_stage_confidence"
+        )
         result["lifecycle_matrix_policy_key_gap_classification"] = "policy_key_provided"
         return result
     if selected_action == "NO_CHANGE":
@@ -565,26 +676,47 @@ def resolve_lifecycle_decision(
         result["lifecycle_matrix_policy_key_gap_classification"] = "policy_key_provided"
         return result
     if not runtime_effect_enabled:
-        result["lifecycle_matrix_runtime_reason"] = "runtime_effect_disabled_context_only"
+        result["lifecycle_matrix_runtime_reason"] = (
+            "runtime_effect_disabled_context_only"
+        )
         result["lifecycle_matrix_policy_key_gap_classification"] = "policy_key_provided"
         return result
     if stage_name == "entry":
-        if selected_action == "BUY_DEFENSIVE" and original not in {"BUY", "BUY_NOW", "BUY_DEFENSIVE"}:
-            if not bool(getattr(TRADING_RULES, "LIFECYCLE_DECISION_MATRIX_PROMOTE_ENABLED", False)):
+        if selected_action == "BUY_DEFENSIVE" and original not in {
+            "BUY",
+            "BUY_NOW",
+            "BUY_DEFENSIVE",
+        }:
+            if not bool(
+                getattr(
+                    TRADING_RULES, "LIFECYCLE_DECISION_MATRIX_PROMOTE_ENABLED", False
+                )
+            ):
                 result["lifecycle_matrix_runtime_reason"] = "promote_disabled"
-                result["lifecycle_matrix_policy_key_gap_classification"] = "policy_key_provided"
+                result["lifecycle_matrix_policy_key_gap_classification"] = (
+                    "policy_key_provided"
+                )
                 return result
             if not bool(policy.get("promote_ready")):
                 result["lifecycle_matrix_runtime_reason"] = "promote_not_ready"
-                result["lifecycle_matrix_policy_key_gap_classification"] = "policy_key_provided"
+                result["lifecycle_matrix_policy_key_gap_classification"] = (
+                    "policy_key_provided"
+                )
                 return result
             key = _counter_key(current_dt)
             current_count = int(_PROMOTE_COUNTER.get(key, 0))
-            cap = int(getattr(TRADING_RULES, "LIFECYCLE_DECISION_MATRIX_MAX_PROMOTES_PER_DAY", 3) or 3)
+            cap = int(
+                getattr(
+                    TRADING_RULES, "LIFECYCLE_DECISION_MATRIX_MAX_PROMOTES_PER_DAY", 3
+                )
+                or 3
+            )
             if current_count >= cap:
                 result["lifecycle_matrix_runtime_reason"] = "promote_cap_exhausted"
                 result["lifecycle_matrix_promote_counter"] = current_count
-                result["lifecycle_matrix_policy_key_gap_classification"] = "policy_key_provided"
+                result["lifecycle_matrix_policy_key_gap_classification"] = (
+                    "policy_key_provided"
+                )
                 return result
             _PROMOTE_COUNTER[key] = current_count + 1
             result.update(
@@ -594,30 +726,41 @@ def resolve_lifecycle_decision(
                     "lifecycle_matrix_promote_counter": _PROMOTE_COUNTER[key],
                 }
             )
-            result["lifecycle_matrix_policy_key_gap_classification"] = "policy_key_provided"
+            result["lifecycle_matrix_policy_key_gap_classification"] = (
+                "policy_key_provided"
+            )
             return result
-        if original in {"BUY", "BUY_NOW", "BUY_DEFENSIVE"} and selected_action in {"WAIT_REQUOTE", "DROP"}:
+        if original in {"BUY", "BUY_NOW", "BUY_DEFENSIVE"} and selected_action in {
+            "WAIT_REQUOTE",
+            "DROP",
+        }:
             result.update(
                 {
-                    "lifecycle_matrix_runtime_effect": "demote_wait"
-                    if selected_action == "WAIT_REQUOTE"
-                    else "demote_drop",
+                    "lifecycle_matrix_runtime_effect": (
+                        "demote_wait"
+                        if selected_action == "WAIT_REQUOTE"
+                        else "demote_drop"
+                    ),
                     "lifecycle_matrix_runtime_reason": "bounded_entry_demote",
                 }
             )
-            result["lifecycle_matrix_policy_key_gap_classification"] = "policy_key_provided"
+            result["lifecycle_matrix_policy_key_gap_classification"] = (
+                "policy_key_provided"
+            )
             return result
     if stage_name in {"holding", "exit"} and selected_action in {"HOLD", "EXIT"}:
         if selected_action != original:
             result.update(
                 {
-                    "lifecycle_matrix_runtime_effect": "force_hold"
-                    if selected_action == "HOLD"
-                    else "force_exit",
+                    "lifecycle_matrix_runtime_effect": (
+                        "force_hold" if selected_action == "HOLD" else "force_exit"
+                    ),
                     "lifecycle_matrix_runtime_reason": "bounded_holding_exit_bias",
                 }
             )
-            result["lifecycle_matrix_policy_key_gap_classification"] = "policy_key_provided"
+            result["lifecycle_matrix_policy_key_gap_classification"] = (
+                "policy_key_provided"
+            )
             return result
     if stage_name == "submit" and selected_action == "ALLOW_SUBMIT":
         result.update(
@@ -628,7 +771,10 @@ def resolve_lifecycle_decision(
         )
         result["lifecycle_matrix_policy_key_gap_classification"] = "policy_key_provided"
         return result
-    if stage_name == "scale_in" and selected_action in {"AVG_DOWN_BIAS", "PYRAMID_BIAS"}:
+    if stage_name == "scale_in" and selected_action in {
+        "AVG_DOWN_BIAS",
+        "PYRAMID_BIAS",
+    }:
         result.update(
             {
                 "lifecycle_matrix_runtime_effect": selected_action.lower(),
@@ -638,7 +784,9 @@ def resolve_lifecycle_decision(
         result["lifecycle_matrix_policy_key_gap_classification"] = "policy_key_provided"
         return result
     result["lifecycle_matrix_runtime_reason"] = "policy_action_not_applicable"
-    result["lifecycle_matrix_policy_key_gap_classification"] = _classify_policy_key_gap(result, ctx)
+    result["lifecycle_matrix_policy_key_gap_classification"] = _classify_policy_key_gap(
+        result, ctx
+    )
     return result
 
 
@@ -657,7 +805,9 @@ def _classify_policy_key_gap(result: dict[str, Any], ctx: dict[str, Any]) -> str
     ctx_broker_forbidden = _truthy(ctx.get("broker_order_forbidden"))
     ctx_sim = ctx.get("simulation_book") or ctx.get("simulation_owner") or False
     ctx_probe = ctx.get("probe_id") or ctx.get("probe_origin_stage") or False
-    ctx_virtual = _truthy(ctx.get("simulated_order")) or _truthy(ctx.get("virtual_pending"))
+    ctx_virtual = _truthy(ctx.get("simulated_order")) or _truthy(
+        ctx.get("virtual_pending")
+    )
     if (
         ctx_sim
         or ctx_probe
@@ -673,7 +823,9 @@ def _classify_policy_key_gap(result: dict[str, Any], ctx: dict[str, Any]) -> str
     return "policy_key_required_missing"
 
 
-def apply_lifecycle_decision_to_payload(payload: dict[str, Any], decision: dict[str, Any]) -> dict[str, Any]:
+def apply_lifecycle_decision_to_payload(
+    payload: dict[str, Any], decision: dict[str, Any]
+) -> dict[str, Any]:
     result = dict(payload or {})
     selected = str(decision.get("lifecycle_matrix_selected_action") or "").upper()
     effect = str(decision.get("lifecycle_matrix_runtime_effect") or "")

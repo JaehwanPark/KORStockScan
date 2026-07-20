@@ -27,9 +27,13 @@ from src.model.swing_bull_period_ai_review import write_review
 from src.model.swing_model_auto_remediation import write_remediation_report
 from src.model.swing_model_tier2_review import write_tier2_review_report
 from src.model.swing_model_tracking import log_model_run
-from src.model.swing_model_upgrade import CANDIDATE_FAMILIES, FEATURE_SET_VERSION, LABEL_POLICY, METRIC_CONTRACT
+from src.model.swing_model_upgrade import (
+    CANDIDATE_FAMILIES,
+    FEATURE_SET_VERSION,
+    LABEL_POLICY,
+    METRIC_CONTRACT,
+)
 from src.model.swing_retrain_diagnosis import write_diagnosis
-
 
 ACTIVE_MODEL_FILES = [
     "hybrid_xgb_v2.pkl",
@@ -38,7 +42,11 @@ ACTIVE_MODEL_FILES = [
     "bull_lgbm_v2.pkl",
     "stacking_meta_v2.pkl",
 ]
-REQUIRED_NON_BULL_FILES = ["hybrid_xgb_v2.pkl", "hybrid_lgbm_v2.pkl", "stacking_meta_v2.pkl"]
+REQUIRED_NON_BULL_FILES = [
+    "hybrid_xgb_v2.pkl",
+    "hybrid_lgbm_v2.pkl",
+    "stacking_meta_v2.pkl",
+]
 REPORT_DIR = Path(DATA_DIR) / "report" / "swing_model_retrain"
 REGISTRY_DIR = Path(MODEL_REGISTRY_DIR)
 RUNS_DIR = REGISTRY_DIR / "runs"
@@ -117,18 +125,24 @@ def _parse_iso_date(value: Any) -> date | None:
 def _latest_quote_date() -> date | None:
     try:
         with engine.connect() as conn:
-            value = conn.execute(text("SELECT MAX(quote_date) FROM daily_stock_quotes")).scalar()
+            value = conn.execute(
+                text("SELECT MAX(quote_date) FROM daily_stock_quotes")
+            ).scalar()
     except Exception:
         return None
     return _parse_iso_date(value)
 
 
-def resolve_meta_period(target_date: str, *, label_safety_days: int = 5) -> dict[str, Any]:
+def resolve_meta_period(
+    target_date: str, *, label_safety_days: int = 5
+) -> dict[str, Any]:
     target = _parse_iso_date(target_date) or date.today()
     latest_quote = _latest_quote_date()
     target_safe_end = target - timedelta(days=label_safety_days)
     end = min(latest_quote, target_safe_end) if latest_quote else target_safe_end
-    start = _parse_iso_date(os.getenv("KORSTOCKSCAN_SWING_META_START")) or _parse_iso_date(META_START)
+    start = _parse_iso_date(
+        os.getenv("KORSTOCKSCAN_SWING_META_START")
+    ) or _parse_iso_date(META_START)
     return {
         "meta_start": (start or date(2026, 1, 1)).isoformat(),
         "meta_end": end.isoformat(),
@@ -228,10 +242,14 @@ def _summarize_backtest(path: Path) -> dict[str, Any]:
 
 def candidate_tradeoff_score(metrics: dict[str, Any]) -> float:
     avg = max(-1.0, min(1.0, _safe_float(metrics.get("avg_net_pct"), 0.0) / 2.0))
-    downside = max(0.0, min(1.0, (_safe_float(metrics.get("downside_p10_pct"), -4.0) + 4.0) / 4.0))
+    downside = max(
+        0.0, min(1.0, (_safe_float(metrics.get("downside_p10_pct"), -4.0) + 4.0) / 4.0)
+    )
     win = max(0.0, min(1.0, _safe_float(metrics.get("win_rate"), 0.0)))
     participation = max(0.0, min(1.0, _safe_int(metrics.get("sample_count"), 0) / 40.0))
-    return round(avg * 0.40 + downside * 0.20 + win * 0.15 + participation * 0.15 + 0.10, 4)
+    return round(
+        avg * 0.40 + downside * 0.20 + win * 0.15 + participation * 0.15 + 0.10, 4
+    )
 
 
 def _copy_if_exists(src: Path, dst: Path) -> None:
@@ -245,12 +263,18 @@ def _prepare_hold_current_bull_artifacts(run_dir: Path) -> None:
         _copy_if_exists(Path(DATA_DIR) / name, run_dir / name)
 
 
-def _staging_env(run_dir: Path, bull_mode: str, bull_review: dict[str, Any]) -> dict[str, str]:
+def _staging_env(
+    run_dir: Path, bull_mode: str, bull_review: dict[str, Any]
+) -> dict[str, str]:
     env = os.environ.copy()
     env["PYTHONPATH"] = "."
     env["KORSTOCKSCAN_SWING_MODEL_OUTPUT_DIR"] = str(run_dir)
     env["KORSTOCKSCAN_SWING_BULL_SPECIALIST_MODE"] = bull_mode
-    decision = bull_review.get("decision") if isinstance(bull_review.get("decision"), dict) else {}
+    decision = (
+        bull_review.get("decision")
+        if isinstance(bull_review.get("decision"), dict)
+        else {}
+    )
     if decision.get("bull_base_start"):
         env["KORSTOCKSCAN_SWING_BULL_BASE_START"] = str(decision["bull_base_start"])
     if decision.get("bull_base_end"):
@@ -324,19 +348,31 @@ def _validate_candidate_files(run_dir: Path, mode: str) -> list[str]:
     return missing
 
 
-def _validate_csv_schema(path: Path, required_columns: set[str], *, missing_reason: str) -> dict[str, Any]:
+def _validate_csv_schema(
+    path: Path, required_columns: set[str], *, missing_reason: str
+) -> dict[str, Any]:
     if not path.exists():
-        return {"passed": False, "missing_columns": sorted(required_columns), "reason": missing_reason}
+        return {
+            "passed": False,
+            "missing_columns": sorted(required_columns),
+            "reason": missing_reason,
+        }
     try:
         df = pd.read_csv(path, nrows=5)
     except Exception as exc:
-        return {"passed": False, "missing_columns": sorted(required_columns), "reason": str(exc)}
+        return {
+            "passed": False,
+            "missing_columns": sorted(required_columns),
+            "reason": str(exc),
+        }
     missing = sorted(required_columns - set(df.columns))
     return {"passed": not missing, "missing_columns": missing}
 
 
 def _validate_recommendation_schema(path: Path) -> dict[str, Any]:
-    return _validate_csv_schema(path, REQUIRED_RECOMMENDATION_COLUMNS, missing_reason="missing_ai_predictions")
+    return _validate_csv_schema(
+        path, REQUIRED_RECOMMENDATION_COLUMNS, missing_reason="missing_ai_predictions"
+    )
 
 
 def _validate_diagnostic_json_schema(path: Path) -> dict[str, Any]:
@@ -349,7 +385,11 @@ def _validate_diagnostic_json_schema(path: Path) -> dict[str, Any]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except Exception as exc:
-        return {"passed": False, "missing_keys": sorted(REQUIRED_RECOMMENDATION_DIAGNOSTIC_KEYS), "reason": str(exc)}
+        return {
+            "passed": False,
+            "missing_keys": sorted(REQUIRED_RECOMMENDATION_DIAGNOSTIC_KEYS),
+            "reason": str(exc),
+        }
     missing = sorted(REQUIRED_RECOMMENDATION_DIAGNOSTIC_KEYS - set(payload))
     return {"passed": not missing, "missing_keys": missing}
 
@@ -362,7 +402,8 @@ def _validate_live_recommendation_schema() -> dict[str, Any]:
     )
     diagnostic_check = _validate_diagnostic_json_schema(Path(RECO_DIAGNOSTIC_JSON_PATH))
     return {
-        "passed": bool(csv_check.get("passed")) and bool(diagnostic_check.get("passed")),
+        "passed": bool(csv_check.get("passed"))
+        and bool(diagnostic_check.get("passed")),
         "recommendation_csv": csv_check,
         "diagnostic_json": diagnostic_check,
     }
@@ -378,8 +419,14 @@ def evaluate_model_upgrade_promotion(
     max_selected_drop: float = 0.30,
     sample_floor: int = 40,
 ) -> dict[str, Any]:
-    candidate_ev = _safe_float(candidate_metrics.get("equal_weight_avg_profit_pct"), _safe_float(candidate_metrics.get("avg_net_pct"), 0.0))
-    incumbent_ev = _safe_float(incumbent_metrics.get("equal_weight_avg_profit_pct"), _safe_float(incumbent_metrics.get("avg_net_pct"), 0.0))
+    candidate_ev = _safe_float(
+        candidate_metrics.get("equal_weight_avg_profit_pct"),
+        _safe_float(candidate_metrics.get("avg_net_pct"), 0.0),
+    )
+    incumbent_ev = _safe_float(
+        incumbent_metrics.get("equal_weight_avg_profit_pct"),
+        _safe_float(incumbent_metrics.get("avg_net_pct"), 0.0),
+    )
     candidate_downside = _safe_float(candidate_metrics.get("downside_p10_pct"), 0.0)
     incumbent_downside = _safe_float(incumbent_metrics.get("downside_p10_pct"), 0.0)
     candidate_selected = _safe_int(candidate_metrics.get("selected_count"), 0)
@@ -387,7 +434,9 @@ def evaluate_model_upgrade_promotion(
     sample_count = _safe_int(candidate_metrics.get("sample_count"), 0)
     ev_delta = candidate_ev - incumbent_ev
     downside_worsening = incumbent_downside - candidate_downside
-    selected_drop_ratio = max(0.0, (incumbent_selected - candidate_selected) / incumbent_selected)
+    selected_drop_ratio = max(
+        0.0, (incumbent_selected - candidate_selected) / incumbent_selected
+    )
     schema_passed = bool((schema_check or {}).get("passed", True))
     reasons = []
     if sample_count < sample_floor:
@@ -480,10 +529,16 @@ def _run_upgrade_candidates(
         train_result = _run_command(train_command, env=env, cwd=root)
         backtest_result: dict[str, Any] | None = None
         if train_result.get("returncode") == 0:
-            backtest_result = _run_command([sys.executable, "-m", "src.model.backtest_v2"], env=env, cwd=root)
+            backtest_result = _run_command(
+                [sys.executable, "-m", "src.model.backtest_v2"], env=env, cwd=root
+            )
         metrics = _summarize_backtest(candidate_dir / "backtest_trades_v2.csv")
-        schema_check = _validate_recommendation_schema(candidate_dir / "ai_predictions_v2.csv")
-        gate = evaluate_model_upgrade_promotion(metrics, incumbent_metrics, schema_check)
+        schema_check = _validate_recommendation_schema(
+            candidate_dir / "ai_predictions_v2.csv"
+        )
+        gate = evaluate_model_upgrade_promotion(
+            metrics, incumbent_metrics, schema_check
+        )
         candidate_payload = {
             "candidate_family": family,
             "run_dir": str(candidate_dir),
@@ -504,12 +559,18 @@ def _run_upgrade_candidates(
                 "feature_set_version": FEATURE_SET_VERSION,
                 "label_policy": LABEL_POLICY,
                 "primary_decision_metric": METRIC_CONTRACT["primary_decision_metric"],
-                "active_promotion_decision": "gate_passed" if gate.get("passed") else "not_promoted_gate_failed",
+                "active_promotion_decision": (
+                    "gate_passed" if gate.get("passed") else "not_promoted_gate_failed"
+                ),
             },
             metrics={
-                "equal_weight_avg_profit_pct": metrics.get("equal_weight_avg_profit_pct"),
+                "equal_weight_avg_profit_pct": metrics.get(
+                    "equal_weight_avg_profit_pct"
+                ),
                 "notional_weighted_ev_pct": metrics.get("notional_weighted_ev_pct"),
-                "source_quality_adjusted_ev_pct": metrics.get("source_quality_adjusted_ev_pct"),
+                "source_quality_adjusted_ev_pct": metrics.get(
+                    "source_quality_adjusted_ev_pct"
+                ),
                 "ev_delta_pct": gate.get("ev_delta_pct"),
                 "downside_worsening_pct": gate.get("downside_worsening_pct"),
                 "downside_p10_pct": metrics.get("downside_p10_pct"),
@@ -523,7 +584,10 @@ def _run_upgrade_candidates(
                 "promotion_gate_passed": gate.get("passed"),
                 "active_live_behavior": "model_artifact_candidate",
             },
-            artifact_paths=[candidate_dir / "candidate_manifest.json", candidate_dir / "shap_summary.json"],
+            artifact_paths=[
+                candidate_dir / "candidate_manifest.json",
+                candidate_dir / "shap_summary.json",
+            ],
         )
 
     passing = [
@@ -534,8 +598,12 @@ def _run_upgrade_candidates(
     if passing:
         passing.sort(
             key=lambda item: (
-                _safe_float((item.get("promotion_gate") or {}).get("ev_delta_pct"), 0.0),
-                _safe_float((item.get("metrics") or {}).get("equal_weight_avg_profit_pct"), 0.0),
+                _safe_float(
+                    (item.get("promotion_gate") or {}).get("ev_delta_pct"), 0.0
+                ),
+                _safe_float(
+                    (item.get("metrics") or {}).get("equal_weight_avg_profit_pct"), 0.0
+                ),
             ),
             reverse=True,
         )
@@ -557,7 +625,9 @@ def _train_and_evaluate_mode(
 ) -> dict[str, Any]:
     mode_run_dir = parent_run_dir / mode
     mode_run_dir.mkdir(parents=True, exist_ok=True)
-    command_results = _train_candidate(mode_run_dir, mode, bull_review, meta_period=meta_period)
+    command_results = _train_candidate(
+        mode_run_dir, mode, bull_review, meta_period=meta_period
+    )
     failed = [item for item in command_results if item.get("returncode") != 0]
     missing = _validate_candidate_files(mode_run_dir, mode)
     metrics = _summarize_backtest(mode_run_dir / "backtest_trades_v2.csv")
@@ -575,7 +645,9 @@ def _train_and_evaluate_mode(
             run_id=run_id or "",
             incumbent_metrics=metrics,
         )
-        if upgrade_result.get("selected_run_dir") and upgrade_result.get("selected_metrics"):
+        if upgrade_result.get("selected_run_dir") and upgrade_result.get(
+            "selected_metrics"
+        ):
             selected_run_dir = Path(str(upgrade_result["selected_run_dir"]))
             selected_candidate_family = str(upgrade_result["selected_candidate_family"])
             metrics = dict(upgrade_result["selected_metrics"] or {})
@@ -614,14 +686,23 @@ def _choose_candidate(
 ) -> tuple[str | None, dict[str, Any]]:
     enabled = candidates.get("enabled")
     disabled = candidates.get("disabled")
-    if enabled and disabled and _candidate_status(enabled) == "ready" and _candidate_status(disabled) == "ready":
-        decision = evaluate_bull_specialist_mode(enabled.get("metrics") or {}, disabled.get("metrics") or {})
+    if (
+        enabled
+        and disabled
+        and _candidate_status(enabled) == "ready"
+        and _candidate_status(disabled) == "ready"
+    ):
+        decision = evaluate_bull_specialist_mode(
+            enabled.get("metrics") or {}, disabled.get("metrics") or {}
+        )
         chosen_mode = resolve_bull_specialist_mode(decision.get("bull_specialist_mode"))
         if chosen_mode == "hold_current":
             hold = candidates.get("hold_current")
             if hold and _candidate_status(hold) == "ready":
                 return "hold_current", decision
-            if (Path(DATA_DIR) / "bull_xgb_v2.pkl").exists() and (Path(DATA_DIR) / "bull_lgbm_v2.pkl").exists():
+            if (Path(DATA_DIR) / "bull_xgb_v2.pkl").exists() and (
+                Path(DATA_DIR) / "bull_lgbm_v2.pkl"
+            ).exists():
                 hold = _train_and_evaluate_mode(
                     Path(candidates["enabled"]["run_dir"]).parent,
                     "hold_current",
@@ -644,7 +725,10 @@ def _choose_candidate(
 
     preferred = candidates.get(initial_mode)
     if preferred and _candidate_status(preferred) == "ready":
-        return initial_mode, {"bull_specialist_mode": initial_mode, "reason": "single_candidate_ready"}
+        return initial_mode, {
+            "bull_specialist_mode": initial_mode,
+            "reason": "single_candidate_ready",
+        }
     for mode in ("disabled", "enabled", "hold_current"):
         candidate = candidates.get(mode)
         if candidate and _candidate_status(candidate) == "ready":
@@ -665,7 +749,9 @@ def _backup_active_models(backup_dir: Path) -> list[str]:
             shutil.copy2(src, backup_dir / name)
             copied.append(name)
     manifest = {"schema_version": 1, "existing_files": copied}
-    (backup_dir / BACKUP_MANIFEST_NAME).write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    (backup_dir / BACKUP_MANIFEST_NAME).write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     return copied
 
 
@@ -736,7 +822,10 @@ def _write_current_manifest(
         "metrics": metrics,
     }
     path = REGISTRY_DIR / "current.json"
-    path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2, default=str),
+        encoding="utf-8",
+    )
     return path
 
 
@@ -745,7 +834,11 @@ def _smoke_after_promote(mode: str) -> dict[str, Any]:
     env = os.environ.copy()
     env["PYTHONPATH"] = "."
     env["KORSTOCKSCAN_SWING_BULL_SPECIALIST_MODE"] = mode
-    return _run_command([sys.executable, "-m", "src.model.recommend_daily_v2", "--bull-mode", mode], env=env, cwd=root)
+    return _run_command(
+        [sys.executable, "-m", "src.model.recommend_daily_v2", "--bull-mode", mode],
+        env=env,
+        cwd=root,
+    )
 
 
 def pipeline_paths(target_date: str) -> tuple[Path, Path]:
@@ -754,7 +847,11 @@ def pipeline_paths(target_date: str) -> tuple[Path, Path]:
 
 
 def render_markdown(report: dict[str, Any]) -> str:
-    promotion_guard = report.get("promotion_guard") if isinstance(report.get("promotion_guard"), dict) else {}
+    promotion_guard = (
+        report.get("promotion_guard")
+        if isinstance(report.get("promotion_guard"), dict)
+        else {}
+    )
     return "\n".join(
         [
             f"# Swing Model Retrain {report.get('target_date')}",
@@ -775,7 +872,9 @@ def render_markdown(report: dict[str, Any]) -> str:
     )
 
 
-def _write_benchmark_report(target_date: str, run_id: str, candidate_results: dict[str, dict[str, Any]]) -> dict[str, str]:
+def _write_benchmark_report(
+    target_date: str, run_id: str, candidate_results: dict[str, dict[str, Any]]
+) -> dict[str, str]:
     BENCHMARK_REPORT_DIR.mkdir(parents=True, exist_ok=True)
     payload = {
         "schema_version": 1,
@@ -797,7 +896,9 @@ def _write_benchmark_report(target_date: str, run_id: str, candidate_results: di
     }
     json_path = BENCHMARK_REPORT_DIR / f"swing_model_benchmark_{target_date}.json"
     md_path = BENCHMARK_REPORT_DIR / f"swing_model_benchmark_{target_date}.md"
-    json_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8"
+    )
     lines = [
         f"# Swing Model Benchmark {target_date}",
         "",
@@ -816,10 +917,20 @@ def _write_benchmark_report(target_date: str, run_id: str, candidate_results: di
     return {"json": str(json_path), "markdown": str(md_path)}
 
 
-def _incumbent_metrics_for_selected_candidate(selected: dict[str, Any] | None) -> dict[str, Any]:
+def _incumbent_metrics_for_selected_candidate(
+    selected: dict[str, Any] | None,
+) -> dict[str, Any]:
     selected = selected or {}
-    upgrade = selected.get("model_upgrade") if isinstance(selected.get("model_upgrade"), dict) else {}
-    incumbent = upgrade.get("incumbent_metrics") if isinstance(upgrade.get("incumbent_metrics"), dict) else {}
+    upgrade = (
+        selected.get("model_upgrade")
+        if isinstance(selected.get("model_upgrade"), dict)
+        else {}
+    )
+    incumbent = (
+        upgrade.get("incumbent_metrics")
+        if isinstance(upgrade.get("incumbent_metrics"), dict)
+        else {}
+    )
     if incumbent:
         return dict(incumbent)
     return dict(selected.get("metrics") or {})
@@ -834,7 +945,9 @@ def run_pipeline(
     target = target_date or date.today().isoformat()
     diagnosis = write_diagnosis(target, force=force)
     bull_review = write_review(target)
-    initial_mode = resolve_bull_specialist_mode((bull_review.get("decision") or {}).get("bull_specialist_mode"))
+    initial_mode = resolve_bull_specialist_mode(
+        (bull_review.get("decision") or {}).get("bull_specialist_mode")
+    )
     meta_period = resolve_meta_period(target)
     run_id = _run_id(target)
     run_dir = RUNS_DIR / run_id
@@ -856,7 +969,11 @@ def run_pipeline(
     mode_decision = {"bull_specialist_mode": initial_mode, "reason": "review_decision"}
 
     if bool(diagnosis.get("retrain_required")):
-        modes_to_train = [initial_mode] if initial_mode == "hold_current" else ["enabled", "disabled"]
+        modes_to_train = (
+            [initial_mode]
+            if initial_mode == "hold_current"
+            else ["enabled", "disabled"]
+        )
         for mode in modes_to_train:
             candidate_results[mode] = _train_and_evaluate_mode(
                 run_dir,
@@ -878,10 +995,17 @@ def run_pipeline(
         if chosen_mode:
             selected_mode = chosen_mode
             selected_run_dir = Path(candidate_results[chosen_mode]["run_dir"])
-            selected_candidate_family = str(candidate_results[chosen_mode].get("selected_candidate_family") or "incumbent_current_v2")
+            selected_candidate_family = str(
+                candidate_results[chosen_mode].get("selected_candidate_family")
+                or "incumbent_current_v2"
+            )
             metrics = dict(candidate_results[chosen_mode].get("metrics") or {})
-        benchmark_report_paths = _write_benchmark_report(target, run_id, candidate_results)
-        failed = [mode for mode, item in candidate_results.items() if item.get("failed")]
+        benchmark_report_paths = _write_benchmark_report(
+            target, run_id, candidate_results
+        )
+        failed = [
+            mode for mode, item in candidate_results.items() if item.get("failed")
+        ]
         missing_by_mode = {
             mode: item.get("missing_artifacts") or []
             for mode, item in candidate_results.items()
@@ -892,12 +1016,16 @@ def run_pipeline(
             promotion["blocked_reason"] = "training_command_failed"
         elif not chosen_mode and missing_by_mode:
             status = "failed"
-            promotion["blocked_reason"] = f"candidate_artifact_missing:{missing_by_mode}"
+            promotion["blocked_reason"] = (
+                f"candidate_artifact_missing:{missing_by_mode}"
+            )
         elif not chosen_mode:
             status = "failed"
             promotion["blocked_reason"] = "no_ready_candidate"
         else:
-            min_score = _safe_float(os.getenv("KORSTOCKSCAN_SWING_RETRAIN_MIN_SCORE"), 0.72)
+            min_score = _safe_float(
+                os.getenv("KORSTOCKSCAN_SWING_RETRAIN_MIN_SCORE"), 0.72
+            )
             hard_floor_passed = _safe_int(metrics.get("sample_count"), 0) >= 40
             avg_ok = _safe_float(metrics.get("avg_net_pct"), 0.0) >= 0.10
             score_ok = _safe_float(metrics.get("tradeoff_score"), 0.0) >= min_score
@@ -913,17 +1041,29 @@ def run_pipeline(
                 promotion["min_tradeoff_score"] = min_score
             elif auto_promote:
                 selected_payload = candidate_results.get(selected_mode) or {}
-                upgrade_payload = selected_payload.get("model_upgrade") if isinstance(selected_payload.get("model_upgrade"), dict) else {}
-                upgrade_candidates = upgrade_payload.get("candidates") if isinstance(upgrade_payload.get("candidates"), dict) else {}
+                upgrade_payload = (
+                    selected_payload.get("model_upgrade")
+                    if isinstance(selected_payload.get("model_upgrade"), dict)
+                    else {}
+                )
+                upgrade_candidates = (
+                    upgrade_payload.get("candidates")
+                    if isinstance(upgrade_payload.get("candidates"), dict)
+                    else {}
+                )
                 upgrade_gate = (
-                    (upgrade_candidates.get(selected_candidate_family) or {}).get("promotion_gate")
+                    (upgrade_candidates.get(selected_candidate_family) or {}).get(
+                        "promotion_gate"
+                    )
                     if selected_candidate_family != "incumbent_current_v2"
                     else None
                 )
                 deterministic_gate = upgrade_gate or {
                     "passed": True,
                     "reasons": [],
-                    "primary_decision_metric": METRIC_CONTRACT["primary_decision_metric"],
+                    "primary_decision_metric": METRIC_CONTRACT[
+                        "primary_decision_metric"
+                    ],
                     "sample_floor": 40,
                     "avg_net_floor_pct": 0.10,
                     "min_tradeoff_score": min_score,
@@ -941,7 +1081,9 @@ def run_pipeline(
                     selected_bull_mode=selected_mode,
                     selected_run_dir=selected_run_dir,
                     candidate_metrics=metrics,
-                    incumbent_metrics=_incumbent_metrics_for_selected_candidate(selected_payload),
+                    incumbent_metrics=_incumbent_metrics_for_selected_candidate(
+                        selected_payload
+                    ),
                     promotion_gate=deterministic_gate,
                     benchmark_report_paths=benchmark_report_paths,
                 )
@@ -953,12 +1095,17 @@ def run_pipeline(
                     "json_path": ai_tier2_review.get("json_path"),
                     "markdown_path": ai_tier2_review.get("markdown_path"),
                 }
-                if not (ai_tier2_review.get("status") == "parsed" and ai_tier2_review.get("decision") == "approved"):
+                if not (
+                    ai_tier2_review.get("status") == "parsed"
+                    and ai_tier2_review.get("decision") == "approved"
+                ):
                     status = "not_promoted_ai_tier2_blocked"
                     promotion["blocked_reason"] = "ai_tier2_not_approved"
                     promotion["runtime_change"] = False
                     promotion["active_live_behavior"] = False
-                    promotion["forbidden_runtime_uses"] = ai_tier2_review.get("forbidden_runtime_uses") or []
+                    promotion["forbidden_runtime_uses"] = (
+                        ai_tier2_review.get("forbidden_runtime_uses") or []
+                    )
                     remediation = write_remediation_report(
                         target_date=target,
                         tier2_review=ai_tier2_review,
@@ -977,7 +1124,9 @@ def run_pipeline(
                         "retry_count": remediation.get("retry_count"),
                         "max_retry_count": remediation.get("max_retry_count"),
                         "next_cron_allowed": remediation.get("next_cron_allowed"),
-                        "retry_env_keys": sorted((remediation.get("retry_env") or {}).keys()),
+                        "retry_env_keys": sorted(
+                            (remediation.get("retry_env") or {}).keys()
+                        ),
                         "manifest_path": remediation.get("manifest_path"),
                         "json_path": remediation.get("json_path"),
                         "markdown_path": remediation.get("markdown_path"),
@@ -991,20 +1140,34 @@ def run_pipeline(
                             "bull_mode": selected_mode,
                             "feature_set_version": FEATURE_SET_VERSION,
                             "label_policy": LABEL_POLICY,
-                            "primary_decision_metric": METRIC_CONTRACT["primary_decision_metric"],
+                            "primary_decision_metric": METRIC_CONTRACT[
+                                "primary_decision_metric"
+                            ],
                             "active_promotion_decision": "not_promoted_ai_tier2_blocked",
                             "ai_tier2_status": ai_tier2_review.get("status"),
                             "ai_tier2_decision": ai_tier2_review.get("decision"),
-                            "ai_tier2_blocking_reasons": ",".join(ai_tier2_review.get("blocking_reasons") or []),
+                            "ai_tier2_blocking_reasons": ",".join(
+                                ai_tier2_review.get("blocking_reasons") or []
+                            ),
                             "remediation_state": remediation.get("remediation_state"),
-                            "retry_allowed": str(remediation.get("remediation_state") == "retry_allowed"),
-                            "retry_env_keys": ",".join(sorted((remediation.get("retry_env") or {}).keys())),
+                            "retry_allowed": str(
+                                remediation.get("remediation_state") == "retry_allowed"
+                            ),
+                            "retry_env_keys": ",".join(
+                                sorted((remediation.get("retry_env") or {}).keys())
+                            ),
                             "retry_reason": remediation.get("retry_reason"),
                         },
                         metrics={
-                            "equal_weight_avg_profit_pct": metrics.get("equal_weight_avg_profit_pct"),
-                            "notional_weighted_ev_pct": metrics.get("notional_weighted_ev_pct"),
-                            "source_quality_adjusted_ev_pct": metrics.get("source_quality_adjusted_ev_pct"),
+                            "equal_weight_avg_profit_pct": metrics.get(
+                                "equal_weight_avg_profit_pct"
+                            ),
+                            "notional_weighted_ev_pct": metrics.get(
+                                "notional_weighted_ev_pct"
+                            ),
+                            "source_quality_adjusted_ev_pct": metrics.get(
+                                "source_quality_adjusted_ev_pct"
+                            ),
                             "sample_count": metrics.get("sample_count"),
                             "downside_p10_pct": metrics.get("downside_p10_pct"),
                             "diagnostic_win_rate": metrics.get("diagnostic_win_rate"),
@@ -1015,7 +1178,9 @@ def run_pipeline(
                             "ai_tier2_status": ai_tier2_review.get("status"),
                             "ai_tier2_decision": ai_tier2_review.get("decision"),
                             "remediation_state": remediation.get("remediation_state"),
-                            "retry_allowed": str(remediation.get("remediation_state") == "retry_allowed"),
+                            "retry_allowed": str(
+                                remediation.get("remediation_state") == "retry_allowed"
+                            ),
                             "active_live_behavior": "false",
                             "runtime_change": "none",
                         },
@@ -1032,7 +1197,9 @@ def run_pipeline(
                     )
                 else:
                     backup_dir = PROMOTIONS_DIR / f"{run_id}_backup"
-                    promotion.update(_promote_candidate(selected_run_dir, backup_dir, selected_mode))
+                    promotion.update(
+                        _promote_candidate(selected_run_dir, backup_dir, selected_mode)
+                    )
                     smoke = _smoke_after_promote(selected_mode)
                     promotion["smoke"] = smoke
                     live_schema_check = {"passed": False, "reason": "smoke_failed"}
@@ -1053,9 +1220,13 @@ def run_pipeline(
                         promotion["current_manifest"] = str(current_path)
                         promotion_artifacts = [current_path]
                         if benchmark_report_paths.get("json"):
-                            promotion_artifacts.append(Path(benchmark_report_paths["json"]))
+                            promotion_artifacts.append(
+                                Path(benchmark_report_paths["json"])
+                            )
                         if ai_tier2_review.get("json_path"):
-                            promotion_artifacts.append(Path(str(ai_tier2_review["json_path"])))
+                            promotion_artifacts.append(
+                                Path(str(ai_tier2_review["json_path"]))
+                            )
                         tracking = log_model_run(
                             run_name=f"promotion:{selected_candidate_family}:{target}",
                             params={
@@ -1065,19 +1236,31 @@ def run_pipeline(
                                 "bull_mode": selected_mode,
                                 "feature_set_version": FEATURE_SET_VERSION,
                                 "label_policy": LABEL_POLICY,
-                                "primary_decision_metric": METRIC_CONTRACT["primary_decision_metric"],
+                                "primary_decision_metric": METRIC_CONTRACT[
+                                    "primary_decision_metric"
+                                ],
                                 "active_promotion_decision": "promoted",
                                 "ai_tier2_status": ai_tier2_review.get("status"),
                                 "ai_tier2_decision": ai_tier2_review.get("decision"),
-                                "ai_tier2_blocking_reasons": ",".join(ai_tier2_review.get("blocking_reasons") or []),
+                                "ai_tier2_blocking_reasons": ",".join(
+                                    ai_tier2_review.get("blocking_reasons") or []
+                                ),
                             },
                             metrics={
-                                "equal_weight_avg_profit_pct": metrics.get("equal_weight_avg_profit_pct"),
-                                "notional_weighted_ev_pct": metrics.get("notional_weighted_ev_pct"),
-                                "source_quality_adjusted_ev_pct": metrics.get("source_quality_adjusted_ev_pct"),
+                                "equal_weight_avg_profit_pct": metrics.get(
+                                    "equal_weight_avg_profit_pct"
+                                ),
+                                "notional_weighted_ev_pct": metrics.get(
+                                    "notional_weighted_ev_pct"
+                                ),
+                                "source_quality_adjusted_ev_pct": metrics.get(
+                                    "source_quality_adjusted_ev_pct"
+                                ),
                                 "sample_count": metrics.get("sample_count"),
                                 "downside_p10_pct": metrics.get("downside_p10_pct"),
-                                "diagnostic_win_rate": metrics.get("diagnostic_win_rate"),
+                                "diagnostic_win_rate": metrics.get(
+                                    "diagnostic_win_rate"
+                                ),
                                 "selected_count": metrics.get("selected_count"),
                             },
                             tags={
@@ -1093,9 +1276,13 @@ def run_pipeline(
                         promotion["mlflow"] = tracking
                     else:
                         rollback_executed = True
-                        promotion["rollback_files"] = _rollback_active_models(backup_dir)
+                        promotion["rollback_files"] = _rollback_active_models(
+                            backup_dir
+                        )
                         if smoke.get("returncode") == 0:
-                            promotion["blocked_reason"] = "recommendation_schema_compatibility_failed"
+                            promotion["blocked_reason"] = (
+                                "recommendation_schema_compatibility_failed"
+                            )
                         status = "rolled_back"
             else:
                 status = "passed_not_promoted"
@@ -1118,7 +1305,11 @@ def run_pipeline(
         "decision": status,
         "reason": promotion.get("blocked_reason")
         or mode_decision.get("reason")
-        or ("retrain_not_required" if not bool(diagnosis.get("retrain_required")) else status),
+        or (
+            "retrain_not_required"
+            if not bool(diagnosis.get("retrain_required"))
+            else status
+        ),
         "bull_specialist_mode": selected_mode,
     }
 
@@ -1156,10 +1347,14 @@ def run_pipeline(
     json_path, md_path = pipeline_paths(target)
     json_path.parent.mkdir(parents=True, exist_ok=True)
     PROMOTIONS_DIR.mkdir(parents=True, exist_ok=True)
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2, default=str), encoding="utf-8"
+    )
     md_path.write_text(render_markdown(report), encoding="utf-8")
     promotion_path = PROMOTIONS_DIR / f"promotion_{target}.json"
-    promotion_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    promotion_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2, default=str), encoding="utf-8"
+    )
     return report
 
 
@@ -1169,7 +1364,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--auto-promote", action="store_true")
     parser.add_argument("--force", action="store_true")
     args = parser.parse_args(argv)
-    report = run_pipeline(args.target_date, auto_promote=args.auto_promote, force=args.force)
+    report = run_pipeline(
+        args.target_date, auto_promote=args.auto_promote, force=args.force
+    )
     return 0 if report.get("status") not in {"failed", "rolled_back"} else 1
 
 

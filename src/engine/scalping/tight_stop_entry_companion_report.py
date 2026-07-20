@@ -23,7 +23,6 @@ from src.utils.constants import DATA_DIR, TRADING_RULES
 from src.utils.jsonl_io import existing_or_gzip_path, open_text_auto
 from src.utils.market_day import is_krx_trading_day
 
-
 REPORT_TYPE = "tight_stop_entry_companion_report"
 SCHEMA_VERSION = 1
 REPORT_DIR = DATA_DIR / "report" / REPORT_TYPE
@@ -47,7 +46,9 @@ FORBIDDEN_USES = [
     "bot_restart",
     "real_execution_quality_approval",
 ]
-TIGHT_STOP_PCT = float(getattr(TRADING_RULES, "SCALP_PRESET_HARD_STOP_PCT", -0.70) or -0.70)
+TIGHT_STOP_PCT = float(
+    getattr(TRADING_RULES, "SCALP_PRESET_HARD_STOP_PCT", -0.70) or -0.70
+)
 MFE_TARGET_PCT = 0.30
 SAMPLE_FLOOR = 20
 CANDIDATE_DIMENSIONS = [
@@ -99,7 +100,13 @@ def _safe_float(value: Any, default: float | None = 0.0) -> float | None:
 def _is_present(value: Any) -> bool:
     if value is None:
         return False
-    if isinstance(value, str) and value.strip().lower() in {"", "null", "none", "-", "not_available"}:
+    if isinstance(value, str) and value.strip().lower() in {
+        "",
+        "null",
+        "none",
+        "-",
+        "not_available",
+    }:
         return False
     return True
 
@@ -160,14 +167,18 @@ def _date_range(start_date: str, end_date: str) -> list[str]:
 
 
 def _event_path(source_date: str) -> Path:
-    return existing_or_gzip_path(PIPELINE_EVENTS_DIR / f"pipeline_events_{source_date}.jsonl")
+    return existing_or_gzip_path(
+        PIPELINE_EVENTS_DIR / f"pipeline_events_{source_date}.jsonl"
+    )
 
 
 def _iter_events(source_dates: list[str], missing: list[dict[str, str]]):
     for source_date in source_dates:
         path = _event_path(source_date)
         if not path.exists():
-            missing.append({"date": source_date, "artifact": "pipeline_events", "path": str(path)})
+            missing.append(
+                {"date": source_date, "artifact": "pipeline_events", "path": str(path)}
+            )
             continue
         with open_text_auto(path) as handle:
             for line in handle:
@@ -179,7 +190,9 @@ def _iter_events(source_dates: list[str], missing: list[dict[str, str]]):
                     continue
                 if not isinstance(event, dict):
                     continue
-                fields = event.get("fields") if isinstance(event.get("fields"), dict) else {}
+                fields = (
+                    event.get("fields") if isinstance(event.get("fields"), dict) else {}
+                )
                 yield source_date, {**event, **fields}
 
 
@@ -187,7 +200,12 @@ def _row_key(source_date: str, event: dict[str, Any]) -> str:
     sim_id = str(event.get("sim_record_id") or "").strip()
     if sim_id:
         return f"{source_date}:sim:{sim_id}"
-    record_id = str(event.get("record_id") or event.get("recommendation_id") or event.get("runtime_record_id") or "").strip()
+    record_id = str(
+        event.get("record_id")
+        or event.get("recommendation_id")
+        or event.get("runtime_record_id")
+        or ""
+    ).strip()
     stock_code = str(event.get("stock_code") or "").strip()
     if record_id:
         return f"{source_date}:real:{record_id}"
@@ -201,10 +219,17 @@ def _context_aliases(source_date: str, event: dict[str, Any]) -> list[str]:
     sim_id = str(event.get("sim_record_id") or "").strip()
     if sim_id:
         aliases.append(f"{source_date}:sim:{sim_id}")
-    parent_id = str(event.get("sim_parent_record_id") or event.get("parent_record_id") or "").strip()
+    parent_id = str(
+        event.get("sim_parent_record_id") or event.get("parent_record_id") or ""
+    ).strip()
     if parent_id:
         aliases.append(f"{source_date}:real:{parent_id}")
-    record_id = str(event.get("record_id") or event.get("recommendation_id") or event.get("runtime_record_id") or "").strip()
+    record_id = str(
+        event.get("record_id")
+        or event.get("recommendation_id")
+        or event.get("runtime_record_id")
+        or ""
+    ).strip()
     if record_id:
         aliases.append(f"{source_date}:real:{record_id}")
     if not aliases:
@@ -215,10 +240,16 @@ def _context_aliases(source_date: str, event: dict[str, Any]) -> list[str]:
 
 
 def _profile_context(event: dict[str, Any]) -> dict[str, Any]:
-    return {key: event.get(key) for key in PROFILE_CONTEXT_FIELDS if _is_present(event.get(key))}
+    return {
+        key: event.get(key)
+        for key in PROFILE_CONTEXT_FIELDS
+        if _is_present(event.get(key))
+    }
 
 
-def _merge_profile_context(event: dict[str, Any], source_date: str, contexts: dict[str, dict[str, Any]]) -> dict[str, Any]:
+def _merge_profile_context(
+    event: dict[str, Any], source_date: str, contexts: dict[str, dict[str, Any]]
+) -> dict[str, Any]:
     merged: dict[str, Any] = {}
     for alias in _context_aliases(source_date, event):
         merged.update(contexts.get(alias) or {})
@@ -230,8 +261,26 @@ def _is_entry_event(event: dict[str, Any]) -> bool:
     stage = str(event.get("stage") or "")
     stage_lower = stage.lower()
     pipeline = str(event.get("pipeline") or "").strip().upper()
-    side = str(event.get("side") or event.get("order_side") or event.get("trade_side") or "").strip().upper()
-    action = str(event.get("ai_action") or event.get("action") or event.get("chosen_action") or "").strip().upper()
+    side = (
+        str(
+            event.get("side")
+            or event.get("order_side")
+            or event.get("trade_side")
+            or ""
+        )
+        .strip()
+        .upper()
+    )
+    action = (
+        str(
+            event.get("ai_action")
+            or event.get("action")
+            or event.get("chosen_action")
+            or ""
+        )
+        .strip()
+        .upper()
+    )
     if (
         "sell" in stage_lower
         or "exit" in stage_lower
@@ -245,7 +294,12 @@ def _is_entry_event(event: dict[str, Any]) -> bool:
         return True
     if not _boolish(event.get("actual_order_submitted")):
         return False
-    return "buy" in stage_lower or side in {"BUY", "B", "매수"} or action == "BUY" or pipeline == "ENTRY_PIPELINE"
+    return (
+        "buy" in stage_lower
+        or side in {"BUY", "B", "매수"}
+        or action == "BUY"
+        or pipeline == "ENTRY_PIPELINE"
+    )
 
 
 def _score_band(score: float | None) -> str:
@@ -310,7 +364,9 @@ def _tick_accel_bucket(value: float | None) -> str:
     return "tick_accel_lt095"
 
 
-def _entry_profile(event: dict[str, Any], source_date: str, key: str, event_time: datetime) -> dict[str, Any]:
+def _entry_profile(
+    event: dict[str, Any], source_date: str, key: str, event_time: datetime
+) -> dict[str, Any]:
     score = _safe_float(
         _first_present(
             event,
@@ -334,9 +390,15 @@ def _entry_profile(event: dict[str, Any], source_date: str, key: str, event_time
         None,
     )
     if buy_pressure is None:
-        buy_pressure = _reason_number(event, "order_flow_pressure_score", "buy_pressure_10t", "buy_pressure")
-    tick_accel = _safe_float(_first_present(event, "tick_acceleration_ratio", "tick_accel"), None)
-    micro_vwap = _safe_float(_first_present(event, "curr_vs_micro_vwap_bp", "micro_vwap_bp"), None)
+        buy_pressure = _reason_number(
+            event, "order_flow_pressure_score", "buy_pressure_10t", "buy_pressure"
+        )
+    tick_accel = _safe_float(
+        _first_present(event, "tick_acceleration_ratio", "tick_accel"), None
+    )
+    micro_vwap = _safe_float(
+        _first_present(event, "curr_vs_micro_vwap_bp", "micro_vwap_bp"), None
+    )
     quote_age = _safe_float(
         _first_present(
             event,
@@ -352,11 +414,13 @@ def _entry_profile(event: dict[str, Any], source_date: str, key: str, event_time
     row_authority = (
         "real_submitted_path_observation"
         if actual_order_submitted
-        else "sim_assumed_fill_path_observation"
-        if stage == "scalp_sim_buy_order_assumed_filled"
-        or str(event.get("sim_record_id") or "").strip()
-        or stage.startswith("scalp_sim_")
-        else "source_only_entry_path_observation"
+        else (
+            "sim_assumed_fill_path_observation"
+            if stage == "scalp_sim_buy_order_assumed_filled"
+            or str(event.get("sim_record_id") or "").strip()
+            or stage.startswith("scalp_sim_")
+            else "source_only_entry_path_observation"
+        )
     )
     return {
         "key": key,
@@ -368,7 +432,12 @@ def _entry_profile(event: dict[str, Any], source_date: str, key: str, event_time
         "stock_name": str(event.get("stock_name") or ""),
         "score": score,
         "score_band": _score_band(score),
-        "ai_action": str(event.get("ai_action") or event.get("action") or event.get("chosen_action") or "").upper(),
+        "ai_action": str(
+            event.get("ai_action")
+            or event.get("action")
+            or event.get("chosen_action")
+            or ""
+        ).upper(),
         "source_signature": str(event.get("source_signature") or ""),
         "scanner_promotion_reason": str(event.get("scanner_promotion_reason") or ""),
         "buy_pressure_10t": buy_pressure,
@@ -384,9 +453,13 @@ def _entry_profile(event: dict[str, Any], source_date: str, key: str, event_time
     }
 
 
-def _path_metrics(entry: dict[str, Any], series: list[tuple[datetime, float]], window_minutes: int) -> dict[str, Any]:
+def _path_metrics(
+    entry: dict[str, Any], series: list[tuple[datetime, float]], window_minutes: int
+) -> dict[str, Any]:
     end_time = entry["entry_time"] + timedelta(minutes=window_minutes)
-    future = [(time, pnl) for time, pnl in series if entry["entry_time"] <= time <= end_time]
+    future = [
+        (time, pnl) for time, pnl in series if entry["entry_time"] <= time <= end_time
+    ]
     if not future:
         return {
             "sample_present": False,
@@ -430,15 +503,21 @@ def _bucket_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "sample_count": len(rows),
         "mfe_before_tight_stop_rate": round(
-            sum(1 for row in rows if row.get("mfe_hit_before_tight_stop_10m")) / len(rows),
+            sum(1 for row in rows if row.get("mfe_hit_before_tight_stop_10m"))
+            / len(rows),
             6,
         ),
         "tight_stop_first_rate": round(
-            sum(1 for row in rows if row.get("tight_stop_touched_before_mfe_10m")) / len(rows),
+            sum(1 for row in rows if row.get("tight_stop_touched_before_mfe_10m"))
+            / len(rows),
             6,
         ),
-        "avg_mfe_10m_pct": round(sum(float(row.get("mfe_10m_pct") or 0.0) for row in rows) / len(rows), 6),
-        "avg_mae_10m_pct": round(sum(float(row.get("mae_10m_pct") or 0.0) for row in rows) / len(rows), 6),
+        "avg_mfe_10m_pct": round(
+            sum(float(row.get("mfe_10m_pct") or 0.0) for row in rows) / len(rows), 6
+        ),
+        "avg_mae_10m_pct": round(
+            sum(float(row.get("mae_10m_pct") or 0.0) for row in rows) / len(rows), 6
+        ),
     }
 
 
@@ -450,7 +529,11 @@ def _summaries(rows: list[dict[str, Any]], bucket_key: str) -> list[dict[str, An
     for bucket, bucket_rows in grouped.items():
         summary = _bucket_summary(bucket_rows)
         result.append({"bucket": bucket, **summary})
-    return sorted(result, key=lambda item: (item["sample_count"], item["mfe_before_tight_stop_rate"]), reverse=True)
+    return sorted(
+        result,
+        key=lambda item: (item["sample_count"], item["mfe_before_tight_stop_rate"]),
+        reverse=True,
+    )
 
 
 def _is_unknown_bucket(value: Any) -> bool:
@@ -471,7 +554,9 @@ def _top_companion_candidates(rows: list[dict[str, Any]]) -> list[dict[str, Any]
             summary = _bucket_summary(bucket_rows)
             if summary["sample_count"] < SAMPLE_FLOOR:
                 continue
-            edge = summary["mfe_before_tight_stop_rate"] - summary["tight_stop_first_rate"]
+            edge = (
+                summary["mfe_before_tight_stop_rate"] - summary["tight_stop_first_rate"]
+            )
             if edge <= 0:
                 continue
             candidates.append(
@@ -497,7 +582,11 @@ def _top_companion_candidates(rows: list[dict[str, Any]]) -> list[dict[str, Any]
 
 
 def _real_submitted_path_validation(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    real_rows = [row for row in rows if row.get("row_authority") == "real_submitted_path_observation"]
+    real_rows = [
+        row
+        for row in rows
+        if row.get("row_authority") == "real_submitted_path_observation"
+    ]
     companion_candidates = _top_companion_candidates(real_rows)
     if not real_rows:
         decision = "hold_no_real_submitted_sample"
@@ -521,7 +610,9 @@ def _real_submitted_path_validation(rows: list[dict[str, Any]]) -> dict[str, Any
     }
 
 
-def _source_date_preflight_entry(source_date: str, preflight: dict[str, Any]) -> dict[str, Any]:
+def _source_date_preflight_entry(
+    source_date: str, preflight: dict[str, Any]
+) -> dict[str, Any]:
     return {
         "date": source_date,
         "status": preflight.get("status"),
@@ -529,14 +620,20 @@ def _source_date_preflight_entry(source_date: str, preflight: dict[str, Any]) ->
         "allowed_runtime_apply": preflight.get("allowed_runtime_apply"),
         "source_quality_gate": preflight.get("source_quality_gate"),
         "blocked_reason": preflight.get("blocked_reason"),
-        "hard_blocking_contract_gap_count": preflight.get("hard_blocking_contract_gap_count"),
-        "hard_blocking_excluded_row_count": preflight.get("hard_blocking_excluded_row_count"),
+        "hard_blocking_contract_gap_count": preflight.get(
+            "hard_blocking_contract_gap_count"
+        ),
+        "hard_blocking_excluded_row_count": preflight.get(
+            "hard_blocking_excluded_row_count"
+        ),
         "raw_row_exclusion_applied": preflight.get("raw_row_exclusion_applied"),
         "artifact": preflight.get("artifact"),
     }
 
 
-def _filter_source_quality_dates(source_dates: list[str]) -> tuple[list[str], list[dict[str, Any]], list[dict[str, Any]]]:
+def _filter_source_quality_dates(
+    source_dates: list[str],
+) -> tuple[list[str], list[dict[str, Any]], list[dict[str, Any]]]:
     usable_dates: list[str] = []
     passed_preflights: list[dict[str, Any]] = []
     blocked_preflights: list[dict[str, Any]] = []
@@ -551,7 +648,9 @@ def _filter_source_quality_dates(source_dates: list[str]) -> tuple[list[str], li
     return usable_dates, passed_preflights, blocked_preflights
 
 
-def _build_rows(source_dates: list[str], missing: list[dict[str, str]]) -> list[dict[str, Any]]:
+def _build_rows(
+    source_dates: list[str], missing: list[dict[str, str]]
+) -> list[dict[str, Any]]:
     entries: dict[str, dict[str, Any]] = {}
     series: dict[str, list[tuple[datetime, float]]] = defaultdict(list)
     contexts: dict[str, dict[str, Any]] = defaultdict(dict)
@@ -566,7 +665,12 @@ def _build_rows(source_dates: list[str], missing: list[dict[str, str]]) -> list[
         if pnl is not None:
             series[key].append((event_time, pnl))
         if _is_entry_event(event) and key not in entries:
-            entries[key] = _entry_profile(_merge_profile_context(event, source_date, contexts), source_date, key, event_time)
+            entries[key] = _entry_profile(
+                _merge_profile_context(event, source_date, contexts),
+                source_date,
+                key,
+                event_time,
+            )
         context = _profile_context(event)
         if context:
             for alias in _context_aliases(source_date, event):
@@ -590,20 +694,30 @@ def _build_rows(source_dates: list[str], missing: list[dict[str, str]]) -> list[
                 "mfe_10m_pct": metrics_10m["mfe_pct"],
                 "mae_10m_pct": metrics_10m["mae_pct"],
                 "final_10m_pct": metrics_10m["final_pct"],
-                "mfe_hit_before_tight_stop_10m": metrics_10m["mfe_hit_before_tight_stop"],
-                "tight_stop_touched_before_mfe_10m": metrics_10m["tight_stop_touched_before_mfe"],
+                "mfe_hit_before_tight_stop_10m": metrics_10m[
+                    "mfe_hit_before_tight_stop"
+                ],
+                "tight_stop_touched_before_mfe_10m": metrics_10m[
+                    "tight_stop_touched_before_mfe"
+                ],
             }
         )
     return rows
 
 
-def build_report(target_date: str, *, start_date: str | None = None, end_date: str | None = None) -> dict[str, Any]:
+def build_report(
+    target_date: str, *, start_date: str | None = None, end_date: str | None = None
+) -> dict[str, Any]:
     target_date = str(target_date).strip()
     start = str(start_date or target_date).strip()
     end = str(end_date or target_date).strip()
     policy = clean_baseline_policy()
-    clean_source_dates, excluded_dates = filter_allowed_dates(_date_range(start, end), policy)
-    source_dates, passed_preflights, blocked_preflights = _filter_source_quality_dates(clean_source_dates)
+    clean_source_dates, excluded_dates = filter_allowed_dates(
+        _date_range(start, end), policy
+    )
+    source_dates, passed_preflights, blocked_preflights = _filter_source_quality_dates(
+        clean_source_dates
+    )
     missing_artifacts: list[dict[str, str]] = []
     rows = _build_rows(source_dates, missing_artifacts)
     candidate_count = len(rows)
@@ -611,13 +725,15 @@ def build_report(target_date: str, *, start_date: str | None = None, end_date: s
     source_quality_status = (
         "source_quality_blocked"
         if source_quality_blocked
-        else "warning_missing_partial_input_and_source_quality_excluded"
-        if missing_artifacts and blocked_preflights
-        else "warning_source_quality_excluded"
-        if blocked_preflights
-        else "warning_missing_partial_input"
-        if missing_artifacts
-        else "pass"
+        else (
+            "warning_missing_partial_input_and_source_quality_excluded"
+            if missing_artifacts and blocked_preflights
+            else (
+                "warning_source_quality_excluded"
+                if blocked_preflights
+                else "warning_missing_partial_input" if missing_artifacts else "pass"
+            )
+        )
     )
     companion_candidates = _top_companion_candidates(rows)
     real_submitted_path_validation = _real_submitted_path_validation(rows)
@@ -667,7 +783,10 @@ def build_report(target_date: str, *, start_date: str | None = None, end_date: s
             "metric_role": "diagnostic_win_rate",
             "decision_authority": "source_only_tight_stop_entry_companion_observation",
             "window_policy": f"{start}_to_{end}",
-            "sample_floor": {"entry_path_rows": SAMPLE_FLOOR, "real_submitted_path_rows": SAMPLE_FLOOR},
+            "sample_floor": {
+                "entry_path_rows": SAMPLE_FLOOR,
+                "real_submitted_path_rows": SAMPLE_FLOOR,
+            },
             "primary_decision_metric": "mfe_before_tight_stop_rate_minus_tight_stop_first_rate",
             "candidate_filters": {
                 "exclude_unknown_context": True,
@@ -711,13 +830,23 @@ def render_markdown(report: dict[str, Any]) -> str:
         "## Top Companion Candidates",
         "",
         "```json",
-        json.dumps(report.get("companion_candidates") or [], ensure_ascii=False, indent=2, default=str),
+        json.dumps(
+            report.get("companion_candidates") or [],
+            ensure_ascii=False,
+            indent=2,
+            default=str,
+        ),
         "```",
         "",
         "## Real Submitted Path Validation",
         "",
         "```json",
-        json.dumps(report.get("real_submitted_path_validation") or {}, ensure_ascii=False, indent=2, default=str),
+        json.dumps(
+            report.get("real_submitted_path_validation") or {},
+            ensure_ascii=False,
+            indent=2,
+            default=str,
+        ),
         "```",
     ]
     return "\n".join(lines) + "\n"
@@ -726,7 +855,10 @@ def render_markdown(report: dict[str, Any]) -> str:
 def write_report(report: dict[str, Any]) -> tuple[Path, Path]:
     json_path, md_path = report_paths(str(report.get("target_date") or "unknown"))
     json_path.parent.mkdir(parents=True, exist_ok=True)
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True, default=str), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True, default=str),
+        encoding="utf-8",
+    )
     md_path.write_text(render_markdown(report), encoding="utf-8")
     return json_path, md_path
 
@@ -738,12 +870,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--end-date")
     parser.add_argument("--write", action="store_true")
     args = parser.parse_args(argv)
-    report = build_report(args.target_date, start_date=args.start_date, end_date=args.end_date)
+    report = build_report(
+        args.target_date, start_date=args.start_date, end_date=args.end_date
+    )
     if args.write:
         json_path, md_path = write_report(report)
-        print(json.dumps({"json": str(json_path), "md": str(md_path)}, ensure_ascii=False))
+        print(
+            json.dumps({"json": str(json_path), "md": str(md_path)}, ensure_ascii=False)
+        )
     else:
-        print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True, default=str))
+        print(
+            json.dumps(
+                report, ensure_ascii=False, indent=2, sort_keys=True, default=str
+            )
+        )
     return 0
 
 

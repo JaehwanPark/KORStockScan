@@ -24,7 +24,9 @@ def _today_iso() -> str:
     return datetime.now(SEOUL_TZ).date().isoformat()
 
 
-def _default_output_paths(local_root: Path, target_date: str, window: str, ts: str) -> tuple[Path, Path]:
+def _default_output_paths(
+    local_root: Path, target_date: str, window: str, ts: str
+) -> tuple[Path, Path]:
     output_dir = local_root / target_date
     output_dir.mkdir(parents=True, exist_ok=True)
     stem = f"{target_date}_{window}_{ts}"
@@ -128,7 +130,9 @@ print(json.dumps(payload, ensure_ascii=False))
 """
 
 
-def _run_ssh_json(*, host: str, user: str, remote_root: str, target_date: str) -> dict[str, Any]:
+def _run_ssh_json(
+    *, host: str, user: str, remote_root: str, target_date: str
+) -> dict[str, Any]:
     proc = subprocess.run(
         ["ssh", f"{user}@{host}", "python3", "-"],
         input=_build_remote_script(remote_root, target_date),
@@ -163,18 +167,22 @@ def _render_markdown(window: str, payload: dict[str, Any]) -> str:
         "```text",
     ]
     lines.extend(payload.get("thread_snapshot") or ["<empty>"])
-    lines.extend([
-        "```",
-        "",
-        "## Top Snapshot",
-        "",
-        "```text",
-    ])
+    lines.extend(
+        [
+            "```",
+            "",
+            "## Top Snapshot",
+            "",
+            "```text",
+        ]
+    )
     lines.extend(payload.get("top_snapshot") or ["<empty>"])
-    lines.extend([
-        "```",
-        "",
-    ])
+    lines.extend(
+        [
+            "```",
+            "",
+        ]
+    )
     return "\n".join(lines)
 
 
@@ -191,28 +199,40 @@ def collect_remote_latency_baseline(
 ) -> dict[str, Any]:
     ts = datetime.now(SEOUL_TZ).strftime("%Y%m%d_%H%M%S")
     if json_output is None or markdown_output is None:
-        default_json, default_md = _default_output_paths(local_root, target_date, window, ts)
+        default_json, default_md = _default_output_paths(
+            local_root, target_date, window, ts
+        )
         json_output = json_output or default_json
         markdown_output = markdown_output or default_md
     json_output.parent.mkdir(parents=True, exist_ok=True)
     markdown_output.parent.mkdir(parents=True, exist_ok=True)
 
-    payload = _run_ssh_json(host=host, user=user, remote_root=remote_root, target_date=target_date)
-    payload.update({
-        "window": window,
-        "status": "ok" if payload.get("bot_running") else "fail",
-        "json_output": str(json_output),
-        "markdown_output": str(markdown_output),
-    })
-    json_output.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    payload = _run_ssh_json(
+        host=host, user=user, remote_root=remote_root, target_date=target_date
+    )
+    payload.update(
+        {
+            "window": window,
+            "status": "ok" if payload.get("bot_running") else "fail",
+            "json_output": str(json_output),
+            "markdown_output": str(markdown_output),
+        }
+    )
+    json_output.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     markdown_output.write_text(_render_markdown(window, payload), encoding="utf-8")
     return payload
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Collect remote latency baseline snapshots")
+    parser = argparse.ArgumentParser(
+        description="Collect remote latency baseline snapshots"
+    )
     parser.add_argument("--date", default=_today_iso())
-    parser.add_argument("--window", choices=["preopen", "midmorning", "afternoon"], required=True)
+    parser.add_argument(
+        "--window", choices=["preopen", "midmorning", "afternoon"], required=True
+    )
     parser.add_argument("--host", default=DEFAULT_HOST)
     parser.add_argument("--user", default=DEFAULT_USER)
     parser.add_argument("--remote-root", default=DEFAULT_REMOTE_ROOT)
@@ -231,17 +251,22 @@ def main() -> int:
         json_output=Path(args.json_output) if args.json_output else None,
         markdown_output=Path(args.markdown_output) if args.markdown_output else None,
     )
-    print(json.dumps({
-        "date": result["target_date"],
-        "window": result["window"],
-        "status": result["status"],
-        "bot_running": result["bot_running"],
-        "bot_pid": result["bot_pid"],
-        "pipeline_exists": result.get("pipeline", {}).get("exists", False),
-        "pipeline_line_count": result.get("pipeline", {}).get("line_count", 0),
-        "json_output": result["json_output"],
-        "markdown_output": result["markdown_output"],
-    }, ensure_ascii=False))
+    print(
+        json.dumps(
+            {
+                "date": result["target_date"],
+                "window": result["window"],
+                "status": result["status"],
+                "bot_running": result["bot_running"],
+                "bot_pid": result["bot_pid"],
+                "pipeline_exists": result.get("pipeline", {}).get("exists", False),
+                "pipeline_line_count": result.get("pipeline", {}).get("line_count", 0),
+                "json_output": result["json_output"],
+                "markdown_output": result["markdown_output"],
+            },
+            ensure_ascii=False,
+        )
+    )
     return 0 if result["status"] == "ok" else 1
 
 

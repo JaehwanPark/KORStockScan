@@ -9,8 +9,10 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
-from src.engine.daily_threshold_cycle_report import CALIBRATION_SAFETY_GUARDS, REPORT_DIR
-
+from src.engine.daily_threshold_cycle_report import (
+    CALIBRATION_SAFETY_GUARDS,
+    REPORT_DIR,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 GEMINI_LAB_DIR = PROJECT_ROOT / "analysis" / "gemini_scalping_pattern_lab"
@@ -76,7 +78,9 @@ def automation_report_paths(target_date: str) -> tuple[Path, Path]:
 
 
 def _entry_adm_summary(target_date: str) -> tuple[dict[str, Any], str | None]:
-    path = SCALP_ENTRY_ADM_DIR / f"scalp_entry_action_decision_matrix_{target_date}.json"
+    path = (
+        SCALP_ENTRY_ADM_DIR / f"scalp_entry_action_decision_matrix_{target_date}.json"
+    )
     payload = _load_json(path)
     if not payload:
         return {"available": False, "status": "missing", "runtime_effect": False}, None
@@ -91,7 +95,11 @@ def _entry_adm_summary(target_date: str) -> tuple[dict[str, Any], str | None]:
             "total_candidates": _safe_int(summary.get("total_candidates"), 0),
             "joined_sample": _safe_int(summary.get("joined_sample"), 0),
             "sample_floor": _safe_int(summary.get("sample_floor"), 0),
-            "missing_actions": summary.get("missing_actions") if isinstance(summary.get("missing_actions"), list) else [],
+            "missing_actions": (
+                summary.get("missing_actions")
+                if isinstance(summary.get("missing_actions"), list)
+                else []
+            ),
             "prompt_applied_count": _safe_int(summary.get("prompt_applied_count"), 0),
         },
         str(path),
@@ -121,7 +129,9 @@ def _entry_adm_source_quality_contract(summary: dict[str, Any]) -> dict[str, Any
     return {
         "contract_id": "scalp_entry_adm_pattern_lab_source_quality",
         "source_contract_version": "scalp_entry_adm_pattern_lab_source_quality_v1",
-        "source_contract_status": "implemented" if available and sample_floor > 0 else "instrumentation_gap",
+        "source_contract_status": (
+            "implemented" if available and sample_floor > 0 else "instrumentation_gap"
+        ),
         "metric_role": "source_quality_gate",
         "decision_authority": DECISION_AUTHORITY,
         "window_policy": "same_day_adm_report_plus_postclose_pattern_lab",
@@ -147,14 +157,23 @@ def _lab_output_paths(lab_dir: Path, lab_name: str) -> dict[str, Path]:
         "observability": outputs / "tuning_observability_summary.json",
         "manifest": outputs / "run_manifest.json",
         "final_review": outputs / final_name,
-        "backlog": outputs / ("ev_improvement_backlog_for_ops.md" if lab_name == "claude" else "ev_improvement_backlog.md"),
+        "backlog": outputs
+        / (
+            "ev_improvement_backlog_for_ops.md"
+            if lab_name == "claude"
+            else "ev_improvement_backlog.md"
+        ),
     }
 
 
-def _lab_freshness(lab_name: str, paths: dict[str, Path], target_date: str) -> dict[str, Any]:
+def _lab_freshness(
+    lab_name: str, paths: dict[str, Path], target_date: str
+) -> dict[str, Any]:
     manifest = _load_json(paths["manifest"])
     run_date = _parse_date_prefix(manifest.get("run_at") or manifest.get("executed_at"))
-    coverage_end = _parse_date_prefix(manifest.get("history_coverage_end") or manifest.get("analysis_end"))
+    coverage_end = _parse_date_prefix(
+        manifest.get("history_coverage_end") or manifest.get("analysis_end")
+    )
     fresh = bool(manifest) and run_date == target_date and coverage_end == target_date
     return {
         "lab": lab_name,
@@ -165,11 +184,17 @@ def _lab_freshness(lab_name: str, paths: dict[str, Path], target_date: str) -> d
         "final_review_exists": paths["final_review"].exists(),
         "ev_result_exists": paths["ev"].exists(),
         "observability_exists": paths["observability"].exists(),
-        "stale_reason": ""
-        if fresh
-        else "missing_manifest_or_target_date_mismatch"
-        if not manifest or run_date != target_date or coverage_end != target_date
-        else "",
+        "stale_reason": (
+            ""
+            if fresh
+            else (
+                "missing_manifest_or_target_date_mismatch"
+                if not manifest
+                or run_date != target_date
+                or coverage_end != target_date
+                else ""
+            )
+        ),
     }
 
 
@@ -180,28 +205,46 @@ def _slug(value: str) -> str:
 
 def _normalize_route(title: str) -> dict[str, str]:
     haystack = title.lower()
-    if any(token in haystack for token in ("ai threshold", "wait65", "wait65~79", "score65", "submitted drought")):
+    if any(
+        token in haystack
+        for token in (
+            "ai threshold",
+            "wait65",
+            "wait65~79",
+            "score65",
+            "submitted drought",
+        )
+    ):
         return {
             "route": "existing_family",
             "family": "score65_74_recovery_probe",
             "stage": "entry",
             "target_subsystem": "entry_funnel",
         }
-    if any(token in haystack for token in ("gatekeeper latency", "latency", "quote_fresh", "lock/model")):
+    if any(
+        token in haystack
+        for token in ("gatekeeper latency", "latency", "quote_fresh", "lock/model")
+    ):
         return {
             "route": "instrumentation_order",
             "family": "",
             "stage": "runtime_ops",
             "target_subsystem": "runtime_instrumentation",
         }
-    if any(token in haystack for token in ("soft_stop", "soft-stop", "same_symbol", "same-symbol")):
+    if any(
+        token in haystack
+        for token in ("soft_stop", "soft-stop", "same_symbol", "same-symbol")
+    ):
         return {
             "route": "existing_family",
             "family": "soft_stop_whipsaw_confirmation",
             "stage": "holding_exit",
             "target_subsystem": "holding_exit",
         }
-    if any(token in haystack for token in ("split-entry", "split entry", "bad_entry", "rebase", "partial")):
+    if any(
+        token in haystack
+        for token in ("split-entry", "split entry", "bad_entry", "rebase", "partial")
+    ):
         return {
             "route": "existing_family",
             "family": "bad_entry_refined_canary",
@@ -238,7 +281,9 @@ def _finding_from_backlog_item(lab: str, item: dict[str, Any]) -> dict[str, Any]
         "evidence": {
             "expected_effect": item.get("기대효과") or item.get("expected_effect"),
             "risk": item.get("리스크") or item.get("risk"),
-            "required_sample": item.get("필요표본") or item.get("필요 표본") or item.get("required_sample"),
+            "required_sample": item.get("필요표본")
+            or item.get("필요 표본")
+            or item.get("required_sample"),
             "metric": item.get("검증지표") or item.get("metric"),
             "apply_stage": item.get("적용단계") or item.get("apply_stage"),
         },
@@ -285,7 +330,9 @@ def _finding_from_priority(lab: str, item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _extract_findings(lab: str, ev_result: dict[str, Any], observability: dict[str, Any]) -> list[dict[str, Any]]:
+def _extract_findings(
+    lab: str, ev_result: dict[str, Any], observability: dict[str, Any]
+) -> list[dict[str, Any]]:
     findings: list[dict[str, Any]] = []
     for item in ev_result.get("ev_backlog") or []:
         if isinstance(item, dict):
@@ -310,7 +357,11 @@ def _load_lab(lab_name: str, lab_dir: Path, target_date: str) -> dict[str, Any]:
     ev_result = _load_json(paths["ev"])
     observability = _load_json(paths["observability"])
     freshness = _lab_freshness(lab_name, paths, target_date)
-    findings = _extract_findings(lab_name, ev_result, observability) if freshness["fresh"] else []
+    findings = (
+        _extract_findings(lab_name, ev_result, observability)
+        if freshness["fresh"]
+        else []
+    )
     rejected = []
     if not freshness["fresh"]:
         rejected.append(
@@ -324,14 +375,18 @@ def _load_lab(lab_name: str, lab_dir: Path, target_date: str) -> dict[str, Any]:
         )
     return {
         "lab": lab_name,
-        "paths": {key: str(path) if path.exists() else None for key, path in paths.items()},
+        "paths": {
+            key: str(path) if path.exists() else None for key, path in paths.items()
+        },
         "freshness": freshness,
         "findings": findings,
         "rejected_findings": rejected,
     }
 
 
-def _merge_findings(lab_results: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def _merge_findings(
+    lab_results: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     grouped: dict[str, list[dict[str, Any]]] = {}
     solo: list[dict[str, Any]] = []
     for result in lab_results:
@@ -356,8 +411,18 @@ def _merge_findings(lab_results: list[dict[str, Any]]) -> tuple[list[dict[str, A
             consensus.append(merged)
         else:
             solo.append(merged)
-    consensus.sort(key=lambda item: (item.get("route") != "existing_family", item.get("title") or ""))
-    solo.sort(key=lambda item: (item.get("route") != "instrumentation_order", item.get("title") or ""))
+    consensus.sort(
+        key=lambda item: (
+            item.get("route") != "existing_family",
+            item.get("title") or "",
+        )
+    )
+    solo.sort(
+        key=lambda item: (
+            item.get("route") != "instrumentation_order",
+            item.get("title") or "",
+        )
+    )
     return consensus, solo
 
 
@@ -396,7 +461,8 @@ def _auto_family_candidates(findings: list[dict[str, Any]]) -> list[dict[str, An
                 "sample_floor": 20,
                 "target_metric": "daily_ev_delta_or_missed_upside_reduction",
                 "safety_guard": list(CALIBRATION_SAFETY_GUARDS),
-                "proposed_runtime_touchpoint": finding.get("target_subsystem") or "scalping_logic",
+                "proposed_runtime_touchpoint": finding.get("target_subsystem")
+                or "scalping_logic",
                 "implementation_order_id": f"order_{family_id}",
                 "runtime_effect": False,
                 "allowed_runtime_apply": False,
@@ -412,8 +478,14 @@ def _source_only_order_provenance(order: dict[str, Any]) -> dict[str, Any]:
     order_id = str(order.get("order_id") or "").strip()
     evidence = order.get("evidence") if isinstance(order.get("evidence"), dict) else {}
     if not evidence:
-        evidence_list = order.get("evidence") if isinstance(order.get("evidence"), list) else []
-        evidence = evidence_list[0] if evidence_list and isinstance(evidence_list[0], dict) else {}
+        evidence_list = (
+            order.get("evidence") if isinstance(order.get("evidence"), list) else []
+        )
+        evidence = (
+            evidence_list[0]
+            if evidence_list and isinstance(evidence_list[0], dict)
+            else {}
+        )
     mapped_family = order.get("mapped_family") or order.get("threshold_family")
 
     quantitative_contracts = {
@@ -444,13 +516,17 @@ def _source_only_order_provenance(order: dict[str, Any]) -> dict[str, Any]:
         present = {key: key in evidence for key in spec["required_keys"]}
         implementation_ok = all(present.values())
         return {
-            "implementation_status": spec["status"] if implementation_ok else "instrumentation_gap",
+            "implementation_status": (
+                spec["status"] if implementation_ok else "instrumentation_gap"
+            ),
             "implementation_checks": [
                 {
                     "name": "source_metric_contract",
                     "status": "pass" if implementation_ok else "fail",
                     "required_keys": spec["required_keys"],
-                    "missing_keys": [key for key, exists in present.items() if not exists],
+                    "missing_keys": [
+                        key for key, exists in present.items() if not exists
+                    ],
                 },
                 {
                     "name": "runtime_authority_contract",
@@ -477,20 +553,34 @@ def _source_only_order_provenance(order: dict[str, Any]) -> dict[str, Any]:
         }
     if order_id in report_only_contracts:
         spec = report_only_contracts[order_id]
-        required_keys = ["expected_effect", "risk", "required_sample", "metric", "apply_stage"]
-        present = {key: bool(str(evidence.get(key) or "").strip()) for key in required_keys}
-        apply_stage_ok = str(evidence.get("apply_stage") or "").strip() == "report_only_observation"
+        required_keys = [
+            "expected_effect",
+            "risk",
+            "required_sample",
+            "metric",
+            "apply_stage",
+        ]
+        present = {
+            key: bool(str(evidence.get(key) or "").strip()) for key in required_keys
+        }
+        apply_stage_ok = (
+            str(evidence.get("apply_stage") or "").strip() == "report_only_observation"
+        )
         implementation_ok = all(present.values()) and apply_stage_ok
         return {
             "implementation_status": (
-                "implemented_but_waiting_sample" if implementation_ok else "instrumentation_gap"
+                "implemented_but_waiting_sample"
+                if implementation_ok
+                else "instrumentation_gap"
             ),
             "implementation_checks": [
                 {
                     "name": "report_only_contract_fields",
                     "status": "pass" if all(present.values()) else "fail",
                     "required_keys": required_keys,
-                    "missing_keys": [key for key, exists in present.items() if not exists],
+                    "missing_keys": [
+                        key for key, exists in present.items() if not exists
+                    ],
                 },
                 {
                     "name": "report_only_apply_stage",
@@ -524,7 +614,9 @@ def _source_only_order_provenance(order: dict[str, Any]) -> dict[str, Any]:
     return {}
 
 
-def _code_improvement_orders(findings: list[dict[str, Any]], solo_findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _code_improvement_orders(
+    findings: list[dict[str, Any]], solo_findings: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
     source = list(findings) + list(solo_findings)
     orders: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -557,10 +649,22 @@ def _code_improvement_orders(findings: list[dict[str, Any]], solo_findings: list
             else {}
         )
         files = {
-            "entry_funnel": ["src/engine/daily_threshold_cycle_report.py", "src/engine/sniper_missed_entry_counterfactual.py"],
-            "holding_exit": ["src/engine/daily_threshold_cycle_report.py", "src/engine/sniper_state_handlers.py"],
-            "runtime_instrumentation": ["src/engine/sniper_performance_tuning_report.py", "src/engine/daily_threshold_cycle_report.py"],
-            "entry_filter_quality": ["src/engine/daily_threshold_cycle_report.py", "src/engine/sniper_state_handlers.py"],
+            "entry_funnel": [
+                "src/engine/daily_threshold_cycle_report.py",
+                "src/engine/sniper_missed_entry_counterfactual.py",
+            ],
+            "holding_exit": [
+                "src/engine/daily_threshold_cycle_report.py",
+                "src/engine/sniper_state_handlers.py",
+            ],
+            "runtime_instrumentation": [
+                "src/engine/sniper_performance_tuning_report.py",
+                "src/engine/daily_threshold_cycle_report.py",
+            ],
+            "entry_filter_quality": [
+                "src/engine/daily_threshold_cycle_report.py",
+                "src/engine/sniper_state_handlers.py",
+            ],
         }.get(subsystem, ["src/engine/daily_threshold_cycle_report.py"])
         orders.append(
             {
@@ -572,7 +676,11 @@ def _code_improvement_orders(findings: list[dict[str, Any]], solo_findings: list
                 "mapped_family": finding.get("mapped_family"),
                 "improvement_type": (
                     finding.get("improvement_type")
-                    or ("threshold_family_input" if finding.get("mapped_family") else finding.get("finding_id"))
+                    or (
+                        "threshold_family_input"
+                        if finding.get("mapped_family")
+                        else finding.get("finding_id")
+                    )
                 ),
                 "intent": "Generate implementation work from pattern-lab EV evidence without direct runtime mutation.",
                 "evidence": finding.get("evidence") or [],
@@ -609,11 +717,17 @@ def build_scalping_pattern_lab_automation_report(target_date: str) -> dict[str, 
         _load_lab("claude", CLAUDE_LAB_DIR, target_date),
     ]
     consensus, solo = _merge_findings(lab_results)
-    accepted_for_family = [item for item in consensus if item.get("route") in {"existing_family", "auto_family_candidate"}]
+    accepted_for_family = [
+        item
+        for item in consensus
+        if item.get("route") in {"existing_family", "auto_family_candidate"}
+    ]
     existing_inputs = _existing_family_inputs(accepted_for_family)
     family_candidates = _auto_family_candidates(accepted_for_family)
     orders = _code_improvement_orders(consensus, solo)
-    rejected = [item for result in lab_results for item in result.get("rejected_findings") or []]
+    rejected = [
+        item for result in lab_results for item in result.get("rejected_findings") or []
+    ]
     entry_adm_summary, entry_adm_path = _entry_adm_summary(target_date)
     entry_adm_source_quality_contract = _entry_adm_source_quality_contract(
         entry_adm_summary
@@ -658,11 +772,19 @@ def build_scalping_pattern_lab_automation_report(target_date: str) -> dict[str, 
             "auto_family_candidate_count": len(family_candidates),
             "code_improvement_order_count": len(orders),
             "top_consensus_findings": [
-                {"title": item.get("title"), "route": item.get("route"), "mapped_family": item.get("mapped_family")}
+                {
+                    "title": item.get("title"),
+                    "route": item.get("route"),
+                    "mapped_family": item.get("mapped_family"),
+                }
                 for item in consensus[:3]
             ],
             "top_code_improvement_orders": [
-                {"order_id": item.get("order_id"), "title": item.get("title"), "target_subsystem": item.get("target_subsystem")}
+                {
+                    "order_id": item.get("order_id"),
+                    "title": item.get("title"),
+                    "target_subsystem": item.get("target_subsystem"),
+                }
                 for item in orders[:3]
             ],
             "scalp_entry_adm_status": entry_adm_summary.get("status"),
@@ -680,14 +802,26 @@ def build_scalping_pattern_lab_automation_report(target_date: str) -> dict[str, 
     }
     PATTERN_LAB_AUTOMATION_DIR.mkdir(parents=True, exist_ok=True)
     json_path, md_path = automation_report_paths(target_date)
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-    md_path.write_text(render_scalping_pattern_lab_automation_markdown(report), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    md_path.write_text(
+        render_scalping_pattern_lab_automation_markdown(report), encoding="utf-8"
+    )
     return report
 
 
 def render_scalping_pattern_lab_automation_markdown(report: dict[str, Any]) -> str:
-    summary = report.get("ev_report_summary") if isinstance(report.get("ev_report_summary"), dict) else {}
-    freshness = report.get("lab_freshness") if isinstance(report.get("lab_freshness"), dict) else {}
+    summary = (
+        report.get("ev_report_summary")
+        if isinstance(report.get("ev_report_summary"), dict)
+        else {}
+    )
+    freshness = (
+        report.get("lab_freshness")
+        if isinstance(report.get("lab_freshness"), dict)
+        else {}
+    )
     lines = [
         f"# Scalping Pattern Lab Automation - {report.get('date')}",
         "",
@@ -735,7 +869,9 @@ def render_scalping_pattern_lab_automation_markdown(report: dict[str, Any]) -> s
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Aggregate scalping pattern labs into improvement orders.")
+    parser = argparse.ArgumentParser(
+        description="Aggregate scalping pattern labs into improvement orders."
+    )
     parser.add_argument("--date", dest="target_date", default=date.today().isoformat())
     args = parser.parse_args(argv)
     report = build_scalping_pattern_lab_automation_report(args.target_date)

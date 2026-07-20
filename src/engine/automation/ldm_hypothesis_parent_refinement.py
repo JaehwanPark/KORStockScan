@@ -14,9 +14,11 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
-from src.engine.automation.ldm_hypothesis_discovery import FORBIDDEN_USES, OBSERVATION_PLAN_SCHEMA_VERSION
+from src.engine.automation.ldm_hypothesis_discovery import (
+    FORBIDDEN_USES,
+    OBSERVATION_PLAN_SCHEMA_VERSION,
+)
 from src.utils.constants import DATA_DIR
-
 
 REPORT_TYPE = "ldm_hypothesis_parent_refinement"
 SCHEMA_VERSION = "ldm_hypothesis_parent_refinement_v1"
@@ -157,7 +159,11 @@ def _iter_pipeline_event_records(target_date: str):
                     continue
                 if not isinstance(payload, dict):
                     continue
-                fields = payload.get("fields") if isinstance(payload.get("fields"), dict) else {}
+                fields = (
+                    payload.get("fields")
+                    if isinstance(payload.get("fields"), dict)
+                    else {}
+                )
                 yield payload, fields, path
 
 
@@ -166,7 +172,11 @@ def _iter_pipeline_event_fields(target_date: str):
         yield payload, fields
 
 
-_LDM_HYPOTHESIS_RUNTIME_REQUIREMENT_FIELDS = {"entry_score_parent", "entry_source_parent", "submit_quality_parent"}
+_LDM_HYPOTHESIS_RUNTIME_REQUIREMENT_FIELDS = {
+    "entry_score_parent",
+    "entry_source_parent",
+    "submit_quality_parent",
+}
 
 
 def _hypothesis_runtime_contract_compatible(hypothesis: dict[str, Any]) -> bool:
@@ -191,13 +201,23 @@ def _hypothesis_runtime_contract_compatible(hypothesis: dict[str, Any]) -> bool:
     }
     if not required.issubset(forbidden):
         return False
-    if not forbidden.intersection({"sizing_formula_runtime_apply_without_guard", "position_cap_release"}):
+    if not forbidden.intersection(
+        {"sizing_formula_runtime_apply_without_guard", "position_cap_release"}
+    ):
         return False
-    return isinstance(hypothesis.get("observable_requirements"), list) and bool(hypothesis.get("observable_requirements"))
+    return isinstance(hypothesis.get("observable_requirements"), list) and bool(
+        hypothesis.get("observable_requirements")
+    )
 
 
-def _hypothesis_matches_requirements(candidate: dict[str, Any], requirements: Any) -> bool:
-    if not isinstance(candidate, dict) or not isinstance(requirements, list) or not requirements:
+def _hypothesis_matches_requirements(
+    candidate: dict[str, Any], requirements: Any
+) -> bool:
+    if (
+        not isinstance(candidate, dict)
+        or not isinstance(requirements, list)
+        or not requirements
+    ):
         return False
     for requirement in requirements:
         if not isinstance(requirement, dict):
@@ -223,7 +243,9 @@ def _derived_hypothesis_id_for_features(
     for hypothesis_id, hypothesis in hypotheses.items():
         if not _hypothesis_runtime_contract_compatible(hypothesis):
             continue
-        if _hypothesis_matches_requirements(candidate_features, hypothesis.get("observable_requirements")):
+        if _hypothesis_matches_requirements(
+            candidate_features, hypothesis.get("observable_requirements")
+        ):
             return hypothesis_id
     return ""
 
@@ -245,9 +267,15 @@ def _add_match_to_aggregate(
         aggregate.derived_match_count += 1
     raw_matched = "true" if _truthy(fields.get("ldm_hypothesis_matched")) else "false"
     aggregate.raw_ldm_hypothesis_matched[raw_matched] += 1
-    raw_id_present = "true" if str(fields.get("ldm_hypothesis_id") or "").strip() else "false"
+    raw_id_present = (
+        "true" if str(fields.get("ldm_hypothesis_id") or "").strip() else "false"
+    )
     aggregate.raw_ldm_hypothesis_id_present[raw_id_present] += 1
-    parent_id = str(fields.get("source_parent_bucket_id") or fields.get("canonical_parent_bucket") or "").strip()
+    parent_id = str(
+        fields.get("source_parent_bucket_id")
+        or fields.get("canonical_parent_bucket")
+        or ""
+    ).strip()
     if parent_id:
         aggregate.source_parent_bucket_ids[parent_id] += 1
     stock_code = str(payload.get("stock_code") or "").strip()
@@ -261,15 +289,27 @@ def _add_match_to_aggregate(
     requirements = aggregate.plan_hypothesis.get("observable_requirements")
     if not isinstance(requirements, list):
         requirements = []
-    aggregate.observable_signatures[_observable_signature(candidate_features, requirements)] += 1
-    source_quality = str(fields.get("source_quality_status") or fields.get("source_quality") or "").lower()
+    aggregate.observable_signatures[
+        _observable_signature(candidate_features, requirements)
+    ] += 1
+    source_quality = str(
+        fields.get("source_quality_status") or fields.get("source_quality") or ""
+    ).lower()
     if "block" in source_quality or "fail" in source_quality:
         aggregate.source_quality_blocked_count += 1
     actual_order_value = fields.get("actual_order_submitted")
     broker_forbidden_value = fields.get("broker_order_forbidden")
-    authority_contract_missing = actual_order_value in (None, "", "-") or broker_forbidden_value in (None, "", "-")
+    authority_contract_missing = actual_order_value in (
+        None,
+        "",
+        "-",
+    ) or broker_forbidden_value in (None, "", "-")
     if source_origin == "runtime_matched":
-        authority_violation = authority_contract_missing or _truthy(actual_order_value) or not _truthy(broker_forbidden_value)
+        authority_violation = (
+            authority_contract_missing
+            or _truthy(actual_order_value)
+            or not _truthy(broker_forbidden_value)
+        )
     else:
         authority_violation = (not authority_contract_missing) and (
             _truthy(actual_order_value) or not _truthy(broker_forbidden_value)
@@ -282,7 +322,9 @@ def _add_match_to_aggregate(
         aggregate.profit_values.append(profit)
 
 
-def _observable_signature(features: dict[str, Any], requirements: list[dict[str, Any]] | None = None) -> str:
+def _observable_signature(
+    features: dict[str, Any], requirements: list[dict[str, Any]] | None = None
+) -> str:
     allowed = {"entry_score_parent", "entry_source_parent", "submit_quality_parent"}
     selected: dict[str, str] = {}
     for key in sorted(allowed):
@@ -302,7 +344,9 @@ def _observable_signature(features: dict[str, Any], requirements: list[dict[str,
     return f"observable_{digest}"
 
 
-def _observable_features(features: dict[str, Any], requirements: list[dict[str, Any]] | None = None) -> dict[str, str]:
+def _observable_features(
+    features: dict[str, Any], requirements: list[dict[str, Any]] | None = None
+) -> dict[str, str]:
     selected: dict[str, str] = {}
     for key in ("entry_score_parent", "entry_source_parent", "submit_quality_parent"):
         value = features.get(key)
@@ -314,7 +358,11 @@ def _observable_features(features: dict[str, Any], requirements: list[dict[str, 
                 continue
             field_name = str(requirement.get("field") or "")
             value = requirement.get("value")
-            if field_name in {"entry_score_parent", "entry_source_parent", "submit_quality_parent"} and value not in (
+            if field_name in {
+                "entry_score_parent",
+                "entry_source_parent",
+                "submit_quality_parent",
+            } and value not in (
                 None,
                 "",
                 "-",
@@ -345,7 +393,9 @@ def _latest_lifecycle_bucket_report(target_date: str) -> dict[str, Any]:
         target = date.fromisoformat(target_date)
     except ValueError:
         return {}
-    paths = sorted(LIFECYCLE_BUCKET_DIR.glob("lifecycle_bucket_discovery_*.json"), reverse=True)
+    paths = sorted(
+        LIFECYCLE_BUCKET_DIR.glob("lifecycle_bucket_discovery_*.json"), reverse=True
+    )
     for path in paths:
         report_date = _date_from_report_path(path)
         if (
@@ -360,13 +410,19 @@ def _latest_lifecycle_bucket_report(target_date: str) -> dict[str, Any]:
     return {}
 
 
-def _parent_lookup(lifecycle_report: dict[str, Any]) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
+def _parent_lookup(
+    lifecycle_report: dict[str, Any],
+) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
     parents: dict[str, dict[str, Any]] = {}
     parent_rows: list[dict[str, Any]] = []
     for parent in lifecycle_report.get("parent_bucket_summaries") or []:
         if not isinstance(parent, dict):
             continue
-        parent_id = str(parent.get("source_parent_bucket_id") or parent.get("parent_bucket_id") or "").strip()
+        parent_id = str(
+            parent.get("source_parent_bucket_id")
+            or parent.get("parent_bucket_id")
+            or ""
+        ).strip()
         if not parent_id:
             continue
         parents[parent_id] = parent
@@ -386,16 +442,30 @@ def _requirements_to_features(requirements: list[dict[str, Any]]) -> dict[str, s
     return features
 
 
-def _matching_parent_ids(features: dict[str, Any], parent_rows: list[dict[str, Any]]) -> list[str]:
+def _matching_parent_ids(
+    features: dict[str, Any], parent_rows: list[dict[str, Any]]
+) -> list[str]:
     matches: list[str] = []
     for parent in parent_rows:
-        dimensions = parent.get("dimension_filters") if isinstance(parent.get("dimension_filters"), dict) else {}
+        dimensions = (
+            parent.get("dimension_filters")
+            if isinstance(parent.get("dimension_filters"), dict)
+            else {}
+        )
         probes = ("entry_score_parent", "entry_source_parent", "submit_quality_parent")
         comparable = [key for key in probes if str(features.get(key) or "").strip()]
         if len(comparable) < 2:
             continue
-        if all(str(dimensions.get(key) or "").strip() == str(features.get(key) or "").strip() for key in comparable):
-            parent_id = str(parent.get("source_parent_bucket_id") or parent.get("parent_bucket_id") or "").strip()
+        if all(
+            str(dimensions.get(key) or "").strip()
+            == str(features.get(key) or "").strip()
+            for key in comparable
+        ):
+            parent_id = str(
+                parent.get("source_parent_bucket_id")
+                or parent.get("parent_bucket_id")
+                or ""
+            ).strip()
             if parent_id:
                 matches.append(parent_id)
     return sorted(set(matches))
@@ -435,7 +505,10 @@ def _previous_status_counts(hypothesis_id: str, target_date: str) -> Counter[str
             continue
         payload = _load_json(path)
         for item in payload.get("refinement_inputs") or []:
-            if not isinstance(item, dict) or str(item.get("soft_hypothesis_id") or "") != hypothesis_id:
+            if (
+                not isinstance(item, dict)
+                or str(item.get("soft_hypothesis_id") or "") != hypothesis_id
+            ):
                 continue
             classification = str(item.get("classification") or "").strip()
             if classification:
@@ -463,7 +536,9 @@ def _diagnose_repeated_status(
     parent_ids: list[str],
     previous_counts: Counter[str],
 ) -> dict[str, Any]:
-    source_quality_ratio = aggregate.source_quality_blocked_count / max(1, aggregate.match_count)
+    source_quality_ratio = aggregate.source_quality_blocked_count / max(
+        1, aggregate.match_count
+    )
     retry_count = max(
         previous_counts.get(classification, 0),
         previous_counts.get("needs_opposite_sample", 0) if contrary_needed else 0,
@@ -472,7 +547,10 @@ def _diagnose_repeated_status(
     diagnosis_reason = "initial_or_non_repeated_status"
     recommended_closure_bias = "still_collecting"
 
-    if aggregate.plan_hypothesis_missing_count > 0 or aggregate.forbidden_contract_violation_count > 0:
+    if (
+        aggregate.plan_hypothesis_missing_count > 0
+        or aggregate.forbidden_contract_violation_count > 0
+    ):
         diagnosed_status = "contract_or_handoff_gap"
         diagnosis_reason = "matched_hypothesis_or_runtime_authority_contract_gap"
         recommended_closure_bias = "contract_handoff_gap_created"
@@ -487,7 +565,11 @@ def _diagnose_repeated_status(
     elif classification == "taxonomy_gap_candidate":
         diagnosed_status = "taxonomy_gap_candidate"
         diagnosis_reason = gap_reason or "taxonomy_gap_repeated_or_unmapped"
-        recommended_closure_bias = "parent_refinement_candidate_created" if parent_ids else "new_parent_candidate_created"
+        recommended_closure_bias = (
+            "parent_refinement_candidate_created"
+            if parent_ids
+            else "new_parent_candidate_created"
+        )
     elif classification == "parent_conflict":
         diagnosed_status = "parent_conflict"
         diagnosis_reason = "hypothesis_parent_ev_divergence_repeated"
@@ -495,7 +577,11 @@ def _diagnose_repeated_status(
     elif classification == "parent_support" and contrary_needed:
         diagnosed_status = "parent_support_but_no_contrast"
         diagnosis_reason = "parent_absorbs_hypothesis_but_contrast_still_missing"
-        recommended_closure_bias = "absorbed_into_existing_parent" if parent_ids else "rare_observation_only_budget_capped"
+        recommended_closure_bias = (
+            "absorbed_into_existing_parent"
+            if parent_ids
+            else "rare_observation_only_budget_capped"
+        )
     elif contrary_needed:
         diagnosed_status = "needs_opposite_sample"
         diagnosis_reason = "contrast_group_missing"
@@ -507,14 +593,20 @@ def _diagnose_repeated_status(
         previous_counts.get(recommended_closure_bias, 0),
     )
 
-    if contrary_needed and retry_count >= 2 and recommended_closure_bias == "still_collecting":
+    if (
+        contrary_needed
+        and retry_count >= 2
+        and recommended_closure_bias == "still_collecting"
+    ):
         if aggregate.match_count >= 10 and source_quality_ratio < 0.5:
             diagnosed_status = "needs_more_contrastive_sample"
             diagnosis_reason = "repeated_one_sided_runtime_matches"
             recommended_closure_bias = "rejected_as_structurally_uncontrastable"
         else:
             diagnosed_status = "runtime_match_zero_or_low"
-            diagnosis_reason = "repeated_contrast_gap_with_low_or_fragile_runtime_coverage"
+            diagnosis_reason = (
+                "repeated_contrast_gap_with_low_or_fragile_runtime_coverage"
+            )
             recommended_closure_bias = "rare_observation_only_budget_capped"
 
     if retry_count < 2 and recommended_closure_bias in {
@@ -556,25 +648,50 @@ def _pressure_item(
     explicit_parent_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     plan = aggregate.plan_hypothesis
-    evidence = plan.get("evidence_summary") if isinstance(plan.get("evidence_summary"), dict) else {}
-    contrast = plan.get("contrast_summary") if isinstance(plan.get("contrast_summary"), dict) else {}
+    evidence = (
+        plan.get("evidence_summary")
+        if isinstance(plan.get("evidence_summary"), dict)
+        else {}
+    )
+    contrast = (
+        plan.get("contrast_summary")
+        if isinstance(plan.get("contrast_summary"), dict)
+        else {}
+    )
     hypothesis_ev = _safe_float(evidence.get("source_quality_adjusted_ev_pct"), None)
-    mean_profit = sum(aggregate.profit_values) / len(aggregate.profit_values) if aggregate.profit_values else None
+    mean_profit = (
+        sum(aggregate.profit_values) / len(aggregate.profit_values)
+        if aggregate.profit_values
+        else None
+    )
     positive_count = sum(1 for value in aggregate.profit_values if value > 0)
     negative_count = sum(1 for value in aggregate.profit_values if value < 0)
     parent_ev_values = [
-        _safe_float(parent_by_id.get(parent_id, {}).get("parent_source_quality_adjusted_ev_pct"), None)
+        _safe_float(
+            parent_by_id.get(parent_id, {}).get(
+                "parent_source_quality_adjusted_ev_pct"
+            ),
+            None,
+        )
         for parent_id in parent_ids
     ]
     parent_ev_values = [value for value in parent_ev_values if value is not None]
-    avg_parent_ev = sum(parent_ev_values) / len(parent_ev_values) if parent_ev_values else None
-    ev_delta = (hypothesis_ev - avg_parent_ev) if hypothesis_ev is not None and avg_parent_ev is not None else None
+    avg_parent_ev = (
+        sum(parent_ev_values) / len(parent_ev_values) if parent_ev_values else None
+    )
+    ev_delta = (
+        (hypothesis_ev - avg_parent_ev)
+        if hypothesis_ev is not None and avg_parent_ev is not None
+        else None
+    )
 
     pressure_reasons: list[str] = []
     classification = "taxonomy_gap_candidate"
     gap_reason = ""
     explicit_parent_ids = explicit_parent_ids or []
-    unknown_explicit_parent_ids = [parent_id for parent_id in explicit_parent_ids if parent_id not in parent_by_id]
+    unknown_explicit_parent_ids = [
+        parent_id for parent_id in explicit_parent_ids if parent_id not in parent_by_id
+    ]
     if aggregate.plan_hypothesis_missing_count > 0:
         classification = "source_quality_gap"
         gap_reason = "plan_hypothesis_missing"
@@ -583,17 +700,29 @@ def _pressure_item(
         classification = "source_quality_gap"
         gap_reason = "forbidden_runtime_authority_violation"
         pressure_reasons.append("matched_event_forbidden_runtime_authority_violation")
-    elif aggregate.source_quality_blocked_count >= aggregate.match_count and aggregate.match_count > 0:
+    elif (
+        aggregate.source_quality_blocked_count >= aggregate.match_count
+        and aggregate.match_count > 0
+    ):
         classification = "source_quality_gap"
         gap_reason = "source_quality_blocked"
         pressure_reasons.append("all_matches_source_quality_blocked")
     elif unknown_explicit_parent_ids:
         classification = "taxonomy_gap_candidate"
-        gap_reason = "parent_ambiguous" if parent_ids or len(unknown_explicit_parent_ids) > 1 else "parent_not_found"
+        gap_reason = (
+            "parent_ambiguous"
+            if parent_ids or len(unknown_explicit_parent_ids) > 1
+            else "parent_not_found"
+        )
         pressure_reasons.append(gap_reason)
     elif len(parent_ids) == 1:
-        if ev_delta is not None and abs(ev_delta) >= 1.0 and (
-            (hypothesis_ev or 0.0) * (avg_parent_ev or 0.0) < 0 or abs(ev_delta) >= 2.0
+        if (
+            ev_delta is not None
+            and abs(ev_delta) >= 1.0
+            and (
+                (hypothesis_ev or 0.0) * (avg_parent_ev or 0.0) < 0
+                or abs(ev_delta) >= 2.0
+            )
         ):
             classification = "parent_conflict"
             pressure_reasons.append("hypothesis_parent_ev_divergence")
@@ -606,25 +735,39 @@ def _pressure_item(
         pressure_reasons.append("multiple_possible_parent_buckets")
     else:
         classification = "taxonomy_gap_candidate"
-        gap_reason = "join_key_missing" if not aggregate.candidate_features else "parent_not_found"
+        gap_reason = (
+            "join_key_missing"
+            if not aggregate.candidate_features
+            else "parent_not_found"
+        )
         pressure_reasons.append(gap_reason)
 
-    contrary_needed = str(contrast.get("contrast_coverage_status") or "") == "needs_opposite_sample"
+    contrary_needed = (
+        str(contrast.get("contrast_coverage_status") or "") == "needs_opposite_sample"
+    )
     if contrary_needed:
         pressure_reasons.append("needs_opposite_sample")
     if aggregate.match_count < 3:
         pressure_reasons.append("thin_runtime_match_sample")
 
     fragility_penalty = 1.0 if aggregate.match_count < 3 else 0.0
-    source_quality_penalty = min(1.0, aggregate.source_quality_blocked_count / max(1, aggregate.match_count))
+    source_quality_penalty = min(
+        1.0, aggregate.source_quality_blocked_count / max(1, aggregate.match_count)
+    )
     contrast_strength = abs(float(contrast.get("contrast_ev_delta_pct") or 0.0))
     divergence = abs(ev_delta or 0.0)
     refinement_pressure_score = round(
-        contrast_strength + divergence + min(2.0, aggregate.match_count / 10.0) - fragility_penalty - source_quality_penalty,
+        contrast_strength
+        + divergence
+        + min(2.0, aggregate.match_count / 10.0)
+        - fragility_penalty
+        - source_quality_penalty,
         4,
     )
     repeated_gap_count = _previous_gap_count(aggregate.hypothesis_id, target_date)
-    previous_status_counts = _previous_status_counts(aggregate.hypothesis_id, target_date)
+    previous_status_counts = _previous_status_counts(
+        aggregate.hypothesis_id, target_date
+    )
     if repeated_gap_count:
         pressure_reasons.append("repeated_taxonomy_gap_seen_before")
     repeated_status_diagnosis = _diagnose_repeated_status(
@@ -638,9 +781,14 @@ def _pressure_item(
     if repeated_status_diagnosis["retry_count"] >= 2:
         pressure_reasons.append("repeated_status_diagnosed")
 
-    item_id = "ldm_refinement_" + hashlib.sha1(
-        f"{target_date}|{aggregate.hypothesis_id}|{','.join(parent_ids)}".encode("utf-8")
-    ).hexdigest()[:16]
+    item_id = (
+        "ldm_refinement_"
+        + hashlib.sha1(
+            f"{target_date}|{aggregate.hypothesis_id}|{','.join(parent_ids)}".encode(
+                "utf-8"
+            )
+        ).hexdigest()[:16]
+    )
     return {
         "refinement_input_id": item_id,
         "soft_hypothesis_id": aggregate.hypothesis_id,
@@ -648,60 +796,88 @@ def _pressure_item(
         "gap_reason": gap_reason,
         "source_parent_bucket_ids": parent_ids,
         "unmatched_source_parent_bucket_ids": unknown_explicit_parent_ids,
-        "runtime_observable_signature": aggregate.observable_signatures.most_common(1)[0][0]
-        if aggregate.observable_signatures
-        else "",
+        "runtime_observable_signature": (
+            aggregate.observable_signatures.most_common(1)[0][0]
+            if aggregate.observable_signatures
+            else ""
+        ),
         "runtime_observable_features": _observable_features(
             aggregate.candidate_features,
-            plan.get("observable_requirements") if isinstance(plan.get("observable_requirements"), list) else [],
+            (
+                plan.get("observable_requirements")
+                if isinstance(plan.get("observable_requirements"), list)
+                else []
+            ),
         ),
         "match_count": aggregate.match_count,
         "runtime_match_count": aggregate.runtime_match_count,
         "derived_match_count": aggregate.derived_match_count,
-        "source_match_origin": "mixed_runtime_and_derived"
-        if aggregate.runtime_match_count and aggregate.derived_match_count
-        else "derived_contract_drift_recompute"
-        if aggregate.derived_match_count
-        else "runtime_matched",
+        "source_match_origin": (
+            "mixed_runtime_and_derived"
+            if aggregate.runtime_match_count and aggregate.derived_match_count
+            else (
+                "derived_contract_drift_recompute"
+                if aggregate.derived_match_count
+                else "runtime_matched"
+            )
+        ),
         "derived_from_contract_drift": aggregate.derived_match_count > 0,
         "raw_event_mutated": False,
-        "raw_ldm_hypothesis_matched": dict(sorted(aggregate.raw_ldm_hypothesis_matched.items())),
-        "raw_ldm_hypothesis_id_present": dict(sorted(aggregate.raw_ldm_hypothesis_id_present.items())),
+        "raw_ldm_hypothesis_matched": dict(
+            sorted(aggregate.raw_ldm_hypothesis_matched.items())
+        ),
+        "raw_ldm_hypothesis_id_present": dict(
+            sorted(aggregate.raw_ldm_hypothesis_id_present.items())
+        ),
         "source_event_files": dict(sorted(aggregate.source_event_files.items())),
         "positive_count": positive_count,
         "negative_count": negative_count,
         "source_quality_blocked_count": aggregate.source_quality_blocked_count,
         "forbidden_contract_violation_count": aggregate.forbidden_contract_violation_count,
         "plan_hypothesis_missing_count": aggregate.plan_hypothesis_missing_count,
-        "mean_runtime_profit_pct": round(mean_profit, 4) if mean_profit is not None else None,
+        "mean_runtime_profit_pct": (
+            round(mean_profit, 4) if mean_profit is not None else None
+        ),
         "hypothesis_ev_pct": hypothesis_ev,
         "parent_ev_pct": round(avg_parent_ev, 4) if avg_parent_ev is not None else None,
-        "hypothesis_parent_ev_delta_pct": round(ev_delta, 4) if ev_delta is not None else None,
+        "hypothesis_parent_ev_delta_pct": (
+            round(ev_delta, 4) if ev_delta is not None else None
+        ),
         "refinement_pressure_score": refinement_pressure_score,
         "pressure_reasons": list(dict.fromkeys(pressure_reasons)),
         "evidence_fragility": "thin_sample" if aggregate.match_count < 3 else "ok",
         "contrary_sample_need": contrary_needed,
-        "taxonomy_fit": "matched_parent" if len(parent_ids) == 1 else "ambiguous" if len(parent_ids) > 1 else "gap",
+        "taxonomy_fit": (
+            "matched_parent"
+            if len(parent_ids) == 1
+            else "ambiguous" if len(parent_ids) > 1 else "gap"
+        ),
         "repeated_gap_count": repeated_gap_count,
         "diagnosed_status": repeated_status_diagnosis["diagnosed_status"],
         "diagnosis_reason": repeated_status_diagnosis["diagnosis_reason"],
         "diagnosis_evidence": repeated_status_diagnosis["diagnosis_evidence"],
         "retry_count": repeated_status_diagnosis["retry_count"],
-        "recommended_closure_bias": repeated_status_diagnosis["recommended_closure_bias"],
+        "recommended_closure_bias": repeated_status_diagnosis[
+            "recommended_closure_bias"
+        ],
         "repeated_status_diagnosis": repeated_status_diagnosis,
-        "opposite_sample_absence_diagnosis": repeated_status_diagnosis
-        if contrary_needed
-        else {
-            "diagnosed_status": "not_applicable",
-            "diagnosis_reason": "contrast_coverage_not_marked_needs_opposite_sample",
-            "diagnosis_evidence": repeated_status_diagnosis["diagnosis_evidence"],
-            "retry_count": repeated_status_diagnosis["retry_count"],
-            "recommended_closure_bias": repeated_status_diagnosis["recommended_closure_bias"],
-            "runtime_effect": False,
-            "allowed_runtime_apply": False,
-            "actual_order_submitted": False,
-            "broker_order_forbidden": True,
-        },
+        "opposite_sample_absence_diagnosis": (
+            repeated_status_diagnosis
+            if contrary_needed
+            else {
+                "diagnosed_status": "not_applicable",
+                "diagnosis_reason": "contrast_coverage_not_marked_needs_opposite_sample",
+                "diagnosis_evidence": repeated_status_diagnosis["diagnosis_evidence"],
+                "retry_count": repeated_status_diagnosis["retry_count"],
+                "recommended_closure_bias": repeated_status_diagnosis[
+                    "recommended_closure_bias"
+                ],
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+            }
+        ),
         "consumer": CONSUMER,
         "consumption_required": True,
         "must_not_be_silent": True,
@@ -730,7 +906,9 @@ def build_refinement_report(target_date: str) -> dict[str, Any]:
     source_event_files: Counter[str] = Counter()
     for payload, fields, source_path in _iter_pipeline_event_records(target_date) or []:
         source_event_files[str(source_path)] += 1
-        candidate_features = _parse_json_mapping(fields.get("ldm_hypothesis_candidate_features"))
+        candidate_features = _parse_json_mapping(
+            fields.get("ldm_hypothesis_candidate_features")
+        )
         if candidate_features:
             candidate_feature_event_count += 1
         raw_runtime_matched = _truthy(fields.get("ldm_hypothesis_matched"))
@@ -743,7 +921,9 @@ def build_refinement_report(target_date: str) -> dict[str, Any]:
         else:
             if not candidate_features:
                 continue
-            hypothesis_id = _derived_hypothesis_id_for_features(candidate_features, hypotheses)
+            hypothesis_id = _derived_hypothesis_id_for_features(
+                candidate_features, hypotheses
+            )
             if not hypothesis_id:
                 continue
             source_origin = "derived_contract_drift_recompute"
@@ -751,7 +931,10 @@ def build_refinement_report(target_date: str) -> dict[str, Any]:
 
         aggregate = aggregates.setdefault(
             hypothesis_id,
-            HypothesisAggregate(hypothesis_id=hypothesis_id, plan_hypothesis=hypotheses.get(hypothesis_id, {})),
+            HypothesisAggregate(
+                hypothesis_id=hypothesis_id,
+                plan_hypothesis=hypotheses.get(hypothesis_id, {}),
+            ),
         )
         if hypothesis_id not in hypotheses:
             aggregate.plan_hypothesis_missing_count += 1
@@ -768,11 +951,15 @@ def build_refinement_report(target_date: str) -> dict[str, Any]:
     refinement_inputs: list[dict[str, Any]] = []
     for aggregate in aggregates.values():
         requirements = aggregate.plan_hypothesis.get("observable_requirements")
-        requirement_features = _requirements_to_features(requirements if isinstance(requirements, list) else [])
+        requirement_features = _requirements_to_features(
+            requirements if isinstance(requirements, list) else []
+        )
         features = {**requirement_features, **aggregate.candidate_features}
         explicit_parent_ids = sorted(set(aggregate.source_parent_bucket_ids))
         parent_ids = explicit_parent_ids or _matching_parent_ids(features, parent_rows)
-        known_parent_ids = [parent_id for parent_id in parent_ids if parent_id in parent_by_id]
+        known_parent_ids = [
+            parent_id for parent_id in parent_ids if parent_id in parent_by_id
+        ]
         refinement_inputs.append(
             _pressure_item(
                 target_date=target_date,
@@ -783,7 +970,9 @@ def build_refinement_report(target_date: str) -> dict[str, Any]:
             )
         )
 
-    class_counts = Counter(str(item.get("classification") or "unknown") for item in refinement_inputs)
+    class_counts = Counter(
+        str(item.get("classification") or "unknown") for item in refinement_inputs
+    )
     report = {
         "schema_version": SCHEMA_VERSION,
         "report_type": REPORT_TYPE,
@@ -802,20 +991,29 @@ def build_refinement_report(target_date: str) -> dict[str, Any]:
             "pipeline_events": str(_pipeline_event_path(target_date)),
             "pipeline_event_files": sorted(source_event_files),
             "observation_plan": str(latest_observation_plan_path(target_date)),
-            "previous_lifecycle_bucket_discovery": str(
-                LIFECYCLE_BUCKET_DIR / f"lifecycle_bucket_discovery_{lifecycle_report.get('date')}.json"
-            )
-            if lifecycle_report.get("date")
-            else "",
+            "previous_lifecycle_bucket_discovery": (
+                str(
+                    LIFECYCLE_BUCKET_DIR
+                    / f"lifecycle_bucket_discovery_{lifecycle_report.get('date')}.json"
+                )
+                if lifecycle_report.get("date")
+                else ""
+            ),
         },
         "summary": {
-            "hypothesis_match_count": sum(item.match_count for item in aggregates.values()),
+            "hypothesis_match_count": sum(
+                item.match_count for item in aggregates.values()
+            ),
             "runtime_hypothesis_match_count": runtime_match_count,
             "derived_hypothesis_match_count": derived_match_count,
             "candidate_feature_event_count": candidate_feature_event_count,
             "matched_hypothesis_count": len(aggregates),
             "refinement_input_count": len(refinement_inputs),
-            "derived_refinement_input_count": sum(1 for item in refinement_inputs if item.get("derived_from_contract_drift")),
+            "derived_refinement_input_count": sum(
+                1
+                for item in refinement_inputs
+                if item.get("derived_from_contract_drift")
+            ),
             "source_event_files": sorted(source_event_files),
             "raw_event_mutated": False,
             "classification_counts": dict(sorted(class_counts.items())),
@@ -870,17 +1068,23 @@ def write_report(target_date: str) -> dict[str, Any]:
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
     report = build_refinement_report(target_date)
     json_path, md_path = report_paths(target_date)
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     md_path.write_text(render_markdown(report), encoding="utf-8")
     return report
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Build LDM hypothesis parent refinement pressure report.")
+    parser = argparse.ArgumentParser(
+        description="Build LDM hypothesis parent refinement pressure report."
+    )
     parser.add_argument("--date", default=date.today().isoformat())
     parser.add_argument("--write", action="store_true")
     args = parser.parse_args(argv)
-    report = write_report(args.date) if args.write else build_refinement_report(args.date)
+    report = (
+        write_report(args.date) if args.write else build_refinement_report(args.date)
+    )
     print(json.dumps(report, ensure_ascii=False))
     return 0
 

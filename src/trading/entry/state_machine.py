@@ -31,7 +31,12 @@ class EntryStateMachine:
             "NORMAL_ORDER_SUBMITTING",
             "FALLBACK_ORDER_SUBMITTING",
         },
-        "NORMAL_ORDER_SUBMITTING": {"ORDER_FILLED", "ORDER_PARTIAL_FILLED", "ORDER_CANCELLED", "ENTRY_EXPIRED"},
+        "NORMAL_ORDER_SUBMITTING": {
+            "ORDER_FILLED",
+            "ORDER_PARTIAL_FILLED",
+            "ORDER_CANCELLED",
+            "ENTRY_EXPIRED",
+        },
         "FALLBACK_ORDER_SUBMITTING": {
             "SCOUT_ORDER_SUBMITTED",
             "MAIN_ORDER_SUBMITTED",
@@ -39,8 +44,18 @@ class EntryStateMachine:
             "ORDER_PARTIAL_FILLED",
             "ORDER_CANCELLED",
         },
-        "SCOUT_ORDER_SUBMITTED": {"MAIN_ORDER_SUBMITTED", "ORDER_FILLED", "ORDER_PARTIAL_FILLED", "ENTRY_EXPIRED"},
-        "MAIN_ORDER_SUBMITTED": {"ORDER_FILLED", "ORDER_PARTIAL_FILLED", "ORDER_CANCELLED", "ENTRY_EXPIRED"},
+        "SCOUT_ORDER_SUBMITTED": {
+            "MAIN_ORDER_SUBMITTED",
+            "ORDER_FILLED",
+            "ORDER_PARTIAL_FILLED",
+            "ENTRY_EXPIRED",
+        },
+        "MAIN_ORDER_SUBMITTED": {
+            "ORDER_FILLED",
+            "ORDER_PARTIAL_FILLED",
+            "ORDER_CANCELLED",
+            "ENTRY_EXPIRED",
+        },
         "ORDER_PARTIAL_FILLED": {"ORDER_FILLED", "ORDER_CANCELLED", "ENTRY_EXPIRED"},
     }
 
@@ -52,6 +67,10 @@ class EntryStateMachine:
         from_state = self.current_state.get(symbol)
         allowed = self.ALLOWED_TRANSITIONS.get(from_state)
         if allowed is not None and to_state not in allowed:
-            raise ValueError(f"invalid transition for {symbol}: {from_state} -> {to_state}")
+            raise ValueError(
+                f"invalid transition for {symbol}: {from_state} -> {to_state}"
+            )
         self.current_state[symbol] = to_state
-        self.history[symbol].append(StateTransition(symbol, from_state, to_state, reason))
+        self.history[symbol].append(
+            StateTransition(symbol, from_state, to_state, reason)
+        )

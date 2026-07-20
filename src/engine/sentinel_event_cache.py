@@ -8,7 +8,6 @@ from typing import Any, Callable
 
 from src.utils.jsonl_io import existing_or_gzip_path
 
-
 PayloadParser = Callable[[dict[str, Any]], dict[str, Any] | None]
 
 
@@ -21,12 +20,18 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
     tmp_path = path.with_suffix(path.suffix + ".tmp")
-    tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     tmp_path.replace(path)
 
 
-def _cache_paths(cache_dir: Path, cache_name: str, target_date: str) -> tuple[Path, Path]:
-    safe_name = "".join(ch if ch.isalnum() or ch in {"_", "-"} else "_" for ch in cache_name)
+def _cache_paths(
+    cache_dir: Path, cache_name: str, target_date: str
+) -> tuple[Path, Path]:
+    safe_name = "".join(
+        ch if ch.isalnum() or ch in {"_", "-"} else "_" for ch in cache_name
+    )
     return (
         cache_dir / f"{safe_name}_{target_date}.jsonl",
         cache_dir / f"{safe_name}_{target_date}.meta.json",
@@ -109,7 +114,10 @@ def update_and_load_cached_event_rows(
                     continue
                 parsed = parse_payload(payload) if isinstance(payload, dict) else None
                 if parsed is not None:
-                    cache_handle.write(json.dumps(parsed, ensure_ascii=False, separators=(",", ":")) + "\n")
+                    cache_handle.write(
+                        json.dumps(parsed, ensure_ascii=False, separators=(",", ":"))
+                        + "\n"
+                    )
                     appended_cache_rows += 1
                 last_good_offset = raw_handle.tell()
                 if last_good_offset <= line_start:
@@ -130,7 +138,9 @@ def update_and_load_cached_event_rows(
                     rows.append(row)
 
     final_stat_size = int(raw_path.stat().st_size) if raw_path.exists() else raw_size
-    final_raw_size = max(final_stat_size, last_good_offset) if is_gzip_raw else final_stat_size
+    final_raw_size = (
+        max(final_stat_size, last_good_offset) if is_gzip_raw else final_stat_size
+    )
     new_meta = {
         "schema_version": schema_version,
         "raw_path": str(raw_path),

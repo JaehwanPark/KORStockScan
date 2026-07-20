@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from copy import deepcopy
 
-
 AI_REASON_LANGUAGE_POLICY = "english_ascii_only"
 AI_REASON_LANGUAGE_FALLBACK = "Reason unavailable: non-English output from AI"
 SWING_AI_STRUCTURED_OUTPUT_EVAL_SCHEMA_NAME = "swing_ai_structured_output_eval_v1"
@@ -124,7 +123,11 @@ def normalize_flow_state_label(value: object) -> str:
 
 def is_known_flow_state_label(value: object) -> bool:
     text = str(value or "-").strip().lower()
-    return text in FLOW_STATE_LABELS or text in CANONICAL_FLOW_STATES or text in KNOWN_FLOW_STATE_SENTINELS
+    return (
+        text in FLOW_STATE_LABELS
+        or text in CANONICAL_FLOW_STATES
+        or text in KNOWN_FLOW_STATE_SENTINELS
+    )
 
 
 def normalize_gatekeeper_action_key(value: object) -> str:
@@ -157,7 +160,9 @@ def is_known_gatekeeper_action_label(value: object) -> bool:
 
 def display_gatekeeper_action_label(value: object) -> str:
     key = normalize_gatekeeper_action_key(value)
-    return GATEKEEPER_ACTION_DISPLAY.get(key, str(value or "UNKNOWN").replace("|", " ").strip() or "UNKNOWN")
+    return GATEKEEPER_ACTION_DISPLAY.get(
+        key, str(value or "UNKNOWN").replace("|", " ").strip() or "UNKNOWN"
+    )
 
 
 AI_RESPONSE_SCHEMA_REGISTRY = {
@@ -183,9 +188,15 @@ AI_RESPONSE_SCHEMA_REGISTRY = {
                                 "reject",
                             ],
                         },
-                        "confidence": {"type": "string", "enum": ["low", "medium", "high"]},
+                        "confidence": {
+                            "type": "string",
+                            "enum": ["low", "medium", "high"],
+                        },
                         "reason": {"type": "string"},
-                        "required_followup": {"type": "array", "items": {"type": "string"}},
+                        "required_followup": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
                     },
                     "required": [
                         "candidate_id",
@@ -200,7 +211,10 @@ AI_RESPONSE_SCHEMA_REGISTRY = {
             "audit": {
                 "type": "object",
                 "properties": {
-                    "status": {"type": "string", "enum": ["pass", "retry_required", "correction_required"]},
+                    "status": {
+                        "type": "string",
+                        "enum": ["pass", "retry_required", "correction_required"],
+                    },
                     "issues": {"type": "array", "items": {"type": "string"}},
                     "reason": {"type": "string"},
                 },
@@ -221,26 +235,53 @@ AI_RESPONSE_SCHEMA_REGISTRY = {
                 },
             },
         },
-        "required": ["schema_version", "reviewer", "candidate_reviews", "audit", "codex_directives"],
+        "required": [
+            "schema_version",
+            "reviewer",
+            "candidate_reviews",
+            "audit",
+            "codex_directives",
+        ],
         "additionalProperties": False,
     },
     "swing_model_tier2_review_v1": {
         "type": "object",
         "properties": {
             "schema_version": {"type": "integer"},
-            "status": {"type": "string", "enum": ["parsed", "parse_rejected", "unavailable"]},
+            "status": {
+                "type": "string",
+                "enum": ["parsed", "parse_rejected", "unavailable"],
+            },
             "decision": {"type": "string", "enum": ["approved", "blocked"]},
             "blocking_reasons": {"type": "array", "items": {"type": "string"}},
             "reviewed_candidate_family": {"type": "string"},
-            "reviewed_bull_mode": {"type": "string", "enum": ["enabled", "disabled", "hold_current"]},
+            "reviewed_bull_mode": {
+                "type": "string",
+                "enum": ["enabled", "disabled", "hold_current"],
+            },
             "checks": {
                 "type": "object",
                 "properties": {
-                    "label_leakage": {"type": "string", "enum": ["pass", "block", "warning"]},
-                    "source_quality": {"type": "string", "enum": ["pass", "block", "warning"]},
-                    "schema_compatibility": {"type": "string", "enum": ["pass", "block", "warning"]},
-                    "metric_interpretation": {"type": "string", "enum": ["pass", "block", "warning"]},
-                    "forbidden_use": {"type": "string", "enum": ["pass", "block", "warning"]},
+                    "label_leakage": {
+                        "type": "string",
+                        "enum": ["pass", "block", "warning"],
+                    },
+                    "source_quality": {
+                        "type": "string",
+                        "enum": ["pass", "block", "warning"],
+                    },
+                    "schema_compatibility": {
+                        "type": "string",
+                        "enum": ["pass", "block", "warning"],
+                    },
+                    "metric_interpretation": {
+                        "type": "string",
+                        "enum": ["pass", "block", "warning"],
+                    },
+                    "forbidden_use": {
+                        "type": "string",
+                        "enum": ["pass", "block", "warning"],
+                    },
                 },
                 "required": [
                     "label_leakage",
@@ -305,7 +346,10 @@ AI_RESPONSE_SCHEMA_REGISTRY = {
             "score_basis": {"type": "string"},
             "risk_factors": {"type": "array", "items": {"type": "string"}},
             "support_factors": {"type": "array", "items": {"type": "string"}},
-            "data_quality": {"type": "string", "enum": ["fresh", "stale", "partial", "insufficient"]},
+            "data_quality": {
+                "type": "string",
+                "enum": ["fresh", "stale", "partial", "insufficient"],
+            },
             "reason": {"type": "string"},
         },
         "required": [
@@ -332,7 +376,15 @@ AI_RESPONSE_SCHEMA_REGISTRY = {
             "reason": {"type": "string"},
             "next_review_sec": {"type": "integer"},
         },
-        "required": ["action", "score", "flow_state", "thesis", "evidence", "reason", "next_review_sec"],
+        "required": [
+            "action",
+            "score",
+            "flow_state",
+            "thesis",
+            "evidence",
+            "reason",
+            "next_review_sec",
+        ],
     },
     "overnight_v1": {
         "type": "object",
@@ -424,7 +476,13 @@ AI_RESPONSE_SCHEMA_REGISTRY = {
                                     ],
                                 },
                                 "proposed_value": {
-                                    "type": ["number", "integer", "boolean", "string", "null"],
+                                    "type": [
+                                        "number",
+                                        "integer",
+                                        "boolean",
+                                        "string",
+                                        "null",
+                                    ],
                                 },
                                 "anomaly_route": {
                                     "type": ["string", "null"],
@@ -447,10 +505,18 @@ AI_RESPONSE_SCHEMA_REGISTRY = {
                                     ],
                                 },
                             },
-                            "required": ["proposed_state", "proposed_value", "anomaly_route", "sample_window"],
+                            "required": [
+                                "proposed_state",
+                                "proposed_value",
+                                "anomaly_route",
+                                "sample_window",
+                            ],
                         },
                         "correction_reason": {"type": "string"},
-                        "required_evidence": {"type": "array", "items": {"type": "string"}},
+                        "required_evidence": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
                         "risk_flags": {"type": "array", "items": {"type": "string"}},
                     },
                     "required": [
@@ -485,7 +551,11 @@ AI_RESPONSE_SCHEMA_REGISTRY = {
                                 "bucket_id": {"type": "string"},
                                 "interpreted_relation": {
                                     "type": "string",
-                                    "enum": ["existing_bucket_refinement", "new_bucket_candidate", "unclear"],
+                                    "enum": [
+                                        "existing_bucket_refinement",
+                                        "new_bucket_candidate",
+                                        "unclear",
+                                    ],
                                 },
                                 "interpreted_state": {
                                     "type": "string",
@@ -500,7 +570,10 @@ AI_RESPONSE_SCHEMA_REGISTRY = {
                                         "new_bucket_candidate",
                                     ],
                                 },
-                                "confidence": {"type": "string", "enum": ["low", "medium", "high"]},
+                                "confidence": {
+                                    "type": "string",
+                                    "enum": ["low", "medium", "high"],
+                                },
                                 "reason": {"type": "string"},
                             },
                             "required": [
@@ -516,7 +589,10 @@ AI_RESPONSE_SCHEMA_REGISTRY = {
                         "type": "object",
                         "additionalProperties": False,
                         "properties": {
-                            "status": {"type": "string", "enum": ["pass", "warning", "fail"]},
+                            "status": {
+                                "type": "string",
+                                "enum": ["pass", "warning", "fail"],
+                            },
                             "changes": {"type": "array", "items": {"type": "string"}},
                             "reason": {"type": "string"},
                         },
@@ -559,11 +635,23 @@ AI_RESPONSE_SCHEMA_REGISTRY = {
                             ],
                         },
                         "recommended_canonical_bucket": {"type": "string"},
-                        "recommended_metric_or_dimension": {"type": "array", "items": {"type": "string"}},
+                        "recommended_metric_or_dimension": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
                         "reasoning_summary": {"type": "string"},
-                        "confidence": {"type": "string", "enum": ["low", "medium", "high"]},
-                        "required_source_fields": {"type": "array", "items": {"type": "string"}},
-                        "forbidden_uses": {"type": "array", "items": {"type": "string"}},
+                        "confidence": {
+                            "type": "string",
+                            "enum": ["low", "medium", "high"],
+                        },
+                        "required_source_fields": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                        "forbidden_uses": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
                     },
                     "required": [
                         "bucket_id",
@@ -602,14 +690,29 @@ AI_RESPONSE_SCHEMA_REGISTRY = {
                             "enum": ["deterministic", "ai_tier2", "hybrid", "reject"],
                         },
                         "recommended_canonical_bucket": {"type": "string"},
-                        "recommended_metric_or_dimension": {"type": "array", "items": {"type": "string"}},
+                        "recommended_metric_or_dimension": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
                         "comparison_summary": {"type": "string"},
                         "rejected_alternative_reason": {"type": "string"},
-                        "confidence": {"type": "string", "enum": ["low", "medium", "high"]},
-                        "required_source_fields": {"type": "array", "items": {"type": "string"}},
-                        "forbidden_uses": {"type": "array", "items": {"type": "string"}},
+                        "confidence": {
+                            "type": "string",
+                            "enum": ["low", "medium", "high"],
+                        },
+                        "required_source_fields": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                        "forbidden_uses": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
                         "workorder_title": {"type": "string"},
-                        "workorder_priority": {"type": "string", "enum": ["critical", "high", "medium", "low"]},
+                        "workorder_priority": {
+                            "type": "string",
+                            "enum": ["critical", "high", "medium", "low"],
+                        },
                     },
                     "required": [
                         "bucket_id",
@@ -636,7 +739,11 @@ AI_RESPONSE_SCHEMA_REGISTRY = {
                         "bucket_id": {"type": "string"},
                         "final_bucket_relation": {
                             "type": "string",
-                            "enum": ["existing_bucket_refinement", "new_bucket_candidate", "unclear"],
+                            "enum": [
+                                "existing_bucket_refinement",
+                                "new_bucket_candidate",
+                                "unclear",
+                            ],
                         },
                         "final_classification_state": {
                             "type": "string",
@@ -707,7 +814,10 @@ AI_RESPONSE_SCHEMA_REGISTRY = {
         "additionalProperties": False,
         "properties": {
             "schema_version": {"type": "integer", "enum": [1]},
-            "reviewer": {"type": "string", "enum": ["swing_lifecycle_bucket_discovery_ai_review"]},
+            "reviewer": {
+                "type": "string",
+                "enum": ["swing_lifecycle_bucket_discovery_ai_review"],
+            },
             "ai_tier2_proposals": {
                 "type": "array",
                 "items": {
@@ -729,11 +839,23 @@ AI_RESPONSE_SCHEMA_REGISTRY = {
                             ],
                         },
                         "recommended_canonical_bucket": {"type": "string"},
-                        "recommended_metric_or_dimension": {"type": "array", "items": {"type": "string"}},
+                        "recommended_metric_or_dimension": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
                         "reasoning_summary": {"type": "string"},
-                        "confidence": {"type": "string", "enum": ["low", "medium", "high"]},
-                        "required_source_fields": {"type": "array", "items": {"type": "string"}},
-                        "forbidden_uses": {"type": "array", "items": {"type": "string"}},
+                        "confidence": {
+                            "type": "string",
+                            "enum": ["low", "medium", "high"],
+                        },
+                        "required_source_fields": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                        "forbidden_uses": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
                     },
                     "required": [
                         "bucket_id",
@@ -772,14 +894,29 @@ AI_RESPONSE_SCHEMA_REGISTRY = {
                             "enum": ["deterministic", "ai_tier2", "hybrid", "reject"],
                         },
                         "recommended_canonical_bucket": {"type": "string"},
-                        "recommended_metric_or_dimension": {"type": "array", "items": {"type": "string"}},
+                        "recommended_metric_or_dimension": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
                         "comparison_summary": {"type": "string"},
                         "rejected_alternative_reason": {"type": "string"},
-                        "confidence": {"type": "string", "enum": ["low", "medium", "high"]},
-                        "required_source_fields": {"type": "array", "items": {"type": "string"}},
-                        "forbidden_uses": {"type": "array", "items": {"type": "string"}},
+                        "confidence": {
+                            "type": "string",
+                            "enum": ["low", "medium", "high"],
+                        },
+                        "required_source_fields": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                        "forbidden_uses": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
                         "workorder_title": {"type": "string"},
-                        "workorder_priority": {"type": "string", "enum": ["critical", "high", "medium", "low"]},
+                        "workorder_priority": {
+                            "type": "string",
+                            "enum": ["critical", "high", "medium", "low"],
+                        },
                     },
                     "required": [
                         "bucket_id",
@@ -801,9 +938,15 @@ AI_RESPONSE_SCHEMA_REGISTRY = {
                 "type": "object",
                 "additionalProperties": False,
                 "properties": {
-                    "status": {"type": "string", "enum": ["pass", "correction_required", "insufficient_context"]},
+                    "status": {
+                        "type": "string",
+                        "enum": ["pass", "correction_required", "insufficient_context"],
+                    },
                     "issues": {"type": "array", "items": {"type": "string"}},
-                    "forbidden_use_violations": {"type": "array", "items": {"type": "string"}},
+                    "forbidden_use_violations": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
                     "reason": {"type": "string"},
                 },
                 "required": ["status", "issues", "forbidden_use_violations", "reason"],
@@ -833,7 +976,10 @@ AI_RESPONSE_SCHEMA_REGISTRY = {
                             "additionalProperties": False,
                             "properties": {
                                 "review_id": {"type": "string"},
-                                "domain": {"type": "string", "enum": ["scalping", "swing", "cross_domain"]},
+                                "domain": {
+                                    "type": "string",
+                                    "enum": ["scalping", "swing", "cross_domain"],
+                                },
                                 "interpreted_state": {
                                     "type": "string",
                                     "enum": [
@@ -844,10 +990,19 @@ AI_RESPONSE_SCHEMA_REGISTRY = {
                                         "code_patch_required",
                                     ],
                                 },
-                                "confidence": {"type": "string", "enum": ["low", "medium", "high"]},
+                                "confidence": {
+                                    "type": "string",
+                                    "enum": ["low", "medium", "high"],
+                                },
                                 "reason": {"type": "string"},
                             },
-                            "required": ["review_id", "domain", "interpreted_state", "confidence", "reason"],
+                            "required": [
+                                "review_id",
+                                "domain",
+                                "interpreted_state",
+                                "confidence",
+                                "reason",
+                            ],
                         },
                     },
                     "source_feedback_status": {
@@ -861,9 +1016,15 @@ AI_RESPONSE_SCHEMA_REGISTRY = {
                 "type": "object",
                 "additionalProperties": False,
                 "properties": {
-                    "status": {"type": "string", "enum": ["pass", "correction_required", "insufficient_context"]},
+                    "status": {
+                        "type": "string",
+                        "enum": ["pass", "correction_required", "insufficient_context"],
+                    },
                     "issues": {"type": "array", "items": {"type": "string"}},
-                    "forbidden_use_violations": {"type": "array", "items": {"type": "string"}},
+                    "forbidden_use_violations": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
                     "reason": {"type": "string"},
                 },
                 "required": ["status", "issues", "forbidden_use_violations", "reason"],
@@ -875,7 +1036,10 @@ AI_RESPONSE_SCHEMA_REGISTRY = {
                     "additionalProperties": False,
                     "properties": {
                         "review_id": {"type": "string"},
-                        "domain": {"type": "string", "enum": ["scalping", "swing", "cross_domain"]},
+                        "domain": {
+                            "type": "string",
+                            "enum": ["scalping", "swing", "cross_domain"],
+                        },
                         "final_state": {
                             "type": "string",
                             "enum": [
@@ -886,9 +1050,15 @@ AI_RESPONSE_SCHEMA_REGISTRY = {
                                 "code_patch_required",
                             ],
                         },
-                        "final_decision": {"type": "string", "enum": ["keep", "surface_workorder", "block_runtime_use"]},
+                        "final_decision": {
+                            "type": "string",
+                            "enum": ["keep", "surface_workorder", "block_runtime_use"],
+                        },
                         "reason": {"type": "string"},
-                        "required_followup": {"type": "array", "items": {"type": "string"}},
+                        "required_followup": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
                     },
                     "required": [
                         "review_id",
@@ -941,9 +1111,15 @@ AI_RESPONSE_SCHEMA_REGISTRY = {
                                 "retry_handoff",
                             ],
                         },
-                        "confidence": {"type": "string", "enum": ["low", "medium", "high"]},
+                        "confidence": {
+                            "type": "string",
+                            "enum": ["low", "medium", "high"],
+                        },
                         "reason": {"type": "string"},
-                        "required_followup": {"type": "array", "items": {"type": "string"}},
+                        "required_followup": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
                     },
                     "required": [
                         "candidate_id",
@@ -959,7 +1135,10 @@ AI_RESPONSE_SCHEMA_REGISTRY = {
                 "type": "object",
                 "additionalProperties": False,
                 "properties": {
-                    "status": {"type": "string", "enum": ["pass", "retry_required", "correction_required"]},
+                    "status": {
+                        "type": "string",
+                        "enum": ["pass", "retry_required", "correction_required"],
+                    },
                     "issues": {"type": "array", "items": {"type": "string"}},
                     "reason": {"type": "string"},
                 },
@@ -991,7 +1170,13 @@ AI_RESPONSE_SCHEMA_REGISTRY = {
                 },
             },
         },
-        "required": ["schema_version", "reviewer", "candidate_reviews", "audit", "codex_directives"],
+        "required": [
+            "schema_version",
+            "reviewer",
+            "candidate_reviews",
+            "audit",
+            "codex_directives",
+        ],
     },
     "swing_bottom_rebound_policy_ai_review_v1": {
         "type": "object",
@@ -1004,7 +1189,11 @@ AI_RESPONSE_SCHEMA_REGISTRY = {
                 "properties": {
                     "policy_edge_state": {
                         "type": "string",
-                        "enum": ["candidate_policy_better", "keep_current_policy", "insufficient_context"],
+                        "enum": [
+                            "candidate_policy_better",
+                            "keep_current_policy",
+                            "insufficient_context",
+                        ],
                     },
                     "evidence": {"type": "array", "items": {"type": "string"}},
                 },
@@ -1019,7 +1208,10 @@ AI_RESPONSE_SCHEMA_REGISTRY = {
                         "enum": ["pass", "correction_required", "insufficient_context"],
                     },
                     "explicit_gaps": {"type": "array", "items": {"type": "string"}},
-                    "forbidden_use_violations": {"type": "array", "items": {"type": "string"}},
+                    "forbidden_use_violations": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
                     "runtime_authority_preserved": {"type": "boolean"},
                 },
                 "required": [
@@ -1035,7 +1227,11 @@ AI_RESPONSE_SCHEMA_REGISTRY = {
                 "properties": {
                     "classification_state": {
                         "type": "string",
-                        "enum": ["sim_auto_approved", "source_only_keep_collecting", "code_patch_required"],
+                        "enum": [
+                            "sim_auto_approved",
+                            "source_only_keep_collecting",
+                            "code_patch_required",
+                        ],
                     },
                     "promote_policy": {"type": "boolean"},
                     "reason": {"type": "string"},
@@ -1050,7 +1246,10 @@ AI_RESPONSE_SCHEMA_REGISTRY = {
         "additionalProperties": False,
         "properties": {
             "schema_version": {"type": "integer", "enum": [1]},
-            "reviewer": {"type": "string", "enum": ["producer_gap_discovery_ai_review"]},
+            "reviewer": {
+                "type": "string",
+                "enum": ["producer_gap_discovery_ai_review"],
+            },
             "candidate_reviews": {
                 "type": "array",
                 "items": {
@@ -1079,17 +1278,36 @@ AI_RESPONSE_SCHEMA_REGISTRY = {
                                 "sim_first_coverage_gap",
                             ],
                         },
-                        "priority": {"type": "string", "enum": ["critical", "high", "medium", "low"]},
+                        "priority": {
+                            "type": "string",
+                            "enum": ["critical", "high", "medium", "low"],
+                        },
                         "recommended_route": {
                             "type": "string",
-                            "enum": ["implement_now", "defer_evidence", "block_source_quality"],
+                            "enum": [
+                                "implement_now",
+                                "defer_evidence",
+                                "block_source_quality",
+                            ],
                         },
-                        "confidence": {"type": "string", "enum": ["low", "medium", "high"]},
+                        "confidence": {
+                            "type": "string",
+                            "enum": ["low", "medium", "high"],
+                        },
                         "target_subsystem": {"type": "string"},
                         "reason": {"type": "string"},
-                        "implementation_requirements": {"type": "array", "items": {"type": "string"}},
-                        "acceptance_tests": {"type": "array", "items": {"type": "string"}},
-                        "files_likely_touched": {"type": "array", "items": {"type": "string"}},
+                        "implementation_requirements": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                        "acceptance_tests": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                        "files_likely_touched": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
                     },
                     "required": [
                         "candidate_id",
@@ -1123,11 +1341,23 @@ AI_RESPONSE_SCHEMA_REGISTRY = {
                             ],
                         },
                         "recommended_canonical_bucket": {"type": "string"},
-                        "recommended_metric_or_dimension": {"type": "array", "items": {"type": "string"}},
+                        "recommended_metric_or_dimension": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
                         "reasoning_summary": {"type": "string"},
-                        "confidence": {"type": "string", "enum": ["low", "medium", "high"]},
-                        "required_source_fields": {"type": "array", "items": {"type": "string"}},
-                        "forbidden_uses": {"type": "array", "items": {"type": "string"}},
+                        "confidence": {
+                            "type": "string",
+                            "enum": ["low", "medium", "high"],
+                        },
+                        "required_source_fields": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                        "forbidden_uses": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
                     },
                     "required": [
                         "candidate_id",
@@ -1163,14 +1393,29 @@ AI_RESPONSE_SCHEMA_REGISTRY = {
                             "enum": ["deterministic", "ai_tier2", "hybrid", "reject"],
                         },
                         "recommended_canonical_bucket": {"type": "string"},
-                        "recommended_metric_or_dimension": {"type": "array", "items": {"type": "string"}},
+                        "recommended_metric_or_dimension": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
                         "comparison_summary": {"type": "string"},
                         "rejected_alternative_reason": {"type": "string"},
-                        "confidence": {"type": "string", "enum": ["low", "medium", "high"]},
-                        "required_source_fields": {"type": "array", "items": {"type": "string"}},
-                        "forbidden_uses": {"type": "array", "items": {"type": "string"}},
+                        "confidence": {
+                            "type": "string",
+                            "enum": ["low", "medium", "high"],
+                        },
+                        "required_source_fields": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                        "forbidden_uses": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
                         "workorder_title": {"type": "string"},
-                        "workorder_priority": {"type": "string", "enum": ["critical", "high", "medium", "low"]},
+                        "workorder_priority": {
+                            "type": "string",
+                            "enum": ["critical", "high", "medium", "low"],
+                        },
                     },
                     "required": [
                         "candidate_id",
@@ -1192,9 +1437,15 @@ AI_RESPONSE_SCHEMA_REGISTRY = {
                 "type": "object",
                 "additionalProperties": False,
                 "properties": {
-                    "status": {"type": "string", "enum": ["pass", "correction_required", "insufficient_context"]},
+                    "status": {
+                        "type": "string",
+                        "enum": ["pass", "correction_required", "insufficient_context"],
+                    },
                     "issues": {"type": "array", "items": {"type": "string"}},
-                    "forbidden_use_violations": {"type": "array", "items": {"type": "string"}},
+                    "forbidden_use_violations": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
                     "reason": {"type": "string"},
                 },
                 "required": ["status", "issues", "forbidden_use_violations", "reason"],
@@ -1214,7 +1465,10 @@ AI_RESPONSE_SCHEMA_REGISTRY = {
         "additionalProperties": False,
         "properties": {
             "schema_version": {"type": "integer", "enum": [1]},
-            "reviewer": {"type": "string", "enum": ["stage_hook_workorder_discovery_ai_review"]},
+            "reviewer": {
+                "type": "string",
+                "enum": ["stage_hook_workorder_discovery_ai_review"],
+            },
             "candidate_reviews": {
                 "type": "array",
                 "items": {
@@ -1233,7 +1487,10 @@ AI_RESPONSE_SCHEMA_REGISTRY = {
                                 "source_schema_provenance_hook",
                             ],
                         },
-                        "priority": {"type": "string", "enum": ["critical", "high", "medium", "low"]},
+                        "priority": {
+                            "type": "string",
+                            "enum": ["critical", "high", "medium", "low"],
+                        },
                         "recommended_readiness_tier": {
                             "type": "string",
                             "enum": [
@@ -1244,12 +1501,24 @@ AI_RESPONSE_SCHEMA_REGISTRY = {
                                 "blocked_by_source_quality",
                             ],
                         },
-                        "confidence": {"type": "string", "enum": ["low", "medium", "high"]},
+                        "confidence": {
+                            "type": "string",
+                            "enum": ["low", "medium", "high"],
+                        },
                         "target_subsystem": {"type": "string"},
                         "reason": {"type": "string"},
-                        "implementation_requirements": {"type": "array", "items": {"type": "string"}},
-                        "acceptance_tests": {"type": "array", "items": {"type": "string"}},
-                        "files_likely_touched": {"type": "array", "items": {"type": "string"}},
+                        "implementation_requirements": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                        "acceptance_tests": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                        "files_likely_touched": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
                     },
                     "required": [
                         "candidate_id",
@@ -1283,11 +1552,23 @@ AI_RESPONSE_SCHEMA_REGISTRY = {
                             ],
                         },
                         "recommended_canonical_bucket": {"type": "string"},
-                        "recommended_metric_or_dimension": {"type": "array", "items": {"type": "string"}},
+                        "recommended_metric_or_dimension": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
                         "reasoning_summary": {"type": "string"},
-                        "confidence": {"type": "string", "enum": ["low", "medium", "high"]},
-                        "required_source_fields": {"type": "array", "items": {"type": "string"}},
-                        "forbidden_uses": {"type": "array", "items": {"type": "string"}},
+                        "confidence": {
+                            "type": "string",
+                            "enum": ["low", "medium", "high"],
+                        },
+                        "required_source_fields": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                        "forbidden_uses": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
                     },
                     "required": [
                         "candidate_id",
@@ -1322,14 +1603,29 @@ AI_RESPONSE_SCHEMA_REGISTRY = {
                             "enum": ["deterministic", "ai_tier2", "hybrid", "reject"],
                         },
                         "recommended_canonical_bucket": {"type": "string"},
-                        "recommended_metric_or_dimension": {"type": "array", "items": {"type": "string"}},
+                        "recommended_metric_or_dimension": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
                         "comparison_summary": {"type": "string"},
                         "rejected_alternative_reason": {"type": "string"},
-                        "confidence": {"type": "string", "enum": ["low", "medium", "high"]},
-                        "required_source_fields": {"type": "array", "items": {"type": "string"}},
-                        "forbidden_uses": {"type": "array", "items": {"type": "string"}},
+                        "confidence": {
+                            "type": "string",
+                            "enum": ["low", "medium", "high"],
+                        },
+                        "required_source_fields": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                        "forbidden_uses": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
                         "workorder_title": {"type": "string"},
-                        "workorder_priority": {"type": "string", "enum": ["critical", "high", "medium", "low"]},
+                        "workorder_priority": {
+                            "type": "string",
+                            "enum": ["critical", "high", "medium", "low"],
+                        },
                     },
                     "required": [
                         "candidate_id",
@@ -1351,9 +1647,15 @@ AI_RESPONSE_SCHEMA_REGISTRY = {
                 "type": "object",
                 "additionalProperties": False,
                 "properties": {
-                    "status": {"type": "string", "enum": ["pass", "correction_required", "insufficient_context"]},
+                    "status": {
+                        "type": "string",
+                        "enum": ["pass", "correction_required", "insufficient_context"],
+                    },
                     "issues": {"type": "array", "items": {"type": "string"}},
-                    "forbidden_use_violations": {"type": "array", "items": {"type": "string"}},
+                    "forbidden_use_violations": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
                     "reason": {"type": "string"},
                 },
                 "required": ["status", "issues", "forbidden_use_violations", "reason"],
@@ -1387,7 +1689,10 @@ AI_RESPONSE_SCHEMA_REGISTRY = {
                         "alignment_hint": {"type": "string"},
                         "context_summary": {"type": "string"},
                         "risk_notes": {"type": "array", "items": {"type": "string"}},
-                        "forbidden_uses": {"type": "array", "items": {"type": "string"}},
+                        "forbidden_uses": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
                     },
                     "required": [
                         "stage",
@@ -1407,7 +1712,10 @@ AI_RESPONSE_SCHEMA_REGISTRY = {
         "additionalProperties": False,
         "properties": {
             "schema_version": {"type": "integer", "enum": [1]},
-            "reviewer": {"type": "string", "enum": ["swing_ai_contract_structured_output_eval"]},
+            "reviewer": {
+                "type": "string",
+                "enum": ["swing_ai_contract_structured_output_eval"],
+            },
             "prompt_variant_reviews": {
                 "type": "array",
                 "items": {
@@ -1483,7 +1791,9 @@ AI_RESPONSE_SCHEMA_REGISTRY = {
 
 
 def swing_ai_structured_output_eval_contract() -> dict:
-    schema_available = SWING_AI_STRUCTURED_OUTPUT_EVAL_SCHEMA_NAME in AI_RESPONSE_SCHEMA_REGISTRY
+    schema_available = (
+        SWING_AI_STRUCTURED_OUTPUT_EVAL_SCHEMA_NAME in AI_RESPONSE_SCHEMA_REGISTRY
+    )
     entry_schema_available = "entry_v1" in AI_RESPONSE_SCHEMA_REGISTRY
     gatekeeper_normalizer_available = {
         "immediate_buy",
@@ -1494,7 +1804,9 @@ def swing_ai_structured_output_eval_contract() -> dict:
         "swing_preferred",
         "neither",
     }.issubset(CANONICAL_GATEKEEPER_ACTION_KEYS)
-    implemented = schema_available and entry_schema_available and gatekeeper_normalizer_available
+    implemented = (
+        schema_available and entry_schema_available and gatekeeper_normalizer_available
+    )
     return {
         "implementation_status": (
             "implemented_source_quality_contract_available"
@@ -1555,7 +1867,9 @@ def swing_ai_structured_output_eval_contract() -> dict:
             "actual_order_submitted": False,
             "broker_order_forbidden": True,
             "requires_separate_runtime_apply_candidate": True,
-            "root_cause_closure_status_hint": "root_cause_closed" if implemented else "needs_followup_workorder",
+            "root_cause_closure_status_hint": (
+                "root_cause_closed" if implemented else "needs_followup_workorder"
+            ),
         },
     }
 

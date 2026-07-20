@@ -3,7 +3,11 @@ from __future__ import annotations
 import argparse
 import json
 
-from src.engine.trade_pause_control import get_pause_state_label, is_buy_side_paused, set_buy_side_pause
+from src.engine.trade_pause_control import (
+    get_pause_state_label,
+    is_buy_side_paused,
+    set_buy_side_pause,
+)
 
 
 def _main() -> int:
@@ -22,7 +26,9 @@ def _main() -> int:
 
     args = parser.parse_args()
     if args.command == "pause":
-        paused = set_buy_side_pause(True, source=args.source, reason=args.reason or None)
+        paused = set_buy_side_pause(
+            True, source=args.source, reason=args.reason or None
+        )
         print(
             json.dumps(
                 {
@@ -39,7 +45,9 @@ def _main() -> int:
         return 0
 
     if args.command == "resume":
-        paused = set_buy_side_pause(False, source=args.source, reason=args.reason or None)
+        paused = set_buy_side_pause(
+            False, source=args.source, reason=args.reason or None
+        )
         print(
             json.dumps(
                 {

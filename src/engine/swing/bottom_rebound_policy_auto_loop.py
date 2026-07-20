@@ -16,7 +16,9 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
-from src.engine.swing.sim_auto_approval_control_tower import refresh_swing_sim_auto_approval
+from src.engine.swing.sim_auto_approval_control_tower import (
+    refresh_swing_sim_auto_approval,
+)
 from src.engine.swing.bottom_rebound_candidate_source import (
     CandidateSourceConfig,
     POLICY_VERSION as CURRENT_SOURCE_POLICY_VERSION,
@@ -24,15 +26,18 @@ from src.engine.swing.bottom_rebound_candidate_source import (
     build_candidate_source_report,
     write_report as write_candidate_source_report,
 )
-from src.engine.swing.bottom_rebound_pattern_research import REPORT_DIR as RESEARCH_REPORT_DIR
+from src.engine.swing.bottom_rebound_pattern_research import (
+    REPORT_DIR as RESEARCH_REPORT_DIR,
+)
 from src.utils.constants import DATA_DIR, TRADING_RULES
-
 
 REPORT_TYPE = "swing_bottom_rebound_policy_auto_loop"
 SCHEMA_VERSION = "swing_bottom_rebound_policy_auto_loop_v1"
 DECISION_AUTHORITY = "swing_bottom_rebound_sim_policy_auto_approval"
 AI_REVIEW_SCHEMA_NAME = "swing_bottom_rebound_policy_ai_review_v1"
-AI_REVIEW_MODEL = str(getattr(TRADING_RULES, "GPT_REPORT_MODEL", "gpt-5.4-mini") or "gpt-5.4-mini")
+AI_REVIEW_MODEL = str(
+    getattr(TRADING_RULES, "GPT_REPORT_MODEL", "gpt-5.4-mini") or "gpt-5.4-mini"
+)
 REPORT_DIR = Path(DATA_DIR) / "report" / REPORT_TYPE
 EV_REPORT_DIR = Path(DATA_DIR) / "report" / "swing_strategy_discovery_ev"
 FORBIDDEN_USES = [
@@ -94,15 +99,20 @@ def _load_json(path: Path) -> dict[str, Any]:
 def _text_hash(payload: Any) -> str:
     import hashlib
 
-    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    raw = json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str
+    )
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 def default_source_paths(target_date: str) -> dict[str, Path]:
     return {
-        "bottom_rebound_research": RESEARCH_REPORT_DIR / f"bottom_rebound_pattern_research_{target_date}.json",
-        "candidate_source": CANDIDATE_SOURCE_DIR / f"swing_bottom_rebound_candidate_source_{target_date}.json",
-        "swing_strategy_discovery_ev": EV_REPORT_DIR / f"swing_strategy_discovery_ev_{target_date}.json",
+        "bottom_rebound_research": RESEARCH_REPORT_DIR
+        / f"bottom_rebound_pattern_research_{target_date}.json",
+        "candidate_source": CANDIDATE_SOURCE_DIR
+        / f"swing_bottom_rebound_candidate_source_{target_date}.json",
+        "swing_strategy_discovery_ev": EV_REPORT_DIR
+        / f"swing_strategy_discovery_ev_{target_date}.json",
     }
 
 
@@ -116,7 +126,11 @@ def _contract_ok(payload: dict[str, Any], expected_authority: str) -> bool:
 
 
 def _candidate_source_selected_count(payload: dict[str, Any]) -> int:
-    source_quality = payload.get("source_quality") if isinstance(payload.get("source_quality"), dict) else {}
+    source_quality = (
+        payload.get("source_quality")
+        if isinstance(payload.get("source_quality"), dict)
+        else {}
+    )
     return _safe_int(source_quality.get("selected_candidate_count"))
 
 
@@ -139,11 +153,18 @@ def _ensure_candidate_source_packet(
     research_path: Path,
     materialize: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    if _contract_ok(candidate_source, "swing_sim_candidate_source_only") and _candidate_source_selected_count(candidate_source) > 0:
+    if (
+        _contract_ok(candidate_source, "swing_sim_candidate_source_only")
+        and _candidate_source_selected_count(candidate_source) > 0
+    ):
         return candidate_source, {
             "status": "existing_candidate_source_used",
-            "candidate_source_selected_count": _candidate_source_selected_count(candidate_source),
-            "path": str(candidate_source_path) if candidate_source_path.exists() else None,
+            "candidate_source_selected_count": _candidate_source_selected_count(
+                candidate_source
+            ),
+            "path": (
+                str(candidate_source_path) if candidate_source_path.exists() else None
+            ),
         }
     generated = build_candidate_source_report(
         bottom_report=research,
@@ -158,8 +179,14 @@ def _ensure_candidate_source_packet(
     )
     selected_count = _candidate_source_selected_count(generated)
     diagnostics = {
-        "status": "generated_candidate_source_packet" if selected_count > 0 else "candidate_source_generation_empty",
-        "previous_candidate_source_selected_count": _candidate_source_selected_count(candidate_source),
+        "status": (
+            "generated_candidate_source_packet"
+            if selected_count > 0
+            else "candidate_source_generation_empty"
+        ),
+        "previous_candidate_source_selected_count": _candidate_source_selected_count(
+            candidate_source
+        ),
         "candidate_source_selected_count": selected_count,
         "path": str(candidate_source_path),
         "runtime_effect": False,
@@ -167,7 +194,9 @@ def _ensure_candidate_source_packet(
         "broker_order_forbidden": True,
     }
     if selected_count > 0 and materialize:
-        write_candidate_source_report(generated, output_dir=candidate_source_path.parent)
+        write_candidate_source_report(
+            generated, output_dir=candidate_source_path.parent
+        )
         diagnostics["materialized"] = True
     else:
         diagnostics["materialized"] = False
@@ -175,12 +204,18 @@ def _ensure_candidate_source_packet(
 
 
 def _research_ev(research: dict[str, Any]) -> float:
-    summary = research.get("summary") if isinstance(research.get("summary"), dict) else {}
+    summary = (
+        research.get("summary") if isinstance(research.get("summary"), dict) else {}
+    )
     return _safe_float(summary.get("top_primary_source_quality_adjusted_ev_pct"))
 
 
 def _bottom_bucket_ev(ev_report: dict[str, Any]) -> dict[str, Any]:
-    aggregates = ev_report.get("aggregates") if isinstance(ev_report.get("aggregates"), dict) else {}
+    aggregates = (
+        ev_report.get("aggregates")
+        if isinstance(ev_report.get("aggregates"), dict)
+        else {}
+    )
     candidates: list[dict[str, Any]] = []
     for axis, key in (
         ("volatility_bucket", "bottom_rebound"),
@@ -191,26 +226,52 @@ def _bottom_bucket_ev(ev_report: dict[str, Any]) -> dict[str, Any]:
                 candidates.append({"axis": axis, **item})
     if not candidates:
         return {}
-    return max(candidates, key=lambda item: (_safe_float(item.get("source_quality_adjusted_ev_pct")), _safe_int(item.get("sample_count"))))
+    return max(
+        candidates,
+        key=lambda item: (
+            _safe_float(item.get("source_quality_adjusted_ev_pct")),
+            _safe_int(item.get("sample_count")),
+        ),
+    )
 
 
 def _candidate_source_ev(candidate_source: dict[str, Any]) -> float | None:
     if _candidate_source_selected_count(candidate_source) <= 0:
         return None
-    rows = candidate_source.get("candidate_rows") if isinstance(candidate_source.get("candidate_rows"), list) else []
-    values = [_safe_float(row.get("source_quality_adjusted_ev_pct")) for row in rows if isinstance(row, dict)]
+    rows = (
+        candidate_source.get("candidate_rows")
+        if isinstance(candidate_source.get("candidate_rows"), list)
+        else []
+    )
+    values = [
+        _safe_float(row.get("source_quality_adjusted_ev_pct"))
+        for row in rows
+        if isinstance(row, dict)
+    ]
     if values:
         return max(values)
-    source_report = candidate_source.get("source_report") if isinstance(candidate_source.get("source_report"), dict) else {}
+    source_report = (
+        candidate_source.get("source_report")
+        if isinstance(candidate_source.get("source_report"), dict)
+        else {}
+    )
     if source_report.get("primary_adjusted_ev_pct") is not None:
         return _safe_float(source_report.get("primary_adjusted_ev_pct"))
     return None
 
 
 def _research_sample_count(research: dict[str, Any]) -> int:
-    summary = research.get("summary") if isinstance(research.get("summary"), dict) else {}
-    portfolio = research.get("portfolio_backtest") if isinstance(research.get("portfolio_backtest"), dict) else {}
-    portfolio_summary = portfolio.get("summary") if isinstance(portfolio.get("summary"), dict) else {}
+    summary = (
+        research.get("summary") if isinstance(research.get("summary"), dict) else {}
+    )
+    portfolio = (
+        research.get("portfolio_backtest")
+        if isinstance(research.get("portfolio_backtest"), dict)
+        else {}
+    )
+    portfolio_summary = (
+        portfolio.get("summary") if isinstance(portfolio.get("summary"), dict) else {}
+    )
     return max(
         _safe_int(summary.get("backtest_trade_count")),
         _safe_int(portfolio_summary.get("trade_count")),
@@ -232,7 +293,11 @@ def _build_context(
     candidate_source_ev = _candidate_source_ev(candidate_source)
     has_sim_bucket = bool(bucket)
     baseline_ev = research_ev if has_sim_bucket else 0.0
-    candidate_ev = bucket_ev if has_sim_bucket else candidate_source_ev if candidate_source_ev is not None else research_ev
+    candidate_ev = (
+        bucket_ev
+        if has_sim_bucket
+        else candidate_source_ev if candidate_source_ev is not None else research_ev
+    )
     absolute_improvement = candidate_ev - baseline_ev
     relative_improvement = (
         absolute_improvement / abs(baseline_ev)
@@ -253,17 +318,26 @@ def _build_context(
         },
         "source_contracts": {
             "bottom_rebound_research": _contract_ok(research, "research_only"),
-            "swing_strategy_discovery_ev": _contract_ok(ev_report, "swing_sim_exploration_only"),
+            "swing_strategy_discovery_ev": _contract_ok(
+                ev_report, "swing_sim_exploration_only"
+            ),
         },
         "downstream_contracts": {
-            "candidate_source": _contract_ok(candidate_source, "swing_sim_candidate_source_only"),
+            "candidate_source": _contract_ok(
+                candidate_source, "swing_sim_candidate_source_only"
+            ),
             "candidate_source_selected_count": _safe_int(
-                (candidate_source.get("source_quality") or {}).get("selected_candidate_count")
+                (candidate_source.get("source_quality") or {}).get(
+                    "selected_candidate_count"
+                )
                 if isinstance(candidate_source.get("source_quality"), dict)
                 else 0
             ),
         },
-        "source_paths": {label: str(path) if path.exists() else None for label, path in source_paths.items()},
+        "source_paths": {
+            label: str(path) if path.exists() else None
+            for label, path in source_paths.items()
+        },
         "metrics": {
             "baseline_research_ev_pct": round(research_ev, 6),
             "baseline_policy_ev_pct": round(baseline_ev, 6),
@@ -272,13 +346,19 @@ def _build_context(
             "candidate_ev_evidence_source": (
                 "swing_strategy_discovery_ev_bucket"
                 if has_sim_bucket
-                else "bottom_rebound_candidate_source_packet"
-                if candidate_source_ev is not None
-                else "bottom_rebound_research_backtest_bootstrap"
+                else (
+                    "bottom_rebound_candidate_source_packet"
+                    if candidate_source_ev is not None
+                    else "bottom_rebound_research_backtest_bootstrap"
+                )
             ),
             "absolute_improvement_pct": round(absolute_improvement, 6),
             "relative_improvement": round(relative_improvement, 6),
-            "sample_count": _safe_int(bucket.get("sample_count")) if has_sim_bucket else _research_sample_count(research),
+            "sample_count": (
+                _safe_int(bucket.get("sample_count"))
+                if has_sim_bucket
+                else _research_sample_count(research)
+            ),
             "ev_bucket": bucket,
         },
         "proposed_policy": {
@@ -293,8 +373,14 @@ def _build_context(
     }
 
 
-def _deterministic_ai_payload(context: dict[str, Any], config: PolicyAutoLoopConfig) -> dict[str, Any]:
-    contracts = context.get("source_contracts") if isinstance(context.get("source_contracts"), dict) else {}
+def _deterministic_ai_payload(
+    context: dict[str, Any], config: PolicyAutoLoopConfig
+) -> dict[str, Any]:
+    contracts = (
+        context.get("source_contracts")
+        if isinstance(context.get("source_contracts"), dict)
+        else {}
+    )
     metrics = context.get("metrics") if isinstance(context.get("metrics"), dict) else {}
     explicit_gaps = [name for name, ok in contracts.items() if ok is not True]
     sample_count = _safe_int(metrics.get("sample_count"))
@@ -303,12 +389,15 @@ def _deterministic_ai_payload(context: dict[str, Any], config: PolicyAutoLoopCon
     if sample_count < config.min_sample_count:
         explicit_gaps.append("sample_floor_not_met")
     promoted = not explicit_gaps and (
-        rel_imp >= config.min_relative_improvement or abs_imp >= config.min_absolute_improvement_pct
+        rel_imp >= config.min_relative_improvement
+        or abs_imp >= config.min_absolute_improvement_pct
     )
     return {
         "schema_version": 1,
         "interpretation": {
-            "policy_edge_state": "candidate_policy_better" if promoted else "keep_current_policy",
+            "policy_edge_state": (
+                "candidate_policy_better" if promoted else "keep_current_policy"
+            ),
             "evidence": [
                 f"relative_improvement={rel_imp}",
                 f"absolute_improvement_pct={abs_imp}",
@@ -322,11 +411,15 @@ def _deterministic_ai_payload(context: dict[str, Any], config: PolicyAutoLoopCon
             "runtime_authority_preserved": True,
         },
         "final_conclusion": {
-            "classification_state": "sim_auto_approved" if promoted else "source_only_keep_collecting",
+            "classification_state": (
+                "sim_auto_approved" if promoted else "source_only_keep_collecting"
+            ),
             "promote_policy": promoted,
-            "reason": "Candidate policy is at least 1 percent better and remains sim-only."
-            if promoted
-            else "Candidate policy did not pass improvement, sample, or source-quality gates.",
+            "reason": (
+                "Candidate policy is at least 1 percent better and remains sim-only."
+                if promoted
+                else "Candidate policy did not pass improvement, sample, or source-quality gates."
+            ),
         },
     }
 
@@ -348,16 +441,30 @@ def _ai_instructions() -> str:
     )
 
 
-def _call_openai_review(context: dict[str, Any], *, model: str) -> tuple[Any | None, dict[str, Any]]:
+def _call_openai_review(
+    context: dict[str, Any], *, model: str
+) -> tuple[Any | None, dict[str, Any]]:
     try:
         from openai import OpenAI, RateLimitError
         from src.engine.ai_response_contracts import build_openai_response_text_format
-        from src.engine.daily_threshold_cycle_report import _extract_openai_response_text, _load_threshold_ai_openai_keys
+        from src.engine.daily_threshold_cycle_report import (
+            _extract_openai_response_text,
+            _load_threshold_ai_openai_keys,
+        )
     except Exception as exc:
-        return None, {"provider": "openai", "status": "unavailable", "reason": f"openai import failed: {exc}"}
+        return None, {
+            "provider": "openai",
+            "status": "unavailable",
+            "reason": f"openai import failed: {exc}",
+        }
     keys = _load_threshold_ai_openai_keys()
     if not keys:
-        return None, {"provider": "openai", "status": "unavailable", "reason": "OPENAI_API_KEY not configured", "model": model}
+        return None, {
+            "provider": "openai",
+            "status": "unavailable",
+            "reason": "OPENAI_API_KEY not configured",
+            "model": model,
+        }
     prompt = json.dumps(context, ensure_ascii=True, indent=2, default=str)
     errors: list[dict[str, str]] = []
     for attempt_index, (key_name, api_key) in enumerate(keys, start=1):
@@ -366,7 +473,10 @@ def _call_openai_review(context: dict[str, Any], *, model: str) -> tuple[Any | N
                 model=model,
                 instructions=_ai_instructions(),
                 input=prompt,
-                text={"format": build_openai_response_text_format(AI_REVIEW_SCHEMA_NAME), "verbosity": "low"},
+                text={
+                    "format": build_openai_response_text_format(AI_REVIEW_SCHEMA_NAME),
+                    "verbosity": "low",
+                },
                 reasoning={"effort": "medium"},
                 store=False,
                 timeout=120,
@@ -386,17 +496,29 @@ def _call_openai_review(context: dict[str, Any], *, model: str) -> tuple[Any | N
                 "key_name": key_name,
                 "attempt_index": attempt_index,
                 "input_context_hash": _text_hash(context),
-                "input_tokens": int(getattr(usage, "input_tokens", 0) or 0) if usage else 0,
-                "output_tokens": int(getattr(usage, "output_tokens", 0) or 0) if usage else 0,
+                "input_tokens": (
+                    int(getattr(usage, "input_tokens", 0) or 0) if usage else 0
+                ),
+                "output_tokens": (
+                    int(getattr(usage, "output_tokens", 0) or 0) if usage else 0
+                ),
             }
         except RateLimitError as exc:
             errors.append({"key_name": key_name, "error": f"rate_limit:{exc}"})
         except Exception as exc:
             errors.append({"key_name": key_name, "error": str(exc)})
-    return None, {"provider": "openai", "status": "unavailable", "reason": "all OpenAI attempts failed", "model": model, "errors": errors[-3:]}
+    return None, {
+        "provider": "openai",
+        "status": "unavailable",
+        "reason": "all OpenAI attempts failed",
+        "model": model,
+        "errors": errors[-3:],
+    }
 
 
-def _normalize_ai_payload_shape(payload: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+def _normalize_ai_payload_shape(
+    payload: dict[str, Any],
+) -> tuple[dict[str, Any], list[str]]:
     normalized = dict(payload)
     notes: list[str] = []
     if normalized.get("schema_version") == "1":
@@ -404,10 +526,20 @@ def _normalize_ai_payload_shape(payload: dict[str, Any]) -> tuple[dict[str, Any]
         notes.append("normalized_schema_version_string")
     if not isinstance(normalized.get("final_conclusion"), dict):
         conclusions = normalized.get("final_conclusions")
-        if isinstance(conclusions, list) and conclusions and isinstance(conclusions[0], dict):
+        if (
+            isinstance(conclusions, list)
+            and conclusions
+            and isinstance(conclusions[0], dict)
+        ):
             first = conclusions[0]
-            state = first.get("classification_state") or first.get("final_classification_state") or first.get("final_state")
-            decision = str(first.get("final_decision") or first.get("decision") or "").lower()
+            state = (
+                first.get("classification_state")
+                or first.get("final_classification_state")
+                or first.get("final_state")
+            )
+            decision = str(
+                first.get("final_decision") or first.get("decision") or ""
+            ).lower()
             normalized["final_conclusion"] = {
                 "classification_state": state,
                 "promote_policy": bool(first.get("promote_policy"))
@@ -441,45 +573,100 @@ def _parse_ai_payload(raw: Any | None) -> tuple[str, dict[str, Any], list[str]]:
     if not isinstance(payload.get("interpretation"), dict):
         warnings.append("ai_review_interpretation_missing")
     audit = payload.get("audit") if isinstance(payload.get("audit"), dict) else {}
-    if str(audit.get("status") or "") not in {"pass", "correction_required", "insufficient_context"}:
+    if str(audit.get("status") or "") not in {
+        "pass",
+        "correction_required",
+        "insufficient_context",
+    }:
         warnings.append("ai_review_audit_status_invalid")
-    conclusion = payload.get("final_conclusion") if isinstance(payload.get("final_conclusion"), dict) else {}
-    if str(conclusion.get("classification_state") or "") not in {"sim_auto_approved", "source_only_keep_collecting", "code_patch_required"}:
+    conclusion = (
+        payload.get("final_conclusion")
+        if isinstance(payload.get("final_conclusion"), dict)
+        else {}
+    )
+    if str(conclusion.get("classification_state") or "") not in {
+        "sim_auto_approved",
+        "source_only_keep_collecting",
+        "code_patch_required",
+    }:
         warnings.append("ai_review_final_classification_invalid")
-    return ("parse_rejected", payload, warnings + normalization_notes) if warnings else ("parsed", payload, normalization_notes)
+    return (
+        ("parse_rejected", payload, warnings + normalization_notes)
+        if warnings
+        else ("parsed", payload, normalization_notes)
+    )
 
 
-def _normalize_conclusion(payload: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
-    deterministic = _deterministic_ai_payload(context, PolicyAutoLoopConfig(target_date=context.get("date")))
-    conclusion = payload.get("final_conclusion") if isinstance(payload.get("final_conclusion"), dict) else {}
+def _normalize_conclusion(
+    payload: dict[str, Any], context: dict[str, Any]
+) -> dict[str, Any]:
+    deterministic = _deterministic_ai_payload(
+        context, PolicyAutoLoopConfig(target_date=context.get("date"))
+    )
+    conclusion = (
+        payload.get("final_conclusion")
+        if isinstance(payload.get("final_conclusion"), dict)
+        else {}
+    )
     audit = payload.get("audit") if isinstance(payload.get("audit"), dict) else {}
-    forbidden = audit.get("forbidden_use_violations") if isinstance(audit.get("forbidden_use_violations"), list) else []
-    gaps = audit.get("explicit_gaps") if isinstance(audit.get("explicit_gaps"), list) else []
+    forbidden = (
+        audit.get("forbidden_use_violations")
+        if isinstance(audit.get("forbidden_use_violations"), list)
+        else []
+    )
+    gaps = (
+        audit.get("explicit_gaps")
+        if isinstance(audit.get("explicit_gaps"), list)
+        else []
+    )
     promote = bool(conclusion.get("promote_policy"))
     if forbidden or gaps:
         promote = False
-    state = "sim_auto_approved" if promote else str(conclusion.get("classification_state") or "source_only_keep_collecting")
-    if state not in {"sim_auto_approved", "source_only_keep_collecting", "code_patch_required"}:
+    state = (
+        "sim_auto_approved"
+        if promote
+        else str(
+            conclusion.get("classification_state") or "source_only_keep_collecting"
+        )
+    )
+    if state not in {
+        "sim_auto_approved",
+        "source_only_keep_collecting",
+        "code_patch_required",
+    }:
         state = deterministic["final_conclusion"]["classification_state"]
     return {
         "classification_state": state,
         "promote_policy": state == "sim_auto_approved",
-        "reason": str(conclusion.get("reason") or deterministic["final_conclusion"]["reason"]),
+        "reason": str(
+            conclusion.get("reason") or deterministic["final_conclusion"]["reason"]
+        ),
         "explicit_gaps": [str(item) for item in gaps],
         "forbidden_use_violations": [str(item) for item in forbidden],
     }
 
 
-def _deterministic_gate_gaps(context: dict[str, Any], config: PolicyAutoLoopConfig) -> list[str]:
-    contracts = context.get("source_contracts") if isinstance(context.get("source_contracts"), dict) else {}
+def _deterministic_gate_gaps(
+    context: dict[str, Any], config: PolicyAutoLoopConfig
+) -> list[str]:
+    contracts = (
+        context.get("source_contracts")
+        if isinstance(context.get("source_contracts"), dict)
+        else {}
+    )
     metrics = context.get("metrics") if isinstance(context.get("metrics"), dict) else {}
-    gaps = [f"{name}_contract_failed" for name, ok in contracts.items() if ok is not True]
+    gaps = [
+        f"{name}_contract_failed" for name, ok in contracts.items() if ok is not True
+    ]
     sample_count = _safe_int(metrics.get("sample_count"))
     abs_imp = _safe_float(metrics.get("absolute_improvement_pct"))
     rel_imp = _safe_float(metrics.get("relative_improvement"))
     if sample_count < config.min_sample_count:
         gaps.append("sample_floor_not_met")
-    if rel_imp < config.min_relative_improvement and abs_imp < config.min_absolute_improvement_pct:
+    if (
+        rel_imp < config.min_relative_improvement
+        and abs_imp < config.min_absolute_improvement_pct
+    ):
         gaps.append("one_percent_improvement_not_met")
     return gaps
 
@@ -514,34 +701,71 @@ def build_policy_auto_loop_report(
         ev_report=ev_report,
         source_paths=paths,
     )
-    resolved_provider = str(provider if provider is not None else os.getenv("KORSTOCKSCAN_BOTTOM_REBOUND_POLICY_AI_REVIEW_PROVIDER", "openai")).lower()
+    resolved_provider = str(
+        provider
+        if provider is not None
+        else os.getenv(
+            "KORSTOCKSCAN_BOTTOM_REBOUND_POLICY_AI_REVIEW_PROVIDER", "openai"
+        )
+    ).lower()
     provider_status = {
         "provider": resolved_provider,
-        "status": "disabled" if resolved_provider in {"none", "off", "false", "0"} else "not_called",
-        "model": AI_REVIEW_MODEL if resolved_provider not in {"none", "off", "false", "0"} else None,
-        "model_tier": "tier2" if resolved_provider not in {"none", "off", "false", "0"} else "deterministic_fallback",
+        "status": (
+            "disabled"
+            if resolved_provider in {"none", "off", "false", "0"}
+            else "not_called"
+        ),
+        "model": (
+            AI_REVIEW_MODEL
+            if resolved_provider not in {"none", "off", "false", "0"}
+            else None
+        ),
+        "model_tier": (
+            "tier2"
+            if resolved_provider not in {"none", "off", "false", "0"}
+            else "deterministic_fallback"
+        ),
     }
     raw_response = ai_raw_response
     if raw_response is None and resolved_provider == "openai":
-        raw_response, provider_status = _call_openai_review(context, model=AI_REVIEW_MODEL)
+        raw_response, provider_status = _call_openai_review(
+            context, model=AI_REVIEW_MODEL
+        )
     ai_status, ai_payload, ai_warnings = _parse_ai_payload(raw_response)
     fallback_used = False
     if ai_status != "parsed":
         fallback_used = True
         ai_payload = _deterministic_ai_payload(context, config)
-        ai_status = "disabled_deterministic_review" if resolved_provider in {"none", "off", "false", "0"} else "unavailable_deterministic_review"
+        ai_status = (
+            "disabled_deterministic_review"
+            if resolved_provider in {"none", "off", "false", "0"}
+            else "unavailable_deterministic_review"
+        )
     conclusion = _normalize_conclusion(ai_payload, context)
     deterministic_gaps = _deterministic_gate_gaps(context, config)
     if deterministic_gaps:
         conclusion["classification_state"] = "source_only_keep_collecting"
         conclusion["promote_policy"] = False
-        conclusion["explicit_gaps"] = sorted(set(conclusion.get("explicit_gaps") or []) | set(deterministic_gaps))
-    if ai_status in {"unavailable_deterministic_review", "disabled_deterministic_review"}:
+        conclusion["explicit_gaps"] = sorted(
+            set(conclusion.get("explicit_gaps") or []) | set(deterministic_gaps)
+        )
+    if ai_status in {
+        "unavailable_deterministic_review",
+        "disabled_deterministic_review",
+    }:
         conclusion["classification_state"] = "source_only_keep_collecting"
         conclusion["promote_policy"] = False
-        gap = "tier2_ai_review_disabled" if ai_status == "disabled_deterministic_review" else "tier2_ai_review_unavailable"
-        conclusion["explicit_gaps"] = sorted(set(conclusion.get("explicit_gaps") or []) | {gap})
-    approved_policy = context["proposed_policy"] if conclusion["promote_policy"] else None
+        gap = (
+            "tier2_ai_review_disabled"
+            if ai_status == "disabled_deterministic_review"
+            else "tier2_ai_review_unavailable"
+        )
+        conclusion["explicit_gaps"] = sorted(
+            set(conclusion.get("explicit_gaps") or []) | {gap}
+        )
+    approved_policy = (
+        context["proposed_policy"] if conclusion["promote_policy"] else None
+    )
     warnings = list(ai_warnings)
     if conclusion.get("explicit_gaps"):
         warnings.extend(f"explicit_gap:{item}" for item in conclusion["explicit_gaps"])
@@ -595,8 +819,16 @@ def build_policy_auto_loop_report(
 
 
 def render_markdown(report: dict[str, Any]) -> str:
-    metrics = ((report.get("source_context") or {}).get("metrics") or {}) if isinstance(report.get("source_context"), dict) else {}
-    conclusion = report.get("final_conclusion") if isinstance(report.get("final_conclusion"), dict) else {}
+    metrics = (
+        ((report.get("source_context") or {}).get("metrics") or {})
+        if isinstance(report.get("source_context"), dict)
+        else {}
+    )
+    conclusion = (
+        report.get("final_conclusion")
+        if isinstance(report.get("final_conclusion"), dict)
+        else {}
+    )
     lines = [
         f"# Swing Bottom Rebound Policy Auto Loop - {report.get('date')}",
         "",
@@ -629,13 +861,19 @@ def report_paths(target_date: str, output_dir: Path = REPORT_DIR) -> tuple[Path,
     return base.with_suffix(".json"), base.with_suffix(".md")
 
 
-def write_policy_auto_loop_report(report: dict[str, Any], *, output_dir: Path = REPORT_DIR) -> dict[str, Path]:
+def write_policy_auto_loop_report(
+    report: dict[str, Any], *, output_dir: Path = REPORT_DIR
+) -> dict[str, Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
     json_path, md_path = report_paths(_date_text(report.get("date")), output_dir)
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2, default=str), encoding="utf-8"
+    )
     md_path.write_text(render_markdown(report), encoding="utf-8")
     if output_dir == REPORT_DIR:
-        refresh_swing_sim_auto_approval(_date_text(report.get("date")), bottom_rebound_policy_report=report)
+        refresh_swing_sim_auto_approval(
+            _date_text(report.get("date")), bottom_rebound_policy_report=report
+        )
     return {"json": json_path, "md": md_path}
 
 
@@ -652,10 +890,21 @@ def main(argv: list[str] | None = None) -> None:
         materialize_generated_candidate_source=not args.no_write,
     )
     if args.no_write:
-        print(json.dumps({"date": report["date"], "final_conclusion": report["final_conclusion"], "warnings": report["warnings"]}, ensure_ascii=False))
+        print(
+            json.dumps(
+                {
+                    "date": report["date"],
+                    "final_conclusion": report["final_conclusion"],
+                    "warnings": report["warnings"],
+                },
+                ensure_ascii=False,
+            )
+        )
         return
     paths = write_policy_auto_loop_report(report, output_dir=args.output_dir)
-    print(f"[DONE] swing_bottom_rebound_policy_auto_loop json={paths['json']} md={paths['md']}")
+    print(
+        f"[DONE] swing_bottom_rebound_policy_auto_loop json={paths['json']} md={paths['md']}"
+    )
 
 
 if __name__ == "__main__":

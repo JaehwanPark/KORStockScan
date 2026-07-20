@@ -7,7 +7,6 @@ from typing import Any
 
 from src.utils.constants import DATA_DIR
 
-
 APPROVAL_DIR = DATA_DIR / "threshold_cycle" / "approvals"
 
 
@@ -131,7 +130,9 @@ _CONTRACTS: dict[str, dict[str, Any]] = {
 }
 
 
-def approval_contract_for(family: str, source_date: str | None = None) -> dict[str, Any]:
+def approval_contract_for(
+    family: str, source_date: str | None = None
+) -> dict[str, Any]:
     family_key = str(family or "").strip()
     source_date = str(source_date or "YYYY-MM-DD").strip() or "YYYY-MM-DD"
     contract = dict(_CONTRACTS.get(family_key) or {})
@@ -151,10 +152,16 @@ def approval_contract_for(family: str, source_date: str | None = None) -> dict[s
                 "rollback_tests",
             ],
         }
-    template = str(contract.get("approval_artifact_template") or f"{family_key}_{{date}}.json")
+    template = str(
+        contract.get("approval_artifact_template") or f"{family_key}_{{date}}.json"
+    )
     contract["family"] = family_key
-    contract["approval_artifact_path"] = str(APPROVAL_DIR / template.format(date=source_date))
-    contract["approval_artifact_exists"] = Path(contract["approval_artifact_path"]).exists()
+    contract["approval_artifact_path"] = str(
+        APPROVAL_DIR / template.format(date=source_date)
+    )
+    contract["approval_artifact_exists"] = Path(
+        contract["approval_artifact_path"]
+    ).exists()
     contract["approval_live_ready"] = (
         contract.get("approval_contract_status") == "ready"
         and bool(contract.get("preopen_env_ready"))
@@ -164,17 +171,22 @@ def approval_contract_for(family: str, source_date: str | None = None) -> dict[s
     return contract
 
 
-def annotate_approval_request(request: dict[str, Any], source_date: str | None = None) -> dict[str, Any]:
+def annotate_approval_request(
+    request: dict[str, Any], source_date: str | None = None
+) -> dict[str, Any]:
     family = str(request.get("family") or request.get("policy_id") or "").strip()
     contract = approval_contract_for(family, source_date)
     return {
         **request,
         "approval_contract_status": contract.get("approval_contract_status"),
         "approval_mode": contract.get("approval_mode") or "artifact_required",
-        "approval_artifact_required": bool(contract.get("approval_artifact_required", True)),
+        "approval_artifact_required": bool(
+            contract.get("approval_artifact_required", True)
+        ),
         "approval_live_ready": bool(contract.get("approval_live_ready")),
         "approval_artifact_path": contract.get("approval_artifact_path"),
         "approval_artifact_consumer": contract.get("approval_artifact_consumer"),
-        "approval_contract_missing_components": contract.get("missing_components") or [],
+        "approval_contract_missing_components": contract.get("missing_components")
+        or [],
         "approval_runtime_scope": contract.get("runtime_scope"),
     }

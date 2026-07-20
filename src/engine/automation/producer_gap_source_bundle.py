@@ -16,7 +16,6 @@ from typing import Any
 from src.engine.daily_threshold_cycle_report import REPORT_DIR
 from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 REPORT_TYPE = "producer_gap_source_bundle"
 REPORT_SCHEMA_VERSION = 1
@@ -57,7 +56,12 @@ SECTION_SPECS: dict[str, dict[str, Any]] = {
     },
     "volatile_runner_exit_counterfactual": {
         "pattern_type": "volatile_runner_exit_counterfactual_missing",
-        "tokens": ("runner", "post_exit_mfe", "peak_drawdown", "holding_flow_override_state"),
+        "tokens": (
+            "runner",
+            "post_exit_mfe",
+            "peak_drawdown",
+            "holding_flow_override_state",
+        ),
         "required_fields": ("source_paths", "join_keys"),
         "join_keys": ("recommendation_id", "sim_parent_record_id", "record_id", "code"),
     },
@@ -107,9 +111,12 @@ def report_paths(target_date: str) -> tuple[Path, Path]:
 
 def _source_paths(target_date: str) -> dict[str, Path]:
     return {
-        "sim_post_sell_evaluations": POST_SELL_DIR / f"sim_post_sell_evaluations_{target_date}.jsonl",
-        "post_sell_candidates": POST_SELL_DIR / f"post_sell_candidates_{target_date}.jsonl",
-        "sim_post_sell_candidates": POST_SELL_DIR / f"sim_post_sell_candidates_{target_date}.jsonl",
+        "sim_post_sell_evaluations": POST_SELL_DIR
+        / f"sim_post_sell_evaluations_{target_date}.jsonl",
+        "post_sell_candidates": POST_SELL_DIR
+        / f"post_sell_candidates_{target_date}.jsonl",
+        "sim_post_sell_candidates": POST_SELL_DIR
+        / f"sim_post_sell_candidates_{target_date}.jsonl",
         "time_window_regime_counterfactual": REPORT_DIR
         / "time_window_regime_counterfactual"
         / f"time_window_regime_counterfactual_{target_date}.json",
@@ -128,7 +135,9 @@ def _source_paths(target_date: str) -> dict[str, Path]:
         "swing_lifecycle_bucket_discovery": REPORT_DIR
         / "swing_lifecycle_bucket_discovery"
         / f"swing_lifecycle_bucket_discovery_{target_date}.json",
-        "swing_lifecycle_audit": REPORT_DIR / "swing_lifecycle_audit" / f"swing_lifecycle_audit_{target_date}.json",
+        "swing_lifecycle_audit": REPORT_DIR
+        / "swing_lifecycle_audit"
+        / f"swing_lifecycle_audit_{target_date}.json",
     }
 
 
@@ -171,7 +180,12 @@ def _section_status(sample_count: int, missing_fields: list[str]) -> str:
     return "implemented"
 
 
-def _build_section(section_id: str, spec: dict[str, Any], sources: dict[str, Any], source_paths: dict[str, Path]) -> dict[str, Any]:
+def _build_section(
+    section_id: str,
+    spec: dict[str, Any],
+    sources: dict[str, Any],
+    source_paths: dict[str, Path],
+) -> dict[str, Any]:
     tokens = tuple(str(item).lower() for item in spec.get("tokens") or ())
     matched_sources: set[str] = set()
     sample_count = 0
@@ -186,7 +200,14 @@ def _build_section(section_id: str, spec: dict[str, Any], sources: dict[str, Any
                 continue
             sample_count += 1
             matched_sources.add(label)
-            reason_counts[str(row.get("source_quality_gate") or row.get("reason") or row.get("pattern_type") or "matched")] += 1
+            reason_counts[
+                str(
+                    row.get("source_quality_gate")
+                    or row.get("reason")
+                    or row.get("pattern_type")
+                    or "matched"
+                )
+            ] += 1
     source_path_values = [
         str(existing_or_gzip_path(source_paths[label]))
         for label in sorted(matched_sources)
@@ -224,7 +245,9 @@ def build_producer_gap_source_bundle(target_date: str) -> dict[str, Any]:
         _build_section(section_id, spec, sources, paths)
         for section_id, spec in SECTION_SPECS.items()
     ]
-    status_counts = Counter(str(item.get("source_quality_status") or "unknown") for item in sections)
+    status_counts = Counter(
+        str(item.get("source_quality_status") or "unknown") for item in sections
+    )
     report = {
         "schema_version": REPORT_SCHEMA_VERSION,
         "report_type": REPORT_TYPE,
@@ -244,14 +267,20 @@ def build_producer_gap_source_bundle(target_date: str) -> dict[str, Any]:
             "source_field_missing_count": status_counts.get("source_field_missing", 0),
         },
         "sources": {
-            label: str(existing_or_gzip_path(path)) if existing_or_gzip_path(path).exists() else None
+            label: (
+                str(existing_or_gzip_path(path))
+                if existing_or_gzip_path(path).exists()
+                else None
+            )
             for label, path in paths.items()
         },
         "sections": sections,
     }
     json_path, md_path = report_paths(str(target_date))
     json_path.parent.mkdir(parents=True, exist_ok=True)
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     md_path.write_text(render_markdown(report), encoding="utf-8")
     return report
 

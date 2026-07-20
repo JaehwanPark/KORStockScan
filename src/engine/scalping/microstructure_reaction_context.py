@@ -13,7 +13,6 @@ from typing import Any
 
 from src.utils.constants import DATA_DIR
 
-
 CONTEXT_VERSION = "microstructure_reaction_context_v1"
 REPORT_DIR = DATA_DIR / "report" / "microstructure_reaction_context"
 PIPELINE_EVENTS_DIR = DATA_DIR / "pipeline_events"
@@ -172,7 +171,9 @@ def _rate_pct(numerator: int, denominator: int) -> float:
 
 def _dict_counter(value: Any) -> Counter:
     if isinstance(value, dict):
-        return Counter({str(key): int(_safe_float(count, 0.0)) for key, count in value.items()})
+        return Counter(
+            {str(key): int(_safe_float(count, 0.0)) for key, count in value.items()}
+        )
     if isinstance(value, str):
         text = value.strip()
         if text.startswith("{") and text.endswith("}"):
@@ -181,7 +182,12 @@ def _dict_counter(value: Any) -> Counter:
             except (SyntaxError, ValueError):
                 parsed = None
             if isinstance(parsed, dict):
-                return Counter({str(key): int(_safe_float(count, 0.0)) for key, count in parsed.items()})
+                return Counter(
+                    {
+                        str(key): int(_safe_float(count, 0.0))
+                        for key, count in parsed.items()
+                    }
+                )
     return Counter()
 
 
@@ -282,21 +288,26 @@ ORDERBOOK_TOUCH_QUOTE_SOURCES = {
 
 def infer_tick_aggressor_side(tick: dict[str, Any] | None) -> dict[str, Any]:
     tick = tick if isinstance(tick, dict) else {}
-    declared_source = str(tick.get("aggressor_source") or tick.get("dir_source") or "").strip()
+    declared_source = str(
+        tick.get("aggressor_source") or tick.get("dir_source") or ""
+    ).strip()
     declared_quality = str(tick.get("aggressor_quality") or "").strip()
     quote_source = str(tick.get("aggressor_quote_source") or "").strip()
     touch_source = (
         "cached_orderbook_touch"
-        if declared_source == "cached_orderbook_touch" or quote_source == "cached_top_of_book_ttl"
+        if declared_source == "cached_orderbook_touch"
+        or quote_source == "cached_top_of_book_ttl"
         else "orderbook_touch"
     )
 
     def _touch_quality(default: str) -> str:
         if declared_quality and (
-            declared_source in {"orderbook_touch", "cached_orderbook_touch"} or quote_source
+            declared_source in {"orderbook_touch", "cached_orderbook_touch"}
+            or quote_source
         ):
             return declared_quality
         return default
+
     explicit = _normalize_tick_side(
         tick.get("aggressor_side")
         or tick.get("trade_aggressor_side")
@@ -306,7 +317,10 @@ def infer_tick_aggressor_side(tick: dict[str, Any] | None) -> dict[str, Any]:
     trade_price = _tick_price(tick)
     best_ask = _tick_best_ask(tick)
     best_bid = _tick_best_bid(tick)
-    if explicit in {"BUY", "SELL"} and declared_source == "kiwoom_0b_signed_trade_volume":
+    if (
+        explicit in {"BUY", "SELL"}
+        and declared_source == "kiwoom_0b_signed_trade_volume"
+    ):
         return {
             "side": explicit,
             "source": declared_source,
@@ -321,7 +335,9 @@ def infer_tick_aggressor_side(tick: dict[str, Any] | None) -> dict[str, Any]:
             "touch_confirms_signed": tick.get("aggressor_touch_confirms_signed"),
         }
     if trade_price > 0 and (best_ask > 0 or best_bid > 0):
-        raw_inline_quote = not declared_source and not quote_source and ("27" in tick or "28" in tick)
+        raw_inline_quote = (
+            not declared_source and not quote_source and ("27" in tick or "28" in tick)
+        )
         trusted_touch_source = (
             declared_source in ORDERBOOK_TOUCH_SOURCES
             or quote_source in ORDERBOOK_TOUCH_QUOTE_SOURCES
@@ -376,7 +392,9 @@ def infer_tick_aggressor_side(tick: dict[str, Any] | None) -> dict[str, Any]:
         return {
             "side": explicit,
             "source": declared_source,
-            "quality": str(tick.get("aggressor_quality") or "side_without_orderbook_touch"),
+            "quality": str(
+                tick.get("aggressor_quality") or "side_without_orderbook_touch"
+            ),
             "trade_price": trade_price,
             "best_ask": best_ask,
             "best_bid": best_bid,
@@ -444,7 +462,9 @@ def _safe_epoch_ms(value: Any) -> int | None:
         return None
 
 
-def _quote_age_ms(ws_data: dict[str, Any], *, now: datetime | None = None) -> tuple[int | None, str]:
+def _quote_age_ms(
+    ws_data: dict[str, Any], *, now: datetime | None = None
+) -> tuple[int | None, str]:
     quote_ts_keys = (
         "quote_age_ms",
         "ws_age_ms",
@@ -485,9 +505,23 @@ def precompute_microstructure_reaction_inputs(
     ws_data = ws_data if isinstance(ws_data, dict) else {}
     recent_ticks = recent_ticks if isinstance(recent_ticks, list) else []
     recent_candles = recent_candles if isinstance(recent_candles, list) else []
-    orderbook = ws_data.get("orderbook") if isinstance(ws_data.get("orderbook"), dict) else {}
-    asks = [level for level in (orderbook.get("asks") if isinstance(orderbook.get("asks"), list) else []) if isinstance(level, dict)]
-    bids = [level for level in (orderbook.get("bids") if isinstance(orderbook.get("bids"), list) else []) if isinstance(level, dict)]
+    orderbook = (
+        ws_data.get("orderbook") if isinstance(ws_data.get("orderbook"), dict) else {}
+    )
+    asks = [
+        level
+        for level in (
+            orderbook.get("asks") if isinstance(orderbook.get("asks"), list) else []
+        )
+        if isinstance(level, dict)
+    ]
+    bids = [
+        level
+        for level in (
+            orderbook.get("bids") if isinstance(orderbook.get("bids"), list) else []
+        )
+        if isinstance(level, dict)
+    ]
     curr_price = _safe_float(ws_data.get("curr") or ws_data.get("curr_price"), 0.0)
     best_ask = _safe_float(asks[0].get("price") if asks else 0, curr_price)
     best_bid = _safe_float(bids[0].get("price") if bids else 0, curr_price)
@@ -497,7 +531,9 @@ def precompute_microstructure_reaction_inputs(
     top3_bid_vol = sum(_safe_float(level.get("volume"), 0.0) for level in bids[:3])
     ticks = [tick for tick in recent_ticks[:10] if isinstance(tick, dict)]
     tick_latest_time = str(ticks[0].get("time") or "") if ticks else ""
-    tick_age_ms = _age_ms_from_hhmmss(tick_latest_time, now=now) if tick_latest_time else None
+    tick_age_ms = (
+        _age_ms_from_hhmmss(tick_latest_time, now=now) if tick_latest_time else None
+    )
     tick_secs = [_safe_hhmmss_to_seconds(tick.get("time")) for tick in ticks]
     aggressor_rows = [infer_tick_aggressor_side(tick) for tick in ticks]
     tick_trade_value_source_counts = Counter(
@@ -517,9 +553,7 @@ def precompute_microstructure_reaction_inputs(
         if "volume_source" in tick or "trade_volume_source" in tick
     )
     trade_volume_mismatch_rows = [
-        tick
-        for tick in ticks
-        if "trade_volume_1030_1031_vs_15_mismatch" in tick
+        tick for tick in ticks if "trade_volume_1030_1031_vs_15_mismatch" in tick
     ]
     trade_volume_mismatch_count = sum(
         1
@@ -559,26 +593,39 @@ def precompute_microstructure_reaction_inputs(
             pressure_volumes.append(volume_value)
     latest_price = prices[0] if prices else curr_price
     oldest_price = prices[-1] if prices else curr_price
-    price_change_pct = ((latest_price - oldest_price) / oldest_price * 100.0) if oldest_price > 0 else 0.0
+    price_change_pct = (
+        ((latest_price - oldest_price) / oldest_price * 100.0)
+        if oldest_price > 0
+        else 0.0
+    )
     avg_tick_volume = mean(volumes) if volumes else 0.0
     avg_pressure_tick_volume = mean(pressure_volumes) if pressure_volumes else 0.0
     buy_at_or_above_ask_vol = sum(
         _safe_float(tick.get("volume"), 0.0)
         for tick, inferred in pressure_rows
-        if inferred.get("side") == "BUY" and _safe_float(tick.get("price"), 0.0) >= best_ask
+        if inferred.get("side") == "BUY"
+        and _safe_float(tick.get("price"), 0.0) >= best_ask
     )
-    large_buy_print_detected = any(
-        _aggressor_pressure_usable(inferred)
-        and inferred.get("side") == "BUY"
-        and _safe_float(tick.get("volume"), 0.0) >= avg_pressure_tick_volume * 2.2
-        for tick, inferred in zip(ticks[:5], aggressor_rows[:5])
-    ) if avg_pressure_tick_volume > 0 else False
-    large_sell_print_detected = any(
-        _aggressor_pressure_usable(inferred)
-        and inferred.get("side") == "SELL"
-        and _safe_float(tick.get("volume"), 0.0) >= avg_pressure_tick_volume * 2.2
-        for tick, inferred in zip(ticks[:5], aggressor_rows[:5])
-    ) if avg_pressure_tick_volume > 0 else False
+    large_buy_print_detected = (
+        any(
+            _aggressor_pressure_usable(inferred)
+            and inferred.get("side") == "BUY"
+            and _safe_float(tick.get("volume"), 0.0) >= avg_pressure_tick_volume * 2.2
+            for tick, inferred in zip(ticks[:5], aggressor_rows[:5])
+        )
+        if avg_pressure_tick_volume > 0
+        else False
+    )
+    large_sell_print_detected = (
+        any(
+            _aggressor_pressure_usable(inferred)
+            and inferred.get("side") == "SELL"
+            and _safe_float(tick.get("volume"), 0.0) >= avg_pressure_tick_volume * 2.2
+            for tick, inferred in zip(ticks[:5], aggressor_rows[:5])
+        )
+        if avg_pressure_tick_volume > 0
+        else False
+    )
     price_buy_count: dict[float, int] = {}
     for tick, inferred in zip(ticks[:6], aggressor_rows[:6]):
         if not _aggressor_pressure_usable(inferred):
@@ -615,9 +662,15 @@ def precompute_microstructure_reaction_inputs(
         "top3_bid_vol": top3_bid_vol,
         "ticks": ticks,
         "tick_aggressor_rows": aggressor_rows,
-        "tick_aggressor_source_counts": dict(Counter(str(row.get("source") or "unknown") for row in aggressor_rows)),
-        "tick_aggressor_quality_counts": dict(Counter(str(row.get("quality") or "unknown") for row in aggressor_rows)),
-        "tick_trade_value_source_counts": dict(sorted(tick_trade_value_source_counts.items())),
+        "tick_aggressor_source_counts": dict(
+            Counter(str(row.get("source") or "unknown") for row in aggressor_rows)
+        ),
+        "tick_aggressor_quality_counts": dict(
+            Counter(str(row.get("quality") or "unknown") for row in aggressor_rows)
+        ),
+        "tick_trade_value_source_counts": dict(
+            sorted(tick_trade_value_source_counts.items())
+        ),
         "tick_trade_value_1313_count": int(tick_trade_value_1313_count),
         "tick_trade_value_1313_missing_count": int(tick_trade_value_1313_missing_count),
         "tick_trade_value_1313_missing_rate_pct": _rate_pct(
@@ -631,8 +684,12 @@ def precompute_microstructure_reaction_inputs(
             trade_volume_mismatch_count,
             len(trade_volume_mismatch_rows),
         ),
-        "tick_aggressor_unknown_count": sum(1 for row in aggressor_rows if row.get("side") not in {"BUY", "SELL"}),
-        "tick_aggressor_orderbook_touch_count": sum(1 for row in aggressor_rows if row.get("source") == "orderbook_touch"),
+        "tick_aggressor_unknown_count": sum(
+            1 for row in aggressor_rows if row.get("side") not in {"BUY", "SELL"}
+        ),
+        "tick_aggressor_orderbook_touch_count": sum(
+            1 for row in aggressor_rows if row.get("source") == "orderbook_touch"
+        ),
         "tick_aggressor_cached_orderbook_touch_count": sum(
             1 for row in aggressor_rows if row.get("source") == "cached_orderbook_touch"
         ),
@@ -702,24 +759,40 @@ def build_microstructure_reaction_context(
     now: datetime | None = None,
     precomputed: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    snapshot = precomputed if isinstance(precomputed, dict) else precompute_microstructure_reaction_inputs(
-        ws_data,
-        recent_ticks,
-        recent_candles,
-        now=now,
+    snapshot = (
+        precomputed
+        if isinstance(precomputed, dict)
+        else precompute_microstructure_reaction_inputs(
+            ws_data,
+            recent_ticks,
+            recent_candles,
+            now=now,
+        )
     )
-    ws_data = snapshot.get("ws_data") if isinstance(snapshot.get("ws_data"), dict) else {}
-    recent_candles = snapshot.get("recent_candles") if isinstance(snapshot.get("recent_candles"), list) else []
+    ws_data = (
+        snapshot.get("ws_data") if isinstance(snapshot.get("ws_data"), dict) else {}
+    )
+    recent_candles = (
+        snapshot.get("recent_candles")
+        if isinstance(snapshot.get("recent_candles"), list)
+        else []
+    )
     asks = snapshot.get("asks") if isinstance(snapshot.get("asks"), list) else []
     bids = snapshot.get("bids") if isinstance(snapshot.get("bids"), list) else []
     if not asks or not bids:
-        return neutral_microstructure_reaction_context("source_quality_missing", "missing_orderbook")
+        return neutral_microstructure_reaction_context(
+            "source_quality_missing", "missing_orderbook"
+        )
     if int(snapshot.get("tick_sample_count") or 0) < 5:
-        return neutral_microstructure_reaction_context("insufficient_window", "tick_sample_lt5")
+        return neutral_microstructure_reaction_context(
+            "insufficient_window", "tick_sample_lt5"
+        )
 
     tick_age_ms = snapshot.get("tick_age_ms")
     quote_age_ms = snapshot.get("quote_age_ms")
-    if (tick_age_ms is not None and tick_age_ms > 5000) or (quote_age_ms is not None and quote_age_ms > 1200):
+    if (tick_age_ms is not None and tick_age_ms > 5000) or (
+        quote_age_ms is not None and quote_age_ms > 1200
+    ):
         return neutral_microstructure_reaction_context("stale", "stale_tick_or_quote")
     curr_price = _safe_float(snapshot.get("curr_price"), 0.0)
     best_ask = _safe_float(snapshot.get("best_ask"), curr_price)
@@ -732,14 +805,19 @@ def build_microstructure_reaction_context(
     buy_vol = _safe_float(snapshot.get("buy_vol"), 0.0)
     sell_vol = _safe_float(snapshot.get("sell_vol"), 0.0)
     total_vol = _safe_float(snapshot.get("total_vol"), 0.0)
-    pressure_usable = _safe_bool(snapshot.get("tick_aggressor_pressure_usable"), False) and total_vol > 0
+    pressure_usable = (
+        _safe_bool(snapshot.get("tick_aggressor_pressure_usable"), False)
+        and total_vol > 0
+    )
     pressure_trusted_count = _safe_int(snapshot.get("tick_aggressor_trusted_count"), 0)
     if not pressure_usable:
         payload = neutral_microstructure_reaction_context(
             "source_quality_partial",
             "tick_aggressor_pressure_unusable",
         )
-        payload["microstructure_reaction_tick_aggressor_trusted_count"] = pressure_trusted_count
+        payload["microstructure_reaction_tick_aggressor_trusted_count"] = (
+            pressure_trusted_count
+        )
         payload["microstructure_reaction_context_hash"] = _context_hash(payload)
         return payload
     buy_pressure = _safe_float(snapshot.get("buy_pressure_pct"), 50.0)
@@ -749,24 +827,56 @@ def build_microstructure_reaction_context(
     ask_sweep_share = buy_at_or_above_ask / total_vol if total_vol > 0 else 0.0
     avg_vol = _safe_float(snapshot.get("avg_tick_volume"), 0.0)
     large_buy = bool(snapshot.get("large_buy_print_detected")) if avg_vol > 0 else False
-    large_sell = bool(snapshot.get("large_sell_print_detected")) if avg_vol > 0 else False
+    large_sell = (
+        bool(snapshot.get("large_sell_print_detected")) if avg_vol > 0 else False
+    )
 
-    ask_sweep_score = _clamp_score(35 + (buy_pressure - 50) * 0.7 + ask_sweep_share * 35 + (12 if price_change_pct > 0 else 0) + (8 if large_buy else 0))
-    post_sweep_hold_score = _clamp_score(50 + min(25, max(-25, price_change_pct * 45)) + (12 if latest_price >= best_ask else 0) - (15 if latest_price < best_bid else 0))
+    ask_sweep_score = _clamp_score(
+        35
+        + (buy_pressure - 50) * 0.7
+        + ask_sweep_share * 35
+        + (12 if price_change_pct > 0 else 0)
+        + (8 if large_buy else 0)
+    )
+    post_sweep_hold_score = _clamp_score(
+        50
+        + min(25, max(-25, price_change_pct * 45))
+        + (12 if latest_price >= best_ask else 0)
+        - (15 if latest_price < best_bid else 0)
+    )
     bid_ratio = top3_bid_vol / top3_ask_vol if top3_ask_vol > 0 else 2.0
-    bid_replenishment_score = _clamp_score(45 + min(30, bid_ratio * 14) + (10 if sell_vol > 0 and price_change_pct >= -0.05 else 0) - (10 if latest_price < best_bid else 0))
-    wall_replenishment_risk_score = _clamp_score(25 + max(0, top3_depth_ratio - 1.0) * 28 + (16 if large_sell else 0) + (10 if buy_pressure < 55 else 0))
+    bid_replenishment_score = _clamp_score(
+        45
+        + min(30, bid_ratio * 14)
+        + (10 if sell_vol > 0 and price_change_pct >= -0.05 else 0)
+        - (10 if latest_price < best_bid else 0)
+    )
+    wall_replenishment_risk_score = _clamp_score(
+        25
+        + max(0, top3_depth_ratio - 1.0) * 28
+        + (16 if large_sell else 0)
+        + (10 if buy_pressure < 55 else 0)
+    )
 
     fluctuation = _safe_float(ws_data.get("fluctuation"), 0.0)
     high = _safe_float(snapshot.get("session_high"), curr_price)
     low = _safe_float(snapshot.get("session_low"), curr_price)
-    distance_from_high = ((curr_price - high) / high * 100.0) if high > 0 and curr_price > 0 else -99.0
+    distance_from_high = (
+        ((curr_price - high) / high * 100.0) if high > 0 and curr_price > 0 else -99.0
+    )
     intraday_range = ((high - low) / low * 100.0) if high >= low and low > 0 else 0.0
-    vi_proximity_risk = _clamp_score(max(0, fluctuation - 20) * 6 + (20 if distance_from_high >= -0.25 and intraday_range >= 12 else 0))
+    vi_proximity_risk = _clamp_score(
+        max(0, fluctuation - 20) * 6
+        + (20 if distance_from_high >= -0.25 and intraday_range >= 12 else 0)
+    )
 
     if wall_replenishment_risk_score >= 70 or vi_proximity_risk >= 70:
         quality = "risk_context_only"
-    elif ask_sweep_score >= 65 and post_sweep_hold_score >= 60 and bid_replenishment_score >= 55:
+    elif (
+        ask_sweep_score >= 65
+        and post_sweep_hold_score >= 60
+        and bid_replenishment_score >= 55
+    ):
         quality = "favorable_reaction"
     elif ask_sweep_score <= 40 or post_sweep_hold_score <= 40:
         quality = "weak_reaction"
@@ -819,7 +929,11 @@ def _iter_jsonl(path: Path):
 
 
 def _has_context(fields: dict[str, Any]) -> bool:
-    return any(key in fields for key in CONTEXT_KEYS if key not in GENERIC_FRESHNESS_CONTEXT_KEYS)
+    return any(
+        key in fields
+        for key in CONTEXT_KEYS
+        if key not in GENERIC_FRESHNESS_CONTEXT_KEYS
+    )
 
 
 def _row_from_event(event: dict[str, Any]) -> dict[str, Any] | None:
@@ -827,16 +941,22 @@ def _row_from_event(event: dict[str, Any]) -> dict[str, Any] | None:
     if not _has_context(fields):
         return None
     row = {
-        "stock_code": str(event.get("stock_code") or fields.get("stock_code") or "").lstrip("A"),
+        "stock_code": str(
+            event.get("stock_code") or fields.get("stock_code") or ""
+        ).lstrip("A"),
         "stock_name": event.get("stock_name"),
-        "event_time": event.get("emitted_at") or fields.get("event_time") or fields.get("event_ts"),
+        "event_time": event.get("emitted_at")
+        or fields.get("event_time")
+        or fields.get("event_ts"),
         "event_ts": fields.get("event_ts") or event.get("emitted_at"),
         "record_id": event.get("record_id") or fields.get("record_id"),
         "sim_record_id": fields.get("sim_record_id"),
         "sim_parent_record_id": fields.get("sim_parent_record_id"),
         "source_event_stage": fields.get("source_event_stage") or event.get("stage"),
         "stage": event.get("stage"),
-        "actual_order_submitted": _safe_bool(fields.get("actual_order_submitted"), False),
+        "actual_order_submitted": _safe_bool(
+            fields.get("actual_order_submitted"), False
+        ),
         "broker_order_forbidden": (
             _safe_bool(fields.get("broker_order_forbidden"), False)
             if "broker_order_forbidden" in fields
@@ -845,15 +965,18 @@ def _row_from_event(event: dict[str, Any]) -> dict[str, Any] | None:
     }
     row.update({key: fields.get(key) for key in CONTEXT_KEYS})
     v_pw_expected = any(
-        key in fields for key in ("v_pw_now", "v_pw_source", "latest_strength", "current_vpw")
+        key in fields
+        for key in ("v_pw_now", "v_pw_source", "latest_strength", "current_vpw")
     )
     row["v_pw_expected"] = v_pw_expected
     current_v_pw_source = str(row.get("v_pw_source") or "").strip().lower()
     if current_v_pw_source in {"", "missing", "unknown", "not_available"}:
         legacy_v_pw = _safe_float(
-            fields.get("latest_strength")
-            if fields.get("latest_strength") not in (None, "", "-")
-            else fields.get("current_vpw"),
+            (
+                fields.get("latest_strength")
+                if fields.get("latest_strength") not in (None, "", "-")
+                else fields.get("current_vpw")
+            ),
             0.0,
         )
         if legacy_v_pw > 0:
@@ -897,17 +1020,20 @@ def _row_from_event(event: dict[str, Any]) -> dict[str, Any] | None:
         )
         row["ka10003_buy_dominance_observation_inside_spread_count"] = (
             row.get("ka10003_buy_dominance_observation_inside_spread_count")
-            if row.get("ka10003_buy_dominance_observation_inside_spread_count") not in (None, "")
+            if row.get("ka10003_buy_dominance_observation_inside_spread_count")
+            not in (None, "")
             else observation.get("inside_spread_count")
         )
         row["ka10003_buy_dominance_observation_split_vs_15_evaluable_count"] = (
             row.get("ka10003_buy_dominance_observation_split_vs_15_evaluable_count")
-            if row.get("ka10003_buy_dominance_observation_split_vs_15_evaluable_count") not in (None, "")
+            if row.get("ka10003_buy_dominance_observation_split_vs_15_evaluable_count")
+            not in (None, "")
             else observation.get("split_vs_15_evaluable_count")
         )
         row["ka10003_buy_dominance_observation_split_vs_15_mismatch_count"] = (
             row.get("ka10003_buy_dominance_observation_split_vs_15_mismatch_count")
-            if row.get("ka10003_buy_dominance_observation_split_vs_15_mismatch_count") not in (None, "")
+            if row.get("ka10003_buy_dominance_observation_split_vs_15_mismatch_count")
+            not in (None, "")
             else observation.get("split_vs_15_mismatch_count")
         )
     return row
@@ -924,7 +1050,9 @@ def _sum_counter_rows(rows: list[dict[str, Any]], key: str) -> dict[str, int]:
     return dict(sorted(counter.items()))
 
 
-def _field_counter(rows: list[dict[str, Any]], key: str, *, default: str = "missing") -> dict[str, int]:
+def _field_counter(
+    rows: list[dict[str, Any]], key: str, *, default: str = "missing"
+) -> dict[str, int]:
     return dict(sorted(Counter(str(row.get(key) or default) for row in rows).items()))
 
 
@@ -980,10 +1108,19 @@ def _strength_diff_rows(rows: list[dict[str, Any]]) -> list[float]:
     return diffs
 
 
-def _microstructure_code_improvement_orders(summary: dict[str, Any], report_path: Path) -> list[dict[str, Any]]:
+def _microstructure_code_improvement_orders(
+    summary: dict[str, Any], report_path: Path
+) -> list[dict[str, Any]]:
     orders: list[dict[str, Any]] = []
 
-    def base_order(order_id: str, title: str, *, route: str, improvement_type: str, evidence: list[str]) -> dict[str, Any]:
+    def base_order(
+        order_id: str,
+        title: str,
+        *,
+        route: str,
+        improvement_type: str,
+        evidence: list[str],
+    ) -> dict[str, Any]:
         order = {
             "order_id": order_id,
             "title": title,
@@ -1041,7 +1178,12 @@ def _microstructure_code_improvement_orders(summary: dict[str, Any], report_path
             order["mapped_family"] = "microstructure_reaction_context"
         return order
 
-    if _safe_int(summary.get("market_data_rest_signed_tape_pressure_usable_true_count"), 0) > 0:
+    if (
+        _safe_int(
+            summary.get("market_data_rest_signed_tape_pressure_usable_true_count"), 0
+        )
+        > 0
+    ):
         orders.append(
             base_order(
                 "order_microstructure_rest_signed_tape_pressure_authority_violation",
@@ -1134,7 +1276,10 @@ def _microstructure_code_improvement_orders(summary: dict[str, Any], report_path
             )
         )
 
-    if _safe_int(summary.get("row_count"), 0) > 0 and _safe_int(summary.get("rest_signed_trade_ticks_row_count"), 0) > 0:
+    if (
+        _safe_int(summary.get("row_count"), 0) > 0
+        and _safe_int(summary.get("rest_signed_trade_ticks_row_count"), 0) > 0
+    ):
         orders.append(
             base_order(
                 "order_microstructure_signed_tape_runtime_candidate_review",
@@ -1149,7 +1294,15 @@ def _microstructure_code_improvement_orders(summary: dict[str, Any], report_path
             )
         )
 
-    if _safe_int(summary.get("ka10003_buy_dominance_observation_split_vs_15_evaluable_count"), 0) > 0:
+    if (
+        _safe_int(
+            summary.get(
+                "ka10003_buy_dominance_observation_split_vs_15_evaluable_count"
+            ),
+            0,
+        )
+        > 0
+    ):
         orders.append(
             base_order(
                 "order_microstructure_ka10003_split_vs_15_observation_review",
@@ -1182,10 +1335,20 @@ def _latest_rows_by_stock(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def build_microstructure_reaction_context_report(target_date: str) -> dict[str, Any]:
     target_date = str(target_date).strip()
     path = _event_path(target_date)
-    rows = [row for event in (_iter_jsonl(path) or []) if (row := _row_from_event(event))]
-    status_counts = Counter(str(row.get("microstructure_reaction_context_status") or "missing") for row in rows)
-    quality_counts = Counter(str(row.get("microstructure_reaction_entry_reaction_quality") or "-") for row in rows)
-    source_quality_counts = Counter(str(row.get("microstructure_reaction_source_quality") or "-") for row in rows)
+    rows = [
+        row for event in (_iter_jsonl(path) or []) if (row := _row_from_event(event))
+    ]
+    status_counts = Counter(
+        str(row.get("microstructure_reaction_context_status") or "missing")
+        for row in rows
+    )
+    quality_counts = Counter(
+        str(row.get("microstructure_reaction_entry_reaction_quality") or "-")
+        for row in rows
+    )
+    source_quality_counts = Counter(
+        str(row.get("microstructure_reaction_source_quality") or "-") for row in rows
+    )
     stage_counts = Counter(str(row.get("stage") or "-") for row in rows)
     real_rows = [row for row in rows if row.get("actual_order_submitted") is True]
     latest_stock_rows = _latest_rows_by_stock(rows)
@@ -1197,14 +1360,24 @@ def build_microstructure_reaction_context_report(target_date: str) -> dict[str, 
         if row.get("v_pw_expected") is True
         and str(row.get("v_pw_source") or "missing") == "missing"
     )
-    ka10046_fallback_rows = [row for row in rows if str(row.get("v_pw_source") or "") == "ka10046_rest_fallback"]
+    ka10046_fallback_rows = [
+        row
+        for row in rows
+        if str(row.get("v_pw_source") or "") == "ka10046_rest_fallback"
+    ]
     ka10046_fallback_quote_freshness_counts = dict(
-        sorted(Counter(_quote_freshness_state(row) for row in ka10046_fallback_rows).items())
+        sorted(
+            Counter(
+                _quote_freshness_state(row) for row in ka10046_fallback_rows
+            ).items()
+        )
     )
     strength_diffs = _strength_diff_rows(rows)
     strength_divergence20_count = sum(1 for value in strength_diffs if value >= 20.0)
     window_trade_value_1313_count = _sum_int(rows, "tick_trade_value_1313_count")
-    window_trade_value_1313_missing_count = _sum_int(rows, "tick_trade_value_1313_missing_count")
+    window_trade_value_1313_missing_count = _sum_int(
+        rows, "tick_trade_value_1313_missing_count"
+    )
     window_trade_volume_mismatch_evaluable_count = _sum_int(
         rows,
         "trade_volume_1030_1031_vs_15_evaluable_count",
@@ -1248,7 +1421,9 @@ def build_microstructure_reaction_context_report(target_date: str) -> dict[str, 
         "trade_volume_1030_1031_vs_15_evaluable_count",
     )
     cumulative_0b_count = _sum_int(latest_stock_rows, "kiwoom_0b_aux_observed_count")
-    cumulative_1313_missing_count = _sum_int(latest_stock_rows, "kiwoom_0b_1313_missing_count")
+    cumulative_1313_missing_count = _sum_int(
+        latest_stock_rows, "kiwoom_0b_1313_missing_count"
+    )
     cumulative_mismatch_evaluable_count = _sum_int(
         latest_stock_rows,
         "kiwoom_0b_1030_1031_vs_15_evaluable_count",
@@ -1302,38 +1477,67 @@ def build_microstructure_reaction_context_report(target_date: str) -> dict[str, 
             and not _safe_bool(row.get("v_pw_runtime_support_usable"), False)
         ),
         "ka10046_rest_fallback_quote_freshness_counts": ka10046_fallback_quote_freshness_counts,
-        "ka10046_rest_fallback_with_fresh_quote_count": ka10046_fallback_quote_freshness_counts.get("fresh", 0),
-        "ka10046_rest_fallback_with_stale_quote_count": ka10046_fallback_quote_freshness_counts.get("stale", 0),
+        "ka10046_rest_fallback_with_fresh_quote_count": ka10046_fallback_quote_freshness_counts.get(
+            "fresh", 0
+        ),
+        "ka10046_rest_fallback_with_stale_quote_count": ka10046_fallback_quote_freshness_counts.get(
+            "stale", 0
+        ),
         "ka10046_strength_runtime_effect_true_count": sum(
-            1 for row in rows if _safe_bool(row.get("ka10046_strength_runtime_effect"), False)
+            1
+            for row in rows
+            if _safe_bool(row.get("ka10046_strength_runtime_effect"), False)
         ),
         "ka10046_strength_missing_received_ts_count": sum(
             1
             for row in rows
-            if str(row.get("ka10046_strength_source") or "") == "ka10046_rest_strength_trend"
+            if str(row.get("ka10046_strength_source") or "")
+            == "ka10046_rest_strength_trend"
             and _safe_int(row.get("ka10046_strength_rest_received_ts_ms"), 0) <= 0
         ),
         "ka10046_0b_strength_compare_evaluable_count": len(strength_diffs),
-        "ka10046_0b_strength_abs_diff_avg": round(sum(strength_diffs) / len(strength_diffs), 3)
-        if strength_diffs
-        else 0.0,
-        "ka10046_0b_strength_abs_diff_max": round(max(strength_diffs), 3) if strength_diffs else 0.0,
+        "ka10046_0b_strength_abs_diff_avg": (
+            round(sum(strength_diffs) / len(strength_diffs), 3)
+            if strength_diffs
+            else 0.0
+        ),
+        "ka10046_0b_strength_abs_diff_max": (
+            round(max(strength_diffs), 3) if strength_diffs else 0.0
+        ),
         "ka10046_0b_strength_divergence20_count": strength_divergence20_count,
         "ka10046_0b_strength_divergence20_rate_pct": _rate_pct(
             strength_divergence20_count,
             len(strength_diffs),
         ),
-        "market_data_signed_tape_state_counts": _field_counter(rows, "market_data_signed_tape_state"),
-        "market_data_signed_tape_sample_count_total": _sum_int(rows, "market_data_signed_tape_sample_count"),
-        "market_data_signed_tape_buy_count_total": _sum_int(rows, "market_data_signed_tape_buy_count"),
-        "market_data_signed_tape_sell_count_total": _sum_int(rows, "market_data_signed_tape_sell_count"),
-        "market_data_signed_tape_buy_volume_total": _sum_int(rows, "market_data_signed_tape_buy_volume"),
-        "market_data_signed_tape_sell_volume_total": _sum_int(rows, "market_data_signed_tape_sell_volume"),
+        "market_data_signed_tape_state_counts": _field_counter(
+            rows, "market_data_signed_tape_state"
+        ),
+        "market_data_signed_tape_sample_count_total": _sum_int(
+            rows, "market_data_signed_tape_sample_count"
+        ),
+        "market_data_signed_tape_buy_count_total": _sum_int(
+            rows, "market_data_signed_tape_buy_count"
+        ),
+        "market_data_signed_tape_sell_count_total": _sum_int(
+            rows, "market_data_signed_tape_sell_count"
+        ),
+        "market_data_signed_tape_buy_volume_total": _sum_int(
+            rows, "market_data_signed_tape_buy_volume"
+        ),
+        "market_data_signed_tape_sell_volume_total": _sum_int(
+            rows, "market_data_signed_tape_sell_volume"
+        ),
         "market_data_rest_signed_tape_pressure_usable_true_count": sum(
-            1 for row in rows if _safe_bool(row.get("market_data_rest_signed_tape_pressure_usable"), False)
+            1
+            for row in rows
+            if _safe_bool(
+                row.get("market_data_rest_signed_tape_pressure_usable"), False
+            )
         ),
         "rest_signed_trade_ticks_row_count": _rest_signed_trade_tick_count(rows),
-        "rest_signed_trade_ticks_source_counts": _rest_signed_trade_tick_source_counts(rows),
+        "rest_signed_trade_ticks_source_counts": _rest_signed_trade_tick_source_counts(
+            rows
+        ),
         "latency_true_ofi_direct_canary_signed_tape_sample_count_total": _sum_int(
             rows,
             "latency_true_ofi_direct_canary_signed_tape_sample_count",
@@ -1357,13 +1561,18 @@ def build_microstructure_reaction_context_report(target_date: str) -> dict[str, 
         "latency_true_ofi_direct_canary_signed_tape_sell_dominated_count": sum(
             1
             for row in rows
-            if _safe_bool(row.get("latency_true_ofi_direct_canary_signed_tape_sell_dominated"), False)
+            if _safe_bool(
+                row.get("latency_true_ofi_direct_canary_signed_tape_sell_dominated"),
+                False,
+            )
         ),
         "latency_true_ofi_direct_canary_signed_tape_latest_single_sell_dominated_count": sum(
             1
             for row in rows
             if _safe_bool(
-                row.get("latency_true_ofi_direct_canary_signed_tape_latest_single_sell_dominated"),
+                row.get(
+                    "latency_true_ofi_direct_canary_signed_tape_latest_single_sell_dominated"
+                ),
                 False,
             )
         ),
@@ -1371,15 +1580,21 @@ def build_microstructure_reaction_context_report(target_date: str) -> dict[str, 
             rows,
             "latency_true_ofi_direct_canary_tape_block_reason",
         ),
-        "tick_aggressor_source_counts": _sum_counter_rows(rows, "tick_aggressor_source_counts"),
-        "tick_trade_value_source_counts": _sum_counter_rows(rows, "tick_trade_value_source_counts"),
+        "tick_aggressor_source_counts": _sum_counter_rows(
+            rows, "tick_aggressor_source_counts"
+        ),
+        "tick_trade_value_source_counts": _sum_counter_rows(
+            rows, "tick_trade_value_source_counts"
+        ),
         "tick_trade_value_1313_count": window_trade_value_1313_count,
         "tick_trade_value_1313_missing_count": window_trade_value_1313_missing_count,
         "tick_trade_value_1313_missing_rate_pct": _rate_pct(
             window_trade_value_1313_missing_count,
             window_trade_value_1313_count + window_trade_value_1313_missing_count,
         ),
-        "trade_volume_source_counts": _sum_counter_rows(rows, "trade_volume_source_counts"),
+        "trade_volume_source_counts": _sum_counter_rows(
+            rows, "trade_volume_source_counts"
+        ),
         "trade_volume_1030_1031_vs_15_evaluable_count": window_trade_volume_mismatch_evaluable_count,
         "trade_volume_1030_1031_vs_15_mismatch_count": window_trade_volume_mismatch_count,
         "trade_volume_1030_1031_vs_15_mismatch_rate_pct": _rate_pct(
@@ -1408,9 +1623,13 @@ def build_microstructure_reaction_context_report(target_date: str) -> dict[str, 
         ),
         "kiwoom_0b_latest_stock_count": len(latest_stock_rows),
         "kiwoom_0b_aux_observed_count": cumulative_0b_count,
-        "kiwoom_0b_1313_present_count": _sum_int(latest_stock_rows, "kiwoom_0b_1313_present_count"),
+        "kiwoom_0b_1313_present_count": _sum_int(
+            latest_stock_rows, "kiwoom_0b_1313_present_count"
+        ),
         "kiwoom_0b_1313_missing_count": cumulative_1313_missing_count,
-        "kiwoom_0b_1313_missing_rate_pct": _rate_pct(cumulative_1313_missing_count, cumulative_0b_count),
+        "kiwoom_0b_1313_missing_rate_pct": _rate_pct(
+            cumulative_1313_missing_count, cumulative_0b_count
+        ),
         "kiwoom_0b_trade_value_source_counts": _sum_counter_rows(
             latest_stock_rows,
             "kiwoom_0b_trade_value_source_counts",
@@ -1443,15 +1662,27 @@ def build_microstructure_reaction_context_report(target_date: str) -> dict[str, 
             ka10003_split_vs_15_mismatch_count,
             ka10003_split_vs_15_evaluable_count,
         ),
-        "avg_ask_sweep_score": _avg_score(rows, "microstructure_reaction_ask_sweep_score"),
-        "avg_post_sweep_hold_score": _avg_score(rows, "microstructure_reaction_post_sweep_hold_score"),
-        "avg_bid_replenishment_score": _avg_score(rows, "microstructure_reaction_bid_replenishment_score"),
+        "avg_ask_sweep_score": _avg_score(
+            rows, "microstructure_reaction_ask_sweep_score"
+        ),
+        "avg_post_sweep_hold_score": _avg_score(
+            rows, "microstructure_reaction_post_sweep_hold_score"
+        ),
+        "avg_bid_replenishment_score": _avg_score(
+            rows, "microstructure_reaction_bid_replenishment_score"
+        ),
         "max_vi_proximity_risk": max(
-            [_safe_int(row.get("microstructure_reaction_vi_proximity_risk"), 0) for row in rows] or [0]
+            [
+                _safe_int(row.get("microstructure_reaction_vi_proximity_risk"), 0)
+                for row in rows
+            ]
+            or [0]
         ),
     }
     json_path, md_path = report_paths(target_date)
-    code_improvement_orders = _microstructure_code_improvement_orders(summary, json_path)
+    code_improvement_orders = _microstructure_code_improvement_orders(
+        summary, json_path
+    )
     summary["code_improvement_order_count"] = len(code_improvement_orders)
     summary["top_code_improvement_orders"] = [
         {
@@ -1490,8 +1721,12 @@ def build_microstructure_reaction_context_report(target_date: str) -> dict[str, 
         ],
     }
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-    md_path.write_text(render_microstructure_reaction_context_markdown(report), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    md_path.write_text(
+        render_microstructure_reaction_context_markdown(report), encoding="utf-8"
+    )
     return report
 
 
@@ -1578,11 +1813,22 @@ def render_microstructure_reaction_context_markdown(report: dict[str, Any]) -> s
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Build source-only microstructure reaction context artifact.")
+    parser = argparse.ArgumentParser(
+        description="Build source-only microstructure reaction context artifact."
+    )
     parser.add_argument("--date", default=datetime.now().strftime("%Y-%m-%d"))
     args = parser.parse_args(argv)
     report = build_microstructure_reaction_context_report(args.date)
-    print(json.dumps({"date": report.get("date"), "summary": report.get("summary"), "warnings": report.get("warnings")}, ensure_ascii=False))
+    print(
+        json.dumps(
+            {
+                "date": report.get("date"),
+                "summary": report.get("summary"),
+                "warnings": report.get("warnings"),
+            },
+            ensure_ascii=False,
+        )
+    )
     return 0
 
 

@@ -13,7 +13,6 @@ from typing import Any
 
 from src.trading.order.tick_utils import get_tick_size
 
-
 DEFAULT_WINDOW_SEC = 10.0
 DEFAULT_FR_THRESHOLD = 5
 DEFAULT_AGE_P90_THRESHOLD_MS = 400.0
@@ -124,11 +123,16 @@ class OrderbookStabilityObserver:
         )
         self.micro_lambda = max(0.0, min(1.0, float(micro_lambda)))
         self.bucket_calibration_enabled = (
-            _env_bool("KORSTOCKSCAN_SCALPING_ENTRY_PRICE_ORDERBOOK_MICRO_BUCKET_CALIBRATION_ENABLED", False)
+            _env_bool(
+                "KORSTOCKSCAN_SCALPING_ENTRY_PRICE_ORDERBOOK_MICRO_BUCKET_CALIBRATION_ENABLED",
+                False,
+            )
             if bucket_calibration_enabled is None
             else bool(bucket_calibration_enabled)
         )
-        self.threshold_manifest_path = Path(threshold_manifest_path or DEFAULT_BUCKET_MANIFEST_PATH)
+        self.threshold_manifest_path = Path(
+            threshold_manifest_path or DEFAULT_BUCKET_MANIFEST_PATH
+        )
         self._threshold_manifest_override = threshold_manifest
         self._states: dict[str, _SymbolState] = {}
         self._lock = threading.RLock()
@@ -167,9 +171,13 @@ class OrderbookStabilityObserver:
             previous_bid = state.last_bid
             previous_ask = state.last_ask
             if previous_bid > 0 and bid > 0 and bid != previous_bid:
-                state.pending_reversions.append(_PendingReversion("bid", previous_bid, now))
+                state.pending_reversions.append(
+                    _PendingReversion("bid", previous_bid, now)
+                )
             if previous_ask > 0 and ask > 0 and ask != previous_ask:
-                state.pending_reversions.append(_PendingReversion("ask", previous_ask, now))
+                state.pending_reversions.append(
+                    _PendingReversion("ask", previous_ask, now)
+                )
 
             state.last_bid = bid or previous_bid
             state.last_ask = ask or previous_ask
@@ -186,7 +194,9 @@ class OrderbookStabilityObserver:
                 previous_ask=previous_ask,
             )
             state.last_quote_ts = now
-            state.quotes.append({"ts": now, "best_bid": state.last_bid, "best_ask": state.last_ask})
+            state.quotes.append(
+                {"ts": now, "best_bid": state.last_bid, "best_ask": state.last_ask}
+            )
             self._mark_reversions(state, now)
 
     def record_trade(self, code: str, *, price: int, ts: float | None = None) -> None:
@@ -222,11 +232,21 @@ class OrderbookStabilityObserver:
         with self._lock:
             state = self._states.setdefault(safe_code, _SymbolState())
             self._prune(state, current)
-            ages = [float(t["quote_age_ms"]) for t in state.trades if t.get("quote_age_ms") is not None]
-            aligned_values = [bool(t.get("aligned")) for t in state.trades if t.get("aligned") is not None]
+            ages = [
+                float(t["quote_age_ms"])
+                for t in state.trades
+                if t.get("quote_age_ms") is not None
+            ]
+            aligned_values = [
+                bool(t.get("aligned"))
+                for t in state.trades
+                if t.get("aligned") is not None
+            ]
             alignment = None
             if aligned_values:
-                alignment = round(sum(1 for item in aligned_values if item) / len(aligned_values), 6)
+                alignment = round(
+                    sum(1 for item in aligned_values if item) / len(aligned_values), 6
+                )
             p50 = round(float(median(ages)), 3) if ages else None
             p90 = _percentile(ages, 0.90)
             reasons: list[str] = []
@@ -273,19 +293,27 @@ class OrderbookStabilityObserver:
             state.quotes.popleft()
         while state.trades and float(state.trades[0].get("ts", 0.0)) < cutoff:
             state.trades.popleft()
-        while state.pending_reversions and state.pending_reversions[0].changed_at < cutoff:
+        while (
+            state.pending_reversions and state.pending_reversions[0].changed_at < cutoff
+        ):
             old = state.pending_reversions.popleft()
             if old.counted and state.flicker_count > 0:
                 state.flicker_count -= 1
         micro_cutoff = now - self.micro_window_sec
-        while state.micro_samples and float(state.micro_samples[0].get("ts", 0.0)) < micro_cutoff:
+        while (
+            state.micro_samples
+            and float(state.micro_samples[0].get("ts", 0.0)) < micro_cutoff
+        ):
             state.micro_samples.popleft()
         while len(state.micro_samples) > self.micro_max_samples:
             state.micro_samples.popleft()
         max_wide_window = max(self.wide_micro_windows_sec or (0,))
         if max_wide_window > 0:
             wide_cutoff = now - float(max_wide_window)
-            while state.wide_micro_samples and float(state.wide_micro_samples[0].get("ts", 0.0)) < wide_cutoff:
+            while (
+                state.wide_micro_samples
+                and float(state.wide_micro_samples[0].get("ts", 0.0)) < wide_cutoff
+            ):
                 state.wide_micro_samples.popleft()
 
     def _mark_reversions(self, state: _SymbolState, now: float) -> None:
@@ -352,12 +380,16 @@ class OrderbookStabilityObserver:
             state.depth_ewma = float(depth_total)
         else:
             state.ofi_ewma = lam * ofi_instant + (1.0 - lam) * state.ofi_ewma
-            state.depth_ewma = lam * depth_total + (1.0 - lam) * max(state.depth_ewma, 1.0)
+            state.depth_ewma = lam * depth_total + (1.0 - lam) * max(
+                state.depth_ewma, 1.0
+            )
 
         qi_denominator = bid_qty + ask_qty
         qi = (bid_qty / qi_denominator) if qi_denominator > 0 else None
         if qi is not None:
-            state.qi_ewma = qi if state.qi_ewma is None else lam * qi + (1.0 - lam) * state.qi_ewma
+            state.qi_ewma = (
+                qi if state.qi_ewma is None else lam * qi + (1.0 - lam) * state.qi_ewma
+            )
 
         ofi_norm = state.ofi_ewma / sqrt(max(state.depth_ewma, 1.0))
         state.micro_samples.append({"ts": now, "ofi_norm": ofi_norm})
@@ -441,7 +473,9 @@ class OrderbookStabilityObserver:
     def _bucket_key(self, state: _SymbolState, sample_count: int) -> str:
         depth_total = int(state.last_bid_depth or 0) + int(state.last_ask_depth or 0)
         parts = {
-            "spread": self._spread_bucket(int(state.last_bid or 0), int(state.last_ask or 0)),
+            "spread": self._spread_bucket(
+                int(state.last_bid or 0), int(state.last_ask or 0)
+            ),
             "price": self._price_bucket(int(state.last_bid or state.last_ask or 0)),
             "depth": self._depth_bucket(depth_total),
             "sample": self._sample_bucket(sample_count),
@@ -460,7 +494,9 @@ class OrderbookStabilityObserver:
         except Exception:
             return None
 
-    def _resolve_thresholds(self, *, bucket_key: str, sample_count: int) -> dict[str, Any]:
+    def _resolve_thresholds(
+        self, *, bucket_key: str, sample_count: int
+    ) -> dict[str, Any]:
         thresholds = {
             "ofi_bull_threshold": DEFAULT_OFI_BULL_THRESHOLD,
             "ofi_bear_threshold": DEFAULT_OFI_BEAR_THRESHOLD,
@@ -482,7 +518,9 @@ class OrderbookStabilityObserver:
             thresholds["ofi_threshold_fallback_reason"] = "manifest_missing_or_invalid"
             return thresholds
         thresholds["ofi_threshold_manifest_id"] = str(manifest.get("manifest_id") or "")
-        thresholds["ofi_threshold_manifest_version"] = str(manifest.get("version") or "")
+        thresholds["ofi_threshold_manifest_version"] = str(
+            manifest.get("version") or ""
+        )
         if not bool(manifest.get("enabled", False)):
             thresholds["ofi_threshold_source"] = "fallback"
             thresholds["ofi_threshold_fallback_reason"] = "manifest_disabled"
@@ -494,7 +532,10 @@ class OrderbookStabilityObserver:
             return thresholds
 
         bucket_thresholds = manifest.get("bucket_thresholds") or {}
-        if not isinstance(bucket_thresholds, dict) or bucket_key not in bucket_thresholds:
+        if (
+            not isinstance(bucket_thresholds, dict)
+            or bucket_key not in bucket_thresholds
+        ):
             thresholds["ofi_threshold_source"] = "fallback"
             thresholds["ofi_threshold_fallback_reason"] = "bucket_missing"
             return thresholds
@@ -505,14 +546,21 @@ class OrderbookStabilityObserver:
             thresholds["ofi_threshold_source"] = "fallback"
             thresholds["ofi_threshold_fallback_reason"] = "bucket_invalid"
             return thresholds
-        bucket_samples = _safe_int(item.get("bucket_sample_count", item.get("sample_count")), sample_count)
+        bucket_samples = _safe_int(
+            item.get("bucket_sample_count", item.get("sample_count")), sample_count
+        )
         thresholds["ofi_bucket_sample_count"] = bucket_samples
         if min_bucket_samples > 0 and bucket_samples < min_bucket_samples:
             thresholds["ofi_threshold_source"] = "fallback"
             thresholds["ofi_threshold_fallback_reason"] = "insufficient_bucket_samples"
             return thresholds
 
-        for key in ("ofi_bull_threshold", "ofi_bear_threshold", "qi_bull_threshold", "qi_bear_threshold"):
+        for key in (
+            "ofi_bull_threshold",
+            "ofi_bear_threshold",
+            "qi_bull_threshold",
+            "qi_bear_threshold",
+        ):
             if key in item:
                 thresholds[key] = _safe_float(item.get(key), thresholds[key])
         thresholds["ofi_threshold_source"] = "bucket"
@@ -553,27 +601,33 @@ class OrderbookStabilityObserver:
                 qi_ewma = float(sample.get("qi_ewma") or 0.0)
                 ofi_values.append(ofi_z)
                 qi_values.append(qi_ewma)
-                if (
-                    ofi_z >= float(threshold_meta["ofi_bull_threshold"])
-                    and qi_ewma >= float(threshold_meta["qi_bull_threshold"])
-                ):
+                if ofi_z >= float(
+                    threshold_meta["ofi_bull_threshold"]
+                ) and qi_ewma >= float(threshold_meta["qi_bull_threshold"]):
                     state_counts["bullish"] += 1
-                elif (
-                    ofi_z <= float(threshold_meta["ofi_bear_threshold"])
-                    and qi_ewma < float(threshold_meta["qi_bear_threshold"])
-                ):
+                elif ofi_z <= float(
+                    threshold_meta["ofi_bear_threshold"]
+                ) and qi_ewma < float(threshold_meta["qi_bear_threshold"]):
                     state_counts["bearish"] += 1
                 else:
                     state_counts["neutral"] += 1
 
             ready_count = len(ready_samples)
-            bullish_ratio = round(state_counts["bullish"] / ready_count, 6) if ready_count else 0.0
-            bearish_ratio = round(state_counts["bearish"] / ready_count, 6) if ready_count else 0.0
+            bullish_ratio = (
+                round(state_counts["bullish"] / ready_count, 6) if ready_count else 0.0
+            )
+            bearish_ratio = (
+                round(state_counts["bearish"] / ready_count, 6) if ready_count else 0.0
+            )
             if ready_count < self.micro_z_min_samples:
                 dominant_state = "insufficient"
-            elif bullish_ratio >= 0.60 and state_counts["bullish"] >= max(3, self.micro_z_min_samples // 2):
+            elif bullish_ratio >= 0.60 and state_counts["bullish"] >= max(
+                3, self.micro_z_min_samples // 2
+            ):
                 dominant_state = "persistent_bullish"
-            elif bearish_ratio >= 0.60 and state_counts["bearish"] >= max(3, self.micro_z_min_samples // 2):
+            elif bearish_ratio >= 0.60 and state_counts["bearish"] >= max(
+                3, self.micro_z_min_samples // 2
+            ):
                 dominant_state = "persistent_bearish"
             elif state_counts["bullish"] > 0 and state_counts["bearish"] > 0:
                 dominant_state = "mixed"
@@ -617,20 +671,20 @@ class OrderbookStabilityObserver:
             reason = "insufficient_samples"
 
         bucket_key = self._bucket_key(state, sample_count)
-        threshold_meta = self._resolve_thresholds(bucket_key=bucket_key, sample_count=sample_count)
+        threshold_meta = self._resolve_thresholds(
+            bucket_key=bucket_key, sample_count=sample_count
+        )
         micro_state = "insufficient"
         if ready:
             ofi_z = float(state.last_ofi_z or 0.0)
             qi_ewma = float(state.qi_ewma or 0.0)
-            if (
-                ofi_z >= float(threshold_meta["ofi_bull_threshold"])
-                and qi_ewma >= float(threshold_meta["qi_bull_threshold"])
-            ):
+            if ofi_z >= float(
+                threshold_meta["ofi_bull_threshold"]
+            ) and qi_ewma >= float(threshold_meta["qi_bull_threshold"]):
                 micro_state = "bullish"
-            elif (
-                ofi_z <= float(threshold_meta["ofi_bear_threshold"])
-                and qi_ewma < float(threshold_meta["qi_bear_threshold"])
-            ):
+            elif ofi_z <= float(
+                threshold_meta["ofi_bear_threshold"]
+            ) and qi_ewma < float(threshold_meta["qi_bear_threshold"]):
                 micro_state = "bearish"
             else:
                 micro_state = "neutral"
@@ -649,8 +703,12 @@ class OrderbookStabilityObserver:
         if sample_count < self.micro_z_min_samples:
             calibration_warning = "insufficient_symbol_samples"
         elif threshold_meta["ofi_threshold_source"] == "fallback":
-            calibration_warning = str(threshold_meta["ofi_threshold_fallback_reason"] or "threshold_fallback")
-        wide_summary = self._wide_micro_window_summary(state, now=now, threshold_meta=threshold_meta)
+            calibration_warning = str(
+                threshold_meta["ofi_threshold_fallback_reason"] or "threshold_fallback"
+            )
+        wide_summary = self._wide_micro_window_summary(
+            state, now=now, threshold_meta=threshold_meta
+        )
 
         return {
             "captured_at_ms": int(round(now * 1000)),
@@ -665,11 +723,17 @@ class OrderbookStabilityObserver:
             "ready": bool(ready),
             "reason": reason or "ready",
             "qi": round(float(state.last_qi), 6) if state.last_qi is not None else None,
-            "qi_ewma": round(float(state.qi_ewma), 6) if state.qi_ewma is not None else None,
+            "qi_ewma": (
+                round(float(state.qi_ewma), 6) if state.qi_ewma is not None else None
+            ),
             "ofi_instant": round(float(state.last_ofi_instant), 6),
             "ofi_ewma": round(float(state.ofi_ewma), 6),
             "ofi_norm": round(float(state.last_ofi_norm), 6),
-            "ofi_z": round(float(state.last_ofi_z), 6) if state.last_ofi_z is not None else None,
+            "ofi_z": (
+                round(float(state.last_ofi_z), 6)
+                if state.last_ofi_z is not None
+                else None
+            ),
             "depth_ewma": round(float(state.depth_ewma), 6),
             "micro_state": micro_state,
             "sample_quote_count": sample_count,
@@ -679,7 +743,9 @@ class OrderbookStabilityObserver:
             "ofi_calibration_bucket": bucket_key,
             "ofi_bucket_key": bucket_key,
             "ofi_symbol_sample_count": sample_count,
-            "ofi_bucket_sample_count": _safe_int(threshold_meta.get("ofi_bucket_sample_count"), 0),
+            "ofi_bucket_sample_count": _safe_int(
+                threshold_meta.get("ofi_bucket_sample_count"), 0
+            ),
             "ofi_symbol_bearish_rate": None,
             "ofi_bucket_bearish_rate": None,
             "ofi_symbol_bullish_rate": None,

@@ -13,9 +13,10 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from src.engine.ai_prompt_contracts import swing_ai_structured_output_eval_prompt_contract
+from src.engine.ai_prompt_contracts import (
+    swing_ai_structured_output_eval_prompt_contract,
+)
 from src.engine.ai_response_contracts import swing_ai_structured_output_eval_contract
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 REPORT_DIR = PROJECT_ROOT / "data" / "report"
@@ -31,7 +32,9 @@ HOLDING_EXIT_DECISION_MATRIX_DIR = REPORT_DIR / "holding_exit_decision_matrix"
 LIFECYCLE_DECISION_MATRIX_DIR = REPORT_DIR / "lifecycle_decision_matrix"
 PIPELINE_EVENT_VERBOSITY_DIR = REPORT_DIR / "pipeline_event_verbosity"
 OBSERVATION_SOURCE_QUALITY_AUDIT_DIR = REPORT_DIR / "observation_source_quality_audit"
-AI_WATCHING_SCORE_SMOOTHING_DIAGNOSTIC_DIR = REPORT_DIR / "ai_watching_score_smoothing_diagnostic"
+AI_WATCHING_SCORE_SMOOTHING_DIAGNOSTIC_DIR = (
+    REPORT_DIR / "ai_watching_score_smoothing_diagnostic"
+)
 CODEBASE_PERFORMANCE_WORKORDER_DIR = REPORT_DIR / "codebase_performance_workorder"
 PATTERN_LAB_CURRENTNESS_AUDIT_DIR = REPORT_DIR / "pattern_lab_currentness_audit"
 BUY_FUNNEL_SENTINEL_DIR = REPORT_DIR / "buy_funnel_sentinel"
@@ -40,7 +43,9 @@ PRODUCER_GAP_DISCOVERY_DIR = REPORT_DIR / "producer_gap_discovery"
 STAGE_HOOK_WORKORDER_DISCOVERY_DIR = REPORT_DIR / "stage_hook_workorder_discovery"
 STAGE_HOOK_RUNTIME_SCAFFOLD_DIR = REPORT_DIR / "stage_hook_runtime_scaffold"
 CONVERSION_LANE_DIR = REPORT_DIR / "conversion_lane"
-INTRADAY_ENTRY_BLOCKER_DIAGNOSTICS_DIR = REPORT_DIR / "intraday_entry_blocker_diagnostics"
+INTRADAY_ENTRY_BLOCKER_DIAGNOSTICS_DIR = (
+    REPORT_DIR / "intraday_entry_blocker_diagnostics"
+)
 RISING_MISSED_SCOUT_WORKORDER_DIR = REPORT_DIR / "rising_missed_scout_workorder"
 RISING_MISSED_CLASSIFIER_PRIOR_DIR = REPORT_DIR / "rising_missed_classifier_prior"
 RISING_MISSED_NORMAL_BUY_BRIDGE_CANDIDATE_DIR = (
@@ -147,8 +152,12 @@ def _file_fingerprint(path: Path, label: str) -> dict[str, Any]:
 
 
 def _source_fingerprint(source_paths: dict[str, Path]) -> dict[str, Any]:
-    files = [_file_fingerprint(path, label) for label, path in sorted(source_paths.items())]
-    hash_input = json.dumps(files, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    files = [
+        _file_fingerprint(path, label) for label, path in sorted(source_paths.items())
+    ]
+    hash_input = json.dumps(
+        files, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
     source_hash = hashlib.sha256(hash_input).hexdigest()
     return {
         "source_hash": source_hash,
@@ -157,8 +166,14 @@ def _source_fingerprint(source_paths: dict[str, Path]) -> dict[str, Any]:
     }
 
 
-def _previous_workorder_lineage(previous_report: dict[str, Any], current_orders: list[dict[str, Any]]) -> dict[str, Any]:
-    previous_orders = previous_report.get("orders") if isinstance(previous_report.get("orders"), list) else []
+def _previous_workorder_lineage(
+    previous_report: dict[str, Any], current_orders: list[dict[str, Any]]
+) -> dict[str, Any]:
+    previous_orders = (
+        previous_report.get("orders")
+        if isinstance(previous_report.get("orders"), list)
+        else []
+    )
     previous_by_id = {
         str(order.get("order_id")): order
         for order in previous_orders
@@ -174,7 +189,8 @@ def _previous_workorder_lineage(previous_report: dict[str, Any], current_orders:
     decision_changed = sorted(
         order_id
         for order_id in previous_ids & current_ids
-        if previous_by_id[order_id].get("decision") != current_by_id[order_id].get("decision")
+        if previous_by_id[order_id].get("decision")
+        != current_by_id[order_id].get("decision")
     )
     return {
         "previous_exists": bool(previous_report),
@@ -193,7 +209,10 @@ def conversion_lane_report_path(target_date: str) -> Path:
 
 
 def intraday_entry_blocker_diagnostics_report_path(target_date: str) -> Path:
-    return INTRADAY_ENTRY_BLOCKER_DIAGNOSTICS_DIR / f"intraday_entry_blocker_diagnostics_{target_date}.json"
+    return (
+        INTRADAY_ENTRY_BLOCKER_DIAGNOSTICS_DIR
+        / f"intraday_entry_blocker_diagnostics_{target_date}.json"
+    )
 
 
 def entry_hurdle_backtest_report_path(target_date: str) -> Path:
@@ -201,11 +220,17 @@ def entry_hurdle_backtest_report_path(target_date: str) -> Path:
 
 
 def rising_missed_scout_workorder_report_path(target_date: str) -> Path:
-    return RISING_MISSED_SCOUT_WORKORDER_DIR / f"rising_missed_scout_workorder_{target_date}.json"
+    return (
+        RISING_MISSED_SCOUT_WORKORDER_DIR
+        / f"rising_missed_scout_workorder_{target_date}.json"
+    )
 
 
 def rising_missed_classifier_prior_report_path(target_date: str) -> Path:
-    return RISING_MISSED_CLASSIFIER_PRIOR_DIR / f"rising_missed_classifier_prior_{target_date}.json"
+    return (
+        RISING_MISSED_CLASSIFIER_PRIOR_DIR
+        / f"rising_missed_classifier_prior_{target_date}.json"
+    )
 
 
 def rising_missed_normal_buy_bridge_candidate_report_path(target_date: str) -> Path:
@@ -216,14 +241,22 @@ def rising_missed_normal_buy_bridge_candidate_report_path(target_date: str) -> P
 
 
 def one_share_threshold_opportunity_report_path(target_date: str) -> Path:
-    return ONE_SHARE_THRESHOLD_OPPORTUNITY_DIR / f"one_share_threshold_opportunity_{target_date}.json"
+    return (
+        ONE_SHARE_THRESHOLD_OPPORTUNITY_DIR
+        / f"one_share_threshold_opportunity_{target_date}.json"
+    )
 
 
 def microstructure_reaction_context_report_path(target_date: str) -> Path:
-    return MICROSTRUCTURE_REACTION_CONTEXT_DIR / f"microstructure_reaction_context_{target_date}.json"
+    return (
+        MICROSTRUCTURE_REACTION_CONTEXT_DIR
+        / f"microstructure_reaction_context_{target_date}.json"
+    )
 
 
-def _conversion_rank_by_candidate(conversion_lane: dict[str, Any]) -> dict[str, dict[str, Any]]:
+def _conversion_rank_by_candidate(
+    conversion_lane: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
     ranked: dict[str, dict[str, Any]] = {}
     for item in conversion_lane.get("conversion_blocker_rank") or []:
         if not isinstance(item, dict):
@@ -232,13 +265,17 @@ def _conversion_rank_by_candidate(conversion_lane: dict[str, Any]) -> dict[str, 
         if not candidate_id:
             continue
         existing = ranked.get(candidate_id)
-        if existing and _safe_int(existing.get("conversion_impact_rank"), 999) <= _safe_int(item.get("conversion_impact_rank"), 999):
+        if existing and _safe_int(
+            existing.get("conversion_impact_rank"), 999
+        ) <= _safe_int(item.get("conversion_impact_rank"), 999):
             continue
         ranked[candidate_id] = item
     return ranked
 
 
-def _annotate_order_conversion_fields(order: dict[str, Any], conversion_rank: dict[str, dict[str, Any]]) -> dict[str, Any]:
+def _annotate_order_conversion_fields(
+    order: dict[str, Any], conversion_rank: dict[str, dict[str, Any]]
+) -> dict[str, Any]:
     candidate_keys = [
         str(order.get(key) or "").strip()
         for key in (
@@ -250,7 +287,11 @@ def _annotate_order_conversion_fields(order: dict[str, Any], conversion_rank: di
             "source_bucket_id",
         )
     ]
-    candidate_keys.extend(str(item) for item in (order.get("candidate_ids") or []) if str(item or "").strip())
+    candidate_keys.extend(
+        str(item)
+        for item in (order.get("candidate_ids") or [])
+        if str(item or "").strip()
+    )
     blocker: dict[str, Any] = {}
     for key in candidate_keys:
         if key in conversion_rank:
@@ -259,16 +300,27 @@ def _annotate_order_conversion_fields(order: dict[str, Any], conversion_rank: di
     if not blocker:
         return order
     annotated = dict(order)
-    annotated.setdefault("conversion_candidate_id", blocker.get("conversion_candidate_id"))
-    annotated.setdefault("conversion_impact_rank", blocker.get("conversion_impact_rank"))
-    annotated.setdefault("remaining_gap_count_before", blocker.get("remaining_gap_count"))
-    annotated.setdefault("remaining_gap_count_after_expected", max(0, _safe_int(blocker.get("remaining_gap_count"), 1) - 1))
+    annotated.setdefault(
+        "conversion_candidate_id", blocker.get("conversion_candidate_id")
+    )
+    annotated.setdefault(
+        "conversion_impact_rank", blocker.get("conversion_impact_rank")
+    )
+    annotated.setdefault(
+        "remaining_gap_count_before", blocker.get("remaining_gap_count")
+    )
+    annotated.setdefault(
+        "remaining_gap_count_after_expected",
+        max(0, _safe_int(blocker.get("remaining_gap_count"), 1) - 1),
+    )
     annotated.setdefault("blocks_bounded_real_canary", True)
     annotated.setdefault("acceptance_test", blocker.get("acceptance_test"))
     return annotated
 
 
-def _conversion_lane_followup_orders(conversion_lane: dict[str, Any], *, limit: int = 20) -> list[dict[str, Any]]:
+def _conversion_lane_followup_orders(
+    conversion_lane: dict[str, Any], *, limit: int = 20
+) -> list[dict[str, Any]]:
     blockers = conversion_lane.get("conversion_blocker_rank")
     if not isinstance(blockers, list):
         return []
@@ -328,11 +380,17 @@ def _conversion_lane_followup_orders(conversion_lane: dict[str, Any], *, limit: 
                 "blocker_resolution_status": blocker.get("blocker_resolution_status"),
                 "conversion_impact_rank": blocker.get("conversion_impact_rank"),
                 "remaining_gap_count_before": blocker.get("remaining_gap_count"),
-                "remaining_gap_count_after_expected": max(0, _safe_int(blocker.get("remaining_gap_count"), 1) - 1),
+                "remaining_gap_count_after_expected": max(
+                    0, _safe_int(blocker.get("remaining_gap_count"), 1) - 1
+                ),
                 "blocks_bounded_real_canary": True,
                 "acceptance_test": blocker.get("acceptance_test"),
-                "implementation_status": "implemented" if instrumentation_implemented else None,
-                "original_implementation_status": "implemented" if instrumentation_implemented else None,
+                "implementation_status": (
+                    "implemented" if instrumentation_implemented else None
+                ),
+                "original_implementation_status": (
+                    "implemented" if instrumentation_implemented else None
+                ),
                 "implementation_provenance": implementation_provenance,
                 "intent": (
                     "Close the conversion critical-path blocker as source-only instrumentation/report/test work. "
@@ -372,7 +430,9 @@ def _conversion_lane_followup_orders(conversion_lane: dict[str, Any], *, limit: 
     return orders
 
 
-def _intraday_entry_blocker_followup_orders(report: dict[str, Any]) -> list[dict[str, Any]]:
+def _intraday_entry_blocker_followup_orders(
+    report: dict[str, Any],
+) -> list[dict[str, Any]]:
     workorders = report.get("source_quality_workorders")
     if not isinstance(workorders, dict):
         return []
@@ -416,16 +476,26 @@ def _intraday_entry_blocker_followup_orders(report: dict[str, Any]) -> list[dict
         ),
     )
     for key, title_prefix, family, subsystem, improvement_type, files in specs:
-        raw_items = [item for item in workorders.get(key) or [] if isinstance(item, dict)]
+        raw_items = [
+            item for item in workorders.get(key) or [] if isinstance(item, dict)
+        ]
         if key == "rising_missed_freshness_recovery" and raw_items:
-            total_stale = sum(_safe_int(item.get("diagnostic_quote_age_stale"), 0) for item in raw_items)
-            total_history_gap = sum(_safe_int(item.get("pre_ai_stale_or_history_gap"), 0) for item in raw_items)
+            total_stale = sum(
+                _safe_int(item.get("diagnostic_quote_age_stale"), 0)
+                for item in raw_items
+            )
+            total_history_gap = sum(
+                _safe_int(item.get("pre_ai_stale_or_history_gap"), 0)
+                for item in raw_items
+            )
             raw_items = [
                 {
                     "workorder_type": "bounded_rising_candidate_freshness_recheck",
                     "stock_code": "multi_symbol",
                     "stock_name": f"{len(raw_items)} rising candidates",
-                    "event_count": sum(_safe_int(item.get("event_count"), 0) for item in raw_items),
+                    "event_count": sum(
+                        _safe_int(item.get("event_count"), 0) for item in raw_items
+                    ),
                     "diagnostic_quote_age_stale": total_stale,
                     "pre_ai_stale_or_history_gap": total_history_gap,
                     "latest_stage": "aggregate",
@@ -456,7 +526,11 @@ def _intraday_entry_blocker_followup_orders(report: dict[str, Any]) -> list[dict
                 value = item.get(field)
                 if value not in (None, ""):
                     evidence.append(f"{field}={value}")
-            source_items = item.get("source_items") if isinstance(item.get("source_items"), list) else []
+            source_items = (
+                item.get("source_items")
+                if isinstance(item.get("source_items"), list)
+                else []
+            )
             if source_items:
                 evidence.append("source_symbol_count=" + str(len(source_items)))
                 evidence.append(
@@ -480,8 +554,12 @@ def _intraday_entry_blocker_followup_orders(report: dict[str, Any]) -> list[dict
                     if isinstance(source, dict)
                 }
                 source_statuses.discard("")
-                if source_statuses and all(_is_implemented_status(status) for status in source_statuses):
-                    implementation_status = "implemented_source_quality_contract_available"
+                if source_statuses and all(
+                    _is_implemented_status(status) for status in source_statuses
+                ):
+                    implementation_status = (
+                        "implemented_source_quality_contract_available"
+                    )
                     implementation_provenance = {
                         "implementation_type": f"{family}_aggregate_source_quality_provenance",
                         "metric_role": "source_quality_gate",
@@ -525,7 +603,8 @@ def _intraday_entry_blocker_followup_orders(report: dict[str, Any]) -> list[dict
                         "PYTHONPATH=. .venv/bin/pytest src/tests/test_intraday_entry_blocker_diagnostics.py src/tests/test_build_code_improvement_workorder.py",
                         "runtime_effect remains false; stale submit, broker, order, provider, bot, and threshold guards remain unchanged",
                     ],
-                    "forbidden_uses": item.get("forbidden_uses") or [
+                    "forbidden_uses": item.get("forbidden_uses")
+                    or [
                         "buy_score_relaxation",
                         "stale_submit_bypass",
                         "broker_guard_bypass",
@@ -537,16 +616,26 @@ def _intraday_entry_blocker_followup_orders(report: dict[str, Any]) -> list[dict
     return orders
 
 
-def _entry_hurdle_backtest_followup_orders(report: dict[str, Any]) -> list[dict[str, Any]]:
+def _entry_hurdle_backtest_followup_orders(
+    report: dict[str, Any],
+) -> list[dict[str, Any]]:
     orders = report.get("code_improvement_orders")
     if not isinstance(orders, list):
         return []
     sanitized: list[dict[str, Any]] = []
-    source_paths = report.get("source_paths") if isinstance(report.get("source_paths"), list) else []
+    source_paths = (
+        report.get("source_paths")
+        if isinstance(report.get("source_paths"), list)
+        else []
+    )
     for raw in orders:
         if not isinstance(raw, dict):
             continue
-        order = {**raw, "source_report_type": raw.get("source_report_type") or "entry_hurdle_backtest"}
+        order = {
+            **raw,
+            "source_report_type": raw.get("source_report_type")
+            or "entry_hurdle_backtest",
+        }
         order["runtime_effect"] = False
         order["allowed_runtime_apply"] = False
         order["actual_order_submitted"] = False
@@ -572,7 +661,11 @@ def _entry_hurdle_backtest_followup_orders(report: dict[str, Any]) -> list[dict[
             "broker_order_forbidden": True,
             "requires_separate_runtime_apply_candidate": True,
         }
-        forbidden = order.get("forbidden_uses") if isinstance(order.get("forbidden_uses"), list) else []
+        forbidden = (
+            order.get("forbidden_uses")
+            if isinstance(order.get("forbidden_uses"), list)
+            else []
+        )
         order["forbidden_uses"] = sorted(
             {
                 *(str(item) for item in forbidden),
@@ -589,7 +682,9 @@ def _entry_hurdle_backtest_followup_orders(report: dict[str, Any]) -> list[dict[
     return sanitized
 
 
-def _rising_missed_scout_followup_orders(report: dict[str, Any]) -> list[dict[str, Any]]:
+def _rising_missed_scout_followup_orders(
+    report: dict[str, Any],
+) -> list[dict[str, Any]]:
     orders = report.get("code_improvement_orders")
     if not isinstance(orders, list):
         return []
@@ -615,12 +710,16 @@ def _rising_missed_scout_followup_orders(report: dict[str, Any]) -> list[dict[st
         existing_forbidden = order.get("forbidden_uses")
         if not isinstance(existing_forbidden, list):
             existing_forbidden = []
-        order["forbidden_uses"] = list(dict.fromkeys([*existing_forbidden, *default_forbidden_uses]))
+        order["forbidden_uses"] = list(
+            dict.fromkeys([*existing_forbidden, *default_forbidden_uses])
+        )
         sanitized.append(order)
     return sanitized
 
 
-def _rising_missed_classifier_prior_followup_orders(report: dict[str, Any]) -> list[dict[str, Any]]:
+def _rising_missed_classifier_prior_followup_orders(
+    report: dict[str, Any],
+) -> list[dict[str, Any]]:
     orders = report.get("code_improvement_orders")
     if not isinstance(orders, list):
         return []
@@ -661,12 +760,16 @@ def _rising_missed_classifier_prior_followup_orders(report: dict[str, Any]) -> l
         existing_forbidden = order.get("forbidden_uses")
         if not isinstance(existing_forbidden, list):
             existing_forbidden = []
-        order["forbidden_uses"] = list(dict.fromkeys([*existing_forbidden, *default_forbidden_uses]))
+        order["forbidden_uses"] = list(
+            dict.fromkeys([*existing_forbidden, *default_forbidden_uses])
+        )
         sanitized.append(order)
     return sanitized
 
 
-def _rising_missed_normal_buy_bridge_followup_orders(report: dict[str, Any]) -> list[dict[str, Any]]:
+def _rising_missed_normal_buy_bridge_followup_orders(
+    report: dict[str, Any],
+) -> list[dict[str, Any]]:
     orders = report.get("code_improvement_orders")
     if not isinstance(orders, list):
         return []
@@ -687,7 +790,9 @@ def _rising_missed_normal_buy_bridge_followup_orders(report: dict[str, Any]) -> 
         if not isinstance(item, dict):
             continue
         order = dict(item)
-        order["source_report_type"] = "rising_missed_normal_buy_bridge_candidate_discovery"
+        order["source_report_type"] = (
+            "rising_missed_normal_buy_bridge_candidate_discovery"
+        )
         order["runtime_effect"] = False
         order["allowed_runtime_apply"] = False
         order["actual_order_submitted"] = False
@@ -708,12 +813,16 @@ def _rising_missed_normal_buy_bridge_followup_orders(report: dict[str, Any]) -> 
         existing_forbidden = order.get("forbidden_uses")
         if not isinstance(existing_forbidden, list):
             existing_forbidden = []
-        order["forbidden_uses"] = list(dict.fromkeys([*existing_forbidden, *default_forbidden_uses]))
+        order["forbidden_uses"] = list(
+            dict.fromkeys([*existing_forbidden, *default_forbidden_uses])
+        )
         sanitized.append(order)
     return sanitized
 
 
-def _one_share_threshold_opportunity_followup_orders(report: dict[str, Any]) -> list[dict[str, Any]]:
+def _one_share_threshold_opportunity_followup_orders(
+    report: dict[str, Any],
+) -> list[dict[str, Any]]:
     orders = report.get("code_improvement_orders")
     if not isinstance(orders, list):
         return []
@@ -742,12 +851,16 @@ def _one_share_threshold_opportunity_followup_orders(report: dict[str, Any]) -> 
         existing_forbidden = order.get("forbidden_uses")
         if not isinstance(existing_forbidden, list):
             existing_forbidden = []
-        order["forbidden_uses"] = list(dict.fromkeys([*existing_forbidden, *default_forbidden_uses]))
+        order["forbidden_uses"] = list(
+            dict.fromkeys([*existing_forbidden, *default_forbidden_uses])
+        )
         sanitized.append(order)
     return sanitized
 
 
-def _recent_workorder_reports(target_date: str, *, lookback_days: int = 10) -> list[dict[str, Any]]:
+def _recent_workorder_reports(
+    target_date: str, *, lookback_days: int = 10
+) -> list[dict[str, Any]]:
     try:
         end_date = date.fromisoformat(target_date)
     except ValueError:
@@ -790,13 +903,21 @@ def _repeat_unresolved_signature(order: dict[str, Any]) -> str | None:
     return "sig:" + "|".join(parts)
 
 
-def _unresolved_repeat_counts(reports: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+def _unresolved_repeat_counts(
+    reports: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
     counts: dict[str, dict[str, Any]] = {}
-    unresolved_decisions = {"attach_existing_family", "design_family_candidate", "defer_evidence"}
+    unresolved_decisions = {
+        "attach_existing_family",
+        "design_family_candidate",
+        "defer_evidence",
+    }
     for report in reports:
         seen_in_report: set[str] = set()
         for section in ("orders", "non_selected_orders"):
-            orders = report.get(section) if isinstance(report.get(section), list) else []
+            orders = (
+                report.get(section) if isinstance(report.get(section), list) else []
+            )
             for order in orders:
                 if not isinstance(order, dict):
                     continue
@@ -821,21 +942,33 @@ def _unresolved_repeat_counts(reports: list[dict[str, Any]]) -> dict[str, dict[s
                     if repeat_key in seen_in_report:
                         continue
                     seen_in_report.add(repeat_key)
-                    repeat_info = counts.setdefault(repeat_key, {"count": 0, "implementation_status_counts": {}})
+                    repeat_info = counts.setdefault(
+                        repeat_key, {"count": 0, "implementation_status_counts": {}}
+                    )
                     repeat_info["count"] = int(repeat_info.get("count") or 0) + 1
                     if status:
-                        status_counts = repeat_info.setdefault("implementation_status_counts", {})
+                        status_counts = repeat_info.setdefault(
+                            "implementation_status_counts", {}
+                        )
                         status_counts[status] = int(status_counts.get(status) or 0) + 1
     return counts
 
 
-def _structural_repeat_history_counts(reports: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+def _structural_repeat_history_counts(
+    reports: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
     counts: dict[str, dict[str, Any]] = {}
-    unresolved_decisions = {"attach_existing_family", "design_family_candidate", "defer_evidence"}
+    unresolved_decisions = {
+        "attach_existing_family",
+        "design_family_candidate",
+        "defer_evidence",
+    }
     for report in reports:
         seen_in_report: set[str] = set()
         for section in ("orders", "non_selected_orders"):
-            orders = report.get(section) if isinstance(report.get(section), list) else []
+            orders = (
+                report.get(section) if isinstance(report.get(section), list) else []
+            )
             for order in orders:
                 if not isinstance(order, dict):
                     continue
@@ -867,10 +1000,14 @@ def _structural_repeat_history_counts(reports: list[dict[str, Any]]) -> dict[str
                     )
                     repeat_info["count"] = int(repeat_info.get("count") or 0) + 1
                     if status:
-                        status_counts = repeat_info.setdefault("implementation_status_counts", {})
+                        status_counts = repeat_info.setdefault(
+                            "implementation_status_counts", {}
+                        )
                         status_counts[status] = int(status_counts.get(status) or 0) + 1
                     decision_counts = repeat_info.setdefault("decision_counts", {})
-                    decision_counts[decision] = int(decision_counts.get(decision) or 0) + 1
+                    decision_counts[decision] = (
+                        int(decision_counts.get(decision) or 0) + 1
+                    )
                     route = str(order.get("route") or "").strip()
                     if route:
                         route_counts = repeat_info.setdefault("route_counts", {})
@@ -891,7 +1028,11 @@ def _repeat_info_primary_status(repeat_info: Any) -> str | None:
     if not isinstance(status_counts, dict) or not status_counts:
         return None
     status, _ = max(
-        ((str(key), _safe_int(value)) for key, value in status_counts.items() if str(key).strip()),
+        (
+            (str(key), _safe_int(value))
+            for key, value in status_counts.items()
+            if str(key).strip()
+        ),
         key=lambda pair: pair[1],
         default=("", 0),
     )
@@ -905,7 +1046,11 @@ def _repeat_info_primary_value(repeat_info: Any, field: str) -> str | None:
     if not isinstance(counts, dict) or not counts:
         return None
     value, _ = max(
-        ((str(key), _safe_int(value)) for key, value in counts.items() if str(key).strip()),
+        (
+            (str(key), _safe_int(value))
+            for key, value in counts.items()
+            if str(key).strip()
+        ),
         key=lambda pair: pair[1],
         default=("", 0),
     )
@@ -920,7 +1065,11 @@ def _is_keep_visible_non_implement_order(order: dict[str, Any]) -> bool:
         "lifecycle_bucket_discovery_source_dimension_rollup",
     }:
         return True
-    if route in {"positive_source_only_review", "ai_review_coverage_review", "source_dimension_rollup"}:
+    if route in {
+        "positive_source_only_review",
+        "ai_review_coverage_review",
+        "source_dimension_rollup",
+    }:
         return True
     if source_type in {
         "scalping_pattern_lab_automation",
@@ -933,13 +1082,28 @@ def _is_keep_visible_non_implement_order(order: dict[str, Any]) -> bool:
         "pattern_lab_observation",
     }:
         return not _has_actionable_implementation_hints(order)
-    provenance = order.get("implementation_provenance") if isinstance(order.get("implementation_provenance"), dict) else {}
-    return str(provenance.get("recommended_resolution") or "") == "mark_not_applicable_explicitly"
+    provenance = (
+        order.get("implementation_provenance")
+        if isinstance(order.get("implementation_provenance"), dict)
+        else {}
+    )
+    return (
+        str(provenance.get("recommended_resolution") or "")
+        == "mark_not_applicable_explicitly"
+    )
 
 
 def _has_actionable_implementation_hints(order: dict[str, Any]) -> bool:
-    files = order.get("files_likely_touched") if isinstance(order.get("files_likely_touched"), list) else []
-    tests = order.get("acceptance_tests") if isinstance(order.get("acceptance_tests"), list) else []
+    files = (
+        order.get("files_likely_touched")
+        if isinstance(order.get("files_likely_touched"), list)
+        else []
+    )
+    tests = (
+        order.get("acceptance_tests")
+        if isinstance(order.get("acceptance_tests"), list)
+        else []
+    )
     return any(str(item).strip() for item in [*files, *tests])
 
 
@@ -1000,12 +1164,18 @@ def _escalate_repeated_structural_blockers(
     specific_structural_gap_sources: set[tuple[str, str]] = {
         (
             str(item.order.get("source_report_type") or "").strip(),
-            str(item.mapped_family or item.order.get("mapped_family") or item.order.get("threshold_family") or "").strip(),
+            str(
+                item.mapped_family
+                or item.order.get("mapped_family")
+                or item.order.get("threshold_family")
+                or ""
+            ).strip(),
         )
         for item in classified
         if (
             str(item.order.get("order_id") or "").strip()
-            and str(item.order.get("improvement_type") or "").strip() in {"instrumentation", "source_quality_gap"}
+            and str(item.order.get("improvement_type") or "").strip()
+            in {"instrumentation", "source_quality_gap"}
             and _structural_blocker_signal(item.order)
         )
     }
@@ -1016,7 +1186,10 @@ def _escalate_repeated_structural_blockers(
             if isinstance(item.order.get("implementation_provenance"), dict)
             else {}
         )
-        if str(provenance.get("root_cause_closure_status_hint") or "").strip() == "root_cause_closed":
+        if (
+            str(provenance.get("root_cause_closure_status_hint") or "").strip()
+            == "root_cause_closed"
+        ):
             escalated.append(item)
             continue
         signature = _repeat_unresolved_signature(item.order)
@@ -1042,14 +1215,23 @@ def _escalate_repeated_structural_blockers(
             "history_window_days": history_window_days,
             "repeat_key": repeat_key,
             "repeat_signature": signature,
-            "previous_decision": _repeat_info_primary_value(repeat_counts.get(repeat_key), "decision_counts"),
-            "previous_route": _repeat_info_primary_value(repeat_counts.get(repeat_key), "route_counts"),
-            "previous_implementation_status": _repeat_info_primary_status(repeat_counts.get(repeat_key)),
+            "previous_decision": _repeat_info_primary_value(
+                repeat_counts.get(repeat_key), "decision_counts"
+            ),
+            "previous_route": _repeat_info_primary_value(
+                repeat_counts.get(repeat_key), "route_counts"
+            ),
+            "previous_implementation_status": _repeat_info_primary_status(
+                repeat_counts.get(repeat_key)
+            ),
             "review_disposition": (
                 "implemented_with_provenance"
                 if _is_implemented_status(item.order.get("implementation_status"))
-                else
-                "keep_visible_by_design" if _is_keep_visible_non_implement_order(item.order) else "review_required"
+                else (
+                    "keep_visible_by_design"
+                    if _is_keep_visible_non_implement_order(item.order)
+                    else "review_required"
+                )
             ),
         }
         updated_order = dict(item.order)
@@ -1074,10 +1256,16 @@ def _escalate_repeated_structural_blockers(
         updated_order["longstanding_non_implement_review"] = review
         longstanding_ids.append(order_id)
         if (
-            str(item.order.get("improvement_type") or "").strip() == "lifecycle_contract_gap"
+            str(item.order.get("improvement_type") or "").strip()
+            == "lifecycle_contract_gap"
             and (
                 str(item.order.get("source_report_type") or "").strip(),
-                str(item.mapped_family or item.order.get("mapped_family") or item.order.get("threshold_family") or "").strip(),
+                str(
+                    item.mapped_family
+                    or item.order.get("mapped_family")
+                    or item.order.get("threshold_family")
+                    or ""
+                ).strip(),
             )
             in specific_structural_gap_sources
         ):
@@ -1143,7 +1331,8 @@ def _escalate_repeated_structural_blockers(
         if not isinstance(provenance, dict):
             provenance = {}
         updated_order["original_implementation_status"] = (
-            str(item.order.get("implementation_status") or "").strip() or review["previous_implementation_status"]
+            str(item.order.get("implementation_status") or "").strip()
+            or review["previous_implementation_status"]
         )
         updated_order["implementation_status"] = "repeat_unresolved_structural_blocker"
         updated_order["structural_blocker_escalation"] = structural_escalation
@@ -1182,7 +1371,11 @@ def _escalate_repeated_unresolved_orders(
 ) -> tuple[list[ClassifiedOrder], list[str]]:
     escalated: list[ClassifiedOrder] = []
     escalated_ids: list[str] = []
-    unresolved_decisions = {"attach_existing_family", "design_family_candidate", "defer_evidence"}
+    unresolved_decisions = {
+        "attach_existing_family",
+        "design_family_candidate",
+        "defer_evidence",
+    }
     for item in classified:
         order_id = str(item.order.get("order_id") or "").strip()
         signature = _repeat_unresolved_signature(item.order)
@@ -1200,11 +1393,13 @@ def _escalate_repeated_unresolved_orders(
             default=("", 0),
         )
         status = str(item.order.get("implementation_status") or "").strip()
-        primary_history_status = _repeat_info_primary_status(repeat_counts.get(repeat_key))
-        implemented_status_present = _is_implemented_status(status)
-        terminal_non_implement_status_present = _is_terminal_non_implement_status(status) or _is_terminal_non_implement_status(
-            primary_history_status
+        primary_history_status = _repeat_info_primary_status(
+            repeat_counts.get(repeat_key)
         )
+        implemented_status_present = _is_implemented_status(status)
+        terminal_non_implement_status_present = _is_terminal_non_implement_status(
+            status
+        ) or _is_terminal_non_implement_status(primary_history_status)
         existing_family_only = (
             item.decision == "attach_existing_family"
             and bool(item.mapped_family)
@@ -1214,7 +1409,11 @@ def _escalate_repeated_unresolved_orders(
         pattern_lab_design_only = (
             item.decision == "design_family_candidate"
             and item.order.get("source_report_type")
-            in {"scalping_pattern_lab_automation", "swing_pattern_lab_automation", "swing_improvement_automation"}
+            in {
+                "scalping_pattern_lab_automation",
+                "swing_pattern_lab_automation",
+                "swing_improvement_automation",
+            }
             and not item.mapped_family
             and not status
             and not primary_history_status
@@ -1224,20 +1423,22 @@ def _escalate_repeated_unresolved_orders(
             and item.order.get("source_report_type")
             in {"scalping_pattern_lab_automation", "swing_pattern_lab_automation"}
             and bool(item.mapped_family)
-            and str(item.order.get("route") or "") in {"existing_family", "attach_existing_family"}
+            and str(item.order.get("route") or "")
+            in {"existing_family", "attach_existing_family"}
             and str(item.order.get("improvement_type") or "")
             in {"threshold_family_input", "pattern_lab_observation"}
             and not status
         )
-        manual_review_only = (
-            item.order.get("source_report_type") == "codebase_performance_workorder"
-            and str(
-                item.order.get("performance_candidate_state")
-                or item.order.get("candidate_state")
-                or ""
-            ).strip()
-            in {"deferred", "rejected"}
-        )
+        manual_review_only = item.order.get(
+            "source_report_type"
+        ) == "codebase_performance_workorder" and str(
+            item.order.get("performance_candidate_state")
+            or item.order.get("candidate_state")
+            or ""
+        ).strip() in {
+            "deferred",
+            "rejected",
+        }
         if (
             order_id
             and repeat_count >= repeat_floor
@@ -1267,7 +1468,9 @@ def _escalate_repeated_unresolved_orders(
                 "previous_route": item.route,
                 "implementation_status": original_status,
                 "implementation_status_counts": (
-                    (repeat_counts.get(repeat_key) or {}).get("implementation_status_counts")
+                    (repeat_counts.get(repeat_key) or {}).get(
+                        "implementation_status_counts"
+                    )
                     if isinstance(repeat_counts.get(repeat_key), dict)
                     else {}
                 ),
@@ -1276,7 +1479,9 @@ def _escalate_repeated_unresolved_orders(
             }
             escalated_order["implementation_provenance"] = {
                 **provenance,
-                "repeat_unresolved_escalation": escalated_order["repeat_unresolved_escalation"],
+                "repeat_unresolved_escalation": escalated_order[
+                    "repeat_unresolved_escalation"
+                ],
             }
             escalated.append(
                 ClassifiedOrder(
@@ -1314,7 +1519,9 @@ def _repeat_unresolved_original_status(order: dict[str, Any]) -> str:
     ).strip()
 
 
-def _selected_implement_now_resolution_summary(selected: list[ClassifiedOrder]) -> dict[str, Any]:
+def _selected_implement_now_resolution_summary(
+    selected: list[ClassifiedOrder],
+) -> dict[str, Any]:
     existing_ids: list[str] = []
     new_ids: list[str] = []
     existing_status_counts: dict[str, int] = {}
@@ -1332,7 +1539,9 @@ def _selected_implement_now_resolution_summary(selected: list[ClassifiedOrder]) 
         if _is_implemented_status(original_status):
             existing_ids.append(order_id)
             status_key = original_status or "implemented"
-            existing_status_counts[status_key] = existing_status_counts.get(status_key, 0) + 1
+            existing_status_counts[status_key] = (
+                existing_status_counts.get(status_key, 0) + 1
+            )
             continue
         new_ids.append(order_id)
         route = str(item.route or order.get("route") or "implement_now")
@@ -1374,7 +1583,9 @@ def _is_real_primary_sample_book(value: Any) -> bool:
 
 
 def _slug(value: str) -> str:
-    text = re.sub(r"[^a-zA-Z0-9가-힣]+", "_", str(value or "").strip().lower()).strip("_")
+    text = re.sub(r"[^a-zA-Z0-9가-힣]+", "_", str(value or "").strip().lower()).strip(
+        "_"
+    )
     return text[:80] or "unknown"
 
 
@@ -1442,15 +1653,24 @@ def _load_source_json(path: Path, *, isolated_source_mode: bool) -> dict[str, An
 
 
 def automation_report_path(target_date: str) -> Path:
-    return PATTERN_LAB_AUTOMATION_DIR / f"scalping_pattern_lab_automation_{target_date}.json"
+    return (
+        PATTERN_LAB_AUTOMATION_DIR
+        / f"scalping_pattern_lab_automation_{target_date}.json"
+    )
 
 
 def swing_automation_report_path(target_date: str) -> Path:
-    return SWING_IMPROVEMENT_AUTOMATION_DIR / f"swing_improvement_automation_{target_date}.json"
+    return (
+        SWING_IMPROVEMENT_AUTOMATION_DIR
+        / f"swing_improvement_automation_{target_date}.json"
+    )
 
 
 def swing_pattern_lab_automation_report_path(target_date: str) -> Path:
-    return SWING_PATTERN_LAB_AUTOMATION_DIR / f"swing_pattern_lab_automation_{target_date}.json"
+    return (
+        SWING_PATTERN_LAB_AUTOMATION_DIR
+        / f"swing_pattern_lab_automation_{target_date}.json"
+    )
 
 
 def threshold_ev_report_path(target_date: str) -> Path:
@@ -1458,19 +1678,30 @@ def threshold_ev_report_path(target_date: str) -> Path:
 
 
 def lifecycle_decision_matrix_report_path(target_date: str) -> Path:
-    return LIFECYCLE_DECISION_MATRIX_DIR / f"lifecycle_decision_matrix_{target_date}.json"
+    return (
+        LIFECYCLE_DECISION_MATRIX_DIR / f"lifecycle_decision_matrix_{target_date}.json"
+    )
 
 
 def swing_strategy_discovery_ev_report_path(target_date: str) -> Path:
-    return SWING_STRATEGY_DISCOVERY_EV_DIR / f"swing_strategy_discovery_ev_{target_date}.json"
+    return (
+        SWING_STRATEGY_DISCOVERY_EV_DIR
+        / f"swing_strategy_discovery_ev_{target_date}.json"
+    )
 
 
 def swing_lifecycle_decision_matrix_report_path(target_date: str) -> Path:
-    return SWING_LIFECYCLE_DECISION_MATRIX_DIR / f"swing_lifecycle_decision_matrix_{target_date}.json"
+    return (
+        SWING_LIFECYCLE_DECISION_MATRIX_DIR
+        / f"swing_lifecycle_decision_matrix_{target_date}.json"
+    )
 
 
 def swing_lifecycle_bucket_discovery_report_path(target_date: str) -> Path:
-    return SWING_LIFECYCLE_BUCKET_DISCOVERY_DIR / f"swing_lifecycle_bucket_discovery_{target_date}.json"
+    return (
+        SWING_LIFECYCLE_BUCKET_DISCOVERY_DIR
+        / f"swing_lifecycle_bucket_discovery_{target_date}.json"
+    )
 
 
 def code_improvement_workorder_paths(target_date: str) -> tuple[Path, Path]:
@@ -1482,7 +1713,10 @@ def code_improvement_workorder_paths(target_date: str) -> tuple[Path, Path]:
 
 
 def pattern_lab_currentness_audit_report_path(target_date: str) -> Path:
-    return PATTERN_LAB_CURRENTNESS_AUDIT_DIR / f"pattern_lab_currentness_audit_{target_date}.json"
+    return (
+        PATTERN_LAB_CURRENTNESS_AUDIT_DIR
+        / f"pattern_lab_currentness_audit_{target_date}.json"
+    )
 
 
 def pattern_lab_ai_review_report_path(target_date: str) -> Path:
@@ -1498,15 +1732,27 @@ def producer_gap_discovery_report_path(target_date: str) -> Path:
 
 
 def stage_hook_workorder_discovery_report_path(target_date: str) -> Path:
-    return STAGE_HOOK_WORKORDER_DISCOVERY_DIR / f"stage_hook_workorder_discovery_{target_date}.json"
+    return (
+        STAGE_HOOK_WORKORDER_DISCOVERY_DIR
+        / f"stage_hook_workorder_discovery_{target_date}.json"
+    )
 
 
 def stage_hook_runtime_scaffold_report_path(target_date: str) -> Path:
-    return STAGE_HOOK_RUNTIME_SCAFFOLD_DIR / f"stage_hook_runtime_scaffold_{target_date}.json"
+    return (
+        STAGE_HOOK_RUNTIME_SCAFFOLD_DIR
+        / f"stage_hook_runtime_scaffold_{target_date}.json"
+    )
 
 
-def _implementation_marker_from_attribution(attribution: dict[str, Any]) -> tuple[str | None, dict[str, Any]]:
-    implementation_status = "implemented" if attribution.get("implementation_status") == "implemented" else None
+def _implementation_marker_from_attribution(
+    attribution: dict[str, Any],
+) -> tuple[str | None, dict[str, Any]]:
+    implementation_status = (
+        "implemented"
+        if attribution.get("implementation_status") == "implemented"
+        else None
+    )
     implementation_provenance = (
         attribution.get("implementation_provenance")
         if isinstance(attribution.get("implementation_provenance"), dict)
@@ -1555,7 +1801,9 @@ def _sanitize_producer_gap_order(order: dict[str, Any]) -> dict[str, Any]:
             and sanitized.get("actual_order_submitted") is False
             and sanitized.get("broker_order_forbidden") is True
         ):
-            sanitized["implementation_status"] = "implemented_source_quality_contract_available"
+            sanitized["implementation_status"] = (
+                "implemented_source_quality_contract_available"
+            )
             sanitized["implementation_provenance"] = {
                 "implementation_type": "producer_gap_ai_review_followup_source_only_provenance",
                 "audit_status": "pass",
@@ -1589,13 +1837,20 @@ def _terminal_non_implement_status(item: ClassifiedOrder) -> str | None:
             if isinstance(item.order.get("implementation_provenance"), dict)
             else {}
         )
-        if str(provenance.get("recommended_resolution") or "") == "mark_not_applicable_explicitly":
+        if (
+            str(provenance.get("recommended_resolution") or "")
+            == "mark_not_applicable_explicitly"
+        ):
             return "terminal_not_applicable_evidence"
         if not status:
             return "terminal_existing_family_evidence"
         return None
     if item.decision == "design_family_candidate":
-        if source_type in {"scalping_pattern_lab_automation", "swing_pattern_lab_automation", "swing_improvement_automation"}:
+        if source_type in {
+            "scalping_pattern_lab_automation",
+            "swing_pattern_lab_automation",
+            "swing_improvement_automation",
+        }:
             return "terminal_design_family_candidate"
         return None
     if item.decision == "defer_evidence":
@@ -1629,14 +1884,19 @@ def _root_cause_closure_status_for_order(order: dict[str, Any]) -> str | None:
         return hinted
     if bool(provenance.get("artifact_regeneration_required")):
         return "artifact_regeneration_required"
-    if implementation_status in {"repeat_unresolved_structural_blocker", "repeat_unresolved_escalated"}:
+    if implementation_status in {
+        "repeat_unresolved_structural_blocker",
+        "repeat_unresolved_escalated",
+    }:
         return "needs_followup_workorder"
     if implementation_status.startswith("open_"):
         return "needs_followup_workorder"
     if _is_implemented_status(implementation_status):
         if (
             str(provenance.get("blocker_resolution_status") or "").strip() == "open"
-            or bool(provenance.get("remaining_blocker_is_observation_or_policy_closure"))
+            or bool(
+                provenance.get("remaining_blocker_is_observation_or_policy_closure")
+            )
             or bool(provenance.get("unresolved_root_cause_present"))
         ):
             return "handoff_closed_root_cause_open"
@@ -1648,12 +1908,17 @@ def _root_cause_closure_status_for_order(order: dict[str, Any]) -> str | None:
         } or sample_status.startswith("waiting_"):
             return "implementation_done"
         return "root_cause_closed"
-    if bool(order.get("implementation_candidate")) or str(order.get("decision") or "").strip() == "implement_now":
+    if (
+        bool(order.get("implementation_candidate"))
+        or str(order.get("decision") or "").strip() == "implement_now"
+    ):
         return "needs_followup_workorder"
     return None
 
 
-def _root_cause_open_top(orders: list[dict[str, Any]], *, limit: int = 10) -> list[dict[str, Any]]:
+def _root_cause_open_top(
+    orders: list[dict[str, Any]], *, limit: int = 10
+) -> list[dict[str, Any]]:
     ranked: list[dict[str, Any]] = []
     for order in orders:
         status = str(order.get("root_cause_closure_status") or "").strip()
@@ -1687,7 +1952,11 @@ def _entry_submit_drought_implementation_marker(
     contract: dict[str, Any],
     lifecycle_report: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    required = contract.get("required_downstream") if isinstance(contract.get("required_downstream"), list) else []
+    required = (
+        contract.get("required_downstream")
+        if isinstance(contract.get("required_downstream"), list)
+        else []
+    )
     if not {
         "code_improvement_workorder",
         "lifecycle_decision_matrix.submit_bucket_attribution",
@@ -1696,7 +1965,11 @@ def _entry_submit_drought_implementation_marker(
         "postclose_verifier",
     }.issubset({str(item) for item in required}):
         return {}
-    classification = report.get("classification") if isinstance(report.get("classification"), dict) else {}
+    classification = (
+        report.get("classification")
+        if isinstance(report.get("classification"), dict)
+        else {}
+    )
     root_cause = (
         classification.get("submit_drought_root_cause")
         if isinstance(classification.get("submit_drought_root_cause"), dict)
@@ -1722,16 +1995,27 @@ def _entry_submit_drought_implementation_marker(
         if isinstance(observation_breakdown.get("axes"), dict)
         else {}
     )
-    refresh_attempted_count = _safe_int(quote_freshness.get("refresh_attempted_count"), 0)
+    refresh_attempted_count = _safe_int(
+        quote_freshness.get("refresh_attempted_count"), 0
+    )
     refresh_applied_count = _safe_int(quote_freshness.get("refresh_applied_count"), 0)
-    latency_pass_recovered_count = _safe_int(quote_freshness.get("latency_pass_recovered_count"), 0)
+    latency_pass_recovered_count = _safe_int(
+        quote_freshness.get("latency_pass_recovered_count"), 0
+    )
     current_primary = str(classification.get("primary") or "").strip()
     ldm_submit_summary = (
         ((lifecycle_report or {}).get("submit_bucket_attribution") or {}).get("summary")
-        if isinstance(((lifecycle_report or {}).get("submit_bucket_attribution") or {}).get("summary"), dict)
+        if isinstance(
+            ((lifecycle_report or {}).get("submit_bucket_attribution") or {}).get(
+                "summary"
+            ),
+            dict,
+        )
         else {}
     )
-    ldm_quote_freshness_present = bool(ldm_submit_summary.get("quote_freshness_attribution_present"))
+    ldm_quote_freshness_present = bool(
+        ldm_submit_summary.get("quote_freshness_attribution_present")
+    )
     quote_freshness_inconsistent = (
         (refresh_attempted_count <= 0 and latency_pass_recovered_count > 0)
         or (refresh_attempted_count <= 0 and refresh_applied_count > 0)
@@ -1795,12 +2079,19 @@ def _entry_submit_weak_contract_implementation_marker(
     taxonomy_leakage_labels: list[str] | None = None,
     lifecycle_report: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    required = contract.get("required_downstream") if isinstance(contract.get("required_downstream"), list) else []
-    if "lifecycle_decision_matrix.submit_bucket_attribution" not in {str(item) for item in required}:
+    required = (
+        contract.get("required_downstream")
+        if isinstance(contract.get("required_downstream"), list)
+        else []
+    )
+    if "lifecycle_decision_matrix.submit_bucket_attribution" not in {
+        str(item) for item in required
+    }:
         return {}
     submit_attribution = (
         lifecycle_report.get("submit_bucket_attribution")
-        if isinstance(lifecycle_report, dict) and isinstance(lifecycle_report.get("submit_bucket_attribution"), dict)
+        if isinstance(lifecycle_report, dict)
+        and isinstance(lifecycle_report.get("submit_bucket_attribution"), dict)
         else {}
     )
     submit_summary = (
@@ -1819,9 +2110,7 @@ def _entry_submit_weak_contract_implementation_marker(
         if isinstance(item, dict)
     }
     unresolved_taxonomy_leakage = [
-        str(item)
-        for item in (taxonomy_leakage_labels or [])
-        if str(item).strip()
+        str(item) for item in (taxonomy_leakage_labels or []) if str(item).strip()
     ]
     if (
         submit_attribution
@@ -1829,7 +2118,10 @@ def _entry_submit_weak_contract_implementation_marker(
         and _safe_int(submit_summary.get("contract_gap_count"), 0) == 0
         and not bool(submit_summary.get("post_submit_provenance_join_gap"))
         and gap_type not in unresolved_gap_types
-        and (gap_type != "source_taxonomy_contract_gap" or not unresolved_taxonomy_leakage)
+        and (
+            gap_type != "source_taxonomy_contract_gap"
+            or not unresolved_taxonomy_leakage
+        )
     ):
         return {
             "implementation_status": "implemented_submit_contract_verified",
@@ -1850,7 +2142,9 @@ def _entry_submit_weak_contract_implementation_marker(
                 "weak_contract_matches": contract.get("weak_contract_matches") or [],
                 "sample_status": "ldm_submit_contract_verified",
                 "submit_rows": _safe_int(submit_summary.get("submit_rows"), 0),
-                "real_submitted_row_count": _safe_int(submit_summary.get("real_submitted_row_count"), 0),
+                "real_submitted_row_count": _safe_int(
+                    submit_summary.get("real_submitted_row_count"), 0
+                ),
                 "missing_broker_order_key_count": _safe_int(
                     submit_summary.get("missing_broker_order_key_count"),
                     0,
@@ -1863,7 +2157,11 @@ def _entry_submit_weak_contract_implementation_marker(
                 "allowed_runtime_apply": contract.get("allowed_runtime_apply"),
             },
         }
-    stage_unique = contract.get("stage_unique") if isinstance(contract.get("stage_unique"), dict) else {}
+    stage_unique = (
+        contract.get("stage_unique")
+        if isinstance(contract.get("stage_unique"), dict)
+        else {}
+    )
     submitted_unique = _safe_int(stage_unique.get("order_bundle_submitted"), 0)
     if submitted_unique > 0 and gap_type == "source_taxonomy_contract_gap":
         return {
@@ -2011,7 +2309,11 @@ def _sanitize_pattern_lab_ai_review_order(
 def _stage_hook_scaffold_by_name(report: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return {
         str(item.get("hook_name")): item
-        for item in (report.get("implemented_hooks") if isinstance(report.get("implemented_hooks"), list) else [])
+        for item in (
+            report.get("implemented_hooks")
+            if isinstance(report.get("implemented_hooks"), list)
+            else []
+        )
         if isinstance(item, dict)
         and item.get("hook_name")
         and item.get("implementation_status") == "implemented"
@@ -2020,9 +2322,15 @@ def _stage_hook_scaffold_by_name(report: dict[str, Any]) -> dict[str, dict[str, 
     }
 
 
-def _sanitize_stage_hook_order(order: dict[str, Any], scaffold_by_name: dict[str, dict[str, Any]]) -> dict[str, Any]:
+def _sanitize_stage_hook_order(
+    order: dict[str, Any], scaffold_by_name: dict[str, dict[str, Any]]
+) -> dict[str, Any]:
     sanitized = {**order, "source_report_type": "stage_hook_workorder_discovery"}
-    contract = sanitized.get("stage_hook_candidate_contract") if isinstance(sanitized.get("stage_hook_candidate_contract"), dict) else {}
+    contract = (
+        sanitized.get("stage_hook_candidate_contract")
+        if isinstance(sanitized.get("stage_hook_candidate_contract"), dict)
+        else {}
+    )
     hook_name = str(contract.get("hook_name") or "")
     scaffold = scaffold_by_name.get(hook_name)
     if scaffold:
@@ -2033,7 +2341,9 @@ def _sanitize_stage_hook_order(order: dict[str, Any], scaffold_by_name: dict[str
             "initial_runtime_state": scaffold.get("initial_runtime_state"),
             "runtime_effect": scaffold.get("runtime_effect"),
             "allowed_runtime_apply": scaffold.get("allowed_runtime_apply"),
-            "requires_separate_runtime_apply_candidate": scaffold.get("requires_separate_runtime_apply_candidate"),
+            "requires_separate_runtime_apply_candidate": scaffold.get(
+                "requires_separate_runtime_apply_candidate"
+            ),
             "implementation_files": scaffold.get("implementation_files") or [],
         }
     return sanitized
@@ -2044,7 +2354,9 @@ def _serialize_classified_order(item: ClassifiedOrder) -> dict[str, Any]:
         item.decision == "attach_existing_family"
         and str(item.order.get("target_subsystem") or "") == "lifecycle_decision_matrix"
     )
-    implementation_status = _terminal_non_implement_status(item) or item.order.get("implementation_status")
+    implementation_status = _terminal_non_implement_status(item) or item.order.get(
+        "implementation_status"
+    )
     serialized = {
         "order_id": item.order.get("order_id"),
         "title": item.order.get("title"),
@@ -2057,9 +2369,13 @@ def _serialize_classified_order(item: ClassifiedOrder) -> dict[str, Any]:
         "decision": item.decision,
         "decision_reason": item.reason,
         "derived_review_category": (
-            "already_implemented_source_handoff" if ldm_existing_source_handoff else item.order.get("derived_review_category")
+            "already_implemented_source_handoff"
+            if ldm_existing_source_handoff
+            else item.order.get("derived_review_category")
         ),
-        "implementation_candidate": False if ldm_existing_source_handoff else item.decision == "implement_now",
+        "implementation_candidate": (
+            False if ldm_existing_source_handoff else item.decision == "implement_now"
+        ),
         "route": item.route,
         "mapped_family": item.mapped_family,
         "confidence": item.confidence,
@@ -2082,37 +2398,61 @@ def _serialize_classified_order(item: ClassifiedOrder) -> dict[str, Any]:
         "data_quality_effect": bool(item.order.get("data_quality_effect")),
         "tuning_axis_effect": bool(item.order.get("tuning_axis_effect")),
         "implementation_status": implementation_status,
-        "original_implementation_status": item.order.get("original_implementation_status"),
+        "original_implementation_status": item.order.get(
+            "original_implementation_status"
+        ),
         "implementation_checks": item.order.get("implementation_checks") or [],
         "implementation_id": item.order.get("implementation_id"),
         "explicit_redecision_required": item.order.get("explicit_redecision_required"),
-        "conflict_resolution_acceptance_test": item.order.get("conflict_resolution_acceptance_test"),
+        "conflict_resolution_acceptance_test": item.order.get(
+            "conflict_resolution_acceptance_test"
+        ),
         "implementation_provenance": item.order.get("implementation_provenance"),
         "repeat_unresolved_escalation": item.order.get("repeat_unresolved_escalation"),
-        "longstanding_non_implement_review": item.order.get("longstanding_non_implement_review"),
-        "longstanding_non_implement_action": item.order.get("longstanding_non_implement_action"),
-        "structural_blocker_escalation": item.order.get("structural_blocker_escalation"),
+        "longstanding_non_implement_review": item.order.get(
+            "longstanding_non_implement_review"
+        ),
+        "longstanding_non_implement_action": item.order.get(
+            "longstanding_non_implement_action"
+        ),
+        "structural_blocker_escalation": item.order.get(
+            "structural_blocker_escalation"
+        ),
         "parity_contract": item.order.get("parity_contract"),
         "source_bucket_id": item.order.get("source_bucket_id"),
         "conversion_candidate_id": item.order.get("conversion_candidate_id"),
         "conversion_impact_rank": item.order.get("conversion_impact_rank"),
         "remaining_gap_count_before": item.order.get("remaining_gap_count_before"),
-        "remaining_gap_count_after_expected": item.order.get("remaining_gap_count_after_expected"),
+        "remaining_gap_count_after_expected": item.order.get(
+            "remaining_gap_count_after_expected"
+        ),
         "blocks_bounded_real_canary": item.order.get("blocks_bounded_real_canary"),
         "acceptance_test": item.order.get("acceptance_test"),
-        "runtime_hook_candidate_contract": item.order.get("runtime_hook_candidate_contract"),
-        "stage_hook_candidate_contract": item.order.get("stage_hook_candidate_contract"),
+        "runtime_hook_candidate_contract": item.order.get(
+            "runtime_hook_candidate_contract"
+        ),
+        "stage_hook_candidate_contract": item.order.get(
+            "stage_hook_candidate_contract"
+        ),
         "initial_runtime_state": item.order.get("initial_runtime_state"),
-        "requires_separate_runtime_apply_candidate": item.order.get("requires_separate_runtime_apply_candidate"),
-        "raw_row_exclusion_context_classification": item.order.get("raw_row_exclusion_context_classification"),
+        "requires_separate_runtime_apply_candidate": item.order.get(
+            "requires_separate_runtime_apply_candidate"
+        ),
+        "raw_row_exclusion_context_classification": item.order.get(
+            "raw_row_exclusion_context_classification"
+        ),
         "raw_row_exclusion_context": item.order.get("raw_row_exclusion_context"),
         "terminal_disposition": item.order.get("terminal_disposition"),
     }
-    serialized["root_cause_closure_status"] = _root_cause_closure_status_for_order(serialized)
+    serialized["root_cause_closure_status"] = _root_cause_closure_status_for_order(
+        serialized
+    )
     return serialized
 
 
-def _finding_maps(report: dict[str, Any]) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+def _finding_maps(
+    report: dict[str, Any],
+) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
     by_order_id: dict[str, dict[str, Any]] = {}
     by_title_slug: dict[str, dict[str, Any]] = {}
     for section in ("consensus_findings", "solo_findings"):
@@ -2158,30 +2498,40 @@ _IMPLEMENT_ACCEPTANCE_PREFIXES = (
 def _normalized_acceptance_text(text: str) -> str:
     normalized = str(text or "").strip()
     if normalized.startswith("PYTHONPATH=. "):
-        normalized = normalized[len("PYTHONPATH=. "):]
+        normalized = normalized[len("PYTHONPATH=. ") :]
     if normalized.startswith(".venv/bin/python "):
-        normalized = "python " + normalized[len(".venv/bin/python "):]
+        normalized = "python " + normalized[len(".venv/bin/python ") :]
     if normalized.startswith("./.venv/bin/python "):
-        normalized = "python " + normalized[len("./.venv/bin/python "):]
+        normalized = "python " + normalized[len("./.venv/bin/python ") :]
     if normalized.startswith(".venv/bin/pytest "):
-        normalized = "pytest " + normalized[len(".venv/bin/pytest "):]
+        normalized = "pytest " + normalized[len(".venv/bin/pytest ") :]
     if normalized.startswith("./.venv/bin/pytest "):
-        normalized = "pytest " + normalized[len("./.venv/bin/pytest "):]
+        normalized = "pytest " + normalized[len("./.venv/bin/pytest ") :]
     if normalized.startswith("venv/Scripts/python.exe "):
-        normalized = "python " + normalized[len("venv/Scripts/python.exe "):]
+        normalized = "python " + normalized[len("venv/Scripts/python.exe ") :]
     return normalized
 
 
 def _has_runnable_acceptance(order: dict[str, Any]) -> bool:
     for raw in order.get("acceptance_tests") or []:
         normalized = _normalized_acceptance_text(str(raw))
-        if not any(normalized.startswith(prefix) for prefix in _IMPLEMENT_ACCEPTANCE_PREFIXES):
+        if not any(
+            normalized.startswith(prefix) for prefix in _IMPLEMENT_ACCEPTANCE_PREFIXES
+        ):
             continue
-        if normalized.startswith("pytest ") or normalized.startswith("python -m pytest "):
+        if normalized.startswith("pytest ") or normalized.startswith(
+            "python -m pytest "
+        ):
             parts = normalized.split()
-            meaningful = [part for part in parts if part not in {"python", "-m", "pytest"} and not part.startswith("-")]
+            meaningful = [
+                part
+                for part in parts
+                if part not in {"python", "-m", "pytest"} and not part.startswith("-")
+            ]
             if not any(
-                part.startswith(("src/tests/", "tests/")) or part.endswith("_test.py") or part.startswith("src/tests/test_")
+                part.startswith(("src/tests/", "tests/"))
+                or part.endswith("_test.py")
+                or part.startswith("src/tests/test_")
                 for part in meaningful
             ):
                 continue
@@ -2197,23 +2547,44 @@ def _implement_now_rejudge(order: dict[str, Any]) -> tuple[str, str] | None:
         and str(order.get("improvement_type") or "") == "automation_handoff_gap"
     ):
         return None
-    issues = {str(item).strip() for item in (order.get("adm_issue_types") or []) if str(item).strip()}
-    if issues and issues.issubset({"joined_sample_below_sample_floor", "prompt_context_not_loaded"}):
+    issues = {
+        str(item).strip()
+        for item in (order.get("adm_issue_types") or [])
+        if str(item).strip()
+    }
+    if issues and issues.issubset(
+        {"joined_sample_below_sample_floor", "prompt_context_not_loaded"}
+    ):
         return (
             "defer_evidence",
             "Entry ADM warning is waiting on clean sample/runtime observation, not a code implementation gap",
         )
-    provenance = order.get("implementation_provenance") if isinstance(order.get("implementation_provenance"), dict) else {}
-    if str(provenance.get("recommended_resolution") or "") == "mark_not_applicable_explicitly":
+    provenance = (
+        order.get("implementation_provenance")
+        if isinstance(order.get("implementation_provenance"), dict)
+        else {}
+    )
+    if (
+        str(provenance.get("recommended_resolution") or "")
+        == "mark_not_applicable_explicitly"
+    ):
         return (
             "attach_existing_family",
             "source coverage is present and the remaining bucket is an explicit not_applicable evidence classification",
         )
     files = order.get("files_likely_touched")
-    file_count = len([item for item in files if str(item).strip()]) if isinstance(files, list) else 0
+    file_count = (
+        len([item for item in files if str(item).strip()])
+        if isinstance(files, list)
+        else 0
+    )
     source_type = str(order.get("source_report_type") or "")
     if (
-        source_type in {"lifecycle_decision_matrix_holding_bucket_attribution", "lifecycle_decision_matrix_exit_bucket_attribution"}
+        source_type
+        in {
+            "lifecycle_decision_matrix_holding_bucket_attribution",
+            "lifecycle_decision_matrix_exit_bucket_attribution",
+        }
         and file_count <= 0
         and not _has_runnable_acceptance(order)
     ):
@@ -2221,7 +2592,11 @@ def _implement_now_rejudge(order: dict[str, Any]) -> tuple[str, str] | None:
             "defer_evidence",
             "not code-actionable in this cycle: no files_likely_touched and no runnable acceptance tests",
         )
-    tests = [str(item).strip() for item in (order.get("acceptance_tests") or []) if str(item).strip()]
+    tests = [
+        str(item).strip()
+        for item in (order.get("acceptance_tests") or [])
+        if str(item).strip()
+    ]
     if (
         tests
         and not _has_runnable_acceptance(order)
@@ -2231,7 +2606,11 @@ def _implement_now_rejudge(order: dict[str, Any]) -> tuple[str, str] | None:
             "defer_evidence",
             "not code-actionable in this cycle: acceptance contract is review text only, not an executable validation",
         )
-    if source_type == "pattern_lab_ai_review" and file_count <= 0 and not _has_runnable_acceptance(order):
+    if (
+        source_type == "pattern_lab_ai_review"
+        and file_count <= 0
+        and not _has_runnable_acceptance(order)
+    ):
         return (
             "defer_evidence",
             "not code-actionable in this cycle: no files_likely_touched and no runnable acceptance tests",
@@ -2251,10 +2630,19 @@ def _classify_order(
     title = str(order.get("title") or "").strip()
     subsystem = str(order.get("target_subsystem") or "").strip()
     text = f"{order_id} {title} {subsystem}"
-    finding = finding_by_order_id.get(order_id) or finding_by_title_slug.get(_slug(title)) or {}
+    finding = (
+        finding_by_order_id.get(order_id)
+        or finding_by_title_slug.get(_slug(title))
+        or {}
+    )
     route = str(finding.get("route") or order.get("route") or "").strip() or None
-    mapped_family = str(finding.get("mapped_family") or order.get("mapped_family") or "").strip() or None
-    confidence = str(finding.get("confidence") or order.get("confidence") or "").strip() or None
+    mapped_family = (
+        str(finding.get("mapped_family") or order.get("mapped_family") or "").strip()
+        or None
+    )
+    confidence = (
+        str(finding.get("confidence") or order.get("confidence") or "").strip() or None
+    )
     closed_family = closed_instrumentation_order_families.get(order_id)
     if closed_family:
         return ClassifiedOrder(
@@ -2285,8 +2673,14 @@ def _classify_order(
             order=order,
             decision=decision,
             reason=reason,
-            mapped_family=mapped_family or str(order.get("threshold_family") or "").strip() or None,
-            route="existing_family" if decision == "attach_existing_family" else route or "evidence_wait",
+            mapped_family=mapped_family
+            or str(order.get("threshold_family") or "").strip()
+            or None,
+            route=(
+                "existing_family"
+                if decision == "attach_existing_family"
+                else route or "evidence_wait"
+            ),
             confidence=confidence,
             decision_source="implement_now_rejudge",
             automation_reentry=(
@@ -2315,7 +2709,10 @@ def _classify_order(
             ),
         )
 
-    if _is_implemented_status(order.get("implementation_status")) and order.get("source_report_type") != "codebase_performance_workorder":
+    if (
+        _is_implemented_status(order.get("implementation_status"))
+        and order.get("source_report_type") != "codebase_performance_workorder"
+    ):
         status = str(order.get("implementation_status") or "").strip()
         return ClassifiedOrder(
             order=order,
@@ -2324,7 +2721,9 @@ def _classify_order(
                 f"instrumentation/report/provenance implementation status is {status}; keep the order as "
                 "existing-family source evidence instead of re-implementing"
             ),
-            mapped_family=mapped_family or str(order.get("threshold_family") or "").strip() or None,
+            mapped_family=mapped_family
+            or str(order.get("threshold_family") or "").strip()
+            or None,
             route="existing_family",
             confidence=confidence,
             automation_reentry=(
@@ -2353,12 +2752,17 @@ def _classify_order(
                     "report-only performance implementation is already present in code; keep the order as provenance "
                     "and validate through regenerated reports/tests instead of re-implementing"
                 ),
-                mapped_family=mapped_family or "ops_performance_report_only_implemented",
+                mapped_family=mapped_family
+                or "ops_performance_report_only_implemented",
                 route=route or "existing_report_only_implementation",
                 confidence=confidence,
                 automation_reentry="Next postclose codebase performance source report must keep implementation_status=implemented and parity tests green.",
             )
-        state = str(order.get("performance_candidate_state") or order.get("candidate_state") or "").strip()
+        state = str(
+            order.get("performance_candidate_state")
+            or order.get("candidate_state")
+            or ""
+        ).strip()
         if state == "accepted":
             return ClassifiedOrder(
                 order=order,
@@ -2373,7 +2777,10 @@ def _classify_order(
             return ClassifiedOrder(
                 order=order,
                 decision="defer_evidence",
-                reason=str(order.get("defer_reason") or "performance order requires manual review before implementation"),
+                reason=str(
+                    order.get("defer_reason")
+                    or "performance order requires manual review before implementation"
+                ),
                 mapped_family=mapped_family,
                 route=route or "performance_optimization_order",
                 confidence=confidence,
@@ -2382,14 +2789,21 @@ def _classify_order(
         return ClassifiedOrder(
             order=order,
             decision="reject",
-            reason=str(order.get("defer_reason") or "performance order is outside current no-logic-change scope"),
+            reason=str(
+                order.get("defer_reason")
+                or "performance order is outside current no-logic-change scope"
+            ),
             mapped_family=mapped_family,
             route=route or "performance_optimization_order",
             confidence=confidence,
             automation_reentry="Do not implement from this workorder source.",
         )
 
-    if order.get("source_report_type") in {"pattern_lab_currentness_audit", "pattern_lab_ai_review", "tuning_observability_summary"}:
+    if order.get("source_report_type") in {
+        "pattern_lab_currentness_audit",
+        "pattern_lab_ai_review",
+        "tuning_observability_summary",
+    }:
         if (
             order.get("source_report_type") == "pattern_lab_ai_review"
             and str(order.get("improvement_type") or "") == "ai_review_followup"
@@ -2489,9 +2903,12 @@ def _classify_order(
             ),
         )
 
-    if (
-        order.get("source_report_type") in ("scalping_pattern_lab_automation", "swing_pattern_lab_automation")
-        and (route in ("auto_family_candidate", "design_family_candidate") or order_id in auto_family_order_ids)
+    if order.get("source_report_type") in (
+        "scalping_pattern_lab_automation",
+        "swing_pattern_lab_automation",
+    ) and (
+        route in ("auto_family_candidate", "design_family_candidate")
+        or order_id in auto_family_order_ids
     ):
         return ClassifiedOrder(
             order=order,
@@ -2509,7 +2926,10 @@ def _classify_order(
             ),
         )
 
-    if order.get("source_report_type") == "lifecycle_decision_matrix_scale_in_bucket_attribution":
+    if (
+        order.get("source_report_type")
+        == "lifecycle_decision_matrix_scale_in_bucket_attribution"
+    ):
         return ClassifiedOrder(
             order=order,
             decision="implement_now",
@@ -2526,7 +2946,10 @@ def _classify_order(
             ),
         )
 
-    if order.get("source_report_type") == "lifecycle_decision_matrix_lifecycle_flow_bucket_attribution":
+    if (
+        order.get("source_report_type")
+        == "lifecycle_decision_matrix_lifecycle_flow_bucket_attribution"
+    ):
         return ClassifiedOrder(
             order=order,
             decision="implement_now",
@@ -2544,7 +2967,10 @@ def _classify_order(
             ),
         )
 
-    if order.get("source_report_type") == "lifecycle_bucket_discovery_source_dimension_rollup":
+    if (
+        order.get("source_report_type")
+        == "lifecycle_bucket_discovery_source_dimension_rollup"
+    ):
         return ClassifiedOrder(
             order=order,
             decision="attach_existing_family",
@@ -2563,7 +2989,9 @@ def _classify_order(
 
     if order.get("source_report_type") == "lifecycle_bucket_discovery_quiet_gap_rollup":
         is_conflict_order = order.get("route") == "parent_conflict_exclusion_review"
-        conflict_ready = is_conflict_order and bool(order.get("implementation_candidate"))
+        conflict_ready = is_conflict_order and bool(
+            order.get("implementation_candidate")
+        )
         if conflict_ready:
             return ClassifiedOrder(
                 order=order,
@@ -2649,7 +3077,10 @@ def _classify_order(
             ),
         )
 
-    if order.get("improvement_type") == "source_quality_raw_row_exclusion_limit_up_locked_context":
+    if (
+        order.get("improvement_type")
+        == "source_quality_raw_row_exclusion_limit_up_locked_context"
+    ):
         return ClassifiedOrder(
             order=order,
             decision="attach_existing_family",
@@ -2666,7 +3097,10 @@ def _classify_order(
             ),
         )
 
-    if order.get("improvement_type") == "source_quality_raw_row_exclusion_market_halt_context":
+    if (
+        order.get("improvement_type")
+        == "source_quality_raw_row_exclusion_market_halt_context"
+    ):
         return ClassifiedOrder(
             order=order,
             decision="attach_existing_family",
@@ -2700,7 +3134,6 @@ def _classify_order(
                 "unknown_token_stage_count should fall or remaining unknowns must carry explicit reviewed provenance."
             ),
         )
-
 
     if order.get("source_report_type") == "lifecycle_bucket_discovery":
         return ClassifiedOrder(
@@ -2798,10 +3231,14 @@ def _sort_classified(items: list[ClassifiedOrder]) -> list[ClassifiedOrder]:
 
 def _holding_exit_counterfactual_contract_status(target_date: str) -> dict[str, Any]:
     report = _load_json(
-        HOLDING_EXIT_DECISION_MATRIX_DIR / f"holding_exit_decision_matrix_{target_date}.json"
+        HOLDING_EXIT_DECISION_MATRIX_DIR
+        / f"holding_exit_decision_matrix_{target_date}.json"
     )
     if not report:
-        return {"implemented": False, "reason": "missing_holding_exit_decision_matrix_report"}
+        return {
+            "implemented": False,
+            "reason": "missing_holding_exit_decision_matrix_report",
+        }
     summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
     proxy = (
         report.get("counterfactual_proxy_summary")
@@ -2815,7 +3252,9 @@ def _holding_exit_counterfactual_contract_status(target_date: str) -> dict[str, 
         "pyramid_wait",
     }
     per_action_samples = (
-        proxy.get("per_action_samples") if isinstance(proxy.get("per_action_samples"), dict) else {}
+        proxy.get("per_action_samples")
+        if isinstance(proxy.get("per_action_samples"), dict)
+        else {}
     )
     actions_present = {str(value) for value in proxy.get("actions_present") or []}
     has_required_actions = required_actions.issubset(actions_present) and all(
@@ -2831,17 +3270,25 @@ def _holding_exit_counterfactual_contract_status(target_date: str) -> dict[str, 
     )
     return {
         "implemented": implemented,
-        "reason": "implemented_contract_available" if implemented else "contract_incomplete",
-        "report_path": str(HOLDING_EXIT_DECISION_MATRIX_DIR / f"holding_exit_decision_matrix_{target_date}.json"),
+        "reason": (
+            "implemented_contract_available" if implemented else "contract_incomplete"
+        ),
+        "report_path": str(
+            HOLDING_EXIT_DECISION_MATRIX_DIR
+            / f"holding_exit_decision_matrix_{target_date}.json"
+        ),
     }
 
 
-def _swing_ai_structured_output_eval_contract_status(source_report: dict[str, Any] | None = None) -> dict[str, Any]:
+def _swing_ai_structured_output_eval_contract_status(
+    source_report: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     response_contract = swing_ai_structured_output_eval_contract()
     prompt_contract = swing_ai_structured_output_eval_prompt_contract()
     eval_report = (
         source_report.get("swing_ai_structured_output_eval")
-        if isinstance(source_report, dict) and isinstance(source_report.get("swing_ai_structured_output_eval"), dict)
+        if isinstance(source_report, dict)
+        and isinstance(source_report.get("swing_ai_structured_output_eval"), dict)
         else {}
     )
     provenance = (
@@ -2851,7 +3298,11 @@ def _swing_ai_structured_output_eval_contract_status(source_report: dict[str, An
     )
     response_variants = {
         str(item.get("variant_id") or "")
-        for item in (provenance.get("prompt_variants") if isinstance(provenance.get("prompt_variants"), list) else [])
+        for item in (
+            provenance.get("prompt_variants")
+            if isinstance(provenance.get("prompt_variants"), list)
+            else []
+        )
         if isinstance(item, dict)
     }
     prompt_variants = {
@@ -2874,8 +3325,10 @@ def _swing_ai_structured_output_eval_contract_status(source_report: dict[str, An
         and eval_report.get("allowed_runtime_apply") is False
         and eval_report.get("actual_order_submitted") is False
         and eval_report.get("broker_order_forbidden") is True
-        and str(eval_report.get("report_contract") or "") == "swing_ai_structured_output_eval_report_v1"
-        and str(eval_report.get("source_contract") or "") == str(provenance.get("source_contract") or "")
+        and str(eval_report.get("report_contract") or "")
+        == "swing_ai_structured_output_eval_report_v1"
+        and str(eval_report.get("source_contract") or "")
+        == str(provenance.get("source_contract") or "")
         and sample_status in {"ready", "waiting_replay_sample"}
     )
     implemented = (
@@ -2891,39 +3344,52 @@ def _swing_ai_structured_output_eval_contract_status(source_report: dict[str, An
     implementation_status = (
         "implemented_source_quality_contract_waiting_sample"
         if implemented and sample_status == "waiting_replay_sample"
-        else "implemented_source_quality_contract_available"
-        if implemented
-        else "terminal_design_family_candidate"
+        else (
+            "implemented_source_quality_contract_available"
+            if implemented
+            else "terminal_design_family_candidate"
+        )
     )
     root_cause_hint = (
         "implementation_done"
         if sample_status == "waiting_replay_sample"
-        else "root_cause_closed"
-        if implemented
-        else "needs_followup_workorder"
+        else "root_cause_closed" if implemented else "needs_followup_workorder"
     )
     return {
         "implemented": implemented,
-        "reason": "implemented_contract_available" if implemented else "contract_incomplete",
+        "reason": (
+            "implemented_contract_available" if implemented else "contract_incomplete"
+        ),
         "implementation_status": implementation_status,
         "implementation_provenance": {
             **provenance,
             "report_contract": eval_report.get("report_contract"),
             "sample_status": sample_status or None,
             "schema_valid_rate": eval_report.get("schema_valid_rate"),
-            "decision_disagreement_rate_pct": eval_report.get("decision_disagreement_rate_pct"),
+            "decision_disagreement_rate_pct": eval_report.get(
+                "decision_disagreement_rate_pct"
+            ),
             "p50_latency_ms": eval_report.get("p50_latency_ms"),
             "estimated_total_cost_krw": eval_report.get("estimated_total_cost_krw"),
             "root_cause_closure_status_hint": root_cause_hint,
-            "remaining_blocker_is_observation_or_policy_closure": sample_status == "waiting_replay_sample",
+            "remaining_blocker_is_observation_or_policy_closure": sample_status
+            == "waiting_replay_sample",
         },
         "prompt_contract": prompt_contract,
     }
 
 
-def _threshold_ev_followup_orders(ev_report: dict[str, Any], *, target_date: str) -> list[dict[str, Any]]:
-    outcome = ev_report.get("calibration_outcome") if isinstance(ev_report.get("calibration_outcome"), dict) else {}
-    decisions = outcome.get("decisions") if isinstance(outcome.get("decisions"), list) else []
+def _threshold_ev_followup_orders(
+    ev_report: dict[str, Any], *, target_date: str
+) -> list[dict[str, Any]]:
+    outcome = (
+        ev_report.get("calibration_outcome")
+        if isinstance(ev_report.get("calibration_outcome"), dict)
+        else {}
+    )
+    decisions = (
+        outcome.get("decisions") if isinstance(outcome.get("decisions"), list) else []
+    )
     orders: list[dict[str, Any]] = []
     for item in decisions:
         if not isinstance(item, dict):
@@ -2932,25 +3398,37 @@ def _threshold_ev_followup_orders(ev_report: dict[str, Any], *, target_date: str
         state = str(item.get("calibration_state") or "").strip()
         if family != "holding_exit_decision_matrix_advisory" or state != "hold_no_edge":
             continue
-        source_metrics = item.get("source_metrics") if isinstance(item.get("source_metrics"), dict) else {}
+        source_metrics = (
+            item.get("source_metrics")
+            if isinstance(item.get("source_metrics"), dict)
+            else {}
+        )
         if source_metrics.get("instrumentation_status") == "implemented":
             continue
         contract_status = _holding_exit_counterfactual_contract_status(target_date)
         if contract_status.get("implemented") is True:
             continue
-        counterfactual_gap_count = _safe_int(source_metrics.get("counterfactual_gap_count"), 0)
-        proxy_sample_snapshots = _safe_int(source_metrics.get("eligible_but_not_chosen_sample_snapshots"), 0)
+        counterfactual_gap_count = _safe_int(
+            source_metrics.get("counterfactual_gap_count"), 0
+        )
+        proxy_sample_snapshots = _safe_int(
+            source_metrics.get("eligible_but_not_chosen_sample_snapshots"), 0
+        )
         proxy_joined_candidates = _safe_int(
             source_metrics.get("eligible_but_not_chosen_post_sell_joined_candidates"),
             0,
         )
         proxy_missing_actions = (
             list(source_metrics.get("counterfactual_proxy_missing_actions") or [])
-            if isinstance(source_metrics.get("counterfactual_proxy_missing_actions"), list)
+            if isinstance(
+                source_metrics.get("counterfactual_proxy_missing_actions"), list
+            )
             else []
         )
         instrumentation_gap = not source_metrics or (
-            counterfactual_gap_count > 0 or proxy_sample_snapshots <= 0 or proxy_joined_candidates <= 0
+            counterfactual_gap_count > 0
+            or proxy_sample_snapshots <= 0
+            or proxy_joined_candidates <= 0
         )
         if not instrumentation_gap:
             continue
@@ -2968,7 +3446,9 @@ def _threshold_ev_followup_orders(ev_report: dict[str, Any], *, target_date: str
                 ]
             )
             if proxy_missing_actions:
-                evidence.append(f"proxy_missing_actions={','.join(str(value) for value in proxy_missing_actions)}")
+                evidence.append(
+                    f"proxy_missing_actions={','.join(str(value) for value in proxy_missing_actions)}"
+                )
         orders.append(
             {
                 "order_id": "order_holding_exit_decision_matrix_edge_counterfactual",
@@ -3010,7 +3490,11 @@ def _entry_adm_followup_orders(ev_report: dict[str, Any]) -> list[dict[str, Any]
         return []
     joined = _safe_int(adm.get("joined_sample"), 0)
     floor = _safe_int(adm.get("sample_floor"), 20)
-    missing_actions = adm.get("missing_actions") if isinstance(adm.get("missing_actions"), list) else []
+    missing_actions = (
+        adm.get("missing_actions")
+        if isinstance(adm.get("missing_actions"), list)
+        else []
+    )
     prompt_applied_count = _safe_int(adm.get("prompt_applied_count"), 0)
     issues: list[str] = []
     if joined < floor:
@@ -3023,7 +3507,9 @@ def _entry_adm_followup_orders(ev_report: dict[str, Any]) -> list[dict[str, Any]
         issues.append("source_quality_gap")
     if not issues:
         return []
-    sources = ev_report.get("sources") if isinstance(ev_report.get("sources"), dict) else {}
+    sources = (
+        ev_report.get("sources") if isinstance(ev_report.get("sources"), dict) else {}
+    )
     evidence = [
         f"status={adm.get('status')}",
         f"joined_sample={joined}",
@@ -3047,8 +3533,12 @@ def _entry_adm_followup_orders(ev_report: dict[str, Any]) -> list[dict[str, Any]
             ]
         )
     if missing_actions:
-        evidence.append("missing_actions=" + ",".join(str(value) for value in missing_actions))
-    source_path = sources.get("scalp_entry_action_decision_matrix") or adm.get("artifact")
+        evidence.append(
+            "missing_actions=" + ",".join(str(value) for value in missing_actions)
+        )
+    source_path = sources.get("scalp_entry_action_decision_matrix") or adm.get(
+        "artifact"
+    )
     return [
         {
             "order_id": "order_scalp_entry_adm_daily_tuning_coverage",
@@ -3083,13 +3573,19 @@ def _entry_adm_followup_orders(ev_report: dict[str, Any]) -> list[dict[str, Any]
     ]
 
 
-def _lifecycle_ai_context_followup_orders(ev_report: dict[str, Any]) -> list[dict[str, Any]]:
+def _lifecycle_ai_context_followup_orders(
+    ev_report: dict[str, Any],
+) -> list[dict[str, Any]]:
     attribution = (
         ev_report.get("lifecycle_ai_context_attribution")
         if isinstance(ev_report.get("lifecycle_ai_context_attribution"), dict)
         else {}
     )
-    context = ev_report.get("lifecycle_ai_context") if isinstance(ev_report.get("lifecycle_ai_context"), dict) else {}
+    context = (
+        ev_report.get("lifecycle_ai_context")
+        if isinstance(ev_report.get("lifecycle_ai_context"), dict)
+        else {}
+    )
     if not attribution and not context:
         return []
     applied = _safe_int(attribution.get("context_applied_count"), 0)
@@ -3103,7 +3599,9 @@ def _lifecycle_ai_context_followup_orders(ev_report: dict[str, Any]) -> list[dic
         issues.append("runtime_context_provenance_missing")
     if not issues:
         return []
-    sources = ev_report.get("sources") if isinstance(ev_report.get("sources"), dict) else {}
+    sources = (
+        ev_report.get("sources") if isinstance(ev_report.get("sources"), dict) else {}
+    )
     implementation_status = (
         "implemented"
         if attribution.get("implementation_status") == "implemented"
@@ -3128,7 +3626,8 @@ def _lifecycle_ai_context_followup_orders(ev_report: dict[str, Any]) -> list[dic
             "allowed_runtime_apply": False,
             "implementation_status": implementation_status,
             "implementation_checks": attribution.get("implementation_checks") or [],
-            "implementation_provenance": attribution.get("implementation_provenance") or {},
+            "implementation_provenance": attribution.get("implementation_provenance")
+            or {},
             "expected_ev_effect": (
                 "Keep lifecycle AI context contribution visible as bounded auxiliary ADM/LDM feedback "
                 "without creating real order gates or standalone threshold families."
@@ -3166,14 +3665,17 @@ def _lifecycle_ai_context_followup_orders(ev_report: dict[str, Any]) -> list[dic
     ]
 
 
-
 def _lifecycle_entry_bucket_order_id(item: dict[str, Any]) -> str:
     bucket_type = _slug(str(item.get("bucket_type") or "bucket"))
-    bucket_key = _slug(str(item.get("bucket_key") or item.get("workorder_id") or "unknown"))
+    bucket_key = _slug(
+        str(item.get("bucket_key") or item.get("workorder_id") or "unknown")
+    )
     return f"order_lifecycle_entry_bucket_{bucket_type}_{bucket_key}"
 
 
-def _lifecycle_entry_bucket_followup_orders(report: dict[str, Any]) -> list[dict[str, Any]]:
+def _lifecycle_entry_bucket_followup_orders(
+    report: dict[str, Any],
+) -> list[dict[str, Any]]:
     attribution = (
         report.get("entry_bucket_attribution")
         if isinstance(report.get("entry_bucket_attribution"), dict)
@@ -3191,7 +3693,9 @@ def _lifecycle_entry_bucket_followup_orders(report: dict[str, Any]) -> list[dict
         "source_quality_gate": attribution.get("source_quality_gate"),
         "forbidden_uses": attribution.get("forbidden_uses") or [],
     }
-    implementation_status, implementation_provenance = _implementation_marker_from_attribution(attribution)
+    implementation_status, implementation_provenance = (
+        _implementation_marker_from_attribution(attribution)
+    )
     orders: list[dict[str, Any]] = []
     for item in workorders:
         if not isinstance(item, dict):
@@ -3223,7 +3727,9 @@ def _lifecycle_entry_bucket_followup_orders(report: dict[str, Any]) -> list[dict
                 "priority": 2 if route == "instrumentation_order" else 5,
                 "runtime_effect": False,
                 "allowed_runtime_apply": False,
-                "implementation_status": _implementation_status_for_bucket(item, implementation_status),
+                "implementation_status": _implementation_status_for_bucket(
+                    item, implementation_status
+                ),
                 "implementation_provenance": _implementation_provenance_for_bucket(
                     item,
                     implementation_provenance,
@@ -3275,11 +3781,15 @@ def _lifecycle_submit_bucket_order_id(item: dict[str, Any]) -> str:
     if workorder_id.startswith("order_entry_"):
         return workorder_id
     bucket_type = _slug(str(item.get("bucket_type") or "bucket"))
-    bucket_key = _slug(str(item.get("bucket_key") or item.get("workorder_id") or "unknown"))
+    bucket_key = _slug(
+        str(item.get("bucket_key") or item.get("workorder_id") or "unknown")
+    )
     return f"order_lifecycle_submit_bucket_{bucket_type}_{bucket_key}"
 
 
-def _lifecycle_submit_bucket_followup_orders(report: dict[str, Any]) -> list[dict[str, Any]]:
+def _lifecycle_submit_bucket_followup_orders(
+    report: dict[str, Any],
+) -> list[dict[str, Any]]:
     attribution = (
         report.get("submit_bucket_attribution")
         if isinstance(report.get("submit_bucket_attribution"), dict)
@@ -3297,7 +3807,9 @@ def _lifecycle_submit_bucket_followup_orders(report: dict[str, Any]) -> list[dic
         "source_quality_gate": attribution.get("source_quality_gate"),
         "forbidden_uses": attribution.get("forbidden_uses") or [],
     }
-    implementation_status, implementation_provenance = _implementation_marker_from_attribution(attribution)
+    implementation_status, implementation_provenance = (
+        _implementation_marker_from_attribution(attribution)
+    )
     orders: list[dict[str, Any]] = []
     for item in workorders:
         if not isinstance(item, dict):
@@ -3321,7 +3833,9 @@ def _lifecycle_submit_bucket_followup_orders(report: dict[str, Any]) -> list[dic
                 "priority": 1,
                 "runtime_effect": False,
                 "allowed_runtime_apply": False,
-                "implementation_status": _implementation_status_for_bucket(item, implementation_status),
+                "implementation_status": _implementation_status_for_bucket(
+                    item, implementation_status
+                ),
                 "implementation_provenance": _implementation_provenance_for_bucket(
                     item,
                     implementation_provenance,
@@ -3464,11 +3978,15 @@ def _entry_post_submit_weak_contract_orders(
 
 def _lifecycle_scale_in_bucket_order_id(item: dict[str, Any]) -> str:
     bucket_type = _slug(str(item.get("bucket_type") or "bucket"))
-    bucket_key = _slug(str(item.get("bucket_key") or item.get("workorder_id") or "unknown"))
+    bucket_key = _slug(
+        str(item.get("bucket_key") or item.get("workorder_id") or "unknown")
+    )
     return f"order_lifecycle_scale_in_bucket_{bucket_type}_{bucket_key}"
 
 
-def _lifecycle_scale_in_bucket_followup_orders(report: dict[str, Any]) -> list[dict[str, Any]]:
+def _lifecycle_scale_in_bucket_followup_orders(
+    report: dict[str, Any],
+) -> list[dict[str, Any]]:
     attribution = (
         report.get("scale_in_bucket_attribution")
         if isinstance(report.get("scale_in_bucket_attribution"), dict)
@@ -3553,23 +4071,31 @@ def _lifecycle_scale_in_bucket_followup_orders(report: dict[str, Any]) -> list[d
 
 def _lifecycle_overnight_bucket_order_id(item: dict[str, Any]) -> str:
     bucket_type = _slug(str(item.get("bucket_type") or "bucket"))
-    bucket_key = _slug(str(item.get("bucket_key") or item.get("workorder_id") or "unknown"))
+    bucket_key = _slug(
+        str(item.get("bucket_key") or item.get("workorder_id") or "unknown")
+    )
     return f"order_lifecycle_overnight_bucket_{bucket_type}_{bucket_key}"
 
 
 def _lifecycle_flow_bucket_order_id(item: dict[str, Any]) -> str:
     workorder_id = _slug(str(item.get("workorder_id") or "unknown"))
-    bucket_id = _slug_with_hash(str(item.get("lifecycle_flow_bucket_id") or item.get("bucket_key") or "unknown"))
+    bucket_id = _slug_with_hash(
+        str(item.get("lifecycle_flow_bucket_id") or item.get("bucket_key") or "unknown")
+    )
     return f"order_lifecycle_flow_bucket_{workorder_id}_{bucket_id}"
 
 
 def _lifecycle_stage_bucket_order_id(stage: str, item: dict[str, Any]) -> str:
     bucket_type = _slug(str(item.get("bucket_type") or "bucket"))
-    bucket_key = _slug_with_hash(str(item.get("bucket_key") or item.get("workorder_id") or "unknown"))
+    bucket_key = _slug_with_hash(
+        str(item.get("bucket_key") or item.get("workorder_id") or "unknown")
+    )
     return f"order_lifecycle_{stage}_bucket_{bucket_type}_{bucket_key}"
 
 
-def _lifecycle_flow_bucket_followup_orders(report: dict[str, Any]) -> list[dict[str, Any]]:
+def _lifecycle_flow_bucket_followup_orders(
+    report: dict[str, Any],
+) -> list[dict[str, Any]]:
     attribution = (
         report.get("lifecycle_flow_bucket_attribution")
         if isinstance(report.get("lifecycle_flow_bucket_attribution"), dict)
@@ -3587,7 +4113,9 @@ def _lifecycle_flow_bucket_followup_orders(report: dict[str, Any]) -> list[dict[
         "source_quality_gate": attribution.get("source_quality_gate"),
         "forbidden_uses": attribution.get("forbidden_uses") or [],
     }
-    implementation_status, implementation_provenance = _implementation_marker_from_attribution(attribution)
+    implementation_status, implementation_provenance = (
+        _implementation_marker_from_attribution(attribution)
+    )
     orders: list[dict[str, Any]] = []
     for item in workorders:
         if not isinstance(item, dict):
@@ -3605,13 +4133,18 @@ def _lifecycle_flow_bucket_followup_orders(report: dict[str, Any]) -> list[dict[
                 "route": "instrumentation_order",
                 "mapped_family": "lifecycle_decision_matrix_runtime",
                 "threshold_family": "lifecycle_decision_matrix_runtime",
-                "improvement_type": item.get("improvement_type") or "join_gap_resolution",
+                "improvement_type": item.get("improvement_type")
+                or "join_gap_resolution",
                 "confidence": "daily_ldm_source",
                 "priority": 1,
                 "runtime_effect": False,
                 "allowed_runtime_apply": False,
-                "implementation_status": _implementation_status_for_bucket(item, implementation_status),
-                "implementation_provenance": _implementation_provenance_for_bucket(item, implementation_provenance),
+                "implementation_status": _implementation_status_for_bucket(
+                    item, implementation_status
+                ),
+                "implementation_provenance": _implementation_provenance_for_bucket(
+                    item, implementation_provenance
+                ),
                 "expected_ev_effect": (
                     "Prevent entry-only EV from being interpreted as full lifecycle EV by keeping incomplete "
                     "parent flow bundles visible as source-quality evidence."
@@ -3653,7 +4186,9 @@ def _lifecycle_flow_bucket_followup_orders(report: dict[str, Any]) -> list[dict[
     return orders
 
 
-def _lifecycle_holding_exit_bucket_followup_orders(report: dict[str, Any]) -> list[dict[str, Any]]:
+def _lifecycle_holding_exit_bucket_followup_orders(
+    report: dict[str, Any],
+) -> list[dict[str, Any]]:
     orders: list[dict[str, Any]] = []
     for stage, attribution_key in (
         ("holding", "holding_bucket_attribution"),
@@ -3667,9 +4202,15 @@ def _lifecycle_holding_exit_bucket_followup_orders(report: dict[str, Any]) -> li
         workorders = attribution.get("code_improvement_workorders")
         if not isinstance(workorders, list) or not workorders:
             continue
-        implementation_status, implementation_provenance = _implementation_marker_from_attribution(attribution)
+        implementation_status, implementation_provenance = (
+            _implementation_marker_from_attribution(attribution)
+        )
         for item in workorders:
-            if not isinstance(item, dict) or not item.get("bucket_type") or not item.get("bucket_key"):
+            if (
+                not isinstance(item, dict)
+                or not item.get("bucket_type")
+                or not item.get("bucket_key")
+            ):
                 continue
             orders.append(
                 {
@@ -3686,8 +4227,12 @@ def _lifecycle_holding_exit_bucket_followup_orders(report: dict[str, Any]) -> li
                     "priority": 2,
                     "runtime_effect": False,
                     "allowed_runtime_apply": False,
-                    "implementation_status": _implementation_status_for_bucket(item, implementation_status),
-                    "implementation_provenance": _implementation_provenance_for_bucket(item, implementation_provenance),
+                    "implementation_status": _implementation_status_for_bucket(
+                        item, implementation_status
+                    ),
+                    "implementation_provenance": _implementation_provenance_for_bucket(
+                        item, implementation_provenance
+                    ),
                     "expected_ev_effect": (
                         f"Keep {stage} stage buckets visible as child evidence while parent lifecycle flow owns "
                         "promotion EV."
@@ -3716,19 +4261,32 @@ def _lifecycle_holding_exit_bucket_followup_orders(report: dict[str, Any]) -> li
 
 
 def _lifecycle_bucket_discovery_report_path(target_date: str) -> Path:
-    return REPORT_DIR / "lifecycle_bucket_discovery" / f"lifecycle_bucket_discovery_{target_date}.json"
+    return (
+        REPORT_DIR
+        / "lifecycle_bucket_discovery"
+        / f"lifecycle_bucket_discovery_{target_date}.json"
+    )
 
 
 def _lifecycle_bucket_discovery_order_id(item: dict[str, Any]) -> str:
     stage = _slug(str(item.get("stage") or "stage"))
-    bucket_id = _slug_with_hash(str(item.get("source_bucket_id") or item.get("bucket_id") or item.get("bucket_key") or "unknown"))
+    bucket_id = _slug_with_hash(
+        str(
+            item.get("source_bucket_id")
+            or item.get("bucket_id")
+            or item.get("bucket_key")
+            or "unknown"
+        )
+    )
     return f"order_lifecycle_bucket_discovery_{stage}_{bucket_id}"
 
 
 def _lifecycle_source_dimension_gap_order_id(item: dict[str, Any]) -> str:
     stage = _slug(str(item.get("stage") or "stage"))
     bucket_type = _slug(str(item.get("bucket_type") or "bucket"))
-    source_bucket = _slug_with_hash(str(item.get("source_bucket_id") or item.get("bucket_id") or "unknown"))
+    source_bucket = _slug_with_hash(
+        str(item.get("source_bucket_id") or item.get("bucket_id") or "unknown")
+    )
     return f"order_lifecycle_source_dimension_gap_{stage}_{bucket_type}_{source_bucket}"
 
 
@@ -3738,21 +4296,39 @@ def _source_dimension_summary_items(report: dict[str, Any]) -> list[dict[str, An
         if isinstance(report.get("source_dimension_gap_summary"), dict)
         else {}
     )
-    items = summary.get("actionable_candidates") if isinstance(summary.get("actionable_candidates"), list) else []
+    items = (
+        summary.get("actionable_candidates")
+        if isinstance(summary.get("actionable_candidates"), list)
+        else []
+    )
     return [item for item in items if isinstance(item, dict)]
 
 
 def _quiet_gap_summary(report: dict[str, Any]) -> dict[str, Any]:
-    return report.get("quiet_gap_summary") if isinstance(report.get("quiet_gap_summary"), dict) else {}
+    return (
+        report.get("quiet_gap_summary")
+        if isinstance(report.get("quiet_gap_summary"), dict)
+        else {}
+    )
 
 
-def _is_explicit_source_only_lifecycle_flow_exclusion(report: dict[str, Any], item: dict[str, Any]) -> bool:
-    if item.get("explicit_runtime_exclusion") is True or item.get("source_only_explicit_exclusion") is True:
+def _is_explicit_source_only_lifecycle_flow_exclusion(
+    report: dict[str, Any], item: dict[str, Any]
+) -> bool:
+    if (
+        item.get("explicit_runtime_exclusion") is True
+        or item.get("source_only_explicit_exclusion") is True
+    ):
         return True
     stage = str(item.get("stage") or "").strip()
     state = str(item.get("classification_state") or "").strip()
-    family = str(item.get("live_auto_apply_family") or item.get("mapped_family") or "").strip()
-    if stage != "lifecycle_flow" or state not in {"new_bucket_candidate", "runtime_blocked_contract_gap"}:
+    family = str(
+        item.get("live_auto_apply_family") or item.get("mapped_family") or ""
+    ).strip()
+    if stage != "lifecycle_flow" or state not in {
+        "new_bucket_candidate",
+        "runtime_blocked_contract_gap",
+    }:
         return False
     source_kind = str(item.get("source_bucket_kind") or "").strip()
     if source_kind in {"taxonomy_provenance_gap", "source_only_observation"}:
@@ -3772,11 +4348,20 @@ def _is_explicit_source_only_lifecycle_flow_exclusion(report: dict[str, Any], it
     return False
 
 
-def _lifecycle_bucket_discovery_followup_orders(report: dict[str, Any]) -> list[dict[str, Any]]:
-    candidates = report.get("surfaced_candidates") if isinstance(report.get("surfaced_candidates"), list) else []
+def _lifecycle_bucket_discovery_followup_orders(
+    report: dict[str, Any],
+) -> list[dict[str, Any]]:
+    candidates = (
+        report.get("surfaced_candidates")
+        if isinstance(report.get("surfaced_candidates"), list)
+        else []
+    )
     orders: list[dict[str, Any]] = []
     seen_bucket_keys: set[tuple[str, str]] = set()
-    actionable_resolutions = {"emit_or_backfill_source_field", "resolve_unknown_source_dimensions"}
+    actionable_resolutions = {
+        "emit_or_backfill_source_field",
+        "resolve_unknown_source_dimensions",
+    }
     for item in [*candidates, *_source_dimension_summary_items(report)]:
         if not isinstance(item, dict):
             continue
@@ -3788,7 +4373,13 @@ def _lifecycle_bucket_discovery_followup_orders(report: dict[str, Any]) -> list[
             and recommended_resolution in actionable_resolutions
         )
         if (
-            state not in {"new_bucket_candidate", "runtime_blocked_contract_gap", "code_patch_required", "code_review_failed"}
+            state
+            not in {
+                "new_bucket_candidate",
+                "runtime_blocked_contract_gap",
+                "code_patch_required",
+                "code_review_failed",
+            }
             and not source_dimension_gap_required
         ):
             continue
@@ -3798,8 +4389,15 @@ def _lifecycle_bucket_discovery_followup_orders(report: dict[str, Any]) -> list[
         bucket_id = str(item.get("bucket_id") or "")
         source_bucket_id = str(item.get("source_bucket_id") or bucket_id)
         if source_dimension_gap_required:
-            missing_dimension_keys = tuple(str(key) for key in (item.get("missing_dimension_keys") or []))
-            bucket_key = (stage, bucket_id, recommended_resolution, ",".join(missing_dimension_keys))
+            missing_dimension_keys = tuple(
+                str(key) for key in (item.get("missing_dimension_keys") or [])
+            )
+            bucket_key = (
+                stage,
+                bucket_id,
+                recommended_resolution,
+                ",".join(missing_dimension_keys),
+            )
         else:
             bucket_key = (stage, source_bucket_id)
         if bucket_key in seen_bucket_keys:
@@ -3817,27 +4415,35 @@ def _lifecycle_bucket_discovery_followup_orders(report: dict[str, Any]) -> list[
         )
         is_source_contract_drift = (
             stage == "source_contract"
-            and str(item.get("parent_bucket_id") or "") == "source_contract:schema_drift"
+            and str(item.get("parent_bucket_id") or "")
+            == "source_contract:schema_drift"
             and item.get("runtime_effect") is False
             and item.get("allowed_runtime_apply") is False
             and item.get("actual_order_submitted") is False
             and item.get("broker_order_forbidden") is True
             and item.get("full_real_conversion_allowed") is False
             and item.get("bounded_live_canary_allowed") is False
-            and str(item.get("transition_target") or "") == "source_only_keep_collecting"
+            and str(item.get("transition_target") or "")
+            == "source_only_keep_collecting"
         )
         implementation_status = (
-            "implemented_source_quality_contract_available" if is_source_contract_drift else None
+            "implemented_source_quality_contract_available"
+            if is_source_contract_drift
+            else None
         )
         implementation_provenance = (
             {
                 "implementation_type": "lifecycle_source_contract_drift_source_only_provenance",
-                "source_contract_status": ((report.get("summary") or {}).get("source_contract_status"))
-                if isinstance(report.get("summary"), dict)
-                else None,
-                "source_contract_change_count": ((report.get("summary") or {}).get("source_contract_change_count"))
-                if isinstance(report.get("summary"), dict)
-                else None,
+                "source_contract_status": (
+                    ((report.get("summary") or {}).get("source_contract_status"))
+                    if isinstance(report.get("summary"), dict)
+                    else None
+                ),
+                "source_contract_change_count": (
+                    ((report.get("summary") or {}).get("source_contract_change_count"))
+                    if isinstance(report.get("summary"), dict)
+                    else None
+                ),
                 "evidence_grade": item.get("evidence_grade"),
                 "transition_target": item.get("transition_target"),
                 "source_bucket_kind": item.get("source_bucket_kind"),
@@ -3865,19 +4471,28 @@ def _lifecycle_bucket_discovery_followup_orders(report: dict[str, Any]) -> list[
                 "legacy_raw_bucket_key": item.get("legacy_raw_bucket_key"),
                 "bucket_alias_version": item.get("bucket_alias_version"),
                 "dimension_set_version": item.get("dimension_set_version"),
-                "ai_tier2_comparative_review": item.get("ai_tier2_comparative_review")
-                if isinstance(item.get("ai_tier2_comparative_review"), dict)
-                else {},
+                "ai_tier2_comparative_review": (
+                    item.get("ai_tier2_comparative_review")
+                    if isinstance(item.get("ai_tier2_comparative_review"), dict)
+                    else {}
+                ),
                 "title": f"Lifecycle bucket discovery follow-up: {bucket_id}",
                 "source_report_type": "lifecycle_bucket_discovery",
                 "lifecycle_stage": stage,
                 "target_subsystem": "lifecycle_bucket_discovery_taxonomy_provenance",
                 "route": "auto_patch_required",
-                "mapped_family": item.get("live_auto_apply_family") or "lifecycle_bucket_discovery",
-                "threshold_family": item.get("live_auto_apply_family") or "lifecycle_bucket_discovery",
+                "mapped_family": item.get("live_auto_apply_family")
+                or "lifecycle_bucket_discovery",
+                "threshold_family": item.get("live_auto_apply_family")
+                or "lifecycle_bucket_discovery",
                 "improvement_type": improvement_type,
                 "confidence": "postclose_discovery_source",
-                "priority": 1 if state in {"code_patch_required", "runtime_blocked_contract_gap"} or source_dimension_gap_required else 3,
+                "priority": (
+                    1
+                    if state in {"code_patch_required", "runtime_blocked_contract_gap"}
+                    or source_dimension_gap_required
+                    else 3
+                ),
                 "runtime_effect": False,
                 "allowed_runtime_apply": False,
                 "actual_order_submitted": False,
@@ -3947,7 +4562,9 @@ def _lifecycle_bucket_discovery_followup_orders(report: dict[str, Any]) -> list[
     )
     rollup_count = _safe_int(source_dimension_summary.get("rollup_only_gap_count"))
     unknown_gap_count = _safe_int(
-        (source_dimension_summary.get("source_dimension_gap_counts") or {}).get("unknown_source_dimensions")
+        (source_dimension_summary.get("source_dimension_gap_counts") or {}).get(
+            "unknown_source_dimensions"
+        )
         if isinstance(source_dimension_summary.get("source_dimension_gap_counts"), dict)
         else 0
     )
@@ -4107,14 +4724,17 @@ def _lifecycle_bucket_discovery_followup_orders(report: dict[str, Any]) -> list[
                     for p in parent_conflict_resolution
                 )
                 sim_eligible = sum(
-                    1 for p in parent_conflict_resolution
+                    1
+                    for p in parent_conflict_resolution
                     if p.get("sim_policy_eligible_after_resolution")
                 )
-                order["evidence"].extend([
-                    f"parent_conflict_resolution_count={len(parent_conflict_resolution)}",
-                    f"resolution_states={dict(resolution_states)}",
-                    f"sim_eligible_after_resolution={sim_eligible}",
-                ])
+                order["evidence"].extend(
+                    [
+                        f"parent_conflict_resolution_count={len(parent_conflict_resolution)}",
+                        f"resolution_states={dict(resolution_states)}",
+                        f"sim_eligible_after_resolution={sim_eligible}",
+                    ]
+                )
                 order["conflict_resolution_acceptance_test"] = "pass"
                 order["implementation_id"] = "parent_conflict_resolution_produced"
                 order["implementation_status"] = "implemented"
@@ -4138,7 +4758,9 @@ def _lifecycle_bucket_discovery_followup_orders(report: dict[str, Any]) -> list[
     return orders
 
 
-def _lifecycle_overnight_bucket_followup_orders(report: dict[str, Any]) -> list[dict[str, Any]]:
+def _lifecycle_overnight_bucket_followup_orders(
+    report: dict[str, Any],
+) -> list[dict[str, Any]]:
     attribution = (
         report.get("overnight_bucket_attribution")
         if isinstance(report.get("overnight_bucket_attribution"), dict)
@@ -4156,7 +4778,9 @@ def _lifecycle_overnight_bucket_followup_orders(report: dict[str, Any]) -> list[
         "source_quality_gate": attribution.get("source_quality_gate"),
         "forbidden_uses": attribution.get("forbidden_uses") or [],
     }
-    implementation_status, implementation_provenance = _implementation_marker_from_attribution(attribution)
+    implementation_status, implementation_provenance = (
+        _implementation_marker_from_attribution(attribution)
+    )
     orders: list[dict[str, Any]] = []
     for item in workorders:
         if not isinstance(item, dict):
@@ -4180,7 +4804,9 @@ def _lifecycle_overnight_bucket_followup_orders(report: dict[str, Any]) -> list[
                 "priority": 4,
                 "runtime_effect": False,
                 "allowed_runtime_apply": False,
-                "implementation_status": _implementation_status_for_bucket(item, implementation_status),
+                "implementation_status": _implementation_status_for_bucket(
+                    item, implementation_status
+                ),
                 "implementation_provenance": _implementation_provenance_for_bucket(
                     item,
                     implementation_provenance,
@@ -4230,25 +4856,42 @@ def _pipeline_event_verbosity_report_path(target_date: str) -> Path:
 
 
 def _observation_source_quality_audit_path(target_date: str) -> Path:
-    return OBSERVATION_SOURCE_QUALITY_AUDIT_DIR / f"observation_source_quality_audit_{target_date}.json"
+    return (
+        OBSERVATION_SOURCE_QUALITY_AUDIT_DIR
+        / f"observation_source_quality_audit_{target_date}.json"
+    )
 
 
 def _ai_watching_score_smoothing_diagnostic_path(target_date: str) -> Path:
-    return AI_WATCHING_SCORE_SMOOTHING_DIAGNOSTIC_DIR / f"ai_watching_score_smoothing_diagnostic_{target_date}.json"
+    return (
+        AI_WATCHING_SCORE_SMOOTHING_DIAGNOSTIC_DIR
+        / f"ai_watching_score_smoothing_diagnostic_{target_date}.json"
+    )
 
 
 def _codebase_performance_report_path(target_date: str) -> Path:
-    return CODEBASE_PERFORMANCE_WORKORDER_DIR / f"codebase_performance_workorder_{target_date}.json"
+    return (
+        CODEBASE_PERFORMANCE_WORKORDER_DIR
+        / f"codebase_performance_workorder_{target_date}.json"
+    )
 
 
-def _pipeline_event_verbosity_followup_orders(report: dict[str, Any]) -> list[dict[str, Any]]:
+def _pipeline_event_verbosity_followup_orders(
+    report: dict[str, Any],
+) -> list[dict[str, Any]]:
     if not report:
         return []
     state = str(report.get("state") or "").strip()
     recommended = str(report.get("recommended_workorder_state") or "").strip()
-    raw_stream = report.get("raw_stream") if isinstance(report.get("raw_stream"), dict) else {}
+    raw_stream = (
+        report.get("raw_stream") if isinstance(report.get("raw_stream"), dict) else {}
+    )
     parity = report.get("parity") if isinstance(report.get("parity"), dict) else {}
-    producer = report.get("producer_summary") if isinstance(report.get("producer_summary"), dict) else {}
+    producer = (
+        report.get("producer_summary")
+        if isinstance(report.get("producer_summary"), dict)
+        else {}
+    )
     evidence = [
         f"state={state}",
         f"recommended_workorder_state={recommended}",
@@ -4316,12 +4959,26 @@ _LDM_MATCH_MISSING_ORDER_THRESHOLD = 5
 _ACTIVE_SEED_NONE_ORDER_THRESHOLD = 3
 
 
-def _sim_fill_and_match_report_contract_orders(ev_report: dict[str, Any], source_quality_report: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+def _sim_fill_and_match_report_contract_orders(
+    ev_report: dict[str, Any], source_quality_report: dict[str, Any] | None = None
+) -> list[dict[str, Any]]:
     orders: list[dict[str, Any]] = []
-    calibration = ev_report.get("calibration") if isinstance(ev_report.get("calibration"), dict) else {}
-    scalp_simulator = ev_report.get("scalp_simulator") if isinstance(ev_report.get("scalp_simulator"), dict) else {}
+    calibration = (
+        ev_report.get("calibration")
+        if isinstance(ev_report.get("calibration"), dict)
+        else {}
+    )
+    scalp_simulator = (
+        ev_report.get("scalp_simulator")
+        if isinstance(ev_report.get("scalp_simulator"), dict)
+        else {}
+    )
     if not scalp_simulator:
-        scalp_simulator = calibration.get("scalp_simulator") if isinstance(calibration.get("scalp_simulator"), dict) else {}
+        scalp_simulator = (
+            calibration.get("scalp_simulator")
+            if isinstance(calibration.get("scalp_simulator"), dict)
+            else {}
+        )
     lifecycle_match = (
         scalp_simulator.get("lifecycle_bucket_match_aggregation")
         if isinstance(scalp_simulator.get("lifecycle_bucket_match_aggregation"), dict)
@@ -4334,12 +4991,20 @@ def _sim_fill_and_match_report_contract_orders(ev_report: dict[str, Any], source
     )
 
     sim_quality = {}
-    family_reports = ev_report.get("family_reports") if isinstance(ev_report.get("family_reports"), list) else []
+    family_reports = (
+        ev_report.get("family_reports")
+        if isinstance(ev_report.get("family_reports"), list)
+        else []
+    )
     for family in family_reports:
         if not isinstance(family, dict):
             continue
         if str(family.get("family") or "") == "dynamic_entry_price_resolver":
-            sim_quality = family.get("sim_submit_path_quality") if isinstance(family.get("sim_submit_path_quality"), dict) else {}
+            sim_quality = (
+                family.get("sim_submit_path_quality")
+                if isinstance(family.get("sim_submit_path_quality"), dict)
+                else {}
+            )
             break
 
     has_canonical_fill_price_gap = False
@@ -4348,11 +5013,21 @@ def _sim_fill_and_match_report_contract_orders(ev_report: dict[str, Any], source
         for stage, data in sim_quality.items():
             if not isinstance(data, dict):
                 continue
-            defect = data.get("canonical_sim_fill_price_defect_breakdown") if isinstance(data.get("canonical_sim_fill_price_defect_breakdown"), dict) else {}
-            unpriced_no_canonical_total += _safe_int(defect.get("unpriced_no_canonical"), 0)
+            defect = (
+                data.get("canonical_sim_fill_price_defect_breakdown")
+                if isinstance(
+                    data.get("canonical_sim_fill_price_defect_breakdown"), dict
+                )
+                else {}
+            )
+            unpriced_no_canonical_total += _safe_int(
+                defect.get("unpriced_no_canonical"), 0
+            )
     has_canonical_fill_price_gap = unpriced_no_canonical_total > 0
 
-    active_seed_none = _safe_int(lifecycle_match.get("active_seed_matched_none_count"), 0)
+    active_seed_none = _safe_int(
+        lifecycle_match.get("active_seed_matched_none_count"), 0
+    )
     eligible_active_seed_none = _safe_int(
         lifecycle_match.get("eligible_active_seed_matched_none_count"),
         active_seed_none,
@@ -4363,15 +5038,27 @@ def _sim_fill_and_match_report_contract_orders(ev_report: dict[str, Any], source
         _safe_int(lifecycle_match.get("policy_missing_count"), 0),
     )
     not_instrumented = _safe_int(lifecycle_match.get("not_instrumented_count"), 0)
-    prefix_parent_missing = _safe_int(lifecycle_match.get("active_seed_prefix_matched_parent_missing_count"), 0)
+    prefix_parent_missing = _safe_int(
+        lifecycle_match.get("active_seed_prefix_matched_parent_missing_count"), 0
+    )
     natural_no_match = _safe_int(lifecycle_match.get("natural_no_match_count"), 0)
-    hypothesis_no_match = _safe_int(lifecycle_match.get("hypothesis_matched_but_parent_bucket_no_match_count"), 0)
-    panic_excluded = _safe_int(lifecycle_match.get("panic_scale_in_stage_excluded_count"), 0)
+    hypothesis_no_match = _safe_int(
+        lifecycle_match.get("hypothesis_matched_but_parent_bucket_no_match_count"), 0
+    )
+    panic_excluded = _safe_int(
+        lifecycle_match.get("panic_scale_in_stage_excluded_count"), 0
+    )
     provenance_gap = _safe_int(swing_micro.get("provenance_gap_count"), 0)
     missing_ws_quote = _safe_int(swing_micro.get("missing_ws_quote_source_count"), 0)
 
-    source_quality_status = str((source_quality_report or {}).get("status") or "").strip()
-    source_quality_contract_gap = source_quality_status in {"fail", "missing", "incomplete"}
+    source_quality_status = str(
+        (source_quality_report or {}).get("status") or ""
+    ).strip()
+    source_quality_contract_gap = source_quality_status in {
+        "fail",
+        "missing",
+        "incomplete",
+    }
 
     base = {
         "source_report_type": "threshold_cycle_ev_report",
@@ -4390,132 +5077,146 @@ def _sim_fill_and_match_report_contract_orders(ev_report: dict[str, Any], source
     }
 
     if has_canonical_fill_price_gap:
-        orders.append({
-            **base,
-            "order_id": "order_sim_fill_canonical_price_contract_gap",
-            "title": "Sim fill canonical price contract gap",
-            "priority": 1,
-            "route": "source_quality_gap",
-            "mapped_family": "dynamic_entry_price_resolver",
-            "threshold_family": "dynamic_entry_price_resolver",
-            "improvement_type": "sim_fill_canonical_price_contract_gap",
-            "confidence": "postclose_threshold_ev_source",
-            "intent": "Priced sim fill rows must produce a canonical_sim_fill_price. Fix the producer or report contract so no priced row has unpriced_no_canonical classification.",
-            "evidence": [
-                f"unpriced_no_canonical_total={unpriced_no_canonical_total}",
-                f"has_canonical_fill_price_gap={has_canonical_fill_price_gap}",
-            ],
-            "next_postclose_metric": "canonical_sim_fill_price_defect_breakdown.unpriced_no_canonical=0 for all priced stages",
-            "files_likely_touched": [
-                "src/engine/daily_threshold_cycle_report.py",
-                "src/engine/sniper_state_handlers.py",
-                "docs/report-based-automation-traceability.md",
-            ],
-            "acceptance_tests": [
-                "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_daily_threshold_cycle_report.py",
-            ],
-        })
+        orders.append(
+            {
+                **base,
+                "order_id": "order_sim_fill_canonical_price_contract_gap",
+                "title": "Sim fill canonical price contract gap",
+                "priority": 1,
+                "route": "source_quality_gap",
+                "mapped_family": "dynamic_entry_price_resolver",
+                "threshold_family": "dynamic_entry_price_resolver",
+                "improvement_type": "sim_fill_canonical_price_contract_gap",
+                "confidence": "postclose_threshold_ev_source",
+                "intent": "Priced sim fill rows must produce a canonical_sim_fill_price. Fix the producer or report contract so no priced row has unpriced_no_canonical classification.",
+                "evidence": [
+                    f"unpriced_no_canonical_total={unpriced_no_canonical_total}",
+                    f"has_canonical_fill_price_gap={has_canonical_fill_price_gap}",
+                ],
+                "next_postclose_metric": "canonical_sim_fill_price_defect_breakdown.unpriced_no_canonical=0 for all priced stages",
+                "files_likely_touched": [
+                    "src/engine/daily_threshold_cycle_report.py",
+                    "src/engine/sniper_state_handlers.py",
+                    "docs/report-based-automation-traceability.md",
+                ],
+                "acceptance_tests": [
+                    "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_daily_threshold_cycle_report.py",
+                ],
+            }
+        )
 
     if (
         contract_missing >= _LDM_MATCH_MISSING_ORDER_THRESHOLD
         or policy_missing >= _LDM_MATCH_MISSING_ORDER_THRESHOLD
         or prefix_parent_missing >= _LDM_MATCH_MISSING_ORDER_THRESHOLD
     ):
-        orders.append({
-            **base,
-            "order_id": "order_active_seed_or_ldm_match_missing_contract_gap",
-            "title": "Contract/policy missing or active seed parent bridge missing above threshold",
-            "priority": 1,
-            "route": "source_quality_gap",
-            "mapped_family": "lifecycle_decision_matrix_runtime",
-            "threshold_family": "lifecycle_decision_matrix_runtime",
-            "improvement_type": "active_seed_ldm_match_contract_gap",
-            "confidence": "postclose_threshold_ev_source",
-            "intent": "contract_missing indicates required instrumentation gap; policy_missing indicates policy/catalog handoff is unavailable for eligible lifecycle events; prefix_matched_parent_missing indicates active seed prefix found but parent lifecycle-flow approved row not closed. These must be diagnosed.",
-            "evidence": [
-                f"contract_missing_count={contract_missing} (lifecycle-eligible stages only)",
-                f"eligible_policy_missing_count={policy_missing}",
-                f"not_instrumented_count={not_instrumented} (excluded: diagnostic/observation stages without lifecycle contract requirement)",
-                f"active_seed_prefix_matched_parent_missing_count={prefix_parent_missing}",
-                f"active_seed_matched_none_count={active_seed_none} (raw compatibility counter)",
-                f"eligible_active_seed_matched_none_count={eligible_active_seed_none}",
-                f"natural_no_match_count={natural_no_match} (excluded from workorder trigger)",
-                f"panic_scale_in_stage_excluded_count={panic_excluded} (excluded from workorder trigger)",
-                f"hypothesis_matched_but_parent_bucket_no_match_count={hypothesis_no_match} (includes natural_no_match + prefix_matched_parent_missing)",
-                f"ldm_match_missing_order_threshold={_LDM_MATCH_MISSING_ORDER_THRESHOLD}",
-            ],
-            "next_postclose_metric": "contract_missing_count < threshold AND eligible_policy_missing_count < threshold AND prefix_parent_missing_count < threshold",
-            "files_likely_touched": [
-                "src/engine/daily_threshold_cycle_report.py",
-                "src/engine/observation_source_quality_audit.py",
-                "docs/report-based-automation-traceability.md",
-            ],
-            "acceptance_tests": [
-                "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_daily_threshold_cycle_report.py src/tests/test_observation_source_quality_audit.py",
-            ],
-        })
+        orders.append(
+            {
+                **base,
+                "order_id": "order_active_seed_or_ldm_match_missing_contract_gap",
+                "title": "Contract/policy missing or active seed parent bridge missing above threshold",
+                "priority": 1,
+                "route": "source_quality_gap",
+                "mapped_family": "lifecycle_decision_matrix_runtime",
+                "threshold_family": "lifecycle_decision_matrix_runtime",
+                "improvement_type": "active_seed_ldm_match_contract_gap",
+                "confidence": "postclose_threshold_ev_source",
+                "intent": "contract_missing indicates required instrumentation gap; policy_missing indicates policy/catalog handoff is unavailable for eligible lifecycle events; prefix_matched_parent_missing indicates active seed prefix found but parent lifecycle-flow approved row not closed. These must be diagnosed.",
+                "evidence": [
+                    f"contract_missing_count={contract_missing} (lifecycle-eligible stages only)",
+                    f"eligible_policy_missing_count={policy_missing}",
+                    f"not_instrumented_count={not_instrumented} (excluded: diagnostic/observation stages without lifecycle contract requirement)",
+                    f"active_seed_prefix_matched_parent_missing_count={prefix_parent_missing}",
+                    f"active_seed_matched_none_count={active_seed_none} (raw compatibility counter)",
+                    f"eligible_active_seed_matched_none_count={eligible_active_seed_none}",
+                    f"natural_no_match_count={natural_no_match} (excluded from workorder trigger)",
+                    f"panic_scale_in_stage_excluded_count={panic_excluded} (excluded from workorder trigger)",
+                    f"hypothesis_matched_but_parent_bucket_no_match_count={hypothesis_no_match} (includes natural_no_match + prefix_matched_parent_missing)",
+                    f"ldm_match_missing_order_threshold={_LDM_MATCH_MISSING_ORDER_THRESHOLD}",
+                ],
+                "next_postclose_metric": "contract_missing_count < threshold AND eligible_policy_missing_count < threshold AND prefix_parent_missing_count < threshold",
+                "files_likely_touched": [
+                    "src/engine/daily_threshold_cycle_report.py",
+                    "src/engine/observation_source_quality_audit.py",
+                    "docs/report-based-automation-traceability.md",
+                ],
+                "acceptance_tests": [
+                    "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_daily_threshold_cycle_report.py src/tests/test_observation_source_quality_audit.py",
+                ],
+            }
+        )
 
-    if provenance_gap > 0 and missing_ws_quote > 0 and swing_micro.get("ready_count", 0) > 0:
-        orders.append({
-            **base,
-            "order_id": "order_swing_micro_provenance_gap_missing_from_report",
-            "title": "Swing micro ws_quote_source=missing provenance gap not surfaced in postclose report",
-            "priority": 2,
-            "route": "source_quality_gap",
-            "mapped_family": "swing_micro_source_quality",
-            "threshold_family": "swing_micro_source_quality",
-            "improvement_type": "swing_micro_provenance_gap",
-            "confidence": "postclose_threshold_ev_source",
-            "intent": "Swing micro ws_quote_source=missing with orderbook_micro ready state is a provenance gap, not a readiness gap. Ensure it is tracked separately in postclose reports.",
-            "evidence": [
-                f"provenance_gap_count={provenance_gap}",
-                f"missing_ws_quote_source_count={missing_ws_quote}",
-                f"ready_count={swing_micro.get('ready_count', 0)}",
-                f"wide_spread_count={swing_micro.get('wide_spread_count', 0)}",
-                f"ofi_outlier_count={swing_micro.get('ofi_outlier_count', 0)}",
-            ],
-            "next_postclose_metric": "swing_micro_source_quality.provenance_gap_count visible and ws_quote_source=missing not mixed with readiness",
-            "files_likely_touched": [
-                "src/engine/daily_threshold_cycle_report.py",
-                "src/engine/observation_source_quality_audit.py",
-                "src/engine/sniper_state_handlers.py",
-                "docs/report-based-automation-traceability.md",
-            ],
-            "acceptance_tests": [
-                "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_daily_threshold_cycle_report.py src/tests/test_observation_source_quality_audit.py",
-            ],
-        })
+    if (
+        provenance_gap > 0
+        and missing_ws_quote > 0
+        and swing_micro.get("ready_count", 0) > 0
+    ):
+        orders.append(
+            {
+                **base,
+                "order_id": "order_swing_micro_provenance_gap_missing_from_report",
+                "title": "Swing micro ws_quote_source=missing provenance gap not surfaced in postclose report",
+                "priority": 2,
+                "route": "source_quality_gap",
+                "mapped_family": "swing_micro_source_quality",
+                "threshold_family": "swing_micro_source_quality",
+                "improvement_type": "swing_micro_provenance_gap",
+                "confidence": "postclose_threshold_ev_source",
+                "intent": "Swing micro ws_quote_source=missing with orderbook_micro ready state is a provenance gap, not a readiness gap. Ensure it is tracked separately in postclose reports.",
+                "evidence": [
+                    f"provenance_gap_count={provenance_gap}",
+                    f"missing_ws_quote_source_count={missing_ws_quote}",
+                    f"ready_count={swing_micro.get('ready_count', 0)}",
+                    f"wide_spread_count={swing_micro.get('wide_spread_count', 0)}",
+                    f"ofi_outlier_count={swing_micro.get('ofi_outlier_count', 0)}",
+                ],
+                "next_postclose_metric": "swing_micro_source_quality.provenance_gap_count visible and ws_quote_source=missing not mixed with readiness",
+                "files_likely_touched": [
+                    "src/engine/daily_threshold_cycle_report.py",
+                    "src/engine/observation_source_quality_audit.py",
+                    "src/engine/sniper_state_handlers.py",
+                    "docs/report-based-automation-traceability.md",
+                ],
+                "acceptance_tests": [
+                    "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_daily_threshold_cycle_report.py src/tests/test_observation_source_quality_audit.py",
+                ],
+            }
+        )
 
     if source_quality_contract_gap:
-        orders.append({
-            **base,
-            "order_id": "order_source_quality_report_contract_status_gap",
-            "title": "Source quality report contract status failed/missing/incomplete",
-            "priority": 0,
-            "route": "source_quality_hard_gap",
-            "mapped_family": "observation_source_quality_audit",
-            "threshold_family": "observation_source_quality_audit",
-            "improvement_type": "report_contract_gap",
-            "confidence": "postclose_source_quality_fail",
-            "intent": "Report contract status is failed/missing/incomplete. Tuning inputs using this report must be blocked until the contract is restored.",
-            "evidence": [
-                f"source_quality_status={source_quality_status}",
-            ],
-            "next_postclose_metric": "observation_source_quality_audit status=pass or warning",
-            "files_likely_touched": [
-                "src/engine/observation_source_quality_audit.py",
-                "src/engine/daily_threshold_cycle_report.py",
-                "docs/report-based-automation-traceability.md",
-            ],
-            "acceptance_tests": [
-                "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_observation_source_quality_audit.py src/tests/test_build_code_improvement_workorder.py",
-            ],
-        })
+        orders.append(
+            {
+                **base,
+                "order_id": "order_source_quality_report_contract_status_gap",
+                "title": "Source quality report contract status failed/missing/incomplete",
+                "priority": 0,
+                "route": "source_quality_hard_gap",
+                "mapped_family": "observation_source_quality_audit",
+                "threshold_family": "observation_source_quality_audit",
+                "improvement_type": "report_contract_gap",
+                "confidence": "postclose_source_quality_fail",
+                "intent": "Report contract status is failed/missing/incomplete. Tuning inputs using this report must be blocked until the contract is restored.",
+                "evidence": [
+                    f"source_quality_status={source_quality_status}",
+                ],
+                "next_postclose_metric": "observation_source_quality_audit status=pass or warning",
+                "files_likely_touched": [
+                    "src/engine/observation_source_quality_audit.py",
+                    "src/engine/daily_threshold_cycle_report.py",
+                    "docs/report-based-automation-traceability.md",
+                ],
+                "acceptance_tests": [
+                    "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_observation_source_quality_audit.py src/tests/test_build_code_improvement_workorder.py",
+                ],
+            }
+        )
 
     return orders
 
 
-def _observation_source_quality_followup_orders(report: dict[str, Any]) -> list[dict[str, Any]]:
+def _observation_source_quality_followup_orders(
+    report: dict[str, Any],
+) -> list[dict[str, Any]]:
     if not report:
         return []
     summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
@@ -4535,7 +5236,11 @@ def _observation_source_quality_followup_orders(report: dict[str, Any]) -> list[
         if isinstance(report.get("hard_blocking_contract_gaps"), list)
         else []
     )
-    stage_contracts = report.get("stage_contracts") if isinstance(report.get("stage_contracts"), dict) else {}
+    stage_contracts = (
+        report.get("stage_contracts")
+        if isinstance(report.get("stage_contracts"), dict)
+        else {}
+    )
     high_volume_gaps = (
         report.get("high_volume_no_source_fields")
         if isinstance(report.get("high_volume_no_source_fields"), list)
@@ -4643,7 +5348,11 @@ def _observation_source_quality_followup_orders(report: dict[str, Any]) -> list[
     excluded_row_count = int(raw_row_exclusion.get("excluded_row_count") or 0)
     if excluded_row_count > 0:
         context_review = _raw_row_exclusion_limit_up_locked_context(raw_row_exclusion)
-        market_halt_context_review = None if context_review else _raw_row_exclusion_market_halt_context(raw_row_exclusion)
+        market_halt_context_review = (
+            None
+            if context_review
+            else _raw_row_exclusion_market_halt_context(raw_row_exclusion)
+        )
         context_classification = None
         if context_review:
             context_classification = "limit_up_locked_context"
@@ -4735,40 +5444,48 @@ def _observation_source_quality_followup_orders(report: dict[str, Any]) -> list[
                 "title": (
                     "Observation source-quality raw row exclusion limit-up locked context"
                     if context_review
-                    else "Observation source-quality raw row exclusion market halt context"
-                    if market_halt_context_review
-                    else "Observation source-quality raw row exclusion producer gap"
+                    else (
+                        "Observation source-quality raw row exclusion market halt context"
+                        if market_halt_context_review
+                        else "Observation source-quality raw row exclusion producer gap"
+                    )
                 ),
                 "priority": 0,
                 "route": (
                     "review_required_limit_up_locked_context"
                     if context_review
-                    else "review_required_market_halt_context"
-                    if market_halt_context_review
-                    else "source_quality_raw_row_exclusion_producer_fix"
+                    else (
+                        "review_required_market_halt_context"
+                        if market_halt_context_review
+                        else "source_quality_raw_row_exclusion_producer_fix"
+                    )
                 ),
                 "mapped_family": "observation_source_quality_audit",
                 "threshold_family": "observation_source_quality_audit",
                 "improvement_type": (
                     "source_quality_raw_row_exclusion_limit_up_locked_context"
                     if context_review
-                    else "source_quality_raw_row_exclusion_market_halt_context"
-                    if market_halt_context_review
-                    else "source_quality_raw_row_exclusion_producer_gap"
+                    else (
+                        "source_quality_raw_row_exclusion_market_halt_context"
+                        if market_halt_context_review
+                        else "source_quality_raw_row_exclusion_producer_gap"
+                    )
                 ),
                 "intent": (
                     "Keep the excluded rows out of tuning inputs, but treat the current cluster as a reviewed "
                     "limit-up locked market context until non-limit-up evidence proves a producer gap."
                     if context_review
                     else (
-                        "Keep the excluded rows out of tuning inputs, but treat the current cluster as a reviewed "
-                        "market halt/circuit-breaker recovery context until post-resume evidence proves a producer gap."
-                    )
-                    if market_halt_context_review
-                    else (
-                        "Analyze all excluded raw rows by stage/field/reason and fix producer-side source-quality "
-                        "or provenance causes so the postclose chain does not repeatedly need to exclude the same "
-                        "class of rows from tuning inputs."
+                        (
+                            "Keep the excluded rows out of tuning inputs, but treat the current cluster as a reviewed "
+                            "market halt/circuit-breaker recovery context until post-resume evidence proves a producer gap."
+                        )
+                        if market_halt_context_review
+                        else (
+                            "Analyze all excluded raw rows by stage/field/reason and fix producer-side source-quality "
+                            "or provenance causes so the postclose chain does not repeatedly need to exclude the same "
+                            "class of rows from tuning inputs."
+                        )
                     )
                 ),
                 "evidence": raw_exclusion_evidence,
@@ -4783,8 +5500,13 @@ def _observation_source_quality_followup_orders(report: dict[str, Any]) -> list[
                     "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_observation_source_quality_audit.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py",
                 ],
                 "raw_row_exclusion_context_classification": context_classification,
-                "raw_row_exclusion_context": context_review or market_halt_context_review,
-                "terminal_disposition": "no_code_required_pending_policy_classification" if context_classification else None,
+                "raw_row_exclusion_context": context_review
+                or market_halt_context_review,
+                "terminal_disposition": (
+                    "no_code_required_pending_policy_classification"
+                    if context_classification
+                    else None
+                ),
             }
         )
     if unknown_token_findings:
@@ -4799,7 +5521,9 @@ def _observation_source_quality_followup_orders(report: dict[str, Any]) -> list[
         for finding in unknown_token_findings:
             if not isinstance(finding, dict):
                 continue
-            fields = finding.get("fields") if isinstance(finding.get("fields"), list) else []
+            fields = (
+                finding.get("fields") if isinstance(finding.get("fields"), list) else []
+            )
             field_bits = []
             for field in fields:
                 if not isinstance(field, dict):
@@ -4844,17 +5568,26 @@ def _observation_source_quality_followup_orders(report: dict[str, Any]) -> list[
                 "acceptance_tests": [
                     "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_observation_source_quality_audit.py src/tests/test_build_code_improvement_workorder.py",
                 ],
-                "implementation_status": "implemented_but_waiting_sample" if producer_fix_implemented else None,
-                "implementation_provenance": {
-                    "producer_fix_status": "implemented_waiting_new_postfix_raw"
+                "implementation_status": (
+                    "implemented_but_waiting_sample"
                     if producer_fix_implemented
-                    else "open_unknown_field_producer_fix_required",
+                    else None
+                ),
+                "implementation_provenance": {
+                    "producer_fix_status": (
+                        "implemented_waiting_new_postfix_raw"
+                        if producer_fix_implemented
+                        else "open_unknown_field_producer_fix_required"
+                    ),
                     "fixed_unknown_fields": sorted(KNOWN_FIXED_UNKNOWN_TOKEN_FIELDS),
                     "current_raw_contains_pre_fix_rows": producer_fix_implemented,
                 },
             }
         )
-    if any(stage in warning_stages for stage in ("ai_confirmed", "blocked_ai_score", "wait65_79_ev_candidate")):
+    if any(
+        stage in warning_stages
+        for stage in ("ai_confirmed", "blocked_ai_score", "wait65_79_ev_candidate")
+    ):
         orders.append(
             {
                 **base,
@@ -4918,8 +5651,16 @@ def _observation_source_quality_followup_orders(report: dict[str, Any]) -> list[
     if swing_warning_stages:
         stage_evidence: list[str] = []
         for stage in swing_warning_stages[:8]:
-            contract = stage_contracts.get(stage) if isinstance(stage_contracts.get(stage), dict) else {}
-            missing = contract.get("missing_violations") if isinstance(contract.get("missing_violations"), dict) else {}
+            contract = (
+                stage_contracts.get(stage)
+                if isinstance(stage_contracts.get(stage), dict)
+                else {}
+            )
+            missing = (
+                contract.get("missing_violations")
+                if isinstance(contract.get("missing_violations"), dict)
+                else {}
+            )
             missing_fields = ",".join(str(key) for key in list(missing)[:8])
             stage_evidence.append(
                 f"{stage}:sample_count={contract.get('sample_count')} missing_fields={missing_fields or '-'}"
@@ -4981,7 +5722,9 @@ def _observation_source_quality_followup_orders(report: dict[str, Any]) -> list[
     return orders
 
 
-def _raw_row_exclusion_with_manifest_details(raw_row_exclusion: dict[str, Any]) -> dict[str, Any]:
+def _raw_row_exclusion_with_manifest_details(
+    raw_row_exclusion: dict[str, Any],
+) -> dict[str, Any]:
     if not raw_row_exclusion:
         return {}
     enriched = dict(raw_row_exclusion)
@@ -5036,7 +5779,9 @@ def _manifest_excluded_rows(raw_row_exclusion: dict[str, Any]) -> list[dict[str,
     return [row for row in rows if isinstance(row, dict)]
 
 
-def _raw_row_exclusion_limit_up_locked_context(raw_row_exclusion: dict[str, Any]) -> dict[str, Any] | None:
+def _raw_row_exclusion_limit_up_locked_context(
+    raw_row_exclusion: dict[str, Any],
+) -> dict[str, Any] | None:
     excluded_row_count = int(raw_row_exclusion.get("excluded_row_count") or 0)
     if excluded_row_count <= 0:
         return None
@@ -5049,7 +5794,9 @@ def _raw_row_exclusion_limit_up_locked_context(raw_row_exclusion: dict[str, Any]
         int(stage_counts.get(stage) or 0)
         for stage in ("blocked_overbought", "blocked_strength_momentum")
     )
-    if relevant_stage_count <= 0 or relevant_stage_count < max(1, int(excluded_row_count * 0.8)):
+    if relevant_stage_count <= 0 or relevant_stage_count < max(
+        1, int(excluded_row_count * 0.8)
+    ):
         return None
     field_gap_counts = (
         raw_row_exclusion.get("field_gap_counts")
@@ -5066,7 +5813,10 @@ def _raw_row_exclusion_limit_up_locked_context(raw_row_exclusion: dict[str, Any]
     )
     if not exclusion_reasons.get("source_quality_blocker"):
         return None
-    if not (exclusion_reasons.get("not_evaluated_context") or exclusion_reasons.get("insufficient_history")):
+    if not (
+        exclusion_reasons.get("not_evaluated_context")
+        or exclusion_reasons.get("insufficient_history")
+    ):
         return None
 
     rows = _manifest_excluded_rows(raw_row_exclusion)
@@ -5079,7 +5829,9 @@ def _raw_row_exclusion_limit_up_locked_context(raw_row_exclusion: dict[str, Any]
     stock_codes_seen: set[str] = set()
     for item in rows:
         payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
-        fields = payload.get("fields") if isinstance(payload.get("fields"), dict) else {}
+        fields = (
+            payload.get("fields") if isinstance(payload.get("fields"), dict) else {}
+        )
         stage = str(payload.get("stage") or "")
         stages_seen.add(stage)
         stock_code = str(payload.get("stock_code") or "")
@@ -5096,7 +5848,9 @@ def _raw_row_exclusion_limit_up_locked_context(raw_row_exclusion: dict[str, Any]
 
     top_identity, top_identity_count = ("", 0)
     if identity_counts:
-        top_identity, top_identity_count = max(identity_counts.items(), key=lambda item: item[1])
+        top_identity, top_identity_count = max(
+            identity_counts.items(), key=lambda item: item[1]
+        )
     if limit_up_rows <= 0:
         return None
     if top_identity_count < max(1, int(len(rows) * 0.5)):
@@ -5121,7 +5875,9 @@ def _raw_row_exclusion_limit_up_locked_context(raw_row_exclusion: dict[str, Any]
     }
 
 
-def _raw_row_exclusion_market_halt_context(raw_row_exclusion: dict[str, Any]) -> dict[str, Any] | None:
+def _raw_row_exclusion_market_halt_context(
+    raw_row_exclusion: dict[str, Any],
+) -> dict[str, Any] | None:
     if raw_row_exclusion.get("market_halt_or_circuit_window_overlap") is not True:
         return None
     excluded_row_count = int(raw_row_exclusion.get("excluded_row_count") or 0)
@@ -5154,8 +5910,14 @@ def _raw_row_exclusion_market_halt_context(raw_row_exclusion: dict[str, Any]) ->
     }
 
 
-def _summarize_legacy_raw_row_exclusion_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
-    rows = manifest.get("excluded_rows") if isinstance(manifest.get("excluded_rows"), list) else []
+def _summarize_legacy_raw_row_exclusion_manifest(
+    manifest: dict[str, Any],
+) -> dict[str, Any]:
+    rows = (
+        manifest.get("excluded_rows")
+        if isinstance(manifest.get("excluded_rows"), list)
+        else []
+    )
     stage_counts: dict[str, int] = {}
     reason_counts: dict[str, int] = {}
     producer_hint: dict[str, dict[str, Any]] = {}
@@ -5165,15 +5927,24 @@ def _summarize_legacy_raw_row_exclusion_manifest(manifest: dict[str, Any]) -> di
         if not isinstance(item, dict):
             continue
         payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
-        fields = payload.get("fields") if isinstance(payload.get("fields"), dict) else {}
+        fields = (
+            payload.get("fields") if isinstance(payload.get("fields"), dict) else {}
+        )
         stage = str(payload.get("stage") or "-")
         stage_counts[stage] = stage_counts.get(stage, 0) + 1
         if payload.get("emitted_at"):
             timestamps.append(str(payload.get("emitted_at")))
         reasons: set[str] = set()
         for key, value in fields.items():
-            text = json.dumps(value, ensure_ascii=False, sort_keys=True).lower() if isinstance(value, (dict, list)) else str(value).lower()
-            if "source_quality_block" in text or str(key).lower() == "source_quality_blocker":
+            text = (
+                json.dumps(value, ensure_ascii=False, sort_keys=True).lower()
+                if isinstance(value, (dict, list))
+                else str(value).lower()
+            )
+            if (
+                "source_quality_block" in text
+                or str(key).lower() == "source_quality_blocker"
+            ):
                 reasons.add("source_quality_blocker")
             if "not_evaluated" in text:
                 reasons.add("not_evaluated_context")
@@ -5212,7 +5983,9 @@ def _summarize_legacy_raw_row_exclusion_manifest(manifest: dict[str, Any]) -> di
                 }
             )
     for hint in producer_hint.values():
-        hint["top_reasons"] = sorted(reason_counts, key=lambda key: (-reason_counts[key], key))[:5]
+        hint["top_reasons"] = sorted(
+            reason_counts, key=lambda key: (-reason_counts[key], key)
+        )[:5]
     return {
         "stage_counts": dict(sorted(stage_counts.items())),
         "field_gap_counts": {},
@@ -5220,11 +5993,19 @@ def _summarize_legacy_raw_row_exclusion_manifest(manifest: dict[str, Any]) -> di
         "first_timestamp": min(timestamps) if timestamps else None,
         "last_timestamp": max(timestamps) if timestamps else None,
         "sample_rows": sample_rows,
-        "producer_hint": sorted(producer_hint.values(), key=lambda item: (-int(item.get("count") or 0), str(item.get("stage") or ""))),
+        "producer_hint": sorted(
+            producer_hint.values(),
+            key=lambda item: (
+                -int(item.get("count") or 0),
+                str(item.get("stage") or ""),
+            ),
+        ),
     }
 
 
-def _codebase_performance_followup_orders(report: dict[str, Any]) -> list[dict[str, Any]]:
+def _codebase_performance_followup_orders(
+    report: dict[str, Any],
+) -> list[dict[str, Any]]:
     if not report:
         return []
     result: list[dict[str, Any]] = []
@@ -5233,7 +6014,9 @@ def _codebase_performance_followup_orders(report: dict[str, Any]) -> list[dict[s
         ("deferred", "deferred_candidates"),
         ("rejected", "rejected_candidates"),
     ):
-        candidates = report.get(section) if isinstance(report.get(section), list) else []
+        candidates = (
+            report.get(section) if isinstance(report.get(section), list) else []
+        )
         for item in candidates:
             if not isinstance(item, dict):
                 continue
@@ -5290,9 +6073,20 @@ def _buy_funnel_sentinel_followup_orders(
 ) -> list[dict[str, Any]]:
     if not report:
         return []
-    classification = report.get("classification") if isinstance(report.get("classification"), dict) else {}
-    matches = classification.get("matches") if isinstance(classification.get("matches"), list) else []
-    if classification.get("primary") != "SUBMIT_DROUGHT_CRITICAL" and "SUBMIT_DROUGHT_CRITICAL" not in matches:
+    classification = (
+        report.get("classification")
+        if isinstance(report.get("classification"), dict)
+        else {}
+    )
+    matches = (
+        classification.get("matches")
+        if isinstance(classification.get("matches"), list)
+        else []
+    )
+    if (
+        classification.get("primary") != "SUBMIT_DROUGHT_CRITICAL"
+        and "SUBMIT_DROUGHT_CRITICAL" not in matches
+    ):
         return []
     session = (
         ((report.get("current") or {}).get("session") or {})
@@ -5300,10 +6094,26 @@ def _buy_funnel_sentinel_followup_orders(
         else {}
     )
     ratios = session.get("ratios") if isinstance(session.get("ratios"), dict) else {}
-    unique = session.get("stage_unique") if isinstance(session.get("stage_unique"), dict) else {}
-    blockers = session.get("blocker_top") if isinstance(session.get("blocker_top"), list) else []
-    upstream = session.get("upstream_blocker_top") if isinstance(session.get("upstream_blocker_top"), list) else []
-    latency = session.get("latency_blocker_top") if isinstance(session.get("latency_blocker_top"), list) else []
+    unique = (
+        session.get("stage_unique")
+        if isinstance(session.get("stage_unique"), dict)
+        else {}
+    )
+    blockers = (
+        session.get("blocker_top")
+        if isinstance(session.get("blocker_top"), list)
+        else []
+    )
+    upstream = (
+        session.get("upstream_blocker_top")
+        if isinstance(session.get("upstream_blocker_top"), list)
+        else []
+    )
+    latency = (
+        session.get("latency_blocker_top")
+        if isinstance(session.get("latency_blocker_top"), list)
+        else []
+    )
     contract = (
         report.get("entry_submit_drought_contract")
         if isinstance(report.get("entry_submit_drought_contract"), dict)
@@ -5315,7 +6125,9 @@ def _buy_funnel_sentinel_followup_orders(
         lifecycle_report=lifecycle_report,
     )
     weak_contract_matches = (
-        contract.get("weak_contract_matches") if isinstance(contract.get("weak_contract_matches"), list) else []
+        contract.get("weak_contract_matches")
+        if isinstance(contract.get("weak_contract_matches"), list)
+        else []
     )
     evidence = [
         f"ai_confirmed_unique={_safe_int(unique.get('ai_confirmed'), 0)}",
@@ -5325,7 +6137,11 @@ def _buy_funnel_sentinel_followup_orders(
         f"submitted_to_ai_pct={ratios.get('submitted_to_ai_unique_pct')}",
         f"submitted_to_budget_pct={ratios.get('submitted_to_budget_unique_pct')}",
     ]
-    for label, items in (("blocker", blockers), ("upstream", upstream), ("latency", latency)):
+    for label, items in (
+        ("blocker", blockers),
+        ("upstream", upstream),
+        ("latency", latency),
+    ):
         for item in items[:3]:
             if isinstance(item, dict):
                 evidence.append(f"{label}:{item.get('label')}={item.get('count')}")
@@ -5386,7 +6202,8 @@ def _buy_funnel_sentinel_followup_orders(
     taxonomy_leakage_labels = [
         str(item.get("label") or "")
         for item in blockers
-        if isinstance(item, dict) and str(item.get("label") or "").startswith("blocked_swing_")
+        if isinstance(item, dict)
+        and str(item.get("label") or "").startswith("blocked_swing_")
     ]
     orders.extend(
         _entry_post_submit_weak_contract_orders(
@@ -5400,15 +6217,27 @@ def _buy_funnel_sentinel_followup_orders(
     return orders
 
 
-def _closed_instrumentation_order_families(ev_report: dict[str, Any], *, target_date: str) -> dict[str, str]:
-    outcome = ev_report.get("calibration_outcome") if isinstance(ev_report.get("calibration_outcome"), dict) else {}
-    decisions = outcome.get("decisions") if isinstance(outcome.get("decisions"), list) else []
+def _closed_instrumentation_order_families(
+    ev_report: dict[str, Any], *, target_date: str
+) -> dict[str, str]:
+    outcome = (
+        ev_report.get("calibration_outcome")
+        if isinstance(ev_report.get("calibration_outcome"), dict)
+        else {}
+    )
+    decisions = (
+        outcome.get("decisions") if isinstance(outcome.get("decisions"), list) else []
+    )
     closed: dict[str, str] = {}
     for item in decisions:
         if not isinstance(item, dict):
             continue
         family = str(item.get("family") or "").strip()
-        source_metrics = item.get("source_metrics") if isinstance(item.get("source_metrics"), dict) else {}
+        source_metrics = (
+            item.get("source_metrics")
+            if isinstance(item.get("source_metrics"), dict)
+            else {}
+        )
         if source_metrics.get("instrumentation_status") != "implemented":
             continue
         if family == "dynamic_entry_price_resolver":
@@ -5417,34 +6246,63 @@ def _closed_instrumentation_order_families(ev_report: dict[str, Any], *, target_
             closed["order_pre_submit_price_guard_safety_audit"] = family
         elif family == "holding_exit_decision_matrix_advisory":
             closed["order_holding_exit_decision_matrix_edge_counterfactual"] = family
-    if _holding_exit_counterfactual_contract_status(target_date).get("implemented") is True:
+    if (
+        _holding_exit_counterfactual_contract_status(target_date).get("implemented")
+        is True
+    ):
         closed["order_holding_exit_decision_matrix_edge_counterfactual"] = (
             "holding_exit_decision_matrix_advisory"
         )
     return closed
 
 
-def _dynamic_entry_price_report_contract_orders(ev_report: dict[str, Any]) -> list[dict[str, Any]]:
-    outcome = ev_report.get("calibration_outcome") if isinstance(ev_report.get("calibration_outcome"), dict) else {}
-    decisions = outcome.get("decisions") if isinstance(outcome.get("decisions"), list) else []
+def _dynamic_entry_price_report_contract_orders(
+    ev_report: dict[str, Any],
+) -> list[dict[str, Any]]:
+    outcome = (
+        ev_report.get("calibration_outcome")
+        if isinstance(ev_report.get("calibration_outcome"), dict)
+        else {}
+    )
+    decisions = (
+        outcome.get("decisions") if isinstance(outcome.get("decisions"), list) else []
+    )
     dynamic = next(
         (
             item
             for item in decisions
-            if isinstance(item, dict) and str(item.get("family") or "") == "dynamic_entry_price_resolver"
+            if isinstance(item, dict)
+            and str(item.get("family") or "") == "dynamic_entry_price_resolver"
         ),
         {},
     )
-    source_metrics = dynamic.get("source_metrics") if isinstance(dynamic.get("source_metrics"), dict) else {}
+    source_metrics = (
+        dynamic.get("source_metrics")
+        if isinstance(dynamic.get("source_metrics"), dict)
+        else {}
+    )
     if not source_metrics:
         return []
     orders: list[dict[str, Any]] = []
     real_count = _safe_int(source_metrics.get("real_candidate_observations"), 0)
     real_joined = _safe_int(source_metrics.get("real_outcome_joined_sample"), 0)
     sim_count = _safe_int(source_metrics.get("sim_candidate_observations"), 0)
-    state = str(dynamic.get("calibration_state") or source_metrics.get("calibration_state") or "")
-    reason = str(dynamic.get("calibration_reason") or source_metrics.get("calibration_reason") or "")
-    if real_count >= 20 and real_joined > 0 and state == "hold_sample" and "sim" in reason.lower():
+    state = str(
+        dynamic.get("calibration_state")
+        or source_metrics.get("calibration_state")
+        or ""
+    )
+    reason = str(
+        dynamic.get("calibration_reason")
+        or source_metrics.get("calibration_reason")
+        or ""
+    )
+    if (
+        real_count >= 20
+        and real_joined > 0
+        and state == "hold_sample"
+        and "sim" in reason.lower()
+    ):
         orders.append(
             {
                 "order_id": "order_dynamic_entry_price_real_sample_unused_by_postclose_decision",
@@ -5478,11 +6336,15 @@ def _dynamic_entry_price_report_contract_orders(ev_report: dict[str, Any]) -> li
                 ],
             }
         )
-    contract_status = str(
-        source_metrics.get("report_contract_status")
-        or source_metrics.get("dynamic_entry_price_report_contract_status")
-        or ""
-    ).strip().lower()
+    contract_status = (
+        str(
+            source_metrics.get("report_contract_status")
+            or source_metrics.get("dynamic_entry_price_report_contract_status")
+            or ""
+        )
+        .strip()
+        .lower()
+    )
 
     def _truthy_contract_gap(value: Any) -> bool:
         if isinstance(value, bool):
@@ -5490,7 +6352,15 @@ def _dynamic_entry_price_report_contract_orders(ev_report: dict[str, Any]) -> li
         if isinstance(value, (int, float)):
             return value != 0
         if isinstance(value, str):
-            return value.strip().lower() in {"true", "1", "yes", "y", "gap", "contract_gap", "report_contract_gap"}
+            return value.strip().lower() in {
+                "true",
+                "1",
+                "yes",
+                "y",
+                "gap",
+                "contract_gap",
+                "report_contract_gap",
+            }
         return False
 
     explicit_contract_gap = any(
@@ -5512,10 +6382,14 @@ def _dynamic_entry_price_report_contract_orders(ev_report: dict[str, Any]) -> li
     if not explicit_contract_gap:
         return orders
     candidate_quality = (
-        source_metrics.get("candidate_quality") if isinstance(source_metrics.get("candidate_quality"), dict) else {}
+        source_metrics.get("candidate_quality")
+        if isinstance(source_metrics.get("candidate_quality"), dict)
+        else {}
     )
     ai_quality = (
-        candidate_quality.get("AI_candidate") if isinstance(candidate_quality.get("AI_candidate"), dict) else {}
+        candidate_quality.get("AI_candidate")
+        if isinstance(candidate_quality.get("AI_candidate"), dict)
+        else {}
     )
     failure_count = _safe_int(ai_quality.get("candidate_failure_count"), 0)
     if failure_count > 0:
@@ -5588,7 +6462,9 @@ def _dynamic_entry_price_report_contract_orders(ev_report: dict[str, Any]) -> li
     return orders
 
 
-def _entry_split_order_plan_followup_orders(ev_report: dict[str, Any]) -> list[dict[str, Any]]:
+def _entry_split_order_plan_followup_orders(
+    ev_report: dict[str, Any],
+) -> list[dict[str, Any]]:
     summary = (
         ev_report.get("entry_split_order_plan")
         if isinstance(ev_report.get("entry_split_order_plan"), dict)
@@ -5609,7 +6485,10 @@ def _entry_split_order_plan_followup_orders(ev_report: dict[str, Any]) -> list[d
         and not _is_real_primary_sample_book(summary.get("primary_sample_book"))
     ):
         issues.append("real_sample_unused_by_postclose_decision")
-    if summary.get("schema_version") and summary.get("schema_version") != "entry_split_order_plan_v1":
+    if (
+        summary.get("schema_version")
+        and summary.get("schema_version") != "entry_split_order_plan_v1"
+    ):
         issues.append("report_contract_gap")
     if not issues:
         return []
@@ -5669,7 +6548,9 @@ def _entry_split_order_plan_followup_orders(ev_report: dict[str, Any]) -> list[d
     ]
 
 
-def _scale_in_split_order_plan_followup_orders(ev_report: dict[str, Any]) -> list[dict[str, Any]]:
+def _scale_in_split_order_plan_followup_orders(
+    ev_report: dict[str, Any],
+) -> list[dict[str, Any]]:
     summary = (
         ev_report.get("scale_in_split_order_plan")
         if isinstance(ev_report.get("scale_in_split_order_plan"), dict)
@@ -5683,7 +6564,10 @@ def _scale_in_split_order_plan_followup_orders(ev_report: dict[str, Any]) -> lis
         issues.append("report_contract_gap")
     if status == "source_quality_blocked":
         issues.append("source_quality_gap")
-    if summary.get("schema_version") and summary.get("schema_version") != "scale_in_split_order_plan_v1":
+    if (
+        summary.get("schema_version")
+        and summary.get("schema_version") != "scale_in_split_order_plan_v1"
+    ):
         issues.append("report_contract_gap")
     if _safe_int(summary.get("price_observation_join_gap_count"), 0) > 0:
         issues.append("price_observation_join_gap")
@@ -5754,7 +6638,9 @@ def _scale_in_split_order_plan_followup_orders(ev_report: dict[str, Any]) -> lis
 
 
 def _calibration_report_from_ev(ev_report: dict[str, Any]) -> dict[str, Any]:
-    sources = ev_report.get("sources") if isinstance(ev_report.get("sources"), dict) else {}
+    sources = (
+        ev_report.get("sources") if isinstance(ev_report.get("sources"), dict) else {}
+    )
     path_text = sources.get("calibration")
     if not path_text:
         return {}
@@ -5762,21 +6648,31 @@ def _calibration_report_from_ev(ev_report: dict[str, Any]) -> dict[str, Any]:
 
 
 def _calibration_report_path_from_ev(ev_report: dict[str, Any]) -> Path | None:
-    sources = ev_report.get("sources") if isinstance(ev_report.get("sources"), dict) else {}
+    sources = (
+        ev_report.get("sources") if isinstance(ev_report.get("sources"), dict) else {}
+    )
     path_text = sources.get("calibration")
     return Path(str(path_text)) if path_text else None
 
 
-def _window_policy_audit_followup_orders(calibration_report: dict[str, Any]) -> list[dict[str, Any]]:
+def _window_policy_audit_followup_orders(
+    calibration_report: dict[str, Any],
+) -> list[dict[str, Any]]:
     audit = (
         calibration_report.get("window_policy_audit")
         if isinstance(calibration_report.get("window_policy_audit"), dict)
         else {}
     )
-    issue_counts = audit.get("issue_counts") if isinstance(audit.get("issue_counts"), dict) else {}
+    issue_counts = (
+        audit.get("issue_counts") if isinstance(audit.get("issue_counts"), dict) else {}
+    )
     if not issue_counts:
         return []
-    items = [item for item in audit.get("items") or [] if isinstance(item, dict) and item.get("issues")]
+    items = [
+        item
+        for item in audit.get("items") or []
+        if isinstance(item, dict) and item.get("issues")
+    ]
     if not items:
         return []
     affected = [str(item.get("family") or "") for item in items if item.get("family")]
@@ -5834,29 +6730,51 @@ def _window_policy_audit_followup_orders(calibration_report: dict[str, Any]) -> 
     ]
 
 
-def _panic_lifecycle_followup_orders(calibration_report: dict[str, Any]) -> list[dict[str, Any]]:
+def _panic_lifecycle_followup_orders(
+    calibration_report: dict[str, Any],
+) -> list[dict[str, Any]]:
     bundle = (
         calibration_report.get("calibration_source_bundle")
         if isinstance(calibration_report.get("calibration_source_bundle"), dict)
         else {}
     )
-    source_metrics = bundle.get("source_metrics") if isinstance(bundle.get("source_metrics"), dict) else {}
+    source_metrics = (
+        bundle.get("source_metrics")
+        if isinstance(bundle.get("source_metrics"), dict)
+        else {}
+    )
     orders: list[dict[str, Any]] = []
 
-    panic_sell = source_metrics.get("panic_sell_defense") if isinstance(source_metrics.get("panic_sell_defense"), dict) else {}
-    panic_sell_candidates = panic_sell.get("candidate_status") if isinstance(panic_sell.get("candidate_status"), dict) else {}
+    panic_sell = (
+        source_metrics.get("panic_sell_defense")
+        if isinstance(source_metrics.get("panic_sell_defense"), dict)
+        else {}
+    )
+    panic_sell_candidates = (
+        panic_sell.get("candidate_status")
+        if isinstance(panic_sell.get("candidate_status"), dict)
+        else {}
+    )
     panic_sell_source_quality_blockers = (
         panic_sell.get("source_quality_blockers")
         if isinstance(panic_sell.get("source_quality_blockers"), list)
         else []
     )
-    panic_sell_triggered = bool(panic_sell_candidates) or str(panic_sell.get("panic_state") or "") in {
+    panic_sell_triggered = bool(panic_sell_candidates) or str(
+        panic_sell.get("panic_state") or ""
+    ) in {
         "PANIC_SELL",
         "RECOVERY_WATCH",
     }
-    panic_sell_triggered = panic_sell_triggered or (_safe_int(panic_sell.get("active_sim_probe_positions"), 0) > 0)
-    panic_sell_triggered = panic_sell_triggered or bool(panic_sell.get("market_breadth_followup_candidate"))
-    panic_sell_triggered = panic_sell_triggered or bool(panic_sell_source_quality_blockers)
+    panic_sell_triggered = panic_sell_triggered or (
+        _safe_int(panic_sell.get("active_sim_probe_positions"), 0) > 0
+    )
+    panic_sell_triggered = panic_sell_triggered or bool(
+        panic_sell.get("market_breadth_followup_candidate")
+    )
+    panic_sell_triggered = panic_sell_triggered or bool(
+        panic_sell_source_quality_blockers
+    )
     if panic_sell_triggered:
         panic_sell_implementation_status = (
             "implemented_but_waiting_sample"
@@ -5931,26 +6849,48 @@ def _panic_lifecycle_followup_orders(calibration_report: dict[str, Any]) -> list
             }
         )
 
-    panic_buy = source_metrics.get("panic_buying") if isinstance(source_metrics.get("panic_buying"), dict) else {}
-    panic_buy_candidates = panic_buy.get("candidate_status") if isinstance(panic_buy.get("candidate_status"), dict) else {}
+    panic_buy = (
+        source_metrics.get("panic_buying")
+        if isinstance(source_metrics.get("panic_buying"), dict)
+        else {}
+    )
+    panic_buy_candidates = (
+        panic_buy.get("candidate_status")
+        if isinstance(panic_buy.get("candidate_status"), dict)
+        else {}
+    )
     panic_buy_source_quality_blockers = (
         panic_buy.get("source_quality_blockers")
         if isinstance(panic_buy.get("source_quality_blockers"), list)
         else []
     )
     panic_buy_gate_state = str(panic_buy.get("risk_regime_gate_state") or "normal")
-    panic_buy_confirmed_evidence_count = _safe_int(panic_buy.get("confirmed_evidence_count"), 0)
+    panic_buy_confirmed_evidence_count = _safe_int(
+        panic_buy.get("confirmed_evidence_count"), 0
+    )
     panic_buy_report_candidate = any(
-        str(status) == "report_only_candidate" for status in panic_buy_candidates.values()
+        str(status) == "report_only_candidate"
+        for status in panic_buy_candidates.values()
     )
     panic_buy_triggered = panic_buy_report_candidate
-    panic_buy_triggered = panic_buy_triggered or panic_buy_gate_state not in {"", "normal", "None"}
+    panic_buy_triggered = panic_buy_triggered or panic_buy_gate_state not in {
+        "",
+        "normal",
+        "None",
+    }
     panic_buy_triggered = panic_buy_triggered or panic_buy_confirmed_evidence_count > 0
-    panic_buy_triggered = panic_buy_triggered or (_safe_int(panic_buy.get("tp_like_exit_count"), 0) > 0)
-    panic_buy_triggered = panic_buy_triggered or (_safe_int(panic_buy.get("trailing_winner_count"), 0) > 0)
+    panic_buy_triggered = panic_buy_triggered or (
+        _safe_int(panic_buy.get("tp_like_exit_count"), 0) > 0
+    )
+    panic_buy_triggered = panic_buy_triggered or (
+        _safe_int(panic_buy.get("trailing_winner_count"), 0) > 0
+    )
     panic_buy_triggered = panic_buy_triggered or bool(panic_buy_source_quality_blockers)
     if panic_buy_triggered:
-        source_quality_only = bool(panic_buy_source_quality_blockers) or panic_buy_gate_state == "source_quality_blocked"
+        source_quality_only = (
+            bool(panic_buy_source_quality_blockers)
+            or panic_buy_gate_state == "source_quality_blocked"
+        )
         panic_buy_implementation_status = (
             "implemented_source_quality_contract_waiting_sample"
             if source_quality_only
@@ -5969,12 +6909,24 @@ def _panic_lifecycle_followup_orders(calibration_report: dict[str, Any]) -> list
                     else "panic buy runner TP canary lifecycle pack"
                 ),
                 "source_report_type": "threshold_cycle_calibration_source_bundle",
-                "lifecycle_stage": "source_quality" if source_quality_only else "holding_exit",
+                "lifecycle_stage": (
+                    "source_quality" if source_quality_only else "holding_exit"
+                ),
                 "target_subsystem": "panic_buying",
-                "route": "source_quality_blocker" if source_quality_only else "auto_family_candidate",
+                "route": (
+                    "source_quality_blocker"
+                    if source_quality_only
+                    else "auto_family_candidate"
+                ),
                 "mapped_family": None,
-                "threshold_family": None if source_quality_only else "panic_buy_runner_tp_canary",
-                "improvement_type": "source_quality_instrumentation" if source_quality_only else "runtime_transition_design",
+                "threshold_family": (
+                    None if source_quality_only else "panic_buy_runner_tp_canary"
+                ),
+                "improvement_type": (
+                    "source_quality_instrumentation"
+                    if source_quality_only
+                    else "runtime_transition_design"
+                ),
                 "confidence": "consensus",
                 "priority": 7,
                 "runtime_effect": False,
@@ -6048,16 +7000,26 @@ def _panic_lifecycle_followup_orders(calibration_report: dict[str, Any]) -> list
     return orders
 
 
-def _swing_strategy_discovery_followup_orders(report: dict[str, Any]) -> list[dict[str, Any]]:
+def _swing_strategy_discovery_followup_orders(
+    report: dict[str, Any],
+) -> list[dict[str, Any]]:
     if not report:
         return []
     summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
     source_quality = (
-        report.get("source_quality_summary") if isinstance(report.get("source_quality_summary"), dict) else {}
+        report.get("source_quality_summary")
+        if isinstance(report.get("source_quality_summary"), dict)
+        else {}
     )
-    warnings = [str(item) for item in (report.get("warnings") or []) if str(item).strip()]
+    warnings = [
+        str(item) for item in (report.get("warnings") or []) if str(item).strip()
+    ]
     avoid_count = _safe_int(summary.get("avoid_bucket_count"), 0)
-    avoid_buckets = report.get("avoid_buckets") if isinstance(report.get("avoid_buckets"), list) else []
+    avoid_buckets = (
+        report.get("avoid_buckets")
+        if isinstance(report.get("avoid_buckets"), list)
+        else []
+    )
     avoid_contract_implemented = bool(avoid_buckets) and all(
         isinstance(item, dict)
         and "axis" in item
@@ -6069,7 +7031,9 @@ def _swing_strategy_discovery_followup_orders(report: dict[str, Any]) -> list[di
     pending = _safe_int(summary.get("pending_future_quote_count"), 0)
     labeled = _safe_int(summary.get("labeled_sample_count"), 0)
     implementation_status = (
-        "implemented" if source_quality.get("implementation_status") == "implemented" else None
+        "implemented"
+        if source_quality.get("implementation_status") == "implemented"
+        else None
     )
     orders: list[dict[str, Any]] = []
     if warnings or pending:
@@ -6089,8 +7053,12 @@ def _swing_strategy_discovery_followup_orders(report: dict[str, Any]) -> list[di
                 "runtime_effect": False,
                 "allowed_runtime_apply": False,
                 "implementation_status": implementation_status,
-                "implementation_checks": source_quality.get("implementation_checks") or [],
-                "implementation_provenance": source_quality.get("implementation_provenance") or {},
+                "implementation_checks": source_quality.get("implementation_checks")
+                or [],
+                "implementation_provenance": source_quality.get(
+                    "implementation_provenance"
+                )
+                or {},
                 "expected_ev_effect": "Improve discovery label coverage and source attribution before any swing strategy policy promotion is discussed.",
                 "evidence": [
                     f"labeled_sample_count={labeled}",
@@ -6127,18 +7095,22 @@ def _swing_strategy_discovery_followup_orders(report: dict[str, Any]) -> list[di
                 "priority": 7,
                 "runtime_effect": False,
                 "allowed_runtime_apply": False,
-                "implementation_status": "implemented" if avoid_contract_implemented else None,
-                "implementation_provenance": {
-                    "avoid_bucket_contract_fields": [
-                        "axis",
-                        "sample_count",
-                        "source_quality_adjusted_ev_pct",
-                        "downside_p10_pct",
-                    ],
-                    "avoid_bucket_count": avoid_count,
-                }
-                if avoid_contract_implemented
-                else None,
+                "implementation_status": (
+                    "implemented" if avoid_contract_implemented else None
+                ),
+                "implementation_provenance": (
+                    {
+                        "avoid_bucket_contract_fields": [
+                            "axis",
+                            "sample_count",
+                            "source_quality_adjusted_ev_pct",
+                            "downside_p10_pct",
+                        ],
+                        "avoid_bucket_count": avoid_count,
+                    }
+                    if avoid_contract_implemented
+                    else None
+                ),
                 "expected_ev_effect": "Expose avoid buckets as analysis guidance only; do not mutate swing runtime or recommendation_history.",
                 "evidence": [
                     f"avoid_bucket_count={avoid_count}",
@@ -6167,7 +7139,9 @@ def _swing_ldm_order_id(item: dict[str, Any]) -> str:
     return f"order_swing_ldm_{stage}_{bucket_type}_{bucket_key}"
 
 
-def _swing_lifecycle_matrix_followup_orders(report: dict[str, Any]) -> list[dict[str, Any]]:
+def _swing_lifecycle_matrix_followup_orders(
+    report: dict[str, Any],
+) -> list[dict[str, Any]]:
     if not report:
         return []
     orders: list[dict[str, Any]] = []
@@ -6216,7 +7190,11 @@ def _swing_lifecycle_matrix_followup_orders(report: dict[str, Any]) -> list[dict
         "scale_in_bucket_attribution",
         "discovery_arm_attribution",
     ):
-        section = report.get(section_name) if isinstance(report.get(section_name), dict) else {}
+        section = (
+            report.get(section_name)
+            if isinstance(report.get(section_name), dict)
+            else {}
+        )
         for item in section.get("code_improvement_workorders") or []:
             if not isinstance(item, dict):
                 continue
@@ -6226,7 +7204,8 @@ def _swing_lifecycle_matrix_followup_orders(report: dict[str, Any]) -> list[dict
                     "title": f"Swing LDM source field follow-up: {item.get('bucket_key')}",
                     "source_report_type": "swing_lifecycle_decision_matrix",
                     "lifecycle_stage": item.get("lifecycle_stage") or "source_quality",
-                    "target_subsystem": item.get("target_subsystem") or "swing_lifecycle_decision_matrix",
+                    "target_subsystem": item.get("target_subsystem")
+                    or "swing_lifecycle_decision_matrix",
                     "route": "instrumentation_order",
                     "mapped_family": None,
                     "threshold_family": None,
@@ -6236,7 +7215,8 @@ def _swing_lifecycle_matrix_followup_orders(report: dict[str, Any]) -> list[dict
                     "runtime_effect": False,
                     "allowed_runtime_apply": False,
                     "implementation_status": item.get("implementation_status"),
-                    "implementation_provenance": item.get("implementation_provenance") or {},
+                    "implementation_provenance": item.get("implementation_provenance")
+                    or {},
                     "expected_ev_effect": "Close Swing LDM bucket source-quality gaps while preserving sim-only authority.",
                     "evidence": [
                         f"section={section_name}",
@@ -6260,19 +7240,27 @@ def _swing_lifecycle_matrix_followup_orders(report: dict[str, Any]) -> list[dict
     return orders
 
 
-def _swing_lifecycle_bucket_discovery_followup_orders(report: dict[str, Any]) -> list[dict[str, Any]]:
+def _swing_lifecycle_bucket_discovery_followup_orders(
+    report: dict[str, Any],
+) -> list[dict[str, Any]]:
     if not report:
         return []
     orders: list[dict[str, Any]] = []
     summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
-    surfaced_candidates = report.get("surfaced_candidates") if isinstance(report.get("surfaced_candidates"), list) else []
+    surfaced_candidates = (
+        report.get("surfaced_candidates")
+        if isinstance(report.get("surfaced_candidates"), list)
+        else []
+    )
     contract_gap_ids: list[str] = []
     for candidate in surfaced_candidates:
         if not isinstance(candidate, dict):
             continue
         candidate_id = str(candidate.get("candidate_id") or "").strip()
         bucket_id = str(candidate.get("bucket_id") or "").strip()
-        stage = str(candidate.get("stage") or candidate.get("lifecycle_stage") or "").strip()
+        stage = str(
+            candidate.get("stage") or candidate.get("lifecycle_stage") or ""
+        ).strip()
         if not candidate_id or not bucket_id or not stage or stage.lower() == "unknown":
             contract_gap_ids.append(candidate_id or bucket_id or "unknown")
     if contract_gap_ids:
@@ -6317,7 +7305,11 @@ def _swing_lifecycle_bucket_discovery_followup_orders(report: dict[str, Any]) ->
             and not bool(summary.get("ai_review_followup_required"))
             and not ai_review_followup_reasons
         )
-        implementation_status = "implemented_but_waiting_sample" if provider_unavailable_hold else "implemented"
+        implementation_status = (
+            "implemented_but_waiting_sample"
+            if provider_unavailable_hold
+            else "implemented"
+        )
         orders.append(
             {
                 "order_id": "order_swing_lifecycle_bucket_discovery_ai_review_rollup",
@@ -6325,8 +7317,16 @@ def _swing_lifecycle_bucket_discovery_followup_orders(report: dict[str, Any]) ->
                 "source_report_type": "swing_lifecycle_bucket_discovery",
                 "lifecycle_stage": "source_quality",
                 "target_subsystem": "swing_lifecycle_bucket_discovery",
-                "route": "ai_review_provider_unavailable_hold" if provider_unavailable_hold else "instrumentation_order",
-                "mapped_family": "swing_lifecycle_bucket_discovery" if provider_unavailable_hold else None,
+                "route": (
+                    "ai_review_provider_unavailable_hold"
+                    if provider_unavailable_hold
+                    else "instrumentation_order"
+                ),
+                "mapped_family": (
+                    "swing_lifecycle_bucket_discovery"
+                    if provider_unavailable_hold
+                    else None
+                ),
                 "threshold_family": None,
                 "improvement_type": "swing_bucket_ai_review_shard_gap",
                 "confidence": "postclose_bucket_discovery_source",
@@ -6357,10 +7357,16 @@ def _swing_lifecycle_bucket_discovery_followup_orders(report: dict[str, Any]) ->
                     "runtime_effect": False,
                     "allowed_runtime_apply": False,
                     "ai_review_blocker_state": summary.get("ai_review_blocker_state"),
-                    "ai_review_followup_required": bool(summary.get("ai_review_followup_required")),
+                    "ai_review_followup_required": bool(
+                        summary.get("ai_review_followup_required")
+                    ),
                     "ai_review_followup_reasons": ai_review_followup_reasons,
-                    "sim_auto_review_shard_count": _safe_int(summary.get("sim_auto_review_shard_count"), 0),
-                    "sim_auto_reviewed_candidate_count": _safe_int(summary.get("sim_auto_reviewed_candidate_count"), 0),
+                    "sim_auto_review_shard_count": _safe_int(
+                        summary.get("sim_auto_review_shard_count"), 0
+                    ),
+                    "sim_auto_reviewed_candidate_count": _safe_int(
+                        summary.get("sim_auto_reviewed_candidate_count"), 0
+                    ),
                     "sim_auto_unreviewed_candidate_count": unreviewed_count,
                     "sim_auto_downgraded_by_review_count": downgraded_count,
                     "root_cause_closure_status_hint": "root_cause_closed",
@@ -6388,7 +7394,8 @@ def _swing_lifecycle_bucket_discovery_followup_orders(report: dict[str, Any]) ->
                 "title": f"Swing lifecycle bucket discovery handoff follow-up: {bucket_id}",
                 "source_report_type": "swing_lifecycle_bucket_discovery",
                 "lifecycle_stage": item.get("lifecycle_stage") or "source_quality",
-                "target_subsystem": item.get("target_subsystem") or "swing_lifecycle_bucket_discovery",
+                "target_subsystem": item.get("target_subsystem")
+                or "swing_lifecycle_bucket_discovery",
                 "route": "instrumentation_order",
                 "mapped_family": None,
                 "threshold_family": None,
@@ -6433,22 +7440,38 @@ def _swing_lifecycle_bucket_discovery_followup_orders(report: dict[str, Any]) ->
     return orders
 
 
-def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) -> dict[str, Any]:
+def build_code_improvement_workorder(
+    target_date: str, *, max_orders: int = 12
+) -> dict[str, Any]:
     target_date = str(target_date).strip()
     isolated_source_mode = _workorder_isolated_source_mode()
     json_path, md_path = code_improvement_workorder_paths(target_date)
     previous_report = _load_json(json_path)
     source_path = automation_report_path(target_date)
-    automation = _load_source_json(source_path, isolated_source_mode=isolated_source_mode)
+    automation = _load_source_json(
+        source_path, isolated_source_mode=isolated_source_mode
+    )
     swing_source_path = swing_automation_report_path(target_date)
-    swing_automation = _load_source_json(swing_source_path, isolated_source_mode=isolated_source_mode)
+    swing_automation = _load_source_json(
+        swing_source_path, isolated_source_mode=isolated_source_mode
+    )
     swing_lab_source_path = swing_pattern_lab_automation_report_path(target_date)
-    swing_lab_automation = _load_source_json(swing_lab_source_path, isolated_source_mode=isolated_source_mode)
+    swing_lab_automation = _load_source_json(
+        swing_lab_source_path, isolated_source_mode=isolated_source_mode
+    )
     swing_discovery_source_path = swing_strategy_discovery_ev_report_path(target_date)
-    swing_discovery_ev = _load_source_json(swing_discovery_source_path, isolated_source_mode=isolated_source_mode)
-    swing_lifecycle_matrix_path = swing_lifecycle_decision_matrix_report_path(target_date)
-    swing_lifecycle_matrix = _load_source_json(swing_lifecycle_matrix_path, isolated_source_mode=isolated_source_mode)
-    swing_lifecycle_bucket_discovery_path = swing_lifecycle_bucket_discovery_report_path(target_date)
+    swing_discovery_ev = _load_source_json(
+        swing_discovery_source_path, isolated_source_mode=isolated_source_mode
+    )
+    swing_lifecycle_matrix_path = swing_lifecycle_decision_matrix_report_path(
+        target_date
+    )
+    swing_lifecycle_matrix = _load_source_json(
+        swing_lifecycle_matrix_path, isolated_source_mode=isolated_source_mode
+    )
+    swing_lifecycle_bucket_discovery_path = (
+        swing_lifecycle_bucket_discovery_report_path(target_date)
+    )
     swing_lifecycle_bucket_discovery = _load_source_json(
         swing_lifecycle_bucket_discovery_path,
         isolated_source_mode=isolated_source_mode,
@@ -6456,47 +7479,77 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
     ev_path = threshold_ev_report_path(target_date)
     ev_report = _load_source_json(ev_path, isolated_source_mode=isolated_source_mode)
     lifecycle_source_path = lifecycle_decision_matrix_report_path(target_date)
-    lifecycle_report = _load_source_json(lifecycle_source_path, isolated_source_mode=isolated_source_mode)
-    lifecycle_bucket_discovery_path = _lifecycle_bucket_discovery_report_path(target_date)
+    lifecycle_report = _load_source_json(
+        lifecycle_source_path, isolated_source_mode=isolated_source_mode
+    )
+    lifecycle_bucket_discovery_path = _lifecycle_bucket_discovery_report_path(
+        target_date
+    )
     lifecycle_bucket_discovery = _load_source_json(
         lifecycle_bucket_discovery_path,
         isolated_source_mode=isolated_source_mode,
     )
     pipeline_event_verbosity_path = _pipeline_event_verbosity_report_path(target_date)
-    pipeline_event_verbosity = _load_source_json(pipeline_event_verbosity_path, isolated_source_mode=isolated_source_mode)
-    observation_source_quality_path = _observation_source_quality_audit_path(target_date)
+    pipeline_event_verbosity = _load_source_json(
+        pipeline_event_verbosity_path, isolated_source_mode=isolated_source_mode
+    )
+    observation_source_quality_path = _observation_source_quality_audit_path(
+        target_date
+    )
     observation_source_quality = _load_source_json(
         observation_source_quality_path,
         isolated_source_mode=isolated_source_mode,
     )
-    watching_score_smoothing_diagnostic_path = _ai_watching_score_smoothing_diagnostic_path(target_date)
+    watching_score_smoothing_diagnostic_path = (
+        _ai_watching_score_smoothing_diagnostic_path(target_date)
+    )
     codebase_performance_path = _codebase_performance_report_path(target_date)
-    codebase_performance = _load_source_json(codebase_performance_path, isolated_source_mode=isolated_source_mode)
-    pattern_lab_currentness_path = pattern_lab_currentness_audit_report_path(target_date)
+    codebase_performance = _load_source_json(
+        codebase_performance_path, isolated_source_mode=isolated_source_mode
+    )
+    pattern_lab_currentness_path = pattern_lab_currentness_audit_report_path(
+        target_date
+    )
     pattern_lab_currentness = _load_source_json(
         pattern_lab_currentness_path,
         isolated_source_mode=isolated_source_mode,
     )
     pattern_lab_ai_review_path = pattern_lab_ai_review_report_path(target_date)
-    pattern_lab_ai_review = _load_source_json(pattern_lab_ai_review_path, isolated_source_mode=isolated_source_mode)
+    pattern_lab_ai_review = _load_source_json(
+        pattern_lab_ai_review_path, isolated_source_mode=isolated_source_mode
+    )
     producer_gap_discovery_path = producer_gap_discovery_report_path(target_date)
-    producer_gap_discovery = _load_source_json(producer_gap_discovery_path, isolated_source_mode=isolated_source_mode)
-    stage_hook_workorder_discovery_path = stage_hook_workorder_discovery_report_path(target_date)
+    producer_gap_discovery = _load_source_json(
+        producer_gap_discovery_path, isolated_source_mode=isolated_source_mode
+    )
+    stage_hook_workorder_discovery_path = stage_hook_workorder_discovery_report_path(
+        target_date
+    )
     stage_hook_workorder_discovery = _load_source_json(
         stage_hook_workorder_discovery_path,
         isolated_source_mode=isolated_source_mode,
     )
-    stage_hook_runtime_scaffold_path = stage_hook_runtime_scaffold_report_path(target_date)
+    stage_hook_runtime_scaffold_path = stage_hook_runtime_scaffold_report_path(
+        target_date
+    )
     stage_hook_runtime_scaffold = _load_source_json(
         stage_hook_runtime_scaffold_path,
         isolated_source_mode=isolated_source_mode,
     )
-    stage_hook_scaffold_by_name = _stage_hook_scaffold_by_name(stage_hook_runtime_scaffold)
+    stage_hook_scaffold_by_name = _stage_hook_scaffold_by_name(
+        stage_hook_runtime_scaffold
+    )
     buy_funnel_sentinel_path = buy_funnel_sentinel_report_path(target_date)
-    buy_funnel_sentinel = _load_source_json(buy_funnel_sentinel_path, isolated_source_mode=isolated_source_mode)
+    buy_funnel_sentinel = _load_source_json(
+        buy_funnel_sentinel_path, isolated_source_mode=isolated_source_mode
+    )
     conversion_lane_path = conversion_lane_report_path(target_date)
-    conversion_lane = _load_source_json(conversion_lane_path, isolated_source_mode=isolated_source_mode)
-    intraday_entry_blocker_path = intraday_entry_blocker_diagnostics_report_path(target_date)
+    conversion_lane = _load_source_json(
+        conversion_lane_path, isolated_source_mode=isolated_source_mode
+    )
+    intraday_entry_blocker_path = intraday_entry_blocker_diagnostics_report_path(
+        target_date
+    )
     intraday_entry_blocker = _load_source_json(
         intraday_entry_blocker_path,
         isolated_source_mode=isolated_source_mode,
@@ -6506,29 +7559,37 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         entry_hurdle_backtest_path,
         isolated_source_mode=isolated_source_mode,
     )
-    rising_missed_scout_workorder_path = rising_missed_scout_workorder_report_path(target_date)
+    rising_missed_scout_workorder_path = rising_missed_scout_workorder_report_path(
+        target_date
+    )
     rising_missed_scout_workorder = _load_source_json(
         rising_missed_scout_workorder_path,
         isolated_source_mode=isolated_source_mode,
     )
-    rising_missed_classifier_prior_path = rising_missed_classifier_prior_report_path(target_date)
+    rising_missed_classifier_prior_path = rising_missed_classifier_prior_report_path(
+        target_date
+    )
     rising_missed_classifier_prior = _load_source_json(
         rising_missed_classifier_prior_path,
         isolated_source_mode=isolated_source_mode,
     )
-    rising_missed_normal_buy_bridge_candidate_path = rising_missed_normal_buy_bridge_candidate_report_path(
-        target_date
+    rising_missed_normal_buy_bridge_candidate_path = (
+        rising_missed_normal_buy_bridge_candidate_report_path(target_date)
     )
     rising_missed_normal_buy_bridge_candidate = _load_source_json(
         rising_missed_normal_buy_bridge_candidate_path,
         isolated_source_mode=isolated_source_mode,
     )
-    one_share_threshold_opportunity_path = one_share_threshold_opportunity_report_path(target_date)
+    one_share_threshold_opportunity_path = one_share_threshold_opportunity_report_path(
+        target_date
+    )
     one_share_threshold_opportunity = _load_source_json(
         one_share_threshold_opportunity_path,
         isolated_source_mode=isolated_source_mode,
     )
-    microstructure_reaction_context_path = microstructure_reaction_context_report_path(target_date)
+    microstructure_reaction_context_path = microstructure_reaction_context_report_path(
+        target_date
+    )
     microstructure_reaction_context = _load_source_json(
         microstructure_reaction_context_path,
         isolated_source_mode=isolated_source_mode,
@@ -6570,43 +7631,82 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         for label, path in candidate_source_paths.items()
         if _source_path_enabled(path, isolated_source_mode=isolated_source_mode)
     }
-    ev_sources = ev_report.get("sources") if isinstance(ev_report.get("sources"), dict) else {}
+    ev_sources = (
+        ev_report.get("sources") if isinstance(ev_report.get("sources"), dict) else {}
+    )
     if ev_sources.get("entry_split_order_plan"):
-        entry_split_order_plan_path = Path(str(ev_sources.get("entry_split_order_plan")))
-        if _source_path_enabled(entry_split_order_plan_path, isolated_source_mode=isolated_source_mode):
+        entry_split_order_plan_path = Path(
+            str(ev_sources.get("entry_split_order_plan"))
+        )
+        if _source_path_enabled(
+            entry_split_order_plan_path, isolated_source_mode=isolated_source_mode
+        ):
             source_paths["entry_split_order_plan"] = entry_split_order_plan_path
     if ev_sources.get("scale_in_split_order_plan"):
-        scale_in_split_order_plan_path = Path(str(ev_sources.get("scale_in_split_order_plan")))
-        if _source_path_enabled(scale_in_split_order_plan_path, isolated_source_mode=isolated_source_mode):
+        scale_in_split_order_plan_path = Path(
+            str(ev_sources.get("scale_in_split_order_plan"))
+        )
+        if _source_path_enabled(
+            scale_in_split_order_plan_path, isolated_source_mode=isolated_source_mode
+        ):
             source_paths["scale_in_split_order_plan"] = scale_in_split_order_plan_path
     if ev_sources.get("scalp_entry_action_decision_matrix"):
-        scalp_entry_source_path = Path(str(ev_sources.get("scalp_entry_action_decision_matrix")))
-        if _source_path_enabled(scalp_entry_source_path, isolated_source_mode=isolated_source_mode):
+        scalp_entry_source_path = Path(
+            str(ev_sources.get("scalp_entry_action_decision_matrix"))
+        )
+        if _source_path_enabled(
+            scalp_entry_source_path, isolated_source_mode=isolated_source_mode
+        ):
             source_paths["scalp_entry_action_decision_matrix"] = scalp_entry_source_path
     if ev_sources.get("lifecycle_decision_matrix"):
         lifecycle_source_path = Path(str(ev_sources.get("lifecycle_decision_matrix")))
-        if not _source_path_enabled(lifecycle_source_path, isolated_source_mode=isolated_source_mode):
+        if not _source_path_enabled(
+            lifecycle_source_path, isolated_source_mode=isolated_source_mode
+        ):
             lifecycle_source_path = lifecycle_decision_matrix_report_path(target_date)
         else:
             lifecycle_report = _load_json(lifecycle_source_path)
-    if _source_path_enabled(lifecycle_source_path, isolated_source_mode=isolated_source_mode):
+    if _source_path_enabled(
+        lifecycle_source_path, isolated_source_mode=isolated_source_mode
+    ):
         source_paths["lifecycle_decision_matrix"] = lifecycle_source_path
     if ev_sources.get("swing_lifecycle_decision_matrix"):
-        swing_lifecycle_matrix_path = Path(str(ev_sources.get("swing_lifecycle_decision_matrix")))
-        if not _source_path_enabled(swing_lifecycle_matrix_path, isolated_source_mode=isolated_source_mode):
-            swing_lifecycle_matrix_path = swing_lifecycle_decision_matrix_report_path(target_date)
+        swing_lifecycle_matrix_path = Path(
+            str(ev_sources.get("swing_lifecycle_decision_matrix"))
+        )
+        if not _source_path_enabled(
+            swing_lifecycle_matrix_path, isolated_source_mode=isolated_source_mode
+        ):
+            swing_lifecycle_matrix_path = swing_lifecycle_decision_matrix_report_path(
+                target_date
+            )
         else:
             swing_lifecycle_matrix = _load_json(swing_lifecycle_matrix_path)
-    if _source_path_enabled(swing_lifecycle_matrix_path, isolated_source_mode=isolated_source_mode):
+    if _source_path_enabled(
+        swing_lifecycle_matrix_path, isolated_source_mode=isolated_source_mode
+    ):
         source_paths["swing_lifecycle_decision_matrix"] = swing_lifecycle_matrix_path
     if ev_sources.get("swing_lifecycle_bucket_discovery"):
-        swing_lifecycle_bucket_discovery_path = Path(str(ev_sources.get("swing_lifecycle_bucket_discovery")))
-        if not _source_path_enabled(swing_lifecycle_bucket_discovery_path, isolated_source_mode=isolated_source_mode):
-            swing_lifecycle_bucket_discovery_path = swing_lifecycle_bucket_discovery_report_path(target_date)
+        swing_lifecycle_bucket_discovery_path = Path(
+            str(ev_sources.get("swing_lifecycle_bucket_discovery"))
+        )
+        if not _source_path_enabled(
+            swing_lifecycle_bucket_discovery_path,
+            isolated_source_mode=isolated_source_mode,
+        ):
+            swing_lifecycle_bucket_discovery_path = (
+                swing_lifecycle_bucket_discovery_report_path(target_date)
+            )
         else:
-            swing_lifecycle_bucket_discovery = _load_json(swing_lifecycle_bucket_discovery_path)
-    if _source_path_enabled(swing_lifecycle_bucket_discovery_path, isolated_source_mode=isolated_source_mode):
-        source_paths["swing_lifecycle_bucket_discovery"] = swing_lifecycle_bucket_discovery_path
+            swing_lifecycle_bucket_discovery = _load_json(
+                swing_lifecycle_bucket_discovery_path
+            )
+    if _source_path_enabled(
+        swing_lifecycle_bucket_discovery_path, isolated_source_mode=isolated_source_mode
+    ):
+        source_paths["swing_lifecycle_bucket_discovery"] = (
+            swing_lifecycle_bucket_discovery_path
+        )
     if calibration_source_path is not None and _source_path_enabled(
         calibration_source_path,
         isolated_source_mode=isolated_source_mode,
@@ -6614,13 +7714,21 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         source_paths["threshold_cycle_calibration"] = calibration_source_path
     source_fingerprint = _source_fingerprint(source_paths)
     finding_by_order_id, finding_by_title_slug = _finding_maps(automation)
-    swing_finding_by_order_id, swing_finding_by_title_slug = _finding_maps(swing_automation)
-    swing_lab_finding_by_order_id, swing_lab_finding_by_title_slug = _finding_maps(swing_lab_automation)
+    swing_finding_by_order_id, swing_finding_by_title_slug = _finding_maps(
+        swing_automation
+    )
+    swing_lab_finding_by_order_id, swing_lab_finding_by_title_slug = _finding_maps(
+        swing_lab_automation
+    )
     finding_by_order_id.update(swing_finding_by_order_id)
     finding_by_order_id.update(swing_lab_finding_by_order_id)
     finding_by_title_slug.update(swing_finding_by_title_slug)
     finding_by_title_slug.update(swing_lab_finding_by_title_slug)
-    auto_family_ids = _auto_family_order_ids(automation) | _auto_family_order_ids(swing_automation) | _auto_family_order_ids(swing_lab_automation)
+    auto_family_ids = (
+        _auto_family_order_ids(automation)
+        | _auto_family_order_ids(swing_automation)
+        | _auto_family_order_ids(swing_lab_automation)
+    )
     scalping_orders = [
         {**item, "source_report_type": "scalping_pattern_lab_automation"}
         for item in (automation.get("code_improvement_orders") or [])
@@ -6638,7 +7746,9 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
     )
     swing_entry_bottleneck_primary = str(swing_entry_bottleneck.get("primary") or "")
     swing_entry_bottleneck_matches = (
-        swing_entry_bottleneck.get("matches") if isinstance(swing_entry_bottleneck.get("matches"), list) else []
+        swing_entry_bottleneck.get("matches")
+        if isinstance(swing_entry_bottleneck.get("matches"), list)
+        else []
     )
     swing_entry_bottleneck_order_ids = {
         str(item.get("order_id"))
@@ -6650,18 +7760,30 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         for item in (swing_lab_automation.get("code_improvement_orders") or [])
         if isinstance(item, dict)
     ]
-    swing_discovery_orders = _swing_strategy_discovery_followup_orders(swing_discovery_ev)
-    swing_lifecycle_matrix_orders = _swing_lifecycle_matrix_followup_orders(swing_lifecycle_matrix)
-    swing_lifecycle_bucket_discovery_orders = _swing_lifecycle_bucket_discovery_followup_orders(
-        swing_lifecycle_bucket_discovery
+    swing_discovery_orders = _swing_strategy_discovery_followup_orders(
+        swing_discovery_ev
+    )
+    swing_lifecycle_matrix_orders = _swing_lifecycle_matrix_followup_orders(
+        swing_lifecycle_matrix
+    )
+    swing_lifecycle_bucket_discovery_orders = (
+        _swing_lifecycle_bucket_discovery_followup_orders(
+            swing_lifecycle_bucket_discovery
+        )
     )
     pattern_lab_currentness_orders = [
-        {**item, "source_report_type": item.get("source_report_type") or "pattern_lab_currentness_audit"}
+        {
+            **item,
+            "source_report_type": item.get("source_report_type")
+            or "pattern_lab_currentness_audit",
+        }
         for item in (pattern_lab_currentness.get("code_improvement_orders") or [])
         if isinstance(item, dict)
     ]
     pattern_lab_ai_review_orders = [
-        _sanitize_pattern_lab_ai_review_order(item, swing_lab_automation=swing_lab_automation)
+        _sanitize_pattern_lab_ai_review_order(
+            item, swing_lab_automation=swing_lab_automation
+        )
         for item in (pattern_lab_ai_review.get("code_improvement_orders") or [])
         if isinstance(item, dict)
     ]
@@ -6672,18 +7794,28 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
     ]
     stage_hook_workorder_discovery_orders = [
         _sanitize_stage_hook_order(item, stage_hook_scaffold_by_name)
-        for item in (stage_hook_workorder_discovery.get("code_improvement_orders") or [])
+        for item in (
+            stage_hook_workorder_discovery.get("code_improvement_orders") or []
+        )
         if isinstance(item, dict)
     ]
     conversion_lane_orders = _conversion_lane_followup_orders(conversion_lane)
-    intraday_entry_blocker_orders = _intraday_entry_blocker_followup_orders(intraday_entry_blocker)
-    entry_hurdle_backtest_orders = _entry_hurdle_backtest_followup_orders(entry_hurdle_backtest)
-    rising_missed_scout_orders = _rising_missed_scout_followup_orders(rising_missed_scout_workorder)
-    rising_missed_classifier_prior_orders = _rising_missed_classifier_prior_followup_orders(
-        rising_missed_classifier_prior
+    intraday_entry_blocker_orders = _intraday_entry_blocker_followup_orders(
+        intraday_entry_blocker
     )
-    rising_missed_normal_buy_bridge_orders = _rising_missed_normal_buy_bridge_followup_orders(
-        rising_missed_normal_buy_bridge_candidate
+    entry_hurdle_backtest_orders = _entry_hurdle_backtest_followup_orders(
+        entry_hurdle_backtest
+    )
+    rising_missed_scout_orders = _rising_missed_scout_followup_orders(
+        rising_missed_scout_workorder
+    )
+    rising_missed_classifier_prior_orders = (
+        _rising_missed_classifier_prior_followup_orders(rising_missed_classifier_prior)
+    )
+    rising_missed_normal_buy_bridge_orders = (
+        _rising_missed_normal_buy_bridge_followup_orders(
+            rising_missed_normal_buy_bridge_candidate
+        )
     )
     one_share_threshold_orders = _one_share_threshold_opportunity_followup_orders(
         one_share_threshold_opportunity
@@ -6691,13 +7823,16 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
     microstructure_reaction_orders = [
         {
             **item,
-            "source_report_type": item.get("source_report_type") or "microstructure_reaction_context",
+            "source_report_type": item.get("source_report_type")
+            or "microstructure_reaction_context",
             "runtime_effect": False,
             "allowed_runtime_apply": False,
             "actual_order_submitted": False,
             "broker_order_forbidden": True,
         }
-        for item in (microstructure_reaction_context.get("code_improvement_orders") or [])
+        for item in (
+            microstructure_reaction_context.get("code_improvement_orders") or []
+        )
         if isinstance(item, dict)
     ]
     buy_funnel_sentinel_orders = _buy_funnel_sentinel_followup_orders(
@@ -6709,19 +7844,35 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         for order in buy_funnel_sentinel_orders
         if order.get("order_id")
     }
-    lifecycle_entry_bucket_orders = _lifecycle_entry_bucket_followup_orders(lifecycle_report)
+    lifecycle_entry_bucket_orders = _lifecycle_entry_bucket_followup_orders(
+        lifecycle_report
+    )
     lifecycle_submit_bucket_orders = [
         order
         for order in _lifecycle_submit_bucket_followup_orders(lifecycle_report)
         if str(order.get("order_id") or "") not in buy_funnel_sentinel_order_ids
     ]
-    lifecycle_flow_bucket_orders = _lifecycle_flow_bucket_followup_orders(lifecycle_report)
-    lifecycle_holding_exit_bucket_orders = _lifecycle_holding_exit_bucket_followup_orders(lifecycle_report)
-    lifecycle_scale_in_bucket_orders = _lifecycle_scale_in_bucket_followup_orders(lifecycle_report)
-    lifecycle_overnight_bucket_orders = _lifecycle_overnight_bucket_followup_orders(lifecycle_report)
-    lifecycle_bucket_discovery_orders = _lifecycle_bucket_discovery_followup_orders(lifecycle_bucket_discovery)
-    observation_source_quality_orders = _observation_source_quality_followup_orders(observation_source_quality)
-    sim_fill_match_orders = _sim_fill_and_match_report_contract_orders(ev_report, observation_source_quality)
+    lifecycle_flow_bucket_orders = _lifecycle_flow_bucket_followup_orders(
+        lifecycle_report
+    )
+    lifecycle_holding_exit_bucket_orders = (
+        _lifecycle_holding_exit_bucket_followup_orders(lifecycle_report)
+    )
+    lifecycle_scale_in_bucket_orders = _lifecycle_scale_in_bucket_followup_orders(
+        lifecycle_report
+    )
+    lifecycle_overnight_bucket_orders = _lifecycle_overnight_bucket_followup_orders(
+        lifecycle_report
+    )
+    lifecycle_bucket_discovery_orders = _lifecycle_bucket_discovery_followup_orders(
+        lifecycle_bucket_discovery
+    )
+    observation_source_quality_orders = _observation_source_quality_followup_orders(
+        observation_source_quality
+    )
+    sim_fill_match_orders = _sim_fill_and_match_report_contract_orders(
+        ev_report, observation_source_quality
+    )
     threshold_ev_orders = [
         *_threshold_ev_followup_orders(ev_report, target_date=target_date),
         *_entry_adm_followup_orders(ev_report),
@@ -6745,11 +7896,15 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
     for order in entry_hurdle_backtest_orders:
         if _is_implemented_status(order.get("implementation_status")):
             order_id = str(order.get("order_id") or "").strip()
-            family = str(order.get("mapped_family") or order.get("threshold_family") or "").strip()
+            family = str(
+                order.get("mapped_family") or order.get("threshold_family") or ""
+            ).strip()
             if order_id and family:
                 closed_instrumentation_order_families[order_id] = family
                 implemented_entry_hurdle_by_order_id[order_id] = order
-    swing_ai_contract_status = _swing_ai_structured_output_eval_contract_status(swing_automation)
+    swing_ai_contract_status = _swing_ai_structured_output_eval_contract_status(
+        swing_automation
+    )
     orders = [
         *scalping_orders,
         *swing_orders,
@@ -6779,7 +7934,10 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         *threshold_ev_orders,
     ]
     if conversion_rank:
-        orders = [_annotate_order_conversion_fields(order, conversion_rank) for order in orders]
+        orders = [
+            _annotate_order_conversion_fields(order, conversion_rank)
+            for order in orders
+        ]
     if implemented_entry_hurdle_by_order_id:
         updated_orders: list[dict[str, Any]] = []
         for order in orders:
@@ -6788,7 +7946,9 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             source_order = implemented_entry_hurdle_by_order_id.get(order_id)
             if source_order and source_type != "entry_hurdle_backtest":
                 inherited = dict(order)
-                inherited["implementation_status"] = "implemented_source_quality_contract_available"
+                inherited["implementation_status"] = (
+                    "implemented_source_quality_contract_available"
+                )
                 inherited["original_implementation_status"] = (
                     str(order.get("original_implementation_status") or "").strip()
                     or "implemented_source_quality_contract_available"
@@ -6803,10 +7963,12 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
                     "implementation_type": "entry_hurdle_backtest_cross_source_closure",
                     "closed_by_source_report_type": "entry_hurdle_backtest",
                     "closed_by_order_id": order_id,
-                    "metric_role": (source_order.get("implementation_provenance") or {}).get("metric_role"),
-                    "decision_authority": (source_order.get("implementation_provenance") or {}).get(
-                        "decision_authority"
-                    ),
+                    "metric_role": (
+                        source_order.get("implementation_provenance") or {}
+                    ).get("metric_role"),
+                    "decision_authority": (
+                        source_order.get("implementation_provenance") or {}
+                    ).get("decision_authority"),
                     "runtime_effect": False,
                     "allowed_runtime_apply": False,
                     "requires_separate_runtime_apply_candidate": True,
@@ -6820,7 +7982,9 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         updated_orders = []
         contract_provenance = (
             swing_ai_contract_status.get("implementation_provenance")
-            if isinstance(swing_ai_contract_status.get("implementation_provenance"), dict)
+            if isinstance(
+                swing_ai_contract_status.get("implementation_provenance"), dict
+            )
             else {}
         )
         for order in orders:
@@ -6831,16 +7995,17 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
                     "implementation_status",
                     "implemented_source_quality_contract_available",
                 )
-                inherited["original_implementation_status"] = (
-                    str(order.get("original_implementation_status") or "").strip()
-                    or str(inherited["implementation_status"])
-                )
+                inherited["original_implementation_status"] = str(
+                    order.get("original_implementation_status") or ""
+                ).strip() or str(inherited["implementation_status"])
                 inherited["runtime_effect"] = False
                 inherited["allowed_runtime_apply"] = False
                 inherited["actual_order_submitted"] = False
                 inherited["broker_order_forbidden"] = True
                 inherited["mapped_family"] = "swing_ai_contract_structured_output_eval"
-                inherited["threshold_family"] = "swing_ai_contract_structured_output_eval"
+                inherited["threshold_family"] = (
+                    "swing_ai_contract_structured_output_eval"
+                )
                 provenance = inherited.get("implementation_provenance")
                 if not isinstance(provenance, dict):
                     provenance = {}
@@ -6872,9 +8037,15 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
     deduped_orders: list[dict[str, Any]] = []
     collision_warnings: list[str] = []
     for order in orders:
-        key = (str(order.get("source_report_type") or ""), str(order.get("lifecycle_stage") or ""), str(order.get("order_id") or ""))
+        key = (
+            str(order.get("source_report_type") or ""),
+            str(order.get("lifecycle_stage") or ""),
+            str(order.get("order_id") or ""),
+        )
         if key in seen_keys:
-            collision_warnings.append(f"duplicate_order_id={order.get('order_id')} source={order.get('source_report_type')} stage={order.get('lifecycle_stage')}")
+            collision_warnings.append(
+                f"duplicate_order_id={order.get('order_id')} source={order.get('source_report_type')} stage={order.get('lifecycle_stage')}"
+            )
             continue
         seen_keys.add(key)
         deduped_orders.append(order)
@@ -6898,9 +8069,11 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         classified,
         repeat_counts=repeat_counts,
     )
-    classified, structural_blocker_order_ids, longstanding_non_implement_order_ids = _escalate_repeated_structural_blockers(
-        classified,
-        repeat_counts=structural_repeat_counts,
+    classified, structural_blocker_order_ids, longstanding_non_implement_order_ids = (
+        _escalate_repeated_structural_blockers(
+            classified,
+            repeat_counts=structural_repeat_counts,
+        )
     )
     classified = _sort_classified(classified)
     selected = classified[: max(1, int(max_orders))]
@@ -6952,7 +8125,10 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
     )
     required_handoff_order_ids.update(
         str(order.get("order_id"))
-        for order in [*swing_lifecycle_matrix_orders, *swing_lifecycle_bucket_discovery_orders]
+        for order in [
+            *swing_lifecycle_matrix_orders,
+            *swing_lifecycle_bucket_discovery_orders,
+        ]
         if order.get("order_id")
     )
     required_handoff_order_ids.update(swing_entry_bottleneck_order_ids)
@@ -6980,7 +8156,8 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         str(order.get("order_id"))
         for order in observation_source_quality_orders
         if order.get("order_id")
-        and order.get("improvement_type") == "source_quality_raw_row_exclusion_producer_gap"
+        and order.get("improvement_type")
+        == "source_quality_raw_row_exclusion_producer_gap"
     )
     required_handoff_order_ids.update(
         str(item.order.get("order_id"))
@@ -6989,10 +8166,17 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         and isinstance(item.order.get("longstanding_non_implement_action"), dict)
         and item.order["longstanding_non_implement_action"].get("action_required")
     )
-    selected_order_ids = {str(item.order.get("order_id")) for item in selected if item.order.get("order_id")}
+    selected_order_ids = {
+        str(item.order.get("order_id"))
+        for item in selected
+        if item.order.get("order_id")
+    }
     for item in classified:
         order_id = str(item.order.get("order_id") or "")
-        if order_id in required_handoff_order_ids and order_id not in selected_order_ids:
+        if (
+            order_id in required_handoff_order_ids
+            and order_id not in selected_order_ids
+        ):
             selected.append(item)
             selected_order_ids.add(order_id)
     selected_identity = {id(item) for item in selected}
@@ -7006,7 +8190,9 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
     if forced_action_required:
         selected.extend(forced_action_required)
         selected_identity = {id(item) for item in selected}
-        non_selected = [item for item in classified if id(item) not in selected_identity]
+        non_selected = [
+            item for item in classified if id(item) not in selected_identity
+        ]
     counts: dict[str, int] = {}
     for item in classified:
         counts[item.decision] = counts.get(item.decision, 0) + 1
@@ -7022,7 +8208,9 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
     selected_longstanding_non_implement_disposition_counts: dict[str, int] = {}
     selected_longstanding_non_implement_action_required_order_ids: list[str] = []
     for item in selected:
-        selected_decision_counts[item.decision] = selected_decision_counts.get(item.decision, 0) + 1
+        selected_decision_counts[item.decision] = (
+            selected_decision_counts.get(item.decision, 0) + 1
+        )
         route = str(item.route or item.order.get("route") or item.decision or "unknown")
         selected_route_counts[route] = selected_route_counts.get(route, 0) + 1
         if item.order.get("runtime_effect") is False:
@@ -7036,37 +8224,62 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
                 if item.order.get("longstanding_non_implement_review"):
                     selected_terminal_non_implement_longstanding_count += 1
                     if item.order.get("order_id"):
-                        selected_terminal_non_implement_longstanding_order_ids.append(str(item.order.get("order_id")))
+                        selected_terminal_non_implement_longstanding_order_ids.append(
+                            str(item.order.get("order_id"))
+                        )
                     review = item.order.get("longstanding_non_implement_review")
                     if isinstance(review, dict):
                         disposition = str(review.get("review_disposition") or "unknown")
-                        selected_longstanding_non_implement_disposition_counts[disposition] = (
-                            selected_longstanding_non_implement_disposition_counts.get(disposition, 0) + 1
+                        selected_longstanding_non_implement_disposition_counts[
+                            disposition
+                        ] = (
+                            selected_longstanding_non_implement_disposition_counts.get(
+                                disposition, 0
+                            )
+                            + 1
                         )
                     action = item.order.get("longstanding_non_implement_action")
-                    if isinstance(action, dict) and action.get("action_required") and item.order.get("order_id"):
+                    if (
+                        isinstance(action, dict)
+                        and action.get("action_required")
+                        and item.order.get("order_id")
+                    ):
                         selected_longstanding_non_implement_action_required_order_ids.append(
                             str(item.order.get("order_id"))
                         )
                 continue
-            if item.decision != "attach_existing_family" and not _is_implemented_status(
-                _repeat_unresolved_original_status(item.order)
+            if (
+                item.decision != "attach_existing_family"
+                and not _is_implemented_status(
+                    _repeat_unresolved_original_status(item.order)
+                )
             ):
                 selected_unimplemented_runtime_effect_false_count += 1
-                selected_unimplemented_route_counts[route] = selected_unimplemented_route_counts.get(route, 0) + 1
+                selected_unimplemented_route_counts[route] = (
+                    selected_unimplemented_route_counts.get(route, 0) + 1
+                )
     non_selected_counts: dict[str, int] = {}
     non_selected_longstanding_non_implement_disposition_counts: dict[str, int] = {}
     non_selected_longstanding_non_implement_action_required_order_ids: list[str] = []
     for item in non_selected:
-        non_selected_counts[item.decision] = non_selected_counts.get(item.decision, 0) + 1
+        non_selected_counts[item.decision] = (
+            non_selected_counts.get(item.decision, 0) + 1
+        )
         review = item.order.get("longstanding_non_implement_review")
         if isinstance(review, dict):
             disposition = str(review.get("review_disposition") or "unknown")
             non_selected_longstanding_non_implement_disposition_counts[disposition] = (
-                non_selected_longstanding_non_implement_disposition_counts.get(disposition, 0) + 1
+                non_selected_longstanding_non_implement_disposition_counts.get(
+                    disposition, 0
+                )
+                + 1
             )
         action = item.order.get("longstanding_non_implement_action")
-        if isinstance(action, dict) and action.get("action_required") and item.order.get("order_id"):
+        if (
+            isinstance(action, dict)
+            and action.get("action_required")
+            and item.order.get("order_id")
+        ):
             non_selected_longstanding_non_implement_action_required_order_ids.append(
                 str(item.order.get("order_id"))
             )
@@ -7076,7 +8289,9 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         if item.decision == "attach_existing_family"
         and str(item.order.get("target_subsystem") or "") == "lifecycle_decision_matrix"
     )
-    implement_now_resolution_summary = _selected_implement_now_resolution_summary(selected)
+    implement_now_resolution_summary = _selected_implement_now_resolution_summary(
+        selected
+    )
     deferred_or_rejected_count = sum(
         non_selected_counts.get(decision, 0)
         for decision in ("design_family_candidate", "defer_evidence", "reject")
@@ -7111,34 +8326,60 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             "swing_improvement_automation": source_ref("swing_improvement_automation"),
             "swing_pattern_lab_automation": source_ref("swing_pattern_lab_automation"),
             "swing_strategy_discovery_ev": source_ref("swing_strategy_discovery_ev"),
-            "swing_lifecycle_decision_matrix": source_ref("swing_lifecycle_decision_matrix"),
-            "swing_lifecycle_bucket_discovery": source_ref("swing_lifecycle_bucket_discovery"),
+            "swing_lifecycle_decision_matrix": source_ref(
+                "swing_lifecycle_decision_matrix"
+            ),
+            "swing_lifecycle_bucket_discovery": source_ref(
+                "swing_lifecycle_bucket_discovery"
+            ),
             "threshold_cycle_ev": source_ref("threshold_cycle_ev"),
             "entry_split_order_plan": source_ref("entry_split_order_plan"),
             "scale_in_split_order_plan": source_ref("scale_in_split_order_plan"),
             "lifecycle_decision_matrix": source_ref("lifecycle_decision_matrix"),
             "lifecycle_bucket_discovery": source_ref("lifecycle_bucket_discovery"),
-            "scalp_entry_action_decision_matrix": source_ref("scalp_entry_action_decision_matrix"),
+            "scalp_entry_action_decision_matrix": source_ref(
+                "scalp_entry_action_decision_matrix"
+            ),
             "pipeline_event_verbosity": source_ref("pipeline_event_verbosity"),
-            "observation_source_quality_audit": source_ref("observation_source_quality_audit"),
-            "ai_watching_score_smoothing_diagnostic": source_ref("ai_watching_score_smoothing_diagnostic"),
-            "codebase_performance_workorder": source_ref("codebase_performance_workorder"),
-            "pattern_lab_currentness_audit": source_ref("pattern_lab_currentness_audit"),
+            "observation_source_quality_audit": source_ref(
+                "observation_source_quality_audit"
+            ),
+            "ai_watching_score_smoothing_diagnostic": source_ref(
+                "ai_watching_score_smoothing_diagnostic"
+            ),
+            "codebase_performance_workorder": source_ref(
+                "codebase_performance_workorder"
+            ),
+            "pattern_lab_currentness_audit": source_ref(
+                "pattern_lab_currentness_audit"
+            ),
             "pattern_lab_ai_review": source_ref("pattern_lab_ai_review"),
             "producer_gap_discovery": source_ref("producer_gap_discovery"),
-            "stage_hook_workorder_discovery": source_ref("stage_hook_workorder_discovery"),
+            "stage_hook_workorder_discovery": source_ref(
+                "stage_hook_workorder_discovery"
+            ),
             "stage_hook_runtime_scaffold": source_ref("stage_hook_runtime_scaffold"),
             "buy_funnel_sentinel": source_ref("buy_funnel_sentinel"),
             "conversion_lane": source_ref("conversion_lane"),
-            "intraday_entry_blocker_diagnostics": source_ref("intraday_entry_blocker_diagnostics"),
+            "intraday_entry_blocker_diagnostics": source_ref(
+                "intraday_entry_blocker_diagnostics"
+            ),
             "entry_hurdle_backtest": source_ref("entry_hurdle_backtest"),
-            "rising_missed_scout_workorder": source_ref("rising_missed_scout_workorder"),
-            "rising_missed_classifier_prior": source_ref("rising_missed_classifier_prior"),
+            "rising_missed_scout_workorder": source_ref(
+                "rising_missed_scout_workorder"
+            ),
+            "rising_missed_classifier_prior": source_ref(
+                "rising_missed_classifier_prior"
+            ),
             "rising_missed_normal_buy_bridge_candidate_discovery": source_ref(
                 "rising_missed_normal_buy_bridge_candidate_discovery"
             ),
-            "one_share_threshold_opportunity": source_ref("one_share_threshold_opportunity"),
-            "microstructure_reaction_context": source_ref("microstructure_reaction_context"),
+            "one_share_threshold_opportunity": source_ref(
+                "one_share_threshold_opportunity"
+            ),
+            "microstructure_reaction_context": source_ref(
+                "microstructure_reaction_context"
+            ),
             "threshold_cycle_calibration": source_ref("threshold_cycle_calibration"),
         },
         "source_fingerprint": source_fingerprint["files"],
@@ -7156,7 +8397,9 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             "scalping_source_order_count": len(scalping_orders),
             "swing_source_order_count": len(swing_orders),
             "swing_entry_bottleneck_primary": swing_entry_bottleneck_primary or None,
-            "swing_entry_bottleneck_source_order_count": len(swing_entry_bottleneck_order_ids),
+            "swing_entry_bottleneck_source_order_count": len(
+                swing_entry_bottleneck_order_ids
+            ),
             "swing_entry_bottleneck_selected": bool(
                 swing_entry_bottleneck_order_ids
                 and swing_entry_bottleneck_order_ids.issubset(selected_order_ids)
@@ -7164,19 +8407,41 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             "swing_entry_bottleneck_matches": swing_entry_bottleneck_matches,
             "swing_lab_source_order_count": len(swing_lab_orders),
             "swing_strategy_discovery_source_order_count": len(swing_discovery_orders),
-            "swing_lifecycle_matrix_source_order_count": len(swing_lifecycle_matrix_orders),
-            "swing_lifecycle_bucket_discovery_source_order_count": len(swing_lifecycle_bucket_discovery_orders),
-            "pattern_lab_currentness_source_order_count": len(pattern_lab_currentness_orders),
-            "pattern_lab_ai_review_source_order_count": len(pattern_lab_ai_review_orders),
-            "producer_gap_discovery_source_order_count": len(producer_gap_discovery_orders),
+            "swing_lifecycle_matrix_source_order_count": len(
+                swing_lifecycle_matrix_orders
+            ),
+            "swing_lifecycle_bucket_discovery_source_order_count": len(
+                swing_lifecycle_bucket_discovery_orders
+            ),
+            "pattern_lab_currentness_source_order_count": len(
+                pattern_lab_currentness_orders
+            ),
+            "pattern_lab_ai_review_source_order_count": len(
+                pattern_lab_ai_review_orders
+            ),
+            "producer_gap_discovery_source_order_count": len(
+                producer_gap_discovery_orders
+            ),
             "producer_gap_discovery_status": producer_gap_discovery.get("status"),
-            "stage_hook_workorder_discovery_source_order_count": len(stage_hook_workorder_discovery_orders),
-            "stage_hook_workorder_discovery_status": stage_hook_workorder_discovery.get("status"),
-            "stage_hook_runtime_scaffold_status": stage_hook_runtime_scaffold.get("status"),
-            "stage_hook_runtime_scaffold_implemented_hook_count": len(stage_hook_scaffold_by_name),
+            "stage_hook_workorder_discovery_source_order_count": len(
+                stage_hook_workorder_discovery_orders
+            ),
+            "stage_hook_workorder_discovery_status": stage_hook_workorder_discovery.get(
+                "status"
+            ),
+            "stage_hook_runtime_scaffold_status": stage_hook_runtime_scaffold.get(
+                "status"
+            ),
+            "stage_hook_runtime_scaffold_implemented_hook_count": len(
+                stage_hook_scaffold_by_name
+            ),
             "conversion_lane_source_order_count": len(conversion_lane_orders),
-            "intraday_entry_blocker_source_order_count": len(intraday_entry_blocker_orders),
-            "entry_hurdle_backtest_source_order_count": len(entry_hurdle_backtest_orders),
+            "intraday_entry_blocker_source_order_count": len(
+                intraday_entry_blocker_orders
+            ),
+            "entry_hurdle_backtest_source_order_count": len(
+                entry_hurdle_backtest_orders
+            ),
             "rising_missed_scout_source_order_count": len(rising_missed_scout_orders),
             "rising_missed_classifier_prior_source_order_count": len(
                 rising_missed_classifier_prior_orders
@@ -7184,24 +8449,43 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             "rising_missed_normal_buy_bridge_source_order_count": len(
                 rising_missed_normal_buy_bridge_orders
             ),
-            "one_share_threshold_opportunity_source_order_count": len(one_share_threshold_orders),
-            "microstructure_reaction_context_source_order_count": len(microstructure_reaction_orders),
+            "one_share_threshold_opportunity_source_order_count": len(
+                one_share_threshold_orders
+            ),
+            "microstructure_reaction_context_source_order_count": len(
+                microstructure_reaction_orders
+            ),
             "producer_gap_discovery_high_priority_selected": bool(
                 {
                     str(order.get("order_id"))
                     for order in producer_gap_discovery_orders
                     if order.get("order_id")
-                    and str(order.get("producer_gap_priority") or "high") in {"critical", "high"}
+                    and str(order.get("producer_gap_priority") or "high")
+                    in {"critical", "high"}
                 }.issubset(selected_order_ids)
             ),
             "threshold_ev_source_order_count": len(threshold_ev_orders),
-            "lifecycle_entry_bucket_source_order_count": len(lifecycle_entry_bucket_orders),
-            "lifecycle_submit_bucket_source_order_count": len(lifecycle_submit_bucket_orders),
-            "lifecycle_flow_bucket_source_order_count": len(lifecycle_flow_bucket_orders),
-            "lifecycle_holding_exit_bucket_source_order_count": len(lifecycle_holding_exit_bucket_orders),
-            "lifecycle_scale_in_bucket_source_order_count": len(lifecycle_scale_in_bucket_orders),
-            "lifecycle_overnight_bucket_source_order_count": len(lifecycle_overnight_bucket_orders),
-            "lifecycle_bucket_discovery_source_order_count": len(lifecycle_bucket_discovery_orders),
+            "lifecycle_entry_bucket_source_order_count": len(
+                lifecycle_entry_bucket_orders
+            ),
+            "lifecycle_submit_bucket_source_order_count": len(
+                lifecycle_submit_bucket_orders
+            ),
+            "lifecycle_flow_bucket_source_order_count": len(
+                lifecycle_flow_bucket_orders
+            ),
+            "lifecycle_holding_exit_bucket_source_order_count": len(
+                lifecycle_holding_exit_bucket_orders
+            ),
+            "lifecycle_scale_in_bucket_source_order_count": len(
+                lifecycle_scale_in_bucket_orders
+            ),
+            "lifecycle_overnight_bucket_source_order_count": len(
+                lifecycle_overnight_bucket_orders
+            ),
+            "lifecycle_bucket_discovery_source_order_count": len(
+                lifecycle_bucket_discovery_orders
+            ),
             "pipeline_event_verbosity_source_order_count": len(
                 _pipeline_event_verbosity_followup_orders(pipeline_event_verbosity)
             ),
@@ -7211,14 +8495,18 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             "codebase_performance_source_order_count": len(
                 _codebase_performance_followup_orders(codebase_performance)
             ),
-            "panic_lifecycle_source_order_count": len(_panic_lifecycle_followup_orders(calibration_report)),
+            "panic_lifecycle_source_order_count": len(
+                _panic_lifecycle_followup_orders(calibration_report)
+            ),
             "selected_order_count": len(selected),
             "non_selected_order_count": len(non_selected),
             "source_decision_counts": counts,
             "decision_counts": counts,
             "selected_decision_counts": selected_decision_counts,
             "selected_route_counts": selected_route_counts,
-            "selected_implement_now_route_count": selected_decision_counts.get("implement_now", 0),
+            "selected_implement_now_route_count": selected_decision_counts.get(
+                "implement_now", 0
+            ),
             "already_implemented_source_handoff_count": already_implemented_source_handoff_count,
             "selected_runtime_effect_false_count": selected_runtime_effect_false_count,
             "selected_unimplemented_runtime_effect_false_count": selected_unimplemented_runtime_effect_false_count,
@@ -7242,18 +8530,24 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             ],
             "repeat_unresolved_escalation_count": len(repeat_escalated_order_ids),
             "repeat_unresolved_escalated_order_ids": repeat_escalated_order_ids,
-            "repeat_unresolved_structural_blocker_count": len(structural_blocker_order_ids),
+            "repeat_unresolved_structural_blocker_count": len(
+                structural_blocker_order_ids
+            ),
             "repeat_unresolved_structural_blocker_order_ids": structural_blocker_order_ids,
             "repeat_unresolved_history_window_days": 10,
             "root_cause_closure_status_counts": root_cause_closure_status_counts,
-            "implementation_done_count": root_cause_closure_status_counts.get("implementation_done", 0),
+            "implementation_done_count": root_cause_closure_status_counts.get(
+                "implementation_done", 0
+            ),
             "artifact_regeneration_required_count": root_cause_closure_status_counts.get(
                 "artifact_regeneration_required", 0
             ),
             "handoff_closed_root_cause_open_count": root_cause_closure_status_counts.get(
                 "handoff_closed_root_cause_open", 0
             ),
-            "root_cause_closed_count": root_cause_closure_status_counts.get("root_cause_closed", 0),
+            "root_cause_closed_count": root_cause_closure_status_counts.get(
+                "root_cause_closed", 0
+            ),
             "needs_followup_workorder_count": root_cause_closure_status_counts.get(
                 "needs_followup_workorder", 0
             ),
@@ -7273,22 +8567,40 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             "non_selected_longstanding_non_implement_action_required_order_ids": (
                 non_selected_longstanding_non_implement_action_required_order_ids
             ),
-            "gemini_fresh": ((automation.get("ev_report_summary") or {}).get("gemini_fresh")),
-            "claude_fresh": ((automation.get("ev_report_summary") or {}).get("claude_fresh")),
+            "gemini_fresh": (
+                (automation.get("ev_report_summary") or {}).get("gemini_fresh")
+            ),
+            "claude_fresh": (
+                (automation.get("ev_report_summary") or {}).get("claude_fresh")
+            ),
             "swing_lifecycle_audit_available": bool(swing_automation),
             "swing_pattern_lab_automation_available": bool(swing_lab_automation),
             "swing_strategy_discovery_ev_available": bool(swing_discovery_ev),
             "swing_lifecycle_matrix_available": bool(swing_lifecycle_matrix),
-            "swing_lifecycle_bucket_discovery_available": bool(swing_lifecycle_bucket_discovery),
-            "swing_pattern_lab_fresh": ((swing_lab_automation.get("ev_report_summary") or {}).get("deepseek_lab_available")),
+            "swing_lifecycle_bucket_discovery_available": bool(
+                swing_lifecycle_bucket_discovery
+            ),
+            "swing_pattern_lab_fresh": (
+                (swing_lab_automation.get("ev_report_summary") or {}).get(
+                    "deepseek_lab_available"
+                )
+            ),
             "pattern_lab_currentness_status": pattern_lab_currentness.get("status"),
-            "pattern_lab_currentness_fail_count": ((pattern_lab_currentness.get("summary") or {}).get("fail_count")),
+            "pattern_lab_currentness_fail_count": (
+                (pattern_lab_currentness.get("summary") or {}).get("fail_count")
+            ),
             "pattern_lab_ai_review_status": pattern_lab_ai_review.get("status"),
-            "pattern_lab_ai_review_workorder_count": ((pattern_lab_ai_review.get("summary") or {}).get("workorder_count")),
+            "pattern_lab_ai_review_workorder_count": (
+                (pattern_lab_ai_review.get("summary") or {}).get("workorder_count")
+            ),
             "buy_funnel_sentinel_source_order_count": len(buy_funnel_sentinel_orders),
             "conversion_blocker_rank_count": len(conversion_rank),
-            "buy_funnel_sentinel_primary": ((buy_funnel_sentinel.get("classification") or {}).get("primary")),
-            "entry_submit_drought_primary": ((buy_funnel_sentinel.get("classification") or {}).get("primary")),
+            "buy_funnel_sentinel_primary": (
+                (buy_funnel_sentinel.get("classification") or {}).get("primary")
+            ),
+            "entry_submit_drought_primary": (
+                (buy_funnel_sentinel.get("classification") or {}).get("primary")
+            ),
             "entry_submit_drought_selected": bool(
                 buy_funnel_sentinel_orders
                 and {
@@ -7298,8 +8610,12 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
                 }.issubset(selected_order_ids)
             ),
             "entry_submit_drought_required_downstream": (
-                (buy_funnel_sentinel.get("entry_submit_drought_contract") or {}).get("required_downstream")
-                if isinstance(buy_funnel_sentinel.get("entry_submit_drought_contract"), dict)
+                (buy_funnel_sentinel.get("entry_submit_drought_contract") or {}).get(
+                    "required_downstream"
+                )
+                if isinstance(
+                    buy_funnel_sentinel.get("entry_submit_drought_contract"), dict
+                )
                 else []
             ),
             "entry_submit_drought_handoff_missing": bool(
@@ -7310,12 +8626,18 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
                     if order.get("order_id")
                 }.issubset(selected_order_ids)
             ),
-            "swing_threshold_ai_status": ((swing_automation.get("ev_report_summary") or {}).get("threshold_ai_status")),
+            "swing_threshold_ai_status": (
+                (swing_automation.get("ev_report_summary") or {}).get(
+                    "threshold_ai_status"
+                )
+            ),
             "daily_ev_available": bool(ev_report),
             "duplicate_order_warnings": collision_warnings,
         },
         "orders": serialized_orders,
-        "non_selected_orders": [_serialize_classified_order(item) for item in non_selected],
+        "non_selected_orders": [
+            _serialize_classified_order(item) for item in non_selected
+        ],
         "deferred_or_rejected_count": deferred_or_rejected_count,
         "next_codex_session": {
             "instruction": "Paste the generated markdown into Codex and ask: '이 code improvement workorder를 순서대로 구현하고 검증해줘.'",
@@ -7323,13 +8645,23 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         },
     }
     report["lineage"] = _previous_workorder_lineage(previous_report, report["orders"])
-    report["summary"]["new_selected_order_count"] = len(report["lineage"]["new_order_ids"])
-    report["summary"]["removed_selected_order_count"] = len(report["lineage"]["removed_order_ids"])
-    report["summary"]["decision_changed_order_count"] = len(report["lineage"]["decision_changed_order_ids"])
+    report["summary"]["new_selected_order_count"] = len(
+        report["lineage"]["new_order_ids"]
+    )
+    report["summary"]["removed_selected_order_count"] = len(
+        report["lineage"]["removed_order_ids"]
+    )
+    report["summary"]["decision_changed_order_count"] = len(
+        report["lineage"]["decision_changed_order_ids"]
+    )
     json_path.parent.mkdir(parents=True, exist_ok=True)
     md_path.parent.mkdir(parents=True, exist_ok=True)
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-    md_path.write_text(render_code_improvement_workorder_markdown(report), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    md_path.write_text(
+        render_code_improvement_workorder_markdown(report), encoding="utf-8"
+    )
     return report
 
 
@@ -7478,35 +8810,41 @@ def render_code_improvement_workorder_markdown(report: dict[str, Any]) -> str:
         f"- daily_ev_available: `{summary.get('daily_ev_available')}`",
         "",
     ]
-    dup_warnings = summary.get("duplicate_order_warnings") if isinstance(summary.get("duplicate_order_warnings"), list) else []
+    dup_warnings = (
+        summary.get("duplicate_order_warnings")
+        if isinstance(summary.get("duplicate_order_warnings"), list)
+        else []
+    )
     if dup_warnings:
         lines.extend(["### Duplicate Order Collisions"])
         for w in dup_warnings:
             lines.append(f"- `{w}`")
         lines.append("")
-    lines.extend([
-        "## Codex 실행 지시",
-        "",
-        "아래 order를 위에서부터 순서대로 처리한다. 각 order는 `판정 -> 근거 -> 다음 액션`으로 닫고, 코드 변경 시 관련 문서와 테스트를 함께 갱신한다.",
-        "",
-        "필수 검증:",
-        "",
-        "```bash",
-        "PYTHONPATH=. .venv/bin/pytest -q <관련 테스트 파일>",
-        "PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project --print-backlog-only --limit 500",
-        "git diff --check",
-        "```",
-        "",
-        "threshold/postclose 체인 영향 시 추가 검증:",
-        "",
-        "```bash",
-        "bash -n deploy/run_threshold_cycle_preopen.sh deploy/run_threshold_cycle_calibration.sh deploy/run_threshold_cycle_postclose.sh",
-        "PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py src/tests/test_threshold_cycle_preopen_apply.py src/tests/test_threshold_cycle_ev_report.py",
-        "```",
-        "",
-        "## Implementation Orders",
-        "",
-    ])
+    lines.extend(
+        [
+            "## Codex 실행 지시",
+            "",
+            "아래 order를 위에서부터 순서대로 처리한다. 각 order는 `판정 -> 근거 -> 다음 액션`으로 닫고, 코드 변경 시 관련 문서와 테스트를 함께 갱신한다.",
+            "",
+            "필수 검증:",
+            "",
+            "```bash",
+            "PYTHONPATH=. .venv/bin/pytest -q <관련 테스트 파일>",
+            "PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project --print-backlog-only --limit 500",
+            "git diff --check",
+            "```",
+            "",
+            "threshold/postclose 체인 영향 시 추가 검증:",
+            "",
+            "```bash",
+            "bash -n deploy/run_threshold_cycle_preopen.sh deploy/run_threshold_cycle_calibration.sh deploy/run_threshold_cycle_postclose.sh",
+            "PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py src/tests/test_threshold_cycle_preopen_apply.py src/tests/test_threshold_cycle_ev_report.py",
+            "```",
+            "",
+            "## Implementation Orders",
+            "",
+        ]
+    )
     for index, item in enumerate(report.get("orders") or [], start=1):
         if not isinstance(item, dict):
             continue
@@ -7636,7 +8974,11 @@ def render_code_improvement_workorder_markdown(report: dict[str, Any]) -> str:
     if not report.get("orders"):
         lines.append("- none")
         lines.append("")
-    non_selected_orders = [item for item in (report.get("non_selected_orders") or []) if isinstance(item, dict)]
+    non_selected_orders = [
+        item
+        for item in (report.get("non_selected_orders") or [])
+        if isinstance(item, dict)
+    ]
     if non_selected_orders:
         lines.extend(
             [
@@ -7689,11 +9031,15 @@ def render_code_improvement_workorder_markdown(report: dict[str, Any]) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Build Codex code improvement workorder from pattern lab automation.")
+    parser = argparse.ArgumentParser(
+        description="Build Codex code improvement workorder from pattern lab automation."
+    )
     parser.add_argument("--date", dest="target_date", default=date.today().isoformat())
     parser.add_argument("--max-orders", type=int, default=12)
     args = parser.parse_args(argv)
-    report = build_code_improvement_workorder(args.target_date, max_orders=args.max_orders)
+    report = build_code_improvement_workorder(
+        args.target_date, max_orders=args.max_orders
+    )
     print(json.dumps(report, ensure_ascii=False))
     return 0
 

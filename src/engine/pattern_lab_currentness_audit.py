@@ -11,7 +11,6 @@ from typing import Any
 
 from src.engine.daily_threshold_cycle_report import REPORT_DIR
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 REPORT_TYPE = "pattern_lab_currentness_audit"
 REPORT_SCHEMA_VERSION = 1
@@ -62,18 +61,36 @@ FEEDBACK_SOURCE_CONTRACTS = {
         "terms": SCALPING_REENTRY_TERMS,
         "artifact_dirs": {
             "threshold_cycle_ev": ("threshold_cycle_ev", "threshold_cycle_ev"),
-            "lifecycle_decision_matrix": ("lifecycle_decision_matrix", "lifecycle_decision_matrix"),
-            "lifecycle_bucket_discovery": ("lifecycle_bucket_discovery", "lifecycle_bucket_discovery"),
-            "runtime_approval_summary": ("runtime_approval_summary", "runtime_approval_summary"),
+            "lifecycle_decision_matrix": (
+                "lifecycle_decision_matrix",
+                "lifecycle_decision_matrix",
+            ),
+            "lifecycle_bucket_discovery": (
+                "lifecycle_bucket_discovery",
+                "lifecycle_bucket_discovery",
+            ),
+            "runtime_approval_summary": (
+                "runtime_approval_summary",
+                "runtime_approval_summary",
+            ),
         },
     },
     "swing": {
         "terms": SWING_REENTRY_TERMS,
         "artifact_dirs": {
             "threshold_cycle_ev": ("threshold_cycle_ev", "threshold_cycle_ev"),
-            "swing_lifecycle_decision_matrix": ("swing_lifecycle_decision_matrix", "swing_lifecycle_decision_matrix"),
-            "swing_lifecycle_bucket_discovery": ("swing_lifecycle_bucket_discovery", "swing_lifecycle_bucket_discovery"),
-            "swing_strategy_discovery_ev": ("swing_strategy_discovery_ev", "swing_strategy_discovery_ev"),
+            "swing_lifecycle_decision_matrix": (
+                "swing_lifecycle_decision_matrix",
+                "swing_lifecycle_decision_matrix",
+            ),
+            "swing_lifecycle_bucket_discovery": (
+                "swing_lifecycle_bucket_discovery",
+                "swing_lifecycle_bucket_discovery",
+            ),
+            "swing_strategy_discovery_ev": (
+                "swing_strategy_discovery_ev",
+                "swing_strategy_discovery_ev",
+            ),
         },
     },
 }
@@ -103,15 +120,39 @@ def _lab_paths() -> dict[str, dict[str, Any]]:
     return {
         "claude_scalping": {
             "lab_dir": PROJECT_ROOT / "analysis" / "claude_scalping_pattern_lab",
-            "analysis_result": PROJECT_ROOT / "analysis" / "claude_scalping_pattern_lab" / "outputs" / "ev_analysis_result.json",
-            "observability": PROJECT_ROOT / "analysis" / "claude_scalping_pattern_lab" / "outputs" / "tuning_observability_summary.json",
-            "manifest": PROJECT_ROOT / "analysis" / "claude_scalping_pattern_lab" / "outputs" / "run_manifest.json",
+            "analysis_result": PROJECT_ROOT
+            / "analysis"
+            / "claude_scalping_pattern_lab"
+            / "outputs"
+            / "ev_analysis_result.json",
+            "observability": PROJECT_ROOT
+            / "analysis"
+            / "claude_scalping_pattern_lab"
+            / "outputs"
+            / "tuning_observability_summary.json",
+            "manifest": PROJECT_ROOT
+            / "analysis"
+            / "claude_scalping_pattern_lab"
+            / "outputs"
+            / "run_manifest.json",
         },
         "deepseek_swing": {
             "lab_dir": PROJECT_ROOT / "analysis" / "deepseek_swing_pattern_lab",
-            "analysis_result": PROJECT_ROOT / "analysis" / "deepseek_swing_pattern_lab" / "outputs" / "swing_pattern_analysis_result.json",
-            "data_quality": PROJECT_ROOT / "analysis" / "deepseek_swing_pattern_lab" / "outputs" / "data_quality_report.json",
-            "manifest": PROJECT_ROOT / "analysis" / "deepseek_swing_pattern_lab" / "outputs" / "run_manifest.json",
+            "analysis_result": PROJECT_ROOT
+            / "analysis"
+            / "deepseek_swing_pattern_lab"
+            / "outputs"
+            / "swing_pattern_analysis_result.json",
+            "data_quality": PROJECT_ROOT
+            / "analysis"
+            / "deepseek_swing_pattern_lab"
+            / "outputs"
+            / "data_quality_report.json",
+            "manifest": PROJECT_ROOT
+            / "analysis"
+            / "deepseek_swing_pattern_lab"
+            / "outputs"
+            / "run_manifest.json",
         },
     }
 
@@ -184,7 +225,11 @@ def _check(
 
 
 def _metric_contract_ok(payload: dict[str, Any]) -> bool:
-    contract = payload.get("metric_contract") if isinstance(payload.get("metric_contract"), dict) else {}
+    contract = (
+        payload.get("metric_contract")
+        if isinstance(payload.get("metric_contract"), dict)
+        else {}
+    )
     if int(payload.get("schema_version") or 0) < 2:
         return False
     for field in REQUIRED_METRIC_CONTRACT_FIELDS:
@@ -214,7 +259,11 @@ def _observability_source_contract_ok(path: Path) -> bool:
 
 def _observability_embedded_orders(path: Path) -> list[dict[str, Any]]:
     payload = _load_json(path)
-    orders = payload.get("code_improvement_orders") if isinstance(payload.get("code_improvement_orders"), list) else []
+    orders = (
+        payload.get("code_improvement_orders")
+        if isinstance(payload.get("code_improvement_orders"), list)
+        else []
+    )
     return [
         {
             **item,
@@ -261,7 +310,9 @@ def _active_source_text(paths: list[Path]) -> str:
             if not path.is_file() or path.suffix not in ACTIVE_SOURCE_SUFFIXES:
                 continue
             try:
-                rel_parts = set(path.relative_to(base).parts) if base.is_dir() else set()
+                rel_parts = (
+                    set(path.relative_to(base).parts) if base.is_dir() else set()
+                )
             except ValueError:
                 rel_parts = set(path.parts)
             if "outputs" in rel_parts or "__pycache__" in rel_parts:
@@ -282,7 +333,9 @@ def _feedback_artifact_path(report_name: str, stem: str, target_date: str) -> Pa
     return REPORT_DIR / report_name / f"{stem}_{target_date}.json"
 
 
-def _latest_feedback_artifact_path(report_name: str, stem: str, target_date: str) -> tuple[Path | None, str | None]:
+def _latest_feedback_artifact_path(
+    report_name: str, stem: str, target_date: str
+) -> tuple[Path | None, str | None]:
     target = str(target_date).strip()[:10]
     report_dir = REPORT_DIR / report_name
     exact = _feedback_artifact_path(report_name, stem, target)
@@ -295,7 +348,10 @@ def _latest_feedback_artifact_path(report_name: str, stem: str, target_date: str
         if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", suffix):
             continue
         source_date = suffix
-        if target >= CLEAN_TUNING_BASELINE_DATE and source_date < CLEAN_TUNING_BASELINE_DATE:
+        if (
+            target >= CLEAN_TUNING_BASELINE_DATE
+            and source_date < CLEAN_TUNING_BASELINE_DATE
+        ):
             continue
         if source_date <= target and (latest_date is None or source_date > latest_date):
             latest_path = path
@@ -314,7 +370,9 @@ def _feedback_source_status(
     consumed: list[dict[str, Any]] = []
     missing: list[dict[str, Any]] = []
     for source_id, (report_name, stem) in contract["artifact_dirs"].items():
-        artifact_path, source_date = _latest_feedback_artifact_path(report_name, stem, target_date)
+        artifact_path, source_date = _latest_feedback_artifact_path(
+            report_name, stem, target_date
+        )
         mentioned = source_id.lower() in active_text
         exists = artifact_path is not None and artifact_path.exists()
         item = {
@@ -323,9 +381,9 @@ def _feedback_source_status(
             "source_date": source_date,
             "target_date": target_date,
             "freshness": (
-                "same_day" if source_date == str(target_date).strip()[:10]
-                else "latest_available_lte_target" if source_date
-                else "missing"
+                "same_day"
+                if source_date == str(target_date).strip()[:10]
+                else "latest_available_lte_target" if source_date else "missing"
             ),
             "active_source_mentions": mentioned,
             "artifact_exists": exists,
@@ -385,14 +443,20 @@ def _manifest_covers_target(path: Path, target_date: str) -> bool:
     if not manifest:
         return False
     candidates = []
-    analysis_window = manifest.get("analysis_window") if isinstance(manifest.get("analysis_window"), dict) else {}
+    analysis_window = (
+        manifest.get("analysis_window")
+        if isinstance(manifest.get("analysis_window"), dict)
+        else {}
+    )
     candidates.extend([analysis_window.get("start"), analysis_window.get("end")])
-    candidates.extend([
-        manifest.get("history_coverage_start"),
-        manifest.get("history_coverage_end"),
-        manifest.get("analysis_start"),
-        manifest.get("analysis_end"),
-    ])
+    candidates.extend(
+        [
+            manifest.get("history_coverage_start"),
+            manifest.get("history_coverage_end"),
+            manifest.get("analysis_start"),
+            manifest.get("analysis_end"),
+        ]
+    )
     return any(str(value or "").strip()[:10] == target_date for value in candidates)
 
 
@@ -413,7 +477,9 @@ def build_pattern_lab_currentness_audit(target_date: str) -> dict[str, Any]:
                 severity="instrumentation_gap",
                 order_title=f"{lab_name} metric contract currentness",
                 files_likely_touched=[_source_rel(lab["lab_dir"])],
-                acceptance_tests=["PYTHONPATH=. .venv/bin/pytest -q src/tests/test_pattern_lab_currentness_audit.py"],
+                acceptance_tests=[
+                    "PYTHONPATH=. .venv/bin/pytest -q src/tests/test_pattern_lab_currentness_audit.py"
+                ],
             )
         )
         if lab.get("observability"):
@@ -427,7 +493,9 @@ def build_pattern_lab_currentness_audit(target_date: str) -> dict[str, Any]:
                     severity="instrumentation_gap",
                     order_title=f"{lab_name} observability metric contract currentness",
                     files_likely_touched=["analysis/tuning_observability_summary.py"],
-                    acceptance_tests=["PYTHONPATH=. .venv/bin/pytest -q src/tests/test_pattern_lab_currentness_audit.py"],
+                    acceptance_tests=[
+                        "PYTHONPATH=. .venv/bin/pytest -q src/tests/test_pattern_lab_currentness_audit.py"
+                    ],
                 )
             )
             checks.append(
@@ -441,7 +509,10 @@ def build_pattern_lab_currentness_audit(target_date: str) -> dict[str, Any]:
                     source_paths=[observability_path],
                     severity="automation_handoff_gap",
                     order_title=f"{lab_name} observability source contract handoff",
-                    files_likely_touched=["analysis/tuning_observability_summary.py", "src/engine/pattern_lab_currentness_audit.py"],
+                    files_likely_touched=[
+                        "analysis/tuning_observability_summary.py",
+                        "src/engine/pattern_lab_currentness_audit.py",
+                    ],
                     acceptance_tests=[
                         "PYTHONPATH=. .venv/bin/pytest -q src/tests/test_tuning_observability_summary.py src/tests/test_pattern_lab_currentness_audit.py"
                     ],
@@ -457,7 +528,9 @@ def build_pattern_lab_currentness_audit(target_date: str) -> dict[str, Any]:
                 severity="source_quality_blocker",
                 order_title=f"{lab_name} stale output freshness guard",
                 files_likely_touched=[_source_rel(lab["lab_dir"])],
-                acceptance_tests=["PYTHONPATH=. .venv/bin/pytest -q src/tests/test_pattern_lab_currentness_audit.py"],
+                acceptance_tests=[
+                    "PYTHONPATH=. .venv/bin/pytest -q src/tests/test_pattern_lab_currentness_audit.py"
+                ],
             )
         )
 
@@ -469,32 +542,48 @@ def build_pattern_lab_currentness_audit(target_date: str) -> dict[str, Any]:
             check_id="active_source_forbidden_terms",
             ok=not forbidden_hits,
             finding="Active pattern lab code/docs/prompts must not use legacy shadow-only or canary-ready wording.",
-            source_paths=[hit["path"] for hit in forbidden_hits[:20]] or [PROJECT_ROOT / "analysis"],
+            source_paths=[hit["path"] for hit in forbidden_hits[:20]]
+            or [PROJECT_ROOT / "analysis"],
             severity="instrumentation_gap",
             order_title="Replace legacy pattern lab stage wording",
-            files_likely_touched=sorted({_source_rel(hit["path"]) for hit in forbidden_hits[:20]}),
-            acceptance_tests=["rg -n \"shadow-only|canary-ready\" analysis/gemini_scalping_pattern_lab analysis/claude_scalping_pattern_lab analysis/deepseek_swing_pattern_lab -g '!**/outputs/**'"],
+            files_likely_touched=sorted(
+                {_source_rel(hit["path"]) for hit in forbidden_hits[:20]}
+            ),
+            acceptance_tests=[
+                "rg -n \"shadow-only|canary-ready\" analysis/gemini_scalping_pattern_lab analysis/claude_scalping_pattern_lab analysis/deepseek_swing_pattern_lab -g '!**/outputs/**'"
+            ],
         )
     )
 
     claude_prepare = paths["claude_scalping"]["lab_dir"] / "prepare_dataset.py"
-    claude_prepare_text = claude_prepare.read_text(encoding="utf-8") if claude_prepare.exists() else ""
+    claude_prepare_text = (
+        claude_prepare.read_text(encoding="utf-8") if claude_prepare.exists() else ""
+    )
     checks.append(
         _check(
             check_id="claude_empty_trade_fact_overwrite_guard",
-            ok="TRADE_FACT_COLUMNS" in claude_prepare_text and "DataFrame(columns=TRADE_FACT_COLUMNS)" in claude_prepare_text,
+            ok="TRADE_FACT_COLUMNS" in claude_prepare_text
+            and "DataFrame(columns=TRADE_FACT_COLUMNS)" in claude_prepare_text,
             finding="Claude empty input must overwrite trade_fact.csv with header-only CSV to prevent stale reuse.",
             source_paths=[claude_prepare],
             severity="source_quality_blocker",
             order_title="Guard Claude stale trade_fact reuse",
-            files_likely_touched=["analysis/claude_scalping_pattern_lab/prepare_dataset.py"],
-            acceptance_tests=["PYTHONPATH=. .venv/bin/pytest -q src/tests/test_claude_scalping_pattern_lab_prepare_dataset.py"],
+            files_likely_touched=[
+                "analysis/claude_scalping_pattern_lab/prepare_dataset.py"
+            ],
+            acceptance_tests=[
+                "PYTHONPATH=. .venv/bin/pytest -q src/tests/test_claude_scalping_pattern_lab_prepare_dataset.py"
+            ],
         )
     )
 
     deepseek_quality_path = paths["deepseek_swing"]["data_quality"]
     deepseek_quality = _load_json(deepseek_quality_path)
-    deepseek_provenance = deepseek_quality.get("sim_probe_provenance") if isinstance(deepseek_quality.get("sim_probe_provenance"), dict) else {}
+    deepseek_provenance = (
+        deepseek_quality.get("sim_probe_provenance")
+        if isinstance(deepseek_quality.get("sim_probe_provenance"), dict)
+        else {}
+    )
     checks.append(
         _check(
             check_id="deepseek_sim_probe_provenance",
@@ -503,8 +592,12 @@ def build_pattern_lab_currentness_audit(target_date: str) -> dict[str, Any]:
             source_paths=[deepseek_quality_path],
             severity="source_quality_blocker",
             order_title="Add DeepSeek swing sim/probe provenance",
-            files_likely_touched=["analysis/deepseek_swing_pattern_lab/prepare_dataset.py"],
-            acceptance_tests=["PYTHONPATH=. .venv/bin/pytest -q src/tests/test_deepseek_swing_pattern_lab.py"],
+            files_likely_touched=[
+                "analysis/deepseek_swing_pattern_lab/prepare_dataset.py"
+            ],
+            acceptance_tests=[
+                "PYTHONPATH=. .venv/bin/pytest -q src/tests/test_deepseek_swing_pattern_lab.py"
+            ],
         )
     )
 
@@ -548,7 +641,9 @@ def build_pattern_lab_currentness_audit(target_date: str) -> dict[str, Any]:
     checks.append(
         _check(
             check_id="swing_ldm_threshold_reentry_sources",
-            ok=_source_mentions_all([paths["deepseek_swing"]["lab_dir"]], SWING_REENTRY_TERMS)
+            ok=_source_mentions_all(
+                [paths["deepseek_swing"]["lab_dir"]], SWING_REENTRY_TERMS
+            )
             and not feedback_sources["swing"]["missing_feedback_sources"],
             finding=(
                 "DeepSeek swing pattern lab must consume threshold_cycle_ev, swing_lifecycle_decision_matrix, "
@@ -604,7 +699,9 @@ def build_pattern_lab_currentness_audit(target_date: str) -> dict[str, Any]:
     embedded_observability_orders: list[dict[str, Any]] = []
     for lab in paths.values():
         if lab.get("observability"):
-            embedded_observability_orders.extend(_observability_embedded_orders(lab["observability"]))
+            embedded_observability_orders.extend(
+                _observability_embedded_orders(lab["observability"])
+            )
 
     orders = [
         check["recommended_order"]
@@ -644,7 +741,9 @@ def build_pattern_lab_currentness_audit(target_date: str) -> dict[str, Any]:
     }
     json_path, md_path = report_paths(target_date)
     json_path.parent.mkdir(parents=True, exist_ok=True)
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     md_path.write_text(render_markdown(report), encoding="utf-8")
     return report
 
@@ -688,7 +787,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     report = build_pattern_lab_currentness_audit(args.date)
     json_path, md_path = report_paths(args.date)
-    print(f"pattern_lab_currentness_audit status={report['status']} json={json_path} md={md_path}")
+    print(
+        f"pattern_lab_currentness_audit status={report['status']} json={json_path} md={md_path}"
+    )
     return 0
 
 

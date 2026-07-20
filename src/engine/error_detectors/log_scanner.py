@@ -16,14 +16,15 @@ from src.engine.error_detectors.base import (
     register_detector,
 )
 
-
 SCAN_STATE_PATH = PROJECT_ROOT / "tmp" / "error_detector_log_scan_state.json"
 
 _EXCEPTION_PATTERNS: list[tuple[str, re.Pattern]] = []
 _IGNORED_LINE_PATTERNS: list[re.Pattern] = [
     re.compile(r"\[ERROR_DETECTION\]"),
     re.compile(r"(?:^|[^A-Za-z0-9])(?:[A-Za-z0-9]+_)*TEST(?:$|[^A-Za-z0-9])"),
-    re.compile(r"(?:^|[^A-Za-z0-9])(?:LatencyTest|LatencyLegacyHolding|LatencyEntry|LatencyEntryPrice)(?:$|[^A-Za-z0-9])"),
+    re.compile(
+        r"(?:^|[^A-Za-z0-9])(?:LatencyTest|LatencyLegacyHolding|LatencyEntry|LatencyEntryPrice)(?:$|[^A-Za-z0-9])"
+    ),
     re.compile(r"\[LIVE_ENTRY_TIMEOUT_[A-Za-z0-9_]+\]"),
     re.compile(r"테스트"),
     re.compile(r"\btest\s*:"),
@@ -42,13 +43,26 @@ def _register_pattern(name: str, pattern: str):
     _EXCEPTION_PATTERNS.append((name, re.compile(pattern)))
 
 
-_register_pattern("DB_ERROR", r"(?:db|database|sqlalchemy|psycopg|connection.*refused|query.*fail|db.*error)")
-_register_pattern("API_ERROR", r"(?:api.*error|http.*(?:40[13]|50[0-9])|request.*fail|response.*invalid|timeout.*api|api.*timeout)")
-_register_pattern("WEBSOCKET_ERROR", r"(?:websocket|ws.*error|ws.*close|ws.*disconnect)")
-_register_pattern("PARSE_ERROR", r"(?:parse|schema.*invalid|json.*decode|value.*error|type.*error)")
+_register_pattern(
+    "DB_ERROR",
+    r"(?:db|database|sqlalchemy|psycopg|connection.*refused|query.*fail|db.*error)",
+)
+_register_pattern(
+    "API_ERROR",
+    r"(?:api.*error|http.*(?:40[13]|50[0-9])|request.*fail|response.*invalid|timeout.*api|api.*timeout)",
+)
+_register_pattern(
+    "WEBSOCKET_ERROR", r"(?:websocket|ws.*error|ws.*close|ws.*disconnect)"
+)
+_register_pattern(
+    "PARSE_ERROR", r"(?:parse|schema.*invalid|json.*decode|value.*error|type.*error)"
+)
 _register_pattern("TIMEOUT_ERROR", r"(?:timeout|timed? ?out|deadline)")
 _register_pattern("KEY_ERROR", r"(?:key.*error|key.*not.*found|missing.*key)")
-_register_pattern("OS_ERROR", r"(?:os.*error|file.*not.*found|permission.*denied|disk.*full|no.*space)")
+_register_pattern(
+    "OS_ERROR",
+    r"(?:os.*error|file.*not.*found|permission.*denied|disk.*full|no.*space)",
+)
 _register_pattern("IMPORT_ERROR", r"(?:import.*error|module.*not.*found|no.*module)")
 _register_pattern(
     "MEMORY_ERROR",
@@ -67,7 +81,10 @@ _register_pattern(
     "SOURCE_IDENTITY_ERROR",
     r"(?:scanner_source_identity_guard|scanner_identity_name_mismatch)",
 )
-_register_pattern("UNKNOWN", r"(?:error|exception|critical|fatal)",)
+_register_pattern(
+    "UNKNOWN",
+    r"(?:error|exception|critical|fatal)",
+)
 
 
 def _get_error_log_files() -> list[Path]:
@@ -150,7 +167,12 @@ class LogScanner(BaseDetector):
             with open(path, "r", encoding="utf-8", errors="replace") as f:
                 f.seek(last_pos)
                 new_lines = f.read(
-                    int(getattr(TRADING_RULES, "ERROR_DETECTOR_LOG_SCAN_MAX_LINES", 2000)) * 256
+                    int(
+                        getattr(
+                            TRADING_RULES, "ERROR_DETECTOR_LOG_SCAN_MAX_LINES", 2000
+                        )
+                    )
+                    * 256
                 )
                 new_position = f.tell()
         except OSError:
@@ -186,15 +208,17 @@ class LogScanner(BaseDetector):
     @staticmethod
     def _save_state(state: dict) -> None:
         SCAN_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        SCAN_STATE_PATH.write_text(json.dumps(state, ensure_ascii=True), encoding="utf-8")
+        SCAN_STATE_PATH.write_text(
+            json.dumps(state, ensure_ascii=True), encoding="utf-8"
+        )
 
     @staticmethod
-    def _classify(
-        total_new: int, counter: Counter
-    ) -> tuple[str, str]:
+    def _classify(total_new: int, counter: Counter) -> tuple[str, str]:
         if total_new == 0:
             return "pass", "No new error log entries detected."
-        if total_new >= int(getattr(TRADING_RULES, "ERROR_DETECTOR_LOG_BURST_THRESHOLD", 4)):
+        if total_new >= int(
+            getattr(TRADING_RULES, "ERROR_DETECTOR_LOG_BURST_THRESHOLD", 4)
+        ):
             top = counter.most_common(1)[0]
             return (
                 "fail",
@@ -211,7 +235,9 @@ class LogScanner(BaseDetector):
         if severity == "fail":
             top = counter.most_common(3)
             types = ", ".join(f"{t}({c})" for t, c in top)
-            return f"Investigate error types: {types}. Check error log files for details."
+            return (
+                f"Investigate error types: {types}. Check error log files for details."
+            )
         if severity == "warning":
             return "Review warning-level errors in next maintenance window."
         return ""

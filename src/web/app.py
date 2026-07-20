@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 
 app = Flask(__name__)
 
-PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if PROJECT_ROOT not in sys.path:
     sys.path.append(PROJECT_ROOT)
 
@@ -18,7 +18,9 @@ from src.engine.sniper_performance_tuning_report import (
 from src.engine.sniper_post_sell_feedback import (
     POST_SELL_REPORT_SCHEMA_VERSION,
 )
-from src.engine.strategy_position_performance_report import build_strategy_position_performance_report
+from src.engine.strategy_position_performance_report import (
+    build_strategy_position_performance_report,
+)
 from src.engine.sniper_gatekeeper_replay import (
     find_gatekeeper_snapshot,
     load_gatekeeper_snapshots,
@@ -118,7 +120,9 @@ def _resolve_dashboard_since(target_date: str, since: str | None) -> str | None:
     today = _today_string()
     if str(target_date).strip() != today:
         return None
-    return (datetime.now() - timedelta(minutes=_DEFAULT_DASHBOARD_LOOKBACK_MINUTES)).strftime("%H:%M:%S")
+    return (
+        datetime.now() - timedelta(minutes=_DEFAULT_DASHBOARD_LOOKBACK_MINUTES)
+    ).strftime("%H:%M:%S")
 
 
 def _load_saved_performance_tuning_snapshot(
@@ -152,7 +156,9 @@ def _load_saved_trade_review_snapshot(
     snapshot = load_monitor_snapshot("trade_review", target_date)
     if not snapshot:
         return None
-    snapshot["recent_trades"] = list(snapshot.get("recent_trades") or [])[: max(1, int(top or 10))]
+    snapshot["recent_trades"] = list(snapshot.get("recent_trades") or [])[
+        : max(1, int(top or 10))
+    ]
     return snapshot
 
 
@@ -163,7 +169,9 @@ def _load_or_build_performance_tuning_report(
     refresh: bool,
     trend_max_dates: int | None = None,
 ) -> dict:
-    report = _load_saved_performance_tuning_snapshot(target_date, since, refresh, trend_max_dates)
+    report = _load_saved_performance_tuning_snapshot(
+        target_date, since, refresh, trend_max_dates
+    )
     if report is None:
         fallback_snapshot = load_monitor_snapshot("performance_tuning", target_date)
         return _build_or_dispatch_heavy_snapshot_report(
@@ -181,7 +189,9 @@ def _load_or_build_performance_tuning_report(
     return report
 
 
-def _load_saved_post_sell_feedback_snapshot(target_date: str, refresh: bool) -> dict | None:
+def _load_saved_post_sell_feedback_snapshot(
+    target_date: str, refresh: bool
+) -> dict | None:
     if refresh:
         return None
     snapshot = load_monitor_snapshot("post_sell_feedback", target_date)
@@ -238,7 +248,9 @@ def _load_or_build_trade_review_report(
     if report is None:
         fallback_snapshot = load_monitor_snapshot("trade_review", target_date)
         if isinstance(fallback_snapshot, dict):
-            fallback_snapshot["recent_trades"] = list(fallback_snapshot.get("recent_trades") or [])[: max(1, int(top or 10))]
+            fallback_snapshot["recent_trades"] = list(
+                fallback_snapshot.get("recent_trades") or []
+            )[: max(1, int(top or 10))]
         return _build_or_dispatch_heavy_snapshot_report(
             snapshot_kind="trade_review",
             target_date=target_date,
@@ -326,8 +338,12 @@ def _build_or_dispatch_heavy_snapshot_report(
     fallback_snapshot: dict | None,
     request_details: dict | None = None,
 ) -> dict:
-    report = copy.deepcopy(fallback_snapshot or _build_pending_report_shell(snapshot_kind, target_date))
-    _ensure_report_meta(report, source_default="snapshot" if fallback_snapshot else "pending")
+    report = copy.deepcopy(
+        fallback_snapshot or _build_pending_report_shell(snapshot_kind, target_date)
+    )
+    _ensure_report_meta(
+        report, source_default="snapshot" if fallback_snapshot else "pending"
+    )
 
     profile = _HEAVY_SNAPSHOT_PROFILE_BY_KIND.get(snapshot_kind, "full")
     existing_artifact = load_completion_artifact(target_date, profile)
@@ -381,7 +397,9 @@ def _build_post_sell_kpi_cards(post_sell_report: dict | None) -> list[dict]:
     avg_close = float(metrics.get("avg_close_after_sell_10m_pct", 0.0) or 0.0)
     tuning_pressure = float(metrics.get("timing_tuning_pressure_score", 0.0) or 0.0)
     extra_krw = int(metrics.get("estimated_extra_upside_10m_krw_sum", 0) or 0)
-    missed_count = int(_report_dict(summary, "outcome_counts").get("MISSED_UPSIDE", 0) or 0)
+    missed_count = int(
+        _report_dict(summary, "outcome_counts").get("MISSED_UPSIDE", 0) or 0
+    )
     good_count = int(_report_dict(summary, "outcome_counts").get("GOOD_EXIT", 0) or 0)
 
     if evaluated <= 0:
@@ -422,6 +440,7 @@ def _build_post_sell_kpi_cards(post_sell_report: dict | None) -> list[dict]:
         },
     ]
 
+
 @app.route("/api/daily-report")
 def daily_report_api():
     target_date = _request_target_date()
@@ -457,12 +476,14 @@ def dashboard_home():
 
     tab_map = {
         "daily-report": f"/daily-report?date={target_date}",
-        "entry-pipeline-flow": f"/entry-pipeline-flow?date={target_date}&top={max(1, int(top or 10))}" + (f"&since={resolved_since}" if resolved_since else ""),
+        "entry-pipeline-flow": f"/entry-pipeline-flow?date={target_date}&top={max(1, int(top or 10))}"
+        + (f"&since={resolved_since}" if resolved_since else ""),
         "trade-review": f"/trade-review?date={target_date}",
         "post-sell-feedback": f"/post-sell-feedback?date={target_date}&top={max(1, int(top or 10))}&refresh=0",
         "strategy-performance": f"/strategy-performance?date={target_date}",
         "gatekeeper-replay": f"/gatekeeper-replay?date={target_date}",
-        "performance-tuning": f"/performance-tuning?date={target_date}" + (f"&since={resolved_since}" if resolved_since else ""),
+        "performance-tuning": f"/performance-tuning?date={target_date}"
+        + (f"&since={resolved_since}" if resolved_since else ""),
         "investor-margin": f"/investor-margin?date={target_date}",
         "bucket-tracking": f"/bucket-tracking?date={target_date}&days=5&top={bucket_top}",
     }
@@ -1001,7 +1022,9 @@ def index():
     insights = report_data.get("insights", {}) or {}
     performance = report_data.get("performance", {}) or {}
     perf_summary = performance.get("summary", {}) or {}
-    strategy_breakdown = report_data.get("sections", {}).get("strategy_breakdown", []) or []
+    strategy_breakdown = (
+        report_data.get("sections", {}).get("strategy_breakdown", []) or []
+    )
     top_winners = report_data.get("sections", {}).get("top_winners", []) or []
     top_losers = report_data.get("sections", {}).get("top_losers", []) or []
     stocks = report_data.get("stocks", []) or []
@@ -1301,7 +1324,7 @@ def index():
     )
 
 
-@app.route('/api/strength-momentum')
+@app.route("/api/strength-momentum")
 def strength_momentum_api():
     target_date = _request_target_date()
     since = _request_since(target_date)
@@ -1314,7 +1337,7 @@ def strength_momentum_api():
     return jsonify(report)
 
 
-@app.route('/strength-momentum')
+@app.route("/strength-momentum")
 def strength_momentum_preview():
     target_date = _request_target_date()
     since = _request_since(target_date)
@@ -1325,11 +1348,13 @@ def strength_momentum_preview():
         top_n=max(1, int(top or 5)),
         since_time=since,
     )
-    metrics = _report_dict(report, 'metrics')
-    top_passes = _report_list(report, 'sections', 'top_passes')
-    near_misses = _report_list(report, 'sections', 'near_misses')
-    override_candidates = _report_list(report, 'sections', 'dynamic_override_candidates')
-    observed_reasons = _report_list(report, 'reason_breakdown', 'observed')
+    metrics = _report_dict(report, "metrics")
+    top_passes = _report_list(report, "sections", "top_passes")
+    near_misses = _report_list(report, "sections", "near_misses")
+    override_candidates = _report_list(
+        report, "sections", "dynamic_override_candidates"
+    )
+    observed_reasons = _report_list(report, "reason_breakdown", "observed")
 
     template = """
     <!doctype html>
@@ -1481,7 +1506,7 @@ def strength_momentum_preview():
     )
 
 
-@app.route('/api/entry-pipeline-flow')
+@app.route("/api/entry-pipeline-flow")
 def entry_pipeline_flow_api():
     target_date = _request_target_date()
     since = _request_since(target_date)
@@ -1494,7 +1519,7 @@ def entry_pipeline_flow_api():
     return jsonify(report)
 
 
-@app.route('/api/gatekeeper-replay')
+@app.route("/api/gatekeeper-replay")
 def gatekeeper_replay_api():
     target_date = _request_target_date()
     code = _request_stripped("code")
@@ -1503,11 +1528,13 @@ def gatekeeper_replay_api():
 
     if not code:
         rows = load_gatekeeper_snapshots(target_date)
-        return jsonify({
-            "date": target_date,
-            "count": len(rows),
-            "rows": rows[-20:],
-        })
+        return jsonify(
+            {
+                "date": target_date,
+                "count": len(rows),
+                "rows": rows[-20:],
+            }
+        )
 
     snapshot = find_gatekeeper_snapshot(target_date, code, target_time)
     response = {
@@ -1530,7 +1557,7 @@ def gatekeeper_replay_api():
     return jsonify(response)
 
 
-@app.route('/api/performance-tuning')
+@app.route("/api/performance-tuning")
 def performance_tuning_api():
     target_date = _request_target_date()
     since = _request_since(target_date)
@@ -1545,7 +1572,7 @@ def performance_tuning_api():
     return jsonify(report)
 
 
-@app.route('/api/post-sell-feedback')
+@app.route("/api/post-sell-feedback")
 def post_sell_feedback_api():
     target_date = _request_target_date()
     top = _request_top(10)
@@ -1558,15 +1585,17 @@ def post_sell_feedback_api():
     return jsonify(report)
 
 
-@app.route('/api/strategy-performance')
+@app.route("/api/strategy-performance")
 def strategy_performance_api():
     target_date = _request_target_date()
     refresh = _request_flag("refresh")
-    report = build_strategy_position_performance_report(target_date=target_date, refresh=refresh)
+    report = build_strategy_position_performance_report(
+        target_date=target_date, refresh=refresh
+    )
     return jsonify(report)
 
 
-@app.route('/entry-pipeline-flow')
+@app.route("/entry-pipeline-flow")
 def entry_pipeline_flow_preview():
     target_date = _request_target_date()
     since = _request_since(target_date)
@@ -1577,12 +1606,12 @@ def entry_pipeline_flow_preview():
         since_time=since,
         top_n=max(1, int(top or 10)),
     )
-    metrics = _report_dict(report, 'metrics')
-    blockers = _report_list(report, 'blocker_breakdown')
-    blocker_guide = _report_list(report, 'blocker_guide')
-    latency_reason_breakdown = _report_list(report, 'latency_reason_breakdown')
-    expired_armed_breakdown = _report_list(report, 'expired_armed_breakdown')
-    recent_stocks = _report_list(report, 'sections', 'recent_stocks')
+    metrics = _report_dict(report, "metrics")
+    blockers = _report_list(report, "blocker_breakdown")
+    blocker_guide = _report_list(report, "blocker_guide")
+    latency_reason_breakdown = _report_list(report, "latency_reason_breakdown")
+    expired_armed_breakdown = _report_list(report, "expired_armed_breakdown")
+    recent_stocks = _report_list(report, "sections", "recent_stocks")
 
     template = """
     <!doctype html>
@@ -1848,7 +1877,7 @@ def entry_pipeline_flow_preview():
     )
 
 
-@app.route('/gatekeeper-replay')
+@app.route("/gatekeeper-replay")
 def gatekeeper_replay_preview():
     target_date = _request_target_date()
     code = _request_stripped("code")
@@ -1856,8 +1885,12 @@ def gatekeeper_replay_preview():
     rerun = _request_flag("rerun")
     rows = load_gatekeeper_snapshots(target_date) if not code else []
     recent_rows = list(reversed(rows[-20:])) if rows else []
-    snapshot = find_gatekeeper_snapshot(target_date, code, target_time) if code else None
-    rerun_result = rerun_gatekeeper_snapshot(snapshot, conf=CONF) if (snapshot and rerun) else None
+    snapshot = (
+        find_gatekeeper_snapshot(target_date, code, target_time) if code else None
+    )
+    rerun_result = (
+        rerun_gatekeeper_snapshot(snapshot, conf=CONF) if (snapshot and rerun) else None
+    )
 
     template = """
     <!doctype html>
@@ -2026,7 +2059,7 @@ def gatekeeper_replay_preview():
     )
 
 
-@app.route('/performance-tuning')
+@app.route("/performance-tuning")
 def performance_tuning_preview():
     target_date = _request_target_date()
     since = _request_since(target_date)
@@ -2040,21 +2073,23 @@ def performance_tuning_preview():
         refresh=refresh,
         trend_max_dates=trend_max_dates,
     )
-    metrics = _report_dict(report, 'metrics')
-    cards = _report_list(report, 'cards')
-    watch_items = _report_list(report, 'watch_items')
-    strategy_rows = _report_list(report, 'strategy_rows')
-    auto_comments = _report_list(report, 'auto_comments')
-    meta_info = _report_dict(report, 'meta')
-    breakdowns = _report_dict(report, 'breakdowns')
-    swing_daily_summary = _report_dict(report, 'sections', 'swing_daily_summary')
-    judgment_gate = _report_dict(report, 'sections', 'judgment_gate')
-    holding_axis = _report_dict(report, 'sections', 'holding_axis')
-    flow_bottleneck_lane = _report_dict(report, 'sections', 'flow_bottleneck_lane')
-    observation_axis_coverage = _report_list(report, 'sections', 'observation_axis_coverage')
-    top_holding_slow = _report_list(report, 'sections', 'top_holding_slow')
-    top_gatekeeper_slow = _report_list(report, 'sections', 'top_gatekeeper_slow')
-    top_dual_persona_slow = _report_list(report, 'sections', 'top_dual_persona_slow')
+    metrics = _report_dict(report, "metrics")
+    cards = _report_list(report, "cards")
+    watch_items = _report_list(report, "watch_items")
+    strategy_rows = _report_list(report, "strategy_rows")
+    auto_comments = _report_list(report, "auto_comments")
+    meta_info = _report_dict(report, "meta")
+    breakdowns = _report_dict(report, "breakdowns")
+    swing_daily_summary = _report_dict(report, "sections", "swing_daily_summary")
+    judgment_gate = _report_dict(report, "sections", "judgment_gate")
+    holding_axis = _report_dict(report, "sections", "holding_axis")
+    flow_bottleneck_lane = _report_dict(report, "sections", "flow_bottleneck_lane")
+    observation_axis_coverage = _report_list(
+        report, "sections", "observation_axis_coverage"
+    )
+    top_holding_slow = _report_list(report, "sections", "top_holding_slow")
+    top_gatekeeper_slow = _report_list(report, "sections", "top_gatekeeper_slow")
+    top_dual_persona_slow = _report_list(report, "sections", "top_dual_persona_slow")
     post_sell_report = _load_or_build_post_sell_feedback_report(
         target_date=target_date,
         top=max(1, int(top or 10)),
@@ -3080,7 +3115,7 @@ def performance_tuning_preview():
     )
 
 
-@app.route('/post-sell-feedback')
+@app.route("/post-sell-feedback")
 def post_sell_feedback_preview():
     target_date = _request_target_date()
     top = _request_top(10)
@@ -3369,19 +3404,21 @@ def post_sell_feedback_preview():
     )
 
 
-@app.route('/strategy-performance')
+@app.route("/strategy-performance")
 def strategy_performance_preview():
     target_date = _request_target_date()
     refresh = _request_flag("refresh")
 
-    report = build_strategy_position_performance_report(target_date=target_date, refresh=refresh)
-    summary = _report_dict(report, 'summary')
-    kpis = _report_list(report, 'kpis')
-    strategy_totals = _report_list(report, 'strategy_totals')
-    rows = _report_list(report, 'rows')
-    scanner_discovery_rows = _report_list(report, 'sections', 'scanner_discovery_rows')
-    top_winners = _report_list(report, 'sections', 'top_winners')
-    top_losers = _report_list(report, 'sections', 'top_losers')
+    report = build_strategy_position_performance_report(
+        target_date=target_date, refresh=refresh
+    )
+    summary = _report_dict(report, "summary")
+    kpis = _report_list(report, "kpis")
+    strategy_totals = _report_list(report, "strategy_totals")
+    rows = _report_list(report, "rows")
+    scanner_discovery_rows = _report_list(report, "sections", "scanner_discovery_rows")
+    top_winners = _report_list(report, "sections", "top_winners")
+    top_losers = _report_list(report, "sections", "top_losers")
 
     template = """
     <!doctype html>
@@ -3654,7 +3691,7 @@ def strategy_performance_preview():
     )
 
 
-@app.route('/api/trade-review')
+@app.route("/api/trade-review")
 def trade_review_api():
     target_date = _request_target_date()
     since = _request_since(target_date)
@@ -3673,7 +3710,7 @@ def trade_review_api():
     return jsonify(report)
 
 
-@app.route('/trade-review')
+@app.route("/trade-review")
 def trade_review_preview():
     target_date = _request_target_date()
     since = _request_since(target_date)
@@ -3690,13 +3727,13 @@ def trade_review_preview():
         top=top,
         refresh=refresh,
     )
-    metrics = _report_dict(report, 'metrics')
-    recent_trades = _report_list(report, 'sections', 'recent_trades')
-    event_breakdown = _report_list(report, 'event_breakdown')
-    warnings = _report_list(report, 'meta', 'warnings')
-    available_stocks = _report_list(report, 'meta', 'available_stocks')
-    fill_quality_summary = _report_dict(report, 'sections', 'fill_quality_summary')
-    hard_stop_taxonomy = _report_dict(report, 'sections', 'hard_stop_taxonomy')
+    metrics = _report_dict(report, "metrics")
+    recent_trades = _report_list(report, "sections", "recent_trades")
+    event_breakdown = _report_list(report, "event_breakdown")
+    warnings = _report_list(report, "meta", "warnings")
+    available_stocks = _report_list(report, "meta", "available_stocks")
+    fill_quality_summary = _report_dict(report, "sections", "fill_quality_summary")
+    hard_stop_taxonomy = _report_dict(report, "sections", "hard_stop_taxonomy")
 
     template = """
     <!doctype html>
@@ -4077,7 +4114,13 @@ def trade_review_preview():
         request=request,
     )
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     # 외부(EC2 퍼블릭 IP)에서 접속할 수 있도록 host를 0.0.0.0으로 설정합니다.
-    debug_enabled = str(os.environ.get("KORSTOCKSCAN_WEB_DEBUG", "")).lower() in {"1", "true", "yes", "y"}
-    app.run(host='0.0.0.0', port=5000, debug=debug_enabled)
+    debug_enabled = str(os.environ.get("KORSTOCKSCAN_WEB_DEBUG", "")).lower() in {
+        "1",
+        "true",
+        "yes",
+        "y",
+    }
+    app.run(host="0.0.0.0", port=5000, debug=debug_enabled)

@@ -14,7 +14,6 @@ from flask import Blueprint, jsonify, render_template_string, request
 
 from src.engine.bd_fbuy_accum_pre_scanner import load_or_build_report
 
-
 bd_fbuy_accum_pre_bp = Blueprint("bd_fbuy_accum_pre", __name__)
 
 
@@ -48,7 +47,9 @@ def _format_ratio(value: Any, digits: int = 3) -> str:
         return "-"
 
 
-def _sparkline_points(rows: list[dict[str, Any]], key: str, width: int = 260, height: int = 58) -> str:
+def _sparkline_points(
+    rows: list[dict[str, Any]], key: str, width: int = 260, height: int = 58
+) -> str:
     values = [_to_float(row.get(key)) for row in rows if row.get(key) is not None]
     if not values:
         return ""
@@ -65,7 +66,11 @@ def _enrich_rows(report: dict[str, Any]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for row in report.get("candidates") or []:
         item = dict(row)
-        live = item.get("live_confirmation") if isinstance(item.get("live_confirmation"), dict) else {}
+        live = (
+            item.get("live_confirmation")
+            if isinstance(item.get("live_confirmation"), dict)
+            else {}
+        )
         history = item.get("history") if isinstance(item.get("history"), dict) else {}
         item.update(
             {
@@ -74,17 +79,35 @@ def _enrich_rows(report: dict[str, Any]) -> list[dict[str, Any]]:
                 "dist_low20_display": _format_ratio(item.get("dist_low20_pct"), 2),
                 "dist_ma5_display": _format_ratio(item.get("dist_ma5_pct"), 2),
                 "vol_ratio_display": _format_ratio(item.get("vol_med20_ratio"), 2),
-                "foreign_qty_ratio_display": _format_ratio(item.get("foreign_qty_medvol20_ratio")),
-                "foreign_amt_ratio_display": _format_ratio(item.get("foreign_amt_medvalue20_ratio")),
+                "foreign_qty_ratio_display": _format_ratio(
+                    item.get("foreign_qty_medvol20_ratio")
+                ),
+                "foreign_amt_ratio_display": _format_ratio(
+                    item.get("foreign_amt_medvalue20_ratio")
+                ),
                 "traded_value_display": _format_won_eok(item.get("traded_value")),
                 "med_value_display": _format_won_eok(item.get("med_value20")),
-                "live_foreign_display": _format_number(live.get("today_foreign_broker_est_net_qty")),
-                "live_source_label": "DB 외인" if live.get("source") == "daily_stock_quotes" else "WS 외국계",
+                "live_foreign_display": _format_number(
+                    live.get("today_foreign_broker_est_net_qty")
+                ),
+                "live_source_label": (
+                    "DB 외인"
+                    if live.get("source") == "daily_stock_quotes"
+                    else "WS 외국계"
+                ),
                 "live_quality": live.get("source_quality") or "missing",
-                "spread_display": _format_ratio(live.get("spread_bps"), 1) if live.get("spread_bps") else "-",
+                "spread_display": (
+                    _format_ratio(live.get("spread_bps"), 1)
+                    if live.get("spread_bps")
+                    else "-"
+                ),
                 "price_points": _sparkline_points(history.get("price") or [], "close"),
-                "volume_points": _sparkline_points(history.get("volume") or [], "volume"),
-                "foreign_points": _sparkline_points(history.get("foreign") or [], "foreign_net"),
+                "volume_points": _sparkline_points(
+                    history.get("volume") or [], "volume"
+                ),
+                "foreign_points": _sparkline_points(
+                    history.get("foreign") or [], "foreign_net"
+                ),
             }
         )
         rows.append(item)
@@ -92,10 +115,25 @@ def _enrich_rows(report: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _load_request_report() -> tuple[dict[str, Any], bool]:
-    target_date = (request.values.get("date") or datetime.now().strftime("%Y-%m-%d")).strip()
-    refresh = str(request.values.get("refresh") or "0").lower() in {"1", "true", "yes", "on"}
-    live_intraday = str(request.values.get("live") or "1").lower() in {"1", "true", "yes", "on"}
-    return load_or_build_report(target_date, refresh=refresh, live_intraday=live_intraday), live_intraday
+    target_date = (
+        request.values.get("date") or datetime.now().strftime("%Y-%m-%d")
+    ).strip()
+    refresh = str(request.values.get("refresh") or "0").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    live_intraday = str(request.values.get("live") or "1").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    return (
+        load_or_build_report(target_date, refresh=refresh, live_intraday=live_intraday),
+        live_intraday,
+    )
 
 
 @bd_fbuy_accum_pre_bp.route("/api/investor-margin")
@@ -108,7 +146,9 @@ def bd_fbuy_accum_pre_api():
 def bd_fbuy_accum_pre_view():
     report, live_intraday = _load_request_report()
     rows = _enrich_rows(report)
-    rebound_rows = _enrich_rows({"candidates": report.get("rebound_expansion_candidates") or []})
+    rebound_rows = _enrich_rows(
+        {"candidates": report.get("rebound_expansion_candidates") or []}
+    )
     summary = report.get("summary") or {}
     template = """
     <!doctype html>

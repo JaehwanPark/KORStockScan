@@ -17,7 +17,6 @@ from typing import Any, Callable, Iterable
 
 from src.utils.constants import DATA_DIR
 
-
 CACHE_DIR = Path(DATA_DIR) / "runtime" / "swing_strategy_discovery"
 REFERENCE_DIR = Path(__file__).resolve().parents[2] / "docs" / "reference"
 DECISION_AUTHORITY = "swing_sim_exploration_only"
@@ -48,13 +47,19 @@ def _as_list(value: Any) -> list[str]:
                 return [str(item).strip() for item in parsed if str(item).strip()]
         except Exception:
             pass
-        return [part.strip() for part in stripped.replace("|", ",").split(",") if part.strip()]
+        return [
+            part.strip()
+            for part in stripped.replace("|", ",").split(",")
+            if part.strip()
+        ]
     return [str(value).strip()] if str(value).strip() else []
 
 
 def _kiwoom_payload_ok(payload: Any) -> bool:
     if isinstance(payload, list):
-        return all(_kiwoom_payload_ok(item) for item in payload if isinstance(item, dict))
+        return all(
+            _kiwoom_payload_ok(item) for item in payload if isinstance(item, dict)
+        )
     if not isinstance(payload, dict):
         return True
     code = payload.get("return_code")
@@ -65,7 +70,9 @@ def _kiwoom_payload_ok(payload: Any) -> bool:
 
 def _kiwoom_error_message(payload: Any) -> str:
     if isinstance(payload, list):
-        messages = [_kiwoom_error_message(item) for item in payload if isinstance(item, dict)]
+        messages = [
+            _kiwoom_error_message(item) for item in payload if isinstance(item, dict)
+        ]
         return "; ".join(message for message in messages if message)
     if isinstance(payload, dict):
         return str(payload.get("return_msg") or payload.get("message") or "")
@@ -97,14 +104,24 @@ def normalize_theme_map(
             "sector_source_quality": str(row.get("sector_source_quality") or "missing"),
             "theme_tags": _as_list(row.get("theme_tags")),
             "theme_source": str(row.get("theme_source") or source),
-            "theme_source_quality": str(row.get("theme_source_quality") or source_quality),
+            "theme_source_quality": str(
+                row.get("theme_source_quality") or source_quality
+            ),
         }
     return normalized
 
 
 def _extract_theme_groups(payload: Any) -> list[dict[str, Any]]:
     if isinstance(payload, dict):
-        for key in ("thema_grp", "theme_grp", "theme_group", "theme_list", "output", "data", "items"):
+        for key in (
+            "thema_grp",
+            "theme_grp",
+            "theme_group",
+            "theme_list",
+            "output",
+            "data",
+            "items",
+        ):
             value = payload.get(key)
             if isinstance(value, list):
                 return [item for item in value if isinstance(item, dict)]
@@ -114,7 +131,9 @@ def _extract_theme_groups(payload: Any) -> list[dict[str, Any]]:
     return []
 
 
-def _manual_sector_reference_path(target_date: str | date, explicit_path: str | Path | None = None) -> Path | None:
+def _manual_sector_reference_path(
+    target_date: str | date, explicit_path: str | Path | None = None
+) -> Path | None:
     if explicit_path:
         path = Path(explicit_path)
         return path if path.exists() else None
@@ -173,7 +192,9 @@ def fetch_manual_sector_map(
     target_date: str | date,
     reference_path: str | Path | None = None,
 ) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
-    requested = sorted({_norm_code(code) for code in codes if _norm_code(code).strip("0")})
+    requested = sorted(
+        {_norm_code(code) for code in codes if _norm_code(code).strip("0")}
+    )
     path = _manual_sector_reference_path(target_date, reference_path)
     diagnostics: dict[str, Any] = {
         "source": "manual_sector_reference",
@@ -189,13 +210,23 @@ def fetch_manual_sector_map(
         raw_rows = _manual_sector_rows(path)
         for raw in raw_rows:
             code = _norm_code(
-                _row_get(raw, "Issue code", "issue_code", "종목코드", "code", "stock_code")
+                _row_get(
+                    raw, "Issue code", "issue_code", "종목코드", "code", "stock_code"
+                )
             )
             if code not in requested_set:
                 continue
-            sector_code = str(_row_get(raw, "Sector code", "sector_code", "업종코드") or "").replace(".0", "").strip()
-            industry = str(_row_get(raw, "Industry", "industry", "업종", "업종명") or "").strip()
-            market_type = str(_row_get(raw, "Market type", "market_type", "시장구분") or "").strip()
+            sector_code = (
+                str(_row_get(raw, "Sector code", "sector_code", "업종코드") or "")
+                .replace(".0", "")
+                .strip()
+            )
+            industry = str(
+                _row_get(raw, "Industry", "industry", "업종", "업종명") or ""
+            ).strip()
+            market_type = str(
+                _row_get(raw, "Market type", "market_type", "시장구분") or ""
+            ).strip()
             rows[code] = {
                 "sector": industry,
                 "industry": industry,
@@ -233,7 +264,9 @@ def fetch_kiwoom_sector_theme_map(
     The adapter is intentionally tolerant because Kiwoom response field names
     differ across wrapper versions.
     """
-    requested = sorted({_norm_code(code) for code in codes if _norm_code(code).strip("0")})
+    requested = sorted(
+        {_norm_code(code) for code in codes if _norm_code(code).strip("0")}
+    )
     diagnostics: dict[str, Any] = {
         "source": "kiwoom_api",
         "requested_code_count": len(requested),
@@ -241,25 +274,39 @@ def fetch_kiwoom_sector_theme_map(
     }
     if not requested:
         return {}, diagnostics
-    token = token or os.getenv("KIWOOM_ACCESS_TOKEN") or os.getenv("KIWOOM_REST_ACCESS_TOKEN")
+    token = (
+        token
+        or os.getenv("KIWOOM_ACCESS_TOKEN")
+        or os.getenv("KIWOOM_REST_ACCESS_TOKEN")
+    )
     token_fetcher: Callable[[], str] | None = None
     explicit_group_fetcher = theme_group_fetcher is not None
-    if theme_group_fetcher is None or (stock_theme_fetcher is None and not explicit_group_fetcher):
+    if theme_group_fetcher is None or (
+        stock_theme_fetcher is None and not explicit_group_fetcher
+    ):
         try:
             from src.utils import kiwoom_utils
 
             token_fetcher = getattr(kiwoom_utils, "get_kiwoom_token", None)
             if not explicit_group_fetcher:
-                stock_theme_fetcher = stock_theme_fetcher or getattr(kiwoom_utils, "get_stock_theme_groups_ka90001", None)
-            theme_group_fetcher = theme_group_fetcher or kiwoom_utils.get_theme_group_list_ka90001
+                stock_theme_fetcher = stock_theme_fetcher or getattr(
+                    kiwoom_utils, "get_stock_theme_groups_ka90001", None
+                )
+            theme_group_fetcher = (
+                theme_group_fetcher or kiwoom_utils.get_theme_group_list_ka90001
+            )
         except Exception as exc:
-            diagnostics.update({"status": "kiwoom_helper_unavailable", "error": str(exc)})
+            diagnostics.update(
+                {"status": "kiwoom_helper_unavailable", "error": str(exc)}
+            )
             return {}, diagnostics
     if not token and token_fetcher is not None:
         try:
             token = token_fetcher()
         except Exception as exc:
-            diagnostics.update({"status": "kiwoom_token_unavailable", "error": str(exc)})
+            diagnostics.update(
+                {"status": "kiwoom_token_unavailable", "error": str(exc)}
+            )
             return {}, diagnostics
     if not token:
         return {}, diagnostics
@@ -267,7 +314,10 @@ def fetch_kiwoom_sector_theme_map(
         if stock_theme_fetcher is not None:
             rows: dict[str, dict[str, Any]] = {}
             errors: list[str] = []
-            interval_sec = float(os.getenv("KORSTOCKSCAN_SWING_THEME_KIWOOM_CALL_INTERVAL_SEC", "1.0") or "0")
+            interval_sec = float(
+                os.getenv("KORSTOCKSCAN_SWING_THEME_KIWOOM_CALL_INTERVAL_SEC", "1.0")
+                or "0"
+            )
             for idx, code in enumerate(requested):
                 if idx and interval_sec > 0:
                     time.sleep(interval_sec)
@@ -313,7 +363,12 @@ def fetch_kiwoom_sector_theme_map(
         # only mapped through ka90001 qry_tp=2 to avoid composition fan-out calls.
         groups_payload = theme_group_fetcher(token)
         if not _kiwoom_payload_ok(groups_payload):
-            diagnostics.update({"status": "kiwoom_fetch_failed", "error": _kiwoom_error_message(groups_payload)})
+            diagnostics.update(
+                {
+                    "status": "kiwoom_fetch_failed",
+                    "error": _kiwoom_error_message(groups_payload),
+                }
+            )
             return {}, diagnostics
         groups = _extract_theme_groups(groups_payload)
         diagnostics.update(
@@ -340,7 +395,9 @@ def fetch_external_sector_theme_map(
     The default path is disabled unless explicitly enabled because this is an
     enrichment source, not an execution prerequisite.
     """
-    requested = sorted({_norm_code(code) for code in codes if _norm_code(code).strip("0")})
+    requested = sorted(
+        {_norm_code(code) for code in codes if _norm_code(code).strip("0")}
+    )
     diagnostics: dict[str, Any] = {
         "source": "external_crawl_fallback",
         "requested_code_count": len(requested),
@@ -348,7 +405,9 @@ def fetch_external_sector_theme_map(
     }
     if not requested:
         return {}, diagnostics
-    if fetcher is None and str(os.getenv("KORSTOCKSCAN_SWING_THEME_EXTERNAL_CRAWL_ENABLED", "false")).lower() not in {
+    if fetcher is None and str(
+        os.getenv("KORSTOCKSCAN_SWING_THEME_EXTERNAL_CRAWL_ENABLED", "false")
+    ).lower() not in {
         "1",
         "true",
         "yes",
@@ -371,7 +430,13 @@ def fetch_external_sector_theme_map(
             "theme_source": "external_crawl_fallback",
             "theme_source_quality": "fallback",
         }
-    diagnostics.update({"status": "ok" if rows else "empty", "mapped_code_count": len(rows), "errors": errors[:10]})
+    diagnostics.update(
+        {
+            "status": "ok" if rows else "empty",
+            "mapped_code_count": len(rows),
+            "errors": errors[:10],
+        }
+    )
     return rows, diagnostics
 
 
@@ -388,8 +453,12 @@ def build_sector_theme_map(
     write_cache: bool = True,
 ) -> dict[str, Any]:
     date_key = _date_text(target_date)
-    requested = sorted({_norm_code(code) for code in codes if _norm_code(code).strip("0")})
-    manual_rows, manual_diag = fetch_manual_sector_map(requested, target_date=date_key, reference_path=manual_sector_path)
+    requested = sorted(
+        {_norm_code(code) for code in codes if _norm_code(code).strip("0")}
+    )
+    manual_rows, manual_diag = fetch_manual_sector_map(
+        requested, target_date=date_key, reference_path=manual_sector_path
+    )
     kiwoom_rows, kiwoom_diag = fetch_kiwoom_sector_theme_map(
         requested,
         token=token,
@@ -400,13 +469,19 @@ def build_sector_theme_map(
     external_rows: dict[str, dict[str, Any]] = {}
     external_diag: dict[str, Any] = {"status": "skipped"}
     if allow_external and missing:
-        external_rows, external_diag = fetch_external_sector_theme_map(missing, fetcher=external_fetcher)
-    merged = normalize_theme_map(manual_rows, source="manual_sector_reference", source_quality="ok")
+        external_rows, external_diag = fetch_external_sector_theme_map(
+            missing, fetcher=external_fetcher
+        )
+    merged = normalize_theme_map(
+        manual_rows, source="manual_sector_reference", source_quality="ok"
+    )
     for source_rows, source_name, source_quality in (
         (kiwoom_rows, "kiwoom_api", "ok"),
         (external_rows, "external_crawl_fallback", "fallback"),
     ):
-        for code, row in normalize_theme_map(source_rows, source=source_name, source_quality=source_quality).items():
+        for code, row in normalize_theme_map(
+            source_rows, source=source_name, source_quality=source_quality
+        ).items():
             base = merged.setdefault(
                 code,
                 {
@@ -421,14 +496,30 @@ def build_sector_theme_map(
                     "theme_source_quality": "missing",
                 },
             )
-            for key in ("sector", "industry", "sector_code", "market_type", "sector_source", "sector_source_quality"):
+            for key in (
+                "sector",
+                "industry",
+                "sector_code",
+                "market_type",
+                "sector_source",
+                "sector_source_quality",
+            ):
                 if row.get(key) and not base.get(key):
                     base[key] = row[key]
             if row.get("theme_tags"):
-                base["theme_tags"] = sorted(set(_as_list(base.get("theme_tags")) + _as_list(row.get("theme_tags"))))
+                base["theme_tags"] = sorted(
+                    set(
+                        _as_list(base.get("theme_tags"))
+                        + _as_list(row.get("theme_tags"))
+                    )
+                )
             if row.get("theme_source_quality") != "missing":
-                base["theme_source"] = row.get("theme_source") or base.get("theme_source") or source_name
-                base["theme_source_quality"] = row.get("theme_source_quality") or source_quality
+                base["theme_source"] = (
+                    row.get("theme_source") or base.get("theme_source") or source_name
+                )
+                base["theme_source_quality"] = (
+                    row.get("theme_source_quality") or source_quality
+                )
     missing_after_merge = [
         code
         for code in requested
@@ -450,22 +541,40 @@ def build_sector_theme_map(
             "theme_source": "missing",
             "theme_source_quality": "missing",
         }
-    sector_missing_count = sum(1 for row in merged.values() if row.get("sector_source_quality") == "missing")
-    theme_missing_count = sum(1 for row in merged.values() if row.get("theme_source_quality") == "missing")
+    sector_missing_count = sum(
+        1 for row in merged.values() if row.get("sector_source_quality") == "missing"
+    )
+    theme_missing_count = sum(
+        1 for row in merged.values() if row.get("theme_source_quality") == "missing"
+    )
     mapped_count = sum(
         1
         for row in merged.values()
-        if row.get("sector_source_quality") != "missing" or row.get("theme_source_quality") != "missing"
+        if row.get("sector_source_quality") != "missing"
+        or row.get("theme_source_quality") != "missing"
     )
     missing_count = sum(
         1
         for row in merged.values()
-        if row.get("sector_source_quality") == "missing" and row.get("theme_source_quality") == "missing"
+        if row.get("sector_source_quality") == "missing"
+        and row.get("theme_source_quality") == "missing"
     )
     coverage = round(mapped_count / len(requested), 6) if requested else 0.0
-    sector_coverage = round((len(merged) - sector_missing_count) / len(requested), 6) if requested else 0.0
-    theme_coverage = round((len(merged) - theme_missing_count) / len(requested), 6) if requested else 0.0
-    warnings = ["manual_sector_missing", "sector_theme_missing"] if requested and coverage <= 0 else []
+    sector_coverage = (
+        round((len(merged) - sector_missing_count) / len(requested), 6)
+        if requested
+        else 0.0
+    )
+    theme_coverage = (
+        round((len(merged) - theme_missing_count) / len(requested), 6)
+        if requested
+        else 0.0
+    )
+    warnings = (
+        ["manual_sector_missing", "sector_theme_missing"]
+        if requested and coverage <= 0
+        else []
+    )
     payload = {
         "schema_version": 1,
         "date": date_key,
@@ -493,7 +602,9 @@ def build_sector_theme_map(
     }
     if write_cache:
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        cache_path(date_key).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        cache_path(date_key).write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
     return payload
 
 
@@ -519,7 +630,9 @@ def main(argv: list[str] | None = None) -> None:
         manual_sector_path=args.manual_sector_file,
         allow_external=not args.no_external,
     )
-    print(f"[DONE] swing_sector_theme_source mapped={payload['mapped_code_count']} path={cache_path(args.date)}")
+    print(
+        f"[DONE] swing_sector_theme_source mapped={payload['mapped_code_count']} path={cache_path(args.date)}"
+    )
 
 
 if __name__ == "__main__":

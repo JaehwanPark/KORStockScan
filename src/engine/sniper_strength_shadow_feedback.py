@@ -13,7 +13,6 @@ from src.utils.constants import DATA_DIR
 from src.utils.jsonl_io import read_jsonl
 from src.utils.logger import log_error, log_info
 
-
 _WRITE_LOCK = threading.RLock()
 _RECORDED_KEYS: dict[tuple[str, str, str], float] = {}
 
@@ -46,7 +45,9 @@ def _minute_bucket(ts: datetime, bucket_min: int = 5) -> str:
     return ts.replace(minute=floored_min, second=0, microsecond=0).strftime("%H:%M")
 
 
-def record_shadow_candidate(stock: dict, code: str, ws_data: dict, momentum_gate: dict) -> dict | None:
+def record_shadow_candidate(
+    stock: dict, code: str, ws_data: dict, momentum_gate: dict
+) -> dict | None:
     stock = stock or {}
     ws_data = ws_data or {}
     momentum_gate = momentum_gate or {}
@@ -89,14 +90,28 @@ def record_shadow_candidate(stock: dict, code: str, ws_data: dict, momentum_gate
             "dynamic_reason": str(momentum_gate.get("reason", "") or ""),
             "dynamic_base_vpw": float(momentum_gate.get("base_vpw", 0.0) or 0.0),
             "dynamic_delta": float(momentum_gate.get("vpw_delta", 0.0) or 0.0),
-            "dynamic_slope_per_sec": float(momentum_gate.get("slope_per_sec", 0.0) or 0.0),
+            "dynamic_slope_per_sec": float(
+                momentum_gate.get("slope_per_sec", 0.0) or 0.0
+            ),
             "dynamic_window_sec": int(momentum_gate.get("window_sec", 0) or 0),
-            "dynamic_window_total_value": int(momentum_gate.get("window_total_value", 0) or 0),
-            "dynamic_window_buy_value": int(momentum_gate.get("window_buy_value", 0) or 0),
-            "dynamic_window_sell_value": int(momentum_gate.get("window_sell_value", 0) or 0),
-            "dynamic_window_buy_ratio": float(momentum_gate.get("window_buy_ratio", 0.0) or 0.0),
-            "dynamic_window_exec_buy_ratio": float(momentum_gate.get("window_exec_buy_ratio", 0.0) or 0.0),
-            "dynamic_window_net_buy_qty": int(momentum_gate.get("window_net_buy_qty", 0) or 0),
+            "dynamic_window_total_value": int(
+                momentum_gate.get("window_total_value", 0) or 0
+            ),
+            "dynamic_window_buy_value": int(
+                momentum_gate.get("window_buy_value", 0) or 0
+            ),
+            "dynamic_window_sell_value": int(
+                momentum_gate.get("window_sell_value", 0) or 0
+            ),
+            "dynamic_window_buy_ratio": float(
+                momentum_gate.get("window_buy_ratio", 0.0) or 0.0
+            ),
+            "dynamic_window_exec_buy_ratio": float(
+                momentum_gate.get("window_exec_buy_ratio", 0.0) or 0.0
+            ),
+            "dynamic_window_net_buy_qty": int(
+                momentum_gate.get("window_net_buy_qty", 0) or 0
+            ),
             "evaluation_mode": "next_minute_forward",
         }
 
@@ -120,7 +135,9 @@ def _parse_minute_time(value: str, signal_date: str) -> datetime | None:
         return None
 
 
-def _compute_window_metrics(candidate: dict, candles: list[dict], window_minutes: int) -> dict:
+def _compute_window_metrics(
+    candidate: dict, candles: list[dict], window_minutes: int
+) -> dict:
     signal_dt = datetime.strptime(
         f"{candidate['signal_date']} {candidate['signal_time']}",
         "%Y-%m-%d %H:%M:%S",
@@ -130,7 +147,9 @@ def _compute_window_metrics(candidate: dict, candles: list[dict], window_minutes
 
     relevant = []
     for candle in candles:
-        candle_dt = _parse_minute_time(str(candle.get("체결시간", "") or ""), candidate["signal_date"])
+        candle_dt = _parse_minute_time(
+            str(candle.get("체결시간", "") or ""), candidate["signal_date"]
+        )
         if candle_dt is None:
             continue
         if candle_dt < start_dt or candle_dt >= end_dt:
@@ -184,7 +203,10 @@ def _compute_window_metrics(candidate: dict, candles: list[dict], window_minutes
         "hit_tp_05": mfe_pct >= 0.5,
         "hit_tp_10": mfe_pct >= 1.0,
         "hit_sl_05": mae_pct <= -0.5,
-        "tp05_before_sl05": bool(first_tp_dt is not None and (first_sl_dt is None or first_tp_dt <= first_sl_dt)),
+        "tp05_before_sl05": bool(
+            first_tp_dt is not None
+            and (first_sl_dt is None or first_tp_dt <= first_sl_dt)
+        ),
         "bars": len(relevant),
     }
 
@@ -211,7 +233,9 @@ class ShadowFeedbackSummary:
     missed_winners: list[dict] = field(default_factory=list)
 
 
-def evaluate_shadow_candidates(target_date: str, token: str | None = None) -> ShadowFeedbackSummary:
+def evaluate_shadow_candidates(
+    target_date: str, token: str | None = None
+) -> ShadowFeedbackSummary:
     try:
         from src.utils import kiwoom_utils
     except Exception as exc:
@@ -235,12 +259,21 @@ def evaluate_shadow_candidates(target_date: str, token: str | None = None) -> Sh
     for candidate in candidates:
         shadow_id = str(candidate.get("shadow_id", "") or "")
         code = str(candidate.get("stock_code", "") or "")
-        if not shadow_id or not code or shadow_id in evaluated_ids or token is None or kiwoom_utils is None:
+        if (
+            not shadow_id
+            or not code
+            or shadow_id in evaluated_ids
+            or token is None
+            or kiwoom_utils is None
+        ):
             continue
 
         if code not in candle_cache:
             try:
-                candle_cache[code] = kiwoom_utils.get_minute_candles_ka10080(token, code, limit=600) or []
+                candle_cache[code] = (
+                    kiwoom_utils.get_minute_candles_ka10080(token, code, limit=600)
+                    or []
+                )
             except Exception as exc:
                 log_error(f"[SHADOW_EVAL] {code} minute candles fetch failed: {exc}")
                 candle_cache[code] = []
@@ -292,7 +325,11 @@ def evaluate_shadow_candidates(target_date: str, token: str | None = None) -> Sh
         )
 
     summary.best_cases = sorted(all_evaluations, key=_score, reverse=True)[:5]
-    summary.missed_winners = [item for item in summary.best_cases if str(item.get("outcome", "")).upper() == "GOOD"]
+    summary.missed_winners = [
+        item
+        for item in summary.best_cases
+        if str(item.get("outcome", "")).upper() == "GOOD"
+    ]
     return summary
 
 

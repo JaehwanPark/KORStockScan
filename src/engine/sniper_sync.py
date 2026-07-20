@@ -15,14 +15,18 @@ from src.engine.sniper_position_tags import (
     normalize_strategy,
     target_identity,
 )
-from src.engine.sniper_scale_in_utils import record_add_history_event, find_latest_open_add_order_no
+from src.engine.sniper_scale_in_utils import (
+    record_add_history_event,
+    find_latest_open_add_order_no,
+)
 from src.engine.trade_profit import calculate_net_profit_rate
-from src.engine.risk.manual_control_exclusion import remove_manual_control_exclusion_code
+from src.engine.risk.manual_control_exclusion import (
+    remove_manual_control_exclusion_code,
+)
 from src.utils import kiwoom_utils
 from src.utils.constants import RESTART_FLAG_PATH, TRADING_RULES
 from src.utils.logger import log_error, log_info
 from src.engine import kiwoom_orders
-
 
 KIWOOM_TOKEN = None
 DB = None
@@ -32,11 +36,21 @@ HIGHEST_PRICES = None
 STATE_LOCK = None
 CONF = None
 _LAST_AUTH_RESTART_TS = 0.0
-_WS_FILL_ORD_RE = re.compile(r"WS 실제체결\]\s*(?P<code>\d{6})\s+(?P<side>BUY|SELL)\b.*?\(주문번호:\s*(?P<ord_no>\d+)\)")
-_ENTRY_TP_RE = re.compile(r"ENTRY_TP_REFRESH\]\s*.*?\((?P<code>\d{6})\).*?\bord_no=(?P<ord_no>\S+)")
-_ENTRY_FILL_RE = re.compile(r"ENTRY_FILL\]\s*.*?\((?P<code>\d{6})\).*?\bord_no=(?P<ord_no>\S+)")
-_PIPELINE_LEG_RE = re.compile(r"\((?P<code>\d{6})\).*?\border_leg_sent\b.*?\bord_no=(?P<ord_no>\S+)")
-_PIPELINE_TP_RE = re.compile(r"\((?P<code>\d{6})\).*?\bpreset_exit_setup\b.*?\bord_no=(?P<ord_no>\S+)")
+_WS_FILL_ORD_RE = re.compile(
+    r"WS 실제체결\]\s*(?P<code>\d{6})\s+(?P<side>BUY|SELL)\b.*?\(주문번호:\s*(?P<ord_no>\d+)\)"
+)
+_ENTRY_TP_RE = re.compile(
+    r"ENTRY_TP_REFRESH\]\s*.*?\((?P<code>\d{6})\).*?\bord_no=(?P<ord_no>\S+)"
+)
+_ENTRY_FILL_RE = re.compile(
+    r"ENTRY_FILL\]\s*.*?\((?P<code>\d{6})\).*?\bord_no=(?P<ord_no>\S+)"
+)
+_PIPELINE_LEG_RE = re.compile(
+    r"\((?P<code>\d{6})\).*?\border_leg_sent\b.*?\bord_no=(?P<ord_no>\S+)"
+)
+_PIPELINE_TP_RE = re.compile(
+    r"\((?P<code>\d{6})\).*?\bpreset_exit_setup\b.*?\bord_no=(?P<ord_no>\S+)"
+)
 
 
 def bind_sync_dependencies(
@@ -86,14 +100,20 @@ def _refresh_kiwoom_token(reason, error_detail=None):
 def _request_auth_restart(reason, error_detail=None):
     """런타임 8005 인증 장애는 hot-refresh 대신 restart.flag 복구로 고정합니다."""
     global _LAST_AUTH_RESTART_TS
-    cooldown_sec = int(getattr(TRADING_RULES, "KIWOOM_AUTH_RESTART_COOLDOWN_SEC", 120) or 120)
+    cooldown_sec = int(
+        getattr(TRADING_RULES, "KIWOOM_AUTH_RESTART_COOLDOWN_SEC", 120) or 120
+    )
     now_ts = time.time()
     detail_str = f" | detail={error_detail}" if error_detail else ""
     try:
-        cache_invalidated = kiwoom_utils.invalidate_kiwoom_token_cache(reason=f"auth_restart:{reason}")
+        cache_invalidated = kiwoom_utils.invalidate_kiwoom_token_cache(
+            reason=f"auth_restart:{reason}"
+        )
     except Exception as exc:
         cache_invalidated = False
-        log_error(f"❌ [AUTH TOKEN CACHE INVALIDATE FAILED] reason={reason} error={exc}{detail_str}")
+        log_error(
+            f"❌ [AUTH TOKEN CACHE INVALIDATE FAILED] reason={reason} error={exc}{detail_str}"
+        )
     if cooldown_sec > 0 and (now_ts - _LAST_AUTH_RESTART_TS) < cooldown_sec:
         wait_left = max(0.0, float(cooldown_sec) - (now_ts - _LAST_AUTH_RESTART_TS))
         log_info(
@@ -111,7 +131,9 @@ def _request_auth_restart(reason, error_detail=None):
         )
         return True
     except Exception as exc:
-        log_error(f"❌ [AUTH RESTART REQUEST FAILED] reason={reason} error={exc}{detail_str}")
+        log_error(
+            f"❌ [AUTH RESTART REQUEST FAILED] reason={reason} error={exc}{detail_str}"
+        )
         return False
 
 
@@ -119,9 +141,9 @@ def _detect_auth_failure():
     """최근 잔고 조회 오류에서 인증 실패 여부를 판단."""
     errors = kiwoom_orders.get_last_inventory_errors()
     for err in errors:
-        msg = str(err.get('return_msg', ''))
-        code = str(err.get('return_code', ''))
-        if '8005' in code or 'Token' in msg or '토큰' in msg or '인증' in msg:
+        msg = str(err.get("return_msg", ""))
+        code = str(err.get("return_code", ""))
+        if "8005" in code or "Token" in msg or "토큰" in msg or "인증" in msg:
             return True, err
     return False, errors[0] if errors else None
 
@@ -168,7 +190,9 @@ def _iter_recovery_log_paths():
     )
     seen = set()
     for pattern in patterns:
-        for path in sorted(logs_dir.glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True):
+        for path in sorted(
+            logs_dir.glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True
+        ):
             if path.is_file() and path not in seen:
                 seen.add(path)
                 yield path
@@ -198,9 +222,17 @@ def _recover_order_refs_from_logs(code: str) -> dict:
         for line in reversed(text.splitlines()):
             if normalized not in line:
                 continue
-            if "WS 실제체결" in line and "주문번호:" in line and "buy_ord_no" not in refs:
+            if (
+                "WS 실제체결" in line
+                and "주문번호:" in line
+                and "buy_ord_no" not in refs
+            ):
                 match = _WS_FILL_ORD_RE.search(line)
-                if match and match.group("code") == normalized and match.group("side") == "BUY":
+                if (
+                    match
+                    and match.group("code") == normalized
+                    and match.group("side") == "BUY"
+                ):
                     refs["buy_ord_no"] = match.group("ord_no")
             if "ENTRY_FILL" in line and "buy_ord_no" not in refs:
                 match = _ENTRY_FILL_RE.search(line)
@@ -229,14 +261,19 @@ def _ensure_runtime_target(record, *, buy_qty=None, buy_price=None):
     identity = target_identity(code, strategy)
     target = next(
         (
-            t for t in (ACTIVE_TARGETS or [])
+            t
+            for t in (ACTIVE_TARGETS or [])
             if target_identity(t.get("code", ""), t.get("strategy", "")) == identity
             and str((t or {}).get("simulation_book") or "") != "scalp_ai_buy_all"
         ),
         None,
     )
-    resolved_qty = _to_int(buy_qty if buy_qty is not None else getattr(record, "buy_qty", 0))
-    resolved_price = _to_float(buy_price if buy_price is not None else getattr(record, "buy_price", 0))
+    resolved_qty = _to_int(
+        buy_qty if buy_qty is not None else getattr(record, "buy_qty", 0)
+    )
+    resolved_price = _to_float(
+        buy_price if buy_price is not None else getattr(record, "buy_price", 0)
+    )
     initial_buy_qty = _to_int(getattr(record, "initial_buy_qty", 0))
     scale_in_filled_qty = _to_int(getattr(record, "scale_in_filled_qty", 0))
     prior_bundle_count = max(
@@ -259,7 +296,9 @@ def _ensure_runtime_target(record, *, buy_qty=None, buy_price=None):
                         HoldingAddHistory.recommendation_id == int(record.id),
                         HoldingAddHistory.event_type == "EXECUTED",
                     )
-                    .order_by(HoldingAddHistory.event_time.asc(), HoldingAddHistory.id.asc())
+                    .order_by(
+                        HoldingAddHistory.event_time.asc(), HoldingAddHistory.id.asc()
+                    )
                     .all()
                 )
             if add_rows:
@@ -278,10 +317,16 @@ def _ensure_runtime_target(record, *, buy_qty=None, buy_price=None):
     if initial_buy_qty <= 0 and prior_bundle_count <= 0:
         initial_buy_qty = max(0, resolved_qty)
     buy_time = getattr(record, "buy_time", None)
-    position_tag = normalize_position_tag(strategy, getattr(record, "position_tag", None))
+    position_tag = normalize_position_tag(
+        strategy, getattr(record, "position_tag", None)
+    )
     order_refs = _recover_order_refs_from_logs(code)
-    recovered_buy_ord_no = str(getattr(record, "_broker_recovered_buy_ord_no", "") or "").strip()
-    recovered_orig_ord_no = str(getattr(record, "_broker_recovered_orig_ord_no", "") or "").strip()
+    recovered_buy_ord_no = str(
+        getattr(record, "_broker_recovered_buy_ord_no", "") or ""
+    ).strip()
+    recovered_orig_ord_no = str(
+        getattr(record, "_broker_recovered_orig_ord_no", "") or ""
+    ).strip()
     if recovered_buy_ord_no and "buy_ord_no" not in order_refs:
         order_refs["buy_ord_no"] = recovered_buy_ord_no
     broker_recovered = bool(getattr(record, "_broker_recovered", False))
@@ -298,7 +343,8 @@ def _ensure_runtime_target(record, *, buy_qty=None, buy_price=None):
             "code": code,
             "name": getattr(record, "stock_name", "") or code,
             "strategy": strategy,
-            "trade_type": getattr(record, "trade_type", None) or _trade_type_for_strategy(strategy),
+            "trade_type": getattr(record, "trade_type", None)
+            or _trade_type_for_strategy(strategy),
             "status": "HOLDING",
             "position_tag": position_tag,
             "buy_qty": resolved_qty,
@@ -342,15 +388,25 @@ def _ensure_runtime_target(record, *, buy_qty=None, buy_price=None):
         target["holding_started_at"] = buy_time
     if order_refs.get("buy_ord_no") and not str(target.get("odno", "") or "").strip():
         target["odno"] = order_refs["buy_ord_no"]
-    if order_refs.get("preset_tp_ord_no") and not str(target.get("preset_tp_ord_no", "") or "").strip():
+    if (
+        order_refs.get("preset_tp_ord_no")
+        and not str(target.get("preset_tp_ord_no", "") or "").strip()
+    ):
         target["preset_tp_ord_no"] = order_refs["preset_tp_ord_no"]
     if recovered_orig_ord_no:
         target["broker_recovered_orig_ord_no"] = recovered_orig_ord_no
-    target["scale_in_locked"] = bool(getattr(record, "scale_in_locked", target.get("scale_in_locked", False)))
-    target["broker_recovered"] = broker_recovered or bool(target.get("broker_recovered"))
-    target["broker_recovered_legacy"] = broker_recovered_legacy or bool(target.get("broker_recovered_legacy"))
+    target["scale_in_locked"] = bool(
+        getattr(record, "scale_in_locked", target.get("scale_in_locked", False))
+    )
+    target["broker_recovered"] = broker_recovered or bool(
+        target.get("broker_recovered")
+    )
+    target["broker_recovered_legacy"] = broker_recovered_legacy or bool(
+        target.get("broker_recovered_legacy")
+    )
     target["broker_recovered_execution_verified"] = (
-        broker_recovered_execution_verified or bool(target.get("broker_recovered_execution_verified"))
+        broker_recovered_execution_verified
+        or bool(target.get("broker_recovered_execution_verified"))
     )
     if broker_recovered:
         target["broker_recovered_at"] = broker_recovered_at
@@ -416,7 +472,9 @@ def _recover_missing_broker_holdings(session, real_codes):
     order_ref_snapshot = []
     if KIWOOM_TOKEN:
         try:
-            execution_snapshot = kiwoom_utils.get_account_execution_snapshot_kt00008(KIWOOM_TOKEN)
+            execution_snapshot = kiwoom_utils.get_account_execution_snapshot_kt00008(
+                KIWOOM_TOKEN
+            )
         except Exception:
             execution_snapshot = []
         use_order_ref_2nd_pass = False
@@ -427,8 +485,16 @@ def _recover_missing_broker_holdings(session, real_codes):
             use_order_ref_2nd_pass = True
         if use_order_ref_2nd_pass:
             try:
-                qry_tp = str((CONF or {}).get("BROKER_ORDER_REF_QRY_TP", "0")) if isinstance(CONF, dict) else "0"
-                stk_bond_tp = str((CONF or {}).get("BROKER_ORDER_REF_STK_BOND_TP", "0")) if isinstance(CONF, dict) else "0"
+                qry_tp = (
+                    str((CONF or {}).get("BROKER_ORDER_REF_QRY_TP", "0"))
+                    if isinstance(CONF, dict)
+                    else "0"
+                )
+                stk_bond_tp = (
+                    str((CONF or {}).get("BROKER_ORDER_REF_STK_BOND_TP", "0"))
+                    if isinstance(CONF, dict)
+                    else "0"
+                )
                 order_ref_snapshot = kiwoom_utils.get_order_reference_snapshot_2nd_pass(
                     KIWOOM_TOKEN,
                     qry_tp=qry_tp,
@@ -439,9 +505,9 @@ def _recover_missing_broker_holdings(session, real_codes):
     active_statuses = {"HOLDING", "SELL_ORDERED", "BUY_ORDERED"}
     tracked_codes = {
         str(getattr(record, "stock_code", "") or "").strip()[:6]
-        for record in session.query(RecommendationHistory).filter(
-            RecommendationHistory.status.in_(tuple(active_statuses))
-        ).all()
+        for record in session.query(RecommendationHistory)
+        .filter(RecommendationHistory.status.in_(tuple(active_statuses)))
+        .all()
     }
     tracked_codes.update(
         str(t.get("code", "")).strip()[:6]
@@ -467,11 +533,15 @@ def _recover_missing_broker_holdings(session, real_codes):
         stock_name = _inventory_name(real_data) or code
         execution_match = next(
             (
-                row for row in execution_snapshot
+                row
+                for row in execution_snapshot
                 if row.get("code") == code
                 and row.get("side") == "매수"
                 and _to_int(row.get("qty")) == real_qty
-                and (_to_int(row.get("unit_price")) <= 0 or abs(_to_int(row.get("unit_price")) - real_buy_uv) <= 1)
+                and (
+                    _to_int(row.get("unit_price")) <= 0
+                    or abs(_to_int(row.get("unit_price")) - real_buy_uv) <= 1
+                )
             ),
             None,
         )
@@ -483,37 +553,58 @@ def _recover_missing_broker_holdings(session, real_codes):
             unit_price=real_buy_uv,
             max_price_diff=1,
         )
-        history_records = session.query(RecommendationHistory).filter_by(stock_code=code).all()
-        latest = max(history_records, key=lambda r: int(getattr(r, "id", 0) or 0), default=None)
+        history_records = (
+            session.query(RecommendationHistory).filter_by(stock_code=code).all()
+        )
+        latest = max(
+            history_records, key=lambda r: int(getattr(r, "id", 0) or 0), default=None
+        )
         reusable = next(
             (
-                r for r in sorted(history_records, key=lambda r: int(getattr(r, "id", 0) or 0), reverse=True)
-                if str(getattr(r, "status", "") or "").upper() in {"WATCHING", "EXPIRED"}
+                r
+                for r in sorted(
+                    history_records,
+                    key=lambda r: int(getattr(r, "id", 0) or 0),
+                    reverse=True,
+                )
+                if str(getattr(r, "status", "") or "").upper()
+                in {"WATCHING", "EXPIRED"}
             ),
             None,
         )
 
         if reusable is not None:
             record = reusable
-            strategy = normalize_strategy(getattr(record, "strategy", None) or "SCALPING")
+            strategy = normalize_strategy(
+                getattr(record, "strategy", None) or "SCALPING"
+            )
             record.stock_name = stock_name
             record.status = "HOLDING"
             record.strategy = strategy
-            record.trade_type = getattr(record, "trade_type", None) or _trade_type_for_strategy(strategy)
-            record.position_tag = normalize_position_tag(strategy, getattr(record, "position_tag", None))
+            record.trade_type = getattr(
+                record, "trade_type", None
+            ) or _trade_type_for_strategy(strategy)
+            record.position_tag = normalize_position_tag(
+                strategy, getattr(record, "position_tag", None)
+            )
             record.buy_qty = real_qty
             record.buy_price = real_buy_uv
             record.buy_time = getattr(record, "buy_time", None) or datetime.now()
         else:
-            strategy = normalize_strategy(getattr(latest, "strategy", None) or "KOSPI_ML")
+            strategy = normalize_strategy(
+                getattr(latest, "strategy", None) or "KOSPI_ML"
+            )
             record = RecommendationHistory(
                 rec_date=datetime.now().date(),
                 stock_code=code,
                 stock_name=stock_name,
-                trade_type=getattr(latest, "trade_type", None) or _trade_type_for_strategy(strategy),
+                trade_type=getattr(latest, "trade_type", None)
+                or _trade_type_for_strategy(strategy),
                 strategy=strategy,
                 status="HOLDING",
-                position_tag=normalize_position_tag(strategy, getattr(latest, "position_tag", None)),
+                position_tag=normalize_position_tag(
+                    strategy, getattr(latest, "position_tag", None)
+                ),
                 prob=float(getattr(latest, "prob", 0.7) or 0.7),
                 buy_price=real_buy_uv,
                 buy_qty=real_qty,
@@ -527,20 +618,24 @@ def _recover_missing_broker_holdings(session, real_codes):
         legacy_recovered = bool(rec_date and rec_date < today)
         if execution_match and execution_match.get("trade_date"):
             try:
-                exec_trade_date = datetime.strptime(execution_match["trade_date"], "%Y%m%d").date()
+                exec_trade_date = datetime.strptime(
+                    execution_match["trade_date"], "%Y%m%d"
+                ).date()
                 legacy_recovered = legacy_recovered or exec_trade_date < today
             except Exception:
                 pass
         record._broker_recovered = True
         record._broker_recovered_legacy = legacy_recovered
         record._broker_recovered_at = time.time()
-        record._broker_recovered_execution_verified = bool(execution_match or order_ref_match)
-        record._broker_recovered_buy_ord_no = (
-            str((order_ref_match or {}).get("ord_no", "") or "").strip()
+        record._broker_recovered_execution_verified = bool(
+            execution_match or order_ref_match
         )
-        record._broker_recovered_orig_ord_no = (
-            str((order_ref_match or {}).get("orig_ord_no", "") or "").strip()
-        )
+        record._broker_recovered_buy_ord_no = str(
+            (order_ref_match or {}).get("ord_no", "") or ""
+        ).strip()
+        record._broker_recovered_orig_ord_no = str(
+            (order_ref_match or {}).get("orig_ord_no", "") or ""
+        ).strip()
 
         log_info(
             f"🔄 [BROKER_RECOVER] {stock_name}({code}) -> HOLDING "
@@ -569,6 +664,7 @@ def _with_state_lock():
     class _DummyLock:
         def __enter__(self):
             return None
+
         def __exit__(self, exc_type, exc, tb):
             return False
 
@@ -582,40 +678,50 @@ def _reconcile_scale_in_lock(record, real_qty, real_buy_uv):
     - 불일치가 남아 있으면 lock 유지
     """
     target_stock = next(
-        (t for t in (ACTIVE_TARGETS or []) if str(t.get('code', '')).strip()[:6] == str(record.stock_code).strip()[:6]),
+        (
+            t
+            for t in (ACTIVE_TARGETS or [])
+            if str(t.get("code", "")).strip()[:6] == str(record.stock_code).strip()[:6]
+        ),
         None,
     )
-    mem_pending = bool(target_stock.get('pending_add_order')) if target_stock else False
+    mem_pending = bool(target_stock.get("pending_add_order")) if target_stock else False
     if mem_pending:
         return False
 
     db_qty = _to_int(record.buy_qty)
     db_avg = _to_float(record.buy_price)
     qty_match = db_qty == real_qty
-    avg_match = (real_buy_uv <= 0) or isclose(db_avg, float(real_buy_uv), rel_tol=0.0, abs_tol=1.0)
+    avg_match = (real_buy_uv <= 0) or isclose(
+        db_avg, float(real_buy_uv), rel_tol=0.0, abs_tol=1.0
+    )
 
     if qty_match and avg_match:
-        reconcile_order_no = find_latest_open_add_order_no(DB, getattr(record, 'id', None))
+        reconcile_order_no = find_latest_open_add_order_no(
+            DB, getattr(record, "id", None)
+        )
         record.scale_in_locked = False
         if target_stock:
-            target_stock['scale_in_locked'] = False
+            target_stock["scale_in_locked"] = False
         record_add_history_event(
             DB,
-            recommendation_id=getattr(record, 'id', None),
+            recommendation_id=getattr(record, "id", None),
             stock_code=record.stock_code,
             stock_name=record.stock_name,
-            strategy=getattr(record, 'strategy', None),
-            add_type=getattr(record, 'last_add_type', None),
-            event_type='RECONCILED',
+            strategy=getattr(record, "strategy", None),
+            add_type=getattr(record, "last_add_type", None),
+            event_type="RECONCILED",
             order_no=reconcile_order_no,
             executed_qty=real_qty,
             executed_price=real_buy_uv,
             new_buy_price=record.buy_price,
             new_buy_qty=record.buy_qty,
-            add_count_after=getattr(record, 'add_count', 0),
-            reason='scale_in_lock_auto_release',
+            add_count_after=getattr(record, "add_count", 0),
+            reason="scale_in_lock_auto_release",
         )
-        log_info(f"✅ [ADD_RECONCILED] {record.stock_name}({record.stock_code}) scale_in_locked 자동 해제")
+        log_info(
+            f"✅ [ADD_RECONCILED] {record.stock_name}({record.stock_code}) scale_in_locked 자동 해제"
+        )
         return True
 
     log_info(
@@ -625,7 +731,9 @@ def _reconcile_scale_in_lock(record, real_qty, real_buy_uv):
     return False
 
 
-def _remove_manual_control_exclusion_for_completed_holding(code, *, reason: str) -> None:
+def _remove_manual_control_exclusion_for_completed_holding(
+    code, *, reason: str
+) -> None:
     removal = remove_manual_control_exclusion_code(code, reason=reason)
     if removal.removed:
         log_info(
@@ -657,25 +765,29 @@ def sync_balance_with_db():
             return
         print("⚠️ [동기화 보류] 모든 거래소 잔고 조회 실패, 1회 재시도합니다.")
         time.sleep(1.5)
-        real_inventory, successful_exchanges = kiwoom_orders.get_my_inventory(KIWOOM_TOKEN)
+        real_inventory, successful_exchanges = kiwoom_orders.get_my_inventory(
+            KIWOOM_TOKEN
+        )
         if not successful_exchanges:
             print("⚠️ [동기화 보류] 모든 거래소 잔고 조회 실패, 동기화를 건너뜁니다.")
             return
 
     real_codes = {
-        str(item.get('code', '')).strip()[:6]: item
+        str(item.get("code", "")).strip()[:6]: item
         for item in real_inventory
-        if item.get('code')
+        if item.get("code")
     }
 
     def get_exchange(code):
         is_nxt = DB.get_latest_is_nxt(code)
-        return 'NXT' if is_nxt else 'KRX'
+        return "NXT" if is_nxt else "KRX"
 
     pending_manual_control_removals = []
     try:
         with DB.get_session() as session:
-            db_holdings = session.query(RecommendationHistory).filter_by(status='HOLDING').all()
+            db_holdings = (
+                session.query(RecommendationHistory).filter_by(status="HOLDING").all()
+            )
 
             for record in db_holdings:
                 code = str(record.stock_code).strip()[:6]
@@ -685,48 +797,71 @@ def sync_balance_with_db():
                 if code not in real_codes:
                     exchange = get_exchange(code)
                     if exchange in successful_exchanges:
-                        print(f"⚠️ [동기화] {name}({code}): 실제 잔고 0주. 상태를 COMPLETED로 강제 변경.")
-                        record.status = 'COMPLETED'
+                        print(
+                            f"⚠️ [동기화] {name}({code}): 실제 잔고 0주. 상태를 COMPLETED로 강제 변경."
+                        )
+                        record.status = "COMPLETED"
                         if not record.sell_time:
                             record.sell_time = datetime.now()
                         pending_manual_control_removals.append(
                             (code, "startup_sync_completed_no_broker_holding")
                         )
 
-                        target = next((t for t in ACTIVE_TARGETS if str(t.get('code', '')).strip()[:6] == code), None)
+                        target = next(
+                            (
+                                t
+                                for t in ACTIVE_TARGETS
+                                if str(t.get("code", "")).strip()[:6] == code
+                            ),
+                            None,
+                        )
                         if target:
-                            target['status'] = 'COMPLETED'
+                            target["status"] = "COMPLETED"
                     else:
-                        print(f"⚠️ [동기화] {name}({code}): {exchange} 거래소 잔고 조회 실패로 상태 변경 생략.")
+                        print(
+                            f"⚠️ [동기화] {name}({code}): {exchange} 거래소 잔고 조회 실패로 상태 변경 생략."
+                        )
                 else:
-                    real_qty = _to_int(real_codes[code].get('qty', 0))
+                    real_qty = _to_int(real_codes[code].get("qty", 0))
                     raw_price = (
-                        real_codes[code].get('buy_price')
-                        or real_codes[code].get('purchase_price')
-                        or real_codes[code].get('pchs_avg_pric')
+                        real_codes[code].get("buy_price")
+                        or real_codes[code].get("purchase_price")
+                        or real_codes[code].get("pchs_avg_pric")
                         or 0
                     )
                     real_buy_uv = _to_int(raw_price)
                     if safe_db_qty != real_qty:
-                        print(f"⚠️ [동기화] {name}({code}): 수량 불일치 교정 (DB: {safe_db_qty}주 -> 실제: {real_qty}주)")
+                        print(
+                            f"⚠️ [동기화] {name}({code}): 수량 불일치 교정 (DB: {safe_db_qty}주 -> 실제: {real_qty}주)"
+                        )
                         record.buy_qty = real_qty
 
                     for t in ACTIVE_TARGETS:
-                        if str(t.get('code', '')).strip()[:6] == code and real_qty > 0:
-                            t['buy_qty'] = real_qty
+                        if str(t.get("code", "")).strip()[:6] == code and real_qty > 0:
+                            t["buy_qty"] = real_qty
 
-                    if real_buy_uv > 0 and not isclose(_to_float(record.buy_price), float(real_buy_uv), rel_tol=0.0, abs_tol=1.0):
+                    if real_buy_uv > 0 and not isclose(
+                        _to_float(record.buy_price),
+                        float(real_buy_uv),
+                        rel_tol=0.0,
+                        abs_tol=1.0,
+                    ):
                         record.buy_price = real_buy_uv
                         for t in ACTIVE_TARGETS:
-                            if str(t.get('code', '')).strip()[:6] == code and real_qty > 0:
-                                t['buy_price'] = real_buy_uv
+                            if (
+                                str(t.get("code", "")).strip()[:6] == code
+                                and real_qty > 0
+                            ):
+                                t["buy_price"] = real_buy_uv
 
                     if bool(record.scale_in_locked):
                         _reconcile_scale_in_lock(record, real_qty, real_buy_uv)
 
             recovered_count = _recover_missing_broker_holdings(session, real_codes)
             if recovered_count:
-                log_info(f"🔄 [데이터 동기화] broker-only holding {recovered_count}건을 복구")
+                log_info(
+                    f"🔄 [데이터 동기화] broker-only holding {recovered_count}건을 복구"
+                )
 
     except Exception as exc:
         log_error(f"🚨 DB 동기화 중 에러 발생: {exc}")
@@ -748,56 +883,66 @@ def sync_state_with_broker():
     if not KIWOOM_TOKEN:
         _refresh_kiwoom_token("토큰 없음(상태 동기화)")
 
-    real_balances, successful_exchanges = kiwoom_utils.get_account_balance_kt00005(KIWOOM_TOKEN)
+    real_balances, successful_exchanges = kiwoom_utils.get_account_balance_kt00005(
+        KIWOOM_TOKEN
+    )
     if not successful_exchanges:
         log_info("⚠️ [상태 동기화] 잔고 조회 실패 -> 토큰 재발급 후 재시도")
         _refresh_kiwoom_token("잔고 조회 실패(상태 동기화)")
         if KIWOOM_TOKEN:
-            real_balances, successful_exchanges = kiwoom_utils.get_account_balance_kt00005(KIWOOM_TOKEN)
+            real_balances, successful_exchanges = (
+                kiwoom_utils.get_account_balance_kt00005(KIWOOM_TOKEN)
+            )
         print("⚠️ [상태 동기화] 모든 거래소 잔고 조회 실패. 다음 턴에 재시도합니다.")
         return
 
     balance_dict = {
-        str(item.get('code', '')).strip()[:6]: item
+        str(item.get("code", "")).strip()[:6]: item
         for item in real_balances
-        if item.get('code')
+        if item.get("code")
     }
 
     synced_count = 0
 
     try:
         with DB.get_session() as session:
-            pending_records = session.query(RecommendationHistory).filter_by(status='BUY_ORDERED').all()
+            pending_records = (
+                session.query(RecommendationHistory)
+                .filter_by(status="BUY_ORDERED")
+                .all()
+            )
 
             for record in pending_records:
                 code = str(record.stock_code).strip()[:6]
 
                 if code in balance_dict:
                     real_data = balance_dict[code]
-                    cur_qty = _to_int(real_data.get('qty', 0))
+                    cur_qty = _to_int(real_data.get("qty", 0))
 
                     if cur_qty > 0:
                         raw_price = (
-                            real_data.get('buy_price')
-                            or real_data.get('purchase_price')
-                            or real_data.get('pchs_avg_pric')
+                            real_data.get("buy_price")
+                            or real_data.get("purchase_price")
+                            or real_data.get("pchs_avg_pric")
                             or 0
                         )
                         buy_uv = _to_int(raw_price)
 
-                        print(f"✅ [동기화 완료] 누락 체결 확인! {record.stock_name}({code}) | 수량: {cur_qty} | 평단가: {buy_uv:,}원")
+                        print(
+                            f"✅ [동기화 완료] 누락 체결 확인! {record.stock_name}({code}) | 수량: {cur_qty} | 평단가: {buy_uv:,}원"
+                        )
 
-                        record.status = 'HOLDING'
+                        record.status = "HOLDING"
                         record.buy_price = buy_uv
                         record.buy_qty = cur_qty
                         if not record.buy_time:
                             record.buy_time = datetime.now()
 
                         for t in ACTIVE_TARGETS:
-                            if str(t.get('code', '')).strip()[:6] == code:
-                                t['status'] = 'HOLDING'
-                                t['buy_price'] = buy_uv
-                                t['buy_qty'] = cur_qty
+                            if str(t.get("code", "")).strip()[:6] == code:
+                                t["status"] = "HOLDING"
+                                t["buy_price"] = buy_uv
+                                t["buy_qty"] = cur_qty
 
                         synced_count += 1
 
@@ -806,7 +951,10 @@ def sync_state_with_broker():
 
     if synced_count > 0:
         msg = f"🔄 <b>[시스템 복구 알림]</b>\n웹소켓 단절 시간 동안 체결된 <b>{synced_count}건</b>의 종목을 성공적으로 동기화하여 감시망에 편입했습니다."
-        EVENT_BUS.publish('TELEGRAM_BROADCAST', {'message': msg, 'audience': 'ADMIN_ONLY', 'parse_mode': 'HTML'})
+        EVENT_BUS.publish(
+            "TELEGRAM_BROADCAST",
+            {"message": msg, "audience": "ADMIN_ONLY", "parse_mode": "HTML"},
+        )
     else:
         print("✅ [상태 동기화] 누락된 체결 건이 없습니다.")
 
@@ -814,6 +962,7 @@ def sync_state_with_broker():
 # =====================================================================
 # 🔄 3분 주기 강제 계좌 동기화 (웹소켓 영수증 누락 방어)
 # =====================================================================
+
 
 def periodic_account_sync():
     """
@@ -824,24 +973,28 @@ def periodic_account_sync():
 
     if not KIWOOM_TOKEN:
         _refresh_kiwoom_token("토큰 없음(정기 동기화)")
-    real_inventory, successful_exchanges = kiwoom_utils.get_account_balance_kt00005(KIWOOM_TOKEN)
+    real_inventory, successful_exchanges = kiwoom_utils.get_account_balance_kt00005(
+        KIWOOM_TOKEN
+    )
     if not successful_exchanges:
         log_info("⚠️ [정기 동기화] 잔고 조회 실패 -> 토큰 재발급 후 재시도")
         _refresh_kiwoom_token("잔고 조회 실패(정기 동기화)")
         if KIWOOM_TOKEN:
-            real_inventory, successful_exchanges = kiwoom_utils.get_account_balance_kt00005(KIWOOM_TOKEN)
+            real_inventory, successful_exchanges = (
+                kiwoom_utils.get_account_balance_kt00005(KIWOOM_TOKEN)
+            )
         print("⚠️ [정기 동기화] 모든 거래소 잔고 조회 실패, 동기화를 건너뜁니다.")
         return
 
     real_codes = {
-        str(item.get('code', '')).strip()[:6]: item
+        str(item.get("code", "")).strip()[:6]: item
         for item in real_inventory
-        if item.get('code')
+        if item.get("code")
     }
 
     def get_exchange(code):
         is_nxt = DB.get_latest_is_nxt(code)
-        return 'NXT' if is_nxt else 'KRX'
+        return "NXT" if is_nxt else "KRX"
 
     synced_count = 0
     pending_manual_control_removals = []
@@ -849,9 +1002,11 @@ def periodic_account_sync():
     try:
         with DB.get_session() as session:
             # 1️⃣ [매도 누락 방어] DB엔 HOLDING/SELL_ORDERED 인데, 실제 계좌엔 없는 경우 -> 팔렸음 (COMPLETED)
-            active_records = session.query(RecommendationHistory).filter(
-                RecommendationHistory.status.in_(['HOLDING', 'SELL_ORDERED'])
-            ).all()
+            active_records = (
+                session.query(RecommendationHistory)
+                .filter(RecommendationHistory.status.in_(["HOLDING", "SELL_ORDERED"]))
+                .all()
+            )
 
             for record in active_records:
                 code = str(record.stock_code).strip()[:6]
@@ -859,96 +1014,134 @@ def periodic_account_sync():
                 if code not in real_codes:
                     exchange = get_exchange(code)
                     if exchange in successful_exchanges:
-                        print(f"⚠️ [정기 동기화] {record.stock_name}({code}) 잔고 없음. 매도 영수증 누락으로 판단하여 COMPLETED 강제 전환.")
-                        record.status = 'COMPLETED'
+                        print(
+                            f"⚠️ [정기 동기화] {record.stock_name}({code}) 잔고 없음. 매도 영수증 누락으로 판단하여 COMPLETED 강제 전환."
+                        )
+                        record.status = "COMPLETED"
                         record.sell_time = datetime.now()
                         pending_manual_control_removals.append(
                             (code, "periodic_sync_completed_no_broker_holding")
                         )
 
                         with STATE_LOCK:
-                            target_stock = next((t for t in ACTIVE_TARGETS if str(t.get('code', '')).strip()[:6] == code), None)
-                            estimated_sell_price = target_stock.get('sell_target_price', 0) if target_stock else 0
-                            fallback_price = record.buy_price if record.buy_price is not None else 0
+                            target_stock = next(
+                                (
+                                    t
+                                    for t in ACTIVE_TARGETS
+                                    if str(t.get("code", "")).strip()[:6] == code
+                                ),
+                                None,
+                            )
+                            estimated_sell_price = (
+                                target_stock.get("sell_target_price", 0)
+                                if target_stock
+                                else 0
+                            )
+                            fallback_price = (
+                                record.buy_price if record.buy_price is not None else 0
+                            )
 
                             if not record.sell_price or record.sell_price == 0:
-                                record.sell_price = estimated_sell_price if estimated_sell_price > 0 else fallback_price
+                                record.sell_price = (
+                                    estimated_sell_price
+                                    if estimated_sell_price > 0
+                                    else fallback_price
+                                )
 
-                            if record.buy_price and record.buy_price > 0 and record.sell_price and record.sell_price > 0:
-                                record.profit_rate = calculate_net_profit_rate(record.buy_price, record.sell_price)
+                            if (
+                                record.buy_price
+                                and record.buy_price > 0
+                                and record.sell_price
+                                and record.sell_price > 0
+                            ):
+                                record.profit_rate = calculate_net_profit_rate(
+                                    record.buy_price, record.sell_price
+                                )
 
                             if target_stock:
-                                target_stock['status'] = 'COMPLETED'
+                                target_stock["status"] = "COMPLETED"
 
                             if HIGHEST_PRICES is not None:
                                 HIGHEST_PRICES.pop(code, None)
                         synced_count += 1
                     else:
-                        print(f"⚠️ [정기 동기화] {record.stock_name}({code}): {exchange} 거래소 잔고 조회 실패로 상태 변경 생략.")
+                        print(
+                            f"⚠️ [정기 동기화] {record.stock_name}({code}): {exchange} 거래소 잔고 조회 실패로 상태 변경 생략."
+                        )
 
                 else:
                     real_data = real_codes[code]
-                    real_qty = _to_int(real_data.get('qty', 0))
+                    real_qty = _to_int(real_data.get("qty", 0))
 
                     raw_price = (
-                        real_data.get('buy_price')
-                        or real_data.get('purchase_price')
-                        or real_data.get('pchs_avg_pric')
+                        real_data.get("buy_price")
+                        or real_data.get("purchase_price")
+                        or real_data.get("pchs_avg_pric")
                         or 0
                     )
                     real_buy_uv = _to_int(raw_price)
 
                     if real_qty > 0 and _to_int(record.buy_qty) != real_qty:
-                        print(f"🔄 [정기 동기화] {record.stock_name} 수량 오차 교정 (기존: {_to_int(record.buy_qty)}주 ➡️ 실제: {real_qty}주)")
+                        print(
+                            f"🔄 [정기 동기화] {record.stock_name} 수량 오차 교정 (기존: {_to_int(record.buy_qty)}주 ➡️ 실제: {real_qty}주)"
+                        )
                         record.buy_qty = real_qty
                         with STATE_LOCK:
                             for t in ACTIVE_TARGETS:
-                                if str(t.get('code', '')).strip()[:6] == code:
-                                    t['buy_qty'] = real_qty
+                                if str(t.get("code", "")).strip()[:6] == code:
+                                    t["buy_qty"] = real_qty
 
                     if real_buy_uv > 0 and record.buy_price != real_buy_uv:
-                        print(f"🔄 [정기 동기화] {record.stock_name} 매입단가 오차 교정 (기존: {record.buy_price}원 ➡️ 실제: {real_buy_uv}원)")
+                        print(
+                            f"🔄 [정기 동기화] {record.stock_name} 매입단가 오차 교정 (기존: {record.buy_price}원 ➡️ 실제: {real_buy_uv}원)"
+                        )
                         record.buy_price = real_buy_uv
                         with _with_state_lock():
                             for t in ACTIVE_TARGETS:
-                                if str(t.get('code', '')).strip()[:6] == code:
-                                    t['buy_price'] = real_buy_uv
+                                if str(t.get("code", "")).strip()[:6] == code:
+                                    t["buy_price"] = real_buy_uv
 
                     if bool(record.scale_in_locked):
                         _reconcile_scale_in_lock(record, real_qty, real_buy_uv)
 
             # 2️⃣ [매수 누락 방어] DB엔 BUY_ORDERED 인데, 실제 잔고에 들어와 있는 경우 -> 샀음 (HOLDING)
-            pending_records = session.query(RecommendationHistory).filter_by(status='BUY_ORDERED').all()
+            pending_records = (
+                session.query(RecommendationHistory)
+                .filter_by(status="BUY_ORDERED")
+                .all()
+            )
 
             for record in pending_records:
                 code = str(record.stock_code).strip()[:6]
 
                 if code in real_codes:
                     real_data = real_codes[code]
-                    cur_qty = _to_int(real_data.get('qty', 0))
+                    cur_qty = _to_int(real_data.get("qty", 0))
 
                     if cur_qty > 0:
                         raw_price = (
-                            real_data.get('buy_price')
-                            or real_data.get('purchase_price')
-                            or real_data.get('pchs_avg_pric')
+                            real_data.get("buy_price")
+                            or real_data.get("purchase_price")
+                            or real_data.get("pchs_avg_pric")
                             or 0
                         )
                         buy_uv = _to_int(raw_price)
 
-                        print(f"⚠️ [정기 동기화] {record.stock_name}({code}) 매수 체결 확인! HOLDING 강제 전환 (평단가 {buy_uv:,}원)")
+                        print(
+                            f"⚠️ [정기 동기화] {record.stock_name}({code}) 매수 체결 확인! HOLDING 강제 전환 (평단가 {buy_uv:,}원)"
+                        )
 
-                        record.status = 'HOLDING'
+                        record.status = "HOLDING"
                         record.buy_price = buy_uv
                         record.buy_qty = cur_qty
                         record.buy_time = datetime.now()
 
                         with _with_state_lock():
                             for t in ACTIVE_TARGETS:
-                                if str(t.get('code', '')).strip()[:6] == code:
-                                    t['status'] = 'HOLDING'
-                                    t['buy_price'] = buy_uv
-                                    t['buy_qty'] = cur_qty
+                                if str(t.get("code", "")).strip()[:6] == code:
+                                    t["status"] = "HOLDING"
+                                    t["buy_price"] = buy_uv
+                                    t["buy_qty"] = cur_qty
 
                         synced_count += 1
 
@@ -961,6 +1154,8 @@ def periodic_account_sync():
             _remove_manual_control_exclusion_for_completed_holding(code, reason=reason)
 
     if synced_count > 0:
-        print(f"🔄 [정기 동기화 완료] 총 {synced_count}건의 웹소켓 누락 체결 상태를 바로잡았습니다.")
+        print(
+            f"🔄 [정기 동기화 완료] 총 {synced_count}건의 웹소켓 누락 체결 상태를 바로잡았습니다."
+        )
     else:
         pass  # 조용히 넘어갑니다. (로그 기록 안 함)

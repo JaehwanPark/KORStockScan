@@ -15,7 +15,6 @@ from src.engine.monitor_snapshot_runtime import guard_stdin_heavy_build
 from src.utils.constants import LOGS_DIR, POSTGRES_URL
 from src.engine.sniper_gatekeeper_replay import find_gatekeeper_snapshot_for_trade
 
-
 _HOLDING_RE = re.compile(
     r"^\[(?P<timestamp>[^\]]+)\].*?\[HOLDING_PIPELINE\] "
     r"(?P<name>.+?)\((?P<code>[^)]+)\) "
@@ -156,7 +155,9 @@ def _parse_since_datetime(target_date: str, since_time: str | None) -> datetime 
 
 
 def _iter_target_lines(log_paths: list[Path], *, target_date: str) -> list[str]:
-    return iter_target_log_lines(log_paths, target_date=target_date, marker="[HOLDING_PIPELINE]")
+    return iter_target_log_lines(
+        log_paths, target_date=target_date, marker="[HOLDING_PIPELINE]"
+    )
 
 
 def _parse_event(line: str) -> HoldingEvent | None:
@@ -261,7 +262,13 @@ def _value_chip(key: str, value: str) -> dict[str, str] | None:
         display = _format_duration_seconds(_safe_int(value))
     elif key in {"profit_rate", "peak_profit"}:
         display = f"{_safe_float(value):+.2f}%"
-    elif key in {"buy_price", "sell_price", "curr_price", "preset_tp_price", "fill_price"}:
+    elif key in {
+        "buy_price",
+        "sell_price",
+        "curr_price",
+        "preset_tp_price",
+        "fill_price",
+    }:
         display = f"{_safe_int(value):,}원"
     elif key == "new_avg_price":
         display = f"{_safe_float(value):,.2f}원"
@@ -276,7 +283,12 @@ def _value_chip(key: str, value: str) -> dict[str, str] | None:
         if age_sec < 0 or age_sec > 86_400:
             return None
         display = f"{age_sec:.1f}초"
-    elif key in {"ai_exit_min_loss_pct", "safe_profit_pct", "distance_to_ai_exit", "distance_to_safe_profit"}:
+    elif key in {
+        "ai_exit_min_loss_pct",
+        "safe_profit_pct",
+        "distance_to_ai_exit",
+        "distance_to_safe_profit",
+    }:
         display = f"{_safe_float(value):+.2f}%"
     elif key in {"near_ai_exit", "near_safe_profit"}:
         normalized = str(value).strip().lower()
@@ -308,7 +320,9 @@ def _import_sqlalchemy():
     return create_engine, text
 
 
-def _fetch_trade_rows(target_date: str, code: str | None = None) -> tuple[list[dict], list[str]]:
+def _fetch_trade_rows(
+    target_date: str, code: str | None = None
+) -> tuple[list[dict], list[str]]:
     warnings: list[str] = []
     try:
         create_engine, text = _import_sqlalchemy()
@@ -316,7 +330,9 @@ def _fetch_trade_rows(target_date: str, code: str | None = None) -> tuple[list[d
     except Exception as exc:
         return [], [f"DB 연결 준비 실패: {exc}"]
 
-    params: dict[str, Any] = {"target_date": datetime.strptime(target_date, "%Y-%m-%d").date()}
+    params: dict[str, Any] = {
+        "target_date": datetime.strptime(target_date, "%Y-%m-%d").date()
+    }
     code_filter = ""
     if code:
         params["code"] = str(code).strip()[:6]
@@ -352,22 +368,24 @@ def _fetch_trade_rows(target_date: str, code: str | None = None) -> tuple[list[d
                 sell_price = _safe_float(row.get("sell_price"))
                 buy_qty = _safe_int(row.get("buy_qty"))
                 pnl_krw = _calculate_realized_pnl_krw(buy_price, sell_price, buy_qty)
-                rows.append({
-                    "id": _safe_int(row.get("id")),
-                    "rec_date": str(row.get("rec_date") or ""),
-                    "code": str(row.get("stock_code") or "").strip()[:6],
-                    "name": str(row.get("stock_name") or ""),
-                    "status": str(row.get("status") or ""),
-                    "strategy": str(row.get("strategy") or ""),
-                    "position_tag": str(row.get("position_tag") or ""),
-                    "buy_price": buy_price,
-                    "buy_qty": buy_qty,
-                    "buy_time": _format_dt(row.get("buy_time")),
-                    "sell_price": _safe_int(sell_price),
-                    "sell_time": _format_dt(row.get("sell_time")),
-                    "profit_rate": round(_safe_float(row.get("profit_rate")), 2),
-                    "realized_pnl_krw": pnl_krw,
-                })
+                rows.append(
+                    {
+                        "id": _safe_int(row.get("id")),
+                        "rec_date": str(row.get("rec_date") or ""),
+                        "code": str(row.get("stock_code") or "").strip()[:6],
+                        "name": str(row.get("stock_name") or ""),
+                        "status": str(row.get("status") or ""),
+                        "strategy": str(row.get("strategy") or ""),
+                        "position_tag": str(row.get("position_tag") or ""),
+                        "buy_price": buy_price,
+                        "buy_qty": buy_qty,
+                        "buy_time": _format_dt(row.get("buy_time")),
+                        "sell_price": _safe_int(sell_price),
+                        "sell_time": _format_dt(row.get("sell_time")),
+                        "profit_rate": round(_safe_float(row.get("profit_rate")), 2),
+                        "realized_pnl_krw": pnl_krw,
+                    }
+                )
     except Exception as exc:
         warnings.append(f"매매 이력 조회 실패: {exc}")
     return rows, warnings
@@ -405,13 +423,15 @@ def _build_timeline(events: list[HoldingEvent]) -> list[dict[str, Any]]:
     for event in events:
         if timeline and timeline[-1]["stage"] == event.stage:
             continue
-        timeline.append({
-            "stage": event.stage,
-            "label": _friendly_stage(event.stage),
-            "timestamp": event.timestamp,
-            "details": _build_event_details(event),
-            "fields": dict(event.fields),
-        })
+        timeline.append(
+            {
+                "stage": event.stage,
+                "label": _friendly_stage(event.stage),
+                "timestamp": event.timestamp,
+                "details": _build_event_details(event),
+                "fields": dict(event.fields),
+            }
+        )
     return timeline
 
 
@@ -542,12 +562,18 @@ def _infer_exit_decision_source(
     reason_text = str(reason or "").strip().lower()
     raw_fields = fields or {}
 
-    if str(raw_fields.get("exit_decision_source") or "").strip() not in {"", "-", "None"}:
+    if str(raw_fields.get("exit_decision_source") or "").strip() not in {
+        "",
+        "-",
+        "None",
+    }:
         return str(raw_fields.get("exit_decision_source") or "").strip()
     if rule.startswith("overnight_") or "overnight_flow" in reason_text:
         return "OVERNIGHT_FLOW"
     if (
-        str(raw_fields.get("candidate_reason") or "").startswith("holding_flow_override")
+        str(raw_fields.get("candidate_reason") or "").startswith(
+            "holding_flow_override"
+        )
         or str(raw_fields.get("reason") or "").startswith("holding_flow_override")
         or str(raw_fields.get("defer_reason") or "").startswith("ofi_stable_")
     ):
@@ -608,7 +634,10 @@ def _build_exit_signal(events: list[HoldingEvent]) -> dict | None:
 
     if sell_completed:
         has_preset_exit = any(event.stage == "preset_exit_setup" for event in events)
-        if has_preset_exit and _safe_float(sell_completed.fields.get("profit_rate")) < 0:
+        if (
+            has_preset_exit
+            and _safe_float(sell_completed.fields.get("profit_rate")) < 0
+        ):
             return _build_exit_signal_payload(
                 sell_completed,
                 reason="추정: SCALP 출구엔진 손절선 도달",
@@ -731,16 +760,18 @@ def _normalize_trade_with_events(trade: dict, events: list[HoldingEvent]) -> dic
         )
         entry_mode = str(restored_entry_mode or "").strip().lower()
 
-    normalized.update({
-        "status": status,
-        "buy_price": buy_price,
-        "buy_qty": buy_qty,
-        "sell_price": sell_price,
-        "sell_time": sell_time,
-        "profit_rate": round(profit_rate, 2),
-        "realized_pnl_krw": pnl_krw,
-        "entry_mode": entry_mode,
-    })
+    normalized.update(
+        {
+            "status": status,
+            "buy_price": buy_price,
+            "buy_qty": buy_qty,
+            "sell_price": sell_price,
+            "sell_time": sell_time,
+            "profit_rate": round(profit_rate, 2),
+            "realized_pnl_krw": pnl_krw,
+            "entry_mode": entry_mode,
+        }
+    )
     return normalized
 
 
@@ -783,7 +814,9 @@ def _summarize_ai_reviews(ai_reviews: list[dict[str, Any]]) -> dict[str, Any] | 
         return None
     scores = [_safe_int(item.get("ai_score")) for item in ai_reviews]
     profits = [_safe_float(item.get("profit_rate")) for item in ai_reviews]
-    low_hits = [_parse_low_score_hits(item.get("low_score_hits")) for item in ai_reviews]
+    low_hits = [
+        _parse_low_score_hits(item.get("low_score_hits")) for item in ai_reviews
+    ]
     latest_score = scores[-1]
     first_score = scores[0]
     score_delta = latest_score - first_score
@@ -836,7 +869,12 @@ def _summarize_ai_reviews(ai_reviews: list[dict[str, Any]]) -> dict[str, Any] | 
     ]
     if hit_target > 0:
         chips.append({"label": "하방카운트", "value": f"{max_hit}/{hit_target}"})
-    chips.append({"label": "마지막 확인", "value": str(ai_reviews[-1].get("timestamp") or "-")[-8:]})
+    chips.append(
+        {
+            "label": "마지막 확인",
+            "value": str(ai_reviews[-1].get("timestamp") or "-")[-8:],
+        }
+    )
 
     return {
         "headline": headline,
@@ -853,7 +891,9 @@ def _build_trade_row(trade: dict, events: list[HoldingEvent]) -> dict:
     trade = _normalize_trade_with_events(trade, events)
     buy_dt = _parse_dt(trade.get("buy_time"))
     sell_dt = _parse_dt(trade.get("sell_time"))
-    holding_sec = int((sell_dt - buy_dt).total_seconds()) if buy_dt and sell_dt else None
+    holding_sec = (
+        int((sell_dt - buy_dt).total_seconds()) if buy_dt and sell_dt else None
+    )
     ai_reviews = [
         {
             "timestamp": event.timestamp,
@@ -886,7 +926,11 @@ def _build_trade_row(trade: dict, events: list[HoldingEvent]) -> dict:
     result_badge = _trade_result_badge(trade)
     timeline = _build_timeline(events)
     exit_signal = _build_exit_signal(events)
-    if exit_signal and exit_signal.get("inferred") and not any(item.get("stage") == "exit_signal" for item in timeline):
+    if (
+        exit_signal
+        and exit_signal.get("inferred")
+        and not any(item.get("stage") == "exit_signal" for item in timeline)
+    ):
         synthetic_timeline_item = {
             "stage": "exit_signal",
             "label": _friendly_stage("exit_signal"),
@@ -895,7 +939,14 @@ def _build_trade_row(trade: dict, events: list[HoldingEvent]) -> dict:
             "fields": dict(exit_signal.get("fields") or {}),
             "is_inferred": True,
         }
-        insert_idx = next((idx for idx, item in enumerate(timeline) if item.get("stage") == "sell_completed"), len(timeline))
+        insert_idx = next(
+            (
+                idx
+                for idx, item in enumerate(timeline)
+                if item.get("stage") == "sell_completed"
+            ),
+            len(timeline),
+        )
         timeline.insert(insert_idx, synthetic_timeline_item)
     compact_timeline = _build_compact_timeline(timeline)
 
@@ -909,7 +960,12 @@ def _build_trade_row(trade: dict, events: list[HoldingEvent]) -> dict:
         "holding_duration_text": _format_duration_seconds(holding_sec),
         "timeline": timeline,
         "compact_timeline": compact_timeline,
-        "timeline_hidden_count": max(0, len(timeline) - len(compact_timeline) + (1 if any(item.get("is_omitted") for item in compact_timeline) else 0)),
+        "timeline_hidden_count": max(
+            0,
+            len(timeline)
+            - len(compact_timeline)
+            + (1 if any(item.get("is_omitted") for item in compact_timeline) else 0),
+        ),
         "latest_event": _build_latest_event(events),
         "exit_signal": exit_signal,
         "ai_reviews": ai_reviews[-6:],
@@ -928,24 +984,40 @@ def _is_entered_trade(row: dict) -> bool:
 
 
 def _build_fill_quality_summary(events: list[HoldingEvent]) -> dict:
-    rebased_events = [event for event in events if event.stage == "position_rebased_after_fill"]
-    fill_quality_counts = Counter(str(event.fields.get("fill_quality") or "UNKNOWN") for event in rebased_events)
+    rebased_events = [
+        event for event in events if event.stage == "position_rebased_after_fill"
+    ]
+    fill_quality_counts = Counter(
+        str(event.fields.get("fill_quality") or "UNKNOWN") for event in rebased_events
+    )
     sync_ok_events = [event for event in events if event.stage == "preset_exit_sync_ok"]
-    sync_mismatch_events = [event for event in events if event.stage == "preset_exit_sync_mismatch"]
-    sync_disabled_events = [event for event in events if event.stage == "preset_exit_sync_disabled_trailing_unified"]
+    sync_mismatch_events = [
+        event for event in events if event.stage == "preset_exit_sync_mismatch"
+    ]
+    sync_disabled_events = [
+        event
+        for event in events
+        if event.stage == "preset_exit_sync_disabled_trailing_unified"
+    ]
 
     mismatch_rows = []
     for event in sync_mismatch_events[-10:]:
-        mismatch_rows.append({
-            "timestamp": event.timestamp,
-            "name": event.name,
-            "code": event.code,
-            "entry_mode": str(event.fields.get("entry_mode") or ""),
-            "sync_status": str(event.fields.get("sync_status") or ""),
-            "sync_reason": str(event.fields.get("sync_reason") or ""),
-            "preset_tp_ord_no_before": str(event.fields.get("preset_tp_ord_no_before") or ""),
-            "preset_tp_ord_no_after": str(event.fields.get("preset_tp_ord_no_after") or ""),
-        })
+        mismatch_rows.append(
+            {
+                "timestamp": event.timestamp,
+                "name": event.name,
+                "code": event.code,
+                "entry_mode": str(event.fields.get("entry_mode") or ""),
+                "sync_status": str(event.fields.get("sync_status") or ""),
+                "sync_reason": str(event.fields.get("sync_reason") or ""),
+                "preset_tp_ord_no_before": str(
+                    event.fields.get("preset_tp_ord_no_before") or ""
+                ),
+                "preset_tp_ord_no_after": str(
+                    event.fields.get("preset_tp_ord_no_after") or ""
+                ),
+            }
+        )
 
     return {
         "fill_quality_breakdown": [
@@ -961,7 +1033,11 @@ def _build_fill_quality_summary(events: list[HoldingEvent]) -> dict:
             "preset_exit_sync_mismatch_events": int(len(sync_mismatch_events)),
             "preset_exit_sync_disabled_events": int(len(sync_disabled_events)),
             "preset_exit_sync_mismatch_rate": round(
-                (len(sync_mismatch_events) / max(1, (len(sync_ok_events) + len(sync_mismatch_events)))) * 100.0,
+                (
+                    len(sync_mismatch_events)
+                    / max(1, (len(sync_ok_events) + len(sync_mismatch_events)))
+                )
+                * 100.0,
                 1,
             ),
         },
@@ -1000,7 +1076,9 @@ def _build_hard_stop_taxonomy(rows: list[dict], events: list[HoldingEvent]) -> d
         if not exit_rule:
             continue
         counts[exit_rule] += 1
-        pair_label = f"{str(row.get('entry_mode') or '-')}|{str(row.get('position_tag') or '-')}"
+        pair_label = (
+            f"{str(row.get('entry_mode') or '-')}|{str(row.get('position_tag') or '-')}"
+        )
         entry_mode_tag_pairs[exit_rule][pair_label] += 1
         sample_codes[exit_rule].add(str(row.get("code") or ""))
 
@@ -1018,24 +1096,34 @@ def _build_hard_stop_taxonomy(rows: list[dict], events: list[HoldingEvent]) -> d
     for item in taxonomy_defs:
         key = item["key"]
         pair_counter = entry_mode_tag_pairs.get(key) or Counter()
-        rows_out.append({
-            "key": key,
-            "label": item["label"],
-            "mode": item["mode"],
-            "stage": item["stage"],
-            "count": int(counts.get(key, 0)),
-            "entry_mode_position_tag_top": [
-                {"label": label, "count": count}
-                for label, count in pair_counter.most_common(3)
-            ],
-            "sample_codes": sorted(code for code in (sample_codes.get(key) or set()) if code)[:5],
-        })
+        rows_out.append(
+            {
+                "key": key,
+                "label": item["label"],
+                "mode": item["mode"],
+                "stage": item["stage"],
+                "count": int(counts.get(key, 0)),
+                "entry_mode_position_tag_top": [
+                    {"label": label, "count": count}
+                    for label, count in pair_counter.most_common(3)
+                ],
+                "sample_codes": sorted(
+                    code for code in (sample_codes.get(key) or set()) if code
+                )[:5],
+            }
+        )
 
     return {
         "metrics": {
-            "total_hard_stop_related_events": int(sum(item["count"] for item in rows_out)),
-            "live_hard_stop_events": int(sum(item["count"] for item in rows_out if item["mode"] == "live")),
-            "shadow_hard_stop_events": int(sum(item["count"] for item in rows_out if item["mode"] == "shadow")),
+            "total_hard_stop_related_events": int(
+                sum(item["count"] for item in rows_out)
+            ),
+            "live_hard_stop_events": int(
+                sum(item["count"] for item in rows_out if item["mode"] == "live")
+            ),
+            "shadow_hard_stop_events": int(
+                sum(item["count"] for item in rows_out if item["mode"] == "shadow")
+            ),
             "hard_time_stop_shadow_events": int(counts.get("hard_time_stop_shadow", 0)),
         },
         "rows": rows_out,
@@ -1097,14 +1185,24 @@ def build_trade_review_report(
 
     all_rows = compiled_rows
     entered_rows = [row for row in all_rows if _is_entered_trade(row)]
-    expired_rows = [row for row in all_rows if str(row.get("status") or "").upper() == "EXPIRED"]
+    expired_rows = [
+        row for row in all_rows if str(row.get("status") or "").upper() == "EXPIRED"
+    ]
     base_rows = all_rows if scope == "all" else entered_rows
     visible_rows = base_rows
     if normalized_code:
-        visible_rows = [row for row in visible_rows if str(row.get("code") or "").strip() == normalized_code]
+        visible_rows = [
+            row
+            for row in visible_rows
+            if str(row.get("code") or "").strip() == normalized_code
+        ]
 
     recent_trades = visible_rows[:top_n]
-    realized = [row for row in visible_rows if str(row.get("status") or "").upper() == "COMPLETED"]
+    realized = [
+        row
+        for row in visible_rows
+        if str(row.get("status") or "").upper() == "COMPLETED"
+    ]
     win_count = sum(1 for row in realized if _safe_float(row.get("profit_rate")) > 0)
     loss_count = sum(1 for row in realized if _safe_float(row.get("profit_rate")) < 0)
     fill_quality_summary = _build_fill_quality_summary(events)
@@ -1116,11 +1214,13 @@ def build_trade_review_report(
         if not code_value or code_value in seen_codes:
             continue
         seen_codes.add(code_value)
-        available_stocks.append({
-            "code": code_value,
-            "name": str(row.get("name") or ""),
-            "label": f"{row.get('name') or '-'} ({code_value})",
-        })
+        available_stocks.append(
+            {
+                "code": code_value,
+                "name": str(row.get("name") or ""),
+                "label": f"{row.get('name') or '-'} ({code_value})",
+            }
+        )
 
     return {
         "date": target_date,
@@ -1136,20 +1236,52 @@ def build_trade_review_report(
         "metrics": {
             "total_trades": len(visible_rows),
             "completed_trades": len(realized),
-            "open_trades": sum(1 for row in visible_rows if str(row.get("status") or "").upper() != "COMPLETED"),
+            "open_trades": sum(
+                1
+                for row in visible_rows
+                if str(row.get("status") or "").upper() != "COMPLETED"
+            ),
             "win_trades": win_count,
             "loss_trades": loss_count,
-            "avg_profit_rate": round(sum(_safe_float(row.get("profit_rate")) for row in realized) / len(realized), 2) if realized else 0.0,
-            "realized_pnl_krw": int(sum(_safe_int(row.get("realized_pnl_krw")) for row in realized)),
+            "avg_profit_rate": (
+                round(
+                    sum(_safe_float(row.get("profit_rate")) for row in realized)
+                    / len(realized),
+                    2,
+                )
+                if realized
+                else 0.0
+            ),
+            "realized_pnl_krw": int(
+                sum(_safe_int(row.get("realized_pnl_krw")) for row in realized)
+            ),
             "holding_events": len(events),
             "all_rows": len(all_rows),
             "entered_rows": len(entered_rows),
             "expired_rows": len(expired_rows),
-            "full_fill_events": int((fill_quality_summary.get("metrics") or {}).get("full_fill_events", 0)),
-            "partial_fill_events": int((fill_quality_summary.get("metrics") or {}).get("partial_fill_events", 0)),
-            "preset_exit_sync_ok_events": int((fill_quality_summary.get("metrics") or {}).get("preset_exit_sync_ok_events", 0)),
-            "preset_exit_sync_mismatch_events": int((fill_quality_summary.get("metrics") or {}).get("preset_exit_sync_mismatch_events", 0)),
-            "hard_time_stop_shadow_events": int((hard_stop_taxonomy.get("metrics") or {}).get("hard_time_stop_shadow_events", 0)),
+            "full_fill_events": int(
+                (fill_quality_summary.get("metrics") or {}).get("full_fill_events", 0)
+            ),
+            "partial_fill_events": int(
+                (fill_quality_summary.get("metrics") or {}).get(
+                    "partial_fill_events", 0
+                )
+            ),
+            "preset_exit_sync_ok_events": int(
+                (fill_quality_summary.get("metrics") or {}).get(
+                    "preset_exit_sync_ok_events", 0
+                )
+            ),
+            "preset_exit_sync_mismatch_events": int(
+                (fill_quality_summary.get("metrics") or {}).get(
+                    "preset_exit_sync_mismatch_events", 0
+                )
+            ),
+            "hard_time_stop_shadow_events": int(
+                (hard_stop_taxonomy.get("metrics") or {}).get(
+                    "hard_time_stop_shadow_events", 0
+                )
+            ),
         },
         "event_breakdown": [
             {"stage": stage, "label": _friendly_stage(stage), "count": count}
@@ -1157,8 +1289,16 @@ def build_trade_review_report(
         ],
         "sections": {
             "recent_trades": recent_trades,
-            "completed_trades": [row for row in visible_rows if str(row.get("status") or "").upper() == "COMPLETED"][:top_n],
-            "open_trades": [row for row in visible_rows if str(row.get("status") or "").upper() != "COMPLETED"][:top_n],
+            "completed_trades": [
+                row
+                for row in visible_rows
+                if str(row.get("status") or "").upper() == "COMPLETED"
+            ][:top_n],
+            "open_trades": [
+                row
+                for row in visible_rows
+                if str(row.get("status") or "").upper() != "COMPLETED"
+            ][:top_n],
             "expired_candidates": expired_rows[:top_n],
             "fill_quality_summary": fill_quality_summary,
             "hard_stop_taxonomy": hard_stop_taxonomy,

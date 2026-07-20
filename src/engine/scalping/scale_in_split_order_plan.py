@@ -148,7 +148,12 @@ def _event_date(event: dict[str, Any]) -> str:
         value = str(event.get(key) or "").strip()
         if len(value) >= 10:
             return value[:10]
-    ts = str(event.get("timestamp") or event.get("created_at") or event.get("emitted_at") or "").strip()
+    ts = str(
+        event.get("timestamp")
+        or event.get("created_at")
+        or event.get("emitted_at")
+        or ""
+    ).strip()
     return ts[:10] if len(ts) >= 10 else ""
 
 
@@ -156,23 +161,30 @@ def _source_quality_summary(target_date: str) -> dict[str, Any]:
     path = _source_quality_path(target_date)
     payload = _load_json(path)
     summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
-    status = str(payload.get("status") or ("missing" if not path.exists() else "loaded"))
+    status = str(
+        payload.get("status") or ("missing" if not path.exists() else "loaded")
+    )
     hard_gap_count = _safe_int(summary.get("hard_blocking_contract_gap_count"), 0)
-    raw_row_exclusion_applied = bool(summary.get("raw_row_exclusion_applied") or payload.get("raw_row_exclusion"))
+    raw_row_exclusion_applied = bool(
+        summary.get("raw_row_exclusion_applied") or payload.get("raw_row_exclusion")
+    )
     tuning_input_allowed = summary.get("tuning_input_allowed")
     if tuning_input_allowed is None:
-        tuning_input_allowed = (
-            status not in {"fail", "missing", "invalid"}
-            and (hard_gap_count <= 0 or raw_row_exclusion_applied)
+        tuning_input_allowed = status not in {"fail", "missing", "invalid"} and (
+            hard_gap_count <= 0 or raw_row_exclusion_applied
         )
-    if status in {"fail", "missing", "invalid"} or (hard_gap_count > 0 and not raw_row_exclusion_applied):
+    if status in {"fail", "missing", "invalid"} or (
+        hard_gap_count > 0 and not raw_row_exclusion_applied
+    ):
         tuning_input_allowed = False
     return {
         "artifact": str(path) if path.exists() else None,
         "status": status,
         "tuning_input_allowed": bool(tuning_input_allowed),
         "hard_blocking_contract_gap_count": hard_gap_count,
-        "hard_blocking_excluded_row_count": _safe_int(summary.get("hard_blocking_excluded_row_count"), 0),
+        "hard_blocking_excluded_row_count": _safe_int(
+            summary.get("hard_blocking_excluded_row_count"), 0
+        ),
         "raw_row_exclusion_applied": raw_row_exclusion_applied,
     }
 
@@ -197,7 +209,11 @@ def _iter_input_events(target_date: str) -> tuple[list[dict[str, Any]], dict[str
             events.append(fields)
     return events, {
         "source_paths": {
-            name: str(existing_or_gzip_path(path)) if existing_or_gzip_path(path).exists() else None
+            name: (
+                str(existing_or_gzip_path(path))
+                if existing_or_gzip_path(path).exists()
+                else None
+            )
             for name, path in source_paths.items()
         },
         "excluded_pre_baseline_count": excluded_pre_baseline,
@@ -206,8 +222,14 @@ def _iter_input_events(target_date: str) -> tuple[list[dict[str, Any]], dict[str
 
 
 def _context_bucket(fields: dict[str, Any]) -> str:
-    strategy = str(fields.get("strategy") or fields.get("raw_strategy") or "").strip().upper()
-    strategy_bucket = "scalping" if strategy in {"SCALPING", "SCALP"} else "swing" if strategy else "unknown_strategy"
+    strategy = (
+        str(fields.get("strategy") or fields.get("raw_strategy") or "").strip().upper()
+    )
+    strategy_bucket = (
+        "scalping"
+        if strategy in {"SCALPING", "SCALP"}
+        else "swing" if strategy else "unknown_strategy"
+    )
     stage = str(fields.get("stage") or "").strip()
     add_reason = str(
         fields.get("add_reason")
@@ -228,7 +250,12 @@ def _context_bucket(fields: dict[str, Any]) -> str:
         reason_bucket = add_reason[:48]
     else:
         reason_bucket = "generic_avg_down"
-    lineage = "rising_missed" if _safe_bool(fields.get("rising_missed_scout")) or "rising_missed" in str(fields).lower() else "normal"
+    lineage = (
+        "rising_missed"
+        if _safe_bool(fields.get("rising_missed_scout"))
+        or "rising_missed" in str(fields).lower()
+        else "normal"
+    )
     return f"{strategy_bucket}:{reason_bucket}:{lineage}"
 
 
@@ -258,11 +285,18 @@ def _explicit_add_reason(fields: dict[str, Any]) -> str:
 
 
 def _record_id(fields: dict[str, Any]) -> str:
-    return str(fields.get("record_id") or fields.get("recommendation_id") or fields.get("id") or "").strip()
+    return str(
+        fields.get("record_id")
+        or fields.get("recommendation_id")
+        or fields.get("id")
+        or ""
+    ).strip()
 
 
 def _order_no(fields: dict[str, Any]) -> str:
-    return str(fields.get("ord_no") or fields.get("order_no") or fields.get("odno") or "").strip()
+    return str(
+        fields.get("ord_no") or fields.get("order_no") or fields.get("odno") or ""
+    ).strip()
 
 
 def _price_from_fields(fields: dict[str, Any], keys: tuple[str, ...]) -> int:
@@ -274,8 +308,12 @@ def _price_from_fields(fields: dict[str, Any], keys: tuple[str, ...]) -> int:
 
 
 def _is_market_like_order(fields: dict[str, Any], base_price: int) -> bool:
-    order_type = str(fields.get("order_type_code") or fields.get("order_type") or "").strip()
-    price_source = str(fields.get("price_source") or fields.get("price_policy") or "").strip()
+    order_type = str(
+        fields.get("order_type_code") or fields.get("order_type") or ""
+    ).strip()
+    price_source = str(
+        fields.get("price_source") or fields.get("price_policy") or ""
+    ).strip()
     return order_type in {"3", "03", "6", "06", "16"} or price_source in {
         "market",
         "non_scalping_market",
@@ -308,7 +346,9 @@ def _event_observed_price(fields: dict[str, Any]) -> int:
     )
 
 
-def _anchor_base_price(anchor: dict[str, Any], events: list[dict[str, Any]]) -> tuple[int, str]:
+def _anchor_base_price(
+    anchor: dict[str, Any], events: list[dict[str, Any]]
+) -> tuple[int, str]:
     price = _price_from_fields(
         anchor,
         (
@@ -343,9 +383,10 @@ def _anchor_base_price(anchor: dict[str, Any], events: list[dict[str, Any]]) -> 
         event_reason = _explicit_add_reason(event)
         event_record_id = _record_id(event)
         event_order_no = _order_no(event)
-        identity_match = (
-            bool(anchor_record_id and event_record_id and anchor_record_id == event_record_id)
-            or bool(anchor_order_no and event_order_no and anchor_order_no == event_order_no)
+        identity_match = bool(
+            anchor_record_id and event_record_id and anchor_record_id == event_record_id
+        ) or bool(
+            anchor_order_no and event_order_no and anchor_order_no == event_order_no
         )
         if not identity_match and reason and event_reason and event_reason != reason:
             continue
@@ -357,12 +398,23 @@ def _anchor_base_price(anchor: dict[str, Any], events: list[dict[str, Any]]) -> 
             continue
         candidate_price = _price_from_fields(
             event,
-            ("resolved_price", "order_price", "request_price", "final_price", "fill_price", "assumed_fill_price"),
+            (
+                "resolved_price",
+                "order_price",
+                "request_price",
+                "final_price",
+                "fill_price",
+                "assumed_fill_price",
+            ),
         )
         if candidate_price <= 0:
             continue
         if best_match is None or delta < best_match[0]:
-            best_match = (delta, candidate_price, str(event.get("stage") or "nearby_event"))
+            best_match = (
+                delta,
+                candidate_price,
+                str(event.get("stage") or "nearby_event"),
+            )
     if best_match is None:
         return 0, "reconstruct_gap"
     return best_match[1], f"reconstructed_from_{best_match[2]}"
@@ -373,8 +425,14 @@ def _enrich_avg_down_context(rows: list[dict[str, Any]]) -> list[dict[str, Any]]
     reason_by_order: dict[tuple[str, str], str] = {}
     for row in rows:
         stage = str(row.get("stage") or "")
-        add_type = str(row.get("add_type") or row.get("scale_in_type") or "").strip().upper()
-        if add_type != "AVG_DOWN" and not stage.startswith("scale_in_") and not stage.endswith("_avg_down_submitted"):
+        add_type = (
+            str(row.get("add_type") or row.get("scale_in_type") or "").strip().upper()
+        )
+        if (
+            add_type != "AVG_DOWN"
+            and not stage.startswith("scale_in_")
+            and not stage.endswith("_avg_down_submitted")
+        ):
             continue
         reason = _explicit_add_reason(row)
         if not reason:
@@ -407,7 +465,9 @@ def _enrich_avg_down_context(rows: list[dict[str, Any]]) -> list[dict[str, Any]]
     return enriched
 
 
-def _build_post_submit_observations(events: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+def _build_post_submit_observations(
+    events: list[dict[str, Any]],
+) -> dict[str, list[dict[str, Any]]]:
     by_code: dict[str, list[dict[str, Any]]] = {}
     for event in events:
         code = _stock_code(event)
@@ -416,7 +476,10 @@ def _build_post_submit_observations(events: list[dict[str, Any]]) -> dict[str, l
             continue
         by_code.setdefault(code, []).append(event)
     for rows in by_code.values():
-        rows.sort(key=lambda item: _event_time(item) or datetime.min.replace(tzinfo=timezone.utc))
+        rows.sort(
+            key=lambda item: _event_time(item)
+            or datetime.min.replace(tzinfo=timezone.utc)
+        )
     return by_code
 
 
@@ -494,13 +557,16 @@ def _counterfactual_for_anchor(
             "touch_0_8pct": down_pct >= 0.8,
             "touch_1_0pct": down_pct >= 1.0,
             "touch_1_5pct": down_pct >= 1.5,
-            "missed_upside_proxy": min_price > base_price - tick and (max_price or 0) >= base_price + tick,
+            "missed_upside_proxy": min_price > base_price - tick
+            and (max_price or 0) >= base_price + tick,
         }
     )
     return result
 
 
-def _counterfactual_summary(bucket_rows: list[dict[str, Any]], all_events: list[dict[str, Any]]) -> dict[str, Any]:
+def _counterfactual_summary(
+    bucket_rows: list[dict[str, Any]], all_events: list[dict[str, Any]]
+) -> dict[str, Any]:
     raw_anchors = [
         row
         for row in bucket_rows
@@ -513,7 +579,8 @@ def _counterfactual_summary(bucket_rows: list[dict[str, Any]], all_events: list[
     submitted_keys = {
         (_stock_code(row), _record_id(row) or _order_no(row))
         for row in raw_anchors
-        if str(row.get("stage") or "").endswith("_submitted") or str(row.get("stage") or "") == "add_order_sent"
+        if str(row.get("stage") or "").endswith("_submitted")
+        or str(row.get("stage") or "") == "add_order_sent"
     }
     submitted_keys.discard(("", ""))
     anchors = [
@@ -524,18 +591,28 @@ def _counterfactual_summary(bucket_rows: list[dict[str, Any]], all_events: list[
     ]
     observations_by_code = _build_post_submit_observations(all_events)
     anchor_results = [
-        _counterfactual_for_anchor(anchor, events=all_events, observations_by_code=observations_by_code)
+        _counterfactual_for_anchor(
+            anchor, events=all_events, observations_by_code=observations_by_code
+        )
         for anchor in anchors
     ]
     observed = [item for item in anchor_results if item.get("observed")]
     market_count = sum(1 for item in anchor_results if item.get("market_like_order"))
-    reconstruct_gap_count = sum(1 for item in anchor_results if item.get("base_price_source") == "reconstruct_gap")
+    reconstruct_gap_count = sum(
+        1
+        for item in anchor_results
+        if item.get("base_price_source") == "reconstruct_gap"
+    )
     join_gap_count = len(anchor_results) - len(observed) - market_count
+
     def rate(key: str) -> float | None:
         if not observed:
             return None
         return round(sum(1 for item in observed if item.get(key)) / len(observed), 4)
-    min_observed_values = [_safe_int(item.get("min_observed_price"), 0) for item in observed]
+
+    min_observed_values = [
+        _safe_int(item.get("min_observed_price"), 0) for item in observed
+    ]
     down_ticks_values = [
         _safe_int(item.get("down_ticks_reached"), 0)
         for item in observed
@@ -554,9 +631,17 @@ def _counterfactual_summary(bucket_rows: list[dict[str, Any]], all_events: list[
         "base_price_reconstruction_gap_count": reconstruct_gap_count,
         "min_observed_price": min(min_observed_values) if min_observed_values else None,
         "max_down_ticks_reached": max(down_ticks_values) if down_ticks_values else None,
-        "avg_down_ticks_reached": round(sum(down_ticks_values) / len(down_ticks_values), 4) if down_ticks_values else None,
+        "avg_down_ticks_reached": (
+            round(sum(down_ticks_values) / len(down_ticks_values), 4)
+            if down_ticks_values
+            else None
+        ),
         "max_down_pct_reached": max(down_pct_values) if down_pct_values else None,
-        "avg_down_pct_reached": round(sum(down_pct_values) / len(down_pct_values), 4) if down_pct_values else None,
+        "avg_down_pct_reached": (
+            round(sum(down_pct_values) / len(down_pct_values), 4)
+            if down_pct_values
+            else None
+        ),
         "touch_0tick_rate": rate("touch_0tick"),
         "touch_1tick_rate": rate("touch_1tick"),
         "touch_2tick_rate": rate("touch_2tick"),
@@ -700,9 +785,13 @@ def _three_leg_candidate(bucket: str, summary: dict[str, Any]) -> dict[str, Any]
     }
 
 
-def _candidate_for_bucket(bucket: str, rows: list[dict[str, Any]], all_events: list[dict[str, Any]]) -> dict[str, Any]:
+def _candidate_for_bucket(
+    bucket: str, rows: list[dict[str, Any]], all_events: list[dict[str, Any]]
+) -> dict[str, Any]:
     real_rows = [row for row in rows if _safe_bool(row.get("actual_order_submitted"))]
-    sim_rows = [row for row in rows if not _safe_bool(row.get("actual_order_submitted"))]
+    sim_rows = [
+        row for row in rows if not _safe_bool(row.get("actual_order_submitted"))
+    ]
     counterfactual = _counterfactual_summary(rows, all_events)
     selected = _selected_policy_from_counterfactual(counterfactual)
     return {
@@ -731,7 +820,9 @@ def _candidate_for_bucket(bucket: str, rows: list[dict[str, Any]], all_events: l
         "runtime_apply_allowed": bool(selected["runtime_apply_allowed"]),
         "policy_generation_reason": "post_submit_tick_band_counterfactual_selector",
         "selection_reason": selected["selection_reason"],
-        "counterfactual_sample_count": counterfactual.get("post_submit_observed_sample"),
+        "counterfactual_sample_count": counterfactual.get(
+            "post_submit_observed_sample"
+        ),
         "post_submit_touch_rates": {
             "touch_0tick_rate": counterfactual.get("touch_0tick_rate"),
             "touch_1tick_rate": counterfactual.get("touch_1tick_rate"),
@@ -780,7 +871,9 @@ def _build_policy(target_date: str, candidates: list[dict[str, Any]]) -> dict[st
     }
 
 
-def _policy_hash(candidates: list[dict[str, Any]], *, default_bucket: dict[str, Any] | None = None) -> str:
+def _policy_hash(
+    candidates: list[dict[str, Any]], *, default_bucket: dict[str, Any] | None = None
+) -> str:
     raw = json.dumps(
         {"candidates": candidates, "default_bucket": default_bucket or {}},
         ensure_ascii=False,
@@ -797,7 +890,11 @@ def build_report(target_date: str) -> dict[str, Any]:
     enriched_events = _enrich_avg_down_context(events)
     for event in enriched_events:
         stage = str(event.get("stage") or "")
-        add_type = str(event.get("add_type") or event.get("scale_in_type") or "").strip().upper()
+        add_type = (
+            str(event.get("add_type") or event.get("scale_in_type") or "")
+            .strip()
+            .upper()
+        )
         if add_type != "AVG_DOWN":
             continue
         if stage not in {
@@ -834,24 +931,29 @@ def build_report(target_date: str) -> dict[str, Any]:
     if source_quality.get("tuning_input_allowed") is not False:
         for item in candidate_grid:
             if _safe_bool(item.get("runtime_apply_allowed")):
-                runtime_candidates_by_bucket[str(item.get("context_bucket") or "default")] = item
+                runtime_candidates_by_bucket[
+                    str(item.get("context_bucket") or "default")
+                ] = item
     candidates = list(runtime_candidates_by_bucket.values())
     policy = _build_policy(target_date, candidates)
     policy_file = policy_path(target_date)
     counterfactual_selected_count = sum(
         1
         for item in candidates
-        if isinstance(item, dict) and item.get("policy_mode") == POLICY_MODE_COUNTERFACTUAL_TICK_BAND
+        if isinstance(item, dict)
+        and item.get("policy_mode") == POLICY_MODE_COUNTERFACTUAL_TICK_BAND
     )
     baseline_fallback_count = sum(
         1
         for item in candidates
-        if isinstance(item, dict) and item.get("policy_mode") == POLICY_MODE_BOUNDED_EQUAL_BASELINE
+        if isinstance(item, dict)
+        and item.get("policy_mode") == POLICY_MODE_BOUNDED_EQUAL_BASELINE
     )
     market_qty_split_only_count = sum(
         1
         for item in candidates
-        if isinstance(item, dict) and item.get("policy_mode") == POLICY_MODE_MARKET_QTY_SPLIT_ONLY
+        if isinstance(item, dict)
+        and item.get("policy_mode") == POLICY_MODE_MARKET_QTY_SPLIT_ONLY
     )
     price_observation_join_gap_count = sum(
         _safe_int(item.get("price_observation_join_gap_count"), 0)
@@ -924,7 +1026,11 @@ def build_report(target_date: str) -> dict[str, Any]:
 
 
 def _write_markdown(path: Path, report: dict[str, Any]) -> None:
-    recommended = report.get("recommended_policy") if isinstance(report.get("recommended_policy"), dict) else {}
+    recommended = (
+        report.get("recommended_policy")
+        if isinstance(report.get("recommended_policy"), dict)
+        else {}
+    )
     lines = [
         f"# Scale-In Split Order Plan {report.get('target_date')}",
         "",
@@ -958,15 +1064,23 @@ def _write_markdown(path: Path, report: dict[str, Any]) -> None:
 def write_outputs(target_date: str, report: dict[str, Any]) -> tuple[Path, Path, Path]:
     json_path, md_path = report_paths(target_date)
     policy_file = policy_path(target_date)
-    policy = report.get("policy_artifact") if isinstance(report.get("policy_artifact"), dict) else {}
-    report_to_write = {key: value for key, value in report.items() if key != "policy_artifact"}
+    policy = (
+        report.get("policy_artifact")
+        if isinstance(report.get("policy_artifact"), dict)
+        else {}
+    )
+    report_to_write = {
+        key: value for key, value in report.items() if key != "policy_artifact"
+    }
     _write_json(json_path, report_to_write)
     _write_json(policy_file, policy)
     _write_markdown(md_path, report_to_write)
     return json_path, md_path, policy_file
 
 
-def _load_policy_from_env(policy_file: str | None = None) -> tuple[dict[str, Any] | None, str]:
+def _load_policy_from_env(
+    policy_file: str | None = None,
+) -> tuple[dict[str, Any] | None, str]:
     enabled = os.environ.get("KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_ENABLED")
     if not _safe_bool(enabled):
         return None, "policy_disabled"
@@ -1082,7 +1196,9 @@ def _tick_size(price: int) -> int:
 def _pct_price_offset(base_price: int, offset_pct: float) -> int:
     if base_price <= 0:
         return 0
-    raw_price = int(round(float(base_price) * max(0.0, 1.0 - (float(offset_pct or 0.0) / 100.0))))
+    raw_price = int(
+        round(float(base_price) * max(0.0, 1.0 - (float(offset_pct or 0.0) / 100.0)))
+    )
     return clamp_price_to_tick(max(1, raw_price))
 
 
@@ -1102,7 +1218,9 @@ def apply_scale_in_split_order_policy(
     price_resolution = price_resolution if isinstance(price_resolution, dict) else {}
     quote_fields = quote_fields if isinstance(quote_fields, dict) else {}
     qty = _safe_int(base_order.get("qty"), 0)
-    add_type = str(action.get("add_type") or base_order.get("add_type") or "").strip().upper()
+    add_type = (
+        str(action.get("add_type") or base_order.get("add_type") or "").strip().upper()
+    )
     fields: dict[str, Any] = {
         "scale_in_split_order_policy_applied": False,
         "scale_in_split_order_original_qty": qty,
@@ -1114,7 +1232,9 @@ def apply_scale_in_split_order_policy(
     if qty <= 1:
         fields["scale_in_split_order_skip_reason"] = "qty_lte_1"
         return [base_order], fields
-    if _safe_bool(quote_fields.get("stale_quote_submit_block")) or _safe_bool(quote_fields.get("quote_stale_at_submit")):
+    if _safe_bool(quote_fields.get("stale_quote_submit_block")) or _safe_bool(
+        quote_fields.get("quote_stale_at_submit")
+    ):
         fields["scale_in_split_order_skip_reason"] = "stale_quote"
         return [base_order], fields
     policy, load_status = _load_policy_from_env(policy_file)
@@ -1134,7 +1254,13 @@ def apply_scale_in_split_order_policy(
     )
     base_order_price = _safe_int(base_order.get("price"), 0)
     order_type_code = str(base_order.get("order_type_code") or "")
-    market_order = base_order_price <= 0 and order_type_code in {"3", "03", "6", "06", "16"}
+    market_order = base_order_price <= 0 and order_type_code in {
+        "3",
+        "03",
+        "6",
+        "06",
+        "16",
+    }
     if base_price <= 0 and not market_order:
         fields["scale_in_split_order_skip_reason"] = "invalid_base_price"
         return [base_order], fields
@@ -1142,7 +1268,11 @@ def apply_scale_in_split_order_policy(
     bucket_policy = (policy.get("buckets") or {}).get(bucket)
     fallback_policy_applied = False
     if not isinstance(bucket_policy, dict):
-        bucket_policy = policy.get("default_bucket") if isinstance(policy.get("default_bucket"), dict) else None
+        bucket_policy = (
+            policy.get("default_bucket")
+            if isinstance(policy.get("default_bucket"), dict)
+            else None
+        )
     if not isinstance(bucket_policy, dict):
         bucket_policy = _runtime_default_bucket_policy(bucket)
         fallback_policy_applied = True
@@ -1160,17 +1290,21 @@ def apply_scale_in_split_order_policy(
     while len(offsets) < desired_legs:
         offsets.append(len(offsets))
     raw_pct_offsets = bucket_policy.get("price_offsets_pct")
-    pct_offsets = [
-        max(0.0, _safe_float(item, 0.0) or 0.0)
-        for item in raw_pct_offsets
-    ][:desired_legs] if isinstance(raw_pct_offsets, list) else []
+    pct_offsets = (
+        [max(0.0, _safe_float(item, 0.0) or 0.0) for item in raw_pct_offsets][
+            :desired_legs
+        ]
+        if isinstance(raw_pct_offsets, list)
+        else []
+    )
     while pct_offsets and len(pct_offsets) < desired_legs:
         pct_offsets.append(pct_offsets[-1])
     raw_weights = bucket_policy.get("qty_weights")
-    qty_weights = [
-        _safe_float(item, 0.0) or 0.0
-        for item in raw_weights
-    ] if isinstance(raw_weights, list) else []
+    qty_weights = (
+        [_safe_float(item, 0.0) or 0.0 for item in raw_weights]
+        if isinstance(raw_weights, list)
+        else []
+    )
     first_weight = _safe_float(bucket_policy.get("qty_weight_min"), 0.5) or 0.5
     quantities = (
         _split_qty_by_weights(qty, desired_legs, qty_weights)
@@ -1188,9 +1322,11 @@ def apply_scale_in_split_order_policy(
         price = (
             0
             if market_order
-            else _pct_price_offset(base_price, pct_offsets[idx])
-            if pct_offsets
-            else clamp_price_to_tick(max(1, base_price - (tick * offsets[idx])))
+            else (
+                _pct_price_offset(base_price, pct_offsets[idx])
+                if pct_offsets
+                else clamp_price_to_tick(max(1, base_price - (tick * offsets[idx])))
+            )
         )
         split_orders.append(
             {
@@ -1209,19 +1345,41 @@ def apply_scale_in_split_order_policy(
                 "scale_in_split_order_runtime_default_policy_applied": fallback_policy_applied,
                 "scale_in_split_order_market_order_applied": market_order,
                 "scale_in_split_order_price_offsets_ticks": (
-                    "market" if market_order else ",".join(str(item) for item in offsets)
+                    "market"
+                    if market_order
+                    else ",".join(str(item) for item in offsets)
                 ),
                 "scale_in_split_order_price_offsets_pct": (
-                    "market" if market_order else ",".join(str(item) for item in pct_offsets) if pct_offsets else ""
+                    "market"
+                    if market_order
+                    else (
+                        ",".join(str(item) for item in pct_offsets)
+                        if pct_offsets
+                        else ""
+                    )
                 ),
-                "scale_in_split_order_price_offset_ticks": "market" if market_order else offsets[idx],
-                "scale_in_split_order_price_offset_pct": "market" if market_order else pct_offsets[idx] if pct_offsets else "",
+                "scale_in_split_order_price_offset_ticks": (
+                    "market" if market_order else offsets[idx]
+                ),
+                "scale_in_split_order_price_offset_pct": (
+                    "market"
+                    if market_order
+                    else pct_offsets[idx] if pct_offsets else ""
+                ),
                 "split_price_offset_ticks": "market" if market_order else offsets[idx],
-                "split_price_offset_pct": "market" if market_order else pct_offsets[idx] if pct_offsets else "",
+                "split_price_offset_pct": (
+                    "market"
+                    if market_order
+                    else pct_offsets[idx] if pct_offsets else ""
+                ),
                 "split_leg_role": "primary" if idx == 0 else "passive",
                 "scale_in_split_order_qty_weight_min": first_weight,
-                "scale_in_split_order_qty_weight_max": _safe_float(bucket_policy.get("qty_weight_max"), first_weight),
-                "scale_in_split_order_qty_weights": ",".join(str(item) for item in qty_weights) if qty_weights else "",
+                "scale_in_split_order_qty_weight_max": _safe_float(
+                    bucket_policy.get("qty_weight_max"), first_weight
+                ),
+                "scale_in_split_order_qty_weights": (
+                    ",".join(str(item) for item in qty_weights) if qty_weights else ""
+                ),
             }
         )
     if sum(_safe_int(item.get("qty"), 0) for item in split_orders) != qty:
@@ -1249,11 +1407,17 @@ def apply_scale_in_split_order_policy(
                 "market" if market_order else ",".join(str(item) for item in offsets)
             ),
             "scale_in_split_order_price_offsets_pct": (
-                "market" if market_order else ",".join(str(item) for item in pct_offsets) if pct_offsets else ""
+                "market"
+                if market_order
+                else ",".join(str(item) for item in pct_offsets) if pct_offsets else ""
             ),
             "scale_in_split_order_qty_weight_min": first_weight,
-            "scale_in_split_order_qty_weight_max": _safe_float(bucket_policy.get("qty_weight_max"), first_weight),
-            "scale_in_split_order_qty_weights": ",".join(str(item) for item in qty_weights) if qty_weights else "",
+            "scale_in_split_order_qty_weight_max": _safe_float(
+                bucket_policy.get("qty_weight_max"), first_weight
+            ),
+            "scale_in_split_order_qty_weights": (
+                ",".join(str(item) for item in qty_weights) if qty_weights else ""
+            ),
         }
     )
     return split_orders, fields
@@ -1261,14 +1425,29 @@ def apply_scale_in_split_order_policy(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--date", "--target-date", dest="target_date", default=datetime.now().strftime("%Y-%m-%d"))
+    parser.add_argument(
+        "--date",
+        "--target-date",
+        dest="target_date",
+        default=datetime.now().strftime("%Y-%m-%d"),
+    )
     parser.add_argument("--no-write", action="store_true")
     args = parser.parse_args(argv)
     report = build_report(args.target_date)
     if not args.no_write:
         write_outputs(args.target_date, report)
     else:
-        print(json.dumps({key: value for key, value in report.items() if key != "policy_artifact"}, ensure_ascii=False, indent=2))
+        print(
+            json.dumps(
+                {
+                    key: value
+                    for key, value in report.items()
+                    if key != "policy_artifact"
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
     return 0
 
 

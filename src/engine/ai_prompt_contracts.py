@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from src.engine.ai_response_contracts import normalize_ai_reason_language
 
-
 # ==========================================
 # 1. Scalping system prompt with V2.0 tick-acceleration context.
 # ==========================================
@@ -169,7 +168,9 @@ def normalize_scalping_entry_price_result(result, *, fallback_price=0):
     if action not in {"USE_DEFENSIVE", "USE_REFERENCE", "IMPROVE_LIMIT", "SKIP"}:
         action = "USE_DEFENSIVE"
     try:
-        order_price = int(float(str(payload.get("order_price", 0)).replace(",", "") or 0))
+        order_price = int(
+            float(str(payload.get("order_price", 0)).replace(",", "") or 0)
+        )
     except Exception:
         order_price = 0
     if order_price <= 0:
@@ -184,7 +185,9 @@ def normalize_scalping_entry_price_result(result, *, fallback_price=0):
     except Exception:
         max_wait_sec = 90
     max_wait_sec = max(5, min(1200, max_wait_sec))
-    reason_contract = normalize_ai_reason_language(payload.get("reason") or "no_reason", max_len=240)
+    reason_contract = normalize_ai_reason_language(
+        payload.get("reason") or "no_reason", max_len=240
+    )
     return {
         "action": action,
         "order_price": order_price,
@@ -229,7 +232,9 @@ def normalize_condition_entry_from_scalping_result(result):
 def normalize_condition_exit_from_scalping_result(result):
     """Compatibility adapter: condition exit now reuses scalping holding/exit routing."""
     payload = result if isinstance(result, dict) else {}
-    action = str(payload.get("action_v2") or payload.get("action") or "HOLD").strip().upper()
+    action = (
+        str(payload.get("action_v2") or payload.get("action") or "HOLD").strip().upper()
+    )
     if action in {"DROP", "SELL"}:
         decision = "EXIT"
     elif action not in {"HOLD", "TRIM", "EXIT"}:
@@ -240,7 +245,9 @@ def normalize_condition_exit_from_scalping_result(result):
     return {
         "decision": decision,
         "confidence": _coerce_confidence_score(payload.get("score", 0), 0),
-        "trim_ratio": 0.5 if decision == "TRIM" else (1.0 if decision == "EXIT" else 0.0),
+        "trim_ratio": (
+            0.5 if decision == "TRIM" else (1.0 if decision == "EXIT" else 0.0)
+        ),
         "new_stop_price": 0,
         "reason_primary": reason,
         "warning": "",
@@ -339,11 +346,9 @@ Return JSON only:
 }
 """
 
-SCALPING_SYSTEM_PROMPT_75_CANARY = (
-    SCALPING_SYSTEM_PROMPT
-    .replace("80-100 BUY", "75-100 BUY")
-    .replace("50-79 WAIT", "50-74 WAIT")
-)
+SCALPING_SYSTEM_PROMPT_75_CANARY = SCALPING_SYSTEM_PROMPT.replace(
+    "80-100 BUY", "75-100 BUY"
+).replace("50-79 WAIT", "50-74 WAIT")
 
 SCALPING_BUY_RECOVERY_CANARY_PROMPT = """
 You are a low-latency BUY recovery classifier for WAIT 65-79 candidates.
@@ -458,7 +463,9 @@ SWING_AI_STRUCTURED_OUTPUT_EVAL_PROMPT_VARIANTS = [
 def swing_ai_structured_output_eval_prompt_contract() -> dict:
     return {
         "contract_id": "swing_ai_contract_structured_output_eval",
-        "prompt_variants": [dict(item) for item in SWING_AI_STRUCTURED_OUTPUT_EVAL_PROMPT_VARIANTS],
+        "prompt_variants": [
+            dict(item) for item in SWING_AI_STRUCTURED_OUTPUT_EVAL_PROMPT_VARIANTS
+        ],
         "decision_authority": "swing_ai_contract_eval_report_only",
         "runtime_effect": False,
         "allowed_runtime_apply": False,

@@ -1,0 +1,3 @@
+src/model/models_old/*.py whitespace=-blank-at-eol
+src/database/db_manager.py whitespace=-blank-at-eol
+src/scanners/final_ensemble_scanner.py whitespace=-blank-at-eol

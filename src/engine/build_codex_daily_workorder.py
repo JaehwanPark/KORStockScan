@@ -25,7 +25,6 @@ from src.engine.sync_docs_backlog_to_project import (
 )
 from src.utils.market_day import get_krx_trading_day_status
 
-
 GITHUB_GRAPHQL_URL = "https://api.github.com/graphql"
 RETRYABLE_GRAPHQL_HTTP_STATUS = {502, 503, 504}
 
@@ -101,7 +100,9 @@ def _local_today_iso() -> str:
     raw = os.getenv("CODEX_WORKORDER_TARGET_DATE", "").strip()
     if raw:
         return raw
-    tz_name = os.getenv("CODEX_WORKORDER_TIMEZONE", "Asia/Seoul").strip() or "Asia/Seoul"
+    tz_name = (
+        os.getenv("CODEX_WORKORDER_TIMEZONE", "Asia/Seoul").strip() or "Asia/Seoul"
+    )
     try:
         tz = ZoneInfo(tz_name)
     except Exception:
@@ -216,7 +217,9 @@ query($owner: String!, $number: Int!, $cursor: String) {
 """.strip()
 
 
-def _graphql_request(token: str, query: str, variables: dict[str, Any]) -> dict[str, Any]:
+def _graphql_request(
+    token: str, query: str, variables: dict[str, Any]
+) -> dict[str, Any]:
     payload = json.dumps({"query": query, "variables": variables}).encode("utf-8")
     req = request.Request(
         GITHUB_GRAPHQL_URL,
@@ -230,7 +233,9 @@ def _graphql_request(token: str, query: str, variables: dict[str, Any]) -> dict[
     )
     max_attempts = _env_int("CODEX_WORKORDER_GRAPHQL_MAX_ATTEMPTS", 4, minimum=1)
     timeout_sec = _env_int("CODEX_WORKORDER_GRAPHQL_TIMEOUT_SEC", 45, minimum=5)
-    retry_base_delay_sec = _env_float("CODEX_WORKORDER_GRAPHQL_RETRY_DELAY_SEC", 2.0, minimum=0.0)
+    retry_base_delay_sec = _env_float(
+        "CODEX_WORKORDER_GRAPHQL_RETRY_DELAY_SEC", 2.0, minimum=0.0
+    )
     body = ""
     for attempt in range(1, max_attempts + 1):
         try:
@@ -273,9 +278,13 @@ def _graphql_request(token: str, query: str, variables: dict[str, Any]) -> dict[
 
 
 def _project_node(data: dict[str, Any]) -> dict[str, Any]:
-    node = ((data.get("organization") or {}).get("projectV2")) or ((data.get("user") or {}).get("projectV2"))
+    node = ((data.get("organization") or {}).get("projectV2")) or (
+        (data.get("user") or {}).get("projectV2")
+    )
     if not node:
-        raise RuntimeError("project not found. check GH_PROJECT_OWNER / GH_PROJECT_NUMBER / token scope")
+        raise RuntimeError(
+            "project not found. check GH_PROJECT_OWNER / GH_PROJECT_NUMBER / token scope"
+        )
     return node
 
 
@@ -307,7 +316,16 @@ def _track_from_title_prefix(title: str) -> str:
     if not match:
         return ""
     value = match.group(1).strip()
-    if value.startswith(("Checklist", "RunbookOps", "RuntimeStability", "ScalpingLogic", "AIPrompt", "Plan")):
+    if value.startswith(
+        (
+            "Checklist",
+            "RunbookOps",
+            "RuntimeStability",
+            "ScalpingLogic",
+            "AIPrompt",
+            "Plan",
+        )
+    ):
         return value
     return ""
 
@@ -330,8 +348,12 @@ def _parse_project_item(
     url = str(content.get("url") or "").strip()
     body = str(content.get("body") or "")
     state = str(content.get("state") or "").strip()
-    assignees_nodes = ((content.get("assignees") or {}).get("nodes") or []) if content else []
-    assignees = ", ".join(str(n.get("login") or "").strip() for n in assignees_nodes if n.get("login"))
+    assignees_nodes = (
+        ((content.get("assignees") or {}).get("nodes") or []) if content else []
+    )
+    assignees = ", ".join(
+        str(n.get("login") or "").strip() for n in assignees_nodes if n.get("login")
+    )
     source, section, apply_target = _parse_body_metadata(body)
     if not apply_target:
         apply_target = "-"
@@ -355,11 +377,23 @@ def _parse_project_item(
                 slot = str(fv.get("name") or "").strip()
             elif field_name == time_window_field_name:
                 time_window = str(fv.get("name") or "").strip()
-        elif kind == "ProjectV2ItemFieldTextValue" and field_name == track_field_name and not track:
+        elif (
+            kind == "ProjectV2ItemFieldTextValue"
+            and field_name == track_field_name
+            and not track
+        ):
             track = str(fv.get("text") or "").strip()
-        elif kind == "ProjectV2ItemFieldTextValue" and field_name == slot_field_name and not slot:
+        elif (
+            kind == "ProjectV2ItemFieldTextValue"
+            and field_name == slot_field_name
+            and not slot
+        ):
             slot = str(fv.get("text") or "").strip()
-        elif kind == "ProjectV2ItemFieldTextValue" and field_name == time_window_field_name and not time_window:
+        elif (
+            kind == "ProjectV2ItemFieldTextValue"
+            and field_name == time_window_field_name
+            and not time_window
+        ):
             time_window = str(fv.get("text") or "").strip()
 
     if not track:
@@ -432,7 +466,9 @@ def fetch_project_tasks(
     slot_set = {_norm(s) for s in include_slots if s.strip()}
 
     while True:
-        data = _graphql_request(token, query, {"owner": owner, "number": number, "cursor": cursor})
+        data = _graphql_request(
+            token, query, {"owner": owner, "number": number, "cursor": cursor}
+        )
         project = _project_node(data)
         if not project_title:
             project_title = str(project.get("title") or "").strip()
@@ -527,7 +563,9 @@ def _open_managed_title_keys_for_target_date(target_date: str) -> set[str]:
     return keys
 
 
-def _filter_stale_same_day_managed_tasks(tasks: list[ProjectTask], target_date: str) -> list[ProjectTask]:
+def _filter_stale_same_day_managed_tasks(
+    tasks: list[ProjectTask], target_date: str
+) -> list[ProjectTask]:
     if not target_date:
         return tasks
     open_keys = _open_managed_title_keys_for_target_date(target_date)
@@ -612,7 +650,9 @@ def _target_date_compact(target_date: str | None) -> str:
     return raw.replace("-", "") if raw else "YYYYMMDD"
 
 
-def build_runbook_operational_checks(*, target_date: str | None, slots: list[str] | None) -> list[RunbookCheck]:
+def build_runbook_operational_checks(
+    *, target_date: str | None, slots: list[str] | None
+) -> list[RunbookCheck]:
     """Build runbook-derived Codex workorder checks without creating Project items."""
 
     compact = _target_date_compact(target_date)
@@ -676,7 +716,7 @@ def build_runbook_operational_checks(*, target_date: str | None, slots: list[str
                     "fail이면 detector별 details을 읽고 운영장애/계측/incident로 분류."
                 ),
                 forbidden="Sentinel 결과로 당일 runtime threshold 변경 금지. "
-                          "SystemErrorDetector 탐지 결과로 runtime threshold/spread/주문/재시작 변경 금지.",
+                "SystemErrorDetector 탐지 결과로 runtime threshold/spread/주문/재시작 변경 금지.",
             )
         )
     if (include_all or "postclose" in selected) and "POSTCLOSE" not in completed_slots:
@@ -718,9 +758,9 @@ def build_runbook_operational_checks(*, target_date: str | None, slots: list[str
                     "impact, next_action을 함께 남긴다. EV 손익은 control state의 primary 기준이 아니다."
                 ),
                 forbidden="postclose 실패 시 threshold 수동 변경이 아니라 같은 date wrapper 재실행/복구 우선. "
-                          "swing model retrain 결과로 스윙 dry-run 해제/브로커 주문 허용 금지. "
-                          "tuning monitoring은 threshold_cycle_postclose 완료 전 선행 산출물을 소비하지 않는다. "
-                          "SystemErrorDetector 결과로 runtime threshold/spread/주문 변경 금지.",
+                "swing model retrain 결과로 스윙 dry-run 해제/브로커 주문 허용 금지. "
+                "tuning monitoring은 threshold_cycle_postclose 완료 전 선행 산출물을 소비하지 않는다. "
+                "SystemErrorDetector 결과로 runtime threshold/spread/주문 변경 금지.",
             )
         )
     return checks
@@ -754,10 +794,16 @@ def render_markdown(
     lines.append("# Codex 일일 작업지시서")
     lines.append("")
     lines.append(f"- 생성시각: `{generated_at}`")
-    lines.append(f"- 프로젝트: `{owner}` / `#{project_number}` / `{project_title or '-'}`")
-    lines.append(f"- 기준일자: `{target_date or '-'}` / overdue 포함: `{include_overdue}`")
+    lines.append(
+        f"- 프로젝트: `{owner}` / `#{project_number}` / `{project_title or '-'}`"
+    )
+    lines.append(
+        f"- 기준일자: `{target_date or '-'}` / overdue 포함: `{include_overdue}`"
+    )
     if holiday_override:
-        lines.append(f"- 휴장일 재분류: `true` / 사유: `{holiday_reason or '-'}` / 슬롯정책: `all -> INTRADAY`")
+        lines.append(
+            f"- 휴장일 재분류: `true` / 사유: `{holiday_reason or '-'}` / 슬롯정책: `all -> INTRADAY`"
+        )
     lines.append(f"- 상태필터: `{', '.join(statuses) if statuses else '전체'}`")
     lines.append(f"- 슬롯필터: `{', '.join(slots) if slots else '전체'}`")
     duplicate_count = max(0, len(tasks) - len(unique_tasks))
@@ -768,7 +814,9 @@ def render_markdown(
     if duplicate_count:
         lines.append(f"- 중복축약건수: `{duplicate_count}`")
     if track_counts:
-        compact = ", ".join(f"{k}:{v}" for k, v in sorted(track_counts.items(), key=lambda kv: kv[0]))
+        compact = ", ".join(
+            f"{k}:{v}" for k, v in sorted(track_counts.items(), key=lambda kv: kv[0])
+        )
         lines.append(f"- Track 분포: `{compact}`")
     lines.append("")
 
@@ -860,7 +908,9 @@ def render_markdown(
     lines.append("```text")
     lines.append("아래 Project 항목을 오늘 작업 대상으로 처리해줘.")
     lines.append("원칙:")
-    lines.append("- 작업시간이 지났으나 반복적으로 실행해야하는 작업은 시간이 지났어도 확인해서 실행(필수)")
+    lines.append(
+        "- 작업시간이 지났으나 반복적으로 실행해야하는 작업은 시간이 지났어도 확인해서 실행(필수)"
+    )
     lines.append("- 판정, 근거, 다음 액션 순서로 보고")
     lines.append("- 관련 문서/체크리스트 동시 업데이트")
     lines.append("- 테스트/검증 결과 포함")
@@ -934,15 +984,21 @@ def build_daily_workorder(
     statuses = _split_csv(os.getenv("GH_CODEX_WORKORDER_STATUSES", "Todo,In Progress"))
     configured_slots = _split_csv(os.getenv("GH_CODEX_WORKORDER_SLOTS", ""))
     include_local_docs = _env_bool("CODEX_WORKORDER_INCLUDE_LOCAL_DOCS", True)
-    default_duration_min = _env_int("GH_PROJECT_DEFAULT_TIME_WINDOW_MINUTES", 30, minimum=5)
+    default_duration_min = _env_int(
+        "GH_PROJECT_DEFAULT_TIME_WINDOW_MINUTES", 30, minimum=5
+    )
     selected_slots = slots if slots is not None else configured_slots
     resolved_target_date = target_date or _local_today_iso()
     resolved_include_overdue = (
-        include_overdue if include_overdue is not None else _env_bool("CODEX_WORKORDER_INCLUDE_OVERDUE", True)
+        include_overdue
+        if include_overdue is not None
+        else _env_bool("CODEX_WORKORDER_INCLUDE_OVERDUE", True)
     )
-    effective_slots, holiday_override, holiday_reason = _resolve_slot_filters_for_target_date(
-        selected_slots=selected_slots,
-        target_date=resolved_target_date,
+    effective_slots, holiday_override, holiday_reason = (
+        _resolve_slot_filters_for_target_date(
+            selected_slots=selected_slots,
+            target_date=resolved_target_date,
+        )
     )
 
     project_title, tasks = fetch_project_tasks(
@@ -970,7 +1026,9 @@ def build_daily_workorder(
         )
         tasks.extend(local_doc_tasks)
     tasks = _filter_stale_same_day_managed_tasks(tasks, resolved_target_date)
-    runbook_checks = build_runbook_operational_checks(target_date=resolved_target_date, slots=effective_slots)
+    runbook_checks = build_runbook_operational_checks(
+        target_date=resolved_target_date, slots=effective_slots
+    )
     generated_at = datetime.now().astimezone().isoformat(timespec="seconds")
     markdown = render_markdown(
         owner=owner,
@@ -1008,12 +1066,28 @@ def build_daily_workorder(
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Build Codex daily workorder markdown from GitHub Project")
-    parser.add_argument("--output", default="tmp/codex_daily_workorder.md", help="Output markdown path")
-    parser.add_argument("--max-items", type=int, default=20, help="Max items in workorder")
-    parser.add_argument("--slot", action="append", default=[], help="Target slot filter (repeatable)")
-    parser.add_argument("--target-date", default="", help="Target due date in YYYY-MM-DD. Defaults to local today.")
-    parser.add_argument("--no-overdue", action="store_true", help="Exclude overdue items and keep only target date.")
+    parser = argparse.ArgumentParser(
+        description="Build Codex daily workorder markdown from GitHub Project"
+    )
+    parser.add_argument(
+        "--output", default="tmp/codex_daily_workorder.md", help="Output markdown path"
+    )
+    parser.add_argument(
+        "--max-items", type=int, default=20, help="Max items in workorder"
+    )
+    parser.add_argument(
+        "--slot", action="append", default=[], help="Target slot filter (repeatable)"
+    )
+    parser.add_argument(
+        "--target-date",
+        default="",
+        help="Target due date in YYYY-MM-DD. Defaults to local today.",
+    )
+    parser.add_argument(
+        "--no-overdue",
+        action="store_true",
+        help="Exclude overdue items and keep only target date.",
+    )
     args = parser.parse_args()
 
     slot_filter = [s.strip() for s in args.slot if s.strip()] or None

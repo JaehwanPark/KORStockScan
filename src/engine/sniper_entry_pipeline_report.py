@@ -9,11 +9,13 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from src.engine.ai_response_contracts import display_gatekeeper_action_label, normalize_gatekeeper_action_key
+from src.engine.ai_response_contracts import (
+    display_gatekeeper_action_label,
+    normalize_gatekeeper_action_key,
+)
 from src.engine.log_archive_service import iter_target_log_lines
 from src.utils.constants import LOGS_DIR, DATA_DIR
 from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
-
 
 _ENTRY_RE = re.compile(
     r"^\[(?P<timestamp>[^\]]+)\].*?\[ENTRY_PIPELINE\] "
@@ -134,7 +136,9 @@ def _parse_since_datetime(target_date: str, since_time: str | None) -> datetime 
 
 
 def _iter_target_lines(log_path: Path, *, target_date: str) -> list[str]:
-    return iter_target_log_lines([log_path], target_date=target_date, marker="[ENTRY_PIPELINE]")
+    return iter_target_log_lines(
+        [log_path], target_date=target_date, marker="[ENTRY_PIPELINE]"
+    )
 
 
 def _jsonl_path(target_date: str) -> Path:
@@ -241,9 +245,18 @@ def _ratio(numerator: int, denominator: int) -> float:
 def _classify_stage(stage: str) -> str:
     if stage in {"order_leg_sent", "order_bundle_submitted"}:
         return "submitted"
-    if stage.startswith("blocked_") or stage.endswith("_block") or stage.endswith("_failed"):
+    if (
+        stage.startswith("blocked_")
+        or stage.endswith("_block")
+        or stage.endswith("_failed")
+    ):
         return "blocked"
-    if stage in {"first_ai_wait", "entry_armed_expired", "entry_armed_expired_after_wait", "entry_arm_expired"}:
+    if stage in {
+        "first_ai_wait",
+        "entry_armed_expired",
+        "entry_armed_expired_after_wait",
+        "entry_arm_expired",
+    }:
         return "waiting"
     return "progress"
 
@@ -384,7 +397,9 @@ def _extract_gatekeeper_action(event: PipelineEvent) -> str:
         return display_gatekeeper_action_label(action)
     match = _GATEKEEPER_ACTION_RE.search(event.raw_line or "")
     if match:
-        return display_gatekeeper_action_label(str(match.group("action") or "").replace("|", " ").strip())
+        return display_gatekeeper_action_label(
+            str(match.group("action") or "").replace("|", " ").strip()
+        )
     return display_gatekeeper_action_label(action) if action else action
 
 
@@ -416,7 +431,9 @@ def _resolve_blocker_guide(gate: str) -> dict[str, str]:
         fallback = _BLOCKER_GUIDE.get("게이트키퍼 거부", {})
         return {
             "gate": gate_text,
-            "description": fallback.get("description", "운영 로그에서 상세 사유 확인 필요"),
+            "description": fallback.get(
+                "description", "운영 로그에서 상세 사유 확인 필요"
+            ),
             "check": fallback.get("check", "-"),
         }
 
@@ -428,51 +445,85 @@ def _resolve_blocker_guide(gate: str) -> dict[str, str]:
     }
 
 
-def _build_summary_flow(item_events: list[PipelineEvent], latest: PipelineEvent) -> list[dict]:
-    summary = [{"stage": "watching", "label": _display_stage_label("watching"), "kind": "start"}]
+def _build_summary_flow(
+    item_events: list[PipelineEvent], latest: PipelineEvent
+) -> list[dict]:
+    summary = [
+        {
+            "stage": "watching",
+            "label": _display_stage_label("watching"),
+            "kind": "start",
+        }
+    ]
     seen_passes: set[str] = set()
 
     for event in item_events:
         if event.stage in _SUMMARY_PASS_STAGES and event.stage not in seen_passes:
-            summary.append({
-                "stage": event.stage,
-                "label": _display_stage_label(event.stage),
-                "kind": "pass" if event.stage != "order_bundle_submitted" else "submitted",
-            })
+            summary.append(
+                {
+                    "stage": event.stage,
+                    "label": _display_stage_label(event.stage),
+                    "kind": (
+                        "pass"
+                        if event.stage != "order_bundle_submitted"
+                        else "submitted"
+                    ),
+                }
+            )
             seen_passes.add(event.stage)
 
     latest_class = _classify_stage(latest.stage)
     if latest_class == "blocked":
-        summary.append({
-            "stage": latest.stage,
-            "label": _display_stage_label(latest.stage),
-            "kind": "blocked",
-        })
+        summary.append(
+            {
+                "stage": latest.stage,
+                "label": _display_stage_label(latest.stage),
+                "kind": "blocked",
+            }
+        )
     elif latest_class == "waiting":
-        summary.append({
-            "stage": latest.stage,
-            "label": _display_stage_label(latest.stage),
-            "kind": "waiting",
-        })
+        summary.append(
+            {
+                "stage": latest.stage,
+                "label": _display_stage_label(latest.stage),
+                "kind": "waiting",
+            }
+        )
     elif latest.stage not in _SUMMARY_PASS_STAGES:
-        summary.append({
-            "stage": latest.stage,
-            "label": _display_stage_label(latest.stage),
-            "kind": "progress",
-        })
+        summary.append(
+            {
+                "stage": latest.stage,
+                "label": _display_stage_label(latest.stage),
+                "kind": "progress",
+            }
+        )
 
     compact: list[dict] = []
     for item in summary:
-        if compact and compact[-1]["stage"] == item["stage"] and compact[-1]["kind"] == item["kind"]:
+        if (
+            compact
+            and compact[-1]["stage"] == item["stage"]
+            and compact[-1]["kind"] == item["kind"]
+        ):
             continue
         compact.append(item)
     return compact
 
 
 def _build_pass_flow(item_events: list[PipelineEvent]) -> list[dict]:
-    flow = [{"stage": "watching", "label": _display_stage_label("watching"), "kind": "start"}]
+    flow = [
+        {
+            "stage": "watching",
+            "label": _display_stage_label("watching"),
+            "kind": "start",
+        }
+    ]
     anchor_idx = next(
-        (idx for idx, event in enumerate(item_events) if event.stage in _CONFIRMED_FLOW_ANCHOR_STAGES),
+        (
+            idx
+            for idx, event in enumerate(item_events)
+            if event.stage in _CONFIRMED_FLOW_ANCHOR_STAGES
+        ),
         None,
     )
     if anchor_idx is None:
@@ -482,13 +533,20 @@ def _build_pass_flow(item_events: list[PipelineEvent]) -> list[dict]:
     for idx, event in enumerate(item_events):
         if event.stage not in _SUMMARY_PASS_STAGES or event.stage in seen_passes:
             continue
-        if idx < anchor_idx and event.stage in {"strength_momentum_pass", "dynamic_vpw_override_pass"}:
+        if idx < anchor_idx and event.stage in {
+            "strength_momentum_pass",
+            "dynamic_vpw_override_pass",
+        }:
             continue
-        flow.append({
-            "stage": event.stage,
-            "label": _display_stage_label(event.stage),
-            "kind": "pass" if event.stage != "order_bundle_submitted" else "submitted",
-        })
+        flow.append(
+            {
+                "stage": event.stage,
+                "label": _display_stage_label(event.stage),
+                "kind": (
+                    "pass" if event.stage != "order_bundle_submitted" else "submitted"
+                ),
+            }
+        )
         seen_passes.add(event.stage)
     return flow
 
@@ -508,7 +566,11 @@ def _build_latest_status(latest: PipelineEvent) -> dict:
 
 def _build_confirmed_failure(item_events: list[PipelineEvent]) -> dict | None:
     anchor_idx = next(
-        (idx for idx, event in enumerate(item_events) if event.stage in _CONFIRMED_FLOW_ANCHOR_STAGES),
+        (
+            idx
+            for idx, event in enumerate(item_events)
+            if event.stage in _CONFIRMED_FLOW_ANCHOR_STAGES
+        ),
         None,
     )
     if anchor_idx is None:
@@ -560,7 +622,11 @@ def _build_failure_details(event: PipelineEvent) -> list[dict[str, str]]:
 
 def _build_precheck_passes(item_events: list[PipelineEvent]) -> list[dict]:
     anchor_idx = next(
-        (idx for idx, event in enumerate(item_events) if event.stage in _CONFIRMED_FLOW_ANCHOR_STAGES),
+        (
+            idx
+            for idx, event in enumerate(item_events)
+            if event.stage in _CONFIRMED_FLOW_ANCHOR_STAGES
+        ),
         None,
     )
     if anchor_idx is not None:
@@ -574,11 +640,13 @@ def _build_precheck_passes(item_events: list[PipelineEvent]) -> list[dict]:
         if event.stage in seen:
             continue
         seen.add(event.stage)
-        precheck_stages.append({
-            "stage": event.stage,
-            "label": _display_stage_label(event.stage),
-            "kind": "pass",
-        })
+        precheck_stages.append(
+            {
+                "stage": event.stage,
+                "label": _display_stage_label(event.stage),
+                "kind": "pass",
+            }
+        )
     return precheck_stages
 
 
@@ -598,7 +666,12 @@ def _latest_attempt_events(item_events: list[PipelineEvent]) -> list[PipelineEve
 
     for event in item_events:
         record_id = _event_record_id(event)
-        record_changed = bool(current and record_id and current_record_id and record_id != current_record_id)
+        record_changed = bool(
+            current
+            and record_id
+            and current_record_id
+            and record_id != current_record_id
+        )
         should_rollover = record_changed or (
             segment_terminated and event.stage not in _ATTEMPT_AUXILIARY_STAGES
         )
@@ -626,14 +699,18 @@ def _latest_attempt_events(item_events: list[PipelineEvent]) -> list[PipelineEve
     return segments[-1] if segments else item_events
 
 
-def _find_latest_gatekeeper_event(item_events: list[PipelineEvent]) -> PipelineEvent | None:
+def _find_latest_gatekeeper_event(
+    item_events: list[PipelineEvent],
+) -> PipelineEvent | None:
     for event in reversed(item_events):
         if event.stage == "blocked_gatekeeper_reject":
             return event
     return None
 
 
-def build_entry_pipeline_flow_report(target_date: str, since_time: str | None = None, top_n: int = 20) -> dict:
+def build_entry_pipeline_flow_report(
+    target_date: str, since_time: str | None = None, top_n: int = 20
+) -> dict:
     log_path = LOGS_DIR / "sniper_state_handlers_info.log"
     # ENTRY_PIPELINE는 구조화 JSONL을 우선 사용한다.
     # 텍스트 로그는 배포/운영 환경에 따라 marker가 빠질 수 있어 fallback으로만 유지한다.
@@ -683,18 +760,32 @@ def build_entry_pipeline_flow_report(target_date: str, since_time: str | None = 
             order_bundle_submitted_events += 1
         elif event.stage == "latency_block":
             latency_reason_counts[str(event.fields.get("reason") or "-")] += 1
-            raw_danger_reasons = str(event.fields.get("latency_danger_reasons") or "").strip()
+            raw_danger_reasons = str(
+                event.fields.get("latency_danger_reasons") or ""
+            ).strip()
             if raw_danger_reasons:
                 for reason in raw_danger_reasons.split(","):
                     clean = str(reason or "").strip()
                     if clean:
                         latency_danger_reason_counts[clean] += 1
-            if str(event.fields.get("quote_stale") or "").strip().lower() in {"false", "0", "no"}:
+            if str(event.fields.get("quote_stale") or "").strip().lower() in {
+                "false",
+                "0",
+                "no",
+            }:
                 quote_fresh_latency_blocks += 1
         elif event.stage == "latency_pass":
-            if str(event.fields.get("quote_stale") or "").strip().lower() in {"false", "0", "no"}:
+            if str(event.fields.get("quote_stale") or "").strip().lower() in {
+                "false",
+                "0",
+                "no",
+            }:
                 quote_fresh_latency_passes += 1
-        elif event.stage in {"entry_armed_expired", "entry_armed_expired_after_wait", "entry_arm_expired"}:
+        elif event.stage in {
+            "entry_armed_expired",
+            "entry_armed_expired_after_wait",
+            "entry_arm_expired",
+        }:
             expired_armed_counts[event.stage] += 1
 
     for key, item_events in stock_events.items():
@@ -730,7 +821,8 @@ def build_entry_pipeline_flow_report(target_date: str, since_time: str | None = 
                 "time": replay_time,
                 "action": latest_gatekeeper_event.fields.get("action") or "",
                 "action_key": normalize_gatekeeper_action_key(
-                    latest_gatekeeper_event.fields.get("action_key") or latest_gatekeeper_event.fields.get("action")
+                    latest_gatekeeper_event.fields.get("action_key")
+                    or latest_gatekeeper_event.fields.get("action")
                 ),
                 "url": (
                     f"/gatekeeper-replay?date={target_date}&code={latest.code}"
@@ -742,30 +834,41 @@ def build_entry_pipeline_flow_report(target_date: str, since_time: str | None = 
                 ),
             }
 
-        per_stock_rows.append({
-            "name": latest.name,
-            "code": latest.code,
-            "record_id": _event_record_id(latest) or None,
-            "attempt_started_at": latest_events[0].timestamp if latest_events else latest.timestamp,
-            "latest_timestamp": latest.timestamp,
-            "latest_stage": latest.stage,
-            "latest_stage_label": _display_stage_label(latest.stage),
-            "stage_class": stage_class,
-            "latest_reason": latest_status["reason"],
-            "flow": compact_flow,
-            "pass_flow": pass_flow,
-            "precheck_passes": _build_precheck_passes(latest_events),
-            "latest_status": latest_status,
-            "confirmed_failure": _build_confirmed_failure(latest_events),
-            "gatekeeper_replay": gatekeeper_replay,
-            "summary_flow": _build_summary_flow(latest_events, latest),
-            "events": [_event_to_row(event) for event in latest_events[-min(len(latest_events), 20):]],
-        })
+        per_stock_rows.append(
+            {
+                "name": latest.name,
+                "code": latest.code,
+                "record_id": _event_record_id(latest) or None,
+                "attempt_started_at": (
+                    latest_events[0].timestamp if latest_events else latest.timestamp
+                ),
+                "latest_timestamp": latest.timestamp,
+                "latest_stage": latest.stage,
+                "latest_stage_label": _display_stage_label(latest.stage),
+                "stage_class": stage_class,
+                "latest_reason": latest_status["reason"],
+                "flow": compact_flow,
+                "pass_flow": pass_flow,
+                "precheck_passes": _build_precheck_passes(latest_events),
+                "latest_status": latest_status,
+                "confirmed_failure": _build_confirmed_failure(latest_events),
+                "gatekeeper_replay": gatekeeper_replay,
+                "summary_flow": _build_summary_flow(latest_events, latest),
+                "events": [
+                    _event_to_row(event)
+                    for event in latest_events[-min(len(latest_events), 20) :]
+                ],
+            }
+        )
 
     per_stock_rows.sort(key=lambda row: row["latest_timestamp"], reverse=True)
-    budget_pass_stocks = sum(1 for row in per_stock_rows if "budget_pass" in row["flow"])
+    budget_pass_stocks = sum(
+        1 for row in per_stock_rows if "budget_pass" in row["flow"]
+    )
     budget_pass_to_submitted_stocks = sum(
-        1 for row in per_stock_rows if ("budget_pass" in row["flow"] and row["stage_class"] == "submitted")
+        1
+        for row in per_stock_rows
+        if ("budget_pass" in row["flow"] and row["stage_class"] == "submitted")
     )
     fresh_quote_total = quote_fresh_latency_passes + quote_fresh_latency_blocks
 
@@ -777,19 +880,31 @@ def build_entry_pipeline_flow_report(target_date: str, since_time: str | None = 
         "metrics": {
             "total_events": len(events),
             "tracked_stocks": len(stock_events),
-            "submitted_stocks": sum(1 for row in per_stock_rows if row["stage_class"] == "submitted"),
-            "blocked_stocks": sum(1 for row in per_stock_rows if row["stage_class"] == "blocked"),
-            "waiting_stocks": sum(1 for row in per_stock_rows if row["stage_class"] == "waiting"),
+            "submitted_stocks": sum(
+                1 for row in per_stock_rows if row["stage_class"] == "submitted"
+            ),
+            "blocked_stocks": sum(
+                1 for row in per_stock_rows if row["stage_class"] == "blocked"
+            ),
+            "waiting_stocks": sum(
+                1 for row in per_stock_rows if row["stage_class"] == "waiting"
+            ),
             "budget_pass_stocks": int(budget_pass_stocks),
             "budget_pass_to_submitted_stocks": int(budget_pass_to_submitted_stocks),
-            "budget_pass_to_submitted_rate": _ratio(budget_pass_to_submitted_stocks, budget_pass_stocks),
+            "budget_pass_to_submitted_rate": _ratio(
+                budget_pass_to_submitted_stocks, budget_pass_stocks
+            ),
             "budget_pass_events": int(budget_pass_events),
             "order_bundle_submitted_events": int(order_bundle_submitted_events),
-            "budget_pass_event_to_submitted_rate": _ratio(order_bundle_submitted_events, budget_pass_events),
+            "budget_pass_event_to_submitted_rate": _ratio(
+                order_bundle_submitted_events, budget_pass_events
+            ),
             "latency_block_events": int(sum(latency_reason_counts.values())),
             "quote_fresh_latency_blocks": int(quote_fresh_latency_blocks),
             "quote_fresh_latency_passes": int(quote_fresh_latency_passes),
-            "quote_fresh_latency_pass_rate": _ratio(quote_fresh_latency_passes, fresh_quote_total),
+            "quote_fresh_latency_pass_rate": _ratio(
+                quote_fresh_latency_passes, fresh_quote_total
+            ),
             "expired_armed_total": int(sum(expired_armed_counts.values())),
         },
         "latency_reason_breakdown": [
@@ -818,9 +933,15 @@ def build_entry_pipeline_flow_report(target_date: str, since_time: str | None = 
         ],
         "sections": {
             "recent_stocks": per_stock_rows[:top_n],
-            "blocked_stocks": [row for row in per_stock_rows if row["stage_class"] == "blocked"][:top_n],
-            "submitted_stocks": [row for row in per_stock_rows if row["stage_class"] == "submitted"][:top_n],
-            "waiting_stocks": [row for row in per_stock_rows if row["stage_class"] == "waiting"][:top_n],
+            "blocked_stocks": [
+                row for row in per_stock_rows if row["stage_class"] == "blocked"
+            ][:top_n],
+            "submitted_stocks": [
+                row for row in per_stock_rows if row["stage_class"] == "submitted"
+            ][:top_n],
+            "waiting_stocks": [
+                row for row in per_stock_rows if row["stage_class"] == "waiting"
+            ][:top_n],
         },
     }
     return report

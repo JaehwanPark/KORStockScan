@@ -15,7 +15,6 @@ from src.engine.error_detectors.base import (
 from src.utils.constants import LOGS_DIR, PROJECT_ROOT, TRADING_RULES
 from src.utils import kiwoom_utils
 
-
 SCAN_STATE_PATH = PROJECT_ROOT / "tmp" / "error_detector_kiwoom_auth_8005_state.json"
 RESTART_FLAG_PATH = PROJECT_ROOT / "restart.flag"
 
@@ -54,7 +53,9 @@ def _cooldown_sec() -> int:
 
 
 def _daily_fail_threshold() -> int:
-    return int(getattr(TRADING_RULES, "KIWOOM_AUTH_8005_DAILY_RESTART_FAIL_THRESHOLD", 3) or 3)
+    return int(
+        getattr(TRADING_RULES, "KIWOOM_AUTH_8005_DAILY_RESTART_FAIL_THRESHOLD", 3) or 3
+    )
 
 
 def _get_target_log_files() -> list[Path]:
@@ -161,7 +162,9 @@ class KiwoomAuth8005RestartDetector(BaseDetector):
 
         return self._handle_matches(state, details, matches)
 
-    def _handle_matches(self, state: dict, details: dict, matches: list[dict]) -> DetectionResult:
+    def _handle_matches(
+        self, state: dict, details: dict, matches: list[dict]
+    ) -> DetectionResult:
         now = _now_ts()
         today = _today_str()
         if state.get("restart_count_date") != today:
@@ -181,7 +184,9 @@ class KiwoomAuth8005RestartDetector(BaseDetector):
 
         if not self.dry_run:
             try:
-                cache_invalidated = kiwoom_utils.invalidate_kiwoom_token_cache(reason="error_detector_auth_8005")
+                cache_invalidated = kiwoom_utils.invalidate_kiwoom_token_cache(
+                    reason="error_detector_auth_8005"
+                )
             except Exception as exc:
                 details["token_cache_invalidation_error"] = str(exc)
 
@@ -223,12 +228,12 @@ class KiwoomAuth8005RestartDetector(BaseDetector):
             )
             action = "Stop the restart loop. Verify Kiwoom token issuance, account API auth, and WS/REST recovery manually."
         elif suppressed:
-            summary = (
-                "Fresh Kiwoom auth 8005 detected, but restart.flag creation was suppressed by cooldown."
-            )
+            summary = "Fresh Kiwoom auth 8005 detected, but restart.flag creation was suppressed by cooldown."
             action = "Cooldown is active. Verify the last graceful restart completed and check WS/REST recovery."
         elif self.dry_run:
-            summary = "Fresh Kiwoom auth 8005 detected; dry-run would create restart.flag."
+            summary = (
+                "Fresh Kiwoom auth 8005 detected; dry-run would create restart.flag."
+            )
             action = "Run live detector or allow daemon/cron to create restart.flag if this is a runtime incident."
         else:
             summary = "Fresh Kiwoom auth 8005 detected; restart.flag created for graceful bot restart."
@@ -266,7 +271,10 @@ class KiwoomAuth8005RestartDetector(BaseDetector):
         if file_size <= last_pos:
             return [], last_pos
 
-        max_bytes = int(getattr(TRADING_RULES, "KIWOOM_AUTH_8005_SCAN_MAX_BYTES", 512_000) or 512_000)
+        max_bytes = int(
+            getattr(TRADING_RULES, "KIWOOM_AUTH_8005_SCAN_MAX_BYTES", 512_000)
+            or 512_000
+        )
         try:
             with open(log_path, "r", encoding="utf-8", errors="replace") as f:
                 f.seek(max(last_pos, file_size - max_bytes))
@@ -304,4 +312,6 @@ class KiwoomAuth8005RestartDetector(BaseDetector):
     @staticmethod
     def _save_state(state: dict) -> None:
         SCAN_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        SCAN_STATE_PATH.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+        SCAN_STATE_PATH.write_text(
+            json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8"
+        )

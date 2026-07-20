@@ -36243,9 +36243,7 @@ def _evaluate_scalp_trailing_continuation_recheck(
     large_sell_state = (
         "confirmed_sell"
         if large_sell_print
-        else "confirmed_clear"
-        if feature_context_usable
-        else "unknown"
+        else "confirmed_clear" if feature_context_usable else "unknown"
     )
     micro_supported, micro_support_fields = _holding_flow_max_defer_micro_support(
         ws_data,
@@ -36393,17 +36391,13 @@ def _evaluate_scalp_trailing_continuation_recheck(
                 "quote_recovery_best_ask": rest_best_ask,
                 "quote_recovery_executable_sell_price": executable_sell_price,
                 "quote_recovery_spread_bps": (
-                    f"{rest_spread_bps:.3f}"
-                    if rest_spread_bps != float("inf")
-                    else "-"
+                    f"{rest_spread_bps:.3f}" if rest_spread_bps != float("inf") else "-"
                 ),
                 **quote_fields,
             }
         )
 
-    eligible = bool(
-        shallow_eligible or high_peak_eligible or quote_recovery_eligible
-    )
+    eligible = bool(shallow_eligible or high_peak_eligible or quote_recovery_eligible)
     if high_peak_eligible:
         recheck_lane = "high_peak"
     elif shallow_eligible:

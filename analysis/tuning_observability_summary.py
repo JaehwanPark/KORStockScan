@@ -7,7 +7,6 @@ import json
 from pathlib import Path
 from typing import Any
 
-
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SNAPSHOT_DIR = PROJECT_ROOT / "data" / "report" / "monitor_snapshots"
 SCHEMA_VERSION = 3
@@ -62,7 +61,9 @@ def _load_json(path: Path) -> Any | None:
         return None
 
 
-def _load_snapshot_with_status(kind: str, target_date: str) -> tuple[dict[str, Any], dict[str, Any]]:
+def _load_snapshot_with_status(
+    kind: str, target_date: str
+) -> tuple[dict[str, Any], dict[str, Any]]:
     for suffix in (".json", ".json.gz"):
         path = SNAPSHOT_DIR / f"{kind}_{target_date}{suffix}"
         if path.exists():
@@ -214,7 +215,9 @@ def _observability_order(finding: dict[str, Any]) -> dict[str, Any]:
         "priority": 8 if str(finding.get("severity")) == "fail" else 6,
         "route": "source_contract_gap",
         "confidence": "deterministic_source_contract",
-        "intent": str(finding.get("reason") or "Close tuning observability source contract gap."),
+        "intent": str(
+            finding.get("reason") or "Close tuning observability source contract gap."
+        ),
         "expected_ev_effect": "Improve report/source-quality handoff without runtime mutation.",
         "evidence": [json.dumps(finding, ensure_ascii=False, sort_keys=True)],
         "files_likely_touched": ["analysis/tuning_observability_summary.py"],
@@ -238,10 +241,18 @@ def build_tuning_observability_summary(
     analysis_start: str,
     analysis_end: str,
 ) -> dict[str, Any]:
-    performance, performance_status = _load_snapshot_with_status("performance_tuning", target_date)
-    wait6579, wait6579_status = _load_snapshot_with_status("wait6579_ev_cohort", target_date)
-    trade_review, trade_review_status = _load_snapshot_with_status("trade_review", target_date)
-    post_sell, post_sell_status = _load_snapshot_with_status("post_sell_feedback", target_date)
+    performance, performance_status = _load_snapshot_with_status(
+        "performance_tuning", target_date
+    )
+    wait6579, wait6579_status = _load_snapshot_with_status(
+        "wait6579_ev_cohort", target_date
+    )
+    trade_review, trade_review_status = _load_snapshot_with_status(
+        "trade_review", target_date
+    )
+    post_sell, post_sell_status = _load_snapshot_with_status(
+        "post_sell_feedback", target_date
+    )
     source_status = {
         "performance_tuning": performance_status,
         "wait6579_ev_cohort": wait6579_status,
@@ -263,7 +274,8 @@ def build_tuning_observability_summary(
     code_improvement_orders = [
         _observability_order(finding)
         for finding in source_contract_findings
-        if finding.get("finding_type") in {"missing", "unreadable", "non_dict_json", "required_field_missing"}
+        if finding.get("finding_type")
+        in {"missing", "unreadable", "non_dict_json", "required_field_missing"}
     ]
 
     perf_metrics = performance.get("metrics", {}) or {}
@@ -286,7 +298,11 @@ def build_tuning_observability_summary(
 
     blocked_ai_score = terminal_map.get("blocked_ai_score", 0)
     total_candidates = _safe_int(wait_metrics.get("total_candidates"))
-    blocked_ai_score_share = round((blocked_ai_score / total_candidates) * 100, 1) if total_candidates else 0.0
+    blocked_ai_score_share = (
+        round((blocked_ai_score / total_candidates) * 100, 1)
+        if total_candidates
+        else 0.0
+    )
 
     summary = {
         "schema_version": SCHEMA_VERSION,
@@ -317,14 +333,26 @@ def build_tuning_observability_summary(
         },
         "entry_funnel": {
             "gatekeeper_decisions": _safe_int(perf_metrics.get("gatekeeper_decisions")),
-            "gatekeeper_eval_ms_p95": _safe_float(perf_metrics.get("gatekeeper_eval_ms_p95")),
-            "gatekeeper_lock_wait_ms_p95": _safe_float(perf_metrics.get("gatekeeper_lock_wait_ms_p95")),
-            "gatekeeper_model_call_ms_p95": _safe_float(perf_metrics.get("gatekeeper_model_call_ms_p95")),
+            "gatekeeper_eval_ms_p95": _safe_float(
+                perf_metrics.get("gatekeeper_eval_ms_p95")
+            ),
+            "gatekeeper_lock_wait_ms_p95": _safe_float(
+                perf_metrics.get("gatekeeper_lock_wait_ms_p95")
+            ),
+            "gatekeeper_model_call_ms_p95": _safe_float(
+                perf_metrics.get("gatekeeper_model_call_ms_p95")
+            ),
             "budget_pass_events": _safe_int(perf_metrics.get("budget_pass_events")),
-            "submitted_events": _safe_int(perf_metrics.get("order_bundle_submitted_events")),
-            "budget_pass_to_submitted_rate": _safe_float(perf_metrics.get("budget_pass_to_submitted_rate")),
+            "submitted_events": _safe_int(
+                perf_metrics.get("order_bundle_submitted_events")
+            ),
+            "budget_pass_to_submitted_rate": _safe_float(
+                perf_metrics.get("budget_pass_to_submitted_rate")
+            ),
             "latency_block_events": _safe_int(perf_metrics.get("latency_block_events")),
-            "quote_fresh_latency_blocks": _safe_int(perf_metrics.get("quote_fresh_latency_blocks")),
+            "quote_fresh_latency_blocks": _safe_int(
+                perf_metrics.get("quote_fresh_latency_blocks")
+            ),
             "full_fill_events": _safe_int(perf_metrics.get("full_fill_events")),
             "partial_fill_events": _safe_int(perf_metrics.get("partial_fill_events")),
             "completed_trades": _safe_int(trade_metrics.get("completed_trades")),
@@ -332,10 +360,16 @@ def build_tuning_observability_summary(
         },
         "buy_recovery_canary": {
             "total_candidates": total_candidates,
-            "recovery_check_candidates": _safe_int(preflight.get("recovery_check_candidates")),
-            "recovery_promoted_candidates": _safe_int(preflight.get("recovery_promoted_candidates")),
+            "recovery_check_candidates": _safe_int(
+                preflight.get("recovery_check_candidates")
+            ),
+            "recovery_promoted_candidates": _safe_int(
+                preflight.get("recovery_promoted_candidates")
+            ),
             "submitted_candidates": _safe_int(preflight.get("submitted_candidates")),
-            "latency_block_candidates": _safe_int(preflight.get("latency_block_candidates")),
+            "latency_block_candidates": _safe_int(
+                preflight.get("latency_block_candidates")
+            ),
             "blocked_ai_score_samples": blocked_ai_score,
             "blocked_ai_score_share_pct": blocked_ai_score_share,
             "terminal_blockers": terminal_rows,
@@ -345,7 +379,9 @@ def build_tuning_observability_summary(
             "evaluated_candidates": _safe_int(post_metrics.get("evaluated_candidates")),
             "missed_upside_rate": _safe_float(post_metrics.get("missed_upside_rate")),
             "good_exit_rate": _safe_float(post_metrics.get("good_exit_rate")),
-            "capture_efficiency_avg_pct": _safe_float(post_metrics.get("capture_efficiency_avg_pct")),
+            "capture_efficiency_avg_pct": _safe_float(
+                post_metrics.get("capture_efficiency_avg_pct")
+            ),
         },
     }
 
@@ -379,7 +415,10 @@ def build_tuning_observability_summary(
                 ),
             }
         )
-    if summary["buy_recovery_canary"]["recovery_promoted_candidates"] > 0 and summary["buy_recovery_canary"]["submitted_candidates"] == 0:
+    if (
+        summary["buy_recovery_canary"]["recovery_promoted_candidates"] > 0
+        and summary["buy_recovery_canary"]["submitted_candidates"] == 0
+    ):
         findings.append(
             {
                 "label": "Prompt improved but submit disconnected",
@@ -402,7 +441,10 @@ def build_tuning_observability_summary(
                 ),
             }
         )
-    if summary["entry_funnel"]["budget_pass_events"] > 0 and summary["entry_funnel"]["submitted_events"] == 0:
+    if (
+        summary["entry_funnel"]["budget_pass_events"] > 0
+        and summary["entry_funnel"]["submitted_events"] == 0
+    ):
         findings.append(
             {
                 "label": "Budget pass without submit",
@@ -425,11 +467,17 @@ def build_tuning_observability_summary(
 
     summary["priority_findings"] = findings
     summary["source_presence"] = {
-        name: bool(status.get("present") and status.get("json_valid") and status.get("type_valid"))
+        name: bool(
+            status.get("present")
+            and status.get("json_valid")
+            and status.get("type_valid")
+        )
         for name, status in source_status.items()
     }
     summary["source_quality"] = {
-        "status": source_contract_status if source_contract_status != "pass" else "pass",
+        "status": (
+            source_contract_status if source_contract_status != "pass" else "pass"
+        ),
         "findings": source_quality_findings,
         "source_contract_findings": source_contract_findings,
         "sources": source_status,
@@ -453,7 +501,9 @@ def write_tuning_observability_outputs(
     output_dir.mkdir(parents=True, exist_ok=True)
     json_path = output_dir / "tuning_observability_summary.json"
     md_path = output_dir / "tuning_observability_summary.md"
-    json_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
 
     lines = [
         "# Tuning Observability Summary",

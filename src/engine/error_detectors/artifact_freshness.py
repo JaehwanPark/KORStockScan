@@ -556,13 +556,17 @@ class ArtifactFreshnessDetector(BaseDetector):
 
             past_window_end = False
             if we is not None:
-                window_end = now_dt.replace(hour=we[0], minute=we[1], second=0, microsecond=0)
+                window_end = now_dt.replace(
+                    hour=we[0], minute=we[1], second=0, microsecond=0
+                )
                 past_window_end = now_dt >= window_end
             exists = artifact_path.exists()
             grace_sec = int(artifact.get("window_grace_sec") or 0)
             in_startup_grace = False
             if grace_sec > 0 and ws and not past_window_end:
-                window_start = now_dt.replace(hour=ws[0], minute=ws[1], second=0, microsecond=0)
+                window_start = now_dt.replace(
+                    hour=ws[0], minute=ws[1], second=0, microsecond=0
+                )
                 elapsed_from_start = (now_dt - window_start).total_seconds()
                 in_startup_grace = 0 <= elapsed_from_start <= grace_sec
             if not exists and in_startup_grace:
@@ -589,16 +593,24 @@ class ArtifactFreshnessDetector(BaseDetector):
                     today,
                 )
                 if in_progress_cron and not past_window_end:
-                    warnings.append(f"{aid}: upstream cron in progress; artifact not generated yet")
+                    warnings.append(
+                        f"{aid}: upstream cron in progress; artifact not generated yet"
+                    )
                     details[f"{aid}_status"] = "warning"
                     details[f"{aid}_upstream_status"] = "in_progress"
                     continue
                 if (
                     in_progress_cron
                     and past_window_end
-                    and bool(artifact.get("allow_missing_after_window_while_cron_in_progress"))
+                    and bool(
+                        artifact.get(
+                            "allow_missing_after_window_while_cron_in_progress"
+                        )
+                    )
                 ):
-                    warnings.append(f"{aid}: upstream cron still in progress after window end")
+                    warnings.append(
+                        f"{aid}: upstream cron still in progress after window end"
+                    )
                     details[f"{aid}_status"] = "warning"
                     details[f"{aid}_upstream_status"] = "in_progress_after_window"
                     continue
@@ -632,7 +644,9 @@ class ArtifactFreshnessDetector(BaseDetector):
                     warnings.append(message)
                     details[f"{aid}_status"] = "warning"
                 continue
-            status_warning = self._validate_json_status(artifact, artifact_path, details)
+            status_warning = self._validate_json_status(
+                artifact, artifact_path, details
+            )
             if status_warning:
                 if critical:
                     issues.append(status_warning)
@@ -718,15 +732,28 @@ class ArtifactFreshnessDetector(BaseDetector):
         if not log_path.exists():
             return False
         try:
-            lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-200:]
+            lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()[
+                -200:
+            ]
         except OSError:
             return False
-        today_lines = [line for line in lines if today in line or f"target_date={today}" in line]
+        today_lines = [
+            line for line in lines if today in line or f"target_date={today}" in line
+        ]
         if not today_lines:
             return False
         has_start = any("[START]" in line or "[BEGIN]" in line for line in today_lines)
-        has_done = any("[DONE]" in line or "[OK]" in line or "[SUCCESS]" in line or "[COMPLETED]" in line for line in today_lines)
-        has_fail = any("[FAIL]" in line or "[ERROR]" in line or "[CRITICAL]" in line for line in today_lines)
+        has_done = any(
+            "[DONE]" in line
+            or "[OK]" in line
+            or "[SUCCESS]" in line
+            or "[COMPLETED]" in line
+            for line in today_lines
+        )
+        has_fail = any(
+            "[FAIL]" in line or "[ERROR]" in line or "[CRITICAL]" in line
+            for line in today_lines
+        )
         if not has_start or has_done:
             return False
         if has_fail:
@@ -738,7 +765,9 @@ class ArtifactFreshnessDetector(BaseDetector):
         patterns_raw = config.get("process_patterns")
         if not isinstance(patterns_raw, list):
             return False
-        patterns = [str(pattern).strip() for pattern in patterns_raw if str(pattern).strip()]
+        patterns = [
+            str(pattern).strip() for pattern in patterns_raw if str(pattern).strip()
+        ]
         if not patterns:
             return False
         proc_root = Path("/proc")
@@ -757,9 +786,14 @@ class ArtifactFreshnessDetector(BaseDetector):
             if pid == current_pid:
                 continue
             try:
-                cmdline = (entry / "cmdline").read_bytes().replace(b"\x00", b" ").decode(
-                    "utf-8",
-                    errors="replace",
+                cmdline = (
+                    (entry / "cmdline")
+                    .read_bytes()
+                    .replace(b"\x00", b" ")
+                    .decode(
+                        "utf-8",
+                        errors="replace",
+                    )
                 )
             except OSError:
                 continue
@@ -779,7 +813,9 @@ class ArtifactFreshnessDetector(BaseDetector):
 
         aid = str(artifact["id"])
         checkpoint_template = str(config.get("checkpoint_template") or "").strip()
-        partition_glob_template = str(config.get("partition_glob_template") or "").strip()
+        partition_glob_template = str(
+            config.get("partition_glob_template") or ""
+        ).strip()
         if not checkpoint_template or not partition_glob_template:
             return "warning", f"{aid}: partitioned compact detector config incomplete"
 
@@ -818,7 +854,10 @@ class ArtifactFreshnessDetector(BaseDetector):
 
         if not completed:
             reason = f" paused_reason={paused_reason}" if paused_reason else ""
-            return "warning", f"{aid}: partitioned compact checkpoint incomplete{reason}"
+            return (
+                "warning",
+                f"{aid}: partitioned compact checkpoint incomplete{reason}",
+            )
 
         latest_mtime = max(path.stat().st_mtime for path in partition_paths)
         details[f"{aid}_age_sec"] = round(time.time() - latest_mtime, 1)
@@ -880,13 +919,19 @@ class ArtifactFreshnessDetector(BaseDetector):
         aid = artifact["id"]
         data_format = str(config.get("format") or "").strip().lower()
         try:
-            payload = ArtifactFreshnessDetector._load_content_payload(data_format, artifact_path)
+            payload = ArtifactFreshnessDetector._load_content_payload(
+                data_format, artifact_path
+            )
         except Exception as exc:
             details[f"{aid}_content_status"] = "invalid_content"
             return f"{aid}: invalid content freshness payload ({exc})", False
 
         min_rows = config.get("min_rows")
-        if min_rows is not None and isinstance(payload, list) and len(payload) < int(min_rows):
+        if (
+            min_rows is not None
+            and isinstance(payload, list)
+            and len(payload) < int(min_rows)
+        ):
             details[f"{aid}_content_status"] = "insufficient_rows"
             details[f"{aid}_content_rows"] = len(payload)
             return f"{aid}: insufficient rows ({len(payload)} < {int(min_rows)})", False
@@ -895,7 +940,9 @@ class ArtifactFreshnessDetector(BaseDetector):
 
         min_count_field = str(config.get("min_count_field") or "").strip()
         if min_count_field:
-            count_value = ArtifactFreshnessDetector._resolve_field(payload, min_count_field)
+            count_value = ArtifactFreshnessDetector._resolve_field(
+                payload, min_count_field
+            )
             try:
                 count_int = int(count_value)
             except (TypeError, ValueError):
@@ -905,7 +952,10 @@ class ArtifactFreshnessDetector(BaseDetector):
             min_count = int(config.get("min_count") or 0)
             if count_int < min_count:
                 details[f"{aid}_content_status"] = "insufficient_count"
-                return f"{aid}: insufficient {min_count_field} ({count_int} < {min_count})", False
+                return (
+                    f"{aid}: insufficient {min_count_field} ({count_int} < {min_count})",
+                    False,
+                )
 
         date_field = str(config.get("date_field") or "").strip()
         if not date_field:
@@ -923,7 +973,10 @@ class ArtifactFreshnessDetector(BaseDetector):
         details[f"{aid}_content_age_days"] = age_days
         if age_days < 0:
             details[f"{aid}_content_status"] = "future_date"
-            return f"{aid}: content date is in the future ({content_date.date().isoformat()})", False
+            return (
+                f"{aid}: content date is in the future ({content_date.date().isoformat()})",
+                False,
+            )
         if max_age_days >= 0 and age_days > max_age_days:
             details[f"{aid}_content_status"] = "stale_date"
             return f"{aid}: content date stale ({age_days}d > {max_age_days}d)", False

@@ -16,7 +16,6 @@ from src.engine.error_detectors.base import (
     register_detector,
 )
 
-
 HEARTBEAT_PATH = PROJECT_ROOT / "tmp" / "error_detector_heartbeat.json"
 POSTCLOSE_BOT_ISOLATION_PATH = PROJECT_ROOT / "tmp" / "postclose_bot_isolation.json"
 _HEARTBEAT_LOCK = threading.Lock()
@@ -59,15 +58,21 @@ class ProcessHealthDetector(BaseDetector):
 
     @property
     def main_loop_timeout_sec(self) -> int:
-        return int(getattr(TRADING_RULES, "ERROR_DETECTOR_PROCESS_MAIN_LOOP_TIMEOUT_SEC", 15))
+        return int(
+            getattr(TRADING_RULES, "ERROR_DETECTOR_PROCESS_MAIN_LOOP_TIMEOUT_SEC", 15)
+        )
 
     @property
     def thread_timeout_sec(self) -> int:
-        return int(getattr(TRADING_RULES, "ERROR_DETECTOR_PROCESS_THREAD_TIMEOUT_SEC", 7200))
+        return int(
+            getattr(TRADING_RULES, "ERROR_DETECTOR_PROCESS_THREAD_TIMEOUT_SEC", 7200)
+        )
 
     @property
     def restart_grace_sec(self) -> int:
-        return int(getattr(TRADING_RULES, "ERROR_DETECTOR_PROCESS_RESTART_GRACE_SEC", 30))
+        return int(
+            getattr(TRADING_RULES, "ERROR_DETECTOR_PROCESS_RESTART_GRACE_SEC", 30)
+        )
 
     @property
     def startup_grace_sec(self) -> int:
@@ -75,7 +80,13 @@ class ProcessHealthDetector(BaseDetector):
 
     @property
     def postclose_isolation_max_age_sec(self) -> int:
-        return int(getattr(TRADING_RULES, "ERROR_DETECTOR_POSTCLOSE_BOT_ISOLATION_MAX_AGE_SEC", 28800))
+        return int(
+            getattr(
+                TRADING_RULES,
+                "ERROR_DETECTOR_POSTCLOSE_BOT_ISOLATION_MAX_AGE_SEC",
+                28800,
+            )
+        )
 
     def check(self) -> DetectionResult:
         now_ts = time.time()
@@ -87,8 +98,12 @@ class ProcessHealthDetector(BaseDetector):
         expected_running = _is_bot_expected_running()
         details["bot_expected_running"] = expected_running
         details["bot_expected_window"] = {
-            "start": getattr(TRADING_RULES, "ERROR_DETECTOR_BOT_EXPECTED_START_HHMM", "07:55"),
-            "end": getattr(TRADING_RULES, "ERROR_DETECTOR_BOT_EXPECTED_END_HHMM", "20:10"),
+            "start": getattr(
+                TRADING_RULES, "ERROR_DETECTOR_BOT_EXPECTED_START_HHMM", "07:55"
+            ),
+            "end": getattr(
+                TRADING_RULES, "ERROR_DETECTOR_BOT_EXPECTED_END_HHMM", "20:10"
+            ),
         }
         details["restart_grace_sec"] = restart_grace
         details["startup_grace_sec"] = startup_grace
@@ -337,8 +352,12 @@ class ProcessHealthDetector(BaseDetector):
             details=details,
         )
 
-    def _postclose_isolation_warning(self, summary: str, details: dict) -> DetectionResult:
-        details["postclose_bot_isolation_marker_path"] = str(POSTCLOSE_BOT_ISOLATION_PATH)
+    def _postclose_isolation_warning(
+        self, summary: str, details: dict
+    ) -> DetectionResult:
+        details["postclose_bot_isolation_marker_path"] = str(
+            POSTCLOSE_BOT_ISOLATION_PATH
+        )
         return DetectionResult(
             detector_id=self.id,
             category=self.category,
@@ -389,14 +408,22 @@ def _load_postclose_bot_isolation(now_ts: float, max_age_sec: int) -> dict | Non
 
 
 def _is_bot_expected_running(now: datetime | None = None) -> bool:
-    enabled = bool(getattr(TRADING_RULES, "ERROR_DETECTOR_BOT_EXPECTED_RUNTIME_WINDOW_ENABLED", True))
+    enabled = bool(
+        getattr(
+            TRADING_RULES, "ERROR_DETECTOR_BOT_EXPECTED_RUNTIME_WINDOW_ENABLED", True
+        )
+    )
     if not enabled:
         return True
     current = now or datetime.now().astimezone()
     if not is_krx_trading_day(current.date()):
         return False
-    start = _parse_hhmm(getattr(TRADING_RULES, "ERROR_DETECTOR_BOT_EXPECTED_START_HHMM", "07:55"))
-    end = _parse_hhmm(getattr(TRADING_RULES, "ERROR_DETECTOR_BOT_EXPECTED_END_HHMM", "20:10"))
+    start = _parse_hhmm(
+        getattr(TRADING_RULES, "ERROR_DETECTOR_BOT_EXPECTED_START_HHMM", "07:55")
+    )
+    end = _parse_hhmm(
+        getattr(TRADING_RULES, "ERROR_DETECTOR_BOT_EXPECTED_END_HHMM", "20:10")
+    )
     if start is None or end is None:
         return True
     current_minutes = current.hour * 60 + current.minute
@@ -406,14 +433,22 @@ def _is_bot_expected_running(now: datetime | None = None) -> bool:
 
 
 def _seconds_since_expected_start(now: datetime | None = None) -> float | None:
-    enabled = bool(getattr(TRADING_RULES, "ERROR_DETECTOR_BOT_EXPECTED_RUNTIME_WINDOW_ENABLED", True))
+    enabled = bool(
+        getattr(
+            TRADING_RULES, "ERROR_DETECTOR_BOT_EXPECTED_RUNTIME_WINDOW_ENABLED", True
+        )
+    )
     if not enabled:
         return None
     current = now or datetime.now().astimezone()
-    start = _parse_hhmm(getattr(TRADING_RULES, "ERROR_DETECTOR_BOT_EXPECTED_START_HHMM", "07:55"))
+    start = _parse_hhmm(
+        getattr(TRADING_RULES, "ERROR_DETECTOR_BOT_EXPECTED_START_HHMM", "07:55")
+    )
     if start is None:
         return None
-    start_dt = current.replace(hour=start // 60, minute=start % 60, second=0, microsecond=0)
+    start_dt = current.replace(
+        hour=start // 60, minute=start % 60, second=0, microsecond=0
+    )
     return (current - start_dt).total_seconds()
 
 

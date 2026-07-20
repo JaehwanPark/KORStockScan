@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import argparse
 
-from src.engine.daily_report_service import build_daily_report, format_daily_report_summary, save_daily_report
+from src.engine.daily_report_service import (
+    build_daily_report,
+    format_daily_report_summary,
+    save_daily_report,
+)
 
 
 def generate_daily_report(target_date: str | None = None) -> dict:
@@ -16,7 +20,9 @@ def generate_daily_report(target_date: str | None = None) -> dict:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Generate daily KORStockScan report JSON.")
+    parser = argparse.ArgumentParser(
+        description="Generate daily KORStockScan report JSON."
+    )
     parser.add_argument("--date", help="기준일 (YYYY-MM-DD). 기본값은 오늘.")
     args = parser.parse_args()
     generate_daily_report(args.date)

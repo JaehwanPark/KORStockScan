@@ -52,7 +52,9 @@ from src.engine.scalping_feature_packet import (
     calculate_scalping_micro_indicator_values,
     extract_scalping_feature_packet,
 )
-from src.engine.scalping.microstructure_reaction_context import infer_tick_aggressor_side
+from src.engine.scalping.microstructure_reaction_context import (
+    infer_tick_aggressor_side,
+)
 from src.utils.logger import log_error, log_info
 from src.utils.constants import TRADING_RULES
 from src.engine.macro_briefing_complete import build_scanner_data_input
@@ -76,7 +78,6 @@ from src.engine.ai_prompt_contracts import (
     REALTIME_ANALYSIS_PROMPT_DUAL,
     SCALPING_OVERNIGHT_DECISION_PROMPT,
 )
-
 
 DUAL_PERSONA_AGGRESSIVE_PROMPT = """
 You are an opportunity-side quantitative reviewer for shadow calibration.
@@ -203,8 +204,12 @@ def _extract_openai_usage_meta(response: Any) -> dict[str, int]:
 
     input_details = _get_usage_value(usage, "input_tokens_details") or {}
     output_details = _get_usage_value(usage, "output_tokens_details") or {}
-    cached_input_tokens = _coerce_usage_int(_get_usage_value(input_details, "cached_tokens"))
-    reasoning_tokens = _coerce_usage_int(_get_usage_value(output_details, "reasoning_tokens"))
+    cached_input_tokens = _coerce_usage_int(
+        _get_usage_value(input_details, "cached_tokens")
+    )
+    reasoning_tokens = _coerce_usage_int(
+        _get_usage_value(output_details, "reasoning_tokens")
+    )
 
     if total_tokens is None and (input_tokens is not None or output_tokens is not None):
         total_tokens = int(input_tokens or 0) + int(output_tokens or 0)
@@ -262,7 +267,8 @@ class OpenAIResponseRequest:
             "model": self.model_name,
             "input": (
                 f"{self.user_input}\n\nReturn JSON only."
-                if self.require_json and "json" not in str(self.user_input or "").lower()
+                if self.require_json
+                and "json" not in str(self.user_input or "").lower()
                 else self.user_input
             ),
             "store": False,
@@ -332,7 +338,9 @@ class OpenAIResponsesWSWorker:
         self._stop_event = threading.Event()
         self._connection = None
         self._client = OpenAI(api_key=self.api_key, max_retries=OPENAI_SDK_MAX_RETRIES)
-        self._thread = threading.Thread(target=self._run, daemon=True, name=f"openai-responses-ws-{worker_id}")
+        self._thread = threading.Thread(
+            target=self._run, daemon=True, name=f"openai-responses-ws-{worker_id}"
+        )
         self._thread.start()
 
     def submit(self, job: OpenAIWSJob):
@@ -340,11 +348,15 @@ class OpenAIResponsesWSWorker:
         wait_timeout = max(0.05, job.request.remaining_timeout_sec() + 0.05)
         if not job.done.wait(timeout=wait_timeout):
             job.cancelled.set()
-            raise TimeoutError(f"OpenAI Responses WS timeout before worker completion ({job.request.context_name})")
+            raise TimeoutError(
+                f"OpenAI Responses WS timeout before worker completion ({job.request.context_name})"
+            )
         if job.error is not None:
             raise job.error
         if job.result is None:
-            raise RuntimeError(f"OpenAI Responses WS empty result ({job.request.context_name})")
+            raise RuntimeError(
+                f"OpenAI Responses WS empty result ({job.request.context_name})"
+            )
         return job.result
 
     def close(self):
@@ -366,11 +378,19 @@ class OpenAIResponsesWSWorker:
                 job.done.set()
                 continue
             try:
-                queue_wait_ms = max(0, int((time.perf_counter() - job.request.submitted_at_perf) * 1000))
+                queue_wait_ms = max(
+                    0, int((time.perf_counter() - job.request.submitted_at_perf) * 1000)
+                )
                 self._record("openai_ws_queue_wait_ms", queue_wait_ms)
                 if job.request.remaining_timeout_sec() <= 0:
-                    raise TimeoutError(f"OpenAI Responses WS queue deadline exceeded ({job.request.context_name})")
-                result = self._execute(job.request, queue_wait_ms=queue_wait_ms, use_schema_registry=job.use_schema_registry)
+                    raise TimeoutError(
+                        f"OpenAI Responses WS queue deadline exceeded ({job.request.context_name})"
+                    )
+                result = self._execute(
+                    job.request,
+                    queue_wait_ms=queue_wait_ms,
+                    use_schema_registry=job.use_schema_registry,
+                )
                 job.result = result
             except Exception as exc:
                 job.error = exc
@@ -400,16 +420,26 @@ class OpenAIResponsesWSWorker:
         raw = connection._connection.recv(timeout=timeout_sec, decode=False)
         return connection.parse_event(raw)
 
-    def _execute(self, request: OpenAIResponseRequest, *, queue_wait_ms: int, use_schema_registry: bool):
+    def _execute(
+        self,
+        request: OpenAIResponseRequest,
+        *,
+        queue_wait_ms: int,
+        use_schema_registry: bool,
+    ):
         started_at = time.perf_counter()
         self._record("openai_ws_requests", 1)
         connection = self._ensure_connection()
         try:
-            connection.send(request.build_ws_event(use_schema_registry=use_schema_registry))
+            connection.send(
+                request.build_ws_event(use_schema_registry=use_schema_registry)
+            )
             while True:
                 remaining = request.remaining_timeout_sec()
                 if remaining <= 0:
-                    raise TimeoutError(f"OpenAI Responses WS timeout ({request.context_name})")
+                    raise TimeoutError(
+                        f"OpenAI Responses WS timeout ({request.context_name})"
+                    )
                 event = self._recv_event(connection, timeout_sec=remaining)
                 event_type = str(getattr(event, "type", "") or "")
                 if event_type == "response.completed":
@@ -422,7 +452,11 @@ class OpenAIResponsesWSWorker:
                             f"OpenAI Responses WS request_id mismatch: expected={request.request_id} actual={response_request_id or '-'}"
                         )
                     if request.remaining_timeout_sec() <= 0 and bool(
-                        getattr(TRADING_RULES, "OPENAI_RESPONSES_WS_LATE_DISCARD_ENABLED", True)
+                        getattr(
+                            TRADING_RULES,
+                            "OPENAI_RESPONSES_WS_LATE_DISCARD_ENABLED",
+                            True,
+                        )
                     ):
                         self._record("openai_ws_late_discard", 1)
                         raise OpenAIWSLateResponseError(
@@ -433,13 +467,19 @@ class OpenAIResponsesWSWorker:
                         try:
                             payload = json.loads(raw_text)
                             if not isinstance(payload, dict):
-                                raise ValueError("OpenAI Responses WS JSON root must be object")
+                                raise ValueError(
+                                    "OpenAI Responses WS JSON root must be object"
+                                )
                         except Exception as exc:
                             self._record("openai_ws_parse_fail", 1)
-                            raise RuntimeError(f"OpenAI Responses WS JSON parse failed: {exc}") from exc
+                            raise RuntimeError(
+                                f"OpenAI Responses WS JSON parse failed: {exc}"
+                            ) from exc
                     else:
                         payload = raw_text
-                    roundtrip_ms = max(0, int((time.perf_counter() - started_at) * 1000))
+                    roundtrip_ms = max(
+                        0, int((time.perf_counter() - started_at) * 1000)
+                    )
                     self._record("openai_ws_completed", 1)
                     self._record("openai_ws_roundtrip_ms", roundtrip_ms)
                     return OpenAITransportResult(
@@ -453,16 +493,22 @@ class OpenAIResponsesWSWorker:
                         timing_meta={
                             "openai_ws_attempt_timeout_ms": int(request.timeout_ms),
                             "openai_ws_total_timeout_ms": int(
-                                (request.metadata or {}).get("ws_total_timeout_ms") or request.timeout_ms
+                                (request.metadata or {}).get("ws_total_timeout_ms")
+                                or request.timeout_ms
                             ),
                             "openai_ws_http_fallback_reserve_ms": int(
-                                (request.metadata or {}).get("ws_http_fallback_reserve_ms") or 0
+                                (request.metadata or {}).get(
+                                    "ws_http_fallback_reserve_ms"
+                                )
+                                or 0
                             ),
                         },
                     )
                 if event_type in {"error", "response.failed", "response.incomplete"}:
                     self._record("openai_ws_parse_fail", 1)
-                    raise RuntimeError(f"OpenAI Responses WS event failure ({event_type})")
+                    raise RuntimeError(
+                        f"OpenAI Responses WS event failure ({event_type})"
+                    )
         except Exception:
             self._close_connection()
             raise
@@ -513,9 +559,13 @@ class GPTSniperEngine:
         self._rotate_client()
 
         # OpenAI runtime uses the existing fast/deep/report tier structure.
-        self.model_tier1_fast = getattr(TRADING_RULES, 'GPT_FAST_MODEL', 'gpt-5-nano')
-        self.model_tier2_balanced = getattr(TRADING_RULES, 'GPT_REPORT_MODEL', self.model_tier1_fast)
-        self.model_tier3_deep = getattr(TRADING_RULES, 'GPT_DEEP_MODEL', self.model_tier2_balanced)
+        self.model_tier1_fast = getattr(TRADING_RULES, "GPT_FAST_MODEL", "gpt-5-nano")
+        self.model_tier2_balanced = getattr(
+            TRADING_RULES, "GPT_REPORT_MODEL", self.model_tier1_fast
+        )
+        self.model_tier3_deep = getattr(
+            TRADING_RULES, "GPT_DEEP_MODEL", self.model_tier2_balanced
+        )
         self.current_model_name = self.model_tier1_fast
         # 기존 호출부 호환을 위한 alias
         self.fast_model_name = self.model_tier1_fast
@@ -525,20 +575,26 @@ class GPTSniperEngine:
         self.lock = threading.Lock()
         self.api_call_lock = threading.Lock()
         self.last_call_time = 0.0
-        self.min_interval = getattr(TRADING_RULES, 'GPT_ENGINE_MIN_INTERVAL', 0.5)
+        self.min_interval = getattr(TRADING_RULES, "GPT_ENGINE_MIN_INTERVAL", 0.5)
         self.consecutive_failures = 0
         self.ai_disabled = False
-        self.max_consecutive_failures = getattr(TRADING_RULES, 'AI_MAX_CONSECUTIVE_FAILURES', 5)
+        self.max_consecutive_failures = getattr(
+            TRADING_RULES, "AI_MAX_CONSECUTIVE_FAILURES", 5
+        )
         self.current_api_key_index = 0
 
         self.cache_lock = threading.RLock()
-        self.analysis_cache_ttl = getattr(TRADING_RULES, 'AI_ANALYZE_RESULT_CACHE_TTL_SEC', 8.0)
+        self.analysis_cache_ttl = getattr(
+            TRADING_RULES, "AI_ANALYZE_RESULT_CACHE_TTL_SEC", 8.0
+        )
         self.holding_analysis_cache_ttl = getattr(
             TRADING_RULES,
-            'AI_HOLDING_RESULT_CACHE_TTL_SEC',
+            "AI_HOLDING_RESULT_CACHE_TTL_SEC",
             max(float(self.analysis_cache_ttl or 0.0), 30.0),
         )
-        self.gatekeeper_cache_ttl = getattr(TRADING_RULES, 'AI_GATEKEEPER_RESULT_CACHE_TTL_SEC', 12.0)
+        self.gatekeeper_cache_ttl = getattr(
+            TRADING_RULES, "AI_GATEKEEPER_RESULT_CACHE_TTL_SEC", 12.0
+        )
         self._analysis_cache = {}
         self._gatekeeper_cache = {}
         self._transport_local = threading.local()
@@ -570,13 +626,17 @@ class GPTSniperEngine:
     def _rotate_client(self):
         """OpenAI API 클라이언트 교체"""
         self.current_key = next(self.key_cycle)
-        self.client = OpenAI(api_key=self.current_key, max_retries=OPENAI_SDK_MAX_RETRIES)
+        self.client = OpenAI(
+            api_key=self.current_key, max_retries=OPENAI_SDK_MAX_RETRIES
+        )
         try:
             self.current_api_key_index = self.api_keys.index(self.current_key)
         except ValueError:
             self.current_api_key_index = 0
 
-    def set_model_names(self, *, fast_model=None, deep_model=None, report_model=None, announce=True):
+    def set_model_names(
+        self, *, fast_model=None, deep_model=None, report_model=None, announce=True
+    ):
         if fast_model:
             self.model_tier1_fast = str(fast_model)
             self.fast_model_name = self.model_tier1_fast
@@ -624,16 +684,22 @@ class GPTSniperEngine:
             }
         with self._ws_metrics_lock:
             if metric_name == "openai_ws_queue_wait_ms":
-                values = self._ws_metrics.setdefault("openai_ws_queue_wait_ms_values", [])
+                values = self._ws_metrics.setdefault(
+                    "openai_ws_queue_wait_ms_values", []
+                )
                 values.append(int(value))
                 del values[:-512]
                 return
             if metric_name == "openai_ws_roundtrip_ms":
-                values = self._ws_metrics.setdefault("openai_ws_roundtrip_ms_values", [])
+                values = self._ws_metrics.setdefault(
+                    "openai_ws_roundtrip_ms_values", []
+                )
                 values.append(int(value))
                 del values[:-512]
                 return
-            self._ws_metrics[metric_name] = int(self._ws_metrics.get(metric_name, 0) or 0) + int(value)
+            self._ws_metrics[metric_name] = int(
+                self._ws_metrics.get(metric_name, 0) or 0
+            ) + int(value)
 
     def _set_last_transport_meta(self, meta):
         if not hasattr(self, "_transport_local"):
@@ -650,22 +716,70 @@ class GPTSniperEngine:
     def _get_openai_timeout_ms(self, *, endpoint_name, require_json):
         endpoint = str(endpoint_name or "").strip()
         if endpoint == "analyze_target":
-            return max(1, int(getattr(TRADING_RULES, "OPENAI_ANALYZE_TARGET_TIMEOUT_MS", 3000) or 3000))
+            return max(
+                1,
+                int(
+                    getattr(TRADING_RULES, "OPENAI_ANALYZE_TARGET_TIMEOUT_MS", 3000)
+                    or 3000
+                ),
+            )
         if endpoint == "entry_price":
-            return max(1, int(getattr(TRADING_RULES, "OPENAI_ENTRY_PRICE_TIMEOUT_MS", 7000) or 7000))
+            return max(
+                1,
+                int(
+                    getattr(TRADING_RULES, "OPENAI_ENTRY_PRICE_TIMEOUT_MS", 7000)
+                    or 7000
+                ),
+            )
         if endpoint == "holding_score":
-            return max(1, int(getattr(TRADING_RULES, "OPENAI_HOLDING_SCORE_TIMEOUT_MS", 7000) or 7000))
+            return max(
+                1,
+                int(
+                    getattr(TRADING_RULES, "OPENAI_HOLDING_SCORE_TIMEOUT_MS", 7000)
+                    or 7000
+                ),
+            )
         if endpoint == "holding_flow":
-            return max(1, int(getattr(TRADING_RULES, "OPENAI_HOLDING_FLOW_TIMEOUT_MS", 7000) or 7000))
+            return max(
+                1,
+                int(
+                    getattr(TRADING_RULES, "OPENAI_HOLDING_FLOW_TIMEOUT_MS", 7000)
+                    or 7000
+                ),
+            )
         if endpoint == "scanner_report":
-            return max(1, int(getattr(TRADING_RULES, "OPENAI_SCANNER_REPORT_TIMEOUT_MS", 15000) or 15000))
+            return max(
+                1,
+                int(
+                    getattr(TRADING_RULES, "OPENAI_SCANNER_REPORT_TIMEOUT_MS", 15000)
+                    or 15000
+                ),
+            )
         if endpoint == "overnight":
-            return max(1, int(getattr(TRADING_RULES, "OPENAI_OVERNIGHT_TIMEOUT_MS", 12000) or 12000))
+            return max(
+                1,
+                int(
+                    getattr(TRADING_RULES, "OPENAI_OVERNIGHT_TIMEOUT_MS", 12000)
+                    or 12000
+                ),
+            )
         if not require_json:
-            return max(1, int(getattr(TRADING_RULES, "OPENAI_RESPONSES_WS_TIMEOUT_MS", 700) or 700))
+            return max(
+                1,
+                int(
+                    getattr(TRADING_RULES, "OPENAI_RESPONSES_WS_TIMEOUT_MS", 700) or 700
+                ),
+            )
         if endpoint in OPENAI_RESPONSES_WS_ENDPOINTS:
-            return max(1, int(getattr(TRADING_RULES, "OPENAI_RESPONSES_WS_TIMEOUT_MS", 700) or 700))
-        return max(1, int(getattr(TRADING_RULES, "OPENAI_RESPONSES_WS_TIMEOUT_MS", 700) or 700))
+            return max(
+                1,
+                int(
+                    getattr(TRADING_RULES, "OPENAI_RESPONSES_WS_TIMEOUT_MS", 700) or 700
+                ),
+            )
+        return max(
+            1, int(getattr(TRADING_RULES, "OPENAI_RESPONSES_WS_TIMEOUT_MS", 700) or 700)
+        )
 
     def _is_sim_observation_overnight_context(self, realtime_ctx):
         if not isinstance(realtime_ctx, dict):
@@ -674,7 +788,9 @@ class GPTSniperEngine:
             return True
         if str(realtime_ctx.get("simulation_book") or "") == "scalp_ai_buy_all":
             return True
-        return realtime_ctx.get("actual_order_submitted") is False and bool(realtime_ctx.get("broker_order_forbidden"))
+        return realtime_ctx.get("actual_order_submitted") is False and bool(
+            realtime_ctx.get("broker_order_forbidden")
+        )
 
     def _should_use_openai_schema_registry(self, *, require_json, schema_name):
         return bool(
@@ -689,13 +805,17 @@ class GPTSniperEngine:
             return False
         return True
 
-    def _resolve_openai_temperature(self, *, require_json, temperature_override, model_name=None):
+    def _resolve_openai_temperature(
+        self, *, require_json, temperature_override, model_name=None
+    ):
         if not self._model_supports_temperature(model_name):
             return None
         if temperature_override is not None:
             return float(temperature_override)
         if require_json:
-            if getattr(TRADING_RULES, "OPENAI_JSON_DETERMINISTIC_CONFIG_ENABLED", False):
+            if getattr(
+                TRADING_RULES, "OPENAI_JSON_DETERMINISTIC_CONFIG_ENABLED", False
+            ):
                 return 0.0
             return 0.0
         return 0.7
@@ -703,13 +823,22 @@ class GPTSniperEngine:
     def _resolve_openai_max_output_tokens(self, *, require_json):
         default_value = 240 if require_json else 1200
         try:
-            configured = int(getattr(TRADING_RULES, "OPENAI_RESPONSES_MAX_OUTPUT_TOKENS", default_value) or default_value)
+            configured = int(
+                getattr(
+                    TRADING_RULES, "OPENAI_RESPONSES_MAX_OUTPUT_TOKENS", default_value
+                )
+                or default_value
+            )
             return max(32, configured)
         except Exception:
             return default_value
 
     def _resolve_openai_reasoning_effort(self, *, model_name=None):
-        value = str(getattr(TRADING_RULES, "OPENAI_REASONING_EFFORT", "auto") or "auto").strip().lower()
+        value = (
+            str(getattr(TRADING_RULES, "OPENAI_REASONING_EFFORT", "auto") or "auto")
+            .strip()
+            .lower()
+        )
         model = str(model_name or "").strip().lower()
         if value == "auto":
             if model.startswith("gpt-5-nano"):
@@ -749,7 +878,9 @@ class GPTSniperEngine:
         reasoning_effort=None,
         metadata_extra=None,
     ):
-        request_id = self._build_openai_request_id(endpoint_name=endpoint_name, symbol=symbol or "-")
+        request_id = self._build_openai_request_id(
+            endpoint_name=endpoint_name, symbol=symbol or "-"
+        )
         metadata = {
             "request_id": request_id,
             "endpoint_name": str(endpoint_name or "generic"),
@@ -809,7 +940,9 @@ class GPTSniperEngine:
             original_key = str(key)
             safe_key = self._shorten_openai_metadata_key(original_key)
             if safe_key in normalized and safe_key != original_key:
-                dedupe_digest = hashlib.sha1(original_key.encode("utf-8")).hexdigest()[:8]
+                dedupe_digest = hashlib.sha1(original_key.encode("utf-8")).hexdigest()[
+                    :8
+                ]
                 prefix_len = OPENAI_METADATA_KEY_MAX_LENGTH - len(dedupe_digest) - 1
                 safe_key = f"{safe_key[:prefix_len]}_{dedupe_digest}"
             if safe_key != original_key:
@@ -847,7 +980,9 @@ class GPTSniperEngine:
             )
         return trimmed
 
-    def _wrap_openai_prompt_contract(self, prompt, *, require_json, schema_name=None, endpoint_name="generic"):
+    def _wrap_openai_prompt_contract(
+        self, prompt, *, require_json, schema_name=None, endpoint_name="generic"
+    ):
         base_prompt = str(prompt or "").strip()
         if OPENAI_PROMPT_CONTRACT_MARKER in base_prompt:
             return base_prompt
@@ -867,7 +1002,11 @@ class GPTSniperEngine:
         return f"{OPENAI_PROMPT_CONTRACT_HEADER.strip()}\n{context_rule}".strip()
 
     def _should_use_responses_ws(self, request: OpenAIResponseRequest):
-        transport_mode = str(getattr(TRADING_RULES, "OPENAI_TRANSPORT_MODE", "http") or "http").strip().lower()
+        transport_mode = (
+            str(getattr(TRADING_RULES, "OPENAI_TRANSPORT_MODE", "http") or "http")
+            .strip()
+            .lower()
+        )
         if transport_mode != "responses_ws":
             return False
         if not bool(getattr(TRADING_RULES, "OPENAI_RESPONSES_WS_ENABLED", False)):
@@ -921,7 +1060,13 @@ class GPTSniperEngine:
 
     def _build_cache_digest(self, payload):
         normalized = self._normalize_for_cache(payload)
-        raw = json.dumps(normalized, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+        raw = json.dumps(
+            normalized,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
         return hashlib.sha1(raw.encode("utf-8")).hexdigest()
 
     def _cache_get(self, cache_name, key):
@@ -944,7 +1089,10 @@ class GPTSniperEngine:
 
     def _cache_max_entries(self):
         try:
-            return max(1, int(getattr(TRADING_RULES, "AI_RESULT_CACHE_MAX_ENTRIES", 512) or 512))
+            return max(
+                1,
+                int(getattr(TRADING_RULES, "AI_RESULT_CACHE_MAX_ENTRIES", 512) or 512),
+            )
         except Exception:
             return 512
 
@@ -982,7 +1130,15 @@ class GPTSniperEngine:
             }
             self._prune_cache_locked(cache, now=now)
 
-    def _build_analysis_cache_key(self, target_name, strategy, ws_data, recent_ticks, recent_candles, program_net_qty):
+    def _build_analysis_cache_key(
+        self,
+        target_name,
+        strategy,
+        ws_data,
+        recent_ticks,
+        recent_candles,
+        program_net_qty,
+    ):
         return self._build_analysis_cache_key_with_profile(
             target_name=target_name,
             strategy=strategy,
@@ -1011,19 +1167,25 @@ class GPTSniperEngine:
                     "strategy": strategy,
                     "ws_data": self._compact_holding_ws_for_cache(ws_data),
                     "recent_ticks": self._compact_holding_ticks_for_cache(recent_ticks),
-                    "recent_candles": self._compact_holding_candles_for_cache(recent_candles),
-                    "program_net_qty": self._bucket_int_for_cache(program_net_qty, 1_000),
+                    "recent_candles": self._compact_holding_candles_for_cache(
+                        recent_candles
+                    ),
+                    "program_net_qty": self._bucket_int_for_cache(
+                        program_net_qty, 1_000
+                    ),
                 }
             )
-        return self._build_cache_digest({
-            "cache_profile": str(cache_profile or "default"),
-            "target_name": target_name,
-            "strategy": strategy,
-            "ws_data": ws_data,
-            "recent_ticks": recent_ticks,
-            "recent_candles": recent_candles,
-            "program_net_qty": program_net_qty,
-        })
+        return self._build_cache_digest(
+            {
+                "cache_profile": str(cache_profile or "default"),
+                "target_name": target_name,
+                "strategy": strategy,
+                "ws_data": ws_data,
+                "recent_ticks": recent_ticks,
+                "recent_candles": recent_candles,
+                "program_net_qty": program_net_qty,
+            }
+        )
 
     def _bucket_int_for_cache(self, value, bucket):
         try:
@@ -1073,18 +1235,32 @@ class GPTSniperEngine:
         price_bucket = self._price_bucket_step_for_cache(curr_price)
         return {
             "curr": self._bucket_int_for_cache(curr_price, price_bucket),
-            "fluctuation": self._bucket_float_for_cache(ws_data.get("fluctuation", 0.0), 0.25),
+            "fluctuation": self._bucket_float_for_cache(
+                ws_data.get("fluctuation", 0.0), 0.25
+            ),
             "v_pw": self._bucket_float_for_cache(ws_data.get("v_pw", 0.0), 10.0),
-            "buy_ratio": self._bucket_float_for_cache(ws_data.get("buy_ratio", 0.0), 4.0),
+            "buy_ratio": self._bucket_float_for_cache(
+                ws_data.get("buy_ratio", 0.0), 4.0
+            ),
             "best_ask": self._bucket_int_for_cache(best_ask, price_bucket),
             "best_bid": self._bucket_int_for_cache(best_bid, price_bucket),
             "ask_tot": self._bucket_int_for_cache(ws_data.get("ask_tot", 0), 25_000),
             "bid_tot": self._bucket_int_for_cache(ws_data.get("bid_tot", 0), 25_000),
-            "net_bid_depth": self._bucket_int_for_cache(ws_data.get("net_bid_depth", 0), 10_000),
-            "net_ask_depth": self._bucket_int_for_cache(ws_data.get("net_ask_depth", 0), 10_000),
-            "buy_exec_volume": self._bucket_int_for_cache(ws_data.get("buy_exec_volume", 0), 3_000),
-            "sell_exec_volume": self._bucket_int_for_cache(ws_data.get("sell_exec_volume", 0), 3_000),
-            "tick_trade_value": self._bucket_int_for_cache(ws_data.get("tick_trade_value", 0), 10_000),
+            "net_bid_depth": self._bucket_int_for_cache(
+                ws_data.get("net_bid_depth", 0), 10_000
+            ),
+            "net_ask_depth": self._bucket_int_for_cache(
+                ws_data.get("net_ask_depth", 0), 10_000
+            ),
+            "buy_exec_volume": self._bucket_int_for_cache(
+                ws_data.get("buy_exec_volume", 0), 3_000
+            ),
+            "sell_exec_volume": self._bucket_int_for_cache(
+                ws_data.get("sell_exec_volume", 0), 3_000
+            ),
+            "tick_trade_value": self._bucket_int_for_cache(
+                ws_data.get("tick_trade_value", 0), 10_000
+            ),
         }
 
     def _compact_holding_ticks_for_cache(self, recent_ticks):
@@ -1111,18 +1287,29 @@ class GPTSniperEngine:
             except Exception:
                 volume_int = 0
             total_value += max(0, latest_price) * max(0, volume_int)
-            if inferred.get("side") == "SELL" and inferred.get("source") != "price_change_heuristic":
+            if (
+                inferred.get("side") == "SELL"
+                and inferred.get("source") != "price_change_heuristic"
+            ):
                 sell_volume += volume_int
-            elif inferred.get("side") == "BUY" and inferred.get("source") != "price_change_heuristic":
+            elif (
+                inferred.get("side") == "BUY"
+                and inferred.get("source") != "price_change_heuristic"
+            ):
                 buy_volume += volume_int
         price_bucket = self._price_bucket_step_for_cache(latest_price)
-        return [{
-            "latest_price": self._bucket_int_for_cache(latest.get("price", latest.get("현재가", latest_price)), price_bucket),
-            "buy_volume": self._bucket_int_for_cache(buy_volume, 100),
-            "sell_volume": self._bucket_int_for_cache(sell_volume, 100),
-            "net_volume": self._bucket_int_for_cache(buy_volume - sell_volume, 100),
-            "trade_value": self._bucket_int_for_cache(total_value, 500_000),
-        }]
+        return [
+            {
+                "latest_price": self._bucket_int_for_cache(
+                    latest.get("price", latest.get("현재가", latest_price)),
+                    price_bucket,
+                ),
+                "buy_volume": self._bucket_int_for_cache(buy_volume, 100),
+                "sell_volume": self._bucket_int_for_cache(sell_volume, 100),
+                "net_volume": self._bucket_int_for_cache(buy_volume - sell_volume, 100),
+                "trade_value": self._bucket_int_for_cache(total_value, 500_000),
+            }
+        ]
 
     def _compact_holding_candles_for_cache(self, recent_candles):
         candles = recent_candles or []
@@ -1130,7 +1317,9 @@ class GPTSniperEngine:
         for candle in candles[-3:]:
             if not isinstance(candle, dict):
                 continue
-            close_price = candle.get("현재가", candle.get("close", candle.get("종가", 0)))
+            close_price = candle.get(
+                "현재가", candle.get("close", candle.get("종가", 0))
+            )
             high_price = candle.get("고가", candle.get("high", close_price))
             low_price = candle.get("저가", candle.get("low", close_price))
             volume = candle.get("거래량", candle.get("volume", 0))
@@ -1176,10 +1365,14 @@ class GPTSniperEngine:
         payload["cache_hit"] = bool(cache_hit)
         payload["cache_mode"] = str(cache_mode or "miss")
         if isinstance(input_contract_fields, dict):
-            payload.update({k: v for k, v in input_contract_fields.items() if v not in (None, "")})
+            payload.update(
+                {k: v for k, v in input_contract_fields.items() if v not in (None, "")}
+            )
         return payload
 
-    def _resolve_ai_input_contract_fields(self, user_input, *, default_schema, default_mode):
+    def _resolve_ai_input_contract_fields(
+        self, user_input, *, default_schema, default_mode
+    ):
         fields = {
             "ai_input_schema": str(default_schema or "-"),
             "ai_input_contract_mode": str(default_mode or "plain_text"),
@@ -1195,7 +1388,9 @@ class GPTSniperEngine:
             return fields
         if not isinstance(payload, dict):
             return fields
-        fields["ai_input_schema"] = str(payload.get("input_schema") or default_schema or "-").strip() or "-"
+        fields["ai_input_schema"] = (
+            str(payload.get("input_schema") or default_schema or "-").strip() or "-"
+        )
         fields["ai_input_contract_mode"] = "structured_json"
         fallback_reason = str(payload.get("input_build_fallback") or "").strip()
         if fallback_reason:
@@ -1220,16 +1415,40 @@ class GPTSniperEngine:
 
     def _resolve_scalping_prompt(self, prompt_profile):
         profile = str(prompt_profile or "shared").strip().lower()
-        split_enabled = bool(getattr(TRADING_RULES, "SCALPING_PROMPT_SPLIT_ENABLED", True))
+        split_enabled = bool(
+            getattr(TRADING_RULES, "SCALPING_PROMPT_SPLIT_ENABLED", True)
+        )
         if not split_enabled:
-            return SCALPING_SYSTEM_PROMPT, "scalping_shared", "split_disabled_v1", "shared"
+            return (
+                SCALPING_SYSTEM_PROMPT,
+                "scalping_shared",
+                "split_disabled_v1",
+                "shared",
+            )
 
         if profile == "watching":
-            if bool(getattr(TRADING_RULES, "OPENAI_ANALYZE_TARGET_HOT_PROMPT_ENABLED", True)):
-                return SCALPING_WATCHING_HOT_SYSTEM_PROMPT, "scalping_entry", "hot_v1", "watching"
-            return SCALPING_WATCHING_SYSTEM_PROMPT, "scalping_entry", "split_v2", "watching"
+            if bool(
+                getattr(TRADING_RULES, "OPENAI_ANALYZE_TARGET_HOT_PROMPT_ENABLED", True)
+            ):
+                return (
+                    SCALPING_WATCHING_HOT_SYSTEM_PROMPT,
+                    "scalping_entry",
+                    "hot_v1",
+                    "watching",
+                )
+            return (
+                SCALPING_WATCHING_SYSTEM_PROMPT,
+                "scalping_entry",
+                "split_v2",
+                "watching",
+            )
         if profile in {"holding", "exit"}:
-            return SCALPING_HOLDING_SYSTEM_PROMPT, "scalping_holding", "split_v2", "holding"
+            return (
+                SCALPING_HOLDING_SYSTEM_PROMPT,
+                "scalping_holding",
+                "split_v2",
+                "holding",
+            )
         return SCALPING_SYSTEM_PROMPT, "scalping_shared", "split_v2", "shared"
 
     def _normalize_scalping_action_schema(self, result, *, prompt_type):
@@ -1254,8 +1473,12 @@ class GPTSniperEngine:
             payload["action_schema"] = "holding_exit_v1"
             payload["score"] = score
             payload["reason"] = reason_contract["reason"]
-            payload["ai_reason_language_policy"] = reason_contract["ai_reason_language_policy"]
-            payload["ai_reason_language_violation"] = reason_contract["ai_reason_language_violation"]
+            payload["ai_reason_language_policy"] = reason_contract[
+                "ai_reason_language_policy"
+            ]
+            payload["ai_reason_language_violation"] = reason_contract[
+                "ai_reason_language_violation"
+            ]
             return payload
 
         allowed = {"BUY", "WAIT", "DROP"}
@@ -1265,8 +1488,12 @@ class GPTSniperEngine:
         payload["action_schema"] = "entry_v1"
         payload["score"] = score
         payload["reason"] = reason_contract["reason"]
-        payload["ai_reason_language_policy"] = reason_contract["ai_reason_language_policy"]
-        payload["ai_reason_language_violation"] = reason_contract["ai_reason_language_violation"]
+        payload["ai_reason_language_policy"] = reason_contract[
+            "ai_reason_language_policy"
+        ]
+        payload["ai_reason_language_violation"] = reason_contract[
+            "ai_reason_language_violation"
+        ]
         return payload
 
     def _merge_last_transport_meta(self, payload):
@@ -1326,6 +1553,7 @@ class GPTSniperEngine:
     @staticmethod
     def _feature_packet_micro_vwap_usable(feature_packet):
         packet = feature_packet if isinstance(feature_packet, dict) else {}
+
         def _bool_value(value, default=False):
             if isinstance(value, bool):
                 return value
@@ -1369,7 +1597,12 @@ class GPTSniperEngine:
     @staticmethod
     def _is_openai_timeout_like_error(error) -> bool:
         text = str(error or "").lower()
-        return isinstance(error, TimeoutError) or "timeout" in text or "timed out" in text or "deadline" in text
+        return (
+            isinstance(error, TimeoutError)
+            or "timeout" in text
+            or "timed out" in text
+            or "deadline" in text
+        )
 
     def _build_ws_http_fallback_timeout_result(
         self,
@@ -1393,7 +1626,9 @@ class GPTSniperEngine:
             }
         else:
             return None
-        roundtrip_ms = max(0, int((time.perf_counter() - request.submitted_at_perf) * 1000))
+        roundtrip_ms = max(
+            0, int((time.perf_counter() - request.submitted_at_perf) * 1000)
+        )
         payload["openai_transport_fail_closed"] = True
         payload["openai_transport_fail_closed_reason"] = str(error or "timeout")[:120]
         return OpenAITransportResult(
@@ -1408,7 +1643,9 @@ class GPTSniperEngine:
     def _remote_buy_risk_flags(self, ws_data, recent_ticks, recent_candles):
         if hasattr(self, "_extract_scalping_features"):
             try:
-                features = self._extract_scalping_features(ws_data, recent_ticks, recent_candles)
+                features = self._extract_scalping_features(
+                    ws_data, recent_ticks, recent_candles
+                )
             except Exception:
                 features = {}
         else:
@@ -1428,13 +1665,17 @@ class GPTSniperEngine:
             flags += 1
         return features, flags
 
-    def _apply_remote_entry_guard(self, result, *, prompt_type, ws_data, recent_ticks, recent_candles):
+    def _apply_remote_entry_guard(
+        self, result, *, prompt_type, ws_data, recent_ticks, recent_candles
+    ):
         if prompt_type not in {"scalping_entry", "scalping_shared"}:
             return result
         if str(result.get("action", "WAIT")).upper() != "BUY":
             return result
 
-        features, risk_flags = self._remote_buy_risk_flags(ws_data, recent_ticks, recent_candles)
+        features, risk_flags = self._remote_buy_risk_flags(
+            ws_data, recent_ticks, recent_candles
+        )
         if not features:
             return result
         pressure_usable = self._feature_packet_pressure_usable(features)
@@ -1443,8 +1684,11 @@ class GPTSniperEngine:
         accel = float(features.get("tick_acceleration_ratio", 0.0) or 0.0)
         latest_strength = float(features.get("latest_strength", 0.0) or 0.0)
         has_reclaim = (
-            (micro_vwap_usable and float(features.get("curr_vs_micro_vwap_bp", 0.0) or 0.0) > 0)
-            or (pressure_usable and int(features.get("same_price_buy_absorption", 0) or 0) >= 2)
+            micro_vwap_usable
+            and float(features.get("curr_vs_micro_vwap_bp", 0.0) or 0.0) > 0
+        ) or (
+            pressure_usable
+            and int(features.get("same_price_buy_absorption", 0) or 0) >= 2
         )
 
         instant_strength_only = (
@@ -1460,10 +1704,14 @@ class GPTSniperEngine:
             score = int(result.get("score", 50))
             result["action"] = "WAIT"
             result["score"] = min(score, 74)
-            result["reason"] = f"{result.get('reason', '')} | remote_buy_guard(risk={risk_flags})"
+            result["reason"] = (
+                f"{result.get('reason', '')} | remote_buy_guard(risk={risk_flags})"
+            )
         return result
 
-    def _annotate_entry_numeric_consistency(self, result, *, prompt_type, feature_packet):
+    def _annotate_entry_numeric_consistency(
+        self, result, *, prompt_type, feature_packet
+    ):
         if prompt_type not in {"scalping_entry", "scalping_shared"}:
             return result
         payload = dict(result or {}) if isinstance(result, dict) else {}
@@ -1486,9 +1734,14 @@ class GPTSniperEngine:
         if "tick_acceleration_ratio" in lowered and accel >= 1.10:
             if re.search(r"tick_acceleration_ratio[^|]{0,100}<\s*1\.1", lowered):
                 contradiction = True
-            if re.search(r"tick_acceleration_ratio[^|]{0,100}(?:fails|not enough|not met|insufficient)", lowered):
+            if re.search(
+                r"tick_acceleration_ratio[^|]{0,100}(?:fails|not enough|not met|insufficient)",
+                lowered,
+            ):
                 contradiction = True
-            if re.search(r"tick_acceleration_ratio[^|]{0,100}not\s*>?=\s*1\.1", lowered):
+            if re.search(
+                r"tick_acceleration_ratio[^|]{0,100}not\s*>?=\s*1\.1", lowered
+            ):
                 contradiction = True
             if contradiction:
                 inconsistency_field = "tick_acceleration_ratio"
@@ -1497,14 +1750,21 @@ class GPTSniperEngine:
 
         micro_vwap_bp = _feature_float("curr_vs_micro_vwap_bp", 0.0)
         ma5_bp = _feature_float("curr_vs_ma5_bp", 0.0)
-        micro_vwap_pass = self._feature_packet_micro_vwap_usable(feature_packet) and micro_vwap_bp > 0.0
+        micro_vwap_pass = (
+            self._feature_packet_micro_vwap_usable(feature_packet)
+            and micro_vwap_bp > 0.0
+        )
         ma5_pass = self._feature_packet_ma5_usable(feature_packet) and ma5_bp > 0.0
         position_pass = micro_vwap_pass or ma5_pass
         position_both_pass = micro_vwap_bp > 0.0 and ma5_bp > 0.0
-        if not contradiction and position_pass and (
-            "position" in lowered
-            or "curr_vs_micro_vwap_bp" in lowered
-            or "curr_vs_ma5_bp" in lowered
+        if (
+            not contradiction
+            and position_pass
+            and (
+                "position" in lowered
+                or "curr_vs_micro_vwap_bp" in lowered
+                or "curr_vs_ma5_bp" in lowered
+            )
         ):
             position_fail_phrase = position_both_pass and (
                 "position disadvantage" in lowered
@@ -1514,7 +1774,9 @@ class GPTSniperEngine:
             both_positive_but_negated = position_both_pass and (
                 "not both positive" in lowered
             )
-            explicit_micro_contradiction = micro_vwap_pass and "curr_vs_micro_vwap_bp <= 0" in lowered
+            explicit_micro_contradiction = (
+                micro_vwap_pass and "curr_vs_micro_vwap_bp <= 0" in lowered
+            )
             explicit_ma5_contradiction = ma5_pass and "curr_vs_ma5_bp <= 0" in lowered
             if position_fail_phrase or both_positive_but_negated:
                 contradiction = True
@@ -1536,13 +1798,19 @@ class GPTSniperEngine:
         buy_pressure = _feature_float("buy_pressure_10t", 50.0)
         net_aggressive_delta = _feature_float("net_aggressive_delta_10t", 0.0)
         pressure_usable = self._feature_packet_pressure_usable(feature_packet)
-        supply_pass = pressure_usable and (buy_pressure >= 68.0 or net_aggressive_delta > 0.0)
-        if not contradiction and supply_pass and (
-            "buy_pressure_10t" in lowered
-            or "buy pressure" in lowered
-            or "supply-demand" in lowered
-            or "supply demand" in lowered
-            or "net_aggressive_delta_10t" in lowered
+        supply_pass = pressure_usable and (
+            buy_pressure >= 68.0 or net_aggressive_delta > 0.0
+        )
+        if (
+            not contradiction
+            and supply_pass
+            and (
+                "buy_pressure_10t" in lowered
+                or "buy pressure" in lowered
+                or "supply-demand" in lowered
+                or "supply demand" in lowered
+                or "net_aggressive_delta_10t" in lowered
+            )
         ):
             supply_fail_phrase = (
                 "buy_pressure_10t < 68" in lowered
@@ -1560,7 +1828,9 @@ class GPTSniperEngine:
                     "buy_pressure_10t": round(buy_pressure, 3),
                     "net_aggressive_delta_10t": round(net_aggressive_delta, 3),
                     "tick_aggressor_pressure_usable": bool(pressure_usable),
-                    "tick_aggressor_trusted_count": (feature_packet or {}).get("tick_aggressor_trusted_count"),
+                    "tick_aggressor_trusted_count": (feature_packet or {}).get(
+                        "tick_aggressor_trusted_count"
+                    ),
                 }
 
         action = str(payload.get("action") or "").upper()
@@ -1569,12 +1839,18 @@ class GPTSniperEngine:
         except Exception:
             score = 0.0
         if not contradiction and action != "BUY":
-            feature_pass_count = int(position_pass) + int(accel >= 1.10) + int(supply_pass)
-            if feature_pass_count >= 3 and score >= 70.0 and (
-                "insufficient buy" in lowered
-                or "prevents buy" in lowered
-                or "buy setup is incomplete" in lowered
-                or "buy signals" in lowered
+            feature_pass_count = (
+                int(position_pass) + int(accel >= 1.10) + int(supply_pass)
+            )
+            if (
+                feature_pass_count >= 3
+                and score >= 70.0
+                and (
+                    "insufficient buy" in lowered
+                    or "prevents buy" in lowered
+                    or "buy setup is incomplete" in lowered
+                    or "buy signals" in lowered
+                )
             ):
                 contradiction = True
                 inconsistency_field = "entry_feature_bundle"
@@ -1584,7 +1860,9 @@ class GPTSniperEngine:
                     "tick_acceleration_ratio": round(accel, 3),
                     "buy_pressure_10t": round(buy_pressure, 3),
                     "tick_aggressor_pressure_usable": bool(pressure_usable),
-                    "tick_aggressor_trusted_count": (feature_packet or {}).get("tick_aggressor_trusted_count"),
+                    "tick_aggressor_trusted_count": (feature_packet or {}).get(
+                        "tick_aggressor_trusted_count"
+                    ),
                     "curr_vs_micro_vwap_bp": round(micro_vwap_bp, 3),
                     "curr_vs_ma5_bp": round(ma5_bp, 3),
                 }
@@ -1593,7 +1871,9 @@ class GPTSniperEngine:
             return payload
         payload["ai_reason_numeric_inconsistency"] = True
         payload["ai_reason_feature_inconsistency"] = True
-        payload["ai_reason_numeric_inconsistency_field"] = inconsistency_field or "entry_feature_bundle"
+        payload["ai_reason_numeric_inconsistency_field"] = (
+            inconsistency_field or "entry_feature_bundle"
+        )
         payload["ai_reason_numeric_inconsistency_reason"] = (
             inconsistency_reason or "entry_feature_pass_described_as_fail"
         )
@@ -1601,20 +1881,35 @@ class GPTSniperEngine:
         payload["ai_reason_numeric_inconsistency_excerpt"] = reason[:120]
         return payload
 
-    def _append_numeric_consistency_recheck_context(self, formatted_data, *, metadata_extra):
+    def _append_numeric_consistency_recheck_context(
+        self, formatted_data, *, metadata_extra
+    ):
         if not isinstance(metadata_extra, dict):
             return formatted_data
-        if str(metadata_extra.get("ai_numeric_consistency_recheck") or "").strip().lower() not in {
+        if str(
+            metadata_extra.get("ai_numeric_consistency_recheck") or ""
+        ).strip().lower() not in {
             "1",
             "true",
             "yes",
             "y",
         }:
             return formatted_data
-        original_reason = str(metadata_extra.get("ai_numeric_consistency_recheck_original_reason_excerpt") or "-")[:160]
-        inconsistency_field = str(metadata_extra.get("ai_numeric_consistency_recheck_inconsistency_field") or "-")[:80]
-        inconsistency_reason = str(metadata_extra.get("ai_numeric_consistency_recheck_inconsistency_reason") or "-")[:120]
-        detected_value = str(metadata_extra.get("ai_numeric_consistency_recheck_detected_value") or "-")[:240]
+        original_reason = str(
+            metadata_extra.get("ai_numeric_consistency_recheck_original_reason_excerpt")
+            or "-"
+        )[:160]
+        inconsistency_field = str(
+            metadata_extra.get("ai_numeric_consistency_recheck_inconsistency_field")
+            or "-"
+        )[:80]
+        inconsistency_reason = str(
+            metadata_extra.get("ai_numeric_consistency_recheck_inconsistency_reason")
+            or "-"
+        )[:120]
+        detected_value = str(
+            metadata_extra.get("ai_numeric_consistency_recheck_detected_value") or "-"
+        )[:240]
         correction_note = (
             "[Numeric consistency recheck]\n"
             f"- prior_reason_excerpt: {original_reason}\n"
@@ -1643,14 +1938,20 @@ class GPTSniperEngine:
                             "If the corrected decision is still WAIT, explain using non-contradictory missing conditions only."
                         ),
                     }
-                    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str)
+                    return json.dumps(
+                        payload, ensure_ascii=False, separators=(",", ":"), default=str
+                    )
             return f"{formatted_data}\n\n{correction_note}"
         return formatted_data
 
-    def _append_early_accel_strong_bundle_recheck_context(self, formatted_data, *, metadata_extra):
+    def _append_early_accel_strong_bundle_recheck_context(
+        self, formatted_data, *, metadata_extra
+    ):
         if not isinstance(metadata_extra, dict):
             return formatted_data
-        if str(metadata_extra.get("early_accel_strong_bundle_recheck") or "").strip().lower() not in {
+        if str(
+            metadata_extra.get("early_accel_strong_bundle_recheck") or ""
+        ).strip().lower() not in {
             "1",
             "true",
             "yes",
@@ -1658,50 +1959,85 @@ class GPTSniperEngine:
         }:
             return formatted_data
         original_reason = str(
-            metadata_extra.get("early_accel_strong_bundle_recheck_original_reason_excerpt") or "-"
+            metadata_extra.get(
+                "early_accel_strong_bundle_recheck_original_reason_excerpt"
+            )
+            or "-"
         )[:160]
         original_action = str(
-            metadata_extra.get("early_accel_strong_bundle_recheck_original_action") or "-"
+            metadata_extra.get("early_accel_strong_bundle_recheck_original_action")
+            or "-"
         )[:32]
         original_score = str(
-            metadata_extra.get("early_accel_strong_bundle_recheck_original_score") or "0.0"
+            metadata_extra.get("early_accel_strong_bundle_recheck_original_score")
+            or "0.0"
         )[:32]
         promotion_reason = str(
-            metadata_extra.get("early_accel_strong_bundle_recheck_scanner_promotion_reason") or "-"
+            metadata_extra.get(
+                "early_accel_strong_bundle_recheck_scanner_promotion_reason"
+            )
+            or "-"
         )[:120]
         source_signature = str(
-            metadata_extra.get("early_accel_strong_bundle_recheck_source_signature") or "-"
+            metadata_extra.get("early_accel_strong_bundle_recheck_source_signature")
+            or "-"
         )[:160]
         price_delta = str(
-            metadata_extra.get("early_accel_strong_bundle_recheck_price_delta_since_first_seen_pct") or "0.00"
+            metadata_extra.get(
+                "early_accel_strong_bundle_recheck_price_delta_since_first_seen_pct"
+            )
+            or "0.00"
         )[:32]
         comparable_flu_delta = str(
-            metadata_extra.get("early_accel_strong_bundle_recheck_comparable_flu_delta_since_first_seen") or "0.00"
+            metadata_extra.get(
+                "early_accel_strong_bundle_recheck_comparable_flu_delta_since_first_seen"
+            )
+            or "0.00"
         )[:32]
         cntr_str_available = str(
-            metadata_extra.get("early_accel_strong_bundle_recheck_cntr_str_available") or "false"
+            metadata_extra.get("early_accel_strong_bundle_recheck_cntr_str_available")
+            or "false"
         )[:8]
-        cntr_str = str(metadata_extra.get("early_accel_strong_bundle_recheck_cntr_str") or "0.0")[:32]
+        cntr_str = str(
+            metadata_extra.get("early_accel_strong_bundle_recheck_cntr_str") or "0.0"
+        )[:32]
         tick_accel = str(
-            metadata_extra.get("early_accel_strong_bundle_recheck_tick_acceleration_ratio") or "0.000"
+            metadata_extra.get(
+                "early_accel_strong_bundle_recheck_tick_acceleration_ratio"
+            )
+            or "0.000"
         )[:32]
         micro_vwap_bp = str(
-            metadata_extra.get("early_accel_strong_bundle_recheck_curr_vs_micro_vwap_bp") or "0.00"
+            metadata_extra.get(
+                "early_accel_strong_bundle_recheck_curr_vs_micro_vwap_bp"
+            )
+            or "0.00"
         )[:32]
         micro_vwap_available = str(
-            metadata_extra.get("early_accel_strong_bundle_recheck_micro_vwap_available") or "false"
+            metadata_extra.get("early_accel_strong_bundle_recheck_micro_vwap_available")
+            or "false"
         )[:8]
         minute_candle_context_quality = str(
-            metadata_extra.get("early_accel_strong_bundle_recheck_minute_candle_context_quality") or "unknown"
+            metadata_extra.get(
+                "early_accel_strong_bundle_recheck_minute_candle_context_quality"
+            )
+            or "unknown"
         )[:80]
         minute_candle_window_fresh = str(
-            metadata_extra.get("early_accel_strong_bundle_recheck_minute_candle_window_fresh") or "false"
+            metadata_extra.get(
+                "early_accel_strong_bundle_recheck_minute_candle_window_fresh"
+            )
+            or "false"
         )[:8]
         minute_candle_latest_age_ms = str(
-            metadata_extra.get("early_accel_strong_bundle_recheck_minute_candle_latest_age_ms") or "0"
+            metadata_extra.get(
+                "early_accel_strong_bundle_recheck_minute_candle_latest_age_ms"
+            )
+            or "0"
         )[:32]
         buy_pressure_10t = str(
-            metadata_extra.get("early_accel_strong_bundle_recheck_buy_pressure_10t") or "0.00"
+            metadata_extra.get("early_accel_strong_bundle_recheck_buy_pressure_10t")
+            or "0.00"
         )[:32]
         correction_note = (
             "[Early acceleration strong-bundle recheck]\n"
@@ -1755,7 +2091,9 @@ class GPTSniperEngine:
                             "BUY is allowed only if the same packet supports it without relaxing the score gate."
                         ),
                     }
-                    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str)
+                    return json.dumps(
+                        payload, ensure_ascii=False, separators=(",", ":"), default=str
+                    )
             return f"{formatted_data}\n\n{correction_note}"
         return formatted_data
 
@@ -1809,12 +2147,15 @@ class GPTSniperEngine:
                     text_value = (
                         content.get("text")
                         or content.get("value")
-                        or ((content.get("output_text") or {}).get("text") if isinstance(content.get("output_text"), dict) else None)
+                        or (
+                            (content.get("output_text") or {}).get("text")
+                            if isinstance(content.get("output_text"), dict)
+                            else None
+                        )
                     )
                 else:
-                    text_value = (
-                        getattr(content, "text", None)
-                        or getattr(content, "value", None)
+                    text_value = getattr(content, "text", None) or getattr(
+                        content, "value", None
                     )
                     output_text = getattr(content, "output_text", None)
                     if not text_value and output_text is not None:
@@ -1822,7 +2163,9 @@ class GPTSniperEngine:
                 if text_value:
                     fragments.append(str(text_value))
 
-        return "\n".join(fragment.strip() for fragment in fragments if str(fragment).strip()).strip()
+        return "\n".join(
+            fragment.strip() for fragment in fragments if str(fragment).strip()
+        ).strip()
 
     # ==========================================
     # 핵심 API 호출기: _call_openai_safe
@@ -1837,7 +2180,9 @@ class GPTSniperEngine:
         text = str(exc or "").lower()
         return "invalid_prompt" in text or "invalid prompt" in text
 
-    def _build_invalid_prompt_retry_request(self, request: OpenAIResponseRequest) -> OpenAIResponseRequest:
+    def _build_invalid_prompt_retry_request(
+        self, request: OpenAIResponseRequest
+    ) -> OpenAIResponseRequest:
         if request.require_json:
             if request.schema_name == "holding_score_v2":
                 safe_prompt = (
@@ -1865,7 +2210,9 @@ class GPTSniperEngine:
         metadata = dict(request.metadata or {})
         metadata["invalid_prompt_retry"] = "true"
         metadata["original_endpoint_name"] = str(request.endpoint_name or "generic")
-        metadata = self._sanitize_openai_metadata(metadata, context_name=request.context_name)
+        metadata = self._sanitize_openai_metadata(
+            metadata, context_name=request.context_name
+        )
         return replace(
             request,
             prompt=self._wrap_openai_prompt_contract(
@@ -1882,7 +2229,9 @@ class GPTSniperEngine:
             require_json=request.require_json,
             schema_name=request.schema_name,
         )
-        invalid_prompt_retried = bool((request.metadata or {}).get("invalid_prompt_retry") == "true")
+        invalid_prompt_retried = bool(
+            (request.metadata or {}).get("invalid_prompt_retry") == "true"
+        )
         last_error = ""
         provider_total_ms = 0
         last_provider_ms = 0
@@ -1894,16 +2243,24 @@ class GPTSniperEngine:
             provider_started_at = time.perf_counter()
             try:
                 response = self.client.responses.create(
-                    **request.build_provider_payload(use_schema_registry=use_schema_registry),
+                    **request.build_provider_payload(
+                        use_schema_registry=use_schema_registry
+                    ),
                     timeout=max(0.05, request.remaining_timeout_sec()),
                 )
-                provider_ms = max(0, int((time.perf_counter() - provider_started_at) * 1000))
+                provider_ms = max(
+                    0, int((time.perf_counter() - provider_started_at) * 1000)
+                )
                 last_provider_ms = provider_ms
                 provider_total_ms += provider_ms
                 self._rotate_client()
                 raw_text = self._extract_openai_response_text(response)
-                payload = self._parse_openai_transport_payload(raw_text, require_json=request.require_json)
-                roundtrip_ms = max(0, int((time.perf_counter() - request.submitted_at_perf) * 1000))
+                payload = self._parse_openai_transport_payload(
+                    raw_text, require_json=request.require_json
+                )
+                roundtrip_ms = max(
+                    0, int((time.perf_counter() - request.submitted_at_perf) * 1000)
+                )
                 return OpenAITransportResult(
                     payload=payload,
                     transport_mode="http",
@@ -1920,7 +2277,9 @@ class GPTSniperEngine:
                     },
                 )
             except RateLimitError as e:
-                last_provider_ms = max(0, int((time.perf_counter() - provider_started_at) * 1000))
+                last_provider_ms = max(
+                    0, int((time.perf_counter() - provider_started_at) * 1000)
+                )
                 provider_total_ms += last_provider_ms
                 last_error = str(e)
                 last_error_type = type(e).__name__
@@ -1939,7 +2298,9 @@ class GPTSniperEngine:
                 time.sleep(min(0.8, max(0.0, remaining - 0.05)))
                 continue
             except Exception as e:
-                last_provider_ms = max(0, int((time.perf_counter() - provider_started_at) * 1000))
+                last_provider_ms = max(
+                    0, int((time.perf_counter() - provider_started_at) * 1000)
+                )
                 provider_total_ms += last_provider_ms
                 last_error = str(e).lower()
                 last_error_type = type(e).__name__
@@ -1964,7 +2325,14 @@ class GPTSniperEngine:
                     continue
                 if any(
                     x in last_error
-                    for x in ["429", "quota", "503", "unavailable", "server", "too_many_requests"]
+                    for x in [
+                        "429",
+                        "quota",
+                        "503",
+                        "unavailable",
+                        "server",
+                        "too_many_requests",
+                    ]
                 ):
                     old_key = self.current_key[-5:]
                     self._rotate_client()
@@ -1974,7 +2342,9 @@ class GPTSniperEngine:
                     )
                     if request.remaining_timeout_sec() <= 0.05:
                         break
-                    time.sleep(min(0.8, max(0.0, request.remaining_timeout_sec() - 0.05)))
+                    time.sleep(
+                        min(0.8, max(0.0, request.remaining_timeout_sec() - 0.05))
+                    )
                     continue
                 raise RuntimeError(f"OpenAI Responses HTTP 응답/파싱 실패: {e}") from e
         if last_error_timeout_like:
@@ -1986,7 +2356,9 @@ class GPTSniperEngine:
             )
             log_info(f"⚠️ [{request.context_name}] {fatal_msg}")
         else:
-            fatal_msg = f"🚨 [AI 고갈] 모든 OpenAI API 키 사용 불가. 마지막 에러: {last_error}"
+            fatal_msg = (
+                f"🚨 [AI 고갈] 모든 OpenAI API 키 사용 불가. 마지막 에러: {last_error}"
+            )
             log_error(fatal_msg)
         raise OpenAIResponsesHTTPError(
             fatal_msg,
@@ -2015,7 +2387,10 @@ class GPTSniperEngine:
         remaining_ms = max(1, int(request.remaining_timeout_sec() * 1000))
         configured_ws_ms = max(
             1,
-            int(getattr(TRADING_RULES, "OPENAI_RESPONSES_WS_TIMEOUT_MS", remaining_ms) or remaining_ms),
+            int(
+                getattr(TRADING_RULES, "OPENAI_RESPONSES_WS_TIMEOUT_MS", remaining_ms)
+                or remaining_ms
+            ),
         )
         configured_reserve_ms = max(
             1,
@@ -2033,7 +2408,9 @@ class GPTSniperEngine:
             configured_reserve_ms,
             max(1, remaining_ms - min_ws_attempt_ms),
         )
-        attempt_ms = min(configured_ws_ms, max(min_ws_attempt_ms, remaining_ms - reserve_ms))
+        attempt_ms = min(
+            configured_ws_ms, max(min_ws_attempt_ms, remaining_ms - reserve_ms)
+        )
         if attempt_ms >= remaining_ms:
             return request
         metadata = dict(request.metadata or {})
@@ -2044,7 +2421,9 @@ class GPTSniperEngine:
             request,
             submitted_at_perf=time.perf_counter(),
             timeout_ms=attempt_ms,
-            metadata=self._sanitize_openai_metadata(metadata, context_name=request.context_name),
+            metadata=self._sanitize_openai_metadata(
+                metadata, context_name=request.context_name
+            ),
         )
 
     def _call_openai_safe(
@@ -2068,8 +2447,12 @@ class GPTSniperEngine:
             temperature_override=temperature_override,
             model_name=target_model,
         )
-        max_output_tokens = self._resolve_openai_max_output_tokens(require_json=bool(require_json))
-        reasoning_effort = self._resolve_openai_reasoning_effort(model_name=target_model)
+        max_output_tokens = self._resolve_openai_max_output_tokens(
+            require_json=bool(require_json)
+        )
+        reasoning_effort = self._resolve_openai_reasoning_effort(
+            model_name=target_model
+        )
         request = self._build_openai_response_request(
             prompt=prompt,
             user_input=user_input,
@@ -2095,7 +2478,9 @@ class GPTSniperEngine:
             "openai_endpoint_name": request.endpoint_name,
             "openai_schema_name": request.schema_name or "-",
         }
-        bedrock_primary_payload = self._try_bedrock_primary_provider(request=request, transport_meta=transport_meta)
+        bedrock_primary_payload = self._try_bedrock_primary_provider(
+            request=request, transport_meta=transport_meta
+        )
         if isinstance(bedrock_primary_payload, dict):
             return bedrock_primary_payload
         result = None
@@ -2123,7 +2508,9 @@ class GPTSniperEngine:
                         "openai_ws_error_type": type(e).__name__,
                     }
                 )
-                if isinstance(e, (OpenAIWSRequestIdMismatchError, OpenAIWSLateResponseError)):
+                if isinstance(
+                    e, (OpenAIWSRequestIdMismatchError, OpenAIWSLateResponseError)
+                ):
                     self._set_last_transport_meta(transport_meta)
                     log_error(f"🚨 [OpenAI WS fail-closed] {context_name}: {e}")
                     raise
@@ -2176,7 +2563,9 @@ class GPTSniperEngine:
                         if result is None:
                             raise
                         transport_meta["openai_ws_http_fallback_fail_closed"] = True
-                        transport_meta["openai_ws_http_fallback_error_type"] = type(fallback_error).__name__
+                        transport_meta["openai_ws_http_fallback_error_type"] = type(
+                            fallback_error
+                        ).__name__
                         log_info(
                             f"⚠️ [OpenAI WS HTTP fallback fail-closed] "
                             f"{context_name}: {fallback_error}"
@@ -2187,7 +2576,9 @@ class GPTSniperEngine:
                         "openai_transport_mode": result.transport_mode,
                         "openai_ws_used": False,
                         "openai_ws_http_fallback": True,
-                        "openai_ws_queue_wait_ms": transport_meta.get("openai_ws_queue_wait_ms", 0),
+                        "openai_ws_queue_wait_ms": transport_meta.get(
+                            "openai_ws_queue_wait_ms", 0
+                        ),
                         "openai_ws_roundtrip_ms": int(result.roundtrip_ms),
                     }
                 )
@@ -2219,20 +2610,28 @@ class GPTSniperEngine:
             return result.payload
         return str(result.payload or "").strip()
 
-    def _try_bedrock_primary_provider(self, *, request: OpenAIResponseRequest, transport_meta: dict[str, Any]):
+    def _try_bedrock_primary_provider(
+        self, *, request: OpenAIResponseRequest, transport_meta: dict[str, Any]
+    ):
         if not bool(request.require_json):
             return None
         model_name = str(request.model_name or "")
         if str(request.endpoint_name or "") == "entry_price":
-            configured_route_mode = os.getenv("KORSTOCKSCAN_BEDROCK_ENTRY_PRICE_ROUTE_MODE", "off")
+            configured_route_mode = os.getenv(
+                "KORSTOCKSCAN_BEDROCK_ENTRY_PRICE_ROUTE_MODE", "off"
+            )
         elif model_name == "gpt-5.4-mini":
-            configured_route_mode = os.getenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_ROUTE_MODE", "shadow")
+            configured_route_mode = os.getenv(
+                "KORSTOCKSCAN_BEDROCK_NOVA_LITE_ROUTE_MODE", "shadow"
+            )
         else:
             return None
         if str(configured_route_mode or "").strip().lower() != "primary":
             return None
         if str(request.endpoint_name or "") == "entry_price":
-            return self._try_entry_price_bedrock_primary_provider(request=request, transport_meta=transport_meta)
+            return self._try_entry_price_bedrock_primary_provider(
+                request=request, transport_meta=transport_meta
+            )
         try:
             from src.engine.bedrock_nova_provider import (
                 BedrockNovaProviderError,
@@ -2246,14 +2645,28 @@ class GPTSniperEngine:
             route_mode, profile = route_mode_for_model(request.model_name)
             if route_mode != "primary" or profile is None:
                 return None
-            if str(request.model_name or "") == "gpt-5.4-mini" and not endpoint_allowed_for_lite_primary(
+            if str(
+                request.model_name or ""
+            ) == "gpt-5.4-mini" and not endpoint_allowed_for_lite_primary(
                 request.endpoint_name
             ):
                 return None
-            result = runtime_provider().converse(prompt=request.prompt or "", user_input=request.user_input, profile=profile)
-            request_meta = self._build_bedrock_shadow_request_meta(request=request, transport_meta=transport_meta, roundtrip_ms=result.latency_ms)
+            result = runtime_provider().converse(
+                prompt=request.prompt or "",
+                user_input=request.user_input,
+                profile=profile,
+            )
+            request_meta = self._build_bedrock_shadow_request_meta(
+                request=request,
+                transport_meta=transport_meta,
+                roundtrip_ms=result.latency_ms,
+            )
             request_meta["request_id"] = request.request_id
-            if not result.parse_ok or not isinstance(result.payload, dict) or not result.payload:
+            if (
+                not result.parse_ok
+                or not isinstance(result.payload, dict)
+                or not result.payload
+            ):
                 write_provider_audit_row(
                     provider_audit_row(
                         request_meta=request_meta,
@@ -2279,10 +2692,16 @@ class GPTSniperEngine:
                 }
             )
             self._set_last_transport_meta(transport_meta)
-            write_provider_audit_row(provider_audit_row(request_meta=request_meta, result=result, payload=result.payload))
+            write_provider_audit_row(
+                provider_audit_row(
+                    request_meta=request_meta, result=result, payload=result.payload
+                )
+            )
             return result.payload
         except Exception as exc:
-            failback_enabled = str(os.getenv("KORSTOCKSCAN_BEDROCK_PRIMARY_FAILBACK_TO_OPENAI", "true")).strip().lower() in {
+            failback_enabled = str(
+                os.getenv("KORSTOCKSCAN_BEDROCK_PRIMARY_FAILBACK_TO_OPENAI", "true")
+            ).strip().lower() in {
                 "1",
                 "true",
                 "yes",
@@ -2297,9 +2716,14 @@ class GPTSniperEngine:
                 }
             )
             try:
-                from src.engine.bedrock_nova_provider import provider_audit_row, write_provider_audit_row
+                from src.engine.bedrock_nova_provider import (
+                    provider_audit_row,
+                    write_provider_audit_row,
+                )
 
-                request_meta = self._build_bedrock_shadow_request_meta(request=request, transport_meta=transport_meta, roundtrip_ms=0)
+                request_meta = self._build_bedrock_shadow_request_meta(
+                    request=request, transport_meta=transport_meta, roundtrip_ms=0
+                )
                 request_meta["request_id"] = request.request_id
                 write_provider_audit_row(
                     provider_audit_row(
@@ -2314,10 +2738,14 @@ class GPTSniperEngine:
                 pass
             if not failback_enabled:
                 raise
-            log_error(f"⚠️ [Bedrock Nova primary failback] {request.context_name}: {type(exc).__name__}")
+            log_error(
+                f"⚠️ [Bedrock Nova primary failback] {request.context_name}: {type(exc).__name__}"
+            )
             return None
 
-    def _try_entry_price_bedrock_primary_provider(self, *, request: OpenAIResponseRequest, transport_meta: dict[str, Any]):
+    def _try_entry_price_bedrock_primary_provider(
+        self, *, request: OpenAIResponseRequest, transport_meta: dict[str, Any]
+    ):
         try:
             from src.engine.bedrock_nova_provider import (
                 BedrockNovaProviderError,
@@ -2335,16 +2763,28 @@ class GPTSniperEngine:
         primary_profile = entry_price_primary_profile_from_env()
         if primary_profile is None:
             return None
-        request_meta = self._build_bedrock_shadow_request_meta(request=request, transport_meta=transport_meta, roundtrip_ms=0)
+        request_meta = self._build_bedrock_shadow_request_meta(
+            request=request, transport_meta=transport_meta, roundtrip_ms=0
+        )
         request_meta["request_id"] = request.request_id
         request_meta["bedrock_primary_family"] = primary_profile.family
-        request_meta["decision_authority"] = "runtime_primary_with_bedrock_failback_defensive_close"
+        request_meta["decision_authority"] = (
+            "runtime_primary_with_bedrock_failback_defensive_close"
+        )
         request_meta["route_mode"] = entry_price_bedrock_route_mode()
 
         try:
             provider = runtime_provider()
-            result = provider.converse(prompt=request.prompt or "", user_input=request.user_input, profile=primary_profile)
-            if not result.parse_ok or not isinstance(result.payload, dict) or not result.payload:
+            result = provider.converse(
+                prompt=request.prompt or "",
+                user_input=request.user_input,
+                profile=primary_profile,
+            )
+            if (
+                not result.parse_ok
+                or not isinstance(result.payload, dict)
+                or not result.payload
+            ):
                 request_meta["bedrock_model_family"] = primary_profile.family
                 write_provider_audit_row(
                     provider_audit_row(
@@ -2355,12 +2795,17 @@ class GPTSniperEngine:
                     )
                 )
                 raise BedrockNovaProviderError(
-                    result.parse_error or "Bedrock entry_price primary returned invalid JSON",
+                    result.parse_error
+                    or "Bedrock entry_price primary returned invalid JSON",
                     error_type=result.parse_error or "parse_failed",
                     attempts=result.attempted_key_count,
                 )
             request_meta["bedrock_model_family"] = primary_profile.family
-            write_provider_audit_row(provider_audit_row(request_meta=request_meta, result=result, payload=result.payload))
+            write_provider_audit_row(
+                provider_audit_row(
+                    request_meta=request_meta, result=result, payload=result.payload
+                )
+            )
             transport_meta.update(result.transport_meta())
             transport_meta.update(
                 {
@@ -2393,7 +2838,11 @@ class GPTSniperEngine:
             except Exception:
                 pass
 
-            failback_profile = entry_price_failback_profile_from_env() if entry_price_failback_enabled() else None
+            failback_profile = (
+                entry_price_failback_profile_from_env()
+                if entry_price_failback_enabled()
+                else None
+            )
             if failback_profile is None:
                 transport_meta.update(
                     {
@@ -2435,12 +2884,17 @@ class GPTSniperEngine:
                         )
                     )
                     raise BedrockNovaProviderError(
-                        failback_result.parse_error or "Bedrock entry_price failback returned invalid JSON",
+                        failback_result.parse_error
+                        or "Bedrock entry_price failback returned invalid JSON",
                         error_type=failback_result.parse_error or "parse_failed",
                         attempts=failback_result.attempted_key_count,
                     )
                 write_provider_audit_row(
-                    provider_audit_row(request_meta=failback_meta, result=failback_result, payload=failback_result.payload)
+                    provider_audit_row(
+                        request_meta=failback_meta,
+                        result=failback_result,
+                        payload=failback_result.payload,
+                    )
                 )
                 transport_meta.update(failback_result.transport_meta())
                 transport_meta.update(
@@ -2458,7 +2912,9 @@ class GPTSniperEngine:
                     }
                 )
                 self._set_last_transport_meta(transport_meta)
-                log_error(f"⚠️ [Bedrock entry_price primary failback] {request.context_name}: {primary_error_type}")
+                log_error(
+                    f"⚠️ [Bedrock entry_price primary failback] {request.context_name}: {primary_error_type}"
+                )
                 return failback_result.payload
             except Exception as failback_exc:
                 failback_meta = dict(request_meta)
@@ -2495,9 +2951,12 @@ class GPTSniperEngine:
                 self._set_last_transport_meta(transport_meta)
                 raise
 
-    def _build_bedrock_shadow_request_meta(self, *, request, transport_meta, roundtrip_ms=0):
+    def _build_bedrock_shadow_request_meta(
+        self, *, request, transport_meta, roundtrip_ms=0
+    ):
         return {
-            "openai_request_id": transport_meta.get("openai_request_id") or request.request_id,
+            "openai_request_id": transport_meta.get("openai_request_id")
+            or request.request_id,
             "endpoint_name": request.endpoint_name,
             "prompt_type": request.endpoint_name,
             "symbol": request.symbol,
@@ -2505,11 +2964,19 @@ class GPTSniperEngine:
             "pipeline_stage": request.endpoint_name,
             "record_id": (request.metadata or {}).get("record_id"),
             "sim_record_id": (request.metadata or {}).get("sim_record_id"),
-            "sim_parent_record_id": (request.metadata or {}).get("sim_parent_record_id"),
-            "entry_adm_candidate_id": (request.metadata or {}).get("entry_adm_candidate_id"),
+            "sim_parent_record_id": (request.metadata or {}).get(
+                "sim_parent_record_id"
+            ),
+            "entry_adm_candidate_id": (request.metadata or {}).get(
+                "entry_adm_candidate_id"
+            ),
             "source_event_stage": (request.metadata or {}).get("source_event_stage"),
-            "pipeline_event_emitted_at": (request.metadata or {}).get("pipeline_event_emitted_at"),
-            "openai_latency_ms": roundtrip_ms or transport_meta.get("openai_ws_roundtrip_ms") or 0,
+            "pipeline_event_emitted_at": (request.metadata or {}).get(
+                "pipeline_event_emitted_at"
+            ),
+            "openai_latency_ms": roundtrip_ms
+            or transport_meta.get("openai_ws_roundtrip_ms")
+            or 0,
         }
 
     # ==========================================
@@ -2532,7 +2999,11 @@ class GPTSniperEngine:
         except Exception:
             best_bid = 0
         spread = best_ask - best_bid if best_ask > 0 and best_bid > 0 else 0
-        spread_bp = round((spread / best_bid) * 10000.0, 3) if spread > 0 and best_bid > 0 else 0.0
+        spread_bp = (
+            round((spread / best_bid) * 10000.0, 3)
+            if spread > 0 and best_bid > 0
+            else 0.0
+        )
         return {
             "best_ask": best_ask,
             "best_bid": best_bid,
@@ -2547,7 +3018,9 @@ class GPTSniperEngine:
             {
                 "time": tick.get("time"),
                 "dir": self._display_tick_dir(tick),
-                "aggressor_source": tick.get("aggressor_source", tick.get("dir_source", "-")),
+                "aggressor_source": tick.get(
+                    "aggressor_source", tick.get("dir_source", "-")
+                ),
                 "aggressor_quality": tick.get("aggressor_quality", "-"),
                 "price": tick.get("price", tick.get("현재가", tick.get("체결가"))),
                 "volume": tick.get("volume", tick.get("qty", tick.get("체결량"))),
@@ -2560,8 +3033,15 @@ class GPTSniperEngine:
     def _display_tick_dir(self, tick):
         if not isinstance(tick, dict):
             return "UNKNOWN"
-        source = str(tick.get("aggressor_source") or tick.get("dir_source") or "").strip()
-        side = str(tick.get("aggressor_side") or tick.get("dir") or tick.get("side") or "UNKNOWN").upper()
+        source = str(
+            tick.get("aggressor_source") or tick.get("dir_source") or ""
+        ).strip()
+        side = str(
+            tick.get("aggressor_side")
+            or tick.get("dir")
+            or tick.get("side")
+            or "UNKNOWN"
+        ).upper()
         if source == "price_change_heuristic":
             return "UNKNOWN"
         return side if side in {"BUY", "SELL"} else "UNKNOWN"
@@ -2570,7 +3050,10 @@ class GPTSniperEngine:
         return [
             {
                 "time": candle.get("체결시간", candle.get("time")),
-                "open": candle.get("시가", candle.get("open", candle.get("현재가", candle.get("close", 0)))),
+                "open": candle.get(
+                    "시가",
+                    candle.get("open", candle.get("현재가", candle.get("close", 0))),
+                ),
                 "high": candle.get("고가", candle.get("high")),
                 "low": candle.get("저가", candle.get("low")),
                 "close": candle.get("현재가", candle.get("close", candle.get("종가"))),
@@ -2630,12 +3113,16 @@ class GPTSniperEngine:
         compact = {key: payload.get(key) for key in keep_keys if key in payload}
         compact["aggressor_quality"] = {
             "orderbook_touch": payload.get("tick_aggressor_orderbook_touch_count", 0),
-            "cached_orderbook_touch": payload.get("tick_aggressor_cached_orderbook_touch_count", 0),
+            "cached_orderbook_touch": payload.get(
+                "tick_aggressor_cached_orderbook_touch_count", 0
+            ),
             "price_heuristic": payload.get("tick_aggressor_price_heuristic_count", 0),
             "unknown": payload.get("tick_aggressor_unknown_count", 0),
         }
         compact["source_quality_flags"] = {
-            "tick_source_quality_fields_sent": bool(audit.get("tick_source_quality_fields_sent", False)),
+            "tick_source_quality_fields_sent": bool(
+                audit.get("tick_source_quality_fields_sent", False)
+            ),
             "microstructure_reaction_context_sent": bool(
                 audit.get("microstructure_reaction_context_sent", False)
             ),
@@ -2643,9 +3130,15 @@ class GPTSniperEngine:
                 "tick_context_stale",
                 payload.get("tick_context_stale", "not_available_tick_latest_age"),
             ),
-            "quote_stale": audit.get("quote_stale", payload.get("quote_stale", "not_available_quote_age")),
-            "tick_aggressor_pressure_usable": payload.get("tick_aggressor_pressure_usable", False),
-            "tick_aggressor_trusted_count": payload.get("tick_aggressor_trusted_count", 0),
+            "quote_stale": audit.get(
+                "quote_stale", payload.get("quote_stale", "not_available_quote_age")
+            ),
+            "tick_aggressor_pressure_usable": payload.get(
+                "tick_aggressor_pressure_usable", False
+            ),
+            "tick_aggressor_trusted_count": payload.get(
+                "tick_aggressor_trusted_count", 0
+            ),
         }
         return compact
 
@@ -2653,18 +3146,28 @@ class GPTSniperEngine:
         ticks = [tick for tick in (recent_ticks or []) if isinstance(tick, dict)]
 
         def _price(tick):
-            return self._safe_float(tick.get("price", tick.get("현재가", tick.get("체결가", 0))), 0.0)
+            return self._safe_float(
+                tick.get("price", tick.get("현재가", tick.get("체결가", 0))), 0.0
+            )
 
         def _volume(tick):
-            return self._safe_float(tick.get("volume", tick.get("qty", tick.get("체결량", 0))), 0.0)
+            return self._safe_float(
+                tick.get("volume", tick.get("qty", tick.get("체결량", 0))), 0.0
+            )
 
         def _is_buy_tick(tick):
             inferred = infer_tick_aggressor_side(tick)
-            return inferred.get("side") == "BUY" and inferred.get("source") != "price_change_heuristic"
+            return (
+                inferred.get("side") == "BUY"
+                and inferred.get("source") != "price_change_heuristic"
+            )
 
         def _is_sell_tick(tick):
             inferred = infer_tick_aggressor_side(tick)
-            return inferred.get("side") == "SELL" and inferred.get("source") != "price_change_heuristic"
+            return (
+                inferred.get("side") == "SELL"
+                and inferred.get("source") != "price_change_heuristic"
+            )
 
         summary = {}
         for window in windows:
@@ -2679,21 +3182,28 @@ class GPTSniperEngine:
             oldest = _price(sample[-1])
             summary[str(window)] = {
                 "count": len(sample),
-                "price_delta_pct": round(((latest - oldest) / oldest * 100.0), 4) if oldest > 0 else 0.0,
-                "buy_pressure_pct": round((buy_vol / total * 100.0), 3) if total > 0 else 0.0,
+                "price_delta_pct": (
+                    round(((latest - oldest) / oldest * 100.0), 4)
+                    if oldest > 0
+                    else 0.0
+                ),
+                "buy_pressure_pct": (
+                    round((buy_vol / total * 100.0), 3) if total > 0 else 0.0
+                ),
                 "buy_volume": int(buy_vol),
                 "sell_volume": int(sell_vol),
                 "large_sell_print_count": sum(
                     1
                     for tick in sample
-                    if _is_sell_tick(tick)
-                    and _volume(tick) >= max(1.0, total * 0.15)
+                    if _is_sell_tick(tick) and _volume(tick) >= max(1.0, total * 0.15)
                 ),
             }
         return summary
 
     def _summarize_candle_windows(self, recent_candles, *, windows=(3, 5, 10)):
-        candles = [candle for candle in (recent_candles or []) if isinstance(candle, dict)]
+        candles = [
+            candle for candle in (recent_candles or []) if isinstance(candle, dict)
+        ]
 
         def _field(candle, *names):
             for name in names:
@@ -2707,28 +3217,49 @@ class GPTSniperEngine:
             if len(sample) < 2:
                 summary[str(window)] = {"count": len(sample)}
                 continue
-            first_close = self._safe_float(_field(sample[0], "현재가", "close", "종가"), 0.0)
-            last_close = self._safe_float(_field(sample[-1], "현재가", "close", "종가"), 0.0)
-            highs = [self._safe_float(_field(item, "고가", "high"), 0.0) for item in sample]
-            lows = [self._safe_float(_field(item, "저가", "low"), 0.0) for item in sample]
-            vols = [self._safe_float(_field(item, "거래량", "volume"), 0.0) for item in sample]
+            first_close = self._safe_float(
+                _field(sample[0], "현재가", "close", "종가"), 0.0
+            )
+            last_close = self._safe_float(
+                _field(sample[-1], "현재가", "close", "종가"), 0.0
+            )
+            highs = [
+                self._safe_float(_field(item, "고가", "high"), 0.0) for item in sample
+            ]
+            lows = [
+                self._safe_float(_field(item, "저가", "low"), 0.0) for item in sample
+            ]
+            vols = [
+                self._safe_float(_field(item, "거래량", "volume"), 0.0)
+                for item in sample
+            ]
             avg_prev_vol = sum(vols[:-1]) / max(1, len(vols) - 1)
             summary[str(window)] = {
                 "count": len(sample),
-                "close_slope_pct": round(((last_close - first_close) / first_close * 100.0), 4)
-                if first_close > 0
-                else 0.0,
-                "range_pct": round(((max(highs) - min(lows)) / min(lows) * 100.0), 4)
-                if lows and min(lows) > 0
-                else 0.0,
-                "latest_volume_ratio": round((vols[-1] / avg_prev_vol), 4) if avg_prev_vol > 0 else 0.0,
+                "close_slope_pct": (
+                    round(((last_close - first_close) / first_close * 100.0), 4)
+                    if first_close > 0
+                    else 0.0
+                ),
+                "range_pct": (
+                    round(((max(highs) - min(lows)) / min(lows) * 100.0), 4)
+                    if lows and min(lows) > 0
+                    else 0.0
+                ),
+                "latest_volume_ratio": (
+                    round((vols[-1] / avg_prev_vol), 4) if avg_prev_vol > 0 else 0.0
+                ),
             }
         return summary
 
-    def _build_entry_screen_v2_payload(self, ws_data, recent_ticks, recent_candles, *, feature_packet=None):
+    def _build_entry_screen_v2_payload(
+        self, ws_data, recent_ticks, recent_candles, *, feature_packet=None
+    ):
         ws = ws_data if isinstance(ws_data, dict) else {}
         if feature_packet is None:
-            feature_packet = extract_scalping_feature_packet(ws, recent_ticks, recent_candles)
+            feature_packet = extract_scalping_feature_packet(
+                ws, recent_ticks, recent_candles
+            )
         quote = self._extract_quote_snapshot(ws)
         orderbook = ws.get("orderbook") if isinstance(ws.get("orderbook"), dict) else {}
         asks = orderbook.get("asks") if isinstance(orderbook.get("asks"), list) else []
@@ -2736,7 +3267,9 @@ class GPTSniperEngine:
         ws_age_sec = None
         try:
             raw_ts = float(ws.get("last_ws_update_ts", 0) or 0)
-            ws_age_sec = round(max(0.0, time.time() - raw_ts), 3) if raw_ts > 0 else None
+            ws_age_sec = (
+                round(max(0.0, time.time() - raw_ts), 3) if raw_ts > 0 else None
+            )
         except Exception:
             ws_age_sec = None
         return {
@@ -2767,12 +3300,26 @@ class GPTSniperEngine:
                 ],
             },
             "tick_summary": self._summarize_tick_windows(recent_ticks, windows=(5, 10)),
-            "candle_summary": self._summarize_candle_windows(recent_candles, windows=(3, 5, 10)),
-            "recent_ticks_latest_first": self._compact_recent_ticks(recent_ticks, limit=5),
-            "recent_candles_latest_window": self._compact_recent_candles(recent_candles, limit=5),
+            "candle_summary": self._summarize_candle_windows(
+                recent_candles, windows=(3, 5, 10)
+            ),
+            "recent_ticks_latest_first": self._compact_recent_ticks(
+                recent_ticks, limit=5
+            ),
+            "recent_candles_latest_window": self._compact_recent_candles(
+                recent_candles, limit=5
+            ),
             "source_quality": {
-                "tick_count": len([tick for tick in (recent_ticks or []) if isinstance(tick, dict)]),
-                "candle_count": len([candle for candle in (recent_candles or []) if isinstance(candle, dict)]),
+                "tick_count": len(
+                    [tick for tick in (recent_ticks or []) if isinstance(tick, dict)]
+                ),
+                "candle_count": len(
+                    [
+                        candle
+                        for candle in (recent_candles or [])
+                        if isinstance(candle, dict)
+                    ]
+                ),
                 "orderbook_present": bool(asks or bids),
                 "tick_context_quality": feature_packet.get("tick_context_quality"),
                 "tick_context_stale": feature_packet.get("tick_context_stale"),
@@ -2780,13 +3327,25 @@ class GPTSniperEngine:
                 "quote_age_ms": feature_packet.get("quote_age_ms"),
                 "quote_stale": feature_packet.get("quote_stale"),
                 "tick_latest_age_ms": feature_packet.get("tick_latest_age_ms"),
-                "tick_aggressor_pressure_usable": feature_packet.get("tick_aggressor_pressure_usable", False),
-                "tick_aggressor_trusted_count": feature_packet.get("tick_aggressor_trusted_count", 0),
-                "tick_aggressor_price_heuristic_count": feature_packet.get("tick_aggressor_price_heuristic_count", 0),
-                "micro_vwap_available": feature_packet.get("micro_vwap_available", False),
+                "tick_aggressor_pressure_usable": feature_packet.get(
+                    "tick_aggressor_pressure_usable", False
+                ),
+                "tick_aggressor_trusted_count": feature_packet.get(
+                    "tick_aggressor_trusted_count", 0
+                ),
+                "tick_aggressor_price_heuristic_count": feature_packet.get(
+                    "tick_aggressor_price_heuristic_count", 0
+                ),
+                "micro_vwap_available": feature_packet.get(
+                    "micro_vwap_available", False
+                ),
                 "ma5_available": feature_packet.get("ma5_available", False),
-                "minute_candle_window_fresh": feature_packet.get("minute_candle_window_fresh", False),
-                "minute_candle_context_quality": feature_packet.get("minute_candle_context_quality"),
+                "minute_candle_window_fresh": feature_packet.get(
+                    "minute_candle_window_fresh", False
+                ),
+                "minute_candle_context_quality": feature_packet.get(
+                    "minute_candle_context_quality"
+                ),
                 "price_change_heuristic_is_not_aggressor": True,
             },
         }
@@ -2804,7 +3363,9 @@ class GPTSniperEngine:
         if isinstance(value, dict):
             cleaned = {}
             for key, item in value.items():
-                cleaned_item = self._clean_hot_entry_payload(self._clean_hot_entry_value(item))
+                cleaned_item = self._clean_hot_entry_payload(
+                    self._clean_hot_entry_value(item)
+                )
                 if cleaned_item not in (None, {}, []):
                     cleaned[key] = cleaned_item
             return cleaned
@@ -2816,7 +3377,9 @@ class GPTSniperEngine:
             return [item for item in cleaned_list if item not in (None, {}, [])]
         return self._clean_hot_entry_value(value)
 
-    def _build_entry_hot_runtime_context(self, *, matrix_runtime, entry_adm_runtime, lifecycle_ai_runtime):
+    def _build_entry_hot_runtime_context(
+        self, *, matrix_runtime, entry_adm_runtime, lifecycle_ai_runtime
+    ):
         context = {}
         if isinstance(matrix_runtime, dict):
             context["holding_exit_matrix"] = {
@@ -2860,7 +3423,9 @@ class GPTSniperEngine:
     ):
         ws = ws_data if isinstance(ws_data, dict) else {}
         ticks = [tick for tick in (recent_ticks or []) if isinstance(tick, dict)]
-        candles = [candle for candle in (recent_candles or []) if isinstance(candle, dict)]
+        candles = [
+            candle for candle in (recent_candles or []) if isinstance(candle, dict)
+        ]
         if feature_packet is None:
             feature_packet = extract_scalping_feature_packet(ws, ticks, candles)
         quote = self._extract_quote_snapshot(ws)
@@ -2940,12 +3505,16 @@ class GPTSniperEngine:
                 **quote,
             },
             "orderbook_top1": {
-                "ask": {"price": asks[0].get("price"), "volume": asks[0].get("volume")}
-                if asks and isinstance(asks[0], dict)
-                else {},
-                "bid": {"price": bids[0].get("price"), "volume": bids[0].get("volume")}
-                if bids and isinstance(bids[0], dict)
-                else {},
+                "ask": (
+                    {"price": asks[0].get("price"), "volume": asks[0].get("volume")}
+                    if asks and isinstance(asks[0], dict)
+                    else {}
+                ),
+                "bid": (
+                    {"price": bids[0].get("price"), "volume": bids[0].get("volume")}
+                    if bids and isinstance(bids[0], dict)
+                    else {}
+                ),
             },
             "latest_tick": {
                 "time": latest_tick.get("time"),
@@ -2969,7 +3538,9 @@ class GPTSniperEngine:
         }
         return self._clean_hot_entry_payload(payload)
 
-    def _format_entry_screen_hot_data(self, ws_data, recent_ticks, recent_candles, *, feature_packet=None, **runtime):
+    def _format_entry_screen_hot_data(
+        self, ws_data, recent_ticks, recent_candles, *, feature_packet=None, **runtime
+    ):
         payload = self._build_entry_screen_hot_payload(
             ws_data,
             recent_ticks,
@@ -2977,23 +3548,33 @@ class GPTSniperEngine:
             feature_packet=feature_packet,
             **runtime,
         )
-        return json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str)
+        return json.dumps(
+            payload, ensure_ascii=False, separators=(",", ":"), default=str
+        )
 
-    def _format_market_data(self, ws_data, recent_ticks, recent_candles=None, *, feature_packet=None):
+    def _format_market_data(
+        self, ws_data, recent_ticks, recent_candles=None, *, feature_packet=None
+    ):
         if recent_candles is None:
             recent_candles = []
 
-        curr_price = ws_data.get('curr', 0)
-        v_pw = ws_data.get('v_pw', 0)
-        fluctuation = ws_data.get('fluctuation', 0.0)
-        raw_orderbook = ws_data.get('orderbook')
-        orderbook = raw_orderbook if isinstance(raw_orderbook, dict) else {'asks': [], 'bids': []}
+        curr_price = ws_data.get("curr", 0)
+        v_pw = ws_data.get("v_pw", 0)
+        fluctuation = ws_data.get("fluctuation", 0.0)
+        raw_orderbook = ws_data.get("orderbook")
+        orderbook = (
+            raw_orderbook
+            if isinstance(raw_orderbook, dict)
+            else {"asks": [], "bids": []}
+        )
         asks = orderbook.get("asks") if isinstance(orderbook.get("asks"), list) else []
         bids = orderbook.get("bids") if isinstance(orderbook.get("bids"), list) else []
-        ask_tot = ws_data.get('ask_tot', 0)
-        bid_tot = ws_data.get('bid_tot', 0)
+        ask_tot = ws_data.get("ask_tot", 0)
+        bid_tot = ws_data.get("bid_tot", 0)
         if feature_packet is None:
-            feature_packet = extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles)
+            feature_packet = extract_scalping_feature_packet(
+                ws_data, recent_ticks, recent_candles
+            )
 
         if bool(getattr(TRADING_RULES, "OPENAI_ENTRY_SCREEN_V2_INPUT_ENABLED", False)):
             return json.dumps(
@@ -3023,7 +3604,9 @@ class GPTSniperEngine:
                 {
                     "time": t.get("time"),
                     "dir": self._display_tick_dir(t),
-                    "aggressor_source": t.get("aggressor_source", t.get("dir_source", "-")),
+                    "aggressor_source": t.get(
+                        "aggressor_source", t.get("dir_source", "-")
+                    ),
                     "aggressor_quality": t.get("aggressor_quality", "-"),
                     "price": t.get("price"),
                     "volume": t.get("volume"),
@@ -3048,7 +3631,9 @@ class GPTSniperEngine:
                     "price": curr_price,
                     "fluctuation_pct": fluctuation,
                     "websocket_strength": v_pw,
-                    "distance_from_day_high_pct": feature_packet["distance_from_day_high_pct"],
+                    "distance_from_day_high_pct": feature_packet[
+                        "distance_from_day_high_pct"
+                    ],
                 },
                 "features": feature_packet,
                 "quote_freshness": {
@@ -3060,8 +3645,20 @@ class GPTSniperEngine:
                 "recent_ticks_latest_first": compact_ticks,
                 "recent_candles_latest_window": compact_candles,
                 "source_quality": {
-                    "tick_count": len([tick for tick in (recent_ticks or []) if isinstance(tick, dict)]),
-                    "candle_count": len([candle for candle in (recent_candles or []) if isinstance(candle, dict)]),
+                    "tick_count": len(
+                        [
+                            tick
+                            for tick in (recent_ticks or [])
+                            if isinstance(tick, dict)
+                        ]
+                    ),
+                    "candle_count": len(
+                        [
+                            candle
+                            for candle in (recent_candles or [])
+                            if isinstance(candle, dict)
+                        ]
+                    ),
                     "orderbook_present": bool(compact_asks or compact_bids),
                     "tick_context_quality": feature_packet.get("tick_context_quality"),
                     "tick_context_stale": feature_packet.get("tick_context_stale"),
@@ -3069,47 +3666,69 @@ class GPTSniperEngine:
                     "quote_age_ms": feature_packet.get("quote_age_ms"),
                     "quote_stale": feature_packet.get("quote_stale"),
                     "tick_latest_age_ms": feature_packet.get("tick_latest_age_ms"),
-                    "tick_aggressor_pressure_usable": feature_packet.get("tick_aggressor_pressure_usable", False),
-                    "tick_aggressor_trusted_count": feature_packet.get("tick_aggressor_trusted_count", 0),
-                    "tick_aggressor_price_heuristic_count": feature_packet.get("tick_aggressor_price_heuristic_count", 0),
-                    "micro_vwap_available": feature_packet.get("micro_vwap_available", False),
+                    "tick_aggressor_pressure_usable": feature_packet.get(
+                        "tick_aggressor_pressure_usable", False
+                    ),
+                    "tick_aggressor_trusted_count": feature_packet.get(
+                        "tick_aggressor_trusted_count", 0
+                    ),
+                    "tick_aggressor_price_heuristic_count": feature_packet.get(
+                        "tick_aggressor_price_heuristic_count", 0
+                    ),
+                    "micro_vwap_available": feature_packet.get(
+                        "micro_vwap_available", False
+                    ),
                     "ma5_available": feature_packet.get("ma5_available", False),
-                    "minute_candle_window_fresh": feature_packet.get("minute_candle_window_fresh", False),
-                    "minute_candle_context_quality": feature_packet.get("minute_candle_context_quality"),
+                    "minute_candle_window_fresh": feature_packet.get(
+                        "minute_candle_window_fresh", False
+                    ),
+                    "minute_candle_context_quality": feature_packet.get(
+                        "minute_candle_context_quality"
+                    ),
                     "price_change_heuristic_is_not_aggressor": True,
                 },
             }
-            return json.dumps(compact_payload, ensure_ascii=False, separators=(",", ":"), default=str)
+            return json.dumps(
+                compact_payload, ensure_ascii=False, separators=(",", ":"), default=str
+            )
 
         imbalance_str = "데이터 없음"
         if ask_tot > 0 and bid_tot > 0:
             ratio = ask_tot / bid_tot
             if ratio >= 2.0:
-                imbalance_str = f"매도벽 압도적 우위 ({ratio:.1f}배) - 돌파 시 급등 패턴"
+                imbalance_str = (
+                    f"매도벽 압도적 우위 ({ratio:.1f}배) - 돌파 시 급등 패턴"
+                )
             elif ratio <= 0.5:
-                imbalance_str = f"매수벽 우위 ({1/ratio:.1f}배) - 하락 방어 또는 휩소(가짜) 패턴"
+                imbalance_str = (
+                    f"매수벽 우위 ({1/ratio:.1f}배) - 하락 방어 또는 휩소(가짜) 패턴"
+                )
             else:
                 imbalance_str = f"팽팽함 (매도 {ask_tot:,} vs 매수 {bid_tot:,})"
 
         high_price = curr_price
         if recent_candles:
-            high_price = max(c.get('고가', curr_price) for c in recent_candles)
+            high_price = max(c.get("고가", curr_price) for c in recent_candles)
 
         drawdown_str = "0.0%"
         if high_price > 0:
             drawdown = ((curr_price - high_price) / high_price) * 100
             drawdown_str = f"{drawdown:.2f}% (당일 고가 {high_price:,}원)"
 
-        ask_str = "\n".join([
-            f"매도 {5-i}호가: {a['price']:,}원 ({a['volume']:,}주)"
-            for i, a in enumerate(asks)
-            if isinstance(a, dict) and "price" in a and "volume" in a
-        ])
-        bid_str = "\n".join([
-            f"매수 {i+1}호가: {b['price']:,}원 ({b['volume']:,}주)"
-            for i, b in enumerate(bids)
-            if isinstance(b, dict) and "price" in b and "volume" in b
-        ])
+        ask_str = "\n".join(
+            [
+                f"매도 {5-i}호가: {a['price']:,}원 ({a['volume']:,}주)"
+                for i, a in enumerate(asks)
+                if isinstance(a, dict) and "price" in a and "volume" in a
+            ]
+        )
+        bid_str = "\n".join(
+            [
+                f"매수 {i+1}호가: {b['price']:,}원 ({b['volume']:,}주)"
+                for i, b in enumerate(bids)
+                if isinstance(b, dict) and "price" in b and "volume" in b
+            ]
+        )
 
         tick_summary = "틱 데이터 부족"
         tick_str = ""
@@ -3121,32 +3740,41 @@ class GPTSniperEngine:
                 if isinstance(t, dict)
             ]
             buy_vol = sum(
-                self._safe_float(t.get('volume'), 0.0)
+                self._safe_float(t.get("volume"), 0.0)
                 for t, inferred in inferred_rows
-                if inferred.get("side") == "BUY" and inferred.get("source") != "price_change_heuristic"
+                if inferred.get("side") == "BUY"
+                and inferred.get("source") != "price_change_heuristic"
             )
             sell_vol = sum(
-                self._safe_float(t.get('volume'), 0.0)
+                self._safe_float(t.get("volume"), 0.0)
                 for t, inferred in inferred_rows
-                if inferred.get("side") == "SELL" and inferred.get("source") != "price_change_heuristic"
+                if inferred.get("side") == "SELL"
+                and inferred.get("source") != "price_change_heuristic"
             )
             total_vol = buy_vol + sell_vol
             buy_pressure = (buy_vol / total_vol * 100) if total_vol > 0 else 50.0
             aggressor_source_counts = {}
             for _, inferred in inferred_rows:
                 source = str(inferred.get("source") or "unknown")
-                aggressor_source_counts[source] = aggressor_source_counts.get(source, 0) + 1
+                aggressor_source_counts[source] = (
+                    aggressor_source_counts.get(source, 0) + 1
+                )
 
-            latest_price = recent_ticks[0]['price']
-            oldest_price = recent_ticks[-1]['price']
-            trend_str = "상승 돌파 중 🚀" if latest_price > oldest_price else "하락 밀림 📉" if latest_price < oldest_price else "횡보 중 ➖"
-            latest_strength = recent_ticks[0].get('strength', 0.0)
+            latest_price = recent_ticks[0]["price"]
+            oldest_price = recent_ticks[-1]["price"]
+            trend_str = (
+                "상승 돌파 중 🚀"
+                if latest_price > oldest_price
+                else "하락 밀림 📉" if latest_price < oldest_price else "횡보 중 ➖"
+            )
+            latest_strength = recent_ticks[0].get("strength", 0.0)
 
             time_diff_sec = 0
             try:
                 from datetime import datetime
-                t1_str = str(recent_ticks[-1]['time']).replace(':', '').zfill(6)
-                t2_str = str(recent_ticks[0]['time']).replace(':', '').zfill(6)
+
+                t1_str = str(recent_ticks[-1]["time"]).replace(":", "").zfill(6)
+                t2_str = str(recent_ticks[0]["time"]).replace(":", "").zfill(6)
                 t1 = datetime.strptime(t1_str, "%H%M%S")
                 t2 = datetime.strptime(t2_str, "%H%M%S")
                 time_diff_sec = (t2 - t1).total_seconds()
@@ -3155,7 +3783,15 @@ class GPTSniperEngine:
             except:
                 time_diff_sec = 999
 
-            speed_str = f"🚀 매우 빠름 ({len(recent_ticks)}틱에 {time_diff_sec}초)" if time_diff_sec <= 2.0 else f"보통 ({time_diff_sec}초)" if time_diff_sec <= 10.0 else f"느림 ({time_diff_sec}초 - 소강상태)"
+            speed_str = (
+                f"🚀 매우 빠름 ({len(recent_ticks)}틱에 {time_diff_sec}초)"
+                if time_diff_sec <= 2.0
+                else (
+                    f"보통 ({time_diff_sec}초)"
+                    if time_diff_sec <= 10.0
+                    else f"느림 ({time_diff_sec}초 - 소강상태)"
+                )
+            )
 
             tick_summary = (
                 f"⏱️ [최근 {len(recent_ticks)}틱 정밀 브리핑]\n"
@@ -3166,47 +3802,61 @@ class GPTSniperEngine:
                 f"- 현재 체결강도: {latest_strength}%"
             )
 
-            tick_str = "\n".join([
-                (
-                    f"[{t['time']}] {self._display_tick_dir(t)} 체결"
-                    f"({t.get('aggressor_source', t.get('dir_source', 'unknown'))}/"
-                    f"{t.get('aggressor_quality', 'unknown')}): "
-                    f"{t['price']:,}원 ({t['volume']:,}주) | 강도:{t.get('strength', 0)}%"
-                )
-                for t in recent_ticks[:10]
-                if isinstance(t, dict)
-            ])
+            tick_str = "\n".join(
+                [
+                    (
+                        f"[{t['time']}] {self._display_tick_dir(t)} 체결"
+                        f"({t.get('aggressor_source', t.get('dir_source', 'unknown'))}/"
+                        f"{t.get('aggressor_quality', 'unknown')}): "
+                        f"{t['price']:,}원 ({t['volume']:,}주) | 강도:{t.get('strength', 0)}%"
+                    )
+                    for t in recent_ticks[:10]
+                    if isinstance(t, dict)
+                ]
+            )
 
         candle_str = ""
         if recent_candles:
-            candle_str = "\n".join([
-                f"[{c['체결시간']}] 시가:{c.get('시가', c.get('현재가', 0)):,} 고가:{c['고가']:,} 저가:{c['저가']:,} 종가:{c['현재가']:,} 거래량:{c['거래량']:,}"
-                for c in recent_candles
-            ])
+            candle_str = "\n".join(
+                [
+                    f"[{c['체결시간']}] 시가:{c.get('시가', c.get('현재가', 0)):,} 고가:{c['고가']:,} 저가:{c['저가']:,} 종가:{c['현재가']:,} 거래량:{c['거래량']:,}"
+                    for c in recent_candles
+                ]
+            )
         else:
             candle_str = "분봉 데이터 없음"
 
         volume_analysis = "비교 불가 (데이터 부족)"
         if recent_candles and len(recent_candles) >= 2:
-            current_volume = recent_candles[-1]['거래량']
-            prev_volumes = [c['거래량'] for c in recent_candles[:-1]]
-            avg_prev_volume = sum(prev_volumes) / len(prev_volumes) if prev_volumes else 0
+            current_volume = recent_candles[-1]["거래량"]
+            prev_volumes = [c["거래량"] for c in recent_candles[:-1]]
+            avg_prev_volume = (
+                sum(prev_volumes) / len(prev_volumes) if prev_volumes else 0
+            )
 
             if avg_prev_volume > 0:
                 vol_ratio = (current_volume / avg_prev_volume) * 100
                 if vol_ratio >= 200:
                     volume_analysis = f"🔥 폭증! (이전 평균 대비 {vol_ratio:.0f}% 수준 / 현재 {current_volume:,}주)"
                 elif vol_ratio >= 100:
-                    volume_analysis = f"상승 추세 (이전 평균 대비 {vol_ratio:.0f}% 수준)"
+                    volume_analysis = (
+                        f"상승 추세 (이전 평균 대비 {vol_ratio:.0f}% 수준)"
+                    )
                 else:
-                    volume_analysis = f"감소 추세 (이전 평균 대비 {vol_ratio:.0f}% 수준)"
+                    volume_analysis = (
+                        f"감소 추세 (이전 평균 대비 {vol_ratio:.0f}% 수준)"
+                    )
 
         indicators_str = "지표 계산 불가"
         if recent_candles and len(recent_candles) >= 5:
             ind = calculate_scalping_micro_indicator_values(recent_candles)
 
-            ma5_status = "상회" if curr_price > ind['MA5'] else "하회"
-            vwap_status = "상회 (수급강세)" if curr_price > ind['Micro_VWAP'] else "하회 (수급약세)"
+            ma5_status = "상회" if curr_price > ind["MA5"] else "하회"
+            vwap_status = (
+                "상회 (수급강세)"
+                if curr_price > ind["Micro_VWAP"]
+                else "하회 (수급약세)"
+            )
 
             indicators_str = (
                 f"- 단기 5-MA: {ind['MA5']:,}원 (현재가 {ma5_status})\n"
@@ -3290,15 +3940,15 @@ class GPTSniperEngine:
         return extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles)
 
     def _format_swing_market_data(self, ws_data, recent_candles, program_net_qty=0):
-        curr_price = ws_data.get('curr', 0)
-        fluctuation = ws_data.get('fluctuation', 0.0)
-        v_pw = ws_data.get('v_pw', 0)
-        today_vol = ws_data.get('volume', 0)
+        curr_price = ws_data.get("curr", 0)
+        fluctuation = ws_data.get("fluctuation", 0.0)
+        v_pw = ws_data.get("v_pw", 0)
+        today_vol = ws_data.get("volume", 0)
 
         candle_str = "minute candle data unavailable"
         ma5, ma20 = 0, 0
         if recent_candles and len(recent_candles) >= 20:
-            closes = [c['현재가'] for c in recent_candles]
+            closes = [c["현재가"] for c in recent_candles]
             ma5 = sum(closes[-5:]) / 5
             ma20 = sum(closes[-20:]) / 20
 
@@ -3309,7 +3959,8 @@ class GPTSniperEngine:
                 f"- short_term_trend: {trend}\n"
                 f"- ma5: {ma5:,.0f} / ma20: {ma20:,.0f}\n"
                 f"- price_position: {position}\n"
-                f"- recent_5_candle_closes: " + " -> ".join([f"{c['현재가']:,}" for c in recent_candles[-5:]])
+                f"- recent_5_candle_closes: "
+                + " -> ".join([f"{c['현재가']:,}" for c in recent_candles[-5:]])
             )
 
         prog_sign = "net_buy" if program_net_qty > 0 else "net_sell"
@@ -3382,7 +4033,9 @@ class GPTSniperEngine:
         if "돌파" in high_breakout_status:
             scalp_score += 1
 
-        if any(k in daily_setup_desc for k in ["정배열", "눌림", "전고점", "추세", "돌파"]):
+        if any(
+            k in daily_setup_desc for k in ["정배열", "눌림", "전고점", "추세", "돌파"]
+        ):
             swing_score += 2
         if any(k in daily_setup_desc for k in ["급등후", "과열", "이격", "장대음봉"]):
             swing_score -= 1
@@ -3398,7 +4051,9 @@ class GPTSniperEngine:
             return REALTIME_ANALYSIS_PROMPT_SWING
         return REALTIME_ANALYSIS_PROMPT_DUAL
 
-    def _build_realtime_quant_packet(self, stock_name, stock_code, realtime_ctx, selected_mode):
+    def _build_realtime_quant_packet(
+        self, stock_name, stock_code, realtime_ctx, selected_mode
+    ):
         def i(key, default=0):
             try:
                 return int(realtime_ctx.get(key, default) or default)
@@ -3516,32 +4171,58 @@ class GPTSniperEngine:
             "target_price": self._bucket_int_for_cache(target_price, price_bucket),
             "vwap_price": self._bucket_int_for_cache(vwap_price, price_bucket),
             "prev_high": self._bucket_int_for_cache(prev_high, price_bucket),
-            "market_cap": self._bucket_int_for_cache(ctx.get("market_cap", 0), 50_000_000_000),
-            "fluctuation": self._bucket_float_for_cache(ctx.get("fluctuation", 0.0), 0.3),
+            "market_cap": self._bucket_int_for_cache(
+                ctx.get("market_cap", 0), 50_000_000_000
+            ),
+            "fluctuation": self._bucket_float_for_cache(
+                ctx.get("fluctuation", 0.0), 0.3
+            ),
             "score": self._bucket_float_for_cache(ctx.get("score", 0.0), 10.0),
             "v_pw_now": self._bucket_float_for_cache(ctx.get("v_pw_now", 0.0), 5.0),
-            "buy_ratio_ws": self._bucket_float_for_cache(ctx.get("buy_ratio_ws", 0.0), 4.0),
-            "exec_buy_ratio": self._bucket_float_for_cache(ctx.get("exec_buy_ratio", 0.0), 8.0),
-            "prog_net_qty": self._bucket_int_for_cache(ctx.get("prog_net_qty", 0), 10_000),
-            "prog_delta_qty": self._bucket_int_for_cache(ctx.get("prog_delta_qty", 0), 2_000),
-            "tick_trade_value": self._bucket_int_for_cache(ctx.get("tick_trade_value", 0), 25_000),
-            "net_buy_exec_volume": self._bucket_int_for_cache(ctx.get("net_buy_exec_volume", 0), 500),
-            "net_bid_depth": self._bucket_int_for_cache(ctx.get("net_bid_depth", 0), 10_000),
-            "net_ask_depth": self._bucket_int_for_cache(ctx.get("net_ask_depth", 0), 10_000),
+            "buy_ratio_ws": self._bucket_float_for_cache(
+                ctx.get("buy_ratio_ws", 0.0), 4.0
+            ),
+            "exec_buy_ratio": self._bucket_float_for_cache(
+                ctx.get("exec_buy_ratio", 0.0), 8.0
+            ),
+            "prog_net_qty": self._bucket_int_for_cache(
+                ctx.get("prog_net_qty", 0), 10_000
+            ),
+            "prog_delta_qty": self._bucket_int_for_cache(
+                ctx.get("prog_delta_qty", 0), 2_000
+            ),
+            "tick_trade_value": self._bucket_int_for_cache(
+                ctx.get("tick_trade_value", 0), 25_000
+            ),
+            "net_buy_exec_volume": self._bucket_int_for_cache(
+                ctx.get("net_buy_exec_volume", 0), 500
+            ),
+            "net_bid_depth": self._bucket_int_for_cache(
+                ctx.get("net_bid_depth", 0), 10_000
+            ),
+            "net_ask_depth": self._bucket_int_for_cache(
+                ctx.get("net_ask_depth", 0), 10_000
+            ),
             "spread_tick": self._bucket_int_for_cache(ctx.get("spread_tick", 0), 1),
             "vol_ratio": self._bucket_float_for_cache(ctx.get("vol_ratio", 0.0), 25.0),
             "today_vol": self._bucket_int_for_cache(ctx.get("today_vol", 0), 100_000),
         }
 
-    def _build_gatekeeper_cache_key(self, stock_name, stock_code, realtime_ctx, analysis_mode):
-        return self._build_cache_digest({
-            "stock_name": stock_name,
-            "stock_code": stock_code,
-            "analysis_mode": analysis_mode,
-            "realtime_ctx": self._compact_gatekeeper_ctx_for_cache(realtime_ctx),
-        })
+    def _build_gatekeeper_cache_key(
+        self, stock_name, stock_code, realtime_ctx, analysis_mode
+    ):
+        return self._build_cache_digest(
+            {
+                "stock_name": stock_name,
+                "stock_code": stock_code,
+                "analysis_mode": analysis_mode,
+                "realtime_ctx": self._compact_gatekeeper_ctx_for_cache(realtime_ctx),
+            }
+        )
 
-    def _prepare_realtime_report_request(self, stock_name, stock_code, input_data_text, analysis_mode="AUTO"):
+    def _prepare_realtime_report_request(
+        self, stock_name, stock_code, input_data_text, analysis_mode="AUTO"
+    ):
         selected_mode = (analysis_mode or "AUTO").upper()
         realtime_ctx = input_data_text if isinstance(input_data_text, dict) else None
 
@@ -3549,7 +4230,9 @@ class GPTSniperEngine:
             if selected_mode == "AUTO":
                 selected_mode = self._infer_realtime_mode(realtime_ctx)
             prompt = self._get_realtime_prompt(selected_mode)
-            packet_text = self._build_realtime_quant_packet(stock_name, stock_code, realtime_ctx, selected_mode)
+            packet_text = self._build_realtime_quant_packet(
+                stock_name, stock_code, realtime_ctx, selected_mode
+            )
             user_input = f"""🚨 [요청 종목]
 종목명: {stock_name}
 종목코드: {stock_code}
@@ -3578,7 +4261,9 @@ class GPTSniperEngine:
             "context_name": context_name,
         }
 
-    def _generate_realtime_report_payload(self, stock_name, stock_code, input_data_text, analysis_mode="AUTO"):
+    def _generate_realtime_report_payload(
+        self, stock_name, stock_code, input_data_text, analysis_mode="AUTO"
+    ):
         total_started_at = time.perf_counter()
         lock_started_at = time.perf_counter()
         with self.lock:
@@ -3651,7 +4336,9 @@ class GPTSniperEngine:
         )
 
     def _compact_entry_price_orderbook(self, ws_data, *, limit=10):
-        orderbook = (ws_data or {}).get("orderbook") if isinstance(ws_data, dict) else {}
+        orderbook = (
+            (ws_data or {}).get("orderbook") if isinstance(ws_data, dict) else {}
+        )
         if not isinstance(orderbook, dict):
             orderbook = {}
         return {
@@ -3699,7 +4386,10 @@ class GPTSniperEngine:
         return [
             {
                 "체결시간": candle.get("체결시간", candle.get("time")),
-                "시가": candle.get("시가", candle.get("open", candle.get("현재가", candle.get("close", 0)))),
+                "시가": candle.get(
+                    "시가",
+                    candle.get("open", candle.get("현재가", candle.get("close", 0))),
+                ),
                 "현재가": candle.get("현재가", candle.get("close")),
                 "고가": candle.get("고가", candle.get("high")),
                 "저가": candle.get("저가", candle.get("low")),
@@ -3711,7 +4401,11 @@ class GPTSniperEngine:
 
     def _compact_entry_price_context(self, price_ctx):
         ctx = price_ctx if isinstance(price_ctx, dict) else {}
-        micro = ctx.get("orderbook_micro") if isinstance(ctx.get("orderbook_micro"), dict) else {}
+        micro = (
+            ctx.get("orderbook_micro")
+            if isinstance(ctx.get("orderbook_micro"), dict)
+            else {}
+        )
         spread = 0
         best_ask = int(self._safe_float(ctx.get("best_ask"), 0))
         best_bid = int(self._safe_float(ctx.get("best_bid"), 0))
@@ -3741,7 +4435,9 @@ class GPTSniperEngine:
             "entry_price_guard": {
                 "resolution_reason": ctx.get("resolution_reason"),
                 "price_below_bid_bps": ctx.get("price_below_bid_bps"),
-                "reference_target_below_bid_bps": ctx.get("reference_target_below_bid_bps"),
+                "reference_target_below_bid_bps": ctx.get(
+                    "reference_target_below_bid_bps"
+                ),
                 "signal_score": ctx.get("signal_score"),
             },
             "orderbook_micro": {
@@ -3751,17 +4447,23 @@ class GPTSniperEngine:
                 "qi": micro.get("qi"),
                 "ofi": micro.get("ofi_norm", micro.get("ofi")),
                 "ofi_z": micro.get("ofi_z"),
-                "top_depth_ratio": micro.get("top_depth_ratio", micro.get("depth_ewma")),
+                "top_depth_ratio": micro.get(
+                    "top_depth_ratio", micro.get("depth_ewma")
+                ),
                 "spread_bp": spread_bp,
                 "spread_ticks": micro.get("spread_ticks"),
                 "sample_quote_count": micro.get("sample_quote_count"),
                 "ofi_threshold_source": micro.get("ofi_threshold_source"),
-                "ofi_threshold_bucket_key": micro.get("ofi_threshold_bucket_key", micro.get("ofi_bucket_key")),
+                "ofi_threshold_bucket_key": micro.get(
+                    "ofi_threshold_bucket_key", micro.get("ofi_bucket_key")
+                ),
                 "ofi_calibration_warning": micro.get("ofi_calibration_warning"),
             },
         }
 
-    def _compact_entry_context_features(self, ws_data, recent_ticks, recent_candles, price_ctx=None):
+    def _compact_entry_context_features(
+        self, ws_data, recent_ticks, recent_candles, price_ctx=None
+    ):
         keys = (
             "entry_liquidity_score",
             "entry_liquidity_status",
@@ -3789,9 +4491,15 @@ class GPTSniperEngine:
         )
         ws = ws_data if isinstance(ws_data, dict) else {}
         ctx = price_ctx if isinstance(price_ctx, dict) else {}
-        nested_ctx = ctx.get("entry_context_features") if isinstance(ctx.get("entry_context_features"), dict) else {}
+        nested_ctx = (
+            ctx.get("entry_context_features")
+            if isinstance(ctx.get("entry_context_features"), dict)
+            else {}
+        )
         try:
-            packet = extract_scalping_feature_packet(ws, recent_ticks or [], recent_candles or [])
+            packet = extract_scalping_feature_packet(
+                ws, recent_ticks or [], recent_candles or []
+            )
         except Exception:
             packet = {}
         summary = {}
@@ -3799,7 +4507,13 @@ class GPTSniperEngine:
             for source in (nested_ctx, packet, ctx, ws):
                 if isinstance(source, dict) and key in source:
                     value = source.get(key)
-                    if value is not None and str(value).strip() not in {"", "-", "None", "none", "null"}:
+                    if value is not None and str(value).strip() not in {
+                        "",
+                        "-",
+                        "None",
+                        "none",
+                        "null",
+                    }:
                         summary[key] = value
                         break
         summary.update(
@@ -3815,7 +4529,11 @@ class GPTSniperEngine:
 
     def _compact_entry_time_context(self, position_ctx):
         ctx = position_ctx if isinstance(position_ctx, dict) else {}
-        raw = ctx.get("entry_time_context") if isinstance(ctx.get("entry_time_context"), dict) else {}
+        raw = (
+            ctx.get("entry_time_context")
+            if isinstance(ctx.get("entry_time_context"), dict)
+            else {}
+        )
         keys = (
             "entry_liquidity_score",
             "entry_liquidity_status",
@@ -3850,7 +4568,13 @@ class GPTSniperEngine:
             for source in (raw, ctx):
                 if isinstance(source, dict) and key in source:
                     value = source.get(key)
-                    if value is not None and str(value).strip() not in {"", "-", "None", "none", "null"}:
+                    if value is not None and str(value).strip() not in {
+                        "",
+                        "-",
+                        "None",
+                        "none",
+                        "null",
+                    }:
                         summary[key] = value
                         break
         for key in ("observed_at", "age_sec", "source"):
@@ -3892,15 +4616,35 @@ class GPTSniperEngine:
         }
         start_best_bid = int(self._safe_float(ctx.get("best_bid"), 0))
         start_best_ask = int(self._safe_float(ctx.get("best_ask"), 0))
-        start_spread = start_best_ask - start_best_bid if start_best_ask > 0 and start_best_bid > 0 else 0
+        start_spread = (
+            start_best_ask - start_best_bid
+            if start_best_ask > 0 and start_best_bid > 0
+            else 0
+        )
         start_quote["spread"] = start_spread
         current_quote = self._extract_quote_snapshot(ws_data)
-        micro = ctx.get("orderbook_micro") if isinstance(ctx.get("orderbook_micro"), dict) else {}
-        current_micro = (ws_data or {}).get("orderbook_micro") if isinstance((ws_data or {}).get("orderbook_micro"), dict) else {}
+        micro = (
+            ctx.get("orderbook_micro")
+            if isinstance(ctx.get("orderbook_micro"), dict)
+            else {}
+        )
+        current_micro = (
+            (ws_data or {}).get("orderbook_micro")
+            if isinstance((ws_data or {}).get("orderbook_micro"), dict)
+            else {}
+        )
         current_micro_state = current_micro.get("micro_state", micro.get("micro_state"))
         tick_size = max(1, int(self._safe_float(ctx.get("tick_size"), 1) or 1))
-        best_bid_delta = int(current_quote.get("best_bid") or 0) - start_best_bid if start_best_bid > 0 else 0
-        best_ask_delta = int(current_quote.get("best_ask") or 0) - start_best_ask if start_best_ask > 0 else 0
+        best_bid_delta = (
+            int(current_quote.get("best_bid") or 0) - start_best_bid
+            if start_best_bid > 0
+            else 0
+        )
+        best_ask_delta = (
+            int(current_quote.get("best_ask") or 0) - start_best_ask
+            if start_best_ask > 0
+            else 0
+        )
         spread_delta = int(current_quote.get("spread") or 0) - start_spread
         defensive_price = ctx.get("defensive_order_price")
         reference_price = ctx.get("reference_target_price")
@@ -3919,15 +4663,24 @@ class GPTSniperEngine:
                 "spread_delta_ticks": round(spread_delta / tick_size, 3),
                 "micro_state_start": micro.get("micro_state"),
                 "micro_state_current": current_micro_state,
-                "micro_state_changed": bool(current_micro_state and current_micro_state != micro.get("micro_state")),
+                "micro_state_changed": bool(
+                    current_micro_state
+                    and current_micro_state != micro.get("micro_state")
+                ),
             },
             "candidate_prices": {
                 "defensive_order_price": defensive_price,
                 "reference_target_price": reference_price,
                 "resolved_order_price": resolved_price,
-                "defensive_vs_bid_bps": self._price_bps_from_bid(defensive_price, start_best_bid),
-                "reference_vs_bid_bps": self._price_bps_from_bid(reference_price, start_best_bid),
-                "resolved_vs_bid_bps": self._price_bps_from_bid(resolved_price, start_best_bid),
+                "defensive_vs_bid_bps": self._price_bps_from_bid(
+                    defensive_price, start_best_bid
+                ),
+                "reference_vs_bid_bps": self._price_bps_from_bid(
+                    reference_price, start_best_bid
+                ),
+                "resolved_vs_bid_bps": self._price_bps_from_bid(
+                    resolved_price, start_best_bid
+                ),
             },
             "freshness": {
                 "latency_state": ctx.get("latency_state"),
@@ -3938,8 +4691,11 @@ class GPTSniperEngine:
             "fill_probability_hints": {
                 "execution_strength": (ws_data or {}).get("v_pw"),
                 "buy_ratio": (ws_data or {}).get("buy_ratio"),
-                "spread_bp": compact_ctx["orderbook_micro"].get("spread_bp") or current_quote.get("spread_bp"),
-                "top_depth_ratio": compact_ctx["orderbook_micro"].get("top_depth_ratio"),
+                "spread_bp": compact_ctx["orderbook_micro"].get("spread_bp")
+                or current_quote.get("spread_bp"),
+                "top_depth_ratio": compact_ctx["orderbook_micro"].get(
+                    "top_depth_ratio"
+                ),
                 "micro_state": micro.get("micro_state"),
                 "ofi": compact_ctx["orderbook_micro"].get("ofi"),
                 "qi": compact_ctx["orderbook_micro"].get("qi"),
@@ -3951,12 +4707,22 @@ class GPTSniperEngine:
                 price_ctx=ctx,
             ),
             "price_context": compact_ctx,
-            "tick_summary": self._summarize_tick_windows(recent_ticks, windows=(5, 10, 20)),
-            "candle_summary": self._summarize_candle_windows(recent_candles, windows=(3, 5, 10)),
-            "recent_ticks_latest_first": self._compact_recent_ticks(recent_ticks, limit=5),
-            "recent_candles_latest_window": self._compact_recent_candles(recent_candles, limit=5),
+            "tick_summary": self._summarize_tick_windows(
+                recent_ticks, windows=(5, 10, 20)
+            ),
+            "candle_summary": self._summarize_candle_windows(
+                recent_candles, windows=(3, 5, 10)
+            ),
+            "recent_ticks_latest_first": self._compact_recent_ticks(
+                recent_ticks, limit=5
+            ),
+            "recent_candles_latest_window": self._compact_recent_candles(
+                recent_candles, limit=5
+            ),
         }
-        return json.dumps(payload, ensure_ascii=True, separators=(",", ":"), default=str)
+        return json.dumps(
+            payload, ensure_ascii=True, separators=(",", ":"), default=str
+        )
 
     def _build_scalping_entry_price_user_input(
         self,
@@ -3982,7 +4748,9 @@ class GPTSniperEngine:
                 price_ctx=price_ctx,
             ),
         }
-        return json.dumps(payload, ensure_ascii=True, separators=(",", ":"), default=str)
+        return json.dumps(
+            payload, ensure_ascii=True, separators=(",", ":"), default=str
+        )
 
     def _build_scalping_entry_price_runtime_input(
         self,
@@ -3994,8 +4762,12 @@ class GPTSniperEngine:
         recent_candles,
         price_ctx,
     ):
-        if bool(getattr(TRADING_RULES, "OPENAI_ENTRY_PRICE_COMPACT_INPUT_ENABLED", True)):
-            if bool(getattr(TRADING_RULES, "OPENAI_ENTRY_PRICE_V2_INPUT_ENABLED", False)):
+        if bool(
+            getattr(TRADING_RULES, "OPENAI_ENTRY_PRICE_COMPACT_INPUT_ENABLED", True)
+        ):
+            if bool(
+                getattr(TRADING_RULES, "OPENAI_ENTRY_PRICE_V2_INPUT_ENABLED", False)
+            ):
                 return self._build_scalping_entry_price_v2_input(
                     stock_name=stock_name,
                     stock_code=stock_code,
@@ -4036,14 +4808,28 @@ class GPTSniperEngine:
         input_contract_fields = {
             "ai_input_schema": (
                 "entry_price_v2"
-                if bool(getattr(TRADING_RULES, "OPENAI_ENTRY_PRICE_V2_INPUT_ENABLED", False))
-                else "entry_price_compact_v1"
-                if bool(getattr(TRADING_RULES, "OPENAI_ENTRY_PRICE_COMPACT_INPUT_ENABLED", True))
-                else "entry_price_raw_v1"
+                if bool(
+                    getattr(TRADING_RULES, "OPENAI_ENTRY_PRICE_V2_INPUT_ENABLED", False)
+                )
+                else (
+                    "entry_price_compact_v1"
+                    if bool(
+                        getattr(
+                            TRADING_RULES,
+                            "OPENAI_ENTRY_PRICE_COMPACT_INPUT_ENABLED",
+                            True,
+                        )
+                    )
+                    else "entry_price_raw_v1"
+                )
             ),
             "ai_input_contract_mode": (
                 "structured_json"
-                if bool(getattr(TRADING_RULES, "OPENAI_ENTRY_PRICE_COMPACT_INPUT_ENABLED", True))
+                if bool(
+                    getattr(
+                        TRADING_RULES, "OPENAI_ENTRY_PRICE_COMPACT_INPUT_ENABLED", True
+                    )
+                )
                 else "plain_text"
             ),
             "ai_input_build_fallback": "not_built",
@@ -4109,14 +4895,32 @@ class GPTSniperEngine:
                 user_input,
                 default_schema=(
                     "entry_price_v2"
-                    if bool(getattr(TRADING_RULES, "OPENAI_ENTRY_PRICE_V2_INPUT_ENABLED", False))
-                    else "entry_price_compact_v1"
-                    if bool(getattr(TRADING_RULES, "OPENAI_ENTRY_PRICE_COMPACT_INPUT_ENABLED", True))
-                    else "entry_price_raw_v1"
+                    if bool(
+                        getattr(
+                            TRADING_RULES, "OPENAI_ENTRY_PRICE_V2_INPUT_ENABLED", False
+                        )
+                    )
+                    else (
+                        "entry_price_compact_v1"
+                        if bool(
+                            getattr(
+                                TRADING_RULES,
+                                "OPENAI_ENTRY_PRICE_COMPACT_INPUT_ENABLED",
+                                True,
+                            )
+                        )
+                        else "entry_price_raw_v1"
+                    )
                 ),
                 default_mode=(
                     "structured_json"
-                    if bool(getattr(TRADING_RULES, "OPENAI_ENTRY_PRICE_COMPACT_INPUT_ENABLED", True))
+                    if bool(
+                        getattr(
+                            TRADING_RULES,
+                            "OPENAI_ENTRY_PRICE_COMPACT_INPUT_ENABLED",
+                            True,
+                        )
+                    )
                     else "plain_text"
                 ),
             )
@@ -4132,7 +4936,9 @@ class GPTSniperEngine:
                 metadata_extra=metadata_extra,
             )
             result = self._merge_last_transport_meta(result)
-            normalized = normalize_scalping_entry_price_result(result, fallback_price=fallback_price)
+            normalized = normalize_scalping_entry_price_result(
+                result, fallback_price=fallback_price
+            )
             normalized["ai_model"] = self._get_tier2_model()
             for key, value in result.items():
                 if str(key).startswith("openai_"):
@@ -4155,7 +4961,9 @@ class GPTSniperEngine:
             failure_count = self._record_failure_and_maybe_disable(
                 context_name=f"ENTRY_PRICE:{stock_name}:{stock_code}"
             )
-            log_error(f"🚨 [ENTRY_PRICE] OpenAI 가격결정 에러 ({stock_name}, 연속 실패 {failure_count}회): {e}")
+            log_error(
+                f"🚨 [ENTRY_PRICE] OpenAI 가격결정 에러 ({stock_name}, 연속 실패 {failure_count}회): {e}"
+            )
             return self._annotate_analysis_result(
                 normalize_scalping_entry_price_result(
                     {
@@ -4204,14 +5012,22 @@ class GPTSniperEngine:
             prompt_type = "swing"
             prompt = SWING_SYSTEM_PROMPT
         else:
-            prompt, prompt_type, prompt_version, normalized_profile = self._resolve_scalping_prompt(prompt_profile)
+            prompt, prompt_type, prompt_version, normalized_profile = (
+                self._resolve_scalping_prompt(prompt_profile)
+            )
             matrix_runtime = build_holding_exit_matrix_runtime_context(
                 prompt_profile=normalized_profile,
                 ws_data=ws_data if isinstance(ws_data, dict) else {},
-                recent_candles=recent_candles if isinstance(recent_candles, list) else [],
+                recent_candles=(
+                    recent_candles if isinstance(recent_candles, list) else []
+                ),
                 advisory_enabled=bool(
-                    getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_ADVISORY_ENABLED", False)
-                    or getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_RUNTIME_BIAS_ENABLED", False)
+                    getattr(
+                        TRADING_RULES, "HOLDING_EXIT_MATRIX_ADVISORY_ENABLED", False
+                    )
+                    or getattr(
+                        TRADING_RULES, "HOLDING_EXIT_MATRIX_RUNTIME_BIAS_ENABLED", False
+                    )
                 ),
             )
             if normalized_profile == "holding":
@@ -4221,13 +5037,21 @@ class GPTSniperEngine:
                     prompt_profile=normalized_profile,
                     ws_data=ws_data if isinstance(ws_data, dict) else {},
                     advisory_enabled=bool(
-                        getattr(TRADING_RULES, "SCALP_ENTRY_ADM_ADVISORY_ENABLED", False)
-                        or getattr(TRADING_RULES, "SCALP_ENTRY_ADM_RUNTIME_BIAS_ENABLED", False)
+                        getattr(
+                            TRADING_RULES, "SCALP_ENTRY_ADM_ADVISORY_ENABLED", False
+                        )
+                        or getattr(
+                            TRADING_RULES, "SCALP_ENTRY_ADM_RUNTIME_BIAS_ENABLED", False
+                        )
                     ),
                 )
-            lifecycle_ai_runtime = build_lifecycle_ai_runtime_context(prompt_profile=normalized_profile)
+            lifecycle_ai_runtime = build_lifecycle_ai_runtime_context(
+                prompt_profile=normalized_profile
+            )
             cache_strategy = f"{strategy}:{normalized_profile}"
-            cache_strategy = f"{cache_strategy}:adm:{matrix_runtime.get('cache_token', 'disabled')}"
+            cache_strategy = (
+                f"{cache_strategy}:adm:{matrix_runtime.get('cache_token', 'disabled')}"
+            )
             entry_adm_cache_token = (
                 entry_adm_runtime.get("cache_token", "disabled")
                 if isinstance(entry_adm_runtime, dict)
@@ -4239,8 +5063,12 @@ class GPTSniperEngine:
             strategy not in ["KOSPI_ML", "KOSDAQ_ML"]
             and prompt_type == "scalping_entry"
             and normalized_profile == "watching"
-            and bool(getattr(TRADING_RULES, "OPENAI_ANALYZE_TARGET_HOT_INPUT_ENABLED", True))
-            and not bool(getattr(TRADING_RULES, "OPENAI_ENTRY_SCREEN_V2_INPUT_ENABLED", False))
+            and bool(
+                getattr(TRADING_RULES, "OPENAI_ANALYZE_TARGET_HOT_INPUT_ENABLED", True)
+            )
+            and not bool(
+                getattr(TRADING_RULES, "OPENAI_ENTRY_SCREEN_V2_INPUT_ENABLED", False)
+            )
         )
         if strategy in ["KOSPI_ML", "KOSDAQ_ML"]:
             input_contract_fields = {
@@ -4252,24 +5080,43 @@ class GPTSniperEngine:
             input_contract_fields = {
                 "ai_input_schema": (
                     "entry_screen_v2"
-                    if bool(getattr(TRADING_RULES, "OPENAI_ENTRY_SCREEN_V2_INPUT_ENABLED", False))
-                    else "entry_screen_hot_v1"
-                    if use_hot_entry_input
-                    else "entry_screen_compact_v1"
-                    if bool(getattr(TRADING_RULES, "OPENAI_SCALPING_COMPACT_INPUT_ENABLED", True))
-                    else "entry_screen_legacy_text_v1"
+                    if bool(
+                        getattr(
+                            TRADING_RULES, "OPENAI_ENTRY_SCREEN_V2_INPUT_ENABLED", False
+                        )
+                    )
+                    else (
+                        "entry_screen_hot_v1"
+                        if use_hot_entry_input
+                        else (
+                            "entry_screen_compact_v1"
+                            if bool(
+                                getattr(
+                                    TRADING_RULES,
+                                    "OPENAI_SCALPING_COMPACT_INPUT_ENABLED",
+                                    True,
+                                )
+                            )
+                            else "entry_screen_legacy_text_v1"
+                        )
+                    )
                 ),
                 "ai_input_contract_mode": (
                     "structured_json"
                     if bool(
-                        getattr(TRADING_RULES, "OPENAI_ENTRY_SCREEN_V2_INPUT_ENABLED", False)
+                        getattr(
+                            TRADING_RULES, "OPENAI_ENTRY_SCREEN_V2_INPUT_ENABLED", False
+                        )
                         or use_hot_entry_input
-                        or getattr(TRADING_RULES, "OPENAI_SCALPING_COMPACT_INPUT_ENABLED", True)
+                        or getattr(
+                            TRADING_RULES, "OPENAI_SCALPING_COMPACT_INPUT_ENABLED", True
+                        )
                     )
                     else "plain_text"
                 ),
                 "ai_input_build_fallback": "not_built",
             }
+
         def _merge_runtime_fields(payload: dict[str, Any] | None) -> dict[str, Any]:
             merged = merge_holding_exit_matrix_result_fields(payload, matrix_runtime)
             if isinstance(entry_adm_runtime, dict):
@@ -4295,7 +5142,9 @@ class GPTSniperEngine:
                 response_ms=int((time.perf_counter() - analysis_started) * 1000),
                 parse_ok=bool(cached_result.get("ai_parse_ok", False)),
                 parse_fail=bool(cached_result.get("ai_parse_fail", False)),
-                fallback_score_50=bool(cached_result.get("ai_fallback_score_50", False)),
+                fallback_score_50=bool(
+                    cached_result.get("ai_fallback_score_50", False)
+                ),
                 cache_hit=True,
                 cache_mode="hit",
                 result_source="cache",
@@ -4311,12 +5160,16 @@ class GPTSniperEngine:
             lock_acquired = self.lock.acquire(timeout=lock_wait_ms / 1000.0)
         else:
             lock_acquired = self.lock.acquire(blocking=False)
-        lock_wait_elapsed_ms = max(0, int((time.perf_counter() - lock_wait_started) * 1000))
+        lock_wait_elapsed_ms = max(
+            0, int((time.perf_counter() - lock_wait_started) * 1000)
+        )
         if not lock_acquired:
             return self._annotate_analysis_result(
                 _merge_runtime_fields(
                     {
-                        "action": "WAIT" if prompt_type == "scalping_holding" else "DROP",
+                        "action": (
+                            "WAIT" if prompt_type == "scalping_holding" else "DROP"
+                        ),
                         "score": 0,
                         "reason": "ai_lock_contention_retry_exhausted",
                         "ai_lock_wait_ms": lock_wait_elapsed_ms,
@@ -4348,7 +5201,9 @@ class GPTSniperEngine:
                     response_ms=int((time.perf_counter() - analysis_started) * 1000),
                     parse_ok=bool(cached_result.get("ai_parse_ok", False)),
                     parse_fail=bool(cached_result.get("ai_parse_fail", False)),
-                    fallback_score_50=bool(cached_result.get("ai_fallback_score_50", False)),
+                    fallback_score_50=bool(
+                        cached_result.get("ai_fallback_score_50", False)
+                    ),
                     cache_hit=True,
                     cache_mode="hit",
                     result_source="cache",
@@ -4357,7 +5212,13 @@ class GPTSniperEngine:
 
             if self.ai_disabled:
                 return self._annotate_analysis_result(
-                    _merge_runtime_fields({"action": "DROP", "score": 0, "reason": "AI 엔진 일시 중단 (연속 실패)"}),
+                    _merge_runtime_fields(
+                        {
+                            "action": "DROP",
+                            "score": 0,
+                            "reason": "AI 엔진 일시 중단 (연속 실패)",
+                        }
+                    ),
                     prompt_type=prompt_type,
                     prompt_version=prompt_version,
                     response_ms=int((time.perf_counter() - analysis_started) * 1000),
@@ -4371,13 +5232,17 @@ class GPTSniperEngine:
                 )
 
             min_interval_wait_ms = 0
-            min_interval_remaining = float(self.min_interval or 0.0) - (time.time() - self.last_call_time)
+            min_interval_remaining = float(self.min_interval or 0.0) - (
+                time.time() - self.last_call_time
+            )
             if min_interval_remaining > 0:
                 time.sleep(min_interval_remaining)
                 min_interval_wait_ms = int(round(min_interval_remaining * 1000))
 
             if strategy in ["KOSPI_ML", "KOSDAQ_ML"]:
-                formatted_data = self._format_swing_market_data(ws_data, recent_candles, program_net_qty)
+                formatted_data = self._format_swing_market_data(
+                    ws_data, recent_candles, program_net_qty
+                )
                 target_model = self._get_tier2_model()
                 feature_audit_fields = {}
                 input_contract_fields = self._resolve_ai_input_contract_fields(
@@ -4386,7 +5251,9 @@ class GPTSniperEngine:
                     default_mode="plain_text",
                 )
             else:
-                feature_packet = extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles)
+                feature_packet = extract_scalping_feature_packet(
+                    ws_data, recent_ticks, recent_candles
+                )
                 if use_hot_entry_input:
                     formatted_data = self._format_entry_screen_hot_data(
                         ws_data,
@@ -4406,8 +5273,14 @@ class GPTSniperEngine:
                             feature_packet=feature_packet,
                         )
                     except TypeError:
-                        formatted_data = self._format_market_data(ws_data, recent_ticks, recent_candles)
-                if bool(getattr(TRADING_RULES, "OPENAI_ENTRY_SCREEN_V2_INPUT_ENABLED", False)):
+                        formatted_data = self._format_market_data(
+                            ws_data, recent_ticks, recent_candles
+                        )
+                if bool(
+                    getattr(
+                        TRADING_RULES, "OPENAI_ENTRY_SCREEN_V2_INPUT_ENABLED", False
+                    )
+                ):
                     try:
                         structured_input = json.loads(formatted_data)
                     except Exception:
@@ -4417,9 +5290,15 @@ class GPTSniperEngine:
                             "legacy_context": formatted_data,
                         }
                     structured_input["runtime_advisory_context"] = {
-                        "holding_exit_matrix": (matrix_runtime or {}).get("prompt_context", ""),
-                        "entry_adm": (entry_adm_runtime or {}).get("prompt_context", ""),
-                        "lifecycle_ai": (lifecycle_ai_runtime or {}).get("prompt_context", ""),
+                        "holding_exit_matrix": (matrix_runtime or {}).get(
+                            "prompt_context", ""
+                        ),
+                        "entry_adm": (entry_adm_runtime or {}).get(
+                            "prompt_context", ""
+                        ),
+                        "lifecycle_ai": (lifecycle_ai_runtime or {}).get(
+                            "prompt_context", ""
+                        ),
                     }
                     formatted_data = json.dumps(
                         structured_input,
@@ -4429,10 +5308,16 @@ class GPTSniperEngine:
                     )
                 elif not use_hot_entry_input:
                     if matrix_runtime and matrix_runtime.get("prompt_context"):
-                        formatted_data = f"{formatted_data}\n\n{matrix_runtime['prompt_context']}"
+                        formatted_data = (
+                            f"{formatted_data}\n\n{matrix_runtime['prompt_context']}"
+                        )
                     if entry_adm_runtime and entry_adm_runtime.get("prompt_context"):
-                        formatted_data = f"{formatted_data}\n\n{entry_adm_runtime['prompt_context']}"
-                    if lifecycle_ai_runtime and lifecycle_ai_runtime.get("prompt_context"):
+                        formatted_data = (
+                            f"{formatted_data}\n\n{entry_adm_runtime['prompt_context']}"
+                        )
+                    if lifecycle_ai_runtime and lifecycle_ai_runtime.get(
+                        "prompt_context"
+                    ):
                         formatted_data = f"{formatted_data}\n\n{lifecycle_ai_runtime['prompt_context']}"
                 formatted_data = self._append_numeric_consistency_recheck_context(
                     formatted_data,
@@ -4443,24 +5328,50 @@ class GPTSniperEngine:
                     metadata_extra=metadata_extra,
                 )
                 target_model = self._get_tier1_model()
-                feature_audit_fields = build_scalping_feature_audit_fields(feature_packet)
+                feature_audit_fields = build_scalping_feature_audit_fields(
+                    feature_packet
+                )
                 input_contract_fields = self._resolve_ai_input_contract_fields(
                     formatted_data,
                     default_schema=(
                         "entry_screen_v2"
-                        if bool(getattr(TRADING_RULES, "OPENAI_ENTRY_SCREEN_V2_INPUT_ENABLED", False))
-                        else "entry_screen_hot_v1"
-                        if use_hot_entry_input
-                        else "entry_screen_compact_v1"
-                        if bool(getattr(TRADING_RULES, "OPENAI_SCALPING_COMPACT_INPUT_ENABLED", True))
-                        else "entry_screen_legacy_text_v1"
+                        if bool(
+                            getattr(
+                                TRADING_RULES,
+                                "OPENAI_ENTRY_SCREEN_V2_INPUT_ENABLED",
+                                False,
+                            )
+                        )
+                        else (
+                            "entry_screen_hot_v1"
+                            if use_hot_entry_input
+                            else (
+                                "entry_screen_compact_v1"
+                                if bool(
+                                    getattr(
+                                        TRADING_RULES,
+                                        "OPENAI_SCALPING_COMPACT_INPUT_ENABLED",
+                                        True,
+                                    )
+                                )
+                                else "entry_screen_legacy_text_v1"
+                            )
+                        )
                     ),
                     default_mode=(
                         "structured_json"
                         if bool(
-                            getattr(TRADING_RULES, "OPENAI_ENTRY_SCREEN_V2_INPUT_ENABLED", False)
+                            getattr(
+                                TRADING_RULES,
+                                "OPENAI_ENTRY_SCREEN_V2_INPUT_ENABLED",
+                                False,
+                            )
                             or use_hot_entry_input
-                            or getattr(TRADING_RULES, "OPENAI_SCALPING_COMPACT_INPUT_ENABLED", True)
+                            or getattr(
+                                TRADING_RULES,
+                                "OPENAI_SCALPING_COMPACT_INPUT_ENABLED",
+                                True,
+                            )
                         )
                         else "plain_text"
                     ),
@@ -4472,7 +5383,11 @@ class GPTSniperEngine:
                 require_json=True,
                 context_name=f"{target_name}({strategy}:{prompt_type})",
                 model_override=target_model,
-                schema_name="holding_exit_v1" if prompt_type == "scalping_holding" else "entry_v1",
+                schema_name=(
+                    "holding_exit_v1"
+                    if prompt_type == "scalping_holding"
+                    else "entry_v1"
+                ),
                 endpoint_name="analyze_target",
                 symbol=target_name,
                 cache_key=cache_key,
@@ -4488,7 +5403,9 @@ class GPTSniperEngine:
                     recent_ticks=recent_ticks,
                     recent_candles=recent_candles,
                 )
-                result = self._normalize_scalping_action_schema(result, prompt_type=prompt_type)
+                result = self._normalize_scalping_action_schema(
+                    result, prompt_type=prompt_type
+                )
                 result.update(feature_audit_fields)
                 result = self._annotate_entry_numeric_consistency(
                     result,
@@ -4524,7 +5441,9 @@ class GPTSniperEngine:
             failure_count = self._record_failure_and_maybe_disable(
                 context_name=f"{target_name}({strategy}:{prompt_type})"
             )
-            log_error(f"🚨 [{target_name}][{strategy}] OpenAI 실시간 분석 에러 (연속 실패 {failure_count}회, API키 인덱스 {self.current_api_key_index}): {e}")
+            log_error(
+                f"🚨 [{target_name}][{strategy}] OpenAI 실시간 분석 에러 (연속 실패 {failure_count}회, API키 인덱스 {self.current_api_key_index}): {e}"
+            )
 
             fallback_payload = (
                 self._build_buy_side_timeout_reject(
@@ -4576,7 +5495,11 @@ class GPTSniperEngine:
     ):
         if strategy in ["KOSPI_ML", "KOSDAQ_ML"]:
             return self._annotate_analysis_result(
-                {"action": "WAIT", "score": 50, "reason": "shadow unsupported for swing"},
+                {
+                    "action": "WAIT",
+                    "score": 50,
+                    "reason": "shadow unsupported for swing",
+                },
                 prompt_type=prompt_type,
                 prompt_version="shadow_v1",
                 response_ms=0,
@@ -4607,7 +5530,9 @@ class GPTSniperEngine:
                 response_ms=int((time.perf_counter() - analysis_started) * 1000),
                 parse_ok=bool(cached_result.get("ai_parse_ok", False)),
                 parse_fail=bool(cached_result.get("ai_parse_fail", False)),
-                fallback_score_50=bool(cached_result.get("ai_fallback_score_50", False)),
+                fallback_score_50=bool(
+                    cached_result.get("ai_fallback_score_50", False)
+                ),
                 cache_hit=True,
                 cache_mode="hit",
                 result_source="shadow_cache",
@@ -4615,7 +5540,11 @@ class GPTSniperEngine:
 
         if self.ai_disabled:
             return self._annotate_analysis_result(
-                {"action": "WAIT", "score": 50, "reason": "engine_disabled_skip_shadow_call"},
+                {
+                    "action": "WAIT",
+                    "score": 50,
+                    "reason": "engine_disabled_skip_shadow_call",
+                },
                 prompt_type=prompt_type,
                 prompt_version="shadow_v1",
                 response_ms=int((time.perf_counter() - analysis_started) * 1000),
@@ -4651,14 +5580,20 @@ class GPTSniperEngine:
                     response_ms=int((time.perf_counter() - analysis_started) * 1000),
                     parse_ok=bool(cached_result.get("ai_parse_ok", False)),
                     parse_fail=bool(cached_result.get("ai_parse_fail", False)),
-                    fallback_score_50=bool(cached_result.get("ai_fallback_score_50", False)),
+                    fallback_score_50=bool(
+                        cached_result.get("ai_fallback_score_50", False)
+                    ),
                     cache_hit=True,
                     cache_mode="hit",
                     result_source="shadow_cache",
                 )
 
-            formatted_data = self._format_market_data(ws_data, recent_ticks, recent_candles)
-            active_prompt = prompt_override if prompt_override else SCALPING_SYSTEM_PROMPT_75_CANARY
+            formatted_data = self._format_market_data(
+                ws_data, recent_ticks, recent_candles
+            )
+            active_prompt = (
+                prompt_override if prompt_override else SCALPING_SYSTEM_PROMPT_75_CANARY
+            )
 
             result = self._call_openai_safe(
                 active_prompt,
@@ -4666,7 +5601,11 @@ class GPTSniperEngine:
                 require_json=True,
                 context_name=f"{target_name}(shadow:{prompt_type})",
                 model_override=self._get_tier1_model(),
-                schema_name="holding_exit_v1" if prompt_type == "scalping_holding" else "entry_v1",
+                schema_name=(
+                    "holding_exit_v1"
+                    if prompt_type == "scalping_holding"
+                    else "entry_v1"
+                ),
                 endpoint_name="analyze_target_shadow_prompt",
                 symbol=target_name,
                 cache_key=cache_key,
@@ -4714,7 +5653,9 @@ class GPTSniperEngine:
     # 퍼블릭 메서드: analyze_scanner_results (시장 브리핑)
     # ==========================================
 
-    def analyze_scanner_results(self, total_count, survived_count, stats_text, macro_text=""):
+    def analyze_scanner_results(
+        self, total_count, survived_count, stats_text, macro_text=""
+    ):
         """텔레그램 아침 브리핑 (Macro + Scanner 통합) - OpenAI Tier3 사용"""
         with self.lock:
             data_input = build_scanner_data_input(
@@ -4747,7 +5688,9 @@ class GPTSniperEngine:
     # 퍼블릭 메서드: 실시간 리포트/게이트키퍼
     # ==========================================
 
-    def generate_realtime_report(self, stock_name, stock_code, input_data_text, analysis_mode="AUTO"):
+    def generate_realtime_report(
+        self, stock_name, stock_code, input_data_text, analysis_mode="AUTO"
+    ):
         """실시간 종목 분석 리포트 생성"""
         return self._generate_realtime_report_payload(
             stock_name=stock_name,
@@ -4776,7 +5719,9 @@ class GPTSniperEngine:
                 return label.strip("[]")
         return "UNKNOWN"
 
-    def evaluate_realtime_gatekeeper(self, stock_name, stock_code, realtime_ctx, analysis_mode="AUTO"):
+    def evaluate_realtime_gatekeeper(
+        self, stock_name, stock_code, realtime_ctx, analysis_mode="AUTO"
+    ):
         """generate_realtime_report 결과를 마지막 진입 게이트 판단용으로 정규화합니다."""
         cache_key = self._build_gatekeeper_cache_key(
             stock_name=stock_name,
@@ -4812,7 +5757,9 @@ class GPTSniperEngine:
             "cache_hit": False,
             "cache_mode": "miss",
         }
-        self._cache_set("_gatekeeper_cache", cache_key, result, self.gatekeeper_cache_ttl)
+        self._cache_set(
+            "_gatekeeper_cache", cache_key, result, self.gatekeeper_cache_ttl
+        )
         return result
 
     # ==========================================
@@ -4855,10 +5802,14 @@ class GPTSniperEngine:
             return "틱 데이터 없음"
 
         def _price(tick):
-            return self._safe_float(tick.get("price", tick.get("현재가", tick.get("체결가", 0))), 0.0)
+            return self._safe_float(
+                tick.get("price", tick.get("현재가", tick.get("체결가", 0))), 0.0
+            )
 
         def _volume(tick):
-            return self._safe_float(tick.get("volume", tick.get("qty", tick.get("체결량", 0))), 0.0)
+            return self._safe_float(
+                tick.get("volume", tick.get("qty", tick.get("체결량", 0))), 0.0
+            )
 
         lines = []
         for window in (10, 20, 30):
@@ -4869,12 +5820,14 @@ class GPTSniperEngine:
             buy_vol = sum(
                 _volume(tick)
                 for tick, inferred in inferred_rows
-                if inferred.get("side") == "BUY" and inferred.get("source") != "price_change_heuristic"
+                if inferred.get("side") == "BUY"
+                and inferred.get("source") != "price_change_heuristic"
             )
             sell_vol = sum(
                 _volume(tick)
                 for tick, inferred in inferred_rows
-                if inferred.get("side") == "SELL" and inferred.get("source") != "price_change_heuristic"
+                if inferred.get("side") == "SELL"
+                and inferred.get("source") != "price_change_heuristic"
             )
             total = buy_vol + sell_vol
             buy_pressure = (buy_vol / total * 100.0) if total > 0 else 0.0
@@ -4894,7 +5847,9 @@ class GPTSniperEngine:
         return "\n".join(lines)
 
     def _summarize_flow_candles(self, recent_candles):
-        candles = [candle for candle in (recent_candles or []) if isinstance(candle, dict)]
+        candles = [
+            candle for candle in (recent_candles or []) if isinstance(candle, dict)
+        ]
         if not candles:
             return "분봉 데이터 없음"
 
@@ -4909,15 +5864,40 @@ class GPTSniperEngine:
             sample = candles[-window:]
             if len(sample) < 2:
                 continue
-            first_close = self._safe_float(_field(sample[0], "현재가", "close", "종가"), 0.0)
-            last_close = self._safe_float(_field(sample[-1], "현재가", "close", "종가"), 0.0)
-            highs = [self._safe_float(_field(item, "고가", "high"), 0.0) for item in sample]
-            lows = [self._safe_float(_field(item, "저가", "low"), 0.0) for item in sample]
-            vols = [self._safe_float(_field(item, "거래량", "volume"), 0.0) for item in sample]
-            slope = ((last_close - first_close) / first_close * 100.0) if first_close > 0 else 0.0
-            range_pct = ((max(highs) - min(lows)) / min(lows) * 100.0) if lows and min(lows) > 0 else 0.0
-            vol_change = (vols[-1] / (sum(vols[:-1]) / max(1, len(vols) - 1))) if len(vols) > 1 and sum(vols[:-1]) > 0 else 0.0
-            lines.append(f"- 최근 {window}분: 종가 기울기 {slope:+.2f}%, 범위 {range_pct:.2f}%, 최신 거래량배율 {vol_change:.2f}x")
+            first_close = self._safe_float(
+                _field(sample[0], "현재가", "close", "종가"), 0.0
+            )
+            last_close = self._safe_float(
+                _field(sample[-1], "현재가", "close", "종가"), 0.0
+            )
+            highs = [
+                self._safe_float(_field(item, "고가", "high"), 0.0) for item in sample
+            ]
+            lows = [
+                self._safe_float(_field(item, "저가", "low"), 0.0) for item in sample
+            ]
+            vols = [
+                self._safe_float(_field(item, "거래량", "volume"), 0.0)
+                for item in sample
+            ]
+            slope = (
+                ((last_close - first_close) / first_close * 100.0)
+                if first_close > 0
+                else 0.0
+            )
+            range_pct = (
+                ((max(highs) - min(lows)) / min(lows) * 100.0)
+                if lows and min(lows) > 0
+                else 0.0
+            )
+            vol_change = (
+                (vols[-1] / (sum(vols[:-1]) / max(1, len(vols) - 1)))
+                if len(vols) > 1 and sum(vols[:-1]) > 0
+                else 0.0
+            )
+            lines.append(
+                f"- 최근 {window}분: 종가 기울기 {slope:+.2f}%, 범위 {range_pct:.2f}%, 최신 거래량배율 {vol_change:.2f}x"
+            )
         return "\n".join(lines) if lines else "분봉 데이터 부족"
 
     def _format_flow_history(self, flow_history):
@@ -4965,7 +5945,12 @@ class GPTSniperEngine:
         stale_reasons = []
         partial_reasons = []
         fresh_labels = {"fresh", "fresh_computed", "usable", "ok", "pass"}
-        stale_labels = {"missing_ticks", "missing_tick_time", "stale_tick", "insufficient"}
+        stale_labels = {
+            "missing_ticks",
+            "missing_tick_time",
+            "stale_tick",
+            "insufficient",
+        }
         for key in ("tick_context_stale", "quote_stale"):
             raw_value = audit.get(key, packet.get(key))
             text = str(raw_value or "").strip().lower()
@@ -4987,20 +5972,35 @@ class GPTSniperEngine:
                 partial_reasons.append("micro_vwap_provenance_missing")
             elif not self._feature_packet_micro_vwap_usable(packet):
                 partial_reasons.append("micro_vwap_unavailable")
-        micro_quality = str(
-            audit.get(
-                "microstructure_reaction_source_quality",
-                packet.get("microstructure_reaction_source_quality", ""),
+        micro_quality = (
+            str(
+                audit.get(
+                    "microstructure_reaction_source_quality",
+                    packet.get("microstructure_reaction_source_quality", ""),
+                )
+                or ""
             )
-            or ""
-        ).strip().lower()
+            .strip()
+            .lower()
+        )
         if micro_quality:
             if micro_quality in {"stale", "stale_tick", "stale_quote"}:
-                stale_reasons.append(f"microstructure_reaction_source_quality:{micro_quality}")
-            elif micro_quality in {"stale_tick_or_quote", "missing", "insufficient", "not_evaluated"}:
-                partial_reasons.append(f"microstructure_reaction_source_quality:{micro_quality}")
+                stale_reasons.append(
+                    f"microstructure_reaction_source_quality:{micro_quality}"
+                )
+            elif micro_quality in {
+                "stale_tick_or_quote",
+                "missing",
+                "insufficient",
+                "not_evaluated",
+            }:
+                partial_reasons.append(
+                    f"microstructure_reaction_source_quality:{micro_quality}"
+                )
             elif micro_quality not in fresh_labels | {"fresh_short_window"}:
-                partial_reasons.append(f"microstructure_reaction_source_quality:{micro_quality}")
+                partial_reasons.append(
+                    f"microstructure_reaction_source_quality:{micro_quality}"
+                )
         if not packet:
             return {
                 "data_quality": "insufficient",
@@ -5039,9 +6039,16 @@ class GPTSniperEngine:
         audit = feature_audit_fields if isinstance(feature_audit_fields, dict) else {}
         curr_price = int(self._safe_float(ws.get("curr", ctx.get("curr_price", 0)), 0))
         buy_price = self._safe_float(ctx.get("buy_price", ctx.get("avg_price", 0)), 0.0)
-        profit_rate = self._safe_float(ctx.get("profit_rate", ctx.get("pnl_pct", 0.0)), 0.0)
+        profit_rate = self._safe_float(
+            ctx.get("profit_rate", ctx.get("pnl_pct", 0.0)), 0.0
+        )
         peak_profit = self._safe_float(ctx.get("peak_profit", profit_rate), profit_rate)
-        drawdown = max(0.0, self._safe_float(ctx.get("drawdown_from_peak_pct", peak_profit - profit_rate), 0.0))
+        drawdown = max(
+            0.0,
+            self._safe_float(
+                ctx.get("drawdown_from_peak_pct", peak_profit - profit_rate), 0.0
+            ),
+        )
         source_quality = self._derive_holding_score_source_quality(packet, audit)
         compact_features = self._compact_holding_score_feature_packet(packet, audit)
         payload = {
@@ -5072,8 +6079,12 @@ class GPTSniperEngine:
             },
             "market_flow_features": {
                 "compact_features": compact_features,
-                "tick_summary": self._summarize_tick_windows(recent_ticks, windows=(5, 10, 20)),
-                "candle_summary": self._summarize_candle_windows(recent_candles, windows=(3, 5, 10)),
+                "tick_summary": self._summarize_tick_windows(
+                    recent_ticks, windows=(5, 10, 20)
+                ),
+                "candle_summary": self._summarize_candle_windows(
+                    recent_candles, windows=(3, 5, 10)
+                ),
                 "live_supply_demand_orderbook": {
                     "execution_strength": ws.get("v_pw", 0.0),
                     "buy_ratio": ws.get("buy_ratio", 0.0),
@@ -5095,7 +6106,9 @@ class GPTSniperEngine:
                 "prior_score_source": ctx.get("prior_score_source", "-"),
                 "prior_data_quality": ctx.get("prior_data_quality", "-"),
                 "prior_score_age_sec": ctx.get("prior_score_age_sec"),
-                "prior_effective_usable": bool(ctx.get("prior_effective_usable", False)),
+                "prior_effective_usable": bool(
+                    ctx.get("prior_effective_usable", False)
+                ),
             },
             "hard_guard_context": {
                 "hard_guards_remain_authoritative": True,
@@ -5110,16 +6123,22 @@ class GPTSniperEngine:
                 "return_schema": "holding_score_v2",
             },
         }
-        return json.dumps(payload, ensure_ascii=True, separators=(",", ":"), default=str)
+        return json.dumps(
+            payload, ensure_ascii=True, separators=(",", ":"), default=str
+        )
 
     def _normalize_holding_score_result(self, result, *, source_quality=None):
         payload = dict(result or {}) if isinstance(result, dict) else {}
         raw_action = str(payload.get("action", "HOLD") or "HOLD").upper().strip()
         action = raw_action if raw_action in {"HOLD", "TRIM", "EXIT"} else "HOLD"
         score = max(0, min(100, int(self._safe_float(payload.get("score"), 50))))
-        confidence = max(0, min(100, int(self._safe_float(payload.get("confidence"), 0))))
+        confidence = max(
+            0, min(100, int(self._safe_float(payload.get("confidence"), 0)))
+        )
         source_quality = source_quality if isinstance(source_quality, dict) else {}
-        model_quality = self._normalize_holding_score_data_quality(payload.get("data_quality"))
+        model_quality = self._normalize_holding_score_data_quality(
+            payload.get("data_quality")
+        )
         derived_quality = self._normalize_holding_score_data_quality(
             source_quality.get("data_quality"),
             fallback=model_quality,
@@ -5132,9 +6151,15 @@ class GPTSniperEngine:
             data_quality = "partial"
         else:
             data_quality = "fresh"
-        reason_payload = normalize_ai_reason_language(str(payload.get("reason", "") or "holding_score_v2_result"))
+        reason_payload = normalize_ai_reason_language(
+            str(payload.get("reason", "") or "holding_score_v2_result")
+        )
         score_basis = normalize_ai_reason_language(
-            str(payload.get("score_basis", "") or reason_payload.get("reason") or "holding_score_v2_basis")
+            str(
+                payload.get("score_basis", "")
+                or reason_payload.get("reason")
+                or "holding_score_v2_basis"
+            )
         )
         return {
             "action": action,
@@ -5142,8 +6167,12 @@ class GPTSniperEngine:
             "confidence": confidence,
             "position_state": str(payload.get("position_state", "-") or "-")[:80],
             "score_basis": score_basis.get("reason", "holding_score_v2_basis"),
-            "risk_factors": self._compact_holding_score_factors(payload.get("risk_factors")),
-            "support_factors": self._compact_holding_score_factors(payload.get("support_factors")),
+            "risk_factors": self._compact_holding_score_factors(
+                payload.get("risk_factors")
+            ),
+            "support_factors": self._compact_holding_score_factors(
+                payload.get("support_factors")
+            ),
             "data_quality": data_quality,
             "reason": reason_payload.get("reason", "holding_score_v2_result"),
             "raw": payload,
@@ -5228,7 +6257,9 @@ class GPTSniperEngine:
             lock_acquired = self.lock.acquire(timeout=lock_wait_ms / 1000.0)
         else:
             lock_acquired = self.lock.acquire(blocking=False)
-        lock_wait_elapsed_ms = max(0, int((time.perf_counter() - lock_wait_started) * 1000))
+        lock_wait_elapsed_ms = max(
+            0, int((time.perf_counter() - lock_wait_started) * 1000)
+        )
         if not lock_acquired:
             payload = self._neutral_holding_score_result(
                 "lock_contention",
@@ -5255,9 +6286,13 @@ class GPTSniperEngine:
                     input_contract_fields=input_contract_fields,
                 )
 
-            feature_packet = extract_scalping_feature_packet(ws_data or {}, recent_ticks or [], recent_candles or [])
+            feature_packet = extract_scalping_feature_packet(
+                ws_data or {}, recent_ticks or [], recent_candles or []
+            )
             feature_audit_fields = build_scalping_feature_audit_fields(feature_packet)
-            source_quality = self._derive_holding_score_source_quality(feature_packet, feature_audit_fields)
+            source_quality = self._derive_holding_score_source_quality(
+                feature_packet, feature_audit_fields
+            )
             user_input = self._build_scalping_holding_score_v2_context(
                 stock_name,
                 stock_code,
@@ -5287,7 +6322,9 @@ class GPTSniperEngine:
             transport_meta = self._consume_last_transport_meta()
             if isinstance(result, dict) and transport_meta:
                 result.update(transport_meta)
-            normalized = self._normalize_holding_score_result(result, source_quality=source_quality)
+            normalized = self._normalize_holding_score_result(
+                result, source_quality=source_quality
+            )
             normalized.update(feature_audit_fields)
             meta_source = result if isinstance(result, dict) else transport_meta
             for key, value in meta_source.items():
@@ -5308,11 +6345,16 @@ class GPTSniperEngine:
                     "holding_score_effective_source": "live",
                     "holding_score_effective_from_prior": False,
                     "holding_score_age_sec": 0,
-                    "holding_score_effective_usable": normalized["data_quality"] in {"fresh", "partial"},
-                    "holding_score_excluded_reason": "-"
-                    if normalized["data_quality"] in {"fresh", "partial"}
-                    else normalized["data_quality"],
-                    "holding_score_source_quality_reason": source_quality.get("source_quality_reason", "-"),
+                    "holding_score_effective_usable": normalized["data_quality"]
+                    in {"fresh", "partial"},
+                    "holding_score_excluded_reason": (
+                        "-"
+                        if normalized["data_quality"] in {"fresh", "partial"}
+                        else normalized["data_quality"]
+                    ),
+                    "holding_score_source_quality_reason": source_quality.get(
+                        "source_quality_reason", "-"
+                    ),
                 }
             )
             self._mark_successful_ai_call(update_last_call_time=False)
@@ -5330,7 +6372,9 @@ class GPTSniperEngine:
                 input_contract_fields=input_contract_fields,
             )
         except Exception as e:
-            failure_count = self._record_failure_and_maybe_disable(context_name=f"HOLDING_SCORE:{stock_name}")
+            failure_count = self._record_failure_and_maybe_disable(
+                context_name=f"HOLDING_SCORE:{stock_name}"
+            )
             timeout_like = self._is_openai_timeout_like_error(e)
             result_source = "timeout" if timeout_like else "exception"
             log_error(
@@ -5346,7 +6390,13 @@ class GPTSniperEngine:
             )
             timing_meta = getattr(e, "timing_meta", None)
             if isinstance(timing_meta, dict):
-                payload.update({key: value for key, value in timing_meta.items() if str(key).startswith("openai_")})
+                payload.update(
+                    {
+                        key: value
+                        for key, value in timing_meta.items()
+                        if str(key).startswith("openai_")
+                    }
+                )
             payload["holding_score_timeout_like"] = bool(timeout_like)
             payload["holding_score_transport_fail_closed"] = True
             payload["holding_score_transport_fail_closed_reason"] = str(e)[:160]
@@ -5388,13 +6438,19 @@ class GPTSniperEngine:
                 {
                     "time": item.get("time"),
                     "action": item.get("action"),
-                    "flow_state": self._normalize_flow_state_label(item.get("flow_state", "-")),
+                    "flow_state": self._normalize_flow_state_label(
+                        item.get("flow_state", "-")
+                    ),
                     "profit_rate": item.get("profit_rate"),
                     "exit_rule": item.get("exit_rule"),
                     "reason": item.get("reason"),
                 }
             )
-        orderbook_micro = ctx.get("orderbook_micro") if isinstance(ctx.get("orderbook_micro"), dict) else {}
+        orderbook_micro = (
+            ctx.get("orderbook_micro")
+            if isinstance(ctx.get("orderbook_micro"), dict)
+            else {}
+        )
         payload = {
             "input_schema": "holding_flow_v2",
             "decision_type": {
@@ -5408,11 +6464,28 @@ class GPTSniperEngine:
                 "current_price": curr_price,
                 "current_pnl_pct": round(pnl, 4),
                 "peak_pnl_pct": round(peak_profit, 4),
-                "drawdown_from_peak_pct": round(self._safe_float(ctx.get("drawdown", peak_profit - pnl), 0.0), 4),
-                "held_sec": int(self._safe_float(ctx.get("held_sec", self._safe_float(ctx.get("held_minutes", 0.0)) * 60.0), 0.0)),
-                "current_ai_score": round(self._safe_float(ctx.get("current_ai_score", ctx.get("score", 0.0)), 0.0), 3),
+                "drawdown_from_peak_pct": round(
+                    self._safe_float(ctx.get("drawdown", peak_profit - pnl), 0.0), 4
+                ),
+                "held_sec": int(
+                    self._safe_float(
+                        ctx.get(
+                            "held_sec",
+                            self._safe_float(ctx.get("held_minutes", 0.0)) * 60.0,
+                        ),
+                        0.0,
+                    )
+                ),
+                "current_ai_score": round(
+                    self._safe_float(
+                        ctx.get("current_ai_score", ctx.get("score", 0.0)), 0.0
+                    ),
+                    3,
+                ),
                 "distance_from_day_high_pct": round(distance_from_day_high, 4),
-                "allowed_worsen_pct": self._safe_float(ctx.get("worsen_pct", 0.80), 0.80),
+                "allowed_worsen_pct": self._safe_float(
+                    ctx.get("worsen_pct", 0.80), 0.80
+                ),
             },
             "entry_time_context": self._compact_entry_time_context(ctx),
             "prior_flow_reviews": prior_reviews,
@@ -5438,21 +6511,37 @@ class GPTSniperEngine:
                 "bid_total_depth": ws.get("bid_tot", 0),
                 **self._extract_quote_snapshot(ws),
             },
-            "tick_summary": self._summarize_tick_windows(recent_ticks, windows=(5, 10, 20, 30)),
-            "candle_summary": self._summarize_candle_windows(recent_candles, windows=(3, 5, 10)),
-            "recent_ticks_latest_first": self._compact_recent_ticks(recent_ticks, limit=5),
-            "recent_candles_latest_window": self._compact_recent_candles(recent_candles, limit=5),
+            "tick_summary": self._summarize_tick_windows(
+                recent_ticks, windows=(5, 10, 20, 30)
+            ),
+            "candle_summary": self._summarize_candle_windows(
+                recent_candles, windows=(3, 5, 10)
+            ),
+            "recent_ticks_latest_first": self._compact_recent_ticks(
+                recent_ticks, limit=5
+            ),
+            "recent_candles_latest_window": self._compact_recent_candles(
+                recent_candles, limit=5
+            ),
             "runtime_advisory_context": {
                 "holding_exit_matrix": (matrix_runtime or {}).get("prompt_context", ""),
                 "lifecycle_ai": (lifecycle_ai_runtime or {}).get("prompt_context", ""),
             },
             "decision_request": {
-                "flow_states": ["absorption", "recovery", "distribution", "breakdown", "quiet"],
+                "flow_states": [
+                    "absorption",
+                    "recovery",
+                    "distribution",
+                    "breakdown",
+                    "quiet",
+                ],
                 "score_is_confidence_only": True,
                 "hard_guards_override_ai": True,
             },
         }
-        return json.dumps(payload, ensure_ascii=True, separators=(",", ":"), default=str)
+        return json.dumps(
+            payload, ensure_ascii=True, separators=(",", ":"), default=str
+        )
 
     def _format_scalping_holding_flow_context(
         self,
@@ -5466,10 +6555,23 @@ class GPTSniperEngine:
         decision_kind="intraday_exit",
     ):
         ctx = position_ctx or {}
-        curr_price = int(self._safe_float(ws_data.get("curr", ctx.get("curr_price", 0)) if isinstance(ws_data, dict) else ctx.get("curr_price", 0), 0))
+        curr_price = int(
+            self._safe_float(
+                (
+                    ws_data.get("curr", ctx.get("curr_price", 0))
+                    if isinstance(ws_data, dict)
+                    else ctx.get("curr_price", 0)
+                ),
+                0,
+            )
+        )
         buy_price = self._safe_float(ctx.get("buy_price", ctx.get("avg_price", 0)), 0.0)
         day_high = self._safe_float(ctx.get("day_high", 0), 0.0)
-        distance_from_day_high = ((curr_price - day_high) / day_high * 100.0) if curr_price > 0 and day_high > 0 else self._safe_float(ctx.get("distance_from_day_high_pct", 0), 0.0)
+        distance_from_day_high = (
+            ((curr_price - day_high) / day_high * 100.0)
+            if curr_price > 0 and day_high > 0
+            else self._safe_float(ctx.get("distance_from_day_high_pct", 0), 0.0)
+        )
         cadence_guide = (
             "For overnight SELL_TODAY re-checks, this should be one-shot. Use next_review_sec=0 unless another review is clearly required; otherwise use 300-600 seconds."
             if str(decision_kind or "") == "overnight_sell_today"
@@ -5535,7 +6637,11 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
         if not isinstance(evidence, list):
             evidence = [str(evidence)] if evidence else []
         next_review_default = 60 if decision_kind != "overnight_sell_today" else 0
-        next_review_raw = int(self._safe_float(payload.get("next_review_sec", next_review_default), next_review_default))
+        next_review_raw = int(
+            self._safe_float(
+                payload.get("next_review_sec", next_review_default), next_review_default
+            )
+        )
         if decision_kind == "overnight_sell_today":
             next_review_sec = max(0, min(600, next_review_raw))
         else:
@@ -5543,7 +6649,9 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
         return {
             "action": action,
             "score": max(0, min(100, score)),
-            "flow_state": self._normalize_flow_state_label(payload.get("flow_state", "-")),
+            "flow_state": self._normalize_flow_state_label(
+                payload.get("flow_state", "-")
+            ),
             "raw_flow_state": str(payload.get("flow_state", "-") or "-")[:80],
             "thesis": str(payload.get("thesis", "-") or "-")[:160],
             "evidence": [str(item).replace("\n", " ")[:160] for item in evidence[:5]],
@@ -5568,12 +6676,20 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
         input_contract_fields = {
             "ai_input_schema": (
                 "holding_flow_v2"
-                if bool(getattr(TRADING_RULES, "OPENAI_HOLDING_FLOW_V2_INPUT_ENABLED", False))
+                if bool(
+                    getattr(
+                        TRADING_RULES, "OPENAI_HOLDING_FLOW_V2_INPUT_ENABLED", False
+                    )
+                )
                 else "holding_flow_text_v1"
             ),
             "ai_input_contract_mode": (
                 "structured_json"
-                if bool(getattr(TRADING_RULES, "OPENAI_HOLDING_FLOW_V2_INPUT_ENABLED", False))
+                if bool(
+                    getattr(
+                        TRADING_RULES, "OPENAI_HOLDING_FLOW_V2_INPUT_ENABLED", False
+                    )
+                )
                 else "plain_text"
             ),
             "ai_input_build_fallback": "not_built",
@@ -5628,14 +6744,24 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
             matrix_runtime = build_holding_exit_matrix_runtime_context(
                 prompt_profile="holding",
                 ws_data=ws_data if isinstance(ws_data, dict) else {},
-                recent_candles=recent_candles if isinstance(recent_candles, list) else [],
+                recent_candles=(
+                    recent_candles if isinstance(recent_candles, list) else []
+                ),
                 advisory_enabled=bool(
-                    getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_ADVISORY_ENABLED", False)
-                    or getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_RUNTIME_BIAS_ENABLED", False)
+                    getattr(
+                        TRADING_RULES, "HOLDING_EXIT_MATRIX_ADVISORY_ENABLED", False
+                    )
+                    or getattr(
+                        TRADING_RULES, "HOLDING_EXIT_MATRIX_RUNTIME_BIAS_ENABLED", False
+                    )
                 ),
             )
-            lifecycle_ai_runtime = build_lifecycle_ai_runtime_context(prompt_profile="holding", stage="holding")
-            if bool(getattr(TRADING_RULES, "OPENAI_HOLDING_FLOW_V2_INPUT_ENABLED", False)):
+            lifecycle_ai_runtime = build_lifecycle_ai_runtime_context(
+                prompt_profile="holding", stage="holding"
+            )
+            if bool(
+                getattr(TRADING_RULES, "OPENAI_HOLDING_FLOW_V2_INPUT_ENABLED", False)
+            ):
                 user_input = self._build_scalping_holding_flow_v2_context(
                     stock_name,
                     stock_code,
@@ -5662,17 +6788,27 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
                 if matrix_runtime.get("prompt_context"):
                     user_input = f"{user_input}\n\n{matrix_runtime['prompt_context']}"
                 if lifecycle_ai_runtime.get("prompt_context"):
-                    user_input = f"{user_input}\n\n{lifecycle_ai_runtime['prompt_context']}"
+                    user_input = (
+                        f"{user_input}\n\n{lifecycle_ai_runtime['prompt_context']}"
+                    )
             input_contract_fields = self._resolve_ai_input_contract_fields(
                 user_input,
                 default_schema=(
                     "holding_flow_v2"
-                    if bool(getattr(TRADING_RULES, "OPENAI_HOLDING_FLOW_V2_INPUT_ENABLED", False))
+                    if bool(
+                        getattr(
+                            TRADING_RULES, "OPENAI_HOLDING_FLOW_V2_INPUT_ENABLED", False
+                        )
+                    )
                     else "holding_flow_text_v1"
                 ),
                 default_mode=(
                     "structured_json"
-                    if bool(getattr(TRADING_RULES, "OPENAI_HOLDING_FLOW_V2_INPUT_ENABLED", False))
+                    if bool(
+                        getattr(
+                            TRADING_RULES, "OPENAI_HOLDING_FLOW_V2_INPUT_ENABLED", False
+                        )
+                    )
                     else "plain_text"
                 ),
             )
@@ -5687,13 +6823,17 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
                 symbol=stock_code,
                 metadata_extra=metadata_extra,
             )
-            normalized = self._normalize_holding_flow_result(result, decision_kind=decision_kind)
+            normalized = self._normalize_holding_flow_result(
+                result, decision_kind=decision_kind
+            )
             normalized = merge_holding_exit_matrix_result_fields(
                 normalized,
                 matrix_runtime,
                 position_ctx=position_ctx if isinstance(position_ctx, dict) else {},
             )
-            normalized = merge_lifecycle_ai_context_fields(normalized, lifecycle_ai_runtime)
+            normalized = merge_lifecycle_ai_context_fields(
+                normalized, lifecycle_ai_runtime
+            )
             normalized["ai_model"] = self._get_tier2_model()
             self._mark_successful_ai_call(update_last_call_time=False)
             return self._annotate_analysis_result(
@@ -5713,7 +6853,9 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
             failure_count = self._record_failure_and_maybe_disable(
                 context_name=f"HOLDING_FLOW:{stock_name}:{decision_kind}"
             )
-            log_error(f"🚨 [HOLDING_FLOW] OpenAI 판정 에러 ({stock_name}/{decision_kind}, 연속 실패 {failure_count}회): {e}")
+            log_error(
+                f"🚨 [HOLDING_FLOW] OpenAI 판정 에러 ({stock_name}/{decision_kind}, 연속 실패 {failure_count}회): {e}"
+            )
             return self._annotate_analysis_result(
                 {
                     "action": "EXIT",
@@ -5738,7 +6880,9 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
         finally:
             self.lock.release()
 
-    def evaluate_scalping_overnight_decision(self, stock_name, stock_code, realtime_ctx):
+    def evaluate_scalping_overnight_decision(
+        self, stock_name, stock_code, realtime_ctx
+    ):
         """장마감 전 SCALPING 포지션의 오버나이트/당일청산 의사결정을 JSON으로 반환합니다."""
         started = time.perf_counter()
         prompt_type = "scalping_overnight"
@@ -5746,11 +6890,11 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
         if not self.lock.acquire(blocking=False):
             return self._annotate_analysis_result(
                 {
-                    'action': 'SELL_TODAY',
-                    'confidence': 0,
-                    'reason': 'ai_lock_contention',
-                    'risk_note': 'lock_contention',
-                    'raw': {},
+                    "action": "SELL_TODAY",
+                    "confidence": 0,
+                    "reason": "ai_lock_contention",
+                    "risk_note": "lock_contention",
+                    "raw": {},
                 },
                 prompt_type=prompt_type,
                 prompt_version=prompt_version,
@@ -5766,11 +6910,11 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
             if self.ai_disabled:
                 return self._annotate_analysis_result(
                     {
-                        'action': 'SELL_TODAY',
-                        'confidence': 0,
-                        'reason': 'engine_disabled_sell_today_fallback',
-                        'risk_note': 'engine_disabled',
-                        'raw': {},
+                        "action": "SELL_TODAY",
+                        "confidence": 0,
+                        "reason": "engine_disabled_sell_today_fallback",
+                        "risk_note": "engine_disabled",
+                        "raw": {},
                     },
                     prompt_type=prompt_type,
                     prompt_version=prompt_version,
@@ -5797,26 +6941,34 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
                 endpoint_name="overnight",
                 symbol=stock_code,
                 metadata_extra={
-                    "sim_record_id": realtime_ctx.get("sim_record_id") if isinstance(realtime_ctx, dict) else None,
-                    "sim_parent_record_id": realtime_ctx.get("sim_parent_record_id") if isinstance(realtime_ctx, dict) else None,
+                    "sim_record_id": (
+                        realtime_ctx.get("sim_record_id")
+                        if isinstance(realtime_ctx, dict)
+                        else None
+                    ),
+                    "sim_parent_record_id": (
+                        realtime_ctx.get("sim_parent_record_id")
+                        if isinstance(realtime_ctx, dict)
+                        else None
+                    ),
                     "source_event_stage": "scalp_sim_overnight_decision",
                 },
             )
             result = self._merge_last_transport_meta(result)
-            action = str(result.get('action', 'SELL_TODAY') or 'SELL_TODAY').upper()
-            if action not in {'SELL_TODAY', 'HOLD_OVERNIGHT'}:
-                action = 'SELL_TODAY'
+            action = str(result.get("action", "SELL_TODAY") or "SELL_TODAY").upper()
+            if action not in {"SELL_TODAY", "HOLD_OVERNIGHT"}:
+                action = "SELL_TODAY"
             try:
-                confidence = int(float(result.get('confidence', 0) or 0))
+                confidence = int(float(result.get("confidence", 0) or 0))
             except Exception:
                 confidence = 0
             payload = {
-                'action': action,
-                'confidence': max(0, min(100, confidence)),
-                'reason': str(result.get('reason', '') or 'reason_unavailable'),
-                'risk_note': str(result.get('risk_note', '') or 'risk_unavailable'),
-                'ai_model': self._get_tier2_model(),
-                'raw': result,
+                "action": action,
+                "confidence": max(0, min(100, confidence)),
+                "reason": str(result.get("reason", "") or "reason_unavailable"),
+                "risk_note": str(result.get("risk_note", "") or "risk_unavailable"),
+                "ai_model": self._get_tier2_model(),
+                "raw": result,
             }
             for key, value in result.items():
                 if str(key).startswith("openai_"):
@@ -5835,24 +6987,28 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
                 result_source="live",
             )
         except Exception as e:
-            sim_observation_only = self._is_sim_observation_overnight_context(realtime_ctx)
+            sim_observation_only = self._is_sim_observation_overnight_context(
+                realtime_ctx
+            )
             if sim_observation_only:
                 failure_count = self.consecutive_failures + 1
             else:
                 failure_count = self._record_failure_and_maybe_disable(
                     context_name=f"SCALP_OVERNIGHT:{stock_name}:{stock_code}"
                 )
-            log_error(f"🚨 [SCALPING 오버나이트 판정] OpenAI 에러 ({stock_name}, 연속 실패 {failure_count}회): {e}")
+            log_error(
+                f"🚨 [SCALPING 오버나이트 판정] OpenAI 에러 ({stock_name}, 연속 실패 {failure_count}회): {e}"
+            )
             return self._annotate_analysis_result(
                 {
-                    'action': 'SELL_TODAY',
-                    'confidence': 0,
-                    'reason': 'ai_failure_sell_today_fallback',
-                    'risk_note': 'ai_response_error_or_insufficient_context',
-                    'ai_exception_type': type(e).__name__,
-                    'ai_exception_message': str(e),
-                    'sim_observation_failure_isolated': sim_observation_only,
-                    'raw': {},
+                    "action": "SELL_TODAY",
+                    "confidence": 0,
+                    "reason": "ai_failure_sell_today_fallback",
+                    "risk_note": "ai_response_error_or_insufficient_context",
+                    "ai_exception_type": type(e).__name__,
+                    "ai_exception_message": str(e),
+                    "sim_observation_failure_isolated": sim_observation_only,
+                    "raw": {},
                 },
                 prompt_type=prompt_type,
                 prompt_version=prompt_version,
@@ -5871,7 +7027,15 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
     # 퍼블릭 메서드: 조건검색식 진입/청산 판단
     # ==========================================
 
-    def evaluate_condition_entry(self, stock_name, stock_code, ws_data, recent_ticks, recent_candles, condition_profile):
+    def evaluate_condition_entry(
+        self,
+        stock_name,
+        stock_code,
+        ws_data,
+        recent_ticks,
+        recent_candles,
+        condition_profile,
+    ):
         """조건검색식 진입 판단: 전용 prompt 대신 기존 scalping entry route를 재사용한다."""
         try:
             result = self.analyze_target(
@@ -5896,21 +7060,44 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
                 "risks": ["데이터 부족 또는 AI 응답 오류"],
             }
 
-    def evaluate_condition_exit(self, stock_name, stock_code, ws_data, recent_ticks, recent_candles, condition_profile, profit_rate, peak_profit, current_ai_score):
+    def evaluate_condition_exit(
+        self,
+        stock_name,
+        stock_code,
+        ws_data,
+        recent_ticks,
+        recent_candles,
+        condition_profile,
+        profit_rate,
+        peak_profit,
+        current_ai_score,
+    ):
         """조건검색식 청산 판단: scalping holding score contract에 명시적 PnL context를 전달한다."""
         try:
             profile = condition_profile if isinstance(condition_profile, dict) else {}
             curr_price = 0
             if isinstance(ws_data, dict):
-                curr_price = int(self._safe_float(ws_data.get("curr", ws_data.get("current_price", 0)), 0))
+                curr_price = int(
+                    self._safe_float(
+                        ws_data.get("curr", ws_data.get("current_price", 0)), 0
+                    )
+                )
             position_ctx = {
                 "record_id": profile.get("record_id"),
                 "buy_price": profile.get("buy_price") or profile.get("avg_price"),
                 "curr_price": curr_price,
                 "profit_rate": profit_rate,
                 "peak_profit": peak_profit,
-                "drawdown_from_peak_pct": max(0.0, self._safe_float(peak_profit, 0.0) - self._safe_float(profit_rate, 0.0)),
-                "held_sec": int(self._safe_float(profile.get("held_sec", profile.get("held_minutes", 0) or 0), 0)),
+                "drawdown_from_peak_pct": max(
+                    0.0,
+                    self._safe_float(peak_profit, 0.0)
+                    - self._safe_float(profit_rate, 0.0),
+                ),
+                "held_sec": int(
+                    self._safe_float(
+                        profile.get("held_sec", profile.get("held_minutes", 0) or 0), 0
+                    )
+                ),
                 "buy_qty": int(self._safe_float(profile.get("buy_qty", 0), 0)),
                 "position_tag": profile.get("position_tag", "CONDITION"),
                 "entry_source": "condition_exit",
@@ -5949,6 +7136,7 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
                 "warning": "데이터 부족 또는 AI 응답 오류",
             }
 
+
 class OpenAIDualPersonaShadowEngine(GPTSniperEngine):
     """Shadow-only dual persona engine for gatekeeper / overnight calibration."""
 
@@ -5963,13 +7151,19 @@ class OpenAIDualPersonaShadowEngine(GPTSniperEngine):
 
     def __init__(self, api_keys):
         super().__init__(api_keys)
-        worker_count = max(1, int(getattr(TRADING_RULES, "OPENAI_DUAL_PERSONA_WORKERS", 2) or 2))
+        worker_count = max(
+            1, int(getattr(TRADING_RULES, "OPENAI_DUAL_PERSONA_WORKERS", 2) or 2)
+        )
         self.shadow_executor = ThreadPoolExecutor(
             max_workers=worker_count,
             thread_name_prefix="openai-dual-shadow",
         )
-        self.shadow_enabled = bool(getattr(TRADING_RULES, "OPENAI_DUAL_PERSONA_ENABLED", True))
-        self.shadow_mode = bool(getattr(TRADING_RULES, "OPENAI_DUAL_PERSONA_SHADOW_MODE", True))
+        self.shadow_enabled = bool(
+            getattr(TRADING_RULES, "OPENAI_DUAL_PERSONA_ENABLED", True)
+        )
+        self.shadow_mode = bool(
+            getattr(TRADING_RULES, "OPENAI_DUAL_PERSONA_SHADOW_MODE", True)
+        )
         print(
             f"🧠 [OpenAI 듀얼 페르소나] shadow={'ON' if self.shadow_mode else 'OFF'} "
             f"/ workers={worker_count}"
@@ -6013,7 +7207,15 @@ class OpenAIDualPersonaShadowEngine(GPTSniperEngine):
         if not isinstance(result, dict):
             result = {}
 
-        action = str(result.get("action", "WAIT" if decision_type == "gatekeeper" else "SELL_TODAY")).upper().strip()
+        action = (
+            str(
+                result.get(
+                    "action", "WAIT" if decision_type == "gatekeeper" else "SELL_TODAY"
+                )
+            )
+            .upper()
+            .strip()
+        )
         if action not in allowed_actions:
             action = "WAIT" if decision_type == "gatekeeper" else "SELL_TODAY"
 
@@ -6036,11 +7238,17 @@ class OpenAIDualPersonaShadowEngine(GPTSniperEngine):
             "risk_flags": self._normalize_risk_flags(result.get("risk_flags", [])),
             "size_bias": size_bias,
             "veto": self._coerce_bool(result.get("veto", False)),
-            "thesis": str(result.get("thesis", "") or "").replace("\n", " ").strip()[:160],
-            "invalidator": str(result.get("invalidator", "") or "").replace("\n", " ").strip()[:160],
+            "thesis": str(result.get("thesis", "") or "")
+            .replace("\n", " ")
+            .strip()[:160],
+            "invalidator": str(result.get("invalidator", "") or "")
+            .replace("\n", " ")
+            .strip()[:160],
         }
 
-    def _build_shadow_payload(self, decision_type, stock_name, stock_code, strategy, realtime_ctx):
+    def _build_shadow_payload(
+        self, decision_type, stock_name, stock_code, strategy, realtime_ctx
+    ):
         return {
             "decision_type": decision_type.upper(),
             "stock_name": stock_name,
@@ -6059,22 +7267,48 @@ class OpenAIDualPersonaShadowEngine(GPTSniperEngine):
             model_override=self.fast_model_name,
             temperature_override=0.05,
             endpoint_name=f"dual_persona_{decision_type}",
-            symbol=stock_code if (stock_code := str(payload.get('stock_code', '') or '-')) else "-",
+            symbol=(
+                stock_code
+                if (stock_code := str(payload.get("stock_code", "") or "-"))
+                else "-"
+            ),
         )
         return self._normalize_shadow_result(raw_result, decision_type)
 
     def _gemini_baseline(self, decision_type, gemini_result):
         gemini_result = gemini_result or {}
         if decision_type == "gatekeeper":
-            action_label = str(gemini_result.get("action_label", "UNKNOWN") or "UNKNOWN")
-            action_key = normalize_gatekeeper_action_key(gemini_result.get("action_key") or action_label)
+            action_label = str(
+                gemini_result.get("action_label", "UNKNOWN") or "UNKNOWN"
+            )
+            action_key = normalize_gatekeeper_action_key(
+                gemini_result.get("action_key") or action_label
+            )
             action_label = display_gatekeeper_action_label(action_key)
             allow_entry = bool(gemini_result.get("allow_entry", False))
             if allow_entry:
-                return {"action": "ALLOW_ENTRY", "score": 85, "confidence": 0.85, "action_label": action_label, "action_key": action_key}
+                return {
+                    "action": "ALLOW_ENTRY",
+                    "score": 85,
+                    "confidence": 0.85,
+                    "action_label": action_label,
+                    "action_key": action_key,
+                }
             if action_key in {"full_avoid", "neither"}:
-                return {"action": "REJECT", "score": 20, "confidence": 0.75, "action_label": action_label, "action_key": action_key}
-            return {"action": "WAIT", "score": 55, "confidence": 0.6, "action_label": action_label, "action_key": action_key}
+                return {
+                    "action": "REJECT",
+                    "score": 20,
+                    "confidence": 0.75,
+                    "action_label": action_label,
+                    "action_key": action_key,
+                }
+            return {
+                "action": "WAIT",
+                "score": 55,
+                "confidence": 0.6,
+                "action_label": action_label,
+                "action_key": action_key,
+            }
 
         action = str(gemini_result.get("action", "SELL_TODAY") or "SELL_TODAY").upper()
         confidence = self._normalize_confidence(gemini_result.get("confidence", 0))
@@ -6090,14 +7324,38 @@ class OpenAIDualPersonaShadowEngine(GPTSniperEngine):
     def _resolve_weights(self, decision_type):
         if decision_type == "gatekeeper":
             return (
-                float(getattr(TRADING_RULES, "OPENAI_DUAL_PERSONA_GATEKEEPER_G_WEIGHT", 0.50) or 0.50),
-                float(getattr(TRADING_RULES, "OPENAI_DUAL_PERSONA_GATEKEEPER_A_WEIGHT", 0.20) or 0.20),
-                float(getattr(TRADING_RULES, "OPENAI_DUAL_PERSONA_GATEKEEPER_C_WEIGHT", 0.30) or 0.30),
+                float(
+                    getattr(
+                        TRADING_RULES, "OPENAI_DUAL_PERSONA_GATEKEEPER_G_WEIGHT", 0.50
+                    )
+                    or 0.50
+                ),
+                float(
+                    getattr(
+                        TRADING_RULES, "OPENAI_DUAL_PERSONA_GATEKEEPER_A_WEIGHT", 0.20
+                    )
+                    or 0.20
+                ),
+                float(
+                    getattr(
+                        TRADING_RULES, "OPENAI_DUAL_PERSONA_GATEKEEPER_C_WEIGHT", 0.30
+                    )
+                    or 0.30
+                ),
             )
         return (
-            float(getattr(TRADING_RULES, "OPENAI_DUAL_PERSONA_OVERNIGHT_G_WEIGHT", 0.45) or 0.45),
-            float(getattr(TRADING_RULES, "OPENAI_DUAL_PERSONA_OVERNIGHT_A_WEIGHT", 0.10) or 0.10),
-            float(getattr(TRADING_RULES, "OPENAI_DUAL_PERSONA_OVERNIGHT_C_WEIGHT", 0.45) or 0.45),
+            float(
+                getattr(TRADING_RULES, "OPENAI_DUAL_PERSONA_OVERNIGHT_G_WEIGHT", 0.45)
+                or 0.45
+            ),
+            float(
+                getattr(TRADING_RULES, "OPENAI_DUAL_PERSONA_OVERNIGHT_A_WEIGHT", 0.10)
+                or 0.10
+            ),
+            float(
+                getattr(TRADING_RULES, "OPENAI_DUAL_PERSONA_OVERNIGHT_C_WEIGHT", 0.45)
+                or 0.45
+            ),
         )
 
     def _agreement_bucket(self, gemini_action, aggr_action, cons_action):
@@ -6116,7 +7374,11 @@ class OpenAIDualPersonaShadowEngine(GPTSniperEngine):
 
     def _fuse_results(self, decision_type, gemini, aggressive, conservative):
         w_gemini, w_aggr, w_cons = self._resolve_weights(decision_type)
-        hard_flags = sorted(flag for flag in conservative.get("risk_flags", []) if flag in self.HARD_RISK_FLAGS)
+        hard_flags = sorted(
+            flag
+            for flag in conservative.get("risk_flags", [])
+            if flag in self.HARD_RISK_FLAGS
+        )
         cons_veto = bool(conservative.get("veto")) and bool(hard_flags)
         fused_score = (
             float(gemini.get("score", 0)) * w_gemini
@@ -6150,7 +7412,9 @@ class OpenAIDualPersonaShadowEngine(GPTSniperEngine):
         )
         if cons_veto and fused_action != gemini.get("action"):
             winner = "conservative_veto"
-        elif fused_action == aggressive.get("action") and fused_action != gemini.get("action"):
+        elif fused_action == aggressive.get("action") and fused_action != gemini.get(
+            "action"
+        ):
             winner = "aggressive_promote"
         elif fused_action == gemini.get("action"):
             winner = "gemini_hold"
@@ -6170,12 +7434,24 @@ class OpenAIDualPersonaShadowEngine(GPTSniperEngine):
         if not self.shadow_enabled or not self.shadow_mode:
             return False
         if decision_type == "gatekeeper":
-            return bool(getattr(TRADING_RULES, "OPENAI_DUAL_PERSONA_APPLY_GATEKEEPER", True))
+            return bool(
+                getattr(TRADING_RULES, "OPENAI_DUAL_PERSONA_APPLY_GATEKEEPER", True)
+            )
         if decision_type == "overnight":
-            return bool(getattr(TRADING_RULES, "OPENAI_DUAL_PERSONA_APPLY_OVERNIGHT", True))
+            return bool(
+                getattr(TRADING_RULES, "OPENAI_DUAL_PERSONA_APPLY_OVERNIGHT", True)
+            )
         return False
 
-    def _evaluate_shadow(self, decision_type, stock_name, stock_code, strategy, realtime_ctx, gemini_result):
+    def _evaluate_shadow(
+        self,
+        decision_type,
+        stock_name,
+        stock_code,
+        strategy,
+        realtime_ctx,
+        gemini_result,
+    ):
         started_at = time.perf_counter()
         try:
             payload = self._build_shadow_payload(
@@ -6227,7 +7503,16 @@ class OpenAIDualPersonaShadowEngine(GPTSniperEngine):
                 "shadow_extra_ms": int((time.perf_counter() - started_at) * 1000),
             }
 
-    def _submit_shadow(self, decision_type, stock_name, stock_code, strategy, realtime_ctx, gemini_result, callback=None):
+    def _submit_shadow(
+        self,
+        decision_type,
+        stock_name,
+        stock_code,
+        strategy,
+        realtime_ctx,
+        gemini_result,
+        callback=None,
+    ):
         if not self._is_enabled_for(decision_type):
             return None
         future = self.shadow_executor.submit(
@@ -6240,15 +7525,28 @@ class OpenAIDualPersonaShadowEngine(GPTSniperEngine):
             gemini_result,
         )
         if callback is not None:
+
             def _emit_result(done_future):
                 try:
                     callback(done_future.result())
                 except Exception as exc:
-                    log_error(f"🚨 [OpenAI 듀얼 페르소나 callback] {decision_type}:{stock_name} 실패: {exc}")
+                    log_error(
+                        f"🚨 [OpenAI 듀얼 페르소나 callback] {decision_type}:{stock_name} 실패: {exc}"
+                    )
+
             future.add_done_callback(_emit_result)
         return future
 
-    def submit_gatekeeper_shadow(self, *, stock_name, stock_code, strategy, realtime_ctx, gemini_result, callback=None):
+    def submit_gatekeeper_shadow(
+        self,
+        *,
+        stock_name,
+        stock_code,
+        strategy,
+        realtime_ctx,
+        gemini_result,
+        callback=None,
+    ):
         return self._submit_shadow(
             "gatekeeper",
             stock_name,
@@ -6259,7 +7557,16 @@ class OpenAIDualPersonaShadowEngine(GPTSniperEngine):
             callback=callback,
         )
 
-    def submit_overnight_shadow(self, *, stock_name, stock_code, strategy, realtime_ctx, gemini_result, callback=None):
+    def submit_overnight_shadow(
+        self,
+        *,
+        stock_name,
+        stock_code,
+        strategy,
+        realtime_ctx,
+        gemini_result,
+        callback=None,
+    ):
         return self._submit_shadow(
             "overnight",
             stock_name,
@@ -6283,7 +7590,9 @@ class OpenAIDualPersonaShadowEngine(GPTSniperEngine):
         return {
             "action": action,
             "score": max(0, min(100, score)),
-            "reason": str(result.get("reason", "") or "").replace("\n", " ").strip()[:160],
+            "reason": str(result.get("reason", "") or "")
+            .replace("\n", " ")
+            .strip()[:160],
         }
 
     def _evaluate_watching_shared_prompt_shadow(
@@ -6310,7 +7619,9 @@ class OpenAIDualPersonaShadowEngine(GPTSniperEngine):
                 symbol=stock_code,
             )
             normalized = self._normalize_shared_prompt_result(result)
-            gemini_action = str((gemini_result or {}).get("action", "WAIT") or "WAIT").upper()
+            gemini_action = str(
+                (gemini_result or {}).get("action", "WAIT") or "WAIT"
+            ).upper()
             gemini_score = int(float((gemini_result or {}).get("score", 50) or 50))
             return {
                 "mode": "shadow",
@@ -6355,11 +7666,15 @@ class OpenAIDualPersonaShadowEngine(GPTSniperEngine):
             gemini_result,
         )
         if callback is not None:
+
             def _emit_result(done_future):
                 try:
                     callback(done_future.result())
                 except Exception as exc:
-                    log_error(f"🚨 [WATCHING shared prompt shadow callback] {stock_name}({stock_code}) 실패: {exc}")
+                    log_error(
+                        f"🚨 [WATCHING shared prompt shadow callback] {stock_name}({stock_code}) 실패: {exc}"
+                    )
+
             future.add_done_callback(_emit_result)
         return future
 
@@ -6390,10 +7705,14 @@ class OpenAIDualPersonaShadowEngine(GPTSniperEngine):
             },
         )
         if callback is not None:
+
             def _emit_result(done_future):
                 try:
                     callback(done_future.result())
                 except Exception as exc:
-                    log_error(f"[WATCHING score projection callback] {stock_name}({stock_code}) failed: {exc}")
+                    log_error(
+                        f"[WATCHING score projection callback] {stock_name}({stock_code}) failed: {exc}"
+                    )
+
             future.add_done_callback(_emit_result)
         return future

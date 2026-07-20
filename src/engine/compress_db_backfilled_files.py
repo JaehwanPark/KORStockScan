@@ -11,7 +11,6 @@ from pathlib import Path
 
 from src.utils.constants import DATA_DIR
 
-
 PIPELINE_EVENTS_DIR = DATA_DIR / "pipeline_events"
 MONITOR_SNAPSHOT_DIR = DATA_DIR / "report" / "monitor_snapshots"
 MONITOR_SNAPSHOT_MANIFEST_DIR = MONITOR_SNAPSHOT_DIR / "manifests"
@@ -65,7 +64,9 @@ def _parquet_partition_exists(dataset: str, target_date: date) -> bool:
 
 def _snapshot_manifest_verifies(kind: str, target_date: date) -> bool:
     for manifest_path in sorted(
-        MONITOR_SNAPSHOT_MANIFEST_DIR.glob(f"monitor_snapshot_manifest_{target_date.isoformat()}_*.json")
+        MONITOR_SNAPSHOT_MANIFEST_DIR.glob(
+            f"monitor_snapshot_manifest_{target_date.isoformat()}_*.json"
+        )
     ):
         try:
             payload = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -113,7 +114,12 @@ def run(*, retention_days: int, today: date, dry_run: bool) -> dict:
         "cutoff": cutoff.isoformat(),
         "pipeline": {"scanned": 0, "verified": 0, "compressed": 0, "saved_bytes": 0},
         "snapshots": {"scanned": 0, "verified": 0, "compressed": 0, "saved_bytes": 0},
-        "threshold_snapshots": {"scanned": 0, "verified": 0, "compressed": 0, "saved_bytes": 0},
+        "threshold_snapshots": {
+            "scanned": 0,
+            "verified": 0,
+            "compressed": 0,
+            "saved_bytes": 0,
+        },
         "skipped_unverified": 0,
         "errors": [],
     }
@@ -193,9 +199,18 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Compress dashboard raw files only after canonical file/parquet verification and D+N age.",
     )
-    parser.add_argument("--days", type=int, default=1, help="Compress files with date <= today - days (default: 1)")
-    parser.add_argument("--date", dest="today", default=None, help="Override today date (YYYY-MM-DD)")
-    parser.add_argument("--dry-run", action="store_true", help="Scan and verify only; do not compress")
+    parser.add_argument(
+        "--days",
+        type=int,
+        default=1,
+        help="Compress files with date <= today - days (default: 1)",
+    )
+    parser.add_argument(
+        "--date", dest="today", default=None, help="Override today date (YYYY-MM-DD)"
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Scan and verify only; do not compress"
+    )
     args = parser.parse_args()
 
     if args.days < 0:

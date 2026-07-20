@@ -23,7 +23,6 @@ import src.engine.error_detectors.artifact_freshness  # noqa: F401
 import src.engine.error_detectors.resource_usage  # noqa: F401
 import src.engine.error_detectors.stale_lock  # noqa: F401
 
-
 REPORT_DIR = PROJECT_ROOT / "data" / "report" / "error_detection"
 
 
@@ -99,7 +98,9 @@ class ErrorDetectionEngine:
 
     def write_report(self, report: dict):
         if self.dry_run:
-            log_info(f"[ERROR_DETECTION] dry-run, would write report with severity={report['summary_severity']}")
+            log_info(
+                f"[ERROR_DETECTION] dry-run, would write report with severity={report['summary_severity']}"
+            )
             return
         REPORT_DIR.mkdir(parents=True, exist_ok=True)
         today_str = datetime.now().strftime("%Y-%m-%d")
@@ -126,9 +127,15 @@ def main():
         default="full",
         help="Detection scope (default: full)",
     )
-    parser.add_argument("--dry-run", action="store_true", help="Do not write report files")
-    parser.add_argument("--daemon", action="store_true", help="Run in daemon loop (for bot_main.py)")
-    parser.add_argument("--interval", type=int, default=60, help="Daemon check interval in seconds")
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Do not write report files"
+    )
+    parser.add_argument(
+        "--daemon", action="store_true", help="Run in daemon loop (for bot_main.py)"
+    )
+    parser.add_argument(
+        "--interval", type=int, default=60, help="Daemon check interval in seconds"
+    )
     args = parser.parse_args()
 
     if args.daemon:
@@ -141,7 +148,9 @@ def main():
 
     for r in results:
         if r.severity in ("fail", "warning"):
-            log_info(f"[ERROR_DETECTION] [{r.severity.upper()}] {r.detector_id}: {r.summary}")
+            log_info(
+                f"[ERROR_DETECTION] [{r.severity.upper()}] {r.detector_id}: {r.summary}"
+            )
 
     engine.write_report(report)
     print(json.dumps(report, ensure_ascii=False, indent=2))

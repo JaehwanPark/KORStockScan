@@ -18,7 +18,9 @@ class OrderManager:
     def submit_order(self, order: PlannedOrder) -> BrokerOrderResult:
         return self.gateway.submit_order(order)
 
-    def submit_orders_async(self, orders: list[PlannedOrder]) -> list[BrokerOrderResult]:
+    def submit_orders_async(
+        self, orders: list[PlannedOrder]
+    ) -> list[BrokerOrderResult]:
         if not orders:
             return []
         with ThreadPoolExecutor(max_workers=min(self.max_workers, len(orders))) as pool:

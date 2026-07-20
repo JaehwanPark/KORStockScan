@@ -20,7 +20,6 @@ from src.utils.constants import DATA_DIR
 from src.utils.jsonl_io import existing_or_gzip_path, open_text_auto
 from src.utils.market_day import is_krx_trading_day
 
-
 REPORT_TYPE = "ai_score_optimization_backtest"
 SCHEMA_VERSION = 1
 REPORT_DIR = DATA_DIR / "report" / REPORT_TYPE
@@ -126,7 +125,9 @@ def _load_json(path: Path) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
-def _latest_existing_report(base_dir: Path, report_type: str, source_dates: list[str]) -> tuple[dict[str, Any], Path | None]:
+def _latest_existing_report(
+    base_dir: Path, report_type: str, source_dates: list[str]
+) -> tuple[dict[str, Any], Path | None]:
     for source_date in reversed(source_dates):
         path = base_dir / f"{report_type}_{source_date}.json"
         payload = _load_json(path)
@@ -144,10 +145,16 @@ def _candidate_list(payload: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _source_quality_pass(candidate: dict[str, Any]) -> bool:
-    gate = str(candidate.get("source_quality_gate") or candidate.get("source_quality_status") or "").lower()
+    gate = str(
+        candidate.get("source_quality_gate")
+        or candidate.get("source_quality_status")
+        or ""
+    ).lower()
     if gate and gate not in {"pass", "ok", "clean", "source_quality_pass"}:
         return False
-    if candidate.get("source_quality_blocked") or candidate.get("source_quality_blocker"):
+    if candidate.get("source_quality_blocked") or candidate.get(
+        "source_quality_blocker"
+    ):
         return False
     blockers = candidate.get("source_quality_blockers")
     return not (isinstance(blockers, list) and blockers)
@@ -157,14 +164,22 @@ def _payload_source_quality_pass(payload: dict[str, Any]) -> bool:
     if not isinstance(payload, dict):
         return True
     summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
-    source_quality = payload.get("source_quality") if isinstance(payload.get("source_quality"), dict) else {}
+    source_quality = (
+        payload.get("source_quality")
+        if isinstance(payload.get("source_quality"), dict)
+        else {}
+    )
     if payload.get("source_quality_blocked") or payload.get("source_quality_blocker"):
         return False
     if summary.get("source_quality_blocked") or summary.get("source_quality_blocker"):
         return False
-    if source_quality.get("source_quality_blocked") or source_quality.get("source_quality_blocker"):
+    if source_quality.get("source_quality_blocked") or source_quality.get(
+        "source_quality_blocker"
+    ):
         return False
-    blockers = payload.get("source_quality_blockers") or summary.get("source_quality_blockers")
+    blockers = payload.get("source_quality_blockers") or summary.get(
+        "source_quality_blockers"
+    )
     if isinstance(blockers, list) and blockers:
         return False
     for value in (
@@ -181,7 +196,9 @@ def _payload_source_quality_pass(payload: dict[str, Any]) -> bool:
             continue
         if text not in {"pass", "ok", "clean", "source_quality_pass"}:
             return False
-    status_text = str(summary.get("status") or payload.get("status") or "").strip().lower()
+    status_text = (
+        str(summary.get("status") or payload.get("status") or "").strip().lower()
+    )
     if "source_quality_blocked" in status_text or "hard_block" in status_text:
         return False
     return True
@@ -199,15 +216,31 @@ def _primary_ev_positive(candidate: dict[str, Any]) -> bool:
     observed = False
     for source in (
         candidate,
-        candidate.get("realized") if isinstance(candidate.get("realized"), dict) else {},
-        candidate.get("source_metrics") if isinstance(candidate.get("source_metrics"), dict) else {},
+        (
+            candidate.get("realized")
+            if isinstance(candidate.get("realized"), dict)
+            else {}
+        ),
+        (
+            candidate.get("source_metrics")
+            if isinstance(candidate.get("source_metrics"), dict)
+            else {}
+        ),
     ):
         value = _safe_float((source or {}).get("source_quality_adjusted_ev_pct"), None)
         if value is not None:
             observed = True
             return value > 0.0
-    source_metrics = candidate.get("source_metrics") if isinstance(candidate.get("source_metrics"), dict) else {}
-    realized = source_metrics.get("realized") if isinstance(source_metrics.get("realized"), dict) else {}
+    source_metrics = (
+        candidate.get("source_metrics")
+        if isinstance(candidate.get("source_metrics"), dict)
+        else {}
+    )
+    realized = (
+        source_metrics.get("realized")
+        if isinstance(source_metrics.get("realized"), dict)
+        else {}
+    )
     value = _safe_float(realized.get("source_quality_adjusted_ev_pct"), None)
     if value is not None:
         observed = True
@@ -235,14 +268,20 @@ def _with_required_candidate_fields(
     if not source_report_quality_pass:
         normalized["source_quality_gate"] = "source_quality_blocked"
         normalized["source_quality_blocked"] = str(
-            normalized.get("source_quality_blocked") or f"{source_report_type}_root_source_quality_blocked"
+            normalized.get("source_quality_blocked")
+            or f"{source_report_type}_root_source_quality_blocked"
         )
         normalized["allowed_runtime_apply"] = False
         normalized.setdefault("apply_block_reason", "source_quality_blocked")
     else:
-        normalized.setdefault("source_quality_gate", "pass" if _source_quality_pass(candidate) else "blocked")
+        normalized.setdefault(
+            "source_quality_gate",
+            "pass" if _source_quality_pass(candidate) else "blocked",
+        )
     normalized["ai_score_optimization_source_report_type"] = source_report_type
-    normalized["ai_score_optimization_source_path"] = str(source_path) if source_path else None
+    normalized["ai_score_optimization_source_path"] = (
+        str(source_path) if source_path else None
+    )
     if family not in KNOWN_AUTO_APPLY_FAMILIES:
         normalized["allowed_runtime_apply"] = False
         normalized.setdefault("apply_block_reason", "blocked_no_env_mapping")
@@ -263,7 +302,9 @@ def _with_required_candidate_fields(
     return normalized
 
 
-def _entry_recheck_candidate(entry_report: dict[str, Any], source_path: Path | None) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def _entry_recheck_candidate(
+    entry_report: dict[str, Any], source_path: Path | None
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     diagnostics: list[dict[str, Any]] = []
     calibration: list[dict[str, Any]] = []
     report_quality_pass = _payload_source_quality_pass(entry_report)
@@ -271,9 +312,19 @@ def _entry_recheck_candidate(entry_report: dict[str, Any], source_path: Path | N
     if isinstance(best_apply, dict) and best_apply:
         policy = str(best_apply.get("policy") or "")
         threshold = _safe_int(best_apply.get("threshold"), 0)
-        realized = best_apply.get("realized") if isinstance(best_apply.get("realized"), dict) else {}
-        counterfactual = best_apply.get("counterfactual") if isinstance(best_apply.get("counterfactual"), dict) else {}
-        primary_ev_positive = _safe_float(realized.get("source_quality_adjusted_ev_pct"), 0.0) > 0.0
+        realized = (
+            best_apply.get("realized")
+            if isinstance(best_apply.get("realized"), dict)
+            else {}
+        )
+        counterfactual = (
+            best_apply.get("counterfactual")
+            if isinstance(best_apply.get("counterfactual"), dict)
+            else {}
+        )
+        primary_ev_positive = (
+            _safe_float(realized.get("source_quality_adjusted_ev_pct"), 0.0) > 0.0
+        )
         entry_allowed = (
             report_quality_pass
             and primary_ev_positive
@@ -304,24 +355,40 @@ def _entry_recheck_candidate(entry_report: dict[str, Any], source_path: Path | N
                         "realized": realized,
                         "counterfactual": counterfactual,
                     },
-                    "sample_floor_passed": _safe_bool(best_apply.get("sample_floor_passed")),
+                    "sample_floor_passed": _safe_bool(
+                        best_apply.get("sample_floor_passed")
+                    ),
                     "primary_ev_positive": primary_ev_positive,
-                    "source_quality_gate": "pass" if report_quality_pass else "source_quality_blocked",
-                    "source_quality_blocked": "" if report_quality_pass else "entry_ai_gate_backtest_root_source_quality_blocked",
+                    "source_quality_gate": (
+                        "pass" if report_quality_pass else "source_quality_blocked"
+                    ),
+                    "source_quality_blocked": (
+                        ""
+                        if report_quality_pass
+                        else "entry_ai_gate_backtest_root_source_quality_blocked"
+                    ),
                     "allowed_runtime_apply": entry_allowed,
                     "apply_block_reason": (
                         ""
                         if entry_allowed
-                        else "source_quality_blocked"
-                        if not report_quality_pass
-                        else "non_positive_primary_ev"
-                        if not primary_ev_positive
-                        else "upstream_candidate_blocked"
+                        else (
+                            "source_quality_blocked"
+                            if not report_quality_pass
+                            else (
+                                "non_positive_primary_ev"
+                                if not primary_ev_positive
+                                else "upstream_candidate_blocked"
+                            )
+                        )
                     ),
-                    "forbidden_uses": FORBIDDEN_USES + ["broad_buy_score_threshold_relaxation"],
+                    "forbidden_uses": FORBIDDEN_USES
+                    + ["broad_buy_score_threshold_relaxation"],
                 }
             )
-    for key in ("best_diagnostic_score_only_candidate", "best_positive_realized_diagnostic_candidate"):
+    for key in (
+        "best_diagnostic_score_only_candidate",
+        "best_positive_realized_diagnostic_candidate",
+    ):
         item = entry_report.get(key)
         if isinstance(item, dict) and item:
             diagnostics.append(
@@ -361,7 +428,9 @@ def _copy_calibration_candidates(
     ]
 
 
-def _threshold_ev_decision_families(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
+def _threshold_ev_decision_families(
+    payload: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
     families: dict[str, dict[str, Any]] = {}
     calibration = payload.get("calibration_outcome")
     decisions = calibration.get("decisions") if isinstance(calibration, dict) else None
@@ -383,7 +452,11 @@ def _entry_price_surface_summary(
     families = _threshold_ev_decision_families(payload)
     dynamic = families.get("dynamic_entry_price_resolver") or {}
     execution = families.get("entry_price_execution_quality") or {}
-    source_metrics = dynamic.get("source_metrics") if isinstance(dynamic.get("source_metrics"), dict) else {}
+    source_metrics = (
+        dynamic.get("source_metrics")
+        if isinstance(dynamic.get("source_metrics"), dict)
+        else {}
+    )
     candidate_quality = (
         source_metrics.get("candidate_quality")
         if isinstance(source_metrics.get("candidate_quality"), dict)
@@ -402,7 +475,9 @@ def _entry_price_surface_summary(
     )
     return {
         "status": status,
-        "producer": "threshold_cycle_ev.dynamic_entry_price_resolver" if dynamic else None,
+        "producer": (
+            "threshold_cycle_ev.dynamic_entry_price_resolver" if dynamic else None
+        ),
         "source_path": str(source_path) if source_path else None,
         "auto_apply_family_scope": [],
         "allowed_runtime_apply": False,
@@ -418,12 +493,20 @@ def _entry_price_surface_summary(
         "candidate_metrics_diagnostic_missing": source_metrics.get(
             "candidate_metrics_diagnostic_missing"
         ),
-        "ai_candidate_event_count": _safe_int(ai_candidate.get("candidate_event_count"), 0),
-        "ai_candidate_failure_count": _safe_int(ai_candidate.get("candidate_failure_count"), 0),
-        "ai_candidate_failure_rate": _safe_float(ai_candidate.get("candidate_failure_rate"), 0.0),
-        "ai_candidate_failure_reasons": ai_candidate.get("failure_reasons")
-        if isinstance(ai_candidate.get("failure_reasons"), dict)
-        else {},
+        "ai_candidate_event_count": _safe_int(
+            ai_candidate.get("candidate_event_count"), 0
+        ),
+        "ai_candidate_failure_count": _safe_int(
+            ai_candidate.get("candidate_failure_count"), 0
+        ),
+        "ai_candidate_failure_rate": _safe_float(
+            ai_candidate.get("candidate_failure_rate"), 0.0
+        ),
+        "ai_candidate_failure_reasons": (
+            ai_candidate.get("failure_reasons")
+            if isinstance(ai_candidate.get("failure_reasons"), dict)
+            else {}
+        ),
         "unpriced_or_stale_warning_count": _safe_int(
             source_metrics.get("unpriced_or_stale_warning_count"), 0
         ),
@@ -453,15 +536,27 @@ def _holding_exit_surface_summary(
         "holding_exit_decision_matrix_advisory",
         "profit_stagnation_exit_runtime",
     ]
-    present = {name: families[name] for name in holding_family_names if name in families}
+    present = {
+        name: families[name] for name in holding_family_names if name in families
+    }
     soft_stop = present.get("soft_stop_whipsaw_confirmation") or {}
     flow = present.get("holding_flow_ofi_smoothing") or {}
     matrix = present.get("holding_exit_decision_matrix_advisory") or {}
     soft_metrics = (
-        soft_stop.get("source_metrics") if isinstance(soft_stop.get("source_metrics"), dict) else {}
+        soft_stop.get("source_metrics")
+        if isinstance(soft_stop.get("source_metrics"), dict)
+        else {}
     )
-    flow_metrics = flow.get("source_metrics") if isinstance(flow.get("source_metrics"), dict) else {}
-    matrix_metrics = matrix.get("source_metrics") if isinstance(matrix.get("source_metrics"), dict) else {}
+    flow_metrics = (
+        flow.get("source_metrics")
+        if isinstance(flow.get("source_metrics"), dict)
+        else {}
+    )
+    matrix_metrics = (
+        matrix.get("source_metrics")
+        if isinstance(matrix.get("source_metrics"), dict)
+        else {}
+    )
     status = "source_only_backtested" if present else "source_only_instrumentation_gap"
     return {
         "status": status,
@@ -469,7 +564,12 @@ def _holding_exit_surface_summary(
         "source_path": str(source_path) if source_path else None,
         "auto_apply_family_scope": [],
         "threshold_ev_mapped_family_scope": [
-            name for name in ("soft_stop_whipsaw_confirmation", "profit_stagnation_exit_runtime") if name in present
+            name
+            for name in (
+                "soft_stop_whipsaw_confirmation",
+                "profit_stagnation_exit_runtime",
+            )
+            if name in present
         ],
         "threshold_ev_families_present": sorted(present.keys()),
         "allowed_runtime_apply": False,
@@ -520,15 +620,21 @@ def _general_scale_in_surface_summary(
     families = _threshold_ev_decision_families(payload)
     scale_guard = families.get("scale_in_price_guard") or {}
     source_metrics = (
-        scale_guard.get("source_metrics") if isinstance(scale_guard.get("source_metrics"), dict) else {}
+        scale_guard.get("source_metrics")
+        if isinstance(scale_guard.get("source_metrics"), dict)
+        else {}
     )
-    status = "source_only_backtested" if scale_guard else "source_only_instrumentation_gap"
+    status = (
+        "source_only_backtested" if scale_guard else "source_only_instrumentation_gap"
+    )
     return {
         "status": status,
         "producer": "threshold_cycle_ev.scale_in_price_guard" if scale_guard else None,
         "source_path": str(source_path) if source_path else None,
         "auto_apply_family_scope": [],
-        "threshold_ev_families_present": ["scale_in_price_guard"] if scale_guard else [],
+        "threshold_ev_families_present": (
+            ["scale_in_price_guard"] if scale_guard else []
+        ),
         "allowed_runtime_apply": False,
         "apply_block_reason": "general_avg_down_reversal_add_source_only_no_env_mapping",
         "reason": (
@@ -574,7 +680,9 @@ def _pipeline_surface_counts(source_dates: list[str]) -> dict[str, Any]:
         "truncated": False,
     }
     for source_date in source_dates[-PIPELINE_SURFACE_COUNT_MAX_DATES:]:
-        path = existing_or_gzip_path(PIPELINE_EVENTS_DIR / f"pipeline_events_{source_date}.jsonl")
+        path = existing_or_gzip_path(
+            PIPELINE_EVENTS_DIR / f"pipeline_events_{source_date}.jsonl"
+        )
         if not path.exists():
             continue
         try:
@@ -602,14 +710,18 @@ def _pipeline_surface_counts(source_dates: list[str]) -> dict[str, Any]:
                         counts["pyramid"] += 1
                     if "exit" in text or "sell" in text:
                         counts["exit"] += 1
-            scan_meta["scanned_dates"].append({"date": source_date, "lines": scanned_lines, "path": str(path)})
+            scan_meta["scanned_dates"].append(
+                {"date": source_date, "lines": scanned_lines, "path": str(path)}
+            )
         except Exception:
             continue
     counts["_scan_meta"] = scan_meta
     return counts
 
 
-def build_report(target_date: str, *, start_date: str | None = None, end_date: str | None = None) -> dict[str, Any]:
+def build_report(
+    target_date: str, *, start_date: str | None = None, end_date: str | None = None
+) -> dict[str, Any]:
     target_date = str(target_date).strip()
     start = str(start_date or target_date).strip()
     end = str(end_date or target_date).strip()
@@ -626,7 +738,9 @@ def build_report(target_date: str, *, start_date: str | None = None, end_date: s
     )
     if entry_path:
         source_paths["entry_ai_gate_backtest"] = str(entry_path)
-        entry_candidates, entry_diagnostics = _entry_recheck_candidate(entry_report, entry_path)
+        entry_candidates, entry_diagnostics = _entry_recheck_candidate(
+            entry_report, entry_path
+        )
         calibration_candidates.extend(
             _with_required_candidate_fields(
                 item,
@@ -676,9 +790,15 @@ def build_report(target_date: str, *, start_date: str | None = None, end_date: s
         "threshold_cycle_ev",
         source_dates,
     )
-    entry_price_surface = _entry_price_surface_summary(threshold_ev_report, threshold_ev_path)
-    holding_exit_surface = _holding_exit_surface_summary(threshold_ev_report, threshold_ev_path)
-    general_scale_in_surface = _general_scale_in_surface_summary(threshold_ev_report, threshold_ev_path)
+    entry_price_surface = _entry_price_surface_summary(
+        threshold_ev_report, threshold_ev_path
+    )
+    holding_exit_surface = _holding_exit_surface_summary(
+        threshold_ev_report, threshold_ev_path
+    )
+    general_scale_in_surface = _general_scale_in_surface_summary(
+        threshold_ev_report, threshold_ev_path
+    )
     if threshold_ev_path:
         source_paths["threshold_cycle_ev"] = str(threshold_ev_path)
 
@@ -687,7 +807,10 @@ def build_report(target_date: str, *, start_date: str | None = None, end_date: s
         "analyze_target_entry": {
             "status": "backtested",
             "producer": "entry_ai_gate_backtest",
-            "auto_apply_family_scope": [ENTRY_OPPORTUNITY_RECHECK_FAMILY, SCORE65_74_RECOVERY_PROBE_FAMILY],
+            "auto_apply_family_scope": [
+                ENTRY_OPPORTUNITY_RECHECK_FAMILY,
+                SCORE65_74_RECOVERY_PROBE_FAMILY,
+            ],
             "broad_buy_score_threshold_apply": False,
         },
         "entry_price": entry_price_surface,
@@ -746,13 +869,15 @@ def build_report(target_date: str, *, start_date: str | None = None, end_date: s
             **holding_exit_surface,
             "surface": "holding_exit",
             "stage": "holding",
-            "observed_event_count": surface_counts.get("holding_score_v2", 0) + surface_counts.get("holding_flow", 0),
+            "observed_event_count": surface_counts.get("holding_score_v2", 0)
+            + surface_counts.get("holding_flow", 0),
         },
         {
             **general_scale_in_surface,
             "surface": "general_avg_down_reversal_add",
             "stage": "scale_in",
-            "observed_event_count": surface_counts.get("avg_down", 0) + surface_counts.get("reversal_add", 0),
+            "observed_event_count": surface_counts.get("avg_down", 0)
+            + surface_counts.get("reversal_add", 0),
         },
         {
             "surface": "overnight_swing_score",
@@ -764,12 +889,20 @@ def build_report(target_date: str, *, start_date: str | None = None, end_date: s
         },
     ]
 
-    allowed_candidates = [item for item in calibration_candidates if _safe_bool(item.get("allowed_runtime_apply"))]
+    allowed_candidates = [
+        item
+        for item in calibration_candidates
+        if _safe_bool(item.get("allowed_runtime_apply"))
+    ]
     blocked_by_reason: dict[str, int] = {}
     for item in calibration_candidates:
         if _safe_bool(item.get("allowed_runtime_apply")):
             continue
-        reason = str(item.get("apply_block_reason") or item.get("calibration_state") or "runtime_apply_not_allowed")
+        reason = str(
+            item.get("apply_block_reason")
+            or item.get("calibration_state")
+            or "runtime_apply_not_allowed"
+        )
         blocked_by_reason[reason] = blocked_by_reason.get(reason, 0) + 1
 
     report = {
@@ -809,7 +942,11 @@ def build_report(target_date: str, *, start_date: str | None = None, end_date: s
             "backtest_coverage_status": backtest_coverage_status,
         },
         "surface_summaries": {
-            "entry": (entry_report.get("summary") if isinstance(entry_report.get("summary"), dict) else {}),
+            "entry": (
+                entry_report.get("summary")
+                if isinstance(entry_report.get("summary"), dict)
+                else {}
+            ),
             "first_touch_avg_down": {
                 "status": "loaded" if first_touch_path else "missing",
                 "path": str(first_touch_path) if first_touch_path else None,
@@ -846,7 +983,14 @@ def render_markdown(report: dict[str, Any]) -> str:
     for reason, count in sorted((summary.get("blocked_by_reason") or {}).items()):
         lines.append(f"- `{reason}`: `{count}`")
     lines.extend(["", "## Calibration Candidates", "", "```json"])
-    lines.append(json.dumps(report.get("calibration_candidates") or [], ensure_ascii=False, indent=2, default=str))
+    lines.append(
+        json.dumps(
+            report.get("calibration_candidates") or [],
+            ensure_ascii=False,
+            indent=2,
+            default=str,
+        )
+    )
     lines.extend(["```", ""])
     return "\n".join(lines)
 
@@ -854,7 +998,10 @@ def render_markdown(report: dict[str, Any]) -> str:
 def write_report(report: dict[str, Any]) -> tuple[Path, Path]:
     json_path, md_path = report_paths(str(report.get("target_date") or "unknown"))
     json_path.parent.mkdir(parents=True, exist_ok=True)
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True, default=str), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True, default=str),
+        encoding="utf-8",
+    )
     md_path.write_text(render_markdown(report), encoding="utf-8")
     return json_path, md_path
 
@@ -866,12 +1013,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--end-date")
     parser.add_argument("--write", action="store_true")
     args = parser.parse_args(argv)
-    report = build_report(args.target_date, start_date=args.start_date, end_date=args.end_date)
+    report = build_report(
+        args.target_date, start_date=args.start_date, end_date=args.end_date
+    )
     if args.write:
         json_path, md_path = write_report(report)
-        print(json.dumps({"json": str(json_path), "md": str(md_path)}, ensure_ascii=False))
+        print(
+            json.dumps({"json": str(json_path), "md": str(md_path)}, ensure_ascii=False)
+        )
     else:
-        print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True, default=str))
+        print(
+            json.dumps(
+                report, ensure_ascii=False, indent=2, sort_keys=True, default=str
+            )
+        )
     return 0
 
 

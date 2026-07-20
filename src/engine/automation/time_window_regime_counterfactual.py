@@ -20,7 +20,6 @@ from src.engine.daily_threshold_cycle_report import REPORT_DIR
 from src.utils.constants import DATA_DIR
 from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 REPORT_TYPE = "time_window_regime_counterfactual"
 SCHEMA_VERSION = 1
@@ -40,7 +39,13 @@ FORBIDDEN_USES = [
     "broker order submit",
     "time-window hard gate apply",
 ]
-EXCEPTION_BUCKETS = ("wait6579", "recovery", "high_score_buy", "latency_caution", "defensive_price")
+EXCEPTION_BUCKETS = (
+    "wait6579",
+    "recovery",
+    "high_score_buy",
+    "latency_caution",
+    "defensive_price",
+)
 SEGMENTS = (
     ("09:00_09:30", "09:00", "09:30"),
     ("09:30_10:00", "09:30", "10:00"),
@@ -99,7 +104,10 @@ def _write_jsonl(path: Path, rows: Iterable[dict[str, Any]]) -> int:
     count = 0
     with path.open("w", encoding="utf-8") as handle:
         for row in rows:
-            handle.write(json.dumps(row, ensure_ascii=False, separators=(",", ":"), default=str) + "\n")
+            handle.write(
+                json.dumps(row, ensure_ascii=False, separators=(",", ":"), default=str)
+                + "\n"
+            )
             count += 1
     return count
 
@@ -173,11 +181,15 @@ def _cutoff_grid() -> list[str]:
     return [_hhmm(value) for value in sorted(set(values))]
 
 
-def _entry_time_from_event(event: dict[str, Any], fields: dict[str, Any]) -> tuple[str, str]:
+def _entry_time_from_event(
+    event: dict[str, Any], fields: dict[str, Any]
+) -> tuple[str, str]:
     emitted = str(event.get("emitted_at") or "").strip()
     if emitted:
         return emitted, "entry_event_emitted_at"
-    signal = str(fields.get("signal_time") or fields.get("tick_latest_time") or "").strip()
+    signal = str(
+        fields.get("signal_time") or fields.get("tick_latest_time") or ""
+    ).strip()
     if signal:
         return signal, "entry_signal_time"
     return "", "entry_time_missing"
@@ -186,28 +198,49 @@ def _entry_time_from_event(event: dict[str, Any], fields: dict[str, Any]) -> tup
 def _index_entry_events(target_date: str) -> dict[str, dict[str, dict[str, Any]]]:
     by_candidate: dict[str, dict[str, Any]] = {}
     by_record: dict[str, dict[str, Any]] = {}
-    paths = list((THRESHOLD_CYCLE_DIR / f"date={target_date}" / "family=scalp_entry_action_decision_matrix").glob("part-*.jsonl"))
+    paths = list(
+        (
+            THRESHOLD_CYCLE_DIR
+            / f"date={target_date}"
+            / "family=scalp_entry_action_decision_matrix"
+        ).glob("part-*.jsonl")
+    )
     legacy = THRESHOLD_CYCLE_DIR / f"threshold_events_{target_date}.jsonl"
     legacy = existing_or_gzip_path(legacy)
     if legacy.exists():
         paths.append(legacy)
     for path in paths:
         for event in _iter_jsonl(path):
-            fields = event.get("fields") if isinstance(event.get("fields"), dict) else {}
+            fields = (
+                event.get("fields") if isinstance(event.get("fields"), dict) else {}
+            )
             stage = str(event.get("stage") or fields.get("source_stage") or "")
-            if "entry" not in stage and not fields.get("entry_adm_candidate_id") and not fields.get("candidate_id"):
+            if (
+                "entry" not in stage
+                and not fields.get("entry_adm_candidate_id")
+                and not fields.get("candidate_id")
+            ):
                 continue
             entry_time, entry_time_source = _entry_time_from_event(event, fields)
-            entry_record_id = str(event.get("record_id") or fields.get("record_id") or "").strip()
+            entry_record_id = str(
+                event.get("record_id") or fields.get("record_id") or ""
+            ).strip()
             indexed = {
                 "entry_event_emitted_at": str(event.get("emitted_at") or ""),
-                "entry_signal_time": str(fields.get("signal_time") or fields.get("tick_latest_time") or ""),
+                "entry_signal_time": str(
+                    fields.get("signal_time") or fields.get("tick_latest_time") or ""
+                ),
                 "entry_time": entry_time,
                 "entry_time_source": entry_time_source,
                 "entry_record_id": entry_record_id,
-                "entry_stock_code": str(event.get("stock_code") or fields.get("stock_code") or "").strip()[:6],
+                "entry_stock_code": str(
+                    event.get("stock_code") or fields.get("stock_code") or ""
+                ).strip()[:6],
             }
-            for key in (fields.get("entry_adm_candidate_id"), fields.get("candidate_id")):
+            for key in (
+                fields.get("entry_adm_candidate_id"),
+                fields.get("candidate_id"),
+            ):
                 safe_key = str(key or "").strip()
                 if safe_key and safe_key not in by_candidate:
                     by_candidate[safe_key] = indexed
@@ -216,27 +249,42 @@ def _index_entry_events(target_date: str) -> dict[str, dict[str, dict[str, Any]]
     return {"candidate": by_candidate, "record": by_record}
 
 
-def _join_entry_time(row: dict[str, Any], entry_index: dict[str, dict[str, dict[str, Any]]]) -> dict[str, Any]:
+def _join_entry_time(
+    row: dict[str, Any], entry_index: dict[str, dict[str, dict[str, Any]]]
+) -> dict[str, Any]:
     for key in (row.get("entry_adm_candidate_id"), row.get("candidate_id")):
         safe_key = str(key or "").strip()
         if safe_key and safe_key in entry_index["candidate"]:
             joined = dict(entry_index["candidate"][safe_key])
-            joined.update({"entry_join_status": "joined_by_candidate_id", "entry_join_key": safe_key})
+            joined.update(
+                {
+                    "entry_join_status": "joined_by_candidate_id",
+                    "entry_join_key": safe_key,
+                }
+            )
             return joined
     record_key = str(row.get("sim_parent_record_id") or "").strip()
     if record_key and record_key in entry_index["record"]:
         joined = dict(entry_index["record"][record_key])
-        joined.update({"entry_join_status": "joined_by_record_id", "entry_join_key": record_key})
+        joined.update(
+            {"entry_join_status": "joined_by_record_id", "entry_join_key": record_key}
+        )
         return joined
-    existing = str(row.get("entry_event_emitted_at") or row.get("entry_signal_time") or "").strip()
+    existing = str(
+        row.get("entry_event_emitted_at") or row.get("entry_signal_time") or ""
+    ).strip()
     if existing:
         return {
             "entry_event_emitted_at": str(row.get("entry_event_emitted_at") or ""),
             "entry_signal_time": str(row.get("entry_signal_time") or ""),
             "entry_time": existing,
-            "entry_time_source": str(row.get("entry_time_source") or "raw_candidate_entry_time"),
+            "entry_time_source": str(
+                row.get("entry_time_source") or "raw_candidate_entry_time"
+            ),
             "entry_record_id": str(row.get("entry_record_id") or ""),
-            "entry_join_status": str(row.get("entry_join_status") or "raw_candidate_entry_time"),
+            "entry_join_status": str(
+                row.get("entry_join_status") or "raw_candidate_entry_time"
+            ),
             "entry_join_key": str(row.get("entry_join_key") or ""),
         }
     return {
@@ -251,14 +299,23 @@ def _join_entry_time(row: dict[str, Any], entry_index: dict[str, dict[str, dict[
 
 
 def _profit_krw(row: dict[str, Any]) -> int:
-    return int(round((_safe_float(row.get("sell_price")) - _safe_float(row.get("buy_price"))) * _safe_float(row.get("buy_qty"))))
+    return int(
+        round(
+            (_safe_float(row.get("sell_price")) - _safe_float(row.get("buy_price")))
+            * _safe_float(row.get("buy_qty"))
+        )
+    )
 
 
-def _completed_rows_for_date(target_date: str) -> tuple[list[dict[str, Any]], dict[str, int]]:
+def _completed_rows_for_date(
+    target_date: str,
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
     entry_index = _index_entry_events(target_date)
     rows: list[dict[str, Any]] = []
     source_quality = Counter()
-    for row in _iter_jsonl(POST_SELL_DIR / f"sim_post_sell_candidates_{target_date}.jsonl"):
+    for row in _iter_jsonl(
+        POST_SELL_DIR / f"sim_post_sell_candidates_{target_date}.jsonl"
+    ):
         if row.get("profit_rate") in (None, ""):
             continue
         joined = _join_entry_time(row, entry_index)
@@ -273,7 +330,9 @@ def _completed_rows_for_date(target_date: str) -> tuple[list[dict[str, Any]], di
             "stock_code": str(row.get("stock_code") or "").strip()[:6],
             "stock_name": row.get("stock_name") or "",
             "post_sell_id": row.get("post_sell_id"),
-            "candidate_id": row.get("candidate_id") or row.get("entry_adm_candidate_id") or "",
+            "candidate_id": row.get("candidate_id")
+            or row.get("entry_adm_candidate_id")
+            or "",
             "sim_record_id": row.get("sim_record_id") or "",
             "sim_parent_record_id": row.get("sim_parent_record_id") or "",
             "entry_minutes": entry_minutes,
@@ -303,14 +362,22 @@ def _source_quality_from_cached_rows(rows: list[dict[str, Any]]) -> dict[str, in
 
 def _load_checkpoint_processed_dates(target_date: str) -> set[str]:
     payload = _load_json(checkpoint_path(target_date))
-    values = payload.get("processed_dates") if isinstance(payload.get("processed_dates"), list) else []
+    values = (
+        payload.get("processed_dates")
+        if isinstance(payload.get("processed_dates"), list)
+        else []
+    )
     return {str(value) for value in values if _parse_date(str(value))}
 
 
 def _exception_bucket(row: dict[str, Any]) -> str:
     text = json.dumps(row, ensure_ascii=False, default=str).lower()
     score = _safe_float(row.get("ai_score"), 0.0)
-    if row.get("recovery_promoted") or row.get("has_recovery_check") or "recovery" in text:
+    if (
+        row.get("recovery_promoted")
+        or row.get("has_recovery_check")
+        or "recovery" in text
+    ):
         return "recovery"
     if score >= 75:
         return "high_score_buy"
@@ -351,9 +418,13 @@ def _counterfactual_rows_for_date(target_date: str) -> list[dict[str, Any]]:
 
 
 def _load_system_metric_status() -> tuple[bool, str]:
-    max_iowait = _safe_float(os.getenv("THRESHOLD_CYCLE_POSTCLOSE_MAX_IOWAIT_PCT"), 35.0)
+    max_iowait = _safe_float(
+        os.getenv("THRESHOLD_CYCLE_POSTCLOSE_MAX_IOWAIT_PCT"), 35.0
+    )
     max_cpu = _safe_float(os.getenv("THRESHOLD_CYCLE_MAX_CPU_BUSY_PCT"), 95.0)
-    min_mem = _safe_float(os.getenv("THRESHOLD_CYCLE_POSTCLOSE_MIN_MEM_AVAILABLE_MB"), 4096.0)
+    min_mem = _safe_float(
+        os.getenv("THRESHOLD_CYCLE_POSTCLOSE_MIN_MEM_AVAILABLE_MB"), 4096.0
+    )
     max_load1 = _safe_float(os.getenv("THRESHOLD_CYCLE_POSTCLOSE_MAX_LOAD1"), 64.0)
     try:
         with SYSTEM_METRIC_SAMPLE_PATH.open("rb") as handle:
@@ -420,10 +491,18 @@ def _aggregate_completed(rows: list[dict[str, Any]]) -> dict[str, Any]:
         }
     return {
         "completed_trade_count": count,
-        "completed_avg_profit_pct": round(sum(_safe_float(row.get("profit_rate")) for row in rows) / count, 4),
-        "completed_sum_profit_pct": round(sum(_safe_float(row.get("profit_rate")) for row in rows), 4),
-        "completed_profit_krw_sum": int(sum(_safe_int(row.get("profit_krw")) for row in rows)),
-        "hard_soft_stop_rate": round(sum(1 for row in rows if row.get("is_stop")) / count, 4),
+        "completed_avg_profit_pct": round(
+            sum(_safe_float(row.get("profit_rate")) for row in rows) / count, 4
+        ),
+        "completed_sum_profit_pct": round(
+            sum(_safe_float(row.get("profit_rate")) for row in rows), 4
+        ),
+        "completed_profit_krw_sum": int(
+            sum(_safe_int(row.get("profit_krw")) for row in rows)
+        ),
+        "hard_soft_stop_rate": round(
+            sum(1 for row in rows if row.get("is_stop")) / count, 4
+        ),
     }
 
 
@@ -438,13 +517,21 @@ def _aggregate_counterfactual(rows: list[dict[str, Any]]) -> dict[str, Any]:
         }
     return {
         "counterfactual_candidate_count": count,
-        "counterfactual_avg_expected_ev_pct": round(sum(_safe_float(row.get("expected_ev_pct")) for row in rows) / count, 4),
-        "counterfactual_expected_ev_krw_sum": int(sum(_safe_int(row.get("expected_ev_krw")) for row in rows)),
-        "exception_bucket_counts": dict(Counter(str(row.get("exception_bucket") or "unknown") for row in rows)),
+        "counterfactual_avg_expected_ev_pct": round(
+            sum(_safe_float(row.get("expected_ev_pct")) for row in rows) / count, 4
+        ),
+        "counterfactual_expected_ev_krw_sum": int(
+            sum(_safe_int(row.get("expected_ev_krw")) for row in rows)
+        ),
+        "exception_bucket_counts": dict(
+            Counter(str(row.get("exception_bucket") or "unknown") for row in rows)
+        ),
     }
 
 
-def _window_policy(completed: list[dict[str, Any]], exceptions: list[dict[str, Any]]) -> dict[str, Any]:
+def _window_policy(
+    completed: list[dict[str, Any]], exceptions: list[dict[str, Any]]
+) -> dict[str, Any]:
     completed_metrics = _aggregate_completed(completed)
     exception_metrics = _aggregate_counterfactual(exceptions)
     return {
@@ -455,15 +542,23 @@ def _window_policy(completed: list[dict[str, Any]], exceptions: list[dict[str, A
         },
         "block_all_in_window": {
             "blocked_completed_trade_count": completed_metrics["completed_trade_count"],
-            "blocked_completed_sum_profit_pct": completed_metrics["completed_sum_profit_pct"],
-            "blocked_completed_profit_krw_sum": completed_metrics["completed_profit_krw_sum"],
+            "blocked_completed_sum_profit_pct": completed_metrics[
+                "completed_sum_profit_pct"
+            ],
+            "blocked_completed_profit_krw_sum": completed_metrics[
+                "completed_profit_krw_sum"
+            ],
             "counterfactual_candidate_count": 0,
             "interpretation": "source-only block-all counterfactual; no runtime hard gate authority",
         },
         "block_general_allow_exception_in_window": {
             "blocked_completed_trade_count": completed_metrics["completed_trade_count"],
-            "blocked_completed_sum_profit_pct": completed_metrics["completed_sum_profit_pct"],
-            "blocked_completed_profit_krw_sum": completed_metrics["completed_profit_krw_sum"],
+            "blocked_completed_sum_profit_pct": completed_metrics[
+                "completed_sum_profit_pct"
+            ],
+            "blocked_completed_profit_krw_sum": completed_metrics[
+                "completed_profit_krw_sum"
+            ],
             **exception_metrics,
             "combined_ev_netting_allowed": False,
             "interpretation": "general completed PnL and exception counterfactual EV are parallel metrics, not summed",
@@ -471,11 +566,20 @@ def _window_policy(completed: list[dict[str, Any]], exceptions: list[dict[str, A
     }
 
 
-def _rows_in_window(rows: list[dict[str, Any]], start_min: int, end_min: int) -> list[dict[str, Any]]:
-    return [row for row in rows if row.get("entry_minutes") is not None and start_min <= int(row["entry_minutes"]) < end_min]
+def _rows_in_window(
+    rows: list[dict[str, Any]], start_min: int, end_min: int
+) -> list[dict[str, Any]]:
+    return [
+        row
+        for row in rows
+        if row.get("entry_minutes") is not None
+        and start_min <= int(row["entry_minutes"]) < end_min
+    ]
 
 
-def _build_window_comparisons(completed: list[dict[str, Any]], exceptions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _build_window_comparisons(
+    completed: list[dict[str, Any]], exceptions: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
     comparisons: list[dict[str, Any]] = []
     for label, start, end in SEGMENTS:
         start_min = _minutes(start)
@@ -530,10 +634,15 @@ def _window_dates(target_date: str, available_dates: list[str]) -> dict[str, lis
 def _data_driven_candidates(comparisons: list[dict[str, Any]]) -> list[dict[str, Any]]:
     candidates: list[dict[str, Any]] = []
     for item in comparisons:
-        policies = item.get("policies") if isinstance(item.get("policies"), dict) else {}
+        policies = (
+            item.get("policies") if isinstance(item.get("policies"), dict) else {}
+        )
         allow = policies.get("allow_all_in_window") or {}
         exception = policies.get("block_general_allow_exception_in_window") or {}
-        if _safe_float(allow.get("completed_avg_profit_pct")) < 0 and _safe_float(exception.get("counterfactual_avg_expected_ev_pct")) > 0:
+        if (
+            _safe_float(allow.get("completed_avg_profit_pct")) < 0
+            and _safe_float(exception.get("counterfactual_avg_expected_ev_pct")) > 0
+        ):
             candidates.append(
                 {
                     "window_id": item.get("window_id"),
@@ -541,7 +650,9 @@ def _data_driven_candidates(comparisons: list[dict[str, Any]]) -> list[dict[str,
                     "reason": "negative_completed_pnl_positive_exception_ev",
                     "operator_seed_cutoff": bool(item.get("operator_seed_cutoff")),
                     "completed_avg_profit_pct": allow.get("completed_avg_profit_pct"),
-                    "counterfactual_avg_expected_ev_pct": exception.get("counterfactual_avg_expected_ev_pct"),
+                    "counterfactual_avg_expected_ev_pct": exception.get(
+                        "counterfactual_avg_expected_ev_pct"
+                    ),
                 }
             )
     return candidates[:20]
@@ -563,11 +674,15 @@ def build_time_window_regime_counterfactual_report(
     available_dates = _available_sim_dates(safe_end, start_date=start_date)
     baseline_excluded_dates: list[str] = []
     if clean_policy.get("enabled", True):
-        available_dates, baseline_excluded_dates = filter_allowed_dates(available_dates, clean_policy)
+        available_dates, baseline_excluded_dates = filter_allowed_dates(
+            available_dates, clean_policy
+        )
     if rolling_days:
         available_dates = available_dates[-max(1, int(rolling_days)) :]
     guard = IoGuard(max_rows=max_rows, max_seconds=max_seconds)
-    cached_resume_dates = _load_checkpoint_processed_dates(safe_target) if resume else set()
+    cached_resume_dates = (
+        _load_checkpoint_processed_dates(safe_target) if resume else set()
+    )
     completed_by_date: dict[str, list[dict[str, Any]]] = {}
     exceptions_by_date: dict[str, list[dict[str, Any]]] = {}
     source_quality_counts = Counter()
@@ -592,8 +707,15 @@ def build_time_window_regime_counterfactual_report(
             break
     window_reports = []
     for window_label, dates in _window_dates(safe_target, processed_dates).items():
-        completed_rows = [row for current in dates for row in completed_by_date.get(current, []) if row.get("entry_minutes") is not None]
-        exception_rows = [row for current in dates for row in exceptions_by_date.get(current, [])]
+        completed_rows = [
+            row
+            for current in dates
+            for row in completed_by_date.get(current, [])
+            if row.get("entry_minutes") is not None
+        ]
+        exception_rows = [
+            row for current in dates for row in exceptions_by_date.get(current, [])
+        ]
         comparisons = _build_window_comparisons(completed_rows, exception_rows)
         window_reports.append(
             {
@@ -608,7 +730,9 @@ def build_time_window_regime_counterfactual_report(
     joined = source_quality_counts.get("entry_time_joined", 0)
     unjoined = source_quality_counts.get("entry_time_unjoined", 0)
     total = joined + unjoined
-    status = "partial" if paused else ("warning" if total and unjoined == total else "pass")
+    status = (
+        "partial" if paused else ("warning" if total and unjoined == total else "pass")
+    )
     report = {
         "schema_version": SCHEMA_VERSION,
         "report_type": REPORT_TYPE,
@@ -627,7 +751,9 @@ def build_time_window_regime_counterfactual_report(
         "source_quality_gate": "entry time join rate and separate completed/counterfactual metric scopes",
         "forbidden_uses": FORBIDDEN_USES,
         "clean_tuning_baseline": clean_policy,
-        "operator_seed_cutoffs": [{"cutoff": "09:30", "operator_seed_cutoff": True, "hard_gate": False}],
+        "operator_seed_cutoffs": [
+            {"cutoff": "09:30", "operator_seed_cutoff": True, "hard_gate": False}
+        ],
         "summary": {
             "status": status,
             "processed_dates": processed_dates,
@@ -637,7 +763,9 @@ def build_time_window_regime_counterfactual_report(
             "resume_required": paused,
             "paused_reason": guard.paused_reason or None,
             "completed_rows": sum(len(rows) for rows in completed_by_date.values()),
-            "counterfactual_rows": sum(len(rows) for rows in exceptions_by_date.values()),
+            "counterfactual_rows": sum(
+                len(rows) for rows in exceptions_by_date.values()
+            ),
             "entry_time_join_rate": round(joined / total, 4) if total else 0.0,
             "unjoined_rate": round(unjoined / total, 4) if total else 0.0,
             "sell_time_fallback_rate": 0.0,
@@ -653,7 +781,9 @@ def build_time_window_regime_counterfactual_report(
     }
     json_path, md_path = report_paths(safe_target)
     json_path.parent.mkdir(parents=True, exist_ok=True)
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2, default=str), encoding="utf-8"
+    )
     md_path.write_text(render_markdown(report), encoding="utf-8")
     checkpoint = {
         "date": safe_target,
@@ -667,7 +797,9 @@ def build_time_window_regime_counterfactual_report(
     }
     checkpoint_file = checkpoint_path(safe_target)
     checkpoint_file.parent.mkdir(parents=True, exist_ok=True)
-    checkpoint_file.write_text(json.dumps(checkpoint, ensure_ascii=False, indent=2), encoding="utf-8")
+    checkpoint_file.write_text(
+        json.dumps(checkpoint, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     return report
 
 
@@ -707,8 +839,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--start-date")
     parser.add_argument("--end-date")
     parser.add_argument("--rolling-days", type=int)
-    parser.add_argument("--max-rows", type=int, default=int(os.getenv("THRESHOLD_CYCLE_TIME_WINDOW_REGIME_MAX_ROWS", "200000")))
-    parser.add_argument("--max-seconds", type=int, default=int(os.getenv("THRESHOLD_CYCLE_TIME_WINDOW_REGIME_MAX_SECONDS", "240")))
+    parser.add_argument(
+        "--max-rows",
+        type=int,
+        default=int(os.getenv("THRESHOLD_CYCLE_TIME_WINDOW_REGIME_MAX_ROWS", "200000")),
+    )
+    parser.add_argument(
+        "--max-seconds",
+        type=int,
+        default=int(os.getenv("THRESHOLD_CYCLE_TIME_WINDOW_REGIME_MAX_SECONDS", "240")),
+    )
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--backfill", action="store_true")
     parser.add_argument("--provider", default="none")
@@ -723,7 +863,16 @@ def main(argv: list[str] | None = None) -> int:
         resume=args.resume,
     )
     json_path, md_path = report_paths(args.date)
-    print(json.dumps({"status": report.get("status"), "json": str(json_path), "md": str(md_path)}, ensure_ascii=False))
+    print(
+        json.dumps(
+            {
+                "status": report.get("status"),
+                "json": str(json_path),
+                "md": str(md_path),
+            },
+            ensure_ascii=False,
+        )
+    )
     return 0
 
 

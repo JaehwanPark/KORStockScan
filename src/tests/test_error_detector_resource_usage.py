@@ -78,10 +78,14 @@ class TestResourceUsageDetector:
         with tempfile.TemporaryDirectory() as tmpdir:
             sample_file = Path(tmpdir) / "samples.jsonl"
             sample_file.write_text(json.dumps(sample), encoding="utf-8")
-            with patch(
-                "src.engine.error_detectors.resource_usage.SAMPLER_JSONL", sample_file
-            ), patch.object(
-                ResourceUsageDetector, "_check_disk_free", return_value=8192.0
+            with (
+                patch(
+                    "src.engine.error_detectors.resource_usage.SAMPLER_JSONL",
+                    sample_file,
+                ),
+                patch.object(
+                    ResourceUsageDetector, "_check_disk_free", return_value=8192.0
+                ),
             ):
                 detector = ResourceUsageDetector()
                 result = detector.check()
@@ -104,10 +108,14 @@ class TestResourceUsageDetector:
         with tempfile.TemporaryDirectory() as tmpdir:
             sample_file = Path(tmpdir) / "samples.jsonl"
             sample_file.write_text(json.dumps(sample), encoding="utf-8")
-            with patch(
-                "src.engine.error_detectors.resource_usage.SAMPLER_JSONL", sample_file
-            ), patch.object(
-                ResourceUsageDetector, "_check_disk_free", return_value=8192.0
+            with (
+                patch(
+                    "src.engine.error_detectors.resource_usage.SAMPLER_JSONL",
+                    sample_file,
+                ),
+                patch.object(
+                    ResourceUsageDetector, "_check_disk_free", return_value=8192.0
+                ),
             ):
                 detector = ResourceUsageDetector()
                 result = detector.check()
@@ -130,10 +138,14 @@ class TestResourceUsageDetector:
         with tempfile.TemporaryDirectory() as tmpdir:
             sample_file = Path(tmpdir) / "samples.jsonl"
             sample_file.write_text(json.dumps(sample), encoding="utf-8")
-            with patch(
-                "src.engine.error_detectors.resource_usage.SAMPLER_JSONL", sample_file
-            ), patch.object(
-                ResourceUsageDetector, "_check_disk_free", return_value=8192.0
+            with (
+                patch(
+                    "src.engine.error_detectors.resource_usage.SAMPLER_JSONL",
+                    sample_file,
+                ),
+                patch.object(
+                    ResourceUsageDetector, "_check_disk_free", return_value=8192.0
+                ),
             ):
                 detector = ResourceUsageDetector()
                 result = detector.check()
@@ -157,10 +169,14 @@ class TestResourceUsageDetector:
         with tempfile.TemporaryDirectory() as tmpdir:
             sample_file = Path(tmpdir) / "samples.jsonl"
             sample_file.write_text(json.dumps(sample), encoding="utf-8")
-            with patch(
-                "src.engine.error_detectors.resource_usage.SAMPLER_JSONL", sample_file
-            ), patch.object(
-                ResourceUsageDetector, "_check_disk_free", return_value=8192.0
+            with (
+                patch(
+                    "src.engine.error_detectors.resource_usage.SAMPLER_JSONL",
+                    sample_file,
+                ),
+                patch.object(
+                    ResourceUsageDetector, "_check_disk_free", return_value=8192.0
+                ),
             ):
                 detector = ResourceUsageDetector()
                 result = detector.check()
@@ -183,10 +199,14 @@ class TestResourceUsageDetector:
         with tempfile.TemporaryDirectory() as tmpdir:
             sample_file = Path(tmpdir) / "samples.jsonl"
             sample_file.write_text(json.dumps(sample), encoding="utf-8")
-            with patch(
-                "src.engine.error_detectors.resource_usage.SAMPLER_JSONL", sample_file
-            ), patch.object(
-                ResourceUsageDetector, "_check_disk_free", return_value=8192.0
+            with (
+                patch(
+                    "src.engine.error_detectors.resource_usage.SAMPLER_JSONL",
+                    sample_file,
+                ),
+                patch.object(
+                    ResourceUsageDetector, "_check_disk_free", return_value=8192.0
+                ),
             ):
                 detector = ResourceUsageDetector()
                 result = detector.check()
@@ -210,10 +230,14 @@ class TestResourceUsageDetector:
         with tempfile.TemporaryDirectory() as tmpdir:
             sample_file = Path(tmpdir) / "samples.jsonl"
             sample_file.write_text(json.dumps(sample), encoding="utf-8")
-            with patch(
-                "src.engine.error_detectors.resource_usage.SAMPLER_JSONL", sample_file
-            ), patch.object(
-                ResourceUsageDetector, "_check_disk_free", return_value=8192.0
+            with (
+                patch(
+                    "src.engine.error_detectors.resource_usage.SAMPLER_JSONL",
+                    sample_file,
+                ),
+                patch.object(
+                    ResourceUsageDetector, "_check_disk_free", return_value=8192.0
+                ),
             ):
                 detector = ResourceUsageDetector()
                 result = detector.check()
@@ -242,10 +266,14 @@ class TestResourceUsageDetector:
                 "src.engine.error_detectors.resource_usage.is_krx_trading_day",
                 lambda target: False,
             )
-            with patch(
-                "src.engine.error_detectors.resource_usage.SAMPLER_JSONL", sample_file
-            ), patch.object(
-                ResourceUsageDetector, "_check_disk_free", return_value=8192.0
+            with (
+                patch(
+                    "src.engine.error_detectors.resource_usage.SAMPLER_JSONL",
+                    sample_file,
+                ),
+                patch.object(
+                    ResourceUsageDetector, "_check_disk_free", return_value=8192.0
+                ),
             ):
                 result = ResourceUsageDetector().check()
 
@@ -272,13 +300,17 @@ class TestResourceUsageDetector:
 
             return Result()
 
-        with patch(
-            "src.engine.error_detectors.resource_usage.PROJECT_ROOT", project_root
-        ), patch.object(
-            ResourceUsageDetector, "_ROTATE_COOLDOWN_STATE", cooldown_state
-        ), patch(
-            "src.engine.error_detectors.resource_usage.subprocess.run",
-            side_effect=fake_run,
+        with (
+            patch(
+                "src.engine.error_detectors.resource_usage.PROJECT_ROOT", project_root
+            ),
+            patch.object(
+                ResourceUsageDetector, "_ROTATE_COOLDOWN_STATE", cooldown_state
+            ),
+            patch(
+                "src.engine.error_detectors.resource_usage.subprocess.run",
+                side_effect=fake_run,
+            ),
         ):
             first_details = {}
             ResourceUsageDetector(dry_run=False)._auto_rotate_logs(first_details)
@@ -295,10 +327,13 @@ class TestResourceUsageDetector:
         project_root.mkdir()
         cooldown_state = tmp_path / "tmp" / "rotate_state.txt"
 
-        with patch(
-            "src.engine.error_detectors.resource_usage.PROJECT_ROOT", project_root
-        ), patch.object(
-            ResourceUsageDetector, "_ROTATE_COOLDOWN_STATE", cooldown_state
+        with (
+            patch(
+                "src.engine.error_detectors.resource_usage.PROJECT_ROOT", project_root
+            ),
+            patch.object(
+                ResourceUsageDetector, "_ROTATE_COOLDOWN_STATE", cooldown_state
+            ),
         ):
             details = {}
             ResourceUsageDetector(dry_run=False)._auto_rotate_logs(details)
@@ -318,13 +353,17 @@ class TestResourceUsageDetector:
         )
         cooldown_state = tmp_path / "tmp" / "rotate_state.txt"
 
-        with patch(
-            "src.engine.error_detectors.resource_usage.PROJECT_ROOT", project_root
-        ), patch.object(
-            ResourceUsageDetector, "_ROTATE_COOLDOWN_STATE", cooldown_state
-        ), patch(
-            "src.engine.error_detectors.resource_usage.subprocess.run",
-            side_effect=subprocess.TimeoutExpired(cmd="rotate", timeout=30),
+        with (
+            patch(
+                "src.engine.error_detectors.resource_usage.PROJECT_ROOT", project_root
+            ),
+            patch.object(
+                ResourceUsageDetector, "_ROTATE_COOLDOWN_STATE", cooldown_state
+            ),
+            patch(
+                "src.engine.error_detectors.resource_usage.subprocess.run",
+                side_effect=subprocess.TimeoutExpired(cmd="rotate", timeout=30),
+            ),
         ):
             details = {}
             ResourceUsageDetector(dry_run=False)._auto_rotate_logs(details)

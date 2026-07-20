@@ -11,19 +11,35 @@ from typing import Any
 
 import pandas as pd
 
-from analysis.deepseek_swing_pattern_lab.config import END_DATE, OUTPUT_DIR, PROMPT_DIR, REPORT_DIR
+from analysis.deepseek_swing_pattern_lab.config import (
+    END_DATE,
+    OUTPUT_DIR,
+    PROMPT_DIR,
+    REPORT_DIR,
+)
 
 SCHEMA_VERSION = 2
 SWING_FEEDBACK_SOURCES = {
     "threshold_cycle_ev": ("threshold_cycle_ev", "threshold_cycle_ev"),
-    "swing_lifecycle_decision_matrix": ("swing_lifecycle_decision_matrix", "swing_lifecycle_decision_matrix"),
-    "swing_lifecycle_bucket_discovery": ("swing_lifecycle_bucket_discovery", "swing_lifecycle_bucket_discovery"),
-    "swing_strategy_discovery_ev": ("swing_strategy_discovery_ev", "swing_strategy_discovery_ev"),
+    "swing_lifecycle_decision_matrix": (
+        "swing_lifecycle_decision_matrix",
+        "swing_lifecycle_decision_matrix",
+    ),
+    "swing_lifecycle_bucket_discovery": (
+        "swing_lifecycle_bucket_discovery",
+        "swing_lifecycle_bucket_discovery",
+    ),
+    "swing_strategy_discovery_ev": (
+        "swing_strategy_discovery_ev",
+        "swing_strategy_discovery_ev",
+    ),
 }
 CLEAN_TUNING_BASELINE_DATE = "2026-06-04"
 
 
-def _latest_feedback_artifact_path(report_name: str, stem: str, target_date: str) -> tuple[Path | None, str | None]:
+def _latest_feedback_artifact_path(
+    report_name: str, stem: str, target_date: str
+) -> tuple[Path | None, str | None]:
     target = str(target_date).strip()[:10]
     report_dir = REPORT_DIR / report_name
     exact = report_dir / f"{stem}_{target}.json"
@@ -36,7 +52,10 @@ def _latest_feedback_artifact_path(report_name: str, stem: str, target_date: str
         if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", suffix):
             continue
         source_date = suffix
-        if target >= CLEAN_TUNING_BASELINE_DATE and source_date < CLEAN_TUNING_BASELINE_DATE:
+        if (
+            target >= CLEAN_TUNING_BASELINE_DATE
+            and source_date < CLEAN_TUNING_BASELINE_DATE
+        ):
             continue
         if source_date <= target and (latest_date is None or source_date > latest_date):
             latest_path = path
@@ -86,16 +105,18 @@ def _load_feedback_sources() -> dict[str, Any]:
     missing = []
     target_date = str(END_DATE).strip()[:10]
     for source_id, (report_name, stem) in SWING_FEEDBACK_SOURCES.items():
-        path, source_date = _latest_feedback_artifact_path(report_name, stem, target_date)
+        path, source_date = _latest_feedback_artifact_path(
+            report_name, stem, target_date
+        )
         item = {
             "source_id": source_id,
             "path": str(path) if path else "",
             "source_date": source_date,
             "target_date": target_date,
             "freshness": (
-                "same_day" if source_date == target_date
-                else "latest_available_lte_target" if source_date
-                else "missing"
+                "same_day"
+                if source_date == target_date
+                else "latest_available_lte_target" if source_date else "missing"
             ),
             "runtime_effect": False,
             "decision_authority": "source_quality_only",
@@ -105,12 +126,18 @@ def _load_feedback_sources() -> dict[str, Any]:
                 payload = json.loads(path.read_text(encoding="utf-8"))
             except Exception:
                 payload = {}
-            summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+            summary = (
+                payload.get("summary")
+                if isinstance(payload.get("summary"), dict)
+                else {}
+            )
             consumed.append(
                 {
                     **item,
                     "status": payload.get("status") or summary.get("status"),
-                    "warnings": payload.get("warnings") or summary.get("warnings") or [],
+                    "warnings": payload.get("warnings")
+                    or summary.get("warnings")
+                    or [],
                 }
             )
         else:
@@ -193,11 +220,17 @@ def _build_funnel_summary(funnel_fact: pd.DataFrame) -> dict[str, Any]:
         "total_db_rows": _safe_int(funnel_fact["db_rows"].sum()),
         "total_entered": _safe_int(funnel_fact["entered_rows"].sum()),
         "total_completed": _safe_int(funnel_fact["completed_rows"].sum()),
-        "total_blocked_gatekeeper": _safe_int(funnel_fact["blocked_gatekeeper_reject_unique"].sum()),
+        "total_blocked_gatekeeper": _safe_int(
+            funnel_fact["blocked_gatekeeper_reject_unique"].sum()
+        ),
         "total_blocked_gap": _safe_int(funnel_fact["blocked_swing_gap_unique"].sum()),
-        "total_market_regime_block": _safe_int(funnel_fact["market_regime_block_unique"].sum()),
+        "total_market_regime_block": _safe_int(
+            funnel_fact["market_regime_block_unique"].sum()
+        ),
         "total_submitted": _safe_int(funnel_fact["submitted_unique_records"].sum()),
-        "total_simulated": _safe_int(funnel_fact["simulated_order_unique_records"].sum()),
+        "total_simulated": _safe_int(
+            funnel_fact["simulated_order_unique_records"].sum()
+        ),
     }
 
 
@@ -213,7 +246,9 @@ def _build_trade_summary(trade_fact: pd.DataFrame) -> dict[str, Any]:
         "win_trades": int((valid["profit"] > 0).sum()) if not valid.empty else 0,
         "loss_trades": int((valid["profit"] < 0).sum()) if not valid.empty else 0,
         "total_pnl": round(float(valid["profit"].sum()), 2) if not valid.empty else 0.0,
-        "avg_profit_rate": round(float(valid["profit_rate"].mean()), 4) if not valid.empty else None,
+        "avg_profit_rate": (
+            round(float(valid["profit_rate"].mean()), 4) if not valid.empty else None
+        ),
     }
 
 
@@ -235,40 +270,68 @@ def _build_ofi_qi_summary(ofi_qi_fact: pd.DataFrame) -> dict[str, Any]:
     }
     stale_rows = ofi_qi_fact[ofi_qi_fact["stale_missing_flag"] == True].copy()
     reason_combination_counts = (
-        stale_rows["stale_missing_reasons"].fillna("unknown").replace("", "unknown").str.replace(",", "+").value_counts().to_dict()
+        stale_rows["stale_missing_reasons"]
+        .fillna("unknown")
+        .replace("", "unknown")
+        .str.replace(",", "+")
+        .value_counts()
+        .to_dict()
         if "stale_missing_reasons" in stale_rows and not stale_rows.empty
         else {}
     )
     reason_combination_unique_record_counts: dict[str, int] = {}
-    if not stale_rows.empty and "stale_missing_reasons" in stale_rows and "record_id" in stale_rows:
+    if (
+        not stale_rows.empty
+        and "stale_missing_reasons" in stale_rows
+        and "record_id" in stale_rows
+    ):
         tmp = stale_rows.copy()
-        tmp["_reason_combination"] = tmp["stale_missing_reasons"].fillna("unknown").replace("", "unknown").str.replace(",", "+")
+        tmp["_reason_combination"] = (
+            tmp["stale_missing_reasons"]
+            .fillna("unknown")
+            .replace("", "unknown")
+            .str.replace(",", "+")
+        )
         reason_combination_unique_record_counts = {
             str(key): int(value)
-            for key, value in tmp.groupby("_reason_combination")["record_id"].nunique().to_dict().items()
+            for key, value in tmp.groupby("_reason_combination")["record_id"]
+            .nunique()
+            .to_dict()
+            .items()
         }
     group_counts = (
-        stale_rows["group"].fillna("unknown").replace("", "unknown").value_counts().to_dict()
+        stale_rows["group"]
+        .fillna("unknown")
+        .replace("", "unknown")
+        .value_counts()
+        .to_dict()
         if "group" in stale_rows and not stale_rows.empty
         else {}
     )
     group_unique_record_counts = (
         {
             str(key): int(value)
-            for key, value in stale_rows.groupby("group")["record_id"].nunique().to_dict().items()
+            for key, value in stale_rows.groupby("group")["record_id"]
+            .nunique()
+            .to_dict()
+            .items()
         }
         if "group" in stale_rows and "record_id" in stale_rows and not stale_rows.empty
         else {}
     )
     observer_overlap = {
-        "observer_unhealthy_total": int(stale_rows["observer_unhealthy_flag"].sum())
-        if "observer_unhealthy_flag" in stale_rows and not stale_rows.empty else 0,
+        "observer_unhealthy_total": (
+            int(stale_rows["observer_unhealthy_flag"].sum())
+            if "observer_unhealthy_flag" in stale_rows and not stale_rows.empty
+            else 0
+        ),
         "observer_unhealthy_with_other_reason": 0,
         "observer_unhealthy_only": 0,
     }
     if not stale_rows.empty and "observer_unhealthy_flag" in stale_rows:
         other_columns = [
-            column for column in (
+            column
+            for column in (
                 "micro_missing_flag",
                 "micro_stale_flag",
                 "micro_not_ready_flag",
@@ -277,14 +340,18 @@ def _build_ofi_qi_summary(ofi_qi_fact: pd.DataFrame) -> dict[str, Any]:
             if column in stale_rows
         ]
         observer_rows = stale_rows[stale_rows["observer_unhealthy_flag"] == True]
-        observer_overlap["observer_unhealthy_with_other_reason"] = int(
-            observer_rows[other_columns].any(axis=1).sum()
-        ) if other_columns else 0
+        observer_overlap["observer_unhealthy_with_other_reason"] = (
+            int(observer_rows[other_columns].any(axis=1).sum()) if other_columns else 0
+        )
         observer_overlap["observer_unhealthy_only"] = (
             observer_overlap["observer_unhealthy_total"]
             - observer_overlap["observer_unhealthy_with_other_reason"]
         )
-    advice = ofi_qi_fact["swing_micro_advice"].value_counts().to_dict() if "swing_micro_advice" in ofi_qi_fact else {}
+    advice = (
+        ofi_qi_fact["swing_micro_advice"].value_counts().to_dict()
+        if "swing_micro_advice" in ofi_qi_fact
+        else {}
+    )
     return {
         "total_samples": total,
         "stale_missing_count": stale,
@@ -294,7 +361,9 @@ def _build_ofi_qi_summary(ofi_qi_fact: pd.DataFrame) -> dict[str, Any]:
             reason: round(count / max(total, 1), 4)
             for reason, count in reason_counts.items()
         },
-        "stale_missing_unique_record_count": int(stale_rows["record_id"].nunique()) if "record_id" in stale_rows else 0,
+        "stale_missing_unique_record_count": (
+            int(stale_rows["record_id"].nunique()) if "record_id" in stale_rows else 0
+        ),
         "stale_missing_reason_combination_counts": reason_combination_counts,
         "stale_missing_reason_combination_unique_record_counts": reason_combination_unique_record_counts,
         "stale_missing_group_counts": group_counts,
@@ -336,8 +405,12 @@ def build_payload_cases(
                     "sell_price": _safe_value(row.get("sell_price")),
                     "profit_rate": _safe_value(row.get("profit_rate")),
                     "profit": _safe_value(row.get("profit")),
-                    "actual_order_submitted": _safe_bool(row.get("actual_order_submitted", False)),
-                    "broker_order_forbidden": _safe_bool(row.get("broker_order_forbidden", True)),
+                    "actual_order_submitted": _safe_bool(
+                        row.get("actual_order_submitted", False)
+                    ),
+                    "broker_order_forbidden": _safe_bool(
+                        row.get("broker_order_forbidden", True)
+                    ),
                     "decision_authority": str(row.get("decision_authority", "")),
                     "pyramid_count": _safe_int(row.get("pyramid_count")),
                     "avg_down_count": _safe_int(row.get("avg_down_count")),
@@ -371,9 +444,13 @@ def build_payload_cases(
                     "reason_flags": {
                         "micro_missing": bool(row.get("micro_missing_flag", False)),
                         "micro_stale": bool(row.get("micro_stale_flag", False)),
-                        "observer_unhealthy": bool(row.get("observer_unhealthy_flag", False)),
+                        "observer_unhealthy": bool(
+                            row.get("observer_unhealthy_flag", False)
+                        ),
                         "micro_not_ready": bool(row.get("micro_not_ready_flag", False)),
-                        "state_insufficient": bool(row.get("state_insufficient_flag", False)),
+                        "state_insufficient": bool(
+                            row.get("state_insufficient_flag", False)
+                        ),
                     },
                     "ready": bool(row.get("orderbook_micro_ready", False)),
                     "healthy": bool(row.get("orderbook_micro_observer_healthy", False)),
@@ -498,7 +575,13 @@ def generate_ev_backlog_markdown(
     for idx, f in enumerate(findings, start=1):
         route = f.get("route", "defer_evidence")
         priority = (
-            "HIGH" if route == "implement_now" else "MEDIUM" if route in ("attach_existing_family", "design_family_candidate") else "LOW"
+            "HIGH"
+            if route == "implement_now"
+            else (
+                "MEDIUM"
+                if route in ("attach_existing_family", "design_family_candidate")
+                else "LOW"
+            )
         )
         lines.extend(
             [
@@ -530,7 +613,9 @@ def main() -> int:
     ofi_qi_fact = _load_csv("swing_ofi_qi_fact.csv")
     analysis_result = _load_json("swing_pattern_analysis_result.json")
 
-    summary = build_payload_summary(trade_fact, funnel_fact, sequence_fact, ofi_qi_fact, analysis_result)
+    summary = build_payload_summary(
+        trade_fact, funnel_fact, sequence_fact, ofi_qi_fact, analysis_result
+    )
     cases = build_payload_cases(trade_fact, sequence_fact, ofi_qi_fact, analysis_result)
 
     (OUTPUT_DIR / "deepseek_payload_summary.json").write_text(
@@ -541,26 +626,40 @@ def main() -> int:
     )
 
     final_review_md = generate_final_review_markdown(analysis_result, summary)
-    (OUTPUT_DIR / "final_review_report_for_lead_ai.md").write_text(final_review_md, encoding="utf-8")
+    (OUTPUT_DIR / "final_review_report_for_lead_ai.md").write_text(
+        final_review_md, encoding="utf-8"
+    )
 
     ev_backlog_md = generate_ev_backlog_markdown(analysis_result)
-    (OUTPUT_DIR / "swing_ev_improvement_backlog_for_ops.md").write_text(ev_backlog_md, encoding="utf-8")
+    (OUTPUT_DIR / "swing_ev_improvement_backlog_for_ops.md").write_text(
+        ev_backlog_md, encoding="utf-8"
+    )
 
     manifest = _load_json("run_manifest.json") or {}
     manifest.update(
         {
-            "deeppayload_generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+            "deeppayload_generated_at": datetime.now()
+            .astimezone()
+            .isoformat(timespec="seconds"),
             "deeppayload_outputs": {
                 "payload_summary": str(OUTPUT_DIR / "deepseek_payload_summary.json"),
                 "payload_cases": str(OUTPUT_DIR / "deepseek_payload_cases.json"),
-                "final_review_report": str(OUTPUT_DIR / "final_review_report_for_lead_ai.md"),
-                "ev_improvement_backlog": str(OUTPUT_DIR / "swing_ev_improvement_backlog_for_ops.md"),
+                "final_review_report": str(
+                    OUTPUT_DIR / "final_review_report_for_lead_ai.md"
+                ),
+                "ev_improvement_backlog": str(
+                    OUTPUT_DIR / "swing_ev_improvement_backlog_for_ops.md"
+                ),
             },
         }
     )
-    (OUTPUT_DIR / "run_manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    (OUTPUT_DIR / "run_manifest.json").write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
 
-    print(f"DeepSeek payload built: {summary.get('findings_count', 0)} findings summarized")
+    print(
+        f"DeepSeek payload built: {summary.get('findings_count', 0)} findings summarized"
+    )
     print(f"Outputs written to {OUTPUT_DIR}")
     return 0
 

@@ -298,7 +298,9 @@ def _log_holding_pipeline(name, code, target_id, stage, **fields):
     )
 
 
-def _receipt_snapshot(target_stock: dict[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
+def _receipt_snapshot(
+    target_stock: dict[str, Any], keys: tuple[str, ...]
+) -> dict[str, Any]:
     return {key: target_stock.get(key) for key in keys}
 
 
@@ -332,7 +334,9 @@ def _sell_completion_contract_fields(position_tag: str) -> dict[str, Any]:
     }
 
 
-def _resolve_entry_submit_ai_score(target_stock: dict[str, Any], order_no: str = "") -> float | None:
+def _resolve_entry_submit_ai_score(
+    target_stock: dict[str, Any], order_no: str = ""
+) -> float | None:
     """Return the BUY submit score that should seed first holding review state."""
     strategy = normalize_strategy(target_stock.get("strategy"))
     position_tag = normalize_position_tag(strategy, target_stock.get("position_tag"))
@@ -343,7 +347,10 @@ def _resolve_entry_submit_ai_score(target_stock: dict[str, Any], order_no: str =
         for order in pending_orders:
             if not isinstance(order, dict):
                 continue
-            if order_no and str(order.get("ord_no", "") or "").strip() != str(order_no).strip():
+            if (
+                order_no
+                and str(order.get("ord_no", "") or "").strip() != str(order_no).strip()
+            ):
                 continue
             score = _safe_float(order.get("ai_score"), 0.0)
             if score > 0:
@@ -398,7 +405,9 @@ def _entry_receipt_int_map(target_stock: dict[str, Any], key: str) -> dict[str, 
     return normalized
 
 
-def _add_receipt_leg_meta(target_stock: dict[str, Any], order_no: str) -> dict[str, Any]:
+def _add_receipt_leg_meta(
+    target_stock: dict[str, Any], order_no: str
+) -> dict[str, Any]:
     raw_map = target_stock.get("_add_receipt_leg_meta_by_order_no")
     if not isinstance(raw_map, dict):
         return {}
@@ -407,7 +416,9 @@ def _add_receipt_leg_meta(target_stock: dict[str, Any], order_no: str) -> dict[s
     return dict(raw_meta) if isinstance(raw_meta, dict) else {}
 
 
-def _split_receipt_leg_meta_fields(leg_meta: dict[str, Any], *, filled_at_ts: float) -> dict[str, Any]:
+def _split_receipt_leg_meta_fields(
+    leg_meta: dict[str, Any], *, filled_at_ts: float
+) -> dict[str, Any]:
     if not isinstance(leg_meta, dict) or not leg_meta:
         return {
             "split_leg_ttl_sec": "-",
@@ -428,13 +439,32 @@ def _split_receipt_leg_meta_fields(leg_meta: dict[str, Any], *, filled_at_ts: fl
         "split_leg_ttl_sec": ttl_sec if ttl_sec > 0 else "-",
         "split_bundle_hard_ttl_sec": leg_meta.get("split_bundle_hard_ttl_sec") or "-",
         "split_leg_role": leg_meta.get("split_leg_role") or "-",
-        "split_price_offset_pct": leg_meta.get("split_price_offset_pct") if leg_meta.get("split_price_offset_pct") is not None else "-",
-        "split_price_offset_ticks": leg_meta.get("split_price_offset_ticks") if leg_meta.get("split_price_offset_ticks") is not None else "-",
+        "split_price_offset_pct": (
+            leg_meta.get("split_price_offset_pct")
+            if leg_meta.get("split_price_offset_pct") is not None
+            else "-"
+        ),
+        "split_price_offset_ticks": (
+            leg_meta.get("split_price_offset_ticks")
+            if leg_meta.get("split_price_offset_ticks") is not None
+            else "-"
+        ),
         "split_leg_age_sec": f"{age_sec:.1f}" if age_sec is not None else "-",
-        "split_fill_before_ttl": bool(ttl_sec > 0 and age_sec is not None and age_sec < ttl_sec) if ttl_sec > 0 else "-",
-        "split_fill_after_ttl": bool(ttl_sec > 0 and age_sec is not None and age_sec >= ttl_sec) if ttl_sec > 0 else "-",
-        "scale_in_split_order_leg_index": leg_meta.get("scale_in_split_order_leg_index") or "-",
-        "scale_in_split_order_market_order_applied": bool(leg_meta.get("scale_in_split_order_market_order_applied")),
+        "split_fill_before_ttl": (
+            bool(ttl_sec > 0 and age_sec is not None and age_sec < ttl_sec)
+            if ttl_sec > 0
+            else "-"
+        ),
+        "split_fill_after_ttl": (
+            bool(ttl_sec > 0 and age_sec is not None and age_sec >= ttl_sec)
+            if ttl_sec > 0
+            else "-"
+        ),
+        "scale_in_split_order_leg_index": leg_meta.get("scale_in_split_order_leg_index")
+        or "-",
+        "scale_in_split_order_market_order_applied": bool(
+            leg_meta.get("scale_in_split_order_market_order_applied")
+        ),
     }
 
 
@@ -489,8 +519,12 @@ def _resolve_entry_effective_fill_qty(
     """
 
     order_key = _entry_receipt_order_key(order_no)
-    requested_by_order = _entry_receipt_int_map(target_stock, _ENTRY_RECEIPT_REQUESTED_BY_ORDER_KEY)
-    filled_by_order = _entry_receipt_int_map(target_stock, _ENTRY_RECEIPT_FILLED_BY_ORDER_KEY)
+    requested_by_order = _entry_receipt_int_map(
+        target_stock, _ENTRY_RECEIPT_REQUESTED_BY_ORDER_KEY
+    )
+    filled_by_order = _entry_receipt_int_map(
+        target_stock, _ENTRY_RECEIPT_FILLED_BY_ORDER_KEY
+    )
 
     pending_order = None
     for order in target_stock.get("pending_entry_orders") or []:
@@ -503,12 +537,17 @@ def _resolve_entry_effective_fill_qty(
         requested_qty = max(requested_qty, int(pending_order.get("qty", 0) or 0))
     if requested_qty <= 0:
         requested_qty = int(
-            target_stock.get("entry_requested_qty", target_stock.get("requested_buy_qty", 0)) or 0
+            target_stock.get(
+                "entry_requested_qty", target_stock.get("requested_buy_qty", 0)
+            )
+            or 0
         )
 
     already_filled = int(filled_by_order.get(order_key, 0) or 0)
     if pending_order is not None:
-        already_filled = max(already_filled, int(pending_order.get("filled_qty", 0) or 0))
+        already_filled = max(
+            already_filled, int(pending_order.get("filled_qty", 0) or 0)
+        )
 
     if requested_qty > 0:
         requested_by_order[order_key] = requested_qty
@@ -539,7 +578,9 @@ def _resolve_entry_effective_fill_qty(
     filled_by_order[order_key] = new_filled
     if pending_order is not None:
         pending_order["filled_qty"] = new_filled
-        pending_order["status"] = "FILLED" if requested_qty > 0 and new_filled >= requested_qty else "PARTIAL"
+        pending_order["status"] = (
+            "FILLED" if requested_qty > 0 and new_filled >= requested_qty else "PARTIAL"
+        )
         pending_order["last_effective_fill_qty"] = effective_qty
     return effective_qty, requested_qty, new_filled
 
@@ -570,14 +611,24 @@ def _resolve_add_effective_fill(
         return 0, raw_price, bundle_requested_qty, bundle_already_filled, 0, 0, False
 
     order_key = _add_receipt_order_key(order_no)
-    requested_by_order = _entry_receipt_int_map(target_stock, _ADD_RECEIPT_REQUESTED_BY_ORDER_KEY)
-    filled_by_order = _entry_receipt_int_map(target_stock, _ADD_RECEIPT_FILLED_BY_ORDER_KEY)
-    amount_by_order = _entry_receipt_int_map(target_stock, _ADD_RECEIPT_AMOUNT_BY_ORDER_KEY)
+    requested_by_order = _entry_receipt_int_map(
+        target_stock, _ADD_RECEIPT_REQUESTED_BY_ORDER_KEY
+    )
+    filled_by_order = _entry_receipt_int_map(
+        target_stock, _ADD_RECEIPT_FILLED_BY_ORDER_KEY
+    )
+    amount_by_order = _entry_receipt_int_map(
+        target_stock, _ADD_RECEIPT_AMOUNT_BY_ORDER_KEY
+    )
     pending_ord_nos = set(_pending_add_order_numbers(target_stock))
     reconciled_before_ordno_bind = False
 
     normalized_order_no = str(order_no or "").strip()
-    if normalized_order_no and normalized_order_no not in pending_ord_nos and not pending_ord_nos:
+    if (
+        normalized_order_no
+        and normalized_order_no not in pending_ord_nos
+        and not pending_ord_nos
+    ):
         _append_pending_add_order_no(target_stock, normalized_order_no)
         pending_ord_nos.add(normalized_order_no)
         reconciled_before_ordno_bind = True
@@ -598,7 +649,9 @@ def _resolve_add_effective_fill(
     ):
         order_requested_qty = raw_qty
     if order_requested_qty > 0:
-        requested_by_order[order_key] = max(int(requested_by_order.get(order_key, 0) or 0), order_requested_qty)
+        requested_by_order[order_key] = max(
+            int(requested_by_order.get(order_key, 0) or 0), order_requested_qty
+        )
 
     order_already_filled = int(filled_by_order.get(order_key, 0) or 0)
     order_already_amount = int(amount_by_order.get(order_key, 0) or 0)
@@ -635,7 +688,12 @@ def _resolve_add_effective_fill(
         effective_qty = min(raw_qty, remaining_qty)
         effective_price = raw_price
 
-        if order_already_filled > 0 and raw_qty > remaining_qty and order_requested_qty > 0 and raw_qty <= order_requested_qty:
+        if (
+            order_already_filled > 0
+            and raw_qty > remaining_qty
+            and order_requested_qty > 0
+            and raw_qty <= order_requested_qty
+        ):
             cumulative_amount = raw_price * raw_qty
             delta_amount = cumulative_amount - order_already_amount
             if delta_amount > 0:
@@ -658,9 +716,13 @@ def _resolve_add_effective_fill(
     new_order_filled = order_already_filled + effective_qty
     new_bundle_filled = bundle_already_filled + effective_qty
     filled_by_order[order_key] = new_order_filled
-    amount_by_order[order_key] = order_already_amount + (effective_price * effective_qty)
+    amount_by_order[order_key] = order_already_amount + (
+        effective_price * effective_qty
+    )
     target_stock["pending_add_filled_qty"] = new_bundle_filled
-    target_stock["pending_add_filled_amount"] = bundle_already_amount + (effective_price * effective_qty)
+    target_stock["pending_add_filled_amount"] = bundle_already_amount + (
+        effective_price * effective_qty
+    )
     return (
         effective_qty,
         effective_price,
@@ -694,12 +756,16 @@ def _normalize_sell_pending_message_for_realized_result(
         final_msg = final_msg.replace("📉 [익절 완료]", "🎊 [익절 완료]")
         normalized_lines = []
         for line in final_msg.splitlines():
-            if line.startswith("사유:") and ("하드스탑" in line or "손절" in line or "LOSS" in line):
+            if line.startswith("사유:") and (
+                "하드스탑" in line or "손절" in line or "LOSS" in line
+            ):
                 normalized_lines.append(line.replace("사유:", "청산 신호:", 1))
                 normalized_lines.append("실현 결과: `익절 확정`")
                 continue
             if line.startswith("현재가 기준 수익:"):
-                normalized_lines.append(line.replace("현재가 기준 수익:", "신호 당시 평가손익:", 1))
+                normalized_lines.append(
+                    line.replace("현재가 기준 수익:", "신호 당시 평가손익:", 1)
+                )
                 continue
             normalized_lines.append(line)
         final_msg = "\n".join(normalized_lines)
@@ -709,7 +775,9 @@ def _normalize_sell_pending_message_for_realized_result(
     return final_msg
 
 
-def _publish_sell_execution_message(*, name: str, pending_msg: str, audience: str, exec_price: int, profit_rate: float) -> None:
+def _publish_sell_execution_message(
+    *, name: str, pending_msg: str, audience: str, exec_price: int, profit_rate: float
+) -> None:
     result_label = "[익절 완료]" if profit_rate > 0 else "[손절 완료]"
     if pending_msg:
         final_msg = _normalize_sell_pending_message_for_realized_result(
@@ -719,42 +787,52 @@ def _publish_sell_execution_message(*, name: str, pending_msg: str, audience: st
         )
         final_msg += f"\n✅ **실제 체결가:** `{exec_price:,}원` (확정 수익률: `{profit_rate:+.2f}%`)"
         event_bus.publish(
-            'TELEGRAM_BROADCAST',
-            {'message': final_msg, 'audience': audience, 'parse_mode': 'HTML'},
+            "TELEGRAM_BROADCAST",
+            {"message": final_msg, "audience": audience, "parse_mode": "HTML"},
         )
         return
 
     sign = f"🎊 {result_label}" if profit_rate > 0 else f"📉 {result_label}"
     event_bus.publish(
-        'TELEGRAM_BROADCAST',
+        "TELEGRAM_BROADCAST",
         {
-            'message': f"{sign} **[{name}]** 매도 체결!\n체결가: `{exec_price:,}원`\n수익률: `{profit_rate:+.2f}%`",
-            'audience': audience,
-            'parse_mode': 'HTML',
+            "message": f"{sign} **[{name}]** 매도 체결!\n체결가: `{exec_price:,}원`\n수익률: `{profit_rate:+.2f}%`",
+            "audience": audience,
+            "parse_mode": "HTML",
         },
     )
 
 
-def _resolve_sell_execution_context(target_id: int, target_stock: dict[str, Any], exec_price: int, now_t):
+def _resolve_sell_execution_context(
+    target_id: int, target_stock: dict[str, Any], exec_price: int, now_t
+):
     try:
         with DB.get_session() as session:
-            record = session.query(RecommendationHistory).filter_by(id=target_id).first()
+            record = (
+                session.query(RecommendationHistory).filter_by(id=target_id).first()
+            )
             if not record:
                 return None
-            safe_buy_price = float(record.buy_price) if record.buy_price is not None else 0.0
+            safe_buy_price = (
+                float(record.buy_price) if record.buy_price is not None else 0.0
+            )
             if safe_buy_price > 0:
                 profit_rate = calculate_net_profit_rate(safe_buy_price, exec_price)
             else:
                 profit_rate = 0.0
-                log_error(f"⚠️ [수익률 계산 불가] ID {target_id}의 매수가(buy_price)가 누락되어 수익률을 0%로 처리합니다.")
-            strategy = normalize_strategy(record.strategy or target_stock.get('strategy') or 'KOSPI_ML')
+                log_error(
+                    f"⚠️ [수익률 계산 불가] ID {target_id}의 매수가(buy_price)가 누락되어 수익률을 0%로 처리합니다."
+                )
+            strategy = normalize_strategy(
+                record.strategy or target_stock.get("strategy") or "KOSPI_ML"
+            )
             position_tag = normalize_position_tag(
                 strategy,
                 getattr(record, "position_tag", None)
                 or target_stock.get("position_tag"),
             )
             is_scalp_revive = (
-                strategy == 'SCALPING'
+                strategy == "SCALPING"
                 and now_t < TIME_15_30
                 and position_tag != OPENING_ROTATION_POSITION_TAG
             )
@@ -775,15 +853,22 @@ def _finalize_standard_sell_execution(
     code: str,
 ) -> None:
     highest_prices.pop(code, None)
-    target_stock['status'] = 'COMPLETED'
-    target_stock['sell_time'] = now.strftime('%H:%M:%S')
-    move_orders_to_terminal(target_stock, reason='sell_completed_cleanup')
+    target_stock["status"] = "COMPLETED"
+    target_stock["sell_time"] = now.strftime("%H:%M:%S")
+    move_orders_to_terminal(target_stock, reason="sell_completed_cleanup")
     sell_receipt_snapshot = _receipt_snapshot(target_stock, _SELL_RECEIPT_SNAPSHOT_KEYS)
     _clear_runtime_keys(target_stock, _SELL_COMPLETE_RESET_KEYS)
-    target_stock.pop('pending_sell_msg', None)
+    target_stock.pop("pending_sell_msg", None)
     threading.Thread(
         target=_update_db_for_sell,
-        args=(target_id, exec_price, now, sell_receipt_snapshot, strategy, is_scalp_revive),
+        args=(
+            target_id,
+            exec_price,
+            now,
+            sell_receipt_snapshot,
+            strategy,
+            is_scalp_revive,
+        ),
         daemon=True,
     ).start()
 
@@ -839,7 +924,9 @@ def _handle_nxt_rising_missed_tp1_partial_sell_execution(
     partial_completed = filled_qty >= requested_qty
     try:
         with DB.get_session() as session:
-            record = session.query(RecommendationHistory).filter_by(id=target_id).first()
+            record = (
+                session.query(RecommendationHistory).filter_by(id=target_id).first()
+            )
             if record:
                 record.status = "HOLDING" if partial_completed else "SELL_ORDERED"
                 record.buy_qty = runner_qty
@@ -867,7 +954,9 @@ def _handle_nxt_rising_missed_tp1_partial_sell_execution(
         exec_price,
     )
     realized_profit_pct = (
-        calculate_net_profit_rate(safe_buy_price, avg_sell_price) if safe_buy_price > 0 else 0.0
+        calculate_net_profit_rate(safe_buy_price, avg_sell_price)
+        if safe_buy_price > 0
+        else 0.0
     )
     realized_pnl_krw = round(
         ((avg_sell_price - safe_buy_price) * filled_qty) if safe_buy_price > 0 else 0.0
@@ -935,51 +1024,57 @@ def _handle_scalp_revive_sell_execution(
     strategy: str,
 ) -> bool:
     revived_position_tag = normalize_position_tag(
-        'SCALPING',
-        target_stock.get('position_tag') or default_position_tag_for_strategy('SCALPING'),
+        "SCALPING",
+        target_stock.get("position_tag")
+        or default_position_tag_for_strategy("SCALPING"),
     )
     try:
         with DB.get_session() as session:
-            record = session.query(RecommendationHistory).filter_by(id=target_id).first()
+            record = (
+                session.query(RecommendationHistory).filter_by(id=target_id).first()
+            )
             if not record:
                 return False
-            record.status = 'COMPLETED'
+            record.status = "COMPLETED"
             record.sell_price = exec_price
             record.sell_time = now
             record.profit_rate = profit_rate
-            log_info(f"🎉 [매매 완료: ID {target_id}] {code} 실매도가: {exec_price:,}원 / 수익률: {profit_rate}%")
+            log_info(
+                f"🎉 [매매 완료: ID {target_id}] {code} 실매도가: {exec_price:,}원 / 수익률: {profit_rate}%"
+            )
 
             new_record = RecommendationHistory(
                 rec_date=now.date(),
                 stock_code=code,
                 stock_name=record.stock_name,
                 buy_price=0,
-                status='WATCHING',
-                strategy='SCALPING',
-                trade_type='SCALP',
+                status="WATCHING",
+                strategy="SCALPING",
+                trade_type="SCALP",
                 position_tag=revived_position_tag,
-                prob=record.prob
+                prob=record.prob,
             )
             session.add(new_record)
             session.flush()
             new_watch_id = new_record.id
 
             _publish_sell_execution_message(
-                name=target_stock.get('name') or '-',
-                pending_msg=target_stock.get('pending_sell_msg') or '',
+                name=target_stock.get("name") or "-",
+                pending_msg=target_stock.get("pending_sell_msg") or "",
                 audience=_receipt_audience(target_stock),
                 exec_price=exec_price,
                 profit_rate=profit_rate,
             )
             _log_holding_pipeline(
-                target_stock.get('name'),
+                target_stock.get("name"),
                 code,
                 target_id,
-                'sell_completed',
+                "sell_completed",
                 sell_price=int(exec_price or 0),
                 profit_rate=f"{profit_rate:+.2f}",
-                exit_rule=target_stock.get('last_exit_rule') or '-',
-                exit_decision_source=target_stock.get('last_exit_decision_source') or 'MANUAL',
+                exit_rule=target_stock.get("last_exit_rule") or "-",
+                exit_decision_source=target_stock.get("last_exit_decision_source")
+                or "MANUAL",
                 revive=True,
                 new_watch_id=int(new_watch_id or 0),
             )
@@ -992,20 +1087,30 @@ def _handle_scalp_revive_sell_execution(
                     buy_price=safe_buy_price,
                     sell_price=exec_price,
                     profit_rate=profit_rate,
-                    buy_qty=int(float(getattr(record, 'buy_qty', 0) or target_stock.get('buy_qty', 0) or 0)),
-                    exit_rule=target_stock.get('last_exit_rule') or '-',
+                    buy_qty=int(
+                        float(
+                            getattr(record, "buy_qty", 0)
+                            or target_stock.get("buy_qty", 0)
+                            or 0
+                        )
+                    ),
+                    exit_rule=target_stock.get("last_exit_rule") or "-",
                     strategy=strategy,
                     revive=True,
-                    peak_profit=target_stock.get('last_exit_peak_profit'),
-                    held_sec=target_stock.get('last_exit_held_sec'),
-                    current_ai_score=target_stock.get('last_exit_current_ai_score'),
-                    soft_stop_threshold_pct=target_stock.get('last_exit_soft_stop_threshold_pct'),
+                    peak_profit=target_stock.get("last_exit_peak_profit"),
+                    held_sec=target_stock.get("last_exit_held_sec"),
+                    current_ai_score=target_stock.get("last_exit_current_ai_score"),
+                    soft_stop_threshold_pct=target_stock.get(
+                        "last_exit_soft_stop_threshold_pct"
+                    ),
                     same_symbol_soft_stop_cooldown_would_block=target_stock.get(
-                        'last_exit_same_symbol_soft_stop_cooldown_would_block'
+                        "last_exit_same_symbol_soft_stop_cooldown_would_block"
                     ),
                 )
             except Exception as exc:
-                log_error(f"[POST_SELL] candidate record failed (id={target_id}): {exc}")
+                log_error(
+                    f"[POST_SELL] candidate record failed (id={target_id}): {exc}"
+                )
     except Exception as e:
         log_error(f"🚨 [DB 에러] ID {target_id} SELL 처리 중 에러: {e}")
         return False
@@ -1029,17 +1134,17 @@ def _apply_scalp_revive_memory_state(
     revived_at_ts: float | None = None,
 ) -> None:
     highest_prices.pop(code, None)
-    target_stock['id'] = new_watch_id
-    target_stock['status'] = 'WATCHING'
-    target_stock['buy_price'] = 0
-    target_stock['buy_qty'] = 0
-    target_stock['added_time'] = time.time()
-    target_stock['position_tag'] = revived_position_tag
+    target_stock["id"] = new_watch_id
+    target_stock["status"] = "WATCHING"
+    target_stock["buy_price"] = 0
+    target_stock["buy_qty"] = 0
+    target_stock["added_time"] = time.time()
+    target_stock["position_tag"] = revived_position_tag
     # Prevent a pre-sell WS snapshot from becoming the revived watcher's entry input.
-    target_stock['_scalp_revive_min_quote_ts'] = float(
+    target_stock["_scalp_revive_min_quote_ts"] = float(
         revived_at_ts if revived_at_ts is not None else time.time()
     )
-    move_orders_to_terminal(target_stock, reason='sell_revive_cleanup')
+    move_orders_to_terminal(target_stock, reason="sell_revive_cleanup")
     _clear_runtime_keys(target_stock, _SELL_REVIVE_RESET_KEYS)
 
 
@@ -1067,7 +1172,9 @@ def _emit_split_entry_followup_shadows(
     remaining_qty: int,
     new_qty: int,
 ) -> None:
-    if not bool(getattr(TRADING_RULES, "SPLIT_ENTRY_REBASE_INTEGRITY_SHADOW_ENABLED", False)):
+    if not bool(
+        getattr(TRADING_RULES, "SPLIT_ENTRY_REBASE_INTEGRITY_SHADOW_ENABLED", False)
+    ):
         return
 
     rebase_count = int(target_stock.get("_split_entry_rebase_shadow_count", 0) or 0) + 1
@@ -1076,7 +1183,12 @@ def _emit_split_entry_followup_shadows(
     emitted_second = now.strftime("%Y-%m-%dT%H:%M:%S")
     last_second = str(target_stock.get("_split_entry_rebase_shadow_last_second") or "")
     if emitted_second == last_second:
-        same_second_count = int(target_stock.get("_split_entry_rebase_shadow_same_second_count", 0) or 0) + 1
+        same_second_count = (
+            int(
+                target_stock.get("_split_entry_rebase_shadow_same_second_count", 0) or 0
+            )
+            + 1
+        )
     else:
         same_second_count = 1
     target_stock["_split_entry_rebase_shadow_last_second"] = emitted_second
@@ -1088,7 +1200,11 @@ def _emit_split_entry_followup_shadows(
         first_partial_qty = max(0, int(cum_filled_qty or 0))
         target_stock["_split_entry_first_partial_qty"] = first_partial_qty
 
-    split_entry_candidate = rebase_count >= 2 or fill_quality_upper == "PARTIAL_FILL" or first_partial_qty > 0
+    split_entry_candidate = (
+        rebase_count >= 2
+        or fill_quality_upper == "PARTIAL_FILL"
+        or first_partial_qty > 0
+    )
     if not split_entry_candidate:
         return
 
@@ -1117,20 +1233,29 @@ def _emit_split_entry_followup_shadows(
         integrity_flags=integrity_flag_text,
     )
 
-    if not bool(getattr(TRADING_RULES, "SPLIT_ENTRY_IMMEDIATE_RECHECK_SHADOW_ENABLED", False)):
+    if not bool(
+        getattr(TRADING_RULES, "SPLIT_ENTRY_IMMEDIATE_RECHECK_SHADOW_ENABLED", False)
+    ):
         return
 
-    expanded_after_partial = first_partial_qty > 0 and int(new_qty or 0) > first_partial_qty
+    expanded_after_partial = (
+        first_partial_qty > 0 and int(new_qty or 0) > first_partial_qty
+    )
     if not (expanded_after_partial or rebase_count >= 2):
         return
 
-    last_logged_count = int(target_stock.get("_split_entry_last_immediate_recheck_rebase_count", 0) or 0)
+    last_logged_count = int(
+        target_stock.get("_split_entry_last_immediate_recheck_rebase_count", 0) or 0
+    )
     if rebase_count <= last_logged_count:
         return
     target_stock["_split_entry_last_immediate_recheck_rebase_count"] = rebase_count
 
     trigger_reason = "partial_then_expand" if expanded_after_partial else "multi_rebase"
-    shadow_window_sec = int(getattr(TRADING_RULES, "SPLIT_ENTRY_IMMEDIATE_RECHECK_SHADOW_WINDOW_SEC", 90) or 90)
+    shadow_window_sec = int(
+        getattr(TRADING_RULES, "SPLIT_ENTRY_IMMEDIATE_RECHECK_SHADOW_WINDOW_SEC", 90)
+        or 90
+    )
     _log_holding_pipeline(
         target_stock.get("name"),
         code,
@@ -1153,11 +1278,12 @@ def _emit_split_entry_followup_shadows(
 def _find_buy_bundle_match(code: str, normalized_order_no: str):
     return next(
         (
-            stock for stock in ACTIVE_TARGETS
-            if str(stock.get('code', '')).strip()[:6] == code
+            stock
+            for stock in ACTIVE_TARGETS
+            if str(stock.get("code", "")).strip()[:6] == code
             and any(
-                str(order.get('ord_no', '') or '').strip() == normalized_order_no
-                for order in (stock.get('pending_entry_orders') or [])
+                str(order.get("ord_no", "") or "").strip() == normalized_order_no
+                for order in (stock.get("pending_entry_orders") or [])
             )
         ),
         None,
@@ -1168,11 +1294,12 @@ def _find_terminal_entry_target(normalized_order_no: str):
     terminal_match = get_terminal_entry_order(normalized_order_no)
     if not terminal_match:
         return None
-    stock_code = str(terminal_match.get('stock_code', '') or '').strip()[:6]
+    stock_code = str(terminal_match.get("stock_code", "") or "").strip()[:6]
     return next(
         (
-            stock for stock in ACTIVE_TARGETS
-            if str(stock.get('code', '')).strip()[:6] == stock_code
+            stock
+            for stock in ACTIVE_TARGETS
+            if str(stock.get("code", "")).strip()[:6] == stock_code
         ),
         None,
     )
@@ -1180,17 +1307,18 @@ def _find_terminal_entry_target(normalized_order_no: str):
 
 def _find_add_order_match(code: str, normalized_order_no: str):
     def _pending_add_ord_nos(stock: dict) -> set[str]:
-        raw = str(stock.get('pending_add_ord_no', '') or '').strip()
-        return {part.strip() for part in raw.split(',') if part.strip()}
+        raw = str(stock.get("pending_add_ord_no", "") or "").strip()
+        return {part.strip() for part in raw.split(",") if part.strip()}
 
     return next(
         (
-            stock for stock in ACTIVE_TARGETS
-            if str(stock.get('code', '')).strip()[:6] == code
-            and bool(stock.get('pending_add_order'))
+            stock
+            for stock in ACTIVE_TARGETS
+            if str(stock.get("code", "")).strip()[:6] == code
+            and bool(stock.get("pending_add_order"))
             and normalized_order_no in _pending_add_ord_nos(stock)
         ),
-        None
+        None,
     )
 
 
@@ -1209,9 +1337,9 @@ def _find_execution_target(code, exec_type, order_no):
     1) SELL_ORDERED status + sell_odno exact
     2) 단일 SELL_ORDERED candidate
     """
-    normalized_order_no = str(order_no or '').strip()
+    normalized_order_no = str(order_no or "").strip()
 
-    if exec_type == 'BUY':
+    if exec_type == "BUY":
         if normalized_order_no:
             bundle_match = _find_buy_bundle_match(code, normalized_order_no)
             if bundle_match:
@@ -1221,39 +1349,43 @@ def _find_execution_target(code, exec_type, order_no):
             if target:
                 return target
 
-        status_key = 'BUY_ORDERED'
-        order_key = 'odno'
+        status_key = "BUY_ORDERED"
+        order_key = "odno"
     else:
-        status_key = 'SELL_ORDERED'
-        order_key = 'sell_odno'
+        status_key = "SELL_ORDERED"
+        order_key = "sell_odno"
 
     status_candidates = [
-        stock for stock in ACTIVE_TARGETS
-        if str(stock.get('code', '')).strip()[:6] == code and stock.get('status') == status_key
+        stock
+        for stock in ACTIVE_TARGETS
+        if str(stock.get("code", "")).strip()[:6] == code
+        and stock.get("status") == status_key
     ]
 
     if normalized_order_no:
         exact_match = next(
             (
-                stock for stock in status_candidates
-                if str(stock.get(order_key, '')).strip() == normalized_order_no
+                stock
+                for stock in status_candidates
+                if str(stock.get(order_key, "")).strip() == normalized_order_no
             ),
-            None
+            None,
         )
         if exact_match:
             return exact_match
 
-        if exec_type == 'BUY':
+        if exec_type == "BUY":
             add_match = _find_add_order_match(code, normalized_order_no)
             if add_match:
                 return add_match
 
-    if exec_type == 'BUY':
+    if exec_type == "BUY":
         pending_add_candidates = [
-            stock for stock in ACTIVE_TARGETS
-            if str(stock.get('code', '')).strip()[:6] == code
-            and bool(stock.get('pending_add_order'))
-            and stock.get('status') == 'HOLDING'
+            stock
+            for stock in ACTIVE_TARGETS
+            if str(stock.get("code", "")).strip()[:6] == code
+            and bool(stock.get("pending_add_order"))
+            and stock.get("status") == "HOLDING"
         ]
         if len(pending_add_candidates) == 1:
             return pending_add_candidates[0]
@@ -1265,30 +1397,31 @@ def _find_execution_target(code, exec_type, order_no):
 
 
 def _execution_ignore_context(code: str, exec_type: str, order_no: str) -> str:
-    normalized_order_no = str(order_no or '').strip()
+    normalized_order_no = str(order_no or "").strip()
     matching_code_targets = [
-        stock for stock in ACTIVE_TARGETS
-        if str((stock or {}).get('code', '')).strip()[:6] == code
+        stock
+        for stock in ACTIVE_TARGETS
+        if str((stock or {}).get("code", "")).strip()[:6] == code
     ]
     target_summaries = []
     for stock in matching_code_targets[:5]:
-        pending_orders = stock.get('pending_entry_orders') or []
+        pending_orders = stock.get("pending_entry_orders") or []
         pending_ord_nos = [
-            str(order.get('ord_no', '') or '').strip() or '-'
+            str(order.get("ord_no", "") or "").strip() or "-"
             for order in pending_orders[:3]
         ]
         pending_add_ord_no = str(stock.get("pending_add_ord_no", "") or "-")
         target_summaries.append(
             "{status}:odno={odno}:sell_odno={sell_odno}:pending={pending}:pending_add={pending_add}".format(
-                status=str(stock.get('status', '') or '-'),
-                odno=str(stock.get('odno', '') or '-'),
-                sell_odno=str(stock.get('sell_odno', '') or '-'),
-                pending="|".join(pending_ord_nos) if pending_ord_nos else '-',
+                status=str(stock.get("status", "") or "-"),
+                odno=str(stock.get("odno", "") or "-"),
+                sell_odno=str(stock.get("sell_odno", "") or "-"),
+                pending="|".join(pending_ord_nos) if pending_ord_nos else "-",
                 pending_add=pending_add_ord_no,
             )
         )
     terminal_present = False
-    if exec_type == 'BUY' and normalized_order_no:
+    if exec_type == "BUY" and normalized_order_no:
         terminal_present = get_terminal_entry_order(normalized_order_no) is not None
     return (
         f"active_code_targets={len(matching_code_targets)} "
@@ -1302,10 +1435,12 @@ def _find_order_notice_target(code, exec_type, order_no):
     if target:
         return target
 
-    status_key = 'BUY_ORDERED' if exec_type == 'BUY' else 'SELL_ORDERED'
+    status_key = "BUY_ORDERED" if exec_type == "BUY" else "SELL_ORDERED"
     status_candidates = [
-        stock for stock in ACTIVE_TARGETS
-        if str(stock.get('code', '')).strip()[:6] == code and stock.get('status') == status_key
+        stock
+        for stock in ACTIVE_TARGETS
+        if str(stock.get("code", "")).strip()[:6] == code
+        and stock.get("status") == status_key
     ]
     if len(status_candidates) == 1:
         return status_candidates[0]
@@ -1315,8 +1450,11 @@ def _find_order_notice_target(code, exec_type, order_no):
 def _apply_order_notice_to_target(target_stock, *, code, exec_type, order_no, status):
     changed = False
 
-    if exec_type == 'BUY':
-        if bool(target_stock.get("pending_add_order")) and str(target_stock.get("status") or "") == "HOLDING":
+    if exec_type == "BUY":
+        if (
+            bool(target_stock.get("pending_add_order"))
+            and str(target_stock.get("status") or "") == "HOLDING"
+        ):
             if order_no:
                 _append_pending_add_order_no(target_stock, order_no)
                 notices = target_stock.get("pending_add_notice_by_order_no")
@@ -1332,12 +1470,12 @@ def _apply_order_notice_to_target(target_stock, *, code, exec_type, order_no, st
                 )
             return
 
-        pending_orders = target_stock.get('pending_entry_orders') or []
+        pending_orders = target_stock.get("pending_entry_orders") or []
         exact_match = None
         blank_match = None
 
         for order in pending_orders:
-            existing_ord_no = str(order.get('ord_no', '') or '').strip()
+            existing_ord_no = str(order.get("ord_no", "") or "").strip()
             if existing_ord_no == order_no:
                 exact_match = order
                 break
@@ -1346,20 +1484,20 @@ def _apply_order_notice_to_target(target_stock, *, code, exec_type, order_no, st
 
         target_order = exact_match or blank_match
         if target_order:
-            if not str(target_order.get('ord_no', '') or '').strip():
-                target_order['ord_no'] = order_no
+            if not str(target_order.get("ord_no", "") or "").strip():
+                target_order["ord_no"] = order_no
                 changed = True
-            target_order['notice_status'] = status
-            target_order['notice_at'] = time.time()
+            target_order["notice_status"] = status
+            target_order["notice_at"] = time.time()
             changed = True
 
-        if order_no and not str(target_stock.get('odno', '') or '').strip():
-            target_stock['odno'] = order_no
+        if order_no and not str(target_stock.get("odno", "") or "").strip():
+            target_stock["odno"] = order_no
             changed = True
 
-    elif exec_type == 'SELL':
-        if order_no and not str(target_stock.get('sell_odno', '') or '').strip():
-            target_stock['sell_odno'] = order_no
+    elif exec_type == "SELL":
+        if order_no and not str(target_stock.get("sell_odno", "") or "").strip():
+            target_stock["sell_odno"] = order_no
             changed = True
 
     if changed:
@@ -1378,16 +1516,18 @@ def _avg_from_totals(total_amount: float, total_qty: int) -> float:
 def weighted_avg_price(old_price, old_qty, exec_price, exec_qty):
     if old_qty <= 0:
         return exec_price
-    return _avg_from_totals((old_price * old_qty) + (exec_price * exec_qty), old_qty + exec_qty)
+    return _avg_from_totals(
+        (old_price * old_qty) + (exec_price * exec_qty), old_qty + exec_qty
+    )
 
 
 def handle_order_notice(notice_data):
-    code = str(notice_data.get('code', '') or '').strip()[:6]
-    exec_type = str(notice_data.get('type', '') or '').upper()
-    order_no = str(notice_data.get('order_no', '') or '').strip()
-    status = str(notice_data.get('status', '') or '').strip()
+    code = str(notice_data.get("code", "") or "").strip()[:6]
+    exec_type = str(notice_data.get("type", "") or "").upper()
+    order_no = str(notice_data.get("order_no", "") or "").strip()
+    status = str(notice_data.get("status", "") or "").strip()
 
-    if not code or exec_type not in {'BUY', 'SELL'} or not order_no:
+    if not code or exec_type not in {"BUY", "SELL"} or not order_no:
         return
 
     with _active_state_lock():
@@ -1410,24 +1550,24 @@ def _clear_pending_add_meta(target_stock):
 def _apply_scale_in_protection(target_stock, add_type):
     """추가매수 체결 후 보호선 보정(1차 단순 버전)."""
     try:
-        raw_strategy = (target_stock.get('strategy') or 'KOSPI_ML').upper()
-        strategy = 'SCALPING' if raw_strategy in ['SCALPING', 'SCALP'] else raw_strategy
-        avg_price = float(target_stock.get('buy_price') or 0)
+        raw_strategy = (target_stock.get("strategy") or "KOSPI_ML").upper()
+        strategy = "SCALPING" if raw_strategy in ["SCALPING", "SCALP"] else raw_strategy
+        avg_price = float(target_stock.get("buy_price") or 0)
         if avg_price <= 0:
             return False
 
-        if add_type == 'PYRAMID':
-            if strategy == 'SCALPING':
+        if add_type == "PYRAMID":
+            if strategy == "SCALPING":
                 protect_price = avg_price * 1.003
             else:
                 protect_price = avg_price * 1.01
 
-            existing = float(target_stock.get('trailing_stop_price') or 0)
-            target_stock['trailing_stop_price'] = max(existing, protect_price)
-        elif add_type == 'AVG_DOWN':
-            target_stock.pop('soft_stop_micro_grace_started_at', None)
-            target_stock.pop('soft_stop_micro_grace_extension_used', None)
-            target_stock['soft_stop_reset_after_avg_down'] = True
+            existing = float(target_stock.get("trailing_stop_price") or 0)
+            target_stock["trailing_stop_price"] = max(existing, protect_price)
+        elif add_type == "AVG_DOWN":
+            target_stock.pop("soft_stop_micro_grace_started_at", None)
+            target_stock.pop("soft_stop_micro_grace_extension_used", None)
+            target_stock["soft_stop_reset_after_avg_down"] = True
         return True
     except Exception as e:
         log_error(f"⚠️ [ADD_PROTECT] 보호선 보정 실패: {e}")
@@ -1437,7 +1577,7 @@ def _apply_scale_in_protection(target_stock, add_type):
 def _is_ok_response(res):
     if not isinstance(res, dict):
         return bool(res)
-    return str(res.get('return_code', res.get('rt_cd', ''))) == '0'
+    return str(res.get("return_code", res.get("rt_cd", ""))) == "0"
 
 
 def _refresh_scalp_preset_exit_order(target_stock, code, total_qty):
@@ -1450,10 +1590,12 @@ def _refresh_scalp_preset_exit_order(target_stock, code, total_qty):
     """
     from src.engine import kiwoom_orders
 
-    preset_ord_no = str(target_stock.get('preset_tp_ord_no', '') or '').strip()
+    preset_ord_no = str(target_stock.get("preset_tp_ord_no", "") or "").strip()
 
     if preset_ord_no:
-        cancel_res = kiwoom_orders.send_cancel_order(code=code, orig_ord_no=preset_ord_no, token=KIWOOM_TOKEN, qty=0)
+        cancel_res = kiwoom_orders.send_cancel_order(
+            code=code, orig_ord_no=preset_ord_no, token=KIWOOM_TOKEN, qty=0
+        )
         if not _is_ok_response(cancel_res):
             log_error(
                 f"⚠️ [SCALP_TRAILING_UNIFIED] {target_stock.get('name')}({code}) "
@@ -1464,18 +1606,18 @@ def _refresh_scalp_preset_exit_order(target_stock, code, total_qty):
         f"[SCALP_TRAILING_UNIFIED] {target_stock.get('name')}({code}) "
         "preset TP order disabled; exit will be evaluated by scalp_trailing_take_profit."
     )
-    target_stock['preset_tp_ord_no'] = ''
-    target_stock['preset_tp_qty'] = 0
-    target_stock['preset_tp_price'] = 0
-    target_stock['protect_profit_pct'] = None
+    target_stock["preset_tp_ord_no"] = ""
+    target_stock["preset_tp_qty"] = 0
+    target_stock["preset_tp_price"] = 0
+    target_stock["protect_profit_pct"] = None
     return True
 
 
 def _update_db_for_buy(target_id, exec_price, now, receipt_snapshot):
     """비동기로 실행되는 BUY 체결 DB 업데이트 및 알림"""
     try:
-        buy_qty = int(receipt_snapshot.get('buy_qty') or 0)
-        avg_buy_price = float(receipt_snapshot.get('buy_price') or exec_price or 0)
+        buy_qty = int(receipt_snapshot.get("buy_qty") or 0)
+        avg_buy_price = float(receipt_snapshot.get("buy_price") or exec_price or 0)
         with DB.get_session() as session:
             update_fields = {
                 "buy_price": avg_buy_price,
@@ -1486,31 +1628,42 @@ def _update_db_for_buy(target_id, exec_price, now, receipt_snapshot):
             initial_buy_qty = _safe_int(receipt_snapshot.get("initial_buy_qty"), 0)
             if initial_buy_qty > 0:
                 update_fields["initial_buy_qty"] = initial_buy_qty
-            session.query(RecommendationHistory).filter_by(id=target_id).update(update_fields)
+            session.query(RecommendationHistory).filter_by(id=target_id).update(
+                update_fields
+            )
 
         log_info(
             f"✅ [영수증: ID {target_id}] {receipt_snapshot.get('code')} "
             f"실제 매수 체결 반영 완료! avg={avg_buy_price:,} qty={buy_qty}"
         )
 
-        if not receipt_snapshot.get('buy_execution_notified'):
-            pending_msg = receipt_snapshot.get('pending_buy_msg')
+        if not receipt_snapshot.get("buy_execution_notified"):
+            pending_msg = receipt_snapshot.get("pending_buy_msg")
             audience = _receipt_audience(receipt_snapshot)
             if pending_msg:
-                final_msg = pending_msg.replace("그물망 투척!", "그물망 매수 체결!").replace("스나이퍼 포착!", "스나이퍼 매수 체결!")
+                final_msg = pending_msg.replace(
+                    "그물망 투척!", "그물망 매수 체결!"
+                ).replace("스나이퍼 포착!", "스나이퍼 매수 체결!")
                 final_msg += f"\n✅ **평균 체결가:** `{avg_buy_price:,.0f}원` / **체결수량:** `{buy_qty}주`"
-                event_bus.publish('TELEGRAM_BROADCAST', {'message': final_msg, 'audience': audience, 'parse_mode': 'Markdown'})
+                event_bus.publish(
+                    "TELEGRAM_BROADCAST",
+                    {
+                        "message": final_msg,
+                        "audience": audience,
+                        "parse_mode": "Markdown",
+                    },
+                )
             else:
                 event_bus.publish(
-                    'TELEGRAM_BROADCAST',
+                    "TELEGRAM_BROADCAST",
                     {
-                        'message': (
+                        "message": (
                             f"🛒 **[{receipt_snapshot.get('name')}]** 매수 체결 완료!\n"
                             f"평균 체결가: `{avg_buy_price:,.0f}원`\n체결수량: `{buy_qty}주`"
                         ),
-                        'audience': audience,
-                        'parse_mode': 'Markdown',
-                    }
+                        "audience": audience,
+                        "parse_mode": "Markdown",
+                    },
                 )
     except Exception as e:
         log_error(f"🚨 [DB 에러] ID {target_id} BUY 처리 중 에러: {e}")
@@ -1525,10 +1678,14 @@ def _publish_entry_partial_fill_message(
     remaining_qty: int,
     allow_defer: bool = True,
 ) -> bool:
-    if requested_entry_qty <= 0 or cum_filled_qty <= 0 or cum_filled_qty >= requested_entry_qty:
+    if (
+        requested_entry_qty <= 0
+        or cum_filled_qty <= 0
+        or cum_filled_qty >= requested_entry_qty
+    ):
         return False
 
-    last_notified_qty = int(target_stock.get('entry_partial_fill_notified_qty', 0) or 0)
+    last_notified_qty = int(target_stock.get("entry_partial_fill_notified_qty", 0) or 0)
     if cum_filled_qty <= last_notified_qty:
         return False
 
@@ -1551,7 +1708,7 @@ def _publish_entry_partial_fill_message(
         )
         return False
 
-    pending_msg = target_stock.get('pending_buy_msg') or ''
+    pending_msg = target_stock.get("pending_buy_msg") or ""
     if pending_msg:
         partial_msg = pending_msg
     else:
@@ -1569,11 +1726,11 @@ def _publish_entry_partial_fill_message(
         return False
     try:
         event_bus.publish(
-            'TELEGRAM_BROADCAST',
+            "TELEGRAM_BROADCAST",
             {
-                'message': partial_msg,
-                'audience': _receipt_audience(target_stock),
-                'parse_mode': 'Markdown',
+                "message": partial_msg,
+                "audience": _receipt_audience(target_stock),
+                "parse_mode": "Markdown",
             },
         )
     except Exception as exc:
@@ -1582,11 +1739,13 @@ def _publish_entry_partial_fill_message(
             f"error={exc}"
         )
         return False
-    target_stock['entry_partial_fill_notified_qty'] = int(cum_filled_qty or 0)
+    target_stock["entry_partial_fill_notified_qty"] = int(cum_filled_qty or 0)
     return True
 
 
-def flush_deferred_entry_partial_fill_notice(target_stock: dict[str, Any] | None) -> bool:
+def flush_deferred_entry_partial_fill_notice(
+    target_stock: dict[str, Any] | None,
+) -> bool:
     target_stock = target_stock if isinstance(target_stock, dict) else {}
     deferred = target_stock.get("entry_partial_fill_deferred_notice")
     if not isinstance(deferred, dict):
@@ -1612,16 +1771,17 @@ def _publish_add_execution_notification(
 ):
     if event_bus is None:
         return False
-    _type_kr = {'AVG_DOWN': '물타기', 'PYRAMID': '불타기'}.get(add_type, add_type)
-    _strategy_kr = {'SCALPING': '스캘핑', 'SWING': '스윙'}.get(
-        receipt_snapshot.get('strategy', ''), receipt_snapshot.get('strategy', ''))
-    new_avg = _safe_float(receipt_snapshot.get('buy_price'), 0.0)
-    new_qty = _safe_int(receipt_snapshot.get('buy_qty'), 0)
+    _type_kr = {"AVG_DOWN": "물타기", "PYRAMID": "불타기"}.get(add_type, add_type)
+    _strategy_kr = {"SCALPING": "스캘핑", "SWING": "스윙"}.get(
+        receipt_snapshot.get("strategy", ""), receipt_snapshot.get("strategy", "")
+    )
+    new_avg = _safe_float(receipt_snapshot.get("buy_price"), 0.0)
+    new_qty = _safe_int(receipt_snapshot.get("buy_qty"), 0)
     notice_prev_price = _safe_float(
-        receipt_snapshot.get('pending_add_initial_buy_price'), fallback_prev_price
+        receipt_snapshot.get("pending_add_initial_buy_price"), fallback_prev_price
     )
     notice_prev_qty = _safe_int(
-        receipt_snapshot.get('pending_add_initial_buy_qty'), fallback_prev_qty
+        receipt_snapshot.get("pending_add_initial_buy_qty"), fallback_prev_qty
     )
     notice_fill_qty = max(0, new_qty - notice_prev_qty)
     notice_fill_avg = 0.0
@@ -1630,7 +1790,7 @@ def _publish_add_execution_notification(
             (new_avg * new_qty) - (notice_prev_price * notice_prev_qty)
         ) / notice_fill_qty
     if notice_fill_avg <= 0:
-        notice_fill_avg = _safe_float(receipt_snapshot.get('last_add_fill_price'), 0.0)
+        notice_fill_avg = _safe_float(receipt_snapshot.get("last_add_fill_price"), 0.0)
     msg = (
         f"➕ 추가매수 체결 완료\n"
         f"종목: {receipt_snapshot.get('name')} ({receipt_snapshot.get('code')})\n"
@@ -1640,30 +1800,35 @@ def _publish_add_execution_notification(
         f"새 평단가: {int(new_avg):,}원 | 총 수량: {new_qty}주\n"
         f"누적 추가매수: {_safe_int(receipt_snapshot.get('add_count'), 0)}회"
     )
-    event_bus.publish('TELEGRAM_BROADCAST', {
-        'message': msg,
-        'audience': _receipt_audience(receipt_snapshot),
-        'parse_mode': None,
-    })
+    event_bus.publish(
+        "TELEGRAM_BROADCAST",
+        {
+            "message": msg,
+            "audience": _receipt_audience(receipt_snapshot),
+            "parse_mode": None,
+        },
+    )
     return True
 
 
 def flush_deferred_add_completion_notice(target_stock: dict[str, Any] | None) -> bool:
     target_stock = target_stock if isinstance(target_stock, dict) else {}
-    if not target_stock.get('pending_add_execution_notice_pending'):
+    if not target_stock.get("pending_add_execution_notice_pending"):
         return False
-    requested_qty = _safe_int(target_stock.get('pending_add_qty'), 0)
-    filled_qty = _safe_int(target_stock.get('pending_add_filled_qty'), 0)
+    requested_qty = _safe_int(target_stock.get("pending_add_qty"), 0)
+    filled_qty = _safe_int(target_stock.get("pending_add_filled_qty"), 0)
     if requested_qty > 0 and filled_qty < requested_qty:
         return False
     snapshot = _receipt_snapshot(target_stock, _ADD_RECEIPT_SNAPSHOT_KEYS)
-    snapshot['last_add_fill_price'] = _safe_int(target_stock.get('last_add_fill_price'), 0)
+    snapshot["last_add_fill_price"] = _safe_int(
+        target_stock.get("last_add_fill_price"), 0
+    )
     published = _publish_add_execution_notification(
         snapshot,
-        str(target_stock.get('pending_add_type') or '').upper(),
+        str(target_stock.get("pending_add_type") or "").upper(),
     )
     if published:
-        target_stock.pop('pending_add_execution_notice_pending', None)
+        target_stock.pop("pending_add_execution_notice_pending", None)
     return published
 
 
@@ -1680,20 +1845,28 @@ def _update_db_for_add(
     """비동기로 실행되는 추가매수 체결 DB 업데이트"""
     try:
         with DB.get_session() as session:
-            record = session.query(RecommendationHistory).filter_by(id=target_id).first()
+            record = (
+                session.query(RecommendationHistory).filter_by(id=target_id).first()
+            )
             if not record:
                 return
 
             old_price = float(record.buy_price) if record.buy_price is not None else 0.0
             old_qty = int(record.buy_qty or 0)
-            new_avg = float(receipt_snapshot.get('buy_price') or exec_price or 0)
-            new_qty = int(receipt_snapshot.get('buy_qty') or 0)
+            new_avg = float(receipt_snapshot.get("buy_price") or exec_price or 0)
+            new_qty = int(receipt_snapshot.get("buy_qty") or 0)
 
             record.buy_price = new_avg
             record.buy_qty = new_qty
-            record.add_count = int(receipt_snapshot.get('add_count', record.add_count or 0) or 0)
-            record.avg_down_count = int(receipt_snapshot.get('avg_down_count', record.avg_down_count or 0) or 0)
-            record.pyramid_count = int(receipt_snapshot.get('pyramid_count', record.pyramid_count or 0) or 0)
+            record.add_count = int(
+                receipt_snapshot.get("add_count", record.add_count or 0) or 0
+            )
+            record.avg_down_count = int(
+                receipt_snapshot.get("avg_down_count", record.avg_down_count or 0) or 0
+            )
+            record.pyramid_count = int(
+                receipt_snapshot.get("pyramid_count", record.pyramid_count or 0) or 0
+            )
             initial_buy_qty = _safe_int(
                 receipt_snapshot.get("initial_buy_qty"),
                 _safe_int(getattr(record, "initial_buy_qty", 0), 0),
@@ -1702,29 +1875,42 @@ def _update_db_for_add(
                 record.initial_buy_qty = initial_buy_qty
             record.scale_in_filled_qty = _safe_int(
                 receipt_snapshot.get("scale_in_filled_qty"),
-                _safe_int(getattr(record, "scale_in_filled_qty", 0), 0) + int(exec_qty or 0),
+                _safe_int(getattr(record, "scale_in_filled_qty", 0), 0)
+                + int(exec_qty or 0),
             )
             record.last_add_type = add_type
-            record.last_add_reason = str(receipt_snapshot.get('last_add_reason') or '').strip()
+            record.last_add_reason = str(
+                receipt_snapshot.get("last_add_reason") or ""
+            ).strip()
             record.last_add_at = now
             record.shallow_volatility_avg_down_count = int(
                 receipt_snapshot.get(
-                    'shallow_volatility_avg_down_count',
-                    getattr(record, 'shallow_volatility_avg_down_count', 0) or 0,
+                    "shallow_volatility_avg_down_count",
+                    getattr(record, "shallow_volatility_avg_down_count", 0) or 0,
                 )
                 or 0
             )
-            shallow_last_at = float(receipt_snapshot.get('shallow_volatility_avg_down_last_at') or 0.0)
+            shallow_last_at = float(
+                receipt_snapshot.get("shallow_volatility_avg_down_last_at") or 0.0
+            )
             if shallow_last_at > 0:
-                record.shallow_volatility_avg_down_last_at = datetime.fromtimestamp(shallow_last_at)
-            record.scale_in_locked = bool(receipt_snapshot.get('scale_in_locked', False))
+                record.shallow_volatility_avg_down_last_at = datetime.fromtimestamp(
+                    shallow_last_at
+                )
+            record.scale_in_locked = bool(
+                receipt_snapshot.get("scale_in_locked", False)
+            )
             add_count_after = int(record.add_count or 0)
 
             # 보호선 보정값을 DB에도 반영 (있을 때만)
-            if receipt_snapshot.get('trailing_stop_price') is not None:
-                record.trailing_stop_price = float(receipt_snapshot.get('trailing_stop_price') or 0)
-            if receipt_snapshot.get('hard_stop_price') is not None:
-                record.hard_stop_price = float(receipt_snapshot.get('hard_stop_price') or 0)
+            if receipt_snapshot.get("trailing_stop_price") is not None:
+                record.trailing_stop_price = float(
+                    receipt_snapshot.get("trailing_stop_price") or 0
+                )
+            if receipt_snapshot.get("hard_stop_price") is not None:
+                record.hard_stop_price = float(
+                    receipt_snapshot.get("hard_stop_price") or 0
+                )
 
         log_info(
             f"✅ [영수증: ID {target_id}] {receipt_snapshot.get('code')} 추가매수 체결 반영 "
@@ -1734,7 +1920,7 @@ def _update_db_for_add(
         if publish_notification is None:
             publish_notification = bool(count_increment)
         if event_bus and publish_notification:
-            receipt_snapshot['last_add_fill_price'] = int(exec_price or 0)
+            receipt_snapshot["last_add_fill_price"] = int(exec_price or 0)
             _publish_add_execution_notification(
                 receipt_snapshot,
                 add_type,
@@ -1745,24 +1931,36 @@ def _update_db_for_add(
         log_error(f"🚨 [DB 에러] ID {target_id} ADD 처리 중 에러: {e}")
 
 
-def _update_db_for_sell(target_id, exec_price, now, receipt_snapshot, strategy, is_scalp_revive):
+def _update_db_for_sell(
+    target_id, exec_price, now, receipt_snapshot, strategy, is_scalp_revive
+):
     """비동기로 실행되는 SELL 체결 DB 업데이트 및 알림 (스캘핑 부활 제외)"""
     try:
         with DB.get_session() as session:
-            record = session.query(RecommendationHistory).filter_by(id=target_id).first()
+            record = (
+                session.query(RecommendationHistory).filter_by(id=target_id).first()
+            )
             if not record:
                 return
 
-            safe_buy_price = float(record.buy_price) if record.buy_price is not None else 0.0
+            safe_buy_price = (
+                float(record.buy_price) if record.buy_price is not None else 0.0
+            )
             if safe_buy_price > 0:
                 profit_rate = calculate_net_profit_rate(safe_buy_price, exec_price)
             else:
                 profit_rate = 0.0
-                log_error(f"⚠️ [수익률 계산 불가] ID {target_id}의 매수가(buy_price)가 누락되어 수익률을 0%로 처리합니다.")
-            pre_add_avg_price = _safe_float(receipt_snapshot.get("pre_add_avg_price"), 0.0)
+                log_error(
+                    f"⚠️ [수익률 계산 불가] ID {target_id}의 매수가(buy_price)가 누락되어 수익률을 0%로 처리합니다."
+                )
+            pre_add_avg_price = _safe_float(
+                receipt_snapshot.get("pre_add_avg_price"), 0.0
+            )
             pre_add_qty = _safe_int(receipt_snapshot.get("pre_add_qty"), 0)
             if pre_add_avg_price > 0 and pre_add_qty > 0:
-                no_scale_in_counterfactual_profit_pct = calculate_net_profit_rate(pre_add_avg_price, exec_price)
+                no_scale_in_counterfactual_profit_pct = calculate_net_profit_rate(
+                    pre_add_avg_price, exec_price
+                )
                 receipt_snapshot["no_scale_in_counterfactual_profit_pct"] = round(
                     float(no_scale_in_counterfactual_profit_pct),
                     4,
@@ -1772,7 +1970,7 @@ def _update_db_for_sell(target_id, exec_price, now, receipt_snapshot, strategy, 
                     4,
                 )
 
-            record.status = 'COMPLETED'
+            record.status = "COMPLETED"
             record.sell_price = exec_price
             record.sell_time = now
             record.profit_rate = profit_rate
@@ -1807,8 +2005,8 @@ def _update_db_for_sell(target_id, exec_price, now, receipt_snapshot, strategy, 
             )
 
             _publish_sell_execution_message(
-                name=receipt_snapshot.get('name') or '-',
-                pending_msg=receipt_snapshot.get('pending_sell_msg') or '',
+                name=receipt_snapshot.get("name") or "-",
+                pending_msg=receipt_snapshot.get("pending_sell_msg") or "",
                 audience=_receipt_audience(receipt_snapshot),
                 exec_price=exec_price,
                 profit_rate=profit_rate,
@@ -1879,7 +2077,9 @@ def _update_db_for_sell(target_id, exec_price, now, receipt_snapshot, strategy, 
                     ),
                 )
             except Exception as exc:
-                log_error(f"[POST_SELL] candidate record failed (id={target_id}): {exc}")
+                log_error(
+                    f"[POST_SELL] candidate record failed (id={target_id}): {exc}"
+                )
     except Exception as e:
         log_error(f"🚨 [DB 에러] ID {target_id} SELL 처리 중 에러: {e}")
 
@@ -1913,114 +2113,132 @@ def _handle_add_buy_execution(
         return
     exec_qty = effective_qty
     exec_price = effective_price
-    add_type = (target_stock.get('pending_add_type') or '').upper()
-    old_price = float(target_stock.get('buy_price') or 0)
-    old_qty = int(target_stock.get('buy_qty') or 0)
-    if 'pending_add_initial_buy_price' not in target_stock:
-        target_stock['pending_add_initial_buy_price'] = old_price
-    if 'pending_add_initial_buy_qty' not in target_stock:
-        target_stock['pending_add_initial_buy_qty'] = old_qty
-    if _safe_int(target_stock.get('initial_buy_qty'), 0) <= 0:
-        target_stock['initial_buy_qty'] = max(
+    add_type = (target_stock.get("pending_add_type") or "").upper()
+    old_price = float(target_stock.get("buy_price") or 0)
+    old_qty = int(target_stock.get("buy_qty") or 0)
+    if "pending_add_initial_buy_price" not in target_stock:
+        target_stock["pending_add_initial_buy_price"] = old_price
+    if "pending_add_initial_buy_qty" not in target_stock:
+        target_stock["pending_add_initial_buy_qty"] = old_qty
+    if _safe_int(target_stock.get("initial_buy_qty"), 0) <= 0:
+        target_stock["initial_buy_qty"] = max(
             0,
-            _safe_int(target_stock.get('pending_add_initial_buy_qty'), old_qty),
+            _safe_int(target_stock.get("pending_add_initial_buy_qty"), old_qty),
         )
-    target_stock['scale_in_filled_qty'] = max(
+    target_stock["scale_in_filled_qty"] = max(
         0,
-        _safe_int(target_stock.get('scale_in_filled_qty'), 0) + int(exec_qty or 0),
+        _safe_int(target_stock.get("scale_in_filled_qty"), 0) + int(exec_qty or 0),
     )
-    request_qty = int(requested_qty or target_stock.get('pending_add_qty', 0) or 0)
-    pending_ord_no = str(target_stock.get('pending_add_ord_no', '') or '').strip()
-    pending_ord_nos = {part.strip() for part in pending_ord_no.split(',') if part.strip()}
-    history_order_no = order_no if order_no in pending_ord_nos else (pending_ord_no or order_no)
+    request_qty = int(requested_qty or target_stock.get("pending_add_qty", 0) or 0)
+    pending_ord_no = str(target_stock.get("pending_add_ord_no", "") or "").strip()
+    pending_ord_nos = {
+        part.strip() for part in pending_ord_no.split(",") if part.strip()
+    }
+    history_order_no = (
+        order_no if order_no in pending_ord_nos else (pending_ord_no or order_no)
+    )
     new_qty = old_qty + exec_qty
     if old_qty > 0:
         total_qty = old_qty + exec_qty
-        new_avg = _avg_from_totals((old_price * old_qty) + (exec_price * exec_qty), total_qty)
+        new_avg = _avg_from_totals(
+            (old_price * old_qty) + (exec_price * exec_qty), total_qty
+        )
     else:
         new_avg = exec_price
     add_reference_avg_price = float(
-        target_stock.get('pending_add_initial_buy_price') or old_price or 0.0
+        target_stock.get("pending_add_initial_buy_price") or old_price or 0.0
     )
-    if add_type == 'AVG_DOWN' and add_reference_avg_price > 0:
+    if add_type == "AVG_DOWN" and add_reference_avg_price > 0:
         if float(exec_price) < add_reference_avg_price:
-            add_economic_direction = 'averaging_down'
+            add_economic_direction = "averaging_down"
         elif float(exec_price) > add_reference_avg_price:
-            add_economic_direction = 'recovery_add_above_average'
+            add_economic_direction = "recovery_add_above_average"
         else:
-            add_economic_direction = 'recovery_add_at_average'
-    elif add_type == 'PYRAMID':
-        add_economic_direction = 'pyramid'
+            add_economic_direction = "recovery_add_at_average"
+    elif add_type == "PYRAMID":
+        add_economic_direction = "pyramid"
     else:
-        add_economic_direction = 'unclassified'
+        add_economic_direction = "unclassified"
     avg_price_improved = bool(
-        add_type == 'AVG_DOWN'
+        add_type == "AVG_DOWN"
         and add_reference_avg_price > 0
         and float(new_avg) < add_reference_avg_price
     )
 
-    target_stock['status'] = 'HOLDING'
-    target_stock['buy_price'] = new_avg
-    target_stock['buy_qty'] = new_qty
-    target_stock['pre_add_avg_price'] = round(float(old_price or 0.0), 4)
-    target_stock['post_add_avg_price'] = round(float(new_avg or 0.0), 4)
-    target_stock['pre_add_qty'] = int(old_qty or 0)
-    target_stock['post_add_qty'] = int(new_qty or 0)
-    target_stock['last_add_type'] = add_type
-    pending_add_reason = str(target_stock.get('pending_add_reason') or '').strip()
-    target_stock['last_add_reason'] = pending_add_reason
-    target_stock['last_add_economic_direction'] = add_economic_direction
-    target_stock['last_add_avg_price_improved'] = avg_price_improved
-    target_stock['last_add_at'] = now
-    target_stock['last_add_fill_price'] = int(exec_price or 0)
+    target_stock["status"] = "HOLDING"
+    target_stock["buy_price"] = new_avg
+    target_stock["buy_qty"] = new_qty
+    target_stock["pre_add_avg_price"] = round(float(old_price or 0.0), 4)
+    target_stock["post_add_avg_price"] = round(float(new_avg or 0.0), 4)
+    target_stock["pre_add_qty"] = int(old_qty or 0)
+    target_stock["post_add_qty"] = int(new_qty or 0)
+    target_stock["last_add_type"] = add_type
+    pending_add_reason = str(target_stock.get("pending_add_reason") or "").strip()
+    target_stock["last_add_reason"] = pending_add_reason
+    target_stock["last_add_economic_direction"] = add_economic_direction
+    target_stock["last_add_avg_price_improved"] = avg_price_improved
+    target_stock["last_add_at"] = now
+    target_stock["last_add_fill_price"] = int(exec_price or 0)
     now_ts = time.time()
-    target_stock['last_add_time'] = now_ts
-    if (
-        add_type == 'AVG_DOWN'
-        and pending_add_reason in {'reversal_add_ok', 'aggressive_reversal_add_ok', 'shallow_volatility_avg_down'}
-    ):
-        target_stock['reversal_add_state'] = 'POST_ADD_EVAL'
-        target_stock['reversal_add_executed_at'] = now.timestamp()
-    if not target_stock.get('holding_started_at'):
-        target_stock['holding_started_at'] = now
+    target_stock["last_add_time"] = now_ts
+    if add_type == "AVG_DOWN" and pending_add_reason in {
+        "reversal_add_ok",
+        "aggressive_reversal_add_ok",
+        "shallow_volatility_avg_down",
+    }:
+        target_stock["reversal_add_state"] = "POST_ADD_EVAL"
+        target_stock["reversal_add_executed_at"] = now.timestamp()
+    if not target_stock.get("holding_started_at"):
+        target_stock["holding_started_at"] = now
     if isinstance(highest_prices, dict):
         # 추가매수 후 포지션 평단/수량이 바뀌면 기존 고점 기준 trailing은 새 포지션에 과민하다.
         highest_prices[code] = max(float(exec_price or 0), float(new_avg or 0))
 
     count_increment = False
-    if not target_stock.get('pending_add_counted'):
-        target_stock['add_count'] = int(target_stock.get('add_count', 0) or 0) + 1
-        if add_type == 'AVG_DOWN':
-            target_stock['avg_down_count'] = int(target_stock.get('avg_down_count', 0) or 0) + 1
-            if pending_add_reason == 'shallow_volatility_avg_down':
-                target_stock['shallow_volatility_avg_down_count'] = (
-                    int(target_stock.get('shallow_volatility_avg_down_count', 0) or 0) + 1
+    if not target_stock.get("pending_add_counted"):
+        target_stock["add_count"] = int(target_stock.get("add_count", 0) or 0) + 1
+        if add_type == "AVG_DOWN":
+            target_stock["avg_down_count"] = (
+                int(target_stock.get("avg_down_count", 0) or 0) + 1
+            )
+            if pending_add_reason == "shallow_volatility_avg_down":
+                target_stock["shallow_volatility_avg_down_count"] = (
+                    int(target_stock.get("shallow_volatility_avg_down_count", 0) or 0)
+                    + 1
                 )
-                target_stock['shallow_volatility_avg_down_last_at'] = now_ts
-        elif add_type == 'PYRAMID':
-            target_stock['pyramid_count'] = int(target_stock.get('pyramid_count', 0) or 0) + 1
-        target_stock['pending_add_counted'] = True
+                target_stock["shallow_volatility_avg_down_last_at"] = now_ts
+        elif add_type == "PYRAMID":
+            target_stock["pyramid_count"] = (
+                int(target_stock.get("pyramid_count", 0) or 0) + 1
+            )
+        target_stock["pending_add_counted"] = True
         count_increment = True
 
     if count_increment:
-        target_stock['pending_add_execution_notice_pending'] = True
+        target_stock["pending_add_execution_notice_pending"] = True
 
-    pending_qty = int(target_stock.get('pending_add_qty', 0) or 0)
+    pending_qty = int(target_stock.get("pending_add_qty", 0) or 0)
     add_bundle_completed = pending_qty <= 0 or filled_qty >= pending_qty
-    publish_add_notification = bool(
-        target_stock.get('pending_add_execution_notice_pending')
-    ) and add_bundle_completed
+    publish_add_notification = (
+        bool(target_stock.get("pending_add_execution_notice_pending"))
+        and add_bundle_completed
+    )
 
     protection_ok = _apply_scale_in_protection(target_stock, add_type)
-    strategy = normalize_strategy(target_stock.get('strategy'))
-    pos_tag = normalize_position_tag(strategy, target_stock.get('position_tag'))
-    if strategy == 'SCALPING' and is_default_position_tag(strategy, pos_tag):
-        base_buy_price = int(target_stock.get('buy_price') or exec_price or 0)
-        target_stock['preset_tp_price'] = kiwoom_utils.get_target_price_up(base_buy_price, 1.5)
-        protection_ok = _refresh_scalp_preset_exit_order(target_stock, code, new_qty) and protection_ok
+    strategy = normalize_strategy(target_stock.get("strategy"))
+    pos_tag = normalize_position_tag(strategy, target_stock.get("position_tag"))
+    if strategy == "SCALPING" and is_default_position_tag(strategy, pos_tag):
+        base_buy_price = int(target_stock.get("buy_price") or exec_price or 0)
+        target_stock["preset_tp_price"] = kiwoom_utils.get_target_price_up(
+            base_buy_price, 1.5
+        )
+        protection_ok = (
+            _refresh_scalp_preset_exit_order(target_stock, code, new_qty)
+            and protection_ok
+        )
 
     if not protection_ok:
-        target_stock['scale_in_locked'] = True
+        target_stock["scale_in_locked"] = True
         log_error(
             f"⚠️ [ADD_PROTECT] {target_stock.get('name')}({code}) 보호선 재설정 실패로 "
             "scale_in_locked=True"
@@ -2029,7 +2247,9 @@ def _handle_add_buy_execution(
     add_receipt_snapshot = _receipt_snapshot(target_stock, _ADD_RECEIPT_SNAPSHOT_KEYS)
     fill_event_ts = time.time()
     split_leg_meta = _add_receipt_leg_meta(target_stock, order_no)
-    split_leg_fields = _split_receipt_leg_meta_fields(split_leg_meta, filled_at_ts=fill_event_ts)
+    split_leg_fields = _split_receipt_leg_meta_fields(
+        split_leg_meta, filled_at_ts=fill_event_ts
+    )
     history_note = _split_receipt_history_note(split_leg_fields)
     _update_db_for_add(
         target_id,
@@ -2045,10 +2265,10 @@ def _handle_add_buy_execution(
         DB,
         recommendation_id=target_id,
         stock_code=code,
-        stock_name=target_stock.get('name'),
-        strategy=target_stock.get('strategy'),
+        stock_name=target_stock.get("name"),
+        strategy=target_stock.get("strategy"),
         add_type=add_type,
-        event_type='EXECUTED',
+        event_type="EXECUTED",
         order_no=history_order_no,
         request_qty=request_qty or pending_qty or exec_qty,
         executed_qty=exec_qty,
@@ -2057,12 +2277,12 @@ def _handle_add_buy_execution(
         new_buy_price=new_avg,
         prev_buy_qty=old_qty,
         new_buy_qty=new_qty,
-        add_count_after=target_stock.get('add_count', 0),
-        reason='receipt_confirmed',
+        add_count_after=target_stock.get("add_count", 0),
+        reason="receipt_confirmed",
         note=history_note,
     )
     if publish_add_notification:
-        target_stock.pop('pending_add_execution_notice_pending', None)
+        target_stock.pop("pending_add_execution_notice_pending", None)
     if pending_qty > 0 and filled_qty >= pending_qty:
         _clear_pending_add_meta(target_stock)
     log_info(
@@ -2072,14 +2292,14 @@ def _handle_add_buy_execution(
         f"new_avg={new_avg} new_qty={new_qty} add_count={target_stock.get('add_count')}"
     )
     _log_holding_pipeline(
-        target_stock.get('name'),
+        target_stock.get("name"),
         code,
         target_id,
-        'scale_in_executed',
-        metric_role='execution_quality_real_only',
-        decision_authority='broker_receipt_observation_only',
+        "scale_in_executed",
+        metric_role="execution_quality_real_only",
+        decision_authority="broker_receipt_observation_only",
         runtime_effect=False,
-        forbidden_uses='runtime_threshold_apply/provider_route_change/bot_restart/sim_execution_quality_claim',
+        forbidden_uses="runtime_threshold_apply/provider_route_change/bot_restart/sim_execution_quality_claim",
         actual_order_submitted=True,
         broker_order_forbidden=False,
         add_type=add_type,
@@ -2097,19 +2317,24 @@ def _handle_add_buy_execution(
         ),
         new_avg_price=f"{float(new_avg or 0):.2f}",
         new_buy_qty=int(new_qty or 0),
-        add_count=int(target_stock.get('add_count', 0) or 0),
-        avg_down_count=int(target_stock.get('avg_down_count', 0) or 0),
+        add_count=int(target_stock.get("add_count", 0) or 0),
+        avg_down_count=int(target_stock.get("avg_down_count", 0) or 0),
         add_reason=pending_add_reason or "-",
         add_economic_direction=add_economic_direction,
         avg_price_improved=avg_price_improved,
         add_reference_avg_price=f"{add_reference_avg_price:.2f}",
         pre_add_avg_price=f"{float(old_price or 0):.2f}",
         post_add_avg_price=f"{float(new_avg or 0):.2f}",
-        shallow_volatility_avg_down_count=int(target_stock.get('shallow_volatility_avg_down_count', 0) or 0),
-        shallow_volatility_avg_down_last_at=target_stock.get('shallow_volatility_avg_down_last_at', '-'),
-        reversal_add_state=target_stock.get('reversal_add_state', '-'),
-        reversal_add_executed_at=target_stock.get('reversal_add_executed_at', '-'),
+        shallow_volatility_avg_down_count=int(
+            target_stock.get("shallow_volatility_avg_down_count", 0) or 0
+        ),
+        shallow_volatility_avg_down_last_at=target_stock.get(
+            "shallow_volatility_avg_down_last_at", "-"
+        ),
+        reversal_add_state=target_stock.get("reversal_add_state", "-"),
+        reversal_add_executed_at=target_stock.get("reversal_add_executed_at", "-"),
     )
+
 
 def _handle_entry_buy_execution(
     *,
@@ -2121,17 +2346,19 @@ def _handle_entry_buy_execution(
     exec_qty: int,
     now: datetime,
 ) -> None:
-    effective_exec_qty, order_requested_qty, order_filled_qty = _resolve_entry_effective_fill_qty(
-        target_stock=target_stock,
-        code=code,
-        order_no=order_no,
-        exec_qty=exec_qty,
+    effective_exec_qty, order_requested_qty, order_filled_qty = (
+        _resolve_entry_effective_fill_qty(
+            target_stock=target_stock,
+            code=code,
+            order_no=order_no,
+            exec_qty=exec_qty,
+        )
     )
     if effective_exec_qty <= 0:
         return
 
-    old_qty = int(target_stock.get('buy_qty') or 0)
-    old_price = float(target_stock.get('buy_price') or 0)
+    old_qty = int(target_stock.get("buy_qty") or 0)
+    old_price = float(target_stock.get("buy_price") or 0)
     if old_qty <= 0:
         _clear_split_entry_shadow_state(target_stock)
     new_qty = old_qty + effective_exec_qty
@@ -2142,16 +2369,16 @@ def _handle_entry_buy_execution(
         )
     else:
         new_avg = exec_price
-    entry_mode = str(target_stock.get('entry_mode', 'normal') or 'normal')
+    entry_mode = str(target_stock.get("entry_mode", "normal") or "normal")
 
-    pending_entry_orders = target_stock.get('pending_entry_orders') or []
+    pending_entry_orders = target_stock.get("pending_entry_orders") or []
     if pending_entry_orders and order_no:
         for pending_order in pending_entry_orders:
-            if str(pending_order.get('ord_no', '') or '').strip() != order_no:
+            if str(pending_order.get("ord_no", "") or "").strip() != order_no:
                 continue
-            requested_qty = int(pending_order.get('qty', 0) or 0)
-            pending_order['last_fill_price'] = exec_price
-            pending_order['last_fill_at'] = time.time()
+            requested_qty = int(pending_order.get("qty", 0) or 0)
+            pending_order["last_fill_price"] = exec_price
+            pending_order["last_fill_at"] = time.time()
             log_info(
                 f"[ENTRY_FILL] {target_stock.get('name')}({code}) "
                 f"tag={pending_order.get('tag')} ord_no={order_no} "
@@ -2161,51 +2388,69 @@ def _handle_entry_buy_execution(
             )
             break
 
-    target_stock['status'] = 'HOLDING'
-    target_stock['buy_price'] = new_avg
-    target_stock['buy_qty'] = new_qty
-    target_stock['entry_filled_qty'] = int(target_stock.get('entry_filled_qty', 0) or 0) + effective_exec_qty
-    target_stock['entry_fill_amount'] = int(target_stock.get('entry_fill_amount', 0) or 0) + (exec_price * effective_exec_qty)
-    target_stock['buy_time'] = now
-    if not target_stock.get('holding_started_at'):
-        target_stock['holding_started_at'] = now
+    target_stock["status"] = "HOLDING"
+    target_stock["buy_price"] = new_avg
+    target_stock["buy_qty"] = new_qty
+    target_stock["entry_filled_qty"] = (
+        int(target_stock.get("entry_filled_qty", 0) or 0) + effective_exec_qty
+    )
+    target_stock["entry_fill_amount"] = int(
+        target_stock.get("entry_fill_amount", 0) or 0
+    ) + (exec_price * effective_exec_qty)
+    target_stock["buy_time"] = now
+    if not target_stock.get("holding_started_at"):
+        target_stock["holding_started_at"] = now
     highest_prices[code] = max(highest_prices.get(code, 0), exec_price)
 
     submit_ai_score = _resolve_entry_submit_ai_score(target_stock, order_no)
     holding_ai_seeded = False
     if submit_ai_score is not None:
-        target_stock['entry_submit_ai_score'] = round(float(submit_ai_score), 2)
-        target_stock['holding_entry_ai_score'] = round(float(submit_ai_score), 2)
+        target_stock["entry_submit_ai_score"] = round(float(submit_ai_score), 2)
+        target_stock["holding_entry_ai_score"] = round(float(submit_ai_score), 2)
         if old_qty <= 0:
-            target_stock['rt_ai_prob'] = max(0.0, min(1.0, float(submit_ai_score) / 100.0))
-            target_stock['holding_ai_score_seeded_from_entry'] = True
+            target_stock["rt_ai_prob"] = max(
+                0.0, min(1.0, float(submit_ai_score) / 100.0)
+            )
+            target_stock["holding_ai_score_seeded_from_entry"] = True
             holding_ai_seeded = True
 
-    requested_entry_qty = int(target_stock.get('entry_requested_qty', target_stock.get('requested_buy_qty', 0)) or 0)
-    cum_filled_qty = int(target_stock.get('entry_filled_qty', 0) or 0)
-    remaining_qty = max(0, requested_entry_qty - cum_filled_qty) if requested_entry_qty > 0 else 0
+    requested_entry_qty = int(
+        target_stock.get(
+            "entry_requested_qty", target_stock.get("requested_buy_qty", 0)
+        )
+        or 0
+    )
+    cum_filled_qty = int(target_stock.get("entry_filled_qty", 0) or 0)
+    remaining_qty = (
+        max(0, requested_entry_qty - cum_filled_qty) if requested_entry_qty > 0 else 0
+    )
     fill_quality = (
         "FULL_FILL"
         if requested_entry_qty > 0 and cum_filled_qty >= requested_entry_qty
         else ("PARTIAL_FILL" if requested_entry_qty > 0 else "UNKNOWN")
     )
-    target_stock['entry_fill_quality'] = fill_quality
-    if max(
-        _safe_int(target_stock.get('add_count'), 0),
-        _safe_int(target_stock.get('avg_down_count'), 0),
-        _safe_int(target_stock.get('pyramid_count'), 0),
-        _safe_int(target_stock.get('scale_in_filled_qty'), 0),
-    ) <= 0:
+    target_stock["entry_fill_quality"] = fill_quality
+    if (
+        max(
+            _safe_int(target_stock.get("add_count"), 0),
+            _safe_int(target_stock.get("avg_down_count"), 0),
+            _safe_int(target_stock.get("pyramid_count"), 0),
+            _safe_int(target_stock.get("scale_in_filled_qty"), 0),
+        )
+        <= 0
+    ):
         # Persist the cumulative initial bundle as fills arrive. A restart
         # between partial fills must not freeze the baseline at zero or at the
         # first partial quantity.
-        target_stock['initial_buy_qty'] = max(
-            _safe_int(target_stock.get('initial_buy_qty'), 0),
+        target_stock["initial_buy_qty"] = max(
+            _safe_int(target_stock.get("initial_buy_qty"), 0),
             max(0, new_qty),
         )
 
-    preset_tp_price = int(target_stock.get('preset_tp_price') or 0)
-    preset_tp_ord_no_before = str(target_stock.get('preset_tp_ord_no', '') or '').strip()
+    preset_tp_price = int(target_stock.get("preset_tp_price") or 0)
+    preset_tp_ord_no_before = str(
+        target_stock.get("preset_tp_ord_no", "") or ""
+    ).strip()
     preset_tp_ord_no_after = preset_tp_ord_no_before
     preset_sync_status = "NOT_APPLICABLE"
     preset_sync_reason = "non_scalping_or_non_default_tag"
@@ -2264,11 +2509,11 @@ def _handle_entry_buy_execution(
             )
             or min(preset_hard_stop_pct - 0.5, -1.2)
         )
-        if str(target_stock.get('entry_mode', '')).strip().lower() == 'fallback':
+        if str(target_stock.get("entry_mode", "")).strip().lower() == "fallback":
             preset_hard_stop_pct = float(
                 getattr(
                     TRADING_RULES,
-                    'SCALP_PRESET_HARD_STOP_FALLBACK_BASE_PCT',
+                    "SCALP_PRESET_HARD_STOP_FALLBACK_BASE_PCT",
                     preset_hard_stop_pct,
                 )
                 or preset_hard_stop_pct
@@ -2276,7 +2521,7 @@ def _handle_entry_buy_execution(
             preset_hard_stop_grace_sec = int(
                 getattr(
                     TRADING_RULES,
-                    'SCALP_PRESET_HARD_STOP_FALLBACK_BASE_GRACE_SEC',
+                    "SCALP_PRESET_HARD_STOP_FALLBACK_BASE_GRACE_SEC",
                     preset_hard_stop_grace_sec,
                 )
                 or preset_hard_stop_grace_sec
@@ -2284,28 +2529,30 @@ def _handle_entry_buy_execution(
             preset_hard_stop_emergency_pct = float(
                 getattr(
                     TRADING_RULES,
-                    'SCALP_PRESET_HARD_STOP_FALLBACK_BASE_EMERGENCY_PCT',
+                    "SCALP_PRESET_HARD_STOP_FALLBACK_BASE_EMERGENCY_PCT",
                     preset_hard_stop_emergency_pct,
                 )
                 or preset_hard_stop_emergency_pct
             )
-        target_stock['hard_stop_pct'] = preset_hard_stop_pct
-        target_stock['hard_stop_grace_sec'] = preset_hard_stop_grace_sec
-        target_stock['hard_stop_emergency_pct'] = preset_hard_stop_emergency_pct
-        target_stock['protect_profit_pct'] = None
-        target_stock['ai_review_done'] = False
-        target_stock['ai_review_score'] = None
-        target_stock['ai_review_action'] = None
-        target_stock['last_ai_reviewed_at'] = None
-        target_stock['exit_requested'] = False
-        target_stock['exit_order_type'] = None
-        target_stock['exit_order_time'] = None
+        target_stock["hard_stop_pct"] = preset_hard_stop_pct
+        target_stock["hard_stop_grace_sec"] = preset_hard_stop_grace_sec
+        target_stock["hard_stop_emergency_pct"] = preset_hard_stop_emergency_pct
+        target_stock["protect_profit_pct"] = None
+        target_stock["ai_review_done"] = False
+        target_stock["ai_review_score"] = None
+        target_stock["ai_review_action"] = None
+        target_stock["last_ai_reviewed_at"] = None
+        target_stock["exit_requested"] = False
+        target_stock["exit_order_type"] = None
+        target_stock["exit_order_time"] = None
 
-        sell_qty = int(target_stock.get('buy_qty') or exec_qty or 0)
+        sell_qty = int(target_stock.get("buy_qty") or exec_qty or 0)
         refreshed = _refresh_scalp_preset_exit_order(target_stock, code, sell_qty)
-        preset_tp_ord_no_after = str(target_stock.get('preset_tp_ord_no', '') or '').strip()
-        preset_tp_qty = int(target_stock.get('preset_tp_qty', 0) or 0)
-        preset_tp_price = int(target_stock.get('preset_tp_price') or 0)
+        preset_tp_ord_no_after = str(
+            target_stock.get("preset_tp_ord_no", "") or ""
+        ).strip()
+        preset_tp_qty = int(target_stock.get("preset_tp_qty", 0) or 0)
+        preset_tp_price = int(target_stock.get("preset_tp_price") or 0)
 
         if not refreshed:
             preset_sync_status = "REFRESH_FAILED"
@@ -2319,10 +2566,10 @@ def _handle_entry_buy_execution(
             f"preset TP setup skipped; scalp_trailing_take_profit owns exit."
         )
         _log_holding_pipeline(
-            target_stock.get('name'),
+            target_stock.get("name"),
             code,
             target_id,
-            'preset_exit_setup_disabled_trailing_unified',
+            "preset_exit_setup_disabled_trailing_unified",
             preset_tp_price=int(preset_tp_price or 0),
             qty=int(sell_qty or 0),
             ord_no=preset_tp_ord_no_before or "-",
@@ -2331,10 +2578,10 @@ def _handle_entry_buy_execution(
         )
 
     _log_holding_pipeline(
-        target_stock.get('name'),
+        target_stock.get("name"),
         code,
         target_id,
-        'position_rebased_after_fill',
+        "position_rebased_after_fill",
         fill_qty=int(effective_exec_qty or 0),
         raw_fill_qty=int(exec_qty or 0),
         order_requested_qty=int(order_requested_qty or 0),
@@ -2422,7 +2669,9 @@ def _handle_entry_buy_execution(
     )
 
     buy_receipt_snapshot = _receipt_snapshot(target_stock, _BUY_RECEIPT_SNAPSHOT_KEYS)
-    entry_partial_fill_pending = requested_entry_qty > 0 and cum_filled_qty < requested_entry_qty
+    entry_partial_fill_pending = (
+        requested_entry_qty > 0 and cum_filled_qty < requested_entry_qty
+    )
     buy_receipt_snapshot.update(
         {
             "entry_fill_quality": fill_quality,
@@ -2432,9 +2681,10 @@ def _handle_entry_buy_execution(
             "entry_partial_fill_pending": entry_partial_fill_pending,
         }
     )
-    buy_receipt_snapshot['buy_execution_notified'] = bool(
-        buy_receipt_snapshot.get('buy_execution_notified', False)
-    ) or entry_partial_fill_pending
+    buy_receipt_snapshot["buy_execution_notified"] = (
+        bool(buy_receipt_snapshot.get("buy_execution_notified", False))
+        or entry_partial_fill_pending
+    )
     if entry_partial_fill_pending:
         partial_notice_sent = _publish_entry_partial_fill_message(
             target_stock,
@@ -2449,17 +2699,17 @@ def _handle_entry_buy_execution(
             f"partial_notice_sent={partial_notice_sent} "
             "reason=wait_full_entry_bundle_before_buy_execution_telegram"
         )
-    elif not buy_receipt_snapshot.get('buy_execution_notified'):
-        target_stock['buy_execution_notified'] = True
-        target_stock.pop('entry_partial_fill_notified_qty', None)
-        target_stock.pop('entry_partial_fill_deferred_notice', None)
-        target_stock.pop('entry_partial_fill_deferred_at', None)
-        target_stock.pop('pending_buy_msg', None)
+    elif not buy_receipt_snapshot.get("buy_execution_notified"):
+        target_stock["buy_execution_notified"] = True
+        target_stock.pop("entry_partial_fill_notified_qty", None)
+        target_stock.pop("entry_partial_fill_deferred_notice", None)
+        target_stock.pop("entry_partial_fill_deferred_at", None)
+        target_stock.pop("pending_buy_msg", None)
 
     threading.Thread(
         target=_update_db_for_buy,
         args=(target_id, exec_price, now, buy_receipt_snapshot),
-        daemon=True
+        daemon=True,
     ).start()
 
 
@@ -2468,17 +2718,17 @@ def handle_real_execution(exec_data):
     웹소켓에서 주문 체결(00) 통보가 오면 이 함수가 즉시 실행됩니다.
     고유 ID(id)를 추적하여 해당 매매 건의 실제 체결가를 정확히 기록합니다.
     """
-    code = str(exec_data.get('code', '')).strip()[:6]
-    exec_type = str(exec_data.get('type', '')).upper()
-    order_no = str(exec_data.get('order_no', '') or '').strip()
+    code = str(exec_data.get("code", "")).strip()[:6]
+    exec_type = str(exec_data.get("type", "")).upper()
+    order_no = str(exec_data.get("order_no", "") or "").strip()
 
     try:
-        exec_price = int(float(exec_data.get('price', 0) or 0))
+        exec_price = int(float(exec_data.get("price", 0) or 0))
     except Exception:
         exec_price = 0
 
     try:
-        exec_qty = int(float(exec_data.get('qty', 0) or 0))
+        exec_qty = int(float(exec_data.get("qty", 0) or 0))
     except Exception:
         exec_qty = 0
 
@@ -2487,27 +2737,31 @@ def handle_real_execution(exec_data):
 
     state = _get_fast_state(code)
     if state and exec_qty > 0:
-        with state['lock']:
+        with state["lock"]:
             matched = False
 
-            if exec_type == 'BUY':
-                if order_no and order_no == str(state.get('buy_ord_no', '')):
-                    state['cum_buy_qty'] += exec_qty
-                    state['cum_buy_amount'] += exec_price * exec_qty
-                    state['avg_buy_price'] = _avg_from_totals(state['cum_buy_amount'], state['cum_buy_qty'])
-                    state['updated_at'] = _now_ts()
+            if exec_type == "BUY":
+                if order_no and order_no == str(state.get("buy_ord_no", "")):
+                    state["cum_buy_qty"] += exec_qty
+                    state["cum_buy_amount"] += exec_price * exec_qty
+                    state["avg_buy_price"] = _avg_from_totals(
+                        state["cum_buy_amount"], state["cum_buy_qty"]
+                    )
+                    state["updated_at"] = _now_ts()
                     matched = True
 
-            elif exec_type == 'SELL':
+            elif exec_type == "SELL":
                 valid_sell_ord_nos = {
-                    str(state.get('sell_ord_no', '') or ''),
-                    str(state.get('pending_cancel_ord_no', '') or ''),
+                    str(state.get("sell_ord_no", "") or ""),
+                    str(state.get("pending_cancel_ord_no", "") or ""),
                 }
                 if order_no and order_no in valid_sell_ord_nos:
-                    state['cum_sell_qty'] += exec_qty
-                    state['cum_sell_amount'] += exec_price * exec_qty
-                    state['avg_sell_price'] = _avg_from_totals(state['cum_sell_amount'], state['cum_sell_qty'])
-                    state['updated_at'] = _now_ts()
+                    state["cum_sell_qty"] += exec_qty
+                    state["cum_sell_amount"] += exec_price * exec_qty
+                    state["avg_sell_price"] = _avg_from_totals(
+                        state["cum_sell_amount"], state["cum_sell_qty"]
+                    )
+                    state["updated_at"] = _now_ts()
                     matched = True
 
         if matched:
@@ -2526,20 +2780,28 @@ def handle_real_execution(exec_data):
             )
             return
 
-        target_id = target_stock.get('id')
+        target_id = target_stock.get("id")
         if not target_id:
-            log_error(f"🚨 [영수증] 종목 {code}의 고유 ID가 메모리에 없습니다. DB 업데이트가 불가능합니다.")
+            log_error(
+                f"🚨 [영수증] 종목 {code}의 고유 ID가 메모리에 없습니다. DB 업데이트가 불가능합니다."
+            )
             return
         is_scalp_revive = False
 
         # ==========================================
         # 1️⃣ DB 상태 업데이트 (ID 기반 정밀 타격)
         # ==========================================
-        if exec_type == 'BUY':
-            pending_add = bool(target_stock.get('pending_add_order'))
-            pending_ord_no = str(target_stock.get('pending_add_ord_no', '') or '').strip()
-            pending_ord_nos = {part.strip() for part in pending_ord_no.split(',') if part.strip()}
-            is_add_fill = pending_add and (not order_no or order_no in pending_ord_nos or not pending_ord_nos)
+        if exec_type == "BUY":
+            pending_add = bool(target_stock.get("pending_add_order"))
+            pending_ord_no = str(
+                target_stock.get("pending_add_ord_no", "") or ""
+            ).strip()
+            pending_ord_nos = {
+                part.strip() for part in pending_ord_no.split(",") if part.strip()
+            }
+            is_add_fill = pending_add and (
+                not order_no or order_no in pending_ord_nos or not pending_ord_nos
+            )
 
             if is_add_fill:
                 _handle_add_buy_execution(
@@ -2551,7 +2813,7 @@ def handle_real_execution(exec_data):
                     exec_qty=exec_qty,
                     now=now,
                 )
-            elif pending_add and str(target_stock.get('status') or '') == 'HOLDING':
+            elif pending_add and str(target_stock.get("status") or "") == "HOLDING":
                 log_info(
                     f"[ADD_FILL_IGNORED] {target_stock.get('name')}({code}) "
                     f"ord_no={order_no or '-'} pending_add_ord_no={pending_ord_no or '-'} "
@@ -2567,9 +2829,11 @@ def handle_real_execution(exec_data):
                     exec_qty=exec_qty,
                     now=now,
                 )
-            
-        elif exec_type == 'SELL':
-            sell_context = _resolve_sell_execution_context(target_id, target_stock, exec_price, now_t)
+
+        elif exec_type == "SELL":
+            sell_context = _resolve_sell_execution_context(
+                target_id, target_stock, exec_price, now_t
+            )
             if not sell_context:
                 return
             _, safe_buy_price, profit_rate, strategy, is_scalp_revive = sell_context

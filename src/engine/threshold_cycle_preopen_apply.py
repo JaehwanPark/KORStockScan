@@ -143,9 +143,13 @@ LOCK_ALLOWED_CLOSE_KEYWORDS = {
     "receipt_missing",
 }
 HOLD_CARRY_FORWARD_BLOCK_REASON_KEYS: dict[str, frozenset[str]] = {
-    "source_quality_hard_block": frozenset({"source_quality_blocked", "source_quality_blocker"}),
+    "source_quality_hard_block": frozenset(
+        {"source_quality_blocked", "source_quality_blocker"}
+    ),
     "severe_loss_guard": frozenset({"severe_loss", "excessive_drawdown"}),
-    "order_provenance_breach": frozenset({"provenance_breach", "order_provenance", "order_failure"}),
+    "order_provenance_breach": frozenset(
+        {"provenance_breach", "order_provenance", "order_failure"}
+    ),
     "same_stage_owner_conflict": frozenset({"same_stage_owner_conflict"}),
 }
 RETIRED_RUNTIME_FAMILY_REASONS = {
@@ -395,17 +399,23 @@ AI_NUMERIC_CONSISTENCY_RECHECK_FAMILY = "ai_numeric_consistency_recheck_runtime"
 PRE_SUBMIT_LIQUIDITY_RELIEF_FAMILY = "pre_submit_liquidity_relief_runtime"
 WEAK_CONTEXT_LATE_ENTRY_GUARD_FAMILY = "weak_context_late_entry_guard_runtime"
 ENTRY_OPPORTUNITY_RECHECK_FAMILY = "entry_opportunity_recheck_runtime"
-SCORE65_74_STRONG_MICRO_OVERRIDE_FAMILY = "score65_74_recovery_probe_strong_micro_override_runtime"
+SCORE65_74_STRONG_MICRO_OVERRIDE_FAMILY = (
+    "score65_74_recovery_probe_strong_micro_override_runtime"
+)
 ENTRY_PRICE_LIVE_TUNING_MARKER_ENV = "KORSTOCKSCAN_ENTRY_PRICE_LIVE_TUNING_SELECTED"
 ENTRY_STAGE_LIVE_TUNING_MARKER_ENV = "KORSTOCKSCAN_ENTRY_STAGE_LIVE_TUNING_SELECTED"
-REAL_PYRAMID_SCALE_IN_QUALITY_GUARD_FAMILY = "real_pyramid_scale_in_quality_guard_runtime"
+REAL_PYRAMID_SCALE_IN_QUALITY_GUARD_FAMILY = (
+    "real_pyramid_scale_in_quality_guard_runtime"
+)
 SCALE_IN_LIVE_TUNING_MARKER_ENV = "KORSTOCKSCAN_SCALE_IN_LIVE_TUNING_SELECTED"
 SOFT_STOP_DYNAMIC_GRACE_FAMILY = "soft_stop_dynamic_grace_runtime"
 PRESET_TP_SOFT_STOP_FAMILY = "preset_tp_soft_stop_runtime"
 PROFIT_STAGNATION_EXIT_FAMILY = "profit_stagnation_exit_runtime"
 NEVER_GREEN_DEFER_CLAMP_FAMILY = "never_green_defer_clamp_runtime"
 HOLDING_EXIT_LIVE_TUNING_MARKER_ENV = "KORSTOCKSCAN_HOLDING_EXIT_LIVE_TUNING_SELECTED"
-PRESET_TP_EXIT_LIVE_TUNING_MARKER_ENV = "KORSTOCKSCAN_PRESET_TP_EXIT_LIVE_TUNING_SELECTED"
+PRESET_TP_EXIT_LIVE_TUNING_MARKER_ENV = (
+    "KORSTOCKSCAN_PRESET_TP_EXIT_LIVE_TUNING_SELECTED"
+)
 SCALPING_SCANNER_REAL_SOURCE_GUARD_ENV_KEYS = frozenset(
     {
         "KORSTOCKSCAN_SCALP_SCANNER_REAL_SOURCE_GUARD_ENABLED",
@@ -592,7 +602,11 @@ def _int_or_default(value: Any, default: int) -> int | None:
 
 def _is_swing_pre_final_auto_approved(request: dict[str, Any]) -> bool:
     state = str(request.get("calibration_state") or "").strip()
-    contract = request.get("auto_promotion_contract") if isinstance(request.get("auto_promotion_contract"), dict) else {}
+    contract = (
+        request.get("auto_promotion_contract")
+        if isinstance(request.get("auto_promotion_contract"), dict)
+        else {}
+    )
     return (
         state == "dry_run_auto_apply_ready"
         and bool(request.get("auto_approval_required"))
@@ -608,8 +622,12 @@ def _latest_report_before(target_date: str) -> Path | None:
         report_date = path.stem.replace("threshold_cycle_", "")
         if report_date < target_date:
             candidates.append((report_date, path))
-    for path in CALIBRATION_REPORT_DIR.glob("threshold_cycle_calibration_*_postclose.json"):
-        report_date = path.stem.replace("threshold_cycle_calibration_", "").replace("_postclose", "")
+    for path in CALIBRATION_REPORT_DIR.glob(
+        "threshold_cycle_calibration_*_postclose.json"
+    ):
+        report_date = path.stem.replace("threshold_cycle_calibration_", "").replace(
+            "_postclose", ""
+        )
         if report_date < target_date:
             candidates.append((report_date, path))
     if not candidates:
@@ -638,15 +656,23 @@ def runtime_env_verify_path(target_date: str) -> Path:
 
 
 def swing_runtime_approval_report_path(source_date: str) -> Path:
-    return SWING_RUNTIME_APPROVAL_REPORT_DIR / f"swing_runtime_approval_{source_date}.json"
+    return (
+        SWING_RUNTIME_APPROVAL_REPORT_DIR / f"swing_runtime_approval_{source_date}.json"
+    )
 
 
 def swing_runtime_approval_artifact_path(source_date: str) -> Path:
-    return SWING_RUNTIME_APPROVAL_ARTIFACT_DIR / f"swing_runtime_approvals_{source_date}.json"
+    return (
+        SWING_RUNTIME_APPROVAL_ARTIFACT_DIR
+        / f"swing_runtime_approvals_{source_date}.json"
+    )
 
 
 def scalp_sim_scale_in_window_artifact_path(source_date: str) -> Path:
-    return SWING_RUNTIME_APPROVAL_ARTIFACT_DIR / f"scalp_sim_scale_in_window_expansion_{source_date}.json"
+    return (
+        SWING_RUNTIME_APPROVAL_ARTIFACT_DIR
+        / f"scalp_sim_scale_in_window_expansion_{source_date}.json"
+    )
 
 
 def _bridge_artifact_path_for_family(family: str, source_date: str) -> Path | None:
@@ -658,10 +684,20 @@ def _bridge_artifact_path_for_family(family: str, source_date: str) -> Path | No
 
 
 def _greenfield_policy_block_reason(item: dict[str, Any]) -> str:
-    recommended = item.get("recommended_values") if isinstance(item.get("recommended_values"), dict) else {}
-    policy_file = str(recommended.get("policy_file") or item.get("greenfield_policy_file") or "").strip()
-    recommended_version = str(recommended.get("policy_version") or item.get("candidate_id") or "")
-    return validate_greenfield_policy_file(policy_file, expected_version=recommended_version or None)
+    recommended = (
+        item.get("recommended_values")
+        if isinstance(item.get("recommended_values"), dict)
+        else {}
+    )
+    policy_file = str(
+        recommended.get("policy_file") or item.get("greenfield_policy_file") or ""
+    ).strip()
+    recommended_version = str(
+        recommended.get("policy_version") or item.get("candidate_id") or ""
+    )
+    return validate_greenfield_policy_file(
+        policy_file, expected_version=recommended_version or None
+    )
 
 
 def _bridge_candidate_float(value: Any) -> float | None:
@@ -674,7 +710,12 @@ def _bridge_candidate_float(value: Any) -> float | None:
 
 
 def _bridge_source_quality_pass(value: Any) -> bool:
-    return str(value or "").strip().lower() in {"pass", "ok", "clean", "source_quality_pass"}
+    return str(value or "").strip().lower() in {
+        "pass",
+        "ok",
+        "clean",
+        "source_quality_pass",
+    }
 
 
 def _runtime_bridge_candidate_contract_blockers(item: dict[str, Any]) -> list[str]:
@@ -682,16 +723,24 @@ def _runtime_bridge_candidate_contract_blockers(item: dict[str, Any]) -> list[st
     if (
         item.get("source_quality_blocked")
         or item.get("source_quality_blocker")
-        or (isinstance(item.get("source_quality_blockers"), list) and item.get("source_quality_blockers"))
+        or (
+            isinstance(item.get("source_quality_blockers"), list)
+            and item.get("source_quality_blockers")
+        )
     ):
         blockers.append("source_quality_blocked")
-    source_quality_gate = item.get("source_quality_gate") or item.get("source_quality_status")
+    source_quality_gate = item.get("source_quality_gate") or item.get(
+        "source_quality_status"
+    )
     if source_quality_gate and not _bridge_source_quality_pass(source_quality_gate):
         blockers.append("source_quality_blocked")
     if (
         item.get("forbidden_use_blocked")
         or item.get("forbidden_use_violation")
-        or (isinstance(item.get("forbidden_use_violations"), list) and item.get("forbidden_use_violations"))
+        or (
+            isinstance(item.get("forbidden_use_violations"), list)
+            and item.get("forbidden_use_violations")
+        )
     ):
         blockers.append("forbidden_use_blocked")
 
@@ -700,7 +749,9 @@ def _runtime_bridge_candidate_contract_blockers(item: dict[str, Any]) -> list[st
         return list(dict.fromkeys(blockers))
 
     source_refs: list[dict[str, Any]] = []
-    source_bucket = item.get("source_bucket") if isinstance(item.get("source_bucket"), dict) else {}
+    source_bucket = (
+        item.get("source_bucket") if isinstance(item.get("source_bucket"), dict) else {}
+    )
     if source_bucket:
         source_refs.append(source_bucket)
     source_refs.extend(
@@ -711,18 +762,29 @@ def _runtime_bridge_candidate_contract_blockers(item: dict[str, Any]) -> list[st
             ref
             for ref in source_refs
             if _bridge_source_quality_pass(ref.get("source_quality_gate"))
-            and _bridge_candidate_float(ref.get("source_quality_adjusted_ev_pct")) is not None
+            and _bridge_candidate_float(ref.get("source_quality_adjusted_ev_pct"))
+            is not None
         ]
-        if not any(_bridge_source_quality_pass(ref.get("source_quality_gate")) for ref in source_refs):
+        if not any(
+            _bridge_source_quality_pass(ref.get("source_quality_gate"))
+            for ref in source_refs
+        ):
             blockers.append("source_bucket_source_quality_blocked")
-        if not any(_bridge_candidate_float(ref.get("source_quality_adjusted_ev_pct")) is not None for ref in source_refs):
+        if not any(
+            _bridge_candidate_float(ref.get("source_quality_adjusted_ev_pct"))
+            is not None
+            for ref in source_refs
+        ):
             blockers.append("source_bucket_primary_ev_missing")
         if not complete_refs:
             blockers.append("source_bucket_contract_incomplete")
     else:
         metric = str(item.get("primary_decision_metric") or "")
         if metric == "source_quality_adjusted_ev_pct":
-            if _bridge_candidate_float(item.get("source_quality_adjusted_ev_pct")) is None:
+            if (
+                _bridge_candidate_float(item.get("source_quality_adjusted_ev_pct"))
+                is None
+            ):
                 blockers.append("primary_ev_missing")
             if not source_quality_gate:
                 blockers.append("source_quality_gate_missing")
@@ -732,8 +794,16 @@ def _runtime_bridge_candidate_contract_blockers(item: dict[str, Any]) -> list[st
 
 
 def _candidate_source_quality_contract_blocked(candidate: dict[str, Any]) -> bool:
-    source_quality = candidate.get("source_quality") if isinstance(candidate.get("source_quality"), dict) else {}
-    source_metrics = candidate.get("source_metrics") if isinstance(candidate.get("source_metrics"), dict) else {}
+    source_quality = (
+        candidate.get("source_quality")
+        if isinstance(candidate.get("source_quality"), dict)
+        else {}
+    )
+    source_metrics = (
+        candidate.get("source_metrics")
+        if isinstance(candidate.get("source_metrics"), dict)
+        else {}
+    )
     if (
         candidate.get("source_quality_blocked")
         or candidate.get("source_quality_blocker")
@@ -778,13 +848,22 @@ def _candidate_apply_contract_blockers(candidate: dict[str, Any]) -> list[str]:
 
 def _report_path_for_date(target_date: str, *, source_phase: str | None = None) -> Path:
     if source_phase == "intraday":
-        return CALIBRATION_REPORT_DIR / f"threshold_cycle_calibration_{target_date}_intraday.json"
+        return (
+            CALIBRATION_REPORT_DIR
+            / f"threshold_cycle_calibration_{target_date}_intraday.json"
+        )
     if source_phase == "postclose":
-        return CALIBRATION_REPORT_DIR / f"threshold_cycle_calibration_{target_date}_postclose.json"
+        return (
+            CALIBRATION_REPORT_DIR
+            / f"threshold_cycle_calibration_{target_date}_postclose.json"
+        )
     canonical = REPORT_DIR / f"threshold_cycle_{target_date}.json"
     if canonical.exists():
         return canonical
-    postclose = CALIBRATION_REPORT_DIR / f"threshold_cycle_calibration_{target_date}_postclose.json"
+    postclose = (
+        CALIBRATION_REPORT_DIR
+        / f"threshold_cycle_calibration_{target_date}_postclose.json"
+    )
     if postclose.exists():
         return postclose
     return canonical
@@ -794,7 +873,9 @@ def _ai_review_path_for_date(source_date: str, phase: str) -> Path:
     return AI_REVIEW_DIR / f"threshold_cycle_ai_review_{source_date}_{phase}.json"
 
 
-def _load_ai_review(source_date: str | None, *, source_phase: str | None = None) -> dict[str, Any]:
+def _load_ai_review(
+    source_date: str | None, *, source_phase: str | None = None
+) -> dict[str, Any]:
     if not source_date:
         return {"status": "missing_source_date", "path": None, "items_by_family": {}}
     postclose_path = _ai_review_path_for_date(source_date, "postclose")
@@ -809,7 +890,11 @@ def _load_ai_review(source_date: str | None, *, source_phase: str | None = None)
         payload = _load_json(path)
         if str(payload.get("ai_status") or "").lower() != "parsed":
             if path == postclose_path:
-                items = payload.get("items") if isinstance(payload.get("items"), list) else []
+                items = (
+                    payload.get("items")
+                    if isinstance(payload.get("items"), list)
+                    else []
+                )
                 return {
                     "status": str(payload.get("ai_status") or "unknown"),
                     "path": str(path),
@@ -831,17 +916,24 @@ def _load_ai_review(source_date: str | None, *, source_phase: str | None = None)
             "model": payload.get("ai_model"),
             "provider_status": payload.get("ai_provider_status") or {},
             "items_by_family": {
-                str(item.get("family") or ""): item for item in items if isinstance(item, dict) and item.get("family")
+                str(item.get("family") or ""): item
+                for item in items
+                if isinstance(item, dict) and item.get("family")
             },
         }
     return {"status": "missing_ai_review", "path": None, "items_by_family": {}}
 
 
 def _latency_classifier_recommendation_path(source_date: str) -> Path:
-    return LATENCY_CLASSIFIER_RECOMMENDATION_DIR / f"latency_classifier_recommendation_{source_date}.json"
+    return (
+        LATENCY_CLASSIFIER_RECOMMENDATION_DIR
+        / f"latency_classifier_recommendation_{source_date}.json"
+    )
 
 
-def _load_latency_classifier_candidates(source_date: str | None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+def _load_latency_classifier_candidates(
+    source_date: str | None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     if not source_date:
         return [], {"status": "missing_source_date", "path": None}
     path = _latency_classifier_recommendation_path(source_date)
@@ -1023,10 +1115,15 @@ def _load_scalping_avg_down_recovery_calibration_candidates(
 
 
 def _ai_score_optimization_backtest_path(source_date: str) -> Path:
-    return AI_SCORE_OPTIMIZATION_BACKTEST_DIR / f"ai_score_optimization_backtest_{source_date}.json"
+    return (
+        AI_SCORE_OPTIMIZATION_BACKTEST_DIR
+        / f"ai_score_optimization_backtest_{source_date}.json"
+    )
 
 
-def _ai_score_optimization_payload_source_quality_blocked(payload: dict[str, Any]) -> bool:
+def _ai_score_optimization_payload_source_quality_blocked(
+    payload: dict[str, Any],
+) -> bool:
     if not isinstance(payload, dict):
         return False
     summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
@@ -1034,7 +1131,9 @@ def _ai_score_optimization_payload_source_quality_blocked(payload: dict[str, Any
         return True
     if summary.get("source_quality_blocked") or summary.get("source_quality_blocker"):
         return True
-    blockers = payload.get("source_quality_blockers") or summary.get("source_quality_blockers")
+    blockers = payload.get("source_quality_blockers") or summary.get(
+        "source_quality_blockers"
+    )
     if isinstance(blockers, list) and blockers:
         return True
     for value in (
@@ -1046,7 +1145,9 @@ def _ai_score_optimization_payload_source_quality_blocked(payload: dict[str, Any
         text = str(value or "").strip().lower()
         if text and text not in {"pass", "ok", "clean", "source_quality_pass"}:
             return True
-    status_text = str(summary.get("status") or payload.get("status") or "").strip().lower()
+    status_text = (
+        str(summary.get("status") or payload.get("status") or "").strip().lower()
+    )
     return "source_quality_blocked" in status_text or "hard_block" in status_text
 
 
@@ -1063,10 +1164,14 @@ def _load_ai_score_optimization_backtest_candidates(
     if not isinstance(candidates, list):
         candidates = []
     normalized = [item for item in candidates if isinstance(item, dict)]
-    source_quality_blocked = _ai_score_optimization_payload_source_quality_blocked(payload)
+    source_quality_blocked = _ai_score_optimization_payload_source_quality_blocked(
+        payload
+    )
     preflight_status = _source_quality_preflight_status(source_date)
     if source_quality_blocked or preflight_status.get("blocked"):
-        preflight_reason = str(preflight_status.get("reason") or "source_quality_blocked")
+        preflight_reason = str(
+            preflight_status.get("reason") or "source_quality_blocked"
+        )
         block_reason = (
             "ai_score_optimization_backtest_root_source_quality_blocked"
             if source_quality_blocked
@@ -1077,7 +1182,9 @@ def _load_ai_score_optimization_backtest_candidates(
                 **item,
                 "allowed_runtime_apply": False,
                 "source_quality_gate": "source_quality_blocked",
-                "source_quality_blocked": str(item.get("source_quality_blocked") or block_reason),
+                "source_quality_blocked": str(
+                    item.get("source_quality_blocked") or block_reason
+                ),
                 "apply_block_reason": "source_quality_blocked",
             }
             for item in normalized
@@ -1094,7 +1201,9 @@ def _load_ai_score_optimization_backtest_candidates(
         "allowed_runtime_apply": selected_candidate.get("allowed_runtime_apply"),
         "calibration_state": selected_candidate.get("calibration_state"),
         "candidate_count": len(normalized),
-        "allowed_runtime_apply_candidate_count": summary.get("allowed_runtime_apply_candidate_count"),
+        "allowed_runtime_apply_candidate_count": summary.get(
+            "allowed_runtime_apply_candidate_count"
+        ),
         "source_quality_blocked": source_quality_blocked,
         "source_quality_preflight": preflight_status,
     }
@@ -1116,14 +1225,20 @@ def _format_env_value(value: Any) -> str:
     return str(value)
 
 
-def _date_in_lock_window(lock: dict[str, Any], source_date: str | None, target_date: str) -> bool:
+def _date_in_lock_window(
+    lock: dict[str, Any], source_date: str | None, target_date: str
+) -> bool:
     source_text = str(source_date or "").strip()
     target_text = str(target_date or "").strip()
     basis_dates = [value for value in (source_text, target_text) if value]
     if not basis_dates:
         return False
-    active_from = str(lock.get("active_from_date") or lock.get("created_date") or "").strip()
-    if bool(lock.get("lock_until_explicit_close")) or bool(lock.get("explicit_close_required")):
+    active_from = str(
+        lock.get("active_from_date") or lock.get("created_date") or ""
+    ).strip()
+    if bool(lock.get("lock_until_explicit_close")) or bool(
+        lock.get("explicit_close_required")
+    ):
         return not active_from or any(value >= active_from for value in basis_dates)
     active_until = str(
         lock.get("min_observation_until_date")
@@ -1139,7 +1254,9 @@ def _date_in_lock_window(lock: dict[str, Any], source_date: str | None, target_d
     return True
 
 
-def _load_operator_runtime_env_locks(source_date: str | None, target_date: str) -> list[dict[str, Any]]:
+def _load_operator_runtime_env_locks(
+    source_date: str | None, target_date: str
+) -> list[dict[str, Any]]:
     locks: list[dict[str, Any]] = []
     if not OPERATOR_RUNTIME_ENV_LOCK_DIR.exists():
         return locks
@@ -1149,7 +1266,11 @@ def _load_operator_runtime_env_locks(source_date: str | None, target_date: str) 
             continue
         family = str(payload.get("family") or "").strip()
         env_key = str(payload.get("env_key") or "").strip()
-        env_overrides = payload.get("env_overrides") if isinstance(payload.get("env_overrides"), dict) else {}
+        env_overrides = (
+            payload.get("env_overrides")
+            if isinstance(payload.get("env_overrides"), dict)
+            else {}
+        )
         if not family or (not env_key and not env_overrides):
             continue
         if not _date_in_lock_window(payload, source_date, target_date):
@@ -1168,7 +1289,9 @@ def _previous_runtime_date(target_date: str) -> str | None:
     return (dt - timedelta(days=1)).isoformat()
 
 
-def _load_previous_runtime_env_selected_families(target_date: str) -> tuple[set[str], dict[str, Any]]:
+def _load_previous_runtime_env_selected_families(
+    target_date: str,
+) -> tuple[set[str], dict[str, Any]]:
     prev_date = _previous_runtime_date(target_date)
     if not prev_date:
         return set(), {}
@@ -1196,9 +1319,8 @@ def _hold_carry_forward_blockers(candidate: dict[str, Any]) -> list[str]:
         )
     ):
         blockers.append("source_quality_hard_block")
-    if (
-        bool(candidate.get("severe_loss_guard"))
-        or bool(candidate.get("excessive_drawdown"))
+    if bool(candidate.get("severe_loss_guard")) or bool(
+        candidate.get("excessive_drawdown")
     ):
         blockers.append("severe_loss_guard")
     if (
@@ -1209,8 +1331,7 @@ def _hold_carry_forward_blockers(candidate: dict[str, Any]) -> list[str]:
         blockers.append("order_provenance_breach")
     close_reasons_raw = " ".join(_candidate_close_reasons(candidate, ""))
     if any(
-        kw in close_reasons_raw.lower()
-        for kw in {"severe_loss", "excessive_drawdown"}
+        kw in close_reasons_raw.lower() for kw in {"severe_loss", "excessive_drawdown"}
     ):
         if "severe_loss_guard" not in blockers:
             blockers.append("severe_loss_guard")
@@ -1302,14 +1423,20 @@ def _previous_runtime_env_overrides_for_family(
     if prefix:
         return _normalize_runtime_env_overrides_for_family(
             family,
-            {str(k): str(v) for k, v in env_overrides.items() if str(k).startswith(prefix)},
+            {
+                str(k): str(v)
+                for k, v in env_overrides.items()
+                if str(k).startswith(prefix)
+            },
         )
     return {}
 
 
 def _lock_env_overrides(lock: dict[str, Any]) -> dict[str, str]:
     family = str(lock.get("family") or "").strip()
-    overrides = lock.get("env_overrides") if isinstance(lock.get("env_overrides"), dict) else {}
+    overrides = (
+        lock.get("env_overrides") if isinstance(lock.get("env_overrides"), dict) else {}
+    )
     if overrides:
         return _normalize_runtime_env_overrides_for_family(
             family,
@@ -1319,10 +1446,14 @@ def _lock_env_overrides(lock: dict[str, Any]) -> dict[str, str]:
     if not env_key:
         return {}
     value = lock.get("env_value", "true")
-    return _normalize_runtime_env_overrides_for_family(family, {env_key: _format_env_value(value)})
+    return _normalize_runtime_env_overrides_for_family(
+        family, {env_key: _format_env_value(value)}
+    )
 
 
-def _candidate_close_reasons(candidate: dict[str, Any], reject_reason: str) -> list[str]:
+def _candidate_close_reasons(
+    candidate: dict[str, Any], reject_reason: str
+) -> list[str]:
     reasons: list[str] = []
     if reject_reason:
         reasons.append(reject_reason)
@@ -1344,8 +1475,17 @@ def _candidate_close_reasons(candidate: dict[str, Any], reject_reason: str) -> l
             reasons.extend(str(item) for item in value)
         elif value:
             reasons.append(str(value))
-    metrics = candidate.get("source_metrics") if isinstance(candidate.get("source_metrics"), dict) else {}
-    for key in ("block_reason", "submit_block_reason", "stale_reason", "order_provenance_status"):
+    metrics = (
+        candidate.get("source_metrics")
+        if isinstance(candidate.get("source_metrics"), dict)
+        else {}
+    )
+    for key in (
+        "block_reason",
+        "submit_block_reason",
+        "stale_reason",
+        "order_provenance_status",
+    ):
         value = metrics.get(key)
         if value:
             reasons.append(str(value))
@@ -1374,7 +1514,8 @@ def _locked_synthetic_candidate(lock: dict[str, Any]) -> dict[str, Any]:
         "calibration_state": "operator_locked",
         "target_env_keys": [],
         "recommended_values": {"enabled": True},
-        "threshold_version": lock.get("threshold_version") or f"{lock.get('family')}:operator_runtime_env_lock",
+        "threshold_version": lock.get("threshold_version")
+        or f"{lock.get('family')}:operator_runtime_env_lock",
         "operator_runtime_env_lock_synthetic": True,
     }
 
@@ -1389,8 +1530,16 @@ def _values_equal(left: Any, right: Any) -> bool:
 
 
 def _env_overrides_for_candidate(candidate: dict[str, Any]) -> dict[str, str]:
-    recommended = candidate.get("recommended_values") if isinstance(candidate.get("recommended_values"), dict) else {}
-    current = candidate.get("current_values") if isinstance(candidate.get("current_values"), dict) else {}
+    recommended = (
+        candidate.get("recommended_values")
+        if isinstance(candidate.get("recommended_values"), dict)
+        else {}
+    )
+    current = (
+        candidate.get("current_values")
+        if isinstance(candidate.get("current_values"), dict)
+        else {}
+    )
     calibration_state = str(candidate.get("calibration_state") or "")
     policy_or_family = str(candidate.get("policy_id") or candidate.get("family") or "")
     force_emit = policy_or_family in {
@@ -1411,7 +1560,11 @@ def _env_overrides_for_candidate(candidate: dict[str, Any]) -> dict[str, str]:
         if not value_key or value_key not in recommended:
             continue
         value = recommended[value_key]
-        if value_key == "enabled" and calibration_state == "adjust_up" and not bool(current.get(value_key)):
+        if (
+            value_key == "enabled"
+            and calibration_state == "adjust_up"
+            and not bool(current.get(value_key))
+        ):
             value = True
         if (not force_emit) and _values_equal(current.get(value_key), value):
             continue
@@ -1443,7 +1596,10 @@ def _scrub_removed_contracts(value: Any) -> Any:
     if isinstance(value, list):
         scrubbed_list = []
         for item in value:
-            if str(item) in REMOVED_TARGET_ENV_KEYS or str(item) in REMOVED_RUNTIME_ENV_KEYS:
+            if (
+                str(item) in REMOVED_TARGET_ENV_KEYS
+                or str(item) in REMOVED_RUNTIME_ENV_KEYS
+            ):
                 continue
             nested = _scrub_removed_contracts(item)
             if nested is not None:
@@ -1452,7 +1608,9 @@ def _scrub_removed_contracts(value: Any) -> Any:
     return value
 
 
-def _dedupe_calibration_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _dedupe_calibration_candidates(
+    candidates: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     deduped: list[dict[str, Any]] = []
     seen: set[tuple[str, str, str, str]] = set()
     for item in candidates:
@@ -1460,8 +1618,12 @@ def _dedupe_calibration_candidates(candidates: list[dict[str, Any]]) -> list[dic
             continue
         family = str(item.get("family") or "")
         threshold_version = str(item.get("threshold_version") or "")
-        target_keys = json.dumps(item.get("target_env_keys") or [], sort_keys=True, ensure_ascii=False)
-        recommended = json.dumps(item.get("recommended_values") or {}, sort_keys=True, ensure_ascii=False)
+        target_keys = json.dumps(
+            item.get("target_env_keys") or [], sort_keys=True, ensure_ascii=False
+        )
+        recommended = json.dumps(
+            item.get("recommended_values") or {}, sort_keys=True, ensure_ascii=False
+        )
         key = (family, threshold_version, target_keys, recommended)
         if key in seen:
             continue
@@ -1473,7 +1635,11 @@ def _dedupe_calibration_candidates(candidates: list[dict[str, Any]]) -> list[dic
 def _score65_74_entry_unlock_candidate(candidate: dict[str, Any]) -> bool:
     if str(candidate.get("family") or "") != "score65_74_recovery_probe":
         return False
-    metrics = candidate.get("source_metrics") if isinstance(candidate.get("source_metrics"), dict) else {}
+    metrics = (
+        candidate.get("source_metrics")
+        if isinstance(candidate.get("source_metrics"), dict)
+        else {}
+    )
     if bool(metrics.get("entry_unlock_probe_ready")):
         return True
     try:
@@ -1487,14 +1653,12 @@ def _score65_74_entry_unlock_candidate(candidate: dict[str, Any]) -> bool:
         avg_ev = float(
             metrics.get("score60_74_avg_expected_ev_pct")
             if metrics.get("score60_74_avg_expected_ev_pct") is not None
-            else metrics.get("score65_74_avg_expected_ev_pct")
-            or 0.0
+            else metrics.get("score65_74_avg_expected_ev_pct") or 0.0
         )
         avg_close = float(
             metrics.get("score60_74_avg_close_10m_pct")
             if metrics.get("score60_74_avg_close_10m_pct") is not None
-            else metrics.get("score65_74_avg_close_10m_pct")
-            or 0.0
+            else metrics.get("score65_74_avg_close_10m_pct") or 0.0
         )
     except Exception:
         return False
@@ -1521,8 +1685,16 @@ def _load_swing_runtime_approval_bundle(source_date: str | None) -> dict[str, An
     artifact_path = swing_runtime_approval_artifact_path(source_date)
     request_report = _load_json(request_path)
     artifact = _load_json(artifact_path)
-    requests = request_report.get("approval_requests") if isinstance(request_report.get("approval_requests"), list) else []
-    approved_items = artifact.get("approved_requests") if isinstance(artifact.get("approved_requests"), list) else []
+    requests = (
+        request_report.get("approval_requests")
+        if isinstance(request_report.get("approval_requests"), list)
+        else []
+    )
+    approved_items = (
+        artifact.get("approved_requests")
+        if isinstance(artifact.get("approved_requests"), list)
+        else []
+    )
     approved_ids = {
         str(item.get("approval_id") or "")
         for item in approved_items
@@ -1544,8 +1716,10 @@ def _load_swing_runtime_approval_bundle(source_date: str | None) -> dict[str, An
         item
         for item in requests
         if isinstance(item, dict)
-        and str(item.get("policy_id") or item.get("family") or "") != "swing_scale_in_real_canary_phase0"
-        and str(item.get("policy_id") or item.get("family") or "") != "swing_one_share_real_canary_phase0"
+        and str(item.get("policy_id") or item.get("family") or "")
+        != "swing_scale_in_real_canary_phase0"
+        and str(item.get("policy_id") or item.get("family") or "")
+        != "swing_one_share_real_canary_phase0"
     ]
     approved_requests = []
     blocked: list[str] = [
@@ -1569,7 +1743,10 @@ def _load_swing_runtime_approval_bundle(source_date: str | None) -> dict[str, An
             blocked.append(f"approval_request_not_found:{approval_id}")
             continue
         request_policy = str(request.get("policy_id") or request.get("family") or "")
-        if request_policy in {"swing_one_share_real_canary_phase0", "swing_scale_in_real_canary_phase0"}:
+        if request_policy in {
+            "swing_one_share_real_canary_phase0",
+            "swing_scale_in_real_canary_phase0",
+        }:
             blocked.append(f"blocked_legacy_real_canary_removed:{approval_id}")
             continue
         approval_state = (
@@ -1589,7 +1766,9 @@ def _load_swing_runtime_approval_bundle(source_date: str | None) -> dict[str, An
     }
 
 
-def _select_swing_approved_candidates(bundle: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, str]]:
+def _select_swing_approved_candidates(
+    bundle: dict[str, Any],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, str]]:
     selected: list[dict[str, Any]] = []
     decisions: list[dict[str, Any]] = []
     env_overrides: dict[str, str] = {}
@@ -1643,13 +1822,20 @@ def _select_swing_approved_candidates(bundle: dict[str, Any]) -> tuple[list[dict
 
 def _load_scalp_sim_scale_in_window_approval(source_date: str | None) -> dict[str, Any]:
     if not source_date:
-        return {"artifact": None, "approved_request": None, "blocked": ["missing_source_date"]}
+        return {
+            "artifact": None,
+            "approved_request": None,
+            "blocked": ["missing_source_date"],
+        }
     path = scalp_sim_scale_in_window_artifact_path(source_date)
     payload = _load_json(path)
     blocked: list[str] = []
     if not payload:
         blocked.append("approval_artifact_missing")
-    elif str(payload.get("policy_id") or payload.get("family") or "") != "scalp_sim_scale_in_window_expansion":
+    elif (
+        str(payload.get("policy_id") or payload.get("family") or "")
+        != "scalp_sim_scale_in_window_expansion"
+    ):
         blocked.append("approval_policy_mismatch")
     elif not bool(payload.get("approved")):
         blocked.append("sim_auto_approval_not_approved")
@@ -1667,7 +1853,11 @@ def _load_scalp_sim_scale_in_window_approval(source_date: str | None) -> dict[st
         blocked.append("source_quality_blocked")
     request = None
     if payload and not blocked:
-        recommended = payload.get("recommended_values") if isinstance(payload.get("recommended_values"), dict) else {}
+        recommended = (
+            payload.get("recommended_values")
+            if isinstance(payload.get("recommended_values"), dict)
+            else {}
+        )
         recommended = dict(recommended)
         if "execution_observation_enabled" not in recommended:
             recommended["execution_observation_enabled"] = True
@@ -1709,8 +1899,14 @@ def _load_scalp_sim_scale_in_window_approval(source_date: str | None) -> dict[st
     }
 
 
-def _select_scalp_sim_scale_in_window_approval(bundle: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, str]]:
-    request = bundle.get("approved_request") if isinstance(bundle.get("approved_request"), dict) else None
+def _select_scalp_sim_scale_in_window_approval(
+    bundle: dict[str, Any],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, str]]:
+    request = (
+        bundle.get("approved_request")
+        if isinstance(bundle.get("approved_request"), dict)
+        else None
+    )
     if not request:
         return [], [], {}
     overrides = _env_overrides_for_candidate(request)
@@ -1726,17 +1922,31 @@ def _select_scalp_sim_scale_in_window_approval(bundle: dict[str, Any]) -> tuple[
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
     }
-    return ([request], [decision], overrides) if not reject_reason else ([], [decision], {})
+    return (
+        ([request], [decision], overrides)
+        if not reject_reason
+        else ([], [decision], {})
+    )
 
 
-def _artifact_matches_bridge_candidate(artifact: dict[str, Any], candidate: dict[str, Any]) -> bool:
+def _artifact_matches_bridge_candidate(
+    artifact: dict[str, Any], candidate: dict[str, Any]
+) -> bool:
     candidate_id = str(candidate.get("candidate_id") or "")
-    explicit_candidate_id = str(artifact.get("candidate_id") or artifact.get("bridge_candidate_id") or "")
+    explicit_candidate_id = str(
+        artifact.get("candidate_id") or artifact.get("bridge_candidate_id") or ""
+    )
     if explicit_candidate_id and explicit_candidate_id != candidate_id:
         return False
     allowed_ids: set[str] = set()
-    for key in ("approved_candidate_ids", "approved_bridge_candidate_ids", "approved_request_ids"):
-        allowed_ids.update(str(value) for value in artifact.get(key) or [] if str(value or "").strip())
+    for key in (
+        "approved_candidate_ids",
+        "approved_bridge_candidate_ids",
+        "approved_request_ids",
+    ):
+        allowed_ids.update(
+            str(value) for value in artifact.get(key) or [] if str(value or "").strip()
+        )
     if allowed_ids and candidate_id not in allowed_ids:
         return False
     return True
@@ -1753,13 +1963,19 @@ def _load_runtime_apply_bridge_approval(source_date: str | None) -> dict[str, An
         }
     report_path = runtime_apply_bridge_report_path(source_date)
     report = _load_json(report_path)
-    candidates = report.get("candidates") if isinstance(report.get("candidates"), list) else []
+    candidates = (
+        report.get("candidates") if isinstance(report.get("candidates"), list) else []
+    )
     artifacts: dict[str, str | None] = {}
     artifact_payloads: dict[str, dict[str, Any]] = {}
     approved_requests: list[dict[str, Any]] = []
     blocked: list[str] = []
     metadata: list[dict[str, Any]] = []
-    bridge_families = {ENTRY_BRIDGE_FAMILY, SCALE_IN_BRIDGE_FAMILY, GREENFIELD_REAL_ENV_FAMILY}
+    bridge_families = {
+        ENTRY_BRIDGE_FAMILY,
+        SCALE_IN_BRIDGE_FAMILY,
+        GREENFIELD_REAL_ENV_FAMILY,
+    }
     if not report:
         blocked.append("runtime_apply_bridge_report_missing")
 
@@ -1774,13 +1990,16 @@ def _load_runtime_apply_bridge_approval(source_date: str | None) -> dict[str, An
             continue
         artifact_path = _bridge_artifact_path_for_family(family, source_date)
         artifact = _load_json(artifact_path) if artifact_path else {}
-        artifacts[family] = str(artifact_path) if artifact_path and artifact_path.exists() else None
+        artifacts[family] = (
+            str(artifact_path) if artifact_path and artifact_path.exists() else None
+        )
         artifact_payloads[family] = artifact
         candidate_id = str(item.get("candidate_id") or "")
         if (
             family == ENTRY_BRIDGE_FAMILY
             or bool(item.get("metadata_only"))
-            or str(item.get("bridge_candidate_state") or "") == "entry_only_bridge_metadata"
+            or str(item.get("bridge_candidate_state") or "")
+            == "entry_only_bridge_metadata"
         ):
             legacy_source_state = str(item.get("bridge_candidate_state") or "").strip()
             metadata.append(
@@ -1788,8 +2007,10 @@ def _load_runtime_apply_bridge_approval(source_date: str | None) -> dict[str, An
                     "family": family,
                     "candidate_id": candidate_id,
                     "state": "entry_only_bridge_metadata",
-                    "legacy_source_state": legacy_source_state or "entry_only_bridge_metadata",
-                    "reason": item.get("bridge_exclusion_reason") or "entry_only_bridge_metadata_not_live_candidate",
+                    "legacy_source_state": legacy_source_state
+                    or "entry_only_bridge_metadata",
+                    "reason": item.get("bridge_exclusion_reason")
+                    or "entry_only_bridge_metadata_not_live_candidate",
                     "allowed_runtime_apply": False,
                     "target_env_keys": [],
                     "runtime_effect": False,
@@ -1816,9 +2037,13 @@ def _load_runtime_apply_bridge_approval(source_date: str | None) -> dict[str, An
         if not bool(contract.get("approval_live_ready")):
             item_blocked.append("approval_contract_not_live_ready")
         if not tier2_validation_passed(tier2_status):
-            item_blocked.append(f"ai_tier2_validation_not_parsed:{tier2_status or 'missing'}")
+            item_blocked.append(
+                f"ai_tier2_validation_not_parsed:{tier2_status or 'missing'}"
+            )
         if str(item.get("bridge_candidate_state") or "") != "live_auto_apply_ready":
-            item_blocked.append(f"runtime_apply_blocked_bridge_not_ready:{item.get('bridge_candidate_state')}")
+            item_blocked.append(
+                f"runtime_apply_blocked_bridge_not_ready:{item.get('bridge_candidate_state')}"
+            )
         if not bool(item.get("allowed_runtime_apply")):
             item_blocked.append("runtime_apply_not_allowed")
         item_blocked.extend(_runtime_bridge_candidate_contract_blockers(item))
@@ -1831,7 +2056,11 @@ def _load_runtime_apply_bridge_approval(source_date: str | None) -> dict[str, An
         if item_blocked:
             blocked.extend(f"{reason}:{family}" for reason in item_blocked)
             continue
-        recommended = item.get("recommended_values") if isinstance(item.get("recommended_values"), dict) else {}
+        recommended = (
+            item.get("recommended_values")
+            if isinstance(item.get("recommended_values"), dict)
+            else {}
+        )
         approved_requests.append(
             {
                 **item,
@@ -1841,14 +2070,19 @@ def _load_runtime_apply_bridge_approval(source_date: str | None) -> dict[str, An
                 "approval_artifact": None,
                 "approval_runtime_scope": contract.get("approval_runtime_scope"),
                 "calibration_state": "live_auto_apply",
-                "threshold_version": recommended.get("threshold_version") or f"{family}:{source_date}",
+                "threshold_version": recommended.get("threshold_version")
+                or f"{family}:{source_date}",
                 "allowed_runtime_apply": True,
                 "safety_revert_required": False,
                 "runtime_apply_bridge_family": family,
                 "bridge_candidate_id": candidate_id,
-                "source_bucket_key": ",".join(str(value) for value in item.get("source_bucket_keys") or []),
+                "source_bucket_key": ",".join(
+                    str(value) for value in item.get("source_bucket_keys") or []
+                ),
                 "actual_runtime_effect": item.get("runtime_effect_after_approval"),
-                "lifecycle_bucket_discovery_bucket_id": item.get("lifecycle_bucket_discovery_bucket_id"),
+                "lifecycle_bucket_discovery_bucket_id": item.get(
+                    "lifecycle_bucket_discovery_bucket_id"
+                ),
                 "lifecycle_bucket_discovery_ai_review_status": item.get(
                     "lifecycle_bucket_discovery_ai_review_status"
                 ),
@@ -1862,9 +2096,7 @@ def _load_runtime_apply_bridge_approval(source_date: str | None) -> dict[str, An
                     item.get("lifecycle_bucket_discovery_ai_followup_required")
                 ),
                 "actual_order_submitted": False,
-                "decision_authority": (
-                    "lifecycle_bucket_discovery_live_auto_apply"
-                ),
+                "decision_authority": ("lifecycle_bucket_discovery_live_auto_apply"),
             }
         )
     return {
@@ -1887,7 +2119,10 @@ def _select_runtime_apply_bridge_approval(
     decisions: list[dict[str, Any]] = []
     env_overrides: dict[str, str] = {}
     selected_by_stage: dict[str, str] = {}
-    for item in sorted(bundle.get("approved_requests") or [], key=lambda row: int(row.get("priority") or 999)):
+    for item in sorted(
+        bundle.get("approved_requests") or [],
+        key=lambda row: int(row.get("priority") or 999),
+    ):
         if not isinstance(item, dict):
             continue
         family = str(item.get("family") or "")
@@ -1914,7 +2149,9 @@ def _select_runtime_apply_bridge_approval(
             "runtime_apply_bridge_family": item.get("runtime_apply_bridge_family"),
             "source_bucket_keys": item.get("source_bucket_keys") or [],
             "actual_runtime_effect": item.get("actual_runtime_effect"),
-            "lifecycle_bucket_discovery_bucket_id": item.get("lifecycle_bucket_discovery_bucket_id"),
+            "lifecycle_bucket_discovery_bucket_id": item.get(
+                "lifecycle_bucket_discovery_bucket_id"
+            ),
             "lifecycle_bucket_discovery_ai_review_status": item.get(
                 "lifecycle_bucket_discovery_ai_review_status"
             ),
@@ -1948,7 +2185,11 @@ def _select_runtime_apply_bridge_approval(
 
 def _load_lifecycle_bucket_sim_auto_approval(source_date: str | None) -> dict[str, Any]:
     if not source_date:
-        return {"artifact": None, "approved_request": None, "blocked": ["missing_source_date"]}
+        return {
+            "artifact": None,
+            "approved_request": None,
+            "blocked": ["missing_source_date"],
+        }
     artifact_path = sim_auto_approval_path(source_date)
     discovery_path = discovery_report_path(source_date)
     catalog_path = bucket_catalog_path(source_date)
@@ -2014,7 +2255,9 @@ def _load_lifecycle_bucket_sim_auto_approval(source_date: str | None) -> dict[st
     }
 
 
-def _select_lifecycle_bucket_sim_auto_approval(bundle: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, str]]:
+def _select_lifecycle_bucket_sim_auto_approval(
+    bundle: dict[str, Any],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, str]]:
     item = bundle.get("approved_request")
     decisions: list[dict[str, Any]] = []
     selected: list[dict[str, Any]] = []
@@ -2024,7 +2267,10 @@ def _select_lifecycle_bucket_sim_auto_approval(bundle: dict[str, Any]) -> tuple[
             {
                 "family": "lifecycle_bucket_discovery_sim_auto_approval",
                 "selected": False,
-                "decision_reason": ",".join(str(reason) for reason in bundle.get("blocked") or []) or "sim_auto_approval_missing",
+                "decision_reason": ",".join(
+                    str(reason) for reason in bundle.get("blocked") or []
+                )
+                or "sim_auto_approval_missing",
                 "env_overrides": {},
                 "actual_order_submitted": False,
             }
@@ -2057,14 +2303,29 @@ def _select_lifecycle_bucket_sim_auto_approval(bundle: dict[str, Any]) -> tuple[
 
 def _load_scalp_sim_auto_approval(source_date: str | None) -> dict[str, Any]:
     if not source_date:
-        return {"artifact": None, "catalog": None, "approved_request": None, "blocked": ["missing_source_date"]}
+        return {
+            "artifact": None,
+            "catalog": None,
+            "approved_request": None,
+            "blocked": ["missing_source_date"],
+        }
     artifact_path = scalp_sim_auto_approval_path(source_date)
     catalog_path = scalp_sim_policy_catalog_path(source_date)
     payload = _load_json(artifact_path)
     catalog_payload = _load_json(catalog_path)
-    policies = payload.get("approved_policies") if isinstance(payload.get("approved_policies"), list) else []
-    approved_source_ids = [str(item) for item in (payload.get("approved_source_ids") or []) if str(item or "").strip()]
-    approved_policy_count = _int_or_default(payload.get("approved_policy_count"), 0) or 0
+    policies = (
+        payload.get("approved_policies")
+        if isinstance(payload.get("approved_policies"), list)
+        else []
+    )
+    approved_source_ids = [
+        str(item)
+        for item in (payload.get("approved_source_ids") or [])
+        if str(item or "").strip()
+    ]
+    approved_policy_count = (
+        _int_or_default(payload.get("approved_policy_count"), 0) or 0
+    )
     blocked: list[str] = []
     if not payload:
         blocked.append("scalp_sim_auto_approval_missing")
@@ -2082,7 +2343,10 @@ def _load_scalp_sim_auto_approval(source_date: str | None) -> dict[str, Any]:
         blocked.append("broker_order_forbidden_contract_missing")
     elif bool(payload.get("human_approval_required")):
         blocked.append("human_approval_required_not_allowed_for_sim_auto")
-    elif payload.get("decision_authority") not in {None, "scalp_sim_auto_approval_control_tower"}:
+    elif payload.get("decision_authority") not in {
+        None,
+        "scalp_sim_auto_approval_control_tower",
+    }:
         blocked.append("decision_authority_invalid")
     elif not policies or approved_policy_count <= 0 or not approved_source_ids:
         blocked.append("scalp_sim_auto_approval_empty")
@@ -2100,24 +2364,42 @@ def _load_scalp_sim_auto_approval(source_date: str | None) -> dict[str, Any]:
             else {}
         )
         catalog_generator_hashes = (
-            generator_provenance.get("files") if isinstance(generator_provenance.get("files"), dict) else {}
+            generator_provenance.get("files")
+            if isinstance(generator_provenance.get("files"), dict)
+            else {}
         )
-        current_generator_hashes = _generator_hashes(SCALP_SIM_POLICY_STALENESS_CHECK_FILES)
+        current_generator_hashes = _generator_hashes(
+            SCALP_SIM_POLICY_STALENESS_CHECK_FILES
+        )
         if generated_at is None:
             blocked.append("scalp_sim_policy_catalog_generated_at_missing")
         if not catalog_generator_hashes:
             blocked.append("scalp_sim_policy_catalog_generator_provenance_missing")
-        elif current_generator_hashes and catalog_generator_hashes != current_generator_hashes:
+        elif (
+            current_generator_hashes
+            and catalog_generator_hashes != current_generator_hashes
+        ):
             blocked.append("scalp_sim_policy_catalog_stale_after_generator_change")
         for seed in catalog_payload.get("active_sim_priority_seeds") or []:
             if not isinstance(seed, dict):
                 blocked.append("active_sim_priority_seed_invalid")
                 break
-            prefix = seed.get("observable_prefix") if isinstance(seed.get("observable_prefix"), dict) else {}
-            if not str(seed.get("active_seed_id") or "").strip() or not str(seed.get("source_parent_bucket_id") or "").strip():
+            prefix = (
+                seed.get("observable_prefix")
+                if isinstance(seed.get("observable_prefix"), dict)
+                else {}
+            )
+            if (
+                not str(seed.get("active_seed_id") or "").strip()
+                or not str(seed.get("source_parent_bucket_id") or "").strip()
+            ):
                 blocked.append("active_sim_priority_seed_key_missing")
                 break
-            if str(seed.get("status") or "").strip() not in {"active", "cooldown", "retired"}:
+            if str(seed.get("status") or "").strip() not in {
+                "active",
+                "cooldown",
+                "retired",
+            }:
                 blocked.append("active_sim_priority_seed_status_invalid")
                 break
             if str(seed.get("status") or "") == "active" and (
@@ -2126,8 +2408,13 @@ def _load_scalp_sim_auto_approval(source_date: str | None) -> dict[str, Any]:
             ):
                 blocked.append("active_sim_priority_seed_observable_prefix_missing")
                 break
-            if any(str(key) not in ACTIVE_SIM_PRIORITY_OBSERVABLE_PREFIX_KEYS for key in prefix):
-                blocked.append("active_sim_priority_seed_observable_prefix_forbidden_dimension")
+            if any(
+                str(key) not in ACTIVE_SIM_PRIORITY_OBSERVABLE_PREFIX_KEYS
+                for key in prefix
+            ):
+                blocked.append(
+                    "active_sim_priority_seed_observable_prefix_forbidden_dimension"
+                )
                 break
     approved_request = None
     if not blocked:
@@ -2158,9 +2445,16 @@ def _load_scalp_sim_auto_approval(source_date: str | None) -> dict[str, Any]:
             "policy_source_date": "",
         }
         for policy in policies:
-            if not isinstance(policy, dict) or policy.get("policy_id") != "scalp_sim_scale_in_window_expansion":
+            if (
+                not isinstance(policy, dict)
+                or policy.get("policy_id") != "scalp_sim_scale_in_window_expansion"
+            ):
                 continue
-            scale_values = policy.get("recommended_values") if isinstance(policy.get("recommended_values"), dict) else {}
+            scale_values = (
+                policy.get("recommended_values")
+                if isinstance(policy.get("recommended_values"), dict)
+                else {}
+            )
             recommended_values.update(scale_values)
             target_env_keys.extend(
                 str(item)
@@ -2206,7 +2500,9 @@ def _load_scalp_sim_auto_approval(source_date: str | None) -> dict[str, Any]:
     }
 
 
-def _select_scalp_sim_auto_approval(bundle: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, str]]:
+def _select_scalp_sim_auto_approval(
+    bundle: dict[str, Any],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, str]]:
     item = bundle.get("approved_request")
     decisions: list[dict[str, Any]] = []
     selected: list[dict[str, Any]] = []
@@ -2216,7 +2512,9 @@ def _select_scalp_sim_auto_approval(bundle: dict[str, Any]) -> tuple[list[dict[s
             {
                 "family": "scalp_sim_auto_approval",
                 "selected": False,
-                "decision_reason": ",".join(str(reason) for reason in bundle.get("blocked") or [])
+                "decision_reason": ",".join(
+                    str(reason) for reason in bundle.get("blocked") or []
+                )
                 or "scalp_sim_auto_approval_missing",
                 "env_overrides": {},
                 "actual_order_submitted": False,
@@ -2252,7 +2550,12 @@ def _select_scalp_sim_auto_approval(bundle: dict[str, Any]) -> tuple[list[dict[s
 
 def _load_swing_sim_auto_approval(source_date: str | None) -> dict[str, Any]:
     if not source_date:
-        return {"artifact": None, "catalog": None, "approved_request": None, "blocked": ["missing_source_date"]}
+        return {
+            "artifact": None,
+            "catalog": None,
+            "approved_request": None,
+            "blocked": ["missing_source_date"],
+        }
     artifact_path = swing_sim_auto_approval_path(source_date)
     catalog_path = swing_sim_policy_catalog_path(source_date)
     payload = _load_json(artifact_path)
@@ -2284,21 +2587,37 @@ def _load_swing_sim_auto_approval(source_date: str | None) -> dict[str, Any]:
                 if not isinstance(policy, dict):
                     blocked.append("swing_active_arm_priority_policy_invalid")
                     break
-                if str(policy.get("status") or "") not in {"active", "cooldown", "retired"}:
+                if str(policy.get("status") or "") not in {
+                    "active",
+                    "cooldown",
+                    "retired",
+                }:
                     blocked.append("swing_active_arm_priority_status_invalid")
                     break
                 if not str(policy.get("priority_policy_id") or "").strip():
                     blocked.append("swing_active_arm_priority_policy_id_missing")
                     break
-                if str(policy.get("status") or "") == "active" and not str(policy.get("priority_arm_id") or policy.get("priority_bucket_id") or "").strip():
+                if (
+                    str(policy.get("status") or "") == "active"
+                    and not str(
+                        policy.get("priority_arm_id")
+                        or policy.get("priority_bucket_id")
+                        or ""
+                    ).strip()
+                ):
                     blocked.append("swing_active_arm_priority_key_missing")
                     break
-                if str(policy.get("status") or "") == "active" and not str(policy.get("source_report_date") or "").strip():
+                if (
+                    str(policy.get("status") or "") == "active"
+                    and not str(policy.get("source_report_date") or "").strip()
+                ):
                     blocked.append("swing_active_arm_priority_source_date_missing")
                     break
     approved_request = None
     if not blocked:
-        approved_source_ids = [str(item) for item in (payload.get("approved_source_ids") or [])]
+        approved_source_ids = [
+            str(item) for item in (payload.get("approved_source_ids") or [])
+        ]
         active_policy_ids = [
             str(policy.get("priority_policy_id") or "").strip()
             for policy in (catalog_payload.get("active_arm_priority_policies") or [])
@@ -2326,7 +2645,8 @@ def _load_swing_sim_auto_approval(source_date: str | None) -> dict[str, Any]:
                 "enabled": True,
                 "policy_file": str(catalog_path),
                 "policy_version": f"swing_sim_auto_approval:{source_date}",
-                "bottom_rebound_source_enabled": "bottom_rebound_policy_auto_loop" in set(approved_source_ids),
+                "bottom_rebound_source_enabled": "bottom_rebound_policy_auto_loop"
+                in set(approved_source_ids),
             },
             "current_values": {
                 "enabled": False,
@@ -2350,7 +2670,9 @@ def _load_swing_sim_auto_approval(source_date: str | None) -> dict[str, Any]:
     }
 
 
-def _select_swing_sim_auto_approval(bundle: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, str]]:
+def _select_swing_sim_auto_approval(
+    bundle: dict[str, Any],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, str]]:
     item = bundle.get("approved_request")
     decisions: list[dict[str, Any]] = []
     selected: list[dict[str, Any]] = []
@@ -2360,7 +2682,10 @@ def _select_swing_sim_auto_approval(bundle: dict[str, Any]) -> tuple[list[dict[s
             {
                 "family": "swing_sim_auto_approval",
                 "selected": False,
-                "decision_reason": ",".join(str(reason) for reason in bundle.get("blocked") or []) or "swing_sim_auto_approval_missing",
+                "decision_reason": ",".join(
+                    str(reason) for reason in bundle.get("blocked") or []
+                )
+                or "swing_sim_auto_approval_missing",
                 "env_overrides": {},
                 "actual_order_submitted": False,
             }
@@ -2392,34 +2717,63 @@ def _select_swing_sim_auto_approval(bundle: dict[str, Any]) -> tuple[list[dict[s
     return selected, decisions, env_overrides
 
 
-def _ai_guard_allows_candidate(candidate: dict[str, Any], ai_review: dict[str, Any], *, require_ai: bool) -> tuple[bool, str]:
+def _ai_guard_allows_candidate(
+    candidate: dict[str, Any], ai_review: dict[str, Any], *, require_ai: bool
+) -> tuple[bool, str]:
     family = str(candidate.get("family") or "")
     if family in DETERMINISTIC_POLICY_HANDOFF_FAMILIES:
         return (True, "deterministic_policy_handoff")
     if family == "latency_classifier_runtime_profile":
         return (True, "deterministic_latency_classifier_recommendation")
-    items_by_family = ai_review.get("items_by_family") if isinstance(ai_review.get("items_by_family"), dict) else {}
+    items_by_family = (
+        ai_review.get("items_by_family")
+        if isinstance(ai_review.get("items_by_family"), dict)
+        else {}
+    )
     item = items_by_family.get(family)
     if not item:
-        return (not require_ai, "ai_review_missing" if require_ai else "ai_review_missing_deterministic_allowed")
-    guard_decision = item.get("guard_decision") if isinstance(item.get("guard_decision"), dict) else {}
-    route_action = str(item.get("route_action") or guard_decision.get("route_action") or "")
-    guard_reject_reason = str(item.get("guard_reject_reason") or guard_decision.get("guard_reject_reason") or "")
+        return (
+            not require_ai,
+            (
+                "ai_review_missing"
+                if require_ai
+                else "ai_review_missing_deterministic_allowed"
+            ),
+        )
+    guard_decision = (
+        item.get("guard_decision")
+        if isinstance(item.get("guard_decision"), dict)
+        else {}
+    )
+    route_action = str(
+        item.get("route_action") or guard_decision.get("route_action") or ""
+    )
+    guard_reject_reason = str(
+        item.get("guard_reject_reason")
+        or guard_decision.get("guard_reject_reason")
+        or ""
+    )
     if not require_ai and (
         guard_reject_reason == "ai_unavailable"
         or (
             route_action == "deterministic_only"
-            and str(item.get("ai_review_state") or ai_review.get("status") or "") == "unavailable"
+            and str(item.get("ai_review_state") or ai_review.get("status") or "")
+            == "unavailable"
         )
     ):
         return (True, "ai_unavailable_deterministic_allowed")
     if (
         _score65_74_entry_unlock_candidate(candidate)
         and route_action == "exclude_from_threshold_candidate_review"
-        and str(guard_decision.get("anomaly_route") or item.get("ai_anomaly_route") or "") == "instrumentation_gap"
+        and str(
+            guard_decision.get("anomaly_route") or item.get("ai_anomaly_route") or ""
+        )
+        == "instrumentation_gap"
     ):
         return (True, "entry_unlock_probe_ready_overrides_no_applied_probe_gap")
-    if str(item.get("guard_decision") or "").lower() != "accept" and not bool(item.get("guard_accepted")):
+    if str(item.get("guard_decision") or "").lower() != "accept" and not bool(
+        item.get("guard_accepted")
+    ):
         return (False, str(item.get("guard_reject_reason") or "ai_guard_rejected"))
     if route_action in AUTO_APPLY_ROUTE_EXCLUDE_ACTIONS:
         return (False, "ai_route_excluded_from_threshold_candidate")
@@ -2480,10 +2834,10 @@ def _operator_lock_stage_coexist(
         REAL_PYRAMID_SCALE_IN_QUALITY_GUARD_FAMILY,
     }:
         return True
-    return (
-        stage == "holding_exit"
-        and {family, previous_family} == {PRESET_TP_SOFT_STOP_FAMILY, PROFIT_STAGNATION_EXIT_FAMILY}
-    )
+    return stage == "holding_exit" and {family, previous_family} == {
+        PRESET_TP_SOFT_STOP_FAMILY,
+        PROFIT_STAGNATION_EXIT_FAMILY,
+    }
 
 
 def _select_auto_apply_candidates(
@@ -2503,19 +2857,25 @@ def _select_auto_apply_candidates(
         if isinstance(lock, dict) and lock.get("family")
     }
     candidates = list(calibration_candidates)
-    present_families = {str(item.get("family") or "") for item in candidates if isinstance(item, dict)}
+    present_families = {
+        str(item.get("family") or "") for item in candidates if isinstance(item, dict)
+    }
     for family, lock in locks_by_family.items():
         if family not in present_families:
             candidates.append(_locked_synthetic_candidate(lock))
-    previous_selected_families, previous_runtime_manifest = _load_previous_runtime_env_selected_families(
-        target_date
+    previous_selected_families, previous_runtime_manifest = (
+        _load_previous_runtime_env_selected_families(target_date)
     )
-    for candidate in sorted(candidates, key=lambda item: int(item.get("priority") or 999)):
+    for candidate in sorted(
+        candidates, key=lambda item: int(item.get("priority") or 999)
+    ):
         family = str(candidate.get("family") or "")
         stage = str(candidate.get("stage") or "unknown")
         state = str(candidate.get("calibration_state") or "")
         lock = locks_by_family.get(family)
-        allowed, reason = _ai_guard_allows_candidate(candidate, ai_review, require_ai=require_ai)
+        allowed, reason = _ai_guard_allows_candidate(
+            candidate, ai_review, require_ai=require_ai
+        )
         contract_blockers = _candidate_apply_contract_blockers(candidate)
         reject_reason = ""
         hold_carry_forward = False
@@ -2525,7 +2885,10 @@ def _select_auto_apply_candidates(
             reject_reason = RETIRED_RUNTIME_FAMILY_REASONS[family]
         elif include_families is not None and family not in include_families:
             reject_reason = "operator_family_filter_excluded"
-        elif family in NON_LIVE_SELECTABLE_FAMILIES or str(candidate.get("family_type") or "") == "sim_lifecycle_source":
+        elif (
+            family in NON_LIVE_SELECTABLE_FAMILIES
+            or str(candidate.get("family_type") or "") == "sim_lifecycle_source"
+        ):
             reject_reason = "non_live_selectable_sim_lifecycle_source"
         elif not bool(candidate.get("allowed_runtime_apply")):
             reject_reason = "runtime_apply_not_allowed"
@@ -2540,9 +2903,7 @@ def _select_auto_apply_candidates(
                 if stage in selected_by_stage:
                     hold_carry_forward_blockers.append("same_stage_owner_conflict")
                 if hold_carry_forward_blockers:
-                    reject_reason = (
-                        f"hold_carry_forward_blocked:{','.join(hold_carry_forward_blockers)}"
-                    )
+                    reject_reason = f"hold_carry_forward_blocked:{','.join(hold_carry_forward_blockers)}"
                 else:
                     hold_carry_forward_env_overrides = (
                         _previous_runtime_env_overrides_for_family(
@@ -2569,26 +2930,40 @@ def _select_auto_apply_candidates(
             selected_by_stage=selected_by_stage,
             locks_by_family=locks_by_family,
         ):
-            reject_reason = f"same_stage_owner_conflict:{selected_by_stage[stage].get('family')}"
+            reject_reason = (
+                f"same_stage_owner_conflict:{selected_by_stage[stage].get('family')}"
+            )
 
         lock_applied = False
         lock_stage_conflict_reason = ""
-        if lock and stage in selected_by_stage and not _operator_lock_stage_coexist(
-            family=family,
-            stage=stage,
-            selected_by_stage=selected_by_stage,
-            locks_by_family=locks_by_family,
+        if (
+            lock
+            and stage in selected_by_stage
+            and not _operator_lock_stage_coexist(
+                family=family,
+                stage=stage,
+                selected_by_stage=selected_by_stage,
+                locks_by_family=locks_by_family,
+            )
         ):
-            lock_stage_conflict_reason = f"same_stage_owner_conflict:{selected_by_stage[stage].get('family')}"
+            lock_stage_conflict_reason = (
+                f"same_stage_owner_conflict:{selected_by_stage[stage].get('family')}"
+            )
         lock_close_reasons = _candidate_close_reasons(candidate, reject_reason)
         if lock_stage_conflict_reason:
             lock_close_reasons.append(lock_stage_conflict_reason)
-        if lock and family not in RETIRED_RUNTIME_FAMILY_REASONS and (
-            include_families is None or family in include_families
+        if (
+            lock
+            and family not in RETIRED_RUNTIME_FAMILY_REASONS
+            and (include_families is None or family in include_families)
         ):
             lock_overrides = _lock_env_overrides(lock)
             lock_allowed_close = _lock_allows_close(lock, lock_close_reasons)
-            lock_can_preserve = bool(lock_overrides) and not lock_allowed_close and not contract_blockers
+            lock_can_preserve = (
+                bool(lock_overrides)
+                and not lock_allowed_close
+                and not contract_blockers
+            )
             if lock_can_preserve:
                 reject_reason = ""
                 reason = f"operator_runtime_env_lock_preserved:{lock.get('lock_id') or family}"
@@ -2610,11 +2985,15 @@ def _select_auto_apply_candidates(
             "env_overrides": (
                 _lock_env_overrides(lock)
                 if lock_applied and lock
-                else hold_carry_forward_env_overrides
-                if hold_carry_forward
-                else _env_overrides_for_candidate(candidate)
-                if not reject_reason
-                else {}
+                else (
+                    hold_carry_forward_env_overrides
+                    if hold_carry_forward
+                    else (
+                        _env_overrides_for_candidate(candidate)
+                        if not reject_reason
+                        else {}
+                    )
+                )
             ),
         }
         if hold_carry_forward:
@@ -2640,7 +3019,9 @@ def _select_auto_apply_candidates(
         selected_by_stage[stage] = candidate
         decisions.append(decision)
 
-    selected_decisions = [decision for decision in decisions if bool(decision.get("selected"))]
+    selected_decisions = [
+        decision for decision in decisions if bool(decision.get("selected"))
+    ]
     env_overrides: dict[str, str] = {}
     for decision in selected_decisions:
         env_overrides.update(decision.get("env_overrides") or {})
@@ -2716,10 +3097,18 @@ def _close_scalping_scanner_real_source_guard_for_live_owner(
     }
     updated_decisions: list[dict[str, Any]] = []
     for decision in decisions:
-        if str(decision.get("family") or "") != SCALPING_SCANNER_REAL_SOURCE_GUARD_FAMILY:
+        if (
+            str(decision.get("family") or "")
+            != SCALPING_SCANNER_REAL_SOURCE_GUARD_FAMILY
+        ):
             updated_decisions.append(decision)
             continue
-        next_decision = {**decision, "selected": False, "decision_reason": reason, "env_overrides": {}}
+        next_decision = {
+            **decision,
+            "selected": False,
+            "decision_reason": reason,
+            "env_overrides": {},
+        }
         lock = next_decision.get("operator_runtime_env_lock")
         if isinstance(lock, dict):
             close_reasons = list(lock.get("close_reasons") or [])
@@ -2760,7 +3149,12 @@ def _close_score65_74_strong_micro_override_for_live_owner(
         if str(decision.get("family") or "") != SCORE65_74_STRONG_MICRO_OVERRIDE_FAMILY:
             updated_decisions.append(decision)
             continue
-        next_decision = {**decision, "selected": False, "decision_reason": reason, "env_overrides": {}}
+        next_decision = {
+            **decision,
+            "selected": False,
+            "decision_reason": reason,
+            "env_overrides": {},
+        }
         lock = next_decision.get("operator_runtime_env_lock")
         if isinstance(lock, dict):
             close_reasons = list(lock.get("close_reasons") or [])
@@ -2801,7 +3195,12 @@ def _close_early_accel_recheck_for_live_owner(
         if str(decision.get("family") or "") != EARLY_ACCEL_RECHECK_FAMILY:
             updated_decisions.append(decision)
             continue
-        next_decision = {**decision, "selected": False, "decision_reason": reason, "env_overrides": {}}
+        next_decision = {
+            **decision,
+            "selected": False,
+            "decision_reason": reason,
+            "env_overrides": {},
+        }
         lock = next_decision.get("operator_runtime_env_lock")
         if isinstance(lock, dict):
             close_reasons = list(lock.get("close_reasons") or [])
@@ -2842,7 +3241,12 @@ def _close_ai_numeric_consistency_recheck_for_live_owner(
         if str(decision.get("family") or "") != AI_NUMERIC_CONSISTENCY_RECHECK_FAMILY:
             updated_decisions.append(decision)
             continue
-        next_decision = {**decision, "selected": False, "decision_reason": reason, "env_overrides": {}}
+        next_decision = {
+            **decision,
+            "selected": False,
+            "decision_reason": reason,
+            "env_overrides": {},
+        }
         lock = next_decision.get("operator_runtime_env_lock")
         if isinstance(lock, dict):
             close_reasons = list(lock.get("close_reasons") or [])
@@ -2883,7 +3287,12 @@ def _close_pre_submit_liquidity_relief_for_live_owner(
         if str(decision.get("family") or "") != PRE_SUBMIT_LIQUIDITY_RELIEF_FAMILY:
             updated_decisions.append(decision)
             continue
-        next_decision = {**decision, "selected": False, "decision_reason": reason, "env_overrides": {}}
+        next_decision = {
+            **decision,
+            "selected": False,
+            "decision_reason": reason,
+            "env_overrides": {},
+        }
         lock = next_decision.get("operator_runtime_env_lock")
         if isinstance(lock, dict):
             close_reasons = list(lock.get("close_reasons") or [])
@@ -2924,7 +3333,12 @@ def _close_weak_context_late_entry_guard_for_live_owner(
         if str(decision.get("family") or "") != WEAK_CONTEXT_LATE_ENTRY_GUARD_FAMILY:
             updated_decisions.append(decision)
             continue
-        next_decision = {**decision, "selected": False, "decision_reason": reason, "env_overrides": {}}
+        next_decision = {
+            **decision,
+            "selected": False,
+            "decision_reason": reason,
+            "env_overrides": {},
+        }
         lock = next_decision.get("operator_runtime_env_lock")
         if isinstance(lock, dict):
             close_reasons = list(lock.get("close_reasons") or [])
@@ -2946,7 +3360,11 @@ def _holding_exit_live_owner_family(*selected_groups: list[dict[str, Any]]) -> s
             if not isinstance(item, dict):
                 continue
             family = str(item.get("family") or "")
-            if family in {SOFT_STOP_DYNAMIC_GRACE_FAMILY, PRESET_TP_SOFT_STOP_FAMILY, NEVER_GREEN_DEFER_CLAMP_FAMILY}:
+            if family in {
+                SOFT_STOP_DYNAMIC_GRACE_FAMILY,
+                PRESET_TP_SOFT_STOP_FAMILY,
+                NEVER_GREEN_DEFER_CLAMP_FAMILY,
+            }:
                 continue
             stage = str(item.get("stage") or "")
             if stage in {"holding_exit", "holding", "exit"}:
@@ -2960,7 +3378,10 @@ def _scale_in_live_owner_family(*selected_groups: list[dict[str, Any]]) -> str:
             if not isinstance(item, dict):
                 continue
             family = str(item.get("family") or "")
-            if family in {REAL_PYRAMID_SCALE_IN_QUALITY_GUARD_FAMILY, "scale_in_split_order_plan"}:
+            if family in {
+                REAL_PYRAMID_SCALE_IN_QUALITY_GUARD_FAMILY,
+                "scale_in_split_order_plan",
+            }:
                 continue
             stage = str(item.get("stage") or "")
             if stage == "scale_in":
@@ -3007,7 +3428,12 @@ def _close_aggressive_entry_price_override_for_live_owner(
         if str(decision.get("family") or "") != AGGRESSIVE_ENTRY_PRICE_OVERRIDE_FAMILY:
             updated_decisions.append(decision)
             continue
-        next_decision = {**decision, "selected": False, "decision_reason": reason, "env_overrides": {}}
+        next_decision = {
+            **decision,
+            "selected": False,
+            "decision_reason": reason,
+            "env_overrides": {},
+        }
         lock = next_decision.get("operator_runtime_env_lock")
         if isinstance(lock, dict):
             close_reasons = list(lock.get("close_reasons") or [])
@@ -3048,7 +3474,12 @@ def _close_never_green_defer_clamp_for_live_owner(
         if str(decision.get("family") or "") != NEVER_GREEN_DEFER_CLAMP_FAMILY:
             updated_decisions.append(decision)
             continue
-        next_decision = {**decision, "selected": False, "decision_reason": reason, "env_overrides": {}}
+        next_decision = {
+            **decision,
+            "selected": False,
+            "decision_reason": reason,
+            "env_overrides": {},
+        }
         lock = next_decision.get("operator_runtime_env_lock")
         if isinstance(lock, dict):
             close_reasons = list(lock.get("close_reasons") or [])
@@ -3086,10 +3517,18 @@ def _close_real_pyramid_scale_in_quality_guard_for_live_owner(
     }
     updated_decisions: list[dict[str, Any]] = []
     for decision in decisions:
-        if str(decision.get("family") or "") != REAL_PYRAMID_SCALE_IN_QUALITY_GUARD_FAMILY:
+        if (
+            str(decision.get("family") or "")
+            != REAL_PYRAMID_SCALE_IN_QUALITY_GUARD_FAMILY
+        ):
             updated_decisions.append(decision)
             continue
-        next_decision = {**decision, "selected": False, "decision_reason": reason, "env_overrides": {}}
+        next_decision = {
+            **decision,
+            "selected": False,
+            "decision_reason": reason,
+            "env_overrides": {},
+        }
         lock = next_decision.get("operator_runtime_env_lock")
         if isinstance(lock, dict):
             close_reasons = list(lock.get("close_reasons") or [])
@@ -3130,7 +3569,12 @@ def _close_soft_stop_dynamic_grace_for_live_owner(
         if str(decision.get("family") or "") != SOFT_STOP_DYNAMIC_GRACE_FAMILY:
             updated_decisions.append(decision)
             continue
-        next_decision = {**decision, "selected": False, "decision_reason": reason, "env_overrides": {}}
+        next_decision = {
+            **decision,
+            "selected": False,
+            "decision_reason": reason,
+            "env_overrides": {},
+        }
         lock = next_decision.get("operator_runtime_env_lock")
         if isinstance(lock, dict):
             close_reasons = list(lock.get("close_reasons") or [])
@@ -3171,7 +3615,12 @@ def _close_preset_tp_soft_stop_for_live_owner(
         if str(decision.get("family") or "") != PRESET_TP_SOFT_STOP_FAMILY:
             updated_decisions.append(decision)
             continue
-        next_decision = {**decision, "selected": False, "decision_reason": reason, "env_overrides": {}}
+        next_decision = {
+            **decision,
+            "selected": False,
+            "decision_reason": reason,
+            "env_overrides": {},
+        }
         lock = next_decision.get("operator_runtime_env_lock")
         if isinstance(lock, dict):
             close_reasons = list(lock.get("close_reasons") or [])
@@ -3192,7 +3641,10 @@ def _lifecycle_ai_context_overlay_env(
     *,
     include_families: set[str] | None = None,
 ) -> tuple[dict[str, Any], dict[str, str]]:
-    if include_families is not None and "lifecycle_decision_matrix_runtime" not in include_families:
+    if (
+        include_families is not None
+        and "lifecycle_decision_matrix_runtime" not in include_families
+    ):
         return (
             {
                 "selected": False,
@@ -3205,7 +3657,8 @@ def _lifecycle_ai_context_overlay_env(
         (
             item
             for item in calibration_candidates
-            if isinstance(item, dict) and str(item.get("family") or "") == "lifecycle_decision_matrix_runtime"
+            if isinstance(item, dict)
+            and str(item.get("family") or "") == "lifecycle_decision_matrix_runtime"
         ),
         None,
     )
@@ -3218,7 +3671,11 @@ def _lifecycle_ai_context_overlay_env(
             },
             {},
         )
-    recommended = candidate.get("recommended_values") if isinstance(candidate.get("recommended_values"), dict) else {}
+    recommended = (
+        candidate.get("recommended_values")
+        if isinstance(candidate.get("recommended_values"), dict)
+        else {}
+    )
     context_file = str(recommended.get("lifecycle_ai_context_file") or "")
     if not bool(recommended.get("lifecycle_ai_context_enabled")) or not context_file:
         return (
@@ -3234,8 +3691,12 @@ def _lifecycle_ai_context_overlay_env(
         "LIFECYCLE_DECISION_MATRIX_RUNTIME_EFFECT_ENABLED": False,
         "LIFECYCLE_AI_CONTEXT_ENABLED": True,
         "LIFECYCLE_AI_CONTEXT_FILE": context_file,
-        "LIFECYCLE_AI_CONTEXT_VERSION": str(recommended.get("lifecycle_ai_context_version") or ""),
-        "SCALP_ENTRY_ADM_ADVISORY_ENABLED": bool(recommended.get("entry_adm_advisory_enabled", True)),
+        "LIFECYCLE_AI_CONTEXT_VERSION": str(
+            recommended.get("lifecycle_ai_context_version") or ""
+        ),
+        "SCALP_ENTRY_ADM_ADVISORY_ENABLED": bool(
+            recommended.get("entry_adm_advisory_enabled", True)
+        ),
         "SCALP_ENTRY_ADM_RUNTIME_BIAS_ENABLED": False,
         "HOLDING_EXIT_MATRIX_ADVISORY_ENABLED": bool(
             recommended.get("holding_exit_matrix_advisory_enabled", True)
@@ -3464,9 +3925,7 @@ DATED_RUNTIME_OVERRIDE_SPECS: tuple[dict[str, str], ...] = (
     },
     {
         "family": "scalp_trailing_loss_conversion_recheck",
-        "enabled_key": (
-            "KORSTOCKSCAN_SCALP_TRAILING_LOSS_CONVERSION_RECHECK_ENABLED"
-        ),
+        "enabled_key": ("KORSTOCKSCAN_SCALP_TRAILING_LOSS_CONVERSION_RECHECK_ENABLED"),
         "active_date_key": (
             "KORSTOCKSCAN_SCALP_TRAILING_LOSS_CONVERSION_RECHECK_ACTIVE_DATE"
         ),
@@ -3790,9 +4249,7 @@ def verify_runtime_env_handoff(
     dated_operator_override_path = (
         RUNTIME_ENV_DIR / f"operator_runtime_overrides_{target_date}.env"
     )
-    raw_dated_operator_overrides = _read_shell_export_env(
-        dated_operator_override_path
-    )
+    raw_dated_operator_overrides = _read_shell_export_env(dated_operator_override_path)
     retired_persistent_operator_override_keys = sorted(
         key for key in raw_operator_overrides if key in RETIRED_RUNTIME_ENV_KEYS
     )
@@ -3995,9 +4452,11 @@ def verify_runtime_env_handoff(
                             "expected_value_source": (
                                 "dated_operator_runtime_overrides"
                                 if key in dated_operator_overrides
-                                else "operator_runtime_overrides"
-                                if key in operator_overrides
-                                else "threshold_runtime_env_manifest"
+                                else (
+                                    "operator_runtime_overrides"
+                                    if key in operator_overrides
+                                    else "threshold_runtime_env_manifest"
+                                )
                             ),
                         }
                     )
@@ -4106,7 +4565,9 @@ def _parse_gap_start_kst(gap: dict[str, Any]) -> datetime | None:
     return _parse_dt(start_text) if start_text else None
 
 
-def _gap_windows_for_target(target_date: str, gap_windows: dict[str, dict[str, Any]] | None = None) -> dict[str, dict[str, Any]]:
+def _gap_windows_for_target(
+    target_date: str, gap_windows: dict[str, dict[str, Any]] | None = None
+) -> dict[str, dict[str, Any]]:
     window_map = gap_windows or RUNTIME_GAP_WINDOWS_2026_06_11
     target = str(target_date).strip()
     if target != "2026-06-11":
@@ -4121,9 +4582,15 @@ def classify_postclose_interpretation_scope(
     target_date: str = "",
 ) -> dict[str, Any]:
     gap_windows = _gap_windows_for_target(target_date, gap_windows)
-    event_dt = _parse_dt(event_time_kst) if isinstance(event_time_kst, str) else event_time_kst
+    event_dt = (
+        _parse_dt(event_time_kst) if isinstance(event_time_kst, str) else event_time_kst
+    )
     if event_dt is None:
-        return {"target_date": target_date, "scope": "unknown_event_time", "active_gaps": []}
+        return {
+            "target_date": target_date,
+            "scope": "unknown_event_time",
+            "active_gaps": [],
+        }
     active_gaps_at_time: list[dict[str, Any]] = []
     for gap_detail in gap_windows.values():
         if not isinstance(gap_detail, dict):
@@ -4139,7 +4606,9 @@ def classify_postclose_interpretation_scope(
                     "gap_type": str(gap_detail.get("gap_type") or ""),
                     "metric_scope": str(gap_detail.get("metric_scope") or ""),
                     "excluded_metrics": gap_detail.get("excluded_metrics") or [],
-                    "interpretation_rule": str(gap_detail.get("interpretation_rule") or ""),
+                    "interpretation_rule": str(
+                        gap_detail.get("interpretation_rule") or ""
+                    ),
                 }
             )
     scope = "gap_affected" if active_gaps_at_time else "normal_runtime"
@@ -4148,7 +4617,9 @@ def classify_postclose_interpretation_scope(
         "event_time_kst": event_dt.isoformat(timespec="seconds"),
         "scope": scope,
         "active_gaps": active_gaps_at_time,
-        "interpretation_rules": [gap["interpretation_rule"] for gap in active_gaps_at_time],
+        "interpretation_rules": [
+            gap["interpretation_rule"] for gap in active_gaps_at_time
+        ],
     }
 
 
@@ -4198,10 +4669,14 @@ def _write_gap_provenance(target_date: str) -> None:
         return
     RUNTIME_GAP_PROVENANCE_DIR.mkdir(parents=True, exist_ok=True)
     out_path = runtime_gap_provenance_artifact_path(target_date)
-    out_path.write_text(json.dumps(artifact, ensure_ascii=False, indent=2), encoding="utf-8")
+    out_path.write_text(
+        json.dumps(artifact, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
 
 
-def _write_runtime_env(target_date: str, manifest: dict[str, Any], env_overrides: dict[str, str]) -> None:
+def _write_runtime_env(
+    target_date: str, manifest: dict[str, Any], env_overrides: dict[str, str]
+) -> None:
     RUNTIME_ENV_DIR.mkdir(parents=True, exist_ok=True)
     env_overrides = {
         key: value
@@ -4234,15 +4709,45 @@ def _write_runtime_env(target_date: str, manifest: dict[str, Any], env_overrides
                     item.get("family")
                     for item in [
                         *(manifest.get("auto_apply_selected") or []),
-                        *((manifest.get("swing_runtime_approval") or {}).get("selected") or []),
-                        *((manifest.get("scalp_sim_auto_approval") or {}).get("selected") or []),
-                        *((manifest.get("scalp_sim_scale_in_window_approval") or {}).get("selected") or []),
-                        *((manifest.get("runtime_apply_bridge") or {}).get("selected") or []),
-                        *((manifest.get("lifecycle_bucket_discovery") or {}).get("selected") or []),
-                        *((manifest.get("swing_sim_auto_approval") or {}).get("selected") or []),
+                        *(
+                            (manifest.get("swing_runtime_approval") or {}).get(
+                                "selected"
+                            )
+                            or []
+                        ),
+                        *(
+                            (manifest.get("scalp_sim_auto_approval") or {}).get(
+                                "selected"
+                            )
+                            or []
+                        ),
+                        *(
+                            (
+                                manifest.get("scalp_sim_scale_in_window_approval") or {}
+                            ).get("selected")
+                            or []
+                        ),
+                        *(
+                            (manifest.get("runtime_apply_bridge") or {}).get("selected")
+                            or []
+                        ),
+                        *(
+                            (manifest.get("lifecycle_bucket_discovery") or {}).get(
+                                "selected"
+                            )
+                            or []
+                        ),
+                        *(
+                            (manifest.get("swing_sim_auto_approval") or {}).get(
+                                "selected"
+                            )
+                            or []
+                        ),
                         *(
                             [manifest.get("entry_cancel_wait_runtime")]
-                            if (manifest.get("entry_cancel_wait_runtime") or {}).get("selected")
+                            if (manifest.get("entry_cancel_wait_runtime") or {}).get(
+                                "selected"
+                            )
                             else []
                         ),
                     ]
@@ -4259,20 +4764,35 @@ def _entry_cancel_wait_standalone_decision(
     source_date: str, target_date: str, operator_locks: list[dict[str, Any]]
 ) -> tuple[dict[str, Any], dict[str, str]]:
     if target_date < ENTRY_CANCEL_WAIT_ACTIVATION_DATE:
-        return ({
-            "family": ENTRY_CANCEL_WAIT_FAMILY,
-            "selected": False,
-            "decision_reason": "before_activation_date",
-            "activation_date": ENTRY_CANCEL_WAIT_ACTIVATION_DATE,
-            "runtime_effect": False,
-            "env_overrides": {},
-        }, {})
+        return (
+            {
+                "family": ENTRY_CANCEL_WAIT_FAMILY,
+                "selected": False,
+                "decision_reason": "before_activation_date",
+                "activation_date": ENTRY_CANCEL_WAIT_ACTIVATION_DATE,
+                "runtime_effect": False,
+                "env_overrides": {},
+            },
+            {},
+        )
     defaults = {"standard": 60, "breakout": 120, "pullback": 600, "reserve": 1200}
-    report_path = ENTRY_CANCEL_WAIT_TUNING_DIR / f"entry_cancel_wait_tuning_{source_date}.json"
+    report_path = (
+        ENTRY_CANCEL_WAIT_TUNING_DIR / f"entry_cancel_wait_tuning_{source_date}.json"
+    )
     report = _load_json(report_path) if report_path.exists() else {}
-    values = report.get("recommended_thresholds") if isinstance(report.get("recommended_thresholds"), dict) else {}
-    _previous_families, previous_manifest = _load_previous_runtime_env_selected_families(target_date)
-    previous_env = previous_manifest.get("env_overrides") if isinstance(previous_manifest.get("env_overrides"), dict) else {}
+    values = (
+        report.get("recommended_thresholds")
+        if isinstance(report.get("recommended_thresholds"), dict)
+        else {}
+    )
+    _previous_families, previous_manifest = (
+        _load_previous_runtime_env_selected_families(target_date)
+    )
+    previous_env = (
+        previous_manifest.get("env_overrides")
+        if isinstance(previous_manifest.get("env_overrides"), dict)
+        else {}
+    )
     env_keys = {
         "standard": "KORSTOCKSCAN_SCALPING_ENTRY_TIMEOUT_SEC",
         "breakout": "KORSTOCKSCAN_SCALPING_BREAKOUT_ENTRY_TIMEOUT_SEC",
@@ -4292,13 +4812,17 @@ def _entry_cancel_wait_standalone_decision(
         if str(lock.get("family") or "") != ENTRY_CANCEL_WAIT_FAMILY:
             continue
         lock_env = _lock_env_overrides(lock)
-        enabled = str(lock_env.get("KORSTOCKSCAN_ENTRY_CANCEL_WAIT_ATTRIBUTION_ENABLED", "true")).lower()
+        enabled = str(
+            lock_env.get("KORSTOCKSCAN_ENTRY_CANCEL_WAIT_ATTRIBUTION_ENABLED", "true")
+        ).lower()
         if enabled in {"false", "0", "off"}:
             explicit_off = True
             off_lock_id = str(lock.get("lock_id") or "operator_lock")
             break
     env_overrides = {
-        "KORSTOCKSCAN_ENTRY_CANCEL_WAIT_ATTRIBUTION_ENABLED": "false" if explicit_off else "true",
+        "KORSTOCKSCAN_ENTRY_CANCEL_WAIT_ATTRIBUTION_ENABLED": (
+            "false" if explicit_off else "true"
+        ),
         "KORSTOCKSCAN_ENTRY_CANCEL_WAIT_ATTRIBUTION_REAL_MIN_SEC": "60",
         "KORSTOCKSCAN_ENTRY_CANCEL_WAIT_ATTRIBUTION_STALE_MAX_SEC": "30",
         **{env_keys[profile]: str(value) for profile, value in selected_values.items()},
@@ -4309,16 +4833,26 @@ def _entry_cancel_wait_standalone_decision(
         "family_type": "standalone_operational_runtime",
         "selected": not explicit_off,
         "decision_reason": (
-            f"explicit_operator_off:{off_lock_id}" if explicit_off else "persistent_on_daily_deterministic_ev"
+            f"explicit_operator_off:{off_lock_id}"
+            if explicit_off
+            else "persistent_on_daily_deterministic_ev"
         ),
         "runtime_effect": not explicit_off,
         "allowed_runtime_apply": True,
         "automatic_off_allowed": False,
         "source_artifact": str(report_path) if report_path.exists() else None,
-        "source_quality_status": str(report.get("source_quality_status") or "missing_hold_defaults"),
+        "source_quality_status": str(
+            report.get("source_quality_status") or "missing_hold_defaults"
+        ),
         "selected_thresholds": selected_values,
         "env_overrides": env_overrides,
-        "excluded_consumers": ["ADM", "LDM", "lifecycle_bucket", "threshold_cycle_ev", "runtime_apply_bridge"],
+        "excluded_consumers": [
+            "ADM",
+            "LDM",
+            "lifecycle_bucket",
+            "threshold_cycle_ev",
+            "runtime_apply_bridge",
+        ],
     }
     return decision, env_overrides
 
@@ -4334,10 +4868,16 @@ def build_preopen_apply_manifest(
     include_families: set[str] | None = None,
 ) -> dict[str, Any]:
     target_date = str(target_date).strip()
-    source_path = _report_path_for_date(source_date, source_phase=source_phase) if source_date else _latest_report_before(target_date)
+    source_path = (
+        _report_path_for_date(source_date, source_phase=source_phase)
+        if source_date
+        else _latest_report_before(target_date)
+    )
     if source_path is None or not source_path.exists():
         auto_apply_requested = bool(auto_apply) or apply_mode in AUTO_APPLY_MODES
-        operator_runtime_env_locks = _load_operator_runtime_env_locks(source_date, target_date)
+        operator_runtime_env_locks = _load_operator_runtime_env_locks(
+            source_date, target_date
+        )
         selected, decisions, env_overrides = ([], [], {})
         if auto_apply_requested and operator_runtime_env_locks:
             selected, decisions, env_overrides = _select_auto_apply_candidates(
@@ -4369,7 +4909,9 @@ def build_preopen_apply_manifest(
             "auto_apply_selected": selected,
             "auto_apply_decisions": decisions,
             "operator_runtime_env_locks": operator_runtime_env_locks,
-            "runtime_env_file": str(runtime_env_path(target_date)) if auto_apply_requested else None,
+            "runtime_env_file": (
+                str(runtime_env_path(target_date)) if auto_apply_requested else None
+            ),
             "runtime_env_overrides": env_overrides,
             "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         }
@@ -4385,22 +4927,36 @@ def build_preopen_apply_manifest(
             )
     else:
         report = _load_json(source_path)
-        candidates = report.get("apply_candidate_list") if isinstance(report.get("apply_candidate_list"), list) else []
+        candidates = (
+            report.get("apply_candidate_list")
+            if isinstance(report.get("apply_candidate_list"), list)
+            else []
+        )
         calibration_candidates = (
-            report.get("calibration_candidates") if isinstance(report.get("calibration_candidates"), list) else []
+            report.get("calibration_candidates")
+            if isinstance(report.get("calibration_candidates"), list)
+            else []
         )
         candidates = [
             item
             for item in candidates
-            if not (isinstance(item, dict) and str(item.get("family") or "") in REMOVED_CALIBRATION_FAMILIES)
+            if not (
+                isinstance(item, dict)
+                and str(item.get("family") or "") in REMOVED_CALIBRATION_FAMILIES
+            )
         ]
         calibration_candidates = [
             item
             for item in calibration_candidates
-            if not (isinstance(item, dict) and str(item.get("family") or "") in REMOVED_CALIBRATION_FAMILIES)
+            if not (
+                isinstance(item, dict)
+                and str(item.get("family") or "") in REMOVED_CALIBRATION_FAMILIES
+            )
         ]
         report_source_date = str(report.get("date") or source_date or "")
-        latency_candidates, latency_recommendation = _load_latency_classifier_candidates(report_source_date)
+        latency_candidates, latency_recommendation = (
+            _load_latency_classifier_candidates(report_source_date)
+        )
         if latency_candidates:
             calibration_candidates = [*calibration_candidates, *latency_candidates]
         rising_missed_first_touch_candidates, rising_missed_first_touch_calibration = (
@@ -4419,9 +4975,10 @@ def build_preopen_apply_manifest(
                 *calibration_candidates,
                 *scalping_pyramid_quality_candidates,
             ]
-        scalping_avg_down_recovery_candidates, scalping_avg_down_recovery_calibration = (
-            _load_scalping_avg_down_recovery_calibration_candidates(report_source_date)
-        )
+        (
+            scalping_avg_down_recovery_candidates,
+            scalping_avg_down_recovery_calibration,
+        ) = _load_scalping_avg_down_recovery_calibration_candidates(report_source_date)
         if scalping_avg_down_recovery_candidates:
             calibration_candidates = [
                 *calibration_candidates,
@@ -4469,7 +5026,9 @@ def build_preopen_apply_manifest(
         ]
         auto_apply_requested = bool(auto_apply) or apply_mode in AUTO_APPLY_MODES
         ai_review = _load_ai_review(report_source_date, source_phase=source_phase)
-        intraday_source_auto_apply_blocked = bool(auto_apply_requested and source_phase == "intraday")
+        intraday_source_auto_apply_blocked = bool(
+            auto_apply_requested and source_phase == "intraday"
+        )
         operator_runtime_env_locks = _load_operator_runtime_env_locks(
             report_source_date,
             target_date,
@@ -4484,15 +5043,39 @@ def build_preopen_apply_manifest(
         swing_bundle = _load_swing_runtime_approval_bundle(report_source_date)
         swing_selected, swing_decisions, swing_env_overrides = ([], [], {})
         scalp_sim_auto_bundle = _load_scalp_sim_auto_approval(report_source_date)
-        scalp_sim_auto_selected, scalp_sim_auto_decisions, scalp_sim_auto_env_overrides = ([], [], {})
-        scalp_scale_bundle = _load_scalp_sim_scale_in_window_approval(report_source_date)
-        scalp_scale_selected, scalp_scale_decisions, scalp_scale_env_overrides = ([], [], {})
+        (
+            scalp_sim_auto_selected,
+            scalp_sim_auto_decisions,
+            scalp_sim_auto_env_overrides,
+        ) = ([], [], {})
+        scalp_scale_bundle = _load_scalp_sim_scale_in_window_approval(
+            report_source_date
+        )
+        scalp_scale_selected, scalp_scale_decisions, scalp_scale_env_overrides = (
+            [],
+            [],
+            {},
+        )
         runtime_bridge_bundle = _load_runtime_apply_bridge_approval(report_source_date)
-        runtime_bridge_selected, runtime_bridge_decisions, runtime_bridge_env_overrides = ([], [], {})
-        lifecycle_bucket_bundle = _load_lifecycle_bucket_sim_auto_approval(report_source_date)
-        lifecycle_bucket_selected, lifecycle_bucket_decisions, lifecycle_bucket_env_overrides = ([], [], {})
+        (
+            runtime_bridge_selected,
+            runtime_bridge_decisions,
+            runtime_bridge_env_overrides,
+        ) = ([], [], {})
+        lifecycle_bucket_bundle = _load_lifecycle_bucket_sim_auto_approval(
+            report_source_date
+        )
+        (
+            lifecycle_bucket_selected,
+            lifecycle_bucket_decisions,
+            lifecycle_bucket_env_overrides,
+        ) = ([], [], {})
         swing_sim_auto_bundle = _load_swing_sim_auto_approval(report_source_date)
-        swing_sim_auto_selected, swing_sim_auto_decisions, swing_sim_auto_env_overrides = ([], [], {})
+        (
+            swing_sim_auto_selected,
+            swing_sim_auto_decisions,
+            swing_sim_auto_env_overrides,
+        ) = ([], [], {})
         if auto_apply_requested and not intraday_source_auto_apply_blocked:
             selected, decisions, env_overrides = _select_auto_apply_candidates(
                 calibration_candidates,
@@ -4502,10 +5085,14 @@ def build_preopen_apply_manifest(
                 include_families=include_families,
                 operator_locks=operator_runtime_env_locks,
             )
-            swing_selected, swing_decisions, swing_env_overrides = _select_swing_approved_candidates(swing_bundle)
-            scalp_sim_auto_selected, scalp_sim_auto_decisions, scalp_sim_auto_env_overrides = (
-                _select_scalp_sim_auto_approval(scalp_sim_auto_bundle)
+            swing_selected, swing_decisions, swing_env_overrides = (
+                _select_swing_approved_candidates(swing_bundle)
             )
+            (
+                scalp_sim_auto_selected,
+                scalp_sim_auto_decisions,
+                scalp_sim_auto_env_overrides,
+            ) = _select_scalp_sim_auto_approval(scalp_sim_auto_bundle)
             if scalp_sim_auto_selected:
                 scalp_scale_decisions = [
                     {
@@ -4517,24 +5104,34 @@ def build_preopen_apply_manifest(
                     }
                 ]
             else:
-                scalp_scale_selected, scalp_scale_decisions, scalp_scale_env_overrides = (
-                    _select_scalp_sim_scale_in_window_approval(scalp_scale_bundle)
-                )
-            runtime_bridge_selected, runtime_bridge_decisions, runtime_bridge_env_overrides = (
-                _select_runtime_apply_bridge_approval(
-                    runtime_bridge_bundle,
+                (
+                    scalp_scale_selected,
+                    scalp_scale_decisions,
+                    scalp_scale_env_overrides,
+                ) = _select_scalp_sim_scale_in_window_approval(scalp_scale_bundle)
+            (
+                runtime_bridge_selected,
+                runtime_bridge_decisions,
+                runtime_bridge_env_overrides,
+            ) = _select_runtime_apply_bridge_approval(
+                runtime_bridge_bundle,
+                include_families=include_families,
+            )
+            (
+                lifecycle_bucket_selected,
+                lifecycle_bucket_decisions,
+                lifecycle_bucket_env_overrides,
+            ) = _select_lifecycle_bucket_sim_auto_approval(lifecycle_bucket_bundle)
+            (
+                swing_sim_auto_selected,
+                swing_sim_auto_decisions,
+                swing_sim_auto_env_overrides,
+            ) = _select_swing_sim_auto_approval(swing_sim_auto_bundle)
+            lifecycle_context_overlay, lifecycle_context_env_overrides = (
+                _lifecycle_ai_context_overlay_env(
+                    calibration_candidates,
                     include_families=include_families,
                 )
-            )
-            lifecycle_bucket_selected, lifecycle_bucket_decisions, lifecycle_bucket_env_overrides = (
-                _select_lifecycle_bucket_sim_auto_approval(lifecycle_bucket_bundle)
-            )
-            swing_sim_auto_selected, swing_sim_auto_decisions, swing_sim_auto_env_overrides = (
-                _select_swing_sim_auto_approval(swing_sim_auto_bundle)
-            )
-            lifecycle_context_overlay, lifecycle_context_env_overrides = _lifecycle_ai_context_overlay_env(
-                calibration_candidates,
-                include_families=include_families,
             )
             entry_price_live_owner_family = _entry_price_live_owner_family(
                 selected,
@@ -4556,71 +5153,93 @@ def build_preopen_apply_manifest(
                 selected,
                 runtime_bridge_selected,
             )
-            selected, decisions, env_overrides = _close_aggressive_entry_price_override_for_live_owner(
-                selected=selected,
-                decisions=decisions,
-                env_overrides=env_overrides,
-                owner_family=entry_price_live_owner_family,
+            selected, decisions, env_overrides = (
+                _close_aggressive_entry_price_override_for_live_owner(
+                    selected=selected,
+                    decisions=decisions,
+                    env_overrides=env_overrides,
+                    owner_family=entry_price_live_owner_family,
+                )
             )
-            selected, decisions, env_overrides = _close_scalping_scanner_real_source_guard_for_live_owner(
-                selected=selected,
-                decisions=decisions,
-                env_overrides=env_overrides,
-                owner_family=entry_live_tuning_owner_family,
+            selected, decisions, env_overrides = (
+                _close_scalping_scanner_real_source_guard_for_live_owner(
+                    selected=selected,
+                    decisions=decisions,
+                    env_overrides=env_overrides,
+                    owner_family=entry_live_tuning_owner_family,
+                )
             )
-            selected, decisions, env_overrides = _close_score65_74_strong_micro_override_for_live_owner(
-                selected=selected,
-                decisions=decisions,
-                env_overrides=env_overrides,
-                owner_family=entry_live_tuning_owner_family,
+            selected, decisions, env_overrides = (
+                _close_score65_74_strong_micro_override_for_live_owner(
+                    selected=selected,
+                    decisions=decisions,
+                    env_overrides=env_overrides,
+                    owner_family=entry_live_tuning_owner_family,
+                )
             )
-            selected, decisions, env_overrides = _close_early_accel_recheck_for_live_owner(
-                selected=selected,
-                decisions=decisions,
-                env_overrides=env_overrides,
-                owner_family=entry_live_tuning_owner_family,
+            selected, decisions, env_overrides = (
+                _close_early_accel_recheck_for_live_owner(
+                    selected=selected,
+                    decisions=decisions,
+                    env_overrides=env_overrides,
+                    owner_family=entry_live_tuning_owner_family,
+                )
             )
-            selected, decisions, env_overrides = _close_pre_submit_liquidity_relief_for_live_owner(
-                selected=selected,
-                decisions=decisions,
-                env_overrides=env_overrides,
-                owner_family=entry_live_tuning_owner_family,
+            selected, decisions, env_overrides = (
+                _close_pre_submit_liquidity_relief_for_live_owner(
+                    selected=selected,
+                    decisions=decisions,
+                    env_overrides=env_overrides,
+                    owner_family=entry_live_tuning_owner_family,
+                )
             )
-            selected, decisions, env_overrides = _close_weak_context_late_entry_guard_for_live_owner(
-                selected=selected,
-                decisions=decisions,
-                env_overrides=env_overrides,
-                owner_family=entry_live_tuning_owner_family,
+            selected, decisions, env_overrides = (
+                _close_weak_context_late_entry_guard_for_live_owner(
+                    selected=selected,
+                    decisions=decisions,
+                    env_overrides=env_overrides,
+                    owner_family=entry_live_tuning_owner_family,
+                )
             )
-            selected, decisions, env_overrides = _close_ai_numeric_consistency_recheck_for_live_owner(
-                selected=selected,
-                decisions=decisions,
-                env_overrides=env_overrides,
-                owner_family=entry_live_tuning_owner_family,
+            selected, decisions, env_overrides = (
+                _close_ai_numeric_consistency_recheck_for_live_owner(
+                    selected=selected,
+                    decisions=decisions,
+                    env_overrides=env_overrides,
+                    owner_family=entry_live_tuning_owner_family,
+                )
             )
-            selected, decisions, env_overrides = _close_real_pyramid_scale_in_quality_guard_for_live_owner(
-                selected=selected,
-                decisions=decisions,
-                env_overrides=env_overrides,
-                owner_family=scale_in_live_owner_family,
+            selected, decisions, env_overrides = (
+                _close_real_pyramid_scale_in_quality_guard_for_live_owner(
+                    selected=selected,
+                    decisions=decisions,
+                    env_overrides=env_overrides,
+                    owner_family=scale_in_live_owner_family,
+                )
             )
-            selected, decisions, env_overrides = _close_never_green_defer_clamp_for_live_owner(
-                selected=selected,
-                decisions=decisions,
-                env_overrides=env_overrides,
-                owner_family=holding_exit_live_owner_family,
+            selected, decisions, env_overrides = (
+                _close_never_green_defer_clamp_for_live_owner(
+                    selected=selected,
+                    decisions=decisions,
+                    env_overrides=env_overrides,
+                    owner_family=holding_exit_live_owner_family,
+                )
             )
-            selected, decisions, env_overrides = _close_soft_stop_dynamic_grace_for_live_owner(
-                selected=selected,
-                decisions=decisions,
-                env_overrides=env_overrides,
-                owner_family=holding_exit_live_owner_family,
+            selected, decisions, env_overrides = (
+                _close_soft_stop_dynamic_grace_for_live_owner(
+                    selected=selected,
+                    decisions=decisions,
+                    env_overrides=env_overrides,
+                    owner_family=holding_exit_live_owner_family,
+                )
             )
-            selected, decisions, env_overrides = _close_preset_tp_soft_stop_for_live_owner(
-                selected=selected,
-                decisions=decisions,
-                env_overrides=env_overrides,
-                owner_family=preset_tp_exit_live_owner_family,
+            selected, decisions, env_overrides = (
+                _close_preset_tp_soft_stop_for_live_owner(
+                    selected=selected,
+                    decisions=decisions,
+                    env_overrides=env_overrides,
+                    owner_family=preset_tp_exit_live_owner_family,
+                )
             )
             env_overrides = {
                 **env_overrides,
@@ -4638,8 +5257,13 @@ def build_preopen_apply_manifest(
                 for key, value in env_overrides.items()
                 if str(key) not in REMOVED_RUNTIME_ENV_KEYS
             }
-            if any(str(item.get("family") or "") == "dynamic_entry_price_resolver" for item in selected):
-                env_overrides["KORSTOCKSCAN_DYNAMIC_ENTRY_PRICE_RESOLVER_LIVE_SELECTED"] = "true"
+            if any(
+                str(item.get("family") or "") == "dynamic_entry_price_resolver"
+                for item in selected
+            ):
+                env_overrides[
+                    "KORSTOCKSCAN_DYNAMIC_ENTRY_PRICE_RESOLVER_LIVE_SELECTED"
+                ] = "true"
             if entry_price_live_owner_family:
                 env_overrides[ENTRY_PRICE_LIVE_TUNING_MARKER_ENV] = "true"
             if entry_live_tuning_owner_family:
@@ -4654,13 +5278,19 @@ def build_preopen_apply_manifest(
         status = (
             "auto_bounded_live_ready"
             if runtime_change
-            else "auto_bounded_live_blocked"
-            if auto_apply_requested
-            else "efficient_tradeoff_manifest_ready"
-            if apply_mode == "efficient_tradeoff_canary_candidate"
-            else "calibrated_manifest_ready"
-            if apply_mode == "calibrated_apply_candidate"
-            else "manifest_ready"
+            else (
+                "auto_bounded_live_blocked"
+                if auto_apply_requested
+                else (
+                    "efficient_tradeoff_manifest_ready"
+                    if apply_mode == "efficient_tradeoff_canary_candidate"
+                    else (
+                        "calibrated_manifest_ready"
+                        if apply_mode == "calibrated_apply_candidate"
+                        else "manifest_ready"
+                    )
+                )
+            )
         )
         manifest = {
             "target_date": target_date,
@@ -4672,12 +5302,15 @@ def build_preopen_apply_manifest(
             "runtime_change_reason": (
                 "intraday source phase는 manual forensic/legacy manifest-only이며 runtime env apply 금지"
                 if intraday_source_auto_apply_blocked
-                else
-                "장전 자동 bounded env apply; 장중 threshold mutation은 계속 금지"
-                if runtime_change
-                else "장전 자동 bounded env apply 후보 없음; 장중 threshold mutation은 계속 금지"
-                if auto_apply_requested
-                else "장중 자동 mutation 금지; calibrated/efficient trade-off 후보도 승인된 family의 다음 장전 bounded apply 후보만 생성"
+                else (
+                    "장전 자동 bounded env apply; 장중 threshold mutation은 계속 금지"
+                    if runtime_change
+                    else (
+                        "장전 자동 bounded env apply 후보 없음; 장중 threshold mutation은 계속 금지"
+                        if auto_apply_requested
+                        else "장중 자동 mutation 금지; calibrated/efficient trade-off 후보도 승인된 family의 다음 장전 bounded apply 후보만 생성"
+                    )
+                )
             ),
             "candidates": candidates,
             "calibration_candidates": calibration_candidates,
@@ -4722,8 +5355,11 @@ def build_preopen_apply_manifest(
                 "artifact": scalp_sim_auto_bundle.get("artifact"),
                 "catalog": scalp_sim_auto_bundle.get("catalog"),
                 "approved": 1 if scalp_sim_auto_bundle.get("approved_request") else 0,
-                "approved_policy_count": scalp_sim_auto_bundle.get("approved_policy_count"),
-                "approved_source_ids": scalp_sim_auto_bundle.get("approved_source_ids") or [],
+                "approved_policy_count": scalp_sim_auto_bundle.get(
+                    "approved_policy_count"
+                ),
+                "approved_source_ids": scalp_sim_auto_bundle.get("approved_source_ids")
+                or [],
                 "blocked": scalp_sim_auto_bundle.get("blocked") or [],
                 "approved_request": scalp_sim_auto_bundle.get("approved_request"),
                 "selected": scalp_sim_auto_selected,
@@ -4744,7 +5380,8 @@ def build_preopen_apply_manifest(
                 "approved": len(runtime_bridge_bundle.get("approved_requests") or []),
                 "blocked": runtime_bridge_bundle.get("blocked") or [],
                 "metadata": runtime_bridge_bundle.get("metadata") or [],
-                "approved_requests": runtime_bridge_bundle.get("approved_requests") or [],
+                "approved_requests": runtime_bridge_bundle.get("approved_requests")
+                or [],
                 "selected": runtime_bridge_selected,
                 "decisions": runtime_bridge_decisions,
             },
@@ -4762,8 +5399,11 @@ def build_preopen_apply_manifest(
                 "artifact": swing_sim_auto_bundle.get("artifact"),
                 "catalog": swing_sim_auto_bundle.get("catalog"),
                 "approved": 1 if swing_sim_auto_bundle.get("approved_request") else 0,
-                "approved_policy_count": swing_sim_auto_bundle.get("approved_policy_count"),
-                "approved_source_ids": swing_sim_auto_bundle.get("approved_source_ids") or [],
+                "approved_policy_count": swing_sim_auto_bundle.get(
+                    "approved_policy_count"
+                ),
+                "approved_source_ids": swing_sim_auto_bundle.get("approved_source_ids")
+                or [],
                 "blocked": swing_sim_auto_bundle.get("blocked") or [],
                 "approved_request": swing_sim_auto_bundle.get("approved_request"),
                 "selected": swing_sim_auto_selected,
@@ -4775,11 +5415,26 @@ def build_preopen_apply_manifest(
                 else None
             ),
             "runtime_env_overrides": env_overrides,
-            "threshold_snapshot": _scrub_removed_contracts(report.get("threshold_snapshot") or {}) or {},
-            "post_apply_attribution": _scrub_removed_contracts(report.get("post_apply_attribution") or {}) or {},
-            "safety_guard_pack": _scrub_removed_contracts(report.get("safety_guard_pack") or []) or [],
-            "calibration_trigger_pack": _scrub_removed_contracts(report.get("calibration_trigger_pack") or []) or [],
-            "rollback_guard_pack": _scrub_removed_contracts(report.get("rollback_guard_pack") or []) or [],
+            "threshold_snapshot": _scrub_removed_contracts(
+                report.get("threshold_snapshot") or {}
+            )
+            or {},
+            "post_apply_attribution": _scrub_removed_contracts(
+                report.get("post_apply_attribution") or {}
+            )
+            or {},
+            "safety_guard_pack": _scrub_removed_contracts(
+                report.get("safety_guard_pack") or []
+            )
+            or [],
+            "calibration_trigger_pack": _scrub_removed_contracts(
+                report.get("calibration_trigger_pack") or []
+            )
+            or [],
+            "rollback_guard_pack": _scrub_removed_contracts(
+                report.get("rollback_guard_pack") or []
+            )
+            or [],
             "calibration_policy": {
                 "condition_miss_action": "calibration_trigger",
                 "sample_shortfall_action": "cap_reduce_or_hold_sample_or_max_step_shrink",
@@ -4790,10 +5445,16 @@ def build_preopen_apply_manifest(
                 "ai_correction_required": bool(require_ai),
                 "same_stage_owner_rule": "one_selected_family_per_stage_by_priority",
                 "daily_ev_report_only": True,
-                "operator_family_filter": sorted(include_families) if include_families is not None else None,
+                "operator_family_filter": (
+                    sorted(include_families) if include_families is not None else None
+                ),
                 "intraday_source_auto_apply": False,
             },
-            "warnings": ["intraday_source_phase_auto_apply_blocked"] if intraday_source_auto_apply_blocked else [],
+            "warnings": (
+                ["intraday_source_phase_auto_apply_blocked"]
+                if intraday_source_auto_apply_blocked
+                else []
+            ),
             "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         }
         if auto_apply_requested and not intraday_source_auto_apply_blocked:
@@ -4808,12 +5469,16 @@ def build_preopen_apply_manifest(
                 encoding="utf-8",
             )
     APPLY_PLAN_DIR.mkdir(parents=True, exist_ok=True)
-    apply_manifest_path(target_date).write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    apply_manifest_path(target_date).write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     return manifest
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Build preopen threshold apply manifest.")
+    parser = argparse.ArgumentParser(
+        description="Build preopen threshold apply manifest."
+    )
     parser.add_argument(
         "--date",
         "--target-date",
@@ -4821,7 +5486,12 @@ def main(argv: list[str] | None = None) -> int:
         default=date.today().isoformat(),
         help="Target preopen date",
     )
-    parser.add_argument("--source-date", dest="source_date", default=None, help="Postclose report date to apply")
+    parser.add_argument(
+        "--source-date",
+        dest="source_date",
+        default=None,
+        help="Postclose report date to apply",
+    )
     parser.add_argument(
         "--source-phase",
         choices=["canonical", "intraday", "postclose"],
@@ -4848,13 +5518,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--auto-apply",
         action="store_true",
-        default=str(os.getenv("THRESHOLD_CYCLE_AUTO_APPLY", "")).lower() in {"1", "true", "yes", "on"},
+        default=str(os.getenv("THRESHOLD_CYCLE_AUTO_APPLY", "")).lower()
+        in {"1", "true", "yes", "on"},
         help="Write guarded runtime env overrides for selected candidates.",
     )
     parser.add_argument(
         "--allow-deterministic-without-ai",
         action="store_true",
-        default=str(os.getenv("THRESHOLD_CYCLE_AUTO_APPLY_REQUIRE_AI", "true")).lower() in {"0", "false", "no", "off"},
+        default=str(os.getenv("THRESHOLD_CYCLE_AUTO_APPLY_REQUIRE_AI", "true")).lower()
+        in {"0", "false", "no", "off"},
         help="Allow deterministic guards to apply when AI correction review is missing/unavailable.",
     )
     parser.add_argument(

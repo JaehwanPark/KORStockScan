@@ -24,15 +24,18 @@ from src.database.models import (
     SwingStrategyDiscoveryCandidate,
 )
 from src.engine.swing_sector_theme_source import build_sector_theme_map
-from src.engine.swing_strategy_discovery_schema import ensure_swing_strategy_discovery_schema
+from src.engine.swing_strategy_discovery_schema import (
+    ensure_swing_strategy_discovery_schema,
+)
 from src.model.common_v2 import RECO_DIAGNOSTIC_PATH, RECO_PATH
 from src.utils.constants import DATA_DIR, POSTGRES_URL, TRADING_RULES
 from src.utils.jsonl_io import iter_jsonl
 
-
 REPORT_DIR = Path(DATA_DIR) / "report" / "swing_strategy_discovery_sim"
 PIPELINE_EVENTS_DIR = Path(DATA_DIR) / "pipeline_events"
-BOTTOM_REBOUND_SOURCE_DIR = Path(DATA_DIR) / "report" / "swing_bottom_rebound_candidate_source"
+BOTTOM_REBOUND_SOURCE_DIR = (
+    Path(DATA_DIR) / "report" / "swing_bottom_rebound_candidate_source"
+)
 THRESHOLD_APPLY_PLAN_DIR = Path(DATA_DIR) / "threshold_cycle" / "apply_plans"
 
 POLICY_VERSION = "swing_strategy_discovery_sim_v1"
@@ -238,33 +241,57 @@ def load_safe_pool_rows(
             return df.iloc[0:0].copy()
         df = df[df["date"] == eligible_dates.max()].copy()
     if "hybrid_mean" not in df.columns:
-        df["hybrid_mean"] = pd.to_numeric(df.get("prob", 0), errors="coerce").fillna(0.0)
+        df["hybrid_mean"] = pd.to_numeric(df.get("prob", 0), errors="coerce").fillna(
+            0.0
+        )
     if "meta_score" not in df.columns:
-        df["meta_score"] = pd.to_numeric(df.get("score", 0), errors="coerce").fillna(0.0)
+        df["meta_score"] = pd.to_numeric(df.get("score", 0), errors="coerce").fillna(
+            0.0
+        )
     if "floor_used" not in df.columns:
         df["floor_used"] = 0.0
-    safe_mask = pd.to_numeric(df["hybrid_mean"], errors="coerce").fillna(0.0) >= pd.to_numeric(
-        df["floor_used"], errors="coerce"
-    ).fillna(0.0)
+    safe_mask = pd.to_numeric(df["hybrid_mean"], errors="coerce").fillna(
+        0.0
+    ) >= pd.to_numeric(df["floor_used"], errors="coerce").fillna(0.0)
     if safe_mask.any():
         df = df[safe_mask].copy()
     return df.reset_index(drop=True)
 
 
 def _bottom_rebound_source_path(target_date: str) -> Path:
-    return BOTTOM_REBOUND_SOURCE_DIR / f"swing_bottom_rebound_candidate_source_{target_date}.json"
+    return (
+        BOTTOM_REBOUND_SOURCE_DIR
+        / f"swing_bottom_rebound_candidate_source_{target_date}.json"
+    )
 
 
-def load_bottom_rebound_source_rows(target_date: str, *, source_path: str | Path | None = None) -> tuple[pd.DataFrame, dict[str, Any]]:
-    path = Path(source_path) if source_path else _bottom_rebound_source_path(target_date)
+def load_bottom_rebound_source_rows(
+    target_date: str, *, source_path: str | Path | None = None
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    path = (
+        Path(source_path) if source_path else _bottom_rebound_source_path(target_date)
+    )
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
-        return pd.DataFrame(), {"path": str(path), "status": "missing", "loaded_rows": 0}
+        return pd.DataFrame(), {
+            "path": str(path),
+            "status": "missing",
+            "loaded_rows": 0,
+        }
     except Exception as exc:
-        return pd.DataFrame(), {"path": str(path), "status": "invalid_json", "loaded_rows": 0, "error": str(exc)}
+        return pd.DataFrame(), {
+            "path": str(path),
+            "status": "invalid_json",
+            "loaded_rows": 0,
+            "error": str(exc),
+        }
     if not isinstance(payload, dict):
-        return pd.DataFrame(), {"path": str(path), "status": "invalid_payload", "loaded_rows": 0}
+        return pd.DataFrame(), {
+            "path": str(path),
+            "status": "invalid_payload",
+            "loaded_rows": 0,
+        }
     contract_ok = (
         payload.get("decision_authority") == "swing_sim_candidate_source_only"
         and payload.get("runtime_effect") is False
@@ -272,7 +299,11 @@ def load_bottom_rebound_source_rows(target_date: str, *, source_path: str | Path
         and payload.get("allowed_runtime_apply") is False
     )
     if not contract_ok:
-        return pd.DataFrame(), {"path": str(path), "status": "blocked_contract", "loaded_rows": 0}
+        return pd.DataFrame(), {
+            "path": str(path),
+            "status": "blocked_contract",
+            "loaded_rows": 0,
+        }
     rows: list[dict[str, Any]] = []
     for candidate in payload.get("candidate_rows") or []:
         if not isinstance(candidate, dict):
@@ -280,8 +311,16 @@ def load_bottom_rebound_source_rows(target_date: str, *, source_path: str | Path
         code = _norm_code(candidate.get("stock_code"))
         if not code.strip("0"):
             continue
-        diagnostic = candidate.get("diagnostic_features") if isinstance(candidate.get("diagnostic_features"), dict) else {}
-        source_features = candidate.get("source_features") if isinstance(candidate.get("source_features"), dict) else {}
+        diagnostic = (
+            candidate.get("diagnostic_features")
+            if isinstance(candidate.get("diagnostic_features"), dict)
+            else {}
+        )
+        source_features = (
+            candidate.get("source_features")
+            if isinstance(candidate.get("source_features"), dict)
+            else {}
+        )
         score = _safe_float(candidate.get("lifecycle_exploration_score"), 0.0)
         rows.append(
             {
@@ -302,8 +341,12 @@ def load_bottom_rebound_source_rows(target_date: str, *, source_path: str | Path
                 "bottom_rebound_source_present": True,
                 "bottom_rebound_candidate_id": candidate.get("candidate_id"),
                 "bottom_rebound_candidate_rank": candidate.get("candidate_rank"),
-                "bottom_rebound_source_quality_adjusted_ev_pct": candidate.get("source_quality_adjusted_ev_pct"),
-                "bottom_rebound_recommended_entry_policy": candidate.get("recommended_sim_entry_policy"),
+                "bottom_rebound_source_quality_adjusted_ev_pct": candidate.get(
+                    "source_quality_adjusted_ev_pct"
+                ),
+                "bottom_rebound_recommended_entry_policy": candidate.get(
+                    "recommended_sim_entry_policy"
+                ),
                 "bottom_rebound_source_features": source_features,
             }
         )
@@ -327,9 +370,18 @@ def _selected_swing_policy_file_from_apply_plan(target_date: str) -> str:
     def walk(value: Any) -> str:
         if isinstance(value, dict):
             family = str(value.get("family") or "")
-            if family == "swing_sim_auto_approval" and value.get("selected") is not False:
-                recommended = value.get("recommended_values") if isinstance(value.get("recommended_values"), dict) else {}
-                policy_file = str(recommended.get("policy_file") or value.get("policy_file") or "").strip()
+            if (
+                family == "swing_sim_auto_approval"
+                and value.get("selected") is not False
+            ):
+                recommended = (
+                    value.get("recommended_values")
+                    if isinstance(value.get("recommended_values"), dict)
+                    else {}
+                )
+                policy_file = str(
+                    recommended.get("policy_file") or value.get("policy_file") or ""
+                ).strip()
                 if policy_file:
                     return policy_file
             for child in value.values():
@@ -351,7 +403,9 @@ def _load_active_arm_priority_policies(
     *,
     target_date: str | None = None,
 ) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
-    resolved = str(policy_file or os.environ.get("KORSTOCKSCAN_SWING_SIM_AUTO_POLICY_FILE") or "").strip()
+    resolved = str(
+        policy_file or os.environ.get("KORSTOCKSCAN_SWING_SIM_AUTO_POLICY_FILE") or ""
+    ).strip()
     if not resolved and target_date:
         resolved = _selected_swing_policy_file_from_apply_plan(target_date)
     if not resolved:
@@ -361,7 +415,10 @@ def _load_active_arm_priority_policies(
         payload = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return {}, {"status": "missing_or_invalid", "path": str(path)}
-    if not isinstance(payload, dict) or payload.get("schema_version") != "swing_sim_policy_catalog_v1":
+    if (
+        not isinstance(payload, dict)
+        or payload.get("schema_version") != "swing_sim_policy_catalog_v1"
+    ):
         return {}, {"status": "schema_invalid", "path": str(path)}
     policies: dict[str, dict[str, Any]] = {}
     bucket_policies: dict[str, dict[str, Any]] = {}
@@ -389,7 +446,9 @@ def _load_active_arm_priority_policies(
     }
 
 
-def merge_optional_source_rows(safe_pool_rows: pd.DataFrame, bottom_rows: pd.DataFrame) -> pd.DataFrame:
+def merge_optional_source_rows(
+    safe_pool_rows: pd.DataFrame, bottom_rows: pd.DataFrame
+) -> pd.DataFrame:
     if bottom_rows.empty:
         return safe_pool_rows.copy()
     if safe_pool_rows.empty:
@@ -407,12 +466,22 @@ def merge_optional_source_rows(safe_pool_rows: pd.DataFrame, bottom_rows: pd.Dat
         if extra:
             row = {
                 **row,
-                "bottom_rebound_source_present": _is_present(extra.get("bottom_rebound_source_present")),
+                "bottom_rebound_source_present": _is_present(
+                    extra.get("bottom_rebound_source_present")
+                ),
                 "bottom_rebound_candidate_id": extra.get("bottom_rebound_candidate_id"),
-                "bottom_rebound_candidate_rank": extra.get("bottom_rebound_candidate_rank"),
-                "bottom_rebound_source_quality_adjusted_ev_pct": extra.get("bottom_rebound_source_quality_adjusted_ev_pct"),
-                "bottom_rebound_recommended_entry_policy": extra.get("bottom_rebound_recommended_entry_policy"),
-                "bottom_rebound_source_features": extra.get("bottom_rebound_source_features"),
+                "bottom_rebound_candidate_rank": extra.get(
+                    "bottom_rebound_candidate_rank"
+                ),
+                "bottom_rebound_source_quality_adjusted_ev_pct": extra.get(
+                    "bottom_rebound_source_quality_adjusted_ev_pct"
+                ),
+                "bottom_rebound_recommended_entry_policy": extra.get(
+                    "bottom_rebound_recommended_entry_policy"
+                ),
+                "bottom_rebound_source_features": extra.get(
+                    "bottom_rebound_source_features"
+                ),
             }
         merged_records.append(row)
         seen.add(code)
@@ -424,7 +493,9 @@ def merge_optional_source_rows(safe_pool_rows: pd.DataFrame, bottom_rows: pd.Dat
     return pd.DataFrame(merged_records).reset_index(drop=True)
 
 
-def load_block_reason_map(target_date: str, *, event_path: Path | None = None) -> dict[str, str]:
+def load_block_reason_map(
+    target_date: str, *, event_path: Path | None = None
+) -> dict[str, str]:
     path = event_path or (PIPELINE_EVENTS_DIR / f"pipeline_events_{target_date}.jsonl")
     priority = {
         "blocked_gatekeeper_reject": 40,
@@ -437,7 +508,11 @@ def load_block_reason_map(target_date: str, *, event_path: Path | None = None) -
         stage = str(event.get("stage") or event.get("event_type") or "")
         if stage not in priority:
             continue
-        code = _norm_code(event.get("stock_code") or event.get("code") or (event.get("fields") or {}).get("stock_code"))
+        code = _norm_code(
+            event.get("stock_code")
+            or event.get("code")
+            or (event.get("fields") or {}).get("stock_code")
+        )
         if not code.strip("0"):
             continue
         rank = priority[stage]
@@ -446,7 +521,9 @@ def load_block_reason_map(target_date: str, *, event_path: Path | None = None) -
     return {code: stage for code, (_, stage) in best.items()}
 
 
-def fetch_quote_features(codes: Iterable[str], *, db_url: str = POSTGRES_URL, lookback: int = 60) -> dict[str, dict[str, Any]]:
+def fetch_quote_features(
+    codes: Iterable[str], *, db_url: str = POSTGRES_URL, lookback: int = 60
+) -> dict[str, dict[str, Any]]:
     codes = sorted({_norm_code(code) for code in codes if _norm_code(code).strip("0")})
     if not codes:
         return {}
@@ -478,7 +555,9 @@ def fetch_quote_features(codes: Iterable[str], *, db_url: str = POSTGRES_URL, lo
         ORDER BY stock_code ASC, quote_date DESC
     """).bindparams(bindparam("codes", expanding=True), bindparam("lookback"))
     try:
-        df = pd.read_sql(query, engine, params={"codes": codes, "lookback": max(1, int(lookback))})
+        df = pd.read_sql(
+            query, engine, params={"codes": codes, "lookback": max(1, int(lookback))}
+        )
     except Exception:
         return {}
     finally:
@@ -498,7 +577,9 @@ def fetch_quote_features(codes: Iterable[str], *, db_url: str = POSTGRES_URL, lo
         current = _safe_float(latest.get("close_price"), 0.0)
         low60 = _safe_float(low.min(), current)
         high60 = _safe_float(high.max(), current)
-        position_ratio = (current - low60) / max(1e-9, high60 - low60) if current > 0 else 0.5
+        position_ratio = (
+            (current - low60) / max(1e-9, high60 - low60) if current > 0 else 0.5
+        )
         if position_ratio >= 0.80:
             position_tag = "BREAKOUT"
         elif position_ratio <= 0.30:
@@ -546,7 +627,9 @@ def _block_exploration_score(reason: str) -> float:
     }.get(reason, 0.55)
 
 
-def _lifecycle_bootstrap_score(row: dict[str, Any], quote: dict[str, Any], block_reason: str) -> float:
+def _lifecycle_bootstrap_score(
+    row: dict[str, Any], quote: dict[str, Any], block_reason: str
+) -> float:
     # Legacy model remains deliberately low weight. The rest of the score keeps
     # diversity and action provenance visible before closed lifecycle labels exist.
     hybrid = max(0.0, min(1.0, _safe_float(row.get("hybrid_mean"), 0.0)))
@@ -555,7 +638,10 @@ def _lifecycle_bootstrap_score(row: dict[str, Any], quote: dict[str, Any], block
     score = (
         0.20 * hybrid
         + 0.10 * rank_score
-        + 0.25 * _position_score(str(quote.get("position_tag") or row.get("position_tag") or ""))
+        + 0.25
+        * _position_score(
+            str(quote.get("position_tag") or row.get("position_tag") or "")
+        )
         + 0.20 * _volatility_score(str(quote.get("volatility_bucket") or ""))
         + 0.25 * _block_exploration_score(block_reason)
     )
@@ -563,12 +649,16 @@ def _lifecycle_bootstrap_score(row: dict[str, Any], quote: dict[str, Any], block
 
 
 def _selection_mode(row: dict[str, Any]) -> str:
-    return str(_first_present_value(row.get("selection_mode"), default="")).strip().upper()
+    return (
+        str(_first_present_value(row.get("selection_mode"), default="")).strip().upper()
+    )
 
 
 def _is_legacy_selected(row: dict[str, Any]) -> bool:
     mode = _selection_mode(row)
-    return mode in {"SELECTED", "META_V2", "DB_FINAL_ENSEMBLE"} or bool(row.get("selected_by_legacy_model"))
+    return mode in {"SELECTED", "META_V2", "DB_FINAL_ENSEMBLE"} or bool(
+        row.get("selected_by_legacy_model")
+    )
 
 
 def _pick_type(row: dict[str, Any]) -> str:
@@ -616,7 +706,11 @@ def build_candidate_rows(
                 default="unknown",
             )
         )
-        source_family_bucket = "bottom_rebound" if _is_present(source.get("bottom_rebound_source_present")) else "safe_pool"
+        source_family_bucket = (
+            "bottom_rebound"
+            if _is_present(source.get("bottom_rebound_source_present"))
+            else "safe_pool"
+        )
         diversity_bucket = "|".join([position_tag, block_reason, volatility_bucket])
         score = _lifecycle_bootstrap_score(source, quote, block_reason)
         rows.append(
@@ -660,12 +754,18 @@ def build_candidate_rows(
                         default=[],
                     )
                 ),
-                "legacy_model_prob": _safe_float(source.get("prob", source.get("hybrid_mean")), 0.0),
+                "legacy_model_prob": _safe_float(
+                    source.get("prob", source.get("hybrid_mean")), 0.0
+                ),
                 "legacy_model_rank": _safe_int(source.get("score_rank"), 999),
                 "legacy_selection_mode": _selection_mode(source),
                 "legacy_pick_type": _pick_type(source),
-                "legacy_meta_score": _safe_float(source.get("meta_score", source.get("score")), 0.0),
-                "legacy_hybrid_mean": _safe_float(source.get("hybrid_mean", source.get("prob")), 0.0),
+                "legacy_meta_score": _safe_float(
+                    source.get("meta_score", source.get("score")), 0.0
+                ),
+                "legacy_hybrid_mean": _safe_float(
+                    source.get("hybrid_mean", source.get("prob")), 0.0
+                ),
                 "lifecycle_exploration_score": score,
                 "source_features": {
                     "label_weight_policy_version": LABEL_WEIGHT_POLICY_VERSION,
@@ -676,15 +776,23 @@ def build_candidate_rows(
                     "source_family_bucket": source_family_bucket,
                     "quote_features": quote,
                     "sector_theme": {
-                        "theme_source": sector_theme.get("theme_source") or "source_row_or_missing",
-                        "theme_source_quality": sector_theme.get("theme_source_quality") or "source_row_or_missing",
+                        "theme_source": sector_theme.get("theme_source")
+                        or "source_row_or_missing",
+                        "theme_source_quality": sector_theme.get("theme_source_quality")
+                        or "source_row_or_missing",
                     },
                     "bottom_rebound_source": {
-                        "present": _is_present(source.get("bottom_rebound_source_present")),
+                        "present": _is_present(
+                            source.get("bottom_rebound_source_present")
+                        ),
                         "candidate_id": source.get("bottom_rebound_candidate_id"),
                         "candidate_rank": source.get("bottom_rebound_candidate_rank"),
-                        "source_quality_adjusted_ev_pct": source.get("bottom_rebound_source_quality_adjusted_ev_pct"),
-                        "recommended_entry_policy": source.get("bottom_rebound_recommended_entry_policy"),
+                        "source_quality_adjusted_ev_pct": source.get(
+                            "bottom_rebound_source_quality_adjusted_ev_pct"
+                        ),
+                        "recommended_entry_policy": source.get(
+                            "bottom_rebound_recommended_entry_policy"
+                        ),
                         "entry_context": (
                             {
                                 "setup_type": "anticipatory_bottom_rebound_swing",
@@ -705,14 +813,27 @@ def build_candidate_rows(
                             else {}
                         ),
                     },
-                    "raw_source": {k: str(v) for k, v in source.items() if k in {"date", "bull_regime", "floor_used", "safe_pool_count", "candidate_count"}},
+                    "raw_source": {
+                        k: str(v)
+                        for k, v in source.items()
+                        if k
+                        in {
+                            "date",
+                            "bull_regime",
+                            "floor_used",
+                            "safe_pool_count",
+                            "candidate_count",
+                        }
+                    },
                 },
                 "decision_authority": DECISION_AUTHORITY,
                 "actual_order_submitted": False,
                 "broker_order_forbidden": True,
                 "runtime_effect": False,
                 "_legacy_selected": _is_legacy_selected(source),
-                "_reference_price": _safe_float(source.get("close") or quote.get("reference_price"), 0.0),
+                "_reference_price": _safe_float(
+                    source.get("close") or quote.get("reference_price"), 0.0
+                ),
             }
         )
     return allocate_candidate_arms(rows, max_candidates=max_candidates)
@@ -724,10 +845,16 @@ def _allocation_counts(total: int) -> dict[str, int]:
     lifecycle = max(1, int(round(total * ARM_ALLOCATION["lifecycle_rank"])))
     diversity = max(0, int(round(total * ARM_ALLOCATION["diversity_exploration"])))
     legacy = max(0, total - lifecycle - diversity)
-    return {"lifecycle_rank": lifecycle, "diversity_exploration": diversity, "legacy_ml": legacy}
+    return {
+        "lifecycle_rank": lifecycle,
+        "diversity_exploration": diversity,
+        "legacy_ml": legacy,
+    }
 
 
-def allocate_candidate_arms(rows: list[dict[str, Any]], *, max_candidates: int) -> list[dict[str, Any]]:
+def allocate_candidate_arms(
+    rows: list[dict[str, Any]], *, max_candidates: int
+) -> list[dict[str, Any]]:
     if not rows:
         return []
     limit = max(1, min(max_candidates, len(rows)))
@@ -735,9 +862,14 @@ def allocate_candidate_arms(rows: list[dict[str, Any]], *, max_candidates: int) 
     by_code = {row["stock_code"]: row for row in rows}
     selected: dict[str, str] = {}
 
-    ranked = sorted(rows, key=lambda item: item["lifecycle_exploration_score"], reverse=True)
+    ranked = sorted(
+        rows, key=lambda item: item["lifecycle_exploration_score"], reverse=True
+    )
     for row in ranked:
-        if len([arm for arm in selected.values() if arm == "lifecycle_rank"]) >= counts["lifecycle_rank"]:
+        if (
+            len([arm for arm in selected.values() if arm == "lifecycle_rank"])
+            >= counts["lifecycle_rank"]
+        ):
             break
         selected.setdefault(row["stock_code"], "lifecycle_rank")
 
@@ -746,7 +878,10 @@ def allocate_candidate_arms(rows: list[dict[str, Any]], *, max_candidates: int) 
         if row["stock_code"] not in selected:
             bucket_rows[row["diversity_bucket"]].append(row)
     bucket_keys = sorted(bucket_rows)
-    while len([arm for arm in selected.values() if arm == "diversity_exploration"]) < counts["diversity_exploration"]:
+    while (
+        len([arm for arm in selected.values() if arm == "diversity_exploration"])
+        < counts["diversity_exploration"]
+    ):
         progressed = False
         for key in bucket_keys:
             while bucket_rows[key]:
@@ -756,14 +891,26 @@ def allocate_candidate_arms(rows: list[dict[str, Any]], *, max_candidates: int) 
                 selected[row["stock_code"]] = "diversity_exploration"
                 progressed = True
                 break
-            if len([arm for arm in selected.values() if arm == "diversity_exploration"]) >= counts["diversity_exploration"]:
+            if (
+                len(
+                    [arm for arm in selected.values() if arm == "diversity_exploration"]
+                )
+                >= counts["diversity_exploration"]
+            ):
                 break
         if not progressed:
             break
 
-    legacy_rows = [row for row in ranked if row.get("_legacy_selected") and row["stock_code"] not in selected]
+    legacy_rows = [
+        row
+        for row in ranked
+        if row.get("_legacy_selected") and row["stock_code"] not in selected
+    ]
     for row in legacy_rows:
-        if len([arm for arm in selected.values() if arm == "legacy_ml"]) >= counts["legacy_ml"]:
+        if (
+            len([arm for arm in selected.values() if arm == "legacy_ml"])
+            >= counts["legacy_ml"]
+        ):
             break
         selected[row["stock_code"]] = "legacy_ml"
 
@@ -778,7 +925,14 @@ def allocate_candidate_arms(rows: list[dict[str, Any]], *, max_candidates: int) 
         item["selection_arm"] = arm
         item.pop("_legacy_selected", None)
         out.append(item)
-    return sorted(out, key=lambda item: (item["selection_arm"], -item["lifecycle_exploration_score"], item["stock_code"]))
+    return sorted(
+        out,
+        key=lambda item: (
+            item["selection_arm"],
+            -item["lifecycle_exploration_score"],
+            item["stock_code"],
+        ),
+    )
 
 
 def _sizing_ratio(sizing_policy: str, candidate: dict[str, Any]) -> float:
@@ -796,12 +950,25 @@ def _sizing_ratio(sizing_policy: str, candidate: dict[str, Any]) -> float:
 
 
 def _is_bottom_rebound_candidate(candidate: dict[str, Any]) -> bool:
-    source_features = candidate.get("source_features") if isinstance(candidate.get("source_features"), dict) else {}
-    bottom = source_features.get("bottom_rebound_source") if isinstance(source_features.get("bottom_rebound_source"), dict) else {}
-    return _is_present(bottom.get("present")) or str(candidate.get("source_family_bucket") or "") == "bottom_rebound"
+    source_features = (
+        candidate.get("source_features")
+        if isinstance(candidate.get("source_features"), dict)
+        else {}
+    )
+    bottom = (
+        source_features.get("bottom_rebound_source")
+        if isinstance(source_features.get("bottom_rebound_source"), dict)
+        else {}
+    )
+    return (
+        _is_present(bottom.get("present"))
+        or str(candidate.get("source_family_bucket") or "") == "bottom_rebound"
+    )
 
 
-def _arm_set_for_candidate(candidate: dict[str, Any]) -> tuple[list[dict[str, str]], str, dict[str, Any]]:
+def _arm_set_for_candidate(
+    candidate: dict[str, Any],
+) -> tuple[list[dict[str, str]], str, dict[str, Any]]:
     if _is_bottom_rebound_candidate(candidate):
         return (
             BOTTOM_REBOUND_ARM_SET,
@@ -826,14 +993,19 @@ def build_arm_rows(
     virtual_budget_krw: int | None = None,
     active_arm_priority_policies: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    virtual_budget = int(virtual_budget_krw or getattr(TRADING_RULES, "SIM_VIRTUAL_BUDGET_KRW", 10_000_000))
+    virtual_budget = int(
+        virtual_budget_krw
+        or getattr(TRADING_RULES, "SIM_VIRTUAL_BUDGET_KRW", 10_000_000)
+    )
     active_arm_priority_policies = active_arm_priority_policies or {}
     rows: list[dict[str, Any]] = []
     for candidate in candidates:
         reference_price = _safe_float(candidate.get("_reference_price"), 0.0)
         arm_set, arm_policy_version, context = _arm_set_for_candidate(candidate)
         for spec in arm_set:
-            priority_policy = active_arm_priority_policies.get(str(spec.get("arm_id") or ""))
+            priority_policy = active_arm_priority_policies.get(
+                str(spec.get("arm_id") or "")
+            )
             priority_fields = {}
             if isinstance(priority_policy, dict):
                 priority_fields = {
@@ -842,7 +1014,9 @@ def build_arm_rows(
                     "priority_arm_id": priority_policy.get("priority_arm_id"),
                     "priority_status": priority_policy.get("status"),
                     "priority_source": priority_policy.get("priority_source"),
-                    "priority_source_report_date": priority_policy.get("source_report_date"),
+                    "priority_source_report_date": priority_policy.get(
+                        "source_report_date"
+                    ),
                 }
             ratio = _sizing_ratio(spec["sizing_policy"], candidate)
             notional = int(virtual_budget * ratio)
@@ -860,7 +1034,9 @@ def build_arm_rows(
                     "status": "PENDING_ENTRY",
                     "virtual_entry_price": reference_price or None,
                     "virtual_qty": max(0, qty),
-                    "virtual_notional_krw": int(max(0, qty) * reference_price) if reference_price > 0 else 0,
+                    "virtual_notional_krw": (
+                        int(max(0, qty) * reference_price) if reference_price > 0 else 0
+                    ),
                     "arm_features": {
                         "arm_policy_version": arm_policy_version,
                         "sizing_ratio": round(ratio, 4),
@@ -882,7 +1058,12 @@ def build_arm_rows(
     return rows
 
 
-def persist_discovery_rows(candidates: list[dict[str, Any]], arms: list[dict[str, Any]], *, db_url: str = POSTGRES_URL) -> dict[str, int]:
+def persist_discovery_rows(
+    candidates: list[dict[str, Any]],
+    arms: list[dict[str, Any]],
+    *,
+    db_url: str = POSTGRES_URL,
+) -> dict[str, int]:
     ensure_swing_strategy_discovery_schema(db_url)
     engine = create_engine(db_url)
     Session = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
@@ -962,7 +1143,9 @@ def persist_discovery_rows(candidates: list[dict[str, Any]], arms: list[dict[str
                     row["stock_code"],
                     row["policy_version"],
                 )
-                candidate_ids[row["candidate_key"]] = int(existing_candidate_map[lookup_key].id)
+                candidate_ids[row["candidate_key"]] = int(
+                    existing_candidate_map[lookup_key].id
+                )
 
             arm_lookup_keys = [
                 (
@@ -994,7 +1177,9 @@ def persist_discovery_rows(candidates: list[dict[str, Any]], arms: list[dict[str
                 candidate_id = candidate_ids.get(row["candidate_key"])
                 if not candidate_id:
                     continue
-                existing = existing_arm_map.get((candidate_id, row["arm_id"], row["policy_version"]))
+                existing = existing_arm_map.get(
+                    (candidate_id, row["arm_id"], row["policy_version"])
+                )
                 payload = {
                     "candidate_id": candidate_id,
                     "source_date": pd.to_datetime(row["source_date"]).date(),
@@ -1025,18 +1210,30 @@ def persist_discovery_rows(candidates: list[dict[str, Any]], arms: list[dict[str
     return {"candidate_rows": len(candidates), "arm_rows": len(arms)}
 
 
-def summarize_candidates(candidates: list[dict[str, Any]], arms: list[dict[str, Any]]) -> dict[str, Any]:
-    bottom_candidate_count = sum(1 for row in candidates if _is_bottom_rebound_candidate(row))
-    bottom_codes = {row["stock_code"] for row in candidates if _is_bottom_rebound_candidate(row)}
+def summarize_candidates(
+    candidates: list[dict[str, Any]], arms: list[dict[str, Any]]
+) -> dict[str, Any]:
+    bottom_candidate_count = sum(
+        1 for row in candidates if _is_bottom_rebound_candidate(row)
+    )
+    bottom_codes = {
+        row["stock_code"] for row in candidates if _is_bottom_rebound_candidate(row)
+    }
     bottom_arm_count = sum(1 for row in arms if row.get("stock_code") in bottom_codes)
     return {
         "candidate_count": len(candidates),
         "arm_count": len(arms),
-        "selection_arm_counts": dict(Counter(row["selection_arm"] for row in candidates)),
+        "selection_arm_counts": dict(
+            Counter(row["selection_arm"] for row in candidates)
+        ),
         "position_tag_counts": dict(Counter(row["position_tag"] for row in candidates)),
         "block_reason_counts": dict(Counter(row["block_reason"] for row in candidates)),
-        "volatility_bucket_counts": dict(Counter(row["volatility_bucket"] for row in candidates)),
-        "source_family_bucket_counts": dict(Counter(row.get("source_family_bucket", "safe_pool") for row in candidates)),
+        "volatility_bucket_counts": dict(
+            Counter(row["volatility_bucket"] for row in candidates)
+        ),
+        "source_family_bucket_counts": dict(
+            Counter(row.get("source_family_bucket", "safe_pool") for row in candidates)
+        ),
         "bottom_rebound_selected_candidate_count": bottom_candidate_count,
         "bottom_rebound_arm_count": bottom_arm_count,
         "arm_policy_counts": dict(Counter(row["arm_id"] for row in arms)),
@@ -1061,22 +1258,47 @@ def build_swing_strategy_discovery_report(
     effective_max_candidates = (
         max_candidates
         if max_candidates is not None
-        else ACTIVE_PRIORITY_MAX_DAILY_CANDIDATES
-        if active_arm_policies
-        else DEFAULT_MAX_DAILY_CANDIDATES
+        else (
+            ACTIVE_PRIORITY_MAX_DAILY_CANDIDATES
+            if active_arm_policies
+            else DEFAULT_MAX_DAILY_CANDIDATES
+        )
     )
     safe_pool_rows = load_safe_pool_rows(date_key)
     bottom_rebound_rows, bottom_rebound_diag = (
-        load_bottom_rebound_source_rows(date_key, source_path=bottom_rebound_source_path)
+        load_bottom_rebound_source_rows(
+            date_key, source_path=bottom_rebound_source_path
+        )
         if include_bottom_rebound_source
-        else (pd.DataFrame(), {"status": "disabled", "loaded_rows": 0, "path": str(bottom_rebound_source_path or _bottom_rebound_source_path(date_key))})
+        else (
+            pd.DataFrame(),
+            {
+                "status": "disabled",
+                "loaded_rows": 0,
+                "path": str(
+                    bottom_rebound_source_path or _bottom_rebound_source_path(date_key)
+                ),
+            },
+        )
     )
-    source_rows = merge_optional_source_rows(safe_pool_rows, bottom_rebound_rows) if include_bottom_rebound_source else safe_pool_rows
+    source_rows = (
+        merge_optional_source_rows(safe_pool_rows, bottom_rebound_rows)
+        if include_bottom_rebound_source
+        else safe_pool_rows
+    )
     block_reasons = load_block_reason_map(date_key)
-    quote_features = fetch_quote_features(source_rows.get("code", pd.Series(dtype=str)).tolist(), db_url=db_url)
+    quote_features = fetch_quote_features(
+        source_rows.get("code", pd.Series(dtype=str)).tolist(), db_url=db_url
+    )
     codes = source_rows.get("code", pd.Series(dtype=str)).tolist()
-    sector_theme_payload = build_sector_theme_map(codes, target_date=date_key, allow_external=True)
-    sector_theme_map = sector_theme_payload.get("rows_by_code") if isinstance(sector_theme_payload.get("rows_by_code"), dict) else {}
+    sector_theme_payload = build_sector_theme_map(
+        codes, target_date=date_key, allow_external=True
+    )
+    sector_theme_map = (
+        sector_theme_payload.get("rows_by_code")
+        if isinstance(sector_theme_payload.get("rows_by_code"), dict)
+        else {}
+    )
     source_count = int(len(source_rows))
     safe_pool_count = int(len(safe_pool_rows))
     bottom_rebound_count = int(len(bottom_rebound_rows))
@@ -1096,14 +1318,22 @@ def build_swing_strategy_discovery_report(
         sector_theme_map=sector_theme_map,
     )
     arms = build_arm_rows(candidates, active_arm_priority_policies=active_arm_policies)
-    persist_summary = persist_discovery_rows(candidates, arms, db_url=db_url) if persist else {"candidate_rows": 0, "arm_rows": 0}
+    persist_summary = (
+        persist_discovery_rows(candidates, arms, db_url=db_url)
+        if persist
+        else {"candidate_rows": 0, "arm_rows": 0}
+    )
     summary = summarize_candidates(candidates, arms)
-    active_priority_arm_count = sum(1 for item in arms if bool(item.get("swing_active_arm_priority")))
+    active_priority_arm_count = sum(
+        1 for item in arms if bool(item.get("swing_active_arm_priority"))
+    )
     summary["active_arm_priority_policy_count"] = len(active_arm_policies)
     summary["active_arm_priority_arm_count"] = active_priority_arm_count
     summary["effective_max_daily_candidates"] = effective_max_candidates
     summary["bottom_rebound_persisted_candidate_count"] = (
-        summary["bottom_rebound_selected_candidate_count"] if persist_summary.get("candidate_rows") else 0
+        summary["bottom_rebound_selected_candidate_count"]
+        if persist_summary.get("candidate_rows")
+        else 0
     )
     summary["bottom_rebound_persisted_arm_count"] = (
         summary["bottom_rebound_arm_count"] if persist_summary.get("arm_rows") else 0
@@ -1120,12 +1350,17 @@ def build_swing_strategy_discovery_report(
         and bottom_rebound_diag.get("status") == "ok"
         and summary.get("bottom_rebound_selected_candidate_count", 0) > 0
         and persist
-        and (persist_summary.get("candidate_rows", 0) <= 0 or persist_summary.get("arm_rows", 0) <= 0)
+        and (
+            persist_summary.get("candidate_rows", 0) <= 0
+            or persist_summary.get("arm_rows", 0) <= 0
+        )
     ):
         warnings.append("bottom_rebound_persist_missing")
     if source_count and quote_feature_count == 0:
         warnings.append("quote_features_unavailable")
-    elif source_count and quote_feature_count < min(source_count, effective_max_candidates):
+    elif source_count and quote_feature_count < min(
+        source_count, effective_max_candidates
+    ):
         warnings.append("quote_features_partial")
     for warning in sector_theme_payload.get("warnings") or []:
         warnings.append(f"sector_theme:{warning}")
@@ -1163,9 +1398,11 @@ def build_swing_strategy_discovery_report(
             "report_artifact_only": True,
         },
         "selection_policy": {
-            "universe": "safe_pool_plus_optional_bottom_rebound_source"
-            if include_bottom_rebound_source
-            else "safe_pool",
+            "universe": (
+                "safe_pool_plus_optional_bottom_rebound_source"
+                if include_bottom_rebound_source
+                else "safe_pool"
+            ),
             "arm_allocation": ARM_ALLOCATION,
             "diversity_v1": list(DIVERSITY_BUCKET_FIELDS),
             "v2_required_extension": list(V2_REQUIRED_FIELDS),
@@ -1181,17 +1418,32 @@ def build_swing_strategy_discovery_report(
             "bottom_rebound_source": bottom_rebound_diag,
             "active_arm_priority_policy": active_arm_policy_diag,
             "quote_feature_rows": quote_feature_count,
-            "quote_feature_coverage": round(quote_feature_count / source_count, 6) if source_count else 0.0,
+            "quote_feature_coverage": (
+                round(quote_feature_count / source_count, 6) if source_count else 0.0
+            ),
             "sector_theme_mapped_rows": sector_theme_mapped,
             "sector_theme_missing_rows": sector_theme_missing,
-            "sector_theme_coverage": round(sector_theme_mapped / source_count, 6) if source_count else 0.0,
+            "sector_theme_coverage": (
+                round(sector_theme_mapped / source_count, 6) if source_count else 0.0
+            ),
             "sector_mapped_rows": sector_mapped,
             "sector_missing_rows": sector_missing,
-            "sector_coverage": round(sector_mapped / source_count, 6) if source_count else 0.0,
+            "sector_coverage": (
+                round(sector_mapped / source_count, 6) if source_count else 0.0
+            ),
             "theme_mapped_rows": theme_mapped,
             "theme_missing_rows": theme_missing,
-            "theme_coverage": round(theme_mapped / source_count, 6) if source_count else 0.0,
-            "sector_theme_cache": str((Path(DATA_DIR) / "runtime" / "swing_strategy_discovery" / f"sector_theme_map_{date_key}.json")),
+            "theme_coverage": (
+                round(theme_mapped / source_count, 6) if source_count else 0.0
+            ),
+            "sector_theme_cache": str(
+                (
+                    Path(DATA_DIR)
+                    / "runtime"
+                    / "swing_strategy_discovery"
+                    / f"sector_theme_map_{date_key}.json"
+                )
+            ),
             "warnings": warnings,
         },
         "arm_set": ARM_SET,
@@ -1201,9 +1453,20 @@ def build_swing_strategy_discovery_report(
         "sources": {
             "diagnostic_csv": str(RECO_DIAGNOSTIC_PATH),
             "recommendation_csv": str(RECO_PATH),
-            "pipeline_events": str((PIPELINE_EVENTS_DIR / f"pipeline_events_{date_key}.jsonl")),
-            "sector_theme_map": str((Path(DATA_DIR) / "runtime" / "swing_strategy_discovery" / f"sector_theme_map_{date_key}.json")),
-            "bottom_rebound_candidate_source": str(bottom_rebound_diag.get("path") or ""),
+            "pipeline_events": str(
+                (PIPELINE_EVENTS_DIR / f"pipeline_events_{date_key}.jsonl")
+            ),
+            "sector_theme_map": str(
+                (
+                    Path(DATA_DIR)
+                    / "runtime"
+                    / "swing_strategy_discovery"
+                    / f"sector_theme_map_{date_key}.json"
+                )
+            ),
+            "bottom_rebound_candidate_source": str(
+                bottom_rebound_diag.get("path") or ""
+            ),
             "swing_sim_policy_catalog": str(active_arm_policy_diag.get("path") or ""),
         },
         "examples": [

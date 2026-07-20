@@ -12,7 +12,6 @@ import os
 from pathlib import Path
 from typing import Any
 
-
 POLICY_ENV_KEYS = (
     "KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_FILE",
     "SCALP_SIM_AUTO_POLICY_FILE",
@@ -127,7 +126,15 @@ def _derive_entry_source_parent(stock: dict[str, Any]) -> str:
             "action",
         )
     ).lower()
-    if any(token in text for token in ("wait6579", "first_ai_wait", "score65_74", "rising_full_eval_relief")):
+    if any(
+        token in text
+        for token in (
+            "wait6579",
+            "first_ai_wait",
+            "score65_74",
+            "rising_full_eval_relief",
+        )
+    ):
         return "entry_source_wait6579"
     return ""
 
@@ -158,7 +165,9 @@ def _candidate_observable_prefix(stock: dict[str, Any]) -> dict[str, str]:
         "overbought_bucket": _first_text(stock, ("overbought_bucket",)),
         "chosen_action": _first_text(stock, ("chosen_action", "action")),
     }
-    submit_quality = _first_text(stock, ("submit_quality_parent", "rising_missed_submit_quality_parent"))
+    submit_quality = _first_text(
+        stock, ("submit_quality_parent", "rising_missed_submit_quality_parent")
+    )
     if submit_quality:
         prefix["submit_quality_parent"] = submit_quality
     return {key: value for key, value in prefix.items() if value}
@@ -175,7 +184,9 @@ def _catalog_contract_ok(payload: Any) -> bool:
     )
 
 
-def load_selection_prior_catalog(policy_file: str | os.PathLike[str] | None = None) -> dict[str, Any]:
+def load_selection_prior_catalog(
+    policy_file: str | os.PathLike[str] | None = None,
+) -> dict[str, Any]:
     path_text = _policy_path(policy_file)
     if not path_text:
         return {"status": "policy_missing", "payload": {}}
@@ -191,14 +202,29 @@ def load_selection_prior_catalog(policy_file: str | os.PathLike[str] | None = No
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
-        loaded = {"status": "policy_invalid_json", "path": str(path), "mtime_ns": stat.st_mtime_ns, "payload": {}}
+        loaded = {
+            "status": "policy_invalid_json",
+            "path": str(path),
+            "mtime_ns": stat.st_mtime_ns,
+            "payload": {},
+        }
         _CATALOG_CACHE[cache_key] = loaded
         return loaded
     if not _catalog_contract_ok(payload):
-        loaded = {"status": "policy_invalid_contract", "path": str(path), "mtime_ns": stat.st_mtime_ns, "payload": {}}
+        loaded = {
+            "status": "policy_invalid_contract",
+            "path": str(path),
+            "mtime_ns": stat.st_mtime_ns,
+            "payload": {},
+        }
         _CATALOG_CACHE[cache_key] = loaded
         return loaded
-    loaded = {"status": "loaded", "path": str(path), "mtime_ns": stat.st_mtime_ns, "payload": payload}
+    loaded = {
+        "status": "loaded",
+        "path": str(path),
+        "mtime_ns": stat.st_mtime_ns,
+        "payload": payload,
+    }
     _CATALOG_CACHE[cache_key] = loaded
     return loaded
 
@@ -206,10 +232,18 @@ def load_selection_prior_catalog(policy_file: str | os.PathLike[str] | None = No
 def _prefix_matches(candidate: dict[str, str], prefix: Any) -> bool:
     if not isinstance(prefix, dict):
         return False
-    required = {str(key): str(value).strip() for key, value in prefix.items() if str(value or "").strip() and value != "-"}
+    required = {
+        str(key): str(value).strip()
+        for key, value in prefix.items()
+        if str(value or "").strip() and value != "-"
+    }
     if not required:
         return False
-    exact_keys = [key for key in required if key not in {"source_signature", "scanner_promotion_reason"}]
+    exact_keys = [
+        key
+        for key in required
+        if key not in {"source_signature", "scanner_promotion_reason"}
+    ]
     if not exact_keys:
         return False
     for key, expected in required.items():
@@ -223,16 +257,34 @@ def _source_signature_matches(candidate: dict[str, str], row: dict[str, Any]) ->
     signature = str(candidate.get("source_signature") or "").strip()
     if not signature:
         return False
-    prefix = row.get("observable_prefix") if isinstance(row.get("observable_prefix"), dict) else {}
-    return signature == str(row.get("source_signature") or prefix.get("source_signature") or "").strip()
+    prefix = (
+        row.get("observable_prefix")
+        if isinstance(row.get("observable_prefix"), dict)
+        else {}
+    )
+    return (
+        signature
+        == str(
+            row.get("source_signature") or prefix.get("source_signature") or ""
+        ).strip()
+    )
 
 
 def _promotion_reason_matches(candidate: dict[str, str], row: dict[str, Any]) -> bool:
     reason = str(candidate.get("scanner_promotion_reason") or "").strip()
     if not reason:
         return False
-    prefix = row.get("observable_prefix") if isinstance(row.get("observable_prefix"), dict) else {}
-    return reason == str(row.get("scanner_promotion_reason") or prefix.get("source_signature") or "").strip()
+    prefix = (
+        row.get("observable_prefix")
+        if isinstance(row.get("observable_prefix"), dict)
+        else {}
+    )
+    return (
+        reason
+        == str(
+            row.get("scanner_promotion_reason") or prefix.get("source_signature") or ""
+        ).strip()
+    )
 
 
 def _recommendation_from_row(row: dict[str, Any], fallback: str = "hold_sample") -> str:
@@ -253,9 +305,16 @@ def _recommendation_from_row(row: dict[str, Any], fallback: str = "hold_sample")
     return value if value in VALID_RECOMMENDATIONS else "hold_sample"
 
 
-def _row_result(row: dict[str, Any], *, recommendation: str, match_type: str) -> dict[str, Any]:
+def _row_result(
+    row: dict[str, Any], *, recommendation: str, match_type: str
+) -> dict[str, Any]:
     delta = RECOMMENDATION_SCORE_DELTA.get(recommendation, 0.0)
-    prior_key = str(row.get("prior_key") or row.get("source_parent_bucket_id") or row.get("active_seed_id") or "-")
+    prior_key = str(
+        row.get("prior_key")
+        or row.get("source_parent_bucket_id")
+        or row.get("active_seed_id")
+        or "-"
+    )
     reason = str(
         row.get("reason")
         or row.get("rising_missed_prior_reason")
@@ -265,7 +324,11 @@ def _row_result(row: dict[str, Any], *, recommendation: str, match_type: str) ->
     return {
         "rising_missed_selection_prior_key": prior_key,
         "rising_missed_selection_recommendation": recommendation,
-        "rising_missed_selection_confidence": str(row.get("confidence") or row.get("rising_missed_prior_confidence") or "unknown"),
+        "rising_missed_selection_confidence": str(
+            row.get("confidence")
+            or row.get("rising_missed_prior_confidence")
+            or "unknown"
+        ),
         "rising_missed_selection_score_delta": delta,
         "rising_missed_selection_rank_reason": reason,
         "rising_missed_selection_match_type": match_type,
@@ -288,20 +351,34 @@ def rising_missed_selection_prior_fields(
         return _empty_result("candidate_observable_prefix_missing")
 
     for row in payload.get("rising_missed_prior_active_seed_status_overrides") or []:
-        if isinstance(row, dict) and _prefix_matches(candidate, row.get("observable_prefix")):
-            recommendation = _recommendation_from_row(row, fallback="source_quality_blocked")
+        if isinstance(row, dict) and _prefix_matches(
+            candidate, row.get("observable_prefix")
+        ):
+            recommendation = _recommendation_from_row(
+                row, fallback="source_quality_blocked"
+            )
             if recommendation == "hold_sample":
                 recommendation = "source_quality_blocked"
-            return _row_result(row, recommendation=recommendation, match_type="observable_prefix_exact")
+            return _row_result(
+                row, recommendation=recommendation, match_type="observable_prefix_exact"
+            )
 
     for seed in payload.get("active_sim_priority_seeds") or []:
         if not isinstance(seed, dict) or str(seed.get("status") or "") != "active":
             continue
         if _prefix_matches(candidate, seed.get("observable_prefix")):
             recommendation = _recommendation_from_row(seed, fallback="positive_prior")
-            return _row_result(seed, recommendation=recommendation, match_type="observable_prefix_exact")
+            return _row_result(
+                seed,
+                recommendation=recommendation,
+                match_type="observable_prefix_exact",
+            )
 
-    lanes = [row for row in payload.get("rising_missed_prior_observation_lanes") or [] if isinstance(row, dict)]
+    lanes = [
+        row
+        for row in payload.get("rising_missed_prior_observation_lanes") or []
+        if isinstance(row, dict)
+    ]
     for row in lanes:
         if _prefix_matches(candidate, row.get("observable_prefix")):
             return _row_result(
@@ -311,7 +388,11 @@ def rising_missed_selection_prior_fields(
             )
     for row in lanes:
         if _source_signature_matches(candidate, row):
-            return _row_result(row, recommendation=_recommendation_from_row(row), match_type="source_signature")
+            return _row_result(
+                row,
+                recommendation=_recommendation_from_row(row),
+                match_type="source_signature",
+            )
     for row in lanes:
         if _promotion_reason_matches(candidate, row):
             return _row_result(

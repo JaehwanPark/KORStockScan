@@ -29,7 +29,6 @@ from src.utils.constants import CONFIG_PATH, DEV_PATH
 from src.utils.logger import log_error, log_info
 from src.engine.trade_pause_control import is_buy_side_paused
 
-
 OUTPUT_ROOT = Path("data/ipo_listing_day")
 STOP_FILE = OUTPUT_ROOT / "STOP"
 KRX_RULE_SOURCE = "KRX first-day IPO range public offering price 60%~400%, regular-session IOC/best-limit only"
@@ -110,7 +109,10 @@ class IpoArtifactWriter:
             "fields": _jsonable(decision.fields),
             "krx_rule_source": KRX_RULE_SOURCE,
         }
-        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+        path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
 
     def add_summary(self, item: dict[str, Any]) -> None:
         self.summary_items.append(_jsonable(item))
@@ -193,7 +195,9 @@ def load_ipo_config(path: str | Path) -> IpoRunConfig:
             IpoTarget(
                 code=normalize_code(item.get("code")),
                 name=str(item.get("name") or "").strip(),
-                listing_date=str(item.get("listing_date") or raw.get("trade_date") or "").strip(),
+                listing_date=str(
+                    item.get("listing_date") or raw.get("trade_date") or ""
+                ).strip(),
                 offer_price=_safe_int(item.get("offer_price")),
                 budget_cap_krw=_safe_int(item.get("budget_cap_krw")),
                 premium_guard_pct=_safe_float(item.get("premium_guard_pct"), 250.0),
@@ -202,10 +206,14 @@ def load_ipo_config(path: str | Path) -> IpoRunConfig:
         )
     return IpoRunConfig(
         trade_date=str(raw.get("trade_date") or date.today().isoformat()),
-        global_daily_loss_cap_krw=_safe_int(raw.get("global_daily_loss_cap_krw"), 100_000),
+        global_daily_loss_cap_krw=_safe_int(
+            raw.get("global_daily_loss_cap_krw"), 100_000
+        ),
         max_order_failures=_safe_int(raw.get("max_order_failures"), 2),
         active_symbol_limit=max(1, _safe_int(raw.get("active_symbol_limit"), 1)),
-        max_ai_calls_per_symbol=max(0, _safe_int(raw.get("max_ai_calls_per_symbol"), 6)),
+        max_ai_calls_per_symbol=max(
+            0, _safe_int(raw.get("max_ai_calls_per_symbol"), 6)
+        ),
         max_ai_calls_per_run=max(0, _safe_int(raw.get("max_ai_calls_per_run"), 10)),
         targets=tuple(targets),
     )
@@ -215,7 +223,9 @@ def _parse_scalar(text: str) -> Any:
     value = str(text or "").strip()
     if not value:
         return ""
-    if (value.startswith('"') and value.endswith('"')) or (value.startswith("'") and value.endswith("'")):
+    if (value.startswith('"') and value.endswith('"')) or (
+        value.startswith("'") and value.endswith("'")
+    ):
         return value[1:-1]
     lowered = value.lower()
     if lowered == "true":
@@ -274,22 +284,33 @@ def load_json_config() -> dict[str, Any]:
         return {}
 
 
-def select_enabled_targets(config: IpoRunConfig, today: str | None = None) -> list[IpoTarget]:
+def select_enabled_targets(
+    config: IpoRunConfig, today: str | None = None
+) -> list[IpoTarget]:
     trade_date = today or config.trade_date
     selected = [
         target
         for target in config.targets
-        if target.enabled and target.code and target.listing_date == trade_date and target.offer_price > 0
+        if target.enabled
+        and target.code
+        and target.listing_date == trade_date
+        and target.offer_price > 0
     ]
     return selected[: config.active_symbol_limit]
 
 
-def best_levels(ws_data: dict[str, Any] | None) -> tuple[int, int, list[dict[str, Any]], list[dict[str, Any]]]:
+def best_levels(
+    ws_data: dict[str, Any] | None,
+) -> tuple[int, int, list[dict[str, Any]], list[dict[str, Any]]]:
     orderbook = (ws_data or {}).get("orderbook") or {}
     asks = list(orderbook.get("asks") or [])
     bids = list(orderbook.get("bids") or [])
-    best_ask = _safe_int((asks[0] or {}).get("price") if asks else (ws_data or {}).get("best_ask"), 0)
-    best_bid = _safe_int((bids[0] or {}).get("price") if bids else (ws_data or {}).get("best_bid"), 0)
+    best_ask = _safe_int(
+        (asks[0] or {}).get("price") if asks else (ws_data or {}).get("best_ask"), 0
+    )
+    best_bid = _safe_int(
+        (bids[0] or {}).get("price") if bids else (ws_data or {}).get("best_bid"), 0
+    )
     return best_ask, best_bid, asks, bids
 
 
@@ -316,7 +337,9 @@ def indicative_open_snapshot(ws_data: dict[str, Any]) -> dict[str, Any]:
         0,
     )
     expected_qty = _safe_int(
-        expected.get("qty") or expected.get("expected_qty") or (ws_data or {}).get("expected_open_qty"),
+        expected.get("qty")
+        or expected.get("expected_qty")
+        or (ws_data or {}).get("expected_open_qty"),
         0,
     )
     if expected_price > 0:
@@ -330,7 +353,9 @@ def indicative_open_snapshot(ws_data: dict[str, Any]) -> dict[str, Any]:
                 "price_vs_prev_rate": expected.get("price_vs_prev_rate"),
                 "sign": expected.get("sign"),
                 "volume_vs_prev_rate": expected.get("volume_vs_prev_rate"),
-                "valid_during_expected_session": expected.get("valid_during_expected_session"),
+                "valid_during_expected_session": expected.get(
+                    "valid_during_expected_session"
+                ),
             },
         }
     return {
@@ -396,18 +421,26 @@ def evaluate_entry_gate(
     price = planned_entry_price(ws_data)
     if price <= 0:
         return IpoDecision(False, "unpriced", {"entry_price": price})
-    premium_pct = (price / target.offer_price) * 100.0 if target.offer_price > 0 else 9999.0
+    premium_pct = (
+        (price / target.offer_price) * 100.0 if target.offer_price > 0 else 9999.0
+    )
     if premium_pct > float(target.premium_guard_pct):
         return IpoDecision(
             False,
             "premium_guard",
-            {"entry_price": price, "offer_price": target.offer_price, "premium_pct": round(premium_pct, 2)},
+            {
+                "entry_price": price,
+                "offer_price": target.offer_price,
+                "premium_pct": round(premium_pct, 2),
+            },
         )
     age = quote_age_sec(ws_data, now_ts=now_ts)
     if age is not None and age > 2.0:
         return IpoDecision(False, "quote_stale", {"quote_age_sec": round(age, 3)})
     if suspected_quote_vacuum(ws_data):
-        return IpoDecision(False, "quote_vacuum_or_vi_suspected", {"entry_price": price})
+        return IpoDecision(
+            False, "quote_vacuum_or_vi_suspected", {"entry_price": price}
+        )
     effective_budget = effective_budget_cap_krw(target.budget_cap_krw)
     qty = calculate_entry_qty(effective_budget, price)
     if qty <= 0:
@@ -438,7 +471,11 @@ def evaluate_entry_gate(
         )
     risk_score = _safe_float((ai_result or {}).get("risk_score"), 0.0)
     if risk_score >= 80.0:
-        return IpoDecision(False, "ai_risk_block", {"risk_score": risk_score, "ai_result": ai_result or {}})
+        return IpoDecision(
+            False,
+            "ai_risk_block",
+            {"risk_score": risk_score, "ai_result": ai_result or {}},
+        )
     return IpoDecision(
         True,
         "entry_allowed",
@@ -478,33 +515,65 @@ def evaluate_exit_action(
     curr = _safe_int(ws_data.get("curr"), 0)
     profit = current_profit_pct(position, curr)
     position.peak_profit_pct = max(position.peak_profit_pct, profit)
-    held_sec = 0 if position.entry_time is None else max(0, int((now_dt - position.entry_time).total_seconds()))
+    held_sec = (
+        0
+        if position.entry_time is None
+        else max(0, int((now_dt - position.entry_time).total_seconds()))
+    )
     if profit <= -10.0:
-        return IpoDecision(True, "hard_stop", {"sell_qty": position.qty, "profit_pct": round(profit, 3)})
+        return IpoDecision(
+            True,
+            "hard_stop",
+            {"sell_qty": position.qty, "profit_pct": round(profit, 3)},
+        )
     if held_sec >= 30 * 60:
-        return IpoDecision(True, "max_hold_time", {"sell_qty": position.qty, "held_sec": held_sec})
+        return IpoDecision(
+            True, "max_hold_time", {"sell_qty": position.qty, "held_sec": held_sec}
+        )
     if position.first_partial_taken and profit <= position.peak_profit_pct - 8.0:
         return IpoDecision(
             True,
             "post_tp_trailing",
-            {"sell_qty": position.qty, "profit_pct": round(profit, 3), "peak_profit_pct": round(position.peak_profit_pct, 3)},
+            {
+                "sell_qty": position.qty,
+                "profit_pct": round(profit, 3),
+                "peak_profit_pct": round(position.peak_profit_pct, 3),
+            },
         )
     if not position.first_partial_taken and profit >= 20.0:
         hold_confidence = _safe_float((ai_result or {}).get("hold_confidence"), 0.0)
-        reasons = ai_result.get("continuation_reasons") if isinstance(ai_result, dict) else []
+        reasons = (
+            ai_result.get("continuation_reasons") if isinstance(ai_result, dict) else []
+        )
         reason_count = len(reasons) if isinstance(reasons, list) else 0
         if hold_confidence >= 75.0 and reason_count >= 2:
-            return IpoDecision(False, "ai_defer_partial_tp", {"profit_pct": round(profit, 3), "ai_result": ai_result})
+            return IpoDecision(
+                False,
+                "ai_defer_partial_tp",
+                {"profit_pct": round(profit, 3), "ai_result": ai_result},
+            )
         return IpoDecision(
             True,
             "partial_take_profit_20pct",
-            {"sell_qty": partial_take_profit_qty(position.qty), "profit_pct": round(profit, 3), "ai_result": ai_result or {}},
+            {
+                "sell_qty": partial_take_profit_qty(position.qty),
+                "profit_pct": round(profit, 3),
+                "ai_result": ai_result or {},
+            },
         )
-    return IpoDecision(False, "hold", {"profit_pct": round(profit, 3), "held_sec": held_sec})
+    return IpoDecision(
+        False, "hold", {"profit_pct": round(profit, 3), "held_sec": held_sec}
+    )
 
 
 class IpoAiAdvisor:
-    def __init__(self, engine: Any | None = None, *, max_calls_per_symbol: int = 6, max_calls_per_run: int = 10):
+    def __init__(
+        self,
+        engine: Any | None = None,
+        *,
+        max_calls_per_symbol: int = 6,
+        max_calls_per_run: int = 10,
+    ):
         self.engine = engine
         self.max_calls_per_symbol = max(0, int(max_calls_per_symbol))
         self.max_calls_per_run = max(0, int(max_calls_per_run))
@@ -518,13 +587,25 @@ class IpoAiAdvisor:
             and self.calls_by_symbol.get(code, 0) < self.max_calls_per_symbol
         )
 
-    def review_entry(self, target: IpoTarget, ws_data: dict[str, Any]) -> dict[str, Any]:
+    def review_entry(
+        self, target: IpoTarget, ws_data: dict[str, Any]
+    ) -> dict[str, Any]:
         return self._call("ipo_entry_risk", target, ws_data)
 
-    def review_exit(self, target: IpoTarget, ws_data: dict[str, Any], position: IpoPosition) -> dict[str, Any]:
-        return self._call("ipo_exit_hold", target, ws_data, {"position": position.__dict__})
+    def review_exit(
+        self, target: IpoTarget, ws_data: dict[str, Any], position: IpoPosition
+    ) -> dict[str, Any]:
+        return self._call(
+            "ipo_exit_hold", target, ws_data, {"position": position.__dict__}
+        )
 
-    def _call(self, mode: str, target: IpoTarget, ws_data: dict[str, Any], extra: dict[str, Any] | None = None) -> dict[str, Any]:
+    def _call(
+        self,
+        mode: str,
+        target: IpoTarget,
+        ws_data: dict[str, Any],
+        extra: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         if not self._can_call(target.code):
             return {"ai_status": "skipped", "reason": "call_cap_or_unavailable"}
         self.total_calls += 1
@@ -535,8 +616,16 @@ class IpoAiAdvisor:
             "ws_data": ws_data,
             "extra": extra or {},
             "required_output": {
-                "entry": {"risk_score": "0-100", "risk_flags": ["string"], "reason": "string"},
-                "exit": {"hold_confidence": "0-100", "continuation_reasons": ["string"], "reason": "string"},
+                "entry": {
+                    "risk_score": "0-100",
+                    "risk_flags": ["string"],
+                    "reason": "string",
+                },
+                "exit": {
+                    "hold_confidence": "0-100",
+                    "continuation_reasons": ["string"],
+                    "reason": "string",
+                },
             },
         }
         prompt = (
@@ -556,7 +645,9 @@ class IpoAiAdvisor:
                     symbol=target.code,
                     cache_key=f"{mode}:{target.code}",
                 )
-                return result if isinstance(result, dict) else {"ai_status": "parse_fail"}
+                return (
+                    result if isinstance(result, dict) else {"ai_status": "parse_fail"}
+                )
         except Exception as exc:
             return {"ai_status": "error", "error": str(exc)[:180]}
         return {"ai_status": "unavailable"}
@@ -578,7 +669,9 @@ class IpoListingDayEngine:
         self.token = token
         self.ws_manager = ws_manager
         self.ai_advisor = ai_advisor or IpoAiAdvisor(None)
-        self.artifacts = artifact_writer or IpoArtifactWriter(trade_date=config.trade_date)
+        self.artifacts = artifact_writer or IpoArtifactWriter(
+            trade_date=config.trade_date
+        )
         self.stop_file = Path(stop_file)
         self.now_func = now_func or datetime.now
         self.order_failures = 0
@@ -589,11 +682,21 @@ class IpoListingDayEngine:
 
     def kill_switch_active(self) -> IpoDecision:
         if self.stop_file.exists():
-            return IpoDecision(True, "manual_stop_file", {"stop_file": str(self.stop_file)})
-        if self.daily_realized_pnl_krw <= -abs(int(self.config.global_daily_loss_cap_krw)):
-            return IpoDecision(True, "daily_loss_cap", {"daily_realized_pnl_krw": self.daily_realized_pnl_krw})
+            return IpoDecision(
+                True, "manual_stop_file", {"stop_file": str(self.stop_file)}
+            )
+        if self.daily_realized_pnl_krw <= -abs(
+            int(self.config.global_daily_loss_cap_krw)
+        ):
+            return IpoDecision(
+                True,
+                "daily_loss_cap",
+                {"daily_realized_pnl_krw": self.daily_realized_pnl_krw},
+            )
         if self.order_failures >= int(self.config.max_order_failures):
-            return IpoDecision(True, "order_failure_cap", {"order_failures": self.order_failures})
+            return IpoDecision(
+                True, "order_failure_cap", {"order_failures": self.order_failures}
+            )
         return IpoDecision(False, "ok", {})
 
     def subscribe_targets(self, targets: list[IpoTarget]) -> None:
@@ -602,7 +705,13 @@ class IpoListingDayEngine:
             self.ws_manager.execute_subscribe(codes)
         self.artifacts.event("ipo_ws_subscribe_requested", codes=codes)
 
-    def maybe_enter(self, target: IpoTarget, ws_data: dict[str, Any], *, now_dt: datetime | None = None) -> IpoDecision:
+    def maybe_enter(
+        self,
+        target: IpoTarget,
+        ws_data: dict[str, Any],
+        *,
+        now_dt: datetime | None = None,
+    ) -> IpoDecision:
         now_dt = now_dt or self.now_func()
         if target.code in self.completed_codes or target.code in self.positions:
             return IpoDecision(False, "reentry_blocked", {"code": target.code})
@@ -612,23 +721,41 @@ class IpoListingDayEngine:
         if is_buy_side_paused():
             return IpoDecision(False, "global_buy_pause", {})
         if not (ENTRY_START <= now_dt.time() <= ENTRY_END):
-            return IpoDecision(False, "outside_entry_window", {"now": now_dt.isoformat()})
+            return IpoDecision(
+                False, "outside_entry_window", {"now": now_dt.isoformat()}
+            )
         ai_result = self.ai_advisor.review_entry(target, ws_data)
-        decision = evaluate_entry_gate(target, ws_data, now_ts=now_dt.timestamp(), ai_result=ai_result)
+        decision = evaluate_entry_gate(
+            target, ws_data, now_ts=now_dt.timestamp(), ai_result=ai_result
+        )
         self.artifacts.decision(target.code, decision)
-        self.artifacts.event("ipo_entry_gate", code=target.code, allowed=decision.allowed, reason=decision.reason, **decision.fields)
+        self.artifacts.event(
+            "ipo_entry_gate",
+            code=target.code,
+            allowed=decision.allowed,
+            reason=decision.reason,
+            **decision.fields,
+        )
         if not decision.allowed:
-            if decision.reason in {"premium_guard", "ai_risk_block", "quote_vacuum_or_vi_suspected"}:
+            if decision.reason in {
+                "premium_guard",
+                "ai_risk_block",
+                "quote_vacuum_or_vi_suspected",
+            }:
                 self.completed_codes.add(target.code)
             return decision
         qty = int(decision.fields.get("qty", 0) or 0)
         price = int(decision.fields.get("entry_price", 0) or 0)
-        order_decision = self._send_entry_order(target, qty=qty, price=price, retry=False, ws_data=ws_data)
+        order_decision = self._send_entry_order(
+            target, qty=qty, price=price, retry=False, ws_data=ws_data
+        )
         if order_decision.allowed:
             return order_decision
         retry_price = planned_entry_price(ws_data, retry=True)
         if retry_price > 0:
-            return self._send_entry_order(target, qty=qty, price=retry_price, retry=True, ws_data=ws_data)
+            return self._send_entry_order(
+                target, qty=qty, price=retry_price, retry=True, ws_data=ws_data
+            )
         return order_decision
 
     def _send_entry_order(
@@ -649,14 +776,32 @@ class IpoListingDayEngine:
             order_type_desc="IPO_LISTING_DAY_ENTRY",
             tif="IOC" if retry else None,
         )
-        if not isinstance(res, dict) or str(res.get("return_code", res.get("rt_cd", ""))) != "0":
+        if (
+            not isinstance(res, dict)
+            or str(res.get("return_code", res.get("rt_cd", ""))) != "0"
+        ):
             self.order_failures += 1
-            reason = "entry_order_failed" if isinstance(res, dict) else "entry_order_no_response"
-            self.artifacts.event("ipo_entry_order_failed", code=target.code, qty=qty, price=price, retry=retry, response=res)
+            reason = (
+                "entry_order_failed"
+                if isinstance(res, dict)
+                else "entry_order_no_response"
+            )
+            self.artifacts.event(
+                "ipo_entry_order_failed",
+                code=target.code,
+                qty=qty,
+                price=price,
+                retry=retry,
+                response=res,
+            )
             if not retry:
-                return IpoDecision(False, reason, {"retry_allowed": True, "response": res or {}})
+                return IpoDecision(
+                    False, reason, {"retry_allowed": True, "response": res or {}}
+                )
             self.completed_codes.add(target.code)
-            return IpoDecision(False, reason, {"retry_allowed": False, "response": res or {}})
+            return IpoDecision(
+                False, reason, {"retry_allowed": False, "response": res or {}}
+            )
         fill_price = _safe_int(ws_data.get("curr"), price) or price
         position = IpoPosition(
             code=target.code,
@@ -678,9 +823,17 @@ class IpoListingDayEngine:
             response=res,
             actual_order_submitted=True,
         )
-        return IpoDecision(True, "entry_submitted", {"qty": qty, "price": price, "response": res})
+        return IpoDecision(
+            True, "entry_submitted", {"qty": qty, "price": price, "response": res}
+        )
 
-    def evaluate_and_exit(self, target: IpoTarget, ws_data: dict[str, Any], *, now_dt: datetime | None = None) -> IpoDecision:
+    def evaluate_and_exit(
+        self,
+        target: IpoTarget,
+        ws_data: dict[str, Any],
+        *,
+        now_dt: datetime | None = None,
+    ) -> IpoDecision:
         now_dt = now_dt or self.now_func()
         position = self.positions.get(target.code)
         if position is None or position.closed or position.qty <= 0:
@@ -689,12 +842,25 @@ class IpoListingDayEngine:
         ai_result: dict[str, Any] | None = None
         if profit >= 20.0 and not position.first_partial_taken:
             ai_result = self.ai_advisor.review_exit(target, ws_data, position)
-        decision = evaluate_exit_action(position, ws_data, now_dt=now_dt, ai_result=ai_result)
-        self.artifacts.event("ipo_exit_gate", code=target.code, allowed=decision.allowed, reason=decision.reason, **decision.fields)
+        decision = evaluate_exit_action(
+            position, ws_data, now_dt=now_dt, ai_result=ai_result
+        )
+        self.artifacts.event(
+            "ipo_exit_gate",
+            code=target.code,
+            allowed=decision.allowed,
+            reason=decision.reason,
+            **decision.fields,
+        )
         if not decision.allowed:
             return decision
-        sell_qty = min(position.qty, int(decision.fields.get("sell_qty", position.qty) or position.qty))
-        return self._send_exit_order(target, position, ws_data, sell_qty=sell_qty, reason=decision.reason)
+        sell_qty = min(
+            position.qty,
+            int(decision.fields.get("sell_qty", position.qty) or position.qty),
+        )
+        return self._send_exit_order(
+            target, position, ws_data, sell_qty=sell_qty, reason=decision.reason
+        )
 
     def _send_exit_order(
         self,
@@ -705,10 +871,21 @@ class IpoListingDayEngine:
         sell_qty: int,
         reason: str,
     ) -> IpoDecision:
-        res = kiwoom_orders.send_smart_sell_order(target.code, sell_qty, self.token, ws_data, reason)
-        if not isinstance(res, dict) or str(res.get("return_code", res.get("rt_cd", ""))) != "0":
+        res = kiwoom_orders.send_smart_sell_order(
+            target.code, sell_qty, self.token, ws_data, reason
+        )
+        if (
+            not isinstance(res, dict)
+            or str(res.get("return_code", res.get("rt_cd", ""))) != "0"
+        ):
             self.order_failures += 1
-            self.artifacts.event("ipo_exit_order_failed", code=target.code, qty=sell_qty, reason=reason, response=res)
+            self.artifacts.event(
+                "ipo_exit_order_failed",
+                code=target.code,
+                qty=sell_qty,
+                reason=reason,
+                response=res,
+            )
             return IpoDecision(False, "exit_order_failed", {"response": res or {}})
         sell_price = _safe_int(ws_data.get("curr"), position.avg_price)
         realized = int((sell_price - position.avg_price) * sell_qty)
@@ -733,9 +910,15 @@ class IpoListingDayEngine:
             actual_order_submitted=True,
             response=res,
         )
-        return IpoDecision(True, "exit_submitted", {"sell_qty": sell_qty, "reason": reason, "realized_pnl_krw": realized})
+        return IpoDecision(
+            True,
+            "exit_submitted",
+            {"sell_qty": sell_qty, "reason": reason, "realized_pnl_krw": realized},
+        )
 
-    def run_until_done(self, targets: list[IpoTarget], *, poll_sec: float = 0.2) -> None:
+    def run_until_done(
+        self, targets: list[IpoTarget], *, poll_sec: float = 0.2
+    ) -> None:
         self.subscribe_targets(targets)
         active = targets[:1]
         try:
@@ -745,24 +928,38 @@ class IpoListingDayEngine:
                     time.sleep(min(poll_sec, 1.0))
                     continue
                 target = active[0]
-                ws_data = self.ws_manager.get_latest_data(target.code) if hasattr(self.ws_manager, "get_latest_data") else {}
+                ws_data = (
+                    self.ws_manager.get_latest_data(target.code)
+                    if hasattr(self.ws_manager, "get_latest_data")
+                    else {}
+                )
                 self.artifacts.event(
                     "ipo_preopen_or_live_snapshot",
                     code=target.code,
                     **indicative_open_snapshot(ws_data),
                     session_state=ws_data.get("market_session_state", ""),
                 )
-                if target.code not in self.positions and target.code not in self.completed_codes:
+                if (
+                    target.code not in self.positions
+                    and target.code not in self.completed_codes
+                ):
                     self.maybe_enter(target, ws_data, now_dt=now_dt)
                 if target.code in self.positions:
                     self.evaluate_and_exit(target, ws_data, now_dt=now_dt)
-                if target.code in self.completed_codes or self.kill_switch_active().allowed:
+                if (
+                    target.code in self.completed_codes
+                    or self.kill_switch_active().allowed
+                ):
                     position = self.positions.get(target.code)
                     self.artifacts.add_summary(
                         {
                             "code": target.code,
                             "name": target.name,
-                            "status": "completed" if target.code in self.completed_codes else "stopped",
+                            "status": (
+                                "completed"
+                                if target.code in self.completed_codes
+                                else "stopped"
+                            ),
                             "realized_pnl_krw": self.completed_pnl_by_code.get(
                                 target.code,
                                 0 if position is None else position.realized_pnl_krw,
@@ -771,7 +968,10 @@ class IpoListingDayEngine:
                         }
                     )
                     active.pop(0)
-                if now_dt.time() > dt_time(9, 31, 0) and target.code not in self.positions:
+                if (
+                    now_dt.time() > dt_time(9, 31, 0)
+                    and target.code not in self.positions
+                ):
                     self.completed_codes.add(target.code)
                 time.sleep(poll_sec)
         finally:
@@ -781,7 +981,11 @@ class IpoListingDayEngine:
 def build_openai_advisor(conf: dict[str, Any], config: IpoRunConfig) -> IpoAiAdvisor:
     keys = [v for k, v in conf.items() if str(k).startswith("OPENAI_API_KEY") and v]
     if not keys:
-        return IpoAiAdvisor(None, max_calls_per_symbol=config.max_ai_calls_per_symbol, max_calls_per_run=config.max_ai_calls_per_run)
+        return IpoAiAdvisor(
+            None,
+            max_calls_per_symbol=config.max_ai_calls_per_symbol,
+            max_calls_per_run=config.max_ai_calls_per_run,
+        )
     engine = GPTSniperEngine(api_keys=keys, announce_startup=False)
     return IpoAiAdvisor(
         engine,
@@ -791,10 +995,18 @@ def build_openai_advisor(conf: dict[str, Any], config: IpoRunConfig) -> IpoAiAdv
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="IPO listing-day spread capture runner.")
-    parser.add_argument("--config", required=True, help="Path to IPO listing-day YAML config.")
+    parser = argparse.ArgumentParser(
+        description="IPO listing-day spread capture runner."
+    )
+    parser.add_argument(
+        "--config", required=True, help="Path to IPO listing-day YAML config."
+    )
     parser.add_argument("--poll-sec", type=float, default=0.2)
-    parser.add_argument("--dry-select", action="store_true", help="Validate config and selected targets without starting WS/orders.")
+    parser.add_argument(
+        "--dry-select",
+        action="store_true",
+        help="Validate config and selected targets without starting WS/orders.",
+    )
     return parser
 
 
@@ -803,7 +1015,16 @@ def main(argv: list[str] | None = None) -> int:
     config = load_ipo_config(args.config)
     targets = select_enabled_targets(config)
     if args.dry_select:
-        print(json.dumps({"trade_date": config.trade_date, "targets": [target.__dict__ for target in targets]}, ensure_ascii=False, indent=2))
+        print(
+            json.dumps(
+                {
+                    "trade_date": config.trade_date,
+                    "targets": [target.__dict__ for target in targets],
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
         return 0 if targets else 1
     if not targets:
         log_info("IPO runner: no enabled target for trade_date")

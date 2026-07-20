@@ -9,7 +9,6 @@ from __future__ import annotations
 import re
 from typing import Any
 
-
 BUCKET_ALIAS_VERSION = "lifecycle_bucket_alias_v1"
 DIMENSION_SET_VERSION = "lifecycle_dimension_set_v1"
 ENTRY_SOURCE_PARENT_ALIAS_VERSION = "entry_source_parent_alias_v1"
@@ -45,7 +44,11 @@ ENTRY_SOURCE_PARENT_ALIASES = (
     ("first_ai_wait", "entry_source_wait6579", "alias_of_wait6579_counterfactual"),
     ("wait6579", "entry_source_wait6579", "canonical_wait6579_counterfactual"),
     ("blocked_ai_score", "entry_source_blocked_ai_score", "canonical_blocked_ai_score"),
-    ("scalp_entry_action_decision", "entry_source_action_decision", "canonical_action_decision"),
+    (
+        "scalp_entry_action_decision",
+        "entry_source_action_decision",
+        "canonical_action_decision",
+    ),
     ("action_decision", "entry_source_action_decision", "alias_of_action_decision"),
     ("scalp_sim", "entry_source_scalp_sim", "canonical_scalp_sim"),
     ("panic", "entry_source_panic", "canonical_panic"),
@@ -117,7 +120,11 @@ def _score_parent(value: Any) -> str | None:
         return None
     low = _safe_float(match.group("low"))
     high_raw = match.group("high")
-    high = _safe_float(match.group("low")) if high_raw == "p" else _safe_float(high_raw or match.group("low"))
+    high = (
+        _safe_float(match.group("low"))
+        if high_raw == "p"
+        else _safe_float(high_raw or match.group("low"))
+    )
     if low is None or high is None:
         return None
     midpoint = (low + high) / 2.0
@@ -169,7 +176,9 @@ def normalize_entry_source_parent(value: Any) -> dict[str, Any]:
                 "parent": parent,
                 "raw_value": raw,
                 "alias_version": ENTRY_SOURCE_PARENT_ALIAS_VERSION,
-                "contract_state": "canonical_alias" if reason.startswith("alias_") else "canonical",
+                "contract_state": (
+                    "canonical_alias" if reason.startswith("alias_") else "canonical"
+                ),
                 "reason": reason,
                 "consume_data": True,
                 "runtime_effect_allowed": True,
@@ -215,7 +224,11 @@ def _coarsen_dimensions_for_parent(
             normalized[f"{key}_detail"] = str(value)
             parent_parts.append(f"{key}={_stage_parent_from_child(key, value)}")
         if parent_parts:
-            return "|".join(parent_parts), normalized, "combo_bucket_rolled_up_to_broad_parent_dimensions"
+            return (
+                "|".join(parent_parts),
+                normalized,
+                "combo_bucket_rolled_up_to_broad_parent_dimensions",
+            )
 
     if score_parent and bucket_key != score_parent:
         normalized["bucket_detail"] = str(bucket_key)
@@ -230,7 +243,9 @@ def normalize_lifecycle_bucket(
     bucket_key: str,
     source_dimensions: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    dimensions = {str(key): str(value) for key, value in (source_dimensions or {}).items()}
+    dimensions = {
+        str(key): str(value) for key, value in (source_dimensions or {}).items()
+    }
     legacy_raw = str(bucket_key or "unknown")
     canonical_key = legacy_raw
     metrics: dict[str, Any] = {}
@@ -260,11 +275,11 @@ def normalize_lifecycle_bucket(
                 normalized_dimensions[f"{metric_name}_bucket"] = (
                     "not_below_bid"
                     if number <= 0
-                    else "0_5bps"
-                    if number <= 5
-                    else "5_20bps"
-                    if number <= 20
-                    else "20bps_plus"
+                    else (
+                        "0_5bps"
+                        if number <= 5
+                        else "5_20bps" if number <= 20 else "20bps_plus"
+                    )
                 )
 
     parent_key, parent_dimensions, parent_reason = _coarsen_dimensions_for_parent(
@@ -282,7 +297,9 @@ def normalize_lifecycle_bucket(
         candidate_type = "parent_bucket_absorption"
         reason = parent_reason
 
-    if "unknown" in legacy_raw.lower() or any(_is_missing_unknown_dimension_value(value) for value in dimensions.values()):
+    if "unknown" in legacy_raw.lower() or any(
+        _is_missing_unknown_dimension_value(value) for value in dimensions.values()
+    ):
         missing_dimensions = sorted(
             {
                 str(key)
@@ -306,9 +323,13 @@ def normalize_lifecycle_bucket(
         "proposal_decision": decision,
         "candidate_type": candidate_type,
         "recommended_canonical_bucket": canonical_bucket,
-        "recommended_metric_or_dimension": sorted([*metrics.keys(), *normalized_dimensions.keys()]),
+        "recommended_metric_or_dimension": sorted(
+            [*metrics.keys(), *normalized_dimensions.keys()]
+        ),
         "reasoning_summary": reason,
-        "confidence": "high" if decision in {"absorb_as_dimension", "merge"} else "medium",
+        "confidence": (
+            "high" if decision in {"absorb_as_dimension", "merge"} else "medium"
+        ),
         "required_source_fields": list(REQUIRED_METRIC_CONTRACT_FIELDS),
         "forbidden_uses": [
             "broker_submit",
@@ -332,14 +353,21 @@ def normalize_lifecycle_bucket(
     }
 
 
-def default_ai_tier2_proposal(bucket_id: str, deterministic_proposal: dict[str, Any]) -> dict[str, Any]:
+def default_ai_tier2_proposal(
+    bucket_id: str, deterministic_proposal: dict[str, Any]
+) -> dict[str, Any]:
     return {
         "bucket_id": bucket_id,
         "proposal_source": "ai_tier2",
         "proposal_status": "not_provided",
         "proposal_decision": "reject",
-        "recommended_canonical_bucket": deterministic_proposal.get("recommended_canonical_bucket"),
-        "recommended_metric_or_dimension": deterministic_proposal.get("recommended_metric_or_dimension") or [],
+        "recommended_canonical_bucket": deterministic_proposal.get(
+            "recommended_canonical_bucket"
+        ),
+        "recommended_metric_or_dimension": deterministic_proposal.get(
+            "recommended_metric_or_dimension"
+        )
+        or [],
         "reasoning_summary": "AI Tier2 proposal unavailable; deterministic proposal remains source-only.",
         "confidence": "low",
         "required_source_fields": list(REQUIRED_METRIC_CONTRACT_FIELDS),
@@ -354,19 +382,27 @@ def compare_taxonomy_proposals(
     ai_tier2_proposal: dict[str, Any] | None,
     comparative_review: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    ai_proposal = ai_tier2_proposal or default_ai_tier2_proposal(bucket_id, deterministic_proposal)
+    ai_proposal = ai_tier2_proposal or default_ai_tier2_proposal(
+        bucket_id, deterministic_proposal
+    )
     review = comparative_review or {}
     if review.get("selected_decision"):
         selected_decision = str(review.get("selected_decision"))
     elif ai_proposal.get("proposal_status") == "provided":
         selected_decision = str(ai_proposal.get("proposal_decision") or "keep_bucket")
     else:
-        selected_decision = str(deterministic_proposal.get("proposal_decision") or "keep_bucket")
+        selected_decision = str(
+            deterministic_proposal.get("proposal_decision") or "keep_bucket"
+        )
     if selected_decision not in TAXONOMY_DECISIONS:
         selected_decision = "source_quality_blocker"
     selected_source = str(review.get("selected_source") or "")
     if selected_source not in {"deterministic", "ai_tier2", "hybrid", "reject"}:
-        selected_source = "deterministic" if ai_proposal.get("proposal_status") != "provided" else "hybrid"
+        selected_source = (
+            "deterministic"
+            if ai_proposal.get("proposal_status") != "provided"
+            else "hybrid"
+        )
     return {
         "bucket_id": bucket_id,
         "selected_decision": selected_decision,
@@ -381,7 +417,10 @@ def compare_taxonomy_proposals(
         "comparison_summary": review.get("comparison_summary")
         or "Deterministic taxonomy proposal used because AI comparative review did not override it.",
         "rejected_alternative_reason": review.get("rejected_alternative_reason") or "",
-        "confidence": review.get("confidence") or ai_proposal.get("confidence") or deterministic_proposal.get("confidence") or "medium",
+        "confidence": review.get("confidence")
+        or ai_proposal.get("confidence")
+        or deterministic_proposal.get("confidence")
+        or "medium",
         "required_source_fields": review.get("required_source_fields")
         or ai_proposal.get("required_source_fields")
         or deterministic_proposal.get("required_source_fields")
@@ -390,6 +429,7 @@ def compare_taxonomy_proposals(
         or ai_proposal.get("forbidden_uses")
         or deterministic_proposal.get("forbidden_uses")
         or [],
-        "workorder_title": review.get("workorder_title") or f"Review lifecycle bucket taxonomy: {bucket_id}",
+        "workorder_title": review.get("workorder_title")
+        or f"Review lifecycle bucket taxonomy: {bucket_id}",
         "workorder_priority": review.get("workorder_priority") or "medium",
     }

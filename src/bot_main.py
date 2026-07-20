@@ -4,6 +4,7 @@
 """
 [KOSDAQ 하이브리드 AI 스캐너 (Kosdaq Scanner)]
 """
+
 import sys
 from pathlib import Path
 
@@ -13,7 +14,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
-    
+
 import os
 import multiprocessing
 import time
@@ -31,12 +32,25 @@ from src.utils import kiwoom_utils
 from src.utils.runtime_flags import is_trading_paused
 from src.database.db_manager import DBManager
 from src.core.event_bus import EventBus
-from src.engine.daily_report_service import save_daily_report, build_daily_report, format_market_status_with_context
-from src.engine.log_archive_service import archive_target_date_logs, save_monitor_snapshots_for_date
-from src.engine.strategy_position_performance_report import sync_trade_performance_for_date
+from src.engine.daily_report_service import (
+    save_daily_report,
+    build_daily_report,
+    format_market_status_with_context,
+)
+from src.engine.log_archive_service import (
+    archive_target_date_logs,
+    save_monitor_snapshots_for_date,
+)
+from src.engine.strategy_position_performance_report import (
+    sync_trade_performance_for_date,
+)
 from src.utils.constants import RESTART_FLAG_PATH, TRADING_RULES
 from src.engine.error_detectors.process_health import reset_heartbeat, write_heartbeat
-from src.engine.error_detector import ErrorDetectionEngine, REPORT_DIR as ERROR_REPORT_DIR
+from src.engine.error_detector import (
+    ErrorDetectionEngine,
+    REPORT_DIR as ERROR_REPORT_DIR,
+)
+
 
 # ==========================================
 # 📅 호출 상단 공용 날짜 helper
@@ -54,26 +68,28 @@ def _resolve_target_date(target_date: str | None = None) -> str:
 # ==========================================
 class DualLogger:
     def __init__(self):
-        log_dir = PROJECT_ROOT / 'logs'
+        log_dir = PROJECT_ROOT / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
-        
-        self.logger = logging.getLogger('SniperBot')
+
+        self.logger = logging.getLogger("SniperBot")
         self.logger.setLevel(logging.INFO)
         self.logger.propagate = False
-        
+
         if not any(
             isinstance(handler, TimedRotatingFileHandler)
             and Path(getattr(handler, "baseFilename", "")).name == "bot_history.log"
             for handler in self.logger.handlers
         ):
             file_handler = TimedRotatingFileHandler(
-                filename=str(log_dir / 'bot_history.log'),
-                when='midnight',
+                filename=str(log_dir / "bot_history.log"),
+                when="midnight",
                 interval=1,
-                backupCount=getattr(TRADING_RULES, 'BOT_HISTORY_BACKUP_COUNT', 7),
-                encoding='utf-8'
+                backupCount=getattr(TRADING_RULES, "BOT_HISTORY_BACKUP_COUNT", 7),
+                encoding="utf-8",
             )
-            formatter = logging.Formatter('[%(asctime)s] %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+            formatter = logging.Formatter(
+                "[%(asctime)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
+            )
             file_handler.setFormatter(formatter)
             self.logger.addHandler(file_handler)
         self.terminal = sys.stdout
@@ -96,6 +112,7 @@ def install_dual_logger():
     sys.stderr = logger
     return logger
 
+
 # 💡 글로벌 위기 감지 무한 루프
 def crisis_monitor_loop():
     """60분(3600초) 주기로 글로벌 위기를 감시하고 Telegram은 슬롯 단위로 제한한다."""
@@ -103,7 +120,9 @@ def crisis_monitor_loop():
     try:
         import src.scanners.crisis_monitor as crisis_monitor
     except ImportError:
-        print("⚠️ [시스템] crisis_monitor.py 모듈을 찾을 수 없어 위기 감지 스케줄러를 종료합니다.")
+        print(
+            "⚠️ [시스템] crisis_monitor.py 모듈을 찾을 수 없어 위기 감지 스케줄러를 종료합니다."
+        )
         return
 
     while True:
@@ -111,6 +130,7 @@ def crisis_monitor_loop():
             crisis_monitor.run_crisis_monitor()
         except Exception as e:
             from src.utils.logger import log_error
+
             log_error(f"위기 감지 스케줄러 에러: {e}")
         write_heartbeat("crisis_monitor")
         time.sleep(3600)
@@ -120,6 +140,7 @@ def error_detection_loop(interval: int, event_bus):
     """60초 주기로 시스템 에러 탐지를 실행하는 데몬 루프."""
     from src.utils.logger import log_error as ed_log_error
     from src.utils.logger import log_info as ed_log_info
+
     alert_state: dict[str, dict] = {}
     ALERT_COOLDOWN_SEC = 600
     while True:
@@ -138,7 +159,8 @@ def error_detection_loop(interval: int, event_bus):
                 prev_ts = prev.get("ts", 0)
                 curr_summary_hash = str(hash(r.summary))
                 is_alert_severity = r.severity == "fail" or (
-                    r.detector_id == "kiwoom_auth_8005_restart" and r.severity == "warning"
+                    r.detector_id == "kiwoom_auth_8005_restart"
+                    and r.severity == "warning"
                 )
 
                 if is_alert_severity:
@@ -155,10 +177,18 @@ def error_detection_loop(interval: int, event_bus):
                                 "parse_mode": "HTML",
                             },
                         )
-                        alert_state[did] = {"severity": r.severity, "summary_hash": curr_summary_hash, "ts": now_ts}
+                        alert_state[did] = {
+                            "severity": r.severity,
+                            "summary_hash": curr_summary_hash,
+                            "ts": now_ts,
+                        }
                 elif r.severity == "pass" and prev_severity in {"fail", "warning"}:
                     ed_log_info(f"[ERROR_DETECTION] {r.detector_id}: recovered to pass")
-                    alert_state[did] = {"severity": "pass", "summary_hash": "", "ts": now_ts}
+                    alert_state[did] = {
+                        "severity": "pass",
+                        "summary_hash": "",
+                        "ts": now_ts,
+                    }
         except Exception as e:
             ed_log_error(f"[ERROR_DETECTION] Daemon loop error: {e}")
         time.sleep(interval)
@@ -220,6 +250,7 @@ def generate_monitor_archive_job(target_date: str | None = None):
 
 def run_scheduler_job_async(job_name: str, func, *args, **kwargs):
     """Run slow scheduled jobs away from the main heartbeat loop."""
+
     def _runner():
         try:
             func(*args, **kwargs)
@@ -236,31 +267,36 @@ def run_scheduler_job_async(job_name: str, func, *args, **kwargs):
 # ==========================================
 # 🎯 메인 실행부 (Main Thread)
 # ==========================================
-if __name__ == '__main__':
+if __name__ == "__main__":
     install_dual_logger()
     print("🤖 KORStockScan v13.0 통합 관제 시스템 기동 중...")
-    
+
     db_manager = DBManager()
     db_manager.init_db()
 
     # 웹/API에서 바로 읽을 수 있도록 부팅 시점에 최신 리포트 1회 생성
     generate_daily_report_job()
-    
+
     # 전역 이벤트 버스 초기화
     event_bus = EventBus()
 
     # 💡 1. 텔레그램 매니저를 별도의 데몬 쓰레드로 실행 (블로킹 방지)
-    import src.notify.telegram_manager as telegram_manager # 우리가 완성한 텔레그램 수신탑
-    tele_thread = threading.Thread(target=telegram_manager.start_telegram_bot, daemon=True)
+    import src.notify.telegram_manager as telegram_manager  # 우리가 완성한 텔레그램 수신탑
+
+    tele_thread = threading.Thread(
+        target=telegram_manager.start_telegram_bot, daemon=True
+    )
     tele_thread.start()
     print("✅ [시스템] 텔레그램 수신탑 (백그라운드) 가동 완료.")
 
     if is_trading_paused():
-        pause_boot_msg = "⏸ 부팅 시 pause.flag 감지: 신규 매수 및 추가매수 중단 상태로 시작합니다."
+        pause_boot_msg = (
+            "⏸ 부팅 시 pause.flag 감지: 신규 매수 및 추가매수 중단 상태로 시작합니다."
+        )
         print(pause_boot_msg)
         event_bus.publish(
-            'TELEGRAM_BROADCAST',
-            {'message': pause_boot_msg, 'audience': 'ADMIN_ONLY', 'parse_mode': 'HTML'},
+            "TELEGRAM_BROADCAST",
+            {"message": pause_boot_msg, "audience": "ADMIN_ONLY", "parse_mode": "HTML"},
         )
 
     # 💡 [신규] 에러 탐지 heartbeat initial write
@@ -286,49 +322,68 @@ if __name__ == '__main__':
         error_detect_thread.start()
         print(f"[시스템] 에러 탐지 데몬 ({ed_interval}초 주기) 가동 완료.")
     else:
-        print("[시스템] 에러 탐지 데몬 DISABLED (TRADING_RULES.ERROR_DETECTOR_ENABLED=False)")
+        print(
+            "[시스템] 에러 탐지 데몬 DISABLED (TRADING_RULES.ERROR_DETECTOR_ENABLED=False)"
+        )
 
     # 💡 2. [신규 추가] 글로벌 위기 감지 모니터는 주말/휴일 상관없이 365일 돌아가야 합니다.
     crisis_thread = threading.Thread(target=crisis_monitor_loop, daemon=True)
     crisis_thread.start()
-    print("🌍 [시스템] 글로벌 위기 감지 모니터 (60분 수집, 장전/정오/장후 알림 제한) 가동 완료.")
+    print(
+        "🌍 [시스템] 글로벌 위기 감지 모니터 (60분 수집, 장전/정오/장후 알림 제한) 가동 완료."
+    )
 
     if is_open:
         import src.engine.kiwoom_sniper_v2 as kiwoom_sniper_v2
 
         # 💡 [아키텍처 포인트 3] 콜백(broadcast_alert) 파라미터 완전 제거!
-        engine_thread = threading.Thread(target=kiwoom_sniper_v2.run_sniper, daemon=True)
+        engine_thread = threading.Thread(
+            target=kiwoom_sniper_v2.run_sniper, daemon=True
+        )
         engine_thread.start()
         write_heartbeat("sniper_engine")
-        print("✅ [시스템] 정상거래일 - 스나이퍼 매매 엔진 가동 완료. 조건검색식 가동기간으로 코스닥 스캐너 가동 임시중단 합니다.")
+        print(
+            "✅ [시스템] 정상거래일 - 스나이퍼 매매 엔진 가동 완료. 조건검색식 가동기간으로 코스닥 스캐너 가동 임시중단 합니다."
+        )
 
         # 초단타 스캘핑 스캐너 가동 - 장초반/후반 90초, 그 외 120초 주기로
         # stale open-top 대신 회전형 신선도 우선 로직으로 감시 대상을 발굴
         try:
             import src.scanners.scalping_scanner as scalping_scanner
-            scalper_thread = threading.Thread(target=scalping_scanner.run_scalper, daemon=True)
+
+            scalper_thread = threading.Thread(
+                target=scalping_scanner.run_scalper, daemon=True
+            )
             scalper_thread.start()
             write_heartbeat("scalping_scanner")
             print("⚡ [시스템] 정상거래일 - 초단타 스캘핑 스캐너 가동 완료.")
         except Exception as e:
             print(f"🚨 [시스템] 스캘핑 스캐너 가동 중 오류 발생 (혹은 모듈 없음): {e}")
-# 
-        # 코스닥 AI 하이브리드 스캐너 가동
-        # try:
-        #     import src.scanners.kosdaq_scanner as kosdaq_scanner
-        #     kosdaq_thread = threading.Thread(target=kosdaq_scanner.run_kosdaq_scanner, daemon=True)
-        #     kosdaq_thread.start()
-        #     print("🚀 [시스템] 정상거래일 - 코스닥 하이브리드 스캐너 가동 완료.")
-        # except Exception as e:
-        #     print(f"🚨 [시스템] 코스닥 스캐너 가동 중 오류 발생 (혹은 모듈 없음): {e}")
+    #
+    # 코스닥 AI 하이브리드 스캐너 가동
+    # try:
+    #     import src.scanners.kosdaq_scanner as kosdaq_scanner
+    #     kosdaq_thread = threading.Thread(target=kosdaq_scanner.run_kosdaq_scanner, daemon=True)
+    #     kosdaq_thread.start()
+    #     print("🚀 [시스템] 정상거래일 - 코스닥 하이브리드 스캐너 가동 완료.")
+    # except Exception as e:
+    #     print(f"🚨 [시스템] 코스닥 스캐너 가동 중 오류 발생 (혹은 모듈 없음): {e}")
 
     else:
         # 휴장일 처리
-        print(f"🛑 [시스템] 오늘은 {reason} 휴장일입니다. 매매 엔진과 스캐너 가동을 생략합니다.")
-        event_bus.publish('TELEGRAM_BROADCAST', {'message': f"🛑 오늘은 {reason} 휴장일입니다. 텔레그램 관제 모드만 가동합니다.", 'audience': 'VIP_ALL'})
+        print(
+            f"🛑 [시스템] 오늘은 {reason} 휴장일입니다. 매매 엔진과 스캐너 가동을 생략합니다."
+        )
+        event_bus.publish(
+            "TELEGRAM_BROADCAST",
+            {
+                "message": f"🛑 오늘은 {reason} 휴장일입니다. 텔레그램 관제 모드만 가동합니다.",
+                "audience": "VIP_ALL",
+            },
+        )
 
     print("🛡️ 메인 관제탑 루프 진입 (스케줄링 및 무중단 감시 시작)...")
-    
+
     # 💡 [아키텍처 포인트 4] 메인 쓰레드는 오직 시스템 스케줄링과 예외 종료 감시만 수행합니다.
     daily_report_sent = False
     monitor_archive_sent = False
@@ -340,7 +395,7 @@ if __name__ == '__main__':
             heartbeat_counter += 1
             if heartbeat_counter % 5 == 0:
                 write_heartbeat("main_loop")
-            
+
             # 자정이 지나면 당일 스케줄러 플래그를 초기화
             if now.hour == 0 and now.minute == 1:
                 daily_report_sent = False
@@ -359,15 +414,21 @@ if __name__ == '__main__':
             # [스케줄러 2] 야간(23:50) 시스템 자동 재시작
             if now.hour == 23 and now.minute == 50:
                 print("🌙 시스템 일일 초기화 및 메모리 정리를 위해 봇을 재가동합니다.")
-                event_bus.publish('TELEGRAM_BROADCAST', {'message': "🌙 자정 메모리 초기화를 위해 시스템을 재가동합니다.", 'audience': 'ADMIN_ONLY'})
-                time.sleep(65) # 23:51분으로 넘겨서 무한 재시작 방지
+                event_bus.publish(
+                    "TELEGRAM_BROADCAST",
+                    {
+                        "message": "🌙 자정 메모리 초기화를 위해 시스템을 재가동합니다.",
+                        "audience": "ADMIN_ONLY",
+                    },
+                )
+                time.sleep(65)  # 23:51분으로 넘겨서 무한 재시작 방지
                 os.kill(os.getpid(), signal.SIGTERM)
 
             # [스케줄러 3] 관리자의 우아한 재시작(restart.flag) 감지
             if RESTART_FLAG_PATH.exists():
                 print("🔄 [시스템] 수동 재시작 플래그 감지. 관제탑을 종료합니다.")
                 RESTART_FLAG_PATH.unlink(missing_ok=True)
-                time.sleep(3) # 다른 쓰레드들이 종료될 시간을 잠시 부여
+                time.sleep(3)  # 다른 쓰레드들이 종료될 시간을 잠시 부여
                 os.kill(os.getpid(), signal.SIGTERM)
 
             # 메인 루프 부하 방지
@@ -379,5 +440,6 @@ if __name__ == '__main__':
 
         except Exception as e:
             from src.utils.logger import log_error
+
             log_error(f"메인 관제탑 루프 에러: {e}")
             time.sleep(5)

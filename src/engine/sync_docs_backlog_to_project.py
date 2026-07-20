@@ -20,7 +20,6 @@ from zoneinfo import ZoneInfo
 
 from src.utils.market_day import get_krx_trading_day_status
 
-
 GITHUB_GRAPHQL_URL = "https://api.github.com/graphql"
 
 DOC_PLAN = Path("docs/plan-korStockScanPerformanceOptimization.prompt.md")
@@ -177,7 +176,9 @@ def _scalping_doc_candidates() -> list[Path]:
     if env_path:
         candidates.append(Path(env_path))
     candidates.append(DOC_SCALPING)
-    candidates.extend(sorted(Path("docs").glob("*-scalping-ai-coding-instructions.md"), reverse=True))
+    candidates.extend(
+        sorted(Path("docs").glob("*-scalping-ai-coding-instructions.md"), reverse=True)
+    )
 
     deduped: list[Path] = []
     seen: set[str] = set()
@@ -196,7 +197,12 @@ def _prompt_doc_candidates() -> list[Path]:
     if env_path:
         candidates.append(Path(env_path))
     candidates.append(DOC_PROMPT)
-    candidates.extend(sorted(Path("docs").glob("*-scalping-ai-prompt-coding-instructions.md"), reverse=True))
+    candidates.extend(
+        sorted(
+            Path("docs").glob("*-scalping-ai-prompt-coding-instructions.md"),
+            reverse=True,
+        )
+    )
 
     deduped: list[Path] = []
     seen: set[str] = set()
@@ -214,8 +220,12 @@ def _checklist_doc_candidates() -> list[Path]:
     env_path = os.getenv("DOC_CHECKLIST_PATH", "").strip()
     if env_path:
         candidates.append(Path(env_path))
-    candidates.extend(sorted(Path("docs/checklists").glob("*-stage2-todo-checklist.md"), reverse=True))
-    candidates.extend(sorted(Path("docs").glob("*-stage2-todo-checklist.md"), reverse=True))
+    candidates.extend(
+        sorted(Path("docs/checklists").glob("*-stage2-todo-checklist.md"), reverse=True)
+    )
+    candidates.extend(
+        sorted(Path("docs").glob("*-stage2-todo-checklist.md"), reverse=True)
+    )
     candidates.append(DOC_CHECKLIST)
 
     deduped: list[Path] = []
@@ -279,7 +289,9 @@ def parse_plan_tasks() -> list[BacklogTask]:
     if not loaded:
         return []
     source_path, text = loaded
-    remaining = _parse_numbered_items(_extract_section_lines(text, "### 아직 남아있는 일"))
+    remaining = _parse_numbered_items(
+        _extract_section_lines(text, "### 아직 남아있는 일")
+    )
     tasks: list[BacklogTask] = []
     for item in remaining:
         tasks.append(
@@ -382,7 +394,10 @@ def _completed_runbook_slots(due_date: str) -> set[str]:
     }
     completed: set[str] = set()
     for source_path in _checklist_doc_candidates():
-        if _due_date_from_checklist_path(source_path) != due_date or not source_path.exists():
+        if (
+            _due_date_from_checklist_path(source_path) != due_date
+            or not source_path.exists()
+        ):
             continue
         text = _read_optional(source_path) or ""
         for slot, marker in markers.items():
@@ -461,7 +476,9 @@ def parse_scalping_logic_tasks() -> list[BacklogTask]:
 
     # Remaining implementation phases only
     for line in text.splitlines():
-        m = re.match(r"^\s*####\s+(?:Legacy\s+)?(0-1b|2-1|2-2|3-1|3-2)\.\s+(.+?)\s*$", line)
+        m = re.match(
+            r"^\s*####\s+(?:Legacy\s+)?(0-1b|2-1|2-2|3-1|3-2)\.\s+(.+?)\s*$", line
+        )
         if not m:
             continue
         tasks.append(
@@ -599,7 +616,9 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
-def _graphql_request(token: str, query: str, variables: dict[str, Any]) -> dict[str, Any]:
+def _graphql_request(
+    token: str, query: str, variables: dict[str, Any]
+) -> dict[str, Any]:
     payload = json.dumps({"query": query, "variables": variables}).encode("utf-8")
     req = request.Request(
         GITHUB_GRAPHQL_URL,
@@ -613,7 +632,12 @@ def _graphql_request(token: str, query: str, variables: dict[str, Any]) -> dict[
     )
 
     last_err: Exception | None = None
-    transient_network_errors = (URLError, RemoteDisconnected, TimeoutError, socket.timeout)
+    transient_network_errors = (
+        URLError,
+        RemoteDisconnected,
+        TimeoutError,
+        socket.timeout,
+    )
     for attempt in range(3):
         try:
             with request.urlopen(req, timeout=30) as resp:
@@ -622,7 +646,7 @@ def _graphql_request(token: str, query: str, variables: dict[str, Any]) -> dict[
             last_err = exc
             status_code = getattr(exc, "code", None)
             if status_code in {502, 503, 504, 429} and attempt < 2:
-                delay = 0.8 * (2 ** attempt)
+                delay = 0.8 * (2**attempt)
                 print(
                     f"[DOC_GRAPHQL_RETRY] code={status_code} attempt={attempt + 1} retry_after={delay:.1f}s",
                     file=sys.stderr,
@@ -633,7 +657,7 @@ def _graphql_request(token: str, query: str, variables: dict[str, Any]) -> dict[
         except transient_network_errors as exc:
             last_err = exc
             if attempt < 2:
-                delay = 0.8 * (2 ** attempt)
+                delay = 0.8 * (2**attempt)
                 print(
                     f"[DOC_GRAPHQL_RETRY] network_error={type(exc).__name__} attempt={attempt + 1} retry_after={delay:.1f}s",
                     file=sys.stderr,
@@ -652,11 +676,12 @@ def _graphql_request(token: str, query: str, variables: dict[str, Any]) -> dict[
             fatal.append(err)
         if fatal:
             retryable_internal = all(
-                "something went wrong while executing your query" in str(err.get("message") or "").lower()
+                "something went wrong while executing your query"
+                in str(err.get("message") or "").lower()
                 for err in fatal
             )
             if retryable_internal and attempt < 2:
-                delay = 0.8 * (2 ** attempt)
+                delay = 0.8 * (2**attempt)
                 print(
                     f"[DOC_GRAPHQL_RETRY] graphql_internal_error attempt={attempt + 1} retry_after={delay:.1f}s",
                     file=sys.stderr,
@@ -666,7 +691,11 @@ def _graphql_request(token: str, query: str, variables: dict[str, Any]) -> dict[
             raise RuntimeError(f"github graphql errors: {fatal}")
         return parsed.get("data") or {}
 
-    raise last_err if last_err is not None else RuntimeError("github graphql request failed")
+    raise (
+        last_err
+        if last_err is not None
+        else RuntimeError("github graphql request failed")
+    )
 
 
 def _project_query() -> str:
@@ -761,7 +790,9 @@ query($owner: String!, $number: Int!, $cursor: String) {
 
 
 def _project_node(data: dict[str, Any]) -> dict[str, Any]:
-    node = ((data.get("organization") or {}).get("projectV2")) or ((data.get("user") or {}).get("projectV2"))
+    node = ((data.get("organization") or {}).get("projectV2")) or (
+        (data.get("user") or {}).get("projectV2")
+    )
     if not node:
         raise RuntimeError("project not found")
     return node
@@ -784,7 +815,9 @@ def _fetch_project_metadata(
     existing_items: list[ProjectItem] = []
 
     while True:
-        data = _graphql_request(token, query, {"owner": owner, "number": project_number, "cursor": cursor})
+        data = _graphql_request(
+            token, query, {"owner": owner, "number": project_number, "cursor": cursor}
+        )
         project = _project_node(data)
         if not project_id:
             project_id = str(project.get("id") or "")
@@ -809,7 +842,10 @@ def _fetch_project_metadata(
                         status_value = str(fv.get("name") or "").strip()
                     elif kind == "ProjectV2ItemFieldTextValue" and not status_value:
                         status_value = str(fv.get("text") or "").strip()
-                elif field_name == due_field_name and kind == "ProjectV2ItemFieldDateValue":
+                elif (
+                    field_name == due_field_name
+                    and kind == "ProjectV2ItemFieldDateValue"
+                ):
                     due_date_value = str(fv.get("date") or "").strip()
                 elif field_name == slot_field_name:
                     if kind == "ProjectV2ItemFieldSingleSelectValue":
@@ -819,7 +855,9 @@ def _fetch_project_metadata(
                 elif field_name == time_window_field_name:
                     if kind == "ProjectV2ItemFieldSingleSelectValue":
                         time_window_value = str(fv.get("name") or "").strip()
-                    elif kind == "ProjectV2ItemFieldTextValue" and not time_window_value:
+                    elif (
+                        kind == "ProjectV2ItemFieldTextValue" and not time_window_value
+                    ):
                         time_window_value = str(fv.get("text") or "").strip()
             if title:
                 existing_titles.add(title)
@@ -1033,10 +1071,14 @@ def _is_all_day_or_unscheduled(text: str) -> str:
 
 
 def _time_window_equals(left: str, right: str) -> bool:
-    return re.sub(r"\s+", "", left.strip().lower()) == re.sub(r"\s+", "", right.strip().lower())
+    return re.sub(r"\s+", "", left.strip().lower()) == re.sub(
+        r"\s+", "", right.strip().lower()
+    )
 
 
-def _infer_time_window(task: BacklogTask, *, slot_label: str, default_duration_min: int) -> str:
+def _infer_time_window(
+    task: BacklogTask, *, slot_label: str, default_duration_min: int
+) -> str:
     text = f"{task.title} {task.section}"
     mode = _is_all_day_or_unscheduled(text)
     if mode:
@@ -1046,7 +1088,9 @@ def _infer_time_window(task: BacklogTask, *, slot_label: str, default_duration_m
     holiday_forced_intraday = False
     if due_date:
         try:
-            is_trading_day, _ = get_krx_trading_day_status(datetime.fromisoformat(due_date).date())
+            is_trading_day, _ = get_krx_trading_day_status(
+                datetime.fromisoformat(due_date).date()
+            )
             if not is_trading_day and slot_label in {"PREOPEN", "POSTCLOSE"}:
                 slot_label = "INTRADAY"
                 holiday_forced_intraday = True
@@ -1068,7 +1112,10 @@ def _infer_time_window(task: BacklogTask, *, slot_label: str, default_duration_m
         "POSTCLOSE": "15:40",
     }.get(slot_label, "15:40")
     slot_default_start = _normalize_hhmm(slot_default_start) or "15:40"
-    slot_default_end = _add_minutes(slot_default_start, max(5, default_duration_min)) or slot_default_start
+    slot_default_end = (
+        _add_minutes(slot_default_start, max(5, default_duration_min))
+        or slot_default_start
+    )
     return f"{slot_default_start}~{slot_default_end}"
 
 
@@ -1081,7 +1128,11 @@ def _desired_status_option_id(
 ) -> str:
     if not _is_managed_project_title(title):
         return ""
-    return todo_option_id if _managed_title_key(title) in desired_open_title_keys else done_option_id
+    return (
+        todo_option_id
+        if _managed_title_key(title) in desired_open_title_keys
+        else done_option_id
+    )
 
 
 def _body_for_project(task: BacklogTask) -> str:
@@ -1098,7 +1149,9 @@ def _body_for_project(task: BacklogTask) -> str:
     )
 
 
-def sync_backlog_to_project(*, dry_run: bool = False, limit: int = 150) -> dict[str, Any]:
+def sync_backlog_to_project(
+    *, dry_run: bool = False, limit: int = 150
+) -> dict[str, Any]:
     tasks = collect_backlog_tasks()[:limit]
     token = _env("GH_PROJECT_TOKEN", os.getenv("GITHUB_TOKEN"))
     owner = _env("GH_PROJECT_OWNER")
@@ -1111,7 +1164,9 @@ def sync_backlog_to_project(*, dry_run: bool = False, limit: int = 150) -> dict[
     done_option_name = _env("GH_PROJECT_DONE_OPTION_NAME", "Done")
     slot_preopen_option_name = _env("GH_PROJECT_SLOT_PREOPEN_OPTION_NAME", "PREOPEN")
     slot_intraday_option_name = _env("GH_PROJECT_SLOT_INTRADAY_OPTION_NAME", "INTRADAY")
-    slot_postclose_option_name = _env("GH_PROJECT_SLOT_POSTCLOSE_OPTION_NAME", "POSTCLOSE")
+    slot_postclose_option_name = _env(
+        "GH_PROJECT_SLOT_POSTCLOSE_OPTION_NAME", "POSTCLOSE"
+    )
     auto_fill_slot = _env_bool("GH_PROJECT_AUTO_FILL_SLOT", True)
     reclassify_slot = _env_bool("GH_PROJECT_RECLASSIFY_SLOT", True)
     auto_fill_time_window = _env_bool("GH_PROJECT_AUTO_FILL_TIME_WINDOW", True)
@@ -1135,7 +1190,10 @@ def sync_backlog_to_project(*, dry_run: bool = False, limit: int = 150) -> dict[
     status_option_id = ""
     done_status_option_id = ""
     status_option_name_by_id: dict[str, str] = {}
-    if status_field and str(status_field.get("__typename")) == "ProjectV2SingleSelectField":
+    if (
+        status_field
+        and str(status_field.get("__typename")) == "ProjectV2SingleSelectField"
+    ):
         for opt in status_field.get("options") or []:
             opt_id = str(opt.get("id") or "")
             opt_name = str(opt.get("name") or "").strip()
@@ -1168,8 +1226,12 @@ def sync_backlog_to_project(*, dry_run: bool = False, limit: int = 150) -> dict[
             file=sys.stderr,
         )
 
-    time_window_field_type = str(time_window_field.get("__typename") or "") if time_window_field else ""
-    time_window_field_data_type = str(time_window_field.get("dataType") or "") if time_window_field else ""
+    time_window_field_type = (
+        str(time_window_field.get("__typename") or "") if time_window_field else ""
+    )
+    time_window_field_data_type = (
+        str(time_window_field.get("dataType") or "") if time_window_field else ""
+    )
     if auto_fill_time_window and not time_window_field:
         print(
             f"[DOC_BACKLOG_SYNC_WARN] time window field not found: {time_window_field_name}",
@@ -1180,10 +1242,11 @@ def sync_backlog_to_project(*, dry_run: bool = False, limit: int = 150) -> dict[
     upd_mut = _mutation_update_field()
     del_mut = _mutation_delete_item()
     tasks_by_title = {_title_for_project(task): task for task in tasks}
-    tasks_by_key = {_managed_title_key(_title_for_project(task)): task for task in tasks}
+    tasks_by_key = {
+        _managed_title_key(_title_for_project(task)): task for task in tasks
+    }
     slot_by_title = {
-        _title_for_project(task): _infer_slot_label(task)
-        for task in tasks
+        _title_for_project(task): _infer_slot_label(task) for task in tasks
     }
     time_window_by_title = {
         _title_for_project(task): _infer_time_window(
@@ -1194,9 +1257,13 @@ def sync_backlog_to_project(*, dry_run: bool = False, limit: int = 150) -> dict[
         for task in tasks
     }
     desired_open_titles = set(tasks_by_title.keys())
-    desired_open_title_keys = {_managed_title_key(title) for title in desired_open_titles}
+    desired_open_title_keys = {
+        _managed_title_key(title) for title in desired_open_titles
+    }
 
-    duplicate_items = _select_duplicate_project_items(existing_items, desired_open_title_keys)
+    duplicate_items = _select_duplicate_project_items(
+        existing_items, desired_open_title_keys
+    )
     duplicate_item_ids = {item.item_id for item in duplicate_items}
     duplicate_deleted = 0
     if duplicate_items:
@@ -1213,17 +1280,24 @@ def sync_backlog_to_project(*, dry_run: bool = False, limit: int = 150) -> dict[
                     },
                 )
                 duplicate_deleted += 1
-        existing_items = [item for item in existing_items if item.item_id not in duplicate_item_ids]
+        existing_items = [
+            item for item in existing_items if item.item_id not in duplicate_item_ids
+        ]
         existing_titles = {item.title for item in existing_items if item.title}
 
     existing_title_keys = {_managed_title_key(title) for title in existing_titles}
     managed_open_items = [
         item
         for item in existing_items
-        if _is_managed_project_title(item.title) and _managed_title_key(item.title) in desired_open_title_keys
+        if _is_managed_project_title(item.title)
+        and _managed_title_key(item.title) in desired_open_title_keys
     ]
-    managed_open_blank_slot = sum(1 for item in managed_open_items if not item.slot.strip())
-    managed_open_blank_time_window = sum(1 for item in managed_open_items if not item.time_window.strip())
+    managed_open_blank_slot = sum(
+        1 for item in managed_open_items if not item.slot.strip()
+    )
+    managed_open_blank_time_window = sum(
+        1 for item in managed_open_items if not item.time_window.strip()
+    )
 
     created = 0
     skipped_existing = 0
@@ -1245,7 +1319,9 @@ def sync_backlog_to_project(*, dry_run: bool = False, limit: int = 150) -> dict[
                 "body": _body_for_project(task),
             },
         )
-        item_id = ((created_item.get("addProjectV2DraftIssue") or {}).get("projectItem") or {}).get("id")
+        item_id = (
+            (created_item.get("addProjectV2DraftIssue") or {}).get("projectItem") or {}
+        ).get("id")
         if not item_id:
             continue
 
@@ -1291,7 +1367,10 @@ def sync_backlog_to_project(*, dry_run: bool = False, limit: int = 150) -> dict[
                             "value": {"singleSelectOptionId": slot_option_id},
                         },
                     )
-            elif slot_field_type == "ProjectV2Field" and str(slot_field.get("dataType") or "") == "TEXT":
+            elif (
+                slot_field_type == "ProjectV2Field"
+                and str(slot_field.get("dataType") or "") == "TEXT"
+            ):
                 _graphql_request(
                     token,
                     upd_mut,
@@ -1312,7 +1391,10 @@ def sync_backlog_to_project(*, dry_run: bool = False, limit: int = 150) -> dict[
                     default_duration_min=default_duration_min,
                 ),
             )
-            if time_window_field_type == "ProjectV2Field" and time_window_field_data_type == "TEXT":
+            if (
+                time_window_field_type == "ProjectV2Field"
+                and time_window_field_data_type == "TEXT"
+            ):
                 _graphql_request(
                     token,
                     upd_mut,
@@ -1339,7 +1421,9 @@ def sync_backlog_to_project(*, dry_run: bool = False, limit: int = 150) -> dict[
             if not desired_option_id:
                 continue
             desired_status_name = status_option_name_by_id.get(desired_option_id, "")
-            if desired_status_name and _slot_key(item.status) == _slot_key(desired_status_name):
+            if desired_status_name and _slot_key(item.status) == _slot_key(
+                desired_status_name
+            ):
                 status_already_current += 1
                 continue
             if dry_run:
@@ -1445,7 +1529,10 @@ def sync_backlog_to_project(*, dry_run: bool = False, limit: int = 150) -> dict[
                     synced_slot_reclassified += 1
                 else:
                     synced_slot_filled += 1
-            elif slot_field_type == "ProjectV2Field" and str(slot_field.get("dataType") or "") == "TEXT":
+            elif (
+                slot_field_type == "ProjectV2Field"
+                and str(slot_field.get("dataType") or "") == "TEXT"
+            ):
                 if dry_run:
                     if existing_slot:
                         synced_slot_reclassified += 1
@@ -1481,14 +1568,23 @@ def sync_backlog_to_project(*, dry_run: bool = False, limit: int = 150) -> dict[
             inferred_slot = slot_by_title.get(item.title, _infer_slot_label(task))
             inferred_time_window = time_window_by_title.get(
                 item.title,
-                _infer_time_window(task, slot_label=inferred_slot, default_duration_min=default_duration_min),
+                _infer_time_window(
+                    task,
+                    slot_label=inferred_slot,
+                    default_duration_min=default_duration_min,
+                ),
             )
             existing_time_window = item.time_window.strip()
             if existing_time_window and not reclassify_time_window:
                 continue
-            if existing_time_window and _time_window_equals(existing_time_window, inferred_time_window):
+            if existing_time_window and _time_window_equals(
+                existing_time_window, inferred_time_window
+            ):
                 continue
-            if time_window_field_type == "ProjectV2Field" and time_window_field_data_type == "TEXT":
+            if (
+                time_window_field_type == "ProjectV2Field"
+                and time_window_field_data_type == "TEXT"
+            ):
                 if dry_run:
                     if existing_time_window:
                         synced_time_window_reclassified += 1
@@ -1568,9 +1664,17 @@ def sync_backlog_to_project(*, dry_run: bool = False, limit: int = 150) -> dict[
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Sync remaining tasks from docs to GitHub Project")
-    parser.add_argument("--dry-run", action="store_true", help="Do not write project items")
-    parser.add_argument("--print-backlog-only", action="store_true", help="Only parse docs and print tasks")
+    parser = argparse.ArgumentParser(
+        description="Sync remaining tasks from docs to GitHub Project"
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Do not write project items"
+    )
+    parser.add_argument(
+        "--print-backlog-only",
+        action="store_true",
+        help="Only parse docs and print tasks",
+    )
     parser.add_argument("--limit", type=int, default=150, help="Max tasks to sync")
     args = parser.parse_args()
 

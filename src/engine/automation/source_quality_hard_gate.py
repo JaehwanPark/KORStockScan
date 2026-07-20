@@ -5,9 +5,11 @@ import json
 from pathlib import Path
 from typing import Any
 
-from src.engine.automation.source_quality_clean_baseline import clean_baseline_policy, is_date_allowed
+from src.engine.automation.source_quality_clean_baseline import (
+    clean_baseline_policy,
+    is_date_allowed,
+)
 from src.engine.daily_threshold_cycle_report import REPORT_DIR
-
 
 BLOCKED_STATUS = "source_quality_blocked"
 BLOCKED_GATE = "blocked_contract_gap"
@@ -42,7 +44,11 @@ RUNTIME_APPLY_BOOL_FIELDS = {
 
 
 def observation_source_quality_audit_path(target_date: str) -> Path:
-    return REPORT_DIR / "observation_source_quality_audit" / f"observation_source_quality_audit_{target_date}.json"
+    return (
+        REPORT_DIR
+        / "observation_source_quality_audit"
+        / f"observation_source_quality_audit_{target_date}.json"
+    )
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
@@ -92,10 +98,9 @@ def load_source_quality_preflight(target_date: str) -> dict[str, Any]:
         payload = {}
     summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
     raw_row_exclusion = _compact_raw_row_exclusion(payload.get("raw_row_exclusion"))
-    raw_row_exclusion_manifest = (
-        summary.get("raw_row_exclusion_manifest")
-        or raw_row_exclusion.get("manifest_path")
-    )
+    raw_row_exclusion_manifest = summary.get(
+        "raw_row_exclusion_manifest"
+    ) or raw_row_exclusion.get("manifest_path")
     raw_row_exclusion_applied = bool(
         summary.get("raw_row_exclusion_applied")
         or raw_row_exclusion
@@ -115,8 +120,12 @@ def load_source_quality_preflight(target_date: str) -> dict[str, Any]:
         or hard_gap_count > 0
         or bool(summary.get("blocked_reason"))
     )
-    preflight_unusable = not exists or status in {"missing", "invalid"} or not has_machine_summary
-    fail_closed = explicit_hard_block or (clean_baseline_enforced and preflight_unusable)
+    preflight_unusable = (
+        not exists or status in {"missing", "invalid"} or not has_machine_summary
+    )
+    fail_closed = explicit_hard_block or (
+        clean_baseline_enforced and preflight_unusable
+    )
     blocked_reason = summary.get("blocked_reason") or None
     if fail_closed and blocked_reason is None:
         if not exists:
@@ -133,7 +142,11 @@ def load_source_quality_preflight(target_date: str) -> dict[str, Any]:
         "artifact": str(path) if exists else None,
         "status": status,
         "tuning_input_allowed": not fail_closed,
-        "source_quality_gate": BLOCKED_GATE if fail_closed else "pass" if has_machine_summary else "pass_or_not_evaluated",
+        "source_quality_gate": (
+            BLOCKED_GATE
+            if fail_closed
+            else "pass" if has_machine_summary else "pass_or_not_evaluated"
+        ),
         "blocked_reason": blocked_reason,
         "hard_blocking_contract_gap_count": hard_gap_count,
         "hard_blocking_excluded_row_count": hard_blocking_excluded_row_count,
@@ -141,7 +154,9 @@ def load_source_quality_preflight(target_date: str) -> dict[str, Any]:
         "raw_row_exclusion_manifest": raw_row_exclusion_manifest,
         "raw_row_exclusion": raw_row_exclusion,
         "hard_blocking_stages": (
-            summary.get("hard_blocking_stages") if isinstance(summary.get("hard_blocking_stages"), list) else []
+            summary.get("hard_blocking_stages")
+            if isinstance(summary.get("hard_blocking_stages"), list)
+            else []
         ),
         "review_warning_count": int(summary.get("review_warning_count") or 0),
         "runtime_effect": False,
@@ -158,17 +173,24 @@ def source_quality_preflight_blocked(preflight: dict[str, Any]) -> bool:
         return True
     if preflight.get("status") == "fail":
         return True
-    if preflight.get("status") in {"missing", "invalid"} and preflight.get("clean_baseline_enforced") is not False:
+    if (
+        preflight.get("status") in {"missing", "invalid"}
+        and preflight.get("clean_baseline_enforced") is not False
+    ):
         return True
     if preflight.get("hard_blocking_contract_gap_count"):
         return True
     if preflight.get("blocked_reason"):
         return True
-    summary = preflight.get("summary") if isinstance(preflight.get("summary"), dict) else {}
+    summary = (
+        preflight.get("summary") if isinstance(preflight.get("summary"), dict) else {}
+    )
     return summary.get("tuning_input_allowed") is False
 
 
-def source_quality_blocked_stub(target_date: str, preflight: dict[str, Any] | None = None) -> dict[str, Any]:
+def source_quality_blocked_stub(
+    target_date: str, preflight: dict[str, Any] | None = None
+) -> dict[str, Any]:
     gate = preflight or load_source_quality_preflight(target_date)
     return {
         "status": BLOCKED_STATUS,
@@ -179,7 +201,9 @@ def source_quality_blocked_stub(target_date: str, preflight: dict[str, Any] | No
     }
 
 
-def apply_source_quality_preflight_block(report: dict[str, Any], preflight: dict[str, Any]) -> dict[str, Any]:
+def apply_source_quality_preflight_block(
+    report: dict[str, Any], preflight: dict[str, Any]
+) -> dict[str, Any]:
     if not source_quality_preflight_blocked(preflight):
         report["source_quality_preflight_gate"] = preflight
         return report
@@ -190,7 +214,9 @@ def apply_source_quality_preflight_block(report: dict[str, Any], preflight: dict
     blocked["calibration_state"] = BLOCKED_STATUS
     blocked["source_quality_gate"] = BLOCKED_GATE
     blocked["source_quality_preflight_gate"] = preflight
-    warnings = blocked.get("warnings") if isinstance(blocked.get("warnings"), list) else []
+    warnings = (
+        blocked.get("warnings") if isinstance(blocked.get("warnings"), list) else []
+    )
     if "source_quality_blocked_contract_gap" not in warnings:
         warnings.append("source_quality_blocked_contract_gap")
     blocked["warnings"] = warnings

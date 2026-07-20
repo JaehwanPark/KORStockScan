@@ -17,7 +17,9 @@ from src.engine.ai.postclose_review_config import (
     PostcloseAIReviewConfig,
     resolve_postclose_ai_review_config,
 )
-from src.engine.ai.postclose_structured_review_provider import call_postclose_structured_review
+from src.engine.ai.postclose_structured_review_provider import (
+    call_postclose_structured_review,
+)
 from src.engine.automation.dual_candidate_review import (
     evidence_authority_contract,
     has_evidence_authority_violation,
@@ -36,7 +38,6 @@ from src.engine.lifecycle.bucket_taxonomy import (
     normalize_entry_source_parent,
 )
 from src.utils.constants import DATA_DIR
-
 
 REPORT_DIR = DATA_DIR / "report" / "lifecycle_bucket_discovery"
 LDM_REPORT_DIR = DATA_DIR / "report" / "lifecycle_decision_matrix"
@@ -61,7 +62,10 @@ AI_REVIEW_SOURCE_ONLY_MODEL = "gpt-5.4"
 AI_REVIEW_SOURCE_ONLY_REASONING_EFFORT = "low"
 LIVE_AUTO_STATES = {"live_auto_apply_ready"}
 LIFECYCLE_FLOW_SIM_PROBE_STATE = "lifecycle_flow_sim_probe_candidate"
-SOURCE_DIMENSION_ACTIONABLE_RESOLUTIONS = {"emit_or_backfill_source_field", "resolve_unknown_source_dimensions"}
+SOURCE_DIMENSION_ACTIONABLE_RESOLUTIONS = {
+    "emit_or_backfill_source_field",
+    "resolve_unknown_source_dimensions",
+}
 SIM_APPROVAL_STATES = {
     "sim_auto_approved",
     "entry_only_sim_auto_approved",
@@ -202,9 +206,13 @@ SOURCE_CONTRACT_SCHEMA_VERSION = "lifecycle_source_contract_snapshot_v2"
 LEGACY_DAILY_LDM_SOURCE_KEY = "daily_lifecycle_decision_matrix_reports"
 CANONICAL_PER_DATE_SOURCE_KEY = "per_date_sources"
 SCALE_IN_AI_SCORE_SOURCE_MISSING_GAP = "scale_in_ai_score_source_missing"
-SCALE_IN_AI_SCORE_SOURCE_MISSING_RESOLUTION = "source_quality_blocked_missing_runtime_features_ai_score"
+SCALE_IN_AI_SCORE_SOURCE_MISSING_RESOLUTION = (
+    "source_quality_blocked_missing_runtime_features_ai_score"
+)
 SCALE_IN_HELD_BUCKET_OBSERVATION_RESOLUTION = "scale_in_held_bucket_observation_rollup"
-SCALE_IN_SOURCE_DIMENSION_OBSERVATION_RESOLUTION = "scale_in_source_dimension_observation_rollup"
+SCALE_IN_SOURCE_DIMENSION_OBSERVATION_RESOLUTION = (
+    "scale_in_source_dimension_observation_rollup"
+)
 SCALE_IN_SOURCE_DIMENSION_ROLLUP_BUCKETS = {
     ("peak_profit_band", "peak_unknown"),
     ("profit_band", "profit_unknown"),
@@ -372,7 +380,13 @@ SOURCE_CONTRACT_SECTION_SCHEMAS: dict[str, dict[str, tuple[str, ...]]] = {
         ),
     },
     "holding_bucket_attribution": {
-        "bucket_types": ("combo_holding_flow", "held_bucket", "holding_action", "holding_source_stage", "profit_band"),
+        "bucket_types": (
+            "combo_holding_flow",
+            "held_bucket",
+            "holding_action",
+            "holding_source_stage",
+            "profit_band",
+        ),
         "bucket_fields": (
             "ai_inference_proposal",
             "allowed_runtime_apply",
@@ -394,10 +408,25 @@ SOURCE_CONTRACT_SECTION_SCHEMAS: dict[str, dict[str, tuple[str, ...]]] = {
             "unknown_dimension_counts",
             "unknown_reason_counts",
         ),
-        "dimension_keys": ("action", "held", "held_bucket", "holding_action", "holding_source_stage", "profit", "profit_band", "source"),
+        "dimension_keys": (
+            "action",
+            "held",
+            "held_bucket",
+            "holding_action",
+            "holding_source_stage",
+            "profit",
+            "profit_band",
+            "source",
+        ),
     },
     "exit_bucket_attribution": {
-        "bucket_types": ("combo_exit_result", "exit_outcome", "exit_rule", "exit_source_stage", "profit_band"),
+        "bucket_types": (
+            "combo_exit_result",
+            "exit_outcome",
+            "exit_rule",
+            "exit_source_stage",
+            "profit_band",
+        ),
         "bucket_fields": (
             "ai_inference_proposal",
             "allowed_runtime_apply",
@@ -419,7 +448,16 @@ SOURCE_CONTRACT_SECTION_SCHEMAS: dict[str, dict[str, tuple[str, ...]]] = {
             "unknown_dimension_counts",
             "unknown_reason_counts",
         ),
-        "dimension_keys": ("exit_outcome", "exit_rule", "exit_source_stage", "outcome", "profit", "profit_band", "rule", "source"),
+        "dimension_keys": (
+            "exit_outcome",
+            "exit_rule",
+            "exit_source_stage",
+            "outcome",
+            "profit",
+            "profit_band",
+            "rule",
+            "source",
+        ),
     },
     "scale_in_bucket_attribution": {
         "bucket_types": (
@@ -530,6 +568,7 @@ SOURCE_CONTRACT_SECTION_SCHEMAS: dict[str, dict[str, tuple[str, ...]]] = {
     },
 }
 
+
 def discovery_report_path(target_date: str) -> Path:
     return REPORT_DIR / f"lifecycle_bucket_discovery_{target_date}.json"
 
@@ -547,7 +586,9 @@ def contamination_window_path(target_date: str) -> Path:
 
 
 def sim_auto_approval_path(target_date: str) -> Path:
-    return SIM_AUTO_APPROVAL_DIR / f"lifecycle_bucket_sim_auto_approval_{target_date}.json"
+    return (
+        SIM_AUTO_APPROVAL_DIR / f"lifecycle_bucket_sim_auto_approval_{target_date}.json"
+    )
 
 
 def _artifact_key(target_date: str, suffix: str | None = None) -> str:
@@ -578,7 +619,9 @@ def _previous_report(target_date: str) -> dict[str, Any]:
 
 
 def _text_hash(payload: Any) -> str:
-    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    raw = json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str
+    )
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
@@ -591,23 +634,36 @@ def _safe_int(value: Any, default: int = 0) -> int:
 
 AI_REVIEW_TIMEOUT_SEC = max(
     30,
-    _safe_int(os.getenv("KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_AI_REVIEW_TIMEOUT_SEC"), 180),
+    _safe_int(
+        os.getenv("KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_AI_REVIEW_TIMEOUT_SEC"), 180
+    ),
 )
 AI_REVIEW_MAX_CANDIDATES = max(
     1,
-    _safe_int(os.getenv("KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_AI_REVIEW_MAX_CANDIDATES"), 20),
+    _safe_int(
+        os.getenv("KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_AI_REVIEW_MAX_CANDIDATES"),
+        20,
+    ),
 )
 AI_REVIEW_MAX_FIELD_CHARS = max(
     200,
-    _safe_int(os.getenv("KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_AI_REVIEW_MAX_FIELD_CHARS"), 500),
+    _safe_int(
+        os.getenv("KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_AI_REVIEW_MAX_FIELD_CHARS"),
+        500,
+    ),
 )
 AI_REVIEW_SHARD_CONTEXT_BUDGET_CHARS = max(
     8_000,
-    _safe_int(os.getenv("KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_SHARD_CONTEXT_BUDGET_CHARS"), 30_000),
+    _safe_int(
+        os.getenv("KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_SHARD_CONTEXT_BUDGET_CHARS"),
+        30_000,
+    ),
 )
 AI_REVIEW_SHARD_MAX_CANDIDATES = max(
     1,
-    _safe_int(os.getenv("KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_SHARD_MAX_CANDIDATES"), 12),
+    _safe_int(
+        os.getenv("KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_SHARD_MAX_CANDIDATES"), 12
+    ),
 )
 AI_REVIEW_SHARD_ORDER = (
     "live_contract_review",
@@ -626,12 +682,21 @@ AI_REVIEW_SHARD_AUTHORITIES = {
     "gap_workorder_review": "source_contract_and_workorder_gap_review_only",
     "taxonomy_discovery_review": "new_bucket_taxonomy_review_only",
 }
-AI_REVIEW_REASONING_EFFORT = str(
-    os.getenv("KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_AI_REVIEW_REASONING_EFFORT", "low")
-).strip().lower() or "low"
+AI_REVIEW_REASONING_EFFORT = (
+    str(
+        os.getenv(
+            "KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_AI_REVIEW_REASONING_EFFORT", "low"
+        )
+    )
+    .strip()
+    .lower()
+    or "low"
+)
 
 
-def _with_lifecycle_ai_provider_defaults(config: PostcloseAIReviewConfig) -> PostcloseAIReviewConfig:
+def _with_lifecycle_ai_provider_defaults(
+    config: PostcloseAIReviewConfig,
+) -> PostcloseAIReviewConfig:
     prefix = config.env_prefix_name
     primary_provider = config.primary_provider
     failback_provider = config.failback_provider
@@ -639,13 +704,17 @@ def _with_lifecycle_ai_provider_defaults(config: PostcloseAIReviewConfig) -> Pos
         primary_provider = "openai"
     if not os.getenv(f"{prefix}_FAILBACK_PROVIDER"):
         failback_provider = "openai"
-    return replace(config, primary_provider=primary_provider, failback_provider=failback_provider)
+    return replace(
+        config, primary_provider=primary_provider, failback_provider=failback_provider
+    )
 
 
 def _ai_review_config_for_shard(shard_id: str | None) -> PostcloseAIReviewConfig:
     shard = str(shard_id or "unknown")
     generic_model = os.getenv("KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_AI_MODEL")
-    generic_reasoning = os.getenv("KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_AI_REASONING_EFFORT")
+    generic_reasoning = os.getenv(
+        "KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_AI_REASONING_EFFORT"
+    )
     generic_timeout_sec = _safe_int(
         os.getenv("KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_AI_TIMEOUT_SEC"),
         AI_REVIEW_TIMEOUT_SEC,
@@ -654,7 +723,9 @@ def _ai_review_config_for_shard(shard_id: str | None) -> PostcloseAIReviewConfig
         config = resolve_postclose_ai_review_config(
             "LIFECYCLE_BUCKET_DISCOVERY",
             default_model=str(generic_model or AI_REVIEW_MODEL),
-            default_reasoning_effort=str(generic_reasoning or AI_REVIEW_REASONING_EFFORT),
+            default_reasoning_effort=str(
+                generic_reasoning or AI_REVIEW_REASONING_EFFORT
+            ),
             default_timeout_sec=generic_timeout_sec,
             env_prefix="KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_LIVE_CONTRACT_AI",
         )
@@ -662,14 +733,18 @@ def _ai_review_config_for_shard(shard_id: str | None) -> PostcloseAIReviewConfig
         config = resolve_postclose_ai_review_config(
             "LIFECYCLE_BUCKET_DISCOVERY",
             default_model=str(generic_model or AI_REVIEW_SOURCE_ONLY_MODEL),
-            default_reasoning_effort=str(generic_reasoning or AI_REVIEW_SOURCE_ONLY_REASONING_EFFORT),
+            default_reasoning_effort=str(
+                generic_reasoning or AI_REVIEW_SOURCE_ONLY_REASONING_EFFORT
+            ),
             default_timeout_sec=generic_timeout_sec,
             env_prefix="KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_SOURCE_ONLY_AI",
         )
     return _with_lifecycle_ai_provider_defaults(config)
 
 
-def _ai_review_compact_value(value: Any, *, max_chars: int = AI_REVIEW_MAX_FIELD_CHARS) -> Any:
+def _ai_review_compact_value(
+    value: Any, *, max_chars: int = AI_REVIEW_MAX_FIELD_CHARS
+) -> Any:
     if isinstance(value, (str, int, float, bool)) or value is None:
         text = str(value) if isinstance(value, str) else value
         if isinstance(text, str) and len(text) > max_chars:
@@ -678,7 +753,10 @@ def _ai_review_compact_value(value: Any, *, max_chars: int = AI_REVIEW_MAX_FIELD
     encoded = json.dumps(value, ensure_ascii=True, sort_keys=True, default=str)
     if len(encoded) <= max_chars:
         return value
-    return {"truncated_json": f"{encoded[:max_chars]}...[truncated]", "original_chars": len(encoded)}
+    return {
+        "truncated_json": f"{encoded[:max_chars]}...[truncated]",
+        "original_chars": len(encoded),
+    }
 
 
 def _ai_review_compact_candidate(item: dict[str, Any]) -> dict[str, Any]:
@@ -700,12 +778,22 @@ def _ai_review_compact_candidate(item: dict[str, Any]) -> dict[str, Any]:
         "bucket_alias_version": item.get("bucket_alias_version"),
         "dimension_set_version": item.get("dimension_set_version"),
         "bucket_absorption_reason": item.get("bucket_absorption_reason"),
-        "normalized_dimensions": _ai_review_compact_value(item.get("normalized_dimensions")),
+        "normalized_dimensions": _ai_review_compact_value(
+            item.get("normalized_dimensions")
+        ),
         "normalized_metrics": _ai_review_compact_value(item.get("normalized_metrics")),
-        "deterministic_proposal": _ai_review_compact_value(item.get("deterministic_proposal")),
-        "ai_inference_proposal": _ai_review_compact_value(item.get("ai_inference_proposal")),
-        "current_ai_tier2_proposal": _ai_review_compact_value(item.get("ai_tier2_proposal")),
-        "evidence_authority_contract": _ai_review_compact_value(item.get("evidence_authority_contract")),
+        "deterministic_proposal": _ai_review_compact_value(
+            item.get("deterministic_proposal")
+        ),
+        "ai_inference_proposal": _ai_review_compact_value(
+            item.get("ai_inference_proposal")
+        ),
+        "current_ai_tier2_proposal": _ai_review_compact_value(
+            item.get("ai_tier2_proposal")
+        ),
+        "evidence_authority_contract": _ai_review_compact_value(
+            item.get("evidence_authority_contract")
+        ),
         "primary_decision_metric": item.get("primary_decision_metric"),
         "sample": item.get("sample"),
         "joined_sample": item.get("joined_sample"),
@@ -769,7 +857,9 @@ def _sim_auto_positive_ev_summary(items: list[dict[str, Any]]) -> dict[str, Any]
             "classification_state": item.get("classification_state"),
             "stage": item.get("stage"),
             "bucket_type": item.get("bucket_type"),
-            "source_quality_adjusted_ev_pct": item.get("source_quality_adjusted_ev_pct"),
+            "source_quality_adjusted_ev_pct": item.get(
+                "source_quality_adjusted_ev_pct"
+            ),
             "joined_sample": item.get("joined_sample"),
             "sample": item.get("sample"),
         }
@@ -785,7 +875,9 @@ def _sim_auto_positive_ev_summary(items: list[dict[str, Any]]) -> dict[str, Any]
 
 
 def _slug(value: Any, *, max_len: int = 96) -> str:
-    text = re.sub(r"[^a-zA-Z0-9가-힣]+", "_", str(value or "").strip().lower()).strip("_")
+    text = re.sub(r"[^a-zA-Z0-9가-힣]+", "_", str(value or "").strip().lower()).strip(
+        "_"
+    )
     return text[:max_len] or "unknown"
 
 
@@ -803,7 +895,11 @@ def _source_dimensions(bucket_type: str, bucket_key: str) -> dict[str, str]:
 
 
 def _explicit_lifecycle_flow_dimensions(bucket: dict[str, Any]) -> dict[str, str]:
-    child_ids = bucket.get("child_bucket_ids") if isinstance(bucket.get("child_bucket_ids"), dict) else {}
+    child_ids = (
+        bucket.get("child_bucket_ids")
+        if isinstance(bucket.get("child_bucket_ids"), dict)
+        else {}
+    )
     dimensions: dict[str, str] = {}
     for stage_key, field in (
         ("entry", "entry_bucket_id"),
@@ -830,7 +926,9 @@ def _implicit_lifecycle_flow_dimensions_from_key(bucket_key: str) -> dict[str, s
     return dimensions
 
 
-def _candidate_source_dimensions(stage: str, bucket_type: str, bucket_key: str, bucket: dict[str, Any]) -> dict[str, str]:
+def _candidate_source_dimensions(
+    stage: str, bucket_type: str, bucket_key: str, bucket: dict[str, Any]
+) -> dict[str, str]:
     dimensions = _source_dimensions(bucket_type, bucket_key)
     if stage == "lifecycle_flow" or bucket_type == "combo_lifecycle_flow":
         dimensions = {
@@ -862,15 +960,24 @@ def _source_bucket_kind(candidate_state: str, bucket: dict[str, Any]) -> str:
         return "entry_only_source_candidate"
     if candidate_state == ENTRY_ONLY_BRIDGE_METADATA_STATE:
         return "entry_only_bridge_metadata"
-    if bucket.get("unknown_dimension_counts") or "unknown" in str(bucket.get("bucket_key") or ""):
+    if bucket.get("unknown_dimension_counts") or "unknown" in str(
+        bucket.get("bucket_key") or ""
+    ):
         return "taxonomy_provenance_gap"
-    if candidate_state in {"code_patch_required", "automation_handoff_gap", "runtime_blocked_contract_gap"}:
+    if candidate_state in {
+        "code_patch_required",
+        "automation_handoff_gap",
+        "runtime_blocked_contract_gap",
+    }:
         return "source_quality_gap"
     return "source_only_observation"
 
 
 def _lifecycle_flow_missing_stage_keys(bucket: dict[str, Any]) -> list[str]:
-    if str(bucket.get("stage") or "") != "lifecycle_flow" and str(bucket.get("bucket_type") or "") != "combo_lifecycle_flow":
+    if (
+        str(bucket.get("stage") or "") != "lifecycle_flow"
+        and str(bucket.get("bucket_type") or "") != "combo_lifecycle_flow"
+    ):
         return []
     dimensions = _candidate_source_dimensions(
         str(bucket.get("stage") or ""),
@@ -886,39 +993,78 @@ def _lifecycle_flow_missing_stage_keys(bucket: dict[str, Any]) -> list[str]:
         ("exit", "exit_bucket_id"),
     ):
         value = bucket.get(field) or dimensions.get(stage_key)
-        if not value or str(value).endswith(":missing") or str(value).strip().lower() in {"missing", "none", "null"}:
+        if (
+            not value
+            or str(value).endswith(":missing")
+            or str(value).strip().lower() in {"missing", "none", "null"}
+        ):
             missing.append(stage_key)
     return missing
 
 
 def _lifecycle_flow_source_only_blocker(bucket: dict[str, Any]) -> bool:
-    if str(bucket.get("stage") or "") != "lifecycle_flow" and str(bucket.get("bucket_type") or "") != "combo_lifecycle_flow":
+    if (
+        str(bucket.get("stage") or "") != "lifecycle_flow"
+        and str(bucket.get("bucket_type") or "") != "combo_lifecycle_flow"
+    ):
         return False
     if _lifecycle_flow_missing_stage_keys(bucket):
         return True
-    stage_contract = bucket.get("stage_contract") if isinstance(bucket.get("stage_contract"), dict) else {}
-    return any(str(stage_contract.get(key) or "").strip().lower() == "missing" for key in ("entry", "submit", "holding", "exit"))
+    stage_contract = (
+        bucket.get("stage_contract")
+        if isinstance(bucket.get("stage_contract"), dict)
+        else {}
+    )
+    return any(
+        str(stage_contract.get(key) or "").strip().lower() == "missing"
+        for key in ("entry", "submit", "holding", "exit")
+    )
 
 
-def _flow_sim_transition_state(state: str, bucket: dict[str, Any], grade: dict[str, Any]) -> tuple[str | None, str | None, str | None]:
-    if str(bucket.get("stage") or "") != "lifecycle_flow" and str(bucket.get("bucket_type") or "") != "combo_lifecycle_flow":
+def _flow_sim_transition_state(
+    state: str, bucket: dict[str, Any], grade: dict[str, Any]
+) -> tuple[str | None, str | None, str | None]:
+    if (
+        str(bucket.get("stage") or "") != "lifecycle_flow"
+        and str(bucket.get("bucket_type") or "") != "combo_lifecycle_flow"
+    ):
         return None, None, None
     if state == LIFECYCLE_FLOW_SIM_PROBE_STATE:
         return "sim_probe_promoted", None, "sim_applied"
     if _lifecycle_flow_source_only_blocker(bucket):
-        return "blocked_observable_prefix_missing", "lifecycle_flow_incomplete_stage_contract", "source_only_keep_collecting"
+        return (
+            "blocked_observable_prefix_missing",
+            "lifecycle_flow_incomplete_stage_contract",
+            "source_only_keep_collecting",
+        )
     if _safe_int(bucket.get("complete_flow_count")) <= 0:
-        return "source_only_keep_collecting", "complete_flow_sample_missing", "collecting"
+        return (
+            "source_only_keep_collecting",
+            "complete_flow_sample_missing",
+            "collecting",
+        )
     if _safe_int(bucket.get("incomplete_flow_count")) > 0:
-        return "blocked_incomplete_mixed_parent", "incomplete_flow_mixed_into_parent", "collecting"
+        return (
+            "blocked_incomplete_mixed_parent",
+            "incomplete_flow_mixed_into_parent",
+            "collecting",
+        )
     primary_ev = _safe_float(
         bucket.get("source_quality_adjusted_ev_pct"),
         _safe_float(bucket.get("equal_weight_avg_profit_pct"), None),
     )
     if primary_ev is not None and primary_ev <= 0:
         return "blocked_ev_not_positive", "primary_ev_not_positive", "collecting"
-    if str(grade.get("source_quality_gate") or "").lower() in {"fail", "blocked", "source_quality_blocked"}:
-        return "blocked_source_quality", "source_quality_gate_not_pass", "source_quality_blocked"
+    if str(grade.get("source_quality_gate") or "").lower() in {
+        "fail",
+        "blocked",
+        "source_quality_blocked",
+    }:
+        return (
+            "blocked_source_quality",
+            "source_quality_gate_not_pass",
+            "source_quality_blocked",
+        )
     return "blocked_sample_floor", "sim_probe_contract_not_ready", "collecting"
 
 
@@ -934,7 +1080,9 @@ def _recommended_resolution(candidate_state: str, bucket: dict[str, Any]) -> str
     existing = str(bucket.get("recommended_resolution") or "").strip()
     if existing and existing != "none":
         return existing
-    if bucket.get("unknown_dimension_counts") or "unknown" in str(bucket.get("bucket_key") or ""):
+    if bucket.get("unknown_dimension_counts") or "unknown" in str(
+        bucket.get("bucket_key") or ""
+    ):
         return "resolve_unknown_source_dimensions"
     if candidate_state == "live_auto_apply_ready":
         return "preopen_live_auto_bridge"
@@ -1012,7 +1160,11 @@ def _scale_in_held_bucket_unknown_rollup(bucket: dict[str, Any]) -> bool:
     text = str(bucket.get("bucket_key") or "").strip().lower()
     if text not in {"held_unknown", "unknown", "missing", "none", "null"}:
         return False
-    reasons = bucket.get("unknown_reason_counts") if isinstance(bucket.get("unknown_reason_counts"), dict) else {}
+    reasons = (
+        bucket.get("unknown_reason_counts")
+        if isinstance(bucket.get("unknown_reason_counts"), dict)
+        else {}
+    )
     return bool(reasons) or "unknown" in text
 
 
@@ -1023,7 +1175,11 @@ def _scale_in_source_dimension_observation_rollup(bucket: dict[str, Any]) -> boo
     bucket_key = str(bucket.get("bucket_key") or "").strip().lower()
     if (bucket_type, bucket_key) not in SCALE_IN_SOURCE_DIMENSION_ROLLUP_BUCKETS:
         return False
-    reasons = bucket.get("unknown_reason_counts") if isinstance(bucket.get("unknown_reason_counts"), dict) else {}
+    reasons = (
+        bucket.get("unknown_reason_counts")
+        if isinstance(bucket.get("unknown_reason_counts"), dict)
+        else {}
+    )
     return bool(reasons) or "unknown" in bucket_key
 
 
@@ -1034,11 +1190,25 @@ def _scale_in_ai_score_source_missing(bucket: dict[str, Any]) -> bool:
         return False
     if str(bucket.get("bucket_key") or "").strip().lower() != "score_unknown":
         return False
-    coverage = bucket.get("source_field_coverage") if isinstance(bucket.get("source_field_coverage"), dict) else {}
-    ai_score_coverage = coverage.get("ai_score_band") if isinstance(coverage.get("ai_score_band"), dict) else {}
-    reasons = bucket.get("unknown_reason_counts") if isinstance(bucket.get("unknown_reason_counts"), dict) else {}
+    coverage = (
+        bucket.get("source_field_coverage")
+        if isinstance(bucket.get("source_field_coverage"), dict)
+        else {}
+    )
+    ai_score_coverage = (
+        coverage.get("ai_score_band")
+        if isinstance(coverage.get("ai_score_band"), dict)
+        else {}
+    )
+    reasons = (
+        bucket.get("unknown_reason_counts")
+        if isinstance(bucket.get("unknown_reason_counts"), dict)
+        else {}
+    )
     present_count = _safe_int(ai_score_coverage.get("present_count"))
-    sample_count = _safe_int(ai_score_coverage.get("sample_count"), _safe_int(bucket.get("sample")))
+    sample_count = _safe_int(
+        ai_score_coverage.get("sample_count"), _safe_int(bucket.get("sample"))
+    )
     return (
         _safe_int(reasons.get("missing_source_field")) > 0
         and sample_count > 0
@@ -1046,15 +1216,28 @@ def _scale_in_ai_score_source_missing(bucket: dict[str, Any]) -> bool:
     )
 
 
-def _scale_in_ai_score_source_missing_provenance(bucket: dict[str, Any]) -> dict[str, Any]:
-    coverage = bucket.get("source_field_coverage") if isinstance(bucket.get("source_field_coverage"), dict) else {}
-    ai_score_coverage = coverage.get("ai_score_band") if isinstance(coverage.get("ai_score_band"), dict) else {}
+def _scale_in_ai_score_source_missing_provenance(
+    bucket: dict[str, Any],
+) -> dict[str, Any]:
+    coverage = (
+        bucket.get("source_field_coverage")
+        if isinstance(bucket.get("source_field_coverage"), dict)
+        else {}
+    )
+    ai_score_coverage = (
+        coverage.get("ai_score_band")
+        if isinstance(coverage.get("ai_score_band"), dict)
+        else {}
+    )
     return {
         "gap": SCALE_IN_AI_SCORE_SOURCE_MISSING_GAP,
         "resolution": SCALE_IN_AI_SCORE_SOURCE_MISSING_RESOLUTION,
-        "source_fields": ai_score_coverage.get("source_fields") or ["runtime_features.ai_score"],
+        "source_fields": ai_score_coverage.get("source_fields")
+        or ["runtime_features.ai_score"],
         "present_count": _safe_int(ai_score_coverage.get("present_count")),
-        "sample_count": _safe_int(ai_score_coverage.get("sample_count"), _safe_int(bucket.get("sample"))),
+        "sample_count": _safe_int(
+            ai_score_coverage.get("sample_count"), _safe_int(bucket.get("sample"))
+        ),
         "coverage_rate": _safe_float(ai_score_coverage.get("coverage_rate"), 0.0),
         "decision_authority": "source_quality_gap_discovery",
         "runtime_effect": False,
@@ -1135,20 +1318,28 @@ def _review_category_for_state(state: str) -> tuple[str, str]:
 def _normalize_candidate_runtime_metadata(item: dict[str, Any]) -> None:
     state = str(item.get("classification_state") or "")
     lifecycle_flow_source_only_blocker = _lifecycle_flow_source_only_blocker(item)
-    review_state = "source_only_keep_collecting" if lifecycle_flow_source_only_blocker else state
+    review_state = (
+        "source_only_keep_collecting" if lifecycle_flow_source_only_blocker else state
+    )
     review_category, review_sub_state = _review_category_for_state(review_state)
-    runtime_apply_allowed = state == "live_auto_apply_ready" and not lifecycle_flow_source_only_blocker
+    runtime_apply_allowed = (
+        state == "live_auto_apply_ready" and not lifecycle_flow_source_only_blocker
+    )
     item["source_bucket_kind"] = _source_bucket_kind(state, item)
     item["review_category"] = review_category
     item["review_sub_state"] = review_sub_state or None
     item["decision_authority"] = _decision_authority_for_state(state)
     item["runtime_effect_after_approval"] = (
-        "none" if lifecycle_flow_source_only_blocker else _runtime_effect_after_approval_for_state(state)
+        "none"
+        if lifecycle_flow_source_only_blocker
+        else _runtime_effect_after_approval_for_state(state)
     )
     item["broker_order_forbidden"] = not runtime_apply_allowed
     item["allowed_runtime_apply"] = runtime_apply_allowed
     item["runtime_effect"] = runtime_apply_allowed
-    item["sim_lifecycle_handoff_allowed"] = state in SIM_APPROVAL_STATES and not lifecycle_flow_source_only_blocker
+    item["sim_lifecycle_handoff_allowed"] = (
+        state in SIM_APPROVAL_STATES and not lifecycle_flow_source_only_blocker
+    )
     item["bounded_live_canary_allowed"] = runtime_apply_allowed
     if not runtime_apply_allowed:
         item["live_auto_apply_family"] = None
@@ -1156,24 +1347,38 @@ def _normalize_candidate_runtime_metadata(item: dict[str, Any]) -> None:
         item["explicit_runtime_exclusion"] = True
         item["source_only_explicit_exclusion"] = True
         item["runtime_exclusion_reason"] = "lifecycle_flow_incomplete_stage_contract"
-        item["lifecycle_flow_contract_status"] = "source_only_blocked_incomplete_stage_contract"
-        item["missing_lifecycle_flow_stage_keys"] = _lifecycle_flow_missing_stage_keys(item)
-    contract = item.get("auto_promotion_contract") if isinstance(item.get("auto_promotion_contract"), dict) else {}
+        item["lifecycle_flow_contract_status"] = (
+            "source_only_blocked_incomplete_stage_contract"
+        )
+        item["missing_lifecycle_flow_stage_keys"] = _lifecycle_flow_missing_stage_keys(
+            item
+        )
+    contract = (
+        item.get("auto_promotion_contract")
+        if isinstance(item.get("auto_promotion_contract"), dict)
+        else {}
+    )
     item["auto_promotion_contract"] = {
         **contract,
-        "state": "source_only" if lifecycle_flow_source_only_blocker else _auto_promotion_contract_state_for_state(state),
+        "state": (
+            "source_only"
+            if lifecycle_flow_source_only_blocker
+            else _auto_promotion_contract_state_for_state(state)
+        ),
         "tier2_required": runtime_apply_allowed,
         "deterministic_contract_required": runtime_apply_allowed,
-        "deterministic_contract_components": [
-            "source_quality_pass",
-            "sample_floor",
-            "primary_ev_uplift",
-            "env_mapping",
-            "runtime_hook",
-            "post_apply_attribution",
-        ]
-        if runtime_apply_allowed
-        else [],
+        "deterministic_contract_components": (
+            [
+                "source_quality_pass",
+                "sample_floor",
+                "primary_ev_uplift",
+                "env_mapping",
+                "runtime_hook",
+                "post_apply_attribution",
+            ]
+            if runtime_apply_allowed
+            else []
+        ),
     }
 
 
@@ -1226,7 +1431,11 @@ def _source_dimension_gap_summary(candidates: list[dict[str, Any]]) -> dict[str,
             missing_dimension_counts[str(key)] += 1
         for key in item.get("missing_lifecycle_flow_stage_keys") or []:
             missing_dimension_counts[str(key)] += 1
-        reason_counts = item.get("unknown_reason_counts") if isinstance(item.get("unknown_reason_counts"), dict) else {}
+        reason_counts = (
+            item.get("unknown_reason_counts")
+            if isinstance(item.get("unknown_reason_counts"), dict)
+            else {}
+        )
         for key, value in reason_counts.items():
             unknown_reason_counts[str(key)] += _safe_int(value)
         classification = str(item.get("policy_key_gap_classification") or "").strip()
@@ -1241,10 +1450,16 @@ def _source_dimension_gap_summary(candidates: list[dict[str, Any]]) -> dict[str,
             "source_dimension_gap": gap,
             "recommended_resolution": resolution,
             "missing_dimension_keys": item.get("missing_dimension_keys") or [],
-            "missing_lifecycle_flow_stage_keys": item.get("missing_lifecycle_flow_stage_keys") or [],
+            "missing_lifecycle_flow_stage_keys": item.get(
+                "missing_lifecycle_flow_stage_keys"
+            )
+            or [],
             "unknown_reason_counts": reason_counts,
             "source_field_coverage": item.get("source_field_coverage") or {},
-            "source_dimension_gap_provenance": item.get("source_dimension_gap_provenance") or {},
+            "source_dimension_gap_provenance": item.get(
+                "source_dimension_gap_provenance"
+            )
+            or {},
         }
         join_gap_count = _safe_int(reason_counts.get("join_gap"))
         if join_gap_count > 0 or resolution == "join_labels_before_bucket_decision":
@@ -1266,7 +1481,10 @@ def _source_dimension_gap_summary(candidates: list[dict[str, Any]]) -> dict[str,
                         "allowed_runtime_apply": False,
                     }
                 )
-        if gap == "unknown_source_dimensions" and resolution in SOURCE_DIMENSION_ACTIONABLE_RESOLUTIONS:
+        if (
+            gap == "unknown_source_dimensions"
+            and resolution in SOURCE_DIMENSION_ACTIONABLE_RESOLUTIONS
+        ):
             actionable.append(compact)
         else:
             rollup.append(compact)
@@ -1299,7 +1517,9 @@ def _source_dimension_gap_summary(candidates: list[dict[str, Any]]) -> dict[str,
         "recommended_resolution_counts": dict(resolution_counts),
         "missing_dimension_key_counts": dict(missing_dimension_counts),
         "unknown_reason_counts": dict(unknown_reason_counts),
-        "policy_key_gap_classification_counts": dict(policy_key_gap_classification_counts),
+        "policy_key_gap_classification_counts": dict(
+            policy_key_gap_classification_counts
+        ),
         "join_gap_enrichment": join_gap_enrichment,
         "actionable_candidates": actionable[:50],
         "rollup_candidates": rollup[:50],
@@ -1318,11 +1538,19 @@ def _is_positive_source_only_candidate(item: dict[str, Any]) -> bool:
     state = str(item.get("classification_state") or "")
     if state != "source_only_keep_collecting":
         return False
-    if item.get("explicit_runtime_exclusion") is True or item.get("source_only_explicit_exclusion") is True:
+    if (
+        item.get("explicit_runtime_exclusion") is True
+        or item.get("source_only_explicit_exclusion") is True
+    ):
         return False
-    if str(item.get("recommended_resolution") or "") in {"mark_not_applicable_explicitly", "reject_not_applicable"}:
+    if str(item.get("recommended_resolution") or "") in {
+        "mark_not_applicable_explicitly",
+        "reject_not_applicable",
+    }:
         return False
-    if str(item.get("source_quality_status") or item.get("source_quality_gate") or "").lower() in {
+    if str(
+        item.get("source_quality_status") or item.get("source_quality_gate") or ""
+    ).lower() in {
         "fail",
         "blocked",
         "source_quality_blocker",
@@ -1343,7 +1571,9 @@ def _is_positive_source_only_candidate(item: dict[str, Any]) -> bool:
     return decision in {"keep_bucket", "absorb_as_dimension", "hybrid"}
 
 
-def _quiet_gap_summary(report: dict[str, Any], candidates: list[dict[str, Any]]) -> dict[str, Any]:
+def _quiet_gap_summary(
+    report: dict[str, Any], candidates: list[dict[str, Any]]
+) -> dict[str, Any]:
     type_counts: Counter[str] = Counter()
     stage_counts: Counter[str] = Counter()
     state_counts: Counter[str] = Counter()
@@ -1361,11 +1591,19 @@ def _quiet_gap_summary(report: dict[str, Any], candidates: list[dict[str, Any]])
             gap_types.append("exclusion_dimension_candidate")
         if _is_positive_source_only_candidate(item):
             gap_types.append("positive_source_only_keep_collecting")
-        if str(item.get("recommended_resolution") or "") == "absorbed_into_parent_policy":
+        if (
+            str(item.get("recommended_resolution") or "")
+            == "absorbed_into_parent_policy"
+        ):
             gap_types.append("absorbed_into_parent_policy")
         if not gap_types:
             continue
-        bucket_id = str(item.get("source_bucket_id") or item.get("bucket_id") or item.get("bucket_key") or "unknown")
+        bucket_id = str(
+            item.get("source_bucket_id")
+            or item.get("bucket_id")
+            or item.get("bucket_key")
+            or "unknown"
+        )
         stage = str(item.get("stage") or "unknown")
         state = str(item.get("classification_state") or "unknown")
         for gap_type in gap_types:
@@ -1385,23 +1623,34 @@ def _quiet_gap_summary(report: dict[str, Any], candidates: list[dict[str, Any]])
                 "classification_state": state,
                 "quiet_gap_types": [],
                 "recommended_resolution": item.get("recommended_resolution") or "",
-                "source_quality_adjusted_ev_pct": item.get("source_quality_adjusted_ev_pct"),
-                "parent_bucket_id": item.get("canonical_parent_bucket") or item.get("policy_bucket_id"),
+                "source_quality_adjusted_ev_pct": item.get(
+                    "source_quality_adjusted_ev_pct"
+                ),
+                "parent_bucket_id": item.get("canonical_parent_bucket")
+                or item.get("policy_bucket_id"),
                 "policy_bucket_id": item.get("policy_bucket_id"),
                 "child_conflict_warning": bool(item.get("child_conflict_warning")),
-                "exclusion_dimension_candidate": bool(item.get("exclusion_dimension_candidate")),
+                "exclusion_dimension_candidate": bool(
+                    item.get("exclusion_dimension_candidate")
+                ),
             },
         )
         for gap_type in gap_types:
             if gap_type not in current["quiet_gap_types"]:
                 current["quiet_gap_types"].append(gap_type)
 
-    ai_review = report.get("ai_two_pass_review") if isinstance(report.get("ai_two_pass_review"), dict) else {}
+    ai_review = (
+        report.get("ai_two_pass_review")
+        if isinstance(report.get("ai_two_pass_review"), dict)
+        else {}
+    )
     ai_status = str(ai_review.get("status") or "")
     shard_count = _safe_int(ai_review.get("shard_count"))
     parsed_shard_count = _safe_int(ai_review.get("parsed_shard_count"))
     reviewed_candidate_count = _safe_int(ai_review.get("reviewed_candidate_count"))
-    ai_review_low_coverage = ai_status == "parsed" and shard_count > 0 and parsed_shard_count < shard_count
+    ai_review_low_coverage = (
+        ai_status == "parsed" and shard_count > 0 and parsed_shard_count < shard_count
+    )
     if ai_review_low_coverage:
         type_counts["ai_review_parsed_low_coverage"] += 1
 
@@ -1414,10 +1663,18 @@ def _quiet_gap_summary(report: dict[str, Any], candidates: list[dict[str, Any]])
         "rollup_required_count": quiet_gap_count,
         "sim_live_connected_quiet_gap_count": len(sim_live_connected_ids),
         "parent_conflict_child_count": type_counts.get("parent_conflict_child", 0),
-        "exclusion_dimension_candidate_count": type_counts.get("exclusion_dimension_candidate", 0),
-        "positive_source_only_keep_collecting_count": type_counts.get("positive_source_only_keep_collecting", 0),
-        "absorbed_into_parent_policy_count": type_counts.get("absorbed_into_parent_policy", 0),
-        "ai_review_parsed_low_coverage_count": type_counts.get("ai_review_parsed_low_coverage", 0),
+        "exclusion_dimension_candidate_count": type_counts.get(
+            "exclusion_dimension_candidate", 0
+        ),
+        "positive_source_only_keep_collecting_count": type_counts.get(
+            "positive_source_only_keep_collecting", 0
+        ),
+        "absorbed_into_parent_policy_count": type_counts.get(
+            "absorbed_into_parent_policy", 0
+        ),
+        "ai_review_parsed_low_coverage_count": type_counts.get(
+            "ai_review_parsed_low_coverage", 0
+        ),
         "quiet_gap_type_counts": dict(type_counts),
         "stage_counts": dict(stage_counts),
         "classification_state_counts": dict(state_counts),
@@ -1466,10 +1723,18 @@ def _classify_conflict_child(
     child_sample = _safe_int(child.get("joined_sample"))
     source_quality = str(child.get("source_quality_gate") or "")
     has_unknown = bool(child.get("unknown_dimension_counts"))
-    dimensions = child.get("source_dimensions") if isinstance(child.get("source_dimensions"), dict) else {}
+    dimensions = (
+        child.get("source_dimensions")
+        if isinstance(child.get("source_dimensions"), dict)
+        else {}
+    )
 
-    source_quality_non_blocking = source_quality in NON_BLOCKING_CONFLICT_SOURCE_QUALITY_STATES
-    is_source_quality_fail = (source_quality != "pass" and not source_quality_non_blocking) or has_unknown
+    source_quality_non_blocking = (
+        source_quality in NON_BLOCKING_CONFLICT_SOURCE_QUALITY_STATES
+    )
+    is_source_quality_fail = (
+        source_quality != "pass" and not source_quality_non_blocking
+    ) or has_unknown
     child_same_direction = (
         parent_ev is not None
         and child_ev is not None
@@ -1491,7 +1756,11 @@ def _classify_conflict_child(
             "parent_ev": parent_ev,
         }
 
-    if child_ev is not None and child_ev > 0 and child_sample < LIFECYCLE_FLOW_CHILD_STANDALONE_MIN_JOINED_SAMPLE:
+    if (
+        child_ev is not None
+        and child_ev > 0
+        and child_sample < LIFECYCLE_FLOW_CHILD_STANDALONE_MIN_JOINED_SAMPLE
+    ):
         return "positive_thin_child", {
             "child_ev": child_ev,
             "joined_sample": child_sample,
@@ -1518,7 +1787,8 @@ def _classify_exclude_child_candidates(
     resolution_items: list[dict[str, Any]],
 ) -> None:
     exclude_candidates = [
-        item for item in resolution_items
+        item
+        for item in resolution_items
         if item.get("child_resolution_state") == "strategy_reversal"
         and item.get("child_ev") is not None
         and parent_ev is not None
@@ -1555,7 +1825,11 @@ def _estimate_parent_ev_after_exclusion(
     exclude_samples = 0
     exclude_ev_sum = 0.0
     for index, c in enumerate(children):
-        r_item = resolution_items[index] if resolution_items and index < len(resolution_items) else {}
+        r_item = (
+            resolution_items[index]
+            if resolution_items and index < len(resolution_items)
+            else {}
+        )
         if r_item.get("child_resolution_state") != "exclude_child_candidate":
             continue
         ev = _safe_float(c.get("source_quality_adjusted_ev_pct"), None)
@@ -1565,7 +1839,9 @@ def _estimate_parent_ev_after_exclusion(
             exclude_ev_sum += ev * sample
     if exclude_samples <= 0:
         return parent_ev
-    weighted_parent = (parent_ev * total_sample - exclude_ev_sum) / max(1, total_sample - exclude_samples)
+    weighted_parent = (parent_ev * total_sample - exclude_ev_sum) / max(
+        1, total_sample - exclude_samples
+    )
     return round(weighted_parent, 4)
 
 
@@ -1576,12 +1852,15 @@ def _build_parent_conflict_resolution(
     parent_summaries = report.get("parent_bucket_summaries")
     if not isinstance(parent_summaries, list):
         return []
-    conflict_parents = [p for p in parent_summaries if p.get("child_conflict_warning") is True]
+    conflict_parents = [
+        p for p in parent_summaries if p.get("child_conflict_warning") is True
+    ]
     if not conflict_parents:
         return []
 
     lf_children = [
-        c for c in candidates
+        c
+        for c in candidates
         if str(c.get("stage") or "") == "lifecycle_flow"
         and str(c.get("bucket_type") or "") == "combo_lifecycle_flow"
     ]
@@ -1591,14 +1870,20 @@ def _build_parent_conflict_resolution(
         parent_id = str(parent.get("parent_bucket_id") or "")
         parent_ev = _safe_float(parent.get("parent_ev"), None)
         parent_joined_sample = _safe_int(parent.get("parent_joined_sample"))
-        child_ids = parent.get("absorbed_child_bucket_ids") if isinstance(parent.get("absorbed_child_bucket_ids"), list) else []
+        child_ids = (
+            parent.get("absorbed_child_bucket_ids")
+            if isinstance(parent.get("absorbed_child_bucket_ids"), list)
+            else []
+        )
         conflicting_patterns = parent.get("conflicting_child_patterns")
         if not isinstance(conflicting_patterns, list):
             conflicting_patterns = []
 
         children_in_parent = [
-            c for c in lf_children
-            if str(c.get("canonical_parent_bucket") or c.get("policy_bucket_id") or "") == parent_id
+            c
+            for c in lf_children
+            if str(c.get("canonical_parent_bucket") or c.get("policy_bucket_id") or "")
+            == parent_id
         ]
         if not children_in_parent and not child_ids:
             continue
@@ -1612,12 +1897,16 @@ def _build_parent_conflict_resolution(
         child_same_direction_count = 0
 
         for child in children_in_parent:
-            child_id = str(child.get("bucket_id") or child.get("source_bucket_id") or "")
+            child_id = str(
+                child.get("bucket_id") or child.get("source_bucket_id") or ""
+            )
             child_state, child_details = _classify_conflict_child(child, parent_ev)
             item = {
                 "child_bucket_id": child_id,
                 "child_resolution_state": child_state,
-                "child_ev": _safe_float(child.get("source_quality_adjusted_ev_pct"), None),
+                "child_ev": _safe_float(
+                    child.get("source_quality_adjusted_ev_pct"), None
+                ),
                 "child_joined_sample": _safe_int(child.get("joined_sample")),
                 "child_source_quality_gate": child.get("source_quality_gate"),
                 "details": child_details,
@@ -1631,15 +1920,37 @@ def _build_parent_conflict_resolution(
             elif child_state == "child_same_direction_absorbed":
                 child_same_direction_count += 1
 
-        _classify_exclude_child_candidates(children_in_parent, parent_ev, resolution_items)
-        strategy_reversal_count = sum(1 for r in resolution_items if r.get("child_resolution_state") == "strategy_reversal")
-        exclude_child_count = sum(1 for r in resolution_items if r.get("child_resolution_state") == "exclude_child_candidate")
-        keep_collecting_count = sum(1 for r in resolution_items if r.get("child_resolution_state") == "keep_collecting")
-        positive_thin_count = sum(1 for r in resolution_items if r.get("child_resolution_state") == "positive_thin_child")
+        _classify_exclude_child_candidates(
+            children_in_parent, parent_ev, resolution_items
+        )
+        strategy_reversal_count = sum(
+            1
+            for r in resolution_items
+            if r.get("child_resolution_state") == "strategy_reversal"
+        )
+        exclude_child_count = sum(
+            1
+            for r in resolution_items
+            if r.get("child_resolution_state") == "exclude_child_candidate"
+        )
+        keep_collecting_count = sum(
+            1
+            for r in resolution_items
+            if r.get("child_resolution_state") == "keep_collecting"
+        )
+        positive_thin_count = sum(
+            1
+            for r in resolution_items
+            if r.get("child_resolution_state") == "positive_thin_child"
+        )
 
-        parent_ev_after = _estimate_parent_ev_after_exclusion(children_in_parent, parent_ev, resolution_items)
+        parent_ev_after = _estimate_parent_ev_after_exclusion(
+            children_in_parent, parent_ev, resolution_items
+        )
         all_quality_ok = source_quality_gap_count == 0
-        has_meaningful_sample = parent_joined_sample >= LIFECYCLE_FLOW_PARENT_MIN_JOINED_SAMPLE
+        has_meaningful_sample = (
+            parent_joined_sample >= LIFECYCLE_FLOW_PARENT_MIN_JOINED_SAMPLE
+        )
         ev_positive = parent_ev_after is not None and parent_ev_after > 0
         has_reversal_or_exclude = strategy_reversal_count > 0 or exclude_child_count > 0
 
@@ -1664,42 +1975,51 @@ def _build_parent_conflict_resolution(
         if not has_meaningful_sample:
             live_blockers.append("sample_below_live_floor")
 
-        resolutions.append({
-            "parent_bucket_id": parent_id,
-            "complete_flow_count": _safe_int(parent.get("complete_flow_count")),
-            "parent_ev_before": parent_ev,
-            "parent_joined_sample": parent_joined_sample,
-            "child_count": len(children_in_parent),
-            "source_quality_gap_child_count": source_quality_gap_count,
-            "strategy_reversal_child_count": strategy_reversal_count,
-            "exclude_child_candidate_count": exclude_child_count,
-            "keep_collecting_child_count": keep_collecting_count,
-            "positive_thin_child_count": positive_thin_count,
-            "child_same_direction_absorbed_count": child_same_direction_count,
-            "child_ev_dispersion_pct": parent.get("child_ev_dispersion_pct", 0.0),
-            "conflict_resolution_state": parent_resolution_state,
-            "resolution_reason": (
-                "source_quality_blocks_resolution"
-                if not all_quality_ok
-                else "all_children_absorbed_or_collecting"
-                if not has_reversal_or_exclude
-                else "exclusion_may_improve_ev"
-                if ev_positive
-                else "ev_negative_after_exclusion"
-            ),
-            "parent_ev_after_exclusion_estimate": parent_ev_after,
-            "sim_policy_eligible_after_resolution": parent_resolution_state == "sim_eligible_after_resolution",
-            "live_policy_blockers": live_blockers,
-            "child_resolution_items": resolution_items,
-            "runtime_effect": False,
-            "allowed_runtime_apply": False,
-            "decision_authority": "parent_conflict_resolution_source_only",
-        })
+        resolutions.append(
+            {
+                "parent_bucket_id": parent_id,
+                "complete_flow_count": _safe_int(parent.get("complete_flow_count")),
+                "parent_ev_before": parent_ev,
+                "parent_joined_sample": parent_joined_sample,
+                "child_count": len(children_in_parent),
+                "source_quality_gap_child_count": source_quality_gap_count,
+                "strategy_reversal_child_count": strategy_reversal_count,
+                "exclude_child_candidate_count": exclude_child_count,
+                "keep_collecting_child_count": keep_collecting_count,
+                "positive_thin_child_count": positive_thin_count,
+                "child_same_direction_absorbed_count": child_same_direction_count,
+                "child_ev_dispersion_pct": parent.get("child_ev_dispersion_pct", 0.0),
+                "conflict_resolution_state": parent_resolution_state,
+                "resolution_reason": (
+                    "source_quality_blocks_resolution"
+                    if not all_quality_ok
+                    else (
+                        "all_children_absorbed_or_collecting"
+                        if not has_reversal_or_exclude
+                        else (
+                            "exclusion_may_improve_ev"
+                            if ev_positive
+                            else "ev_negative_after_exclusion"
+                        )
+                    )
+                ),
+                "parent_ev_after_exclusion_estimate": parent_ev_after,
+                "sim_policy_eligible_after_resolution": parent_resolution_state
+                == "sim_eligible_after_resolution",
+                "live_policy_blockers": live_blockers,
+                "child_resolution_items": resolution_items,
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "decision_authority": "parent_conflict_resolution_source_only",
+            }
+        )
 
     return resolutions
 
 
-def _weighted_average(items: list[dict[str, Any]], value_key: str, weight_key: str) -> float | None:
+def _weighted_average(
+    items: list[dict[str, Any]], value_key: str, weight_key: str
+) -> float | None:
     numerator = 0.0
     denominator = 0
     for item in items:
@@ -1749,11 +2069,18 @@ def _score_parent_from_text(value: Any) -> str:
 
 def _missing_or_none_text(text: str) -> bool:
     compact = text.strip().lower()
-    return not compact or compact in {"none", "missing", "null"} or compact.endswith(":missing")
+    return (
+        not compact
+        or compact in {"none", "missing", "null"}
+        or compact.endswith(":missing")
+    )
 
 
 def _entry_source_parent(value: Any) -> str:
-    return str(normalize_entry_source_parent(value).get("parent") or "entry_source_observed_other")
+    return str(
+        normalize_entry_source_parent(value).get("parent")
+        or "entry_source_observed_other"
+    )
 
 
 def _submit_quality_parent(value: Any) -> str:
@@ -1762,9 +2089,18 @@ def _submit_quality_parent(value: Any) -> str:
         return "submit_missing"
     if "stale_context" in text or "stale_quote" in text or "stale_block" in text:
         return "submit_stale_context_or_quote"
-    if "price_guard" in text or "liquidity_guard" in text or "overbought_guard" in text or "would_block" in text:
+    if (
+        "price_guard" in text
+        or "liquidity_guard" in text
+        or "overbought_guard" in text
+        or "would_block" in text
+    ):
         return "submit_price_or_liquidity_guard_block"
-    if "revalidation_ok" in text or "ok_or_unflagged" in text or "assumed_filled" in text:
+    if (
+        "revalidation_ok" in text
+        or "ok_or_unflagged" in text
+        or "assumed_filled" in text
+    ):
         return "submit_revalidation_ok"
     return "submit_observed_other"
 
@@ -1775,9 +2111,20 @@ def _exit_outcome_parent(value: Any) -> str:
         return "exit_missing"
     if "missed_upside" in text:
         return "exit_missed_upside"
-    if "good_exit" in text or "take_profit" in text or "_tp" in text or "rule_tp" in text:
+    if (
+        "good_exit" in text
+        or "take_profit" in text
+        or "_tp" in text
+        or "rule_tp" in text
+    ):
         return "exit_good_or_take_profit"
-    if "soft_stop" in text or "hard_stop" in text or "bad_exit" in text or "loss" in text or "lt_neg" in text:
+    if (
+        "soft_stop" in text
+        or "hard_stop" in text
+        or "bad_exit" in text
+        or "loss" in text
+        or "lt_neg" in text
+    ):
         return "exit_soft_stop_or_loss"
     if "neutral" in text:
         return "exit_neutral"
@@ -1816,7 +2163,12 @@ def _scale_in_parent(value: Any) -> str:
         return "scale_in_none"
     if "block" in text or "forbidden" in text or "skipped" in text:
         return "scale_in_block_or_skipped"
-    if "avg" in text or "pyramid" in text or "scale_in_applied" in text or "active" in text:
+    if (
+        "avg" in text
+        or "pyramid" in text
+        or "scale_in_applied" in text
+        or "active" in text
+    ):
         return "scale_in_active"
     return "scale_in_observed_other"
 
@@ -1837,7 +2189,11 @@ def _exit_rule_parent(value: Any) -> str:
 
 
 def _lifecycle_flow_parent_dimensions(item: dict[str, Any]) -> dict[str, str]:
-    source_dimensions = item.get("source_dimensions") if isinstance(item.get("source_dimensions"), dict) else {}
+    source_dimensions = (
+        item.get("source_dimensions")
+        if isinstance(item.get("source_dimensions"), dict)
+        else {}
+    )
     entry = item.get("entry_bucket_id") or source_dimensions.get("entry") or ""
     entry_source_contract = normalize_entry_source_parent(entry)
     submit = item.get("submit_bucket_id") or source_dimensions.get("submit") or ""
@@ -1846,11 +2202,21 @@ def _lifecycle_flow_parent_dimensions(item: dict[str, Any]) -> dict[str, str]:
     exit_value = item.get("exit_bucket_id") or source_dimensions.get("exit") or ""
     return {
         "entry_score_parent": _score_parent_from_text(entry),
-        "entry_source_parent": str(entry_source_contract.get("parent") or "entry_source_observed_other"),
-        "entry_source_parent_contract_state": str(entry_source_contract.get("contract_state") or ""),
-        "entry_source_parent_contract_reason": str(entry_source_contract.get("reason") or ""),
-        "entry_source_parent_alias_version": str(entry_source_contract.get("alias_version") or ""),
-        "entry_source_parent_consume_data": str(bool(entry_source_contract.get("consume_data"))),
+        "entry_source_parent": str(
+            entry_source_contract.get("parent") or "entry_source_observed_other"
+        ),
+        "entry_source_parent_contract_state": str(
+            entry_source_contract.get("contract_state") or ""
+        ),
+        "entry_source_parent_contract_reason": str(
+            entry_source_contract.get("reason") or ""
+        ),
+        "entry_source_parent_alias_version": str(
+            entry_source_contract.get("alias_version") or ""
+        ),
+        "entry_source_parent_consume_data": str(
+            bool(entry_source_contract.get("consume_data"))
+        ),
         "entry_source_parent_runtime_effect_allowed": str(
             bool(entry_source_contract.get("runtime_effect_allowed"))
         ),
@@ -1870,21 +2236,32 @@ def _lifecycle_flow_parent_dimensions(item: dict[str, Any]) -> dict[str, str]:
 
 def _lifecycle_flow_parent_key(item: dict[str, Any], level: str) -> str:
     dimensions = _lifecycle_flow_parent_dimensions(item)
-    fields = LIFECYCLE_FLOW_PARENT_LEVEL_FIELDS.get(level) or LIFECYCLE_FLOW_PARENT_LEVEL_FIELDS["L2_default"]
+    fields = (
+        LIFECYCLE_FLOW_PARENT_LEVEL_FIELDS.get(level)
+        or LIFECYCLE_FLOW_PARENT_LEVEL_FIELDS["L2_default"]
+    )
     parts = [f"{field}={dimensions.get(field) or 'unknown'}" for field in fields]
     return "lifecycle_flow:combo_lifecycle_flow:" + "|".join(parts)
 
 
-def _load_previous_active_sim_priority_seeds(target_date: str) -> dict[str, dict[str, Any]]:
+def _load_previous_active_sim_priority_seeds(
+    target_date: str,
+) -> dict[str, dict[str, Any]]:
     previous: dict[str, dict[str, Any]] = {}
-    for path in sorted(REPORT_DIR.glob("lifecycle_bucket_discovery_*.json"), reverse=True):
+    for path in sorted(
+        REPORT_DIR.glob("lifecycle_bucket_discovery_*.json"), reverse=True
+    ):
         if target_date and target_date in path.name:
             continue
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
         except Exception:
             continue
-        seeds = payload.get("active_sim_priority_seeds") if isinstance(payload, dict) else []
+        seeds = (
+            payload.get("active_sim_priority_seeds")
+            if isinstance(payload, dict)
+            else []
+        )
         if not isinstance(seeds, list):
             continue
         for seed in seeds:
@@ -1930,10 +2307,16 @@ def _observable_prefix_for_parent(dimensions: dict[str, Any]) -> dict[str, str]:
 
 def _target_validation_dimensions(dimensions: dict[str, Any]) -> dict[str, str]:
     keys = ("exit_outcome_parent", "major_holding_parent", "scale_in_parent")
-    return {key: str(dimensions.get(key) or "") for key in keys if str(dimensions.get(key) or "").strip()}
+    return {
+        key: str(dimensions.get(key) or "")
+        for key in keys
+        if str(dimensions.get(key) or "").strip()
+    }
 
 
-def _active_sim_priority_targeted_quota(parent: dict[str, Any], *, eligible: bool) -> dict[str, Any]:
+def _active_sim_priority_targeted_quota(
+    parent: dict[str, Any], *, eligible: bool
+) -> dict[str, Any]:
     joined_sample = _safe_int(parent.get("parent_joined_sample"))
     complete_flow_count = _safe_int(parent.get("complete_flow_count"))
     return {
@@ -1942,7 +2325,8 @@ def _active_sim_priority_targeted_quota(parent: dict[str, Any], *, eligible: boo
         "daily_total_share_pct": ACTIVE_SIM_PRIORITY_TOTAL_SHARE_PCT,
         "per_seed_daily_limit": ACTIVE_SIM_PRIORITY_PER_SEED_DAILY_LIMIT,
         "sample_goal_per_bucket": ACTIVE_SIM_PRIORITY_SAMPLE_GOAL_PER_BUCKET,
-        "needs_revisit_sample": joined_sample < ACTIVE_SIM_PRIORITY_SAMPLE_GOAL_PER_BUCKET,
+        "needs_revisit_sample": joined_sample
+        < ACTIVE_SIM_PRIORITY_SAMPLE_GOAL_PER_BUCKET,
         "current_parent_joined_sample": joined_sample,
         "current_complete_flow_count": complete_flow_count,
         "reason": (
@@ -1957,12 +2341,22 @@ def _active_sim_priority_targeted_quota(parent: dict[str, Any], *, eligible: boo
     }
 
 
-def _positive_ev_stage_sampling_plan(parent: dict[str, Any], *, eligible: bool) -> dict[str, Any]:
-    dimensions = parent.get("dimension_filters") if isinstance(parent.get("dimension_filters"), dict) else {}
+def _positive_ev_stage_sampling_plan(
+    parent: dict[str, Any], *, eligible: bool
+) -> dict[str, Any]:
+    dimensions = (
+        parent.get("dimension_filters")
+        if isinstance(parent.get("dimension_filters"), dict)
+        else {}
+    )
     joined_sample = _safe_int(parent.get("parent_joined_sample"))
     complete_flow_count = _safe_int(parent.get("complete_flow_count"))
-    missing_complete_flow = max(0, ACTIVE_SIM_PRIORITY_COMPLETE_FLOW_GOAL_PER_BUCKET - complete_flow_count)
-    missing_parent_sample = max(0, ACTIVE_SIM_PRIORITY_SAMPLE_GOAL_PER_BUCKET - joined_sample)
+    missing_complete_flow = max(
+        0, ACTIVE_SIM_PRIORITY_COMPLETE_FLOW_GOAL_PER_BUCKET - complete_flow_count
+    )
+    missing_parent_sample = max(
+        0, ACTIVE_SIM_PRIORITY_SAMPLE_GOAL_PER_BUCKET - joined_sample
+    )
     observable_prefix = _observable_prefix_for_parent(dimensions)
     return {
         "schema_version": "positive_ev_stage_sampling_plan_v1",
@@ -2009,9 +2403,11 @@ def _positive_ev_stage_sampling_plan(parent: dict[str, Any], *, eligible: bool) 
         "priority_reason": (
             "eligible_positive_parent_needs_complete_flow"
             if eligible and missing_complete_flow > 0
-            else "eligible_positive_parent_needs_more_samples"
-            if eligible and missing_parent_sample > 0
-            else "metadata_only_until_parent_requalifies"
+            else (
+                "eligible_positive_parent_needs_more_samples"
+                if eligible and missing_parent_sample > 0
+                else "metadata_only_until_parent_requalifies"
+            )
         ),
         "runtime_effect": False,
         "allowed_runtime_apply": False,
@@ -2054,7 +2450,9 @@ def _child_conflict_stratified_targets(parent: dict[str, Any]) -> dict[str, Any]
         "strata": strata,
         "resolution_policy": "collect_until_child_floor_before_exclusion_or_live_authority",
         "runtime_match_fields": _observable_prefix_for_parent(
-            parent.get("dimension_filters") if isinstance(parent.get("dimension_filters"), dict) else {}
+            parent.get("dimension_filters")
+            if isinstance(parent.get("dimension_filters"), dict)
+            else {}
         ),
         "post_observation_dimensions_only": [
             "holding",
@@ -2103,7 +2501,8 @@ def _stage_counterfactual_variant_plan(parent: dict[str, Any]) -> dict[str, Any]
         ],
         "primary_decision_metric": "source_quality_adjusted_ev_pct",
         "forbidden_uses": list(BASE_FORBIDDEN_USES),
-        "source_parent_bucket_id": parent.get("source_parent_bucket_id") or parent.get("parent_bucket_id"),
+        "source_parent_bucket_id": parent.get("source_parent_bucket_id")
+        or parent.get("parent_bucket_id"),
         "runtime_effect": False,
         "allowed_runtime_apply": False,
         "actual_order_submitted": False,
@@ -2112,7 +2511,10 @@ def _stage_counterfactual_variant_plan(parent: dict[str, Any]) -> dict[str, Any]
 
 
 def _ldm_refinement_report_path(target_date: str) -> Path:
-    return LDM_REFINEMENT_REPORT_DIR / f"ldm_hypothesis_parent_refinement_{target_date}.json"
+    return (
+        LDM_REFINEMENT_REPORT_DIR
+        / f"ldm_hypothesis_parent_refinement_{target_date}.json"
+    )
 
 
 def _load_ldm_refinement_report(target_date: str) -> dict[str, Any]:
@@ -2124,16 +2526,31 @@ def _load_ldm_refinement_report(target_date: str) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
-def _parent_dimension_matches_refinement(parent: dict[str, Any], item: dict[str, Any]) -> bool:
-    dimensions = parent.get("dimension_filters") if isinstance(parent.get("dimension_filters"), dict) else {}
-    features = item.get("runtime_observable_features") if isinstance(item.get("runtime_observable_features"), dict) else {}
+def _parent_dimension_matches_refinement(
+    parent: dict[str, Any], item: dict[str, Any]
+) -> bool:
+    dimensions = (
+        parent.get("dimension_filters")
+        if isinstance(parent.get("dimension_filters"), dict)
+        else {}
+    )
+    features = (
+        item.get("runtime_observable_features")
+        if isinstance(item.get("runtime_observable_features"), dict)
+        else {}
+    )
     comparable = [
         key
-        for key in ("entry_score_parent", "entry_source_parent", "submit_quality_parent")
+        for key in (
+            "entry_score_parent",
+            "entry_source_parent",
+            "submit_quality_parent",
+        )
         if str(features.get(key) or "").strip()
     ]
     if len(comparable) >= 2 and all(
-        str(dimensions.get(key) or "").strip() == str(features.get(key) or "").strip() for key in comparable
+        str(dimensions.get(key) or "").strip() == str(features.get(key) or "").strip()
+        for key in comparable
     ):
         return True
     signature = str(item.get("runtime_observable_signature") or "").strip()
@@ -2141,7 +2558,11 @@ def _parent_dimension_matches_refinement(parent: dict[str, Any], item: dict[str,
         return False
     parent_signature_fields = {
         key: str(dimensions.get(key) or "")
-        for key in ("entry_score_parent", "entry_source_parent", "submit_quality_parent")
+        for key in (
+            "entry_score_parent",
+            "entry_source_parent",
+            "submit_quality_parent",
+        )
         if str(dimensions.get(key) or "").strip()
     }
     if len(parent_signature_fields) < 2:
@@ -2156,7 +2577,9 @@ def _parent_dimension_matches_refinement(parent: dict[str, Any], item: dict[str,
     return signature == f"observable_{parent_signature}"
 
 
-def _ldm_refinement_contract_issues(refinement: dict[str, Any], target_date: str) -> list[str]:
+def _ldm_refinement_contract_issues(
+    refinement: dict[str, Any], target_date: str
+) -> list[str]:
     issues: list[str] = []
     if not refinement:
         return issues
@@ -2185,20 +2608,36 @@ def _ldm_refinement_contract_issues(refinement: dict[str, Any], target_date: str
         if item.get("allowed_runtime_apply") is not False:
             issues.append("ldm_refinement_input_allowed_runtime_apply_contract_invalid")
         if item.get("actual_order_submitted") is not False:
-            issues.append("ldm_refinement_input_actual_order_submitted_contract_invalid")
+            issues.append(
+                "ldm_refinement_input_actual_order_submitted_contract_invalid"
+            )
         if item.get("broker_order_forbidden") is not True:
-            issues.append("ldm_refinement_input_broker_order_forbidden_contract_invalid")
+            issues.append(
+                "ldm_refinement_input_broker_order_forbidden_contract_invalid"
+            )
     return list(dict.fromkeys(issues))
 
 
-def _closure_for_ldm_refinement(item: dict[str, Any], matched_parent_ids: list[str]) -> tuple[str, str]:
+def _closure_for_ldm_refinement(
+    item: dict[str, Any], matched_parent_ids: list[str]
+) -> tuple[str, str]:
     classification = str(item.get("classification") or "").strip()
     gap_reason = str(item.get("gap_reason") or "").strip()
     match_count = _safe_int(item.get("match_count"))
-    diagnosis = item.get("repeated_status_diagnosis") if isinstance(item.get("repeated_status_diagnosis"), dict) else {}
+    diagnosis = (
+        item.get("repeated_status_diagnosis")
+        if isinstance(item.get("repeated_status_diagnosis"), dict)
+        else {}
+    )
     retry_count = _safe_int(item.get("retry_count") or diagnosis.get("retry_count"))
-    closure_bias = str(item.get("recommended_closure_bias") or diagnosis.get("recommended_closure_bias") or "").strip()
-    diagnosis_reason = str(item.get("diagnosis_reason") or diagnosis.get("diagnosis_reason") or "").strip()
+    closure_bias = str(
+        item.get("recommended_closure_bias")
+        or diagnosis.get("recommended_closure_bias")
+        or ""
+    ).strip()
+    diagnosis_reason = str(
+        item.get("diagnosis_reason") or diagnosis.get("diagnosis_reason") or ""
+    ).strip()
     if closure_bias in {
         "source_quality_gap_created",
         "parent_refinement_candidate_created",
@@ -2208,40 +2647,95 @@ def _closure_for_ldm_refinement(item: dict[str, Any], matched_parent_ids: list[s
         "rejected_as_fragile",
         "contract_handoff_gap_created",
     }:
-        if closure_bias == "parent_refinement_candidate_created" and not matched_parent_ids and gap_reason != "parent_ambiguous":
-            return "new_parent_candidate_created", diagnosis_reason or gap_reason or "diagnosed_taxonomy_gap_without_parent_match"
-        return closure_bias, diagnosis_reason or "diagnosed_repeated_status_closure_bias"
-    if classification == "source_quality_gap" or gap_reason in {"join_key_missing", "source_quality_blocked"}:
-        return "source_quality_gap_created", gap_reason or "source_quality_gap_classification"
+        if (
+            closure_bias == "parent_refinement_candidate_created"
+            and not matched_parent_ids
+            and gap_reason != "parent_ambiguous"
+        ):
+            return (
+                "new_parent_candidate_created",
+                diagnosis_reason
+                or gap_reason
+                or "diagnosed_taxonomy_gap_without_parent_match",
+            )
+        return (
+            closure_bias,
+            diagnosis_reason or "diagnosed_repeated_status_closure_bias",
+        )
+    if classification == "source_quality_gap" or gap_reason in {
+        "join_key_missing",
+        "source_quality_blocked",
+    }:
+        return (
+            "source_quality_gap_created",
+            gap_reason or "source_quality_gap_classification",
+        )
     if match_count <= 1:
-        return "rejected_as_fragile", "single_match_pressure_is_too_fragile_for_parent_refinement"
+        return (
+            "rejected_as_fragile",
+            "single_match_pressure_is_too_fragile_for_parent_refinement",
+        )
     if retry_count >= 2 and item.get("contrary_sample_need") is True:
-        return "rare_observation_only_budget_capped", "repeated_contrast_gap_without_forced_diagnosis_budget_capped"
+        return (
+            "rare_observation_only_budget_capped",
+            "repeated_contrast_gap_without_forced_diagnosis_budget_capped",
+        )
     if item.get("contrary_sample_need") is True and match_count < 3:
-        return "needs_more_contrastive_sample", "contrary_sample_needed_before_parent_structure_change"
+        return (
+            "needs_more_contrastive_sample",
+            "contrary_sample_needed_before_parent_structure_change",
+        )
     if classification == "parent_support" and matched_parent_ids:
-        return "absorbed_into_existing_parent", "hypothesis_pressure_matches_existing_parent"
+        return (
+            "absorbed_into_existing_parent",
+            "hypothesis_pressure_matches_existing_parent",
+        )
     if classification == "parent_conflict" and matched_parent_ids:
-        return "parent_refinement_candidate_created", "hypothesis_pressure_conflicts_with_parent_average"
+        return (
+            "parent_refinement_candidate_created",
+            "hypothesis_pressure_conflicts_with_parent_average",
+        )
     if classification == "taxonomy_gap_candidate":
         if matched_parent_ids:
-            return "parent_refinement_candidate_created", "taxonomy_gap_now_maps_to_existing_parent_for_review"
+            return (
+                "parent_refinement_candidate_created",
+                "taxonomy_gap_now_maps_to_existing_parent_for_review",
+            )
         if gap_reason == "parent_ambiguous":
-            return "parent_refinement_candidate_created", "multiple_parent_fit_requires_refinement_review"
-        return "new_parent_candidate_created", gap_reason or "taxonomy_gap_not_absorbed_by_existing_parent"
-    return "needs_more_contrastive_sample", "unclassified_pressure_kept_for_contrastive_observation"
+            return (
+                "parent_refinement_candidate_created",
+                "multiple_parent_fit_requires_refinement_review",
+            )
+        return (
+            "new_parent_candidate_created",
+            gap_reason or "taxonomy_gap_not_absorbed_by_existing_parent",
+        )
+    return (
+        "needs_more_contrastive_sample",
+        "unclassified_pressure_kept_for_contrastive_observation",
+    )
 
 
-def _apply_ldm_refinement_pressure(report: dict[str, Any], summary: dict[str, Any]) -> None:
+def _apply_ldm_refinement_pressure(
+    report: dict[str, Any], summary: dict[str, Any]
+) -> None:
     target_date = str(report.get("target_date") or report.get("date") or "")
     refinement = _load_ldm_refinement_report(target_date)
-    inputs = [item for item in (refinement.get("refinement_inputs") or []) if isinstance(item, dict)]
+    inputs = [
+        item
+        for item in (refinement.get("refinement_inputs") or [])
+        if isinstance(item, dict)
+    ]
     contract_issues = _ldm_refinement_contract_issues(refinement, target_date)
     parent_by_id: dict[str, dict[str, Any]] = {}
     for parent in report.get("parent_bucket_summaries") or []:
         if not isinstance(parent, dict):
             continue
-        parent_id = str(parent.get("source_parent_bucket_id") or parent.get("parent_bucket_id") or "").strip()
+        parent_id = str(
+            parent.get("source_parent_bucket_id")
+            or parent.get("parent_bucket_id")
+            or ""
+        ).strip()
         if parent_id:
             parent_by_id[parent_id] = parent
 
@@ -2254,12 +2748,18 @@ def _apply_ldm_refinement_pressure(report: dict[str, Any], summary: dict[str, An
             for parent_id in (item.get("source_parent_bucket_ids") or [])
             if str(parent_id).strip()
         ]
-        matched_parent_ids = [parent_id for parent_id in explicit_parent_ids if parent_id in parent_by_id]
+        matched_parent_ids = [
+            parent_id for parent_id in explicit_parent_ids if parent_id in parent_by_id
+        ]
         if not matched_parent_ids:
             matched_parent_ids = [
-                parent_id for parent_id, parent in parent_by_id.items() if _parent_dimension_matches_refinement(parent, item)
+                parent_id
+                for parent_id, parent in parent_by_id.items()
+                if _parent_dimension_matches_refinement(parent, item)
             ]
-        closure_status, closure_reason = _closure_for_ldm_refinement(item, matched_parent_ids)
+        closure_status, closure_reason = _closure_for_ldm_refinement(
+            item, matched_parent_ids
+        )
         if closure_status not in LDM_REFINEMENT_CLOSURE_STATUSES:
             closure_status = "needs_more_contrastive_sample"
             closure_reason = "unknown_closure_status_normalized"
@@ -2281,7 +2781,8 @@ def _apply_ldm_refinement_pressure(report: dict[str, Any], summary: dict[str, An
             "runtime_match_count": item.get("runtime_match_count"),
             "derived_match_count": item.get("derived_match_count"),
             "source_match_origin": item.get("source_match_origin"),
-            "derived_from_contract_drift": item.get("derived_from_contract_drift") is True,
+            "derived_from_contract_drift": item.get("derived_from_contract_drift")
+            is True,
             "raw_event_mutated": item.get("raw_event_mutated") is True,
             "runtime_effect": False,
             "allowed_runtime_apply": False,
@@ -2303,9 +2804,14 @@ def _apply_ldm_refinement_pressure(report: dict[str, Any], summary: dict[str, An
                         "closure_status": closure_status,
                         "diagnosed_status": item.get("diagnosed_status"),
                         "diagnosis_reason": item.get("diagnosis_reason"),
-                        "refinement_pressure_score": item.get("refinement_pressure_score"),
+                        "refinement_pressure_score": item.get(
+                            "refinement_pressure_score"
+                        ),
                         "source_match_origin": item.get("source_match_origin"),
-                        "derived_from_contract_drift": item.get("derived_from_contract_drift") is True,
+                        "derived_from_contract_drift": item.get(
+                            "derived_from_contract_drift"
+                        )
+                        is True,
                         "pressure_reasons": item.get("pressure_reasons") or [],
                         "runtime_effect": False,
                         "allowed_runtime_apply": False,
@@ -2335,7 +2841,9 @@ def _apply_ldm_refinement_pressure(report: dict[str, Any], summary: dict[str, An
     }
     summary["ldm_refinement_pressure_input_count"] = len(inputs)
     summary["ldm_refinement_pressure_consumed_count"] = len(entries)
-    summary["ldm_refinement_pressure_closure_counts"] = dict(sorted(closure_counts.items()))
+    summary["ldm_refinement_pressure_closure_counts"] = dict(
+        sorted(closure_counts.items())
+    )
 
 
 def _build_active_sim_priority_seeds(report: dict[str, Any]) -> list[dict[str, Any]]:
@@ -2346,17 +2854,27 @@ def _build_active_sim_priority_seeds(report: dict[str, Any]) -> list[dict[str, A
     for parent in report.get("parent_bucket_summaries") or []:
         if not isinstance(parent, dict):
             continue
-        parent_id = str(parent.get("source_parent_bucket_id") or parent.get("parent_bucket_id") or "").strip()
+        parent_id = str(
+            parent.get("source_parent_bucket_id")
+            or parent.get("parent_bucket_id")
+            or ""
+        ).strip()
         if not parent_id:
             continue
         seen_parent_ids.add(parent_id)
-        dimensions = parent.get("dimension_filters") if isinstance(parent.get("dimension_filters"), dict) else {}
+        dimensions = (
+            parent.get("dimension_filters")
+            if isinstance(parent.get("dimension_filters"), dict)
+            else {}
+        )
         observable_prefix = _observable_prefix_for_parent(dimensions)
         entry_source_taxonomy_contract = {
             "contract_state": dimensions.get("entry_source_parent_contract_state"),
             "reason": dimensions.get("entry_source_parent_contract_reason"),
             "alias_version": dimensions.get("entry_source_parent_alias_version"),
-            "consume_data": str(dimensions.get("entry_source_parent_consume_data") or "").lower()
+            "consume_data": str(
+                dimensions.get("entry_source_parent_consume_data") or ""
+            ).lower()
             == "true",
             "runtime_effect_allowed": str(
                 dimensions.get("entry_source_parent_runtime_effect_allowed") or ""
@@ -2368,24 +2886,36 @@ def _build_active_sim_priority_seeds(report: dict[str, Any]) -> list[dict[str, A
         floor_pass = bool(parent.get("parent_granularity_floor_passed"))
         ev_positive = ev is not None and ev > 0
         eligible = bool(observable_prefix) and ev_positive and floor_pass
-        live_conversion_blocked_reason = "incomplete_lifecycle_flow" if complete_flow_count <= 0 else ""
+        live_conversion_blocked_reason = (
+            "incomplete_lifecycle_flow" if complete_flow_count <= 0 else ""
+        )
         active_collection_reason = (
             "positive_ev_parent_needs_sim_collection"
             if eligible and live_conversion_blocked_reason
-            else "positive_ev_parent_active_sim_collection"
-            if eligible
-            else ""
+            else "positive_ev_parent_active_sim_collection" if eligible else ""
         )
         previous = previous_by_parent.get(parent_id, {})
-        previous_prefix = previous.get("observable_prefix") if isinstance(previous.get("observable_prefix"), dict) else {}
+        previous_prefix = (
+            previous.get("observable_prefix")
+            if isinstance(previous.get("observable_prefix"), dict)
+            else {}
+        )
         effective_prefix = observable_prefix or previous_prefix
-        ldm_pressure_items = parent.get("ldm_refinement_pressure") if isinstance(parent.get("ldm_refinement_pressure"), list) else []
+        ldm_pressure_items = (
+            parent.get("ldm_refinement_pressure")
+            if isinstance(parent.get("ldm_refinement_pressure"), list)
+            else []
+        )
         ldm_pressure_counts = Counter(
-            str(item.get("closure_status") or "unknown") for item in ldm_pressure_items if isinstance(item, dict)
+            str(item.get("closure_status") or "unknown")
+            for item in ldm_pressure_items
+            if isinstance(item, dict)
         )
         has_previous = bool(previous)
         previous_status = str(previous.get("status") or "").strip()
-        failed_count = 0 if eligible else _safe_int(previous.get("consecutive_fail_count")) + 1
+        failed_count = (
+            0 if eligible else _safe_int(previous.get("consecutive_fail_count")) + 1
+        )
         first_fail_grace_allowed = (
             has_previous
             and previous_status == "active"
@@ -2396,9 +2926,11 @@ def _build_active_sim_priority_seeds(report: dict[str, Any]) -> list[dict[str, A
         status = (
             "active"
             if eligible or first_fail_grace_allowed
-            else "retired"
-            if previous_status == "retired" or failed_count >= 5
-            else "cooldown"
+            else (
+                "retired"
+                if previous_status == "retired" or failed_count >= 5
+                else "cooldown"
+            )
         )
         seed = {
             "active_seed_id": (
@@ -2412,19 +2944,31 @@ def _build_active_sim_priority_seeds(report: dict[str, Any]) -> list[dict[str, A
             "priority_tier": "rare_positive_parent_seed",
             "observable_prefix": effective_prefix,
             "entry_source_taxonomy_contract": entry_source_taxonomy_contract,
-            "taxonomy_contract_data_consumed": bool(entry_source_taxonomy_contract["consume_data"]),
+            "taxonomy_contract_data_consumed": bool(
+                entry_source_taxonomy_contract["consume_data"]
+            ),
             "taxonomy_contract_runtime_effect_allowed": bool(
                 entry_source_taxonomy_contract["runtime_effect_allowed"]
             ),
-            "target_validation_parent_dimensions": _target_validation_dimensions(dimensions),
+            "target_validation_parent_dimensions": _target_validation_dimensions(
+                dimensions
+            ),
             "parent_ev_pct": ev,
             "parent_joined_sample": parent.get("parent_joined_sample"),
             "complete_flow_count": complete_flow_count,
             "active_collection_reason": active_collection_reason,
-            "targeted_sim_quota": _active_sim_priority_targeted_quota(parent, eligible=eligible),
-            "positive_ev_stage_sampling_plan": _positive_ev_stage_sampling_plan(parent, eligible=eligible),
-            "child_conflict_stratified_targets": _child_conflict_stratified_targets(parent),
-            "stage_counterfactual_variant_plan": _stage_counterfactual_variant_plan(parent),
+            "targeted_sim_quota": _active_sim_priority_targeted_quota(
+                parent, eligible=eligible
+            ),
+            "positive_ev_stage_sampling_plan": _positive_ev_stage_sampling_plan(
+                parent, eligible=eligible
+            ),
+            "child_conflict_stratified_targets": _child_conflict_stratified_targets(
+                parent
+            ),
+            "stage_counterfactual_variant_plan": _stage_counterfactual_variant_plan(
+                parent
+            ),
             "live_conversion_blocked_reason": live_conversion_blocked_reason,
             "ldm_refinement_pressure_summary": {
                 "input_count": len(ldm_pressure_items),
@@ -2441,9 +2985,11 @@ def _build_active_sim_priority_seeds(report: dict[str, Any]) -> list[dict[str, A
             "source_quality_status": (
                 "pass"
                 if eligible
-                else "first_fail_grace"
-                if first_fail_grace_allowed
-                else "source_quality_or_granularity_blocked"
+                else (
+                    "first_fail_grace"
+                    if first_fail_grace_allowed
+                    else "source_quality_or_granularity_blocked"
+                )
             ),
             "consecutive_fail_count": failed_count,
             "consecutive_missing_count": missing_count,
@@ -2451,9 +2997,16 @@ def _build_active_sim_priority_seeds(report: dict[str, Any]) -> list[dict[str, A
             "allowed_runtime_apply": False,
             "actual_order_submitted": False,
             "broker_order_forbidden": True,
-            "retired_reason": "consecutive_fail_or_nonpositive_ev" if status == "retired" else "",
+            "retired_reason": (
+                "consecutive_fail_or_nonpositive_ev" if status == "retired" else ""
+            ),
         }
-        if has_previous and previous_status == "active" and failed_count < 2 and not ev_positive:
+        if (
+            has_previous
+            and previous_status == "active"
+            and failed_count < 2
+            and not ev_positive
+        ):
             seed["active_grace_blocked_reason"] = "nonpositive_ev"
         if first_fail_grace_allowed:
             seed["active_collection_reason"] = "previous_active_first_fail_grace"
@@ -2467,9 +3020,11 @@ def _build_active_sim_priority_seeds(report: dict[str, Any]) -> list[dict[str, A
         status = (
             "retired"
             if previous_status == "retired" or missing_count >= 5
-            else "cooldown"
-            if previous_status == "cooldown" or missing_count >= 2
-            else "active"
+            else (
+                "cooldown"
+                if previous_status == "cooldown" or missing_count >= 2
+                else "active"
+            )
         )
         seed = {
             **previous,
@@ -2480,7 +3035,11 @@ def _build_active_sim_priority_seeds(report: dict[str, Any]) -> list[dict[str, A
             "allowed_runtime_apply": False,
             "actual_order_submitted": False,
             "broker_order_forbidden": True,
-            "retired_reason": "consecutive_missing" if status == "retired" else str(previous.get("retired_reason") or ""),
+            "retired_reason": (
+                "consecutive_missing"
+                if status == "retired"
+                else str(previous.get("retired_reason") or "")
+            ),
         }
         seed.setdefault(
             "targeted_sim_quota",
@@ -2505,7 +3064,11 @@ def _build_active_sim_priority_seeds(report: dict[str, Any]) -> list[dict[str, A
                 "sampling_scope": "carried_forward_positive_ev_parent_stage_completion",
                 "sample_goal_per_bucket": ACTIVE_SIM_PRIORITY_SAMPLE_GOAL_PER_BUCKET,
                 "complete_flow_goal_per_bucket": ACTIVE_SIM_PRIORITY_COMPLETE_FLOW_GOAL_PER_BUCKET,
-                "runtime_match_fields": seed.get("observable_prefix") if isinstance(seed.get("observable_prefix"), dict) else {},
+                "runtime_match_fields": (
+                    seed.get("observable_prefix")
+                    if isinstance(seed.get("observable_prefix"), dict)
+                    else {}
+                ),
                 "runtime_match_forbidden_fields": [
                     "exit_outcome_parent",
                     "major_holding_parent",
@@ -2551,7 +3114,9 @@ def _build_active_sim_priority_seeds(report: dict[str, Any]) -> list[dict[str, A
     return sorted(
         seeds,
         key=lambda item: (
-            {"active": 0, "cooldown": 1, "retired": 2}.get(str(item.get("status") or ""), 9),
+            {"active": 0, "cooldown": 1, "retired": 2}.get(
+                str(item.get("status") or ""), 9
+            ),
             -(_safe_float(item.get("parent_ev_pct"), None) or -999.0),
             str(item.get("active_seed_id") or ""),
         ),
@@ -2559,8 +3124,16 @@ def _build_active_sim_priority_seeds(report: dict[str, Any]) -> list[dict[str, A
 
 
 def _active_seed_prefix_key(seed: dict[str, Any]) -> str:
-    prefix = seed.get("observable_prefix") if isinstance(seed.get("observable_prefix"), dict) else {}
-    compact = {str(key): str(value) for key, value in prefix.items() if str(value or "").strip()}
+    prefix = (
+        seed.get("observable_prefix")
+        if isinstance(seed.get("observable_prefix"), dict)
+        else {}
+    )
+    compact = {
+        str(key): str(value)
+        for key, value in prefix.items()
+        if str(value or "").strip()
+    }
     if not compact:
         return ""
     return json.dumps(compact, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
@@ -2590,8 +3163,12 @@ def _dedupe_active_sim_priority_seed_prefixes(seeds: list[dict[str, Any]]) -> No
         winner = max(duplicates, key=_active_seed_prefix_rank)
         for seed in duplicates:
             seed["active_observable_prefix_duplicate_count"] = len(duplicates)
-            seed["active_observable_prefix_dedup_policy"] = "single_active_seed_per_observable_prefix_v1"
-            seed["active_observable_prefix_dedup_winner_seed_id"] = winner.get("active_seed_id")
+            seed["active_observable_prefix_dedup_policy"] = (
+                "single_active_seed_per_observable_prefix_v1"
+            )
+            seed["active_observable_prefix_dedup_winner_seed_id"] = winner.get(
+                "active_seed_id"
+            )
             if seed is winner:
                 seed["active_observable_prefix_dedup_state"] = "winner"
                 continue
@@ -2603,19 +3180,27 @@ def _dedupe_active_sim_priority_seed_prefixes(seeds: list[dict[str, Any]]) -> No
             seed.setdefault("targeted_sim_quota", {})
             if isinstance(seed["targeted_sim_quota"], dict):
                 seed["targeted_sim_quota"]["needs_revisit_sample"] = False
-                seed["targeted_sim_quota"]["reason"] = "duplicate_observable_prefix_suppressed"
+                seed["targeted_sim_quota"][
+                    "reason"
+                ] = "duplicate_observable_prefix_suppressed"
                 seed["targeted_sim_quota"]["runtime_effect"] = False
                 seed["targeted_sim_quota"]["allowed_runtime_apply"] = False
 
 
-def _active_sim_priority_diagnostics(report: dict[str, Any], seeds: list[dict[str, Any]]) -> dict[str, int]:
+def _active_sim_priority_diagnostics(
+    report: dict[str, Any], seeds: list[dict[str, Any]]
+) -> dict[str, int]:
     eligible_count = 0
     blocked_nonpositive_ev_count = 0
     blocked_observable_prefix_count = 0
     for parent in report.get("parent_bucket_summaries") or []:
         if not isinstance(parent, dict):
             continue
-        dimensions = parent.get("dimension_filters") if isinstance(parent.get("dimension_filters"), dict) else {}
+        dimensions = (
+            parent.get("dimension_filters")
+            if isinstance(parent.get("dimension_filters"), dict)
+            else {}
+        )
         observable_prefix = _observable_prefix_for_parent(dimensions)
         ev = _safe_float(parent.get("parent_source_quality_adjusted_ev_pct"), None)
         floor_pass = bool(parent.get("parent_granularity_floor_passed"))
@@ -2629,14 +3214,17 @@ def _active_sim_priority_diagnostics(report: dict[str, Any], seeds: list[dict[st
         1
         for seed in seeds
         if str(seed.get("status") or "") == "active"
-        and str(seed.get("live_conversion_blocked_reason") or "") == "incomplete_lifecycle_flow"
+        and str(seed.get("live_conversion_blocked_reason") or "")
+        == "incomplete_lifecycle_flow"
     )
     active_targeted_quota_count = sum(
         1
         for seed in seeds
         if str(seed.get("status") or "") == "active"
         and isinstance(seed.get("targeted_sim_quota"), dict)
-        and str((seed.get("targeted_sim_quota") or {}).get("quota_policy_version") or "")
+        and str(
+            (seed.get("targeted_sim_quota") or {}).get("quota_policy_version") or ""
+        )
         == ACTIVE_SIM_PRIORITY_QUOTA_POLICY_VERSION
     )
     active_revisit_sample_need_count = sum(
@@ -2649,7 +3237,12 @@ def _active_sim_priority_diagnostics(report: dict[str, Any], seeds: list[dict[st
         1
         for seed in seeds
         if str(seed.get("status") or "") == "active"
-        and _safe_int((seed.get("positive_ev_stage_sampling_plan") or {}).get("additional_complete_flow_needed")) > 0
+        and _safe_int(
+            (seed.get("positive_ev_stage_sampling_plan") or {}).get(
+                "additional_complete_flow_needed"
+            )
+        )
+        > 0
     )
     active_conflict_strata_count = sum(
         len((seed.get("child_conflict_stratified_targets") or {}).get("strata") or [])
@@ -2691,9 +3284,14 @@ def _positive_parent_diagnostics(report: dict[str, Any]) -> dict[str, Any]:
         if ev is None or ev <= 0:
             continue
         joined_sample = _safe_int(parent.get("parent_joined_sample"))
-        dimensions = parent.get("dimension_filters") if isinstance(parent.get("dimension_filters"), dict) else {}
+        dimensions = (
+            parent.get("dimension_filters")
+            if isinstance(parent.get("dimension_filters"), dict)
+            else {}
+        )
         item = {
-            "parent_bucket_id": parent.get("parent_bucket_id") or parent.get("policy_bucket_id"),
+            "parent_bucket_id": parent.get("parent_bucket_id")
+            or parent.get("policy_bucket_id"),
             "parent_ev_pct": ev,
             "parent_joined_sample": joined_sample,
             "complete_flow_count": _safe_int(parent.get("complete_flow_count")),
@@ -2710,8 +3308,14 @@ def _positive_parent_diagnostics(report: dict[str, Any]) -> dict[str, Any]:
             sample_ready.append(item)
         if item["child_conflict_warning"]:
             conflicted += 1
-    positive.sort(key=lambda item: (item["parent_ev_pct"], item["parent_joined_sample"]), reverse=True)
-    sample_ready.sort(key=lambda item: (item["parent_ev_pct"], item["parent_joined_sample"]), reverse=True)
+    positive.sort(
+        key=lambda item: (item["parent_ev_pct"], item["parent_joined_sample"]),
+        reverse=True,
+    )
+    sample_ready.sort(
+        key=lambda item: (item["parent_ev_pct"], item["parent_joined_sample"]),
+        reverse=True,
+    )
     return {
         "positive_parent_count": len(positive),
         "positive_parent_sample_ready_count": len(sample_ready),
@@ -2742,7 +3346,9 @@ def _parent_level_counts(items: list[dict[str, Any]]) -> dict[str, dict[str, Any
     return counts
 
 
-def _select_parent_level(items: list[dict[str, Any]], report: dict[str, Any]) -> tuple[str, dict[str, dict[str, Any]], dict[str, Any]]:
+def _select_parent_level(
+    items: list[dict[str, Any]], report: dict[str, Any]
+) -> tuple[str, dict[str, dict[str, Any]], dict[str, Any]]:
     level_counts = _parent_level_counts(items)
     deterministic_level = ""
     for level in LIFECYCLE_FLOW_PARENT_LEVEL_ORDER:
@@ -2753,13 +3359,24 @@ def _select_parent_level(items: list[dict[str, Any]], report: dict[str, Any]) ->
         deterministic_level = min(
             LIFECYCLE_FLOW_PARENT_LEVEL_ORDER,
             key=lambda level: (
-                abs(int(level_counts[level]["parent_count"]) - LIFECYCLE_FLOW_PARENT_TARGET_MID),
+                abs(
+                    int(level_counts[level]["parent_count"])
+                    - LIFECYCLE_FLOW_PARENT_TARGET_MID
+                ),
                 int(level_counts[level]["parent_count"]),
             ),
         )
     selected_level = deterministic_level
-    ai_review = report.get("ai_two_pass_review") if isinstance(report.get("ai_two_pass_review"), dict) else {}
-    parent_reviews = ai_review.get("parent_granularity_reviews") if isinstance(ai_review.get("parent_granularity_reviews"), list) else []
+    ai_review = (
+        report.get("ai_two_pass_review")
+        if isinstance(report.get("ai_two_pass_review"), dict)
+        else {}
+    )
+    parent_reviews = (
+        ai_review.get("parent_granularity_reviews")
+        if isinstance(ai_review.get("parent_granularity_reviews"), list)
+        else []
+    )
     ai_choice: dict[str, Any] = {}
     for review in parent_reviews:
         if not isinstance(review, dict):
@@ -2784,7 +3401,12 @@ def _select_parent_level(items: list[dict[str, Any]], report: dict[str, Any]) ->
                     "reason": "preferred_level_outside_target_range",
                 }
             break
-        if decision in {"taxonomy_gap", "source_quality_blocker", "code_patch_required", "accept_selected_level"}:
+        if decision in {
+            "taxonomy_gap",
+            "source_quality_blocker",
+            "code_patch_required",
+            "accept_selected_level",
+        }:
             ai_choice = {
                 "decision": decision,
                 "preferred_level": preferred if preferred in level_counts else None,
@@ -2848,7 +3470,9 @@ def _absorbed_dimensions(items: list[dict[str, Any]]) -> dict[str, list[str]]:
     return {key: sorted(values) for key, values in sorted(dimensions.items())}
 
 
-def _apply_lifecycle_flow_parent_absorption(report: dict[str, Any], candidates: list[dict[str, Any]]) -> None:
+def _apply_lifecycle_flow_parent_absorption(
+    report: dict[str, Any], candidates: list[dict[str, Any]]
+) -> None:
     lifecycle_flow_items = [
         item
         for item in candidates
@@ -2865,13 +3489,19 @@ def _apply_lifecycle_flow_parent_absorption(report: dict[str, Any], candidates: 
         "ai_parent_granularity_choice": {},
     }
     if lifecycle_flow_items:
-        selected_level, level_counts, level_metadata = _select_parent_level(lifecycle_flow_items, report)
+        selected_level, level_counts, level_metadata = _select_parent_level(
+            lifecycle_flow_items, report
+        )
     groups: dict[str, list[dict[str, Any]]] = {}
     for item in lifecycle_flow_items:
-        groups.setdefault(_lifecycle_flow_parent_key(item, selected_level), []).append(item)
+        groups.setdefault(_lifecycle_flow_parent_key(item, selected_level), []).append(
+            item
+        )
     summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
     summary["selected_parent_level"] = selected_level
-    summary["deterministic_selected_parent_level"] = level_metadata.get("deterministic_selected_parent_level")
+    summary["deterministic_selected_parent_level"] = level_metadata.get(
+        "deterministic_selected_parent_level"
+    )
     summary["parent_level_candidate_counts"] = level_counts
     summary["target_parent_min"] = LIFECYCLE_FLOW_PARENT_TARGET_MIN
     summary["target_parent_max"] = LIFECYCLE_FLOW_PARENT_TARGET_MAX
@@ -2879,39 +3509,74 @@ def _apply_lifecycle_flow_parent_absorption(report: dict[str, Any], candidates: 
     parent_granularity_pass = parent_granularity_status == "target_pass"
     summary["parent_granularity_status"] = parent_granularity_status
     if level_metadata.get("ai_parent_granularity_choice"):
-        summary["ai_parent_granularity_choice"] = level_metadata.get("ai_parent_granularity_choice")
+        summary["ai_parent_granularity_choice"] = level_metadata.get(
+            "ai_parent_granularity_choice"
+        )
     report["summary"] = summary
     report["parent_bucket_summaries"] = []
 
     for parent_id, items in groups.items():
-        parent_joined_sample = sum(_safe_int(item.get("joined_sample")) for item in items)
-        parent_real_submitted_count = sum(_safe_int(item.get("real_submitted_count")) for item in items)
-        parent_real_joined_sample = sum(_safe_int(item.get("real_joined_sample")) for item in items)
-        parent_sim_probe_joined_sample = sum(_safe_int(item.get("sim_probe_joined_sample")) for item in items)
+        parent_joined_sample = sum(
+            _safe_int(item.get("joined_sample")) for item in items
+        )
+        parent_real_submitted_count = sum(
+            _safe_int(item.get("real_submitted_count")) for item in items
+        )
+        parent_real_joined_sample = sum(
+            _safe_int(item.get("real_joined_sample")) for item in items
+        )
+        parent_sim_probe_joined_sample = sum(
+            _safe_int(item.get("sim_probe_joined_sample")) for item in items
+        )
         parent_primary_sample_book = (
             "real"
             if parent_real_joined_sample >= LIFECYCLE_FLOW_PARENT_MIN_JOINED_SAMPLE
-            else "sim_probe"
-            if parent_sim_probe_joined_sample > 0
-            else "real_outcome_pending"
-            if parent_real_submitted_count > 0
-            else "none"
+            else (
+                "sim_probe"
+                if parent_sim_probe_joined_sample > 0
+                else (
+                    "real_outcome_pending"
+                    if parent_real_submitted_count > 0
+                    else "none"
+                )
+            )
         )
-        absorbed_sample_count = sum(_safe_int(item.get("sample"), _safe_int(item.get("joined_sample"))) for item in items)
-        complete_flow_count = sum(_safe_int(item.get("complete_flow_count")) for item in items)
-        parent_ev = _weighted_average(items, "source_quality_adjusted_ev_pct", "joined_sample")
+        absorbed_sample_count = sum(
+            _safe_int(item.get("sample"), _safe_int(item.get("joined_sample")))
+            for item in items
+        )
+        complete_flow_count = sum(
+            _safe_int(item.get("complete_flow_count")) for item in items
+        )
+        parent_ev = _weighted_average(
+            items, "source_quality_adjusted_ev_pct", "joined_sample"
+        )
         child_evs = [
             value
-            for value in (_safe_float(item.get("source_quality_adjusted_ev_pct"), None) for item in items)
+            for value in (
+                _safe_float(item.get("source_quality_adjusted_ev_pct"), None)
+                for item in items
+            )
             if value is not None
         ]
-        child_ev_dispersion = round(max(child_evs) - min(child_evs), 6) if len(child_evs) >= 2 else 0.0
-        quality_pass = all(str(item.get("source_quality_gate") or "") == "pass" for item in items)
+        child_ev_dispersion = (
+            round(max(child_evs) - min(child_evs), 6) if len(child_evs) >= 2 else 0.0
+        )
+        quality_pass = all(
+            str(item.get("source_quality_gate") or "") == "pass" for item in items
+        )
         group_live_blocked = any(_ai_explicitly_blocks_live(item) for item in items)
-        ai_review = report.get("ai_two_pass_review") if isinstance(report.get("ai_two_pass_review"), dict) else {}
+        ai_review = (
+            report.get("ai_two_pass_review")
+            if isinstance(report.get("ai_two_pass_review"), dict)
+            else {}
+        )
         ai_review_status = str(ai_review.get("status") or "")
         tier2_parent_pass = not ai_review_status or ai_review_status == "parsed"
-        route_pass = any(str(item.get("recommended_route") or "") == "candidate_recovery_or_relax" for item in items)
+        route_pass = any(
+            str(item.get("recommended_route") or "") == "candidate_recovery_or_relax"
+            for item in items
+        )
         parent_deterministic_floor_passed = (
             quality_pass
             and parent_granularity_pass
@@ -2922,7 +3587,9 @@ def _apply_lifecycle_flow_parent_absorption(report: dict[str, Any], candidates: 
             and parent_real_joined_sample >= LIFECYCLE_FLOW_PARENT_MIN_JOINED_SAMPLE
             and primary_ev_uplift_passes(parent_ev, positive_edge=True)
         )
-        parent_live_floor_passed = parent_deterministic_floor_passed and tier2_parent_pass
+        parent_live_floor_passed = (
+            parent_deterministic_floor_passed and tier2_parent_pass
+        )
         representative = None
         if parent_deterministic_floor_passed:
             eligible = [
@@ -2937,15 +3604,24 @@ def _apply_lifecycle_flow_parent_absorption(report: dict[str, Any], candidates: 
                     eligible,
                     key=lambda item: (
                         -_safe_int(item.get("joined_sample")),
-                        -(_safe_float(item.get("source_quality_adjusted_ev_pct"), None) or -999.0),
+                        -(
+                            _safe_float(
+                                item.get("source_quality_adjusted_ev_pct"), None
+                            )
+                            or -999.0
+                        ),
                         str(item.get("bucket_id") or ""),
                     ),
                 )[0]
 
-        child_bucket_ids = [str(item.get("bucket_id") or "") for item in items if item.get("bucket_id")]
+        child_bucket_ids = [
+            str(item.get("bucket_id") or "") for item in items if item.get("bucket_id")
+        ]
         dominant_patterns = _dominant_child_patterns(items)
         absorbed_dimensions = _absorbed_dimensions(items)
-        conflict_warning = child_ev_dispersion >= LIFECYCLE_FLOW_PARENT_CONFLICT_EV_DELTA_PCT
+        conflict_warning = (
+            child_ev_dispersion >= LIFECYCLE_FLOW_PARENT_CONFLICT_EV_DELTA_PCT
+        )
         conflicting_patterns = [
             pattern
             for pattern in dominant_patterns
@@ -2953,8 +3629,16 @@ def _apply_lifecycle_flow_parent_absorption(report: dict[str, Any], candidates: 
                 parent_ev is not None
                 and pattern.get("source_quality_adjusted_ev_pct") is not None
                 and (
-                    (parent_ev >= 0 and float(pattern.get("source_quality_adjusted_ev_pct") or 0.0) < 0)
-                    or (parent_ev < 0 and float(pattern.get("source_quality_adjusted_ev_pct") or 0.0) >= 0)
+                    (
+                        parent_ev >= 0
+                        and float(pattern.get("source_quality_adjusted_ev_pct") or 0.0)
+                        < 0
+                    )
+                    or (
+                        parent_ev < 0
+                        and float(pattern.get("source_quality_adjusted_ev_pct") or 0.0)
+                        >= 0
+                    )
                 )
             )
         ]
@@ -2992,7 +3676,10 @@ def _apply_lifecycle_flow_parent_absorption(report: dict[str, Any], candidates: 
             child_same_direction = (
                 parent_ev is not None
                 and child_ev is not None
-                and ((parent_ev >= 0 and child_ev >= 0) or (parent_ev < 0 and child_ev < 0))
+                and (
+                    (parent_ev >= 0 and child_ev >= 0)
+                    or (parent_ev < 0 and child_ev < 0)
+                )
             )
             item["policy_bucket_id"] = parent_id
             item["canonical_parent_bucket"] = parent_id
@@ -3000,7 +3687,9 @@ def _apply_lifecycle_flow_parent_absorption(report: dict[str, Any], candidates: 
             item["parent_granularity_status"] = parent_granularity_status
             item["parent_granularity_floor_passed"] = parent_granularity_pass
             item["parent_level_candidate_counts"] = level_counts
-            item["lifecycle_flow_parent_dimensions"] = _lifecycle_flow_parent_dimensions(item)
+            item["lifecycle_flow_parent_dimensions"] = (
+                _lifecycle_flow_parent_dimensions(item)
+            )
             item["parent_joined_sample"] = parent_joined_sample
             item["parent_real_submitted_count"] = parent_real_submitted_count
             item["parent_real_joined_sample"] = parent_real_joined_sample
@@ -3017,7 +3706,9 @@ def _apply_lifecycle_flow_parent_absorption(report: dict[str, Any], candidates: 
             item["conflicting_child_patterns"] = conflicting_patterns
             item["child_ev_dispersion_pct"] = child_ev_dispersion
             item["child_conflict_warning"] = conflict_warning
-            item["exclusion_dimension_candidate"] = conflict_warning and not child_same_direction
+            item["exclusion_dimension_candidate"] = (
+                conflict_warning and not child_same_direction
+            )
             item["exclusion_dimension_candidates"] = conflicting_patterns
             item["dimension_filters"] = _lifecycle_flow_parent_dimensions(item)
             item["child_live_authority_allowed"] = (
@@ -3025,37 +3716,56 @@ def _apply_lifecycle_flow_parent_absorption(report: dict[str, Any], candidates: 
                 and child_same_direction
                 and parent_live_floor_passed
             )
-            if not tier2_parent_pass and parent_deterministic_floor_passed and item is representative:
+            if (
+                not tier2_parent_pass
+                and parent_deterministic_floor_passed
+                and item is representative
+            ):
                 item["classification_state"] = "runtime_blocked_contract_gap"
                 item["live_auto_apply_family"] = GREENFIELD_REAL_ENV_FAMILY
                 item["transition_target"] = "source_only_keep_collecting"
-                item["grade_reason"] = "parent_lifecycle_flow_bucket_waiting_for_parsed_tier2_review"
-                item["recommended_resolution"] = "retry_tier2_review_before_pre_final_auto_apply"
+                item["grade_reason"] = (
+                    "parent_lifecycle_flow_bucket_waiting_for_parsed_tier2_review"
+                )
+                item["recommended_resolution"] = (
+                    "retry_tier2_review_before_pre_final_auto_apply"
+                )
                 item["runtime_effect"] = False
                 item["broker_order_forbidden"] = True
                 item["allowed_runtime_apply"] = False
-                item["ai_tier2_blocked_reason"] = tier2_fail_closed_reason(ai_review_status)
+                item["ai_tier2_blocked_reason"] = tier2_fail_closed_reason(
+                    ai_review_status
+                )
             elif parent_live_floor_passed and item is representative:
                 item["classification_state"] = "live_auto_apply_ready"
                 item["live_auto_apply_family"] = GREENFIELD_REAL_ENV_FAMILY
                 item["transition_target"] = "bounded_live_canary"
-                item["grade_reason"] = "parent_lifecycle_flow_bucket_sample_and_ev_floor_passed"
-                item["recommended_resolution"] = "preopen_live_auto_bridge_parent_policy"
+                item["grade_reason"] = (
+                    "parent_lifecycle_flow_bucket_sample_and_ev_floor_passed"
+                )
+                item["recommended_resolution"] = (
+                    "preopen_live_auto_bridge_parent_policy"
+                )
             elif str(item.get("classification_state") or "") == "live_auto_apply_ready":
                 item["classification_state"] = "source_only_keep_collecting"
                 item["live_auto_apply_family"] = None
                 item["transition_target"] = "source_only_keep_collecting"
-                item["grade_reason"] = "child_combo_absorbed_into_parent_policy_not_standalone_live_authority"
+                item["grade_reason"] = (
+                    "child_combo_absorbed_into_parent_policy_not_standalone_live_authority"
+                )
                 item["recommended_resolution"] = "absorbed_into_parent_policy"
             elif parent_live_floor_passed:
                 item["recommended_resolution"] = "absorbed_into_parent_live_policy"
             _normalize_candidate_runtime_metadata(item)
             if (
-                str(item.get("classification_state") or "") == "runtime_blocked_contract_gap"
+                str(item.get("classification_state") or "")
+                == "runtime_blocked_contract_gap"
                 and previous_live_family
             ):
                 item["live_auto_apply_family"] = previous_live_family
-            item["source_bucket_kind"] = _source_bucket_kind(str(item.get("classification_state") or ""), item)
+            item["source_bucket_kind"] = _source_bucket_kind(
+                str(item.get("classification_state") or ""), item
+            )
     report["parent_bucket_summaries"].sort(
         key=lambda item: (
             -_safe_int(item.get("parent_joined_sample")),
@@ -3065,15 +3775,24 @@ def _apply_lifecycle_flow_parent_absorption(report: dict[str, Any], candidates: 
     _apply_ldm_refinement_pressure(report, summary)
     active_seeds = _build_active_sim_priority_seeds(report)
     report["active_sim_priority_seeds"] = active_seeds
-    active_seed_counts = Counter(str(item.get("status") or "unknown") for item in active_seeds)
+    active_seed_counts = Counter(
+        str(item.get("status") or "unknown") for item in active_seeds
+    )
     active_seed_taxonomy_counts = Counter(
-        str((item.get("entry_source_taxonomy_contract") or {}).get("contract_state") or "unknown")
+        str(
+            (item.get("entry_source_taxonomy_contract") or {}).get("contract_state")
+            or "unknown"
+        )
         for item in active_seeds
         if isinstance(item, dict)
     )
     summary["active_sim_priority_seed_count"] = len(active_seeds)
-    summary["active_sim_priority_seed_status_counts"] = dict(sorted(active_seed_counts.items()))
-    summary["active_sim_priority_active_seed_count"] = active_seed_counts.get("active", 0)
+    summary["active_sim_priority_seed_status_counts"] = dict(
+        sorted(active_seed_counts.items())
+    )
+    summary["active_sim_priority_active_seed_count"] = active_seed_counts.get(
+        "active", 0
+    )
     summary["active_sim_priority_positive_seed_count"] = sum(
         1
         for item in active_seeds
@@ -3090,8 +3809,8 @@ def _apply_lifecycle_flow_parent_absorption(report: dict[str, Any], candidates: 
     summary["active_sim_priority_entry_source_taxonomy_contract_counts"] = dict(
         sorted(active_seed_taxonomy_counts.items())
     )
-    summary["active_sim_priority_pending_taxonomy_contract_count"] = active_seed_taxonomy_counts.get(
-        "new_axis_pending_taxonomy", 0
+    summary["active_sim_priority_pending_taxonomy_contract_count"] = (
+        active_seed_taxonomy_counts.get("new_axis_pending_taxonomy", 0)
     )
     summary.update(_positive_parent_diagnostics(report))
     summary.update(_active_sim_priority_diagnostics(report, active_seeds))
@@ -3102,12 +3821,22 @@ def _source_contract_snapshot(ldm: dict[str, Any]) -> dict[str, Any]:
     source_map = ldm.get("sources") if isinstance(ldm.get("sources"), dict) else {}
     sections: dict[str, Any] = {}
     for section_name in SOURCE_CONTRACT_SECTION_SCHEMAS:
-        section = ldm.get(section_name) if isinstance(ldm.get(section_name), dict) else {}
-        buckets = section.get("buckets") if isinstance(section.get("buckets"), list) else []
+        section = (
+            ldm.get(section_name) if isinstance(ldm.get(section_name), dict) else {}
+        )
+        buckets = (
+            section.get("buckets") if isinstance(section.get("buckets"), list) else []
+        )
         declared = SOURCE_CONTRACT_SECTION_SCHEMAS[section_name]
-        field_names: set[str] = set(str(item) for item in declared.get("bucket_fields", ()))
-        bucket_types: set[str] = set(str(item) for item in declared.get("bucket_types", ()))
-        dimension_keys: set[str] = set(str(item) for item in declared.get("dimension_keys", ()))
+        field_names: set[str] = set(
+            str(item) for item in declared.get("bucket_fields", ())
+        )
+        bucket_types: set[str] = set(
+            str(item) for item in declared.get("bucket_types", ())
+        )
+        dimension_keys: set[str] = set(
+            str(item) for item in declared.get("dimension_keys", ())
+        )
         observed_field_names: set[str] = set()
         observed_bucket_types: set[str] = set()
         observed_dimension_keys: set[str] = set()
@@ -3116,7 +3845,9 @@ def _source_contract_snapshot(ldm: dict[str, Any]) -> dict[str, Any]:
                 continue
             item_fields = {str(key) for key in item}
             item_type = str(item.get("bucket_type") or "")
-            item_dimensions = set(_source_dimensions(item_type, str(item.get("bucket_key") or "")).keys())
+            item_dimensions = set(
+                _source_dimensions(item_type, str(item.get("bucket_key") or "")).keys()
+            )
             observed_field_names.update(item_fields)
             observed_bucket_types.add(item_type)
             observed_dimension_keys.update(item_dimensions)
@@ -3131,27 +3862,28 @@ def _source_contract_snapshot(ldm: dict[str, Any]) -> dict[str, Any]:
             "declared_bucket_fields": sorted(declared.get("bucket_fields", ())),
             "declared_dimension_keys": sorted(declared.get("dimension_keys", ())),
             "bucket_types": sorted(value for value in bucket_types if value),
-            "observed_bucket_types": sorted(value for value in observed_bucket_types if value),
+            "observed_bucket_types": sorted(
+                value for value in observed_bucket_types if value
+            ),
             "bucket_fields": sorted(field_names),
             "observed_bucket_fields": sorted(observed_field_names),
             "dimension_keys": sorted(dimension_keys),
             "observed_dimension_keys": sorted(observed_dimension_keys),
         }
-    policy_entries = ldm.get("policy_entries") if isinstance(ldm.get("policy_entries"), list) else []
+    policy_entries = (
+        ldm.get("policy_entries") if isinstance(ldm.get("policy_entries"), list) else []
+    )
     policy_fields = sorted(
-        {
-            str(key)
-            for item in policy_entries
-            if isinstance(item, dict)
-            for key in item
-        }
+        {str(key) for item in policy_entries if isinstance(item, dict) for key in item}
     )
     return {
         "schema_version": SOURCE_CONTRACT_SCHEMA_VERSION,
         "compare_policy": "declared_schema_plus_observed_samples",
         "source_keys": sorted(str(key) for key, value in source_map.items() if value),
         "sections": sections,
-        "policy_entry_count": len([item for item in policy_entries if isinstance(item, dict)]),
+        "policy_entry_count": len(
+            [item for item in policy_entries if isinstance(item, dict)]
+        ),
         "policy_fields": policy_fields,
     }
 
@@ -3163,18 +3895,32 @@ def _normalize_source_contract_for_compare(contract: dict[str, Any]) -> dict[str
     normalized["schema_version"] = SOURCE_CONTRACT_SCHEMA_VERSION
     normalized["compare_policy"] = "declared_schema_plus_observed_samples"
     source_keys = {
-        CANONICAL_PER_DATE_SOURCE_KEY if str(item) == LEGACY_DAILY_LDM_SOURCE_KEY else str(item)
+        (
+            CANONICAL_PER_DATE_SOURCE_KEY
+            if str(item) == LEGACY_DAILY_LDM_SOURCE_KEY
+            else str(item)
+        )
         for item in (normalized.get("source_keys") or [])
         if str(item)
     }
     normalized["source_keys"] = sorted(source_keys)
-    sections = normalized.get("sections") if isinstance(normalized.get("sections"), dict) else {}
+    sections = (
+        normalized.get("sections")
+        if isinstance(normalized.get("sections"), dict)
+        else {}
+    )
     normalized["sections"] = sections
     for section_name, declared in SOURCE_CONTRACT_SECTION_SCHEMAS.items():
-        section = sections.get(section_name) if isinstance(sections.get(section_name), dict) else {}
+        section = (
+            sections.get(section_name)
+            if isinstance(sections.get(section_name), dict)
+            else {}
+        )
         current_fields = set(str(item) for item in (section.get("bucket_fields") or []))
         current_types = set(str(item) for item in (section.get("bucket_types") or []))
-        current_dimensions = set(str(item) for item in (section.get("dimension_keys") or []))
+        current_dimensions = set(
+            str(item) for item in (section.get("dimension_keys") or [])
+        )
         section.update(
             {
                 "present": bool(section.get("present", True)),
@@ -3182,9 +3928,15 @@ def _normalize_source_contract_for_compare(contract: dict[str, Any]) -> dict[str
                 "declared_bucket_types": sorted(declared.get("bucket_types", ())),
                 "declared_bucket_fields": sorted(declared.get("bucket_fields", ())),
                 "declared_dimension_keys": sorted(declared.get("dimension_keys", ())),
-                "bucket_types": sorted(current_types | set(declared.get("bucket_types", ()))),
-                "bucket_fields": sorted(current_fields | set(declared.get("bucket_fields", ()))),
-                "dimension_keys": sorted(current_dimensions | set(declared.get("dimension_keys", ()))),
+                "bucket_types": sorted(
+                    current_types | set(declared.get("bucket_types", ()))
+                ),
+                "bucket_fields": sorted(
+                    current_fields | set(declared.get("bucket_fields", ()))
+                ),
+                "dimension_keys": sorted(
+                    current_dimensions | set(declared.get("dimension_keys", ()))
+                ),
             }
         )
         section.setdefault("bucket_count", 0)
@@ -3195,16 +3947,24 @@ def _normalize_source_contract_for_compare(contract: dict[str, Any]) -> dict[str
     return normalized
 
 
-def _compare_source_contracts(current: dict[str, Any], previous: dict[str, Any]) -> list[dict[str, Any]]:
+def _compare_source_contracts(
+    current: dict[str, Any], previous: dict[str, Any]
+) -> list[dict[str, Any]]:
     if not previous:
         return []
-    raw_current_sources = {str(item) for item in (current.get("source_keys") or []) if str(item)}
-    raw_previous_sources = {str(item) for item in (previous.get("source_keys") or []) if str(item)}
+    raw_current_sources = {
+        str(item) for item in (current.get("source_keys") or []) if str(item)
+    }
+    raw_previous_sources = {
+        str(item) for item in (previous.get("source_keys") or []) if str(item)
+    }
     current = _normalize_source_contract_for_compare(current)
     previous = _normalize_source_contract_for_compare(previous)
     changes: list[dict[str, Any]] = []
 
-    def _add(change_type: str, severity: str, subject: str, detail: dict[str, Any]) -> None:
+    def _add(
+        change_type: str, severity: str, subject: str, detail: dict[str, Any]
+    ) -> None:
         changes.append(
             {
                 "change_type": change_type,
@@ -3215,8 +3975,14 @@ def _compare_source_contracts(current: dict[str, Any], previous: dict[str, Any])
             }
         )
 
-    for contract_side, raw_sources in (("current", raw_current_sources), ("previous", raw_previous_sources)):
-        if LEGACY_DAILY_LDM_SOURCE_KEY in raw_sources and CANONICAL_PER_DATE_SOURCE_KEY in raw_sources:
+    for contract_side, raw_sources in (
+        ("current", raw_current_sources),
+        ("previous", raw_previous_sources),
+    ):
+        if (
+            LEGACY_DAILY_LDM_SOURCE_KEY in raw_sources
+            and CANONICAL_PER_DATE_SOURCE_KEY in raw_sources
+        ):
             _add(
                 "source_alias_duplicate",
                 "warning",
@@ -3235,23 +4001,65 @@ def _compare_source_contracts(current: dict[str, Any], previous: dict[str, Any])
     for key in sorted(previous_sources - current_sources):
         _add("source_removed", "fail", key, {"source_key": key})
 
-    current_sections = current.get("sections") if isinstance(current.get("sections"), dict) else {}
-    previous_sections = previous.get("sections") if isinstance(previous.get("sections"), dict) else {}
+    current_sections = (
+        current.get("sections") if isinstance(current.get("sections"), dict) else {}
+    )
+    previous_sections = (
+        previous.get("sections") if isinstance(previous.get("sections"), dict) else {}
+    )
     for section_name in sorted(set(current_sections) | set(previous_sections)):
-        current_section = current_sections.get(section_name) if isinstance(current_sections.get(section_name), dict) else {}
-        previous_section = previous_sections.get(section_name) if isinstance(previous_sections.get(section_name), dict) else {}
-        for field_name in sorted(set(current_section.get("bucket_fields") or []) - set(previous_section.get("bucket_fields") or [])):
+        current_section = (
+            current_sections.get(section_name)
+            if isinstance(current_sections.get(section_name), dict)
+            else {}
+        )
+        previous_section = (
+            previous_sections.get(section_name)
+            if isinstance(previous_sections.get(section_name), dict)
+            else {}
+        )
+        for field_name in sorted(
+            set(current_section.get("bucket_fields") or [])
+            - set(previous_section.get("bucket_fields") or [])
+        ):
             _add("bucket_field_added", "warning", section_name, {"field": field_name})
-        for field_name in sorted(set(previous_section.get("bucket_fields") or []) - set(current_section.get("bucket_fields") or [])):
+        for field_name in sorted(
+            set(previous_section.get("bucket_fields") or [])
+            - set(current_section.get("bucket_fields") or [])
+        ):
             _add("bucket_field_removed", "fail", section_name, {"field": field_name})
-        for bucket_type in sorted(set(current_section.get("bucket_types") or []) - set(previous_section.get("bucket_types") or [])):
-            _add("bucket_type_added", "warning", section_name, {"bucket_type": bucket_type})
-        for bucket_type in sorted(set(previous_section.get("bucket_types") or []) - set(current_section.get("bucket_types") or [])):
-            _add("bucket_type_removed", "warning", section_name, {"bucket_type": bucket_type})
-        for key in sorted(set(current_section.get("dimension_keys") or []) - set(previous_section.get("dimension_keys") or [])):
+        for bucket_type in sorted(
+            set(current_section.get("bucket_types") or [])
+            - set(previous_section.get("bucket_types") or [])
+        ):
+            _add(
+                "bucket_type_added",
+                "warning",
+                section_name,
+                {"bucket_type": bucket_type},
+            )
+        for bucket_type in sorted(
+            set(previous_section.get("bucket_types") or [])
+            - set(current_section.get("bucket_types") or [])
+        ):
+            _add(
+                "bucket_type_removed",
+                "warning",
+                section_name,
+                {"bucket_type": bucket_type},
+            )
+        for key in sorted(
+            set(current_section.get("dimension_keys") or [])
+            - set(previous_section.get("dimension_keys") or [])
+        ):
             _add("dimension_key_added", "warning", section_name, {"dimension_key": key})
-        for key in sorted(set(previous_section.get("dimension_keys") or []) - set(current_section.get("dimension_keys") or [])):
-            _add("dimension_key_removed", "warning", section_name, {"dimension_key": key})
+        for key in sorted(
+            set(previous_section.get("dimension_keys") or [])
+            - set(current_section.get("dimension_keys") or [])
+        ):
+            _add(
+                "dimension_key_removed", "warning", section_name, {"dimension_key": key}
+            )
     return changes
 
 
@@ -3263,7 +4071,9 @@ def _relation_for(bucket_type: str, bucket_key: str) -> str:
     return "existing_bucket_refinement"
 
 
-def _recommended_action(route: str, *, stage: str = "", bucket_type: str = "", ev: float | None = None) -> str:
+def _recommended_action(
+    route: str, *, stage: str = "", bucket_type: str = "", ev: float | None = None
+) -> str:
     if (
         stage == "scale_in"
         and bucket_type == "blocker_reason"
@@ -3286,14 +4096,24 @@ def _recommended_action(route: str, *, stage: str = "", bucket_type: str = "", e
 def _live_family_for(stage: str, bucket_type: str, bucket_key: str) -> str | None:
     if stage == "lifecycle_flow" and bucket_type == "combo_lifecycle_flow":
         return GREENFIELD_REAL_ENV_FAMILY
-    if stage == "scale_in" and bucket_type == "arm" and bucket_key in {"PYRAMID", "AVG_DOWN"}:
+    if (
+        stage == "scale_in"
+        and bucket_type == "arm"
+        and bucket_key in {"PYRAMID", "AVG_DOWN"}
+    ):
         return SCALE_IN_LIVE_AUTO_FAMILY
-    if stage == "scale_in" and bucket_type == "blocker_namespace" and bucket_key == "AVG_DOWN_ONLY":
+    if (
+        stage == "scale_in"
+        and bucket_type == "blocker_namespace"
+        and bucket_key == "AVG_DOWN_ONLY"
+    ):
         return SCALE_IN_LIVE_AUTO_FAMILY
     return None
 
 
-def _is_counterfactual_bucket(bucket_type: str, bucket_key: str, dimensions: dict[str, str]) -> bool:
+def _is_counterfactual_bucket(
+    bucket_type: str, bucket_key: str, dimensions: dict[str, str]
+) -> bool:
     haystack = " ".join([bucket_type, bucket_key, *dimensions.values()]).lower()
     return any(token in haystack for token in COUNTERFACTUAL_SOURCE_TOKENS)
 
@@ -3321,7 +4141,11 @@ def _evidence_grade_for_bucket(stage: str, bucket: dict[str, Any]) -> dict[str, 
     ):
         return {
             "evidence_grade": EVIDENCE_GRADE_MIXED_SOURCE,
-            "transition_target": "sim_lifecycle_handoff" if (join_rate or 0.0) >= 0.2 else "source_only_keep_collecting",
+            "transition_target": (
+                "sim_lifecycle_handoff"
+                if (join_rate or 0.0) >= 0.2
+                else "source_only_keep_collecting"
+            ),
             "grade_reason": "source_mix_requires_child_source_stage_split_before_live",
             "source_stage_split_required": True,
         }
@@ -3361,13 +4185,14 @@ def _real_primary_bucket_ready(bucket: dict[str, Any]) -> bool:
     real_joined = _safe_int(bucket.get("real_joined_sample"), 0)
     parent_primary_book = str(bucket.get("parent_primary_sample_book") or "").strip()
     parent_real_joined = _safe_int(bucket.get("parent_real_joined_sample"), 0)
-    return (
-        (primary_book == "real" and real_joined >= 10)
-        or (parent_primary_book == "real" and parent_real_joined >= 10)
+    return (primary_book == "real" and real_joined >= 10) or (
+        parent_primary_book == "real" and parent_real_joined >= 10
     )
 
 
-def _classify_bucket(stage: str, bucket: dict[str, Any]) -> tuple[str, str | None, dict[str, Any]]:
+def _classify_bucket(
+    stage: str, bucket: dict[str, Any]
+) -> tuple[str, str | None, dict[str, Any]]:
     bucket_type = str(bucket.get("bucket_type") or "")
     bucket_key = str(bucket.get("bucket_key") or "")
     route = str(bucket.get("recommended_route") or "")
@@ -3392,21 +4217,32 @@ def _classify_bucket(stage: str, bucket: dict[str, Any]) -> tuple[str, str | Non
             elif primary_metric != "incremental_notional_ev_pct":
                 reason = "scale_in_incremental_v2_primary_metric_missing"
             else:
-                reason = str(bucket.get("runtime_authority_block_reason") or "scale_in_runtime_authority_not_ready")
-            return "source_only_keep_collecting", None, {
-                **grade,
-                "transition_target": "source_only_keep_collecting",
-                "grade_reason": reason,
-            }
+                reason = str(
+                    bucket.get("runtime_authority_block_reason")
+                    or "scale_in_runtime_authority_not_ready"
+                )
+            return (
+                "source_only_keep_collecting",
+                None,
+                {
+                    **grade,
+                    "transition_target": "source_only_keep_collecting",
+                    "grade_reason": reason,
+                },
+            )
     if quality != "pass":
         return "source_only_keep_collecting", None, grade
     ev = _safe_float(bucket.get("source_quality_adjusted_ev_pct"), None)
     if stage in {"holding", "exit"}:
-        return "source_only_keep_collecting", None, {
-            **grade,
-            "transition_target": "child_evidence_for_lifecycle_flow_only",
-            "grade_reason": "stage_only_holding_exit_bucket_cannot_promote_without_parent_lifecycle_flow",
-        }
+        return (
+            "source_only_keep_collecting",
+            None,
+            {
+                **grade,
+                "transition_target": "child_evidence_for_lifecycle_flow_only",
+                "grade_reason": "stage_only_holding_exit_bucket_cannot_promote_without_parent_lifecycle_flow",
+            },
+        )
     if stage == "lifecycle_flow" and bucket_type == "combo_lifecycle_flow":
         if (
             route == "candidate_recovery_or_relax"
@@ -3422,11 +4258,15 @@ def _classify_bucket(stage: str, bucket: dict[str, Any]) -> tuple[str, str | Non
             and ev is not None
             and ev > 0
         ):
-            return LIFECYCLE_FLOW_SIM_PROBE_STATE, None, {
-                **grade,
-                "transition_target": "lifecycle_flow_sim_probe_handoff",
-                "grade_reason": "complete_positive_lifecycle_flow_sim_probe_without_live_auto_contract",
-            }
+            return (
+                LIFECYCLE_FLOW_SIM_PROBE_STATE,
+                None,
+                {
+                    **grade,
+                    "transition_target": "lifecycle_flow_sim_probe_handoff",
+                    "grade_reason": "complete_positive_lifecycle_flow_sim_probe_without_live_auto_contract",
+                },
+            )
         if _sim_handoff_allowed(bucket, grade):
             return "sim_auto_approved", None, grade
         return "source_only_keep_collecting", None, grade
@@ -3435,13 +4275,23 @@ def _classify_bucket(stage: str, bucket: dict[str, Any]) -> tuple[str, str | Non
         and bucket_type == "combo_entry_spot"
         and bucket_key == ENTRY_LIVE_AUTO_BUCKET_KEY
     ):
-        return ENTRY_ONLY_BRIDGE_METADATA_STATE, None, {
-            **grade,
-            "transition_target": "entry_dimension_provenance_only",
-            "grade_reason": "entry_wait6579_bridge_metadata_not_complete_lifecycle_bucket",
-        }
-    if str(grade.get("evidence_grade") or "") in {EVIDENCE_GRADE_2_COUNTERFACTUAL, EVIDENCE_GRADE_MIXED_SOURCE}:
-        if route in {"candidate_recovery_or_relax", "candidate_tighten_or_exclude"} and _sim_handoff_allowed(bucket, grade):
+        return (
+            ENTRY_ONLY_BRIDGE_METADATA_STATE,
+            None,
+            {
+                **grade,
+                "transition_target": "entry_dimension_provenance_only",
+                "grade_reason": "entry_wait6579_bridge_metadata_not_complete_lifecycle_bucket",
+            },
+        )
+    if str(grade.get("evidence_grade") or "") in {
+        EVIDENCE_GRADE_2_COUNTERFACTUAL,
+        EVIDENCE_GRADE_MIXED_SOURCE,
+    }:
+        if route in {
+            "candidate_recovery_or_relax",
+            "candidate_tighten_or_exclude",
+        } and _sim_handoff_allowed(bucket, grade):
             return "sim_auto_approved", None, grade
         return "source_only_keep_collecting", None, grade
     if (
@@ -3453,8 +4303,14 @@ def _classify_bucket(stage: str, bucket: dict[str, Any]) -> tuple[str, str | Non
         return "live_auto_apply_ready", live_family, grade
     if "unknown" in bucket_key:
         return (
-            "entry_only_source_candidate" if stage == "entry" else "source_only_keep_collecting"
-        ), None, grade
+            (
+                "entry_only_source_candidate"
+                if stage == "entry"
+                else "source_only_keep_collecting"
+            ),
+            None,
+            grade,
+        )
     if route in {"candidate_recovery_or_relax", "candidate_tighten_or_exclude"}:
         if stage == "entry":
             return "entry_only_sim_auto_approved", None, grade
@@ -3471,7 +4327,9 @@ def _candidate_from_bucket(stage: str, bucket: dict[str, Any]) -> dict[str, Any]
     source_bucket_id = _stable_source_bucket_id(stage, bucket_type, bucket_key)
     joined_sample = _safe_int(bucket.get("joined_sample"))
     sample = _safe_int(bucket.get("sample"), joined_sample)
-    source_dimensions = _candidate_source_dimensions(stage, bucket_type, bucket_key, bucket)
+    source_dimensions = _candidate_source_dimensions(
+        stage, bucket_type, bucket_key, bucket
+    )
     taxonomy = normalize_lifecycle_bucket(
         stage=stage,
         bucket_type=bucket_type,
@@ -3521,18 +4379,28 @@ def _candidate_from_bucket(stage: str, bucket: dict[str, Any]) -> dict[str, Any]
         bucket=bucket,
     ):
         source_dimension_gap = "unknown_source_dimensions"
-    runtime_apply_allowed = state == "live_auto_apply_ready" and not lifecycle_flow_source_only_blocker
-    runtime_metadata_state = state if not lifecycle_flow_source_only_blocker else "source_only_keep_collecting"
-    review_category, review_sub_state = _review_category_for_state(runtime_metadata_state)
-    flow_transition_state, flow_transition_blocker, conversion_lane_hint = _flow_sim_transition_state(
-        state,
-        {
-            **bucket,
-            "stage": stage,
-            "bucket_type": bucket_type,
-            "bucket_key": bucket_key,
-        },
-        grade,
+    runtime_apply_allowed = (
+        state == "live_auto_apply_ready" and not lifecycle_flow_source_only_blocker
+    )
+    runtime_metadata_state = (
+        state
+        if not lifecycle_flow_source_only_blocker
+        else "source_only_keep_collecting"
+    )
+    review_category, review_sub_state = _review_category_for_state(
+        runtime_metadata_state
+    )
+    flow_transition_state, flow_transition_blocker, conversion_lane_hint = (
+        _flow_sim_transition_state(
+            state,
+            {
+                **bucket,
+                "stage": stage,
+                "bucket_type": bucket_type,
+                "bucket_key": bucket_key,
+            },
+            grade,
+        )
     )
     return {
         "bucket_id": bucket_id,
@@ -3548,13 +4416,18 @@ def _candidate_from_bucket(stage: str, bucket: dict[str, Any]) -> dict[str, Any]
         "classification_state": state,
         "live_auto_apply_family": live_family if runtime_apply_allowed else None,
         "evidence_grade": grade.get("evidence_grade"),
-        "transition_target": "bounded_live_canary" if runtime_apply_allowed else grade.get("transition_target"),
+        "transition_target": (
+            "bounded_live_canary"
+            if runtime_apply_allowed
+            else grade.get("transition_target")
+        ),
         "grade_reason": grade.get("grade_reason"),
         "flow_sim_transition_state": flow_transition_state,
         "flow_sim_transition_blocker": flow_transition_blocker,
         "conversion_lane_hint": conversion_lane_hint,
         "full_real_conversion_allowed": False,
-        "sim_lifecycle_handoff_allowed": state in SIM_APPROVAL_STATES and not lifecycle_flow_source_only_blocker,
+        "sim_lifecycle_handoff_allowed": state in SIM_APPROVAL_STATES
+        and not lifecycle_flow_source_only_blocker,
         "bounded_live_canary_allowed": runtime_apply_allowed,
         "source_stage_split_required": bool(grade.get("source_stage_split_required")),
         "archived_live_exception_reason": None,
@@ -3566,17 +4439,23 @@ def _candidate_from_bucket(stage: str, bucket: dict[str, Any]) -> dict[str, Any]
             and "unknown" in bucket_key
         ),
         "source_dimension_gap": source_dimension_gap,
-        "source_dimension_gap_provenance": _scale_in_ai_score_source_missing_provenance(bucket)
-        if source_dimension_gap == SCALE_IN_AI_SCORE_SOURCE_MISSING_GAP
-        else {},
+        "source_dimension_gap_provenance": (
+            _scale_in_ai_score_source_missing_provenance(bucket)
+            if source_dimension_gap == SCALE_IN_AI_SCORE_SOURCE_MISSING_GAP
+            else {}
+        ),
         "explicit_runtime_exclusion": lifecycle_flow_source_only_blocker,
         "source_only_explicit_exclusion": lifecycle_flow_source_only_blocker,
-        "runtime_exclusion_reason": "lifecycle_flow_incomplete_stage_contract"
-        if lifecycle_flow_source_only_blocker
-        else "",
-        "lifecycle_flow_contract_status": "source_only_blocked_incomplete_stage_contract"
-        if lifecycle_flow_source_only_blocker
-        else "",
+        "runtime_exclusion_reason": (
+            "lifecycle_flow_incomplete_stage_contract"
+            if lifecycle_flow_source_only_blocker
+            else ""
+        ),
+        "lifecycle_flow_contract_status": (
+            "source_only_blocked_incomplete_stage_contract"
+            if lifecycle_flow_source_only_blocker
+            else ""
+        ),
         "missing_lifecycle_flow_stage_keys": missing_lifecycle_flow_stage_keys,
         "source_dimensions": source_dimensions,
         "lifecycle_flow_bucket_id": bucket.get("lifecycle_flow_bucket_id"),
@@ -3604,7 +4483,9 @@ def _candidate_from_bucket(stage: str, bucket: dict[str, Any]) -> dict[str, Any]
         "missing_dimension_keys": taxonomy["missing_dimension_keys"],
         "deterministic_proposal": deterministic_proposal,
         "ai_inference_proposal": bucket.get("ai_inference_proposal") or {},
-        "ai_tier2_proposal": default_ai_tier2_proposal(bucket_id, deterministic_proposal),
+        "ai_tier2_proposal": default_ai_tier2_proposal(
+            bucket_id, deterministic_proposal
+        ),
         "ai_tier2_comparative_review": compare_taxonomy_proposals(
             bucket_id=bucket_id,
             deterministic_proposal=deterministic_proposal,
@@ -3618,8 +4499,12 @@ def _candidate_from_bucket(stage: str, bucket: dict[str, Any]) -> dict[str, Any]
         "sim_probe_joined_sample": _safe_int(bucket.get("sim_probe_joined_sample"), 0),
         "primary_sample_book": bucket.get("primary_sample_book") or "none",
         "join_rate": _safe_float(bucket.get("join_rate"), None),
-        "source_quality_adjusted_ev_pct": _safe_float(bucket.get("source_quality_adjusted_ev_pct"), None),
-        "equal_weight_avg_profit_pct": _safe_float(bucket.get("equal_weight_avg_profit_pct"), None),
+        "source_quality_adjusted_ev_pct": _safe_float(
+            bucket.get("source_quality_adjusted_ev_pct"), None
+        ),
+        "equal_weight_avg_profit_pct": _safe_float(
+            bucket.get("equal_weight_avg_profit_pct"), None
+        ),
         "diagnostic_win_rate": _safe_float(bucket.get("diagnostic_win_rate"), None),
         "mfe_10m_pct": _safe_float(bucket.get("mfe_10m_pct"), None),
         "mae_10m_pct": _safe_float(bucket.get("mae_10m_pct"), None),
@@ -3654,23 +4539,27 @@ def _candidate_from_bucket(stage: str, bucket: dict[str, Any]) -> dict[str, Any]
         "allowed_runtime_apply": runtime_apply_allowed,
         "decision_authority": _decision_authority_for_state(state),
         "runtime_effect": runtime_apply_allowed,
-        "runtime_effect_after_approval": _runtime_effect_after_approval_for_state(runtime_metadata_state),
+        "runtime_effect_after_approval": _runtime_effect_after_approval_for_state(
+            runtime_metadata_state
+        ),
         "auto_promotion_contract": {
             "state": _auto_promotion_contract_state_for_state(runtime_metadata_state),
             "tier2_required": runtime_apply_allowed,
             "tier2_policy": "fail_closed",
             "primary_ev_uplift_threshold_pct": 1.0,
             "deterministic_contract_required": runtime_apply_allowed,
-            "deterministic_contract_components": [
-                "source_quality_pass",
-                "sample_floor",
-                "primary_ev_uplift",
-                "env_mapping",
-                "runtime_hook",
-                "post_apply_attribution",
-            ]
-            if runtime_apply_allowed
-            else [],
+            "deterministic_contract_components": (
+                [
+                    "source_quality_pass",
+                    "sample_floor",
+                    "primary_ev_uplift",
+                    "env_mapping",
+                    "runtime_hook",
+                    "post_apply_attribution",
+                ]
+                if runtime_apply_allowed
+                else []
+            ),
             "final_user_approval_boundary": "full_live_only",
         },
         "forbidden_uses": list(BASE_FORBIDDEN_USES),
@@ -3702,7 +4591,9 @@ def _source_drift_candidates(changes: list[dict[str, Any]]) -> list[dict[str, An
         candidates.append(
             {
                 "bucket_id": bucket_id,
-                "source_bucket_id": _stable_source_bucket_id("source_contract", change_type, subject),
+                "source_bucket_id": _stable_source_bucket_id(
+                    "source_contract", change_type, subject
+                ),
                 "parent_bucket_id": "source_contract:schema_drift",
                 "stage": "source_contract",
                 "bucket_type": change_type,
@@ -3712,9 +4603,11 @@ def _source_drift_candidates(changes: list[dict[str, Any]]) -> list[dict[str, An
                 "classification_state": state,
                 "live_auto_apply_family": None,
                 "evidence_grade": EVIDENCE_GRADE_SOURCE_ONLY,
-                "transition_target": "code_improvement_workorder"
-                if state == "code_patch_required"
-                else "source_only_keep_collecting",
+                "transition_target": (
+                    "code_improvement_workorder"
+                    if state == "code_patch_required"
+                    else "source_only_keep_collecting"
+                ),
                 "grade_reason": "source_contract_drift_not_strategy_outcome_evidence",
                 "full_real_conversion_allowed": False,
                 "sim_lifecycle_handoff_allowed": False,
@@ -3731,7 +4624,9 @@ def _source_drift_candidates(changes: list[dict[str, Any]]) -> list[dict[str, An
                 "normalized_metrics": taxonomy["normalized_metrics"],
                 "missing_dimension_keys": taxonomy["missing_dimension_keys"],
                 "deterministic_proposal": deterministic_proposal,
-                "ai_tier2_proposal": default_ai_tier2_proposal(bucket_id, deterministic_proposal),
+                "ai_tier2_proposal": default_ai_tier2_proposal(
+                    bucket_id, deterministic_proposal
+                ),
                 "ai_tier2_comparative_review": compare_taxonomy_proposals(
                     bucket_id=bucket_id,
                     deterministic_proposal=deterministic_proposal,
@@ -3763,10 +4658,20 @@ def _source_drift_candidates(changes: list[dict[str, Any]]) -> list[dict[str, An
     return candidates
 
 
-def _candidates_from_attribution(payload: dict[str, Any], stage: str, key: str) -> list[dict[str, Any]]:
+def _candidates_from_attribution(
+    payload: dict[str, Any], stage: str, key: str
+) -> list[dict[str, Any]]:
     attribution = payload.get(key) if isinstance(payload.get(key), dict) else {}
-    buckets = attribution.get("buckets") if isinstance(attribution.get("buckets"), list) else []
-    candidates = [_candidate_from_bucket(stage, bucket) for bucket in buckets if isinstance(bucket, dict)]
+    buckets = (
+        attribution.get("buckets")
+        if isinstance(attribution.get("buckets"), list)
+        else []
+    )
+    candidates = [
+        _candidate_from_bucket(stage, bucket)
+        for bucket in buckets
+        if isinstance(bucket, dict)
+    ]
     candidates.sort(
         key=lambda item: (
             0 if item["classification_state"] == "live_auto_apply_ready" else 1,
@@ -3779,7 +4684,11 @@ def _candidates_from_attribution(payload: dict[str, Any], stage: str, key: str) 
 
 
 def _policy_stage_candidates(payload: dict[str, Any]) -> list[dict[str, Any]]:
-    entries = payload.get("policy_entries") if isinstance(payload.get("policy_entries"), list) else []
+    entries = (
+        payload.get("policy_entries")
+        if isinstance(payload.get("policy_entries"), list)
+        else []
+    )
     candidates: list[dict[str, Any]] = []
     for entry in entries:
         if not isinstance(entry, dict):
@@ -3788,7 +4697,9 @@ def _policy_stage_candidates(payload: dict[str, Any]) -> list[dict[str, Any]]:
         raw_policy_key = str(entry.get("policy_key") or "").strip()
         policy_key = raw_policy_key if raw_policy_key else "-"
         bucket_id = f"{stage}:stage_policy:{_slug(raw_policy_key or stage)}"
-        policy_key_gap_classification = str(entry.get("policy_key_gap_classification") or "")
+        policy_key_gap_classification = str(
+            entry.get("policy_key_gap_classification") or ""
+        )
         state = (
             "sim_auto_approved"
             if str(entry.get("source_quality_gate") or "") == "pass"
@@ -3820,21 +4731,31 @@ def _policy_stage_candidates(payload: dict[str, Any]) -> list[dict[str, Any]]:
         candidates.append(
             {
                 "bucket_id": bucket_id,
-                "source_bucket_id": _stable_source_bucket_id(stage, "stage_policy", policy_key),
+                "source_bucket_id": _stable_source_bucket_id(
+                    stage, "stage_policy", policy_key
+                ),
                 "parent_bucket_id": f"{stage}:stage_policy",
                 "stage": stage,
                 "bucket_type": "stage_policy",
                 "bucket_key": policy_key,
-                "source_bucket_kind": "sim_auto_policy" if state == "sim_auto_approved" else "source_only_observation",
+                "source_bucket_kind": (
+                    "sim_auto_policy"
+                    if state == "sim_auto_approved"
+                    else "source_only_observation"
+                ),
                 "bucket_relation": "existing_bucket_refinement",
                 "classification_state": state,
                 "live_auto_apply_family": None,
-                "evidence_grade": EVIDENCE_GRADE_1_COMPLETED_SIM
-                if state == "sim_auto_approved"
-                else EVIDENCE_GRADE_SOURCE_ONLY,
-                "transition_target": "sim_lifecycle_handoff"
-                if state == "sim_auto_approved"
-                else "source_only_keep_collecting",
+                "evidence_grade": (
+                    EVIDENCE_GRADE_1_COMPLETED_SIM
+                    if state == "sim_auto_approved"
+                    else EVIDENCE_GRADE_SOURCE_ONLY
+                ),
+                "transition_target": (
+                    "sim_lifecycle_handoff"
+                    if state == "sim_auto_approved"
+                    else "source_only_keep_collecting"
+                ),
                 "grade_reason": "stage_policy_source_quality_pass_without_live_bridge",
                 "full_real_conversion_allowed": False,
                 "sim_lifecycle_handoff_allowed": state == "sim_auto_approved",
@@ -3850,10 +4771,15 @@ def _policy_stage_candidates(payload: dict[str, Any]) -> list[dict[str, Any]]:
                 "taxonomy_candidate_type": taxonomy["taxonomy_candidate_type"],
                 "normalized_dimensions": taxonomy["normalized_dimensions"],
                 "normalized_metrics": taxonomy["normalized_metrics"],
-                "missing_dimension_keys": sorted(set(taxonomy["missing_dimension_keys"]) | set(missing_dimension_overrides)),
+                "missing_dimension_keys": sorted(
+                    set(taxonomy["missing_dimension_keys"])
+                    | set(missing_dimension_overrides)
+                ),
                 "source_dimension_gap": source_dimension_gap_override,
                 "deterministic_proposal": deterministic_proposal,
-                "ai_tier2_proposal": default_ai_tier2_proposal(bucket_id, deterministic_proposal),
+                "ai_tier2_proposal": default_ai_tier2_proposal(
+                    bucket_id, deterministic_proposal
+                ),
                 "ai_tier2_comparative_review": compare_taxonomy_proposals(
                     bucket_id=bucket_id,
                     deterministic_proposal=deterministic_proposal,
@@ -3863,14 +4789,22 @@ def _policy_stage_candidates(payload: dict[str, Any]) -> list[dict[str, Any]]:
                 "sample": _safe_int(entry.get("sample")),
                 "joined_sample": _safe_int(entry.get("joined_sample")),
                 "join_rate": _safe_float(entry.get("join_rate"), None),
-                "source_quality_adjusted_ev_pct": _safe_float(entry.get("stage_ev_composite_pct"), None),
+                "source_quality_adjusted_ev_pct": _safe_float(
+                    entry.get("stage_ev_composite_pct"), None
+                ),
                 "source_quality_gate": entry.get("source_quality_gate"),
                 "recommended_action": str(entry.get("selected_action") or "NO_CHANGE"),
-                "recommended_resolution": "next_preopen_sim_policy_input"
-                if state == "sim_auto_approved"
-                else "keep_collecting_until_sample_floor",
-                "unknown_dimension_counts": {"policy_key": 1} if source_dimension_gap_override else {},
-                "unknown_reason_counts": {"policy_key_missing": 1} if source_dimension_gap_override else {},
+                "recommended_resolution": (
+                    "next_preopen_sim_policy_input"
+                    if state == "sim_auto_approved"
+                    else "keep_collecting_until_sample_floor"
+                ),
+                "unknown_dimension_counts": (
+                    {"policy_key": 1} if source_dimension_gap_override else {}
+                ),
+                "unknown_reason_counts": (
+                    {"policy_key_missing": 1} if source_dimension_gap_override else {}
+                ),
                 "source_field_coverage": {},
                 "actual_order_submitted": False,
                 "broker_order_forbidden": True,
@@ -3895,8 +4829,16 @@ def _build_ai_review_context(
     review_authority: str = "contract_gap_review_only",
 ) -> dict[str, Any]:
     summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
-    surfaced = report.get("surfaced_candidates") if isinstance(report.get("surfaced_candidates"), list) else []
-    selected_items = candidate_items if candidate_items is not None else surfaced[:AI_REVIEW_MAX_CANDIDATES]
+    surfaced = (
+        report.get("surfaced_candidates")
+        if isinstance(report.get("surfaced_candidates"), list)
+        else []
+    )
+    selected_items = (
+        candidate_items
+        if candidate_items is not None
+        else surfaced[:AI_REVIEW_MAX_CANDIDATES]
+    )
     compact_candidates: list[dict[str, Any]] = []
     for item in selected_items:
         if not isinstance(item, dict):
@@ -3969,7 +4911,9 @@ def _build_ai_review_context(
             "allowed_ai_decisions": sorted(AI_PARENT_GRANULARITY_DECISIONS),
             "allowed_preferred_levels": list(LIFECYCLE_FLOW_PARENT_LEVEL_ORDER),
         },
-        "parent_bucket_summaries": _ai_review_compact_value((report.get("parent_bucket_summaries") or [])[:20]),
+        "parent_bucket_summaries": _ai_review_compact_value(
+            (report.get("parent_bucket_summaries") or [])[:20]
+        ),
         "source_contract": report.get("source_contract"),
         "source_contract_changes": report.get("source_contract_changes") or [],
         "surfaced_candidates": compact_candidates,
@@ -4028,12 +4972,21 @@ def _candidate_matches_ai_shard(item: dict[str, Any], shard_id: str) -> bool:
             "automation_handoff_gap",
         }
     if shard_id == "sim_policy_review":
-        return state in {"sim_auto_approved", "entry_only_sim_auto_approved", LIFECYCLE_FLOW_SIM_PROBE_STATE}
-    if shard_id == "gap_workorder_review":
-        return state in {"code_patch_required", "automation_handoff_gap"} or stage == "source_contract" or source_kind in {
-            "source_contract_gap",
-            "source_quality_gap",
+        return state in {
+            "sim_auto_approved",
+            "entry_only_sim_auto_approved",
+            LIFECYCLE_FLOW_SIM_PROBE_STATE,
         }
+    if shard_id == "gap_workorder_review":
+        return (
+            state in {"code_patch_required", "automation_handoff_gap"}
+            or stage == "source_contract"
+            or source_kind
+            in {
+                "source_contract_gap",
+                "source_quality_gap",
+            }
+        )
     if shard_id == "taxonomy_discovery_review":
         return state == "new_bucket_candidate"
     return False
@@ -4055,7 +5008,9 @@ def _fit_candidates_to_ai_budget(
             candidate_items=selected,
             omitted_candidate_count=max(0, len(candidates) - len(selected)),
             candidate_selection_policy=candidate_selection_policy,
-            review_authority=AI_REVIEW_SHARD_AUTHORITIES.get(shard_id, "contract_gap_review_only"),
+            review_authority=AI_REVIEW_SHARD_AUTHORITIES.get(
+                shard_id, "contract_gap_review_only"
+            ),
         )
         context_chars = len(json.dumps(context, ensure_ascii=True, default=str))
         if context_chars > AI_REVIEW_SHARD_CONTEXT_BUDGET_CHARS and len(selected) > 1:
@@ -4067,7 +5022,9 @@ def _fit_candidates_to_ai_budget(
         candidate_items=selected,
         omitted_candidate_count=max(0, len(candidates) - len(selected)),
         candidate_selection_policy=candidate_selection_policy,
-        review_authority=AI_REVIEW_SHARD_AUTHORITIES.get(shard_id, "contract_gap_review_only"),
+        review_authority=AI_REVIEW_SHARD_AUTHORITIES.get(
+            shard_id, "contract_gap_review_only"
+        ),
     )
     return selected, context
 
@@ -4084,7 +5041,8 @@ def _build_ai_review_shards(report: dict[str, Any]) -> list[dict[str, Any]]:
         candidates = [
             item
             for item in surfaced
-            if str(item.get("bucket_id")) not in assigned and _candidate_matches_ai_shard(item, shard_id)
+            if str(item.get("bucket_id")) not in assigned
+            and _candidate_matches_ai_shard(item, shard_id)
         ]
         candidates.sort(key=_candidate_review_priority)
         selected, context = _fit_candidates_to_ai_budget(
@@ -4093,7 +5051,9 @@ def _build_ai_review_shards(report: dict[str, Any]) -> list[dict[str, Any]]:
             candidates=candidates,
             candidate_selection_policy=f"{shard_id}_priority_then_sample_ev",
         )
-        reviewed_ids = [str(item.get("bucket_id")) for item in selected if item.get("bucket_id")]
+        reviewed_ids = [
+            str(item.get("bucket_id")) for item in selected if item.get("bucket_id")
+        ]
         assigned.update(reviewed_ids)
         context_chars = len(json.dumps(context, ensure_ascii=True, default=str))
         shards.append(
@@ -4140,7 +5100,9 @@ def _build_ai_review_instructions() -> str:
     )
 
 
-def _parse_ai_review_response(raw_response: Any | None) -> tuple[str, dict[str, Any], list[str]]:
+def _parse_ai_review_response(
+    raw_response: Any | None,
+) -> tuple[str, dict[str, Any], list[str]]:
     if raw_response is None:
         return "unavailable", {}, ["ai_review_response_missing"]
     payload: Any = raw_response
@@ -4154,15 +5116,27 @@ def _parse_ai_review_response(raw_response: Any | None) -> tuple[str, dict[str, 
     warnings: list[str] = []
     if payload.get("schema_version") != 1:
         warnings.append("ai_review_schema_version_invalid")
-    interpretation = payload.get("interpretation") if isinstance(payload.get("interpretation"), dict) else {}
+    interpretation = (
+        payload.get("interpretation")
+        if isinstance(payload.get("interpretation"), dict)
+        else {}
+    )
     audit = payload.get("audit") if isinstance(payload.get("audit"), dict) else {}
     raw_conclusions = payload.get("final_conclusions")
     raw_ai_proposals = payload.get("ai_tier2_proposals")
     raw_comparative_reviews = payload.get("comparative_reviews")
     raw_parent_granularity_reviews = payload.get("parent_granularity_reviews")
     conclusions = raw_conclusions if isinstance(raw_conclusions, list) else []
-    ai_proposals = payload.get("ai_tier2_proposals") if isinstance(payload.get("ai_tier2_proposals"), list) else []
-    comparative_reviews = payload.get("comparative_reviews") if isinstance(payload.get("comparative_reviews"), list) else []
+    ai_proposals = (
+        payload.get("ai_tier2_proposals")
+        if isinstance(payload.get("ai_tier2_proposals"), list)
+        else []
+    )
+    comparative_reviews = (
+        payload.get("comparative_reviews")
+        if isinstance(payload.get("comparative_reviews"), list)
+        else []
+    )
     parent_granularity_reviews = (
         payload.get("parent_granularity_reviews")
         if isinstance(payload.get("parent_granularity_reviews"), list)
@@ -4178,20 +5152,33 @@ def _parse_ai_review_response(raw_response: Any | None) -> tuple[str, dict[str, 
         warnings.append("ai_review_ai_tier2_proposals_invalid")
     if not isinstance(raw_comparative_reviews, list):
         warnings.append("ai_review_comparative_reviews_invalid")
-    if raw_parent_granularity_reviews is not None and not isinstance(raw_parent_granularity_reviews, list):
+    if raw_parent_granularity_reviews is not None and not isinstance(
+        raw_parent_granularity_reviews, list
+    ):
         warnings.append("ai_review_parent_granularity_reviews_invalid")
     for proposal in ai_proposals:
         if not isinstance(proposal, dict):
             warnings.append("ai_review_ai_tier2_proposal_non_dict")
             continue
         if str(proposal.get("proposal_decision") or "") not in AI_TAXONOMY_DECISIONS:
-            warnings.append(f"ai_review_invalid_proposal_decision:{proposal.get('bucket_id')}")
-        if str(proposal.get("proposal_decision") or "") in {"create_new_metric", "create_new_dimension"}:
-            fields = {str(value) for value in (proposal.get("required_source_fields") or [])}
+            warnings.append(
+                f"ai_review_invalid_proposal_decision:{proposal.get('bucket_id')}"
+            )
+        if str(proposal.get("proposal_decision") or "") in {
+            "create_new_metric",
+            "create_new_dimension",
+        }:
+            fields = {
+                str(value) for value in (proposal.get("required_source_fields") or [])
+            }
             if not REQUIRED_TAXONOMY_CONTRACT_FIELDS.issubset(fields):
-                warnings.append(f"ai_review_metric_contract_missing:{proposal.get('bucket_id')}")
+                warnings.append(
+                    f"ai_review_metric_contract_missing:{proposal.get('bucket_id')}"
+                )
         if has_evidence_authority_violation(proposal):
-            warnings.append(f"ai_review_evidence_authority_violation:{proposal.get('bucket_id')}")
+            warnings.append(
+                f"ai_review_evidence_authority_violation:{proposal.get('bucket_id')}"
+            )
     proposal_ids = {
         str(proposal.get("bucket_id"))
         for proposal in ai_proposals
@@ -4209,25 +5196,43 @@ def _parse_ai_review_response(raw_response: Any | None) -> tuple[str, dict[str, 
             warnings.append("ai_review_comparative_review_non_dict")
             continue
         if str(review.get("selected_decision") or "") not in AI_TAXONOMY_DECISIONS:
-            warnings.append(f"ai_review_invalid_selected_decision:{review.get('bucket_id')}")
+            warnings.append(
+                f"ai_review_invalid_selected_decision:{review.get('bucket_id')}"
+            )
         if str(review.get("selected_source") or "") not in AI_TAXONOMY_SOURCES:
-            warnings.append(f"ai_review_invalid_selected_source:{review.get('bucket_id')}")
-        if str(review.get("selected_decision") or "") in {"create_new_metric", "create_new_dimension"}:
-            fields = {str(value) for value in (review.get("required_source_fields") or [])}
+            warnings.append(
+                f"ai_review_invalid_selected_source:{review.get('bucket_id')}"
+            )
+        if str(review.get("selected_decision") or "") in {
+            "create_new_metric",
+            "create_new_dimension",
+        }:
+            fields = {
+                str(value) for value in (review.get("required_source_fields") or [])
+            }
             if not REQUIRED_TAXONOMY_CONTRACT_FIELDS.issubset(fields):
-                warnings.append(f"ai_review_selected_metric_contract_missing:{review.get('bucket_id')}")
+                warnings.append(
+                    f"ai_review_selected_metric_contract_missing:{review.get('bucket_id')}"
+                )
         if has_evidence_authority_violation(review):
-            warnings.append(f"ai_review_selected_evidence_authority_violation:{review.get('bucket_id')}")
+            warnings.append(
+                f"ai_review_selected_evidence_authority_violation:{review.get('bucket_id')}"
+            )
     for item in conclusions:
         if not isinstance(item, dict):
             warnings.append("ai_review_final_conclusion_non_dict")
             continue
         if str(item.get("final_bucket_relation") or "") not in FINAL_RELATIONS:
             warnings.append(f"ai_review_invalid_relation:{item.get('bucket_id')}")
-        if str(item.get("final_classification_state") or "") not in FINAL_CLASSIFICATION_STATES:
+        if (
+            str(item.get("final_classification_state") or "")
+            not in FINAL_CLASSIFICATION_STATES
+        ):
             warnings.append(f"ai_review_invalid_state:{item.get('bucket_id')}")
         if has_evidence_authority_violation(item):
-            warnings.append(f"ai_review_final_evidence_authority_violation:{item.get('bucket_id')}")
+            warnings.append(
+                f"ai_review_final_evidence_authority_violation:{item.get('bucket_id')}"
+            )
     for review in parent_granularity_reviews:
         if not isinstance(review, dict):
             warnings.append("ai_review_parent_granularity_review_non_dict")
@@ -4249,8 +5254,11 @@ def _call_openai_ai_review(
     shard_id: str | None = None,
     config: PostcloseAIReviewConfig | None = None,
 ) -> tuple[Any | None, dict[str, Any]]:
-    resolved_shard_id = shard_id or str((input_context.get("review_scope") or {}).get("shard_id") or "unknown")
+    resolved_shard_id = shard_id or str(
+        (input_context.get("review_scope") or {}).get("shard_id") or "unknown"
+    )
     config = config or _ai_review_config_for_shard(resolved_shard_id)
+
     def validator(raw_text: str) -> tuple[bool, str]:
         parse_status, _payload, warnings = _parse_ai_review_response(raw_text)
         if parse_status != "parsed":
@@ -4280,11 +5288,23 @@ def _call_openai_ai_review(
             _load_threshold_ai_openai_keys,
         )
     except Exception as exc:
-        return None, {"provider": "openai", "status": "unavailable", "reason": f"openai import failed: {exc}", "shard_id": resolved_shard_id, **config.provider_status_fields()}
+        return None, {
+            "provider": "openai",
+            "status": "unavailable",
+            "reason": f"openai import failed: {exc}",
+            "shard_id": resolved_shard_id,
+            **config.provider_status_fields(),
+        }
 
     api_keys = _load_threshold_ai_openai_keys()
     if not api_keys:
-        return None, {"provider": "openai", "status": "unavailable", "reason": "OPENAI_API_KEY not configured", "shard_id": resolved_shard_id, **config.provider_status_fields()}
+        return None, {
+            "provider": "openai",
+            "status": "unavailable",
+            "reason": "OPENAI_API_KEY not configured",
+            "shard_id": resolved_shard_id,
+            **config.provider_status_fields(),
+        }
 
     prompt = json.dumps(input_context, ensure_ascii=True, indent=2, default=str)
     errors: list[dict[str, str]] = []
@@ -4328,9 +5348,15 @@ def _call_openai_ai_review(
                 "input_context_hash": _text_hash(input_context),
                 "input_context_chars": len(prompt),
                 "output_chars": len(raw_text),
-                "input_tokens": int(getattr(usage, "input_tokens", 0) or 0) if usage else 0,
-                "output_tokens": int(getattr(usage, "output_tokens", 0) or 0) if usage else 0,
-                "total_tokens": int(getattr(usage, "total_tokens", 0) or 0) if usage else 0,
+                "input_tokens": (
+                    int(getattr(usage, "input_tokens", 0) or 0) if usage else 0
+                ),
+                "output_tokens": (
+                    int(getattr(usage, "output_tokens", 0) or 0) if usage else 0
+                ),
+                "total_tokens": (
+                    int(getattr(usage, "total_tokens", 0) or 0) if usage else 0
+                ),
             }
         except RateLimitError as exc:
             errors.append({"key_name": key_name, "error": f"rate_limit:{exc}"})
@@ -4355,7 +5381,11 @@ def _candidate_index(candidates: list[dict[str, Any]]) -> dict[str, dict[str, An
 
 
 def _ai_proposal_by_candidate(ai_payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    proposals = ai_payload.get("ai_tier2_proposals") if isinstance(ai_payload.get("ai_tier2_proposals"), list) else []
+    proposals = (
+        ai_payload.get("ai_tier2_proposals")
+        if isinstance(ai_payload.get("ai_tier2_proposals"), list)
+        else []
+    )
     result: dict[str, dict[str, Any]] = {}
     for proposal in proposals:
         if isinstance(proposal, dict) and proposal.get("bucket_id"):
@@ -4367,8 +5397,14 @@ def _ai_proposal_by_candidate(ai_payload: dict[str, Any]) -> dict[str, dict[str,
     return result
 
 
-def _comparative_review_by_candidate(ai_payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    reviews = ai_payload.get("comparative_reviews") if isinstance(ai_payload.get("comparative_reviews"), list) else []
+def _comparative_review_by_candidate(
+    ai_payload: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    reviews = (
+        ai_payload.get("comparative_reviews")
+        if isinstance(ai_payload.get("comparative_reviews"), list)
+        else []
+    )
     result: dict[str, dict[str, Any]] = {}
     for review in reviews:
         if isinstance(review, dict) and review.get("bucket_id"):
@@ -4389,15 +5425,23 @@ def _apply_ai_review(
     by_id = _candidate_index(updated)
     target_ids = reviewed_bucket_ids
     if target_ids is None:
-        target_ids = {str(item.get("bucket_id")) for item in updated if item.get("bucket_id")}
+        target_ids = {
+            str(item.get("bucket_id")) for item in updated if item.get("bucket_id")
+        }
     if ai_status != "parsed":
         for item in updated:
             bucket_id = str(item.get("bucket_id") or "")
             if bucket_id not in target_ids:
                 item.setdefault("ai_review_coverage", "unreviewed")
                 continue
-            deterministic = item.get("deterministic_proposal") if isinstance(item.get("deterministic_proposal"), dict) else {}
-            item["ai_tier2_proposal"] = default_ai_tier2_proposal(str(item.get("bucket_id") or ""), deterministic)
+            deterministic = (
+                item.get("deterministic_proposal")
+                if isinstance(item.get("deterministic_proposal"), dict)
+                else {}
+            )
+            item["ai_tier2_proposal"] = default_ai_tier2_proposal(
+                str(item.get("bucket_id") or ""), deterministic
+            )
             item["ai_tier2_comparative_review"] = compare_taxonomy_proposals(
                 bucket_id=str(item.get("bucket_id") or ""),
                 deterministic_proposal=deterministic,
@@ -4405,14 +5449,23 @@ def _apply_ai_review(
             )
             item["ai_review_coverage"] = "reviewed"
             item["ai_review_status"] = ai_status
-            if fail_closed_live and item.get("classification_state") == "live_auto_apply_ready":
+            if (
+                fail_closed_live
+                and item.get("classification_state") == "live_auto_apply_ready"
+            ):
                 item["classification_state"] = "runtime_blocked_contract_gap"
                 item["runtime_effect"] = False
                 item["broker_order_forbidden"] = True
                 item["allowed_runtime_apply"] = False
                 item["ai_tier2_blocked_reason"] = tier2_fail_closed_reason(ai_status)
-                item["recommended_resolution"] = "retry_tier2_review_before_pre_final_auto_apply"
-                contract = item.get("auto_promotion_contract") if isinstance(item.get("auto_promotion_contract"), dict) else {}
+                item["recommended_resolution"] = (
+                    "retry_tier2_review_before_pre_final_auto_apply"
+                )
+                contract = (
+                    item.get("auto_promotion_contract")
+                    if isinstance(item.get("auto_promotion_contract"), dict)
+                    else {}
+                )
                 item["auto_promotion_contract"] = {
                     **contract,
                     "state": "source_only",
@@ -4420,7 +5473,9 @@ def _apply_ai_review(
                     "tier2_fail_closed": True,
                 }
         if any(item.get("ai_tier2_blocked_reason") for item in updated):
-            warnings.append(f"ai_two_pass_review_{ai_status}_fail_closed_live_auto_blocked")
+            warnings.append(
+                f"ai_two_pass_review_{ai_status}_fail_closed_live_auto_blocked"
+            )
         return updated
 
     ai_proposals = _ai_proposal_by_candidate(ai_payload)
@@ -4430,8 +5485,14 @@ def _apply_ai_review(
         if bucket_id not in target_ids:
             item.setdefault("ai_review_coverage", "unreviewed")
             continue
-        deterministic = item.get("deterministic_proposal") if isinstance(item.get("deterministic_proposal"), dict) else {}
-        ai_proposal = ai_proposals.get(bucket_id) or default_ai_tier2_proposal(bucket_id, deterministic)
+        deterministic = (
+            item.get("deterministic_proposal")
+            if isinstance(item.get("deterministic_proposal"), dict)
+            else {}
+        )
+        ai_proposal = ai_proposals.get(bucket_id) or default_ai_tier2_proposal(
+            bucket_id, deterministic
+        )
         provided_comparative = comparative_reviews.get(bucket_id)
         comparative = compare_taxonomy_proposals(
             bucket_id=bucket_id,
@@ -4444,10 +5505,15 @@ def _apply_ai_review(
         item["ai_tier2_taxonomy_decision"] = comparative.get("selected_decision")
         item["ai_tier2_selected_source"] = comparative.get("selected_source")
         item["ai_tier2_confidence"] = comparative.get("confidence")
-        item["ai_tier2_rejection_reason"] = comparative.get("rejected_alternative_reason")
+        item["ai_tier2_rejection_reason"] = comparative.get(
+            "rejected_alternative_reason"
+        )
         item["ai_review_coverage"] = "reviewed"
         item["ai_review_status"] = ai_status
-        if provided_comparative and comparative.get("selected_decision") in {"source_quality_blocker", "instrumentation_gap"}:
+        if provided_comparative and comparative.get("selected_decision") in {
+            "source_quality_blocker",
+            "instrumentation_gap",
+        }:
             selected_decision = str(comparative.get("selected_decision") or "")
             item["recommended_resolution"] = selected_decision
             item["source_quality_gate"] = selected_decision
@@ -4462,7 +5528,11 @@ def _apply_ai_review(
             else:
                 item["classification_state"] = "new_bucket_candidate"
 
-    conclusions = ai_payload.get("final_conclusions") if isinstance(ai_payload.get("final_conclusions"), list) else []
+    conclusions = (
+        ai_payload.get("final_conclusions")
+        if isinstance(ai_payload.get("final_conclusions"), list)
+        else []
+    )
     for conclusion in conclusions:
         if not isinstance(conclusion, dict):
             continue
@@ -4489,17 +5559,23 @@ def _apply_ai_review(
         if conclusion.get("confidence"):
             item["ai_tier2_confidence"] = conclusion.get("confidence")
         if conclusion.get("rejected_alternative_reason"):
-            item["ai_tier2_rejection_reason"] = conclusion.get("rejected_alternative_reason")
+            item["ai_tier2_rejection_reason"] = conclusion.get(
+                "rejected_alternative_reason"
+            )
         if final_state not in FINAL_CLASSIFICATION_STATES or final_decision == "keep":
             continue
         if final_state == "live_auto_apply_ready":
-            if item.get("classification_state") == "live_auto_apply_ready" and item.get("live_auto_apply_family"):
+            if item.get("classification_state") == "live_auto_apply_ready" and item.get(
+                "live_auto_apply_family"
+            ):
                 continue
             item["classification_state"] = "runtime_blocked_contract_gap"
             item["runtime_effect"] = False
             item["broker_order_forbidden"] = True
             item["allowed_runtime_apply"] = False
-            item["ai_review_blocked_reason"] = "ai_live_auto_without_deterministic_contract"
+            item["ai_review_blocked_reason"] = (
+                "ai_live_auto_without_deterministic_contract"
+            )
             continue
         if final_state in {
             "source_only_keep_collecting",
@@ -4520,12 +5596,18 @@ def _apply_ai_review(
                     "ambiguous_or_non_contract_gap_live_then_verify"
                 )
                 item["ai_review_followup_required"] = "post_apply_verification"
-                warnings.append("ai_review_ambiguous_live_candidate_kept_for_post_apply")
+                warnings.append(
+                    "ai_review_ambiguous_live_candidate_kept_for_post_apply"
+                )
                 continue
             item["classification_state"] = final_state
             _normalize_candidate_runtime_metadata(item)
             if final_state == "live_auto_apply_ready":
-                contract = item.get("auto_promotion_contract") if isinstance(item.get("auto_promotion_contract"), dict) else {}
+                contract = (
+                    item.get("auto_promotion_contract")
+                    if isinstance(item.get("auto_promotion_contract"), dict)
+                    else {}
+                )
                 item["auto_promotion_contract"] = {
                     **contract,
                     "state": "bounded_live_auto_apply_ready",
@@ -4541,7 +5623,11 @@ def _apply_ai_review(
             continue
         if item.get("classification_state") != "live_auto_apply_ready":
             continue
-        contract = item.get("auto_promotion_contract") if isinstance(item.get("auto_promotion_contract"), dict) else {}
+        contract = (
+            item.get("auto_promotion_contract")
+            if isinstance(item.get("auto_promotion_contract"), dict)
+            else {}
+        )
         item["ai_review_status"] = ai_status
         item["auto_promotion_contract"] = {
             **contract,
@@ -4561,7 +5647,11 @@ def _raw_response_for_shard(raw_response: Any | None, shard_id: str) -> Any | No
     if isinstance(shards, list):
         for item in shards:
             if isinstance(item, dict) and item.get("shard_id") == shard_id:
-                return item.get("raw_response") if "raw_response" in item else item.get("response")
+                return (
+                    item.get("raw_response")
+                    if "raw_response" in item
+                    else item.get("response")
+                )
     if raw_response.get("schema_version") == 1:
         return raw_response
     return raw_response.get(shard_id)
@@ -4576,9 +5666,15 @@ def _apply_contamination_quarantine(
     payload = _load_json(contamination_window_path(target_date))
     if not payload or not bool(payload.get("exclude_live_auto_apply", True)):
         return candidates
-    affected_stages = {str(value) for value in payload.get("affected_stages") or [] if str(value)}
-    affected_families = {str(value) for value in payload.get("affected_families") or [] if str(value)}
-    affected_bucket_ids = {str(value) for value in payload.get("affected_bucket_ids") or [] if str(value)}
+    affected_stages = {
+        str(value) for value in payload.get("affected_stages") or [] if str(value)
+    }
+    affected_families = {
+        str(value) for value in payload.get("affected_families") or [] if str(value)
+    }
+    affected_bucket_ids = {
+        str(value) for value in payload.get("affected_bucket_ids") or [] if str(value)
+    }
     updated: list[dict[str, Any]] = []
     blocked_count = 0
     for item in candidates:
@@ -4586,10 +5682,22 @@ def _apply_contamination_quarantine(
         if row.get("classification_state") != "live_auto_apply_ready":
             updated.append(row)
             continue
-        match_all = not affected_stages and not affected_families and not affected_bucket_ids
-        stage_hit = str(row.get("stage") or "") in affected_stages if affected_stages else False
-        family_hit = str(row.get("live_auto_apply_family") or "") in affected_families if affected_families else False
-        bucket_hit = str(row.get("bucket_id") or "") in affected_bucket_ids if affected_bucket_ids else False
+        match_all = (
+            not affected_stages and not affected_families and not affected_bucket_ids
+        )
+        stage_hit = (
+            str(row.get("stage") or "") in affected_stages if affected_stages else False
+        )
+        family_hit = (
+            str(row.get("live_auto_apply_family") or "") in affected_families
+            if affected_families
+            else False
+        )
+        bucket_hit = (
+            str(row.get("bucket_id") or "") in affected_bucket_ids
+            if affected_bucket_ids
+            else False
+        )
         if not (match_all or stage_hit or family_hit or bucket_hit):
             updated.append(row)
             continue
@@ -4597,10 +5705,20 @@ def _apply_contamination_quarantine(
         row["runtime_effect"] = False
         row["broker_order_forbidden"] = True
         row["allowed_runtime_apply"] = False
-        row["contamination_quarantine_id"] = payload.get("quarantine_id") or f"lifecycle_bucket_quarantine:{target_date}"
-        row["promotion_ev_excluded_reason"] = payload.get("reason") or "contaminated_greenfield_partial_lifecycle_policy"
-        row["recommended_resolution"] = "exclude_contaminated_window_from_live_promotion"
-        contract = row.get("auto_promotion_contract") if isinstance(row.get("auto_promotion_contract"), dict) else {}
+        row["contamination_quarantine_id"] = (
+            payload.get("quarantine_id") or f"lifecycle_bucket_quarantine:{target_date}"
+        )
+        row["promotion_ev_excluded_reason"] = (
+            payload.get("reason") or "contaminated_greenfield_partial_lifecycle_policy"
+        )
+        row["recommended_resolution"] = (
+            "exclude_contaminated_window_from_live_promotion"
+        )
+        contract = (
+            row.get("auto_promotion_contract")
+            if isinstance(row.get("auto_promotion_contract"), dict)
+            else {}
+        )
         row["auto_promotion_contract"] = {
             **contract,
             "state": "source_only",
@@ -4619,7 +5737,11 @@ def _provider_status_looks_timeout(provider_status: dict[str, Any]) -> bool:
 
 
 def _aggregate_ai_review_status(shard_records: list[dict[str, Any]]) -> str:
-    statuses = [str(item.get("status") or "") for item in shard_records if item.get("candidate_count")]
+    statuses = [
+        str(item.get("status") or "")
+        for item in shard_records
+        if item.get("candidate_count")
+    ]
     if not statuses:
         return "disabled"
     if all(status == "disabled" for status in statuses):
@@ -4644,7 +5766,9 @@ def _run_ai_review_shards(
     ai_raw_response: Any | None,
     warnings: list[str],
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    candidates = report.get("candidates") if isinstance(report.get("candidates"), list) else []
+    candidates = (
+        report.get("candidates") if isinstance(report.get("candidates"), list) else []
+    )
     updated_candidates = [dict(item) for item in candidates]
     shard_specs = _build_ai_review_shards(report)
     shard_records: list[dict[str, Any]] = []
@@ -4660,7 +5784,9 @@ def _run_ai_review_shards(
     for shard in shard_specs:
         shard_id = str(shard.get("shard_id") or "")
         shard_config = _ai_review_config_for_shard(shard_id)
-        candidate_ids = {str(value) for value in (shard.get("candidate_ids") or []) if str(value)}
+        candidate_ids = {
+            str(value) for value in (shard.get("candidate_ids") or []) if str(value)
+        }
         provider_status: dict[str, Any] = {
             "provider": provider,
             "status": "disabled" if disabled else "not_called",
@@ -4668,10 +5794,21 @@ def _run_ai_review_shards(
             "shard_id": shard_id,
             "input_context_hash": _text_hash(shard.get("context")),
             "input_context_chars": shard.get("context_chars"),
-            **(shard_config.provider_status_fields() if not disabled else {"model": None}),
+            **(
+                shard_config.provider_status_fields()
+                if not disabled
+                else {"model": None}
+            ),
         }
         if disabled:
-            provider_status.update({"reasoning_effort": None, "timeout_sec": None, "attempt_role": None, "retry_reason": None})
+            provider_status.update(
+                {
+                    "reasoning_effort": None,
+                    "timeout_sec": None,
+                    "attempt_role": None,
+                    "retry_reason": None,
+                }
+            )
         if not candidate_ids:
             shard_records.append(
                 {
@@ -4682,7 +5819,9 @@ def _run_ai_review_shards(
                     "omitted_candidate_count": shard.get("omitted_candidate_count", 0),
                     "context_chars": shard.get("context_chars"),
                     "context_budget_chars": AI_REVIEW_SHARD_CONTEXT_BUDGET_CHARS,
-                    "candidate_selection_policy": shard.get("candidate_selection_policy"),
+                    "candidate_selection_policy": shard.get(
+                        "candidate_selection_policy"
+                    ),
                     "review_authority": shard.get("review_authority"),
                     "provider_status": {**provider_status, "status": "skipped_empty"},
                     "status": "skipped_empty",
@@ -4698,7 +5837,11 @@ def _run_ai_review_shards(
         else:
             if raw_response is None and provider == "openai":
                 raw_response, provider_status = _call_openai_ai_review(
-                    shard.get("context") if isinstance(shard.get("context"), dict) else {},
+                    (
+                        shard.get("context")
+                        if isinstance(shard.get("context"), dict)
+                        else {}
+                    ),
                     shard_id=shard_id,
                     config=shard_config,
                 )
@@ -4708,7 +5851,9 @@ def _run_ai_review_shards(
                     "status": "provided_response",
                 }
             ai_status, ai_payload, ai_warnings = _parse_ai_review_response(raw_response)
-            if ai_status == "unavailable" and _provider_status_looks_timeout(provider_status):
+            if ai_status == "unavailable" and _provider_status_looks_timeout(
+                provider_status
+            ):
                 ai_status = "timeout"
                 ai_warnings = ["ai_review_timeout"]
         fail_closed_live = shard_id == "live_contract_review"
@@ -4723,14 +5868,35 @@ def _run_ai_review_shards(
         warnings.extend(ai_warnings)
         warnings.extend(f"{shard_id}:{warning}" for warning in ai_warnings)
         if ai_status == "parsed":
-            interpretation = ai_payload.get("interpretation") if isinstance(ai_payload.get("interpretation"), dict) else {}
-            bucket_reviews = interpretation.get("bucket_reviews") if isinstance(interpretation.get("bucket_reviews"), list) else []
+            interpretation = (
+                ai_payload.get("interpretation")
+                if isinstance(ai_payload.get("interpretation"), dict)
+                else {}
+            )
+            bucket_reviews = (
+                interpretation.get("bucket_reviews")
+                if isinstance(interpretation.get("bucket_reviews"), list)
+                else []
+            )
             combined_payload["interpretation"]["bucket_reviews"].extend(bucket_reviews)
-            audit = ai_payload.get("audit") if isinstance(ai_payload.get("audit"), dict) else {}
-            audit_issues = audit.get("issues") if isinstance(audit.get("issues"), list) else []
+            audit = (
+                ai_payload.get("audit")
+                if isinstance(ai_payload.get("audit"), dict)
+                else {}
+            )
+            audit_issues = (
+                audit.get("issues") if isinstance(audit.get("issues"), list) else []
+            )
             combined_payload["audit"]["issues"].extend(audit_issues)
-            for key in ("ai_tier2_proposals", "comparative_reviews", "final_conclusions", "parent_granularity_reviews"):
-                values = ai_payload.get(key) if isinstance(ai_payload.get(key), list) else []
+            for key in (
+                "ai_tier2_proposals",
+                "comparative_reviews",
+                "final_conclusions",
+                "parent_granularity_reviews",
+            ):
+                values = (
+                    ai_payload.get(key) if isinstance(ai_payload.get(key), list) else []
+                )
                 combined_payload[key].extend(values)
         shard_records.append(
             {
@@ -4757,19 +5923,26 @@ def _run_ai_review_shards(
     }
     for item in updated_candidates:
         bucket_id = str(item.get("bucket_id") or "")
-        if bucket_id not in reviewed_ids and item.get("ai_review_coverage") != "reviewed":
+        if (
+            bucket_id not in reviewed_ids
+            and item.get("ai_review_coverage") != "reviewed"
+        ):
             item["ai_review_coverage"] = "unreviewed"
     review = {
         "provider": provider,
         "status": aggregate_status,
         "model": "sharded" if not disabled else None,
         "models_by_shard": {
-            str(record.get("shard_id")): (record.get("provider_status") or {}).get("model")
+            str(record.get("shard_id")): (record.get("provider_status") or {}).get(
+                "model"
+            )
             for record in shard_records
             if record.get("shard_id")
         },
         "reasoning_effort_by_shard": {
-            str(record.get("shard_id")): (record.get("provider_status") or {}).get("reasoning_effort")
+            str(record.get("shard_id")): (record.get("provider_status") or {}).get(
+                "reasoning_effort"
+            )
             for record in shard_records
             if record.get("shard_id")
         },
@@ -4777,7 +5950,9 @@ def _run_ai_review_shards(
         "schema_name": AI_REVIEW_SCHEMA_NAME,
         "sharded": True,
         "shard_count": len(shard_records),
-        "parsed_shard_count": sum(1 for item in shard_records if item.get("status") == "parsed"),
+        "parsed_shard_count": sum(
+            1 for item in shard_records if item.get("status") == "parsed"
+        ),
         "reviewed_candidate_count": len(
             {
                 bucket_id
@@ -4786,7 +5961,12 @@ def _run_ai_review_shards(
                 for bucket_id in (record.get("candidate_ids") or [])
             }
         ),
-        "input_context_hash": _text_hash([record.get("provider_status", {}).get("input_context_hash") for record in shard_records]),
+        "input_context_hash": _text_hash(
+            [
+                record.get("provider_status", {}).get("input_context_hash")
+                for record in shard_records
+            ]
+        ),
         "interpretation": combined_payload["interpretation"],
         "audit": combined_payload["audit"],
         "ai_tier2_proposals": combined_payload["ai_tier2_proposals"],
@@ -4794,7 +5974,11 @@ def _run_ai_review_shards(
         "final_conclusions": combined_payload["final_conclusions"],
         "parent_granularity_reviews": combined_payload["parent_granularity_reviews"],
         "shards": shard_records,
-        "warnings": [warning for record in shard_records for warning in (record.get("warnings") or [])],
+        "warnings": [
+            warning
+            for record in shard_records
+            for warning in (record.get("warnings") or [])
+        ],
     }
     return updated_candidates, review
 
@@ -4805,22 +5989,42 @@ def _finalize_report(
     warnings: list[str],
 ) -> dict[str, Any]:
     _apply_lifecycle_flow_parent_absorption(report, candidates)
-    state_counts = Counter(str(item.get("classification_state") or "unknown") for item in candidates)
+    state_counts = Counter(
+        str(item.get("classification_state") or "unknown") for item in candidates
+    )
     sim_auto_candidates = [
-        item for item in candidates if str(item.get("classification_state") or "") in SIM_APPROVAL_STATES
+        item
+        for item in candidates
+        if str(item.get("classification_state") or "") in SIM_APPROVAL_STATES
     ]
     sim_auto_positive_summary = _sim_auto_positive_ev_summary(sim_auto_candidates)
-    review_category_counts = Counter(str(item.get("review_category") or "unknown") for item in candidates)
+    review_category_counts = Counter(
+        str(item.get("review_category") or "unknown") for item in candidates
+    )
     review_sub_state_counts = Counter(
         str(item.get("review_sub_state"))
         for item in candidates
         if item.get("review_sub_state")
     )
     stage_counts = Counter(str(item.get("stage") or "unknown") for item in candidates)
-    source_bucket_kind_counts = Counter(str(item.get("source_bucket_kind") or "unknown") for item in candidates)
-    canonical_bucket_count = len({str(item.get("canonical_bucket") or item.get("bucket_id")) for item in candidates})
-    legacy_bucket_count = len({str(item.get("legacy_raw_bucket_key") or item.get("bucket_key")) for item in candidates})
-    deterministic_proposal_count = sum(1 for item in candidates if isinstance(item.get("deterministic_proposal"), dict))
+    source_bucket_kind_counts = Counter(
+        str(item.get("source_bucket_kind") or "unknown") for item in candidates
+    )
+    canonical_bucket_count = len(
+        {
+            str(item.get("canonical_bucket") or item.get("bucket_id"))
+            for item in candidates
+        }
+    )
+    legacy_bucket_count = len(
+        {
+            str(item.get("legacy_raw_bucket_key") or item.get("bucket_key"))
+            for item in candidates
+        }
+    )
+    deterministic_proposal_count = sum(
+        1 for item in candidates if isinstance(item.get("deterministic_proposal"), dict)
+    )
     ai_tier2_proposal_count = sum(
         1
         for item in candidates
@@ -4857,36 +6061,64 @@ def _finalize_report(
     child_conflict_warning_count = 0
     parent_group_stats: dict[str, dict[str, Any]] = {}
     for item in candidates:
-        counts = item.get("unknown_reason_counts") if isinstance(item.get("unknown_reason_counts"), dict) else {}
+        counts = (
+            item.get("unknown_reason_counts")
+            if isinstance(item.get("unknown_reason_counts"), dict)
+            else {}
+        )
         for key, value in counts.items():
             unknown_reason_counts[str(key)] += _safe_int(value)
         if (
             str(item.get("stage") or "") == "lifecycle_flow"
             and str(item.get("bucket_type") or "") == "combo_lifecycle_flow"
         ):
-            parent_id = str(item.get("canonical_parent_bucket") or item.get("policy_bucket_id") or "")
+            parent_id = str(
+                item.get("canonical_parent_bucket")
+                or item.get("policy_bucket_id")
+                or ""
+            )
             if parent_id:
                 parent_bucket_ids.add(parent_id)
                 parent_group_stats.setdefault(
                     parent_id,
                     {
-                        "absorbed_child_count": _safe_int(item.get("absorbed_child_count")),
-                        "absorbed_sample_count": _safe_int(item.get("absorbed_sample_count")),
-                        "child_conflict_warning": bool(item.get("child_conflict_warning")),
+                        "absorbed_child_count": _safe_int(
+                            item.get("absorbed_child_count")
+                        ),
+                        "absorbed_sample_count": _safe_int(
+                            item.get("absorbed_sample_count")
+                        ),
+                        "child_conflict_warning": bool(
+                            item.get("child_conflict_warning")
+                        ),
                     },
                 )
-            if item.get("classification_state") == "live_auto_apply_ready" and item.get("parent_live_floor_passed") is True:
+            if (
+                item.get("classification_state") == "live_auto_apply_ready"
+                and item.get("parent_live_floor_passed") is True
+            ):
                 parent_live_auto_apply_ready_count += 1
-    absorbed_child_count = sum(_safe_int(stats.get("absorbed_child_count")) for stats in parent_group_stats.values())
-    absorbed_sample_count = sum(_safe_int(stats.get("absorbed_sample_count")) for stats in parent_group_stats.values())
-    child_conflict_warning_count = sum(1 for stats in parent_group_stats.values() if stats.get("child_conflict_warning"))
+    absorbed_child_count = sum(
+        _safe_int(stats.get("absorbed_child_count"))
+        for stats in parent_group_stats.values()
+    )
+    absorbed_sample_count = sum(
+        _safe_int(stats.get("absorbed_sample_count"))
+        for stats in parent_group_stats.values()
+    )
+    child_conflict_warning_count = sum(
+        1
+        for stats in parent_group_stats.values()
+        if stats.get("child_conflict_warning")
+    )
     surfaced = [
         item
         for item in candidates
         if str(item.get("classification_state") or "") in AUTO_SURFACE_STATES
         or (
             str(item.get("stage") or "") == "lifecycle_flow"
-            and str(item.get("classification_state") or "") == "source_only_keep_collecting"
+            and str(item.get("classification_state") or "")
+            == "source_only_keep_collecting"
         )
     ]
     summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
@@ -4897,13 +6129,19 @@ def _finalize_report(
             "candidate_count": len(candidates),
             "surfaced_candidate_count": len(surfaced),
             "sim_auto_approved_count": state_counts.get("sim_auto_approved", 0),
-            "entry_only_sim_auto_approved_count": state_counts.get("entry_only_sim_auto_approved", 0),
+            "entry_only_sim_auto_approved_count": state_counts.get(
+                "entry_only_sim_auto_approved", 0
+            ),
             **sim_auto_positive_summary,
-            "lifecycle_flow_sim_probe_candidate_count": state_counts.get(LIFECYCLE_FLOW_SIM_PROBE_STATE, 0),
+            "lifecycle_flow_sim_probe_candidate_count": state_counts.get(
+                LIFECYCLE_FLOW_SIM_PROBE_STATE, 0
+            ),
             "live_auto_apply_ready_count": state_counts.get("live_auto_apply_ready", 0),
             "new_bucket_candidate_count": state_counts.get("new_bucket_candidate", 0),
             "code_patch_required_count": state_counts.get("code_patch_required", 0),
-            "automation_handoff_gap_count": state_counts.get("automation_handoff_gap", 0),
+            "automation_handoff_gap_count": state_counts.get(
+                "automation_handoff_gap", 0
+            ),
             "state_counts": dict(state_counts),
             "review_category_counts": dict(review_category_counts),
             "review_sub_state_counts": dict(review_sub_state_counts),
@@ -4911,18 +6149,28 @@ def _finalize_report(
             "source_bucket_kind_counts": dict(source_bucket_kind_counts),
             "unknown_reason_counts": dict(unknown_reason_counts),
             "source_dimension_gap_count": source_dimension_summary["gap_count"],
-            "actionable_unknown_gap_count": source_dimension_summary["actionable_unknown_gap_count"],
-            "rollup_only_source_dimension_gap_count": source_dimension_summary["rollup_only_gap_count"],
+            "actionable_unknown_gap_count": source_dimension_summary[
+                "actionable_unknown_gap_count"
+            ],
+            "rollup_only_source_dimension_gap_count": source_dimension_summary[
+                "rollup_only_gap_count"
+            ],
             "lifecycle_flow_incomplete_stage_contract_count": source_dimension_summary[
                 "lifecycle_flow_incomplete_stage_contract_count"
             ],
             "quiet_gap_count": quiet_gap_summary["quiet_gap_count"],
-            "quiet_gap_rollup_required_count": quiet_gap_summary["rollup_required_count"],
-            "quiet_gap_sim_live_connected_count": quiet_gap_summary["sim_live_connected_quiet_gap_count"],
+            "quiet_gap_rollup_required_count": quiet_gap_summary[
+                "rollup_required_count"
+            ],
+            "quiet_gap_sim_live_connected_count": quiet_gap_summary[
+                "sim_live_connected_quiet_gap_count"
+            ],
             "quiet_gap_type_counts": quiet_gap_summary["quiet_gap_type_counts"],
             "canonical_bucket_count": canonical_bucket_count,
             "legacy_bucket_count": legacy_bucket_count,
-            "absorbed_bucket_count": selected_decision_counts.get("absorb_as_dimension", 0),
+            "absorbed_bucket_count": selected_decision_counts.get(
+                "absorb_as_dimension", 0
+            ),
             "parent_bucket_count": len(parent_bucket_ids),
             "parent_live_auto_apply_ready_count": parent_live_auto_apply_ready_count,
             "absorbed_child_count": absorbed_child_count,
@@ -4930,12 +6178,16 @@ def _finalize_report(
             "child_conflict_warning_count": child_conflict_warning_count,
             "deterministic_proposal_count": deterministic_proposal_count,
             "ai_tier2_proposal_count": ai_tier2_proposal_count,
-            "reviewer_selected_deterministic_count": selected_source_counts.get("deterministic", 0),
+            "reviewer_selected_deterministic_count": selected_source_counts.get(
+                "deterministic", 0
+            ),
             "reviewer_selected_ai_count": selected_source_counts.get("ai_tier2", 0),
             "reviewer_selected_hybrid_count": selected_source_counts.get("hybrid", 0),
             "reviewer_rejected_count": selected_source_counts.get("reject", 0)
             + selected_decision_counts.get("reject", 0),
-            "source_quality_blocker_count": selected_decision_counts.get("source_quality_blocker", 0),
+            "source_quality_blocker_count": selected_decision_counts.get(
+                "source_quality_blocker", 0
+            ),
             "taxonomy_selected_decision_counts": dict(selected_decision_counts),
             "taxonomy_selected_source_counts": dict(selected_source_counts),
             "human_intervention_required": False,
@@ -4947,22 +6199,35 @@ def _finalize_report(
     report["quiet_gap_summary"] = quiet_gap_summary
     parent_conflict_resolution = _build_parent_conflict_resolution(report, candidates)
     report["parent_conflict_resolution"] = parent_conflict_resolution
-    parent_conflict_count = sum(1 for p in parent_conflict_resolution if isinstance(p, dict))
+    parent_conflict_count = sum(
+        1 for p in parent_conflict_resolution if isinstance(p, dict)
+    )
     if parent_conflict_count > 0:
         report["summary"]["parent_conflict_resolution_count"] = parent_conflict_count
         resolution_states = Counter(
-            str(p.get("conflict_resolution_state") or "") for p in parent_conflict_resolution
+            str(p.get("conflict_resolution_state") or "")
+            for p in parent_conflict_resolution
         )
-        report["summary"]["parent_conflict_resolution_state_counts"] = dict(resolution_states)
-        sim_eligible = sum(1 for p in parent_conflict_resolution if p.get("sim_policy_eligible_after_resolution"))
-        report["summary"]["parent_conflict_sim_eligible_after_resolution"] = sim_eligible
+        report["summary"]["parent_conflict_resolution_state_counts"] = dict(
+            resolution_states
+        )
+        sim_eligible = sum(
+            1
+            for p in parent_conflict_resolution
+            if p.get("sim_policy_eligible_after_resolution")
+        )
+        report["summary"][
+            "parent_conflict_sim_eligible_after_resolution"
+        ] = sim_eligible
     else:
         report["summary"]["parent_conflict_resolution_count"] = 0
         report["summary"]["parent_conflict_sim_eligible_after_resolution"] = 0
     report["candidates"] = candidates[:500]
     report["surfaced_candidates"] = surfaced[:200]
     report["live_auto_apply_candidates"] = [
-        item for item in candidates if item.get("classification_state") == "live_auto_apply_ready"
+        item
+        for item in candidates
+        if item.get("classification_state") == "live_auto_apply_ready"
     ]
     report["sim_auto_approved_candidates"] = sim_auto_candidates[:200]
     report["warnings"] = warnings
@@ -4994,25 +6259,43 @@ def build_lifecycle_bucket_discovery_report(
         if isinstance(previous.get("source_contract"), dict)
         else {}
     )
-    normalized_previous_contract = _normalize_source_contract_for_compare(previous_contract) if previous_contract else {}
-    source_contract_changes = _compare_source_contracts(source_contract, previous_contract)
+    normalized_previous_contract = (
+        _normalize_source_contract_for_compare(previous_contract)
+        if previous_contract
+        else {}
+    )
+    source_contract_changes = _compare_source_contracts(
+        source_contract, previous_contract
+    )
     if ldm:
         candidates.extend(
-            _candidates_from_attribution(ldm, "lifecycle_flow", "lifecycle_flow_bucket_attribution")
+            _candidates_from_attribution(
+                ldm, "lifecycle_flow", "lifecycle_flow_bucket_attribution"
+            )
         )
-        candidates.extend(_candidates_from_attribution(ldm, "entry", "entry_bucket_attribution"))
-        candidates.extend(_candidates_from_attribution(ldm, "holding", "holding_bucket_attribution"))
-        candidates.extend(_candidates_from_attribution(ldm, "exit", "exit_bucket_attribution"))
-        candidates.extend(_candidates_from_attribution(ldm, "scale_in", "scale_in_bucket_attribution"))
-        candidates.extend(_candidates_from_attribution(ldm, "overnight", "overnight_bucket_attribution"))
+        candidates.extend(
+            _candidates_from_attribution(ldm, "entry", "entry_bucket_attribution")
+        )
+        candidates.extend(
+            _candidates_from_attribution(ldm, "holding", "holding_bucket_attribution")
+        )
+        candidates.extend(
+            _candidates_from_attribution(ldm, "exit", "exit_bucket_attribution")
+        )
+        candidates.extend(
+            _candidates_from_attribution(ldm, "scale_in", "scale_in_bucket_attribution")
+        )
+        candidates.extend(
+            _candidates_from_attribution(
+                ldm, "overnight", "overnight_bucket_attribution"
+            )
+        )
         candidates.extend(_policy_stage_candidates(ldm))
         candidates.extend(_source_drift_candidates(source_contract_changes))
     source_contract_status = (
         "fail"
         if any(str(item.get("severity")) == "fail" for item in source_contract_changes)
-        else "warning"
-        if source_contract_changes
-        else "pass"
+        else "warning" if source_contract_changes else "pass"
     )
     if source_contract_status != "pass":
         warnings.append(f"source_contract_drift_{source_contract_status}")
@@ -5025,7 +6308,10 @@ def build_lifecycle_bucket_discovery_report(
         "runtime_effect": False,
         "decision_authority": "postclose_lifecycle_bucket_discovery_classifier",
         "metric_role": "primary_ev",
-        "window_policy": str(ldm.get("window_policy") or "daily_lifecycle_bucket_discovery_with_preopen_auto_apply"),
+        "window_policy": str(
+            ldm.get("window_policy")
+            or "daily_lifecycle_bucket_discovery_with_preopen_auto_apply"
+        ),
         "sample_floor": "source_bucket_sample_floor",
         "primary_decision_metric": "source_quality_adjusted_ev_pct",
         "source_quality_gate": "exact_joined_lifecycle_rows_or_source_bucket_quality",
@@ -5035,8 +6321,14 @@ def build_lifecycle_bucket_discovery_report(
             "lifecycle_decision_matrix": str(ldm_path) if ldm_path.exists() else None,
         },
         "source_contract": source_contract,
-        "source_contract_previous_hash": _text_hash(normalized_previous_contract) if normalized_previous_contract else None,
-        "source_contract_hash": _text_hash(source_contract) if source_contract else None,
+        "source_contract_previous_hash": (
+            _text_hash(normalized_previous_contract)
+            if normalized_previous_contract
+            else None
+        ),
+        "source_contract_hash": (
+            _text_hash(source_contract) if source_contract else None
+        ),
         "source_contract_changes": source_contract_changes,
         "pre_final_auto_promotion_contract": pre_final_promotion_contract(),
         "summary": {
@@ -5045,7 +6337,9 @@ def build_lifecycle_bucket_discovery_report(
             "target_date": target_date,
             "source_artifact_key": source_key,
             "output_artifact_key": output_key,
-            "source_window_policy": ldm.get("window_policy") if isinstance(ldm, dict) else None,
+            "source_window_policy": (
+                ldm.get("window_policy") if isinstance(ldm, dict) else None
+            ),
             "source_contract_status": source_contract_status,
             "source_contract_change_count": len(source_contract_changes),
             "warnings": warnings,
@@ -5054,11 +6348,19 @@ def build_lifecycle_bucket_discovery_report(
     }
     report = _finalize_report(report, candidates, warnings)
 
-    provider = str(
-        ai_review_provider
-        if ai_review_provider is not None
-        else os.getenv("KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_AI_REVIEW_PROVIDER", AI_REVIEW_DEFAULT_PROVIDER)
-    ).strip().lower() or "none"
+    provider = (
+        str(
+            ai_review_provider
+            if ai_review_provider is not None
+            else os.getenv(
+                "KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_AI_REVIEW_PROVIDER",
+                AI_REVIEW_DEFAULT_PROVIDER,
+            )
+        )
+        .strip()
+        .lower()
+        or "none"
+    )
     candidates_after_ai, ai_review = _run_ai_review_shards(
         report,
         provider=provider,
@@ -5075,14 +6377,22 @@ def build_lifecycle_bucket_discovery_report(
     report["summary"]["ai_two_pass_review_status"] = ai_review.get("status")
     report["summary"]["ai_two_pass_review_required"] = True
     report["summary"]["ai_two_pass_review_shard_count"] = ai_review.get("shard_count")
-    report["summary"]["ai_two_pass_review_parsed_shard_count"] = ai_review.get("parsed_shard_count")
-    report["summary"]["ai_two_pass_review_reviewed_candidate_count"] = ai_review.get("reviewed_candidate_count")
+    report["summary"]["ai_two_pass_review_parsed_shard_count"] = ai_review.get(
+        "parsed_shard_count"
+    )
+    report["summary"]["ai_two_pass_review_reviewed_candidate_count"] = ai_review.get(
+        "reviewed_candidate_count"
+    )
     return report
 
 
 def _render_markdown(report: dict[str, Any]) -> str:
     summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
-    ai_review = report.get("ai_two_pass_review") if isinstance(report.get("ai_two_pass_review"), dict) else {}
+    ai_review = (
+        report.get("ai_two_pass_review")
+        if isinstance(report.get("ai_two_pass_review"), dict)
+        else {}
+    )
     source_dimension_summary = (
         report.get("source_dimension_gap_summary")
         if isinstance(report.get("source_dimension_gap_summary"), dict)
@@ -5151,11 +6461,13 @@ def _render_markdown(report: dict[str, Any]) -> str:
                 f"sim_eligible=`{p.get('sim_policy_eligible_after_resolution')}` "
                 f"live_blockers=`{p.get('live_policy_blockers', [])}` "
             )
-    lines.extend([
-        "",
-        "## 근거",
-        "",
-    ])
+    lines.extend(
+        [
+            "",
+            "## 근거",
+            "",
+        ]
+    )
     if report.get("source_contract_changes"):
         lines.append("### Source Contract Changes")
         for change in (report.get("source_contract_changes") or [])[:12]:
@@ -5166,7 +6478,9 @@ def _render_markdown(report: dict[str, Any]) -> str:
                 )
         lines.append("")
     if ai_review:
-        audit = ai_review.get("audit") if isinstance(ai_review.get("audit"), dict) else {}
+        audit = (
+            ai_review.get("audit") if isinstance(ai_review.get("audit"), dict) else {}
+        )
         lines.extend(
             [
                 "### AI Two-Pass Review",
@@ -5179,7 +6493,9 @@ def _render_markdown(report: dict[str, Any]) -> str:
                 "",
             ]
         )
-        shards = ai_review.get("shards") if isinstance(ai_review.get("shards"), list) else []
+        shards = (
+            ai_review.get("shards") if isinstance(ai_review.get("shards"), list) else []
+        )
         if shards:
             lines.append("### AI Review Shards")
             for shard in shards:
@@ -5254,7 +6570,9 @@ def _write_catalog(report: dict[str, Any]) -> None:
             "broker_order_forbidden": True,
         },
     }
-    bucket_catalog_path(target_date).write_text(json.dumps(catalog, ensure_ascii=False, indent=2), encoding="utf-8")
+    bucket_catalog_path(target_date).write_text(
+        json.dumps(catalog, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
 
 
 def _write_sim_auto_approval(report: dict[str, Any]) -> None:
@@ -5265,8 +6583,12 @@ def _write_sim_auto_approval(report: dict[str, Any]) -> None:
         for item in (report.get("sim_auto_approved_candidates") or [])
         if isinstance(item, dict) and item.get("bucket_id")
     ]
-    positive_approved_candidates = [item for item in approved_candidates if _positive_ev(item)]
-    nonpositive_approved_candidates = [item for item in approved_candidates if not _positive_ev(item)]
+    positive_approved_candidates = [
+        item for item in approved_candidates if _positive_ev(item)
+    ]
+    nonpositive_approved_candidates = [
+        item for item in approved_candidates if not _positive_ev(item)
+    ]
     approved_bucket_ids = [str(item.get("bucket_id")) for item in approved_candidates]
 
     def approved_row(item: dict[str, Any]) -> dict[str, Any]:
@@ -5277,7 +6599,9 @@ def _write_sim_auto_approval(report: dict[str, Any]) -> None:
             "source_bucket_kind": item.get("source_bucket_kind"),
             "stage": item.get("stage"),
             "bucket_type": item.get("bucket_type"),
-            "source_quality_adjusted_ev_pct": item.get("source_quality_adjusted_ev_pct"),
+            "source_quality_adjusted_ev_pct": item.get(
+                "source_quality_adjusted_ev_pct"
+            ),
             "sample": item.get("sample"),
             "joined_sample": item.get("joined_sample"),
             "complete_flow_count": item.get("complete_flow_count"),
@@ -5285,8 +6609,12 @@ def _write_sim_auto_approval(report: dict[str, Any]) -> None:
         }
 
     approved_bucket_rows = [approved_row(item) for item in approved_candidates]
-    positive_ev_bucket_rows = [approved_row(item) for item in positive_approved_candidates]
-    nonpositive_ev_bucket_rows = [approved_row(item) for item in nonpositive_approved_candidates]
+    positive_ev_bucket_rows = [
+        approved_row(item) for item in positive_approved_candidates
+    ]
+    nonpositive_ev_bucket_rows = [
+        approved_row(item) for item in nonpositive_approved_candidates
+    ]
     active_sim_priority_seeds = [
         item
         for item in (report.get("active_sim_priority_seeds") or [])
@@ -5297,8 +6625,13 @@ def _write_sim_auto_approval(report: dict[str, Any]) -> None:
         for row in approved_bucket_rows
         if str(row.get("source_bucket_id") or row.get("bucket_id") or "").strip()
     ]
-    grade_counts = Counter(str(item.get("evidence_grade") or "unknown") for item in approved_candidates)
-    state_counts = Counter(str(item.get("classification_state") or "unknown") for item in approved_candidates)
+    grade_counts = Counter(
+        str(item.get("evidence_grade") or "unknown") for item in approved_candidates
+    )
+    state_counts = Counter(
+        str(item.get("classification_state") or "unknown")
+        for item in approved_candidates
+    )
     payload = {
         "schema_version": "lifecycle_bucket_sim_auto_approval_v1",
         "date": target_date,
@@ -5344,12 +6677,25 @@ def _write_sim_auto_approval(report: dict[str, Any]) -> None:
         "approved_state_counts": dict(sorted(state_counts.items())),
         "active_sim_priority_seed_count": len(active_sim_priority_seeds),
         "active_sim_priority_seed_status_counts": dict(
-            sorted(Counter(str(item.get("status") or "unknown") for item in active_sim_priority_seeds).items())
+            sorted(
+                Counter(
+                    str(item.get("status") or "unknown")
+                    for item in active_sim_priority_seeds
+                ).items()
+            )
         ),
-        "approved_lifecycle_flow_sim_probe_count": state_counts.get(LIFECYCLE_FLOW_SIM_PROBE_STATE, 0),
+        "approved_lifecycle_flow_sim_probe_count": state_counts.get(
+            LIFECYCLE_FLOW_SIM_PROBE_STATE, 0
+        ),
         "approved_evidence_grade_counts": dict(sorted(grade_counts.items())),
-        "source_quality_status": "pass" if (approved_bucket_ids or active_sim_priority_seeds) else "empty",
-        "blocked_reasons": [] if (approved_bucket_ids or active_sim_priority_seeds) else ["sim_auto_approved_bucket_missing"],
+        "source_quality_status": (
+            "pass" if (approved_bucket_ids or active_sim_priority_seeds) else "empty"
+        ),
+        "blocked_reasons": (
+            []
+            if (approved_bucket_ids or active_sim_priority_seeds)
+            else ["sim_auto_approved_bucket_missing"]
+        ),
         "forbidden_uses": list(BASE_FORBIDDEN_USES),
         "evidence_authority_contract": evidence_authority_contract(),
     }
@@ -5375,26 +6721,35 @@ def write_lifecycle_bucket_discovery_report(
         source_suffix=source_suffix,
         output_suffix=output_suffix,
     )
-    output_key = str(report.get("date") or _artifact_key(target_date, output_suffix or source_suffix))
+    output_key = str(
+        report.get("date") or _artifact_key(target_date, output_suffix or source_suffix)
+    )
     discovery_report_path(output_key).write_text(
         json.dumps(report, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
-    discovery_markdown_path(output_key).write_text(_render_markdown(report), encoding="utf-8")
+    discovery_markdown_path(output_key).write_text(
+        _render_markdown(report), encoding="utf-8"
+    )
     _write_catalog(report)
     _write_sim_auto_approval(report)
     return report
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Build lifecycle bucket discovery/classifier report.")
+    parser = argparse.ArgumentParser(
+        description="Build lifecycle bucket discovery/classifier report."
+    )
     parser.add_argument("--date", dest="target_date", default=date.today().isoformat())
     parser.add_argument("--target-date", dest="target_date_alias")
     parser.add_argument("--source-suffix")
     parser.add_argument("--output-suffix")
     parser.add_argument(
         "--ai-review-provider",
-        default=os.getenv("KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_AI_REVIEW_PROVIDER", AI_REVIEW_DEFAULT_PROVIDER),
+        default=os.getenv(
+            "KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_AI_REVIEW_PROVIDER",
+            AI_REVIEW_DEFAULT_PROVIDER,
+        ),
         choices=["openai", "none", "off", "false", "0"],
         help="Provider for AI Tier2 two-pass bucket interpretation/audit.",
     )
