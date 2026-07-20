@@ -37,6 +37,7 @@ from src.engine.ai_response_contracts import (
 )
 from src.engine.swing_selection_funnel_report import (
     SWING_EVENT_STAGES,
+    SWING_SHARED_STAGE_REQUIRES_STRATEGY,
     SWING_STRATEGIES,
     load_recommendation_rows,
     summarize_ofi_qi_events,
@@ -688,11 +689,11 @@ def _is_swing_event(event: dict[str, Any]) -> bool:
     strategy = _event_strategy(event)
     if strategy in SWING_STRATEGIES:
         return True
-    if stage in SUBMITTED_STAGES:
+    if stage.startswith("swing_"):
+        return True
+    if stage in SWING_SHARED_STAGE_REQUIRES_STRATEGY:
         return False
     if stage in SWING_EVENT_STAGES or stage in SELL_STAGES:
-        return True
-    if stage.startswith("swing_"):
         return True
     lowered = stage.lower()
     return "gatekeeper" in lowered or "market_regime" in lowered

@@ -3685,3 +3685,32 @@ def test_write_swing_lifecycle_outputs_creates_all_artifacts(tmp_path):
         assert tmp_path in Path(path).parents
         assert Path(path).exists()
     assert "runtime_approval" in outputs
+
+
+def test_selection_funnel_requires_swing_strategy_for_shared_holding_stage():
+    summary = summarize_pipeline_events(
+        [
+            {
+                "stage": "holding_flow_ofi_smoothing_applied",
+                "record_id": "scalp-hold",
+                "stock_code": "000001",
+                "fields": {"smoothing_action": "NO_CHANGE"},
+            },
+            {
+                "stage": "holding_flow_ofi_smoothing_applied",
+                "record_id": "swing-hold",
+                "stock_code": "000002",
+                "fields": {
+                    "strategy": "MAIN",
+                    "smoothing_action": "NO_CHANGE",
+                    "orderbook_micro_ready": True,
+                    "orderbook_micro_state": "neutral",
+                    "orderbook_micro_observer_healthy": True,
+                    "swing_micro_advice": "WAIT_FOR_PULLBACK",
+                },
+            },
+        ]
+    )
+
+    assert summary["raw_counts"]["holding_flow_ofi_smoothing_applied"] == 1
+    assert summary["ofi_qi_summary"]["exit_smoothing_action_counts"] == {"NO_CHANGE": 1}
