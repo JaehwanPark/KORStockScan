@@ -15,7 +15,6 @@ from src.utils.logger import log_error, log_info
 from src.utils.threshold_cycle_registry import threshold_family_for_stage
 from src.engine.pipeline_event_summary import ProducerSummaryCompactor
 
-
 _WRITE_LOCK = threading.RLock()
 _PRODUCER_COMPACTOR: ProducerSummaryCompactor | None = None
 
@@ -160,7 +159,12 @@ def _threshold_cycle_event_path(target_date: str) -> Path:
 def _compaction_mode() -> str:
     value = os.getenv(
         "PIPELINE_EVENT_HIGH_VOLUME_COMPACTION_MODE",
-        str(getattr(TRADING_RULES, "PIPELINE_EVENT_HIGH_VOLUME_COMPACTION_MODE", "shadow") or "shadow"),
+        str(
+            getattr(
+                TRADING_RULES, "PIPELINE_EVENT_HIGH_VOLUME_COMPACTION_MODE", "shadow"
+            )
+            or "shadow"
+        ),
     )
     normalized = str(value).strip().lower()
     return normalized if normalized in {"off", "shadow", "suppress"} else "off"
@@ -180,7 +184,10 @@ def _compaction_flush_sec() -> int:
 def _compaction_sample_per_bucket() -> int:
     value = os.getenv(
         "PIPELINE_EVENT_COMPACTION_SAMPLE_PER_BUCKET",
-        str(getattr(TRADING_RULES, "PIPELINE_EVENT_COMPACTION_SAMPLE_PER_BUCKET", 6) or 6),
+        str(
+            getattr(TRADING_RULES, "PIPELINE_EVENT_COMPACTION_SAMPLE_PER_BUCKET", 6)
+            or 6
+        ),
     )
     try:
         return max(1, int(value))
@@ -246,7 +253,11 @@ def _is_non_real_observation(stage: str, fields: dict | None) -> bool:
         return True
     if raw_fields.get("probe_id") or raw_fields.get("probe_origin_stage"):
         return True
-    return "sim_" in lowered_stage or "_probe_" in lowered_stage or lowered_stage.startswith("swing_probe_")
+    return (
+        "sim_" in lowered_stage
+        or "_probe_" in lowered_stage
+        or lowered_stage.startswith("swing_probe_")
+    )
 
 
 def _should_emit_text_info(stage: str, fields: dict | None) -> bool:
@@ -258,7 +269,9 @@ def _should_emit_text_info(stage: str, fields: dict | None) -> bool:
     if _is_non_real_observation(safe_stage, raw_fields):
         return False
 
-    allowlist = tuple(getattr(TRADING_RULES, "PIPELINE_EVENT_TEXT_INFO_STAGE_ALLOWLIST", ()) or ())
+    allowlist = tuple(
+        getattr(TRADING_RULES, "PIPELINE_EVENT_TEXT_INFO_STAGE_ALLOWLIST", ()) or ()
+    )
     if safe_stage in allowlist:
         return True
 
@@ -279,8 +292,13 @@ def _fields_hash(fields: dict[str, str]) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
-def _project_fields_for_compact_stream(stage: str, fields: dict[str, str]) -> dict[str, str]:
-    if stage not in _SUBMIT_STAGE_COMPACT_STREAMS or len(fields) <= _COMPACT_FIELD_LIMIT:
+def _project_fields_for_compact_stream(
+    stage: str, fields: dict[str, str]
+) -> dict[str, str]:
+    if (
+        stage not in _SUBMIT_STAGE_COMPACT_STREAMS
+        or len(fields) <= _COMPACT_FIELD_LIMIT
+    ):
         return fields
 
     selected: dict[str, str] = {}
@@ -349,15 +367,21 @@ def emit_pipeline_event(
     merged_fields.update(normalized_fields)
 
     text_fields = _project_fields_for_text(safe_stage, merged_fields)
-    parts = [f"{key}={sanitize_pipeline_field(value)}" for key, value in text_fields.items()]
+    parts = [
+        f"{key}={sanitize_pipeline_field(value)}" for key, value in text_fields.items()
+    ]
     suffix = f" {' '.join(parts)}" if parts else ""
-    text_payload = f"[{safe_pipeline}] {safe_name}({safe_code}) stage={safe_stage}{suffix}"
+    text_payload = (
+        f"[{safe_pipeline}] {safe_name}({safe_code}) stage={safe_stage}{suffix}"
+    )
     if _should_emit_text_info(safe_stage, normalized_fields):
         log_info(text_payload)
 
     emitted_dt = datetime.now()
     event_payload = {
-        "schema_version": int(getattr(TRADING_RULES, "PIPELINE_EVENT_SCHEMA_VERSION", 1) or 1),
+        "schema_version": int(
+            getattr(TRADING_RULES, "PIPELINE_EVENT_SCHEMA_VERSION", 1) or 1
+        ),
         "event_type": "pipeline_event",
         "pipeline": safe_pipeline,
         "stage": safe_stage,
@@ -374,11 +398,18 @@ def emit_pipeline_event(
         return event_payload
 
     threshold_family = threshold_family_for_stage(safe_stage, event_payload["fields"])
-    raw_line = json.dumps(event_payload, ensure_ascii=False, separators=(",", ":"), default=str) + "\n"
+    raw_line = (
+        json.dumps(
+            event_payload, ensure_ascii=False, separators=(",", ":"), default=str
+        )
+        + "\n"
+    )
     compact_line = None
     compact_fields = None
     if threshold_family:
-        compact_fields = _project_fields_for_compact_stream(safe_stage, event_payload["fields"])
+        compact_fields = _project_fields_for_compact_stream(
+            safe_stage, event_payload["fields"]
+        )
         compact_payload = {
             "schema_version": 1,
             "event_type": "threshold_cycle_event",
@@ -392,18 +423,28 @@ def emit_pipeline_event(
             "emitted_at": event_payload["emitted_at"],
             "emitted_date": event_payload["emitted_date"],
         }
-        compact_line = json.dumps(compact_payload, ensure_ascii=False, separators=(",", ":"), default=str) + "\n"
+        compact_line = (
+            json.dumps(
+                compact_payload, ensure_ascii=False, separators=(",", ":"), default=str
+            )
+            + "\n"
+        )
 
     compaction_result = {"suppress_raw": False}
     try:
         with _WRITE_LOCK:
             compactor = _get_producer_compactor()
             if compactor is not None:
-                compaction_result = compactor.submit(event_payload, threshold_family=threshold_family)
+                compaction_result = compactor.submit(
+                    event_payload, threshold_family=threshold_family
+                )
             if not compaction_result.get("suppress_raw"):
                 _append_jsonl(_event_path(event_payload["emitted_date"]), raw_line)
             if compact_line is not None:
-                _append_jsonl(_threshold_cycle_event_path(event_payload["emitted_date"]), compact_line)
+                _append_jsonl(
+                    _threshold_cycle_event_path(event_payload["emitted_date"]),
+                    compact_line,
+                )
     except Exception as exc:
         log_error(f"[PIPELINE_EVENT] structured append failed: {exc}")
 

@@ -64,12 +64,18 @@ class MarketDataCache:
     def get_quote_health(self, symbol: str) -> QuoteHealth:
         quote = self._quotes.get(symbol, _SymbolQuote())
         now = time.time()
-        ws_age_ms = int(max(0.0, (now - quote.last_packet_ts) * 1000)) if quote.last_packet_ts else 10**9
+        ws_age_ms = (
+            int(max(0.0, (now - quote.last_packet_ts) * 1000))
+            if quote.last_packet_ts
+            else 10**9
+        )
         intervals = list(quote.packet_intervals_ms)
         ws_jitter_ms = (max(intervals) - min(intervals)) if len(intervals) >= 2 else 0
         spread_ratio = 0.0
         if quote.best_ask > 0 and quote.best_bid > 0 and quote.last_price > 0:
-            spread_ratio = max(0.0, (quote.best_ask - quote.best_bid) / quote.last_price)
+            spread_ratio = max(
+                0.0, (quote.best_ask - quote.best_bid) / quote.last_price
+            )
         return QuoteHealth(
             ws_age_ms=ws_age_ms,
             ws_jitter_ms=ws_jitter_ms,

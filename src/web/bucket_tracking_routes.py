@@ -12,7 +12,6 @@ from flask import Blueprint, jsonify, render_template_string, request
 
 from src.utils.constants import DATA_DIR
 
-
 bucket_tracking_bp = Blueprint("bucket_tracking", __name__)
 
 DEFAULT_DAYS = 5
@@ -94,7 +93,10 @@ def _request_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
 def _date_window(end_date: str, days: int) -> list[str]:
     end = datetime.strptime(end_date, "%Y-%m-%d").date()
     start = end - timedelta(days=max(1, days) - 1)
-    return [(start + timedelta(days=idx)).strftime("%Y-%m-%d") for idx in range(max(1, days))]
+    return [
+        (start + timedelta(days=idx)).strftime("%Y-%m-%d")
+        for idx in range(max(1, days))
+    ]
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -127,19 +129,39 @@ def _safe_float(value: Any) -> float | None:
 
 
 def _discovery_path(target_date: str) -> Path:
-    return DATA_DIR / "report" / "lifecycle_bucket_discovery" / f"lifecycle_bucket_discovery_{target_date}.json"
+    return (
+        DATA_DIR
+        / "report"
+        / "lifecycle_bucket_discovery"
+        / f"lifecycle_bucket_discovery_{target_date}.json"
+    )
 
 
 def _bridge_path(target_date: str) -> Path:
-    return DATA_DIR / "report" / "runtime_apply_bridge" / f"runtime_apply_bridge_{target_date}.json"
+    return (
+        DATA_DIR
+        / "report"
+        / "runtime_apply_bridge"
+        / f"runtime_apply_bridge_{target_date}.json"
+    )
 
 
 def _runtime_apply_gap_path(target_date: str) -> Path:
-    return DATA_DIR / "report" / "runtime_apply_gap_audit" / f"runtime_apply_gap_audit_{target_date}.json"
+    return (
+        DATA_DIR
+        / "report"
+        / "runtime_apply_gap_audit"
+        / f"runtime_apply_gap_audit_{target_date}.json"
+    )
 
 
 def _ldm_path(target_date: str) -> Path:
-    return DATA_DIR / "report" / "lifecycle_decision_matrix" / f"lifecycle_decision_matrix_{target_date}.json"
+    return (
+        DATA_DIR
+        / "report"
+        / "lifecycle_decision_matrix"
+        / f"lifecycle_decision_matrix_{target_date}.json"
+    )
 
 
 def _source_count_from_ldm(ldm: dict[str, Any]) -> int:
@@ -149,7 +171,11 @@ def _source_count_from_ldm(ldm: dict[str, Any]) -> int:
         "scale_in_bucket_attribution",
         "overnight_bucket_attribution",
     ):
-        summary = ldm.get(section, {}).get("summary", {}) if isinstance(ldm.get(section), dict) else {}
+        summary = (
+            ldm.get(section, {}).get("summary", {})
+            if isinstance(ldm.get(section), dict)
+            else {}
+        )
         total += _safe_int(summary.get("bucket_count"))
     return total
 
@@ -198,7 +224,9 @@ def _candidate_row(target_date: str, item: dict[str, Any]) -> dict[str, Any]:
         "decision_authority": str(item.get("decision_authority") or "-"),
         "runtime_effect": bool(item.get("runtime_effect")),
         "ai_followup": str(item.get("ai_review_followup_required") or "-"),
-        "ai_block_reason": str(item.get("ai_review_blocked_reason") or item.get("ai_final_reason") or "-"),
+        "ai_block_reason": str(
+            item.get("ai_review_blocked_reason") or item.get("ai_final_reason") or "-"
+        ),
         "blocked_reason": "-",
         "last_seen": target_date,
     }
@@ -206,14 +234,20 @@ def _candidate_row(target_date: str, item: dict[str, Any]) -> dict[str, Any]:
 
 def _bridge_row(target_date: str, item: dict[str, Any]) -> dict[str, Any]:
     state = str(item.get("bridge_candidate_state") or "bootstrap_pending")
-    rolling = item.get("rolling_confirmation") if isinstance(item.get("rolling_confirmation"), dict) else {}
+    rolling = (
+        item.get("rolling_confirmation")
+        if isinstance(item.get("rolling_confirmation"), dict)
+        else {}
+    )
     blocked = []
     if rolling.get("blocked_route"):
         blocked.append(f"route={rolling.get('blocked_route')}")
     if rolling.get("expected_route"):
         blocked.append(f"expected={rolling.get('expected_route')}")
     for branch in ("pyramid", "avg_down"):
-        branch_meta = rolling.get(branch) if isinstance(rolling.get(branch), dict) else {}
+        branch_meta = (
+            rolling.get(branch) if isinstance(rolling.get(branch), dict) else {}
+        )
         if branch_meta.get("blocked_route"):
             blocked.append(f"{branch}:route={branch_meta.get('blocked_route')}")
         if branch_meta.get("expected_route"):
@@ -221,11 +255,21 @@ def _bridge_row(target_date: str, item: dict[str, Any]) -> dict[str, Any]:
     return {
         "date": target_date,
         "row_type": "bridge",
-        "bucket_id": str(item.get("lifecycle_bucket_discovery_bucket_id") or item.get("candidate_id") or item.get("family") or "-"),
+        "bucket_id": str(
+            item.get("lifecycle_bucket_discovery_bucket_id")
+            or item.get("candidate_id")
+            or item.get("family")
+            or "-"
+        ),
         "stage": str(item.get("stage") or "unknown"),
         "bucket_type": "runtime_apply_bridge",
-        "bucket_key": ",".join(str(value) for value in item.get("source_bucket_keys") or []) or str(item.get("family") or "-"),
-        "classification_state": str(item.get("lifecycle_bucket_discovery_classification_state") or "-"),
+        "bucket_key": ",".join(
+            str(value) for value in item.get("source_bucket_keys") or []
+        )
+        or str(item.get("family") or "-"),
+        "classification_state": str(
+            item.get("lifecycle_bucket_discovery_classification_state") or "-"
+        ),
         "bridge_candidate_state": state,
         "state_group": _state_group(state),
         "recommended_route": "-",
@@ -233,12 +277,18 @@ def _bridge_row(target_date: str, item: dict[str, Any]) -> dict[str, Any]:
         "sample": 0,
         "joined_sample": 0,
         "ev": None,
-        "source_quality_gate": str((rolling or {}).get("lifecycle_bucket_discovery_gate") or "-"),
+        "source_quality_gate": str(
+            (rolling or {}).get("lifecycle_bucket_discovery_gate") or "-"
+        ),
         "live_auto_apply_family": str(item.get("family") or "-"),
         "decision_authority": str(item.get("decision_authority") or "-"),
         "runtime_effect": bool(item.get("allowed_runtime_apply")),
-        "ai_followup": str(item.get("lifecycle_bucket_discovery_ai_followup_required") or "-"),
-        "ai_block_reason": str(item.get("lifecycle_bucket_discovery_ai_block_ignored_reason") or "-"),
+        "ai_followup": str(
+            item.get("lifecycle_bucket_discovery_ai_followup_required") or "-"
+        ),
+        "ai_block_reason": str(
+            item.get("lifecycle_bucket_discovery_ai_block_ignored_reason") or "-"
+        ),
         "blocked_reason": "; ".join(blocked) or "-",
         "last_seen": target_date,
     }
@@ -269,8 +319,12 @@ def _runtime_apply_gap_row(target_date: str, item: dict[str, Any]) -> dict[str, 
         "decision_authority": "runtime_apply_gap_aggressive_watcher_source_only",
         "runtime_effect": False,
         "ai_followup": str(item.get("ai_route_decision") or "-"),
-        "ai_block_reason": str(item.get("reason_ko") or item.get("ai_reason_en") or "-"),
-        "blocked_reason": str(item.get("failure_reason") or item.get("retry_reason") or "-"),
+        "ai_block_reason": str(
+            item.get("reason_ko") or item.get("ai_reason_en") or "-"
+        ),
+        "blocked_reason": str(
+            item.get("failure_reason") or item.get("retry_reason") or "-"
+        ),
         "last_seen": target_date,
     }
 
@@ -290,7 +344,9 @@ def _row_identity(row: dict[str, Any]) -> str:
 
 
 def _row_state(row: dict[str, Any]) -> str:
-    return str(row.get("bridge_candidate_state") or row.get("classification_state") or "")
+    return str(
+        row.get("bridge_candidate_state") or row.get("classification_state") or ""
+    )
 
 
 def _summarize_groups(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -377,10 +433,24 @@ def build_bucket_tracking_view_model(
             missing_dates.append({"date": item_date, "missing": missing})
 
         ldm_source_count = _source_count_from_ldm(ldm)
-        discovery_summary = discovery.get("summary") if isinstance(discovery.get("summary"), dict) else {}
-        bridge_summary = bridge.get("summary") if isinstance(bridge.get("summary"), dict) else {}
-        gap_summary = runtime_gap.get("summary") if isinstance(runtime_gap.get("summary"), dict) else {}
-        gap_kpi = runtime_gap.get("runtime_uptake_kpi") if isinstance(runtime_gap.get("runtime_uptake_kpi"), dict) else {}
+        discovery_summary = (
+            discovery.get("summary")
+            if isinstance(discovery.get("summary"), dict)
+            else {}
+        )
+        bridge_summary = (
+            bridge.get("summary") if isinstance(bridge.get("summary"), dict) else {}
+        )
+        gap_summary = (
+            runtime_gap.get("summary")
+            if isinstance(runtime_gap.get("summary"), dict)
+            else {}
+        )
+        gap_kpi = (
+            runtime_gap.get("runtime_uptake_kpi")
+            if isinstance(runtime_gap.get("runtime_uptake_kpi"), dict)
+            else {}
+        )
         surfaced_count = _safe_int(discovery_summary.get("surfaced_candidate_count"))
         sim_count = _safe_int(discovery_summary.get("sim_auto_approved_count"))
         live_count = max(
@@ -391,7 +461,11 @@ def build_bucket_tracking_view_model(
         blocked_count = 0
         code_patch_count = _safe_int(discovery_summary.get("code_patch_required_count"))
 
-        candidates = discovery.get("candidates") if isinstance(discovery.get("candidates"), list) else []
+        candidates = (
+            discovery.get("candidates")
+            if isinstance(discovery.get("candidates"), list)
+            else []
+        )
         for candidate in candidates:
             if not isinstance(candidate, dict):
                 continue
@@ -400,7 +474,11 @@ def build_bucket_tracking_view_model(
                 blocked_count += 1
             date_rows.append(row)
 
-        bridge_candidates = bridge.get("candidates") if isinstance(bridge.get("candidates"), list) else []
+        bridge_candidates = (
+            bridge.get("candidates")
+            if isinstance(bridge.get("candidates"), list)
+            else []
+        )
         for candidate in bridge_candidates:
             if not isinstance(candidate, dict):
                 continue
@@ -408,7 +486,11 @@ def build_bucket_tracking_view_model(
             if _is_blocked_state(str(row["bridge_candidate_state"])):
                 blocked_count += 1
             date_rows.append(row)
-        gap_ledger = runtime_gap.get("candidate_route_ledger") if isinstance(runtime_gap.get("candidate_route_ledger"), list) else []
+        gap_ledger = (
+            runtime_gap.get("candidate_route_ledger")
+            if isinstance(runtime_gap.get("candidate_route_ledger"), list)
+            else []
+        )
         for candidate in gap_ledger:
             if not isinstance(candidate, dict):
                 continue
@@ -426,9 +508,13 @@ def build_bucket_tracking_view_model(
             current_blocked_total = blocked_count
             current_code_patch_total = code_patch_count
             current_gap_status = str(runtime_gap.get("status") or "-")
-            current_runtime_uptake_rate_pct = _safe_float(gap_kpi.get("runtime_uptake_rate_pct")) or 0.0
+            current_runtime_uptake_rate_pct = (
+                _safe_float(gap_kpi.get("runtime_uptake_rate_pct")) or 0.0
+            )
             current_gap_retry_count = _safe_int(gap_summary.get("retry_queue_count"))
-            current_gap_directive_count = _safe_int(gap_summary.get("codex_directive_count"))
+            current_gap_directive_count = _safe_int(
+                gap_summary.get("codex_directive_count")
+            )
             current_bridge_candidate_count = bridge_candidate_count
             current_gap_push_target_count = len(
                 runtime_gap.get("aggressive_push_targets")
@@ -456,13 +542,24 @@ def build_bucket_tracking_view_model(
                 "live_auto_apply_ready_count": live_count,
                 "bridge_candidate_count": bridge_candidate_count,
                 "runtime_apply_gap_status": runtime_gap.get("status") or "-",
-                "runtime_uptake_rate_pct": _safe_float(gap_kpi.get("runtime_uptake_rate_pct")) or 0.0,
-                "runtime_apply_gap_retry_count": _safe_int(gap_summary.get("retry_queue_count")),
-                "runtime_apply_gap_directive_count": _safe_int(gap_summary.get("codex_directive_count")),
+                "runtime_uptake_rate_pct": _safe_float(
+                    gap_kpi.get("runtime_uptake_rate_pct")
+                )
+                or 0.0,
+                "runtime_apply_gap_retry_count": _safe_int(
+                    gap_summary.get("retry_queue_count")
+                ),
+                "runtime_apply_gap_directive_count": _safe_int(
+                    gap_summary.get("codex_directive_count")
+                ),
                 "blocked_count": blocked_count,
                 "code_patch_required_count": code_patch_count,
-                "ai_review_status": discovery_summary.get("ai_two_pass_review_status") or "-",
-                "source_contract_status": discovery_summary.get("source_contract_status") or "-",
+                "ai_review_status": discovery_summary.get("ai_two_pass_review_status")
+                or "-",
+                "source_contract_status": discovery_summary.get(
+                    "source_contract_status"
+                )
+                or "-",
             }
         )
 
@@ -489,22 +586,34 @@ def build_bucket_tracking_view_model(
         previous_state = _row_state(previous) if previous else ""
         current_state = _row_state(row)
         row["previous_state"] = previous_state or "-"
-        row["first_seen_in_window"] = (history_by_id.get(row_id) or [{"date": target_date}])[0]["date"]
-        row["changed_from_previous"] = bool(previous_state and previous_state != current_state)
+        row["first_seen_in_window"] = (
+            history_by_id.get(row_id) or [{"date": target_date}]
+        )[0]["date"]
+        row["changed_from_previous"] = bool(
+            previous_state and previous_state != current_state
+        )
         row["change_label"] = (
             f"{previous_state} -> {current_state}"
             if row["changed_from_previous"]
-            else "new_in_window"
-            if not previous_state
-            else "unchanged"
+            else "new_in_window" if not previous_state else "unchanged"
         )
         row["history"] = history_by_id.get(row_id, []) + [
-            {"date": target_date, "state": current_state, "state_group": str(row.get("state_group") or "")}
+            {
+                "date": target_date,
+                "state": current_state,
+                "state_group": str(row.get("state_group") or ""),
+            }
         ]
         if stage_filter != "all" and row.get("stage") != stage_filter:
             continue
-        row_state = str(row.get("bridge_candidate_state") or row.get("classification_state") or "")
-        if state_filter != "all" and row_state != state_filter and row.get("state_group") != state_filter:
+        row_state = str(
+            row.get("bridge_candidate_state") or row.get("classification_state") or ""
+        )
+        if (
+            state_filter != "all"
+            and row_state != state_filter
+            and row.get("state_group") != state_filter
+        ):
             continue
         filtered_rows.append(row)
     filtered_rows = sorted(filtered_rows, key=_sort_key)[:top]
@@ -562,12 +671,15 @@ def build_bucket_tracking_view_model(
             "human_intervention_required": current_human_intervention,
             "row_count": len(filtered_rows),
             "state_counts": dict(current_state_counts),
-            "changed_count": sum(1 for row in filtered_rows if row.get("changed_from_previous")),
-            "new_in_window_count": sum(1 for row in filtered_rows if row.get("change_label") == "new_in_window"),
+            "changed_count": sum(
+                1 for row in filtered_rows if row.get("changed_from_previous")
+            ),
+            "new_in_window_count": sum(
+                1 for row in filtered_rows if row.get("change_label") == "new_in_window"
+            ),
         },
         "stage_summary": {
-            stage: dict(current_stage_counts.get(stage, Counter()))
-            for stage in STAGES
+            stage: dict(current_stage_counts.get(stage, Counter())) for stage in STAGES
         },
         "groups": _summarize_groups(filtered_rows),
         "timeline": timeline,

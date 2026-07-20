@@ -33,12 +33,12 @@ import src.notify.telegram_manager as telegram_manager
 # ==========================================
 # 1. 경로 및 로깅 설정
 # ==========================================
-LOG_DIR = os.path.join(PROJECT_ROOT, 'logs')
+LOG_DIR = os.path.join(PROJECT_ROOT, "logs")
 os.makedirs(LOG_DIR, exist_ok=True)
 
-LOG_PATH = os.path.join(LOG_DIR, 'update_kospi_error.log')
-TABLE_NAME = 'daily_stock_quotes'
-STATUS_DIR = PROJECT_ROOT / 'data' / 'runtime' / 'update_kospi_status'
+LOG_PATH = os.path.join(LOG_DIR, "update_kospi_error.log")
+TABLE_NAME = "daily_stock_quotes"
+STATUS_DIR = PROJECT_ROOT / "data" / "runtime" / "update_kospi_status"
 STATUS_VERSION = 1
 
 # Constants
@@ -54,22 +54,27 @@ logger = logging.getLogger("KospiUpdater")
 logger.setLevel(logging.INFO)
 
 if not logger.handlers:
-    file_handler = RotatingFileHandler(LOG_PATH, maxBytes=LOG_MAX_BYTES, backupCount=LOG_BACKUP_COUNT, encoding='utf-8')
-    file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+    file_handler = RotatingFileHandler(
+        LOG_PATH, maxBytes=LOG_MAX_BYTES, backupCount=LOG_BACKUP_COUNT, encoding="utf-8"
+    )
+    file_handler.setFormatter(
+        logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+    )
     logger.addHandler(file_handler)
 
     console_handler = logging.StreamHandler()
-    console_handler.setFormatter(logging.Formatter('%(message)s'))
+    console_handler.setFormatter(logging.Formatter("%(message)s"))
     logger.addHandler(console_handler)
 
 logger.info("🧠 Nightly feature source: src.model.common_v2.calculate_all_features")
 
+
 def _now_iso() -> str:
-    return datetime.now().isoformat(timespec='seconds')
+    return datetime.now().isoformat(timespec="seconds")
 
 
 def _today_str() -> str:
-    return datetime.now().strftime('%Y-%m-%d')
+    return datetime.now().strftime("%Y-%m-%d")
 
 
 def _update_kospi_status_path(target_date: str | None = None) -> Path:
@@ -78,9 +83,14 @@ def _update_kospi_status_path(target_date: str | None = None) -> Path:
 
 
 def _write_update_kospi_status(payload: dict, path: Path | None = None) -> Path:
-    status_path = path or _update_kospi_status_path(str(payload.get('target_date') or _today_str()))
+    status_path = path or _update_kospi_status_path(
+        str(payload.get("target_date") or _today_str())
+    )
     status_path.parent.mkdir(parents=True, exist_ok=True)
-    status_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True, default=str), encoding='utf-8')
+    status_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True, default=str),
+        encoding="utf-8",
+    )
     return status_path
 
 
@@ -88,105 +98,115 @@ def _load_latest_quote_state() -> dict:
     try:
         db = DBManager()
         with db.engine.connect() as conn:
-            latest_quote_date = conn.execute(text(f"SELECT MAX(quote_date) FROM {TABLE_NAME}")).scalar()
+            latest_quote_date = conn.execute(
+                text(f"SELECT MAX(quote_date) FROM {TABLE_NAME}")
+            ).scalar()
             rows_on_latest_date = 0
             if latest_quote_date is not None:
                 rows_on_latest_date = conn.execute(
-                    text(f"SELECT COUNT(*) FROM {TABLE_NAME} WHERE quote_date = :latest_quote_date"),
-                    {'latest_quote_date': latest_quote_date},
+                    text(
+                        f"SELECT COUNT(*) FROM {TABLE_NAME} WHERE quote_date = :latest_quote_date"
+                    ),
+                    {"latest_quote_date": latest_quote_date},
                 ).scalar()
         return {
-            'db_state_status': 'available',
-            'latest_quote_date': str(latest_quote_date) if latest_quote_date is not None else None,
-            'rows_on_latest_date': int(rows_on_latest_date or 0),
+            "db_state_status": "available",
+            "latest_quote_date": (
+                str(latest_quote_date) if latest_quote_date is not None else None
+            ),
+            "rows_on_latest_date": int(rows_on_latest_date or 0),
         }
     except Exception as e:
         return {
-            'db_state_status': 'unavailable',
-            'error': str(e),
+            "db_state_status": "unavailable",
+            "error": str(e),
         }
 
 
 def _step(name: str, status: str, **details) -> dict:
     payload = {
-        'name': name,
-        'status': status,
-        'finished_at': _now_iso(),
+        "name": name,
+        "status": status,
+        "finished_at": _now_iso(),
     }
     payload.update({k: v for k, v in details.items() if v is not None})
     return payload
 
+
 # 💡 [핵심 매핑] 모델 스키마와 완벽 동기화 (Return -> daily_return 포함)
 COLUMN_MAPPING = {
-    'Date': 'quote_date',
-    'Code': 'stock_code',
-    'Name': 'stock_name',
-    'Open': 'open_price',
-    'High': 'high_price',
-    'Low': 'low_price',
-    'Close': 'close_price',
-    'Volume': 'volume',
-    'MA5': 'ma5',
-    'MA20': 'ma20',
-    'MA60': 'ma60',
-    'MA120': 'ma120',
-    'RSI': 'rsi',
-    'MACD': 'macd',
-    'MACD_Sig': 'macd_sig',
-    'MACD_Hist': 'macd_hist',
-    'BBL': 'bbl',
-    'BBM': 'bbm',
-    'BBU': 'bbu',
-    'BBB': 'bbb',
-    'BBP': 'bbp',
-    'VWAP': 'vwap',
-    'OBV': 'obv',
-    'ATR': 'atr',
-    'Return': 'daily_return',  # 💡 예약어 충돌 회피
-    'Marcap': 'marcap',
-    'Retail_Net': 'retail_net',
-    'Foreign_Net': 'foreign_net',
-    'Inst_Net': 'inst_net',
-    'Margin_Rate': 'margin_rate',
-    'Is_NXT': 'is_nxt'
+    "Date": "quote_date",
+    "Code": "stock_code",
+    "Name": "stock_name",
+    "Open": "open_price",
+    "High": "high_price",
+    "Low": "low_price",
+    "Close": "close_price",
+    "Volume": "volume",
+    "MA5": "ma5",
+    "MA20": "ma20",
+    "MA60": "ma60",
+    "MA120": "ma120",
+    "RSI": "rsi",
+    "MACD": "macd",
+    "MACD_Sig": "macd_sig",
+    "MACD_Hist": "macd_hist",
+    "BBL": "bbl",
+    "BBM": "bbm",
+    "BBU": "bbu",
+    "BBB": "bbb",
+    "BBP": "bbp",
+    "VWAP": "vwap",
+    "OBV": "obv",
+    "ATR": "atr",
+    "Return": "daily_return",  # 💡 예약어 충돌 회피
+    "Marcap": "marcap",
+    "Retail_Net": "retail_net",
+    "Foreign_Net": "foreign_net",
+    "Inst_Net": "inst_net",
+    "Margin_Rate": "margin_rate",
+    "Is_NXT": "is_nxt",
 }
+
 
 def _normalize_feature_output_columns(df: pd.DataFrame) -> pd.DataFrame:
     """feature 함수 출력 컬럼을 nightly update 스키마에 맞게 정규화합니다."""
     rename_map = {
-        'return': 'Return',
-        'return_1d': 'Return',
-        'ma5': 'MA5',
-        'ma20': 'MA20',
-        'ma60': 'MA60',
-        'ma120': 'MA120',
-        'rsi': 'RSI',
-        'macd': 'MACD',
-        'macd_sig': 'MACD_Sig',
-        'macd_hist': 'MACD_Hist',
-        'bbl': 'BBL',
-        'bbm': 'BBM',
-        'bbu': 'BBU',
-        'bbb': 'BBB',
-        'bbp': 'BBP',
-        'vwap20': 'VWAP',
-        'vwap': 'VWAP',
-        'obv': 'OBV',
-        'atr': 'ATR',
-        'date': 'Date',
-        'code': 'Code',
-        'name': 'Name',
-        'open': 'Open',
-        'high': 'High',
-        'low': 'Low',
-        'close': 'Close',
-        'volume': 'Volume',
-        'foreign_net': 'Foreign_Net',
-        'inst_net': 'Inst_Net',
-        'margin_rate': 'Margin_Rate',
-        'is_nxt': 'Is_NXT',
+        "return": "Return",
+        "return_1d": "Return",
+        "ma5": "MA5",
+        "ma20": "MA20",
+        "ma60": "MA60",
+        "ma120": "MA120",
+        "rsi": "RSI",
+        "macd": "MACD",
+        "macd_sig": "MACD_Sig",
+        "macd_hist": "MACD_Hist",
+        "bbl": "BBL",
+        "bbm": "BBM",
+        "bbu": "BBU",
+        "bbb": "BBB",
+        "bbp": "BBP",
+        "vwap20": "VWAP",
+        "vwap": "VWAP",
+        "obv": "OBV",
+        "atr": "ATR",
+        "date": "Date",
+        "code": "Code",
+        "name": "Name",
+        "open": "Open",
+        "high": "High",
+        "low": "Low",
+        "close": "Close",
+        "volume": "Volume",
+        "foreign_net": "Foreign_Net",
+        "inst_net": "Inst_Net",
+        "margin_rate": "Margin_Rate",
+        "is_nxt": "Is_NXT",
     }
-    applicable = {k: v for k, v in rename_map.items() if k in df.columns and v not in df.columns}
+    applicable = {
+        k: v for k, v in rename_map.items() if k in df.columns and v not in df.columns
+    }
     return df.rename(columns=applicable)
 
 
@@ -194,46 +214,73 @@ def _prepare_feature_input_columns(df: pd.DataFrame) -> pd.DataFrame:
     """nightly update 원본 컬럼을 common_v2 feature 입력 스키마에 맞춥니다."""
     out = df.copy()
     rename_map = {
-        'Date': 'quote_date',
-        'Code': 'stock_code',
-        'Name': 'stock_name',
-        'Open': 'open_price',
-        'High': 'high_price',
-        'Low': 'low_price',
-        'Close': 'close_price',
-        'Volume': 'volume',
-        'Foreign_Net': 'foreign_net',
-        'Inst_Net': 'inst_net',
-        'Margin_Rate': 'margin_rate',
-        'Is_NXT': 'is_nxt',
+        "Date": "quote_date",
+        "Code": "stock_code",
+        "Name": "stock_name",
+        "Open": "open_price",
+        "High": "high_price",
+        "Low": "low_price",
+        "Close": "close_price",
+        "Volume": "volume",
+        "Foreign_Net": "foreign_net",
+        "Inst_Net": "inst_net",
+        "Margin_Rate": "margin_rate",
+        "Is_NXT": "is_nxt",
     }
     for source, target in rename_map.items():
         if source in out.columns and target not in out.columns:
             out[target] = out[source]
     return out
 
+
 def _sanitize_daily_input(df: pd.DataFrame, code_str: str) -> pd.DataFrame:
     """지표 계산 전에 Datetime/숫자 입력을 정규화합니다."""
     out = df.copy()
-    if 'index' in out.columns and 'Date' not in out.columns:
-        out = out.rename(columns={'index': 'Date'})
+    if "index" in out.columns and "Date" not in out.columns:
+        out = out.rename(columns={"index": "Date"})
 
-    out['Date'] = pd.to_datetime(out['Date'], errors='coerce')
-    numeric_cols = ['Open', 'High', 'Low', 'Close', 'Volume', 'Retail_Net', 'Foreign_Net', 'Inst_Net', 'Margin_Rate']
+    out["Date"] = pd.to_datetime(out["Date"], errors="coerce")
+    numeric_cols = [
+        "Open",
+        "High",
+        "Low",
+        "Close",
+        "Volume",
+        "Retail_Net",
+        "Foreign_Net",
+        "Inst_Net",
+        "Margin_Rate",
+    ]
     for col in numeric_cols:
         if col not in out.columns:
             out[col] = 0.0
-        out[col] = pd.to_numeric(out[col], errors='coerce')
+        out[col] = pd.to_numeric(out[col], errors="coerce")
 
     raw_rows = len(out)
-    diag_cols = [c for c in ['Date', 'Open', 'High', 'Low', 'Close', 'Volume'] if c in out.columns]
+    diag_cols = [
+        c
+        for c in ["Date", "Open", "High", "Low", "Close", "Volume"]
+        if c in out.columns
+    ]
     if len(diag_cols) == 6:
         null_diag = out[diag_cols].isnull().sum().to_dict()
     else:
-        null_diag = {"missing_cols": [c for c in ['Date', 'Open', 'High', 'Low', 'Close', 'Volume'] if c not in out.columns]}
+        null_diag = {
+            "missing_cols": [
+                c
+                for c in ["Date", "Open", "High", "Low", "Close", "Volume"]
+                if c not in out.columns
+            ]
+        }
 
-    out = out.sort_values('Date').dropna(subset=['Date', 'Open', 'High', 'Low', 'Close', 'Volume']).copy()
-    out[['Retail_Net', 'Foreign_Net', 'Inst_Net', 'Margin_Rate']] = out[['Retail_Net', 'Foreign_Net', 'Inst_Net', 'Margin_Rate']].fillna(0.0)
+    out = (
+        out.sort_values("Date")
+        .dropna(subset=["Date", "Open", "High", "Low", "Close", "Volume"])
+        .copy()
+    )
+    out[["Retail_Net", "Foreign_Net", "Inst_Net", "Margin_Rate"]] = out[
+        ["Retail_Net", "Foreign_Net", "Inst_Net", "Margin_Rate"]
+    ].fillna(0.0)
 
     if len(out) < 20:
         logger.warning(
@@ -244,17 +291,19 @@ def _sanitize_daily_input(df: pd.DataFrame, code_str: str) -> pd.DataFrame:
 
     return out
 
+
 # ==========================================
 # 2. 공통 코드 정규화 헬퍼
 # ==========================================
 def _normalize_stock_code(code) -> str:
-    raw = str(code or "").strip().upper().replace('.0', '')
-    if raw.endswith('_AL'):
+    raw = str(code or "").strip().upper().replace(".0", "")
+    if raw.endswith("_AL"):
         raw = raw[:-3]
-    if raw.startswith('A') and len(raw) >= 7:
+    if raw.startswith("A") and len(raw) >= 7:
         raw = raw[1:]
-    digits = ''.join(ch for ch in raw if ch.isdigit())
+    digits = "".join(ch for ch in raw if ch.isdigit())
     return digits[-6:].zfill(6) if digits else raw
+
 
 # ==========================================
 # 3. 메인 업데이트 로직
@@ -267,57 +316,66 @@ def process_and_save_stock(code, token, session, is_nxt=False) -> pd.DataFrame:
 
         # 1. API 순차 호출
         df_ohlcv = kiwoom_utils.get_daily_ohlcv_ka10081_df(token, code_str)
-        if df_ohlcv.empty: return pd.DataFrame()
+        if df_ohlcv.empty:
+            return pd.DataFrame()
         # 💡 [안전 장치 2] 조인(Join) 실패를 막기 위해 인덱스를 날짜형(Datetime)으로 강제 통일
-        df_ohlcv.index = pd.to_datetime(df_ohlcv.index, errors='coerce')
+        df_ohlcv.index = pd.to_datetime(df_ohlcv.index, errors="coerce")
 
-        df_investor = kiwoom_utils.get_investor_daily_ka10059_df(token, code_str, is_nxt=is_nxt)
+        df_investor = kiwoom_utils.get_investor_daily_ka10059_df(
+            token, code_str, is_nxt=is_nxt
+        )
         if not df_investor.empty:
-            df_investor.index = pd.to_datetime(df_investor.index, errors='coerce')
+            df_investor.index = pd.to_datetime(df_investor.index, errors="coerce")
 
-        df_margin = kiwoom_utils.get_margin_daily_ka10013_df(token, code_str, is_nxt=is_nxt)
+        df_margin = kiwoom_utils.get_margin_daily_ka10013_df(
+            token, code_str, is_nxt=is_nxt
+        )
         if not df_margin.empty:
-            df_margin.index = pd.to_datetime(df_margin.index, errors='coerce')
+            df_margin.index = pd.to_datetime(df_margin.index, errors="coerce")
 
         basic_info = kiwoom_utils.get_basic_info_ka10001(token, code_str) or {}
-        
+
         # 2. Date 기준 무결점 병합 (Join)
         df = df_ohlcv
         if not df_investor.empty:
-            df = df.join(df_investor, how='left')
+            df = df.join(df_investor, how="left")
         else:
-            for col in ['Retail_Net', 'Foreign_Net', 'Inst_Net']: df[col] = np.nan
+            for col in ["Retail_Net", "Foreign_Net", "Inst_Net"]:
+                df[col] = np.nan
 
         if not df_margin.empty:
-            df = df.join(df_margin, how='left')
+            df = df.join(df_margin, how="left")
         else:
-            df['Margin_Rate'] = np.nan
+            df["Margin_Rate"] = np.nan
 
         # 💡 [안전 장치 3] 0으로 덮어버리기 전에, 어제 발표된 Margin_Rate를 오늘 빈칸으로 끌어내림 (ffill)
         # Forward fill only for missing investor and margin data
-        cols_to_ffill = ['Margin_Rate', 'Retail_Net', 'Foreign_Net', 'Inst_Net']
+        cols_to_ffill = ["Margin_Rate", "Retail_Net", "Foreign_Net", "Inst_Net"]
         for col in cols_to_ffill:
             if col in df.columns:
                 df[col] = df[col].ffill()
         # 그 뒤에 진짜로 데이터가 없는 상장 초기 빈칸들만 0으로 채움
-        df.fillna({'Retail_Net': 0, 'Foreign_Net': 0, 'Inst_Net': 0, 'Margin_Rate': 0}, inplace=True)
-        
+        df.fillna(
+            {"Retail_Net": 0, "Foreign_Net": 0, "Inst_Net": 0, "Margin_Rate": 0},
+            inplace=True,
+        )
+
         df = df.reset_index()
-        
+
         # 인덱스 이름 보정 (reset_index 후 이름이 index가 될 수 있음)
-        if 'index' in df.columns and 'Date' not in df.columns:
-            df.rename(columns={'index': 'Date'}, inplace=True)
-        
+        if "index" in df.columns and "Date" not in df.columns:
+            df.rename(columns={"index": "Date"}, inplace=True)
+
         # 3. 지표 계산 전 입력 정제
         df = _sanitize_daily_input(df, code_str)
         if df.empty:
             return pd.DataFrame()
 
         # 💡 [핵심 복구 1] 종목 코드, 이름, 그리고 시가총액(Marcap) 주입!
-        df['Code'] = code_str
-        df['Name'] = basic_info.get('Name') or '이름없음'
-        df['Marcap'] = basic_info.get('Marcap') or 0
-        df['Is_NXT'] = bool(is_nxt)
+        df["Code"] = code_str
+        df["Name"] = basic_info.get("Name") or "이름없음"
+        df["Marcap"] = basic_info.get("Marcap") or 0
+        df["Is_NXT"] = bool(is_nxt)
 
         # 💡 [핵심 복구 2] 지표 계산 전 원본 데이터 완벽 백업
         backup_df = df.copy()
@@ -331,22 +389,33 @@ def process_and_save_stock(code, token, session, is_nxt=False) -> pd.DataFrame:
 
         # 💡 [핵심 복구 3] 원본 컬럼 강제 복원 (지표 계산기가 0으로 덮어쓰는 것 원천 차단)
         for col in original_cols:
-            if col in ['Marcap', 'Margin_Rate', 'Retail_Net', 'Foreign_Net', 'Inst_Net', 'Code', 'Name', 'Is_NXT']:
+            if col in [
+                "Marcap",
+                "Margin_Rate",
+                "Retail_Net",
+                "Foreign_Net",
+                "Inst_Net",
+                "Code",
+                "Name",
+                "Is_NXT",
+            ]:
                 df[col] = backup_df[col].values
             elif col not in df.columns:
                 df[col] = backup_df[col].values
 
         # Ensure 'Return' column exists for mapping
-        if 'Return' not in df.columns:
+        if "Return" not in df.columns:
             # Compute daily return as percentage change of close_price
-            if 'Close' in df.columns:
-                df['Return'] = pd.to_numeric(df['Close'], errors='coerce').pct_change().fillna(0.0)
+            if "Close" in df.columns:
+                df["Return"] = (
+                    pd.to_numeric(df["Close"], errors="coerce").pct_change().fillna(0.0)
+                )
             else:
-                df['Return'] = 0.0
+                df["Return"] = 0.0
 
-        if 'Date' not in df.columns:
-            raise ValueError(f'[{code_str}] feature 출력에 Date 컬럼이 없습니다.')
-        df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+        if "Date" not in df.columns:
+            raise ValueError(f"[{code_str}] feature 출력에 Date 컬럼이 없습니다.")
+        df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
 
         # 5. DB 컬럼명으로 최종 변환
         final_valid_cols = [col for col in COLUMN_MAPPING.keys() if col in df.columns]
@@ -354,38 +423,65 @@ def process_and_save_stock(code, token, session, is_nxt=False) -> pd.DataFrame:
 
         # 6. 최근 100일치 슬라이싱
         cutoff_ts = pd.Timestamp(datetime.now().date() - timedelta(days=CUTOFF_DAYS))
-        new_rows = df[df['quote_date'] >= cutoff_ts].copy()
+        new_rows = df[df["quote_date"] >= cutoff_ts].copy()
 
         # 7. DB 적재 전 정리
-        if 'quote_date' in new_rows.columns:
-            new_rows['quote_date'] = pd.to_datetime(new_rows['quote_date'], errors='coerce').dt.date
-        if 'is_nxt' in new_rows.columns:
-            new_rows['is_nxt'] = new_rows['is_nxt'].fillna(False).astype(bool)
+        if "quote_date" in new_rows.columns:
+            new_rows["quote_date"] = pd.to_datetime(
+                new_rows["quote_date"], errors="coerce"
+            ).dt.date
+        if "is_nxt" in new_rows.columns:
+            new_rows["is_nxt"] = new_rows["is_nxt"].fillna(False).astype(bool)
 
-        new_rows = new_rows.dropna(subset=['quote_date', 'close_price', 'daily_return'])
+        new_rows = new_rows.dropna(subset=["quote_date", "close_price", "daily_return"])
         new_rows = new_rows.replace([np.inf, -np.inf], np.nan)
 
         # 💡 [핵심 복구 4] 결측치(NaN) 완벽 제거 및 0 채우기 (PostgreSQL 에러 원천 차단)
         # Fill NaN with appropriate defaults per column type
         # Ensure numeric columns are numeric (convert object dtype)
-        numeric_cols = ['open_price', 'high_price', 'low_price', 'close_price', 'volume',
-                        'ma5', 'ma20', 'ma60', 'ma120', 'rsi', 'macd', 'macd_sig', 'macd_hist',
-                        'bbl', 'bbm', 'bbu', 'bbb', 'bbp', 'vwap', 'obv', 'atr', 'daily_return',
-                        'marcap', 'retail_net', 'foreign_net', 'inst_net', 'margin_rate']
+        numeric_cols = [
+            "open_price",
+            "high_price",
+            "low_price",
+            "close_price",
+            "volume",
+            "ma5",
+            "ma20",
+            "ma60",
+            "ma120",
+            "rsi",
+            "macd",
+            "macd_sig",
+            "macd_hist",
+            "bbl",
+            "bbm",
+            "bbu",
+            "bbb",
+            "bbp",
+            "vwap",
+            "obv",
+            "atr",
+            "daily_return",
+            "marcap",
+            "retail_net",
+            "foreign_net",
+            "inst_net",
+            "margin_rate",
+        ]
         for col in numeric_cols:
             if col in new_rows.columns:
-                new_rows[col] = pd.to_numeric(new_rows[col], errors='coerce')
-        
+                new_rows[col] = pd.to_numeric(new_rows[col], errors="coerce")
+
         for col in new_rows.columns:
             if is_numeric_dtype(new_rows[col]):
                 new_rows[col] = new_rows[col].fillna(0)
             elif is_string_dtype(new_rows[col]):
-                new_rows[col] = new_rows[col].fillna('')
+                new_rows[col] = new_rows[col].fillna("")
             elif is_bool_dtype(new_rows[col]):
                 new_rows[col] = new_rows[col].fillna(False)
             else:
                 # fallback: fill with empty string
-                new_rows[col] = new_rows[col].fillna('')
+                new_rows[col] = new_rows[col].fillna("")
 
         # 안전한 최종 컬럼 필터링
         final_cols = [col for col in COLUMN_MAPPING.values() if col in new_rows.columns]
@@ -395,34 +491,49 @@ def process_and_save_stock(code, token, session, is_nxt=False) -> pd.DataFrame:
     except Exception as e:
         logger.error(f"❌ [{code}] 처리 중 치명적 에러: {e}", exc_info=True)
         return pd.DataFrame()
-        
+
+
 # ==========================================
 # 3. 전체 스케줄러 (배치 메인)
 # ==========================================
 def update_kospi_data():
     logger.info("📅 오늘이 주식시장 개장일인지 확인합니다...")
-    
+
     is_open, reason = kiwoom_utils.is_trading_day()
     # is_open, reason = True, "정상거래일 (MOCK)"
-    
+
     event_bus = EventBus()
-    
+
     if not is_open:
-        logger.info(f"🛑 오늘은 {reason} 휴장일이므로 데이터베이스 업데이트를 종료합니다.")
-        return {'status': 'skipped_non_trading_day', 'reason': reason}
+        logger.info(
+            f"🛑 오늘은 {reason} 휴장일이므로 데이터베이스 업데이트를 종료합니다."
+        )
+        return {"status": "skipped_non_trading_day", "reason": reason}
 
     logger.info("=== KORStockScan 일일 데이터 수집 (PostgreSQL 정식가동) ===")
-    
+
     db = DBManager()
     db.init_db()
 
     kiwoom_token = kiwoom_utils.get_kiwoom_token()
     if not kiwoom_token:
         logger.error("❌ 키움 토큰 발급 실패! 시스템을 종료합니다.")
-        event_bus.publish('TELEGRAM_BROADCAST', {'message': "🚨 [데이터 갱신 실패] 키움 토큰 발급 오류", 'audience': 'ADMIN_ONLY'})
-        return {'status': 'failed', 'reason': 'kiwoom_token_failed'}
+        event_bus.publish(
+            "TELEGRAM_BROADCAST",
+            {
+                "message": "🚨 [데이터 갱신 실패] 키움 토큰 발급 오류",
+                "audience": "ADMIN_ONLY",
+            },
+        )
+        return {"status": "failed", "reason": "kiwoom_token_failed"}
 
-    event_bus.publish('TELEGRAM_BROADCAST', {'message': "🔄 전 종목 일일 데이터 갱신을 시작합니다. (약 15분 소요)", 'audience': 'ADMIN_ONLY'})
+    event_bus.publish(
+        "TELEGRAM_BROADCAST",
+        {
+            "message": "🔄 전 종목 일일 데이터 갱신을 시작합니다. (약 15분 소요)",
+            "audience": "ADMIN_ONLY",
+        },
+    )
 
     kospi_codes = []
     # ========================================================
@@ -430,54 +541,70 @@ def update_kospi_data():
     # ========================================================
     try:
         logger.info("🔍 FinanceDataReader를 통해 최신 상장 종목 리스트를 수집합니다...")
-        df_krx = fdr.StockListing('KRX')
-        
+        df_krx = fdr.StockListing("KRX")
+
         if not df_krx.empty:
             # 코스피, 코스닥 시장만 필터링 (코넥스 등 제외)
-            df_filtered = df_krx[df_krx['Market'].isin(['KOSPI', 'KOSDAQ'])]
-            kospi_codes = df_filtered['Code'].tolist()
-            logger.info(f"✅ FDR 종목 수집 성공! 총 {len(kospi_codes)}개 (KOSPI/KOSDAQ) 종목")
+            df_filtered = df_krx[df_krx["Market"].isin(["KOSPI", "KOSDAQ"])]
+            kospi_codes = df_filtered["Code"].tolist()
+            logger.info(
+                f"✅ FDR 종목 수집 성공! 총 {len(kospi_codes)}개 (KOSPI/KOSDAQ) 종목"
+            )
         else:
             raise ValueError("FDR에서 빈 데이터를 반환했습니다.")
-            
+
     except Exception as e:
-        logger.warning(f"⚠️ FDR 종목 수집 실패 ({e}). 기존 DB 조회 방식으로 Fallback 합니다.")
-        
+        logger.warning(
+            f"⚠️ FDR 종목 수집 실패 ({e}). 기존 DB 조회 방식으로 Fallback 합니다."
+        )
+
         # ========================================================
         # 💡 [2순위 (Fallback)] 기존 방식: DB에서 수집된 이력이 있는 종목들 가져오기
         # ========================================================
         try:
             with db.engine.connect() as conn:
                 # PostgreSQL 최적화 쿼리 유지
-                df_codes = pd.read_sql(text(f"SELECT DISTINCT stock_code FROM {TABLE_NAME}"), conn)
+                df_codes = pd.read_sql(
+                    text(f"SELECT DISTINCT stock_code FROM {TABLE_NAME}"), conn
+                )
 
             if df_codes.empty:
-                logger.warning("⚠️ DB가 완전히 비어있고 FDR도 실패했습니다! 기초 데이터 셋업이 필요합니다.")
-                return {'status': 'failed', 'reason': 'symbol_source_empty'}
+                logger.warning(
+                    "⚠️ DB가 완전히 비어있고 FDR도 실패했습니다! 기초 데이터 셋업이 필요합니다."
+                )
+                return {"status": "failed", "reason": "symbol_source_empty"}
             else:
-                kospi_codes = df_codes['stock_code'].tolist()
+                kospi_codes = df_codes["stock_code"].tolist()
                 logger.info(f"✅ DB에서 종목 수집 성공! 총 {len(kospi_codes)}개 종목")
-                
+
         except Exception as db_e:
             logger.error(f"❌ DB 종목 수집 중 에러: {db_e}", exc_info=True)
-            return {'status': 'failed', 'reason': 'symbol_source_db_failed', 'error': str(db_e)}
+            return {
+                "status": "failed",
+                "reason": "symbol_source_db_failed",
+                "error": str(db_e),
+            }
 
     kospi_codes = sorted({_normalize_stock_code(c) for c in kospi_codes if c})
     total_count = len(kospi_codes)
     successful_codes = []
     inserted_rows = 0
-    update_status = 'completed'
+    update_status = "completed"
     update_reason = None
 
-    nxt_map = kiwoom_utils.get_nxt_flag_map_ka10099(kiwoom_token, kospi_codes, mrkt_tps=("0", "10"))
+    nxt_map = kiwoom_utils.get_nxt_flag_map_ka10099(
+        kiwoom_token, kospi_codes, mrkt_tps=("0", "10")
+    )
     if nxt_map:
         nxt_count = int(sum(1 for v in nxt_map.values() if v))
         logger.info(f"✅ [ka10099] NXT 가능 종목 매핑 완료: {nxt_count}개")
     else:
-        logger.warning("⚠️ [ka10099] NXT 가능 종목 매핑 실패. 최신 거래일 DB is_nxt 플래그로 폴백합니다.")
+        logger.warning(
+            "⚠️ [ka10099] NXT 가능 종목 매핑 실패. 최신 거래일 DB is_nxt 플래그로 폴백합니다."
+        )
         nxt_map = db.get_latest_is_nxt_map(kospi_codes)
         nxt_count = int(sum(1 for v in nxt_map.values() if v))
-    
+
     # 💡 [핵심] 900개 종목의 데이터를 담을 거대한 빈 리스트
     all_stocks_data = []
 
@@ -487,8 +614,10 @@ def update_kospi_data():
     with db.get_session() as session:
         for i, code in enumerate(kospi_codes):
             code_str = _normalize_stock_code(code)
-            df_stock = process_and_save_stock(code_str, kiwoom_token, session, is_nxt=nxt_map.get(code_str, False))
-            
+            df_stock = process_and_save_stock(
+                code_str, kiwoom_token, session, is_nxt=nxt_map.get(code_str, False)
+            )
+
             if df_stock is not None and not df_stock.empty:
                 all_stocks_data.append(df_stock)
                 successful_codes.append(code_str)
@@ -496,16 +625,20 @@ def update_kospi_data():
             if (i + 1) % PROGRESS_INTERVAL == 0:
                 logger.info(f" ⏳ 수집 진행 상황: [{i + 1}/{total_count}] 완료...")
 
-            time.sleep(API_DELAY_SECONDS) # API 제재 방지용 대기
+            time.sleep(API_DELAY_SECONDS)  # API 제재 방지용 대기
 
     # [PHASE 2] 대망의 일괄 DB 삽입 (Bulk Insert)
     if all_stocks_data:
-        logger.info("\n🚀 모든 데이터 수집 완료! PostgreSQL로 일괄 전송(Bulk-Insert)을 시작합니다...")
-        
+        logger.info(
+            "\n🚀 모든 데이터 수집 완료! PostgreSQL로 일괄 전송(Bulk-Insert)을 시작합니다..."
+        )
+
         # 모든 데이터프레임을 하나로 합치기
         final_bulk_df = pd.concat(all_stocks_data, ignore_index=True)
-        cutoff_date = (datetime.now() - timedelta(days=CUTOFF_DAYS)).strftime('%Y-%m-%d')
-        
+        cutoff_date = (datetime.now() - timedelta(days=CUTOFF_DAYS)).strftime(
+            "%Y-%m-%d"
+        )
+
         # Filter out rows that already exist in DB to avoid duplicate key errors
         existing_keys = set()
         if not final_bulk_df.empty and successful_codes:
@@ -517,17 +650,25 @@ def update_kospi_data():
                     WHERE quote_date >= :cutoff
                       AND stock_code = ANY(:codes)
                 """)
-                result = conn.execute(query, {'cutoff': cutoff_date, 'codes': successful_codes})
+                result = conn.execute(
+                    query, {"cutoff": cutoff_date, "codes": successful_codes}
+                )
                 existing_keys.update((row.quote_date, row.stock_code) for row in result)
-        
+
         # Filter final_bulk_df
         if existing_keys:
-            row_keys = pd.MultiIndex.from_frame(final_bulk_df[['quote_date', 'stock_code']])
-            existing_index = pd.MultiIndex.from_tuples(list(existing_keys), names=['quote_date', 'stock_code'])
+            row_keys = pd.MultiIndex.from_frame(
+                final_bulk_df[["quote_date", "stock_code"]]
+            )
+            existing_index = pd.MultiIndex.from_tuples(
+                list(existing_keys), names=["quote_date", "stock_code"]
+            )
             mask = ~row_keys.isin(existing_index)
             final_bulk_df = final_bulk_df[mask].copy()
-            logger.info(f"⏩ Filtered out {len(existing_keys)} existing rows, {len(final_bulk_df)} new rows to insert")
-        
+            logger.info(
+                f"⏩ Filtered out {len(existing_keys)} existing rows, {len(final_bulk_df)} new rows to insert"
+            )
+
         # Attempt bulk insert with retry and fallback
         max_retries = 2
         inserted = False
@@ -535,20 +676,38 @@ def update_kospi_data():
             try:
                 with db.engine.begin() as conn:
                     # 1. Delete existing data for these codes within cutoff
-                    delete_query = text(f"DELETE FROM {TABLE_NAME} WHERE quote_date >= :date AND stock_code = ANY(:codes)")
-                    conn.execute(delete_query, {'date': cutoff_date, 'codes': successful_codes})
-                    
+                    delete_query = text(
+                        f"DELETE FROM {TABLE_NAME} WHERE quote_date >= :date AND stock_code = ANY(:codes)"
+                    )
+                    conn.execute(
+                        delete_query, {"date": cutoff_date, "codes": successful_codes}
+                    )
+
                     # 2. Insert new data with adaptive method
                     if attempt == 0:
                         # First attempt: multi-row insert with configured chunk size
-                        final_bulk_df.to_sql(TABLE_NAME, con=conn, if_exists='append', index=False,
-                                             chunksize=BULK_CHUNKSIZE, method='multi')
+                        final_bulk_df.to_sql(
+                            TABLE_NAME,
+                            con=conn,
+                            if_exists="append",
+                            index=False,
+                            chunksize=BULK_CHUNKSIZE,
+                            method="multi",
+                        )
                     else:
                         # Fallback: single-row inserts (slower but reliable)
-                        final_bulk_df.to_sql(TABLE_NAME, con=conn, if_exists='append', index=False,
-                                             chunksize=BULK_CHUNKSIZE, method=None)
-                
-                logger.info(f"✅ DB 일괄 삽입 성공! (총 {len(final_bulk_df)}행 적재 완료)")
+                        final_bulk_df.to_sql(
+                            TABLE_NAME,
+                            con=conn,
+                            if_exists="append",
+                            index=False,
+                            chunksize=BULK_CHUNKSIZE,
+                            method=None,
+                        )
+
+                logger.info(
+                    f"✅ DB 일괄 삽입 성공! (총 {len(final_bulk_df)}행 적재 완료)"
+                )
                 inserted_rows = int(len(final_bulk_df))
                 inserted = True
                 break
@@ -559,87 +718,102 @@ def update_kospi_data():
                 else:
                     # Optionally reduce chunk size for next attempt
                     pass
-        
+
         if not inserted:
             logger.error("🚨 DB 삽입 실패로 데이터가 저장되지 않았습니다.")
-            update_status = 'failed'
-            update_reason = 'bulk_insert_failed'
+            update_status = "failed"
+            update_reason = "bulk_insert_failed"
     else:
         logger.warning("⚠️ 수집된 데이터가 없어 DB 작업을 건너뜁니다.")
-        update_status = 'completed_with_warnings'
-        update_reason = 'no_collected_rows'
+        update_status = "completed_with_warnings"
+        update_reason = "no_collected_rows"
 
-    logger.info(f"\n🎉 일일 업데이트 최종 완료! (성공: {len(successful_codes)} / {total_count} 종목)")
-    
+    logger.info(
+        f"\n🎉 일일 업데이트 최종 완료! (성공: {len(successful_codes)} / {total_count} 종목)"
+    )
+
     finish_msg = f"✅ **KOSPI 일일 데이터 갱신 완료**\n총 **{len(successful_codes)} / {total_count}** 종목의 캔들 및 수급 데이터가 DB에 일괄 적재되었습니다.\n🟣 NXT 대상 플래그 반영: **{nxt_count}개**"
-    event_bus.publish('TELEGRAM_BROADCAST', {'message': finish_msg, 'audience': 'ADMIN_ONLY', 'parse_mode': 'Markdown'})
+    event_bus.publish(
+        "TELEGRAM_BROADCAST",
+        {"message": finish_msg, "audience": "ADMIN_ONLY", "parse_mode": "Markdown"},
+    )
     return {
-        'status': update_status,
-        'reason': update_reason,
-        'total_count': int(total_count),
-        'successful_count': int(len(successful_codes)),
-        'inserted_rows': inserted_rows,
-        'nxt_count': int(nxt_count),
+        "status": update_status,
+        "reason": update_reason,
+        "total_count": int(total_count),
+        "successful_count": int(len(successful_codes)),
+        "inserted_rows": inserted_rows,
+        "nxt_count": int(nxt_count),
     }
+
 
 def _resolve_latest_report_date() -> str:
     latest_report_date = _today_str()
-    diagnostic_path = PROJECT_ROOT / "data" / "daily_recommendations_v2_diagnostics.json"
+    diagnostic_path = (
+        PROJECT_ROOT / "data" / "daily_recommendations_v2_diagnostics.json"
+    )
     try:
         if diagnostic_path.exists():
-            latest_report_date = str(json.loads(diagnostic_path.read_text(encoding="utf-8")).get("latest_date") or latest_report_date)
+            latest_report_date = str(
+                json.loads(diagnostic_path.read_text(encoding="utf-8")).get(
+                    "latest_date"
+                )
+                or latest_report_date
+            )
     except Exception as e:
         logger.warning(f"⚠️ 추천 진단 날짜 로드 실패, calendar date 사용: {e}")
     return latest_report_date
 
 
 def _run_bottom_rebound_sim_auto_loop(report_date: str) -> dict:
-    if str(os.getenv('KORSTOCKSCAN_RUN_BOTTOM_REBOUND_SIM_AUTO_LOOP', 'true')).lower() in {'0', 'false', 'off', 'no'}:
-        return {'status': 'skipped_disabled'}
+    if str(
+        os.getenv("KORSTOCKSCAN_RUN_BOTTOM_REBOUND_SIM_AUTO_LOOP", "true")
+    ).lower() in {"0", "false", "off", "no"}:
+        return {"status": "skipped_disabled"}
     commands = [
         [
             sys.executable,
-            '-m',
-            'src.engine.swing.bottom_rebound_pattern_research',
-            '--as-of',
+            "-m",
+            "src.engine.swing.bottom_rebound_pattern_research",
+            "--as-of",
             report_date,
         ],
         [
             sys.executable,
-            '-m',
-            'src.engine.swing.bottom_rebound_policy_auto_loop',
-            '--date',
+            "-m",
+            "src.engine.swing.bottom_rebound_policy_auto_loop",
+            "--date",
             report_date,
         ],
         [
             sys.executable,
-            '-m',
-            'src.engine.swing.bottom_rebound_candidate_source',
-            '--date',
+            "-m",
+            "src.engine.swing.bottom_rebound_candidate_source",
+            "--date",
             report_date,
-            '--require-sim-auto-policy',
+            "--require-sim-auto-policy",
         ],
         [
             sys.executable,
-            '-m',
-            'src.engine.swing_strategy_discovery_sim',
-            '--date',
+            "-m",
+            "src.engine.swing_strategy_discovery_sim",
+            "--date",
             report_date,
-            '--include-bottom-rebound-source',
+            "--include-bottom-rebound-source",
         ],
     ]
     completed: list[str] = []
     for command in commands:
         subprocess.run(command, check=True, cwd=PROJECT_ROOT)
-        completed.append(' '.join(command[2:]))
+        completed.append(" ".join(command[2:]))
     return {
-        'status': 'completed',
-        'report_date': report_date,
-        'decision_authority': 'swing_bottom_rebound_sim_policy_auto_approval',
-        'runtime_effect': False,
-        'allowed_runtime_apply': False,
-        'broker_order_forbidden': True,
-        'commands': completed,
+        "status": "completed",
+        "report_date": report_date,
+        "decision_authority": "swing_bottom_rebound_sim_policy_auto_approval",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "broker_order_forbidden": True,
+        "commands": completed,
     }
 
 
@@ -647,26 +821,42 @@ def run_update_kospi_chain() -> dict:
     target_date = _today_str()
     started_at = _now_iso()
     steps: list[dict] = []
-    logger.info(f"[START] update_kospi target_date={target_date} started_at={started_at}")
+    logger.info(
+        f"[START] update_kospi target_date={target_date} started_at={started_at}"
+    )
 
     try:
-        update_summary = update_kospi_data() or {'status': 'completed'}
-        steps.append(_step('update_kospi_data', str(update_summary.get('status', 'completed')), details=update_summary))
+        update_summary = update_kospi_data() or {"status": "completed"}
+        steps.append(
+            _step(
+                "update_kospi_data",
+                str(update_summary.get("status", "completed")),
+                details=update_summary,
+            )
+        )
     except Exception as e:
         logger.exception(f"❌ update_kospi_data 실행 중 치명적 오류: {e}")
-        steps.append(_step('update_kospi_data', 'failed', error=str(e)))
+        steps.append(_step("update_kospi_data", "failed", error=str(e)))
         payload = _build_update_kospi_status(target_date, started_at, steps)
         status_path = _write_update_kospi_status(payload)
-        logger.error(f"[FAIL] update_kospi target_date={target_date} finished_at={payload['finished_at']} status_path={status_path}")
+        logger.error(
+            f"[FAIL] update_kospi target_date={target_date} finished_at={payload['finished_at']} status_path={status_path}"
+        )
         raise
 
     logger.info("🚀 추천 모델(recommend_daily_v2.py)을 이어서 실행합니다...")
     try:
-        subprocess.run([sys.executable, str(PROJECT_ROOT / "src/model/recommend_daily_v2.py")], check=True, cwd=PROJECT_ROOT)
-        steps.append(_step('recommend_daily_v2', 'completed'))
+        subprocess.run(
+            [sys.executable, str(PROJECT_ROOT / "src/model/recommend_daily_v2.py")],
+            check=True,
+            cwd=PROJECT_ROOT,
+        )
+        steps.append(_step("recommend_daily_v2", "completed"))
     except subprocess.CalledProcessError as e:
         logger.error(f"❌ 추천 모델 실행 중 에러 발생: {e}")
-        steps.append(_step('recommend_daily_v2', 'failed', returncode=e.returncode, error=str(e)))
+        steps.append(
+            _step("recommend_daily_v2", "failed", returncode=e.returncode, error=str(e))
+        )
 
     latest_report_date = _resolve_latest_report_date()
     logger.info("📈 스윙 일일 시뮬레이션 및 선정 funnel 리포트 생성 시작...")
@@ -691,56 +881,88 @@ def run_update_kospi_chain() -> dict:
             check=True,
         )
         logger.info(f"✅ 스윙 일일 리포트 생성 완료: {latest_report_date}")
-        steps.append(_step('swing_daily_reports', 'completed', report_date=latest_report_date))
+        steps.append(
+            _step("swing_daily_reports", "completed", report_date=latest_report_date)
+        )
     except subprocess.CalledProcessError as e:
         logger.error(f"❌ 스윙 일일 리포트 생성 실패 (무시하고 진행): {e}")
-        steps.append(_step('swing_daily_reports', 'failed', report_date=latest_report_date, returncode=e.returncode, error=str(e)))
+        steps.append(
+            _step(
+                "swing_daily_reports",
+                "failed",
+                report_date=latest_report_date,
+                returncode=e.returncode,
+                error=str(e),
+            )
+        )
 
     logger.info("🧪 바닥 반등 스윙 sim-only 자동승인 루프 실행 시작...")
     try:
         loop_summary = _run_bottom_rebound_sim_auto_loop(latest_report_date)
-        logger.info(f"✅ 바닥 반등 sim-only 자동승인 루프 완료: {loop_summary.get('status')}")
-        steps.append(_step('bottom_rebound_sim_auto_loop', str(loop_summary.get('status', 'completed')), details=loop_summary))
+        logger.info(
+            f"✅ 바닥 반등 sim-only 자동승인 루프 완료: {loop_summary.get('status')}"
+        )
+        steps.append(
+            _step(
+                "bottom_rebound_sim_auto_loop",
+                str(loop_summary.get("status", "completed")),
+                details=loop_summary,
+            )
+        )
     except subprocess.CalledProcessError as e:
         logger.error(f"❌ 바닥 반등 sim-only 자동승인 루프 실패 (무시하고 진행): {e}")
-        steps.append(_step('bottom_rebound_sim_auto_loop', 'failed', report_date=latest_report_date, returncode=e.returncode, error=str(e)))
+        steps.append(
+            _step(
+                "bottom_rebound_sim_auto_loop",
+                "failed",
+                report_date=latest_report_date,
+                returncode=e.returncode,
+                error=str(e),
+            )
+        )
 
     payload = _build_update_kospi_status(target_date, started_at, steps)
     status_path = _write_update_kospi_status(payload)
     log_marker = "[FAIL]" if payload["status"] == "failed" else "[DONE]"
-    logger.info(f"{log_marker} update_kospi target_date={target_date} finished_at={payload['finished_at']} status={payload['status']} status_path={status_path}")
+    logger.info(
+        f"{log_marker} update_kospi target_date={target_date} finished_at={payload['finished_at']} status={payload['status']} status_path={status_path}"
+    )
     return payload
 
 
-def _build_update_kospi_status(target_date: str, started_at: str, steps: list[dict]) -> dict:
-    update_status = steps[0].get('status') if steps else 'failed'
-    failed_steps = [s['name'] for s in steps if s.get('status') == 'failed']
-    warning_steps = [s['name'] for s in steps if s.get('status') == 'completed_with_warnings']
+def _build_update_kospi_status(
+    target_date: str, started_at: str, steps: list[dict]
+) -> dict:
+    update_status = steps[0].get("status") if steps else "failed"
+    failed_steps = [s["name"] for s in steps if s.get("status") == "failed"]
+    warning_steps = [
+        s["name"] for s in steps if s.get("status") == "completed_with_warnings"
+    ]
 
-    if update_status == 'failed':
-        status = 'failed'
+    if update_status == "failed":
+        status = "failed"
     elif failed_steps or warning_steps:
-        status = 'completed_with_warnings'
-    elif update_status == 'skipped_non_trading_day':
-        status = 'skipped_non_trading_day'
+        status = "completed_with_warnings"
+    elif update_status == "skipped_non_trading_day":
+        status = "skipped_non_trading_day"
     else:
-        status = 'completed'
+        status = "completed"
 
     return {
-        'schema_version': STATUS_VERSION,
-        'target_date': target_date,
-        'started_at': started_at,
-        'finished_at': _now_iso(),
-        'status': status,
-        'feature_source': 'src.model.common_v2.calculate_all_features',
-        'db_state': _load_latest_quote_state(),
-        'steps': steps,
-        'failed_steps': failed_steps,
-        'warning_steps': warning_steps,
+        "schema_version": STATUS_VERSION,
+        "target_date": target_date,
+        "started_at": started_at,
+        "finished_at": _now_iso(),
+        "status": status,
+        "feature_source": "src.model.common_v2.calculate_all_features",
+        "db_state": _load_latest_quote_state(),
+        "steps": steps,
+        "failed_steps": failed_steps,
+        "warning_steps": warning_steps,
     }
 
 
 if __name__ == "__main__":
     chain_status = run_update_kospi_chain()
-    if chain_status.get('status') == 'failed':
+    if chain_status.get("status") == "failed":
         sys.exit(1)

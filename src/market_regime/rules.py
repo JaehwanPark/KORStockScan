@@ -5,7 +5,6 @@ import pandas as pd
 from .schemas import MarketRegimeSnapshot
 from .indicators import sma, rsi, macd, cross_under
 
-
 MARKET_REGIME_SCORE_VERSION = "market_regime_continuous_v1"
 LEGACY_RECOVERY_GATE_THRESHOLD = 70
 
@@ -47,7 +46,9 @@ def _fear_greed_level_score(value: float) -> float:
     return _linear_between(min(value, 100.0), 90.0, 15.0, 100.0, 10.0)
 
 
-def _domestic_breadth_score(ma20_ratio: float | None, max_weight: float = 35.0) -> float:
+def _domestic_breadth_score(
+    ma20_ratio: float | None, max_weight: float = 35.0
+) -> float:
     if ma20_ratio is None:
         return 0.0
     return _clamp((float(ma20_ratio) / 70.0) * max_weight, 0.0, max_weight)
@@ -76,12 +77,16 @@ def _local_model_score(local_context: dict | None) -> float:
     if avg_bull is None:
         return 0.0
     try:
-        return _clamp(_linear_between(float(avg_bull), 45.0, 0.0, 65.0, 10.0), 0.0, 10.0)
+        return _clamp(
+            _linear_between(float(avg_bull), 45.0, 0.0, 65.0, 10.0), 0.0, 10.0
+        )
     except (TypeError, ValueError):
         return 0.0
 
 
-def market_regime_continuous_label(score: float, risk_on_min: float = 65.0, neutral_min: float = 45.0) -> str:
+def market_regime_continuous_label(
+    score: float, risk_on_min: float = 65.0, neutral_min: float = 45.0
+) -> str:
     if score >= risk_on_min:
         return "RISK_ON"
     if score >= neutral_min:
@@ -89,15 +94,22 @@ def market_regime_continuous_label(score: float, risk_on_min: float = 65.0, neut
     return "RISK_OFF"
 
 
-def apply_legacy_recovery_gate_metadata(snapshot: MarketRegimeSnapshot) -> MarketRegimeSnapshot:
-    threshold = int(snapshot.debug.get("score_threshold", LEGACY_RECOVERY_GATE_THRESHOLD) or LEGACY_RECOVERY_GATE_THRESHOLD)
+def apply_legacy_recovery_gate_metadata(
+    snapshot: MarketRegimeSnapshot,
+) -> MarketRegimeSnapshot:
+    threshold = int(
+        snapshot.debug.get("score_threshold", LEGACY_RECOVERY_GATE_THRESHOLD)
+        or LEGACY_RECOVERY_GATE_THRESHOLD
+    )
     score = int(snapshot.swing_score or 0)
     component_scores = dict(snapshot.debug.get("component_scores", {}) or {})
     oil_score = int(component_scores.get("oil", 0) or 0)
     vix_score = int(component_scores.get("vix", 0) or 0)
     fng_score = int(component_scores.get("fng", 0) or 0)
     local_breadth_score = int(component_scores.get("local_breadth", 0) or 0)
-    oil_only = oil_score > 0 and vix_score == 0 and fng_score == 0 and local_breadth_score == 0
+    oil_only = (
+        oil_score > 0 and vix_score == 0 and fng_score == 0 and local_breadth_score == 0
+    )
 
     if score >= threshold:
         label = "READY"
@@ -107,7 +119,11 @@ def apply_legacy_recovery_gate_metadata(snapshot: MarketRegimeSnapshot) -> Marke
         reason = "recovery_signal_partial"
     else:
         label = "INSUFFICIENT"
-        reason = "oil_only_recovery_signal_insufficient" if oil_only else "recovery_signal_insufficient"
+        reason = (
+            "oil_only_recovery_signal_insufficient"
+            if oil_only
+            else "recovery_signal_insufficient"
+        )
 
     snapshot.swing_entry_recovery_gate_score = score
     snapshot.recovery_gate_state = label
@@ -147,8 +163,7 @@ def apply_continuous_market_regime_score(
 
     apply_legacy_recovery_gate_metadata(snapshot)
     snapshot.market_regime_component_scores = {
-        key: round(float(value), 4)
-        for key, value in components.items()
+        key: round(float(value), 4) for key, value in components.items()
     }
     snapshot.market_regime_continuous_score = round(_clamp(float(total), 0.0, 100.0), 4)
     snapshot.market_regime_continuous_label = market_regime_continuous_label(
@@ -180,7 +195,9 @@ def apply_continuous_market_regime_score(
     return snapshot
 
 
-def evaluate_market_regime(vix_df: pd.DataFrame, oil_df: pd.DataFrame, fng_data: dict | None = None) -> MarketRegimeSnapshot:
+def evaluate_market_regime(
+    vix_df: pd.DataFrame, oil_df: pd.DataFrame, fng_data: dict | None = None
+) -> MarketRegimeSnapshot:
     snapshot = MarketRegimeSnapshot(timestamp=datetime.now())
     fng_data = fng_data if isinstance(fng_data, dict) else {}
 
@@ -205,9 +222,8 @@ def evaluate_market_regime(vix_df: pd.DataFrame, oil_df: pd.DataFrame, fng_data:
     # --- WTI 가공 ---
     oil["rsi14"] = rsi(oil["close"], 14)
     oil["macd"], oil["macd_signal"], oil["macd_hist"] = macd(oil["close"])
-    oil["dead_cross"] = (
-        (oil["macd"].shift(1) >= oil["macd_signal"].shift(1)) &
-        (oil["macd"] < oil["macd_signal"])
+    oil["dead_cross"] = (oil["macd"].shift(1) >= oil["macd_signal"].shift(1)) & (
+        oil["macd"] < oil["macd_signal"]
     )
     oil["recent_high_20"] = oil["close"].rolling(20).max()
     oil["from_recent_high_pct"] = ((oil["close"] / oil["recent_high_20"]) - 1.0) * 100.0
@@ -217,16 +233,28 @@ def evaluate_market_regime(vix_df: pd.DataFrame, oil_df: pd.DataFrame, fng_data:
 
     snapshot.vix_close = float(lv["close"]) if pd.notna(lv["close"]) else 0.0
     snapshot.vix_ma3 = float(lv["ma3"]) if pd.notna(lv["ma3"]) else 0.0
-    snapshot.vix_peak_passed = bool(lv["below_ma3"]) if pd.notna(lv["below_ma3"]) else False
-    snapshot.vix_two_day_down = bool(vix["down_day"].tail(2).all()) if len(vix) >= 2 else False
+    snapshot.vix_peak_passed = (
+        bool(lv["below_ma3"]) if pd.notna(lv["below_ma3"]) else False
+    )
+    snapshot.vix_two_day_down = (
+        bool(vix["down_day"].tail(2).all()) if len(vix) >= 2 else False
+    )
     snapshot.vix_extreme = snapshot.vix_close >= 35.0
 
     snapshot.wti_close = float(lo["close"]) if pd.notna(lo["close"]) else 0.0
     snapshot.wti_rsi = float(lo["rsi14"]) if pd.notna(lo["rsi14"]) else 0.0
     snapshot.wti_macd = float(lo["macd"]) if pd.notna(lo["macd"]) else 0.0
-    snapshot.wti_macd_signal = float(lo["macd_signal"]) if pd.notna(lo["macd_signal"]) else 0.0
-    snapshot.wti_dead_cross = bool(lo["dead_cross"]) if pd.notna(lo["dead_cross"]) else False
-    snapshot.wti_from_recent_high_pct = float(lo["from_recent_high_pct"]) if pd.notna(lo["from_recent_high_pct"]) else 0.0
+    snapshot.wti_macd_signal = (
+        float(lo["macd_signal"]) if pd.notna(lo["macd_signal"]) else 0.0
+    )
+    snapshot.wti_dead_cross = (
+        bool(lo["dead_cross"]) if pd.notna(lo["dead_cross"]) else False
+    )
+    snapshot.wti_from_recent_high_pct = (
+        float(lo["from_recent_high_pct"])
+        if pd.notna(lo["from_recent_high_pct"])
+        else 0.0
+    )
 
     oil_rsi_turned = False
     if len(oil) >= 2:
@@ -236,9 +264,9 @@ def evaluate_market_regime(vix_df: pd.DataFrame, oil_df: pd.DataFrame, fng_data:
             oil_rsi_turned = (prev_rsi >= 70.0) and (curr_rsi < prev_rsi)
 
     snapshot.oil_reversal = (
-        oil_rsi_turned or
-        snapshot.wti_dead_cross or
-        snapshot.wti_from_recent_high_pct <= -5.0
+        oil_rsi_turned
+        or snapshot.wti_dead_cross
+        or snapshot.wti_from_recent_high_pct <= -5.0
     )
     snapshot.oil_pullback_relief = snapshot.oil_reversal
 
@@ -253,9 +281,8 @@ def evaluate_market_regime(vix_df: pd.DataFrame, oil_df: pd.DataFrame, fng_data:
     snapshot.fng_value = fng_curr
     snapshot.fng_prev = fng_prev
     snapshot.fng_extreme_fear = fng_curr > 0 and fng_curr <= 25.0
-    snapshot.fng_recovery = (
-        (fng_prev <= 25.0 and fng_curr > fng_prev) or
-        (fng_curr >= 30.0 and fng_curr > fng_prev)
+    snapshot.fng_recovery = (fng_prev <= 25.0 and fng_curr > fng_prev) or (
+        fng_curr >= 30.0 and fng_curr > fng_prev
     )
 
     # --- Score 기반 스윙 진입 판정 ---
@@ -318,9 +345,17 @@ def evaluate_market_regime(vix_df: pd.DataFrame, oil_df: pd.DataFrame, fng_data:
         "fng_prev": fng_prev,
         "score_threshold": 70,
         "component_scores": component_scores,
-        "vix_signal": "extreme_two_day_down" if component_scores["vix"] == 40 else ("below_ma3" if component_scores["vix"] == 25 else "none"),
+        "vix_signal": (
+            "extreme_two_day_down"
+            if component_scores["vix"] == 40
+            else ("below_ma3" if component_scores["vix"] == 25 else "none")
+        ),
         "oil_signal": "reversal" if snapshot.oil_reversal else "none",
-        "fng_signal": "recovery" if component_scores["fng"] == 20 else ("extreme_fear" if component_scores["fng"] == -10 else "none"),
+        "fng_signal": (
+            "recovery"
+            if component_scores["fng"] == 20
+            else ("extreme_fear" if component_scores["fng"] == -10 else "none")
+        ),
     }
 
     snapshot.fng_description = str(fng_data.get("description", "") or "")

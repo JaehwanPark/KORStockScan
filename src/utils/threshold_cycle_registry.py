@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from typing import Any
 
-
 THRESHOLD_STAGE_FAMILY_MAP = {
     "budget_pass": "entry_mechanical_momentum",
     "order_bundle_submitted": "dynamic_entry_price_resolver",

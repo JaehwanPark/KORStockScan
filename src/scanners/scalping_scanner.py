@@ -20,7 +20,11 @@ from src.database.db_manager import DBManager
 from src.database.models import RecommendationHistory
 from src.core.event_bus import EventBus
 from src.engine.signal_radar import SniperRadar
-from src.engine.sniper_time import SCALPING_BUY_WINDOWS, describe_scalping_buy_windows, is_scalping_buy_time_allowed
+from src.engine.sniper_time import (
+    SCALPING_BUY_WINDOWS,
+    describe_scalping_buy_windows,
+    is_scalping_buy_time_allowed,
+)
 from src.utils.constants import TRADING_RULES
 from src.utils.pipeline_event_logger import emit_pipeline_event
 from sqlalchemy import func, or_
@@ -32,9 +36,14 @@ LOW_REBOUND_RISING_MISSED_ROLE = "rising_missed_low_rebound_candidate"
 LOW_REBOUND_RISING_MISSED_LINEAGE = "low_rebound_from_intraday_low"
 HIGH_PROXIMITY_CONFIRMATION_SOURCE = "HIGH_PROXIMITY_CONFIRMATION"
 NEW_HIGH_CONFIRMATION_SOURCE = "NEW_HIGH_CONFIRMATION"
-BREAKOUT_CONFIRMATION_SOURCES = {HIGH_PROXIMITY_CONFIRMATION_SOURCE, NEW_HIGH_CONFIRMATION_SOURCE}
+BREAKOUT_CONFIRMATION_SOURCES = {
+    HIGH_PROXIMITY_CONFIRMATION_SOURCE,
+    NEW_HIGH_CONFIRMATION_SOURCE,
+}
 RANK_CHANGE_SIGN_AUTHORITY_DEFAULT = "raw_unverified_not_decision_input"
-SCANNER_PROMOTION_POLICY_VERSION = "scanner_priority_v6_20260709_breakout_confirmation_enrichment"
+SCANNER_PROMOTION_POLICY_VERSION = (
+    "scanner_priority_v6_20260709_breakout_confirmation_enrichment"
+)
 SCANNER_UNDER_10000_PRIORITY_PRICE_CEILING = 10000
 SCANNER_UNDER_10000_VOLUME_SURGE_RANK_PCT_DEFAULT = 0.40
 SCANNER_UNDER_10000_VOLUME_SURGE_RANK_MIN_COUNT_DEFAULT = 10
@@ -87,7 +96,9 @@ def _parse_scan_time_env(env_name, default_value):
     try:
         return datetime.strptime(str(raw_value), "%H:%M:%S").time()
     except (TypeError, ValueError):
-        log_error(f"⚠️ {env_name} 값이 잘못되어 기본값을 사용합니다: {raw_value} -> {default_value}")
+        log_error(
+            f"⚠️ {env_name} 값이 잘못되어 기본값을 사용합니다: {raw_value} -> {default_value}"
+        )
         return datetime.strptime(default_value, "%H:%M:%S").time()
 
 
@@ -103,7 +114,11 @@ def _is_scanner_discovery_time(now_time):
 
 
 def _time_in_window(now_time, start, end):
-    return start <= now_time <= end if start <= end else now_time >= start or now_time <= end
+    return (
+        start <= now_time <= end
+        if start <= end
+        else now_time >= start or now_time <= end
+    )
 
 
 def _active_scalping_buy_window(now_dt):
@@ -149,7 +164,9 @@ def _low_rebound_active_floor():
 
 
 def _low_rebound_floor_replacement_max_per_loop():
-    raw = os.getenv("KORSTOCKSCAN_SCALP_SCANNER_LOW_REBOUND_FLOOR_REPLACE_MAX_PER_LOOP", "")
+    raw = os.getenv(
+        "KORSTOCKSCAN_SCALP_SCANNER_LOW_REBOUND_FLOOR_REPLACE_MAX_PER_LOOP", ""
+    )
     try:
         value = int(str(raw).strip()) if str(raw).strip() else 2
     except (TypeError, ValueError):
@@ -166,16 +183,19 @@ def _scanner_after_buy_window_cap_release_enabled():
 
 
 def _scanner_after_buy_window_cap_release_start_time():
-    raw = (
-        os.getenv("KORSTOCKSCAN_SCANNER_AFTER_BUY_WINDOW_CAP_RELEASE_START_TIME", "")
-        or os.getenv("KORSTOCKSCAN_SCANNER_AFTER_BUY_WINDOW_SOURCE_QUALITY_EVICTION_START_TIME", "")
+    raw = os.getenv(
+        "KORSTOCKSCAN_SCANNER_AFTER_BUY_WINDOW_CAP_RELEASE_START_TIME", ""
+    ) or os.getenv(
+        "KORSTOCKSCAN_SCANNER_AFTER_BUY_WINDOW_SOURCE_QUALITY_EVICTION_START_TIME", ""
     )
     if not str(raw).strip():
         return None
     try:
         return datetime.strptime(str(raw).strip(), "%H:%M:%S").time()
     except (TypeError, ValueError):
-        log_error(f"⚠️ KORSTOCKSCAN_SCANNER_AFTER_BUY_WINDOW_CAP_RELEASE_START_TIME 값이 잘못되었습니다: {raw}")
+        log_error(
+            f"⚠️ KORSTOCKSCAN_SCANNER_AFTER_BUY_WINDOW_CAP_RELEASE_START_TIME 값이 잘못되었습니다: {raw}"
+        )
         return None
 
 
@@ -189,7 +209,9 @@ def _scanner_after_buy_window_cap_release_min_age_sec():
 
 
 def _scanner_after_buy_window_cap_release_max_per_loop():
-    raw = os.getenv("KORSTOCKSCAN_SCANNER_AFTER_BUY_WINDOW_CAP_RELEASE_MAX_PER_LOOP", "")
+    raw = os.getenv(
+        "KORSTOCKSCAN_SCANNER_AFTER_BUY_WINDOW_CAP_RELEASE_MAX_PER_LOOP", ""
+    )
     try:
         value = int(str(raw).strip()) if str(raw).strip() else 4
     except (TypeError, ValueError):
@@ -257,17 +279,26 @@ def _expire_scanner_watching_records(
                     continue
                 if getattr(record, "strategy", None) != "SCALPING":
                     continue
-                if position_tag is not None and getattr(record, "position_tag", None) != position_tag:
+                if (
+                    position_tag is not None
+                    and getattr(record, "position_tag", None) != position_tag
+                ):
                     continue
                 if getattr(record, "buy_time", None) is not None:
                     continue
                 if int(getattr(record, "buy_qty", 0) or 0) != 0:
                     continue
-                armed_ts = _safe_float(getattr(record, "entry_armed_at_epoch", 0.0), 0.0)
-                age_sec = max(0.0, float(now_ts) - armed_ts) if armed_ts > 0 else min_age_sec
+                armed_ts = _safe_float(
+                    getattr(record, "entry_armed_at_epoch", 0.0), 0.0
+                )
+                age_sec = (
+                    max(0.0, float(now_ts) - armed_ts) if armed_ts > 0 else min_age_sec
+                )
                 if age_sec < min_age_sec:
                     continue
-                if armed_before_epoch is not None and armed_ts >= float(armed_before_epoch):
+                if armed_before_epoch is not None and armed_ts >= float(
+                    armed_before_epoch
+                ):
                     continue
                 candidates.append((armed_ts or 0.0, record))
             ordered = sorted(candidates, key=lambda item: item[0])
@@ -275,7 +306,9 @@ def _expire_scanner_watching_records(
                 ordered = ordered[: int(max_per_loop)]
             for _armed_ts, record in ordered:
                 record.status = "EXPIRED"
-                expired_codes.append(str(getattr(record, "stock_code", "") or "").strip()[:6])
+                expired_codes.append(
+                    str(getattr(record, "stock_code", "") or "").strip()[:6]
+                )
     except Exception as exc:
         log_error(f"⚠️ [SCALPING 스캐너] watch reset 실패 reason={reason}: {exc}")
         return []
@@ -292,12 +325,15 @@ def _recent_low_rebound_codes(recent_picks, low_rebound_targets=None):
         sources = set((meta or {}).get("last_source_signature") or [])
         if LOW_REBOUND_RISING_MISSED_SOURCE in sources:
             recent_target = {
-                "Price": (meta or {}).get("last_price") or (meta or {}).get("first_price"),
+                "Price": (meta or {}).get("last_price")
+                or (meta or {}).get("first_price"),
                 "SourceSet": sources,
                 "VolumeSurgeMatched": (meta or {}).get("last_volume_surge_matched"),
                 "VolumeSurgeRank": (meta or {}).get("last_volume_surge_rank"),
                 "VolumeSurgeRankPct": (meta or {}).get("last_volume_surge_rank_pct"),
-                "VolumeSurgeUniverseSize": (meta or {}).get("last_volume_surge_universe_size"),
+                "VolumeSurgeUniverseSize": (meta or {}).get(
+                    "last_volume_surge_universe_size"
+                ),
             }
             if _under_10000_runtime_priority_rank(recent_target) > 0:
                 continue
@@ -308,7 +344,9 @@ def _recent_low_rebound_codes(recent_picks, low_rebound_targets=None):
 
 
 def _active_scanner_watching_codes(db, codes):
-    codes = {str(code or "").strip()[:6] for code in (codes or []) if str(code or "").strip()}
+    codes = {
+        str(code or "").strip()[:6] for code in (codes or []) if str(code or "").strip()
+    }
     if not codes:
         return set()
     try:
@@ -327,7 +365,12 @@ def _active_scanner_watching_codes(db, codes):
                     )
                     .all()
                 )
-                return {str(row[0] if isinstance(row, tuple) else row.stock_code).strip()[:6] for row in rows}
+                return {
+                    str(row[0] if isinstance(row, tuple) else row.stock_code).strip()[
+                        :6
+                    ]
+                    for row in rows
+                }
             records = getattr(session, "records", [])
             return {
                 str(getattr(record, "stock_code", "") or "").strip()[:6]
@@ -344,9 +387,13 @@ def _active_scanner_watching_codes(db, codes):
         return set()
 
 
-def _expire_scanner_watching_for_low_rebound_floor(db, now_ts, *, max_to_expire, protected_codes=None):
+def _expire_scanner_watching_for_low_rebound_floor(
+    db, now_ts, *, max_to_expire, protected_codes=None
+):
     protected_codes = {
-        str(code or "").strip()[:6] for code in (protected_codes or set()) if str(code or "").strip()
+        str(code or "").strip()[:6]
+        for code in (protected_codes or set())
+        if str(code or "").strip()
     }
     if int(max_to_expire or 0) <= 0:
         return []
@@ -383,18 +430,26 @@ def _expire_scanner_watching_for_low_rebound_floor(db, now_ts, *, max_to_expire,
                     continue
                 if int(getattr(record, "buy_qty", 0) or 0) != 0:
                     continue
-                armed_ts = _safe_float(getattr(record, "entry_armed_at_epoch", 0.0), 0.0)
+                armed_ts = _safe_float(
+                    getattr(record, "entry_armed_at_epoch", 0.0), 0.0
+                )
                 candidates.append((armed_ts or 0.0, record))
-            for _armed_ts, record in sorted(candidates, key=lambda item: item[0])[: int(max_to_expire)]:
+            for _armed_ts, record in sorted(candidates, key=lambda item: item[0])[
+                : int(max_to_expire)
+            ]:
                 record.status = "EXPIRED"
-                expired_codes.append(str(getattr(record, "stock_code", "") or "").strip()[:6])
+                expired_codes.append(
+                    str(getattr(record, "stock_code", "") or "").strip()[:6]
+                )
     except Exception as exc:
         log_error(f"⚠️ [SCALPING 스캐너] LOW_REBOUND floor 슬롯 교체 실패: {exc}")
         return []
     return expired_codes
 
 
-def _reset_scanner_watch_targets(db, event_bus, now_ts, *, reason, armed_before_epoch=None):
+def _reset_scanner_watch_targets(
+    db, event_bus, now_ts, *, reason, armed_before_epoch=None
+):
     expired_codes = _expire_scanner_watching_records(
         db,
         now_ts,
@@ -405,7 +460,11 @@ def _reset_scanner_watch_targets(db, event_bus, now_ts, *, reason, armed_before_
     if unreg_codes:
         event_bus.publish(
             "COMMAND_WS_UNREG",
-            {"codes": unreg_codes, "source": "scalping_scanner_buy_window_reset", "reason": reason},
+            {
+                "codes": unreg_codes,
+                "source": "scalping_scanner_buy_window_reset",
+                "reason": reason,
+            },
         )
         log_info(
             "[SCALPING_SCANNER_BUY_WINDOW_RESET] "
@@ -474,13 +533,16 @@ def _has_active_non_scanner_scalping_watching_code(db, code):
                 getattr(record, "status", None) == "WATCHING"
                 and getattr(record, "strategy", None) == "SCALPING"
                 and getattr(record, "position_tag", None) != "SCANNER"
-                and str(getattr(record, "stock_code", "") or "").strip()[:6] == norm_code
+                and str(getattr(record, "stock_code", "") or "").strip()[:6]
+                == norm_code
                 and getattr(record, "buy_time", None) is None
                 and int(getattr(record, "buy_qty", 0) or 0) == 0
                 for record in records
             )
     except Exception as exc:
-        log_error(f"⚠️ [SCALPING 스캐너] active non-SCANNER 코드 확인 실패 ({norm_code}): {exc}")
+        log_error(
+            f"⚠️ [SCALPING 스캐너] active non-SCANNER 코드 확인 실패 ({norm_code}): {exc}"
+        )
         return False
 
 
@@ -533,7 +595,12 @@ def _rank_change_sign_event_diagnostics(target, source_signature):
     )
     has_rank_fields = any(
         key in target and target.get(key) not in (None, "")
-        for key in ("RankChange", "RankChangeSign", "RankChangeSignState", "RankChangeSignConsistency")
+        for key in (
+            "RankChange",
+            "RankChangeSign",
+            "RankChangeSignState",
+            "RankChangeSignConsistency",
+        )
     )
     if not has_realtime_rank_source and not has_rank_fields:
         return {
@@ -564,7 +631,9 @@ def _zero_context_value_missing(value) -> bool:
     )
 
 
-def _zero_context_value_state(value, *, missing: bool = False, not_applicable: bool = False) -> str:
+def _zero_context_value_state(
+    value, *, missing: bool = False, not_applicable: bool = False
+) -> str:
     numeric = _safe_float(value, 0.0)
     if abs(numeric) > 1e-12:
         return "non_zero"
@@ -575,7 +644,9 @@ def _zero_context_value_state(value, *, missing: bool = False, not_applicable: b
     return "actual_zero"
 
 
-def _zero_context_observation_fields(*, domain: str, blocker: str, states: dict) -> dict:
+def _zero_context_observation_fields(
+    *, domain: str, blocker: str, states: dict
+) -> dict:
     zero_states = {str(key): str(value) for key, value in (states or {}).items()}
     blocking_states = [
         value
@@ -586,8 +657,14 @@ def _zero_context_observation_fields(*, domain: str, blocker: str, states: dict)
         "zero_context_observed": bool(zero_states),
         "zero_context_domain": str(domain or "unknown"),
         "zero_context_blocker": str(blocker or "unknown"),
-        "zero_context_primary_state": blocking_states[0] if blocking_states else (
-            next(iter(zero_states.values())) if zero_states else "not_applicable_zero"
+        "zero_context_primary_state": (
+            blocking_states[0]
+            if blocking_states
+            else (
+                next(iter(zero_states.values()))
+                if zero_states
+                else "not_applicable_zero"
+            )
         ),
         "zero_context_defaulted_zero_field_count": len(blocking_states),
         "zero_context_forbidden_uses": ZERO_CONTEXT_FORBIDDEN_USES,
@@ -650,7 +727,11 @@ def _has_under_10000_volume_surge_rank_relief(target):
     universe_size = _safe_positive_int((target or {}).get("VolumeSurgeUniverseSize"))
     rank_pct_limit = _under_10000_volume_surge_rank_pct()
     min_count = _under_10000_volume_surge_rank_min_count()
-    rank_limit = max(min_count, int(ceil(universe_size * rank_pct_limit))) if universe_size > 0 else min_count
+    rank_limit = (
+        max(min_count, int(ceil(universe_size * rank_pct_limit)))
+        if universe_size > 0
+        else min_count
+    )
     if rank <= rank_limit:
         return True
     rank_pct = _safe_float((target or {}).get("VolumeSurgeRankPct"))
@@ -664,7 +745,8 @@ def _has_volume_surge_source_evidence(target, *, positive_only=False):
         if "VOLUME_SURGE_POSITIVE" not in source_set:
             return False
     elif not (
-        {"VOLUME_SURGE_POSITIVE", "VOLUME_SURGE_RAW", LOW_REBOUND_RISING_MISSED_SOURCE} & source_set
+        {"VOLUME_SURGE_POSITIVE", "VOLUME_SURGE_RAW", LOW_REBOUND_RISING_MISSED_SOURCE}
+        & source_set
         or bool(target.get("VolumeSurgeMatched"))
     ):
         return False
@@ -673,7 +755,8 @@ def _has_volume_surge_source_evidence(target, *, positive_only=False):
     return (
         _safe_float(target.get("VolumeSurgeRate", target.get("SpikeRate"))) > 0.0
         or _safe_positive_int(target.get("VolumeSurgeQty", target.get("SurgeQty"))) > 0
-        or _safe_positive_int(target.get("VolumeSurgeTradeQty", target.get("TradeQty"))) > 0
+        or _safe_positive_int(target.get("VolumeSurgeTradeQty", target.get("TradeQty")))
+        > 0
     )
 
 
@@ -699,19 +782,30 @@ def _under_10000_runtime_priority_rank(target):
 
 
 def _low_rebound_min_pct():
-    return float(getattr(TRADING_RULES, "SCALP_SCANNER_LOW_REBOUND_MIN_PCT", 2.5) or 2.5)
+    return float(
+        getattr(TRADING_RULES, "SCALP_SCANNER_LOW_REBOUND_MIN_PCT", 2.5) or 2.5
+    )
 
 
 def _low_rebound_max_distance_from_high_pct():
-    return float(getattr(TRADING_RULES, "SCALP_SCANNER_LOW_REBOUND_MAX_DISTANCE_FROM_HIGH_PCT", -0.5) or -0.5)
+    return float(
+        getattr(
+            TRADING_RULES, "SCALP_SCANNER_LOW_REBOUND_MAX_DISTANCE_FROM_HIGH_PCT", -0.5
+        )
+        or -0.5
+    )
 
 
 def _low_rebound_candle_fetch_cap():
-    return int(getattr(TRADING_RULES, "SCALP_SCANNER_LOW_REBOUND_CANDLE_FETCH_CAP", 20) or 20)
+    return int(
+        getattr(TRADING_RULES, "SCALP_SCANNER_LOW_REBOUND_CANDLE_FETCH_CAP", 20) or 20
+    )
 
 
 def _low_rebound_candle_limit():
-    return int(getattr(TRADING_RULES, "SCALP_SCANNER_LOW_REBOUND_CANDLE_LIMIT", 420) or 420)
+    return int(
+        getattr(TRADING_RULES, "SCALP_SCANNER_LOW_REBOUND_CANDLE_LIMIT", 420) or 420
+    )
 
 
 def _candidate_current_change_rate(target):
@@ -842,7 +936,9 @@ def _representative_source(source_set):
 
 
 def _source_signature(target):
-    return tuple(sorted(set(target.get("SourceSet") or [target.get("Source") or "OPEN_TOP"])))
+    return tuple(
+        sorted(set(target.get("SourceSet") or [target.get("Source") or "OPEN_TOP"]))
+    )
 
 
 def _is_low_rebound_target(target):
@@ -850,7 +946,10 @@ def _is_low_rebound_target(target):
 
 
 def _is_low_rebound_reserved_priority_target(target):
-    return _is_low_rebound_target(target) and _under_10000_runtime_priority_rank(target) == 0
+    return (
+        _is_low_rebound_target(target)
+        and _under_10000_runtime_priority_rank(target) == 0
+    )
 
 
 def _scanner_rate_from_field(target, field_name):
@@ -865,7 +964,11 @@ def _scanner_flu_metric(target):
     if LOW_REBOUND_RISING_MISSED_SOURCE in source_set:
         rate, has_rate = _scanner_rate_from_field(target, "LowReboundDisplayChangeRate")
         if has_rate:
-            return rate, "low_rebound_display_change_rate", LOW_REBOUND_RISING_MISSED_SOURCE
+            return (
+                rate,
+                "low_rebound_display_change_rate",
+                LOW_REBOUND_RISING_MISSED_SOURCE,
+            )
 
     if "REALTIME_RANK_START" in source_set:
         rate, has_rate = _scanner_rate_from_field(target, "RealtimeRankFluRate")
@@ -908,10 +1011,16 @@ def _scanner_flu_metric(target):
     if "VI_TRIGGERED" in source_set:
         vi_rate, has_vi = _scanner_rate_from_field(target, "ViFluRate")
         if has_vi:
-            return vi_rate, str(target.get("ViFluRateMetric") or "vi_open_flu_rate"), "VI_TRIGGERED"
+            return (
+                vi_rate,
+                str(target.get("ViFluRateMetric") or "vi_open_flu_rate"),
+                "VI_TRIGGERED",
+            )
 
     if "SUPERNOVA" in source_set:
-        supernova_rate, has_supernova = _scanner_rate_from_field(target, "SupernovaFluRate")
+        supernova_rate, has_supernova = _scanner_rate_from_field(
+            target, "SupernovaFluRate"
+        )
         if has_supernova:
             return supernova_rate, "supernova_source_rate", "SUPERNOVA"
 
@@ -937,12 +1046,22 @@ def _scanner_candidate_role(target):
         return LOW_REBOUND_RISING_MISSED_ROLE
     if bool(getattr(TRADING_RULES, "SCALP_SCANNER_PRIORITY_TIERING_ENABLED", False)):
         if source_set == {"BID_IMBALANCE_SURGE"} and bool(
-            getattr(TRADING_RULES, "SCALP_SCANNER_PRIORITY_DEMOTE_BID_IMBALANCE_ONLY", True)
+            getattr(
+                TRADING_RULES, "SCALP_SCANNER_PRIORITY_DEMOTE_BID_IMBALANCE_ONLY", True
+            )
         ):
             return "source_only"
         late_rank_sources = {"REALTIME_RANK_START", "VALUE_TOP", "OPEN_TOP"}
-        if source_set and source_set.issubset(late_rank_sources) and bool(
-            getattr(TRADING_RULES, "SCALP_SCANNER_PRIORITY_DEMOTE_REALTIME_RANK_ONLY", True)
+        if (
+            source_set
+            and source_set.issubset(late_rank_sources)
+            and bool(
+                getattr(
+                    TRADING_RULES,
+                    "SCALP_SCANNER_PRIORITY_DEMOTE_REALTIME_RANK_ONLY",
+                    True,
+                )
+            )
         ):
             return "late_confirmation"
     if source_set & PRIMARY_RISING_START_SOURCES:
@@ -978,7 +1097,9 @@ def _rising_start_score(target):
         "OPEN_TOP": 120.0,
         "VALUE_TOP": 20.0,
     }
-    best_source_bias = max((source_bias.get(source, 0.0) for source in source_set), default=0.0)
+    best_source_bias = max(
+        (source_bias.get(source, 0.0) for source in source_set), default=0.0
+    )
     flu_rate, flu_metric, _ = _scanner_flu_metric(target)
     flu_score = _bounded(flu_rate * 10.0, 0.0, 260.0)
     if flu_metric in {"vi_dynamic_disparity_rate", "vi_static_disparity_rate"}:
@@ -990,15 +1111,22 @@ def _rising_start_score(target):
     rank_score = min(240.0, rank_change * 8.0)
     rank_jump_score = min(220.0, _rank_jump(target) * 4.0)
     jump_score = _bounded(target.get("JumpRate"), 0.0, 20.0) * 18.0
-    volume_score = _bounded(target.get("VolumeSurgeRate", target.get("SpikeRate")), 0.0, 400.0)
+    volume_score = _bounded(
+        target.get("VolumeSurgeRate", target.get("SpikeRate")), 0.0, 400.0
+    )
     bid_score = _bounded(target.get("BidSurgeRate"), 0.0, 250.0)
     cntr_score = _bounded(target.get("CntrStr"), 0.0, 180.0)
     priority_score = _bounded(target.get("PriorityScore"), 0.0, 220.0)
     trade_value = _safe_positive_int(target.get("TradeValue"))
-    trade_value_score = min(160.0, log10(max(trade_value, 1)) * 22.0) if trade_value > 0 else 0.0
+    trade_value_score = (
+        min(160.0, log10(max(trade_value, 1)) * 22.0) if trade_value > 0 else 0.0
+    )
     source_count_score = min(240.0, max(0, len(source_set) - 1) * 70.0)
     breakout_confirmation_score = 0.0
-    if source_set & BREAKOUT_CONFIRMATION_SOURCES and source_set & {"PRICE_JUMP_START", "VOLUME_SURGE_POSITIVE"}:
+    if source_set & BREAKOUT_CONFIRMATION_SOURCES and source_set & {
+        "PRICE_JUMP_START",
+        "VOLUME_SURGE_POSITIVE",
+    }:
         breakout_confirmation_score = 180.0
 
     return (
@@ -1026,13 +1154,25 @@ def _scanner_priority_profile(target, previous=None):
     priority_score = _safe_float(target.get("PriorityScore"))
     cntr_str = _safe_float(target.get("CntrStr"))
     cntr_available = bool(target.get("CntrStrAvailable", False))
-    min_rank_jump = int(getattr(TRADING_RULES, "SCALP_SCANNER_ACCEL_MIN_RANK_JUMP", 10) or 10)
-    min_spike = float(getattr(TRADING_RULES, "SCALP_SCANNER_ACCEL_MIN_SPIKE_RATE", 80.0) or 80.0)
-    min_priority = float(getattr(TRADING_RULES, "SCALP_SCANNER_ACCEL_MIN_PRIORITY_SCORE", 80.0) or 80.0)
-    min_cntr = float(getattr(TRADING_RULES, "SCALP_SCANNER_ACCEL_MIN_CNTR_STR", 110.0) or 110.0)
-    demote_bid_only = bool(getattr(TRADING_RULES, "SCALP_SCANNER_PRIORITY_DEMOTE_BID_IMBALANCE_ONLY", True))
+    min_rank_jump = int(
+        getattr(TRADING_RULES, "SCALP_SCANNER_ACCEL_MIN_RANK_JUMP", 10) or 10
+    )
+    min_spike = float(
+        getattr(TRADING_RULES, "SCALP_SCANNER_ACCEL_MIN_SPIKE_RATE", 80.0) or 80.0
+    )
+    min_priority = float(
+        getattr(TRADING_RULES, "SCALP_SCANNER_ACCEL_MIN_PRIORITY_SCORE", 80.0) or 80.0
+    )
+    min_cntr = float(
+        getattr(TRADING_RULES, "SCALP_SCANNER_ACCEL_MIN_CNTR_STR", 110.0) or 110.0
+    )
+    demote_bid_only = bool(
+        getattr(TRADING_RULES, "SCALP_SCANNER_PRIORITY_DEMOTE_BID_IMBALANCE_ONLY", True)
+    )
     demote_open_price_jump_without_volume = bool(
-        getattr(TRADING_RULES, "SCALP_SCANNER_DEMOTE_OPEN_PRICE_JUMP_WITHOUT_VOLUME", False)
+        getattr(
+            TRADING_RULES, "SCALP_SCANNER_DEMOTE_OPEN_PRICE_JUMP_WITHOUT_VOLUME", False
+        )
     )
     open_price_jump_without_volume = (
         "OPEN_TOP" in source_set
@@ -1128,7 +1268,9 @@ def _scanner_priority_profile(target, previous=None):
             reason = acceleration_reason or "general_acceleration_confirmed"
         base_score = 4000.0
         demoted_reason = ""
-    elif source_set and source_set.issubset({"REALTIME_RANK_START", "VALUE_TOP", "OPEN_TOP"}):
+    elif source_set and source_set.issubset(
+        {"REALTIME_RANK_START", "VALUE_TOP", "OPEN_TOP"}
+    ):
         tier = "tier_d_late_rank_only"
         reason = "late_rank_or_liquidity_only_source"
         base_score = 1000.0
@@ -1157,7 +1299,9 @@ def _price_delta_pct(first_price, current_price):
     return ((current - first) / first) * 100.0
 
 
-def _late_confirmation_probe_block_reason(*, probe_age, min_probe_sec, max_probe_sec, price_declined, flu_metric_changed=False):
+def _late_confirmation_probe_block_reason(
+    *, probe_age, min_probe_sec, max_probe_sec, price_declined, flu_metric_changed=False
+):
     if probe_age < min_probe_sec:
         return "late_confirmation_probe_waiting"
     if probe_age > max_probe_sec:
@@ -1188,12 +1332,16 @@ def _acceleration_reason(target, previous=None):
         return "new_supernova_source"
 
     rank_jump = _rank_jump(target)
-    min_rank_jump = int(getattr(TRADING_RULES, "SCALP_SCANNER_ACCEL_MIN_RANK_JUMP", 10) or 10)
+    min_rank_jump = int(
+        getattr(TRADING_RULES, "SCALP_SCANNER_ACCEL_MIN_RANK_JUMP", 10) or 10
+    )
     if rank_jump >= min_rank_jump:
         return "rank_jump_acceleration"
 
     spike_rate = _safe_float(target.get("SpikeRate"))
-    min_spike = float(getattr(TRADING_RULES, "SCALP_SCANNER_ACCEL_MIN_SPIKE_RATE", 80.0) or 80.0)
+    min_spike = float(
+        getattr(TRADING_RULES, "SCALP_SCANNER_ACCEL_MIN_SPIKE_RATE", 80.0) or 80.0
+    )
     if spike_rate >= min_spike:
         return "spike_rate_acceleration"
 
@@ -1206,12 +1354,16 @@ def _acceleration_reason(target, previous=None):
         return "bid_imbalance_surge_acceleration"
 
     priority_score = _safe_float(target.get("PriorityScore"))
-    min_priority = float(getattr(TRADING_RULES, "SCALP_SCANNER_ACCEL_MIN_PRIORITY_SCORE", 80.0) or 80.0)
+    min_priority = float(
+        getattr(TRADING_RULES, "SCALP_SCANNER_ACCEL_MIN_PRIORITY_SCORE", 80.0) or 80.0
+    )
     if priority_score >= min_priority:
         return "priority_score_acceleration"
 
     cntr_str = _safe_float(target.get("CntrStr"))
-    min_cntr = float(getattr(TRADING_RULES, "SCALP_SCANNER_ACCEL_MIN_CNTR_STR", 110.0) or 110.0)
+    min_cntr = float(
+        getattr(TRADING_RULES, "SCALP_SCANNER_ACCEL_MIN_CNTR_STR", 110.0) or 110.0
+    )
     if bool(target.get("CntrStrAvailable", False)) and cntr_str >= min_cntr:
         return "execution_strength_acceleration"
 
@@ -1254,7 +1406,9 @@ def _freshness_score(target):
 
     vi_score = 0.0
     if "VI_TRIGGERED" in source_set:
-        vi_score = 320.0 + min(_safe_positive_int(target.get("VIMotionCount")), 5) * 30.0
+        vi_score = (
+            320.0 + min(_safe_positive_int(target.get("VIMotionCount")), 5) * 30.0
+        )
 
     source_count_score = min(320.0, max(0, len(source_set) - 1) * 100.0)
     flu_score = _bounded(flu_rate * 8.0, 0.0, 220.0)
@@ -1284,13 +1438,21 @@ def _merge_best_rank_metadata(current, raw_target, prefix):
         return
     current[f"{prefix}Matched"] = bool((raw_target or {}).get(f"{prefix}Matched", True))
     current[rank_key] = rank
-    current[f"{prefix}RankPct"] = _safe_float((raw_target or {}).get(f"{prefix}RankPct"))
-    current[f"{prefix}UniverseSize"] = _safe_positive_int((raw_target or {}).get(f"{prefix}UniverseSize"))
-    current[f"{prefix}SortType"] = str((raw_target or {}).get(f"{prefix}SortType") or "")
+    current[f"{prefix}RankPct"] = _safe_float(
+        (raw_target or {}).get(f"{prefix}RankPct")
+    )
+    current[f"{prefix}UniverseSize"] = _safe_positive_int(
+        (raw_target or {}).get(f"{prefix}UniverseSize")
+    )
+    current[f"{prefix}SortType"] = str(
+        (raw_target or {}).get(f"{prefix}SortType") or ""
+    )
 
 
 def _merge_candidate(candidate_pool, raw_target, source):
-    code = kiwoom_utils.normalize_stock_code(raw_target.get("Code", raw_target.get("code", "")))
+    code = kiwoom_utils.normalize_stock_code(
+        raw_target.get("Code", raw_target.get("code", ""))
+    )
     if not code:
         return
 
@@ -1325,7 +1487,9 @@ def _merge_candidate(candidate_pool, raw_target, source):
     raw_flu_value = raw_target.get("FluRate", raw_target.get("flu_rate"))
     raw_flu_present = raw_flu_value not in (None, "")
     raw_flu_rate = _safe_float(raw_flu_value)
-    current["LegacyMaxFluRate"] = max(current.get("LegacyMaxFluRate", 0.0), raw_flu_rate)
+    current["LegacyMaxFluRate"] = max(
+        current.get("LegacyMaxFluRate", 0.0), raw_flu_rate
+    )
     if source == "OPEN_TOP":
         open_flu_value = raw_target.get("OpenFluRate", raw_flu_value)
         if open_flu_value not in (None, ""):
@@ -1340,14 +1504,21 @@ def _merge_candidate(candidate_pool, raw_target, source):
             current.setdefault("DayFluRate", raw_flu_rate)
     elif source == "REALTIME_RANK_START":
         if raw_target.get("RealtimeRankFluRate") not in (None, ""):
-            current["RealtimeRankFluRate"] = _safe_float(raw_target.get("RealtimeRankFluRate"))
+            current["RealtimeRankFluRate"] = _safe_float(
+                raw_target.get("RealtimeRankFluRate")
+            )
         elif raw_flu_present:
             current["RealtimeRankFluRate"] = raw_flu_rate
-        current["RealtimePrevBaseChange"] = _safe_float(raw_target.get("RealtimePrevBaseChange"))
+        current["RealtimePrevBaseChange"] = _safe_float(
+            raw_target.get("RealtimePrevBaseChange")
+        )
         current["RankChange"] = _safe_int(raw_target.get("RankChange"))
         current["RankChangeSign"] = str(raw_target.get("RankChangeSign") or "").strip()
         current["RankChangeSignAuthority"] = (
-            str(raw_target.get("RankChangeSignAuthority") or RANK_CHANGE_SIGN_AUTHORITY_DEFAULT).strip()
+            str(
+                raw_target.get("RankChangeSignAuthority")
+                or RANK_CHANGE_SIGN_AUTHORITY_DEFAULT
+            ).strip()
             or RANK_CHANGE_SIGN_AUTHORITY_DEFAULT
         )
         sign_diagnostics = kiwoom_utils.rank_change_sign_diagnostics(
@@ -1355,7 +1526,8 @@ def _merge_candidate(candidate_pool, raw_target, source):
             current.get("RankChange"),
         )
         current["RankChangeSignState"] = str(
-            raw_target.get("RankChangeSignState") or sign_diagnostics["RankChangeSignState"]
+            raw_target.get("RankChangeSignState")
+            or sign_diagnostics["RankChangeSignState"]
         ).strip()
         current["RankChangeSignConsistency"] = str(
             raw_target.get("RankChangeSignConsistency")
@@ -1365,9 +1537,12 @@ def _merge_candidate(candidate_pool, raw_target, source):
     elif source == "PRICE_JUMP_START":
         if raw_flu_present:
             current["PriceJumpFluRate"] = raw_flu_rate
-        current["JumpRate"] = max(current.get("JumpRate", 0.0), _safe_float(raw_target.get("JumpRate")))
+        current["JumpRate"] = max(
+            current.get("JumpRate", 0.0), _safe_float(raw_target.get("JumpRate"))
+        )
         current["PriceJumpTradeQty"] = max(
-            current.get("PriceJumpTradeQty", 0), _safe_positive_int(raw_target.get("TradeQty"))
+            current.get("PriceJumpTradeQty", 0),
+            _safe_positive_int(raw_target.get("TradeQty")),
         )
         current["PreSig"] = raw_target.get("PreSig", current.get("PreSig", ""))
         _merge_best_rank_metadata(current, raw_target, "PriceJump")
@@ -1376,18 +1551,33 @@ def _merge_candidate(candidate_pool, raw_target, source):
             current["VolumeSurgeFluRate"] = raw_flu_rate
         current["VolumeSurgeRate"] = max(
             current.get("VolumeSurgeRate", 0.0),
-            _safe_float(raw_target.get("VolumeSurgeRate", raw_target.get("SpikeRate", raw_target.get("spike_rate")))),
+            _safe_float(
+                raw_target.get(
+                    "VolumeSurgeRate",
+                    raw_target.get("SpikeRate", raw_target.get("spike_rate")),
+                )
+            ),
         )
         current["VolumeSurgeQty"] = max(
-            current.get("VolumeSurgeQty", 0), _safe_positive_int(raw_target.get("SurgeQty"))
+            current.get("VolumeSurgeQty", 0),
+            _safe_positive_int(raw_target.get("SurgeQty")),
         )
         current["PreSig"] = raw_target.get("PreSig", current.get("PreSig", ""))
     elif source == "BID_IMBALANCE_SURGE":
         if raw_flu_present:
             current["BidImbalanceFluRate"] = raw_flu_rate
-        current["BidSurgeRate"] = max(current.get("BidSurgeRate", 0.0), _safe_float(raw_target.get("BidSurgeRate")))
-        current["BidSurgeQty"] = max(current.get("BidSurgeQty", 0), _safe_positive_int(raw_target.get("BidSurgeQty")))
-        current["TotalBuyQty"] = max(current.get("TotalBuyQty", 0), _safe_positive_int(raw_target.get("TotalBuyQty")))
+        current["BidSurgeRate"] = max(
+            current.get("BidSurgeRate", 0.0),
+            _safe_float(raw_target.get("BidSurgeRate")),
+        )
+        current["BidSurgeQty"] = max(
+            current.get("BidSurgeQty", 0),
+            _safe_positive_int(raw_target.get("BidSurgeQty")),
+        )
+        current["TotalBuyQty"] = max(
+            current.get("TotalBuyQty", 0),
+            _safe_positive_int(raw_target.get("TotalBuyQty")),
+        )
         current["PreSig"] = raw_target.get("PreSig", current.get("PreSig", ""))
     elif source == "VI_TRIGGERED":
         if raw_flu_present:
@@ -1395,9 +1585,13 @@ def _merge_candidate(candidate_pool, raw_target, source):
         if raw_target.get("ViOpenFluRate") not in (None, ""):
             current["ViOpenFluRate"] = _safe_float(raw_target.get("ViOpenFluRate"))
         if raw_target.get("ViDynamicDisparityRate") not in (None, ""):
-            current["ViDynamicDisparityRate"] = _safe_float(raw_target.get("ViDynamicDisparityRate"))
+            current["ViDynamicDisparityRate"] = _safe_float(
+                raw_target.get("ViDynamicDisparityRate")
+            )
         if raw_target.get("ViStaticDisparityRate") not in (None, ""):
-            current["ViStaticDisparityRate"] = _safe_float(raw_target.get("ViStaticDisparityRate"))
+            current["ViStaticDisparityRate"] = _safe_float(
+                raw_target.get("ViStaticDisparityRate")
+            )
         if raw_target.get("ViFluRateMetric"):
             current["ViFluRateMetric"] = str(raw_target.get("ViFluRateMetric"))
         if "ViFluRate" not in current:
@@ -1414,31 +1608,45 @@ def _merge_candidate(candidate_pool, raw_target, source):
         if raw_flu_present:
             current["HighProximityFluRate"] = raw_flu_rate
         current["HighProximityTradeQty"] = max(
-            current.get("HighProximityTradeQty", 0), _safe_positive_int(raw_target.get("TradeQty"))
+            current.get("HighProximityTradeQty", 0),
+            _safe_positive_int(raw_target.get("TradeQty")),
         )
         current["TodayHighPrice"] = max(
-            current.get("TodayHighPrice", 0), _safe_positive_int(raw_target.get("TodayHighPrice"))
+            current.get("TodayHighPrice", 0),
+            _safe_positive_int(raw_target.get("TodayHighPrice")),
         )
         current["TodayLowPrice"] = max(
-            current.get("TodayLowPrice", 0), _safe_positive_int(raw_target.get("TodayLowPrice"))
+            current.get("TodayLowPrice", 0),
+            _safe_positive_int(raw_target.get("TodayLowPrice")),
         )
         if raw_target.get("HighProximityDistancePct") not in (None, ""):
-            current["HighProximityDistancePct"] = _safe_float(raw_target.get("HighProximityDistancePct"))
+            current["HighProximityDistancePct"] = _safe_float(
+                raw_target.get("HighProximityDistancePct")
+            )
         current["PreSig"] = raw_target.get("PreSig", current.get("PreSig", ""))
         _merge_best_rank_metadata(current, raw_target, "HighProximity")
     elif source == NEW_HIGH_CONFIRMATION_SOURCE:
         if raw_flu_present:
             current["NewHighFluRate"] = raw_flu_rate
         current["NewHighTradeQty"] = max(
-            current.get("NewHighTradeQty", 0), _safe_positive_int(raw_target.get("TradeQty"))
+            current.get("NewHighTradeQty", 0),
+            _safe_positive_int(raw_target.get("TradeQty")),
         )
         current["NewHighPrevTradeQtyRatio"] = max(
-            current.get("NewHighPrevTradeQtyRatio", 0.0), _safe_float(raw_target.get("PrevTradeQtyRatio"))
+            current.get("NewHighPrevTradeQtyRatio", 0.0),
+            _safe_float(raw_target.get("PrevTradeQtyRatio")),
         )
-        current["NewHighPrice"] = max(current.get("NewHighPrice", 0), _safe_positive_int(raw_target.get("NewHighPrice")))
-        current["NewLowPrice"] = max(current.get("NewLowPrice", 0), _safe_positive_int(raw_target.get("NewLowPrice")))
+        current["NewHighPrice"] = max(
+            current.get("NewHighPrice", 0),
+            _safe_positive_int(raw_target.get("NewHighPrice")),
+        )
+        current["NewLowPrice"] = max(
+            current.get("NewLowPrice", 0),
+            _safe_positive_int(raw_target.get("NewLowPrice")),
+        )
         current["NewHighPeriodDays"] = max(
-            current.get("NewHighPeriodDays", 0), _safe_positive_int(raw_target.get("NewHighPeriodDays"))
+            current.get("NewHighPeriodDays", 0),
+            _safe_positive_int(raw_target.get("NewHighPeriodDays")),
         )
         current["PreSig"] = raw_target.get("PreSig", current.get("PreSig", ""))
         _merge_best_rank_metadata(current, raw_target, "NewHigh")
@@ -1448,14 +1656,28 @@ def _merge_candidate(candidate_pool, raw_target, source):
             raw_target.get("RisingMissedLineage") or LOW_REBOUND_RISING_MISSED_LINEAGE
         )
         current["LowReboundPct"] = _safe_float(raw_target.get("LowReboundPct"))
-        current["IntradayLowPrice"] = _safe_positive_int(raw_target.get("IntradayLowPrice"))
-        current["IntradayHighPrice"] = _safe_positive_int(raw_target.get("IntradayHighPrice"))
-        current["DistanceFromIntradayHighPct"] = _safe_float(raw_target.get("DistanceFromIntradayHighPct"))
-        current["NegativeDisplayRebound"] = bool(raw_target.get("NegativeDisplayRebound"))
-        current["LowReboundBaseSourceSignature"] = str(raw_target.get("LowReboundBaseSourceSignature") or "")
-        current["LowReboundCandleLimit"] = _safe_positive_int(raw_target.get("LowReboundCandleLimit"))
+        current["IntradayLowPrice"] = _safe_positive_int(
+            raw_target.get("IntradayLowPrice")
+        )
+        current["IntradayHighPrice"] = _safe_positive_int(
+            raw_target.get("IntradayHighPrice")
+        )
+        current["DistanceFromIntradayHighPct"] = _safe_float(
+            raw_target.get("DistanceFromIntradayHighPct")
+        )
+        current["NegativeDisplayRebound"] = bool(
+            raw_target.get("NegativeDisplayRebound")
+        )
+        current["LowReboundBaseSourceSignature"] = str(
+            raw_target.get("LowReboundBaseSourceSignature") or ""
+        )
+        current["LowReboundCandleLimit"] = _safe_positive_int(
+            raw_target.get("LowReboundCandleLimit")
+        )
         if raw_target.get("LowReboundDisplayChangeRate") not in (None, ""):
-            current["LowReboundDisplayChangeRate"] = _safe_float(raw_target.get("LowReboundDisplayChangeRate"))
+            current["LowReboundDisplayChangeRate"] = _safe_float(
+                raw_target.get("LowReboundDisplayChangeRate")
+            )
     elif source == "SUPERNOVA":
         if raw_flu_present:
             current["SupernovaFluRate"] = raw_flu_rate
@@ -1463,9 +1685,18 @@ def _merge_candidate(candidate_pool, raw_target, source):
     if strength_available:
         current["CntrStr"] = max(current.get("CntrStr", 0.0), strength_value)
         current["CntrStrAvailable"] = True
-    current["PriorityScore"] = max(current.get("PriorityScore", 0.0), _safe_float(raw_target.get("PriorityScore", raw_target.get("priority_score"))))
-    current["SpikeRate"] = max(current.get("SpikeRate", 0.0), _safe_float(raw_target.get("SpikeRate", raw_target.get("spike_rate"))))
-    current["TradeValue"] = max(current.get("TradeValue", 0), _safe_positive_int(raw_target.get("TradeValue", raw_target.get("trade_value"))))
+    current["PriorityScore"] = max(
+        current.get("PriorityScore", 0.0),
+        _safe_float(raw_target.get("PriorityScore", raw_target.get("priority_score"))),
+    )
+    current["SpikeRate"] = max(
+        current.get("SpikeRate", 0.0),
+        _safe_float(raw_target.get("SpikeRate", raw_target.get("spike_rate"))),
+    )
+    current["TradeValue"] = max(
+        current.get("TradeValue", 0),
+        _safe_positive_int(raw_target.get("TradeValue", raw_target.get("trade_value"))),
+    )
     volume_surge_rank = _safe_positive_int(raw_target.get("VolumeSurgeRank"))
     if volume_surge_rank > 0 and (
         _safe_positive_int(current.get("VolumeSurgeRank")) <= 0
@@ -1473,13 +1704,22 @@ def _merge_candidate(candidate_pool, raw_target, source):
     ):
         current["VolumeSurgeMatched"] = True
         current["VolumeSurgeRank"] = volume_surge_rank
-        current["VolumeSurgeRankPct"] = _safe_float(raw_target.get("VolumeSurgeRankPct"))
-        current["VolumeSurgeUniverseSize"] = _safe_positive_int(raw_target.get("VolumeSurgeUniverseSize"))
-        current["VolumeSurgeSortType"] = str(raw_target.get("VolumeSurgeSortType") or "")
+        current["VolumeSurgeRankPct"] = _safe_float(
+            raw_target.get("VolumeSurgeRankPct")
+        )
+        current["VolumeSurgeUniverseSize"] = _safe_positive_int(
+            raw_target.get("VolumeSurgeUniverseSize")
+        )
+        current["VolumeSurgeSortType"] = str(
+            raw_target.get("VolumeSurgeSortType") or ""
+        )
     _merge_best_rank_metadata(current, raw_target, "PriceJump")
     _merge_best_rank_metadata(current, raw_target, "HighProximity")
     _merge_best_rank_metadata(current, raw_target, "NewHigh")
-    current["VIMotionCount"] = max(current.get("VIMotionCount", 0), _safe_positive_int(raw_target.get("VIMotionCount")))
+    current["VIMotionCount"] = max(
+        current.get("VIMotionCount", 0),
+        _safe_positive_int(raw_target.get("VIMotionCount")),
+    )
 
     price = _safe_positive_int(raw_target.get("Price", raw_target.get("cur_prc")))
     if price > 0:
@@ -1488,7 +1728,9 @@ def _merge_candidate(candidate_pool, raw_target, source):
         open_price = _safe_positive_int(current.get("OpenPrice"))
         current_price = _safe_positive_int(current.get("Price"))
         if open_price > 0 and current_price > 0:
-            current["OpenFluRate"] = round(((current_price - open_price) / open_price) * 100.0, 2)
+            current["OpenFluRate"] = round(
+                ((current_price - open_price) / open_price) * 100.0, 2
+            )
 
     rank_now = _safe_int(raw_target.get("RankNow"))
     rank_prev = _safe_int(raw_target.get("RankPrev"))
@@ -1498,10 +1740,14 @@ def _merge_candidate(candidate_pool, raw_target, source):
         current["RankPrev"] = rank_prev
     vi_release_time = str(raw_target.get("VIReleaseTime") or "").strip()
     if vi_release_time:
-        current["VIReleaseTime"] = max(str(current.get("VIReleaseTime") or ""), vi_release_time)
+        current["VIReleaseTime"] = max(
+            str(current.get("VIReleaseTime") or ""), vi_release_time
+        )
 
     current["Source"] = _representative_source(current["SourceSet"])
-    scanner_flu_rate, scanner_flu_metric, scanner_flu_source = _scanner_flu_metric(current)
+    scanner_flu_rate, scanner_flu_metric, scanner_flu_source = _scanner_flu_metric(
+        current
+    )
     current["FluRate"] = scanner_flu_rate
     current["ScannerFluRate"] = scanner_flu_rate
     current["ScannerFluRateMetric"] = scanner_flu_metric
@@ -1562,7 +1808,9 @@ def rank_candidates(candidate_pool):
             candidate_pool.values(),
             key=lambda item: (
                 _under_10000_runtime_priority_rank(item),
-                tier_rank.get(_scanner_priority_profile(item).get("scanner_priority_tier"), 8),
+                tier_rank.get(
+                    _scanner_priority_profile(item).get("scanner_priority_tier"), 8
+                ),
                 -_scanner_priority_profile(item).get("scanner_priority_score", 0.0),
                 _source_priority(item.get("Source")),
                 -_safe_float(item.get("FluRate")),
@@ -1616,15 +1864,19 @@ def _scanner_candidate_pre_filter_reason(target):
 
 
 def _filter_picks_within_cooldown(recent_picks, now_ts, reentry_cooldown_sec):
-    max_probe_sec = int(getattr(TRADING_RULES, "SCALP_SCANNER_PROBE_MAX_SEC", 300) or 300)
+    max_probe_sec = int(
+        getattr(TRADING_RULES, "SCALP_SCANNER_PROBE_MAX_SEC", 300) or 300
+    )
     return {
         code: meta
         for code, meta in (recent_picks or {}).items()
         if (
-            (now_ts - float(meta.get("last_promoted_at", 0.0) or 0.0)) < reentry_cooldown_sec
+            (now_ts - float(meta.get("last_promoted_at", 0.0) or 0.0))
+            < reentry_cooldown_sec
             or (
                 str(meta.get("scanner_probe_state") or "") == "first_seen_probe"
-                and (now_ts - float(meta.get("first_seen_at", 0.0) or 0.0)) <= max_probe_sec
+                and (now_ts - float(meta.get("first_seen_at", 0.0) or 0.0))
+                <= max_probe_sec
             )
         )
     }
@@ -1650,14 +1902,20 @@ def _scanner_anchor_reset_context(target, previous):
         if current_price > 0 and previous_price > 0
         else 0.0
     )
-    name_changed = bool(current_name and previous_name and current_name != previous_name)
-    price_discontinuous = bool(price_ratio >= 2.0 or (price_ratio > 0.0 and price_ratio <= 0.5))
+    name_changed = bool(
+        current_name and previous_name and current_name != previous_name
+    )
+    price_discontinuous = bool(
+        price_ratio >= 2.0 or (price_ratio > 0.0 and price_ratio <= 0.5)
+    )
     reason = (
         "scanner_identity_name_changed"
         if name_changed
-        else "scanner_identity_price_discontinuity"
-        if price_discontinuous
-        else "not_applicable"
+        else (
+            "scanner_identity_price_discontinuity"
+            if price_discontinuous
+            else "not_applicable"
+        )
     )
     return {
         "reset": bool(name_changed or price_discontinuous),
@@ -1685,8 +1943,14 @@ def _scanner_candidate_identity_decision(db, target):
     try:
         authoritative_name = str(getter(code) or "").strip()
     except Exception as exc:
-        log_error(f"[SCANNER_SOURCE_IDENTITY_GUARD] latest name lookup failed ({code}): {exc}")
-        return {"blocked": False, "reason": "authoritative_name_lookup_failed", **fields}
+        log_error(
+            f"[SCANNER_SOURCE_IDENTITY_GUARD] latest name lookup failed ({code}): {exc}"
+        )
+        return {
+            "blocked": False,
+            "reason": "authoritative_name_lookup_failed",
+            **fields,
+        }
     fields.update(
         {
             "scanner_source_identity_guard_applied": bool(authoritative_name),
@@ -1703,7 +1967,9 @@ def _scanner_candidate_identity_decision(db, target):
         and authoritative_name_norm
         and payload_name_norm != authoritative_name_norm
     ):
-        fields["scanner_source_identity_guard_reason"] = "scanner_identity_name_mismatch"
+        fields["scanner_source_identity_guard_reason"] = (
+            "scanner_identity_name_mismatch"
+        )
         return {"blocked": True, "reason": "scanner_identity_name_mismatch", **fields}
     return {"blocked": False, "reason": "scanner_identity_ok", **fields}
 
@@ -1728,7 +1994,9 @@ def _should_promote_candidate(target, recent_picks, now_ts, reentry_cooldown_sec
         return True
     if str(previous.get("scanner_probe_state") or "") == "first_seen_probe":
         return True
-    if (now_ts - float(previous.get("last_promoted_at", 0.0) or 0.0)) >= reentry_cooldown_sec:
+    if (
+        now_ts - float(previous.get("last_promoted_at", 0.0) or 0.0)
+    ) >= reentry_cooldown_sec:
         return True
 
     current_sources = set(_source_signature(target))
@@ -1774,17 +2042,22 @@ def _scanner_real_source_guard_decision(target, recent_picks, now_ts):
             ),
             "scanner_source_identity_quarantine_basis": "first_identity_mismatch_for_same_anchor",
         }
-    if not bool(getattr(TRADING_RULES, "SCALP_SCANNER_REAL_SOURCE_GUARD_ENABLED", False)):
+    if not bool(
+        getattr(TRADING_RULES, "SCALP_SCANNER_REAL_SOURCE_GUARD_ENABLED", False)
+    ):
         return {"blocked": False, "reason": "guard_disabled"}
 
     source_set = set(source_signature)
     candidate_role = _scanner_candidate_role(target)
     acceleration_reason = _acceleration_reason(target, previous)
     priority_profile = _scanner_priority_profile(target, previous)
-    priority_tiering_enabled = bool(getattr(TRADING_RULES, "SCALP_SCANNER_PRIORITY_TIERING_ENABLED", False))
+    priority_tiering_enabled = bool(
+        getattr(TRADING_RULES, "SCALP_SCANNER_PRIORITY_TIERING_ENABLED", False)
+    )
     open_price_jump_without_volume_demoted = (
         priority_tiering_enabled
-        and priority_profile.get("scanner_priority_reason") == "open_price_jump_without_volume_demoted"
+        and priority_profile.get("scanner_priority_reason")
+        == "open_price_jump_without_volume_demoted"
     )
     previous_sources = set(previous.get("last_source_signature") or [])
     open_price_jump_volume_followup_confirmed = (
@@ -1796,33 +2069,57 @@ def _scanner_real_source_guard_decision(target, recent_picks, now_ts):
         and "PRICE_JUMP_START" in source_set
         and "VOLUME_SURGE_POSITIVE" in source_set
     )
-    if priority_tiering_enabled and priority_profile.get("scanner_priority_tier") == "tier_d_late_rank_only":
+    if (
+        priority_tiering_enabled
+        and priority_profile.get("scanner_priority_tier") == "tier_d_late_rank_only"
+    ):
         candidate_role = "late_confirmation"
         if acceleration_reason in {"new_realtime_rank_start_source"}:
             acceleration_reason = ""
     if open_price_jump_without_volume_demoted:
         candidate_role = "late_confirmation"
         acceleration_reason = ""
-    if priority_tiering_enabled and priority_profile.get("scanner_priority_tier") == "tier_z_source_only":
+    if (
+        priority_tiering_enabled
+        and priority_profile.get("scanner_priority_tier") == "tier_z_source_only"
+    ):
         candidate_role = "source_only"
         acceleration_reason = ""
-    if priority_tiering_enabled and priority_profile.get("scanner_priority_tier") == "tier_a_acceleration_confirmed":
-        acceleration_reason = str(priority_profile.get("scanner_priority_reason") or acceleration_reason)
+    if (
+        priority_tiering_enabled
+        and priority_profile.get("scanner_priority_tier")
+        == "tier_a_acceleration_confirmed"
+    ):
+        acceleration_reason = str(
+            priority_profile.get("scanner_priority_reason") or acceleration_reason
+        )
     first_price = _safe_positive_int(previous.get("first_price"))
     current_price = _safe_positive_int(target.get("Price"))
     current_flu, current_flu_metric, current_flu_source = _scanner_flu_metric(target)
-    legacy_unknown_flu_anchor = bool(previous) and previous.get("first_flu_rate") not in (None, "") and (
-        not previous.get("first_flu_rate_metric") or not previous.get("first_flu_rate_source")
+    legacy_unknown_flu_anchor = (
+        bool(previous)
+        and previous.get("first_flu_rate") not in (None, "")
+        and (
+            not previous.get("first_flu_rate_metric")
+            or not previous.get("first_flu_rate_source")
+        )
     )
     previous_flu_metric = str(
-        previous.get("first_flu_rate_metric") or ("legacy_unknown_flu_rate" if legacy_unknown_flu_anchor else current_flu_metric)
+        previous.get("first_flu_rate_metric")
+        or (
+            "legacy_unknown_flu_rate"
+            if legacy_unknown_flu_anchor
+            else current_flu_metric
+        )
     )
     previous_flu_source = str(
-        previous.get("first_flu_rate_source") or ("legacy_unknown" if legacy_unknown_flu_anchor else current_flu_source)
+        previous.get("first_flu_rate_source")
+        or ("legacy_unknown" if legacy_unknown_flu_anchor else current_flu_source)
     )
     first_flu = _safe_float(previous.get("first_flu_rate"), current_flu)
     flu_metric_changed = bool(previous) and (
-        previous_flu_metric != current_flu_metric or previous_flu_source != current_flu_source
+        previous_flu_metric != current_flu_metric
+        or previous_flu_source != current_flu_source
     )
     price_delta = _price_delta_pct(first_price, current_price)
     flu_delta = current_flu - first_flu
@@ -1852,11 +2149,16 @@ def _scanner_real_source_guard_decision(target, recent_picks, now_ts):
     }
     first_seen_at = float(previous.get("first_seen_at", 0.0) or 0.0)
     probe_age = max(0.0, now_ts - first_seen_at) if first_seen_at > 0 else 0.0
-    price_declined = first_price > 0 and current_price > 0 and current_price < first_price
+    price_declined = (
+        first_price > 0 and current_price > 0 and current_price < first_price
+    )
     if previous:
         observed_context["probe_age_sec"] = f"{probe_age:.1f}"
 
-    if priority_tiering_enabled and priority_profile.get("scanner_priority_tier") == "tier_z_source_only":
+    if (
+        priority_tiering_enabled
+        and priority_profile.get("scanner_priority_tier") == "tier_z_source_only"
+    ):
         return {
             "blocked": True,
             "reason": "scanner_priority_source_only",
@@ -1903,7 +2205,11 @@ def _scanner_real_source_guard_decision(target, recent_picks, now_ts):
             **observed_context,
         }
 
-    if not bool(getattr(TRADING_RULES, "SCALP_SCANNER_REAL_SOURCE_GUARD_BLOCK_LATE_FIRST_SEEN", True)):
+    if not bool(
+        getattr(
+            TRADING_RULES, "SCALP_SCANNER_REAL_SOURCE_GUARD_BLOCK_LATE_FIRST_SEEN", True
+        )
+    ):
         return {
             "blocked": False,
             "reason": "late_first_seen_guard_disabled",
@@ -1913,9 +2219,15 @@ def _scanner_real_source_guard_decision(target, recent_picks, now_ts):
         }
 
     min_probe_sec = int(getattr(TRADING_RULES, "SCALP_SCANNER_PROBE_MIN_SEC", 30) or 30)
-    max_probe_sec = int(getattr(TRADING_RULES, "SCALP_SCANNER_PROBE_MAX_SEC", 300) or 300)
-    min_price_delta = float(getattr(TRADING_RULES, "SCALP_SCANNER_PROBE_MIN_PRICE_DELTA_PCT", 0.15) or 0.15)
-    min_flu_delta = float(getattr(TRADING_RULES, "SCALP_SCANNER_PROBE_MIN_FLU_DELTA_PCT", 0.30) or 0.30)
+    max_probe_sec = int(
+        getattr(TRADING_RULES, "SCALP_SCANNER_PROBE_MAX_SEC", 300) or 300
+    )
+    min_price_delta = float(
+        getattr(TRADING_RULES, "SCALP_SCANNER_PROBE_MIN_PRICE_DELTA_PCT", 0.15) or 0.15
+    )
+    min_flu_delta = float(
+        getattr(TRADING_RULES, "SCALP_SCANNER_PROBE_MIN_FLU_DELTA_PCT", 0.30) or 0.30
+    )
 
     if not previous:
         first_seen_reason = (
@@ -1975,7 +2287,11 @@ def _scanner_real_source_guard_decision(target, recent_picks, now_ts):
             **observed_context,
         }
 
-    if not bool(getattr(TRADING_RULES, "SCALP_SCANNER_REAL_SOURCE_GUARD_BLOCK_VALUE_TOP_ONLY", True)):
+    if not bool(
+        getattr(
+            TRADING_RULES, "SCALP_SCANNER_REAL_SOURCE_GUARD_BLOCK_VALUE_TOP_ONLY", True
+        )
+    ):
         return {
             "blocked": False,
             "reason": "value_top_only_guard_disabled",
@@ -1992,10 +2308,17 @@ def _scanner_real_source_guard_decision(target, recent_picks, now_ts):
             **observed_context,
         }
 
-    max_decline = float(getattr(TRADING_RULES, "SCALP_SCANNER_REAL_SOURCE_GUARD_MAX_DECLINE_PCT", 0.0) or 0.0)
-    flu_declined = False if flu_metric_changed else current_flu < (first_flu - max_decline)
+    max_decline = float(
+        getattr(TRADING_RULES, "SCALP_SCANNER_REAL_SOURCE_GUARD_MAX_DECLINE_PCT", 0.0)
+        or 0.0
+    )
+    flu_declined = (
+        False if flu_metric_changed else current_flu < (first_flu - max_decline)
+    )
 
-    price_declined = first_price > 0 and current_price > 0 and current_price < first_price
+    price_declined = (
+        first_price > 0 and current_price > 0 and current_price < first_price
+    )
 
     previous_signature = tuple(previous.get("last_source_signature") or ())
     same_source_family = previous_signature == source_signature
@@ -2050,9 +2373,15 @@ def _remember_pick(recent_picks, target, now_ts):
         "last_score": _freshness_score(target),
         "first_seen_at": previous.get("first_seen_at", now_ts),
         "first_flu_rate": previous.get("first_flu_rate", current_flu),
-        "first_flu_rate_metric": previous.get("first_flu_rate_metric", current_flu_metric),
-        "first_flu_rate_source": previous.get("first_flu_rate_source", current_flu_source),
-        "first_price": previous.get("first_price", _safe_positive_int(target.get("Price"))),
+        "first_flu_rate_metric": previous.get(
+            "first_flu_rate_metric", current_flu_metric
+        ),
+        "first_flu_rate_source": previous.get(
+            "first_flu_rate_source", current_flu_source
+        ),
+        "first_price": previous.get(
+            "first_price", _safe_positive_int(target.get("Price"))
+        ),
         "last_flu_rate": current_flu,
         "last_flu_rate_metric": current_flu_metric,
         "last_flu_rate_source": current_flu_source,
@@ -2061,7 +2390,9 @@ def _remember_pick(recent_picks, target, now_ts):
         "last_volume_surge_matched": bool(target.get("VolumeSurgeMatched")),
         "last_volume_surge_rank": _safe_positive_int(target.get("VolumeSurgeRank")),
         "last_volume_surge_rank_pct": _safe_float(target.get("VolumeSurgeRankPct")),
-        "last_volume_surge_universe_size": _safe_positive_int(target.get("VolumeSurgeUniverseSize")),
+        "last_volume_surge_universe_size": _safe_positive_int(
+            target.get("VolumeSurgeUniverseSize")
+        ),
         "scanner_probe_state": "promoted",
         **_scanner_priority_profile(target, previous),
     }
@@ -2076,13 +2407,23 @@ def _remember_guard_block(recent_picks, target, now_ts, reason):
     )
     current_flu, current_flu_metric, current_flu_source = _scanner_flu_metric(target)
     reset_probe_anchor = reason == "late_confirmation_flu_metric_changed"
-    first_seen_at = now_ts if reset_probe_anchor else previous.get("first_seen_at", now_ts)
-    first_flu_rate = current_flu if reset_probe_anchor else previous.get("first_flu_rate", current_flu)
+    first_seen_at = (
+        now_ts if reset_probe_anchor else previous.get("first_seen_at", now_ts)
+    )
+    first_flu_rate = (
+        current_flu
+        if reset_probe_anchor
+        else previous.get("first_flu_rate", current_flu)
+    )
     first_flu_metric = (
-        current_flu_metric if reset_probe_anchor else previous.get("first_flu_rate_metric", current_flu_metric)
+        current_flu_metric
+        if reset_probe_anchor
+        else previous.get("first_flu_rate_metric", current_flu_metric)
     )
     first_flu_source = (
-        current_flu_source if reset_probe_anchor else previous.get("first_flu_rate_source", current_flu_source)
+        current_flu_source
+        if reset_probe_anchor
+        else previous.get("first_flu_rate_source", current_flu_source)
     )
     first_price = (
         _safe_positive_int(target.get("Price"))
@@ -2108,7 +2449,9 @@ def _remember_guard_block(recent_picks, target, now_ts, reason):
         "last_volume_surge_matched": bool(target.get("VolumeSurgeMatched")),
         "last_volume_surge_rank": _safe_positive_int(target.get("VolumeSurgeRank")),
         "last_volume_surge_rank_pct": _safe_float(target.get("VolumeSurgeRankPct")),
-        "last_volume_surge_universe_size": _safe_positive_int(target.get("VolumeSurgeUniverseSize")),
+        "last_volume_surge_universe_size": _safe_positive_int(
+            target.get("VolumeSurgeUniverseSize")
+        ),
         "scanner_probe_state": "first_seen_probe",
         "last_observed_at": now_ts,
         **_scanner_priority_profile(target, previous),
@@ -2122,7 +2465,9 @@ def _scanner_source_guard_requires_first_seen_provenance(reason):
     return False
 
 
-def _scanner_zero_context_fields(target, source_guard, current_flu, source_guard_context):
+def _scanner_zero_context_fields(
+    target, source_guard, current_flu, source_guard_context
+):
     cntr_str_available = bool(target.get("CntrStrAvailable", False))
     first_seen_not_applicable = source_guard_context == "first_seen_not_applicable"
     return _zero_context_observation_fields(
@@ -2146,18 +2491,27 @@ def _scanner_zero_context_fields(target, source_guard, current_flu, source_guard
 
 def _scanner_event_fields(target, source_guard=None):
     source_guard = source_guard or {}
-    source_signature = source_guard.get("source_signature") or ",".join(_source_signature(target))
+    source_signature = source_guard.get("source_signature") or ",".join(
+        _source_signature(target)
+    )
     first_price = source_guard.get("first_price")
-    current_price = source_guard.get("current_price") or str(_safe_positive_int(target.get("Price")) or "-")
+    current_price = source_guard.get("current_price") or str(
+        _safe_positive_int(target.get("Price")) or "-"
+    )
     first_flu = source_guard.get("first_seen_flu_rate")
-    current_flu_value, current_flu_metric, current_flu_source = _scanner_flu_metric(target)
+    current_flu_value, current_flu_metric, current_flu_source = _scanner_flu_metric(
+        target
+    )
     current_flu = source_guard.get("current_flu_rate") or f"{current_flu_value:.2f}"
     priority_profile = _scanner_priority_profile(target)
     guard_reason = str(source_guard.get("reason") or "")
     last_promoted_at = source_guard.get("last_promoted_at")
     first_seen_missing = first_flu in (None, "", "-")
     last_promoted_missing = last_promoted_at in (None, "", "-")
-    if guard_reason in {"late_confirmation_first_seen_probe", "open_price_jump_requires_volume_or_followthrough"}:
+    if guard_reason in {
+        "late_confirmation_first_seen_probe",
+        "open_price_jump_requires_volume_or_followthrough",
+    }:
         source_guard_context = "normal_first_seen_block"
     elif _scanner_source_guard_requires_first_seen_provenance(guard_reason):
         source_guard_context = "repeat_guard_with_provenance"
@@ -2165,8 +2519,12 @@ def _scanner_event_fields(target, source_guard=None):
         source_guard_context = "first_seen_not_applicable"
     else:
         source_guard_context = "repeat_guard_with_provenance"
-    rank_sign_diagnostics = _rank_change_sign_event_diagnostics(target, source_signature)
-    is_low_rebound_source = LOW_REBOUND_RISING_MISSED_SOURCE in set(_source_signature(target))
+    rank_sign_diagnostics = _rank_change_sign_event_diagnostics(
+        target, source_signature
+    )
+    is_low_rebound_source = LOW_REBOUND_RISING_MISSED_SOURCE in set(
+        _source_signature(target)
+    )
     return {
         "metric_role": "source_quality_gate",
         "decision_authority": "real_scalping_scanner_source_guard_only",
@@ -2183,13 +2541,20 @@ def _scanner_event_fields(target, source_guard=None):
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
         "source_signature": source_signature,
-        "scanner_source_family": target.get("SourceFamily") or SCANNER_RISING_START_SOURCE_FAMILY,
-        "scanner_source_role": target.get("SourceRole") or _scanner_candidate_role(target),
-        "rising_start_score": _safe_float(target.get("RisingStartScore", _rising_start_score(target))),
+        "scanner_source_family": target.get("SourceFamily")
+        or SCANNER_RISING_START_SOURCE_FAMILY,
+        "scanner_source_role": target.get("SourceRole")
+        or _scanner_candidate_role(target),
+        "rising_start_score": _safe_float(
+            target.get("RisingStartScore", _rising_start_score(target))
+        ),
         "rank_change": _safe_int(target.get("RankChange")),
         "rank_change_sign": target.get("RankChangeSign"),
         "rank_change_sign_authority": (
-            str(target.get("RankChangeSignAuthority") or RANK_CHANGE_SIGN_AUTHORITY_DEFAULT).strip()
+            str(
+                target.get("RankChangeSignAuthority")
+                or RANK_CHANGE_SIGN_AUTHORITY_DEFAULT
+            ).strip()
             or RANK_CHANGE_SIGN_AUTHORITY_DEFAULT
         ),
         "rank_change_sign_state": target.get("RankChangeSignState")
@@ -2199,16 +2564,29 @@ def _scanner_event_fields(target, source_guard=None):
         "rank_change_score_input": max(0, _safe_int(target.get("RankChange"))),
         "rank_change_score_policy": "positive_signed_rank_delta_only_raw_rank_sign_unverified",
         "jump_rate": _safe_float(target.get("JumpRate")),
-        "volume_surge_rate": _safe_float(target.get("VolumeSurgeRate", target.get("SpikeRate"))),
+        "volume_surge_rate": _safe_float(
+            target.get("VolumeSurgeRate", target.get("SpikeRate"))
+        ),
         "bid_surge_rate": _safe_float(target.get("BidSurgeRate")),
-        "scanner_filter_reason": source_guard.get("reason") if source_guard.get("blocked") else "",
-        "scanner_candidate_role": source_guard.get("candidate_role") or _scanner_candidate_role(target),
-        "scanner_block_reason": source_guard.get("reason") if source_guard.get("blocked") else "",
+        "scanner_filter_reason": (
+            source_guard.get("reason") if source_guard.get("blocked") else ""
+        ),
+        "scanner_candidate_role": source_guard.get("candidate_role")
+        or _scanner_candidate_role(target),
+        "scanner_block_reason": (
+            source_guard.get("reason") if source_guard.get("blocked") else ""
+        ),
         "scanner_source_guard_context": source_guard_context,
-        "scanner_source_guard_first_seen_required": source_guard_context == "repeat_guard_with_provenance",
-        "scanner_promotion_reason": "" if source_guard.get("blocked") else source_guard.get("reason"),
+        "scanner_source_guard_first_seen_required": source_guard_context
+        == "repeat_guard_with_provenance",
+        "scanner_promotion_reason": (
+            "" if source_guard.get("blocked") else source_guard.get("reason")
+        ),
         "scanner_promotion_id": source_guard.get("scanner_promotion_id") or "",
-        "scanner_promotion_emitted_epoch": source_guard.get("scanner_promotion_emitted_epoch") or "",
+        "scanner_promotion_emitted_epoch": source_guard.get(
+            "scanner_promotion_emitted_epoch"
+        )
+        or "",
         "scanner_priority_tier": source_guard.get("scanner_priority_tier")
         or priority_profile.get("scanner_priority_tier"),
         "scanner_priority_score": _safe_float(
@@ -2220,20 +2598,28 @@ def _scanner_event_fields(target, source_guard=None):
         or priority_profile.get("scanner_priority_reason"),
         "scanner_demoted_reason": source_guard.get("scanner_demoted_reason")
         or priority_profile.get("scanner_demoted_reason"),
-        "scanner_promotion_policy_version": source_guard.get("scanner_promotion_policy_version")
+        "scanner_promotion_policy_version": source_guard.get(
+            "scanner_promotion_policy_version"
+        )
         or priority_profile.get("scanner_promotion_policy_version"),
         "first_seen_price": first_price,
         "current_price": current_price,
-        "price_delta_since_first_seen_pct": source_guard.get("price_delta_since_first_seen_pct"),
+        "price_delta_since_first_seen_pct": source_guard.get(
+            "price_delta_since_first_seen_pct"
+        ),
         "first_seen_flu_rate": first_flu,
         "current_flu_rate": current_flu,
         "first_flu_rate_metric": source_guard.get("first_flu_rate_metric"),
-        "current_flu_rate_metric": source_guard.get("current_flu_rate_metric") or current_flu_metric,
+        "current_flu_rate_metric": source_guard.get("current_flu_rate_metric")
+        or current_flu_metric,
         "first_flu_rate_source": source_guard.get("first_flu_rate_source"),
-        "current_flu_rate_source": source_guard.get("current_flu_rate_source") or current_flu_source,
+        "current_flu_rate_source": source_guard.get("current_flu_rate_source")
+        or current_flu_source,
         "flu_metric_changed": source_guard.get("flu_metric_changed"),
         "flu_delta_since_first_seen": source_guard.get("flu_delta_since_first_seen"),
-        "comparable_flu_delta_since_first_seen": source_guard.get("comparable_flu_delta_since_first_seen"),
+        "comparable_flu_delta_since_first_seen": source_guard.get(
+            "comparable_flu_delta_since_first_seen"
+        ),
         "probe_age_sec": source_guard.get("probe_age_sec"),
         "last_promoted_at": last_promoted_at,
         "rank_jump": _rank_jump(target),
@@ -2243,17 +2629,31 @@ def _scanner_event_fields(target, source_guard=None):
         "cntr_str": _safe_float(target.get("CntrStr")),
         "current_price_observed": _safe_positive_int(target.get("Price")),
         "current_source": target.get("Source"),
-        "rising_missed_lineage": target.get("RisingMissedLineage") or (
-            LOW_REBOUND_RISING_MISSED_LINEAGE if is_low_rebound_source else ""
+        "rising_missed_lineage": target.get("RisingMissedLineage")
+        or (LOW_REBOUND_RISING_MISSED_LINEAGE if is_low_rebound_source else ""),
+        "low_rebound_pct": (
+            _safe_float(target.get("LowReboundPct")) if is_low_rebound_source else ""
         ),
-        "low_rebound_pct": _safe_float(target.get("LowReboundPct")) if is_low_rebound_source else "",
-        "intraday_low_price": _safe_positive_int(target.get("IntradayLowPrice")) if is_low_rebound_source else "",
-        "intraday_high_price": _safe_positive_int(target.get("IntradayHighPrice")) if is_low_rebound_source else "",
+        "intraday_low_price": (
+            _safe_positive_int(target.get("IntradayLowPrice"))
+            if is_low_rebound_source
+            else ""
+        ),
+        "intraday_high_price": (
+            _safe_positive_int(target.get("IntradayHighPrice"))
+            if is_low_rebound_source
+            else ""
+        ),
         "distance_from_intraday_high_pct": (
-            _safe_float(target.get("DistanceFromIntradayHighPct")) if is_low_rebound_source else ""
+            _safe_float(target.get("DistanceFromIntradayHighPct"))
+            if is_low_rebound_source
+            else ""
         ),
-        "negative_display_rebound": bool(target.get("NegativeDisplayRebound")) if is_low_rebound_source else "",
-        "low_rebound_base_source_signature": target.get("LowReboundBaseSourceSignature") or "",
+        "negative_display_rebound": (
+            bool(target.get("NegativeDisplayRebound")) if is_low_rebound_source else ""
+        ),
+        "low_rebound_base_source_signature": target.get("LowReboundBaseSourceSignature")
+        or "",
         "scanner_source_identity_guard_applied": source_guard.get(
             "scanner_source_identity_guard_applied", "not_evaluated"
         ),
@@ -2266,7 +2666,9 @@ def _scanner_event_fields(target, source_guard=None):
         "scanner_source_identity_authoritative_name": source_guard.get(
             "scanner_source_identity_authoritative_name", "not_evaluated"
         ),
-        **_scanner_zero_context_fields(target, source_guard, current_flu, source_guard_context),
+        **_scanner_zero_context_fields(
+            target, source_guard, current_flu, source_guard_context
+        ),
     }
 
 
@@ -2298,7 +2700,9 @@ def _log_scanner_real_source_guard_block(target, source_guard, now_ts):
     )
 
 
-def _scanner_runtime_target_payload(target, source_guard, record_id=None, *, now_ts=None):
+def _scanner_runtime_target_payload(
+    target, source_guard, record_id=None, *, now_ts=None
+):
     fields = _scanner_event_fields(target, source_guard)
     return {
         "record_id": record_id,
@@ -2313,10 +2717,13 @@ def _scanner_runtime_target_payload(target, source_guard, record_id=None, *, now
         "entry_armed_at_epoch": float(now_ts or time.time()),
         "scanner_promotion_id": fields.get("scanner_promotion_id") or "",
         "scanner_promotion_reason": fields.get("scanner_promotion_reason") or "",
-        "scanner_promotion_emitted_epoch": fields.get("scanner_promotion_emitted_epoch") or "",
+        "scanner_promotion_emitted_epoch": fields.get("scanner_promotion_emitted_epoch")
+        or "",
         "source_signature": fields.get("source_signature") or "",
         "current_price_observed": fields.get("current_price_observed"),
-        "price_delta_since_first_seen_pct": fields.get("price_delta_since_first_seen_pct"),
+        "price_delta_since_first_seen_pct": fields.get(
+            "price_delta_since_first_seen_pct"
+        ),
         "scanner_source_family": fields.get("scanner_source_family"),
         "scanner_source_role": fields.get("scanner_source_role"),
         "rank_change": fields.get("rank_change"),
@@ -2330,7 +2737,9 @@ def _scanner_runtime_target_payload(target, source_guard, record_id=None, *, now
         "low_rebound_pct": fields.get("low_rebound_pct"),
         "intraday_low_price": fields.get("intraday_low_price"),
         "intraday_high_price": fields.get("intraday_high_price"),
-        "distance_from_intraday_high_pct": fields.get("distance_from_intraday_high_pct"),
+        "distance_from_intraday_high_pct": fields.get(
+            "distance_from_intraday_high_pct"
+        ),
         "negative_display_rebound": bool(fields.get("negative_display_rebound")),
         "runtime_effect": True,
         "actual_order_submitted": False,
@@ -2338,21 +2747,43 @@ def _scanner_runtime_target_payload(target, source_guard, record_id=None, *, now
     }
 
 
-def promote_candidates(db, event_bus, ranked_targets, recent_picks, *, max_new_codes, reentry_cooldown_sec, token=None, now_ts=None):
+def promote_candidates(
+    db,
+    event_bus,
+    ranked_targets,
+    recent_picks,
+    *,
+    max_new_codes,
+    reentry_cooldown_sec,
+    token=None,
+    now_ts=None,
+):
     now_ts = time.time() if now_ts is None else now_ts
     new_codes_found = []
     promoted_target_payloads = []
-    recent_picks = _filter_picks_within_cooldown(recent_picks, now_ts, reentry_cooldown_sec)
+    recent_picks = _filter_picks_within_cooldown(
+        recent_picks, now_ts, reentry_cooldown_sec
+    )
     max_active = _scalping_watching_max_active()
     _expire_after_buy_window_scanner_watching(db, now_ts)
     active_count = _active_scanner_watching_count(db)
-    low_rebound_targets = [target for target in ranked_targets if _is_low_rebound_reserved_priority_target(target)]
+    low_rebound_targets = [
+        target
+        for target in ranked_targets
+        if _is_low_rebound_reserved_priority_target(target)
+    ]
     low_rebound_candidates_present = bool(low_rebound_targets)
     low_rebound_active_floor = _low_rebound_active_floor()
-    protected_low_rebound_codes = _recent_low_rebound_codes(recent_picks, low_rebound_targets)
-    active_low_rebound_codes = _active_scanner_watching_codes(db, protected_low_rebound_codes)
+    protected_low_rebound_codes = _recent_low_rebound_codes(
+        recent_picks, low_rebound_targets
+    )
+    active_low_rebound_codes = _active_scanner_watching_codes(
+        db, protected_low_rebound_codes
+    )
     active_low_rebound_count = len(active_low_rebound_codes)
-    low_rebound_floor_shortfall = max(0, low_rebound_active_floor - active_low_rebound_count)
+    low_rebound_floor_shortfall = max(
+        0, low_rebound_active_floor - active_low_rebound_count
+    )
     if low_rebound_candidates_present and low_rebound_floor_shortfall > 0:
         open_slots = max(0, max_active - active_count)
         replacement_needed = max(0, low_rebound_floor_shortfall - open_slots)
@@ -2383,7 +2814,9 @@ def promote_candidates(db, event_bus, ranked_targets, recent_picks, *, max_new_c
                 f"codes={','.join(code for code in expired_for_low_rebound if code)} "
                 f"floor={low_rebound_active_floor} active_low_rebound={active_low_rebound_count}"
             )
-    remaining_slots = min(max(0, int(max_new_codes or 0)), max(0, max_active - active_count))
+    remaining_slots = min(
+        max(0, int(max_new_codes or 0)), max(0, max_active - active_count)
+    )
     if remaining_slots <= 0:
         print(
             "🧯 [SCALPING 스캐너 cap] 신규 후보 등록 생략 "
@@ -2396,7 +2829,11 @@ def promote_candidates(db, event_bus, ranked_targets, recent_picks, *, max_new_c
             remaining_slots,
             max(_low_rebound_reserve_slots(), low_rebound_floor_shortfall),
         )
-    general_slot_limit = remaining_slots - low_rebound_reserved_slots if low_rebound_reserved_slots > 0 else remaining_slots
+    general_slot_limit = (
+        remaining_slots - low_rebound_reserved_slots
+        if low_rebound_reserved_slots > 0
+        else remaining_slots
+    )
     low_rebound_promoted_count = 0
     general_promoted_count = 0
 
@@ -2405,13 +2842,18 @@ def promote_candidates(db, event_bus, ranked_targets, recent_picks, *, max_new_c
         if _has_active_non_scanner_scalping_watching_code(db, code):
             continue
         is_low_rebound_target = _is_low_rebound_target(target)
-        is_low_rebound_reserved_priority_target = _is_low_rebound_reserved_priority_target(target)
+        is_low_rebound_reserved_priority_target = (
+            _is_low_rebound_reserved_priority_target(target)
+        )
         uses_low_rebound_reserved_slot = (
             is_low_rebound_reserved_priority_target
             and low_rebound_reserved_slots > 0
             and low_rebound_promoted_count < low_rebound_reserved_slots
         )
-        if not uses_low_rebound_reserved_slot and general_promoted_count >= general_slot_limit:
+        if (
+            not uses_low_rebound_reserved_slot
+            and general_promoted_count >= general_slot_limit
+        ):
             continue
 
         pre_filter_reason = _scanner_candidate_pre_filter_reason(target)
@@ -2422,16 +2864,24 @@ def promote_candidates(db, event_bus, ranked_targets, recent_picks, *, max_new_c
                 "candidate_role": _scanner_candidate_role(target),
                 "source_signature": ",".join(_source_signature(target)),
             }
-            _log_scanner_candidate_event("scalping_scanner_candidate_observed", target, source_guard)
+            _log_scanner_candidate_event(
+                "scalping_scanner_candidate_observed", target, source_guard
+            )
             _log_scanner_real_source_guard_block(target, source_guard, now_ts)
             _remember_guard_block(recent_picks, target, now_ts, pre_filter_reason)
             continue
-        if not _should_promote_candidate(target, recent_picks, now_ts, reentry_cooldown_sec):
+        if not _should_promote_candidate(
+            target, recent_picks, now_ts, reentry_cooldown_sec
+        ):
             continue
 
         source_guard = _scanner_real_source_guard_decision(target, recent_picks, now_ts)
         if source_guard.get("blocked"):
-            _log_scanner_candidate_event("scalping_scanner_candidate_observed", target, {**source_guard, "blocked": True})
+            _log_scanner_candidate_event(
+                "scalping_scanner_candidate_observed",
+                target,
+                {**source_guard, "blocked": True},
+            )
             _log_scanner_real_source_guard_block(target, source_guard, now_ts)
             print(
                 "🧯 [SCALPING 스캐너 guard] "
@@ -2447,19 +2897,28 @@ def promote_candidates(db, event_bus, ranked_targets, recent_picks, *, max_new_c
                 f"probe_age={source_guard.get('probe_age_sec')} "
                 f"last_promoted_at={source_guard.get('last_promoted_at')}"
             )
-            if source_guard.get("reason") != "scanner_identity_name_mismatch_quarantine":
-                _remember_guard_block(recent_picks, target, now_ts, source_guard.get("reason"))
+            if (
+                source_guard.get("reason")
+                != "scanner_identity_name_mismatch_quarantine"
+            ):
+                _remember_guard_block(
+                    recent_picks, target, now_ts, source_guard.get("reason")
+                )
             continue
 
         curr_p = float(target.get("Price", 0))
-        if not kiwoom_utils.is_valid_stock(code, target["Name"], token=token, current_price=curr_p):
+        if not kiwoom_utils.is_valid_stock(
+            code, target["Name"], token=token, current_price=curr_p
+        ):
             source_guard = {
                 "blocked": True,
                 "reason": "invalid_stock_filter",
                 "candidate_role": _scanner_candidate_role(target),
                 "source_signature": ",".join(_source_signature(target)),
             }
-            _log_scanner_candidate_event("scalping_scanner_candidate_observed", target, source_guard)
+            _log_scanner_candidate_event(
+                "scalping_scanner_candidate_observed", target, source_guard
+            )
             _log_scanner_real_source_guard_block(target, source_guard, now_ts)
             _remember_guard_block(recent_picks, target, now_ts, "invalid_stock_filter")
             continue
@@ -2502,7 +2961,9 @@ def promote_candidates(db, event_bus, ranked_targets, recent_picks, *, max_new_c
 
         score = _freshness_score(target)
         source_sig = ",".join(_source_signature(target))
-        display_flu, display_flu_metric, display_flu_source = _scanner_flu_metric(target)
+        display_flu, display_flu_metric, display_flu_source = _scanner_flu_metric(
+            target
+        )
         print(
             f"🎯 [타겟 포착] {target['Name']} "
             f"(등락률: {display_flu:+.2f}% [{display_flu_metric}/{display_flu_source}], "
@@ -2517,28 +2978,28 @@ def promote_candidates(db, event_bus, ranked_targets, recent_picks, *, max_new_c
                     session,
                     rec_date=today_date,
                     stock_code=code,
-                    strategy='SCALPING',
-                    position_tag='SCANNER',
+                    strategy="SCALPING",
+                    position_tag="SCANNER",
                 )
 
                 if record:
-                    record.stock_name = target['Name']
-                    if record.status in ('WATCHING', 'COMPLETED', 'EXPIRED'):
-                        record.strategy = 'SCALPING'
+                    record.stock_name = target["Name"]
+                    if record.status in ("WATCHING", "COMPLETED", "EXPIRED"):
+                        record.strategy = "SCALPING"
                         record.buy_price = curr_p
                         record.entry_armed_at_epoch = now_ts
-                        record.status = 'WATCHING'
-                        record.position_tag = 'SCANNER'
+                        record.status = "WATCHING"
+                        record.position_tag = "SCANNER"
                 else:
                     new_record = RecommendationHistory(
                         rec_date=today_date,
                         stock_code=code,
-                        stock_name=target['Name'],
+                        stock_name=target["Name"],
                         buy_price=curr_p,
-                        trade_type='SCALP',
-                        strategy='SCALPING',
-                        status='WATCHING',
-                        position_tag='SCANNER',
+                        trade_type="SCALP",
+                        strategy="SCALPING",
+                        status="WATCHING",
+                        position_tag="SCANNER",
                         entry_armed_at_epoch=now_ts,
                     )
                     session.add(new_record)
@@ -2561,8 +3022,12 @@ def promote_candidates(db, event_bus, ranked_targets, recent_picks, *, max_new_c
             "scanner_low_rebound_active_count": active_low_rebound_count,
             "scanner_low_rebound_floor_shortfall": low_rebound_floor_shortfall,
         }
-        if bool(getattr(TRADING_RULES, "SCALP_SCANNER_REAL_SOURCE_GUARD_ENABLED", False)):
-            _log_scanner_candidate_event("scalping_scanner_candidate_promoted", target, source_guard)
+        if bool(
+            getattr(TRADING_RULES, "SCALP_SCANNER_REAL_SOURCE_GUARD_ENABLED", False)
+        ):
+            _log_scanner_candidate_event(
+                "scalping_scanner_candidate_promoted", target, source_guard
+            )
         _remember_pick(recent_picks, target, now_ts)
         new_codes_found.append(code)
         if uses_low_rebound_reserved_slot:
@@ -2570,15 +3035,17 @@ def promote_candidates(db, event_bus, ranked_targets, recent_picks, *, max_new_c
         else:
             general_promoted_count += 1
         promoted_target_payloads.append(
-            _scanner_runtime_target_payload(target, source_guard, record_id=record_id, now_ts=now_ts)
+            _scanner_runtime_target_payload(
+                target, source_guard, record_id=record_id, now_ts=now_ts
+            )
         )
 
         if len(new_codes_found) >= remaining_slots:
             break
         if (
-            (low_rebound_reserved_slots <= 0 or low_rebound_promoted_count >= low_rebound_reserved_slots)
-            and general_promoted_count >= general_slot_limit
-        ):
+            low_rebound_reserved_slots <= 0
+            or low_rebound_promoted_count >= low_rebound_reserved_slots
+        ) and general_promoted_count >= general_slot_limit:
             break
 
     if new_codes_found:
@@ -2607,7 +3074,13 @@ def _positive_volume_surge_from_raw(raw_targets, limit=60):
         if _safe_float((item or {}).get("FluRate", (item or {}).get("flu_rate"))) <= 0:
             continue
         pre_sig = (item or {}).get("PreSig")
-        if pre_sig not in (None, "") and str(pre_sig or "").strip() not in {"1", "2", "+", "상한", "상승"}:
+        if pre_sig not in (None, "") and str(pre_sig or "").strip() not in {
+            "1",
+            "2",
+            "+",
+            "상한",
+            "상승",
+        }:
             continue
         positive.append({**item, "Source": "VOLUME_SURGE_POSITIVE"})
         if len(positive) >= int(limit or 60):
@@ -2622,7 +3095,9 @@ def _annotate_source_rank(raw_targets, *, prefix, sort_type):
     for index, item in enumerate(targets, start=1):
         item[f"{prefix}Matched"] = True
         item[f"{prefix}Rank"] = index
-        item[f"{prefix}RankPct"] = round(index / universe_size, 6) if universe_size > 0 else 0.0
+        item[f"{prefix}RankPct"] = (
+            round(index / universe_size, 6) if universe_size > 0 else 0.0
+        )
         item[f"{prefix}UniverseSize"] = universe_size
         item[f"{prefix}SortType"] = sort_type
         annotated.append(item)
@@ -2639,7 +3114,9 @@ def _annotate_volume_surge_rank(raw_targets):
 
 def _merge_low_rebound_universe(universe, targets, source):
     for raw_target in targets or []:
-        code = kiwoom_utils.normalize_stock_code((raw_target or {}).get("Code", (raw_target or {}).get("code", "")))
+        code = kiwoom_utils.normalize_stock_code(
+            (raw_target or {}).get("Code", (raw_target or {}).get("code", ""))
+        )
         if not code:
             continue
         if source not in LOW_REBOUND_BASE_SOURCES and code not in universe:
@@ -2648,8 +3125,12 @@ def _merge_low_rebound_universe(universe, targets, source):
             code,
             {
                 "Code": code,
-                "Name": (raw_target or {}).get("Name", (raw_target or {}).get("name", "")),
-                "Price": _safe_positive_int((raw_target or {}).get("Price", (raw_target or {}).get("cur_prc"))),
+                "Name": (raw_target or {}).get(
+                    "Name", (raw_target or {}).get("name", "")
+                ),
+                "Price": _safe_positive_int(
+                    (raw_target or {}).get("Price", (raw_target or {}).get("cur_prc"))
+                ),
                 "SourceSet": set(),
                 "BaseTargets": [],
                 "PriorityScore": 0.0,
@@ -2660,8 +3141,12 @@ def _merge_low_rebound_universe(universe, targets, source):
         current["SourceSet"].add(source)
         current["BaseTargets"].append(raw_target)
         if (raw_target or {}).get("Name") or (raw_target or {}).get("name"):
-            current["Name"] = (raw_target or {}).get("Name", (raw_target or {}).get("name", ""))
-        price = _safe_positive_int((raw_target or {}).get("Price", (raw_target or {}).get("cur_prc")))
+            current["Name"] = (raw_target or {}).get(
+                "Name", (raw_target or {}).get("name", "")
+            )
+        price = _safe_positive_int(
+            (raw_target or {}).get("Price", (raw_target or {}).get("cur_prc"))
+        )
         if price > 0:
             current["Price"] = price
         change_rate, has_change_rate = _candidate_current_change_rate(raw_target)
@@ -2669,39 +3154,73 @@ def _merge_low_rebound_universe(universe, targets, source):
             current["LowReboundDisplayChangeRate"] = change_rate
         current["PriorityScore"] = max(
             _safe_float(current.get("PriorityScore")),
-            _safe_float((raw_target or {}).get("PriorityScore", (raw_target or {}).get("priority_score"))),
+            _safe_float(
+                (raw_target or {}).get(
+                    "PriorityScore", (raw_target or {}).get("priority_score")
+                )
+            ),
         )
         current["TradeValue"] = max(
             _safe_positive_int(current.get("TradeValue")),
-            _safe_positive_int((raw_target or {}).get("TradeValue", (raw_target or {}).get("trade_value"))),
+            _safe_positive_int(
+                (raw_target or {}).get(
+                    "TradeValue", (raw_target or {}).get("trade_value")
+                )
+            ),
         )
         current["SpikeRate"] = max(
             _safe_float(current.get("SpikeRate")),
-            _safe_float((raw_target or {}).get("SpikeRate", (raw_target or {}).get("spike_rate"))),
+            _safe_float(
+                (raw_target or {}).get(
+                    "SpikeRate", (raw_target or {}).get("spike_rate")
+                )
+            ),
         )
-        volume_surge_rank = _safe_positive_int((raw_target or {}).get("VolumeSurgeRank"))
+        volume_surge_rank = _safe_positive_int(
+            (raw_target or {}).get("VolumeSurgeRank")
+        )
         if volume_surge_rank > 0 and (
             _safe_positive_int(current.get("VolumeSurgeRank")) <= 0
             or volume_surge_rank < _safe_positive_int(current.get("VolumeSurgeRank"))
         ):
             current["VolumeSurgeMatched"] = True
             current["VolumeSurgeRank"] = volume_surge_rank
-            current["VolumeSurgeRankPct"] = _safe_float((raw_target or {}).get("VolumeSurgeRankPct"))
-            current["VolumeSurgeUniverseSize"] = _safe_positive_int((raw_target or {}).get("VolumeSurgeUniverseSize"))
-            current["VolumeSurgeSortType"] = str((raw_target or {}).get("VolumeSurgeSortType") or "")
+            current["VolumeSurgeRankPct"] = _safe_float(
+                (raw_target or {}).get("VolumeSurgeRankPct")
+            )
+            current["VolumeSurgeUniverseSize"] = _safe_positive_int(
+                (raw_target or {}).get("VolumeSurgeUniverseSize")
+            )
+            current["VolumeSurgeSortType"] = str(
+                (raw_target or {}).get("VolumeSurgeSortType") or ""
+            )
         _merge_best_rank_metadata(current, raw_target, "PriceJump")
         _merge_best_rank_metadata(current, raw_target, "HighProximity")
         _merge_best_rank_metadata(current, raw_target, "NewHigh")
         if source == HIGH_PROXIMITY_CONFIRMATION_SOURCE:
-            current["HighProximityFluRate"] = _safe_float((raw_target or {}).get("FluRate"))
-            current["HighProximityDistancePct"] = _safe_float((raw_target or {}).get("HighProximityDistancePct"))
-            current["TodayHighPrice"] = _safe_positive_int((raw_target or {}).get("TodayHighPrice"))
-            current["TodayLowPrice"] = _safe_positive_int((raw_target or {}).get("TodayLowPrice"))
+            current["HighProximityFluRate"] = _safe_float(
+                (raw_target or {}).get("FluRate")
+            )
+            current["HighProximityDistancePct"] = _safe_float(
+                (raw_target or {}).get("HighProximityDistancePct")
+            )
+            current["TodayHighPrice"] = _safe_positive_int(
+                (raw_target or {}).get("TodayHighPrice")
+            )
+            current["TodayLowPrice"] = _safe_positive_int(
+                (raw_target or {}).get("TodayLowPrice")
+            )
         elif source == NEW_HIGH_CONFIRMATION_SOURCE:
             current["NewHighFluRate"] = _safe_float((raw_target or {}).get("FluRate"))
-            current["NewHighPrice"] = _safe_positive_int((raw_target or {}).get("NewHighPrice"))
-            current["NewLowPrice"] = _safe_positive_int((raw_target or {}).get("NewLowPrice"))
-            current["NewHighPeriodDays"] = _safe_positive_int((raw_target or {}).get("NewHighPeriodDays"))
+            current["NewHighPrice"] = _safe_positive_int(
+                (raw_target or {}).get("NewHighPrice")
+            )
+            current["NewLowPrice"] = _safe_positive_int(
+                (raw_target or {}).get("NewLowPrice")
+            )
+            current["NewHighPeriodDays"] = _safe_positive_int(
+                (raw_target or {}).get("NewHighPeriodDays")
+            )
 
 
 def _is_low_rebound_prefetch_product_allowed(target):
@@ -2710,9 +3229,14 @@ def _is_low_rebound_prefetch_product_allowed(target):
         return False
     price = _safe_positive_int((target or {}).get("Price"))
     min_price = _safe_positive_int(getattr(TRADING_RULES, "MIN_PRICE", 0))
-    if min_price > 0 and 0 < price < min_price and not _has_volume_surge_source_evidence(target):
+    if (
+        min_price > 0
+        and 0 < price < min_price
+        and not _has_volume_surge_source_evidence(target)
+    ):
         return False
     return True
+
 
 def _low_rebound_prefetch_rank_key(target):
     source_set = set((target or {}).get("SourceSet") or [])
@@ -2753,8 +3277,12 @@ def _build_low_rebound_universe(
     _merge_low_rebound_universe(universe, value_targets, "VALUE_TOP")
     _merge_low_rebound_universe(universe, realtime_rank_targets, "REALTIME_RANK_START")
     _merge_low_rebound_universe(universe, price_jump_targets, "PRICE_JUMP_START")
-    _merge_low_rebound_universe(universe, high_proximity_targets, HIGH_PROXIMITY_CONFIRMATION_SOURCE)
-    _merge_low_rebound_universe(universe, new_high_targets, NEW_HIGH_CONFIRMATION_SOURCE)
+    _merge_low_rebound_universe(
+        universe, high_proximity_targets, HIGH_PROXIMITY_CONFIRMATION_SOURCE
+    )
+    _merge_low_rebound_universe(
+        universe, new_high_targets, NEW_HIGH_CONFIRMATION_SOURCE
+    )
     return sorted(
         universe.values(),
         key=_low_rebound_prefetch_rank_key,
@@ -2828,7 +3356,9 @@ def _build_low_rebound_rising_missed_targets(
         new_high_targets=new_high_targets,
     )
     fetch_cap = _low_rebound_candle_fetch_cap()
-    prefetch_targets, prefetch_stats, selection_reasons = _select_low_rebound_prefetch_targets(universe, fetch_cap)
+    prefetch_targets, prefetch_stats, selection_reasons = (
+        _select_low_rebound_prefetch_targets(universe, fetch_cap)
+    )
     stats = {
         "universe_count": len(universe),
         "candidate_scan_cap": fetch_cap,
@@ -2856,7 +3386,9 @@ def _build_low_rebound_rising_missed_targets(
         code = str(target.get("Code") or "").strip()
         if code and len(sampled_codes) < fetch_cap:
             sampled_codes.append(code)
-        if not code or not (LOW_REBOUND_BASE_SOURCES & set(target.get("SourceSet") or [])):
+        if not code or not (
+            LOW_REBOUND_BASE_SOURCES & set(target.get("SourceSet") or [])
+        ):
             stats["base_source_missing_count"] += 1
             continue
         current_change_rate, has_change_rate = _candidate_current_change_rate(target)
@@ -2865,10 +3397,15 @@ def _build_low_rebound_rising_missed_targets(
             continue
         stats["candle_fetch_attempted_count"] += 1
         try:
-            candles = kiwoom_utils.get_minute_candles_ka10080(token, code, limit=candle_limit) or []
+            candles = (
+                kiwoom_utils.get_minute_candles_ka10080(token, code, limit=candle_limit)
+                or []
+            )
         except Exception as exc:
             stats["candle_fetch_failed_count"] += 1
-            log_error(f"🚨 [SCALPING 스캐너] ka10080 저가반등 조회 실패 [{code}]: {exc}")
+            log_error(
+                f"🚨 [SCALPING 스캐너] ka10080 저가반등 조회 실패 [{code}]: {exc}"
+            )
             continue
         if not candles:
             stats["missing_candle_count"] += 1
@@ -2881,31 +3418,49 @@ def _build_low_rebound_rising_missed_targets(
             int(stats.get("intraday_date_filter_unique_date_count") or 0),
             int(date_filter_stats.get("intraday_date_filter_unique_date_count") or 0),
         )
-        latest_filter_date = str(date_filter_stats.get("intraday_date_filter_latest_date") or "")
+        latest_filter_date = str(
+            date_filter_stats.get("intraday_date_filter_latest_date") or ""
+        )
         if latest_filter_date:
             stats["intraday_date_filter_latest_date"] = latest_filter_date
         if not candles:
             stats["missing_candle_count"] += 1
             continue
-        lows = [_low_rebound_price_from_candle(row, "저가", "Low", "low") for row in candles]
-        highs = [_low_rebound_price_from_candle(row, "고가", "High", "high") for row in candles]
+        lows = [
+            _low_rebound_price_from_candle(row, "저가", "Low", "low") for row in candles
+        ]
+        highs = [
+            _low_rebound_price_from_candle(row, "고가", "High", "high")
+            for row in candles
+        ]
         lows = [price for price in lows if price > 0]
         highs = [price for price in highs if price > 0]
         if not lows or not highs:
             stats["invalid_candle_price_count"] += 1
             continue
-        latest_current = _low_rebound_price_from_candle(candles[-1], "현재가", "Close", "close", "cur_prc")
+        latest_current = _low_rebound_price_from_candle(
+            candles[-1], "현재가", "Close", "close", "cur_prc"
+        )
         current_price = latest_current or _safe_positive_int(target.get("Price"))
         intraday_low = min(lows)
         intraday_high = max(highs)
-        if current_price <= 0 or intraday_low <= 0 or current_price <= intraday_low or intraday_high <= 0:
+        if (
+            current_price <= 0
+            or intraday_low <= 0
+            or current_price <= intraday_low
+            or intraday_high <= 0
+        ):
             stats["invalid_intraday_price_count"] += 1
             continue
-        low_rebound_pct = round(((current_price - intraday_low) / intraday_low) * 100.0, 2)
+        low_rebound_pct = round(
+            ((current_price - intraday_low) / intraday_low) * 100.0, 2
+        )
         if low_rebound_pct < min_rebound_pct:
             stats["below_rebound_threshold_count"] += 1
             continue
-        distance_from_high_pct = round(((current_price - intraday_high) / intraday_high) * 100.0, 2)
+        distance_from_high_pct = round(
+            ((current_price - intraday_high) / intraday_high) * 100.0, 2
+        )
         if distance_from_high_pct > chase_distance_pct:
             stats["chase_risk_filtered_count"] += 1
             continue
@@ -2938,31 +3493,45 @@ def _build_low_rebound_rising_missed_targets(
                 "VolumeSurgeMatched": bool(target.get("VolumeSurgeMatched")),
                 "VolumeSurgeRank": _safe_positive_int(target.get("VolumeSurgeRank")),
                 "VolumeSurgeRankPct": _safe_float(target.get("VolumeSurgeRankPct")),
-                "VolumeSurgeUniverseSize": _safe_positive_int(target.get("VolumeSurgeUniverseSize")),
+                "VolumeSurgeUniverseSize": _safe_positive_int(
+                    target.get("VolumeSurgeUniverseSize")
+                ),
                 "VolumeSurgeSortType": str(target.get("VolumeSurgeSortType") or ""),
                 "PriceJumpMatched": bool(target.get("PriceJumpMatched")),
                 "PriceJumpRank": _safe_positive_int(target.get("PriceJumpRank")),
                 "PriceJumpRankPct": _safe_float(target.get("PriceJumpRankPct")),
-                "PriceJumpUniverseSize": _safe_positive_int(target.get("PriceJumpUniverseSize")),
+                "PriceJumpUniverseSize": _safe_positive_int(
+                    target.get("PriceJumpUniverseSize")
+                ),
                 "PriceJumpSortType": str(target.get("PriceJumpSortType") or ""),
                 "HighProximityMatched": bool(target.get("HighProximityMatched")),
-                "HighProximityRank": _safe_positive_int(target.get("HighProximityRank")),
+                "HighProximityRank": _safe_positive_int(
+                    target.get("HighProximityRank")
+                ),
                 "HighProximityRankPct": _safe_float(target.get("HighProximityRankPct")),
-                "HighProximityUniverseSize": _safe_positive_int(target.get("HighProximityUniverseSize")),
+                "HighProximityUniverseSize": _safe_positive_int(
+                    target.get("HighProximityUniverseSize")
+                ),
                 "HighProximitySortType": str(target.get("HighProximitySortType") or ""),
                 "HighProximityFluRate": _safe_float(target.get("HighProximityFluRate")),
-                "HighProximityDistancePct": _safe_float(target.get("HighProximityDistancePct")),
+                "HighProximityDistancePct": _safe_float(
+                    target.get("HighProximityDistancePct")
+                ),
                 "TodayHighPrice": _safe_positive_int(target.get("TodayHighPrice")),
                 "TodayLowPrice": _safe_positive_int(target.get("TodayLowPrice")),
                 "NewHighMatched": bool(target.get("NewHighMatched")),
                 "NewHighRank": _safe_positive_int(target.get("NewHighRank")),
                 "NewHighRankPct": _safe_float(target.get("NewHighRankPct")),
-                "NewHighUniverseSize": _safe_positive_int(target.get("NewHighUniverseSize")),
+                "NewHighUniverseSize": _safe_positive_int(
+                    target.get("NewHighUniverseSize")
+                ),
                 "NewHighSortType": str(target.get("NewHighSortType") or ""),
                 "NewHighFluRate": _safe_float(target.get("NewHighFluRate")),
                 "NewHighPrice": _safe_positive_int(target.get("NewHighPrice")),
                 "NewLowPrice": _safe_positive_int(target.get("NewLowPrice")),
-                "NewHighPeriodDays": _safe_positive_int(target.get("NewHighPeriodDays")),
+                "NewHighPeriodDays": _safe_positive_int(
+                    target.get("NewHighPeriodDays")
+                ),
             }
         )
     if emit_observation:
@@ -3062,7 +3631,9 @@ def run_scalper_iteration(
         mrkt_tp="000",
     )
     raw_volume_surge_targets = _annotate_volume_surge_rank(raw_volume_surge_targets)
-    volume_surge_targets = _positive_volume_surge_from_raw(raw_volume_surge_targets, limit=supernova_limit)
+    volume_surge_targets = _positive_volume_surge_from_raw(
+        raw_volume_surge_targets, limit=supernova_limit
+    )
     bid_imbalance_targets = _fetch_scan_source(
         "ka10021 호가잔량급증",
         kiwoom_utils.get_bid_balance_surge_ka10021,
@@ -3158,25 +3729,27 @@ def run_scalper_iteration(
 # ==========================================
 def run_scalper(is_test_mode=False):
     """
-    [역할] 
+    [역할]
     90~120초 주기로 시장을 스캔하여 당일 수급이 폭발하거나 급등 전조가 보이는
     '초단타(Scalping)' 타겟을 발굴합니다.
-    
+
     [아키텍처 흐름]
     1. 데이터 수집: kiwoom_utils/signal_radar(REST API)를 호출하여 등락률 상위 및 거래량 급증 종목을 가져옵니다.
     2. 필터링: is_valid_stock을 통해 동전주, ETF, 스팩주 등의 불순물을 걸러냅니다.
     3. DB 저장: 발굴된 종목을 SQLAlchemy ORM을 사용하여 안전하게 Upsert(삽입/업데이트) 합니다.
     4. 이벤트 발행: 'COMMAND_WS_REG' 이벤트를 EventBus에 쏘아, 웹소켓 모듈이 해당 종목의 실시간 틱 데이터 감시를 즉각 시작하도록 지시합니다.
     """
-    print("⚡ [SCALPING 스캐너] 초단타 감시 엔진 가동 (장초반/후반 60초, 그 외 90초 주기)...")
+    print(
+        "⚡ [SCALPING 스캐너] 초단타 감시 엔진 가동 (장초반/후반 60초, 그 외 90초 주기)..."
+    )
     db = DBManager()
-    event_bus = EventBus() # 💡 전역 싱글톤 이벤트 버스
-    
+    event_bus = EventBus()  # 💡 전역 싱글톤 이벤트 버스
+
     # 같은 종목을 하루 종일 영구 제외하면 초반에 잡힌 이름만 오래 남게 됩니다.
     # 그래서 `already_picked` 대신 재등록 cooldown을 둬서, 한동안은 쉬게 하되
     # 다시 거래가 살아난 종목은 같은 날에도 재포착할 수 있게 만듭니다.
     recent_picks = {}
-    last_closed_msg_time = 0 # 💡 장 마감 도배 방지용 타이머 추가
+    last_closed_msg_time = 0  # 💡 장 마감 도배 방지용 타이머 추가
     last_active_window_key = None
     last_outside_reset_key = None
     reentry_cooldown_sec = 25 * 60
@@ -3186,9 +3759,9 @@ def run_scalper(is_test_mode=False):
 
     # 💡 무한 루프 밖에서 토큰과 레이더를 한 번만 초기화하여 부하 감소
     # (실제 운영 시에는 토큰 만료를 대비한 갱신 로직이 추가로 필요할 수 있음)
-    
+
     token = kiwoom_utils.get_kiwoom_token()
-    
+
     if not token:
         log_error("❌ 키움 토큰 발급 실패. 스캐너를 종료합니다.")
         return
@@ -3201,6 +3774,7 @@ def run_scalper(is_test_mode=False):
         now_ts = time.time()
 
         from src.engine.error_detectors.process_health import write_heartbeat as _sc_whb
+
         _sc_whb("scalping_scanner")
 
         active_window = _active_scalping_buy_window(now)
@@ -3222,9 +3796,13 @@ def run_scalper(is_test_mode=False):
         # 신규 후보 발굴은 실제 scalping BUY window와 동일하게 맞춘다.
         # 보유/청산 감시와 downstream hard/broker/order guards는 별도 유지한다.
         if not is_test_mode and active_window is None:
-            reset_key = ("after_buy_window", last_active_window_key) if last_active_window_key else (
-                "outside_buy_window_startup",
-                now.date().isoformat(),
+            reset_key = (
+                ("after_buy_window", last_active_window_key)
+                if last_active_window_key
+                else (
+                    "outside_buy_window_startup",
+                    now.date().isoformat(),
+                )
             )
             if reset_key != last_outside_reset_key:
                 _reset_scanner_watch_targets(
@@ -3258,6 +3836,7 @@ def run_scalper(is_test_mode=False):
         )
 
         time.sleep(scan_interval_sec)
+
 
 if __name__ == "__main__":
     run_scalper(is_test_mode=True)

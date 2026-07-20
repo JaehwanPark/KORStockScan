@@ -7,7 +7,7 @@ from datetime import datetime
 from datetime import timedelta
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from src.utils.constants import POSTGRES_URL 
+from src.utils.constants import POSTGRES_URL
 from sqlalchemy import func
 from sqlalchemy import text
 from sqlalchemy import or_
@@ -44,17 +44,15 @@ def is_swing_real_watching_enabled() -> bool:
 def is_swing_real_watching_strategy(strategy: str | None) -> bool:
     return normalize_strategy(strategy) in SWING_REAL_WATCHING_STRATEGIES
 
+
 class DBManager:
     """
     KORStockScan 시스템의 데이터베이스 접근 및 세션 관리를 전담하는 ORM 매니저
     """
+
     def __init__(self, db_url=POSTGRES_URL):
         self.engine = create_engine(
-            db_url,
-            pool_size=20,          
-            max_overflow=10,       
-            pool_timeout=30,       
-            pool_pre_ping=True     
+            db_url, pool_size=20, max_overflow=10, pool_timeout=30, pool_pre_ping=True
         )
         # 운영 루프/백그라운드 스레드에서 commit 직후 ORM 필드를 참조하는 경로가 있어,
         # 기본값(expire_on_commit=True)에서는 DetachedInstanceError가 간헐적으로 발생합니다.
@@ -65,36 +63,106 @@ class DBManager:
             bind=self.engine,
             expire_on_commit=False,
         )
-    
+
     def init_db(self):
         """프로그램 기동 시 테이블이 없으면 생성합니다."""
         Base.metadata.create_all(bind=self.engine)
-        
+
         # 💡 [자동 마이그레이션] users 테이블에 신규 컬럼이 없으면 자동 추가 (PostgreSQL)
         try:
             with self.engine.begin() as conn:
-                conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS daily_analyze_count INTEGER DEFAULT 0;"))
-                conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_analyze_date DATE;"))
-                conn.execute(text("ALTER TABLE daily_stock_quotes ADD COLUMN IF NOT EXISTS is_nxt BOOLEAN DEFAULT false;"))
+                conn.execute(
+                    text(
+                        "ALTER TABLE users ADD COLUMN IF NOT EXISTS daily_analyze_count INTEGER DEFAULT 0;"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_analyze_date DATE;"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "ALTER TABLE daily_stock_quotes ADD COLUMN IF NOT EXISTS is_nxt BOOLEAN DEFAULT false;"
+                    )
+                )
                 # 💡 [추가매수 필드] recommendation_history 확장 (PostgreSQL)
-                conn.execute(text("ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS add_count INTEGER DEFAULT 0;"))
-                conn.execute(text("ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS avg_down_count INTEGER DEFAULT 0;"))
-                conn.execute(text("ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS pyramid_count INTEGER DEFAULT 0;"))
-                conn.execute(text("ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS initial_buy_qty INTEGER DEFAULT 0;"))
-                conn.execute(text("ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS scale_in_filled_qty INTEGER DEFAULT 0;"))
-                conn.execute(text("ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS last_add_type TEXT;"))
-                conn.execute(text("ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS last_add_reason TEXT;"))
-                conn.execute(text("ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS last_add_at TIMESTAMP;"))
-                conn.execute(text("ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS shallow_volatility_avg_down_count INTEGER DEFAULT 0;"))
-                conn.execute(text("ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS shallow_volatility_avg_down_last_at TIMESTAMP;"))
-                conn.execute(text("ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS scale_in_locked BOOLEAN DEFAULT false;"))
-                conn.execute(text("ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS hard_stop_price DOUBLE PRECISION;"))
-                conn.execute(text("ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS trailing_stop_price DOUBLE PRECISION;"))
-                conn.execute(text("ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS entry_armed_at_epoch DOUBLE PRECISION;"))
-                conn.execute(text(
-                    "ALTER TABLE recommendation_history "
-                    "ALTER COLUMN buy_price TYPE DOUBLE PRECISION USING buy_price::double precision;"
-                ))
+                conn.execute(
+                    text(
+                        "ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS add_count INTEGER DEFAULT 0;"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS avg_down_count INTEGER DEFAULT 0;"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS pyramid_count INTEGER DEFAULT 0;"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS initial_buy_qty INTEGER DEFAULT 0;"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS scale_in_filled_qty INTEGER DEFAULT 0;"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS last_add_type TEXT;"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS last_add_reason TEXT;"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS last_add_at TIMESTAMP;"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS shallow_volatility_avg_down_count INTEGER DEFAULT 0;"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS shallow_volatility_avg_down_last_at TIMESTAMP;"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS scale_in_locked BOOLEAN DEFAULT false;"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS hard_stop_price DOUBLE PRECISION;"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS trailing_stop_price DOUBLE PRECISION;"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS entry_armed_at_epoch DOUBLE PRECISION;"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "ALTER TABLE recommendation_history "
+                        "ALTER COLUMN buy_price TYPE DOUBLE PRECISION USING buy_price::double precision;"
+                    )
+                )
                 conn.execute(text("""
                     CREATE TABLE IF NOT EXISTS holding_add_history (
                         id SERIAL PRIMARY KEY,
@@ -205,7 +273,9 @@ class DBManager:
         ]
 
         try:
-            with self.engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+            with self.engine.connect().execution_options(
+                isolation_level="AUTOCOMMIT"
+            ) as conn:
                 for statement in index_statements:
                     conn.execute(text(statement))
         except Exception as e:
@@ -223,7 +293,9 @@ class DBManager:
         if self.engine.dialect.name != "postgresql":
             return
         try:
-            with self.engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+            with self.engine.connect().execution_options(
+                isolation_level="AUTOCOMMIT"
+            ) as conn:
                 conn.execute(text("ANALYZE daily_stock_quotes;"))
                 conn.execute(text("ANALYZE recommendation_history;"))
                 conn.execute(text("ANALYZE trade_performance_facts;"))
@@ -241,7 +313,9 @@ class DBManager:
         position_tag=None,
     ):
         """체결/청산 이력이 없는 WATCHING/EXPIRED row만 재사용 대상으로 찾습니다."""
-        normalized_strategy = normalize_strategy(strategy) if strategy is not None else None
+        normalized_strategy = (
+            normalize_strategy(strategy) if strategy is not None else None
+        )
         normalized_position_tag = (
             normalize_position_tag(normalized_strategy, position_tag)
             if position_tag is not None
@@ -257,9 +331,11 @@ class DBManager:
         if normalized_strategy is not None:
             query = query.filter(RecommendationHistory.strategy == normalized_strategy)
         if normalized_position_tag is not None:
-            query = query.filter(RecommendationHistory.position_tag == normalized_position_tag)
+            query = query.filter(
+                RecommendationHistory.position_tag == normalized_position_tag
+            )
         return query.order_by(RecommendationHistory.id.desc()).first()
-    
+
     @contextmanager
     def get_session(self):
         """DB 세션을 안전하게 열고 닫는 제너레이터 (에러 발생 시 롤백 보장)"""
@@ -284,7 +360,7 @@ class DBManager:
         query = f"SELECT * FROM daily_stock_quotes WHERE stock_code='{code}' ORDER BY quote_date DESC LIMIT {limit}"
         df = pd.read_sql(query, self.engine)
         if not df.empty:
-            df = df.sort_values('quote_date').reset_index(drop=True)
+            df = df.sort_values("quote_date").reset_index(drop=True)
         return df
 
     def get_latest_stock_name(self, code: str) -> str:
@@ -292,22 +368,20 @@ class DBManager:
         norm_code = str(code or "").strip()[:6]
         if not norm_code:
             return ""
-        query = text(
-            """
+        query = text("""
             SELECT stock_name
             FROM daily_stock_quotes
             WHERE stock_code = :code
               AND COALESCE(stock_name, '') <> ''
             ORDER BY quote_date DESC
             LIMIT 1
-            """
-        )
+            """)
         with self.engine.connect() as conn:
             return str(conn.execute(query, {"code": norm_code}).scalar() or "").strip()
 
     def get_latest_is_nxt(self, code: str) -> bool:
         """최신 거래일 기준 NXT 대상 여부(_AL suffix 적용 대상) 조회"""
-        norm_code = str(code).replace('_AL', '').zfill(6)
+        norm_code = str(code).replace("_AL", "").zfill(6)
         query = text("""
             SELECT COALESCE(is_nxt, false)
             FROM daily_stock_quotes
@@ -325,7 +399,7 @@ class DBManager:
 
     def get_latest_is_nxt_map(self, codes: list[str]) -> dict:
         """복수 종목에 대해 최신 거래일 기준 NXT 대상 여부를 dict로 반환합니다."""
-        normalized = [str(c).replace('_AL', '').zfill(6) for c in (codes or []) if c]
+        normalized = [str(c).replace("_AL", "").zfill(6) for c in (codes or []) if c]
         if not normalized:
             return {}
 
@@ -349,33 +423,46 @@ class DBManager:
     # --------------------------------------------------------
     # 2. 매매 이력 및 종목 관리
     # --------------------------------------------------------
-    def save_recommendation(self, date: str, code: str, name: str, price: int, pick_type: str, position: str, prob: float = 0.7, strategy: str = None):
+    def save_recommendation(
+        self,
+        date: str,
+        code: str,
+        name: str,
+        price: int,
+        pick_type: str,
+        position: str,
+        prob: float = 0.7,
+        strategy: str = None,
+    ):
         """종목 추천 이력 저장 (3대 표준 trade_type 강제 정규화)"""
-        
+
         # 💡 [핵심 교정 1] 스캐너가 넘겨준 pick_type을 3대 표준 태그로 강제 매핑합니다.
         pick_type_upper = pick_type.upper()
-        if 'SCALP' in pick_type_upper:
-            normalized_type = 'SCALP'
-        elif 'RUNNER' in pick_type_upper or 'KOSDAQ' in pick_type_upper:
-            normalized_type = 'RUNNER'
+        if "SCALP" in pick_type_upper:
+            normalized_type = "SCALP"
+        elif "RUNNER" in pick_type_upper or "KOSDAQ" in pick_type_upper:
+            normalized_type = "RUNNER"
         else:
-            normalized_type = 'MAIN' # 기본값
+            normalized_type = "MAIN"  # 기본값
 
         # final_ensemble_scanner의 generic RUNNER는 KOSPI universe에서 나온다.
         # KOSDAQ_ML은 명시적으로 KOSDAQ pick_type이 들어온 경우에만 기본 매핑한다.
         if not strategy:
-            if normalized_type == 'SCALP':
-                strategy = 'SCALPING'
-            elif 'KOSDAQ' in pick_type_upper:
-                strategy = 'KOSDAQ_ML'
+            if normalized_type == "SCALP":
+                strategy = "SCALPING"
+            elif "KOSDAQ" in pick_type_upper:
+                strategy = "KOSDAQ_ML"
             else:
-                strategy = 'KOSPI_ML'
+                strategy = "KOSPI_ML"
         strategy = normalize_strategy(strategy)
         position = normalize_position_tag(strategy, position)
-        recommendation_status = 'WATCHING'
-        if is_swing_real_watching_strategy(strategy) and not is_swing_real_watching_enabled():
-            if normalized_type == 'RUNNER':
-                recommendation_status = 'REPORT_ONLY'
+        recommendation_status = "WATCHING"
+        if (
+            is_swing_real_watching_strategy(strategy)
+            and not is_swing_real_watching_enabled()
+        ):
+            if normalized_type == "RUNNER":
+                recommendation_status = "REPORT_ONLY"
             else:
                 log_info(
                     f"[SWING_REAL_WATCHING_DISABLED] skip WATCHING save "
@@ -391,38 +478,40 @@ class DBManager:
                 strategy=strategy,
                 position_tag=position,
             )
-            
-            if record: # Update
+
+            if record:  # Update
                 record.stock_name = name
                 record.buy_price = price
-                record.trade_type = normalized_type # 💡 표준화된 태그 저장
-                record.strategy = strategy          # 💡 매핑된 전략 저장
+                record.trade_type = normalized_type  # 💡 표준화된 태그 저장
+                record.strategy = strategy  # 💡 매핑된 전략 저장
                 record.position_tag = position
                 record.prob = prob
-                
-                if recommendation_status == 'REPORT_ONLY':
-                    record.status = 'REPORT_ONLY'
-                elif record.status == 'EXPIRED':
-                    record.status = 'WATCHING'
-            else:      # Insert
+
+                if recommendation_status == "REPORT_ONLY":
+                    record.status = "REPORT_ONLY"
+                elif record.status == "EXPIRED":
+                    record.status = "WATCHING"
+            else:  # Insert
                 new_record = RecommendationHistory(
                     rec_date=date,
                     stock_code=code,
                     stock_name=name,
                     buy_price=price,
-                    trade_type=normalized_type, # 💡 표준화된 태그 저장
-                    strategy=strategy,          # 💡 매핑된 전략 저장
+                    trade_type=normalized_type,  # 💡 표준화된 태그 저장
+                    strategy=strategy,  # 💡 매핑된 전략 저장
                     status=recommendation_status,
                     position_tag=position,
-                    prob=prob
+                    prob=prob,
                 )
                 session.add(new_record)
-    
-    def register_manual_stock(self, code: str, name: str, prob: float | None = None) -> bool:
+
+    def register_manual_stock(
+        self, code: str, name: str, prob: float | None = None
+    ) -> bool:
         """수동 감시 종목을 DB에 등록합니다."""
         today_date = datetime.now().date()
         target_code = str(code).zfill(6)
-        strategy = 'SCALPING'
+        strategy = "SCALPING"
         position_tag = normalize_position_tag(strategy, None)
 
         try:
@@ -437,9 +526,11 @@ class DBManager:
 
                 if record:
                     record.stock_name = name
-                    record.status = 'WATCHING'
-                    record.trade_type = 'SCALP' 
-                    record.strategy = strategy # 💡 수동 등록 시 확실하게 단타 전략으로 덮어씌움
+                    record.status = "WATCHING"
+                    record.trade_type = "SCALP"
+                    record.strategy = (
+                        strategy  # 💡 수동 등록 시 확실하게 단타 전략으로 덮어씌움
+                    )
                     record.position_tag = position_tag
                     record.buy_price = 0
                     record.buy_qty = 0
@@ -449,14 +540,14 @@ class DBManager:
                         record.prob = prob
                 else:
                     new_record = RecommendationHistory(
-                        rec_date=today_date,     
-                        stock_code=target_code,  
-                        stock_name=name,         
+                        rec_date=today_date,
+                        stock_code=target_code,
+                        stock_name=name,
                         buy_price=0,
                         buy_qty=0,
-                        trade_type='SCALP', # 태그는 단타로
-                        strategy=strategy,       # 💡 실제 매매 로직은 확실한 SCALPING으로!
-                        status='WATCHING',
+                        trade_type="SCALP",  # 태그는 단타로
+                        strategy=strategy,  # 💡 실제 매매 로직은 확실한 SCALPING으로!
+                        status="WATCHING",
                         position_tag=position_tag,
                     )
                     if prob is not None:
@@ -470,20 +561,25 @@ class DBManager:
                         and getattr(candidate, "stock_code", None) == target_code
                         and getattr(candidate, "strategy", None) == strategy
                         and getattr(candidate, "position_tag", None) == "SCANNER"
-                        and str(getattr(candidate, "status", "") or "") in {"WATCHING", "EXPIRED"}
+                        and str(getattr(candidate, "status", "") or "")
+                        in {"WATCHING", "EXPIRED"}
                         and getattr(candidate, "buy_time", None) is None
                         and int(getattr(candidate, "buy_qty", 0) or 0) == 0
                     ]
                 else:
-                    scanner_records = session.query(RecommendationHistory).filter(
-                        RecommendationHistory.rec_date == today_date,
-                        RecommendationHistory.stock_code == target_code,
-                        RecommendationHistory.strategy == strategy,
-                        RecommendationHistory.position_tag == "SCANNER",
-                        RecommendationHistory.status.in_(("WATCHING", "EXPIRED")),
-                        RecommendationHistory.buy_time.is_(None),
-                        func.coalesce(RecommendationHistory.buy_qty, 0) == 0,
-                    ).all()
+                    scanner_records = (
+                        session.query(RecommendationHistory)
+                        .filter(
+                            RecommendationHistory.rec_date == today_date,
+                            RecommendationHistory.stock_code == target_code,
+                            RecommendationHistory.strategy == strategy,
+                            RecommendationHistory.position_tag == "SCANNER",
+                            RecommendationHistory.status.in_(("WATCHING", "EXPIRED")),
+                            RecommendationHistory.buy_time.is_(None),
+                            func.coalesce(RecommendationHistory.buy_qty, 0) == 0,
+                        )
+                        .all()
+                    )
                 for scanner_record in scanner_records:
                     scanner_record.status = "EXPIRED"
 
@@ -491,25 +587,32 @@ class DBManager:
 
         except Exception as e:
             from src.utils.logger import log_error
+
             log_error(f"수동 타겟 DB 등록 오류 (ORM): {e}")
             return False
-    
+
     def get_latest_history_date(self) -> str:
         """가장 최근 AI 스캐너 추천 기록의 날짜를 반환합니다."""
         try:
             with self.get_session() as session:
                 # 💡 [변경] RecommendationHistory.date -> RecommendationHistory.rec_date
-                latest_date = session.query(func.max(RecommendationHistory.rec_date)).scalar()
-                
+                latest_date = session.query(
+                    func.max(RecommendationHistory.rec_date)
+                ).scalar()
+
                 # DB가 비어있을 경우 None 처리, 날짜 객체일 경우 문자열로 변환하여 리턴
                 if latest_date:
-                    return latest_date.strftime('%Y-%m-%d') if hasattr(latest_date, 'strftime') else str(latest_date)
+                    return (
+                        latest_date.strftime("%Y-%m-%d")
+                        if hasattr(latest_date, "strftime")
+                        else str(latest_date)
+                    )
                 return None
-                
+
         except Exception as e:
             log_error(f"최근 추천 기록 날짜 조회 실패: {e}")
             return None
-    
+
     def get_history_by_date(self, date: str) -> pd.DataFrame:
         """특정 일자의 추천 종목 기록을 가져옵니다."""
         try:
@@ -522,7 +625,7 @@ class DBManager:
         except Exception as e:
             log_error(f"추천 기록 조회 실패 (날짜: {date}): {e}")
             return pd.DataFrame()
-    
+
     def save_macro_alert(self, alert_data):
         """💡 [핵심] 글로벌 위기 알림을 DB에 저장 (중복 방어 포함)"""
         query = text("""
@@ -537,6 +640,7 @@ class DBManager:
                 return True
         except Exception as e:
             from src.utils.logger import log_error
+
             log_error(f"❌ 위기 경보 저장 실패: {e}")
             return False
 
@@ -549,25 +653,27 @@ class DBManager:
         """)
         try:
             with self.get_session() as session:
-                return session.execute(query, {'threshold': threshold, 'min_severity': min_severity}).scalar()
+                return session.execute(
+                    query, {"threshold": threshold, "min_severity": min_severity}
+                ).scalar()
         except Exception:
             return 0
-    
+
     def get_active_targets(self) -> list:
         """
-        💡 [핵심] 당일 감시 대상(WATCHING) 및 기존 보유 종목(HOLDING) 리스트를 
+        💡 [핵심] 당일 감시 대상(WATCHING) 및 기존 보유 종목(HOLDING) 리스트를
         엔진 규격에 맞는 딕셔너리 리스트로 반환합니다.
         고유 PK인 `id`를 포함하여 다중 스캘핑 시 데이터 덮어쓰기를 방지합니다.
         """
         import pandas as pd
         from datetime import datetime
         from src.utils.constants import TRADING_RULES
-        
+
         try:
             today = datetime.now().date()
-            
+
             with self.get_session() as session:
-                # 💡 [핵심 교정 2] 이미 매매가 끝났거나(COMPLETED) 버려진(EXPIRED) 종목은 
+                # 💡 [핵심 교정 2] 이미 매매가 끝났거나(COMPLETED) 버려진(EXPIRED) 종목은
                 # 아예 DB에서 가져오지 않도록 쿼리단에서 컷오프! (메모리 낭비 완벽 차단)
                 query = f"""
                     SELECT 
@@ -597,19 +703,24 @@ class DBManager:
             # S15 rows are owned by the fast-track module: S15_CANDID is TTL
             # arm persistence, and S15_FAST is shadow lifecycle tracking.
             # Neither should enter the generic WATCHING/HOLDING loop.
-            df = df[~df['strategy'].astype(str).str.upper().isin({'S15_CANDID', 'S15_FAST'})]
+            df = df[
+                ~df["strategy"].astype(str).str.upper().isin({"S15_CANDID", "S15_FAST"})
+            ]
             if df.empty:
                 return []
 
-            df['strategy'] = df['strategy'].apply(normalize_strategy)
-            df['position_tag'] = df.apply(
-                lambda row: normalize_position_tag(row.get('strategy'), row.get('position_tag')),
+            df["strategy"] = df["strategy"].apply(normalize_strategy)
+            df["position_tag"] = df.apply(
+                lambda row: normalize_position_tag(
+                    row.get("strategy"), row.get("position_tag")
+                ),
                 axis=1,
             )
             if not is_swing_real_watching_enabled():
-                swing_watching = (
-                    df['status'].astype(str).str.upper().eq('WATCHING')
-                    & df['strategy'].astype(str).str.upper().isin(SWING_REAL_WATCHING_STRATEGIES)
+                swing_watching = df["status"].astype(str).str.upper().eq(
+                    "WATCHING"
+                ) & df["strategy"].astype(str).str.upper().isin(
+                    SWING_REAL_WATCHING_STRATEGIES
                 )
                 if swing_watching.any():
                     skipped = int(swing_watching.sum())
@@ -624,31 +735,39 @@ class DBManager:
             # 💡 [핵심 교정 2] 상태값(status) 우선순위 강제 지정 (알파벳 정렬 버그 차단)
             # 가장 중요한 상태(HOLDING)부터 먼저 오도록 랭킹을 매깁니다.
             status_priority = {
-                'HOLDING': 1, 
-                'SELL_ORDERED': 2, 
-                'BUY_ORDERED': 3, 
-                'WATCHING': 4, 
-                'COMPLETED': 5
+                "HOLDING": 1,
+                "SELL_ORDERED": 2,
+                "BUY_ORDERED": 3,
+                "WATCHING": 4,
+                "COMPLETED": 5,
             }
-            df['priority'] = df['status'].map(status_priority).fillna(99)
-            
+            df["priority"] = df["status"].map(status_priority).fillna(99)
+
             # 우선순위가 높은 순(오름차순), 그리고 id가 최신인 순(내림차순)으로 정렬 후 중복 제거
-            df = df.sort_values(by=['priority', 'id'], ascending=[True, False])
-            df = df.drop_duplicates(subset=['code', 'strategy'], keep='first')
-            
+            df = df.sort_values(by=["priority", "id"], ascending=[True, False])
+            df = df.drop_duplicates(subset=["code", "strategy"], keep="first")
+
             # 엔진에 넘기기 전에 임시 컬럼 삭제
-            df = df.drop(columns=['priority'])
-            
-            targets = df.to_dict('records')
+            df = df.drop(columns=["priority"])
+
+            targets = df.to_dict("records")
 
             # 기본값 보정 (스나이퍼 엔진의 부담을 DB 매니저가 덜어줍니다)
-            default_prob = getattr(TRADING_RULES, 'SNIPER_AGGRESSIVE_PROB', 0.8)
+            default_prob = getattr(TRADING_RULES, "SNIPER_AGGRESSIVE_PROB", 0.8)
 
             def _safe_int(value, default=0):
                 try:
                     if value is None:
                         return default
-                    if isinstance(value, str) and value.strip().lower() in {'', 'nan', 'nat', 'none', 'inf', '+inf', '-inf'}:
+                    if isinstance(value, str) and value.strip().lower() in {
+                        "",
+                        "nan",
+                        "nat",
+                        "none",
+                        "inf",
+                        "+inf",
+                        "-inf",
+                    }:
                         return default
                     numeric = float(value)
                     if not math.isfinite(numeric):
@@ -661,7 +780,15 @@ class DBManager:
                 try:
                     if value is None:
                         return default
-                    if isinstance(value, str) and value.strip().lower() in {'', 'nan', 'nat', 'none', 'inf', '+inf', '-inf'}:
+                    if isinstance(value, str) and value.strip().lower() in {
+                        "",
+                        "nan",
+                        "nat",
+                        "none",
+                        "inf",
+                        "+inf",
+                        "-inf",
+                    }:
                         return default
                     numeric = float(value)
                     if not math.isfinite(numeric):
@@ -676,44 +803,51 @@ class DBManager:
                 if isinstance(value, bool):
                     return value
                 text = str(value).strip().lower()
-                if text in {'1', 'true', 't', 'yes', 'y'}:
+                if text in {"1", "true", "t", "yes", "y"}:
                     return True
-                if text in {'0', 'false', 'f', 'no', 'n'}:
+                if text in {"0", "false", "f", "no", "n"}:
                     return False
                 return default
+
             for t in targets:
-                t['prob'] = _safe_float(t.get('prob'), default_prob)
-                t['buy_qty'] = _safe_int(t.get('buy_qty'))
-                t['buy_price'] = _safe_float(t.get('buy_price'))
-                t['ratio'] = _safe_float(t.get('ratio'))
-                t['order_price'] = _safe_int(t.get('order_price'))
-                t['target_buy_price'] = _safe_int(t.get('target_buy_price'))
-                t['marcap'] = _safe_int(t.get('marcap'))
-                t['preset_tp_price'] = _safe_int(t.get('preset_tp_price'))
-                t['preset_tp_qty'] = _safe_int(t.get('preset_tp_qty'))
-                t['strategy'] = normalize_strategy(t.get('strategy', 'KOSPI_ML'))
-                t['position_tag'] = normalize_position_tag(t['strategy'], t.get('position_tag'))
-                t['add_count'] = _safe_int(t.get('add_count'))
-                t['avg_down_count'] = _safe_int(t.get('avg_down_count'))
-                t['pyramid_count'] = _safe_int(t.get('pyramid_count'))
-                t['last_add_reason'] = str(t.get('last_add_reason') or '').strip()
-                t['shallow_volatility_avg_down_count'] = _safe_int(t.get('shallow_volatility_avg_down_count'))
+                t["prob"] = _safe_float(t.get("prob"), default_prob)
+                t["buy_qty"] = _safe_int(t.get("buy_qty"))
+                t["buy_price"] = _safe_float(t.get("buy_price"))
+                t["ratio"] = _safe_float(t.get("ratio"))
+                t["order_price"] = _safe_int(t.get("order_price"))
+                t["target_buy_price"] = _safe_int(t.get("target_buy_price"))
+                t["marcap"] = _safe_int(t.get("marcap"))
+                t["preset_tp_price"] = _safe_int(t.get("preset_tp_price"))
+                t["preset_tp_qty"] = _safe_int(t.get("preset_tp_qty"))
+                t["strategy"] = normalize_strategy(t.get("strategy", "KOSPI_ML"))
+                t["position_tag"] = normalize_position_tag(
+                    t["strategy"], t.get("position_tag")
+                )
+                t["add_count"] = _safe_int(t.get("add_count"))
+                t["avg_down_count"] = _safe_int(t.get("avg_down_count"))
+                t["pyramid_count"] = _safe_int(t.get("pyramid_count"))
+                t["last_add_reason"] = str(t.get("last_add_reason") or "").strip()
+                t["shallow_volatility_avg_down_count"] = _safe_int(
+                    t.get("shallow_volatility_avg_down_count")
+                )
                 try:
-                    shallow_last_at = t.get('shallow_volatility_avg_down_last_at')
-                    t['shallow_volatility_avg_down_last_at'] = (
+                    shallow_last_at = t.get("shallow_volatility_avg_down_last_at")
+                    t["shallow_volatility_avg_down_last_at"] = (
                         float(pd.to_datetime(shallow_last_at).timestamp())
                         if shallow_last_at is not None and not pd.isna(shallow_last_at)
                         else 0.0
                     )
                 except Exception:
-                    t['shallow_volatility_avg_down_last_at'] = 0.0
-                t['scale_in_locked'] = _safe_bool(t.get('scale_in_locked'), default=False)
-                t['hard_stop_price'] = _safe_float(t.get('hard_stop_price'))
-                t['trailing_stop_price'] = _safe_float(t.get('trailing_stop_price'))
-                t['entry_armed_at_epoch'] = _safe_float(t.get('entry_armed_at_epoch'))
+                    t["shallow_volatility_avg_down_last_at"] = 0.0
+                t["scale_in_locked"] = _safe_bool(
+                    t.get("scale_in_locked"), default=False
+                )
+                t["hard_stop_price"] = _safe_float(t.get("hard_stop_price"))
+                t["trailing_stop_price"] = _safe_float(t.get("trailing_stop_price"))
+                t["entry_armed_at_epoch"] = _safe_float(t.get("entry_armed_at_epoch"))
 
             return targets
-            
+
         except Exception as e:
             print(f"감시 대상 로드 에러: {e}")
             log_error(f"감시 대상 로드 에러: {e}")
@@ -742,18 +876,19 @@ class DBManager:
     # --------------------------------------------------------
     # 3. 텔레그램 유저 관리
     # --------------------------------------------------------
-    
+
     def get_telegram_chat_ids(self) -> list:
         with self.get_session() as session:
             users = session.query(User.chat_id).all()
             return [user.chat_id for user in users]
-        
+
     def check_special_auth(self, chat_id: int) -> bool:
         with self.get_session() as session:
             user = session.query(User).filter_by(chat_id=chat_id).first()
             # return bool(user and user.auth_group in ['A', 'V'])
-            return bool(user and user.auth_group in ['A']) # VIP 등급 제거 (관리자만 허용), VIP는 일반 유저와 동일하게 취급, 추가기능개발시 VIP 등급 활용 예정
-
+            return bool(
+                user and user.auth_group in ["A"]
+            )  # VIP 등급 제거 (관리자만 허용), VIP는 일반 유저와 동일하게 취급, 추가기능개발시 VIP 등급 활용 예정
 
     def add_new_user(self, chat_id: int):
         with self.get_session() as session:
@@ -761,7 +896,7 @@ class DBManager:
             if not exists:
                 new_user = User(chat_id=chat_id)
                 session.add(new_user)
-    
+
     def check_analyze_quota(self, chat_id, consume=False):
         """
         사용자의 일일 AI 분석 횟수 제한을 확인하고, 필요시 차감합니다.
@@ -773,34 +908,40 @@ class DBManager:
                 if not user:
                     # 사용자가 없으면 기본 허용 (무제한)
                     return True, 999, "무제한 분석 가능"
-                
+
                 today = datetime.now().date()
                 last_date = user.last_analyze_date
-                
+
                 # 마지막 분석 날짜가 오늘이 아니면 카운트 리셋
                 if last_date != today:
                     user.daily_analyze_count = 0
                     user.last_analyze_date = today
-                
+
                 # 일일 제한은 TRADING_RULES에서 가져오거나 기본값 10으로 설정
                 from src.utils.constants import TRADING_RULES
-                daily_limit = getattr(TRADING_RULES, 'DAILY_ANALYZE_LIMIT', 10)
-                
+
+                daily_limit = getattr(TRADING_RULES, "DAILY_ANALYZE_LIMIT", 10)
+
                 remaining = daily_limit - user.daily_analyze_count
                 if remaining <= 0:
-                    return False, 0, f"일일 분석 횟수({daily_limit}회)를 모두 사용했습니다. 내일 다시 시도해주세요."
-                
+                    return (
+                        False,
+                        0,
+                        f"일일 분석 횟수({daily_limit}회)를 모두 사용했습니다. 내일 다시 시도해주세요.",
+                    )
+
                 if consume:
                     user.daily_analyze_count += 1
                     remaining -= 1
-                
+
                 return True, remaining, f"남은 분석 횟수: {remaining}회"
         except Exception as e:
             # 에러 발생 시 안전하게 허용 처리
             import traceback
+
             traceback.print_exc()
             return True, 999, f"쿼터 확인 중 에러: {e}"
-    
+
     def update_user_active_status(self, chat_id: int, is_active: bool = True) -> bool:
         """
         💡 [핵심] 사용자의 봇 활성화 상태(차단/해제)를 업데이트합니다.
@@ -808,23 +949,28 @@ class DBManager:
         try:
             with self.get_session() as session:
                 user = session.query(User).filter_by(chat_id=chat_id).first()
-                
+
                 if user:
                     user.is_active = is_active
                     # session.commit()은 get_session() 제너레이터에서 자동 처리됨
-                    
+
                     status_str = "활성화(복귀)" if is_active else "비활성화(차단)"
-                    print(f"🔄 [DBManager] 유저({chat_id}) 상태가 '{status_str}'(으)로 변경되었습니다.")
+                    print(
+                        f"🔄 [DBManager] 유저({chat_id}) 상태가 '{status_str}'(으)로 변경되었습니다."
+                    )
                     return True
                 else:
-                    print(f"⚠️ [DBManager] 상태를 변경할 유저({chat_id})를 찾을 수 없습니다.")
+                    print(
+                        f"⚠️ [DBManager] 상태를 변경할 유저({chat_id})를 찾을 수 없습니다."
+                    )
                     return False
-                    
+
         except Exception as e:
             from src.utils.logger import log_error
+
             log_error(f"❌ 유저 활성화 상태 업데이트 에러: {e}")
             return False
-            
+
     def delete_user(self, chat_id: int) -> bool:
         """
         💡 [핵심] 사용자가 봇을 차단하거나 방을 나갔을 때 DB에서 완전히 삭제합니다.
@@ -834,16 +980,21 @@ class DBManager:
                 user = session.query(User).filter_by(chat_id=chat_id).first()
                 if user:
                     session.delete(user)
-                    print(f"🗑️ [DBManager] 유저({chat_id})가 DB에서 완전히 삭제되었습니다.")
+                    print(
+                        f"🗑️ [DBManager] 유저({chat_id})가 DB에서 완전히 삭제되었습니다."
+                    )
                     return True
                 else:
-                    print(f"⚠️ [DBManager] 삭제할 유저({chat_id})를 DB에서 찾을 수 없습니다.")
+                    print(
+                        f"⚠️ [DBManager] 삭제할 유저({chat_id})를 DB에서 찾을 수 없습니다."
+                    )
                     return False
         except Exception as e:
             from src.utils.logger import log_error
+
             log_error(f"❌ 유저 삭제 DB 에러: {e}")
             return False
-    
+
     def get_user_level(self, chat_id):
         """
         💡 [핵심] 특정 사용자의 등급(Admin/VIP/User)을 조회합니다.
@@ -852,53 +1003,59 @@ class DBManager:
         - 'U': 일반 사용자 (User) - 기본값
         """
         chat_id_str = str(chat_id)
-        
+
         try:
-            from src.database.models import User # 💡 순환 참조 방지를 위한 지역 임포트
-            
+            from src.database.models import User  # 💡 순환 참조 방지를 위한 지역 임포트
+
             with self.get_session() as session:
                 # 1. DB에서 해당 chat_id를 가진 사용자 검색
                 user = session.query(User).filter_by(chat_id=chat_id_str).first()
-                
+
                 # 2. 사용자가 존재하면 해당 레벨 반환, 없으면 기본값 'U' 반환
                 if user and user.auth_group:
                     return user.auth_group
-                
+
                 # 💡 사용자가 없거나 레벨이 비어있다면 일반 유저('U')로 간주
-                return 'U'
-                
+                return "U"
+
         except Exception as e:
             from src.utils.logger import log_error
+
             log_error(f"❌ 사용자 레벨 조회 중 에러 ({chat_id_str}): {e}")
-            return 'U' # 에러 발생 시 보안을 위해 가장 낮은 등급 반환
-    
-    def upgrade_user_level(self, chat_id: int, level: str = 'V') -> bool:
+            return "U"  # 에러 발생 시 보안을 위해 가장 낮은 등급 반환
+
+    def upgrade_user_level(self, chat_id: int, level: str = "V") -> bool:
         """
         사용자의 등급을 업데이트합니다. (기본값: 'V')
         """
         # 💡 [아키텍처 포인트] 파일 최상단에 User 모델이 임포트되어 있지 않다면
         # 순환 참조 방지를 위해 함수 내부에서 임포트합니다.
-        from src.database.models import User 
+        from src.database.models import User
 
         try:
             # 원시 SQL 직접 조회 대신 SQLAlchemy 세션 사용
             with self.get_session() as session:
                 # 1. 대상 유저 조회 (chat_id를 문자열로 캐스팅하여 안전하게 비교)
                 user = session.query(User).filter_by(chat_id=str(chat_id)).first()
-                
+
                 if user:
                     # 2. 유저가 존재하면 등급 업데이트 (숫자 1 대신 'VIP' 같은 문자열 사용)
                     user.auth_group = level
-                    # session.commit()은 get_session()의 Context Manager(with문)가 
+                    # session.commit()은 get_session()의 Context Manager(with문)가
                     # 정상 종료될 때 자동으로 수행되지만, 명시적으로 적어주어도 좋습니다.
                     session.commit()
-                    print(f"✅ [DBManager] 유저({chat_id}) 등급이 '{level}'(으)로 승격되었습니다.")
+                    print(
+                        f"✅ [DBManager] 유저({chat_id}) 등급이 '{level}'(으)로 승격되었습니다."
+                    )
                     return True
                 else:
-                    print(f"⚠️ [DBManager] 승격할 유저({chat_id})를 DB에서 찾을 수 없습니다.")
+                    print(
+                        f"⚠️ [DBManager] 승격할 유저({chat_id})를 DB에서 찾을 수 없습니다."
+                    )
                     return False
-                    
+
         except Exception as e:
             from src.utils.logger import log_error
+
             log_error(f"유저 등급 업데이트 DB 에러: {e}")
             return False

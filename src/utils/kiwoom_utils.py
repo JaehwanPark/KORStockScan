@@ -19,15 +19,21 @@ except ImportError:  # pragma: no cover - non-Unix fallback
 
 # 💡 독립 로거 및 전역 상수 사용
 from src.utils.logger import log_error, log_info
-from src.utils.constants import CONFIG_PATH, DEV_PATH, TRADING_RULES, DATA_DIR  # 필요에 따라 상수를 추가/수정해서 사용
-
+from src.utils.constants import (
+    CONFIG_PATH,
+    DEV_PATH,
+    TRADING_RULES,
+    DATA_DIR,
+)  # 필요에 따라 상수를 추가/수정해서 사용
 
 _MARKET_DATA_CACHE = {}
 _MARKET_DATA_CACHE_LOCK = threading.RLock()
 _KIWOOM_TOKEN_PROCESS_LOCK = threading.RLock()
 KIWOOM_CONNECT_TIMEOUT_SEC = float(os.getenv("KIWOOM_CONNECT_TIMEOUT_SEC", "5"))
 KIWOOM_READ_TIMEOUT_SEC = float(os.getenv("KIWOOM_READ_TIMEOUT_SEC", "20"))
-KIWOOM_TOKEN_CACHE_DEFAULT_TTL_SEC = int(os.getenv("KIWOOM_TOKEN_CACHE_DEFAULT_TTL_SEC", str(23 * 60 * 60)))
+KIWOOM_TOKEN_CACHE_DEFAULT_TTL_SEC = int(
+    os.getenv("KIWOOM_TOKEN_CACHE_DEFAULT_TTL_SEC", str(23 * 60 * 60))
+)
 KIWOOM_TOKEN_CACHE_SAFETY_SEC = int(os.getenv("KIWOOM_TOKEN_CACHE_SAFETY_SEC", "300"))
 
 
@@ -61,18 +67,32 @@ def _cache_set(namespace, key, value, ttl_sec):
             "value": _cache_clone(value),
         }
         if len(_MARKET_DATA_CACHE) > 2048:
-            expired = [k for k, v in _MARKET_DATA_CACHE.items() if float(v.get("expires_at", 0.0) or 0.0) <= now]
+            expired = [
+                k
+                for k, v in _MARKET_DATA_CACHE.items()
+                if float(v.get("expires_at", 0.0) or 0.0) <= now
+            ]
             for item in expired[:512]:
                 _MARKET_DATA_CACHE.pop(item, None)
     return value
 
 
 def _kiwoom_token_cache_path() -> Path:
-    return Path(os.getenv("KIWOOM_TOKEN_CACHE_PATH", str(DATA_DIR / "runtime" / "kiwoom_token_cache.json")))
+    return Path(
+        os.getenv(
+            "KIWOOM_TOKEN_CACHE_PATH",
+            str(DATA_DIR / "runtime" / "kiwoom_token_cache.json"),
+        )
+    )
 
 
 def _kiwoom_token_lock_path() -> Path:
-    return Path(os.getenv("KIWOOM_TOKEN_LOCK_PATH", str(DATA_DIR / "runtime" / "kiwoom_token_cache.lock")))
+    return Path(
+        os.getenv(
+            "KIWOOM_TOKEN_LOCK_PATH",
+            str(DATA_DIR / "runtime" / "kiwoom_token_cache.lock"),
+        )
+    )
 
 
 def _token_cache_key(config: dict) -> str:
@@ -133,7 +153,9 @@ def _parse_token_expires_at(response_payload: dict, now_ts: float) -> float:
     return now_ts + max(60, KIWOOM_TOKEN_CACHE_DEFAULT_TTL_SEC)
 
 
-def _read_cached_kiwoom_token(config: dict, *, now_ts: float | None = None) -> str | None:
+def _read_cached_kiwoom_token(
+    config: dict, *, now_ts: float | None = None
+) -> str | None:
     path = _kiwoom_token_cache_path()
     payload = _json_load_path(path)
     if not payload:
@@ -157,7 +179,9 @@ def _read_cached_kiwoom_token(config: dict, *, now_ts: float | None = None) -> s
     return token
 
 
-def _write_cached_kiwoom_token(config: dict, token: str, response_payload: dict, *, now_ts: float | None = None) -> None:
+def _write_cached_kiwoom_token(
+    config: dict, token: str, response_payload: dict, *, now_ts: float | None = None
+) -> None:
     path = _kiwoom_token_cache_path()
     now = float(now_ts or time.time())
     expires_at = _parse_token_expires_at(response_payload or {}, now)
@@ -165,7 +189,9 @@ def _write_cached_kiwoom_token(config: dict, token: str, response_payload: dict,
         "schema_version": 1,
         "cache_key": _token_cache_key(config),
         "base_url": str((config or {}).get("KIWOOM_BASE_URL") or KIWOOM_BASE_URL),
-        "app_key_hash": hashlib.sha256(str((config or {}).get("KIWOOM_APPKEY") or "").encode("utf-8")).hexdigest(),
+        "app_key_hash": hashlib.sha256(
+            str((config or {}).get("KIWOOM_APPKEY") or "").encode("utf-8")
+        ).hexdigest(),
         "access_token": token,
         "issued_at": now,
         "expires_at": expires_at,
@@ -174,7 +200,10 @@ def _write_cached_kiwoom_token(config: dict, token: str, response_payload: dict,
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = path.with_suffix(path.suffix + ".tmp")
-        tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+        tmp_path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
         try:
             os.chmod(tmp_path, 0o600)
         except Exception:
@@ -236,7 +265,9 @@ def _is_kiwoom_auth_8005_response(payload: dict | None) -> bool:
 
 
 def _refresh_kiwoom_token_after_8005(api_id: str) -> str | None:
-    return get_kiwoom_token_after_auth_failure(api_id=api_id, failed_token=None, reason_prefix="api_8005_retry")
+    return get_kiwoom_token_after_auth_failure(
+        api_id=api_id, failed_token=None, reason_prefix="api_8005_retry"
+    )
 
 
 def get_kiwoom_token_after_auth_failure(
@@ -251,7 +282,7 @@ def get_kiwoom_token_after_auth_failure(
         config = None
         target_path = CONFIG_PATH if CONFIG_PATH.exists() else DEV_PATH
         try:
-            with open(target_path, 'r', encoding='utf-8') as f:
+            with open(target_path, "r", encoding="utf-8") as f:
                 config = json.load(f)
         except Exception:
             config = None
@@ -278,7 +309,9 @@ def get_kiwoom_token_after_auth_failure(
         log_error(f"❌ [{api_id}] 8005 감지 후 Kiwoom token force refresh 예외: {exc}")
         return None
     if refreshed:
-        log_info(f"🔐 [{api_id}] 8005 감지 후 Kiwoom token force refresh 성공 (1회 retry 예정)")
+        log_info(
+            f"🔐 [{api_id}] 8005 감지 후 Kiwoom token force refresh 성공 (1회 retry 예정)"
+        )
     else:
         log_error(f"❌ [{api_id}] 8005 감지 후 Kiwoom token force refresh 실패")
     return refreshed
@@ -302,6 +335,7 @@ def _kiwoom_token_file_lock():
                 if fcntl is not None:
                     fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
 
+
 # ==========================================
 # 1. API 설정 및 공통 유틸리티
 # ==========================================
@@ -311,18 +345,22 @@ def get_kiwoom_base_url():
     config_dev.json 파일의 존재 여부를 파악하여,
     자동으로 모의투자 URL 또는 실투자 URL을 세팅합니다.
     """
-      
+
     # GCP에는 dev_path가 있고, AWS에는 없으므로 알아서 분기됩니다!
     target_path = CONFIG_PATH if os.path.exists(CONFIG_PATH) else DEV_PATH
-    
+
     try:
-        with open(target_path, 'r', encoding='utf-8') as f:
+        with open(target_path, "r", encoding="utf-8") as f:
             conf = json.load(f)
             # config에 명시된 URL이 있으면 가져오고, 없으면 실투자 URL을 기본값으로 씁니다.
             base_url = conf.get("KIWOOM_BASE_URL", "https://api.kiwoom.com")
             # 최초 1회 로드 시 터미널에 현재 모드를 명확히 출력해줍니다.
             # target_path가 문자열이어도 에러가 나지 않도록 형변환 후 처리
-            mode_str = "🧪 [MOCK/DEV]" if "dev" in str(target_path).lower() else "🚀 [PROD/REAL]"
+            mode_str = (
+                "🧪 [MOCK/DEV]"
+                if "dev" in str(target_path).lower()
+                else "🚀 [PROD/REAL]"
+            )
             print(f"⚙️ Kiwoom API 스위치 온: {mode_str} 목적지 -> {base_url}")
             return base_url
     except Exception as e:
@@ -330,8 +368,10 @@ def get_kiwoom_base_url():
         print(f"⚠️ 설정 로드 실패. 실투자 기본 URL로 폴백합니다: {e}")
         return "https://api.kiwoom.com"
 
+
 # 전역 변수로 세팅해두어 함수 호출 때마다 파일을 읽지 않도록 최적화합니다.
 KIWOOM_BASE_URL = get_kiwoom_base_url()
+
 
 def get_api_url(endpoint):
     """엔드포인트를 받아 최종 목적지 URL을 조립합니다."""
@@ -351,9 +391,9 @@ def _split_kiwoom_market_suffix(code: str) -> tuple[str, str]:
 def normalize_stock_code(code: str) -> str:
     """종목코드를 6자리 기준으로 정규화합니다. (_AL/_NX, A-prefix 허용)"""
     raw, _suffix = _split_kiwoom_market_suffix(code)
-    if raw.startswith('A') and len(raw) >= 7:
+    if raw.startswith("A") and len(raw) >= 7:
         raw = raw[1:]
-    digits = ''.join(ch for ch in raw if ch.isdigit())
+    digits = "".join(ch for ch in raw if ch.isdigit())
     return digits[-6:].zfill(6) if digits else raw
 
 
@@ -372,6 +412,7 @@ def get_effective_kiwoom_code(code: str, db=None, is_nxt=None) -> str:
         try:
             if db is None:
                 from src.database.db_manager import DBManager
+
                 db = DBManager()
             is_nxt = db.get_latest_is_nxt(normalized)
         except Exception as e:
@@ -380,27 +421,30 @@ def get_effective_kiwoom_code(code: str, db=None, is_nxt=None) -> str:
 
     return f"{normalized}_AL" if bool(is_nxt) else normalized
 
+
 # ==========================================
 # 2. 인증 및 기초 정보 API (Data Fetching Only)
 # ==========================================
 def _request_new_kiwoom_token(config: dict) -> tuple[str | None, dict]:
     url = get_api_url("/oauth2/token")
 
-    app_key = config.get('KIWOOM_APPKEY')
-    sec_key = config.get('KIWOOM_SECRETKEY')
+    app_key = config.get("KIWOOM_APPKEY")
+    sec_key = config.get("KIWOOM_SECRETKEY")
 
     if not app_key or not sec_key:
         log_error("❌ APP_KEY 또는 SECRET_KEY가 설정 파일에 없습니다.")
         return None, {}
-    masked_key = f"{str(app_key)[:4]}...{str(app_key)[-4:]}" if len(str(app_key)) >= 8 else "***"
+    masked_key = (
+        f"{str(app_key)[:4]}...{str(app_key)[-4:]}" if len(str(app_key)) >= 8 else "***"
+    )
     log_info(f"🔐 [TOKEN] app_key 확인: {masked_key}")
 
     params = {
-        'grant_type': 'client_credentials',
-        'appkey': app_key,
-        'secretkey': sec_key,
+        "grant_type": "client_credentials",
+        "appkey": app_key,
+        "secretkey": sec_key,
     }
-    headers = {'Content-Type': 'application/json;charset=UTF-8'}
+    headers = {"Content-Type": "application/json;charset=UTF-8"}
 
     try:
         res = requests.post(url, headers=headers, json=params, timeout=5)
@@ -408,7 +452,7 @@ def _request_new_kiwoom_token(config: dict) -> tuple[str | None, dict]:
         log_info(f"🔐 [TOKEN] 응답 코드: {res.status_code}")
         if res.status_code == 200:
             payload = res.json() or {}
-            token = payload.get('access_token') or payload.get('token')
+            token = payload.get("access_token") or payload.get("token")
             if token:
                 log_info(f"🔐 [TOKEN] 발급 성공 (len={len(str(token))})")
                 return str(token), payload
@@ -437,7 +481,7 @@ def get_kiwoom_token(config=None, *, force_refresh=False, use_cache=True):
         target_path = CONFIG_PATH if CONFIG_PATH.exists() else DEV_PATH
         log_info(f"🔐 [TOKEN] config 로드 경로: {target_path}")
         try:
-            with open(target_path, 'r', encoding='utf-8') as f:
+            with open(target_path, "r", encoding="utf-8") as f:
                 config = json.load(f)
         except Exception as e:
             log_error(f"❌ 토큰 발급용 설정 로드 실패: {e}")
@@ -453,7 +497,9 @@ def get_kiwoom_token(config=None, *, force_refresh=False, use_cache=True):
             return cached
 
     if force_refresh:
-        log_info("🔐 [TOKEN] force_refresh=True: 공유 캐시를 우회하고 새 발급을 시도합니다.")
+        log_info(
+            "🔐 [TOKEN] force_refresh=True: 공유 캐시를 우회하고 새 발급을 시도합니다."
+        )
 
     with _kiwoom_token_file_lock():
         if use_cache and not force_refresh:
@@ -466,16 +512,17 @@ def get_kiwoom_token(config=None, *, force_refresh=False, use_cache=True):
             _write_cached_kiwoom_token(config, token, payload)
         return token
 
+
 def get_account_balance_kt00005(token):
     """
     [kt00005] 체결잔고요청 (SOR 통합 버전)
     KRX 데이터를 우선 적재하고, NXT 데이터 중 중복되는 종목코드는 무시(방어)하여 반환합니다.
     """
-    url = get_api_url("/api/dostk/acnt") 
-    
+    url = get_api_url("/api/dostk/acnt")
+
     # 💡 KRX를 먼저 조회하고 NXT를 나중에 조회하도록 순서 고정
     target_exchanges = ["KRX", "NXT"]
-    
+
     # 종목코드를 Key로 하여 중복을 제거할 딕셔너리
     aggregated_balances = {}
     successful_exchanges = set()
@@ -484,11 +531,7 @@ def get_account_balance_kt00005(token):
         payload = {"dmst_stex_tp": ex}
 
         results = fetch_kiwoom_api_continuous(
-            url=url,
-            token=token,
-            api_id='kt00005',
-            payload=payload,
-            use_continuous=True
+            url=url, token=token, api_id="kt00005", payload=payload, use_continuous=True
         )
 
         if not results:
@@ -497,8 +540,8 @@ def get_account_balance_kt00005(token):
         exchange_success = False
 
         for res in results:
-            rt_code = str(res.get('return_code', res.get('rt_cd', '0')))
-            if rt_code != '0':
+            rt_code = str(res.get("return_code", res.get("rt_cd", "0")))
+            if rt_code != "0":
                 log_info(
                     f"⚠️ [kt00005] {ex} 잔고 응답 거절: "
                     f"{res.get('return_msg', res.get('msg1', '알 수 없는 에러'))}"
@@ -506,46 +549,53 @@ def get_account_balance_kt00005(token):
                 continue
 
             exchange_success = True
-            data_list = res.get('stk_cntr_remn', [])
+            data_list = res.get("stk_cntr_remn", [])
 
             for item in data_list:
+
                 def to_i(v):
-                    if not v: return 0
+                    if not v:
+                        return 0
                     try:
-                        clean_v = str(v).replace(',', '').replace('+', '').strip()
+                        clean_v = str(v).replace(",", "").replace("+", "").strip()
                         return int(float(clean_v))
                     except (ValueError, TypeError):
                         return 0
 
                 def to_f(v):
-                    if not v: return 0.0
+                    if not v:
+                        return 0.0
                     try:
-                        clean_v = str(v).replace(',', '').replace('+', '').strip()
+                        clean_v = str(v).replace(",", "").replace("+", "").strip()
                         return float(clean_v)
                     except (ValueError, TypeError):
                         return 0.0
 
-                cur_qty = to_i(item.get('cur_qty'))
-                
+                cur_qty = to_i(item.get("cur_qty"))
+
                 if cur_qty > 0:
-                    raw_code = str(item.get('stk_cd', '')).strip()
-                    clean_code = raw_code.replace('A', '') if raw_code.startswith('A') else raw_code
-                    
+                    raw_code = str(item.get("stk_cd", "")).strip()
+                    clean_code = (
+                        raw_code.replace("A", "")
+                        if raw_code.startswith("A")
+                        else raw_code
+                    )
+
                     # 💡 [핵심] KRX가 먼저 등록되므로, 딕셔너리에 없는 경우에만 신규 등록 (NXT 중복 방어)
                     if clean_code not in aggregated_balances:
                         aggregated_balances[clean_code] = {
-                            'code': clean_code,
-                            'name': str(item.get('stk_nm', '')).strip(),
-                            'qty': cur_qty,
-                            'buy_price': to_i(item.get('buy_uv')),
-                            'current_price': to_i(item.get('cur_prc')),
-                            'eval_profit': to_i(item.get('evltv_prft')),
-                            'profit_rate': to_f(item.get('pl_rt'))
+                            "code": clean_code,
+                            "name": str(item.get("stk_nm", "")).strip(),
+                            "qty": cur_qty,
+                            "buy_price": to_i(item.get("buy_uv")),
+                            "current_price": to_i(item.get("cur_prc")),
+                            "eval_profit": to_i(item.get("evltv_prft")),
+                            "profit_rate": to_f(item.get("pl_rt")),
                         }
 
         if exchange_success:
             successful_exchanges.add(ex)
-                        
+
     # 딕셔너리의 Value들만 뽑아서 리스트 형태로 반환
     return list(aggregated_balances.values()), successful_exchanges
 
@@ -584,7 +634,9 @@ def get_account_execution_snapshot_kt00008(token):
         rows = res.get("acnt_nxdy_setl_frcs_prps_array", []) or []
         for item in rows:
             raw_code = str(item.get("stk_cd", "")).strip()
-            clean_code = raw_code.replace("A", "") if raw_code.startswith("A") else raw_code
+            clean_code = (
+                raw_code.replace("A", "") if raw_code.startswith("A") else raw_code
+            )
             snapshot.append(
                 {
                     "trade_date": trade_date,
@@ -631,7 +683,9 @@ def get_orderable_by_margin_kt00011(token, code, unit_price=None, is_nxt=None):
     rt_code = int(data.get("return_code", data.get("rt_cd", 0)) or 0)
     if rt_code != 0:
         return {
-            "error": str(data.get("return_msg") or data.get("err_msg") or "kt00011 조회 실패"),
+            "error": str(
+                data.get("return_msg") or data.get("err_msg") or "kt00011 조회 실패"
+            ),
             "return_code": rt_code,
             "raw": data,
         }
@@ -726,17 +780,18 @@ def _normalize_order_history_rows(*, results, source_api):
     normalized = []
     for res in results or []:
         trade_date = str(
-            res.get("trde_dt")
-            or res.get("ord_dt")
-            or res.get("dt")
-            or ""
+            res.get("trde_dt") or res.get("ord_dt") or res.get("dt") or ""
         ).strip()
         rows = _extract_order_rows(res)
         for item in rows:
-            code = normalize_stock_code(_pick_first(item, ("stk_cd", "code", "isu_no", "item_cd")))
+            code = normalize_stock_code(
+                _pick_first(item, ("stk_cd", "code", "isu_no", "item_cd"))
+            )
             if not code:
                 continue
-            ord_no = str(_pick_first(item, ("ord_no", "odno", "order_no", "org_ord_no"))).strip()
+            ord_no = str(
+                _pick_first(item, ("ord_no", "odno", "order_no", "org_ord_no"))
+            ).strip()
             orig_ord_no = str(
                 _pick_first(
                     item,
@@ -750,7 +805,10 @@ def _normalize_order_history_rows(*, results, source_api):
                 )
             ).strip()
             qty = _to_int_safe(
-                _pick_first(item, ("qty", "ord_qty", "cntr_qty", "exct_qty", "cnfm_qty", "oso_qty"))
+                _pick_first(
+                    item,
+                    ("qty", "ord_qty", "cntr_qty", "exct_qty", "cnfm_qty", "oso_qty"),
+                )
             )
             unit_price = _to_int_safe(
                 _pick_first(
@@ -785,17 +843,29 @@ def _normalize_order_history_rows(*, results, source_api):
                     "source_api": source_api,
                     "trade_date": trade_date,
                     "code": code,
-                    "name": str(_pick_first(item, ("stk_nm", "name", "hts_kor_isnm"))).strip(),
+                    "name": str(
+                        _pick_first(item, ("stk_nm", "name", "hts_kor_isnm"))
+                    ).strip(),
                     "side": side,
                     "qty": qty,
-                    "remaining_qty": _to_int_safe(_pick_first(item, ("oso_qty", "osop_qty", "remaining_qty"))),
+                    "remaining_qty": _to_int_safe(
+                        _pick_first(item, ("oso_qty", "osop_qty", "remaining_qty"))
+                    ),
                     "unit_price": unit_price,
                     "ord_no": ord_no,
                     "orig_ord_no": orig_ord_no,
-                    "stex_tp": str(_pick_first(item, ("stex_tp", "dmst_stex_tp"))).strip(),
-                    "stex_tp_txt": str(_pick_first(item, ("stex_tp_txt", "dmst_stex_tp_txt"))).strip(),
-                    "sor_yn": str(_pick_first(item, ("sor_yn", "sorYn", "sor"))).strip(),
-                    "seq": str(_pick_first(item, ("seq", "odno_dseq", "ord_seq"))).strip(),
+                    "stex_tp": str(
+                        _pick_first(item, ("stex_tp", "dmst_stex_tp"))
+                    ).strip(),
+                    "stex_tp_txt": str(
+                        _pick_first(item, ("stex_tp_txt", "dmst_stex_tp_txt"))
+                    ).strip(),
+                    "sor_yn": str(
+                        _pick_first(item, ("sor_yn", "sorYn", "sor"))
+                    ).strip(),
+                    "seq": str(
+                        _pick_first(item, ("seq", "odno_dseq", "ord_seq"))
+                    ).strip(),
                     "raw": item,
                 }
             )
@@ -911,7 +981,9 @@ def get_unfilled_order_snapshot_ka10075(
     return _normalize_order_history_rows(results=results, source_api="ka10075")
 
 
-def get_order_reference_snapshot_2nd_pass(token, *, qry_tp="0", stk_bond_tp="0", sell_tp="0"):
+def get_order_reference_snapshot_2nd_pass(
+    token, *, qry_tp="0", stk_bond_tp="0", sell_tp="0"
+):
     """
     `kt00007 + ka10076`를 함께 조회해 원주문번호 대조용 스냅샷을 생성합니다.
     """
@@ -953,7 +1025,9 @@ def get_order_reference_snapshot_2nd_pass(token, *, qry_tp="0", stk_bond_tp="0",
     return list(dedup.values())
 
 
-def find_order_reference_match(order_rows, *, code, side, qty, unit_price, max_price_diff=1):
+def find_order_reference_match(
+    order_rows, *, code, side, qty, unit_price, max_price_diff=1
+):
     """
     주문참조 스냅샷에서 종목/매매구분/수량/체결단가 기준으로 일치 항목을 찾습니다.
     """
@@ -970,10 +1044,15 @@ def find_order_reference_match(order_rows, *, code, side, qty, unit_price, max_p
         if _to_int_safe(row.get("qty")) != target_qty:
             continue
         row_price = _to_int_safe(row.get("unit_price"))
-        if target_price > 0 and row_price > 0 and abs(row_price - target_price) > int(max_price_diff):
+        if (
+            target_price > 0
+            and row_price > 0
+            and abs(row_price - target_price) > int(max_price_diff)
+        ):
             continue
         return row
     return None
+
 
 def get_industry_list_ka10101(token, market_type="0"):
     """
@@ -986,11 +1065,7 @@ def get_industry_list_ka10101(token, market_type="0"):
 
     # 💡 [핵심] 공통 래퍼 함수 적용 (1회성 조회이므로 use_continuous=False)
     results = fetch_kiwoom_api_continuous(
-        url=url, 
-        token=token, 
-        api_id='ka10101', 
-        payload=payload, 
-        use_continuous=False
+        url=url, token=token, api_id="ka10101", payload=payload, use_continuous=False
     )
 
     # 응답이 실패하여 빈 리스트가 넘어온 경우
@@ -998,7 +1073,7 @@ def get_industry_list_ka10101(token, market_type="0"):
         return []
 
     # 💡 래퍼 함수는 모든 응답을 리스트(all_results)에 담아서 반환합니다.
-    # 명세서상 ka10101의 JSON 응답 자체가 배열(List) 형태이므로, 
+    # 명세서상 ka10101의 JSON 응답 자체가 배열(List) 형태이므로,
     # 첫 번째 응답 덩어리인 results[0]을 그대로 반환하면 기존 로직과 100% 호환됩니다.
     return results[0]
 
@@ -1069,11 +1144,7 @@ def get_nxt_enabled_codes_ka10099(token, mrkt_tps=("0", "10")) -> set[str]:
     for mrkt_tp in requested_markets:
         payload = {"mrkt_tp": mrkt_tp}
         results = fetch_kiwoom_api_continuous(
-            url=url,
-            token=token,
-            api_id='ka10099',
-            payload=payload,
-            use_continuous=True
+            url=url, token=token, api_id="ka10099", payload=payload, use_continuous=True
         )
 
         if not results:
@@ -1084,22 +1155,26 @@ def get_nxt_enabled_codes_ka10099(token, mrkt_tps=("0", "10")) -> set[str]:
         market_nxt = 0
 
         for res in results:
-            for item in res.get('list', []) or []:
-                code = normalize_stock_code(item.get('code'))
+            for item in res.get("list", []) or []:
+                code = normalize_stock_code(item.get("code"))
                 if not code or not code.isdigit() or len(code) != 6:
                     continue
 
                 market_total += 1
-                if str(item.get('nxtEnable', '')).strip().upper() == 'Y':
+                if str(item.get("nxtEnable", "")).strip().upper() == "Y":
                     nxt_codes.add(code)
                     market_nxt += 1
 
-        print(f"ℹ️ [ka10099] 시장구분 {mrkt_tp}: 전체 {market_total}건 / NXT 가능 {market_nxt}건")
+        print(
+            f"ℹ️ [ka10099] 시장구분 {mrkt_tp}: 전체 {market_total}건 / NXT 가능 {market_nxt}건"
+        )
 
     return nxt_codes
 
 
-def get_nxt_flag_map_ka10099(token, target_codes=None, mrkt_tps=("0", "10")) -> dict[str, bool]:
+def get_nxt_flag_map_ka10099(
+    token, target_codes=None, mrkt_tps=("0", "10")
+) -> dict[str, bool]:
     """
     [ka10099] 기반으로 종목코드별 is_nxt 플래그 맵을 생성합니다.
     - target_codes가 주어지면 해당 종목들만 {code: bool} 형태로 반환
@@ -1110,28 +1185,32 @@ def get_nxt_flag_map_ka10099(token, target_codes=None, mrkt_tps=("0", "10")) -> 
     if target_codes is None:
         return {code: True for code in sorted(nxt_enabled_codes)}
 
-    normalized = sorted({normalize_stock_code(code) for code in (target_codes or []) if code})
+    normalized = sorted(
+        {normalize_stock_code(code) for code in (target_codes or []) if code}
+    )
     return {code: (code in nxt_enabled_codes) for code in normalized}
 
 
 def get_basic_info_ka10001(token, code):
     """[ka10001] 주식기본정보요청 (1회성 조회)"""
     url = get_api_url("/api/dostk/stkinfo")
-    payload = {'stk_cd': code}
-    
+    payload = {"stk_cd": code}
+
     # 공통 함수 호출 (연속조회 안함)
-    results = fetch_kiwoom_api_continuous(url, token, 'ka10001', payload, use_continuous=False)
-    
+    results = fetch_kiwoom_api_continuous(
+        url, token, "ka10001", payload, use_continuous=False
+    )
+
     if not results:
-        return {'Name': code, 'Marcap': 0}
-        
-    data = results[0] # 첫 번째 응답값
-    
-    name = data.get('stk_nm', code)
-    raw_mac = data.get('mac', 0)
+        return {"Name": code, "Marcap": 0}
+
+    data = results[0]  # 첫 번째 응답값
+
+    name = data.get("stk_nm", code)
+    raw_mac = data.get("mac", 0)
     marcap = int(raw_mac) if str(raw_mac).strip() != "" else 0
-    
-    return {'Name': name, 'Marcap': marcap}
+
+    return {"Name": name, "Marcap": marcap}
 
 
 def _empty_kiwoom_source_meta(api_id, requested_limit=None):
@@ -1160,7 +1239,11 @@ def _normalize_kiwoom_source_meta(meta, api_id, requested_limit=None):
 
 
 def _detect_sort_direction(rows, key):
-    values = [str((row or {}).get(key) or "").strip() for row in rows or [] if str((row or {}).get(key) or "").strip()]
+    values = [
+        str((row or {}).get(key) or "").strip()
+        for row in rows or []
+        if str((row or {}).get(key) or "").strip()
+    ]
     if len(values) < 2:
         return "single_or_unknown"
     ascending = all(left <= right for left, right in zip(values, values[1:]))
@@ -1204,24 +1287,20 @@ def get_daily_ohlcv_ka10081_df(token, code, end_date=""):
         return cached_df
 
     url = get_api_url("/api/dostk/chart")
-        
-    payload = {
-        "stk_cd": str(code),
-        "base_dt": end_date,
-        "upd_stkpc_tp": "1"
-    }
-    
+
+    payload = {"stk_cd": str(code), "base_dt": end_date, "upd_stkpc_tp": "1"}
+
     max_pages = int(os.getenv("KIWOOM_DAILY_OHLCV_MAX_PAGES", "2") or "2")
     results, source_meta = _fetch_kiwoom_api_continuous_with_meta(
         url=url,
         token=token,
-        api_id='ka10081',
+        api_id="ka10081",
         payload=payload,
         use_continuous=True,
         max_pages=max_pages,
     )
     source_meta = _normalize_kiwoom_source_meta(source_meta, "ka10081")
-    
+
     if not results:
         empty_df = pd.DataFrame()
         empty_df.attrs["kiwoom_source_meta"] = source_meta
@@ -1231,11 +1310,11 @@ def get_daily_ohlcv_ka10081_df(token, code, end_date=""):
             empty_df,
             getattr(TRADING_RULES, "KIWOOM_DAILY_CACHE_TTL_SEC", 30.0),
         )
-        
+
     # 여러 페이지(연속조회)의 응답 리스트를 하나의 DataFrame으로 합침
     all_data = []
     for res in results:
-        output = res.get('stk_dt_pole_chart_qry', [])
+        output = res.get("stk_dt_pole_chart_qry", [])
         all_data.extend(output)
     source_meta.update(
         {
@@ -1243,13 +1322,17 @@ def get_daily_ohlcv_ka10081_df(token, code, end_date=""):
             "received_count": len(all_data),
             "sort_direction_detected": _detect_sort_direction(all_data, "dt"),
             "latest_source_timestamp": max(
-                [str((row or {}).get("dt") or "").strip() for row in all_data if str((row or {}).get("dt") or "").strip()],
+                [
+                    str((row or {}).get("dt") or "").strip()
+                    for row in all_data
+                    if str((row or {}).get("dt") or "").strip()
+                ],
                 default=None,
             ),
             "truncated_window": bool(source_meta.get("continuous_page_limit_reached")),
         }
     )
-        
+
     if not all_data:
         empty_df = pd.DataFrame()
         empty_df.attrs["kiwoom_source_meta"] = source_meta
@@ -1262,22 +1345,26 @@ def get_daily_ohlcv_ka10081_df(token, code, end_date=""):
 
     df = pd.DataFrame(all_data)
 
-    df = df.rename(columns={
-        'dt': 'Date',
-        'open_pric': 'Open',
-        'high_pric': 'High',
-        'low_pric': 'Low',
-        'cur_prc': 'Close',  
-        'trde_qty': 'Volume'
-    })
+    df = df.rename(
+        columns={
+            "dt": "Date",
+            "open_pric": "Open",
+            "high_pric": "High",
+            "low_pric": "Low",
+            "cur_prc": "Close",
+            "trde_qty": "Volume",
+        }
+    )
 
-    df['Date'] = pd.to_datetime(df['Date'], format='%Y%m%d', errors='coerce')
+    df["Date"] = pd.to_datetime(df["Date"], format="%Y%m%d", errors="coerce")
 
-    for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
-        df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', ''), errors='coerce').abs()
+    for col in ["Open", "High", "Low", "Close", "Volume"]:
+        df[col] = pd.to_numeric(
+            df[col].astype(str).str.replace(",", ""), errors="coerce"
+        ).abs()
 
-    df.set_index('Date', inplace=True)
-    
+    df.set_index("Date", inplace=True)
+
     # 가장 오래된 과거(오름차순) 순으로 정렬하여 반환
     df = df.sort_index()
     df.attrs["kiwoom_source_meta"] = source_meta
@@ -1287,6 +1374,7 @@ def get_daily_ohlcv_ka10081_df(token, code, end_date=""):
         df,
         getattr(TRADING_RULES, "KIWOOM_DAILY_CACHE_TTL_SEC", 30.0),
     )
+
 
 def get_item_info_ka10100(token, code):
     """
@@ -1298,18 +1386,15 @@ def get_item_info_ka10100(token, code):
 
     # 💡 [핵심] 1회성 조회를 위해 use_continuous=False 적용
     results = fetch_kiwoom_api_continuous(
-        url=url, 
-        token=token, 
-        api_id='ka10100', 
-        payload=payload, 
-        use_continuous=False
+        url=url, token=token, api_id="ka10100", payload=payload, use_continuous=False
     )
 
     # 💡 정상 응답 시 첫 번째 데이터(원본 JSON 딕셔너리) 그대로 반환
     if results:
         return results[0]
-        
+
     return None
+
 
 def get_index_daily_ka20006(token, inds_cd="001"):
     """
@@ -1318,32 +1403,26 @@ def get_index_daily_ka20006(token, inds_cd="001"):
     """
     url = get_api_url("/api/dostk/chart")
     today_str = datetime.now().strftime("%Y%m%d")
-    payload = {
-        "inds_cd": str(inds_cd),
-        "base_dt": today_str
-    }
+    payload = {"inds_cd": str(inds_cd), "base_dt": today_str}
 
     # 💡 [핵심] 1회성 조회를 위해 use_continuous=False 적용
     results = fetch_kiwoom_api_continuous(
-        url=url, 
-        token=token, 
-        api_id='ka20006', 
-        payload=payload, 
-        use_continuous=False
+        url=url, token=token, api_id="ka20006", payload=payload, use_continuous=False
     )
 
     if results:
         data = results[0]
-        daily_list = data.get('inds_dt_pole_qry', [])
+        daily_list = data.get("inds_dt_pole_qry", [])
 
         # 최소 6일치(오늘 포함 5거래일 전) 데이터가 있어야 RS(상대강도) 등 계산 가능
         if daily_list and len(daily_list) >= 6:
             # 명세서 규칙: 지수 값은 소수점 제거 후 100배 값으로 반환되므로 100.0으로 나눔
-            latest_price = int(daily_list[0].get('cur_prc', 0)) / 100.0
-            before_price = int(daily_list[5].get('cur_prc', 0)) / 100.0
+            latest_price = int(daily_list[0].get("cur_prc", 0)) / 100.0
+            before_price = int(daily_list[5].get("cur_prc", 0)) / 100.0
             return latest_price, before_price
 
     return None, None
+
 
 def get_realtime_hot_stocks_ka00198(token, config=None, as_dict=True):
     """
@@ -1351,42 +1430,53 @@ def get_realtime_hot_stocks_ka00198(token, config=None, as_dict=True):
     - 빅데이터 순위, 순위 변동, 등락율 등 모든 필드 보존
     """
     url = get_api_url("/api/dostk/stkinfo")
-    payload = {'qry_tp': '3'} # 당일 누적 기준
+    payload = {"qry_tp": "3"}  # 당일 누적 기준
 
     results = fetch_kiwoom_api_continuous(
-        url=url, token=token, api_id='ka00198', payload=payload, use_continuous=False
+        url=url, token=token, api_id="ka00198", payload=payload, use_continuous=False
     )
 
     hot_results = []
-    if results and (data := results[0].get('item_inq_rank', [])):
-        def to_i(v): 
-            if not v: return 0
+    if results and (data := results[0].get("item_inq_rank", [])):
+
+        def to_i(v):
+            if not v:
+                return 0
             try:
                 # 콤마와 부호를 제거한 뒤 float으로 먼저 바꾸고 int로 최종 변환
-                clean_v = str(v).replace(',', '').replace('+', '').replace('-', '').strip()
-                return int(float(clean_v)) 
+                clean_v = (
+                    str(v).replace(",", "").replace("+", "").replace("-", "").strip()
+                )
+                return int(float(clean_v))
             except (ValueError, TypeError):
                 return 0
 
         for item in data:
-            stk_cd = str(item.get('stk_cd', ''))[:6]
-            if not stk_cd: continue
-            
+            stk_cd = str(item.get("stk_cd", ""))[:6]
+            if not stk_cd:
+                continue
+
             # 🚀 모든 응답 데이터를 딕셔너리로 패키징
             stock_info = {
-                'code': stk_cd,
-                'name': item.get('stk_nm', ''),
-                'rank': to_i(item.get('bigd_rank')),        # 빅데이터 순위
-                'rank_chg': _scanner_to_signed_int(item.get('rank_chg')),
-                'rank_chg_authority': 'signed_numeric_rank_delta_from_api',
-                'rank_sign': item.get('rank_chg_sign'),     # raw only; official code meaning is unconfirmed
-                'rank_sign_authority': 'raw_unverified_not_decision_input',
-                'price': to_i(item.get('past_curr_prc')),   # 현재가
-                'flu_rate': _scanner_to_signed_float(item.get('base_comp_chgr')), # 기준가 대비 등락율
-                'prev_flu': _scanner_to_signed_float(item.get('prev_base_chgr')), # 직전 대비 등락율
-                'time': item.get('tm', ''),                 # 데이터 시각
+                "code": stk_cd,
+                "name": item.get("stk_nm", ""),
+                "rank": to_i(item.get("bigd_rank")),  # 빅데이터 순위
+                "rank_chg": _scanner_to_signed_int(item.get("rank_chg")),
+                "rank_chg_authority": "signed_numeric_rank_delta_from_api",
+                "rank_sign": item.get(
+                    "rank_chg_sign"
+                ),  # raw only; official code meaning is unconfirmed
+                "rank_sign_authority": "raw_unverified_not_decision_input",
+                "price": to_i(item.get("past_curr_prc")),  # 현재가
+                "flu_rate": _scanner_to_signed_float(
+                    item.get("base_comp_chgr")
+                ),  # 기준가 대비 등락율
+                "prev_flu": _scanner_to_signed_float(
+                    item.get("prev_base_chgr")
+                ),  # 직전 대비 등락율
+                "time": item.get("tm", ""),  # 데이터 시각
             }
-            
+
             if as_dict:
                 hot_results.append(stock_info)
             else:
@@ -1394,65 +1484,66 @@ def get_realtime_hot_stocks_ka00198(token, config=None, as_dict=True):
 
     return hot_results
 
+
 def get_daily_data_ka10005_df(token, code):
     """
     [ka10005] 실전투자 API를 호출하여 FDR과 동일한 형태의 일봉 DataFrame을 반환합니다.
     """
     url = get_api_url("/api/dostk/mrkcond")
-    payload = {'stk_cd': str(code)}
+    payload = {"stk_cd": str(code)}
 
     # 💡 [핵심] 1회성 조회 래퍼 함수 적용
     results = fetch_kiwoom_api_continuous(
-        url=url, 
-        token=token, 
-        api_id='ka10005', 
-        payload=payload, 
-        use_continuous=False
+        url=url, token=token, api_id="ka10005", payload=payload, use_continuous=False
     )
 
     if not results:
         return pd.DataFrame()
 
     market_data = results[0]
-    daily_list = market_data.get('stk_ddwkmm', [])
+    daily_list = market_data.get("stk_ddwkmm", [])
 
     if not daily_list:
         return pd.DataFrame()
 
     # 1. DataFrame 생성 및 컬럼명 변경 (FDR 포맷에 맞춤)
     df = pd.DataFrame(daily_list)
-    df.rename(columns={
-        'date': 'Date',
-        'open_pric': 'Open',
-        'high_pric': 'High',
-        'low_pric': 'Low',
-        'close_pric': 'Close',
-        'trde_qty': 'Volume'
-    }, inplace=True)
+    df.rename(
+        columns={
+            "date": "Date",
+            "open_pric": "Open",
+            "high_pric": "High",
+            "low_pric": "Low",
+            "close_pric": "Close",
+            "trde_qty": "Volume",
+        },
+        inplace=True,
+    )
 
     # 2. 필요한 컬럼만 추출
-    df = df[['Date', 'Open', 'High', 'Low', 'Close', 'Volume']]
+    df = df[["Date", "Open", "High", "Low", "Close", "Volume"]]
 
     # 3. 데이터 정제 (빈 문자열 처리 및 기호 제거)
-    for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
-        df[col] = df[col].replace('', np.nan)
-        df[col] = df[col].astype(str).str.replace(r'[+-]', '', regex=True).astype(float)
+    for col in ["Open", "High", "Low", "Close", "Volume"]:
+        df[col] = df[col].replace("", np.nan)
+        df[col] = df[col].astype(str).str.replace(r"[+-]", "", regex=True).astype(float)
 
     # 4. 날짜 포맷 변경 및 인덱스 설정
-    df['Date'] = pd.to_datetime(df['Date'], format='%Y%m%d')
-    df.set_index('Date', inplace=True)
+    df["Date"] = pd.to_datetime(df["Date"], format="%Y%m%d")
+    df.set_index("Date", inplace=True)
 
     # 5. 시간순 정렬 (과거 -> 최신)
     df.sort_index(ascending=True, inplace=True)
 
     return df
 
+
 def get_investor_daily_ka10059_df(token, code, base_dt=None, is_nxt=None):
     """[ka10059] 수급 데이터 (투신, 연기금, 사모펀드 등 세부 주체 확장)"""
-    
+
     # SOR 일 경우 _AL 코드로 변환
     req_code = get_effective_kiwoom_code(code, is_nxt=is_nxt)
-    
+
     if not base_dt:
         base_dt = datetime.now().strftime("%Y%m%d")
     else:
@@ -1464,18 +1555,29 @@ def get_investor_daily_ka10059_df(token, code, base_dt=None, is_nxt=None):
         return cached_df
 
     url = get_api_url("/api/dostk/stkinfo")
-    payload = {"dt": base_dt, "stk_cd": str(req_code), "amt_qty_tp": "2", "trde_tp": "0", "unit_tp": "1"}
+    payload = {
+        "dt": base_dt,
+        "stk_cd": str(req_code),
+        "amt_qty_tp": "2",
+        "trde_tp": "0",
+        "unit_tp": "1",
+    }
 
     # 💡 [방어막 1] 확장된 컬럼 뼈대
     target_cols = [
-        'Retail_Net', 'Foreign_Net', 'Inst_Net', 
-        'Fin_Net', 'Trust_Net', 'Pension_Net', 'Private_Net'
+        "Retail_Net",
+        "Foreign_Net",
+        "Inst_Net",
+        "Fin_Net",
+        "Trust_Net",
+        "Pension_Net",
+        "Private_Net",
     ]
     empty_df = pd.DataFrame(columns=target_cols)
-    empty_df.index.name = 'Date'
+    empty_df.index.name = "Date"
 
     results = fetch_kiwoom_api_continuous(
-        url=url, token=token, api_id='ka10059', payload=payload, use_continuous=False
+        url=url, token=token, api_id="ka10059", payload=payload, use_continuous=False
     )
 
     if not results:
@@ -1488,7 +1590,7 @@ def get_investor_daily_ka10059_df(token, code, base_dt=None, is_nxt=None):
 
     all_data = []
     for res in results:
-        all_data.extend(res.get('stk_invsr_orgn', []))
+        all_data.extend(res.get("stk_invsr_orgn", []))
 
     if not all_data:
         return _cache_set(
@@ -1499,37 +1601,43 @@ def get_investor_daily_ka10059_df(token, code, base_dt=None, is_nxt=None):
         )
 
     df = pd.DataFrame(all_data)
-    
+
     # 💡 [핵심 교정] 세부 기관 주체 완벽 매핑
-    df.rename(columns={
-        'dt': 'Date', 
-        'ind_invsr': 'Retail_Net', 
-        'frgnr_invsr': 'Foreign_Net', 
-        'orgn': 'Inst_Net',
-        'fnnc_invt': 'Fin_Net',      # 금융투자 (보통 단타 성향)
-        'invtrt': 'Trust_Net',       # 투신 (실적주 주도 세력)
-        'penfnd_etc': 'Pension_Net', # 연기금 (중장기 추세)
-        'samo_fund': 'Private_Net'   # 사모펀드 (작전/급등주 배후)
-    }, inplace=True)
+    df.rename(
+        columns={
+            "dt": "Date",
+            "ind_invsr": "Retail_Net",
+            "frgnr_invsr": "Foreign_Net",
+            "orgn": "Inst_Net",
+            "fnnc_invt": "Fin_Net",  # 금융투자 (보통 단타 성향)
+            "invtrt": "Trust_Net",  # 투신 (실적주 주도 세력)
+            "penfnd_etc": "Pension_Net",  # 연기금 (중장기 추세)
+            "samo_fund": "Private_Net",  # 사모펀드 (작전/급등주 배후)
+        },
+        inplace=True,
+    )
 
     # 누락된 컬럼 0으로 채우기
     for col in target_cols:
         if col not in df.columns:
             df[col] = 0
 
-    df = df[['Date'] + target_cols]
-    
+    df = df[["Date"] + target_cols]
+
     # 문자열 정수로 파싱 (+, 콤마 제거)
     for col in target_cols:
         df[col] = pd.to_numeric(
-            df[col].astype(str).str.replace('+', '', regex=False).str.replace(',', '', regex=False),
-            errors='coerce'
+            df[col]
+            .astype(str)
+            .str.replace("+", "", regex=False)
+            .str.replace(",", "", regex=False),
+            errors="coerce",
         ).fillna(0)
-        
-    df['Date'] = pd.to_datetime(df['Date'], format='%Y%m%d')
-    df.set_index('Date', inplace=True)
-    
-    df = df[~df.index.duplicated(keep='first')]
+
+    df["Date"] = pd.to_datetime(df["Date"], format="%Y%m%d")
+    df.set_index("Date", inplace=True)
+
+    df = df[~df.index.duplicated(keep="first")]
     return _cache_set(
         "ka10059_investor_df",
         cache_key,
@@ -1537,12 +1645,13 @@ def get_investor_daily_ka10059_df(token, code, base_dt=None, is_nxt=None):
         getattr(TRADING_RULES, "KIWOOM_INVESTOR_CACHE_TTL_SEC", 60.0),
     )
 
+
 def get_margin_daily_ka10013_df(token, code, base_dt=None, is_nxt=None):
     """[ka10013] 신용 잔고율 데이터 (공통 래퍼 함수 및 누락 방어 적용)"""
 
     # SOR 일 경우 _AL 코드로 변환
     req_code = get_effective_kiwoom_code(code, is_nxt=is_nxt)
-    
+
     if not base_dt:
         base_dt = datetime.now().strftime("%Y%m%d")
     else:
@@ -1551,16 +1660,12 @@ def get_margin_daily_ka10013_df(token, code, base_dt=None, is_nxt=None):
     url = get_api_url("/api/dostk/stkinfo")
     payload = {"stk_cd": str(req_code), "dt": base_dt, "qry_tp": "1"}
 
-    empty_df = pd.DataFrame(columns=['Margin_Rate'])
-    empty_df.index.name = 'Date'
+    empty_df = pd.DataFrame(columns=["Margin_Rate"])
+    empty_df.index.name = "Date"
 
     # 💡 [핵심] 래퍼 함수 적용 (연속조회 True)
     results = fetch_kiwoom_api_continuous(
-        url=url, 
-        token=token, 
-        api_id='ka10013', 
-        payload=payload, 
-        use_continuous=False
+        url=url, token=token, api_id="ka10013", payload=payload, use_continuous=False
     )
 
     if not results:
@@ -1568,27 +1673,28 @@ def get_margin_daily_ka10013_df(token, code, base_dt=None, is_nxt=None):
 
     all_data = []
     for res in results:
-        all_data.extend(res.get('crd_trde_trend', []))
+        all_data.extend(res.get("crd_trde_trend", []))
 
     if not all_data:
         return empty_df
 
     df = pd.DataFrame(all_data)
-    df.rename(columns={'dt': 'Date', 'remn_rt': 'Margin_Rate'}, inplace=True)
+    df.rename(columns={"dt": "Date", "remn_rt": "Margin_Rate"}, inplace=True)
 
-    if 'Margin_Rate' not in df.columns:
-        df['Margin_Rate'] = 0
+    if "Margin_Rate" not in df.columns:
+        df["Margin_Rate"] = 0
 
-    df = df[['Date', 'Margin_Rate']]
-    df['Margin_Rate'] = pd.to_numeric(
-        df['Margin_Rate'].astype(str).replace('', '0'), errors='coerce'
+    df = df[["Date", "Margin_Rate"]]
+    df["Margin_Rate"] = pd.to_numeric(
+        df["Margin_Rate"].astype(str).replace("", "0"), errors="coerce"
     ).fillna(0)
-    
-    df['Date'] = pd.to_datetime(df['Date'], format='%Y%m%d')
-    df.set_index('Date', inplace=True)
-    
-    df = df[~df.index.duplicated(keep='first')]
+
+    df["Date"] = pd.to_datetime(df["Date"], format="%Y%m%d")
+    df.set_index("Date", inplace=True)
+
+    df = df[~df.index.duplicated(keep="first")]
     return df.sort_index()
+
 
 def get_top_fluctuation_ka10027(token, mrkt_tp="000", trde_qty_cnd=None, limit=50):
     """
@@ -1600,49 +1706,54 @@ def get_top_fluctuation_ka10027(token, mrkt_tp="000", trde_qty_cnd=None, limit=5
     payload = {
         "mrkt_tp": mrkt_tp,
         "sort_tp": "1",
-        "trde_qty_cnd": str(trde_qty_cnd or os.getenv("KORSTOCKSCAN_KA10027_TRDE_QTY_CND", "0000")),
+        "trde_qty_cnd": str(
+            trde_qty_cnd or os.getenv("KORSTOCKSCAN_KA10027_TRDE_QTY_CND", "0000")
+        ),
         "stk_cnd": "0",
         "crd_cnd": "0",
         "updown_incls": "1",
         "pric_cnd": "0",
         "trde_prica_cnd": "0",
-        "stex_tp": "3"
+        "stex_tp": "3",
     }
 
     # 💡 [핵심] 1회성 스캐너 조회 (429 에러 방어 탑재)
     results = fetch_kiwoom_api_continuous(
-        url=url, 
-        token=token, 
-        api_id='ka10027', 
-        payload=payload, 
-        use_continuous=False
+        url=url, token=token, api_id="ka10027", payload=payload, use_continuous=False
     )
 
     cleaned_list = []
-    
+
     if results:
         data = results[0]
-        items = data.get('pred_pre_flu_rt_upper', [])
+        items = data.get("pred_pre_flu_rt_upper", [])
 
         for item in items[:limit]:
-            code = str(item.get('stk_cd', '')).strip()[:6]
-            name = item.get('stk_nm')
+            code = str(item.get("stk_cd", "")).strip()[:6]
+            name = item.get("stk_nm")
 
-            price = _scanner_to_int(item.get('cur_prc'))
-            change_rate = _scanner_to_signed_float(item.get('flu_rt'))
-            volume = _scanner_to_int(item.get('now_trde_qty'))
-            cntr_str = _scanner_to_signed_float(item.get('cntr_str'))
+            price = _scanner_to_int(item.get("cur_prc"))
+            change_rate = _scanner_to_signed_float(item.get("flu_rt"))
+            volume = _scanner_to_int(item.get("now_trde_qty"))
+            cntr_str = _scanner_to_signed_float(item.get("cntr_str"))
 
-            cleaned_list.append({
-                'Code': code, 'Name': name, 'Price': price,
-                'ChangeRate': change_rate,
-                'PreSig': item.get('pred_pre_sig', ''),
-                'PreSigDirection': _pred_pre_signal_direction(item.get('pred_pre_sig')),
-                'Volume': volume,
-                'CntrStr': cntr_str,
-            })
+            cleaned_list.append(
+                {
+                    "Code": code,
+                    "Name": name,
+                    "Price": price,
+                    "ChangeRate": change_rate,
+                    "PreSig": item.get("pred_pre_sig", ""),
+                    "PreSigDirection": _pred_pre_signal_direction(
+                        item.get("pred_pre_sig")
+                    ),
+                    "Volume": volume,
+                    "CntrStr": cntr_str,
+                }
+            )
 
     return cleaned_list
+
 
 def get_top_open_fluctuation_ka10028(token, mrkt_tp="000", trde_qty_cnd=None, limit=50):
     """
@@ -1652,82 +1763,95 @@ def get_top_open_fluctuation_ka10028(token, mrkt_tp="000", trde_qty_cnd=None, li
     """
     url = get_api_url("/api/dostk/stkinfo")
     payload = {
-        "sort_tp": "1",           # 1: 시가 기준
-        "trde_qty_cnd": str(trde_qty_cnd or os.getenv("KORSTOCKSCAN_KA10028_TRDE_QTY_CND", "0000")),
+        "sort_tp": "1",  # 1: 시가 기준
+        "trde_qty_cnd": str(
+            trde_qty_cnd or os.getenv("KORSTOCKSCAN_KA10028_TRDE_QTY_CND", "0000")
+        ),
         "mrkt_tp": mrkt_tp,
-        "updown_incls": "1",      # 상하한가 포함
-        "stk_cnd": "0",           # 0: 전체 (필요시 4: 우선주+관리주 제외 로 변경 추천)
+        "updown_incls": "1",  # 상하한가 포함
+        "stk_cnd": "0",  # 0: 전체 (필요시 4: 우선주+관리주 제외 로 변경 추천)
         "crd_cnd": "0",
         "trde_prica_cnd": "0",
-        "flu_cnd": "1",            # 1: 상위
-        "stex_tp": "3"
+        "flu_cnd": "1",  # 1: 상위
+        "stex_tp": "3",
     }
 
     results = fetch_kiwoom_api_continuous(
-        url=url, token=token, api_id='ka10028', payload=payload, use_continuous=False
+        url=url, token=token, api_id="ka10028", payload=payload, use_continuous=False
     )
 
     cleaned_list = []
-    
-    if results and (data := results[0].get('open_pric_pre_flu_rt', [])):
+
+    if results and (data := results[0].get("open_pric_pre_flu_rt", [])):
         # 💡 [핵심 교정] 소수점이 포함된 문자열도 안전하게 정수로 변환하도록 수정
-        def to_i(v): 
-            if not v: return 0
+        def to_i(v):
+            if not v:
+                return 0
             try:
                 # 콤마와 부호를 제거한 뒤 float으로 먼저 바꾸고 int로 최종 변환
-                clean_v = str(v).replace(',', '').replace('+', '').replace('-', '').strip()
-                return int(float(clean_v)) 
+                clean_v = (
+                    str(v).replace(",", "").replace("+", "").replace("-", "").strip()
+                )
+                return int(float(clean_v))
             except (ValueError, TypeError):
                 return 0
 
-        def to_f(v): 
-            if not v: return 0.0
+        def to_f(v):
+            if not v:
+                return 0.0
             try:
-                return float(str(v).replace(',', '').replace('+', '').strip())
+                return float(str(v).replace(",", "").replace("+", "").strip())
             except (ValueError, TypeError):
                 return 0.0
 
         for item in data[:limit]:
-            code = str(item.get('stk_cd', '')).strip()[:6]
-            if not code: continue
-            name = item.get('stk_nm')
+            code = str(item.get("stk_cd", "")).strip()[:6]
+            if not code:
+                continue
+            name = item.get("stk_nm")
 
             # 가격 데이터 파싱
-            curr_price = to_i(item.get('cur_prc'))
-            open_price = to_i(item.get('open_pric'))
-            high_price = to_i(item.get('high_pric'))
-            low_price = to_i(item.get('low_pric'))
-            
+            curr_price = to_i(item.get("cur_prc"))
+            open_price = to_i(item.get("open_pric"))
+            high_price = to_i(item.get("high_pric"))
+            low_price = to_i(item.get("low_pric"))
+
             # Kiwoom ka10028 exposes open_pric_pre as an open-relative rate.
             # Recompute from price/open for scanner consistency, but preserve the raw rate separately.
             if open_price > 0:
                 open_flu_rate = round(((curr_price - open_price) / open_price) * 100, 2)
             else:
                 open_flu_rate = 0.0
-            open_pre_rate_raw = _scanner_to_signed_float(item.get('open_pric_pre'))
+            open_pre_rate_raw = _scanner_to_signed_float(item.get("open_pric_pre"))
 
             # 🚀 스캐너 호환성을 위해 기존 키(FluRate)에 '시가대비 등락률'을 덮어씌움
-            cleaned_list.append({
-                'Code': code, 
-                'Name': name, 
-                'Price': curr_price,
-                'OpenPrice': open_price,
-                'HighPrice': high_price,
-                'LowPrice': low_price,
-                'OpenFluRate': open_flu_rate,
-                'OpenFluRateRaw': open_pre_rate_raw,
-                'OpenPreRateRaw': open_pre_rate_raw,
-                'FluRate': open_flu_rate,           # 💡 스캐너 병합용 메인 키 (이제 시가대비 상승률로 작동!)
-                'DayFluRate': _scanner_to_signed_float(item.get('flu_rt')), # 전일대비 등락률도 보존
-                'OpenDiff': open_pre_rate_raw, # legacy key: ka10028 open_pric_pre is a percent rate, not a price diff
-                'Volume': to_i(item.get('now_trde_qty')), 
-                'CntrStr': to_f(item.get('cntr_str')),
-                'FluRateMetric': 'open_flu_rate',
-                'FluRateSource': 'OPEN_TOP',
-                'PreSig': item.get('pred_pre_sig', ''),
-                'PreSigDirection': _pred_pre_signal_direction(item.get('pred_pre_sig')),
-                'Source': 'OPEN_TOP_RANK'
-            })
+            cleaned_list.append(
+                {
+                    "Code": code,
+                    "Name": name,
+                    "Price": curr_price,
+                    "OpenPrice": open_price,
+                    "HighPrice": high_price,
+                    "LowPrice": low_price,
+                    "OpenFluRate": open_flu_rate,
+                    "OpenFluRateRaw": open_pre_rate_raw,
+                    "OpenPreRateRaw": open_pre_rate_raw,
+                    "FluRate": open_flu_rate,  # 💡 스캐너 병합용 메인 키 (이제 시가대비 상승률로 작동!)
+                    "DayFluRate": _scanner_to_signed_float(
+                        item.get("flu_rt")
+                    ),  # 전일대비 등락률도 보존
+                    "OpenDiff": open_pre_rate_raw,  # legacy key: ka10028 open_pric_pre is a percent rate, not a price diff
+                    "Volume": to_i(item.get("now_trde_qty")),
+                    "CntrStr": to_f(item.get("cntr_str")),
+                    "FluRateMetric": "open_flu_rate",
+                    "FluRateSource": "OPEN_TOP",
+                    "PreSig": item.get("pred_pre_sig", ""),
+                    "PreSigDirection": _pred_pre_signal_direction(
+                        item.get("pred_pre_sig")
+                    ),
+                    "Source": "OPEN_TOP_RANK",
+                }
+            )
 
     return cleaned_list
 
@@ -1736,7 +1860,7 @@ def _scanner_to_int(v, default=0):
     if v in (None, ""):
         return default
     try:
-        clean_v = str(v).replace(',', '').replace('+', '').replace('-', '').strip()
+        clean_v = str(v).replace(",", "").replace("+", "").replace("-", "").strip()
         if not clean_v:
             return default
         return int(float(clean_v))
@@ -1748,7 +1872,7 @@ def _scanner_to_signed_int(v, default=0):
     if v in (None, ""):
         return default
     try:
-        clean_v = str(v).replace(',', '').replace('+', '').strip()
+        clean_v = str(v).replace(",", "").replace("+", "").strip()
         if not clean_v or clean_v == "-":
             return default
         return int(float(clean_v))
@@ -1760,7 +1884,7 @@ def _scanner_to_float(v, default=0.0):
     if v in (None, ""):
         return default
     try:
-        return float(str(v).replace(',', '').replace('+', '').strip())
+        return float(str(v).replace(",", "").replace("+", "").strip())
     except (ValueError, TypeError):
         return default
 
@@ -1837,7 +1961,11 @@ def get_realtime_item_rank_ka00198(token, qry_tp="5", limit=60):
 
     try:
         results = fetch_kiwoom_api_continuous(
-            url=url, token=token, api_id='ka00198', payload=payload, use_continuous=False
+            url=url,
+            token=token,
+            api_id="ka00198",
+            payload=payload,
+            use_continuous=False,
         )
     except Exception as e:
         log_info(f"⚠️ [ka00198] 실시간종목조회순위 조회 실패: {e}")
@@ -1846,29 +1974,35 @@ def get_realtime_item_rank_ka00198(token, qry_tp="5", limit=60):
     cleaned_list = []
     items = _extract_rank_items(results, ("item_inq_rank", "data"))
     for item in items[:limit]:
-        code = normalize_stock_code(item.get('stk_cd', item.get('code', '')))
+        code = normalize_stock_code(item.get("stk_cd", item.get("code", "")))
         if not code:
             continue
-        base_change = _scanner_to_signed_float(item.get('base_comp_chgr', item.get('flu_rt')))
-        prev_change = _scanner_to_signed_float(item.get('prev_base_chgr'))
-        rank_change = _scanner_to_signed_int(item.get('rank_chg'))
-        rank_change_sign = str(item.get('rank_chg_sign') or '').strip()
+        base_change = _scanner_to_signed_float(
+            item.get("base_comp_chgr", item.get("flu_rt"))
+        )
+        prev_change = _scanner_to_signed_float(item.get("prev_base_chgr"))
+        rank_change = _scanner_to_signed_int(item.get("rank_chg"))
+        rank_change_sign = str(item.get("rank_chg_sign") or "").strip()
         sign_diagnostics = rank_change_sign_diagnostics(rank_change_sign, rank_change)
-        cleaned_list.append({
-            'Code': code,
-            'Name': item.get('stk_nm', item.get('name', '')),
-            'Price': _scanner_to_int(item.get('past_curr_prc', item.get('cur_prc', item.get('price')))),
-            'FluRate': base_change,
-            'RealtimeRankFluRate': base_change,
-            'RealtimePrevBaseChange': prev_change,
-            'RankNow': _scanner_to_int(item.get('bigd_rank', item.get('rank'))),
-            'RankChange': rank_change,
-            'RankChangeSign': rank_change_sign,
-            'RankChangeSignAuthority': 'raw_unverified_not_decision_input',
-            **sign_diagnostics,
-            'RealtimeRankWindow': str(qry_tp),
-            'Source': 'REALTIME_RANK_START',
-        })
+        cleaned_list.append(
+            {
+                "Code": code,
+                "Name": item.get("stk_nm", item.get("name", "")),
+                "Price": _scanner_to_int(
+                    item.get("past_curr_prc", item.get("cur_prc", item.get("price")))
+                ),
+                "FluRate": base_change,
+                "RealtimeRankFluRate": base_change,
+                "RealtimePrevBaseChange": prev_change,
+                "RankNow": _scanner_to_int(item.get("bigd_rank", item.get("rank"))),
+                "RankChange": rank_change,
+                "RankChangeSign": rank_change_sign,
+                "RankChangeSignAuthority": "raw_unverified_not_decision_input",
+                **sign_diagnostics,
+                "RealtimeRankWindow": str(qry_tp),
+                "Source": "REALTIME_RANK_START",
+            }
+        )
     return cleaned_list
 
 
@@ -1883,7 +2017,9 @@ def get_price_jump_ka10019(token, mrkt_tp="000", minutes=3, limit=60, trde_qty_t
         "flu_tp": "1",
         "tm_tp": "1",
         "tm": str(minutes),
-        "trde_qty_tp": str(trde_qty_tp or os.getenv("KORSTOCKSCAN_KA10019_TRDE_QTY_TP", "00000")),
+        "trde_qty_tp": str(
+            trde_qty_tp or os.getenv("KORSTOCKSCAN_KA10019_TRDE_QTY_TP", "00000")
+        ),
         "stk_cnd": "4",
         "crd_cnd": "0",
         "pric_cnd": "0",
@@ -1893,7 +2029,11 @@ def get_price_jump_ka10019(token, mrkt_tp="000", minutes=3, limit=60, trde_qty_t
 
     try:
         results = fetch_kiwoom_api_continuous(
-            url=url, token=token, api_id='ka10019', payload=payload, use_continuous=False
+            url=url,
+            token=token,
+            api_id="ka10019",
+            payload=payload,
+            use_continuous=False,
         )
     except Exception as e:
         log_info(f"⚠️ [ka10019] 가격급등락 조회 실패: {e}")
@@ -1902,24 +2042,30 @@ def get_price_jump_ka10019(token, mrkt_tp="000", minutes=3, limit=60, trde_qty_t
     cleaned_list = []
     items = _extract_rank_items(results, ("pric_jmpflu", "data"))
     for item in items[:limit]:
-        code = normalize_stock_code(item.get('stk_cd', item.get('code', '')))
+        code = normalize_stock_code(item.get("stk_cd", item.get("code", "")))
         if not code:
             continue
-        cleaned_list.append({
-            'Code': code,
-            'Name': item.get('stk_nm', item.get('name', '')),
-            'Price': _scanner_to_int(item.get('cur_prc', item.get('price'))),
-            'FluRate': _scanner_to_signed_float(item.get('flu_rt', item.get('change_rate'))),
-            'JumpRate': _scanner_to_signed_float(item.get('jmp_rt')),
-            'TradeQty': _scanner_to_int(item.get('trde_qty')),
-            'PreSig': item.get('pred_pre_sig', ''),
-            'PreSigDirection': _pred_pre_signal_direction(item.get('pred_pre_sig')),
-            'Source': 'PRICE_JUMP_START',
-        })
+        cleaned_list.append(
+            {
+                "Code": code,
+                "Name": item.get("stk_nm", item.get("name", "")),
+                "Price": _scanner_to_int(item.get("cur_prc", item.get("price"))),
+                "FluRate": _scanner_to_signed_float(
+                    item.get("flu_rt", item.get("change_rate"))
+                ),
+                "JumpRate": _scanner_to_signed_float(item.get("jmp_rt")),
+                "TradeQty": _scanner_to_int(item.get("trde_qty")),
+                "PreSig": item.get("pred_pre_sig", ""),
+                "PreSigDirection": _pred_pre_signal_direction(item.get("pred_pre_sig")),
+                "Source": "PRICE_JUMP_START",
+            }
+        )
     return cleaned_list
 
 
-def get_high_price_proximity_ka10018(token, mrkt_tp="000", proximity="10", limit=60, trde_qty_tp=None):
+def get_high_price_proximity_ka10018(
+    token, mrkt_tp="000", proximity="10", limit=60, trde_qty_tp=None
+):
     """
     [ka10018] 고저가근접.
     Scanner enrichment only: returns symbols near the intraday high.
@@ -1929,7 +2075,9 @@ def get_high_price_proximity_ka10018(token, mrkt_tp="000", proximity="10", limit
         "high_low_tp": "1",
         "alacc_rt": str(proximity or "10"),
         "mrkt_tp": mrkt_tp,
-        "trde_qty_tp": str(trde_qty_tp or os.getenv("KORSTOCKSCAN_KA10018_TRDE_QTY_TP", "00000")),
+        "trde_qty_tp": str(
+            trde_qty_tp or os.getenv("KORSTOCKSCAN_KA10018_TRDE_QTY_TP", "00000")
+        ),
         "stk_cnd": "1",
         "crd_cnd": "0",
         "stex_tp": "3",
@@ -1937,7 +2085,11 @@ def get_high_price_proximity_ka10018(token, mrkt_tp="000", proximity="10", limit
 
     try:
         results = fetch_kiwoom_api_continuous(
-            url=url, token=token, api_id='ka10018', payload=payload, use_continuous=False
+            url=url,
+            token=token,
+            api_id="ka10018",
+            payload=payload,
+            use_continuous=False,
         )
     except Exception as e:
         log_info(f"⚠️ [ka10018] 고가근접 조회 실패: {e}")
@@ -1946,33 +2098,39 @@ def get_high_price_proximity_ka10018(token, mrkt_tp="000", proximity="10", limit
     cleaned_list = []
     items = _extract_rank_items(results, ("high_low_pric_alacc", "data"))
     for item in items[:limit]:
-        code = normalize_stock_code(item.get('stk_cd', item.get('code', '')))
+        code = normalize_stock_code(item.get("stk_cd", item.get("code", "")))
         if not code:
             continue
-        current_price = _scanner_to_int(item.get('cur_prc', item.get('price')))
-        today_high = _scanner_to_int(item.get('tdy_high_pric'))
+        current_price = _scanner_to_int(item.get("cur_prc", item.get("price")))
+        today_high = _scanner_to_int(item.get("tdy_high_pric"))
         distance_pct = 0.0
         if current_price > 0 and today_high > 0:
             distance_pct = round(((current_price - today_high) / today_high) * 100.0, 4)
-        cleaned_list.append({
-            'Code': code,
-            'Name': item.get('stk_nm', item.get('name', '')),
-            'Price': current_price,
-            'FluRate': _scanner_to_signed_float(item.get('flu_rt', item.get('change_rate'))),
-            'TradeQty': _scanner_to_int(item.get('trde_qty')),
-            'AskPrice': _scanner_to_int(item.get('sel_bid')),
-            'BidPrice': _scanner_to_int(item.get('buy_bid')),
-            'TodayHighPrice': today_high,
-            'TodayLowPrice': _scanner_to_int(item.get('tdy_low_pric')),
-            'HighProximityDistancePct': distance_pct,
-            'PreSig': item.get('pred_pre_sig', ''),
-            'PreSigDirection': _pred_pre_signal_direction(item.get('pred_pre_sig')),
-            'Source': 'HIGH_PROXIMITY_CONFIRMATION',
-        })
+        cleaned_list.append(
+            {
+                "Code": code,
+                "Name": item.get("stk_nm", item.get("name", "")),
+                "Price": current_price,
+                "FluRate": _scanner_to_signed_float(
+                    item.get("flu_rt", item.get("change_rate"))
+                ),
+                "TradeQty": _scanner_to_int(item.get("trde_qty")),
+                "AskPrice": _scanner_to_int(item.get("sel_bid")),
+                "BidPrice": _scanner_to_int(item.get("buy_bid")),
+                "TodayHighPrice": today_high,
+                "TodayLowPrice": _scanner_to_int(item.get("tdy_low_pric")),
+                "HighProximityDistancePct": distance_pct,
+                "PreSig": item.get("pred_pre_sig", ""),
+                "PreSigDirection": _pred_pre_signal_direction(item.get("pred_pre_sig")),
+                "Source": "HIGH_PROXIMITY_CONFIRMATION",
+            }
+        )
     return cleaned_list
 
 
-def get_new_high_ka10016(token, mrkt_tp="000", period_days=20, limit=60, trde_qty_tp=None):
+def get_new_high_ka10016(
+    token, mrkt_tp="000", period_days=20, limit=60, trde_qty_tp=None
+):
     """
     [ka10016] 신고저가.
     Scanner enrichment only: returns new-high confirmation rows.
@@ -1983,7 +2141,9 @@ def get_new_high_ka10016(token, mrkt_tp="000", period_days=20, limit=60, trde_qt
         "ntl_tp": "1",
         "high_low_close_tp": "1",
         "stk_cnd": "1",
-        "trde_qty_tp": str(trde_qty_tp or os.getenv("KORSTOCKSCAN_KA10016_TRDE_QTY_TP", "00000")),
+        "trde_qty_tp": str(
+            trde_qty_tp or os.getenv("KORSTOCKSCAN_KA10016_TRDE_QTY_TP", "00000")
+        ),
         "crd_cnd": "0",
         "updown_incls": "0",
         "dt": str(period_days or 20),
@@ -1992,7 +2152,11 @@ def get_new_high_ka10016(token, mrkt_tp="000", period_days=20, limit=60, trde_qt
 
     try:
         results = fetch_kiwoom_api_continuous(
-            url=url, token=token, api_id='ka10016', payload=payload, use_continuous=False
+            url=url,
+            token=token,
+            api_id="ka10016",
+            payload=payload,
+            use_continuous=False,
         )
     except Exception as e:
         log_info(f"⚠️ [ka10016] 신고가 조회 실패: {e}")
@@ -2001,25 +2165,31 @@ def get_new_high_ka10016(token, mrkt_tp="000", period_days=20, limit=60, trde_qt
     cleaned_list = []
     items = _extract_rank_items(results, ("ntl_pric", "data"))
     for item in items[:limit]:
-        code = normalize_stock_code(item.get('stk_cd', item.get('code', '')))
+        code = normalize_stock_code(item.get("stk_cd", item.get("code", "")))
         if not code:
             continue
-        cleaned_list.append({
-            'Code': code,
-            'Name': item.get('stk_nm', item.get('name', '')),
-            'Price': _scanner_to_int(item.get('cur_prc', item.get('price'))),
-            'FluRate': _scanner_to_signed_float(item.get('flu_rt', item.get('change_rate'))),
-            'TradeQty': _scanner_to_int(item.get('trde_qty')),
-            'PrevTradeQtyRatio': _scanner_to_signed_float(item.get('pred_trde_qty_pre_rt')),
-            'AskPrice': _scanner_to_int(item.get('sel_bid')),
-            'BidPrice': _scanner_to_int(item.get('buy_bid')),
-            'NewHighPrice': _scanner_to_int(item.get('high_pric')),
-            'NewLowPrice': _scanner_to_int(item.get('low_pric')),
-            'NewHighPeriodDays': int(_scanner_to_int(period_days) or 20),
-            'PreSig': item.get('pred_pre_sig', ''),
-            'PreSigDirection': _pred_pre_signal_direction(item.get('pred_pre_sig')),
-            'Source': 'NEW_HIGH_CONFIRMATION',
-        })
+        cleaned_list.append(
+            {
+                "Code": code,
+                "Name": item.get("stk_nm", item.get("name", "")),
+                "Price": _scanner_to_int(item.get("cur_prc", item.get("price"))),
+                "FluRate": _scanner_to_signed_float(
+                    item.get("flu_rt", item.get("change_rate"))
+                ),
+                "TradeQty": _scanner_to_int(item.get("trde_qty")),
+                "PrevTradeQtyRatio": _scanner_to_signed_float(
+                    item.get("pred_trde_qty_pre_rt")
+                ),
+                "AskPrice": _scanner_to_int(item.get("sel_bid")),
+                "BidPrice": _scanner_to_int(item.get("buy_bid")),
+                "NewHighPrice": _scanner_to_int(item.get("high_pric")),
+                "NewLowPrice": _scanner_to_int(item.get("low_pric")),
+                "NewHighPeriodDays": int(_scanner_to_int(period_days) or 20),
+                "PreSig": item.get("pred_pre_sig", ""),
+                "PreSigDirection": _pred_pre_signal_direction(item.get("pred_pre_sig")),
+                "Source": "NEW_HIGH_CONFIRMATION",
+            }
+        )
     return cleaned_list
 
 
@@ -2037,7 +2207,11 @@ def get_value_top_ka10032(token, mrkt_tp="000", limit=60):
 
     try:
         results = fetch_kiwoom_api_continuous(
-            url=url, token=token, api_id='ka10032', payload=payload, use_continuous=False
+            url=url,
+            token=token,
+            api_id="ka10032",
+            payload=payload,
+            use_continuous=False,
         )
     except Exception as e:
         log_info(f"⚠️ [ka10032] 거래대금 상위 조회 실패: {e}")
@@ -2055,23 +2229,33 @@ def get_value_top_ka10032(token, mrkt_tp="000", limit=60):
         ),
     )
     for item in items[:limit]:
-        code = normalize_stock_code(item.get('stk_cd', item.get('code', '')))
+        code = normalize_stock_code(item.get("stk_cd", item.get("code", "")))
         if not code:
             continue
-        cleaned_list.append({
-            'Code': code,
-            'Name': item.get('stk_nm', item.get('name', '')),
-            'Price': _scanner_to_int(item.get('cur_prc', item.get('price'))),
-            'FluRate': _scanner_to_signed_float(item.get('flu_rt', item.get('change_rate'))),
-            'ValueFluRate': _scanner_to_signed_float(item.get('flu_rt', item.get('change_rate'))),
-            'CntrStr': _scanner_to_signed_float(item.get('cntr_str')),
-            'TradeValue': _scanner_to_int(
-                item.get('trde_prica', item.get('acc_trde_prica', item.get('trde_amt')))
-            ),
-            'RankNow': _scanner_to_int(item.get('now_rank', item.get('rank'))),
-            'RankPrev': _scanner_to_int(item.get('pred_rank', item.get('prev_rank'))),
-            'Source': 'VALUE_TOP',
-        })
+        cleaned_list.append(
+            {
+                "Code": code,
+                "Name": item.get("stk_nm", item.get("name", "")),
+                "Price": _scanner_to_int(item.get("cur_prc", item.get("price"))),
+                "FluRate": _scanner_to_signed_float(
+                    item.get("flu_rt", item.get("change_rate"))
+                ),
+                "ValueFluRate": _scanner_to_signed_float(
+                    item.get("flu_rt", item.get("change_rate"))
+                ),
+                "CntrStr": _scanner_to_signed_float(item.get("cntr_str")),
+                "TradeValue": _scanner_to_int(
+                    item.get(
+                        "trde_prica", item.get("acc_trde_prica", item.get("trde_amt"))
+                    )
+                ),
+                "RankNow": _scanner_to_int(item.get("now_rank", item.get("rank"))),
+                "RankPrev": _scanner_to_int(
+                    item.get("pred_rank", item.get("prev_rank"))
+                ),
+                "Source": "VALUE_TOP",
+            }
+        )
     return cleaned_list
 
 
@@ -2132,7 +2316,9 @@ def get_stock_orderbook_ka10004(token, code):
     best_bid = bids[0]["price"] if bids else 0
     best_ask_qty = asks[0]["volume"] if asks else 0
     best_bid_qty = bids[0]["volume"] if bids else 0
-    rest_mid_price = int(round((best_ask + best_bid) / 2.0)) if best_ask > 0 and best_bid > 0 else 0
+    rest_mid_price = (
+        int(round((best_ask + best_bid) / 2.0)) if best_ask > 0 and best_bid > 0 else 0
+    )
     return {
         "source": "ka10004_rest_orderbook",
         "stock_code": normalize_stock_code(code),
@@ -2169,7 +2355,9 @@ def get_stock_orderbook_ka10004(token, code):
     }
 
 
-def get_bid_balance_surge_ka10021(token, mrkt_tp="000", minutes=3, limit=60, trde_qty_tp=None):
+def get_bid_balance_surge_ka10021(
+    token, mrkt_tp="000", minutes=3, limit=60, trde_qty_tp=None
+):
     """
     [ka10021] 호가잔량급증.
     매수잔량 급증을 상승 시작 pressure 후보로 정규화한다.
@@ -2181,14 +2369,20 @@ def get_bid_balance_surge_ka10021(token, mrkt_tp="000", minutes=3, limit=60, trd
         "sort_tp": "2",
         "tm_tp": "1",
         "tm": str(minutes),
-        "trde_qty_tp": str(trde_qty_tp or os.getenv("KORSTOCKSCAN_KA10021_TRDE_QTY_TP", "1")),
+        "trde_qty_tp": str(
+            trde_qty_tp or os.getenv("KORSTOCKSCAN_KA10021_TRDE_QTY_TP", "1")
+        ),
         "stk_cnd": "4",
         "stex_tp": "3",
     }
 
     try:
         results = fetch_kiwoom_api_continuous(
-            url=url, token=token, api_id='ka10021', payload=payload, use_continuous=False
+            url=url,
+            token=token,
+            api_id="ka10021",
+            payload=payload,
+            use_continuous=False,
         )
     except Exception as e:
         log_info(f"⚠️ [ka10021] 호가잔량급증 조회 실패: {e}")
@@ -2197,21 +2391,25 @@ def get_bid_balance_surge_ka10021(token, mrkt_tp="000", minutes=3, limit=60, trd
     cleaned_list = []
     items = _extract_rank_items(results, ("bid_req_sdnin", "req_vol_sdnin", "data"))
     for item in items[:limit]:
-        code = normalize_stock_code(item.get('stk_cd', item.get('code', '')))
+        code = normalize_stock_code(item.get("stk_cd", item.get("code", "")))
         if not code:
             continue
-        cleaned_list.append({
-            'Code': code,
-            'Name': item.get('stk_nm', item.get('name', '')),
-            'Price': _scanner_to_int(item.get('cur_prc', item.get('price'))),
-            'FluRate': _scanner_to_signed_float(item.get('flu_rt')),
-            'BidSurgeQty': _scanner_to_int(item.get('sdnin_qty')),
-            'BidSurgeRate': _scanner_to_signed_float(item.get('sdnin_rt')),
-            'TotalBuyQty': _scanner_to_int(item.get('tot_buy_qty', item.get('tot_buy_req'))),
-            'PreSig': item.get('pred_pre_sig', ''),
-            'PreSigDirection': _pred_pre_signal_direction(item.get('pred_pre_sig')),
-            'Source': 'BID_IMBALANCE_SURGE',
-        })
+        cleaned_list.append(
+            {
+                "Code": code,
+                "Name": item.get("stk_nm", item.get("name", "")),
+                "Price": _scanner_to_int(item.get("cur_prc", item.get("price"))),
+                "FluRate": _scanner_to_signed_float(item.get("flu_rt")),
+                "BidSurgeQty": _scanner_to_int(item.get("sdnin_qty")),
+                "BidSurgeRate": _scanner_to_signed_float(item.get("sdnin_rt")),
+                "TotalBuyQty": _scanner_to_int(
+                    item.get("tot_buy_qty", item.get("tot_buy_req"))
+                ),
+                "PreSig": item.get("pred_pre_sig", ""),
+                "PreSigDirection": _pred_pre_signal_direction(item.get("pred_pre_sig")),
+                "Source": "BID_IMBALANCE_SURGE",
+            }
+        )
     return cleaned_list
 
 
@@ -2239,7 +2437,11 @@ def get_vi_triggered_ka10054(token, mrkt_tp="000", limit=60):
 
     try:
         results = fetch_kiwoom_api_continuous(
-            url=url, token=token, api_id='ka10054', payload=payload, use_continuous=False
+            url=url,
+            token=token,
+            api_id="ka10054",
+            payload=payload,
+            use_continuous=False,
         )
     except Exception as e:
         log_info(f"⚠️ [ka10054] VI 발동 종목 조회 실패: {e}")
@@ -2256,41 +2458,49 @@ def get_vi_triggered_ka10054(token, mrkt_tp="000", limit=60):
         ),
     )
     for item in items[:limit]:
-        code = normalize_stock_code(item.get('stk_cd', item.get('code', '')))
+        code = normalize_stock_code(item.get("stk_cd", item.get("code", "")))
         if not code:
             continue
-        vi_open_flu_rate = _scanner_to_signed_float(item.get('open_pric_pre_flu_rt'))
-        vi_dynamic_disparity_rate = _scanner_to_signed_float(item.get('dynm_dispty_rt'))
-        vi_static_disparity_rate = _scanner_to_signed_float(item.get('static_dispty_rt'))
-        if item.get('open_pric_pre_flu_rt') not in (None, ""):
+        vi_open_flu_rate = _scanner_to_signed_float(item.get("open_pric_pre_flu_rt"))
+        vi_dynamic_disparity_rate = _scanner_to_signed_float(item.get("dynm_dispty_rt"))
+        vi_static_disparity_rate = _scanner_to_signed_float(
+            item.get("static_dispty_rt")
+        )
+        if item.get("open_pric_pre_flu_rt") not in (None, ""):
             vi_flu_rate = vi_open_flu_rate
             vi_flu_metric = "vi_open_flu_rate"
-        elif item.get('dynm_dispty_rt') not in (None, ""):
+        elif item.get("dynm_dispty_rt") not in (None, ""):
             vi_flu_rate = vi_dynamic_disparity_rate
             vi_flu_metric = "vi_dynamic_disparity_rate"
         else:
             vi_flu_rate = vi_static_disparity_rate
             vi_flu_metric = "vi_static_disparity_rate"
-        cleaned_list.append({
-            'Code': code,
-            'Name': item.get('stk_nm', item.get('name', '')),
-            'Price': _scanner_to_int(item.get('motn_pric', item.get('cur_prc'))),
-            'FluRate': vi_flu_rate,
-            'ViFluRate': vi_flu_rate,
-            'ViOpenFluRate': vi_open_flu_rate,
-            'ViDynamicDisparityRate': vi_dynamic_disparity_rate,
-            'ViStaticDisparityRate': vi_static_disparity_rate,
-            'ViFluRateMetric': vi_flu_metric,
-            'CntrStr': 0.0,
-            'TradeValue': 0,
-            'RankNow': 0,
-            'RankPrev': 0,
-            'AccTradeQty': _scanner_to_int(item.get('acc_trde_qty')),
-            'VIMotionCount': _scanner_to_int(item.get('vimotn_cnt', item.get('motn_cnt'))),
-            'VIReleaseTime': item.get('virelis_time', item.get('vi_release_time', '')),
-            'VIAppliedType': item.get('viaplc_tp', ''),
-            'Source': 'VI_TRIGGERED',
-        })
+        cleaned_list.append(
+            {
+                "Code": code,
+                "Name": item.get("stk_nm", item.get("name", "")),
+                "Price": _scanner_to_int(item.get("motn_pric", item.get("cur_prc"))),
+                "FluRate": vi_flu_rate,
+                "ViFluRate": vi_flu_rate,
+                "ViOpenFluRate": vi_open_flu_rate,
+                "ViDynamicDisparityRate": vi_dynamic_disparity_rate,
+                "ViStaticDisparityRate": vi_static_disparity_rate,
+                "ViFluRateMetric": vi_flu_metric,
+                "CntrStr": 0.0,
+                "TradeValue": 0,
+                "RankNow": 0,
+                "RankPrev": 0,
+                "AccTradeQty": _scanner_to_int(item.get("acc_trde_qty")),
+                "VIMotionCount": _scanner_to_int(
+                    item.get("vimotn_cnt", item.get("motn_cnt"))
+                ),
+                "VIReleaseTime": item.get(
+                    "virelis_time", item.get("vi_release_time", "")
+                ),
+                "VIAppliedType": item.get("viaplc_tp", ""),
+                "Source": "VI_TRIGGERED",
+            }
+        )
     return cleaned_list
 
 
@@ -2298,55 +2508,59 @@ def scan_volume_spike_ka10023(token, mrkt_tp="000", trde_qty_tp=None, pric_tp=No
     """[ka10023] 최근 n분간 거래량이 급증한 종목 스캔 (현재가 포함)"""
     url = get_api_url("/api/dostk/rkinfo")
     payload = {
-        "mrkt_tp": mrkt_tp,    # 000: 전체, 001: 코스피, 101: 코스닥
-        "tm_tp": "1",          # 💡 [수정] 1: 분단위 조회
-        "tm": "5",             # 💡 [추가] 5분 입력 (최근 5분간 급증)
-        "sort_tp": "1",        # 1: 급증량 기준
-        "trde_qty_tp": str(trde_qty_tp or os.getenv("KORSTOCKSCAN_KA10023_TRDE_QTY_TP", "5")),   # 5: 5천주 이상
-        "stk_cnd": "4",        # 4:관리종목,우선주제외
-        "pric_tp": str(pric_tp or os.getenv("KORSTOCKSCAN_KA10023_PRICE_TP", "0")),        # 0: 전체조회
-        "stex_tp": "3"         # 3: 통합(KRX+NXT)
+        "mrkt_tp": mrkt_tp,  # 000: 전체, 001: 코스피, 101: 코스닥
+        "tm_tp": "1",  # 💡 [수정] 1: 분단위 조회
+        "tm": "5",  # 💡 [추가] 5분 입력 (최근 5분간 급증)
+        "sort_tp": "1",  # 1: 급증량 기준
+        "trde_qty_tp": str(
+            trde_qty_tp or os.getenv("KORSTOCKSCAN_KA10023_TRDE_QTY_TP", "5")
+        ),  # 5: 5천주 이상
+        "stk_cnd": "4",  # 4:관리종목,우선주제외
+        "pric_tp": str(
+            pric_tp or os.getenv("KORSTOCKSCAN_KA10023_PRICE_TP", "0")
+        ),  # 0: 전체조회
+        "stex_tp": "3",  # 3: 통합(KRX+NXT)
     }
-    
+
     # 💡 [핵심] 1회성 스캐너 조회 (429 에러 방어 탑재)
     results = fetch_kiwoom_api_continuous(
-        url=url, 
-        token=token, 
-        api_id='ka10023', 
-        payload=payload, 
-        use_continuous=False
+        url=url, token=token, api_id="ka10023", payload=payload, use_continuous=False
     )
 
     candidates = []
-    
+
     if results:
         # 💡 [핵심 교정] 명세서에 맞게 'req_vol_sdnin' ➡️ 'trde_qty_sdnin' 으로 수정
-        data = results[0].get('trde_qty_sdnin', [])
-        
+        data = results[0].get("trde_qty_sdnin", [])
+
         for item in data:
             # 💡 가격 추출 (사용자 제안 반영)
-            curr_price = _scanner_to_int(item.get('cur_prc'))
-            flu_rate = _scanner_to_signed_float(item.get('flu_rt'))
+            curr_price = _scanner_to_int(item.get("cur_prc"))
+            flu_rate = _scanner_to_signed_float(item.get("flu_rt"))
 
-            candidates.append({
-                'code': item.get('stk_cd', ''),
-                'Code': normalize_stock_code(item.get('stk_cd', '')),
-                'name': item.get('stk_nm', ''),
-                'Name': item.get('stk_nm', ''),
-                'spike_rate': _scanner_to_signed_float(item.get('sdnin_rt')),
-                'SpikeRate': _scanner_to_signed_float(item.get('sdnin_rt')),
-                'flu_rate': flu_rate, # 💡 [추가] 당일 등락률 포함
-                'FluRate': flu_rate,
-                'Price': curr_price,  # 🚀 스캐너를 위해 'Price' 키로 통일
-                'cur_prc': curr_price, # 하위 호환성 유지
-                'TradeQty': _scanner_to_int(item.get('now_trde_qty')),
-                'PreviousTradeQty': _scanner_to_int(item.get('prev_trde_qty')),
-                'SurgeQty': _scanner_to_int(item.get('sdnin_qty')),
-                'PreSig': item.get('pred_pre_sig', ''),
-                'PreSigDirection': _pred_pre_signal_direction(item.get('pred_pre_sig')),
-                'Source': 'VOLUME_SURGE_POSITIVE',
-            })
-            
+            candidates.append(
+                {
+                    "code": item.get("stk_cd", ""),
+                    "Code": normalize_stock_code(item.get("stk_cd", "")),
+                    "name": item.get("stk_nm", ""),
+                    "Name": item.get("stk_nm", ""),
+                    "spike_rate": _scanner_to_signed_float(item.get("sdnin_rt")),
+                    "SpikeRate": _scanner_to_signed_float(item.get("sdnin_rt")),
+                    "flu_rate": flu_rate,  # 💡 [추가] 당일 등락률 포함
+                    "FluRate": flu_rate,
+                    "Price": curr_price,  # 🚀 스캐너를 위해 'Price' 키로 통일
+                    "cur_prc": curr_price,  # 하위 호환성 유지
+                    "TradeQty": _scanner_to_int(item.get("now_trde_qty")),
+                    "PreviousTradeQty": _scanner_to_int(item.get("prev_trde_qty")),
+                    "SurgeQty": _scanner_to_int(item.get("sdnin_qty")),
+                    "PreSig": item.get("pred_pre_sig", ""),
+                    "PreSigDirection": _pred_pre_signal_direction(
+                        item.get("pred_pre_sig")
+                    ),
+                    "Source": "VOLUME_SURGE_POSITIVE",
+                }
+            )
+
     return candidates
 
 
@@ -2359,47 +2573,57 @@ def get_positive_volume_surge_ka10023(token, mrkt_tp="000", limit=60):
         return []
     positive = []
     for item in candidates:
-        if _scanner_to_signed_float(item.get('FluRate', item.get('flu_rate'))) <= 0:
+        if _scanner_to_signed_float(item.get("FluRate", item.get("flu_rate"))) <= 0:
             continue
-        if item.get('PreSig') not in (None, "") and not _is_positive_pred_signal(item.get('PreSig')):
+        if item.get("PreSig") not in (None, "") and not _is_positive_pred_signal(
+            item.get("PreSig")
+        ):
             continue
-        positive.append({**item, 'Source': 'VOLUME_SURGE_POSITIVE'})
+        positive.append({**item, "Source": "VOLUME_SURGE_POSITIVE"})
         if len(positive) >= limit:
             break
     return positive
+
 
 def scan_orderbook_spike_ka10021(token, mrkt_tp="101", trde_qty_tp=None):
     """[ka10021] 호가창에 갑자기 거대 물량이 쌓인 종목 스캔"""
     url = get_api_url("/api/dostk/rkinfo")
     # 명세서 기준: 코스닥(101), 매수호가급증(1), 5분(5), 1천주 이상(1)
     payload = {
-        "mrkt_tp": mrkt_tp, "trde_tp": "1", "tm_tp": "5",
-        "trde_qty_tp": str(trde_qty_tp or os.getenv("KORSTOCKSCAN_KA10021_TRDE_QTY_TP", "1")),
-        "stk_cnd": "0", "stex_tp": "1"
+        "mrkt_tp": mrkt_tp,
+        "trde_tp": "1",
+        "tm_tp": "5",
+        "trde_qty_tp": str(
+            trde_qty_tp or os.getenv("KORSTOCKSCAN_KA10021_TRDE_QTY_TP", "1")
+        ),
+        "stk_cnd": "0",
+        "stex_tp": "1",
     }
-    
+
     # 💡 1회성 조회 래퍼 적용 (429 자동 방어)
     results = fetch_kiwoom_api_continuous(
-        url=url, token=token, api_id='ka10021', payload=payload, use_continuous=False
+        url=url, token=token, api_id="ka10021", payload=payload, use_continuous=False
     )
-    
+
     candidates = []
-    
+
     if results:
-        data = results[0].get('bid_req_sdnin', results[0].get('req_vol_sdnin', []))
+        data = results[0].get("bid_req_sdnin", results[0].get("req_vol_sdnin", []))
         for item in data:
             # 💡 가격 추출 및 정제
-            raw_p = str(item.get('cur_prc', '0')).replace('+', '').replace('-', '')
+            raw_p = str(item.get("cur_prc", "0")).replace("+", "").replace("-", "")
             curr_price = int(raw_p) if raw_p.isdigit() else 0
-            
-            candidates.append({
-                'code': item.get('stk_cd', ''),
-                'name': item.get('stk_nm', ''),
-                'spike_rate': _scanner_to_signed_float(item.get('sdnin_rt')),
-                'Price': curr_price,  # 🚀 스캐너를 위해 'Price' 키로 통일
-                'cur_prc': curr_price # 하위 호환성 유지
-            })
-            
+
+            candidates.append(
+                {
+                    "code": item.get("stk_cd", ""),
+                    "name": item.get("stk_nm", ""),
+                    "spike_rate": _scanner_to_signed_float(item.get("sdnin_rt")),
+                    "Price": curr_price,  # 🚀 스캐너를 위해 'Price' 키로 통일
+                    "cur_prc": curr_price,  # 하위 호환성 유지
+                }
+            )
+
     return candidates
 
 
@@ -2416,7 +2640,7 @@ def _get_prev_business_day_str(ref_dt=None):
     d = ref_dt.date() - timedelta(days=1)
     while d.weekday() >= 5 or d in kr_holidays:
         d -= timedelta(days=1)
-    return d.strftime('%Y%m%d')
+    return d.strftime("%Y%m%d")
 
 
 def check_program_buying_ka90008(token, code, date_str=None, retry_prev_if_zero=True):
@@ -2434,51 +2658,58 @@ def check_program_buying_ka90008(token, code, date_str=None, retry_prev_if_zero=
     payload = {"amt_qty_tp": "2", "stk_cd": str(code), "date": target_date}
 
     results = fetch_kiwoom_api_continuous(
-        url=url, token=token, api_id='ka90008', payload=payload, use_continuous=False
+        url=url, token=token, api_id="ka90008", payload=payload, use_continuous=False
     )
 
     def to_int(v):
         if v in (None, ""):
             return 0
         try:
-            return int(str(v).replace(',', '').replace('+', '').strip())
+            return int(str(v).replace(",", "").replace("+", "").strip())
         except Exception:
             return 0
 
     res_data = {
-        'base_date': target_date,
-        'is_buying': False, 'net_amt': 0, 'net_qty': 0,
-        'buy_amt': 0, 'sell_amt': 0, 'buy_qty': 0, 'sell_qty': 0,
-        'net_irds_amt': 0
+        "base_date": target_date,
+        "is_buying": False,
+        "net_amt": 0,
+        "net_qty": 0,
+        "buy_amt": 0,
+        "sell_amt": 0,
+        "buy_qty": 0,
+        "sell_qty": 0,
+        "net_irds_amt": 0,
     }
 
-    if results and (data := results[0].get('prm_trde_trend', [])):
+    if results and (data := results[0].get("prm_trde_trend", [])):
         item = data[0]
-        res_data.update({
-            'net_amt': to_int(item.get('prm_netprps_amt')),
-            'net_qty': to_int(item.get('prm_netprps_qty')),
-            'buy_amt': to_int(item.get('prm_buy_amt')),
-            'sell_amt': to_int(item.get('prm_sell_amt')),
-            'buy_qty': to_int(item.get('prm_buy_qty')),
-            'sell_qty': to_int(item.get('prm_sell_qty')),
-            'net_irds_amt': to_int(item.get('prm_netprps_amt_irds')),
-        })
-        res_data['is_buying'] = res_data['net_amt'] > 50 and res_data['net_qty'] > 10000
+        res_data.update(
+            {
+                "net_amt": to_int(item.get("prm_netprps_amt")),
+                "net_qty": to_int(item.get("prm_netprps_qty")),
+                "buy_amt": to_int(item.get("prm_buy_amt")),
+                "sell_amt": to_int(item.get("prm_sell_amt")),
+                "buy_qty": to_int(item.get("prm_buy_qty")),
+                "sell_qty": to_int(item.get("prm_sell_qty")),
+                "net_irds_amt": to_int(item.get("prm_netprps_amt_irds")),
+            }
+        )
+        res_data["is_buying"] = res_data["net_amt"] > 50 and res_data["net_qty"] > 10000
 
     if retry_prev_if_zero and date_str:
         is_all_zero = (
-            res_data['net_amt'] == 0 and res_data['net_qty'] == 0 and
-            res_data['buy_amt'] == 0 and res_data['sell_amt'] == 0 and
-            res_data['buy_qty'] == 0 and res_data['sell_qty'] == 0
+            res_data["net_amt"] == 0
+            and res_data["net_qty"] == 0
+            and res_data["buy_amt"] == 0
+            and res_data["sell_amt"] == 0
+            and res_data["buy_qty"] == 0
+            and res_data["sell_qty"] == 0
         )
-        today_str = datetime.now().strftime('%Y%m%d')
+        today_str = datetime.now().strftime("%Y%m%d")
         prev_bd = _get_prev_business_day_str()
         if is_all_zero and str(date_str) == today_str and target_date != prev_bd:
             return check_program_buying_ka90008(
-                token=token,
-                code=code,
-                date_str=prev_bd,
-                retry_prev_if_zero=False
+                token=token, code=code, date_str=prev_bd, retry_prev_if_zero=False
             )
 
     return _cache_set(
@@ -2492,36 +2723,36 @@ def check_program_buying_ka90008(token, code, date_str=None, retry_prev_if_zero=
 def get_program_flow_realtime(token, code, ws_data=None):
     """실시간 프로그램 수급은 WS '0w'를 우선, 없으면 ka90008 전일 스냅샷으로 fallback."""
     ws_data = ws_data or {}
-    received_types = set(ws_data.get('received_types', []))
-    has_ws_program = (
-        '0w' in received_types or
-        any(int(ws_data.get(k, 0) or 0) != 0 for k in ('prog_net_qty', 'prog_delta_qty', 'prog_net_amt', 'prog_delta_amt'))
+    received_types = set(ws_data.get("received_types", []))
+    has_ws_program = "0w" in received_types or any(
+        int(ws_data.get(k, 0) or 0) != 0
+        for k in ("prog_net_qty", "prog_delta_qty", "prog_net_amt", "prog_delta_amt")
     )
 
     if has_ws_program:
-        net_qty = int(ws_data.get('prog_net_qty', 0) or 0)
-        delta_qty = int(ws_data.get('prog_delta_qty', 0) or 0)
-        net_amt = int(ws_data.get('prog_net_amt', 0) or 0)
-        delta_amt = int(ws_data.get('prog_delta_amt', 0) or 0)
+        net_qty = int(ws_data.get("prog_net_qty", 0) or 0)
+        delta_qty = int(ws_data.get("prog_delta_qty", 0) or 0)
+        net_amt = int(ws_data.get("prog_net_amt", 0) or 0)
+        delta_amt = int(ws_data.get("prog_delta_amt", 0) or 0)
         return {
-            'source': 'WS_0w',
-            'base_date': '',
-            'is_buying': net_qty > 0 and net_amt > 0,
-            'net_amt': net_amt,
-            'net_qty': net_qty,
-            'buy_amt': 0,
-            'sell_amt': 0,
-            'buy_qty': 0,
-            'sell_qty': 0,
-            'net_irds_amt': delta_amt,
-            'delta_qty': delta_qty,
-            'delta_amt': delta_amt,
+            "source": "WS_0w",
+            "base_date": "",
+            "is_buying": net_qty > 0 and net_amt > 0,
+            "net_amt": net_amt,
+            "net_qty": net_qty,
+            "buy_amt": 0,
+            "sell_amt": 0,
+            "buy_qty": 0,
+            "sell_qty": 0,
+            "net_irds_amt": delta_amt,
+            "delta_qty": delta_qty,
+            "delta_amt": delta_amt,
         }
 
     snap = check_program_buying_ka90008(token, code)
-    snap['source'] = 'KA90008_PREV_BD'
-    snap['delta_qty'] = 0
-    snap['delta_amt'] = int(snap.get('net_irds_amt', 0) or 0)
+    snap["source"] = "KA90008_PREV_BD"
+    snap["delta_qty"] = 0
+    snap["delta_amt"] = int(snap.get("net_irds_amt", 0) or 0)
     return snap
 
 
@@ -2533,82 +2764,96 @@ def check_execution_strength_ka10046(token, code):
         return cached
 
     url = get_api_url("/api/dostk/mrkcond")
-    
+
     # SOR 일 경우 _AL 코드로 변환
     req_code = get_effective_kiwoom_code(code)
 
     payload = {"stk_cd": str(req_code)}
- 
+
     received_ts = time.time()
     results = fetch_kiwoom_api_continuous(
-        url=url, token=token, api_id='ka10046', payload=payload, use_continuous=False
+        url=url, token=token, api_id="ka10046", payload=payload, use_continuous=False
     )
     rest_received_ts = time.time()
-    
+
     # 💡 기본 반환 규격 (에러 방어용)
     res_data = {
-        'is_strong': False, 'strength': 0.0,
-        's5': 0.0, 's20': 0.0, 's60': 0.0,
-        'acc_amt': 0, 'trde_qty': 0, 'flu_rt': 0.0,
-        'source': 'ka10046_rest_strength_trend',
-        'strength_source': 'ka10046_rest',
-        'metric_role': 'source_quality_gate',
-        'decision_authority': 'strength_trend_rest_fallback_source_only',
-        'runtime_effect': False,
-        'allowed_runtime_apply': False,
-        'source_time_basis': 'response_received_epoch_ms',
-        'rest_request_ts': received_ts,
-        'rest_received_ts': rest_received_ts,
-        'rest_received_ts_ms': int(rest_received_ts * 1000),
-        'window_policy': 'rest_aggregate_strength_trend_ttl_limited',
-        'sample_floor': 'not_standalone_runtime_signal',
-        'primary_decision_metric': 'source_quality_adjusted_ev_pct',
-        'source_quality_gate': 'prefer_ws_0b_window_when_fresh_else_rest_context_only',
-        'forbidden_uses': [
-            'standalone_buy_support',
-            'submit_permission',
-            'pressure_math',
-            'threshold_mutation',
-            'provider_route_change',
-            'bot_restart',
-            'order_cap_change',
-            'broker_guard_bypass',
-            'real_execution_quality_approval',
+        "is_strong": False,
+        "strength": 0.0,
+        "s5": 0.0,
+        "s20": 0.0,
+        "s60": 0.0,
+        "acc_amt": 0,
+        "trde_qty": 0,
+        "flu_rt": 0.0,
+        "source": "ka10046_rest_strength_trend",
+        "strength_source": "ka10046_rest",
+        "metric_role": "source_quality_gate",
+        "decision_authority": "strength_trend_rest_fallback_source_only",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "source_time_basis": "response_received_epoch_ms",
+        "rest_request_ts": received_ts,
+        "rest_received_ts": rest_received_ts,
+        "rest_received_ts_ms": int(rest_received_ts * 1000),
+        "window_policy": "rest_aggregate_strength_trend_ttl_limited",
+        "sample_floor": "not_standalone_runtime_signal",
+        "primary_decision_metric": "source_quality_adjusted_ev_pct",
+        "source_quality_gate": "prefer_ws_0b_window_when_fresh_else_rest_context_only",
+        "forbidden_uses": [
+            "standalone_buy_support",
+            "submit_permission",
+            "pressure_math",
+            "threshold_mutation",
+            "provider_route_change",
+            "bot_restart",
+            "order_cap_change",
+            "broker_guard_bypass",
+            "real_execution_quality_approval",
         ],
     }
-    
-    if results and (data := results[0].get('cntr_str_tm', [])):
+
+    if results and (data := results[0].get("cntr_str_tm", [])):
         item = data[0]
-        def to_i(v): 
-            if not v: return 0
+
+        def to_i(v):
+            if not v:
+                return 0
             try:
                 # 콤마와 부호를 제거한 뒤 float으로 먼저 바꾸고 int로 최종 변환
-                clean_v = str(v).replace(',', '').replace('+', '').replace('-', '').strip()
-                return int(float(clean_v)) 
+                clean_v = (
+                    str(v).replace(",", "").replace("+", "").replace("-", "").strip()
+                )
+                return int(float(clean_v))
             except (ValueError, TypeError):
                 return 0
 
-        def to_f(v): 
-            if not v: return 0.0
+        def to_f(v):
+            if not v:
+                return 0.0
             try:
-                return float(str(v).replace(',', '').replace('+', '').strip())
+                return float(str(v).replace(",", "").replace("+", "").strip())
             except (ValueError, TypeError):
                 return 0.0
-        
-        res_data.update({
-            'strength': to_f(item.get('cntr_str')),      # 실시간 체결강도
-            's5': to_f(item.get('cntr_str_5min')),       # 5분 체결강도
-            's20': to_f(item.get('cntr_str_20min')),     # 20분 체결강도
-            's60': to_f(item.get('cntr_str_60min')),     # 60분 체결강도
-            'acc_amt': to_i(item.get('acc_trde_prica')), # 누적거래대금
-            'trde_qty': to_i(item.get('trde_qty')),      # 현재 거래량
-            'flu_rt': to_f(item.get('flu_rt')),          # 등락율
-        })
-        
+
+        res_data.update(
+            {
+                "strength": to_f(item.get("cntr_str")),  # 실시간 체결강도
+                "s5": to_f(item.get("cntr_str_5min")),  # 5분 체결강도
+                "s20": to_f(item.get("cntr_str_20min")),  # 20분 체결강도
+                "s60": to_f(item.get("cntr_str_60min")),  # 60분 체결강도
+                "acc_amt": to_i(item.get("acc_trde_prica")),  # 누적거래대금
+                "trde_qty": to_i(item.get("trde_qty")),  # 현재 거래량
+                "flu_rt": to_f(item.get("flu_rt")),  # 등락율
+            }
+        )
+
         # 💡 [전략] 단기 수급이 중기 수급을 골든크로스 할 때 '강력'으로 판정
-        res_data['is_strong'] = res_data['s5'] > res_data['s20'] and res_data['s5'] > 110.0
-    
-    time.sleep(0.3) # 💡 API 연속 호출 방지 위해 약간의 딜레이 추가
+        res_data["is_strong"] = (
+            res_data["s5"] > res_data["s20"] and res_data["s5"] > 110.0
+        )
+
+    time.sleep(0.3)  # 💡 API 연속 호출 방지 위해 약간의 딜레이 추가
 
     return _cache_set(
         "ka10046_strength",
@@ -2616,7 +2861,8 @@ def check_execution_strength_ka10046(token, code):
         res_data,
         getattr(TRADING_RULES, "KIWOOM_STRENGTH_CACHE_TTL_SEC", 2.0),
     )
-    
+
+
 def get_tick_history_ka10003(token, code, limit=10):
     """
     [ka10003] 주식체결정보요청.
@@ -2635,63 +2881,72 @@ def get_tick_history_ka10003(token, code, limit=10):
     url = get_api_url("/api/dostk/stkinfo")
 
     payload = {"stk_cd": str(req_code)}
-    
+
     results = fetch_kiwoom_api_continuous(
-        url=url, token=token, api_id='ka10003', payload=payload, use_continuous=False
+        url=url, token=token, api_id="ka10003", payload=payload, use_continuous=False
     )
-    
+
     ticks = []
-    
-    if results and (data := results[0]) and (tick_list := data.get('cntr_infr', [])):
-        def to_i(v): 
-            if not v: return 0
+
+    if results and (data := results[0]) and (tick_list := data.get("cntr_infr", [])):
+
+        def to_i(v):
+            if not v:
+                return 0
             try:
                 # 콤마와 부호를 제거한 뒤 float으로 먼저 바꾸고 int로 최종 변환
-                clean_v = str(v).replace(',', '').replace('+', '').replace('-', '').strip()
-                return int(float(clean_v)) 
+                clean_v = (
+                    str(v).replace(",", "").replace("+", "").replace("-", "").strip()
+                )
+                return int(float(clean_v))
             except (ValueError, TypeError):
                 return 0
 
-        def to_f(v): 
-            if not v: return 0.0
+        def to_f(v):
+            if not v:
+                return 0.0
             try:
-                return float(str(v).replace(',', '').replace('+', '').strip())
+                return float(str(v).replace(",", "").replace("+", "").strip())
             except (ValueError, TypeError):
                 return 0.0
+
         # 최근 체결 순으로 들어오므로 다음 인덱스가 시간상 더 과거의 틱이다.
         for i in range(len(tick_list)):
-            if i >= limit: break
-            
+            if i >= limit:
+                break
+
             item = tick_list[i]
             # 💡 [명세서 반영] 부호는 제거하고 순수 정수 가격만 추출
-            current_price = to_i(item.get('cur_prc'))
-            volume = to_i(item.get('cntr_trde_qty'))
-            
+            current_price = to_i(item.get("cur_prc"))
+            volume = to_i(item.get("cntr_trde_qty"))
+
             direction = "NEUTRAL"
             direction_quality = "same_price_or_oldest_tick"
             if i + 1 < len(tick_list):
-                past_price = to_i(tick_list[i+1].get('cur_prc'))
+                past_price = to_i(tick_list[i + 1].get("cur_prc"))
                 if current_price > past_price:
                     direction = "BUY"
                     direction_quality = "price_up_vs_previous_print"
                 elif current_price < past_price:
                     direction = "SELL"
                     direction_quality = "price_down_vs_previous_print"
-            
-            ticks.append({
-                'time': item.get('tm', ''),
-                'price': current_price,
-                'volume': volume,
-                'dir': direction,
-                'aggressor_side': direction,
-                'aggressor_source': 'price_change_heuristic',
-                'aggressor_quality': direction_quality,
-                'flu_rate': to_f(item.get('pre_rt')),       # 대비율
-                'strength': to_f(item.get('cntr_str')),     # 체결강도
-                'acc_vol': to_i(item.get('acc_trde_qty')),  # 누적거래량
-                'raw': item,
-            })
-            
+
+            ticks.append(
+                {
+                    "time": item.get("tm", ""),
+                    "price": current_price,
+                    "volume": volume,
+                    "dir": direction,
+                    "aggressor_side": direction,
+                    "aggressor_source": "price_change_heuristic",
+                    "aggressor_quality": direction_quality,
+                    "flu_rate": to_f(item.get("pre_rt")),  # 대비율
+                    "strength": to_f(item.get("cntr_str")),  # 체결강도
+                    "acc_vol": to_i(item.get("acc_trde_qty")),  # 누적거래량
+                    "raw": item,
+                }
+            )
+
     return _cache_set(
         "ka10003_ticks",
         cache_key,
@@ -2749,7 +3004,9 @@ def _first_raw(row, *keys):
     return ""
 
 
-def compute_buy_dominance_from_ka10003_entries(entries, limit=100, include_inside=False):
+def compute_buy_dominance_from_ka10003_entries(
+    entries, limit=100, include_inside=False
+):
     """
     Source-quality-only buy-dominance observer for raw ka10003 ``cntr_infr`` rows.
 
@@ -2868,7 +3125,9 @@ def compute_buy_dominance_from_ka10003_entries(entries, limit=100, include_insid
 
     total_volume = buy_volume + sell_volume
     buy_ratio = (buy_volume / total_volume) if total_volume > 0 else None
-    buy_dominance = ((buy_volume - sell_volume) / total_volume) if total_volume > 0 else None
+    buy_dominance = (
+        ((buy_volume - sell_volume) / total_volume) if total_volume > 0 else None
+    )
     return {
         "metric_role": "source_quality_gate",
         "decision_authority": "source_quality_only",
@@ -2897,7 +3156,8 @@ def compute_buy_dominance_from_ka10003_entries(entries, limit=100, include_insid
         },
         "split_vs_15_evaluable_count": split_vs_15_evaluable_count,
         "split_vs_15_mismatch_count": split_vs_15_mismatch_count,
-        "inside_spread_count": source_counts["inside_excluded"] + source_counts["inside_split"],
+        "inside_spread_count": source_counts["inside_excluded"]
+        + source_counts["inside_split"],
         "undetermined_count": source_counts["undetermined"],
     }
 
@@ -2914,7 +3174,11 @@ def get_recent_signed_trades_ka10084(token, code, limit=10, tm=""):
     req_code = get_effective_kiwoom_code(code)
     limit_int = max(1, int(limit or 10))
     request_tm = str(tm or "").strip()
-    cache_key = (str(req_code), limit_int, request_tm or datetime.now().strftime("%H%M"))
+    cache_key = (
+        str(req_code),
+        limit_int,
+        request_tm or datetime.now().strftime("%H%M"),
+    )
     cached = _cache_get("ka10084_signed_trades", cache_key)
     if cached is not None:
         return cached
@@ -2943,14 +3207,20 @@ def get_recent_signed_trades_ka10084(token, code, limit=10, tm=""):
                 if not isinstance(item, dict):
                     continue
                 signed_qty = _parse_signed_int(item.get("cntr_trde_qty"), 0)
-                side = "BUY" if signed_qty > 0 else "SELL" if signed_qty < 0 else "UNKNOWN"
+                side = (
+                    "BUY" if signed_qty > 0 else "SELL" if signed_qty < 0 else "UNKNOWN"
+                )
                 rows.append(
                     {
                         "time": item.get("tm", ""),
                         "price": abs(_parse_signed_int(item.get("cur_prc"), 0)),
                         "volume": abs(signed_qty),
-                        "signed_trade_volume": str(item.get("cntr_trde_qty") or signed_qty),
-                        "aggressor_aux_raw_15": str(item.get("cntr_trde_qty") or signed_qty),
+                        "signed_trade_volume": str(
+                            item.get("cntr_trde_qty") or signed_qty
+                        ),
+                        "aggressor_aux_raw_15": str(
+                            item.get("cntr_trde_qty") or signed_qty
+                        ),
                         "aggressor_side": side,
                         "aggressor_source": "kiwoom_rest_ka10084_signed_trade_qty",
                         "aggressor_aux_pressure_usable": False,
@@ -2970,7 +3240,7 @@ def get_recent_signed_trades_ka10084(token, code, limit=10, tm=""):
     )
 
 
-# 📝 TODO: 추후 RSI/MACD 보조지표 계산이 필요할 경우, 
+# 📝 TODO: 추후 RSI/MACD 보조지표 계산이 필요할 경우,
 # AI 속도 최적화를 위해 걸어둔 limit=5를 30~50으로 넉넉하게 늘려줄 것.
 def _normalize_ka10080_time(raw_time):
     text = str(raw_time or "").strip()
@@ -2994,26 +3264,33 @@ def get_minute_candles_ka10080_with_meta(token, code, limit=10):
         return cached
 
     url = get_api_url("/api/dostk/chart")
-    base_dt = datetime.now().strftime('%Y%m%d')
-    
+    base_dt = datetime.now().strftime("%Y%m%d")
+
     payload = {
-        'stk_cd': str(req_code),
-        'tic_scope': '1',       # 1분봉
-        'upd_stkpc_tp': '1',    # 수정주가 반영
-        'base_dt': base_dt      # 당일 기준
+        "stk_cd": str(req_code),
+        "tic_scope": "1",  # 1분봉
+        "upd_stkpc_tp": "1",  # 수정주가 반영
+        "base_dt": base_dt,  # 당일 기준
     }
-    
+
     page_size = 900
     max_pages = max(1, int((max(1, int(limit or 1)) + page_size - 1) / page_size) + 1)
     results, source_meta = _fetch_kiwoom_api_continuous_with_meta(
-        url=url, token=token, api_id='ka10080', payload=payload, use_continuous=True, max_pages=max_pages
+        url=url,
+        token=token,
+        api_id="ka10080",
+        payload=payload,
+        use_continuous=True,
+        max_pages=max_pages,
     )
-    source_meta = _normalize_kiwoom_source_meta(source_meta, "ka10080", requested_limit=int(limit or 0))
-    
+    source_meta = _normalize_kiwoom_source_meta(
+        source_meta, "ka10080", requested_limit=int(limit or 0)
+    )
+
     refined_candles = []
     all_candles = []
     for data in results or []:
-        all_candles.extend(data.get('stk_min_pole_chart_qry', []) or [])
+        all_candles.extend(data.get("stk_min_pole_chart_qry", []) or [])
     source_meta.update(
         {
             "requested_limit": int(limit or 0),
@@ -3027,29 +3304,32 @@ def get_minute_candles_ka10080_with_meta(token, code, limit=10):
                 ],
                 default=None,
             ),
-            "truncated_window": len(all_candles) < int(limit or 0) or bool(source_meta.get("continuous_page_limit_reached")),
+            "truncated_window": len(all_candles) < int(limit or 0)
+            or bool(source_meta.get("continuous_page_limit_reached")),
         }
     )
 
     if all_candles:
         recent_candles = sorted(
             all_candles,
-            key=lambda item: _normalize_ka10080_time((item or {}).get('cntr_tm'))[0],
+            key=lambda item: _normalize_ka10080_time((item or {}).get("cntr_tm"))[0],
         )[-int(limit or len(all_candles)) :]
         for candle in recent_candles:
-            raw_time = str(candle.get('cntr_tm', ''))
+            raw_time = str(candle.get("cntr_tm", ""))
             source_timestamp, formatted_time = _normalize_ka10080_time(raw_time)
 
-            refined_candles.append({
-                "체결시간": formatted_time,
-                "source_timestamp": source_timestamp,
-                "source_time_basis": "ka10080_cntr_tm_bar_timestamp",
-                "시가": _scanner_to_int(candle.get("open_pric")),
-                "고가": _scanner_to_int(candle.get("high_pric")),
-                "저가": _scanner_to_int(candle.get("low_pric")),
-                "현재가": _scanner_to_int(candle.get("cur_prc")),
-                "거래량": _scanner_to_int(candle.get("trde_qty"))
-            })
+            refined_candles.append(
+                {
+                    "체결시간": formatted_time,
+                    "source_timestamp": source_timestamp,
+                    "source_time_basis": "ka10080_cntr_tm_bar_timestamp",
+                    "시가": _scanner_to_int(candle.get("open_pric")),
+                    "고가": _scanner_to_int(candle.get("high_pric")),
+                    "저가": _scanner_to_int(candle.get("low_pric")),
+                    "현재가": _scanner_to_int(candle.get("cur_prc")),
+                    "거래량": _scanner_to_int(candle.get("trde_qty")),
+                }
+            )
 
     return _cache_set(
         "ka10080_minutes_with_meta",
@@ -3063,14 +3343,15 @@ def get_minute_candles_ka10080(token, code, limit=10):
     candles, _meta = get_minute_candles_ka10080_with_meta(token, code, limit=limit)
     return candles
 
+
 def get_top_marketcap_stocks(limit=300):
     """네이버 API 우회 시총 상위 종목 수집 (구조 정합성 교정)"""
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Referer': 'https://m.stock.naver.com/',
-        'Accept': 'application/json, text/plain, */*'
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Referer": "https://m.stock.naver.com/",
+        "Accept": "application/json, text/plain, */*",
     }
-    target_list = [] # 💡 코드 리스트가 아닌 딕셔너리 리스트로 변경
+    target_list = []  # 💡 코드 리스트가 아닌 딕셔너리 리스트로 변경
     page_size = 60
     max_pages = (limit // page_size) + 1
     for page in range(1, max_pages + 1):
@@ -3078,21 +3359,26 @@ def get_top_marketcap_stocks(limit=300):
         try:
             res = requests.get(url, headers=headers, timeout=10)
             if res.status_code == 200:
-                stocks = res.json().get('stocks', [])
-                if not stocks: break
+                stocks = res.json().get("stocks", [])
+                if not stocks:
+                    break
                 for s in stocks:
-                    code, name = s.get('itemCode'), s.get('stockName')
-                    raw_p = str(s.get('closePrice', '0')).replace(',', '')
+                    code, name = s.get("itemCode"), s.get("stockName")
+                    raw_p = str(s.get("closePrice", "0")).replace(",", "")
                     curr_p = int(raw_p) if raw_p.isdigit() else 0
                     # 💡 [교정] 초고속 필터 적용 및 표준 딕셔너리 반환
                     if is_valid_stock(code, name, current_price=curr_p):
-                        target_list.append({'Code': code, 'Name': name, 'Price': curr_p})
-                        if len(target_list) >= limit: return target_list
+                        target_list.append(
+                            {"Code": code, "Name": name, "Price": curr_p}
+                        )
+                        if len(target_list) >= limit:
+                            return target_list
         except Exception as e:
             log_error(f"🚨 네이버 수집 실패: {e}")
             break
         time.sleep(0.3)
     return target_list
+
 
 # =====================================================================
 # 🛡️ 공통 API 호출 래퍼 (429 방어 + 연속조회 통합)
@@ -3115,23 +3401,23 @@ def fetch_kiwoom_api_continuous(
     """
     all_results = []
     meta = _empty_kiwoom_source_meta(api_id)
-    cont_yn = 'N'
-    next_key = ''
+    cont_yn = "N"
+    next_key = ""
     active_token = token
     auth_retry_used = False
-    
+
     while True:
         retry_count = 0
         response = None
-        
+
         # 💡 [핵심 방어] 429 에러 발생 시 백오프(Back-off) 후 재시도
         while retry_count < max_retries:
             headers = {
-                'Content-Type': 'application/json;charset=UTF-8',
-                'authorization': f'Bearer {active_token}',
-                'cont-yn': cont_yn,
-                'next-key': next_key,
-                'api-id': api_id,
+                "Content-Type": "application/json;charset=UTF-8",
+                "authorization": f"Bearer {active_token}",
+                "cont-yn": cont_yn,
+                "next-key": next_key,
+                "api-id": api_id,
             }
             try:
                 response = requests.post(
@@ -3140,12 +3426,14 @@ def fetch_kiwoom_api_continuous(
                     json=payload,
                     timeout=(KIWOOM_CONNECT_TIMEOUT_SEC, KIWOOM_READ_TIMEOUT_SEC),
                 )
-                
+
                 if response.status_code == 200:
                     break  # 성공 시 재시도 루프 탈출
                 elif response.status_code == 429:
                     wait_sec = (retry_count + 1) * 3
-                    print(f"⚠️ [{api_id}] 429 요청 제한! {wait_sec}초 대기 후 재시도... ({retry_count+1}/{max_retries})")
+                    print(
+                        f"⚠️ [{api_id}] 429 요청 제한! {wait_sec}초 대기 후 재시도... ({retry_count+1}/{max_retries})"
+                    )
                     time.sleep(wait_sec)
                     retry_count += 1
                 elif 500 <= response.status_code < 600:
@@ -3157,9 +3445,11 @@ def fetch_kiwoom_api_continuous(
                     time.sleep(wait_sec)
                     retry_count += 1
                 else:
-                    log_error(f"❌ [{api_id}] HTTP 에러 {response.status_code}: {response.text}")
+                    log_error(
+                        f"❌ [{api_id}] HTTP 에러 {response.status_code}: {response.text}"
+                    )
                     break  # 치명적 에러는 즉시 중단
-                    
+
             except requests.exceptions.ReadTimeout:
                 wait_sec = min(2 * (retry_count + 1), 6)
                 log_info(
@@ -3180,7 +3470,9 @@ def fetch_kiwoom_api_continuous(
                 retry_count += 1
             except requests.exceptions.ConnectionError:
                 wait_sec = min(2 * (retry_count + 1), 6)
-                log_info(f"⚠️ [{api_id}] 연결 끊김. {wait_sec}초 대기 후 재접속... ({retry_count+1}/{max_retries})")
+                log_info(
+                    f"⚠️ [{api_id}] 연결 끊김. {wait_sec}초 대기 후 재접속... ({retry_count+1}/{max_retries})"
+                )
                 time.sleep(wait_sec)
                 retry_count += 1
             except Exception as e:
@@ -3190,17 +3482,21 @@ def fetch_kiwoom_api_continuous(
         if response is None or response.status_code != 200:
             log_error(f"🚨 [{api_id}] 최대 재시도 초과 또는 실패. 조회를 중단합니다.")
             break
-            
+
         res_json = response.json()
         meta["rest_received_ts_ms"] = int(time.time() * 1000)
-        
+
         # return_code 체크 (정상이 아니면 경고 후 응답값 저장)
-        response_code = str(res_json.get('return_code', res_json.get('rt_cd', '0')))
-        if response_code != '0':
-            log_info(f"⚠️ [{api_id}] API 거절 사유: {res_json.get('return_msg', '알 수 없는 에러')}")
+        response_code = str(res_json.get("return_code", res_json.get("rt_cd", "0")))
+        if response_code != "0":
+            log_info(
+                f"⚠️ [{api_id}] API 거절 사유: {res_json.get('return_msg', '알 수 없는 에러')}"
+            )
             if _is_kiwoom_auth_8005_response(res_json):
                 if auth_retry_used:
-                    log_error(f"🚨 [{api_id}] 8005 token refresh retry 후에도 인증 실패. 조회를 중단합니다.")
+                    log_error(
+                        f"🚨 [{api_id}] 8005 token refresh retry 후에도 인증 실패. 조회를 중단합니다."
+                    )
                     all_results.append(res_json)
                     break
                 auth_retry_used = True
@@ -3215,22 +3511,22 @@ def fetch_kiwoom_api_continuous(
                     continue
                 all_results.append(res_json)
                 break
-            
+
         all_results.append(res_json)
         meta["page_count"] = len(all_results)
-        
+
         # 💡 연속조회 모드가 아니면 첫 응답 후 바로 종료
         if not use_continuous:
             break
-            
-        cont_yn = str(response.headers.get('cont-yn', 'N') or 'N').upper()
-        next_key = str(response.headers.get('next-key', '') or '').strip()
+
+        cont_yn = str(response.headers.get("cont-yn", "N") or "N").upper()
+        next_key = str(response.headers.get("next-key", "") or "").strip()
         if cont_yn == "Y":
             meta["cont_yn_seen"] = True
         if next_key:
             meta["next_key_seen"] = True
-        
-        if cont_yn != 'Y':
+
+        if cont_yn != "Y":
             break  # 더 이상 페이지가 없으면 탈출
         if not next_key:
             meta["continuous_next_key_missing"] = True
@@ -3238,14 +3534,17 @@ def fetch_kiwoom_api_continuous(
         if max_pages is not None and len(all_results) >= max(1, int(max_pages or 1)):
             meta["continuous_page_limit_reached"] = True
             break
-            
+
         time.sleep(0.5)  # 연속조회 시 서버 배려를 위한 딜레이(실전서버)
         # time.sleep(1.2)  # 연속조회 시 서버 배려를 위한 딜레이(모의투자서버)
 
     return (all_results, meta) if return_meta else all_results
+
+
 # ==========================================
 # 3. 오프라인 순수 유틸리티 (외부 통신 없음)
 # ==========================================
+
 
 def is_trading_day():
     """
@@ -3272,6 +3571,7 @@ def is_trading_day():
 
     return True, "정상거래일"
 
+
 def is_valid_stock(code, name, token=None, current_price=0):
     """
     [공통 필터] 불순물 종목을 걸러냅니다.
@@ -3284,39 +3584,61 @@ def is_valid_stock(code, name, token=None, current_price=0):
     # 1. 이름 기반 필터링 (KODEX 포함 제외 목록)
     # ==========================================
     invalid_keywords = [
-        '스팩', 'ETF', 'ETN', 'TIGER', 'KBSTAR', 'KODEX',
-        'KINDEX', 'ARIRANG', 'KOSEF', '리츠', 'HANARO',
-        'SOL ', 'ACE ', 'RISE ', 'PLUS ', 'TIMEFOLIO', 'KIWOOM ',
+        "스팩",
+        "ETF",
+        "ETN",
+        "TIGER",
+        "KBSTAR",
+        "KODEX",
+        "KINDEX",
+        "ARIRANG",
+        "KOSEF",
+        "리츠",
+        "HANARO",
+        "SOL ",
+        "ACE ",
+        "RISE ",
+        "PLUS ",
+        "TIMEFOLIO",
+        "KIWOOM ",
     ]
-    
+
     for keyword in invalid_keywords:
         if keyword in name_upper:
             return False
 
     # 2. 우선주 필터링 (이름 끝자리 및 코드 번호 규칙)
-    if name.endswith(('우', '우B', '우C')):
+    if name.endswith(("우", "우B", "우C")):
         return False
 
-    if len(str(code)) == 6 and str(code)[-1] != '0':
+    if len(str(code)) == 6 and str(code)[-1] != "0":
         return False
 
     # 3. 파생상품 및 기타 예외 처리
-    derivative_keywords = ['선물', '레버리지', '블룸버그', 'VIX', '인버스']
+    derivative_keywords = ["선물", "레버리지", "블룸버그", "VIX", "인버스"]
     for keyword in derivative_keywords:
         if keyword in name_upper:
             return False
 
     return True
 
+
 def get_tick_size(price):
     """한국 주식시장 호가 단위 계산기 (2023년 코스피/코스닥 통합 규정)"""
-    if price < 2000: return 1
-    if price < 5000: return 5
-    if price < 20000: return 10
-    if price < 50000: return 50
-    if price < 200000: return 100
-    if price < 500000: return 500
+    if price < 2000:
+        return 1
+    if price < 5000:
+        return 5
+    if price < 20000:
+        return 10
+    if price < 50000:
+        return 50
+    if price < 200000:
+        return 100
+    if price < 500000:
+        return 500
     return 1000
+
 
 def get_price_ticks_down(curr_price, ticks=2):
     """현재가에서 지정한 틱(호가) 수만큼 정확히 내린 가격을 계산합니다."""
@@ -3327,25 +3649,28 @@ def get_price_ticks_down(curr_price, ticks=2):
         price -= tick
     return price
 
+
 def get_target_price_by_percent(curr_price, drop_percent=0.5):
     """
-    [스캘핑 전용] 현재가에서 목표 퍼센트(%)만큼 하락한 가격을 
+    [스캘핑 전용] 현재가에서 목표 퍼센트(%)만큼 하락한 가격을
     한국 주식시장 호가 규격에 딱 맞춰서 계산해 줍니다.
-    
+
     예: 19,900원에서 0.5% 하락(-99.5원) -> 19,800원으로 자동 맞춤
     """
-    if curr_price <= 0: return 0
-    
+    if curr_price <= 0:
+        return 0
+
     # 1. 퍼센트를 적용한 이상적인 목표가 계산
     ideal_target = curr_price * (1 - (drop_percent / 100.0))
-    
+
     # 2. 현재가에서 호가를 하나씩 내리면서 목표가에 가장 근접한 실제 호가를 찾음
     price = curr_price
     while price > ideal_target:
         tick = get_tick_size(price - 1)
         price -= tick
-        
+
     return price
+
 
 def get_target_price_up(curr_price, up_percent=0.5):
     """
@@ -3367,6 +3692,7 @@ def get_target_price_up(curr_price, up_percent=0.5):
         price += tick
 
     return price
+
 
 def get_investor_flow_summary_ka10059(token, code, base_dt=None):
     """[ka10059] 외인/기관/세부 기관 수급 요약"""
@@ -3398,7 +3724,12 @@ def get_investor_flow_summary_ka10059(token, code, base_dt=None):
 
 def _kiwoom_signed_int(value, default=0):
     try:
-        text = str(value if value is not None else "").strip().replace(",", "").replace("+", "")
+        text = (
+            str(value if value is not None else "")
+            .strip()
+            .replace(",", "")
+            .replace("+", "")
+        )
         if not text:
             return default
         return int(float(text))
@@ -3424,7 +3755,9 @@ def _normalize_investor_row(row):
     }
 
 
-def get_investor_period_total_ka10061(token, code, start_dt, end_dt, amt_qty_tp="2", trde_tp="0", unit_tp="1", is_nxt=None):
+def get_investor_period_total_ka10061(
+    token, code, start_dt, end_dt, amt_qty_tp="2", trde_tp="0", unit_tp="1", is_nxt=None
+):
     """[ka10061] 종목별 외인/기관 기간 합계.
 
     Kiwoom REST access remains owned by this module; downstream resolvers consume
@@ -3433,7 +3766,14 @@ def get_investor_period_total_ka10061(token, code, start_dt, end_dt, amt_qty_tp=
     req_code = get_effective_kiwoom_code(code, is_nxt=is_nxt)
     start_dt = str(start_dt).replace("-", "")
     end_dt = str(end_dt).replace("-", "")
-    cache_key = (str(req_code), start_dt, end_dt, str(amt_qty_tp), str(trde_tp), str(unit_tp))
+    cache_key = (
+        str(req_code),
+        start_dt,
+        end_dt,
+        str(amt_qty_tp),
+        str(trde_tp),
+        str(unit_tp),
+    )
     cached = _cache_get("ka10061_investor_period_total", cache_key)
     if cached is not None:
         return cached
@@ -3486,7 +3826,14 @@ def get_intraday_investor_trade_ka10063(
     Returns rows keyed by normalized stock code. This helper is intended for
     one-shot source collection or smoke tests, not per-symbol tight loops.
     """
-    cache_key = (str(market_tp), str(amt_qty_tp), str(investor), str(frgn_all), str(smtm_netprps_tp), str(stex_tp))
+    cache_key = (
+        str(market_tp),
+        str(amt_qty_tp),
+        str(investor),
+        str(frgn_all),
+        str(smtm_netprps_tp),
+        str(stex_tp),
+    )
     cached = _cache_get("ka10063_intraday_investor_trade", cache_key)
     if cached is not None:
         return cached
@@ -3506,7 +3853,9 @@ def get_intraday_investor_trade_ka10063(
     rows_by_code = {}
     for res in results or []:
         for row in res.get("opmr_invsr_trde", []) or []:
-            code = str(row.get("stk_cd") or row.get("stck_cd") or "").strip().lstrip("A")
+            code = (
+                str(row.get("stk_cd") or row.get("stck_cd") or "").strip().lstrip("A")
+            )
             if not code:
                 continue
             rows_by_code[code] = {
@@ -3515,8 +3864,12 @@ def get_intraday_investor_trade_ka10063(
                 "stock_name": row.get("stk_nm") or row.get("stck_nm"),
                 "net_qty": _kiwoom_signed_int(row.get("netprps_qty")),
                 "net_amt": _kiwoom_signed_int(row.get("netprps_amt")),
-                "buy_qty": _kiwoom_signed_int(row.get("buy_qty") or row.get("buy_cntr_qty")),
-                "sell_qty": _kiwoom_signed_int(row.get("sell_qty") or row.get("sell_cntr_qty")),
+                "buy_qty": _kiwoom_signed_int(
+                    row.get("buy_qty") or row.get("buy_cntr_qty")
+                ),
+                "sell_qty": _kiwoom_signed_int(
+                    row.get("sell_qty") or row.get("sell_cntr_qty")
+                ),
                 "raw": row,
             }
     return _cache_set(
@@ -3527,7 +3880,9 @@ def get_intraday_investor_trade_ka10063(
     )
 
 
-def get_intraday_investor_chart_ka10064(token, code, market_tp="000", amt_qty_tp="2", trde_tp="0", is_nxt=None):
+def get_intraday_investor_chart_ka10064(
+    token, code, market_tp="000", amt_qty_tp="2", trde_tp="0", is_nxt=None
+):
     """[ka10064] 종목별 장중 외인/기관 매매 차트 최신값."""
     req_code = get_effective_kiwoom_code(code, is_nxt=is_nxt)
     cache_key = (str(req_code), str(market_tp), str(amt_qty_tp), str(trde_tp))
@@ -3567,7 +3922,9 @@ def get_intraday_investor_chart_ka10064(token, code, market_tp="000", amt_qty_tp
     )
 
 
-def get_postclose_investor_trade_ka10066(token, market_tp="000", amt_qty_tp="2", trde_tp="0", stex_tp="3"):
+def get_postclose_investor_trade_ka10066(
+    token, market_tp="000", amt_qty_tp="2", trde_tp="0", stex_tp="3"
+):
     """[ka10066] 장마감 후 투자자별 매매 목록."""
     cache_key = (str(market_tp), str(amt_qty_tp), str(trde_tp), str(stex_tp))
     cached = _cache_get("ka10066_postclose_investor_trade", cache_key)
@@ -3587,7 +3944,9 @@ def get_postclose_investor_trade_ka10066(token, market_tp="000", amt_qty_tp="2",
     rows_by_code = {}
     for res in results or []:
         for row in res.get("opaf_invsr_trde", []) or []:
-            code = str(row.get("stk_cd") or row.get("stck_cd") or "").strip().lstrip("A")
+            code = (
+                str(row.get("stk_cd") or row.get("stck_cd") or "").strip().lstrip("A")
+            )
             if not code:
                 continue
             normalized = _normalize_investor_row(row)
@@ -3652,13 +4011,17 @@ def summarize_ticks_for_realtime_ka10003(token, code, limit=20):
             observation.get("inside_spread_count"),
             0,
         )
-        res["ka10003_buy_dominance_observation_split_vs_15_evaluable_count"] = _coerce_int(
-            observation.get("split_vs_15_evaluable_count"),
-            0,
+        res["ka10003_buy_dominance_observation_split_vs_15_evaluable_count"] = (
+            _coerce_int(
+                observation.get("split_vs_15_evaluable_count"),
+                0,
+            )
         )
-        res["ka10003_buy_dominance_observation_split_vs_15_mismatch_count"] = _coerce_int(
-            observation.get("split_vs_15_mismatch_count"),
-            0,
+        res["ka10003_buy_dominance_observation_split_vs_15_mismatch_count"] = (
+            _coerce_int(
+                observation.get("split_vs_15_mismatch_count"),
+                0,
+            )
         )
 
     source_counts = {}
@@ -3669,7 +4032,11 @@ def summarize_ticks_for_realtime_ka10003(token, code, limit=20):
     for tick in ticks:
         if not isinstance(tick, dict):
             continue
-        source = str(tick.get("aggressor_source") or tick.get("dir_source") or "declared_tick_side")
+        source = str(
+            tick.get("aggressor_source")
+            or tick.get("dir_source")
+            or "declared_tick_side"
+        )
         side = str(tick.get("aggressor_side") or tick.get("dir") or "").upper()
         source_counts[source] = source_counts.get(source, 0) + 1
         if source == "price_change_heuristic":
@@ -3734,8 +4101,16 @@ def _window_signed_ratio(history, last_n):
     if not history:
         return 0.0, 0, 0, 0
     series = list(history)[-last_n:]
-    buy_qty = sum(abs(_coerce_int(item.get("qty", 0))) for item in series if _coerce_int(item.get("qty", 0)) > 0)
-    sell_qty = sum(abs(_coerce_int(item.get("qty", 0))) for item in series if _coerce_int(item.get("qty", 0)) < 0)
+    buy_qty = sum(
+        abs(_coerce_int(item.get("qty", 0)))
+        for item in series
+        if _coerce_int(item.get("qty", 0)) > 0
+    )
+    sell_qty = sum(
+        abs(_coerce_int(item.get("qty", 0)))
+        for item in series
+        if _coerce_int(item.get("qty", 0)) < 0
+    )
     signed_now = _coerce_int(series[-1].get("qty", 0)) if series else 0
     total = buy_qty + sell_qty
     ratio = (buy_qty / total) * 100.0 if total > 0 else 0.0
@@ -3761,7 +4136,7 @@ def _build_daily_setup_desc(ctx):
     if ma20 > 0 and curr_price < ma20:
         return "중립 또는 약세"
     return "박스 또는 눌림 구간"
-    
+
 
 def build_realtime_analysis_context(
     token,
@@ -3862,9 +4237,12 @@ def build_realtime_analysis_context(
             if c_close > 0 and c_vol > 0:
                 total_turnover += c_close * c_vol
                 total_volume += c_vol
-            if c_high > 0: highs.append(c_high)
-            if c_low > 0: lows.append(c_low)
-            if c_close > 0: closes.append(c_close)
+            if c_high > 0:
+                highs.append(c_high)
+            if c_low > 0:
+                lows.append(c_low)
+            if c_close > 0:
+                closes.append(c_close)
         if total_volume > 0:
             vwap_price = int(total_turnover / total_volume)
         if highs:
@@ -3874,19 +4252,37 @@ def build_realtime_analysis_context(
         if lows:
             intraday_low = min(lows)
         last_5 = minute_candles[-5:]
-        box_high = max((_coerce_int(c.get("고가") or c.get("High"), 0) for c in last_5), default=0)
-        lows_5 = [_coerce_int(c.get("저가") or c.get("Low"), 0) for c in last_5 if _coerce_int(c.get("저가") or c.get("Low"), 0) > 0]
+        box_high = max(
+            (_coerce_int(c.get("고가") or c.get("High"), 0) for c in last_5), default=0
+        )
+        lows_5 = [
+            _coerce_int(c.get("저가") or c.get("Low"), 0)
+            for c in last_5
+            if _coerce_int(c.get("저가") or c.get("Low"), 0) > 0
+        ]
         box_low = min(lows_5) if lows_5 else 0
 
     if curr_price > 0 and target_price <= 0:
-        up_pct = 3.0 if str(strat_label).upper() in {"KOSPI_ML", "KOSDAQ_ML", "SWING"} else 1.0
+        up_pct = (
+            3.0
+            if str(strat_label).upper() in {"KOSPI_ML", "KOSDAQ_ML", "SWING"}
+            else 1.0
+        )
         target_price = get_target_price_up(curr_price, up_pct)
         target_reason = target_reason or f"기본 목표가(+{up_pct:.1f}%)"
 
     if stop_pct <= 0.0:
-        stop_pct = 2.0 if str(strat_label).upper() in {"KOSPI_ML", "KOSDAQ_ML", "SWING"} else 0.8
+        stop_pct = (
+            2.0
+            if str(strat_label).upper() in {"KOSPI_ML", "KOSDAQ_ML", "SWING"}
+            else 0.8
+        )
     if trailing_pct <= 0.0:
-        trailing_pct = 4.0 if str(strat_label).upper() in {"KOSPI_ML", "KOSDAQ_ML", "SWING"} else 1.5
+        trailing_pct = (
+            4.0
+            if str(strat_label).upper() in {"KOSPI_ML", "KOSDAQ_ML", "SWING"}
+            else 1.5
+        )
 
     ma5_status = "정보없음"
     ma20_status = "정보없음"
@@ -3898,7 +4294,9 @@ def build_realtime_analysis_context(
     if ma60 > 0 and curr_price > 0:
         ma60_status = "60일선 상회" if curr_price >= ma60 else "60일선 하회"
 
-    orderbook_imbalance = (ask_tot / bid_tot) if bid_tot > 0 else (999.0 if ask_tot > 0 else 0.0)
+    orderbook_imbalance = (
+        (ask_tot / bid_tot) if bid_tot > 0 else (999.0 if ask_tot > 0 else 0.0)
+    )
     tick_size = get_tick_size(curr_price) if curr_price > 0 else 1
     spread_tick = 0
     if best_ask > 0 and best_bid > 0 and tick_size > 0:
@@ -3913,15 +4311,27 @@ def build_realtime_analysis_context(
     sell_exec_single = _coerce_int(ws_data.get("sell_exec_single"), 0)
     ws_buy_ratio = _coerce_float(ws_data.get("buy_ratio"), 0.0)
     exec_total_volume = buy_exec_volume + sell_exec_volume
-    exec_buy_ratio = ((buy_exec_volume / exec_total_volume) * 100.0) if exec_total_volume > 0 else ws_buy_ratio
+    exec_buy_ratio = (
+        ((buy_exec_volume / exec_total_volume) * 100.0)
+        if exec_total_volume > 0
+        else ws_buy_ratio
+    )
     net_bid_depth = _coerce_int(ws_data.get("net_bid_depth"), 0)
     bid_depth_ratio = _coerce_float(ws_data.get("bid_depth_ratio"), 0.0)
     net_ask_depth = _coerce_int(ws_data.get("net_ask_depth"), 0)
     ask_depth_ratio = _coerce_float(ws_data.get("ask_depth_ratio"), 0.0)
-    prog_buy_qty = _coerce_int(ws_data.get("prog_buy_qty"), 0) or _coerce_int(program_pack.get("buy_qty"), 0)
-    prog_sell_qty = _coerce_int(ws_data.get("prog_sell_qty"), 0) or _coerce_int(program_pack.get("sell_qty"), 0)
-    prog_buy_amt = _coerce_int(ws_data.get("prog_buy_amt"), 0) or _coerce_int(program_pack.get("buy_amt"), 0)
-    prog_sell_amt = _coerce_int(ws_data.get("prog_sell_amt"), 0) or _coerce_int(program_pack.get("sell_amt"), 0)
+    prog_buy_qty = _coerce_int(ws_data.get("prog_buy_qty"), 0) or _coerce_int(
+        program_pack.get("buy_qty"), 0
+    )
+    prog_sell_qty = _coerce_int(ws_data.get("prog_sell_qty"), 0) or _coerce_int(
+        program_pack.get("sell_qty"), 0
+    )
+    prog_buy_amt = _coerce_int(ws_data.get("prog_buy_amt"), 0) or _coerce_int(
+        program_pack.get("buy_amt"), 0
+    )
+    prog_sell_amt = _coerce_int(ws_data.get("prog_sell_amt"), 0) or _coerce_int(
+        program_pack.get("sell_amt"), 0
+    )
 
     if exec_total_volume > 0 and exec_buy_ratio >= 60.0 and net_buy_exec_volume > 0:
         micro_flow_desc = "단기 매수 체결 우위"
@@ -4000,11 +4410,15 @@ def build_realtime_analysis_context(
     if trend_score == 0.0 and score:
         trend_score = min(100.0, max(0.0, float(score)))
     if flow_score == 0.0:
-        flow_score = min(100.0, max(0.0, 50.0 + (program_pack.get("net_qty", 0) / 10000.0)))
+        flow_score = min(
+            100.0, max(0.0, 50.0 + (program_pack.get("net_qty", 0) / 10000.0))
+        )
     if orderbook_score == 0.0:
         orderbook_score = 60.0 if bid_tot >= ask_tot else 45.0
     if timing_score == 0.0 and v_pw_runtime_support_usable:
-        timing_score = min(100.0, max(0.0, 50.0 + (v_pw_now - 100.0))) if v_pw_now > 0 else 50.0
+        timing_score = (
+            min(100.0, max(0.0, 50.0 + (v_pw_now - 100.0))) if v_pw_now > 0 else 50.0
+        )
     elif timing_score == 0.0:
         timing_score = 50.0
 
@@ -4039,12 +4453,16 @@ def build_realtime_analysis_context(
         "v_pw_1m": v_pw_1m,
         "v_pw_3m": v_pw_3m,
         "v_pw_5m": v_pw_5m,
-        "ka10046_strength_source": strength_pack.get("source", "ka10046_rest_strength_trend"),
+        "ka10046_strength_source": strength_pack.get(
+            "source", "ka10046_rest_strength_trend"
+        ),
         "ka10046_strength_decision_authority": strength_pack.get(
             "decision_authority",
             "strength_trend_rest_fallback_source_only",
         ),
-        "ka10046_strength_runtime_effect": bool(strength_pack.get("runtime_effect", False)),
+        "ka10046_strength_runtime_effect": bool(
+            strength_pack.get("runtime_effect", False)
+        ),
         "ka10046_strength_rest_received_ts_ms": _coerce_int(
             strength_pack.get("rest_received_ts_ms"),
             0,
@@ -4053,26 +4471,35 @@ def build_realtime_analysis_context(
         "buy_ratio_1m": _coerce_float(tick_pack.get("buy_ratio_1m"), 0.0),
         "buy_ratio_3m": _coerce_float(tick_pack.get("buy_ratio_3m"), 0.0),
         "trade_qty_signed_now": _coerce_int(tick_pack.get("trade_qty_signed_now"), 0),
-        "ka10003_buy_dominance_observation": tick_pack.get("ka10003_buy_dominance_observation") or {},
+        "ka10003_buy_dominance_observation": tick_pack.get(
+            "ka10003_buy_dominance_observation"
+        )
+        or {},
         "ka10003_buy_dominance_observation_source_counts": (
             tick_pack.get("ka10003_buy_dominance_observation_source_counts") or {}
         ),
         "ka10003_buy_dominance_observation_trade_value_source_counts": (
-            tick_pack.get("ka10003_buy_dominance_observation_trade_value_source_counts") or {}
+            tick_pack.get("ka10003_buy_dominance_observation_trade_value_source_counts")
+            or {}
         ),
         "ka10003_buy_dominance_observation_inside_spread_count": _coerce_int(
             tick_pack.get("ka10003_buy_dominance_observation_inside_spread_count"),
             0,
         ),
         "ka10003_buy_dominance_observation_split_vs_15_evaluable_count": _coerce_int(
-            tick_pack.get("ka10003_buy_dominance_observation_split_vs_15_evaluable_count"),
+            tick_pack.get(
+                "ka10003_buy_dominance_observation_split_vs_15_evaluable_count"
+            ),
             0,
         ),
         "ka10003_buy_dominance_observation_split_vs_15_mismatch_count": _coerce_int(
-            tick_pack.get("ka10003_buy_dominance_observation_split_vs_15_mismatch_count"),
+            tick_pack.get(
+                "ka10003_buy_dominance_observation_split_vs_15_mismatch_count"
+            ),
             0,
         ),
-        "prog_net_qty": _coerce_int(ws_data.get("prog_net_qty"), 0) or _coerce_int(program_pack.get("net_qty"), 0),
+        "prog_net_qty": _coerce_int(ws_data.get("prog_net_qty"), 0)
+        or _coerce_int(program_pack.get("net_qty"), 0),
         "prog_delta_qty": _coerce_int(ws_data.get("prog_delta_qty"), 0),
         "prog_buy_qty": prog_buy_qty,
         "prog_sell_qty": prog_sell_qty,
@@ -4111,14 +4538,16 @@ def build_realtime_analysis_context(
         "high_breakout_status": high_breakout_status,
         "box_high": box_high,
         "box_low": box_low,
-        "daily_setup_desc": _build_daily_setup_desc({
-            "curr_price": curr_price,
-            "ma5": ma5,
-            "ma20": ma20,
-            "prev_high": prev_high,
-            "vol_ratio": vol_ratio,
-            "near_20d_high_pct": near_20d_high_pct,
-        }),
+        "daily_setup_desc": _build_daily_setup_desc(
+            {
+                "curr_price": curr_price,
+                "ma5": ma5,
+                "ma20": ma20,
+                "prev_high": prev_high,
+                "vol_ratio": vol_ratio,
+                "near_20d_high_pct": near_20d_high_pct,
+            }
+        ),
         "ma5_status": ma5_status,
         "ma20_status": ma20_status,
         "ma60_status": ma60_status,

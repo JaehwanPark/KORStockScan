@@ -14,7 +14,6 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from src.utils.constants import POSTGRES_URL
 
-
 DDL_STATEMENTS = [
     "ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS add_count INTEGER DEFAULT 0;",
     "ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS avg_down_count INTEGER DEFAULT 0;",

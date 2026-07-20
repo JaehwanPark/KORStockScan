@@ -10,24 +10,39 @@ class YahooMarketDataProvider:
     @staticmethod
     def _normalize_column_name(col) -> str:
         if isinstance(col, tuple):
-            parts = [str(part).strip() for part in col if str(part).strip() and str(part).strip().lower() != "nan"]
+            parts = [
+                str(part).strip()
+                for part in col
+                if str(part).strip() and str(part).strip().lower() != "nan"
+            ]
             if not parts:
                 return ""
             for part in parts:
                 lowered = part.lower()
-                if lowered in {"date", "datetime", "open", "high", "low", "close", "adj close", "volume"}:
+                if lowered in {
+                    "date",
+                    "datetime",
+                    "open",
+                    "high",
+                    "low",
+                    "close",
+                    "adj close",
+                    "volume",
+                }:
                     return lowered
             return parts[0].lower()
         return str(col).strip().lower()
 
-    def fetch_history(self, ticker: str, period: str = "3mo", interval: str = "1d") -> pd.DataFrame:
+    def fetch_history(
+        self, ticker: str, period: str = "3mo", interval: str = "1d"
+    ) -> pd.DataFrame:
         df = yf.download(
             tickers=ticker,
             period=period,
             interval=interval,
             auto_adjust=False,
             progress=False,
-            threads=False
+            threads=False,
         )
 
         if df is None or df.empty:
@@ -38,13 +53,19 @@ class YahooMarketDataProvider:
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = [self._normalize_column_name(col) for col in df.columns]
         else:
-            df = df.rename(columns={col: self._normalize_column_name(col) for col in df.columns})
+            df = df.rename(
+                columns={col: self._normalize_column_name(col) for col in df.columns}
+            )
 
         if "date" not in df.columns and "datetime" in df.columns:
             df["date"] = df["datetime"]
 
         # 필요한 컬럼만 유지
-        keep_cols = [c for c in ["date", "open", "high", "low", "close", "adj close", "volume"] if c in df.columns]
+        keep_cols = [
+            c
+            for c in ["date", "open", "high", "low", "close", "adj close", "volume"]
+            if c in df.columns
+        ]
         df = df[keep_cols].copy()
 
         if "close" in df.columns:

@@ -11,6 +11,8 @@ from src.trading.entry.entry_types import (
     SignalSnapshot,
 )
 from src.trading.order.tick_utils import move_price_by_ticks
+
+
 class EntryPolicy:
     """Hard policy filter for latency-aware entry acceptance."""
 
@@ -26,7 +28,9 @@ class EntryPolicy:
         now: datetime | None = None,
     ) -> PolicyResult:
         current_time = now or datetime.now(UTC)
-        elapsed_ms = int(max(0.0, (current_time - snapshot.signal_time).total_seconds() * 1000))
+        elapsed_ms = int(
+            max(0.0, (current_time - snapshot.signal_time).total_seconds() * 1000)
+        )
         if elapsed_ms > self.config.entry_deadline_ms:
             return PolicyResult(
                 decision=EntryDecision.REJECT_TIMEOUT,
@@ -54,7 +58,9 @@ class EntryPolicy:
                 tick_limit=self.config.normal_allowed_slippage_ticks,
                 pct_limit=self.config.normal_allowed_slippage_pct,
             )
-            if not self._slippage_ok(snapshot.signal_price, latest_price, allowed, snapshot.side):
+            if not self._slippage_ok(
+                snapshot.signal_price, latest_price, allowed, snapshot.side
+            ):
                 return PolicyResult(
                     decision=EntryDecision.REJECT_SLIPPAGE,
                     reason="safe_slippage_exceeded",
@@ -78,7 +84,9 @@ class EntryPolicy:
             tick_limit=self.config.fallback_allowed_slippage_ticks,
             pct_limit=self.config.fallback_allowed_slippage_pct,
         )
-        if not self._slippage_ok(snapshot.signal_price, latest_price, allowed, snapshot.side):
+        if not self._slippage_ok(
+            snapshot.signal_price, latest_price, allowed, snapshot.side
+        ):
             return PolicyResult(
                 decision=EntryDecision.REJECT_SLIPPAGE,
                 reason="caution_slippage_exceeded",
@@ -109,7 +117,9 @@ class EntryPolicy:
         return max(1, tick_based, pct_based)
 
     @staticmethod
-    def _slippage_ok(signal_price: int, latest_price: int, allowed: int, side: str) -> bool:
+    def _slippage_ok(
+        signal_price: int, latest_price: int, allowed: int, side: str
+    ) -> bool:
         normalized_side = str(side).upper()
         if normalized_side == "SELL":
             return latest_price >= (signal_price - allowed)

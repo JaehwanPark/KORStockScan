@@ -47,7 +47,9 @@ def move_price_by_ticks(price: int | float, ticks: int) -> int:
     return moved
 
 
-def move_price_down_by_bps(price: int | float, bps: int, *, floor_ticks: int = 1) -> int:
+def move_price_down_by_bps(
+    price: int | float, bps: int, *, floor_ticks: int = 1
+) -> int:
     """Move price down by bps (1 bps = 0.01%), clamp to tick, enforce minimum tick floor.
 
     Returns int price at least floor_ticks below the original price.
