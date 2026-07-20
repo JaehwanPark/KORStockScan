@@ -18,18 +18,18 @@
 
 | family | state | score | reasons |
 | --- | --- | ---: | --- |
-| `swing_model_floor` | `hold_sample` | 0.2943 | `family_sample_floor_not_met, critical_instrumentation_gap, severe_downside_guard` |
-| `swing_selection_top_k` | `hold_sample` | 0.2943 | `family_sample_floor_not_met, critical_instrumentation_gap, severe_downside_guard` |
-| `swing_gatekeeper_accept_reject` | `hold_sample` | 0.261 | `family_sample_floor_not_met, critical_instrumentation_gap, severe_downside_guard, runtime_family_guard_missing` |
-| `swing_gatekeeper_reject_cooldown` | `hold_sample` | 0.261 | `family_sample_floor_not_met, critical_instrumentation_gap, severe_downside_guard` |
-| `swing_market_regime_sensitivity` | `hold_sample` | 0.261 | `family_sample_floor_not_met, critical_instrumentation_gap, severe_downside_guard` |
-| `swing_pyramid_trigger` | `hold_sample` | 0.261 | `family_sample_floor_not_met, critical_instrumentation_gap, severe_downside_guard, runtime_family_guard_missing` |
-| `swing_avg_down_eligibility` | `hold_sample` | 0.261 | `family_sample_floor_not_met, critical_instrumentation_gap, severe_downside_guard, runtime_family_guard_missing` |
-| `swing_trailing_stop_time_stop` | `freeze` | 0.361 | `critical_instrumentation_gap, severe_downside_guard, runtime_family_guard_missing` |
-| `swing_holding_flow_defer` | `hold_sample` | 0.301 | `family_sample_floor_not_met, critical_instrumentation_gap, severe_downside_guard, runtime_family_guard_missing` |
-| `swing_entry_ofi_qi_execution_quality` | `hold_sample` | 0.261 | `family_sample_floor_not_met, critical_instrumentation_gap, severe_downside_guard, runtime_family_guard_missing` |
-| `swing_scale_in_ofi_qi_confirmation` | `hold_sample` | 0.261 | `family_sample_floor_not_met, critical_instrumentation_gap, severe_downside_guard, runtime_family_guard_missing` |
-| `swing_exit_ofi_qi_smoothing` | `hold_sample` | 0.301 | `family_sample_floor_not_met, critical_instrumentation_gap, severe_downside_guard, runtime_family_guard_missing` |
+| `swing_model_floor` | `hold_sample` | 0.5207 | `family_sample_floor_not_met` |
+| `swing_selection_top_k` | `hold_sample` | 0.5207 | `family_sample_floor_not_met` |
+| `swing_gatekeeper_accept_reject` | `hold_sample` | 0.4874 | `family_sample_floor_not_met, runtime_family_guard_missing` |
+| `swing_gatekeeper_reject_cooldown` | `hold_sample` | 0.4874 | `family_sample_floor_not_met` |
+| `swing_market_regime_sensitivity` | `hold_sample` | 0.4874 | `family_sample_floor_not_met` |
+| `swing_pyramid_trigger` | `hold_sample` | 0.4874 | `family_sample_floor_not_met, runtime_family_guard_missing` |
+| `swing_avg_down_eligibility` | `hold_sample` | 0.4874 | `family_sample_floor_not_met, runtime_family_guard_missing` |
+| `swing_trailing_stop_time_stop` | `hold_sample` | 0.4874 | `family_sample_floor_not_met, runtime_family_guard_missing` |
+| `swing_holding_flow_defer` | `hold_sample` | 0.4874 | `family_sample_floor_not_met, runtime_family_guard_missing` |
+| `swing_entry_ofi_qi_execution_quality` | `hold_sample` | 0.4874 | `family_sample_floor_not_met, runtime_family_guard_missing` |
+| `swing_scale_in_ofi_qi_confirmation` | `hold_sample` | 0.4874 | `family_sample_floor_not_met, runtime_family_guard_missing` |
+| `swing_exit_ofi_qi_smoothing` | `hold_sample` | 0.4874 | `family_sample_floor_not_met, runtime_family_guard_missing` |
 
 ## Source Quality Blockers
 
