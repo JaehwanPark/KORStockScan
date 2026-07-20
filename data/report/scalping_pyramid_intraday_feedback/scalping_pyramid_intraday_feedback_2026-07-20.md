@@ -1,6 +1,6 @@
 # 2026-07-20 Scalping Pyramid Intraday Feedback
 
-- generated_at: 2026-07-20T15:35:01+09:00
+- generated_at: 2026-07-20T15:45:01+09:00
 - decision_authority: source_only_pyramid_intraday_feedback_no_runtime_mutation
 - runtime_effect: false
 - allowed_runtime_apply: false
@@ -57,7 +57,7 @@
 - record_id=20647 code=099440 name=스맥 label=pyramid_overheat_or_reversal_risk blocker=rising_missed_scout_pyramid_bridge_blocked:profit_not_enough,micro_context_stale,tick_accel_stale,tick_aggressor_pressure_unusable,fresh_micro_confirmation_missing profit=0.65 final=-0.58 ai=50.0 tick=0.143 micro_vwap=-42.19
 - record_id=20422 code=002990 name=금호건설 label=pyramid_overheat_or_reversal_risk blocker=rising_missed_scout_pyramid_bridge_blocked:buy_pressure_severe_below_min,fresh_micro_confirmation_missing profit=0.71 final=0.05 ai=72.0 tick=1.25 micro_vwap=24.54
 - record_id=20752 code=024060 name=흥구석유 label=pyramid_overheat_or_reversal_risk blocker=pyramid_quality_blocked:ai_score_unavailable,tick_aggressor_pressure_unusable,tick_accel_stale,micro_context_stale profit=1.93 final=1.24 ai=58.0 tick=3.0 micro_vwap=-0.76
-- record_id=20395 code=950160 name=코오롱티슈진 label=pyramid_open_unresolved blocker=rising_missed_scout_pyramid_bridge_blocked:profit_not_enough profit=0.1 final=None ai=50.0 tick=0.01 micro_vwap=0.0
+- record_id=20395 code=950160 name=코오롱티슈진 label=pyramid_open_unresolved blocker=rising_missed_scout_pyramid_bridge_blocked:profit_not_enough profit=0.1 final=None ai=50.0 tick=0.0 micro_vwap=0.0
 
 ## One Share Opportunity Rows
 
