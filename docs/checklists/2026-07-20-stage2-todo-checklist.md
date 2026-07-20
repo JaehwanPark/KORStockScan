@@ -25,6 +25,13 @@
 
 ## 장전 체크리스트 (07:55~09:00)
 
+- [ ] `[RuntimeRolloverPreopen0721] 2026-07-20 operator runtime bundle의 익일 overlay 및 PID handoff 확인` (`Due: 2026-07-21`, `Slot: PREOPEN`, `TimeWindow: 07:55~08:10`, `Track: RuntimeStability`)
+  - Source: [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh), [threshold_cycle_preopen_apply.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_preopen_apply.py), [operator_runtime_overrides_2026-07-21.env](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/operator_runtime_overrides_2026-07-21.env)
+  - 판정 기준: 2026-07-21 PREOPEN threshold env를 먼저 source한 뒤 persistent operator override와 target-date overlay가 순서대로 적용되고, 금일 활성화된 date-scoped 20개 family의 `ACTIVE_DATE=2026-07-21`, entry/scale-in split policy usability, runtime verifier `status=pass`, PID mismatch/missing `0`을 확인한다.
+  - 금지: 2026-07-20 프로세스에서 ACTIVE_DATE를 선행 변경해 당일 runtime을 끄거나, stale quote, broker/account/order/quantity/cooldown, hard/protect/emergency stop, provider, sizing/cap 권한을 변경하지 않는다.
+  - 다음 액션: `rollover_reflected_and_verified`, `overlay_missing`, `preopen_env_missing`, `policy_stale`, `pid_handoff_failed`, `rollback_required` 중 하나로 닫는다.
+  - 준비 결과 (`2026-07-20 15:35 KST`): target-date overlay loader와 verifier 합성을 구현하고 금일 `ACTIVE_DATE=2026-07-20`인 20개 family를 누락 없이 `2026-07-21` overlay로 이관했다. runtime wrapper/verifier 전체 `181 passed`, compile, shell syntax, checklist parser, `git diff --check`를 통과했고 review gate 미해결 finding은 `0`이다. PID `231073 -> 270827` 우아한 재기동 후 금일 verifier는 `passed/pid_passed=true`, dated fail/mismatch/missing=`0/0/0`; 계좌 동기화와 WS 연결도 정상이다. 내일 실제 PREOPEN env 생성 후 target-date overlay와 PID handoff를 최종 판정한다.
+
 - [x] `[ScaleInPerTypeExecutionCapPreopen0720] scale-in 유형별 최대 1회 실행 제한 프로세스 반영 확인` (`Due: 2026-07-20`, `Slot: PREOPEN`, `TimeWindow: 07:55~08:10`, `Track: ScalpingLogic`)
   - Source: [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py), [sniper_execution_receipts.py](/home/ubuntu/KORStockScan/src/engine/sniper_execution_receipts.py), [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh)
   - 판정 기준: 신규 프로세스가 변경 코드를 적재했는지 확인하고 동일 포지션 lifecycle에서 `AVG_DOWN` 최대 1회, `PYRAMID` 최대 1회가 각각 독립 적용되는지 확인한다. multi-leg 주문은 하나의 scale-in bundle로 계산하고 미체결/거절/취소 주문은 실행횟수로 계산하지 않는다.
