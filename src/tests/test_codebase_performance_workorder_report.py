@@ -24,10 +24,10 @@ def test_codebase_performance_workorder_report_classifies_candidates(
 
     expected_hash = hashlib.sha256(source_doc.read_bytes()).hexdigest()
     assert report["source_doc_hash"] == expected_hash
-    assert report["summary"]["accepted_count"] == 7
+    assert report["summary"]["accepted_count"] == 8
     assert report["summary"]["implemented_count"] >= 1
-    assert report["summary"]["pending_accepted_count"] <= 6
-    assert report["summary"]["deferred_count"] == 3
+    assert report["summary"]["pending_accepted_count"] <= 7
+    assert report["summary"]["deferred_count"] == 2
     assert report["summary"]["rejected_count"] == 2
     assert report["policy"]["runtime_effect"] is False
     assert report["policy"]["strategy_effect"] is False
@@ -48,6 +48,13 @@ def test_codebase_performance_workorder_report_classifies_candidates(
         }
         assert isinstance(item["implementation_checks"], list)
         assert "runtime_threshold_mutation" in item["forbidden_uses"]
+
+    sentinel_cache = next(
+        item
+        for item in report["accepted_candidates"]
+        if item["item_id"] == "order_perf_sentinel_event_cache_incremental_review"
+    )
+    assert sentinel_cache["implementation_status"] == "implemented"
 
     json_path = report_dir / "codebase_performance_workorder_2026-05-14.json"
     md_path = report_dir / "codebase_performance_workorder_2026-05-14.md"
