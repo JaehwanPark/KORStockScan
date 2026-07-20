@@ -3444,6 +3444,63 @@ DATED_RUNTIME_OVERRIDE_SPECS: tuple[dict[str, str], ...] = (
         "enabled_key": "KORSTOCKSCAN_SCALP_NXT_TRAILING_BID_GUARD_ENABLED",
         "active_date_key": "KORSTOCKSCAN_SCALP_NXT_TRAILING_BID_GUARD_ACTIVE_DATE",
     },
+    {
+        "family": "latency_true_ofi_direct_canary_dynamic_age_band",
+        "enabled_key": (
+            "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_DYNAMIC_AGE_BAND_ENABLED"
+        ),
+        "active_date_key": (
+            "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_DYNAMIC_AGE_BAND_ACTIVE_DATE"
+        ),
+    },
+    {
+        "family": "rising_missed_post_ai_hard_negative_block",
+        "enabled_key": (
+            "KORSTOCKSCAN_RISING_MISSED_POST_AI_HARD_NEGATIVE_BLOCK_ENABLED"
+        ),
+        "active_date_key": (
+            "KORSTOCKSCAN_RISING_MISSED_POST_AI_HARD_NEGATIVE_BLOCK_ACTIVE_DATE"
+        ),
+    },
+    {
+        "family": "scalp_trailing_loss_conversion_recheck",
+        "enabled_key": (
+            "KORSTOCKSCAN_SCALP_TRAILING_LOSS_CONVERSION_RECHECK_ENABLED"
+        ),
+        "active_date_key": (
+            "KORSTOCKSCAN_SCALP_TRAILING_LOSS_CONVERSION_RECHECK_ACTIVE_DATE"
+        ),
+    },
+    {
+        "family": "rising_missed_tp1_strong_micro_source_gap_relief",
+        "enabled_key": (
+            "KORSTOCKSCAN_RISING_MISSED_TP1_STRONG_MICRO_SOURCE_GAP_RELIEF_ENABLED"
+        ),
+        "active_date_key": (
+            "KORSTOCKSCAN_RISING_MISSED_TP1_STRONG_MICRO_SOURCE_GAP_RELIEF_ACTIVE_DATE"
+        ),
+        "dependency_enabled_key": "KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ENABLED",
+    },
+    {
+        "family": "rising_missed_tick_absolute_throughput_relief",
+        "enabled_key": (
+            "KORSTOCKSCAN_RISING_MISSED_TICK_ABSOLUTE_THROUGHPUT_RELIEF_ENABLED"
+        ),
+        "active_date_key": (
+            "KORSTOCKSCAN_RISING_MISSED_TICK_ABSOLUTE_THROUGHPUT_RELIEF_ACTIVE_DATE"
+        ),
+        "dependency_enabled_key": "KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ENABLED",
+    },
+    {
+        "family": "latency_true_ofi_direct_canary_low_rebound_recovery",
+        "enabled_key": (
+            "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_LOW_REBOUND_RECOVERY_ENABLED"
+        ),
+        "active_date_key": (
+            "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_LOW_REBOUND_RECOVERY_ACTIVE_DATE"
+        ),
+        "dependency_enabled_key": "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_ENABLED",
+    },
 )
 
 
@@ -3730,16 +3787,37 @@ def verify_runtime_env_handoff(
     }
     operator_override_path = RUNTIME_ENV_DIR / "operator_runtime_overrides.env"
     raw_operator_overrides = _read_shell_export_env(operator_override_path)
-    retired_operator_override_keys = sorted(
+    dated_operator_override_path = (
+        RUNTIME_ENV_DIR / f"operator_runtime_overrides_{target_date}.env"
+    )
+    raw_dated_operator_overrides = _read_shell_export_env(
+        dated_operator_override_path
+    )
+    retired_persistent_operator_override_keys = sorted(
         key for key in raw_operator_overrides if key in RETIRED_RUNTIME_ENV_KEYS
+    )
+    retired_dated_operator_override_keys = sorted(
+        key for key in raw_dated_operator_overrides if key in RETIRED_RUNTIME_ENV_KEYS
+    )
+    retired_operator_override_keys = sorted(
+        {
+            *retired_persistent_operator_override_keys,
+            *retired_dated_operator_override_keys,
+        }
     )
     operator_overrides = {
         key: value
         for key, value in raw_operator_overrides.items()
         if key not in RETIRED_RUNTIME_ENV_KEYS
     }
+    dated_operator_overrides = {
+        key: value
+        for key, value in raw_dated_operator_overrides.items()
+        if key not in RETIRED_RUNTIME_ENV_KEYS
+    }
     effective_env_overrides = dict(env_overrides)
     effective_env_overrides.update(operator_overrides)
+    effective_env_overrides.update(dated_operator_overrides)
     findings: list[dict[str, Any]] = []
     for family in retired_selected_families:
         findings.append(
@@ -3752,7 +3830,8 @@ def verify_runtime_env_handoff(
         )
     for source, keys in (
         ("threshold_runtime_env_manifest", retired_manifest_override_keys),
-        ("operator_runtime_overrides", retired_operator_override_keys),
+        ("operator_runtime_overrides", retired_persistent_operator_override_keys),
+        ("dated_operator_runtime_overrides", retired_dated_operator_override_keys),
     ):
         for key in keys:
             findings.append(
@@ -3914,7 +3993,9 @@ def verify_runtime_env_handoff(
                             "manifest_value": manifest_value,
                             "pid_value": pid_value,
                             "expected_value_source": (
-                                "operator_runtime_overrides"
+                                "dated_operator_runtime_overrides"
+                                if key in dated_operator_overrides
+                                else "operator_runtime_overrides"
                                 if key in operator_overrides
                                 else "threshold_runtime_env_manifest"
                             ),
@@ -3934,6 +4015,9 @@ def verify_runtime_env_handoff(
         "pid_env_available": bool(pid_env),
         "retired_manifest_override_keys_blocked": retired_manifest_override_keys,
         "retired_operator_override_keys_blocked": retired_operator_override_keys,
+        "retired_dated_operator_override_keys_blocked": (
+            retired_dated_operator_override_keys
+        ),
         "pid_passed": pid_passed,
         "pid_mismatches": pid_mismatches,
         "pid_missing": pid_missing,
@@ -3941,6 +4025,12 @@ def verify_runtime_env_handoff(
             str(operator_override_path) if operator_override_path.exists() else None
         ),
         "operator_runtime_override_keys": sorted(operator_overrides),
+        "dated_operator_runtime_override_path": (
+            str(dated_operator_override_path)
+            if dated_operator_override_path.exists()
+            else None
+        ),
+        "dated_operator_runtime_override_keys": sorted(dated_operator_overrides),
         "runtime_policy_audits": runtime_policy_audits,
         "runtime_policy_fail_count": sum(
             audit.get("status") == "fail" for audit in runtime_policy_audits

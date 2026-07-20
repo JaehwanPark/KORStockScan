@@ -1085,14 +1085,16 @@ def test_run_bot_waits_for_threshold_runtime_env_before_launching_bot():
     assert script.index('. "$OPERATOR_RUNTIME_OVERRIDES"') < script.index(
         "../.venv/bin/python bot_main.py"
     )
+    assert "operator_runtime_overrides_${RUNTIME_TARGET_DATE}.env" in script
+    assert script.index('. "$DATED_OPERATOR_RUNTIME_OVERRIDES"') < script.index(
+        'disable_expired_dated_runtime_overrides "$RUNTIME_TARGET_DATE"'
+    )
     assert "disable_expired_dated_runtime_overrides" in script
     assert "reset_runtime_policy_env_before_handoff" in script
     assert script.index("reset_runtime_policy_env_before_handoff") < script.index(
         '. "$THRESHOLD_RUNTIME_ENV"'
     )
-    assert (
-        'disable_expired_dated_runtime_overrides "$(TZ=Asia/Seoul date +%F)"' in script
-    )
+    assert 'disable_expired_dated_runtime_overrides "$RUNTIME_TARGET_DATE"' in script
     assert (
         "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED:KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ACTIVE_DATE:"
         in script
@@ -1114,6 +1116,10 @@ def test_run_bot_waits_for_threshold_runtime_env_before_launching_bot():
     assert (
         "KORSTOCKSCAN_SCALP_NXT_TRAILING_BID_GUARD_ENABLED:KORSTOCKSCAN_SCALP_NXT_TRAILING_BID_GUARD_ACTIVE_DATE:"
         in script
+    )
+    assert (
+        "KORSTOCKSCAN_SCALP_TRAILING_LOSS_CONVERSION_RECHECK_ENABLED:"
+        "KORSTOCKSCAN_SCALP_TRAILING_LOSS_CONVERSION_RECHECK_ACTIVE_DATE:" in script
     )
     assert script.index(
         'BOT_CPU_AFFINITY="${KORSTOCKSCAN_BOT_CPU_AFFINITY:-$DEFAULT_BOT_CPU_AFFINITY}"'

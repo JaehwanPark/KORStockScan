@@ -8470,6 +8470,18 @@ def test_dated_runtime_override_audits_accept_current_runtime_bundle():
         "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_ACTIVE_DATE": target_date,
         "KORSTOCKSCAN_SCALP_NXT_TRAILING_BID_GUARD_ENABLED": "true",
         "KORSTOCKSCAN_SCALP_NXT_TRAILING_BID_GUARD_ACTIVE_DATE": target_date,
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_DYNAMIC_AGE_BAND_ENABLED": "true",
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_DYNAMIC_AGE_BAND_ACTIVE_DATE": target_date,
+        "KORSTOCKSCAN_RISING_MISSED_POST_AI_HARD_NEGATIVE_BLOCK_ENABLED": "true",
+        "KORSTOCKSCAN_RISING_MISSED_POST_AI_HARD_NEGATIVE_BLOCK_ACTIVE_DATE": target_date,
+        "KORSTOCKSCAN_SCALP_TRAILING_LOSS_CONVERSION_RECHECK_ENABLED": "true",
+        "KORSTOCKSCAN_SCALP_TRAILING_LOSS_CONVERSION_RECHECK_ACTIVE_DATE": target_date,
+        "KORSTOCKSCAN_RISING_MISSED_TP1_STRONG_MICRO_SOURCE_GAP_RELIEF_ENABLED": "true",
+        "KORSTOCKSCAN_RISING_MISSED_TP1_STRONG_MICRO_SOURCE_GAP_RELIEF_ACTIVE_DATE": target_date,
+        "KORSTOCKSCAN_RISING_MISSED_TICK_ABSOLUTE_THROUGHPUT_RELIEF_ENABLED": "true",
+        "KORSTOCKSCAN_RISING_MISSED_TICK_ABSOLUTE_THROUGHPUT_RELIEF_ACTIVE_DATE": target_date,
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_LOW_REBOUND_RECOVERY_ENABLED": "true",
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_LOW_REBOUND_RECOVERY_ACTIVE_DATE": target_date,
     }
 
     audits = mod._dated_runtime_override_audits(target_date, env)
@@ -8656,6 +8668,51 @@ def test_verify_runtime_env_handoff_pid_uses_operator_runtime_overrides(
         "KORSTOCKSCAN_SWING_SIM_AUTO_POLICY_ENABLED",
         "KORSTOCKSCAN_SWING_SIM_AUTO_POLICY_FILE",
         "KORSTOCKSCAN_SWING_SIM_AUTO_POLICY_VERSION",
+    ]
+
+
+def test_verify_runtime_env_handoff_uses_target_date_operator_overlay(
+    tmp_path, monkeypatch
+):
+    runtime_dir = tmp_path / "runtime_env"
+    runtime_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    (runtime_dir / "threshold_runtime_env_2026-07-21.json").write_text(
+        json.dumps(
+            {"target_date": "2026-07-21", "selected_families": [], "env_overrides": {}}
+        ),
+        encoding="utf-8",
+    )
+    (runtime_dir / "operator_runtime_overrides.env").write_text(
+        "\n".join(
+            [
+                "export KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_ENABLED=true",
+                "export KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_ACTIVE_DATE=2026-07-20",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    overlay_path = runtime_dir / "operator_runtime_overrides_2026-07-21.env"
+    overlay_path.write_text(
+        "export KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_ACTIVE_DATE=2026-07-21\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        mod,
+        "_read_pid_environ",
+        lambda pid: {
+            "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_ENABLED": "true",
+            "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_ACTIVE_DATE": "2026-07-21",
+        },
+    )
+
+    result = mod.verify_runtime_env_handoff("2026-07-21", pid=12345)
+
+    assert result["status"] == "pass"
+    assert result["pid_mismatches"] == []
+    assert result["dated_operator_runtime_override_path"] == str(overlay_path)
+    assert result["dated_operator_runtime_override_keys"] == [
+        "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_ACTIVE_DATE"
     ]
 
 
