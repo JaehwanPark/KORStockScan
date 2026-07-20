@@ -1,6 +1,6 @@
 # Threshold Cycle Postclose Verification - 2026-07-20
 
-- status: `warning`
+- status: `fail`
 - latest_start_marker: `[START] threshold-cycle postclose target_date=2026-07-20 max_iterations=80 started_at=2026-07-20T20:10:01+0900`
 - latest_done_marker: `[DONE] threshold-cycle postclose target_date=2026-07-20 ai_correction_provider=openai panic_sell_defense=true panic_buying=true market_panic_breadth=true scalp_sim_ai_deferred_review=true pipeline_event_verbosity=true quote_consistency_report=true intraday_ws_freshness_monitor=true observation_source_quality_audit=true ai_watching_score_smoothing_diagnostic=true codebase_performance_workorder=true pattern_lab_currentness_audit=true pattern_lab_ai_review=true time_window_regime_counterfactual=true producer_gap_discovery=true stage_hook_workorder_discovery=true stage_hook_runtime_scaffold=true pattern_lab_propagation_audit=true scalp_sim_overnight=true scalp_entry_adm=true entry_split_order_plan=true scale_in_split_order_plan=true entry_ai_gate_backtest=true tight_stop_entry_companion_report=true ai_score_optimization_backtest=true rising_missed_intraday_feedback_postclose=true rising_missed_scout_workorder=true rising_missed_normal_buy_bridge_candidate_discovery=true rising_missed_first_touch_calibration=true scalping_pyramid_intraday_feedback_postclose=true scalping_pyramid_quality_calibration=true scalping_avg_down_recovery_calibration=true rising_missed_classifier_prior=true one_share_threshold_opportunity=true one_share_threshold_opportunity_ai_provider=openai institutional_flow_context=true microstructure_reaction_context=true lifecycle_decision_matrix=true lifecycle_ai_context=true ldm_hypothesis_parent_refinement=true lifecycle_bucket_discovery=true lifecycle_bucket_windows=true lifecycle_bucket_window_list=rolling5d,rolling10d,mtd lifecycle_bucket_promotion_window=mtd force_lifecycle_bucket_windows=false force_deep_audits=false force_workorder_branch=false runtime_apply_bridge=true scalp_sim_auto_approval_control_tower=true latency_classifier_recommendation=true tuning_performance_control_tower=true swing_lifecycle=true swing_strategy_discovery=true swing_lifecycle_matrix=true swing_lifecycle_bucket_discovery=true swing_ai_review_provider=openai swing_lifecycle_bucket_discovery_ai_provider=openai pattern_lab_ai_review_provider=openai producer_gap_discovery_ai_provider=openai stage_hook_workorder_discovery_ai_provider=openai pattern_labs=true deepseek_swing_lab=true code_improvement_workorder=true daily_ev=true runtime_approval_summary=true runtime_apply_gap_audit=true key_lineage_ledger=true conversion_lane=true next_stage2_checklist=true finished_at=2026-07-20T21:05:04+0900`
 - predecessor_status: `pass`
@@ -16,7 +16,7 @@
 - missing_required_artifacts: `[]`
 - missing_downstream_links: `[]`
 - stale_downstream_links: `[]`
-- runtime_apply_gap_issues: `[]`
+- runtime_apply_gap_issues: `['runtime_apply_gap_audit_stale_before_threshold_preopen_apply']`
 
 ## Warning Follow-Up Summary
 - status: `warning`
@@ -224,11 +224,11 @@
 - gap_affected_handoff_count: `0`
 
 ## Workorder Snapshot
-- generation_id: `2026-07-20-33debb75dfdb`
-- source_hash: `33debb75dfdb9c6206e4e4c9348184ab39cc0ef5ad268b7cf321849546b50987`
+- generation_id: `2026-07-20-9b45746dc323`
+- source_hash: `9b45746dc323091c9e0df56be219fb06ea5b366a24ff959965e72c5e53c725bf`
 - snapshot_status: `source_changed_with_lineage`
-- previous_generation_id: `2026-07-20-a2ae427715ed`
-- previous_source_hash: `a2ae427715edde834b479f14a224b9dffb75fbae63d84ac86b8c6c2d6ba2ca56`
+- previous_generation_id: `2026-07-20-33debb75dfdb`
+- previous_source_hash: `33debb75dfdb9c6206e4e4c9348184ab39cc0ef5ad268b7cf321849546b50987`
 - new_order_ids: `[]`
-- removed_order_ids: `['order_lifecycle_exit_bucket_combo_exit_result_source_scalp_sim_overnight_sell_today_rule_scalp_sim_overnight_sell_tod_ff77f4c9', 'order_lifecycle_exit_bucket_exit_outcome_outcome_unknown']`
+- removed_order_ids: `[]`
 - decision_changed_order_ids: `[]`
