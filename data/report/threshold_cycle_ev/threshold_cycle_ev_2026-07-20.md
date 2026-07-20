@@ -197,7 +197,7 @@
 - artifact: `/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-07-20.json`
 - markdown: `/home/ubuntu/KORStockScan/docs/code-improvement-workorders/code_improvement_workorder_2026-07-20.md`
 - selected_order_count: `183`
-- decision_counts: `{'attach_existing_family': 215, 'design_family_candidate': 3, 'defer_evidence': 5, 'reject': 3}`
+- decision_counts: `{'attach_existing_family': 213, 'design_family_candidate': 3, 'defer_evidence': 4, 'reject': 3}`
 
 ## Approval Requests
 - none
