@@ -45,6 +45,7 @@ DONE_ACCEPTABLE_WARNING_ISSUES = {
     "active_sim_priority_runtime_observation_missing",
     "active_or_hypothesis_preopen_handoff_pending",
     "ai_watching_score_smoothing_diagnostic_followup_open",
+    "quote_consistency_divergence_without_safety_exit_rows",
     "quote_consistency_required_fields_excluded",
     "quote_consistency_source_missing",
     "real_sample_unused_by_postclose_decision",

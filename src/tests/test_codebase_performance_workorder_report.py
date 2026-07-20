@@ -4,6 +4,13 @@ import json
 from src.engine import codebase_performance_workorder_report as mod
 
 
+def test_final_ensemble_records_probe_accepts_black_normalized_quotes():
+    probe = mod._implementation_probe("order_perf_final_ensemble_records")
+
+    assert probe["implementation_status"] == "implemented"
+    assert probe["implementation_checks"][0]["missing_tokens"] == []
+
+
 def test_codebase_performance_workorder_report_classifies_candidates(
     tmp_path, monkeypatch
 ):

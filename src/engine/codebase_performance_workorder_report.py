@@ -69,7 +69,7 @@ IMPLEMENTATION_CHECKS: dict[str, list[dict[str, Any]]] = {
     "order_perf_final_ensemble_records": [
         {
             "path": "src/scanners/final_ensemble_scanner.py",
-            "tokens": ["to_dict('records')"],
+            "tokens": ['to_dict("records")'],
             "forbidden_tokens": ["iterrows()"],
         }
     ],
