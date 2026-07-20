@@ -29,9 +29,9 @@
 - stage_hook_runtime_scaffold: `/home/ubuntu/KORStockScan/data/report/stage_hook_runtime_scaffold/stage_hook_runtime_scaffold_2026-07-20.json`
 - buy_funnel_sentinel: `/home/ubuntu/KORStockScan/data/report/buy_funnel_sentinel/buy_funnel_sentinel_2026-07-20.json`
 - microstructure_reaction_context: `/home/ubuntu/KORStockScan/data/report/microstructure_reaction_context/microstructure_reaction_context_2026-07-20.json`
-- generated_at: `2026-07-20T21:44:50+09:00`
-- generation_id: `2026-07-20-33debb75dfdb`
-- source_hash: `33debb75dfdb9c6206e4e4c9348184ab39cc0ef5ad268b7cf321849546b50987`
+- generated_at: `2026-07-21T07:40:59+09:00`
+- generation_id: `2026-07-20-9b45746dc323`
+- source_hash: `9b45746dc323091c9e0df56be219fb06ea5b366a24ff959965e72c5e53c725bf`
 
 ## 운영 원칙
 
@@ -53,17 +53,17 @@
 ## Snapshot Lineage
 
 - previous_exists: `True`
-- previous_generation_id: `2026-07-20-a2ae427715ed`
-- previous_source_hash: `a2ae427715edde834b479f14a224b9dffb75fbae63d84ac86b8c6c2d6ba2ca56`
+- previous_generation_id: `2026-07-20-33debb75dfdb`
+- previous_source_hash: `33debb75dfdb9c6206e4e4c9348184ab39cc0ef5ad268b7cf321849546b50987`
 - new_order_ids: `[]`
-- removed_order_ids: `['order_lifecycle_exit_bucket_combo_exit_result_source_scalp_sim_overnight_sell_today_rule_scalp_sim_overnight_sell_tod_ff77f4c9', 'order_lifecycle_exit_bucket_exit_outcome_outcome_unknown']`
+- removed_order_ids: `[]`
 - decision_changed_order_ids: `[]`
 
 ## Summary
 
-- source_order_count: `226`
+- source_order_count: `223`
 - scalping_source_order_count: `10`
-- swing_source_order_count: `8`
+- swing_source_order_count: `5`
 - swing_entry_bottleneck_primary: `SWING_ENTRY_BOTTLENECK_OBSERVE`
 - swing_entry_bottleneck_selected: `False`
 - swing_lab_source_order_count: `3`
@@ -85,8 +85,8 @@
 - entry_submit_drought_handoff_missing: `False`
 - panic_lifecycle_source_order_count: `2`
 - selected_order_count: `183`
-- non_selected_order_count: `43`
-- source_decision_counts: `{'attach_existing_family': 215, 'design_family_candidate': 3, 'defer_evidence': 5, 'reject': 3}`
+- non_selected_order_count: `40`
+- source_decision_counts: `{'attach_existing_family': 213, 'design_family_candidate': 3, 'defer_evidence': 4, 'reject': 3}`
 - selected_decision_counts: `{'attach_existing_family': 183}`
 - selected_route_counts: `{'existing_family': 179, 'ai_review_coverage_review': 1, 'positive_source_only_review': 1, 'source_dimension_rollup': 1, 'join_gap_enrichment': 1}`
 - selected_implement_now_route_count: `0`
@@ -114,8 +114,8 @@
 - selected_terminal_non_implement_longstanding_order_ids: `['order_lifecycle_quiet_gap_ai_review_coverage_rollup', 'order_lifecycle_quiet_gap_positive_source_only_rollup', 'order_lifecycle_source_dimension_gap_rollup', 'order_lifecycle_source_dimension_join_gap_enrichment']`
 - selected_longstanding_non_implement_disposition_counts: `{'keep_visible_by_design': 4}`
 - selected_longstanding_non_implement_action_required_order_ids: `[]`
-- non_selected_decision_counts: `{'attach_existing_family': 32, 'design_family_candidate': 3, 'defer_evidence': 5, 'reject': 3}`
-- non_selected_longstanding_non_implement_disposition_counts: `{'implemented_with_provenance': 30, 'review_required': 8}`
+- non_selected_decision_counts: `{'attach_existing_family': 30, 'design_family_candidate': 3, 'defer_evidence': 4, 'reject': 3}`
+- non_selected_longstanding_non_implement_disposition_counts: `{'implemented_with_provenance': 29, 'review_required': 7}`
 - non_selected_longstanding_non_implement_action_required_order_ids: `[]`
 - gemini_fresh: `False`
 - claude_fresh: `True`
@@ -7566,23 +7566,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/swing_lifecycle_audit.py`, `src/engine/ai_prompt_contracts.py`, `src/engine/ai_engine_openai.py`
 - acceptance_tests: `pytest swing lifecycle audit tests`
 
-### N16. `order_swing_ofi_qi_stale_or_missing_context`
-
-- title: swing OFI/QI stale or missing context
-- decision: `attach_existing_family`
-- decision_reason: instrumentation/report/provenance implementation status is implemented; keep the order as existing-family source evidence instead of re-implementing
-- source_report_type: `swing_improvement_automation`
-- lifecycle_stage: `entry`
-- target_subsystem: `swing_orderbook_micro_context`
-- runtime_effect: `False`
-- allowed_runtime_apply: `False`
-- implementation_status: `implemented`
-- longstanding_non_implement_review: `-`
-- longstanding_non_implement_action: `-`
-- files_likely_touched: `src/engine/sniper_state_handlers.py`, `src/engine/orderbook_stability.py`, `src/engine/swing_lifecycle_audit.py`
-- acceptance_tests: `pytest orderbook stability tests`, `pytest swing lifecycle audit tests`
-
-### N17. `order_swing_scale_in_contract_gap_review`
+### N16. `order_swing_scale_in_contract_gap_review`
 
 - title: swing scale-in contract gap review
 - decision: `attach_existing_family`
@@ -7598,7 +7582,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/swing_lifecycle_audit.py`, `src/engine/sniper_scale_in.py`
 - acceptance_tests: `pytest swing lifecycle audit tests`
 
-### N18. `order_perf_swing_simulation_iteration`
+### N17. `order_perf_swing_simulation_iteration`
 
 - title: Swing simulation iteration and quote grouping
 - decision: `attach_existing_family`
@@ -7614,7 +7598,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/swing_daily_simulation_report.py`
 - acceptance_tests: `pytest src/tests/test_swing_model_selection_funnel_repair.py`, `swing simulation JSON parity on injected sources`
 
-### N19. `order_swing_ai_contract_structured_output_eval`
+### N18. `order_swing_ai_contract_structured_output_eval`
 
 - title: swing AI contract structured output eval
 - decision: `attach_existing_family`
@@ -7630,7 +7614,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/ai_prompt_contracts.py`, `src/engine/ai_engine_openai.py`, `src/engine/ai_response_contracts.py`
 - acceptance_tests: `pytest OpenAI transport/schema tests`, `pytest swing lifecycle audit tests`
 
-### N20. `order_swing_discovery_label_contract_gap_review`
+### N19. `order_swing_discovery_label_contract_gap_review`
 
 - title: swing discovery label contract gap review
 - decision: `attach_existing_family`
@@ -7646,7 +7630,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/swing_strategy_discovery_label_builder.py`, `src/engine/swing_strategy_discovery_ev_report.py`
 - acceptance_tests: `pytest swing lifecycle audit tests`
 
-### N21. `order_swing_pattern_lab_deepseek_ofi_qi_smoothing_review`
+### N20. `order_swing_pattern_lab_deepseek_ofi_qi_smoothing_review`
 
 - title: OFI/QI exit smoothing action distribution
 - decision: `attach_existing_family`
@@ -7662,7 +7646,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/swing_lifecycle_audit.py`, `src/engine/swing_selection_funnel_report.py`, `src/model/common_v2.py`
 - acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_model_selection_funnel_repair.py`, `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_deepseek_swing_pattern_lab.py`
 
-### N22. `order_panic_sell_defense_lifecycle_transition_pack`
+### N21. `order_panic_sell_defense_lifecycle_transition_pack`
 
 - title: panic sell defense lifecycle transition pack
 - decision: `attach_existing_family`
@@ -7678,7 +7662,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/panic_sell_defense_report.py`, `src/engine/daily_threshold_cycle_report.py`, `src/engine/runtime_approval_summary.py`, `docs/plan-korStockScanPerformanceOptimization.rebase.md`
 - acceptance_tests: `pytest panic sell defense/report lifecycle tests`, `pytest src/tests/test_build_code_improvement_workorder.py src/tests/test_runtime_approval_summary.py`
 
-### N23. `order_perf_monitor_snapshot_stream_tail`
+### N22. `order_perf_monitor_snapshot_stream_tail`
 
 - title: Monitor snapshot runtime streaming tail read
 - decision: `attach_existing_family`
@@ -7694,23 +7678,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/monitor_snapshot_runtime.py`
 - acceptance_tests: `pytest src/tests/test_log_archive_service.py`, `last valid JSON line parity`
 
-### N24. `order_swing_exit_ofi_qi_smoothing_distribution`
-
-- title: swing exit OFI/QI smoothing distribution
-- decision: `attach_existing_family`
-- decision_reason: instrumentation/report/provenance implementation status is implemented; keep the order as existing-family source evidence instead of re-implementing
-- source_report_type: `swing_improvement_automation`
-- lifecycle_stage: `holding_exit`
-- target_subsystem: `swing_holding_exit`
-- runtime_effect: `False`
-- allowed_runtime_apply: `False`
-- implementation_status: `implemented`
-- longstanding_non_implement_review: `{"history_window_days": 10, "previous_decision": "attach_existing_family", "previous_implementation_status": "implemented", "previous_route": "existing_family", "repeat_count": 4, "repeat_key": "order_swing_exit_ofi_qi_smoothing_distribution", "repeat_signature": "sig:swing_improvement_automation|swing_holding_exit|holding_exit|threshold_family_input|swing_exit_ofi_qi_smoothing|swing_exit_ofi_qi_smoothing_distribution", "review_disposition": "implemented_with_provenance"}`
-- longstanding_non_implement_action: `-`
-- files_likely_touched: `src/engine/sniper_state_handlers.py`, `src/engine/swing_lifecycle_audit.py`
-- acceptance_tests: `pytest OFI smoothing tests`, `pytest swing lifecycle audit tests`
-
-### N25. `order_swing_scale_in_avg_down_pyramid_observation`
+### N23. `order_swing_scale_in_avg_down_pyramid_observation`
 
 - title: swing scale-in AVG_DOWN/PYRAMID observation
 - decision: `attach_existing_family`
@@ -7726,7 +7694,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/sniper_scale_in.py`, `src/engine/sniper_state_handlers.py`
 - acceptance_tests: `pytest sniper scale-in tests`, `pytest swing lifecycle audit tests`
 
-### N26. `order_swing_strategy_discovery_source_quality_followup`
+### N24. `order_swing_strategy_discovery_source_quality_followup`
 
 - title: swing strategy discovery label/source quality follow-up
 - decision: `attach_existing_family`
@@ -7742,7 +7710,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/swing_strategy_discovery_label_builder.py`, `src/engine/swing_strategy_discovery_ev_report.py`, `src/engine/swing_sector_theme_source.py`
 - acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_strategy_discovery_label_builder.py src/tests/test_swing_strategy_discovery_ev_report.py src/tests/test_swing_sector_theme_source.py`
 
-### N27. `order_panic_buying_source_quality_market_breadth_micro_coverage`
+### N25. `order_panic_buying_source_quality_market_breadth_micro_coverage`
 
 - title: panic buying source-quality market breadth and micro coverage
 - decision: `attach_existing_family`
@@ -7758,7 +7726,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/panic_buying_report.py`, `src/engine/daily_threshold_cycle_report.py`, `src/engine/runtime_approval_summary.py`, `docs/plan-korStockScanPerformanceOptimization.rebase.md`, `docs/code-improvement-workorders/panic_buying_regime_mode_v2_2026-05-14.md`
 - acceptance_tests: `pytest src/tests/test_panic_buying_report.py`, `pytest src/tests/test_build_code_improvement_workorder.py src/tests/test_runtime_approval_summary.py`
 
-### N28. `order_perf_final_ensemble_records`
+### N26. `order_perf_final_ensemble_records`
 
 - title: Final ensemble scanner records conversion without iterrows
 - decision: `attach_existing_family`
@@ -7774,7 +7742,7 @@ Stage hook candidate:
 - files_likely_touched: `src/scanners/final_ensemble_scanner.py`
 - acceptance_tests: `pytest src/tests/test_swing_model_selection_funnel_repair.py`, `V2 CSV pick list parity`
 
-### N29. `order_swing_strategy_discovery_avoid_bucket_review`
+### N27. `order_swing_strategy_discovery_avoid_bucket_review`
 
 - title: swing strategy discovery avoid bucket report enrichment
 - decision: `attach_existing_family`
@@ -7790,7 +7758,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/swing_strategy_discovery_ev_report.py`, `docs/swing-strategy-discovery-sim-v1.md`
 - acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_strategy_discovery_ev_report.py src/tests/test_build_code_improvement_workorder.py`
 
-### N30. `order_partial_only_표류_전용_timeout_report_only`
+### N28. `order_partial_only_표류_전용_timeout_report_only`
 
 - title: partial-only 표류 전용 timeout report-only
 - decision: `attach_existing_family`
@@ -7806,7 +7774,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/daily_threshold_cycle_report.py`, `src/engine/sniper_state_handlers.py`
 - acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
 
-### N31. `order_split_entry_rebase_수량_정합성_report_only_감사`
+### N29. `order_split_entry_rebase_수량_정합성_report_only_감사`
 
 - title: split-entry rebase 수량 정합성 report-only 감사
 - decision: `attach_existing_family`
@@ -7822,7 +7790,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/daily_threshold_cycle_report.py`, `src/engine/sniper_state_handlers.py`
 - acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
 
-### N32. `order_동일_종목_split_entry_soft_stop_재진입_cooldown_report_only`
+### N30. `order_동일_종목_split_entry_soft_stop_재진입_cooldown_report_only`
 
 - title: 동일 종목 split-entry soft-stop 재진입 cooldown report-only
 - decision: `attach_existing_family`
@@ -7838,7 +7806,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/daily_threshold_cycle_report.py`, `src/engine/sniper_state_handlers.py`
 - acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
 
-### N33. `order_no_acute_observability_alert`
+### N31. `order_no_acute_observability_alert`
 
 - title: No acute observability alert
 - decision: `design_family_candidate`
@@ -7854,7 +7822,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/daily_threshold_cycle_report.py`
 - acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
 
-### N34. `order_liquidity_gate_miss_ev_recovery`
+### N32. `order_liquidity_gate_miss_ev_recovery`
 
 - title: liquidity gate miss EV recovery
 - decision: `design_family_candidate`
@@ -7870,7 +7838,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/daily_threshold_cycle_report.py`, `src/engine/sniper_state_handlers.py`
 - acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
 
-### N35. `order_overbought_gate_miss_ev_recovery`
+### N33. `order_overbought_gate_miss_ev_recovery`
 
 - title: overbought gate miss EV recovery
 - decision: `design_family_candidate`
@@ -7886,23 +7854,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/daily_threshold_cycle_report.py`, `src/engine/sniper_state_handlers.py`
 - acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
 
-### N36. `order_swing_lifecycle_observation_coverage`
-
-- title: swing lifecycle observation coverage
-- decision: `defer_evidence`
-- decision_reason: not code-actionable in this cycle: acceptance contract is review text only, not an executable validation
-- source_report_type: `swing_improvement_automation`
-- lifecycle_stage: `full_lifecycle`
-- target_subsystem: `runtime_instrumentation`
-- runtime_effect: `False`
-- allowed_runtime_apply: `False`
-- implementation_status: `terminal_deferred_evidence`
-- longstanding_non_implement_review: `{"history_window_days": 10, "previous_decision": "defer_evidence", "previous_implementation_status": "terminal_deferred_evidence", "previous_route": "instrumentation_order", "repeat_count": 4, "repeat_key": "order_swing_lifecycle_observation_coverage", "repeat_signature": "sig:swing_improvement_automation|runtime_instrumentation|full_lifecycle|instrumentation||swing_lifecycle_observation_coverage", "review_disposition": "review_required"}`
-- longstanding_non_implement_action: `-`
-- files_likely_touched: `src/engine/swing_lifecycle_audit.py`, `src/engine/sniper_state_handlers.py`, `src/engine/sniper_scale_in.py`
-- acceptance_tests: `pytest swing lifecycle audit tests`, `pipeline event field coverage smoke`
-
-### N37. `order_scalp_entry_adm_daily_tuning_coverage`
+### N34. `order_scalp_entry_adm_daily_tuning_coverage`
 
 - title: scalp entry ADM daily tuning coverage
 - decision: `defer_evidence`
@@ -7918,7 +7870,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/scalp_entry_action_decision_matrix.py`, `src/engine/sniper_state_handlers.py`, `src/engine/scalp_entry_adm_runtime.py`, `src/engine/threshold_cycle_ev_report.py`
 - acceptance_tests: `PYTHONPATH=. .venv/bin/pytest src/tests/test_scalp_entry_action_decision_matrix.py src/tests/test_build_code_improvement_workorder.py`, `runtime_effect remains false and broker submit safety guards remain owner`
 
-### N38. `order_perf_kiwoom_orders_http_session_review`
+### N35. `order_perf_kiwoom_orders_http_session_review`
 
 - title: Kiwoom orders HTTP session reuse manual review
 - decision: `defer_evidence`
@@ -7934,7 +7886,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/kiwoom_orders.py`
 - acceptance_tests: `pytest src/tests/test_kiwoom_orders.py src/tests/test_sniper_scale_in.py`
 
-### N39. `order_perf_config_cache_scope_review`
+### N36. `order_perf_config_cache_scope_review`
 
 - title: Config cache scope review
 - decision: `defer_evidence`
@@ -7950,7 +7902,7 @@ Stage hook candidate:
 - files_likely_touched: `src/utils/constants.py`, `src/utils/kiwoom_utils.py`
 - acceptance_tests: `pytest config/import smoke tests`
 
-### N40. `order_perf_sentinel_event_cache_incremental_review`
+### N37. `order_perf_sentinel_event_cache_incremental_review`
 
 - title: Sentinel event cache incremental parse review
 - decision: `defer_evidence`
@@ -7966,7 +7918,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/sentinel_event_cache.py`
 - acceptance_tests: `pytest src/tests/test_buy_funnel_sentinel.py src/tests/test_holding_exit_sentinel.py`, `sentinel event cache parity on malformed, unchanged, and appended JSONL inputs`
 
-### N41. `order_partial_fallback_확대_직후_즉시_재평가_report_only`
+### N38. `order_partial_fallback_확대_직후_즉시_재평가_report_only`
 
 - title: partial → fallback 확대 직후 즉시 재평가 report-only
 - decision: `reject`
@@ -7982,7 +7934,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/daily_threshold_cycle_report.py`, `src/engine/sniper_state_handlers.py`
 - acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
 
-### N42. `order_perf_kiwoom_ws_tick_parse_fastpath`
+### N39. `order_perf_kiwoom_ws_tick_parse_fastpath`
 
 - title: Kiwoom websocket tick parsing fast path
 - decision: `reject`
@@ -7998,7 +7950,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/kiwoom_websocket.py`
 - acceptance_tests: `pytest websocket parsing/data-quality tests`
 
-### N43. `order_perf_raw_event_suppression_out_of_scope`
+### N40. `order_perf_raw_event_suppression_out_of_scope`
 
 - title: Raw pipeline event suppression out of scope
 - decision: `reject`
