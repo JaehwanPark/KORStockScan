@@ -3298,7 +3298,7 @@ def test_run_sniper_batches_scanner_ws_recovery_reg_before_loop_end():
     queue_idx = source.index("def _queue_scanner_ws_reg", pending_idx)
     missing_recovery_idx = source.index("publish_ws_reg=False", queue_idx)
     missing_queue_idx = source.index(
-        '_queue_scanner_ws_reg(code, "scanner_watching_ws_snapshot_recovery")',
+        '_queue_scanner_ws_reg(\n                                    code, "scanner_watching_ws_snapshot_recovery"',
         missing_recovery_idx,
     )
     stale_recovery_idx = source.index(
@@ -3306,11 +3306,11 @@ def test_run_sniper_batches_scanner_ws_recovery_reg_before_loop_end():
     )
     stale_no_publish_idx = source.index("publish_ws_reg=False", stale_recovery_idx)
     stale_queue_idx = source.index(
-        '_queue_scanner_ws_reg(code, "scanner_fast_precheck_stale_ws_recovery")',
+        '_queue_scanner_ws_reg(\n                                    code, "scanner_fast_precheck_stale_ws_recovery"',
         stale_no_publish_idx,
     )
     final_flush_idx = source.rindex("_flush_pending_scanner_ws_reg()")
-    prune_idx = source.index("targets[:] = [t for t in targets", final_flush_idx)
+    prune_idx = source.index("targets[:] = [", final_flush_idx)
 
     assert pending_idx < queue_idx < missing_recovery_idx < missing_queue_idx
     assert missing_queue_idx < stale_no_publish_idx < stale_queue_idx
@@ -3328,7 +3328,7 @@ def test_run_sniper_defers_scanner_skip_event_emits_until_loop_tail():
     executor_submit_idx = source.index(
         "_SCANNER_OBSERVATION_EXECUTOR.submit", defer_def_idx
     )
-    prune_idx = source.index("targets[:] = [t for t in targets", final_flush_idx)
+    prune_idx = source.index("targets[:] = [", final_flush_idx)
     direct_emit_after_defer = source.find(
         "sniper_state_handlers.emit_scanner_watching_runtime_skip",
         defer_def_idx,
@@ -3391,7 +3391,7 @@ def test_run_sniper_checks_queue_lag_eviction_before_stale_recovery():
         "queue_lag_fields = _defer_emit_scanner_runtime_queue_lag(", loop_idx
     )
     fast_result_idx = source.index(
-        'fast_precheck_result = str(stock.get("_scanner_fast_precheck_result")',
+        'fast_precheck_result = str(\n                            stock.get("_scanner_fast_precheck_result")',
         queue_call_idx,
     )
     queue_decision_idx = source.index(
@@ -3454,7 +3454,7 @@ def test_scanner_heavy_eval_stale_recheck_repairs_before_handler():
         "_scanner_ws_subscription_recheck_snapshot_and_fields(", flush_def_idx
     )
     fresh_idx = source.index("_scanner_heavy_eval_recheck_fresh_sec()", recheck_idx)
-    stale_idx = source.index("heavy_recheck_repair_needed = bool(", fresh_idx)
+    stale_idx = source.index("heavy_recheck_repair_needed = (", fresh_idx)
     recover_idx = source.index("scanner_heavy_eval_stale_ws_recovery", stale_idx)
     merge_idx = source.index("heavy_recheck_skip_fields = {", recover_idx)
     skip_idx = source.index(
@@ -3473,7 +3473,7 @@ def test_scanner_heavy_eval_stale_recheck_repairs_before_handler():
 
 def test_scanner_strength_recheck_waiting_skips_before_full_eval_budget():
     source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
-    waiting_idx = source.index("if _scanner_strength_recheck_waiting(stock")
+    waiting_idx = source.index("if _scanner_strength_recheck_waiting(")
     budget_idx = source.index(
         "if scanner_full_eval_count >= scanner_full_eval_limit:", waiting_idx
     )
@@ -3484,24 +3484,21 @@ def test_scanner_strength_recheck_waiting_skips_before_full_eval_budget():
 
 def test_scanner_fast_precheck_not_eligible_skips_before_heavy_eval():
     source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
-    precheck_idx = source.index("fast_precheck_result = str(stock.get")
+    precheck_idx = source.index("fast_precheck_result = str(")
     not_eligible_idx = source.index(
         'fast_precheck_result != "eligible_for_heavy_entry_eval"', precheck_idx
     )
     fields_store_idx = source.index(
         'stock_value["_scanner_fast_precheck_fields"] = dict(fields)'
     )
-    fields_arg_idx = source.index(
-        'fast_precheck_fields=dict(stock.get("_scanner_fast_precheck_fields") or {})',
-        not_eligible_idx,
-    )
+    fields_arg_idx = source.index("fast_precheck_fields=dict(", not_eligible_idx)
     ws_reg_idx = source.index(
         "scanner_fast_precheck_stale_ws_recovery", not_eligible_idx
     )
     recovered_idx = source.index("scanner_fast_precheck_stale_ws_recovered", ws_reg_idx)
     recheck_idx = source.index("throttle_sec=0", recovered_idx)
     waiting_idx = source.index(
-        "if _scanner_strength_recheck_waiting(stock", not_eligible_idx
+        "if _scanner_strength_recheck_waiting(", not_eligible_idx
     )
     budget_idx = source.index(
         "if scanner_full_eval_count >= scanner_full_eval_limit:", waiting_idx
@@ -3532,9 +3529,9 @@ def test_scanner_fast_precheck_is_flushed_before_non_scanner_targets():
     flush_call_idx = source.index(
         "_flush_delayed_scanner_heavy_eval()", transition_flush_idx
     )
-    buy_ordered_idx = source.index("if status == 'BUY_ORDERED':", flush_call_idx)
+    buy_ordered_idx = source.index('if status == "BUY_ORDERED":', flush_call_idx)
     final_flush_idx = source.rindex("_flush_delayed_scanner_heavy_eval()")
-    prune_idx = source.index("targets[:] = [t for t in targets", final_flush_idx)
+    prune_idx = source.index("targets[:] = [", final_flush_idx)
 
     assert transition_flush_idx < flush_call_idx < buy_ordered_idx
     assert final_flush_idx < prune_idx
@@ -3543,9 +3540,9 @@ def test_scanner_fast_precheck_is_flushed_before_non_scanner_targets():
 def test_holding_missing_ws_snapshot_reaches_holding_freshness_guard():
     source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
     missing_ws_branch_idx = source.index(
-        "if not ws_data or ws_data.get('curr', 0) == 0:"
+        'if not ws_data or ws_data.get("curr", 0) == 0:'
     )
-    holding_guard_idx = source.index("if status == 'HOLDING':", missing_ws_branch_idx)
+    holding_guard_idx = source.index('if status == "HOLDING":', missing_ws_branch_idx)
     handler_call_idx = source.index("handle_holding_state(", holding_guard_idx)
     continue_idx = source.index("continue", handler_call_idx)
 

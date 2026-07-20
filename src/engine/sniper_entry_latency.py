@@ -8,7 +8,9 @@ import time
 from datetime import UTC, datetime, timedelta, timezone
 from typing import Any
 
-from src.engine.scalping.micro_estimator_state import DEFAULT_STORE as MICRO_ESTIMATOR_STORE
+from src.engine.scalping.micro_estimator_state import (
+    DEFAULT_STORE as MICRO_ESTIMATOR_STORE,
+)
 from src.engine.scalping.market_data_enrichment import rest_signed_tape_tick_freshness
 from src.trading.config.entry_config import EntryConfig
 from src.trading.entry.entry_policy import EntryPolicy
@@ -34,13 +36,20 @@ def _build_entry_config() -> EntryConfig:
             int(getattr(TRADING_RULES, "SCALPING_NORMAL_DEFENSIVE_TICKS", 1) or 1),
         ),
         max_ws_age_ms_for_caution=int(
-            getattr(TRADING_RULES, "SCALP_ENTRY_LATENCY_MAX_WS_AGE_MS_FOR_CAUTION", 700) or 700
+            getattr(TRADING_RULES, "SCALP_ENTRY_LATENCY_MAX_WS_AGE_MS_FOR_CAUTION", 700)
+            or 700
         ),
         max_ws_jitter_ms_for_caution=int(
-            getattr(TRADING_RULES, "SCALP_ENTRY_LATENCY_MAX_WS_JITTER_MS_FOR_CAUTION", 300) or 300
+            getattr(
+                TRADING_RULES, "SCALP_ENTRY_LATENCY_MAX_WS_JITTER_MS_FOR_CAUTION", 300
+            )
+            or 300
         ),
         max_spread_ratio_for_caution=float(
-            getattr(TRADING_RULES, "SCALP_ENTRY_LATENCY_MAX_SPREAD_RATIO_FOR_CAUTION", 0.005) or 0.005
+            getattr(
+                TRADING_RULES, "SCALP_ENTRY_LATENCY_MAX_SPREAD_RATIO_FOR_CAUTION", 0.005
+            )
+            or 0.005
         ),
     )
 
@@ -89,9 +98,13 @@ def _best_ask_bid_from_ws(ws_data: dict[str, Any] | None) -> tuple[int, int]:
     if bids:
         best_bid = _safe_price_int((bids[0] or {}).get("price", 0))
     if best_ask <= 0:
-        best_ask = _safe_price_int(data.get("best_ask") or data.get("ask_price") or data.get("ask"))
+        best_ask = _safe_price_int(
+            data.get("best_ask") or data.get("ask_price") or data.get("ask")
+        )
     if best_bid <= 0:
-        best_bid = _safe_price_int(data.get("best_bid") or data.get("bid_price") or data.get("bid"))
+        best_bid = _safe_price_int(
+            data.get("best_bid") or data.get("bid_price") or data.get("bid")
+        )
     return best_ask, best_bid
 
 
@@ -101,9 +114,15 @@ def _compute_price_below_bid_bps(price: int, best_bid: int) -> int:
         normalized_best_bid = int(best_bid or 0)
     except Exception:
         return 0
-    if normalized_price <= 0 or normalized_best_bid <= 0 or normalized_price >= normalized_best_bid:
+    if (
+        normalized_price <= 0
+        or normalized_best_bid <= 0
+        or normalized_price >= normalized_best_bid
+    ):
         return 0
-    return int(round(((normalized_best_bid - normalized_price) / normalized_best_bid) * 10000))
+    return int(
+        round(((normalized_best_bid - normalized_price) / normalized_best_bid) * 10000)
+    )
 
 
 def _compute_spread_ticks(best_ask: int, best_bid: int) -> int:
@@ -126,26 +145,41 @@ def _tick_aggressor_pressure_usable_from_fields(fields: dict[str, Any] | None) -
     if isinstance(raw_flag, bool):
         pressure_flag = raw_flag
     else:
-        pressure_flag = str(raw_flag or "").strip().lower() in {"1", "true", "yes", "y", "on"}
+        pressure_flag = str(raw_flag or "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "y",
+            "on",
+        }
     return bool(
-        pressure_flag
-        or _to_float(source.get("tick_aggressor_trusted_count"), 0.0) > 0
+        pressure_flag or _to_float(source.get("tick_aggressor_trusted_count"), 0.0) > 0
     )
 
 
-def _latency_buy_pressure_value(ws_data: dict[str, Any] | None, stock: dict[str, Any] | None) -> float:
+def _latency_buy_pressure_value(
+    ws_data: dict[str, Any] | None, stock: dict[str, Any] | None
+) -> float:
     ws = ws_data if isinstance(ws_data, dict) else {}
     item = stock if isinstance(stock, dict) else {}
-    if ws.get("buy_pressure_10t") not in (None, "") and _tick_aggressor_pressure_usable_from_fields(ws):
+    if ws.get("buy_pressure_10t") not in (
+        None,
+        "",
+    ) and _tick_aggressor_pressure_usable_from_fields(ws):
         return _to_float(ws.get("buy_pressure_10t"), 0.0)
-    if item.get("buy_pressure_10t") not in (None, "") and _tick_aggressor_pressure_usable_from_fields(item):
+    if item.get("buy_pressure_10t") not in (
+        None,
+        "",
+    ) and _tick_aggressor_pressure_usable_from_fields(item):
         return _to_float(item.get("buy_pressure_10t"), 0.0)
     if ws.get("buy_ratio") not in (None, ""):
         return _to_float(ws.get("buy_ratio"), 0.0)
     return 0.0
 
 
-def _conditional_real_1tick_context(ws_data: dict[str, Any] | None, *, best_ask: int, best_bid: int) -> dict[str, Any]:
+def _conditional_real_1tick_context(
+    ws_data: dict[str, Any] | None, *, best_ask: int, best_bid: int
+) -> dict[str, Any]:
     ws = ws_data or {}
     orderbook = ws.get("orderbook") or {}
     asks = orderbook.get("asks") or []
@@ -153,9 +187,13 @@ def _conditional_real_1tick_context(ws_data: dict[str, Any] | None, *, best_ask:
     ask_depth = _to_float(ws.get("ask_tot"), 0.0)
     bid_depth = _to_float(ws.get("bid_tot"), 0.0)
     if ask_depth <= 0 and asks:
-        ask_depth = sum(_to_float((level or {}).get("volume"), 0.0) for level in asks[:3])
+        ask_depth = sum(
+            _to_float((level or {}).get("volume"), 0.0) for level in asks[:3]
+        )
     if bid_depth <= 0 and bids:
-        bid_depth = sum(_to_float((level or {}).get("volume"), 0.0) for level in bids[:3])
+        bid_depth = sum(
+            _to_float((level or {}).get("volume"), 0.0) for level in bids[:3]
+        )
 
     pressure_usable = _ws_tick_aggressor_pressure_usable(ws)
     raw_buy_volume = _to_float(ws.get("buy_exec_volume"), 0.0)
@@ -166,7 +204,11 @@ def _conditional_real_1tick_context(ws_data: dict[str, Any] | None, *, best_ask:
     buy_ratio = _to_float(ws.get("buy_ratio"), 0.0) if pressure_usable else 50.0
     if total_exec_volume > 0:
         buy_ratio = (buy_volume / total_exec_volume) * 100.0
-    net_buy_exec_volume = _to_float(ws.get("net_buy_exec_volume"), buy_volume - sell_volume) if pressure_usable else 0.0
+    net_buy_exec_volume = (
+        _to_float(ws.get("net_buy_exec_volume"), buy_volume - sell_volume)
+        if pressure_usable
+        else 0.0
+    )
 
     ofi_norm = max(
         _to_float(ws.get("orderbook_micro_ofi_norm"), -999.0),
@@ -176,12 +218,19 @@ def _conditional_real_1tick_context(ws_data: dict[str, Any] | None, *, best_ask:
     bid_ask_ratio = (bid_depth / ask_depth) if ask_depth > 0 and bid_depth > 0 else 0.0
     spread_ticks = _compute_spread_ticks(best_ask, best_bid)
 
-    min_buy_ratio = float(getattr(TRADING_RULES, "SCALPING_CONDITIONAL_1TICK_MIN_BUY_RATIO", 60.0) or 60.0)
-    min_ofi_norm = float(getattr(TRADING_RULES, "SCALPING_CONDITIONAL_1TICK_MIN_OFI_NORM", 0.45) or 0.45)
-    min_bid_ask_ratio = float(
-        getattr(TRADING_RULES, "SCALPING_CONDITIONAL_1TICK_MIN_BID_ASK_RATIO", 1.20) or 1.20
+    min_buy_ratio = float(
+        getattr(TRADING_RULES, "SCALPING_CONDITIONAL_1TICK_MIN_BUY_RATIO", 60.0) or 60.0
     )
-    buy_pressure_ok = pressure_usable and net_buy_exec_volume > 0 and buy_ratio >= min_buy_ratio
+    min_ofi_norm = float(
+        getattr(TRADING_RULES, "SCALPING_CONDITIONAL_1TICK_MIN_OFI_NORM", 0.45) or 0.45
+    )
+    min_bid_ask_ratio = float(
+        getattr(TRADING_RULES, "SCALPING_CONDITIONAL_1TICK_MIN_BID_ASK_RATIO", 1.20)
+        or 1.20
+    )
+    buy_pressure_ok = (
+        pressure_usable and net_buy_exec_volume > 0 and buy_ratio >= min_buy_ratio
+    )
     ofi_ok = ofi_norm >= min_ofi_norm
     depth_ok = bid_depth > 0 and ask_depth > 0 and bid_ask_ratio >= min_bid_ask_ratio
 
@@ -192,7 +241,9 @@ def _conditional_real_1tick_context(ws_data: dict[str, Any] | None, *, best_ask:
         "raw_buy_exec_volume": int(raw_buy_volume),
         "raw_sell_exec_volume": int(raw_sell_volume),
         "tick_aggressor_pressure_usable": bool(pressure_usable),
-        "tick_aggressor_trusted_count": int(_to_float(ws.get("tick_aggressor_trusted_count"), 0.0)),
+        "tick_aggressor_trusted_count": int(
+            _to_float(ws.get("tick_aggressor_trusted_count"), 0.0)
+        ),
         "ofi_norm": None if ofi_norm == -999.0 else round(float(ofi_norm), 6),
         "bid_ask_depth_ratio": round(float(bid_ask_ratio), 6),
         "buy_pressure_ok": buy_pressure_ok,
@@ -209,35 +260,58 @@ def _conditional_real_1tick_enabled(strategy_id: str) -> bool:
 
 
 def _defense_mode_is_percent_bps() -> bool:
-    mode = str(getattr(TRADING_RULES, "SCALPING_ENTRY_PRICE_DEFENSE_MODE", "tick") or "").strip().lower()
+    mode = (
+        str(getattr(TRADING_RULES, "SCALPING_ENTRY_PRICE_DEFENSE_MODE", "tick") or "")
+        .strip()
+        .lower()
+    )
     return mode == "percent_bps"
 
 
 def _normal_defensive_bps() -> int:
-    return max(1, int(getattr(TRADING_RULES, "SCALPING_NORMAL_DEFENSIVE_BPS", 50) or 50))
+    return max(
+        1, int(getattr(TRADING_RULES, "SCALPING_NORMAL_DEFENSIVE_BPS", 50) or 50)
+    )
 
 
 def _conditional_strong_defensive_bps() -> int:
-    return max(1, int(getattr(TRADING_RULES, "SCALPING_CONDITIONAL_STRONG_DEFENSIVE_BPS", 20) or 20))
+    return max(
+        1,
+        int(
+            getattr(TRADING_RULES, "SCALPING_CONDITIONAL_STRONG_DEFENSIVE_BPS", 20)
+            or 20
+        ),
+    )
 
 
 def _normal_favorable_defensive_bps() -> int:
-    return max(1, int(getattr(TRADING_RULES, "SCALPING_NORMAL_FAVORABLE_DEFENSIVE_BPS", 35) or 35))
+    return max(
+        1,
+        int(
+            getattr(TRADING_RULES, "SCALPING_NORMAL_FAVORABLE_DEFENSIVE_BPS", 35) or 35
+        ),
+    )
 
 
 def _normal_weak_defensive_bps() -> int:
-    return max(1, int(getattr(TRADING_RULES, "SCALPING_NORMAL_WEAK_DEFENSIVE_BPS", 65) or 65))
+    return max(
+        1, int(getattr(TRADING_RULES, "SCALPING_NORMAL_WEAK_DEFENSIVE_BPS", 65) or 65)
+    )
 
 
 def _aggressive_entry_price_override_enabled() -> bool:
     operator_enabled = str(
         os.getenv("KORSTOCKSCAN_INTRADAY_ENTRY_PRICE_DISCOVERY_ENABLED") or ""
     ).strip().lower() in {"1", "true", "yes", "y", "on"}
-    return operator_enabled or bool(getattr(TRADING_RULES, "SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_ENABLED", False))
+    return operator_enabled or bool(
+        getattr(TRADING_RULES, "SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_ENABLED", False)
+    )
 
 
 def _intraday_entry_price_discovery_enabled() -> bool:
-    return str(os.getenv("KORSTOCKSCAN_INTRADAY_ENTRY_PRICE_DISCOVERY_ENABLED") or "").strip().lower() in {
+    return str(
+        os.getenv("KORSTOCKSCAN_INTRADAY_ENTRY_PRICE_DISCOVERY_ENABLED") or ""
+    ).strip().lower() in {
         "1",
         "true",
         "yes",
@@ -247,9 +321,9 @@ def _intraday_entry_price_discovery_enabled() -> bool:
 
 
 def _dynamic_entry_price_resolver_live_selected() -> bool:
-    return bool(getattr(TRADING_RULES, "DYNAMIC_ENTRY_PRICE_RESOLVER_LIVE_SELECTED", False)) or bool(
-        getattr(TRADING_RULES, "ENTRY_PRICE_LIVE_TUNING_SELECTED", False)
-    )
+    return bool(
+        getattr(TRADING_RULES, "DYNAMIC_ENTRY_PRICE_RESOLVER_LIVE_SELECTED", False)
+    ) or bool(getattr(TRADING_RULES, "ENTRY_PRICE_LIVE_TUNING_SELECTED", False))
 
 
 def _aggressive_entry_price_override_types() -> set[str]:
@@ -264,16 +338,28 @@ def _aggressive_entry_price_override_types() -> set[str]:
     return {item.strip() for item in raw.split(",") if item.strip()}
 
 
-def _micro_state_from_inputs(stock: dict[str, Any] | None, ws_data: dict[str, Any] | None) -> str:
+def _micro_state_from_inputs(
+    stock: dict[str, Any] | None, ws_data: dict[str, Any] | None
+) -> str:
     for source in (stock, ws_data):
         if isinstance(source, dict):
-            state = str(source.get("orderbook_micro_state") or source.get("micro_state") or "").strip().lower()
+            state = (
+                str(
+                    source.get("orderbook_micro_state")
+                    or source.get("micro_state")
+                    or ""
+                )
+                .strip()
+                .lower()
+            )
             if state:
                 return state
     return "neutral"
 
 
-def _weak_pullback_like_context(stock: dict[str, Any] | None, positive_signal_count: int) -> bool:
+def _weak_pullback_like_context(
+    stock: dict[str, Any] | None, positive_signal_count: int
+) -> bool:
     if positive_signal_count > 0:
         return False
     context = stock.get("scalp_pre_ai_gate_context") if isinstance(stock, dict) else {}
@@ -285,7 +371,11 @@ def _weak_pullback_like_context(stock: dict[str, Any] | None, positive_signal_co
         or (stock or {}).get("entry_strength_momentum_risk_state")
         or ""
     ).strip()
-    reason = str(strength.get("reason") or (stock or {}).get("entry_strength_momentum_reason") or "").strip()
+    reason = str(
+        strength.get("reason")
+        or (stock or {}).get("entry_strength_momentum_reason")
+        or ""
+    ).strip()
     return state in {"weak_momentum_context", "below_static_vpw_context"} or reason in {
         "below_buy_ratio",
         "below_window_buy_value",
@@ -307,8 +397,14 @@ def _defensive_missed_upside_aggressive_entry_override(
 ) -> dict[str, Any]:
     if not _aggressive_entry_price_override_enabled():
         return {"applied": False, "reason": "disabled"}
-    if _dynamic_entry_price_resolver_live_selected() and not _intraday_entry_price_discovery_enabled():
-        return {"applied": False, "reason": "dynamic_entry_price_resolver_live_selected"}
+    if (
+        _dynamic_entry_price_resolver_live_selected()
+        and not _intraday_entry_price_discovery_enabled()
+    ):
+        return {
+            "applied": False,
+            "reason": "dynamic_entry_price_resolver_live_selected",
+        }
     if "defensive_missed_upside_v1" not in _aggressive_entry_price_override_types():
         return {"applied": False, "reason": "type_disabled"}
     if str(strategy_id or "").upper() not in {"SCALPING", "SCALP"}:
@@ -321,31 +417,68 @@ def _defensive_missed_upside_aggressive_entry_override(
         return {"applied": False, "reason": "missing_bid_or_defensive_price"}
 
     profile = str(gap_profile.get("profile") or "")
-    if profile not in {"normal", "favorable_micro", "favorable_wide_micro", "weak_liquidity_wide_spread"}:
+    if profile not in {
+        "normal",
+        "favorable_micro",
+        "favorable_wide_micro",
+        "weak_liquidity_wide_spread",
+    }:
         return {"applied": False, "reason": "profile_not_eligible"}
-    min_bps = max(1, int(getattr(TRADING_RULES, "SCALP_DEFENSIVE_MISSED_UPSIDE_MIN_ORIGINAL_BPS", 35) or 35))
+    min_bps = max(
+        1,
+        int(
+            getattr(TRADING_RULES, "SCALP_DEFENSIVE_MISSED_UPSIDE_MIN_ORIGINAL_BPS", 35)
+            or 35
+        ),
+    )
     if int(applied_bps or 0) < min_bps:
         return {"applied": False, "reason": "original_bps_below_min"}
 
-    context = gap_profile.get("context") if isinstance(gap_profile.get("context"), dict) else {}
+    context = (
+        gap_profile.get("context")
+        if isinstance(gap_profile.get("context"), dict)
+        else {}
+    )
     positive_signal_count = int(context.get("positive_signal_count") or 0)
     micro_state = _micro_state_from_inputs(stock, ws_data)
-    if micro_state not in {"neutral", "bullish", "strong_bullish"} and positive_signal_count <= 0:
+    if (
+        micro_state not in {"neutral", "bullish", "strong_bullish"}
+        and positive_signal_count <= 0
+    ):
         return {"applied": False, "reason": "micro_not_eligible"}
     if _weak_pullback_like_context(stock, positive_signal_count):
         return {"applied": False, "reason": "weak_pullback_like_context"}
 
     target_mode = str(
-        getattr(TRADING_RULES, "SCALP_DEFENSIVE_MISSED_UPSIDE_TARGET_MODE", "best_bid_near") or "best_bid_near"
+        getattr(
+            TRADING_RULES, "SCALP_DEFENSIVE_MISSED_UPSIDE_TARGET_MODE", "best_bid_near"
+        )
+        or "best_bid_near"
     ).strip()
     bullish = micro_state in {"bullish", "strong_bullish"} or positive_signal_count > 0
     minus_ticks = (
-        int(getattr(TRADING_RULES, "SCALP_DEFENSIVE_MISSED_UPSIDE_BULLISH_BID_MINUS_TICKS", 0) or 0)
+        int(
+            getattr(
+                TRADING_RULES,
+                "SCALP_DEFENSIVE_MISSED_UPSIDE_BULLISH_BID_MINUS_TICKS",
+                0,
+            )
+            or 0
+        )
         if bullish
-        else int(getattr(TRADING_RULES, "SCALP_DEFENSIVE_MISSED_UPSIDE_NEUTRAL_BID_MINUS_TICKS", 1) or 1)
+        else int(
+            getattr(
+                TRADING_RULES,
+                "SCALP_DEFENSIVE_MISSED_UPSIDE_NEUTRAL_BID_MINUS_TICKS",
+                1,
+            )
+            or 1
+        )
     )
     minus_ticks = max(0, minus_ticks)
-    target_price = move_price_by_ticks(best_bid, -minus_ticks) if minus_ticks else int(best_bid)
+    target_price = (
+        move_price_by_ticks(best_bid, -minus_ticks) if minus_ticks else int(best_bid)
+    )
     if best_ask > 0:
         target_price = min(target_price, best_ask)
     if target_price <= defensive_order_price:
@@ -381,9 +514,18 @@ def _reference_target_cap_missed_upside_aggressive_entry_override(
 ) -> dict[str, Any]:
     if not _aggressive_entry_price_override_enabled():
         return {"applied": False, "reason": "disabled"}
-    if _dynamic_entry_price_resolver_live_selected() and not _intraday_entry_price_discovery_enabled():
-        return {"applied": False, "reason": "dynamic_entry_price_resolver_live_selected"}
-    if "reference_target_cap_missed_upside_v1" not in _aggressive_entry_price_override_types():
+    if (
+        _dynamic_entry_price_resolver_live_selected()
+        and not _intraday_entry_price_discovery_enabled()
+    ):
+        return {
+            "applied": False,
+            "reason": "dynamic_entry_price_resolver_live_selected",
+        }
+    if (
+        "reference_target_cap_missed_upside_v1"
+        not in _aggressive_entry_price_override_types()
+    ):
         return {"applied": False, "reason": "type_disabled"}
     if str(strategy_id or "").upper() not in {"SCALPING", "SCALP"}:
         return {"applied": False, "reason": "non_scalping"}
@@ -401,7 +543,14 @@ def _reference_target_cap_missed_upside_aggressive_entry_override(
     below_bid_bps = _compute_price_below_bid_bps(int(target_buy_price), int(best_bid))
     min_bps = max(
         1,
-        int(getattr(TRADING_RULES, "SCALP_REFERENCE_TARGET_MISSED_UPSIDE_MIN_BELOW_BID_BPS", 20) or 20),
+        int(
+            getattr(
+                TRADING_RULES,
+                "SCALP_REFERENCE_TARGET_MISSED_UPSIDE_MIN_BELOW_BID_BPS",
+                20,
+            )
+            or 20
+        ),
     )
     if below_bid_bps < min_bps:
         return {
@@ -412,26 +561,53 @@ def _reference_target_cap_missed_upside_aggressive_entry_override(
             "reference_target_missed_upside_min_bps": int(min_bps),
         }
 
-    context = gap_profile.get("context") if isinstance(gap_profile.get("context"), dict) else {}
+    context = (
+        gap_profile.get("context")
+        if isinstance(gap_profile.get("context"), dict)
+        else {}
+    )
     positive_signal_count = int(context.get("positive_signal_count") or 0)
     micro_state = _micro_state_from_inputs(stock, ws_data)
-    if micro_state not in {"neutral", "bullish", "strong_bullish"} and positive_signal_count <= 0:
+    if (
+        micro_state not in {"neutral", "bullish", "strong_bullish"}
+        and positive_signal_count <= 0
+    ):
         return {"applied": False, "reason": "micro_not_eligible"}
     if _weak_pullback_like_context(stock, positive_signal_count):
         return {"applied": False, "reason": "weak_pullback_like_context"}
 
     target_mode = str(
-        getattr(TRADING_RULES, "SCALP_REFERENCE_TARGET_MISSED_UPSIDE_TARGET_MODE", "best_bid_near")
+        getattr(
+            TRADING_RULES,
+            "SCALP_REFERENCE_TARGET_MISSED_UPSIDE_TARGET_MODE",
+            "best_bid_near",
+        )
         or "best_bid_near"
     ).strip()
     bullish = micro_state in {"bullish", "strong_bullish"} or positive_signal_count > 0
     minus_ticks = (
-        int(getattr(TRADING_RULES, "SCALP_REFERENCE_TARGET_MISSED_UPSIDE_BULLISH_BID_MINUS_TICKS", 0) or 0)
+        int(
+            getattr(
+                TRADING_RULES,
+                "SCALP_REFERENCE_TARGET_MISSED_UPSIDE_BULLISH_BID_MINUS_TICKS",
+                0,
+            )
+            or 0
+        )
         if bullish
-        else int(getattr(TRADING_RULES, "SCALP_REFERENCE_TARGET_MISSED_UPSIDE_NEUTRAL_BID_MINUS_TICKS", 1) or 1)
+        else int(
+            getattr(
+                TRADING_RULES,
+                "SCALP_REFERENCE_TARGET_MISSED_UPSIDE_NEUTRAL_BID_MINUS_TICKS",
+                1,
+            )
+            or 1
+        )
     )
     minus_ticks = max(0, minus_ticks)
-    target_price = move_price_by_ticks(best_bid, -minus_ticks) if minus_ticks else int(best_bid)
+    target_price = (
+        move_price_by_ticks(best_bid, -minus_ticks) if minus_ticks else int(best_bid)
+    )
     if best_ask > 0:
         target_price = min(target_price, best_ask)
     if target_price <= max(int(defensive_order_price), int(target_buy_price)):
@@ -476,8 +652,12 @@ def _normal_market_gap_profile(
         "positive_signal_count": positive_signal_count,
         "positive_signals": ",".join(positive_signals),
         "buy_pressure_ok": bool(conditional_context.get("buy_pressure_ok")),
-        "tick_aggressor_pressure_usable": bool(conditional_context.get("tick_aggressor_pressure_usable")),
-        "tick_aggressor_trusted_count": int(conditional_context.get("tick_aggressor_trusted_count") or 0),
+        "tick_aggressor_pressure_usable": bool(
+            conditional_context.get("tick_aggressor_pressure_usable")
+        ),
+        "tick_aggressor_trusted_count": int(
+            conditional_context.get("tick_aggressor_trusted_count") or 0
+        ),
         "ofi_ok": bool(conditional_context.get("ofi_ok")),
         "depth_ok": bool(conditional_context.get("depth_ok")),
         "conditional_1tick_eligible": bool(conditional_context.get("eligible")),
@@ -491,7 +671,9 @@ def _normal_market_gap_profile(
         "context": profile_context,
     }
     if is_latency_override:
-        profile.update(profile="latency_override", bps=0, reason="latency_override_keeps_defensive")
+        profile.update(
+            profile="latency_override", bps=0, reason="latency_override_keeps_defensive"
+        )
         return profile
     if not strong_enabled:
         profile["reason"] = "conditional_1tick_disabled"
@@ -551,7 +733,9 @@ def _ticks_between(lower: int | float, upper: int | float) -> int:
 def _can_apply_target_buy_price_cap(*, target_buy_price: int, best_bid: int) -> bool:
     if target_buy_price <= 0:
         return False
-    if not bool(getattr(TRADING_RULES, "SCALPING_PRE_SUBMIT_PRICE_GUARD_ENABLED", True)):
+    if not bool(
+        getattr(TRADING_RULES, "SCALPING_PRE_SUBMIT_PRICE_GUARD_ENABLED", True)
+    ):
         return True
     max_below_bid_bps = int(
         getattr(TRADING_RULES, "SCALPING_PRE_SUBMIT_MAX_BELOW_BID_BPS", 80) or 80
@@ -597,14 +781,18 @@ def _resolve_scalping_order_price(
         return resolved
 
     if not resolver_enabled:
-        if _can_apply_target_buy_price_cap(target_buy_price=target_price, best_bid=best_bid):
+        if _can_apply_target_buy_price_cap(
+            target_buy_price=target_price, best_bid=best_bid
+        ):
             resolved.update(
                 order_price=target_price,
                 price_resolution_reason="reference_target_cap",
                 reference_target_applied=True,
             )
         else:
-            resolved["reference_target_rejected_reason"] = "pre_submit_guard_bps_exceeded"
+            resolved["reference_target_rejected_reason"] = (
+                "pre_submit_guard_bps_exceeded"
+            )
         return resolved
 
     if below_bid_bps <= max_below_bid_bps:
@@ -648,22 +836,30 @@ def _truthy(value: Any) -> bool:
 
 def _latency_micro_estimator_all_scalping_enabled() -> bool:
     return _truthy(
-        os.getenv("KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MICRO_ESTIMATOR_ALL_SCALPING_ENABLED")
+        os.getenv(
+            "KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MICRO_ESTIMATOR_ALL_SCALPING_ENABLED"
+        )
     )
 
 
 def _latency_micro_estimator_allowed_tags() -> set[str]:
-    raw_tags = os.getenv("KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MICRO_ESTIMATOR_TAGS")
+    raw_tags = os.getenv(
+        "KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MICRO_ESTIMATOR_TAGS"
+    )
     if raw_tags is None:
         return {
             str(tag).strip().upper()
-            for tag in (getattr(TRADING_RULES, "SCALP_LATENCY_SPREAD_RELIEF_TAGS", ()) or ())
+            for tag in (
+                getattr(TRADING_RULES, "SCALP_LATENCY_SPREAD_RELIEF_TAGS", ()) or ()
+            )
             if str(tag).strip()
         }
     return {item.strip().upper() for item in raw_tags.split(",") if item.strip()}
 
 
-def _score_candidate_from_source(source: dict[str, Any] | None, prefix: str) -> tuple[float | None, str]:
+def _score_candidate_from_source(
+    source: dict[str, Any] | None, prefix: str
+) -> tuple[float | None, str]:
     fields = source if isinstance(source, dict) else {}
     zero_candidate = ""
     for key in (
@@ -727,12 +923,16 @@ def _latency_micro_estimator_relief_signal_candidate(
     or REST-only snapshots cannot produce this signal.
     """
 
-    enabled = _truthy(os.getenv("KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MICRO_ESTIMATOR_ENABLED"))
+    enabled = _truthy(
+        os.getenv("KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MICRO_ESTIMATOR_ENABLED")
+    )
     all_scalping_enabled = _latency_micro_estimator_all_scalping_enabled()
     result: dict[str, Any] = {
         "latency_spread_relief_micro_estimator_enabled": enabled,
         "latency_spread_relief_micro_estimator_eligible": False,
-        "latency_spread_relief_micro_estimator_reason": "disabled" if not enabled else "not_evaluated",
+        "latency_spread_relief_micro_estimator_reason": (
+            "disabled" if not enabled else "not_evaluated"
+        ),
         "latency_spread_relief_micro_estimator_score": 0.0,
         "latency_spread_relief_micro_estimator_source_state": "not_evaluated",
         "latency_spread_relief_micro_estimator_confidence": 0.0,
@@ -764,7 +964,9 @@ def _latency_micro_estimator_relief_signal_candidate(
 
     allowed_tags = _latency_micro_estimator_allowed_tags()
     normalized_tag = str(position_tag or "").strip().upper()
-    result["latency_spread_relief_micro_estimator_allowed_tags"] = ",".join(sorted(allowed_tags))
+    result["latency_spread_relief_micro_estimator_allowed_tags"] = ",".join(
+        sorted(allowed_tags)
+    )
     if not all_scalping_enabled and allowed_tags and normalized_tag not in allowed_tags:
         result["latency_spread_relief_micro_estimator_reason"] = "tag_not_allowed"
         return result
@@ -794,7 +996,9 @@ def _latency_micro_estimator_relief_signal_candidate(
             "latency_spread_relief_micro_estimator_confidence": round(confidence, 4),
             "latency_spread_relief_micro_estimator_true_ofi_ewma": round(true_ofi, 4),
             "latency_spread_relief_micro_estimator_pressure_ewma": round(pressure, 3),
-            "latency_spread_relief_micro_estimator_top_depth_ratio": round(depth_ratio, 4),
+            "latency_spread_relief_micro_estimator_top_depth_ratio": round(
+                depth_ratio, 4
+            ),
             "latency_spread_relief_micro_estimator_true_ofi_sample_count": true_sample_count,
             "latency_spread_relief_micro_estimator_ws_age_ms": round(ws_age_ms, 3),
         }
@@ -802,13 +1006,20 @@ def _latency_micro_estimator_relief_signal_candidate(
 
     min_confidence = max(
         0.70,
-        _to_float(os.getenv("KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MICRO_ESTIMATOR_MIN_CONFIDENCE"), 0.70),
+        _to_float(
+            os.getenv(
+                "KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MICRO_ESTIMATOR_MIN_CONFIDENCE"
+            ),
+            0.70,
+        ),
     )
     min_true_ofi_samples = max(
         8,
         int(
             _to_float(
-                os.getenv("KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MICRO_ESTIMATOR_MIN_TRUE_OFI_SAMPLES"),
+                os.getenv(
+                    "KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MICRO_ESTIMATOR_MIN_TRUE_OFI_SAMPLES"
+                ),
                 8.0,
             )
         ),
@@ -816,21 +1027,27 @@ def _latency_micro_estimator_relief_signal_candidate(
     min_true_ofi = max(
         0.20,
         _to_float(
-            os.getenv("KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MICRO_ESTIMATOR_MIN_TRUE_OFI"),
+            os.getenv(
+                "KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MICRO_ESTIMATOR_MIN_TRUE_OFI"
+            ),
             0.20,
         ),
     )
     min_pressure = max(
         65.0,
         _to_float(
-            os.getenv("KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MICRO_ESTIMATOR_MIN_PRESSURE"),
+            os.getenv(
+                "KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MICRO_ESTIMATOR_MIN_PRESSURE"
+            ),
             65.0,
         ),
     )
     min_depth_ratio = max(
         1.05,
         _to_float(
-            os.getenv("KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MICRO_ESTIMATOR_MIN_TOP_DEPTH_RATIO"),
+            os.getenv(
+                "KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MICRO_ESTIMATOR_MIN_TOP_DEPTH_RATIO"
+            ),
             1.05,
         ),
     )
@@ -840,29 +1057,47 @@ def _latency_micro_estimator_relief_signal_candidate(
         max(
             1.0,
             _to_float(
-                os.getenv("KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MICRO_ESTIMATOR_MAX_WS_AGE_MS"),
+                os.getenv(
+                    "KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MICRO_ESTIMATOR_MAX_WS_AGE_MS"
+                ),
                 freshness_cap_ms,
             ),
         ),
     )
     result.update(
         {
-            "latency_spread_relief_micro_estimator_min_confidence": round(min_confidence, 4),
+            "latency_spread_relief_micro_estimator_min_confidence": round(
+                min_confidence, 4
+            ),
             "latency_spread_relief_micro_estimator_min_true_ofi_samples": min_true_ofi_samples,
-            "latency_spread_relief_micro_estimator_min_true_ofi": round(min_true_ofi, 4),
-            "latency_spread_relief_micro_estimator_min_pressure": round(min_pressure, 3),
-            "latency_spread_relief_micro_estimator_min_top_depth_ratio": round(min_depth_ratio, 4),
-            "latency_spread_relief_micro_estimator_max_ws_age_ms": round(max_ws_age_ms, 3),
+            "latency_spread_relief_micro_estimator_min_true_ofi": round(
+                min_true_ofi, 4
+            ),
+            "latency_spread_relief_micro_estimator_min_pressure": round(
+                min_pressure, 3
+            ),
+            "latency_spread_relief_micro_estimator_min_top_depth_ratio": round(
+                min_depth_ratio, 4
+            ),
+            "latency_spread_relief_micro_estimator_max_ws_age_ms": round(
+                max_ws_age_ms, 3
+            ),
         }
     )
     if ws_age_ms < 0 or ws_age_ms > max_ws_age_ms:
-        result["latency_spread_relief_micro_estimator_reason"] = "ws_state_stale_or_missing"
+        result["latency_spread_relief_micro_estimator_reason"] = (
+            "ws_state_stale_or_missing"
+        )
         return result
     if true_sample_count < min_true_ofi_samples:
-        result["latency_spread_relief_micro_estimator_reason"] = "true_ofi_samples_below_floor"
+        result["latency_spread_relief_micro_estimator_reason"] = (
+            "true_ofi_samples_below_floor"
+        )
         return result
     if confidence < min_confidence:
-        result["latency_spread_relief_micro_estimator_reason"] = "confidence_below_floor"
+        result["latency_spread_relief_micro_estimator_reason"] = (
+            "confidence_below_floor"
+        )
         return result
     if true_ofi < min_true_ofi:
         result["latency_spread_relief_micro_estimator_reason"] = "true_ofi_below_floor"
@@ -871,10 +1106,14 @@ def _latency_micro_estimator_relief_signal_candidate(
         result["latency_spread_relief_micro_estimator_reason"] = "pressure_below_floor"
         return result
     if depth_ratio < min_depth_ratio:
-        result["latency_spread_relief_micro_estimator_reason"] = "top_depth_ratio_below_floor"
+        result["latency_spread_relief_micro_estimator_reason"] = (
+            "top_depth_ratio_below_floor"
+        )
         return result
 
-    true_ofi_component = _clamp_float(true_ofi / max(min_true_ofi * 2.0, 0.40), 0.0, 1.0)
+    true_ofi_component = _clamp_float(
+        true_ofi / max(min_true_ofi * 2.0, 0.40), 0.0, 1.0
+    )
     pressure_component = _clamp_float((pressure - 50.0) / 20.0, 0.0, 1.0)
     depth_component = _clamp_float((depth_ratio - 1.0) / 0.25, 0.0, 1.0)
     confidence_component = _clamp_float(confidence, 0.0, 1.0)
@@ -905,9 +1144,11 @@ def _latency_micro_relief_signal_candidate(
         fields = source if isinstance(source, dict) else {}
         if not fields:
             continue
-        ready = _truthy(fields.get("orderbook_micro_ready")) or str(
-            fields.get("orderbook_micro_reason") or ""
-        ).strip().lower() == "ready"
+        ready = (
+            _truthy(fields.get("orderbook_micro_ready"))
+            or str(fields.get("orderbook_micro_reason") or "").strip().lower()
+            == "ready"
+        )
         if not ready:
             continue
         healthy_raw = fields.get("orderbook_micro_observer_healthy")
@@ -915,18 +1156,26 @@ def _latency_micro_relief_signal_candidate(
             continue
         snapshot_age_ms = _to_float(
             fields.get("orderbook_micro_snapshot_age_ms"),
-            _to_float(fields.get("orderbook_micro_observer_last_quote_age_ms"), 999999.0),
+            _to_float(
+                fields.get("orderbook_micro_observer_last_quote_age_ms"), 999999.0
+            ),
         )
         if snapshot_age_ms > float(_CONFIG.max_ws_age_ms_for_caution or 0):
             continue
-        sample_count = int(_to_float(fields.get("orderbook_micro_sample_quote_count"), 0.0))
-        min_samples = int(_to_float(fields.get("orderbook_micro_micro_z_min_samples"), 20.0))
+        sample_count = int(
+            _to_float(fields.get("orderbook_micro_sample_quote_count"), 0.0)
+        )
+        min_samples = int(
+            _to_float(fields.get("orderbook_micro_micro_z_min_samples"), 20.0)
+        )
         if sample_count < max(3, min_samples):
             continue
 
         ofi_z = _to_float(fields.get("orderbook_micro_ofi_z"), -999999.0)
         ofi_norm = _to_float(fields.get("orderbook_micro_ofi_norm"), -999999.0)
-        bull_threshold = abs(_to_float(fields.get("orderbook_micro_ofi_bull_threshold"), 1.2)) or 1.2
+        bull_threshold = (
+            abs(_to_float(fields.get("orderbook_micro_ofi_bull_threshold"), 1.2)) or 1.2
+        )
         if ofi_z > -999998.0:
             ofi_component = _clamp_float(ofi_z / bull_threshold, -1.0, 1.0)
         elif ofi_norm > -999998.0:
@@ -942,7 +1191,9 @@ def _latency_micro_relief_signal_candidate(
         if qi_value > -999998.0:
             qi_component = _clamp_float((qi_value - 0.50) / 0.20, -1.0, 1.0)
 
-        score = _clamp_float(50.0 + (25.0 * ofi_component) + (25.0 * qi_component), 0.0, 100.0)
+        score = _clamp_float(
+            50.0 + (25.0 * ofi_component) + (25.0 * qi_component), 0.0, 100.0
+        )
         return score, f"{prefix}.orderbook_micro_ofi_qi", ""
     return None, "", "orderbook_micro_not_ready"
 
@@ -968,7 +1219,9 @@ def _latency_relief_signal_provenance(
             or ""
         ),
     )
-    micro_score, micro_source, micro_gap = _latency_micro_relief_signal_candidate(stock, ws_data)
+    micro_score, micro_source, micro_gap = _latency_micro_relief_signal_candidate(
+        stock, ws_data
+    )
     candidate_score: float | None = None
     candidate_source = ""
     for score, score_source in ((stock_score, stock_source), (ws_score, ws_source)):
@@ -994,7 +1247,9 @@ def _latency_relief_signal_provenance(
         state = "fresh"
         source = "micro_estimator.true_ofi_ewma"
         gap = ""
-        effective_score = _to_float(estimator.get("latency_spread_relief_micro_estimator_score"), 0.0)
+        effective_score = _to_float(
+            estimator.get("latency_spread_relief_micro_estimator_score"), 0.0
+        )
     elif micro_score is not None:
         state = "fresh"
         source = micro_source
@@ -1025,7 +1280,8 @@ def _latency_relief_signal_provenance(
         ),
         "latency_spread_relief_candidate_ai_score_source": candidate_source,
         "latency_spread_relief_source_quality_gap": gap,
-        "latency_spread_relief_explicit_negative_ai_action": explicit_negative_ai_action or "",
+        "latency_spread_relief_explicit_negative_ai_action": explicit_negative_ai_action
+        or "",
         "latency_spread_relief_orderbook_micro_gap": micro_gap,
         **estimator,
     }
@@ -1059,13 +1315,21 @@ def _latency_spread_block_buckets(
     else:
         price_bucket = "spread_not_above_caution"
 
-    if signal_source_quality_state in {"missing", "unusable", "source_gap", "explicit_negative_ai"}:
+    if signal_source_quality_state in {
+        "missing",
+        "unusable",
+        "source_gap",
+        "explicit_negative_ai",
+    }:
         signal_bucket = f"signal_{signal_source_quality_state}"
     else:
         signal_bucket = "signal_fresh"
 
     block_bucket = price_bucket
-    if price_bucket not in {"not_spread_block", "stale_mixed_spread"} and signal_bucket != "signal_fresh":
+    if (
+        price_bucket not in {"not_spread_block", "stale_mixed_spread"}
+        and signal_bucket != "signal_fresh"
+    ):
         block_bucket = f"{price_bucket}|{signal_bucket}"
 
     return {
@@ -1198,11 +1462,14 @@ def _signed_trade_side_and_volume_from_tick(tick: Any) -> tuple[str, float]:
     if raw_text.startswith("-"):
         return "SELL", abs(_to_float(raw_text, 0.0))
     if (
-        str(tick.get("aggressor_source") or "") == "kiwoom_rest_ka10084_signed_trade_qty"
+        str(tick.get("aggressor_source") or "")
+        == "kiwoom_rest_ka10084_signed_trade_qty"
         and str(tick.get("aggressor_side") or "").upper() in {"BUY", "SELL"}
         and raw_text
     ):
-        return str(tick.get("aggressor_side") or "").upper(), abs(_to_float(raw_text, 0.0))
+        return str(tick.get("aggressor_side") or "").upper(), abs(
+            _to_float(raw_text, 0.0)
+        )
     return "UNKNOWN", 0.0
 
 
@@ -1240,23 +1507,44 @@ def _latency_signed_tape_fields(
     ws = ws_data if isinstance(ws_data, dict) else {}
     window = max(
         1,
-        int(_to_float(os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_SIGNED_TAPE_WINDOW"), 5.0)),
+        int(
+            _to_float(
+                os.getenv(
+                    "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_SIGNED_TAPE_WINDOW"
+                ),
+                5.0,
+            )
+        ),
     )
     min_samples = max(
         1,
-        int(_to_float(os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_SIGNED_TAPE_MIN_SAMPLES"), 3.0)),
+        int(
+            _to_float(
+                os.getenv(
+                    "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_SIGNED_TAPE_MIN_SAMPLES"
+                ),
+                3.0,
+            )
+        ),
     )
     max_buy_ratio = max(
         0.0,
         min(
             100.0,
-            _to_float(os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_SIGNED_TAPE_MAX_BUY_RATIO"), 45.0),
+            _to_float(
+                os.getenv(
+                    "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_SIGNED_TAPE_MAX_BUY_RATIO"
+                ),
+                45.0,
+            ),
         ),
     )
     max_rest_age_ms = max(
         0.0,
         _to_float(
-            os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_SIGNED_TAPE_MAX_REST_AGE_MS"),
+            os.getenv(
+                "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_SIGNED_TAPE_MAX_REST_AGE_MS"
+            ),
             3000.0,
         ),
     )
@@ -1307,14 +1595,24 @@ def _latency_signed_tape_fields(
         and buy_ratio <= max_buy_ratio
     )
     latest_side = rows[0][0] if rows else "UNKNOWN"
-    latest_buy_single = _first_present_float(ws.get("buy_exec_single"), item.get("buy_exec_single"), default=0.0)
-    latest_sell_single = _first_present_float(ws.get("sell_exec_single"), item.get("sell_exec_single"), default=0.0)
-    latest_single_sell_dominated = latest_sell_single > latest_buy_single and latest_sell_single > 0
+    latest_buy_single = _first_present_float(
+        ws.get("buy_exec_single"), item.get("buy_exec_single"), default=0.0
+    )
+    latest_sell_single = _first_present_float(
+        ws.get("sell_exec_single"), item.get("sell_exec_single"), default=0.0
+    )
+    latest_single_sell_dominated = (
+        latest_sell_single > latest_buy_single and latest_sell_single > 0
+    )
     return {
         "latency_true_ofi_direct_canary_signed_tape_window": window,
         "latency_true_ofi_direct_canary_signed_tape_min_samples": min_samples,
-        "latency_true_ofi_direct_canary_signed_tape_max_buy_ratio": round(max_buy_ratio, 3),
-        "latency_true_ofi_direct_canary_signed_tape_max_rest_age_ms": round(max_rest_age_ms, 3),
+        "latency_true_ofi_direct_canary_signed_tape_max_buy_ratio": round(
+            max_buy_ratio, 3
+        ),
+        "latency_true_ofi_direct_canary_signed_tape_max_rest_age_ms": round(
+            max_rest_age_ms, 3
+        ),
         "latency_true_ofi_direct_canary_signed_tape_rest_fresh_count": rest_fresh_count,
         "latency_true_ofi_direct_canary_signed_tape_rest_stale_or_unknown_count": (
             rest_stale_or_unknown_count
@@ -1328,13 +1626,23 @@ def _latency_signed_tape_fields(
         "latency_true_ofi_direct_canary_signed_tape_sell_count": sell_count,
         "latency_true_ofi_direct_canary_signed_tape_buy_volume": int(buy_volume),
         "latency_true_ofi_direct_canary_signed_tape_sell_volume": int(sell_volume),
-        "latency_true_ofi_direct_canary_signed_tape_net_buy_volume": int(buy_volume - sell_volume),
-        "latency_true_ofi_direct_canary_signed_tape_buy_ratio": round(float(buy_ratio), 3),
+        "latency_true_ofi_direct_canary_signed_tape_net_buy_volume": int(
+            buy_volume - sell_volume
+        ),
+        "latency_true_ofi_direct_canary_signed_tape_buy_ratio": round(
+            float(buy_ratio), 3
+        ),
         "latency_true_ofi_direct_canary_signed_tape_latest_side": latest_side,
         "latency_true_ofi_direct_canary_signed_tape_sell_dominated": sell_dominated,
-        "latency_true_ofi_direct_canary_signed_tape_latest_buy_single": int(latest_buy_single),
-        "latency_true_ofi_direct_canary_signed_tape_latest_sell_single": int(latest_sell_single),
-        "latency_true_ofi_direct_canary_signed_tape_latest_single_sell_dominated": bool(latest_single_sell_dominated),
+        "latency_true_ofi_direct_canary_signed_tape_latest_buy_single": int(
+            latest_buy_single
+        ),
+        "latency_true_ofi_direct_canary_signed_tape_latest_sell_single": int(
+            latest_sell_single
+        ),
+        "latency_true_ofi_direct_canary_signed_tape_latest_single_sell_dominated": bool(
+            latest_single_sell_dominated
+        ),
     }
 
 
@@ -1346,56 +1654,98 @@ def _latency_direct_canary_tape_pressure_fields(
     ws = ws_data if isinstance(ws_data, dict) else {}
     min_buy_pressure = max(
         0.0,
-        _to_float(os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_MIN_BUY_PRESSURE"), 55.0),
+        _to_float(
+            os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_MIN_BUY_PRESSURE"),
+            55.0,
+        ),
     )
     min_trusted_ticks = max(
         1,
-        int(_to_float(os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_MIN_TRUSTED_TICKS"), 3.0)),
+        int(
+            _to_float(
+                os.getenv(
+                    "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_MIN_TRUSTED_TICKS"
+                ),
+                3.0,
+            )
+        ),
     )
-    pressure_usable = _tick_aggressor_pressure_usable_from_fields(ws) or _tick_aggressor_pressure_usable_from_fields(item)
+    pressure_usable = _tick_aggressor_pressure_usable_from_fields(
+        ws
+    ) or _tick_aggressor_pressure_usable_from_fields(item)
     trusted_count = max(
-        _first_present_int(ws.get("tick_aggressor_trusted_count"), ws.get("microstructure_reaction_tick_aggressor_trusted_count")),
-        _first_present_int(item.get("tick_aggressor_trusted_count"), item.get("microstructure_reaction_tick_aggressor_trusted_count")),
+        _first_present_int(
+            ws.get("tick_aggressor_trusted_count"),
+            ws.get("microstructure_reaction_tick_aggressor_trusted_count"),
+        ),
+        _first_present_int(
+            item.get("tick_aggressor_trusted_count"),
+            item.get("microstructure_reaction_tick_aggressor_trusted_count"),
+        ),
     )
     buy_pressure = _latency_buy_pressure_value(ws, item)
-    buy_exec_volume = _first_present_float(ws.get("buy_exec_volume"), item.get("buy_exec_volume"), default=0.0)
-    sell_exec_volume = _first_present_float(ws.get("sell_exec_volume"), item.get("sell_exec_volume"), default=0.0)
+    buy_exec_volume = _first_present_float(
+        ws.get("buy_exec_volume"), item.get("buy_exec_volume"), default=0.0
+    )
+    sell_exec_volume = _first_present_float(
+        ws.get("sell_exec_volume"), item.get("sell_exec_volume"), default=0.0
+    )
     net_buy_exec_volume = _first_present_float(
         ws.get("net_buy_exec_volume"),
         item.get("net_buy_exec_volume"),
-        default=(buy_exec_volume - sell_exec_volume) if (buy_exec_volume > 0 or sell_exec_volume > 0) else 0.0,
+        default=(
+            (buy_exec_volume - sell_exec_volume)
+            if (buy_exec_volume > 0 or sell_exec_volume > 0)
+            else 0.0
+        ),
     )
-    large_sell = _truthy(ws.get("large_sell_print_detected")) or _truthy(item.get("large_sell_print_detected"))
+    large_sell = _truthy(ws.get("large_sell_print_detected")) or _truthy(
+        item.get("large_sell_print_detected")
+    )
     signed_tape_fields = _latency_signed_tape_fields(item, ws)
     fields = {
         "latency_true_ofi_direct_canary_min_buy_pressure": round(min_buy_pressure, 3),
         "latency_true_ofi_direct_canary_min_trusted_ticks": min_trusted_ticks,
         "latency_true_ofi_direct_canary_tape_pressure_usable": bool(pressure_usable),
         "latency_true_ofi_direct_canary_tape_trusted_count": trusted_count,
-        "latency_true_ofi_direct_canary_tape_buy_pressure": round(float(buy_pressure or 0.0), 3),
+        "latency_true_ofi_direct_canary_tape_buy_pressure": round(
+            float(buy_pressure or 0.0), 3
+        ),
         "latency_true_ofi_direct_canary_tape_buy_exec_volume": int(buy_exec_volume),
         "latency_true_ofi_direct_canary_tape_sell_exec_volume": int(sell_exec_volume),
-        "latency_true_ofi_direct_canary_tape_net_buy_exec_volume": int(net_buy_exec_volume),
+        "latency_true_ofi_direct_canary_tape_net_buy_exec_volume": int(
+            net_buy_exec_volume
+        ),
         "latency_true_ofi_direct_canary_large_sell_print_detected": bool(large_sell),
         "latency_true_ofi_direct_canary_tape_support_ok": False,
         "latency_true_ofi_direct_canary_tape_block_reason": "not_evaluated",
         **signed_tape_fields,
     }
     if large_sell:
-        fields["latency_true_ofi_direct_canary_tape_block_reason"] = "large_sell_print_detected"
+        fields["latency_true_ofi_direct_canary_tape_block_reason"] = (
+            "large_sell_print_detected"
+        )
         return fields
     if fields["latency_true_ofi_direct_canary_signed_tape_sell_dominated"]:
-        fields["latency_true_ofi_direct_canary_tape_block_reason"] = "signed_tape_sell_dominated"
+        fields["latency_true_ofi_direct_canary_tape_block_reason"] = (
+            "signed_tape_sell_dominated"
+        )
         return fields
     if not pressure_usable or trusted_count < min_trusted_ticks:
         fields["latency_true_ofi_direct_canary_tape_support_ok"] = True
-        fields["latency_true_ofi_direct_canary_tape_block_reason"] = "tape_support_ok_missing_pressure"
+        fields["latency_true_ofi_direct_canary_tape_block_reason"] = (
+            "tape_support_ok_missing_pressure"
+        )
         return fields
     if (buy_exec_volume > 0 or sell_exec_volume > 0) and net_buy_exec_volume <= 0:
-        fields["latency_true_ofi_direct_canary_tape_block_reason"] = "sell_dominated_tape"
+        fields["latency_true_ofi_direct_canary_tape_block_reason"] = (
+            "sell_dominated_tape"
+        )
         return fields
     if buy_pressure < min_buy_pressure:
-        fields["latency_true_ofi_direct_canary_tape_block_reason"] = "buy_pressure_below_floor"
+        fields["latency_true_ofi_direct_canary_tape_block_reason"] = (
+            "buy_pressure_below_floor"
+        )
         return fields
     fields["latency_true_ofi_direct_canary_tape_support_ok"] = True
     fields["latency_true_ofi_direct_canary_tape_block_reason"] = "tape_support_ok"
@@ -1456,10 +1806,14 @@ def _latency_false_negative_runtime_estimator_context(code: str) -> dict[str, An
     try:
         snapshot = MICRO_ESTIMATOR_STORE.snapshot(str(code), now_ts=now_ts)
     except Exception:
-        context["latency_false_negative_remeasure_source_state"] = "snapshot_unavailable"
+        context["latency_false_negative_remeasure_source_state"] = (
+            "snapshot_unavailable"
+        )
         return context
     if not isinstance(snapshot, dict):
-        context["latency_false_negative_remeasure_source_state"] = "snapshot_unavailable"
+        context["latency_false_negative_remeasure_source_state"] = (
+            "snapshot_unavailable"
+        )
         return context
     last_ws_ts = _to_float(snapshot.get("last_ws_ts"), 0.0)
     ws_age_ms = max(0.0, (now_ts - last_ws_ts) * 1000.0) if last_ws_ts > 0 else -1.0
@@ -1505,18 +1859,35 @@ def _latency_false_negative_bounded_remeasure_fields(
     spread_bps: float,
 ) -> dict[str, Any]:
     enabled = _latency_false_negative_remeasure_enabled()
-    estimator_context = _latency_false_negative_runtime_estimator_context(code) if enabled else {}
+    estimator_context = (
+        _latency_false_negative_runtime_estimator_context(code) if enabled else {}
+    )
     min_review_score_pct = max(
         0.0,
-        _to_float(os.getenv("KORSTOCKSCAN_LATENCY_FALSE_NEGATIVE_REMEASURE_MIN_REVIEW_SCORE_PCT"), 2.0),
+        _to_float(
+            os.getenv(
+                "KORSTOCKSCAN_LATENCY_FALSE_NEGATIVE_REMEASURE_MIN_REVIEW_SCORE_PCT"
+            ),
+            2.0,
+        ),
     )
     min_samples = max(
         1,
-        int(_to_float(os.getenv("KORSTOCKSCAN_LATENCY_FALSE_NEGATIVE_REMEASURE_MIN_TRUE_OFI_SAMPLES"), 100.0)),
+        int(
+            _to_float(
+                os.getenv(
+                    "KORSTOCKSCAN_LATENCY_FALSE_NEGATIVE_REMEASURE_MIN_TRUE_OFI_SAMPLES"
+                ),
+                100.0,
+            )
+        ),
     )
     max_ws_age_ms = max(
         1.0,
-        _to_float(os.getenv("KORSTOCKSCAN_LATENCY_FALSE_NEGATIVE_REMEASURE_MAX_WS_AGE_MS"), 150.0),
+        _to_float(
+            os.getenv("KORSTOCKSCAN_LATENCY_FALSE_NEGATIVE_REMEASURE_MAX_WS_AGE_MS"),
+            150.0,
+        ),
     )
     true_ofi_floor = _to_float(
         os.getenv("KORSTOCKSCAN_LATENCY_FALSE_NEGATIVE_REMEASURE_TRUE_OFI_FLOOR"),
@@ -1524,14 +1895,19 @@ def _latency_false_negative_bounded_remeasure_fields(
     )
     max_spread_bps = max(
         1.0,
-        _to_float(os.getenv("KORSTOCKSCAN_LATENCY_FALSE_NEGATIVE_REMEASURE_MAX_SPREAD_BPS"), 90.0),
+        _to_float(
+            os.getenv("KORSTOCKSCAN_LATENCY_FALSE_NEGATIVE_REMEASURE_MAX_SPREAD_BPS"),
+            90.0,
+        ),
     )
     fields: dict[str, Any] = {
         "latency_false_negative_remeasure_enabled": enabled,
         "latency_false_negative_remeasure_candidate": False,
         "latency_false_negative_remeasure_candidate_source": "none",
         "latency_false_negative_remeasure_enqueued": False,
-        "latency_false_negative_remeasure_reason": "disabled" if not enabled else "not_evaluated",
+        "latency_false_negative_remeasure_reason": (
+            "disabled" if not enabled else "not_evaluated"
+        ),
         "latency_false_negative_remeasure_cohort": "not_applicable",
         "latency_false_negative_remeasure_grade": "not_applicable",
         "latency_false_negative_remeasure_next_action": "none",
@@ -1552,12 +1928,16 @@ def _latency_false_negative_bounded_remeasure_fields(
         "latency_false_negative_remeasure_runtime_effect": False,
         "latency_false_negative_remeasure_allowed_runtime_apply": False,
         "latency_false_negative_remeasure_forbidden_uses": _LATENCY_FALSE_NEGATIVE_REMEASURE_FORBIDDEN_USES,
-        "latency_false_negative_remeasure_min_review_score_pct": round(min_review_score_pct, 3),
+        "latency_false_negative_remeasure_min_review_score_pct": round(
+            min_review_score_pct, 3
+        ),
         "latency_false_negative_remeasure_min_true_ofi_samples": min_samples,
         "latency_false_negative_remeasure_max_ws_age_ms": round(max_ws_age_ms, 3),
         "latency_false_negative_remeasure_true_ofi_floor": round(true_ofi_floor, 4),
         "latency_false_negative_remeasure_max_spread_bps": round(max_spread_bps, 3),
-        "latency_false_negative_remeasure_spread_bps": round(float(spread_bps or 0.0), 3),
+        "latency_false_negative_remeasure_spread_bps": round(
+            float(spread_bps or 0.0), 3
+        ),
         **estimator_context,
     }
     if not enabled:
@@ -1565,8 +1945,13 @@ def _latency_false_negative_bounded_remeasure_fields(
     if str(strategy_id or "").upper() not in {"SCALPING", "SCALP"}:
         fields["latency_false_negative_remeasure_reason"] = "non_scalping"
         return fields
-    if policy_decision != EntryDecision.REJECT_DANGER or effective_decision != EntryDecision.REJECT_DANGER:
-        fields["latency_false_negative_remeasure_reason"] = "not_blocked_by_latency_danger"
+    if (
+        policy_decision != EntryDecision.REJECT_DANGER
+        or effective_decision != EntryDecision.REJECT_DANGER
+    ):
+        fields["latency_false_negative_remeasure_reason"] = (
+            "not_blocked_by_latency_danger"
+        )
         return fields
     if bool(getattr(latency_status, "quote_stale", False)):
         fields["latency_false_negative_remeasure_reason"] = "quote_stale"
@@ -1578,7 +1963,9 @@ def _latency_false_negative_bounded_remeasure_fields(
         )
         return fields
 
-    normalized_reasons = _normalized_reason_set(danger_reasons or _latency_danger_reasons(latency_status))
+    normalized_reasons = _normalized_reason_set(
+        danger_reasons or _latency_danger_reasons(latency_status)
+    )
     spread_reasons = {
         "spread_above_caution_below_guard_cap",
         "spread_above_caution",
@@ -1588,20 +1975,32 @@ def _latency_false_negative_bounded_remeasure_fields(
         fields["latency_false_negative_remeasure_reason"] = "non_spread_latency_danger"
         return fields
     if float(spread_bps or 0.0) > max_spread_bps:
-        fields["latency_false_negative_remeasure_reason"] = "spread_bps_above_remeasure_cap"
+        fields["latency_false_negative_remeasure_reason"] = (
+            "spread_bps_above_remeasure_cap"
+        )
         fields["latency_false_negative_remeasure_grade"] = "observe_wide_spread"
         return fields
 
-    true_ofi = _to_float(fields.get("latency_false_negative_remeasure_true_ofi_ewma"), 0.0)
-    sample_count = int(_to_float(fields.get("latency_false_negative_remeasure_true_ofi_sample_count"), 0.0))
-    ws_age_ms = _to_float(fields.get("latency_false_negative_remeasure_ws_age_ms"), -1.0)
+    true_ofi = _to_float(
+        fields.get("latency_false_negative_remeasure_true_ofi_ewma"), 0.0
+    )
+    sample_count = int(
+        _to_float(
+            fields.get("latency_false_negative_remeasure_true_ofi_sample_count"), 0.0
+        )
+    )
+    ws_age_ms = _to_float(
+        fields.get("latency_false_negative_remeasure_ws_age_ms"), -1.0
+    )
     true_ofi_ready = (
         sample_count >= min_samples
         and 0.0 <= ws_age_ms <= max_ws_age_ms
         and true_ofi >= true_ofi_floor
     )
     if not _latency_false_negative_report_ready(stock):
-        fields["latency_false_negative_remeasure_reason"] = "report_ready_for_recheck_missing"
+        fields["latency_false_negative_remeasure_reason"] = (
+            "report_ready_for_recheck_missing"
+        )
         return fields
     report_cohort = str(
         (stock or {}).get("latency_false_negative_canary_cohort")
@@ -1609,7 +2008,9 @@ def _latency_false_negative_bounded_remeasure_fields(
         or ""
     )
     if not true_ofi_ready and "spread_only" not in report_cohort:
-        fields["latency_false_negative_remeasure_reason"] = "runtime_true_ofi_recheck_not_ready"
+        fields["latency_false_negative_remeasure_reason"] = (
+            "runtime_true_ofi_recheck_not_ready"
+        )
         fields["latency_false_negative_remeasure_grade"] = "hold_sample"
         return fields
 
@@ -1654,7 +2055,12 @@ def _latency_true_ofi_direct_canary_fields(
     enabled = bool(runtime_state["active"])
     min_samples = max(
         1,
-        int(_to_float(os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_MIN_SAMPLES"), 75.0)),
+        int(
+            _to_float(
+                os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_MIN_SAMPLES"),
+                75.0,
+            )
+        ),
     )
     max_ws_age_ms = max(
         1.0,
@@ -2851,9 +3257,17 @@ def _latency_danger_reasons(latency_status) -> list[str]:
     reasons: list[str] = []
     if getattr(latency_status, "quote_stale", False):
         reasons.append("quote_stale")
-    max_ws_age_ms = int(getattr(TRADING_RULES, "SCALP_LATENCY_GUARD_CANARY_MAX_WS_AGE_MS", 450) or 450)
-    max_ws_jitter_ms = int(getattr(TRADING_RULES, "SCALP_LATENCY_GUARD_CANARY_MAX_WS_JITTER_MS", 260) or 260)
-    max_spread_ratio = _to_float(getattr(TRADING_RULES, "SCALP_LATENCY_GUARD_CANARY_MAX_SPREAD_RATIO", 0.0100), 0.0100)
+    max_ws_age_ms = int(
+        getattr(TRADING_RULES, "SCALP_LATENCY_GUARD_CANARY_MAX_WS_AGE_MS", 450) or 450
+    )
+    max_ws_jitter_ms = int(
+        getattr(TRADING_RULES, "SCALP_LATENCY_GUARD_CANARY_MAX_WS_JITTER_MS", 260)
+        or 260
+    )
+    max_spread_ratio = _to_float(
+        getattr(TRADING_RULES, "SCALP_LATENCY_GUARD_CANARY_MAX_SPREAD_RATIO", 0.0100),
+        0.0100,
+    )
     if int(getattr(latency_status, "ws_age_ms", 0) or 0) > max_ws_age_ms:
         reasons.append("ws_age_too_high")
     if int(getattr(latency_status, "ws_jitter_ms", 0) or 0) > max_ws_jitter_ms:
@@ -2861,7 +3275,9 @@ def _latency_danger_reasons(latency_status) -> list[str]:
     spread_ratio = _to_float(getattr(latency_status, "spread_ratio", 0.0), 0.0)
     if spread_ratio > max_spread_ratio:
         reasons.append("spread_too_wide")
-    elif not reasons and spread_ratio > _to_float(_CONFIG.max_spread_ratio_for_caution, 0.0):
+    elif not reasons and spread_ratio > _to_float(
+        _CONFIG.max_spread_ratio_for_caution, 0.0
+    ):
         reasons.append("spread_above_caution_below_guard_cap")
     if not reasons:
         reasons.append("other_danger")
@@ -2872,7 +3288,11 @@ def _latency_danger_provenance(latency_status) -> dict[str, Any]:
     """Expose the EntryPolicy DANGER basis without changing legacy reason labels."""
 
     state_value = str(
-        getattr(getattr(latency_status, "state", None), "value", getattr(latency_status, "state", ""))
+        getattr(
+            getattr(latency_status, "state", None),
+            "value",
+            getattr(latency_status, "state", ""),
+        )
         or ""
     ).upper()
     if state_value != "DANGER":
@@ -2880,8 +3300,12 @@ def _latency_danger_provenance(latency_status) -> dict[str, Any]:
             "latency_danger_detail_reason": "not_applicable",
             "latency_danger_source_quality_state": "not_applicable",
             "latency_danger_reason_taxonomy_gap": False,
-            "latency_danger_max_ws_age_ms_for_caution": int(_CONFIG.max_ws_age_ms_for_caution or 0),
-            "latency_danger_max_ws_jitter_ms_for_caution": int(_CONFIG.max_ws_jitter_ms_for_caution or 0),
+            "latency_danger_max_ws_age_ms_for_caution": int(
+                _CONFIG.max_ws_age_ms_for_caution or 0
+            ),
+            "latency_danger_max_ws_jitter_ms_for_caution": int(
+                _CONFIG.max_ws_jitter_ms_for_caution or 0
+            ),
             "latency_danger_max_spread_ratio_for_caution": round(
                 float(_to_float(_CONFIG.max_spread_ratio_for_caution, 0.0)),
                 6,
@@ -2889,7 +3313,11 @@ def _latency_danger_provenance(latency_status) -> dict[str, Any]:
             "latency_danger_guard_max_spread_ratio": round(
                 float(
                     _to_float(
-                        getattr(TRADING_RULES, "SCALP_LATENCY_GUARD_CANARY_MAX_SPREAD_RATIO", 0.0100),
+                        getattr(
+                            TRADING_RULES,
+                            "SCALP_LATENCY_GUARD_CANARY_MAX_SPREAD_RATIO",
+                            0.0100,
+                        ),
                         0.0100,
                     )
                 ),
@@ -2929,9 +3357,11 @@ def _latency_danger_provenance(latency_status) -> dict[str, Any]:
 
     if getattr(latency_status, "quote_stale", False):
         source_quality_state = "stale"
-    elif {"ws_age_above_caution", "ws_jitter_above_caution", "order_rtt_avg_above_caution"} & set(
-        detail_reasons
-    ):
+    elif {
+        "ws_age_above_caution",
+        "ws_jitter_above_caution",
+        "order_rtt_avg_above_caution",
+    } & set(detail_reasons):
         source_quality_state = "degraded"
     elif any(reason.startswith("spread_above_caution") for reason in detail_reasons):
         source_quality_state = "fresh"
@@ -2939,14 +3369,18 @@ def _latency_danger_provenance(latency_status) -> dict[str, Any]:
         source_quality_state = "unknown"
 
     legacy_reasons = _normalized_reason_set(_latency_danger_reasons(latency_status))
-    taxonomy_gap = legacy_reasons == {"other_danger"} and detail_reasons != ["unclassified_danger"]
+    taxonomy_gap = legacy_reasons == {"other_danger"} and detail_reasons != [
+        "unclassified_danger"
+    ]
     return {
         "latency_danger_detail_reason": ",".join(detail_reasons),
         "latency_danger_source_quality_state": source_quality_state,
         "latency_danger_reason_taxonomy_gap": taxonomy_gap,
         "latency_danger_max_ws_age_ms_for_caution": max_ws_age_caution,
         "latency_danger_max_ws_jitter_ms_for_caution": max_ws_jitter_caution,
-        "latency_danger_max_spread_ratio_for_caution": round(float(max_spread_caution), 6),
+        "latency_danger_max_spread_ratio_for_caution": round(
+            float(max_spread_caution), 6
+        ),
         "latency_danger_guard_max_spread_ratio": round(float(guard_max_spread), 6),
     }
 
@@ -2968,7 +3402,9 @@ def _should_apply_latency_submit_recovery_canary(
     signal_strength: float,
     latency_status,
 ) -> tuple[bool, str]:
-    if not bool(getattr(TRADING_RULES, "SCALP_LATENCY_SUBMIT_RECOVERY_CANARY_ENABLED", False)):
+    if not bool(
+        getattr(TRADING_RULES, "SCALP_LATENCY_SUBMIT_RECOVERY_CANARY_ENABLED", False)
+    ):
         return False, "disabled"
     if str(strategy_id or "").upper() != "SCALPING":
         return False, "non_scalping"
@@ -2978,16 +3414,25 @@ def _should_apply_latency_submit_recovery_canary(
         return False, "not_caution"
 
     normalized_score = _normalize_signal_score(signal_strength)
-    min_signal = _to_float(getattr(TRADING_RULES, "SCALP_LATENCY_SUBMIT_RECOVERY_MIN_SIGNAL_SCORE", 75.0), 75.0)
+    min_signal = _to_float(
+        getattr(TRADING_RULES, "SCALP_LATENCY_SUBMIT_RECOVERY_MIN_SIGNAL_SCORE", 75.0),
+        75.0,
+    )
     if normalized_score < min_signal:
         return False, "signal_score_below_floor"
 
-    max_ws_age_ms = int(getattr(TRADING_RULES, "SCALP_LATENCY_SUBMIT_RECOVERY_MAX_WS_AGE_MS", 1200) or 1200)
+    max_ws_age_ms = int(
+        getattr(TRADING_RULES, "SCALP_LATENCY_SUBMIT_RECOVERY_MAX_WS_AGE_MS", 1200)
+        or 1200
+    )
     max_ws_jitter_ms = int(
-        getattr(TRADING_RULES, "SCALP_LATENCY_SUBMIT_RECOVERY_MAX_WS_JITTER_MS", 1500) or 1500
+        getattr(TRADING_RULES, "SCALP_LATENCY_SUBMIT_RECOVERY_MAX_WS_JITTER_MS", 1500)
+        or 1500
     )
     max_spread_ratio = _to_float(
-        getattr(TRADING_RULES, "SCALP_LATENCY_SUBMIT_RECOVERY_MAX_SPREAD_RATIO", 0.0100),
+        getattr(
+            TRADING_RULES, "SCALP_LATENCY_SUBMIT_RECOVERY_MAX_SPREAD_RATIO", 0.0100
+        ),
         0.0100,
     )
     if int(getattr(latency_status, "ws_age_ms", 0) or 0) > max_ws_age_ms:
@@ -3022,7 +3467,9 @@ def _should_apply_latency_guard_canary(
     allowed_danger_reasons = _normalized_reason_set(
         getattr(TRADING_RULES, "SCALP_LATENCY_GUARD_CANARY_ALLOWED_DANGER_REASONS", ())
     )
-    if allowed_danger_reasons and not (allowed_danger_reasons & _normalized_reason_set(reasons)):
+    if allowed_danger_reasons and not (
+        allowed_danger_reasons & _normalized_reason_set(reasons)
+    ):
         return False, "danger_reason_not_allowed"
 
     allow_tags = {
@@ -3034,14 +3481,25 @@ def _should_apply_latency_guard_canary(
     if allow_tags and normalized_tag not in allow_tags:
         return False, "tag_not_allowed"
 
-    min_signal = _to_float(getattr(TRADING_RULES, "SCALP_LATENCY_GUARD_CANARY_MIN_SIGNAL_SCORE", 85.0), 85.0)
+    min_signal = _to_float(
+        getattr(TRADING_RULES, "SCALP_LATENCY_GUARD_CANARY_MIN_SIGNAL_SCORE", 85.0),
+        85.0,
+    )
     signal_score = _normalize_signal_score(signal_strength)
     if signal_score < min_signal:
         return False, "low_signal"
 
-    max_ws_age_ms = int(getattr(TRADING_RULES, "SCALP_LATENCY_GUARD_CANARY_MAX_WS_AGE_MS", 450) or 450)
-    max_ws_jitter_ms = int(getattr(TRADING_RULES, "SCALP_LATENCY_GUARD_CANARY_MAX_WS_JITTER_MS", 260) or 260)
-    max_spread_ratio = _to_float(getattr(TRADING_RULES, "SCALP_LATENCY_GUARD_CANARY_MAX_SPREAD_RATIO", 0.0100), 0.0100)
+    max_ws_age_ms = int(
+        getattr(TRADING_RULES, "SCALP_LATENCY_GUARD_CANARY_MAX_WS_AGE_MS", 450) or 450
+    )
+    max_ws_jitter_ms = int(
+        getattr(TRADING_RULES, "SCALP_LATENCY_GUARD_CANARY_MAX_WS_JITTER_MS", 260)
+        or 260
+    )
+    max_spread_ratio = _to_float(
+        getattr(TRADING_RULES, "SCALP_LATENCY_GUARD_CANARY_MAX_SPREAD_RATIO", 0.0100),
+        0.0100,
+    )
     if int(getattr(latency_status, "ws_age_ms", 0) or 0) > max_ws_age_ms:
         return False, "ws_age_too_high"
     if int(getattr(latency_status, "ws_jitter_ms", 0) or 0) > max_ws_jitter_ms:
@@ -3055,7 +3513,9 @@ def _should_apply_latency_guard_canary(
         tick_limit=_CONFIG.fallback_allowed_slippage_ticks,
         pct_limit=_CONFIG.fallback_allowed_slippage_pct,
     )
-    if not _ENTRY_POLICY._slippage_ok(signal_price, latest_price, allowed_slippage, "BUY"):
+    if not _ENTRY_POLICY._slippage_ok(
+        signal_price, latest_price, allowed_slippage, "BUY"
+    ):
         return False, "fallback_slippage_exceeded"
 
     return True, "canary_applied"
@@ -3073,25 +3533,37 @@ def _should_apply_latency_spread_relief_canary(
     danger_reasons: list[str] | None = None,
     allow_true_ofi_all_scalping_scope: bool = False,
 ) -> tuple[bool, str]:
-    if not bool(getattr(TRADING_RULES, "SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED", False)):
+    if not bool(
+        getattr(TRADING_RULES, "SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED", False)
+    ):
         return False, "disabled"
     if str(strategy_id or "").upper() not in {"SCALPING", "SCALP"}:
         return False, "non_scalping"
     if getattr(latency_status, "quote_stale", False):
         return False, "quote_stale"
 
-    normalized_reasons = _normalized_reason_set(danger_reasons or _latency_danger_reasons(latency_status))
+    normalized_reasons = _normalized_reason_set(
+        danger_reasons or _latency_danger_reasons(latency_status)
+    )
     spread_relief_reasons = {"spread_too_wide", "spread_above_caution_below_guard_cap"}
-    if len(normalized_reasons) != 1 or not normalized_reasons.issubset(spread_relief_reasons):
+    if len(normalized_reasons) != 1 or not normalized_reasons.issubset(
+        spread_relief_reasons
+    ):
         return False, "spread_only_required"
 
     allow_tags = {
         str(tag).strip().upper()
-        for tag in (getattr(TRADING_RULES, "SCALP_LATENCY_SPREAD_RELIEF_TAGS", ()) or ())
+        for tag in (
+            getattr(TRADING_RULES, "SCALP_LATENCY_SPREAD_RELIEF_TAGS", ()) or ()
+        )
         if str(tag).strip()
     }
     normalized_tag = str(position_tag or "").strip().upper()
-    if allow_tags and normalized_tag not in allow_tags and not allow_true_ofi_all_scalping_scope:
+    if (
+        allow_tags
+        and normalized_tag not in allow_tags
+        and not allow_true_ofi_all_scalping_scope
+    ):
         return False, "tag_not_allowed"
 
     configured_min_signal = _to_float(
@@ -3101,7 +3573,11 @@ def _should_apply_latency_spread_relief_canary(
     min_signal = max(
         configured_min_signal,
         _to_float(
-            getattr(TRADING_RULES, "SCALP_LATENCY_SPREAD_RELIEF_EFFECTIVE_MIN_SIGNAL_SCORE_FLOOR", 85.0),
+            getattr(
+                TRADING_RULES,
+                "SCALP_LATENCY_SPREAD_RELIEF_EFFECTIVE_MIN_SIGNAL_SCORE_FLOOR",
+                85.0,
+            ),
             85.0,
         ),
     )
@@ -3116,16 +3592,26 @@ def _should_apply_latency_spread_relief_canary(
     if _to_float(getattr(latency_status, "spread_ratio", 0.0), 0.0) > max_spread_ratio:
         return False, "spread_relief_limit_exceeded"
 
-    if bool(getattr(TRADING_RULES, "SCALP_LATENCY_SPREAD_RELIEF_BLOCK_UNSTABLE_QUOTE", True)):
+    if bool(
+        getattr(TRADING_RULES, "SCALP_LATENCY_SPREAD_RELIEF_BLOCK_UNSTABLE_QUOTE", True)
+    ):
         stability = ORDERBOOK_STABILITY_OBSERVER.snapshot(code) if code else {}
         if bool(stability.get("unstable_quote_observed")):
             return False, "unstable_quote_observed"
         if "print_quote_alignment" in stability:
             min_alignment = _to_float(
-                getattr(TRADING_RULES, "SCALP_LATENCY_SPREAD_RELIEF_MIN_PRINT_QUOTE_ALIGNMENT", 0.90),
+                getattr(
+                    TRADING_RULES,
+                    "SCALP_LATENCY_SPREAD_RELIEF_MIN_PRINT_QUOTE_ALIGNMENT",
+                    0.90,
+                ),
                 0.90,
             )
-            if min_alignment > 0 and _to_float(stability.get("print_quote_alignment"), 1.0) < min_alignment:
+            if (
+                min_alignment > 0
+                and _to_float(stability.get("print_quote_alignment"), 1.0)
+                < min_alignment
+            ):
                 return False, "print_quote_alignment_too_low"
 
     allowed_slippage = _ENTRY_POLICY._allowed_slippage(
@@ -3134,7 +3620,9 @@ def _should_apply_latency_spread_relief_canary(
         tick_limit=_CONFIG.normal_allowed_slippage_ticks,
         pct_limit=_CONFIG.normal_allowed_slippage_pct,
     )
-    if not _ENTRY_POLICY._slippage_ok(signal_price, latest_price, allowed_slippage, "BUY"):
+    if not _ENTRY_POLICY._slippage_ok(
+        signal_price, latest_price, allowed_slippage, "BUY"
+    ):
         return False, "normal_slippage_exceeded"
 
     return True, "spread_relief_canary_applied"
@@ -3157,21 +3645,28 @@ def _should_apply_latency_wide_spread_passive_requote(
     danger_reasons: list[str] | None = None,
 ) -> tuple[bool, str, dict[str, Any]]:
     diagnostics: dict[str, Any] = {}
-    if not bool(getattr(TRADING_RULES, "SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_ENABLED", False)):
+    if not bool(
+        getattr(
+            TRADING_RULES, "SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_ENABLED", False
+        )
+    ):
         return False, "disabled", diagnostics
     if str(strategy_id or "").upper() not in {"SCALPING", "SCALP"}:
         return False, "non_scalping", diagnostics
     if getattr(latency_status, "quote_stale", False):
         return False, "quote_stale", diagnostics
 
-    normalized_reasons = _normalized_reason_set(danger_reasons or _latency_danger_reasons(latency_status))
+    normalized_reasons = _normalized_reason_set(
+        danger_reasons or _latency_danger_reasons(latency_status)
+    )
     if normalized_reasons != {"spread_too_wide"}:
         return False, "spread_only_required", diagnostics
 
     allow_tags = {
         str(tag).strip().upper()
         for tag in (
-            getattr(TRADING_RULES, "SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_TAGS", ()) or ()
+            getattr(TRADING_RULES, "SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_TAGS", ())
+            or ()
         )
         if str(tag).strip()
     }
@@ -3181,42 +3676,64 @@ def _should_apply_latency_wide_spread_passive_requote(
 
     signal_score = _normalize_signal_score(signal_strength)
     min_signal = _to_float(
-        getattr(TRADING_RULES, "SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_MIN_SIGNAL_SCORE", 78.0),
+        getattr(
+            TRADING_RULES,
+            "SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_MIN_SIGNAL_SCORE",
+            78.0,
+        ),
         78.0,
     )
     if signal_score < min_signal:
         return False, "low_signal", diagnostics
 
     min_buy_pressure = _to_float(
-        getattr(TRADING_RULES, "SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_MIN_BUY_PRESSURE", 78.0),
+        getattr(
+            TRADING_RULES,
+            "SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_MIN_BUY_PRESSURE",
+            78.0,
+        ),
         78.0,
     )
     if _to_float(buy_pressure_10t, 0.0) < min_buy_pressure:
         return False, "low_buy_pressure", diagnostics
 
     min_strength = _to_float(
-        getattr(TRADING_RULES, "SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_MIN_STRENGTH", 0.0),
+        getattr(
+            TRADING_RULES, "SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_MIN_STRENGTH", 0.0
+        ),
         0.0,
     )
     if min_strength > 0 and _to_float(latest_strength, 0.0) < min_strength:
         return False, "low_strength", diagnostics
 
     max_ws_age_ms = int(
-        getattr(TRADING_RULES, "SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_MAX_WS_AGE_MS", 700)
+        getattr(
+            TRADING_RULES,
+            "SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_MAX_WS_AGE_MS",
+            700,
+        )
         or 700
     )
     if int(getattr(latency_status, "ws_age_ms", 0) or 0) > max_ws_age_ms:
         return False, "ws_age_limit_exceeded", diagnostics
 
     max_ws_jitter_ms = int(
-        getattr(TRADING_RULES, "SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_MAX_WS_JITTER_MS", 500)
+        getattr(
+            TRADING_RULES,
+            "SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_MAX_WS_JITTER_MS",
+            500,
+        )
         or 500
     )
     if int(getattr(latency_status, "ws_jitter_ms", 0) or 0) > max_ws_jitter_ms:
         return False, "ws_jitter_limit_exceeded", diagnostics
 
     max_spread_ratio = _to_float(
-        getattr(TRADING_RULES, "SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_MAX_SPREAD_RATIO", 0.0130),
+        getattr(
+            TRADING_RULES,
+            "SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_MAX_SPREAD_RATIO",
+            0.0130,
+        ),
         0.0130,
     )
     if _to_float(getattr(latency_status, "spread_ratio", 0.0), 0.0) > max_spread_ratio:
@@ -3225,16 +3742,26 @@ def _should_apply_latency_wide_spread_passive_requote(
     if int(best_bid or 0) <= 0 or int(best_ask or 0) <= int(best_bid or 0):
         return False, "invalid_quote", diagnostics
 
-    micro_context = _conditional_real_1tick_context(ws_data, best_ask=best_ask, best_bid=best_bid)
+    micro_context = _conditional_real_1tick_context(
+        ws_data, best_ask=best_ask, best_bid=best_bid
+    )
     min_ofi = _to_float(
-        getattr(TRADING_RULES, "SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_MIN_OFI_NORM", 0.0),
+        getattr(
+            TRADING_RULES, "SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_MIN_OFI_NORM", 0.0
+        ),
         0.0,
     )
     ofi_norm = micro_context.get("ofi_norm")
     if min_ofi > 0 and (ofi_norm is None or _to_float(ofi_norm, 0.0) < min_ofi):
         return False, "low_ofi", micro_context
 
-    if bool(getattr(TRADING_RULES, "SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_BLOCK_UNSTABLE_QUOTE", True)):
+    if bool(
+        getattr(
+            TRADING_RULES,
+            "SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_BLOCK_UNSTABLE_QUOTE",
+            True,
+        )
+    ):
         stability = ORDERBOOK_STABILITY_OBSERVER.snapshot(code) if code else {}
         diagnostics.update(stability)
         if bool(stability.get("unstable_quote_observed")):
@@ -3246,7 +3773,9 @@ def _should_apply_latency_wide_spread_passive_requote(
         tick_limit=_CONFIG.normal_allowed_slippage_ticks,
         pct_limit=_CONFIG.normal_allowed_slippage_pct,
     )
-    if not _ENTRY_POLICY._slippage_ok(signal_price, latest_price, allowed_slippage, "BUY"):
+    if not _ENTRY_POLICY._slippage_ok(
+        signal_price, latest_price, allowed_slippage, "BUY"
+    ):
         return False, "normal_slippage_exceeded", diagnostics
 
     diagnostics.update(micro_context)
@@ -3270,7 +3799,11 @@ def _latency_spread_relief_signal_score_floors() -> tuple[float, float]:
     effective_min_signal = max(
         configured_min_signal,
         _to_float(
-            getattr(TRADING_RULES, "SCALP_LATENCY_SPREAD_RELIEF_EFFECTIVE_MIN_SIGNAL_SCORE_FLOOR", 85.0),
+            getattr(
+                TRADING_RULES,
+                "SCALP_LATENCY_SPREAD_RELIEF_EFFECTIVE_MIN_SIGNAL_SCORE_FLOOR",
+                85.0,
+            ),
             85.0,
         ),
     )
@@ -3298,11 +3831,15 @@ def _pre_submit_quote_refresh_max_age_ms() -> int:
         except Exception:
             pass
     runtime_rules = getattr(constants_module, "TRADING_RULES", TRADING_RULES)
-    return int(getattr(runtime_rules, "SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_AGE_MS", 700) or 700)
+    return int(
+        getattr(runtime_rules, "SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_AGE_MS", 700) or 700
+    )
 
 
 def _pre_submit_quote_refresh_max_spread_ratio() -> float:
-    env_value = os.getenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_SPREAD_RATIO")
+    env_value = os.getenv(
+        "KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_SPREAD_RATIO"
+    )
     if env_value is not None:
         try:
             return max(0.0, float(env_value))
@@ -3310,7 +3847,9 @@ def _pre_submit_quote_refresh_max_spread_ratio() -> float:
             pass
     runtime_rules = getattr(constants_module, "TRADING_RULES", TRADING_RULES)
     return _to_float(
-        getattr(runtime_rules, "SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_SPREAD_RATIO", 0.015),
+        getattr(
+            runtime_rules, "SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_SPREAD_RATIO", 0.015
+        ),
         0.015,
     )
 
@@ -3324,12 +3863,16 @@ def _maybe_refresh_stale_quote_from_observer(
     latency,
 ) -> tuple[Any, dict[str, Any]]:
     provenance = {
-        "pre_submit_quote_refresh_enabled": _pre_submit_quote_refresh_enabled(strategy_id),
+        "pre_submit_quote_refresh_enabled": _pre_submit_quote_refresh_enabled(
+            strategy_id
+        ),
         "pre_submit_quote_refresh_applied": False,
         "pre_submit_quote_refresh_reason": "not_attempted",
         "pre_submit_quote_refresh_source": "orderbook_stability_observer",
         "pre_submit_quote_refresh_strategy_id": str(strategy_id or ""),
-        "pre_submit_quote_refresh_env_value": os.getenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_ENABLED"),
+        "pre_submit_quote_refresh_env_value": os.getenv(
+            "KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_ENABLED"
+        ),
         "pre_submit_quote_refresh_quote_age_ms": None,
         "pre_submit_quote_refresh_best_bid": 0,
         "pre_submit_quote_refresh_best_ask": 0,
@@ -3373,7 +3916,9 @@ def _maybe_refresh_stale_quote_from_observer(
     max_spread = _pre_submit_quote_refresh_max_spread_ratio()
     if spread_ratio > max_spread:
         provenance["pre_submit_quote_refresh_reason"] = "observer_spread_too_wide"
-        provenance["pre_submit_quote_refresh_spread_ratio"] = round(float(spread_ratio), 6)
+        provenance["pre_submit_quote_refresh_spread_ratio"] = round(
+            float(spread_ratio), 6
+        )
         return latency, provenance
 
     refreshed_latency = _LATENCY_MONITOR.evaluate(
@@ -3409,14 +3954,20 @@ def _should_apply_latency_quote_fresh_composite_canary(
     latest_price: int,
     danger_reasons: list[str] | None = None,
 ) -> tuple[bool, str]:
-    if not bool(getattr(TRADING_RULES, "SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_CANARY_ENABLED", False)):
+    if not bool(
+        getattr(
+            TRADING_RULES, "SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_CANARY_ENABLED", False
+        )
+    ):
         return False, "disabled"
     if str(strategy_id or "").upper() != "SCALPING":
         return False, "non_scalping"
     if getattr(latency_status, "quote_stale", False):
         return False, "quote_stale"
 
-    normalized_reasons = _normalized_reason_set(danger_reasons or _latency_danger_reasons(latency_status))
+    normalized_reasons = _normalized_reason_set(
+        danger_reasons or _latency_danger_reasons(latency_status)
+    )
     quote_fresh_reasons = {
         "other_danger",
         "ws_age_too_high",
@@ -3429,7 +3980,9 @@ def _should_apply_latency_quote_fresh_composite_canary(
 
     allow_tags = {
         str(tag).strip().upper()
-        for tag in (getattr(TRADING_RULES, "SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_TAGS", ()) or ())
+        for tag in (
+            getattr(TRADING_RULES, "SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_TAGS", ()) or ()
+        )
         if str(tag).strip()
     }
     normalized_tag = str(position_tag or "").strip().upper()
@@ -3437,25 +3990,37 @@ def _should_apply_latency_quote_fresh_composite_canary(
         return False, "tag_not_allowed"
 
     min_signal = _to_float(
-        getattr(TRADING_RULES, "SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_MIN_SIGNAL_SCORE", 88.0),
+        getattr(
+            TRADING_RULES, "SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_MIN_SIGNAL_SCORE", 88.0
+        ),
         88.0,
     )
     signal_score = _normalize_signal_score(signal_strength)
     if signal_score < min_signal:
         return False, "low_signal"
 
-    max_ws_age_ms = int(getattr(TRADING_RULES, "SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_MAX_WS_AGE_MS", 950) or 950)
+    max_ws_age_ms = int(
+        getattr(TRADING_RULES, "SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_MAX_WS_AGE_MS", 950)
+        or 950
+    )
     if int(getattr(latency_status, "ws_age_ms", 0) or 0) > max_ws_age_ms:
         return False, "ws_age_composite_limit_exceeded"
 
     max_ws_jitter_ms = int(
-        getattr(TRADING_RULES, "SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_MAX_WS_JITTER_MS", 450) or 450
+        getattr(
+            TRADING_RULES, "SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_MAX_WS_JITTER_MS", 450
+        )
+        or 450
     )
     if int(getattr(latency_status, "ws_jitter_ms", 0) or 0) > max_ws_jitter_ms:
         return False, "ws_jitter_composite_limit_exceeded"
 
     max_spread_ratio = _to_float(
-        getattr(TRADING_RULES, "SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_MAX_SPREAD_RATIO", 0.0075),
+        getattr(
+            TRADING_RULES,
+            "SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_MAX_SPREAD_RATIO",
+            0.0075,
+        ),
         0.0075,
     )
     if _to_float(getattr(latency_status, "spread_ratio", 0.0), 0.0) > max_spread_ratio:
@@ -3467,7 +4032,9 @@ def _should_apply_latency_quote_fresh_composite_canary(
         tick_limit=_CONFIG.normal_allowed_slippage_ticks,
         pct_limit=_CONFIG.normal_allowed_slippage_pct,
     )
-    if not _ENTRY_POLICY._slippage_ok(signal_price, latest_price, allowed_slippage, "BUY"):
+    if not _ENTRY_POLICY._slippage_ok(
+        signal_price, latest_price, allowed_slippage, "BUY"
+    ):
         return False, "normal_slippage_exceeded"
 
     return True, "quote_fresh_composite_canary_applied"
@@ -3486,7 +4053,11 @@ def _should_apply_latency_signal_quality_quote_composite_canary(
     danger_reasons: list[str] | None = None,
 ) -> tuple[bool, str]:
     if not bool(
-        getattr(TRADING_RULES, "SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_CANARY_ENABLED", False)
+        getattr(
+            TRADING_RULES,
+            "SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_CANARY_ENABLED",
+            False,
+        )
     ):
         return False, "disabled"
     if str(strategy_id or "").upper() != "SCALPING":
@@ -3494,7 +4065,9 @@ def _should_apply_latency_signal_quality_quote_composite_canary(
     if getattr(latency_status, "quote_stale", False):
         return False, "quote_stale"
 
-    normalized_reasons = _normalized_reason_set(danger_reasons or _latency_danger_reasons(latency_status))
+    normalized_reasons = _normalized_reason_set(
+        danger_reasons or _latency_danger_reasons(latency_status)
+    )
     quote_fresh_reasons = {
         "other_danger",
         "ws_age_too_high",
@@ -3508,7 +4081,10 @@ def _should_apply_latency_signal_quality_quote_composite_canary(
     allow_tags = {
         str(tag).strip().upper()
         for tag in (
-            getattr(TRADING_RULES, "SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_TAGS", ()) or ()
+            getattr(
+                TRADING_RULES, "SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_TAGS", ()
+            )
+            or ()
         )
         if str(tag).strip()
     }
@@ -3517,7 +4093,11 @@ def _should_apply_latency_signal_quality_quote_composite_canary(
         return False, "tag_not_allowed"
 
     min_signal = _to_float(
-        getattr(TRADING_RULES, "SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_MIN_SIGNAL_SCORE", 90.0),
+        getattr(
+            TRADING_RULES,
+            "SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_MIN_SIGNAL_SCORE",
+            90.0,
+        ),
         90.0,
     )
     signal_score = _normalize_signal_score(signal_strength)
@@ -3525,35 +4105,55 @@ def _should_apply_latency_signal_quality_quote_composite_canary(
         return False, "low_signal"
 
     min_strength = _to_float(
-        getattr(TRADING_RULES, "SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_MIN_STRENGTH", 110.0),
+        getattr(
+            TRADING_RULES,
+            "SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_MIN_STRENGTH",
+            110.0,
+        ),
         110.0,
     )
     if _to_float(latest_strength, 0.0) < min_strength:
         return False, "low_strength"
 
     min_buy_pressure = _to_float(
-        getattr(TRADING_RULES, "SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_MIN_BUY_PRESSURE", 65.0),
+        getattr(
+            TRADING_RULES,
+            "SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_MIN_BUY_PRESSURE",
+            65.0,
+        ),
         65.0,
     )
     if _to_float(buy_pressure_10t, 0.0) < min_buy_pressure:
         return False, "low_buy_pressure"
 
     max_ws_age_ms = int(
-        getattr(TRADING_RULES, "SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_MAX_WS_AGE_MS", 1200)
+        getattr(
+            TRADING_RULES,
+            "SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_MAX_WS_AGE_MS",
+            1200,
+        )
         or 1200
     )
     if int(getattr(latency_status, "ws_age_ms", 0) or 0) > max_ws_age_ms:
         return False, "ws_age_signal_quality_limit_exceeded"
 
     max_ws_jitter_ms = int(
-        getattr(TRADING_RULES, "SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_MAX_WS_JITTER_MS", 500)
+        getattr(
+            TRADING_RULES,
+            "SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_MAX_WS_JITTER_MS",
+            500,
+        )
         or 500
     )
     if int(getattr(latency_status, "ws_jitter_ms", 0) or 0) > max_ws_jitter_ms:
         return False, "ws_jitter_signal_quality_limit_exceeded"
 
     max_spread_ratio = _to_float(
-        getattr(TRADING_RULES, "SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_MAX_SPREAD_RATIO", 0.0085),
+        getattr(
+            TRADING_RULES,
+            "SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_MAX_SPREAD_RATIO",
+            0.0085,
+        ),
         0.0085,
     )
     if _to_float(getattr(latency_status, "spread_ratio", 0.0), 0.0) > max_spread_ratio:
@@ -3565,7 +4165,9 @@ def _should_apply_latency_signal_quality_quote_composite_canary(
         tick_limit=_CONFIG.normal_allowed_slippage_ticks,
         pct_limit=_CONFIG.normal_allowed_slippage_pct,
     )
-    if not _ENTRY_POLICY._slippage_ok(signal_price, latest_price, allowed_slippage, "BUY"):
+    if not _ENTRY_POLICY._slippage_ok(
+        signal_price, latest_price, allowed_slippage, "BUY"
+    ):
         return False, "normal_slippage_exceeded"
 
     return True, "signal_quality_quote_composite_canary_applied"
@@ -3584,7 +4186,11 @@ def _should_apply_latency_mechanical_momentum_relief_canary(
     danger_reasons: list[str] | None = None,
 ) -> tuple[bool, str]:
     if not bool(
-        getattr(TRADING_RULES, "SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_CANARY_ENABLED", False)
+        getattr(
+            TRADING_RULES,
+            "SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_CANARY_ENABLED",
+            False,
+        )
     ):
         return False, "disabled"
     if str(strategy_id or "").upper() != "SCALPING":
@@ -3592,7 +4198,9 @@ def _should_apply_latency_mechanical_momentum_relief_canary(
     if getattr(latency_status, "quote_stale", False):
         return False, "quote_stale"
 
-    normalized_reasons = _normalized_reason_set(danger_reasons or _latency_danger_reasons(latency_status))
+    normalized_reasons = _normalized_reason_set(
+        danger_reasons or _latency_danger_reasons(latency_status)
+    )
     quote_fresh_reasons = {
         "other_danger",
         "ws_age_too_high",
@@ -3605,7 +4213,10 @@ def _should_apply_latency_mechanical_momentum_relief_canary(
 
     allow_tags = {
         str(tag).strip().upper()
-        for tag in (getattr(TRADING_RULES, "SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_TAGS", ()) or ())
+        for tag in (
+            getattr(TRADING_RULES, "SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_TAGS", ())
+            or ()
+        )
         if str(tag).strip()
     }
     normalized_tag = str(position_tag or "").strip().upper()
@@ -3613,7 +4224,11 @@ def _should_apply_latency_mechanical_momentum_relief_canary(
         return False, "tag_not_allowed"
 
     max_signal = _to_float(
-        getattr(TRADING_RULES, "SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_MAX_SIGNAL_SCORE", 75.0),
+        getattr(
+            TRADING_RULES,
+            "SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_MAX_SIGNAL_SCORE",
+            75.0,
+        ),
         75.0,
     )
     signal_score = _normalize_signal_score(signal_strength)
@@ -3621,33 +4236,55 @@ def _should_apply_latency_mechanical_momentum_relief_canary(
         return False, "signal_not_mechanical"
 
     min_strength = _to_float(
-        getattr(TRADING_RULES, "SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_MIN_STRENGTH", 110.0),
+        getattr(
+            TRADING_RULES,
+            "SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_MIN_STRENGTH",
+            110.0,
+        ),
         110.0,
     )
     if _to_float(latest_strength, 0.0) < min_strength:
         return False, "low_strength"
 
     min_buy_pressure = _to_float(
-        getattr(TRADING_RULES, "SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_MIN_BUY_PRESSURE", 50.0),
+        getattr(
+            TRADING_RULES,
+            "SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_MIN_BUY_PRESSURE",
+            50.0,
+        ),
         50.0,
     )
     if _to_float(buy_pressure_10t, 0.0) < min_buy_pressure:
         return False, "low_buy_pressure"
 
     max_ws_age_ms = int(
-        getattr(TRADING_RULES, "SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_MAX_WS_AGE_MS", 1200) or 1200
+        getattr(
+            TRADING_RULES,
+            "SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_MAX_WS_AGE_MS",
+            1200,
+        )
+        or 1200
     )
     if int(getattr(latency_status, "ws_age_ms", 0) or 0) > max_ws_age_ms:
         return False, "ws_age_mechanical_momentum_limit_exceeded"
 
     max_ws_jitter_ms = int(
-        getattr(TRADING_RULES, "SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_MAX_WS_JITTER_MS", 500) or 500
+        getattr(
+            TRADING_RULES,
+            "SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_MAX_WS_JITTER_MS",
+            500,
+        )
+        or 500
     )
     if int(getattr(latency_status, "ws_jitter_ms", 0) or 0) > max_ws_jitter_ms:
         return False, "ws_jitter_mechanical_momentum_limit_exceeded"
 
     max_spread_ratio = _to_float(
-        getattr(TRADING_RULES, "SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_MAX_SPREAD_RATIO", 0.0085),
+        getattr(
+            TRADING_RULES,
+            "SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_MAX_SPREAD_RATIO",
+            0.0085,
+        ),
         0.0085,
     )
     if _to_float(getattr(latency_status, "spread_ratio", 0.0), 0.0) > max_spread_ratio:
@@ -3659,7 +4296,9 @@ def _should_apply_latency_mechanical_momentum_relief_canary(
         tick_limit=_CONFIG.normal_allowed_slippage_ticks,
         pct_limit=_CONFIG.normal_allowed_slippage_pct,
     )
-    if not _ENTRY_POLICY._slippage_ok(signal_price, latest_price, allowed_slippage, "BUY"):
+    if not _ENTRY_POLICY._slippage_ok(
+        signal_price, latest_price, allowed_slippage, "BUY"
+    ):
         return False, "normal_slippage_exceeded"
 
     return True, "mechanical_momentum_relief_canary_applied"
@@ -3675,41 +4314,58 @@ def _should_apply_latency_ws_jitter_relief_canary(
     latest_price: int,
     danger_reasons: list[str] | None = None,
 ) -> tuple[bool, str]:
-    if not bool(getattr(TRADING_RULES, "SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED", False)):
+    if not bool(
+        getattr(TRADING_RULES, "SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED", False)
+    ):
         return False, "disabled"
     if str(strategy_id or "").upper() != "SCALPING":
         return False, "non_scalping"
     if getattr(latency_status, "quote_stale", False):
         return False, "quote_stale"
 
-    normalized_reasons = _normalized_reason_set(danger_reasons or _latency_danger_reasons(latency_status))
+    normalized_reasons = _normalized_reason_set(
+        danger_reasons or _latency_danger_reasons(latency_status)
+    )
     if normalized_reasons != {"ws_jitter_too_high"}:
         return False, "ws_jitter_only_required"
 
     allow_tags = {
         str(tag).strip().upper()
-        for tag in (getattr(TRADING_RULES, "SCALP_LATENCY_WS_JITTER_RELIEF_TAGS", ()) or ())
+        for tag in (
+            getattr(TRADING_RULES, "SCALP_LATENCY_WS_JITTER_RELIEF_TAGS", ()) or ()
+        )
         if str(tag).strip()
     }
     normalized_tag = str(position_tag or "").strip().upper()
     if allow_tags and normalized_tag not in allow_tags:
         return False, "tag_not_allowed"
 
-    min_signal = _to_float(getattr(TRADING_RULES, "SCALP_LATENCY_WS_JITTER_RELIEF_MIN_SIGNAL_SCORE", 85.0), 85.0)
+    min_signal = _to_float(
+        getattr(TRADING_RULES, "SCALP_LATENCY_WS_JITTER_RELIEF_MIN_SIGNAL_SCORE", 85.0),
+        85.0,
+    )
     signal_score = _normalize_signal_score(signal_strength)
     if signal_score < min_signal:
         return False, "low_signal"
 
-    max_ws_age_ms = int(getattr(TRADING_RULES, "SCALP_LATENCY_WS_JITTER_RELIEF_MAX_WS_AGE_MS", 450) or 450)
+    max_ws_age_ms = int(
+        getattr(TRADING_RULES, "SCALP_LATENCY_WS_JITTER_RELIEF_MAX_WS_AGE_MS", 450)
+        or 450
+    )
     if int(getattr(latency_status, "ws_age_ms", 0) or 0) > max_ws_age_ms:
         return False, "ws_age_limit_exceeded"
 
-    max_ws_jitter_ms = int(getattr(TRADING_RULES, "SCALP_LATENCY_WS_JITTER_RELIEF_MAX_WS_JITTER_MS", 360) or 360)
+    max_ws_jitter_ms = int(
+        getattr(TRADING_RULES, "SCALP_LATENCY_WS_JITTER_RELIEF_MAX_WS_JITTER_MS", 360)
+        or 360
+    )
     if int(getattr(latency_status, "ws_jitter_ms", 0) or 0) > max_ws_jitter_ms:
         return False, "ws_jitter_relief_limit_exceeded"
 
     max_spread_ratio = _to_float(
-        getattr(TRADING_RULES, "SCALP_LATENCY_WS_JITTER_RELIEF_MAX_SPREAD_RATIO", 0.0050),
+        getattr(
+            TRADING_RULES, "SCALP_LATENCY_WS_JITTER_RELIEF_MAX_SPREAD_RATIO", 0.0050
+        ),
         0.0050,
     )
     if _to_float(getattr(latency_status, "spread_ratio", 0.0), 0.0) > max_spread_ratio:
@@ -3721,7 +4377,9 @@ def _should_apply_latency_ws_jitter_relief_canary(
         tick_limit=_CONFIG.normal_allowed_slippage_ticks,
         pct_limit=_CONFIG.normal_allowed_slippage_pct,
     )
-    if not _ENTRY_POLICY._slippage_ok(signal_price, latest_price, allowed_slippage, "BUY"):
+    if not _ENTRY_POLICY._slippage_ok(
+        signal_price, latest_price, allowed_slippage, "BUY"
+    ):
         return False, "normal_slippage_exceeded"
 
     return True, "ws_jitter_relief_canary_applied"
@@ -3738,58 +4396,91 @@ def _should_apply_latency_other_danger_relief_canary(
     latest_price: int,
     danger_reasons: list[str] | None = None,
 ) -> tuple[bool, str]:
-    if not bool(getattr(TRADING_RULES, "SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED", False)):
+    if not bool(
+        getattr(
+            TRADING_RULES, "SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED", False
+        )
+    ):
         return False, "disabled"
     if str(strategy_id or "").upper() != "SCALPING":
         return False, "non_scalping"
     if getattr(latency_status, "quote_stale", False):
         return False, "quote_stale"
 
-    normalized_reasons = _normalized_reason_set(danger_reasons or _latency_danger_reasons(latency_status))
+    normalized_reasons = _normalized_reason_set(
+        danger_reasons or _latency_danger_reasons(latency_status)
+    )
     if normalized_reasons != {"other_danger"}:
         return False, "other_danger_only_required"
 
     allow_tags = {
         str(tag).strip().upper()
-        for tag in (getattr(TRADING_RULES, "SCALP_LATENCY_OTHER_DANGER_RELIEF_TAGS", ()) or ())
+        for tag in (
+            getattr(TRADING_RULES, "SCALP_LATENCY_OTHER_DANGER_RELIEF_TAGS", ()) or ()
+        )
         if str(tag).strip()
     }
     normalized_tag = str(position_tag or "").strip().upper()
     if allow_tags and normalized_tag not in allow_tags:
         return False, "tag_not_allowed"
 
-    min_signal = _to_float(getattr(TRADING_RULES, "SCALP_LATENCY_OTHER_DANGER_RELIEF_MIN_SIGNAL_SCORE", 90.0), 90.0)
+    min_signal = _to_float(
+        getattr(
+            TRADING_RULES, "SCALP_LATENCY_OTHER_DANGER_RELIEF_MIN_SIGNAL_SCORE", 90.0
+        ),
+        90.0,
+    )
     signal_score = _normalize_signal_score(signal_strength)
     if signal_score < min_signal:
         return False, "low_signal"
 
-    max_ws_age_ms = int(getattr(TRADING_RULES, "SCALP_LATENCY_OTHER_DANGER_RELIEF_MAX_WS_AGE_MS", 400) or 400)
+    max_ws_age_ms = int(
+        getattr(TRADING_RULES, "SCALP_LATENCY_OTHER_DANGER_RELIEF_MAX_WS_AGE_MS", 400)
+        or 400
+    )
     if int(getattr(latency_status, "ws_age_ms", 0) or 0) > max_ws_age_ms:
         return False, "ws_age_limit_exceeded"
 
     max_ws_jitter_ms = int(
-        getattr(TRADING_RULES, "SCALP_LATENCY_OTHER_DANGER_RELIEF_MAX_WS_JITTER_MS", 80) or 80
+        getattr(TRADING_RULES, "SCALP_LATENCY_OTHER_DANGER_RELIEF_MAX_WS_JITTER_MS", 80)
+        or 80
     )
     if int(getattr(latency_status, "ws_jitter_ms", 0) or 0) > max_ws_jitter_ms:
         return False, "ws_jitter_limit_exceeded"
 
     max_spread_ratio = _to_float(
-        getattr(TRADING_RULES, "SCALP_LATENCY_OTHER_DANGER_RELIEF_MAX_SPREAD_RATIO", 0.0080),
+        getattr(
+            TRADING_RULES, "SCALP_LATENCY_OTHER_DANGER_RELIEF_MAX_SPREAD_RATIO", 0.0080
+        ),
         0.0080,
     )
     if _to_float(getattr(latency_status, "spread_ratio", 0.0), 0.0) > max_spread_ratio:
         return False, "spread_limit_exceeded"
 
-    if bool(getattr(TRADING_RULES, "SCALP_LATENCY_OTHER_DANGER_RELIEF_BLOCK_UNSTABLE_QUOTE", True)):
+    if bool(
+        getattr(
+            TRADING_RULES,
+            "SCALP_LATENCY_OTHER_DANGER_RELIEF_BLOCK_UNSTABLE_QUOTE",
+            True,
+        )
+    ):
         stability = ORDERBOOK_STABILITY_OBSERVER.snapshot(code) if code else {}
         if bool(stability.get("unstable_quote_observed")):
             return False, "unstable_quote_observed"
         if "print_quote_alignment" in stability:
             min_alignment = _to_float(
-                getattr(TRADING_RULES, "SCALP_LATENCY_OTHER_DANGER_RELIEF_MIN_PRINT_QUOTE_ALIGNMENT", 0.90),
+                getattr(
+                    TRADING_RULES,
+                    "SCALP_LATENCY_OTHER_DANGER_RELIEF_MIN_PRINT_QUOTE_ALIGNMENT",
+                    0.90,
+                ),
                 0.90,
             )
-            if min_alignment > 0 and _to_float(stability.get("print_quote_alignment"), 1.0) < min_alignment:
+            if (
+                min_alignment > 0
+                and _to_float(stability.get("print_quote_alignment"), 1.0)
+                < min_alignment
+            ):
                 return False, "print_quote_alignment_too_low"
 
     allowed_slippage = _ENTRY_POLICY._allowed_slippage(
@@ -3798,7 +4489,9 @@ def _should_apply_latency_other_danger_relief_canary(
         tick_limit=_CONFIG.normal_allowed_slippage_ticks,
         pct_limit=_CONFIG.normal_allowed_slippage_pct,
     )
-    if not _ENTRY_POLICY._slippage_ok(signal_price, latest_price, allowed_slippage, "BUY"):
+    if not _ENTRY_POLICY._slippage_ok(
+        signal_price, latest_price, allowed_slippage, "BUY"
+    ):
         return False, "normal_slippage_exceeded"
 
     return True, "other_danger_relief_canary_applied"
@@ -3817,7 +4510,11 @@ def freeze_signal_reference(
     frozen_time = stock.get("entry_signal_time")
     frozen_strategy = str(stock.get("entry_signal_strategy_id", "") or "")
 
-    if frozen_price > 0 and isinstance(frozen_time, datetime) and frozen_strategy == strategy_id:
+    if (
+        frozen_price > 0
+        and isinstance(frozen_time, datetime)
+        and frozen_strategy == strategy_id
+    ):
         return frozen_price, frozen_time
 
     now = signal_time or datetime.now(UTC)
@@ -3901,13 +4598,19 @@ def evaluate_live_buy_entry(
         latency=latency,
     )
     if pre_submit_quote_refresh.get("pre_submit_quote_refresh_applied"):
-        refreshed_best_bid = int(pre_submit_quote_refresh.get("pre_submit_quote_refresh_best_bid") or 0)
-        refreshed_best_ask = int(pre_submit_quote_refresh.get("pre_submit_quote_refresh_best_ask") or 0)
+        refreshed_best_bid = int(
+            pre_submit_quote_refresh.get("pre_submit_quote_refresh_best_bid") or 0
+        )
+        refreshed_best_ask = int(
+            pre_submit_quote_refresh.get("pre_submit_quote_refresh_best_ask") or 0
+        )
         if refreshed_best_bid > 0 and refreshed_best_ask > refreshed_best_bid:
             best_bid = refreshed_best_bid
             best_ask = refreshed_best_ask
             latest_price = refreshed_best_bid
-            pre_submit_quote_refresh["pre_submit_quote_refresh_latest_price"] = latest_price
+            pre_submit_quote_refresh["pre_submit_quote_refresh_latest_price"] = (
+                latest_price
+            )
             with _CACHE_LOCK:
                 _CACHE.update(
                     code,
@@ -3948,11 +4651,15 @@ def evaluate_live_buy_entry(
     latency_buy_pressure = _latency_buy_pressure_value(ws_data, stock)
     latency_spread_relief_block_reason = ""
     danger_relief_forbidden = (
-        policy.decision == EntryDecision.REJECT_DANGER and not _danger_latency_relief_runtime_enabled()
+        policy.decision == EntryDecision.REJECT_DANGER
+        and not _danger_latency_relief_runtime_enabled()
     )
     if policy.decision == EntryDecision.REJECT_DANGER:
         latency_canary_reason = "danger_hard_safety_block"
-    if policy.decision == EntryDecision.REJECT_MARKET_CONDITION and policy.reason == "latency_fallback_deprecated":
+    if (
+        policy.decision == EntryDecision.REJECT_MARKET_CONDITION
+        and policy.reason == "latency_fallback_deprecated"
+    ):
         recovery_ok, recovery_reason = _should_apply_latency_submit_recovery_canary(
             strategy_id=strategy_id,
             signal_strength=float(signal_strength or 0.0),
@@ -3972,14 +4679,16 @@ def evaluate_live_buy_entry(
         else:
             latency_canary_reason = recovery_reason
     if policy.decision == EntryDecision.REJECT_DANGER and not danger_relief_forbidden:
-        quote_fresh_composite_ok, quote_fresh_composite_reason = _should_apply_latency_quote_fresh_composite_canary(
-            strategy_id=strategy_id,
-            position_tag=str(stock.get("position_tag") or ""),
-            signal_strength=float(signal_strength or 0.0),
-            latency_status=latency,
-            signal_price=frozen_price,
-            latest_price=latest_price,
-            danger_reasons=latency_danger_reasons.split(","),
+        quote_fresh_composite_ok, quote_fresh_composite_reason = (
+            _should_apply_latency_quote_fresh_composite_canary(
+                strategy_id=strategy_id,
+                position_tag=str(stock.get("position_tag") or ""),
+                signal_strength=float(signal_strength or 0.0),
+                latency_status=latency,
+                signal_price=frozen_price,
+                latest_price=latest_price,
+                danger_reasons=latency_danger_reasons.split(","),
+            )
         )
         if quote_fresh_composite_ok:
             latency_canary_applied = True
@@ -3996,17 +4705,25 @@ def evaluate_live_buy_entry(
         else:
             latency_canary_reason = quote_fresh_composite_reason
 
-    if policy.decision == EntryDecision.REJECT_DANGER and not danger_relief_forbidden and effective_decision == EntryDecision.REJECT_DANGER:
-        signal_quality_ok, signal_quality_reason = _should_apply_latency_signal_quality_quote_composite_canary(
-            strategy_id=strategy_id,
-            position_tag=str(stock.get("position_tag") or ""),
-            signal_strength=float(signal_strength or 0.0),
-            latest_strength=_to_float((ws_data or {}).get("v_pw", stock.get("latest_strength", 0.0)), 0.0),
-            buy_pressure_10t=latency_buy_pressure,
-            latency_status=latency,
-            signal_price=frozen_price,
-            latest_price=latest_price,
-            danger_reasons=latency_danger_reasons.split(","),
+    if (
+        policy.decision == EntryDecision.REJECT_DANGER
+        and not danger_relief_forbidden
+        and effective_decision == EntryDecision.REJECT_DANGER
+    ):
+        signal_quality_ok, signal_quality_reason = (
+            _should_apply_latency_signal_quality_quote_composite_canary(
+                strategy_id=strategy_id,
+                position_tag=str(stock.get("position_tag") or ""),
+                signal_strength=float(signal_strength or 0.0),
+                latest_strength=_to_float(
+                    (ws_data or {}).get("v_pw", stock.get("latest_strength", 0.0)), 0.0
+                ),
+                buy_pressure_10t=latency_buy_pressure,
+                latency_status=latency,
+                signal_price=frozen_price,
+                latest_price=latest_price,
+                danger_reasons=latency_danger_reasons.split(","),
+            )
         )
         if signal_quality_ok:
             latency_canary_applied = True
@@ -4026,16 +4743,22 @@ def evaluate_live_buy_entry(
             if not latency_canary_reason or latency_canary_reason == "disabled":
                 latency_canary_reason = signal_quality_reason
 
-    if policy.decision == EntryDecision.REJECT_DANGER and not danger_relief_forbidden and effective_decision == EntryDecision.REJECT_DANGER:
-        other_danger_relief_ok, other_danger_relief_reason = _should_apply_latency_other_danger_relief_canary(
-            code=code,
-            strategy_id=strategy_id,
-            position_tag=str(stock.get("position_tag") or ""),
-            signal_strength=float(signal_strength or 0.0),
-            latency_status=latency,
-            signal_price=frozen_price,
-            latest_price=latest_price,
-            danger_reasons=latency_danger_reasons.split(","),
+    if (
+        policy.decision == EntryDecision.REJECT_DANGER
+        and not danger_relief_forbidden
+        and effective_decision == EntryDecision.REJECT_DANGER
+    ):
+        other_danger_relief_ok, other_danger_relief_reason = (
+            _should_apply_latency_other_danger_relief_canary(
+                code=code,
+                strategy_id=strategy_id,
+                position_tag=str(stock.get("position_tag") or ""),
+                signal_strength=float(signal_strength or 0.0),
+                latency_status=latency,
+                signal_price=frozen_price,
+                latest_price=latest_price,
+                danger_reasons=latency_danger_reasons.split(","),
+            )
         )
         if other_danger_relief_ok:
             latency_canary_applied = True
@@ -4053,15 +4776,21 @@ def evaluate_live_buy_entry(
             if not latency_canary_reason or latency_canary_reason == "disabled":
                 latency_canary_reason = other_danger_relief_reason
 
-    if policy.decision == EntryDecision.REJECT_DANGER and not danger_relief_forbidden and effective_decision == EntryDecision.REJECT_DANGER:
-        ws_jitter_relief_ok, ws_jitter_relief_reason = _should_apply_latency_ws_jitter_relief_canary(
-            strategy_id=strategy_id,
-            position_tag=str(stock.get("position_tag") or ""),
-            signal_strength=float(signal_strength or 0.0),
-            latency_status=latency,
-            signal_price=frozen_price,
-            latest_price=latest_price,
-            danger_reasons=latency_danger_reasons.split(","),
+    if (
+        policy.decision == EntryDecision.REJECT_DANGER
+        and not danger_relief_forbidden
+        and effective_decision == EntryDecision.REJECT_DANGER
+    ):
+        ws_jitter_relief_ok, ws_jitter_relief_reason = (
+            _should_apply_latency_ws_jitter_relief_canary(
+                strategy_id=strategy_id,
+                position_tag=str(stock.get("position_tag") or ""),
+                signal_strength=float(signal_strength or 0.0),
+                latency_status=latency,
+                signal_price=frozen_price,
+                latest_price=latest_price,
+                danger_reasons=latency_danger_reasons.split(","),
+            )
         )
         if ws_jitter_relief_ok:
             latency_canary_applied = True
@@ -4096,22 +4825,34 @@ def evaluate_live_buy_entry(
         _normalize_signal_score(signal_strength),
     )
     true_ofi_all_scalping_scope = bool(
-        spread_relief_signal_provenance.get("latency_spread_relief_micro_estimator_all_scalping_enabled")
-        and spread_relief_signal_provenance.get("latency_spread_relief_micro_estimator_eligible")
-        and spread_relief_signal_provenance.get("latency_spread_relief_signal_score_source")
+        spread_relief_signal_provenance.get(
+            "latency_spread_relief_micro_estimator_all_scalping_enabled"
+        )
+        and spread_relief_signal_provenance.get(
+            "latency_spread_relief_micro_estimator_eligible"
+        )
+        and spread_relief_signal_provenance.get(
+            "latency_spread_relief_signal_score_source"
+        )
         == "micro_estimator.true_ofi_ewma"
     )
-    if policy.decision == EntryDecision.REJECT_DANGER and not danger_relief_forbidden and effective_decision == EntryDecision.REJECT_DANGER:
-        spread_relief_ok, spread_relief_reason = _should_apply_latency_spread_relief_canary(
-            code=code,
-            strategy_id=strategy_id,
-            position_tag=spread_relief_tag,
-            signal_strength=spread_relief_signal_score,
-            latency_status=latency,
-            signal_price=frozen_price,
-            latest_price=latest_price,
-            danger_reasons=latency_danger_reasons.split(","),
-            allow_true_ofi_all_scalping_scope=true_ofi_all_scalping_scope,
+    if (
+        policy.decision == EntryDecision.REJECT_DANGER
+        and not danger_relief_forbidden
+        and effective_decision == EntryDecision.REJECT_DANGER
+    ):
+        spread_relief_ok, spread_relief_reason = (
+            _should_apply_latency_spread_relief_canary(
+                code=code,
+                strategy_id=strategy_id,
+                position_tag=spread_relief_tag,
+                signal_strength=spread_relief_signal_score,
+                latency_status=latency,
+                signal_price=frozen_price,
+                latest_price=latest_price,
+                danger_reasons=latency_danger_reasons.split(","),
+                allow_true_ofi_all_scalping_scope=true_ofi_all_scalping_scope,
+            )
         )
         if spread_relief_ok:
             latency_canary_applied = True
@@ -4130,18 +4871,27 @@ def evaluate_live_buy_entry(
             if (
                 not latency_canary_reason
                 or latency_canary_reason == "disabled"
-                or (latency_canary_reason == "danger_hard_safety_block" and spread_relief_reason != "disabled")
+                or (
+                    latency_canary_reason == "danger_hard_safety_block"
+                    and spread_relief_reason != "disabled"
+                )
             ):
                 latency_canary_reason = spread_relief_reason
 
-    if policy.decision == EntryDecision.REJECT_DANGER and not danger_relief_forbidden and effective_decision == EntryDecision.REJECT_DANGER:
+    if (
+        policy.decision == EntryDecision.REJECT_DANGER
+        and not danger_relief_forbidden
+        and effective_decision == EntryDecision.REJECT_DANGER
+    ):
         passive_requote_ok, passive_requote_reason, passive_requote_context = (
             _should_apply_latency_wide_spread_passive_requote(
                 code=code,
                 strategy_id=strategy_id,
                 position_tag=spread_relief_tag,
                 signal_strength=float(signal_strength or 0.0),
-                latest_strength=_to_float((ws_data or {}).get("v_pw", stock.get("latest_strength", 0.0)), 0.0),
+                latest_strength=_to_float(
+                    (ws_data or {}).get("v_pw", stock.get("latest_strength", 0.0)), 0.0
+                ),
                 buy_pressure_10t=latency_buy_pressure,
                 latency_status=latency,
                 signal_price=frozen_price,
@@ -4172,11 +4922,18 @@ def evaluate_live_buy_entry(
             if (
                 not latency_canary_reason
                 or latency_canary_reason == "disabled"
-                or (latency_canary_reason == "danger_hard_safety_block" and passive_requote_reason != "disabled")
+                or (
+                    latency_canary_reason == "danger_hard_safety_block"
+                    and passive_requote_reason != "disabled"
+                )
             ):
                 latency_canary_reason = passive_requote_reason
 
-    if policy.decision == EntryDecision.REJECT_DANGER and not danger_relief_forbidden and effective_decision == EntryDecision.REJECT_DANGER:
+    if (
+        policy.decision == EntryDecision.REJECT_DANGER
+        and not danger_relief_forbidden
+        and effective_decision == EntryDecision.REJECT_DANGER
+    ):
         canary_ok, canary_reason = _should_apply_latency_guard_canary(
             strategy_id=strategy_id,
             position_tag=str(stock.get("position_tag") or ""),
@@ -4202,17 +4959,25 @@ def evaluate_live_buy_entry(
             if not latency_canary_reason or latency_canary_reason == "disabled":
                 latency_canary_reason = canary_reason
 
-    if policy.decision == EntryDecision.REJECT_DANGER and not danger_relief_forbidden and effective_decision == EntryDecision.REJECT_DANGER:
-        mechanical_momentum_ok, mechanical_momentum_reason = _should_apply_latency_mechanical_momentum_relief_canary(
-            strategy_id=strategy_id,
-            position_tag=str(stock.get("position_tag") or ""),
-            signal_strength=float(signal_strength or 0.0),
-            latest_strength=_to_float((ws_data or {}).get("v_pw", stock.get("latest_strength", 0.0)), 0.0),
-            buy_pressure_10t=latency_buy_pressure,
-            latency_status=latency,
-            signal_price=frozen_price,
-            latest_price=latest_price,
-            danger_reasons=latency_danger_reasons.split(","),
+    if (
+        policy.decision == EntryDecision.REJECT_DANGER
+        and not danger_relief_forbidden
+        and effective_decision == EntryDecision.REJECT_DANGER
+    ):
+        mechanical_momentum_ok, mechanical_momentum_reason = (
+            _should_apply_latency_mechanical_momentum_relief_canary(
+                strategy_id=strategy_id,
+                position_tag=str(stock.get("position_tag") or ""),
+                signal_strength=float(signal_strength or 0.0),
+                latest_strength=_to_float(
+                    (ws_data or {}).get("v_pw", stock.get("latest_strength", 0.0)), 0.0
+                ),
+                buy_pressure_10t=latency_buy_pressure,
+                latency_status=latency,
+                signal_price=frozen_price,
+                latest_price=latest_price,
+                danger_reasons=latency_danger_reasons.split(","),
+            )
         )
         if mechanical_momentum_ok:
             latency_canary_applied = True
@@ -4229,7 +4994,10 @@ def evaluate_live_buy_entry(
                 f"danger_reasons={latency_danger_reasons}"
             )
         else:
-            if not latency_canary_reason or latency_canary_reason in {"disabled", "latency_fallback_disabled"}:
+            if not latency_canary_reason or latency_canary_reason in {
+                "disabled",
+                "latency_fallback_disabled",
+            }:
                 latency_canary_reason = mechanical_momentum_reason
 
     computed_allowed_slippage = int(policy.computed_allowed_slippage or 0)
@@ -4255,19 +5023,26 @@ def evaluate_live_buy_entry(
         best_bid=best_bid,
         best_ask=best_ask,
         signal_source_quality_state=str(
-            spread_relief_signal_provenance.get("latency_spread_relief_signal_source_quality_state") or ""
+            spread_relief_signal_provenance.get(
+                "latency_spread_relief_signal_source_quality_state"
+            )
+            or ""
         ),
     )
-    latency_false_negative_remeasure_fields = _latency_false_negative_bounded_remeasure_fields(
-        code=code,
-        stock=stock,
-        ws_data=ws_data,
-        strategy_id=strategy_id,
-        policy_decision=policy.decision,
-        effective_decision=effective_decision,
-        latency_status=latency,
-        danger_reasons=latency_danger_reasons.split(","),
-        spread_bps=_to_float(spread_block_buckets.get("latency_spread_block_spread_bps"), 0.0),
+    latency_false_negative_remeasure_fields = (
+        _latency_false_negative_bounded_remeasure_fields(
+            code=code,
+            stock=stock,
+            ws_data=ws_data,
+            strategy_id=strategy_id,
+            policy_decision=policy.decision,
+            effective_decision=effective_decision,
+            latency_status=latency,
+            danger_reasons=latency_danger_reasons.split(","),
+            spread_bps=_to_float(
+                spread_block_buckets.get("latency_spread_block_spread_bps"), 0.0
+            ),
+        )
     )
     latency_true_ofi_direct_canary_fields = _latency_true_ofi_direct_canary_fields(
         stock=stock,
@@ -4277,19 +5052,28 @@ def evaluate_live_buy_entry(
         effective_decision=effective_decision,
         latency_status=latency,
         danger_reasons=latency_danger_reasons.split(","),
-        spread_bps=_to_float(spread_block_buckets.get("latency_spread_block_spread_bps"), 0.0),
+        spread_bps=_to_float(
+            spread_block_buckets.get("latency_spread_block_spread_bps"), 0.0
+        ),
         signal_score=_normalize_signal_score(signal_strength),
         micro_estimator_reason=str(
-            spread_relief_signal_provenance.get("latency_spread_relief_micro_estimator_reason") or ""
+            spread_relief_signal_provenance.get(
+                "latency_spread_relief_micro_estimator_reason"
+            )
+            or ""
         ),
         estimator_context=latency_false_negative_remeasure_fields,
         danger_relief_forbidden=danger_relief_forbidden,
     )
-    if latency_true_ofi_direct_canary_fields.get("latency_true_ofi_direct_canary_applied"):
+    if latency_true_ofi_direct_canary_fields.get(
+        "latency_true_ofi_direct_canary_applied"
+    ):
         latency_canary_applied = True
         latency_canary_reason = "latency_true_ofi_direct_canary_applied"
         effective_decision = EntryDecision.ALLOW_NORMAL
-        effective_reason = "latency_true_ofi_false_negative_direct_canary_normal_override"
+        effective_reason = (
+            "latency_true_ofi_false_negative_direct_canary_normal_override"
+        )
         log_info(
             f"[LATENCY_TRUE_OFI_DIRECT_CANARY] {stock.get('name')}({code}) "
             f"tag={stock.get('position_tag')} signal_score={_normalize_signal_score(signal_strength):.1f} "
@@ -4348,15 +5132,22 @@ def evaluate_live_buy_entry(
         ),
         "latency_canary_applied": latency_canary_applied,
         "latency_canary_reason": latency_canary_reason,
-        "latency_spread_relief_configured_min_signal_score": round(spread_relief_configured_min_signal, 3),
-        "latency_spread_relief_effective_min_signal_score": round(spread_relief_effective_min_signal, 3),
+        "latency_spread_relief_configured_min_signal_score": round(
+            spread_relief_configured_min_signal, 3
+        ),
+        "latency_spread_relief_effective_min_signal_score": round(
+            spread_relief_effective_min_signal, 3
+        ),
         "latency_spread_relief_tag": spread_relief_tag,
         "latency_spread_relief_block_reason": latency_spread_relief_block_reason,
         **spread_relief_signal_provenance,
         **spread_block_buckets,
         **latency_false_negative_remeasure_fields,
         **latency_true_ofi_direct_canary_fields,
-        "latency_relief_attempted": bool(policy.decision == EntryDecision.REJECT_DANGER and not danger_relief_forbidden),
+        "latency_relief_attempted": bool(
+            policy.decision == EntryDecision.REJECT_DANGER
+            and not danger_relief_forbidden
+        ),
         "latency_relief_block_reason": (
             latency_canary_reason
             if policy.decision == EntryDecision.REJECT_DANGER
@@ -4398,7 +5189,9 @@ def evaluate_live_buy_entry(
                 strong_enabled=conditional_1tick_enabled,
                 is_latency_override=is_latency_override,
             )
-            applied_bps = int(gap_profile.get("bps", normal_defensive_bps) or normal_defensive_bps)
+            applied_bps = int(
+                gap_profile.get("bps", normal_defensive_bps) or normal_defensive_bps
+            )
             entry_price_guard = {
                 "normal": "normal_defensive_percent_bps",
                 "strong_1tick_pressure": "conditional_strong_defensive_percent_bps",
@@ -4446,22 +5239,11 @@ def evaluate_live_buy_entry(
                     ),
                 )
             else:
-                defensive_price = move_price_down_by_bps(latest_price, applied_bps, floor_ticks=1)
-                aggressive_override = _reference_target_cap_missed_upside_aggressive_entry_override(
-                    stock=stock,
-                    ws_data=ws_data,
-                    strategy_id=strategy_id,
-                    gap_profile=gap_profile,
-                    applied_bps=applied_bps,
-                    best_bid=best_bid,
-                    best_ask=best_ask,
-                    defensive_order_price=defensive_price,
-                    target_buy_price=int(target_buy_price or 0),
-                    is_latency_override=is_latency_override,
-                    quote_stale=bool(latency.quote_stale),
+                defensive_price = move_price_down_by_bps(
+                    latest_price, applied_bps, floor_ticks=1
                 )
-                if not aggressive_override.get("applied"):
-                    defensive_override = _defensive_missed_upside_aggressive_entry_override(
+                aggressive_override = (
+                    _reference_target_cap_missed_upside_aggressive_entry_override(
                         stock=stock,
                         ws_data=ws_data,
                         strategy_id=strategy_id,
@@ -4470,13 +5252,35 @@ def evaluate_live_buy_entry(
                         best_bid=best_bid,
                         best_ask=best_ask,
                         defensive_order_price=defensive_price,
+                        target_buy_price=int(target_buy_price or 0),
                         is_latency_override=is_latency_override,
                         quote_stale=bool(latency.quote_stale),
                     )
-                    if defensive_override.get("applied") or aggressive_override.get("reason") == "type_disabled":
+                )
+                if not aggressive_override.get("applied"):
+                    defensive_override = (
+                        _defensive_missed_upside_aggressive_entry_override(
+                            stock=stock,
+                            ws_data=ws_data,
+                            strategy_id=strategy_id,
+                            gap_profile=gap_profile,
+                            applied_bps=applied_bps,
+                            best_bid=best_bid,
+                            best_ask=best_ask,
+                            defensive_order_price=defensive_price,
+                            is_latency_override=is_latency_override,
+                            quote_stale=bool(latency.quote_stale),
+                        )
+                    )
+                    if (
+                        defensive_override.get("applied")
+                        or aggressive_override.get("reason") == "type_disabled"
+                    ):
                         aggressive_override = defensive_override
                 if aggressive_override.get("applied"):
-                    order_price = int(aggressive_override.get("target_price") or defensive_price)
+                    order_price = int(
+                        aggressive_override.get("target_price") or defensive_price
+                    )
                     override_type = str(aggressive_override.get("type") or "")
                     gap_profile.update(
                         profile=override_type,
@@ -4484,29 +5288,56 @@ def evaluate_live_buy_entry(
                         reason=str(aggressive_override.get("reason")),
                     )
                     gap_profile["context"] = {
-                        **(gap_profile.get("context") if isinstance(gap_profile.get("context"), dict) else {}),
+                        **(
+                            gap_profile.get("context")
+                            if isinstance(gap_profile.get("context"), dict)
+                            else {}
+                        ),
                         "aggressive_entry_price_override_applied": True,
                         "aggressive_entry_price_override_type": override_type,
-                        "aggressive_entry_price_override_reason": str(aggressive_override.get("reason")),
-                        "aggressive_entry_price_operator_intraday_discovery": bool(
-                            aggressive_override.get("operator_intraday_entry_price_discovery")
+                        "aggressive_entry_price_override_reason": str(
+                            aggressive_override.get("reason")
                         ),
-                        "aggressive_entry_price_original_profile": str(aggressive_override.get("original_profile")),
-                        "aggressive_entry_price_original_bps": int(aggressive_override.get("original_bps") or applied_bps),
-                        "aggressive_entry_price_target_mode": str(aggressive_override.get("target_mode")),
+                        "aggressive_entry_price_operator_intraday_discovery": bool(
+                            aggressive_override.get(
+                                "operator_intraday_entry_price_discovery"
+                            )
+                        ),
+                        "aggressive_entry_price_original_profile": str(
+                            aggressive_override.get("original_profile")
+                        ),
+                        "aggressive_entry_price_original_bps": int(
+                            aggressive_override.get("original_bps") or applied_bps
+                        ),
+                        "aggressive_entry_price_target_mode": str(
+                            aggressive_override.get("target_mode")
+                        ),
                         "aggressive_entry_price_order_price": int(order_price),
-                        "aggressive_entry_price_minus_ticks": int(aggressive_override.get("minus_ticks") or 0),
-                        "aggressive_entry_price_micro_state": str(aggressive_override.get("micro_state") or ""),
+                        "aggressive_entry_price_minus_ticks": int(
+                            aggressive_override.get("minus_ticks") or 0
+                        ),
+                        "aggressive_entry_price_micro_state": str(
+                            aggressive_override.get("micro_state") or ""
+                        ),
                     }
                     if "reference_target_price" in aggressive_override:
                         gap_profile["context"].update(
                             {
-                                "reference_target_price": int(aggressive_override.get("reference_target_price") or 0),
+                                "reference_target_price": int(
+                                    aggressive_override.get("reference_target_price")
+                                    or 0
+                                ),
                                 "reference_target_below_bid_bps": int(
-                                    aggressive_override.get("reference_target_below_bid_bps") or 0
+                                    aggressive_override.get(
+                                        "reference_target_below_bid_bps"
+                                    )
+                                    or 0
                                 ),
                                 "reference_target_missed_upside_min_bps": int(
-                                    aggressive_override.get("reference_target_missed_upside_min_bps") or 0
+                                    aggressive_override.get(
+                                        "reference_target_missed_upside_min_bps"
+                                    )
+                                    or 0
                                 ),
                             }
                         )
@@ -4518,7 +5349,11 @@ def evaluate_live_buy_entry(
                 else:
                     order_price = defensive_price
                     gap_profile["context"] = {
-                        **(gap_profile.get("context") if isinstance(gap_profile.get("context"), dict) else {}),
+                        **(
+                            gap_profile.get("context")
+                            if isinstance(gap_profile.get("context"), dict)
+                            else {}
+                        ),
                         "aggressive_entry_price_override_skip_reason": str(
                             aggressive_override.get("reason") or ""
                         ),
@@ -4542,14 +5377,24 @@ def evaluate_live_buy_entry(
                     "reference_target_applied": False,
                     "reference_target_rejected_reason": "aggressive_entry_price_override_applied",
                     "reference_target_below_bid_bps": int(
-                        reference_target_override_diagnostics.get("reference_target_below_bid_bps")
-                        or _compute_price_below_bid_bps(int(target_buy_price or 0), best_bid)
+                        reference_target_override_diagnostics.get(
+                            "reference_target_below_bid_bps"
+                        )
+                        or _compute_price_below_bid_bps(
+                            int(target_buy_price or 0), best_bid
+                        )
                     ),
                     "reference_target_max_below_bid_bps": int(
-                        getattr(TRADING_RULES, "SCALPING_ENTRY_PRICE_RESOLVER_MAX_BELOW_BID_BPS", 80)
+                        getattr(
+                            TRADING_RULES,
+                            "SCALPING_ENTRY_PRICE_RESOLVER_MAX_BELOW_BID_BPS",
+                            80,
+                        )
                     ),
                     "entry_price_resolver_enabled": bool(
-                        getattr(TRADING_RULES, "SCALPING_ENTRY_PRICE_RESOLVER_ENABLED", True)
+                        getattr(
+                            TRADING_RULES, "SCALPING_ENTRY_PRICE_RESOLVER_ENABLED", True
+                        )
                     ),
                 }
             else:
@@ -4561,84 +5406,132 @@ def evaluate_live_buy_entry(
                 )
             if int(target_buy_price or 0) > 0 and not aggressive_override_applied:
                 target_cap = int(target_buy_price)
-                counterfactual_order_price_1tick = min(counterfactual_order_price_1tick, target_cap)
-                order_price = int(price_resolution.get("order_price", order_price) or order_price)
+                counterfactual_order_price_1tick = min(
+                    counterfactual_order_price_1tick, target_cap
+                )
+                order_price = int(
+                    price_resolution.get("order_price", order_price) or order_price
+                )
             result["allowed"] = True
             result["mode"] = "normal"
             result["order_price"] = order_price
             result["entry_price_guard"] = entry_price_guard
-            result["entry_price_defensive_ticks"] = _ticks_between(order_price, latest_price)
+            result["entry_price_defensive_ticks"] = _ticks_between(
+                order_price, latest_price
+            )
             result["entry_price_defense_mode"] = "percent_bps"
             result["entry_price_defensive_bps"] = applied_bps
             result["entry_price_defensive_floor_ticks"] = 1
             result["entry_price_gap_profile"] = str(gap_profile.get("profile"))
-            result["entry_price_gap_profile_bps"] = int(gap_profile.get("bps", applied_bps) or applied_bps)
-            result["entry_price_gap_profile_reason"] = str(gap_profile.get("reason") or "")
+            result["entry_price_gap_profile_bps"] = int(
+                gap_profile.get("bps", applied_bps) or applied_bps
+            )
+            result["entry_price_gap_profile_reason"] = str(
+                gap_profile.get("reason") or ""
+            )
             result["entry_price_gap_profile_context"] = gap_profile.get("context", {})
             result["aggressive_entry_price_override_applied"] = bool(
-                (gap_profile.get("context") or {}).get("aggressive_entry_price_override_applied")
+                (gap_profile.get("context") or {}).get(
+                    "aggressive_entry_price_override_applied"
+                )
                 if isinstance(gap_profile.get("context"), dict)
                 else False
             )
             result["aggressive_entry_price_override_type"] = str(
-                (gap_profile.get("context") or {}).get("aggressive_entry_price_override_type", "")
+                (gap_profile.get("context") or {}).get(
+                    "aggressive_entry_price_override_type", ""
+                )
                 if isinstance(gap_profile.get("context"), dict)
                 else ""
             )
             result["aggressive_entry_price_override_reason"] = str(
-                (gap_profile.get("context") or {}).get("aggressive_entry_price_override_reason", "")
+                (gap_profile.get("context") or {}).get(
+                    "aggressive_entry_price_override_reason", ""
+                )
                 if isinstance(gap_profile.get("context"), dict)
                 else ""
             )
             result["aggressive_entry_price_operator_intraday_discovery"] = bool(
-                (gap_profile.get("context") or {}).get("aggressive_entry_price_operator_intraday_discovery", False)
+                (gap_profile.get("context") or {}).get(
+                    "aggressive_entry_price_operator_intraday_discovery", False
+                )
                 if isinstance(gap_profile.get("context"), dict)
                 else False
             )
             result["aggressive_entry_price_override_skip_reason"] = str(
-                (gap_profile.get("context") or {}).get("aggressive_entry_price_override_skip_reason", "")
+                (gap_profile.get("context") or {}).get(
+                    "aggressive_entry_price_override_skip_reason", ""
+                )
                 if isinstance(gap_profile.get("context"), dict)
                 else ""
             )
             result["aggressive_entry_price_original_profile"] = str(
-                (gap_profile.get("context") or {}).get("aggressive_entry_price_original_profile", "")
+                (gap_profile.get("context") or {}).get(
+                    "aggressive_entry_price_original_profile", ""
+                )
                 if isinstance(gap_profile.get("context"), dict)
                 else ""
             )
             result["aggressive_entry_price_original_bps"] = int(
-                (gap_profile.get("context") or {}).get("aggressive_entry_price_original_bps", 0)
+                (gap_profile.get("context") or {}).get(
+                    "aggressive_entry_price_original_bps", 0
+                )
                 if isinstance(gap_profile.get("context"), dict)
                 else 0
             )
             result["aggressive_entry_price_target_mode"] = str(
-                (gap_profile.get("context") or {}).get("aggressive_entry_price_target_mode", "")
+                (gap_profile.get("context") or {}).get(
+                    "aggressive_entry_price_target_mode", ""
+                )
                 if isinstance(gap_profile.get("context"), dict)
                 else ""
             )
             result["aggressive_entry_price_order_price"] = int(
-                (gap_profile.get("context") or {}).get("aggressive_entry_price_order_price", 0)
+                (gap_profile.get("context") or {}).get(
+                    "aggressive_entry_price_order_price", 0
+                )
                 if isinstance(gap_profile.get("context"), dict)
                 else 0
             )
             result["normal_defensive_order_price"] = int(normal_defensive_order_price)
             result["latency_guarded_order_price"] = int(latency_guarded_order_price)
-            result["counterfactual_order_price_1tick"] = int(counterfactual_order_price_1tick)
-            result["conditional_1tick_real_override_applied"] = conditional_1tick_applied
+            result["counterfactual_order_price_1tick"] = int(
+                counterfactual_order_price_1tick
+            )
+            result["conditional_1tick_real_override_applied"] = (
+                conditional_1tick_applied
+            )
             result["conditional_1tick_real_override_reason"] = conditional_1tick_reason
-            result["conditional_1tick_real_override_context"] = conditional_1tick_context
-            result["price_resolution_reason"] = price_resolution.get("price_resolution_reason", "defensive_order_price")
-            result["reference_target_applied"] = bool(price_resolution.get("reference_target_applied"))
-            result["reference_target_rejected_reason"] = price_resolution.get("reference_target_rejected_reason", "")
-            result["reference_target_below_bid_bps"] = int(price_resolution.get("reference_target_below_bid_bps", 0) or 0)
+            result["conditional_1tick_real_override_context"] = (
+                conditional_1tick_context
+            )
+            result["price_resolution_reason"] = price_resolution.get(
+                "price_resolution_reason", "defensive_order_price"
+            )
+            result["reference_target_applied"] = bool(
+                price_resolution.get("reference_target_applied")
+            )
+            result["reference_target_rejected_reason"] = price_resolution.get(
+                "reference_target_rejected_reason", ""
+            )
+            result["reference_target_below_bid_bps"] = int(
+                price_resolution.get("reference_target_below_bid_bps", 0) or 0
+            )
             result["reference_target_max_below_bid_bps"] = int(
                 price_resolution.get("reference_target_max_below_bid_bps", 0) or 0
             )
-            result["entry_price_resolver_enabled"] = bool(price_resolution.get("entry_price_resolver_enabled"))
+            result["entry_price_resolver_enabled"] = bool(
+                price_resolution.get("entry_price_resolver_enabled")
+            )
             result["orders"] = [
                 {
                     "tag": "normal",
                     "price": int(order_price),
-                    "qty": int(snapshot.planned_qty) if snapshot and snapshot.planned_qty else 0,
+                    "qty": (
+                        int(snapshot.planned_qty)
+                        if snapshot and snapshot.planned_qty
+                        else 0
+                    ),
                 }
             ]
             return result
@@ -4652,9 +5545,11 @@ def evaluate_live_buy_entry(
         entry_price_guard = (
             "latency_wide_spread_passive_requote_defensive"
             if is_latency_override and latency_wide_spread_passive_requote_applied
-            else "latency_danger_override_defensive"
-            if is_latency_override
-            else "normal_defensive"
+            else (
+                "latency_danger_override_defensive"
+                if is_latency_override
+                else "normal_defensive"
+            )
         )
         conditional_1tick_context = _conditional_real_1tick_context(
             ws_data,
@@ -4699,8 +5594,12 @@ def evaluate_live_buy_entry(
         )
         if int(target_buy_price or 0) > 0:
             target_cap = int(target_buy_price)
-            counterfactual_order_price_1tick = min(counterfactual_order_price_1tick, target_cap)
-            order_price = int(price_resolution.get("order_price", order_price) or order_price)
+            counterfactual_order_price_1tick = min(
+                counterfactual_order_price_1tick, target_cap
+            )
+            order_price = int(
+                price_resolution.get("order_price", order_price) or order_price
+            )
         result["allowed"] = True
         result["mode"] = "normal"
         result["order_price"] = order_price
@@ -4709,23 +5608,39 @@ def evaluate_live_buy_entry(
         result["entry_price_defense_mode"] = "tick"
         result["normal_defensive_order_price"] = int(normal_defensive_order_price)
         result["latency_guarded_order_price"] = int(latency_guarded_order_price)
-        result["counterfactual_order_price_1tick"] = int(counterfactual_order_price_1tick)
+        result["counterfactual_order_price_1tick"] = int(
+            counterfactual_order_price_1tick
+        )
         result["conditional_1tick_real_override_applied"] = conditional_1tick_applied
         result["conditional_1tick_real_override_reason"] = conditional_1tick_reason
         result["conditional_1tick_real_override_context"] = conditional_1tick_context
-        result["price_resolution_reason"] = price_resolution.get("price_resolution_reason", "defensive_order_price")
-        result["reference_target_applied"] = bool(price_resolution.get("reference_target_applied"))
-        result["reference_target_rejected_reason"] = price_resolution.get("reference_target_rejected_reason", "")
-        result["reference_target_below_bid_bps"] = int(price_resolution.get("reference_target_below_bid_bps", 0) or 0)
+        result["price_resolution_reason"] = price_resolution.get(
+            "price_resolution_reason", "defensive_order_price"
+        )
+        result["reference_target_applied"] = bool(
+            price_resolution.get("reference_target_applied")
+        )
+        result["reference_target_rejected_reason"] = price_resolution.get(
+            "reference_target_rejected_reason", ""
+        )
+        result["reference_target_below_bid_bps"] = int(
+            price_resolution.get("reference_target_below_bid_bps", 0) or 0
+        )
         result["reference_target_max_below_bid_bps"] = int(
             price_resolution.get("reference_target_max_below_bid_bps", 0) or 0
         )
-        result["entry_price_resolver_enabled"] = bool(price_resolution.get("entry_price_resolver_enabled"))
+        result["entry_price_resolver_enabled"] = bool(
+            price_resolution.get("entry_price_resolver_enabled")
+        )
         result["orders"] = [
             {
                 "tag": "normal",
                 "price": int(order_price),
-                "qty": int(snapshot.planned_qty) if snapshot and snapshot.planned_qty else 0,
+                "qty": (
+                    int(snapshot.planned_qty)
+                    if snapshot and snapshot.planned_qty
+                    else 0
+                ),
             }
         ]
         return result
