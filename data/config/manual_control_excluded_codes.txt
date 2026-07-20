@@ -1,3 +1,4 @@
 052710 # Amotech manual control
 038500 # Sampyo Cement manual control
 049080 # auto_hard_stop_handoff source=standard_hard_stop_after_quote_revalidation exit=scalp_hard_stop_pct profit=-5.43% peak=-0.23%
+005930 # Samsung Electronics manual control
