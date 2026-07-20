@@ -15,23 +15,23 @@
 
 ## 근거
 
-- as_of: `2026-07-20T12:50:02`
+- as_of: `2026-07-20T12:55:03`
 - baseline_date: `2026-07-16`
-- ai_confirmed unique: `16`
-- budget_pass unique: `63`
-- latency_pass unique: `15`
-- submitted unique: `9`
-- holding_started unique: `9`
-- budget/ai unique: `393.8%` (baseline `0.0`)
-- submitted/ai unique: `56.2%` (baseline `0.0`)
+- ai_confirmed unique: `17`
+- budget_pass unique: `64`
+- latency_pass unique: `16`
+- submitted unique: `10`
+- holding_started unique: `11`
+- budget/ai unique: `376.5%` (baseline `0.0`)
+- submitted/ai unique: `58.8%` (baseline `0.0`)
 - critical submit thresholds: `submitted/ai < 20.0%` or `submitted/budget <= 10.0%` (floors: ai>=20, budget>=3)
-- top blockers: `latency_block:latency_state_danger=90, pre_submit_entry_ai_authority_guard_block:entry_ai_score_unavailable=9, blocked_strength_momentum:below_strength_base=8, blocked_liquidity:-=7, blocked_vpw:-=5`
+- top blockers: `latency_block:latency_state_danger=92, pre_submit_entry_ai_authority_guard_block:entry_ai_score_unavailable=9, blocked_strength_momentum:below_strength_base=8, blocked_liquidity:-=7, blocked_vpw:-=5`
 - swing blockers: `-`
 - upstream blockers: `blocked_ai_score:score_58.0=2, first_ai_wait:-=2, blocked_ai_score:score_70.0=2, blocked_ai_score:score_62.0=1`
 - AI terminal reasons: `ai_terminal:entry_policy_no_buy_score_prior=5, ai_terminal:first_ai_wait_big_bite_not_confirmed=2`
-- latency blockers: `latency_block:latency_state_danger=90`
-- price guards: `pre_submit_entry_ai_authority_guard_block:entry_ai_score_unavailable=9, entry_ai_price_canary_fallback:above_best_ask=2, entry_ai_price_canary_skip_order:orderbook_micro is bearish with negative ofi and weak bid depth, making submission unfavorable=1, entry_ai_price_canary_fallback:skip_low_confidence=1`
-- quote refresh: `attempted=56, applied=48, latency_recovered=10, submitted_after_refresh=3`
+- latency blockers: `latency_block:latency_state_danger=92`
+- price guards: `pre_submit_entry_ai_authority_guard_block:entry_ai_score_unavailable=9, entry_ai_price_canary_fallback:above_best_ask=2, entry_ai_price_canary_fallback:skip_low_confidence=2, entry_ai_price_canary_skip_order:orderbook_micro is bearish with negative ofi and weak bid depth, making submission unfavorable=1`
+- quote refresh: `attempted=57, applied=48, latency_recovered=10, submitted_after_refresh=3`
 - quote refresh downstream: `{'order_bundle_submitted': 3, 'price_guard_or_revalidation': 7}`
 
 ## 금지된 자동변경
@@ -49,6 +49,6 @@
 
 ## Window Summary
 
-- `5m`: ai=1, budget=3, latency=1, submitted=1, top=`latency_block:latency_state_danger=2`, swing=`-`, upstream=`-`, ai_terminal=`-`
-- `10m`: ai=1, budget=4, latency=1, submitted=1, top=`latency_block:latency_state_danger=3`, swing=`-`, upstream=`-`, ai_terminal=`-`
-- `30m`: ai=1, budget=12, latency=1, submitted=1, top=`latency_block:latency_state_danger=11, blocked_vpw:-=1, blocked_liquidity:-=1`, swing=`-`, upstream=`blocked_ai_score:score_70.0=1`, ai_terminal=`ai_terminal:entry_policy_no_buy_score_prior=1`
+- `5m`: ai=2, budget=4, latency=2, submitted=1, top=`latency_block:latency_state_danger=2, entry_ai_price_canary_fallback:skip_low_confidence=1`, swing=`-`, upstream=`-`, ai_terminal=`-`
+- `10m`: ai=3, budget=7, latency=3, submitted=2, top=`latency_block:latency_state_danger=4, entry_ai_price_canary_fallback:skip_low_confidence=1`, swing=`-`, upstream=`-`, ai_terminal=`-`
+- `30m`: ai=3, budget=14, latency=3, submitted=2, top=`latency_block:latency_state_danger=11, entry_ai_price_canary_fallback:skip_low_confidence=1`, swing=`-`, upstream=`-`, ai_terminal=`-`
