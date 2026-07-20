@@ -21,7 +21,6 @@ from src.engine.scalping.rising_missed_one_share_entry import (
     classify_rising_missed_candidate,
 )
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 ENTRY_PIPELINE = "ENTRY_PIPELINE"
 PROMOTED_STAGE = "scalping_scanner_candidate_promoted"
@@ -236,7 +235,10 @@ def _exclude_from_real_entry_analysis(row: dict[str, Any]) -> bool:
         return True
     if str(fields.get("simulated_order") or "").strip().lower() == "true":
         return True
-    if any(fields.get(key) not in (None, "") for key in ("simulation_book", "simulation_owner", "sim_record_id")):
+    if any(
+        fields.get(key) not in (None, "")
+        for key in ("simulation_book", "simulation_owner", "sim_record_id")
+    ):
         return True
     if str(fields.get("reason") or "").strip() == "scalp_live_simulator":
         return True
@@ -248,10 +250,15 @@ def _exclude_from_real_entry_analysis(row: dict[str, Any]) -> bool:
 
 def _is_rising_missed_forced_one_share_entry(fields: dict[str, Any]) -> bool:
     reason = str(fields.get("forced_entry_reason") or "").strip()
-    forced = str(fields.get("rising_missed_one_share_entry_forced") or "").strip().lower() == "true"
+    forced = (
+        str(fields.get("rising_missed_one_share_entry_forced") or "").strip().lower()
+        == "true"
+    )
     qty = _safe_float(fields.get("forced_entry_qty"))
     forced_scout_qty_or_missing = qty is None or qty > 0.0
-    return forced_scout_qty_or_missing and (reason == RISING_MISSED_FORCED_ENTRY_REASON or forced)
+    return forced_scout_qty_or_missing and (
+        reason == RISING_MISSED_FORCED_ENTRY_REASON or forced
+    )
 
 
 def _parse_event_dt(row: dict[str, Any]) -> datetime | None:
@@ -266,7 +273,15 @@ def _parse_event_dt(row: dict[str, Any]) -> datetime | None:
 
 
 def _forced_lineage_qty_present(fields: dict[str, Any]) -> bool:
-    for key in ("forced_entry_qty", "order_requested_qty", "order_quantity", "quantity", "qty", "fill_qty", "order_filled_qty"):
+    for key in (
+        "forced_entry_qty",
+        "order_requested_qty",
+        "order_quantity",
+        "quantity",
+        "qty",
+        "fill_qty",
+        "order_filled_qty",
+    ):
         value = _safe_float(fields.get(key))
         if value is not None and value > 0.0:
             return True
@@ -287,8 +302,15 @@ def _is_rising_missed_forced_lineage_row(
         return False
     fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}
     stage = str(row.get("stage") or "")
-    actual_submitted = str(fields.get("actual_order_submitted") or "").strip().lower() == REAL_SUBMIT_TRUE
-    return stage in RISING_MISSED_FORCED_LINEAGE_STAGES or actual_submitted or _forced_lineage_qty_present(fields)
+    actual_submitted = (
+        str(fields.get("actual_order_submitted") or "").strip().lower()
+        == REAL_SUBMIT_TRUE
+    )
+    return (
+        stage in RISING_MISSED_FORCED_LINEAGE_STAGES
+        or actual_submitted
+        or _forced_lineage_qty_present(fields)
+    )
 
 
 def _entry_events(rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
@@ -323,12 +345,16 @@ def _field(row: dict[str, Any], key: str, default: Any = "") -> Any:
 
 def _selection_prior_recommendation(item: dict[str, Any]) -> str:
     for blocker in reversed(item.get("recent_blockers") or []):
-        recommendation = str(blocker.get("rising_missed_selection_recommendation") or "").strip()
+        recommendation = str(
+            blocker.get("rising_missed_selection_recommendation") or ""
+        ).strip()
         if recommendation:
             return recommendation
     deferred = item.get("scanner_full_eval_budget_deferred")
     if isinstance(deferred, dict):
-        recommendation = str(deferred.get("rising_missed_selection_recommendation") or "").strip()
+        recommendation = str(
+            deferred.get("rising_missed_selection_recommendation") or ""
+        ).strip()
         if recommendation:
             return recommendation
     return "unavailable"
@@ -341,7 +367,9 @@ def _selection_prior_counts(items: list[dict[str, Any]]) -> Counter[str]:
 def _selection_prior_sort_key(item: dict[str, Any]) -> tuple[int, float]:
     recommendation = _selection_prior_recommendation(item)
     return (
-        SELECTION_PRIOR_SORT_ORDER.get(recommendation, SELECTION_PRIOR_SORT_ORDER["unavailable"]),
+        SELECTION_PRIOR_SORT_ORDER.get(
+            recommendation, SELECTION_PRIOR_SORT_ORDER["unavailable"]
+        ),
         -(item.get("max_price_delta_since_first_seen_pct") or -999.0),
     )
 
@@ -407,7 +435,9 @@ def _metric_summary(values: list[float]) -> dict[str, float | None]:
 
 
 def _latency_danger_cause(fields: dict[str, Any]) -> str:
-    reason_text = str(fields.get("latency_danger_reasons") or fields.get("latency_reason") or "").lower()
+    reason_text = str(
+        fields.get("latency_danger_reasons") or fields.get("latency_reason") or ""
+    ).lower()
     stale_values = (
         fields.get("pre_submit_effective_quote_stale"),
         fields.get("quote_stale_at_submit"),
@@ -417,11 +447,18 @@ def _latency_danger_cause(fields: dict[str, Any]) -> str:
         return "quote_stale"
     if "spread_too_wide" in reason_text:
         return "spread_too_wide"
-    spread_ratio = _safe_float(fields.get("spread_ratio") or fields.get("pre_submit_quote_refresh_spread_ratio"))
+    spread_ratio = _safe_float(
+        fields.get("spread_ratio")
+        or fields.get("pre_submit_quote_refresh_spread_ratio")
+    )
     if spread_ratio is not None and spread_ratio > LATENCY_DANGER_SPREAD_RATIO_CAP:
         return "spread_too_wide"
     spread_ticks = _safe_float(fields.get("orderbook_micro_spread_ticks"))
-    bucket = str(fields.get("orderbook_micro_ofi_bucket_key") or fields.get("orderbook_micro_calibration_bucket") or "")
+    bucket = str(
+        fields.get("orderbook_micro_ofi_bucket_key")
+        or fields.get("orderbook_micro_calibration_bucket")
+        or ""
+    )
     if (spread_ticks is not None and spread_ticks >= 5.0) or "spread=wide" in bucket:
         return "spread_microstructure_wide"
     ws_age_ms = _safe_float(
@@ -429,7 +466,9 @@ def _latency_danger_cause(fields: dict[str, Any]) -> str:
         or fields.get("pre_submit_effective_quote_age_ms")
         or fields.get("pre_submit_ws_snapshot_refresh_age_ms")
     )
-    if (ws_age_ms is not None and ws_age_ms > LATENCY_DANGER_WS_AGE_MS_CAP) or "ws_age_too_high" in reason_text:
+    if (
+        ws_age_ms is not None and ws_age_ms > LATENCY_DANGER_WS_AGE_MS_CAP
+    ) or "ws_age_too_high" in reason_text:
         return "ws_age_too_high"
     return "other_danger"
 
@@ -440,7 +479,10 @@ def _latency_danger_event_fields(row: dict[str, Any]) -> dict[str, Any]:
         "latency_state": str(fields.get("latency_state") or ""),
         "latency_danger_reasons": str(fields.get("latency_danger_reasons") or ""),
         "latency_root_cause": _latency_danger_cause(fields),
-        "spread_ratio": _safe_float(fields.get("spread_ratio") or fields.get("pre_submit_quote_refresh_spread_ratio")),
+        "spread_ratio": _safe_float(
+            fields.get("spread_ratio")
+            or fields.get("pre_submit_quote_refresh_spread_ratio")
+        ),
         "ws_age_ms": _safe_float(
             fields.get("ws_age_ms")
             or fields.get("pre_submit_effective_quote_age_ms")
@@ -453,19 +495,28 @@ def _latency_danger_event_fields(row: dict[str, Any]) -> dict[str, Any]:
             or fields.get("orderbook_micro_calibration_bucket")
             or ""
         ),
-        "pre_submit_effective_quote_stale": str(fields.get("pre_submit_effective_quote_stale") or ""),
+        "pre_submit_effective_quote_stale": str(
+            fields.get("pre_submit_effective_quote_stale") or ""
+        ),
         "quote_stale_at_submit": str(fields.get("quote_stale_at_submit") or ""),
         "quote_stale": str(fields.get("quote_stale") or ""),
     }
 
 
-def _latency_danger_root_cause_summary(blocker_rows: list[dict[str, Any]]) -> dict[str, Any]:
+def _latency_danger_root_cause_summary(
+    blocker_rows: list[dict[str, Any]],
+) -> dict[str, Any]:
     events = []
     for row in blocker_rows:
-        if row.get("stage") != "latency_block" or _blocker_reason(row) != "latency_state_danger":
+        if (
+            row.get("stage") != "latency_block"
+            or _blocker_reason(row) != "latency_state_danger"
+        ):
             continue
         fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}
-        if not any(fields.get(key) not in (None, "") for key in LATENCY_PROVENANCE_FIELD_KEYS):
+        if not any(
+            fields.get(key) not in (None, "") for key in LATENCY_PROVENANCE_FIELD_KEYS
+        ):
             continue
         events.append(_latency_danger_event_fields(row))
     if not events:
@@ -479,7 +530,9 @@ def _latency_danger_root_cause_summary(blocker_rows: list[dict[str, Any]]) -> di
             "top_micro_state": "-",
             "top_ofi_bucket": "no_latency_provenance_fields",
         }
-    cause_counts = Counter(str(item.get("latency_root_cause") or "other_danger") for item in events)
+    cause_counts = Counter(
+        str(item.get("latency_root_cause") or "other_danger") for item in events
+    )
     micro_state_counts = Counter(str(item.get("micro_state") or "-") for item in events)
     bucket_counts = Counter(str(item.get("ofi_bucket") or "-") for item in events)
     return {
@@ -490,13 +543,21 @@ def _latency_danger_root_cause_summary(blocker_rows: list[dict[str, Any]]) -> di
             for cause, count in cause_counts.most_common()
         ],
         "spread_ratio": _metric_summary(
-            [value for item in events if (value := item.get("spread_ratio")) is not None]
+            [
+                value
+                for item in events
+                if (value := item.get("spread_ratio")) is not None
+            ]
         ),
         "ws_age_ms": _metric_summary(
             [value for item in events if (value := item.get("ws_age_ms")) is not None]
         ),
         "spread_ticks": _metric_summary(
-            [value for item in events if (value := item.get("spread_ticks")) is not None]
+            [
+                value
+                for item in events
+                if (value := item.get("spread_ticks")) is not None
+            ]
         ),
         "top_micro_state": micro_state_counts.most_common(1)[0][0],
         "top_ofi_bucket": bucket_counts.most_common(1)[0][0],
@@ -562,14 +623,21 @@ def _stale_or_delayed_eval_category(row: dict[str, Any]) -> str:
     context_text = " ".join(
         str(value).lower()
         for key, value in fields.items()
-        if any(token in str(key).lower() for token in ("stale", "fresh", "snapshot", "subscription"))
+        if any(
+            token in str(key).lower()
+            for token in ("stale", "fresh", "snapshot", "subscription")
+        )
     )
     combined = f"{stage} {reason} {context_text}"
-    if "scanner_full_eval_loop_budget_deferred" in combined or ("full_eval" in stage and "lag" in stage):
+    if "scanner_full_eval_loop_budget_deferred" in combined or (
+        "full_eval" in stage and "lag" in stage
+    ):
         return "full_eval_delay"
     if "ws_snapshot_missing_or_zero" in combined or "missing_or_zero_curr" in combined:
         return "ws_quote_missing"
-    if "stale_context_or_quote" in combined or ("entry_submit_revalidation" in stage and "stale" in combined):
+    if "stale_context_or_quote" in combined or (
+        "entry_submit_revalidation" in stage and "stale" in combined
+    ):
         return "pre_submit_hard_stale"
     if (
         ("pre_ai" in combined and "stale" in combined)
@@ -588,7 +656,11 @@ def _stale_or_delayed_eval_category(row: dict[str, Any]) -> str:
 
 def _event_is_fresh_context(row: dict[str, Any]) -> bool:
     max_age_ms = _event_max_age_ms(row)
-    return max_age_ms is not None and max_age_ms <= ENTRY_FRESH_MAX_AGE_MS and not _event_has_stale_or_delayed_context(row)
+    return (
+        max_age_ms is not None
+        and max_age_ms <= ENTRY_FRESH_MAX_AGE_MS
+        and not _event_has_stale_or_delayed_context(row)
+    )
 
 
 def _event_is_recovery_observation(row: dict[str, Any]) -> bool:
@@ -604,9 +676,8 @@ def _low_ai_or_negative_pressure(row: dict[str, Any]) -> bool:
         "orderbook_buy_pressure",
         "pressure_buy",
     )
-    return (
-        (ai_score is not None and ai_score < LOW_AI_SCORE_CUTOFF)
-        or (buy_pressure is not None and buy_pressure < NEGATIVE_BUY_PRESSURE_CUTOFF)
+    return (ai_score is not None and ai_score < LOW_AI_SCORE_CUTOFF) or (
+        buy_pressure is not None and buy_pressure < NEGATIVE_BUY_PRESSURE_CUTOFF
     )
 
 
@@ -628,7 +699,9 @@ def _low_ai_pressure_quality_counts(rows: list[dict[str, Any]]) -> dict[str, int
     return counts
 
 
-def _stale_or_delayed_eval_category_counts(rows: list[dict[str, Any]]) -> dict[str, int]:
+def _stale_or_delayed_eval_category_counts(
+    rows: list[dict[str, Any]],
+) -> dict[str, int]:
     counter: Counter[str] = Counter()
     for row in rows:
         if not _low_ai_or_negative_pressure(row):
@@ -640,7 +713,9 @@ def _stale_or_delayed_eval_category_counts(rows: list[dict[str, Any]]) -> dict[s
         "diagnostic_quote_age_stale": int(counter.get("diagnostic_quote_age_stale", 0)),
         "full_eval_delay": int(counter.get("full_eval_delay", 0)),
         "ws_quote_missing": int(counter.get("ws_quote_missing", 0)),
-        "pre_ai_stale_or_history_gap": int(counter.get("pre_ai_stale_or_history_gap", 0)),
+        "pre_ai_stale_or_history_gap": int(
+            counter.get("pre_ai_stale_or_history_gap", 0)
+        ),
         "pre_submit_hard_stale": int(counter.get("pre_submit_hard_stale", 0)),
     }
 
@@ -649,13 +724,15 @@ def _unresolved_stale_low_ai_pressure_count(rows: list[dict[str, Any]]) -> int:
     stale_indexes = [
         idx
         for idx, row in enumerate(rows)
-        if _low_ai_or_negative_pressure(row) and _event_has_stale_or_delayed_context(row)
+        if _low_ai_or_negative_pressure(row)
+        and _event_has_stale_or_delayed_context(row)
     ]
     if not stale_indexes:
         return 0
     latest_stale_idx = stale_indexes[-1]
     if any(
-        _is_downstream_progress_after_stale_source(row) or _event_is_recovery_observation(row)
+        _is_downstream_progress_after_stale_source(row)
+        or _event_is_recovery_observation(row)
         for row in rows[latest_stale_idx + 1 :]
     ):
         return 0
@@ -674,8 +751,13 @@ def _is_zero_strength_history_source_quality_event(row: dict[str, Any]) -> bool:
     if _event_is_recovery_observation(row):
         return False
     stage = str(row.get("stage") or "").lower()
-    fast_precheck_result = str(_field(row, "fast_precheck_result", "") or "").strip().lower()
-    if stage == "scalping_scanner_fast_precheck" and fast_precheck_result == "eligible_for_heavy_entry_eval":
+    fast_precheck_result = (
+        str(_field(row, "fast_precheck_result", "") or "").strip().lower()
+    )
+    if (
+        stage == "scalping_scanner_fast_precheck"
+        and fast_precheck_result == "eligible_for_heavy_entry_eval"
+    ):
         return False
     history_count = _strength_history_count(row)
     if history_count is None or history_count > 0:
@@ -705,46 +787,69 @@ def _is_downstream_progress_after_stale_source(row: dict[str, Any]) -> bool:
         "rising_subscription_recheck_fresh_realtime_evidence",
     }:
         return True
-    return stage in {
-        "ai_confirmed",
-        "ai_confirmed_terminal_no_budget",
-        "blocked_ai_score",
-        "blocked_strength_momentum",
-        "entry_ai_price_canary_applied",
-        "scalp_entry_action_decision_snapshot",
-        "strength_momentum_observed",
-        "strength_momentum_pass",
-    } and reason not in RECOVERY_OBSERVATION_REASONS
+    return (
+        stage
+        in {
+            "ai_confirmed",
+            "ai_confirmed_terminal_no_budget",
+            "blocked_ai_score",
+            "blocked_strength_momentum",
+            "entry_ai_price_canary_applied",
+            "scalp_entry_action_decision_snapshot",
+            "strength_momentum_observed",
+            "strength_momentum_pass",
+        }
+        and reason not in RECOVERY_OBSERVATION_REASONS
+    )
 
 
 def _zero_strength_history_source_quality(rows: list[dict[str, Any]]) -> dict[str, Any]:
     zero_indexed_rows = [
-        (idx, row) for idx, row in enumerate(rows) if _is_zero_strength_history_source_quality_event(row)
+        (idx, row)
+        for idx, row in enumerate(rows)
+        if _is_zero_strength_history_source_quality_event(row)
     ]
     zero_rows = [row for _idx, row in zero_indexed_rows]
     latest_zero_idx = zero_indexed_rows[-1][0] if zero_indexed_rows else -1
     downstream_progress = next(
-        (row for row in rows[latest_zero_idx + 1 :] if _is_downstream_progress_after_stale_source(row)),
+        (
+            row
+            for row in rows[latest_zero_idx + 1 :]
+            if _is_downstream_progress_after_stale_source(row)
+        ),
         None,
     )
     unresolved_zero_rows = [] if downstream_progress else zero_rows
     reason_counts = Counter(
-        _blocker_reason(row) or str(row.get("stage") or "") for row in unresolved_zero_rows
+        _blocker_reason(row) or str(row.get("stage") or "")
+        for row in unresolved_zero_rows
     )
     latest = unresolved_zero_rows[-1] if unresolved_zero_rows else {}
-    raw_reason_counts = Counter(_blocker_reason(row) or str(row.get("stage") or "") for row in zero_rows)
-    route = "transient_stale_recovered_to_downstream_blocker" if zero_rows and downstream_progress else (
-        "source_quality_workorder_required"
-        if len(unresolved_zero_rows) >= ZERO_HISTORY_WORKORDER_MIN_EVENTS
-        else "observe_until_repeated"
+    raw_reason_counts = Counter(
+        _blocker_reason(row) or str(row.get("stage") or "") for row in zero_rows
+    )
+    route = (
+        "transient_stale_recovered_to_downstream_blocker"
+        if zero_rows and downstream_progress
+        else (
+            "source_quality_workorder_required"
+            if len(unresolved_zero_rows) >= ZERO_HISTORY_WORKORDER_MIN_EVENTS
+            else "observe_until_repeated"
+        )
     )
     return {
         "event_count": len(unresolved_zero_rows),
         "raw_event_count": len(zero_rows),
         "recovered_by_downstream_progress": bool(downstream_progress),
-        "downstream_progress_at": _event_time(downstream_progress) if downstream_progress else "",
-        "downstream_progress_stage": (downstream_progress.get("stage") or "") if downstream_progress else "",
-        "downstream_progress_reason": _blocker_reason(downstream_progress) if downstream_progress else "",
+        "downstream_progress_at": (
+            _event_time(downstream_progress) if downstream_progress else ""
+        ),
+        "downstream_progress_stage": (
+            (downstream_progress.get("stage") or "") if downstream_progress else ""
+        ),
+        "downstream_progress_reason": (
+            _blocker_reason(downstream_progress) if downstream_progress else ""
+        ),
         "repeated": len(unresolved_zero_rows) >= ZERO_HISTORY_WORKORDER_MIN_EVENTS,
         "latest_at": _event_time(latest) if latest else "",
         "latest_stage": (latest.get("stage") or "") if latest else "",
@@ -764,14 +869,19 @@ def _zero_strength_history_source_quality(rows: list[dict[str, Any]]) -> dict[st
 def _is_blocker_row(row: dict[str, Any]) -> bool:
     if row.get("stage") not in BLOCKER_STAGES:
         return False
-    return _blocker_reason(row) not in RECOVERY_OBSERVATION_REASONS | BUY_WINDOW_PAUSE_REASONS
+    return (
+        _blocker_reason(row)
+        not in RECOVERY_OBSERVATION_REASONS | BUY_WINDOW_PAUSE_REASONS
+    )
 
 
 def _dominant_blocker(rows: list[dict[str, Any]]) -> dict[str, Any]:
     blocker_rows = [row for row in rows if _is_blocker_row(row)]
     if not blocker_rows:
         return {"stage": "", "reason": "", "count": 0}
-    counts = Counter((row.get("stage") or "", _blocker_reason(row)) for row in blocker_rows)
+    counts = Counter(
+        (row.get("stage") or "", _blocker_reason(row)) for row in blocker_rows
+    )
     (stage, reason), count = counts.most_common(1)[0]
     return {"stage": stage, "reason": reason, "count": count}
 
@@ -788,7 +898,13 @@ def _latest_blocker(rows: list[dict[str, Any]]) -> dict[str, Any]:
                     _field(row, "price_delta_since_first_seen_pct")
                 ),
             }
-    return {"emitted_at": "", "stage": "", "reason": "", "ai_score": None, "price_delta_since_first_seen_pct": None}
+    return {
+        "emitted_at": "",
+        "stage": "",
+        "reason": "",
+        "ai_score": None,
+        "price_delta_since_first_seen_pct": None,
+    }
 
 
 def _blocker_taxonomy(
@@ -820,12 +936,18 @@ def _blocker_taxonomy(
     if reason == "ws_snapshot_missing_or_zero":
         evictable = count >= 3
         return {
-            "class": "source_freshness_evictable" if evictable else "source_freshness_recovering",
+            "class": (
+                "source_freshness_evictable"
+                if evictable
+                else "source_freshness_recovering"
+            ),
             "actionable": evictable,
             "major_blocker": False,
-            "route": "evict_or_quarantine_and_reallocate_watch_budget"
-            if evictable
-            else "short_recovery_window_before_watch_budget_reallocation",
+            "route": (
+                "evict_or_quarantine_and_reallocate_watch_budget"
+                if evictable
+                else "short_recovery_window_before_watch_budget_reallocation"
+            ),
         }
     if reason == "scanner_full_eval_loop_budget_deferred":
         return {
@@ -841,7 +963,10 @@ def _blocker_taxonomy(
     ):
         if reason == "operator_manual_control_excluded_symbol":
             route = "operator_manual_control_guard_preserved_no_bypass"
-        elif count >= ACTIONABLE_COOLDOWN_MIN_COUNT and delta >= ACTIONABLE_COOLDOWN_MIN_DELTA_PCT:
+        elif (
+            count >= ACTIONABLE_COOLDOWN_MIN_COUNT
+            and delta >= ACTIONABLE_COOLDOWN_MIN_DELTA_PCT
+        ):
             route = "review_cooldown_opportunity_loss_or_wrong_scope"
         else:
             route = "normal_cooldown_guard"
@@ -866,7 +991,11 @@ def _blocker_taxonomy(
             "route": "restore_entry_ai_authority_before_submit_without_broker_guard_bypass",
         }
     if stage == "latency_block":
-        if latency_cause in {"quote_stale", "spread_too_wide", "spread_microstructure_wide"}:
+        if latency_cause in {
+            "quote_stale",
+            "spread_too_wide",
+            "spread_microstructure_wide",
+        }:
             return {
                 "class": "pre_submit_quality_guard",
                 "actionable": False,
@@ -903,9 +1032,14 @@ def _dominant_actionable_blocker(rows: list[dict[str, Any]]) -> dict[str, Any]:
         (
             row.get("stage") or "",
             _blocker_reason(row),
-            _latency_danger_cause(row.get("fields") if isinstance(row.get("fields"), dict) else {})
-            if row.get("stage") == "latency_block" and _blocker_reason(row) == "latency_state_danger"
-            else "",
+            (
+                _latency_danger_cause(
+                    row.get("fields") if isinstance(row.get("fields"), dict) else {}
+                )
+                if row.get("stage") == "latency_block"
+                and _blocker_reason(row) == "latency_state_danger"
+                else ""
+            ),
         )
         for row in blocker_rows
     )
@@ -933,7 +1067,13 @@ def _dominant_actionable_blocker(rows: list[dict[str, Any]]) -> dict[str, Any]:
                 "class": taxonomy["class"],
                 "route": taxonomy["route"],
             }
-    return {"stage": "", "reason": "", "count": 0, "class": "non_actionable_guard_or_backpressure", "route": "observe_only"}
+    return {
+        "stage": "",
+        "reason": "",
+        "count": 0,
+        "class": "non_actionable_guard_or_backpressure",
+        "route": "observe_only",
+    }
 
 
 def _runtime_attach_identity_mismatch(rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -944,22 +1084,29 @@ def _runtime_attach_identity_mismatch(rows: list[dict[str, Any]]) -> dict[str, A
         fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}
         if (
             str(fields.get("runtime_target_attach_outcome") or "").strip() == "skipped"
-            and str(fields.get("runtime_target_attach_reason") or "").strip() == "scanner_identity_name_mismatch"
+            and str(fields.get("runtime_target_attach_reason") or "").strip()
+            == "scanner_identity_name_mismatch"
         ):
             mismatch_rows.append(row)
     latest = mismatch_rows[-1] if mismatch_rows else {}
-    latest_fields = latest.get("fields") if isinstance(latest.get("fields"), dict) else {}
+    latest_fields = (
+        latest.get("fields") if isinstance(latest.get("fields"), dict) else {}
+    )
     return {
         "count": len(mismatch_rows),
         "latest_at": _event_time(latest) if latest else "",
         "latest_reason": str(latest_fields.get("runtime_target_attach_reason") or ""),
         "payload_name": str(latest_fields.get("scanner_identity_payload_name") or ""),
         "db_name": str(latest_fields.get("scanner_identity_db_name") or ""),
-        "mismatch_expired": str(latest_fields.get("scanner_identity_mismatch_expired") or ""),
+        "mismatch_expired": str(
+            latest_fields.get("scanner_identity_mismatch_expired") or ""
+        ),
     }
 
 
-def _full_eval_deferred_status(rows: list[dict[str, Any]], deferred_rows: list[dict[str, Any]]) -> str:
+def _full_eval_deferred_status(
+    rows: list[dict[str, Any]], deferred_rows: list[dict[str, Any]]
+) -> str:
     if not deferred_rows:
         return "not_deferred"
     latest_deferred = deferred_rows[-1]
@@ -985,7 +1132,8 @@ def _max_delta(rows: list[dict[str, Any]]) -> float | None:
     values = [
         value
         for row in rows
-        if (value := _safe_float(_field(row, "price_delta_since_first_seen_pct"))) is not None
+        if (value := _safe_float(_field(row, "price_delta_since_first_seen_pct")))
+        is not None
     ]
     return max(values) if values else None
 
@@ -1009,8 +1157,12 @@ def _normalize_event_bound(value: str | None, *, target_date: str) -> str | None
     return f"{target_date}T{parsed_time.isoformat()}"
 
 
-def _top_counter(counter: Counter[Any], *, limit: int = 10, key_name: str = "key") -> list[dict[str, Any]]:
-    return [{key_name: key, "count": count} for key, count in counter.most_common(limit)]
+def _top_counter(
+    counter: Counter[Any], *, limit: int = 10, key_name: str = "key"
+) -> list[dict[str, Any]]:
+    return [
+        {key_name: key, "count": count} for key, count in counter.most_common(limit)
+    ]
 
 
 def _real_rows(
@@ -1032,12 +1184,16 @@ def _real_rows(
             continue
         code = str(row.get("stock_code") or "").strip()
         fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}
-        if row.get("pipeline") == ENTRY_PIPELINE and _is_rising_missed_forced_one_share_entry(fields):
+        if row.get(
+            "pipeline"
+        ) == ENTRY_PIPELINE and _is_rising_missed_forced_one_share_entry(fields):
             event_at = _parse_event_dt(row)
             if code and event_at is not None:
                 latest_forced_scout_at_by_code[code] = event_at
             continue
-        if row.get("pipeline") == ENTRY_PIPELINE and _is_rising_missed_forced_lineage_row(
+        if row.get(
+            "pipeline"
+        ) == ENTRY_PIPELINE and _is_rising_missed_forced_lineage_row(
             row,
             latest_forced_scout_at_by_code,
         ):
@@ -1067,12 +1223,21 @@ def _entry_price_diagnostics(rows: list[dict[str, Any]]) -> dict[str, Any]:
             relevant.append(row)
 
     stage_counts = Counter(str(row.get("stage") or "") for row in relevant)
-    guard_counts = Counter(str(_field(row, "entry_price_guard") or "-") for row in relevant)
-    resolution_counts = Counter(str(_field(row, "resolution_reason") or "-") for row in relevant)
+    guard_counts = Counter(
+        str(_field(row, "entry_price_guard") or "-") for row in relevant
+    )
+    resolution_counts = Counter(
+        str(_field(row, "resolution_reason") or "-") for row in relevant
+    )
     block_rows = [
         row
         for row in relevant
-        if str(row.get("stage") or "") in {"entry_ai_price_canary_skip_order", "entry_submit_revalidation_block", "pre_submit_price_guard_block"}
+        if str(row.get("stage") or "")
+        in {
+            "entry_ai_price_canary_skip_order",
+            "entry_submit_revalidation_block",
+            "pre_submit_price_guard_block",
+        }
         or str(row.get("stage") or "").startswith("entry_order_cancel_")
         or str(_field(row, "entry_submit_revalidation_block") or "").lower() == "true"
         or str(_field(row, "price_context_stale_at_submit") or "").lower() == "true"
@@ -1083,7 +1248,9 @@ def _entry_price_diagnostics(rows: list[dict[str, Any]]) -> dict[str, Any]:
         for row in relevant
         if str(row.get("stage") or "") == "entry_ai_price_canary_fallback"
     ]
-    candidate_failure_reason_counts = Counter(_blocker_reason(row) or "-" for row in candidate_failure_rows)
+    candidate_failure_reason_counts = Counter(
+        _blocker_reason(row) or "-" for row in candidate_failure_rows
+    )
 
     def _submitted_order_price(row: dict[str, Any]) -> float | None:
         return _safe_float(
@@ -1103,7 +1270,9 @@ def _entry_price_diagnostics(rows: list[dict[str, Any]]) -> dict[str, Any]:
         ),
         "stage_counts": _top_counter(stage_counts, key_name="stage"),
         "guard_counts": _top_counter(guard_counts, key_name="entry_price_guard"),
-        "resolution_counts": _top_counter(resolution_counts, key_name="resolution_reason"),
+        "resolution_counts": _top_counter(
+            resolution_counts, key_name="resolution_reason"
+        ),
         "recent_issues": [
             {
                 "emitted_at": _event_time(row),
@@ -1116,12 +1285,24 @@ def _entry_price_diagnostics(rows: list[dict[str, Any]]) -> dict[str, Any]:
                 "price_below_bid_bps": _safe_float(_field(row, "price_below_bid_bps")),
                 "submitted_order_price": _submitted_order_price(row),
                 "best_bid_at_submit": _safe_float(_field(row, "best_bid_at_submit")),
-                "quote_age_at_submit_ms": _safe_float(_field(row, "quote_age_at_submit_ms")),
-                "entry_submit_revalidation": _field(row, "entry_submit_revalidation", ""),
-                "entry_submit_revalidation_warning": _field(row, "entry_submit_revalidation_warning", ""),
-                "ai_entry_price_canary_action": _field(row, "ai_entry_price_canary_action", ""),
-                "pre_submit_liquidity_guard_action": _field(row, "pre_submit_liquidity_guard_action", ""),
-                "pre_submit_liquidity_reason": _field(row, "pre_submit_liquidity_reason", ""),
+                "quote_age_at_submit_ms": _safe_float(
+                    _field(row, "quote_age_at_submit_ms")
+                ),
+                "entry_submit_revalidation": _field(
+                    row, "entry_submit_revalidation", ""
+                ),
+                "entry_submit_revalidation_warning": _field(
+                    row, "entry_submit_revalidation_warning", ""
+                ),
+                "ai_entry_price_canary_action": _field(
+                    row, "ai_entry_price_canary_action", ""
+                ),
+                "pre_submit_liquidity_guard_action": _field(
+                    row, "pre_submit_liquidity_guard_action", ""
+                ),
+                "pre_submit_liquidity_reason": _field(
+                    row, "pre_submit_liquidity_reason", ""
+                ),
             }
             for row in block_rows[-12:]
         ],
@@ -1136,7 +1317,9 @@ def _scale_in_diagnostics(rows: list[dict[str, Any]]) -> dict[str, Any]:
     for row in holding_rows:
         stage = str(row.get("stage") or "")
         fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}
-        value_text = " ".join([stage, *(str(value) for value in fields.values())]).lower()
+        value_text = " ".join(
+            [stage, *(str(value) for value in fields.values())]
+        ).lower()
         if stage == "stat_action_decision_snapshot":
             action = str(
                 _field(row, "scale_in_action_type")
@@ -1148,10 +1331,14 @@ def _scale_in_diagnostics(rows: list[dict[str, Any]]) -> dict[str, Any]:
                 str(_field(row, key) or "")
                 for key in ("scale_in_blocker_reason", "scale_in_gate_reason", "reason")
             ).lower()
-            if (action and action != "-") or any(token in reason_text for token in SCALE_IN_REASON_TOKENS):
+            if (action and action != "-") or any(
+                token in reason_text for token in SCALE_IN_REASON_TOKENS
+            ):
                 relevant.append(row)
             continue
-        if stage in SCALE_IN_STAGES or any(token in value_text for token in SCALE_IN_REASON_TOKENS):
+        if stage in SCALE_IN_STAGES or any(
+            token in value_text for token in SCALE_IN_REASON_TOKENS
+        ):
             relevant.append(row)
 
     blocker_counter: Counter[str] = Counter()
@@ -1161,10 +1348,23 @@ def _scale_in_diagnostics(rows: list[dict[str, Any]]) -> dict[str, Any]:
     for row in relevant:
         stage = str(row.get("stage") or "")
         stage_lower = stage.lower()
-        executed = stage == "scale_in_executed" or str(_field(row, "scale_in_executed") or "").lower() == "true"
+        executed = (
+            stage == "scale_in_executed"
+            or str(_field(row, "scale_in_executed") or "").lower() == "true"
+        )
         allowed = str(_field(row, "scale_in_gate_allowed") or "").strip().lower()
-        reason = str(_field(row, "scale_in_blocker_reason") or _field(row, "scale_in_gate_reason") or _field(row, "reason") or "")
-        action = str(_field(row, "scale_in_action_type") or _field(row, "scale_in_arm") or _field(row, "chosen_action") or "-")
+        reason = str(
+            _field(row, "scale_in_blocker_reason")
+            or _field(row, "scale_in_gate_reason")
+            or _field(row, "reason")
+            or ""
+        )
+        action = str(
+            _field(row, "scale_in_action_type")
+            or _field(row, "scale_in_arm")
+            or _field(row, "chosen_action")
+            or "-"
+        )
         action_counter[action] += 1
         blocked_stage = "blocked" in stage_lower or stage in {
             "scale_in_price_guard_block",
@@ -1191,7 +1391,9 @@ def _scale_in_diagnostics(rows: list[dict[str, Any]]) -> dict[str, Any]:
                 "stage": row.get("stage") or "",
                 "profit_rate": _safe_float(_field(row, "profit_rate")),
                 "peak_profit": _safe_float(_field(row, "peak_profit")),
-                "current_ai_score": _safe_float(_field(row, "current_ai_score") or _field(row, "ai_score")),
+                "current_ai_score": _safe_float(
+                    _field(row, "current_ai_score") or _field(row, "ai_score")
+                ),
                 "scale_in_gate_allowed": _field(row, "scale_in_gate_allowed", ""),
                 "scale_in_gate_reason": _field(row, "scale_in_gate_reason", ""),
                 "scale_in_blocker_reason": _field(row, "scale_in_blocker_reason", ""),
@@ -1219,22 +1421,36 @@ def _sell_flow(row: dict[str, Any]) -> str:
     reason = str(row.get("sell_reason_type") or "").lower()
     if (profit is not None and profit < 0) or "loss" in reason or "stop" in exit_rule:
         return "stop_loss_flow"
-    if (profit is not None and profit > 0) or any(token in exit_rule for token in ("profit", "trailing", "target")):
+    if (profit is not None and profit > 0) or any(
+        token in exit_rule for token in ("profit", "trailing", "target")
+    ):
         return "take_profit_flow"
     return "other_sell_flow"
 
 
-def _post_sell_flow_diagnostics(*, target_date: str, post_sell_dir: Path) -> dict[str, Any]:
-    candidates = _read_jsonl(_post_sell_path(post_sell_dir, "post_sell_candidates", target_date))
-    evaluations = _read_jsonl(_post_sell_path(post_sell_dir, "post_sell_evaluations", target_date))
+def _post_sell_flow_diagnostics(
+    *, target_date: str, post_sell_dir: Path
+) -> dict[str, Any]:
+    candidates = _read_jsonl(
+        _post_sell_path(post_sell_dir, "post_sell_candidates", target_date)
+    )
+    evaluations = _read_jsonl(
+        _post_sell_path(post_sell_dir, "post_sell_evaluations", target_date)
+    )
     outcome_counter = Counter(str(row.get("outcome") or "-") for row in evaluations)
     flow_counter = Counter(_sell_flow(row) for row in evaluations)
-    missed_rows = [row for row in evaluations if str(row.get("outcome") or "") == "MISSED_UPSIDE"]
+    missed_rows = [
+        row for row in evaluations if str(row.get("outcome") or "") == "MISSED_UPSIDE"
+    ]
     bad_entry_rows = [
         row
         for row in evaluations
         if (_safe_float(row.get("profit_rate"), 0.0) or 0.0) < 0
-        and (_safe_float((row.get("metrics_10m") or {}).get("mfe_vs_buy_pct"), -999.0) or -999.0) <= 0
+        and (
+            _safe_float((row.get("metrics_10m") or {}).get("mfe_vs_buy_pct"), -999.0)
+            or -999.0
+        )
+        <= 0
     ]
     return {
         "candidate_count": len(candidates),
@@ -1251,13 +1467,22 @@ def _post_sell_flow_diagnostics(*, target_date: str, post_sell_dir: Path) -> dic
                 "flow": _sell_flow(row),
                 "profit_rate": _safe_float(row.get("profit_rate")),
                 "exit_rule": row.get("exit_rule") or "",
-                "mfe_10m_pct": _safe_float((row.get("metrics_10m") or {}).get("mfe_pct")),
-                "mfe_vs_buy_10m_pct": _safe_float((row.get("metrics_10m") or {}).get("mfe_vs_buy_pct")),
-                "ai_score_at_exit": _safe_float(row.get("ai_score_at_exit") or row.get("current_ai_score")),
+                "mfe_10m_pct": _safe_float(
+                    (row.get("metrics_10m") or {}).get("mfe_pct")
+                ),
+                "mfe_vs_buy_10m_pct": _safe_float(
+                    (row.get("metrics_10m") or {}).get("mfe_vs_buy_pct")
+                ),
+                "ai_score_at_exit": _safe_float(
+                    row.get("ai_score_at_exit") or row.get("current_ai_score")
+                ),
             }
             for row in sorted(
                 missed_rows,
-                key=lambda item: _safe_float((item.get("metrics_10m") or {}).get("mfe_pct"), -999.0) or -999.0,
+                key=lambda item: _safe_float(
+                    (item.get("metrics_10m") or {}).get("mfe_pct"), -999.0
+                )
+                or -999.0,
                 reverse=True,
             )[:12]
         ],
@@ -1268,8 +1493,12 @@ def _post_sell_flow_diagnostics(*, target_date: str, post_sell_dir: Path) -> dic
                 "sell_time": row.get("sell_time") or "",
                 "profit_rate": _safe_float(row.get("profit_rate")),
                 "exit_rule": row.get("exit_rule") or "",
-                "mfe_vs_buy_10m_pct": _safe_float((row.get("metrics_10m") or {}).get("mfe_vs_buy_pct")),
-                "ai_score_at_exit": _safe_float(row.get("ai_score_at_exit") or row.get("current_ai_score")),
+                "mfe_vs_buy_10m_pct": _safe_float(
+                    (row.get("metrics_10m") or {}).get("mfe_vs_buy_pct")
+                ),
+                "ai_score_at_exit": _safe_float(
+                    row.get("ai_score_at_exit") or row.get("current_ai_score")
+                ),
             }
             for row in bad_entry_rows[:12]
         ],
@@ -1285,12 +1514,20 @@ def _summarize_code(
     promotion_source_rows: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     stage_counts = Counter(str(row.get("stage") or "") for row in rows)
-    name = next((str(row.get("stock_name") or "") for row in rows if row.get("stock_name")), "")
-    promotion_rows = promotion_source_rows if promotion_source_rows is not None else rows
-    promoted_rows = [row for row in promotion_rows if row.get("stage") == PROMOTED_STAGE]
+    name = next(
+        (str(row.get("stock_name") or "") for row in rows if row.get("stock_name")), ""
+    )
+    promotion_rows = (
+        promotion_source_rows if promotion_source_rows is not None else rows
+    )
+    promoted_rows = [
+        row for row in promotion_rows if row.get("stage") == PROMOTED_STAGE
+    ]
     ai_rows = [row for row in rows if row.get("stage") == "ai_confirmed"]
     real_submit_rows = [
-        row for row in rows if str(_field(row, "actual_order_submitted")).lower() == REAL_SUBMIT_TRUE
+        row
+        for row in rows
+        if str(_field(row, "actual_order_submitted")).lower() == REAL_SUBMIT_TRUE
     ]
     blocker_rows = [row for row in rows if _is_blocker_row(row)]
     budget_deferred_rows = [
@@ -1299,7 +1536,11 @@ def _summarize_code(
         if _blocker_reason(row) == "scanner_full_eval_loop_budget_deferred"
     ]
     latest_budget_deferred = budget_deferred_rows[-1] if budget_deferred_rows else {}
-    queue_counts = {stage: stage_counts.get(stage, 0) for stage in QUEUE_STAGES if stage_counts.get(stage, 0)}
+    queue_counts = {
+        stage: stage_counts.get(stage, 0)
+        for stage in QUEUE_STAGES
+        if stage_counts.get(stage, 0)
+    }
     latest_ai = ai_rows[-1] if ai_rows else {}
     entry_ai_snapshot = _latest_entry_ai_action_snapshot(rows)
     max_delta = _max_delta(rows)
@@ -1308,22 +1549,32 @@ def _summarize_code(
         "stock_name": name,
         "promoted_count": len(promoted_rows),
         "first_promoted_at": _event_time(promoted_rows[0]) if promoted_rows else "",
-        "promoted_in_event_window": any(row.get("stage") == PROMOTED_STAGE for row in rows),
+        "promoted_in_event_window": any(
+            row.get("stage") == PROMOTED_STAGE for row in rows
+        ),
         "last_event_at": _event_time(rows[-1]) if rows else "",
         "max_price_delta_since_first_seen_pct": max_delta,
         "latest_price_delta_since_first_seen_pct": _latest_delta(rows),
         "ai_confirmed_count": len(ai_rows),
         "latest_ai_action": _field(latest_ai, "action") if latest_ai else "",
-        "latest_ai_score": _safe_float(_field(latest_ai, "ai_score")) if latest_ai else None,
+        "latest_ai_score": (
+            _safe_float(_field(latest_ai, "ai_score")) if latest_ai else None
+        ),
         "rising_missed_entry_ai_action": entry_ai_snapshot["action"],
         "rising_missed_entry_ai_action_source": entry_ai_snapshot["field"],
         "rising_missed_entry_ai_action_stage": entry_ai_snapshot["stage"],
         "rising_missed_entry_ai_action_emitted_at": entry_ai_snapshot["emitted_at"],
-        "rising_missed_entry_ai_not_evaluated_excluded": str(entry_ai_snapshot["action"]).strip().lower()
+        "rising_missed_entry_ai_not_evaluated_excluded": str(
+            entry_ai_snapshot["action"]
+        )
+        .strip()
+        .lower()
         == "not_evaluated",
-        "latest_entry_score_threshold": _safe_float(_field(latest_ai, "entry_score_threshold"))
-        if latest_ai
-        else None,
+        "latest_entry_score_threshold": (
+            _safe_float(_field(latest_ai, "entry_score_threshold"))
+            if latest_ai
+            else None
+        ),
         "real_submit_count": len(real_submit_rows),
         "blocker_count": len(blocker_rows),
         "dominant_blocker": _dominant_blocker(rows),
@@ -1332,16 +1583,30 @@ def _summarize_code(
         "latest_blocker": _latest_blocker(rows),
         "latency_danger_root_cause": _latency_danger_root_cause_summary(blocker_rows),
         "queue_observation_counts": queue_counts,
-        "low_ai_or_negative_pressure_eval_quality": _low_ai_pressure_quality_counts(rows),
-        "stale_or_delayed_eval_category_counts": _stale_or_delayed_eval_category_counts(rows),
-        "unresolved_stale_low_ai_or_pressure_eval_count": _unresolved_stale_low_ai_pressure_count(rows),
-        "zero_strength_history_source_quality": _zero_strength_history_source_quality(rows),
+        "low_ai_or_negative_pressure_eval_quality": _low_ai_pressure_quality_counts(
+            rows
+        ),
+        "stale_or_delayed_eval_category_counts": _stale_or_delayed_eval_category_counts(
+            rows
+        ),
+        "unresolved_stale_low_ai_or_pressure_eval_count": _unresolved_stale_low_ai_pressure_count(
+            rows
+        ),
+        "zero_strength_history_source_quality": _zero_strength_history_source_quality(
+            rows
+        ),
         "scanner_full_eval_budget_deferred": {
             "count": len(budget_deferred_rows),
             "status": _full_eval_deferred_status(rows, budget_deferred_rows),
-            "latest_at": _event_time(latest_budget_deferred) if latest_budget_deferred else "",
-            "scanner_full_eval_limit": _safe_float(_field(latest_budget_deferred, "scanner_full_eval_limit")),
-            "scanner_full_eval_count": _safe_float(_field(latest_budget_deferred, "scanner_full_eval_count")),
+            "latest_at": (
+                _event_time(latest_budget_deferred) if latest_budget_deferred else ""
+            ),
+            "scanner_full_eval_limit": _safe_float(
+                _field(latest_budget_deferred, "scanner_full_eval_limit")
+            ),
+            "scanner_full_eval_count": _safe_float(
+                _field(latest_budget_deferred, "scanner_full_eval_count")
+            ),
             "scanner_rising_full_eval_extra_limit": _safe_float(
                 _field(latest_budget_deferred, "scanner_rising_full_eval_extra_limit")
             ),
@@ -1378,20 +1643,42 @@ def _summarize_code(
                 "price_delta_since_first_seen_pct": _safe_float(
                     _field(row, "price_delta_since_first_seen_pct")
                 ),
-                "rising_entry_relief_eligible": _field(row, "rising_entry_relief_eligible", ""),
-                "rising_entry_relief_reason": _field(row, "rising_entry_relief_reason", ""),
-                "scanner_positive_delta_pct": _safe_float(_field(row, "scanner_positive_delta_pct")),
-                "scanner_full_eval_budget_source": _field(row, "scanner_full_eval_budget_source", ""),
-                "rising_missed_selection_prior_key": _field(row, "rising_missed_selection_prior_key", ""),
-                "rising_missed_selection_recommendation": _field(row, "rising_missed_selection_recommendation", ""),
-                "rising_missed_selection_confidence": _field(row, "rising_missed_selection_confidence", ""),
+                "rising_entry_relief_eligible": _field(
+                    row, "rising_entry_relief_eligible", ""
+                ),
+                "rising_entry_relief_reason": _field(
+                    row, "rising_entry_relief_reason", ""
+                ),
+                "scanner_positive_delta_pct": _safe_float(
+                    _field(row, "scanner_positive_delta_pct")
+                ),
+                "scanner_full_eval_budget_source": _field(
+                    row, "scanner_full_eval_budget_source", ""
+                ),
+                "rising_missed_selection_prior_key": _field(
+                    row, "rising_missed_selection_prior_key", ""
+                ),
+                "rising_missed_selection_recommendation": _field(
+                    row, "rising_missed_selection_recommendation", ""
+                ),
+                "rising_missed_selection_confidence": _field(
+                    row, "rising_missed_selection_confidence", ""
+                ),
                 "rising_missed_selection_score_delta": _safe_float(
                     _field(row, "rising_missed_selection_score_delta")
                 ),
-                "rising_missed_selection_rank_reason": _field(row, "rising_missed_selection_rank_reason", ""),
-                "rising_missed_selection_match_type": _field(row, "rising_missed_selection_match_type", ""),
-                "scanner_full_eval_limit": _safe_float(_field(row, "scanner_full_eval_limit")),
-                "scanner_full_eval_count": _safe_float(_field(row, "scanner_full_eval_count")),
+                "rising_missed_selection_rank_reason": _field(
+                    row, "rising_missed_selection_rank_reason", ""
+                ),
+                "rising_missed_selection_match_type": _field(
+                    row, "rising_missed_selection_match_type", ""
+                ),
+                "scanner_full_eval_limit": _safe_float(
+                    _field(row, "scanner_full_eval_limit")
+                ),
+                "scanner_full_eval_count": _safe_float(
+                    _field(row, "scanner_full_eval_count")
+                ),
                 "scanner_rising_full_eval_extra_limit": _safe_float(
                     _field(row, "scanner_rising_full_eval_extra_limit")
                 ),
@@ -1400,11 +1687,14 @@ def _summarize_code(
                 ),
                 "eviction_reason": _field(row, "eviction_reason", ""),
                 "terminal_reason": _field(row, "terminal_reason", ""),
-                "eviction_attempt_count": _safe_float(_field(row, "eviction_attempt_count")),
+                "eviction_attempt_count": _safe_float(
+                    _field(row, "eviction_attempt_count")
+                ),
                 "stale_age_sec": _safe_float(_field(row, "stale_age_sec")),
                 **(
                     _latency_danger_event_fields(row)
-                    if row.get("stage") == "latency_block" and _blocker_reason(row) == "latency_state_danger"
+                    if row.get("stage") == "latency_block"
+                    and _blocker_reason(row) == "latency_state_danger"
                     else {}
                 ),
                 "taxonomy": _blocker_taxonomy(
@@ -1412,9 +1702,16 @@ def _summarize_code(
                     reason=_blocker_reason(row),
                     count=1,
                     max_delta_pct=max_delta,
-                    latency_root_cause=_latency_danger_cause(row.get("fields") if isinstance(row.get("fields"), dict) else {})
-                    if row.get("stage") == "latency_block" and _blocker_reason(row) == "latency_state_danger"
-                    else "",
+                    latency_root_cause=(
+                        _latency_danger_cause(
+                            row.get("fields")
+                            if isinstance(row.get("fields"), dict)
+                            else {}
+                        )
+                        if row.get("stage") == "latency_block"
+                        and _blocker_reason(row) == "latency_state_danger"
+                        else ""
+                    ),
                 ),
             }
             for row in blocker_rows[-8:]
@@ -1433,9 +1730,12 @@ def _rollup_blocker_taxonomy(items: list[dict[str, Any]]) -> dict[str, Any]:
             (
                 blocker.get("stage") or "",
                 blocker.get("reason") or "",
-                str(blocker.get("latency_root_cause") or "")
-                if blocker.get("stage") == "latency_block" and blocker.get("reason") == "latency_state_danger"
-                else "",
+                (
+                    str(blocker.get("latency_root_cause") or "")
+                    if blocker.get("stage") == "latency_block"
+                    and blocker.get("reason") == "latency_state_danger"
+                    else ""
+                ),
             )
             for blocker in item.get("recent_blockers") or []
             if blocker.get("stage")
@@ -1452,16 +1752,12 @@ def _rollup_blocker_taxonomy(items: list[dict[str, Any]]) -> dict[str, Any]:
                 max_delta_pct=max_delta,
                 latency_root_cause=latency_root_cause,
             )
-            if (
-                item.get("rising_missed_class")
-                in {
-                    RISING_MISSED_CLASS_SOURCE_QUALITY_EXCLUDED,
-                    RISING_MISSED_CLASS_NOT_RISING,
-                }
-                and taxonomy["class"] in {
-                    "source_freshness_blocker",
-                }
-            ):
+            if item.get("rising_missed_class") in {
+                RISING_MISSED_CLASS_SOURCE_QUALITY_EXCLUDED,
+                RISING_MISSED_CLASS_NOT_RISING,
+            } and taxonomy["class"] in {
+                "source_freshness_blocker",
+            }:
                 taxonomy = {
                     **taxonomy,
                     "class": "source_quality_exclusion_candidate",
@@ -1473,11 +1769,19 @@ def _rollup_blocker_taxonomy(items: list[dict[str, Any]]) -> dict[str, Any]:
             route = taxonomy["route"]
             class_counter[block_class] += effective_count
             route_counter[(block_class, route)] += effective_count
-            target = actionable_counter if taxonomy["major_blocker"] else suppressed_non_major_counter
+            target = (
+                actionable_counter
+                if taxonomy["major_blocker"]
+                else suppressed_non_major_counter
+            )
             target[(block_class, stage, reason)] += effective_count
     suppressed_non_major_counts = [
         {"class": block_class, "stage": stage, "reason": reason, "count": count}
-        for (block_class, stage, reason), count in suppressed_non_major_counter.most_common()
+        for (
+            block_class,
+            stage,
+            reason,
+        ), count in suppressed_non_major_counter.most_common()
     ]
     return {
         "class_counts": _top_counter(class_counter, key_name="class"),
@@ -1508,7 +1812,10 @@ def _rollup_blockers(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         for blocker in item["recent_blockers"]:
             stage = blocker.get("stage") or ""
             reason = blocker.get("reason") or ""
-            if stage and (reason in RELIEF_BLOCKER_REASONS or stage == "scalping_scanner_watch_eviction"):
+            if stage and (
+                reason in RELIEF_BLOCKER_REASONS
+                or stage == "scalping_scanner_watch_eviction"
+            ):
                 counter[(stage, reason)] += 1
     return [
         {"stage": stage, "reason": reason, "count": count}
@@ -1527,7 +1834,9 @@ def _rollup_low_ai_pressure_quality(items: list[dict[str, Any]]) -> dict[str, in
     }
 
 
-def _rollup_stale_or_delayed_eval_categories(items: list[dict[str, Any]]) -> dict[str, int]:
+def _rollup_stale_or_delayed_eval_categories(
+    items: list[dict[str, Any]],
+) -> dict[str, int]:
     counter: Counter[str] = Counter()
     for item in items:
         counter.update(item.get("stale_or_delayed_eval_category_counts") or {})
@@ -1535,22 +1844,33 @@ def _rollup_stale_or_delayed_eval_categories(items: list[dict[str, Any]]) -> dic
         "diagnostic_quote_age_stale": int(counter.get("diagnostic_quote_age_stale", 0)),
         "full_eval_delay": int(counter.get("full_eval_delay", 0)),
         "ws_quote_missing": int(counter.get("ws_quote_missing", 0)),
-        "pre_ai_stale_or_history_gap": int(counter.get("pre_ai_stale_or_history_gap", 0)),
+        "pre_ai_stale_or_history_gap": int(
+            counter.get("pre_ai_stale_or_history_gap", 0)
+        ),
         "pre_submit_hard_stale": int(counter.get("pre_submit_hard_stale", 0)),
     }
 
 
 def _rollup_unresolved_stale_low_ai_pressure_count(items: list[dict[str, Any]]) -> int:
-    return sum(int(item.get("unresolved_stale_low_ai_or_pressure_eval_count") or 0) for item in items)
+    return sum(
+        int(item.get("unresolved_stale_low_ai_or_pressure_eval_count") or 0)
+        for item in items
+    )
 
 
-def _unresolved_stale_low_ai_pressure_symbols(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _unresolved_stale_low_ai_pressure_symbols(
+    items: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     symbols = []
     for item in items:
         count = int(item.get("unresolved_stale_low_ai_or_pressure_eval_count") or 0)
         if count <= 0:
             continue
-        latest = item.get("latest_blocker") if isinstance(item.get("latest_blocker"), dict) else {}
+        latest = (
+            item.get("latest_blocker")
+            if isinstance(item.get("latest_blocker"), dict)
+            else {}
+        )
         symbols.append(
             {
                 "stock_code": item.get("stock_code") or "",
@@ -1560,10 +1880,14 @@ def _unresolved_stale_low_ai_pressure_symbols(items: list[dict[str, Any]]) -> li
                 "latest_reason": latest.get("reason") or "",
             }
         )
-    return sorted(symbols, key=lambda item: int(item.get("event_count") or 0), reverse=True)
+    return sorted(
+        symbols, key=lambda item: int(item.get("event_count") or 0), reverse=True
+    )
 
 
-def _scanner_full_eval_budget_diagnostics(items: list[dict[str, Any]]) -> dict[str, Any]:
+def _scanner_full_eval_budget_diagnostics(
+    items: list[dict[str, Any]],
+) -> dict[str, Any]:
     symbol_rows: list[dict[str, Any]] = []
     total_count = 0
     for item in items:
@@ -1578,13 +1902,24 @@ def _scanner_full_eval_budget_diagnostics(items: list[dict[str, Any]]) -> dict[s
                 "stock_name": item.get("stock_name") or "",
                 "count": count,
                 "latest_at": budget.get("latest_at") or "",
-                "latest_price_delta_since_first_seen_pct": item.get("latest_price_delta_since_first_seen_pct"),
-                "max_price_delta_since_first_seen_pct": item.get("max_price_delta_since_first_seen_pct"),
+                "latest_price_delta_since_first_seen_pct": item.get(
+                    "latest_price_delta_since_first_seen_pct"
+                ),
+                "max_price_delta_since_first_seen_pct": item.get(
+                    "max_price_delta_since_first_seen_pct"
+                ),
                 "scanner_full_eval_limit": budget.get("scanner_full_eval_limit"),
-                "scanner_rising_full_eval_extra_limit": budget.get("scanner_rising_full_eval_extra_limit"),
-                "scanner_rising_full_eval_relief_count": budget.get("scanner_rising_full_eval_relief_count"),
+                "scanner_rising_full_eval_extra_limit": budget.get(
+                    "scanner_rising_full_eval_extra_limit"
+                ),
+                "scanner_rising_full_eval_relief_count": budget.get(
+                    "scanner_rising_full_eval_relief_count"
+                ),
                 "scanner_full_eval_count": budget.get("scanner_full_eval_count"),
-                "scanner_full_eval_budget_source": budget.get("scanner_full_eval_budget_source") or "",
+                "scanner_full_eval_budget_source": budget.get(
+                    "scanner_full_eval_budget_source"
+                )
+                or "",
                 "deferred_status": budget.get("status") or "deferred_never_evaluated",
             }
         )
@@ -1600,7 +1935,10 @@ def _scanner_full_eval_budget_diagnostics(items: list[dict[str, Any]]) -> dict[s
         "symbol_count": len(symbol_rows),
         "top_symbols": symbol_rows[:12],
         "status_counts": _top_counter(
-            Counter(str(row.get("deferred_status") or "deferred_never_evaluated") for row in symbol_rows),
+            Counter(
+                str(row.get("deferred_status") or "deferred_never_evaluated")
+                for row in symbol_rows
+            ),
             key_name="status",
         ),
         "decision_authority": "diagnostic_only_no_runtime_budget_change",
@@ -1615,14 +1953,21 @@ def _scanner_full_eval_budget_diagnostics(items: list[dict[str, Any]]) -> dict[s
     }
 
 
-def _actionable_scanner_full_eval_backpressure(scanner_budget: dict[str, Any]) -> list[dict[str, Any]]:
+def _actionable_scanner_full_eval_backpressure(
+    scanner_budget: dict[str, Any],
+) -> list[dict[str, Any]]:
     actionable_rows: list[dict[str, Any]] = []
     for row in scanner_budget.get("top_symbols") or []:
         count = int(row.get("count") or 0)
-        max_delta = _safe_float(row.get("max_price_delta_since_first_seen_pct"), 0.0) or 0.0
+        max_delta = (
+            _safe_float(row.get("max_price_delta_since_first_seen_pct"), 0.0) or 0.0
+        )
         if row.get("deferred_status") == "deferred_then_evaluated":
             continue
-        if count < ACTIONABLE_FULL_EVAL_DEFERRED_MIN_COUNT and max_delta < ACTIONABLE_FULL_EVAL_DEFERRED_MIN_DELTA_PCT:
+        if (
+            count < ACTIONABLE_FULL_EVAL_DEFERRED_MIN_COUNT
+            and max_delta < ACTIONABLE_FULL_EVAL_DEFERRED_MIN_DELTA_PCT
+        ):
             continue
         actionable_rows.append(row)
     total_count = sum(int(row.get("count") or 0) for row in actionable_rows)
@@ -1639,7 +1984,9 @@ def _actionable_scanner_full_eval_backpressure(scanner_budget: dict[str, Any]) -
     ]
 
 
-def _zero_strength_history_workorders(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _zero_strength_history_workorders(
+    items: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     workorders: list[dict[str, Any]] = []
     for item in items:
         quality = item.get("zero_strength_history_source_quality") or {}
@@ -1690,7 +2037,9 @@ def _zero_strength_history_workorders(items: list[dict[str, Any]]) -> list[dict[
     return sorted(workorders, key=lambda item: item["event_count"], reverse=True)
 
 
-def _runtime_attach_identity_workorders(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _runtime_attach_identity_workorders(
+    items: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     workorders: list[dict[str, Any]] = []
     for item in items:
         mismatch = item.get("runtime_attach_identity_mismatch") or {}
@@ -1747,7 +2096,11 @@ def _freshness_recovery_workorders(items: list[dict[str, Any]]) -> list[dict[str
         history_gap = int(categories.get("pre_ai_stale_or_history_gap") or 0)
         if diagnostic_stale <= 0 and history_gap <= 0:
             continue
-        latest = item.get("latest_blocker") if isinstance(item.get("latest_blocker"), dict) else {}
+        latest = (
+            item.get("latest_blocker")
+            if isinstance(item.get("latest_blocker"), dict)
+            else {}
+        )
         workorders.append(
             {
                 "workorder_type": "bounded_rising_candidate_freshness_recheck",
@@ -1756,7 +2109,9 @@ def _freshness_recovery_workorders(items: list[dict[str, Any]]) -> list[dict[str
                 "diagnostic_quote_age_stale": diagnostic_stale,
                 "pre_ai_stale_or_history_gap": history_gap,
                 "event_count": diagnostic_stale + history_gap,
-                "max_price_delta_since_first_seen_pct": item.get("max_price_delta_since_first_seen_pct"),
+                "max_price_delta_since_first_seen_pct": item.get(
+                    "max_price_delta_since_first_seen_pct"
+                ),
                 "latest_stage": latest.get("stage") or "",
                 "latest_reason": latest.get("reason") or "",
                 "decision_authority": "source_quality_only",
@@ -1791,19 +2146,38 @@ def _freshness_recovery_workorders(items: list[dict[str, Any]]) -> list[dict[str
         workorders,
         key=lambda item: (
             int(item.get("event_count") or 0),
-            _safe_float(item.get("max_price_delta_since_first_seen_pct"), -999.0) or -999.0,
+            _safe_float(item.get("max_price_delta_since_first_seen_pct"), -999.0)
+            or -999.0,
         ),
         reverse=True,
     )
 
 
-def _rising_missed_classification_for_item(item: dict[str, Any], *, rising_threshold_pct: float) -> dict[str, Any]:
-    dominant = item.get("dominant_actionable_blocker") if isinstance(item.get("dominant_actionable_blocker"), dict) else {}
+def _rising_missed_classification_for_item(
+    item: dict[str, Any], *, rising_threshold_pct: float
+) -> dict[str, Any]:
+    dominant = (
+        item.get("dominant_actionable_blocker")
+        if isinstance(item.get("dominant_actionable_blocker"), dict)
+        else {}
+    )
     blocker_class = str(dominant.get("class") or "")
     blocker_route = str(dominant.get("route") or "")
-    budget = item.get("scanner_full_eval_budget_deferred") if isinstance(item.get("scanner_full_eval_budget_deferred"), dict) else {}
-    quality = item.get("zero_strength_history_source_quality") if isinstance(item.get("zero_strength_history_source_quality"), dict) else {}
-    recent_blockers = item.get("recent_blockers") if isinstance(item.get("recent_blockers"), list) else []
+    budget = (
+        item.get("scanner_full_eval_budget_deferred")
+        if isinstance(item.get("scanner_full_eval_budget_deferred"), dict)
+        else {}
+    )
+    quality = (
+        item.get("zero_strength_history_source_quality")
+        if isinstance(item.get("zero_strength_history_source_quality"), dict)
+        else {}
+    )
+    recent_blockers = (
+        item.get("recent_blockers")
+        if isinstance(item.get("recent_blockers"), list)
+        else []
+    )
     recent_taxonomies = [
         row.get("taxonomy")
         for row in recent_blockers
@@ -1819,14 +2193,18 @@ def _rising_missed_classification_for_item(item: dict[str, Any], *, rising_thres
     )
     source_quality_excluded = (
         int(item.get("unresolved_stale_low_ai_or_pressure_eval_count") or 0) > 0
-        or int((item.get("runtime_attach_identity_mismatch") or {}).get("count") or 0) > 0
+        or int((item.get("runtime_attach_identity_mismatch") or {}).get("count") or 0)
+        > 0
         or int(quality.get("event_count") or 0) >= ZERO_HISTORY_WORKORDER_MIN_EVENTS
         or blocker_class in {"source_freshness_blocker", "source_freshness_evictable"}
         or bool(item.get("rising_missed_entry_ai_not_evaluated_excluded"))
     )
     intended_guard_preserved = (
         blocker_class in {"submit_hard_guard", "intended_guard"}
-        or (blocker_class == "pre_submit_quality_guard" and blocker_route.startswith("known_"))
+        or (
+            blocker_class == "pre_submit_quality_guard"
+            and blocker_route.startswith("known_")
+        )
         or recent_preserved_guard
     )
     runtime_backpressure_observation = int(budget.get("count") or 0) > 0
@@ -1851,9 +2229,12 @@ def _rising_missed_classification_for_item(item: dict[str, Any], *, rising_thres
     )
     return {
         "rising_missed_class": classification.rising_missed_class,
-        "rising_missed_class_reason": BLOCK_ENTRY_AI_NOT_EVALUATED
-        if classification.rising_missed and item.get("rising_missed_entry_ai_not_evaluated_excluded")
-        else classification.reason,
+        "rising_missed_class_reason": (
+            BLOCK_ENTRY_AI_NOT_EVALUATED
+            if classification.rising_missed
+            and item.get("rising_missed_entry_ai_not_evaluated_excluded")
+            else classification.reason
+        ),
         "rising_missed_one_share_eligible": classification.one_share_eligible,
         "rising_missed_class_flags": {
             RISING_MISSED_CLASS_SOURCE_QUALITY_EXCLUDED: source_quality_excluded,
@@ -1878,9 +2259,15 @@ def _root_cause_priorities(
     priorities: list[dict[str, Any]] = []
 
     zero_history = _zero_strength_history_workorders(rising_missed)
-    stale_eval_count = _rollup_low_ai_pressure_quality(rising_missed).get("stale_or_delayed_eval", 0)
-    unresolved_stale_eval_count = _rollup_unresolved_stale_low_ai_pressure_count(rising_missed)
-    unresolved_stale_eval_symbols = _unresolved_stale_low_ai_pressure_symbols(rising_missed)
+    stale_eval_count = _rollup_low_ai_pressure_quality(rising_missed).get(
+        "stale_or_delayed_eval", 0
+    )
+    unresolved_stale_eval_count = _rollup_unresolved_stale_low_ai_pressure_count(
+        rising_missed
+    )
+    unresolved_stale_eval_symbols = _unresolved_stale_low_ai_pressure_symbols(
+        rising_missed
+    )
     if zero_history or unresolved_stale_eval_count:
         priorities.append(
             {
@@ -1904,7 +2291,9 @@ def _root_cause_priorities(
                         }
                         for item in zero_history[:8]
                     ],
-                    "top_unresolved_stale_eval_symbols": unresolved_stale_eval_symbols[:8],
+                    "top_unresolved_stale_eval_symbols": unresolved_stale_eval_symbols[
+                        :8
+                    ],
                 },
                 "next_action": "inspect_ws_strength_momentum_history_and_subscription_recheck_flow",
                 "runtime_effect": False,
@@ -1933,7 +2322,8 @@ def _root_cause_priorities(
                 },
                 "next_action": "raise_only_bounded_scanner_eval_capacity_if_high_delta_candidates_keep_deferred",
                 "runtime_effect": False,
-                "forbidden_uses": scanner_budget.get("forbidden_uses") or [
+                "forbidden_uses": scanner_budget.get("forbidden_uses")
+                or [
                     "buy_score_relaxation",
                     "threshold_relaxation",
                     "stale_submit_bypass",
@@ -1945,7 +2335,11 @@ def _root_cause_priorities(
     ai_wait = 0
     for item in rising_missed:
         for blocker in item.get("recent_blockers") or []:
-            if blocker.get("stage") in {"blocked_ai_score", "ai_confirmed_terminal_no_budget", "first_ai_wait"}:
+            if blocker.get("stage") in {
+                "blocked_ai_score",
+                "ai_confirmed_terminal_no_budget",
+                "first_ai_wait",
+            }:
                 ai_wait += 1
     if ai_wait:
         priorities.append(
@@ -1961,7 +2355,9 @@ def _root_cause_priorities(
                             "stock_code": item.get("stock_code") or "",
                             "stock_name": item.get("stock_name") or "",
                             "latest_ai_score": item.get("latest_ai_score"),
-                            "latest_entry_score_threshold": item.get("latest_entry_score_threshold"),
+                            "latest_entry_score_threshold": item.get(
+                                "latest_entry_score_threshold"
+                            ),
                             "latest_blocker": item.get("latest_blocker") or {},
                         }
                         for item in rising_missed[:8]
@@ -1988,7 +2384,10 @@ def _root_cause_priorities(
                 "evidence": {
                     "block_or_unfilled_count": price_block_count,
                     "candidate_failure_count": price_candidate_failure_count,
-                    "candidate_failure_reason_counts": entry_price.get("candidate_failure_reason_counts") or [],
+                    "candidate_failure_reason_counts": entry_price.get(
+                        "candidate_failure_reason_counts"
+                    )
+                    or [],
                     "stage_counts": entry_price.get("stage_counts") or [],
                     "recent_issues": entry_price.get("recent_issues") or [],
                 },
@@ -2012,7 +2411,8 @@ def _root_cause_priorities(
                 "evidence": {
                     "blocked_count": scale_block_count,
                     "executed_count": int(scale_in.get("executed_count") or 0),
-                    "blocker_reason_counts": scale_in.get("blocker_reason_counts") or [],
+                    "blocker_reason_counts": scale_in.get("blocker_reason_counts")
+                    or [],
                     "recent_blockers": scale_in.get("recent_blockers") or [],
                 },
                 "next_action": "separate_price_guard_qty_guard_and_window_guard_before_scale_in_change",
@@ -2045,15 +2445,21 @@ def _root_cause_priorities(
             }
         )
 
-    if int(post_sell.get("missed_upside_count") or 0) or int(post_sell.get("bad_entry_after_sell_count") or 0):
+    if int(post_sell.get("missed_upside_count") or 0) or int(
+        post_sell.get("bad_entry_after_sell_count") or 0
+    ):
         priorities.append(
             {
                 "priority": 7,
                 "issue": "post_sell_missed_upside_or_bad_entry",
                 "decision": "use_as_exit_entry_diagnostic_not_intraday_exit_mutation",
                 "evidence": {
-                    "missed_upside_count": int(post_sell.get("missed_upside_count") or 0),
-                    "bad_entry_after_sell_count": int(post_sell.get("bad_entry_after_sell_count") or 0),
+                    "missed_upside_count": int(
+                        post_sell.get("missed_upside_count") or 0
+                    ),
+                    "bad_entry_after_sell_count": int(
+                        post_sell.get("bad_entry_after_sell_count") or 0
+                    ),
                     "top_missed_upside": post_sell.get("top_missed_upside") or [],
                     "bad_entry_examples": post_sell.get("bad_entry_examples") or [],
                 },
@@ -2100,25 +2506,40 @@ def build_report(
     all_rows = _read_jsonl(pipeline_path)
     normalized_since = _normalize_event_bound(since, target_date=target_date)
     normalized_until = _normalize_event_bound(event_until, target_date=target_date)
-    source_rows = [row for row in all_rows if not normalized_until or _event_time(row) <= normalized_until]
+    source_rows = [
+        row
+        for row in all_rows
+        if not normalized_until or _event_time(row) <= normalized_until
+    ]
     full_grouped = _entry_events(source_rows)
     rows = source_rows
     if normalized_since:
         rows = [row for row in rows if _event_time(row) >= normalized_since]
-    real_rows = _real_rows(all_rows, since=since, event_until=event_until, target_date=target_date)
+    real_rows = _real_rows(
+        all_rows, since=since, event_until=event_until, target_date=target_date
+    )
     grouped = _entry_events(rows)
     real_entry_event_count = sum(len(events) for events in grouped.values())
     summaries = [
-        _summarize_code(code, events, promotion_source_rows=full_grouped.get(code, events))
+        _summarize_code(
+            code, events, promotion_source_rows=full_grouped.get(code, events)
+        )
         for code, events in grouped.items()
-        if any(row.get("stage") == PROMOTED_STAGE for row in full_grouped.get(code, events))
+        if any(
+            row.get("stage") == PROMOTED_STAGE for row in full_grouped.get(code, events)
+        )
     ]
     for item in summaries:
-        item.update(_rising_missed_classification_for_item(item, rising_threshold_pct=rising_threshold_pct))
+        item.update(
+            _rising_missed_classification_for_item(
+                item, rising_threshold_pct=rising_threshold_pct
+            )
+        )
     rising_missed = [
         item
         for item in summaries
-        if item.get("rising_missed_class") not in {
+        if item.get("rising_missed_class")
+        not in {
             RISING_MISSED_CLASS_NOT_RISING,
             RISING_MISSED_CLASS_SUBMITTED_RESOLVED,
         }
@@ -2127,7 +2548,8 @@ def build_report(
     rising_missed_ai_not_evaluated_excluded = [
         item
         for item in summaries
-        if item.get("rising_missed_class") not in {
+        if item.get("rising_missed_class")
+        not in {
             RISING_MISSED_CLASS_NOT_RISING,
             RISING_MISSED_CLASS_SUBMITTED_RESOLVED,
         }
@@ -2136,7 +2558,8 @@ def build_report(
     falling_submitted = [
         item
         for item in summaries
-        if (item["latest_price_delta_since_first_seen_pct"] or 0.0) <= falling_threshold_pct
+        if (item["latest_price_delta_since_first_seen_pct"] or 0.0)
+        <= falling_threshold_pct
         and item["real_submit_count"] > 0
     ]
     non_rising_promoted = [
@@ -2147,7 +2570,8 @@ def build_report(
     falling_promoted = [
         item
         for item in summaries
-        if (item["latest_price_delta_since_first_seen_pct"] or 0.0) <= falling_threshold_pct
+        if (item["latest_price_delta_since_first_seen_pct"] or 0.0)
+        <= falling_threshold_pct
     ]
     blocker_counter: Counter[tuple[str, str]] = Counter()
     for item in summaries:
@@ -2164,10 +2588,12 @@ def build_report(
     blocker_taxonomy = _rollup_blocker_taxonomy(summaries)
     selection_prior_counts = _selection_prior_counts(rising_missed)
     selection_positive_or_recheck_count = sum(
-        selection_prior_counts.get(key, 0) for key in ("positive_prior", "recheck_prior")
+        selection_prior_counts.get(key, 0)
+        for key in ("positive_prior", "recheck_prior")
     )
     selection_risk_count = sum(
-        selection_prior_counts.get(key, 0) for key in SELECTION_PRIOR_RISK_RECOMMENDATIONS
+        selection_prior_counts.get(key, 0)
+        for key in SELECTION_PRIOR_RISK_RECOMMENDATIONS
     )
     return {
         "schema_version": 1,
@@ -2385,10 +2811,13 @@ def build_report(
                 rising_missed_ai_not_evaluated_excluded
             ),
             "rising_missed_ai_not_evaluated_excluded_symbols": [
-                item.get("stock_code") or "" for item in rising_missed_ai_not_evaluated_excluded
+                item.get("stock_code") or ""
+                for item in rising_missed_ai_not_evaluated_excluded
             ],
             "falling_real_submitted_count": len(falling_submitted),
-            "real_submit_symbol_count": sum(1 for item in summaries if item["real_submit_count"] > 0),
+            "real_submit_symbol_count": sum(
+                1 for item in summaries if item["real_submit_count"] > 0
+            ),
             "excluded_analysis_scope": "sim_swing_and_rising_missed_forced_one_share_events",
             "rising_missed_low_ai_or_negative_pressure_eval_quality": _rollup_low_ai_pressure_quality(
                 rising_missed
@@ -2418,7 +2847,9 @@ def build_report(
                 scanner_budget.get("symbol_count") or 0
             ),
             "rising_missed_class_counts": _top_counter(
-                Counter(str(item.get("rising_missed_class") or "") for item in rising_missed),
+                Counter(
+                    str(item.get("rising_missed_class") or "") for item in rising_missed
+                ),
                 key_name="class",
             ),
             "rising_missed_selection_prior_recommendation_counts": _top_counter(
@@ -2428,7 +2859,9 @@ def build_report(
             "rising_missed_selection_positive_or_recheck_count": selection_positive_or_recheck_count,
             "rising_missed_selection_risk_count": selection_risk_count,
             "rising_missed_one_share_eligible_symbol_count": sum(
-                1 for item in rising_missed if bool(item.get("rising_missed_one_share_eligible"))
+                1
+                for item in rising_missed
+                if bool(item.get("rising_missed_one_share_eligible"))
             ),
             "actionable_major_blocker_count": sum(
                 int(item.get("count") or 0)
@@ -2440,15 +2873,21 @@ def build_report(
             ),
         },
         "source_quality_workorders": {
-            "repeated_zero_strength_history": _zero_strength_history_workorders(summaries),
+            "repeated_zero_strength_history": _zero_strength_history_workorders(
+                summaries
+            ),
             "rising_missed_repeated_zero_strength_history": _zero_strength_history_workorders(
                 rising_missed
             ),
-            "runtime_attach_identity_mismatch": _runtime_attach_identity_workorders(summaries),
+            "runtime_attach_identity_mismatch": _runtime_attach_identity_workorders(
+                summaries
+            ),
             "rising_missed_runtime_attach_identity_mismatch": _runtime_attach_identity_workorders(
                 rising_missed
             ),
-            "rising_missed_freshness_recovery": _freshness_recovery_workorders(rising_missed),
+            "rising_missed_freshness_recovery": _freshness_recovery_workorders(
+                rising_missed
+            ),
         },
         "root_cause_priorities": _root_cause_priorities(
             rising_missed=rising_missed,
@@ -2490,7 +2929,12 @@ def build_report(
 
 
 def _default_pipeline_path(target_date: str) -> Path:
-    plain_path = PROJECT_ROOT / "data" / "pipeline_events" / f"pipeline_events_{target_date}.jsonl"
+    plain_path = (
+        PROJECT_ROOT
+        / "data"
+        / "pipeline_events"
+        / f"pipeline_events_{target_date}.jsonl"
+    )
     if plain_path.exists():
         return plain_path
     gz_path = plain_path.with_suffix(plain_path.suffix + ".gz")
@@ -2532,7 +2976,10 @@ def _build_write_report(args: argparse.Namespace) -> dict[str, Any]:
         event_until=args.event_until,
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    output_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
     return {
         "output": str(output_path),
         **report["summary"],
@@ -2541,15 +2988,25 @@ def _build_write_report(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Build intraday entry blocker diagnostics from pipeline events.")
+    parser = argparse.ArgumentParser(
+        description="Build intraday entry blocker diagnostics from pipeline events."
+    )
     parser.add_argument("--target-date", default=datetime.now().strftime("%Y-%m-%d"))
     parser.add_argument("--pipeline-path", type=Path)
     parser.add_argument("--post-sell-dir", type=Path)
     parser.add_argument("--output", type=Path)
-    parser.add_argument("--since", help="Only include events with emitted_at at or after this ISO timestamp.")
-    parser.add_argument("--event-until", help="Only include events with emitted_at at or before this ISO timestamp.")
+    parser.add_argument(
+        "--since",
+        help="Only include events with emitted_at at or after this ISO timestamp.",
+    )
+    parser.add_argument(
+        "--event-until",
+        help="Only include events with emitted_at at or before this ISO timestamp.",
+    )
     parser.add_argument("--print-summary", action="store_true")
-    parser.add_argument("--loop", action="store_true", help="Repeat report generation until --until.")
+    parser.add_argument(
+        "--loop", action="store_true", help="Repeat report generation until --until."
+    )
     parser.add_argument("--interval-sec", type=int, default=180)
     parser.add_argument("--until", help="Stop after local HH:MM, for example 19:00.")
     parser.add_argument("--buy-window-only", action="store_true")
@@ -2558,8 +3015,16 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     until = _parse_hhmm(args.until) if args.until else None
-    buy_start = _parse_hhmm(args.buy_window_start) if args.buy_window_start else DEFAULT_BUY_WINDOW_START
-    buy_end = _parse_hhmm(args.buy_window_end) if args.buy_window_end else DEFAULT_BUY_WINDOW_END
+    buy_start = (
+        _parse_hhmm(args.buy_window_start)
+        if args.buy_window_start
+        else DEFAULT_BUY_WINDOW_START
+    )
+    buy_end = (
+        _parse_hhmm(args.buy_window_end)
+        if args.buy_window_end
+        else DEFAULT_BUY_WINDOW_END
+    )
     interval_sec = max(1, int(args.interval_sec or 180))
 
     while True:
@@ -2568,18 +3033,26 @@ def main(argv: list[str] | None = None) -> int:
             if args.print_summary:
                 print(
                     json.dumps(
-                        {"status": "stopped_after_until", "now": now_value.isoformat(timespec="seconds")},
+                        {
+                            "status": "stopped_after_until",
+                            "now": now_value.isoformat(timespec="seconds"),
+                        },
                         ensure_ascii=False,
                         sort_keys=True,
                     ),
                     flush=True,
                 )
             break
-        if args.buy_window_only and not _within_time_window(now_value, start=buy_start, end=buy_end):
+        if args.buy_window_only and not _within_time_window(
+            now_value, start=buy_start, end=buy_end
+        ):
             if args.print_summary:
                 print(
                     json.dumps(
-                        {"status": "paused_outside_buy_window", "now": now_value.isoformat(timespec="seconds")},
+                        {
+                            "status": "paused_outside_buy_window",
+                            "now": now_value.isoformat(timespec="seconds"),
+                        },
                         ensure_ascii=False,
                         sort_keys=True,
                     ),
@@ -2588,7 +3061,9 @@ def main(argv: list[str] | None = None) -> int:
         else:
             summary = _build_write_report(args)
             if args.print_summary:
-                print(json.dumps(summary, ensure_ascii=False, sort_keys=True), flush=True)
+                print(
+                    json.dumps(summary, ensure_ascii=False, sort_keys=True), flush=True
+                )
         if not args.loop:
             break
         time.sleep(interval_sec)

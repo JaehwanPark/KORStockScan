@@ -19,7 +19,6 @@ from src.utils.constants import DATA_DIR
 from src.utils.jsonl_io import existing_or_gzip_path
 from src.utils.market_day import is_krx_trading_day
 
-
 REPORT_TYPE = "stop_loss_recovery_backtest"
 SCHEMA_VERSION = 1
 REPORT_DIR = DATA_DIR / "report" / REPORT_TYPE
@@ -93,7 +92,9 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return default
 
 
-def _percentile(values: list[float], pct: float, default: float | None = None) -> float | None:
+def _percentile(
+    values: list[float], pct: float, default: float | None = None
+) -> float | None:
     usable = sorted(v for v in values if math.isfinite(v))
     if not usable:
         return default
@@ -108,7 +109,9 @@ def _percentile(values: list[float], pct: float, default: float | None = None) -
 
 
 def _event_path(target_date: str) -> Path:
-    return existing_or_gzip_path(PIPELINE_EVENTS_DIR / f"pipeline_events_{target_date}.jsonl")
+    return existing_or_gzip_path(
+        PIPELINE_EVENTS_DIR / f"pipeline_events_{target_date}.jsonl"
+    )
 
 
 def _iter_jsonl(path: Path) -> Iterable[dict[str, Any]]:
@@ -180,7 +183,9 @@ def _allowed_by_clean_baseline(row: dict[str, Any], policy: dict[str, Any]) -> b
     if not baseline_text:
         return True
     try:
-        baseline = datetime.fromisoformat(baseline_text.replace("Z", "+00:00")).timestamp()
+        baseline = datetime.fromisoformat(
+            baseline_text.replace("Z", "+00:00")
+        ).timestamp()
     except Exception:
         return False
     emitted = _parse_emitted_at(row)
@@ -203,22 +208,39 @@ def _sell_reason(row: dict[str, Any]) -> str:
 
 def _is_non_real(row: dict[str, Any]) -> bool:
     fields = _fields(row)
-    return fields.get("actual_order_submitted") is False or fields.get("broker_order_forbidden") is True
+    return (
+        fields.get("actual_order_submitted") is False
+        or fields.get("broker_order_forbidden") is True
+    )
 
 
 def _is_loss_exit(row: dict[str, Any]) -> bool:
     text = " ".join(
         str(value or "").lower()
-        for value in (row.get("stage"), _exit_rule(row), _sell_reason(row), _fields(row).get("reason"))
+        for value in (
+            row.get("stage"),
+            _exit_rule(row),
+            _sell_reason(row),
+            _fields(row).get("reason"),
+        )
     )
     profit = _safe_float(_fields(row).get("profit_rate"), 0.0)
-    return _sell_reason(row) == "LOSS" or profit < 0 or any(token in text for token in LOSS_TOKENS)
+    return (
+        _sell_reason(row) == "LOSS"
+        or profit < 0
+        or any(token in text for token in LOSS_TOKENS)
+    )
 
 
 def _is_hard_safety_exit(row: dict[str, Any]) -> bool:
     text = " ".join(
         str(value or "").lower()
-        for value in (row.get("stage"), _exit_rule(row), _sell_reason(row), _fields(row).get("reason"))
+        for value in (
+            row.get("stage"),
+            _exit_rule(row),
+            _sell_reason(row),
+            _fields(row).get("reason"),
+        )
     )
     return any(token in text for token in HARD_SAFETY_TOKENS)
 
@@ -246,7 +268,12 @@ def _exit_family(row: dict[str, Any]) -> str:
 
 def _evaluation_key(row: dict[str, Any]) -> tuple[str, str]:
     fields = _fields(row)
-    record_id = str(row.get("record_id") or fields.get("record_id") or fields.get("recommendation_id") or "").strip()
+    record_id = str(
+        row.get("record_id")
+        or fields.get("record_id")
+        or fields.get("recommendation_id")
+        or ""
+    ).strip()
     sim_id = str(fields.get("sim_record_id") or row.get("sim_record_id") or "").strip()
     if sim_id:
         return "sim", sim_id
@@ -255,12 +282,16 @@ def _evaluation_key(row: dict[str, Any]) -> tuple[str, str]:
 
 def _load_evaluations(target_date: str) -> dict[tuple[str, str], dict[str, Any]]:
     result: dict[tuple[str, str], dict[str, Any]] = {}
-    real_path = existing_or_gzip_path(POST_SELL_DIR / f"post_sell_evaluations_{target_date}.jsonl")
+    real_path = existing_or_gzip_path(
+        POST_SELL_DIR / f"post_sell_evaluations_{target_date}.jsonl"
+    )
     for row in _iter_jsonl(real_path):
         key = str(row.get("recommendation_id") or row.get("record_id") or "").strip()
         if key:
             result[("real", key)] = row
-    sim_path = existing_or_gzip_path(POST_SELL_DIR / f"sim_post_sell_evaluations_{target_date}.jsonl")
+    sim_path = existing_or_gzip_path(
+        POST_SELL_DIR / f"sim_post_sell_evaluations_{target_date}.jsonl"
+    )
     for row in _iter_jsonl(sim_path):
         key = str(row.get("sim_record_id") or "").strip()
         if key:
@@ -275,11 +306,17 @@ def _metric_for(evaluation: dict[str, Any], horizon: int) -> dict[str, Any]:
 
 def _avg_down_recovery(evaluation: dict[str, Any]) -> dict[str, Any]:
     if not evaluation:
-        return {"status": "missing_post_sell_evaluation", "avg_down_recovery_possible": False}
+        return {
+            "status": "missing_post_sell_evaluation",
+            "avg_down_recovery_possible": False,
+        }
     buy_price = _safe_float(evaluation.get("buy_price"), 0.0)
     sell_price = _safe_float(evaluation.get("sell_price"), 0.0)
     if buy_price <= 0 or sell_price <= 0:
-        return {"status": "missing_buy_or_sell_price", "avg_down_recovery_possible": False}
+        return {
+            "status": "missing_buy_or_sell_price",
+            "avg_down_recovery_possible": False,
+        }
     ratio = ASSUMED_AVG_DOWN_RATIO
     break_even_price = ((buy_price * 1.0) + (sell_price * ratio)) / (1.0 + ratio)
     break_even_from_sell_pct = ((break_even_price / sell_price) - 1.0) * 100.0
@@ -335,15 +372,13 @@ def _recommend_stop_line(family: str, rows: list[dict[str, Any]]) -> dict[str, A
         if (row.get("avg_down_recovery") or {}).get("avg_down_recovery_possible")
     ]
     loss_values = [
-        abs(_safe_float(row.get("profit_rate"), float("nan")))
-        for row in evaluated
+        abs(_safe_float(row.get("profit_rate"), float("nan"))) for row in evaluated
     ]
     loss_values = [value for value in loss_values if math.isfinite(value)]
+    mfe_values = [_max_mfe_pct(row.get("avg_down_recovery") or {}) for row in evaluated]
     mfe_values = [
-        _max_mfe_pct(row.get("avg_down_recovery") or {})
-        for row in evaluated
+        value for value in mfe_values if value is not None and math.isfinite(value)
     ]
-    mfe_values = [value for value in mfe_values if value is not None and math.isfinite(value)]
     missing_count = len(eligible) - len(evaluated)
     evaluated_count = len(evaluated)
     evaluated_rate = evaluated_count / len(eligible) if eligible else 0.0
@@ -372,7 +407,10 @@ def _recommend_stop_line(family: str, rows: list[dict[str, Any]]) -> dict[str, A
         "confidence": "insufficient_evaluated_sample",
         "rationale": "insufficient evaluated post-sell MFE sample",
     }
-    if family == "scalp_hard_soft_stop" and evaluated_count >= MIN_STOP_RECOMMENDATION_EVALUATED_SAMPLE:
+    if (
+        family == "scalp_hard_soft_stop"
+        and evaluated_count >= MIN_STOP_RECOMMENDATION_EVALUATED_SAMPLE
+    ):
         recommendation.update(
             {
                 "confidence": "directional_cumulative",
@@ -425,7 +463,9 @@ def _scale_in_counterfactual_summary(target_date: str) -> dict[str, Any]:
     return {
         "status": "loaded",
         "path": str(path),
-        "summary": payload.get("summary") if isinstance(payload.get("summary"), dict) else {},
+        "summary": (
+            payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+        ),
         "cohort_count": len(payload.get("cohorts") or []),
     }
 
@@ -468,15 +508,23 @@ def build_report(
             summary_by_family[family]["exit_count"] += 1
             summary_by_family[family]["hard_safety_count"] += int(hard_safety)
             summary_by_family[family]["recovery_eligible_count"] += int(not hard_safety)
-            summary_by_family[family]["avg_down_recovery_possible_count"] += int(recovery_possible and not hard_safety)
+            summary_by_family[family]["avg_down_recovery_possible_count"] += int(
+                recovery_possible and not hard_safety
+            )
             rows.append(
                 {
                     "source_date": source_date,
                     "event_stage": event.get("stage"),
                     "record_id": key[1],
                     "record_key_type": key[0],
-                    "stock_code": str(event.get("stock_code") or _fields(event).get("stock_code") or "")[:6],
-                    "stock_name": event.get("stock_name") or _fields(event).get("stock_name") or "-",
+                    "stock_code": str(
+                        event.get("stock_code")
+                        or _fields(event).get("stock_code")
+                        or ""
+                    )[:6],
+                    "stock_name": event.get("stock_name")
+                    or _fields(event).get("stock_name")
+                    or "-",
                     "exit_rule": _exit_rule(event),
                     "sell_reason_type": _sell_reason(event),
                     "profit_rate": _fields(event).get("profit_rate"),
@@ -568,7 +616,9 @@ def build_markdown(report: dict[str, Any]) -> str:
             f"recovery_possible={row.get('avg_down_recovery_possible_count', 0)}, "
             f"hard_safety={row.get('hard_safety_count', 0)}"
         )
-    recommendations = report.get("summary", {}).get("stop_line_recommendations_by_family") or {}
+    recommendations = (
+        report.get("summary", {}).get("stop_line_recommendations_by_family") or {}
+    )
     if recommendations:
         lines.extend(["", "## Stop Line Recommendations"])
         for family, row in recommendations.items():
@@ -584,21 +634,30 @@ def build_markdown(report: dict[str, Any]) -> str:
 
 def write_outputs(report: dict[str, Any]) -> tuple[Path, Path]:
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
-    json_path, md_path = report_paths(str(report.get("date") or date.today().isoformat()))
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    json_path, md_path = report_paths(
+        str(report.get("date") or date.today().isoformat())
+    )
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
     md_path.write_text(build_markdown(report), encoding="utf-8")
     return json_path, md_path
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Build stop-loss recovery backtest report.")
+    parser = argparse.ArgumentParser(
+        description="Build stop-loss recovery backtest report."
+    )
     parser.add_argument("--date", dest="target_date", default=date.today().isoformat())
     parser.add_argument("--start-date")
     parser.add_argument("--end-date")
     parser.add_argument("--write", action="store_true")
     parser.add_argument("--print", dest="print_stdout", action="store_true")
     args = parser.parse_args(argv)
-    report = build_report(args.target_date, start_date=args.start_date, end_date=args.end_date)
+    report = build_report(
+        args.target_date, start_date=args.start_date, end_date=args.end_date
+    )
     if args.write:
         json_path, md_path = write_outputs(report)
         print(f"Wrote {json_path}")

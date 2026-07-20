@@ -13,7 +13,6 @@ from src.engine.error_detectors.base import (
     register_detector,
 )
 
-
 LOCK_DIR = PROJECT_ROOT / "tmp"
 MAX_LOCK_AGE_SEC = 3600
 MAX_LOCKS_TO_CLEAN = 20
@@ -38,8 +37,14 @@ class StaleLockDetector(BaseDetector):
         stale_not_cleaned: list[str] = []
         would_clean: list[str] = []
         details: dict = {}
-        max_age = int(getattr(TRADING_RULES, "ERROR_DETECTOR_STALE_LOCK_MAX_AGE_SEC", MAX_LOCK_AGE_SEC))
-        cleanup_enabled = bool(getattr(TRADING_RULES, "ERROR_DETECTOR_STALE_LOCK_CLEANUP_ENABLED", True))
+        max_age = int(
+            getattr(
+                TRADING_RULES, "ERROR_DETECTOR_STALE_LOCK_MAX_AGE_SEC", MAX_LOCK_AGE_SEC
+            )
+        )
+        cleanup_enabled = bool(
+            getattr(TRADING_RULES, "ERROR_DETECTOR_STALE_LOCK_CLEANUP_ENABLED", True)
+        )
 
         lock_files = sorted(
             [p for p in LOCK_DIR.glob("*.lock") if p.is_file()],
@@ -83,7 +88,9 @@ class StaleLockDetector(BaseDetector):
                 parts.append(f"{len(stale_not_cleaned)} still locked")
             if would_clean:
                 parts.append(f"{len(would_clean)} would clean (dry-run)")
-            summary = "Stale locks: " + "; ".join(parts) if parts else "All locks healthy."
+            summary = (
+                "Stale locks: " + "; ".join(parts) if parts else "All locks healthy."
+            )
             severity = "warning" if (cleaned or stale_not_cleaned) else "pass"
             action = f"Cleanup performed: {', '.join(cleaned[:5])}" if cleaned else ""
             return DetectionResult(
@@ -109,6 +116,7 @@ class StaleLockDetector(BaseDetector):
             with open(lock_path, "a+b") as fp:
                 try:
                     import fcntl
+
                     fcntl.flock(fp, fcntl.LOCK_EX | fcntl.LOCK_NB)
                     os.remove(lock_path)
                     return True

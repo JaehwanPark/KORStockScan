@@ -150,15 +150,26 @@ HOOK_CLASS_BY_PATTERN = {
 
 def report_paths(target_date: str) -> tuple[Path, Path]:
     base = f"{REPORT_TYPE}_{target_date}"
-    return REPORT_DIR / REPORT_TYPE / f"{base}.json", REPORT_DIR / REPORT_TYPE / f"{base}.md"
+    return (
+        REPORT_DIR / REPORT_TYPE / f"{base}.json",
+        REPORT_DIR / REPORT_TYPE / f"{base}.md",
+    )
 
 
 def producer_gap_report_path(target_date: str) -> Path:
-    return REPORT_DIR / "producer_gap_discovery" / f"producer_gap_discovery_{target_date}.json"
+    return (
+        REPORT_DIR
+        / "producer_gap_discovery"
+        / f"producer_gap_discovery_{target_date}.json"
+    )
 
 
 def stage_hook_runtime_scaffold_report_path(target_date: str) -> Path:
-    return REPORT_DIR / "stage_hook_runtime_scaffold" / f"stage_hook_runtime_scaffold_{target_date}.json"
+    return (
+        REPORT_DIR
+        / "stage_hook_runtime_scaffold"
+        / f"stage_hook_runtime_scaffold_{target_date}.json"
+    )
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -181,25 +192,76 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
 
 
 def _slug(text: str) -> str:
-    return "".join(ch.lower() if ch.isalnum() else "_" for ch in str(text)).strip("_")[:96] or "unknown"
+    return (
+        "".join(ch.lower() if ch.isalnum() else "_" for ch in str(text)).strip("_")[:96]
+        or "unknown"
+    )
 
 
-def _score_from_candidate(candidate: dict[str, Any]) -> tuple[float, dict[str, float], list[str], str]:
+def _score_from_candidate(
+    candidate: dict[str, Any],
+) -> tuple[float, dict[str, float], list[str], str]:
     sample_component = min(25.0, _safe_float(candidate.get("sample_count"), 0.0) * 1.5)
-    evidence_text = " ".join(str(item) for item in candidate.get("evidence") or []).lower()
-    strict = _safe_float(next((item.split("=", 1)[1] for item in candidate.get("evidence") or [] if str(item).startswith("strict_match_count=")), 0.0), 0.0)
-    ambiguous = _safe_float(next((item.split("=", 1)[1] for item in candidate.get("evidence") or [] if str(item).startswith("ambiguous_match_count=")), 0.0), 0.0)
+    evidence_text = " ".join(
+        str(item) for item in candidate.get("evidence") or []
+    ).lower()
+    strict = _safe_float(
+        next(
+            (
+                item.split("=", 1)[1]
+                for item in candidate.get("evidence") or []
+                if str(item).startswith("strict_match_count=")
+            ),
+            0.0,
+        ),
+        0.0,
+    )
+    ambiguous = _safe_float(
+        next(
+            (
+                item.split("=", 1)[1]
+                for item in candidate.get("evidence") or []
+                if str(item).startswith("ambiguous_match_count=")
+            ),
+            0.0,
+        ),
+        0.0,
+    )
     entry_time_field_rate = _safe_float(
         next(
-            (item.split("=", 1)[1] for item in candidate.get("evidence") or [] if str(item).startswith("entry_time_field_rate=")),
+            (
+                item.split("=", 1)[1]
+                for item in candidate.get("evidence") or []
+                if str(item).startswith("entry_time_field_rate=")
+            ),
             1.0,
         ),
         1.0,
     )
     strict_component = min(25.0, strict * 2.0)
-    recurrence_component = 15.0 if "top_symbols=" in evidence_text or strict >= 2 else 5.0
-    ev_component = 20.0 if any(token in evidence_text for token in ("estimated_uplift", "expected_ev", "positive", "giveback")) else 6.0
-    mapping_component = 15.0 if any(token in evidence_text for token in ("required_producer", "required_microstructure", "required_comparison")) else 8.0
+    recurrence_component = (
+        15.0 if "top_symbols=" in evidence_text or strict >= 2 else 5.0
+    )
+    ev_component = (
+        20.0
+        if any(
+            token in evidence_text
+            for token in ("estimated_uplift", "expected_ev", "positive", "giveback")
+        )
+        else 6.0
+    )
+    mapping_component = (
+        15.0
+        if any(
+            token in evidence_text
+            for token in (
+                "required_producer",
+                "required_microstructure",
+                "required_comparison",
+            )
+        )
+        else 8.0
+    )
     penalties = []
     risk_penalty = 0.0
     if ambiguous > strict and ambiguous > 0:
@@ -209,7 +271,18 @@ def _score_from_candidate(candidate: dict[str, Any]) -> tuple[float, dict[str, f
         risk_penalty += 40.0
         penalties.append("entry_time_provenance_penalty")
     source_quality_score = max(0.0, 100.0 - risk_penalty - min(30.0, ambiguous * 4.0))
-    score = max(0.0, min(100.0, sample_component + strict_component + recurrence_component + ev_component + mapping_component - risk_penalty))
+    score = max(
+        0.0,
+        min(
+            100.0,
+            sample_component
+            + strict_component
+            + recurrence_component
+            + ev_component
+            + mapping_component
+            - risk_penalty,
+        ),
+    )
     components = {
         "sample": sample_component,
         "strict_chronology": strict_component,
@@ -237,15 +310,26 @@ def _contract_from_candidate(candidate: dict[str, Any]) -> dict[str, Any] | None
     if isinstance(runtime_contract, dict) and runtime_contract.get("hook_name"):
         hook_name = str(runtime_contract.get("hook_name"))
         hook_class = "runtime_arbitration_hook"
-        stage = str(runtime_contract.get("stage") or candidate.get("lifecycle_stage") or "holding_exit")
+        stage = str(
+            runtime_contract.get("stage")
+            or candidate.get("lifecycle_stage")
+            or "holding_exit"
+        )
         action_namespace = list(runtime_contract.get("action_namespace") or [])
-        required_artifacts = list(runtime_contract.get("required_source_artifacts") or [])
+        required_artifacts = list(
+            runtime_contract.get("required_source_artifacts") or []
+        )
     elif pattern_type in HOOK_CLASS_BY_PATTERN:
-        hook_name, hook_class, stage, action_namespace, required_artifacts = HOOK_CLASS_BY_PATTERN[pattern_type]
+        hook_name, hook_class, stage, action_namespace, required_artifacts = (
+            HOOK_CLASS_BY_PATTERN[pattern_type]
+        )
     else:
         return None
     score, components, penalties, tier = _score_from_candidate(candidate)
-    if hook_class == "source_schema_provenance_hook" and tier == "implementation_workorder_ready":
+    if (
+        hook_class == "source_schema_provenance_hook"
+        and tier == "implementation_workorder_ready"
+    ):
         tier = "hook_design_ready"
     return {
         "hook_name": hook_name,
@@ -285,8 +369,14 @@ def _contract_from_candidate(candidate: dict[str, Any]) -> dict[str, Any] | None
 
 def _deterministic_proposal(candidate: dict[str, Any]) -> dict[str, Any]:
     candidate_id = str(candidate.get("candidate_id") or "unknown")
-    contract = candidate.get("stage_hook_candidate_contract") if isinstance(candidate.get("stage_hook_candidate_contract"), dict) else {}
-    readiness = str(contract.get("readiness_tier") or candidate.get("readiness_tier") or "")
+    contract = (
+        candidate.get("stage_hook_candidate_contract")
+        if isinstance(candidate.get("stage_hook_candidate_contract"), dict)
+        else {}
+    )
+    readiness = str(
+        contract.get("readiness_tier") or candidate.get("readiness_tier") or ""
+    )
     if readiness == "blocked_by_source_quality":
         decision = "source_quality_gap"
     elif readiness == "implementation_workorder_ready":
@@ -304,7 +394,9 @@ def _deterministic_proposal(candidate: dict[str, Any]) -> dict[str, Any]:
             f"{contract.get('hook_name')}_source_dimension",
         ],
         "reasoning_summary": "Deterministic stage-hook detector mapped producer gaps to source-only hook workorder readiness.",
-        "confidence": "high" if readiness == "implementation_workorder_ready" else "medium",
+        "confidence": (
+            "high" if readiness == "implementation_workorder_ready" else "medium"
+        ),
         "required_source_fields": list(REQUIRED_METRIC_CONTRACT_FIELDS),
         "forbidden_uses": list(FORBIDDEN_USES),
         "evidence_authority_contract": evidence_authority_contract(),
@@ -314,14 +406,24 @@ def _deterministic_proposal(candidate: dict[str, Any]) -> dict[str, Any]:
 
 
 def _default_ai_proposal(candidate: dict[str, Any]) -> dict[str, Any]:
-    deterministic = candidate.get("deterministic_proposal") if isinstance(candidate.get("deterministic_proposal"), dict) else {}
+    deterministic = (
+        candidate.get("deterministic_proposal")
+        if isinstance(candidate.get("deterministic_proposal"), dict)
+        else {}
+    )
     return {
         "candidate_id": str(candidate.get("candidate_id") or "unknown"),
         "proposal_source": "ai_tier2",
         "proposal_status": "not_provided",
         "proposal_decision": "reject",
-        "recommended_canonical_bucket": deterministic.get("recommended_canonical_bucket") or "",
-        "recommended_metric_or_dimension": deterministic.get("recommended_metric_or_dimension") or [],
+        "recommended_canonical_bucket": deterministic.get(
+            "recommended_canonical_bucket"
+        )
+        or "",
+        "recommended_metric_or_dimension": deterministic.get(
+            "recommended_metric_or_dimension"
+        )
+        or [],
         "reasoning_summary": "AI Tier2 hook proposal unavailable; fail-closed comparative review remains source-only.",
         "confidence": "low",
         "required_source_fields": list(REQUIRED_METRIC_CONTRACT_FIELDS),
@@ -330,11 +432,18 @@ def _default_ai_proposal(candidate: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _attach_deterministic_proposals(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [{**candidate, "deterministic_proposal": _deterministic_proposal(candidate)} for candidate in candidates]
+def _attach_deterministic_proposals(
+    candidates: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    return [
+        {**candidate, "deterministic_proposal": _deterministic_proposal(candidate)}
+        for candidate in candidates
+    ]
 
 
-def _deterministic_candidates(target_date: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+def _deterministic_candidates(
+    target_date: str,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     producer_gap = _load_json(producer_gap_report_path(target_date))
     candidates_by_hook: dict[str, dict[str, Any]] = {}
     consumed_ids = []
@@ -354,9 +463,14 @@ def _deterministic_candidates(target_date: str) -> tuple[list[dict[str, Any]], d
             if source_candidate_id not in source_ids:
                 source_ids.append(source_candidate_id)
             existing_contract["source_candidate_ids"] = source_ids
-            existing_contract["source_candidate_id"] = source_ids[0] if source_ids else source_candidate_id
+            existing_contract["source_candidate_id"] = (
+                source_ids[0] if source_ids else source_candidate_id
+            )
             existing_contract["source_pattern_types"] = sorted(
-                set(existing_contract.get("source_pattern_types") or [existing_contract.get("source_pattern_type")])
+                set(
+                    existing_contract.get("source_pattern_types")
+                    or [existing_contract.get("source_pattern_type")]
+                )
                 | {str(contract.get("source_pattern_type") or "")}
             )
             merged_evidence = list(existing.get("evidence") or [])
@@ -371,13 +485,19 @@ def _deterministic_candidates(target_date: str) -> tuple[list[dict[str, Any]], d
                 existing["priority"] = "high"
             continue
         contract["source_candidate_ids"] = [source_candidate_id]
-        contract["source_pattern_types"] = [str(contract.get("source_pattern_type") or "")]
+        contract["source_pattern_types"] = [
+            str(contract.get("source_pattern_type") or "")
+        ]
         candidates_by_hook[hook_name] = {
             "candidate_id": f"stage_hook_{_slug(hook_name)}",
             "hook_name": contract["hook_name"],
             "hook_class": contract["hook_class"],
             "stage": contract["stage"],
-            "priority": "high" if contract["readiness_tier"] == "implementation_workorder_ready" else "medium",
+            "priority": (
+                "high"
+                if contract["readiness_tier"] == "implementation_workorder_ready"
+                else "medium"
+            ),
             "readiness_tier": contract["readiness_tier"],
             "runtime_effect": False,
             "allowed_runtime_apply": False,
@@ -392,7 +512,9 @@ def _deterministic_candidates(target_date: str) -> tuple[list[dict[str, Any]], d
     return candidates, {
         "producer_gap_artifact": str(producer_gap_report_path(target_date)),
         "producer_gap_status": producer_gap.get("status"),
-        "producer_gap_candidate_count": len(producer_gap.get("producer_gap_candidates") or []),
+        "producer_gap_candidate_count": len(
+            producer_gap.get("producer_gap_candidates") or []
+        ),
         "consumed_candidate_ids": consumed_ids,
     }
 
@@ -437,7 +559,9 @@ def _ai_review_config(
     return resolve_postclose_ai_review_config(
         "STAGE_HOOK_WORKORDER_DISCOVERY",
         default_model=AI_REVIEW_MODEL,
-        default_reasoning_effort="low" if attempt_role == "retry" else AI_REVIEW_REASONING_EFFORT,
+        default_reasoning_effort=(
+            "low" if attempt_role == "retry" else AI_REVIEW_REASONING_EFFORT
+        ),
         default_timeout_sec=AI_REVIEW_TIMEOUT_SEC,
         attempt_role=attempt_role,
         retry_reason=retry_reason,
@@ -456,7 +580,11 @@ def _call_openai_ai_review(
         if status != "parsed":
             return False, status
         audit = payload.get("audit") if isinstance(payload.get("audit"), dict) else {}
-        expected_ids = {str(item.get("candidate_id") or "") for item in context.get("candidates", []) if isinstance(item, dict)}
+        expected_ids = {
+            str(item.get("candidate_id") or "")
+            for item in context.get("candidates", [])
+            if isinstance(item, dict)
+        }
         review_rows = payload.get("candidate_reviews")
         proposal_rows = payload.get("ai_tier2_proposals")
         comparative_rows = payload.get("comparative_reviews")
@@ -467,22 +595,40 @@ def _call_openai_ai_review(
         if not isinstance(comparative_rows, list):
             return False, "missing_comparative_reviews"
         if expected_ids:
-            review_ids = {str(item.get("candidate_id") or "") for item in review_rows if isinstance(item, dict)}
-            proposal_ids = {str(item.get("candidate_id") or "") for item in proposal_rows if isinstance(item, dict)}
-            comparative_ids = {str(item.get("candidate_id") or "") for item in comparative_rows if isinstance(item, dict)}
+            review_ids = {
+                str(item.get("candidate_id") or "")
+                for item in review_rows
+                if isinstance(item, dict)
+            }
+            proposal_ids = {
+                str(item.get("candidate_id") or "")
+                for item in proposal_rows
+                if isinstance(item, dict)
+            }
+            comparative_ids = {
+                str(item.get("candidate_id") or "")
+                for item in comparative_rows
+                if isinstance(item, dict)
+            }
             if review_ids != expected_ids:
                 return False, "candidate_reviews_id_mismatch"
             if proposal_ids != expected_ids:
                 return False, "ai_tier2_proposals_id_mismatch"
             if comparative_ids != expected_ids:
                 return False, "comparative_reviews_id_mismatch"
-        if audit.get("status") not in {"pass", "correction_required", "insufficient_context"}:
+        if audit.get("status") not in {
+            "pass",
+            "correction_required",
+            "insufficient_context",
+        }:
             return False, "missing_audit_status"
         if warnings:
             return False, "warnings:" + ",".join(warnings[:3])
         return True, ""
 
-    from src.engine.ai.postclose_structured_review_provider import call_postclose_structured_review
+    from src.engine.ai.postclose_structured_review_provider import (
+        call_postclose_structured_review,
+    )
 
     return call_postclose_structured_review(
         context,
@@ -495,7 +641,9 @@ def _call_openai_ai_review(
     )
 
 
-def _parse_ai_review_response(raw_response: Any | None) -> tuple[str, dict[str, Any], list[str]]:
+def _parse_ai_review_response(
+    raw_response: Any | None,
+) -> tuple[str, dict[str, Any], list[str]]:
     if raw_response in (None, ""):
         return "missing", {}, ["ai_review_response_missing"]
     if isinstance(raw_response, dict):
@@ -521,14 +669,24 @@ def _parse_ai_review_response(raw_response: Any | None) -> tuple[str, dict[str, 
             warnings.append("ai_review_ai_tier2_proposal_invalid")
             continue
         if str(item.get("proposal_decision") or "") not in STAGE_HOOK_DUAL_DECISIONS:
-            warnings.append(f"ai_review_ai_proposal_decision_invalid:{item.get('candidate_id')}")
-        missing_contract = missing_metric_contract_fields(item.get("required_source_fields"))
+            warnings.append(
+                f"ai_review_ai_proposal_decision_invalid:{item.get('candidate_id')}"
+            )
+        missing_contract = missing_metric_contract_fields(
+            item.get("required_source_fields")
+        )
         if missing_contract:
-            warnings.append(f"ai_review_ai_proposal_contract_missing:{item.get('candidate_id')}:{','.join(missing_contract)}")
+            warnings.append(
+                f"ai_review_ai_proposal_contract_missing:{item.get('candidate_id')}:{','.join(missing_contract)}"
+            )
         if has_forbidden_runtime_leak(item):
-            warnings.append(f"ai_review_ai_proposal_forbidden_use_leak:{item.get('candidate_id')}")
+            warnings.append(
+                f"ai_review_ai_proposal_forbidden_use_leak:{item.get('candidate_id')}"
+            )
         if has_evidence_authority_violation(item):
-            warnings.append(f"ai_review_ai_proposal_evidence_authority_violation:{item.get('candidate_id')}")
+            warnings.append(
+                f"ai_review_ai_proposal_evidence_authority_violation:{item.get('candidate_id')}"
+            )
     proposal_ids = {
         str(item.get("candidate_id"))
         for item in payload.get("ai_tier2_proposals") or []
@@ -546,18 +704,39 @@ def _parse_ai_review_response(raw_response: Any | None) -> tuple[str, dict[str, 
             warnings.append("ai_review_comparative_review_invalid")
             continue
         if str(item.get("selected_decision") or "") not in STAGE_HOOK_DUAL_DECISIONS:
-            warnings.append(f"ai_review_comparative_decision_invalid:{item.get('candidate_id')}")
-        if str(item.get("selected_source") or "") not in {"deterministic", "ai_tier2", "hybrid", "reject"}:
-            warnings.append(f"ai_review_comparative_source_invalid:{item.get('candidate_id')}")
-        missing_contract = missing_metric_contract_fields(item.get("required_source_fields"))
+            warnings.append(
+                f"ai_review_comparative_decision_invalid:{item.get('candidate_id')}"
+            )
+        if str(item.get("selected_source") or "") not in {
+            "deterministic",
+            "ai_tier2",
+            "hybrid",
+            "reject",
+        }:
+            warnings.append(
+                f"ai_review_comparative_source_invalid:{item.get('candidate_id')}"
+            )
+        missing_contract = missing_metric_contract_fields(
+            item.get("required_source_fields")
+        )
         if missing_contract:
-            warnings.append(f"ai_review_comparative_contract_missing:{item.get('candidate_id')}:{','.join(missing_contract)}")
+            warnings.append(
+                f"ai_review_comparative_contract_missing:{item.get('candidate_id')}:{','.join(missing_contract)}"
+            )
         if has_forbidden_runtime_leak(item):
-            warnings.append(f"ai_review_comparative_forbidden_use_leak:{item.get('candidate_id')}")
+            warnings.append(
+                f"ai_review_comparative_forbidden_use_leak:{item.get('candidate_id')}"
+            )
         if has_evidence_authority_violation(item):
-            warnings.append(f"ai_review_comparative_evidence_authority_violation:{item.get('candidate_id')}")
+            warnings.append(
+                f"ai_review_comparative_evidence_authority_violation:{item.get('candidate_id')}"
+            )
     audit = payload.get("audit") if isinstance(payload.get("audit"), dict) else {}
-    if str(audit.get("status") or "") not in {"pass", "correction_required", "insufficient_context"}:
+    if str(audit.get("status") or "") not in {
+        "pass",
+        "correction_required",
+        "insufficient_context",
+    }:
         warnings.append("ai_review_audit_status_invalid")
     if not isinstance(audit.get("forbidden_use_violations"), list):
         warnings.append("ai_review_forbidden_use_violations_missing")
@@ -576,7 +755,11 @@ def _review_map(ai_payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 def _proposal_map(ai_payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return {
-        str(item.get("candidate_id")): {**item, "proposal_source": "ai_tier2", "proposal_status": "provided"}
+        str(item.get("candidate_id")): {
+            **item,
+            "proposal_source": "ai_tier2",
+            "proposal_status": "provided",
+        }
         for item in ai_payload.get("ai_tier2_proposals") or []
         if isinstance(item, dict) and item.get("candidate_id")
     }
@@ -591,7 +774,11 @@ def _comparative_map(ai_payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 
 def _scaffold_by_hook(scaffold_report: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    hooks = scaffold_report.get("implemented_hooks") if isinstance(scaffold_report.get("implemented_hooks"), list) else []
+    hooks = (
+        scaffold_report.get("implemented_hooks")
+        if isinstance(scaffold_report.get("implemented_hooks"), list)
+        else []
+    )
     return {
         str(item.get("hook_name")): item
         for item in hooks
@@ -601,9 +788,17 @@ def _scaffold_by_hook(scaffold_report: dict[str, Any]) -> dict[str, dict[str, An
     }
 
 
-def _apply_scaffold_implementation(candidate: dict[str, Any], scaffold_by_hook: dict[str, dict[str, Any]]) -> dict[str, Any]:
-    contract = candidate.get("stage_hook_candidate_contract") if isinstance(candidate.get("stage_hook_candidate_contract"), dict) else {}
-    hook_name = str(contract.get("hook_name") or candidate.get("hook_name") or "").strip()
+def _apply_scaffold_implementation(
+    candidate: dict[str, Any], scaffold_by_hook: dict[str, dict[str, Any]]
+) -> dict[str, Any]:
+    contract = (
+        candidate.get("stage_hook_candidate_contract")
+        if isinstance(candidate.get("stage_hook_candidate_contract"), dict)
+        else {}
+    )
+    hook_name = str(
+        contract.get("hook_name") or candidate.get("hook_name") or ""
+    ).strip()
     scaffold = scaffold_by_hook.get(hook_name)
     if not scaffold:
         return candidate
@@ -643,7 +838,8 @@ def _order_from_candidate(
         "title": f"Implement stage hook: {contract['hook_name']}",
         "source_report_type": REPORT_TYPE,
         "lifecycle_stage": contract.get("stage"),
-        "target_subsystem": review.get("target_subsystem") or f"stage_hook.{contract['hook_name']}",
+        "target_subsystem": review.get("target_subsystem")
+        or f"stage_hook.{contract['hook_name']}",
         "route": "implement_now",
         "priority": 1 if priority in {"critical", "high"} else 2,
         "stage_hook_priority": priority,
@@ -656,17 +852,26 @@ def _order_from_candidate(
         "initial_runtime_state": "disabled",
         "requires_separate_runtime_apply_candidate": True,
         "decision_authority": "stage_hook_workorder_source_only",
-        "intent": review.get("reason") or "Implement a disabled source-only stage hook scaffold after producer evidence surfaced readiness.",
+        "intent": review.get("reason")
+        or "Implement a disabled source-only stage hook scaffold after producer evidence surfaced readiness.",
         "expected_ev_effect": "none_direct_until_separate_runtime_apply_candidate",
-        "evidence": list(candidate.get("evidence") or []) + [f"readiness_tier={contract.get('readiness_tier')}"],
+        "evidence": list(candidate.get("evidence") or [])
+        + [f"readiness_tier={contract.get('readiness_tier')}"],
         "files_likely_touched": review.get("files_likely_touched")
-        or ["src/engine/automation/stage_hook_workorder_discovery.py", "src/engine/build_code_improvement_workorder.py"],
+        or [
+            "src/engine/automation/stage_hook_workorder_discovery.py",
+            "src/engine/build_code_improvement_workorder.py",
+        ],
         "acceptance_tests": review.get("acceptance_tests")
         or ["stage hook starts disabled/source-only", "forbidden uses remain blocked"],
         "implementation_requirements": review.get("implementation_requirements") or [],
         "stage_hook_candidate_contract": contract,
         "evidence_authority_contract": evidence_authority_contract(),
-        "canonical_bucket": comparative_review.get("recommended_canonical_bucket") if isinstance(comparative_review, dict) else None,
+        "canonical_bucket": (
+            comparative_review.get("recommended_canonical_bucket")
+            if isinstance(comparative_review, dict)
+            else None
+        ),
         "legacy_raw_bucket_key": contract.get("hook_name"),
         "deterministic_proposal": candidate.get("deterministic_proposal"),
         "ai_tier2_proposal": ai_tier2_proposal or {},
@@ -742,21 +947,51 @@ def build_stage_hook_workorder_discovery_report(
     ai_raw_response: Any | None = None,
 ) -> dict[str, Any]:
     target_date = str(target_date).strip()
-    resolved_provider = str(provider if provider is not None else os.getenv("KORSTOCKSCAN_STAGE_HOOK_WORKORDER_DISCOVERY_AI_PROVIDER", AI_REVIEW_DEFAULT_PROVIDER)).strip().lower() or "none"
+    resolved_provider = (
+        str(
+            provider
+            if provider is not None
+            else os.getenv(
+                "KORSTOCKSCAN_STAGE_HOOK_WORKORDER_DISCOVERY_AI_PROVIDER",
+                AI_REVIEW_DEFAULT_PROVIDER,
+            )
+        )
+        .strip()
+        .lower()
+        or "none"
+    )
     candidates, context = _deterministic_candidates(target_date)
     scaffold_report = _load_json(stage_hook_runtime_scaffold_report_path(target_date))
     scaffold_by_hook = _scaffold_by_hook(scaffold_report)
-    candidates = [_apply_scaffold_implementation(candidate, scaffold_by_hook) for candidate in candidates]
+    candidates = [
+        _apply_scaffold_implementation(candidate, scaffold_by_hook)
+        for candidate in candidates
+    ]
     primary_config = _ai_review_config()
     provider_status: dict[str, Any] = {
         "provider": resolved_provider,
-        "status": "disabled" if resolved_provider in {"none", "off", "false", "0"} else "not_called",
+        "status": (
+            "disabled"
+            if resolved_provider in {"none", "off", "false", "0"}
+            else "not_called"
+        ),
         "schema_name": AI_REVIEW_SCHEMA_NAME,
-        **(primary_config.provider_status_fields() if resolved_provider not in {"none", "off", "false", "0"} else {"model": None}),
+        **(
+            primary_config.provider_status_fields()
+            if resolved_provider not in {"none", "off", "false", "0"}
+            else {"model": None}
+        ),
         "retry_attempted": False,
     }
     if resolved_provider in {"none", "off", "false", "0"}:
-        provider_status.update({"reasoning_effort": None, "timeout_sec": None, "attempt_role": None, "retry_reason": None})
+        provider_status.update(
+            {
+                "reasoning_effort": None,
+                "timeout_sec": None,
+                "attempt_role": None,
+                "retry_reason": None,
+            }
+        )
     raw_response = ai_raw_response
     provided_ai_response = raw_response is not None
     if raw_response is not None:
@@ -776,8 +1011,20 @@ def build_stage_hook_workorder_discovery_report(
     proposals = _proposal_map(ai_payload) if ai_status == "parsed" else {}
     comparatives = _comparative_map(ai_payload) if ai_status == "parsed" else {}
     candidate_ids = {str(item.get("candidate_id") or "") for item in candidates}
-    missing_ai_proposal_count = len([candidate_id for candidate_id in candidate_ids if candidate_id not in proposals])
-    missing_comparative_review_count = len([candidate_id for candidate_id in candidate_ids if candidate_id not in comparatives])
+    missing_ai_proposal_count = len(
+        [
+            candidate_id
+            for candidate_id in candidate_ids
+            if candidate_id not in proposals
+        ]
+    )
+    missing_comparative_review_count = len(
+        [
+            candidate_id
+            for candidate_id in candidate_ids
+            if candidate_id not in comparatives
+        ]
+    )
     fail_closed = ai_status != "parsed"
     retry_reason = first_wave_retry_reason(
         ai_status=ai_status,
@@ -788,21 +1035,37 @@ def build_stage_hook_workorder_discovery_report(
     )
     if retry_reason and resolved_provider == "openai" and not provided_ai_response:
         primary_provider_status = dict(provider_status)
-        retry_config = _ai_review_config(attempt_role="retry", retry_reason=retry_reason)
+        retry_config = _ai_review_config(
+            attempt_role="retry", retry_reason=retry_reason
+        )
         raw_response, retry_provider_status = _call_openai_ai_review(
             {"date": target_date, "candidates": candidates, "context": context},
             config=retry_config,
         )
         ai_status, ai_payload, ai_warnings = _parse_ai_review_response(raw_response)
-        audit = ai_payload.get("audit") if isinstance(ai_payload.get("audit"), dict) else {}
+        audit = (
+            ai_payload.get("audit") if isinstance(ai_payload.get("audit"), dict) else {}
+        )
         forbidden = audit.get("forbidden_use_violations")
         if not isinstance(forbidden, list):
             forbidden = []
         reviews = _review_map(ai_payload) if ai_status == "parsed" else {}
         proposals = _proposal_map(ai_payload) if ai_status == "parsed" else {}
         comparatives = _comparative_map(ai_payload) if ai_status == "parsed" else {}
-        missing_ai_proposal_count = len([candidate_id for candidate_id in candidate_ids if candidate_id not in proposals])
-        missing_comparative_review_count = len([candidate_id for candidate_id in candidate_ids if candidate_id not in comparatives])
+        missing_ai_proposal_count = len(
+            [
+                candidate_id
+                for candidate_id in candidate_ids
+                if candidate_id not in proposals
+            ]
+        )
+        missing_comparative_review_count = len(
+            [
+                candidate_id
+                for candidate_id in candidate_ids
+                if candidate_id not in comparatives
+            ]
+        )
         fail_closed = ai_status != "parsed"
         provider_status = {
             **retry_provider_status,
@@ -823,10 +1086,16 @@ def build_stage_hook_workorder_discovery_report(
         candidate_id = str(candidate.get("candidate_id") or "")
         review = reviews.get(candidate_id) or {}
         deterministic_proposal = (
-            candidate.get("deterministic_proposal") if isinstance(candidate.get("deterministic_proposal"), dict) else {}
+            candidate.get("deterministic_proposal")
+            if isinstance(candidate.get("deterministic_proposal"), dict)
+            else {}
         )
-        ai_tier2_proposal = proposals.get(candidate_id) or _default_ai_proposal(candidate)
-        comparative_review = comparatives.get(candidate_id) or default_comparative_review(
+        ai_tier2_proposal = proposals.get(candidate_id) or _default_ai_proposal(
+            candidate
+        )
+        comparative_review = comparatives.get(
+            candidate_id
+        ) or default_comparative_review(
             candidate_id=candidate_id,
             deterministic_proposal=deterministic_proposal,
             ai_tier2_proposal=ai_tier2_proposal,
@@ -835,7 +1104,11 @@ def build_stage_hook_workorder_discovery_report(
             workorder_title=f"Review stage hook: {candidate.get('hook_name')}",
         )
         if ai_status != "parsed":
-            comparative_review = {**comparative_review, "selected_decision": "source_quality_gap", "selected_source": "reject"}
+            comparative_review = {
+                **comparative_review,
+                "selected_decision": "source_quality_gap",
+                "selected_source": "reject",
+            }
         merged = {
             **candidate,
             "ai_review": review,
@@ -855,16 +1128,36 @@ def build_stage_hook_workorder_discovery_report(
             not fail_closed
             and not forbidden
             and contract.get("readiness_tier") == "implementation_workorder_ready"
-            and comparative_review.get("selected_decision") not in {"reject", "source_quality_gap"}
+            and comparative_review.get("selected_decision")
+            not in {"reject", "source_quality_gap"}
             and merged.get("implementation_status") != "implemented"
             and priority in {"critical", "high", "medium"}
         ):
-            orders.append(_order_from_candidate(candidate, review, ai_tier2_proposal=ai_tier2_proposal, comparative_review=comparative_review))
+            orders.append(
+                _order_from_candidate(
+                    candidate,
+                    review,
+                    ai_tier2_proposal=ai_tier2_proposal,
+                    comparative_review=comparative_review,
+                )
+            )
     if followup_reasons:
-        orders.append(_ai_review_followup_order(target_date=target_date, reasons=followup_reasons, audit=audit))
+        orders.append(
+            _ai_review_followup_order(
+                target_date=target_date, reasons=followup_reasons, audit=audit
+            )
+        )
     status = "fail" if fail_closed else ("warning" if orders else "pass")
-    tier_counts = Counter(str(item.get("stage_hook_candidate_contract", {}).get("readiness_tier") or "unknown") for item in candidates)
-    class_counts = Counter(str(item.get("hook_class") or "unknown") for item in candidates)
+    tier_counts = Counter(
+        str(
+            item.get("stage_hook_candidate_contract", {}).get("readiness_tier")
+            or "unknown"
+        )
+        for item in candidates
+    )
+    class_counts = Counter(
+        str(item.get("hook_class") or "unknown") for item in candidates
+    )
     report = {
         "schema_version": REPORT_SCHEMA_VERSION,
         "date": target_date,
@@ -885,10 +1178,16 @@ def build_stage_hook_workorder_discovery_report(
         "evidence_authority_contract": evidence_authority_contract(),
         "status": status,
         "sources": {
-            "producer_gap_discovery": str(producer_gap_report_path(target_date)) if producer_gap_report_path(target_date).exists() else None,
-            "stage_hook_runtime_scaffold": str(stage_hook_runtime_scaffold_report_path(target_date))
-            if stage_hook_runtime_scaffold_report_path(target_date).exists()
-            else None,
+            "producer_gap_discovery": (
+                str(producer_gap_report_path(target_date))
+                if producer_gap_report_path(target_date).exists()
+                else None
+            ),
+            "stage_hook_runtime_scaffold": (
+                str(stage_hook_runtime_scaffold_report_path(target_date))
+                if stage_hook_runtime_scaffold_report_path(target_date).exists()
+                else None
+            ),
         },
         "summary": {
             "status": status,
@@ -897,7 +1196,10 @@ def build_stage_hook_workorder_discovery_report(
             "implemented_candidate_count": implemented_candidate_count,
             "deterministic_proposal_count": len(candidates),
             "ai_tier2_proposal_count": sum(
-                1 for item in reviewed if item.get("ai_tier2_proposal", {}).get("proposal_status") == "provided"
+                1
+                for item in reviewed
+                if item.get("ai_tier2_proposal", {}).get("proposal_status")
+                == "provided"
             ),
             "comparative_review_count": len(reviewed),
             "missing_ai_tier2_proposal_count": missing_ai_proposal_count,
@@ -918,26 +1220,38 @@ def build_stage_hook_workorder_discovery_report(
             "ai_review_followup_required": bool(followup_reasons),
             "ai_review_followup_reasons": followup_reasons,
             "provider": resolved_provider,
-            "model": provider_status.get("model") or (AI_REVIEW_MODEL if resolved_provider == "openai" else None),
+            "model": provider_status.get("model")
+            or (AI_REVIEW_MODEL if resolved_provider == "openai" else None),
             "human_intervention_required": False,
         },
         "context": context,
         "ai_two_pass_review": {
             "provider": resolved_provider,
             "status": ai_status,
-            "model": provider_status.get("model") or (AI_REVIEW_MODEL if resolved_provider == "openai" else None),
+            "model": provider_status.get("model")
+            or (AI_REVIEW_MODEL if resolved_provider == "openai" else None),
             "schema_name": AI_REVIEW_SCHEMA_NAME,
             "provider_status": provider_status,
             "audit": audit,
-            "candidate_reviews": ai_payload.get("candidate_reviews") if isinstance(ai_payload.get("candidate_reviews"), list) else [],
+            "candidate_reviews": (
+                ai_payload.get("candidate_reviews")
+                if isinstance(ai_payload.get("candidate_reviews"), list)
+                else []
+            ),
             "deterministic_proposals": [
-                item.get("deterministic_proposal") for item in reviewed if item.get("deterministic_proposal")
+                item.get("deterministic_proposal")
+                for item in reviewed
+                if item.get("deterministic_proposal")
             ],
             "ai_tier2_proposals": [
-                item.get("ai_tier2_proposal") for item in reviewed if item.get("ai_tier2_proposal")
+                item.get("ai_tier2_proposal")
+                for item in reviewed
+                if item.get("ai_tier2_proposal")
             ],
             "comparative_reviews": [
-                item.get("comparative_review") for item in reviewed if item.get("comparative_review")
+                item.get("comparative_review")
+                for item in reviewed
+                if item.get("comparative_review")
             ],
             "warnings": ai_warnings,
             "fail_closed": fail_closed,
@@ -947,13 +1261,19 @@ def build_stage_hook_workorder_discovery_report(
             "missing_comparative_review_count": missing_comparative_review_count,
         },
         "deterministic_proposals": [
-            item.get("deterministic_proposal") for item in reviewed if item.get("deterministic_proposal")
+            item.get("deterministic_proposal")
+            for item in reviewed
+            if item.get("deterministic_proposal")
         ],
         "ai_tier2_proposals": [
-            item.get("ai_tier2_proposal") for item in reviewed if item.get("ai_tier2_proposal")
+            item.get("ai_tier2_proposal")
+            for item in reviewed
+            if item.get("ai_tier2_proposal")
         ],
         "comparative_reviews": [
-            item.get("comparative_review") for item in reviewed if item.get("comparative_review")
+            item.get("comparative_review")
+            for item in reviewed
+            if item.get("comparative_review")
         ],
         "selected_decision_counts": proposal_counts(
             [item.get("comparative_review") or {} for item in reviewed],
@@ -968,7 +1288,9 @@ def build_stage_hook_workorder_discovery_report(
     }
     json_path, md_path = report_paths(target_date)
     json_path.parent.mkdir(parents=True, exist_ok=True)
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     md_path.write_text(render_markdown(report), encoding="utf-8")
     return report
 
@@ -993,7 +1315,11 @@ def render_markdown(report: dict[str, Any]) -> str:
         "",
     ]
     for item in report.get("stage_hook_candidates") or []:
-        contract = item.get("stage_hook_candidate_contract") if isinstance(item.get("stage_hook_candidate_contract"), dict) else {}
+        contract = (
+            item.get("stage_hook_candidate_contract")
+            if isinstance(item.get("stage_hook_candidate_contract"), dict)
+            else {}
+        )
         lines.extend(
             [
                 f"### `{item.get('candidate_id')}`",
@@ -1010,16 +1336,35 @@ def render_markdown(report: dict[str, Any]) -> str:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Build stage hook workorder discovery report.")
+    parser = argparse.ArgumentParser(
+        description="Build stage hook workorder discovery report."
+    )
     parser.add_argument("--date", required=True)
-    parser.add_argument("--provider", default=os.getenv("KORSTOCKSCAN_STAGE_HOOK_WORKORDER_DISCOVERY_AI_PROVIDER", AI_REVIEW_DEFAULT_PROVIDER))
+    parser.add_argument(
+        "--provider",
+        default=os.getenv(
+            "KORSTOCKSCAN_STAGE_HOOK_WORKORDER_DISCOVERY_AI_PROVIDER",
+            AI_REVIEW_DEFAULT_PROVIDER,
+        ),
+    )
     parser.add_argument("--ai-response-json", default=None)
     args = parser.parse_args()
     raw = None
     if args.ai_response_json:
         raw = Path(args.ai_response_json).read_text(encoding="utf-8")
-    report = build_stage_hook_workorder_discovery_report(args.date, provider=args.provider, ai_raw_response=raw)
-    print(json.dumps({"status": report.get("status"), "json": str(report_paths(args.date)[0]), "md": str(report_paths(args.date)[1])}, ensure_ascii=False))
+    report = build_stage_hook_workorder_discovery_report(
+        args.date, provider=args.provider, ai_raw_response=raw
+    )
+    print(
+        json.dumps(
+            {
+                "status": report.get("status"),
+                "json": str(report_paths(args.date)[0]),
+                "md": str(report_paths(args.date)[1]),
+            },
+            ensure_ascii=False,
+        )
+    )
     if report.get("status") == "fail":
         raise SystemExit(1)
 

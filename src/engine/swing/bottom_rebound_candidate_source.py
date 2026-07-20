@@ -19,17 +19,22 @@ from src.engine.swing.sim_auto_approval_control_tower import (
     bottom_rebound_is_approved_by_control_tower,
     swing_sim_auto_approval_path,
 )
-from src.engine.swing.bottom_rebound_pattern_research import FORBIDDEN_USES as RESEARCH_FORBIDDEN_USES
-from src.engine.swing.bottom_rebound_pattern_research import REPORT_DIR as BOTTOM_REBOUND_REPORT_DIR
+from src.engine.swing.bottom_rebound_pattern_research import (
+    FORBIDDEN_USES as RESEARCH_FORBIDDEN_USES,
+)
+from src.engine.swing.bottom_rebound_pattern_research import (
+    REPORT_DIR as BOTTOM_REBOUND_REPORT_DIR,
+)
 from src.utils.constants import DATA_DIR
-
 
 REPORT_TYPE = "swing_bottom_rebound_candidate_source"
 SCHEMA_VERSION = "swing_bottom_rebound_candidate_source_v1"
 DECISION_AUTHORITY = "swing_sim_candidate_source_only"
 POLICY_VERSION = "bottom_rebound_swing_source_v1"
 REPORT_DIR = Path(DATA_DIR) / "report" / REPORT_TYPE
-POLICY_AUTO_LOOP_DIR = Path(DATA_DIR) / "report" / "swing_bottom_rebound_policy_auto_loop"
+POLICY_AUTO_LOOP_DIR = (
+    Path(DATA_DIR) / "report" / "swing_bottom_rebound_policy_auto_loop"
+)
 FORBIDDEN_USES = sorted(
     set(
         RESEARCH_FORBIDDEN_USES
@@ -72,7 +77,10 @@ def _date_text(value: str | date | datetime | None) -> str:
 
 
 def _bottom_report_path(target_date: str) -> Path:
-    return BOTTOM_REBOUND_REPORT_DIR / f"bottom_rebound_pattern_research_{target_date}.json"
+    return (
+        BOTTOM_REBOUND_REPORT_DIR
+        / f"bottom_rebound_pattern_research_{target_date}.json"
+    )
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -86,7 +94,10 @@ def _load_json(path: Path) -> dict[str, Any]:
 
 
 def _policy_auto_loop_path(target_date: str) -> Path:
-    return POLICY_AUTO_LOOP_DIR / f"swing_bottom_rebound_policy_auto_loop_{target_date}.json"
+    return (
+        POLICY_AUTO_LOOP_DIR
+        / f"swing_bottom_rebound_policy_auto_loop_{target_date}.json"
+    )
 
 
 def config_from_policy_auto_loop(
@@ -96,8 +107,16 @@ def config_from_policy_auto_loop(
     require_sim_auto_approved: bool = True,
     control_tower_approval: dict[str, Any] | None = None,
 ) -> tuple[CandidateSourceConfig, dict[str, Any]]:
-    conclusion = policy_report.get("final_conclusion") if isinstance(policy_report.get("final_conclusion"), dict) else {}
-    approved_policy = policy_report.get("sim_auto_approved_policy") if isinstance(policy_report.get("sim_auto_approved_policy"), dict) else {}
+    conclusion = (
+        policy_report.get("final_conclusion")
+        if isinstance(policy_report.get("final_conclusion"), dict)
+        else {}
+    )
+    approved_policy = (
+        policy_report.get("sim_auto_approved_policy")
+        if isinstance(policy_report.get("sim_auto_approved_policy"), dict)
+        else {}
+    )
     policy_approved = (
         conclusion.get("classification_state") == "sim_auto_approved"
         and conclusion.get("promote_policy") is True
@@ -108,7 +127,9 @@ def config_from_policy_auto_loop(
         if isinstance(control_tower_approval, dict)
         else False
     )
-    approved = policy_approved and (control_tower_approved if require_sim_auto_approved else True)
+    approved = policy_approved and (
+        control_tower_approved if require_sim_auto_approved else True
+    )
     diagnostics = {
         "policy_report_type": policy_report.get("report_type"),
         "policy_date": policy_report.get("date"),
@@ -136,7 +157,10 @@ def config_from_policy_auto_loop(
     return (
         CandidateSourceConfig(
             target_date=target_date or _date_text(policy_report.get("date")),
-            max_candidates=int(approved_policy.get("max_candidates") or CandidateSourceConfig.max_candidates),
+            max_candidates=int(
+                approved_policy.get("max_candidates")
+                or CandidateSourceConfig.max_candidates
+            ),
             min_backtest_rank_score=_safe_float(
                 approved_policy.get("min_backtest_rank_score"),
                 CandidateSourceConfig.min_backtest_rank_score,
@@ -151,7 +175,9 @@ def config_from_policy_auto_loop(
     )
 
 
-def _source_contract_pass(report: dict[str, Any], config: CandidateSourceConfig) -> tuple[bool, list[str]]:
+def _source_contract_pass(
+    report: dict[str, Any], config: CandidateSourceConfig
+) -> tuple[bool, list[str]]:
     reasons: list[str] = []
     if not config.require_research_contract:
         return True, reasons
@@ -178,7 +204,13 @@ def _entry_policy(report: dict[str, Any]) -> str:
     return str(summary.get("top_primary_entry_policy") or "atr_pullback_entry")
 
 
-def _candidate_row(row: dict[str, Any], *, report: dict[str, Any], rank: int, config: CandidateSourceConfig) -> dict[str, Any]:
+def _candidate_row(
+    row: dict[str, Any],
+    *,
+    report: dict[str, Any],
+    rank: int,
+    config: CandidateSourceConfig,
+) -> dict[str, Any]:
     code = str(row.get("stock_code") or "").zfill(6)
     primary_policy = _entry_policy(report)
     return {
@@ -256,7 +288,9 @@ def build_candidate_source_report(
         warnings.extend(contract_reasons)
     if primary_ev < float(config.min_primary_adjusted_ev_pct):
         warnings.append("primary_adjusted_ev_below_candidate_source_floor")
-    if policy_auto_loop_diagnostics and policy_auto_loop_diagnostics.get("block_reason"):
+    if policy_auto_loop_diagnostics and policy_auto_loop_diagnostics.get(
+        "block_reason"
+    ):
         warnings.append(str(policy_auto_loop_diagnostics["block_reason"]))
 
     rows: list[dict[str, Any]] = []
@@ -271,9 +305,15 @@ def build_candidate_source_report(
             reverse=True,
         )
         for row in ranked:
-            if _safe_float(row.get("backtest_rank_score")) < float(config.min_backtest_rank_score):
+            if _safe_float(row.get("backtest_rank_score")) < float(
+                config.min_backtest_rank_score
+            ):
                 continue
-            rows.append(_candidate_row(row, report=bottom_report, rank=len(rows) + 1, config=config))
+            rows.append(
+                _candidate_row(
+                    row, report=bottom_report, rank=len(rows) + 1, config=config
+                )
+            )
             if len(rows) >= max(1, int(config.max_candidates)):
                 break
     if not rows:
@@ -298,7 +338,11 @@ def build_candidate_source_report(
             "metric_role": "candidate_source_feature",
             "decision_authority": DECISION_AUTHORITY,
             "window_policy": "postclose_asof_research_report_to_next_day_sim_candidate_source",
-            "sample_floor": bottom_report.get("metric_contract", {}).get("sample_floor") if isinstance(bottom_report.get("metric_contract"), dict) else None,
+            "sample_floor": (
+                bottom_report.get("metric_contract", {}).get("sample_floor")
+                if isinstance(bottom_report.get("metric_contract"), dict)
+                else None
+            ),
             "primary_decision_metric": "source_quality_adjusted_ev_pct",
             "source_quality_gate": "bottom_rebound_research_contract_pass_and_candidate_rank_floor",
             "forbidden_uses": FORBIDDEN_USES,
@@ -326,8 +370,16 @@ def build_candidate_source_report(
             "warnings": warnings,
         },
         "policy_auto_loop": {
-            "report_type": (policy_auto_loop or {}).get("report_type") if isinstance(policy_auto_loop, dict) else None,
-            "date": (policy_auto_loop or {}).get("date") if isinstance(policy_auto_loop, dict) else None,
+            "report_type": (
+                (policy_auto_loop or {}).get("report_type")
+                if isinstance(policy_auto_loop, dict)
+                else None
+            ),
+            "date": (
+                (policy_auto_loop or {}).get("date")
+                if isinstance(policy_auto_loop, dict)
+                else None
+            ),
             "diagnostics": policy_auto_loop_diagnostics or {"status": "not_supplied"},
         },
         "candidate_rows": rows,
@@ -368,8 +420,16 @@ def build_candidate_source_report(
 
 
 def render_markdown(report: dict[str, Any]) -> str:
-    source_quality = report.get("source_quality") if isinstance(report.get("source_quality"), dict) else {}
-    source_report = report.get("source_report") if isinstance(report.get("source_report"), dict) else {}
+    source_quality = (
+        report.get("source_quality")
+        if isinstance(report.get("source_quality"), dict)
+        else {}
+    )
+    source_report = (
+        report.get("source_report")
+        if isinstance(report.get("source_report"), dict)
+        else {}
+    )
     lines = [
         f"# Swing Bottom Rebound Candidate Source - {report.get('date')}",
         "",
@@ -391,8 +451,16 @@ def render_markdown(report: dict[str, Any]) -> str:
         "| ---: | --- | --- | ---: | --- | ---: | --- | --- |",
     ]
     for row in (report.get("candidate_rows") or [])[:30]:
-        features = row.get("diagnostic_features") if isinstance(row.get("diagnostic_features"), dict) else {}
-        themes = features.get("kiwoom_theme_tags") if isinstance(features.get("kiwoom_theme_tags"), list) else []
+        features = (
+            row.get("diagnostic_features")
+            if isinstance(row.get("diagnostic_features"), dict)
+            else {}
+        )
+        themes = (
+            features.get("kiwoom_theme_tags")
+            if isinstance(features.get("kiwoom_theme_tags"), list)
+            else []
+        )
         lines.append(
             f"| `{row.get('candidate_rank')}` | `{row.get('stock_code')}` | {row.get('stock_name') or ''} | "
             f"`{row.get('lifecycle_exploration_score')}` | `{row.get('recommended_sim_entry_policy')}` | "
@@ -436,7 +504,9 @@ def build_from_path(
             or policy_report.get("date")
             or path.stem.rsplit("_", 1)[-1]
         )
-        resolved_control_tower_path = control_tower_approval_path or swing_sim_auto_approval_path(approval_date)
+        resolved_control_tower_path = (
+            control_tower_approval_path or swing_sim_auto_approval_path(approval_date)
+        )
         control_tower_approval = _load_json(resolved_control_tower_path)
     else:
         resolved_control_tower_path = control_tower_approval_path
@@ -460,10 +530,14 @@ def build_from_path(
     )
 
 
-def write_report(report: dict[str, Any], *, output_dir: Path = REPORT_DIR) -> dict[str, Path]:
+def write_report(
+    report: dict[str, Any], *, output_dir: Path = REPORT_DIR
+) -> dict[str, Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
     json_path, md_path = report_paths(_date_text(report.get("date")), output_dir)
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2, default=str), encoding="utf-8"
+    )
     md_path.write_text(render_markdown(report), encoding="utf-8")
     return {"json": json_path, "md": md_path}
 
@@ -473,9 +547,19 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--date", default=None)
     parser.add_argument("--bottom-report", type=Path, default=None)
     parser.add_argument("--output-dir", type=Path, default=REPORT_DIR)
-    parser.add_argument("--max-candidates", type=int, default=CandidateSourceConfig.max_candidates)
-    parser.add_argument("--min-backtest-rank-score", type=float, default=CandidateSourceConfig.min_backtest_rank_score)
-    parser.add_argument("--min-primary-adjusted-ev-pct", type=float, default=CandidateSourceConfig.min_primary_adjusted_ev_pct)
+    parser.add_argument(
+        "--max-candidates", type=int, default=CandidateSourceConfig.max_candidates
+    )
+    parser.add_argument(
+        "--min-backtest-rank-score",
+        type=float,
+        default=CandidateSourceConfig.min_backtest_rank_score,
+    )
+    parser.add_argument(
+        "--min-primary-adjusted-ev-pct",
+        type=float,
+        default=CandidateSourceConfig.min_primary_adjusted_ev_pct,
+    )
     parser.add_argument("--policy-report", type=Path, default=None)
     parser.add_argument("--control-tower-approval", type=Path, default=None)
     parser.add_argument("--require-sim-auto-policy", action="store_true")
@@ -483,7 +567,9 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
 
     target_date = _date_text(args.date) if args.date else None
-    source_path = args.bottom_report or _bottom_report_path(target_date or date.today().isoformat())
+    source_path = args.bottom_report or _bottom_report_path(
+        target_date or date.today().isoformat()
+    )
     config = CandidateSourceConfig(
         target_date=target_date,
         max_candidates=args.max_candidates,
@@ -492,7 +578,9 @@ def main(argv: list[str] | None = None) -> None:
     )
     policy_report_path = args.policy_report
     if policy_report_path is None and args.require_sim_auto_policy:
-        policy_report_path = _policy_auto_loop_path(target_date or date.today().isoformat())
+        policy_report_path = _policy_auto_loop_path(
+            target_date or date.today().isoformat()
+        )
     report = build_from_path(
         source_path,
         config=config,
@@ -515,7 +603,9 @@ def main(argv: list[str] | None = None) -> None:
         )
         return
     paths = write_report(report, output_dir=args.output_dir)
-    print(f"[DONE] swing_bottom_rebound_candidate_source json={paths['json']} md={paths['md']}")
+    print(
+        f"[DONE] swing_bottom_rebound_candidate_source json={paths['json']} md={paths['md']}"
+    )
 
 
 if __name__ == "__main__":

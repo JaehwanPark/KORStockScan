@@ -18,14 +18,18 @@ SUPPORTED_HOOKS = {
         "hook_class": "runtime_arbitration_hook",
         "action_namespace": ["EXIT_CONFIRM", "HOLD_REVIEW", "TRIM"],
         "required_source_artifacts": ["runner_regime_counterfactual_producer"],
-        "implementation_files": ["src/engine/automation/stage_hook_runtime_scaffold.py"],
+        "implementation_files": [
+            "src/engine/automation/stage_hook_runtime_scaffold.py"
+        ],
     },
     "plateau_breakdown_exit_arbitration_probe": {
         "stage": "exit",
         "hook_class": "runtime_arbitration_hook",
         "action_namespace": ["EXIT_CONFIRM", "TAKE_PROFIT_ON_PLATEAU", "HOLD_REVIEW"],
         "required_source_artifacts": ["plateau_breakdown_exit_counterfactual_producer"],
-        "implementation_files": ["src/engine/automation/stage_hook_runtime_scaffold.py"],
+        "implementation_files": [
+            "src/engine/automation/stage_hook_runtime_scaffold.py"
+        ],
     },
 }
 FORBIDDEN_USES = [
@@ -54,7 +58,11 @@ def report_paths(target_date: str) -> tuple[Path, Path]:
 
 
 def stage_hook_discovery_path(target_date: str) -> Path:
-    return REPORT_DIR / "stage_hook_workorder_discovery" / f"stage_hook_workorder_discovery_{target_date}.json"
+    return (
+        REPORT_DIR
+        / "stage_hook_workorder_discovery"
+        / f"stage_hook_workorder_discovery_{target_date}.json"
+    )
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -80,8 +88,12 @@ def build_stage_hook_runtime_scaffold_report(target_date: str) -> dict[str, Any]
     discovery_path = stage_hook_discovery_path(target_date)
     discovery = _load_json(discovery_path)
     discovery_status = str(discovery.get("status") or "").strip()
-    discovery_summary = discovery.get("summary") if isinstance(discovery.get("summary"), dict) else {}
-    discovery_ai_status = str(discovery_summary.get("ai_two_pass_review_status") or "").strip()
+    discovery_summary = (
+        discovery.get("summary") if isinstance(discovery.get("summary"), dict) else {}
+    )
+    discovery_ai_status = str(
+        discovery_summary.get("ai_two_pass_review_status") or ""
+    ).strip()
     discovery_audit_status = str(discovery_summary.get("audit_status") or "").strip()
     source_contract_pass = bool(
         discovery
@@ -97,7 +109,9 @@ def build_stage_hook_runtime_scaffold_report(target_date: str) -> dict[str, Any]
         for hook_name, scaffold in SUPPORTED_HOOKS.items():
             if hook_name not in observed_hook_names:
                 continue
-            source_contract = next((item for item in contracts if item.get("hook_name") == hook_name), {})
+            source_contract = next(
+                (item for item in contracts if item.get("hook_name") == hook_name), {}
+            )
             implemented_hooks.append(
                 {
                     "hook_name": hook_name,
@@ -116,7 +130,8 @@ def build_stage_hook_runtime_scaffold_report(target_date: str) -> dict[str, Any]
                     "action_namespace": scaffold["action_namespace"],
                     "required_source_artifacts": scaffold["required_source_artifacts"],
                     "implementation_files": scaffold["implementation_files"],
-                    "source_candidate_ids": source_contract.get("source_candidate_ids") or [],
+                    "source_candidate_ids": source_contract.get("source_candidate_ids")
+                    or [],
                     "acceptance_tests": [
                         "scaffold artifact preserves runtime_effect=false",
                         "hook remains disabled until separate runtime apply candidate",
@@ -125,8 +140,15 @@ def build_stage_hook_runtime_scaffold_report(target_date: str) -> dict[str, Any]
                     "forbidden_uses": FORBIDDEN_USES,
                 }
             )
-    missing_supported_hooks = sorted(observed_hook_names.intersection(SUPPORTED_HOOKS) - {item["hook_name"] for item in implemented_hooks})
-    status = "pass" if implemented_hooks else ("fail" if not source_contract_pass else "warning")
+    missing_supported_hooks = sorted(
+        observed_hook_names.intersection(SUPPORTED_HOOKS)
+        - {item["hook_name"] for item in implemented_hooks}
+    )
+    status = (
+        "pass"
+        if implemented_hooks
+        else ("fail" if not source_contract_pass else "warning")
+    )
     report = {
         "schema_version": SCHEMA_VERSION,
         "date": target_date,
@@ -144,7 +166,11 @@ def build_stage_hook_runtime_scaffold_report(target_date: str) -> dict[str, Any]
         "primary_decision_metric": "source_quality_adjusted_ev_pct",
         "source_quality_gate": "stage hook discovery artifact exists and hook is implemented as disabled source-only scaffold",
         "forbidden_uses": FORBIDDEN_USES,
-        "sources": {"stage_hook_workorder_discovery": str(discovery_path) if discovery_path.exists() else None},
+        "sources": {
+            "stage_hook_workorder_discovery": (
+                str(discovery_path) if discovery_path.exists() else None
+            )
+        },
         "summary": {
             "status": status,
             "implemented_hook_count": len(implemented_hooks),
@@ -162,7 +188,9 @@ def build_stage_hook_runtime_scaffold_report(target_date: str) -> dict[str, Any]
     }
     json_path, md_path = report_paths(target_date)
     json_path.parent.mkdir(parents=True, exist_ok=True)
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     md_path.write_text(render_markdown(report), encoding="utf-8")
     return report
 
@@ -199,11 +227,22 @@ def render_markdown(report: dict[str, Any]) -> str:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Build disabled source-only stage hook scaffold provenance.")
+    parser = argparse.ArgumentParser(
+        description="Build disabled source-only stage hook scaffold provenance."
+    )
     parser.add_argument("--date", required=True)
     args = parser.parse_args()
     report = build_stage_hook_runtime_scaffold_report(args.date)
-    print(json.dumps({"status": report.get("status"), "json": str(report_paths(args.date)[0]), "md": str(report_paths(args.date)[1])}, ensure_ascii=False))
+    print(
+        json.dumps(
+            {
+                "status": report.get("status"),
+                "json": str(report_paths(args.date)[0]),
+                "md": str(report_paths(args.date)[1]),
+            },
+            ensure_ascii=False,
+        )
+    )
     if report.get("status") == "fail":
         raise SystemExit(1)
 

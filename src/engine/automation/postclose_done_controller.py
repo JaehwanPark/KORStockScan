@@ -13,7 +13,6 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 REPORT_DIR = PROJECT_ROOT / "data" / "report"
 OUTPUT_DIR = REPORT_DIR / "postclose_done_controller"
@@ -115,7 +114,10 @@ def _load_json(path: Path) -> dict[str, Any]:
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
 
 
 def _append_log_marker(line: str) -> None:
@@ -131,7 +133,9 @@ def _run_command(command: list[str], env: dict[str, str] | None = None) -> int:
 
         merged_env = os.environ.copy()
         merged_env.update(env)
-    return subprocess.run(command, cwd=PROJECT_ROOT, env=merged_env, check=False).returncode
+    return subprocess.run(
+        command, cwd=PROJECT_ROOT, env=merged_env, check=False
+    ).returncode
 
 
 def _action_env(action: RecoveryAction) -> dict[str, str]:
@@ -142,23 +146,43 @@ def _action_env(action: RecoveryAction) -> dict[str, str]:
 
 
 def _verification_path(target_date: str) -> Path:
-    return REPORT_DIR / "threshold_cycle_postclose_verification" / f"threshold_cycle_postclose_verification_{target_date}.json"
+    return (
+        REPORT_DIR
+        / "threshold_cycle_postclose_verification"
+        / f"threshold_cycle_postclose_verification_{target_date}.json"
+    )
 
 
 def _status_path(target_date: str) -> Path:
-    return REPORT_DIR / "threshold_cycle_postclose_status" / f"threshold_cycle_postclose_{target_date}.status.json"
+    return (
+        REPORT_DIR
+        / "threshold_cycle_postclose_status"
+        / f"threshold_cycle_postclose_{target_date}.status.json"
+    )
 
 
 def _runtime_gap_path(target_date: str) -> Path:
-    return REPORT_DIR / "runtime_apply_gap_audit" / f"runtime_apply_gap_audit_{target_date}.json"
+    return (
+        REPORT_DIR
+        / "runtime_apply_gap_audit"
+        / f"runtime_apply_gap_audit_{target_date}.json"
+    )
 
 
 def _workorder_path(target_date: str) -> Path:
-    return REPORT_DIR / "code_improvement_workorder" / f"code_improvement_workorder_{target_date}.json"
+    return (
+        REPORT_DIR
+        / "code_improvement_workorder"
+        / f"code_improvement_workorder_{target_date}.json"
+    )
 
 
 def _runner_path(target_date: str) -> Path:
-    return REPORT_DIR / "codex_workorder_runner" / f"codex_workorder_runner_{target_date}.json"
+    return (
+        REPORT_DIR
+        / "codex_workorder_runner"
+        / f"codex_workorder_runner_{target_date}.json"
+    )
 
 
 def _control_paths(target_date: str) -> tuple[Path, Path]:
@@ -180,8 +204,12 @@ def _flatten_issues(verification: dict[str, Any]) -> list[str]:
     issues: list[str] = []
     predecessor = verification.get("predecessor_integrity")
     if isinstance(predecessor, dict):
-        issues.extend(str(item) for item in predecessor.get("log_issues") or [] if str(item))
-        issues.extend(str(item) for item in predecessor.get("timeouts") or [] if str(item))
+        issues.extend(
+            str(item) for item in predecessor.get("log_issues") or [] if str(item)
+        )
+        issues.extend(
+            str(item) for item in predecessor.get("timeouts") or [] if str(item)
+        )
     for key in (
         "missing_required_artifacts",
         "missing_downstream_links",
@@ -192,13 +220,22 @@ def _flatten_issues(verification: dict[str, Any]) -> list[str]:
         issues.extend(str(item) for item in verification.get(key) or [] if str(item))
     runtime_gap = verification.get("runtime_apply_gap_audit")
     if isinstance(runtime_gap, dict):
-        issues.extend(str(item) for item in runtime_gap.get("issues") or [] if str(item))
+        issues.extend(
+            str(item) for item in runtime_gap.get("issues") or [] if str(item)
+        )
     conversion_kpi = verification.get("conversion_kpi")
     if isinstance(conversion_kpi, dict):
-        issues.extend(str(item) for item in conversion_kpi.get("issues") or [] if str(item))
-        issues.extend(str(item) for item in conversion_kpi.get("warnings") or [] if str(item))
+        issues.extend(
+            str(item) for item in conversion_kpi.get("issues") or [] if str(item)
+        )
+        issues.extend(
+            str(item) for item in conversion_kpi.get("warnings") or [] if str(item)
+        )
     workorder_snapshot = verification.get("workorder_snapshot")
-    if isinstance(workorder_snapshot, dict) and workorder_snapshot.get("status") == "missing_snapshot_identity":
+    if (
+        isinstance(workorder_snapshot, dict)
+        and workorder_snapshot.get("status") == "missing_snapshot_identity"
+    ):
         issues.append("workorder_snapshot_missing_snapshot_identity")
     for section in (
         "entry_bucket_handoff",
@@ -236,16 +273,24 @@ def _structural_blockers(verification: dict[str, Any], issues: list[str]) -> lis
             blockers.append("requires_code_fix:source_quality_hard_contract_gap")
     active_handoff = verification.get("active_sim_priority_handoff")
     if isinstance(active_handoff, dict):
-        active_missing = [str(item) for item in active_handoff.get("missing") or [] if str(item)]
+        active_missing = [
+            str(item) for item in active_handoff.get("missing") or [] if str(item)
+        ]
         if "active_sim_priority_inactive_key_consumed" in active_missing:
-            blockers.append("requires_policy_lineage_fix:active_sim_priority_inactive_key_consumed")
+            blockers.append(
+                "requires_policy_lineage_fix:active_sim_priority_inactive_key_consumed"
+            )
         if "active_sim_priority_unknown_key_observed" in active_missing:
-            blockers.append("requires_policy_lineage_fix:active_sim_priority_unknown_key_observed")
+            blockers.append(
+                "requires_policy_lineage_fix:active_sim_priority_unknown_key_observed"
+            )
     issue_set = set(str(item) for item in issues if str(item))
     if "source_quality_hard_block_handoff_missing" in issue_set:
         blockers.append("requires_code_fix:source_quality_hard_block_handoff_missing")
     if "active_sim_priority_handoff_missing" in issue_set:
-        blockers.append("requires_policy_lineage_fix:active_sim_priority_handoff_missing")
+        blockers.append(
+            "requires_policy_lineage_fix:active_sim_priority_handoff_missing"
+        )
     return list(dict.fromkeys(blockers))
 
 
@@ -253,9 +298,13 @@ def _structural_next_actions(blockers: list[str]) -> list[str]:
     actions: list[str] = []
     for blocker in blockers:
         if blocker.startswith("requires_code_fix:source_quality"):
-            actions.append("fix_source_quality_metric_contract_and_rerun_postclose_audit")
+            actions.append(
+                "fix_source_quality_metric_contract_and_rerun_postclose_audit"
+            )
         elif blocker.startswith("requires_policy_lineage_fix:active_sim_priority"):
-            actions.append("fix_active_sim_priority_seed_lineage_and_verify_no_inactive_runtime_key")
+            actions.append(
+                "fix_active_sim_priority_seed_lineage_and_verify_no_inactive_runtime_key"
+            )
     return list(dict.fromkeys(actions))
 
 
@@ -268,13 +317,19 @@ def _postclose_status_succeeded(target_date: str) -> bool:
     return str(_load_json(_status_path(target_date)).get("status") or "") == "succeeded"
 
 
-def _is_done_verifier_status(target_date: str, verification: dict[str, Any], issues: list[str]) -> bool:
+def _is_done_verifier_status(
+    target_date: str, verification: dict[str, Any], issues: list[str]
+) -> bool:
     verifier_status = str(verification.get("status") or "")
     if verifier_status == "pass":
-        return _has_done_marker(verification) and _postclose_status_succeeded(target_date)
+        return _has_done_marker(verification) and _postclose_status_succeeded(
+            target_date
+        )
     if verifier_status != "warning":
         return False
-    if not _has_done_marker(verification) or not _postclose_status_succeeded(target_date):
+    if not _has_done_marker(verification) or not _postclose_status_succeeded(
+        target_date
+    ):
         return False
     return set(issues).issubset(DONE_ACCEPTABLE_WARNING_ISSUES)
 
@@ -284,13 +339,23 @@ def _runner_completed(runner_report: dict[str, Any], *, dry_run: bool = False) -
     two_pass_status = str(runner_report.get("two_pass_status") or "missing")
     if dry_run:
         return runner_status == "dry_run_planned"
-    return runner_status == "completed" and two_pass_status in {"pass2_completed", "pass2_not_required", "not_required"}
+    return runner_status == "completed" and two_pass_status in {
+        "pass2_completed",
+        "pass2_not_required",
+        "not_required",
+    }
 
 
 def _build_verify_action(target_date: str) -> RecoveryAction:
     return RecoveryAction(
         "verify_postclose_chain",
-        [_python_bin(), "-m", "src.engine.verify_threshold_cycle_postclose_chain", "--date", target_date],
+        [
+            _python_bin(),
+            "-m",
+            "src.engine.verify_threshold_cycle_postclose_chain",
+            "--date",
+            target_date,
+        ],
         "refresh verifier status",
     )
 
@@ -356,7 +421,13 @@ def _build_next_preopen_apply_action(target_date: str) -> RecoveryAction:
 def _build_runtime_apply_gap_audit_action(target_date: str) -> RecoveryAction:
     return RecoveryAction(
         "refresh_runtime_apply_gap_audit",
-        [_python_bin(), "-m", "src.engine.runtime_apply_gap_audit", "--date", target_date],
+        [
+            _python_bin(),
+            "-m",
+            "src.engine.runtime_apply_gap_audit",
+            "--date",
+            target_date,
+        ],
         "runtime apply gap audit refresh after next PREOPEN apply",
     )
 
@@ -384,7 +455,13 @@ def _env_enabled(name: str, default: str = "true") -> bool:
 def _build_codex_runner_action(target_date: str) -> RecoveryAction:
     return RecoveryAction(
         "run_codex_workorder_runner",
-        [_python_bin(), "-m", "src.engine.automation.codex_workorder_runner", "--date", target_date],
+        [
+            _python_bin(),
+            "-m",
+            "src.engine.automation.codex_workorder_runner",
+            "--date",
+            target_date,
+        ],
         "codex workorder runner strict completion or 2-pass incomplete",
     )
 
@@ -400,7 +477,10 @@ def _verification_artifacts_passable(verification: dict[str, Any]) -> bool:
     for item in artifact_status:
         if not isinstance(item, dict) or not item.get("label") or "exists" not in item:
             return False
-        if item.get("exists") is False and item.get("label") in OPTIONAL_MISSING_ARTIFACT_LABELS:
+        if (
+            item.get("exists") is False
+            and item.get("label") in OPTIONAL_MISSING_ARTIFACT_LABELS
+        ):
             continue
         if item.get("json_valid") is False:
             return False
@@ -414,7 +494,10 @@ def _has_invalid_artifact_status(verification: dict[str, Any]) -> bool:
     for item in artifact_status:
         if not isinstance(item, dict) or not item.get("label") or "exists" not in item:
             return True
-        if item.get("exists") is False and item.get("label") in OPTIONAL_MISSING_ARTIFACT_LABELS:
+        if (
+            item.get("exists") is False
+            and item.get("label") in OPTIONAL_MISSING_ARTIFACT_LABELS
+        ):
             continue
         if item.get("json_valid") is False:
             return True
@@ -425,7 +508,9 @@ def _latest_postclose_run_lines(target_date: str) -> list[str]:
     if not POSTCLOSE_LOG_PATH.exists():
         return []
     try:
-        lines = POSTCLOSE_LOG_PATH.read_text(encoding="utf-8", errors="replace").splitlines()
+        lines = POSTCLOSE_LOG_PATH.read_text(
+            encoding="utf-8", errors="replace"
+        ).splitlines()
     except Exception:
         return []
     start_prefix = f"[START] threshold-cycle postclose target_date={target_date}"
@@ -440,7 +525,9 @@ def _postclose_run_segments(target_date: str) -> list[list[str]]:
     if not POSTCLOSE_LOG_PATH.exists():
         return []
     try:
-        lines = POSTCLOSE_LOG_PATH.read_text(encoding="utf-8", errors="replace").splitlines()
+        lines = POSTCLOSE_LOG_PATH.read_text(
+            encoding="utf-8", errors="replace"
+        ).splitlines()
     except Exception:
         return []
     start_prefix = f"[START] threshold-cycle postclose target_date={target_date}"
@@ -458,12 +545,20 @@ def _postclose_run_segments(target_date: str) -> list[list[str]]:
     return segments
 
 
-def _failed_tail_stage_from_run_lines(target_date: str, run_lines: list[str]) -> str | None:
+def _failed_tail_stage_from_run_lines(
+    target_date: str, run_lines: list[str]
+) -> str | None:
     if not run_lines:
         return None
-    if not any(f"[FAIL] threshold-cycle postclose target_date={target_date}" in line for line in run_lines):
+    if not any(
+        f"[FAIL] threshold-cycle postclose target_date={target_date}" in line
+        for line in run_lines
+    ):
         return None
-    if any(f"[DONE] threshold-cycle postclose target_date={target_date}" in line for line in run_lines):
+    if any(
+        f"[DONE] threshold-cycle postclose target_date={target_date}" in line
+        for line in run_lines
+    ):
         return None
 
     for line in reversed(run_lines):
@@ -483,7 +578,10 @@ def _failed_tail_stage_from_run_lines(target_date: str, run_lines: list[str]) ->
         if resource_pass:
             last_pass_label = resource_pass.group("label")
 
-    if last_pass_label in _TAIL_REPAIR_STAGE_ORDER and last_pass_label not in ready_labels:
+    if (
+        last_pass_label in _TAIL_REPAIR_STAGE_ORDER
+        and last_pass_label not in ready_labels
+    ):
         return last_pass_label
     return None
 
@@ -496,17 +594,31 @@ def _latest_failed_tail_stage(target_date: str) -> str | None:
     return None
 
 
-def _tail_stage_repair_actions(target_date: str, failed_stage: str) -> list[RecoveryAction]:
+def _tail_stage_repair_actions(
+    target_date: str, failed_stage: str
+) -> list[RecoveryAction]:
     workorder_max_orders = os.environ.get("CODE_IMPROVEMENT_WORKORDER_MAX_ORDERS", "12")
     stage_commands = {
         "key_lineage_ledger": RecoveryAction(
             "refresh_key_lineage_ledger",
-            [_python_bin(), "-m", "src.engine.automation.key_lineage_ledger", "--date", target_date],
+            [
+                _python_bin(),
+                "-m",
+                "src.engine.automation.key_lineage_ledger",
+                "--date",
+                target_date,
+            ],
             "wrapper tail repair from failed key lineage ledger stage",
         ),
         "conversion_lane": RecoveryAction(
             "refresh_conversion_lane",
-            [_python_bin(), "-m", "src.engine.automation.conversion_lane", "--date", target_date],
+            [
+                _python_bin(),
+                "-m",
+                "src.engine.automation.conversion_lane",
+                "--date",
+                target_date,
+            ],
             "wrapper tail repair from failed conversion lane stage",
         ),
         "code_improvement_workorder_post_conversion_lane": RecoveryAction(
@@ -544,12 +656,24 @@ def _tail_stage_repair_actions(target_date: str, failed_stage: str) -> list[Reco
         [
             RecoveryAction(
                 "refresh_pattern_lab_currentness_audit",
-                [_python_bin(), "-m", "src.engine.pattern_lab_currentness_audit", "--date", target_date],
+                [
+                    _python_bin(),
+                    "-m",
+                    "src.engine.pattern_lab_currentness_audit",
+                    "--date",
+                    target_date,
+                ],
                 "wrapper tail repair pattern currentness audit refresh before final EV",
             ),
             RecoveryAction(
                 "refresh_pattern_lab_propagation_audit",
-                [_python_bin(), "-m", "src.engine.pattern_lab_propagation_audit", "--date", target_date],
+                [
+                    _python_bin(),
+                    "-m",
+                    "src.engine.pattern_lab_propagation_audit",
+                    "--date",
+                    target_date,
+                ],
                 "wrapper tail repair pattern propagation audit refresh before final EV",
             ),
             RecoveryAction(
@@ -567,12 +691,24 @@ def _tail_stage_repair_actions(target_date: str, failed_stage: str) -> list[Reco
             ),
             RecoveryAction(
                 "refresh_threshold_cycle_ev",
-                [_python_bin(), "-m", "src.engine.threshold_cycle_ev_report", "--date", target_date],
+                [
+                    _python_bin(),
+                    "-m",
+                    "src.engine.threshold_cycle_ev_report",
+                    "--date",
+                    target_date,
+                ],
                 "wrapper tail repair EV refresh after upstream audits and workorder",
             ),
             RecoveryAction(
                 "refresh_runtime_approval_summary",
-                [_python_bin(), "-m", "src.engine.runtime_approval_summary", "--date", target_date],
+                [
+                    _python_bin(),
+                    "-m",
+                    "src.engine.runtime_approval_summary",
+                    "--date",
+                    target_date,
+                ],
                 "wrapper tail repair runtime summary refresh after EV consumers",
             ),
             _build_next_preopen_apply_action(target_date),
@@ -607,12 +743,18 @@ def _can_finalize_tail_repair(verification: dict[str, Any]) -> bool:
     if verifier_status not in {"pass", "warning", "pass_with_pending_done_marker"}:
         return False
     flattened_issues = set(_flatten_issues(verification))
-    allowed_issues = MARKER_RECONCILIATION_LOG_ISSUES | {"postclose_done_marker_missing"} | DONE_ACCEPTABLE_WARNING_ISSUES
+    allowed_issues = (
+        MARKER_RECONCILIATION_LOG_ISSUES
+        | {"postclose_done_marker_missing"}
+        | DONE_ACCEPTABLE_WARNING_ISSUES
+    )
     if flattened_issues and not flattened_issues.issubset(allowed_issues):
         return False
     if verification.get("missing_required_artifacts"):
         return False
-    if verification.get("missing_downstream_links") or verification.get("stale_downstream_links"):
+    if verification.get("missing_downstream_links") or verification.get(
+        "stale_downstream_links"
+    ):
         return False
     if verification.get("source_generation_warnings"):
         return False
@@ -623,7 +765,9 @@ def _can_finalize_tail_repair(verification: dict[str, Any]) -> bool:
     return True
 
 
-def _can_attempt_failed_done_reconciliation(target_date: str, verification: dict[str, Any]) -> bool:
+def _can_attempt_failed_done_reconciliation(
+    target_date: str, verification: dict[str, Any]
+) -> bool:
     if _postclose_status_succeeded(target_date):
         return False
     predecessor = verification.get("predecessor_integrity")
@@ -640,7 +784,9 @@ def _can_attempt_failed_done_reconciliation(target_date: str, verification: dict
         return False
     if verification.get("missing_required_artifacts"):
         return False
-    if verification.get("missing_downstream_links") or verification.get("stale_downstream_links"):
+    if verification.get("missing_downstream_links") or verification.get(
+        "stale_downstream_links"
+    ):
         return False
     if verification.get("source_generation_warnings"):
         return False
@@ -655,7 +801,10 @@ def _can_attempt_failed_done_reconciliation(target_date: str, verification: dict
     if isinstance(conversion_kpi, dict) and conversion_kpi.get("status") == "fail":
         return False
     workorder_snapshot = verification.get("workorder_snapshot")
-    if isinstance(workorder_snapshot, dict) and workorder_snapshot.get("status") == "missing_snapshot_identity":
+    if (
+        isinstance(workorder_snapshot, dict)
+        and workorder_snapshot.get("status") == "missing_snapshot_identity"
+    ):
         return False
     return True
 
@@ -673,9 +822,13 @@ def _can_reconcile_marker(target_date: str, verification: dict[str, Any]) -> boo
         return False
     if predecessor and isinstance(predecessor, dict) and predecessor.get("timeouts"):
         return False
-    allowed_reconciliation_issues = MARKER_RECONCILIATION_LOG_ISSUES | DONE_ACCEPTABLE_WARNING_ISSUES
+    allowed_reconciliation_issues = (
+        MARKER_RECONCILIATION_LOG_ISSUES | DONE_ACCEPTABLE_WARNING_ISSUES
+    )
     flattened_issues = set(_flatten_issues(verification))
-    if flattened_issues and not flattened_issues.issubset(allowed_reconciliation_issues):
+    if flattened_issues and not flattened_issues.issubset(
+        allowed_reconciliation_issues
+    ):
         return False
     if not _verification_artifacts_passable(verification):
         return False
@@ -687,11 +840,17 @@ def _can_reconcile_marker(target_date: str, verification: dict[str, Any]) -> boo
         str(item)
         for item in [
             *(verification.get("handoff_warnings") or []),
-            *(((verification.get("conversion_kpi") or {}).get("warnings") or []) if isinstance(verification.get("conversion_kpi"), dict) else []),
+            *(
+                ((verification.get("conversion_kpi") or {}).get("warnings") or [])
+                if isinstance(verification.get("conversion_kpi"), dict)
+                else []
+            ),
         ]
         if str(item)
     ]
-    if warning_issues and not set(warning_issues).issubset(DONE_ACCEPTABLE_WARNING_ISSUES):
+    if warning_issues and not set(warning_issues).issubset(
+        DONE_ACCEPTABLE_WARNING_ISSUES
+    ):
         return False
     if verification.get("runtime_apply_gap_issues"):
         return False
@@ -702,7 +861,10 @@ def _can_reconcile_marker(target_date: str, verification: dict[str, Any]) -> boo
     if isinstance(conversion_kpi, dict) and conversion_kpi.get("status") == "fail":
         return False
     workorder_snapshot = verification.get("workorder_snapshot")
-    if isinstance(workorder_snapshot, dict) and workorder_snapshot.get("status") == "missing_snapshot_identity":
+    if (
+        isinstance(workorder_snapshot, dict)
+        and workorder_snapshot.get("status") == "missing_snapshot_identity"
+    ):
         return False
     for section in (
         "entry_bucket_handoff",
@@ -722,8 +884,13 @@ def _can_reconcile_marker(target_date: str, verification: dict[str, Any]) -> boo
     return True
 
 
-def _run_internal_action(target_date: str, action: RecoveryAction, verification: dict[str, Any]) -> int:
-    if action.action not in {"marker_reconciliation", "tail_repair_done_reconciliation"}:
+def _run_internal_action(
+    target_date: str, action: RecoveryAction, verification: dict[str, Any]
+) -> int:
+    if action.action not in {
+        "marker_reconciliation",
+        "tail_repair_done_reconciliation",
+    }:
         raise ValueError(f"unsupported internal action: {action.action}")
     if action.action == "marker_reconciliation":
         if not _can_reconcile_marker(target_date, verification):
@@ -757,7 +924,9 @@ def _run_internal_action(target_date: str, action: RecoveryAction, verification:
     return 0
 
 
-def _recovery_actions(target_date: str, verification: dict[str, Any], *, allow_wrapper_rerun: bool) -> list[RecoveryAction]:
+def _recovery_actions(
+    target_date: str, verification: dict[str, Any], *, allow_wrapper_rerun: bool
+) -> list[RecoveryAction]:
     issues = _flatten_issues(verification)
     actions: list[RecoveryAction] = []
     issue_text = " ".join(issues)
@@ -777,7 +946,10 @@ def _recovery_actions(target_date: str, verification: dict[str, Any], *, allow_w
             )
         )
         return actions
-    if allow_wrapper_rerun and (verification.get("missing_required_artifacts") or _has_invalid_artifact_status(verification)):
+    if allow_wrapper_rerun and (
+        verification.get("missing_required_artifacts")
+        or _has_invalid_artifact_status(verification)
+    ):
         actions.append(
             RecoveryAction(
                 "rerun_threshold_cycle_postclose",
@@ -788,11 +960,19 @@ def _recovery_actions(target_date: str, verification: dict[str, Any], *, allow_w
         return actions
     if "postclose_fail_marker_present" in log_issue_set and failed_tail_stage:
         return _tail_stage_repair_actions(target_date, failed_tail_stage)
-    if log_issue_set & MARKER_RECONCILIATION_LOG_ISSUES and _can_reconcile_marker(target_date, verification):
-        actions.extend([_build_marker_reconciliation_action(target_date), _build_verify_action(target_date)])
-        return actions
-    if "postclose_fail_marker_present" in log_issue_set and _can_attempt_failed_done_reconciliation(
+    if log_issue_set & MARKER_RECONCILIATION_LOG_ISSUES and _can_reconcile_marker(
         target_date, verification
+    ):
+        actions.extend(
+            [
+                _build_marker_reconciliation_action(target_date),
+                _build_verify_action(target_date),
+            ]
+        )
+        return actions
+    if (
+        "postclose_fail_marker_present" in log_issue_set
+        and _can_attempt_failed_done_reconciliation(target_date, verification)
     ):
         actions.extend(
             [
@@ -844,27 +1024,57 @@ def _recovery_actions(target_date: str, verification: dict[str, Any], *, allow_w
                 ),
                 RecoveryAction(
                     "refresh_threshold_cycle_ev",
-                    [_python_bin(), "-m", "src.engine.threshold_cycle_ev_report", "--date", target_date],
+                    [
+                        _python_bin(),
+                        "-m",
+                        "src.engine.threshold_cycle_ev_report",
+                        "--date",
+                        target_date,
+                    ],
                     "threshold EV source refresh before downstream consumers",
                 ),
                 RecoveryAction(
                     "refresh_pattern_lab_currentness_audit",
-                    [_python_bin(), "-m", "src.engine.pattern_lab_currentness_audit", "--date", target_date],
+                    [
+                        _python_bin(),
+                        "-m",
+                        "src.engine.pattern_lab_currentness_audit",
+                        "--date",
+                        target_date,
+                    ],
                     "pattern currentness audit refresh after EV",
                 ),
                 RecoveryAction(
                     "refresh_pattern_lab_propagation_audit",
-                    [_python_bin(), "-m", "src.engine.pattern_lab_propagation_audit", "--date", target_date],
+                    [
+                        _python_bin(),
+                        "-m",
+                        "src.engine.pattern_lab_propagation_audit",
+                        "--date",
+                        target_date,
+                    ],
                     "pattern propagation audit refresh after EV",
                 ),
                 RecoveryAction(
                     "refresh_code_improvement_workorder",
-                    [_python_bin(), "-m", "src.engine.build_code_improvement_workorder", "--date", target_date],
+                    [
+                        _python_bin(),
+                        "-m",
+                        "src.engine.build_code_improvement_workorder",
+                        "--date",
+                        target_date,
+                    ],
                     "workorder lineage repair after EV and pattern consumers",
                 ),
                 RecoveryAction(
                     "refresh_runtime_approval_summary",
-                    [_python_bin(), "-m", "src.engine.runtime_approval_summary", "--date", target_date],
+                    [
+                        _python_bin(),
+                        "-m",
+                        "src.engine.runtime_approval_summary",
+                        "--date",
+                        target_date,
+                    ],
                     "runtime summary refresh after EV consumer repair",
                 ),
                 _build_next_preopen_apply_action(target_date),
@@ -875,11 +1085,20 @@ def _recovery_actions(target_date: str, verification: dict[str, Any], *, allow_w
         return actions
     if "runtime_apply_gap" in issue_text:
         actions.append(_build_runtime_apply_gap_audit_action(target_date))
-    if "code_improvement_workorder" in issue_text or not _workorder_path(target_date).exists():
+    if (
+        "code_improvement_workorder" in issue_text
+        or not _workorder_path(target_date).exists()
+    ):
         actions.append(
             RecoveryAction(
                 "refresh_code_improvement_workorder",
-                [_python_bin(), "-m", "src.engine.build_code_improvement_workorder", "--date", target_date],
+                [
+                    _python_bin(),
+                    "-m",
+                    "src.engine.build_code_improvement_workorder",
+                    "--date",
+                    target_date,
+                ],
                 "workorder source or lineage issue",
             )
         )
@@ -893,12 +1112,24 @@ def _recovery_actions(target_date: str, verification: dict[str, Any], *, allow_w
             [
                 RecoveryAction(
                     "refresh_threshold_cycle_ev",
-                    [_python_bin(), "-m", "src.engine.threshold_cycle_ev_report", "--date", target_date],
+                    [
+                        _python_bin(),
+                        "-m",
+                        "src.engine.threshold_cycle_ev_report",
+                        "--date",
+                        target_date,
+                    ],
                     "downstream EV source refresh",
                 ),
                 RecoveryAction(
                     "refresh_runtime_approval_summary",
-                    [_python_bin(), "-m", "src.engine.runtime_approval_summary", "--date", target_date],
+                    [
+                        _python_bin(),
+                        "-m",
+                        "src.engine.runtime_approval_summary",
+                        "--date",
+                        target_date,
+                    ],
                     "runtime summary source refresh",
                 ),
             ]
@@ -935,7 +1166,9 @@ def _render_markdown(report: dict[str, Any]) -> str:
         lines.extend(["", "## Structural Blockers"])
         lines.extend(f"- `{item}`" for item in structural)
         lines.append(f"- requires_code_fix: `{report.get('requires_code_fix')}`")
-        lines.append(f"- requires_policy_lineage_fix: `{report.get('requires_policy_lineage_fix')}`")
+        lines.append(
+            f"- requires_policy_lineage_fix: `{report.get('requires_policy_lineage_fix')}`"
+        )
     next_actions = report.get("structural_next_actions") or []
     if next_actions:
         lines.extend(["", "## Structural Next Actions"])
@@ -989,12 +1222,18 @@ def build_postclose_done_controller(
         recovery_attempt += 1
         attempt = recovery_attempt
         verify_action = _build_verify_action(target_date)
-        verify_rc = 0 if dry_run else command_runner(verify_action.command or [], {"PYTHONPATH": "."})
+        verify_rc = (
+            0
+            if dry_run
+            else command_runner(verify_action.command or [], {"PYTHONPATH": "."})
+        )
         final_verifier = _load_json(_verification_path(target_date))
         verifier_status = str(final_verifier.get("status") or "missing")
         issues = _flatten_issues(final_verifier)
         if verifier_status not in {"pass", "warning"} or issues:
-            observed_root_causes.extend(issues or [f"verifier_status={verifier_status}"])
+            observed_root_causes.extend(
+                issues or [f"verifier_status={verifier_status}"]
+            )
         attempts.append(
             {
                 "attempt": attempt,
@@ -1028,7 +1267,9 @@ def build_postclose_done_controller(
         if _has_non_recoverable_issue(issues):
             blocked_reasons = issues or [f"verifier_status={verifier_status}"]
             break
-        actions = _recovery_actions(target_date, final_verifier, allow_wrapper_rerun=allow_wrapper_rerun)
+        actions = _recovery_actions(
+            target_date, final_verifier, allow_wrapper_rerun=allow_wrapper_rerun
+        )
         if not actions:
             blocked_reasons = issues or [f"verifier_status={verifier_status}"]
             break
@@ -1045,7 +1286,9 @@ def build_postclose_done_controller(
                     "action": action.action,
                     "reason": action.reason,
                     "command": action.command,
-                    "status": "planned" if dry_run else ("success" if rc == 0 else "failed"),
+                    "status": (
+                        "planned" if dry_run else ("success" if rc == 0 else "failed")
+                    ),
                     "exit_code": rc,
                 }
             )
@@ -1061,7 +1304,9 @@ def build_postclose_done_controller(
     final_issues = _flatten_issues(final_verifier)
     structural_blockers = _structural_blockers(final_verifier, final_issues)
     structural_next_actions = _structural_next_actions(structural_blockers)
-    latest_failed_tail_stage = _latest_failed_tail_stage(target_date) or _tail_stage_from_actions(actions_done)
+    latest_failed_tail_stage = _latest_failed_tail_stage(
+        target_date
+    ) or _tail_stage_from_actions(actions_done)
     selected_recovery_action = next(
         (
             item["action"]
@@ -1070,13 +1315,20 @@ def build_postclose_done_controller(
         ),
         None,
     )
-    full_wrapper_rerun_used = any(item.get("action") == "rerun_threshold_cycle_postclose" for item in actions_done)
+    full_wrapper_rerun_used = any(
+        item.get("action") == "rerun_threshold_cycle_postclose" for item in actions_done
+    )
     minimal_repair_commands = [
         item.get("command")
         for item in actions_done
-        if item.get("action") != "rerun_threshold_cycle_postclose" and item.get("command")
+        if item.get("action") != "rerun_threshold_cycle_postclose"
+        and item.get("command")
     ]
-    root_cause_items = list(dict.fromkeys(observed_root_causes or final_issues or [f"verifier_status={final_status}"]))
+    root_cause_items = list(
+        dict.fromkeys(
+            observed_root_causes or final_issues or [f"verifier_status={final_status}"]
+        )
+    )
     root_cause = ",".join(root_cause_items)
     blocked_reason = ",".join(blocked_reasons) if blocked_reasons else None
     runner_report = _load_json(_runner_path(target_date))
@@ -1084,13 +1336,23 @@ def build_postclose_done_controller(
     runner_two_pass_status = str(runner_report.get("two_pass_status") or "missing")
     runner_completed = _runner_completed(runner_report, dry_run=dry_run)
     if require_codex_completed and not dry_run and not runner_completed:
-        blocked_reasons = list(dict.fromkeys([*blocked_reasons, f"codex_workorder_runner_not_completed:{runner_status}:{runner_two_pass_status}"]))
+        blocked_reasons = list(
+            dict.fromkeys(
+                [
+                    *blocked_reasons,
+                    f"codex_workorder_runner_not_completed:{runner_status}:{runner_two_pass_status}",
+                ]
+            )
+        )
 
     if _is_done_verifier_status(target_date, final_verifier, final_issues) and not (
         require_codex_completed and not dry_run and not runner_completed
     ):
         status = "done"
-    elif dry_run and (actions_done or blocked_reasons in (["predecessor_running"], ["predecessor_status_missing"])):
+    elif dry_run and (
+        actions_done
+        or blocked_reasons in (["predecessor_running"], ["predecessor_status_missing"])
+    ):
         status = "dry_run_planned"
     elif require_codex_completed and not dry_run and not runner_completed:
         status = "blocked_uncompleted_implementation"
@@ -1122,9 +1384,12 @@ def build_postclose_done_controller(
         "minimal_repair_commands": minimal_repair_commands,
         "blocked_reason": blocked_reason,
         "structural_blockers": structural_blockers,
-        "requires_code_fix": any(str(item).startswith("requires_code_fix:") for item in structural_blockers),
+        "requires_code_fix": any(
+            str(item).startswith("requires_code_fix:") for item in structural_blockers
+        ),
         "requires_policy_lineage_fix": any(
-            str(item).startswith("requires_policy_lineage_fix:") for item in structural_blockers
+            str(item).startswith("requires_policy_lineage_fix:")
+            for item in structural_blockers
         ),
         "structural_next_actions": structural_next_actions,
         "require_codex_completed": require_codex_completed,
@@ -1132,9 +1397,15 @@ def build_postclose_done_controller(
         "predecessor_wait_sec": predecessor_wait_sec,
         "predecessor_timeout_sec": predecessor_timeout_sec,
         "final_verifier_status": final_status,
-        "threshold_cycle_postclose_status": _load_json(_status_path(target_date)).get("status"),
-        "runtime_apply_gap_status": _load_json(_runtime_gap_path(target_date)).get("status"),
-        "workorder_generation_id": _load_json(_workorder_path(target_date)).get("generation_id"),
+        "threshold_cycle_postclose_status": _load_json(_status_path(target_date)).get(
+            "status"
+        ),
+        "runtime_apply_gap_status": _load_json(_runtime_gap_path(target_date)).get(
+            "status"
+        ),
+        "workorder_generation_id": _load_json(_workorder_path(target_date)).get(
+            "generation_id"
+        ),
         "codex_workorder_runner_status": runner_status,
         "codex_workorder_runner_two_pass_status": runner_two_pass_status,
         "codex_workorder_runner_completed": runner_completed,
@@ -1164,18 +1435,26 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--predecessor-wait-sec",
         type=float,
-        default=float(os.environ.get("POSTCLOSE_DONE_CONTROLLER_PREDECESSOR_WAIT_SEC", "60")),
+        default=float(
+            os.environ.get("POSTCLOSE_DONE_CONTROLLER_PREDECESSOR_WAIT_SEC", "60")
+        ),
     )
     parser.add_argument(
         "--predecessor-timeout-sec",
         type=float,
-        default=float(os.environ.get("POSTCLOSE_DONE_CONTROLLER_PREDECESSOR_TIMEOUT_SEC", "14400")),
+        default=float(
+            os.environ.get("POSTCLOSE_DONE_CONTROLLER_PREDECESSOR_TIMEOUT_SEC", "14400")
+        ),
     )
     parser.add_argument("--allow-wrapper-rerun", action="store_true")
     parser.add_argument(
         "--require-codex-completed",
         action="store_true",
-        default=os.environ.get("POSTCLOSE_DONE_CONTROLLER_REQUIRE_CODEX_COMPLETED", "false").strip().lower()
+        default=os.environ.get(
+            "POSTCLOSE_DONE_CONTROLLER_REQUIRE_CODEX_COMPLETED", "false"
+        )
+        .strip()
+        .lower()
         in {"1", "true", "yes", "on"},
     )
     parser.add_argument("--dry-run", action="store_true")
@@ -1189,7 +1468,11 @@ def main(argv: list[str] | None = None) -> int:
         require_codex_completed=args.require_codex_completed,
         dry_run=args.dry_run,
     )
-    print(json.dumps({"status": report["status"], "date": report["date"]}, ensure_ascii=False))
+    print(
+        json.dumps(
+            {"status": report["status"], "date": report["date"]}, ensure_ascii=False
+        )
+    )
     return 0 if report["status"] in {"done", "dry_run_planned"} else 1
 
 

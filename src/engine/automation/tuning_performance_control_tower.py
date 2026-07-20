@@ -11,7 +11,6 @@ from typing import Any
 
 from src.utils.constants import DATA_DIR
 
-
 REPORT_TYPE = "tuning_performance_control_tower"
 SCHEMA_VERSION = 1
 REPORT_ROOT_DIR = DATA_DIR / "report"
@@ -25,14 +24,35 @@ SOURCE_SPECS: dict[str, tuple[Path, str]] = {
         REPORT_ROOT_DIR / "observation_source_quality_audit",
         "observation_source_quality_audit",
     ),
-    "threshold_cycle_ev": (REPORT_ROOT_DIR / "threshold_cycle_ev", "threshold_cycle_ev"),
-    "runtime_approval_summary": (REPORT_ROOT_DIR / "runtime_approval_summary", "runtime_approval_summary"),
-    "runtime_apply_bridge": (REPORT_ROOT_DIR / "runtime_apply_bridge", "runtime_apply_bridge"),
-    "runtime_apply_gap_audit": (REPORT_ROOT_DIR / "runtime_apply_gap_audit", "runtime_apply_gap_audit"),
-    "key_lineage_ledger": (REPORT_ROOT_DIR / "key_lineage_ledger", "key_lineage_ledger"),
+    "threshold_cycle_ev": (
+        REPORT_ROOT_DIR / "threshold_cycle_ev",
+        "threshold_cycle_ev",
+    ),
+    "runtime_approval_summary": (
+        REPORT_ROOT_DIR / "runtime_approval_summary",
+        "runtime_approval_summary",
+    ),
+    "runtime_apply_bridge": (
+        REPORT_ROOT_DIR / "runtime_apply_bridge",
+        "runtime_apply_bridge",
+    ),
+    "runtime_apply_gap_audit": (
+        REPORT_ROOT_DIR / "runtime_apply_gap_audit",
+        "runtime_apply_gap_audit",
+    ),
+    "key_lineage_ledger": (
+        REPORT_ROOT_DIR / "key_lineage_ledger",
+        "key_lineage_ledger",
+    ),
     "conversion_lane": (REPORT_ROOT_DIR / "conversion_lane", "conversion_lane"),
-    "lifecycle_decision_matrix": (REPORT_ROOT_DIR / "lifecycle_decision_matrix", "lifecycle_decision_matrix"),
-    "lifecycle_bucket_discovery": (REPORT_ROOT_DIR / "lifecycle_bucket_discovery", "lifecycle_bucket_discovery"),
+    "lifecycle_decision_matrix": (
+        REPORT_ROOT_DIR / "lifecycle_decision_matrix",
+        "lifecycle_decision_matrix",
+    ),
+    "lifecycle_bucket_discovery": (
+        REPORT_ROOT_DIR / "lifecycle_bucket_discovery",
+        "lifecycle_bucket_discovery",
+    ),
     "swing_lifecycle_decision_matrix": (
         REPORT_ROOT_DIR / "swing_lifecycle_decision_matrix",
         "swing_lifecycle_decision_matrix",
@@ -133,7 +153,11 @@ def _scalp_sim_policy_catalog_path(target_date: str) -> Path:
 
 
 def _postclose_verifier_path(target_date: str) -> Path:
-    return REPORT_ROOT_DIR / "threshold_cycle_postclose_verification" / f"threshold_cycle_postclose_verification_{target_date}.json"
+    return (
+        REPORT_ROOT_DIR
+        / "threshold_cycle_postclose_verification"
+        / f"threshold_cycle_postclose_verification_{target_date}.json"
+    )
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -201,11 +225,15 @@ def _artifact_status(path: Path, payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _previous_report(label: str, target_date: str) -> tuple[str | None, Path | None, dict[str, Any]]:
+def _previous_report(
+    label: str, target_date: str
+) -> tuple[str | None, Path | None, dict[str, Any]]:
     directory, prefix = SOURCE_SPECS[label]
     candidates: list[tuple[str, Path]] = []
     for path in directory.glob(f"{prefix}_*.json"):
-        match = re.fullmatch(rf"{re.escape(prefix)}_(\d{{4}}-\d{{2}}-\d{{2}})\.json", path.name)
+        match = re.fullmatch(
+            rf"{re.escape(prefix)}_(\d{{4}}-\d{{2}}-\d{{2}})\.json", path.name
+        )
         if not match:
             continue
         current_date = match.group(1)
@@ -217,7 +245,9 @@ def _previous_report(label: str, target_date: str) -> tuple[str | None, Path | N
     return previous_date, previous_path, _load_json(previous_path)
 
 
-def _delta(current: dict[str, Any], previous: dict[str, Any], keys: tuple[str, ...]) -> dict[str, int | float | None]:
+def _delta(
+    current: dict[str, Any], previous: dict[str, Any], keys: tuple[str, ...]
+) -> dict[str, int | float | None]:
     out: dict[str, int | float | None] = {}
     for key in keys:
         current_value = current.get(key)
@@ -228,7 +258,11 @@ def _delta(current: dict[str, Any], previous: dict[str, Any], keys: tuple[str, .
         if isinstance(current_value, float) or isinstance(previous_value, float):
             current_number = _safe_float(current_value)
             previous_number = _safe_float(previous_value)
-            out[key] = None if current_number is None or previous_number is None else round(current_number - previous_number, 4)
+            out[key] = (
+                None
+                if current_number is None or previous_number is None
+                else round(current_number - previous_number, 4)
+            )
         else:
             out[key] = _safe_int(current_value) - _safe_int(previous_value)
     return out
@@ -242,7 +276,9 @@ def _progress_section(
     keys: tuple[str, ...],
 ) -> dict[str, Any]:
     current_summary = _summary(payload)
-    previous_date, previous_path, previous_payload = _previous_report(label, target_date)
+    previous_date, previous_path, previous_payload = _previous_report(
+        label, target_date
+    )
     previous_summary = _summary(previous_payload)
     return {
         "current_date": target_date,
@@ -251,34 +287,66 @@ def _progress_section(
         "status": current_summary.get("status"),
         "source_contract_status": current_summary.get("source_contract_status"),
         "current": {key: current_summary.get(key) for key in keys},
-        "previous": {key: previous_summary.get(key) for key in keys} if previous_summary else {},
-        "delta": _delta(current_summary, previous_summary, keys) if previous_summary else {},
-        "state_counts": current_summary.get("state_counts") if isinstance(current_summary.get("state_counts"), dict) else {},
-        "stage_counts": current_summary.get("stage_counts") if isinstance(current_summary.get("stage_counts"), dict) else {},
-        "warnings": current_summary.get("warnings") if isinstance(current_summary.get("warnings"), list) else [],
+        "previous": (
+            {key: previous_summary.get(key) for key in keys} if previous_summary else {}
+        ),
+        "delta": (
+            _delta(current_summary, previous_summary, keys) if previous_summary else {}
+        ),
+        "state_counts": (
+            current_summary.get("state_counts")
+            if isinstance(current_summary.get("state_counts"), dict)
+            else {}
+        ),
+        "stage_counts": (
+            current_summary.get("stage_counts")
+            if isinstance(current_summary.get("stage_counts"), dict)
+            else {}
+        ),
+        "warnings": (
+            current_summary.get("warnings")
+            if isinstance(current_summary.get("warnings"), list)
+            else []
+        ),
     }
 
 
 def _source_split_summary(daily_ev_summary: dict[str, Any]) -> dict[str, Any]:
-    source_split = daily_ev_summary.get("source_split") if isinstance(daily_ev_summary.get("source_split"), dict) else {}
+    source_split = (
+        daily_ev_summary.get("source_split")
+        if isinstance(daily_ev_summary.get("source_split"), dict)
+        else {}
+    )
     out: dict[str, Any] = {}
     for label in ("real", "sim", "combined"):
-        payload = source_split.get(label) if isinstance(source_split.get(label), dict) else {}
+        payload = (
+            source_split.get(label) if isinstance(source_split.get(label), dict) else {}
+        )
         out[label] = {
             "sample": _safe_int(payload.get("sample")),
             "avg_profit_rate": _safe_float(payload.get("avg_profit_rate")),
             "win_rate": _safe_float(payload.get("win_rate")),
-            "downside_p10_profit_rate": _safe_float(payload.get("downside_p10_profit_rate")),
-            "upside_p90_profit_rate": _safe_float(payload.get("upside_p90_profit_rate")),
+            "downside_p10_profit_rate": _safe_float(
+                payload.get("downside_p10_profit_rate")
+            ),
+            "upside_p90_profit_rate": _safe_float(
+                payload.get("upside_p90_profit_rate")
+            ),
         }
-    out["real_family_candidate_authority"] = source_split.get("real_family_candidate_authority")
+    out["real_family_candidate_authority"] = source_split.get(
+        "real_family_candidate_authority"
+    )
     out["sim_calibration_authority"] = source_split.get("sim_calibration_authority")
     out["combined_authority"] = source_split.get("combined_authority")
     return out
 
 
 def _real_pnl_is_tuning_performance(apply_plan: dict[str, Any]) -> tuple[bool, str]:
-    post_apply = apply_plan.get("post_apply_attribution") if isinstance(apply_plan.get("post_apply_attribution"), dict) else {}
+    post_apply = (
+        apply_plan.get("post_apply_attribution")
+        if isinstance(apply_plan.get("post_apply_attribution"), dict)
+        else {}
+    )
     status = str(post_apply.get("status") or "").strip()
     if status in {"completed", "attributed", "pass"}:
         sample = max(
@@ -293,8 +361,14 @@ def _real_pnl_is_tuning_performance(apply_plan: dict[str, Any]) -> tuple[bool, s
     return False, f"post_apply_attribution_not_ready:{status or 'unknown'}"
 
 
-def _ev_authority(threshold_ev: dict[str, Any], apply_plan: dict[str, Any]) -> dict[str, Any]:
-    daily = threshold_ev.get("daily_ev_summary") if isinstance(threshold_ev.get("daily_ev_summary"), dict) else {}
+def _ev_authority(
+    threshold_ev: dict[str, Any], apply_plan: dict[str, Any]
+) -> dict[str, Any]:
+    daily = (
+        threshold_ev.get("daily_ev_summary")
+        if isinstance(threshold_ev.get("daily_ev_summary"), dict)
+        else {}
+    )
     real_is_tuning, reason = _real_pnl_is_tuning_performance(apply_plan)
     return {
         "completed_trades": _safe_int(daily.get("completed_trades")),
@@ -302,7 +376,11 @@ def _ev_authority(threshold_ev: dict[str, Any], apply_plan: dict[str, Any]) -> d
         "avg_profit_rate_pct": _safe_float(daily.get("avg_profit_rate_pct")),
         "realized_pnl_krw": _safe_int(daily.get("realized_pnl_krw")),
         "source_split": _source_split_summary(daily),
-        "warnings": threshold_ev.get("warnings") if isinstance(threshold_ev.get("warnings"), list) else [],
+        "warnings": (
+            threshold_ev.get("warnings")
+            if isinstance(threshold_ev.get("warnings"), list)
+            else []
+        ),
         "real_pnl_is_tuning_performance": real_is_tuning,
         "real_pnl_interpretation_reason": reason,
         "real_pnl_allowed_use": (
@@ -315,8 +393,14 @@ def _ev_authority(threshold_ev: dict[str, Any], apply_plan: dict[str, Any]) -> d
     }
 
 
-def _selected_runtime(apply_plan: dict[str, Any], threshold_ev: dict[str, Any]) -> dict[str, Any]:
-    runtime_apply = threshold_ev.get("runtime_apply") if isinstance(threshold_ev.get("runtime_apply"), dict) else {}
+def _selected_runtime(
+    apply_plan: dict[str, Any], threshold_ev: dict[str, Any]
+) -> dict[str, Any]:
+    runtime_apply = (
+        threshold_ev.get("runtime_apply")
+        if isinstance(threshold_ev.get("runtime_apply"), dict)
+        else {}
+    )
     selected = apply_plan.get("auto_apply_selected")
     if not isinstance(selected, list):
         selected = []
@@ -328,10 +412,14 @@ def _selected_runtime(apply_plan: dict[str, Any], threshold_ev: dict[str, Any]) 
         "runtime_change": _safe_bool(apply_plan.get("runtime_change")),
         "threshold_ev_runtime_change": _safe_bool(runtime_apply.get("runtime_change")),
         "selected_family_count": len(selected),
-        "selected_families": [str(item.get("family") or "") for item in selected if isinstance(item, dict)],
-        "post_apply_attribution": apply_plan.get("post_apply_attribution")
-        if isinstance(apply_plan.get("post_apply_attribution"), dict)
-        else {},
+        "selected_families": [
+            str(item.get("family") or "") for item in selected if isinstance(item, dict)
+        ],
+        "post_apply_attribution": (
+            apply_plan.get("post_apply_attribution")
+            if isinstance(apply_plan.get("post_apply_attribution"), dict)
+            else {}
+        ),
     }
 
 
@@ -339,33 +427,57 @@ def _workorder_summary(code_workorder: dict[str, Any]) -> dict[str, Any]:
     summary = _summary(code_workorder)
     return {
         "selected_order_count": _safe_int(summary.get("selected_order_count")),
-        "selected_decision_counts": summary.get("selected_decision_counts")
-        if isinstance(summary.get("selected_decision_counts"), dict)
-        else {},
-        "selected_route_counts": summary.get("selected_route_counts")
-        if isinstance(summary.get("selected_route_counts"), dict)
-        else {},
-        "selected_implement_now_route_count": _safe_int(summary.get("selected_implement_now_route_count")),
+        "selected_decision_counts": (
+            summary.get("selected_decision_counts")
+            if isinstance(summary.get("selected_decision_counts"), dict)
+            else {}
+        ),
+        "selected_route_counts": (
+            summary.get("selected_route_counts")
+            if isinstance(summary.get("selected_route_counts"), dict)
+            else {}
+        ),
+        "selected_implement_now_route_count": _safe_int(
+            summary.get("selected_implement_now_route_count")
+        ),
         "selected_unimplemented_runtime_effect_false_count": _safe_int(
             summary.get("selected_unimplemented_runtime_effect_false_count")
         ),
-        "pattern_lab_ai_review_source_order_count": _safe_int(summary.get("pattern_lab_ai_review_source_order_count")),
-        "pattern_lab_currentness_source_order_count": _safe_int(summary.get("pattern_lab_currentness_source_order_count")),
-        "producer_gap_discovery_source_order_count": _safe_int(summary.get("producer_gap_discovery_source_order_count")),
+        "pattern_lab_ai_review_source_order_count": _safe_int(
+            summary.get("pattern_lab_ai_review_source_order_count")
+        ),
+        "pattern_lab_currentness_source_order_count": _safe_int(
+            summary.get("pattern_lab_currentness_source_order_count")
+        ),
+        "producer_gap_discovery_source_order_count": _safe_int(
+            summary.get("producer_gap_discovery_source_order_count")
+        ),
         "stage_hook_workorder_discovery_source_order_count": _safe_int(
             summary.get("stage_hook_workorder_discovery_source_order_count")
         ),
-        "root_cause_closure_status_counts": summary.get("root_cause_closure_status_counts")
-        if isinstance(summary.get("root_cause_closure_status_counts"), dict)
-        else {},
-        "implementation_done_count": _safe_int(summary.get("implementation_done_count")),
-        "artifact_regeneration_required_count": _safe_int(summary.get("artifact_regeneration_required_count")),
-        "handoff_closed_root_cause_open_count": _safe_int(summary.get("handoff_closed_root_cause_open_count")),
+        "root_cause_closure_status_counts": (
+            summary.get("root_cause_closure_status_counts")
+            if isinstance(summary.get("root_cause_closure_status_counts"), dict)
+            else {}
+        ),
+        "implementation_done_count": _safe_int(
+            summary.get("implementation_done_count")
+        ),
+        "artifact_regeneration_required_count": _safe_int(
+            summary.get("artifact_regeneration_required_count")
+        ),
+        "handoff_closed_root_cause_open_count": _safe_int(
+            summary.get("handoff_closed_root_cause_open_count")
+        ),
         "root_cause_closed_count": _safe_int(summary.get("root_cause_closed_count")),
-        "needs_followup_workorder_count": _safe_int(summary.get("needs_followup_workorder_count")),
-        "root_cause_open_top": summary.get("root_cause_open_top")
-        if isinstance(summary.get("root_cause_open_top"), list)
-        else [],
+        "needs_followup_workorder_count": _safe_int(
+            summary.get("needs_followup_workorder_count")
+        ),
+        "root_cause_open_top": (
+            summary.get("root_cause_open_top")
+            if isinstance(summary.get("root_cause_open_top"), list)
+            else []
+        ),
         "interpretation": "workorder_intake_only_not_automatic_repo_change",
     }
 
@@ -373,8 +485,12 @@ def _workorder_summary(code_workorder: dict[str, Any]) -> dict[str, Any]:
 def _runtime_summary(runtime_summary: dict[str, Any]) -> dict[str, Any]:
     summary = _summary(runtime_summary)
     return {
-        "runtime_mutation_allowed": _safe_bool(runtime_summary.get("runtime_mutation_allowed")),
-        "scalping_selected_auto_bounded_live": _safe_int(summary.get("scalping_selected_auto_bounded_live")),
+        "runtime_mutation_allowed": _safe_bool(
+            runtime_summary.get("runtime_mutation_allowed")
+        ),
+        "scalping_selected_auto_bounded_live": _safe_int(
+            summary.get("scalping_selected_auto_bounded_live")
+        ),
         "lifecycle_bucket_discovery_live_auto_apply_ready_count": _safe_int(
             summary.get("lifecycle_bucket_discovery_live_auto_apply_ready_count")
         ),
@@ -388,7 +504,11 @@ def _runtime_summary(runtime_summary: dict[str, Any]) -> dict[str, Any]:
         "pattern_lab_ai_review_status": summary.get("pattern_lab_ai_review_status"),
         "producer_gap_discovery_status": summary.get("producer_gap_discovery_status"),
         "pattern_lab_propagation_status": summary.get("pattern_lab_propagation_status"),
-        "warnings": runtime_summary.get("warnings") if isinstance(runtime_summary.get("warnings"), list) else [],
+        "warnings": (
+            runtime_summary.get("warnings")
+            if isinstance(runtime_summary.get("warnings"), list)
+            else []
+        ),
     }
 
 
@@ -402,16 +522,24 @@ def _runtime_gap_audit_summary(runtime_gap_audit: dict[str, Any]) -> dict[str, A
             if isinstance(directives, list)
             else _safe_int(summary.get("codex_directive_count"))
         ),
-        "source_dimension_gap_count": _safe_int(summary.get("source_dimension_gap_count")),
+        "source_dimension_gap_count": _safe_int(
+            summary.get("source_dimension_gap_count")
+        ),
         "quiet_gap_count": _safe_int(summary.get("quiet_gap_count")),
-        "quiet_gap_codex_directive_count": _safe_int(summary.get("quiet_gap_codex_directive_count")),
-        "actionable_unknown_gap_count": _safe_int(summary.get("actionable_unknown_gap_count")),
+        "quiet_gap_codex_directive_count": _safe_int(
+            summary.get("quiet_gap_codex_directive_count")
+        ),
+        "actionable_unknown_gap_count": _safe_int(
+            summary.get("actionable_unknown_gap_count")
+        ),
         "critical_failure_count": _safe_int(summary.get("critical_failure_count")),
         "retry_queue_count": _safe_int(summary.get("retry_queue_count")),
     }
 
 
-def _conversion_first_summary(conversion_lane: dict[str, Any], key_lineage_ledger: dict[str, Any]) -> dict[str, Any]:
+def _conversion_first_summary(
+    conversion_lane: dict[str, Any], key_lineage_ledger: dict[str, Any]
+) -> dict[str, Any]:
     conversion_summary = _summary(conversion_lane)
     lineage_summary = _summary(key_lineage_ledger)
     blockers = conversion_lane.get("conversion_blocker_rank")
@@ -424,44 +552,70 @@ def _conversion_first_summary(conversion_lane: dict[str, Any], key_lineage_ledge
     if not isinstance(sim_priority_only, list):
         sim_priority_only = []
     if "positive_ev_sample_floor_blocked_count" in conversion_summary:
-        conversion_positive_sample_floor = _safe_int(conversion_summary.get("positive_ev_sample_floor_blocked_count"))
+        conversion_positive_sample_floor = _safe_int(
+            conversion_summary.get("positive_ev_sample_floor_blocked_count")
+        )
     else:
-        conversion_positive_sample_floor = _safe_int(lineage_summary.get("positive_ev_sample_floor_blocked_count"))
+        conversion_positive_sample_floor = _safe_int(
+            lineage_summary.get("positive_ev_sample_floor_blocked_count")
+        )
     conversion_positive_unknown_floor = _safe_int(
         conversion_summary.get("positive_ev_sample_floor_unknown_floor_count")
     )
     conversion_positive_floor_related = _safe_int(
         conversion_summary.get("positive_ev_sample_floor_related_count")
     )
-    lineage_positive_sample_floor = _safe_int(lineage_summary.get("positive_ev_sample_floor_blocked_count"))
+    lineage_positive_sample_floor = _safe_int(
+        lineage_summary.get("positive_ev_sample_floor_blocked_count")
+    )
     conversion_sample_floor_count_scope = ""
     if conversion_summary:
         conversion_sample_floor_count_scope = (
-            conversion_summary.get("positive_ev_sample_floor_count_scope") or "conversion_candidates"
+            conversion_summary.get("positive_ev_sample_floor_count_scope")
+            or "conversion_candidates"
         )
     lineage_sample_floor_count_scope = ""
     if lineage_summary:
         lineage_sample_floor_count_scope = (
-            lineage_summary.get("positive_ev_sample_floor_count_scope") or "lineage_rows"
+            lineage_summary.get("positive_ev_sample_floor_count_scope")
+            or "lineage_rows"
         )
     return {
         "top_conversion_candidates": queue[:10],
         "top_conversion_blockers": blockers[:10],
         "key_lineage_status": {
             "source_key_count": _safe_int(lineage_summary.get("source_key_count")),
-            "runtime_observation_target_date": lineage_summary.get("runtime_observation_target_date"),
-            "runtime_policy_source_date": lineage_summary.get("runtime_policy_source_date"),
-            "postclose_candidate_source_date": lineage_summary.get("postclose_candidate_source_date"),
+            "runtime_observation_target_date": lineage_summary.get(
+                "runtime_observation_target_date"
+            ),
+            "runtime_policy_source_date": lineage_summary.get(
+                "runtime_policy_source_date"
+            ),
+            "postclose_candidate_source_date": lineage_summary.get(
+                "postclose_candidate_source_date"
+            ),
             "runtime_policy_matches_postclose_candidate_source": lineage_summary.get(
                 "runtime_policy_matches_postclose_candidate_source"
             ),
-            "new_postclose_candidates_due_state": lineage_summary.get("new_postclose_candidates_due_state"),
-            "same_key_continuity_pass_count": _safe_int(lineage_summary.get("same_key_continuity_pass_count")),
+            "new_postclose_candidates_due_state": lineage_summary.get(
+                "new_postclose_candidates_due_state"
+            ),
+            "same_key_continuity_pass_count": _safe_int(
+                lineage_summary.get("same_key_continuity_pass_count")
+            ),
             "key_mismatch_count": _safe_int(lineage_summary.get("key_mismatch_count")),
-            "catalog_missing_count": _safe_int(lineage_summary.get("catalog_missing_count")),
-            "preopen_missing_count": _safe_int(lineage_summary.get("preopen_missing_count")),
-            "not_instrumented_count": _safe_int(lineage_summary.get("not_instrumented_count")),
-            "natural_match_0_count": _safe_int(lineage_summary.get("natural_match_0_count")),
+            "catalog_missing_count": _safe_int(
+                lineage_summary.get("catalog_missing_count")
+            ),
+            "preopen_missing_count": _safe_int(
+                lineage_summary.get("preopen_missing_count")
+            ),
+            "not_instrumented_count": _safe_int(
+                lineage_summary.get("not_instrumented_count")
+            ),
+            "natural_match_0_count": _safe_int(
+                lineage_summary.get("natural_match_0_count")
+            ),
             "positive_ev_runtime_observed_count": _safe_int(
                 lineage_summary.get("positive_ev_runtime_observed_count")
             ),
@@ -469,8 +623,12 @@ def _conversion_first_summary(conversion_lane: dict[str, Any], key_lineage_ledge
                 lineage_summary.get("positive_ev_sample_floor_blocked_count")
             ),
         },
-        "sim_priority_only_count": _safe_int(conversion_summary.get("sim_priority_only_count") or len(sim_priority_only)),
-        "real_conversion_queue_count": _safe_int(conversion_summary.get("real_conversion_queue_count") or len(queue)),
+        "sim_priority_only_count": _safe_int(
+            conversion_summary.get("sim_priority_only_count") or len(sim_priority_only)
+        ),
+        "real_conversion_queue_count": _safe_int(
+            conversion_summary.get("real_conversion_queue_count") or len(queue)
+        ),
         "positive_ev_runtime_observed_count": _safe_int(
             conversion_summary.get("positive_ev_runtime_observed_count")
             or lineage_summary.get("positive_ev_runtime_observed_count")
@@ -518,15 +676,23 @@ def _conversion_first_summary(conversion_lane: dict[str, Any], key_lineage_ledge
         "positive_ev_previous_policy_natural_match_0_count": _safe_int(
             conversion_summary.get("positive_ev_previous_policy_natural_match_0_count")
         ),
-        "top_ldm_bucket_blocker_class": conversion_summary.get("top_ldm_bucket_blocker_class"),
-        "submit_funnel_blocker_count": _safe_int(conversion_summary.get("submit_funnel_blocker_count")),
-        "submit_drought_is_ldm_bucket_blocker": conversion_summary.get("submit_drought_is_ldm_bucket_blocker"),
+        "top_ldm_bucket_blocker_class": conversion_summary.get(
+            "top_ldm_bucket_blocker_class"
+        ),
+        "submit_funnel_blocker_count": _safe_int(
+            conversion_summary.get("submit_funnel_blocker_count")
+        ),
+        "submit_drought_is_ldm_bucket_blocker": conversion_summary.get(
+            "submit_drought_is_ldm_bucket_blocker"
+        ),
         "why_not_real_runtime": blockers[:20],
         "summary": conversion_summary,
     }
 
 
-def _source_freshness(payloads: dict[str, dict[str, Any]], verifier_report: dict[str, Any]) -> dict[str, Any]:
+def _source_freshness(
+    payloads: dict[str, dict[str, Any]], verifier_report: dict[str, Any]
+) -> dict[str, Any]:
     consumer_flag_by_key = {
         "threshold_cycle_ev": "daily_ev",
         "runtime_approval_summary": "runtime_approval_summary",
@@ -539,10 +705,14 @@ def _source_freshness(payloads: dict[str, dict[str, Any]], verifier_report: dict
         "swing_lifecycle_bucket_discovery": "swing_lifecycle_bucket_discovery",
     }
     execution_profile = (
-        verifier_report.get("execution_profile") if isinstance(verifier_report.get("execution_profile"), dict) else {}
+        verifier_report.get("execution_profile")
+        if isinstance(verifier_report.get("execution_profile"), dict)
+        else {}
     )
     execution_flags = (
-        execution_profile.get("flags") if isinstance(execution_profile.get("flags"), dict) else {}
+        execution_profile.get("flags")
+        if isinstance(execution_profile.get("flags"), dict)
+        else {}
     )
     disabled_stage_flags = set(
         execution_profile.get("disabled_stage_flags")
@@ -556,12 +726,10 @@ def _source_freshness(payloads: dict[str, dict[str, Any]], verifier_report: dict
         return bool(execution_flags.get(flag, True))
 
     consumer_keys = tuple(
-        key for key, flag in consumer_flag_by_key.items()
-        if stage_enabled(flag)
+        key for key, flag in consumer_flag_by_key.items() if stage_enabled(flag)
     )
     source_keys = tuple(
-        key for key, flag in source_flag_by_key.items()
-        if stage_enabled(flag)
+        key for key, flag in source_flag_by_key.items() if stage_enabled(flag)
     )
     stale_pairs: list[dict[str, Any]] = []
     generated_at = {
@@ -605,7 +773,11 @@ def _window_discovery_path(target_date: str, suffix: str | None = None) -> Path:
 
 
 def _lifecycle_windows_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    windows = payload.get("lifecycle_bucket_windows") if isinstance(payload.get("lifecycle_bucket_windows"), dict) else {}
+    windows = (
+        payload.get("lifecycle_bucket_windows")
+        if isinstance(payload.get("lifecycle_bucket_windows"), dict)
+        else {}
+    )
     return windows
 
 
@@ -613,7 +785,9 @@ def _window_item_from_payload(windows: dict[str, Any], suffix: str) -> dict[str,
     if suffix == "daily":
         item = windows.get("daily")
         return item if isinstance(item, dict) else {}
-    window_items = windows.get("windows") if isinstance(windows.get("windows"), dict) else {}
+    window_items = (
+        windows.get("windows") if isinstance(windows.get("windows"), dict) else {}
+    )
     item = window_items.get(suffix)
     return item if isinstance(item, dict) else {}
 
@@ -635,24 +809,42 @@ def _summary_window_item(
 ) -> dict[str, Any]:
     summary = _summary(fallback_payload)
     available = _safe_bool(source_item.get("available")) or bool(fallback_payload)
-    artifact = source_item.get("artifact") or (str(fallback_path) if fallback_path.exists() else None)
+    artifact = source_item.get("artifact") or (
+        str(fallback_path) if fallback_path.exists() else None
+    )
     return {
         "artifact": artifact,
         "available": available,
         "window_role": source_item.get("window_role") or _window_role(suffix),
-        "window_policy": source_item.get("window_policy") or fallback_payload.get("window_policy") or summary.get("source_window_policy") or ("daily_only" if suffix == "daily" else suffix),
-        "status": source_item.get("status") or summary.get("status") or ("missing" if not available else "unknown"),
-        "source_contract_status": source_item.get("source_contract_status") or summary.get("source_contract_status"),
-        "ai_two_pass_review_status": source_item.get("ai_two_pass_review_status") or summary.get("ai_two_pass_review_status"),
-        "parent_bucket_count": _safe_int(source_item.get("parent_bucket_count") or summary.get("parent_bucket_count")),
-        "selected_parent_level": source_item.get("selected_parent_level") or summary.get("selected_parent_level"),
-        "parent_granularity_status": source_item.get("parent_granularity_status") or summary.get("parent_granularity_status"),
-        "absorbed_sample_count": _safe_int(source_item.get("absorbed_sample_count") or summary.get("absorbed_sample_count")),
+        "window_policy": source_item.get("window_policy")
+        or fallback_payload.get("window_policy")
+        or summary.get("source_window_policy")
+        or ("daily_only" if suffix == "daily" else suffix),
+        "status": source_item.get("status")
+        or summary.get("status")
+        or ("missing" if not available else "unknown"),
+        "source_contract_status": source_item.get("source_contract_status")
+        or summary.get("source_contract_status"),
+        "ai_two_pass_review_status": source_item.get("ai_two_pass_review_status")
+        or summary.get("ai_two_pass_review_status"),
+        "parent_bucket_count": _safe_int(
+            source_item.get("parent_bucket_count") or summary.get("parent_bucket_count")
+        ),
+        "selected_parent_level": source_item.get("selected_parent_level")
+        or summary.get("selected_parent_level"),
+        "parent_granularity_status": source_item.get("parent_granularity_status")
+        or summary.get("parent_granularity_status"),
+        "absorbed_sample_count": _safe_int(
+            source_item.get("absorbed_sample_count")
+            or summary.get("absorbed_sample_count")
+        ),
         "child_conflict_warning_count": _safe_int(
-            source_item.get("child_conflict_warning_count") or summary.get("child_conflict_warning_count")
+            source_item.get("child_conflict_warning_count")
+            or summary.get("child_conflict_warning_count")
         ),
         "live_auto_apply_ready_count": _safe_int(
-            source_item.get("live_auto_apply_ready_count") or summary.get("live_auto_apply_ready_count")
+            source_item.get("live_auto_apply_ready_count")
+            or summary.get("live_auto_apply_ready_count")
         ),
     }
 
@@ -666,16 +858,24 @@ def _lifecycle_bucket_window_summary(
 ) -> dict[str, Any]:
     ev_windows = _lifecycle_windows_payload(threshold_ev)
     runtime_windows = _lifecycle_windows_payload(runtime_summary)
-    promotion_window = ev_windows.get("promotion_window") or runtime_windows.get("promotion_window") or "mtd"
+    promotion_window = (
+        ev_windows.get("promotion_window")
+        or runtime_windows.get("promotion_window")
+        or "mtd"
+    )
     confirmation_windows = (
         ev_windows.get("confirmation_windows")
         if isinstance(ev_windows.get("confirmation_windows"), list)
-        else runtime_windows.get("confirmation_windows")
-        if isinstance(runtime_windows.get("confirmation_windows"), list)
-        else ["rolling5d", "rolling10d"]
+        else (
+            runtime_windows.get("confirmation_windows")
+            if isinstance(runtime_windows.get("confirmation_windows"), list)
+            else ["rolling5d", "rolling10d"]
+        )
     )
     daily_path = _window_discovery_path(target_date)
-    daily_item = _window_item_from_payload(ev_windows, "daily") or _window_item_from_payload(runtime_windows, "daily")
+    daily_item = _window_item_from_payload(
+        ev_windows, "daily"
+    ) or _window_item_from_payload(runtime_windows, "daily")
     windows: dict[str, Any] = {
         "daily": _summary_window_item(
             suffix="daily",
@@ -686,7 +886,9 @@ def _lifecycle_bucket_window_summary(
     }
     for suffix in ("rolling5d", "rolling10d", "mtd"):
         path = _window_discovery_path(target_date, suffix)
-        source_item = _window_item_from_payload(ev_windows, suffix) or _window_item_from_payload(runtime_windows, suffix)
+        source_item = _window_item_from_payload(
+            ev_windows, suffix
+        ) or _window_item_from_payload(runtime_windows, suffix)
         windows[suffix] = _summary_window_item(
             suffix=suffix,
             source_item=source_item,
@@ -701,7 +903,11 @@ def _lifecycle_bucket_window_summary(
         "warnings": [
             str(item)
             for source in (ev_windows, runtime_windows)
-            for item in (source.get("warnings") if isinstance(source.get("warnings"), list) else [])
+            for item in (
+                source.get("warnings")
+                if isinstance(source.get("warnings"), list)
+                else []
+            )
             if str(item)
         ],
     }
@@ -709,43 +915,59 @@ def _lifecycle_bucket_window_summary(
 
 def _bridge_summary(bridge_report: dict[str, Any]) -> dict[str, Any]:
     summary = _summary(bridge_report)
-    promotion_contract_passed = summary.get("lifecycle_bucket_promotion_contract_passed")
+    promotion_contract_passed = summary.get(
+        "lifecycle_bucket_promotion_contract_passed"
+    )
     raw_emit_state = summary.get("greenfield_policy_emit_state")
     emit_state = raw_emit_state
     greenfield_flow_exists = (
         _safe_int(summary.get("greenfield_lifecycle_flow_candidate_count")) > 0
-        or _safe_int(summary.get("greenfield_lifecycle_flow_surfaced_candidate_count")) > 0
+        or _safe_int(summary.get("greenfield_lifecycle_flow_surfaced_candidate_count"))
+        > 0
     )
-    if (
-        raw_emit_state == "not_emitted_no_complete_lifecycle_flow"
-        and (
-            summary.get("greenfield_policy_emit_blocker") == "no_live_auto_ready_lifecycle_flow"
-            or (
-                greenfield_flow_exists
-                and _safe_int(summary.get("greenfield_lifecycle_flow_live_auto_apply_candidate_count")) <= 0
+    if raw_emit_state == "not_emitted_no_complete_lifecycle_flow" and (
+        summary.get("greenfield_policy_emit_blocker")
+        == "no_live_auto_ready_lifecycle_flow"
+        or (
+            greenfield_flow_exists
+            and _safe_int(
+                summary.get("greenfield_lifecycle_flow_live_auto_apply_candidate_count")
             )
+            <= 0
         )
     ):
         emit_state = "not_emitted_no_live_auto_ready_lifecycle_flow"
     return {
         "status": bridge_report.get("status"),
         "candidate_count": _safe_int(summary.get("candidate_count")),
-        "live_auto_apply_ready_count": _safe_int(summary.get("live_auto_apply_ready_count")),
-        "greenfield_real_env_ready_count": _safe_int(summary.get("greenfield_real_env_ready_count")),
+        "live_auto_apply_ready_count": _safe_int(
+            summary.get("live_auto_apply_ready_count")
+        ),
+        "greenfield_real_env_ready_count": _safe_int(
+            summary.get("greenfield_real_env_ready_count")
+        ),
         "greenfield_policy_emit_state": emit_state,
         "greenfield_policy_emit_state_raw": raw_emit_state,
         "greenfield_policy_emit_blocker": summary.get("greenfield_policy_emit_blocker"),
-        "greenfield_policy_emit_blocker_detail": summary.get("greenfield_policy_emit_blocker_detail"),
+        "greenfield_policy_emit_blocker_detail": summary.get(
+            "greenfield_policy_emit_blocker_detail"
+        ),
         "greenfield_live_auto_ready_lifecycle_flow_count": _safe_int(
             summary.get("greenfield_live_auto_ready_lifecycle_flow_count")
         ),
-        "lifecycle_bucket_promotion_window": summary.get("lifecycle_bucket_promotion_window"),
+        "lifecycle_bucket_promotion_window": summary.get(
+            "lifecycle_bucket_promotion_window"
+        ),
         "lifecycle_bucket_promotion_contract_passed": (
             promotion_contract_passed
             if isinstance(promotion_contract_passed, bool)
             else _safe_bool(promotion_contract_passed)
         ),
-        "warnings": bridge_report.get("warnings") if isinstance(bridge_report.get("warnings"), list) else [],
+        "warnings": (
+            bridge_report.get("warnings")
+            if isinstance(bridge_report.get("warnings"), list)
+            else []
+        ),
     }
 
 
@@ -779,50 +1001,94 @@ def _postclose_verifier_summary(
     )
     return {
         "status": verifier_report.get("status"),
-        "handoff_warnings": verifier_report.get("handoff_warnings")
-        if isinstance(verifier_report.get("handoff_warnings"), list)
-        else [],
-        "missing_downstream_links": verifier_report.get("missing_downstream_links")
-        if isinstance(verifier_report.get("missing_downstream_links"), list)
-        else [],
-        "stale_downstream_links": verifier_report.get("stale_downstream_links")
-        if isinstance(verifier_report.get("stale_downstream_links"), list)
-        else [],
-        "root_cause_closure_status_counts": verifier_report.get("root_cause_closure_status_counts")
-        if isinstance(verifier_report.get("root_cause_closure_status_counts"), dict)
-        else {},
-        "root_cause_closure_summary": verifier_report.get("root_cause_closure_summary")
-        if isinstance(verifier_report.get("root_cause_closure_summary"), dict)
-        else {},
+        "handoff_warnings": (
+            verifier_report.get("handoff_warnings")
+            if isinstance(verifier_report.get("handoff_warnings"), list)
+            else []
+        ),
+        "missing_downstream_links": (
+            verifier_report.get("missing_downstream_links")
+            if isinstance(verifier_report.get("missing_downstream_links"), list)
+            else []
+        ),
+        "stale_downstream_links": (
+            verifier_report.get("stale_downstream_links")
+            if isinstance(verifier_report.get("stale_downstream_links"), list)
+            else []
+        ),
+        "root_cause_closure_status_counts": (
+            verifier_report.get("root_cause_closure_status_counts")
+            if isinstance(verifier_report.get("root_cause_closure_status_counts"), dict)
+            else {}
+        ),
+        "root_cause_closure_summary": (
+            verifier_report.get("root_cause_closure_summary")
+            if isinstance(verifier_report.get("root_cause_closure_summary"), dict)
+            else {}
+        ),
         "lifecycle_bucket_windows": {
             "status": windows.get("status"),
             "checked": bool(windows.get("checked")),
-            "missing": windows.get("missing") if isinstance(windows.get("missing"), list) else [],
-            "warnings": windows.get("warnings") if isinstance(windows.get("warnings"), list) else [],
+            "missing": (
+                windows.get("missing")
+                if isinstance(windows.get("missing"), list)
+                else []
+            ),
+            "warnings": (
+                windows.get("warnings")
+                if isinstance(windows.get("warnings"), list)
+                else []
+            ),
         },
     }
 
 
-def _scalp_sim_control_tower_summary(approval: dict[str, Any], catalog_path: Path) -> dict[str, Any]:
-    source_status = approval.get("source_status") if isinstance(approval.get("source_status"), dict) else {}
-    runtime_bridge = source_status.get("runtime_apply_bridge") if isinstance(source_status.get("runtime_apply_bridge"), dict) else {}
+def _scalp_sim_control_tower_summary(
+    approval: dict[str, Any], catalog_path: Path
+) -> dict[str, Any]:
+    source_status = (
+        approval.get("source_status")
+        if isinstance(approval.get("source_status"), dict)
+        else {}
+    )
+    runtime_bridge = (
+        source_status.get("runtime_apply_bridge")
+        if isinstance(source_status.get("runtime_apply_bridge"), dict)
+        else {}
+    )
     return {
         "approved": _safe_bool(approval.get("approved")),
         "approved_policy_count": _safe_int(approval.get("approved_policy_count")),
-        "approved_source_ids": approval.get("approved_source_ids") if isinstance(approval.get("approved_source_ids"), list) else [],
+        "approved_source_ids": (
+            approval.get("approved_source_ids")
+            if isinstance(approval.get("approved_source_ids"), list)
+            else []
+        ),
         "catalog": str(catalog_path),
         "catalog_exists": catalog_path.exists(),
-        "runtime_bridge_live_auto_apply_ready_count": _safe_int(runtime_bridge.get("live_auto_apply_ready_count")),
-        "blocked_reasons": approval.get("blocked_reasons") if isinstance(approval.get("blocked_reasons"), list) else [],
+        "runtime_bridge_live_auto_apply_ready_count": _safe_int(
+            runtime_bridge.get("live_auto_apply_ready_count")
+        ),
+        "blocked_reasons": (
+            approval.get("blocked_reasons")
+            if isinstance(approval.get("blocked_reasons"), list)
+            else []
+        ),
         "decision_authority": approval.get("decision_authority"),
         "runtime_effect": _safe_bool(approval.get("runtime_effect")),
         "allowed_runtime_apply": _safe_bool(approval.get("allowed_runtime_apply")),
     }
 
 
-def _top_lifecycle_candidates(threshold_ev: dict[str, Any], lifecycle_bucket: dict[str, Any]) -> list[dict[str, Any]]:
+def _top_lifecycle_candidates(
+    threshold_ev: dict[str, Any], lifecycle_bucket: dict[str, Any]
+) -> list[dict[str, Any]]:
     embedded = threshold_ev.get("lifecycle_bucket_discovery")
-    top = embedded.get("top_surfaced") if isinstance(embedded, dict) and isinstance(embedded.get("top_surfaced"), list) else None
+    top = (
+        embedded.get("top_surfaced")
+        if isinstance(embedded, dict) and isinstance(embedded.get("top_surfaced"), list)
+        else None
+    )
     raw = top if top is not None else lifecycle_bucket.get("surfaced_candidates")
     if not isinstance(raw, list):
         return []
@@ -837,7 +1103,9 @@ def _top_lifecycle_candidates(threshold_ev: dict[str, Any], lifecycle_bucket: di
                 "classification_state": item.get("classification_state"),
                 "recommended_action": item.get("recommended_action"),
                 "joined_sample": _safe_int(item.get("joined_sample")),
-                "source_quality_adjusted_ev_pct": _safe_float(item.get("source_quality_adjusted_ev_pct")),
+                "source_quality_adjusted_ev_pct": _safe_float(
+                    item.get("source_quality_adjusted_ev_pct")
+                ),
                 "live_auto_apply_family": item.get("live_auto_apply_family"),
             }
         )
@@ -857,24 +1125,42 @@ def _primary_verdict(
     current_lifecycle = lifecycle_bucket_progress.get("current")
     current_swing = swing_bucket_progress.get("current")
     lifecycle_live = _safe_int(
-        current_lifecycle.get("live_auto_apply_ready_count") if isinstance(current_lifecycle, dict) else 0
+        current_lifecycle.get("live_auto_apply_ready_count")
+        if isinstance(current_lifecycle, dict)
+        else 0
     )
     lifecycle_new_bucket = _safe_int(
-        current_lifecycle.get("new_bucket_candidate_count") if isinstance(current_lifecycle, dict) else 0
+        current_lifecycle.get("new_bucket_candidate_count")
+        if isinstance(current_lifecycle, dict)
+        else 0
     )
-    lifecycle_sim = _safe_int(current_lifecycle.get("sim_auto_approved_count") if isinstance(current_lifecycle, dict) else 0)
-    swing_sim = _safe_int(current_swing.get("sim_auto_approved_count") if isinstance(current_swing, dict) else 0)
+    lifecycle_sim = _safe_int(
+        current_lifecycle.get("sim_auto_approved_count")
+        if isinstance(current_lifecycle, dict)
+        else 0
+    )
+    swing_sim = _safe_int(
+        current_swing.get("sim_auto_approved_count")
+        if isinstance(current_swing, dict)
+        else 0
+    )
     verifier_windows = (
         verifier_summary.get("lifecycle_bucket_windows")
         if isinstance(verifier_summary.get("lifecycle_bucket_windows"), dict)
         else {}
     )
-    if verifier_summary.get("status") == "fail" or verifier_windows.get("status") == "fail":
+    if (
+        verifier_summary.get("status") == "fail"
+        or verifier_windows.get("status") == "fail"
+    ):
         return "postclose_verifier_blocked"
     if warnings:
         return "source_gap_review_required"
     bridge_live = _safe_int(bridge_summary.get("live_auto_apply_ready_count"))
-    if bridge_live > 0 and bridge_summary.get("lifecycle_bucket_promotion_contract_passed") is True:
+    if (
+        bridge_live > 0
+        and bridge_summary.get("lifecycle_bucket_promotion_contract_passed") is True
+    ):
         return "bridge_live_bucket_ready"
     promotion_window = str(lifecycle_bucket_windows.get("promotion_window") or "mtd")
     promotion = (lifecycle_bucket_windows.get("windows") or {}).get(promotion_window)
@@ -905,17 +1191,35 @@ def _markdown(report: dict[str, Any]) -> str:
     ev = report["ev_authority"]
     workorder = report["workorder"]
     runtime = report["runtime_approval"]
-    scalp_sim_auto = report.get("scalp_sim_auto_approval") if isinstance(report.get("scalp_sim_auto_approval"), dict) else {}
+    scalp_sim_auto = (
+        report.get("scalp_sim_auto_approval")
+        if isinstance(report.get("scalp_sim_auto_approval"), dict)
+        else {}
+    )
     bucket_windows = (
         report.get("lifecycle_bucket_window_summary")
         if isinstance(report.get("lifecycle_bucket_window_summary"), dict)
         else {}
     )
-    bridge = report.get("bridge_summary") if isinstance(report.get("bridge_summary"), dict) else {}
-    verifier = report.get("postclose_verifier_summary") if isinstance(report.get("postclose_verifier_summary"), dict) else {}
-    runtime_gap = report.get("runtime_apply_gap_audit") if isinstance(report.get("runtime_apply_gap_audit"), dict) else {}
+    bridge = (
+        report.get("bridge_summary")
+        if isinstance(report.get("bridge_summary"), dict)
+        else {}
+    )
+    verifier = (
+        report.get("postclose_verifier_summary")
+        if isinstance(report.get("postclose_verifier_summary"), dict)
+        else {}
+    )
+    runtime_gap = (
+        report.get("runtime_apply_gap_audit")
+        if isinstance(report.get("runtime_apply_gap_audit"), dict)
+        else {}
+    )
     conversion_first = (
-        report.get("conversion_first_summary") if isinstance(report.get("conversion_first_summary"), dict) else {}
+        report.get("conversion_first_summary")
+        if isinstance(report.get("conversion_first_summary"), dict)
+        else {}
     )
     top_blockers = (
         conversion_first.get("top_conversion_blockers")
@@ -927,8 +1231,16 @@ def _markdown(report: dict[str, Any]) -> str:
         if isinstance(conversion_first.get("key_lineage_status"), dict)
         else {}
     )
-    freshness = report.get("source_freshness") if isinstance(report.get("source_freshness"), dict) else {}
-    daily_window = bucket_windows.get("daily") if isinstance(bucket_windows.get("daily"), dict) else {}
+    freshness = (
+        report.get("source_freshness")
+        if isinstance(report.get("source_freshness"), dict)
+        else {}
+    )
+    daily_window = (
+        bucket_windows.get("daily")
+        if isinstance(bucket_windows.get("daily"), dict)
+        else {}
+    )
     promotion_window = str(bucket_windows.get("promotion_window") or "mtd")
     promotion_summary = (
         (bucket_windows.get("windows") or {}).get(promotion_window)
@@ -942,7 +1254,9 @@ def _markdown(report: dict[str, Any]) -> str:
     )
 
     def current(section: dict[str, Any], key: str) -> Any:
-        payload = section.get("current") if isinstance(section.get("current"), dict) else {}
+        payload = (
+            section.get("current") if isinstance(section.get("current"), dict) else {}
+        )
         return payload.get(key)
 
     def delta(section: dict[str, Any], key: str) -> Any:
@@ -1116,7 +1430,9 @@ def _markdown(report: dict[str, Any]) -> str:
         "",
     ]
     for label, status in report["sources"].items():
-        lines.append(f"- {label}: `{status['path']}` exists={str(status['exists']).lower()} json_valid={str(status['json_valid']).lower()}")
+        lines.append(
+            f"- {label}: `{status['path']}` exists={str(status['exists']).lower()} json_valid={str(status['json_valid']).lower()}"
+        )
     lines.append("")
     return "\n".join(lines)
 
@@ -1148,15 +1464,21 @@ def build_tuning_performance_control_tower(target_date: str) -> dict[str, Any]:
     verifier_path = _postclose_verifier_path(target_date)
     verifier_payload = _load_json(verifier_path)
     payloads["threshold_cycle_postclose_verification"] = verifier_payload
-    sources["threshold_cycle_postclose_verification"] = _artifact_status(verifier_path, verifier_payload)
+    sources["threshold_cycle_postclose_verification"] = _artifact_status(
+        verifier_path, verifier_payload
+    )
     if verifier_path.exists() and not verifier_payload:
         warnings.append("threshold_cycle_postclose_verification_parse_failed")
 
     scalp_sim_auto_path = _scalp_sim_auto_approval_path(target_date)
     scalp_sim_auto = _load_json(scalp_sim_auto_path)
-    sources["scalp_sim_auto_approval"] = _artifact_status(scalp_sim_auto_path, scalp_sim_auto)
+    sources["scalp_sim_auto_approval"] = _artifact_status(
+        scalp_sim_auto_path, scalp_sim_auto
+    )
     scalp_sim_catalog_path = _scalp_sim_policy_catalog_path(target_date)
-    sources["scalp_sim_policy_catalog"] = _artifact_status(scalp_sim_catalog_path, _load_json(scalp_sim_catalog_path))
+    sources["scalp_sim_policy_catalog"] = _artifact_status(
+        scalp_sim_catalog_path, _load_json(scalp_sim_catalog_path)
+    )
 
     threshold_ev = payloads["threshold_cycle_ev"]
     ldm_bucket = _progress_section(
@@ -1193,18 +1515,32 @@ def build_tuning_performance_control_tower(target_date: str) -> dict[str, Any]:
     )
     bridge = _bridge_summary(payloads["runtime_apply_bridge"])
     runtime_gap_audit = _runtime_gap_audit_summary(payloads["runtime_apply_gap_audit"])
-    conversion_first = _conversion_first_summary(payloads["conversion_lane"], payloads["key_lineage_ledger"])
+    conversion_first = _conversion_first_summary(
+        payloads["conversion_lane"], payloads["key_lineage_ledger"]
+    )
     verifier = _postclose_verifier_summary(
         payloads["threshold_cycle_postclose_verification"],
         sources["threshold_cycle_postclose_verification"],
     )
     workorder = _workorder_summary(payloads["code_improvement_workorder"])
-    source_freshness = _source_freshness(payloads, payloads["threshold_cycle_postclose_verification"])
+    source_freshness = _source_freshness(
+        payloads, payloads["threshold_cycle_postclose_verification"]
+    )
     if source_freshness.get("status") == "warning":
         warnings.append("source_generation_stale_warning")
-    current_ldm_bucket = ldm_bucket.get("current") if isinstance(ldm_bucket.get("current"), dict) else {}
-    current_swing_bucket = swing_bucket.get("current") if isinstance(swing_bucket.get("current"), dict) else {}
-    daily_bucket_summary = lifecycle_bucket_windows.get("daily") if isinstance(lifecycle_bucket_windows.get("daily"), dict) else {}
+    current_ldm_bucket = (
+        ldm_bucket.get("current") if isinstance(ldm_bucket.get("current"), dict) else {}
+    )
+    current_swing_bucket = (
+        swing_bucket.get("current")
+        if isinstance(swing_bucket.get("current"), dict)
+        else {}
+    )
+    daily_bucket_summary = (
+        lifecycle_bucket_windows.get("daily")
+        if isinstance(lifecycle_bucket_windows.get("daily"), dict)
+        else {}
+    )
     promotion_window = str(lifecycle_bucket_windows.get("promotion_window") or "mtd")
     promotion_summary = (
         (lifecycle_bucket_windows.get("windows") or {}).get(promotion_window)
@@ -1250,29 +1586,56 @@ def build_tuning_performance_control_tower(target_date: str) -> dict[str, Any]:
                 if _safe_int(current_ldm_bucket.get("live_auto_apply_ready_count")) > 0
                 else None
             ),
-            "lifecycle_sim_auto_approved_count": _safe_int(current_ldm_bucket.get("sim_auto_approved_count")),
-            "lifecycle_live_auto_apply_ready_count": _safe_int(current_ldm_bucket.get("live_auto_apply_ready_count")),
-            "daily_discovery_live_auto_apply_ready_count": _safe_int(daily_bucket_summary.get("live_auto_apply_ready_count")),
-            "promotion_window_live_auto_apply_ready_count": _safe_int(
-                promotion_summary.get("live_auto_apply_ready_count") if isinstance(promotion_summary, dict) else 0
+            "lifecycle_sim_auto_approved_count": _safe_int(
+                current_ldm_bucket.get("sim_auto_approved_count")
             ),
-            "bridge_live_auto_apply_ready_count": _safe_int(bridge.get("live_auto_apply_ready_count")),
+            "lifecycle_live_auto_apply_ready_count": _safe_int(
+                current_ldm_bucket.get("live_auto_apply_ready_count")
+            ),
+            "daily_discovery_live_auto_apply_ready_count": _safe_int(
+                daily_bucket_summary.get("live_auto_apply_ready_count")
+            ),
+            "promotion_window_live_auto_apply_ready_count": _safe_int(
+                promotion_summary.get("live_auto_apply_ready_count")
+                if isinstance(promotion_summary, dict)
+                else 0
+            ),
+            "bridge_live_auto_apply_ready_count": _safe_int(
+                bridge.get("live_auto_apply_ready_count")
+            ),
             "bridge_policy_emit_state": bridge.get("greenfield_policy_emit_state"),
             "bridge_policy_emit_blocker": bridge.get("greenfield_policy_emit_blocker"),
-            "bridge_policy_emit_blocker_detail": bridge.get("greenfield_policy_emit_blocker_detail"),
+            "bridge_policy_emit_blocker_detail": bridge.get(
+                "greenfield_policy_emit_blocker_detail"
+            ),
             "greenfield_live_auto_ready_lifecycle_flow_count": _safe_int(
                 bridge.get("greenfield_live_auto_ready_lifecycle_flow_count")
             ),
             "promotion_window": promotion_window,
             "verifier_status": verifier.get("status"),
-            "verifier_handoff_warning_count": len(verifier.get("handoff_warnings") or []),
-            "verifier_missing_downstream_link_count": len(verifier.get("missing_downstream_links") or []),
-            "verifier_root_cause_closure_status_counts": verifier.get("root_cause_closure_status_counts") or {},
+            "verifier_handoff_warning_count": len(
+                verifier.get("handoff_warnings") or []
+            ),
+            "verifier_missing_downstream_link_count": len(
+                verifier.get("missing_downstream_links") or []
+            ),
+            "verifier_root_cause_closure_status_counts": verifier.get(
+                "root_cause_closure_status_counts"
+            )
+            or {},
             "runtime_apply_gap_audit_status": runtime_gap_audit.get("status"),
-            "real_conversion_queue_count": conversion_first["real_conversion_queue_count"],
-            "positive_ev_runtime_observed_count": conversion_first["positive_ev_runtime_observed_count"],
-            "positive_ev_real_conversion_queue_count": conversion_first["positive_ev_real_conversion_queue_count"],
-            "positive_ev_sample_floor_blocked_count": conversion_first["positive_ev_sample_floor_blocked_count"],
+            "real_conversion_queue_count": conversion_first[
+                "real_conversion_queue_count"
+            ],
+            "positive_ev_runtime_observed_count": conversion_first[
+                "positive_ev_runtime_observed_count"
+            ],
+            "positive_ev_real_conversion_queue_count": conversion_first[
+                "positive_ev_real_conversion_queue_count"
+            ],
+            "positive_ev_sample_floor_blocked_count": conversion_first[
+                "positive_ev_sample_floor_blocked_count"
+            ],
             "positive_ev_sample_floor_unknown_floor_count": conversion_first[
                 "positive_ev_sample_floor_unknown_floor_count"
             ],
@@ -1328,50 +1691,77 @@ def build_tuning_performance_control_tower(target_date: str) -> dict[str, Any]:
                 if isinstance(conversion_first.get("summary"), dict)
                 else None
             ),
-            "top_ldm_bucket_blocker_class": conversion_first["top_ldm_bucket_blocker_class"],
-            "submit_funnel_blocker_count": conversion_first["submit_funnel_blocker_count"],
-            "submit_drought_is_ldm_bucket_blocker": conversion_first["submit_drought_is_ldm_bucket_blocker"],
+            "top_ldm_bucket_blocker_class": conversion_first[
+                "top_ldm_bucket_blocker_class"
+            ],
+            "submit_funnel_blocker_count": conversion_first[
+                "submit_funnel_blocker_count"
+            ],
+            "submit_drought_is_ldm_bucket_blocker": conversion_first[
+                "submit_drought_is_ldm_bucket_blocker"
+            ],
             "key_lineage_blocker_count": (
                 conversion_first["key_lineage_status"]["key_mismatch_count"]
                 + conversion_first["key_lineage_status"]["catalog_missing_count"]
                 + conversion_first["key_lineage_status"]["preopen_missing_count"]
                 + conversion_first["key_lineage_status"]["not_instrumented_count"]
             ),
-            "runtime_apply_gap_audit_codex_directive_count": runtime_gap_audit.get("codex_directive_count"),
-            "runtime_apply_gap_audit_source_dimension_gap_count": runtime_gap_audit.get("source_dimension_gap_count"),
-            "runtime_apply_gap_audit_quiet_gap_count": runtime_gap_audit.get("quiet_gap_count"),
+            "runtime_apply_gap_audit_codex_directive_count": runtime_gap_audit.get(
+                "codex_directive_count"
+            ),
+            "runtime_apply_gap_audit_source_dimension_gap_count": runtime_gap_audit.get(
+                "source_dimension_gap_count"
+            ),
+            "runtime_apply_gap_audit_quiet_gap_count": runtime_gap_audit.get(
+                "quiet_gap_count"
+            ),
             "runtime_apply_gap_audit_quiet_gap_codex_directive_count": runtime_gap_audit.get(
                 "quiet_gap_codex_directive_count"
             ),
             "source_freshness_status": source_freshness.get("status"),
-            "source_generation_stale_warning_count": source_freshness.get("stale_pair_count"),
+            "source_generation_stale_warning_count": source_freshness.get(
+                "stale_pair_count"
+            ),
             "lifecycle_bucket_windows_status": (
                 (verifier.get("lifecycle_bucket_windows") or {}).get("status")
                 if isinstance(verifier.get("lifecycle_bucket_windows"), dict)
                 else None
             ),
-            "swing_sim_auto_approved_count": _safe_int(current_swing_bucket.get("sim_auto_approved_count")),
+            "swing_sim_auto_approved_count": _safe_int(
+                current_swing_bucket.get("sim_auto_approved_count")
+            ),
             "real_pnl_is_tuning_performance": ev["real_pnl_is_tuning_performance"],
             "source_artifact_warnings": warnings,
             "source_artifact_warning_count": len(warnings),
             "ev_warnings": ev["warnings"],
             "ev_warning_count": len(ev["warnings"]),
-            "workorder_root_cause_closure_status_counts": workorder.get("root_cause_closure_status_counts") or {},
-            "workorder_implementation_done_count": workorder.get("implementation_done_count"),
+            "workorder_root_cause_closure_status_counts": workorder.get(
+                "root_cause_closure_status_counts"
+            )
+            or {},
+            "workorder_implementation_done_count": workorder.get(
+                "implementation_done_count"
+            ),
             "workorder_artifact_regeneration_required_count": workorder.get(
                 "artifact_regeneration_required_count"
             ),
             "workorder_handoff_closed_root_cause_open_count": workorder.get(
                 "handoff_closed_root_cause_open_count"
             ),
-            "workorder_root_cause_closed_count": workorder.get("root_cause_closed_count"),
-            "workorder_needs_followup_workorder_count": workorder.get("needs_followup_workorder_count"),
+            "workorder_root_cause_closed_count": workorder.get(
+                "root_cause_closed_count"
+            ),
+            "workorder_needs_followup_workorder_count": workorder.get(
+                "needs_followup_workorder_count"
+            ),
             "read_this_first": True,
         },
         "ldm_progression": {
             "lifecycle_decision_matrix": ldm_matrix,
             "lifecycle_bucket_discovery": ldm_bucket,
-            "top_lifecycle_candidates": _top_lifecycle_candidates(threshold_ev, payloads["lifecycle_bucket_discovery"]),
+            "top_lifecycle_candidates": _top_lifecycle_candidates(
+                threshold_ev, payloads["lifecycle_bucket_discovery"]
+            ),
         },
         "swing_progression": {
             "swing_lifecycle_decision_matrix": swing_matrix,
@@ -1386,14 +1776,19 @@ def build_tuning_performance_control_tower(target_date: str) -> dict[str, Any]:
         "bridge_summary": bridge,
         "postclose_verifier_summary": verifier,
         "source_freshness": source_freshness,
-        "scalp_sim_auto_approval": _scalp_sim_control_tower_summary(scalp_sim_auto, scalp_sim_catalog_path),
+        "scalp_sim_auto_approval": _scalp_sim_control_tower_summary(
+            scalp_sim_auto, scalp_sim_catalog_path
+        ),
         "workorder": workorder,
         "sources": sources,
         "warnings": warnings,
     }
     json_path, md_path = report_paths(target_date)
     json_path.parent.mkdir(parents=True, exist_ok=True)
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True, default=str), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True, default=str),
+        encoding="utf-8",
+    )
     md_path.write_text(_markdown(report), encoding="utf-8")
     return report
 
@@ -1403,7 +1798,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--date", required=True)
     args = parser.parse_args(argv)
     report = build_tuning_performance_control_tower(args.date)
-    print(json.dumps({"date": args.date, "path": str(report_paths(args.date)[0]), "summary": report["summary"]}, ensure_ascii=False))
+    print(
+        json.dumps(
+            {
+                "date": args.date,
+                "path": str(report_paths(args.date)[0]),
+                "summary": report["summary"],
+            },
+            ensure_ascii=False,
+        )
+    )
     return 0
 
 

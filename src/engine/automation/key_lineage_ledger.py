@@ -13,7 +13,6 @@ from typing import Any
 
 from src.utils.constants import DATA_DIR
 
-
 REPORT_TYPE = "key_lineage_ledger"
 SCHEMA_VERSION = 1
 REPORT_DIR = DATA_DIR / "report" / REPORT_TYPE
@@ -24,7 +23,12 @@ HYPOTHESIS_PLAN_DIR = DATA_DIR / "threshold_cycle" / "ldm_hypothesis_observation
 DEFAULT_EVENT_UNTRACKED_VALUE_LIMIT = 200_000
 DEFAULT_EVENT_LINE_BYTES_LIMIT = 8_000_000
 
-LINEAGE_BLOCKER_STATES = {"key_mismatch", "catalog_missing", "preopen_missing", "not_instrumented"}
+LINEAGE_BLOCKER_STATES = {
+    "key_mismatch",
+    "catalog_missing",
+    "preopen_missing",
+    "not_instrumented",
+}
 ALLOWED_STATES = {
     "collecting",
     "cooldown_intentional",
@@ -118,7 +122,9 @@ def _bool_field(value: Any, default: bool | None = None) -> bool | None:
     return default
 
 
-def _active_seed_default_match_eligible(*, stage: str, seed_id: str, matched: str) -> bool:
+def _active_seed_default_match_eligible(
+    *, stage: str, seed_id: str, matched: str
+) -> bool:
     if stage == "scalp_sim_entry_armed":
         return True
     if seed_id:
@@ -130,14 +136,19 @@ def _active_seed_default_match_eligible(*, stage: str, seed_id: str, matched: st
     return matched == "true"
 
 
-def _active_seed_without_seed_reason(*, stage: str, matched: str, candidate_prefix: str) -> str:
+def _active_seed_without_seed_reason(
+    *, stage: str, matched: str, candidate_prefix: str
+) -> str:
     if matched == "true":
         return "producer_missing_seed_id"
     if stage == "scalp_sim_entry_armed":
         return "new_entry_without_seed_id"
     if stage:
         return "followup_missing_parent_seed_id"
-    if "entry_source_parent" in candidate_prefix or "entry_score_parent" in candidate_prefix:
+    if (
+        "entry_source_parent" in candidate_prefix
+        or "entry_score_parent" in candidate_prefix
+    ):
         return "natural_no_match"
     return "taxonomy_pending_source"
 
@@ -163,11 +174,15 @@ def _active_seed_without_seed_detail(
         if "taxonomy" in exclusion or "taxonomy" in source:
             return "taxonomy_pending_or_natural_no_match"
         if source in {"no_match", "inactive_seed_blocked"} or (
-            "entry_source_parent" in candidate_prefix or "entry_score_parent" in candidate_prefix
+            "entry_source_parent" in candidate_prefix
+            or "entry_score_parent" in candidate_prefix
         ):
             return "taxonomy_pending_or_natural_no_match"
         return "new_entry_seed_id_missing_unclassified"
-    if "entry_source_parent" in candidate_prefix or "entry_score_parent" in candidate_prefix:
+    if (
+        "entry_source_parent" in candidate_prefix
+        or "entry_score_parent" in candidate_prefix
+    ):
         return "taxonomy_pending_or_natural_no_match"
     return "taxonomy_pending_source"
 
@@ -182,10 +197,14 @@ def _canonical_json_text(value: Any) -> str:
         except Exception:
             return raw
     if isinstance(value, dict):
-        compact = {str(key): str(val) for key, val in value.items() if str(val or "").strip()}
+        compact = {
+            str(key): str(val) for key, val in value.items() if str(val or "").strip()
+        }
         if not compact:
             return ""
-        return json.dumps(compact, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+        return json.dumps(
+            compact, ensure_ascii=True, sort_keys=True, separators=(",", ":")
+        )
     return str(value or "").strip()
 
 
@@ -217,12 +236,20 @@ def _catalog_path_from_apply(
     default_prefix: str,
     target_date: str,
 ) -> Path:
-    section = apply_plan.get(section_key) if isinstance(apply_plan.get(section_key), dict) else {}
+    section = (
+        apply_plan.get(section_key)
+        if isinstance(apply_plan.get(section_key), dict)
+        else {}
+    )
     for key in ("catalog", "policy_file"):
         value = section.get(key)
         if str(value or "").strip():
             return Path(str(value))
-    env_exports = apply_plan.get("env_exports") if isinstance(apply_plan.get("env_exports"), dict) else {}
+    env_exports = (
+        apply_plan.get("env_exports")
+        if isinstance(apply_plan.get("env_exports"), dict)
+        else {}
+    )
     value = env_exports.get(env_key)
     if str(value or "").strip():
         return Path(str(value))
@@ -255,7 +282,9 @@ def _collect_values(payload: Any, keys: set[str]) -> set[str]:
         for key, value in payload.items():
             if key in keys:
                 if isinstance(value, list):
-                    values.update(str(item) for item in value if str(item or "").strip())
+                    values.update(
+                        str(item) for item in value if str(item or "").strip()
+                    )
                 elif str(value or "").strip():
                     values.add(str(value))
             values.update(_collect_values(value, keys))
@@ -456,20 +485,38 @@ def _event_field_values(
         if not path.exists():
             continue
         values["io_guard"]["files_seen"] += 1
-        for payload in _iter_jsonl_payloads(path, values, line_bytes_limit=line_bytes_limit):
+        for payload in _iter_jsonl_payloads(
+            path, values, line_bytes_limit=line_bytes_limit
+        ):
             fields = payload.get("fields") if isinstance(payload, dict) else {}
-            stage = str(payload.get("stage") or "").strip() if isinstance(payload, dict) else ""
-            active_count_raw = fields.get("scalp_sim_auto_policy_active_seed_count") if isinstance(fields, dict) else None
-            active_count = _safe_int(active_count_raw, None) if active_count_raw not in (None, "") else None
+            stage = (
+                str(payload.get("stage") or "").strip()
+                if isinstance(payload, dict)
+                else ""
+            )
+            active_count_raw = (
+                fields.get("scalp_sim_auto_policy_active_seed_count")
+                if isinstance(fields, dict)
+                else None
+            )
+            active_count = (
+                _safe_int(active_count_raw, None)
+                if active_count_raw not in (None, "")
+                else None
+            )
             policy_diag = values["active_policy_observation"]
             if isinstance(fields, dict):
-                candidate_prefix = str(fields.get("active_seed_candidate_observable_prefix") or "").strip()
+                candidate_prefix = str(
+                    fields.get("active_seed_candidate_observable_prefix") or ""
+                ).strip()
                 if candidate_prefix:
                     policy_diag["active_seed_candidate_event_count"] += 1
                     seed_id = str(fields.get("active_seed_id") or "").strip()
                     raw_seed_id = seed_id
                     prefix_key = _canonical_json_text(candidate_prefix)
-                    inferred_parent_seed_ids = active_seed_prefix_index.get(prefix_key, [])
+                    inferred_parent_seed_ids = active_seed_prefix_index.get(
+                        prefix_key, []
+                    )
                     if not seed_id and len(inferred_parent_seed_ids) == 1:
                         seed_id = inferred_parent_seed_ids[0]
                         fields["active_seed_id"] = seed_id
@@ -477,11 +524,15 @@ def _event_field_values(
                         fields["active_seed_id_inference_source"] = (
                             "catalog_active_observable_prefix_unique_match"
                         )
-                        policy_diag["active_seed_candidate_inferred_parent_seed_id_event_count"] += 1
+                        policy_diag[
+                            "active_seed_candidate_inferred_parent_seed_id_event_count"
+                        ] += 1
                         stage_counts = policy_diag[
                             "active_seed_candidate_inferred_parent_seed_id_stage_counts"
                         ]
-                        stage_counts[stage or "unknown"] = stage_counts.get(stage or "unknown", 0) + 1
+                        stage_counts[stage or "unknown"] = (
+                            stage_counts.get(stage or "unknown", 0) + 1
+                        )
                         prefix_counts = policy_diag[
                             "active_seed_candidate_inferred_parent_seed_id_prefix_counts"
                         ]
@@ -490,10 +541,20 @@ def _event_field_values(
                         fields["active_seed_id_inference_source"] = (
                             "catalog_active_observable_prefix_ambiguous"
                         )
-                        policy_diag["active_seed_candidate_ambiguous_parent_seed_prefix_event_count"] += 1
-                    matched = str(fields.get("scalp_sim_active_priority_seed_matched") or "").strip().lower()
-                    explicit_eligible = _bool_field(fields.get("active_seed_match_eligible"), None)
-                    exclusion_reason = str(fields.get("active_seed_match_exclusion_reason") or "").strip()
+                        policy_diag[
+                            "active_seed_candidate_ambiguous_parent_seed_prefix_event_count"
+                        ] += 1
+                    matched = (
+                        str(fields.get("scalp_sim_active_priority_seed_matched") or "")
+                        .strip()
+                        .lower()
+                    )
+                    explicit_eligible = _bool_field(
+                        fields.get("active_seed_match_eligible"), None
+                    )
+                    exclusion_reason = str(
+                        fields.get("active_seed_match_exclusion_reason") or ""
+                    ).strip()
                     if explicit_eligible is None:
                         eligible = _active_seed_default_match_eligible(
                             stage=stage,
@@ -504,15 +565,21 @@ def _event_field_values(
                         eligible = explicit_eligible
                     if active_count == 0:
                         eligible = False
-                        exclusion_reason = "policy_active_seed_count_zero_effect_excluded"
+                        exclusion_reason = (
+                            "policy_active_seed_count_zero_effect_excluded"
+                        )
                     if not eligible:
                         reason = exclusion_reason or (
                             "diagnostic_followup_without_seed_context"
                             if stage != "scalp_sim_entry_armed"
                             else "not_match_eligible"
                         )
-                        policy_diag["active_seed_candidate_not_match_eligible_event_count"] += 1
-                        reason_counts = policy_diag["active_seed_candidate_not_match_eligible_reason_counts"]
+                        policy_diag[
+                            "active_seed_candidate_not_match_eligible_event_count"
+                        ] += 1
+                        reason_counts = policy_diag[
+                            "active_seed_candidate_not_match_eligible_reason_counts"
+                        ]
                         reason_counts[reason] = reason_counts.get(reason, 0) + 1
                     else:
                         policy_diag["active_seed_candidate_eligible_event_count"] += 1
@@ -520,31 +587,53 @@ def _event_field_values(
                         policy_diag["active_seed_candidate_new_entry_event_count"] += 1
                     else:
                         policy_diag["active_seed_candidate_followup_event_count"] += 1
-                        followup_counts = policy_diag["active_seed_candidate_followup_stage_counts"]
-                        followup_counts[stage or "unknown"] = followup_counts.get(stage or "unknown", 0) + 1
+                        followup_counts = policy_diag[
+                            "active_seed_candidate_followup_stage_counts"
+                        ]
+                        followup_counts[stage or "unknown"] = (
+                            followup_counts.get(stage or "unknown", 0) + 1
+                        )
                     if not raw_seed_id:
-                        policy_diag["active_seed_candidate_raw_without_seed_id_event_count"] += 1
+                        policy_diag[
+                            "active_seed_candidate_raw_without_seed_id_event_count"
+                        ] += 1
                         if stage != "scalp_sim_entry_armed":
-                            policy_diag["active_seed_candidate_raw_followup_without_seed_id_event_count"] += 1
+                            policy_diag[
+                                "active_seed_candidate_raw_followup_without_seed_id_event_count"
+                            ] += 1
                     if eligible:
                         if seed_id:
-                            policy_diag["active_seed_candidate_matched_event_count"] += 1
+                            policy_diag[
+                                "active_seed_candidate_matched_event_count"
+                            ] += 1
                         elif matched == "true":
-                            policy_diag["active_seed_candidate_matched_true_without_seed_id_event_count"] += 1
+                            policy_diag[
+                                "active_seed_candidate_matched_true_without_seed_id_event_count"
+                            ] += 1
                         else:
-                            policy_diag["active_seed_candidate_unmatched_event_count"] += 1
+                            policy_diag[
+                                "active_seed_candidate_unmatched_event_count"
+                            ] += 1
                             if stage == "scalp_sim_entry_armed":
-                                policy_diag["active_seed_candidate_new_entry_unmatched_event_count"] += 1
+                                policy_diag[
+                                    "active_seed_candidate_new_entry_unmatched_event_count"
+                                ] += 1
                             else:
-                                policy_diag["active_seed_candidate_followup_unmatched_event_count"] += 1
+                                policy_diag[
+                                    "active_seed_candidate_followup_unmatched_event_count"
+                                ] += 1
                         if not seed_id:
-                            policy_diag["active_seed_candidate_without_seed_id_event_count"] += 1
+                            policy_diag[
+                                "active_seed_candidate_without_seed_id_event_count"
+                            ] += 1
                             reason = _active_seed_without_seed_reason(
                                 stage=stage,
                                 matched=matched,
                                 candidate_prefix=candidate_prefix,
                             )
-                            reason_counts = policy_diag["active_seed_candidate_without_seed_id_reason_counts"]
+                            reason_counts = policy_diag[
+                                "active_seed_candidate_without_seed_id_reason_counts"
+                            ]
                             reason_counts[reason] = reason_counts.get(reason, 0) + 1
                             detail = _active_seed_without_seed_detail(
                                 stage=stage,
@@ -552,20 +641,30 @@ def _event_field_values(
                                 candidate_prefix=candidate_prefix,
                                 fields=fields,
                             )
-                            detail_counts = policy_diag["active_seed_candidate_without_seed_id_detail_counts"]
+                            detail_counts = policy_diag[
+                                "active_seed_candidate_without_seed_id_detail_counts"
+                            ]
                             detail_counts[detail] = detail_counts.get(detail, 0) + 1
                             if stage != "scalp_sim_entry_armed":
-                                policy_diag["active_seed_candidate_followup_without_seed_id_event_count"] += 1
+                                policy_diag[
+                                    "active_seed_candidate_followup_without_seed_id_event_count"
+                                ] += 1
                                 if reason == "followup_missing_parent_seed_id":
-                                    lookup_key = candidate_prefix or "missing_observable_prefix"
+                                    lookup_key = (
+                                        candidate_prefix or "missing_observable_prefix"
+                                    )
                                     lookup_counts = policy_diag[
                                         "active_seed_candidate_missing_parent_seed_lookup_key_counts"
                                     ]
-                                    lookup_counts[lookup_key] = lookup_counts.get(lookup_key, 0) + 1
+                                    lookup_counts[lookup_key] = (
+                                        lookup_counts.get(lookup_key, 0) + 1
+                                    )
                                     stage_counts = policy_diag[
                                         "active_seed_candidate_missing_parent_seed_stage_counts"
                                     ]
-                                    stage_counts[stage or "unknown"] = stage_counts.get(stage or "unknown", 0) + 1
+                                    stage_counts[stage or "unknown"] = (
+                                        stage_counts.get(stage or "unknown", 0) + 1
+                                    )
                 if stage == "scalp_sim_panic_scale_in_blocked":
                     policy_diag["panic_scale_in_event_count"] += 1
                     sim_record_id = str(
@@ -579,50 +678,107 @@ def _event_field_values(
                         if len(panic_sim_record_ids) < untracked_value_limit:
                             panic_sim_record_ids.add(sim_record_id)
                         else:
-                            values["io_guard"]["truncated_panic_sim_record_id_count"] = (
-                                values["io_guard"].get("truncated_panic_sim_record_id_count", 0) + 1
+                            values["io_guard"][
+                                "truncated_panic_sim_record_id_count"
+                            ] = (
+                                values["io_guard"].get(
+                                    "truncated_panic_sim_record_id_count", 0
+                                )
+                                + 1
                             )
-                    match_status = str(fields.get("lifecycle_bucket_match_status") or "missing").strip() or "missing"
+                    match_status = (
+                        str(
+                            fields.get("lifecycle_bucket_match_status") or "missing"
+                        ).strip()
+                        or "missing"
+                    )
                     status_counts = policy_diag["panic_scale_in_match_status_counts"]
                     status_counts[match_status] = status_counts.get(match_status, 0) + 1
                     if match_status == "no_match":
                         policy_diag["panic_scale_in_no_match_event_count"] += 1
                         if sim_record_id:
-                            if len(panic_no_match_sim_record_ids) < untracked_value_limit:
+                            if (
+                                len(panic_no_match_sim_record_ids)
+                                < untracked_value_limit
+                            ):
                                 panic_no_match_sim_record_ids.add(sim_record_id)
                             else:
-                                values["io_guard"]["truncated_panic_no_match_sim_record_id_count"] = (
-                                    values["io_guard"].get("truncated_panic_no_match_sim_record_id_count", 0) + 1
+                                values["io_guard"][
+                                    "truncated_panic_no_match_sim_record_id_count"
+                                ] = (
+                                    values["io_guard"].get(
+                                        "truncated_panic_no_match_sim_record_id_count",
+                                        0,
+                                    )
+                                    + 1
                                 )
                         else:
-                            policy_diag["panic_scale_in_no_match_missing_sim_record_id_event_count"] += 1
-                        source_stage = str(
-                            fields.get("scalp_sim_candidate_window_source_stage")
-                            or fields.get("source_stage")
+                            policy_diag[
+                                "panic_scale_in_no_match_missing_sim_record_id_event_count"
+                            ] += 1
+                        source_stage = (
+                            str(
+                                fields.get("scalp_sim_candidate_window_source_stage")
+                                or fields.get("source_stage")
+                                or "missing"
+                            ).strip()
                             or "missing"
-                        ).strip() or "missing"
-                        source_counts = policy_diag["panic_scale_in_no_match_source_stage_counts"]
-                        source_counts[source_stage] = source_counts.get(source_stage, 0) + 1
-                        prefix_counts = policy_diag["panic_scale_in_no_match_prefix_counts"]
+                        )
+                        source_counts = policy_diag[
+                            "panic_scale_in_no_match_source_stage_counts"
+                        ]
+                        source_counts[source_stage] = (
+                            source_counts.get(source_stage, 0) + 1
+                        )
+                        prefix_counts = policy_diag[
+                            "panic_scale_in_no_match_prefix_counts"
+                        ]
                         prefix_key = candidate_prefix or "missing"
                         prefix_counts[prefix_key] = prefix_counts.get(prefix_key, 0) + 1
-                global_match_status = str(fields.get("lifecycle_bucket_match_status") or "missing").strip() or "missing"
-                global_match_counts = policy_diag["lifecycle_bucket_match_status_global_counts"]
-                global_match_counts[global_match_status] = global_match_counts.get(global_match_status, 0) + 1
+                global_match_status = (
+                    str(
+                        fields.get("lifecycle_bucket_match_status") or "missing"
+                    ).strip()
+                    or "missing"
+                )
+                global_match_counts = policy_diag[
+                    "lifecycle_bucket_match_status_global_counts"
+                ]
+                global_match_counts[global_match_status] = (
+                    global_match_counts.get(global_match_status, 0) + 1
+                )
                 if global_match_status == "no_match":
-                    policy_diag["lifecycle_bucket_match_status_no_match_global_count"] += 1
+                    policy_diag[
+                        "lifecycle_bucket_match_status_no_match_global_count"
+                    ] += 1
                 elif global_match_status == "matched":
-                    policy_diag["lifecycle_bucket_match_status_matched_global_count"] += 1
+                    policy_diag[
+                        "lifecycle_bucket_match_status_matched_global_count"
+                    ] += 1
                 elif global_match_status == "candidate_context_only":
-                    policy_diag["lifecycle_bucket_match_status_candidate_context_only_global_count"] += 1
+                    policy_diag[
+                        "lifecycle_bucket_match_status_candidate_context_only_global_count"
+                    ] += 1
                 elif global_match_status == "policy_missing":
-                    policy_diag["lifecycle_bucket_match_status_policy_missing_global_count"] += 1
+                    policy_diag[
+                        "lifecycle_bucket_match_status_policy_missing_global_count"
+                    ] += 1
                 elif global_match_status == "missing":
-                    policy_diag["lifecycle_bucket_match_status_missing_global_count"] += 1
+                    policy_diag[
+                        "lifecycle_bucket_match_status_missing_global_count"
+                    ] += 1
                 if global_match_status == "no_match":
-                    hypothesis_val = fields.get("ldm_hypothesis_matched") if isinstance(fields, dict) else None
-                    if hypothesis_val is True or str(hypothesis_val or "").strip().lower() in {"true", "1", "yes"}:
-                        policy_diag["hypothesis_matched_but_parent_bucket_no_match_count"] += 1
+                    hypothesis_val = (
+                        fields.get("ldm_hypothesis_matched")
+                        if isinstance(fields, dict)
+                        else None
+                    )
+                    if hypothesis_val is True or str(
+                        hypothesis_val or ""
+                    ).strip().lower() in {"true", "1", "yes"}:
+                        policy_diag[
+                            "hypothesis_matched_but_parent_bucket_no_match_count"
+                        ] += 1
 
                 active_seed_val = fields.get("active_seed_matched")
                 if active_seed_val is None:
@@ -659,8 +815,12 @@ def _event_field_values(
                     stage=stage,
                     active_seed_state=active_seed_state,
                 )
-                reclassified_counts = policy_diag["lifecycle_bucket_reclassified_status_global_counts"]
-                reclassified_counts[reclassified_status] = reclassified_counts.get(reclassified_status, 0) + 1
+                reclassified_counts = policy_diag[
+                    "lifecycle_bucket_reclassified_status_global_counts"
+                ]
+                reclassified_counts[reclassified_status] = (
+                    reclassified_counts.get(reclassified_status, 0) + 1
+                )
                 if reclassified_status == "natural_no_match":
                     policy_diag["natural_no_match_global_count"] += 1
                 elif reclassified_status == "panic_scale_in_stage_excluded":
@@ -668,7 +828,9 @@ def _event_field_values(
                 elif reclassified_status == "matched_entry_child_bridge":
                     policy_diag["matched_entry_child_bridge_global_count"] += 1
                 elif reclassified_status == "active_seed_prefix_matched_parent_missing":
-                    policy_diag["active_seed_prefix_matched_parent_missing_global_count"] += 1
+                    policy_diag[
+                        "active_seed_prefix_matched_parent_missing_global_count"
+                    ] += 1
                 elif reclassified_status == "contract_missing":
                     policy_diag["contract_missing_global_count"] += 1
                 elif reclassified_status == "not_instrumented":
@@ -676,7 +838,8 @@ def _event_field_values(
             if active_count is not None:
                 policy_diag["event_count"] += 1
                 policy_diag["active_seed_count_values"][str(active_count)] = (
-                    policy_diag["active_seed_count_values"].get(str(active_count), 0) + 1
+                    policy_diag["active_seed_count_values"].get(str(active_count), 0)
+                    + 1
                 )
                 if active_count > 0:
                     policy_diag["active_seed_count_positive_event_count"] += 1
@@ -687,7 +850,11 @@ def _event_field_values(
             for key in field_keys:
                 value = fields.get(key) if isinstance(fields, dict) else None
                 if str(value or "").strip():
-                    if key in {"active_seed_id", "active_sim_priority_seed_id", "scalp_sim_active_priority_seed_id"}:
+                    if key in {
+                        "active_seed_id",
+                        "active_sim_priority_seed_id",
+                        "scalp_sim_active_priority_seed_id",
+                    }:
                         if active_count is None or active_count > 0:
                             _bounded_add(
                                 values,
@@ -697,8 +864,12 @@ def _event_field_values(
                                 untracked_value_limit=untracked_value_limit,
                             )
                             if active_count is None:
-                                policy_diag["active_seed_id_without_count_event_count"] += 1
-                                policy_diag["policy_loaded_for_active_priority_effect"] = True
+                                policy_diag[
+                                    "active_seed_id_without_count_event_count"
+                                ] += 1
+                                policy_diag[
+                                    "policy_loaded_for_active_priority_effect"
+                                ] = True
                         else:
                             _bounded_add(
                                 values,
@@ -717,9 +888,14 @@ def _event_field_values(
                         )
             if not isinstance(fields, dict):
                 continue
-            if str(fields.get("lifecycle_bucket_match_status") or "").strip().lower() == "matched":
+            if (
+                str(fields.get("lifecycle_bucket_match_status") or "").strip().lower()
+                == "matched"
+            ):
                 bucket_id = str(fields.get("lifecycle_bucket_bucket_id") or "").strip()
-                source_bucket_id = str(fields.get("lifecycle_bucket_source_bucket_id") or "").strip()
+                source_bucket_id = str(
+                    fields.get("lifecycle_bucket_source_bucket_id") or ""
+                ).strip()
                 if bucket_id:
                     _bounded_add(
                         values,
@@ -738,11 +914,16 @@ def _event_field_values(
                     )
     policy_diag = values["active_policy_observation"]
     policy_diag["panic_scale_in_unique_sim_record_count"] = len(panic_sim_record_ids)
-    policy_diag["panic_scale_in_no_match_unique_sim_record_count"] = len(panic_no_match_sim_record_ids)
+    policy_diag["panic_scale_in_no_match_unique_sim_record_count"] = len(
+        panic_no_match_sim_record_ids
+    )
     policy_diag["panic_scale_in_no_match_repeated_followup_event_count"] = max(
         0,
         int(policy_diag.get("panic_scale_in_no_match_event_count") or 0)
-        - int(policy_diag.get("panic_scale_in_no_match_missing_sim_record_id_event_count") or 0)
+        - int(
+            policy_diag.get("panic_scale_in_no_match_missing_sim_record_id_event_count")
+            or 0
+        )
         - len(panic_no_match_sim_record_ids),
     )
     return values
@@ -774,7 +955,9 @@ def _reclassify_match_status_lineage(
 
         match_reason = str(fields.get("lifecycle_bucket_match_reason") or "").strip()
         bucket_id = str(fields.get("lifecycle_bucket_bucket_id") or "").strip()
-        source_bucket_id = str(fields.get("lifecycle_bucket_source_bucket_id") or "").strip()
+        source_bucket_id = str(
+            fields.get("lifecycle_bucket_source_bucket_id") or ""
+        ).strip()
         if (
             match_reason != "parent_catalog_missing"
             and bucket_id
@@ -826,11 +1009,21 @@ def _event_any_hypothesis_instrumented(events: dict[str, set[str]]) -> bool:
 
 
 def _seed_id(seed: dict[str, Any]) -> str:
-    return str(seed.get("active_seed_id") or seed.get("seed_id") or seed.get("source_key_id") or "").strip()
+    return str(
+        seed.get("active_seed_id")
+        or seed.get("seed_id")
+        or seed.get("source_key_id")
+        or ""
+    ).strip()
 
 
 def _policy_id(policy: dict[str, Any]) -> str:
-    return str(policy.get("priority_policy_id") or policy.get("policy_id") or policy.get("active_arm_policy_id") or "").strip()
+    return str(
+        policy.get("priority_policy_id")
+        or policy.get("policy_id")
+        or policy.get("active_arm_policy_id")
+        or ""
+    ).strip()
 
 
 def _hypothesis_id(item: dict[str, Any]) -> str:
@@ -873,10 +1066,15 @@ def _row(
     next_blocker: str,
     evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    state = conversion_state if conversion_state in ALLOWED_STATES else "not_instrumented"
+    state = (
+        conversion_state if conversion_state in ALLOWED_STATES else "not_instrumented"
+    )
     runtime_key = runtime_match_key or ""
     postclose_key = postclose_observed_key or ""
-    same_key = bool(source_key_id and (runtime_key == source_key_id or postclose_key == source_key_id))
+    same_key = bool(
+        source_key_id
+        and (runtime_key == source_key_id or postclose_key == source_key_id)
+    )
     if state == "key_mismatch":
         same_key_continuity = "fail"
     elif same_key:
@@ -891,12 +1089,17 @@ def _row(
     runtime_observed_same_key = same_key_continuity == "pass"
     positive_ev_candidate = bool(primary_ev is not None and primary_ev > 0)
     sample = _safe_float(evidence.get("sample"), 0.0) or 0.0
-    required_sample = _safe_float(
-        evidence.get("parent_sample_floor") or evidence.get("sample_floor"),
-        0.0,
-    ) or 0.0
+    required_sample = (
+        _safe_float(
+            evidence.get("parent_sample_floor") or evidence.get("sample_floor"),
+            0.0,
+        )
+        or 0.0
+    )
     sample_floor_related = next_blocker == "sample_floor"
-    sample_floor_blocked = sample_floor_related and required_sample > 0 and sample < required_sample
+    sample_floor_blocked = (
+        sample_floor_related and required_sample > 0 and sample < required_sample
+    )
     sample_floor_unknown_floor = sample_floor_related and required_sample <= 0
     return {
         "source_key_id": source_key_id,
@@ -924,9 +1127,15 @@ def _scalp_rows(
     apply_plan: dict[str, Any],
     events: dict[str, set[str]],
 ) -> list[dict[str, Any]]:
-    catalog_seeds = [item for item in catalog.get("active_sim_priority_seeds") or [] if isinstance(item, dict)]
+    catalog_seeds = [
+        item
+        for item in catalog.get("active_sim_priority_seeds") or []
+        if isinstance(item, dict)
+    ]
     catalog_by_id = {_seed_id(item): item for item in catalog_seeds if _seed_id(item)}
-    preopen_ids = _collect_values(apply_plan, {"active_sim_priority_seed_ids", "active_seed_id"})
+    preopen_ids = _collect_values(
+        apply_plan, {"active_sim_priority_seed_ids", "active_seed_id"}
+    )
     observed_ids = set().union(
         events.get("active_seed_id", set()),
         events.get("active_sim_priority_seed_id", set()),
@@ -937,7 +1146,9 @@ def _scalp_rows(
         if isinstance(events.get("active_policy_observation"), dict)
         else {}
     )
-    policy_loaded_for_effect = bool(policy_observation.get("policy_loaded_for_active_priority_effect"))
+    policy_loaded_for_effect = bool(
+        policy_observation.get("policy_loaded_for_active_priority_effect")
+    )
     policy_zero_only_window = bool(
         policy_observation.get("active_seed_count_zero_event_count")
         and not policy_observation.get("active_seed_count_positive_event_count")
@@ -955,12 +1166,23 @@ def _scalp_rows(
         elif observed:
             state, blocker = "matched", ""
         elif status == "cooldown":
-            state = "cooldown_intentional" if not preopen_selected else "cooldown_blocks_conversion"
-            blocker = "" if state == "cooldown_intentional" else "key_lineage_cooldown_blocks_conversion"
+            state = (
+                "cooldown_intentional"
+                if not preopen_selected
+                else "cooldown_blocks_conversion"
+            )
+            blocker = (
+                ""
+                if state == "cooldown_intentional"
+                else "key_lineage_cooldown_blocks_conversion"
+            )
         elif not preopen_selected:
             state, blocker = "preopen_missing", "key_lineage_preopen_missing"
         elif policy_zero_only_window:
-            state, blocker = "policy_not_loaded_window", "active_policy_not_loaded_window"
+            state, blocker = (
+                "policy_not_loaded_window",
+                "active_policy_not_loaded_window",
+            )
         else:
             state, blocker = "natural_match_0", "runtime_natural_match_0"
         rows.append(
@@ -977,23 +1199,33 @@ def _scalp_rows(
                 evidence={
                     "producer_present": True,
                     "seed_status": status or None,
-                    "entry_source_taxonomy_contract": seed.get("entry_source_taxonomy_contract")
-                    if isinstance(seed.get("entry_source_taxonomy_contract"), dict)
-                    else {},
-                    "taxonomy_contract_data_consumed": seed.get("taxonomy_contract_data_consumed"),
+                    "entry_source_taxonomy_contract": (
+                        seed.get("entry_source_taxonomy_contract")
+                        if isinstance(seed.get("entry_source_taxonomy_contract"), dict)
+                        else {}
+                    ),
+                    "taxonomy_contract_data_consumed": seed.get(
+                        "taxonomy_contract_data_consumed"
+                    ),
                     "taxonomy_contract_runtime_effect_allowed": seed.get(
                         "taxonomy_contract_runtime_effect_allowed"
                     ),
                     "runtime_policy_observation_state": (
                         "policy_loaded_active_seed_window"
                         if policy_loaded_for_effect
-                        else "policy_not_loaded_window"
-                        if policy_zero_only_window
-                        else "policy_observation_absent"
+                        else (
+                            "policy_not_loaded_window"
+                            if policy_zero_only_window
+                            else "policy_observation_absent"
+                        )
                     ),
-                    "excluded_from_active_priority_effect": bool(policy_zero_only_window and not observed),
+                    "excluded_from_active_priority_effect": bool(
+                        policy_zero_only_window and not observed
+                    ),
                     "excluded_from_active_priority_effect_reason": (
-                        "policy_not_loaded_window" if policy_zero_only_window and not observed else None
+                        "policy_not_loaded_window"
+                        if policy_zero_only_window and not observed
+                        else None
                     ),
                 },
             )
@@ -1016,10 +1248,18 @@ def _scalp_rows(
     return rows
 
 
-def _swing_rows(*, catalog: dict[str, Any], apply_plan: dict[str, Any], events: dict[str, set[str]]) -> list[dict[str, Any]]:
-    policies = [item for item in catalog.get("active_arm_priority_policies") or [] if isinstance(item, dict)]
+def _swing_rows(
+    *, catalog: dict[str, Any], apply_plan: dict[str, Any], events: dict[str, set[str]]
+) -> list[dict[str, Any]]:
+    policies = [
+        item
+        for item in catalog.get("active_arm_priority_policies") or []
+        if isinstance(item, dict)
+    ]
     catalog_by_id = {_policy_id(item): item for item in policies if _policy_id(item)}
-    preopen_ids = _collect_values(apply_plan, {"active_arm_priority_policy_ids", "priority_policy_id"})
+    preopen_ids = _collect_values(
+        apply_plan, {"active_arm_priority_policy_ids", "priority_policy_id"}
+    )
     observed_ids = set().union(
         events.get("priority_policy_id", set()),
         events.get("active_arm_priority_policy_id", set()),
@@ -1046,7 +1286,10 @@ def _swing_rows(*, catalog: dict[str, Any], apply_plan: dict[str, Any], events: 
                 postclose_observed_key=policy_id if observed else None,
                 conversion_state=state,
                 next_blocker=blocker,
-                evidence={"policy_status": policy.get("status") or policy.get("approval_state")},
+                evidence={
+                    "policy_status": policy.get("status")
+                    or policy.get("approval_state")
+                },
             )
         )
     for observed_id in sorted(observed_ids - set(catalog_by_id)):
@@ -1075,14 +1318,23 @@ def _hypothesis_rows(
     events: dict[str, set[str]],
 ) -> list[dict[str, Any]]:
     plan_items = _hypotheses_from_plan(plan)
-    plan_by_id = {_hypothesis_id(item): item for item in plan_items if _hypothesis_id(item)}
+    plan_by_id = {
+        _hypothesis_id(item): item for item in plan_items if _hypothesis_id(item)
+    }
     catalog_ids = {
         _hypothesis_id(item)
-        for item in [*_catalog_hypotheses(scalp_catalog), *_catalog_hypotheses(swing_catalog)]
+        for item in [
+            *_catalog_hypotheses(scalp_catalog),
+            *_catalog_hypotheses(swing_catalog),
+        ]
         if _hypothesis_id(item)
     }
-    observed_ids = set().union(events.get("ldm_hypothesis_id", set()), events.get("hypothesis_id", set()))
-    refinement_ids = _collect_values(refinement, {"hypothesis_id", "ldm_hypothesis_id", "soft_hypothesis_id"})
+    observed_ids = set().union(
+        events.get("ldm_hypothesis_id", set()), events.get("hypothesis_id", set())
+    )
+    refinement_ids = _collect_values(
+        refinement, {"hypothesis_id", "ldm_hypothesis_id", "soft_hypothesis_id"}
+    )
     any_instrumented = _event_any_hypothesis_instrumented(events)
     rows: list[dict[str, Any]] = []
     for hypothesis_id, item in sorted(plan_by_id.items()):
@@ -1100,21 +1352,30 @@ def _hypothesis_rows(
             _row(
                 source_key_id=hypothesis_id,
                 source_key_type="hypothesis",
-                source_artifact=str(plan.get("source_artifact") or "ldm_hypothesis_observation_plan"),
+                source_artifact=str(
+                    plan.get("source_artifact") or "ldm_hypothesis_observation_plan"
+                ),
                 catalog_key_present=catalog_present,
                 preopen_policy_selected=catalog_present,
-                runtime_match_key=hypothesis_id if hypothesis_id in observed_ids else None,
-                postclose_observed_key=hypothesis_id if hypothesis_id in refinement_ids else None,
+                runtime_match_key=(
+                    hypothesis_id if hypothesis_id in observed_ids else None
+                ),
+                postclose_observed_key=(
+                    hypothesis_id if hypothesis_id in refinement_ids else None
+                ),
                 conversion_state=state,
                 next_blocker=blocker,
                 evidence={
-                    "source_quality_adjusted_ev_pct": item.get("source_quality_adjusted_ev_pct"),
+                    "source_quality_adjusted_ev_pct": item.get(
+                        "source_quality_adjusted_ev_pct"
+                    ),
                     "sample": item.get("sample"),
                     "sample_floor": item.get("sample_floor"),
                     "parent_sample_floor": item.get("parent_sample_floor"),
                     "sample_floor_window_policy": item.get("sample_floor_window_policy")
                     or item.get("window_policy"),
-                    "parent_bucket_id": item.get("parent_bucket_id") or item.get("hypothesis_parent_bucket_id"),
+                    "parent_bucket_id": item.get("parent_bucket_id")
+                    or item.get("hypothesis_parent_bucket_id"),
                 },
             )
         )
@@ -1122,7 +1383,11 @@ def _hypothesis_rows(
 
 
 def _bucket_state(item: dict[str, Any]) -> str:
-    contract = item.get("auto_promotion_contract") if isinstance(item.get("auto_promotion_contract"), dict) else {}
+    contract = (
+        item.get("auto_promotion_contract")
+        if isinstance(item.get("auto_promotion_contract"), dict)
+        else {}
+    )
     return str(
         item.get("classification_state")
         or item.get("review_sub_state")
@@ -1132,13 +1397,20 @@ def _bucket_state(item: dict[str, Any]) -> str:
 
 
 def _bucket_identity(item: dict[str, Any]) -> str:
-    return str(item.get("source_bucket_id") or item.get("bucket_id") or item.get("source_key_id") or "").strip()
+    return str(
+        item.get("source_bucket_id")
+        or item.get("bucket_id")
+        or item.get("source_key_id")
+        or ""
+    ).strip()
 
 
 def _iter_bucket_items(payload: Any) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     if isinstance(payload, dict):
-        if _bucket_identity(payload) and (_bucket_state(payload) or payload.get("source_bucket_kind")):
+        if _bucket_identity(payload) and (
+            _bucket_state(payload) or payload.get("source_bucket_kind")
+        ):
             items.append(payload)
         for value in payload.values():
             items.extend(_iter_bucket_items(value))
@@ -1161,13 +1433,19 @@ def _tracked_event_values(
         for item in scalp_catalog.get("active_sim_priority_seeds") or []
         if isinstance(item, dict) and _seed_id(item)
     }
-    scalp_ids.update(_collect_values(apply_plan, {"active_sim_priority_seed_ids", "active_seed_id"}))
+    scalp_ids.update(
+        _collect_values(apply_plan, {"active_sim_priority_seed_ids", "active_seed_id"})
+    )
     swing_ids = {
         _policy_id(item)
         for item in swing_catalog.get("active_arm_priority_policies") or []
         if isinstance(item, dict) and _policy_id(item)
     }
-    swing_ids.update(_collect_values(apply_plan, {"active_arm_priority_policy_ids", "priority_policy_id"}))
+    swing_ids.update(
+        _collect_values(
+            apply_plan, {"active_arm_priority_policy_ids", "priority_policy_id"}
+        )
+    )
     hypothesis_ids = {
         _hypothesis_id(item)
         for item in [
@@ -1177,12 +1455,18 @@ def _tracked_event_values(
         ]
         if _hypothesis_id(item)
     }
-    hypothesis_ids.update(_collect_values(refinement, {"hypothesis_id", "ldm_hypothesis_id", "soft_hypothesis_id"}))
+    hypothesis_ids.update(
+        _collect_values(
+            refinement, {"hypothesis_id", "ldm_hypothesis_id", "soft_hypothesis_id"}
+        )
+    )
     bucket_source_ids = set()
     bucket_ids = set()
     for item in _iter_bucket_items(scalp_catalog):
         source_id = _bucket_identity(item)
-        bucket_id = str(item.get("bucket_id") or "").strip() if isinstance(item, dict) else ""
+        bucket_id = (
+            str(item.get("bucket_id") or "").strip() if isinstance(item, dict) else ""
+        )
         if source_id:
             bucket_source_ids.add(source_id)
         if bucket_id:
@@ -1222,7 +1506,11 @@ def _bucket_rows(
             continue
         seen.add(source_id)
         candidates.append((item, "scalp_sim_policy_catalog", True))
-    for section in ("live_auto_apply_candidates", "sim_auto_approved_candidates", "surfaced_candidates"):
+    for section in (
+        "live_auto_apply_candidates",
+        "sim_auto_approved_candidates",
+        "surfaced_candidates",
+    ):
         for item in discovery.get(section) or []:
             if not isinstance(item, dict):
                 continue
@@ -1239,17 +1527,31 @@ def _bucket_rows(
             continue
         state = _bucket_state(item)
         bucket_id = str(item.get("bucket_id") or "").strip()
-        observed = preopen_from_catalog and (candidate_id in matched_source_ids or bucket_id in matched_bucket_ids)
-        runtime_seen = preopen_from_catalog and (candidate_id in runtime_source_ids or bucket_id in runtime_bucket_ids)
+        observed = preopen_from_catalog and (
+            candidate_id in matched_source_ids or bucket_id in matched_bucket_ids
+        )
+        runtime_seen = preopen_from_catalog and (
+            candidate_id in runtime_source_ids or bucket_id in runtime_bucket_ids
+        )
         if observed:
             conversion_state, blocker = "matched", ""
         elif preopen_from_catalog and runtime_seen:
-            conversion_state, blocker = "natural_match_0", "lifecycle_bucket_runtime_no_match"
+            conversion_state, blocker = (
+                "natural_match_0",
+                "lifecycle_bucket_runtime_no_match",
+            )
         elif preopen_from_catalog:
-            conversion_state, blocker = "natural_match_0", "lifecycle_bucket_natural_match_0"
+            conversion_state, blocker = (
+                "natural_match_0",
+                "lifecycle_bucket_natural_match_0",
+            )
         elif state == "live_auto_apply_ready":
             conversion_state, blocker = "bridge_blocked", "bridge_contract"
-        elif state in {"sim_auto_approved", "entry_only_sim_auto_approved", "lifecycle_flow_sim_probe_candidate"}:
+        elif state in {
+            "sim_auto_approved",
+            "entry_only_sim_auto_approved",
+            "lifecycle_flow_sim_probe_candidate",
+        }:
             conversion_state, blocker = "collecting", "sample_floor"
         elif str(item.get("source_dimension_gap") or ""):
             conversion_state, blocker = "source_quality_blocked", "source_quality"
@@ -1262,7 +1564,12 @@ def _bucket_rows(
                 source_artifact=source_artifact,
                 catalog_key_present=True,
                 preopen_policy_selected=preopen_from_catalog
-                or state in {"sim_auto_approved", "entry_only_sim_auto_approved", "lifecycle_flow_sim_probe_candidate"},
+                or state
+                in {
+                    "sim_auto_approved",
+                    "entry_only_sim_auto_approved",
+                    "lifecycle_flow_sim_probe_candidate",
+                },
                 runtime_match_key=candidate_id if observed else None,
                 postclose_observed_key=candidate_id if observed else None,
                 conversion_state=conversion_state,
@@ -1270,7 +1577,9 @@ def _bucket_rows(
                 evidence={
                     "classification_state": state,
                     "primary_ev": item.get("primary_ev"),
-                    "source_quality_adjusted_ev_pct": item.get("source_quality_adjusted_ev_pct"),
+                    "source_quality_adjusted_ev_pct": item.get(
+                        "source_quality_adjusted_ev_pct"
+                    ),
                     "sample": item.get("sample"),
                     "sample_floor": item.get("sample_floor"),
                     "parent_sample_floor": item.get("parent_sample_floor"),
@@ -1286,8 +1595,18 @@ def _bucket_rows(
 
 
 def build_key_lineage_ledger(target_date: str) -> dict[str, Any]:
-    discovery_path = DATA_DIR / "report" / "lifecycle_bucket_discovery" / f"lifecycle_bucket_discovery_{target_date}.json"
-    refinement_path = DATA_DIR / "report" / "ldm_hypothesis_parent_refinement" / f"ldm_hypothesis_parent_refinement_{target_date}.json"
+    discovery_path = (
+        DATA_DIR
+        / "report"
+        / "lifecycle_bucket_discovery"
+        / f"lifecycle_bucket_discovery_{target_date}.json"
+    )
+    refinement_path = (
+        DATA_DIR
+        / "report"
+        / "ldm_hypothesis_parent_refinement"
+        / f"ldm_hypothesis_parent_refinement_{target_date}.json"
+    )
     apply_path = _runtime_apply_path(target_date)
     apply_plan = _load_json(apply_path)
     apply_source_date = _apply_source_date(apply_plan, target_date)
@@ -1329,11 +1648,22 @@ def build_key_lineage_ledger(target_date: str) -> dict[str, Any]:
         if isinstance(events.get("active_policy_observation"), dict)
         else {}
     )
-    io_guard = events.get("io_guard") if isinstance(events.get("io_guard"), dict) else {}
+    io_guard = (
+        events.get("io_guard") if isinstance(events.get("io_guard"), dict) else {}
+    )
 
     rows: list[dict[str, Any]] = []
-    rows.extend(_scalp_rows(discovery=discovery, catalog=scalp_catalog, apply_plan=apply_plan, events=events))
-    rows.extend(_swing_rows(catalog=swing_catalog, apply_plan=apply_plan, events=events))
+    rows.extend(
+        _scalp_rows(
+            discovery=discovery,
+            catalog=scalp_catalog,
+            apply_plan=apply_plan,
+            events=events,
+        )
+    )
+    rows.extend(
+        _swing_rows(catalog=swing_catalog, apply_plan=apply_plan, events=events)
+    )
     rows.extend(
         _hypothesis_rows(
             plan=hypothesis_plan,
@@ -1344,33 +1674,54 @@ def build_key_lineage_ledger(target_date: str) -> dict[str, Any]:
         )
     )
     rows.extend(_bucket_rows(discovery, scalp_catalog=scalp_catalog, events=events))
-    state_counts = Counter(str(row.get("conversion_state") or "unknown") for row in rows)
-    continuity_pass_count = sum(1 for row in rows if row.get("same_key_continuity") == "pass")
+    state_counts = Counter(
+        str(row.get("conversion_state") or "unknown") for row in rows
+    )
+    continuity_pass_count = sum(
+        1 for row in rows if row.get("same_key_continuity") == "pass"
+    )
     positive_ev_runtime_observed_count = sum(
-        1 for row in rows if row.get("positive_ev_candidate") and row.get("runtime_observed_same_key")
+        1
+        for row in rows
+        if row.get("positive_ev_candidate") and row.get("runtime_observed_same_key")
     )
     positive_ev_sample_floor_blocked_count = sum(
-        1 for row in rows if row.get("positive_ev_candidate") and row.get("sample_floor_blocked")
+        1
+        for row in rows
+        if row.get("positive_ev_candidate") and row.get("sample_floor_blocked")
     )
     positive_ev_sample_floor_unknown_floor_count = sum(
-        1 for row in rows if row.get("positive_ev_candidate") and row.get("sample_floor_unknown_floor")
+        1
+        for row in rows
+        if row.get("positive_ev_candidate") and row.get("sample_floor_unknown_floor")
     )
     positive_ev_sample_floor_related_count = (
-        positive_ev_sample_floor_blocked_count + positive_ev_sample_floor_unknown_floor_count
+        positive_ev_sample_floor_blocked_count
+        + positive_ev_sample_floor_unknown_floor_count
     )
     active_seed_taxonomy_counts = Counter(
-        str(((row.get("evidence") or {}).get("entry_source_taxonomy_contract") or {}).get("contract_state") or "unknown")
+        str(
+            (
+                (row.get("evidence") or {}).get("entry_source_taxonomy_contract") or {}
+            ).get("contract_state")
+            or "unknown"
+        )
         for row in rows
         if row.get("source_key_type") == "active_seed"
     )
-    discovery_summary = discovery.get("summary") if isinstance(discovery.get("summary"), dict) else {}
+    discovery_summary = (
+        discovery.get("summary") if isinstance(discovery.get("summary"), dict) else {}
+    )
     default_sample_floor_window_policy = str(
         discovery_summary.get("source_window_policy")
         or discovery.get("window_policy")
         or "source_report_window"
     )
     sample_floor_window_counts = Counter(
-        str((row.get("evidence") or {}).get("sample_floor_window_policy") or default_sample_floor_window_policy)
+        str(
+            (row.get("evidence") or {}).get("sample_floor_window_policy")
+            or default_sample_floor_window_policy
+        )
         for row in rows
         if row.get("positive_ev_candidate")
         and (row.get("sample_floor_blocked") or row.get("sample_floor_unknown_floor"))
@@ -1378,9 +1729,11 @@ def build_key_lineage_ledger(target_date: str) -> dict[str, Any]:
     sample_floor_window_policy = (
         next(iter(sample_floor_window_counts))
         if len(sample_floor_window_counts) == 1
-        else "mixed_source_windows"
-        if sample_floor_window_counts
-        else default_sample_floor_window_policy
+        else (
+            "mixed_source_windows"
+            if sample_floor_window_counts
+            else default_sample_floor_window_policy
+        )
     )
     blockers = []
     for row in rows:
@@ -1418,7 +1771,8 @@ def build_key_lineage_ledger(target_date: str) -> dict[str, Any]:
             "runtime_observation_target_date": target_date,
             "runtime_policy_source_date": apply_source_date,
             "postclose_candidate_source_date": target_date,
-            "runtime_policy_matches_postclose_candidate_source": apply_source_date == target_date,
+            "runtime_policy_matches_postclose_candidate_source": apply_source_date
+            == target_date,
             "new_postclose_candidates_due_state": (
                 "due_same_day"
                 if apply_source_date == target_date
@@ -1429,7 +1783,8 @@ def build_key_lineage_ledger(target_date: str) -> dict[str, Any]:
             "bucket_same_key_continuity_pass_count": sum(
                 1
                 for row in rows
-                if row.get("source_key_type") == "bucket" and row.get("same_key_continuity") == "pass"
+                if row.get("source_key_type") == "bucket"
+                and row.get("same_key_continuity") == "pass"
             ),
             "key_mismatch_count": state_counts.get("key_mismatch", 0),
             "catalog_missing_count": state_counts.get("catalog_missing", 0),
@@ -1444,10 +1799,14 @@ def build_key_lineage_ledger(target_date: str) -> dict[str, Any]:
             "positive_ev_sample_floor_related_count": positive_ev_sample_floor_related_count,
             "positive_ev_sample_floor_count_scope": "lineage_rows",
             "positive_ev_sample_floor_window_policy": sample_floor_window_policy,
-            "positive_ev_sample_floor_window_policy_counts": dict(sorted(sample_floor_window_counts.items())),
+            "positive_ev_sample_floor_window_policy_counts": dict(
+                sorted(sample_floor_window_counts.items())
+            ),
             "positive_ev_sample_floor_basis": "lineage_evidence_sample_vs_sample_floor",
             "active_sim_policy_observation_window_policy": "consume_all_events_but_score_active_priority_effect_only_when_active_seed_count_positive",
-            "active_sim_policy_event_count": _safe_int(active_policy_observation.get("event_count")),
+            "active_sim_policy_event_count": _safe_int(
+                active_policy_observation.get("event_count")
+            ),
             "active_sim_policy_zero_count_event_count": _safe_int(
                 active_policy_observation.get("active_seed_count_zero_event_count")
             ),
@@ -1455,12 +1814,18 @@ def build_key_lineage_ledger(target_date: str) -> dict[str, Any]:
                 active_policy_observation.get("active_seed_count_positive_event_count")
             ),
             "active_sim_policy_active_seed_id_without_count_event_count": _safe_int(
-                active_policy_observation.get("active_seed_id_without_count_event_count")
+                active_policy_observation.get(
+                    "active_seed_id_without_count_event_count"
+                )
             ),
-            "active_sim_policy_active_seed_count_values": active_policy_observation.get("active_seed_count_values")
+            "active_sim_policy_active_seed_count_values": active_policy_observation.get(
+                "active_seed_count_values"
+            )
             or {},
             "active_sim_policy_loaded_for_effect": bool(
-                active_policy_observation.get("policy_loaded_for_active_priority_effect")
+                active_policy_observation.get(
+                    "policy_loaded_for_active_priority_effect"
+                )
             ),
             "active_sim_policy_zero_count_data_consumed": bool(
                 active_policy_observation.get("zero_count_data_consumed")
@@ -1472,43 +1837,69 @@ def build_key_lineage_ledger(target_date: str) -> dict[str, Any]:
                 active_policy_observation.get("active_seed_candidate_event_count")
             ),
             "active_seed_candidate_new_entry_event_count": _safe_int(
-                active_policy_observation.get("active_seed_candidate_new_entry_event_count")
+                active_policy_observation.get(
+                    "active_seed_candidate_new_entry_event_count"
+                )
             ),
             "active_seed_candidate_followup_event_count": _safe_int(
-                active_policy_observation.get("active_seed_candidate_followup_event_count")
+                active_policy_observation.get(
+                    "active_seed_candidate_followup_event_count"
+                )
             ),
             "active_seed_candidate_matched_event_count": _safe_int(
-                active_policy_observation.get("active_seed_candidate_matched_event_count")
+                active_policy_observation.get(
+                    "active_seed_candidate_matched_event_count"
+                )
             ),
             "active_seed_candidate_matched_true_without_seed_id_event_count": _safe_int(
-                active_policy_observation.get("active_seed_candidate_matched_true_without_seed_id_event_count")
+                active_policy_observation.get(
+                    "active_seed_candidate_matched_true_without_seed_id_event_count"
+                )
             ),
             "active_seed_candidate_unmatched_event_count": _safe_int(
-                active_policy_observation.get("active_seed_candidate_unmatched_event_count")
+                active_policy_observation.get(
+                    "active_seed_candidate_unmatched_event_count"
+                )
             ),
             "active_seed_candidate_new_entry_unmatched_event_count": _safe_int(
-                active_policy_observation.get("active_seed_candidate_new_entry_unmatched_event_count")
+                active_policy_observation.get(
+                    "active_seed_candidate_new_entry_unmatched_event_count"
+                )
             ),
             "active_seed_candidate_followup_unmatched_event_count": _safe_int(
-                active_policy_observation.get("active_seed_candidate_followup_unmatched_event_count")
+                active_policy_observation.get(
+                    "active_seed_candidate_followup_unmatched_event_count"
+                )
             ),
             "active_seed_candidate_without_seed_id_event_count": _safe_int(
-                active_policy_observation.get("active_seed_candidate_without_seed_id_event_count")
+                active_policy_observation.get(
+                    "active_seed_candidate_without_seed_id_event_count"
+                )
             ),
             "active_seed_candidate_raw_without_seed_id_event_count": _safe_int(
-                active_policy_observation.get("active_seed_candidate_raw_without_seed_id_event_count")
+                active_policy_observation.get(
+                    "active_seed_candidate_raw_without_seed_id_event_count"
+                )
             ),
             "active_seed_candidate_followup_without_seed_id_event_count": _safe_int(
-                active_policy_observation.get("active_seed_candidate_followup_without_seed_id_event_count")
+                active_policy_observation.get(
+                    "active_seed_candidate_followup_without_seed_id_event_count"
+                )
             ),
             "active_seed_candidate_raw_followup_without_seed_id_event_count": _safe_int(
-                active_policy_observation.get("active_seed_candidate_raw_followup_without_seed_id_event_count")
+                active_policy_observation.get(
+                    "active_seed_candidate_raw_followup_without_seed_id_event_count"
+                )
             ),
             "active_seed_candidate_eligible_event_count": _safe_int(
-                active_policy_observation.get("active_seed_candidate_eligible_event_count")
+                active_policy_observation.get(
+                    "active_seed_candidate_eligible_event_count"
+                )
             ),
             "active_seed_candidate_not_match_eligible_event_count": _safe_int(
-                active_policy_observation.get("active_seed_candidate_not_match_eligible_event_count")
+                active_policy_observation.get(
+                    "active_seed_candidate_not_match_eligible_event_count"
+                )
             ),
             "active_seed_candidate_not_match_eligible_reason_counts": active_policy_observation.get(
                 "active_seed_candidate_not_match_eligible_reason_counts"
@@ -1523,7 +1914,9 @@ def build_key_lineage_ledger(target_date: str) -> dict[str, Any]:
             )
             or {},
             "active_seed_candidate_inferred_parent_seed_id_event_count": _safe_int(
-                active_policy_observation.get("active_seed_candidate_inferred_parent_seed_id_event_count")
+                active_policy_observation.get(
+                    "active_seed_candidate_inferred_parent_seed_id_event_count"
+                )
             ),
             "active_seed_candidate_inferred_parent_seed_id_stage_counts": active_policy_observation.get(
                 "active_seed_candidate_inferred_parent_seed_id_stage_counts"
@@ -1534,7 +1927,9 @@ def build_key_lineage_ledger(target_date: str) -> dict[str, Any]:
             )
             or {},
             "active_seed_candidate_ambiguous_parent_seed_prefix_event_count": _safe_int(
-                active_policy_observation.get("active_seed_candidate_ambiguous_parent_seed_prefix_event_count")
+                active_policy_observation.get(
+                    "active_seed_candidate_ambiguous_parent_seed_prefix_event_count"
+                )
             ),
             "active_seed_candidate_missing_parent_seed_lookup_key_counts": active_policy_observation.get(
                 "active_seed_candidate_missing_parent_seed_lookup_key_counts"
@@ -1546,11 +1941,21 @@ def build_key_lineage_ledger(target_date: str) -> dict[str, Any]:
             or {},
             "active_seed_candidate_lineage_closure_status": (
                 "closed"
-                if _safe_int(active_policy_observation.get("active_seed_candidate_without_seed_id_event_count")) <= 0
+                if _safe_int(
+                    active_policy_observation.get(
+                        "active_seed_candidate_without_seed_id_event_count"
+                    )
+                )
+                <= 0
                 else "closed_with_producer_followup"
             ),
             "active_seed_candidate_lineage_followup_required": (
-                _safe_int(active_policy_observation.get("active_seed_candidate_without_seed_id_event_count")) > 0
+                _safe_int(
+                    active_policy_observation.get(
+                        "active_seed_candidate_without_seed_id_event_count"
+                    )
+                )
+                > 0
             ),
             "active_seed_candidate_followup_stage_counts": active_policy_observation.get(
                 "active_seed_candidate_followup_stage_counts"
@@ -1574,13 +1979,19 @@ def build_key_lineage_ledger(target_date: str) -> dict[str, Any]:
                 active_policy_observation.get("panic_scale_in_no_match_event_count")
             ),
             "panic_scale_in_no_match_unique_sim_record_count": _safe_int(
-                active_policy_observation.get("panic_scale_in_no_match_unique_sim_record_count")
+                active_policy_observation.get(
+                    "panic_scale_in_no_match_unique_sim_record_count"
+                )
             ),
             "panic_scale_in_no_match_missing_sim_record_id_event_count": _safe_int(
-                active_policy_observation.get("panic_scale_in_no_match_missing_sim_record_id_event_count")
+                active_policy_observation.get(
+                    "panic_scale_in_no_match_missing_sim_record_id_event_count"
+                )
             ),
             "panic_scale_in_no_match_repeated_followup_event_count": _safe_int(
-                active_policy_observation.get("panic_scale_in_no_match_repeated_followup_event_count")
+                active_policy_observation.get(
+                    "panic_scale_in_no_match_repeated_followup_event_count"
+                )
             ),
             "panic_scale_in_no_match_source_stage_counts": active_policy_observation.get(
                 "panic_scale_in_no_match_source_stage_counts"
@@ -1598,7 +2009,9 @@ def build_key_lineage_ledger(target_date: str) -> dict[str, Any]:
             )
             or {},
             "hypothesis_matched_but_parent_bucket_no_match_count": _safe_int(
-                active_policy_observation.get("hypothesis_matched_but_parent_bucket_no_match_count")
+                active_policy_observation.get(
+                    "hypothesis_matched_but_parent_bucket_no_match_count"
+                )
             ),
             "active_seed_matched_false_count": _safe_int(
                 active_policy_observation.get("active_seed_matched_false_count")
@@ -1621,13 +2034,17 @@ def build_key_lineage_ledger(target_date: str) -> dict[str, Any]:
                 active_policy_observation.get("natural_no_match_global_count")
             ),
             "panic_scale_in_stage_excluded_global_count": _safe_int(
-                active_policy_observation.get("panic_scale_in_stage_excluded_global_count")
+                active_policy_observation.get(
+                    "panic_scale_in_stage_excluded_global_count"
+                )
             ),
             "matched_entry_child_bridge_global_count": _safe_int(
                 active_policy_observation.get("matched_entry_child_bridge_global_count")
             ),
             "active_seed_prefix_matched_parent_missing_global_count": _safe_int(
-                active_policy_observation.get("active_seed_prefix_matched_parent_missing_global_count")
+                active_policy_observation.get(
+                    "active_seed_prefix_matched_parent_missing_global_count"
+                )
             ),
             "contract_missing_global_count": _safe_int(
                 active_policy_observation.get("contract_missing_global_count")
@@ -1637,10 +2054,14 @@ def build_key_lineage_ledger(target_date: str) -> dict[str, Any]:
             ),
             "not_instrumented_count_scope": "non-lifecycle-match-eligible diagnostic/observation stages where lifecycle fields are not required",
             "lifecycle_bucket_match_status_no_match_global_count": _safe_int(
-                active_policy_observation.get("lifecycle_bucket_match_status_no_match_global_count")
+                active_policy_observation.get(
+                    "lifecycle_bucket_match_status_no_match_global_count"
+                )
             ),
             "lifecycle_bucket_match_status_matched_global_count": _safe_int(
-                active_policy_observation.get("lifecycle_bucket_match_status_matched_global_count")
+                active_policy_observation.get(
+                    "lifecycle_bucket_match_status_matched_global_count"
+                )
             ),
             "active_seed_matched_false_policy": "natural_no_match_candidate_taxonomy_handoff_diagnosis_target",
             "active_seed_matched_none_policy": "instrumentation_or_contract_missing_candidate_workorder_target",
@@ -1716,7 +2137,11 @@ def _render_markdown(report: dict[str, Any]) -> str:
         "",
         "## Top Blockers",
     ]
-    blockers = report.get("lineage_blockers") if isinstance(report.get("lineage_blockers"), list) else []
+    blockers = (
+        report.get("lineage_blockers")
+        if isinstance(report.get("lineage_blockers"), list)
+        else []
+    )
     if blockers:
         for item in blockers[:20]:
             lines.append(
@@ -1730,7 +2155,10 @@ def _render_markdown(report: dict[str, Any]) -> str:
 def write_key_lineage_ledger(report: dict[str, Any]) -> tuple[Path, Path]:
     json_path, md_path = report_paths(str(report.get("date")))
     json_path.parent.mkdir(parents=True, exist_ok=True)
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
     md_path.write_text(_render_markdown(report), encoding="utf-8")
     return json_path, md_path
 
@@ -1741,7 +2169,12 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     report = build_key_lineage_ledger(args.date)
     json_path, md_path = write_key_lineage_ledger(report)
-    print(json.dumps({"json": str(json_path), "md": str(md_path), "summary": report["summary"]}, ensure_ascii=False))
+    print(
+        json.dumps(
+            {"json": str(json_path), "md": str(md_path), "summary": report["summary"]},
+            ensure_ascii=False,
+        )
+    )
     return 0
 
 

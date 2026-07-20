@@ -231,7 +231,9 @@ CRON_JOB_REGISTRY: list[dict[str, Any]] = [
 _ERROR_MARKER = re.compile(r"\[(FAIL|ERROR|CRITICAL)\]", re.IGNORECASE)
 _DONE_MARKER = re.compile(r"\[(DONE|OK|SUCCESS|COMPLETED)\]", re.IGNORECASE)
 _START_MARKER = re.compile(r"\[(START|BEGIN)\]", re.IGNORECASE)
-_DATE_PATTERN = re.compile(r"(?:target_date|started_at|finished_at)=(\d{4}-\d{2}-\d{2})")
+_DATE_PATTERN = re.compile(
+    r"(?:target_date|started_at|finished_at)=(\d{4}-\d{2}-\d{2})"
+)
 
 
 @register_detector
@@ -276,7 +278,9 @@ class CronCompletionDetector(BaseDetector):
 
             if not past_window_start:
                 details[f"{jid}_status"] = "not_yet_due"
-                details[f"{jid}_window"] = f"{ws_h:02d}:{ws_m:02d}~{we_h:02d}:{we_m:02d}"
+                details[f"{jid}_window"] = (
+                    f"{ws_h:02d}:{ws_m:02d}~{we_h:02d}:{we_m:02d}"
+                )
                 continue
 
             if not log_path.exists():
@@ -300,9 +304,17 @@ class CronCompletionDetector(BaseDetector):
             recent_lines = self._read_tail(log_path, self.MARKER_TAIL_LINES)
             today_lines = self._filter_today_lines(recent_lines, today_str)
             has_matching_date = bool(today_lines)
-            has_done = bool(_DONE_MARKER.search(today_lines)) if has_matching_date else False
-            has_start = bool(_START_MARKER.search(today_lines)) if has_matching_date else False
-            has_error = bool(_ERROR_MARKER.search(today_lines)) if has_matching_date else bool(_ERROR_MARKER.search(recent_lines))
+            has_done = (
+                bool(_DONE_MARKER.search(today_lines)) if has_matching_date else False
+            )
+            has_start = (
+                bool(_START_MARKER.search(today_lines)) if has_matching_date else False
+            )
+            has_error = (
+                bool(_ERROR_MARKER.search(today_lines))
+                if has_matching_date
+                else bool(_ERROR_MARKER.search(recent_lines))
+            )
             if artifact_status:
                 details[f"{jid}_status_artifact_terminal"] = artifact_status
 
@@ -330,7 +342,9 @@ class CronCompletionDetector(BaseDetector):
                         details[f"{jid}_status"] = "fail"
                     else:
                         details[f"{jid}_status"] = "pass"
-                        details[f"{jid}_pass_note"] = "done over error (last terminal was DONE)"
+                        details[f"{jid}_pass_note"] = (
+                            "done over error (last terminal was DONE)"
+                        )
                 elif has_done:
                     details[f"{jid}_status"] = "pass"
                 elif has_error and past_window_end:
@@ -422,9 +436,22 @@ class CronCompletionDetector(BaseDetector):
         except (TypeError, ValueError):
             exit_code = 1
         status = str(payload.get("status") or "").lower()
-        manual_recovery = payload.get("manual_recovery") if isinstance(payload.get("manual_recovery"), dict) else {}
-        verification_status = str(manual_recovery.get("verification_status") or "").lower()
-        if exit_code == 0 and status in {"succeeded", "success", "passed", "pass", "completed", "done"}:
+        manual_recovery = (
+            payload.get("manual_recovery")
+            if isinstance(payload.get("manual_recovery"), dict)
+            else {}
+        )
+        verification_status = str(
+            manual_recovery.get("verification_status") or ""
+        ).lower()
+        if exit_code == 0 and status in {
+            "succeeded",
+            "success",
+            "passed",
+            "pass",
+            "completed",
+            "done",
+        }:
             return "done"
         if exit_code == 0 and verification_status == "pass_with_pending_done_marker":
             return "done"
@@ -446,7 +473,9 @@ class CronCompletionDetector(BaseDetector):
     @staticmethod
     def _line_has_today_timestamp(line: str, today_str: str) -> bool:
         return today_str in line and (
-            _DONE_MARKER.search(line) or _ERROR_MARKER.search(line) or _START_MARKER.search(line)
+            _DONE_MARKER.search(line)
+            or _ERROR_MARKER.search(line)
+            or _START_MARKER.search(line)
         )
 
     @staticmethod
@@ -459,9 +488,7 @@ class CronCompletionDetector(BaseDetector):
         return "none"
 
     @staticmethod
-    def _classify(
-        issues: list[str], warnings: list[str]
-    ) -> tuple[str, str]:
+    def _classify(issues: list[str], warnings: list[str]) -> tuple[str, str]:
         if issues:
             return "fail", f"Cron job failures: {'; '.join(issues[:5])}"
         if warnings:

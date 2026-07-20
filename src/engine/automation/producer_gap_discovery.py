@@ -29,10 +29,11 @@ from src.engine.ai.postclose_review_config import (
     parsed_review_followup_reasons,
     resolve_postclose_ai_review_config,
 )
-from src.engine.automation.producer_gap_source_bundle import report_paths as producer_gap_source_bundle_paths
+from src.engine.automation.producer_gap_source_bundle import (
+    report_paths as producer_gap_source_bundle_paths,
+)
 from src.engine.daily_threshold_cycle_report import REPORT_DIR
 from src.utils.jsonl_io import iter_jsonl
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 REPORT_TYPE = "producer_gap_discovery"
@@ -77,8 +78,12 @@ PATTERN_TYPES = {
 }
 PRIORITY_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 ROLLING_WINDOWS = ("daily", "3d", "5d", "10d", "all_available")
-SIM_ROLLING_MAX_ROWS = int(os.getenv("KORSTOCKSCAN_PRODUCER_GAP_SIM_ROLLING_MAX_ROWS", "200000") or "200000")
-SIM_ROLLING_MAX_SECONDS = int(os.getenv("KORSTOCKSCAN_PRODUCER_GAP_SIM_ROLLING_MAX_SECONDS", "240") or "240")
+SIM_ROLLING_MAX_ROWS = int(
+    os.getenv("KORSTOCKSCAN_PRODUCER_GAP_SIM_ROLLING_MAX_ROWS", "200000") or "200000"
+)
+SIM_ROLLING_MAX_SECONDS = int(
+    os.getenv("KORSTOCKSCAN_PRODUCER_GAP_SIM_ROLLING_MAX_SECONDS", "240") or "240"
+)
 PRODUCER_DUAL_DECISIONS = {
     "new_producer",
     "extend_existing_producer",
@@ -108,22 +113,158 @@ class DetectorContract:
 
 
 DETECTOR_REGISTRY: tuple[DetectorContract, ...] = (
-    DetectorContract("stop_recovery_counterfactual_missing", "counterfactual_only", "scalping", "exit", ("sim_post_sell_evaluations",), False, "stop_recovery", "sim_stop_recovery_gap_missing"),
-    DetectorContract("missed_fill_recovery_counterfactual_missing", "mixed_source", "scalping", "submit", ("lifecycle_decision_matrix", "lifecycle_bucket_discovery"), False, "submit_fill", "sim_submit_fill_quality_gap_missing"),
-    DetectorContract("swing_sim_probe_label_gap_missing", "swing_sim_first", "swing", "selection", ("swing_strategy_discovery_ev",), False, "swing_label", None, "swing source is already sim/probe first"),
-    DetectorContract("scale_in_counterfactual_gap_missing", "mixed_source", "cross_domain", "scale_in", ("lifecycle_decision_matrix",), False, "scale_in", "sim_scale_in_counterfactual_gap_missing"),
-    DetectorContract("time_window_policy_exception_missing", "counterfactual_only", "scalping", "entry", ("sim_post_sell_candidates", "wait6579_ev_cohort"), False, "time_window", "sim_time_window_exception_gap_missing"),
-    DetectorContract("volatile_runner_exit_counterfactual_missing", "real_anchor", "scalping", "exit", ("post_sell_candidates", "sim_post_sell_candidates"), True, "runner_exit", "sim_holding_runner_gap_missing"),
-    DetectorContract("limit_up_plateau_breakdown_exit_missing", "real_anchor", "scalping", "exit", ("post_sell_candidates", "sim_post_sell_candidates"), True, "plateau_exit", "sim_exit_plateau_breakdown_gap_missing"),
-    DetectorContract("sim_entry_selection_gap_missing", "sim_first", "scalping", "entry", ("sim_post_sell_candidates",), False, "entry_selection"),
-    DetectorContract("sim_submit_fill_quality_gap_missing", "sim_first", "scalping", "submit", ("sim_post_sell_candidates",), False, "submit_fill"),
-    DetectorContract("sim_holding_runner_gap_missing", "sim_first", "scalping", "holding", ("sim_post_sell_candidates",), False, "runner_exit"),
-    DetectorContract("sim_exit_plateau_breakdown_gap_missing", "sim_first", "scalping", "exit", ("sim_post_sell_candidates",), False, "plateau_exit"),
-    DetectorContract("sim_stop_recovery_gap_missing", "sim_first", "scalping", "exit", ("sim_post_sell_candidates", "sim_post_sell_evaluations"), False, "stop_recovery"),
-    DetectorContract("sim_scale_in_counterfactual_gap_missing", "sim_first", "cross_domain", "scale_in", ("sim_post_sell_candidates", "lifecycle_decision_matrix"), False, "scale_in"),
-    DetectorContract("sim_time_window_exception_gap_missing", "sim_first", "scalping", "entry", ("sim_post_sell_candidates", "wait6579_ev_cohort"), False, "time_window"),
-    DetectorContract("sim_source_quality_join_gap_missing", "source_quality", "cross_domain", "source_quality", ("sim_post_sell_candidates", "sim_post_sell_evaluations"), False, "source_quality"),
-    DetectorContract("sim_first_coverage_gap", "source_quality", "cross_domain", "source_quality", ("sim_post_sell_candidates",), False, "coverage_audit"),
+    DetectorContract(
+        "stop_recovery_counterfactual_missing",
+        "counterfactual_only",
+        "scalping",
+        "exit",
+        ("sim_post_sell_evaluations",),
+        False,
+        "stop_recovery",
+        "sim_stop_recovery_gap_missing",
+    ),
+    DetectorContract(
+        "missed_fill_recovery_counterfactual_missing",
+        "mixed_source",
+        "scalping",
+        "submit",
+        ("lifecycle_decision_matrix", "lifecycle_bucket_discovery"),
+        False,
+        "submit_fill",
+        "sim_submit_fill_quality_gap_missing",
+    ),
+    DetectorContract(
+        "swing_sim_probe_label_gap_missing",
+        "swing_sim_first",
+        "swing",
+        "selection",
+        ("swing_strategy_discovery_ev",),
+        False,
+        "swing_label",
+        None,
+        "swing source is already sim/probe first",
+    ),
+    DetectorContract(
+        "scale_in_counterfactual_gap_missing",
+        "mixed_source",
+        "cross_domain",
+        "scale_in",
+        ("lifecycle_decision_matrix",),
+        False,
+        "scale_in",
+        "sim_scale_in_counterfactual_gap_missing",
+    ),
+    DetectorContract(
+        "time_window_policy_exception_missing",
+        "counterfactual_only",
+        "scalping",
+        "entry",
+        ("sim_post_sell_candidates", "wait6579_ev_cohort"),
+        False,
+        "time_window",
+        "sim_time_window_exception_gap_missing",
+    ),
+    DetectorContract(
+        "volatile_runner_exit_counterfactual_missing",
+        "real_anchor",
+        "scalping",
+        "exit",
+        ("post_sell_candidates", "sim_post_sell_candidates"),
+        True,
+        "runner_exit",
+        "sim_holding_runner_gap_missing",
+    ),
+    DetectorContract(
+        "limit_up_plateau_breakdown_exit_missing",
+        "real_anchor",
+        "scalping",
+        "exit",
+        ("post_sell_candidates", "sim_post_sell_candidates"),
+        True,
+        "plateau_exit",
+        "sim_exit_plateau_breakdown_gap_missing",
+    ),
+    DetectorContract(
+        "sim_entry_selection_gap_missing",
+        "sim_first",
+        "scalping",
+        "entry",
+        ("sim_post_sell_candidates",),
+        False,
+        "entry_selection",
+    ),
+    DetectorContract(
+        "sim_submit_fill_quality_gap_missing",
+        "sim_first",
+        "scalping",
+        "submit",
+        ("sim_post_sell_candidates",),
+        False,
+        "submit_fill",
+    ),
+    DetectorContract(
+        "sim_holding_runner_gap_missing",
+        "sim_first",
+        "scalping",
+        "holding",
+        ("sim_post_sell_candidates",),
+        False,
+        "runner_exit",
+    ),
+    DetectorContract(
+        "sim_exit_plateau_breakdown_gap_missing",
+        "sim_first",
+        "scalping",
+        "exit",
+        ("sim_post_sell_candidates",),
+        False,
+        "plateau_exit",
+    ),
+    DetectorContract(
+        "sim_stop_recovery_gap_missing",
+        "sim_first",
+        "scalping",
+        "exit",
+        ("sim_post_sell_candidates", "sim_post_sell_evaluations"),
+        False,
+        "stop_recovery",
+    ),
+    DetectorContract(
+        "sim_scale_in_counterfactual_gap_missing",
+        "sim_first",
+        "cross_domain",
+        "scale_in",
+        ("sim_post_sell_candidates", "lifecycle_decision_matrix"),
+        False,
+        "scale_in",
+    ),
+    DetectorContract(
+        "sim_time_window_exception_gap_missing",
+        "sim_first",
+        "scalping",
+        "entry",
+        ("sim_post_sell_candidates", "wait6579_ev_cohort"),
+        False,
+        "time_window",
+    ),
+    DetectorContract(
+        "sim_source_quality_join_gap_missing",
+        "source_quality",
+        "cross_domain",
+        "source_quality",
+        ("sim_post_sell_candidates", "sim_post_sell_evaluations"),
+        False,
+        "source_quality",
+    ),
+    DetectorContract(
+        "sim_first_coverage_gap",
+        "source_quality",
+        "cross_domain",
+        "source_quality",
+        ("sim_post_sell_candidates",),
+        False,
+        "coverage_audit",
+    ),
 )
 
 
@@ -188,22 +329,33 @@ def _safe_int(value: Any, default: int = 0) -> int:
 
 
 def _slug(value: Any, *, max_len: int = 80) -> str:
-    text = re.sub(r"[^a-zA-Z0-9가-힣]+", "_", str(value or "").strip().lower()).strip("_")
+    text = re.sub(r"[^a-zA-Z0-9가-힣]+", "_", str(value or "").strip().lower()).strip(
+        "_"
+    )
     return text[:max_len] or "unknown"
 
 
 def _text_hash(payload: Any) -> str:
-    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    raw = json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str
+    )
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 def _source_paths(target_date: str) -> dict[str, Path]:
     return {
-        "sim_post_sell_evaluations": POST_SELL_DIR / f"sim_post_sell_evaluations_{target_date}.jsonl",
-        "post_sell_candidates": POST_SELL_DIR / f"post_sell_candidates_{target_date}.jsonl",
-        "sim_post_sell_candidates": POST_SELL_DIR / f"sim_post_sell_candidates_{target_date}.jsonl",
-        "wait6579_ev_cohort": REPORT_DIR / "monitor_snapshots" / f"wait6579_ev_cohort_{target_date}.json",
-        "performance_tuning": REPORT_DIR / "monitor_snapshots" / f"performance_tuning_{target_date}.json",
+        "sim_post_sell_evaluations": POST_SELL_DIR
+        / f"sim_post_sell_evaluations_{target_date}.jsonl",
+        "post_sell_candidates": POST_SELL_DIR
+        / f"post_sell_candidates_{target_date}.jsonl",
+        "sim_post_sell_candidates": POST_SELL_DIR
+        / f"sim_post_sell_candidates_{target_date}.jsonl",
+        "wait6579_ev_cohort": REPORT_DIR
+        / "monitor_snapshots"
+        / f"wait6579_ev_cohort_{target_date}.json",
+        "performance_tuning": REPORT_DIR
+        / "monitor_snapshots"
+        / f"performance_tuning_{target_date}.json",
         "time_window_regime_counterfactual": REPORT_DIR
         / "time_window_regime_counterfactual"
         / f"time_window_regime_counterfactual_{target_date}.json",
@@ -222,7 +374,9 @@ def _source_paths(target_date: str) -> dict[str, Path]:
         "swing_lifecycle_bucket_discovery": REPORT_DIR
         / "swing_lifecycle_bucket_discovery"
         / f"swing_lifecycle_bucket_discovery_{target_date}.json",
-        "swing_lifecycle_audit": REPORT_DIR / "swing_lifecycle_audit" / f"swing_lifecycle_audit_{target_date}.json",
+        "swing_lifecycle_audit": REPORT_DIR
+        / "swing_lifecycle_audit"
+        / f"swing_lifecycle_audit_{target_date}.json",
         "producer_gap_source_bundle": producer_gap_source_bundle_paths(target_date)[0],
     }
 
@@ -251,7 +405,9 @@ def _candidate(
     sample_count: int,
     source_scope: str | None = None,
 ) -> dict[str, Any]:
-    contract = next((item for item in DETECTOR_REGISTRY if item.pattern_type == pattern_type), None)
+    contract = next(
+        (item for item in DETECTOR_REGISTRY if item.pattern_type == pattern_type), None
+    )
     return {
         "candidate_id": candidate_id,
         "domain": domain,
@@ -271,7 +427,8 @@ def _candidate(
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
         "sample_count": sample_count,
-        "source_scope": source_scope or (contract.source_scope if contract else "mixed_source"),
+        "source_scope": source_scope
+        or (contract.source_scope if contract else "mixed_source"),
         "coverage_family": contract.coverage_family if contract else pattern_type,
         "real_case_anchor": bool(contract and contract.source_scope == "real_anchor"),
         "evidence": evidence[:20],
@@ -294,20 +451,50 @@ def _candidate(
     }
 
 
-def _detect_stop_recovery(rows: list[dict[str, Any]], source_path: Path) -> list[dict[str, Any]]:
+def _detect_stop_recovery(
+    rows: list[dict[str, Any]], source_path: Path
+) -> list[dict[str, Any]]:
     matches: list[dict[str, Any]] = []
     for row in rows:
         text = json.dumps(row, ensure_ascii=False, default=str).lower()
-        exit_reason = str(row.get("exit_reason") or row.get("sell_reason") or row.get("reason") or "").lower()
-        profit = _safe_float(row.get("profit_rate") or row.get("profit_pct") or row.get("realized_profit_pct"), 0.0)
-        mfe = _safe_float(row.get("mfe_pct") or row.get("max_favorable_excursion_pct") or row.get("post_exit_mfe_pct"), 0.0)
-        recovery = _safe_float(row.get("recovery_profit_pct") or row.get("post_stop_recovery_pct"), 0.0)
-        if ("hard" in exit_reason and "stop" in exit_reason) or "hard_stop" in text or "soft_stop" in text:
+        exit_reason = str(
+            row.get("exit_reason") or row.get("sell_reason") or row.get("reason") or ""
+        ).lower()
+        profit = _safe_float(
+            row.get("profit_rate")
+            or row.get("profit_pct")
+            or row.get("realized_profit_pct"),
+            0.0,
+        )
+        mfe = _safe_float(
+            row.get("mfe_pct")
+            or row.get("max_favorable_excursion_pct")
+            or row.get("post_exit_mfe_pct"),
+            0.0,
+        )
+        recovery = _safe_float(
+            row.get("recovery_profit_pct") or row.get("post_stop_recovery_pct"), 0.0
+        )
+        if (
+            ("hard" in exit_reason and "stop" in exit_reason)
+            or "hard_stop" in text
+            or "soft_stop" in text
+        ):
             if profit < 0 or mfe > 0 or recovery > 0:
                 matches.append(row)
     if not matches:
         return []
-    symbols = sorted({str(row.get("code") or row.get("symbol") or row.get("stock_code") or "unknown") for row in matches})[:8]
+    symbols = sorted(
+        {
+            str(
+                row.get("code")
+                or row.get("symbol")
+                or row.get("stock_code")
+                or "unknown"
+            )
+            for row in matches
+        }
+    )[:8]
     return [
         _candidate(
             candidate_id="producer_gap_stop_recovery_counterfactual_missing",
@@ -326,12 +513,25 @@ def _detect_stop_recovery(rows: list[dict[str, Any]], source_path: Path) -> list
     ]
 
 
-def _detect_missed_fill(payloads: dict[str, Any], paths: dict[str, Path]) -> list[dict[str, Any]]:
+def _detect_missed_fill(
+    payloads: dict[str, Any], paths: dict[str, Path]
+) -> list[dict[str, Any]]:
     matches: list[dict[str, Any]] = []
     for label in ("lifecycle_decision_matrix", "lifecycle_bucket_discovery"):
         for item in _iter_nested(payloads.get(label)):
             text = json.dumps(item, ensure_ascii=False, default=str).lower()
-            if any(token in text for token in ("missed_fill", "unfilled", "not_filled", "cancel", "defensive_price", "below_window", "fill_quality")):
+            if any(
+                token in text
+                for token in (
+                    "missed_fill",
+                    "unfilled",
+                    "not_filled",
+                    "cancel",
+                    "defensive_price",
+                    "below_window",
+                    "fill_quality",
+                )
+            ):
                 matches.append({"label": label, "item": item})
     if not matches:
         return []
@@ -344,7 +544,9 @@ def _detect_missed_fill(payloads: dict[str, Any], paths: dict[str, Path]) -> lis
             lifecycle_stage="submit",
             priority="high",
             sample_count=len(matches),
-            source_paths=[str(paths[label]) for label in labels if paths[label].exists()],
+            source_paths=[
+                str(paths[label]) for label in labels if paths[label].exists()
+            ],
             evidence=[
                 f"matched_submit_fill_gap_rows={len(matches)}",
                 f"source_labels={','.join(labels)}",
@@ -354,12 +556,29 @@ def _detect_missed_fill(payloads: dict[str, Any], paths: dict[str, Path]) -> lis
     ]
 
 
-def _detect_swing_label_gap(payloads: dict[str, Any], paths: dict[str, Path]) -> list[dict[str, Any]]:
+def _detect_swing_label_gap(
+    payloads: dict[str, Any], paths: dict[str, Path]
+) -> list[dict[str, Any]]:
     matches: list[dict[str, Any]] = []
-    for label in ("swing_strategy_discovery_ev", "swing_lifecycle_decision_matrix", "swing_lifecycle_bucket_discovery", "swing_lifecycle_audit"):
+    for label in (
+        "swing_strategy_discovery_ev",
+        "swing_lifecycle_decision_matrix",
+        "swing_lifecycle_bucket_discovery",
+        "swing_lifecycle_audit",
+    ):
         for item in _iter_nested(payloads.get(label)):
             text = json.dumps(item, ensure_ascii=False, default=str).lower()
-            if any(token in text for token in ("label_missing", "missing_label", "pending_label", "insufficient_label", "source_quality", "handoff_missing")):
+            if any(
+                token in text
+                for token in (
+                    "label_missing",
+                    "missing_label",
+                    "pending_label",
+                    "insufficient_label",
+                    "source_quality",
+                    "handoff_missing",
+                )
+            ):
                 matches.append({"label": label, "item": item})
     if not matches:
         return []
@@ -372,7 +591,9 @@ def _detect_swing_label_gap(payloads: dict[str, Any], paths: dict[str, Path]) ->
             lifecycle_stage="selection",
             priority="high",
             sample_count=len(matches),
-            source_paths=[str(paths[label]) for label in labels if paths[label].exists()],
+            source_paths=[
+                str(paths[label]) for label in labels if paths[label].exists()
+            ],
             evidence=[
                 f"matched_swing_label_or_source_gap_rows={len(matches)}",
                 f"source_labels={','.join(labels)}",
@@ -382,13 +603,31 @@ def _detect_swing_label_gap(payloads: dict[str, Any], paths: dict[str, Path]) ->
     ]
 
 
-def _detect_scale_in_gap(payloads: dict[str, Any], paths: dict[str, Path]) -> list[dict[str, Any]]:
+def _detect_scale_in_gap(
+    payloads: dict[str, Any], paths: dict[str, Path]
+) -> list[dict[str, Any]]:
     matches: list[dict[str, Any]] = []
-    for label in ("lifecycle_decision_matrix", "swing_lifecycle_decision_matrix", "swing_lifecycle_bucket_discovery"):
+    for label in (
+        "lifecycle_decision_matrix",
+        "swing_lifecycle_decision_matrix",
+        "swing_lifecycle_bucket_discovery",
+    ):
         for item in _iter_nested(payloads.get(label)):
             text = json.dumps(item, ensure_ascii=False, default=str).lower()
             if "scale_in" in text or "avg_down" in text or "pyramid" in text:
-                if any(token in text for token in ("blocked", "missing", "would", "counterfactual", "mfe", "mae", "price_guard", "qty_reason")):
+                if any(
+                    token in text
+                    for token in (
+                        "blocked",
+                        "missing",
+                        "would",
+                        "counterfactual",
+                        "mfe",
+                        "mae",
+                        "price_guard",
+                        "qty_reason",
+                    )
+                ):
                     matches.append({"label": label, "item": item})
     if not matches:
         return []
@@ -401,7 +640,9 @@ def _detect_scale_in_gap(payloads: dict[str, Any], paths: dict[str, Path]) -> li
             lifecycle_stage="scale_in",
             priority="high",
             sample_count=len(matches),
-            source_paths=[str(paths[label]) for label in labels if paths[label].exists()],
+            source_paths=[
+                str(paths[label]) for label in labels if paths[label].exists()
+            ],
             evidence=[
                 f"matched_scale_in_gap_rows={len(matches)}",
                 f"source_labels={','.join(labels)}",
@@ -459,7 +700,9 @@ def _row_completed_profit_pct(row: dict[str, Any]) -> float | None:
 
 
 def _row_symbol(row: dict[str, Any]) -> str:
-    return str(row.get("stock_code") or row.get("code") or row.get("symbol") or "").strip()
+    return str(
+        row.get("stock_code") or row.get("code") or row.get("symbol") or ""
+    ).strip()
 
 
 def _row_name(row: dict[str, Any]) -> str:
@@ -467,7 +710,13 @@ def _row_name(row: dict[str, Any]) -> str:
 
 
 def _row_group_key(row: dict[str, Any], date: str) -> str:
-    for key in ("sim_parent_record_id", "recommendation_id", "record_id", "candidate_id", "entry_adm_candidate_id"):
+    for key in (
+        "sim_parent_record_id",
+        "recommendation_id",
+        "record_id",
+        "candidate_id",
+        "entry_adm_candidate_id",
+    ):
         value = row.get(key)
         if value not in (None, ""):
             return f"{key}:{value}"
@@ -485,16 +734,31 @@ def _time_sort_key(row: dict[str, Any]) -> tuple[int, str] | None:
 def _exit_text(row: dict[str, Any]) -> str:
     return " ".join(
         str(row.get(key) or "")
-        for key in ("exit_reason", "sell_reason", "reason", "exit_rule", "sell_reason_type", "outcome")
+        for key in (
+            "exit_reason",
+            "sell_reason",
+            "reason",
+            "exit_rule",
+            "sell_reason_type",
+            "outcome",
+        )
     ).lower()
 
 
 def _is_stop_row(row: dict[str, Any]) -> bool:
     text = _exit_text(row)
-    return "hard_stop" in text or "soft_stop" in text or "hard stop" in text or "soft stop" in text or "stop" in text
+    return (
+        "hard_stop" in text
+        or "soft_stop" in text
+        or "hard stop" in text
+        or "soft stop" in text
+        or "stop" in text
+    )
 
 
-def _rolling_sim_sources(target_date: str, *, rolling_sim_scan: bool, max_rows: int = SIM_ROLLING_MAX_ROWS) -> dict[str, Any]:
+def _rolling_sim_sources(
+    target_date: str, *, rolling_sim_scan: bool, max_rows: int = SIM_ROLLING_MAX_ROWS
+) -> dict[str, Any]:
     dates = _available_sim_dates(target_date) if rolling_sim_scan else [target_date]
     scanned_dates: list[str] = []
     rows: list[dict[str, Any]] = []
@@ -599,7 +863,9 @@ def _detect_time_window_policy_exception_gap(
     pre_profit_rows = [profit for _, _, _, profit in pre_rows if profit is not None]
     post_profit_rows = [profit for _, _, _, profit in post_rows if profit is not None]
     pre_avg = sum(pre_profit_rows) / len(pre_profit_rows) if pre_profit_rows else None
-    post_avg = sum(post_profit_rows) / len(post_profit_rows) if post_profit_rows else None
+    post_avg = (
+        sum(post_profit_rows) / len(post_profit_rows) if post_profit_rows else None
+    )
 
     pre_window_worse = bool(
         len(pre_profit_rows) >= 2
@@ -616,7 +882,9 @@ def _detect_time_window_policy_exception_gap(
         )
     ]
     early_stop_rate = (len(stop_rows) / len(pre_rows)) if pre_rows else 0.0
-    early_stop_high = bool(pre_profit_rows) and len(stop_rows) >= 1 and early_stop_rate >= 0.34
+    early_stop_high = (
+        bool(pre_profit_rows) and len(stop_rows) >= 1 and early_stop_rate >= 0.34
+    )
 
     wait6579_payload = payloads.get("wait6579_ev_cohort") or {}
     performance_payload = payloads.get("performance_tuning") or {}
@@ -631,17 +899,28 @@ def _detect_time_window_policy_exception_gap(
     )
     wait6579_ev_krw_sum = _nested_first_float(
         wait6579_payload,
-        ("expected_ev_krw_sum", "ev_krw_sum", "expected_profit_krw_sum", "profit_krw_sum"),
+        (
+            "expected_ev_krw_sum",
+            "ev_krw_sum",
+            "expected_profit_krw_sum",
+            "profit_krw_sum",
+        ),
     )
     performance_recovery_ev = _nested_first_float(
         performance_payload,
-        ("recovery_avg_expected_ev_pct", "recovery_equal_weight_avg_profit_pct", "wait6579_avg_expected_ev_pct"),
+        (
+            "recovery_avg_expected_ev_pct",
+            "recovery_equal_weight_avg_profit_pct",
+            "wait6579_avg_expected_ev_pct",
+        ),
     )
     exception_ev_positive = any(
         value is not None and value > 0
         for value in (wait6579_avg_ev, wait6579_ev_krw_sum, performance_recovery_ev)
     )
-    early_general_loss = any((profit is not None and profit < 0) for _, _, _, profit in pre_rows)
+    early_general_loss = any(
+        (profit is not None and profit < 0) for _, _, _, profit in pre_rows
+    )
     early_loss_and_recovery_coexist = early_general_loss and exception_ev_positive
 
     conditions = []
@@ -652,13 +931,19 @@ def _detect_time_window_policy_exception_gap(
     if exception_ev_positive:
         conditions.append("wait6579_or_recovery_ev_positive")
     if early_loss_and_recovery_coexist:
-        conditions.append("completed_loss_and_counterfactual_exception_positive_same_day")
+        conditions.append(
+            "completed_loss_and_counterfactual_exception_positive_same_day"
+        )
     if len(conditions) < 2:
         return []
 
     source_paths = [
         str(paths[label])
-        for label in ("sim_post_sell_candidates", "wait6579_ev_cohort", "performance_tuning")
+        for label in (
+            "sim_post_sell_candidates",
+            "wait6579_ev_cohort",
+            "performance_tuning",
+        )
         if paths[label].exists()
     ]
     evidence = [
@@ -683,7 +968,9 @@ def _detect_time_window_policy_exception_gap(
     if wait6579_ev_krw_sum is not None:
         evidence.append(f"wait6579_expected_ev_krw_sum={wait6579_ev_krw_sum:.0f}")
     if performance_recovery_ev is not None:
-        evidence.append(f"performance_recovery_avg_expected_ev_pct={performance_recovery_ev:.4f}")
+        evidence.append(
+            f"performance_recovery_avg_expected_ev_pct={performance_recovery_ev:.4f}"
+        )
 
     candidate = _candidate(
         candidate_id="producer_gap_time_window_policy_exception_missing",
@@ -806,7 +1093,9 @@ def _detect_limit_up_plateau_breakdown_exit_gap(
         for key in _real_sim_join_keys(row):
             sim_by_key.setdefault(key, []).append(row)
 
-    matches: list[tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]] = []
+    matches: list[tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]] = (
+        []
+    )
     for real_row in real_post_sell_rows:
         real_profit = _safe_float(real_row.get("profit_rate"), 0.0)
         real_peak = _safe_float(real_row.get("peak_profit"), 0.0)
@@ -817,7 +1106,11 @@ def _detect_limit_up_plateau_breakdown_exit_gap(
         ).lower()
         if real_profit > -2.0 or real_peak < 0.5 or held_sec < 1800:
             continue
-        if "hard_stop" not in exit_text and "soft_stop" not in exit_text and "stop" not in exit_text:
+        if (
+            "hard_stop" not in exit_text
+            and "soft_stop" not in exit_text
+            and "stop" not in exit_text
+        ):
             continue
         real_symbol = str(real_row.get("stock_code") or real_row.get("code") or "")
         real_time = _row_event_time(real_row)
@@ -836,9 +1129,7 @@ def _detect_limit_up_plateau_breakdown_exit_gap(
             sim_profit = _safe_float(sim_row.get("profit_rate"), 0.0)
             sim_time = _row_event_time(sim_row)
             is_before_real = bool(
-                real_time is None
-                or sim_time is None
-                or sim_time[0] <= real_time[0]
+                real_time is None or sim_time is None or sim_time[0] <= real_time[0]
             )
             if is_before_real and sim_profit >= 0.5:
                 positive_reentry_rows.append(sim_row)
@@ -854,8 +1145,13 @@ def _detect_limit_up_plateau_breakdown_exit_gap(
     for real_row, positive_rows, stop_rows in matches[:5]:
         symbol = real_row.get("stock_code") or real_row.get("code") or "unknown"
         name = real_row.get("stock_name") or ""
-        best_positive = max((_safe_float(row.get("profit_rate"), 0.0) for row in positive_rows), default=0.0)
-        worst_stop = min((_safe_float(row.get("profit_rate"), 0.0) for row in stop_rows), default=0.0)
+        best_positive = max(
+            (_safe_float(row.get("profit_rate"), 0.0) for row in positive_rows),
+            default=0.0,
+        )
+        worst_stop = min(
+            (_safe_float(row.get("profit_rate"), 0.0) for row in stop_rows), default=0.0
+        )
         examples.append(
             f"{symbol}:{name}:real_profit={_safe_float(real_row.get('profit_rate')):.2f}:"
             f"real_peak={_safe_float(real_row.get('peak_profit')):.2f}:held_sec={_safe_int(real_row.get('held_sec'))}:"
@@ -886,7 +1182,9 @@ def _detect_limit_up_plateau_breakdown_exit_gap(
     ]
 
 
-def _sim_source_paths(rows: list[dict[str, Any]], evaluations: list[dict[str, Any]], target_date: str) -> list[str]:
+def _sim_source_paths(
+    rows: list[dict[str, Any]], evaluations: list[dict[str, Any]], target_date: str
+) -> list[str]:
     paths = sorted(
         {
             str(row.get("_source_file") or "")
@@ -912,12 +1210,20 @@ def _detect_sim_first_stage_gaps(
     ambiguous_runner: list[tuple[dict[str, Any], dict[str, Any], float]] = []
     strict_plateau: list[tuple[dict[str, Any], dict[str, Any], float]] = []
     ambiguous_plateau: list[tuple[dict[str, Any], dict[str, Any], float]] = []
-    stop_rows = [row for row in [*sim_rows, *eval_rows] if _is_stop_row(row) or (_row_completed_profit_pct(row) or 0.0) <= -2.0]
+    stop_rows = [
+        row
+        for row in [*sim_rows, *eval_rows]
+        if _is_stop_row(row) or (_row_completed_profit_pct(row) or 0.0) <= -2.0
+    ]
     detectable_families: set[str] = set()
 
     entry_rows = [
-        row for row in sim_rows
-        if any(row.get(key) not in (None, "") for key in ("entry_time", "buy_time", "submitted_at", "filled_at"))
+        row
+        for row in sim_rows
+        if any(
+            row.get(key) not in (None, "")
+            for key in ("entry_time", "buy_time", "submitted_at", "filled_at")
+        )
     ]
     if len(sim_rows) >= 10 and len(entry_rows) / max(1, len(sim_rows)) < 0.5:
         detectable_families.add("entry_selection")
@@ -1007,7 +1313,11 @@ def _detect_sim_first_stage_gaps(
                 uplift = win_profit - loss_profit
                 win_time = row_times[id(win_row)]
                 if win_profit >= 2.0 or uplift >= 3.0:
-                    if loss_time is not None and win_time is not None and loss_time[0] < win_time[0]:
+                    if (
+                        loss_time is not None
+                        and win_time is not None
+                        and loss_time[0] < win_time[0]
+                    ):
                         strict_runner.append((loss_row, win_row, uplift))
                     elif loss_time is None or win_time is None:
                         ambiguous_runner.append((loss_row, win_row, uplift))
@@ -1024,14 +1334,23 @@ def _detect_sim_first_stage_gaps(
                     continue
                 stop_time = row_times[id(stop_row)]
                 giveback = win_profit - stop_profit
-                if win_time is not None and stop_time is not None and win_time[0] < stop_time[0]:
+                if (
+                    win_time is not None
+                    and stop_time is not None
+                    and win_time[0] < stop_time[0]
+                ):
                     strict_plateau.append((win_row, stop_row, giveback))
                 elif win_time is None or stop_time is None:
                     ambiguous_plateau.append((win_row, stop_row, giveback))
 
     if strict_runner or ambiguous_runner:
         detectable_families.add("runner_exit")
-        top_symbols = sorted({(_row_symbol(row[0]) or "unknown") for row in [*strict_runner, *ambiguous_runner]})[:8]
+        top_symbols = sorted(
+            {
+                (_row_symbol(row[0]) or "unknown")
+                for row in [*strict_runner, *ambiguous_runner]
+            }
+        )[:8]
         candidates.append(
             _candidate(
                 candidate_id="producer_gap_sim_holding_runner_gap_missing",
@@ -1054,7 +1373,12 @@ def _detect_sim_first_stage_gaps(
         )
     if strict_plateau or ambiguous_plateau:
         detectable_families.add("plateau_exit")
-        top_symbols = sorted({(_row_symbol(row[0]) or "unknown") for row in [*strict_plateau, *ambiguous_plateau]})[:8]
+        top_symbols = sorted(
+            {
+                (_row_symbol(row[0]) or "unknown")
+                for row in [*strict_plateau, *ambiguous_plateau]
+            }
+        )[:8]
         candidates.append(
             _candidate(
                 candidate_id="producer_gap_sim_exit_plateau_breakdown_gap_missing",
@@ -1094,8 +1418,13 @@ def _detect_sim_first_stage_gaps(
             )
         )
 
-    text_payload = json.dumps({"rows": sim_rows[:200], "payloads": payloads}, ensure_ascii=False, default=str).lower()
-    if any(token in text_payload for token in ("scale_in", "avg_down", "pyramid", "would_add")):
+    text_payload = json.dumps(
+        {"rows": sim_rows[:200], "payloads": payloads}, ensure_ascii=False, default=str
+    ).lower()
+    if any(
+        token in text_payload
+        for token in ("scale_in", "avg_down", "pyramid", "would_add")
+    ):
         detectable_families.add("scale_in")
         candidates.append(
             _candidate(
@@ -1104,7 +1433,12 @@ def _detect_sim_first_stage_gaps(
                 pattern_type="sim_scale_in_counterfactual_gap_missing",
                 lifecycle_stage="scale_in",
                 priority="high",
-                sample_count=max(1, text_payload.count("scale_in") + text_payload.count("avg_down") + text_payload.count("pyramid")),
+                sample_count=max(
+                    1,
+                    text_payload.count("scale_in")
+                    + text_payload.count("avg_down")
+                    + text_payload.count("pyramid"),
+                ),
                 source_paths=source_paths,
                 evidence=[
                     "gap=sim scale-in blocked/fill/unfill would-add comparison needs a dedicated producer",
@@ -1127,8 +1461,10 @@ def _detect_sim_first_stage_gaps(
     time_window_artifact = payloads.get("time_window_regime_counterfactual") or {}
     time_window_existing_ok = (
         isinstance(time_window_artifact, dict)
-        and time_window_artifact.get("report_type") == "time_window_regime_counterfactual"
-        and str(time_window_artifact.get("status") or "") in {"pass", "warning", "partial"}
+        and time_window_artifact.get("report_type")
+        == "time_window_regime_counterfactual"
+        and str(time_window_artifact.get("status") or "")
+        in {"pass", "warning", "partial"}
     )
     if len(early_rows) >= 2 and len(stop_rows) >= 1 and not time_window_existing_ok:
         detectable_families.add("time_window")
@@ -1152,7 +1488,11 @@ def _detect_sim_first_stage_gaps(
         )
 
     timed_count = sum(1 for row in sim_rows if _row_event_time(row) is not None)
-    grouped_count = sum(1 for row in sim_rows if _row_group_key(row, str(row.get("_source_date") or target_date)))
+    grouped_count = sum(
+        1
+        for row in sim_rows
+        if _row_group_key(row, str(row.get("_source_date") or target_date))
+    )
     unjoined_rate = 1.0 - (timed_count / max(1, len(sim_rows)))
     if len(sim_rows) >= 10 and unjoined_rate > 0.25:
         detectable_families.add("source_quality")
@@ -1200,13 +1540,23 @@ def _coverage_audit_candidates(
     gaps: list[str] = []
     for contract in DETECTOR_REGISTRY:
         if contract.source_scope == "real_anchor" and contract.sim_equivalent_required:
-            if contract.pattern_type in pattern_types and contract.sim_equivalent_pattern not in pattern_types:
-                gaps.append(f"real_anchor_without_sim_equivalent:{contract.pattern_type}->{contract.sim_equivalent_pattern}")
-    stage_families = {contract.coverage_family for contract in DETECTOR_REGISTRY if contract.source_scope == "sim_first"}
+            if (
+                contract.pattern_type in pattern_types
+                and contract.sim_equivalent_pattern not in pattern_types
+            ):
+                gaps.append(
+                    f"real_anchor_without_sim_equivalent:{contract.pattern_type}->{contract.sim_equivalent_pattern}"
+                )
+    stage_families = {
+        contract.coverage_family
+        for contract in DETECTOR_REGISTRY
+        if contract.source_scope == "sim_first"
+    }
     observed_families = {
         str(item.get("coverage_family") or "")
         for item in candidates
-        if str(item.get("source_scope") or "") in {"sim_first", "source_quality", "counterfactual_only"}
+        if str(item.get("source_scope") or "")
+        in {"sim_first", "source_quality", "counterfactual_only"}
     }
     observed_families.update(externally_covered_families or set())
     if sim_row_count > 0:
@@ -1245,12 +1595,18 @@ def _deterministic_proposal(candidate: dict[str, Any]) -> dict[str, Any]:
     candidate_id = str(candidate.get("candidate_id") or "unknown")
     pattern_type = str(candidate.get("pattern_type") or "producer_gap")
     contract = candidate.get("recommended_producer_contract")
-    preferred = contract.get("preferred_producer_name") if isinstance(contract, dict) else None
+    preferred = (
+        contract.get("preferred_producer_name") if isinstance(contract, dict) else None
+    )
     if pattern_type == "sim_source_quality_join_gap_missing":
         decision = "source_quality_blocker"
     elif preferred:
         decision = "extend_existing_producer"
-    elif pattern_type in {"sim_submit_fill_quality_gap_missing", "sim_holding_runner_gap_missing", "sim_exit_plateau_breakdown_gap_missing"}:
+    elif pattern_type in {
+        "sim_submit_fill_quality_gap_missing",
+        "sim_holding_runner_gap_missing",
+        "sim_exit_plateau_breakdown_gap_missing",
+    }:
         decision = "absorb_as_metric_dimension"
     else:
         decision = "new_producer"
@@ -1265,7 +1621,9 @@ def _deterministic_proposal(candidate: dict[str, Any]) -> dict[str, Any]:
             f"{pattern_type}_source_dimension",
         ],
         "reasoning_summary": "Deterministic missing-producer detector found a source-only lifecycle observation gap.",
-        "confidence": "high" if candidate.get("priority") in {"critical", "high"} else "medium",
+        "confidence": (
+            "high" if candidate.get("priority") in {"critical", "high"} else "medium"
+        ),
         "required_source_fields": list(REQUIRED_METRIC_CONTRACT_FIELDS),
         "forbidden_uses": list(FORBIDDEN_USES),
         "evidence_authority_contract": evidence_authority_contract(),
@@ -1275,14 +1633,24 @@ def _deterministic_proposal(candidate: dict[str, Any]) -> dict[str, Any]:
 
 
 def _default_ai_proposal(candidate: dict[str, Any]) -> dict[str, Any]:
-    deterministic = candidate.get("deterministic_proposal") if isinstance(candidate.get("deterministic_proposal"), dict) else {}
+    deterministic = (
+        candidate.get("deterministic_proposal")
+        if isinstance(candidate.get("deterministic_proposal"), dict)
+        else {}
+    )
     return {
         "candidate_id": str(candidate.get("candidate_id") or "unknown"),
         "proposal_source": "ai_tier2",
         "proposal_status": "not_provided",
         "proposal_decision": "reject",
-        "recommended_canonical_bucket": deterministic.get("recommended_canonical_bucket") or "",
-        "recommended_metric_or_dimension": deterministic.get("recommended_metric_or_dimension") or [],
+        "recommended_canonical_bucket": deterministic.get(
+            "recommended_canonical_bucket"
+        )
+        or "",
+        "recommended_metric_or_dimension": deterministic.get(
+            "recommended_metric_or_dimension"
+        )
+        or [],
         "reasoning_summary": "AI Tier2 proposal unavailable; fail-closed comparative review prevents automatic promotion.",
         "confidence": "low",
         "required_source_fields": list(REQUIRED_METRIC_CONTRACT_FIELDS),
@@ -1291,7 +1659,9 @@ def _default_ai_proposal(candidate: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _attach_deterministic_proposals(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _attach_deterministic_proposals(
+    candidates: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     enriched = []
     for candidate in candidates:
         proposal = _deterministic_proposal(candidate)
@@ -1299,24 +1669,46 @@ def _attach_deterministic_proposals(candidates: list[dict[str, Any]]) -> list[di
     return enriched
 
 
-def _deterministic_candidates(target_date: str, *, rolling_sim_scan: bool = False) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+def _deterministic_candidates(
+    target_date: str, *, rolling_sim_scan: bool = False
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     paths = _source_paths(target_date)
-    jsonl_sources = {"sim_post_sell_evaluations", "post_sell_candidates", "sim_post_sell_candidates"}
-    payloads = {label: _load_json(path) for label, path in paths.items() if label not in jsonl_sources}
+    jsonl_sources = {
+        "sim_post_sell_evaluations",
+        "post_sell_candidates",
+        "sim_post_sell_candidates",
+    }
+    payloads = {
+        label: _load_json(path)
+        for label, path in paths.items()
+        if label not in jsonl_sources
+    }
     sim_rows = _load_jsonl(paths["sim_post_sell_evaluations"])
     real_post_sell_rows = _load_jsonl(paths["post_sell_candidates"])
     sim_candidate_rows = _load_jsonl(paths["sim_post_sell_candidates"])
-    rolling_sources = _rolling_sim_sources(target_date, rolling_sim_scan=rolling_sim_scan)
+    rolling_sources = _rolling_sim_sources(
+        target_date, rolling_sim_scan=rolling_sim_scan
+    )
     rolling_sim_rows = rolling_sources["rows"] or sim_candidate_rows
     rolling_eval_rows = rolling_sources["evaluations"] or sim_rows
     candidates: list[dict[str, Any]] = []
-    candidates.extend(_detect_stop_recovery(sim_rows, paths["sim_post_sell_evaluations"]))
+    candidates.extend(
+        _detect_stop_recovery(sim_rows, paths["sim_post_sell_evaluations"])
+    )
     candidates.extend(_detect_missed_fill(payloads, paths))
     candidates.extend(_detect_swing_label_gap(payloads, paths))
     candidates.extend(_detect_scale_in_gap(payloads, paths))
-    candidates.extend(_detect_time_window_policy_exception_gap(sim_candidate_rows, payloads, paths))
-    candidates.extend(_detect_volatile_runner_exit_gap(real_post_sell_rows, sim_candidate_rows, paths))
-    candidates.extend(_detect_limit_up_plateau_breakdown_exit_gap(real_post_sell_rows, sim_candidate_rows, paths))
+    candidates.extend(
+        _detect_time_window_policy_exception_gap(sim_candidate_rows, payloads, paths)
+    )
+    candidates.extend(
+        _detect_volatile_runner_exit_gap(real_post_sell_rows, sim_candidate_rows, paths)
+    )
+    candidates.extend(
+        _detect_limit_up_plateau_breakdown_exit_gap(
+            real_post_sell_rows, sim_candidate_rows, paths
+        )
+    )
     sim_first_candidates, sim_first_summary = _detect_sim_first_stage_gaps(
         rolling_sim_rows,
         rolling_eval_rows,
@@ -1328,8 +1720,10 @@ def _deterministic_candidates(target_date: str, *, rolling_sim_scan: bool = Fals
     time_window_artifact = payloads.get("time_window_regime_counterfactual") or {}
     if (
         isinstance(time_window_artifact, dict)
-        and time_window_artifact.get("report_type") == "time_window_regime_counterfactual"
-        and str(time_window_artifact.get("status") or "") in {"pass", "warning", "partial"}
+        and time_window_artifact.get("report_type")
+        == "time_window_regime_counterfactual"
+        and str(time_window_artifact.get("status") or "")
+        in {"pass", "warning", "partial"}
     ):
         externally_covered_families.add("time_window")
     coverage_candidates, coverage_summary = _coverage_audit_candidates(
@@ -1337,11 +1731,15 @@ def _deterministic_candidates(target_date: str, *, rolling_sim_scan: bool = Fals
         len(rolling_sim_rows),
         _sim_source_paths(rolling_sim_rows, rolling_eval_rows, target_date),
         externally_covered_families=externally_covered_families,
-        detectable_families=set(sim_first_summary.get("detectable_coverage_families") or []),
+        detectable_families=set(
+            sim_first_summary.get("detectable_coverage_families") or []
+        ),
     )
     candidates.extend(coverage_candidates)
     candidates = _attach_deterministic_proposals(candidates)
-    source_scope_counts = Counter(str(item.get("source_scope") or "unknown") for item in candidates)
+    source_scope_counts = Counter(
+        str(item.get("source_scope") or "unknown") for item in candidates
+    )
     context = {
         "date": target_date,
         "report_type": REPORT_TYPE,
@@ -1357,11 +1755,15 @@ def _deterministic_candidates(target_date: str, *, rolling_sim_scan: bool = Fals
                 "row_count": (
                     len(sim_rows)
                     if label == "sim_post_sell_evaluations"
-                    else len(real_post_sell_rows)
-                    if label == "post_sell_candidates"
-                    else len(sim_candidate_rows)
-                    if label == "sim_post_sell_candidates"
-                    else None
+                    else (
+                        len(real_post_sell_rows)
+                        if label == "post_sell_candidates"
+                        else (
+                            len(sim_candidate_rows)
+                            if label == "sim_post_sell_candidates"
+                            else None
+                        )
+                    )
                 ),
             }
             for label, path in paths.items()
@@ -1382,7 +1784,9 @@ def _deterministic_candidates(target_date: str, *, rolling_sim_scan: bool = Fals
         "coverage_audit": {
             **coverage_summary,
             "source_scope_counts": dict(source_scope_counts),
-            "sim_first_coverage_status": "warning" if coverage_summary.get("coverage_gap_count") else "pass",
+            "sim_first_coverage_status": (
+                "warning" if coverage_summary.get("coverage_gap_count") else "pass"
+            ),
         },
         "producer_gap_candidates": candidates,
     }
@@ -1447,7 +1851,9 @@ def _ai_review_config(
     return resolve_postclose_ai_review_config(
         "PRODUCER_GAP_DISCOVERY",
         default_model=AI_REVIEW_MODEL,
-        default_reasoning_effort="low" if attempt_role == "retry" else AI_REVIEW_REASONING_EFFORT,
+        default_reasoning_effort=(
+            "low" if attempt_role == "retry" else AI_REVIEW_REASONING_EFFORT
+        ),
         default_timeout_sec=AI_REVIEW_TIMEOUT_SEC,
         attempt_role=attempt_role,
         retry_reason=retry_reason,
@@ -1466,7 +1872,11 @@ def _call_openai_ai_review(
         if status != "parsed":
             return False, status
         audit = payload.get("audit") if isinstance(payload.get("audit"), dict) else {}
-        expected_ids = {str(item.get("candidate_id") or "") for item in context.get("candidates", []) if isinstance(item, dict)}
+        expected_ids = {
+            str(item.get("candidate_id") or "")
+            for item in context.get("candidates", [])
+            if isinstance(item, dict)
+        }
         review_rows = payload.get("candidate_reviews")
         proposal_rows = payload.get("ai_tier2_proposals")
         comparative_rows = payload.get("comparative_reviews")
@@ -1477,22 +1887,40 @@ def _call_openai_ai_review(
         if not isinstance(comparative_rows, list):
             return False, "missing_comparative_reviews"
         if expected_ids:
-            review_ids = {str(item.get("candidate_id") or "") for item in review_rows if isinstance(item, dict)}
-            proposal_ids = {str(item.get("candidate_id") or "") for item in proposal_rows if isinstance(item, dict)}
-            comparative_ids = {str(item.get("candidate_id") or "") for item in comparative_rows if isinstance(item, dict)}
+            review_ids = {
+                str(item.get("candidate_id") or "")
+                for item in review_rows
+                if isinstance(item, dict)
+            }
+            proposal_ids = {
+                str(item.get("candidate_id") or "")
+                for item in proposal_rows
+                if isinstance(item, dict)
+            }
+            comparative_ids = {
+                str(item.get("candidate_id") or "")
+                for item in comparative_rows
+                if isinstance(item, dict)
+            }
             if review_ids != expected_ids:
                 return False, "candidate_reviews_id_mismatch"
             if proposal_ids != expected_ids:
                 return False, "ai_tier2_proposals_id_mismatch"
             if comparative_ids != expected_ids:
                 return False, "comparative_reviews_id_mismatch"
-        if audit.get("status") not in {"pass", "correction_required", "insufficient_context"}:
+        if audit.get("status") not in {
+            "pass",
+            "correction_required",
+            "insufficient_context",
+        }:
             return False, "missing_audit_status"
         if warnings:
             return False, "warnings:" + ",".join(warnings[:3])
         return True, ""
 
-    from src.engine.ai.postclose_structured_review_provider import call_postclose_structured_review
+    from src.engine.ai.postclose_structured_review_provider import (
+        call_postclose_structured_review,
+    )
 
     return call_postclose_structured_review(
         context,
@@ -1505,7 +1933,9 @@ def _call_openai_ai_review(
     )
 
 
-def _parse_ai_review_response(raw_response: Any | None) -> tuple[str, dict[str, Any], list[str]]:
+def _parse_ai_review_response(
+    raw_response: Any | None,
+) -> tuple[str, dict[str, Any], list[str]]:
     if raw_response in (None, ""):
         return "missing", {}, ["ai_review_response_missing"]
     if isinstance(raw_response, dict):
@@ -1531,14 +1961,24 @@ def _parse_ai_review_response(raw_response: Any | None) -> tuple[str, dict[str, 
             warnings.append("ai_review_ai_tier2_proposal_invalid")
             continue
         if str(item.get("proposal_decision") or "") not in PRODUCER_DUAL_DECISIONS:
-            warnings.append(f"ai_review_ai_proposal_decision_invalid:{item.get('candidate_id')}")
-        missing_contract = missing_metric_contract_fields(item.get("required_source_fields"))
+            warnings.append(
+                f"ai_review_ai_proposal_decision_invalid:{item.get('candidate_id')}"
+            )
+        missing_contract = missing_metric_contract_fields(
+            item.get("required_source_fields")
+        )
         if missing_contract:
-            warnings.append(f"ai_review_ai_proposal_contract_missing:{item.get('candidate_id')}:{','.join(missing_contract)}")
+            warnings.append(
+                f"ai_review_ai_proposal_contract_missing:{item.get('candidate_id')}:{','.join(missing_contract)}"
+            )
         if has_forbidden_runtime_leak(item):
-            warnings.append(f"ai_review_ai_proposal_forbidden_use_leak:{item.get('candidate_id')}")
+            warnings.append(
+                f"ai_review_ai_proposal_forbidden_use_leak:{item.get('candidate_id')}"
+            )
         if has_evidence_authority_violation(item):
-            warnings.append(f"ai_review_ai_proposal_evidence_authority_violation:{item.get('candidate_id')}")
+            warnings.append(
+                f"ai_review_ai_proposal_evidence_authority_violation:{item.get('candidate_id')}"
+            )
     proposal_ids = {
         str(item.get("candidate_id"))
         for item in payload.get("ai_tier2_proposals") or []
@@ -1556,18 +1996,39 @@ def _parse_ai_review_response(raw_response: Any | None) -> tuple[str, dict[str, 
             warnings.append("ai_review_comparative_review_invalid")
             continue
         if str(item.get("selected_decision") or "") not in PRODUCER_DUAL_DECISIONS:
-            warnings.append(f"ai_review_comparative_decision_invalid:{item.get('candidate_id')}")
-        if str(item.get("selected_source") or "") not in {"deterministic", "ai_tier2", "hybrid", "reject"}:
-            warnings.append(f"ai_review_comparative_source_invalid:{item.get('candidate_id')}")
-        missing_contract = missing_metric_contract_fields(item.get("required_source_fields"))
+            warnings.append(
+                f"ai_review_comparative_decision_invalid:{item.get('candidate_id')}"
+            )
+        if str(item.get("selected_source") or "") not in {
+            "deterministic",
+            "ai_tier2",
+            "hybrid",
+            "reject",
+        }:
+            warnings.append(
+                f"ai_review_comparative_source_invalid:{item.get('candidate_id')}"
+            )
+        missing_contract = missing_metric_contract_fields(
+            item.get("required_source_fields")
+        )
         if missing_contract:
-            warnings.append(f"ai_review_comparative_contract_missing:{item.get('candidate_id')}:{','.join(missing_contract)}")
+            warnings.append(
+                f"ai_review_comparative_contract_missing:{item.get('candidate_id')}:{','.join(missing_contract)}"
+            )
         if has_forbidden_runtime_leak(item):
-            warnings.append(f"ai_review_comparative_forbidden_use_leak:{item.get('candidate_id')}")
+            warnings.append(
+                f"ai_review_comparative_forbidden_use_leak:{item.get('candidate_id')}"
+            )
         if has_evidence_authority_violation(item):
-            warnings.append(f"ai_review_comparative_evidence_authority_violation:{item.get('candidate_id')}")
+            warnings.append(
+                f"ai_review_comparative_evidence_authority_violation:{item.get('candidate_id')}"
+            )
     audit = payload.get("audit") if isinstance(payload.get("audit"), dict) else {}
-    if str(audit.get("status") or "") not in {"pass", "correction_required", "insufficient_context"}:
+    if str(audit.get("status") or "") not in {
+        "pass",
+        "correction_required",
+        "insufficient_context",
+    }:
         warnings.append("ai_review_audit_status_invalid")
     if not isinstance(audit.get("forbidden_use_violations"), list):
         warnings.append("ai_review_forbidden_use_violations_missing")
@@ -1597,7 +2058,11 @@ def _review_by_candidate(ai_payload: dict[str, Any]) -> dict[str, dict[str, Any]
 
 def _proposal_by_candidate(ai_payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return {
-        str(item.get("candidate_id")): {**item, "proposal_source": "ai_tier2", "proposal_status": "provided"}
+        str(item.get("candidate_id")): {
+            **item,
+            "proposal_source": "ai_tier2",
+            "proposal_status": "provided",
+        }
         for item in ai_payload.get("ai_tier2_proposals") or []
         if isinstance(item, dict) and item.get("candidate_id")
     }
@@ -1632,7 +2097,8 @@ def _order_from_candidate(
         "title": f"Implement missing producer: {pattern_type}",
         "source_report_type": REPORT_TYPE,
         "lifecycle_stage": candidate.get("lifecycle_stage"),
-        "target_subsystem": review.get("target_subsystem") or "postclose_source_producer",
+        "target_subsystem": review.get("target_subsystem")
+        or "postclose_source_producer",
         "route": review.get("recommended_route") or "implement_now",
         "priority": PRIORITY_RANK.get(priority, 1) + 1,
         "producer_gap_priority": priority,
@@ -1643,9 +2109,11 @@ def _order_from_candidate(
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
         "decision_authority": "producer_gap_discovery_workorder_source_only",
-        "intent": review.get("reason") or "Add a source-only producer for a missing observation gap.",
+        "intent": review.get("reason")
+        or "Add a source-only producer for a missing observation gap.",
         "expected_ev_effect": "Improve source-quality adjusted EV attribution by making the missing producer observable.",
-        "evidence": list(candidate.get("evidence") or []) + [f"ai_priority={priority}", f"ai_route={review.get('recommended_route')}"],
+        "evidence": list(candidate.get("evidence") or [])
+        + [f"ai_priority={priority}", f"ai_route={review.get('recommended_route')}"],
         "source_paths": candidate.get("source_paths") or [],
         "files_likely_touched": review.get("files_likely_touched")
         or [
@@ -1662,7 +2130,11 @@ def _order_from_candidate(
         "forbidden_uses": FORBIDDEN_USES,
         "evidence_authority_contract": evidence_authority_contract(),
         "implementation_requirements": review.get("implementation_requirements") or [],
-        "canonical_bucket": comparative_review.get("recommended_canonical_bucket") if isinstance(comparative_review, dict) else None,
+        "canonical_bucket": (
+            comparative_review.get("recommended_canonical_bucket")
+            if isinstance(comparative_review, dict)
+            else None
+        ),
         "legacy_raw_bucket_key": candidate.get("pattern_type"),
         "deterministic_proposal": candidate.get("deterministic_proposal"),
         "ai_tier2_proposal": ai_tier2_proposal or {},
@@ -1730,11 +2202,15 @@ def _ai_review_followup_order(
 
 def _source_bundle_by_pattern(bundle: dict[str, Any]) -> dict[str, dict[str, Any]]:
     out: dict[str, dict[str, Any]] = {}
-    sections = bundle.get("sections") if isinstance(bundle.get("sections"), list) else []
+    sections = (
+        bundle.get("sections") if isinstance(bundle.get("sections"), list) else []
+    )
     for section in sections:
         if not isinstance(section, dict):
             continue
-        pattern_type = str(section.get("pattern_type") or section.get("section_id") or "").strip()
+        pattern_type = str(
+            section.get("pattern_type") or section.get("section_id") or ""
+        ).strip()
         if pattern_type:
             out[pattern_type] = section
     return out
@@ -1762,7 +2238,10 @@ def _handled_forbidden_use_violations(
 
 
 def _has_source_bundle_implementation(candidate: dict[str, Any]) -> bool:
-    return str(candidate.get("implementation_status") or "").strip() in SOURCE_BUNDLE_IMPLEMENTED_STATUSES
+    return (
+        str(candidate.get("implementation_status") or "").strip()
+        in SOURCE_BUNDLE_IMPLEMENTED_STATUSES
+    )
 
 
 def _apply_source_bundle_implementation(
@@ -1790,9 +2269,12 @@ def _apply_source_bundle_implementation(
         return {
             **candidate,
             "producer_source_bundle_status": status,
-            "producer_source_bundle_missing_fields": section.get("missing_fields") or [],
+            "producer_source_bundle_missing_fields": section.get("missing_fields")
+            or [],
         }
-    implementation_status = "implemented" if status == "implemented" else "implemented_but_hold_sample"
+    implementation_status = (
+        "implemented" if status == "implemented" else "implemented_but_hold_sample"
+    )
     return {
         **candidate,
         "implementation_status": implementation_status,
@@ -1827,38 +2309,65 @@ def build_producer_gap_discovery_report(
     rolling_sim_scan: bool = False,
 ) -> dict[str, Any]:
     target_date = str(target_date).strip()
-    resolved_provider = str(
-        provider
-        if provider is not None
-        else os.getenv("KORSTOCKSCAN_PRODUCER_GAP_DISCOVERY_AI_PROVIDER", AI_REVIEW_DEFAULT_PROVIDER)
-    ).strip().lower() or "none"
-    candidates, context = _deterministic_candidates(target_date, rolling_sim_scan=rolling_sim_scan)
+    resolved_provider = (
+        str(
+            provider
+            if provider is not None
+            else os.getenv(
+                "KORSTOCKSCAN_PRODUCER_GAP_DISCOVERY_AI_PROVIDER",
+                AI_REVIEW_DEFAULT_PROVIDER,
+            )
+        )
+        .strip()
+        .lower()
+        or "none"
+    )
+    candidates, context = _deterministic_candidates(
+        target_date, rolling_sim_scan=rolling_sim_scan
+    )
     source_bundle_path, _ = producer_gap_source_bundle_paths(target_date)
     source_bundle = _load_json(source_bundle_path)
-    source_bundle_sections = _source_bundle_by_pattern(source_bundle) if source_bundle else {}
-    candidates = [_apply_source_bundle_implementation(candidate, source_bundle_sections) for candidate in candidates]
+    source_bundle_sections = (
+        _source_bundle_by_pattern(source_bundle) if source_bundle else {}
+    )
+    candidates = [
+        _apply_source_bundle_implementation(candidate, source_bundle_sections)
+        for candidate in candidates
+    ]
     primary_config = _ai_review_config()
     provider_status: dict[str, Any] = {
         "provider": resolved_provider,
-        "status": "disabled" if resolved_provider in {"none", "off", "false", "0"} else "not_called",
+        "status": (
+            "disabled"
+            if resolved_provider in {"none", "off", "false", "0"}
+            else "not_called"
+        ),
         "schema_name": AI_REVIEW_SCHEMA_NAME,
         "input_context_hash": _text_hash(context),
-        **(primary_config.provider_status_fields() if resolved_provider not in {"none", "off", "false", "0"} else {"model": None}),
+        **(
+            primary_config.provider_status_fields()
+            if resolved_provider not in {"none", "off", "false", "0"}
+            else {"model": None}
+        ),
         "retry_attempted": False,
     }
     if resolved_provider in {"none", "off", "false", "0"}:
-        provider_status.update({
-            "reasoning_effort": None,
-            "timeout_sec": None,
-            "attempt_role": None,
-            "retry_reason": None,
-        })
+        provider_status.update(
+            {
+                "reasoning_effort": None,
+                "timeout_sec": None,
+                "attempt_role": None,
+                "retry_reason": None,
+            }
+        )
     raw_response = ai_raw_response
     provided_ai_response = raw_response is not None
     if raw_response is not None:
         provider_status["status"] = "provided_response"
     if raw_response is None and resolved_provider == "openai":
-        raw_response, provider_status = _call_openai_ai_review(context, config=primary_config)
+        raw_response, provider_status = _call_openai_ai_review(
+            context, config=primary_config
+        )
         provider_status["retry_attempted"] = False
     ai_status, ai_payload, ai_warnings = _parse_ai_review_response(raw_response)
     audit = ai_payload.get("audit") if isinstance(ai_payload.get("audit"), dict) else {}
@@ -1866,15 +2375,33 @@ def build_producer_gap_discovery_report(
     if not isinstance(audit_forbidden_use_violations, list):
         audit_forbidden_use_violations = []
     review_map = _review_by_candidate(ai_payload) if ai_status == "parsed" else {}
-    ai_proposal_map = _proposal_by_candidate(ai_payload) if ai_status == "parsed" else {}
-    comparative_map = _comparative_by_candidate(ai_payload) if ai_status == "parsed" else {}
-    audit_forbidden_use_violations, handled_forbidden_use_violations = _handled_forbidden_use_violations(
-        audit_forbidden_use_violations,
-        comparative_map,
+    ai_proposal_map = (
+        _proposal_by_candidate(ai_payload) if ai_status == "parsed" else {}
+    )
+    comparative_map = (
+        _comparative_by_candidate(ai_payload) if ai_status == "parsed" else {}
+    )
+    audit_forbidden_use_violations, handled_forbidden_use_violations = (
+        _handled_forbidden_use_violations(
+            audit_forbidden_use_violations,
+            comparative_map,
+        )
     )
     candidate_ids = {str(item.get("candidate_id") or "") for item in candidates}
-    missing_ai_proposal_count = len([candidate_id for candidate_id in candidate_ids if candidate_id not in ai_proposal_map])
-    missing_comparative_review_count = len([candidate_id for candidate_id in candidate_ids if candidate_id not in comparative_map])
+    missing_ai_proposal_count = len(
+        [
+            candidate_id
+            for candidate_id in candidate_ids
+            if candidate_id not in ai_proposal_map
+        ]
+    )
+    missing_comparative_review_count = len(
+        [
+            candidate_id
+            for candidate_id in candidate_ids
+            if candidate_id not in comparative_map
+        ]
+    )
     fail_closed = ai_status != "parsed"
     retry_reason = first_wave_retry_reason(
         ai_status=ai_status,
@@ -1885,22 +2412,46 @@ def build_producer_gap_discovery_report(
     )
     if retry_reason and resolved_provider == "openai" and not provided_ai_response:
         primary_provider_status = dict(provider_status)
-        retry_config = _ai_review_config(attempt_role="retry", retry_reason=retry_reason)
-        raw_response, retry_provider_status = _call_openai_ai_review(context, config=retry_config)
+        retry_config = _ai_review_config(
+            attempt_role="retry", retry_reason=retry_reason
+        )
+        raw_response, retry_provider_status = _call_openai_ai_review(
+            context, config=retry_config
+        )
         ai_status, ai_payload, ai_warnings = _parse_ai_review_response(raw_response)
-        audit = ai_payload.get("audit") if isinstance(ai_payload.get("audit"), dict) else {}
+        audit = (
+            ai_payload.get("audit") if isinstance(ai_payload.get("audit"), dict) else {}
+        )
         audit_forbidden_use_violations = audit.get("forbidden_use_violations")
         if not isinstance(audit_forbidden_use_violations, list):
             audit_forbidden_use_violations = []
         review_map = _review_by_candidate(ai_payload) if ai_status == "parsed" else {}
-        ai_proposal_map = _proposal_by_candidate(ai_payload) if ai_status == "parsed" else {}
-        comparative_map = _comparative_by_candidate(ai_payload) if ai_status == "parsed" else {}
-        audit_forbidden_use_violations, handled_forbidden_use_violations = _handled_forbidden_use_violations(
-            audit_forbidden_use_violations,
-            comparative_map,
+        ai_proposal_map = (
+            _proposal_by_candidate(ai_payload) if ai_status == "parsed" else {}
         )
-        missing_ai_proposal_count = len([candidate_id for candidate_id in candidate_ids if candidate_id not in ai_proposal_map])
-        missing_comparative_review_count = len([candidate_id for candidate_id in candidate_ids if candidate_id not in comparative_map])
+        comparative_map = (
+            _comparative_by_candidate(ai_payload) if ai_status == "parsed" else {}
+        )
+        audit_forbidden_use_violations, handled_forbidden_use_violations = (
+            _handled_forbidden_use_violations(
+                audit_forbidden_use_violations,
+                comparative_map,
+            )
+        )
+        missing_ai_proposal_count = len(
+            [
+                candidate_id
+                for candidate_id in candidate_ids
+                if candidate_id not in ai_proposal_map
+            ]
+        )
+        missing_comparative_review_count = len(
+            [
+                candidate_id
+                for candidate_id in candidate_ids
+                if candidate_id not in comparative_map
+            ]
+        )
         fail_closed = ai_status != "parsed"
         provider_status = {
             **retry_provider_status,
@@ -1921,10 +2472,16 @@ def build_producer_gap_discovery_report(
         candidate_id = str(candidate.get("candidate_id") or "")
         review = review_map.get(candidate_id) or {}
         deterministic_proposal = (
-            candidate.get("deterministic_proposal") if isinstance(candidate.get("deterministic_proposal"), dict) else {}
+            candidate.get("deterministic_proposal")
+            if isinstance(candidate.get("deterministic_proposal"), dict)
+            else {}
         )
-        ai_tier2_proposal = ai_proposal_map.get(candidate_id) or _default_ai_proposal(candidate)
-        comparative_review = comparative_map.get(candidate_id) or default_comparative_review(
+        ai_tier2_proposal = ai_proposal_map.get(candidate_id) or _default_ai_proposal(
+            candidate
+        )
+        comparative_review = comparative_map.get(
+            candidate_id
+        ) or default_comparative_review(
             candidate_id=candidate_id,
             deterministic_proposal=deterministic_proposal,
             ai_tier2_proposal=ai_tier2_proposal,
@@ -1933,7 +2490,11 @@ def build_producer_gap_discovery_report(
             workorder_title=f"Review producer gap: {candidate.get('pattern_type')}",
         )
         if ai_status != "parsed":
-            comparative_review = {**comparative_review, "selected_decision": "source_quality_blocker", "selected_source": "reject"}
+            comparative_review = {
+                **comparative_review,
+                "selected_decision": "source_quality_blocker",
+                "selected_source": "reject",
+            }
         merged = {
             **candidate,
             "ai_review": review,
@@ -1955,13 +2516,36 @@ def build_producer_gap_discovery_report(
             and not _has_source_bundle_implementation(merged)
             and PRIORITY_RANK.get(priority, 99) <= PRIORITY_RANK["high"]
         ):
-            orders.append(_order_from_candidate(candidate, review, ai_tier2_proposal=ai_tier2_proposal, comparative_review=comparative_review))
+            orders.append(
+                _order_from_candidate(
+                    candidate,
+                    review,
+                    ai_tier2_proposal=ai_tier2_proposal,
+                    comparative_review=comparative_review,
+                )
+            )
     if followup_reasons:
-        orders.append(_ai_review_followup_order(target_date=target_date, reasons=followup_reasons, audit=audit))
-    state_counts = Counter(str(item.get("pattern_type") or "unknown") for item in candidates)
-    source_scope_counts = Counter(str(item.get("source_scope") or "unknown") for item in candidates)
-    rolling_summary = context.get("rolling_sim_discovery") if isinstance(context.get("rolling_sim_discovery"), dict) else {}
-    coverage_audit = context.get("coverage_audit") if isinstance(context.get("coverage_audit"), dict) else {}
+        orders.append(
+            _ai_review_followup_order(
+                target_date=target_date, reasons=followup_reasons, audit=audit
+            )
+        )
+    state_counts = Counter(
+        str(item.get("pattern_type") or "unknown") for item in candidates
+    )
+    source_scope_counts = Counter(
+        str(item.get("source_scope") or "unknown") for item in candidates
+    )
+    rolling_summary = (
+        context.get("rolling_sim_discovery")
+        if isinstance(context.get("rolling_sim_discovery"), dict)
+        else {}
+    )
+    coverage_audit = (
+        context.get("coverage_audit")
+        if isinstance(context.get("coverage_audit"), dict)
+        else {}
+    )
     status = "fail" if fail_closed else ("warning" if orders else "pass")
     report = {
         "schema_version": REPORT_SCHEMA_VERSION,
@@ -1991,13 +2575,18 @@ def build_producer_gap_discovery_report(
             "status": status,
             "candidate_count": len(candidates),
             "high_priority_candidate_count": sum(
-                1 for item in reviewed_candidates if PRIORITY_RANK.get(str(item.get("ai_priority")), 99) <= 1
+                1
+                for item in reviewed_candidates
+                if PRIORITY_RANK.get(str(item.get("ai_priority")), 99) <= 1
             ),
             "workorder_count": len(orders),
             "implemented_candidate_count": implemented_candidate_count,
             "deterministic_proposal_count": len(candidates),
             "ai_tier2_proposal_count": sum(
-                1 for item in reviewed_candidates if item.get("ai_tier2_proposal", {}).get("proposal_status") == "provided"
+                1
+                for item in reviewed_candidates
+                if item.get("ai_tier2_proposal", {}).get("proposal_status")
+                == "provided"
             ),
             "comparative_review_count": len(reviewed_candidates),
             "missing_ai_tier2_proposal_count": missing_ai_proposal_count,
@@ -2015,21 +2604,30 @@ def build_producer_gap_discovery_report(
             "ai_review_followup_required": bool(followup_reasons),
             "ai_review_followup_reasons": followup_reasons,
             "provider": resolved_provider,
-            "model": provider_status.get("model") or (AI_REVIEW_MODEL if resolved_provider == "openai" else None),
+            "model": provider_status.get("model")
+            or (AI_REVIEW_MODEL if resolved_provider == "openai" else None),
             "audit_status": audit.get("status"),
             "pattern_type_counts": dict(state_counts),
             "source_scope_counts": dict(source_scope_counts),
             "sim_first_pattern_count": source_scope_counts.get("sim_first", 0),
             "real_anchor_pattern_count": source_scope_counts.get("real_anchor", 0),
-            "sim_first_coverage_status": coverage_audit.get("sim_first_coverage_status"),
+            "sim_first_coverage_status": coverage_audit.get(
+                "sim_first_coverage_status"
+            ),
             "coverage_gap_count": coverage_audit.get("coverage_gap_count", 0),
-            "real_anchor_without_sim_equivalent_count": coverage_audit.get("real_anchor_without_sim_equivalent_count", 0),
+            "real_anchor_without_sim_equivalent_count": coverage_audit.get(
+                "real_anchor_without_sim_equivalent_count", 0
+            ),
             "rolling_sim_scan_enabled": bool(rolling_sim_scan),
             "rolling_dates_scanned": rolling_summary.get("dates_scanned") or [],
             "sim_rows_scanned": rolling_summary.get("sim_rows_scanned", 0),
-            "strict_match_count": _safe_int(rolling_summary.get("strict_runner_match_count"), 0)
+            "strict_match_count": _safe_int(
+                rolling_summary.get("strict_runner_match_count"), 0
+            )
             + _safe_int(rolling_summary.get("strict_plateau_match_count"), 0),
-            "ambiguous_match_count": _safe_int(rolling_summary.get("ambiguous_runner_match_count"), 0)
+            "ambiguous_match_count": _safe_int(
+                rolling_summary.get("ambiguous_runner_match_count"), 0
+            )
             + _safe_int(rolling_summary.get("ambiguous_plateau_match_count"), 0),
             "resume_required": bool(rolling_summary.get("guard_hit")),
             "human_intervention_required": False,
@@ -2039,22 +2637,33 @@ def build_producer_gap_discovery_report(
         "ai_two_pass_review": {
             "provider": resolved_provider,
             "status": ai_status,
-            "model": provider_status.get("model") or (AI_REVIEW_MODEL if resolved_provider == "openai" else None),
+            "model": provider_status.get("model")
+            or (AI_REVIEW_MODEL if resolved_provider == "openai" else None),
             "schema_name": AI_REVIEW_SCHEMA_NAME,
             "provider_status": provider_status,
             "input_context_hash": _text_hash(context),
             "audit": audit,
             "handled_forbidden_use_violations": handled_forbidden_use_violations,
             "unresolved_forbidden_use_violations": audit_forbidden_use_violations,
-            "candidate_reviews": ai_payload.get("candidate_reviews") if isinstance(ai_payload.get("candidate_reviews"), list) else [],
+            "candidate_reviews": (
+                ai_payload.get("candidate_reviews")
+                if isinstance(ai_payload.get("candidate_reviews"), list)
+                else []
+            ),
             "deterministic_proposals": [
-                item.get("deterministic_proposal") for item in reviewed_candidates if item.get("deterministic_proposal")
+                item.get("deterministic_proposal")
+                for item in reviewed_candidates
+                if item.get("deterministic_proposal")
             ],
             "ai_tier2_proposals": [
-                item.get("ai_tier2_proposal") for item in reviewed_candidates if item.get("ai_tier2_proposal")
+                item.get("ai_tier2_proposal")
+                for item in reviewed_candidates
+                if item.get("ai_tier2_proposal")
             ],
             "comparative_reviews": [
-                item.get("comparative_review") for item in reviewed_candidates if item.get("comparative_review")
+                item.get("comparative_review")
+                for item in reviewed_candidates
+                if item.get("comparative_review")
             ],
             "warnings": ai_warnings,
             "fail_closed": fail_closed,
@@ -2064,13 +2673,19 @@ def build_producer_gap_discovery_report(
             "missing_comparative_review_count": missing_comparative_review_count,
         },
         "deterministic_proposals": [
-            item.get("deterministic_proposal") for item in reviewed_candidates if item.get("deterministic_proposal")
+            item.get("deterministic_proposal")
+            for item in reviewed_candidates
+            if item.get("deterministic_proposal")
         ],
         "ai_tier2_proposals": [
-            item.get("ai_tier2_proposal") for item in reviewed_candidates if item.get("ai_tier2_proposal")
+            item.get("ai_tier2_proposal")
+            for item in reviewed_candidates
+            if item.get("ai_tier2_proposal")
         ],
         "comparative_reviews": [
-            item.get("comparative_review") for item in reviewed_candidates if item.get("comparative_review")
+            item.get("comparative_review")
+            for item in reviewed_candidates
+            if item.get("comparative_review")
         ],
         "selected_decision_counts": proposal_counts(
             [item.get("comparative_review") or {} for item in reviewed_candidates],
@@ -2085,14 +2700,20 @@ def build_producer_gap_discovery_report(
     }
     json_path, md_path = report_paths(target_date)
     json_path.parent.mkdir(parents=True, exist_ok=True)
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     md_path.write_text(render_markdown(report), encoding="utf-8")
     return report
 
 
 def render_markdown(report: dict[str, Any]) -> str:
     summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
-    review = report.get("ai_two_pass_review") if isinstance(report.get("ai_two_pass_review"), dict) else {}
+    review = (
+        report.get("ai_two_pass_review")
+        if isinstance(report.get("ai_two_pass_review"), dict)
+        else {}
+    )
     lines = [
         f"# Producer Gap Discovery - {report.get('date')}",
         "",
@@ -2142,14 +2763,21 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--date", required=True)
     parser.add_argument(
         "--provider",
-        default=os.getenv("KORSTOCKSCAN_PRODUCER_GAP_DISCOVERY_AI_PROVIDER", AI_REVIEW_DEFAULT_PROVIDER),
+        default=os.getenv(
+            "KORSTOCKSCAN_PRODUCER_GAP_DISCOVERY_AI_PROVIDER",
+            AI_REVIEW_DEFAULT_PROVIDER,
+        ),
         choices=["openai", "none", "off", "false", "0"],
     )
     parser.add_argument(
         "--ai-review-response-json",
         help="Strict producer_gap_discovery_ai_review_v1 JSON response to parse instead of calling a provider.",
     )
-    parser.add_argument("--rolling-sim-scan", action="store_true", help="Scan all available historical sim rows.")
+    parser.add_argument(
+        "--rolling-sim-scan",
+        action="store_true",
+        help="Scan all available historical sim rows.",
+    )
     args = parser.parse_args(argv)
     report = build_producer_gap_discovery_report(
         args.date,
@@ -2158,7 +2786,16 @@ def main(argv: list[str] | None = None) -> int:
         rolling_sim_scan=bool(args.rolling_sim_scan),
     )
     json_path, md_path = report_paths(args.date)
-    print(json.dumps({"status": report.get("status"), "json": str(json_path), "md": str(md_path)}, ensure_ascii=False))
+    print(
+        json.dumps(
+            {
+                "status": report.get("status"),
+                "json": str(json_path),
+                "md": str(md_path),
+            },
+            ensure_ascii=False,
+        )
+    )
     return 1 if report.get("status") == "fail" else 0
 
 

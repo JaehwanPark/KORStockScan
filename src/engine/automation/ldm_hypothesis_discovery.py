@@ -16,7 +16,6 @@ from typing import Any, Iterable
 from src.engine.daily_threshold_cycle_report import REPORT_DIR
 from src.utils.jsonl_io import iter_jsonl
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 REPORT_TYPE = "ldm_hypothesis_discovery"
 REPORT_SCHEMA_VERSION = "ldm_hypothesis_discovery_v1"
@@ -24,7 +23,9 @@ OBSERVATION_PLAN_SCHEMA_VERSION = "ldm_hypothesis_observation_plan_v1"
 REPORT_OUT_DIR = REPORT_DIR / REPORT_TYPE
 POST_SELL_DIR = PROJECT_ROOT / "data" / "post_sell"
 PIPELINE_EVENTS_DIR = PROJECT_ROOT / "data" / "pipeline_events"
-PLAN_DIR = PROJECT_ROOT / "data" / "threshold_cycle" / "ldm_hypothesis_observation_plans"
+PLAN_DIR = (
+    PROJECT_ROOT / "data" / "threshold_cycle" / "ldm_hypothesis_observation_plans"
+)
 SCALP_POLICY_DIR = PROJECT_ROOT / "data" / "threshold_cycle" / "scalp_sim_policies"
 SWING_POLICY_DIR = PROJECT_ROOT / "data" / "threshold_cycle" / "swing_sim_policies"
 
@@ -52,12 +53,17 @@ ALLOWED_DOWNSTREAM_EFFECTS = [
     "source_quality_gap_surfacing",
     "runtime_effect_false_workorder_candidate",
 ]
-IDENTITY_KEY_RE = re.compile(r"(?:^|_)(id|uuid|hash|code|name|record|candidate|sim_record|odno|order_no)(?:$|_)", re.I)
+IDENTITY_KEY_RE = re.compile(
+    r"(?:^|_)(id|uuid|hash|code|name|record|candidate|sim_record|odno|order_no)(?:$|_)",
+    re.I,
+)
 FUTURE_KEY_RE = re.compile(
     r"(profit|ev|pnl|return|mfe|mae|win|loss|outcome|result|future|label|sell|exit|close|joined_sample|sample|rate|count|generated|date|time|at$)",
     re.I,
 )
-FUTURE_VALUE_RE = re.compile(r"(profit|outcome|mfe|mae|sell|exit|loss|winner|missed|good_exit|bad_exit)", re.I)
+FUTURE_VALUE_RE = re.compile(
+    r"(profit|outcome|mfe|mae|sell|exit|loss|winner|missed|good_exit|bad_exit)", re.I
+)
 OK_QUALITY_VALUES = {"", "-", "ok", "pass", "passed", "ready", "true"}
 EXCLUDED_EXACT_FEATURE_KEYS = {
     "source_section",
@@ -177,12 +183,18 @@ def _quality_from_mapping(payload: dict[str, Any]) -> str:
 
 def _outcome_group(row: SourceRow) -> str:
     quality = row.source_quality.lower()
-    if quality and quality not in OK_QUALITY_VALUES and any(token in quality for token in ("block", "fail", "warning", "unknown")):
+    if (
+        quality
+        and quality not in OK_QUALITY_VALUES
+        and any(token in quality for token in ("block", "fail", "warning", "unknown"))
+    ):
         return "source_quality_blocked"
     outcome_text = " ".join(
         f"{key}={value}"
         for key, value in row.features.items()
-        if any(token in str(key).lower() for token in ("outcome", "result", "exit", "sell"))
+        if any(
+            token in str(key).lower() for token in ("outcome", "result", "exit", "sell")
+        )
     ).lower()
     if "missed_upside" in outcome_text:
         return "missed_upside"
@@ -218,7 +230,14 @@ def _is_forbidden_feature_value(value: Any) -> bool:
     if not text or text.lower() in {"none", "null", "nan"}:
         return True
     lowered = text.lower()
-    if lowered in {"missing", "unknown", "unobserved", "not_evaluated", "not_instrumented", "-"}:
+    if lowered in {
+        "missing",
+        "unknown",
+        "unobserved",
+        "not_evaluated",
+        "not_instrumented",
+        "-",
+    }:
         return True
     if lowered.endswith(("_missing", "_unobserved")):
         return True
@@ -243,7 +262,9 @@ def _flatten_features(payload: dict[str, Any], *, prefix: str = "") -> dict[str,
     return output
 
 
-def _feature_items(rows: list[SourceRow]) -> tuple[list[set[str]], dict[str, dict[str, Any]]]:
+def _feature_items(
+    rows: list[SourceRow],
+) -> tuple[list[set[str]], dict[str, dict[str, Any]]]:
     raw_by_key: dict[str, list[Any]] = defaultdict(list)
     for row in rows:
         for key, value in row.features.items():
@@ -259,7 +280,9 @@ def _feature_items(rows: list[SourceRow]) -> tuple[list[set[str]], dict[str, dic
         missing_rate = 1.0 - (len(values) / total)
         string_values = [str(v).strip() for v in values if str(v).strip()]
         unique_count = len(set(string_values))
-        numeric_values = [_safe_float(v, None) for v in values if _safe_float(v, None) is not None]
+        numeric_values = [
+            _safe_float(v, None) for v in values if _safe_float(v, None) is not None
+        ]
         is_numeric = len(numeric_values) >= max(3, int(len(values) * 0.8))
         diagnostics[key] = {
             "observed_count": len(values),
@@ -270,7 +293,10 @@ def _feature_items(rows: list[SourceRow]) -> tuple[list[set[str]], dict[str, dic
         if len(values) < MIN_SAMPLE_WEIGHT:
             diagnostics[key]["excluded_reason"] = "observed_sample_floor"
             continue
-        if missing_rate > MAX_MISSING_RATE and key not in RUNTIME_OBSERVABLE_REQUIREMENT_FIELDS:
+        if (
+            missing_rate > MAX_MISSING_RATE
+            and key not in RUNTIME_OBSERVABLE_REQUIREMENT_FIELDS
+        ):
             diagnostics[key]["excluded_reason"] = "missing_rate_cap"
             continue
         if is_numeric:
@@ -296,7 +322,9 @@ def _feature_items(rows: list[SourceRow]) -> tuple[list[set[str]], dict[str, dic
                 if numeric is None:
                     continue
                 low, high = numeric_bins[key]
-                bucket = "low" if numeric <= low else "high" if numeric >= high else "mid"
+                bucket = (
+                    "low" if numeric <= low else "high" if numeric >= high else "mid"
+                )
                 items.add(f"{key}#bin={bucket}")
             else:
                 items.add(f"{key}={str(value).strip()}")
@@ -304,11 +332,15 @@ def _feature_items(rows: list[SourceRow]) -> tuple[list[set[str]], dict[str, dic
     return itemsets, diagnostics
 
 
-def _extract_metric_row(section: str, source_date: str, row: dict[str, Any]) -> SourceRow | None:
+def _extract_metric_row(
+    section: str, source_date: str, row: dict[str, Any]
+) -> SourceRow | None:
     profit = _safe_float(
-        row.get("source_quality_adjusted_ev_pct")
-        if row.get("source_quality_adjusted_ev_pct") is not None
-        else row.get("equal_weight_avg_profit_pct"),
+        (
+            row.get("source_quality_adjusted_ev_pct")
+            if row.get("source_quality_adjusted_ev_pct") is not None
+            else row.get("equal_weight_avg_profit_pct")
+        ),
         None,
     )
     features = _flatten_features(row)
@@ -326,7 +358,11 @@ def _extract_metric_row(section: str, source_date: str, row: dict[str, Any]) -> 
 
 def _load_ldm_rows(target_date: str) -> list[SourceRow]:
     rows: list[SourceRow] = []
-    ldm_path = REPORT_DIR / "lifecycle_decision_matrix" / f"lifecycle_decision_matrix_{target_date}.json"
+    ldm_path = (
+        REPORT_DIR
+        / "lifecycle_decision_matrix"
+        / f"lifecycle_decision_matrix_{target_date}.json"
+    )
     payload = _load_json(ldm_path)
     for section in (
         "lifecycle_flow_bucket_attribution",
@@ -343,26 +379,47 @@ def _load_ldm_rows(target_date: str) -> list[SourceRow]:
                 item = _extract_metric_row(section, target_date, bucket)
                 if item:
                     rows.append(item)
-    discovery_path = REPORT_DIR / "lifecycle_bucket_discovery" / f"lifecycle_bucket_discovery_{target_date}.json"
+    discovery_path = (
+        REPORT_DIR
+        / "lifecycle_bucket_discovery"
+        / f"lifecycle_bucket_discovery_{target_date}.json"
+    )
     discovery = _load_json(discovery_path)
     for parent in discovery.get("parent_bucket_summaries") or []:
         if not isinstance(parent, dict):
             continue
         features = {}
-        dimensions = parent.get("dimension_filters") if isinstance(parent.get("dimension_filters"), dict) else {}
+        dimensions = (
+            parent.get("dimension_filters")
+            if isinstance(parent.get("dimension_filters"), dict)
+            else {}
+        )
         features.update(dimensions)
-        features["source_parent_family"] = parent.get("parent_bucket_family") or parent.get("bucket_type")
+        features["source_parent_family"] = parent.get(
+            "parent_bucket_family"
+        ) or parent.get("bucket_type")
         rows.append(
             SourceRow(
                 source="lifecycle_bucket_discovery_parent",
                 source_date=target_date,
                 features=features,
-                profit_pct=_safe_float(parent.get("parent_source_quality_adjusted_ev_pct"), None),
+                profit_pct=_safe_float(
+                    parent.get("parent_source_quality_adjusted_ev_pct"), None
+                ),
                 source_quality=_quality_from_mapping(parent),
-                weight=max(1, _safe_int(parent.get("parent_joined_sample") or parent.get("sample"), 1)),
+                weight=max(
+                    1,
+                    _safe_int(
+                        parent.get("parent_joined_sample") or parent.get("sample"), 1
+                    ),
+                ),
             )
         )
-    swing_path = REPORT_DIR / "swing_lifecycle_decision_matrix" / f"swing_lifecycle_decision_matrix_{target_date}.json"
+    swing_path = (
+        REPORT_DIR
+        / "swing_lifecycle_decision_matrix"
+        / f"swing_lifecycle_decision_matrix_{target_date}.json"
+    )
     swing = _load_json(swing_path)
     for section in (
         "swing_lifecycle_flow_bucket_attribution",
@@ -389,9 +446,17 @@ def _load_jsonl_rows(path: Path, source: str, source_date: str) -> list[SourceRo
             break
         if not isinstance(payload, dict):
             continue
-        fields = payload.get("fields") if isinstance(payload.get("fields"), dict) else payload
+        fields = (
+            payload.get("fields")
+            if isinstance(payload.get("fields"), dict)
+            else payload
+        )
         profit = _safe_float(
-            _first_present(fields.get("profit_rate"), fields.get("trigger_profit_rate"), payload.get("profit_rate")),
+            _first_present(
+                fields.get("profit_rate"),
+                fields.get("trigger_profit_rate"),
+                payload.get("profit_rate"),
+            ),
             None,
         )
         features = _flatten_features(fields)
@@ -411,7 +476,9 @@ def _load_jsonl_rows(path: Path, source: str, source_date: str) -> list[SourceRo
     return rows
 
 
-def load_source_rows(source_start: str, target_date: str) -> tuple[list[SourceRow], list[dict[str, Any]]]:
+def load_source_rows(
+    source_start: str, target_date: str
+) -> tuple[list[SourceRow], list[dict[str, Any]]]:
     rows: list[SourceRow] = []
     diagnostics: list[dict[str, Any]] = []
     for day in _date_range(source_start, target_date):
@@ -423,8 +490,16 @@ def load_source_rows(source_start: str, target_date: str) -> tuple[list[SourceRo
             "post_sell_candidates",
             "post_sell_evaluations",
         ):
-            rows.extend(_load_jsonl_rows(POST_SELL_DIR / f"{name}_{day}.jsonl", name, day))
-        rows.extend(_load_jsonl_rows(PIPELINE_EVENTS_DIR / f"pipeline_events_{day}.jsonl", "pipeline_events", day))
+            rows.extend(
+                _load_jsonl_rows(POST_SELL_DIR / f"{name}_{day}.jsonl", name, day)
+            )
+        rows.extend(
+            _load_jsonl_rows(
+                PIPELINE_EVENTS_DIR / f"pipeline_events_{day}.jsonl",
+                "pipeline_events",
+                day,
+            )
+        )
         diagnostics.append({"date": day, "loaded_rows": len(rows) - before})
     return rows, diagnostics
 
@@ -434,7 +509,9 @@ def _signature_for_items(items: tuple[str, ...]) -> str:
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
 
 
-def _requirements_from_items(items: Iterable[str], *, allowed_fields: set[str] | None = None) -> list[dict[str, str]]:
+def _requirements_from_items(
+    items: Iterable[str], *, allowed_fields: set[str] | None = None
+) -> list[dict[str, str]]:
     requirements: list[dict[str, str]] = []
     for item in sorted(items):
         if "#bin=" in item:
@@ -453,7 +530,14 @@ def _requirements_from_items(items: Iterable[str], *, allowed_fields: set[str] |
 def _requirement_signature(requirements: list[dict[str, str]]) -> str:
     raw = "|".join(
         f"{item.get('field')}:{item.get('op')}:{item.get('value')}"
-        for item in sorted(requirements, key=lambda item: (item.get("field") or "", item.get("op") or "", item.get("value") or ""))
+        for item in sorted(
+            requirements,
+            key=lambda item: (
+                item.get("field") or "",
+                item.get("op") or "",
+                item.get("value") or "",
+            ),
+        )
     )
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
 
@@ -466,8 +550,12 @@ def _has_runtime_observable_requirement(items: Iterable[str]) -> bool:
     return False
 
 
-def _evaluate_itemset(items: tuple[str, ...], rows: list[SourceRow], row_items: list[set[str]]) -> dict[str, Any] | None:
-    selected: list[SourceRow] = [row for row, itemset in zip(rows, row_items) if set(items).issubset(itemset)]
+def _evaluate_itemset(
+    items: tuple[str, ...], rows: list[SourceRow], row_items: list[set[str]]
+) -> dict[str, Any] | None:
+    selected: list[SourceRow] = [
+        row for row, itemset in zip(rows, row_items) if set(items).issubset(itemset)
+    ]
     sample_weight = sum(row.weight for row in selected)
     if sample_weight < MIN_SAMPLE_WEIGHT:
         return None
@@ -492,7 +580,9 @@ def _evaluate_itemset(items: tuple[str, ...], rows: list[SourceRow], row_items: 
     ev = weighted_profit / profit_weight if profit_weight else 0.0
     positive = groups.get("positive", 0)
     negative = groups.get("negative", 0) + groups.get("severe_loss", 0)
-    contrast_delta = ev - ((negative / sample_weight) * abs(ev) if sample_weight else 0.0)
+    contrast_delta = ev - (
+        (negative / sample_weight) * abs(ev) if sample_weight else 0.0
+    )
     drift_score = 1.0 / max(1, len(dates))
     score = abs(contrast_delta) * math.log(sample_weight + 1) * max(1, len(dates))
     return {
@@ -501,9 +591,15 @@ def _evaluate_itemset(items: tuple[str, ...], rows: list[SourceRow], row_items: 
         "source_quality_adjusted_ev_pct": round(ev, 4),
         "repeated_date_count": len(dates),
         "contrast_group_counts": dict(sorted(groups.items())),
-        "contrast_coverage_status": "pass" if contrast_group_count >= MIN_CONTRAST_GROUPS else "needs_opposite_sample",
+        "contrast_coverage_status": (
+            "pass"
+            if contrast_group_count >= MIN_CONTRAST_GROUPS
+            else "needs_opposite_sample"
+        ),
         "contrast_ev_delta_pct": round(contrast_delta, 4),
-        "downside_rate": round(downside_weight / sample_weight, 4) if sample_weight else 0.0,
+        "downside_rate": (
+            round(downside_weight / sample_weight, 4) if sample_weight else 0.0
+        ),
         "drift_score": round(drift_score, 4),
         "positive_weight": positive,
         "negative_weight": negative,
@@ -511,7 +607,9 @@ def _evaluate_itemset(items: tuple[str, ...], rows: list[SourceRow], row_items: 
     }
 
 
-def build_hypotheses(rows: list[SourceRow]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+def build_hypotheses(
+    rows: list[SourceRow],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     row_items, feature_diagnostics = _feature_items(rows)
     singleton_counts: Counter[str] = Counter()
     for row, items in zip(rows, row_items):
@@ -545,9 +643,14 @@ def build_hypotheses(rows: list[SourceRow]) -> tuple[list[dict[str, Any]], dict[
         candidates = sorted(next_level)[:MAX_CANDIDATES]
         if len(evaluated) >= MAX_CANDIDATES:
             break
-    evaluated.sort(key=lambda item: (item.get("score", 0), item.get("sample_weight", 0)), reverse=True)
+    evaluated.sort(
+        key=lambda item: (item.get("score", 0), item.get("sample_weight", 0)),
+        reverse=True,
+    )
     hypotheses: list[dict[str, Any]] = []
-    runtime_observable = [item for item in evaluated if _has_runtime_observable_requirement(item["items"])]
+    runtime_observable = [
+        item for item in evaluated if _has_runtime_observable_requirement(item["items"])
+    ]
     hypotheses_by_match_signature: dict[str, dict[str, Any]] = {}
     for item in runtime_observable:
         signature = _signature_for_items(tuple(item["items"]))
@@ -583,7 +686,9 @@ def build_hypotheses(rows: list[SourceRow]) -> tuple[list[dict[str, Any]], dict[
             "observation_dimensions": all_requirements,
             "evidence_summary": {
                 "sample_weight": item["sample_weight"],
-                "source_quality_adjusted_ev_pct": item["source_quality_adjusted_ev_pct"],
+                "source_quality_adjusted_ev_pct": item[
+                    "source_quality_adjusted_ev_pct"
+                ],
                 "repeated_date_count": item["repeated_date_count"],
                 "downside_rate": item["downside_rate"],
             },
@@ -598,9 +703,11 @@ def build_hypotheses(rows: list[SourceRow]) -> tuple[list[dict[str, Any]], dict[
                 "priority": (
                     "collect_contrary_sample"
                     if item["contrast_coverage_status"] != "pass"
-                    else "increase_contrastive_sim_collection"
-                    if item["contrast_ev_delta_pct"] > 0
-                    else "collect_contrary_sample"
+                    else (
+                        "increase_contrastive_sim_collection"
+                        if item["contrast_ev_delta_pct"] > 0
+                        else "collect_contrary_sample"
+                    )
                 ),
                 "max_daily_share_pct": 15,
             },
@@ -637,7 +744,8 @@ def _validate_hypothesis_contract(hypothesis: dict[str, Any]) -> bool:
         return False
     if any(
         not isinstance(item, dict)
-        or str(item.get("field") or "").strip() not in ARMING_OBSERVABLE_REQUIREMENT_FIELDS
+        or str(item.get("field") or "").strip()
+        not in ARMING_OBSERVABLE_REQUIREMENT_FIELDS
         for item in requirements
     ):
         return False
@@ -664,13 +772,22 @@ def _validate_observation_plan_contract(plan: dict[str, Any]) -> bool:
     hypotheses = plan.get("hypotheses")
     if not isinstance(hypotheses, list):
         return False
-    if plan.get("hypothesis_count") is not None and _safe_int(plan.get("hypothesis_count"), -1) != len(hypotheses):
+    if plan.get("hypothesis_count") is not None and _safe_int(
+        plan.get("hypothesis_count"), -1
+    ) != len(hypotheses):
         return False
-    return all(isinstance(item, dict) and _validate_hypothesis_contract(item) for item in hypotheses)
+    return all(
+        isinstance(item, dict) and _validate_hypothesis_contract(item)
+        for item in hypotheses
+    )
 
 
 def build_observation_plan(report: dict[str, Any], apply_date: str) -> dict[str, Any]:
-    hypotheses = [item for item in report.get("hypotheses") or [] if isinstance(item, dict) and _validate_hypothesis_contract(item)]
+    hypotheses = [
+        item
+        for item in report.get("hypotheses") or []
+        if isinstance(item, dict) and _validate_hypothesis_contract(item)
+    ]
     return {
         "schema_version": OBSERVATION_PLAN_SCHEMA_VERSION,
         "source_report_type": REPORT_TYPE,
@@ -706,7 +823,9 @@ def _merge_catalog(path: Path, plan: dict[str, Any], *, domain: str) -> bool:
             "catalog_applied_runtime_pending": domain == "swing",
         },
     }
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8"
+    )
     return True
 
 
@@ -719,7 +838,9 @@ def merge_sim_policy_catalogs(source_date: str, plan: dict[str, Any]) -> dict[st
     for domain, path in paths.items():
         result[domain] = {
             "path": str(path),
-            "merged": _merge_catalog(path, plan, domain=domain) if path.exists() else False,
+            "merged": (
+                _merge_catalog(path, plan, domain=domain) if path.exists() else False
+            ),
         }
     return result
 
@@ -740,12 +861,26 @@ def render_markdown(report: dict[str, Any]) -> str:
         "",
     ]
     summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
-    for key in ("source_start", "source_end", "input_row_count", "hypothesis_count", "candidate_count"):
+    for key in (
+        "source_start",
+        "source_end",
+        "input_row_count",
+        "hypothesis_count",
+        "candidate_count",
+    ):
         lines.append(f"- {key}: `{summary.get(key)}`")
     lines.extend(["", "## Top Hypotheses", ""])
     for item in (report.get("hypotheses") or [])[:10]:
-        evidence = item.get("evidence_summary") if isinstance(item.get("evidence_summary"), dict) else {}
-        contrast = item.get("contrast_summary") if isinstance(item.get("contrast_summary"), dict) else {}
+        evidence = (
+            item.get("evidence_summary")
+            if isinstance(item.get("evidence_summary"), dict)
+            else {}
+        )
+        contrast = (
+            item.get("contrast_summary")
+            if isinstance(item.get("contrast_summary"), dict)
+            else {}
+        )
         lines.append(
             f"- `{item.get('soft_hypothesis_id')}` sample=`{evidence.get('sample_weight')}` "
             f"ev=`{evidence.get('source_quality_adjusted_ev_pct')}` "
@@ -757,7 +892,9 @@ def render_markdown(report: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def build_report(target_date: str, source_start: str, apply_date: str) -> dict[str, Any]:
+def build_report(
+    target_date: str, source_start: str, apply_date: str
+) -> dict[str, Any]:
     rows, source_diagnostics = load_source_rows(source_start, target_date)
     hypotheses, diagnostics = build_hypotheses(rows)
     report = {
@@ -814,14 +951,20 @@ def write_report(report: dict[str, Any], *, merge_catalog: bool) -> dict[str, st
     plan = build_observation_plan(report, apply_date)
     if merge_catalog:
         report["catalog_merge"] = merge_sim_policy_catalogs(target_date, plan)
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2, default=str), encoding="utf-8"
+    )
     md_path.write_text(render_markdown(report), encoding="utf-8")
-    plan_path.write_text(json.dumps(plan, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    plan_path.write_text(
+        json.dumps(plan, ensure_ascii=False, indent=2, default=str), encoding="utf-8"
+    )
     return {"json": str(json_path), "markdown": str(md_path), "plan": str(plan_path)}
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Build LDM hypothesis discovery sim observation plan.")
+    parser = argparse.ArgumentParser(
+        description="Build LDM hypothesis discovery sim observation plan."
+    )
     parser.add_argument("--date", dest="target_date", default=date.today().isoformat())
     parser.add_argument("--source-start", dest="source_start", required=True)
     parser.add_argument("--apply-date", dest="apply_date", required=True)

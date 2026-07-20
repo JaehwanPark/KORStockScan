@@ -10,7 +10,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 REPORT_TYPE = "automation_chain_slimming_audit"
 REPORT_DIR = PROJECT_ROOT / "data" / "report" / REPORT_TYPE
@@ -138,7 +137,9 @@ def _resolve_run_defaults(defaults: list[dict[str, Any]]) -> list[dict[str, Any]
             {
                 **item,
                 "resolved_default_enabled": enabled,
-                "default_enabled_resolution": "resolved" if enabled is not None else "unknown",
+                "default_enabled_resolution": (
+                    "resolved" if enabled is not None else "unknown"
+                ),
             }
         )
     return resolved
@@ -146,23 +147,40 @@ def _resolve_run_defaults(defaults: list[dict[str, Any]]) -> list[dict[str, Any]
 
 def _extract_ai_provider_defaults(script_text: str) -> list[dict[str, Any]]:
     defaults: list[dict[str, Any]] = []
-    pattern = re.compile(r'^\s*([A-Z0-9_]*AI[A-Z0-9_]*PROVIDER[A-Z0-9_]*)="\$\{([A-Z0-9_]+):-([^}]*)\}"', re.MULTILINE)
+    pattern = re.compile(
+        r'^\s*([A-Z0-9_]*AI[A-Z0-9_]*PROVIDER[A-Z0-9_]*)="\$\{([A-Z0-9_]+):-([^}]*)\}"',
+        re.MULTILINE,
+    )
     for match in pattern.finditer(script_text):
-        defaults.append({"name": match.group(1), "env_var": match.group(2), "default": match.group(3).strip()})
+        defaults.append(
+            {
+                "name": match.group(1),
+                "env_var": match.group(2),
+                "default": match.group(3).strip(),
+            }
+        )
     return defaults
 
 
 def _clean_artifact_path(raw: str, target_date: str) -> str:
     cleaned = raw.replace("$PROJECT_DIR/", "")
-    cleaned = cleaned.replace("${TARGET_DATE}", "{date}").replace("$TARGET_DATE", "{date}")
+    cleaned = cleaned.replace("${TARGET_DATE}", "{date}").replace(
+        "$TARGET_DATE", "{date}"
+    )
     cleaned = cleaned.replace(target_date, "{date}")
     return cleaned
 
 
-def _nearby_artifacts(lines: list[str], start_index: int, target_date: str) -> list[str]:
+def _nearby_artifacts(
+    lines: list[str], start_index: int, target_date: str
+) -> list[str]:
     artifacts: list[str] = []
     for line in lines[start_index + 1 : min(len(lines), start_index + 15)]:
-        if " -m src." in line or "run_postclose_cmd env PYTHONPATH" in line and artifacts:
+        if (
+            " -m src." in line
+            or "run_postclose_cmd env PYTHONPATH" in line
+            and artifacts
+        ):
             break
         for match in re.finditer(r'"\$PROJECT_DIR/([^"]+)"', line):
             artifacts.append(_clean_artifact_path(match.group(1), target_date))
@@ -170,7 +188,10 @@ def _nearby_artifacts(lines: list[str], start_index: int, target_date: str) -> l
 
 
 def _extract_guard_flags(line: str) -> list[str]:
-    flags = re.findall(r'"\$([A-Z0-9_]*(?:RUN|BUILD_CODE_IMPROVEMENT_WORKORDER)[A-Z0-9_]*)"\s*=\s*"(?:true|1)"', line)
+    flags = re.findall(
+        r'"\$([A-Z0-9_]*(?:RUN|BUILD_CODE_IMPROVEMENT_WORKORDER)[A-Z0-9_]*)"\s*=\s*"(?:true|1)"',
+        line,
+    )
     return sorted(dict.fromkeys(flags))
 
 
@@ -197,10 +218,21 @@ def _guard_context_by_line(lines: list[str]) -> dict[int, dict[str, Any]]:
             flags.extend(item["flags"])
         contexts[index] = {
             "flags": sorted(dict.fromkeys(flags)),
-            "conditions": [dict(item) for item in stack if item["condition_type"] != "none"],
-            "condition_type": "nested_all"
-            if len([item for item in stack if item["condition_type"] != "none"]) > 1
-            else next((item["condition_type"] for item in stack if item["condition_type"] != "none"), "none"),
+            "conditions": [
+                dict(item) for item in stack if item["condition_type"] != "none"
+            ],
+            "condition_type": (
+                "nested_all"
+                if len([item for item in stack if item["condition_type"] != "none"]) > 1
+                else next(
+                    (
+                        item["condition_type"]
+                        for item in stack
+                        if item["condition_type"] != "none"
+                    ),
+                    "none",
+                )
+            ),
         }
 
         stripped = line.strip()
@@ -234,7 +266,9 @@ def _line_in_ranges(index: int, ranges: list[range]) -> bool:
     return any(index in item for item in ranges)
 
 
-def _extract_module_calls(script_text: str, wrapper: str, target_date: str) -> list[dict[str, Any]]:
+def _extract_module_calls(
+    script_text: str, wrapper: str, target_date: str
+) -> list[dict[str, Any]]:
     lines = script_text.splitlines()
     calls: list[dict[str, Any]] = []
     module_counts: Counter[str] = Counter()
@@ -245,21 +279,21 @@ def _extract_module_calls(script_text: str, wrapper: str, target_date: str) -> l
         if not match:
             continue
         module = match.group(1)
-        if module == "src.engine.threshold_cycle_ev_report" and _line_in_ranges(index, ev_function_ranges):
+        if module == "src.engine.threshold_cycle_ev_report" and _line_in_ranges(
+            index, ev_function_ranges
+        ):
             continue
         module_counts[module] += 1
         occurrence = module_counts[module]
         nearby = "\n".join(lines[max(0, index - 5) : min(len(lines), index + 12)])
-        guard_context = guard_contexts.get(index, {"flags": [], "condition_type": "none"})
-        default_flags = list(guard_context.get("flags") or [])
-        is_lifecycle_window = (
-            module
-            in {
-                "src.engine.lifecycle_decision_matrix",
-                "src.engine.lifecycle_bucket_discovery",
-            }
-            and ("--window-policy" in nearby or "lifecycle_bucket_window" in nearby)
+        guard_context = guard_contexts.get(
+            index, {"flags": [], "condition_type": "none"}
         )
+        default_flags = list(guard_context.get("flags") or [])
+        is_lifecycle_window = module in {
+            "src.engine.lifecycle_decision_matrix",
+            "src.engine.lifecycle_bucket_discovery",
+        } and ("--window-policy" in nearby or "lifecycle_bucket_window" in nearby)
         calls.append(
             {
                 "step_id": f"{wrapper}:{module.rsplit('.', 1)[-1]}:{occurrence}",
@@ -283,9 +317,11 @@ def _extract_module_calls(script_text: str, wrapper: str, target_date: str) -> l
                 ),
                 "window_policy": "rolling_or_mtd" if is_lifecycle_window else "daily",
                 "allow_pending_done_marker": "--allow-pending-done-marker" in nearby,
-                "runtime_authority": "preopen_runtime_env_apply_only"
-                if module == "src.engine.threshold_cycle_preopen_apply"
-                else "report_only",
+                "runtime_authority": (
+                    "preopen_runtime_env_apply_only"
+                    if module == "src.engine.threshold_cycle_preopen_apply"
+                    else "report_only"
+                ),
             }
         )
     for index, line in enumerate(lines):
@@ -335,36 +371,79 @@ def _classify_call(
     occurrence = int(call.get("occurrence") or 0)
     base = module.rsplit(".", 1)[-1]
     if default_enabled is False and module not in CORE_MODULES:
-        return "deprecated_candidate", "deprecated_candidate", "disabled_by_default_non_core_step"
+        return (
+            "deprecated_candidate",
+            "deprecated_candidate",
+            "disabled_by_default_non_core_step",
+        )
     if call.get("window_policy") == "rolling_or_mtd":
-        return "change_triggered_candidate", "change_triggered", "rolling_or_mtd_full_recompute"
+        return (
+            "change_triggered_candidate",
+            "change_triggered",
+            "rolling_or_mtd_full_recompute",
+        )
     if module == "src.engine.verify_threshold_cycle_postclose_chain":
         if call.get("allow_pending_done_marker"):
-            return "duplicate_refresh_candidate", "change_triggered", "interim_verifier_duplicates_final_verifier"
+            return (
+                "duplicate_refresh_candidate",
+                "change_triggered",
+                "interim_verifier_duplicates_final_verifier",
+            )
         return "core_daily", "core_daily", "final_fail_closed_postclose_verifier"
     if module_total_counts[module] > 1 and occurrence > 1:
         if _is_mutually_exclusive_static_duplicate(call):
-            return "mutually_exclusive_static_duplicate", "no_change", "if_else_branch_static_duplicate_not_runtime_duplicate"
+            return (
+                "mutually_exclusive_static_duplicate",
+                "no_change",
+                "if_else_branch_static_duplicate_not_runtime_duplicate",
+            )
         if _is_dependent_refresh(call):
-            return "dependent_refresh", "no_change", "upstream_dependent_refresh_keep_daily"
-        return "duplicate_refresh_candidate", "change_triggered", "same_module_reexecuted_in_wrapper"
+            return (
+                "dependent_refresh",
+                "no_change",
+                "upstream_dependent_refresh_keep_daily",
+            )
+        return (
+            "duplicate_refresh_candidate",
+            "change_triggered",
+            "same_module_reexecuted_in_wrapper",
+        )
     if base == "build_code_improvement_workorder":
-        return "side_branch_candidate", "change_triggered", "workorder_generation_can_run_outside_strategy_ev_refresh"
+        return (
+            "side_branch_candidate",
+            "change_triggered",
+            "workorder_generation_can_run_outside_strategy_ev_refresh",
+        )
     if _is_triggered_deep_review(base):
         mode = "manual_or_weekly" if profile == "aggressive" else "change_triggered"
-        return "triggered_deep_review_candidate", mode, "deep_audit_or_ai_review_should_trigger_on_drift_or_handoff_gap"
+        return (
+            "triggered_deep_review_candidate",
+            mode,
+            "deep_audit_or_ai_review_should_trigger_on_drift_or_handoff_gap",
+        )
     if module in CORE_MODULES:
         return "core_daily", "core_daily", "direct_apply_or_core_handoff_boundary"
-    return "manual_or_weekly_candidate", "manual_or_weekly", "support_report_not_direct_apply_boundary"
+    return (
+        "manual_or_weekly_candidate",
+        "manual_or_weekly",
+        "support_report_not_direct_apply_boundary",
+    )
 
 
 def _is_triggered_deep_review(base: str) -> bool:
-    return any(token in base for token in DEEP_AUDIT_MODULE_TOKENS) or base.endswith("_ai_review") or "ai_deferred_review" in base
+    return (
+        any(token in base for token in DEEP_AUDIT_MODULE_TOKENS)
+        or base.endswith("_ai_review")
+        or "ai_deferred_review" in base
+    )
 
 
 def _is_mutually_exclusive_static_duplicate(call: dict[str, Any]) -> bool:
     module = str(call.get("module") or "")
-    return module == "src.engine.swing_strategy_discovery_sim" and int(call.get("occurrence") or 0) == 2
+    return (
+        module == "src.engine.swing_strategy_discovery_sim"
+        and int(call.get("occurrence") or 0) == 2
+    )
 
 
 def _is_dependent_refresh(call: dict[str, Any]) -> bool:
@@ -379,7 +458,11 @@ def _is_dependent_refresh(call: dict[str, Any]) -> bool:
         and "lifecycle_ai_context_attribution" in nearby_text
     ):
         return True
-    if module == "src.engine.lifecycle_ai_context" and occurrence == 2 and "--mode context" in command_line:
+    if (
+        module == "src.engine.lifecycle_ai_context"
+        and occurrence == 2
+        and "--mode context" in command_line
+    ):
         return True
     return False
 
@@ -389,7 +472,10 @@ def _classification_group(classification: str, recommended_mode: str) -> str:
         return "core_daily"
     if classification in {"dependent_refresh", "mutually_exclusive_static_duplicate"}:
         return "core_daily"
-    if classification == "deprecated_candidate" or recommended_mode == "deprecated_candidate":
+    if (
+        classification == "deprecated_candidate"
+        or recommended_mode == "deprecated_candidate"
+    ):
         return "deprecated_candidate"
     if recommended_mode == "manual_or_weekly":
         return "manual_or_weekly"
@@ -397,7 +483,12 @@ def _classification_group(classification: str, recommended_mode: str) -> str:
 
 
 def _stable_group_counts(counter: Counter[str]) -> dict[str, int]:
-    groups = ("core_daily", "change_triggered", "manual_or_weekly", "deprecated_candidate")
+    groups = (
+        "core_daily",
+        "change_triggered",
+        "manual_or_weekly",
+        "deprecated_candidate",
+    )
     return {group: int(counter.get(group, 0)) for group in groups}
 
 
@@ -430,7 +521,11 @@ def _build_inventory(
             default_flags,
             str(call.get("default_condition_type") or "none"),
             default_by_name,
-            call.get("default_guard_conditions") if isinstance(call.get("default_guard_conditions"), list) else None,
+            (
+                call.get("default_guard_conditions")
+                if isinstance(call.get("default_guard_conditions"), list)
+                else None
+            ),
         )
         classification, recommended_mode, reason = _classify_call(
             call,
@@ -457,8 +552,10 @@ def _build_inventory(
             "classification_group": classification_group,
             "recommended_mode": recommended_mode,
             "classification_reason": reason,
-            "runtime_effect": call["runtime_authority"] == "preopen_runtime_env_apply_only",
-            "allowed_runtime_apply": call["runtime_authority"] == "preopen_runtime_env_apply_only",
+            "runtime_effect": call["runtime_authority"]
+            == "preopen_runtime_env_apply_only",
+            "allowed_runtime_apply": call["runtime_authority"]
+            == "preopen_runtime_env_apply_only",
         }
         inventory.append(step)
         if classification not in NO_CHANGE_CLASSIFICATIONS:
@@ -487,11 +584,16 @@ def _resolve_call_default_enabled(
 ) -> tuple[bool | None, str]:
     if not default_flags:
         return True, "unconditional"
-    conditions = guard_conditions or [{"flags": default_flags, "condition_type": condition_type}]
+    conditions = guard_conditions or [
+        {"flags": default_flags, "condition_type": condition_type}
+    ]
     condition_values: list[bool | None] = []
     for condition in conditions:
         flags = [str(item) for item in condition.get("flags") or []]
-        values = [default_by_name.get(flag, {}).get("resolved_default_enabled") for flag in flags]
+        values = [
+            default_by_name.get(flag, {}).get("resolved_default_enabled")
+            for flag in flags
+        ]
         if not flags or any(value is None for value in values):
             condition_values.append(None)
             continue
@@ -543,7 +645,10 @@ def _must_keep_daily(inventory: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def _protected_refreshes(inventory: list[dict[str, Any]]) -> list[dict[str, Any]]:
     protected: list[dict[str, Any]] = []
     for step in inventory:
-        if step.get("classification") in {"dependent_refresh", "mutually_exclusive_static_duplicate"}:
+        if step.get("classification") in {
+            "dependent_refresh",
+            "mutually_exclusive_static_duplicate",
+        }:
             protected.append(
                 {
                     "step_id": step["step_id"],
@@ -577,9 +682,13 @@ def _blocked_reductions() -> list[dict[str, Any]]:
     ]
 
 
-def _implementation_workorders(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _implementation_workorders(
+    candidates: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     by_class = Counter(str(item.get("classification") or "") for item in candidates)
-    by_group = Counter(str(item.get("classification_group") or "") for item in candidates)
+    by_group = Counter(
+        str(item.get("classification_group") or "") for item in candidates
+    )
     workorders: list[dict[str, Any]] = []
     if by_class.get("duplicate_refresh_candidate"):
         workorders.append(
@@ -660,9 +769,15 @@ def build_report(target_date: str, profile: str = "standard") -> dict[str, Any]:
     calls.extend(_extract_module_calls(preopen_text, "preopen", target_date))
     inventory, candidates = _build_inventory(calls, run_defaults, profile)
     class_counts = Counter(str(item.get("classification") or "") for item in inventory)
-    group_counts = Counter(str(item.get("classification_group") or "") for item in inventory)
-    candidate_counts = Counter(str(item.get("classification") or "") for item in candidates)
-    candidate_group_counts = Counter(str(item.get("classification_group") or "") for item in candidates)
+    group_counts = Counter(
+        str(item.get("classification_group") or "") for item in inventory
+    )
+    candidate_counts = Counter(
+        str(item.get("classification") or "") for item in candidates
+    )
+    candidate_group_counts = Counter(
+        str(item.get("classification_group") or "") for item in candidates
+    )
     status_inputs = {
         "postclose_status": _read_json(
             PROJECT_ROOT
@@ -703,15 +818,26 @@ def build_report(target_date: str, profile: str = "standard") -> dict[str, Any]:
             "change_triggered_candidates": sum(
                 count
                 for key, count in candidate_counts.items()
-                if key in {"change_triggered_candidate", "triggered_deep_review_candidate"}
+                if key
+                in {"change_triggered_candidate", "triggered_deep_review_candidate"}
             ),
-            "duplicate_refresh_candidates": candidate_counts.get("duplicate_refresh_candidate", 0),
-            "true_duplicate_refresh_candidates": candidate_counts.get("duplicate_refresh_candidate", 0),
+            "duplicate_refresh_candidates": candidate_counts.get(
+                "duplicate_refresh_candidate", 0
+            ),
+            "true_duplicate_refresh_candidates": candidate_counts.get(
+                "duplicate_refresh_candidate", 0
+            ),
             "dependent_refresh_steps": class_counts.get("dependent_refresh", 0),
-            "mutually_exclusive_static_duplicates": class_counts.get("mutually_exclusive_static_duplicate", 0),
-            "deprecated_candidates": candidate_group_counts.get("deprecated_candidate", 0),
+            "mutually_exclusive_static_duplicates": class_counts.get(
+                "mutually_exclusive_static_duplicate", 0
+            ),
+            "deprecated_candidates": candidate_group_counts.get(
+                "deprecated_candidate", 0
+            ),
             "side_branch_candidates": candidate_counts.get("side_branch_candidate", 0),
-            "manual_or_weekly_candidates": candidate_counts.get("manual_or_weekly_candidate", 0),
+            "manual_or_weekly_candidates": candidate_counts.get(
+                "manual_or_weekly_candidate", 0
+            ),
             "run_default_count": len(run_defaults),
             "ai_provider_default_count": len(ai_provider_defaults),
             "classification_counts": dict(sorted(class_counts.items())),
@@ -768,17 +894,45 @@ def render_markdown(report: dict[str, Any]) -> str:
                 reason=item.get("reason"),
             )
         )
-    lines.extend(["", "## Must Keep Daily", "", "| step_id | producer | reason |", "| --- | --- | --- |"])
+    lines.extend(
+        [
+            "",
+            "## Must Keep Daily",
+            "",
+            "| step_id | producer | reason |",
+            "| --- | --- | --- |",
+        ]
+    )
     for item in report.get("must_keep_daily") or []:
-        lines.append(f"| `{item.get('step_id')}` | `{item.get('producer')}` | {item.get('reason')} |")
-    lines.extend(["", "## Protected Refreshes", "", "| step_id | producer | classification | reason |", "| --- | --- | --- | --- |"])
+        lines.append(
+            f"| `{item.get('step_id')}` | `{item.get('producer')}` | {item.get('reason')} |"
+        )
+    lines.extend(
+        [
+            "",
+            "## Protected Refreshes",
+            "",
+            "| step_id | producer | classification | reason |",
+            "| --- | --- | --- | --- |",
+        ]
+    )
     for item in report.get("protected_refreshes") or []:
         lines.append(
             f"| `{item.get('step_id')}` | `{item.get('producer')}` | `{item.get('classification')}` | {item.get('reason')} |"
         )
-    lines.extend(["", "## Implementation Workorders", "", "| workorder_id | reason | runtime_effect |", "| --- | --- | --- |"])
+    lines.extend(
+        [
+            "",
+            "## Implementation Workorders",
+            "",
+            "| workorder_id | reason | runtime_effect |",
+            "| --- | --- | --- |",
+        ]
+    )
     for item in report.get("implementation_workorders") or []:
-        lines.append(f"| `{item.get('workorder_id')}` | {item.get('reason')} | `{item.get('runtime_effect')}` |")
+        lines.append(
+            f"| `{item.get('workorder_id')}` | {item.get('reason')} | `{item.get('runtime_effect')}` |"
+        )
     return "\n".join(lines) + "\n"
 
 
@@ -786,16 +940,23 @@ def write_report(report: dict[str, Any]) -> tuple[Path, Path]:
     target_date = str(report.get("target_date") or "")
     json_path, md_path = _report_paths(target_date)
     json_path.parent.mkdir(parents=True, exist_ok=True)
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
     md_path.write_text(render_markdown(report), encoding="utf-8")
     return json_path, md_path
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--date", required=True, help="Target date in YYYY-MM-DD format.")
+    parser.add_argument(
+        "--date", required=True, help="Target date in YYYY-MM-DD format."
+    )
     parser.add_argument("--profile", choices=sorted(VALID_PROFILES), default="standard")
-    parser.add_argument("--write", action="store_true", help="Write JSON/Markdown artifacts.")
+    parser.add_argument(
+        "--write", action="store_true", help="Write JSON/Markdown artifacts."
+    )
     args = parser.parse_args(argv)
     report = build_report(args.date, profile=args.profile)
     if args.write:

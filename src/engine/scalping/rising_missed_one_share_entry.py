@@ -6,7 +6,6 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-
 FORCED_ENTRY_REASON = "rising_missed_one_share_entry"
 BLOCK_FEATURE_DISABLED = "feature_disabled"
 BLOCK_NOT_CANDIDATE = "not_rising_missed_candidate"
@@ -111,7 +110,16 @@ def _field_present(value: Any) -> bool:
     if isinstance(value, bool):
         return value
     text = str(value or "").strip().lower()
-    return bool(text) and text not in {"0", "false", "no", "n", "off", "none", "null", "-"}
+    return bool(text) and text not in {
+        "0",
+        "false",
+        "no",
+        "n",
+        "off",
+        "none",
+        "null",
+        "-",
+    }
 
 
 def _signature_tokens(
@@ -165,7 +173,9 @@ def evaluate_rising_missed_tp1_candidate(
     decision_input = decision_input if isinstance(decision_input, dict) else {}
     active = bool(selector_enabled and active_date and active_date == current_date)
     source_count = _source_family_count(stock)
-    low_rebound_pct = _safe_float(stock.get("low_rebound_pct") or stock.get("LowReboundPct"), 0.0)
+    low_rebound_pct = _safe_float(
+        stock.get("low_rebound_pct") or stock.get("LowReboundPct"), 0.0
+    )
     watch_delta_raw = decision_input.get("rising_missed_tp1_actual_watch_delta_pct")
     watch_delta_available = watch_delta_raw not in (None, "", "-")
     watch_delta_pct = _safe_float(watch_delta_raw, 0.0)
@@ -177,20 +187,32 @@ def evaluate_rising_missed_tp1_candidate(
         and low_rebound_pct >= 1.0
         and source_count >= 3
     )
-    acceleration_lane = bool(watch_delta_available and watch_delta_pct >= 1.0 and source_count >= 2)
-    lane = "low_rebound" if low_rebound_lane else "acceleration" if acceleration_lane else "none"
-    ai_action = str(
-        current_ai_action
-        if current_ai_action not in (None, "")
-        else _entry_ai_action_for_rising_missed(stock)[0]
-    ).strip().upper()
+    acceleration_lane = bool(
+        watch_delta_available and watch_delta_pct >= 1.0 and source_count >= 2
+    )
+    lane = (
+        "low_rebound"
+        if low_rebound_lane
+        else "acceleration" if acceleration_lane else "none"
+    )
+    ai_action = (
+        str(
+            current_ai_action
+            if current_ai_action not in (None, "")
+            else _entry_ai_action_for_rising_missed(stock)[0]
+        )
+        .strip()
+        .upper()
+    )
     bid_imbalance_surge = _has_signature(stock, "BID_IMBALANCE_SURGE")
     input_ready = bool(decision_input.get("rising_missed_tp1_input_ready"))
     effective_quote_age_ms = _safe_float(
         decision_input.get("rising_missed_tp1_effective_quote_age_ms"),
         999999.0,
     )
-    spread_ratio = _safe_float(decision_input.get("rising_missed_tp1_spread_ratio"), 1.0)
+    spread_ratio = _safe_float(
+        decision_input.get("rising_missed_tp1_spread_ratio"), 1.0
+    )
     micro_confidence = _safe_float(
         decision_input.get("rising_missed_tp1_micro_confidence"),
         0.0,
@@ -211,9 +233,9 @@ def evaluate_rising_missed_tp1_candidate(
         decision_input.get("rising_missed_tp1_top_depth_ratio"),
         0.0,
     )
-    signed_tape_state = str(
-        decision_input.get("market_data_signed_tape_state") or ""
-    ).strip().lower()
+    signed_tape_state = (
+        str(decision_input.get("market_data_signed_tape_state") or "").strip().lower()
+    )
     tick_acceleration_support = bool(
         _field_present(decision_input.get("rising_missed_tp1_tick_acceleration_fresh"))
         and _safe_float(
@@ -233,11 +255,11 @@ def evaluate_rising_missed_tp1_candidate(
     micro_trusted = micro_confidence >= 0.25
     support_families = {
         "bid_imbalance": bid_imbalance_surge,
-        "order_flow": bool(micro_trusted and (true_ofi_ewma > 0.0 or pressure_ewma >= 49.0)),
+        "order_flow": bool(
+            micro_trusted and (true_ofi_ewma > 0.0 or pressure_ewma >= 49.0)
+        ),
         "depth": bool(
-            micro_trusted
-            and depth_imbalance_ewma >= -0.05
-            and top_depth_ratio >= 0.95
+            micro_trusted and depth_imbalance_ewma >= -0.05 and top_depth_ratio >= 0.95
         ),
         "momentum": bool(tick_acceleration_support or micro_vwap_support),
     }
@@ -249,9 +271,7 @@ def evaluate_rising_missed_tp1_candidate(
         and lane == "none"
         and str(decision_input.get("rising_missed_effective_venue") or "").upper()
         == "NXT"
-        and str(
-            decision_input.get("rising_missed_market_session_bucket") or ""
-        ).lower()
+        and str(decision_input.get("rising_missed_market_session_bucket") or "").lower()
         == "nxt_entry_window"
         and _field_present(decision_input.get("rising_missed_nxt_eligible"))
         and _has_signature(stock, "LOW_REBOUND_RISING_MISSED")
@@ -292,18 +312,25 @@ def evaluate_rising_missed_tp1_candidate(
         counterfactual_risks.append("depth_support_weak")
     if not support_families["momentum"]:
         counterfactual_risks.append("momentum_support_weak")
-    if ai_action in {"", "-", "WAIT", "MISSING", "NONE", "NULL"} and not bid_imbalance_surge:
+    if (
+        ai_action in {"", "-", "WAIT", "MISSING", "NONE", "NULL"}
+        and not bid_imbalance_surge
+    ):
         counterfactual_risks.append("wait_without_bid_imbalance")
     if watch_delta_available and watch_delta_pct > TP1_SELECTOR_CHASE_DELTA_PCT:
         counterfactual_risks.append("acceleration_above_chase_prior")
     counterfactual_action = (
         "INPUT_DEFER_EXPECTED"
         if not input_ready or effective_quote_age_ms > 3000.0
-        else "HARD_VETO_EXPECTED"
-        if hard_negative_reasons
-        else "RECHECK_REQUIRED"
-        if counterfactual_risks
-        else "NO_CURRENT_VETO_EVIDENCE"
+        else (
+            "HARD_VETO_EXPECTED"
+            if hard_negative_reasons
+            else (
+                "RECHECK_REQUIRED"
+                if counterfactual_risks
+                else "NO_CURRENT_VETO_EVIDENCE"
+            )
+        )
     )
     base_fields = {
         "rising_missed_tp1_selector_enabled": bool(selector_enabled),
@@ -335,7 +362,8 @@ def evaluate_rising_missed_tp1_candidate(
             if nxt_price_jump_recovery_lane
             else TP1_SELECTOR_MIN_POSITIVE_SUPPORT_FAMILIES
         ),
-        "rising_missed_tp1_positive_support_families": ",".join(positive_supports) or "-",
+        "rising_missed_tp1_positive_support_families": ",".join(positive_supports)
+        or "-",
         "rising_missed_tp1_support_bid_imbalance": support_families["bid_imbalance"],
         "rising_missed_tp1_support_order_flow": support_families["order_flow"],
         "rising_missed_tp1_support_depth": support_families["depth"],
@@ -402,7 +430,9 @@ def evaluate_rising_missed_tp1_candidate(
         ),
     }
 
-    def _decision_fields(*, allowed: bool, deferred: bool, reason: str) -> dict[str, Any]:
+    def _decision_fields(
+        *, allowed: bool, deferred: bool, reason: str
+    ) -> dict[str, Any]:
         return {
             **base_fields,
             **decision_input,
@@ -427,7 +457,10 @@ def evaluate_rising_missed_tp1_candidate(
         return RisingMissedTP1CandidateDecision(
             allowed=False,
             deferred=True,
-            reason=str(decision_input.get("rising_missed_tp1_input_reason") or TP1_SELECTOR_DEFER_INPUT),
+            reason=str(
+                decision_input.get("rising_missed_tp1_input_reason")
+                or TP1_SELECTOR_DEFER_INPUT
+            ),
             lane=lane,
             log_fields=_decision_fields(
                 allowed=False,
@@ -486,8 +519,10 @@ def evaluate_rising_missed_tp1_candidate(
                 reason=TP1_SELECTOR_BLOCK_HARD_NEGATIVE,
             ),
         )
-    required_positive_supports = 1 if nxt_price_jump_recovery_lane else (
-        TP1_SELECTOR_MIN_POSITIVE_SUPPORT_FAMILIES
+    required_positive_supports = (
+        1
+        if nxt_price_jump_recovery_lane
+        else (TP1_SELECTOR_MIN_POSITIVE_SUPPORT_FAMILIES)
     )
     if len(positive_supports) < required_positive_supports:
         return RisingMissedTP1CandidateDecision(
@@ -521,7 +556,9 @@ def _prior_log_fields(stock: dict[str, Any]) -> dict[str, Any]:
         "rising_missed_prior_key": stock.get("rising_missed_prior_key")
         or prior.get("prior_key")
         or "-",
-        "rising_missed_prior_recommendation": stock.get("rising_missed_prior_recommendation")
+        "rising_missed_prior_recommendation": stock.get(
+            "rising_missed_prior_recommendation"
+        )
         or prior.get("recommendation")
         or "unavailable",
         "rising_missed_prior_confidence": stock.get("rising_missed_prior_confidence")
@@ -589,7 +626,9 @@ def resolve_rising_missed_scout_forced_qty(
     budget_cap_krw: Any = DEFAULT_RISING_MISSED_SCOUT_ENTRY_BUDGET_CAP_KRW,
 ) -> tuple[int, dict[str, Any]]:
     entry_price = _safe_int(current_price, 0)
-    budget_cap = max(0, _safe_int(budget_cap_krw, DEFAULT_RISING_MISSED_SCOUT_ENTRY_BUDGET_CAP_KRW))
+    budget_cap = max(
+        0, _safe_int(budget_cap_krw, DEFAULT_RISING_MISSED_SCOUT_ENTRY_BUDGET_CAP_KRW)
+    )
     budget_qty = budget_cap // entry_price if entry_price > 0 and budget_cap > 0 else 0
     forced_qty = max(1, budget_qty)
     min_one_share_applied = budget_qty < 1
@@ -601,7 +640,9 @@ def resolve_rising_missed_scout_forced_qty(
         "rising_missed_scout_min_one_share_over_cap": bool(
             min_one_share_applied and budget_cap > 0 and entry_price > budget_cap
         ),
-        "rising_missed_scout_forced_notional_krw": entry_price * forced_qty if entry_price > 0 else 0,
+        "rising_missed_scout_forced_notional_krw": (
+            entry_price * forced_qty if entry_price > 0 else 0
+        ),
     }
 
 
@@ -681,7 +722,8 @@ def _looks_like_scalping_rising_missed_candidate(
         or _field_present(stock.get("rising_missed_lineage"))
         or _field_present(stock.get("low_rebound_pct"))
         or _field_present(stock.get("LowReboundPct"))
-        or "LOW_REBOUND_RISING_MISSED" in str(stock.get("source_signature") or "").upper()
+        or "LOW_REBOUND_RISING_MISSED"
+        in str(stock.get("source_signature") or "").upper()
     )
 
 
@@ -705,13 +747,19 @@ def evaluate_rising_missed_one_share_entry(
     stock = stock if isinstance(stock, dict) else {}
     delta_pct = _positive_delta_pct(stock, explicit_delta_pct=positive_delta_pct)
     fluctuation_pct = _safe_float(
-        current_fluctuation_pct
-        if current_fluctuation_pct is not None
-        else stock.get("fluctuation", stock.get("fluctuation_rate", stock.get("flu_rate"))),
+        (
+            current_fluctuation_pct
+            if current_fluctuation_pct is not None
+            else stock.get(
+                "fluctuation", stock.get("fluctuation_rate", stock.get("flu_rate"))
+            )
+        ),
         0.0,
     )
-    entry_price = _safe_int(current_price, 0) or _safe_int(stock.get("target_buy_price"), 0) or _safe_int(
-        stock.get("curr_price"), 0
+    entry_price = (
+        _safe_int(current_price, 0)
+        or _safe_int(stock.get("target_buy_price"), 0)
+        or _safe_int(stock.get("curr_price"), 0)
     )
     price_cap = max(0, _safe_int(max_entry_price_krw, MAX_ONE_SHARE_ENTRY_PRICE_KRW))
     forced_qty, sizing_fields = resolve_rising_missed_scout_forced_qty(
@@ -720,7 +768,9 @@ def evaluate_rising_missed_one_share_entry(
     )
     upper_limit_threshold = max(
         0.0,
-        _safe_float(upper_limit_exclude_pct, DEFAULT_RISING_MISSED_UPPER_LIMIT_EXCLUDE_PCT),
+        _safe_float(
+            upper_limit_exclude_pct, DEFAULT_RISING_MISSED_UPPER_LIMIT_EXCLUDE_PCT
+        ),
     )
     base_fields = {
         **_candidate_gate_filter_fields(allowed=False),
@@ -728,14 +778,17 @@ def evaluate_rising_missed_one_share_entry(
         "rising_missed_one_share_entry_positive_delta_pct": f"{delta_pct:.4f}",
         "rising_missed_one_share_entry_min_delta_pct": f"{float(min_delta_pct):.4f}",
         "rising_missed_one_share_entry_strategy": _normalized_text(strategy) or "-",
-        "rising_missed_one_share_entry_position_tag": _normalized_text(position_tag) or "-",
+        "rising_missed_one_share_entry_position_tag": _normalized_text(position_tag)
+        or "-",
         "rising_missed_one_share_entry_forced_qty": forced_qty,
         "rising_missed_one_share_entry_price": entry_price,
         "rising_missed_one_share_entry_price_cap_krw": price_cap,
         "rising_missed_one_share_entry_fluctuation_pct": f"{fluctuation_pct:.2f}",
         "rising_missed_one_share_entry_upper_limit_exclude_pct": f"{upper_limit_threshold:.2f}",
         "rising_missed_one_share_entry_upper_limit_gap_to_limit_pct": f"{max(0.0, 30.0 - fluctuation_pct):.2f}",
-        "rising_missed_one_share_entry_upper_limit_exclude_enabled": bool(upper_limit_exclude_enabled),
+        "rising_missed_one_share_entry_upper_limit_exclude_enabled": bool(
+            upper_limit_exclude_enabled
+        ),
     }
     base_fields.update(sizing_fields)
     base_fields.update(_prior_log_fields(stock))
@@ -744,18 +797,27 @@ def evaluate_rising_missed_one_share_entry(
         {
             "rising_missed_entry_ai_action": entry_ai_action,
             "rising_missed_entry_ai_action_source": entry_ai_action_source,
-            "rising_missed_entry_ai_not_evaluated_excluded": _entry_ai_action_not_evaluated(stock),
+            "rising_missed_entry_ai_not_evaluated_excluded": _entry_ai_action_not_evaluated(
+                stock
+            ),
         }
     )
     classification = classify_rising_missed_candidate(
         max_delta_pct=delta_pct,
-        real_submit_count=stock.get("real_submit_count") or stock.get("actual_order_submit_count") or 0,
+        real_submit_count=stock.get("real_submit_count")
+        or stock.get("actual_order_submit_count")
+        or 0,
         min_delta_pct=min_delta_pct,
-        source_quality_excluded=stock.get("rising_missed_class") == RISING_MISSED_CLASS_SOURCE_QUALITY_EXCLUDED,
-        intended_guard_preserved=stock.get("rising_missed_class") == RISING_MISSED_CLASS_INTENDED_GUARD_PRESERVED,
-        runtime_backpressure_observation=stock.get("rising_missed_class") == RISING_MISSED_CLASS_RUNTIME_BACKPRESSURE,
-        strategy_reject_missed=stock.get("rising_missed_class") == RISING_MISSED_CLASS_STRATEGY_REJECT,
-        actionable_major_missed=stock.get("rising_missed_class") == RISING_MISSED_CLASS_ACTIONABLE_MAJOR,
+        source_quality_excluded=stock.get("rising_missed_class")
+        == RISING_MISSED_CLASS_SOURCE_QUALITY_EXCLUDED,
+        intended_guard_preserved=stock.get("rising_missed_class")
+        == RISING_MISSED_CLASS_INTENDED_GUARD_PRESERVED,
+        runtime_backpressure_observation=stock.get("rising_missed_class")
+        == RISING_MISSED_CLASS_RUNTIME_BACKPRESSURE,
+        strategy_reject_missed=stock.get("rising_missed_class")
+        == RISING_MISSED_CLASS_STRATEGY_REJECT,
+        actionable_major_missed=stock.get("rising_missed_class")
+        == RISING_MISSED_CLASS_ACTIONABLE_MAJOR,
     )
     base_fields.update(
         {
@@ -808,7 +870,11 @@ def evaluate_rising_missed_one_share_entry(
             positive_delta_pct=delta_pct,
             log_fields=base_fields,
         )
-    if upper_limit_exclude_enabled and upper_limit_threshold > 0 and fluctuation_pct >= upper_limit_threshold:
+    if (
+        upper_limit_exclude_enabled
+        and upper_limit_threshold > 0
+        and fluctuation_pct >= upper_limit_threshold
+    ):
         base_fields.update(
             {
                 "rising_missed_class": RISING_MISSED_CLASS_SOURCE_QUALITY_EXCLUDED,
@@ -893,11 +959,15 @@ def evaluate_rising_missed_normal_buy_bridge(
         if key != "rising_missed_one_share_entry_forced_qty"
         and not str(key).startswith("rising_missed_scout_")
     }
-    action = str(
-        current_ai_action
-        if current_ai_action not in (None, "")
-        else _entry_ai_action_for_rising_missed(stock)[0]
-    ).strip().upper()
+    action = (
+        str(
+            current_ai_action
+            if current_ai_action not in (None, "")
+            else _entry_ai_action_for_rising_missed(stock)[0]
+        )
+        .strip()
+        .upper()
+    )
     allowed = bool(decision.allowed and action == "BUY")
     reason = NORMAL_BUY_BRIDGE_REASON if allowed else decision.reason
     if decision.allowed and action != "BUY":
@@ -921,13 +991,17 @@ def evaluate_rising_missed_normal_buy_bridge(
     )
 
 
-def is_forced_rising_missed_one_share_entry(stock: dict[str, Any] | None, runtime: dict[str, Any] | None) -> bool:
+def is_forced_rising_missed_one_share_entry(
+    stock: dict[str, Any] | None, runtime: dict[str, Any] | None
+) -> bool:
     stock = stock if isinstance(stock, dict) else {}
     runtime = runtime if isinstance(runtime, dict) else {}
     return (
         bool(stock.get("rising_missed_one_share_entry_forced"))
         and _safe_int(stock.get("forced_entry_qty"), 0) > 0
-        and str(stock.get("forced_entry_reason") or runtime.get("forced_entry_reason") or "").strip()
+        and str(
+            stock.get("forced_entry_reason") or runtime.get("forced_entry_reason") or ""
+        ).strip()
         == FORCED_ENTRY_REASON
     )
 

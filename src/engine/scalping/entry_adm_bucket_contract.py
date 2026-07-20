@@ -3,7 +3,6 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-
 ENTRY_ADM_BUCKET_SCHEMA_VERSION = "entry_adm_bucket_v2"
 
 ENTRY_ADM_BUCKET_DIMENSIONS = (

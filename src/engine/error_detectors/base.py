@@ -5,7 +5,6 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import ClassVar
 
-
 _DETECTOR_REGISTRY: dict[str, type[BaseDetector]] = {}
 
 
@@ -33,8 +32,7 @@ class BaseDetector(ABC):
         self.dry_run = dry_run
 
     @abstractmethod
-    def check(self) -> DetectionResult:
-        ...
+    def check(self) -> DetectionResult: ...
 
 
 def register_detector(cls):

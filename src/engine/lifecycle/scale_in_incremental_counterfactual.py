@@ -32,7 +32,6 @@ from src.engine.trade_profit import calculate_net_realized_pnl
 from src.utils.constants import DATA_DIR
 from src.utils.jsonl_io import existing_or_gzip_path
 
-
 REPORT_DIR = DATA_DIR / "report" / "scale_in_incremental_counterfactual"
 PIPELINE_EVENTS_DIR = DATA_DIR / "pipeline_events"
 SCHEMA_VERSION = 1
@@ -113,12 +112,16 @@ def _iter_events(target_date: str) -> Iterable[dict[str, Any]]:
                 yield row
 
 
-def _event_allowed_by_clean_baseline(event: dict[str, Any], policy: dict[str, Any]) -> bool:
+def _event_allowed_by_clean_baseline(
+    event: dict[str, Any], policy: dict[str, Any]
+) -> bool:
     baseline_text = str(policy.get("clean_tuning_baseline_ts_kst") or "")
     if not baseline_text:
         return True
     try:
-        baseline = datetime.fromisoformat(baseline_text.replace("Z", "+00:00")).timestamp()
+        baseline = datetime.fromisoformat(
+            baseline_text.replace("Z", "+00:00")
+        ).timestamp()
     except Exception:
         return False
     emitted = _parse_emitted_at(event)
@@ -132,8 +135,16 @@ def _has_sim_counterfactual_authority(event: dict[str, Any]) -> bool:
     broker_forbidden = fields.get("broker_order_forbidden")
     if stage == "scalp_sim_scale_in_counterfactual_started":
         return actual is False and broker_forbidden is True
-    if stage in {"scalp_sim_scale_in_order_assumed_filled", "scalp_sim_scale_in_order_unfilled"}:
-        return actual not in {True, "true", "True", 1} and broker_forbidden not in {False, "false", "False", 0}
+    if stage in {
+        "scalp_sim_scale_in_order_assumed_filled",
+        "scalp_sim_scale_in_order_unfilled",
+    }:
+        return actual not in {True, "true", "True", 1} and broker_forbidden not in {
+            False,
+            "false",
+            "False",
+            0,
+        }
     return False
 
 
@@ -214,12 +225,17 @@ def _reconstruct_counterfactual_from_legacy(
     for sim_id, events in events_by_sim.items():
         for item in events:
             stage = str(item.get("stage") or "")
-            if stage not in {"scalp_sim_scale_in_order_assumed_filled", "scalp_sim_scale_in_order_unfilled"}:
+            if stage not in {
+                "scalp_sim_scale_in_order_assumed_filled",
+                "scalp_sim_scale_in_order_unfilled",
+            }:
                 continue
             if not _has_sim_counterfactual_authority(item):
                 continue
             fields = item.get("fields") if isinstance(item.get("fields"), dict) else {}
-            add_type = str(fields.get("add_type") or fields.get("scale_in_arm") or "").upper()
+            add_type = str(
+                fields.get("add_type") or fields.get("scale_in_arm") or ""
+            ).upper()
             if add_type not in ("AVG_DOWN", "PYRAMID"):
                 if "avg_down" in stage.lower():
                     add_type = "AVG_DOWN"
@@ -229,17 +245,28 @@ def _reconstruct_counterfactual_from_legacy(
                     continue
 
             emitted_at = _parse_emitted_at(item)
-            ord_no = str(fields.get("ord_no") or fields.get("candidate_id") or f"{sim_id}:{emitted_at}")
-            decision_id = str(fields.get("scale_in_decision_id") or f"{sim_id}+{add_type}+{int(emitted_at * 1000)}")
+            ord_no = str(
+                fields.get("ord_no")
+                or fields.get("candidate_id")
+                or f"{sim_id}:{emitted_at}"
+            )
+            decision_id = str(
+                fields.get("scale_in_decision_id")
+                or f"{sim_id}+{add_type}+{int(emitted_at * 1000)}"
+            )
             if decision_id in cf_decision_ids:
                 continue
             cf_decision_ids.add(decision_id)
 
             is_filled = stage == "scalp_sim_scale_in_order_assumed_filled"
             qty = _safe_int(fields.get("qty"), 0)
-            fill_price = _safe_int(fields.get("assumed_fill_price") or fields.get("limit_price"), 0)
+            fill_price = _safe_int(
+                fields.get("assumed_fill_price") or fields.get("limit_price"), 0
+            )
             prev_qty = _safe_int(fields.get("prev_buy_qty"), 0)
-            prev_price = _safe_int(fields.get("prev_buy_price") or fields.get("buy_price"), 0)
+            prev_price = _safe_int(
+                fields.get("prev_buy_price") or fields.get("buy_price"), 0
+            )
             curr_price = _safe_int(fields.get("curr_price"), fill_price)
 
             if prev_price <= 0 and fill_price > 0:
@@ -269,7 +296,9 @@ def _reconstruct_counterfactual_from_legacy(
                     "proposed_add_qty": qty,
                     "proposed_add_notional": proposed_notional,
                     "quote_touched": is_filled,
-                    "treatment_state": "ADD_FILLED" if is_filled else "WOULD_ADD_UNFILLED",
+                    "treatment_state": (
+                        "ADD_FILLED" if is_filled else "WOULD_ADD_UNFILLED"
+                    ),
                     "control_state": "NO_ADD",
                     "actual_order_submitted": False,
                     "broker_order_forbidden": True,
@@ -297,17 +326,30 @@ def _find_evaluation_price(
                 continue
             stage = str(item.get("stage") or "")
             if stage == "scalp_sim_sell_order_assumed_filled":
-                fields = item.get("fields") if isinstance(item.get("fields"), dict) else {}
-                sell_price = _safe_int(fields.get("assumed_fill_price") or fields.get("sell_price"))
+                fields = (
+                    item.get("fields") if isinstance(item.get("fields"), dict) else {}
+                )
+                sell_price = _safe_int(
+                    fields.get("assumed_fill_price") or fields.get("sell_price")
+                )
                 if sell_price and sell_price > 0:
                     terminal_candidates.append((emitted, float(sell_price)))
                     continue
                 buy_price_for_profit = _safe_float(fields.get("buy_price"))
-                profit_rate_str = fields.get("profit_rate") or fields.get("realized_profit_rate")
+                profit_rate_str = fields.get("profit_rate") or fields.get(
+                    "realized_profit_rate"
+                )
                 profit_rate = _safe_float(profit_rate_str)
-                if buy_price_for_profit and buy_price_for_profit > 0 and profit_rate is not None:
+                if (
+                    buy_price_for_profit
+                    and buy_price_for_profit > 0
+                    and profit_rate is not None
+                ):
                     terminal_candidates.append(
-                        (emitted, float(buy_price_for_profit * (1.0 + profit_rate / 100.0)))
+                        (
+                            emitted,
+                            float(buy_price_for_profit * (1.0 + profit_rate / 100.0)),
+                        )
                     )
         terminal_candidates.sort(key=lambda item: item[0])
         return terminal_candidates[-1][1] if terminal_candidates else None
@@ -323,7 +365,9 @@ def _find_evaluation_price(
         if curr_price and curr_price > 0:
             candidates.append((emitted, float(curr_price)))
         else:
-            profit_rate = _safe_float(fields.get("profit_rate") or fields.get("trigger_profit_rate"))
+            profit_rate = _safe_float(
+                fields.get("profit_rate") or fields.get("trigger_profit_rate")
+            )
             buy_price = _safe_int(fields.get("buy_price"))
             if profit_rate is not None and buy_price and buy_price > 0:
                 eval_price = float(buy_price * (1.0 + profit_rate / 100.0))
@@ -344,7 +388,9 @@ def _compute_incremental_pnl(
 ) -> dict[str, Any]:
     """Compute incremental PnL for added shares."""
     no_add_pnl = calculate_net_realized_pnl(pre_add_price, int(eval_price), pre_add_qty)
-    added_tranche_pnl = calculate_net_realized_pnl(proposed_price, int(eval_price), proposed_qty)
+    added_tranche_pnl = calculate_net_realized_pnl(
+        proposed_price, int(eval_price), proposed_qty
+    )
     add_pnl_total = no_add_pnl + added_tranche_pnl
     incremental_pnl_krw = added_tranche_pnl
     incremental_notional_ev_pct = (
@@ -414,7 +460,9 @@ def build_report(target_date: str) -> dict[str, Any]:
     incomplete_reasons: dict[str, int] = defaultdict(int)
 
     for cf_event in cf_events:
-        fields = cf_event.get("fields") if isinstance(cf_event.get("fields"), dict) else {}
+        fields = (
+            cf_event.get("fields") if isinstance(cf_event.get("fields"), dict) else {}
+        )
         sim_id = str(fields.get("sim_record_id") or "")
         decision_id = str(fields.get("scale_in_decision_id") or "")
         decision_time = _safe_float(fields.get("decision_time"), 0.0)
@@ -425,12 +473,14 @@ def build_report(target_date: str) -> dict[str, Any]:
         proposed_notional = _safe_int(fields.get("proposed_add_notional"))
 
         if proposed_qty <= 0 or proposed_price <= 0:
-            rows.append({
-                "scale_in_decision_id": decision_id,
-                "sim_record_id": sim_id,
-                "status": "counterfactual_input_incomplete",
-                "reason": "missing_qty_or_price",
-            })
+            rows.append(
+                {
+                    "scale_in_decision_id": decision_id,
+                    "sim_record_id": sim_id,
+                    "status": "counterfactual_input_incomplete",
+                    "reason": "missing_qty_or_price",
+                }
+            )
             incomplete_count += 1
             incomplete_reasons["missing_qty_or_price"] += 1
             continue
@@ -449,11 +499,18 @@ def build_report(target_date: str) -> dict[str, Any]:
             "proposed_add_qty": proposed_qty,
             "proposed_add_notional": proposed_notional,
             "quote_touched": bool(fields.get("quote_touched")),
-            "execution_arm": str(fields.get("execution_arm") or "LEGACY_PASSIVE").upper(),
-            "treatment_state": "ADD_FILLED" if bool(fields.get("quote_touched")) else "WOULD_ADD_UNFILLED",
+            "execution_arm": str(
+                fields.get("execution_arm") or "LEGACY_PASSIVE"
+            ).upper(),
+            "treatment_state": (
+                "ADD_FILLED"
+                if bool(fields.get("quote_touched"))
+                else "WOULD_ADD_UNFILLED"
+            ),
             "runtime_ev_eligible": bool(
                 fields.get("runtime_ev_eligible") is True
-                and str(fields.get("execution_arm") or "").upper() == "MARKETABLE_OBSERVATION"
+                and str(fields.get("execution_arm") or "").upper()
+                == "MARKETABLE_OBSERVATION"
                 and fields.get("quote_touched") is True
             ),
             "counterfactual_method": COUNTERFACTUAL_METHOD,
@@ -464,7 +521,9 @@ def build_report(target_date: str) -> dict[str, Any]:
             "broker_order_forbidden": True,
             "runtime_effect": False,
             "decision_authority": "sim_scale_in_counterfactual_only",
-            "source_provenance": str(fields.get("source_provenance") or "instrumentation"),
+            "source_provenance": str(
+                fields.get("source_provenance") or "instrumentation"
+            ),
             "horizons": {},
         }
 
@@ -472,7 +531,10 @@ def build_report(target_date: str) -> dict[str, Any]:
         for horizon_name, horizon_sec in HORIZONS.items():
             eval_price = _find_evaluation_price(sim_events, decision_time, horizon_sec)
             if eval_price is None:
-                row["horizons"][horizon_name] = {"status": "horizon_incomplete", "reason": "no_evaluation_price"}
+                row["horizons"][horizon_name] = {
+                    "status": "horizon_incomplete",
+                    "reason": "no_evaluation_price",
+                }
                 all_horizons_complete = False
                 incomplete_reasons[f"horizon_incomplete_{horizon_name}"] += 1
             else:
@@ -483,7 +545,8 @@ def build_report(target_date: str) -> dict[str, Any]:
 
         row["all_horizons_complete"] = all_horizons_complete
         row["final_horizon_complete"] = (
-            row["horizons"].get("final", {}).get("incremental_notional_ev_pct") is not None
+            row["horizons"].get("final", {}).get("incremental_notional_ev_pct")
+            is not None
         )
         # This is an added-tranche observation evaluated at the canonical
         # NO_ADD exit, not a replay of the complete ADD lifecycle.
@@ -499,7 +562,9 @@ def build_report(target_date: str) -> dict[str, Any]:
         rows.append(row)
 
     summary = _build_summary(rows, target_date, incomplete_count, incomplete_reasons)
-    summary["candidate_funnel_by_arm"] = _candidate_funnel_by_arm(target_date, clean_policy)
+    summary["candidate_funnel_by_arm"] = _candidate_funnel_by_arm(
+        target_date, clean_policy
+    )
     summary["source_quality_excluded_event_count"] = sum(source_diagnostics.values())
     summary["source_quality_exclusion_reasons"] = source_diagnostics
     cohorts = _build_cohorts(rows)
@@ -533,14 +598,18 @@ def build_report(target_date: str) -> dict[str, Any]:
     }
 
 
-def _candidate_funnel_by_arm(target_date: str, clean_policy: dict[str, Any]) -> dict[str, dict[str, int]]:
+def _candidate_funnel_by_arm(
+    target_date: str, clean_policy: dict[str, Any]
+) -> dict[str, dict[str, int]]:
     funnel: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
     for item in _iter_events(target_date):
         if not _event_allowed_by_clean_baseline(item, clean_policy):
             continue
         stage = str(item.get("stage") or "")
         fields = item.get("fields") if isinstance(item.get("fields"), dict) else {}
-        arm = str(fields.get("scale_in_arm") or fields.get("add_type") or "unknown").upper()
+        arm = str(
+            fields.get("scale_in_arm") or fields.get("add_type") or "unknown"
+        ).upper()
         state = str(fields.get("scale_in_candidate_funnel_state") or "")
         if stage == "scalp_sim_panic_scale_in_blocked":
             state = "panic_blocked"
@@ -592,7 +661,9 @@ def _build_summary(
             horizon_ev[horizon_name] = {
                 "sample": len(ev_values),
                 "incremental_notional_ev_pct": avg_ev,
-                "diagnostic_win_rate": round(win_count / len(ev_values), 4) if ev_values else None,
+                "diagnostic_win_rate": (
+                    round(win_count / len(ev_values), 4) if ev_values else None
+                ),
             }
         else:
             horizon_ev[horizon_name] = {
@@ -629,13 +700,17 @@ def _build_cohorts(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
     for arm in ("AVG_DOWN", "PYRAMID"):
         arm_rows = [
-            r for r in final_complete_rows
-            if r.get("runtime_ev_eligible") and str(r.get("scale_in_arm") or "").upper() == arm
+            r
+            for r in final_complete_rows
+            if r.get("runtime_ev_eligible")
+            and str(r.get("scale_in_arm") or "").upper() == arm
         ]
         cohorts["by_arm"][arm] = _cohort_ev_summary(arm_rows)
 
     for touched_label, touched_bool in [("filled", True), ("unfilled", False)]:
-        touched_rows = [r for r in final_complete_rows if r.get("quote_touched") == touched_bool]
+        touched_rows = [
+            r for r in final_complete_rows if r.get("quote_touched") == touched_bool
+        ]
         cohorts["by_quote_touched"][touched_label] = _cohort_ev_summary(touched_rows)
 
     cohorts["combined_primary_filled"] = _cohort_ev_summary(
@@ -665,9 +740,13 @@ def _cohort_ev_summary(cohort_rows: list[dict[str, Any]]) -> dict[str, Any]:
             win_count = sum(1 for ev in ev_values if ev > 0)
             horizon_summary[horizon_name] = {
                 "sample": len(ev_values),
-                "incremental_notional_ev_pct": round(sum(ev_values) / len(ev_values), 4),
+                "incremental_notional_ev_pct": round(
+                    sum(ev_values) / len(ev_values), 4
+                ),
                 "diagnostic_win_rate": round(win_count / len(ev_values), 4),
-                "avg_incremental_pnl_krw": round(sum(pnl_values) / len(pnl_values)) if pnl_values else None,
+                "avg_incremental_pnl_krw": (
+                    round(sum(pnl_values) / len(pnl_values)) if pnl_values else None
+                ),
             }
         else:
             horizon_summary[horizon_name] = {"sample": 0}
@@ -682,7 +761,9 @@ def write_outputs(report: dict[str, Any]) -> tuple[Path, Path]:
     target_date = str(report.get("date") or "")
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
     json_path, md_path = report_paths(target_date)
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     md_path.write_text(_render_markdown(report), encoding="utf-8")
     return json_path, md_path
 
@@ -712,7 +793,11 @@ def _render_markdown(report: dict[str, Any]) -> str:
         "",
         "## Horizon Summary",
     ]
-    horizon_summary = summary.get("horizon_summary") if isinstance(summary.get("horizon_summary"), dict) else {}
+    horizon_summary = (
+        summary.get("horizon_summary")
+        if isinstance(summary.get("horizon_summary"), dict)
+        else {}
+    )
     for horizon_name in HORIZONS:
         h = horizon_summary.get(horizon_name, {})
         lines.append(
@@ -774,11 +859,18 @@ def build_backfill_report(
         if not row.get("all_horizons_complete"):
             incomplete_count += 1
         for horizon_name, horizon_data in (row.get("horizons") or {}).items():
-            if isinstance(horizon_data, dict) and horizon_data.get("status") == "horizon_incomplete":
+            if (
+                isinstance(horizon_data, dict)
+                and horizon_data.get("status") == "horizon_incomplete"
+            ):
                 incomplete_reasons[f"horizon_incomplete_{horizon_name}"] += 1
         if row.get("status") == "counterfactual_input_incomplete":
-            incomplete_reasons[str(row.get("reason") or "counterfactual_input_incomplete")] += 1
-    summary = _build_summary(all_rows, target_date, incomplete_count, incomplete_reasons)
+            incomplete_reasons[
+                str(row.get("reason") or "counterfactual_input_incomplete")
+            ] += 1
+    summary = _build_summary(
+        all_rows, target_date, incomplete_count, incomplete_reasons
+    )
     cohorts = _build_cohorts(all_rows)
 
     return {
@@ -806,12 +898,17 @@ def build_backfill_report(
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Build scale-in incremental counterfactual report.")
+    parser = argparse.ArgumentParser(
+        description="Build scale-in incremental counterfactual report."
+    )
     parser.add_argument("--date", dest="target_date", default=date.today().isoformat())
     parser.add_argument("--start-date")
     parser.add_argument("--end-date")
-    parser.add_argument("--backfill", action="store_true",
-                       help="Aggregate daily reports into rolling/MTD window")
+    parser.add_argument(
+        "--backfill",
+        action="store_true",
+        help="Aggregate daily reports into rolling/MTD window",
+    )
     args = parser.parse_args(argv)
     target_date = str(args.target_date).strip()
 

@@ -7,7 +7,6 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-
 STABLE_BULLISH = "stable_bullish"
 STABLE_BEARISH = "stable_bearish"
 NEUTRAL = "neutral"
@@ -55,7 +54,9 @@ def _clip(value: float, lower: float = -1.0, upper: float = 1.0) -> float:
     return max(lower, min(upper, value))
 
 
-def snapshot_age_ms(micro: dict[str, Any] | None, *, now_ms: int | None = None) -> float | None:
+def snapshot_age_ms(
+    micro: dict[str, Any] | None, *, now_ms: int | None = None
+) -> float | None:
     if not isinstance(micro, dict):
         return None
     captured_at_ms = _safe_float(micro.get("captured_at_ms"), None)
@@ -77,7 +78,9 @@ def micro_score_raw(micro: dict[str, Any]) -> float | None:
     return (0.65 * ofi_component) + (0.35 * qi_component)
 
 
-def _invalid_state(regime: str, *, age_ms: float | None, reason: str) -> OfiSmoothingState:
+def _invalid_state(
+    regime: str, *, age_ms: float | None, reason: str
+) -> OfiSmoothingState:
     return OfiSmoothingState(regime=regime, snapshot_age_ms=age_ms, reason=reason)
 
 
@@ -90,19 +93,29 @@ def evaluate_ofi_smoothing(
 ) -> OfiSmoothingState:
     cfg = config or OfiSmoothingConfig()
     if not isinstance(micro, dict):
-        return _invalid_state(OBSERVER_UNHEALTHY, age_ms=None, reason="missing_snapshot")
+        return _invalid_state(
+            OBSERVER_UNHEALTHY, age_ms=None, reason="missing_snapshot"
+        )
 
     age_ms = snapshot_age_ms(micro, now_ms=now_ms)
     if micro.get("observer_healthy") is not True:
-        return _invalid_state(OBSERVER_UNHEALTHY, age_ms=age_ms, reason="observer_unhealthy")
+        return _invalid_state(
+            OBSERVER_UNHEALTHY, age_ms=age_ms, reason="observer_unhealthy"
+        )
     if age_ms is not None and age_ms > float(cfg.stale_threshold_ms):
         return _invalid_state(STALE, age_ms=age_ms, reason="snapshot_stale")
     if not bool(micro.get("ready")):
-        return _invalid_state(INSUFFICIENT, age_ms=age_ms, reason=str(micro.get("reason") or "insufficient"))
+        return _invalid_state(
+            INSUFFICIENT,
+            age_ms=age_ms,
+            reason=str(micro.get("reason") or "insufficient"),
+        )
 
     raw_score = micro_score_raw(micro)
     if raw_score is None:
-        return _invalid_state(INSUFFICIENT, age_ms=age_ms, reason="missing_score_inputs")
+        return _invalid_state(
+            INSUFFICIENT, age_ms=age_ms, reason="missing_score_inputs"
+        )
 
     prev = previous or OfiSmoothingState()
     raw_weight = _clip(float(cfg.raw_weight), 0.0, 1.0)
@@ -141,7 +154,9 @@ def evaluate_ofi_smoothing(
     )
 
 
-def ofi_smoothing_log_fields(state: OfiSmoothingState | None, *, prefix: str = "ofi_smoothing") -> dict[str, Any]:
+def ofi_smoothing_log_fields(
+    state: OfiSmoothingState | None, *, prefix: str = "ofi_smoothing"
+) -> dict[str, Any]:
     if state is None:
         return {
             f"{prefix}_usable": False,
@@ -151,11 +166,15 @@ def ofi_smoothing_log_fields(state: OfiSmoothingState | None, *, prefix: str = "
         f"{prefix}_usable": bool(state.usable),
         f"{prefix}_regime": state.regime,
         f"{prefix}_reason": state.reason,
-        f"{prefix}_micro_score_raw": "-" if state.micro_score_raw is None else state.micro_score_raw,
+        f"{prefix}_micro_score_raw": (
+            "-" if state.micro_score_raw is None else state.micro_score_raw
+        ),
         f"{prefix}_micro_score_smooth": state.micro_score_smooth,
         f"{prefix}_bullish_count": state.bullish_count,
         f"{prefix}_bearish_count": state.bearish_count,
-        f"{prefix}_snapshot_age_ms": "-" if state.snapshot_age_ms is None else state.snapshot_age_ms,
+        f"{prefix}_snapshot_age_ms": (
+            "-" if state.snapshot_age_ms is None else state.snapshot_age_ms
+        ),
     }
 
 

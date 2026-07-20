@@ -10,7 +10,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-
 BASELINE_PRIOR_FEATURES = ("score_vpw", "gap", "gatekeeper", "market_regime")
 
 
@@ -87,7 +86,9 @@ def evaluate_swing_entry_lifecycle_policy(
     feature_snapshot = {
         "strategy": strategy,
         "source_stage": source_stage or "-",
-        "feature_roles": {name: "baseline_prior_feature" for name in BASELINE_PRIOR_FEATURES},
+        "feature_roles": {
+            name: "baseline_prior_feature" for name in BASELINE_PRIOR_FEATURES
+        },
         **(extra_features or {}),
     }
     if hard_safety_block:

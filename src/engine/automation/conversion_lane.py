@@ -10,9 +10,11 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
-from src.engine.automation.key_lineage_ledger import build_key_lineage_ledger, report_paths as key_lineage_paths
+from src.engine.automation.key_lineage_ledger import (
+    build_key_lineage_ledger,
+    report_paths as key_lineage_paths,
+)
 from src.utils.constants import DATA_DIR
-
 
 REPORT_TYPE = "conversion_lane"
 SCHEMA_VERSION = 1
@@ -110,7 +112,11 @@ def _blocker_class(reason: str, row: dict[str, Any] | None = None) -> str:
     ).lower()
     if "key" in text or "catalog" in text or "lineage" in text:
         return "key_lineage"
-    if "submit_drought" in text or "latency_pre_submit" in text or "budget_pass" in text:
+    if (
+        "submit_drought" in text
+        or "latency_pre_submit" in text
+        or "budget_pass" in text
+    ):
         return "submit_drought"
     if "bridge" in text:
         return "bridge_contract"
@@ -122,7 +128,13 @@ def _blocker_class(reason: str, row: dict[str, Any] | None = None) -> str:
         return "post_apply_attribution"
     if "ai" in text or "tier2" in text:
         return "AI_review"
-    if "safety" in text or "broker" in text or "stale" in text or "quantity" in text or "cooldown" in text:
+    if (
+        "safety" in text
+        or "broker" in text
+        or "stale" in text
+        or "quantity" in text
+        or "cooldown" in text
+    ):
         return "safety_or_broker_guard"
     if "authority" in text or "approval" in text or "user" in text:
         return "user_authority"
@@ -138,7 +150,9 @@ def _blocker_class(reason: str, row: dict[str, Any] | None = None) -> str:
     return "sample_floor"
 
 
-def _candidate_from_lifecycle(item: dict[str, Any], strategy_scope: str) -> dict[str, Any]:
+def _candidate_from_lifecycle(
+    item: dict[str, Any], strategy_scope: str
+) -> dict[str, Any]:
     candidate_id = str(item.get("bucket_id") or _hash("candidate", item))
     source_key_id = str(item.get("source_bucket_id") or candidate_id)
     state = str(item.get("classification_state") or "source_only_keep_collecting")
@@ -146,8 +160,13 @@ def _candidate_from_lifecycle(item: dict[str, Any], strategy_scope: str) -> dict
     bridge_state = "ready" if state == "live_auto_apply_ready" else "not_ready"
     source_quality_state = "blocked" if source_gap else "pass"
     sample = _safe_int(item.get("sample"))
-    required_sample = _safe_int(item.get("parent_sample_floor") or item.get("sample_floor"), 0)
-    ev = _safe_float(item.get("source_quality_adjusted_ev_pct") or item.get("equal_weight_avg_profit_pct"))
+    required_sample = _safe_int(
+        item.get("parent_sample_floor") or item.get("sample_floor"), 0
+    )
+    ev = _safe_float(
+        item.get("source_quality_adjusted_ev_pct")
+        or item.get("equal_weight_avg_profit_pct")
+    )
     if state == "lifecycle_flow_sim_probe_candidate":
         conversion_state, blocker = "sim_applied", "sample_floor"
     elif state in {"sim_auto_approved", "entry_only_sim_auto_approved"}:
@@ -163,13 +182,18 @@ def _candidate_from_lifecycle(item: dict[str, Any], strategy_scope: str) -> dict
         "strategy_scope": strategy_scope,
         "source_key_type": "bucket",
         "source_key_id": source_key_id,
-        "parent_bucket_id": item.get("parent_bucket_id") or f"{item.get('stage')}:{item.get('bucket_type')}",
+        "parent_bucket_id": item.get("parent_bucket_id")
+        or f"{item.get('stage')}:{item.get('bucket_type')}",
         "primary_ev": ev,
         "sample": sample,
         "required_sample": required_sample or None,
-        "sample_floor_window_policy": str(item.get("sample_floor_window_policy") or item.get("window_policy") or ""),
-        "sample_floor_status": "unknown_floor" if not required_sample else (
-            "pass" if sample >= required_sample else "below_floor"
+        "sample_floor_window_policy": str(
+            item.get("sample_floor_window_policy") or item.get("window_policy") or ""
+        ),
+        "sample_floor_status": (
+            "unknown_floor"
+            if not required_sample
+            else ("pass" if sample >= required_sample else "below_floor")
         ),
         "source_quality_state": source_quality_state,
         "sim_policy_state": state,
@@ -187,7 +211,9 @@ def _candidate_from_lifecycle(item: dict[str, Any], strategy_scope: str) -> dict
     }
 
 
-def _candidate_from_matched_bucket_lineage(row: dict[str, Any]) -> dict[str, Any] | None:
+def _candidate_from_matched_bucket_lineage(
+    row: dict[str, Any],
+) -> dict[str, Any] | None:
     evidence = row.get("evidence") if isinstance(row.get("evidence"), dict) else {}
     source_key_id = str(row.get("source_key_id") or "").strip()
     if not source_key_id or row.get("source_key_type") != "bucket":
@@ -196,22 +222,31 @@ def _candidate_from_matched_bucket_lineage(row: dict[str, Any]) -> dict[str, Any
         return None
     ev = _safe_float(evidence.get("primary_ev"))
     sample = _safe_int(evidence.get("sample"))
-    required_sample = _safe_int(evidence.get("parent_sample_floor") or evidence.get("sample_floor"), 0)
+    required_sample = _safe_int(
+        evidence.get("parent_sample_floor") or evidence.get("sample_floor"), 0
+    )
     return {
         "candidate_id": source_key_id,
         "strategy_scope": "scalp",
         "source_key_type": "bucket",
         "source_key_id": source_key_id,
-        "parent_bucket_id": evidence.get("bucket_id") or source_key_id.rsplit(":", 1)[0],
+        "parent_bucket_id": evidence.get("bucket_id")
+        or source_key_id.rsplit(":", 1)[0],
         "primary_ev": ev,
         "sample": sample,
         "required_sample": required_sample or None,
-        "sample_floor_window_policy": str(evidence.get("sample_floor_window_policy") or ""),
-        "sample_floor_status": "unknown_floor" if not required_sample else (
-            "pass" if sample >= required_sample else "below_floor"
+        "sample_floor_window_policy": str(
+            evidence.get("sample_floor_window_policy") or ""
+        ),
+        "sample_floor_status": (
+            "unknown_floor"
+            if not required_sample
+            else ("pass" if sample >= required_sample else "below_floor")
         ),
         "source_quality_state": "pass",
-        "sim_policy_state": str(evidence.get("classification_state") or "runtime_applied_bucket_policy"),
+        "sim_policy_state": str(
+            evidence.get("classification_state") or "runtime_applied_bucket_policy"
+        ),
         "runtime_observation_state": "matched",
         "runtime_observation_scope": "previous_preopen_policy_runtime_observed",
         "bridge_state": "not_ready",
@@ -227,59 +262,95 @@ def _candidate_from_matched_bucket_lineage(row: dict[str, Any]) -> dict[str, Any
 
 def _annotate_conversion_candidate(candidate: dict[str, Any]) -> None:
     ev = _safe_float(candidate.get("primary_ev"))
-    runtime_observed = str(candidate.get("runtime_observation_state") or "") in {
-        "matched",
-        "runtime_observed",
-        "joined",
-    } or candidate.get("conversion_state") == "runtime_observed"
+    runtime_observed = (
+        str(candidate.get("runtime_observation_state") or "")
+        in {
+            "matched",
+            "runtime_observed",
+            "joined",
+        }
+        or candidate.get("conversion_state") == "runtime_observed"
+    )
     sample_floor_related = str(candidate.get("next_blocker") or "") == "sample_floor"
     sample = _safe_int(candidate.get("sample"), 0)
     required_sample = _safe_int(candidate.get("required_sample"), 0)
     sample_floor_unknown = sample_floor_related and required_sample <= 0
-    sample_floor_blocked = sample_floor_related and required_sample > 0 and sample < required_sample
+    sample_floor_blocked = (
+        sample_floor_related and required_sample > 0 and sample < required_sample
+    )
     candidate["positive_ev_candidate"] = bool(ev is not None and ev > 0)
     candidate["sample_floor_blocked"] = sample_floor_blocked
     candidate["sample_floor_unknown_floor"] = sample_floor_unknown
     candidate["runtime_observed_same_key"] = bool(runtime_observed)
     if candidate.get("runtime_observed_same_key"):
-        candidate.setdefault("runtime_observation_scope", "previous_preopen_policy_runtime_observed")
+        candidate.setdefault(
+            "runtime_observation_scope", "previous_preopen_policy_runtime_observed"
+        )
     else:
         candidate.setdefault("runtime_observation_scope", "not_observed_or_not_due")
 
 
-def _merge_lineage_candidate(candidate: dict[str, Any], lineage: dict[str, Any]) -> None:
-    evidence = lineage.get("evidence") if isinstance(lineage.get("evidence"), dict) else {}
+def _merge_lineage_candidate(
+    candidate: dict[str, Any], lineage: dict[str, Any]
+) -> None:
+    evidence = (
+        lineage.get("evidence") if isinstance(lineage.get("evidence"), dict) else {}
+    )
     if lineage.get("same_key_continuity") == "pass":
         candidate["runtime_observation_state"] = "matched"
-        candidate["runtime_observation_scope"] = "previous_preopen_policy_runtime_observed"
+        candidate["runtime_observation_scope"] = (
+            "previous_preopen_policy_runtime_observed"
+        )
         candidate["runtime_observed_same_key"] = True
         candidate["conversion_state"] = "runtime_observed"
         candidate["runtime_match_key"] = lineage.get("runtime_match_key")
         candidate["postclose_observed_key"] = lineage.get("postclose_observed_key")
         candidate["next_blocker"] = "sample_floor"
     elif lineage.get("conversion_state") == "natural_match_0":
-        candidate["runtime_observation_scope"] = "previous_preopen_policy_natural_match_0"
+        candidate["runtime_observation_scope"] = (
+            "previous_preopen_policy_natural_match_0"
+        )
     elif candidate.get("runtime_observation_scope") == "not_observed_or_not_due":
-        candidate["runtime_observation_scope"] = "new_postclose_candidate_not_due_until_next_preopen"
+        candidate["runtime_observation_scope"] = (
+            "new_postclose_candidate_not_due_until_next_preopen"
+        )
     if candidate.get("primary_ev") is None:
-        candidate["primary_ev"] = _safe_float(evidence.get("primary_ev") or evidence.get("source_quality_adjusted_ev_pct"))
+        candidate["primary_ev"] = _safe_float(
+            evidence.get("primary_ev") or evidence.get("source_quality_adjusted_ev_pct")
+        )
     if not candidate.get("required_sample"):
-        floor = _safe_int(evidence.get("parent_sample_floor") or evidence.get("sample_floor"), 0)
+        floor = _safe_int(
+            evidence.get("parent_sample_floor") or evidence.get("sample_floor"), 0
+        )
         if floor:
             candidate["required_sample"] = floor
-            candidate["sample_floor_status"] = "pass" if _safe_int(candidate.get("sample")) >= floor else "below_floor"
+            candidate["sample_floor_status"] = (
+                "pass" if _safe_int(candidate.get("sample")) >= floor else "below_floor"
+            )
 
 
 def _source_sample_floor_window_policy(discovery: dict[str, Any]) -> str:
-    summary = discovery.get("summary") if isinstance(discovery.get("summary"), dict) else {}
-    return str(summary.get("source_window_policy") or discovery.get("window_policy") or "source_report_window")
+    summary = (
+        discovery.get("summary") if isinstance(discovery.get("summary"), dict) else {}
+    )
+    return str(
+        summary.get("source_window_policy")
+        or discovery.get("window_policy")
+        or "source_report_window"
+    )
 
 
-def _candidates_from_lifecycle(discovery: dict[str, Any], strategy_scope: str) -> list[dict[str, Any]]:
+def _candidates_from_lifecycle(
+    discovery: dict[str, Any], strategy_scope: str
+) -> list[dict[str, Any]]:
     source_window_policy = _source_sample_floor_window_policy(discovery)
     candidates: list[dict[str, Any]] = []
     seen: set[str] = set()
-    for section in ("live_auto_apply_candidates", "sim_auto_approved_candidates", "surfaced_candidates"):
+    for section in (
+        "live_auto_apply_candidates",
+        "sim_auto_approved_candidates",
+        "surfaced_candidates",
+    ):
         for item in discovery.get(section) or []:
             if not isinstance(item, dict):
                 continue
@@ -295,8 +366,13 @@ def _candidates_from_lifecycle(discovery: dict[str, Any], strategy_scope: str) -
 
 def _candidate_from_runtime_gap(row: dict[str, Any]) -> dict[str, Any]:
     candidate_id = str(row.get("candidate_id") or _hash("runtime_gap", row))
-    derived = str(row.get("derived_review_category") or row.get("final_disposition") or "")
-    blocker = _blocker_class(str(row.get("failure_reason") or row.get("recommended_resolution") or derived), row)
+    derived = str(
+        row.get("derived_review_category") or row.get("final_disposition") or ""
+    )
+    blocker = _blocker_class(
+        str(row.get("failure_reason") or row.get("recommended_resolution") or derived),
+        row,
+    )
     return {
         "candidate_id": candidate_id,
         "strategy_scope": str(row.get("domain") or "scalp"),
@@ -307,9 +383,15 @@ def _candidate_from_runtime_gap(row: dict[str, Any]) -> dict[str, Any]:
         "sample": _safe_int(row.get("sample")),
         "source_quality_state": "blocked" if blocker == "source_quality" else "pass",
         "sim_policy_state": str(row.get("producer_state") or ""),
-        "runtime_observation_state": str(row.get("preopen_apply_state") or "not_checked"),
+        "runtime_observation_state": str(
+            row.get("preopen_apply_state") or "not_checked"
+        ),
         "bridge_state": str(row.get("bridge_state") or "not_checked"),
-        "conversion_state": "bridge_contract_ready" if row.get("bridge_state") == "joined" else "discovered",
+        "conversion_state": (
+            "bridge_contract_ready"
+            if row.get("bridge_state") == "joined"
+            else "discovered"
+        ),
         "next_blocker": blocker,
         "evidence": {
             "final_disposition": row.get("final_disposition"),
@@ -330,7 +412,12 @@ def _conversion_blocker(
     blocker = blocker_class if blocker_class in BLOCKER_CLASSES else "sample_floor"
     candidate = candidate or {}
     remaining_gap_count = 1
-    if blocker in {"source_quality", "bridge_contract", "key_lineage", "submit_drought"}:
+    if blocker in {
+        "source_quality",
+        "bridge_contract",
+        "key_lineage",
+        "submit_drought",
+    }:
         remaining_gap_count = 2
     ev = _safe_float(candidate.get("primary_ev"), 0.0) or 0.0
     sample = _safe_int(candidate.get("sample"))
@@ -347,8 +434,17 @@ def _conversion_blocker(
         "safety_or_broker_guard": 5,
         "user_authority": 5,
     }.get(blocker, 3)
-    impact = max(1, rank_seed - int(ev * 10) - min(sample, 20) + fix_difficulty * 5 + remaining_gap_count * 3)
-    blocker_axis = _blocker_axis(candidate_id=candidate_id, blocker_class=blocker, reason=reason)
+    impact = max(
+        1,
+        rank_seed
+        - int(ev * 10)
+        - min(sample, 20)
+        + fix_difficulty * 5
+        + remaining_gap_count * 3,
+    )
+    blocker_axis = _blocker_axis(
+        candidate_id=candidate_id, blocker_class=blocker, reason=reason
+    )
     return {
         "blocker_id": _hash("conversion_blocker", [candidate_id, blocker, reason]),
         "conversion_candidate_id": candidate_id,
@@ -399,9 +495,20 @@ def _acceptance_test(blocker_class: str) -> str:
 
 
 def _submit_drought_blockers(buy_funnel: dict[str, Any]) -> list[dict[str, Any]]:
-    classification = buy_funnel.get("classification") if isinstance(buy_funnel.get("classification"), dict) else {}
-    matches = classification.get("matches") if isinstance(classification.get("matches"), list) else []
-    critical = classification.get("primary") == "SUBMIT_DROUGHT_CRITICAL" or "SUBMIT_DROUGHT_CRITICAL" in matches
+    classification = (
+        buy_funnel.get("classification")
+        if isinstance(buy_funnel.get("classification"), dict)
+        else {}
+    )
+    matches = (
+        classification.get("matches")
+        if isinstance(classification.get("matches"), list)
+        else []
+    )
+    critical = (
+        classification.get("primary") == "SUBMIT_DROUGHT_CRITICAL"
+        or "SUBMIT_DROUGHT_CRITICAL" in matches
+    )
     if not critical:
         return []
     return [
@@ -415,7 +522,9 @@ def _submit_drought_blockers(buy_funnel: dict[str, Any]) -> list[dict[str, Any]]
     ]
 
 
-def _submit_drought_quote_freshness_subactions(subreason_counts: dict[str, Any]) -> dict[str, int]:
+def _submit_drought_quote_freshness_subactions(
+    subreason_counts: dict[str, Any],
+) -> dict[str, int]:
     out: Counter[str] = Counter()
     for reason, raw_count in (subreason_counts or {}).items():
         text = str(reason or "").lower()
@@ -438,12 +547,24 @@ def _submit_drought_quote_freshness_subactions(subreason_counts: dict[str, Any])
             out["close_observer_quote_spread_guard"] += count
         elif "disabled" in text or "alias" in text:
             out["close_refresh_alias_disabled"] += count
-    return {key: out.get(key, 0) for key in SUBMIT_DROUGHT_QUOTE_FRESHNESS_SUBACTIONS if out.get(key, 0)}
+    return {
+        key: out.get(key, 0)
+        for key in SUBMIT_DROUGHT_QUOTE_FRESHNESS_SUBACTIONS
+        if out.get(key, 0)
+    }
 
 
 def _buy_funnel_provenance(buy_funnel: dict[str, Any]) -> dict[str, Any]:
-    classification = buy_funnel.get("classification") if isinstance(buy_funnel.get("classification"), dict) else {}
-    matches = classification.get("matches") if isinstance(classification.get("matches"), list) else []
+    classification = (
+        buy_funnel.get("classification")
+        if isinstance(buy_funnel.get("classification"), dict)
+        else {}
+    )
+    matches = (
+        classification.get("matches")
+        if isinstance(classification.get("matches"), list)
+        else []
+    )
     root_cause = (
         classification.get("submit_drought_root_cause")
         if isinstance(classification.get("submit_drought_root_cause"), dict)
@@ -457,20 +578,31 @@ def _buy_funnel_provenance(buy_funnel: dict[str, Any]) -> dict[str, Any]:
     subreason_counts = quote_freshness.get("refresh_subreason_counts") or {}
     subactions = _submit_drought_quote_freshness_subactions(subreason_counts)
     if root_cause.get("unknown_latency_reason_count"):
-        subactions["close_unknown_latency_reason"] = _safe_int(root_cause.get("unknown_latency_reason_count"))
+        subactions["close_unknown_latency_reason"] = _safe_int(
+            root_cause.get("unknown_latency_reason_count")
+        )
     return {
         "buy_funnel_source_present": bool(buy_funnel),
         "buy_funnel_report_type": buy_funnel.get("report_type"),
         "buy_funnel_classification_primary": classification.get("primary"),
         "buy_funnel_classification_matches": matches,
-        "submit_drought_handoff_state": classification.get("submit_drought_handoff_state"),
-        "submit_drought_root_cause_counts": root_cause.get("latency_root_cause_counts") or {},
+        "submit_drought_handoff_state": classification.get(
+            "submit_drought_handoff_state"
+        ),
+        "submit_drought_root_cause_counts": root_cause.get("latency_root_cause_counts")
+        or {},
         "submit_drought_quote_freshness_attribution": quote_freshness,
         "submit_drought_quote_freshness_subreason_counts": subreason_counts,
         "submit_drought_quote_freshness_subaction_counts": subactions,
-        "submit_drought_refresh_attempted_count": _safe_int(quote_freshness.get("refresh_attempted_count")),
-        "submit_drought_refresh_applied_count": _safe_int(quote_freshness.get("refresh_applied_count")),
-        "submit_drought_latency_pass_recovered_count": _safe_int(quote_freshness.get("latency_pass_recovered_count")),
+        "submit_drought_refresh_attempted_count": _safe_int(
+            quote_freshness.get("refresh_attempted_count")
+        ),
+        "submit_drought_refresh_applied_count": _safe_int(
+            quote_freshness.get("refresh_applied_count")
+        ),
+        "submit_drought_latency_pass_recovered_count": _safe_int(
+            quote_freshness.get("latency_pass_recovered_count")
+        ),
         "submit_drought_order_bundle_submitted_after_refresh_count": _safe_int(
             quote_freshness.get("order_bundle_submitted_after_refresh_count")
         ),
@@ -484,9 +616,11 @@ def _buy_funnel_provenance(buy_funnel: dict[str, Any]) -> dict[str, Any]:
             "submit_drought_critical"
             if classification.get("primary") == "SUBMIT_DROUGHT_CRITICAL"
             or "SUBMIT_DROUGHT_CRITICAL" in matches
-            else "not_submit_drought_critical"
-            if classification
-            else "buy_funnel_missing_or_unclassified"
+            else (
+                "not_submit_drought_critical"
+                if classification
+                else "buy_funnel_missing_or_unclassified"
+            )
         ),
     }
 
@@ -503,7 +637,11 @@ def _lineage_by_source_key(ledger: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 
 def _lineage_handoff_rows(ledger: dict[str, Any]) -> list[dict[str, Any]]:
-    rows = ledger.get("lineage_rows") if isinstance(ledger.get("lineage_rows"), list) else []
+    rows = (
+        ledger.get("lineage_rows")
+        if isinstance(ledger.get("lineage_rows"), list)
+        else []
+    )
     return [
         {
             "source_key_id": row.get("source_key_id"),
@@ -533,8 +671,14 @@ def _swing_proxy_candidates(target_date: str) -> list[dict[str, Any]]:
         payload = _load_json(path)
         if not payload:
             continue
-        summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
-        count = _safe_int(summary.get("candidate_count") or summary.get("approved_count") or summary.get("positive_source_count"))
+        summary = (
+            payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+        )
+        count = _safe_int(
+            summary.get("candidate_count")
+            or summary.get("approved_count")
+            or summary.get("positive_source_count")
+        )
         if count <= 0:
             continue
         candidates.append(
@@ -544,7 +688,9 @@ def _swing_proxy_candidates(target_date: str) -> list[dict[str, Any]]:
                 "source_key_type": "hypothesis",
                 "source_key_id": "bottom_rebound",
                 "parent_bucket_id": "bottom_rebound",
-                "primary_ev": _safe_float(summary.get("source_quality_adjusted_ev_pct")),
+                "primary_ev": _safe_float(
+                    summary.get("source_quality_adjusted_ev_pct")
+                ),
                 "sample": count,
                 "source_quality_state": "pass",
                 "sim_policy_state": "proxy_positive_source",
@@ -564,17 +710,39 @@ def build_conversion_lane(target_date: str) -> dict[str, Any]:
     key_ledger = _load_json(key_json_path)
     if not key_ledger:
         key_ledger = build_key_lineage_ledger(target_date)
-    lifecycle = _load_json(DATA_DIR / "report" / "lifecycle_bucket_discovery" / f"lifecycle_bucket_discovery_{target_date}.json")
-    swing_lifecycle = _load_json(
-        DATA_DIR / "report" / "swing_lifecycle_bucket_discovery" / f"swing_lifecycle_bucket_discovery_{target_date}.json"
+    lifecycle = _load_json(
+        DATA_DIR
+        / "report"
+        / "lifecycle_bucket_discovery"
+        / f"lifecycle_bucket_discovery_{target_date}.json"
     )
-    runtime_gap = _load_json(DATA_DIR / "report" / "runtime_apply_gap_audit" / f"runtime_apply_gap_audit_{target_date}.json")
-    buy_funnel = _load_json(DATA_DIR / "report" / "buy_funnel_sentinel" / f"buy_funnel_sentinel_{target_date}.json")
+    swing_lifecycle = _load_json(
+        DATA_DIR
+        / "report"
+        / "swing_lifecycle_bucket_discovery"
+        / f"swing_lifecycle_bucket_discovery_{target_date}.json"
+    )
+    runtime_gap = _load_json(
+        DATA_DIR
+        / "report"
+        / "runtime_apply_gap_audit"
+        / f"runtime_apply_gap_audit_{target_date}.json"
+    )
+    buy_funnel = _load_json(
+        DATA_DIR
+        / "report"
+        / "buy_funnel_sentinel"
+        / f"buy_funnel_sentinel_{target_date}.json"
+    )
 
     candidates = _candidates_from_lifecycle(lifecycle, "scalp")
     candidates.extend(_candidates_from_lifecycle(swing_lifecycle, "swing"))
     seen = {item["candidate_id"] for item in candidates}
-    seen_source_keys = {str(item.get("source_key_id") or "") for item in candidates if item.get("source_key_id")}
+    seen_source_keys = {
+        str(item.get("source_key_id") or "")
+        for item in candidates
+        if item.get("source_key_id")
+    }
     lineage_by_key = _lineage_by_source_key(key_ledger)
     for candidate in candidates:
         lineage = lineage_by_key.get(str(candidate.get("source_key_id") or ""))
@@ -586,7 +754,10 @@ def build_conversion_lane(target_date: str) -> dict[str, Any]:
         candidate = _candidate_from_runtime_gap(row)
         if candidate["candidate_id"] in seen:
             continue
-        if candidate.get("primary_ev") is not None or candidate.get("next_blocker") in {"source_quality", "bridge_contract"}:
+        if candidate.get("primary_ev") is not None or candidate.get("next_blocker") in {
+            "source_quality",
+            "bridge_contract",
+        }:
             candidates.append(candidate)
             seen.add(candidate["candidate_id"])
     for candidate in _swing_proxy_candidates(target_date):
@@ -609,7 +780,9 @@ def build_conversion_lane(target_date: str) -> dict[str, Any]:
 
     blockers: list[dict[str, Any]] = []
     for candidate in candidates:
-        blocker_class = _blocker_class(str(candidate.get("next_blocker") or ""), candidate)
+        blocker_class = _blocker_class(
+            str(candidate.get("next_blocker") or ""), candidate
+        )
         if candidate.get("conversion_state") != "bounded_real_canary_requestable":
             blockers.append(
                 _conversion_blocker(
@@ -645,7 +818,9 @@ def build_conversion_lane(target_date: str) -> dict[str, Any]:
     continuity_pass_ids = {
         str(row.get("source_key_id"))
         for row in key_ledger.get("lineage_rows") or []
-        if isinstance(row, dict) and row.get("same_key_continuity") == "pass" and row.get("source_key_id")
+        if isinstance(row, dict)
+        and row.get("same_key_continuity") == "pass"
+        and row.get("source_key_id")
     }
     real_queue = [
         item
@@ -654,9 +829,11 @@ def build_conversion_lane(target_date: str) -> dict[str, Any]:
         and (_safe_float(item.get("primary_ev"), 0.0) or 0.0) > 0
         and (
             item.get("conversion_state") == "bounded_real_canary_requestable"
-            or str(item.get("source_key_id") or item.get("candidate_id")) in continuity_pass_ids
+            or str(item.get("source_key_id") or item.get("candidate_id"))
+            in continuity_pass_ids
         )
-        and item.get("conversion_state") in {
+        and item.get("conversion_state")
+        in {
             "runtime_observed",
             "complete_parent_flow",
             "bridge_contract_ready",
@@ -668,51 +845,76 @@ def build_conversion_lane(target_date: str) -> dict[str, Any]:
             "candidate_id": row.get("source_key_id"),
             "source_key_type": row.get("source_key_type"),
             "conversion_state": row.get("conversion_state"),
-            "excluded_from_real_queue_reason": row.get("next_blocker") or "observation_priority_only",
+            "excluded_from_real_queue_reason": row.get("next_blocker")
+            or "observation_priority_only",
         }
         for row in key_ledger.get("lineage_rows") or []
         if isinstance(row, dict)
-        and str(row.get("source_key_type") or "") in {"active_seed", "active_arm", "hypothesis"}
+        and str(row.get("source_key_type") or "")
+        in {"active_seed", "active_arm", "hypothesis"}
         and str(row.get("conversion_state") or "") != "matched"
     ]
-    blocker_counts = Counter(str(item.get("blocker_class") or "unknown") for item in blockers)
-    blocker_axis_counts = Counter(str(item.get("blocker_axis") or "unknown") for item in blockers)
-    strategy_scope_counts = Counter(str(item.get("strategy_scope") or "unscoped") for item in candidates)
+    blocker_counts = Counter(
+        str(item.get("blocker_class") or "unknown") for item in blockers
+    )
+    blocker_axis_counts = Counter(
+        str(item.get("blocker_axis") or "unknown") for item in blockers
+    )
+    strategy_scope_counts = Counter(
+        str(item.get("strategy_scope") or "unscoped") for item in candidates
+    )
     submit_drought_axes = sorted(
         {
             str(item.get("blocker_axis"))
             for item in blockers
-            if item.get("blocker_class") == "submit_drought" and item.get("blocker_axis")
+            if item.get("blocker_class") == "submit_drought"
+            and item.get("blocker_axis")
         }
     )
     positive_ev_runtime_observed_count = sum(
-        1 for item in candidates if item.get("positive_ev_candidate") and item.get("runtime_observed_same_key")
+        1
+        for item in candidates
+        if item.get("positive_ev_candidate") and item.get("runtime_observed_same_key")
     )
-    positive_ev_real_conversion_queue_count = sum(1 for item in real_queue if item.get("positive_ev_candidate"))
+    positive_ev_real_conversion_queue_count = sum(
+        1 for item in real_queue if item.get("positive_ev_candidate")
+    )
     positive_ev_sample_floor_blocked_count = sum(
-        1 for item in candidates if item.get("positive_ev_candidate") and item.get("sample_floor_blocked")
+        1
+        for item in candidates
+        if item.get("positive_ev_candidate") and item.get("sample_floor_blocked")
     )
     positive_ev_sample_floor_unknown_floor_count = sum(
-        1 for item in candidates if item.get("positive_ev_candidate") and item.get("sample_floor_unknown_floor")
+        1
+        for item in candidates
+        if item.get("positive_ev_candidate") and item.get("sample_floor_unknown_floor")
     )
     positive_ev_sample_floor_related_count = (
-        positive_ev_sample_floor_blocked_count + positive_ev_sample_floor_unknown_floor_count
+        positive_ev_sample_floor_blocked_count
+        + positive_ev_sample_floor_unknown_floor_count
     )
     buy_funnel_provenance = _buy_funnel_provenance(buy_funnel)
     submit_drought_quote_freshness_subactions = (
-        buy_funnel_provenance.get("submit_drought_quote_freshness_subaction_counts") or {}
+        buy_funnel_provenance.get("submit_drought_quote_freshness_subaction_counts")
+        or {}
     )
     for blocker in blockers:
         if (
             blocker.get("blocker_class") == "submit_drought"
             and blocker.get("blocker_axis") == "LATENCY_PRE_SUBMIT"
         ):
-            blocker["quote_freshness_subaction_counts"] = submit_drought_quote_freshness_subactions
+            blocker["quote_freshness_subaction_counts"] = (
+                submit_drought_quote_freshness_subactions
+            )
             blocker["quote_freshness_source_only"] = True
-            blocker["next_repair_action"] = "close_submit_drought_latency_pre_submit_quote_freshness"
+            blocker["next_repair_action"] = (
+                "close_submit_drought_latency_pre_submit_quote_freshness"
+            )
     default_sample_floor_window_policy = _source_sample_floor_window_policy(lifecycle)
     sample_floor_window_counts = Counter(
-        str(item.get("sample_floor_window_policy") or default_sample_floor_window_policy)
+        str(
+            item.get("sample_floor_window_policy") or default_sample_floor_window_policy
+        )
         for item in candidates
         if item.get("positive_ev_candidate")
         and (item.get("sample_floor_blocked") or item.get("sample_floor_unknown_floor"))
@@ -720,43 +922,63 @@ def build_conversion_lane(target_date: str) -> dict[str, Any]:
     sample_floor_window_policy = (
         next(iter(sample_floor_window_counts))
         if len(sample_floor_window_counts) == 1
-        else "mixed_source_windows"
-        if sample_floor_window_counts
-        else default_sample_floor_window_policy
+        else (
+            "mixed_source_windows"
+            if sample_floor_window_counts
+            else default_sample_floor_window_policy
+        )
     )
     positive_ev_not_due_until_next_preopen_count = sum(
         1
         for item in candidates
         if item.get("positive_ev_candidate")
-        and item.get("runtime_observation_scope") == "new_postclose_candidate_not_due_until_next_preopen"
+        and item.get("runtime_observation_scope")
+        == "new_postclose_candidate_not_due_until_next_preopen"
     )
     positive_ev_previous_policy_natural_match_0_count = sum(
         1
         for item in candidates
         if item.get("positive_ev_candidate")
-        and item.get("runtime_observation_scope") == "previous_preopen_policy_natural_match_0"
+        and item.get("runtime_observation_scope")
+        == "previous_preopen_policy_natural_match_0"
     )
-    ldm_bucket_blockers = [item for item in blockers if item.get("blocker_class") != "submit_drought"]
-    top_blocker_by_count = blocker_counts.most_common(1)[0][0] if blocker_counts else None
+    ldm_bucket_blockers = [
+        item for item in blockers if item.get("blocker_class") != "submit_drought"
+    ]
+    top_blocker_by_count = (
+        blocker_counts.most_common(1)[0][0] if blocker_counts else None
+    )
     summary = {
         "conversion_candidate_count": len(candidates),
         "conversion_candidate_strategy_scope_counts": dict(strategy_scope_counts),
         "bounded_real_canary_requestable_count": sum(
-            1 for item in candidates if item.get("conversion_state") == "bounded_real_canary_requestable"
+            1
+            for item in candidates
+            if item.get("conversion_state") == "bounded_real_canary_requestable"
         ),
         "top_blocker_class": blockers[0]["blocker_class"] if blockers else None,
         "top_blocker_ranked_class": blockers[0]["blocker_class"] if blockers else None,
         "top_blocker_by_count_class": top_blocker_by_count,
-        "top_ldm_bucket_blocker_class": ldm_bucket_blockers[0]["blocker_class"] if ldm_bucket_blockers else None,
+        "top_ldm_bucket_blocker_class": (
+            ldm_bucket_blockers[0]["blocker_class"] if ldm_bucket_blockers else None
+        ),
         "submit_funnel_blocker_count": len(submit_drought_blockers),
         "submit_drought_is_ldm_bucket_blocker": False,
-        "scalp_conversion_candidate_count": sum(1 for item in candidates if item.get("strategy_scope") == "scalp"),
-        "swing_conversion_candidate_count": sum(1 for item in candidates if item.get("strategy_scope") == "swing"),
+        "scalp_conversion_candidate_count": sum(
+            1 for item in candidates if item.get("strategy_scope") == "scalp"
+        ),
+        "swing_conversion_candidate_count": sum(
+            1 for item in candidates if item.get("strategy_scope") == "swing"
+        ),
         "unscoped_conversion_candidate_count": sum(
-            1 for item in candidates if str(item.get("strategy_scope") or "") not in {"scalp", "swing"}
+            1
+            for item in candidates
+            if str(item.get("strategy_scope") or "") not in {"scalp", "swing"}
         ),
         "sim_priority_only_count": len(sim_priority_only),
-        "key_lineage_blocker_count": _safe_int((key_ledger.get("summary") or {}).get("lineage_blocker_count")),
+        "key_lineage_blocker_count": _safe_int(
+            (key_ledger.get("summary") or {}).get("lineage_blocker_count")
+        ),
         "real_conversion_queue_count": len(real_queue),
         "positive_ev_runtime_observed_count": positive_ev_runtime_observed_count,
         "positive_ev_real_conversion_queue_count": positive_ev_real_conversion_queue_count,
@@ -765,116 +987,160 @@ def build_conversion_lane(target_date: str) -> dict[str, Any]:
         "positive_ev_sample_floor_related_count": positive_ev_sample_floor_related_count,
         "positive_ev_sample_floor_count_scope": "conversion_candidates",
         "positive_ev_sample_floor_window_policy": sample_floor_window_policy,
-        "positive_ev_sample_floor_window_policy_counts": dict(sorted(sample_floor_window_counts.items())),
+        "positive_ev_sample_floor_window_policy_counts": dict(
+            sorted(sample_floor_window_counts.items())
+        ),
         "positive_ev_sample_floor_basis": "candidate_sample_vs_required_sample",
         "positive_ev_not_due_until_next_preopen_count": positive_ev_not_due_until_next_preopen_count,
         "positive_ev_previous_policy_natural_match_0_count": positive_ev_previous_policy_natural_match_0_count,
-        "active_sim_policy_observation_window_policy": (key_ledger.get("summary") or {}).get(
-            "active_sim_policy_observation_window_policy"
-        ),
+        "active_sim_policy_observation_window_policy": (
+            key_ledger.get("summary") or {}
+        ).get("active_sim_policy_observation_window_policy"),
         "active_sim_policy_event_count": _safe_int(
             (key_ledger.get("summary") or {}).get("active_sim_policy_event_count")
         ),
         "active_sim_policy_zero_count_event_count": _safe_int(
-            (key_ledger.get("summary") or {}).get("active_sim_policy_zero_count_event_count")
+            (key_ledger.get("summary") or {}).get(
+                "active_sim_policy_zero_count_event_count"
+            )
         ),
         "active_sim_policy_positive_count_event_count": _safe_int(
-            (key_ledger.get("summary") or {}).get("active_sim_policy_positive_count_event_count")
+            (key_ledger.get("summary") or {}).get(
+                "active_sim_policy_positive_count_event_count"
+            )
         ),
         "active_sim_policy_active_seed_id_without_count_event_count": _safe_int(
-            (key_ledger.get("summary") or {}).get("active_sim_policy_active_seed_id_without_count_event_count")
+            (key_ledger.get("summary") or {}).get(
+                "active_sim_policy_active_seed_id_without_count_event_count"
+            )
         ),
         "active_sim_policy_zero_count_effect_excluded": bool(
-            (key_ledger.get("summary") or {}).get("active_sim_policy_zero_count_effect_excluded")
+            (key_ledger.get("summary") or {}).get(
+                "active_sim_policy_zero_count_effect_excluded"
+            )
         ),
-        "active_sim_priority_entry_source_taxonomy_contract_counts": (key_ledger.get("summary") or {}).get(
-            "active_sim_priority_entry_source_taxonomy_contract_counts"
-        )
+        "active_sim_priority_entry_source_taxonomy_contract_counts": (
+            key_ledger.get("summary") or {}
+        ).get("active_sim_priority_entry_source_taxonomy_contract_counts")
         or {},
         "active_sim_priority_pending_taxonomy_contract_count": _safe_int(
-            (key_ledger.get("summary") or {}).get("active_sim_priority_pending_taxonomy_contract_count")
+            (key_ledger.get("summary") or {}).get(
+                "active_sim_priority_pending_taxonomy_contract_count"
+            )
         ),
         "active_seed_candidate_event_count": _safe_int(
             (key_ledger.get("summary") or {}).get("active_seed_candidate_event_count")
         ),
         "active_seed_candidate_new_entry_event_count": _safe_int(
-            (key_ledger.get("summary") or {}).get("active_seed_candidate_new_entry_event_count")
+            (key_ledger.get("summary") or {}).get(
+                "active_seed_candidate_new_entry_event_count"
+            )
         ),
         "active_seed_candidate_followup_event_count": _safe_int(
-            (key_ledger.get("summary") or {}).get("active_seed_candidate_followup_event_count")
+            (key_ledger.get("summary") or {}).get(
+                "active_seed_candidate_followup_event_count"
+            )
         ),
         "active_seed_candidate_matched_event_count": _safe_int(
-            (key_ledger.get("summary") or {}).get("active_seed_candidate_matched_event_count")
+            (key_ledger.get("summary") or {}).get(
+                "active_seed_candidate_matched_event_count"
+            )
         ),
         "active_seed_candidate_matched_true_without_seed_id_event_count": _safe_int(
-            (key_ledger.get("summary") or {}).get("active_seed_candidate_matched_true_without_seed_id_event_count")
+            (key_ledger.get("summary") or {}).get(
+                "active_seed_candidate_matched_true_without_seed_id_event_count"
+            )
         ),
         "active_seed_candidate_unmatched_event_count": _safe_int(
-            (key_ledger.get("summary") or {}).get("active_seed_candidate_unmatched_event_count")
+            (key_ledger.get("summary") or {}).get(
+                "active_seed_candidate_unmatched_event_count"
+            )
         ),
         "active_seed_candidate_new_entry_unmatched_event_count": _safe_int(
-            (key_ledger.get("summary") or {}).get("active_seed_candidate_new_entry_unmatched_event_count")
+            (key_ledger.get("summary") or {}).get(
+                "active_seed_candidate_new_entry_unmatched_event_count"
+            )
         ),
         "active_seed_candidate_followup_unmatched_event_count": _safe_int(
-            (key_ledger.get("summary") or {}).get("active_seed_candidate_followup_unmatched_event_count")
+            (key_ledger.get("summary") or {}).get(
+                "active_seed_candidate_followup_unmatched_event_count"
+            )
         ),
         "active_seed_candidate_without_seed_id_event_count": _safe_int(
-            (key_ledger.get("summary") or {}).get("active_seed_candidate_without_seed_id_event_count")
+            (key_ledger.get("summary") or {}).get(
+                "active_seed_candidate_without_seed_id_event_count"
+            )
         ),
         "active_seed_candidate_raw_without_seed_id_event_count": _safe_int(
-            (key_ledger.get("summary") or {}).get("active_seed_candidate_raw_without_seed_id_event_count")
+            (key_ledger.get("summary") or {}).get(
+                "active_seed_candidate_raw_without_seed_id_event_count"
+            )
         ),
         "active_seed_candidate_followup_without_seed_id_event_count": _safe_int(
-            (key_ledger.get("summary") or {}).get("active_seed_candidate_followup_without_seed_id_event_count")
+            (key_ledger.get("summary") or {}).get(
+                "active_seed_candidate_followup_without_seed_id_event_count"
+            )
         ),
         "active_seed_candidate_raw_followup_without_seed_id_event_count": _safe_int(
-            (key_ledger.get("summary") or {}).get("active_seed_candidate_raw_followup_without_seed_id_event_count")
+            (key_ledger.get("summary") or {}).get(
+                "active_seed_candidate_raw_followup_without_seed_id_event_count"
+            )
         ),
         "active_seed_candidate_eligible_event_count": _safe_int(
-            (key_ledger.get("summary") or {}).get("active_seed_candidate_eligible_event_count")
+            (key_ledger.get("summary") or {}).get(
+                "active_seed_candidate_eligible_event_count"
+            )
         ),
         "active_seed_candidate_not_match_eligible_event_count": _safe_int(
-            (key_ledger.get("summary") or {}).get("active_seed_candidate_not_match_eligible_event_count")
+            (key_ledger.get("summary") or {}).get(
+                "active_seed_candidate_not_match_eligible_event_count"
+            )
         ),
-        "active_seed_candidate_not_match_eligible_reason_counts": (key_ledger.get("summary") or {}).get(
-            "active_seed_candidate_not_match_eligible_reason_counts"
-        )
+        "active_seed_candidate_not_match_eligible_reason_counts": (
+            key_ledger.get("summary") or {}
+        ).get("active_seed_candidate_not_match_eligible_reason_counts")
         or {},
-        "active_seed_candidate_without_seed_id_reason_counts": (key_ledger.get("summary") or {}).get(
-            "active_seed_candidate_without_seed_id_reason_counts"
-        )
+        "active_seed_candidate_without_seed_id_reason_counts": (
+            key_ledger.get("summary") or {}
+        ).get("active_seed_candidate_without_seed_id_reason_counts")
         or {},
-        "active_seed_candidate_without_seed_id_detail_counts": (key_ledger.get("summary") or {}).get(
-            "active_seed_candidate_without_seed_id_detail_counts"
-        )
+        "active_seed_candidate_without_seed_id_detail_counts": (
+            key_ledger.get("summary") or {}
+        ).get("active_seed_candidate_without_seed_id_detail_counts")
         or {},
         "active_seed_candidate_inferred_parent_seed_id_event_count": _safe_int(
-            (key_ledger.get("summary") or {}).get("active_seed_candidate_inferred_parent_seed_id_event_count")
+            (key_ledger.get("summary") or {}).get(
+                "active_seed_candidate_inferred_parent_seed_id_event_count"
+            )
         ),
-        "active_seed_candidate_inferred_parent_seed_id_stage_counts": (key_ledger.get("summary") or {}).get(
-            "active_seed_candidate_inferred_parent_seed_id_stage_counts"
-        )
+        "active_seed_candidate_inferred_parent_seed_id_stage_counts": (
+            key_ledger.get("summary") or {}
+        ).get("active_seed_candidate_inferred_parent_seed_id_stage_counts")
         or {},
-        "active_seed_candidate_inferred_parent_seed_id_prefix_counts": (key_ledger.get("summary") or {}).get(
-            "active_seed_candidate_inferred_parent_seed_id_prefix_counts"
-        )
+        "active_seed_candidate_inferred_parent_seed_id_prefix_counts": (
+            key_ledger.get("summary") or {}
+        ).get("active_seed_candidate_inferred_parent_seed_id_prefix_counts")
         or {},
         "active_seed_candidate_ambiguous_parent_seed_prefix_event_count": _safe_int(
-            (key_ledger.get("summary") or {}).get("active_seed_candidate_ambiguous_parent_seed_prefix_event_count")
+            (key_ledger.get("summary") or {}).get(
+                "active_seed_candidate_ambiguous_parent_seed_prefix_event_count"
+            )
         ),
-        "active_seed_candidate_missing_parent_seed_lookup_key_counts": (key_ledger.get("summary") or {}).get(
-            "active_seed_candidate_missing_parent_seed_lookup_key_counts"
-        )
+        "active_seed_candidate_missing_parent_seed_lookup_key_counts": (
+            key_ledger.get("summary") or {}
+        ).get("active_seed_candidate_missing_parent_seed_lookup_key_counts")
         or {},
-        "active_seed_candidate_missing_parent_seed_stage_counts": (key_ledger.get("summary") or {}).get(
-            "active_seed_candidate_missing_parent_seed_stage_counts"
-        )
+        "active_seed_candidate_missing_parent_seed_stage_counts": (
+            key_ledger.get("summary") or {}
+        ).get("active_seed_candidate_missing_parent_seed_stage_counts")
         or {},
-        "active_seed_candidate_lineage_closure_status": (key_ledger.get("summary") or {}).get(
-            "active_seed_candidate_lineage_closure_status"
-        ),
+        "active_seed_candidate_lineage_closure_status": (
+            key_ledger.get("summary") or {}
+        ).get("active_seed_candidate_lineage_closure_status"),
         "active_seed_candidate_lineage_followup_required": bool(
-            (key_ledger.get("summary") or {}).get("active_seed_candidate_lineage_followup_required")
+            (key_ledger.get("summary") or {}).get(
+                "active_seed_candidate_lineage_followup_required"
+            )
         ),
         "active_seed_candidate_validation_scope": (key_ledger.get("summary") or {}).get(
             "active_seed_candidate_validation_scope"
@@ -883,7 +1149,9 @@ def build_conversion_lane(target_date: str) -> dict[str, Any]:
             (key_ledger.get("summary") or {}).get("panic_scale_in_event_count")
         ),
         "panic_scale_in_unique_sim_record_count": _safe_int(
-            (key_ledger.get("summary") or {}).get("panic_scale_in_unique_sim_record_count")
+            (key_ledger.get("summary") or {}).get(
+                "panic_scale_in_unique_sim_record_count"
+            )
         ),
         "panic_scale_in_match_status_counts": (key_ledger.get("summary") or {}).get(
             "panic_scale_in_match_status_counts"
@@ -893,17 +1161,23 @@ def build_conversion_lane(target_date: str) -> dict[str, Any]:
             (key_ledger.get("summary") or {}).get("panic_scale_in_no_match_event_count")
         ),
         "panic_scale_in_no_match_unique_sim_record_count": _safe_int(
-            (key_ledger.get("summary") or {}).get("panic_scale_in_no_match_unique_sim_record_count")
+            (key_ledger.get("summary") or {}).get(
+                "panic_scale_in_no_match_unique_sim_record_count"
+            )
         ),
         "panic_scale_in_no_match_missing_sim_record_id_event_count": _safe_int(
-            (key_ledger.get("summary") or {}).get("panic_scale_in_no_match_missing_sim_record_id_event_count")
+            (key_ledger.get("summary") or {}).get(
+                "panic_scale_in_no_match_missing_sim_record_id_event_count"
+            )
         ),
         "panic_scale_in_no_match_repeated_followup_event_count": _safe_int(
-            (key_ledger.get("summary") or {}).get("panic_scale_in_no_match_repeated_followup_event_count")
+            (key_ledger.get("summary") or {}).get(
+                "panic_scale_in_no_match_repeated_followup_event_count"
+            )
         ),
-        "panic_scale_in_no_match_source_stage_counts": (key_ledger.get("summary") or {}).get(
-            "panic_scale_in_no_match_source_stage_counts"
-        )
+        "panic_scale_in_no_match_source_stage_counts": (
+            key_ledger.get("summary") or {}
+        ).get("panic_scale_in_no_match_source_stage_counts")
         or {},
         "panic_scale_in_no_match_count_scope": (key_ledger.get("summary") or {}).get(
             "panic_scale_in_no_match_count_scope"
@@ -913,7 +1187,8 @@ def build_conversion_lane(target_date: str) -> dict[str, Any]:
         "blocker_axis_counts": dict(blocker_axis_counts),
         "submit_drought_closure_axis_count": len(submit_drought_axes),
         "submit_drought_closure_axes": submit_drought_axes,
-        "submit_drought_split_complete": set(submit_drought_axes) == set(SUBMIT_DROUGHT_CLOSURE_AXES),
+        "submit_drought_split_complete": set(submit_drought_axes)
+        == set(SUBMIT_DROUGHT_CLOSURE_AXES),
         **buy_funnel_provenance,
     }
     return {
@@ -935,8 +1210,16 @@ def build_conversion_lane(target_date: str) -> dict[str, Any]:
 
 def _render_markdown(report: dict[str, Any]) -> str:
     summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
-    blockers = report.get("conversion_blocker_rank") if isinstance(report.get("conversion_blocker_rank"), list) else []
-    queue = report.get("real_conversion_queue") if isinstance(report.get("real_conversion_queue"), list) else []
+    blockers = (
+        report.get("conversion_blocker_rank")
+        if isinstance(report.get("conversion_blocker_rank"), list)
+        else []
+    )
+    queue = (
+        report.get("real_conversion_queue")
+        if isinstance(report.get("real_conversion_queue"), list)
+        else []
+    )
     lines = [
         f"# Conversion Lane - {report.get('date')}",
         "",
@@ -1025,7 +1308,10 @@ def _render_markdown(report: dict[str, Any]) -> str:
 def write_conversion_lane(report: dict[str, Any]) -> tuple[Path, Path]:
     json_path, md_path = report_paths(str(report.get("date")))
     json_path.parent.mkdir(parents=True, exist_ok=True)
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
     md_path.write_text(_render_markdown(report), encoding="utf-8")
     return json_path, md_path
 
@@ -1036,7 +1322,12 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     report = build_conversion_lane(args.date)
     json_path, md_path = write_conversion_lane(report)
-    print(json.dumps({"json": str(json_path), "md": str(md_path), "summary": report["summary"]}, ensure_ascii=False))
+    print(
+        json.dumps(
+            {"json": str(json_path), "md": str(md_path), "summary": report["summary"]},
+            ensure_ascii=False,
+        )
+    )
     return 0
 
 

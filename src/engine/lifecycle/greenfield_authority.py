@@ -14,7 +14,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-
 ENABLED_ENV = "KORSTOCKSCAN_GREENFIELD_REAL_ENV_AUTHORITY_ENABLED"
 SCOPE_ENV = "KORSTOCKSCAN_GREENFIELD_REAL_ENV_AUTHORITY_SCOPE"
 POLICY_FILE_ENV = "KORSTOCKSCAN_GREENFIELD_REAL_ENV_AUTHORITY_POLICY_FILE"
@@ -129,7 +128,11 @@ def _entry_bucket_parts_from_slug(bucket_key: str) -> dict[str, str]:
     ]
     positions: list[tuple[int, str, str]] = []
     for key, marker in markers:
-        idx = text.find(marker) if marker.startswith("_") else (0 if text.startswith(marker) else -1)
+        idx = (
+            text.find(marker)
+            if marker.startswith("_")
+            else (0 if text.startswith(marker) else -1)
+        )
         if idx >= 0:
             positions.append((idx, key, marker))
     positions.sort()
@@ -143,12 +146,16 @@ def _entry_bucket_parts_from_slug(bucket_key: str) -> dict[str, str]:
     return parts
 
 
-def format_lifecycle_bucket_label(bucket_id: str | None, *, stage: str | None = None) -> str:
+def format_lifecycle_bucket_label(
+    bucket_id: str | None, *, stage: str | None = None
+) -> str:
     """Return a readable label while preserving raw bucket IDs elsewhere."""
     if not bucket_id or str(bucket_id).strip() in {"", "-"}:
         return "candidate bucket instrumentation gap"
     stage_name = str(stage or "").strip().lower()
-    if stage_name in {"", "entry"} and str(bucket_id).startswith("entry:combo_entry_spot:"):
+    if stage_name in {"", "entry"} and str(bucket_id).startswith(
+        "entry:combo_entry_spot:"
+    ):
         parts = _entry_bucket_parts(str(bucket_id))
         if not parts:
             return "candidate bucket instrumentation gap"
@@ -163,8 +170,16 @@ def format_lifecycle_bucket_label(bucket_id: str | None, *, stage: str | None = 
 
 
 def format_greenfield_bucket_notice_line(decision: GreenfieldDecision) -> str:
-    observed = decision.observed_bucket_id if decision.observed_bucket_id not in {"", "-"} else "-"
-    policy = decision.matched_bucket_id if decision.matched_bucket_id not in {"", "-"} else "-"
+    observed = (
+        decision.observed_bucket_id
+        if decision.observed_bucket_id not in {"", "-"}
+        else "-"
+    )
+    policy = (
+        decision.matched_bucket_id
+        if decision.matched_bucket_id not in {"", "-"}
+        else "-"
+    )
     observed_label = format_lifecycle_bucket_label(observed, stage=decision.stage)
     policy_label = format_lifecycle_bucket_label(policy, stage=decision.stage)
     status = (
@@ -200,7 +215,10 @@ def _read_policy(path: str) -> dict[str, Any]:
 def greenfield_authority_active() -> bool:
     if not _bool_env(ENABLED_ENV, False):
         return False
-    return str(os.getenv(SCOPE_ENV, FULL_LIFECYCLE_SCOPE) or "").strip() == FULL_LIFECYCLE_SCOPE
+    return (
+        str(os.getenv(SCOPE_ENV, FULL_LIFECYCLE_SCOPE) or "").strip()
+        == FULL_LIFECYCLE_SCOPE
+    )
 
 
 def greenfield_stage_telegram_enabled() -> bool:
@@ -246,7 +264,9 @@ def _stage_rows(policy: dict[str, Any], stage: str) -> list[dict[str, Any]]:
     rows = stages.get(stage)
     if isinstance(rows, list):
         return [row for row in rows if isinstance(row, dict)]
-    allowlist = policy.get("allowlist") if isinstance(policy.get("allowlist"), list) else []
+    allowlist = (
+        policy.get("allowlist") if isinstance(policy.get("allowlist"), list) else []
+    )
     return [
         row
         for row in allowlist
@@ -255,18 +275,30 @@ def _stage_rows(policy: dict[str, Any], stage: str) -> list[dict[str, Any]]:
 
 
 def _stage_has_baseline_passthrough(policy: dict[str, Any], stage: str) -> bool:
-    stage_contract = policy.get("stage_contract") if isinstance(policy.get("stage_contract"), dict) else {}
-    contract = stage_contract.get(stage) if isinstance(stage_contract.get(stage), dict) else {}
-    if bool(contract.get("baseline_passthrough") or contract.get("baseline_passthrough_allowed")):
+    stage_contract = (
+        policy.get("stage_contract")
+        if isinstance(policy.get("stage_contract"), dict)
+        else {}
+    )
+    contract = (
+        stage_contract.get(stage) if isinstance(stage_contract.get(stage), dict) else {}
+    )
+    if bool(
+        contract.get("baseline_passthrough")
+        or contract.get("baseline_passthrough_allowed")
+    ):
         return True
     return any(
         bool(row.get("baseline_passthrough"))
-        or str(row.get("authority_mode") or "").strip().lower() == "baseline_passthrough"
+        or str(row.get("authority_mode") or "").strip().lower()
+        == "baseline_passthrough"
         for row in _stage_rows(policy, stage)
     )
 
 
-def validate_greenfield_policy_contract(policy: dict[str, Any], *, expected_version: str | None = None) -> str:
+def validate_greenfield_policy_contract(
+    policy: dict[str, Any], *, expected_version: str | None = None
+) -> str:
     if not policy:
         return "greenfield_policy_file_invalid"
     if str(policy.get("scope") or "") != FULL_LIFECYCLE_SCOPE:
@@ -274,7 +306,9 @@ def validate_greenfield_policy_contract(policy: dict[str, Any], *, expected_vers
     policy_version = str(policy.get("policy_version") or policy.get("version") or "")
     if expected_version and policy_version and expected_version != policy_version:
         return "greenfield_policy_version_mismatch"
-    allowlist = policy.get("allowlist") if isinstance(policy.get("allowlist"), list) else []
+    allowlist = (
+        policy.get("allowlist") if isinstance(policy.get("allowlist"), list) else []
+    )
     if not allowlist:
         return "greenfield_policy_allowlist_empty"
     for row in allowlist:
@@ -309,9 +343,16 @@ def evaluate_greenfield_authority(
     policy_file = str(os.getenv(POLICY_FILE_ENV, "") or "")
     policy_version = str(os.getenv(POLICY_VERSION_ENV, "") or "")
     if not _bool_env(ENABLED_ENV, False):
-        return GreenfieldDecision(False, True, stage_name, action_name, "greenfield_inactive")
-    if str(os.getenv(SCOPE_ENV, FULL_LIFECYCLE_SCOPE) or "").strip() != FULL_LIFECYCLE_SCOPE:
-        return GreenfieldDecision(False, True, stage_name, action_name, "greenfield_scope_not_full_lifecycle")
+        return GreenfieldDecision(
+            False, True, stage_name, action_name, "greenfield_inactive"
+        )
+    if (
+        str(os.getenv(SCOPE_ENV, FULL_LIFECYCLE_SCOPE) or "").strip()
+        != FULL_LIFECYCLE_SCOPE
+    ):
+        return GreenfieldDecision(
+            False, True, stage_name, action_name, "greenfield_scope_not_full_lifecycle"
+        )
     if hard_safety:
         return GreenfieldDecision(
             True,
@@ -334,7 +375,9 @@ def evaluate_greenfield_authority(
             policy_version or "-",
             policy_file or "-",
         )
-    policy_version = policy_version or str(policy.get("policy_version") or policy.get("version") or "-")
+    policy_version = policy_version or str(
+        policy.get("policy_version") or policy.get("version") or "-"
+    )
     contract_issue = validate_greenfield_policy_contract(
         policy,
         expected_version=policy_version if policy_version != "-" else None,

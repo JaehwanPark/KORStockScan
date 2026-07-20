@@ -23,7 +23,6 @@ from sqlalchemy import create_engine, text
 
 from src.utils.constants import DATA_DIR, POSTGRES_URL
 
-
 REPORT_TYPE = "bottom_rebound_pattern_research"
 SCHEMA_VERSION = "bottom_rebound_pattern_research_v1"
 DECISION_AUTHORITY = "research_only"
@@ -141,22 +140,33 @@ def _load_quote_frame(
     as_of: str | None = None,
     history_start: str | None = None,
 ) -> tuple[pd.DataFrame, str, str | None]:
-    engine = create_engine(db_url, pool_pre_ping=True, connect_args={"connect_timeout": 5})
+    engine = create_engine(
+        db_url, pool_pre_ping=True, connect_args={"connect_timeout": 5}
+    )
     with engine.connect() as conn:
-        bounds = conn.execute(
-            text("SELECT min(quote_date) AS min_date, max(quote_date) AS max_date FROM daily_stock_quotes")
-        ).mappings().one()
+        bounds = (
+            conn.execute(
+                text(
+                    "SELECT min(quote_date) AS min_date, max(quote_date) AS max_date FROM daily_stock_quotes"
+                )
+            )
+            .mappings()
+            .one()
+        )
         if bounds["max_date"] is None:
             return pd.DataFrame(), date.today().isoformat(), history_start
-        effective_as_of = min(pd.Timestamp(as_of).date(), bounds["max_date"]) if as_of else bounds["max_date"]
+        effective_as_of = (
+            min(pd.Timestamp(as_of).date(), bounds["max_date"])
+            if as_of
+            else bounds["max_date"]
+        )
         effective_start = (
             max(pd.Timestamp(history_start).date(), bounds["min_date"])
             if history_start
             else bounds["min_date"]
         )
         frame = pd.read_sql(
-            text(
-                """
+            text("""
                 SELECT quote_date, stock_code, stock_name, open_price, high_price, low_price,
                        close_price, volume, ma5, ma20, ma60, ma120, rsi, bbl, bbm, bbu, bbb,
                        bbp, vwap, atr, foreign_net, inst_net, margin_rate, marcap
@@ -168,15 +178,16 @@ def _load_quote_frame(
                   AND high_price > 0
                   AND low_price > 0
                   AND close_price > 0
-                """
-            ),
+                """),
             conn,
             params={"start_date": effective_start, "as_of": effective_as_of},
         )
     return frame, effective_as_of.isoformat(), effective_start.isoformat()
 
 
-def prepare_feature_frame(raw: pd.DataFrame, config: ResearchConfig | None = None) -> pd.DataFrame:
+def prepare_feature_frame(
+    raw: pd.DataFrame, config: ResearchConfig | None = None
+) -> pd.DataFrame:
     """Create signal-day features plus forward columns reserved for labeling.
 
     Candidate marking consumes only same-day and prior-derived columns. The
@@ -188,7 +199,9 @@ def prepare_feature_frame(raw: pd.DataFrame, config: ResearchConfig | None = Non
         return pd.DataFrame()
     df = raw.copy()
     df["quote_date"] = pd.to_datetime(df["quote_date"], errors="coerce").dt.normalize()
-    df["stock_code"] = df["stock_code"].astype(str).str.replace(r"\.0$", "", regex=True).str.zfill(6)
+    df["stock_code"] = (
+        df["stock_code"].astype(str).str.replace(r"\.0$", "", regex=True).str.zfill(6)
+    )
     if "stock_name" not in df.columns:
         df["stock_name"] = ""
     numeric_cols = [
@@ -214,72 +227,171 @@ def prepare_feature_frame(raw: pd.DataFrame, config: ResearchConfig | None = Non
         if col not in df.columns:
             df[col] = np.nan
         df[col] = pd.to_numeric(df[col], errors="coerce")
-    df = df.dropna(subset=["quote_date", "stock_code", "open_price", "high_price", "low_price", "close_price"])
-    df = df[(df["open_price"] > 0) & (df["high_price"] > 0) & (df["low_price"] > 0) & (df["close_price"] > 0)]
+    df = df.dropna(
+        subset=[
+            "quote_date",
+            "stock_code",
+            "open_price",
+            "high_price",
+            "low_price",
+            "close_price",
+        ]
+    )
+    df = df[
+        (df["open_price"] > 0)
+        & (df["high_price"] > 0)
+        & (df["low_price"] > 0)
+        & (df["close_price"] > 0)
+    ]
     df = df[_normal_stock_mask(df["stock_name"])].copy()
     df = df.sort_values(["stock_code", "quote_date"]).reset_index(drop=True)
     grouped = df.groupby("stock_code", group_keys=False)
 
     typical = (df["high_price"] + df["low_price"] + df["close_price"]) / 3.0
     df["traded_value"] = df["close_price"] * df["volume"].fillna(0.0)
-    df["vwap20_calc"] = (
-        (typical * df["volume"]).groupby(df["stock_code"]).rolling(20, min_periods=5).sum().reset_index(level=0, drop=True)
-        / (grouped["volume"].rolling(20, min_periods=5).sum().reset_index(level=0, drop=True) + 1e-9)
+    df["vwap20_calc"] = (typical * df["volume"]).groupby(df["stock_code"]).rolling(
+        20, min_periods=5
+    ).sum().reset_index(level=0, drop=True) / (
+        grouped["volume"]
+        .rolling(20, min_periods=5)
+        .sum()
+        .reset_index(level=0, drop=True)
+        + 1e-9
     )
     df["vwap_effective"] = df["vwap"].where(df["vwap"] > 0, df["vwap20_calc"])
 
     for length in (5, 20, 60, 120):
         ma_col = f"ma{length}"
         calc_col = f"{ma_col}_calc"
-        df[calc_col] = grouped["close_price"].rolling(length, min_periods=max(2, min(length, 5))).mean().reset_index(level=0, drop=True)
+        df[calc_col] = (
+            grouped["close_price"]
+            .rolling(length, min_periods=max(2, min(length, 5)))
+            .mean()
+            .reset_index(level=0, drop=True)
+        )
         df[ma_col] = df[ma_col].where(df[ma_col] > 0, df[calc_col])
 
-    df["high20"] = grouped["high_price"].rolling(20, min_periods=20).max().reset_index(level=0, drop=True)
-    df["high60"] = grouped["high_price"].rolling(60, min_periods=60).max().reset_index(level=0, drop=True)
-    df["high120"] = grouped["high_price"].rolling(120, min_periods=120).max().reset_index(level=0, drop=True)
-    df["low20"] = grouped["low_price"].rolling(20, min_periods=20).min().reset_index(level=0, drop=True)
-    df["low60"] = grouped["low_price"].rolling(60, min_periods=60).min().reset_index(level=0, drop=True)
-    df["median_volume20"] = grouped["volume"].rolling(20, min_periods=20).median().reset_index(level=0, drop=True)
-    df["median_value20"] = grouped["traded_value"].rolling(20, min_periods=20).median().reset_index(level=0, drop=True)
+    df["high20"] = (
+        grouped["high_price"]
+        .rolling(20, min_periods=20)
+        .max()
+        .reset_index(level=0, drop=True)
+    )
+    df["high60"] = (
+        grouped["high_price"]
+        .rolling(60, min_periods=60)
+        .max()
+        .reset_index(level=0, drop=True)
+    )
+    df["high120"] = (
+        grouped["high_price"]
+        .rolling(120, min_periods=120)
+        .max()
+        .reset_index(level=0, drop=True)
+    )
+    df["low20"] = (
+        grouped["low_price"]
+        .rolling(20, min_periods=20)
+        .min()
+        .reset_index(level=0, drop=True)
+    )
+    df["low60"] = (
+        grouped["low_price"]
+        .rolling(60, min_periods=60)
+        .min()
+        .reset_index(level=0, drop=True)
+    )
+    df["median_volume20"] = (
+        grouped["volume"]
+        .rolling(20, min_periods=20)
+        .median()
+        .reset_index(level=0, drop=True)
+    )
+    df["median_value20"] = (
+        grouped["traded_value"]
+        .rolling(20, min_periods=20)
+        .median()
+        .reset_index(level=0, drop=True)
+    )
     df["history_count"] = grouped.cumcount() + 1
 
     df["return_1d_pct"] = grouped["close_price"].pct_change() * 100.0
     df["return_20d_pct"] = grouped["close_price"].pct_change(20) * 100.0
-    df["drawdown_high20_pct"] = (df["close_price"] / (df["high20"] + 1e-9) - 1.0) * 100.0
-    df["drawdown_high60_pct"] = (df["close_price"] / (df["high60"] + 1e-9) - 1.0) * 100.0
-    df["drawdown_high120_pct"] = (df["close_price"] / (df["high120"] + 1e-9) - 1.0) * 100.0
+    df["drawdown_high20_pct"] = (
+        df["close_price"] / (df["high20"] + 1e-9) - 1.0
+    ) * 100.0
+    df["drawdown_high60_pct"] = (
+        df["close_price"] / (df["high60"] + 1e-9) - 1.0
+    ) * 100.0
+    df["drawdown_high120_pct"] = (
+        df["close_price"] / (df["high120"] + 1e-9) - 1.0
+    ) * 100.0
     df["dist_low20_pct"] = (df["close_price"] / (df["low20"] + 1e-9) - 1.0) * 100.0
     df["dist_low60_pct"] = (df["close_price"] / (df["low60"] + 1e-9) - 1.0) * 100.0
-    df["low_compression20_pct"] = ((df["high20"] - df["low20"]) / (df["close_price"] + 1e-9)) * 100.0
+    df["low_compression20_pct"] = (
+        (df["high20"] - df["low20"]) / (df["close_price"] + 1e-9)
+    ) * 100.0
     df["volume_ratio20"] = df["volume"] / (df["median_volume20"] + 1e-9)
     df["turnover_shock20"] = df["traded_value"] / (df["median_value20"] + 1e-9)
-    df["vwap_distance_pct"] = (df["close_price"] / (df["vwap_effective"] + 1e-9) - 1.0) * 100.0
+    df["vwap_distance_pct"] = (
+        df["close_price"] / (df["vwap_effective"] + 1e-9) - 1.0
+    ) * 100.0
     df["ma5_distance_pct"] = (df["close_price"] / (df["ma5"] + 1e-9) - 1.0) * 100.0
     df["ma20_distance_pct"] = (df["close_price"] / (df["ma20"] + 1e-9) - 1.0) * 100.0
     df["ma60_distance_pct"] = (df["close_price"] / (df["ma60"] + 1e-9) - 1.0) * 100.0
     df["ma120_distance_pct"] = (df["close_price"] / (df["ma120"] + 1e-9) - 1.0) * 100.0
     df["ma5_slope5_pct"] = grouped["ma5"].pct_change(5) * 100.0
     df["ma20_slope5_pct"] = grouped["ma20"].pct_change(5) * 100.0
-    df["foreign_roll5_ratio"] = grouped["foreign_net"].rolling(5, min_periods=3).sum().reset_index(level=0, drop=True) / (
-        grouped["volume"].rolling(5, min_periods=3).sum().reset_index(level=0, drop=True) + 1e-9
+    df["foreign_roll5_ratio"] = grouped["foreign_net"].rolling(
+        5, min_periods=3
+    ).sum().reset_index(level=0, drop=True) / (
+        grouped["volume"]
+        .rolling(5, min_periods=3)
+        .sum()
+        .reset_index(level=0, drop=True)
+        + 1e-9
     )
-    df["foreign_roll20_ratio"] = grouped["foreign_net"].rolling(20, min_periods=10).sum().reset_index(level=0, drop=True) / (
-        grouped["volume"].rolling(20, min_periods=10).sum().reset_index(level=0, drop=True) + 1e-9
+    df["foreign_roll20_ratio"] = grouped["foreign_net"].rolling(
+        20, min_periods=10
+    ).sum().reset_index(level=0, drop=True) / (
+        grouped["volume"]
+        .rolling(20, min_periods=10)
+        .sum()
+        .reset_index(level=0, drop=True)
+        + 1e-9
     )
-    df["inst_roll5_ratio"] = grouped["inst_net"].rolling(5, min_periods=3).sum().reset_index(level=0, drop=True) / (
-        grouped["volume"].rolling(5, min_periods=3).sum().reset_index(level=0, drop=True) + 1e-9
+    df["inst_roll5_ratio"] = grouped["inst_net"].rolling(
+        5, min_periods=3
+    ).sum().reset_index(level=0, drop=True) / (
+        grouped["volume"]
+        .rolling(5, min_periods=3)
+        .sum()
+        .reset_index(level=0, drop=True)
+        + 1e-9
     )
-    df["inst_roll20_ratio"] = grouped["inst_net"].rolling(20, min_periods=10).sum().reset_index(level=0, drop=True) / (
-        grouped["volume"].rolling(20, min_periods=10).sum().reset_index(level=0, drop=True) + 1e-9
+    df["inst_roll20_ratio"] = grouped["inst_net"].rolling(
+        20, min_periods=10
+    ).sum().reset_index(level=0, drop=True) / (
+        grouped["volume"]
+        .rolling(20, min_periods=10)
+        .sum()
+        .reset_index(level=0, drop=True)
+        + 1e-9
     )
-    df["foreign_net_accel"] = grouped["foreign_net"].transform(lambda s: s.ewm(span=5, adjust=False).mean() - s.ewm(span=20, adjust=False).mean())
-    df["inst_net_accel"] = grouped["inst_net"].transform(lambda s: s.ewm(span=5, adjust=False).mean() - s.ewm(span=20, adjust=False).mean())
+    df["foreign_net_accel"] = grouped["foreign_net"].transform(
+        lambda s: s.ewm(span=5, adjust=False).mean()
+        - s.ewm(span=20, adjust=False).mean()
+    )
+    df["inst_net_accel"] = grouped["inst_net"].transform(
+        lambda s: s.ewm(span=5, adjust=False).mean()
+        - s.ewm(span=20, adjust=False).mean()
+    )
 
     positive_foreign = (df["foreign_net"].fillna(0.0) > 0).astype(int)
     positive_inst = (df["inst_net"].fillna(0.0) > 0).astype(int)
-    df["foreign_positive_streak"] = positive_foreign.groupby(df["stock_code"]).transform(
-        lambda s: s.groupby((s != s.shift()).cumsum()).cumsum()
-    )
+    df["foreign_positive_streak"] = positive_foreign.groupby(
+        df["stock_code"]
+    ).transform(lambda s: s.groupby((s != s.shift()).cumsum()).cumsum())
     df["inst_positive_streak"] = positive_inst.groupby(df["stock_code"]).transform(
         lambda s: s.groupby((s != s.shift()).cumsum()).cumsum()
     )
@@ -287,11 +399,19 @@ def prepare_feature_frame(raw: pd.DataFrame, config: ResearchConfig | None = Non
     day_range = (df["high_price"] - df["low_price"]).abs() + 1e-9
     df["range_ratio_pct"] = day_range / (df["close_price"] + 1e-9) * 100.0
     df["body_ratio"] = (df["close_price"] - df["open_price"]).abs() / day_range
-    df["lower_wick_ratio"] = (np.minimum(df["open_price"], df["close_price"]) - df["low_price"]) / day_range
+    df["lower_wick_ratio"] = (
+        np.minimum(df["open_price"], df["close_price"]) - df["low_price"]
+    ) / day_range
     df["atr_ratio_pct"] = df["atr"] / (df["close_price"] + 1e-9) * 100.0
 
     low_retest_flag = df["low_price"] <= (df["low20"] * 1.03)
-    df["low_retest_count20"] = low_retest_flag.astype(float).groupby(df["stock_code"]).rolling(20, min_periods=20).sum().reset_index(level=0, drop=True)
+    df["low_retest_count20"] = (
+        low_retest_flag.astype(float)
+        .groupby(df["stock_code"])
+        .rolling(20, min_periods=20)
+        .sum()
+        .reset_index(level=0, drop=True)
+    )
     if "bbp" not in df.columns:
         df["bbp"] = np.nan
     df["bbp"] = df["bbp"].fillna(0.5)
@@ -300,7 +420,9 @@ def prepare_feature_frame(raw: pd.DataFrame, config: ResearchConfig | None = Non
     by_date = df.groupby("quote_date")
     df["market_equal_weight_return_1d_pct"] = by_date["return_1d_pct"].transform("mean")
     df["market_median_return_1d_pct"] = by_date["return_1d_pct"].transform("median")
-    df["market_positive_breadth_ratio"] = by_date["return_1d_pct"].transform(lambda s: (s > 0).mean())
+    df["market_positive_breadth_ratio"] = by_date["return_1d_pct"].transform(
+        lambda s: (s > 0).mean()
+    )
     df["next_quote_date"] = grouped["quote_date"].shift(-1)
     df["next_open_price"] = grouped["open_price"].shift(-1)
     df["next_high_price"] = grouped["high_price"].shift(-1)
@@ -309,15 +431,23 @@ def prepare_feature_frame(raw: pd.DataFrame, config: ResearchConfig | None = Non
         df[f"future_exit_date_{horizon}d"] = grouped["quote_date"].shift(-horizon)
         df[f"future_close_{horizon}d"] = grouped["close_price"].shift(-horizon)
         df[f"future_high_max_{horizon}d"] = grouped["high_price"].transform(
-            lambda s, h=horizon: s.shift(-1).rolling(h, min_periods=h).max().shift(-(h - 1))
+            lambda s, h=horizon: s.shift(-1)
+            .rolling(h, min_periods=h)
+            .max()
+            .shift(-(h - 1))
         )
         df[f"future_low_min_{horizon}d"] = grouped["low_price"].transform(
-            lambda s, h=horizon: s.shift(-1).rolling(h, min_periods=h).min().shift(-(h - 1))
+            lambda s, h=horizon: s.shift(-1)
+            .rolling(h, min_periods=h)
+            .min()
+            .shift(-(h - 1))
         )
     return df.replace([np.inf, -np.inf], np.nan)
 
 
-def mark_bottom_rebound_candidates(features: pd.DataFrame, config: ResearchConfig | None = None) -> pd.DataFrame:
+def mark_bottom_rebound_candidates(
+    features: pd.DataFrame, config: ResearchConfig | None = None
+) -> pd.DataFrame:
     config = config or ResearchConfig()
     if features.empty:
         return features.copy()
@@ -333,9 +463,8 @@ def mark_bottom_rebound_candidates(features: pd.DataFrame, config: ResearchConfi
         | (df["drawdown_high120_pct"] <= -20.0)
         | (df["return_20d_pct"] <= -8.0)
     ) & (df["return_20d_pct"] <= 5.0)
-    bottom_zone = (
-        df["dist_low60_pct"].between(0.0, 10.0)
-        | ((df["bbp"] <= 0.20) & (df["dist_low60_pct"] <= 14.0))
+    bottom_zone = df["dist_low60_pct"].between(0.0, 10.0) | (
+        (df["bbp"] <= 0.20) & (df["dist_low60_pct"] <= 14.0)
     )
     stabilization = (
         (df["low_retest_count20"] >= 3)
@@ -343,8 +472,12 @@ def mark_bottom_rebound_candidates(features: pd.DataFrame, config: ResearchConfi
         | (df["lower_wick_ratio"] >= 0.30)
         | (df["low_compression20_pct"] <= 12.0)
     )
-    not_overextended = (df["dist_low20_pct"] <= 12.0) & df["volume_ratio20"].between(0.40, 3.0)
-    df["is_bottom_rebound_signal"] = valid & prior_decline & bottom_zone & stabilization & not_overextended
+    not_overextended = (df["dist_low20_pct"] <= 12.0) & df["volume_ratio20"].between(
+        0.40, 3.0
+    )
+    df["is_bottom_rebound_signal"] = (
+        valid & prior_decline & bottom_zone & stabilization & not_overextended
+    )
     return df
 
 
@@ -358,16 +491,32 @@ def _apply_backtest_rank_score(signals: pd.DataFrame) -> pd.DataFrame:
     if signals.empty:
         return signals.copy()
     out = signals.copy()
-    drawdown60 = _clip01((-pd.to_numeric(out["drawdown_high60_pct"], errors="coerce") - 15.0) / 30.0)
-    drawdown120 = _clip01((-pd.to_numeric(out["drawdown_high120_pct"], errors="coerce") - 20.0) / 45.0)
+    drawdown60 = _clip01(
+        (-pd.to_numeric(out["drawdown_high60_pct"], errors="coerce") - 15.0) / 30.0
+    )
+    drawdown120 = _clip01(
+        (-pd.to_numeric(out["drawdown_high120_pct"], errors="coerce") - 20.0) / 45.0
+    )
     drawdown_score = pd.concat([drawdown60, drawdown120], axis=1).max(axis=1)
-    bottom_score = _clip01((10.0 - pd.to_numeric(out["dist_low60_pct"], errors="coerce")) / 10.0)
-    retest_score = _clip01(pd.to_numeric(out["low_retest_count20"], errors="coerce") / 10.0)
-    slope_score = _clip01((pd.to_numeric(out["ma20_slope5_pct"], errors="coerce") + 3.0) / 6.0)
+    bottom_score = _clip01(
+        (10.0 - pd.to_numeric(out["dist_low60_pct"], errors="coerce")) / 10.0
+    )
+    retest_score = _clip01(
+        pd.to_numeric(out["low_retest_count20"], errors="coerce") / 10.0
+    )
+    slope_score = _clip01(
+        (pd.to_numeric(out["ma20_slope5_pct"], errors="coerce") + 3.0) / 6.0
+    )
     wick_score = _clip01(pd.to_numeric(out["lower_wick_ratio"], errors="coerce") / 0.6)
-    flow_score = _clip01((pd.to_numeric(out["foreign_roll20_ratio"], errors="coerce") + 0.05) / 0.15)
-    volume_score = _clip01((3.0 - pd.to_numeric(out["volume_ratio20"], errors="coerce")) / 2.6)
-    vwap_score = _clip01((2.0 - pd.to_numeric(out["vwap_distance_pct"], errors="coerce").abs()) / 2.0)
+    flow_score = _clip01(
+        (pd.to_numeric(out["foreign_roll20_ratio"], errors="coerce") + 0.05) / 0.15
+    )
+    volume_score = _clip01(
+        (3.0 - pd.to_numeric(out["volume_ratio20"], errors="coerce")) / 2.6
+    )
+    vwap_score = _clip01(
+        (2.0 - pd.to_numeric(out["vwap_distance_pct"], errors="coerce").abs()) / 2.0
+    )
     score = (
         drawdown_score * 2.0
         + bottom_score * 2.0
@@ -382,21 +531,38 @@ def _apply_backtest_rank_score(signals: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def _simulate_limit_entry(next_quote: pd.Series, limit_price: float, reason: str) -> EntryResult:
+def _simulate_limit_entry(
+    next_quote: pd.Series, limit_price: float, reason: str
+) -> EntryResult:
     open_price = _safe_float(next_quote.get("open_price"))
     low_price = _safe_float(next_quote.get("low_price"))
     high_price = _safe_float(next_quote.get("high_price"))
     quote_date = _date_text(next_quote.get("quote_date"))
     if min(open_price, low_price, high_price, limit_price) <= 0:
-        return EntryResult("pending_future_quotes", entry_reason="invalid_next_quote", limit_price=limit_price)
+        return EntryResult(
+            "pending_future_quotes",
+            entry_reason="invalid_next_quote",
+            limit_price=limit_price,
+        )
     if open_price <= limit_price:
-        return EntryResult("entered", quote_date, open_price, f"{reason}_open_below_limit", limit_price)
+        return EntryResult(
+            "entered", quote_date, open_price, f"{reason}_open_below_limit", limit_price
+        )
     if low_price <= limit_price <= high_price:
-        return EntryResult("entered", quote_date, limit_price, f"{reason}_limit_touched", limit_price)
-    return EntryResult("expired", entry_reason=f"{reason}_not_touched", limit_price=limit_price)
+        return EntryResult(
+            "entered", quote_date, limit_price, f"{reason}_limit_touched", limit_price
+        )
+    return EntryResult(
+        "expired", entry_reason=f"{reason}_not_touched", limit_price=limit_price
+    )
 
 
-def simulate_entry(policy: str, signal: pd.Series, future_quotes: pd.DataFrame, config: ResearchConfig | None = None) -> EntryResult:
+def simulate_entry(
+    policy: str,
+    signal: pd.Series,
+    future_quotes: pd.DataFrame,
+    config: ResearchConfig | None = None,
+) -> EntryResult:
     config = config or ResearchConfig()
     if future_quotes.empty:
         return EntryResult("pending_future_quotes", entry_reason="missing_next_quote")
@@ -404,15 +570,27 @@ def simulate_entry(policy: str, signal: pd.Series, future_quotes: pd.DataFrame, 
     if policy == "next_open_entry":
         entry_price = _safe_float(next_quote.get("open_price"))
         if entry_price <= 0:
-            return EntryResult("pending_future_quotes", entry_reason="invalid_next_open")
-        return EntryResult("entered", _date_text(next_quote.get("quote_date")), entry_price, "next_open")
+            return EntryResult(
+                "pending_future_quotes", entry_reason="invalid_next_open"
+            )
+        return EntryResult(
+            "entered",
+            _date_text(next_quote.get("quote_date")),
+            entry_price,
+            "next_open",
+        )
     signal_close = _safe_float(signal.get("close_price"))
     if policy == "signal_close_retest_entry":
-        limit_price = _price_at_pct(signal_close, -config.signal_close_retest_discount_pct)
+        limit_price = _price_at_pct(
+            signal_close, -config.signal_close_retest_discount_pct
+        )
         return _simulate_limit_entry(next_quote, limit_price, "signal_close_retest")
     if policy == "atr_pullback_entry":
         atr_pct = _safe_float(signal.get("atr_ratio_pct"))
-        buffer_pct = min(config.atr_pullback_max_pct, max(config.atr_pullback_min_pct, atr_pct * config.atr_pullback_multiplier))
+        buffer_pct = min(
+            config.atr_pullback_max_pct,
+            max(config.atr_pullback_min_pct, atr_pct * config.atr_pullback_multiplier),
+        )
         limit_price = _price_at_pct(signal_close, -buffer_pct)
         return _simulate_limit_entry(next_quote, limit_price, "atr_pullback")
     if policy == "open_guarded_retest_entry":
@@ -422,7 +600,10 @@ def simulate_entry(policy: str, signal: pd.Series, future_quotes: pd.DataFrame, 
             return EntryResult("expired", entry_reason="open_guarded_gap_up_blocked")
         if gap_pct < config.open_guarded_max_gap_down_pct:
             return EntryResult("expired", entry_reason="open_guarded_gap_down_blocked")
-        limit_price = min(signal_close, _price_at_pct(next_open, -config.open_guarded_retest_discount_pct))
+        limit_price = min(
+            signal_close,
+            _price_at_pct(next_open, -config.open_guarded_retest_discount_pct),
+        )
         return _simulate_limit_entry(next_quote, limit_price, "open_guarded_retest")
     if policy == "close_zone_limit_entry":
         limit_price = _price_at_pct(signal_close, -config.close_zone_limit_discount_pct)
@@ -463,7 +644,11 @@ def label_signal(
             if entry.status != "entered":
                 row.update(
                     {
-                        "label_status": "expired_entry_no_trigger" if entry.status == "expired" else "pending_future_quotes",
+                        "label_status": (
+                            "expired_entry_no_trigger"
+                            if entry.status == "expired"
+                            else "pending_future_quotes"
+                        ),
                         "final_return_pct": None,
                         "mfe_pct": None,
                         "mae_pct": None,
@@ -535,46 +720,121 @@ def _feature_buckets(row: pd.Series) -> dict[str, str]:
         "market_regime_bucket": market_regime_bucket,
         "market_breadth_bucket": _bucket(
             row.get("market_positive_breadth_ratio"),
-            [(0.35, "breadth_weak"), (0.50, "breadth_soft"), (0.65, "breadth_balanced"), (999, "breadth_strong")],
+            [
+                (0.35, "breadth_weak"),
+                (0.50, "breadth_soft"),
+                (0.65, "breadth_balanced"),
+                (999, "breadth_strong"),
+            ],
         ),
         "marcap_bucket": _bucket(
             row.get("marcap"),
-            [(100_000_000_000, "micro_cap"), (500_000_000_000, "small_cap"), (2_000_000_000_000, "mid_cap"), (999_000_000_000_000, "large_cap")],
+            [
+                (100_000_000_000, "micro_cap"),
+                (500_000_000_000, "small_cap"),
+                (2_000_000_000_000, "mid_cap"),
+                (999_000_000_000_000, "large_cap"),
+            ],
         ),
         "flow_combo_bucket": flow_combo_bucket,
         "drawdown_high60_bucket": _bucket(
             row.get("drawdown_high60_pct"),
-            [(-35, "deep_35_down"), (-25, "down_25_35"), (-15, "down_15_25"), (0, "down_0_15"), (999, "above_high")],
+            [
+                (-35, "deep_35_down"),
+                (-25, "down_25_35"),
+                (-15, "down_15_25"),
+                (0, "down_0_15"),
+                (999, "above_high"),
+            ],
         ),
         "dist_low60_bucket": _bucket(
             row.get("dist_low60_pct"),
-            [(3, "near_low_0_3"), (7, "near_low_3_7"), (14, "near_low_7_14"), (999, "above_low_14")],
+            [
+                (3, "near_low_0_3"),
+                (7, "near_low_3_7"),
+                (14, "near_low_7_14"),
+                (999, "above_low_14"),
+            ],
         ),
         "vwap_distance_bucket": _bucket(
             row.get("vwap_distance_pct"),
-            [(-5, "below_vwap_5_plus"), (-1, "below_vwap_1_5"), (1, "near_vwap"), (5, "above_vwap_1_5"), (999, "above_vwap_5_plus")],
+            [
+                (-5, "below_vwap_5_plus"),
+                (-1, "below_vwap_1_5"),
+                (1, "near_vwap"),
+                (5, "above_vwap_1_5"),
+                (999, "above_vwap_5_plus"),
+            ],
         ),
         "volume_ratio_bucket": _bucket(
             row.get("volume_ratio20"),
-            [(0.8, "quiet"), (1.2, "normal"), (2.0, "active"), (4.0, "expanded"), (999, "extreme")],
+            [
+                (0.8, "quiet"),
+                (1.2, "normal"),
+                (2.0, "active"),
+                (4.0, "expanded"),
+                (999, "extreme"),
+            ],
         ),
-        "rsi_bucket": _bucket(row.get("rsi"), [(30, "rsi_oversold"), (45, "rsi_30_45"), (60, "rsi_45_60"), (999, "rsi_60_plus")]),
-        "bbp_bucket": _bucket(row.get("bbp"), [(0.1, "bbp_bottom"), (0.35, "bbp_low"), (0.65, "bbp_mid"), (999, "bbp_high")]),
+        "rsi_bucket": _bucket(
+            row.get("rsi"),
+            [
+                (30, "rsi_oversold"),
+                (45, "rsi_30_45"),
+                (60, "rsi_45_60"),
+                (999, "rsi_60_plus"),
+            ],
+        ),
+        "bbp_bucket": _bucket(
+            row.get("bbp"),
+            [
+                (0.1, "bbp_bottom"),
+                (0.35, "bbp_low"),
+                (0.65, "bbp_mid"),
+                (999, "bbp_high"),
+            ],
+        ),
         "foreign_roll20_bucket": _bucket(
             row.get("foreign_roll20_ratio"),
-            [(-0.05, "foreign_sell"), (0, "foreign_slight_sell"), (0.05, "foreign_slight_buy"), (999, "foreign_buy")],
+            [
+                (-0.05, "foreign_sell"),
+                (0, "foreign_slight_sell"),
+                (0.05, "foreign_slight_buy"),
+                (999, "foreign_buy"),
+            ],
         ),
         "inst_roll20_bucket": _bucket(
             row.get("inst_roll20_ratio"),
-            [(-0.05, "inst_sell"), (0, "inst_slight_sell"), (0.05, "inst_slight_buy"), (999, "inst_buy")],
+            [
+                (-0.05, "inst_sell"),
+                (0, "inst_slight_sell"),
+                (0.05, "inst_slight_buy"),
+                (999, "inst_buy"),
+            ],
         ),
-        "low_retest_bucket": _bucket(row.get("low_retest_count20"), [(1, "low_retest_0_1"), (3, "low_retest_2_3"), (999, "low_retest_4_plus")]),
-        "ma20_slope_bucket": _bucket(row.get("ma20_slope5_pct"), [(-5, "ma20_falling_fast"), (-1, "ma20_falling"), (1, "ma20_flat"), (999, "ma20_rising")]),
-        "atr_ratio_bucket": _bucket(row.get("atr_ratio_pct"), [(2, "atr_low"), (4, "atr_mid"), (7, "atr_high"), (999, "atr_extreme")]),
+        "low_retest_bucket": _bucket(
+            row.get("low_retest_count20"),
+            [(1, "low_retest_0_1"), (3, "low_retest_2_3"), (999, "low_retest_4_plus")],
+        ),
+        "ma20_slope_bucket": _bucket(
+            row.get("ma20_slope5_pct"),
+            [
+                (-5, "ma20_falling_fast"),
+                (-1, "ma20_falling"),
+                (1, "ma20_flat"),
+                (999, "ma20_rising"),
+            ],
+        ),
+        "atr_ratio_bucket": _bucket(
+            row.get("atr_ratio_pct"),
+            [(2, "atr_low"), (4, "atr_mid"), (7, "atr_high"), (999, "atr_extreme")],
+        ),
     }
 
 
-def _signal_summary_row(row: pd.Series, *, include_buckets: bool = True) -> dict[str, Any]:
+def _signal_summary_row(
+    row: pd.Series, *, include_buckets: bool = True
+) -> dict[str, Any]:
     payload = {
         "signal_date": _date_text(row.get("quote_date")),
         "stock_code": str(row.get("stock_code")),
@@ -597,8 +857,12 @@ def _signal_summary_row(row: pd.Series, *, include_buckets: bool = True) -> dict
         "foreign_roll20_ratio": _as_report_number(row.get("foreign_roll20_ratio")),
         "inst_roll20_ratio": _as_report_number(row.get("inst_roll20_ratio")),
         "market_regime_bucket": _feature_buckets(row).get("market_regime_bucket"),
-        "market_median_return_1d_pct": _as_report_number(row.get("market_median_return_1d_pct")),
-        "market_positive_breadth_ratio": _as_report_number(row.get("market_positive_breadth_ratio")),
+        "market_median_return_1d_pct": _as_report_number(
+            row.get("market_median_return_1d_pct")
+        ),
+        "market_positive_breadth_ratio": _as_report_number(
+            row.get("market_positive_breadth_ratio")
+        ),
         "flow_combo_bucket": _feature_buckets(row).get("flow_combo_bucket"),
         "marcap": int(_safe_float(row.get("marcap"))),
         "backtest_rank_score": _as_report_number(row.get("backtest_rank_score")),
@@ -612,7 +876,9 @@ def _dedupe_examples(signals: pd.DataFrame, cooldown_days: int) -> pd.DataFrame:
     if signals.empty:
         return signals.copy()
     selected_indices: list[int] = []
-    for _, group in signals.sort_values(["stock_code", "quote_date"]).groupby("stock_code"):
+    for _, group in signals.sort_values(["stock_code", "quote_date"]).groupby(
+        "stock_code"
+    ):
         last_history_count = -10_000
         for idx, row in group.iterrows():
             history_count = int(_safe_float(row.get("history_count")))
@@ -628,7 +894,12 @@ def _label_frame(rows: list[dict[str, Any]] | pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def _aggregate_label_rows(rows: list[dict[str, Any]] | pd.DataFrame, *, group_keys: list[str], sample_floor: int) -> list[dict[str, Any]]:
+def _aggregate_label_rows(
+    rows: list[dict[str, Any]] | pd.DataFrame,
+    *,
+    group_keys: list[str],
+    sample_floor: int,
+) -> list[dict[str, Any]]:
     frame = _label_frame(rows)
     if frame.empty:
         return []
@@ -638,7 +909,9 @@ def _aggregate_label_rows(rows: list[dict[str, Any]] | pd.DataFrame, *, group_ke
             key_values = (key_values,)
         base = {key: value for key, value in zip(group_keys, key_values)}
         labeled = group[group["label_status"].eq("labeled")].copy()
-        returns = pd.to_numeric(labeled.get("final_return_pct"), errors="coerce").dropna()
+        returns = pd.to_numeric(
+            labeled.get("final_return_pct"), errors="coerce"
+        ).dropna()
         mfe = pd.to_numeric(labeled.get("mfe_pct"), errors="coerce").dropna()
         mae = pd.to_numeric(labeled.get("mae_pct"), errors="coerce").dropna()
         sample_count = int(len(returns))
@@ -650,20 +923,44 @@ def _aggregate_label_rows(rows: list[dict[str, Any]] | pd.DataFrame, *, group_ke
                 **base,
                 "sample_count": sample_count,
                 "total_row_count": total_count,
-                "entry_fill_rate": round(sample_count / total_count, 6) if total_count else 0.0,
-                "expired_rate": round(group["label_status"].eq("expired_entry_no_trigger").sum() / total_count, 6)
-                if total_count
-                else 0.0,
-                "pending_future_quote_rate": round(group["label_status"].eq("pending_future_quotes").sum() / total_count, 6)
-                if total_count
-                else 0.0,
+                "entry_fill_rate": (
+                    round(sample_count / total_count, 6) if total_count else 0.0
+                ),
+                "expired_rate": (
+                    round(
+                        group["label_status"].eq("expired_entry_no_trigger").sum()
+                        / total_count,
+                        6,
+                    )
+                    if total_count
+                    else 0.0
+                ),
+                "pending_future_quote_rate": (
+                    round(
+                        group["label_status"].eq("pending_future_quotes").sum()
+                        / total_count,
+                        6,
+                    )
+                    if total_count
+                    else 0.0
+                ),
                 "equal_weight_avg_profit_pct": round(equal_ev, 6),
                 "source_quality_adjusted_ev_pct": round(equal_ev * coverage, 6),
-                "diagnostic_win_rate": round(float((returns > 0).mean()), 6) if sample_count else 0.0,
-                "mfe_p50_pct": _as_report_number(mfe.quantile(0.50)) if sample_count else None,
-                "mfe_p80_pct": _as_report_number(mfe.quantile(0.80)) if sample_count else None,
-                "mae_p20_pct": _as_report_number(mae.quantile(0.20)) if sample_count else None,
-                "mae_p10_pct": _as_report_number(mae.quantile(0.10)) if sample_count else None,
+                "diagnostic_win_rate": (
+                    round(float((returns > 0).mean()), 6) if sample_count else 0.0
+                ),
+                "mfe_p50_pct": (
+                    _as_report_number(mfe.quantile(0.50)) if sample_count else None
+                ),
+                "mfe_p80_pct": (
+                    _as_report_number(mfe.quantile(0.80)) if sample_count else None
+                ),
+                "mae_p20_pct": (
+                    _as_report_number(mae.quantile(0.20)) if sample_count else None
+                ),
+                "mae_p10_pct": (
+                    _as_report_number(mae.quantile(0.10)) if sample_count else None
+                ),
             }
         )
     return sorted(
@@ -678,10 +975,16 @@ def _aggregate_label_rows(rows: list[dict[str, Any]] | pd.DataFrame, *, group_ke
     )
 
 
-def _entry_columns(signals: pd.DataFrame, policy: str, config: ResearchConfig) -> pd.DataFrame:
+def _entry_columns(
+    signals: pd.DataFrame, policy: str, config: ResearchConfig
+) -> pd.DataFrame:
     out = pd.DataFrame(index=signals.index)
     out["entry_policy"] = policy
-    out["entry_date"] = signals["next_quote_date"].dt.date.astype(str).where(signals["next_quote_date"].notna(), None)
+    out["entry_date"] = (
+        signals["next_quote_date"]
+        .dt.date.astype(str)
+        .where(signals["next_quote_date"].notna(), None)
+    )
     next_open = pd.to_numeric(signals["next_open_price"], errors="coerce")
     next_low = pd.to_numeric(signals["next_low_price"], errors="coerce")
     next_high = pd.to_numeric(signals["next_high_price"], errors="coerce")
@@ -696,7 +999,9 @@ def _entry_columns(signals: pd.DataFrame, policy: str, config: ResearchConfig) -
 
     signal_close = pd.to_numeric(signals["close_price"], errors="coerce")
     if policy == "signal_close_retest_entry":
-        limit_price = _price_at_pct(1.0, -config.signal_close_retest_discount_pct) * signal_close
+        limit_price = (
+            _price_at_pct(1.0, -config.signal_close_retest_discount_pct) * signal_close
+        )
         reason = "signal_close_retest"
     elif policy == "atr_pullback_entry":
         atr_pct = pd.to_numeric(signals["atr_ratio_pct"], errors="coerce").fillna(0.0)
@@ -712,17 +1017,30 @@ def _entry_columns(signals: pd.DataFrame, policy: str, config: ResearchConfig) -
         gap_down_blocked = gap_pct.lt(config.open_guarded_max_gap_down_pct)
         gap_ok = ~(gap_up_blocked | gap_down_blocked)
         limit_price = pd.concat(
-            [signal_close, next_open * (1.0 - config.open_guarded_retest_discount_pct / 100.0)],
+            [
+                signal_close,
+                next_open * (1.0 - config.open_guarded_retest_discount_pct / 100.0),
+            ],
             axis=1,
         ).min(axis=1)
         reason = "open_guarded_retest"
         missing_reason = pd.Series(
-            np.where(gap_up_blocked, "open_guarded_gap_up_blocked", np.where(gap_down_blocked, "open_guarded_gap_down_blocked", "missing_next_quote")),
+            np.where(
+                gap_up_blocked,
+                "open_guarded_gap_up_blocked",
+                np.where(
+                    gap_down_blocked,
+                    "open_guarded_gap_down_blocked",
+                    "missing_next_quote",
+                ),
+            ),
             index=signals.index,
         )
         has_next = has_next & gap_ok
     elif policy == "close_zone_limit_entry":
-        limit_price = signal_close * (1.0 - config.close_zone_limit_discount_pct / 100.0)
+        limit_price = signal_close * (
+            1.0 - config.close_zone_limit_discount_pct / 100.0
+        )
         reason = "close_zone_limit"
     else:
         out["entry_status"] = "expired"
@@ -732,31 +1050,47 @@ def _entry_columns(signals: pd.DataFrame, policy: str, config: ResearchConfig) -
         return out
 
     open_fill = has_next & next_open.le(limit_price)
-    limit_fill = has_next & ~open_fill & next_low.le(limit_price) & next_high.ge(limit_price)
+    limit_fill = (
+        has_next & ~open_fill & next_low.le(limit_price) & next_high.ge(limit_price)
+    )
     entered = open_fill | limit_fill
-    out["entry_status"] = np.where(~has_next, "pending_future_quotes", np.where(entered, "entered", "expired"))
-    out["entry_price"] = np.where(open_fill, next_open, np.where(limit_fill, limit_price, np.nan))
+    out["entry_status"] = np.where(
+        ~has_next, "pending_future_quotes", np.where(entered, "entered", "expired")
+    )
+    out["entry_price"] = np.where(
+        open_fill, next_open, np.where(limit_fill, limit_price, np.nan)
+    )
     out["limit_price"] = limit_price
     out["entry_reason"] = np.where(
         ~has_next,
         missing_reason,
-        np.where(open_fill, f"{reason}_open_below_limit", np.where(limit_fill, f"{reason}_limit_touched", f"{reason}_not_touched")),
+        np.where(
+            open_fill,
+            f"{reason}_open_below_limit",
+            np.where(limit_fill, f"{reason}_limit_touched", f"{reason}_not_touched"),
+        ),
     )
     return out
 
 
-def _build_labels(signals: pd.DataFrame, features: pd.DataFrame, config: ResearchConfig) -> tuple[pd.DataFrame, list[dict[str, Any]]]:
+def _build_labels(
+    signals: pd.DataFrame, features: pd.DataFrame, config: ResearchConfig
+) -> tuple[pd.DataFrame, list[dict[str, Any]]]:
     examples: list[dict[str, Any]] = []
     if signals.empty:
         return pd.DataFrame(), examples
     signals = signals.sort_values(["stock_code", "quote_date"]).copy()
-    bucket_frame = pd.DataFrame([_feature_buckets(row) for _, row in signals.iterrows()], index=signals.index)
+    bucket_frame = pd.DataFrame(
+        [_feature_buckets(row) for _, row in signals.iterrows()], index=signals.index
+    )
     signal_base = pd.DataFrame(
         {
             "stock_code": signals["stock_code"].astype(str),
             "stock_name": signals["stock_name"].fillna("").astype(str),
             "signal_date": signals["quote_date"].dt.date.astype(str),
-            "backtest_rank_score": pd.to_numeric(signals.get("backtest_rank_score", 0.0), errors="coerce").fillna(0.0),
+            "backtest_rank_score": pd.to_numeric(
+                signals.get("backtest_rank_score", 0.0), errors="coerce"
+            ).fillna(0.0),
         },
         index=signals.index,
     )
@@ -773,14 +1107,26 @@ def _build_labels(signals: pd.DataFrame, features: pd.DataFrame, config: Researc
             frame["label_status"] = np.where(
                 entered & has_exit,
                 "labeled",
-                np.where(frame["entry_status"].eq("expired"), "expired_entry_no_trigger", "pending_future_quotes"),
+                np.where(
+                    frame["entry_status"].eq("expired"),
+                    "expired_entry_no_trigger",
+                    "pending_future_quotes",
+                ),
             )
             entry_price = pd.to_numeric(frame["entry_price"], errors="coerce")
-            final_return = (signals[f"future_close_{horizon}d"] / entry_price - 1.0) * 100.0
+            final_return = (
+                signals[f"future_close_{horizon}d"] / entry_price - 1.0
+            ) * 100.0
             mfe = (signals[f"future_high_max_{horizon}d"] / entry_price - 1.0) * 100.0
             mae = (signals[f"future_low_min_{horizon}d"] / entry_price - 1.0) * 100.0
-            frame["exit_date"] = signals[f"future_exit_date_{horizon}d"].dt.date.astype(str).where(has_exit, None)
-            frame["final_return_pct"] = final_return.where(frame["label_status"].eq("labeled")).round(6)
+            frame["exit_date"] = (
+                signals[f"future_exit_date_{horizon}d"]
+                .dt.date.astype(str)
+                .where(has_exit, None)
+            )
+            frame["final_return_pct"] = final_return.where(
+                frame["label_status"].eq("labeled")
+            ).round(6)
             frame["mfe_pct"] = mfe.where(frame["label_status"].eq("labeled")).round(6)
             frame["mae_pct"] = mae.where(frame["label_status"].eq("labeled")).round(6)
             frames.append(frame)
@@ -809,7 +1155,9 @@ def _max_drawdown_pct(equity_values: Iterable[float]) -> float:
     return round(max_drawdown, 6)
 
 
-def _build_portfolio_backtest(labels: pd.DataFrame, config: ResearchConfig) -> dict[str, Any]:
+def _build_portfolio_backtest(
+    labels: pd.DataFrame, config: ResearchConfig
+) -> dict[str, Any]:
     """Closed-trade portfolio backtest using postclose signal ranking only."""
 
     if labels.empty:
@@ -820,7 +1168,11 @@ def _build_portfolio_backtest(labels: pd.DataFrame, config: ResearchConfig) -> d
                 "max_positions": config.backtest_max_positions,
                 "trade_cost_pct": config.backtest_trade_cost_pct,
             },
-            "summary": {"trade_count": 0, "skipped_capacity_count": 0, "skipped_same_symbol_count": 0},
+            "summary": {
+                "trade_count": 0,
+                "skipped_capacity_count": 0,
+                "skipped_same_symbol_count": 0,
+            },
             "equity_curve": [],
             "monthly_returns": [],
             "yearly_returns": [],
@@ -840,7 +1192,11 @@ def _build_portfolio_backtest(labels: pd.DataFrame, config: ResearchConfig) -> d
                 "max_positions": config.backtest_max_positions,
                 "trade_cost_pct": config.backtest_trade_cost_pct,
             },
-            "summary": {"trade_count": 0, "skipped_capacity_count": 0, "skipped_same_symbol_count": 0},
+            "summary": {
+                "trade_count": 0,
+                "skipped_capacity_count": 0,
+                "skipped_same_symbol_count": 0,
+            },
             "equity_curve": [],
             "monthly_returns": [],
             "yearly_returns": [],
@@ -850,10 +1206,19 @@ def _build_portfolio_backtest(labels: pd.DataFrame, config: ResearchConfig) -> d
     frame["signal_ts"] = pd.to_datetime(frame["signal_date"], errors="coerce")
     frame["entry_ts"] = pd.to_datetime(frame["entry_date"], errors="coerce")
     frame["exit_ts"] = pd.to_datetime(frame["exit_date"], errors="coerce")
-    frame["backtest_rank_score"] = pd.to_numeric(frame.get("backtest_rank_score"), errors="coerce").fillna(0.0)
-    frame["final_return_pct"] = pd.to_numeric(frame["final_return_pct"], errors="coerce")
-    frame = frame.dropna(subset=["signal_ts", "entry_ts", "exit_ts", "final_return_pct"])
-    frame = frame.sort_values(["signal_ts", "backtest_rank_score", "stock_code"], ascending=[True, False, True])
+    frame["backtest_rank_score"] = pd.to_numeric(
+        frame.get("backtest_rank_score"), errors="coerce"
+    ).fillna(0.0)
+    frame["final_return_pct"] = pd.to_numeric(
+        frame["final_return_pct"], errors="coerce"
+    )
+    frame = frame.dropna(
+        subset=["signal_ts", "entry_ts", "exit_ts", "final_return_pct"]
+    )
+    frame = frame.sort_values(
+        ["signal_ts", "backtest_rank_score", "stock_code"],
+        ascending=[True, False, True],
+    )
 
     open_positions: list[dict[str, Any]] = []
     selected: list[dict[str, Any]] = []
@@ -862,7 +1227,9 @@ def _build_portfolio_backtest(labels: pd.DataFrame, config: ResearchConfig) -> d
     max_positions = max(1, int(config.backtest_max_positions))
     for _, row in frame.iterrows():
         entry_ts = row["entry_ts"]
-        open_positions = [item for item in open_positions if item["exit_ts"] >= entry_ts]
+        open_positions = [
+            item for item in open_positions if item["exit_ts"] >= entry_ts
+        ]
         code = str(row["stock_code"])
         if any(item["stock_code"] == code for item in open_positions):
             skipped_same_symbol_count += 1
@@ -911,7 +1278,10 @@ def _build_portfolio_backtest(labels: pd.DataFrame, config: ResearchConfig) -> d
 
     trades = pd.DataFrame(selected)
     daily_contrib = (
-        trades.groupby("exit_date", dropna=False)["portfolio_return_contribution_pct"].sum().reset_index().sort_values("exit_date")
+        trades.groupby("exit_date", dropna=False)["portfolio_return_contribution_pct"]
+        .sum()
+        .reset_index()
+        .sort_values("exit_date")
     )
     equity = 1.0
     equity_curve: list[dict[str, Any]] = []
@@ -927,14 +1297,26 @@ def _build_portfolio_backtest(labels: pd.DataFrame, config: ResearchConfig) -> d
             }
         )
 
-    trades["exit_month"] = pd.to_datetime(trades["exit_date"]).dt.to_period("M").astype(str)
+    trades["exit_month"] = (
+        pd.to_datetime(trades["exit_date"]).dt.to_period("M").astype(str)
+    )
     trades["exit_year"] = pd.to_datetime(trades["exit_date"]).dt.year.astype(str)
     monthly_returns = [
-        {"month": key, "portfolio_return_pct": _compound_return_pct(group["portfolio_return_contribution_pct"])}
+        {
+            "month": key,
+            "portfolio_return_pct": _compound_return_pct(
+                group["portfolio_return_contribution_pct"]
+            ),
+        }
         for key, group in trades.groupby("exit_month")
     ]
     yearly_returns = [
-        {"year": key, "portfolio_return_pct": _compound_return_pct(group["portfolio_return_contribution_pct"])}
+        {
+            "year": key,
+            "portfolio_return_pct": _compound_return_pct(
+                group["portfolio_return_contribution_pct"]
+            ),
+        }
         for key, group in trades.groupby("exit_year")
     ]
     net_returns = pd.to_numeric(trades["net_return_pct"], errors="coerce").dropna()
@@ -946,7 +1328,9 @@ def _build_portfolio_backtest(labels: pd.DataFrame, config: ResearchConfig) -> d
         "max_drawdown_pct": _max_drawdown_pct(item["equity"] for item in equity_curve),
         "avg_trade_net_return_pct": _as_report_number(net_returns.mean()),
         "median_trade_net_return_pct": _as_report_number(net_returns.median()),
-        "diagnostic_win_rate": round(float((net_returns > 0).mean()), 6) if len(net_returns) else 0.0,
+        "diagnostic_win_rate": (
+            round(float((net_returns > 0).mean()), 6) if len(net_returns) else 0.0
+        ),
         "first_entry_date": str(trades["entry_date"].min()),
         "last_exit_date": str(trades["exit_date"].max()),
     }
@@ -963,30 +1347,56 @@ def _build_portfolio_backtest(labels: pd.DataFrame, config: ResearchConfig) -> d
         "equity_curve": equity_curve,
         "monthly_returns": monthly_returns,
         "yearly_returns": yearly_returns,
-        "trades": trades.drop(columns=["exit_month", "exit_year"]).to_dict(orient="records"),
+        "trades": trades.drop(columns=["exit_month", "exit_year"]).to_dict(
+            orient="records"
+        ),
     }
 
 
-def _build_backtest_variants(labels: pd.DataFrame, config: ResearchConfig) -> list[dict[str, Any]]:
+def _build_backtest_variants(
+    labels: pd.DataFrame, config: ResearchConfig
+) -> list[dict[str, Any]]:
     if labels.empty:
         return []
     variants = [
         ("baseline", labels),
-        ("exclude_market_risk_off", labels[~labels.get("market_regime_bucket", pd.Series(index=labels.index, dtype=str)).eq("market_risk_off")]),
-        ("require_foreign_not_sell", labels[~labels.get("foreign_roll20_bucket", pd.Series(index=labels.index, dtype=str)).eq("foreign_sell")]),
+        (
+            "exclude_market_risk_off",
+            labels[
+                ~labels.get(
+                    "market_regime_bucket", pd.Series(index=labels.index, dtype=str)
+                ).eq("market_risk_off")
+            ],
+        ),
+        (
+            "require_foreign_not_sell",
+            labels[
+                ~labels.get(
+                    "foreign_roll20_bucket", pd.Series(index=labels.index, dtype=str)
+                ).eq("foreign_sell")
+            ],
+        ),
         (
             "exclude_risk_off_and_foreign_sell",
             labels[
-                ~labels.get("market_regime_bucket", pd.Series(index=labels.index, dtype=str)).eq("market_risk_off")
-                & ~labels.get("foreign_roll20_bucket", pd.Series(index=labels.index, dtype=str)).eq("foreign_sell")
+                ~labels.get(
+                    "market_regime_bucket", pd.Series(index=labels.index, dtype=str)
+                ).eq("market_risk_off")
+                & ~labels.get(
+                    "foreign_roll20_bucket", pd.Series(index=labels.index, dtype=str)
+                ).eq("foreign_sell")
             ],
         ),
     ]
     out: list[dict[str, Any]] = []
     for name, subset in variants:
         result = _build_portfolio_backtest(subset.copy(), config)
-        summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
-        out.append({"variant": name, "summary": summary, "config": result.get("config")})
+        summary = (
+            result.get("summary") if isinstance(result.get("summary"), dict) else {}
+        )
+        out.append(
+            {"variant": name, "summary": summary, "config": result.get("config")}
+        )
     return out
 
 
@@ -995,7 +1405,13 @@ def _latest_candidates(signals: pd.DataFrame, as_of: str) -> list[dict[str, Any]
         return []
     current = signals[signals["quote_date"].eq(pd.Timestamp(as_of))].copy()
     current = current.sort_values(
-        ["backtest_rank_score", "drawdown_high60_pct", "dist_low60_pct", "turnover_shock20", "foreign_roll20_ratio"],
+        [
+            "backtest_rank_score",
+            "drawdown_high60_pct",
+            "dist_low60_pct",
+            "turnover_shock20",
+            "foreign_roll20_ratio",
+        ],
         ascending=[False, True, True, False, False],
     )
     return [_signal_summary_row(row) for _, row in current.head(100).iterrows()]
@@ -1008,7 +1424,11 @@ def _build_kiwoom_enrichment(
     config: ResearchConfig,
 ) -> dict[str, Any]:
     max_codes = max(0, int(config.kiwoom_enrichment_max_codes))
-    candidate_codes = [str(row.get("stock_code") or "").zfill(6) for row in latest_candidates if row.get("stock_code")]
+    candidate_codes = [
+        str(row.get("stock_code") or "").zfill(6)
+        for row in latest_candidates
+        if row.get("stock_code")
+    ]
     requested = candidate_codes[:max_codes]
     if not config.enable_kiwoom_enrichment:
         return {
@@ -1049,7 +1469,11 @@ def _build_kiwoom_enrichment(
             "diagnostics": {"status": "kiwoom_enrichment_failed", "error": str(exc)},
             "warnings": ["kiwoom_enrichment_failed"],
         }
-    rows_by_code = payload.get("rows_by_code") if isinstance(payload.get("rows_by_code"), dict) else {}
+    rows_by_code = (
+        payload.get("rows_by_code")
+        if isinstance(payload.get("rows_by_code"), dict)
+        else {}
+    )
     return {
         "enabled": True,
         "source": "kiwoom_api",
@@ -1068,22 +1492,32 @@ def _apply_kiwoom_enrichment_to_candidates(
     candidates: list[dict[str, Any]],
     enrichment: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    rows_by_code = enrichment.get("rows_by_code") if isinstance(enrichment.get("rows_by_code"), dict) else {}
+    rows_by_code = (
+        enrichment.get("rows_by_code")
+        if isinstance(enrichment.get("rows_by_code"), dict)
+        else {}
+    )
     if not rows_by_code:
         return candidates
     out: list[dict[str, Any]] = []
     for row in candidates:
         code = str(row.get("stock_code") or "").zfill(6)
-        enrich = rows_by_code.get(code) if isinstance(rows_by_code.get(code), dict) else {}
+        enrich = (
+            rows_by_code.get(code) if isinstance(rows_by_code.get(code), dict) else {}
+        )
         if enrich:
             row = {
                 **row,
                 "kiwoom_sector": enrich.get("sector") or row.get("kiwoom_sector") or "",
-                "kiwoom_industry": enrich.get("industry") or row.get("kiwoom_industry") or "",
+                "kiwoom_industry": enrich.get("industry")
+                or row.get("kiwoom_industry")
+                or "",
                 "kiwoom_market_type": enrich.get("market_type") or "",
                 "kiwoom_theme_tags": enrich.get("theme_tags") or [],
-                "kiwoom_sector_source_quality": enrich.get("sector_source_quality") or "missing",
-                "kiwoom_theme_source_quality": enrich.get("theme_source_quality") or "missing",
+                "kiwoom_sector_source_quality": enrich.get("sector_source_quality")
+                or "missing",
+                "kiwoom_theme_source_quality": enrich.get("theme_source_quality")
+                or "missing",
             }
         out.append(row)
     return out
@@ -1099,7 +1533,12 @@ def _source_quality_summary(
 ) -> dict[str, Any]:
     label_frame = _label_frame(labels)
     status_counts = (
-        {str(key): int(value) for key, value in label_frame["label_status"].value_counts(dropna=False).items()}
+        {
+            str(key): int(value)
+            for key, value in label_frame["label_status"]
+            .value_counts(dropna=False)
+            .items()
+        }
         if not label_frame.empty and "label_status" in label_frame.columns
         else {}
     )
@@ -1113,23 +1552,35 @@ def _source_quality_summary(
         "raw_quote_rows": raw_rows,
         "feature_rows": feature_rows,
         "signal_rows": int(len(signals)),
-        "unique_signal_codes": int(signals["stock_code"].nunique()) if not signals.empty else 0,
+        "unique_signal_codes": (
+            int(signals["stock_code"].nunique()) if not signals.empty else 0
+        ),
         "latest_signal_date": latest_date,
         "label_status_counts": status_counts,
         "sample_floor": config.sample_floor,
-        "source_quality_gate": "pass" if raw_rows and feature_rows else "no_source_rows",
+        "source_quality_gate": (
+            "pass" if raw_rows and feature_rows else "no_source_rows"
+        ),
     }
 
 
-def build_research_report_from_frame(raw: pd.DataFrame, config: ResearchConfig | None = None) -> dict[str, Any]:
+def build_research_report_from_frame(
+    raw: pd.DataFrame, config: ResearchConfig | None = None
+) -> dict[str, Any]:
     config = config or ResearchConfig()
     features = prepare_feature_frame(raw, config)
     features = mark_bottom_rebound_candidates(features, config)
     if features.empty:
         effective_as_of = config.as_of or date.today().isoformat()
     else:
-        effective_as_of = config.as_of or _date_text(features["quote_date"].max()) or date.today().isoformat()
-    signals = _apply_backtest_rank_score(features[features["is_bottom_rebound_signal"].fillna(False)].copy())
+        effective_as_of = (
+            config.as_of
+            or _date_text(features["quote_date"].max())
+            or date.today().isoformat()
+        )
+    signals = _apply_backtest_rank_score(
+        features[features["is_bottom_rebound_signal"].fillna(False)].copy()
+    )
     labels, examples = _build_labels(signals, features, config)
     entry_policy_comparison = _aggregate_label_rows(
         labels,
@@ -1168,13 +1619,25 @@ def build_research_report_from_frame(raw: pd.DataFrame, config: ResearchConfig |
         if int(row.get("horizon_days") or 0) == int(config.primary_horizon_days)
         and int(row.get("sample_count") or 0) >= int(config.sample_floor)
     ]
-    top_primary = max(primary_rows, key=lambda row: _safe_float(row.get("source_quality_adjusted_ev_pct")), default=None)
+    top_primary = max(
+        primary_rows,
+        key=lambda row: _safe_float(row.get("source_quality_adjusted_ev_pct")),
+        default=None,
+    )
     portfolio_backtest = _build_portfolio_backtest(labels, config)
     backtest_variants = _build_backtest_variants(labels, config)
-    backtest_summary = portfolio_backtest.get("summary") if isinstance(portfolio_backtest.get("summary"), dict) else {}
+    backtest_summary = (
+        portfolio_backtest.get("summary")
+        if isinstance(portfolio_backtest.get("summary"), dict)
+        else {}
+    )
     latest_candidates = _latest_candidates(signals, effective_as_of)
-    kiwoom_enrichment = _build_kiwoom_enrichment(latest_candidates, target_date=effective_as_of, config=config)
-    latest_candidates = _apply_kiwoom_enrichment_to_candidates(latest_candidates, kiwoom_enrichment)
+    kiwoom_enrichment = _build_kiwoom_enrichment(
+        latest_candidates, target_date=effective_as_of, config=config
+    )
+    latest_candidates = _apply_kiwoom_enrichment_to_candidates(
+        latest_candidates, kiwoom_enrichment
+    )
     report = {
         "schema_version": SCHEMA_VERSION,
         "report_type": REPORT_TYPE,
@@ -1217,11 +1680,19 @@ def build_research_report_from_frame(raw: pd.DataFrame, config: ResearchConfig |
             "signal_rows": int(len(signals)),
             "label_rows": int(len(labels)),
             "latest_as_of_candidate_count": int(
-                len(signals[signals["quote_date"].eq(pd.Timestamp(effective_as_of))]) if not signals.empty else 0
+                len(signals[signals["quote_date"].eq(pd.Timestamp(effective_as_of))])
+                if not signals.empty
+                else 0
             ),
             "primary_horizon_days": config.primary_horizon_days,
-            "top_primary_entry_policy": top_primary.get("entry_policy") if top_primary else None,
-            "top_primary_source_quality_adjusted_ev_pct": top_primary.get("source_quality_adjusted_ev_pct") if top_primary else None,
+            "top_primary_entry_policy": (
+                top_primary.get("entry_policy") if top_primary else None
+            ),
+            "top_primary_source_quality_adjusted_ev_pct": (
+                top_primary.get("source_quality_adjusted_ev_pct")
+                if top_primary
+                else None
+            ),
             "backtest_trade_count": backtest_summary.get("trade_count", 0),
             "backtest_total_return_pct": backtest_summary.get("total_return_pct"),
             "backtest_max_drawdown_pct": backtest_summary.get("max_drawdown_pct"),
@@ -1266,7 +1737,9 @@ def build_research_report_from_frame(raw: pd.DataFrame, config: ResearchConfig |
     if top_primary is None:
         report["warnings"].append("primary_sample_floor_not_met")
     if kiwoom_enrichment.get("warnings"):
-        report["warnings"].extend(f"kiwoom:{warning}" for warning in kiwoom_enrichment.get("warnings") or [])
+        report["warnings"].extend(
+            f"kiwoom:{warning}" for warning in kiwoom_enrichment.get("warnings") or []
+        )
     return report
 
 
@@ -1282,17 +1755,35 @@ def build_research_report(
         as_of=config.as_of,
         history_start=config.history_start,
     )
-    effective_config = ResearchConfig(**{**asdict(config), "as_of": effective_as_of, "history_start": effective_start})
+    effective_config = ResearchConfig(
+        **{**asdict(config), "as_of": effective_as_of, "history_start": effective_start}
+    )
     return build_research_report_from_frame(raw, effective_config)
 
 
 def render_markdown(report: dict[str, Any]) -> str:
     summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
-    contract = report.get("metric_contract") if isinstance(report.get("metric_contract"), dict) else {}
-    backtest = report.get("portfolio_backtest") if isinstance(report.get("portfolio_backtest"), dict) else {}
-    backtest_summary = backtest.get("summary") if isinstance(backtest.get("summary"), dict) else {}
-    backtest_config = backtest.get("config") if isinstance(backtest.get("config"), dict) else {}
-    kiwoom_enrichment = report.get("kiwoom_enrichment") if isinstance(report.get("kiwoom_enrichment"), dict) else {}
+    contract = (
+        report.get("metric_contract")
+        if isinstance(report.get("metric_contract"), dict)
+        else {}
+    )
+    backtest = (
+        report.get("portfolio_backtest")
+        if isinstance(report.get("portfolio_backtest"), dict)
+        else {}
+    )
+    backtest_summary = (
+        backtest.get("summary") if isinstance(backtest.get("summary"), dict) else {}
+    )
+    backtest_config = (
+        backtest.get("config") if isinstance(backtest.get("config"), dict) else {}
+    )
+    kiwoom_enrichment = (
+        report.get("kiwoom_enrichment")
+        if isinstance(report.get("kiwoom_enrichment"), dict)
+        else {}
+    )
     lines = [
         f"# Bottom Rebound Pattern Research - {report.get('date')}",
         "",
@@ -1388,7 +1879,11 @@ def render_markdown(report: dict[str, Any]) -> str:
         ]
     )
     for row in latest[:20]:
-        themes = row.get("kiwoom_theme_tags") if isinstance(row.get("kiwoom_theme_tags"), list) else []
+        themes = (
+            row.get("kiwoom_theme_tags")
+            if isinstance(row.get("kiwoom_theme_tags"), list)
+            else []
+        )
         theme_text = ", ".join(str(item) for item in themes[:3])
         lines.append(
             f"| `{row.get('stock_code')}` | {row.get('stock_name') or ''} | `{row.get('close_price')}` | "
@@ -1422,7 +1917,9 @@ def write_research_report(
     report = build_research_report(db_url=db_url, config=config)
     output_dir.mkdir(parents=True, exist_ok=True)
     json_path, md_path = report_paths(str(report.get("date")), output_dir)
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2, default=str), encoding="utf-8"
+    )
     md_path.write_text(render_markdown(report), encoding="utf-8")
     return {"json": json_path, "md": md_path}
 
@@ -1434,16 +1931,47 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--db-url", default=os.getenv("DATABASE_URL") or POSTGRES_URL)
     parser.add_argument("--output-dir", type=Path, default=REPORT_DIR)
     parser.add_argument("--min-price", type=float, default=ResearchConfig.min_price)
-    parser.add_argument("--min-median-value-20d-krw", type=float, default=ResearchConfig.min_median_value_20d_krw)
-    parser.add_argument("--min-median-volume-20d", type=float, default=ResearchConfig.min_median_volume_20d)
+    parser.add_argument(
+        "--min-median-value-20d-krw",
+        type=float,
+        default=ResearchConfig.min_median_value_20d_krw,
+    )
+    parser.add_argument(
+        "--min-median-volume-20d",
+        type=float,
+        default=ResearchConfig.min_median_volume_20d,
+    )
     parser.add_argument("--sample-floor", type=int, default=ResearchConfig.sample_floor)
-    parser.add_argument("--primary-horizon-days", type=int, default=ResearchConfig.primary_horizon_days)
-    parser.add_argument("--backtest-entry-policy", default=ResearchConfig.backtest_entry_policy, choices=ENTRY_POLICIES)
-    parser.add_argument("--backtest-horizon-days", type=int, default=ResearchConfig.backtest_horizon_days, choices=HORIZONS)
-    parser.add_argument("--backtest-max-positions", type=int, default=ResearchConfig.backtest_max_positions)
-    parser.add_argument("--backtest-trade-cost-pct", type=float, default=ResearchConfig.backtest_trade_cost_pct)
+    parser.add_argument(
+        "--primary-horizon-days", type=int, default=ResearchConfig.primary_horizon_days
+    )
+    parser.add_argument(
+        "--backtest-entry-policy",
+        default=ResearchConfig.backtest_entry_policy,
+        choices=ENTRY_POLICIES,
+    )
+    parser.add_argument(
+        "--backtest-horizon-days",
+        type=int,
+        default=ResearchConfig.backtest_horizon_days,
+        choices=HORIZONS,
+    )
+    parser.add_argument(
+        "--backtest-max-positions",
+        type=int,
+        default=ResearchConfig.backtest_max_positions,
+    )
+    parser.add_argument(
+        "--backtest-trade-cost-pct",
+        type=float,
+        default=ResearchConfig.backtest_trade_cost_pct,
+    )
     parser.add_argument("--enable-kiwoom-enrichment", action="store_true")
-    parser.add_argument("--kiwoom-enrichment-max-codes", type=int, default=ResearchConfig.kiwoom_enrichment_max_codes)
+    parser.add_argument(
+        "--kiwoom-enrichment-max-codes",
+        type=int,
+        default=ResearchConfig.kiwoom_enrichment_max_codes,
+    )
     parser.add_argument("--kiwoom-enrichment-write-cache", action="store_true")
     parser.add_argument("--no-write", action="store_true")
     args = parser.parse_args(argv)
@@ -1461,7 +1989,8 @@ def main(argv: list[str] | None = None) -> None:
         backtest_trade_cost_pct=args.backtest_trade_cost_pct,
         enable_kiwoom_enrichment=args.enable_kiwoom_enrichment,
         kiwoom_enrichment_max_codes=args.kiwoom_enrichment_max_codes,
-        kiwoom_enrichment_write_cache=args.kiwoom_enrichment_write_cache and not args.no_write,
+        kiwoom_enrichment_write_cache=args.kiwoom_enrichment_write_cache
+        and not args.no_write,
     )
     if args.no_write:
         report = build_research_report(db_url=args.db_url, config=config)
@@ -1478,8 +2007,12 @@ def main(argv: list[str] | None = None) -> None:
             )
         )
         return
-    paths = write_research_report(db_url=args.db_url, output_dir=args.output_dir, config=config)
-    print(f"[DONE] bottom_rebound_pattern_research json={paths['json']} md={paths['md']}")
+    paths = write_research_report(
+        db_url=args.db_url, output_dir=args.output_dir, config=config
+    )
+    print(
+        f"[DONE] bottom_rebound_pattern_research json={paths['json']} md={paths['md']}"
+    )
 
 
 if __name__ == "__main__":

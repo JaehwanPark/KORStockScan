@@ -14,7 +14,6 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 REPORT_DIR = PROJECT_ROOT / "data" / "report"
 WORKORDER_REPORT_DIR = REPORT_DIR / "code_improvement_workorder"
@@ -134,7 +133,10 @@ def _load_json(path: Path) -> dict[str, Any]:
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
 
 
 def _run_command(command: list[str], cwd: Path | None = None) -> int:
@@ -216,7 +218,14 @@ def _runner_paths(target_date: str) -> tuple[Path, Path]:
 
 def _text_blob(order: dict[str, Any]) -> str:
     values: list[str] = []
-    for key in ("order_id", "title", "target_subsystem", "lifecycle_stage", "threshold_family", "decision_reason"):
+    for key in (
+        "order_id",
+        "title",
+        "target_subsystem",
+        "lifecycle_stage",
+        "threshold_family",
+        "decision_reason",
+    ):
         values.append(str(order.get(key) or ""))
     for key in ("files_likely_touched", "acceptance_tests"):
         raw = order.get(key)
@@ -242,7 +251,9 @@ def _safe_implement_now_block_reason(order: dict[str, Any]) -> str | None:
     if any(term in blob for term in FORBIDDEN_USE_TERMS):
         return "forbidden_or_not_safe"
     forbidden_uses = order.get("forbidden_uses")
-    if not isinstance(forbidden_uses, list) or not any(str(item).strip() for item in forbidden_uses):
+    if not isinstance(forbidden_uses, list) or not any(
+        str(item).strip() for item in forbidden_uses
+    ):
         return "missing_forbidden_uses_contract"
     return None
 
@@ -250,16 +261,23 @@ def _safe_implement_now_block_reason(order: dict[str, Any]) -> str | None:
 def _is_missing_contract_self_repairable(order: dict[str, Any]) -> bool:
     if str(order.get("decision") or "") != "implement_now":
         return False
-    if order.get("runtime_effect") is not False or order.get("allowed_runtime_apply") is True:
+    if (
+        order.get("runtime_effect") is not False
+        or order.get("allowed_runtime_apply") is True
+    ):
         return False
     forbidden_uses = order.get("forbidden_uses")
-    if isinstance(forbidden_uses, list) and any(str(item).strip() for item in forbidden_uses):
+    if isinstance(forbidden_uses, list) and any(
+        str(item).strip() for item in forbidden_uses
+    ):
         return False
     blob = _text_blob(order)
     return not any(term in blob for term in FORBIDDEN_USE_TERMS)
 
 
-def _self_repair_order_contract(order: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any] | None]:
+def _self_repair_order_contract(
+    order: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
     if not _is_missing_contract_self_repairable(order):
         return order, None
     repaired = dict(order)
@@ -280,21 +298,36 @@ def triage_non_implement(order: dict[str, Any]) -> str:
     if status.startswith("implemented"):
         return "attached_to_existing_family"
     if decision == "attach_existing_family":
-        return "needs_codex_instrumentation" if _explicitly_needs_codex_instrumentation(order) else "attached_to_existing_family"
+        return (
+            "needs_codex_instrumentation"
+            if _explicitly_needs_codex_instrumentation(order)
+            else "attached_to_existing_family"
+        )
     if decision == "design_family_candidate":
-        return "design_backlog_required" if order.get("allowed_runtime_apply") is False else "merge_into_existing_family"
+        return (
+            "design_backlog_required"
+            if order.get("allowed_runtime_apply") is False
+            else "merge_into_existing_family"
+        )
     if decision == "defer_evidence":
         repeat = order.get("repeat_unresolved") or order.get("repeat_count") or 0
         try:
             repeat_count = int(repeat)
         except Exception:
             repeat_count = 0
-        return "promoted" if repeat_count >= 2 and order.get("runtime_effect") is False else "continue_defer"
+        return (
+            "promoted"
+            if repeat_count >= 2 and order.get("runtime_effect") is False
+            else "continue_defer"
+        )
     return "drop_stale" if decision == "reject" else "stale_no_action"
 
 
 def _explicitly_needs_codex_instrumentation(order: dict[str, Any]) -> bool:
-    if order.get("runtime_effect") is not False or order.get("allowed_runtime_apply") is True:
+    if (
+        order.get("runtime_effect") is not False
+        or order.get("allowed_runtime_apply") is True
+    ):
         return False
     explicit_keys = (
         "needs_codex_instrumentation",
@@ -304,7 +337,12 @@ def _explicitly_needs_codex_instrumentation(order: dict[str, Any]) -> bool:
     if any(order.get(key) is True for key in explicit_keys):
         return True
     explicit_values = {"needs_codex_instrumentation", "instrumentation_order"}
-    for key in ("implementation_status", "implementation_type", "route", "improvement_type"):
+    for key in (
+        "implementation_status",
+        "implementation_type",
+        "route",
+        "improvement_type",
+    ):
         if str(order.get(key) or "").strip().lower() in explicit_values:
             return True
     return False
@@ -325,7 +363,10 @@ def _non_implement_terminal_disposition(order: dict[str, Any]) -> str:
 
 
 def _promotable_non_implement(order: dict[str, Any]) -> bool:
-    if order.get("runtime_effect") is not False or order.get("allowed_runtime_apply") is True:
+    if (
+        order.get("runtime_effect") is not False
+        or order.get("allowed_runtime_apply") is True
+    ):
         return False
     blob = _text_blob(order)
     return not any(term in blob for term in FORBIDDEN_USE_TERMS)
@@ -335,7 +376,9 @@ def _promote_non_implement_order(order: dict[str, Any]) -> dict[str, Any]:
     promoted = dict(order)
     promoted["decision"] = "implement_now"
     promoted["promoted_from_decision"] = order.get("decision")
-    promoted["forbidden_uses"] = promoted.get("forbidden_uses") or list(DEFAULT_FORBIDDEN_USES)
+    promoted["forbidden_uses"] = promoted.get("forbidden_uses") or list(
+        DEFAULT_FORBIDDEN_USES
+    )
     promoted["runtime_effect"] = False
     promoted["allowed_runtime_apply"] = False
     return promoted
@@ -362,17 +405,21 @@ def _render_markdown(report: dict[str, Any]) -> str:
         )
     if not report.get("agent_model_policy"):
         lines.append("- none")
-    lines.extend([
-        "",
-        "## Implemented Orders",
-    ])
+    lines.extend(
+        [
+            "",
+            "## Implemented Orders",
+        ]
+    )
     for item in report.get("implemented_orders") or []:
         lines.append(f"- `{item.get('order_id')}` status=`{item.get('status')}`")
     if not report.get("implemented_orders"):
         lines.append("- none")
     lines.extend(["", "## Non-Implement Triage"])
     for item in report.get("non_implement_triage") or []:
-        lines.append(f"- `{item.get('order_id')}` decision=`{item.get('decision')}` triage=`{item.get('triage')}`")
+        lines.append(
+            f"- `{item.get('order_id')}` decision=`{item.get('decision')}` triage=`{item.get('triage')}`"
+        )
     if not report.get("non_implement_triage"):
         lines.append("- none")
     lines.extend(["", "## Terminal Dispositions"])
@@ -407,7 +454,12 @@ def _order_complexity(orders: list[dict[str, Any]]) -> str:
         "report producer",
         "traceability",
     )
-    if len(orders) >= 3 or path_count >= 4 or acceptance_count >= 3 or any(term in blob for term in broad_terms):
+    if (
+        len(orders) >= 3
+        or path_count >= 4
+        or acceptance_count >= 3
+        or any(term in blob for term in broad_terms)
+    ):
         return "broad_contract"
     if path_count >= 2 or acceptance_count >= 1:
         return "medium_source"
@@ -429,7 +481,11 @@ def _select_turn_model_effort(
     complexity = _order_complexity(orders)
     selected: tuple[str, str]
     if phase == "implement":
-        selected = ("gpt-5.4", "medium") if complexity == "broad_contract" else ("gpt-5.3-codex-spark", "medium")
+        selected = (
+            ("gpt-5.4", "medium")
+            if complexity == "broad_contract"
+            else ("gpt-5.3-codex-spark", "medium")
+        )
     elif phase == "review":
         selected = ("gpt-5.4", "high")
     elif phase == "supplemental_fix":
@@ -476,10 +532,20 @@ def _agent_escalation_reasons(orders: list[dict[str, Any]], *, phase: str) -> li
     if complexity == "broad_contract":
         reasons.append("broad_contract")
     blob = " ".join(_text_blob(order) for order in orders)
-    for term in ("schema", "producer", "consumer", "contract", "report producer", "cross"):
+    for term in (
+        "schema",
+        "producer",
+        "consumer",
+        "contract",
+        "report producer",
+        "cross",
+    ):
         if term in blob:
             reasons.append(f"order_term:{term.replace(' ', '_')}")
-    if phase in {"review", "final_review", "supplemental_fix"} and complexity == "broad_contract":
+    if (
+        phase in {"review", "final_review", "supplemental_fix"}
+        and complexity == "broad_contract"
+    ):
         reasons.append("broad_change_requires_independent_strong_review")
     return list(dict.fromkeys(reasons))
 
@@ -619,7 +685,9 @@ def _planned_agent_model_policy(
                 }
             )
             continue
-        selection = _select_agent_model(phase, orders, model_policy=model_policy, model=model, effort=effort)
+        selection = _select_agent_model(
+            phase, orders, model_policy=model_policy, model=model, effort=effort
+        )
         planned.append(selection.__dict__)
     return planned
 
@@ -640,12 +708,16 @@ def _make_worktree(
         if not (worktree / ".git").exists():
             return worktree, branch, 2, "worktree_path_exists_not_git"
         capture_runner = capture_runner or _run_capture
-        status_rc, status_stdout = capture_runner(["git", "status", "--porcelain"], worktree)
+        status_rc, status_stdout = capture_runner(
+            ["git", "status", "--porcelain"], worktree
+        )
         if status_rc != 0:
             return worktree, branch, status_rc, "worktree_status_failed"
         if status_stdout.strip():
             return worktree, branch, 2, "worktree_dirty"
-        root_rc, root_head = capture_runner(["git", "rev-parse", base_ref], PROJECT_ROOT)
+        root_rc, root_head = capture_runner(
+            ["git", "rev-parse", base_ref], PROJECT_ROOT
+        )
         tree_rc, tree_head = capture_runner(["git", "rev-parse", "HEAD"], worktree)
         if root_rc != 0 or tree_rc != 0:
             return worktree, branch, 2, "worktree_head_check_failed"
@@ -653,7 +725,9 @@ def _make_worktree(
             return worktree, branch, 2, "worktree_stale_head"
         return worktree, branch, 0, "reused_clean_worktree"
     worktree.parent.mkdir(parents=True, exist_ok=True)
-    rc = command_runner(["git", "worktree", "add", "-B", branch, str(worktree), base_ref], PROJECT_ROOT)
+    rc = command_runner(
+        ["git", "worktree", "add", "-B", branch, str(worktree), base_ref], PROJECT_ROOT
+    )
     return worktree, branch, rc, "created" if rc == 0 else "worktree_add_failed"
 
 
@@ -675,7 +749,9 @@ def _preserve_and_cleanup_interrupted_worktree(
     diff_path.parent.mkdir(parents=True, exist_ok=True)
 
     add_intent_rc = command_runner(["git", "add", "-N", "."], worktree)
-    diff_rc, diff_stdout = capture_runner(["git", "diff", "--binary", "HEAD", "--"], worktree)
+    diff_rc, diff_stdout = capture_runner(
+        ["git", "diff", "--binary", "HEAD", "--"], worktree
+    )
     if add_intent_rc != 0 or diff_rc != 0:
         diff_path.write_text(
             f"# interrupted diff capture failed for {target_date}\n"
@@ -688,9 +764,15 @@ def _preserve_and_cleanup_interrupted_worktree(
         diff_path.write_text(diff_stdout, encoding="utf-8")
         preserve_status = "diff_preserved" if diff_stdout.strip() else "no_diff"
 
-    cleanup_rc = command_runner(["git", "worktree", "remove", "--force", str(worktree)], PROJECT_ROOT)
+    cleanup_rc = command_runner(
+        ["git", "worktree", "remove", "--force", str(worktree)], PROJECT_ROOT
+    )
     status = preserve_status if cleanup_rc == 0 else f"{preserve_status}_cleanup_failed"
-    return {"status": status, "diff_path": str(diff_path), "cleanup_exit_code": cleanup_rc}
+    return {
+        "status": status,
+        "diff_path": str(diff_path),
+        "cleanup_exit_code": cleanup_rc,
+    }
 
 
 def _codex_recovery_model_plan(
@@ -699,11 +781,19 @@ def _codex_recovery_model_plan(
     *,
     model_policy: str = "credit_min",
 ) -> list[tuple[str | None, str | None, str]]:
-    plan: list[tuple[str | None, str | None, str]] = [(model, effort, "requested_or_auto")]
+    plan: list[tuple[str | None, str | None, str]] = [
+        (model, effort, "requested_or_auto")
+    ]
     if model_policy == "credit_min" and not model and not effort:
         defaults = _credit_min_model_defaults()
         plan[0] = (None, None, "credit_min_agent_policy")
-        plan.append((defaults["strong_model"], defaults["strong_effort"], "credit_min_strong_recovery"))
+        plan.append(
+            (
+                defaults["strong_model"],
+                defaults["strong_effort"],
+                "credit_min_strong_recovery",
+            )
+        )
     raw_models = os.environ.get("CODEX_WORKORDER_RECOVERY_MODELS")
     if raw_models:
         for raw_item in raw_models.split(","):
@@ -711,16 +801,27 @@ def _codex_recovery_model_plan(
             if not text:
                 continue
             if ":" in text:
-                fallback_model, fallback_effort = [part.strip() or None for part in text.split(":", 1)]
+                fallback_model, fallback_effort = [
+                    part.strip() or None for part in text.split(":", 1)
+                ]
             else:
-                fallback_model, fallback_effort = text, os.environ.get("CODEX_WORKORDER_RECOVERY_EFFORT", "medium")
-            if (fallback_model, fallback_effort) not in [(item[0], item[1]) for item in plan]:
+                fallback_model, fallback_effort = text, os.environ.get(
+                    "CODEX_WORKORDER_RECOVERY_EFFORT", "medium"
+                )
+            if (fallback_model, fallback_effort) not in [
+                (item[0], item[1]) for item in plan
+            ]:
                 plan.append((fallback_model, fallback_effort, "fallback_model"))
         return plan
     if model_policy == "credit_min" and not model and not effort:
         return plan
-    fallback_model = os.environ.get("CODEX_WORKORDER_RECOVERY_MODEL", "gpt-5.3-codex-spark").strip() or None
-    fallback_effort = os.environ.get("CODEX_WORKORDER_RECOVERY_EFFORT", "medium").strip() or None
+    fallback_model = (
+        os.environ.get("CODEX_WORKORDER_RECOVERY_MODEL", "gpt-5.3-codex-spark").strip()
+        or None
+    )
+    fallback_effort = (
+        os.environ.get("CODEX_WORKORDER_RECOVERY_EFFORT", "medium").strip() or None
+    )
     if (fallback_model, fallback_effort) != (model, effort):
         plan.append((fallback_model, fallback_effort, "fallback_model"))
     return plan
@@ -735,8 +836,12 @@ def _make_retry_worktree(
     dry_run: bool,
     base_ref: str = "HEAD",
 ) -> tuple[Path, str, int, str]:
-    retry_prefix = branch_prefix if attempt_index == 0 else f"{branch_prefix}-retry{attempt_index}"
-    return _make_worktree(target_date, retry_prefix, command_runner, dry_run, base_ref=base_ref)
+    retry_prefix = (
+        branch_prefix if attempt_index == 0 else f"{branch_prefix}-retry{attempt_index}"
+    )
+    return _make_worktree(
+        target_date, retry_prefix, command_runner, dry_run, base_ref=base_ref
+    )
 
 
 def _codex_turns(
@@ -782,14 +887,21 @@ def _codex_turns(
         implement_selection = _select_agent_model(
             "implement", orders, model_policy=model_policy, model=model, effort=effort
         )
-        thread = codex.thread_start(cwd=str(worktree), sandbox=Sandbox.workspace_write, model=implement_selection.model)
+        thread = codex.thread_start(
+            cwd=str(worktree),
+            sandbox=Sandbox.workspace_write,
+            model=implement_selection.model,
+        )
         try:
             result = _run_codex_call_with_timeout(
                 lambda: thread.run(
                     prompt,
                     **{
                         k: v
-                        for k, v in {"model": implement_selection.model, "effort": implement_selection.effort}.items()
+                        for k, v in {
+                            "model": implement_selection.model,
+                            "effort": implement_selection.effort,
+                        }.items()
                         if v
                     },
                 ),
@@ -809,13 +921,22 @@ def _codex_turns(
                 implement_selection.token_minimization_policy,
             )
         )
-        review_selection = _select_agent_model("review", orders, model_policy=model_policy, model=model, effort=effort)
+        review_selection = _select_agent_model(
+            "review", orders, model_policy=model_policy, model=model, effort=effort
+        )
         try:
             review = _run_codex_call_with_timeout(
                 lambda: thread.run(
                     "Review the diff only. List blocking issues first.",
                     sandbox=Sandbox.read_only,
-                    **{k: v for k, v in {"model": review_selection.model, "effort": review_selection.effort}.items() if v},
+                    **{
+                        k: v
+                        for k, v in {
+                            "model": review_selection.model,
+                            "effort": review_selection.effort,
+                        }.items()
+                        if v
+                    },
                 ),
                 phase="review",
             )
@@ -833,13 +954,26 @@ def _codex_turns(
                 review_selection.token_minimization_policy,
             )
         )
-        fix_selection = _select_agent_model("supplemental_fix", orders, model_policy=model_policy, model=model, effort=effort)
+        fix_selection = _select_agent_model(
+            "supplemental_fix",
+            orders,
+            model_policy=model_policy,
+            model=model,
+            effort=effort,
+        )
         try:
             fix = _run_codex_call_with_timeout(
                 lambda: thread.run(
                     "Fix any blocking issues found in the review, then summarize.",
                     sandbox=Sandbox.workspace_write,
-                    **{k: v for k, v in {"model": fix_selection.model, "effort": fix_selection.effort}.items() if v},
+                    **{
+                        k: v
+                        for k, v in {
+                            "model": fix_selection.model,
+                            "effort": fix_selection.effort,
+                        }.items()
+                        if v
+                    },
                 ),
                 phase="supplemental_fix",
             )
@@ -857,13 +991,26 @@ def _codex_turns(
                 fix_selection.token_minimization_policy,
             )
         )
-        final_selection = _select_agent_model("final_review", orders, model_policy=model_policy, model=model, effort=effort)
+        final_selection = _select_agent_model(
+            "final_review",
+            orders,
+            model_policy=model_policy,
+            model=model,
+            effort=effort,
+        )
         try:
             final_review = _run_codex_call_with_timeout(
                 lambda: thread.run(
                     "Final read-only review of the resulting diff.",
                     sandbox=Sandbox.read_only,
-                    **{k: v for k, v in {"model": final_selection.model, "effort": final_selection.effort}.items() if v},
+                    **{
+                        k: v
+                        for k, v in {
+                            "model": final_selection.model,
+                            "effort": final_selection.effort,
+                        }.items()
+                        if v
+                    },
                 ),
                 phase="final_review",
             )
@@ -884,23 +1031,52 @@ def _codex_turns(
     return turns, None
 
 
-def _run_validation(worktree: Path, command_runner: CommandRunner, dry_run: bool) -> list[dict[str, Any]]:
+def _run_validation(
+    worktree: Path, command_runner: CommandRunner, dry_run: bool
+) -> list[dict[str, Any]]:
     commands = [
         ["git", "diff", "--check", "HEAD"],
-        [_python_bin(), "-m", "pytest", "-q", "src/tests/test_build_code_improvement_workorder.py"],
-        [_python_bin(), "-m", "pytest", "-q", "src/tests/test_verify_threshold_cycle_postclose_chain.py"],
-        [_python_bin(), "-m", "src.engine.sync_docs_backlog_to_project", "--print-backlog-only", "--limit", "500"],
+        [
+            _python_bin(),
+            "-m",
+            "pytest",
+            "-q",
+            "src/tests/test_build_code_improvement_workorder.py",
+        ],
+        [
+            _python_bin(),
+            "-m",
+            "pytest",
+            "-q",
+            "src/tests/test_verify_threshold_cycle_postclose_chain.py",
+        ],
+        [
+            _python_bin(),
+            "-m",
+            "src.engine.sync_docs_backlog_to_project",
+            "--print-backlog-only",
+            "--limit",
+            "500",
+        ],
     ]
     results: list[dict[str, Any]] = []
     for command in commands:
         rc = 0 if dry_run else command_runner(command, worktree)
-        results.append({"command": command, "exit_code": rc, "status": "planned" if dry_run else ("pass" if rc == 0 else "fail")})
+        results.append(
+            {
+                "command": command,
+                "exit_code": rc,
+                "status": "planned" if dry_run else ("pass" if rc == 0 else "fail"),
+            }
+        )
         if rc != 0 and not dry_run:
             break
     return results
 
 
-def _acceptance_commands(orders: list[dict[str, Any]]) -> tuple[list[list[str]], list[str]]:
+def _acceptance_commands(
+    orders: list[dict[str, Any]],
+) -> tuple[list[list[str]], list[str]]:
     commands: list[list[str]] = []
     unsupported: list[str] = []
     for order in orders:
@@ -910,26 +1086,32 @@ def _acceptance_commands(orders: list[dict[str, Any]]) -> tuple[list[list[str]],
                 continue
             normalized = text
             if normalized.startswith("PYTHONPATH=. "):
-                normalized = normalized[len("PYTHONPATH=. "):]
+                normalized = normalized[len("PYTHONPATH=. ") :]
             if normalized.startswith(".venv/bin/python "):
-                normalized = "python " + normalized[len(".venv/bin/python "):]
+                normalized = "python " + normalized[len(".venv/bin/python ") :]
             if normalized.startswith("./.venv/bin/python "):
-                normalized = "python " + normalized[len("./.venv/bin/python "):]
+                normalized = "python " + normalized[len("./.venv/bin/python ") :]
             if normalized.startswith(".venv/bin/pytest "):
-                normalized = "pytest " + normalized[len(".venv/bin/pytest "):]
+                normalized = "pytest " + normalized[len(".venv/bin/pytest ") :]
             if normalized.startswith("./.venv/bin/pytest "):
-                normalized = "pytest " + normalized[len("./.venv/bin/pytest "):]
+                normalized = "pytest " + normalized[len("./.venv/bin/pytest ") :]
             if normalized.startswith("venv/Scripts/python.exe "):
-                normalized = "python " + normalized[len("venv/Scripts/python.exe "):]
-            if not any(normalized.startswith(prefix) for prefix in ALLOWED_ACCEPTANCE_COMMAND_PREFIXES):
+                normalized = "python " + normalized[len("venv/Scripts/python.exe ") :]
+            if not any(
+                normalized.startswith(prefix)
+                for prefix in ALLOWED_ACCEPTANCE_COMMAND_PREFIXES
+            ):
                 unsupported.append(text)
                 continue
             parts = normalized.split()
-            if normalized.startswith("pytest ") or normalized.startswith("python -m pytest "):
+            if normalized.startswith("pytest ") or normalized.startswith(
+                "python -m pytest "
+            ):
                 meaningful = [
                     part
                     for part in parts
-                    if part not in {"python", "-m", "pytest"} and not part.startswith("-")
+                    if part not in {"python", "-m", "pytest"}
+                    and not part.startswith("-")
                 ]
                 if not any(
                     part.startswith(("src/tests/", "tests/"))
@@ -948,18 +1130,39 @@ def _acceptance_commands(orders: list[dict[str, Any]]) -> tuple[list[list[str]],
 
 
 def _implement_now_rejudge_reason(order: dict[str, Any]) -> str | None:
-    issues = {str(item).strip() for item in (order.get("adm_issue_types") or []) if str(item).strip()}
-    if issues and issues.issubset({"joined_sample_below_sample_floor", "prompt_context_not_loaded"}):
+    issues = {
+        str(item).strip()
+        for item in (order.get("adm_issue_types") or [])
+        if str(item).strip()
+    }
+    if issues and issues.issubset(
+        {"joined_sample_below_sample_floor", "prompt_context_not_loaded"}
+    ):
         return "evidence_waiting_sample_or_runtime_observation"
-    provenance = order.get("implementation_provenance") if isinstance(order.get("implementation_provenance"), dict) else {}
-    if str(provenance.get("recommended_resolution") or "") == "mark_not_applicable_explicitly":
+    provenance = (
+        order.get("implementation_provenance")
+        if isinstance(order.get("implementation_provenance"), dict)
+        else {}
+    )
+    if (
+        str(provenance.get("recommended_resolution") or "")
+        == "mark_not_applicable_explicitly"
+    ):
         return "source_evidence_not_applicable_terminal"
     files = order.get("files_likely_touched")
-    file_count = len([item for item in files if str(item).strip()]) if isinstance(files, list) else 0
+    file_count = (
+        len([item for item in files if str(item).strip()])
+        if isinstance(files, list)
+        else 0
+    )
     commands, unsupported = _acceptance_commands([order])
     source_type = str(order.get("source_report_type") or "")
     if (
-        source_type in {"lifecycle_decision_matrix_holding_bucket_attribution", "lifecycle_decision_matrix_exit_bucket_attribution"}
+        source_type
+        in {
+            "lifecycle_decision_matrix_holding_bucket_attribution",
+            "lifecycle_decision_matrix_exit_bucket_attribution",
+        }
         and file_count <= 0
         and not commands
     ):
@@ -983,7 +1186,13 @@ def _run_acceptance_tests(
     results: list[dict[str, Any]] = []
     for command in commands:
         rc = 0 if dry_run else command_runner(command, worktree)
-        results.append({"command": command, "exit_code": rc, "status": "planned" if dry_run else ("pass" if rc == 0 else "fail")})
+        results.append(
+            {
+                "command": command,
+                "exit_code": rc,
+                "status": "planned" if dry_run else ("pass" if rc == 0 else "fail"),
+            }
+        )
         if rc != 0 and not dry_run:
             break
     return results, unsupported
@@ -1012,9 +1221,11 @@ def _normalize_workorders(
                     {
                         "order_id": item.get("order_id"),
                         "decision": item.get("decision"),
-                        "terminal_status": "requires_user_authority"
-                        if reason == "forbidden_or_not_safe"
-                        else "deferred_evidence_terminal",
+                        "terminal_status": (
+                            "requires_user_authority"
+                            if reason == "forbidden_or_not_safe"
+                            else "deferred_evidence_terminal"
+                        ),
                         "triage": "non_selected_not_in_canonical_queue",
                         "reason": reason or "non_selected_not_in_canonical_queue",
                         "runtime_effect": item.get("runtime_effect"),
@@ -1057,7 +1268,11 @@ def _normalize_workorders(
                     {
                         "order_id": item.get("order_id"),
                         "decision": "implement_now",
-                        "terminal_status": "requires_user_authority" if reason == "forbidden_or_not_safe" else "rejected_terminal",
+                        "terminal_status": (
+                            "requires_user_authority"
+                            if reason == "forbidden_or_not_safe"
+                            else "rejected_terminal"
+                        ),
                         "reason": reason,
                         "runtime_effect": item.get("runtime_effect"),
                         "allowed_runtime_apply": item.get("allowed_runtime_apply"),
@@ -1068,7 +1283,9 @@ def _normalize_workorders(
         if disposition == "promoted_to_implement_now" and not promote_non_implement:
             disposition = "deferred_evidence_terminal"
         if disposition == "promoted_to_implement_now":
-            promoted, recovery = _self_repair_order_contract(_promote_non_implement_order(item))
+            promoted, recovery = _self_repair_order_contract(
+                _promote_non_implement_order(item)
+            )
             if recovery:
                 contract_recoveries.append(recovery)
             reason = _safe_implement_now_block_reason(promoted)
@@ -1101,10 +1318,15 @@ def _normalize_workorders(
 
 def _chunked(items: Sequence[dict[str, Any]], size: int) -> list[list[dict[str, Any]]]:
     chunk_size = max(1, int(size))
-    return [list(items[index : index + chunk_size]) for index in range(0, len(items), chunk_size)]
+    return [
+        list(items[index : index + chunk_size])
+        for index in range(0, len(items), chunk_size)
+    ]
 
 
-def _head_sha(worktree: Path, capture_runner: CaptureRunner | None = None) -> str | None:
+def _head_sha(
+    worktree: Path, capture_runner: CaptureRunner | None = None
+) -> str | None:
     capture_runner = capture_runner or _run_capture
     rc, stdout = capture_runner(["git", "rev-parse", "HEAD"], worktree)
     return stdout.strip() if rc == 0 and stdout.strip() else None
@@ -1130,7 +1352,10 @@ def _commit_worktree_diff(
     add_rc = command_runner(["git", "add", "-A"], worktree)
     if add_rc != 0:
         return add_rc, None
-    commit_rc = command_runner(["git", "commit", "-m", f"Automate code improvement workorders {target_date}"], worktree)
+    commit_rc = command_runner(
+        ["git", "commit", "-m", f"Automate code improvement workorders {target_date}"],
+        worktree,
+    )
     if commit_rc != 0:
         return commit_rc, None
     return commit_rc, _head_sha(worktree)
@@ -1144,7 +1369,9 @@ def _run_branch_validation_acceptance(
     dry_run: bool,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[str], dict[str, Any], bool]:
     validation_results = _run_validation(worktree, command_runner, dry_run)
-    validations_pass = bool(validation_results) and all(item["exit_code"] == 0 for item in validation_results)
+    validations_pass = bool(validation_results) and all(
+        item["exit_code"] == 0 for item in validation_results
+    )
     acceptance_results: list[dict[str, Any]] = []
     unsupported_acceptance_tests: list[str] = []
     forbidden_scan = {"status": "not_run", "matches": []}
@@ -1213,7 +1440,11 @@ def _attempt_codex_batch(
         "acceptance_results": [],
         "unsupported_acceptance_tests": [],
         "forbidden_diff_scan": {"status": "not_run", "matches": []},
-        "interrupted_worktree": {"status": "not_applicable", "diff_path": None, "cleanup_exit_code": None},
+        "interrupted_worktree": {
+            "status": "not_applicable",
+            "diff_path": None,
+            "cleanup_exit_code": None,
+        },
         "commit_sha": None,
     }
     if worktree_rc != 0:
@@ -1253,11 +1484,13 @@ def _attempt_codex_batch(
                 dry_run=dry_run,
             )
         return result
-    validation_results, acceptance_results, unsupported, forbidden_scan, checks_pass = _run_branch_validation_acceptance(
-        worktree=worktree,
-        orders=orders,
-        command_runner=command_runner,
-        dry_run=dry_run,
+    validation_results, acceptance_results, unsupported, forbidden_scan, checks_pass = (
+        _run_branch_validation_acceptance(
+            worktree=worktree,
+            orders=orders,
+            command_runner=command_runner,
+            dry_run=dry_run,
+        )
     )
     result["validation_results"] = validation_results
     result["acceptance_results"] = acceptance_results
@@ -1274,7 +1507,9 @@ def _attempt_codex_batch(
     )
     result["commit_exit_code"] = commit_rc
     result["commit_sha"] = commit_sha
-    result["status"] = "committed_branch" if commit_rc == 0 and commit_sha else "commit_failed"
+    result["status"] = (
+        "committed_branch" if commit_rc == 0 and commit_sha else "commit_failed"
+    )
     return result
 
 
@@ -1355,11 +1590,16 @@ def _process_order_batch(
                     {
                         "order_id": item.get("order_id"),
                         "final_status": "committed_branch",
-                        "attempt_count": sum(1 for attempt in recovery_attempts if item.get("order_id") in (attempt.get("order_ids") or [])),
+                        "attempt_count": sum(
+                            1
+                            for attempt in recovery_attempts
+                            if item.get("order_id") in (attempt.get("order_ids") or [])
+                        ),
                         "codex_errors": [
                             attempt.get("codex_error")
                             for attempt in recovery_attempts
-                            if item.get("order_id") in (attempt.get("order_ids") or []) and attempt.get("codex_error")
+                            if item.get("order_id") in (attempt.get("order_ids") or [])
+                            and attempt.get("codex_error")
                         ],
                         "validation_results": result.get("validation_results") or [],
                         "commit_sha": result.get("commit_sha"),
@@ -1413,18 +1653,25 @@ def _process_order_batch(
         {
             "order_id": item.get("order_id"),
             "final_status": "blocked_uncompleted_implementation",
-            "attempt_count": sum(1 for attempt in recovery_attempts if item.get("order_id") in (attempt.get("order_ids") or [])),
+            "attempt_count": sum(
+                1
+                for attempt in recovery_attempts
+                if item.get("order_id") in (attempt.get("order_ids") or [])
+            ),
             "codex_errors": [
                 attempt.get("codex_error")
                 for attempt in recovery_attempts
-                if item.get("order_id") in (attempt.get("order_ids") or []) and attempt.get("codex_error")
+                if item.get("order_id") in (attempt.get("order_ids") or [])
+                and attempt.get("codex_error")
             ],
             "validation_results": (last_result or {}).get("validation_results") or [],
             "commit_sha": None,
             "branch": (last_result or {}).get("branch"),
             "merged_main_sha": None,
             "pushed": False,
-            "reason": (last_result or {}).get("codex_error") or (last_result or {}).get("status") or "recovery_attempts_exhausted",
+            "reason": (last_result or {}).get("codex_error")
+            or (last_result or {}).get("status")
+            or "recovery_attempts_exhausted",
         }
         for item in orders
     ]
@@ -1439,7 +1686,10 @@ def _merge_and_push_main(
     auto_push: bool,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     if not branch_commits:
-        return {"status": "not_required", "merged_main_sha": None, "branches": []}, {"status": "not_required", "pushed": False}
+        return {"status": "not_required", "merged_main_sha": None, "branches": []}, {
+            "status": "not_required",
+            "pushed": False,
+        }
     integration_branch = f"codex-integration-{target_date}"
     integration_worktree = WORKTREE_ROOT / integration_branch
     merge_result: dict[str, Any] = {
@@ -1451,29 +1701,67 @@ def _merge_and_push_main(
         "validation_results": [],
         "merged_main_sha": None,
     }
-    push_result: dict[str, Any] = {"status": "not_run", "pushed": False, "exit_code": None}
+    push_result: dict[str, Any] = {
+        "status": "not_run",
+        "pushed": False,
+        "exit_code": None,
+    }
     if dry_run:
-        merge_result.update({"status": "dry_run_planned", "merged_main_sha": "dry_run_main_sha"})
-        push_result.update({"status": "dry_run_planned", "pushed": True, "exit_code": 0})
+        merge_result.update(
+            {"status": "dry_run_planned", "merged_main_sha": "dry_run_main_sha"}
+        )
+        push_result.update(
+            {"status": "dry_run_planned", "pushed": True, "exit_code": 0}
+        )
         return merge_result, push_result
     command_runner(["git", "fetch", "origin", "main"], PROJECT_ROOT)
     if integration_worktree.exists():
-        command_runner(["git", "worktree", "remove", "--force", str(integration_worktree)], PROJECT_ROOT)
-    add_rc = command_runner(["git", "worktree", "add", "-B", integration_branch, str(integration_worktree), "origin/main"], PROJECT_ROOT)
+        command_runner(
+            ["git", "worktree", "remove", "--force", str(integration_worktree)],
+            PROJECT_ROOT,
+        )
+    add_rc = command_runner(
+        [
+            "git",
+            "worktree",
+            "add",
+            "-B",
+            integration_branch,
+            str(integration_worktree),
+            "origin/main",
+        ],
+        PROJECT_ROOT,
+    )
     if add_rc != 0:
         merge_result["status"] = "integration_worktree_failed"
         merge_result["worktree_add_exit_code"] = add_rc
         return merge_result, push_result
     for item in branch_commits:
         branch = str(item.get("branch") or "")
-        merge_rc = command_runner(["git", "merge", "--no-ff", branch, "-m", f"Merge Codex workorder branch {branch}"], integration_worktree)
-        merge_result["merge_exit_codes"].append({"branch": branch, "exit_code": merge_rc})
+        merge_rc = command_runner(
+            [
+                "git",
+                "merge",
+                "--no-ff",
+                branch,
+                "-m",
+                f"Merge Codex workorder branch {branch}",
+            ],
+            integration_worktree,
+        )
+        merge_result["merge_exit_codes"].append(
+            {"branch": branch, "exit_code": merge_rc}
+        )
         if merge_rc != 0:
             merge_result["status"] = "merge_conflict"
             return merge_result, push_result
-    validation_results = _run_validation(integration_worktree, command_runner, dry_run=False)
+    validation_results = _run_validation(
+        integration_worktree, command_runner, dry_run=False
+    )
     merge_result["validation_results"] = validation_results
-    if not validation_results or any(item.get("exit_code") != 0 for item in validation_results):
+    if not validation_results or any(
+        item.get("exit_code") != 0 for item in validation_results
+    ):
         merge_result["status"] = "integration_validation_failed"
         return merge_result, push_result
     merge_result["merged_main_sha"] = _head_sha(integration_worktree)
@@ -1481,33 +1769,96 @@ def _merge_and_push_main(
     if not auto_push:
         push_result["status"] = "push_disabled"
         return merge_result, push_result
-    push_rc = command_runner(["git", "push", "origin", "HEAD:main"], integration_worktree)
-    push_result.update({"exit_code": push_rc, "status": "pushed" if push_rc == 0 else "push_rejected", "pushed": push_rc == 0})
+    push_rc = command_runner(
+        ["git", "push", "origin", "HEAD:main"], integration_worktree
+    )
+    push_result.update(
+        {
+            "exit_code": push_rc,
+            "status": "pushed" if push_rc == 0 else "push_rejected",
+            "pushed": push_rc == 0,
+        }
+    )
     if push_rc != 0:
         command_runner(["git", "fetch", "origin", "main"], integration_worktree)
-        rebase_rc = command_runner(["git", "rebase", "origin/main"], integration_worktree)
+        rebase_rc = command_runner(
+            ["git", "rebase", "origin/main"], integration_worktree
+        )
         push_result["rebase_exit_code"] = rebase_rc
         if rebase_rc == 0:
-            validation_results = _run_validation(integration_worktree, command_runner, dry_run=False)
+            validation_results = _run_validation(
+                integration_worktree, command_runner, dry_run=False
+            )
             push_result["post_rebase_validation_results"] = validation_results
-            if validation_results and all(item.get("exit_code") == 0 for item in validation_results):
+            if validation_results and all(
+                item.get("exit_code") == 0 for item in validation_results
+            ):
                 merge_result["merged_main_sha"] = _head_sha(integration_worktree)
-                push_rc = command_runner(["git", "push", "origin", "HEAD:main"], integration_worktree)
-                push_result.update({"exit_code": push_rc, "status": "pushed" if push_rc == 0 else "push_rejected_after_rebase", "pushed": push_rc == 0})
+                push_rc = command_runner(
+                    ["git", "push", "origin", "HEAD:main"], integration_worktree
+                )
+                push_result.update(
+                    {
+                        "exit_code": push_rc,
+                        "status": (
+                            "pushed" if push_rc == 0 else "push_rejected_after_rebase"
+                        ),
+                        "pushed": push_rc == 0,
+                    }
+                )
     return merge_result, push_result
 
 
 def _workorder_path_for_root(root: Path, target_date: str) -> Path:
-    return root / "data" / "report" / "code_improvement_workorder" / f"code_improvement_workorder_{target_date}.json"
+    return (
+        root
+        / "data"
+        / "report"
+        / "code_improvement_workorder"
+        / f"code_improvement_workorder_{target_date}.json"
+    )
 
 
 def _regeneration_commands(target_date: str, max_orders: int) -> list[list[str]]:
     return [
-        [_python_bin(), "-m", "src.engine.observation_source_quality_audit", "--target-date", target_date, "--write"],
-        [_python_bin(), "-m", "src.engine.automation.key_lineage_ledger", "--date", target_date],
-        [_python_bin(), "-m", "src.engine.automation.conversion_lane", "--date", target_date],
-        [_python_bin(), "-m", "src.engine.build_code_improvement_workorder", "--date", target_date, "--max-orders", str(max_orders)],
-        [_python_bin(), "-m", "src.engine.verify_threshold_cycle_postclose_chain", "--date", target_date],
+        [
+            _python_bin(),
+            "-m",
+            "src.engine.observation_source_quality_audit",
+            "--target-date",
+            target_date,
+            "--write",
+        ],
+        [
+            _python_bin(),
+            "-m",
+            "src.engine.automation.key_lineage_ledger",
+            "--date",
+            target_date,
+        ],
+        [
+            _python_bin(),
+            "-m",
+            "src.engine.automation.conversion_lane",
+            "--date",
+            target_date,
+        ],
+        [
+            _python_bin(),
+            "-m",
+            "src.engine.build_code_improvement_workorder",
+            "--date",
+            target_date,
+            "--max-orders",
+            str(max_orders),
+        ],
+        [
+            _python_bin(),
+            "-m",
+            "src.engine.verify_threshold_cycle_postclose_chain",
+            "--date",
+            target_date,
+        ],
     ]
 
 
@@ -1532,15 +1883,38 @@ def _prepare_regeneration_worktree(
         return regen_worktree, result
     command_runner(["git", "fetch", "origin", "main"], PROJECT_ROOT)
     if regen_worktree.exists():
-        command_runner(["git", "worktree", "remove", "--force", str(regen_worktree)], PROJECT_ROOT)
-    add_rc = command_runner(["git", "worktree", "add", "-B", regen_branch, str(regen_worktree), "origin/main"], PROJECT_ROOT)
+        command_runner(
+            ["git", "worktree", "remove", "--force", str(regen_worktree)], PROJECT_ROOT
+        )
+    add_rc = command_runner(
+        [
+            "git",
+            "worktree",
+            "add",
+            "-B",
+            regen_branch,
+            str(regen_worktree),
+            "origin/main",
+        ],
+        PROJECT_ROOT,
+    )
     result["worktree_add_exit_code"] = add_rc
     if add_rc != 0:
         result["status"] = "regeneration_worktree_failed"
         return regen_worktree, result
     for item in branch_commits:
         branch = str(item.get("branch") or "")
-        merge_rc = command_runner(["git", "merge", "--no-ff", branch, "-m", f"Merge Codex pass1 branch {branch}"], regen_worktree)
+        merge_rc = command_runner(
+            [
+                "git",
+                "merge",
+                "--no-ff",
+                branch,
+                "-m",
+                f"Merge Codex pass1 branch {branch}",
+            ],
+            regen_worktree,
+        )
         result["merge_exit_codes"].append({"branch": branch, "exit_code": merge_rc})
         if merge_rc != 0:
             result["status"] = "regeneration_merge_conflict"
@@ -1565,7 +1939,11 @@ def _run_two_pass_regeneration(
     )
     results = [prep]
     if prep.get("status") not in {"merged_pass1", "dry_run_planned"}:
-        return {"status": "blocked_regeneration_failed", "worktree": str(regen_worktree), "results": results}, {}
+        return {
+            "status": "blocked_regeneration_failed",
+            "worktree": str(regen_worktree),
+            "results": results,
+        }, {}
     for command in _regeneration_commands(target_date, max_orders):
         rc = 0 if dry_run else command_runner(command, regen_worktree)
         results.append(
@@ -1576,20 +1954,35 @@ def _run_two_pass_regeneration(
             }
         )
         if rc != 0 and not dry_run:
-            return {"status": "blocked_regeneration_failed", "worktree": str(regen_worktree), "results": results}, {}
-    regenerated = _load_json(_workorder_path_for_root(regen_worktree, target_date)) if not dry_run else {}
+            return {
+                "status": "blocked_regeneration_failed",
+                "worktree": str(regen_worktree),
+                "results": results,
+            }, {}
+    regenerated = (
+        _load_json(_workorder_path_for_root(regen_worktree, target_date))
+        if not dry_run
+        else {}
+    )
     if dry_run:
         regenerated = {}
     elif not regenerated.get("generation_id"):
         results.append(
             {
                 "status": "fail",
-                "command": ["load_regenerated_code_improvement_workorder", str(_workorder_path_for_root(regen_worktree, target_date))],
+                "command": [
+                    "load_regenerated_code_improvement_workorder",
+                    str(_workorder_path_for_root(regen_worktree, target_date)),
+                ],
                 "exit_code": 1,
                 "reason": "regenerated_workorder_missing_or_invalid",
             }
         )
-        return {"status": "blocked_regeneration_failed", "worktree": str(regen_worktree), "results": results}, {}
+        return {
+            "status": "blocked_regeneration_failed",
+            "worktree": str(regen_worktree),
+            "results": results,
+        }, {}
     return {
         "status": "regeneration_completed",
         "worktree": str(regen_worktree),
@@ -1598,21 +1991,47 @@ def _run_two_pass_regeneration(
     }, regenerated
 
 
-def _workorder_lineage_diff(original: dict[str, Any], regenerated: dict[str, Any]) -> dict[str, Any]:
-    lineage = regenerated.get("lineage") if isinstance(regenerated.get("lineage"), dict) else {}
-    original_order_ids = {str(item.get("order_id") or "") for item in original.get("orders") or [] if isinstance(item, dict)}
-    regenerated_order_ids = {str(item.get("order_id") or "") for item in regenerated.get("orders") or [] if isinstance(item, dict)}
-    inferred_new = sorted(item for item in regenerated_order_ids - original_order_ids if item)
-    inferred_removed = sorted(item for item in original_order_ids - regenerated_order_ids if item)
+def _workorder_lineage_diff(
+    original: dict[str, Any], regenerated: dict[str, Any]
+) -> dict[str, Any]:
+    lineage = (
+        regenerated.get("lineage")
+        if isinstance(regenerated.get("lineage"), dict)
+        else {}
+    )
+    original_order_ids = {
+        str(item.get("order_id") or "")
+        for item in original.get("orders") or []
+        if isinstance(item, dict)
+    }
+    regenerated_order_ids = {
+        str(item.get("order_id") or "")
+        for item in regenerated.get("orders") or []
+        if isinstance(item, dict)
+    }
+    inferred_new = sorted(
+        item for item in regenerated_order_ids - original_order_ids if item
+    )
+    inferred_removed = sorted(
+        item for item in original_order_ids - regenerated_order_ids if item
+    )
     return {
         "previous_generation_id": original.get("generation_id"),
         "regenerated_generation_id": regenerated.get("generation_id"),
         "previous_source_hash": original.get("source_hash"),
         "regenerated_source_hash": regenerated.get("source_hash"),
         "new_order_ids": sorted(set(lineage.get("new_order_ids") or inferred_new)),
-        "removed_order_ids": sorted(set(lineage.get("removed_order_ids") or inferred_removed)),
-        "decision_changed_order_ids": sorted(set(lineage.get("decision_changed_order_ids") or [])),
-        "source_hash_changed": bool(original.get("source_hash") and regenerated.get("source_hash") and original.get("source_hash") != regenerated.get("source_hash")),
+        "removed_order_ids": sorted(
+            set(lineage.get("removed_order_ids") or inferred_removed)
+        ),
+        "decision_changed_order_ids": sorted(
+            set(lineage.get("decision_changed_order_ids") or [])
+        ),
+        "source_hash_changed": bool(
+            original.get("source_hash")
+            and regenerated.get("source_hash")
+            and original.get("source_hash") != regenerated.get("source_hash")
+        ),
     }
 
 
@@ -1621,27 +2040,42 @@ def _pass2_orders_from_regenerated(
     *,
     completed_pass1_ids: set[str],
     lineage_diff: dict[str, Any],
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, str]]]:
+) -> tuple[
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, str]],
+]:
     changed_ids = {
         *[str(item) for item in lineage_diff.get("new_order_ids") or []],
         *[str(item) for item in lineage_diff.get("decision_changed_order_ids") or []],
     }
-    selected = [item for item in regenerated.get("orders") or [] if isinstance(item, dict)]
-    canonical, normalized_out, non_implement_dispositions, _recoveries = _normalize_workorders(
-        selected,
-        execute_implement_now=True,
-        promote_non_implement=True,
+    selected = [
+        item for item in regenerated.get("orders") or [] if isinstance(item, dict)
+    ]
+    canonical, normalized_out, non_implement_dispositions, _recoveries = (
+        _normalize_workorders(
+            selected,
+            execute_implement_now=True,
+            promote_non_implement=True,
+        )
     )
     pass2: list[dict[str, Any]] = []
     reasons: list[dict[str, str]] = []
     for order in canonical:
         order_id = str(order.get("order_id") or "")
-        if order_id and (order_id not in completed_pass1_ids or order_id in changed_ids):
+        if order_id and (
+            order_id not in completed_pass1_ids or order_id in changed_ids
+        ):
             pass2.append(order)
             reasons.append(
                 {
                     "order_id": order_id,
-                    "reason": "new_or_changed_order" if order_id in changed_ids else "not_completed_in_pass1",
+                    "reason": (
+                        "new_or_changed_order"
+                        if order_id in changed_ids
+                        else "not_completed_in_pass1"
+                    ),
                 }
             )
     return pass2, normalized_out, non_implement_dispositions, reasons
@@ -1656,12 +2090,18 @@ def _forbidden_diff_scan(
     if dry_run:
         return {"status": "planned", "matches": []}
     capture_runner = capture_runner or _run_capture
-    name_rc, name_stdout = capture_runner(["git", "diff", "--name-only", "HEAD"], worktree)
+    name_rc, name_stdout = capture_runner(
+        ["git", "diff", "--name-only", "HEAD"], worktree
+    )
     diff_rc, diff_stdout = capture_runner(["git", "diff", "HEAD", "--"], worktree)
-    untracked_rc, untracked_stdout = capture_runner(["git", "ls-files", "--others", "--exclude-standard"], worktree)
+    untracked_rc, untracked_stdout = capture_runner(
+        ["git", "ls-files", "--others", "--exclude-standard"], worktree
+    )
     if name_rc != 0 or diff_rc != 0 or untracked_rc != 0:
         return {"status": "fail", "matches": ["git_diff_failed"]}
-    untracked_files = [line.strip() for line in untracked_stdout.splitlines() if line.strip()]
+    untracked_files = [
+        line.strip() for line in untracked_stdout.splitlines() if line.strip()
+    ]
     files = list(
         dict.fromkeys(
             [
@@ -1674,12 +2114,17 @@ def _forbidden_diff_scan(
         path
         for path in files
         if path not in ALLOWED_AUTO_COMMIT_EXACT_PATHS
-        and not any(path.startswith(prefix) for prefix in ALLOWED_AUTO_COMMIT_PATH_PREFIXES)
+        and not any(
+            path.startswith(prefix) for prefix in ALLOWED_AUTO_COMMIT_PATH_PREFIXES
+        )
     ]
     forbidden_files = [
         path
         for path in files
-        if any(token in path.lower() for token in ("runtime_env", "approvals", "kiwoom_orders", "run_bot.sh"))
+        if any(
+            token in path.lower()
+            for token in ("runtime_env", "approvals", "kiwoom_orders", "run_bot.sh")
+        )
     ]
     changed_lines = [
         line[1:].lower()
@@ -1689,11 +2134,18 @@ def _forbidden_diff_scan(
     ]
     for path in untracked_files:
         try:
-            changed_lines.extend((worktree / path).read_text(encoding="utf-8", errors="replace").lower().splitlines())
+            changed_lines.extend(
+                (worktree / path)
+                .read_text(encoding="utf-8", errors="replace")
+                .lower()
+                .splitlines()
+            )
         except OSError:
             changed_lines.append(f"unreadable_untracked:{path}")
     changed_text = "\n".join(changed_lines)
-    forbidden_terms = sorted(term for term in FORBIDDEN_DIFF_PATTERNS if term in changed_text)
+    forbidden_terms = sorted(
+        term for term in FORBIDDEN_DIFF_PATTERNS if term in changed_text
+    )
     matches = [
         *[f"disallowed_path:{path}" for path in disallowed_files],
         *forbidden_files,
@@ -1731,8 +2183,17 @@ def build_codex_workorder_runner(
     workorder = _load_json(_workorder_path(target_date))
     original_workorder = copy.deepcopy(workorder)
     orders = [item for item in workorder.get("orders") or [] if isinstance(item, dict)]
-    non_selected_orders = [item for item in workorder.get("non_selected_orders") or [] if isinstance(item, dict)]
-    canonical_orders, normalized_out, non_implement_dispositions, contract_recoveries = _normalize_workorders(
+    non_selected_orders = [
+        item
+        for item in workorder.get("non_selected_orders") or []
+        if isinstance(item, dict)
+    ]
+    (
+        canonical_orders,
+        normalized_out,
+        non_implement_dispositions,
+        contract_recoveries,
+    ) = _normalize_workorders(
         orders,
         execute_implement_now=True,
         promote_non_implement=True,
@@ -1747,11 +2208,19 @@ def build_codex_workorder_runner(
         execute_implement_now=False,
         promote_non_implement=False,
     )
-    non_implement_dispositions = [*non_implement_dispositions, *non_selected_dispositions]
+    non_implement_dispositions = [
+        *non_implement_dispositions,
+        *non_selected_dispositions,
+    ]
     batch_size = max(1, int(max_orders))
     max_recovery_attempts = max(
         1,
-        int(os.environ.get("CODEX_WORKORDER_MAX_RECOVERY_ATTEMPTS", str(max(8, len(canonical_orders) * 4 or 1)))),
+        int(
+            os.environ.get(
+                "CODEX_WORKORDER_MAX_RECOVERY_ATTEMPTS",
+                str(max(8, len(canonical_orders) * 4 or 1)),
+            )
+        ),
     )
     two_pass_enabled = _env_bool("CODEX_WORKORDER_TWO_PASS_ENABLED", True)
     recovery_attempts: list[dict[str, Any]] = []
@@ -1822,7 +2291,10 @@ def build_codex_workorder_runner(
     pass1_complete = (
         bool(canonical_orders)
         and len(order_execution_results) == len(canonical_orders)
-        and all(item.get("final_status") == "committed_branch" for item in order_execution_results)
+        and all(
+            item.get("final_status") == "committed_branch"
+            for item in order_execution_results
+        )
     )
     all_canonical_orders = list(canonical_orders)
     if two_pass_enabled and not dry_run and pass1_complete:
@@ -1839,23 +2311,35 @@ def build_codex_workorder_runner(
             two_pass_status = "blocked_regeneration_failed"
         else:
             two_pass_status = "regeneration_completed"
-            workorder_lineage_diff = _workorder_lineage_diff(original_workorder, regenerated_workorder)
+            workorder_lineage_diff = _workorder_lineage_diff(
+                original_workorder, regenerated_workorder
+            )
             completed_pass1_ids = {
                 str(item.get("order_id") or "")
                 for item in order_execution_results
                 if item.get("final_status") == "committed_branch"
             }
-            pass2_orders, pass2_normalized_out, pass2_non_implement, pass2_selection_reason = _pass2_orders_from_regenerated(
+            (
+                pass2_orders,
+                pass2_normalized_out,
+                pass2_non_implement,
+                pass2_selection_reason,
+            ) = _pass2_orders_from_regenerated(
                 regenerated_workorder,
                 completed_pass1_ids=completed_pass1_ids,
                 lineage_diff=workorder_lineage_diff,
             )
             normalized_out = [*normalized_out, *pass2_normalized_out]
-            non_implement_dispositions = [*non_implement_dispositions, *pass2_non_implement]
+            non_implement_dispositions = [
+                *non_implement_dispositions,
+                *pass2_non_implement,
+            ]
             pass2_order_ids = [item.get("order_id") for item in pass2_orders]
             if pass2_orders:
                 all_canonical_orders = [*all_canonical_orders, *pass2_orders]
-                pass2_base_ref = str(regen_status.get("base_ref") or f"codex-regeneration-{target_date}")
+                pass2_base_ref = str(
+                    regen_status.get("base_ref") or f"codex-regeneration-{target_date}"
+                )
                 for batch in _chunked(pass2_orders, batch_size):
                     order_execution_results.extend(
                         _process_order_batch(
@@ -1879,7 +2363,11 @@ def build_codex_workorder_runner(
                     for item in order_execution_results
                     if item.get("order_id") in set(pass2_order_ids)
                 )
-                two_pass_status = "pass2_completed" if pass2_completed else "blocked_new_orders_uncompleted"
+                two_pass_status = (
+                    "pass2_completed"
+                    if pass2_completed
+                    else "blocked_new_orders_uncompleted"
+                )
             else:
                 two_pass_status = "pass2_not_required"
     elif two_pass_enabled and dry_run and canonical_orders:
@@ -1888,12 +2376,16 @@ def build_codex_workorder_runner(
         two_pass_status = "blocked_new_orders_uncompleted"
 
     has_user_authority_blocker = any(
-        str(item.get("terminal_status")) == "requires_user_authority" for item in normalized_out
+        str(item.get("terminal_status")) == "requires_user_authority"
+        for item in normalized_out
     )
     implementation_complete = (
         bool(all_canonical_orders)
         and len(order_execution_results) == len(all_canonical_orders)
-        and all(item.get("final_status") == "committed_branch" for item in order_execution_results)
+        and all(
+            item.get("final_status") == "committed_branch"
+            for item in order_execution_results
+        )
         and (not two_pass_enabled or two_pass_status in TWO_PASS_COMPLETED_STATUSES)
         and not has_user_authority_blocker
     )
@@ -1919,11 +2411,10 @@ def build_codex_workorder_runner(
         str(item.get("terminal_status") or "") in TERMINAL_NON_IMPLEMENT_STATUSES
         for item in non_implement_dispositions
     )
-    all_implement_completed = (
-        not all_canonical_orders
-        or (
-            len(order_execution_results) == len(all_canonical_orders)
-            and all(item.get("final_status") == "completed" for item in order_execution_results)
+    all_implement_completed = not all_canonical_orders or (
+        len(order_execution_results) == len(all_canonical_orders)
+        and all(
+            item.get("final_status") == "completed" for item in order_execution_results
         )
     )
     if dry_run:
@@ -1945,8 +2436,16 @@ def build_codex_workorder_runner(
         "canonical_implement_count": len(all_canonical_orders),
         "pass1_implement_count": len(pass1_order_ids),
         "pass2_implement_count": len(pass2_order_ids),
-        "completed_implement_count": sum(1 for item in order_execution_results if item.get("final_status") == "completed"),
-        "blocked_implement_count": sum(1 for item in order_execution_results if item.get("final_status") != "completed"),
+        "completed_implement_count": sum(
+            1
+            for item in order_execution_results
+            if item.get("final_status") == "completed"
+        ),
+        "blocked_implement_count": sum(
+            1
+            for item in order_execution_results
+            if item.get("final_status") != "completed"
+        ),
         "normalized_out_count": len(normalized_out),
         "non_implement_terminal_count": len(non_implement_dispositions),
         "non_implement_complete": non_implement_complete,
@@ -1972,14 +2471,18 @@ def build_codex_workorder_runner(
         "token_minimization_policy": model_policy,
         "agent_model_policy": agent_model_policy,
         "source_generation_id": workorder.get("generation_id"),
-        "canonical_implement_order_ids": [item.get("order_id") for item in all_canonical_orders],
+        "canonical_implement_order_ids": [
+            item.get("order_id") for item in all_canonical_orders
+        ],
         "pass1_order_ids": pass1_order_ids,
         "pass2_order_ids": pass2_order_ids,
         "regeneration_results": regeneration_results,
         "workorder_lineage_diff": workorder_lineage_diff,
         "pass2_selection_reason": pass2_selection_reason,
         "normalized_out_orders": normalized_out,
-        "non_selected_order_ids": [item.get("order_id") for item in non_selected_orders],
+        "non_selected_order_ids": [
+            item.get("order_id") for item in non_selected_orders
+        ],
         "non_selected_dispositions": non_selected_dispositions,
         "contract_recoveries": contract_recoveries,
         "order_execution_results": order_execution_results,
@@ -2023,19 +2526,30 @@ def build_codex_workorder_runner(
             None,
         ),
         "codex_attempts": recovery_attempts,
-        "codex_turns": [turn for attempt in recovery_attempts for turn in (attempt.get("codex_turns") or [])],
+        "codex_turns": [
+            turn
+            for attempt in recovery_attempts
+            for turn in (attempt.get("codex_turns") or [])
+        ],
         "agent_model_traces": [
-            trace for attempt in recovery_attempts for trace in (attempt.get("agent_model_trace") or [])
+            trace
+            for attempt in recovery_attempts
+            for trace in (attempt.get("agent_model_trace") or [])
         ],
         "interrupted_worktree": next(
             (
                 attempt.get("interrupted_worktree")
                 for attempt in recovery_attempts
-                if (attempt.get("interrupted_worktree") or {}).get("status") not in {None, "not_applicable"}
+                if (attempt.get("interrupted_worktree") or {}).get("status")
+                not in {None, "not_applicable"}
             ),
             {"status": "not_applicable", "diff_path": None, "cleanup_exit_code": None},
         ),
-        "validation_results": [item for result in order_execution_results for item in (result.get("validation_results") or [])],
+        "validation_results": [
+            item
+            for result in order_execution_results
+            for item in (result.get("validation_results") or [])
+        ],
         "acceptance_results": [],
         "unsupported_acceptance_tests": [
             item
@@ -2068,20 +2582,40 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--max-orders",
         type=int,
-        default=int(os.environ.get("POSTCLOSE_DONE_CONTROLLER_CODEX_BATCH_SIZE", os.environ.get("CODEX_WORKORDER_BATCH_SIZE", "5"))),
+        default=int(
+            os.environ.get(
+                "POSTCLOSE_DONE_CONTROLLER_CODEX_BATCH_SIZE",
+                os.environ.get("CODEX_WORKORDER_BATCH_SIZE", "5"),
+            )
+        ),
         help="Batch size for canonical implement_now orders; kept as --max-orders for compatibility.",
     )
     parser.add_argument("--branch-prefix", default="codex-workorder")
-    parser.add_argument("--model", default=os.environ.get("CODEX_WORKORDER_MODEL") or None)
-    parser.add_argument("--effort", default=os.environ.get("CODEX_WORKORDER_EFFORT") or None)
-    parser.add_argument("--model-policy", default=os.environ.get("CODEX_WORKORDER_MODEL_POLICY") or "credit_min")
-    parser.add_argument("--commit", dest="commit", action="store_true", default=_env_bool("CODEX_WORKORDER_COMMIT", True))
+    parser.add_argument(
+        "--model", default=os.environ.get("CODEX_WORKORDER_MODEL") or None
+    )
+    parser.add_argument(
+        "--effort", default=os.environ.get("CODEX_WORKORDER_EFFORT") or None
+    )
+    parser.add_argument(
+        "--model-policy",
+        default=os.environ.get("CODEX_WORKORDER_MODEL_POLICY") or "credit_min",
+    )
+    parser.add_argument(
+        "--commit",
+        dest="commit",
+        action="store_true",
+        default=_env_bool("CODEX_WORKORDER_COMMIT", True),
+    )
     parser.add_argument("--no-commit", dest="commit", action="store_false")
     parser.add_argument(
         "--auto-push-main",
         dest="auto_push",
         action="store_true",
-        default=_env_bool("POSTCLOSE_DONE_CONTROLLER_AUTO_PUSH_MAIN", _env_bool("CODEX_WORKORDER_AUTO_PUSH_MAIN", True)),
+        default=_env_bool(
+            "POSTCLOSE_DONE_CONTROLLER_AUTO_PUSH_MAIN",
+            _env_bool("CODEX_WORKORDER_AUTO_PUSH_MAIN", True),
+        ),
     )
     parser.add_argument("--no-auto-push-main", dest="auto_push", action="store_false")
     parser.add_argument("--dry-run", action="store_true")
@@ -2097,7 +2631,11 @@ def main(argv: list[str] | None = None) -> int:
         auto_push=args.auto_push,
         dry_run=args.dry_run,
     )
-    print(json.dumps({"status": report["status"], "date": report["date"]}, ensure_ascii=False))
+    print(
+        json.dumps(
+            {"status": report["status"], "date": report["date"]}, ensure_ascii=False
+        )
+    )
     return 0 if report["status"] in COMPLETED_RUNNER_STATUSES else 1
 
 
