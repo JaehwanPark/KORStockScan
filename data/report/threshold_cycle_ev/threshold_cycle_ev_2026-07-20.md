@@ -171,7 +171,7 @@
 ## Codebase Performance Workorder Source
 - artifact: `/home/ubuntu/KORStockScan/data/report/codebase_performance_workorder/codebase_performance_workorder_2026-07-20.json`
 - authority: `ops_performance_workorder_source`
-- accepted/deferred/rejected: `7` / `3` / `2`
+- accepted/deferred/rejected: `8` / `2` / `2`
 - runtime_effect: `False`
 - strategy_effect: `False`
 - data_quality_effect: `False`
@@ -197,7 +197,7 @@
 - artifact: `/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-07-20.json`
 - markdown: `/home/ubuntu/KORStockScan/docs/code-improvement-workorders/code_improvement_workorder_2026-07-20.md`
 - selected_order_count: `183`
-- decision_counts: `{'attach_existing_family': 213, 'design_family_candidate': 3, 'defer_evidence': 4, 'reject': 3}`
+- decision_counts: `{'attach_existing_family': 214, 'design_family_candidate': 3, 'defer_evidence': 3, 'reject': 3}`
 
 ## Approval Requests
 - none

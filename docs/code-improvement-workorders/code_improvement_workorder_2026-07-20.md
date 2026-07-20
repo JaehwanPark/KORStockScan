@@ -29,9 +29,9 @@
 - stage_hook_runtime_scaffold: `/home/ubuntu/KORStockScan/data/report/stage_hook_runtime_scaffold/stage_hook_runtime_scaffold_2026-07-20.json`
 - buy_funnel_sentinel: `/home/ubuntu/KORStockScan/data/report/buy_funnel_sentinel/buy_funnel_sentinel_2026-07-20.json`
 - microstructure_reaction_context: `/home/ubuntu/KORStockScan/data/report/microstructure_reaction_context/microstructure_reaction_context_2026-07-20.json`
-- generated_at: `2026-07-21T07:40:59+09:00`
-- generation_id: `2026-07-20-9b45746dc323`
-- source_hash: `9b45746dc323091c9e0df56be219fb06ea5b366a24ff959965e72c5e53c725bf`
+- generated_at: `2026-07-21T07:48:54+09:00`
+- generation_id: `2026-07-20-177eb98488e6`
+- source_hash: `177eb98488e695663665d35e8518cba38e3c363533a49cd3f4d08e9f03f7d6a3`
 
 ## 운영 원칙
 
@@ -53,8 +53,8 @@
 ## Snapshot Lineage
 
 - previous_exists: `True`
-- previous_generation_id: `2026-07-20-33debb75dfdb`
-- previous_source_hash: `33debb75dfdb9c6206e4e4c9348184ab39cc0ef5ad268b7cf321849546b50987`
+- previous_generation_id: `2026-07-20-9b45746dc323`
+- previous_source_hash: `9b45746dc323091c9e0df56be219fb06ea5b366a24ff959965e72c5e53c725bf`
 - new_order_ids: `[]`
 - removed_order_ids: `[]`
 - decision_changed_order_ids: `[]`
@@ -86,7 +86,7 @@
 - panic_lifecycle_source_order_count: `2`
 - selected_order_count: `183`
 - non_selected_order_count: `40`
-- source_decision_counts: `{'attach_existing_family': 213, 'design_family_candidate': 3, 'defer_evidence': 4, 'reject': 3}`
+- source_decision_counts: `{'attach_existing_family': 214, 'design_family_candidate': 3, 'defer_evidence': 3, 'reject': 3}`
 - selected_decision_counts: `{'attach_existing_family': 183}`
 - selected_route_counts: `{'existing_family': 179, 'ai_review_coverage_review': 1, 'positive_source_only_review': 1, 'source_dimension_rollup': 1, 'join_gap_enrichment': 1}`
 - selected_implement_now_route_count: `0`
@@ -114,8 +114,8 @@
 - selected_terminal_non_implement_longstanding_order_ids: `['order_lifecycle_quiet_gap_ai_review_coverage_rollup', 'order_lifecycle_quiet_gap_positive_source_only_rollup', 'order_lifecycle_source_dimension_gap_rollup', 'order_lifecycle_source_dimension_join_gap_enrichment']`
 - selected_longstanding_non_implement_disposition_counts: `{'keep_visible_by_design': 4}`
 - selected_longstanding_non_implement_action_required_order_ids: `[]`
-- non_selected_decision_counts: `{'attach_existing_family': 30, 'design_family_candidate': 3, 'defer_evidence': 4, 'reject': 3}`
-- non_selected_longstanding_non_implement_disposition_counts: `{'implemented_with_provenance': 29, 'review_required': 7}`
+- non_selected_decision_counts: `{'attach_existing_family': 31, 'design_family_candidate': 3, 'defer_evidence': 3, 'reject': 3}`
+- non_selected_longstanding_non_implement_disposition_counts: `{'implemented_with_provenance': 30, 'review_required': 6}`
 - non_selected_longstanding_non_implement_action_required_order_ids: `[]`
 - gemini_fresh: `False`
 - claude_fresh: `True`
@@ -7774,7 +7774,23 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/daily_threshold_cycle_report.py`, `src/engine/sniper_state_handlers.py`
 - acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
 
-### N29. `order_split_entry_rebase_수량_정합성_report_only_감사`
+### N29. `order_perf_sentinel_event_cache_incremental_review`
+
+- title: Sentinel event cache incremental parse review
+- decision: `attach_existing_family`
+- decision_reason: report-only performance implementation is already present in code; keep the order as provenance and validate through regenerated reports/tests instead of re-implementing
+- source_report_type: `codebase_performance_workorder`
+- lifecycle_stage: `ops_performance`
+- target_subsystem: `sentinel_event_cache`
+- runtime_effect: `False`
+- allowed_runtime_apply: `False`
+- implementation_status: `implemented`
+- longstanding_non_implement_review: `{"history_window_days": 10, "previous_decision": "defer_evidence", "previous_implementation_status": "terminal_deferred_evidence", "previous_route": "performance_optimization_order", "repeat_count": 6, "repeat_key": "order_perf_sentinel_event_cache_incremental_review", "repeat_signature": "sig:codebase_performance_workorder|sentinel_event_cache|ops_performance|||sentinel_event_cache_incremental_parse_review", "review_disposition": "implemented_with_provenance"}`
+- longstanding_non_implement_action: `-`
+- files_likely_touched: `src/engine/sentinel_event_cache.py`, `src/tests/test_sentinel_event_cache_parity.py`
+- acceptance_tests: `pytest src/tests/test_buy_funnel_sentinel.py src/tests/test_holding_exit_sentinel.py`, `pytest src/tests/test_sentinel_event_cache_parity.py`
+
+### N30. `order_split_entry_rebase_수량_정합성_report_only_감사`
 
 - title: split-entry rebase 수량 정합성 report-only 감사
 - decision: `attach_existing_family`
@@ -7790,7 +7806,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/daily_threshold_cycle_report.py`, `src/engine/sniper_state_handlers.py`
 - acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
 
-### N30. `order_동일_종목_split_entry_soft_stop_재진입_cooldown_report_only`
+### N31. `order_동일_종목_split_entry_soft_stop_재진입_cooldown_report_only`
 
 - title: 동일 종목 split-entry soft-stop 재진입 cooldown report-only
 - decision: `attach_existing_family`
@@ -7806,7 +7822,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/daily_threshold_cycle_report.py`, `src/engine/sniper_state_handlers.py`
 - acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
 
-### N31. `order_no_acute_observability_alert`
+### N32. `order_no_acute_observability_alert`
 
 - title: No acute observability alert
 - decision: `design_family_candidate`
@@ -7822,7 +7838,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/daily_threshold_cycle_report.py`
 - acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
 
-### N32. `order_liquidity_gate_miss_ev_recovery`
+### N33. `order_liquidity_gate_miss_ev_recovery`
 
 - title: liquidity gate miss EV recovery
 - decision: `design_family_candidate`
@@ -7838,7 +7854,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/daily_threshold_cycle_report.py`, `src/engine/sniper_state_handlers.py`
 - acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
 
-### N33. `order_overbought_gate_miss_ev_recovery`
+### N34. `order_overbought_gate_miss_ev_recovery`
 
 - title: overbought gate miss EV recovery
 - decision: `design_family_candidate`
@@ -7854,7 +7870,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/daily_threshold_cycle_report.py`, `src/engine/sniper_state_handlers.py`
 - acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
 
-### N34. `order_scalp_entry_adm_daily_tuning_coverage`
+### N35. `order_scalp_entry_adm_daily_tuning_coverage`
 
 - title: scalp entry ADM daily tuning coverage
 - decision: `defer_evidence`
@@ -7870,7 +7886,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/scalp_entry_action_decision_matrix.py`, `src/engine/sniper_state_handlers.py`, `src/engine/scalp_entry_adm_runtime.py`, `src/engine/threshold_cycle_ev_report.py`
 - acceptance_tests: `PYTHONPATH=. .venv/bin/pytest src/tests/test_scalp_entry_action_decision_matrix.py src/tests/test_build_code_improvement_workorder.py`, `runtime_effect remains false and broker submit safety guards remain owner`
 
-### N35. `order_perf_kiwoom_orders_http_session_review`
+### N36. `order_perf_kiwoom_orders_http_session_review`
 
 - title: Kiwoom orders HTTP session reuse manual review
 - decision: `defer_evidence`
@@ -7886,7 +7902,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/kiwoom_orders.py`
 - acceptance_tests: `pytest src/tests/test_kiwoom_orders.py src/tests/test_sniper_scale_in.py`
 
-### N36. `order_perf_config_cache_scope_review`
+### N37. `order_perf_config_cache_scope_review`
 
 - title: Config cache scope review
 - decision: `defer_evidence`
@@ -7901,22 +7917,6 @@ Stage hook candidate:
 - longstanding_non_implement_action: `-`
 - files_likely_touched: `src/utils/constants.py`, `src/utils/kiwoom_utils.py`
 - acceptance_tests: `pytest config/import smoke tests`
-
-### N37. `order_perf_sentinel_event_cache_incremental_review`
-
-- title: Sentinel event cache incremental parse review
-- decision: `defer_evidence`
-- decision_reason: incremental cache semantics require a dedicated parity harness before implementation
-- source_report_type: `codebase_performance_workorder`
-- lifecycle_stage: `ops_performance`
-- target_subsystem: `sentinel_event_cache`
-- runtime_effect: `False`
-- allowed_runtime_apply: `False`
-- implementation_status: `terminal_deferred_evidence`
-- longstanding_non_implement_review: `{"history_window_days": 10, "previous_decision": "defer_evidence", "previous_implementation_status": "terminal_deferred_evidence", "previous_route": "performance_optimization_order", "repeat_count": 6, "repeat_key": "order_perf_sentinel_event_cache_incremental_review", "repeat_signature": "sig:codebase_performance_workorder|sentinel_event_cache|ops_performance|||sentinel_event_cache_incremental_parse_review", "review_disposition": "review_required"}`
-- longstanding_non_implement_action: `-`
-- files_likely_touched: `src/engine/sentinel_event_cache.py`
-- acceptance_tests: `pytest src/tests/test_buy_funnel_sentinel.py src/tests/test_holding_exit_sentinel.py`, `sentinel event cache parity on malformed, unchanged, and appended JSONL inputs`
 
 ### N38. `order_partial_fallback_확대_직후_즉시_재평가_report_only`
 

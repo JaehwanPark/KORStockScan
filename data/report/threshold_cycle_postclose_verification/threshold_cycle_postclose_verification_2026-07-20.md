@@ -224,11 +224,11 @@
 - gap_affected_handoff_count: `0`
 
 ## Workorder Snapshot
-- generation_id: `2026-07-20-9b45746dc323`
-- source_hash: `9b45746dc323091c9e0df56be219fb06ea5b366a24ff959965e72c5e53c725bf`
+- generation_id: `2026-07-20-177eb98488e6`
+- source_hash: `177eb98488e695663665d35e8518cba38e3c363533a49cd3f4d08e9f03f7d6a3`
 - snapshot_status: `source_changed_with_lineage`
-- previous_generation_id: `2026-07-20-33debb75dfdb`
-- previous_source_hash: `33debb75dfdb9c6206e4e4c9348184ab39cc0ef5ad268b7cf321849546b50987`
+- previous_generation_id: `2026-07-20-9b45746dc323`
+- previous_source_hash: `9b45746dc323091c9e0df56be219fb06ea5b366a24ff959965e72c5e53c725bf`
 - new_order_ids: `[]`
 - removed_order_ids: `[]`
 - decision_changed_order_ids: `[]`
