@@ -28,6 +28,9 @@ from src.engine.scalping.scalp_sim_auto_approval_control_tower import (
     scalp_sim_auto_approval_path,
     scalp_sim_policy_catalog_path,
 )
+from src.engine.scalping.scale_in_split_order_plan import (
+    MAX_POLICY_AGE_KRX_TRADING_DAYS,
+)
 from src.engine.monitoring import rising_missed_classifier_prior
 from src.engine.scalping import scalp_sim_auto_approval_control_tower
 from src.engine import lifecycle_bucket_discovery
@@ -45,16 +48,20 @@ from src.engine.swing.sim_auto_approval_control_tower import (
     swing_sim_policy_catalog_path,
 )
 from src.utils.constants import DATA_DIR
-
+from src.utils.market_day import count_krx_trading_days
 
 APPLY_PLAN_DIR = DATA_DIR / "threshold_cycle" / "apply_plans"
 RUNTIME_ENV_DIR = DATA_DIR / "threshold_cycle" / "runtime_env"
-OPERATOR_RUNTIME_ENV_LOCK_DIR = DATA_DIR / "threshold_cycle" / "operator_runtime_env_locks"
+OPERATOR_RUNTIME_ENV_LOCK_DIR = (
+    DATA_DIR / "threshold_cycle" / "operator_runtime_env_locks"
+)
 AI_REVIEW_DIR = REPORT_DIR / "threshold_cycle_ai_review"
 CALIBRATION_REPORT_DIR = REPORT_DIR / "threshold_cycle_calibration"
 SWING_RUNTIME_APPROVAL_REPORT_DIR = DATA_DIR / "report" / "swing_runtime_approval"
 SWING_RUNTIME_APPROVAL_ARTIFACT_DIR = DATA_DIR / "threshold_cycle" / "approvals"
-LATENCY_CLASSIFIER_RECOMMENDATION_DIR = DATA_DIR / "report" / "latency_classifier_recommendation"
+LATENCY_CLASSIFIER_RECOMMENDATION_DIR = (
+    DATA_DIR / "report" / "latency_classifier_recommendation"
+)
 RISING_MISSED_FIRST_TOUCH_CALIBRATION_DIR = (
     DATA_DIR / "report" / "rising_missed_first_touch_calibration"
 )
@@ -64,7 +71,9 @@ SCALPING_PYRAMID_QUALITY_CALIBRATION_DIR = (
 SCALPING_AVG_DOWN_RECOVERY_CALIBRATION_DIR = (
     DATA_DIR / "report" / "scalping_avg_down_recovery_calibration"
 )
-AI_SCORE_OPTIMIZATION_BACKTEST_DIR = DATA_DIR / "report" / "ai_score_optimization_backtest"
+AI_SCORE_OPTIMIZATION_BACKTEST_DIR = (
+    DATA_DIR / "report" / "ai_score_optimization_backtest"
+)
 RUNTIME_GAP_PROVENANCE_DIR = DATA_DIR / "threshold_cycle" / "runtime_gap_provenance"
 ENTRY_CANCEL_WAIT_TUNING_DIR = DATA_DIR / "report" / "entry_cancel_wait_tuning"
 ENTRY_CANCEL_WAIT_FAMILY = "entry_cancel_wait_runtime"
@@ -82,16 +91,30 @@ NON_LIVE_SELECTABLE_FAMILIES = {
     "panic_entry_freeze_guard",
     "panic_buy_runner_tp_canary",
 }
+RETIRED_RUNTIME_ENV_KEYS = {
+    "KORSTOCKSCAN_SCALP_SOFT_STOP_DYNAMIC_GRACE_OVERRIDE_ENABLED",
+    "KORSTOCKSCAN_SCALP_SOFT_STOP_DYNAMIC_GRACE_WEAK_SEC",
+    "KORSTOCKSCAN_SCALP_SOFT_STOP_DYNAMIC_GRACE_BASE_SEC",
+    "KORSTOCKSCAN_SCALP_SOFT_STOP_DYNAMIC_GRACE_STRONG_SEC",
+    "KORSTOCKSCAN_SCALP_SOFT_STOP_DYNAMIC_GRACE_MIN_AI_SCORE",
+    "KORSTOCKSCAN_SCALP_SOFT_STOP_DYNAMIC_GRACE_EMERGENCY_PCT",
+    "KORSTOCKSCAN_SCALP_SOFT_STOP_DYNAMIC_GRACE_MAX_WORSEN_PCT",
+    "KORSTOCKSCAN_SCALP_LATE_ENTRY_PRICE_DRIFT_GUARD_ENABLED",
+    "KORSTOCKSCAN_SCALP_LATE_ENTRY_PRICE_DRIFT_HARD_BPS",
+    "KORSTOCKSCAN_SCALP_LATE_ENTRY_PRICE_DRIFT_SOFT_BPS",
+    "KORSTOCKSCAN_SCALP_LATE_ENTRY_PRICE_DRIFT_MIN_TICK_ACCEL",
+    "KORSTOCKSCAN_SCALP_LATE_ENTRY_PRICE_DRIFT_MIN_BUY_PRESSURE",
+    "KORSTOCKSCAN_SCALP_LATE_ENTRY_PRICE_DRIFT_MIN_MICRO_VWAP_BP",
+}
 REMOVED_RUNTIME_ENV_KEYS = {
     "KORSTOCKSCAN_SCALPING_INITIAL_ENTRY_QTY_CAP_ENABLED",
     "KORSTOCKSCAN_SCALPING_INITIAL_ENTRY_MAX_QTY",
     "KORSTOCKSCAN_SCALPING_SCALE_IN_EFFECTIVE_QTY_CAP",
     "KORSTOCKSCAN_WAIT6579_PROBE_CANARY_MAX_BUDGET_KRW",
     "KORSTOCKSCAN_WAIT6579_PROBE_CANARY_MAX_QTY",
-}
+} | RETIRED_RUNTIME_ENV_KEYS
 REMOVED_TARGET_ENV_KEYS = {
-    key.removeprefix("KORSTOCKSCAN_")
-    for key in REMOVED_RUNTIME_ENV_KEYS
+    key.removeprefix("KORSTOCKSCAN_") for key in REMOVED_RUNTIME_ENV_KEYS
 }
 REMOVED_CALIBRATION_FAMILIES = {
     "position_sizing_cap_release",
@@ -3491,7 +3514,7 @@ def _split_runtime_policy_audits(
             "prefix": "KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_",
             "schema": "scale_in_split_order_policy_v1",
             "freshness_field": "generated_at",
-            "max_age_days": 3,
+            "max_age_trading_days": MAX_POLICY_AGE_KRX_TRADING_DAYS,
             "require_runtime_apply_allowed": True,
             "allow_missing_runtime_apply_allowed": False,
         },
@@ -3543,30 +3566,44 @@ def _split_runtime_policy_audits(
             audit.update(status="fail", reason="policy_schema_mismatch")
             audits.append(audit)
             continue
-        if effective_env.get(version_key) and policy.get("policy_version") != effective_env.get(version_key):
+        if effective_env.get(version_key) and policy.get(
+            "policy_version"
+        ) != effective_env.get(version_key):
             audit.update(status="fail", reason="policy_version_mismatch")
             audits.append(audit)
             continue
         runtime_apply_value_present = "runtime_apply_allowed" in policy
-        runtime_apply_denied = not _runtime_env_enabled(policy.get("runtime_apply_allowed"))
+        runtime_apply_denied = not _runtime_env_enabled(
+            policy.get("runtime_apply_allowed")
+        )
         runtime_apply_denial_requires_fallback = bool(
             spec["require_runtime_apply_allowed"]
             and runtime_apply_denied
-            and (runtime_apply_value_present or not spec.get("allow_missing_runtime_apply_allowed"))
+            and (
+                runtime_apply_value_present
+                or not spec.get("allow_missing_runtime_apply_allowed")
+            )
         )
         if runtime_apply_denial_requires_fallback:
             fallback_enabled_key = str(spec.get("operator_fallback_enabled_key") or "")
-            fallback_active_date_key = str(spec.get("operator_fallback_active_date_key") or "")
-            fallback_enabled = bool(
-                fallback_enabled_key and _runtime_env_enabled(effective_env.get(fallback_enabled_key))
+            fallback_active_date_key = str(
+                spec.get("operator_fallback_active_date_key") or ""
             )
-            fallback_active_date = str(effective_env.get(fallback_active_date_key) or "").strip()
+            fallback_enabled = bool(
+                fallback_enabled_key
+                and _runtime_env_enabled(effective_env.get(fallback_enabled_key))
+            )
+            fallback_active_date = str(
+                effective_env.get(fallback_active_date_key) or ""
+            ).strip()
             audit.update(
                 operator_fallback_enabled=fallback_enabled,
                 operator_fallback_active_date=fallback_active_date or None,
             )
             if fallback_enabled_key:
-                audit["required_env_keys"].extend([fallback_enabled_key, fallback_active_date_key])
+                audit["required_env_keys"].extend(
+                    [fallback_enabled_key, fallback_active_date_key]
+                )
             if not fallback_enabled or fallback_active_date != target_date:
                 audit.update(status="fail", reason="runtime_apply_not_allowed")
                 audits.append(audit)
@@ -3577,19 +3614,35 @@ def _split_runtime_policy_audits(
         try:
             if spec["freshness_field"] == "source_date":
                 source_day = date.fromisoformat(freshness_value)
-                stale = target_day - source_day > timedelta(days=int(spec["max_age_days"]))
+                stale = target_day - source_day > timedelta(
+                    days=int(spec["max_age_days"])
+                )
             else:
-                generated_at = datetime.fromisoformat(freshness_value.replace("Z", "+00:00"))
+                generated_at = datetime.fromisoformat(
+                    freshness_value.replace("Z", "+00:00")
+                )
                 if generated_at.tzinfo is None:
-                    generated_at = generated_at.replace(tzinfo=timezone(timedelta(hours=9)))
+                    generated_at = generated_at.replace(
+                        tzinfo=timezone(timedelta(hours=9))
+                    )
                 target_end = datetime.combine(
                     target_day,
                     datetime.max.time(),
                     tzinfo=timezone(timedelta(hours=9)),
                 )
-                stale = target_end - generated_at.astimezone(target_end.tzinfo) > timedelta(
-                    days=int(spec["max_age_days"])
-                )
+                generated_at = generated_at.astimezone(target_end.tzinfo)
+                if "max_age_trading_days" in spec:
+                    freshness_age = count_krx_trading_days(
+                        generated_at.date(), target_end.date()
+                    )
+                    audit["freshness_age_trading_days"] = freshness_age
+                    stale = generated_at > target_end or freshness_age > int(
+                        spec["max_age_trading_days"]
+                    )
+                else:
+                    stale = target_end - generated_at > timedelta(
+                        days=int(spec["max_age_days"])
+                    )
         except (TypeError, ValueError):
             audit.update(status="fail", reason="policy_freshness_basis_invalid")
             audits.append(audit)
@@ -3659,15 +3712,62 @@ def verify_runtime_env_handoff(
         for item in (manifest.get("selected_families") or [])
         if isinstance(item, str) and item.strip()
     ]
-    env_overrides = manifest.get("env_overrides")
-    if not isinstance(env_overrides, dict):
-        env_overrides = {}
+    retired_selected_families = sorted(
+        family
+        for family in selected_families
+        if family in RETIRED_RUNTIME_FAMILY_REASONS
+    )
+    raw_env_overrides = manifest.get("env_overrides")
+    if not isinstance(raw_env_overrides, dict):
+        raw_env_overrides = {}
+    retired_manifest_override_keys = sorted(
+        key for key in raw_env_overrides if key in RETIRED_RUNTIME_ENV_KEYS
+    )
+    env_overrides = {
+        key: value
+        for key, value in raw_env_overrides.items()
+        if key not in RETIRED_RUNTIME_ENV_KEYS
+    }
     operator_override_path = RUNTIME_ENV_DIR / "operator_runtime_overrides.env"
-    operator_overrides = _read_shell_export_env(operator_override_path)
+    raw_operator_overrides = _read_shell_export_env(operator_override_path)
+    retired_operator_override_keys = sorted(
+        key for key in raw_operator_overrides if key in RETIRED_RUNTIME_ENV_KEYS
+    )
+    operator_overrides = {
+        key: value
+        for key, value in raw_operator_overrides.items()
+        if key not in RETIRED_RUNTIME_ENV_KEYS
+    }
     effective_env_overrides = dict(env_overrides)
     effective_env_overrides.update(operator_overrides)
     findings: list[dict[str, Any]] = []
-    runtime_policy_audits = _split_runtime_policy_audits(target_date, effective_env_overrides)
+    for family in retired_selected_families:
+        findings.append(
+            {
+                "family": family,
+                "missing_env_keys": [],
+                "severity": "retired_runtime_family_selected",
+                "detail": f"retired runtime family must not remain selected: {family}",
+            }
+        )
+    for source, keys in (
+        ("threshold_runtime_env_manifest", retired_manifest_override_keys),
+        ("operator_runtime_overrides", retired_operator_override_keys),
+    ):
+        for key in keys:
+            findings.append(
+                {
+                    "family": "retired_runtime_family",
+                    "missing_env_keys": [],
+                    "severity": "retired_runtime_override_present",
+                    "detail": f"retired runtime env key must be removed from {source}: {key}",
+                    "env_key": key,
+                    "source": source,
+                }
+            )
+    runtime_policy_audits = _split_runtime_policy_audits(
+        target_date, effective_env_overrides
+    )
     for audit in runtime_policy_audits:
         selected_policy_disabled = bool(
             audit.get("status") == "disabled"
@@ -3675,7 +3775,11 @@ def verify_runtime_env_handoff(
         )
         if audit.get("status") != "fail" and not selected_policy_disabled:
             continue
-        policy_reason = "selected_policy_disabled" if selected_policy_disabled else audit.get("reason")
+        policy_reason = (
+            "selected_policy_disabled"
+            if selected_policy_disabled
+            else audit.get("reason")
+        )
         findings.append(
             {
                 "family": audit.get("family"),
@@ -3711,7 +3815,9 @@ def verify_runtime_env_handoff(
             }
         )
     market_first_enabled_key = "KORSTOCKSCAN_ENTRY_SPLIT_MARKET_FIRST_LEG_ENABLED"
-    market_first_active_date_key = "KORSTOCKSCAN_ENTRY_SPLIT_MARKET_FIRST_LEG_ACTIVE_DATE"
+    market_first_active_date_key = (
+        "KORSTOCKSCAN_ENTRY_SPLIT_MARKET_FIRST_LEG_ACTIVE_DATE"
+    )
     if _runtime_env_enabled(effective_env_overrides.get(market_first_enabled_key)):
         market_first_active_date = str(
             effective_env_overrides.get(market_first_active_date_key) or ""
@@ -3721,7 +3827,9 @@ def verify_runtime_env_handoff(
                 {
                     "family": "entry_split_order_plan",
                     "missing_env_keys": (
-                        [market_first_active_date_key] if not market_first_active_date else []
+                        [market_first_active_date_key]
+                        if not market_first_active_date
+                        else []
                     ),
                     "severity": "runtime_policy_unusable",
                     "detail": "entry market-first leg enabled outside its active date",
@@ -3818,11 +3926,14 @@ def verify_runtime_env_handoff(
         "target_date": target_date,
         "manifest_path": str(manifest_path) if manifest_path.exists() else None,
         "selected_families": selected_families,
+        "retired_selected_families_blocked": retired_selected_families,
         "passed": passed,
         "findings": findings,
         "missing_family_count": len(missing_families),
         "pid": pid,
         "pid_env_available": bool(pid_env),
+        "retired_manifest_override_keys_blocked": retired_manifest_override_keys,
+        "retired_operator_override_keys_blocked": retired_operator_override_keys,
         "pid_passed": pid_passed,
         "pid_mismatches": pid_mismatches,
         "pid_missing": pid_missing,
@@ -3841,7 +3952,14 @@ def verify_runtime_env_handoff(
         "unverified_selected_families": unverified_selected_families,
         "unverified_selected_family_count": len(unverified_selected_families),
     }
-    if not passed:
+    if (
+        retired_selected_families
+        or retired_manifest_override_keys
+        or retired_operator_override_keys
+    ):
+        result["status"] = "fail"
+        result["fail_reason"] = "retired_runtime_selection_or_override_present"
+    elif not passed:
         result["status"] = "fail"
         result["fail_reason"] = "runtime_env_handoff_missing"
     elif not pid_passed:
@@ -3861,7 +3979,11 @@ RUNTIME_GAP_WINDOWS_2026_06_11: dict[str, dict[str, Any]] = {
         "raw_preserved": True,
         "metric_scope": "real_probe_attribution_only",
         "excluded_metrics": ["real_entry_unlock_event", "real_probe_submit_count"],
-        "not_excluded": ["sim_candidate_source_quality", "raw_pipeline_events", "threshold_events"],
+        "not_excluded": [
+            "sim_candidate_source_quality",
+            "raw_pipeline_events",
+            "threshold_events",
+        ],
         "interpretation_rule": "Do not interpret as probe failure or unlock rate degradation.",
         "runtime_gap_reason": "score65_74_recovery_probe env not in PREOPEN apply until operator override at 10:51:07",
     },
@@ -3873,7 +3995,11 @@ RUNTIME_GAP_WINDOWS_2026_06_11: dict[str, dict[str, Any]] = {
         "raw_preserved": True,
         "metric_scope": "lifecycle_catalog_match_ldm_bucket_attribution_only",
         "excluded_metrics": ["parent_catalog_match_success", "ldm_bucket_match_count"],
-        "not_excluded": ["raw_pipeline_events", "threshold_events", "source_quality_audit"],
+        "not_excluded": [
+            "raw_pipeline_events",
+            "threshold_events",
+            "source_quality_audit",
+        ],
         "interpretation_rule": "Do not interpret parent_catalog_missing as bucket success or failure.",
         "runtime_gap_reason": "lifecycle_bucket_discovery_sim_auto_approval policy env overwritten by scalp_sim_auto_approval; restored at 10:59:40",
     },

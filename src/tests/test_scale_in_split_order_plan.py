@@ -78,7 +78,9 @@ def test_allocator_preserves_avg_down_qty_and_offsets(monkeypatch, tmp_path):
         encoding="utf-8",
     )
     monkeypatch.setenv("KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_ENABLED", "true")
-    monkeypatch.setenv("KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_FILE", str(policy_file))
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_FILE", str(policy_file)
+    )
 
     orders, fields = split_plan.apply_scale_in_split_order_policy(
         {"qty": 5, "price": 10000, "order_type_code": "00", "add_type": "AVG_DOWN"},
@@ -97,7 +99,85 @@ def test_allocator_preserves_avg_down_qty_and_offsets(monkeypatch, tmp_path):
     assert fields["scale_in_split_order_price_offsets_pct"] == "0.0,0.3"
 
 
-def test_allocator_skips_qty_one_pyramid_and_splits_market_avg_down(monkeypatch, tmp_path):
+def test_allocator_accepts_policy_across_krx_holiday_weekend(monkeypatch, tmp_path):
+    _patch_dirs(monkeypatch, tmp_path)
+    policy_file = split_plan.policy_path("2026-07-16")
+    policy_file.parent.mkdir(parents=True, exist_ok=True)
+    policy_file.write_text(
+        json.dumps(
+            {
+                "schema_version": "scale_in_split_order_policy_v1",
+                "policy_version": "scale-in-holiday-handoff",
+                "generated_at": "2026-07-16T20:28:37+09:00",
+                "runtime_apply_allowed": True,
+                "default_bucket": {
+                    "leg_count": 2,
+                    "price_offsets_pct": [0.0, 0.3],
+                    "qty_weights": [0.5, 0.5],
+                    "qty_weight_min": 0.5,
+                    "qty_weight_max": 0.5,
+                    "policy_mode": "bounded_equal_scale_in_split_baseline",
+                    "split_variant_id": "scale_in_equal_50_50_offset_0pct_0_3pct",
+                },
+                "buckets": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_ENABLED", "true")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_FILE", str(policy_file)
+    )
+
+    orders, fields = split_plan.apply_scale_in_split_order_policy(
+        {"qty": 10, "price": 10000, "order_type_code": "00", "add_type": "AVG_DOWN"},
+        action={"add_type": "AVG_DOWN"},
+        now=datetime(2026, 7, 20, 8, 30, tzinfo=timezone(timedelta(hours=9))),
+    )
+
+    assert fields["scale_in_split_order_policy_applied"] is True
+    assert fields["scale_in_split_order_skip_reason"] == ""
+    assert [order["qty"] for order in orders] == [5, 5]
+
+
+def test_allocator_rejects_policy_after_three_krx_trading_days(monkeypatch, tmp_path):
+    _patch_dirs(monkeypatch, tmp_path)
+    policy_file = split_plan.policy_path("2026-07-13")
+    policy_file.parent.mkdir(parents=True, exist_ok=True)
+    policy_file.write_text(
+        json.dumps(
+            {
+                "schema_version": "scale_in_split_order_policy_v1",
+                "policy_version": "scale-in-stale-trading-days",
+                "generated_at": "2026-07-13T20:28:37+09:00",
+                "runtime_apply_allowed": True,
+                "default_bucket": {"leg_count": 2},
+                "buckets": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_ENABLED", "true")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_FILE", str(policy_file)
+    )
+
+    orders, fields = split_plan.apply_scale_in_split_order_policy(
+        {"qty": 10, "price": 10000, "order_type_code": "00", "add_type": "AVG_DOWN"},
+        action={"add_type": "AVG_DOWN"},
+        now=datetime(2026, 7, 20, 8, 30, tzinfo=timezone(timedelta(hours=9))),
+    )
+
+    assert orders == [
+        {"qty": 10, "price": 10000, "order_type_code": "00", "add_type": "AVG_DOWN"}
+    ]
+    assert fields["scale_in_split_order_policy_applied"] is False
+    assert fields["scale_in_split_order_skip_reason"] == "stale_policy"
+
+
+def test_allocator_skips_qty_one_pyramid_and_splits_market_avg_down(
+    monkeypatch, tmp_path
+):
     target_date = "2026-07-07"
     _patch_dirs(monkeypatch, tmp_path)
     policy_file = split_plan.policy_path(target_date)
@@ -123,7 +203,9 @@ def test_allocator_skips_qty_one_pyramid_and_splits_market_avg_down(monkeypatch,
         encoding="utf-8",
     )
     monkeypatch.setenv("KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_ENABLED", "true")
-    monkeypatch.setenv("KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_FILE", str(policy_file))
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_FILE", str(policy_file)
+    )
 
     _, qty_fields = split_plan.apply_scale_in_split_order_policy(
         {"qty": 1, "price": 10000, "add_type": "AVG_DOWN"},

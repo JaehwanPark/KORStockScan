@@ -11,11 +11,14 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from src.engine.automation.source_quality_clean_baseline import clean_baseline_policy, is_date_allowed
+from src.engine.automation.source_quality_clean_baseline import (
+    clean_baseline_policy,
+    is_date_allowed,
+)
 from src.trading.order.tick_utils import clamp_price_to_tick, get_tick_size
 from src.utils.constants import DATA_DIR
 from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
-
+from src.utils.market_day import count_krx_trading_days
 
 SCHEMA_VERSION = "scale_in_split_order_plan_v1"
 POLICY_SCHEMA_VERSION = "scale_in_split_order_policy_v1"
@@ -33,7 +36,9 @@ COUNTERFACTUAL_70_30_VARIANT_ID = "scale_in_counterfactual_70_30_offset_0pct_0_3
 COUNTERFACTUAL_50_50_VARIANT_ID = "scale_in_counterfactual_50_50_offset_0pct_0_3pct"
 COUNTERFACTUAL_60_40_VARIANT_ID = "scale_in_counterfactual_60_40_offset_0pct_0_8pct"
 MARKET_QTY_SPLIT_VARIANT_ID = "scale_in_market_qty_split_50_50"
-DIAGNOSTIC_THREE_LEG_VARIANT_ID = "scale_in_diagnostic_50_25_25_offset_0pct_0_3pct_0_8pct"
+DIAGNOSTIC_THREE_LEG_VARIANT_ID = (
+    "scale_in_diagnostic_50_25_25_offset_0pct_0_3pct_0_8pct"
+)
 BOUNDED_THREE_LEG_VARIANT_ID = "scale_in_bounded_50_25_25_offset_0pct_0_3pct_0_8pct"
 RUNTIME_FALLBACK_POLICY_MODE = "runtime_default_scale_in_equal_50_50_0_3pct"
 RUNTIME_FALLBACK_VARIANT_ID = "runtime_default_scale_in_equal_50_50_offset_0pct_0_3pct"
@@ -41,6 +46,7 @@ COUNTERFACTUAL_WINDOW_SEC = 180
 ANCHOR_RECONSTRUCT_WINDOW_SEC = 5
 THREE_LEG_RUNTIME_SAMPLE_FLOOR = 20
 MAX_SCALE_IN_SPLIT_LEGS = 3
+MAX_POLICY_AGE_KRX_TRADING_DAYS = 3
 
 
 def report_paths(target_date: str) -> tuple[Path, Path]:
@@ -61,7 +67,12 @@ def _threshold_events_path(target_date: str) -> Path:
 
 
 def _source_quality_path(target_date: str) -> Path:
-    return DATA_DIR / "report" / "observation_source_quality_audit" / f"observation_source_quality_audit_{target_date}.json"
+    return (
+        DATA_DIR
+        / "report"
+        / "observation_source_quality_audit"
+        / f"observation_source_quality_audit_{target_date}.json"
+    )
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -74,7 +85,10 @@ def _load_json(path: Path) -> dict[str, Any]:
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
@@ -956,7 +970,9 @@ def _load_policy_from_env(policy_file: str | None = None) -> tuple[dict[str, Any
     enabled = os.environ.get("KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_ENABLED")
     if not _safe_bool(enabled):
         return None, "policy_disabled"
-    path_value = policy_file or os.environ.get("KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_FILE")
+    path_value = policy_file or os.environ.get(
+        "KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_FILE"
+    )
     if not path_value:
         return None, "policy_file_missing"
     path = Path(path_value)
@@ -983,7 +999,13 @@ def _policy_is_stale(policy: dict[str, Any], *, now: datetime | None = None) -> 
     now = now or datetime.now(timezone(timedelta(hours=9)))
     if now.tzinfo is None:
         now = now.replace(tzinfo=timezone(timedelta(hours=9)))
-    return now - generated_at.astimezone(now.tzinfo) > timedelta(days=3)
+    generated_at = generated_at.astimezone(now.tzinfo)
+    if generated_at > now:
+        return True
+    return (
+        count_krx_trading_days(generated_at.date(), now.date())
+        > MAX_POLICY_AGE_KRX_TRADING_DAYS
+    )
 
 
 def _runtime_default_bucket_policy(bucket: str) -> dict[str, Any]:
@@ -1003,7 +1025,9 @@ def _runtime_default_bucket_policy(bucket: str) -> dict[str, Any]:
 def _split_qty(total_qty: int, leg_count: int, first_weight: float) -> list[int]:
     if leg_count <= 1 or total_qty <= 1:
         return [total_qty]
-    first_qty = max(1, min(total_qty - (leg_count - 1), int(round(total_qty * first_weight))))
+    first_qty = max(
+        1, min(total_qty - (leg_count - 1), int(round(total_qty * first_weight)))
+    )
     quantities = [first_qty]
     remaining = total_qty - first_qty
     for remaining_legs in range(leg_count - 1, 0, -1):
@@ -1015,7 +1039,9 @@ def _split_qty(total_qty: int, leg_count: int, first_weight: float) -> list[int]
     return quantities
 
 
-def _split_qty_by_weights(total_qty: int, leg_count: int, weights: list[float]) -> list[int]:
+def _split_qty_by_weights(
+    total_qty: int, leg_count: int, weights: list[float]
+) -> list[int]:
     if leg_count <= 1 or total_qty <= 1:
         return [total_qty]
     if total_qty < leg_count:

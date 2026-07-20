@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
 
 def get_krx_trading_day_status(target: date) -> tuple[bool, str]:
@@ -26,3 +26,16 @@ def get_krx_trading_day_status(target: date) -> tuple[bool, str]:
 
 def is_krx_trading_day(target: date) -> bool:
     return get_krx_trading_day_status(target)[0]
+
+
+def count_krx_trading_days(start_exclusive: date, end_inclusive: date) -> int:
+    """Count KRX trading days in ``(start_exclusive, end_inclusive]``."""
+    if end_inclusive <= start_exclusive:
+        return 0
+    current = start_exclusive + timedelta(days=1)
+    count = 0
+    while current <= end_inclusive:
+        if is_krx_trading_day(current):
+            count += 1
+        current += timedelta(days=1)
+    return count

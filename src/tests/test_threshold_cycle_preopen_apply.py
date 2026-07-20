@@ -8020,6 +8020,108 @@ def test_verify_runtime_env_handoff_pass(tmp_path, monkeypatch):
     assert result["missing_family_count"] == 0
 
 
+def test_verify_runtime_env_handoff_rejects_retired_operator_overrides(
+    tmp_path, monkeypatch
+):
+    runtime_dir = tmp_path / "runtime_env"
+    runtime_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    (runtime_dir / "operator_runtime_overrides.env").write_text(
+        "\n".join(
+            [
+                "export KORSTOCKSCAN_SCALP_SOFT_STOP_DYNAMIC_GRACE_OVERRIDE_ENABLED=true",
+                "export KORSTOCKSCAN_SCALP_LATE_ENTRY_PRICE_DRIFT_GUARD_ENABLED=true",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = mod.verify_runtime_env_handoff("2026-07-20")
+
+    assert result["status"] == "fail"
+    assert result["fail_reason"] == "retired_runtime_selection_or_override_present"
+    assert result["operator_runtime_override_keys"] == []
+    assert result["retired_operator_override_keys_blocked"] == [
+        "KORSTOCKSCAN_SCALP_LATE_ENTRY_PRICE_DRIFT_GUARD_ENABLED",
+        "KORSTOCKSCAN_SCALP_SOFT_STOP_DYNAMIC_GRACE_OVERRIDE_ENABLED",
+    ]
+    assert {item["severity"] for item in result["findings"]} == {
+        "retired_runtime_override_present"
+    }
+
+
+def test_verify_runtime_env_handoff_rejects_retired_manifest_overrides(
+    tmp_path, monkeypatch
+):
+    runtime_dir = tmp_path / "runtime_env"
+    runtime_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    (runtime_dir / "threshold_runtime_env_2026-07-20.json").write_text(
+        json.dumps(
+            {
+                "target_date": "2026-07-20",
+                "selected_families": [],
+                "env_overrides": {
+                    "KORSTOCKSCAN_SCALP_LATE_ENTRY_PRICE_DRIFT_GUARD_ENABLED": "true"
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = mod.verify_runtime_env_handoff("2026-07-20")
+
+    assert result["status"] == "fail"
+    assert result["retired_manifest_override_keys_blocked"] == [
+        "KORSTOCKSCAN_SCALP_LATE_ENTRY_PRICE_DRIFT_GUARD_ENABLED"
+    ]
+    assert result["findings"][0]["source"] == "threshold_runtime_env_manifest"
+
+
+def test_verify_runtime_env_handoff_rejects_retired_selected_family(
+    tmp_path, monkeypatch
+):
+    runtime_dir = tmp_path / "runtime_env"
+    runtime_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    (runtime_dir / "threshold_runtime_env_2026-07-20.json").write_text(
+        json.dumps(
+            {
+                "target_date": "2026-07-20",
+                "selected_families": ["soft_stop_dynamic_grace_runtime"],
+                "env_overrides": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = mod.verify_runtime_env_handoff("2026-07-20")
+
+    assert result["status"] == "fail"
+    assert result["fail_reason"] == "retired_runtime_selection_or_override_present"
+    assert result["retired_selected_families_blocked"] == [
+        "soft_stop_dynamic_grace_runtime"
+    ]
+    assert result["findings"][0]["severity"] == "retired_runtime_family_selected"
+
+
+def test_write_runtime_env_strips_all_retired_runtime_keys(tmp_path, monkeypatch):
+    runtime_dir = tmp_path / "runtime_env"
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    retired_overrides = {key: "true" for key in mod.RETIRED_RUNTIME_ENV_KEYS}
+
+    mod._write_runtime_env(
+        "2026-07-20",
+        {"source_date": "2026-07-16", "generated_at": "2026-07-20T08:00:00+09:00"},
+        retired_overrides,
+    )
+
+    rendered = (runtime_dir / "threshold_runtime_env_2026-07-20.env").read_text(
+        encoding="utf-8"
+    )
+    assert not any(key in rendered for key in mod.RETIRED_RUNTIME_ENV_KEYS)
+
+
 def test_verify_runtime_env_handoff_missing_key(tmp_path, monkeypatch):
     report_dir = tmp_path / "report"
     apply_dir = tmp_path / "apply_plans"
@@ -8142,6 +8244,70 @@ def test_split_runtime_policy_audit_accepts_current_entry_and_scale_in_policies(
     assert [audit["status"] for audit in audits] == ["pass", "pass"]
     assert [audit["reason"] for audit in audits] == ["policy_usable", "policy_usable"]
     assert audits[0]["operator_fallback_authorized"] is True
+
+
+def test_split_runtime_policy_audit_accepts_scale_in_policy_across_krx_holiday_weekend(
+    tmp_path,
+):
+    scale_policy = tmp_path / "scale.json"
+    scale_policy.write_text(
+        json.dumps(
+            {
+                "schema_version": "scale_in_split_order_policy_v1",
+                "policy_version": "scale-holiday-handoff",
+                "generated_at": "2026-07-16T20:28:37+09:00",
+                "runtime_apply_allowed": True,
+                "buckets": {"default": {}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    env = {
+        "KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_ENABLED": "true",
+        "KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_FILE": str(scale_policy),
+        "KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_VERSION": "scale-holiday-handoff",
+    }
+
+    audits = mod._split_runtime_policy_audits("2026-07-20", env)
+
+    scale_audit = next(
+        item for item in audits if item["family"] == "scale_in_split_order_plan"
+    )
+    assert scale_audit["status"] == "pass"
+    assert scale_audit["reason"] == "policy_usable"
+    assert scale_audit["freshness_age_trading_days"] == 1
+
+
+def test_split_runtime_policy_audit_rejects_scale_in_policy_after_three_trading_days(
+    tmp_path,
+):
+    scale_policy = tmp_path / "scale.json"
+    scale_policy.write_text(
+        json.dumps(
+            {
+                "schema_version": "scale_in_split_order_policy_v1",
+                "policy_version": "scale-stale-trading-days",
+                "generated_at": "2026-07-13T20:28:37+09:00",
+                "runtime_apply_allowed": True,
+                "buckets": {"default": {}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    env = {
+        "KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_ENABLED": "true",
+        "KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_FILE": str(scale_policy),
+        "KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_VERSION": "scale-stale-trading-days",
+    }
+
+    audits = mod._split_runtime_policy_audits("2026-07-20", env)
+
+    scale_audit = next(
+        item for item in audits if item["family"] == "scale_in_split_order_plan"
+    )
+    assert scale_audit["status"] == "fail"
+    assert scale_audit["reason"] == "stale_policy"
+    assert scale_audit["freshness_age_trading_days"] == 4
 
 
 def test_verify_runtime_env_handoff_rejects_selected_disabled_split_policy(
