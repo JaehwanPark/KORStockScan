@@ -10,6 +10,9 @@ from src.database.models import HoldingAddHistory, RecommendationHistory
 from src.engine.scalping.opening_rotation import (
     POSITION_TAG as OPENING_ROTATION_POSITION_TAG,
 )
+from src.engine.scalping.entry_split_order_plan import (
+    recover_probe_runtime_bundle_for_stock,
+)
 from src.engine.sniper_position_tags import (
     normalize_position_tag,
     normalize_strategy,
@@ -369,6 +372,13 @@ def _ensure_runtime_target(record, *, buy_qty=None, buy_price=None):
             target["broker_recovered_orig_ord_no"] = recovered_orig_ord_no
         if strategy == "SCALPING" and position_tag != OPENING_ROTATION_POSITION_TAG:
             target.setdefault("exit_mode", "SCALP_PRESET_TP")
+        probe_recovery = recover_probe_runtime_bundle_for_stock(target)
+        if probe_recovery.get("recovered") or probe_recovery.get("circuit_open"):
+            log_info(
+                f"[ENTRY_SPLIT_PROBE_RECOVERY] {code} "
+                f"result={probe_recovery.get('reason')} "
+                f"phase={probe_recovery.get('phase', '-')}"
+            )
         ACTIVE_TARGETS.append(target)
         if EVENT_BUS is not None and code:
             EVENT_BUS.publish("COMMAND_WS_REG", {"codes": [code]})
@@ -414,6 +424,13 @@ def _ensure_runtime_target(record, *, buy_qty=None, buy_price=None):
         target.setdefault("exit_mode", "SCALP_PRESET_TP")
     elif strategy == "SCALPING" and position_tag == OPENING_ROTATION_POSITION_TAG:
         target.pop("exit_mode", None)
+    probe_recovery = recover_probe_runtime_bundle_for_stock(target)
+    if probe_recovery.get("recovered") or probe_recovery.get("circuit_open"):
+        log_info(
+            f"[ENTRY_SPLIT_PROBE_RECOVERY] {code} "
+            f"result={probe_recovery.get('reason')} "
+            f"phase={probe_recovery.get('phase', '-')}"
+        )
     return target
 
 

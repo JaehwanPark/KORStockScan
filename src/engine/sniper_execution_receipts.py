@@ -11,6 +11,10 @@ from src.engine.scalping.opening_rotation import (
     entry_time_bucket as opening_rotation_entry_time_bucket,
     entry_window_version as opening_rotation_entry_window_version,
 )
+from src.engine.scalping.entry_split_order_plan import (
+    trip_probe_runtime_circuit,
+    update_probe_runtime_bundle,
+)
 from src.engine.sniper_entry_state import (
     ENTRY_LOCK,
     get_terminal_entry_order,
@@ -209,6 +213,23 @@ _SELL_REVIVE_RESET_KEYS = (
     "trailing_stop_price",
     "hard_stop_price",
     "protect_profit_pct",
+    "entry_split_probe_phase",
+    "entry_split_probe_bundle_id",
+    "entry_split_probe_exit_bundle_id",
+    "entry_split_probe_requested_qty",
+    "entry_split_probe_continuation",
+    "entry_split_probe_submit_best_ask",
+    "entry_split_probe_timeout_sec",
+    "entry_split_probe_max_slippage_bps",
+    "entry_split_probe_anchor_mode",
+    "entry_split_probe_submitting_at",
+    "entry_split_probe_submitted_at",
+    "entry_split_probe_order_no",
+    "entry_split_probe_fill_price",
+    "entry_split_probe_filled_at",
+    "entry_split_probe_residual_claimed",
+    "entry_split_probe_scale_in_forbidden",
+    "entry_split_probe_abort_reason",
 )
 _SELL_COMPLETE_RESET_KEYS = (
     "pending_entry_orders",
@@ -234,6 +255,23 @@ _SELL_COMPLETE_RESET_KEYS = (
     "trailing_stop_price",
     "hard_stop_price",
     "protect_profit_pct",
+    "entry_split_probe_phase",
+    "entry_split_probe_bundle_id",
+    "entry_split_probe_exit_bundle_id",
+    "entry_split_probe_requested_qty",
+    "entry_split_probe_continuation",
+    "entry_split_probe_submit_best_ask",
+    "entry_split_probe_timeout_sec",
+    "entry_split_probe_max_slippage_bps",
+    "entry_split_probe_anchor_mode",
+    "entry_split_probe_submitting_at",
+    "entry_split_probe_submitted_at",
+    "entry_split_probe_order_no",
+    "entry_split_probe_fill_price",
+    "entry_split_probe_filled_at",
+    "entry_split_probe_residual_claimed",
+    "entry_split_probe_scale_in_forbidden",
+    "entry_split_probe_abort_reason",
 )
 _ENTRY_RECEIPT_FILLED_BY_ORDER_KEY = "_entry_receipt_filled_by_order_no"
 _ENTRY_RECEIPT_REQUESTED_BY_ORDER_KEY = "_entry_receipt_requested_by_order_no"
@@ -855,6 +893,19 @@ def _finalize_standard_sell_execution(
     highest_prices.pop(code, None)
     target_stock["status"] = "COMPLETED"
     target_stock["sell_time"] = now.strftime("%H:%M:%S")
+    probe_bundle_id = str(
+        target_stock.get("entry_split_probe_bundle_id")
+        or target_stock.get("entry_split_probe_exit_bundle_id")
+        or ""
+    ).strip()
+    if probe_bundle_id:
+        update_probe_runtime_bundle(
+            probe_bundle_id,
+            phase="complete",
+            target_id=target_id,
+            close_reason="position_sell_completed",
+            sold_at=now.astimezone().isoformat() if now.tzinfo else now.isoformat(),
+        )
     move_orders_to_terminal(target_stock, reason="sell_completed_cleanup")
     sell_receipt_snapshot = _receipt_snapshot(target_stock, _SELL_RECEIPT_SNAPSHOT_KEYS)
     _clear_runtime_keys(target_stock, _SELL_COMPLETE_RESET_KEYS)
@@ -2402,6 +2453,106 @@ def _handle_entry_buy_execution(
         target_stock["holding_started_at"] = now
     highest_prices[code] = max(highest_prices.get(code, 0), exec_price)
 
+    probe_phase = str(target_stock.get("entry_split_probe_phase") or "").strip()
+    if probe_phase in {"probe_submitting", "probe_submitted"}:
+        bundle_id = str(target_stock.get("entry_split_probe_bundle_id") or "").strip()
+        probe_order_no = str(
+            target_stock.get("entry_split_probe_order_no") or ""
+        ).strip()
+        if probe_order_no and order_no and probe_order_no != order_no:
+            trip_probe_runtime_circuit("probe_receipt_order_number_mismatch")
+            target_stock["entry_split_probe_phase"] = "aborted"
+            target_stock["entry_split_probe_abort_reason"] = (
+                "probe_receipt_order_number_mismatch"
+            )
+            target_stock["entry_split_probe_scale_in_forbidden"] = True
+            if bundle_id:
+                update_probe_runtime_bundle(
+                    bundle_id,
+                    phase="aborted",
+                    reason="probe_receipt_order_number_mismatch",
+                    target_id=target_id,
+                    observed_order_no=order_no,
+                    filled_qty=int(new_qty or 0),
+                )
+        elif effective_exec_qty != 1 or int(new_qty or 0) != 1:
+            trip_probe_runtime_circuit("probe_fill_quantity_invariant")
+            target_stock["entry_split_probe_phase"] = "aborted"
+            target_stock["entry_split_probe_abort_reason"] = (
+                "probe_fill_quantity_invariant"
+            )
+            target_stock["entry_split_probe_scale_in_forbidden"] = True
+            if bundle_id:
+                update_probe_runtime_bundle(
+                    bundle_id,
+                    phase="aborted",
+                    reason="probe_fill_quantity_invariant",
+                    target_id=target_id,
+                    filled_qty=int(new_qty or 0),
+                )
+        else:
+            filled_at_ts = time.time()
+            target_stock["entry_split_probe_phase"] = "probe_filled"
+            target_stock["entry_split_probe_order_no"] = order_no
+            target_stock["entry_split_probe_fill_price"] = exec_price
+            target_stock["entry_split_probe_filled_at"] = filled_at_ts
+            update_probe_runtime_bundle(
+                bundle_id,
+                phase="probe_filled",
+                order_no=order_no,
+                fill_price=exec_price,
+                filled_at=filled_at_ts,
+                fill_qty=effective_exec_qty,
+            )
+            submit_best_ask = _safe_int(
+                target_stock.get("entry_split_probe_submit_best_ask"), 0
+            )
+            slippage_bps = (
+                ((float(exec_price) - float(submit_best_ask)) / float(submit_best_ask))
+                * 10000.0
+                if submit_best_ask > 0
+                else 0.0
+            )
+            _log_holding_pipeline(
+                target_stock.get("name"),
+                code,
+                target_id,
+                "probe_filled",
+                probe_bundle_id=bundle_id or "-",
+                order_no=order_no or "-",
+                fill_qty=effective_exec_qty,
+                fill_price=exec_price,
+                probe_submit_best_ask=submit_best_ask,
+                probe_submit_to_fill_ms=round(
+                    max(
+                        0.0,
+                        filled_at_ts
+                        - _safe_float(
+                            target_stock.get("entry_split_probe_submitted_at")
+                            or target_stock.get("entry_split_probe_submitting_at"),
+                            filled_at_ts,
+                        ),
+                    )
+                    * 1000.0,
+                    3,
+                ),
+                probe_fill_slippage_bps=round(slippage_bps, 4),
+                metric_role="real_execution_quality",
+                decision_authority="operator_override_observation_only",
+                window_policy="same_day_operator_canary",
+                sample_floor="5_bundles",
+                primary_decision_metric="probe_fill_to_first_residual_limit_gap_bps",
+                source_quality_gate="exact_probe_receipt_and_fresh_consistent_bbo",
+                allowed_runtime_apply=False,
+                forbidden_uses=(
+                    "live_auto_promotion|threshold_mutation|provider_route_change|"
+                    "quantity_cap_release|broker_guard_bypass|full_live_approval"
+                ),
+                actual_order_submitted=True,
+                broker_order_forbidden=False,
+                runtime_effect=True,
+            )
+
     submit_ai_score = _resolve_entry_submit_ai_score(target_stock, order_no)
     holding_ai_seeded = False
     if submit_ai_score is not None:
@@ -2455,6 +2606,19 @@ def _handle_entry_buy_execution(
     preset_sync_status = "NOT_APPLICABLE"
     preset_sync_reason = "non_scalping_or_non_default_tag"
     if requested_entry_qty > 0 and cum_filled_qty >= requested_entry_qty:
+        probe_bundle_id = str(
+            target_stock.get("entry_split_probe_bundle_id") or ""
+        ).strip()
+        probe_bundle_completed = bool(
+            probe_bundle_id
+            and str(target_stock.get("entry_split_probe_phase") or "")
+            in {
+                "residual_claimed",
+                "residual_submitting",
+                "residual_submitted",
+                "residual_partial_submitted",
+            }
+        )
         log_info(
             f"[ENTRY_BUNDLE_FILLED] {target_stock.get('name')}({code}) "
             f"mode={target_stock.get('entry_mode', 'normal')} "
@@ -2468,6 +2632,41 @@ def _handle_entry_buy_execution(
         target_stock.pop("entry_fill_amount", None)
         target_stock.pop("entry_bundle_id", None)
         target_stock.pop("rising_missed_scout_upgrade_order_pending", None)
+        if probe_bundle_completed:
+            target_stock["entry_split_probe_phase"] = "complete"
+            target_stock.pop("entry_split_probe_residual_claimed", None)
+            target_stock.pop("entry_split_probe_scale_in_forbidden", None)
+            update_probe_runtime_bundle(
+                probe_bundle_id,
+                phase="complete",
+                requested_qty=requested_entry_qty,
+                filled_qty=cum_filled_qty,
+                avg_buy_price=round(float(new_avg or 0.0), 4),
+            )
+            _log_holding_pipeline(
+                target_stock.get("name"),
+                code,
+                target_id,
+                "bundle_completed",
+                probe_bundle_id=probe_bundle_id,
+                requested_qty=requested_entry_qty,
+                filled_qty=cum_filled_qty,
+                avg_buy_price=round(float(new_avg or 0.0), 4),
+                metric_role="real_execution_quality",
+                decision_authority="operator_override_observation_only",
+                window_policy="same_day_operator_canary",
+                sample_floor="5_bundles",
+                primary_decision_metric="probe_fill_to_first_residual_limit_gap_bps",
+                source_quality_gate="exact_probe_receipt_and_fresh_consistent_bbo",
+                allowed_runtime_apply=False,
+                forbidden_uses=(
+                    "live_auto_promotion|threshold_mutation|provider_route_change|"
+                    "quantity_cap_release|broker_guard_bypass|full_live_approval"
+                ),
+                actual_order_submitted=True,
+                broker_order_forbidden=False,
+                runtime_effect=True,
+            )
         if target_stock.get("rising_missed_one_share_scout"):
             target_stock["rising_missed_scout_upgraded"] = True
 

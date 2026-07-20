@@ -1166,6 +1166,170 @@ def test_allocator_market_first_uses_policy_weight_and_keeps_residual_at_resolve
     assert orders[2]["price"] < orders[1]["price"]
 
 
+def test_allocator_probe_first_reserves_one_share_and_builds_fill_anchored_residuals(
+    monkeypatch, tmp_path
+):
+    target_date = "2026-07-20"
+    policy_file = tmp_path / "entry-policy.json"
+    policy_file.write_text(
+        json.dumps(
+            {
+                "schema_version": "entry_split_order_policy_v1",
+                "policy_version": "probe-test",
+                "source_date": "2026-07-16",
+                "buckets": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        split_plan,
+        "PROBE_RUNTIME_STATE_PATH",
+        tmp_path / "entry_split_probe_runtime_state.json",
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ACTIVE_DATE", target_date)
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_FILE", str(policy_file))
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ACTIVE_DATE", target_date)
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_QTY", "1")
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_MAX_BUNDLES", "1")
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_MARKET_FIRST_LEG_ENABLED", "false")
+
+    orders, fields = split_plan.apply_entry_split_order_policy(
+        [{"tag": "normal", "qty": 10, "price": 10000, "tif": "DAY"}],
+        stock={"code": "123456", "strategy": "SCALPING"},
+        latency_gate={
+            "latency_state": "SAFE",
+            "best_ask_at_submit": 10050,
+            "quote_stale_at_submit": False,
+        },
+        now=datetime(2026, 7, 20, 10, 0, tzinfo=timezone(timedelta(hours=9))),
+    )
+
+    assert fields["entry_split_order_probe_first_applied"] is True
+    assert fields["entry_split_order_split_qty"] == 10
+    assert len(orders) == 1
+    assert orders[0]["qty"] == 1
+    assert orders[0]["entry_split_order_leg_index"] == 0
+    assert orders[0]["entry_split_order_execution_mode"] == "probe_first_market"
+    continuation = orders[0]["entry_split_order_probe_continuation"]
+    assert sum(continuation["residual_quantities"]) == 9
+
+    residuals, residual_fields = split_plan.build_probe_residual_orders(
+        continuation,
+        probe_fill_price=10080,
+        best_bid=10000,
+        best_ask=10020,
+    )
+
+    assert residual_fields["allowed"] is True
+    assert residual_fields["probe_anchor_price"] == 10020
+    assert 1 + sum(order["qty"] for order in residuals) == 10
+    assert residuals[0]["price"] == 10020
+    assert all(order["order_type_code"] == "00" for order in residuals)
+
+    fallback_orders, fallback_fields = split_plan.apply_entry_split_order_policy(
+        [{"tag": "normal", "qty": 10, "price": 10000, "tif": "DAY"}],
+        stock={"code": "654321", "strategy": "SCALPING"},
+        latency_gate={
+            "latency_state": "SAFE",
+            "best_ask_at_submit": 10050,
+            "quote_stale_at_submit": False,
+        },
+        now=datetime(2026, 7, 20, 10, 1, tzinfo=timezone(timedelta(hours=9))),
+    )
+    assert fallback_fields["entry_split_order_probe_first_skip_reason"] == (
+        "probe_daily_cap_reached"
+    )
+    assert len(fallback_orders) >= 2
+    assert not any(
+        order.get("entry_split_order_probe_first_applied") for order in fallback_orders
+    )
+
+
+def test_probe_runtime_restart_recovery_restores_bundle_and_fails_closed_on_mismatch(
+    monkeypatch, tmp_path
+):
+    state_path = tmp_path / "entry_split_probe_runtime_state.json"
+    monkeypatch.setattr(split_plan, "PROBE_RUNTIME_STATE_PATH", state_path)
+    now = datetime(2026, 7, 20, 10, 0, tzinfo=timezone(timedelta(hours=9)))
+    continuation = {
+        "requested_qty": 5,
+        "residual_qty": 4,
+        "residual_quantities": [2, 2],
+    }
+    split_plan.update_probe_runtime_bundle(
+        "123456-probe-restart",
+        phase="probe_filled",
+        now=now,
+        code="123456",
+        target_id=7,
+        requested_qty=5,
+        continuation=continuation,
+        probe_submit_best_ask=10000,
+        timeout_sec=3,
+        max_slippage_bps=50,
+        anchor_mode="fill_clamped_to_fresh_bbo",
+        submitted_at=100.0,
+        filled_at=101.0,
+        fill_price=10010,
+        fill_qty=1,
+        order_no="P0",
+        residual_orders=[
+            {"tag": "planned_only", "qty": 2, "status": "OPEN"},
+            {"tag": "submitted", "qty": 2, "status": "OPEN", "ord_no": "R1"},
+        ],
+    )
+
+    unrelated_stock = {
+        "id": 8,
+        "code": "123456",
+        "buy_qty": 1,
+        "status": "HOLDING",
+    }
+    unrelated = split_plan.recover_probe_runtime_bundle_for_stock(
+        unrelated_stock, now=now
+    )
+    assert unrelated == {"recovered": False, "reason": "no_incomplete_bundle"}
+    assert "entry_split_probe_bundle_id" not in unrelated_stock
+
+    recovered_stock = {
+        "id": 7,
+        "code": "123456",
+        "buy_qty": 1,
+        "status": "HOLDING",
+    }
+    result = split_plan.recover_probe_runtime_bundle_for_stock(recovered_stock, now=now)
+
+    assert result == {
+        "recovered": True,
+        "reason": "incomplete_bundle_restored",
+        "phase": "probe_filled",
+    }
+    assert recovered_stock["entry_split_probe_phase"] == "probe_filled"
+    assert recovered_stock["entry_split_probe_continuation"] == continuation
+    assert recovered_stock["entry_split_probe_scale_in_forbidden"] is True
+    assert recovered_stock["pending_entry_orders"] == [
+        {"tag": "submitted", "qty": 2, "status": "OPEN", "ord_no": "R1"}
+    ]
+
+    mismatched_stock = {
+        "id": 7,
+        "code": "123456",
+        "buy_qty": 2,
+        "status": "HOLDING",
+    }
+    mismatch = split_plan.recover_probe_runtime_bundle_for_stock(
+        mismatched_stock, now=now
+    )
+    assert mismatch["circuit_open"] is True
+    assert mismatched_stock["entry_split_probe_phase"] == "aborted"
+    state = split_plan._load_json(state_path)
+    assert state["circuit_open"] is True
+    assert state["circuit_reason"] == "probe_restart_recovery_quantity_mismatch"
+
+
 def test_allocator_date_bounded_policy_becomes_inactive(monkeypatch, tmp_path):
     policy_file = tmp_path / "entry-policy.json"
     policy_file.write_text(

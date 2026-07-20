@@ -218,7 +218,12 @@ from src.engine.scalping.entry_ai_gate import (
     evaluate_entry_score_role_gate,
     get_entry_buy_score_threshold,
 )
-from src.engine.scalping.entry_split_order_plan import apply_entry_split_order_policy
+from src.engine.scalping.entry_split_order_plan import (
+    apply_entry_split_order_policy,
+    build_probe_residual_orders,
+    trip_probe_runtime_circuit,
+    update_probe_runtime_bundle,
+)
 from src.engine.scalping.scale_in_split_order_plan import (
     apply_scale_in_split_order_policy,
 )
@@ -12583,6 +12588,8 @@ _RISING_MISSED_TP1_OBSERVATION_CONTEXT_MAX_AGE_SEC = 20.0 * 60.0
 _RISING_MISSED_NXT_POST_BLOCK_SAMPLERS: dict[str, dict[str, Any]] = {}
 _RISING_MISSED_NXT_POST_BLOCK_SAMPLER_LOCK = threading.RLock()
 _RISING_MISSED_NXT_POST_BLOCK_SAMPLERS_RESTORED = False
+_RISING_MISSED_NXT_POST_BLOCK_REST_RATE_LOCK = threading.Lock()
+_RISING_MISSED_NXT_POST_BLOCK_REST_RATE_EPOCHS: list[float] = []
 
 
 def _rising_missed_nxt_post_block_sampler_enabled(
@@ -12651,14 +12658,133 @@ def _rising_missed_nxt_post_block_sampler_max_ws_age_ms() -> float:
     )
 
 
+def _rising_missed_nxt_post_block_rest_fallback_enabled(now_ts: float) -> bool:
+    if not _env_bool(
+        "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_REST_FALLBACK_ENABLED", False
+    ):
+        return False
+    active_date = str(
+        os.getenv(
+            "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_REST_FALLBACK_ACTIVE_DATE", ""
+        )
+    ).strip()
+    current_date = datetime.fromtimestamp(float(now_ts), tz=_KST).strftime("%Y-%m-%d")
+    return bool(active_date and active_date == current_date)
+
+
+def _reserve_rising_missed_nxt_post_block_rest_packet(
+    now_ts: float,
+) -> tuple[bool, str]:
+    window_sec = max(
+        5.0,
+        _env_float(
+            "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_REST_RATE_WINDOW_SEC", 30.0
+        ),
+    )
+    max_packets = max(
+        1,
+        min(
+            12,
+            _env_int(
+                "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_REST_MAX_PACKETS_PER_WINDOW",
+                4,
+            ),
+        ),
+    )
+    window_start = float(now_ts) - window_sec
+    with _RISING_MISSED_NXT_POST_BLOCK_REST_RATE_LOCK:
+        active = [
+            epoch
+            for epoch in _RISING_MISSED_NXT_POST_BLOCK_REST_RATE_EPOCHS
+            if epoch >= window_start
+        ]
+        _RISING_MISSED_NXT_POST_BLOCK_REST_RATE_EPOCHS[:] = active
+        if len(active) >= max_packets:
+            return False, "observation_rest_budget_deferred"
+        _RISING_MISSED_NXT_POST_BLOCK_REST_RATE_EPOCHS.append(float(now_ts))
+    return True, "observation_rest_budget_allowed"
+
+
+def _rising_missed_nxt_post_block_rest_observation(
+    code: str,
+    *,
+    now_ts: float,
+) -> dict[str, Any]:
+    fields: dict[str, Any] = {
+        "enabled": _rising_missed_nxt_post_block_rest_fallback_enabled(now_ts),
+        "attempted": False,
+        "applied": False,
+        "reason": "disabled",
+        "price": 0,
+        "best_bid": 0,
+        "best_ask": 0,
+        "fetch_state": "not_attempted",
+        "elapsed_ms": 0.0,
+    }
+    if not fields["enabled"]:
+        return fields
+    reserve_allowed, reserve_reason = _reserve_rising_missed_nxt_post_block_rest_packet(
+        now_ts
+    )
+    fields["reason"] = reserve_reason
+    if not reserve_allowed:
+        return fields
+    fields["attempted"] = True
+    timeout_ms = max(
+        50,
+        min(
+            1000,
+            _env_int("KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_REST_TIMEOUT_MS", 400),
+        ),
+    )
+    snapshot, fetch_state, elapsed_ms = _fetch_rest_orderbook_snapshot_bounded(
+        code, timeout_ms
+    )
+    fields.update(
+        {
+            "fetch_state": fetch_state,
+            "elapsed_ms": round(elapsed_ms, 3),
+            "timeout_ms": timeout_ms,
+        }
+    )
+    if not snapshot:
+        fields["reason"] = f"rest_{fetch_state}"
+        return fields
+    best_ask = _safe_int(snapshot.get("best_ask"), 0)
+    best_bid = _safe_int(snapshot.get("best_bid"), 0)
+    if best_ask <= 0 or best_bid <= 0 or best_ask < best_bid:
+        fields["reason"] = "rest_invalid_top_of_book"
+        return fields
+    spread_ratio = (best_ask - best_bid) / max(best_ask, 1)
+    if spread_ratio > 0.005:
+        fields["reason"] = "rest_spread_too_wide"
+        return fields
+    fields.update(
+        {
+            "applied": True,
+            "reason": "fresh_ka10004_executable_bid_observation_only",
+            "price": best_bid,
+            "best_bid": best_bid,
+            "best_ask": best_ask,
+            "spread_ratio": round(spread_ratio, 6),
+            "received_at": float(now_ts),
+            "receive_age_ms": 0.0,
+            "age_basis": "bounded_call_completion_receive_ts",
+        }
+    )
+    return fields
+
+
 def _rising_missed_nxt_post_block_sampler_contract_fields() -> dict[str, Any]:
     return {
         "metric_role": "source_quality_gate",
         "decision_authority": "source_only_nxt_post_block_price_observation",
         "window_policy": "nxt_selector_block_or_defer_bounded_20m",
-        "sample_floor": "2_fresh_absolute_ws_0b_nxt_price_samples",
+        "sample_floor": "2_fresh_ws_or_observation_only_rest_price_samples",
         "primary_decision_metric": "gross_1.30_first_before_adverse_0.70",
-        "source_quality_gate": "fresh_absolute_0b_receive_ts_and_actual_nxt_item_route",
+        "source_quality_gate": (
+            "fresh_absolute_nxt_ws_route_or_bounded_ka10004_receive_observation"
+        ),
         "runtime_effect": False,
         "allowed_runtime_apply": False,
         "actual_order_submitted": False,
@@ -12991,11 +13117,14 @@ def observe_rising_missed_nxt_post_block_samplers(
         ]
 
     snapshot_cache: dict[str, dict[str, Any]] = {}
+    rest_observation_cache: dict[str, dict[str, Any]] = {}
     stats = {
         "active": len(due_items),
         "sampled": 0,
         "fresh": 0,
         "source_gap": 0,
+        "rest_fallback": 0,
+        "rest_budget_deferred": 0,
         "completed": 0,
     }
     for due in due_items:
@@ -13095,7 +13224,38 @@ def observe_rising_missed_nxt_post_block_samplers(
             fresh = True
             source_reason = "fresh_absolute_ws_0d_nxt_trade_quiet"
 
-        if fresh and quote_proxy_fresh:
+        rest_observation = {
+            "enabled": False,
+            "attempted": False,
+            "applied": False,
+            "reason": "ws_price_available",
+            "fetch_state": "not_attempted",
+            "elapsed_ms": 0.0,
+        }
+        rest_proxy_fresh = False
+        if not fresh:
+            if code not in rest_observation_cache:
+                rest_observation_cache[code] = (
+                    _rising_missed_nxt_post_block_rest_observation(
+                        code,
+                        now_ts=observed_ts,
+                    )
+                )
+            rest_observation = rest_observation_cache[code]
+            if rest_observation.get("applied"):
+                price = _safe_int(rest_observation.get("price"), 0)
+                fresh = price > 0
+                rest_proxy_fresh = fresh
+                source_reason = str(rest_observation.get("reason") or "-")
+                stats["rest_fallback"] += 1
+            elif rest_observation.get("reason") == "observation_rest_budget_deferred":
+                stats["rest_budget_deferred"] += 1
+
+        if fresh and rest_proxy_fresh:
+            observation_state = "fresh_rest_nxt_price_observation_only"
+            price_source = "ka10004_executable_bid_observation_only"
+            price_basis = "executable_sell_touch_rest_observation_only"
+        elif fresh and quote_proxy_fresh:
             observation_state = "fresh_ws_0d_nxt_quote_proxy"
             price_source = "trusted_ws_0d_nxt_executable_bid_proxy"
             price_basis = "executable_sell_touch_quote_proxy"
@@ -13127,9 +13287,13 @@ def observe_rising_missed_nxt_post_block_samplers(
                     _safe_int(sampler.get("fresh_sample_count"), 0) + 1
                 )
                 sample_counter = (
-                    "quote_proxy_sample_count"
-                    if quote_proxy_fresh
-                    else "trade_price_sample_count"
+                    "rest_proxy_sample_count"
+                    if rest_proxy_fresh
+                    else (
+                        "quote_proxy_sample_count"
+                        if quote_proxy_fresh
+                        else "trade_price_sample_count"
+                    )
                 )
                 sampler[sample_counter] = _safe_int(sampler.get(sample_counter), 0) + 1
                 current_max = sampler.get("max_move_pct")
@@ -13165,7 +13329,9 @@ def observe_rising_missed_nxt_post_block_samplers(
             "rising_missed_nxt_post_block_price_source": price_source,
             "rising_missed_nxt_post_block_price_source_reason": source_reason,
             "rising_missed_nxt_post_block_price_fallback_from_reason": (
-                fallback_from_reason if quote_proxy_fresh else "not_applicable"
+                fallback_from_reason
+                if quote_proxy_fresh or rest_proxy_fresh
+                else "not_applicable"
             ),
             "rising_missed_nxt_post_block_price_basis": price_basis,
             "rising_missed_nxt_post_block_ws_0b_age_ms": (
@@ -13184,6 +13350,29 @@ def observe_rising_missed_nxt_post_block_samplers(
             "rising_missed_nxt_post_block_ws_0d_best_bid": best_bid,
             "rising_missed_nxt_post_block_ws_0d_best_ask": best_ask,
             "rising_missed_nxt_post_block_ws_0d_quote_proxy_applied": quote_proxy_fresh,
+            "rising_missed_nxt_post_block_rest_fallback_enabled": bool(
+                rest_observation.get("enabled")
+            ),
+            "rising_missed_nxt_post_block_rest_fallback_attempted": bool(
+                rest_observation.get("attempted")
+            ),
+            "rising_missed_nxt_post_block_rest_fallback_applied": rest_proxy_fresh,
+            "rising_missed_nxt_post_block_rest_fallback_reason": (
+                rest_observation.get("reason") or "-"
+            ),
+            "rising_missed_nxt_post_block_rest_fetch_state": (
+                rest_observation.get("fetch_state") or "-"
+            ),
+            "rising_missed_nxt_post_block_rest_fetch_elapsed_ms": (
+                rest_observation.get("elapsed_ms", 0.0)
+            ),
+            "rising_missed_nxt_post_block_rest_receive_age_ms": (
+                rest_observation.get("receive_age_ms", "-")
+            ),
+            "rising_missed_nxt_post_block_rest_age_basis": (
+                rest_observation.get("age_basis") or "-"
+            ),
+            "rising_missed_nxt_post_block_rest_positive_micro_authority": False,
             "rising_missed_nxt_post_block_fresh_sample": fresh,
             "rising_missed_nxt_post_block_sample_attempt_count": emitted_sampler[
                 "sample_attempt_count"
@@ -13196,6 +13385,9 @@ def observe_rising_missed_nxt_post_block_samplers(
             ),
             "rising_missed_nxt_post_block_quote_proxy_sample_count": _safe_int(
                 emitted_sampler.get("quote_proxy_sample_count"), 0
+            ),
+            "rising_missed_nxt_post_block_rest_proxy_sample_count": _safe_int(
+                emitted_sampler.get("rest_proxy_sample_count"), 0
             ),
             "rising_missed_nxt_post_block_source_gap_sample_count": emitted_sampler[
                 "source_gap_sample_count"
@@ -13248,6 +13440,9 @@ def observe_rising_missed_nxt_post_block_samplers(
             ),
             rising_missed_nxt_post_block_quote_proxy_sample_count=_safe_int(
                 emitted_sampler.get("quote_proxy_sample_count"), 0
+            ),
+            rising_missed_nxt_post_block_rest_proxy_sample_count=_safe_int(
+                emitted_sampler.get("rest_proxy_sample_count"), 0
             ),
             rising_missed_nxt_post_block_source_gap_sample_count=emitted_sampler[
                 "source_gap_sample_count"
@@ -20557,6 +20752,11 @@ def _dispatch_scalp_preset_exit(
     market_regime=None,
 ):
     target_id = stock.get("id")
+    probe_bundle_id = str(
+        stock.get("entry_split_probe_bundle_id")
+        or stock.get("entry_split_probe_exit_bundle_id")
+        or ""
+    ).strip()
     expected_qty = _safe_int(stock.get("buy_qty"), 0)
     orig_ord_no = stock.get("preset_tp_ord_no", "")
     preset_ai_score = float(stock.get("rt_ai_prob", 0.5) or 0.5) * 100
@@ -20602,6 +20802,67 @@ def _dispatch_scalp_preset_exit(
             profit_rate=profit_rate,
         )
         return
+
+    probe_phase = str(stock.get("entry_split_probe_phase") or "").strip()
+    if probe_phase in {
+        "residual_claimed",
+        "residual_submitting",
+        "residual_submitted",
+        "residual_partial_submitted",
+    } and _has_open_pending_entry_orders(stock):
+        if probe_bundle_id:
+            update_probe_runtime_bundle(
+                probe_bundle_id,
+                phase="aborted",
+                target_id=target_id,
+                reason="exit_authority_precedence",
+                exit_rule=exit_rule,
+                exit_requested_at=datetime.now().astimezone().isoformat(),
+            )
+            _mutate_stock_state(
+                stock,
+                set_fields={
+                    "entry_split_probe_exit_bundle_id": probe_bundle_id,
+                },
+            )
+        cancel_state = _cancel_pending_entry_orders(stock, code, force=False)
+        if cancel_state != "cancelled":
+            trip_probe_runtime_circuit("probe_residual_cancel_before_exit_failed")
+            _mutate_stock_state(
+                stock,
+                set_fields={
+                    "entry_split_probe_abort_reason": (
+                        "probe_residual_cancel_before_exit_failed"
+                    ),
+                    "entry_split_probe_scale_in_forbidden": True,
+                },
+            )
+            _log_holding_pipeline(
+                stock,
+                code,
+                "probe_residual_cancel_before_hard_exit_failed",
+                probe_phase=probe_phase,
+                exit_rule=exit_rule,
+                actual_order_submitted=False,
+                broker_order_forbidden=True,
+                runtime_effect=True,
+                **_entry_split_probe_observation_contract_fields(),
+            )
+        expected_qty = _safe_int(stock.get("buy_qty"), expected_qty)
+        if cancel_state == "cancelled":
+            _log_holding_pipeline(
+                stock,
+                code,
+                "probe_residual_cancelled_before_hard_exit",
+                probe_phase=probe_phase,
+                cancel_state=cancel_state,
+                exit_rule=exit_rule,
+                sell_qty=expected_qty,
+                actual_order_submitted=False,
+                broker_order_forbidden=True,
+                runtime_effect=True,
+                **_entry_split_probe_observation_contract_fields(),
+            )
 
     sell_time_block_fields = _sell_side_open_time_block_fields(
         strategy=strategy,
@@ -29609,7 +29870,144 @@ def _split_order_meta_fields(order: dict | None) -> dict:
         "entry_split_order_operator_fallback_authorized": bool(
             src.get("entry_split_order_operator_fallback_authorized")
         ),
+        "entry_split_order_leg_index": src.get("entry_split_order_leg_index"),
+        "entry_split_order_probe_first_applied": bool(
+            src.get("entry_split_order_probe_first_applied")
+        ),
+        "entry_split_order_probe_qty": src.get("entry_split_order_probe_qty"),
+        "entry_split_order_probe_bundle_id": src.get(
+            "entry_split_order_probe_bundle_id"
+        ),
+        "entry_split_order_probe_timeout_sec": src.get(
+            "entry_split_order_probe_timeout_sec"
+        ),
+        "entry_split_order_probe_max_slippage_bps": src.get(
+            "entry_split_order_probe_max_slippage_bps"
+        ),
+        "entry_split_order_probe_anchor_mode": src.get(
+            "entry_split_order_probe_anchor_mode"
+        ),
+        "entry_split_order_probe_submit_best_ask": src.get(
+            "entry_split_order_probe_submit_best_ask"
+        ),
+        "entry_split_order_probe_continuation": src.get(
+            "entry_split_order_probe_continuation"
+        ),
     }
+
+
+def _entry_split_probe_observation_contract_fields() -> dict[str, Any]:
+    return {
+        "metric_role": "real_execution_quality",
+        "decision_authority": "operator_override_observation_only",
+        "window_policy": "same_day_operator_canary",
+        "sample_floor": "5_bundles",
+        "primary_decision_metric": "probe_fill_to_first_residual_limit_gap_bps",
+        "source_quality_gate": "exact_probe_receipt_and_fresh_consistent_bbo",
+        "allowed_runtime_apply": False,
+        "forbidden_uses": (
+            "live_auto_promotion|threshold_mutation|provider_route_change|"
+            "quantity_cap_release|broker_guard_bypass|full_live_approval"
+        ),
+    }
+
+
+def _probe_residual_account_guard_fields(
+    code: str, *, unit_price: int, residual_qty: int
+) -> dict[str, Any]:
+    fields = {
+        "account_guard_allowed": False,
+        "account_guard_reason": "probe_residual_account_guard_unverified",
+        "required_residual_qty": max(0, _safe_int(residual_qty, 0)),
+    }
+    if not KIWOOM_TOKEN or _safe_int(unit_price, 0) <= 0 or residual_qty <= 0:
+        return fields
+    try:
+        deposit = max(0, _safe_int(kiwoom_orders.get_deposit(KIWOOM_TOKEN), 0))
+        budget = _resolve_scalp_cash_budget_context(code, unit_price, deposit)
+    except Exception as exc:
+        fields["account_guard_error"] = str(exc)
+        return fields
+    fields.update(
+        {
+            "account_deposit": budget.get("account_deposit", deposit),
+            "cash_orderable_amount": budget.get("cash_orderable_amount", deposit),
+            "cash_orderable_qty_cap": budget.get("cash_orderable_qty_cap"),
+            "account_guard_error": budget.get("kt00011_error") or "",
+        }
+    )
+    if fields["account_guard_error"]:
+        return fields
+    qty_cap = _safe_int(fields.get("cash_orderable_qty_cap"), -1)
+    if deposit <= 0 or qty_cap < residual_qty:
+        fields["account_guard_reason"] = "probe_residual_account_capacity_insufficient"
+        return fields
+    fields["account_guard_allowed"] = True
+    fields["account_guard_reason"] = "probe_residual_account_guard_passed"
+    return fields
+
+
+_ENTRY_SPLIT_PROBE_RUNTIME_KEYS = (
+    "entry_split_probe_phase",
+    "entry_split_probe_bundle_id",
+    "entry_split_probe_requested_qty",
+    "entry_split_probe_continuation",
+    "entry_split_probe_submit_best_ask",
+    "entry_split_probe_timeout_sec",
+    "entry_split_probe_max_slippage_bps",
+    "entry_split_probe_anchor_mode",
+    "entry_split_probe_submitting_at",
+    "entry_split_probe_submitted_at",
+    "entry_split_probe_order_no",
+    "entry_split_probe_fill_price",
+    "entry_split_probe_filled_at",
+    "entry_split_probe_residual_claimed",
+)
+
+
+def _abort_entry_split_probe_residual(
+    stock: dict,
+    code: str,
+    reason: str,
+    *,
+    preserve_position: bool,
+) -> None:
+    bundle_id = str(stock.get("entry_split_probe_bundle_id") or "").strip()
+    filled_qty = _safe_int(stock.get("entry_filled_qty"), 0)
+    set_fields = {
+        "entry_split_probe_phase": "aborted",
+        "entry_split_probe_abort_reason": reason,
+        "entry_split_probe_scale_in_forbidden": bool(preserve_position),
+    }
+    if preserve_position and filled_qty > 0:
+        set_fields.update(
+            {
+                "status": "HOLDING",
+                "entry_requested_qty": filled_qty,
+                "requested_buy_qty": filled_qty,
+                "entry_fill_quality": "FULL_FILL",
+            }
+        )
+    _mutate_stock_state(stock, set_fields=set_fields)
+    if bundle_id:
+        update_probe_runtime_bundle(
+            bundle_id,
+            phase="aborted",
+            reason=reason,
+            filled_qty=filled_qty,
+        )
+    _log_entry_pipeline(
+        stock,
+        code,
+        "residual_blocked",
+        reason=reason,
+        probe_bundle_id=bundle_id or "-",
+        filled_qty=filled_qty,
+        actual_order_submitted=False,
+        broker_order_forbidden=True,
+        runtime_effect=True,
+        **_entry_split_probe_observation_contract_fields(),
+    )
 
 
 def _entry_bundle_filled_qty(stock) -> int:
@@ -44100,6 +44498,24 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             final_price = int(
                 float(stock.get("target_buy_price", curr_price) or curr_price)
             )
+    nxt_tp1_context_refresh_fields = _refresh_nxt_rising_missed_tp1_submit_context(
+        stock,
+        code,
+        ws_data,
+        now_ts=now_ts,
+    )
+    if nxt_tp1_context_refresh_fields.get("nxt_tp1_context_refresh_attempted"):
+        _log_entry_pipeline(
+            stock,
+            code,
+            "nxt_rising_missed_tp1_context_refresh",
+            actual_order_submitted=False,
+            broker_order_forbidden=False,
+            runtime_effect=bool(
+                nxt_tp1_context_refresh_fields.get("nxt_tp1_context_refresh_applied")
+            ),
+            **nxt_tp1_context_refresh_fields,
+        )
     latency_gate = evaluate_live_buy_entry(
         stock=_rising_missed_tp1_latency_context_stock(stock),
         code=code,
@@ -44113,6 +44529,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
     latency_gate.update(latency_false_negative_report_fields)
     latency_gate.update(pre_submit_ws_snapshot_refresh)
     latency_gate.update(pre_submit_rest_orderbook_refresh)
+    latency_gate.update(nxt_tp1_context_refresh_fields)
     latency_direct_recheck_fields = _apply_latency_true_ofi_direct_recheck(
         stock,
         code,
@@ -46614,6 +47031,74 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             broker_order_forbidden=False,
             **entry_split_fields,
         )
+        if entry_split_fields.get("entry_split_order_probe_first_applied"):
+            probe_order = planned_orders[0] if planned_orders else {}
+            probe_bundle_id = str(
+                entry_split_fields.get("entry_split_order_probe_bundle_id") or ""
+            ).strip()
+            probe_continuation = probe_order.get("entry_split_order_probe_continuation")
+            if not probe_bundle_id or not isinstance(probe_continuation, dict):
+                trip_probe_runtime_circuit("probe_plan_missing_runtime_contract")
+                _log_entry_pipeline(
+                    stock,
+                    code,
+                    "residual_blocked",
+                    reason="probe_plan_missing_runtime_contract",
+                    actual_order_submitted=False,
+                    broker_order_forbidden=True,
+                    runtime_effect=True,
+                    **_entry_split_probe_observation_contract_fields(),
+                )
+                return False
+            _mutate_stock_state(
+                stock,
+                set_fields={
+                    "status": "BUY_ORDERED",
+                    "entry_bundle_id": probe_bundle_id,
+                    "entry_split_probe_phase": "probe_submitting",
+                    "entry_split_probe_bundle_id": probe_bundle_id,
+                    "entry_split_probe_requested_qty": requested_qty,
+                    "entry_split_probe_continuation": probe_continuation,
+                    "entry_split_probe_submit_best_ask": _safe_int(
+                        probe_order.get("entry_split_order_probe_submit_best_ask"), 0
+                    ),
+                    "entry_split_probe_timeout_sec": _safe_int(
+                        probe_order.get("entry_split_order_probe_timeout_sec"), 3
+                    ),
+                    "entry_split_probe_max_slippage_bps": _safe_float(
+                        probe_order.get("entry_split_order_probe_max_slippage_bps"),
+                        50.0,
+                    ),
+                    "entry_split_probe_anchor_mode": probe_order.get(
+                        "entry_split_order_probe_anchor_mode"
+                    ),
+                    "entry_split_probe_submitting_at": now_ts,
+                    "requested_buy_qty": requested_qty,
+                    "entry_requested_qty": requested_qty,
+                    "entry_filled_qty": _safe_int(stock.get("entry_filled_qty"), 0),
+                    "entry_fill_amount": _safe_int(stock.get("entry_fill_amount"), 0),
+                },
+            )
+            update_probe_runtime_bundle(
+                probe_bundle_id,
+                phase="probe_submitting",
+                code=code,
+                target_id=stock.get("id"),
+                requested_qty=requested_qty,
+                continuation=probe_continuation,
+                probe_submit_best_ask=_safe_int(
+                    probe_order.get("entry_split_order_probe_submit_best_ask"), 0
+                ),
+                timeout_sec=_safe_int(
+                    probe_order.get("entry_split_order_probe_timeout_sec"), 3
+                ),
+                max_slippage_bps=_safe_float(
+                    probe_order.get("entry_split_order_probe_max_slippage_bps"),
+                    50.0,
+                ),
+                anchor_mode=probe_order.get("entry_split_order_probe_anchor_mode"),
+                submitting_at=now_ts,
+            )
 
     msg = msg or (
         f"✅ **{stock['name']} ({code}) 진입 주문 전송!**\n전략: `{strategy}`\n현재가: `{curr_price:,}원`\n주문 수량: `{requested_qty}주`"
@@ -47066,6 +47551,18 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             )
             continue
         ord_no = _extract_broker_order_no(res)
+        if (
+            bool(planned_order.get("entry_split_order_probe_first_applied"))
+            and not ord_no
+        ):
+            trip_probe_runtime_circuit("probe_broker_order_number_missing")
+            _abort_entry_split_probe_residual(
+                stock,
+                code,
+                "probe_broker_order_number_missing",
+                preserve_position=_safe_int(stock.get("buy_qty"), 0) > 0,
+            )
+            continue
         if opening_rotation_active and not is_opening_rotation_position(
             stock.get("position_tag")
         ):
@@ -47200,6 +47697,57 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             msg=msg,
             entry_orders=successful_orders,
         )
+        if bool(planned_order.get("entry_split_order_probe_first_applied")):
+            probe_bundle_id = str(
+                planned_order.get("entry_split_order_probe_bundle_id") or ""
+            ).strip()
+            current_probe_phase = str(
+                stock.get("entry_split_probe_phase") or ""
+            ).strip()
+            probe_phase = (
+                current_probe_phase
+                if current_probe_phase == "probe_filled"
+                else "probe_submitted"
+            )
+            _mutate_stock_state(
+                stock,
+                set_fields={
+                    "entry_split_probe_phase": probe_phase,
+                    "entry_split_probe_order_no": ord_no,
+                    "entry_split_probe_submitted_at": order_sent_ts,
+                },
+            )
+            update_probe_runtime_bundle(
+                probe_bundle_id,
+                phase=probe_phase,
+                order_no=ord_no,
+                submitted_at=order_sent_ts,
+                requested_order_type=order_resolution.get("requested_order_type"),
+                effective_order_type=order_resolution.get("effective_order_type"),
+                dmst_stex_tp=submit_dmst_stex_tp,
+                order_type_remapped=bool(order_resolution.get("order_type_remapped")),
+                order_type_remap_reason=order_resolution.get("order_type_remap_reason"),
+            )
+            _log_entry_pipeline(
+                stock,
+                code,
+                "probe_submitted",
+                probe_bundle_id=probe_bundle_id,
+                order_no=ord_no,
+                qty=qty,
+                probe_submit_best_ask=_safe_int(
+                    planned_order.get("entry_split_order_probe_submit_best_ask"), 0
+                ),
+                requested_order_type=order_resolution.get("requested_order_type"),
+                effective_order_type=order_resolution.get("effective_order_type"),
+                dmst_stex_tp=submit_dmst_stex_tp,
+                order_type_remapped=bool(order_resolution.get("order_type_remapped")),
+                order_type_remap_reason=order_resolution.get("order_type_remap_reason"),
+                actual_order_submitted=True,
+                broker_order_forbidden=False,
+                runtime_effect=True,
+                **_entry_split_probe_observation_contract_fields(),
+            )
         log_info(
             f"[LATENCY_ENTRY_ORDER_SENT] {stock.get('name')}({code}) "
             f"tag={request['tag']} qty={qty} price={broker_price} guard_price={price} "
@@ -47222,6 +47770,26 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         )
 
     if not successful_orders:
+        if stock.get("entry_split_probe_bundle_id"):
+            preserve_probe_position = _safe_int(stock.get("buy_qty"), 0) > 0
+            if stock.get("entry_split_probe_phase") != "aborted":
+                _abort_entry_split_probe_residual(
+                    stock,
+                    code,
+                    "probe_broker_submit_failed",
+                    preserve_position=preserve_probe_position,
+                )
+            _mutate_stock_state(
+                stock,
+                set_fields={
+                    "status": "HOLDING" if preserve_probe_position else "WATCHING"
+                },
+                pop_fields=[
+                    "entry_requested_qty",
+                    "requested_buy_qty",
+                    "entry_bundle_id",
+                ],
+            )
         log_info(f"❌ [{stock['name']}] 매수 주문 전송 실패 (성공 주문 없음)")
         clear_signal_reference(stock)
         _log_entry_pipeline(
@@ -47891,6 +48459,9 @@ def _clear_pending_entry_meta(stock):
             "entry_partial_fill_deferred_at",
             "entry_submit_notice_pending",
             "entry_submit_notice_enqueued",
+            *_ENTRY_SPLIT_PROBE_RUNTIME_KEYS,
+            "entry_split_probe_abort_reason",
+            "entry_split_probe_scale_in_forbidden",
         ]:
             stock.pop(key, None)
     _clear_entry_arm(stock)
@@ -47942,6 +48513,9 @@ ENTRY_SPLIT_POSITION_PROVENANCE_KEYS = (
     "entry_split_order_qty_weight_max",
     "entry_split_order_runtime_default_policy_applied",
     "entry_split_order_operator_fallback_authorized",
+    "entry_split_order_probe_first_applied",
+    "entry_split_order_probe_bundle_id",
+    "entry_split_order_probe_anchor_mode",
 )
 
 
@@ -48517,6 +49091,211 @@ def _rising_missed_tp1_latency_context_stock(stock: dict | None) -> dict[str, An
     if not observation_fields:
         return stock
     return {**stock, **observation_fields}
+
+
+def _refresh_nxt_rising_missed_tp1_submit_context(
+    stock: dict | None,
+    code: str,
+    ws_data: dict | None,
+    *,
+    now_ts: float,
+) -> dict[str, Any]:
+    fields: dict[str, Any] = {
+        "nxt_tp1_context_refresh_enabled": _env_bool(
+            "KORSTOCKSCAN_NXT_RISING_MISSED_TP1_CONTEXT_REFRESH_ENABLED", False
+        ),
+        "nxt_tp1_context_refresh_attempted": False,
+        "nxt_tp1_context_refresh_applied": False,
+        "nxt_tp1_context_refresh_reason": "not_applicable",
+        "nxt_tp1_context_refresh_metric_role": "bounded_tunable",
+        "nxt_tp1_context_refresh_decision_authority": (
+            "refresh_existing_tp1_authorization_only"
+        ),
+        "nxt_tp1_context_refresh_window_policy": "one_refresh_between_45_and_120_sec",
+        "nxt_tp1_context_refresh_sample_floor": "3_true_ofi_samples",
+        "nxt_tp1_context_refresh_primary_decision_metric": (
+            "fresh_trusted_ws_micro_continuation"
+        ),
+        "nxt_tp1_context_refresh_source_quality_gate": (
+            "fresh_actual_nxt_0b_0d_and_fresh_ws_estimator"
+        ),
+        "nxt_tp1_context_refresh_forbidden_uses": (
+            "new_candidate_authority|rest_positive_micro|krx_runtime_mutation|"
+            "stale_submit_bypass|broker_guard_bypass|hard_safety_override"
+        ),
+    }
+    if not fields["nxt_tp1_context_refresh_enabled"]:
+        fields["nxt_tp1_context_refresh_reason"] = "disabled"
+        return fields
+    stock = stock if isinstance(stock, dict) else {}
+    active_date = str(
+        os.getenv("KORSTOCKSCAN_NXT_RISING_MISSED_TP1_CONTEXT_REFRESH_ACTIVE_DATE", "")
+    ).strip()
+    current_date = datetime.fromtimestamp(float(now_ts), tz=_KST).strftime("%Y-%m-%d")
+    context_at = _safe_float(stock.get("rising_missed_tp1_submit_context_at"), 0.0)
+    context_age_sec = max(0.0, float(now_ts) - context_at) if context_at > 0 else None
+    fields["nxt_tp1_context_refresh_context_age_sec"] = (
+        round(context_age_sec, 6) if context_age_sec is not None else "-"
+    )
+    if active_date != current_date:
+        fields["nxt_tp1_context_refresh_reason"] = "runtime_inactive_date"
+        return fields
+    if _rising_missed_nxt_session_bucket(now_ts) not in {
+        "nxt_open_observe",
+        "nxt_entry_window",
+    }:
+        fields["nxt_tp1_context_refresh_reason"] = "outside_nxt_entry_window"
+        return fields
+    if not _has_rising_missed_entry_lineage(stock):
+        fields["nxt_tp1_context_refresh_reason"] = "not_rising_missed"
+        return fields
+    if not bool(stock.get("rising_missed_tp1_submit_context_candidate_allowed")):
+        fields["nxt_tp1_context_refresh_reason"] = "prior_tp1_not_allowed"
+        return fields
+    if context_age_sec is None or not 45.0 < context_age_sec <= 120.0:
+        fields["nxt_tp1_context_refresh_reason"] = "context_age_outside_refresh_band"
+        return fields
+    if _safe_int(stock.get("nxt_tp1_context_refresh_count"), 0) >= 1:
+        fields["nxt_tp1_context_refresh_reason"] = "refresh_already_consumed"
+        return fields
+
+    fields["nxt_tp1_context_refresh_attempted"] = True
+    raw_ws: dict[str, Any] = {}
+    if WS_MANAGER is not None:
+        try:
+            latest = WS_MANAGER.get_latest_data(code)
+            raw_ws = latest if isinstance(latest, dict) else {}
+        except Exception as exc:
+            fields["nxt_tp1_context_refresh_ws_error"] = str(exc)[:120]
+    observation = _rising_missed_nxt_observation_fields(
+        stock,
+        code,
+        raw_ws,
+        ws_data,
+        now_ts=now_ts,
+    )
+    fields.update(
+        {
+            "nxt_tp1_context_refresh_ws_0b_age_ms": observation.get(
+                "rising_missed_ws_0b_age_ms", "-"
+            ),
+            "nxt_tp1_context_refresh_ws_0d_age_ms": observation.get(
+                "rising_missed_ws_0d_age_ms", "-"
+            ),
+            "nxt_tp1_context_refresh_micro_state": observation.get(
+                "rising_missed_nxt_micro_state", "-"
+            ),
+        }
+    )
+    if observation.get("rising_missed_nxt_eligible") is not True:
+        fields["nxt_tp1_context_refresh_reason"] = "nxt_eligibility_not_confirmed"
+        return fields
+    if observation.get("rising_missed_nxt_micro_state") != "fresh_active":
+        fields["nxt_tp1_context_refresh_reason"] = "actual_nxt_0b_0d_not_fresh"
+        return fields
+
+    trusted_ws = _rising_missed_trusted_ws_provenance(raw_ws, now_ts=now_ts)
+    last_tick = raw_ws.get("last_trade_tick")
+    last_tick = last_tick if isinstance(last_tick, dict) else {}
+    last_values = last_tick.get("values")
+    last_values = last_values if isinstance(last_values, dict) else {}
+    raw_signed_fid_15 = str(
+        last_values.get("15")
+        or last_tick.get("aggressor_aux_raw_15")
+        or last_tick.get("signed_trade_volume")
+        or ""
+    ).strip()
+    signed_fid_15_value = _safe_float(raw_signed_fid_15, 0.0)
+    fields.update(
+        {
+            "nxt_tp1_context_refresh_signed_fid15_present": trusted_ws.get(
+                "rising_missed_tp1_ws_0b_signed_fid15_present", False
+            ),
+            "nxt_tp1_context_refresh_signed_fid15_value": signed_fid_15_value,
+            "nxt_tp1_context_refresh_tick_flow_trusted": trusted_ws.get(
+                "rising_missed_tp1_ws_0b_tick_flow_trusted", False
+            ),
+        }
+    )
+    if (
+        not bool(trusted_ws.get("rising_missed_tp1_ws_micro_provenance_ready"))
+        or signed_fid_15_value <= 0.0
+    ):
+        fields["nxt_tp1_context_refresh_reason"] = "signed_ws_buy_flow_not_confirmed"
+        return fields
+
+    _SCALPING_MICRO_ESTIMATOR_STORE.update_from_ws_quote(
+        code,
+        raw_ws,
+        now_ts=now_ts,
+        tier="hot",
+    )
+
+    micro = _SCALPING_MICRO_ESTIMATOR_STORE.snapshot(code, now_ts=now_ts)
+    micro_source = str(micro.get("source_state") or "").strip().lower()
+    micro_age_sec = _safe_float(micro.get("age_sec"), 999999.0)
+    confidence = _safe_float(micro.get("confidence"), 0.0)
+    true_ofi = _safe_float(micro.get("true_ofi_ewma"), 0.0)
+    pressure = _safe_float(micro.get("pressure_ewma"), 0.0)
+    depth_ratio = _safe_float(micro.get("top_depth_ratio"), 0.0)
+    true_ofi_samples = _safe_int(micro.get("true_ofi_sample_count"), 0)
+    fields.update(
+        {
+            "nxt_tp1_context_refresh_micro_source_state": micro_source or "-",
+            "nxt_tp1_context_refresh_micro_age_sec": round(micro_age_sec, 6),
+            "nxt_tp1_context_refresh_micro_confidence": round(confidence, 4),
+            "nxt_tp1_context_refresh_true_ofi_ewma": round(true_ofi, 4),
+            "nxt_tp1_context_refresh_pressure_ewma": round(pressure, 3),
+            "nxt_tp1_context_refresh_top_depth_ratio": round(depth_ratio, 4),
+            "nxt_tp1_context_refresh_true_ofi_sample_count": true_ofi_samples,
+        }
+    )
+    if not (
+        micro_source.startswith("fresh_ws")
+        and micro_age_sec <= 3.0
+        and true_ofi_samples >= 3
+        and confidence >= 0.25
+        and true_ofi > 0.0
+        and pressure >= 49.0
+        and depth_ratio >= 0.95
+    ):
+        fields["nxt_tp1_context_refresh_reason"] = "trusted_ws_micro_not_continuing"
+        return fields
+
+    best_ask, best_bid = _get_best_levels_from_ws(raw_ws)
+    spread_ratio = (
+        (float(best_ask) - float(best_bid)) / float(best_ask)
+        if best_ask > 0 and best_bid > 0 and best_ask >= best_bid
+        else 1.0
+    )
+    if spread_ratio > 0.002:
+        fields["nxt_tp1_context_refresh_reason"] = "spread_too_wide"
+        return fields
+
+    _mutate_stock_state(
+        stock,
+        set_fields={
+            "rising_missed_tp1_submit_context_original_at": context_at,
+            "rising_missed_tp1_submit_context_at": float(now_ts),
+            "rising_missed_tp1_submit_context_micro_source_state": micro_source,
+            "rising_missed_tp1_submit_context_micro_confidence": confidence,
+            "rising_missed_tp1_submit_context_true_ofi_ewma": true_ofi,
+            "rising_missed_tp1_submit_context_pressure_ewma": pressure,
+            "rising_missed_tp1_submit_context_top_depth_ratio": depth_ratio,
+            "rising_missed_tp1_submit_context_spread_ratio": spread_ratio,
+            "rising_missed_tp1_submit_context_ws_micro_ready": True,
+            "nxt_tp1_context_refresh_count": 1,
+            "nxt_tp1_context_refreshed_at": float(now_ts),
+        },
+    )
+    fields.update(
+        {
+            "nxt_tp1_context_refresh_applied": True,
+            "nxt_tp1_context_refresh_reason": "fresh_actual_nxt_ws_micro_continuation",
+            "nxt_tp1_context_refresh_spread_ratio": round(spread_ratio, 6),
+        }
+    )
+    return fields
 
 
 def _evaluate_rising_missed_tp1_source_gap_relief(
@@ -51705,7 +52484,93 @@ def _entry_reprice_refresh_snapshot(
     return refreshed_snapshot, fields
 
 
-def _reset_entry_reprice_after_failed_resubmit(stock, code):
+def _nxt_rising_missed_partial_fill_reprice_enabled(
+    stock: dict | None,
+    code: str,
+    *,
+    now_ts: float,
+) -> bool:
+    if not _env_bool(
+        "KORSTOCKSCAN_NXT_RISING_MISSED_PARTIAL_FILL_REPRICE_ENABLED", False
+    ):
+        return False
+    active_date = str(
+        os.getenv("KORSTOCKSCAN_NXT_RISING_MISSED_PARTIAL_FILL_REPRICE_ACTIVE_DATE", "")
+    ).strip()
+    current_date = datetime.fromtimestamp(float(now_ts), tz=_KST).strftime("%Y-%m-%d")
+    if not active_date or active_date != current_date:
+        return False
+    if _rising_missed_nxt_session_bucket(now_ts) not in {
+        "nxt_open_observe",
+        "nxt_entry_window",
+    }:
+        return False
+    if not _has_rising_missed_entry_lineage(stock):
+        return False
+    nxt_enabled, _ = _holding_sell_nxt_enabled_status(stock, code)
+    if nxt_enabled is not True:
+        return False
+    if str((stock or {}).get("status") or "").upper() != "HOLDING":
+        return False
+    if _safe_int((stock or {}).get("entry_filled_qty"), 0) <= 0:
+        return False
+    if str((stock or {}).get("entry_split_probe_bundle_id") or "").strip():
+        return False
+    return bool(_open_entry_split_orders(stock))
+
+
+def _nxt_rising_missed_partial_fill_reprice_contract_fields() -> dict[str, Any]:
+    return {
+        "nxt_partial_fill_reprice_runtime_family": (
+            "nxt_rising_missed_partial_fill_reprice"
+        ),
+        "nxt_partial_fill_reprice_metric_role": "real_execution_quality",
+        "nxt_partial_fill_reprice_decision_authority": (
+            "nxt_rising_missed_open_residual_only"
+        ),
+        "nxt_partial_fill_reprice_window_policy": "nxt_open_and_entry_window",
+        "nxt_partial_fill_reprice_sample_floor": "per_open_residual_bundle",
+        "nxt_partial_fill_reprice_primary_decision_metric": (
+            "residual_fill_rate_and_net_ev"
+        ),
+        "nxt_partial_fill_reprice_source_quality_gate": (
+            "existing_entry_reprice_fresh_quote_and_submit_safety"
+        ),
+        "nxt_partial_fill_reprice_forbidden_uses": (
+            "krx_order_mutation|new_position_authority|stale_submit_bypass|"
+            "broker_guard_bypass|quantity_increase|hard_safety_override"
+        ),
+    }
+
+
+def _reset_entry_reprice_after_failed_resubmit(
+    stock, code, *, preserve_holding: bool = False
+):
+    if preserve_holding:
+        filled_qty = max(
+            _safe_int(stock.get("entry_filled_qty"), 0),
+            _safe_int(stock.get("buy_qty"), 0),
+        )
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                "status": "HOLDING",
+                "entry_requested_qty": filled_qty,
+                "requested_buy_qty": filled_qty,
+                "entry_fill_quality": "FULL_FILL",
+                "entry_reprice_residual_aborted": True,
+            },
+            pop_fields=[
+                "pending_entry_orders",
+                "entry_bundle_id",
+                "odno",
+                "order_time",
+                "pending_buy_msg",
+                "target_buy_price",
+                "order_price",
+            ],
+        )
+        return
     _mutate_stock_state(
         stock,
         set_fields={"status": "WATCHING"},
@@ -51738,12 +52603,22 @@ def _maybe_reprice_pending_entry_order(stock, code, strategy, *, timeout_sec=Non
     if not _has_open_pending_entry_orders(stock):
         return "not_applicable"
 
+    now_ts = time.time()
+    allow_partial_holding_reprice = _nxt_rising_missed_partial_fill_reprice_enabled(
+        stock,
+        code,
+        now_ts=now_ts,
+    )
     open_orders = _open_reprice_candidate_orders(stock)
     active_orders = _open_entry_split_orders(stock)
     entry_bundle_filled_qty = _entry_bundle_filled_qty(stock)
-    if len(active_orders) > 1 and (
-        _entry_reprice_has_partial_bundle_fill(active_orders)
-        or entry_bundle_filled_qty > 0
+    if (
+        len(active_orders) > 1
+        and (
+            _entry_reprice_has_partial_bundle_fill(active_orders)
+            or entry_bundle_filled_qty > 0
+        )
+        and not allow_partial_holding_reprice
     ):
         if not bool(stock.get("entry_reprice_evaluated")):
             _log_entry_pipeline(
@@ -51789,7 +52664,6 @@ def _maybe_reprice_pending_entry_order(stock, code, strategy, *, timeout_sec=Non
     ):
         return "already_evaluated"
 
-    now_ts = time.time()
     sent_at = _safe_float(
         order.get("sent_at"), _safe_float(stock.get("order_time"), 0.0)
     )
@@ -51884,6 +52758,16 @@ def _maybe_reprice_pending_entry_order(stock, code, strategy, *, timeout_sec=Non
             "runtime_effect": False,
             "timeout_sec": timeout_sec if timeout_sec is not None else "-",
         }
+        if allow_partial_holding_reprice:
+            evaluated_fields.update(
+                {
+                    **_nxt_rising_missed_partial_fill_reprice_contract_fields(),
+                    "nxt_partial_fill_reprice_applied": True,
+                    "nxt_partial_fill_reprice_filled_qty_before_cancel": (
+                        entry_bundle_filled_qty
+                    ),
+                }
+            )
         if bundle_reprice:
             evaluated_fields.update(
                 {
@@ -51981,6 +52865,16 @@ def _maybe_reprice_pending_entry_order(stock, code, strategy, *, timeout_sec=Non
         "runtime_effect": False,
         "timeout_sec": timeout_sec if timeout_sec is not None else "-",
     }
+    if allow_partial_holding_reprice:
+        evaluated_fields.update(
+            {
+                **_nxt_rising_missed_partial_fill_reprice_contract_fields(),
+                "nxt_partial_fill_reprice_applied": True,
+                "nxt_partial_fill_reprice_filled_qty_before_cancel": (
+                    entry_bundle_filled_qty
+                ),
+            }
+        )
     if bundle_reprice:
         evaluated_fields.update(
             {
@@ -52034,6 +52928,16 @@ def _maybe_reprice_pending_entry_order(stock, code, strategy, *, timeout_sec=Non
         "qty": qty,
         "dmst_stex_tp": child_dmst_stex_tp,
     }
+    if allow_partial_holding_reprice:
+        request_fields.update(
+            {
+                **_nxt_rising_missed_partial_fill_reprice_contract_fields(),
+                "nxt_partial_fill_reprice_applied": True,
+                "nxt_partial_fill_reprice_filled_qty_before_cancel": (
+                    entry_bundle_filled_qty
+                ),
+            }
+        )
     if bundle_reprice:
         request_fields.update(
             {
@@ -52107,7 +53011,9 @@ def _maybe_reprice_pending_entry_order(stock, code, strategy, *, timeout_sec=Non
             cancel_order["entry_reprice_cancel_ord_no"] = cancel_ord_no
 
     post_cancel_filled_qty = _entry_bundle_filled_qty(stock)
-    if bundle_reprice and post_cancel_filled_qty > 0:
+    if (
+        bundle_reprice or allow_partial_holding_reprice
+    ) and post_cancel_filled_qty > entry_bundle_filled_qty:
         failure_reason = "bundle_fill_after_cancel_detected"
         with ENTRY_LOCK:
             order["entry_reprice_evaluated"] = True
@@ -52122,6 +53028,7 @@ def _maybe_reprice_pending_entry_order(stock, code, strategy, *, timeout_sec=Non
             failure_stage="post_cancel_fill_check",
             failure_reason=failure_reason,
             entry_reprice_filled_qty=post_cancel_filled_qty,
+            entry_reprice_filled_qty_before_cancel=entry_bundle_filled_qty,
         )
         return "failed"
 
@@ -52140,6 +53047,7 @@ def _maybe_reprice_pending_entry_order(stock, code, strategy, *, timeout_sec=Non
         token=KIWOOM_TOKEN,
         order_type_desc="매수재주문",
         tif=str(order.get("tif") or "DAY"),
+        dmst_stex_tp=child_dmst_stex_tp,
     )
     if (
         not isinstance(buy_res, dict)
@@ -52157,7 +53065,11 @@ def _maybe_reprice_pending_entry_order(stock, code, strategy, *, timeout_sec=Non
             failure_stage="resubmit",
             resubmit_message=message[:160],
         )
-        _reset_entry_reprice_after_failed_resubmit(stock, code)
+        _reset_entry_reprice_after_failed_resubmit(
+            stock,
+            code,
+            preserve_holding=allow_partial_holding_reprice,
+        )
         return "failed"
 
     child_order_no = _extract_broker_order_no(buy_res)
@@ -52170,7 +53082,11 @@ def _maybe_reprice_pending_entry_order(stock, code, strategy, *, timeout_sec=Non
             failure_stage="resubmit_missing_order_no",
             resubmit_message=str(buy_res)[:160],
         )
-        _reset_entry_reprice_after_failed_resubmit(stock, code)
+        _reset_entry_reprice_after_failed_resubmit(
+            stock,
+            code,
+            preserve_holding=allow_partial_holding_reprice,
+        )
         return "failed"
     child_order = {
         "tag": order.get("tag", "normal"),
@@ -52214,6 +53130,7 @@ def _maybe_reprice_pending_entry_order(stock, code, strategy, *, timeout_sec=Non
         "entry_reprice_bundle_leg_count": (
             len(orders_to_cancel) if bundle_reprice else 1
         ),
+        "nxt_partial_fill_reprice_applied": allow_partial_holding_reprice,
         "ai_score": order.get("ai_score"),
         "entry_reprice_action": order.get("entry_reprice_action"),
         "entry_adm_recommended_action": order.get("entry_adm_recommended_action"),
@@ -52267,6 +53184,12 @@ def _maybe_reprice_pending_entry_order(stock, code, strategy, *, timeout_sec=Non
         entry_reprice_bundle_compression=bool(bundle_reprice),
         entry_reprice_bundle_leg_count=len(orders_to_cancel) if bundle_reprice else 1,
         entry_reprice_parent_order_nos=parent_order_no,
+        **(
+            _nxt_rising_missed_partial_fill_reprice_contract_fields()
+            if allow_partial_holding_reprice
+            else {}
+        ),
+        nxt_partial_fill_reprice_applied=allow_partial_holding_reprice,
     )
     log_info(
         f"[ENTRY_REPRICE_AFTER_SUBMIT] {stock.get('name')}({code}) "
@@ -52294,6 +53217,10 @@ def _stage_buy_order_submission(
             "HOLDING"
             if preserve_holding_for_scout_upgrade
             or (requested_qty > 0 and existing_filled_qty >= requested_qty)
+            or (
+                existing_filled_qty > 0
+                and bool(stock.get("entry_split_probe_bundle_id"))
+            )
             else "BUY_ORDERED"
         )
         order_sent_times = [
@@ -52313,6 +53240,21 @@ def _stage_buy_order_submission(
             stock.get("pending_entry_orders") or [],
             entry_orders,
         )
+        receipt_filled_by_order = stock.get("_entry_receipt_filled_by_order_no")
+        if isinstance(receipt_filled_by_order, dict):
+            for pending_order in stock.get("pending_entry_orders") or []:
+                pending_order_no = str(pending_order.get("ord_no") or "").strip()
+                receipt_filled_qty = _safe_int(
+                    receipt_filled_by_order.get(pending_order_no), 0
+                )
+                if receipt_filled_qty <= 0:
+                    continue
+                pending_order["filled_qty"] = receipt_filled_qty
+                pending_order["status"] = (
+                    "FILLED"
+                    if receipt_filled_qty >= _safe_int(pending_order.get("qty"), 0)
+                    else "PARTIAL"
+                )
         if split_provenance or previous_status not in {"HOLDING", "BUY_ORDERED"}:
             for key in ENTRY_SPLIT_POSITION_PROVENANCE_KEYS:
                 stock.pop(key, None)
@@ -52390,12 +53332,19 @@ def _resolve_live_entry_order_request(
     qty = int(planned_order.get("qty", 0) or 0)
     price = int(planned_order.get("price", default_price) or default_price or 0)
 
-    if (
-        strategy == "SCALPING"
-        and bool(planned_order.get("entry_split_order_market_first_leg_applied"))
-        and str(planned_order.get("entry_split_order_execution_mode") or "")
-        == "market_first"
-        and int(planned_order.get("entry_split_order_leg_index", 0) or 0) == 1
+    if strategy == "SCALPING" and (
+        (
+            bool(planned_order.get("entry_split_order_market_first_leg_applied"))
+            and str(planned_order.get("entry_split_order_execution_mode") or "")
+            == "market_first"
+            and int(planned_order.get("entry_split_order_leg_index", 0) or 0) == 1
+        )
+        or (
+            bool(planned_order.get("entry_split_order_probe_first_applied"))
+            and str(planned_order.get("entry_split_order_execution_mode") or "")
+            == "probe_first_market"
+            and int(planned_order.get("entry_split_order_leg_index", -1) or 0) == 0
+        )
     ):
         guard_price = int(
             planned_order.get("entry_split_order_market_reference_price")
@@ -53712,6 +54661,457 @@ def handle_watching_state(
         return
 
 
+def _maybe_submit_entry_split_probe_residual(
+    stock: dict,
+    code: str,
+    ws_data: dict,
+    *,
+    now_ts: float,
+    now_dt: datetime,
+) -> bool:
+    revalidation_started_monotonic = time.monotonic()
+    phase = str(stock.get("entry_split_probe_phase") or "").strip()
+    if phase != "probe_filled":
+        return False
+
+    requested_qty = _safe_int(stock.get("entry_split_probe_requested_qty"), 0)
+    filled_qty = _safe_int(stock.get("entry_filled_qty"), 0)
+    fill_price = _safe_int(stock.get("entry_split_probe_fill_price"), 0)
+    filled_at = _safe_float(stock.get("entry_split_probe_filled_at"), 0.0)
+    submitted_at = _safe_float(
+        stock.get("entry_split_probe_submitted_at")
+        or stock.get("entry_split_probe_submitting_at"),
+        0.0,
+    )
+    timeout_sec = max(1, _safe_int(stock.get("entry_split_probe_timeout_sec"), 3))
+    bundle_id = str(stock.get("entry_split_probe_bundle_id") or "").strip()
+
+    if stock.get("entry_split_probe_residual_claimed"):
+        trip_probe_runtime_circuit("duplicate_residual_claim")
+        _abort_entry_split_probe_residual(
+            stock, code, "duplicate_residual_claim", preserve_position=True
+        )
+        return False
+    if requested_qty <= 1 or filled_qty != 1 or fill_price <= 0:
+        trip_probe_runtime_circuit("probe_runtime_quantity_invariant")
+        _abort_entry_split_probe_residual(
+            stock, code, "probe_runtime_quantity_invariant", preserve_position=True
+        )
+        return False
+    if submitted_at <= 0 or filled_at <= 0 or filled_at - submitted_at > timeout_sec:
+        _abort_entry_split_probe_residual(
+            stock, code, "probe_fill_after_timeout", preserve_position=True
+        )
+        return False
+    if now_ts - filled_at > timeout_sec:
+        _abort_entry_split_probe_residual(
+            stock, code, "residual_revalidation_timeout", preserve_position=True
+        )
+        return False
+    if not is_scalping_buy_time_allowed(now_dt) or is_buy_side_paused():
+        _abort_entry_split_probe_residual(
+            stock, code, "buy_authority_not_available", preserve_position=True
+        )
+        return False
+    if _has_active_sell_order_pending(stock) or stock.get("exit_requested"):
+        _abort_entry_split_probe_residual(
+            stock, code, "exit_authority_precedence", preserve_position=True
+        )
+        return False
+    if _has_open_pending_entry_orders(stock):
+        _abort_entry_split_probe_residual(
+            stock,
+            code,
+            "unexpected_open_entry_order_after_probe_fill",
+            preserve_position=True,
+        )
+        return False
+    cooldown_until = _safe_float((COOLDOWNS or {}).get(code), 0.0)
+    if cooldown_until > now_ts:
+        _abort_entry_split_probe_residual(
+            stock, code, "entry_cooldown_active", preserve_position=True
+        )
+        return False
+
+    buy_price = _safe_float(stock.get("buy_price"), 0.0)
+    curr_price = _safe_int(ws_data.get("curr"), 0)
+    profit_rate = (
+        calculate_net_profit_rate(buy_price, curr_price)
+        if buy_price > 0 and curr_price > 0
+        else 0.0
+    )
+    hard_stop_pct = _safe_float(
+        stock.get("hard_stop_pct"), _rule_float("SCALP_PRESET_HARD_STOP_PCT", -0.7)
+    )
+    soft_stop_trigger_pct = _rule_float(
+        "SCALP_PRESET_TP_SOFT_STOP_TRIGGER_PCT", hard_stop_pct
+    )
+    protect_profit_pct = _safe_float(stock.get("protect_profit_pct"), None)
+    trailing_stop_price = _safe_int(stock.get("trailing_stop_price"), 0)
+    stop_precedence = bool(
+        profit_rate <= max(hard_stop_pct, soft_stop_trigger_pct)
+        or (protect_profit_pct is not None and profit_rate <= float(protect_profit_pct))
+        or (trailing_stop_price > 0 and curr_price <= trailing_stop_price)
+    )
+    if stop_precedence:
+        _abort_entry_split_probe_residual(
+            stock, code, "hard_protect_stop_precedence", preserve_position=True
+        )
+        return False
+
+    quote_fields, _, executable_buy_price, _ = _build_quote_consistency_fields(
+        ws_data,
+        side="buy",
+        now_ts=now_ts,
+    )
+    quote_state = str(quote_fields.get("quote_consistency_state") or "").lower()
+    quote_reason = str(quote_fields.get("quote_consistency_reason") or "").lower()
+    best_bid = _safe_int(quote_fields.get("passive_buy_price"), 0)
+    best_ask = _safe_int(executable_buy_price, 0)
+    if quote_state in {"missing", "diverged", "blocked"} or quote_reason in {
+        "quote_stale",
+        "stale_quote",
+        "conflicted",
+        "price_conflict",
+    }:
+        _abort_entry_split_probe_residual(
+            stock, code, "stale_or_conflicted_fresh_quote", preserve_position=True
+        )
+        return False
+    if best_bid <= 0 or best_ask <= 0 or best_bid > best_ask:
+        _abort_entry_split_probe_residual(
+            stock, code, "fresh_bbo_unavailable", preserve_position=True
+        )
+        return False
+
+    submit_best_ask = _safe_int(stock.get("entry_split_probe_submit_best_ask"), 0)
+    max_slippage_bps = max(
+        0.0, _safe_float(stock.get("entry_split_probe_max_slippage_bps"), 50.0)
+    )
+    slippage_bps = (
+        ((float(fill_price) - float(submit_best_ask)) / float(submit_best_ask))
+        * 10000.0
+        if submit_best_ask > 0
+        else float("inf")
+    )
+    if not math.isfinite(slippage_bps) or slippage_bps > max_slippage_bps:
+        _abort_entry_split_probe_residual(
+            stock, code, "probe_fill_slippage_above_cap", preserve_position=True
+        )
+        return False
+
+    continuation = stock.get("entry_split_probe_continuation")
+    if not isinstance(continuation, dict):
+        trip_probe_runtime_circuit("probe_continuation_missing")
+        _abort_entry_split_probe_residual(
+            stock, code, "probe_continuation_missing", preserve_position=True
+        )
+        return False
+    residual_orders, plan_fields = build_probe_residual_orders(
+        continuation,
+        probe_fill_price=fill_price,
+        best_bid=best_bid,
+        best_ask=best_ask,
+    )
+    if not plan_fields.get("allowed") or not residual_orders:
+        trip_probe_runtime_circuit(
+            str(plan_fields.get("reason") or "residual_plan_failed")
+        )
+        _abort_entry_split_probe_residual(
+            stock,
+            code,
+            str(plan_fields.get("reason") or "residual_plan_failed"),
+            preserve_position=True,
+        )
+        return False
+
+    account_guard_fields = _probe_residual_account_guard_fields(
+        code,
+        unit_price=best_ask,
+        residual_qty=requested_qty - filled_qty,
+    )
+    if not account_guard_fields.get("account_guard_allowed"):
+        _abort_entry_split_probe_residual(
+            stock,
+            code,
+            str(
+                account_guard_fields.get("account_guard_reason")
+                or "probe_residual_account_guard_blocked"
+            ),
+            preserve_position=True,
+        )
+        return False
+    revalidation_age_sec = max(0.0, now_ts - filled_at) + max(
+        0.0, time.monotonic() - revalidation_started_monotonic
+    )
+    if revalidation_age_sec > timeout_sec:
+        _abort_entry_split_probe_residual(
+            stock,
+            code,
+            "residual_revalidation_timeout",
+            preserve_position=True,
+        )
+        return False
+
+    _mutate_stock_state(
+        stock,
+        set_fields={
+            "entry_split_probe_phase": "residual_claimed",
+            "entry_split_probe_residual_claimed": True,
+        },
+    )
+    update_probe_runtime_bundle(
+        bundle_id,
+        phase="residual_claimed",
+        probe_fill_price=fill_price,
+        fresh_best_bid=best_bid,
+        fresh_best_ask=best_ask,
+        probe_fill_slippage_bps=round(slippage_bps, 4),
+        residual_orders=residual_orders,
+        **plan_fields,
+        **account_guard_fields,
+    )
+    _log_entry_pipeline(
+        stock,
+        code,
+        "residual_planned",
+        probe_bundle_id=bundle_id,
+        requested_qty=requested_qty,
+        filled_qty=filled_qty,
+        fresh_best_bid=best_bid,
+        fresh_best_ask=best_ask,
+        probe_fill_price=fill_price,
+        probe_fill_slippage_bps=round(slippage_bps, 4),
+        actual_order_submitted=False,
+        broker_order_forbidden=False,
+        runtime_effect=True,
+        **plan_fields,
+        **account_guard_fields,
+        **quote_fields,
+        **_entry_split_probe_observation_contract_fields(),
+    )
+
+    residual_orders = _decorate_entry_split_leg_ttls(residual_orders, stock, "SCALPING")
+    probe_order = next(
+        (
+            order
+            for order in _iter_pending_entry_orders(stock)
+            if str(order.get("tag") or "") == "entry_split_probe_0"
+        ),
+        {},
+    )
+    dmst_stex_tp = _entry_order_submit_dmst_stex_tp(probe_order)
+    successful_orders: list[dict[str, Any]] = []
+    failure_reason = ""
+    for residual_order in residual_orders:
+        submission_age_sec = max(0.0, now_ts - filled_at) + max(
+            0.0, time.monotonic() - revalidation_started_monotonic
+        )
+        if submission_age_sec > timeout_sec:
+            failure_reason = "residual_submission_timeout"
+            break
+        qty = _safe_int(residual_order.get("qty"), 0)
+        price = _safe_int(residual_order.get("price"), 0)
+        if qty <= 0 or price <= 0:
+            failure_reason = "invalid_residual_order"
+            break
+        price_guard = _split_policy_pre_submit_price_guard_fields(
+            "SCALPING",
+            price,
+            best_bid,
+            planned_order=residual_order,
+        )
+        if price_guard.get("pre_submit_price_guard_blocked"):
+            failure_reason = "residual_pre_submit_price_guard_blocked"
+            break
+        resolution = kiwoom_orders.describe_buy_order_resolution(
+            "00",
+            price=price,
+            tif="DAY",
+            dmst_stex_tp=dmst_stex_tp,
+        )
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                "status": "BUY_ORDERED",
+                "entry_split_probe_phase": "residual_submitting",
+            },
+        )
+        try:
+            response = kiwoom_orders.send_buy_order(
+                code,
+                qty,
+                price,
+                "00",
+                token=KIWOOM_TOKEN,
+                order_type_desc="0-leg 체결기준 잔여매수",
+                tif="DAY",
+                dmst_stex_tp=dmst_stex_tp,
+            )
+        except Exception as exc:
+            failure_reason = "residual_broker_submit_exception"
+            trip_probe_runtime_circuit(failure_reason)
+            log_error(
+                f"[ENTRY_SPLIT_PROBE_RESIDUAL] {stock.get('name', code)}({code}) "
+                f"broker submit exception: {exc}"
+            )
+            break
+        if (
+            not isinstance(response, dict)
+            or str(response.get("return_code", response.get("rt_cd", ""))) != "0"
+        ):
+            failure_reason = "residual_broker_submit_failed"
+            break
+        order_no = _extract_broker_order_no(response)
+        if not order_no:
+            failure_reason = "residual_broker_order_number_missing"
+            trip_probe_runtime_circuit(failure_reason)
+            break
+        sent_at = time.time()
+        successful_orders.append(
+            {
+                **residual_order,
+                "ord_no": order_no,
+                "status": "OPEN",
+                "filled_qty": 0,
+                "sent_at": sent_at,
+                "dmst_stex_tp": resolution.get("effective_dmst_stex_tp")
+                or dmst_stex_tp,
+                "dmst_stex_tp_source": "probe_inherited",
+                "requested_order_type": resolution.get("requested_order_type"),
+                "effective_order_type": resolution.get("effective_order_type"),
+                "order_type_remapped": resolution.get("order_type_remapped"),
+                "order_type_remap_reason": resolution.get("order_type_remap_reason"),
+            }
+        )
+        completed_during_order_bind = bool(
+            str(stock.get("entry_split_probe_phase") or "") == "complete"
+            and _safe_int(stock.get("buy_qty"), 0) >= requested_qty
+        )
+        if completed_during_order_bind:
+            _log_entry_pipeline(
+                stock,
+                code,
+                "residual_submitted",
+                probe_bundle_id=bundle_id,
+                order_no=order_no,
+                qty=qty,
+                price=price,
+                residual_leg_index=residual_order.get("entry_split_order_leg_index"),
+                receipt_completed_before_order_bind=True,
+                actual_order_submitted=True,
+                broker_order_forbidden=False,
+                runtime_effect=True,
+                **plan_fields,
+                **_entry_split_probe_observation_contract_fields(),
+            )
+            return True
+        combined_orders_by_number = {
+            str(order.get("ord_no") or "").strip(): dict(order)
+            for order in _iter_pending_entry_orders(stock)
+            if str(order.get("ord_no") or "").strip()
+        }
+        for successful_order in successful_orders:
+            successful_order_no = str(successful_order.get("ord_no") or "").strip()
+            if successful_order_no:
+                combined_orders_by_number[successful_order_no] = successful_order
+        _stage_buy_order_submission(
+            stock,
+            code,
+            plan_fields.get("probe_anchor_price") or fill_price,
+            requested_qty,
+            stock.get("pending_buy_msg") or "0-leg probe residual",
+            list(combined_orders_by_number.values()),
+        )
+        _log_entry_pipeline(
+            stock,
+            code,
+            "residual_submitted",
+            probe_bundle_id=bundle_id,
+            order_no=order_no,
+            qty=qty,
+            price=price,
+            residual_leg_index=residual_order.get("entry_split_order_leg_index"),
+            requested_order_type=resolution.get("requested_order_type"),
+            effective_order_type=resolution.get("effective_order_type"),
+            dmst_stex_tp=resolution.get("effective_dmst_stex_tp") or dmst_stex_tp,
+            actual_order_submitted=True,
+            broker_order_forbidden=False,
+            runtime_effect=True,
+            **plan_fields,
+            **_entry_split_probe_observation_contract_fields(),
+        )
+
+    if failure_reason:
+        if successful_orders:
+            _mutate_stock_state(
+                stock,
+                set_fields={
+                    "status": "HOLDING",
+                    "entry_split_probe_phase": "residual_partial_submitted",
+                    "entry_split_probe_abort_reason": failure_reason,
+                    "entry_split_probe_scale_in_forbidden": True,
+                },
+            )
+            update_probe_runtime_bundle(
+                bundle_id,
+                phase="residual_partial_submitted",
+                reason=failure_reason,
+                residual_order_nos=[order.get("ord_no") for order in successful_orders],
+                residual_submitted_qty=sum(
+                    _safe_int(order.get("qty"), 0) for order in successful_orders
+                ),
+                residual_orders=successful_orders,
+            )
+            _log_entry_pipeline(
+                stock,
+                code,
+                "residual_blocked",
+                reason=failure_reason,
+                probe_bundle_id=bundle_id,
+                residual_submitted_qty=sum(
+                    _safe_int(order.get("qty"), 0) for order in successful_orders
+                ),
+                residual_submitted_leg_count=len(successful_orders),
+                actual_order_submitted=True,
+                broker_order_forbidden=True,
+                runtime_effect=True,
+                **_entry_split_probe_observation_contract_fields(),
+            )
+            return True
+        _abort_entry_split_probe_residual(
+            stock, code, failure_reason, preserve_position=True
+        )
+        return False
+    if (
+        1 + sum(_safe_int(order.get("qty"), 0) for order in successful_orders)
+        != requested_qty
+    ):
+        trip_probe_runtime_circuit("residual_submitted_quantity_invariant")
+        _abort_entry_split_probe_residual(
+            stock,
+            code,
+            "residual_submitted_quantity_invariant",
+            preserve_position=True,
+        )
+        return True
+    _mutate_stock_state(
+        stock,
+        set_fields={
+            "entry_split_probe_phase": "residual_submitted",
+            "entry_split_probe_residual_submitted_at": time.time(),
+        },
+    )
+    update_probe_runtime_bundle(
+        bundle_id,
+        phase="residual_submitted",
+        residual_order_nos=[order.get("ord_no") for order in successful_orders],
+        residual_orders=successful_orders,
+        **plan_fields,
+    )
+    return True
+
+
 def handle_holding_state(
     stock,
     code,
@@ -53805,9 +55205,30 @@ def handle_holding_state(
     _observe_entry_cancel_wait_counterfactuals(
         stock, code, now_ts=now_ts, curr_price=curr_p
     )
+    if _nxt_rising_missed_partial_fill_reprice_enabled(
+        stock,
+        code,
+        now_ts=now_ts,
+    ):
+        reprice_result = _maybe_reprice_pending_entry_order(
+            stock,
+            code,
+            strategy,
+            timeout_sec=None,
+        )
+        if reprice_result == "submitted":
+            return
     _reconcile_pending_entry_orders(stock, code, strategy)
     _mutate_stock_state(stock, set_fields={"position_tag": pos_tag})
     if curr_p <= 0 or buy_p <= 0:
+        return
+    if _maybe_submit_entry_split_probe_residual(
+        stock,
+        code,
+        ws_data,
+        now_ts=now_ts,
+        now_dt=now_dt,
+    ):
         return
     holding_exit_micro_estimator_fields = (
         _scalping_micro_estimator_log_fields(
@@ -59013,6 +60434,19 @@ def can_consider_scale_in(
     """추가매수 공통 게이트: 조건을 만족하는 경우에만 True."""
     _ = (code, ws_data)
 
+    if stock.get("entry_split_probe_scale_in_forbidden") or str(
+        stock.get("entry_split_probe_phase") or ""
+    ) in {
+        "probe_submitting",
+        "probe_submitted",
+        "probe_filled",
+        "residual_claimed",
+        "residual_submitting",
+        "residual_submitted",
+        "residual_partial_submitted",
+    }:
+        return {"allowed": False, "reason": "entry_split_probe_scale_in_forbidden"}
+
     if _rule_bool("SCALE_IN_REQUIRE_HISTORY_TABLE", False):
         return {"allowed": False, "reason": "history_table_required"}
 
@@ -61984,6 +63418,61 @@ def handle_buy_ordered_state(stock, code):
 
     raw_strategy = (stock.get("strategy") or "KOSPI_ML").upper()
     strategy = "SCALPING" if raw_strategy in ["SCALPING", "SCALP"] else raw_strategy
+
+    probe_phase = str(stock.get("entry_split_probe_phase") or "").strip()
+    if probe_phase in {"probe_submitting", "probe_submitted"}:
+        probe_started_at = _safe_float(
+            stock.get("entry_split_probe_submitted_at")
+            or stock.get("entry_split_probe_submitting_at"),
+            order_time,
+        )
+        probe_timeout_sec = max(
+            1, _safe_int(stock.get("entry_split_probe_timeout_sec"), 3)
+        )
+        if probe_started_at > 0 and time.time() - probe_started_at >= probe_timeout_sec:
+            cancel_result = _cancel_pending_entry_orders(
+                stock,
+                code,
+                force=True,
+                cancel_reason="entry_split_probe_timeout",
+            )
+            if cancel_result != "failed":
+                preserve_position = _safe_int(stock.get("buy_qty"), 0) > 0
+                _abort_entry_split_probe_residual(
+                    stock,
+                    code,
+                    "probe_timeout",
+                    preserve_position=preserve_position,
+                )
+                if not preserve_position:
+                    _mutate_stock_state(stock, set_fields={"status": "WATCHING"})
+                _log_entry_pipeline(
+                    stock,
+                    code,
+                    "probe_timeout",
+                    timeout_sec=probe_timeout_sec,
+                    cancel_result=cancel_result,
+                    preserve_position=preserve_position,
+                    actual_order_submitted=False,
+                    broker_order_forbidden=True,
+                    runtime_effect=True,
+                    **_entry_split_probe_observation_contract_fields(),
+                )
+            else:
+                trip_probe_runtime_circuit("probe_timeout_cancel_failed")
+                _log_entry_pipeline(
+                    stock,
+                    code,
+                    "probe_timeout",
+                    reason="probe_timeout_cancel_failed",
+                    timeout_sec=probe_timeout_sec,
+                    cancel_result=cancel_result,
+                    actual_order_submitted=False,
+                    broker_order_forbidden=True,
+                    runtime_effect=True,
+                    **_entry_split_probe_observation_contract_fields(),
+                )
+            return
 
     timeout_sec = _resolve_buy_order_timeout_sec(stock, strategy)
 
