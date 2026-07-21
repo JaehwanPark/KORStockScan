@@ -31887,6 +31887,205 @@ def _trailing_shallow_loss_confirm_defer_decision(
     }
 
 
+def _trailing_pre_submit_executable_recovery_decision(
+    stock: dict | None,
+    code: str,
+    ws_data: dict | None,
+    *,
+    buy_price: float,
+    signal_profit_rate: float,
+    peak_profit: float,
+    current_ai_score: float,
+    initial_executable_sell_price: int,
+    now_ts: float,
+) -> dict[str, Any]:
+    """Confirm a shallow trailing-loss recovery once before broker submit."""
+    stock = stock if isinstance(stock, dict) else {}
+    position_key = (
+        f"{stock.get('id', '-')}:"
+        f"{stock.get('holding_started_at') or stock.get('buy_time') or '-'}:"
+        f"{float(buy_price or 0.0):.4f}"
+    )
+    if stock.get("trailing_pre_submit_recovery_position_key") == position_key:
+        return {"defer": False, "reason": "already_deferred_once"}
+
+    min_peak_pct = 0.50
+    max_peak_pct = 1.00
+    max_executable_loss_pct = -0.50
+    min_ai_score = 55.0
+    min_recovery_improvement_pct = 0.15
+    max_recheck_deterioration_pct = 0.05
+    hard_stop_margin_pct = 0.15
+    recheck_sec = 2.0
+    rest_timeout_ms = 300
+    max_rest_age_ms = 1_500.0
+    max_spread_bps = 150.0
+
+    buy_price_value = _safe_float(buy_price, 0.0)
+    signal_profit = _safe_float(signal_profit_rate, 0.0)
+    peak = _safe_float(peak_profit, 0.0)
+    ai_score = _safe_float(current_ai_score, 0.0)
+    initial_price = _safe_int(initial_executable_sell_price, 0)
+    if buy_price_value <= 0 or initial_price <= 0:
+        return {"defer": False, "reason": "invalid_executable_price"}
+    if signal_profit >= 0.0:
+        return {"defer": False, "reason": "not_loss_conversion"}
+    if not (min_peak_pct <= peak <= max_peak_pct):
+        return {"defer": False, "reason": "peak_outside_recovery_band"}
+    if ai_score < min_ai_score:
+        return {"defer": False, "reason": "ai_below_recovery_floor"}
+
+    initial_profit = calculate_net_profit_rate(buy_price_value, initial_price)
+    recovery_improvement = initial_profit - signal_profit
+    hard_stop_pct = _safe_float(
+        stock.get("hard_stop_pct"),
+        _rule_float("SCALP_PRESET_HARD_STOP_PCT", -0.70),
+    )
+    if initial_profit < max_executable_loss_pct:
+        return {
+            "defer": False,
+            "reason": "executable_loss_below_recovery_band",
+            "initial_executable_profit_rate": initial_profit,
+        }
+    if recovery_improvement + 1e-9 < min_recovery_improvement_pct:
+        return {
+            "defer": False,
+            "reason": "executable_recovery_too_small",
+            "recovery_improvement_pct": recovery_improvement,
+        }
+    if initial_profit <= hard_stop_pct + hard_stop_margin_pct:
+        return {
+            "defer": False,
+            "reason": "hard_stop_margin_insufficient",
+            "initial_executable_profit_rate": initial_profit,
+            "hard_stop_pct": hard_stop_pct,
+        }
+    protect_profit_pct = _safe_float(stock.get("protect_profit_pct"), None)
+    if protect_profit_pct is not None and initial_profit <= protect_profit_pct:
+        return {
+            "defer": False,
+            "reason": "protect_stop_precedence",
+            "initial_executable_profit_rate": initial_profit,
+            "protect_profit_pct": protect_profit_pct,
+        }
+
+    features, has_features = _normalize_soft_stop_expert_features(stock)
+    if bool(
+        has_features
+        and _truthy_field(features.get("micro_context_usable"))
+        and _truthy_field(features.get("large_sell_print_detected"))
+    ):
+        return {"defer": False, "reason": "large_sell_print_detected"}
+
+    time.sleep(recheck_sec)
+    recheck_now_ts = time.time()
+    rest_snapshot, rest_state, rest_elapsed_ms = _fetch_rest_orderbook_snapshot_bounded(
+        code, rest_timeout_ms
+    )
+    rest_snapshot = dict(rest_snapshot or {})
+    if rest_snapshot and not any(
+        rest_snapshot.get(key)
+        for key in (
+            "rest_received_ts_ms",
+            "received_at_ms",
+            "rest_received_ts",
+            "received_ts",
+        )
+    ):
+        rest_snapshot["rest_received_ts"] = recheck_now_ts
+    quote_fields, _, _, rechecked_sell_price = _build_quote_consistency_fields(
+        ws_data,
+        rest_snapshot=rest_snapshot,
+        side="sell",
+        safety_exit=False,
+        now_ts=recheck_now_ts,
+    )
+    rest_age_ms = _safe_float(
+        quote_fields.get("quote_consistency_rest_age_ms"), float("inf")
+    )
+    best_bid = _safe_int(rest_snapshot.get("best_bid"), 0)
+    best_ask = _safe_int(rest_snapshot.get("best_ask"), 0)
+    spread_bps = (
+        ((best_ask - best_bid) / max(best_bid, 1)) * 10000.0
+        if best_bid > 0 and best_ask >= best_bid
+        else float("inf")
+    )
+    quote_reason = str(quote_fields.get("quote_consistency_reason") or "").lower()
+    quote_state = str(quote_fields.get("quote_consistency_state") or "").lower()
+    quote_fresh = bool(
+        rest_state == "ok"
+        and rest_snapshot
+        and 0.0 <= rest_age_ms <= max_rest_age_ms
+        and best_bid > 0
+        and best_ask >= best_bid
+        and rechecked_sell_price > 0
+        and spread_bps <= max_spread_bps
+        and quote_state not in {"blocked", "conflicted", "diverged", "stale"}
+        and quote_reason
+        not in {
+            "conflicted",
+            "price_conflict",
+            "quote_stale",
+            "stale_quote",
+            "ws_rest_conflicted",
+        }
+        and not _truthy_log_value(quote_fields.get("quote_consistency_entry_blocked"))
+    )
+    quote_consistency_sell_price = rechecked_sell_price
+    rechecked_sell_price = best_bid if quote_fresh else 0
+    rechecked_profit = (
+        calculate_net_profit_rate(buy_price_value, rechecked_sell_price)
+        if rechecked_sell_price > 0
+        else float("-inf")
+    )
+    stable_recovery = bool(
+        quote_fresh
+        and rechecked_profit >= max_executable_loss_pct
+        and rechecked_profit > hard_stop_pct + hard_stop_margin_pct
+        and rechecked_profit + max_recheck_deterioration_pct + 1e-9 >= initial_profit
+    )
+    fields = {
+        "defer": stable_recovery,
+        "reason": (
+            "executable_recovery_confirmed"
+            if stable_recovery
+            else "executable_recovery_not_confirmed"
+        ),
+        "position_key": position_key,
+        "signal_profit_rate": signal_profit,
+        "peak_profit": peak,
+        "current_ai_score": ai_score,
+        "initial_executable_sell_price": initial_price,
+        "initial_executable_profit_rate": initial_profit,
+        "recovery_improvement_pct": recovery_improvement,
+        "rechecked_executable_sell_price": rechecked_sell_price,
+        "quote_consistency_executable_sell_price": quote_consistency_sell_price,
+        "rechecked_executable_profit_rate": rechecked_profit,
+        "recheck_sec": recheck_sec,
+        "rest_fetch_state": rest_state,
+        "rest_fetch_elapsed_ms": rest_elapsed_ms,
+        "rest_quote_age_ms": rest_age_ms,
+        "rest_spread_bps": spread_bps,
+        "quote_fresh": quote_fresh,
+        "evaluated": True,
+        "hard_stop_pct": hard_stop_pct,
+        "hard_stop_margin_pct": hard_stop_margin_pct,
+        "max_executable_loss_pct": max_executable_loss_pct,
+        "min_recovery_improvement_pct": min_recovery_improvement_pct,
+        "max_recheck_deterioration_pct": max_recheck_deterioration_pct,
+        **quote_fields,
+    }
+    if stable_recovery:
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                "trailing_pre_submit_recovery_position_key": position_key,
+                "trailing_pre_submit_recovery_deferred_at": recheck_now_ts,
+            },
+        )
+    return fields
+
+
 def _normalize_pre_ai_strength_ws_timestamp(snapshot: dict | None) -> tuple[dict, str]:
     normalized = dict(snapshot or {}) if isinstance(snapshot, dict) else {}
     if not normalized:
@@ -59888,6 +60087,7 @@ def handle_holding_state(
             and str(exit_rule or stock.get("last_exit_rule") or "").strip()
             == "scalp_trailing_take_profit"
         )
+        trailing_signal_profit_rate = float(profit_rate)
         if sell_safety_exit or trailing_pre_submit_recheck:
             rest_snapshot, rest_check_state, rest_check_elapsed_ms = (
                 _fetch_rest_orderbook_snapshot_bounded(
@@ -59989,6 +60189,80 @@ def handle_holding_state(
             orderbook["bids"] = bids
             ws_data["orderbook"] = orderbook
             ws_data["curr"] = curr_p if curr_p > 0 else sell_order_price
+
+        if trailing_pre_submit_recheck:
+            recovery_decision = _trailing_pre_submit_executable_recovery_decision(
+                stock,
+                code,
+                ws_data,
+                buy_price=buy_p,
+                signal_profit_rate=trailing_signal_profit_rate,
+                peak_profit=peak_profit,
+                current_ai_score=current_ai_score,
+                initial_executable_sell_price=sell_order_price,
+                now_ts=now_ts,
+            )
+            if recovery_decision.get("defer"):
+                _mutate_stock_state(
+                    stock,
+                    pop_fields=(
+                        "last_exit_rule",
+                        "last_exit_reason",
+                        "last_exit_decision_source",
+                    ),
+                )
+                _log_holding_pipeline(
+                    stock,
+                    code,
+                    "trailing_pre_submit_executable_recovery_deferred",
+                    exit_rule=exit_rule or stock.get("last_exit_rule") or "-",
+                    sell_reason_type=sell_reason_type or "-",
+                    exit_classification="trailing_loss_conversion",
+                    metric_role="bounded_tunable",
+                    decision_authority=(
+                        "real_scalping_trailing_pre_submit_executable_recovery_guard"
+                    ),
+                    window_policy="same_position_single_two_second_recheck",
+                    sample_floor="fresh_two_point_executable_sell_quote_recovery",
+                    primary_decision_metric="post_defer_mfe_before_next_exit_signal",
+                    source_quality_gate="two_fresh_consistent_executable_sell_quotes",
+                    actual_order_submitted=False,
+                    broker_order_forbidden=True,
+                    runtime_effect=True,
+                    allowed_runtime_apply=False,
+                    forbidden_uses=(
+                        f"{TRADE_QUALITY_RUNTIME_FORBIDDEN_USES}|hard_stop_bypass|"
+                        "protect_stop_bypass|emergency_stop_bypass|second_extension"
+                    ),
+                    **recovery_decision,
+                )
+                return
+            if recovery_decision.get("evaluated"):
+                _log_holding_pipeline(
+                    stock,
+                    code,
+                    "trailing_pre_submit_executable_recovery_checked",
+                    exit_rule=exit_rule or stock.get("last_exit_rule") or "-",
+                    sell_reason_type=sell_reason_type or "-",
+                    exit_classification="trailing_loss_conversion",
+                    metric_role="bounded_tunable",
+                    decision_authority=(
+                        "real_scalping_trailing_pre_submit_executable_recovery_guard"
+                    ),
+                    window_policy="same_position_single_two_second_recheck",
+                    sample_floor="fresh_two_point_executable_sell_quote_recovery",
+                    primary_decision_metric="post_recheck_executable_profit_rate",
+                    source_quality_gate="two_fresh_consistent_executable_sell_quotes",
+                    actual_order_submitted=False,
+                    broker_order_forbidden=False,
+                    runtime_effect=True,
+                    allowed_runtime_apply=False,
+                    forbidden_uses=(
+                        f"{TRADE_QUALITY_RUNTIME_FORBIDDEN_USES}|hard_stop_bypass|"
+                        "protect_stop_bypass|emergency_stop_bypass|second_extension"
+                    ),
+                    **recovery_decision,
+                )
 
         sell_exchange_resolution = _resolve_holding_sell_dmst_stex_tp(
             stock, code, now_t=now_t
