@@ -403,12 +403,17 @@ def test_wait6579_counterfactual_uses_virtual_qty_without_budget_pass(
 
     row = report["rows"][0]
     assert row["target_qty"] == 0
-    assert row["counterfactual_qty"] == 224
-    assert row["counterfactual_qty_source"] == "sim_virtual_budget_dynamic_formula"
+    assert row["counterfactual_qty"] == 95
+    assert row["counterfactual_qty_source"] == "scalping_position_sizing_allocator"
     assert row["virtual_budget_override"] is True
     assert row["virtual_budget_krw"] == 10_000_000
-    assert row["counterfactual_safe_budget"] == 2_242_000
-    assert row["counterfactual_notional_krw"] == 2_240_000
+    assert row["counterfactual_safe_budget"] == 950_000
+    assert row["counterfactual_notional_krw"] == 950_000
+    assert row["formula_version"] == "entry_type_5stage_cap25_v1"
+    assert row["tier"] == 1
+    assert row["effective_qty"] == row["counterfactual_qty"]
+    assert row["actual_order_submitted"] is False
+    assert row["broker_order_forbidden"] is True
     assert row["expected_ev_krw"] > 0
     assert report["metrics"]["expected_ev_krw_sum"] == row["expected_ev_krw"]
 

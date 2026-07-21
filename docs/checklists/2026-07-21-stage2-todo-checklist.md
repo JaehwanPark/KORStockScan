@@ -16,6 +16,16 @@
 - `actual_order_submitted=false`인 sim/probe 표본은 EV/source-quality 입력이며 실주문 전환 근거가 아니다.
 - Project/Calendar 동기화는 사용자가 표준 동기화 명령으로 수행한다.
 
+## 사용자 지시 구현
+
+- [x] `[ScalpingPositionSizingAllocator0721] 모든 스캘핑 매수 5단계 중앙 투자금액배분기 구현` (`Due: 2026-07-21`, `Slot: INTRADAY`, `TimeWindow: 17:20~18:40`, `Track: ScalpingLogic`)
+  - Source: [position_sizing_allocator.py](/home/ubuntu/KORStockScan/src/engine/scalping/position_sizing_allocator.py), [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py), [sniper_scale_in.py](/home/ubuntu/KORStockScan/src/engine/sniper_scale_in.py), [daily_threshold_cycle_report.py](/home/ubuntu/KORStockScan/src/engine/daily_threshold_cycle_report.py), [workorder-position-sizing-dynamic-formula.md](/home/ubuntu/KORStockScan/docs/workorder-position-sizing-dynamic-formula.md)
+  - 판정 기준: 일반/Opening Rotation/Rising Missed/AVG_DOWN/PYRAMID/scalping sim·counterfactual이 `entry_type_5stage_cap25_v1` 단일 owner를 사용하고, KRX 5단계 `10%/15%/20%/25%/25%`, NXT·unknown·복원 실패 10%, 95% safe budget, 최소 1주 및 downstream cap 합성을 지키는지 확인한다. Report grid는 선택 공식과 `flat_10_fallback`만 비교한다.
+  - 금지: Swing/S15, broker/account/order/cooldown, stale quote, hard/protect/emergency 안전장치 변경, 현재 PID 종료, bot 재기동, restart flag 생성, 실주문 시험, 고비용 전체 report 재생성, Project/Calendar 직접 동기화를 금지한다.
+  - 다음 액션: 구현·producer/consumer review·targeted validation·parser·`git diff --check`를 닫고 `implemented_not_runtime_reflected|review_defect_open|validation_failed` 중 하나로 기록한다. 소스 구현 완료 시에도 다음 명시적 재기동 전까지 current runtime 반영으로 표기하지 않는다.
+  - 실행 결과 (`2026-07-21 18:20 KST`): 판정=`implemented_not_runtime_reflected`. `entry_type_5stage_cap25_v1` 중앙 allocator를 일반/Opening Rotation/Rising Missed/AVG_DOWN/PYRAMID/scalping sim·counterfactual에 연결하고, 점수 선형·Opening 전용 비율·Rising Missed 400,000 KRW cap/single-order collapse·sim 고정/100% fallback의 runtime 수량 권한을 제거했다. Review gate에서 현재 포지션 대비 최대 포지션 cap 합성과 재시작 복원 sim pending의 구형 고정 1주 fallback을 찾아 중앙 allocator로 보완했다. 관련 producer/consumer 회귀 `1382 passed`, Black/compile/parser/`git diff --check`, 미해결 finding=`0`이다. 봇/PID/runtime env/restart flag/실주문/report regeneration/Project·Calendar sync는 수행하지 않았다.
+  - 재리뷰 보완 (`2026-07-21 19:56 KST`): 최소 1주 floor의 절대예산 cap 우회, loss-reentry/WAIT6579·scale-in 1.5x cap의 중앙 배분 후 수량 덮어쓰기, real/sim `qty_source` 혼입, sizing event 압축 필드·real submit provenance 누락, counterfactual 배분 provenance 누락을 재현하고 모두 수정했다. 후단 수량 제한은 allocator `stage_qty_cap`으로 재판정하고, report는 SCALPING-only real/sim 분모와 실제 bundle/scale-in submit event를 사용하며 runtime event 관측 여부로 `runtime_reflected` 상태를 판정한다. 최종 관련 회귀 `1590 passed`, Black/compile/parser/`git diff --check`, review gate 미해결 finding=`0`이다. 현재 프로세스는 재기동하지 않아 상태를 `implemented_not_runtime_reflected`로 유지한다.
+
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_START -->
 ## 자동 생성 체크리스트 (`2026-07-20` postclose -> `2026-07-21`)
 

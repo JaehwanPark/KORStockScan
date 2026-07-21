@@ -8,7 +8,11 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from src.engine import kiwoom_orders
+from src.engine.scalping.position_sizing_allocator import (
+    ScalpingSizingContext,
+    infer_scalping_venue,
+    resolve_scalping_allocation,
+)
 from src.utils.constants import DATA_DIR, TRADING_RULES
 from src.utils.jsonl_io import read_jsonl
 from src.utils.logger import log_error
@@ -184,42 +188,63 @@ def _sim_virtual_budget_krw() -> int:
     )
 
 
-def _scalp_ratio_from_score(ai_score: float) -> float:
-    min_ratio = float(getattr(TRADING_RULES, "INVEST_RATIO_SCALPING_MIN", 0.10) or 0.10)
-    max_ratio = float(getattr(TRADING_RULES, "INVEST_RATIO_SCALPING_MAX", 0.30) or 0.30)
-    score = max(0.0, min(100.0, float(ai_score or 0.0)))
-    return min_ratio + (score / 100.0) * (max_ratio - min_ratio)
-
-
-def _sim_virtual_qty(entry_price: int, ai_score: float) -> dict:
+def _sim_virtual_qty(
+    entry_price: int,
+    ai_score: float,
+    *,
+    reference_time=None,
+    source_signature=None,
+    effective_venue=None,
+) -> dict:
+    _ = ai_score
     virtual_budget = _sim_virtual_budget_krw()
-    ratio = _scalp_ratio_from_score(ai_score)
     max_budget = int(getattr(TRADING_RULES, "SCALPING_MAX_BUY_BUDGET_KRW", 0) or 0)
-    if entry_price <= 0 or virtual_budget <= 0:
-        return {
-            "qty": 0,
-            "ratio": ratio,
-            "virtual_budget_krw": virtual_budget,
-            "target_budget": 0,
-            "safe_budget": 0,
-            "safety_ratio": 0.0,
-            "max_budget": max_budget,
-        }
-    target_budget, safe_budget, qty, safety_ratio = kiwoom_orders.describe_buy_capacity(
-        entry_price,
-        virtual_budget,
-        ratio,
-        max_budget=max_budget,
+    venue = infer_scalping_venue(reference_time, effective_venue)
+    decision = resolve_scalping_allocation(
+        ScalpingSizingContext(
+            allocation_stage="missed_entry_counterfactual",
+            reference_time=reference_time,
+            source_signature=source_signature,
+            effective_venue=venue,
+            budget_base_krw=virtual_budget,
+            price_krw=entry_price,
+            absolute_budget_cap_krw=max_budget,
+            simulation=True,
+        )
     )
     return {
-        "qty": max(1, _safe_int(qty, 0)),
-        "ratio": ratio,
+        "qty": decision.effective_qty,
         "virtual_budget_krw": virtual_budget,
-        "target_budget": target_budget,
-        "safe_budget": safe_budget,
-        "safety_ratio": safety_ratio,
         "max_budget": max_budget,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        **decision.event_fields(),
     }
+
+
+_COUNTERFACTUAL_SIZING_KEYS = (
+    "formula_version",
+    "tier",
+    "ratio",
+    "tier_reason",
+    "source_count",
+    "reference_time",
+    "venue",
+    "target_budget",
+    "safe_budget",
+    "pre_cap_qty",
+    "effective_qty",
+    "min_one_share_floor_applied",
+    "binding_caps",
+    "allocation_stage",
+    "simulation",
+    "actual_order_submitted",
+    "broker_order_forbidden",
+)
+
+
+def _counterfactual_sizing_fields(capacity: dict) -> dict:
+    return {key: capacity.get(key) for key in _COUNTERFACTUAL_SIZING_KEYS}
 
 
 def _avg(values: list[float]) -> float:
@@ -1578,7 +1603,11 @@ def build_missed_entry_counterfactual_report(
         )
         entry_price_used = _safe_int(metrics_10m.get("entry_price_used"), 0)
         capacity = _sim_virtual_qty(
-            entry_price_used, _safe_float(candidate.get("ai_score"), 0.0)
+            entry_price_used,
+            _safe_float(candidate.get("ai_score"), 0.0),
+            reference_time=candidate.get("emitted_at") or candidate.get("buy_time"),
+            source_signature=candidate.get("source_signature"),
+            effective_venue=candidate.get("effective_venue"),
         )
         qty = _safe_int(capacity.get("qty"), 0)
         est_pnl_10m = (
@@ -1595,6 +1624,7 @@ def build_missed_entry_counterfactual_report(
         evaluations.append(
             {
                 **candidate,
+                **_counterfactual_sizing_fields(capacity),
                 "outcome": outcome,
                 "metrics_5m": metrics_5m,
                 "metrics_10m": metrics_10m,
@@ -1610,7 +1640,7 @@ def build_missed_entry_counterfactual_report(
                 **source_quality_15m,
                 "counterfactual_qty": int(qty),
                 "counterfactual_qty_source": (
-                    "sim_virtual_budget_dynamic_formula" if qty > 0 else "unpriced"
+                    "scalping_position_sizing_allocator" if qty > 0 else "unpriced"
                 ),
                 "virtual_budget_override": True,
                 "virtual_budget_krw": int(capacity.get("virtual_budget_krw") or 0),
@@ -1886,6 +1916,7 @@ def build_missed_entry_counterfactual_report(
             "counterfactual_notional_krw": int(
                 _safe_int(item.get("counterfactual_notional_krw"), 0)
             ),
+            **{key: item.get(key) for key in _COUNTERFACTUAL_SIZING_KEYS},
             "ai_score": round(_safe_float(item.get("ai_score"), 0.0), 1),
             "price_source": str(item.get("price_source") or "minute_candle_proxy"),
             "minute_candle_source_quality": str(

@@ -224,7 +224,7 @@ class TradingConfig:
     SCALP_LIVE_SIMULATOR_OWNER: str = "ScalpAiBuyAllLiveSimulator0511"
     SCALP_LIVE_SIMULATOR_FILL_POLICY: str = "signal_inclusive_best_ask_v1"
     SCALP_LIVE_SIMULATOR_QTY: int = (
-        0  # 0 이하는 SIM_VIRTUAL_BUDGET_KRW 기준 실주문 동적수량 산식 사용
+        0  # DEPRECATED compatibility: 중앙 5단계 allocator가 sim 수량을 결정
     )
     SCALP_LIVE_SIMULATOR_MAX_OPEN: int = (
         0  # 0 이하는 전체 scalp live simulator open cap 없음
@@ -296,10 +296,10 @@ class TradingConfig:
     INVEST_RATIO_KOSPI: float = 0.25  # DEPRECATED: MIN/MAX 비중으로 대체됨
     INVEST_RATIO_KOSDAQ: float = 0.15  # DEPRECATED: MIN/MAX 비중으로 대체됨
     INVEST_RATIO_SCALPING_MIN: float = (
-        0.10  # 스캘핑 신규 real BUY 최소 주문가능금액 비중
+        0.10  # DEPRECATED parser compatibility: 중앙 allocator runtime 권한 없음
     )
     INVEST_RATIO_SCALPING_MAX: float = (
-        0.30  # 스캘핑 신규 real BUY 최대 주문가능금액 비중
+        0.30  # DEPRECATED parser compatibility: 중앙 allocator runtime 권한 없음
     )
     SCALPING_MAX_BUY_BUDGET_KRW: int = (
         0  # 0 이하는 절대 투자금 상한 없음; 주문가능금액 비중 guard 사용

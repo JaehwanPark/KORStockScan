@@ -5,6 +5,12 @@ from datetime import datetime, timedelta, time as dt_time
 
 from src.utils.constants import TRADING_RULES
 from src.utils import kiwoom_utils
+from src.engine.scalping.position_sizing_allocator import (
+    FORMULA_VERSION as SCALPING_SIZING_FORMULA_VERSION,
+    ScalpingSizingContext,
+    infer_scalping_venue,
+    resolve_scalping_allocation,
+)
 
 _DEFAULT_SCALE_IN_RATIO = 0.50
 _DEFAULT_SWING_PYRAMID_RATIO = 0.30
@@ -2229,6 +2235,20 @@ def describe_scale_in_qty(
     }
 
 
+def _scalping_initial_sizing_reference(stock):
+    for key in (
+        "scalping_sizing_reference_time",
+        "entry_armed_at_epoch",
+        "scanner_promotion_emitted_epoch",
+        "buy_time",
+        "holding_started_at",
+    ):
+        value = stock.get(key)
+        if value not in (None, "", "-", 0, 0.0):
+            return value
+    return None
+
+
 def describe_dynamic_scale_in_qty(
     stock,
     resolved_price,
@@ -2243,6 +2263,8 @@ def describe_dynamic_scale_in_qty(
     budget_source=None,
     account_deposit=None,
     cash_orderable_amount=None,
+    effective_venue=None,
+    stage_qty_cap=None,
 ):
     """추가매수 수량을 safety guard와 position cap 안에서 결정하고 provenance를 남긴다."""
     legacy = describe_scale_in_qty(
@@ -2332,47 +2354,62 @@ def describe_dynamic_scale_in_qty(
     cash_qty_cap = None
     if cash_orderable_qty_cap is not None:
         cash_qty_cap = max(0, _safe_int(cash_orderable_qty_cap, 0))
-    if normalized_strategy == "SCALPING" and not details["sim_uncapped_qty"]:
-        current_ai_score_for_ratio = _safe_float(
-            (action or {}).get(
-                "current_ai_score",
-                stock.get("current_ai_score", (stock.get("rt_ai_prob") or 0) * 100),
-            ),
-            0.0,
-        )
-        min_ratio = float(
-            getattr(TRADING_RULES, "INVEST_RATIO_SCALPING_MIN", 0.10) or 0.10
-        )
-        max_ratio = float(
-            getattr(TRADING_RULES, "INVEST_RATIO_SCALPING_MAX", 0.30) or 0.30
-        )
-        if max_ratio < min_ratio:
-            min_ratio, max_ratio = max_ratio, min_ratio
-        score = max(0.0, min(100.0, current_ai_score_for_ratio))
-        scale_in_ratio = min_ratio + (score / 100.0) * (max_ratio - min_ratio)
-        target_budget = max(float(deposit) * float(scale_in_ratio), 0.0)
-        safe_budget = target_budget * float(
-            getattr(TRADING_RULES, "BUY_BUDGET_SAFETY_RATIO", 0.95) or 0.95
-        )
-        scalp_budget_qty = int(safe_budget // resolved_price)
+    if normalized_strategy == "SCALPING":
         min_one_share_floor_enabled = bool(
             getattr(
                 TRADING_RULES, "SCALPING_SCALE_IN_MIN_ONE_SHARE_FLOOR_ENABLED", True
             )
         )
-        if (
-            scalp_budget_qty <= 0
-            and min_one_share_floor_enabled
-            and float(deposit) >= float(resolved_price)
-        ):
-            scalp_budget_qty = 1
-            scalp_min_one_share_floor_applied = True
-        if cash_qty_cap is not None:
-            scalp_budget_qty = min(max(0, scalp_budget_qty), cash_qty_cap)
-        cap_qty = max(0, scalp_budget_qty)
-        effective_cap = (
-            configured_effective_cap if configured_effective_cap > 0 else cap_qty
+        initial_reference = _scalping_initial_sizing_reference(stock)
+        venue_reference = initial_reference
+        resolved_venue = infer_scalping_venue(
+            venue_reference,
+            effective_venue
+            or stock.get("rising_missed_effective_venue")
+            or stock.get("effective_venue"),
         )
+        initial_tier = _safe_int(stock.get("scalping_sizing_tier"), 0) or None
+        initial_formula_version = str(
+            stock.get("scalping_sizing_formula_version") or ""
+        )
+        allocator_stage_qty_cap = (
+            configured_effective_cap if configured_effective_cap > 0 else None
+        )
+        if stage_qty_cap is not None:
+            explicit_stage_cap = max(0, _safe_int(stage_qty_cap, 0))
+            allocator_stage_qty_cap = (
+                min(allocator_stage_qty_cap, explicit_stage_cap)
+                if allocator_stage_qty_cap is not None
+                else explicit_stage_cap
+            )
+        sizing_decision = resolve_scalping_allocation(
+            ScalpingSizingContext(
+                allocation_stage=add_type.lower(),
+                reference_time=initial_reference,
+                source_signature=(
+                    stock.get("source_signature")
+                    or stock.get("scanner_source_signature")
+                ),
+                effective_venue=resolved_venue,
+                budget_base_krw=deposit,
+                price_krw=resolved_price,
+                safety_ratio=float(
+                    getattr(TRADING_RULES, "BUY_BUDGET_SAFETY_RATIO", 0.95) or 0.95
+                ),
+                current_position_qty=buy_qty,
+                max_position_qty_cap=buy_qty + cap_qty,
+                cash_orderable_qty_cap=cash_qty_cap,
+                stage_qty_cap=allocator_stage_qty_cap,
+                min_one_share_floor_enabled=min_one_share_floor_enabled,
+                simulation=bool(details["sim_uncapped_qty"]),
+                initial_tier=initial_tier,
+                initial_formula_version=initial_formula_version,
+            )
+        )
+        scalp_budget_qty = sizing_decision.pre_cap_qty
+        scalp_min_one_share_floor_applied = sizing_decision.min_one_share_floor_applied
+        cap_qty = max(0, sizing_decision.effective_qty)
+        effective_cap = cap_qty
         details.update(
             {
                 "scale_in_budget_source": budget_source or "budget_base",
@@ -2389,12 +2426,26 @@ def describe_dynamic_scale_in_qty(
                 "scale_in_cash_orderable_qty_cap": (
                     cash_qty_cap if cash_qty_cap is not None else "-"
                 ),
-                "scale_in_budget_ratio": round(scale_in_ratio, 6),
-                "scale_in_target_budget": int(target_budget),
-                "scale_in_safe_budget": int(safe_budget),
-                "scale_in_budget_qty": int(scalp_budget_qty),
+                "scale_in_budget_ratio": round(sizing_decision.ratio, 6),
+                "scale_in_target_budget": sizing_decision.target_budget,
+                "scale_in_safe_budget": sizing_decision.safe_budget,
+                "scale_in_budget_qty": sizing_decision.effective_qty,
                 "scale_in_min_one_share_floor_enabled": min_one_share_floor_enabled,
                 "scale_in_min_one_share_floor_applied": scalp_min_one_share_floor_applied,
+                "formula_version": sizing_decision.formula_version,
+                "tier": sizing_decision.tier,
+                "ratio": round(sizing_decision.ratio, 6),
+                "tier_reason": sizing_decision.tier_reason,
+                "source_count": sizing_decision.source_count,
+                "reference_time": sizing_decision.reference_time,
+                "venue": sizing_decision.venue,
+                "target_budget": sizing_decision.target_budget,
+                "safe_budget": sizing_decision.safe_budget,
+                "pre_cap_qty": sizing_decision.pre_cap_qty,
+                "effective_qty": sizing_decision.effective_qty,
+                "binding_caps": ",".join(sizing_decision.binding_caps) or "-",
+                "allocation_stage": sizing_decision.allocation_stage,
+                "scale_in_sizing_authority": SCALPING_SIZING_FORMULA_VERSION,
             }
         )
     if cap_qty <= 0:

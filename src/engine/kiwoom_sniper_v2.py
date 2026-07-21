@@ -63,6 +63,11 @@ from src.engine.scalping.rising_missed_selection_prior import (
     rising_missed_selection_rank_delta,
 )
 from src.engine.scalping.market_data_enrichment import build_market_data_enrichment
+from src.engine.scalping.position_sizing_allocator import (
+    ScalpingSizingContext,
+    infer_scalping_venue,
+    resolve_scalping_allocation,
+)
 from src.engine.scalping.entry_ai_gate import (
     entry_buy_decision_allowed,
     evaluate_ai_score_prior,
@@ -1257,24 +1262,45 @@ def check_watching_conditions(
 
     # 매수 수량 체크 (자금 부족)
     deposit = kiwoom_orders.get_deposit(KIWOOM_TOKEN)
-    ratio = stock.get("ratio", 0.1)  # 기본 비율
     budget_cap = 0
     if strategy == "SCALPING":
         budget_cap = int(getattr(TRADING_RULES, "SCALPING_MAX_BUY_BUDGET_KRW", 0) or 0)
-    target_budget, safe_budget, real_buy_qty, used_safety_ratio = (
-        kiwoom_orders.describe_buy_capacity(
-            curr_price,
-            deposit,
-            ratio,
-            max_budget=budget_cap,
-            allow_min_one_share_over_budget=(
-                strategy == "SCALPING"
-                and bool(
+        sizing_now = datetime.now()
+        sizing_decision = resolve_scalping_allocation(
+            ScalpingSizingContext(
+                allocation_stage="legacy_precheck",
+                reference_time=sizing_now,
+                source_signature=stock.get("source_signature")
+                or stock.get("scanner_source_signature"),
+                effective_venue=infer_scalping_venue(
+                    sizing_now,
+                    stock.get("rising_missed_effective_venue")
+                    or stock.get("effective_venue"),
+                ),
+                budget_base_krw=deposit,
+                price_krw=curr_price,
+                absolute_budget_cap_krw=budget_cap,
+                min_one_share_floor_enabled=bool(
                     getattr(TRADING_RULES, "SCALPING_MIN_ONE_SHARE_FLOOR_ENABLED", True)
-                )
-            ),
+                ),
+            )
         )
-    )
+        target_budget = sizing_decision.target_budget
+        safe_budget = sizing_decision.safe_budget
+        real_buy_qty = sizing_decision.effective_qty
+        used_safety_ratio = sizing_decision.safety_ratio
+        ratio = sizing_decision.ratio
+    else:
+        ratio = stock.get("ratio", 0.1)
+        target_budget, safe_budget, real_buy_qty, used_safety_ratio = (
+            kiwoom_orders.describe_buy_capacity(
+                curr_price,
+                deposit,
+                ratio,
+                max_budget=budget_cap,
+                allow_min_one_share_over_budget=False,
+            )
+        )
     if real_buy_qty <= 0:
         return (
             "매수 수량 0주 "

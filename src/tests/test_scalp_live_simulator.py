@@ -142,7 +142,7 @@ def test_scalp_simulator_arms_and_fills_without_real_buy_order(monkeypatch):
     assert sim_target["simulation_fill_policy"] == "signal_inclusive_best_ask_v1"
     assert sim_target["actual_order_submitted"] is False
     assert sim_target["msg_audience"] == "ADMIN_ONLY"
-    assert sim_target["buy_qty"] == 1
+    assert sim_target["buy_qty"] == 95
     assert sim_target["buy_price"] == 9_990
     sim_stages = [stage for stage, _ in logs if stage.startswith("scalp_sim_")]
     assert sim_stages == [
@@ -167,6 +167,57 @@ def test_scalp_simulator_arms_and_fills_without_real_buy_order(monkeypatch):
         fields for stage, fields in logs if stage == "scalp_sim_entry_armed"
     )
     assert armed_event["runtime_effect"] == "simulated_entry_armed_only"
+
+
+def test_pending_sim_without_persisted_qty_restores_central_allocator(monkeypatch):
+    restored = {
+        "qty": 7,
+        "qty_source": "scalping_position_sizing_allocator",
+        "formula_version": "entry_type_5stage_cap25_v1",
+        "tier": 1,
+        "ratio": 0.10,
+        "tier_reason": "missing_source_signature_fallback",
+        "source_count": 0,
+        "reference_time": "2026-07-21T10:00:00+09:00",
+        "venue": "KRX",
+        "target_budget": 1_000_000,
+        "safe_budget": 950_000,
+        "pre_cap_qty": 7,
+        "binding_caps": "-",
+        "allocation_stage": "sim_initial_entry",
+    }
+    filled = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_resolve_scalp_sim_entry_qty",
+        lambda stock, ws_data, runtime: dict(restored),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_mark_scalp_simulated_holding",
+        lambda *args, **kwargs: filled.append((args, kwargs)),
+    )
+    stock = {
+        "name": "RESTORED",
+        "code": "123456",
+        "strategy": "SCALPING",
+        "status": state_handlers.SCALP_SIM_PENDING_STATUS,
+        "scalp_live_simulator": True,
+        "simulation_book": state_handlers.SCALP_SIMULATION_BOOK,
+        "scalp_sim_entry_limit_price": 10_000,
+    }
+
+    assert state_handlers.handle_scalp_simulator_pending_entry(
+        stock,
+        "123456",
+        {"curr": 9_990, "best_ask": 9_990, "best_bid": 9_980},
+        now_ts=1_000.0,
+    )
+
+    assert stock["scalp_sim_entry_qty"] == 7
+    assert stock["scalp_sim_entry_qty_source"] == ("scalping_position_sizing_allocator")
+    assert stock["scalping_sizing_formula_version"] == ("entry_type_5stage_cap25_v1")
+    assert filled[0][0][3] == 7
 
 
 def test_scalp_live_simulator_respects_max_open_cap(monkeypatch):
@@ -1442,11 +1493,11 @@ def test_scalp_simulator_blocks_stale_passive_probe_before_virtual_submit(monkey
         if stage == "scalp_sim_entry_submit_revalidation_block"
     )
     assert block["block_reason"] == "stale_context_or_quote"
-    assert block["entry_order_lifecycle"] == "passive_probe"
+    assert block["entry_order_lifecycle"] == "standard"
     assert block["actual_order_submitted"] is False
 
 
-def test_scalp_simulator_entry_uses_virtual_budget_with_live_qty_formula(monkeypatch):
+def test_scalp_simulator_entry_uses_virtual_budget_with_central_allocator(monkeypatch):
     logs = []
     rules = replace(
         CONFIG, SCALP_LIVE_SIMULATOR_QTY=0, SCALPING_MAX_BUY_BUDGET_KRW=1_200_000
@@ -1491,18 +1542,18 @@ def test_scalp_simulator_entry_uses_virtual_budget_with_live_qty_formula(monkeyp
     )
 
     sim_target = state_handlers.ACTIVE_TARGETS[0]
-    assert sim_target["buy_qty"] == 114
+    assert sim_target["buy_qty"] == 95
     assert (
-        sim_target["scalp_sim_entry_qty_source"] == "sim_virtual_budget_dynamic_formula"
+        sim_target["scalp_sim_entry_qty_source"] == "scalping_position_sizing_allocator"
     )
     armed = next(fields for stage, fields in logs if stage == "scalp_sim_entry_armed")
-    assert armed["qty"] == 114
-    assert armed["qty_reason"] == "sim_uses_virtual_budget_with_live_qty_formula"
+    assert armed["qty"] == 95
+    assert armed["qty_reason"] == "sim_uses_central_scalping_allocator"
     assert armed["virtual_budget_override"] is True
     assert armed["virtual_budget_krw"] == 10_000_000
-    assert armed["target_budget"] == 1_200_000
-    assert armed["safe_budget"] == 1_140_000
-    assert armed["virtual_notional_used_krw"] == 1_140_000
+    assert armed["target_budget"] == 1_000_000
+    assert armed["safe_budget"] == 950_000
+    assert armed["virtual_notional_used_krw"] == 950_000
     assert armed["budget_authority"] == "sim_virtual_not_real_orderable_amount"
 
 
@@ -1547,16 +1598,16 @@ def test_scalp_simulator_entry_ignores_real_orderable_amount_when_unaffordable(
     )
 
     sim_target = state_handlers.ACTIVE_TARGETS[0]
-    assert sim_target["buy_qty"] == 24
+    assert sim_target["buy_qty"] == 2
     assert (
-        sim_target["scalp_sim_entry_qty_source"] == "sim_virtual_budget_dynamic_formula"
+        sim_target["scalp_sim_entry_qty_source"] == "scalping_position_sizing_allocator"
     )
     armed = next(fields for stage, fields in logs if stage == "scalp_sim_entry_armed")
-    assert armed["qty"] == 24
+    assert armed["qty"] == 2
     assert armed["virtual_budget_override"] is True
     assert armed["virtual_budget_krw"] == 10_000_000
-    assert armed["safe_budget"] == 9_500_000
-    assert armed["virtual_notional_used_krw"] == 9_180_000
+    assert armed["safe_budget"] == 950_000
+    assert armed["virtual_notional_used_krw"] == 765_000
     assert armed["budget_authority"] == "sim_virtual_not_real_orderable_amount"
 
 
@@ -3392,7 +3443,9 @@ def test_scalp_simulator_scale_in_does_not_call_real_buy(monkeypatch):
     )
 
 
-def test_scalp_simulator_scale_in_dynamic_qty_ignores_real_one_share_cap(monkeypatch):
+def test_scalp_simulator_scale_in_uses_central_allocator_without_real_order_cap(
+    monkeypatch,
+):
     rules = replace(CONFIG, SCALPING_SCALE_IN_DYNAMIC_QTY_ENABLED=True)
     monkeypatch.setattr(scale_in, "TRADING_RULES", rules)
     stock = {
@@ -3421,9 +3474,9 @@ def test_scalp_simulator_scale_in_dynamic_qty_ignores_real_one_share_cap(monkeyp
 
     assert details["sim_uncapped_qty"] is True
     assert details["effective_qty_cap"] == 0
-    assert details["would_qty"] == 3
-    assert details["effective_qty"] == 3
-    assert details["qty"] == 3
+    assert details["would_qty"] == 95
+    assert details["effective_qty"] == 95
+    assert details["qty"] == 95
 
 
 def test_real_scalp_scale_in_uses_orderable_percent_budget_without_one_share_cap(
@@ -3462,13 +3515,13 @@ def test_real_scalp_scale_in_uses_orderable_percent_budget_without_one_share_cap
 
     assert details["sim_uncapped_qty"] is False
     assert details["effective_qty_cap"] == 0
-    assert details["scale_in_budget_ratio"] == 0.30
-    assert details["scale_in_target_budget"] == 300_000
-    assert details["scale_in_safe_budget"] == 285_000
-    assert details["scale_in_budget_qty"] == 28
-    assert details["would_qty"] == 28
-    assert details["effective_qty"] == 28
-    assert details["qty"] == 28
+    assert details["scale_in_budget_ratio"] == 0.10
+    assert details["scale_in_target_budget"] == 100_000
+    assert details["scale_in_safe_budget"] == 95_000
+    assert details["scale_in_budget_qty"] == 9
+    assert details["would_qty"] == 9
+    assert details["effective_qty"] == 9
+    assert details["qty"] == 9
 
 
 def test_real_scalp_pyramid_uses_dynamic_budget_for_one_share_position(monkeypatch):
@@ -3527,10 +3580,10 @@ def test_real_scalp_pyramid_uses_dynamic_budget_for_one_share_position(monkeypat
     )
 
     assert details["sim_uncapped_qty"] is False
-    assert details["scale_in_budget_qty"] == 13
-    assert details["would_qty"] == 13
-    assert details["effective_qty"] == 13
-    assert details["qty"] == 13
+    assert details["scale_in_budget_qty"] == 5
+    assert details["would_qty"] == 5
+    assert details["effective_qty"] == 5
+    assert details["qty"] == 5
     assert details["qty_reason"] == "dynamic_allowed"
     assert details["pyramid_sizing_mode"] == "dynamic_budget"
     assert details["pyramid_position_ratio_cap_applied"] is False
@@ -3593,10 +3646,10 @@ def test_real_scalp_pyramid_uses_dynamic_budget_qty_without_existing_position_ra
         },
     )
 
-    assert details["scale_in_budget_qty"] == 266
-    assert details["would_qty"] == 266
-    assert details["effective_qty"] == 266
-    assert details["qty"] == 266
+    assert details["scale_in_budget_qty"] == 95
+    assert details["would_qty"] == 95
+    assert details["effective_qty"] == 95
+    assert details["qty"] == 95
     assert details["pyramid_sizing_mode"] == "dynamic_budget"
     assert details["pyramid_position_ratio_cap_applied"] is False
 
@@ -3610,6 +3663,7 @@ def test_real_scalp_scale_in_min_one_share_floor_when_percent_budget_is_below_pr
         INVEST_RATIO_SCALPING_MAX=0.30,
         SCALPING_SCALE_IN_DYNAMIC_QTY_ENABLED=True,
         SCALPING_SCALE_IN_MIN_ONE_SHARE_FLOOR_ENABLED=True,
+        MAX_POSITION_PCT=30.0,
     )
     monkeypatch.setattr(scale_in, "TRADING_RULES", rules)
     stock = {
@@ -3618,7 +3672,7 @@ def test_real_scalp_scale_in_min_one_share_floor_when_percent_budget_is_below_pr
         "strategy": "SCALPING",
         "status": "HOLDING",
         "buy_price": 200_000,
-        "buy_qty": 100,
+        "buy_qty": 1,
         "hard_stop_price": 100_000,
         "rt_ai_prob": 0.0,
         "actual_order_submitted": True,

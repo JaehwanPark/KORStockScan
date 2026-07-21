@@ -85,18 +85,16 @@ _CONTRACTS: dict[str, dict[str, Any]] = {
         "missing_components": [],
     },
     "position_sizing_dynamic_formula": {
-        "approval_contract_status": "candidate_grid_active_runtime_apply_blocked",
-        "approval_mode": "candidate_grid_comparison",
+        "approval_contract_status": "implemented_not_runtime_reflected",
+        "approval_mode": "selected_formula_with_flat10_report_comparison",
         "approval_artifact_required": False,
         "approval_artifact_template": "position_sizing_dynamic_formula_{date}.json",
         "approval_artifact_consumer": None,
         "preopen_env_ready": False,
-        "runtime_guard_ready": False,
-        "runtime_scope": "candidate_grid_comparison_only_runtime_apply_blocked",
+        "runtime_guard_ready": True,
+        "runtime_scope": "source_selected_next_approved_process_start_report_apply_blocked",
         "missing_components": [
-            "preopen_env_mapping",
-            "runtime_formula_guard",
-            "approval_preopen_guard_tests",
+            "current_process_restart_not_authorized",
         ],
     },
     "panic_entry_freeze_guard": {

@@ -8,6 +8,7 @@ import re
 import time
 import math
 import threading
+from dataclasses import replace as dataclass_replace
 from datetime import (
     date as date_cls,
     datetime,
@@ -94,18 +95,22 @@ from src.engine.scalping.rising_missed_one_share_entry import (
     BLOCK_OPEN_PENDING as RISING_MISSED_BLOCK_OPEN_PENDING,
     BLOCK_PRICE_ABOVE_CAP as RISING_MISSED_BLOCK_PRICE_ABOVE_CAP,
     BLOCK_UPPER_LIMIT_PROXIMITY as RISING_MISSED_BLOCK_UPPER_LIMIT_PROXIMITY,
-    DEFAULT_RISING_MISSED_SCOUT_ENTRY_BUDGET_CAP_KRW,
     DEFAULT_RISING_MISSED_UPPER_LIMIT_EXCLUDE_PCT,
     DEFAULT_UPPER_LIMIT_PROXIMITY_BLOCK_PCT,
     FORCED_ENTRY_REASON as RISING_MISSED_FORCED_ENTRY_REASON,
     MAX_ONE_SHARE_ENTRY_PRICE_KRW as RISING_MISSED_MAX_ONE_SHARE_ENTRY_PRICE_KRW,
     RISING_MISSED_CLASS_RAW,
     RISING_MISSED_CLASS_NOT_RISING,
-    collapse_to_one_share_order,
     evaluate_rising_missed_normal_buy_bridge,
     evaluate_rising_missed_one_share_entry,
     evaluate_rising_missed_tp1_candidate,
     is_forced_rising_missed_one_share_entry,
+)
+from src.engine.scalping.position_sizing_allocator import (
+    FORMULA_VERSION as SCALPING_SIZING_FORMULA_VERSION,
+    ScalpingSizingContext,
+    infer_scalping_venue,
+    resolve_scalping_allocation,
 )
 from src.engine.scalping.rising_missed_selection_prior import (
     rising_missed_selection_prior_fields,
@@ -8750,9 +8755,43 @@ def handle_scalp_simulator_pending_entry(
         return False
     now_ts = now_ts or time.time()
     limit_price = _safe_int(stock.get("scalp_sim_entry_limit_price"), 0)
-    qty = _safe_int(
-        stock.get("scalp_sim_entry_qty"), _rule_int("SCALP_LIVE_SIMULATOR_QTY", 1) or 1
-    )
+    qty = _safe_int(stock.get("scalp_sim_entry_qty"), 0)
+    if qty <= 0:
+        restored_qty = _resolve_scalp_sim_entry_qty(
+            stock,
+            ws_data or {},
+            {
+                "now_ts": now_ts,
+                "effective_venue": stock.get("effective_venue"),
+                "source_signature": stock.get("source_signature"),
+            },
+        )
+        qty = max(0, _safe_int(restored_qty.get("qty"), 0))
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                "scalp_sim_entry_qty": qty,
+                "scalp_sim_entry_qty_source": restored_qty.get("qty_source"),
+                **{
+                    f"scalping_sizing_{key}": restored_qty.get(key)
+                    for key in (
+                        "formula_version",
+                        "tier",
+                        "ratio",
+                        "tier_reason",
+                        "source_count",
+                        "reference_time",
+                        "venue",
+                        "target_budget",
+                        "safe_budget",
+                        "pre_cap_qty",
+                        "binding_caps",
+                        "allocation_stage",
+                    )
+                    if restored_qty.get(key) not in (None, "")
+                },
+            },
+        )
     fill_info = _scalp_sim_buy_signal_inclusive_fill(ws_data or {}, limit_price)
     fill_price = _safe_int(fill_info.get("fill_price"), 0)
     if fill_price <= 0:
@@ -8792,65 +8831,71 @@ def handle_scalp_simulator_pending_entry(
 
 
 def _resolve_scalp_sim_entry_qty(stock: dict, ws_data: dict, runtime: dict) -> dict:
-    configured_qty = _rule_int("SCALP_LIVE_SIMULATOR_QTY", 0)
-    if configured_qty > 0:
-        virtual_budget = _sim_virtual_budget_krw()
-        return {
-            "qty": configured_qty,
-            "qty_source": "fixed_config",
-            "uncapped_qty": configured_qty,
-            "cap_applied": False,
-            "qty_reason": "fixed_config",
-            "virtual_budget_override": True,
-            "virtual_budget_krw": virtual_budget,
-            "virtual_notional_used_krw": 0,
-            "budget_authority": "sim_virtual_not_real_orderable_amount",
-        }
-
     curr_price = _safe_int(
         (ws_data or {}).get("curr")
         or stock.get("target_buy_price")
         or stock.get("entry_armed_target_buy_price"),
         0,
     )
-    ratio = _safe_float((runtime or {}).get("ratio"), 0.0)
-    effective_ratio = ratio if ratio > 0 else 1.0
-    budget_cap = int(_rule("SCALPING_MAX_BUY_BUDGET_KRW", 0) or 0)
-    capacity = _describe_sim_virtual_buy_capacity(
-        curr_price, effective_ratio, max_budget=budget_cap
+    reference_time = (runtime or {}).get("now_dt") or datetime.fromtimestamp(
+        _safe_float((runtime or {}).get("now_ts"), time.time()), tz=_KST
     )
-    qty = _safe_int(capacity.get("qty"), 1)
+    explicit_venue = (
+        (runtime or {}).get("rising_missed_effective_venue")
+        or stock.get("rising_missed_effective_venue")
+        or (runtime or {}).get("effective_venue")
+        or stock.get("effective_venue")
+    )
+    budget_cap = int(_rule("SCALPING_MAX_BUY_BUDGET_KRW", 0) or 0)
+    virtual_budget = _sim_virtual_budget_krw()
+    decision = resolve_scalping_allocation(
+        ScalpingSizingContext(
+            allocation_stage="sim_initial_entry",
+            reference_time=reference_time,
+            source_signature=(
+                stock.get("source_signature")
+                or stock.get("scanner_source_signature")
+                or (runtime or {}).get("source_signature")
+            ),
+            effective_venue=infer_scalping_venue(reference_time, explicit_venue),
+            budget_base_krw=virtual_budget,
+            price_krw=curr_price,
+            safety_ratio=_rule_float("BUY_BUDGET_SAFETY_RATIO", 0.95),
+            absolute_budget_cap_krw=budget_cap,
+            min_one_share_floor_enabled=True,
+            simulation=True,
+        )
+    )
+    qty = decision.effective_qty
+    sizing_fields = decision.event_fields()
     if curr_price <= 0:
         return {
             "qty": qty,
-            "qty_source": "sim_virtual_budget_dynamic_formula",
+            "qty_source": "scalping_position_sizing_allocator",
             "uncapped_qty": qty,
             "cap_applied": False,
             "qty_reason": "missing_price",
             "curr_price": curr_price,
-            "ratio": f"{effective_ratio:.4f}",
             "virtual_budget_override": True,
-            "virtual_budget_krw": capacity.get("virtual_budget_krw"),
+            "virtual_budget_krw": virtual_budget,
             "virtual_notional_used_krw": 0,
             "budget_authority": "sim_virtual_not_real_orderable_amount",
+            **sizing_fields,
         }
 
     return {
         "qty": qty,
-        "qty_source": "sim_virtual_budget_dynamic_formula",
-        "uncapped_qty": qty,
-        "cap_applied": False,
-        "qty_reason": "sim_uses_virtual_budget_with_live_qty_formula",
+        "qty_source": "scalping_position_sizing_allocator",
+        "uncapped_qty": decision.pre_cap_qty,
+        "cap_applied": bool(decision.binding_caps),
+        "qty_reason": "sim_uses_central_scalping_allocator",
         "curr_price": curr_price,
-        "ratio": f"{effective_ratio:.4f}",
-        "target_budget": capacity.get("target_budget"),
-        "safe_budget": capacity.get("safe_budget"),
-        "safety_ratio": f"{float(capacity.get('safety_ratio') or 0.0):.4f}",
         "budget_cap": budget_cap if budget_cap > 0 else "-",
         "virtual_budget_override": True,
-        "virtual_budget_krw": capacity.get("virtual_budget_krw"),
+        "virtual_budget_krw": virtual_budget,
         "virtual_notional_used_krw": int(curr_price * qty),
         "budget_authority": "sim_virtual_not_real_orderable_amount",
+        **sizing_fields,
     }
 
 
@@ -9598,8 +9643,21 @@ def maybe_arm_scalp_live_simulator_from_buy_signal(
         0,
     )
     qty_details = _resolve_scalp_sim_entry_qty(stock, ws_data or {}, runtime or {})
-    qty = max(1, _safe_int(qty_details.get("qty"), 1))
+    qty = max(0, _safe_int(qty_details.get("qty"), 0))
     qty_log_fields = {k: v for k, v in qty_details.items() if k != "qty"}
+    if qty <= 0:
+        _log_entry_pipeline(
+            stock,
+            code,
+            "scalp_live_simulator_discarded",
+            **_scalp_sim_event_fields(
+                threshold_family="position_sizing_dynamic_formula",
+                sim_parent_record_id=stock.get("id"),
+                discard_reason="central_allocator_zero_qty",
+                **qty_log_fields,
+            ),
+        )
+        return False
     pre_ai_context_fields = _scalp_pre_ai_gate_context_log_fields(
         runtime.get("scalp_pre_ai_gate_context") if isinstance(runtime, dict) else {}
     )
@@ -9607,6 +9665,24 @@ def maybe_arm_scalp_live_simulator_from_buy_signal(
     sim_record_id = _simulated_order_no("SCALPSIM", code)
     sim_ord_no = _simulated_order_no("SIMBUY", code)
     sim_target = dict(stock)
+    sim_sizing_state = {
+        f"scalping_sizing_{key}": qty_details.get(key)
+        for key in (
+            "formula_version",
+            "tier",
+            "ratio",
+            "tier_reason",
+            "source_count",
+            "reference_time",
+            "venue",
+            "target_budget",
+            "safe_budget",
+            "pre_cap_qty",
+            "binding_caps",
+            "allocation_stage",
+        )
+        if qty_details.get(key) not in (None, "")
+    }
     sim_target.update(
         {
             "id": None,
@@ -9641,6 +9717,7 @@ def maybe_arm_scalp_live_simulator_from_buy_signal(
             "entry_mode": stock.get("entry_mode") or "scalp_sim_ai_buy_all",
             "rt_ai_prob": current_ai_score / 100.0,
             "msg_audience": "ADMIN_ONLY",
+            **sim_sizing_state,
             **_scalp_sim_candidate_window_context_fields(stock),
         }
     )
@@ -9858,7 +9935,9 @@ def maybe_arm_scalp_live_simulator_from_buy_signal(
                 **_scalp_sim_candidate_window_context_fields(sim_target),
             ),
         )
-    if _is_passive_probe_stale_submit_block(sim_submit_revalidation_fields):
+    if _is_passive_probe_stale_submit_block(
+        sim_submit_revalidation_fields
+    ) or _is_standard_stale_submit_block(sim_submit_revalidation_fields):
         _log_entry_pipeline(
             sim_target,
             code,
@@ -12015,11 +12094,76 @@ def _apply_latency_false_negative_remeasure_report_marker(
     return fields
 
 
+_SCALPING_SIZING_STATE_FIELD_MAP = {
+    "scalping_sizing_formula_version": "formula_version",
+    "scalping_sizing_tier": "tier",
+    "scalping_sizing_ratio": "ratio",
+    "scalping_sizing_tier_reason": "tier_reason",
+    "scalping_sizing_source_count": "source_count",
+    "scalping_sizing_reference_time": "reference_time",
+    "scalping_sizing_venue": "venue",
+    "scalping_sizing_target_budget": "target_budget",
+    "scalping_sizing_safe_budget": "safe_budget",
+    "scalping_sizing_pre_cap_qty": "pre_cap_qty",
+    "scalping_sizing_effective_qty": "effective_qty",
+    "scalping_sizing_binding_caps": "binding_caps",
+    "scalping_sizing_allocation_stage": "allocation_stage",
+}
+
+
+def _scalping_sizing_state_fields(stock: dict | None) -> dict[str, Any]:
+    if not isinstance(stock, dict):
+        return {}
+    if str(stock.get("scalping_sizing_formula_version") or "") != (
+        SCALPING_SIZING_FORMULA_VERSION
+    ):
+        return {}
+    event_fields = {
+        event_key: stock.get(state_key)
+        for state_key, event_key in _SCALPING_SIZING_STATE_FIELD_MAP.items()
+        if stock.get(state_key) not in (None, "")
+    }
+    event_fields["strategy"] = normalize_strategy(stock.get("strategy"))
+    source_signature = stock.get("source_signature") or stock.get(
+        "scanner_source_signature"
+    )
+    if source_signature not in (None, ""):
+        event_fields["source_signature"] = source_signature
+    return event_fields
+
+
+def _store_scalping_sizing_decision(stock: dict, decision) -> dict[str, Any]:
+    event_fields = decision.event_fields()
+    state_fields = {
+        f"scalping_sizing_{key}": value
+        for key, value in event_fields.items()
+        if key
+        in {
+            "formula_version",
+            "tier",
+            "ratio",
+            "tier_reason",
+            "source_count",
+            "reference_time",
+            "venue",
+            "target_budget",
+            "safe_budget",
+            "pre_cap_qty",
+            "effective_qty",
+            "binding_caps",
+            "allocation_stage",
+        }
+    }
+    _mutate_stock_state(stock, set_fields=state_fields)
+    return event_fields
+
+
 def _log_entry_pipeline(stock, code, stage, **fields):
     record_id = stock.get("id") if isinstance(stock, dict) else None
     merged_fields = {
         **_scanner_promotion_correlation_fields(stock),
         **_rising_missed_tp1_observation_context_log_fields(stock),
+        **_scalping_sizing_state_fields(stock),
         **fields,
     }
     _remember_scanner_terminal_block(stock, stage, merged_fields)
@@ -17898,29 +18042,46 @@ def _apply_scalp_loss_reentry_rebound_bypass(
 
 
 def _apply_scalp_loss_reentry_rebound_canary_qty(
-    stock: dict | None,
+    sizing_context: ScalpingSizingContext | None,
+    sizing_decision,
     *,
-    strategy: str,
-    curr_price: int,
-    deposit: int,
-    target_budget: int,
-    safe_budget: int,
-    real_buy_qty: int,
-    used_safety_ratio: float,
     bypass: dict | None = None,
-) -> tuple[int, int, int, float, bool]:
-    if (
-        str(strategy or "").upper() != "SCALPING"
-        or not isinstance(stock, dict)
-        or not bool((bypass or {}).get("allowed"))
-    ):
-        return target_budget, safe_budget, real_buy_qty, used_safety_ratio, False
+) -> tuple[ScalpingSizingContext | None, Any, bool]:
+    if not bool((bypass or {}).get("allowed")):
+        return sizing_context, sizing_decision, False
     force_qty = max(1, _safe_int((bypass or {}).get("force_qty"), 1))
-    if _safe_int(deposit, 0) < int(curr_price or 0) or int(curr_price or 0) <= 0:
-        return target_budget, safe_budget, real_buy_qty, used_safety_ratio, False
-    canary_qty = max(1, min(force_qty, max(1, int(real_buy_qty or 1))))
-    canary_budget = int(curr_price) * canary_qty
-    return canary_budget, canary_budget, canary_qty, 1.0, True
+    return _apply_scalping_sizing_stage_qty_cap(
+        sizing_context,
+        sizing_decision,
+        stage_qty_cap=force_qty,
+    )
+
+
+def _apply_scalping_sizing_stage_qty_cap(
+    sizing_context: ScalpingSizingContext | None,
+    sizing_decision,
+    *,
+    stage_qty_cap: int,
+) -> tuple[ScalpingSizingContext | None, Any, bool]:
+    """Apply a downstream quantity limit without creating a second sizing owner."""
+    if sizing_context is None or sizing_decision is None:
+        return sizing_context, sizing_decision, False
+    effective_cap = max(0, _safe_int(stage_qty_cap, 0))
+    if sizing_context.stage_qty_cap is not None:
+        effective_cap = min(
+            effective_cap,
+            max(0, _safe_int(sizing_context.stage_qty_cap, 0)),
+        )
+    capped_context = dataclass_replace(
+        sizing_context,
+        stage_qty_cap=effective_cap,
+    )
+    capped_decision = resolve_scalping_allocation(capped_context)
+    return (
+        capped_context,
+        capped_decision,
+        capped_decision.effective_qty < sizing_decision.effective_qty,
+    )
 
 
 def _scalp_loss_reentry_guard_log_fields(decision: dict | None) -> dict:
@@ -40543,11 +40704,6 @@ def _opening_rotation_float(name: str, default: float) -> float:
 
 
 def _opening_rotation_entry_config() -> OpeningRotationEntryConfig:
-    min_ratio = _rule_float("INVEST_RATIO_SCALPING_MIN", 0.10)
-    max_ratio = _rule_float("INVEST_RATIO_SCALPING_MAX", 0.30)
-    requested_ratio = _opening_rotation_float(
-        "OPENING_ROTATION_1PCT_BUDGET_RATIO", 0.10
-    )
     return OpeningRotationEntryConfig(
         enabled=_env_or_rule_bool("OPENING_ROTATION_1PCT_ENABLED", True),
         observe_start=_opening_rotation_time(
@@ -40610,7 +40766,8 @@ def _opening_rotation_entry_config() -> OpeningRotationEntryConfig:
         max_vi_risk_score=_opening_rotation_float(
             "OPENING_ROTATION_1PCT_MAX_VI_RISK_SCORE", 69.0
         ),
-        budget_ratio=max(min_ratio, min(max_ratio, requested_ratio)),
+        # Compatibility-only field; the central allocator owns actual sizing.
+        budget_ratio=0.10,
         mechanical_signal_strength=max(
             0.0,
             min(
@@ -41344,7 +41501,7 @@ def _handle_watching_opening_rotation(stock, code, ws_data, runtime, config) -> 
         {
             "pos_tag": OPENING_ROTATION_POSITION_TAG,
             "curr_price": current_price,
-            "ratio": float(decision.get("budget_ratio", entry_config.budget_ratio)),
+            "ratio": 0.10,
             "liquidity_value": liquidity_value,
             "scalp_liquidity_value": liquidity_value,
             "scalp_min_liquidity": int(config.get("MIN_SCALP_LIQUIDITY", 500_000_000)),
@@ -41415,9 +41572,9 @@ def _handle_watching_strategy_branch(
             return True
 
         current_ai_score = float(stock.get("rt_ai_prob", 0.5) or 0.5) * 100
-        min_ratio = config["INVEST_RATIO_SCALPING_MIN"]
-        max_ratio = config["INVEST_RATIO_SCALPING_MAX"]
-        ratio = min_ratio + (current_ai_score / 100.0) * (max_ratio - min_ratio)
+        # Quantity authority is resolved only after the orderable budget is
+        # known.  Score remains an entry feature and cannot set the ratio.
+        ratio = 0.10
 
         ask_tot = _safe_int(ws_data.get("ask_tot"), 0)
         bid_tot = _safe_int(ws_data.get("bid_tot"), 0)
@@ -41468,7 +41625,6 @@ def _handle_watching_strategy_branch(
             current_ai_score = float(
                 entry_arm.get("ai_score", current_ai_score) or current_ai_score
             )
-            ratio = float(entry_arm.get("ratio", ratio) or ratio)
             _mutate_stock_state(
                 stock,
                 set_fields={
@@ -41487,7 +41643,7 @@ def _handle_watching_strategy_branch(
                 code,
                 "entry_armed_resume",
                 ai_score=f"{current_ai_score:.1f}",
-                ratio=f"{ratio:.4f}",
+                ratio_authority=SCALPING_SIZING_FORMULA_VERSION,
                 remaining_sec=f"{float(entry_arm.get('remaining_sec', 0.0) or 0.0):.1f}",
                 armed_reason=entry_arm.get("reason"),
                 dynamic_reason=entry_arm.get("dynamic_reason"),
@@ -45201,41 +45357,114 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         }
     )
     budget_base = max(0, _safe_int(budget_context.get("budget_base"), deposit))
-    uncapped_target_budget = int(max(float(budget_base) * float(ratio), 0.0))
     budget_cap = 0
     if strategy == "SCALPING":
         budget_cap = int(_rule("SCALPING_MAX_BUY_BUDGET_KRW", 0) or 0)
     min_one_share_floor_enabled = strategy == "SCALPING" and bool(
         _rule("SCALPING_MIN_ONE_SHARE_FLOOR_ENABLED", True)
     )
-    target_budget, safe_budget, real_buy_qty, used_safety_ratio = (
-        kiwoom_orders.describe_buy_capacity(
-            curr_price,
-            budget_base,
-            ratio,
-            max_budget=budget_cap,
-            allow_min_one_share_over_budget=min_one_share_floor_enabled,
+    sizing_fields: dict[str, Any] = {}
+    sizing_context: ScalpingSizingContext | None = None
+    sizing_decision = None
+    if strategy == "SCALPING":
+        sizing_reference_time = runtime.get("now_dt") or datetime.fromtimestamp(
+            float(now_ts), tz=_KST
         )
-    )
-    cash_orderable_qty_cap = budget_context.get("cash_orderable_qty_cap")
-    if cash_orderable_qty_cap is not None:
-        real_buy_qty = min(real_buy_qty, max(0, _safe_int(cash_orderable_qty_cap, 0)))
-    if forced_rising_missed_one_share and _safe_int(budget_base, 0) >= curr_price > 0:
-        affordable_qty = max(0, _safe_int(budget_base, 0) // curr_price)
-        real_buy_qty = min(max(1, forced_rising_missed_scout_qty), affordable_qty)
-        if cash_orderable_qty_cap is not None:
-            real_buy_qty = min(
-                real_buy_qty, max(0, _safe_int(cash_orderable_qty_cap, 0))
+        sizing_explicit_venue = (
+            runtime.get("rising_missed_effective_venue")
+            or stock.get("rising_missed_effective_venue")
+            or runtime.get("effective_venue")
+            or stock.get("effective_venue")
+        )
+        allocation_stage = (
+            "rising_missed_scout_initial"
+            if forced_rising_missed_one_share
+            else (
+                "rising_missed_scout_upgrade"
+                if scout_upgrade_entry
+                else (
+                    "opening_rotation_initial"
+                    if opening_rotation_active
+                    else "initial_entry"
+                )
             )
-        target_budget = curr_price * real_buy_qty
-        safe_budget = target_budget
-        used_safety_ratio = 1.0
+        )
+        initial_tier = (
+            _safe_int(stock.get("scalping_sizing_tier"), 0)
+            if scout_upgrade_entry
+            else None
+        )
+        initial_formula_version = (
+            str(stock.get("scalping_sizing_formula_version") or "")
+            if scout_upgrade_entry
+            else None
+        )
+        sizing_context = ScalpingSizingContext(
+            allocation_stage=allocation_stage,
+            reference_time=sizing_reference_time,
+            source_signature=(
+                stock.get("source_signature")
+                or stock.get("scanner_source_signature")
+                or runtime.get("source_signature")
+            ),
+            effective_venue=infer_scalping_venue(
+                sizing_reference_time, sizing_explicit_venue
+            ),
+            budget_base_krw=budget_base,
+            price_krw=curr_price,
+            safety_ratio=_rule_float("BUY_BUDGET_SAFETY_RATIO", 0.95),
+            absolute_budget_cap_krw=budget_cap,
+            current_position_qty=_safe_int(stock.get("buy_qty"), 0),
+            cash_orderable_qty_cap=budget_context.get("cash_orderable_qty_cap"),
+            min_one_share_floor_enabled=min_one_share_floor_enabled,
+            initial_tier=initial_tier,
+            initial_formula_version=initial_formula_version,
+        )
+        sizing_decision = resolve_scalping_allocation(sizing_context)
+        sizing_fields = _store_scalping_sizing_decision(stock, sizing_decision)
+        ratio = sizing_decision.ratio
+        target_budget = sizing_decision.target_budget
+        safe_budget = sizing_decision.safe_budget
+        real_buy_qty = sizing_decision.effective_qty
+        used_safety_ratio = sizing_decision.safety_ratio
+        runtime["ratio"] = ratio
+        runtime["scalping_sizing_decision"] = sizing_fields
+        if forced_rising_missed_one_share and real_buy_qty > 0:
+            _mutate_stock_state(
+                stock,
+                set_fields={
+                    "forced_entry_qty": real_buy_qty,
+                    "rising_missed_scout_sizing_mode": (
+                        SCALPING_SIZING_FORMULA_VERSION
+                    ),
+                },
+            )
+            runtime["forced_entry_qty"] = real_buy_qty
+            forced_rising_missed_scout_qty = real_buy_qty
+    else:
+        target_budget, safe_budget, real_buy_qty, used_safety_ratio = (
+            kiwoom_orders.describe_buy_capacity(
+                curr_price,
+                budget_base,
+                ratio,
+                max_budget=budget_cap,
+                allow_min_one_share_over_budget=min_one_share_floor_enabled,
+            )
+        )
+    uncapped_target_budget = int(max(float(budget_base) * float(ratio), 0.0))
+    cash_orderable_qty_cap = budget_context.get("cash_orderable_qty_cap")
+    if strategy != "SCALPING" and cash_orderable_qty_cap is not None:
+        real_buy_qty = min(real_buy_qty, max(0, _safe_int(cash_orderable_qty_cap, 0)))
     budget_cap_applied = budget_cap > 0 and target_budget < uncapped_target_budget
-    min_one_share_floor_applied = (
-        min_one_share_floor_enabled
-        and real_buy_qty == 1
-        and safe_budget < curr_price
-        and _safe_int(budget_base, 0) >= curr_price
+    min_one_share_floor_applied = bool(
+        sizing_fields.get("min_one_share_floor_applied")
+        if strategy == "SCALPING"
+        else (
+            min_one_share_floor_enabled
+            and real_buy_qty == 1
+            and safe_budget < curr_price
+            and _safe_int(budget_base, 0) >= curr_price
+        )
     )
     budget_cap_msg = f", 절대한도 {budget_cap:,}원 적용" if budget_cap_applied else ""
 
@@ -45289,7 +45518,8 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             safe_budget=safe_budget,
             safety_ratio=f"{used_safety_ratio:.4f}",
             curr_price=curr_price,
-            budget_cap=budget_cap if budget_cap_applied else "-",
+            budget_cap=budget_cap if budget_cap > 0 else "-",
+            budget_cap_applied=budget_cap_applied,
             cooldown_sec=zero_qty_cooldown_sec,
             min_one_share_floor_enabled=min_one_share_floor_enabled,
             min_one_share_floor_applied=False,
@@ -45349,7 +45579,8 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         target_budget=target_budget,
         safe_budget=safe_budget,
         safety_ratio=f"{used_safety_ratio:.4f}",
-        budget_cap=budget_cap if budget_cap_applied else "-",
+        budget_cap=budget_cap if budget_cap > 0 else "-",
+        budget_cap_applied=budget_cap_applied,
         qty=real_buy_qty,
         min_one_share_floor_enabled=min_one_share_floor_enabled,
         min_one_share_floor_applied=min_one_share_floor_applied,
@@ -45430,23 +45661,29 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 )
                 return False
         (
-            target_budget,
-            safe_budget,
-            real_buy_qty,
-            used_safety_ratio,
+            sizing_context,
+            capped_sizing_decision,
             loss_reentry_canary_qty_applied,
         ) = _apply_scalp_loss_reentry_rebound_canary_qty(
-            stock,
-            strategy=strategy,
-            curr_price=curr_price,
-            deposit=deposit,
-            target_budget=target_budget,
-            safe_budget=safe_budget,
-            real_buy_qty=real_buy_qty,
-            used_safety_ratio=used_safety_ratio,
+            sizing_context,
+            sizing_decision,
             bypass=loss_reentry_rebound_bypass,
         )
         if loss_reentry_canary_qty_applied:
+            sizing_decision = capped_sizing_decision
+            sizing_fields = _store_scalping_sizing_decision(stock, sizing_decision)
+            target_budget = sizing_decision.target_budget
+            safe_budget = sizing_decision.safe_budget
+            real_buy_qty = sizing_decision.effective_qty
+            used_safety_ratio = sizing_decision.safety_ratio
+            runtime["scalping_sizing_decision"] = sizing_fields
+            if forced_rising_missed_one_share:
+                forced_rising_missed_scout_qty = real_buy_qty
+                runtime["forced_entry_qty"] = real_buy_qty
+                _mutate_stock_state(
+                    stock,
+                    set_fields={"forced_entry_qty": real_buy_qty},
+                )
             _log_entry_pipeline(
                 stock,
                 code,
@@ -46094,6 +46331,27 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         if scaled_qty > 0:
             requested_qty = scaled_qty
         wait6579_probe_applied = bool(applied)
+        if wait6579_probe_applied:
+            sizing_context, capped_sizing_decision, _ = (
+                _apply_scalping_sizing_stage_qty_cap(
+                    sizing_context,
+                    sizing_decision,
+                    stage_qty_cap=scaled_qty,
+                )
+            )
+            if capped_sizing_decision is not None:
+                sizing_decision = capped_sizing_decision
+                sizing_fields = _store_scalping_sizing_decision(stock, sizing_decision)
+                target_budget = sizing_decision.target_budget
+                safe_budget = sizing_decision.safe_budget
+                real_buy_qty = sizing_decision.effective_qty
+                used_safety_ratio = sizing_decision.safety_ratio
+                runtime["scalping_sizing_decision"] = sizing_fields
+                planned_orders, _, requested_qty, _ = _apply_initial_entry_qty_cap(
+                    planned_orders,
+                    max_total_qty=real_buy_qty,
+                )
+                latency_gate["orders"] = planned_orders
         _log_entry_pipeline(
             stock,
             code,
@@ -46772,32 +47030,21 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         )
         return False
     if forced_rising_missed_one_share:
-        planned_orders = collapse_to_one_share_order(
-            planned_orders,
-            fallback_price=int(
-                latency_gate.get("order_price", 0) or final_price or curr_price or 0
-            ),
-            forced_qty=requested_qty,
-        )
-        latency_gate["orders"] = planned_orders
-        requested_qty = max(
-            1, _safe_int(requested_qty, forced_rising_missed_scout_qty or 1)
-        )
-        latency_price_snapshot = _build_entry_price_snapshot_fields(
-            latency_gate,
-            request_price=planned_orders[0].get("price", 0),
-            curr_price=curr_price,
-            best_bid=best_bid_at_submit,
-            best_ask=best_ask_at_submit,
-        )
+        # Rising-missed is a selection lineage.  Keep the common probe-first /
+        # multi-leg plan and never collapse the allocator's total quantity.
         _log_entry_pipeline(
             stock,
             code,
-            "rising_missed_one_share_entry_order_plan_forced",
+            "rising_missed_scout_allocator_order_plan",
             forced_entry_reason=RISING_MISSED_FORCED_ENTRY_REASON,
             forced_entry_qty=requested_qty,
             planned_order_count=len(planned_orders),
-            planned_order_price=planned_orders[0].get("price", 0),
+            planned_order_total_qty=sum(
+                max(0, _safe_int(order.get("qty"), 0)) for order in planned_orders
+            ),
+            planned_order_price=(
+                planned_orders[0].get("price", 0) if planned_orders else 0
+            ),
             actual_order_submitted=False,
             broker_order_forbidden=False,
         )
@@ -49639,7 +49886,6 @@ def _clear_entry_arm(stock):
             "entry_armed_until",
             "entry_armed_reason",
             "entry_armed_ai_score",
-            "entry_armed_ratio",
             "entry_armed_target_buy_price",
             "entry_armed_vpw",
             "entry_armed_dynamic_reason",
@@ -49669,7 +49915,6 @@ def _activate_entry_arm(
             "entry_armed_until": now_ts + ttl_sec,
             "entry_armed_reason": reason,
             "entry_armed_ai_score": float(ai_score),
-            "entry_armed_ratio": float(ratio),
             "entry_armed_target_buy_price": int(target_buy_price or 0),
             "entry_armed_vpw": float(current_vpw),
             "entry_armed_dynamic_reason": dynamic_reason,
@@ -49685,7 +49930,7 @@ def _activate_entry_arm(
         runtime_effect=False,
         forbidden_uses="runtime_threshold_apply/order_submit/provider_route_change/bot_restart",
         ai_score=f"{float(ai_score):.1f}",
-        ratio=f"{float(ratio):.4f}",
+        ratio_authority=SCALPING_SIZING_FORMULA_VERSION,
         target_buy_price=int(target_buy_price or 0),
         current_vpw=f"{float(current_vpw):.1f}",
         reason=reason,
@@ -49728,7 +49973,6 @@ def _get_live_entry_arm(stock, code):
         "expires_at": expires_at,
         "remaining_sec": max(0.0, expires_at - now_ts),
         "ai_score": float(stock.get("entry_armed_ai_score", 50.0) or 50.0),
-        "ratio": float(stock.get("entry_armed_ratio", 0.10) or 0.10),
         "target_buy_price": int(stock.get("entry_armed_target_buy_price", 0) or 0),
         "current_vpw": float(stock.get("entry_armed_vpw", 0.0) or 0.0),
         "reason": stock.get("entry_armed_reason"),
@@ -51844,13 +52088,9 @@ def _rising_missed_one_share_entry_max_price_krw() -> int:
 
 
 def _rising_missed_scout_entry_budget_cap_krw() -> int:
-    return max(
-        0,
-        _env_int(
-            "KORSTOCKSCAN_RISING_MISSED_SCOUT_ENTRY_BUDGET_CAP_KRW",
-            DEFAULT_RISING_MISSED_SCOUT_ENTRY_BUDGET_CAP_KRW,
-        ),
-    )
+    """Legacy call-site compatibility; scout sizing is centralized."""
+
+    return 0
 
 
 def _maybe_submit_rising_missed_one_share_entry(
@@ -52209,7 +52449,8 @@ def _maybe_submit_rising_missed_one_share_entry(
             "is_trigger": True,
             "msg": (
                 f"✅ **{stock.get('name')} ({code}) rising missed scout 진입 주문 전송!**\n"
-                f"전략: `{strategy}`\n현재가: `{curr_price:,}원`\n주문 수량: `{forced_entry_qty}주`"
+                f"전략: `{strategy}`\n현재가: `{curr_price:,}원`\n"
+                "주문 수량: `5단계 중앙 배분기에서 제출 직전 확정`"
             ),
             "ratio": 0.0,
             "liquidity_value": None,
@@ -55405,8 +55646,6 @@ def handle_watching_state(
     SNIPER_AGGRESSIVE_PROB = _rule_float("SNIPER_AGGRESSIVE_PROB", 0.70)
     BUY_SCORE_THRESHOLD = _rule_float("BUY_SCORE_THRESHOLD", 70)
     VPW_STRONG_LIMIT = _rule_float("VPW_STRONG_LIMIT", 120)
-    INVEST_RATIO_SCALPING_MIN = _rule_float("INVEST_RATIO_SCALPING_MIN", 0.10)
-    INVEST_RATIO_SCALPING_MAX = _rule_float("INVEST_RATIO_SCALPING_MAX", 0.30)
     VPW_SCALP_LIMIT = _rule_float("VPW_SCALP_LIMIT", 120)
     AI_WATCHING_COOLDOWN = _rule_int("AI_WATCHING_COOLDOWN", 60)
     VIP_LIQUIDITY_THRESHOLD = _rule_float("VIP_LIQUIDITY_THRESHOLD", 1_000_000_000)
@@ -55688,8 +55927,6 @@ def handle_watching_state(
         "SNIPER_AGGRESSIVE_PROB": SNIPER_AGGRESSIVE_PROB,
         "BUY_SCORE_THRESHOLD": BUY_SCORE_THRESHOLD,
         "VPW_STRONG_LIMIT": VPW_STRONG_LIMIT,
-        "INVEST_RATIO_SCALPING_MIN": INVEST_RATIO_SCALPING_MIN,
-        "INVEST_RATIO_SCALPING_MAX": INVEST_RATIO_SCALPING_MAX,
         "VPW_SCALP_LIMIT": VPW_SCALP_LIMIT,
         "AI_WATCHING_COOLDOWN": AI_WATCHING_COOLDOWN,
         "VIP_LIQUIDITY_THRESHOLD": VIP_LIQUIDITY_THRESHOLD,
@@ -63779,6 +64016,11 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
         if simulated_position
         else {}
     )
+    pre_sizing_initial_qty_limit = (
+        _scale_in_quantity_limit_decision(stock, requested_qty=0)
+        if strategy == "SCALPING"
+        else None
+    )
     qty_details = describe_dynamic_scale_in_qty(
         stock=stock,
         resolved_price=qty_price,
@@ -63792,6 +64034,15 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
         budget_source=budget_context.get("budget_source"),
         account_deposit=budget_context.get("account_deposit"),
         cash_orderable_amount=budget_context.get("cash_orderable_amount"),
+        effective_venue=infer_scalping_venue(
+            datetime.now(tz=_KST),
+            stock.get("rising_missed_effective_venue") or stock.get("effective_venue"),
+        ),
+        stage_qty_cap=(
+            pre_sizing_initial_qty_limit.get("remaining_scale_in_qty")
+            if pre_sizing_initial_qty_limit is not None
+            else None
+        ),
     )
     qty = int(qty_details.get("qty", 0) or 0)
     template_qty = int(qty_details.get("template_qty", 0) or 0)
@@ -63864,6 +64115,19 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             "scale_in_account_deposit",
             "scale_in_cash_orderable_amount",
             "scale_in_cash_orderable_qty_cap",
+            "formula_version",
+            "tier",
+            "ratio",
+            "tier_reason",
+            "source_count",
+            "reference_time",
+            "venue",
+            "target_budget",
+            "safe_budget",
+            "pre_cap_qty",
+            "binding_caps",
+            "allocation_stage",
+            "scale_in_sizing_authority",
             "initial_buy_qty",
             "max_scale_in_qty",
             "scale_in_filled_qty",
@@ -64913,6 +65177,28 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
         log_info(
             f"✅ [{stock.get('name')}] 추가매수 주문 전송 완료. "
             f"type={add_type}, qty={submitted_qty}, ord_no={joined_ord_nos}"
+        )
+    if strategy == "SCALPING":
+        _log_holding_pipeline(
+            stock,
+            code,
+            "scale_in_order_submitted",
+            strategy=strategy,
+            add_type=add_type,
+            scale_in_type=add_type,
+            add_trigger=action.get("reason"),
+            qty=submitted_qty,
+            effective_qty=effective_qty,
+            submitted_qty=submitted_qty,
+            submitted_leg_count=len(submitted_results),
+            ord_no=joined_ord_nos or "-",
+            resolved_price=resolved_price,
+            partial_submit_failure=partial_submit_failure or "-",
+            actual_order_submitted=True,
+            broker_order_forbidden=False,
+            runtime_effect=True,
+            **scale_in_qty_budget_fields,
+            **sim_budget_fields,
         )
     _publish_greenfield_stage_notice(
         stock,

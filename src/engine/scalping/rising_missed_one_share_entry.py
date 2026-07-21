@@ -18,7 +18,9 @@ BLOCK_ENTRY_AI_NOT_EVALUATED = "entry_ai_action_not_evaluated"
 BLOCK_ENTRY_AI_ACTION_NOT_BUY = "entry_ai_action_not_buy"
 NORMAL_BUY_BRIDGE_REASON = "rising_missed_normal_buy_bridge_ok"
 MAX_ONE_SHARE_ENTRY_PRICE_KRW = 1_000_000
-DEFAULT_RISING_MISSED_SCOUT_ENTRY_BUDGET_CAP_KRW = 400_000
+# Legacy compatibility only.  Rising-missed no longer owns a budget cap;
+# position_sizing_allocator resolves the real quantity at submit time.
+DEFAULT_RISING_MISSED_SCOUT_ENTRY_BUDGET_CAP_KRW = 0
 DEFAULT_RISING_MISSED_UPPER_LIMIT_EXCLUDE_PCT = 22.0
 DEFAULT_UPPER_LIMIT_PROXIMITY_BLOCK_PCT = 27.0
 RISING_MISSED_OPPORTUNITY_COST_POLICY = "balanced"
@@ -626,23 +628,14 @@ def resolve_rising_missed_scout_forced_qty(
     budget_cap_krw: Any = DEFAULT_RISING_MISSED_SCOUT_ENTRY_BUDGET_CAP_KRW,
 ) -> tuple[int, dict[str, Any]]:
     entry_price = _safe_int(current_price, 0)
-    budget_cap = max(
-        0, _safe_int(budget_cap_krw, DEFAULT_RISING_MISSED_SCOUT_ENTRY_BUDGET_CAP_KRW)
-    )
-    budget_qty = budget_cap // entry_price if entry_price > 0 and budget_cap > 0 else 0
-    forced_qty = max(1, budget_qty)
-    min_one_share_applied = budget_qty < 1
-    return forced_qty, {
-        "rising_missed_scout_sizing_mode": "capped_budget_min_one_share",
-        "rising_missed_scout_budget_cap_krw": budget_cap,
-        "rising_missed_scout_budget_qty": budget_qty,
-        "rising_missed_scout_min_one_share_applied": min_one_share_applied,
-        "rising_missed_scout_min_one_share_over_cap": bool(
-            min_one_share_applied and budget_cap > 0 and entry_price > budget_cap
+    return 1, {
+        "rising_missed_scout_sizing_mode": "central_allocator_at_submit",
+        "rising_missed_scout_budget_owner": "position_sizing_dynamic_formula",
+        "rising_missed_scout_legacy_budget_cap_ignored": bool(
+            _safe_int(budget_cap_krw, 0) > 0
         ),
-        "rising_missed_scout_forced_notional_krw": (
-            entry_price * forced_qty if entry_price > 0 else 0
-        ),
+        "rising_missed_scout_selection_qty_placeholder": 1,
+        "rising_missed_scout_selection_price": entry_price,
     }
 
 

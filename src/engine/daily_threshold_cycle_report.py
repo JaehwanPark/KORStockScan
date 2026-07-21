@@ -16,6 +16,13 @@ from pathlib import Path
 from typing import Any, Callable
 
 from src.engine.ai_response_contracts import build_openai_response_text_format
+from src.engine.scalping.position_sizing_allocator import (
+    FORMULA_VERSION as SCALPING_SIZING_FORMULA_VERSION,
+    ROLLBACK_FORMULA_VERSION as SCALPING_SIZING_ROLLBACK_VERSION,
+    ScalpingSizingContext,
+    infer_scalping_venue,
+    resolve_scalping_allocation,
+)
 from src.utils.constants import (
     CONFIG_PATH,
     DATA_DIR,
@@ -69,19 +76,31 @@ THRESHOLD_EVENT_FIELD_KEEP_KEYS = {
     "avg_down_count",
     "blocked_reason",
     "broker_order_forbidden",
+    "broker_qty_cap",
     "budget_authority",
+    "budget_cap",
+    "budget_cap_applied",
+    "budget_ratio",
     "buffer_pct",
     "buy_pressure_10t",
     "buy_price",
+    "buy_budget",
+    "cash_orderable_qty_cap",
     "chosen_action",
     "confirmation_elapsed_sec",
     "conditional_1tick_real_override_applied",
     "conditional_1tick_real_override_context",
     "conditional_1tick_real_override_reason",
     "current_ai_score",
+    "curr_price",
     "decision_authority",
     "drawdown_from_peak",
+    "deposit",
+    "binding_caps",
     "effective_qty",
+    "effective_qty_cap",
+    "effective_ratio",
+    "formula_version",
     "eligible_actions",
     "emergency_pct",
     "entry_ai_price_ofi_regime",
@@ -97,11 +116,15 @@ THRESHOLD_EVENT_FIELD_KEEP_KEYS = {
     "hold_ok",
     "last_add_type",
     "latest_strength",
+    "latest_price",
     "mae_bps",
     "mfe_bps",
     "micro_vwap_bps",
     "orderbook_micro_snapshot_age_ms",
     "orderbook_micro_state",
+    "order_price",
+    "orderable_amount",
+    "orderable_cash",
     "peak_profit",
     "price_below_bid_bps",
     "profit_rate",
@@ -109,14 +132,22 @@ THRESHOLD_EVENT_FIELD_KEEP_KEYS = {
     "qty",
     "qty_reason",
     "qty_source",
+    "pre_cap_qty",
+    "ratio",
+    "reference_time",
+    "reference_price",
     "reason",
     "rejected_actions",
     "resolved_price_vs_curr_bps",
     "resolved_vs_curr_bps",
+    "resolved_price",
     "sample_count",
     "sample_span_sec",
     "scalp_sim_entry_qty_source",
     "scale_in_action_type",
+    "scale_in_budget_ratio",
+    "scale_in_safe_budget",
+    "scale_in_target_budget",
     "sell_reason_type",
     "should_exit",
     "sim_parent_record_id",
@@ -125,6 +156,22 @@ THRESHOLD_EVENT_FIELD_KEEP_KEYS = {
     "smoothing_action",
     "spread_bps",
     "spread_ratio",
+    "source_count",
+    "source_signature",
+    "signal_price",
+    "strategy",
+    "submitted_leg_count",
+    "submitted_qty",
+    "tier",
+    "tier_reason",
+    "time_bucket",
+    "trade_type",
+    "target_budget",
+    "safe_budget",
+    "safety_ratio",
+    "stage_qty_cap",
+    "venue",
+    "virtual_budget_krw",
     "worsen_from_candidate",
     "would_exit",
     "ws_age_ms",
@@ -704,7 +751,7 @@ CALIBRATION_FAMILY_METADATA = {
                 "cumulative_since_2026-04-21",
                 "sim_probe_counterfactual_diagnostic",
             ],
-            "use": "position_sizing_dynamic_formula는 신규 BUY와 scale-in에 주문가능금액 10~30% 산식 + 최소 1주 floor를 적용하는 단일 owner이며, 후보 산식 grid를 생성해 postclose 비교 후 PREOPEN bounded candidate를 만든다.",
+            "use": "position_sizing_dynamic_formula는 모든 SCALPING/SCALP 신규·추가매수와 sim/counterfactual에 entry_type_5stage_cap25_v1을 적용하는 단일 owner다. report grid는 선택 공식과 flat_10_fallback의 postclose 비교만 수행한다.",
             "daily_only_allowed": False,
         },
         "sample_denominator_keys": ["real_completed_valid"],
@@ -5333,98 +5380,98 @@ def _compute_candidate_qty(
     formula_id: str,
     min_ratio: float = 0.10,
     max_ratio: float = 0.30,
+    source_signature: Any = None,
+    reference_time: Any = None,
+    effective_venue: Any = None,
+    tier: Any = None,
+    formula_version: Any = None,
+    absolute_budget_cap_krw: Any = 0,
+    cash_orderable_qty_cap: Any = None,
+    remaining_position_qty_cap: Any = None,
+    stage_qty_cap: Any = None,
+    broker_qty_cap: Any = None,
+    safety_ratio: Any = 0.95,
 ) -> dict:
-    score = max(0.0, min(100.0, score))
-    if formula_id == "linear_10_30_current":
-        ratio = min_ratio + (score / 100.0) * (max_ratio - min_ratio)
-    elif formula_id == "linear_10_20_defensive":
-        ratio = 0.10 + (score / 100.0) * (0.20 - 0.10)
-    elif formula_id == "linear_15_30_aggressive":
-        ratio = 0.15 + (score / 100.0) * (0.30 - 0.15)
-    elif formula_id == "spread_penalized_10_30":
-        base_ratio = min_ratio + (score / 100.0) * (max_ratio - min_ratio)
-        spread_penalty = min(0.5, max(0.0, (float(spread_bps or 0) - 20.0) / 200.0))
-        ratio = base_ratio * (1.0 - spread_penalty * 0.3)
-    elif formula_id == "liquidity_adjusted_10_30":
-        base_ratio = min_ratio + (score / 100.0) * (max_ratio - min_ratio)
-        liq_mult = 1.0
-        if liquidity_bucket and "low" in str(liquidity_bucket).lower():
-            liq_mult = 0.7
-        elif liquidity_bucket and "high" in str(liquidity_bucket).lower():
-            liq_mult = 1.2
-        ratio = base_ratio * liq_mult
-    elif formula_id == "recent_loss_capped_10_20":
-        if recent_loss_bucket and "loss" in str(recent_loss_bucket).lower():
-            ratio = 0.10 + (score / 100.0) * (0.20 - 0.10)
-        else:
-            ratio = min_ratio + (score / 100.0) * (max_ratio - min_ratio)
-    elif formula_id == "portfolio_exposure_capped_10_30":
-        base_ratio = min_ratio + (score / 100.0) * (max_ratio - min_ratio)
-        exposure_penalty = 1.0
-        if (
-            portfolio_exposure_bucket
-            and "high" in str(portfolio_exposure_bucket).lower()
-        ):
-            exposure_penalty = 0.7
-        ratio = base_ratio * exposure_penalty
+    _ = (
+        score,
+        spread_bps,
+        liquidity_bucket,
+        recent_loss_bucket,
+        portfolio_exposure_bucket,
+        min_ratio,
+        max_ratio,
+    )
+    if formula_id == SCALPING_SIZING_ROLLBACK_VERSION:
+        selected_tier = 1
+        selected_version = SCALPING_SIZING_FORMULA_VERSION
     else:
-        ratio = min_ratio + (score / 100.0) * (max_ratio - min_ratio)
-    ratio = max(min_ratio, min(max_ratio, ratio))
-    candidate_budget = max(float(target_budget) * ratio, 0.0)
-    candidate_qty = int(candidate_budget // price) if price > 0 else 0
-    min_one_share_floor = candidate_qty <= 0 and float(target_budget) >= price
-    if min_one_share_floor:
-        candidate_qty = 1
+        selected_tier = _safe_int(tier, 0) or None
+        selected_version = str(formula_version or "") or None
+    resolved_safety_ratio = _safe_float(safety_ratio, None)
+    if resolved_safety_ratio is None:
+        resolved_safety_ratio = 0.95
+    decision = resolve_scalping_allocation(
+        ScalpingSizingContext(
+            allocation_stage="postclose_candidate_grid",
+            reference_time=reference_time,
+            source_signature=source_signature,
+            effective_venue=infer_scalping_venue(reference_time, effective_venue),
+            budget_base_krw=int(target_budget or 0),
+            price_krw=int(price or 0),
+            safety_ratio=resolved_safety_ratio,
+            absolute_budget_cap_krw=max(0, _safe_int(absolute_budget_cap_krw, 0)),
+            cash_orderable_qty_cap=_safe_int(cash_orderable_qty_cap, None),
+            remaining_position_qty_cap=_safe_int(remaining_position_qty_cap, None),
+            stage_qty_cap=_safe_int(stage_qty_cap, None),
+            broker_qty_cap=_safe_int(broker_qty_cap, None),
+            simulation=True,
+            initial_tier=selected_tier,
+            initial_formula_version=selected_version,
+        )
+    )
+    ratio = 0.10 if formula_id == SCALPING_SIZING_ROLLBACK_VERSION else decision.ratio
+    if formula_id == SCALPING_SIZING_ROLLBACK_VERSION and decision.ratio != 0.10:
+        decision = resolve_scalping_allocation(
+            ScalpingSizingContext(
+                allocation_stage="postclose_flat10_fallback",
+                reference_time=reference_time,
+                source_signature=source_signature,
+                effective_venue="UNKNOWN",
+                budget_base_krw=int(target_budget or 0),
+                price_krw=int(price or 0),
+                safety_ratio=resolved_safety_ratio,
+                absolute_budget_cap_krw=max(0, _safe_int(absolute_budget_cap_krw, 0)),
+                cash_orderable_qty_cap=_safe_int(cash_orderable_qty_cap, None),
+                remaining_position_qty_cap=_safe_int(remaining_position_qty_cap, None),
+                stage_qty_cap=_safe_int(stage_qty_cap, None),
+                broker_qty_cap=_safe_int(broker_qty_cap, None),
+                simulation=True,
+            )
+        )
     return {
         "ratio": round(ratio, 6),
-        "candidate_budget": int(candidate_budget),
-        "candidate_qty": candidate_qty,
-        "min_one_share_floor_applied": min_one_share_floor,
+        "target_budget": decision.target_budget,
+        "safe_budget": decision.safe_budget,
+        "candidate_budget": decision.safe_budget,
+        "candidate_qty": decision.effective_qty,
+        "pre_cap_qty": decision.pre_cap_qty,
+        "binding_caps": list(decision.binding_caps),
+        "min_one_share_floor_applied": decision.min_one_share_floor_applied,
     }
 
 
 _POSITION_SIZING_FORMULA_CANDIDATES = [
     {
-        "formula_candidate_id": "linear_10_30_current",
-        "formula_version": "linear_10_30_current",
-        "description": "score-linear 10-30% budget with min 1-share floor",
-        "type": "baseline",
+        "formula_candidate_id": SCALPING_SIZING_FORMULA_VERSION,
+        "formula_version": SCALPING_SIZING_FORMULA_VERSION,
+        "description": "entry-observable five-stage 10/15/20/25/25% allocator",
+        "type": "selected",
     },
     {
-        "formula_candidate_id": "linear_10_20_defensive",
-        "formula_version": "linear_10_20_defensive",
-        "description": "defensive 10-20% budget range, score-linear",
-        "type": "variant",
-    },
-    {
-        "formula_candidate_id": "linear_15_30_aggressive",
-        "formula_version": "linear_15_30_aggressive",
-        "description": "aggressive 15-30% budget range, score-linear",
-        "type": "variant",
-    },
-    {
-        "formula_candidate_id": "spread_penalized_10_30",
-        "formula_version": "spread_penalized_10_30",
-        "description": "10-30% base with spread penalty above 20bps",
-        "type": "variant",
-    },
-    {
-        "formula_candidate_id": "liquidity_adjusted_10_30",
-        "formula_version": "liquidity_adjusted_10_30",
-        "description": "10-30% base with liquidity bucket multiplier",
-        "type": "variant",
-    },
-    {
-        "formula_candidate_id": "recent_loss_capped_10_20",
-        "formula_version": "recent_loss_capped_10_20",
-        "description": "10-20% when recent loss detected, else 10-30%",
-        "type": "variant",
-    },
-    {
-        "formula_candidate_id": "portfolio_exposure_capped_10_30",
-        "formula_version": "portfolio_exposure_capped_10_30",
-        "description": "10-30% base with high-exposure penalty",
-        "type": "variant",
+        "formula_candidate_id": SCALPING_SIZING_ROLLBACK_VERSION,
+        "formula_version": SCALPING_SIZING_ROLLBACK_VERSION,
+        "description": "flat 10% fail-closed rollback allocator",
+        "type": "rollback",
     },
 ]
 
@@ -5503,7 +5550,11 @@ def _build_candidate_metrics(
             _safe_float(
                 fields.get("resolved_price")
                 or fields.get("buy_price")
-                or fields.get("reference_price"),
+                or fields.get("reference_price")
+                or fields.get("curr_price")
+                or fields.get("order_price")
+                or fields.get("latest_price")
+                or fields.get("signal_price"),
                 0.0,
             )
             or 0.0
@@ -5536,6 +5587,27 @@ def _build_candidate_metrics(
                 portfolio_exposure_bucket if portfolio_exposure_bucket else None
             ),
             formula_id=fid,
+            source_signature=fields.get("source_signature"),
+            reference_time=(
+                fields.get("reference_time")
+                or event.get("emitted_at")
+                or fields.get("buy_time")
+            ),
+            effective_venue=fields.get("venue")
+            or fields.get("effective_venue")
+            or fields.get("rising_missed_effective_venue"),
+            tier=fields.get("tier"),
+            formula_version=fields.get("formula_version"),
+            absolute_budget_cap_krw=fields.get("budget_cap"),
+            cash_orderable_qty_cap=fields.get("cash_orderable_qty_cap"),
+            remaining_position_qty_cap=fields.get("remaining_position_qty_cap"),
+            stage_qty_cap=(
+                fields.get("stage_qty_cap")
+                if fields.get("stage_qty_cap") is not None
+                else fields.get("effective_qty_cap")
+            ),
+            broker_qty_cap=fields.get("broker_qty_cap"),
+            safety_ratio=fields.get("safety_ratio"),
         )
 
         fields["formula_version"] = fid
@@ -5554,10 +5626,13 @@ def _build_candidate_metrics(
         fields["input_portfolio_exposure_bucket"] = (
             portfolio_exposure_bucket if portfolio_exposure_bucket else "unknown"
         )
-        fields["target_budget"] = int(target_budget)
-        fields["safe_budget"] = int(target_budget * 0.95)
+        fields["budget_base_krw"] = int(target_budget)
+        fields["target_budget"] = result["target_budget"]
+        fields["safe_budget"] = result["safe_budget"]
         fields["candidate_qty"] = result["candidate_qty"]
         fields["effective_qty"] = result["candidate_qty"]
+        fields["pre_cap_qty"] = result["pre_cap_qty"]
+        fields["binding_caps"] = result["binding_caps"]
         fields["min_one_share_floor_applied"] = result["min_one_share_floor_applied"]
 
         candidate_qty_values.append(float(result["candidate_qty"]))
@@ -5698,6 +5773,8 @@ def _build_candidate_metrics(
         price = _safe_float(
             event.get("price")
             or event.get("resolved_price")
+            or event.get("order_price")
+            or event.get("curr_price")
             or matched.get("buy_price"),
             None,
         )
@@ -5817,14 +5894,27 @@ def _build_position_sizing_dynamic_formula_family(
         "blocked_zero_qty",
         "auth_zero_qty",
         "scale_in_price_resolved",
+        "scale_in_order_submitted",
+        "order_bundle_submitted",
         "scalp_sim_entry_armed",
         "scalp_sim_buy_order_assumed_filled",
         "swing_probe_entry_assumed_filled",
         "swing_sim_entry_assumed_filled",
     }
-    sizing_events = [
-        event for event in events if str(event.get("stage") or "") in sizing_stages
-    ]
+    sizing_events = []
+    for event in events:
+        stage = str(event.get("stage") or "")
+        if stage not in sizing_stages:
+            continue
+        fields = _event_fields(event)
+        strategy = str(fields.get("strategy") or fields.get("trade_type") or "").upper()
+        formula_version = str(fields.get("formula_version") or "").strip()
+        if (
+            strategy in {"SCALPING", "SCALP"}
+            or formula_version == SCALPING_SIZING_FORMULA_VERSION
+            or stage.startswith("scalp_sim_")
+        ):
+            sizing_events.append(event)
     real_rows = [
         row for row in _valid_profit_rows(completed_rows) if _is_normal_only_row(row)
     ]
@@ -5864,24 +5954,31 @@ def _build_position_sizing_dynamic_formula_family(
     )
 
     required_inputs = {
-        "score": bool(score_values),
         "strategy": bool(_bucket_counter(sizing_events, "strategy", "trade_type")),
-        "volatility": bool(
-            _bucket_counter(sizing_events, "volatility_bucket", "volatility_mode")
+        "source_signature": bool(
+            _bucket_counter(sizing_events, "source_signature", "source_count")
         ),
-        "liquidity": bool(
-            liquidity_values or _bucket_counter(sizing_events, "liquidity_bucket")
+        "reference_time": bool(
+            _bucket_counter(sizing_events, "reference_time")
+            or any(
+                str(event.get("emitted_at") or "").strip() for event in sizing_events
+            )
         ),
-        "spread": bool(spread_values),
-        "price_band": bool(
-            _bucket_counter(sizing_events, "price_band", "price_bucket")
-        ),
-        "recent_loss": bool(
-            _bucket_counter(sizing_events, "recent_loss_bucket", "loss_bucket")
-        ),
-        "portfolio_exposure": bool(
+        "venue": bool(
             _bucket_counter(
-                sizing_events, "portfolio_exposure_bucket", "exposure_bucket"
+                sizing_events,
+                "venue",
+                "effective_venue",
+                "rising_missed_effective_venue",
+            )
+            or any(
+                infer_scalping_venue(
+                    _event_fields(event).get("reference_time")
+                    or event.get("emitted_at"),
+                    None,
+                )
+                != "UNKNOWN"
+                for event in sizing_events
             )
         ),
     }
@@ -5897,6 +5994,18 @@ def _build_position_sizing_dynamic_formula_family(
         else notional_ev
     )
     sample_ready = real_sample >= 30 and source_quality_passed
+    runtime_reflected_event_count = sum(
+        1
+        for event in sizing_events
+        if str(_event_fields(event).get("formula_version") or "").strip()
+        == SCALPING_SIZING_FORMULA_VERSION
+    )
+    runtime_reflected = runtime_reflected_event_count > 0
+    implementation_status = (
+        "runtime_reflected_observed"
+        if runtime_reflected
+        else "implemented_not_runtime_reflected"
+    )
 
     candidate_grid = []
     for candidate_def in _POSITION_SIZING_FORMULA_CANDIDATES:
@@ -5917,13 +6026,19 @@ def _build_position_sizing_dynamic_formula_family(
         candidate_grid.append(metrics)
 
     current = {
-        "formula_version": "linear_10_30_current",
-        "formula_mode": "current_runtime_formula",
+        "formula_version": SCALPING_SIZING_FORMULA_VERSION,
+        "formula_mode": (
+            "runtime_reflected_observed"
+            if runtime_reflected
+            else "source_selected_runtime_reflection_pending"
+        ),
+        "implementation_status": implementation_status,
+        "runtime_reflected": runtime_reflected,
         "runtime_apply_allowed": False,
     }
     recommended = {
-        "formula_version": "linear_10_30_current",
-        "formula_mode": "candidate_grid_comparison",
+        "formula_version": SCALPING_SIZING_FORMULA_VERSION,
+        "formula_mode": "selected_with_flat10_rollback_comparison",
         "runtime_apply_allowed": False,
     }
     return {
@@ -5932,6 +6047,7 @@ def _build_position_sizing_dynamic_formula_family(
         "sample": {
             "real_completed_valid": real_sample,
             "sizing_event_count": len(sizing_events),
+            "runtime_reflected_event_count": runtime_reflected_event_count,
             "sim_probe_sizing_event_count": len(sim_probe_rows),
             "real_order_sizing_event_count": len(real_order_rows),
             "qty_source_counts": qty_source_counts,
@@ -5961,13 +6077,15 @@ def _build_position_sizing_dynamic_formula_family(
             ),
         },
         "apply_ready": sample_ready,
+        "implementation_status": implementation_status,
+        "runtime_reflected": runtime_reflected,
         "current": current,
         "recommended": recommended,
         "candidate_grid": candidate_grid,
         "apply_mode": "candidate_grid_comparison",
         "metric_contract": {
             "metric_role": "primary_ev",
-            "decision_authority": "candidate_grid_comparison_runtime_apply_blocked_until_guard_tests_pass",
+            "decision_authority": "postclose_formula_comparison_only_no_runtime_mutation",
             "window_policy": "rolling_10d_with_real_denominator",
             "sample_floor": 30,
             "primary_decision_metric": [
@@ -5981,11 +6099,16 @@ def _build_position_sizing_dynamic_formula_family(
             ],
         },
         "notes": [
-            "position_sizing_dynamic_formula는 신규 BUY와 scale-in 수량 산식의 단일 owner이며, cap release family는 제거됐다.",
+            "position_sizing_dynamic_formula는 모든 SCALPING/SCALP 신규 BUY와 scale-in, sim/counterfactual 수량 산식의 단일 owner이며, cap release family는 제거됐다.",
+            (
+                "entry_type_5stage_cap25_v1 runtime event가 관측되어 runtime_reflected_observed로 판정했다."
+                if runtime_reflected
+                else "entry_type_5stage_cap25_v1 소스는 구현됐지만 현재 프로세스 재기동 전까지 implemented_not_runtime_reflected다."
+            ),
             "sim/probe sizing rows는 actual_order_submitted=false, broker_order_forbidden=true, runtime_effect=false로 분리하며 real execution quality 분모에 섞지 않는다.",
             "source-quality 결손 후보는 EV 분모에서 제외하고 source_quality_blocked로 닫는다.",
-            "runtime_apply_allowed=false로 시작하며 approval/preopen guard 테스트가 닫힌 뒤에만 bounded candidate를 연다.",
-            "후보 grid는 postclose 비교 후 PREOPEN bounded candidate 생성에 사용된다.",
+            "runtime_apply_allowed=false이며 report candidate 비교는 실행 중인 프로세스 수량을 변경하지 않는다.",
+            "후보 grid는 선택 공식과 flat_10_fallback의 postclose 비교에만 사용된다.",
         ],
     }
 
@@ -14184,6 +14307,16 @@ def _threshold_snapshot_from_families(
             ),
             "current": family["current"],
             "recommended": family["recommended"],
+            **(
+                {"implementation_status": family["implementation_status"]}
+                if "implementation_status" in family
+                else {}
+            ),
+            **(
+                {"runtime_reflected": family["runtime_reflected"]}
+                if "runtime_reflected" in family
+                else {}
+            ),
         }
         if report_only:
             payload["daily_family_apply_mode"] = family.get("apply_mode")
@@ -14637,6 +14770,16 @@ def build_daily_threshold_cycle_report(
             "current": family["current"],
             "recommended": family["recommended"],
             "candidate_grid": family.get("candidate_grid", []),
+            **(
+                {"implementation_status": family["implementation_status"]}
+                if "implementation_status" in family
+                else {}
+            ),
+            **(
+                {"runtime_reflected": family["runtime_reflected"]}
+                if "runtime_reflected" in family
+                else {}
+            ),
         }
         for family in families
     }

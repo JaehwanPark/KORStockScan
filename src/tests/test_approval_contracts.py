@@ -70,18 +70,20 @@ def test_annotate_approval_request_keeps_entry_bridge_metadata_not_live_ready():
     ]
 
 
-def test_approval_contract_registry_marks_dynamic_formula_as_candidate_grid():
+def test_approval_contract_registry_marks_dynamic_formula_as_not_runtime_reflected():
     request = annotate_approval_request(
         {"family": "position_sizing_dynamic_formula"}, "2026-06-10"
     )
 
-    assert (
-        request["approval_contract_status"]
-        == "candidate_grid_active_runtime_apply_blocked"
+    assert request["approval_contract_status"] == "implemented_not_runtime_reflected"
+    assert request["approval_mode"] == (
+        "selected_formula_with_flat10_report_comparison"
     )
-    assert request["approval_mode"] == "candidate_grid_comparison"
     assert request["approval_artifact_required"] is False
     assert request["approval_live_ready"] is False
     assert request["approval_artifact_path"].endswith(
         "position_sizing_dynamic_formula_2026-06-10.json"
     )
+    assert request["approval_contract_missing_components"] == [
+        "current_process_restart_not_authorized"
+    ]

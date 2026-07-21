@@ -345,7 +345,11 @@ def _build_initial_qty_provenance(positions: dict[str, dict]) -> dict:
             qty_source == "uncapped_buy_capacity"
         )
         summary["virtual_budget_qty_source_count"] += int(
-            qty_source == "sim_virtual_budget_dynamic_formula"
+            qty_source
+            in {
+                "sim_virtual_budget_dynamic_formula",
+                "scalping_position_sizing_allocator",
+            }
         )
         summary["fixed_qty_source_count"] += int(qty_source == "fixed_config")
 

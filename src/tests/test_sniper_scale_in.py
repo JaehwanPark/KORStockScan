@@ -1650,7 +1650,7 @@ def test_rising_missed_tp1_probability_gate_blocks_insufficient_support_and_sell
     )
 
 
-def test_rising_missed_one_share_entry_uses_budget_cap_with_min_one_share():
+def test_rising_missed_scout_defers_quantity_to_central_allocator():
     budget_capped = evaluate_rising_missed_one_share_entry(
         {
             "strategy": "SCALPING",
@@ -1685,23 +1685,22 @@ def test_rising_missed_one_share_entry_uses_budget_cap_with_min_one_share():
     )
 
     assert budget_capped.allowed is True
-    assert budget_capped.forced_qty == 20
+    assert budget_capped.forced_qty == 1
     assert (
         budget_capped.log_fields["rising_missed_scout_sizing_mode"]
-        == "capped_budget_min_one_share"
+        == "central_allocator_at_submit"
     )
-    assert budget_capped.log_fields["rising_missed_scout_budget_cap_krw"] == 400_000
-    assert budget_capped.log_fields["rising_missed_scout_budget_qty"] == 20
     assert (
-        budget_capped.log_fields["rising_missed_scout_min_one_share_applied"] is False
+        budget_capped.log_fields["rising_missed_scout_budget_owner"]
+        == "position_sizing_dynamic_formula"
     )
-    assert budget_capped.log_fields["rising_missed_one_share_entry_forced_qty"] == 20
+    assert "rising_missed_scout_budget_cap_krw" not in budget_capped.log_fields
+    assert budget_capped.log_fields["rising_missed_one_share_entry_forced_qty"] == 1
     assert min_one_share.allowed is True
     assert min_one_share.forced_qty == 1
-    assert min_one_share.log_fields["rising_missed_scout_budget_qty"] == 0
-    assert min_one_share.log_fields["rising_missed_scout_min_one_share_applied"] is True
     assert (
-        min_one_share.log_fields["rising_missed_scout_min_one_share_over_cap"] is True
+        min_one_share.log_fields["rising_missed_scout_sizing_mode"]
+        == "central_allocator_at_submit"
     )
 
 
@@ -3131,9 +3130,9 @@ def test_rising_missed_one_share_hook_bypasses_watching_soft_branch(monkeypatch)
     assert submitted_stock["rising_missed_one_share_entry_forced"] is True
     assert submitted_stock["rising_missed_one_share_scout"] is True
     assert submitted_stock["rising_missed_scout_upgrade_pending"] is True
-    assert submitted_stock["forced_entry_qty"] == 40
+    assert submitted_stock["forced_entry_qty"] == 1
     assert submitted_stock["forced_entry_reason"] == FORCED_ENTRY_REASON
-    assert runtime["forced_entry_qty"] == 40
+    assert runtime["forced_entry_qty"] == 1
     assert runtime["forced_entry_reason"] == FORCED_ENTRY_REASON
 
 
@@ -4814,7 +4813,10 @@ def test_rising_missed_scout_quality_guard_blocks_stale_recent_weak_ai_micro(
         is True
     )
     assert entry_logs[-1][1]["rising_missed_one_share_entry_forced_qty"] == 1
-    assert entry_logs[-1][1]["rising_missed_scout_min_one_share_over_cap"] is True
+    assert (
+        entry_logs[-1][1]["rising_missed_scout_sizing_mode"]
+        == "central_allocator_at_submit"
+    )
     assert entry_logs[-1][1]["rising_missed_filter_layer"] == "submit_safety"
     assert (
         entry_logs[-1][1]["rising_missed_filter_owner"] == "rising_missed_submit_safety"
@@ -4982,7 +4984,7 @@ def test_rising_missed_one_share_entry_blocks_fresh_adverse_micro_before_submit(
         entry_logs[-1][1]["rising_missed_scout_quality_guard_adverse_micro_blocked"]
         is True
     )
-    assert entry_logs[-1][1]["rising_missed_one_share_entry_forced_qty"] == 2
+    assert entry_logs[-1][1]["rising_missed_one_share_entry_forced_qty"] == 1
     assert entry_logs[-1][1]["rising_missed_filter_layer"] == "submit_safety"
     assert entry_logs[-1][1]["rising_missed_filter_action"] == "pre_submit_block"
     assert entry_logs[-1][1]["actual_order_submitted"] is False
@@ -11740,11 +11742,11 @@ def test_rising_missed_scout_pyramid_bridge_uses_existing_dynamic_qty_logic():
     finally:
         scale_in.TRADING_RULES = original
 
-    assert details["scale_in_budget_ratio"] == 0.24
-    assert details["scale_in_budget_qty"] == 228
-    assert details["would_qty"] == 228
-    assert details["effective_qty"] == 228
-    assert details["qty"] == 228
+    assert details["scale_in_budget_ratio"] == 0.10
+    assert details["scale_in_budget_qty"] == 95
+    assert details["would_qty"] == 95
+    assert details["effective_qty"] == 95
+    assert details["qty"] == 95
     assert details["pyramid_sizing_mode"] == "dynamic_budget"
     assert "scale_in_qty_override" not in details
 
@@ -13965,7 +13967,7 @@ def test_execute_scalping_pyramid_sends_resolved_best_bid_with_dynamic_budget_qt
     resolved = [fields for stage, fields in logs if stage == "scale_in_price_resolved"][
         0
     ]
-    assert resolved["would_qty"] == 237
+    assert resolved["would_qty"] == 95
     assert resolved["effective_qty"] == 15
     assert resolved["pyramid_sizing_mode"] == "dynamic_budget"
     assert resolved["pyramid_position_ratio_cap_applied"] is False
@@ -14069,8 +14071,15 @@ def test_execute_scalping_pyramid_uses_dynamic_budget_for_one_share_position(
         0
     ]
     assert sent_orders[0][2] == resolved["resolved_price"]
-    assert resolved["scale_in_budget_qty"] == 13
-    assert resolved["would_qty"] == 13
+    assert resolved["scale_in_budget_qty"] == 1
+    assert "stage_qty_cap" in resolved["binding_caps"]
+    submitted = [
+        fields for stage, fields in logs if stage == "scale_in_order_submitted"
+    ][0]
+    assert submitted["actual_order_submitted"] is True
+    assert submitted["effective_qty"] == 1
+    assert submitted["formula_version"] == "entry_type_5stage_cap25_v1"
+    assert resolved["would_qty"] == 5
     assert resolved["effective_qty"] == 1
     assert resolved["pyramid_sizing_mode"] == "dynamic_budget"
     assert resolved["pyramid_position_ratio_cap_applied"] is False
@@ -14811,7 +14820,7 @@ def test_execute_scalping_pyramid_refreshes_rest_orderbook_when_quote_missing(
     resolved = [fields for stage, fields in logs if stage == "scale_in_price_resolved"][
         0
     ]
-    assert resolved["would_qty"] == 237
+    assert resolved["would_qty"] == 95
     assert resolved["effective_qty"] == 15
     assert resolved["pre_submit_ws_snapshot_refresh_reason"] == "ws_manager_missing"
     assert resolved["pre_submit_rest_orderbook_refresh_applied"] is True
@@ -16461,12 +16470,42 @@ def test_dynamic_pyramid_qty_uses_budget_even_when_buy_pressure_is_only_supporti
         },
     )
 
-    assert details["scale_in_budget_qty"] == 22
-    assert details["qty"] == 22
+    assert details["scale_in_budget_qty"] == 9
+    assert details["qty"] == 9
     assert details["qty_reason"] == "dynamic_allowed"
     assert details["buy_pressure_support_ok"] is False
     assert details["pyramid_sizing_mode"] == "dynamic_budget"
     assert details["pyramid_position_ratio_cap_applied"] is False
+
+
+def test_dynamic_scale_in_stage_cap_is_composed_by_central_allocator(monkeypatch):
+    monkeypatch.setattr(
+        scale_in,
+        "TRADING_RULES",
+        replace(CONFIG, MAX_POSITION_PCT=1.0),
+    )
+
+    details = scale_in.describe_dynamic_scale_in_qty(
+        stock={
+            "strategy": "SCALPING",
+            "buy_price": 10_000,
+            "buy_qty": 1,
+            "actual_order_submitted": True,
+        },
+        resolved_price=10_000,
+        deposit=1_000_000,
+        add_type="AVG_DOWN",
+        strategy="SCALPING",
+        add_reason="reversal_add_ok",
+        price_resolution={"allowed": True},
+        action={"reason": "reversal_add_ok", "current_ai_score": 100},
+        stage_qty_cap=2,
+    )
+
+    assert details["pre_cap_qty"] == 9
+    assert details["effective_qty"] == 2
+    assert details["qty"] == 2
+    assert "stage_qty_cap" in details["binding_caps"]
 
 
 def test_dynamic_scale_in_qty_uses_deposit_budget_with_cash_orderable_qty_cap(
@@ -16474,7 +16513,7 @@ def test_dynamic_scale_in_qty_uses_deposit_budget_with_cash_orderable_qty_cap(
 ):
     rules = replace(
         CONFIG,
-        MAX_POSITION_PCT=1.0,
+        MAX_POSITION_PCT=3.0,
         INVEST_RATIO_SCALPING_MIN=0.10,
         INVEST_RATIO_SCALPING_MAX=0.30,
         SCALPING_SCALE_IN_DYNAMIC_QTY_ENABLED=True,
@@ -16505,9 +16544,12 @@ def test_dynamic_scale_in_qty_uses_deposit_budget_with_cash_orderable_qty_cap(
         cash_orderable_amount=2_394_255,
     )
 
-    assert details["scale_in_budget_ratio"] == 0.242
-    assert details["scale_in_safe_budget"] == 420_112
+    assert details["scale_in_budget_ratio"] == 0.10
+    assert details["scale_in_safe_budget"] == 173_600
     assert details["scale_in_budget_qty"] == 1
+    assert details["formula_version"] == "entry_type_5stage_cap25_v1"
+    assert details["tier"] == 1
+    assert details["tier_reason"] == "unknown_venue_fallback"
     assert details["scale_in_cash_orderable_qty_cap"] == 8
     assert (
         details["scale_in_budget_source"]
@@ -18128,25 +18170,59 @@ def test_unfilled_defensive_avg_down_recheck_skips_missing_ordno():
 
 
 def test_scalp_loss_reentry_rebound_qty_cap_does_not_consume_cooldown():
-    stock = {"strategy": "SCALPING"}
     cooldowns = {"000500": 4_600.0}
     bypass = {"allowed": True, "force_qty": 1, "cooldown_marked_at": 1_000.0}
+    context = state_handlers.ScalpingSizingContext(
+        allocation_stage="initial_entry",
+        reference_time=datetime(2026, 7, 21, 10, 0, tzinfo=state_handlers._KST),
+        source_signature="A,B,C",
+        effective_venue="KRX",
+        budget_base_krw=1_000_000,
+        price_krw=10_600,
+    )
+    decision = state_handlers.resolve_scalping_allocation(context)
 
-    capped = state_handlers._apply_scalp_loss_reentry_rebound_canary_qty(
-        stock,
-        strategy="SCALPING",
-        curr_price=10600,
-        deposit=1_000_000,
-        target_budget=300_000,
-        safe_budget=300_000,
-        real_buy_qty=28,
-        used_safety_ratio=0.8,
-        bypass=bypass,
+    capped_context, capped_decision, applied = (
+        state_handlers._apply_scalp_loss_reentry_rebound_canary_qty(
+            context,
+            decision,
+            bypass=bypass,
+        )
     )
 
-    assert capped == (10600, 10600, 1, 1.0, True)
+    assert applied is True
+    assert capped_context.stage_qty_cap == 1
+    assert capped_decision.effective_qty == 1
+    assert capped_decision.target_budget == decision.target_budget
+    assert capped_decision.safe_budget == decision.safe_budget
+    assert "stage_qty_cap" in capped_decision.binding_caps
     assert cooldowns["000500"] == 4_600.0
-    assert "loss_reentry_rebound_canary_entry" not in stock
+
+
+def test_scalp_loss_reentry_rebound_qty_cap_cannot_bypass_zero_central_qty():
+    bypass = {"allowed": True, "force_qty": 1}
+    context = state_handlers.ScalpingSizingContext(
+        allocation_stage="initial_entry",
+        reference_time=datetime(2026, 7, 21, 10, 0, tzinfo=state_handlers._KST),
+        source_signature="A,B,C",
+        effective_venue="KRX",
+        budget_base_krw=1_000_000,
+        price_krw=10_600,
+        cash_orderable_qty_cap=0,
+    )
+    decision = state_handlers.resolve_scalping_allocation(context)
+
+    _, capped_decision, applied = (
+        state_handlers._apply_scalp_loss_reentry_rebound_canary_qty(
+            context,
+            decision,
+            bypass=bypass,
+        )
+    )
+
+    assert applied is False
+    assert capped_decision.effective_qty == 0
+    assert capped_decision.binding_caps == ("cash_orderable_qty_cap",)
 
 
 def test_scale_in_blocked_when_buy_side_paused(monkeypatch):
@@ -36075,22 +36151,29 @@ def test_scalp_loss_reentry_rebound_bypass_allows_strong_scanner_canary(monkeypa
             now_ts=1_100.0,
             cooldowns={"000500": 4_600.0},
         )
-        capped = state_handlers._apply_scalp_loss_reentry_rebound_canary_qty(
-            stock,
-            strategy="SCALPING",
-            curr_price=10600,
-            deposit=1_000_000,
-            target_budget=300_000,
-            safe_budget=300_000,
-            real_buy_qty=28,
-            used_safety_ratio=0.8,
-            bypass=bypass,
+        context = state_handlers.ScalpingSizingContext(
+            allocation_stage="initial_entry",
+            reference_time=datetime(2026, 7, 21, 10, 0, tzinfo=state_handlers._KST),
+            source_signature=stock["source_signature"],
+            effective_venue="KRX",
+            budget_base_krw=1_000_000,
+            price_krw=10_600,
+        )
+        decision = state_handlers.resolve_scalping_allocation(context)
+        _, capped_decision, applied = (
+            state_handlers._apply_scalp_loss_reentry_rebound_canary_qty(
+                context,
+                decision,
+                bypass=bypass,
+            )
         )
 
         assert bypass["allowed"] is True
         assert stock["loss_reentry_rebound_canary_entry"] is True
         assert "000500" not in state_handlers._SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWNS
-        assert capped == (10600, 10600, 1, 1.0, True)
+        assert applied is True
+        assert capped_decision.effective_qty == 1
+        assert "stage_qty_cap" in capped_decision.binding_caps
         assert logs[-1][0] == "scalp_loss_reentry_rebound_bypass"
     finally:
         state_handlers._SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWNS.clear()

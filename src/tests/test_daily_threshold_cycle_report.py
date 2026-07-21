@@ -3550,7 +3550,7 @@ def test_position_sizing_dynamic_formula_generates_candidate_grid():
     pipeline_rows = []
     for record_id in range(1, 36):
         event = {
-            "stage": "budget_pass",
+            "stage": "order_bundle_submitted",
             "record_id": record_id,
             "stock_code": f"{100000 + record_id:06d}",
             "fields": {
@@ -3564,8 +3564,14 @@ def test_position_sizing_dynamic_formula_generates_candidate_grid():
                 "recent_loss_bucket": "none",
                 "portfolio_exposure_bucket": "low",
                 "target_budget": "500000.0",
-                "resolved_price": "10000.0",
+                "ratio": "0.25",
+                "order_price": "10000.0",
                 "actual_order_submitted": "true",
+                "formula_version": "entry_type_5stage_cap25_v1",
+                "qty_source": "scalping_position_sizing_allocator",
+                "source_signature": "A,B,C",
+                "reference_time": "2026-06-10T10:00:00+09:00",
+                "venue": "KRX",
             },
         }
         pipeline_rows.append(event)
@@ -3601,14 +3607,18 @@ def test_position_sizing_dynamic_formula_generates_candidate_grid():
     assert family["apply_ready"] is True
     assert family["apply_mode"] == "candidate_grid_comparison"
     assert family["current"]["runtime_apply_allowed"] is False
-    assert family["current"]["formula_version"] == "linear_10_30_current"
+    assert family["current"]["formula_version"] == "entry_type_5stage_cap25_v1"
+    assert family["current"]["runtime_reflected"] is True
+    assert family["implementation_status"] == "runtime_reflected_observed"
+    assert family["sample"]["runtime_reflected_event_count"] == 35
     candidate_grid = family["candidate_grid"]
     assert isinstance(candidate_grid, list)
-    assert len(candidate_grid) == 7
+    assert len(candidate_grid) == 2
     baseline = candidate_grid[0]
-    assert baseline["formula_candidate_id"] == "linear_10_30_current"
-    assert baseline["formula_type"] == "baseline"
+    assert baseline["formula_candidate_id"] == "entry_type_5stage_cap25_v1"
+    assert baseline["formula_type"] == "selected"
     assert baseline["real_sample_count"] > 0
+    assert baseline["sim_probe_sample_count"] == 0
     assert baseline["real_completed_overall_ev_pct"] is not None
     assert baseline["source_quality_blocked"] is False
     assert baseline["real_actual_order_submitted_count"] > 0
@@ -3621,6 +3631,65 @@ def test_position_sizing_dynamic_formula_generates_candidate_grid():
     assert candidate["calibration_state"] == "hold"
     assert candidate["allowed_runtime_apply"] is False
     assert candidate["human_approval_required"] is False
+
+
+def test_position_sizing_runtime_fields_survive_event_compaction():
+    event = report_mod._compact_threshold_cycle_event(
+        {
+            "stage": "order_bundle_submitted",
+            "fields": {
+                "strategy": "SCALPING",
+                "formula_version": "entry_type_5stage_cap25_v1",
+                "ratio": 0.25,
+                "deposit": 2_000_000,
+                "target_budget": 500_000,
+                "safe_budget": 475_000,
+                "order_price": 10_000,
+                "cash_orderable_qty_cap": 40,
+                "submitted_qty": 40,
+                "submitted_leg_count": 2,
+            },
+        }
+    )
+
+    assert event["fields"] == {
+        "strategy": "SCALPING",
+        "formula_version": "entry_type_5stage_cap25_v1",
+        "ratio": 0.25,
+        "deposit": 2_000_000,
+        "target_budget": 500_000,
+        "safe_budget": 475_000,
+        "order_price": 10_000,
+        "cash_orderable_qty_cap": 40,
+        "submitted_qty": 40,
+        "submitted_leg_count": 2,
+    }
+
+
+def test_position_sizing_candidate_replays_safety_and_quantity_caps():
+    result = report_mod._compute_candidate_qty(
+        score=82.0,
+        target_budget=1_000_000,
+        price=10_000,
+        spread_bps=12.0,
+        liquidity_bucket="high",
+        recent_loss_bucket="none",
+        portfolio_exposure_bucket="low",
+        formula_id="entry_type_5stage_cap25_v1",
+        source_signature="A,B,C",
+        reference_time="2026-07-21T10:00:00+09:00",
+        effective_venue="KRX",
+        absolute_budget_cap_krw=100_000,
+        cash_orderable_qty_cap=3,
+    )
+
+    assert result["target_budget"] == 100_000
+    assert result["pre_cap_qty"] == 9
+    assert result["candidate_qty"] == 3
+    assert result["binding_caps"] == [
+        "absolute_budget_cap",
+        "cash_orderable_qty_cap",
+    ]
 
 
 def test_position_sizing_dynamic_formula_enters_candidate_grid_chain():
@@ -3643,6 +3712,9 @@ def test_position_sizing_dynamic_formula_enters_candidate_grid_chain():
                     "target_budget": "500000.0",
                     "resolved_price": "10000.0",
                     "actual_order_submitted": "true",
+                    "source_signature": "A,B,C",
+                    "reference_time": "2026-06-10T10:00:00+09:00",
+                    "venue": "KRX",
                 },
             }
         )
@@ -3678,9 +3750,9 @@ def test_position_sizing_dynamic_formula_enters_candidate_grid_chain():
     assert family["sample"]["real_completed_valid"] == 35
     assert family["sample"]["source_quality_passed"] is True
     assert family["sample"]["notional_weighted_ev_pct"] is not None
-    assert len(family["candidate_grid"]) == 7
+    assert len(family["candidate_grid"]) == 2
     baseline = family["candidate_grid"][0]
-    assert baseline["formula_candidate_id"] == "linear_10_30_current"
+    assert baseline["formula_candidate_id"] == "entry_type_5stage_cap25_v1"
     assert baseline["real_sample_count"] > 0
     assert baseline["source_quality_blocked"] is False
 
@@ -3727,7 +3799,7 @@ def test_position_sizing_dynamic_formula_does_not_use_sim_as_real_floor():
     assert family["sample"]["real_completed_valid"] == 0
     assert family["sample"]["sim_probe_sizing_event_count"] == 40
     assert family["apply_ready"] is False
-    assert len(family["candidate_grid"]) == 7
+    assert len(family["candidate_grid"]) == 2
     for candidate_entry in family["candidate_grid"]:
         assert candidate_entry["real_sample_count"] == 0
         assert candidate_entry["sim_probe_sample_count"] >= 0
@@ -3761,6 +3833,9 @@ def test_position_sizing_dynamic_formula_candidate_grid_excludes_source_quality_
                     "target_budget": "300000.0",
                     "resolved_price": "8000.0",
                     "actual_order_submitted": "true",
+                    "source_signature": "A,B,C",
+                    "reference_time": "2026-06-10T14:00:00+09:00",
+                    "venue": "KRX",
                 },
             }
         )
@@ -3783,7 +3858,7 @@ def test_position_sizing_dynamic_formula_candidate_grid_excludes_source_quality_
     family = report["threshold_snapshot"]["position_sizing_dynamic_formula"]
     assert family["apply_ready"] is True
     candidate_grid = family["candidate_grid"]
-    assert len(candidate_grid) == 7
+    assert len(candidate_grid) == 2
     for candidate_entry in candidate_grid:
         assert "formula_candidate_id" in candidate_entry
         assert "real_sample_count" in candidate_entry

@@ -282,7 +282,7 @@ def test_build_missed_entry_counterfactual_report(monkeypatch, tmp_path):
     assert winner["counterfactual_qty"] > 0
     assert (
         report["top_missed_winners"][0]["counterfactual_qty_source"]
-        == "sim_virtual_budget_dynamic_formula"
+        == "scalping_position_sizing_allocator"
     )
     assert report["top_missed_winners"][0]["virtual_budget_krw"] == 10_000_000
     assert (
@@ -290,7 +290,11 @@ def test_build_missed_entry_counterfactual_report(monkeypatch, tmp_path):
         == winner["entry_price_used"] * winner["counterfactual_qty"]
     )
     assert winner["counterfactual_notional_krw"] <= winner["counterfactual_safe_budget"]
-    assert 0.10 <= winner["counterfactual_ratio"] <= 0.30
+    assert 0.10 <= winner["counterfactual_ratio"] <= 0.25
+    assert winner["formula_version"] == "entry_type_5stage_cap25_v1"
+    assert winner["effective_qty"] == winner["counterfactual_qty"]
+    assert winner["actual_order_submitted"] is False
+    assert winner["broker_order_forbidden"] is True
     assert report["top_avoided_losers"][0]["stock_code"] == "222222"
     stages = {row["stage"] for row in report["reason_breakdown"]}
     assert "latency_block" in stages
