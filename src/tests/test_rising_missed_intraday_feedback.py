@@ -818,6 +818,41 @@ def test_submit_safety_source_quality_unknown_breakdown_is_structured(tmp_path):
     ]
 
 
+def test_submit_safety_blocker_rows_retain_latest_bounded_window(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-15.jsonl"
+    rows = [
+        _event(
+            1_000 + index,
+            f"{index:06d}",
+            f"block-{index}",
+            "real_weak_ai_micro_entry_block",
+            {
+                "forced_entry_reason": "rising_missed_one_share_entry",
+                "reason": "source_quality_unknown",
+                "source_quality_gate": "weak_ai_micro_context_contract",
+                "weak_ai_micro_entry_block_source_quality_state": "missing",
+                "weak_ai_micro_entry_block_missing_fields": "buy_pressure_10t",
+                "current_price": 1_000 + index,
+            },
+            emitted_at=(f"2026-07-15T09:{index // 60:02d}:{index % 60:02d}+09:00"),
+        )
+        for index in range(205)
+    ]
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows), encoding="utf-8"
+    )
+
+    report = mod.build_report(
+        "2026-07-15", pipeline_path=pipeline_path, generated_at="fixed"
+    )
+
+    blockers = report["submit_safety_blocker_rows"]
+    assert report["summary"]["submit_safety_block_count"] == 205
+    assert len(blockers) == 200
+    assert blockers[0]["stock_code"] == "000005"
+    assert blockers[-1]["stock_code"] == "000204"
+
+
 def test_build_report_flags_rising_missed_avg_down_ge2_initial_quality_fail(tmp_path):
     pipeline_path = tmp_path / "pipeline_events_2026-07-02.jsonl"
     rows = [

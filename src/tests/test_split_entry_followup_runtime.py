@@ -1,11 +1,13 @@
 from datetime import datetime
 from types import SimpleNamespace
+import threading
 
 import pytest
 
 import src.engine.sniper_execution_receipts as receipts
 import src.engine.sniper_state_handlers as state_handlers
 from src.engine.scalping import entry_split_order_plan as split_plan
+from src.utils.threshold_cycle_registry import threshold_family_for_stage
 
 
 def test_emit_split_entry_followup_shadows_is_off_by_default(monkeypatch):
@@ -144,6 +146,13 @@ def test_completed_sell_closes_persisted_probe_bundle(monkeypatch, tmp_path):
         "entry_split_probe_phase": "aborted",
         "entry_split_probe_exit_bundle_id": "123456-probe-sold",
         "entry_split_probe_scale_in_forbidden": True,
+        "entry_split_probe_recheck_due_at": 123.0,
+        "entry_split_probe_recheck_count": 2,
+        "entry_split_probe_deferred_once": True,
+        "entry_split_probe_direction_state": "UNKNOWN",
+        "entry_split_probe_continuation_action": "DEFER",
+        "entry_split_probe_offset_profile": "recovered_wide",
+        "rising_missed_scout_upgraded": True,
     }
 
     receipts._finalize_standard_sell_execution(
@@ -161,6 +170,55 @@ def test_completed_sell_closes_persisted_probe_bundle(monkeypatch, tmp_path):
     assert persisted["phase"] == "complete"
     assert persisted["close_reason"] == "position_sell_completed"
     assert "entry_split_probe_exit_bundle_id" not in stock
+    assert "entry_split_probe_recheck_due_at" not in stock
+    assert "entry_split_probe_direction_state" not in stock
+    assert "entry_split_probe_offset_profile" not in stock
+    assert "rising_missed_scout_upgraded" not in stock
+
+
+def test_probe_hard_guard_abort_records_hard_negative(monkeypatch):
+    monkeypatch.setattr(
+        state_handlers, "_log_entry_pipeline", lambda *args, **kwargs: None
+    )
+    stock = {
+        "entry_filled_qty": 1,
+        "entry_split_probe_phase": "probe_filled",
+    }
+
+    state_handlers._abort_entry_split_probe_residual(
+        stock,
+        "123456",
+        "stale_or_conflicted_fresh_quote",
+        preserve_position=True,
+    )
+
+    assert stock["entry_split_probe_phase"] == "aborted"
+    assert stock["entry_split_probe_direction_state"] == "HARD_NEGATIVE"
+    assert stock["entry_split_probe_continuation_action"] == "HARD_NEGATIVE"
+    assert stock["entry_split_probe_scale_in_forbidden"] is True
+
+
+def test_post_probe_observation_contract_uses_existing_resolver_family(monkeypatch):
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_DYNAMIC_ENTRY_PRICE_RESOLVER_POST_PROBE_ENABLED", "true"
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ENABLED", "true")
+
+    fields = state_handlers._entry_split_probe_observation_contract_fields()
+
+    assert fields["metric_role"] == "real_execution_quality"
+    assert fields["decision_authority"] == "dynamic_entry_price_resolver_p1_post_probe"
+    assert fields["window_policy"] == "same_day_probe_fill_ttl"
+    assert fields["allowed_runtime_apply"] is False
+    assert {
+        threshold_family_for_stage(stage)
+        for stage in (
+            "probe_continuation_deferred",
+            "residual_planned",
+            "residual_submitted",
+            "residual_blocked",
+        )
+    } == {"dynamic_entry_price_resolver"}
 
 
 def test_probe_receipt_marks_fill_once_and_schedules_residual(monkeypatch, tmp_path):
@@ -277,8 +335,9 @@ def test_probe_fill_callback_uses_fresh_ws_and_submits_immediately(monkeypatch):
     assert observed[0][3]["now_ts"] == now_ts
 
 
+@pytest.mark.parametrize("rising_missed", [False, True])
 def test_probe_residual_submits_once_after_fresh_fill_revalidation(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, rising_missed
 ):
     now_ts = 1_774_150_400.0
     sent = []
@@ -393,6 +452,13 @@ def test_probe_residual_submits_once_after_fresh_fill_revalidation(
             }
         ],
     }
+    if rising_missed:
+        stock.update(
+            {
+                "rising_missed_one_share_scout": True,
+                "forced_entry_qty": 10,
+            }
+        )
 
     submitted = state_handlers._maybe_submit_entry_split_probe_residual(
         stock,
@@ -418,6 +484,401 @@ def test_probe_residual_submits_once_after_fresh_fill_revalidation(
     )
     assert submitted_again is False
     assert len(sent) == 2
+
+
+def test_post_probe_direction_classifies_strong_weak_and_hanwha_source_gap():
+    observed_at = 100.0
+    quote = {
+        "canonical_mark_price": 10_010,
+        "passive_buy_price": 10_000,
+    }
+    strong = state_handlers._post_probe_direction_fields(
+        {
+            "last_watching_ai_feature_probe_at": observed_at,
+            "last_watching_ai_source_quality_fields": {
+                "orderbook_micro_state": "bullish",
+                "buy_pressure_10t": 60.0,
+            },
+        },
+        {"curr": 10_010},
+        quote,
+        probe_fill_price=10_000,
+        now_ts=100.5,
+    )
+    weak = state_handlers._post_probe_direction_fields(
+        {
+            "last_watching_ai_feature_probe_at": observed_at,
+            "last_watching_ai_source_quality_fields": {
+                "orderbook_micro_state": "bearish",
+                "orderbook_micro_qi": 0.20,
+                "orderbook_micro_ofi_norm": -0.10,
+                "buy_pressure_10t": 20.0,
+            },
+        },
+        {"curr": 9_990},
+        {**quote, "canonical_mark_price": 9_990},
+        probe_fill_price=10_000,
+        now_ts=100.5,
+    )
+    hanwha_gap = state_handlers._post_probe_direction_fields(
+        {
+            "last_watching_ai_feature_probe_at": observed_at,
+            "last_watching_ai_source_quality_fields": {
+                "true_ofi_ewma": 0.0013,
+                "buy_pressure_10t": 21.46,
+            },
+        },
+        {"curr": 83_200},
+        {
+            "canonical_mark_price": 83_200,
+            "passive_buy_price": 83_100,
+        },
+        probe_fill_price=83_200,
+        now_ts=100.5,
+    )
+
+    assert strong["post_probe_direction_state"] == "STRONG"
+    assert strong["post_probe_continuation_action"] == "ALLOW_NARROW"
+    assert weak["post_probe_direction_state"] == "WEAK"
+    assert weak["post_probe_continuation_action"] == "DEFER"
+    assert hanwha_gap["post_probe_direction_state"] == "UNKNOWN"
+    assert hanwha_gap["post_probe_continuation_action"] == "DEFER"
+
+
+def test_post_probe_direction_rejects_stale_watching_features():
+    result = state_handlers._post_probe_direction_fields(
+        {
+            "last_watching_ai_feature_probe_at": 90.0,
+            "last_watching_ai_source_quality_fields": {
+                "orderbook_micro_state": "bullish",
+                "buy_pressure_10t": 80.0,
+            },
+        },
+        {"curr": 10_010},
+        {"canonical_mark_price": 10_010, "passive_buy_price": 10_000},
+        probe_fill_price=10_000,
+        now_ts=100.0,
+        max_context_age_sec=3.0,
+    )
+
+    assert result["post_probe_direction_state"] == "UNKNOWN"
+    assert result["post_probe_feature_probe_fresh"] is False
+
+
+def test_post_probe_direction_uses_fresh_live_orderbook_observer(monkeypatch):
+    monkeypatch.setattr(
+        state_handlers,
+        "_build_live_orderbook_micro_context",
+        lambda *_args, **_kwargs: {
+            "ready": True,
+            "micro_state": "bullish",
+            "qi": 0.7,
+            "ofi_norm": 0.1,
+            "snapshot_age_ms": 100,
+            "observer_healthy": True,
+        },
+    )
+
+    result = state_handlers._post_probe_direction_fields(
+        {},
+        {"curr": 10_010, "buy_pressure_10t": 70.0},
+        {"canonical_mark_price": 10_010, "passive_buy_price": 10_000},
+        probe_fill_price=10_000,
+        code="123456",
+        now_ts=100.0,
+    )
+
+    assert result["post_probe_direction_state"] == "STRONG"
+    assert result["post_probe_live_micro_fresh"] is True
+
+
+def test_post_probe_direction_ignores_untrusted_ws_micro_over_fresh_observer(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        state_handlers,
+        "_build_live_orderbook_micro_context",
+        lambda *_args, **_kwargs: {
+            "ready": True,
+            "micro_state": "bullish",
+            "qi": 0.7,
+            "ofi_norm": 0.1,
+            "snapshot_age_ms": 100,
+            "observer_healthy": True,
+        },
+    )
+
+    result = state_handlers._post_probe_direction_fields(
+        {},
+        {
+            "curr": 10_010,
+            "orderbook_micro_state": "bearish",
+            "orderbook_micro_qi": 0.1,
+            "orderbook_micro_ofi_norm": -0.5,
+            "buy_pressure_10t": 1.0,
+            "tick_context_quality": "stale_tick",
+            "tick_aggressor_pressure_usable": False,
+        },
+        {"canonical_mark_price": 10_010, "passive_buy_price": 10_000},
+        probe_fill_price=10_000,
+        code="123456",
+        now_ts=100.0,
+    )
+
+    assert result["post_probe_direction_state"] == "STRONG"
+    assert result["post_probe_live_micro_fresh"] is True
+    assert result["post_probe_ws_tick_context_fresh"] is False
+
+
+def test_post_probe_direction_does_not_treat_ws_tick_freshness_as_orderbook_freshness():
+    result = state_handlers._post_probe_direction_fields(
+        {},
+        {
+            "curr": 10_010,
+            "tick_context_quality": "fresh_computed",
+            "tick_aggressor_pressure_usable": True,
+            "tick_context_stale": False,
+            "tick_acceleration_ratio": 1.2,
+            "orderbook_micro_state": "bullish",
+            "orderbook_micro_qi": 0.8,
+            "orderbook_micro_ofi_norm": 0.5,
+        },
+        {"canonical_mark_price": 10_010, "passive_buy_price": 10_000},
+        probe_fill_price=10_000,
+        now_ts=100.0,
+    )
+
+    assert result["post_probe_direction_state"] == "UNKNOWN"
+    assert result["post_probe_continuation_action"] == "DEFER"
+    assert result["post_probe_ws_tick_context_fresh"] is True
+    assert result["post_probe_live_micro_fresh"] is False
+
+
+def test_post_probe_direction_rejects_future_micro_timestamps(monkeypatch):
+    monkeypatch.setattr(
+        state_handlers,
+        "_build_live_orderbook_micro_context",
+        lambda *_args, **_kwargs: {
+            "ready": True,
+            "micro_state": "bullish",
+            "qi": 0.7,
+            "ofi_norm": 0.1,
+            "snapshot_age_ms": -1,
+            "observer_healthy": True,
+        },
+    )
+
+    result = state_handlers._post_probe_direction_fields(
+        {
+            "last_watching_ai_feature_probe_at": 101.0,
+            "last_watching_ai_feature_probe": {"buy_pressure_10t": 80.0},
+            "last_watching_ai_source_quality_fields": {
+                "orderbook_micro_state": "bullish"
+            },
+        },
+        {"curr": 10_010},
+        {"canonical_mark_price": 10_010, "passive_buy_price": 10_000},
+        probe_fill_price=10_000,
+        code="123456",
+        now_ts=100.0,
+    )
+
+    assert result["post_probe_direction_state"] == "UNKNOWN"
+    assert result["post_probe_live_micro_fresh"] is False
+    assert result["post_probe_feature_probe_fresh"] is False
+
+
+def test_probe_residual_network_path_does_not_hold_shared_receipt_lock(monkeypatch):
+    receipt_lock_acquired = threading.Event()
+
+    def _fake_submit(*_args, **_kwargs):
+        def _receipt_worker():
+            with state_handlers.ENTRY_LOCK:
+                receipt_lock_acquired.set()
+
+        worker = threading.Thread(target=_receipt_worker)
+        worker.start()
+        assert receipt_lock_acquired.wait(0.5)
+        worker.join(timeout=0.5)
+        return True
+
+    monkeypatch.setattr(
+        state_handlers, "_submit_entry_split_probe_residual_locked", _fake_submit
+    )
+
+    assert state_handlers._maybe_submit_entry_split_probe_residual(
+        {},
+        "123456",
+        {},
+        now_ts=100.0,
+        now_dt=datetime(2026, 7, 21, 10, 0, 0),
+    )
+
+
+@pytest.mark.parametrize("second_leg_weak", [False, True])
+def test_post_probe_unknown_defers_then_recovery_reprices_each_p1_leg(
+    monkeypatch, tmp_path, second_leg_weak
+):
+    sent = []
+    direction = {"state": "UNKNOWN", "action": "DEFER", "recovery_calls": 0}
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_DYNAMIC_ENTRY_PRICE_RESOLVER_POST_PROBE_ENABLED", "true"
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ENABLED", "true")
+    monkeypatch.setattr(
+        split_plan,
+        "PROBE_RUNTIME_STATE_PATH",
+        tmp_path / "entry_split_probe_runtime_state.json",
+    )
+    monkeypatch.setattr(state_handlers, "COOLDOWNS", {})
+    monkeypatch.setattr(state_handlers, "KIWOOM_TOKEN", "token")
+    monkeypatch.setattr(state_handlers, "is_buy_side_paused", lambda: False)
+    monkeypatch.setattr(
+        state_handlers, "is_scalping_buy_time_allowed", lambda _now: True
+    )
+    monkeypatch.setattr(
+        state_handlers, "_has_active_sell_order_pending", lambda _stock: False
+    )
+    monkeypatch.setattr(
+        state_handlers, "_has_open_pending_entry_orders", lambda _stock: False
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_build_quote_consistency_fields",
+        lambda *args, **kwargs: (
+            {
+                "quote_consistency_state": "ok",
+                "quote_consistency_reason": "ws_only_fresh",
+                "canonical_mark_price": 10000,
+                "passive_buy_price": 9990,
+            },
+            10000,
+            10010,
+            9990,
+        ),
+    )
+
+    def _direction_fields(*_args, **_kwargs):
+        if direction["state"] == "STRONG":
+            direction["recovery_calls"] += 1
+            if second_leg_weak and direction["recovery_calls"] >= 3:
+                return {
+                    "post_probe_direction_state": "WEAK",
+                    "post_probe_continuation_action": "DEFER",
+                    "post_probe_direction_reason": "second_leg_weakened",
+                }
+        return {
+            "post_probe_direction_state": direction["state"],
+            "post_probe_continuation_action": direction["action"],
+            "post_probe_direction_reason": "test",
+        }
+
+    monkeypatch.setattr(
+        state_handlers, "_post_probe_direction_fields", _direction_fields
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_probe_residual_account_guard_fields",
+        lambda *args, **kwargs: {
+            "account_guard_allowed": True,
+            "account_guard_reason": "probe_residual_account_guard_passed",
+        },
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_split_policy_pre_submit_price_guard_fields",
+        lambda *args, **kwargs: {"pre_submit_price_guard_blocked": False},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "WS_MANAGER",
+        SimpleNamespace(get_latest_data=lambda _code: {"curr": 10000}),
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "describe_buy_order_resolution",
+        lambda *args, **kwargs: {
+            "requested_order_type": "00",
+            "effective_order_type": "00",
+            "effective_dmst_stex_tp": "SOR",
+            "order_type_remapped": False,
+            "order_type_remap_reason": "",
+        },
+    )
+
+    def _send(_code, qty, price, *_args, **_kwargs):
+        sent.append((qty, price))
+        return {"return_code": "0", "ord_no": f"R{len(sent)}"}
+
+    monkeypatch.setattr(state_handlers.kiwoom_orders, "send_buy_order", _send)
+    monkeypatch.setattr(state_handlers, "_log_entry_pipeline", lambda *a, **k: None)
+    stock = {
+        "id": 1,
+        "name": "PROBE",
+        "code": "123456",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_qty": 1,
+        "buy_price": 10000,
+        "entry_requested_qty": 5,
+        "requested_buy_qty": 5,
+        "entry_filled_qty": 1,
+        "entry_fill_amount": 10000,
+        "entry_split_probe_phase": "probe_filled",
+        "entry_split_probe_bundle_id": "123456-probe-direction",
+        "entry_split_probe_requested_qty": 5,
+        "entry_split_probe_submit_best_ask": 10000,
+        "entry_split_probe_timeout_sec": 3,
+        "entry_split_probe_max_slippage_bps": 50,
+        "entry_split_probe_submitted_at": 100.0,
+        "entry_split_probe_filled_at": 100.1,
+        "entry_split_probe_fill_price": 10000,
+        "entry_split_probe_continuation": {
+            "base_order": {"tag": "normal", "tif": "DAY", "order_type_code": "00"},
+            "requested_qty": 5,
+            "residual_qty": 4,
+            "residual_leg_count": 2,
+            "residual_quantities": [2, 2],
+            "price_offsets_ticks": [0, 1],
+            "price_offsets_pct": [0.0, 0.3],
+            "common_fields": {"entry_split_order_policy_applied": True},
+        },
+        "pending_entry_orders": [
+            {
+                "tag": "entry_split_probe_0",
+                "ord_no": "P0",
+                "qty": 1,
+                "filled_qty": 1,
+                "status": "FILLED",
+                "dmst_stex_tp": "SOR",
+            }
+        ],
+    }
+
+    assert not state_handlers._maybe_submit_entry_split_probe_residual(
+        stock,
+        "123456",
+        {"curr": 10000},
+        now_ts=100.2,
+        now_dt=datetime(2026, 7, 20, 10, 0, 0),
+    )
+    assert stock["entry_split_probe_phase"] == "probe_recheck_pending"
+    assert sent == []
+
+    direction.update(state="STRONG", action="ALLOW_NARROW")
+    assert state_handlers._maybe_submit_entry_split_probe_residual(
+        stock,
+        "123456",
+        {"curr": 10000},
+        now_ts=100.5,
+        now_dt=datetime(2026, 7, 20, 10, 0, 1),
+    )
+    expected_sent = [(2, 9970)] if second_leg_weak else [(2, 9970), (2, 9920)]
+    assert sent == expected_sent
+    assert stock["entry_split_probe_offset_profile"] == "recovered_wide"
+    assert stock["entry_split_probe_phase"] == (
+        "residual_partial_submitted" if second_leg_weak else "residual_submitted"
+    )
 
 
 def test_probe_residual_timeout_aborts_one_share_without_scale_in(
@@ -476,6 +937,31 @@ def test_probe_residual_timeout_aborts_one_share_without_scale_in(
         "allowed": False,
         "reason": "entry_split_probe_scale_in_forbidden",
     }
+
+
+def test_rising_missed_total_qty_owns_scout_state_and_completed_bundle_stops_upgrade():
+    stock = {
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "buy_qty": 4,
+        "entry_filled_qty": 4,
+        "rising_missed_one_share_scout": True,
+        "forced_entry_qty": 4,
+    }
+
+    assert state_handlers._is_rising_missed_one_share_scout_holding(
+        stock,
+        strategy="SCALPING",
+        pos_tag="SCANNER",
+    )
+
+    stock["rising_missed_scout_upgraded"] = True
+    assert not state_handlers._is_rising_missed_one_share_scout_holding(
+        stock,
+        strategy="SCALPING",
+        pos_tag="SCANNER",
+    )
 
 
 def test_probe_residual_account_guard_requires_current_orderable_quantity(monkeypatch):

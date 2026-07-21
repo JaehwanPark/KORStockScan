@@ -2867,7 +2867,9 @@ def build_report(
         "records": rows[:100],
         "rising_missed_submit_lineage_rows": submit_lineage_rows[:200],
         "first_touch_regression_rows": first_touch_rows[:200],
-        "submit_safety_blocker_rows": submit_safety_rows[:200],
+        # Keep the current intraday window inspectable after the bounded table
+        # reaches its payload limit.
+        "submit_safety_blocker_rows": submit_safety_rows[-200:],
         "backoff_opportunity_audit_rows": backoff_audit_rows[:200],
         "latency_false_negative_review_rows": latency_false_negative_rows[:200],
         "latency_false_negative_canary_candidate_rows": latency_canary_rows[:200],

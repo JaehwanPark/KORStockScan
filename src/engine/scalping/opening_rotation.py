@@ -217,7 +217,10 @@ def _blocked(reason: str, state: dict[str, Any], **fields: Any) -> dict[str, Any
 
 
 def _entry_micro_gate_preview(
-    packet: dict[str, Any], config: EntryConfig
+    packet: dict[str, Any],
+    config: EntryConfig,
+    *,
+    source_quality_ready: bool = True,
 ) -> tuple[dict[str, Any], tuple[tuple[bool, str], ...]]:
     """Expose downstream gate readiness before the pullback state is complete."""
 
@@ -274,6 +277,9 @@ def _entry_micro_gate_preview(
         (vi_risk <= config.max_vi_risk_score, "vi_proximity_risk"),
     )
     failed_reasons = [reason for passed, reason in checks if not passed]
+    preview_blockers = (
+        failed_reasons if source_quality_ready else ["trusted_tick_context_unavailable"]
+    )
     metrics = {
         "spread_bp": spread_bp,
         "buy_pressure_10t": buy_pressure,
@@ -288,20 +294,42 @@ def _entry_micro_gate_preview(
         "microstructure_reaction_bid_replenishment_score": bid_replenishment,
         "microstructure_reaction_wall_replenishment_risk_score": wall_risk,
         "microstructure_reaction_vi_proximity_risk": vi_risk,
-        "opening_rotation_downstream_preview_evaluated": True,
-        "opening_rotation_downstream_preview_passed": not failed_reasons,
+        "opening_rotation_downstream_preview_evaluated": source_quality_ready,
+        "opening_rotation_downstream_preview_source_quality": (
+            "ready" if source_quality_ready else "trusted_tick_context_unavailable"
+        ),
+        "opening_rotation_downstream_preview_passed": (
+            source_quality_ready and not failed_reasons
+        ),
         "opening_rotation_downstream_preview_pass_count": (
-            len(checks) - len(failed_reasons)
+            len(checks) - len(failed_reasons) if source_quality_ready else 0
         ),
         "opening_rotation_downstream_preview_total_count": len(checks),
         "opening_rotation_downstream_preview_first_blocker": (
-            failed_reasons[0] if failed_reasons else "all_downstream_gates_ready"
+            preview_blockers[0] if preview_blockers else "all_downstream_gates_ready"
         ),
         "opening_rotation_downstream_preview_blockers": (
-            ",".join(failed_reasons) if failed_reasons else "-"
+            ",".join(preview_blockers) if preview_blockers else "-"
         ),
         "opening_rotation_downstream_preview_decision_authority": (
             "observation_only_no_pattern_or_submit_bypass"
+        ),
+        "opening_rotation_downstream_preview_metric_role": "diagnostic",
+        "opening_rotation_downstream_preview_window_policy": (
+            "same_symbol_same_day_opening_rotation_state"
+        ),
+        "opening_rotation_downstream_preview_sample_floor": (
+            "one_fresh_quote_observation_trusted_tape_required_for_evaluated_true"
+        ),
+        "opening_rotation_downstream_preview_primary_decision_metric": (
+            "first_blocker_after_source_quality"
+        ),
+        "opening_rotation_downstream_preview_source_quality_gate": (
+            "fresh_quote_and_trusted_ws_aggressor_context"
+        ),
+        "opening_rotation_downstream_preview_forbidden_uses": (
+            "standalone_buy,pattern_bypass,submit_safety_bypass,broker_guard_bypass,"
+            "threshold_mutation,quantity_or_cap_change,provider_route_change"
         ),
     }
     return metrics, checks
@@ -387,10 +415,14 @@ def evaluate_entry(
         return _blocked("quote_freshness_unavailable", state, **common)
     if quote_stale or quote_age_ms > quote_stale_threshold_ms or tick_stale:
         return _blocked("stale_market_context", state, **common)
-    if tick_quality != "fresh_computed" or not pressure_usable:
-        return _blocked("trusted_tick_context_unavailable", state, **common)
-
-    micro_metrics, checks = _entry_micro_gate_preview(packet, config)
+    trusted_tick_context_ready = bool(
+        tick_quality == "fresh_computed" and pressure_usable
+    )
+    micro_metrics, checks = _entry_micro_gate_preview(
+        packet,
+        config,
+        source_quality_ready=trusted_tick_context_ready,
+    )
     common.update(
         {
             "quote_age_ms": quote_age_ms,
@@ -416,6 +448,8 @@ def evaluate_entry(
             "last_observed_at": now_dt.isoformat(),
         }
     )
+    if not trusted_tick_context_ready:
+        return _blocked("trusted_tick_context_unavailable", state, **common)
     if now_dt.time() < config.entry_start:
         state["phase"] = "COLLECTING"
         return _blocked("collecting_before_entry_window", state, **common)

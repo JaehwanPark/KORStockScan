@@ -1229,6 +1229,23 @@ def test_allocator_probe_first_reserves_one_share_and_builds_fill_anchored_resid
     assert residuals[0]["price"] == 10020
     assert all(order["order_type_code"] == "00" for order in residuals)
 
+    p1_prices = [9970] + [9920] * (len(continuation["residual_quantities"]) - 1)
+    p1_residuals, p1_fields = split_plan.build_probe_residual_orders(
+        continuation,
+        probe_fill_price=10080,
+        best_bid=10000,
+        best_ask=10020,
+        resolved_leg_prices=p1_prices,
+    )
+
+    assert p1_fields["allowed"] is True
+    assert p1_fields["residual_price_authority"] == ("dynamic_entry_price_resolver_p1")
+    assert [order["price"] for order in p1_residuals] == p1_prices
+    assert all(
+        order["entry_split_order_price_authority"] == "dynamic_entry_price_resolver_p1"
+        for order in p1_residuals
+    )
+
     fallback_orders, fallback_fields = split_plan.apply_entry_split_order_policy(
         [{"tag": "normal", "qty": 10, "price": 10000, "tif": "DAY"}],
         stock={"code": "654321", "strategy": "SCALPING"},
@@ -1449,6 +1466,45 @@ def test_probe_runtime_restart_recovery_restores_bundle_and_fails_closed_on_mism
     state = split_plan._load_json(state_path)
     assert state["circuit_open"] is True
     assert state["circuit_reason"] == "probe_restart_recovery_quantity_mismatch"
+
+
+def test_probe_runtime_restart_clears_pending_recheck_without_opening_circuit(
+    monkeypatch, tmp_path
+):
+    state_path = tmp_path / "entry_split_probe_runtime_state.json"
+    monkeypatch.setattr(split_plan, "PROBE_RUNTIME_STATE_PATH", state_path)
+    now = datetime(2026, 7, 20, 10, 0, tzinfo=timezone(timedelta(hours=9)))
+    split_plan.update_probe_runtime_bundle(
+        "123456-probe-recheck-restart",
+        phase="probe_recheck_pending",
+        now=now,
+        code="123456",
+        target_id=7,
+        requested_qty=5,
+        fill_qty=1,
+        recheck_count=2,
+        post_probe_direction_state="UNKNOWN",
+    )
+    stock = {
+        "id": 7,
+        "code": "123456",
+        "buy_qty": 1,
+        "status": "HOLDING",
+    }
+
+    result = split_plan.recover_probe_runtime_bundle_for_stock(stock, now=now)
+
+    assert result == {
+        "recovered": True,
+        "reason": "post_probe_recheck_cleared_on_restart",
+        "phase": "aborted",
+    }
+    assert stock["entry_split_probe_phase"] == "aborted"
+    assert stock["entry_requested_qty"] == 1
+    assert "entry_split_probe_direction_state" not in stock
+    state = split_plan._load_json(state_path)
+    assert state["circuit_open"] is False
+    assert state["bundles"]["123456-probe-recheck-restart"]["phase"] == "aborted"
 
 
 def test_allocator_date_bounded_policy_becomes_inactive(monkeypatch, tmp_path):

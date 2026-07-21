@@ -8411,6 +8411,35 @@ def test_verify_runtime_env_handoff_rejects_probe_first_value_mismatch(
     ]
 
 
+def test_verify_runtime_env_handoff_rejects_post_probe_resolver_without_probe_first(
+    tmp_path, monkeypatch
+):
+    runtime_dir = tmp_path / "runtime_env"
+    runtime_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    (runtime_dir / "threshold_runtime_env_2026-07-21.json").write_text(
+        json.dumps(
+            {"target_date": "2026-07-21", "selected_families": [], "env_overrides": {}}
+        ),
+        encoding="utf-8",
+    )
+    (runtime_dir / "operator_runtime_overrides.env").write_text(
+        "export KORSTOCKSCAN_DYNAMIC_ENTRY_PRICE_RESOLVER_POST_PROBE_ENABLED=true\n"
+        "export KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ENABLED=false\n",
+        encoding="utf-8",
+    )
+
+    result = mod.verify_runtime_env_handoff("2026-07-21")
+
+    finding = next(
+        item
+        for item in result["findings"]
+        if item.get("policy_reason")
+        == "post_probe_resolver_probe_first_dependency_disabled"
+    )
+    assert finding["family"] == "dynamic_entry_price_resolver"
+
+
 def test_dated_runtime_override_audits_require_current_date_and_dependency():
     target_date = "2026-07-15"
     env = {
@@ -8802,6 +8831,7 @@ def test_verify_runtime_env_handoff_rolls_probe_first_into_target_date_overlay(
         "KORSTOCKSCAN_ENTRY_SPLIT_PROBE_MAX_BUNDLES": "5",
         "KORSTOCKSCAN_ENTRY_SPLIT_PROBE_MAX_SLIPPAGE_BPS": "50",
         "KORSTOCKSCAN_ENTRY_SPLIT_PROBE_ANCHOR_MODE": "fill_clamped_to_fresh_bbo",
+        "KORSTOCKSCAN_DYNAMIC_ENTRY_PRICE_RESOLVER_POST_PROBE_ENABLED": "true",
     }
     (runtime_dir / "operator_runtime_overrides.env").write_text(
         "".join(f"export {key}={value}\n" for key, value in persistent_env.items()),

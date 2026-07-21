@@ -269,11 +269,19 @@ def test_opening_rotation_restores_pullback_state_across_scanner_repromotion(
         "_log_entry_pipeline",
         lambda *args, **kwargs: emitted.append((args, kwargs)),
     )
-    packet_prices = iter((10_000, 10_020))
+    source_gap_packet = _packet(10_000)
+    source_gap_packet.update(
+        {
+            "tick_context_quality": "missing",
+            "tick_aggressor_pressure_usable": False,
+            "tick_aggressor_trusted_count": 0,
+        }
+    )
+    packets = iter((source_gap_packet, _packet(10_020)))
     monkeypatch.setattr(
         handlers,
         "_opening_rotation_feature_packet",
-        lambda *args, **kwargs: _packet(next(packet_prices)),
+        lambda *args, **kwargs: next(packets),
     )
     first_now = datetime(2026, 7, 21, 12, 40)
     first_stock = {
@@ -303,6 +311,15 @@ def test_opening_rotation_restores_pullback_state_across_scanner_repromotion(
     )
     assert first_runtime["is_trigger"] is False
     assert first_stock["opening_rotation_1pct_state"]["pullback_seen"] is True
+    first_observed_fields = next(
+        fields
+        for args, fields in emitted
+        if args[2] == "opening_rotation_1pct_observed"
+    )
+    assert first_observed_fields["reason"] == "trusted_tick_context_unavailable"
+    assert (
+        first_observed_fields["opening_rotation_downstream_preview_evaluated"] is False
+    )
 
     second_now = datetime(2026, 7, 21, 12, 41)
     second_stock = {
@@ -397,6 +414,56 @@ def test_pullback_wait_exposes_downstream_gate_preview_without_bypass():
         decision["opening_rotation_downstream_preview_decision_authority"]
         == "observation_only_no_pattern_or_submit_bypass"
     )
+
+
+def test_fresh_quote_without_trusted_tape_preserves_pullback_for_repromotion():
+    source_gap_packet = _packet(10_000)
+    source_gap_packet.update(
+        {
+            "tick_context_quality": "missing",
+            "tick_aggressor_pressure_usable": False,
+            "tick_aggressor_trusted_count": 0,
+        }
+    )
+    source_gap = evaluate_entry(
+        previous_state=None,
+        feature_packet=source_gap_packet,
+        source_signature="PRICE_JUMP_START",
+        day_change_pct=3.0,
+        intraday_high_price=10_100,
+        now_dt=datetime(2026, 7, 21, 13, 40, 0),
+    )
+
+    assert source_gap["reason"] == "trusted_tick_context_unavailable"
+    assert source_gap["state"]["pullback_seen"] is True
+    assert source_gap["state"]["last_price"] == 10_000
+    assert source_gap["opening_rotation_downstream_preview_evaluated"] is False
+    assert source_gap["opening_rotation_downstream_preview_source_quality"] == (
+        "trusted_tick_context_unavailable"
+    )
+    assert source_gap["opening_rotation_downstream_preview_pass_count"] == 0
+    assert source_gap["opening_rotation_downstream_preview_first_blocker"] == (
+        "trusted_tick_context_unavailable"
+    )
+    assert source_gap["opening_rotation_downstream_preview_metric_role"] == (
+        "diagnostic"
+    )
+    assert (
+        "standalone_buy"
+        in source_gap["opening_rotation_downstream_preview_forbidden_uses"]
+    )
+
+    recovered = evaluate_entry(
+        previous_state=source_gap["state"],
+        feature_packet=_packet(10_020),
+        source_signature="PRICE_JUMP_START",
+        day_change_pct=3.0,
+        intraday_high_price=10_100,
+        now_dt=datetime(2026, 7, 21, 13, 40, 1),
+    )
+
+    assert recovered["qualified"] is True
+    assert recovered["reason"] == "pullback_reacceleration_confirmed"
 
 
 @pytest.mark.parametrize(

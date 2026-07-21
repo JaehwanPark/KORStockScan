@@ -4401,6 +4401,9 @@ def verify_runtime_env_handoff(
                 }
             )
     probe_first_enabled_key = "KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ENABLED"
+    post_probe_resolver_enabled_key = (
+        "KORSTOCKSCAN_DYNAMIC_ENTRY_PRICE_RESOLVER_POST_PROBE_ENABLED"
+    )
     probe_first_active_date_key = "KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ACTIVE_DATE"
     probe_first_required_keys = (
         probe_first_enabled_key,
@@ -4469,6 +4472,20 @@ def verify_runtime_env_handoff(
                     "policy_reason": "probe_first_value_mismatch",
                 }
             )
+    if _runtime_env_enabled(
+        effective_env_overrides.get(post_probe_resolver_enabled_key)
+    ) and not _runtime_env_enabled(
+        effective_env_overrides.get(probe_first_enabled_key)
+    ):
+        findings.append(
+            {
+                "family": "dynamic_entry_price_resolver",
+                "missing_env_keys": [probe_first_enabled_key],
+                "severity": "runtime_policy_unusable",
+                "detail": "post-probe P1 capability requires probe-first runtime",
+                "policy_reason": "post_probe_resolver_probe_first_dependency_disabled",
+            }
+        )
     unverified_selected_families = sorted(
         family
         for family in selected_families
@@ -4528,6 +4545,12 @@ def verify_runtime_env_handoff(
             for key in probe_first_required_keys:
                 if key not in keys:
                     keys.append(key)
+        if _runtime_env_enabled(
+            effective_env_overrides.get(post_probe_resolver_enabled_key)
+        ):
+            keys = pid_required_keys.setdefault("dynamic_entry_price_resolver", [])
+            if post_probe_resolver_enabled_key not in keys:
+                keys.append(post_probe_resolver_enabled_key)
         for family, required_keys in pid_required_keys.items():
             for key in required_keys:
                 manifest_value = effective_env_overrides.get(key)

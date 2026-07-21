@@ -40971,3 +40971,52 @@ def test_emit_partial_only_timeout_shadow_logs_when_partial_stuck(monkeypatch):
     assert logs[0][1]["shadow_only"] is True
     assert logs[0][1]["requested_qty"] == 3
     assert logs[0][1]["buy_qty"] == 1
+
+
+def test_runtime_action_now_ts_does_not_reuse_stale_loop_clock(monkeypatch):
+    monkeypatch.setattr(state_handlers.time, "time", lambda: 2_000.0)
+
+    assert state_handlers._runtime_action_now_ts({"now_ts": 1_850.0}) == 2_000.0
+    assert state_handlers._runtime_action_now_ts({"now_ts": 2_010.0}) == 2_010.0
+    assert state_handlers._runtime_action_now_ts({"now_ts": 1_000_000.0}) == 1_000_000.0
+
+
+def test_real_weak_ai_micro_entry_block_uses_live_clock_for_refreshed_tp1_context(
+    monkeypatch,
+):
+    monkeypatch.setattr(state_handlers.time, "time", lambda: 2_000.0)
+    monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ENABLED", "true")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE", "1970-01-01"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RISING_MISSED_TP1_SOURCE_GAP_RELIEF_ENABLED", "true"
+    )
+
+    decision = state_handlers._evaluate_real_weak_ai_micro_entry_block(
+        strategy="SCALPING",
+        stock={
+            "rising_missed_tp1_submit_context_at": 1_995.0,
+            "rising_missed_tp1_submit_context_support_count": 3,
+            "rising_missed_tp1_submit_context_lane": "low_rebound",
+            "rising_missed_tp1_submit_context_micro_source_state": "fresh_ws",
+            "rising_missed_tp1_submit_context_candidate_allowed": True,
+            "rising_missed_tp1_submit_context_selector_active": True,
+            "rising_missed_tp1_submit_context_policy": "probability_support_v3",
+            "rising_missed_tp1_submit_context_input_ready": True,
+            "rising_missed_tp1_submit_context_support_momentum": True,
+        },
+        latency_gate={"ai_score": 0, "ai_action": "WAIT"},
+        latency_signal_score=0,
+        orderbook_fields={
+            "orderbook_micro_state": "neutral",
+            "orderbook_micro_reason": "ready",
+            "orderbook_micro_ofi_norm": 0.0,
+            "orderbook_micro_qi": 0.5,
+        },
+        microstructure_fields={},
+        now_ts=1_950.0,
+    )
+
+    assert decision["rising_missed_tp1_source_gap_relief_context_age_sec"] == 5.0
+    assert decision["rising_missed_tp1_source_gap_relief_applied"] is True

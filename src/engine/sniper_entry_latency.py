@@ -743,7 +743,7 @@ def _can_apply_target_buy_price_cap(*, target_buy_price: int, best_bid: int) -> 
     return _compute_price_below_bid_bps(target_buy_price, best_bid) <= max_below_bid_bps
 
 
-def _resolve_scalping_order_price(
+def _resolve_initial_scalping_order_price(
     *,
     strategy_id: str,
     defensive_order_price: int,
@@ -808,6 +808,145 @@ def _resolve_scalping_order_price(
         reference_target_rejected_reason="target_below_bid_bps_exceeded",
     )
     return resolved
+
+
+def resolve_scalping_entry_price(
+    *,
+    strategy_id: str,
+    defensive_order_price: int,
+    target_buy_price: int,
+    best_bid: int,
+    best_ask: int = 0,
+    phase: str = "initial",
+    probe_fill_price: int = 0,
+    fresh_mark_price: int = 0,
+    continuation_action: str = "ALLOW_NORMAL",
+    residual_leg_index: int = 0,
+) -> dict[str, Any]:
+    """Resolve all scalping entry prices through the P1 authority.
+
+    ``initial`` preserves the legacy scalar-price contract.  ``post_probe``
+    and ``leg_reprice`` additionally own the executable residual-leg price;
+    the split allocator may distribute quantity but must not invent another
+    price profile.
+    """
+
+    normalized_phase = str(phase or "initial").strip().lower()
+    if normalized_phase == "initial":
+        resolved = _resolve_initial_scalping_order_price(
+            strategy_id=strategy_id,
+            defensive_order_price=defensive_order_price,
+            target_buy_price=target_buy_price,
+            best_bid=best_bid,
+        )
+        order_price = _safe_price_int(resolved.get("order_price"))
+        return {
+            **resolved,
+            "allowed": order_price > 0,
+            "action": "ALLOW_NORMAL" if order_price > 0 else "BLOCK",
+            "anchor_price": order_price,
+            "min_price": order_price,
+            "max_price": order_price,
+            "offset_profile": "initial",
+            "resolved_order_price": order_price,
+            "reason": str(
+                resolved.get("price_resolution_reason") or "defensive_order_price"
+            ),
+            "entry_price_resolver_phase": "initial",
+        }
+
+    resolver_enabled = bool(
+        getattr(TRADING_RULES, "SCALPING_ENTRY_PRICE_RESOLVER_ENABLED", True)
+    ) and str(strategy_id or "").upper() in {"SCALPING", "SCALP"}
+    action = str(continuation_action or "").strip().upper()
+    result: dict[str, Any] = {
+        "allowed": False,
+        "action": action or "BLOCK",
+        "anchor_price": 0,
+        "min_price": 0,
+        "max_price": 0,
+        "offset_profile": "none",
+        "resolved_order_price": 0,
+        "order_price": 0,
+        "reason": "post_probe_contract_invalid",
+        "price_resolution_reason": "post_probe_contract_invalid",
+        "entry_price_resolver_enabled": resolver_enabled,
+        "entry_price_resolver_phase": normalized_phase,
+        "reference_target_applied": False,
+        "reference_target_rejected_reason": "post_probe_phase_not_applicable",
+        "reference_target_below_bid_bps": 0,
+        "reference_target_max_below_bid_bps": int(
+            getattr(
+                TRADING_RULES, "SCALPING_ENTRY_PRICE_RESOLVER_MAX_BELOW_BID_BPS", 80
+            )
+            or 80
+        ),
+    }
+    if normalized_phase not in {"post_probe", "leg_reprice"}:
+        result["reason"] = "unsupported_resolver_phase"
+        result["price_resolution_reason"] = result["reason"]
+        return result
+    if not resolver_enabled:
+        result["reason"] = "entry_price_resolver_disabled"
+        result["price_resolution_reason"] = result["reason"]
+        return result
+    if action in {"DEFER", "BLOCK", "HARD_NEGATIVE", ""}:
+        result["reason"] = f"continuation_{action.lower() or 'missing'}"
+        result["price_resolution_reason"] = result["reason"]
+        return result
+
+    fill_price = _safe_price_int(probe_fill_price)
+    bid = _safe_price_int(best_bid)
+    ask = _safe_price_int(best_ask)
+    if fill_price <= 0 or bid <= 0 or ask <= 0 or bid > ask:
+        result["reason"] = "invalid_post_probe_bbo"
+        result["price_resolution_reason"] = result["reason"]
+        return result
+    anchor = min(max(fill_price, bid), ask)
+    leg_index = max(0, int(residual_leg_index or 0))
+
+    if action == "ALLOW_NARROW":
+        profile = "narrow"
+        resolved_price = move_price_by_ticks(anchor, -min(leg_index, 2))
+        min_price = move_price_by_ticks(anchor, -2)
+    elif action == "ALLOW_RECOVERED_WIDE":
+        profile = "recovered_wide"
+        wide_bps = (30, 80)
+        selected_bps = wide_bps[min(leg_index, len(wide_bps) - 1)]
+        resolved_price = move_price_down_by_bps(anchor, selected_bps)
+        min_price = move_price_down_by_bps(anchor, 80)
+    elif action == "ALLOW_NORMAL":
+        profile = "normal"
+        normal_bps = (0, 30, 80)
+        selected_bps = normal_bps[min(leg_index, len(normal_bps) - 1)]
+        resolved_price = (
+            anchor
+            if selected_bps == 0
+            else move_price_down_by_bps(anchor, selected_bps)
+        )
+        min_price = move_price_down_by_bps(anchor, 80)
+    else:
+        result["reason"] = "unsupported_continuation_action"
+        result["price_resolution_reason"] = result["reason"]
+        return result
+
+    resolved_price = clamp_price_to_tick(max(1, int(resolved_price or 0)))
+    result.update(
+        {
+            "allowed": resolved_price > 0,
+            "anchor_price": anchor,
+            "min_price": int(min_price or resolved_price),
+            "max_price": anchor,
+            "offset_profile": profile,
+            "resolved_order_price": resolved_price,
+            "order_price": resolved_price,
+            "reason": f"post_probe_{profile}",
+            "price_resolution_reason": f"post_probe_{profile}",
+            "fresh_mark_price": _safe_price_int(fresh_mark_price),
+            "residual_leg_index": leg_index,
+        }
+    )
+    return result
 
 
 def _to_float(value: Any, default: float = 0.0) -> float:
@@ -5454,7 +5593,7 @@ def evaluate_live_buy_entry(
                     ),
                 }
             else:
-                price_resolution = _resolve_scalping_order_price(
+                price_resolution = resolve_scalping_entry_price(
                     strategy_id=strategy_id,
                     defensive_order_price=order_price,
                     target_buy_price=int(target_buy_price or 0),
@@ -5642,7 +5781,7 @@ def evaluate_live_buy_entry(
         latency_guarded_order_price = int(defensive_order.price)
         counterfactual_order_price_1tick = move_price_by_ticks(latest_price, -1)
         order_price = int(defensive_order.price)
-        price_resolution = _resolve_scalping_order_price(
+        price_resolution = resolve_scalping_entry_price(
             strategy_id=strategy_id,
             defensive_order_price=order_price,
             target_buy_price=int(target_buy_price or 0),

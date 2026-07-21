@@ -115,6 +115,7 @@ from src.engine.trade_pause_control import is_buy_side_paused, get_pause_state_l
 from src.engine.sniper_entry_latency import (
     clear_signal_reference,
     evaluate_live_buy_entry,
+    resolve_scalping_entry_price,
 )
 from src.engine.sniper_entry_state import ENTRY_LOCK, move_orders_to_terminal
 from src.engine.sniper_strength_momentum import evaluate_scalping_strength_momentum
@@ -2159,6 +2160,24 @@ def _safe_float(value, default=0.0):
         return numeric
     except Exception:
         return default
+
+
+def _runtime_action_now_ts(runtime: dict | None = None) -> float:
+    """Return a wall-clock timestamp that cannot trail the loop snapshot.
+
+    Scanner iterations can spend tens of seconds in enrichment and AI calls.  A
+    loop-start ``runtime['now_ts']`` is therefore unsafe for short recheck TTLs:
+    by the time a recheck is armed its deadline may already have expired.  Keep
+    an explicitly historical/replayed runtime clock intact so deterministic
+    evaluation does not expire same-day guards against the real wall clock.
+    """
+    wall_now = time.time()
+    loop_now = _safe_float((runtime or {}).get("now_ts"), 0.0)
+    if loop_now <= 0:
+        return wall_now
+    if abs(wall_now - loop_now) > 6 * 60 * 60:
+        return loop_now
+    return max(wall_now, loop_now)
 
 
 def _safe_int(value, default=0):
@@ -25005,6 +25024,10 @@ def _evaluate_real_weak_ai_micro_entry_block(
     microstructure_fields=None,
     now_ts=None,
 ) -> dict:
+    # A scanner-loop timestamp can predate a TP1 context refreshed later in the
+    # same loop after REST/AI work.  Normalize it through the shared live/replay
+    # clock guard so a fresh context never receives a negative age.
+    now_ts = _runtime_action_now_ts({"now_ts": now_ts})
     if str(strategy or "").upper() not in {"SCALPING", "SCALP"}:
         return {"blocked": False, "reason": "non_scalping"}
     if not _rule_bool("SCALP_REAL_WEAK_AI_MICRO_ENTRY_BLOCK_ENABLED", True):
@@ -30195,7 +30218,7 @@ def _split_order_meta_fields(order: dict | None) -> dict:
 
 
 def _entry_split_probe_observation_contract_fields() -> dict[str, Any]:
-    return {
+    fields = {
         "metric_role": "real_execution_quality",
         "decision_authority": "operator_override_observation_only",
         "window_policy": "same_day_operator_canary",
@@ -30208,6 +30231,20 @@ def _entry_split_probe_observation_contract_fields() -> dict[str, Any]:
             "quantity_cap_release|broker_guard_bypass|full_live_approval"
         ),
     }
+    if _env_bool(
+        "KORSTOCKSCAN_DYNAMIC_ENTRY_PRICE_RESOLVER_POST_PROBE_ENABLED", False
+    ) and _env_bool("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ENABLED", False):
+        fields.update(
+            {
+                "decision_authority": "dynamic_entry_price_resolver_p1_post_probe",
+                "window_policy": "same_day_probe_fill_ttl",
+                "primary_decision_metric": "post_probe_direction_state",
+                "source_quality_gate": (
+                    "exact_probe_receipt_fresh_bbo_two_direction_groups"
+                ),
+            }
+        )
+    return fields
 
 
 def _probe_residual_account_guard_fields(
@@ -30260,7 +30297,274 @@ _ENTRY_SPLIT_PROBE_RUNTIME_KEYS = (
     "entry_split_probe_fill_price",
     "entry_split_probe_filled_at",
     "entry_split_probe_residual_claimed",
+    "entry_split_probe_recheck_due_at",
+    "entry_split_probe_recheck_count",
+    "entry_split_probe_deferred_once",
+    "entry_split_probe_direction_state",
+    "entry_split_probe_continuation_action",
+    "entry_split_probe_offset_profile",
 )
+
+# Residual submission can be reached by both the fill callback worker and the
+# holding loop.  Serialize only this rare path; ENTRY_LOCK is also the receipt
+# state lock and must not be held across account REST or broker order calls.
+_ENTRY_SPLIT_PROBE_RESIDUAL_LOCK = threading.RLock()
+
+
+def _post_probe_price_resolver_enabled() -> bool:
+    return _env_bool(
+        "KORSTOCKSCAN_DYNAMIC_ENTRY_PRICE_RESOLVER_POST_PROBE_ENABLED", False
+    ) and _env_bool("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ENABLED", False)
+
+
+def _post_probe_recheck_interval_sec() -> float:
+    raw = _safe_float(
+        os.getenv("KORSTOCKSCAN_DYNAMIC_ENTRY_PRICE_RESOLVER_POST_PROBE_RECHECK_MS"),
+        250.0,
+    )
+    return max(0.1, min(1.0, raw / 1000.0))
+
+
+def _post_probe_direction_fields(
+    stock: dict,
+    ws_data: dict,
+    quote_fields: dict,
+    *,
+    probe_fill_price: int,
+    code: str = "",
+    now_ts: float | None = None,
+    max_context_age_sec: float = 3.0,
+) -> dict[str, Any]:
+    """Classify continuation direction from fresh BBO and bounded micro context."""
+
+    observed_now = _safe_float(now_ts, time.time())
+    feature_probe_at = _safe_float(stock.get("last_watching_ai_feature_probe_at"), 0.0)
+    feature_probe_age_sec = (
+        observed_now - feature_probe_at if feature_probe_at > 0 else None
+    )
+    feature_probe_fresh = bool(
+        feature_probe_age_sec is not None
+        and feature_probe_age_sec >= -0.5
+        and feature_probe_age_sec <= max(0.1, float(max_context_age_sec))
+    )
+    feature_probe = (
+        stock.get("last_watching_ai_feature_probe")
+        if feature_probe_fresh
+        and isinstance(stock.get("last_watching_ai_feature_probe"), dict)
+        else {}
+    )
+    source_quality_fields = (
+        stock.get("last_watching_ai_source_quality_fields")
+        if feature_probe_fresh
+        and isinstance(stock.get("last_watching_ai_source_quality_fields"), dict)
+        else {}
+    )
+    live_micro: dict[str, Any] = {}
+    if code:
+        live_micro_context = _build_live_orderbook_micro_context(
+            code,
+            curr_price=_safe_int(
+                quote_fields.get("canonical_mark_price") or ws_data.get("curr"), 0
+            ),
+        )
+        live_micro_fields = _build_orderbook_micro_log_fields(live_micro_context)
+        live_micro_age_ms = _safe_float(
+            live_micro_fields.get("orderbook_micro_snapshot_age_ms"), None
+        )
+        live_micro_healthy = bool(
+            live_micro_fields.get("orderbook_micro_ready")
+            and live_micro_fields.get("orderbook_micro_observer_healthy") is True
+            and live_micro_age_ms is not None
+            and live_micro_age_ms >= 0
+            and live_micro_age_ms
+            <= max(1, _rule_int("OFI_AI_SMOOTHING_STALE_THRESHOLD_MS", 700))
+        )
+        if live_micro_healthy:
+            live_micro = live_micro_fields
+    ws_tick_context_fresh = bool(
+        str(ws_data.get("tick_context_quality") or "").strip().lower()
+        == "fresh_computed"
+        and _truthy_field(ws_data.get("tick_aggressor_pressure_usable"))
+        and not _truthy_field(ws_data.get("tick_context_stale"))
+    )
+    ws_direction_fields = (
+        {
+            key: ws_data.get(key)
+            for key in (
+                "tick_acceleration_ratio",
+                "tick_accel",
+                "late_entry_fresh_tick_acceleration_ratio",
+                "buy_pressure_10t",
+                "buy_pressure",
+                "last_buy_pressure_10t",
+                "late_entry_fresh_buy_pressure_10t",
+            )
+            if key in ws_data
+        }
+        if ws_tick_context_fresh
+        else {}
+    )
+    sources = (
+        live_micro,
+        ws_direction_fields,
+        source_quality_fields,
+        feature_probe,
+        quote_fields,
+    )
+    mark_price = _safe_int(
+        quote_fields.get("canonical_mark_price")
+        or ws_data.get("curr")
+        or stock.get("curr_price"),
+        0,
+    )
+    tick_accel, tick_raw = _rising_missed_tick_numeric_field(
+        *sources,
+        key="tick_acceleration_ratio",
+        aliases=("tick_accel", "late_entry_fresh_tick_acceleration_ratio"),
+    )
+    tick_min = _rising_missed_reversal_pre_submit_tick_accel_min()
+    price_available = bool(mark_price > 0 and probe_fill_price > 0)
+    price_positive = bool(
+        price_available
+        and mark_price > probe_fill_price
+        and (tick_accel is None or tick_accel >= tick_min)
+    )
+    price_negative = bool(
+        price_available
+        and mark_price < probe_fill_price
+        and (tick_accel is None or tick_accel < tick_min)
+    )
+
+    micro_state = (
+        str(
+            _entry_submit_field(
+                *sources,
+                key="orderbook_micro_state",
+                aliases=("micro_state", "weak_ai_micro_entry_block_micro_state"),
+                default="",
+            )
+            or ""
+        )
+        .strip()
+        .lower()
+    )
+    qi, qi_available, _ = _first_numeric_field_with_source(
+        *sources,
+        key="orderbook_micro_qi",
+        aliases=("qi", "weak_ai_micro_entry_block_qi"),
+    )
+    ofi, ofi_available, _ = _first_numeric_field_with_source(
+        *sources,
+        key="orderbook_micro_ofi_norm",
+        aliases=("ofi_norm", "true_ofi_ewma", "micro_estimator_true_ofi_ewma"),
+    )
+    qi_weak_max = _rising_missed_reversal_pre_submit_qi_max()
+    ofi_min = _rising_missed_reversal_pre_submit_ofi_norm_min()
+    micro_state_available = bool(
+        micro_state
+        and micro_state
+        not in {"-", "unknown", "missing", "not_evaluated", "insufficient"}
+    )
+    orderbook_available = bool(
+        micro_state_available or (qi_available and ofi_available)
+    )
+    orderbook_positive = bool(
+        orderbook_available
+        and (
+            micro_state in {"bullish", "strong_bullish"}
+            or (qi_available and qi > qi_weak_max and ofi_available and ofi >= ofi_min)
+        )
+    )
+    orderbook_negative = bool(
+        orderbook_available
+        and micro_state not in {"bullish", "strong_bullish"}
+        and ((qi_available and qi <= qi_weak_max) or (ofi_available and ofi < ofi_min))
+    )
+
+    buy_pressure, pressure_available, _ = _first_numeric_field_with_source(
+        *sources,
+        key="buy_pressure_10t",
+        aliases=(
+            "buy_pressure",
+            "last_buy_pressure_10t",
+            "late_entry_fresh_buy_pressure_10t",
+        ),
+    )
+    pressure_low = _rising_missed_reversal_pre_submit_low_buy_pressure_max()
+    pressure_high = _rising_missed_reversal_pre_submit_high_buy_pressure_min()
+    pressure_positive = bool(pressure_available and buy_pressure >= pressure_high)
+    pressure_negative = bool(pressure_available and buy_pressure < pressure_low)
+
+    groups = {
+        "price_tick": (price_available, price_positive, price_negative),
+        "orderbook": (orderbook_available, orderbook_positive, orderbook_negative),
+        "signed_pressure": (
+            pressure_available,
+            pressure_positive,
+            pressure_negative,
+        ),
+    }
+    available = [name for name, values in groups.items() if values[0]]
+    positives = [name for name, values in groups.items() if values[1]]
+    negatives = [name for name, values in groups.items() if values[2]]
+    directional_group_count = len(set(positives + negatives))
+    if len(available) < 2 or directional_group_count < 2:
+        direction_state = "UNKNOWN"
+        action = "DEFER"
+        reason = "post_probe_direction_source_gap"
+    elif len(negatives) >= 2:
+        direction_state = "WEAK"
+        action = "DEFER"
+        reason = "post_probe_multi_group_weak"
+    elif len(positives) >= 2 and not negatives:
+        direction_state = "STRONG"
+        action = "ALLOW_NARROW"
+        reason = "post_probe_multi_group_strong"
+    else:
+        direction_state = "NEUTRAL"
+        action = "ALLOW_NORMAL"
+        reason = "post_probe_mixed_or_neutral"
+    return {
+        "post_probe_direction_state": direction_state,
+        "post_probe_continuation_action": action,
+        "post_probe_direction_reason": reason,
+        "post_probe_direction_available_groups": ",".join(available) or "-",
+        "post_probe_direction_positive_groups": ",".join(positives) or "-",
+        "post_probe_direction_negative_groups": ",".join(negatives) or "-",
+        "post_probe_direction_group_count": len(available),
+        "post_probe_directional_group_count": directional_group_count,
+        "post_probe_direction_mark_price": mark_price or "-",
+        "post_probe_direction_probe_fill_price": probe_fill_price,
+        "post_probe_direction_tick_acceleration_ratio": (
+            f"{tick_accel:.4f}" if tick_accel is not None else "-"
+        ),
+        "post_probe_direction_tick_acceleration_raw": tick_raw or "-",
+        "post_probe_direction_micro_state": micro_state or "-",
+        "post_probe_direction_qi": f"{qi:.6f}" if qi_available else "-",
+        "post_probe_direction_ofi_norm": f"{ofi:.6f}" if ofi_available else "-",
+        "post_probe_direction_buy_pressure_10t": (
+            f"{buy_pressure:.4f}" if pressure_available else "-"
+        ),
+        "post_probe_live_micro_fresh": bool(live_micro),
+        "post_probe_ws_tick_context_fresh": ws_tick_context_fresh,
+        "post_probe_feature_probe_fresh": feature_probe_fresh,
+        "post_probe_feature_probe_age_sec": (
+            f"{feature_probe_age_sec:.3f}"
+            if feature_probe_age_sec is not None
+            else "not_available"
+        ),
+        "metric_role": "real_execution_quality",
+        "decision_authority": "dynamic_entry_price_resolver_p1_post_probe",
+        "window_policy": "same_day_probe_fill_ttl",
+        "sample_floor": "5_bundles",
+        "primary_decision_metric": "post_probe_direction_state",
+        "source_quality_gate": "exact_probe_receipt_fresh_bbo_two_direction_groups",
+        "allowed_runtime_apply": False,
+        "forbidden_uses": (
+            "live_auto_promotion|threshold_mutation|provider_route_change|"
+            "quantity_cap_release|broker_guard_bypass|full_live_approval"
+        ),
+    }
 
 
 def _abort_entry_split_probe_residual(
@@ -30277,6 +30581,27 @@ def _abort_entry_split_probe_residual(
         "entry_split_probe_abort_reason": reason,
         "entry_split_probe_scale_in_forbidden": bool(preserve_position),
     }
+    hard_negative_reasons = {
+        "buy_authority_not_available",
+        "exit_authority_precedence",
+        "entry_cooldown_active",
+        "hard_protect_stop_precedence",
+        "stale_or_conflicted_fresh_quote",
+        "fresh_bbo_unavailable",
+        "probe_fill_slippage_above_cap",
+        "residual_leg_stale_or_conflicted_quote",
+    }
+    hard_negative = bool(
+        reason in hard_negative_reasons
+        or reason.startswith("probe_residual_account_guard_")
+    )
+    if hard_negative:
+        set_fields.update(
+            {
+                "entry_split_probe_direction_state": "HARD_NEGATIVE",
+                "entry_split_probe_continuation_action": "HARD_NEGATIVE",
+            }
+        )
     if preserve_position and filled_qty > 0:
         set_fields.update(
             {
@@ -30304,6 +30629,8 @@ def _abort_entry_split_probe_residual(
         actual_order_submitted=False,
         broker_order_forbidden=True,
         runtime_effect=True,
+        post_probe_direction_state=("HARD_NEGATIVE" if hard_negative else "-"),
+        post_probe_continuation_action=("HARD_NEGATIVE" if hard_negative else "BLOCK"),
         **_entry_split_probe_observation_contract_fields(),
     )
 
@@ -45130,7 +45457,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         stock,
         code,
         latency_gate,
-        now_ts=now_ts,
+        now_ts=_runtime_action_now_ts(runtime),
     )
     latency_gate.update(latency_direct_recheck_fields)
     if latency_direct_recheck_fields.get(
@@ -49261,6 +49588,12 @@ def _already_holding_entry_position(stock) -> bool:
 def _is_rising_missed_one_share_scout_holding(
     stock, *, strategy: str, pos_tag: str
 ) -> bool:
+    """Return whether the legacy rising-missed scout target is fully held.
+
+    ``one_share`` is a legacy identifier, not a quantity contract.  The scout
+    owns the dynamically sized total entry quantity; probe-first separately
+    owns the one-share market execution leg.
+    """
     if not isinstance(stock, dict):
         return False
     if normalize_strategy(strategy) != "SCALPING":
@@ -49270,6 +49603,8 @@ def _is_rising_missed_one_share_scout_holding(
     if str(stock.get("status") or "").strip().upper() != "HOLDING":
         return False
     if not bool(stock.get("rising_missed_one_share_scout")):
+        return False
+    if bool(stock.get("rising_missed_scout_upgraded")):
         return False
     scout_qty = _rising_missed_forced_scout_qty(stock, {})
     if _safe_int(stock.get("buy_qty"), 0) != scout_qty:
@@ -50361,7 +50696,7 @@ def _evaluate_rising_missed_normal_buy_bridge(
                     "rising_missed_scout_quality_guard_stale_ai_provenance_gap_blocked": True,
                     "block_reason": tp1_decision.reason,
                 },
-                now_ts=_safe_float(runtime.get("now_ts"), time.time()),
+                now_ts=_runtime_action_now_ts(runtime),
             )
     bridge_fields.update(decision.log_fields or {})
     if tp1_decision is not None:
@@ -50406,6 +50741,7 @@ def _evaluate_rising_missed_normal_buy_bridge(
 
 
 def _rising_missed_forced_scout_qty(stock: dict | None, runtime: dict | None) -> int:
+    """Resolve the total rising-missed target quantity, not the probe quantity."""
     stock = stock if isinstance(stock, dict) else {}
     runtime = runtime if isinstance(runtime, dict) else {}
     for source in (stock, runtime):
@@ -51415,7 +51751,7 @@ def _maybe_submit_rising_missed_one_share_entry(
         return False
     reentry_guard = evaluate_rising_missed_same_day_reentry_guard(
         code,
-        _safe_float((runtime or {}).get("now_ts"), time.time()),
+        _runtime_action_now_ts(runtime),
     )
     if not reentry_guard.get("allowed", True):
         action = str(reentry_guard.get("reentry_action") or "block")
@@ -51488,7 +51824,7 @@ def _maybe_submit_rising_missed_one_share_entry(
             stock,
             code,
             decision.reason,
-            now_ts=_safe_float(runtime.get("now_ts"), time.time()),
+            now_ts=_runtime_action_now_ts(runtime),
             source_stage="rising_missed_one_share_entry_blocked",
         )
         _log_entry_pipeline(
@@ -51555,14 +51891,14 @@ def _maybe_submit_rising_missed_one_share_entry(
                     "rising_missed_scout_quality_guard_stale_ai_provenance_gap_blocked": True,
                     "block_reason": tp1_decision.reason,
                 },
-                now_ts=_safe_float(runtime.get("now_ts"), time.time()),
+                now_ts=_runtime_action_now_ts(runtime),
             )
         else:
             candidate_backoff_fields = _record_rising_missed_candidate_gate_backoff(
                 stock,
                 code,
                 tp1_decision.reason,
-                now_ts=_safe_float(runtime.get("now_ts"), time.time()),
+                now_ts=_runtime_action_now_ts(runtime),
                 source_stage="rising_missed_tp1_candidate_blocked",
             )
         _log_entry_pipeline(
@@ -51607,7 +51943,7 @@ def _maybe_submit_rising_missed_one_share_entry(
             stock,
             code,
             quality_guard.get("block_reason") or quality_guard.get("reason"),
-            now_ts=_safe_float(runtime.get("now_ts"), time.time()),
+            now_ts=_runtime_action_now_ts(runtime),
             source_stage="rising_missed_scout_quality_guard_blocked",
             runtime=runtime,
             rising_missed_entry_lineage=True,
@@ -51617,7 +51953,7 @@ def _maybe_submit_rising_missed_one_share_entry(
                 stock,
                 code,
                 quality_guard,
-                now_ts=_safe_float(runtime.get("now_ts"), time.time()),
+                now_ts=_runtime_action_now_ts(runtime),
             )
         )
         if freshness_envelope_recheck_fields.get(
@@ -51640,9 +51976,9 @@ def _maybe_submit_rising_missed_one_share_entry(
                     quality_guard=quality_guard,
                     backoff_fields=scout_quality_backoff_fields,
                     source_stage="rising_missed_scout_quality_guard_blocked",
-                    now_ts=_safe_float(runtime.get("now_ts"), time.time()),
+                    now_ts=_runtime_action_now_ts(runtime),
                 ),
-                now_ts=_safe_float(runtime.get("now_ts"), time.time()),
+                now_ts=_runtime_action_now_ts(runtime),
             )
         )
         if reversal_up_watch_recheck_fields.get(
@@ -51677,7 +52013,7 @@ def _maybe_submit_rising_missed_one_share_entry(
     forced_entry_qty = int(decision.forced_qty or 1)
     tp1_submit_context_fields = _rising_missed_tp1_submit_context_fields(
         tp1_decision,
-        now_ts=_safe_float(runtime.get("now_ts"), time.time()),
+        now_ts=_runtime_action_now_ts(runtime),
         stock=stock,
         code=code,
     )
@@ -55257,7 +55593,7 @@ def handle_watching_state(
         return
 
 
-def _maybe_submit_entry_split_probe_residual(
+def _submit_entry_split_probe_residual_locked(
     stock: dict,
     code: str,
     ws_data: dict,
@@ -55267,7 +55603,7 @@ def _maybe_submit_entry_split_probe_residual(
 ) -> bool:
     revalidation_started_monotonic = time.monotonic()
     phase = str(stock.get("entry_split_probe_phase") or "").strip()
-    if phase != "probe_filled":
+    if phase not in {"probe_filled", "probe_recheck_pending"}:
         return False
 
     requested_qty = _safe_int(stock.get("entry_split_probe_requested_qty"), 0)
@@ -55281,6 +55617,7 @@ def _maybe_submit_entry_split_probe_residual(
     )
     timeout_sec = max(1, _safe_int(stock.get("entry_split_probe_timeout_sec"), 3))
     bundle_id = str(stock.get("entry_split_probe_bundle_id") or "").strip()
+    post_probe_resolver_enabled = _post_probe_price_resolver_enabled()
 
     if stock.get("entry_split_probe_residual_claimed"):
         trip_probe_runtime_circuit("duplicate_residual_claim")
@@ -55303,6 +55640,10 @@ def _maybe_submit_entry_split_probe_residual(
         _abort_entry_split_probe_residual(
             stock, code, "residual_revalidation_timeout", preserve_position=True
         )
+        return False
+    if phase == "probe_recheck_pending" and now_ts < _safe_float(
+        stock.get("entry_split_probe_recheck_due_at"), 0.0
+    ):
         return False
     if not is_scalping_buy_time_allowed(now_dt) or is_buy_side_paused():
         _abort_entry_split_probe_residual(
@@ -55403,11 +55744,143 @@ def _maybe_submit_entry_split_probe_residual(
             stock, code, "probe_continuation_missing", preserve_position=True
         )
         return False
+    direction_fields: dict[str, Any] = {}
+    continuation_action = "ALLOW_NORMAL"
+    resolved_leg_prices: list[int] | None = None
+    resolver_fields: list[dict[str, Any]] = []
+    if post_probe_resolver_enabled:
+        direction_fields = _post_probe_direction_fields(
+            stock,
+            ws_data,
+            quote_fields,
+            probe_fill_price=fill_price,
+            code=code,
+            now_ts=now_ts,
+            max_context_age_sec=timeout_sec,
+        )
+        continuation_action = str(
+            direction_fields.get("post_probe_continuation_action") or "DEFER"
+        ).upper()
+        if continuation_action == "DEFER":
+            recheck_count = (
+                _safe_int(stock.get("entry_split_probe_recheck_count"), 0) + 1
+            )
+            recheck_due_at = min(
+                filled_at + timeout_sec,
+                now_ts + _post_probe_recheck_interval_sec(),
+            )
+            _mutate_stock_state(
+                stock,
+                set_fields={
+                    "entry_split_probe_phase": "probe_recheck_pending",
+                    "entry_split_probe_recheck_due_at": recheck_due_at,
+                    "entry_split_probe_recheck_count": recheck_count,
+                    "entry_split_probe_deferred_once": True,
+                    "entry_split_probe_direction_state": direction_fields.get(
+                        "post_probe_direction_state"
+                    ),
+                    "entry_split_probe_continuation_action": "DEFER",
+                },
+            )
+            update_probe_runtime_bundle(
+                bundle_id,
+                phase="probe_recheck_pending",
+                recheck_count=recheck_count,
+                recheck_due_at=recheck_due_at,
+                **direction_fields,
+            )
+            _log_entry_pipeline(
+                stock,
+                code,
+                "probe_continuation_deferred",
+                probe_bundle_id=bundle_id,
+                recheck_count=recheck_count,
+                recheck_due_at=f"{recheck_due_at:.6f}",
+                actual_order_submitted=False,
+                broker_order_forbidden=True,
+                runtime_effect=True,
+                **direction_fields,
+            )
+            return False
+        if bool(stock.get("entry_split_probe_deferred_once")):
+            continuation_action = "ALLOW_RECOVERED_WIDE"
+            direction_fields["post_probe_continuation_action"] = continuation_action
+            direction_fields["post_probe_direction_reason"] = (
+                "post_probe_recovered_after_defer"
+            )
+        quantities = [
+            _safe_int(value, 0)
+            for value in continuation.get("residual_quantities") or []
+        ]
+        resolved_leg_prices = []
+        for leg_index, _qty in enumerate(quantities):
+            resolution = resolve_scalping_entry_price(
+                strategy_id="SCALPING",
+                defensive_order_price=fill_price,
+                target_buy_price=0,
+                best_bid=best_bid,
+                best_ask=best_ask,
+                phase="post_probe",
+                probe_fill_price=fill_price,
+                fresh_mark_price=curr_price,
+                continuation_action=continuation_action,
+                residual_leg_index=leg_index,
+            )
+            resolver_fields.append(resolution)
+            if not resolution.get("allowed"):
+                resolved_leg_prices = []
+                break
+            resolved_leg_prices.append(
+                _safe_int(resolution.get("resolved_order_price"), 0)
+            )
+        if len(resolved_leg_prices) != len(quantities):
+            recheck_count = (
+                _safe_int(stock.get("entry_split_probe_recheck_count"), 0) + 1
+            )
+            recheck_due_at = min(
+                filled_at + timeout_sec,
+                now_ts + _post_probe_recheck_interval_sec(),
+            )
+            direction_fields.update(
+                {
+                    "post_probe_direction_state": "UNKNOWN",
+                    "post_probe_continuation_action": "DEFER",
+                    "post_probe_direction_reason": "post_probe_resolver_unavailable",
+                }
+            )
+            _mutate_stock_state(
+                stock,
+                set_fields={
+                    "entry_split_probe_phase": "probe_recheck_pending",
+                    "entry_split_probe_recheck_due_at": recheck_due_at,
+                    "entry_split_probe_recheck_count": recheck_count,
+                    "entry_split_probe_deferred_once": True,
+                    "entry_split_probe_direction_state": "UNKNOWN",
+                    "entry_split_probe_continuation_action": "DEFER",
+                },
+            )
+            _log_entry_pipeline(
+                stock,
+                code,
+                "probe_continuation_deferred",
+                probe_bundle_id=bundle_id,
+                recheck_count=recheck_count,
+                recheck_due_at=f"{recheck_due_at:.6f}",
+                resolver_reason=(
+                    resolver_fields[-1].get("reason") if resolver_fields else "missing"
+                ),
+                actual_order_submitted=False,
+                broker_order_forbidden=True,
+                runtime_effect=True,
+                **direction_fields,
+            )
+            return False
     residual_orders, plan_fields = build_probe_residual_orders(
         continuation,
         probe_fill_price=fill_price,
         best_bid=best_bid,
         best_ask=best_ask,
+        resolved_leg_prices=resolved_leg_prices,
     )
     if not plan_fields.get("allowed") or not residual_orders:
         trip_probe_runtime_circuit(
@@ -55420,6 +55893,30 @@ def _maybe_submit_entry_split_probe_residual(
             preserve_position=True,
         )
         return False
+    if post_probe_resolver_enabled and resolver_fields:
+        first_resolution = resolver_fields[0]
+        plan_fields.update(
+            {
+                "entry_price_resolver_phase": "post_probe",
+                "post_probe_continuation_action": continuation_action,
+                "post_probe_offset_profile": first_resolution.get("offset_profile"),
+                "post_probe_anchor_price": first_resolution.get("anchor_price"),
+                "post_probe_min_price": first_resolution.get("min_price"),
+                "post_probe_max_price": first_resolution.get("max_price"),
+            }
+        )
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                "entry_split_probe_direction_state": direction_fields.get(
+                    "post_probe_direction_state"
+                ),
+                "entry_split_probe_continuation_action": continuation_action,
+                "entry_split_probe_offset_profile": first_resolution.get(
+                    "offset_profile"
+                ),
+            },
+        )
 
     account_guard_fields = _probe_residual_account_guard_fields(
         code,
@@ -55481,10 +55978,17 @@ def _maybe_submit_entry_split_probe_residual(
         actual_order_submitted=False,
         broker_order_forbidden=False,
         runtime_effect=True,
-        **plan_fields,
-        **account_guard_fields,
-        **quote_fields,
-        **_entry_split_probe_observation_contract_fields(),
+        **_merge_entry_pipeline_field_groups(
+            plan_fields,
+            account_guard_fields,
+            quote_fields,
+            {
+                key: value
+                for key, value in direction_fields.items()
+                if str(key).startswith("post_probe_")
+            },
+            _entry_split_probe_observation_contract_fields(),
+        ),
     )
 
     residual_orders = _decorate_entry_split_leg_ttls(residual_orders, stock, "SCALPING")
@@ -55506,6 +56010,103 @@ def _maybe_submit_entry_split_probe_residual(
         if submission_age_sec > timeout_sec:
             failure_reason = "residual_submission_timeout"
             break
+        if post_probe_resolver_enabled:
+            leg_ws_data = dict(ws_data or {})
+            if WS_MANAGER is not None:
+                try:
+                    latest_leg_ws = WS_MANAGER.get_latest_data(code)
+                    if isinstance(latest_leg_ws, dict) and latest_leg_ws:
+                        leg_ws_data = latest_leg_ws
+                except Exception as exc:
+                    failure_reason = "residual_leg_fresh_quote_exception"
+                    log_error(
+                        f"[ENTRY_SPLIT_PROBE_LEG_REPRICE] {stock.get('name', code)}({code}) "
+                        f"fresh quote failed: {exc}"
+                    )
+                    break
+            leg_quote_fields, leg_mark, leg_ask, _ = _build_quote_consistency_fields(
+                leg_ws_data,
+                side="buy",
+                now_ts=time.time(),
+            )
+            leg_quote_state = str(
+                leg_quote_fields.get("quote_consistency_state") or ""
+            ).lower()
+            leg_quote_reason = str(
+                leg_quote_fields.get("quote_consistency_reason") or ""
+            ).lower()
+            leg_bid = _safe_int(leg_quote_fields.get("passive_buy_price"), 0)
+            if (
+                leg_quote_state in {"missing", "diverged", "blocked"}
+                or leg_quote_reason
+                in {"quote_stale", "stale_quote", "conflicted", "price_conflict"}
+                or leg_bid <= 0
+                or leg_ask <= 0
+                or leg_bid > leg_ask
+            ):
+                failure_reason = "residual_leg_stale_or_conflicted_quote"
+                break
+            leg_direction_fields = _post_probe_direction_fields(
+                stock,
+                leg_ws_data,
+                leg_quote_fields,
+                probe_fill_price=fill_price,
+                code=code,
+                now_ts=time.time(),
+                max_context_age_sec=timeout_sec,
+            )
+            leg_action = str(
+                leg_direction_fields.get("post_probe_continuation_action") or "DEFER"
+            ).upper()
+            if leg_action == "DEFER":
+                failure_reason = "residual_leg_direction_deferred"
+                break
+            if bool(stock.get("entry_split_probe_deferred_once")):
+                leg_action = "ALLOW_RECOVERED_WIDE"
+            leg_index = max(
+                0,
+                _safe_int(residual_order.get("entry_split_order_leg_index"), 1) - 1,
+            )
+            old_price = _safe_int(residual_order.get("price"), 0)
+            leg_resolution = resolve_scalping_entry_price(
+                strategy_id="SCALPING",
+                defensive_order_price=old_price or fill_price,
+                target_buy_price=0,
+                best_bid=leg_bid,
+                best_ask=leg_ask,
+                phase="leg_reprice",
+                probe_fill_price=fill_price,
+                fresh_mark_price=leg_mark,
+                continuation_action=leg_action,
+                residual_leg_index=leg_index,
+            )
+            if not leg_resolution.get("allowed"):
+                failure_reason = "residual_leg_price_resolver_blocked"
+                break
+            repriced = _safe_int(leg_resolution.get("resolved_order_price"), 0)
+            residual_order.update(
+                {
+                    "price": repriced,
+                    "entry_price_resolver_phase": "leg_reprice",
+                    "entry_price_resolver_action": leg_action,
+                    "entry_price_resolver_offset_profile": leg_resolution.get(
+                        "offset_profile"
+                    ),
+                    "entry_price_resolver_anchor_price": leg_resolution.get(
+                        "anchor_price"
+                    ),
+                    "entry_price_resolver_previous_price": old_price,
+                    "entry_price_resolver_resolved_price": repriced,
+                    "post_probe_direction_state": leg_direction_fields.get(
+                        "post_probe_direction_state"
+                    ),
+                    "post_probe_direction_reason": leg_direction_fields.get(
+                        "post_probe_direction_reason"
+                    ),
+                }
+            )
+            best_bid = leg_bid
+            best_ask = leg_ask
         qty = _safe_int(residual_order.get("qty"), 0)
         price = _safe_int(residual_order.get("price"), 0)
         if qty <= 0 or price <= 0:
@@ -55598,8 +56199,21 @@ def _maybe_submit_entry_split_probe_residual(
                 actual_order_submitted=True,
                 broker_order_forbidden=False,
                 runtime_effect=True,
-                **plan_fields,
-                **_entry_split_probe_observation_contract_fields(),
+                **_merge_entry_pipeline_field_groups(
+                    plan_fields,
+                    _entry_split_probe_observation_contract_fields(),
+                    {
+                        key: residual_order.get(key)
+                        for key in (
+                            "entry_price_resolver_phase",
+                            "entry_price_resolver_action",
+                            "entry_price_resolver_offset_profile",
+                            "entry_price_resolver_previous_price",
+                            "entry_price_resolver_resolved_price",
+                            "post_probe_direction_state",
+                        )
+                    },
+                ),
             )
             return True
         combined_orders_by_number = {
@@ -55634,8 +56248,21 @@ def _maybe_submit_entry_split_probe_residual(
             actual_order_submitted=True,
             broker_order_forbidden=False,
             runtime_effect=True,
-            **plan_fields,
-            **_entry_split_probe_observation_contract_fields(),
+            **_merge_entry_pipeline_field_groups(
+                plan_fields,
+                _entry_split_probe_observation_contract_fields(),
+                {
+                    key: residual_order.get(key)
+                    for key in (
+                        "entry_price_resolver_phase",
+                        "entry_price_resolver_action",
+                        "entry_price_resolver_offset_profile",
+                        "entry_price_resolver_previous_price",
+                        "entry_price_resolver_resolved_price",
+                        "post_probe_direction_state",
+                    )
+                },
+            ),
         )
 
     if failure_reason:
@@ -55708,16 +56335,49 @@ def _maybe_submit_entry_split_probe_residual(
     return True
 
 
+def _maybe_submit_entry_split_probe_residual(
+    stock: dict,
+    code: str,
+    ws_data: dict,
+    *,
+    now_ts: float,
+    now_dt: datetime,
+) -> bool:
+    """Serialize receipt-thread and holding-loop residual claims.
+
+    Keep the shared receipt state lock free while account and broker network
+    calls run.  The dedicated lock prevents a second residual claim.
+    """
+
+    with _ENTRY_SPLIT_PROBE_RESIDUAL_LOCK:
+        return _submit_entry_split_probe_residual_locked(
+            stock,
+            code,
+            ws_data,
+            now_ts=now_ts,
+            now_dt=now_dt,
+        )
+
+
 def submit_entry_split_probe_residual_after_fill(stock: dict, code: str) -> bool:
-    """Run probe residual revalidation immediately after the fill receipt.
+    """Run bounded probe residual revalidation after the fill receipt.
 
     Execution receipts invoke this on a daemon thread so the callback waits for
     the shared entry lock without doing broker I/O inside the receipt handler.
-    The normal holding-loop call remains as a fail-closed recovery path.
+    WEAK/UNKNOWN decisions sleep outside the lock and retry within the existing
+    probe TTL.  The holding-loop call remains a fail-closed recovery path.
     """
-    with ENTRY_LOCK:
-        if str(stock.get("entry_split_probe_phase") or "").strip() != "probe_filled":
-            return False
+    while True:
+        with ENTRY_LOCK:
+            phase = str(stock.get("entry_split_probe_phase") or "").strip()
+            if phase not in {"probe_filled", "probe_recheck_pending"}:
+                return phase in {
+                    "residual_claimed",
+                    "residual_submitting",
+                    "residual_submitted",
+                    "residual_partial_submitted",
+                    "complete",
+                }
         ws_data: dict[str, Any] = {}
         if WS_MANAGER is not None:
             try:
@@ -55729,13 +56389,27 @@ def submit_entry_split_probe_residual_after_fill(stock: dict, code: str) -> bool
                     f"failed={exc}"
                 )
         now_ts = time.time()
-        return _maybe_submit_entry_split_probe_residual(
+        submitted = _maybe_submit_entry_split_probe_residual(
             stock,
             code,
             ws_data,
             now_ts=now_ts,
             now_dt=datetime.fromtimestamp(now_ts),
         )
+        with ENTRY_LOCK:
+            next_phase = str(stock.get("entry_split_probe_phase") or "").strip()
+            filled_at = _safe_float(stock.get("entry_split_probe_filled_at"), now_ts)
+            timeout_sec = max(
+                1, _safe_int(stock.get("entry_split_probe_timeout_sec"), 3)
+            )
+        if submitted:
+            return True
+        if next_phase != "probe_recheck_pending":
+            return False
+        remaining = (filled_at + timeout_sec) - time.time()
+        if remaining <= 0:
+            continue
+        time.sleep(min(_post_probe_recheck_interval_sec(), remaining))
 
 
 def handle_holding_state(

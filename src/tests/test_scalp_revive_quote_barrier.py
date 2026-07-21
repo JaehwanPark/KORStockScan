@@ -5,7 +5,13 @@ from src.engine import sniper_execution_receipts as receipts
 def test_scalp_revive_sets_quote_barrier_before_rewatch(monkeypatch):
     monkeypatch.setattr(receipts, "highest_prices", {})
     monkeypatch.setattr(receipts, "move_orders_to_terminal", lambda stock, reason: None)
-    stock = {"id": 7, "status": "HOLDING", "buy_price": 10000, "buy_qty": 3}
+    stock = {
+        "id": 7,
+        "status": "HOLDING",
+        "buy_price": 10000,
+        "buy_qty": 3,
+        "rising_missed_scout_upgraded": True,
+    }
 
     receipts._apply_scalp_revive_memory_state(
         target_stock=stock,
@@ -17,6 +23,7 @@ def test_scalp_revive_sets_quote_barrier_before_rewatch(monkeypatch):
 
     assert stock["status"] == "WATCHING"
     assert stock["_scalp_revive_min_quote_ts"] == 1000.0
+    assert "rising_missed_scout_upgraded" not in stock
 
 
 def test_revive_barrier_discards_pre_sell_ws_then_accepts_new_ws_snapshot():

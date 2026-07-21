@@ -7155,3 +7155,80 @@ def test_tick_mode_default_unchanged():
     assert result["entry_price_defense_mode"] == "tick"
     assert result["entry_price_defensive_ticks"] == 1
     assert result["order_price"] == 9990
+
+
+def test_p1_initial_phase_preserves_legacy_price_contract():
+    resolved = entry_latency_module.resolve_scalping_entry_price(
+        strategy_id="SCALPING",
+        defensive_order_price=10_000,
+        target_buy_price=9_980,
+        best_bid=10_000,
+    )
+
+    assert resolved["allowed"] is True
+    assert resolved["entry_price_resolver_phase"] == "initial"
+    assert resolved["resolved_order_price"] == 9_980
+    assert resolved["price_resolution_reason"] == "reference_target_cap"
+
+
+def test_p1_post_probe_profiles_own_residual_prices():
+    narrow = entry_latency_module.resolve_scalping_entry_price(
+        strategy_id="SCALPING",
+        defensive_order_price=83_200,
+        target_buy_price=0,
+        best_bid=83_100,
+        best_ask=83_600,
+        phase="post_probe",
+        probe_fill_price=83_200,
+        fresh_mark_price=83_200,
+        continuation_action="ALLOW_NARROW",
+        residual_leg_index=1,
+    )
+    normal = entry_latency_module.resolve_scalping_entry_price(
+        strategy_id="SCALPING",
+        defensive_order_price=83_200,
+        target_buy_price=0,
+        best_bid=83_100,
+        best_ask=83_600,
+        phase="post_probe",
+        probe_fill_price=83_200,
+        fresh_mark_price=83_200,
+        continuation_action="ALLOW_NORMAL",
+        residual_leg_index=1,
+    )
+    recovered = entry_latency_module.resolve_scalping_entry_price(
+        strategy_id="SCALPING",
+        defensive_order_price=83_200,
+        target_buy_price=0,
+        best_bid=83_100,
+        best_ask=83_600,
+        phase="leg_reprice",
+        probe_fill_price=83_200,
+        fresh_mark_price=83_200,
+        continuation_action="ALLOW_RECOVERED_WIDE",
+        residual_leg_index=1,
+    )
+
+    assert narrow["offset_profile"] == "narrow"
+    assert narrow["resolved_order_price"] == 83_100
+    assert normal["offset_profile"] == "normal"
+    assert normal["resolved_order_price"] == 82_900
+    assert recovered["offset_profile"] == "recovered_wide"
+    assert recovered["resolved_order_price"] == 82_500
+
+
+def test_p1_post_probe_defer_has_no_executable_price():
+    resolved = entry_latency_module.resolve_scalping_entry_price(
+        strategy_id="SCALPING",
+        defensive_order_price=10_000,
+        target_buy_price=0,
+        best_bid=9_990,
+        best_ask=10_010,
+        phase="post_probe",
+        probe_fill_price=10_000,
+        continuation_action="DEFER",
+    )
+
+    assert resolved["allowed"] is False
+    assert resolved["resolved_order_price"] == 0
+    assert resolved["reason"] == "continuation_defer"

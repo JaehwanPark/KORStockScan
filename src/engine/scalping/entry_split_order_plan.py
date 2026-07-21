@@ -193,6 +193,34 @@ def recover_probe_runtime_bundle_for_stock(
         phase = str(bundle.get("phase") or "").strip()
         requested_qty = _safe_int(bundle.get("requested_qty"), 0)
         persisted_fill_qty = _safe_int(bundle.get("fill_qty"), 0)
+        if phase == "probe_recheck_pending" and actual_qty == 1:
+            close_reason = "post_probe_recheck_cleared_on_restart"
+            bundle.update(
+                {
+                    "phase": "aborted",
+                    "reason": close_reason,
+                    "recovered_actual_qty": actual_qty,
+                    "restart_recovered_at": datetime.now(timezone.utc).isoformat(),
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }
+            )
+            payload.setdefault("bundles", {})[bundle_id] = bundle
+            _write_probe_runtime_state(payload)
+            stock.update(
+                {
+                    "entry_split_probe_phase": "aborted",
+                    "entry_split_probe_bundle_id": bundle_id,
+                    "entry_split_probe_abort_reason": close_reason,
+                    "entry_split_probe_scale_in_forbidden": True,
+                    "entry_requested_qty": actual_qty,
+                    "requested_buy_qty": actual_qty,
+                }
+            )
+            return {
+                "recovered": True,
+                "reason": close_reason,
+                "phase": "aborted",
+            }
         quantity_matches = bool(
             requested_qty > 1
             and actual_qty <= requested_qty
@@ -1966,8 +1994,14 @@ def build_probe_residual_orders(
     probe_fill_price: int,
     best_bid: int,
     best_ask: int,
+    resolved_leg_prices: list[int] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Build residual limit legs after a verified one-share probe fill."""
+    """Allocate residual legs after a verified one-share probe fill.
+
+    When P1 supplies ``resolved_leg_prices`` this allocator preserves those
+    prices exactly and owns quantity distribution only.  The legacy offset
+    calculation remains for the disabled capability path.
+    """
     requested_qty = _safe_int(continuation.get("requested_qty"), 0)
     residual_qty = _safe_int(continuation.get("residual_qty"), 0)
     quantities = [
@@ -1991,15 +2025,24 @@ def build_probe_residual_orders(
     ]
     common_fields = dict(continuation.get("common_fields") or {})
     base_order = dict(continuation.get("base_order") or {})
+    p1_prices = [_safe_int(value, 0) for value in (resolved_leg_prices or [])]
+    if resolved_leg_prices is not None and (
+        len(p1_prices) != len(quantities) or any(price <= 0 for price in p1_prices)
+    ):
+        return [], {"allowed": False, "reason": "invalid_p1_residual_prices"}
     tick = _tick_size(anchor)
     orders: list[dict[str, Any]] = []
     for idx, qty in enumerate(quantities):
         offset_ticks = offsets[idx] if idx < len(offsets) else idx
         offset_pct = pct_offsets[idx] if idx < len(pct_offsets) else None
         price = (
-            _pct_price_offset(anchor, offset_pct)
-            if offset_pct is not None
-            else clamp_price_to_tick(max(1, anchor - (tick * offset_ticks)))
+            p1_prices[idx]
+            if resolved_leg_prices is not None
+            else (
+                _pct_price_offset(anchor, offset_pct)
+                if offset_pct is not None
+                else clamp_price_to_tick(max(1, anchor - (tick * offset_ticks)))
+            )
         )
         orders.append(
             {
@@ -2014,6 +2057,11 @@ def build_probe_residual_orders(
                 "entry_split_order_probe_first_applied": True,
                 "entry_split_order_probe_anchor_price": anchor,
                 "entry_split_order_probe_fill_price": probe_fill_price,
+                "entry_split_order_price_authority": (
+                    "dynamic_entry_price_resolver_p1"
+                    if resolved_leg_prices is not None
+                    else "legacy_probe_offset"
+                ),
                 "split_leg_role": "primary" if idx == 0 else "passive",
                 "split_price_offset_ticks": offset_ticks,
                 "split_price_offset_pct": offset_pct if offset_pct is not None else "",
@@ -2035,6 +2083,11 @@ def build_probe_residual_orders(
         "probe_fill_to_first_residual_limit_gap_bps": round(gap_bps, 4),
         "residual_qty": residual_qty,
         "residual_leg_count": len(orders),
+        "residual_price_authority": (
+            "dynamic_entry_price_resolver_p1"
+            if resolved_leg_prices is not None
+            else "legacy_probe_offset"
+        ),
     }
 
 

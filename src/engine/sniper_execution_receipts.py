@@ -229,8 +229,15 @@ _SELL_REVIVE_RESET_KEYS = (
     "entry_split_probe_fill_price",
     "entry_split_probe_filled_at",
     "entry_split_probe_residual_claimed",
+    "entry_split_probe_recheck_due_at",
+    "entry_split_probe_recheck_count",
+    "entry_split_probe_deferred_once",
+    "entry_split_probe_direction_state",
+    "entry_split_probe_continuation_action",
+    "entry_split_probe_offset_profile",
     "entry_split_probe_scale_in_forbidden",
     "entry_split_probe_abort_reason",
+    "rising_missed_scout_upgraded",
 )
 _SELL_COMPLETE_RESET_KEYS = (
     "pending_entry_orders",
@@ -271,8 +278,15 @@ _SELL_COMPLETE_RESET_KEYS = (
     "entry_split_probe_fill_price",
     "entry_split_probe_filled_at",
     "entry_split_probe_residual_claimed",
+    "entry_split_probe_recheck_due_at",
+    "entry_split_probe_recheck_count",
+    "entry_split_probe_deferred_once",
+    "entry_split_probe_direction_state",
+    "entry_split_probe_continuation_action",
+    "entry_split_probe_offset_profile",
     "entry_split_probe_scale_in_forbidden",
     "entry_split_probe_abort_reason",
+    "rising_missed_scout_upgraded",
 )
 _ENTRY_RECEIPT_FILLED_BY_ORDER_KEY = "_entry_receipt_filled_by_order_no"
 _ENTRY_RECEIPT_REQUESTED_BY_ORDER_KEY = "_entry_receipt_requested_by_order_no"
