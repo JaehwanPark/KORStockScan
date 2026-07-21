@@ -2090,6 +2090,17 @@ def _latency_true_ofi_direct_canary_fields(
             500.0,
         ),
     )
+    dynamic_age_min_samples = max(
+        20,
+        int(
+            _to_float(
+                os.getenv(
+                    "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_DYNAMIC_AGE_BAND_MIN_SAMPLES"
+                ),
+                float(min_samples),
+            )
+        ),
+    )
     dynamic_age_max_spread_bps = max(
         1.0,
         _to_float(
@@ -2118,6 +2129,17 @@ def _latency_true_ofi_direct_canary_fields(
                 ),
                 80.0,
             ),
+        ),
+    )
+    dynamic_age_min_signed_tape_samples = max(
+        3,
+        int(
+            _to_float(
+                os.getenv(
+                    "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_DYNAMIC_AGE_BAND_MIN_SIGNED_TAPE_SAMPLES"
+                ),
+                3.0,
+            )
         ),
     )
     max_spread_bps = max(
@@ -2430,6 +2452,12 @@ def _latency_true_ofi_direct_canary_fields(
     tp1_context_fresh = _truthy(
         (stock or {}).get("rising_missed_tp1_submit_context_fresh")
     )
+    tp1_context_at = _to_float(
+        (stock or {}).get("rising_missed_tp1_submit_context_at"), 0.0
+    )
+    tp1_context_age_sec = (
+        max(0.0, time.time() - tp1_context_at) if tp1_context_at > 0.0 else float("inf")
+    )
     tp1_true_ofi = _to_float(
         (stock or {}).get("rising_missed_tp1_submit_context_true_ofi_ewma"),
         0.0,
@@ -2590,12 +2618,16 @@ def _latency_true_ofi_direct_canary_fields(
     )
     dynamic_age_eligible = bool(
         dynamic_age_active
-        and sample_count >= min_samples
+        and sample_count >= dynamic_age_min_samples
         and source_state.startswith("fresh_ws")
         and 0.0 <= ws_age_ms <= dynamic_age_max_ws_age_ms
         and float(spread_bps or 0.0) <= dynamic_age_max_spread_bps
         and true_ofi > dynamic_age_min_true_ofi
-        and signed_tape_sample_count >= 3
+        and tp1_context_fresh
+        and tp1_context_age_sec <= 60.0
+        and support_count >= 2
+        and delta_pct >= 1.0
+        and signed_tape_sample_count >= dynamic_age_min_signed_tape_samples
         and signed_tape_trusted_ws_count == signed_tape_sample_count
         and signed_tape_rest_fresh_count == 0
         and signed_tape_unknown_source_count == 0
@@ -2682,6 +2714,14 @@ def _latency_true_ofi_direct_canary_fields(
         "latency_true_ofi_direct_canary_dynamic_age_band_max_ws_age_ms": round(
             dynamic_age_max_ws_age_ms, 3
         ),
+        "latency_true_ofi_direct_canary_dynamic_age_band_min_samples": (
+            dynamic_age_min_samples
+        ),
+        "latency_true_ofi_direct_canary_dynamic_age_band_tp1_context_age_sec": (
+            round(tp1_context_age_sec, 3)
+            if tp1_context_age_sec != float("inf")
+            else "-"
+        ),
         "latency_true_ofi_direct_canary_dynamic_age_band_max_spread_bps": round(
             dynamic_age_max_spread_bps, 3
         ),
@@ -2690,6 +2730,9 @@ def _latency_true_ofi_direct_canary_fields(
         ),
         "latency_true_ofi_direct_canary_dynamic_age_band_min_signed_tape_buy_ratio": round(
             dynamic_age_min_signed_tape_buy_ratio, 3
+        ),
+        "latency_true_ofi_direct_canary_dynamic_age_band_min_signed_tape_samples": (
+            dynamic_age_min_signed_tape_samples
         ),
         "latency_true_ofi_direct_canary_max_spread_bps": round(max_spread_bps, 3),
         "latency_true_ofi_direct_canary_extended_spread_enabled": extended_enabled,
@@ -2977,6 +3020,19 @@ def _latency_true_ofi_direct_canary_fields(
         return fields
     if source_state in {"", "not_evaluated", "missing_code", "snapshot_unavailable"}:
         fields["latency_true_ofi_direct_canary_reason"] = "true_ofi_source_unavailable"
+        return fields
+    if dynamic_age_eligible and opportunity_supported:
+        fields.update(
+            {
+                "latency_true_ofi_direct_canary_applied": True,
+                "latency_true_ofi_direct_canary_reason": (
+                    "direct_canary_dynamic_age_signed_tape_allow"
+                ),
+                "latency_true_ofi_direct_canary_runtime_effect": True,
+                "latency_true_ofi_direct_canary_allowed_runtime_apply": True,
+                "latency_true_ofi_direct_canary_dynamic_age_band_applied": True,
+            }
+        )
         return fields
     low_rebound_sample_exception = bool(
         low_rebound_recovery_active

@@ -71,6 +71,7 @@ from src.engine.scalping.opening_rotation import (
     entry_window_version as opening_rotation_entry_window_version,
     is_strategy_position as is_opening_rotation_position,
     is_watch_candidate as is_opening_rotation_watch_candidate,
+    is_watch_source_scope as is_opening_rotation_watch_source_scope,
 )
 from src.engine.scalping.watching_score_smoothing import (
     evaluate_watching_score,
@@ -14994,6 +14995,237 @@ def _scanner_fast_precheck_observed_fields(fast_precheck_fields) -> dict[str, An
     return observed
 
 
+def _opening_rotation_upstream_scope_fields(
+    stock: dict | None,
+    ws_data: dict | None,
+    *,
+    now_ts: float,
+) -> dict[str, Any]:
+    """Describe OPENING source scope without promoting an incomplete row."""
+
+    stock = stock if isinstance(stock, dict) else {}
+    ws_data = ws_data if isinstance(ws_data, dict) else {}
+    now_dt = datetime.fromtimestamp(float(now_ts))
+    strategy = normalize_strategy(stock.get("strategy"))
+    pos_tag = normalize_position_tag(strategy, stock.get("position_tag"))
+    promotion_fields = _scanner_promotion_correlation_fields(stock)
+    source_signature = (
+        stock.get("source_signature")
+        or stock.get("scanner_source_signature")
+        or promotion_fields.get("source_signature")
+    )
+    config = _opening_rotation_entry_config()
+    owner_conflict_reason = (
+        ""
+        if is_opening_rotation_position(pos_tag)
+        else _opening_rotation_rising_missed_owner_reason(
+            stock,
+            {"pos_tag": pos_tag},
+        )
+    )
+    owner_conflict = bool(owner_conflict_reason)
+    source_scope = bool(
+        strategy == "SCALPING"
+        and not owner_conflict
+        and is_opening_rotation_watch_source_scope(
+            position_tag=pos_tag,
+            source_signature=source_signature,
+            now_dt=now_dt,
+            config=config,
+        )
+    )
+    day_change_value = None
+    day_change_source = "missing"
+    for key in ("fluctuation", "fluctuation_rate", "day_change_pct"):
+        value = ws_data.get(key)
+        if value not in (None, "", "-"):
+            day_change_value = _safe_float(value, 0.0)
+            day_change_source = f"ws_data:{key}"
+            break
+    exact_candidate_known = day_change_value is not None
+    exact_candidate = bool(
+        source_scope
+        and exact_candidate_known
+        and is_opening_rotation_watch_candidate(
+            position_tag=pos_tag,
+            source_signature=source_signature,
+            day_change_pct=float(day_change_value),
+            now_dt=now_dt,
+            config=config,
+        )
+    )
+    return {
+        "opening_rotation_upstream_source_scope": source_scope,
+        "opening_rotation_upstream_owner_conflict": owner_conflict,
+        "opening_rotation_upstream_owner_conflict_reason": (
+            owner_conflict_reason or "not_applicable"
+        ),
+        "opening_rotation_upstream_exact_candidate_known": exact_candidate_known,
+        "opening_rotation_upstream_exact_candidate": exact_candidate,
+        "opening_rotation_upstream_scope_state": (
+            "exact_candidate"
+            if exact_candidate
+            else (
+                "source_scope_day_change_missing"
+                if source_scope and not exact_candidate_known
+                else "not_candidate"
+            )
+        ),
+        "opening_rotation_upstream_day_change_pct": (
+            round(float(day_change_value), 4) if day_change_value is not None else "-"
+        ),
+        "opening_rotation_upstream_day_change_source": day_change_source,
+        "opening_rotation_upstream_entry_window_start": config.entry_start.isoformat(),
+        "opening_rotation_upstream_entry_window_end": config.entry_end.isoformat(),
+        "opening_rotation_window_version": opening_rotation_entry_window_version(
+            config
+        ),
+        "opening_rotation_decision_time_bucket": opening_rotation_entry_time_bucket(
+            now_dt, config
+        ),
+    }
+
+
+def _opening_rotation_upstream_handoff_fields(
+    stock: dict | None,
+    ws_data: dict | None,
+    *,
+    now_ts: float,
+) -> dict[str, Any]:
+    """Allow only fresh trusted WS tape to reach the strategy quote envelope."""
+
+    stock = stock if isinstance(stock, dict) else {}
+    ws_data = ws_data if isinstance(ws_data, dict) else {}
+    scope_fields = _opening_rotation_upstream_scope_fields(
+        stock, ws_data, now_ts=now_ts
+    )
+    if not scope_fields["opening_rotation_upstream_exact_candidate"]:
+        return {
+            **scope_fields,
+            "opening_rotation_upstream_handoff_allowed": False,
+            "opening_rotation_upstream_handoff_reason": (
+                "exact_candidate_not_established"
+            ),
+            "opening_rotation_upstream_trusted_tick_count": 0,
+            "opening_rotation_upstream_tick_context_quality": "not_evaluated",
+            "opening_rotation_upstream_tick_context_stale": "not_evaluated",
+            "opening_rotation_upstream_tape_pressure_usable": False,
+        }
+    try:
+        packet = extract_scalping_feature_packet(
+            ws_data,
+            [],
+            [],
+            now=datetime.fromtimestamp(float(now_ts)),
+        )
+    except Exception as exc:
+        return {
+            **scope_fields,
+            "opening_rotation_upstream_handoff_allowed": False,
+            "opening_rotation_upstream_handoff_reason": "tape_probe_failed",
+            "opening_rotation_upstream_handoff_error": str(exc)[:160],
+            "opening_rotation_upstream_trusted_tick_count": 0,
+            "opening_rotation_upstream_tick_context_quality": "error",
+            "opening_rotation_upstream_tick_context_stale": True,
+            "opening_rotation_upstream_tape_pressure_usable": False,
+        }
+    config = _opening_rotation_entry_config()
+    trusted_count = _safe_int(packet.get("tick_aggressor_trusted_count"), 0)
+    tick_quality = str(packet.get("tick_context_quality") or "missing")
+    tick_stale = bool(packet.get("tick_context_stale") is True)
+    pressure_usable = bool(packet.get("tick_aggressor_pressure_usable"))
+    market_conflicted = (
+        str(ws_data.get("market_data_freshness_state") or "").lower() == "conflicted"
+        or str(ws_data.get("market_data_orderbook_state") or "").lower() == "conflicted"
+    )
+    tape_ready = bool(
+        tick_quality == "fresh_computed"
+        and not tick_stale
+        and pressure_usable
+        and trusted_count >= config.min_trusted_ticks
+    )
+    allowed = bool(
+        _safe_int(ws_data.get("curr"), 0) > 0 and tape_ready and not market_conflicted
+    )
+    if market_conflicted:
+        reason = "market_data_conflicted"
+    elif _safe_int(ws_data.get("curr"), 0) <= 0:
+        reason = "current_price_missing"
+    elif not tape_ready:
+        reason = "fresh_trusted_ws_tape_missing"
+    else:
+        reason = "fresh_trusted_ws_tape_to_quote_envelope"
+    return {
+        **scope_fields,
+        "opening_rotation_upstream_handoff_allowed": allowed,
+        "opening_rotation_upstream_handoff_reason": reason,
+        "opening_rotation_upstream_trusted_tick_count": trusted_count,
+        "opening_rotation_upstream_tick_context_quality": tick_quality,
+        "opening_rotation_upstream_tick_context_stale": tick_stale,
+        "opening_rotation_upstream_tape_pressure_usable": pressure_usable,
+        "opening_rotation_upstream_market_data_conflicted": market_conflicted,
+    }
+
+
+_OPENING_ROTATION_UPSTREAM_RECOVERY_MARKERS = {
+    "scanner_fast_precheck_stale_ws_recovered",
+    "scanner_fast_precheck_subscription_recheck_snapshot_applied",
+    "ws_snapshot_missing_or_zero_recovered",
+}
+
+
+def _maybe_log_opening_rotation_upstream_blocked(
+    stock: dict,
+    code: str,
+    *,
+    skip_reason: str,
+    now_ts: float,
+    ws_data: dict | None,
+) -> bool:
+    if skip_reason in _OPENING_ROTATION_UPSTREAM_RECOVERY_MARKERS:
+        return False
+    scope_fields = _opening_rotation_upstream_scope_fields(
+        stock, ws_data, now_ts=now_ts
+    )
+    if not scope_fields["opening_rotation_upstream_source_scope"]:
+        return False
+    if (
+        scope_fields["opening_rotation_upstream_exact_candidate_known"]
+        and not scope_fields["opening_rotation_upstream_exact_candidate"]
+    ):
+        return False
+    _log_entry_pipeline(
+        stock,
+        code,
+        "opening_rotation_1pct_upstream_blocked",
+        reason=f"upstream:{skip_reason}",
+        upstream_stage="scalping_scanner_watching_runtime_skip",
+        upstream_skip_reason=skip_reason,
+        position_tag_candidate=OPENING_ROTATION_POSITION_TAG,
+        freshness_envelope_attempted=False,
+        freshness_envelope_not_attempted_reason="blocked_before_watching_strategy_branch",
+        metric_role="source_quality_gate",
+        decision_authority="opening_rotation_upstream_handoff_observation_only",
+        window_policy="same_day_opening_rotation_source_scope_kst",
+        sample_floor="not_applicable_upstream_source_quality_attribution",
+        primary_decision_metric="upstream_skip_reason",
+        source_quality_gate=(
+            "source_scope_and_live_day_change_when_available_no_candidate_promotion"
+        ),
+        runtime_effect=False,
+        actual_order_submitted=False,
+        broker_order_forbidden=True,
+        allowed_runtime_apply=False,
+        forbidden_uses=(
+            "standalone_buy,stale_quote_bypass,rest_tape_buy_support,"
+            "threshold_mutation,provider_route_change,quantity_or_cap_change,"
+            "broker_guard_bypass,real_execution_quality_approval"
+        ),
+        **scope_fields,
+    )
+    return True
+
+
 def _scanner_watching_runtime_skip_fields(
     stock, *, skip_reason: str, now_ts: float, ws_data=None, **extra
 ) -> dict[str, Any]:
@@ -15102,6 +15334,13 @@ def emit_scanner_watching_runtime_skip(
     )
     if scanner_ws_stale_backoff_fields:
         extra = {**extra, **scanner_ws_stale_backoff_fields}
+    _maybe_log_opening_rotation_upstream_blocked(
+        stock,
+        code,
+        skip_reason=key,
+        now_ts=now_value,
+        ws_data=ws_data,
+    )
     _log_entry_pipeline(
         stock,
         code,
@@ -15489,6 +15728,14 @@ def _scanner_fast_precheck_fields(
         ws_data,
         now_ts=float(now_ts),
     )
+    opening_rotation_handoff_fields = _opening_rotation_upstream_handoff_fields(
+        stock,
+        ws_data,
+        now_ts=float(now_ts),
+    )
+    opening_rotation_handoff_allowed = bool(
+        opening_rotation_handoff_fields.get("opening_rotation_upstream_handoff_allowed")
+    )
     signed_tape_strong_preserve_fields = {}
     if (
         curr > 0
@@ -15505,7 +15752,7 @@ def _scanner_fast_precheck_fields(
                 now_ts=float(now_ts),
             )
         )
-    if scanner_ws_stale_backoff_fields:
+    if scanner_ws_stale_backoff_fields and not opening_rotation_handoff_allowed:
         result = "budget_reallocated"
         reason = "scanner_ws_stale_backoff_active"
     elif curr <= 0:
@@ -15530,6 +15777,9 @@ def _scanner_fast_precheck_fields(
     elif market_data_conflicted:
         result = "stability_pending"
         reason = "market_data_ws_rest_conflicted"
+    elif opening_rotation_handoff_allowed:
+        result = "eligible_for_heavy_entry_eval"
+        reason = "opening_rotation_fresh_tape_quote_envelope_handoff"
     elif (
         market_data_signed_tape_state == "sell_dominated"
         and _scanner_rising_entry_relief_eligible(stock)
@@ -15588,7 +15838,6 @@ def _scanner_fast_precheck_fields(
         "budget_reallocated" if result == "budget_reallocated" else "observe_only"
     )
     return {
-        **_rising_missed_scanner_filter_fields(action=scanner_filter_action),
         **market_data_fields,
         "scanner_promotion_id": scanner_fields.get("scanner_promotion_id")
         or "not_applicable_scanner_promotion_id",
@@ -15731,7 +15980,14 @@ def _scanner_fast_precheck_fields(
         **submit_safety_backoff_fields,
         **signed_tape_scanner_backoff_fields,
         **signed_tape_strong_preserve_fields,
+        **opening_rotation_handoff_fields,
         **_scanner_rising_relief_observation_fields(stock),
+        # Backoff helpers intentionally carry their own historical precheck
+        # decision for standalone callers.  Keep that evidence, but make the
+        # decision computed above authoritative after all evidence merges.
+        **_rising_missed_scanner_filter_fields(action=scanner_filter_action),
+        "fast_precheck_result": result,
+        "fast_precheck_reason": reason,
     }
 
 
@@ -26416,6 +26672,15 @@ def _evaluate_rising_missed_tick_speed_entry_guard(
     tp1_micro_confidence = _safe_float(
         tp1_context.get("rising_missed_tp1_submit_context_micro_confidence"), 0.0
     )
+    tp1_true_ofi = _safe_float(
+        tp1_context.get("rising_missed_tp1_submit_context_true_ofi_ewma"), -1.0
+    )
+    tp1_pressure = _safe_float(
+        tp1_context.get("rising_missed_tp1_submit_context_pressure_ewma"), 0.0
+    )
+    tp1_depth_ratio = _safe_float(
+        tp1_context.get("rising_missed_tp1_submit_context_top_depth_ratio"), 0.0
+    )
     tp1_ws_micro_ready = _truthy_field(
         tp1_context.get("rising_missed_tp1_submit_context_ws_micro_ready")
     )
@@ -26474,7 +26739,36 @@ def _evaluate_rising_missed_tick_speed_entry_guard(
         ),
         "no_large_sell": not large_sell_detected,
     }
-    relief_applied = bool(is_rising_missed and all(relief_checks.values()))
+    absolute_throughput_path = bool(
+        relief_checks["only_relative_accel_slow"]
+        and relief_checks["absolute_tick_throughput"]
+        and relief_checks["fresh_quote"]
+        and relief_checks["positive_current_micro"]
+        and relief_checks["fresh_tp1_support"]
+    )
+    fresh_tp1_micro_path = bool(
+        relief_checks["only_relative_accel_slow"]
+        and relief_checks["fresh_quote"]
+        and relief_checks["fresh_tp1_support"]
+        and tp1_context_age_sec is not None
+        and tp1_context_age_sec <= 45.0
+        and tp1_true_ofi >= 0.0
+        and tp1_pressure >= 80.0
+        and tp1_depth_ratio >= 2.0
+        and orderbook_state not in {"bearish", "strong_bearish"}
+    )
+    relief_applied = bool(
+        is_rising_missed
+        and relief_checks["enabled"]
+        and relief_checks["active_date"]
+        and relief_checks["no_large_sell"]
+        and (absolute_throughput_path or fresh_tp1_micro_path)
+    )
+    relief_path = (
+        "fresh_tp1_micro"
+        if fresh_tp1_micro_path
+        else "absolute_tick_throughput" if absolute_throughput_path else "none"
+    )
     reasons = []
     if missing_window:
         reasons.append("tick_window_span_sec_missing")
@@ -26522,6 +26816,7 @@ def _evaluate_rising_missed_tick_speed_entry_guard(
         "rising_missed_tick_absolute_throughput_relief_active_date": relief_active_date,
         "rising_missed_tick_absolute_throughput_relief_current_date": relief_current_date,
         "rising_missed_tick_absolute_throughput_relief_applied": relief_applied,
+        "rising_missed_tick_absolute_throughput_relief_path": relief_path,
         "rising_missed_tick_absolute_throughput_relief_checks": ",".join(
             key for key, passed in relief_checks.items() if passed
         ),
@@ -26543,6 +26838,9 @@ def _evaluate_rising_missed_tick_speed_entry_guard(
         "rising_missed_tick_absolute_tp1_micro_confidence": (
             f"{tp1_micro_confidence:.3f}"
         ),
+        "rising_missed_tick_absolute_tp1_true_ofi": f"{tp1_true_ofi:.6f}",
+        "rising_missed_tick_absolute_tp1_pressure": f"{tp1_pressure:.3f}",
+        "rising_missed_tick_absolute_tp1_depth_ratio": f"{tp1_depth_ratio:.4f}",
         "rising_missed_tick_absolute_large_sell_detected": large_sell_detected,
         "metric_role": (
             "bounded_tunable"
@@ -31592,6 +31890,205 @@ def _trailing_shallow_loss_confirm_defer_decision(
         "curr_vs_micro_vwap_bp": curr_vs_micro_vwap_bp,
         **support_checks,
     }
+
+
+def _trailing_pre_submit_executable_recovery_decision(
+    stock: dict | None,
+    code: str,
+    ws_data: dict | None,
+    *,
+    buy_price: float,
+    signal_profit_rate: float,
+    peak_profit: float,
+    current_ai_score: float,
+    initial_executable_sell_price: int,
+    now_ts: float,
+) -> dict[str, Any]:
+    """Confirm a shallow trailing-loss recovery once before broker submit."""
+    stock = stock if isinstance(stock, dict) else {}
+    position_key = (
+        f"{stock.get('id', '-')}:"
+        f"{stock.get('holding_started_at') or stock.get('buy_time') or '-'}:"
+        f"{float(buy_price or 0.0):.4f}"
+    )
+    if stock.get("trailing_pre_submit_recovery_position_key") == position_key:
+        return {"defer": False, "reason": "already_deferred_once"}
+
+    min_peak_pct = 0.50
+    max_peak_pct = 1.00
+    max_executable_loss_pct = -0.50
+    min_ai_score = 55.0
+    min_recovery_improvement_pct = 0.15
+    max_recheck_deterioration_pct = 0.05
+    hard_stop_margin_pct = 0.15
+    recheck_sec = 2.0
+    rest_timeout_ms = 300
+    max_rest_age_ms = 1_500.0
+    max_spread_bps = 150.0
+
+    buy_price_value = _safe_float(buy_price, 0.0)
+    signal_profit = _safe_float(signal_profit_rate, 0.0)
+    peak = _safe_float(peak_profit, 0.0)
+    ai_score = _safe_float(current_ai_score, 0.0)
+    initial_price = _safe_int(initial_executable_sell_price, 0)
+    if buy_price_value <= 0 or initial_price <= 0:
+        return {"defer": False, "reason": "invalid_executable_price"}
+    if signal_profit >= 0.0:
+        return {"defer": False, "reason": "not_loss_conversion"}
+    if not (min_peak_pct <= peak <= max_peak_pct):
+        return {"defer": False, "reason": "peak_outside_recovery_band"}
+    if ai_score < min_ai_score:
+        return {"defer": False, "reason": "ai_below_recovery_floor"}
+
+    initial_profit = calculate_net_profit_rate(buy_price_value, initial_price)
+    recovery_improvement = initial_profit - signal_profit
+    hard_stop_pct = _safe_float(
+        stock.get("hard_stop_pct"),
+        _rule_float("SCALP_PRESET_HARD_STOP_PCT", -0.70),
+    )
+    if initial_profit < max_executable_loss_pct:
+        return {
+            "defer": False,
+            "reason": "executable_loss_below_recovery_band",
+            "initial_executable_profit_rate": initial_profit,
+        }
+    if recovery_improvement + 1e-9 < min_recovery_improvement_pct:
+        return {
+            "defer": False,
+            "reason": "executable_recovery_too_small",
+            "recovery_improvement_pct": recovery_improvement,
+        }
+    if initial_profit <= hard_stop_pct + hard_stop_margin_pct:
+        return {
+            "defer": False,
+            "reason": "hard_stop_margin_insufficient",
+            "initial_executable_profit_rate": initial_profit,
+            "hard_stop_pct": hard_stop_pct,
+        }
+    protect_profit_pct = _safe_float(stock.get("protect_profit_pct"), None)
+    if protect_profit_pct is not None and initial_profit <= protect_profit_pct:
+        return {
+            "defer": False,
+            "reason": "protect_stop_precedence",
+            "initial_executable_profit_rate": initial_profit,
+            "protect_profit_pct": protect_profit_pct,
+        }
+
+    features, has_features = _normalize_soft_stop_expert_features(stock)
+    if bool(
+        has_features
+        and _truthy_field(features.get("micro_context_usable"))
+        and _truthy_field(features.get("large_sell_print_detected"))
+    ):
+        return {"defer": False, "reason": "large_sell_print_detected"}
+
+    time.sleep(recheck_sec)
+    recheck_now_ts = time.time()
+    rest_snapshot, rest_state, rest_elapsed_ms = _fetch_rest_orderbook_snapshot_bounded(
+        code, rest_timeout_ms
+    )
+    rest_snapshot = dict(rest_snapshot or {})
+    if rest_snapshot and not any(
+        rest_snapshot.get(key)
+        for key in (
+            "rest_received_ts_ms",
+            "received_at_ms",
+            "rest_received_ts",
+            "received_ts",
+        )
+    ):
+        rest_snapshot["rest_received_ts"] = recheck_now_ts
+    quote_fields, _, _, rechecked_sell_price = _build_quote_consistency_fields(
+        ws_data,
+        rest_snapshot=rest_snapshot,
+        side="sell",
+        safety_exit=False,
+        now_ts=recheck_now_ts,
+    )
+    rest_age_ms = _safe_float(
+        quote_fields.get("quote_consistency_rest_age_ms"), float("inf")
+    )
+    best_bid = _safe_int(rest_snapshot.get("best_bid"), 0)
+    best_ask = _safe_int(rest_snapshot.get("best_ask"), 0)
+    spread_bps = (
+        ((best_ask - best_bid) / max(best_bid, 1)) * 10000.0
+        if best_bid > 0 and best_ask >= best_bid
+        else float("inf")
+    )
+    quote_reason = str(quote_fields.get("quote_consistency_reason") or "").lower()
+    quote_state = str(quote_fields.get("quote_consistency_state") or "").lower()
+    quote_fresh = bool(
+        rest_state == "ok"
+        and rest_snapshot
+        and 0.0 <= rest_age_ms <= max_rest_age_ms
+        and best_bid > 0
+        and best_ask >= best_bid
+        and rechecked_sell_price > 0
+        and spread_bps <= max_spread_bps
+        and quote_state not in {"blocked", "conflicted", "diverged", "stale"}
+        and quote_reason
+        not in {
+            "conflicted",
+            "price_conflict",
+            "quote_stale",
+            "stale_quote",
+            "ws_rest_conflicted",
+        }
+        and not _truthy_log_value(quote_fields.get("quote_consistency_entry_blocked"))
+    )
+    quote_consistency_sell_price = rechecked_sell_price
+    rechecked_sell_price = best_bid if quote_fresh else 0
+    rechecked_profit = (
+        calculate_net_profit_rate(buy_price_value, rechecked_sell_price)
+        if rechecked_sell_price > 0
+        else float("-inf")
+    )
+    stable_recovery = bool(
+        quote_fresh
+        and rechecked_profit >= max_executable_loss_pct
+        and rechecked_profit > hard_stop_pct + hard_stop_margin_pct
+        and rechecked_profit + max_recheck_deterioration_pct + 1e-9 >= initial_profit
+    )
+    fields = {
+        "defer": stable_recovery,
+        "reason": (
+            "executable_recovery_confirmed"
+            if stable_recovery
+            else "executable_recovery_not_confirmed"
+        ),
+        "position_key": position_key,
+        "signal_profit_rate": signal_profit,
+        "peak_profit": peak,
+        "current_ai_score": ai_score,
+        "initial_executable_sell_price": initial_price,
+        "initial_executable_profit_rate": initial_profit,
+        "recovery_improvement_pct": recovery_improvement,
+        "rechecked_executable_sell_price": rechecked_sell_price,
+        "quote_consistency_executable_sell_price": quote_consistency_sell_price,
+        "rechecked_executable_profit_rate": rechecked_profit,
+        "recheck_sec": recheck_sec,
+        "rest_fetch_state": rest_state,
+        "rest_fetch_elapsed_ms": rest_elapsed_ms,
+        "rest_quote_age_ms": rest_age_ms,
+        "rest_spread_bps": spread_bps,
+        "quote_fresh": quote_fresh,
+        "evaluated": True,
+        "hard_stop_pct": hard_stop_pct,
+        "hard_stop_margin_pct": hard_stop_margin_pct,
+        "max_executable_loss_pct": max_executable_loss_pct,
+        "min_recovery_improvement_pct": min_recovery_improvement_pct,
+        "max_recheck_deterioration_pct": max_recheck_deterioration_pct,
+        **quote_fields,
+    }
+    if stable_recovery:
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                "trailing_pre_submit_recovery_position_key": position_key,
+                "trailing_pre_submit_recovery_deferred_at": recheck_now_ts,
+            },
+        )
+    return fields
 
 
 def _normalize_pre_ai_strength_ws_timestamp(snapshot: dict | None) -> tuple[dict, str]:
@@ -40022,6 +40519,7 @@ def _opening_rotation_feature_packet(stock, code, ws_data, *, now_ts, now_dt):
         )
         with ENTRY_LOCK:
             _OPENING_ROTATION_CONTEXT_CACHE[code] = {
+                **cached,
                 "cached_at": now_ts,
                 "recent_candles": recent_candles,
             }
@@ -40070,14 +40568,53 @@ def _opening_rotation_yields_to_rising_missed_owner(stock, runtime=None) -> bool
     pos_tag = runtime.get("pos_tag") or stock.get("position_tag")
     if is_opening_rotation_position(pos_tag):
         return False
-    return bool(
-        runtime.get("scout_upgrade_entry")
-        or _has_rising_missed_entry_lineage(stock, runtime)
-        or _has_rising_missed_watch_source_marker(
-            stock,
-            include_not_rising_class=False,
-        )
-    )
+    return bool(_opening_rotation_rising_missed_owner_reason(stock, runtime))
+
+
+def _opening_rotation_rising_missed_owner_reason(
+    stock: dict | None, runtime: dict | None = None
+) -> str:
+    """Return only affirmative rising-missed ownership evidence.
+
+    The shared watch-source predicate intentionally treats diagnostic and
+    bounded-recheck fields as routing provenance.  OPENING ownership is
+    narrower: default rebound metrics and generic relief/recheck hints must not
+    preempt an otherwise independent scanner candidate.
+    """
+
+    stock = stock if isinstance(stock, dict) else {}
+    runtime = runtime if isinstance(runtime, dict) else {}
+    if _truthy_field(runtime.get("scout_upgrade_entry")):
+        return "scout_upgrade_entry"
+    if _has_rising_missed_entry_lineage(stock, runtime):
+        return "rising_missed_entry_lineage"
+
+    source_tokens = set()
+    for key in ("source_signature", "scanner_source_signature"):
+        source_tokens.update(_scanner_rising_source_signature_set(stock.get(key)))
+    if "LOW_REBOUND_RISING_MISSED" in source_tokens:
+        return "low_rebound_rising_missed_source"
+
+    if _truthy_field(stock.get("rising_missed_buy")) or _truthy_field(
+        runtime.get("rising_missed_buy")
+    ):
+        return "rising_missed_buy"
+
+    lineage = str(
+        stock.get("rising_missed_lineage") or runtime.get("rising_missed_lineage") or ""
+    ).strip()
+    if lineage.lower() not in {
+        "",
+        "-",
+        "0",
+        "false",
+        "none",
+        "not_applicable",
+        "not_rising_missed",
+    }:
+        return "rising_missed_lineage"
+
+    return ""
 
 
 def _handle_watching_opening_rotation(stock, code, ws_data, runtime, config) -> bool:
@@ -40096,6 +40633,9 @@ def _handle_watching_opening_rotation(stock, code, ws_data, runtime, config) -> 
     window_version = opening_rotation_entry_window_version(entry_config)
     decision_time_bucket = opening_rotation_entry_time_bucket(now_dt, entry_config)
     if _opening_rotation_yields_to_rising_missed_owner(stock, runtime):
+        owner_conflict_reason = _opening_rotation_rising_missed_owner_reason(
+            stock, runtime
+        )
         with ENTRY_LOCK:
             _OPENING_ROTATION_CONTEXT_CACHE.pop(code, None)
         _mutate_stock_state(
@@ -40124,6 +40664,9 @@ def _handle_watching_opening_rotation(stock, code, ws_data, runtime, config) -> 
                 code,
                 "opening_rotation_1pct_entry_owner_excluded",
                 opening_rotation_entry_owner="rising_missed_scout",
+                opening_rotation_entry_owner_reason=(
+                    owner_conflict_reason or "rising_missed_owner_marker"
+                ),
                 source_signature=source_signature or "-",
                 scout_upgrade_entry=bool(runtime.get("scout_upgrade_entry")),
                 rising_missed_entry_lineage=_has_rising_missed_entry_lineage(
@@ -40163,6 +40706,37 @@ def _handle_watching_opening_rotation(stock, code, ws_data, runtime, config) -> 
                 _OPENING_ROTATION_CONTEXT_CACHE.pop(code, None)
         return bool(direct_position)
 
+    state_source = "empty"
+    state_restored_across_promotion = False
+    cached_state_promotion_id = "-"
+    previous_state = stock.get(OPENING_ROTATION_STATE_KEY)
+    if isinstance(previous_state, dict) and previous_state:
+        previous_state = dict(previous_state)
+        state_source = "stock"
+    else:
+        with ENTRY_LOCK:
+            cached_context = dict(_OPENING_ROTATION_CONTEXT_CACHE.get(code) or {})
+        cached_state = cached_context.get("entry_state")
+        cached_state_date = str(cached_context.get("entry_state_date") or "")
+        cached_state_promotion_id = str(
+            cached_context.get("entry_state_promotion_id") or "-"
+        )
+        if (
+            isinstance(cached_state, dict)
+            and cached_state
+            and cached_state_date == now_dt.date().isoformat()
+        ):
+            previous_state = dict(cached_state)
+            state_source = "symbol_cache"
+            current_promotion_id = str(stock.get("scanner_promotion_id") or "-")
+            state_restored_across_promotion = bool(
+                cached_state_promotion_id not in {"", "-"}
+                and current_promotion_id not in {"", "-"}
+                and cached_state_promotion_id != current_promotion_id
+            )
+        else:
+            previous_state = None
+
     try:
         feature_packet = _opening_rotation_feature_packet(
             stock, code, ws_data, now_ts=now_ts, now_dt=now_dt
@@ -40176,7 +40750,7 @@ def _handle_watching_opening_rotation(stock, code, ws_data, runtime, config) -> 
         }
     else:
         decision = evaluate_opening_rotation_entry(
-            previous_state=stock.get(OPENING_ROTATION_STATE_KEY),
+            previous_state=previous_state,
             feature_packet=feature_packet,
             source_signature=source_signature,
             day_change_pct=day_change_pct,
@@ -40186,6 +40760,20 @@ def _handle_watching_opening_rotation(stock, code, ws_data, runtime, config) -> 
         )
 
     decision_state = decision.get("state") if isinstance(decision, dict) else {}
+    if isinstance(decision_state, dict) and decision_state:
+        with ENTRY_LOCK:
+            cached_context = dict(_OPENING_ROTATION_CONTEXT_CACHE.get(code) or {})
+            cached_context.update(
+                {
+                    "entry_state": dict(decision_state),
+                    "entry_state_date": now_dt.date().isoformat(),
+                    "entry_state_cached_at": now_ts,
+                    "entry_state_promotion_id": str(
+                        stock.get("scanner_promotion_id") or "-"
+                    ),
+                }
+            )
+            _OPENING_ROTATION_CONTEXT_CACHE[code] = cached_context
     reason = str(decision.get("reason") or "not_evaluated")
     previous_reason = str(stock.get("opening_rotation_1pct_last_reason") or "")
     should_log = bool(
@@ -40223,6 +40811,14 @@ def _handle_watching_opening_rotation(stock, code, ws_data, runtime, config) -> 
             entry_window_end=entry_config.entry_end.isoformat(),
             opening_rotation_window_version=window_version,
             opening_rotation_decision_time_bucket=decision_time_bucket,
+            opening_rotation_state_source=state_source,
+            opening_rotation_state_restored_across_promotion=(
+                state_restored_across_promotion
+            ),
+            opening_rotation_state_cached_promotion_id=cached_state_promotion_id,
+            opening_rotation_state_current_promotion_id=(
+                stock.get("scanner_promotion_id") or "-"
+            ),
             **{
                 key: value
                 for key, value in decision.items()
@@ -55112,6 +55708,36 @@ def _maybe_submit_entry_split_probe_residual(
     return True
 
 
+def submit_entry_split_probe_residual_after_fill(stock: dict, code: str) -> bool:
+    """Run probe residual revalidation immediately after the fill receipt.
+
+    Execution receipts invoke this on a daemon thread so the callback waits for
+    the shared entry lock without doing broker I/O inside the receipt handler.
+    The normal holding-loop call remains as a fail-closed recovery path.
+    """
+    with ENTRY_LOCK:
+        if str(stock.get("entry_split_probe_phase") or "").strip() != "probe_filled":
+            return False
+        ws_data: dict[str, Any] = {}
+        if WS_MANAGER is not None:
+            try:
+                latest = WS_MANAGER.get_latest_data(code)
+                ws_data = latest if isinstance(latest, dict) else {}
+            except Exception as exc:
+                log_error(
+                    f"[PROBE_RESIDUAL_IMMEDIATE_WS] {stock.get('name')}({code}) "
+                    f"failed={exc}"
+                )
+        now_ts = time.time()
+        return _maybe_submit_entry_split_probe_residual(
+            stock,
+            code,
+            ws_data,
+            now_ts=now_ts,
+            now_dt=datetime.fromtimestamp(now_ts),
+        )
+
+
 def handle_holding_state(
     stock,
     code,
@@ -59520,6 +60146,7 @@ def handle_holding_state(
             and str(exit_rule or stock.get("last_exit_rule") or "").strip()
             == "scalp_trailing_take_profit"
         )
+        trailing_signal_profit_rate = float(profit_rate)
         if sell_safety_exit or trailing_pre_submit_recheck:
             rest_snapshot, rest_check_state, rest_check_elapsed_ms = (
                 _fetch_rest_orderbook_snapshot_bounded(
@@ -59621,6 +60248,80 @@ def handle_holding_state(
             orderbook["bids"] = bids
             ws_data["orderbook"] = orderbook
             ws_data["curr"] = curr_p if curr_p > 0 else sell_order_price
+
+        if trailing_pre_submit_recheck:
+            recovery_decision = _trailing_pre_submit_executable_recovery_decision(
+                stock,
+                code,
+                ws_data,
+                buy_price=buy_p,
+                signal_profit_rate=trailing_signal_profit_rate,
+                peak_profit=peak_profit,
+                current_ai_score=current_ai_score,
+                initial_executable_sell_price=sell_order_price,
+                now_ts=now_ts,
+            )
+            if recovery_decision.get("defer"):
+                _mutate_stock_state(
+                    stock,
+                    pop_fields=(
+                        "last_exit_rule",
+                        "last_exit_reason",
+                        "last_exit_decision_source",
+                    ),
+                )
+                _log_holding_pipeline(
+                    stock,
+                    code,
+                    "trailing_pre_submit_executable_recovery_deferred",
+                    exit_rule=exit_rule or stock.get("last_exit_rule") or "-",
+                    sell_reason_type=sell_reason_type or "-",
+                    exit_classification="trailing_loss_conversion",
+                    metric_role="bounded_tunable",
+                    decision_authority=(
+                        "real_scalping_trailing_pre_submit_executable_recovery_guard"
+                    ),
+                    window_policy="same_position_single_two_second_recheck",
+                    sample_floor="fresh_two_point_executable_sell_quote_recovery",
+                    primary_decision_metric="post_defer_mfe_before_next_exit_signal",
+                    source_quality_gate="two_fresh_consistent_executable_sell_quotes",
+                    actual_order_submitted=False,
+                    broker_order_forbidden=True,
+                    runtime_effect=True,
+                    allowed_runtime_apply=False,
+                    forbidden_uses=(
+                        f"{TRADE_QUALITY_RUNTIME_FORBIDDEN_USES}|hard_stop_bypass|"
+                        "protect_stop_bypass|emergency_stop_bypass|second_extension"
+                    ),
+                    **recovery_decision,
+                )
+                return
+            if recovery_decision.get("evaluated"):
+                _log_holding_pipeline(
+                    stock,
+                    code,
+                    "trailing_pre_submit_executable_recovery_checked",
+                    exit_rule=exit_rule or stock.get("last_exit_rule") or "-",
+                    sell_reason_type=sell_reason_type or "-",
+                    exit_classification="trailing_loss_conversion",
+                    metric_role="bounded_tunable",
+                    decision_authority=(
+                        "real_scalping_trailing_pre_submit_executable_recovery_guard"
+                    ),
+                    window_policy="same_position_single_two_second_recheck",
+                    sample_floor="fresh_two_point_executable_sell_quote_recovery",
+                    primary_decision_metric="post_recheck_executable_profit_rate",
+                    source_quality_gate="two_fresh_consistent_executable_sell_quotes",
+                    actual_order_submitted=False,
+                    broker_order_forbidden=False,
+                    runtime_effect=True,
+                    allowed_runtime_apply=False,
+                    forbidden_uses=(
+                        f"{TRADE_QUALITY_RUNTIME_FORBIDDEN_USES}|hard_stop_bypass|"
+                        "protect_stop_bypass|emergency_stop_bypass|second_extension"
+                    ),
+                    **recovery_decision,
+                )
 
         sell_exchange_resolution = _resolve_holding_sell_dmst_stex_tp(
             stock, code, now_t=now_t

@@ -3400,8 +3400,12 @@ def test_emit_scanner_watching_runtime_skip_fills_contract_fields(monkeypatch):
     )
 
     assert emitted_result is True
-    assert emitted[-1]["stage"] == "scalping_scanner_watching_runtime_skip"
-    fields = emitted[-1]["fields"]
+    scanner_event = next(
+        event
+        for event in emitted
+        if event["stage"] == "scalping_scanner_watching_runtime_skip"
+    )
+    fields = scanner_event["fields"]
     assert fields["metric_role"] == "funnel_count"
     assert (
         fields["decision_authority"]
@@ -3438,6 +3442,16 @@ def test_emit_scanner_watching_runtime_skip_fills_contract_fields(monkeypatch):
     )
     assert fields["zero_context_defaulted_zero_field_count"] >= 2
     assert "threshold_mutation" in fields["zero_context_forbidden_uses"]
+    opening_event = next(
+        event
+        for event in emitted
+        if event["stage"] == "opening_rotation_1pct_upstream_blocked"
+    )
+    assert opening_event["fields"]["freshness_envelope_attempted"] is False
+    assert (
+        opening_event["fields"]["opening_rotation_upstream_scope_state"]
+        == "source_scope_day_change_missing"
+    )
 
 
 def test_emit_scanner_watching_runtime_skip_reports_ws_type_freshness(monkeypatch):

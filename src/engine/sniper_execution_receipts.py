@@ -46,6 +46,7 @@ highest_prices = None
 _get_fast_state = None
 _weighted_avg = None
 _now_ts = None
+_probe_fill_continuation_callback = None
 
 # Receipt module의 임시/DB 작업은 독립 락으로 직렬화하고,
 # ACTIVE_TARGETS 같은 shared runtime truth는 주입된 _STATE_LOCK(실운영에서는 ENTRY_LOCK)으로만 만집니다.
@@ -293,6 +294,7 @@ def bind_execution_dependencies(
     weighted_avg=None,
     now_ts=None,
     state_lock=None,
+    probe_fill_continuation_callback=None,
     state_machine=None,
     **_unused_kwargs,
 ):
@@ -304,6 +306,7 @@ def bind_execution_dependencies(
     """
     global KIWOOM_TOKEN, DB, event_bus, ACTIVE_TARGETS, highest_prices
     global _get_fast_state, _weighted_avg, _now_ts, _STATE_LOCK
+    global _probe_fill_continuation_callback
 
     if kiwoom_token is not None:
         KIWOOM_TOKEN = kiwoom_token
@@ -323,6 +326,8 @@ def bind_execution_dependencies(
         _now_ts = now_ts
     if state_lock is not None:
         _STATE_LOCK = state_lock
+    if probe_fill_continuation_callback is not None:
+        _probe_fill_continuation_callback = probe_fill_continuation_callback
 
 
 def _log_holding_pipeline(name, code, target_id, stage, **fields):
@@ -334,6 +339,19 @@ def _log_holding_pipeline(name, code, target_id, stage, **fields):
         record_id=target_id,
         fields=fields,
     )
+
+
+def _run_probe_fill_continuation(target_stock: dict[str, Any], code: str) -> None:
+    callback = _probe_fill_continuation_callback
+    if callback is None:
+        return
+    try:
+        callback(target_stock, code)
+    except Exception as exc:
+        log_error(
+            f"[PROBE_RESIDUAL_IMMEDIATE] {target_stock.get('name')}({code}) "
+            f"failed={exc}"
+        )
 
 
 def _receipt_snapshot(
@@ -2552,6 +2570,13 @@ def _handle_entry_buy_execution(
                 broker_order_forbidden=False,
                 runtime_effect=True,
             )
+            if _probe_fill_continuation_callback is not None:
+                threading.Thread(
+                    target=_run_probe_fill_continuation,
+                    args=(target_stock, code),
+                    daemon=True,
+                    name=f"probe-residual-{code}",
+                ).start()
 
     submit_ai_score = _resolve_entry_submit_ai_score(target_stock, order_no)
     holding_ai_seeded = False

@@ -8582,6 +8582,153 @@ def test_rising_missed_tick_speed_guard_relies_on_absolute_throughput_when_bulli
     assert decision["runtime_effect"] is True
     assert decision["broker_order_forbidden"] is False
 
+    stale_quote = state_handlers._evaluate_rising_missed_tick_speed_entry_guard(
+        stock=stock,
+        runtime={},
+        latency_gate={},
+        ws_data={
+            "curr": 10000,
+            "last_ws_update_ts": time.time(),
+            "market_data_effective_quote_age_ms": 501.0,
+        },
+        orderbook_fields={
+            "orderbook_micro_ready": True,
+            "orderbook_micro_state": "bullish",
+            "orderbook_micro_qi": 0.92,
+            "orderbook_micro_ofi_norm": 5.1,
+        },
+        microstructure_fields={
+            "tick_window_span_sec": 3.0,
+            "recent_5tick_seconds": 2.0,
+            "tick_sample_count": 10,
+            "tick_acceleration_ratio": 0.0,
+        },
+        rising_missed_entry_lineage=True,
+    )
+
+    assert stale_quote["blocked"] is True
+    assert stale_quote["rising_missed_tick_absolute_throughput_relief_path"] == "none"
+
+
+def test_rising_missed_tick_speed_guard_reuses_strong_fresh_tp1_micro(
+    monkeypatch,
+):
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RISING_MISSED_TICK_ABSOLUTE_THROUGHPUT_RELIEF_ENABLED",
+        "true",
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RISING_MISSED_TICK_ABSOLUTE_THROUGHPUT_RELIEF_ACTIVE_DATE",
+        state_handlers.datetime.now(tz=state_handlers._KST).strftime("%Y-%m-%d"),
+    )
+    now_ts = time.time()
+    stock = {
+        "rising_missed_normal_buy_bridge_allowed": True,
+        "rising_missed_tp1_submit_context_at": now_ts - 35.0,
+        "rising_missed_tp1_submit_context_evaluation_id": "eval-fresh-tp1-micro",
+        "rising_missed_tp1_submit_context_support_count": 2,
+        "rising_missed_tp1_submit_context_micro_confidence": 0.85,
+        "rising_missed_tp1_submit_context_true_ofi_ewma": 0.00005,
+        "rising_missed_tp1_submit_context_pressure_ewma": 86.59,
+        "rising_missed_tp1_submit_context_top_depth_ratio": 6.375,
+        "rising_missed_tp1_submit_context_ws_micro_ready": True,
+    }
+
+    decision = state_handlers._evaluate_rising_missed_tick_speed_entry_guard(
+        stock=stock,
+        runtime={},
+        latency_gate={},
+        ws_data={"market_data_effective_quote_age_ms": 1.0},
+        orderbook_fields={
+            "orderbook_micro_ready": False,
+            "orderbook_micro_state": "insufficient",
+            "orderbook_micro_qi": 0.50,
+            "orderbook_micro_ofi_norm": 0.001,
+        },
+        microstructure_fields={
+            "tick_window_span_sec": 58.0,
+            "recent_5tick_seconds": 49.0,
+            "tick_sample_count": 10,
+            "tick_acceleration_ratio": 0.163,
+        },
+        rising_missed_entry_lineage=True,
+    )
+
+    assert decision["blocked"] is False
+    assert decision["reason"] == "tick_speed_absolute_throughput_relief"
+    assert decision["rising_missed_tick_absolute_throughput_relief_applied"] is True
+    assert (
+        decision["rising_missed_tick_absolute_throughput_relief_path"]
+        == "fresh_tp1_micro"
+    )
+    assert decision["broker_order_forbidden"] is False
+
+    bearish = state_handlers._evaluate_rising_missed_tick_speed_entry_guard(
+        stock=stock,
+        runtime={},
+        latency_gate={},
+        ws_data={"market_data_effective_quote_age_ms": 1.0},
+        orderbook_fields={
+            "orderbook_micro_ready": True,
+            "orderbook_micro_state": "bearish",
+            "orderbook_micro_qi": 0.30,
+            "orderbook_micro_ofi_norm": -1.2,
+        },
+        microstructure_fields={
+            "tick_window_span_sec": 58.0,
+            "recent_5tick_seconds": 49.0,
+            "tick_sample_count": 10,
+            "tick_acceleration_ratio": 0.163,
+        },
+        rising_missed_entry_lineage=True,
+    )
+
+    assert bearish["blocked"] is True
+    assert bearish["rising_missed_tick_absolute_throughput_relief_path"] == "none"
+
+
+def test_rising_missed_tick_speed_fresh_tp1_micro_keeps_weak_pressure_blocked(
+    monkeypatch,
+):
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RISING_MISSED_TICK_ABSOLUTE_THROUGHPUT_RELIEF_ENABLED",
+        "true",
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RISING_MISSED_TICK_ABSOLUTE_THROUGHPUT_RELIEF_ACTIVE_DATE",
+        state_handlers.datetime.now(tz=state_handlers._KST).strftime("%Y-%m-%d"),
+    )
+    stock = {
+        "rising_missed_normal_buy_bridge_allowed": True,
+        "rising_missed_tp1_submit_context_at": time.time() - 35.0,
+        "rising_missed_tp1_submit_context_evaluation_id": "eval-weak-tp1-micro",
+        "rising_missed_tp1_submit_context_support_count": 2,
+        "rising_missed_tp1_submit_context_micro_confidence": 0.85,
+        "rising_missed_tp1_submit_context_true_ofi_ewma": 0.0029,
+        "rising_missed_tp1_submit_context_pressure_ewma": 32.24,
+        "rising_missed_tp1_submit_context_top_depth_ratio": 0.477,
+        "rising_missed_tp1_submit_context_ws_micro_ready": True,
+    }
+
+    decision = state_handlers._evaluate_rising_missed_tick_speed_entry_guard(
+        stock=stock,
+        runtime={},
+        latency_gate={},
+        ws_data={"market_data_effective_quote_age_ms": 1.0},
+        orderbook_fields={"orderbook_micro_ready": False},
+        microstructure_fields={
+            "tick_window_span_sec": 58.0,
+            "recent_5tick_seconds": 49.0,
+            "tick_sample_count": 10,
+            "tick_acceleration_ratio": 0.163,
+        },
+        rising_missed_entry_lineage=True,
+    )
+
+    assert decision["blocked"] is True
+    assert decision["block_reason"] == "tick_acceleration_ratio_lt_1"
+    assert decision["rising_missed_tick_absolute_throughput_relief_path"] == "none"
+
 
 def test_rising_missed_tick_speed_absolute_throughput_does_not_bypass_bearish_book(
     monkeypatch,
@@ -36565,6 +36712,123 @@ def test_handle_holding_state_blocks_trailing_sell_when_pre_submit_quote_stale(
     assert blocked[0]["actual_order_submitted"] is False
 
 
+def test_handle_holding_state_defers_trailing_sell_on_executable_recovery(
+    monkeypatch,
+):
+    original_rules = state_handlers.TRADING_RULES
+    try:
+        state_handlers.TRADING_RULES = replace(
+            CONFIG,
+            SCALE_IN_REQUIRE_HISTORY_TABLE=False,
+            SCALP_BAD_ENTRY_REFINED_CANARY_ENABLED=False,
+            SCALP_BAD_ENTRY_REFINED_OBSERVE_ENABLED=False,
+            SCALP_MFE_PROTECT_EXIT_ENABLED=False,
+            SCALP_TRAILING_START_PCT=0.50,
+            SCALP_SAFE_PROFIT=1.00,
+        )
+        state_handlers.COOLDOWNS = {}
+        state_handlers.ALERTED_STOCKS = set()
+        state_handlers.HIGHEST_PRICES = {"123456": 10_080}
+        state_handlers.LAST_AI_CALL_TIMES = {}
+        state_handlers.LAST_LOG_TIMES = {}
+        state_handlers.DB = _DummyDB()
+        state_handlers.KIWOOM_TOKEN = "token"
+        sell_calls = []
+        recovery_calls = []
+        pipeline_events = []
+
+        monkeypatch.setattr(
+            state_handlers,
+            "_build_quote_consistency_fields",
+            lambda *args, **kwargs: (
+                {
+                    "quote_consistency_state": "ok",
+                    "quote_consistency_reason": "ws_rest_gap_ok",
+                    "quote_consistency_entry_blocked": False,
+                    "price_source": "ws_rest_mid",
+                },
+                10_000,
+                10_010,
+                9_995,
+            ),
+        )
+        monkeypatch.setattr(
+            state_handlers,
+            "_fetch_rest_orderbook_snapshot_bounded",
+            lambda code, timeout_ms: (
+                {"best_bid": 9_995, "best_ask": 10_005},
+                "ok",
+                10.0,
+            ),
+        )
+        monkeypatch.setattr(
+            state_handlers,
+            "_trailing_pre_submit_executable_recovery_decision",
+            lambda *args, **kwargs: recovery_calls.append((args, kwargs))
+            or {
+                "defer": True,
+                "reason": "executable_recovery_confirmed",
+                "evaluated": True,
+            },
+        )
+        monkeypatch.setattr(
+            state_handlers,
+            "can_consider_scale_in",
+            lambda *args, **kwargs: {"allowed": False, "reason": "test_no_add"},
+        )
+        monkeypatch.setattr(
+            state_handlers.kiwoom_orders,
+            "send_smart_sell_order",
+            lambda **kwargs: sell_calls.append(kwargs)
+            or {"return_code": "0", "ord_no": "S1"},
+        )
+        monkeypatch.setattr(
+            state_handlers,
+            "_log_holding_pipeline",
+            lambda stock, code, stage, **fields: pipeline_events.append(
+                (stage, fields)
+            ),
+        )
+        stock = {
+            "id": 1,
+            "code": "123456",
+            "name": "TEST",
+            "status": "HOLDING",
+            "strategy": "SCALPING",
+            "buy_price": 10_000,
+            "buy_qty": 3,
+            "rt_ai_prob": 0.60,
+            "buy_time": 1_000.0,
+            "trailing_shallow_loss_confirm_deferred": True,
+        }
+
+        state_handlers.handle_holding_state(
+            stock=stock,
+            code="123456",
+            ws_data={"curr": 10_000},
+            admin_id=1,
+            market_regime="BULL",
+            now_ts=1_240.0,
+            now_dt=datetime(2026, 7, 13, 13, 4, 30),
+            radar=None,
+            ai_engine=None,
+        )
+    finally:
+        state_handlers.TRADING_RULES = original_rules
+
+    assert recovery_calls
+    assert sell_calls == []
+    assert stock["status"] == "HOLDING"
+    deferred = [
+        fields
+        for stage, fields in pipeline_events
+        if stage == "trailing_pre_submit_executable_recovery_deferred"
+    ]
+    assert deferred
+    assert deferred[0]["exit_classification"] == "trailing_loss_conversion"
+    assert deferred[0]["actual_order_submitted"] is False
+
+
 def test_scalp_profit_stagnation_time_exit_skips_simulated_position(monkeypatch):
     state_handlers.TRADING_RULES = replace(
         CONFIG, SCALP_PROFIT_STAGNATION_EXIT_ENABLED=True
@@ -40471,6 +40735,140 @@ def test_scalp_trailing_loss_conversion_recheck_fails_open_without_fresh_rest(
     )
 
     assert decision is False
+
+
+def test_trailing_pre_submit_executable_recovery_defers_once(monkeypatch):
+    now_ts = 1_783_471_000.0
+    sleeps = []
+    monkeypatch.setattr(
+        state_handlers.time, "sleep", lambda seconds: sleeps.append(seconds)
+    )
+    monkeypatch.setattr(state_handlers.time, "time", lambda: now_ts + 2.0)
+    monkeypatch.setattr(
+        state_handlers,
+        "_fetch_rest_orderbook_snapshot_bounded",
+        lambda code, timeout_ms: (
+            {"best_bid": 3_595, "best_ask": 3_605},
+            "ok",
+            12.0,
+        ),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_build_quote_consistency_fields",
+        lambda *args, **kwargs: (
+            {
+                "quote_consistency_state": "single_source",
+                "quote_consistency_reason": "rest_only_fresh",
+                "quote_consistency_rest_age_ms": 12.0,
+                "quote_consistency_entry_blocked": False,
+            },
+            3_600,
+            3_605,
+            3_595,
+        ),
+    )
+    stock = {
+        "id": 1,
+        "strategy": "SCALPING",
+        "buy_time": now_ts - 140,
+        "hard_stop_pct": -0.70,
+    }
+
+    decision = state_handlers._trailing_pre_submit_executable_recovery_decision(
+        stock,
+        "413630",
+        {"curr": 3_585},
+        buy_price=3_600,
+        signal_profit_rate=-0.65,
+        peak_profit=0.60,
+        current_ai_score=57,
+        initial_executable_sell_price=3_595,
+        now_ts=now_ts,
+    )
+    repeated = state_handlers._trailing_pre_submit_executable_recovery_decision(
+        stock,
+        "413630",
+        {"curr": 3_595},
+        buy_price=3_600,
+        signal_profit_rate=-0.40,
+        peak_profit=0.60,
+        current_ai_score=57,
+        initial_executable_sell_price=3_595,
+        now_ts=now_ts + 60,
+    )
+
+    assert decision["defer"] is True
+    assert decision["reason"] == "executable_recovery_confirmed"
+    assert decision["rechecked_executable_sell_price"] == 3_595
+    assert decision["quote_consistency_executable_sell_price"] == 3_595
+    assert decision["evaluated"] is True
+    assert sleeps == [2.0]
+    assert repeated == {"defer": False, "reason": "already_deferred_once"}
+
+
+def test_trailing_pre_submit_executable_recovery_preserves_hard_stop(monkeypatch):
+    monkeypatch.setattr(
+        state_handlers.time,
+        "sleep",
+        lambda seconds: pytest.fail("hard-stop-adjacent exit must not sleep"),
+    )
+    stock = {
+        "id": 1,
+        "strategy": "SCALPING",
+        "buy_time": 1_000.0,
+        "hard_stop_pct": -0.70,
+    }
+
+    decision = state_handlers._trailing_pre_submit_executable_recovery_decision(
+        stock,
+        "413630",
+        {"curr": 3_580},
+        buy_price=3_600,
+        signal_profit_rate=-0.75,
+        peak_profit=0.60,
+        current_ai_score=70,
+        initial_executable_sell_price=3_580,
+        now_ts=1_140.0,
+    )
+
+    assert decision["defer"] is False
+    assert decision["reason"] in {
+        "executable_loss_below_recovery_band",
+        "hard_stop_margin_insufficient",
+    }
+
+
+def test_trailing_pre_submit_executable_recovery_does_not_bypass_protect_stop(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        state_handlers.time,
+        "sleep",
+        lambda seconds: pytest.fail("protect stop must not sleep"),
+    )
+    stock = {
+        "id": 1,
+        "strategy": "SCALPING",
+        "buy_time": 1_000.0,
+        "hard_stop_pct": -0.70,
+        "protect_profit_pct": -0.30,
+    }
+
+    decision = state_handlers._trailing_pre_submit_executable_recovery_decision(
+        stock,
+        "413630",
+        {"curr": 3_585},
+        buy_price=3_600,
+        signal_profit_rate=-0.65,
+        peak_profit=0.60,
+        current_ai_score=70,
+        initial_executable_sell_price=3_595,
+        now_ts=1_140.0,
+    )
+
+    assert decision["defer"] is False
+    assert decision["reason"] == "protect_stop_precedence"
 
 
 def test_emit_same_symbol_soft_stop_cooldown_shadow_once(monkeypatch):
