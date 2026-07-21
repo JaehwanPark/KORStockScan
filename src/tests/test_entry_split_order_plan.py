@@ -1507,6 +1507,35 @@ def test_probe_runtime_restart_clears_pending_recheck_without_opening_circuit(
     assert state["bundles"]["123456-probe-recheck-restart"]["phase"] == "aborted"
 
 
+def test_probe_runtime_restart_ignores_partial_complete_bundle(monkeypatch, tmp_path):
+    state_path = tmp_path / "entry_split_probe_runtime_state.json"
+    monkeypatch.setattr(split_plan, "PROBE_RUNTIME_STATE_PATH", state_path)
+    now = datetime(2026, 7, 20, 10, 0, tzinfo=timezone(timedelta(hours=9)))
+    split_plan.update_probe_runtime_bundle(
+        "123456-probe-partial-complete",
+        phase="partial_complete",
+        now=now,
+        code="123456",
+        target_id=7,
+        requested_qty=10,
+        filled_qty=4,
+        reason="submitted_residual_orders_terminal",
+    )
+    stock = {
+        "id": 7,
+        "code": "123456",
+        "buy_qty": 4,
+        "status": "HOLDING",
+    }
+
+    result = split_plan.recover_probe_runtime_bundle_for_stock(stock, now=now)
+
+    assert result == {"recovered": False, "reason": "no_incomplete_bundle"}
+    assert "entry_split_probe_bundle_id" not in stock
+    state = split_plan._load_json(state_path)
+    assert state["circuit_open"] is False
+
+
 def test_allocator_date_bounded_policy_becomes_inactive(monkeypatch, tmp_path):
     policy_file = tmp_path / "entry-policy.json"
     policy_file.write_text(

@@ -21429,6 +21429,9 @@ def _dispatch_scalp_preset_exit(
                 stock,
                 set_fields={
                     "entry_split_probe_exit_bundle_id": probe_bundle_id,
+                    "entry_split_probe_phase": "aborted",
+                    "entry_split_probe_abort_reason": "exit_authority_precedence",
+                    "entry_split_probe_scale_in_forbidden": True,
                 },
             )
         cancel_state = _cancel_pending_entry_orders(stock, code, force=False)
@@ -30634,6 +30637,7 @@ _ENTRY_SPLIT_PROBE_RUNTIME_KEYS = (
     "entry_split_probe_direction_state",
     "entry_split_probe_continuation_action",
     "entry_split_probe_offset_profile",
+    "entry_split_probe_reward_target_price",
 )
 
 # Residual submission can be reached by both the fill callback worker and the
@@ -30654,6 +30658,123 @@ def _post_probe_recheck_interval_sec() -> float:
         250.0,
     )
     return max(0.1, min(1.0, raw / 1000.0))
+
+
+def _post_probe_chase_guard_fields(
+    stock: dict,
+    *,
+    probe_fill_price: int,
+    best_bid: int,
+    best_ask: int,
+    candidate_price: int = 0,
+) -> dict[str, Any]:
+    """Bound the resolved residual price and preserve reward/risk when known."""
+
+    fill_price = max(0, _safe_int(probe_fill_price, 0))
+    bid = max(0, _safe_int(best_bid, 0))
+    ask = max(0, _safe_int(best_ask, 0))
+    candidate = max(0, _safe_int(candidate_price, 0))
+    enabled = _env_bool(
+        "KORSTOCKSCAN_ENTRY_SPLIT_PROBE_CHASE_GUARD_ENABLED",
+        True,
+    )
+    max_chase_bps = max(
+        0.0,
+        _env_float("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_MAX_CHASE_BPS", 80.0),
+    )
+    min_reward_risk = max(
+        0.0,
+        _env_float("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_MIN_REWARD_RISK", 0.50),
+    )
+    bbo_anchor = (
+        min(max(fill_price, bid), ask)
+        if fill_price > 0 and bid > 0 and ask > 0 and bid <= ask
+        else 0
+    )
+    anchor = candidate or bbo_anchor
+    chase_bps = (
+        max(0.0, ((float(anchor) - float(fill_price)) / float(fill_price)) * 10000.0)
+        if anchor > 0 and fill_price > 0
+        else float("inf")
+    )
+    # SCALP preset TP is a disabled compatibility surface and sell_target_price
+    # belongs to an already-active exit order. Neither may regain entry
+    # authority through the residual chase guard. Only an explicit target
+    # captured by the probe plan is eligible for reward/risk validation.
+    target_price = max(
+        0,
+        _safe_int(stock.get("entry_split_probe_reward_target_price"), 0),
+    )
+    hard_stop_pct = _safe_float(
+        stock.get("hard_stop_pct"),
+        _rule_float("SCALP_PRESET_HARD_STOP_PCT", -0.7),
+    )
+    stop_price = (
+        float(fill_price) * (1.0 + (float(hard_stop_pct) / 100.0))
+        if fill_price > 0 and hard_stop_pct < 0
+        else 0.0
+    )
+    reward_bps = (
+        ((float(target_price) - float(anchor)) / float(anchor)) * 10000.0
+        if target_price > 0 and anchor > 0
+        else None
+    )
+    risk_bps = (
+        ((float(anchor) - stop_price) / float(anchor)) * 10000.0
+        if anchor > 0 and stop_price > 0 and anchor > stop_price
+        else None
+    )
+    reward_risk = (
+        max(0.0, float(reward_bps)) / float(risk_bps)
+        if reward_bps is not None and risk_bps is not None and risk_bps > 0
+        else None
+    )
+    chase_blocked = not math.isfinite(chase_bps) or chase_bps > max_chase_bps
+    reward_risk_blocked = bool(
+        target_price > 0
+        and (
+            reward_bps is None
+            or reward_bps <= 0
+            or reward_risk is None
+            or reward_risk < min_reward_risk
+        )
+    )
+    blocked = enabled and (chase_blocked or reward_risk_blocked)
+    reason = (
+        "post_probe_chase_guard_disabled"
+        if not enabled
+        else (
+            "post_probe_chase_bps_exceeded"
+            if chase_blocked
+            else (
+                "post_probe_reward_risk_below_min"
+                if reward_risk_blocked
+                else "post_probe_chase_guard_passed"
+            )
+        )
+    )
+    return {
+        "post_probe_chase_guard_enabled": enabled,
+        "post_probe_chase_guard_blocked": blocked,
+        "post_probe_chase_guard_reason": reason,
+        "post_probe_chase_anchor_price": anchor or "-",
+        "post_probe_chase_candidate_price": candidate or "not_available",
+        "post_probe_chase_bps": (
+            round(chase_bps, 4) if math.isfinite(chase_bps) else "not_available"
+        ),
+        "post_probe_max_chase_bps": round(max_chase_bps, 4),
+        "post_probe_reward_target_price": target_price or "not_available",
+        "post_probe_reward_bps": (
+            round(reward_bps, 4) if reward_bps is not None else "not_available"
+        ),
+        "post_probe_risk_bps": (
+            round(risk_bps, 4) if risk_bps is not None else "not_available"
+        ),
+        "post_probe_reward_risk": (
+            round(reward_risk, 6) if reward_risk is not None else "not_available"
+        ),
+        "post_probe_min_reward_risk": round(min_reward_risk, 6),
+    }
 
 
 def _post_probe_direction_fields(
@@ -30964,6 +31085,95 @@ def _abort_entry_split_probe_residual(
         post_probe_continuation_action=("HARD_NEGATIVE" if hard_negative else "BLOCK"),
         **_entry_split_probe_observation_contract_fields(),
     )
+
+
+def _entry_split_probe_exit_authority_active(stock: dict) -> bool:
+    return bool(
+        stock.get("entry_split_probe_exit_bundle_id")
+        or stock.get("exit_requested")
+        or str(stock.get("status") or "").strip().upper() == "SELL_ORDERED"
+    )
+
+
+def _finalize_entry_split_probe_partial_position(
+    stock: dict,
+    code: str,
+    *,
+    reason: str,
+) -> bool:
+    """Close a terminal partial probe bundle without freezing future scale-in."""
+
+    if str(stock.get("entry_split_probe_phase") or "").strip() != (
+        "residual_partial_submitted"
+    ):
+        return False
+    if _entry_split_probe_exit_authority_active(stock):
+        return False
+    if _has_open_pending_entry_orders(stock):
+        return False
+    bundle_id = str(stock.get("entry_split_probe_bundle_id") or "").strip()
+    requested_qty = max(
+        0,
+        _safe_int(
+            stock.get("entry_split_probe_requested_qty")
+            or stock.get("entry_requested_qty")
+            or stock.get("requested_buy_qty"),
+            0,
+        ),
+    )
+    filled_qty = max(
+        0,
+        _safe_int(stock.get("buy_qty"), 0),
+        _safe_int(stock.get("entry_filled_qty"), 0),
+    )
+    if filled_qty <= 0:
+        return False
+    move_orders_to_terminal(stock, reason="entry_split_probe_partial_complete")
+    _mutate_stock_state(
+        stock,
+        set_fields={
+            "status": "HOLDING",
+            "entry_split_probe_phase": "partial_complete",
+            "entry_split_probe_partial_complete_reason": reason,
+            "entry_split_probe_partial_complete_qty": filled_qty,
+            "entry_fill_quality": "PARTIAL_FILL",
+        },
+        pop_fields=[
+            "pending_entry_orders",
+            "entry_requested_qty",
+            "requested_buy_qty",
+            "entry_filled_qty",
+            "entry_fill_amount",
+            "entry_bundle_id",
+            "odno",
+            "order_time",
+            "entry_split_probe_residual_claimed",
+            "entry_split_probe_scale_in_forbidden",
+            "entry_split_probe_reward_target_price",
+        ],
+    )
+    if bundle_id:
+        update_probe_runtime_bundle(
+            bundle_id,
+            phase="partial_complete",
+            reason=reason,
+            requested_qty=requested_qty,
+            filled_qty=filled_qty,
+        )
+    _log_entry_pipeline(
+        stock,
+        code,
+        "residual_partial_complete",
+        reason=reason,
+        probe_bundle_id=bundle_id or "-",
+        requested_qty=requested_qty,
+        filled_qty=filled_qty,
+        actual_order_submitted=False,
+        broker_order_forbidden=False,
+        runtime_effect=True,
+        **_entry_split_probe_observation_contract_fields(),
+    )
+    return True
 
 
 def _entry_bundle_filled_qty(stock) -> int:
@@ -49782,10 +49992,10 @@ def _iter_pending_entry_orders(stock):
     return orders
 
 
-def _clear_pending_entry_meta(stock):
+def _clear_pending_entry_meta(stock, *, preserve_probe_runtime=False):
     with ENTRY_LOCK:
         move_orders_to_terminal(stock, reason="pending_entry_meta_cleared")
-        for key in [
+        clear_keys = [
             "pending_entry_orders",
             "entry_mode",
             "entry_requested_qty",
@@ -49799,10 +50009,16 @@ def _clear_pending_entry_meta(stock):
             "entry_partial_fill_deferred_at",
             "entry_submit_notice_pending",
             "entry_submit_notice_enqueued",
-            *_ENTRY_SPLIT_PROBE_RUNTIME_KEYS,
-            "entry_split_probe_abort_reason",
-            "entry_split_probe_scale_in_forbidden",
-        ]:
+        ]
+        if not preserve_probe_runtime:
+            clear_keys.extend(
+                [
+                    *_ENTRY_SPLIT_PROBE_RUNTIME_KEYS,
+                    "entry_split_probe_abort_reason",
+                    "entry_split_probe_scale_in_forbidden",
+                ]
+            )
+        for key in clear_keys:
             stock.pop(key, None)
     _clear_entry_arm(stock)
 
@@ -52997,7 +53213,10 @@ def _cancel_pending_entry_orders(
         now_ts = float(now_ts or time.time())
         open_orders = _open_entry_split_orders(stock)
         if not open_orders:
-            _clear_pending_entry_meta(stock)
+            _clear_pending_entry_meta(
+                stock,
+                preserve_probe_runtime=_entry_split_probe_exit_authority_active(stock),
+            )
             return "resolved"
 
         bundle_hard_expired = _entry_split_bundle_hard_expired(open_orders, now_ts)
@@ -53331,7 +53550,16 @@ def _cancel_pending_entry_orders(
                     },
                 )
 
-        _clear_pending_entry_meta(stock)
+        if _finalize_entry_split_probe_partial_position(
+            stock,
+            code,
+            reason=str(cancel_reason or "residual_orders_cancelled"),
+        ):
+            return "cancelled"
+        _clear_pending_entry_meta(
+            stock,
+            preserve_probe_runtime=_entry_split_probe_exit_authority_active(stock),
+        )
         return "cancelled"
 
 
@@ -54764,6 +54992,15 @@ def _reconcile_pending_entry_orders(stock, code, strategy):
     was_rising_missed_scout_upgrade = bool(
         stock.get("rising_missed_scout_upgrade_order_pending")
     )
+    requested_qty_before_reconcile = max(
+        0,
+        _safe_int(
+            stock.get("entry_requested_qty")
+            or stock.get("requested_buy_qty")
+            or stock.get("entry_split_probe_requested_qty"),
+            0,
+        ),
+    )
     result = _cancel_pending_entry_orders(
         stock,
         code,
@@ -54799,8 +55036,10 @@ def _reconcile_pending_entry_orders(stock, code, strategy):
     buy_qty = _safe_int(stock.get("buy_qty"), 0)
     if buy_qty > 0:
         requested_qty = int(
-            stock.get("entry_requested_qty", 0)
+            requested_qty_before_reconcile
+            or stock.get("entry_requested_qty", 0)
             or stock.get("requested_buy_qty", 0)
+            or stock.get("entry_split_probe_requested_qty", 0)
             or buy_qty
         )
         requested_qty = max(requested_qty, buy_qty, 1)
@@ -56285,6 +56524,63 @@ def _submit_entry_split_probe_residual_locked(
                 **direction_fields,
             )
             return False
+        chase_guard_fields = _post_probe_chase_guard_fields(
+            stock,
+            probe_fill_price=fill_price,
+            best_bid=best_bid,
+            best_ask=best_ask,
+            candidate_price=max(resolved_leg_prices, default=0),
+        )
+        direction_fields.update(chase_guard_fields)
+        if chase_guard_fields.get("post_probe_chase_guard_blocked"):
+            recheck_count = (
+                _safe_int(stock.get("entry_split_probe_recheck_count"), 0) + 1
+            )
+            recheck_due_at = min(
+                filled_at + timeout_sec,
+                now_ts + _post_probe_recheck_interval_sec(),
+            )
+            direction_fields.update(
+                {
+                    "post_probe_continuation_action": "DEFER",
+                    "post_probe_direction_reason": chase_guard_fields.get(
+                        "post_probe_chase_guard_reason"
+                    ),
+                }
+            )
+            _mutate_stock_state(
+                stock,
+                set_fields={
+                    "entry_split_probe_phase": "probe_recheck_pending",
+                    "entry_split_probe_recheck_due_at": recheck_due_at,
+                    "entry_split_probe_recheck_count": recheck_count,
+                    "entry_split_probe_deferred_once": True,
+                    "entry_split_probe_direction_state": direction_fields.get(
+                        "post_probe_direction_state"
+                    ),
+                    "entry_split_probe_continuation_action": "DEFER",
+                },
+            )
+            update_probe_runtime_bundle(
+                bundle_id,
+                phase="probe_recheck_pending",
+                recheck_count=recheck_count,
+                recheck_due_at=recheck_due_at,
+                **direction_fields,
+            )
+            _log_entry_pipeline(
+                stock,
+                code,
+                "probe_continuation_deferred",
+                probe_bundle_id=bundle_id,
+                recheck_count=recheck_count,
+                recheck_due_at=f"{recheck_due_at:.6f}",
+                actual_order_submitted=False,
+                broker_order_forbidden=True,
+                runtime_effect=True,
+                **direction_fields,
+            )
+            return False
     residual_orders, plan_fields = build_probe_residual_orders(
         continuation,
         probe_fill_price=fill_price,
@@ -56494,6 +56790,17 @@ def _submit_entry_split_probe_residual_locked(
                 failure_reason = "residual_leg_price_resolver_blocked"
                 break
             repriced = _safe_int(leg_resolution.get("resolved_order_price"), 0)
+            leg_chase_guard_fields = _post_probe_chase_guard_fields(
+                stock,
+                probe_fill_price=fill_price,
+                best_bid=leg_bid,
+                best_ask=leg_ask,
+                candidate_price=repriced,
+            )
+            leg_direction_fields.update(leg_chase_guard_fields)
+            if leg_chase_guard_fields.get("post_probe_chase_guard_blocked"):
+                failure_reason = "residual_leg_chase_guard_blocked"
+                break
             residual_order.update(
                 {
                     "price": repriced,
@@ -56929,6 +57236,11 @@ def handle_holding_state(
         if reprice_result == "submitted":
             return
     _reconcile_pending_entry_orders(stock, code, strategy)
+    _finalize_entry_split_probe_partial_position(
+        stock,
+        code,
+        reason="submitted_residual_orders_terminal",
+    )
     _mutate_stock_state(stock, set_fields={"position_tag": pos_tag})
     if curr_p <= 0 or buy_p <= 0:
         return

@@ -42,6 +42,31 @@ from src.engine.scalping.rising_missed_one_share_entry import (
 )
 
 
+def test_holding_elapsed_prefers_first_fill_over_residual_order_time():
+    held_sec = scale_in.resolve_holding_elapsed_sec(
+        {
+            "holding_started_at": 1_000.0,
+            "buy_time": 1_000.0,
+            "order_time": 1_060.0,
+        },
+        now_ts=1_100.0,
+        now_dt=datetime.fromtimestamp(1_100.0),
+    )
+
+    assert held_sec == 100
+
+    recovered_probe_held_sec = scale_in.resolve_holding_elapsed_sec(
+        {
+            "entry_split_probe_filled_at": 1_000.0,
+            "buy_time": 1_070.0,
+            "order_time": 1_060.0,
+        },
+        now_ts=1_100.0,
+        now_dt=datetime.fromtimestamp(1_100.0),
+    )
+    assert recovered_probe_held_sec == 100
+
+
 @pytest.fixture(autouse=True)
 def _clear_scalp_loss_reentry_state(request, monkeypatch, tmp_path):
     manual_control_exclusion_file = (
@@ -24939,6 +24964,9 @@ def test_split_entry_residual_cancel_after_partial_fill_has_no_cooldown(monkeypa
         state_handlers, "_log_entry_pipeline", lambda *args, **kwargs: None
     )
     monkeypatch.setattr(
+        state_handlers, "update_probe_runtime_bundle", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_cancel_order",
         lambda **kwargs: cancel_calls.append(kwargs)
@@ -24948,7 +24976,15 @@ def test_split_entry_residual_cancel_after_partial_fill_has_no_cooldown(monkeypa
         "id": 1,
         "name": "TEST",
         "strategy": "SCALPING",
+        "status": "HOLDING",
+        "buy_qty": 3,
         "entry_filled_qty": 3,
+        "entry_requested_qty": 7,
+        "requested_buy_qty": 7,
+        "entry_split_probe_phase": "residual_partial_submitted",
+        "entry_split_probe_bundle_id": "440110-probe-partial-cancel",
+        "entry_split_probe_requested_qty": 7,
+        "entry_split_probe_scale_in_forbidden": True,
         "pending_entry_orders": [
             {
                 "tag": "entry_split_passive_1",
@@ -24978,6 +25014,9 @@ def test_split_entry_residual_cancel_after_partial_fill_has_no_cooldown(monkeypa
     assert "score65_74_recovery_probe_cancel_cooldown_until" not in stock
     assert "last_entry_cancel_confirmed_at" not in stock
     assert stock["last_entry_residual_cancel_at"] > 0
+    assert stock["entry_split_probe_phase"] == "partial_complete"
+    assert "entry_split_probe_scale_in_forbidden" not in stock
+    assert "entry_requested_qty" not in stock
 
 
 def test_split_entry_bundle_hard_ttl_cancels_all_and_sets_single_cooldown(monkeypatch):
@@ -28143,10 +28182,15 @@ def test_reconcile_partial_fill_below_min_ratio_sends_exit_order(monkeypatch):
     )
     state_handlers.KIWOOM_TOKEN = "token"
 
+    def _cancel_and_clear_entry_request(stock, *_args, **_kwargs):
+        stock.pop("entry_requested_qty", None)
+        stock.pop("requested_buy_qty", None)
+        return "cancelled"
+
     monkeypatch.setattr(
         state_handlers,
         "_cancel_pending_entry_orders",
-        lambda *args, **kwargs: "cancelled",
+        _cancel_and_clear_entry_request,
     )
     event_logs = []
     monkeypatch.setattr(

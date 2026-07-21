@@ -59,6 +59,9 @@ ALLOWED_PRICE_CANDIDATES = {
 PROBE_RUNTIME_STATE_SCHEMA_VERSION = "entry_split_probe_runtime_state_v1"
 PROBE_RUNTIME_STATE_PATH = PROJECT_ROOT / "tmp" / "entry_split_probe_runtime_state.json"
 PROBE_VARIANT_SUFFIX = "probe1_fill_clamped_bbo"
+PROBE_RECOVERY_TERMINAL_PHASES = frozenset(
+    {"complete", "bundle_completed", "partial_complete"}
+)
 _PROBE_RUNTIME_STATE_LOCK = threading.RLock()
 
 
@@ -183,7 +186,7 @@ def recover_probe_runtime_bundle_for_stock(
                 or not stock_target_id
                 or str(bundle.get("target_id") or "").strip() == stock_target_id
             )
-            and str(bundle.get("phase") or "") not in {"complete", "bundle_completed"}
+            and str(bundle.get("phase") or "") not in PROBE_RECOVERY_TERMINAL_PHASES
         ]
         if not candidates:
             return {"recovered": False, "reason": "no_incomplete_bundle"}

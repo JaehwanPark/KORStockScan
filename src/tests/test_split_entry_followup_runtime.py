@@ -545,6 +545,212 @@ def test_post_probe_direction_classifies_strong_weak_and_hanwha_source_gap():
     assert hanwha_gap["post_probe_continuation_action"] == "DEFER"
 
 
+def test_post_probe_chase_guard_caps_fast_rise_and_checks_known_tp_reward_risk(
+    monkeypatch,
+):
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_CHASE_GUARD_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_MAX_CHASE_BPS", "80")
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_MIN_REWARD_RISK", "0.5")
+
+    allowed = state_handlers._post_probe_chase_guard_fields(
+        {},
+        probe_fill_price=10_000,
+        best_bid=10_070,
+        best_ask=10_080,
+    )
+    chase_blocked = state_handlers._post_probe_chase_guard_fields(
+        {},
+        probe_fill_price=10_000,
+        best_bid=10_090,
+        best_ask=10_100,
+    )
+    resolved_price_allowed = state_handlers._post_probe_chase_guard_fields(
+        {},
+        probe_fill_price=10_000,
+        best_bid=10_090,
+        best_ask=10_100,
+        candidate_price=10_060,
+    )
+    legacy_preset_tp_ignored = state_handlers._post_probe_chase_guard_fields(
+        {"preset_tp_price": 10_060, "hard_stop_pct": -0.7},
+        probe_fill_price=10_000,
+        best_bid=10_050,
+        best_ask=10_060,
+    )
+    reward_risk_blocked = state_handlers._post_probe_chase_guard_fields(
+        {
+            "entry_split_probe_reward_target_price": 10_060,
+            "hard_stop_pct": -0.7,
+        },
+        probe_fill_price=10_000,
+        best_bid=10_050,
+        best_ask=10_060,
+    )
+
+    assert allowed["post_probe_chase_guard_blocked"] is False
+    assert allowed["post_probe_chase_bps"] == 70.0
+    assert chase_blocked["post_probe_chase_guard_blocked"] is True
+    assert chase_blocked["post_probe_chase_guard_reason"] == (
+        "post_probe_chase_bps_exceeded"
+    )
+    assert resolved_price_allowed["post_probe_chase_guard_blocked"] is False
+    assert resolved_price_allowed["post_probe_chase_candidate_price"] == 10_060
+    assert legacy_preset_tp_ignored["post_probe_chase_guard_blocked"] is False
+    assert legacy_preset_tp_ignored["post_probe_reward_target_price"] == (
+        "not_available"
+    )
+    assert reward_risk_blocked["post_probe_chase_guard_blocked"] is True
+    assert reward_risk_blocked["post_probe_chase_guard_reason"] == (
+        "post_probe_reward_risk_below_min"
+    )
+
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_CHASE_GUARD_ENABLED", "false")
+    rollback = state_handlers._post_probe_chase_guard_fields(
+        {},
+        probe_fill_price=10_000,
+        best_bid=10_100,
+        best_ask=10_110,
+    )
+    assert rollback["post_probe_chase_guard_blocked"] is False
+    assert rollback["post_probe_chase_guard_reason"] == (
+        "post_probe_chase_guard_disabled"
+    )
+
+
+def test_terminal_partial_probe_bundle_releases_scale_in_lock(monkeypatch, tmp_path):
+    events = []
+    monkeypatch.setattr(
+        split_plan,
+        "PROBE_RUNTIME_STATE_PATH",
+        tmp_path / "entry_split_probe_runtime_state.json",
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: events.append((stage, fields)),
+    )
+    stock = {
+        "id": 1,
+        "name": "PARTIAL",
+        "code": "123456",
+        "strategy": "SCALPING",
+        "status": "HOLDING",
+        "buy_qty": 4,
+        "holding_started_at": 100.0,
+        "order_time": 150.0,
+        "entry_filled_qty": 4,
+        "entry_requested_qty": 10,
+        "requested_buy_qty": 10,
+        "entry_split_probe_phase": "residual_partial_submitted",
+        "entry_split_probe_bundle_id": "123456-probe-partial-complete",
+        "entry_split_probe_requested_qty": 10,
+        "entry_split_probe_scale_in_forbidden": True,
+        "entry_split_probe_reward_target_price": 10_500,
+        "pending_entry_orders": [
+            {
+                "tag": "entry_split_probe_residual_1",
+                "ord_no": "R1",
+                "qty": 3,
+                "filled_qty": 3,
+                "status": "FILLED",
+            }
+        ],
+    }
+
+    assert state_handlers._finalize_entry_split_probe_partial_position(
+        stock,
+        "123456",
+        reason="submitted_residual_orders_terminal",
+    )
+    assert stock["entry_split_probe_phase"] == "partial_complete"
+    assert stock["entry_split_probe_partial_complete_qty"] == 4
+    assert stock["entry_fill_quality"] == "PARTIAL_FILL"
+    assert "entry_split_probe_scale_in_forbidden" not in stock
+    assert "entry_requested_qty" not in stock
+    assert "requested_buy_qty" not in stock
+    assert "order_time" not in stock
+    assert "entry_split_probe_reward_target_price" not in stock
+    assert events[-1][0] == "residual_partial_complete"
+    assert events[-1][1]["broker_order_forbidden"] is False
+
+
+def test_exit_authority_prevents_partial_probe_unlock(monkeypatch):
+    stock = {
+        "status": "HOLDING",
+        "entry_split_probe_phase": "residual_partial_submitted",
+        "entry_split_probe_bundle_id": "probe-exit",
+        "entry_split_probe_exit_bundle_id": "probe-exit",
+        "entry_split_probe_scale_in_forbidden": True,
+        "buy_qty": 2,
+    }
+    monkeypatch.setattr(
+        state_handlers,
+        "_has_open_pending_entry_orders",
+        lambda _stock: False,
+    )
+
+    assert (
+        state_handlers._finalize_entry_split_probe_partial_position(
+            stock,
+            "005930",
+            reason="submitted_residual_orders_terminal",
+        )
+        is False
+    )
+    assert stock["entry_split_probe_phase"] == "residual_partial_submitted"
+    assert stock["entry_split_probe_scale_in_forbidden"] is True
+
+
+def test_exit_authority_cancel_preserves_probe_phase_and_scale_in_lock(monkeypatch):
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_cancel_order",
+        lambda **kwargs: {
+            "return_code": "0",
+            "ord_no": "C1",
+            "return_msg": "ok",
+        },
+    )
+    stock = {
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_qty": 2,
+        "entry_filled_qty": 2,
+        "entry_split_probe_phase": "residual_partial_submitted",
+        "entry_split_probe_bundle_id": "probe-exit-cancel",
+        "entry_split_probe_exit_bundle_id": "probe-exit-cancel",
+        "entry_split_probe_scale_in_forbidden": True,
+        "pending_entry_orders": [
+            {
+                "tag": "entry_split_probe_residual_1",
+                "ord_no": "R1",
+                "qty": 3,
+                "filled_qty": 0,
+                "status": "OPEN",
+                "sent_at": 90.0,
+            }
+        ],
+    }
+
+    result = state_handlers._cancel_pending_entry_orders(
+        stock,
+        "005930",
+        force=True,
+        now_ts=100.0,
+    )
+
+    assert result == "cancelled"
+    assert "pending_entry_orders" not in stock
+    assert stock["entry_split_probe_phase"] == "residual_partial_submitted"
+    assert stock["entry_split_probe_bundle_id"] == "probe-exit-cancel"
+    assert stock["entry_split_probe_scale_in_forbidden"] is True
+
+
 def test_post_probe_direction_rejects_stale_watching_features():
     result = state_handlers._post_probe_direction_fields(
         {
@@ -749,12 +955,12 @@ def test_post_probe_unknown_defers_then_recovery_reprices_each_p1_leg(
             {
                 "quote_consistency_state": "ok",
                 "quote_consistency_reason": "ws_only_fresh",
-                "canonical_mark_price": 10000,
-                "passive_buy_price": 9990,
+                "canonical_mark_price": 10095,
+                "passive_buy_price": 10090,
             },
-            10000,
-            10010,
-            9990,
+            10095,
+            10100,
+            10090,
         ),
     )
 
@@ -792,7 +998,7 @@ def test_post_probe_unknown_defers_then_recovery_reprices_each_p1_leg(
     monkeypatch.setattr(
         state_handlers,
         "WS_MANAGER",
-        SimpleNamespace(get_latest_data=lambda _code: {"curr": 10000}),
+        SimpleNamespace(get_latest_data=lambda _code: {"curr": 10095}),
     )
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
@@ -873,7 +1079,7 @@ def test_post_probe_unknown_defers_then_recovery_reprices_each_p1_leg(
         now_ts=100.5,
         now_dt=datetime(2026, 7, 20, 10, 0, 1),
     )
-    expected_sent = [(2, 9970)] if second_leg_weak else [(2, 9970), (2, 9920)]
+    expected_sent = [(2, 10060)] if second_leg_weak else [(2, 10060), (2, 10010)]
     assert sent == expected_sent
     assert stock["entry_split_probe_offset_profile"] == "recovered_wide"
     assert stock["entry_split_probe_phase"] == (
@@ -1232,6 +1438,9 @@ def test_probe_residual_orders_are_cancelled_before_hard_exit_sell(monkeypatch):
     assert calls == ["cancel_buy", "sell"]
     assert stock["status"] == "SELL_ORDERED"
     assert stock["entry_split_probe_exit_bundle_id"] == "123456-probe-exit"
+    assert stock["entry_split_probe_phase"] == "aborted"
+    assert stock["entry_split_probe_abort_reason"] == "exit_authority_precedence"
+    assert stock["entry_split_probe_scale_in_forbidden"] is True
     assert len(persisted_updates) == 1
     persisted_bundle_id, persisted_fields = persisted_updates[0]
     assert persisted_bundle_id == "123456-probe-exit"

@@ -443,13 +443,6 @@ def resolve_holding_elapsed_sec(stock, *, now_dt=None, now_ts=None):
     current_dt = now_dt or datetime.now()
     current_ts = float(now_ts if now_ts is not None else current_dt.timestamp())
 
-    raw_order_time = stock.get("order_time")
-    if raw_order_time not in (None, "", 0, "0"):
-        try:
-            return max(0, int(current_ts - float(raw_order_time)))
-        except (TypeError, ValueError):
-            pass
-
     raw_holding_started_at = stock.get("holding_started_at")
     if raw_holding_started_at not in (None, "", 0, "0"):
         try:
@@ -461,14 +454,29 @@ def resolve_holding_elapsed_sec(stock, *, now_dt=None, now_ts=None):
             if holding_dt is not None:
                 return max(0, int((current_dt - holding_dt).total_seconds()))
 
-    raw_buy_time = stock.get("buy_time")
-    if not raw_buy_time:
-        return 0
+    raw_probe_filled_at = stock.get("entry_split_probe_filled_at")
+    if raw_probe_filled_at not in (None, "", 0, "0"):
+        try:
+            return max(0, int(current_ts - float(raw_probe_filled_at)))
+        except (TypeError, ValueError):
+            pass
 
-    buy_dt = resolve_buy_time_as_datetime(raw_buy_time, current_dt)
-    if buy_dt is None:
-        return 0
-    return max(0, int((current_dt - buy_dt).total_seconds()))
+    raw_buy_time = stock.get("buy_time")
+    if raw_buy_time:
+        buy_dt = resolve_buy_time_as_datetime(raw_buy_time, current_dt)
+        if buy_dt is not None:
+            return max(0, int((current_dt - buy_dt).total_seconds()))
+
+    # ``order_time`` is an entry-order lifecycle timestamp and is refreshed by
+    # residual submit/reprice paths.  It is only a compatibility fallback when
+    # no position-start timestamp survived recovery.
+    raw_order_time = stock.get("order_time")
+    if raw_order_time not in (None, "", 0, "0"):
+        try:
+            return max(0, int(current_ts - float(raw_order_time)))
+        except (TypeError, ValueError):
+            pass
+    return 0
 
 
 def _scalping_pyramid_quality_snapshot(stock, *, current_ai_score=None):
