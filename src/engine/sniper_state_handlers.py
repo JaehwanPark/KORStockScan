@@ -55112,6 +55112,36 @@ def _maybe_submit_entry_split_probe_residual(
     return True
 
 
+def submit_entry_split_probe_residual_after_fill(stock: dict, code: str) -> bool:
+    """Run probe residual revalidation immediately after the fill receipt.
+
+    Execution receipts invoke this on a daemon thread so the callback waits for
+    the shared entry lock without doing broker I/O inside the receipt handler.
+    The normal holding-loop call remains as a fail-closed recovery path.
+    """
+    with ENTRY_LOCK:
+        if str(stock.get("entry_split_probe_phase") or "").strip() != "probe_filled":
+            return False
+        ws_data: dict[str, Any] = {}
+        if WS_MANAGER is not None:
+            try:
+                latest = WS_MANAGER.get_latest_data(code)
+                ws_data = latest if isinstance(latest, dict) else {}
+            except Exception as exc:
+                log_error(
+                    f"[PROBE_RESIDUAL_IMMEDIATE_WS] {stock.get('name')}({code}) "
+                    f"failed={exc}"
+                )
+        now_ts = time.time()
+        return _maybe_submit_entry_split_probe_residual(
+            stock,
+            code,
+            ws_data,
+            now_ts=now_ts,
+            now_dt=datetime.fromtimestamp(now_ts),
+        )
+
+
 def handle_holding_state(
     stock,
     code,

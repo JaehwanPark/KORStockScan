@@ -728,6 +728,9 @@ bind_execution_dependencies(
     weighted_avg=_weighted_avg,
     now_ts=_now_ts,
     state_lock=ENTRY_LOCK,
+    probe_fill_continuation_callback=(
+        sniper_state_handlers.submit_entry_split_probe_residual_after_fill
+    ),
 )
 
 _STATE_HANDLER_DEPS = {}
@@ -829,6 +832,9 @@ def _ensure_execution_deps():
         "get_fast_state": _get_fast_state,
         "weighted_avg": _weighted_avg,
         "now_ts": _now_ts,
+        "probe_fill_continuation_callback": (
+            sniper_state_handlers.submit_entry_split_probe_residual_after_fill
+        ),
     }
     if any(_EXECUTION_DEPS.get(k) is not v for k, v in snapshot.items()):
         bind_execution_dependencies(**snapshot)

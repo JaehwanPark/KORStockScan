@@ -163,18 +163,24 @@ def test_completed_sell_closes_persisted_probe_bundle(monkeypatch, tmp_path):
     assert "entry_split_probe_exit_bundle_id" not in stock
 
 
-def test_probe_receipt_marks_fill_once_without_submitting_residual(
-    monkeypatch, tmp_path
-):
-    class _NoopThread:
-        def __init__(self, *args, **kwargs):
-            pass
+def test_probe_receipt_marks_fill_once_and_schedules_residual(monkeypatch, tmp_path):
+    scheduled = []
+
+    class _ImmediateThread:
+        def __init__(self, *, target, args, **kwargs):
+            self.target = target
+            self.args = args
 
         def start(self):
-            return None
+            self.target(*self.args)
 
     events = []
-    monkeypatch.setattr(receipts.threading, "Thread", _NoopThread)
+    monkeypatch.setattr(receipts.threading, "Thread", _ImmediateThread)
+    monkeypatch.setattr(
+        receipts,
+        "_probe_fill_continuation_callback",
+        lambda stock, code: scheduled.append((stock, code)),
+    )
     monkeypatch.setattr(
         receipts,
         "_log_holding_pipeline",
@@ -242,8 +248,33 @@ def test_probe_receipt_marks_fill_once_without_submitting_residual(
     assert stock["entry_split_probe_phase"] == "probe_filled"
     assert stock["entry_split_probe_fill_price"] == 10010
     assert [stage for stage, _ in events].count("probe_filled") == 1
+    assert scheduled == [(stock, "123456")]
     runtime_state = split_plan._load_json(split_plan.PROBE_RUNTIME_STATE_PATH)
     assert runtime_state["bundles"]["123456-probe-test"]["phase"] == "probe_filled"
+
+
+def test_probe_fill_callback_uses_fresh_ws_and_submits_immediately(monkeypatch):
+    now_ts = 1_774_150_400.0
+    stock = {"name": "PROBE", "entry_split_probe_phase": "probe_filled"}
+    observed = []
+    monkeypatch.setattr(
+        state_handlers,
+        "WS_MANAGER",
+        SimpleNamespace(get_latest_data=lambda code: {"curr": 10010, "code": code}),
+    )
+    monkeypatch.setattr(state_handlers.time, "time", lambda: now_ts)
+    monkeypatch.setattr(
+        state_handlers,
+        "_maybe_submit_entry_split_probe_residual",
+        lambda target, code, ws_data, **kwargs: observed.append(
+            (target, code, ws_data, kwargs)
+        )
+        or True,
+    )
+
+    assert state_handlers.submit_entry_split_probe_residual_after_fill(stock, "123456")
+    assert observed[0][0:3] == (stock, "123456", {"curr": 10010, "code": "123456"})
+    assert observed[0][3]["now_ts"] == now_ts
 
 
 def test_probe_residual_submits_once_after_fresh_fill_revalidation(
