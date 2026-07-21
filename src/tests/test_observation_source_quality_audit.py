@@ -1609,6 +1609,18 @@ def test_observation_source_quality_audit_reviews_20260713_unknown_provenance_ga
                 record_id=2,
             ),
             _event(
+                "rising_missed_tick_absolute_throughput_relief_applied",
+                {
+                    **common_entry_context,
+                    "decision_authority": (
+                        "operator_runtime_override_tick_absolute_throughput_relief"
+                    ),
+                    "runtime_effect": True,
+                    "source_quality_gate": "rising_missed_tick_context_present",
+                },
+                record_id=5,
+            ),
+            _event(
                 "scalp_entry_action_decision_snapshot",
                 {
                     "actual_order_submitted": False,
@@ -1655,6 +1667,12 @@ def test_observation_source_quality_audit_reviews_20260713_unknown_provenance_ga
         reviewed["rising_missed_tick_speed_entry_block"]["entry_order_flow_status"][
             "reviewed_reason"
         ]
+        == "reviewed_entry_order_flow_not_available"
+    )
+    assert (
+        reviewed["rising_missed_tick_absolute_throughput_relief_applied"][
+            "entry_order_flow_status"
+        ]["reviewed_reason"]
         == "reviewed_entry_order_flow_not_available"
     )
     assert (

@@ -2451,6 +2451,7 @@ def _reviewed_unknown_reason_for_stage_field(
             "blocked_ai_score",
             "order_bundle_submitted",
             "pre_submit_entry_ai_authority_guard_block",
+            "rising_missed_tick_absolute_throughput_relief_applied",
             "rising_missed_tick_speed_entry_block",
             "scalp_entry_action_decision_snapshot",
         }:

@@ -575,6 +575,70 @@ def test_bucket_discovery_reviews_all_sim_auto_candidates_in_20_candidate_shards
     assert report["summary"]["sim_auto_approved_count"] == 21
 
 
+def test_bucket_discovery_explicit_comparative_reject_is_not_missing_review(
+    tmp_path, monkeypatch
+):
+    target = "2026-05-22"
+    matrix_dir = tmp_path / "matrix"
+    matrix_dir.mkdir()
+    monkeypatch.setattr(mod, "REPORT_DIR", tmp_path / "discovery")
+
+    matrix_path = matrix_dir / f"swing_lifecycle_decision_matrix_{target}.json"
+    matrix_path.write_text(
+        json.dumps(
+            {
+                "input_contract": {"swing_daily_simulation_consumed": False},
+                "swing_lifecycle_flow_bucket_attribution": {
+                    "buckets": [_flow_bucket(joined_sample=12)]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        mod,
+        "matrix_report_paths",
+        lambda target_date: (matrix_path, matrix_path.with_suffix(".md")),
+    )
+
+    def fake_call(context, **_kwargs):
+        payload = _ai_response(context["candidate_ids"])
+        payload["comparative_reviews"][0].update(
+            {
+                "selected_decision": "source_quality_blocker",
+                "selected_source": "reject",
+                "comparison_summary": "Explicit source-quality blocker.",
+            }
+        )
+        return payload, {
+            "provider": "openai",
+            "status": "success",
+            "model": mod.AI_REVIEW_MODEL,
+        }
+
+    monkeypatch.setattr(mod, "_call_openai_ai_review", fake_call)
+
+    report = mod.build_swing_lifecycle_bucket_discovery(target, provider="openai")
+
+    summary = report["summary"]
+    assert summary["missing_comparative_review_count"] == 0
+    assert summary["sim_missing_comparative_review_count"] == 0
+    assert summary["explicit_comparative_reject_count"] == 1
+    assert summary["sim_explicit_comparative_reject_count"] == 1
+    assert summary["ai_review_followup_required"] is False
+    assert summary["sim_auto_blocked_by_ai_review_followup"] is False
+    assert summary["sim_auto_downgraded_by_explicit_review_count"] == 1
+    assert summary["sim_auto_downgraded_by_missing_review_count"] == 0
+    assert summary["sim_auto_approved_count"] == 0
+    candidate = report["surfaced_candidates"][0]
+    assert candidate["comparative_review_status"] == "provided"
+    assert candidate["sim_auto_downgraded_by_ai_explicit_blocker"] is True
+    assert not any(
+        item["workorder_id"] == "swing_lifecycle_bucket_discovery_ai_review_followup"
+        for item in report["code_improvement_workorders"]
+    )
+
+
 def test_bucket_discovery_partial_sim_auto_shard_failure_only_downgrades_failed_shard(
     tmp_path, monkeypatch
 ):

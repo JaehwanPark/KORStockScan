@@ -154,6 +154,11 @@ def _summary_for(payload: dict[str, Any]) -> dict[str, Any]:
         if isinstance(payload.get("ev_report_summary"), dict)
         else {}
     )
+    source_quality_contracts = (
+        payload.get("source_quality_contracts")
+        if isinstance(payload.get("source_quality_contracts"), dict)
+        else {}
+    )
     data_quality = (
         payload.get("data_quality")
         if isinstance(payload.get("data_quality"), dict)
@@ -167,12 +172,16 @@ def _summary_for(payload: dict[str, Any]) -> dict[str, Any]:
         "summary": summary,
         "ev_report_summary": ev_summary,
         "source_quality_contracts": (
-            ev_summary.get("source_quality_contracts")
-            if isinstance(ev_summary.get("source_quality_contracts"), dict)
+            source_quality_contracts
+            if source_quality_contracts
             else (
-                data_quality.get("source_quality_contracts")
-                if isinstance(data_quality.get("source_quality_contracts"), dict)
-                else {}
+                ev_summary.get("source_quality_contracts")
+                if isinstance(ev_summary.get("source_quality_contracts"), dict)
+                else (
+                    data_quality.get("source_quality_contracts")
+                    if isinstance(data_quality.get("source_quality_contracts"), dict)
+                    else {}
+                )
             )
         ),
         "warnings": _top_list(payload.get("warnings"), 50),
@@ -412,7 +421,12 @@ def _is_resolved_swing_ai_review_missing_source_only_gap(
     source_summary = _swing_lifecycle_bucket_discovery_summary(context)
     summary = _nested_report_summary(source_summary)
     sim_auto_unreviewed = _safe_int(summary.get("sim_auto_unreviewed_candidate_count"))
-    sim_auto_downgraded = _safe_int(summary.get("sim_auto_downgraded_by_review_count"))
+    sim_auto_missing_review_downgraded = _safe_int(
+        summary.get(
+            "sim_auto_downgraded_by_missing_review_count",
+            summary.get("sim_auto_downgraded_by_review_count"),
+        )
+    )
     return (
         summary.get("source_contract_status") == "pass"
         and source_summary.get("runtime_effect") is False
@@ -421,7 +435,7 @@ def _is_resolved_swing_ai_review_missing_source_only_gap(
         and summary.get("ai_review_followup_required") is False
         and summary.get("sim_auto_blocked_by_ai_review_followup") is False
         and sim_auto_unreviewed == 0
-        and sim_auto_downgraded == 0
+        and sim_auto_missing_review_downgraded == 0
     )
 
 
@@ -631,6 +645,7 @@ def _is_resolved_classified_source_quality_warning_gap(
     if (
         review_id
         in {
+            "lifecycle_bucket_discovery_contract_drift",
             "lifecycle_bucket_discovery_source_contract_drift",
             "lifecycle_bucket_discovery",
             "source_contract_drift",
@@ -668,6 +683,7 @@ def _is_resolved_classified_source_quality_warning_gap(
             )
         )
     if review_id in {
+        "scalp_entry_adm_sample_floor",
         "scalping_scalp_entry_adm_status_warning",
         "scalp_entry_adm_status_warning",
         "scalping_pattern_lab_automation",
@@ -680,6 +696,28 @@ def _is_resolved_classified_source_quality_warning_gap(
         or "entry admission metric" in reason
     ):
         source = _source_summary(context, "scalping_pattern_lab_automation")
+        source_contracts = (
+            source.get("source_quality_contracts")
+            if isinstance(source.get("source_quality_contracts"), dict)
+            else {}
+        )
+        scalp_entry_adm_contract = (
+            source_contracts.get("scalp_entry_adm")
+            if isinstance(source_contracts.get("scalp_entry_adm"), dict)
+            else {}
+        )
+        exact_sample_floor_contract_ready = (
+            scalp_entry_adm_contract.get("source_contract_status") == "implemented"
+            and scalp_entry_adm_contract.get("sample_floor_status") == "hold_sample"
+            and scalp_entry_adm_contract.get("tuning_input_allowed") is False
+            and "joined_sample_below_sample_floor"
+            in [
+                str(item)
+                for item in scalp_entry_adm_contract.get("blocked_reasons", [])
+            ]
+            and scalp_entry_adm_contract.get("runtime_effect") is False
+            and scalp_entry_adm_contract.get("allowed_runtime_apply") is False
+        )
         source_ev_summary = (
             source.get("ev_report_summary")
             if isinstance(source.get("ev_report_summary"), dict)
@@ -699,6 +737,10 @@ def _is_resolved_classified_source_quality_warning_gap(
         return (
             source.get("runtime_effect") is False
             and source.get("allowed_runtime_apply") is False
+            and (
+                review_id != "scalp_entry_adm_sample_floor"
+                or exact_sample_floor_contract_ready
+            )
             and source_only_warning
             and (
                 _source_context_or_threshold_warning_closed(

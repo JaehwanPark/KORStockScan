@@ -1394,6 +1394,13 @@ def build_swing_lifecycle_bucket_discovery(
         ai_proposal = ai_proposals.get(bucket_id) or default_ai_tier2_proposal(
             bucket_id, deterministic
         )
+        comparative_review_status = (
+            "provided"
+            if bucket_id in ai_comparatives
+            else (
+                "missing" if bucket_id in ai_reviewed_candidate_ids else "not_requested"
+            )
+        )
         comparative = compare_taxonomy_proposals(
             bucket_id=bucket_id,
             deterministic_proposal=deterministic,
@@ -1414,6 +1421,7 @@ def build_swing_lifecycle_bucket_discovery(
                 **candidate,
                 "ai_tier2_proposal": ai_proposal,
                 "comparative_review": comparative,
+                "comparative_review_status": comparative_review_status,
                 "ai_review_coverage": ai_review_coverage,
                 "ai_review_status": ai_status,
             }
@@ -1487,9 +1495,13 @@ def build_swing_lifecycle_bucket_discovery(
         if item.get("ai_tier2_proposal", {}).get("proposal_status") != "provided"
     )
     missing_comparative_review_count = sum(
+        1 for item in candidates if item.get("comparative_review_status") == "missing"
+    )
+    explicit_comparative_reject_count = sum(
         1
         for item in candidates
-        if item.get("comparative_review", {}).get("selected_source") == "reject"
+        if item.get("comparative_review_status") == "provided"
+        and item.get("comparative_review", {}).get("selected_source") == "reject"
     )
     reviewed_missing_ai_proposal_count = sum(
         1
@@ -1499,7 +1511,13 @@ def build_swing_lifecycle_bucket_discovery(
     reviewed_missing_comparative_review_count = sum(
         1
         for item in reviewed_candidates
-        if item.get("comparative_review", {}).get("selected_source") == "reject"
+        if item.get("comparative_review_status") == "missing"
+    )
+    reviewed_explicit_comparative_reject_count = sum(
+        1
+        for item in reviewed_candidates
+        if item.get("comparative_review_status") == "provided"
+        and item.get("comparative_review", {}).get("selected_source") == "reject"
     )
     sim_shards = [
         item
@@ -1534,7 +1552,13 @@ def build_swing_lifecycle_bucket_discovery(
     sim_missing_comparative_review_count = sum(
         1
         for item in sim_reviewed_candidates
-        if item.get("comparative_review", {}).get("selected_source") == "reject"
+        if item.get("comparative_review_status") == "missing"
+    )
+    sim_explicit_comparative_reject_count = sum(
+        1
+        for item in sim_reviewed_candidates
+        if item.get("comparative_review_status") == "provided"
+        and item.get("comparative_review", {}).get("selected_source") == "reject"
     )
     sim_review_required = any(
         item.get("classification_state") == "sim_auto_approved" for item in candidates
@@ -1588,7 +1612,13 @@ def build_swing_lifecycle_bucket_discovery(
     missing_sim_comparative_candidate_ids = {
         str(item.get("bucket_id"))
         for item in sim_reviewed_candidates
+        if item.get("bucket_id") and item.get("comparative_review_status") == "missing"
+    }
+    explicit_sim_comparative_reject_candidate_ids = {
+        str(item.get("bucket_id"))
+        for item in sim_reviewed_candidates
         if item.get("bucket_id")
+        and item.get("comparative_review_status") == "provided"
         and item.get("comparative_review", {}).get("selected_source") == "reject"
     }
     followup_sim_candidate_ids.update(missing_sim_proposal_candidate_ids)
@@ -1622,6 +1652,9 @@ def build_swing_lifecycle_bucket_discovery(
     ) or sim_review_call_fail_closed
     sim_auto_blocked_by_review_followup = bool(sim_review_followup_reasons)
     sim_auto_downgrade_candidate_ids = set(failed_sim_candidate_ids)
+    sim_auto_downgrade_candidate_ids.update(
+        explicit_sim_comparative_reject_candidate_ids
+    )
     if ai_fail_closed and not sim_reviewed_candidate_ids:
         sim_auto_downgrade_candidate_ids.update(pre_review_sim_auto_candidate_ids)
     elif sim_auto_blocked_by_review_followup:
@@ -1656,12 +1689,16 @@ def build_swing_lifecycle_bucket_discovery(
                     "sim_auto_downgraded_by_ai_fail_closed"
                     if ai_fail_closed
                     else (
-                        "sim_auto_downgraded_by_ai_shard_failure"
-                        if bucket_id in failed_sim_candidate_ids
+                        "sim_auto_downgraded_by_ai_explicit_blocker"
+                        if bucket_id in explicit_sim_comparative_reject_candidate_ids
                         else (
-                            "sim_auto_blocked_by_ai_review_followup"
-                            if sim_auto_blocked_by_review_followup
-                            else "sim_auto_downgraded_by_ai_fail_closed"
+                            "sim_auto_downgraded_by_ai_shard_failure"
+                            if bucket_id in failed_sim_candidate_ids
+                            else (
+                                "sim_auto_blocked_by_ai_review_followup"
+                                if sim_auto_blocked_by_review_followup
+                                else "sim_auto_downgraded_by_ai_fail_closed"
+                            )
                         )
                     )
                 )
@@ -1871,8 +1908,23 @@ def build_swing_lifecycle_bucket_discovery(
             "unreviewed_sim_auto_candidate_count": unreviewed_sim_auto_candidate_count,
             "missing_ai_tier2_proposal_count": missing_ai_proposal_count,
             "missing_comparative_review_count": missing_comparative_review_count,
+            "explicit_comparative_reject_count": explicit_comparative_reject_count,
+            "reviewed_explicit_comparative_reject_count": (
+                reviewed_explicit_comparative_reject_count
+            ),
             "sim_missing_ai_tier2_proposal_count": sim_missing_ai_proposal_count,
             "sim_missing_comparative_review_count": sim_missing_comparative_review_count,
+            "sim_explicit_comparative_reject_count": (
+                sim_explicit_comparative_reject_count
+            ),
+            "sim_auto_downgraded_by_missing_review_count": len(
+                missing_sim_comparative_candidate_ids
+                & pre_review_sim_auto_candidate_ids
+            ),
+            "sim_auto_downgraded_by_explicit_review_count": len(
+                explicit_sim_comparative_reject_candidate_ids
+                & pre_review_sim_auto_candidate_ids
+            ),
             "selected_decision_counts": proposal_counts(
                 [item.get("comparative_review") or {} for item in candidates],
                 key="selected_decision",
