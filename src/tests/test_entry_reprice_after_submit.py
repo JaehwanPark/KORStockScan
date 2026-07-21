@@ -1,4 +1,7 @@
 import time
+from datetime import datetime
+from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 from src.engine.scalping.entry_reprice_after_submit import (
     evaluate_entry_reprice_after_submit,
@@ -1080,6 +1083,288 @@ def test_pending_order_multi_leg_partial_fill_blocks_without_cancel(monkeypatch)
     )
     assert stock["entry_reprice_block_reason"] == "bundle_partial_fill_not_supported"
     assert events[0][1]["block_reason"] == "bundle_partial_fill_not_supported"
+
+
+def test_nxt_rising_missed_holding_reprices_open_residual_bundle(monkeypatch):
+    import src.engine.sniper_state_handlers as handlers
+
+    now = 1000.0
+    stock = {
+        "name": "현대힘스",
+        "strategy": "SCALPING",
+        "status": "HOLDING",
+        "buy_qty": 14,
+        "entry_filled_qty": 14,
+        "rising_missed_class": "LOW_REBOUND_RISING_MISSED",
+        "pending_entry_orders": [
+            {
+                **_base_order(
+                    sent_at=now - 152.0,
+                    ord_no="NXT-R2",
+                    qty=7,
+                    price=13690,
+                ),
+                "tag": "entry_split_passive_1",
+                "tif": "DAY",
+                "dmst_stex_tp": "SOR",
+            },
+            {
+                **_base_order(
+                    sent_at=now - 152.0,
+                    ord_no="NXT-R3",
+                    qty=7,
+                    price=13630,
+                ),
+                "tag": "entry_split_passive_2",
+                "tif": "DAY",
+                "dmst_stex_tp": "SOR",
+            },
+        ],
+    }
+    events = []
+    cancel_calls = []
+    buy_calls = []
+    monkeypatch.setattr(handlers.time, "time", lambda: now)
+    monkeypatch.setattr(
+        handlers,
+        "_nxt_rising_missed_partial_fill_reprice_enabled",
+        lambda *args, **kwargs: True,
+    )
+    monkeypatch.setattr(
+        handlers.ORDERBOOK_STABILITY_OBSERVER,
+        "snapshot",
+        lambda code, now=None: {
+            "best_bid": 13780,
+            "best_ask": 13790,
+            "last_trade_price": 13790,
+            "observer_healthy": True,
+            "observer_missing_reason": "ok",
+            "unstable_quote_observed": False,
+            "observer_last_quote_age_ms": 120.0,
+            "orderbook_micro": {"micro_state": "neutral"},
+        },
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: events.append((stage, fields)),
+    )
+    monkeypatch.setattr(
+        handlers.kiwoom_orders,
+        "send_cancel_order",
+        lambda **kwargs: cancel_calls.append(kwargs)
+        or {"return_code": "0", "ord_no": f"C{len(cancel_calls)}"},
+    )
+    monkeypatch.setattr(
+        handlers.kiwoom_orders,
+        "send_buy_order",
+        lambda *args, **kwargs: buy_calls.append((args, kwargs))
+        or {"return_code": "0", "ord_no": "NXT-R4"},
+    )
+
+    result = handlers._maybe_reprice_pending_entry_order(
+        stock, "460930", "SCALPING", timeout_sec=None
+    )
+
+    assert result == "submitted"
+    assert [call["orig_ord_no"] for call in cancel_calls] == ["NXT-R2", "NXT-R3"]
+    assert buy_calls[0][0][1] == 14
+    assert buy_calls[0][1]["dmst_stex_tp"] == "SOR"
+    assert stock["status"] == "HOLDING"
+    assert stock["buy_qty"] == 14
+    assert stock["pending_entry_orders"][0]["ord_no"] == "NXT-R4"
+    submitted = [
+        fields
+        for stage, fields in events
+        if stage == "entry_reprice_resubmit_submitted"
+    ][-1]
+    assert submitted["nxt_partial_fill_reprice_applied"] is True
+    assert submitted["nxt_partial_fill_reprice_decision_authority"] == (
+        "nxt_rising_missed_open_residual_only"
+    )
+
+
+def test_nxt_partial_fill_reprice_resubmit_failure_preserves_holding(monkeypatch):
+    import src.engine.sniper_state_handlers as handlers
+
+    stock = {
+        "status": "HOLDING",
+        "buy_qty": 14,
+        "entry_filled_qty": 14,
+        "entry_requested_qty": 28,
+        "requested_buy_qty": 28,
+        "pending_entry_orders": [{"ord_no": "NXT-R2", "status": "CANCELLED"}],
+    }
+
+    handlers._reset_entry_reprice_after_failed_resubmit(
+        stock, "460930", preserve_holding=True
+    )
+
+    assert stock["status"] == "HOLDING"
+    assert stock["buy_qty"] == 14
+    assert stock["entry_filled_qty"] == 14
+    assert stock["entry_requested_qty"] == 14
+    assert stock["requested_buy_qty"] == 14
+    assert stock["entry_reprice_residual_aborted"] is True
+    assert "pending_entry_orders" not in stock
+
+
+def test_nxt_single_residual_fill_during_cancel_blocks_duplicate_resubmit(monkeypatch):
+    import src.engine.sniper_state_handlers as handlers
+
+    now = 1000.0
+    stock = {
+        "name": "현대힘스",
+        "strategy": "SCALPING",
+        "status": "HOLDING",
+        "buy_qty": 14,
+        "entry_filled_qty": 14,
+        "rising_missed_class": "LOW_REBOUND_RISING_MISSED",
+        "pending_entry_orders": [
+            {
+                **_base_order(
+                    sent_at=now - 20.0,
+                    ord_no="NXT-R2",
+                    qty=7,
+                    price=13690,
+                    mark_price_at_submit=13780,
+                ),
+                "dmst_stex_tp": "SOR",
+            }
+        ],
+    }
+    monkeypatch.setattr(handlers.time, "time", lambda: now)
+    monkeypatch.setattr(
+        handlers,
+        "_nxt_rising_missed_partial_fill_reprice_enabled",
+        lambda *args, **kwargs: True,
+    )
+    monkeypatch.setattr(
+        handlers.ORDERBOOK_STABILITY_OBSERVER,
+        "snapshot",
+        lambda code, now=None: {
+            "best_bid": 13780,
+            "best_ask": 13790,
+            "last_trade_price": 13790,
+            "observer_healthy": True,
+            "observer_missing_reason": "ok",
+            "unstable_quote_observed": False,
+            "observer_last_quote_age_ms": 100.0,
+            "orderbook_micro": {"micro_state": "neutral"},
+        },
+    )
+    monkeypatch.setattr(handlers, "_log_entry_pipeline", lambda *args, **kwargs: None)
+
+    def fill_while_cancelling(**kwargs):
+        stock["entry_filled_qty"] = 15
+        return {"return_code": "0", "ord_no": "C-NXT-R2"}
+
+    monkeypatch.setattr(
+        handlers.kiwoom_orders, "send_cancel_order", fill_while_cancelling
+    )
+    monkeypatch.setattr(
+        handlers.kiwoom_orders,
+        "send_buy_order",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError),
+    )
+
+    result = handlers._maybe_reprice_pending_entry_order(
+        stock, "460930", "SCALPING", timeout_sec=None
+    )
+
+    assert result == "failed"
+    assert stock["entry_reprice_block_reason"] == "bundle_fill_after_cancel_detected"
+
+
+def test_nxt_tp1_context_refresh_requires_current_actual_ws_micro(monkeypatch):
+    import src.engine.sniper_state_handlers as handlers
+
+    now = datetime(2026, 7, 21, 16, 20, tzinfo=ZoneInfo("Asia/Seoul")).timestamp()
+    raw_ws = {
+        "curr": 13790,
+        "last_realtime_type_ts": {"0B": now - 0.4, "0D": now - 0.2},
+        "last_realtime_type_market_route": {
+            "0B": "krx_nxt_integrated",
+            "0D": "krx_nxt_integrated",
+        },
+        "last_trade_tick": {
+            "ts": now - 0.4,
+            "values": {"15": "+120"},
+            "aggressor_source": "kiwoom_0b_signed_trade_volume",
+            "strength": 110.0,
+        },
+        "orderbook": {
+            "bids": [{"price": 13780, "volume": 1000}],
+            "asks": [{"price": 13790, "volume": 900}],
+        },
+    }
+    stock = {
+        "name": "현대힘스",
+        "is_nxt": True,
+        "rising_missed_class": "LOW_REBOUND_RISING_MISSED",
+        "rising_missed_tp1_submit_context_at": now - 60.0,
+        "rising_missed_tp1_submit_context_candidate_allowed": True,
+        "rising_missed_tp1_submit_context_evaluation_id": "eval-nxt-1",
+    }
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_NXT_RISING_MISSED_TP1_CONTEXT_REFRESH_ENABLED", "true"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_NXT_RISING_MISSED_TP1_CONTEXT_REFRESH_ACTIVE_DATE",
+        "2026-07-21",
+    )
+    monkeypatch.setattr(
+        handlers,
+        "WS_MANAGER",
+        SimpleNamespace(get_latest_data=lambda code: dict(raw_ws)),
+    )
+    monkeypatch.setattr(
+        handlers._SCALPING_MICRO_ESTIMATOR_STORE,
+        "snapshot",
+        lambda code, now_ts: {
+            "source_state": "fresh_ws_order_flow_delta",
+            "age_sec": 0.5,
+            "confidence": 0.8,
+            "true_ofi_ewma": 0.2,
+            "pressure_ewma": 65.0,
+            "top_depth_ratio": 1.2,
+            "true_ofi_sample_count": 4,
+        },
+    )
+
+    fields = handlers._refresh_nxt_rising_missed_tp1_submit_context(
+        stock, "460930", raw_ws, now_ts=now
+    )
+
+    assert fields["nxt_tp1_context_refresh_applied"] is True
+    assert stock["rising_missed_tp1_submit_context_at"] == now
+    assert stock["rising_missed_tp1_submit_context_original_at"] == now - 60.0
+    assert stock["nxt_tp1_context_refresh_count"] == 1
+
+    stock["nxt_tp1_context_refresh_count"] = 0
+    stock["rising_missed_tp1_submit_context_at"] = now - 60.0
+    monkeypatch.setattr(
+        handlers._SCALPING_MICRO_ESTIMATOR_STORE,
+        "snapshot",
+        lambda code, now_ts: {
+            "source_state": "rest_orderbook_delta_estimate",
+            "age_sec": 0.1,
+            "confidence": 0.9,
+            "true_ofi_ewma": 0.5,
+            "pressure_ewma": 80.0,
+            "top_depth_ratio": 2.0,
+            "true_ofi_sample_count": 10,
+        },
+    )
+
+    blocked = handlers._refresh_nxt_rising_missed_tp1_submit_context(
+        stock, "460930", raw_ws, now_ts=now
+    )
+
+    assert blocked["nxt_tp1_context_refresh_applied"] is False
+    assert blocked["nxt_tp1_context_refresh_reason"] == (
+        "trusted_ws_micro_not_continuing"
+    )
 
 
 def test_pending_order_multi_leg_cancel_failure_does_not_resubmit(monkeypatch):

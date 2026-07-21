@@ -507,3 +507,42 @@ def test_swing_improvement_automation_marks_existing_family_metric_orders_implem
             order["implementation_provenance"]["source_metric_snapshot"]["sample_count"]
             > 0
         )
+
+
+def test_lifecycle_summary_requires_swing_strategy_for_shared_holding_exit_stages():
+    summary = mod.summarize_lifecycle_events(
+        [
+            {
+                "stage": "holding_flow_ofi_smoothing_applied",
+                "record_id": "scalp-hold",
+                "stock_code": "000001",
+                "fields": {"smoothing_action": "NO_CHANGE"},
+            },
+            {
+                "stage": "sell_order_sent",
+                "record_id": "scalp-exit",
+                "stock_code": "000002",
+                "fields": {"sell_time_block_strategy": "SCALPING"},
+            },
+            {
+                "stage": "holding_flow_ofi_smoothing_applied",
+                "record_id": "swing-hold",
+                "stock_code": "000003",
+                "fields": {
+                    "strategy": "KOSPI_ML",
+                    "smoothing_action": "NO_CHANGE",
+                },
+            },
+            {
+                "stage": "sell_order_sent",
+                "record_id": "swing-exit",
+                "stock_code": "000004",
+                "fields": {"strategy": "KOSDAQ_ML"},
+            },
+        ]
+    )
+
+    assert summary["raw_counts"]["holding_flow_ofi_smoothing_applied"] == 1
+    assert summary["raw_counts"]["sell_order_sent"] == 1
+    assert summary["group_unique_counts"]["holding"] == 1
+    assert summary["group_unique_counts"]["exit"] == 1

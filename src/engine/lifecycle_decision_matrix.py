@@ -2140,9 +2140,21 @@ def _load_scalp_sim_overnight_rows(
             else "holding"
         )
         profit = _safe_float(fields.get("profit_rate"), None)
+        source_outcome = fields.get("sim_post_sell_outcome") or fields.get("outcome")
+        outcome_source = fields.get("sim_post_sell_outcome_source")
+        if not _source_missing_value(source_outcome) and not outcome_source:
+            outcome_source = "source_field"
+        if (
+            matrix_stage == "exit"
+            and profit is not None
+            and _source_missing_value(source_outcome)
+        ):
+            source_outcome = "COMPLETED"
+            outcome_source = "derived_from_completed_sim_exit"
         labels = {
             "profit_rate": profit,
             "exit_rule": fields.get("exit_rule"),
+            "sim_post_sell_outcome": source_outcome,
             "sell_today_realized_profit_pct": (
                 profit if matrix_stage == "exit" else None
             ),
@@ -2177,6 +2189,7 @@ def _load_scalp_sim_overnight_rows(
                     "overnight_status": (
                         "SELL_TODAY" if matrix_stage == "exit" else "HOLD_OVERNIGHT"
                     ),
+                    "sim_post_sell_outcome_source": outcome_source,
                     "source_quality_gate": fields.get("source_quality_gate"),
                     "metric_role": fields.get("metric_role"),
                     "openai_model": fields.get("openai_model"),

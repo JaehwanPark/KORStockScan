@@ -18,10 +18,16 @@ set -euo pipefail
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_PY="${KORSTOCKSCAN_VENV_PY:-$PROJECT_DIR/.venv/bin/python}"
 RESTART_FLAG="$PROJECT_DIR/restart.flag"
-BOT_PATTERN="${KORSTOCKSCAN_BOT_PROCESS_PATTERN:-python.*bot_main.py}"
+RESTART_REQUEST_TMP="${RESTART_FLAG}.$$"
+RESTART_SOURCE="${KORSTOCKSCAN_RESTART_REQUEST_SOURCE:-operator_restart_sh}"
+# Anchor the default pattern to the real bot command.  Broad patterns such as
+# "python.*bot_main.py" also match monitor shells whose command text contains a
+# pgrep expression, which can make a healthy graceful restart look stuck.
+BOT_PATTERN="${KORSTOCKSCAN_BOT_PROCESS_PATTERN:-[/]python bot_main[.]py$}"
 STOP_TIMEOUT_SEC="${KORSTOCKSCAN_GRACEFUL_RESTART_STOP_TIMEOUT_SEC:-90}"
 START_TIMEOUT_SEC="${KORSTOCKSCAN_GRACEFUL_RESTART_START_TIMEOUT_SEC:-150}"
 POLL_SEC="${KORSTOCKSCAN_GRACEFUL_RESTART_POLL_SEC:-2}"
+trap 'rm -f "$RESTART_REQUEST_TMP"' EXIT
 
 bot_pids() {
     pgrep -f "$BOT_PATTERN" 2>/dev/null | sort -n || true
@@ -48,7 +54,10 @@ fi
 
 echo "Requesting graceful bot restart via $RESTART_FLAG"
 echo "Current bot PID(s): ${OLD_PIDS[*]}"
-touch "$RESTART_FLAG"
+printf 'source=%s requested_at_utc=%s old_pids=%s\n' \
+    "$RESTART_SOURCE" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${OLD_PIDS[*]}" \
+    > "$RESTART_REQUEST_TMP"
+mv -f "$RESTART_REQUEST_TMP" "$RESTART_FLAG"
 
 elapsed=0
 while [ "$elapsed" -lt "$STOP_TIMEOUT_SEC" ]; do

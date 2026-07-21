@@ -54,6 +54,16 @@ SWING_EVENT_STAGES = {
     "order_submitted",
     "buy_order_submitted",
 }
+SWING_SHARED_STAGE_REQUIRES_STRATEGY = {
+    "holding_flow_ofi_smoothing_applied",
+    "order_bundle_submitted",
+    "order_submitted",
+    "buy_order_submitted",
+    "sell_order_sent",
+    "sell_order_submitted",
+    "sell_order_failed",
+    "sell_order_blocked_market_closed",
+}
 SUBMITTED_STAGES = {"order_bundle_submitted", "order_submitted", "buy_order_submitted"}
 SIMULATED_ORDER_STAGES = {
     "swing_sim_buy_order_assumed_filled",
@@ -334,7 +344,7 @@ def _is_swing_event(event: dict) -> bool:
     strategy = _event_strategy(event)
     if strategy in SWING_STRATEGIES:
         return True
-    if stage in SUBMITTED_STAGES:
+    if stage in SWING_SHARED_STAGE_REQUIRES_STRATEGY:
         return False
     return stage in SWING_EVENT_STAGES
 

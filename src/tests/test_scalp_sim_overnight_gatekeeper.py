@@ -82,6 +82,8 @@ def test_sell_today_closes_sim_without_real_order(tmp_path):
     row = report["rows"][0]
     assert row["decision"] == "SELL_TODAY"
     assert row["sell_today_realized_profit_pct"] is not None
+    assert row["sim_post_sell_outcome"] == "COMPLETED"
+    assert row["sim_post_sell_outcome_source"] == "simulated_sell_completion"
     assert row["runtime_features"]["actual_order_submitted"] is False
     assert row["runtime_features"]["broker_order_forbidden"] is True
 
@@ -138,6 +140,12 @@ def test_emitted_events_include_metric_contract_and_openai_provenance(
     assert sell_fields["decision_authority"] == "sim_observation_only"
     assert sell_fields["runtime_effect"] == "simulated_completed_only"
     assert sell_fields["lifecycle_bucket_match_status"] == "candidate_context_only"
+    for completed_fields in (sell_today_fields, sell_fields):
+        assert completed_fields["sim_post_sell_outcome"] == "COMPLETED"
+        assert (
+            completed_fields["sim_post_sell_outcome_source"]
+            == "simulated_sell_completion"
+        )
 
 
 def test_hold_overnight_keeps_active_state_with_carry_fields(tmp_path):

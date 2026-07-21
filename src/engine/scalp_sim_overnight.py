@@ -31,6 +31,7 @@ SCHEMA_VERSION = 1
 OVERNIGHT_SCHEMA = "overnight_v1"
 DECISION_AUTHORITY = "sim_observation_only"
 SOURCE_QUALITY_GATE = "overnight_decision_coverage"
+COMPLETED_SIM_EXIT_OUTCOME = "COMPLETED"
 FORBIDDEN_USES = [
     "broker_submit",
     "real_execution_quality_claim",
@@ -715,6 +716,8 @@ def _run_sim_overnight_locked(
                     "qty": fill["qty"],
                     "profit_rate": f"{fill['profit_rate']:+.2f}",
                     "realized_pnl_krw": fill["realized_pnl_krw"],
+                    "sim_post_sell_outcome": COMPLETED_SIM_EXIT_OUTCOME,
+                    "sim_post_sell_outcome_source": "simulated_sell_completion",
                     "runtime_effect": "simulated_completed_only",
                 },
             )
@@ -734,6 +737,8 @@ def _run_sim_overnight_locked(
                     "buy_price": row.get("buy_price"),
                     "profit_rate": f"{fill['profit_rate']:+.2f}",
                     "realized_pnl_krw": fill["realized_pnl_krw"],
+                    "sim_post_sell_outcome": COMPLETED_SIM_EXIT_OUTCOME,
+                    "sim_post_sell_outcome_source": "simulated_sell_completion",
                     "would_submit_stage": "sell_order_sent",
                     "runtime_effect": "simulated_completed_only",
                 },
@@ -756,6 +761,8 @@ def _run_sim_overnight_locked(
                 "sell_today_realized_profit_pct": fill["profit_rate"],
                 "sell_today_realized_pnl_krw": fill["realized_pnl_krw"],
                 "assumed_fill_price": fill["assumed_fill_price"],
+                "sim_post_sell_outcome": COMPLETED_SIM_EXIT_OUTCOME,
+                "sim_post_sell_outcome_source": "simulated_sell_completion",
             }
         )
 
@@ -967,6 +974,10 @@ def build_report(target_date: str, state_path: Path = STATE_PATH) -> dict[str, A
                 "held_sec": fields.get("held_sec"),
                 "sell_today_realized_profit_pct": fields.get("profit_rate"),
                 "sell_today_realized_pnl_krw": fields.get("realized_pnl_krw"),
+                "sim_post_sell_outcome": fields.get("sim_post_sell_outcome"),
+                "sim_post_sell_outcome_source": fields.get(
+                    "sim_post_sell_outcome_source"
+                ),
                 "next_day_open_gap_pct": None,
                 "next_day_mfe_pct": None,
                 "next_day_mae_pct": None,

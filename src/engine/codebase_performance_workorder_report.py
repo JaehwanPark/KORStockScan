@@ -69,8 +69,18 @@ IMPLEMENTATION_CHECKS: dict[str, list[dict[str, Any]]] = {
     "order_perf_final_ensemble_records": [
         {
             "path": "src/scanners/final_ensemble_scanner.py",
-            "tokens": ["to_dict('records')"],
+            "tokens": ['to_dict("records")'],
             "forbidden_tokens": ["iterrows()"],
+        }
+    ],
+    "order_perf_sentinel_event_cache_incremental_review": [
+        {
+            "path": "src/tests/test_sentinel_event_cache_parity.py",
+            "tokens": [
+                "test_incremental_cache_parity_for_malformed_partial_unchanged_and_appended_jsonl",
+                "test_buy_sentinel_raw_cache_report_parity",
+                "test_holding_exit_sentinel_raw_cache_report_parity",
+            ],
         }
     ],
 }
@@ -219,6 +229,26 @@ def _accepted_candidates() -> list[dict[str, Any]]:
             priority=7,
             state="accepted",
         ),
+        _base_candidate(
+            item_id="order_perf_sentinel_event_cache_incremental_review",
+            title="Sentinel event cache incremental parse review",
+            risk_tier="medium",
+            target_subsystem="sentinel_event_cache",
+            files_likely_touched=[
+                "src/engine/sentinel_event_cache.py",
+                "src/tests/test_sentinel_event_cache_parity.py",
+            ],
+            acceptance_tests=[
+                "pytest src/tests/test_buy_funnel_sentinel.py src/tests/test_holding_exit_sentinel.py",
+                "pytest src/tests/test_sentinel_event_cache_parity.py",
+            ],
+            parity_contract=(
+                "cached row ordering, malformed-line tolerance, source-quality fields, and empty/no-new-event "
+                "fallback behavior exact match"
+            ),
+            priority=8,
+            state="accepted",
+        ),
     ]
 
 
@@ -252,24 +282,6 @@ def _deferred_candidates() -> list[dict[str, Any]]:
             priority=21,
             state="deferred",
             defer_reason="runtime config reload semantics are not yet bounded",
-        ),
-        _base_candidate(
-            item_id="order_perf_sentinel_event_cache_incremental_review",
-            title="Sentinel event cache incremental parse review",
-            risk_tier="medium",
-            target_subsystem="sentinel_event_cache",
-            files_likely_touched=["src/engine/sentinel_event_cache.py"],
-            acceptance_tests=[
-                "pytest src/tests/test_buy_funnel_sentinel.py src/tests/test_holding_exit_sentinel.py",
-                "sentinel event cache parity on malformed, unchanged, and appended JSONL inputs",
-            ],
-            parity_contract=(
-                "cached row ordering, malformed-line tolerance, source-quality fields, and empty/no-new-event "
-                "fallback behavior exact match"
-            ),
-            priority=22,
-            state="deferred",
-            defer_reason="incremental cache semantics require a dedicated parity harness before implementation",
         ),
     ]
 

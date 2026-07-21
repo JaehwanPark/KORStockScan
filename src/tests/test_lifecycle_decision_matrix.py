@@ -2899,6 +2899,42 @@ def test_lifecycle_matrix_emits_overnight_bucket_attribution_workorders(
     assert report["summary"]["overnight_bucket_runtime_candidate_count"] >= 1
 
 
+def test_lifecycle_matrix_backfills_completed_overnight_exit_outcome(
+    tmp_path, monkeypatch
+):
+    pipeline_dir = tmp_path / "pipeline_events"
+    pipeline_dir.mkdir()
+    monkeypatch.setattr(mod, "PIPELINE_EVENTS_DIR", pipeline_dir)
+    event = {
+        "stage": "scalp_sim_overnight_sell_today",
+        "stock_code": "800001",
+        "record_id": 1,
+        "emitted_at": "2026-05-21T15:20:00+09:00",
+        "fields": {
+            "simulation_book": "scalp_ai_buy_all",
+            "sim_record_id": "SIM-ON-1",
+            "exit_rule": "scalp_sim_overnight_sell_today",
+            "profit_rate": "-0.23",
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+        },
+    }
+    (pipeline_dir / "pipeline_events_2026-05-21.jsonl").write_text(
+        json.dumps(event, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+    rows, _ = mod._load_scalp_sim_overnight_rows("2026-05-21")
+
+    assert len(rows) == 1
+    assert rows[0]["labels"]["sim_post_sell_outcome"] == "COMPLETED"
+    assert (
+        rows[0]["runtime_features"]["sim_post_sell_outcome_source"]
+        == "derived_from_completed_sim_exit"
+    )
+    assert rows[0]["actual_order_submitted"] is False
+
+
 def test_lifecycle_flow_denominator_excludes_scale_in_noise_and_incomplete_seeds():
     rows = []
     for idx in range(5):

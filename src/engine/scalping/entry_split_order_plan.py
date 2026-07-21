@@ -7,6 +7,7 @@ import hashlib
 import json
 import math
 import os
+import threading
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -18,7 +19,7 @@ from src.engine.automation.source_quality_clean_baseline import (
     is_date_allowed,
 )
 from src.trading.order.tick_utils import clamp_price_to_tick, get_tick_size
-from src.utils.constants import DATA_DIR
+from src.utils.constants import DATA_DIR, PROJECT_ROOT
 from src.utils.jsonl_io import iter_jsonl
 
 SCHEMA_VERSION = "entry_split_order_plan_v1"
@@ -55,6 +56,322 @@ ALLOWED_PRICE_CANDIDATES = {
     "reference_target",
     "AI_candidate",
 }
+PROBE_RUNTIME_STATE_SCHEMA_VERSION = "entry_split_probe_runtime_state_v1"
+PROBE_RUNTIME_STATE_PATH = PROJECT_ROOT / "tmp" / "entry_split_probe_runtime_state.json"
+PROBE_VARIANT_SUFFIX = "probe1_fill_clamped_bbo"
+_PROBE_RUNTIME_STATE_LOCK = threading.RLock()
+
+
+def _kst_date(now: datetime | None = None) -> str:
+    current = now or datetime.now(timezone(timedelta(hours=9)))
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone(timedelta(hours=9)))
+    return current.astimezone(timezone(timedelta(hours=9))).date().isoformat()
+
+
+def _probe_runtime_config(*, now: datetime | None = None) -> dict[str, Any]:
+    active_date = str(
+        os.environ.get("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ACTIVE_DATE") or ""
+    ).strip()
+    enabled = _safe_bool(os.environ.get("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ENABLED"))
+    return {
+        "enabled": bool(enabled and active_date == _kst_date(now)),
+        "configured_enabled": enabled,
+        "active_date": active_date,
+        "probe_qty": max(
+            1,
+            _safe_int(os.environ.get("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_QTY"), 1),
+        ),
+        "timeout_sec": max(
+            1,
+            _safe_int(os.environ.get("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_TIMEOUT_SEC"), 3),
+        ),
+        "max_bundles": max(
+            0,
+            _safe_int(os.environ.get("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_MAX_BUNDLES"), 5),
+        ),
+        "max_slippage_bps": max(
+            0.0,
+            float(
+                _safe_float(
+                    os.environ.get("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_MAX_SLIPPAGE_BPS"),
+                    50.0,
+                )
+                or 0.0
+            ),
+        ),
+        "anchor_mode": str(
+            os.environ.get("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_ANCHOR_MODE")
+            or "fill_clamped_to_fresh_bbo"
+        ).strip(),
+    }
+
+
+def _empty_probe_runtime_state(target_date: str) -> dict[str, Any]:
+    return {
+        "schema_version": PROBE_RUNTIME_STATE_SCHEMA_VERSION,
+        "target_date": target_date,
+        "submitted_bundle_count": 0,
+        "circuit_open": False,
+        "circuit_reason": "",
+        "bundles": {},
+    }
+
+
+def _load_probe_runtime_state(target_date: str) -> dict[str, Any]:
+    payload = _load_json(PROBE_RUNTIME_STATE_PATH)
+    if not PROBE_RUNTIME_STATE_PATH.exists():
+        return _empty_probe_runtime_state(target_date)
+    if (
+        not payload
+        or payload.get("schema_version") != PROBE_RUNTIME_STATE_SCHEMA_VERSION
+    ):
+        state = _empty_probe_runtime_state(target_date)
+        state["circuit_open"] = True
+        state["circuit_reason"] = "runtime_state_unreadable_or_schema_mismatch"
+        return state
+    if str(payload.get("target_date") or "") != target_date:
+        return _empty_probe_runtime_state(target_date)
+    if not isinstance(payload.get("bundles"), dict):
+        payload["bundles"] = {}
+    return payload
+
+
+def _write_probe_runtime_state(payload: dict[str, Any]) -> None:
+    PROBE_RUNTIME_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = PROBE_RUNTIME_STATE_PATH.with_suffix(".tmp")
+    temp_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    os.replace(temp_path, PROBE_RUNTIME_STATE_PATH)
+
+
+def probe_runtime_state_snapshot(*, now: datetime | None = None) -> dict[str, Any]:
+    target_date = _kst_date(now)
+    with _PROBE_RUNTIME_STATE_LOCK:
+        return dict(_load_probe_runtime_state(target_date))
+
+
+def recover_probe_runtime_bundle_for_stock(
+    stock: dict[str, Any], *, now: datetime | None = None
+) -> dict[str, Any]:
+    """Restore an incomplete probe bundle onto a broker-recovered holding.
+
+    Recovery never re-opens submission authority by itself.  It restores the
+    persisted phase so the normal holding tick can either reconcile/cancel the
+    known residual orders or fail closed.  Any quantity disagreement opens the
+    session circuit breaker.
+    """
+    code = str(stock.get("code") or stock.get("stock_code") or "").strip()[:6]
+    stock_target_id = str(stock.get("id") or "").strip()
+    actual_qty = max(0, _safe_int(stock.get("buy_qty"), 0))
+    if not code or actual_qty <= 0:
+        return {"recovered": False, "reason": "no_live_holding"}
+    if str(stock.get("entry_split_probe_bundle_id") or "").strip():
+        return {"recovered": False, "reason": "already_hydrated"}
+    target_date = _kst_date(now)
+    with _PROBE_RUNTIME_STATE_LOCK:
+        payload = _load_probe_runtime_state(target_date)
+        candidates = [
+            dict(bundle)
+            for bundle in (payload.get("bundles") or {}).values()
+            if isinstance(bundle, dict)
+            and str(bundle.get("code") or "").strip()[:6] == code
+            and (
+                not str(bundle.get("target_id") or "").strip()
+                or not stock_target_id
+                or str(bundle.get("target_id") or "").strip() == stock_target_id
+            )
+            and str(bundle.get("phase") or "") not in {"complete", "bundle_completed"}
+        ]
+        if not candidates:
+            return {"recovered": False, "reason": "no_incomplete_bundle"}
+        candidates.sort(key=lambda item: str(item.get("updated_at") or ""))
+        bundle = candidates[-1]
+        bundle_id = str(bundle.get("bundle_id") or "").strip()
+        phase = str(bundle.get("phase") or "").strip()
+        requested_qty = _safe_int(bundle.get("requested_qty"), 0)
+        persisted_fill_qty = _safe_int(bundle.get("fill_qty"), 0)
+        quantity_matches = bool(
+            requested_qty > 1
+            and actual_qty <= requested_qty
+            and (
+                (phase in {"probe_filled", "residual_claimed"} and actual_qty == 1)
+                or (
+                    phase
+                    in {
+                        "residual_submitting",
+                        "residual_submitted",
+                        "residual_partial_submitted",
+                        "aborted",
+                    }
+                    and actual_qty >= max(1, persisted_fill_qty)
+                )
+            )
+        )
+        if not quantity_matches:
+            payload["circuit_open"] = True
+            payload["circuit_reason"] = "probe_restart_recovery_quantity_mismatch"
+            payload["circuit_opened_at"] = datetime.now(timezone.utc).isoformat()
+            bundle["phase"] = "aborted"
+            bundle["reason"] = "probe_restart_recovery_quantity_mismatch"
+            bundle["recovered_actual_qty"] = actual_qty
+            bundle["updated_at"] = datetime.now(timezone.utc).isoformat()
+            payload.setdefault("bundles", {})[bundle_id] = bundle
+            _write_probe_runtime_state(payload)
+            stock.update(
+                {
+                    "entry_split_probe_phase": "aborted",
+                    "entry_split_probe_bundle_id": bundle_id,
+                    "entry_split_probe_abort_reason": (
+                        "probe_restart_recovery_quantity_mismatch"
+                    ),
+                    "entry_split_probe_scale_in_forbidden": True,
+                }
+            )
+            return {
+                "recovered": False,
+                "reason": "probe_restart_recovery_quantity_mismatch",
+                "circuit_open": True,
+            }
+
+        recovery_fields = {
+            "entry_split_probe_phase": phase,
+            "entry_split_probe_bundle_id": bundle_id,
+            "entry_split_probe_requested_qty": requested_qty,
+            "entry_split_probe_continuation": bundle.get("continuation"),
+            "entry_split_probe_submit_best_ask": bundle.get("probe_submit_best_ask"),
+            "entry_split_probe_timeout_sec": bundle.get("timeout_sec"),
+            "entry_split_probe_max_slippage_bps": bundle.get("max_slippage_bps"),
+            "entry_split_probe_anchor_mode": bundle.get("anchor_mode"),
+            "entry_split_probe_submitting_at": bundle.get("submitting_at"),
+            "entry_split_probe_submitted_at": bundle.get("submitted_at"),
+            "entry_split_probe_order_no": bundle.get("order_no"),
+            "entry_split_probe_fill_price": bundle.get("fill_price"),
+            "entry_split_probe_filled_at": bundle.get("filled_at"),
+            "entry_split_probe_residual_claimed": phase
+            in {
+                "residual_claimed",
+                "residual_submitting",
+                "residual_submitted",
+                "residual_partial_submitted",
+            },
+            "entry_split_probe_scale_in_forbidden": phase != "complete",
+            "entry_requested_qty": requested_qty,
+            "requested_buy_qty": requested_qty,
+        }
+        stock.update(
+            {key: value for key, value in recovery_fields.items() if value is not None}
+        )
+        persisted_orders = bundle.get("residual_orders")
+        if isinstance(persisted_orders, list) and persisted_orders:
+            stock["pending_entry_orders"] = [
+                dict(order)
+                for order in persisted_orders
+                if isinstance(order, dict) and str(order.get("ord_no") or "").strip()
+            ]
+        bundle["restart_recovered_at"] = datetime.now(timezone.utc).isoformat()
+        bundle["recovered_actual_qty"] = actual_qty
+        payload.setdefault("bundles", {})[bundle_id] = bundle
+        _write_probe_runtime_state(payload)
+        return {
+            "recovered": True,
+            "reason": "incomplete_bundle_restored",
+            "phase": phase,
+        }
+
+
+def update_probe_runtime_bundle(
+    bundle_id: str,
+    *,
+    phase: str,
+    now: datetime | None = None,
+    **fields: Any,
+) -> dict[str, Any]:
+    target_date = _kst_date(now)
+    with _PROBE_RUNTIME_STATE_LOCK:
+        payload = _load_probe_runtime_state(target_date)
+        bundles = payload.setdefault("bundles", {})
+        bundle = dict(bundles.get(bundle_id) or {})
+        countable_phase = phase in {
+            "probe_submitted",
+            "probe_filled",
+            "residual_claimed",
+            "residual_submitted",
+            "complete",
+        }
+        if countable_phase and not _safe_bool(bundle.get("counted_submitted")):
+            payload["submitted_bundle_count"] = (
+                _safe_int(payload.get("submitted_bundle_count"), 0) + 1
+            )
+            bundle["counted_submitted"] = True
+        bundle.update(fields)
+        bundle.update(
+            {
+                "bundle_id": bundle_id,
+                "phase": phase,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+        bundles[bundle_id] = bundle
+        _write_probe_runtime_state(payload)
+        return dict(bundle)
+
+
+def trip_probe_runtime_circuit(reason: str, *, now: datetime | None = None) -> None:
+    target_date = _kst_date(now)
+    with _PROBE_RUNTIME_STATE_LOCK:
+        payload = _load_probe_runtime_state(target_date)
+        payload["circuit_open"] = True
+        payload["circuit_reason"] = str(reason or "invariant_violation")
+        payload["circuit_opened_at"] = datetime.now(timezone.utc).isoformat()
+        _write_probe_runtime_state(payload)
+
+
+def _reserve_probe_runtime_bundle(
+    *, stock: dict[str, Any], total_qty: int, now: datetime | None = None
+) -> tuple[str, str]:
+    config = _probe_runtime_config(now=now)
+    if not config["enabled"]:
+        return "", "probe_runtime_inactive"
+    if config["probe_qty"] != 1:
+        return "", "probe_qty_must_equal_one"
+    target_date = _kst_date(now)
+    with _PROBE_RUNTIME_STATE_LOCK:
+        payload = _load_probe_runtime_state(target_date)
+        if _safe_bool(payload.get("circuit_open")):
+            return "", "probe_circuit_open"
+        current_count = _safe_int(payload.get("submitted_bundle_count"), 0)
+        active_reservations = sum(
+            1
+            for bundle in (payload.get("bundles") or {}).values()
+            if isinstance(bundle, dict)
+            and not _safe_bool(bundle.get("counted_submitted"))
+            and str(bundle.get("phase") or "") in {"planned", "probe_submitting"}
+        )
+        if current_count + active_reservations >= config["max_bundles"]:
+            return "", "probe_daily_cap_reached"
+        code = str(stock.get("code") or stock.get("stock_code") or "unknown")[:6]
+        nonce = f"{target_date}:{code}:{time_ns()}:{current_count + 1}"
+        bundle_id = f"{code}-probe-{hashlib.sha1(nonce.encode()).hexdigest()[:12]}"
+        payload.setdefault("bundles", {})[bundle_id] = {
+            "bundle_id": bundle_id,
+            "phase": "planned",
+            "code": code,
+            "target_id": stock.get("id"),
+            "requested_qty": int(total_qty),
+            "reserved_at": datetime.now(timezone.utc).isoformat(),
+        }
+        _write_probe_runtime_state(payload)
+        return bundle_id, "reserved"
+
+
+def time_ns() -> int:
+    """Small indirection kept patchable in deterministic tests."""
+    import time
+
+    return time.time_ns()
 
 
 def report_paths(target_date: str) -> tuple[Path, Path]:
@@ -1571,6 +1888,156 @@ def _market_first_leg_reference_price(fields: dict[str, Any], base_price: int) -
     return max(0, int(base_price or 0))
 
 
+def _probe_first_eligible(stock: dict[str, Any], total_qty: int) -> tuple[bool, str]:
+    """Allow probe-first for every real SCALPING initial-entry source."""
+
+    if total_qty <= 1:
+        return False, "qty_lte_1"
+    if str(stock.get("strategy") or "").strip().upper() not in {"SCALP", "SCALPING"}:
+        return False, "non_scalping"
+    if any(
+        _safe_bool(stock.get(key))
+        for key in (
+            "scalp_live_simulator",
+            "simulation_book",
+            "swing_live_order_dry_run",
+        )
+    ):
+        return False, "simulated_entry_excluded"
+    if stock.get("simulation_owner") or stock.get("actual_order_submitted") is False:
+        return False, "simulated_entry_excluded"
+
+    has_existing_position = bool(
+        _safe_int(stock.get("buy_qty"), 0) > 0
+        or str(stock.get("status") or "").strip().upper() in {"HOLDING", "SELL_ORDERED"}
+    )
+    forced_rising_missed_initial = bool(
+        _safe_bool(stock.get("rising_missed_one_share_entry_forced"))
+        and _safe_bool(stock.get("rising_missed_one_share_scout"))
+        and not has_existing_position
+        and not _safe_bool(stock.get("rising_missed_scout_upgrade_order_pending"))
+        and not _safe_bool(stock.get("pending_add_order"))
+    )
+    if (
+        has_existing_position
+        or _safe_bool(stock.get("rising_missed_scout_upgrade_order_pending"))
+        or _safe_bool(stock.get("pending_add_order"))
+        or (
+            _safe_bool(stock.get("rising_missed_scout_upgrade_pending"))
+            and not forced_rising_missed_initial
+        )
+    ):
+        return False, "non_initial_entry_excluded"
+    return True, "eligible"
+
+
+def _build_probe_continuation(
+    *,
+    base_order: dict[str, Any],
+    total_qty: int,
+    desired_legs: int,
+    first_weight: float,
+    applied_offsets: list[int],
+    pct_offsets: list[float],
+    common_fields: dict[str, Any],
+) -> dict[str, Any]:
+    remaining_qty = total_qty - 1
+    residual_leg_count = min(desired_legs, remaining_qty)
+    residual_quantities = _split_qty(remaining_qty, residual_leg_count, first_weight)
+    return {
+        "base_order": {
+            "tag": str(base_order.get("tag") or "normal"),
+            "tif": str(base_order.get("tif") or "DAY"),
+            "order_type_code": "00",
+        },
+        "requested_qty": total_qty,
+        "residual_qty": remaining_qty,
+        "residual_leg_count": residual_leg_count,
+        "residual_quantities": residual_quantities,
+        "price_offsets_ticks": applied_offsets[:residual_leg_count],
+        "price_offsets_pct": pct_offsets[:residual_leg_count] if pct_offsets else [],
+        "common_fields": common_fields,
+    }
+
+
+def build_probe_residual_orders(
+    continuation: dict[str, Any],
+    *,
+    probe_fill_price: int,
+    best_bid: int,
+    best_ask: int,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Build residual limit legs after a verified one-share probe fill."""
+    requested_qty = _safe_int(continuation.get("requested_qty"), 0)
+    residual_qty = _safe_int(continuation.get("residual_qty"), 0)
+    quantities = [
+        _safe_int(value, 0) for value in continuation.get("residual_quantities") or []
+    ]
+    if (
+        requested_qty <= 1
+        or residual_qty != requested_qty - 1
+        or sum(quantities) != residual_qty
+    ):
+        return [], {"allowed": False, "reason": "residual_quantity_invariant"}
+    if probe_fill_price <= 0 or best_bid <= 0 or best_ask <= 0 or best_bid > best_ask:
+        return [], {"allowed": False, "reason": "invalid_fresh_bbo"}
+    anchor = min(max(int(probe_fill_price), int(best_bid)), int(best_ask))
+    offsets = [
+        _safe_int(value, 0) for value in continuation.get("price_offsets_ticks") or []
+    ]
+    pct_offsets = [
+        max(0.0, float(_safe_float(value, 0.0) or 0.0))
+        for value in continuation.get("price_offsets_pct") or []
+    ]
+    common_fields = dict(continuation.get("common_fields") or {})
+    base_order = dict(continuation.get("base_order") or {})
+    tick = _tick_size(anchor)
+    orders: list[dict[str, Any]] = []
+    for idx, qty in enumerate(quantities):
+        offset_ticks = offsets[idx] if idx < len(offsets) else idx
+        offset_pct = pct_offsets[idx] if idx < len(pct_offsets) else None
+        price = (
+            _pct_price_offset(anchor, offset_pct)
+            if offset_pct is not None
+            else clamp_price_to_tick(max(1, anchor - (tick * offset_ticks)))
+        )
+        orders.append(
+            {
+                **base_order,
+                **common_fields,
+                "tag": f"entry_split_probe_residual_{idx + 1}",
+                "qty": qty,
+                "price": price,
+                "order_type_code": "00",
+                "entry_split_order_leg_index": idx + 1,
+                "entry_split_order_execution_mode": "probe_fill_resolver_limit",
+                "entry_split_order_probe_first_applied": True,
+                "entry_split_order_probe_anchor_price": anchor,
+                "entry_split_order_probe_fill_price": probe_fill_price,
+                "split_leg_role": "primary" if idx == 0 else "passive",
+                "split_price_offset_ticks": offset_ticks,
+                "split_price_offset_pct": offset_pct if offset_pct is not None else "",
+            }
+        )
+    if 1 + sum(_safe_int(order.get("qty"), 0) for order in orders) != requested_qty:
+        return [], {"allowed": False, "reason": "total_quantity_invariant"}
+    first_price = _safe_int(orders[0].get("price"), 0) if orders else 0
+    gap_bps = (
+        ((float(probe_fill_price) - float(first_price)) / float(probe_fill_price))
+        * 10000.0
+        if probe_fill_price > 0 and first_price > 0
+        else 0.0
+    )
+    return orders, {
+        "allowed": True,
+        "reason": "probe_fill_anchor_ready",
+        "probe_anchor_price": anchor,
+        "probe_fill_to_first_residual_limit_gap_bps": round(gap_bps, 4),
+        "residual_qty": residual_qty,
+        "residual_leg_count": len(orders),
+    }
+
+
 def apply_entry_split_order_policy(
     planned_orders: list[dict[str, Any]] | tuple[dict[str, Any], ...] | None,
     *,
@@ -1696,6 +2163,117 @@ def apply_entry_split_order_policy(
     market_first_reference_price = _market_first_leg_reference_price(
         context_fields, base_price
     )
+    probe_config = _probe_runtime_config(now=now)
+    probe_eligible, probe_eligibility_reason = _probe_first_eligible(stock, total_qty)
+    if probe_config["enabled"] and probe_eligible:
+        bundle_id, reservation_reason = _reserve_probe_runtime_bundle(
+            stock=stock,
+            total_qty=total_qty,
+            now=now,
+        )
+        if bundle_id:
+            probe_variant_id = f"{split_variant_id}__{PROBE_VARIANT_SUFFIX}"
+            common_fields = {
+                "entry_split_order_policy_applied": True,
+                "entry_split_order_policy_version": policy.get("policy_version"),
+                "entry_split_order_policy_mode": policy_mode,
+                "entry_split_order_variant_id": probe_variant_id,
+                "entry_split_order_policy_variant_id": policy_split_variant_id,
+                "entry_split_order_bucket": bucket,
+                "entry_split_order_runtime_default_policy_applied": fallback_policy_applied,
+                "entry_split_order_operator_fallback_authorized": bool(
+                    policy.get("entry_split_order_operator_fallback_authorized")
+                ),
+                "entry_split_order_price_offsets_ticks": ",".join(
+                    str(item) for item in applied_offsets
+                ),
+                "entry_split_order_price_offsets_pct": (
+                    ",".join(str(item) for item in pct_offsets) if pct_offsets else ""
+                ),
+                "entry_split_order_qty_weight_min": first_weight,
+                "entry_split_order_qty_weight_max": min(
+                    _safe_float(bucket_policy.get("qty_weight_max"), first_weight)
+                    or first_weight,
+                    first_weight,
+                ),
+            }
+            continuation = _build_probe_continuation(
+                base_order=base_order,
+                total_qty=total_qty,
+                desired_legs=desired_legs,
+                first_weight=first_weight,
+                applied_offsets=applied_offsets,
+                pct_offsets=pct_offsets,
+                common_fields=common_fields,
+            )
+            probe_order = {
+                **base_order,
+                **common_fields,
+                "tag": "entry_split_probe_0",
+                "qty": 1,
+                "price": market_first_reference_price or base_price,
+                "order_type_code": "3",
+                "entry_split_order_leg_index": 0,
+                "entry_split_order_execution_mode": "probe_first_market",
+                "entry_split_order_probe_first_applied": True,
+                "entry_split_order_probe_qty": 1,
+                "entry_split_order_probe_bundle_id": bundle_id,
+                "entry_split_order_probe_timeout_sec": probe_config["timeout_sec"],
+                "entry_split_order_probe_max_slippage_bps": probe_config[
+                    "max_slippage_bps"
+                ],
+                "entry_split_order_probe_anchor_mode": probe_config["anchor_mode"],
+                "entry_split_order_probe_submit_best_ask": market_first_reference_price,
+                "entry_split_order_probe_continuation": continuation,
+                "entry_split_order_market_first_leg_applied": False,
+                "entry_split_order_market_reference_price": market_first_reference_price,
+                "split_leg_role": "probe",
+                "split_price_offset_ticks": 0,
+                "split_price_offset_pct": 0.0,
+            }
+            fields.update(
+                {
+                    **common_fields,
+                    "entry_split_order_policy_applied": True,
+                    "entry_split_order_skip_reason": "",
+                    "entry_split_order_probe_first_enabled": True,
+                    "entry_split_order_probe_first_applied": True,
+                    "entry_split_order_probe_first_active_date": probe_config[
+                        "active_date"
+                    ],
+                    "entry_split_order_probe_bundle_id": bundle_id,
+                    "entry_split_order_probe_qty": 1,
+                    "entry_split_order_probe_timeout_sec": probe_config["timeout_sec"],
+                    "entry_split_order_probe_max_bundles": probe_config["max_bundles"],
+                    "entry_split_order_probe_max_slippage_bps": probe_config[
+                        "max_slippage_bps"
+                    ],
+                    "entry_split_order_probe_anchor_mode": probe_config["anchor_mode"],
+                    "entry_split_order_probe_reservation_reason": reservation_reason,
+                    "entry_split_order_market_first_leg_enabled": False,
+                    "entry_split_order_market_first_leg_applied": False,
+                    "entry_split_order_leg_count": 1
+                    + _safe_int(continuation.get("residual_leg_count"), 0),
+                    "entry_split_order_split_qty": total_qty,
+                    "entry_split_order_price_offsets_ticks": ",".join(
+                        str(item) for item in applied_offsets
+                    ),
+                    "entry_split_order_price_offsets_pct": (
+                        ",".join(str(item) for item in pct_offsets)
+                        if pct_offsets
+                        else ""
+                    ),
+                    "entry_split_order_passive_bias_applied": bool(passive_bias_reason),
+                    "entry_split_order_passive_bias_reason": passive_bias_reason,
+                    "entry_split_order_policy_original_qty_weight_min": policy_first_weight,
+                    "entry_split_order_passive_center_max_first_weight": PASSIVE_CENTER_MAX_FIRST_WEIGHT,
+                    "entry_split_order_runtime_weight_adjustment_applied": runtime_weight_adjusted,
+                }
+            )
+            return [probe_order], fields
+        fields["entry_split_order_probe_first_skip_reason"] = reservation_reason
+    elif probe_config["configured_enabled"]:
+        fields["entry_split_order_probe_first_skip_reason"] = probe_eligibility_reason
     split_orders: list[dict[str, Any]] = []
     for idx, qty in enumerate(quantities):
         price = (

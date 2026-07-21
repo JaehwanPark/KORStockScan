@@ -6887,6 +6887,98 @@ def test_rising_missed_nxt_post_block_sampler_uses_fresh_0d_bid_as_price_proxy(
     assert "current_price_observed" not in rejected_sample
 
 
+def test_rising_missed_nxt_post_block_sampler_uses_bounded_rest_for_labels_only(
+    monkeypatch,
+):
+    start_ts = datetime(2026, 7, 21, 16, 20, tzinfo=state_handlers._KST).timestamp()
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_ENABLED", "true"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_ACTIVE_DATE",
+        "2026-07-21",
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_REST_FALLBACK_ENABLED", "true"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_REST_FALLBACK_ACTIVE_DATE",
+        "2026-07-21",
+    )
+    events = []
+    snapshot = {
+        "curr": 10000,
+        "last_realtime_type_ts": {"0B": start_ts - 30, "0D": start_ts - 30},
+        "last_realtime_type_item": {"0B": "123471_AL", "0D": "123471_AL"},
+        "last_realtime_type_market_suffix": {"0B": "_AL", "0D": "_AL"},
+        "last_realtime_type_market_route": {
+            "0B": "krx_nxt_integrated",
+            "0D": "krx_nxt_integrated",
+        },
+    }
+    monkeypatch.setattr(
+        state_handlers,
+        "EVENT_BUS",
+        SimpleNamespace(publish=lambda *_args, **_kwargs: None),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "WS_MANAGER",
+        SimpleNamespace(get_latest_data=lambda code: dict(snapshot)),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_fetch_rest_orderbook_snapshot_bounded",
+        lambda code, timeout_ms: (
+            {"best_bid": 10100, "best_ask": 10110},
+            "ok",
+            12.0,
+        ),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, record_id=None, fields=None: events.append(
+            {"stage": stage, "fields": fields or {}}
+        ),
+    )
+    state_handlers._RISING_MISSED_NXT_POST_BLOCK_REST_RATE_EPOCHS.clear()
+
+    assert state_handlers._register_rising_missed_nxt_post_block_sampler(
+        {"id": 14, "name": "NXT REST TEST"},
+        "123471",
+        {
+            "rising_missed_tp1_evaluation_id": "nxt-rest-block-1",
+            "rising_missed_market_session_bucket": "nxt_entry_window",
+            "rising_missed_effective_venue": "NXT",
+            "rising_missed_tp1_effective_price": 10000,
+            "selector_reason": "rising_missed_tp1_lane_not_eligible",
+            "selector_deferred": False,
+        },
+        now_ts=start_ts,
+    )
+
+    observed = state_handlers.observe_rising_missed_nxt_post_block_samplers(
+        now_ts=start_ts
+    )
+
+    assert observed["fresh"] == 1
+    assert observed["rest_fallback"] == 1
+    sample = next(
+        item
+        for item in events
+        if item["stage"] == "rising_missed_nxt_post_block_price_sample"
+    )["fields"]
+    assert sample["current_price_observed"] == 10100
+    assert sample["rising_missed_nxt_post_block_price_source"] == (
+        "ka10004_executable_bid_observation_only"
+    )
+    assert sample["rising_missed_nxt_post_block_rest_fallback_applied"] is True
+    assert sample["rising_missed_nxt_post_block_rest_positive_micro_authority"] is False
+    assert sample["actual_order_submitted"] is False
+    assert sample["allowed_runtime_apply"] is False
+
+
 def test_rising_missed_nxt_post_block_sampler_rejects_krx_evaluation(monkeypatch):
     start_ts = datetime(2026, 7, 14, 14, 0, tzinfo=state_handlers._KST).timestamp()
     monkeypatch.setenv(

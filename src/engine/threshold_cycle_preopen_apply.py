@@ -3876,6 +3876,18 @@ DATED_RUNTIME_OVERRIDE_SPECS: tuple[dict[str, str], ...] = (
         "active_date_key": "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_ACTIVE_DATE",
     },
     {
+        "family": "rising_missed_nxt_post_block_rest_fallback",
+        "enabled_key": (
+            "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_REST_FALLBACK_ENABLED"
+        ),
+        "active_date_key": (
+            "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_REST_FALLBACK_ACTIVE_DATE"
+        ),
+        "dependency_enabled_key": (
+            "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_ENABLED"
+        ),
+    },
+    {
         "family": "rising_missed_nxt_price_jump_recovery",
         "enabled_key": "KORSTOCKSCAN_RISING_MISSED_NXT_PRICE_JUMP_RECOVERY_ENABLED",
         "active_date_key": (
@@ -3889,6 +3901,21 @@ DATED_RUNTIME_OVERRIDE_SPECS: tuple[dict[str, str], ...] = (
         "active_date_key": (
             "KORSTOCKSCAN_NXT_RISING_MISSED_TP1_PARTIAL_RUNNER_ACTIVE_DATE"
         ),
+    },
+    {
+        "family": "nxt_rising_missed_partial_fill_reprice",
+        "enabled_key": ("KORSTOCKSCAN_NXT_RISING_MISSED_PARTIAL_FILL_REPRICE_ENABLED"),
+        "active_date_key": (
+            "KORSTOCKSCAN_NXT_RISING_MISSED_PARTIAL_FILL_REPRICE_ACTIVE_DATE"
+        ),
+    },
+    {
+        "family": "nxt_rising_missed_tp1_context_refresh",
+        "enabled_key": ("KORSTOCKSCAN_NXT_RISING_MISSED_TP1_CONTEXT_REFRESH_ENABLED"),
+        "active_date_key": (
+            "KORSTOCKSCAN_NXT_RISING_MISSED_TP1_CONTEXT_REFRESH_ACTIVE_DATE"
+        ),
+        "dependency_enabled_key": "KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ENABLED",
     },
     {
         "family": "shallow_avg_down_source_gap_recheck",
@@ -4373,6 +4400,75 @@ def verify_runtime_env_handoff(
                     "active_date": market_first_active_date or None,
                 }
             )
+    probe_first_enabled_key = "KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ENABLED"
+    probe_first_active_date_key = "KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ACTIVE_DATE"
+    probe_first_required_keys = (
+        probe_first_enabled_key,
+        probe_first_active_date_key,
+        "KORSTOCKSCAN_ENTRY_SPLIT_PROBE_QTY",
+        "KORSTOCKSCAN_ENTRY_SPLIT_PROBE_TIMEOUT_SEC",
+        "KORSTOCKSCAN_ENTRY_SPLIT_PROBE_MAX_BUNDLES",
+        "KORSTOCKSCAN_ENTRY_SPLIT_PROBE_MAX_SLIPPAGE_BPS",
+        "KORSTOCKSCAN_ENTRY_SPLIT_PROBE_ANCHOR_MODE",
+    )
+    probe_first_expected_values = {
+        "KORSTOCKSCAN_ENTRY_SPLIT_PROBE_QTY": "1",
+        "KORSTOCKSCAN_ENTRY_SPLIT_PROBE_TIMEOUT_SEC": "3",
+        "KORSTOCKSCAN_ENTRY_SPLIT_PROBE_MAX_BUNDLES": "5",
+        "KORSTOCKSCAN_ENTRY_SPLIT_PROBE_MAX_SLIPPAGE_BPS": "50",
+        "KORSTOCKSCAN_ENTRY_SPLIT_PROBE_ANCHOR_MODE": ("fill_clamped_to_fresh_bbo"),
+    }
+    if _runtime_env_enabled(effective_env_overrides.get(probe_first_enabled_key)):
+        missing_probe_keys = [
+            key
+            for key in probe_first_required_keys
+            if str(effective_env_overrides.get(key) or "").strip() == ""
+        ]
+        probe_active_date = str(
+            effective_env_overrides.get(probe_first_active_date_key) or ""
+        ).strip()
+        if missing_probe_keys or probe_active_date != target_date:
+            findings.append(
+                {
+                    "family": "entry_split_order_plan",
+                    "missing_env_keys": missing_probe_keys,
+                    "severity": "runtime_policy_unusable",
+                    "detail": "entry split probe-first override contract is incomplete or inactive",
+                    "policy_reason": (
+                        "probe_first_required_env_missing"
+                        if missing_probe_keys
+                        else "probe_first_inactive_date"
+                    ),
+                    "active_date": probe_active_date or None,
+                }
+            )
+        if not _runtime_env_enabled(
+            effective_env_overrides.get("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED")
+        ):
+            findings.append(
+                {
+                    "family": "entry_split_order_plan",
+                    "missing_env_keys": [],
+                    "severity": "runtime_policy_unusable",
+                    "detail": "entry split probe-first dependency policy is disabled",
+                    "policy_reason": "probe_first_dependency_disabled",
+                }
+            )
+        invalid_probe_values = [
+            key
+            for key, expected in probe_first_expected_values.items()
+            if str(effective_env_overrides.get(key) or "").strip() != expected
+        ]
+        if invalid_probe_values:
+            findings.append(
+                {
+                    "family": "entry_split_order_plan",
+                    "missing_env_keys": invalid_probe_values,
+                    "severity": "runtime_policy_unusable",
+                    "detail": "entry split probe-first override values differ from the approved operator contract",
+                    "policy_reason": "probe_first_value_mismatch",
+                }
+            )
     unverified_selected_families = sorted(
         family
         for family in selected_families
@@ -4425,6 +4521,11 @@ def verify_runtime_env_handoff(
                 market_first_enabled_key,
                 market_first_active_date_key,
             ):
+                if key not in keys:
+                    keys.append(key)
+        if _runtime_env_enabled(effective_env_overrides.get(probe_first_enabled_key)):
+            keys = pid_required_keys.setdefault("entry_split_order_plan", [])
+            for key in probe_first_required_keys:
                 if key not in keys:
                     keys.append(key)
         for family, required_keys in pid_required_keys.items():

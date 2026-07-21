@@ -8371,6 +8371,46 @@ def test_verify_runtime_env_handoff_rejects_market_first_inactive_date(
     assert finding["active_date"] == "2026-07-13"
 
 
+def test_verify_runtime_env_handoff_rejects_probe_first_value_mismatch(
+    tmp_path, monkeypatch
+):
+    runtime_dir = tmp_path / "runtime_env"
+    runtime_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    (runtime_dir / "threshold_runtime_env_2026-07-20.json").write_text(
+        json.dumps(
+            {"target_date": "2026-07-20", "selected_families": [], "env_overrides": {}}
+        ),
+        encoding="utf-8",
+    )
+    (runtime_dir / "operator_runtime_overrides.env").write_text(
+        "\n".join(
+            [
+                "export KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ENABLED=true",
+                "export KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ACTIVE_DATE=2026-07-20",
+                "export KORSTOCKSCAN_ENTRY_SPLIT_PROBE_QTY=1",
+                "export KORSTOCKSCAN_ENTRY_SPLIT_PROBE_TIMEOUT_SEC=4",
+                "export KORSTOCKSCAN_ENTRY_SPLIT_PROBE_MAX_BUNDLES=5",
+                "export KORSTOCKSCAN_ENTRY_SPLIT_PROBE_MAX_SLIPPAGE_BPS=50",
+                "export KORSTOCKSCAN_ENTRY_SPLIT_PROBE_ANCHOR_MODE=fill_clamped_to_fresh_bbo",
+                "export KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED=false",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = mod.verify_runtime_env_handoff("2026-07-20")
+
+    mismatch = next(
+        finding
+        for finding in result["findings"]
+        if finding.get("policy_reason") == "probe_first_value_mismatch"
+    )
+    assert mismatch["missing_env_keys"] == [
+        "KORSTOCKSCAN_ENTRY_SPLIT_PROBE_TIMEOUT_SEC"
+    ]
+
+
 def test_dated_runtime_override_audits_require_current_date_and_dependency():
     target_date = "2026-07-15"
     env = {
@@ -8460,10 +8500,16 @@ def test_dated_runtime_override_audits_accept_current_runtime_bundle():
         "KORSTOCKSCAN_LATENCY_TRUE_OFI_NXT_PROBABILITY_BAND_ACTIVE_DATE": target_date,
         "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_ENABLED": "true",
         "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_ACTIVE_DATE": target_date,
+        "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_REST_FALLBACK_ENABLED": "true",
+        "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_REST_FALLBACK_ACTIVE_DATE": target_date,
         "KORSTOCKSCAN_RISING_MISSED_NXT_PRICE_JUMP_RECOVERY_ENABLED": "true",
         "KORSTOCKSCAN_RISING_MISSED_NXT_PRICE_JUMP_RECOVERY_ACTIVE_DATE": target_date,
         "KORSTOCKSCAN_NXT_RISING_MISSED_TP1_PARTIAL_RUNNER_ENABLED": "true",
         "KORSTOCKSCAN_NXT_RISING_MISSED_TP1_PARTIAL_RUNNER_ACTIVE_DATE": target_date,
+        "KORSTOCKSCAN_NXT_RISING_MISSED_PARTIAL_FILL_REPRICE_ENABLED": "true",
+        "KORSTOCKSCAN_NXT_RISING_MISSED_PARTIAL_FILL_REPRICE_ACTIVE_DATE": target_date,
+        "KORSTOCKSCAN_NXT_RISING_MISSED_TP1_CONTEXT_REFRESH_ENABLED": "true",
+        "KORSTOCKSCAN_NXT_RISING_MISSED_TP1_CONTEXT_REFRESH_ACTIVE_DATE": target_date,
         "KORSTOCKSCAN_SHALLOW_SOURCE_GAP_RECHECK_ENABLED": "true",
         "KORSTOCKSCAN_SHALLOW_SOURCE_GAP_RECHECK_ACTIVE_DATE": target_date,
         "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_ENABLED": "true",
@@ -8714,6 +8760,80 @@ def test_verify_runtime_env_handoff_uses_target_date_operator_overlay(
     assert result["dated_operator_runtime_override_keys"] == [
         "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_ACTIVE_DATE"
     ]
+
+
+def test_verify_runtime_env_handoff_rolls_probe_first_into_target_date_overlay(
+    tmp_path, monkeypatch
+):
+    runtime_dir = tmp_path / "runtime_env"
+    runtime_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    policy_path = tmp_path / "entry-split-policy.json"
+    policy_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "entry_split_order_policy_v1",
+                "policy_version": "entry-split-rollover-test",
+                "source_date": "2026-07-20",
+                "runtime_apply_allowed": False,
+                "buckets": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (runtime_dir / "threshold_runtime_env_2026-07-21.json").write_text(
+        json.dumps(
+            {"target_date": "2026-07-21", "selected_families": [], "env_overrides": {}}
+        ),
+        encoding="utf-8",
+    )
+    persistent_env = {
+        "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED": "true",
+        "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_FILE": str(policy_path),
+        "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_VERSION": "entry-split-rollover-test",
+        "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ACTIVE_DATE": "2026-07-20",
+        "KORSTOCKSCAN_ENTRY_SPLIT_OPERATOR_FALLBACK_ENABLED": "true",
+        "KORSTOCKSCAN_ENTRY_SPLIT_OPERATOR_FALLBACK_ACTIVE_DATE": "2026-07-20",
+        "KORSTOCKSCAN_ENTRY_SPLIT_MARKET_FIRST_LEG_ENABLED": "false",
+        "KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ENABLED": "true",
+        "KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ACTIVE_DATE": "2026-07-20",
+        "KORSTOCKSCAN_ENTRY_SPLIT_PROBE_QTY": "1",
+        "KORSTOCKSCAN_ENTRY_SPLIT_PROBE_TIMEOUT_SEC": "3",
+        "KORSTOCKSCAN_ENTRY_SPLIT_PROBE_MAX_BUNDLES": "5",
+        "KORSTOCKSCAN_ENTRY_SPLIT_PROBE_MAX_SLIPPAGE_BPS": "50",
+        "KORSTOCKSCAN_ENTRY_SPLIT_PROBE_ANCHOR_MODE": "fill_clamped_to_fresh_bbo",
+    }
+    (runtime_dir / "operator_runtime_overrides.env").write_text(
+        "".join(f"export {key}={value}\n" for key, value in persistent_env.items()),
+        encoding="utf-8",
+    )
+    dated_env = {
+        "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ACTIVE_DATE": "2026-07-21",
+        "KORSTOCKSCAN_ENTRY_SPLIT_OPERATOR_FALLBACK_ACTIVE_DATE": "2026-07-21",
+        "KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ACTIVE_DATE": "2026-07-21",
+    }
+    (runtime_dir / "operator_runtime_overrides_2026-07-21.env").write_text(
+        "".join(f"export {key}={value}\n" for key, value in dated_env.items()),
+        encoding="utf-8",
+    )
+    effective_pid_env = dict(persistent_env)
+    effective_pid_env.update(dated_env)
+    monkeypatch.setattr(mod, "_read_pid_environ", lambda pid: effective_pid_env)
+
+    result = mod.verify_runtime_env_handoff("2026-07-21", pid=12345)
+
+    assert result["status"] == "pass"
+    assert result["pid_passed"] is True
+    assert result["pid_missing"] == []
+    assert result["pid_mismatches"] == []
+    entry_audit = next(
+        audit
+        for audit in result["runtime_policy_audits"]
+        if audit["family"] == "entry_split_order_plan"
+    )
+    assert entry_audit["status"] == "pass"
+    assert entry_audit["active_date"] == "2026-07-21"
+    assert entry_audit["operator_fallback_active_date"] == "2026-07-21"
 
 
 def test_verify_runtime_env_handoff_pid_rejects_stale_dated_override(
