@@ -152,6 +152,35 @@ def is_strategy_position(position_tag: Any) -> bool:
     return str(position_tag or "").strip().upper() == POSITION_TAG
 
 
+def is_watch_source_scope(
+    *,
+    position_tag: Any,
+    source_signature: Any,
+    now_dt: datetime,
+    config: EntryConfig,
+) -> bool:
+    """Return the source/time scope before a live day-change value is available.
+
+    Scanner upstream skips can happen before a usable WS snapshot reaches the
+    strategy.  Keeping this predicate separate lets those gaps be attributed
+    without pretending that a source-scoped row passed the full entry screen.
+    """
+
+    if not config.enabled:
+        return False
+    normalized_tag = str(position_tag or "").strip().upper()
+    if normalized_tag not in {WATCH_POSITION_TAG, POSITION_TAG}:
+        return False
+    if now_dt.time() < config.observe_start or now_dt.time() > config.entry_end:
+        return False
+    if normalized_tag == POSITION_TAG:
+        return True
+    source_tokens = parse_source_signature(source_signature)
+    if source_tokens & EXCLUDED_ENTRY_OWNER_SOURCES:
+        return False
+    return bool(source_tokens & PRIMARY_SOURCES)
+
+
 def is_watch_candidate(
     *,
     position_tag: Any,
@@ -160,23 +189,18 @@ def is_watch_candidate(
     now_dt: datetime,
     config: EntryConfig,
 ) -> bool:
-    if not config.enabled:
-        return False
-    normalized_tag = str(position_tag or "").strip().upper()
-    if normalized_tag not in {WATCH_POSITION_TAG, POSITION_TAG}:
-        return False
-    if now_dt.time() < config.observe_start or now_dt.time() > config.entry_end:
+    if not is_watch_source_scope(
+        position_tag=position_tag,
+        source_signature=source_signature,
+        now_dt=now_dt,
+        config=config,
+    ):
         return False
     if not (
         config.min_day_change_pct <= float(day_change_pct) <= config.max_day_change_pct
     ):
         return False
-    if normalized_tag == POSITION_TAG:
-        return True
-    source_tokens = parse_source_signature(source_signature)
-    if source_tokens & EXCLUDED_ENTRY_OWNER_SOURCES:
-        return False
-    return bool(source_tokens & PRIMARY_SOURCES)
+    return True
 
 
 def _blocked(reason: str, state: dict[str, Any], **fields: Any) -> dict[str, Any]:

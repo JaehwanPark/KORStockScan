@@ -4951,11 +4951,21 @@ def _scanner_market_data_enrichment_candidate(stock, ws_data, now_ts):
     rising_source_marker = sniper_state_handlers._has_rising_missed_watch_source_marker(
         stock
     )
-    if not (
+    existing_enrichment_scope = bool(
         _scanner_is_rising_entry_relief_candidate(stock)
         or rising_source_marker
         or hot_delta
-    ):
+    )
+    opening_rotation_handoff_allowed = False
+    if not existing_enrichment_scope:
+        opening_rotation_handoff_allowed = bool(
+            sniper_state_handlers._opening_rotation_upstream_handoff_fields(
+                stock,
+                ws_data,
+                now_ts=float(now_ts),
+            ).get("opening_rotation_upstream_handoff_allowed")
+        )
+    if not (existing_enrichment_scope or opening_rotation_handoff_allowed):
         return False
     curr = _safe_int(ws_data.get("curr"), 0)
     quote_age_ms = _scanner_ws_quote_age_ms(ws_data, now_ts)
@@ -7547,6 +7557,7 @@ def run_sniper(is_test_mode=False):
                     if delayed_stock.get("status") != "WATCHING":
                         continue
                     eval_ws_data = delayed_ws_data
+                    opening_rotation_handoff_allowed = False
                     if _is_scanner_watching_target(delayed_stock):
                         recheck_snapshot, recheck_fields = (
                             _scanner_ws_subscription_recheck_snapshot_and_fields(
@@ -7567,7 +7578,36 @@ def run_sniper(is_test_mode=False):
                             bool(recheck_fields.get("ws_subscription_repair_needed"))
                             or heavy_recheck_age_sec > heavy_recheck_fresh_sec
                         )
-                        if heavy_recheck_repair_needed:
+                        opening_rotation_handoff_fields = sniper_state_handlers._opening_rotation_upstream_handoff_fields(
+                            delayed_stock,
+                            delayed_ws_data,
+                            now_ts=time.time(),
+                        )
+                        opening_rotation_handoff_allowed = bool(
+                            opening_rotation_handoff_fields.get(
+                                "opening_rotation_upstream_handoff_allowed"
+                            )
+                        )
+                        if (
+                            heavy_recheck_repair_needed
+                            and opening_rotation_handoff_allowed
+                        ):
+                            eval_ws_data = delayed_ws_data
+                            delayed_stock[
+                                "_opening_rotation_upstream_handoff_applied"
+                            ] = True
+                            delayed_stock[
+                                "_opening_rotation_upstream_handoff_reason"
+                            ] = opening_rotation_handoff_fields.get(
+                                "opening_rotation_upstream_handoff_reason"
+                            )
+                            delayed_stock[
+                                "_scanner_heavy_eval_ws_snapshot_refresh_status"
+                            ] = "opening_rotation_quote_envelope_pending"
+                            delayed_stock[
+                                "_scanner_heavy_eval_ws_snapshot_apply_phase"
+                            ] = "opening_rotation_bounded_handoff"
+                        elif heavy_recheck_repair_needed:
                             recheck_fields["scanner_heavy_eval_recheck_fresh_sec"] = (
                                 round(
                                     heavy_recheck_fresh_sec,
@@ -7689,13 +7729,21 @@ def run_sniper(is_test_mode=False):
                         delayed_stock
                     )
                     _flush_deferred_scanner_pipeline_events()
+                    handler_now_ts = (
+                        time.time() if opening_rotation_handoff_allowed else now_ts
+                    )
+                    handler_now_dt = (
+                        datetime.fromtimestamp(handler_now_ts)
+                        if opening_rotation_handoff_allowed
+                        else now
+                    )
                     handle_watching_state(
                         delayed_stock,
                         delayed_code,
                         eval_ws_data,
                         admin_id,
-                        now_ts=now_ts,
-                        now_dt=now,
+                        now_ts=handler_now_ts,
+                        now_dt=handler_now_dt,
                         radar=radar,
                         ai_engine=ai_engine,
                     )

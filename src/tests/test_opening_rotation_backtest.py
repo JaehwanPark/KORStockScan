@@ -432,6 +432,54 @@ def test_observed_without_qualification_cannot_be_counted_as_strategy_trade(tmp_
     )
 
 
+def test_upstream_block_is_reported_without_creating_exact_trade(tmp_path):
+    events_dir = tmp_path / "events"
+    _write_events(
+        events_dir,
+        "2026-07-20",
+        [
+            _event(
+                "opening_rotation_1pct_upstream_blocked",
+                "2026-07-20T09:10:00",
+                fields={
+                    "reason": "upstream:ws_snapshot_missing_or_zero",
+                    "upstream_skip_reason": "ws_snapshot_missing_or_zero",
+                    "opening_rotation_upstream_exact_candidate_known": "False",
+                    "opening_rotation_upstream_exact_candidate": "False",
+                },
+            ),
+            _event(
+                "opening_rotation_1pct_upstream_blocked",
+                "2026-07-20T09:10:01",
+                record_id=2,
+                fields={
+                    "reason": "upstream:scanner_fast_precheck_stability_pending",
+                    "upstream_skip_reason": ("scanner_fast_precheck_stability_pending"),
+                    "opening_rotation_upstream_exact_candidate_known": "True",
+                    "opening_rotation_upstream_exact_candidate": "True",
+                },
+            ),
+        ],
+    )
+
+    report = build_report(
+        start_date="2026-07-20",
+        end_date="2026-07-20",
+        events_dir=events_dir,
+        post_sell_dir=tmp_path / "post_sell",
+    )
+
+    assert report["summary"]["upstream_block_count"] == 2
+    assert report["summary"]["upstream_exact_candidate_block_count"] == 1
+    assert report["summary"]["upstream_day_change_missing_count"] == 1
+    assert report["summary"]["exact_observation_count"] == 0
+    assert report["exact_trade_rows"] == []
+    assert report["source_quality"]["upstream_block_reason_counts"] == {
+        "ws_snapshot_missing_or_zero": 1,
+        "scanner_fast_precheck_stability_pending": 1,
+    }
+
+
 def test_full_and_partial_fill_ev_are_not_merged(tmp_path):
     events_dir = tmp_path / "events"
     rows = []

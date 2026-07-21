@@ -45,6 +45,7 @@ EXPLICIT_ENTRY_STAGES = {
     "opening_rotation_1pct_qualified",
     "opening_rotation_1pct_retag_blocked",
 }
+UPSTREAM_BLOCK_STAGE = "opening_rotation_1pct_upstream_blocked"
 EXACT_LIFECYCLE_STAGES = {
     "order_bundle_submitted",
     "holding_started",
@@ -121,6 +122,12 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
@@ -494,6 +501,20 @@ def build_report(
             )
             stage = str(event.get("stage") or "")
             key = _record_key(event, fields, target_date)
+
+            if stage == UPSTREAM_BLOCK_STAGE:
+                counters["upstream_block_count"] += 1
+                upstream_reason = str(
+                    fields.get("upstream_skip_reason") or fields.get("reason") or "-"
+                )
+                counters[f"upstream_reason:{upstream_reason}"] += 1
+                if _truthy(fields.get("opening_rotation_upstream_exact_candidate")):
+                    counters["upstream_exact_candidate_block_count"] += 1
+                if not _truthy(
+                    fields.get("opening_rotation_upstream_exact_candidate_known")
+                ):
+                    counters["upstream_day_change_missing_count"] += 1
+                continue
 
             if stage in EXPLICIT_ENTRY_STAGES:
                 counters[f"exact_stage_{stage}"] += 1
@@ -903,6 +924,13 @@ def build_report(
             "exact_observation_count": counters[
                 "exact_stage_opening_rotation_1pct_observed"
             ],
+            "upstream_block_count": counters["upstream_block_count"],
+            "upstream_exact_candidate_block_count": counters[
+                "upstream_exact_candidate_block_count"
+            ],
+            "upstream_day_change_missing_count": counters[
+                "upstream_day_change_missing_count"
+            ],
             "exact_qualification_count": counters[
                 "exact_stage_opening_rotation_1pct_qualified"
             ],
@@ -983,6 +1011,11 @@ def build_report(
             "required_replay_fields": list(REQUIRED_REPLAY_FIELDS),
             "missing_field_counts": dict(missing_counts.most_common()),
             "reason_counts": dict(reason_counts.most_common()),
+            "upstream_block_reason_counts": {
+                key.removeprefix("upstream_reason:"): value
+                for key, value in counters.most_common()
+                if key.startswith("upstream_reason:")
+            },
             "legacy_performance_authority": "none_without_complete_entry_and_forward_path",
         },
         "auxiliary_post_sell_inventory": _post_sell_inventory(
@@ -1017,6 +1050,9 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"- 과거 SCANNER 이벤트: `{summary.get('legacy_scanner_event_count', 0)}`",
         f"- 완전 진입 패킷: `{summary.get('legacy_complete_packet_count', 0)}`",
         f"- 엄격 재생 진입: `{summary.get('legacy_replay_qualified_count', 0)}`",
+        f"- upstream 차단 관측: `{summary.get('upstream_block_count', 0)}`",
+        f"- upstream exact 후보 차단: `{summary.get('upstream_exact_candidate_block_count', 0)}`",
+        f"- upstream 등락률 미확정: `{summary.get('upstream_day_change_missing_count', 0)}`",
         f"- 신규 태그 완료 거래: `{perf.get('completed_trade_count', 0)}`",
         f"- 실현손익: `{perf.get('realized_pnl_krw', 0):,}원`",
         f"- 일 3만원 달성일: `{perf.get('daily_target_hit_days', 0)}`",

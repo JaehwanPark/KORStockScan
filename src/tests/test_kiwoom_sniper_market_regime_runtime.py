@@ -3471,6 +3471,56 @@ def test_scanner_heavy_eval_stale_recheck_repairs_before_handler():
     assert skip_idx < merged_arg_idx < continue_idx < handle_idx
 
 
+def test_scanner_heavy_eval_allows_bounded_opening_handoff_before_recovery():
+    source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
+    flush_def_idx = source.index("def _flush_delayed_scanner_heavy_eval")
+    stale_idx = source.index("heavy_recheck_repair_needed = (", flush_def_idx)
+    handoff_idx = source.index("_opening_rotation_upstream_handoff_fields(", stale_idx)
+    bounded_branch_idx = source.index(
+        "and opening_rotation_handoff_allowed", handoff_idx
+    )
+    recover_idx = source.index(
+        "scanner_heavy_eval_stale_ws_recovery", bounded_branch_idx
+    )
+    handle_idx = source.index(
+        "handle_watching_state(\n                        delayed_stock",
+        recover_idx,
+    )
+    fresh_clock_idx = source.index(
+        "time.time() if opening_rotation_handoff_allowed else now_ts",
+        recover_idx,
+    )
+
+    assert (
+        stale_idx
+        < handoff_idx
+        < bounded_branch_idx
+        < recover_idx
+        < fresh_clock_idx
+        < handle_idx
+    )
+
+
+def test_scanner_market_data_enrichment_accepts_opening_bounded_handoff(monkeypatch):
+    monkeypatch.setattr(
+        kiwoom_sniper_v2.sniper_state_handlers,
+        "_opening_rotation_upstream_handoff_fields",
+        lambda *args, **kwargs: {"opening_rotation_upstream_handoff_allowed": True},
+    )
+    stock = {
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "price_delta_since_first_seen_pct": "0.0",
+    }
+
+    assert kiwoom_sniper_v2._scanner_market_data_enrichment_candidate(
+        stock,
+        {"curr": 10_000, "last_ws_update_ts": 900.0},
+        1000.0,
+    )
+
+
 def test_scanner_strength_recheck_waiting_skips_before_full_eval_budget():
     source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
     waiting_idx = source.index("if _scanner_strength_recheck_waiting(")

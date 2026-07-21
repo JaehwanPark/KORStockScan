@@ -71,6 +71,7 @@ from src.engine.scalping.opening_rotation import (
     entry_window_version as opening_rotation_entry_window_version,
     is_strategy_position as is_opening_rotation_position,
     is_watch_candidate as is_opening_rotation_watch_candidate,
+    is_watch_source_scope as is_opening_rotation_watch_source_scope,
 )
 from src.engine.scalping.watching_score_smoothing import (
     evaluate_watching_score,
@@ -14994,6 +14995,237 @@ def _scanner_fast_precheck_observed_fields(fast_precheck_fields) -> dict[str, An
     return observed
 
 
+def _opening_rotation_upstream_scope_fields(
+    stock: dict | None,
+    ws_data: dict | None,
+    *,
+    now_ts: float,
+) -> dict[str, Any]:
+    """Describe OPENING source scope without promoting an incomplete row."""
+
+    stock = stock if isinstance(stock, dict) else {}
+    ws_data = ws_data if isinstance(ws_data, dict) else {}
+    now_dt = datetime.fromtimestamp(float(now_ts))
+    strategy = normalize_strategy(stock.get("strategy"))
+    pos_tag = normalize_position_tag(strategy, stock.get("position_tag"))
+    promotion_fields = _scanner_promotion_correlation_fields(stock)
+    source_signature = (
+        stock.get("source_signature")
+        or stock.get("scanner_source_signature")
+        or promotion_fields.get("source_signature")
+    )
+    config = _opening_rotation_entry_config()
+    owner_conflict_reason = (
+        ""
+        if is_opening_rotation_position(pos_tag)
+        else _opening_rotation_rising_missed_owner_reason(
+            stock,
+            {"pos_tag": pos_tag},
+        )
+    )
+    owner_conflict = bool(owner_conflict_reason)
+    source_scope = bool(
+        strategy == "SCALPING"
+        and not owner_conflict
+        and is_opening_rotation_watch_source_scope(
+            position_tag=pos_tag,
+            source_signature=source_signature,
+            now_dt=now_dt,
+            config=config,
+        )
+    )
+    day_change_value = None
+    day_change_source = "missing"
+    for key in ("fluctuation", "fluctuation_rate", "day_change_pct"):
+        value = ws_data.get(key)
+        if value not in (None, "", "-"):
+            day_change_value = _safe_float(value, 0.0)
+            day_change_source = f"ws_data:{key}"
+            break
+    exact_candidate_known = day_change_value is not None
+    exact_candidate = bool(
+        source_scope
+        and exact_candidate_known
+        and is_opening_rotation_watch_candidate(
+            position_tag=pos_tag,
+            source_signature=source_signature,
+            day_change_pct=float(day_change_value),
+            now_dt=now_dt,
+            config=config,
+        )
+    )
+    return {
+        "opening_rotation_upstream_source_scope": source_scope,
+        "opening_rotation_upstream_owner_conflict": owner_conflict,
+        "opening_rotation_upstream_owner_conflict_reason": (
+            owner_conflict_reason or "not_applicable"
+        ),
+        "opening_rotation_upstream_exact_candidate_known": exact_candidate_known,
+        "opening_rotation_upstream_exact_candidate": exact_candidate,
+        "opening_rotation_upstream_scope_state": (
+            "exact_candidate"
+            if exact_candidate
+            else (
+                "source_scope_day_change_missing"
+                if source_scope and not exact_candidate_known
+                else "not_candidate"
+            )
+        ),
+        "opening_rotation_upstream_day_change_pct": (
+            round(float(day_change_value), 4) if day_change_value is not None else "-"
+        ),
+        "opening_rotation_upstream_day_change_source": day_change_source,
+        "opening_rotation_upstream_entry_window_start": config.entry_start.isoformat(),
+        "opening_rotation_upstream_entry_window_end": config.entry_end.isoformat(),
+        "opening_rotation_window_version": opening_rotation_entry_window_version(
+            config
+        ),
+        "opening_rotation_decision_time_bucket": opening_rotation_entry_time_bucket(
+            now_dt, config
+        ),
+    }
+
+
+def _opening_rotation_upstream_handoff_fields(
+    stock: dict | None,
+    ws_data: dict | None,
+    *,
+    now_ts: float,
+) -> dict[str, Any]:
+    """Allow only fresh trusted WS tape to reach the strategy quote envelope."""
+
+    stock = stock if isinstance(stock, dict) else {}
+    ws_data = ws_data if isinstance(ws_data, dict) else {}
+    scope_fields = _opening_rotation_upstream_scope_fields(
+        stock, ws_data, now_ts=now_ts
+    )
+    if not scope_fields["opening_rotation_upstream_exact_candidate"]:
+        return {
+            **scope_fields,
+            "opening_rotation_upstream_handoff_allowed": False,
+            "opening_rotation_upstream_handoff_reason": (
+                "exact_candidate_not_established"
+            ),
+            "opening_rotation_upstream_trusted_tick_count": 0,
+            "opening_rotation_upstream_tick_context_quality": "not_evaluated",
+            "opening_rotation_upstream_tick_context_stale": "not_evaluated",
+            "opening_rotation_upstream_tape_pressure_usable": False,
+        }
+    try:
+        packet = extract_scalping_feature_packet(
+            ws_data,
+            [],
+            [],
+            now=datetime.fromtimestamp(float(now_ts)),
+        )
+    except Exception as exc:
+        return {
+            **scope_fields,
+            "opening_rotation_upstream_handoff_allowed": False,
+            "opening_rotation_upstream_handoff_reason": "tape_probe_failed",
+            "opening_rotation_upstream_handoff_error": str(exc)[:160],
+            "opening_rotation_upstream_trusted_tick_count": 0,
+            "opening_rotation_upstream_tick_context_quality": "error",
+            "opening_rotation_upstream_tick_context_stale": True,
+            "opening_rotation_upstream_tape_pressure_usable": False,
+        }
+    config = _opening_rotation_entry_config()
+    trusted_count = _safe_int(packet.get("tick_aggressor_trusted_count"), 0)
+    tick_quality = str(packet.get("tick_context_quality") or "missing")
+    tick_stale = bool(packet.get("tick_context_stale") is True)
+    pressure_usable = bool(packet.get("tick_aggressor_pressure_usable"))
+    market_conflicted = (
+        str(ws_data.get("market_data_freshness_state") or "").lower() == "conflicted"
+        or str(ws_data.get("market_data_orderbook_state") or "").lower() == "conflicted"
+    )
+    tape_ready = bool(
+        tick_quality == "fresh_computed"
+        and not tick_stale
+        and pressure_usable
+        and trusted_count >= config.min_trusted_ticks
+    )
+    allowed = bool(
+        _safe_int(ws_data.get("curr"), 0) > 0 and tape_ready and not market_conflicted
+    )
+    if market_conflicted:
+        reason = "market_data_conflicted"
+    elif _safe_int(ws_data.get("curr"), 0) <= 0:
+        reason = "current_price_missing"
+    elif not tape_ready:
+        reason = "fresh_trusted_ws_tape_missing"
+    else:
+        reason = "fresh_trusted_ws_tape_to_quote_envelope"
+    return {
+        **scope_fields,
+        "opening_rotation_upstream_handoff_allowed": allowed,
+        "opening_rotation_upstream_handoff_reason": reason,
+        "opening_rotation_upstream_trusted_tick_count": trusted_count,
+        "opening_rotation_upstream_tick_context_quality": tick_quality,
+        "opening_rotation_upstream_tick_context_stale": tick_stale,
+        "opening_rotation_upstream_tape_pressure_usable": pressure_usable,
+        "opening_rotation_upstream_market_data_conflicted": market_conflicted,
+    }
+
+
+_OPENING_ROTATION_UPSTREAM_RECOVERY_MARKERS = {
+    "scanner_fast_precheck_stale_ws_recovered",
+    "scanner_fast_precheck_subscription_recheck_snapshot_applied",
+    "ws_snapshot_missing_or_zero_recovered",
+}
+
+
+def _maybe_log_opening_rotation_upstream_blocked(
+    stock: dict,
+    code: str,
+    *,
+    skip_reason: str,
+    now_ts: float,
+    ws_data: dict | None,
+) -> bool:
+    if skip_reason in _OPENING_ROTATION_UPSTREAM_RECOVERY_MARKERS:
+        return False
+    scope_fields = _opening_rotation_upstream_scope_fields(
+        stock, ws_data, now_ts=now_ts
+    )
+    if not scope_fields["opening_rotation_upstream_source_scope"]:
+        return False
+    if (
+        scope_fields["opening_rotation_upstream_exact_candidate_known"]
+        and not scope_fields["opening_rotation_upstream_exact_candidate"]
+    ):
+        return False
+    _log_entry_pipeline(
+        stock,
+        code,
+        "opening_rotation_1pct_upstream_blocked",
+        reason=f"upstream:{skip_reason}",
+        upstream_stage="scalping_scanner_watching_runtime_skip",
+        upstream_skip_reason=skip_reason,
+        position_tag_candidate=OPENING_ROTATION_POSITION_TAG,
+        freshness_envelope_attempted=False,
+        freshness_envelope_not_attempted_reason="blocked_before_watching_strategy_branch",
+        metric_role="source_quality_gate",
+        decision_authority="opening_rotation_upstream_handoff_observation_only",
+        window_policy="same_day_opening_rotation_source_scope_kst",
+        sample_floor="not_applicable_upstream_source_quality_attribution",
+        primary_decision_metric="upstream_skip_reason",
+        source_quality_gate=(
+            "source_scope_and_live_day_change_when_available_no_candidate_promotion"
+        ),
+        runtime_effect=False,
+        actual_order_submitted=False,
+        broker_order_forbidden=True,
+        allowed_runtime_apply=False,
+        forbidden_uses=(
+            "standalone_buy,stale_quote_bypass,rest_tape_buy_support,"
+            "threshold_mutation,provider_route_change,quantity_or_cap_change,"
+            "broker_guard_bypass,real_execution_quality_approval"
+        ),
+        **scope_fields,
+    )
+    return True
+
+
 def _scanner_watching_runtime_skip_fields(
     stock, *, skip_reason: str, now_ts: float, ws_data=None, **extra
 ) -> dict[str, Any]:
@@ -15102,6 +15334,13 @@ def emit_scanner_watching_runtime_skip(
     )
     if scanner_ws_stale_backoff_fields:
         extra = {**extra, **scanner_ws_stale_backoff_fields}
+    _maybe_log_opening_rotation_upstream_blocked(
+        stock,
+        code,
+        skip_reason=key,
+        now_ts=now_value,
+        ws_data=ws_data,
+    )
     _log_entry_pipeline(
         stock,
         code,
@@ -15489,6 +15728,14 @@ def _scanner_fast_precheck_fields(
         ws_data,
         now_ts=float(now_ts),
     )
+    opening_rotation_handoff_fields = _opening_rotation_upstream_handoff_fields(
+        stock,
+        ws_data,
+        now_ts=float(now_ts),
+    )
+    opening_rotation_handoff_allowed = bool(
+        opening_rotation_handoff_fields.get("opening_rotation_upstream_handoff_allowed")
+    )
     signed_tape_strong_preserve_fields = {}
     if (
         curr > 0
@@ -15505,7 +15752,7 @@ def _scanner_fast_precheck_fields(
                 now_ts=float(now_ts),
             )
         )
-    if scanner_ws_stale_backoff_fields:
+    if scanner_ws_stale_backoff_fields and not opening_rotation_handoff_allowed:
         result = "budget_reallocated"
         reason = "scanner_ws_stale_backoff_active"
     elif curr <= 0:
@@ -15530,6 +15777,9 @@ def _scanner_fast_precheck_fields(
     elif market_data_conflicted:
         result = "stability_pending"
         reason = "market_data_ws_rest_conflicted"
+    elif opening_rotation_handoff_allowed:
+        result = "eligible_for_heavy_entry_eval"
+        reason = "opening_rotation_fresh_tape_quote_envelope_handoff"
     elif (
         market_data_signed_tape_state == "sell_dominated"
         and _scanner_rising_entry_relief_eligible(stock)
@@ -15731,6 +15981,7 @@ def _scanner_fast_precheck_fields(
         **submit_safety_backoff_fields,
         **signed_tape_scanner_backoff_fields,
         **signed_tape_strong_preserve_fields,
+        **opening_rotation_handoff_fields,
         **_scanner_rising_relief_observation_fields(stock),
     }
 
@@ -40070,14 +40321,53 @@ def _opening_rotation_yields_to_rising_missed_owner(stock, runtime=None) -> bool
     pos_tag = runtime.get("pos_tag") or stock.get("position_tag")
     if is_opening_rotation_position(pos_tag):
         return False
-    return bool(
-        runtime.get("scout_upgrade_entry")
-        or _has_rising_missed_entry_lineage(stock, runtime)
-        or _has_rising_missed_watch_source_marker(
-            stock,
-            include_not_rising_class=False,
-        )
-    )
+    return bool(_opening_rotation_rising_missed_owner_reason(stock, runtime))
+
+
+def _opening_rotation_rising_missed_owner_reason(
+    stock: dict | None, runtime: dict | None = None
+) -> str:
+    """Return only affirmative rising-missed ownership evidence.
+
+    The shared watch-source predicate intentionally treats diagnostic and
+    bounded-recheck fields as routing provenance.  OPENING ownership is
+    narrower: default rebound metrics and generic relief/recheck hints must not
+    preempt an otherwise independent scanner candidate.
+    """
+
+    stock = stock if isinstance(stock, dict) else {}
+    runtime = runtime if isinstance(runtime, dict) else {}
+    if _truthy_field(runtime.get("scout_upgrade_entry")):
+        return "scout_upgrade_entry"
+    if _has_rising_missed_entry_lineage(stock, runtime):
+        return "rising_missed_entry_lineage"
+
+    source_tokens = set()
+    for key in ("source_signature", "scanner_source_signature"):
+        source_tokens.update(_scanner_rising_source_signature_set(stock.get(key)))
+    if "LOW_REBOUND_RISING_MISSED" in source_tokens:
+        return "low_rebound_rising_missed_source"
+
+    if _truthy_field(stock.get("rising_missed_buy")) or _truthy_field(
+        runtime.get("rising_missed_buy")
+    ):
+        return "rising_missed_buy"
+
+    lineage = str(
+        stock.get("rising_missed_lineage") or runtime.get("rising_missed_lineage") or ""
+    ).strip()
+    if lineage.lower() not in {
+        "",
+        "-",
+        "0",
+        "false",
+        "none",
+        "not_applicable",
+        "not_rising_missed",
+    }:
+        return "rising_missed_lineage"
+
+    return ""
 
 
 def _handle_watching_opening_rotation(stock, code, ws_data, runtime, config) -> bool:
@@ -40096,6 +40386,9 @@ def _handle_watching_opening_rotation(stock, code, ws_data, runtime, config) -> 
     window_version = opening_rotation_entry_window_version(entry_config)
     decision_time_bucket = opening_rotation_entry_time_bucket(now_dt, entry_config)
     if _opening_rotation_yields_to_rising_missed_owner(stock, runtime):
+        owner_conflict_reason = _opening_rotation_rising_missed_owner_reason(
+            stock, runtime
+        )
         with ENTRY_LOCK:
             _OPENING_ROTATION_CONTEXT_CACHE.pop(code, None)
         _mutate_stock_state(
@@ -40124,6 +40417,9 @@ def _handle_watching_opening_rotation(stock, code, ws_data, runtime, config) -> 
                 code,
                 "opening_rotation_1pct_entry_owner_excluded",
                 opening_rotation_entry_owner="rising_missed_scout",
+                opening_rotation_entry_owner_reason=(
+                    owner_conflict_reason or "rising_missed_owner_marker"
+                ),
                 source_signature=source_signature or "-",
                 scout_upgrade_entry=bool(runtime.get("scout_upgrade_entry")),
                 rising_missed_entry_lineage=_has_rising_missed_entry_lineage(

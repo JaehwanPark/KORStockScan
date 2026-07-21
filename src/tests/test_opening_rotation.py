@@ -15,6 +15,7 @@ from src.engine.scalping.opening_rotation import (
     evaluate_entry,
     evaluate_exit,
     is_watch_candidate,
+    is_watch_source_scope,
 )
 from src.engine import sniper_state_handlers as handlers
 from src.engine import sniper_execution_receipts
@@ -45,6 +46,213 @@ def _packet(price: int) -> dict:
         "microstructure_reaction_wall_replenishment_risk_score": 42,
         "microstructure_reaction_vi_proximity_risk": 18,
     }
+
+
+def test_watch_source_scope_does_not_promote_missing_day_change():
+    config = EntryConfig()
+    now_dt = datetime(2026, 7, 21, 9, 20)
+
+    assert is_watch_source_scope(
+        position_tag="SCANNER",
+        source_signature="PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+        now_dt=now_dt,
+        config=config,
+    )
+    assert not is_watch_source_scope(
+        position_tag="SCANNER",
+        source_signature="LOW_REBOUND_RISING_MISSED,PRICE_JUMP_START",
+        now_dt=now_dt,
+        config=config,
+    )
+
+
+def test_opening_rotation_upstream_block_records_unknown_day_change(monkeypatch):
+    emitted = []
+    stock = {
+        "id": 41,
+        "name": "테스트",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+    }
+    monkeypatch.setattr(
+        handlers,
+        "_log_entry_pipeline",
+        lambda *args, **fields: emitted.append((args[2], fields)),
+    )
+
+    logged = handlers._maybe_log_opening_rotation_upstream_blocked(
+        stock,
+        "005930",
+        skip_reason="ws_snapshot_missing_or_zero",
+        now_ts=datetime(2026, 7, 21, 9, 20).timestamp(),
+        ws_data={},
+    )
+
+    assert logged is True
+    stage, fields = emitted[-1]
+    assert stage == "opening_rotation_1pct_upstream_blocked"
+    assert fields["opening_rotation_upstream_source_scope"] is True
+    assert fields["opening_rotation_upstream_exact_candidate_known"] is False
+    assert fields["opening_rotation_upstream_exact_candidate"] is False
+    assert fields["freshness_envelope_attempted"] is False
+    assert fields["actual_order_submitted"] is False
+    assert fields["broker_order_forbidden"] is True
+
+
+def test_opening_rotation_upstream_scope_hydrates_scanner_source(monkeypatch):
+    stock = {
+        "id": 42,
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+    }
+    monkeypatch.setattr(
+        handlers,
+        "_scanner_promotion_correlation_fields",
+        lambda target: {"source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE"},
+    )
+
+    fields = handlers._opening_rotation_upstream_scope_fields(
+        stock,
+        {"fluctuation": 3.2},
+        now_ts=datetime(2026, 7, 21, 9, 20).timestamp(),
+    )
+
+    assert fields["opening_rotation_upstream_source_scope"] is True
+    assert fields["opening_rotation_upstream_exact_candidate"] is True
+
+
+def test_direct_opening_position_is_not_reclassified_by_rising_marker():
+    fields = handlers._opening_rotation_upstream_scope_fields(
+        {
+            "strategy": "SCALPING",
+            "position_tag": "OPENING_ROTATION_1PCT",
+            "source_signature": "LOW_REBOUND_RISING_MISSED",
+        },
+        {"fluctuation": 3.2},
+        now_ts=datetime(2026, 7, 21, 9, 20).timestamp(),
+    )
+
+    assert fields["opening_rotation_upstream_owner_conflict"] is False
+    assert fields["opening_rotation_upstream_exact_candidate"] is True
+
+
+def test_opening_rotation_upstream_handoff_requires_fresh_trusted_ws_tape(
+    monkeypatch,
+):
+    stock = {
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+    }
+    ws_data = {
+        "curr": 10_000,
+        "fluctuation": 3.2,
+        "quote_stale": True,
+    }
+    monkeypatch.setattr(
+        handlers,
+        "extract_scalping_feature_packet",
+        lambda *args, **kwargs: _packet(10_000),
+    )
+
+    allowed = handlers._opening_rotation_upstream_handoff_fields(
+        stock,
+        ws_data,
+        now_ts=datetime(2026, 7, 21, 9, 20).timestamp(),
+    )
+    assert allowed["opening_rotation_upstream_handoff_allowed"] is True
+    assert allowed["opening_rotation_upstream_trusted_tick_count"] == 8
+
+    monkeypatch.setattr(
+        handlers,
+        "extract_scalping_feature_packet",
+        lambda *args, **kwargs: {
+            **_packet(10_000),
+            "tick_context_stale": True,
+        },
+    )
+    blocked = handlers._opening_rotation_upstream_handoff_fields(
+        stock,
+        ws_data,
+        now_ts=datetime(2026, 7, 21, 9, 20).timestamp(),
+    )
+    assert blocked["opening_rotation_upstream_handoff_allowed"] is False
+    assert (
+        blocked["opening_rotation_upstream_handoff_reason"]
+        == "fresh_trusted_ws_tape_missing"
+    )
+
+
+def test_opening_rotation_bounded_handoff_can_pass_scanner_stale_backoff(
+    monkeypatch,
+):
+    stock = {
+        "id": 42,
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "source_signature": "PRICE_JUMP_START",
+        "added_time": 900.0,
+    }
+    ws_data = {
+        "curr": 10_000,
+        "fluctuation": 3.2,
+        "last_ws_update_ts": 900.0,
+    }
+    handoff_fields = {
+        "opening_rotation_upstream_handoff_allowed": True,
+        "opening_rotation_upstream_handoff_reason": (
+            "fresh_trusted_ws_tape_to_quote_envelope"
+        ),
+    }
+    monkeypatch.setattr(
+        handlers,
+        "_opening_rotation_upstream_handoff_fields",
+        lambda *args, **kwargs: handoff_fields,
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_scanner_ws_stale_backoff_fields",
+        lambda *args, **kwargs: {"scanner_ws_stale_backoff_active": True},
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_scanner_ws_stale_backoff_strong_promotion_recheck",
+        lambda *args, **kwargs: False,
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_rising_missed_candidate_gate_backoff_fields",
+        lambda *args, **kwargs: {},
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_rising_missed_submit_safety_backoff_fields",
+        lambda *args, **kwargs: {},
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_rising_missed_signed_tape_scanner_backoff_fields",
+        lambda *args, **kwargs: {},
+    )
+
+    fields = handlers._scanner_fast_precheck_fields(
+        stock,
+        now_ts=1000.0,
+        code="005930",
+        ws_data=ws_data,
+    )
+
+    assert fields["fast_precheck_result"] == "eligible_for_heavy_entry_eval"
+    assert (
+        fields["fast_precheck_reason"]
+        == "opening_rotation_fresh_tape_quote_envelope_handoff"
+    )
+    assert fields["opening_rotation_upstream_handoff_allowed"] is True
 
 
 def test_entry_collects_then_qualifies_on_pullback_reacceleration():
@@ -225,6 +433,81 @@ def test_negative_rising_missed_source_token_does_not_take_entry_ownership():
         day_change_pct=3.0,
         now_dt=datetime(2026, 7, 20, 9, 20),
         config=EntryConfig(),
+    )
+
+
+def test_zero_rising_missed_diagnostics_do_not_take_opening_ownership():
+    stock = {
+        "position_tag": "SCANNER",
+        "source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+        "low_rebound_pct": 0.0,
+        "LowReboundPct": "0.0",
+        "rising_entry_relief_eligible": False,
+        "rising_missed_buy": "False",
+        "_scanner_rising_entry_relief_reason": "not_applicable_rising_entry_relief",
+    }
+
+    assert handlers._has_rising_missed_watch_source_marker(stock) is True
+    assert (
+        handlers._opening_rotation_rising_missed_owner_reason(
+            stock, {"pos_tag": "SCANNER"}
+        )
+        == ""
+    )
+    assert (
+        handlers._opening_rotation_yields_to_rising_missed_owner(
+            stock, {"pos_tag": "SCANNER"}
+        )
+        is False
+    )
+
+
+def test_rising_recheck_hints_do_not_take_opening_ownership():
+    stock = {
+        "position_tag": "SCANNER",
+        "source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+        "low_rebound_pct": 0.4,
+        "rising_entry_relief_eligible": True,
+        "_scanner_rising_entry_relief_reason": "reversal_up_watch_recheck_pending",
+    }
+
+    assert (
+        handlers._opening_rotation_rising_missed_owner_reason(
+            stock, {"pos_tag": "SCANNER"}
+        )
+        == ""
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "expected_reason"),
+    [
+        (
+            "source_signature",
+            "LOW_REBOUND_RISING_MISSED,PRICE_JUMP_START",
+            "low_rebound_rising_missed_source",
+        ),
+        ("rising_missed_buy", True, "rising_missed_buy"),
+        ("rising_missed_lineage", "normal_buy_bridge", "rising_missed_lineage"),
+    ],
+)
+def test_affirmative_rising_missed_marker_keeps_entry_ownership(
+    field, value, expected_reason
+):
+    stock = {
+        "position_tag": "SCANNER",
+        "source_signature": "PRICE_JUMP_START",
+        field: value,
+    }
+
+    assert (
+        handlers._opening_rotation_rising_missed_owner_reason(
+            stock, {"pos_tag": "SCANNER"}
+        )
+        == expected_reason
+    )
+    assert handlers._opening_rotation_yields_to_rising_missed_owner(
+        stock, {"pos_tag": "SCANNER"}
     )
 
 
