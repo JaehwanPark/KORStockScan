@@ -1248,6 +1248,127 @@ def test_allocator_probe_first_reserves_one_share_and_builds_fill_anchored_resid
     )
 
 
+def test_allocator_probe_first_applies_to_real_rising_missed_initial_entry(
+    monkeypatch, tmp_path
+):
+    target_date = "2026-07-21"
+    policy_file = tmp_path / "entry-policy.json"
+    policy_file.write_text(
+        json.dumps(
+            {
+                "schema_version": "entry_split_order_policy_v1",
+                "policy_version": "rising-missed-probe-test",
+                "source_date": "2026-07-16",
+                "buckets": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        split_plan,
+        "PROBE_RUNTIME_STATE_PATH",
+        tmp_path / "entry_split_probe_runtime_state.json",
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ACTIVE_DATE", target_date)
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_FILE", str(policy_file))
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ACTIVE_DATE", target_date)
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_QTY", "1")
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_MAX_BUNDLES", "5")
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_OPERATOR_FALLBACK_ENABLED", "true")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_ENTRY_SPLIT_OPERATOR_FALLBACK_ACTIVE_DATE", target_date
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_MARKET_FIRST_LEG_ENABLED", "false")
+
+    orders, fields = split_plan.apply_entry_split_order_policy(
+        [{"tag": "normal", "qty": 6, "price": 59200, "tif": "DAY"}],
+        stock={
+            "code": "475150",
+            "strategy": "SCALPING",
+            "status": "WATCHING",
+            "buy_qty": 0,
+            "position_tag": "SCANNER",
+            "rising_missed_one_share_scout": True,
+            "rising_missed_one_share_entry_forced": True,
+            # The real initial-scout producer sets this before entering the
+            # common submit path. It is not itself an upgrade order marker.
+            "rising_missed_scout_upgrade_pending": True,
+        },
+        latency_gate={
+            "latency_state": "SAFE",
+            "best_ask_at_submit": 59900,
+            "quote_stale_at_submit": False,
+        },
+        now=datetime(2026, 7, 21, 10, 22, tzinfo=timezone(timedelta(hours=9))),
+    )
+
+    assert fields["entry_split_order_probe_first_applied"] is True
+    assert len(orders) == 1
+    assert orders[0]["qty"] == 1
+    assert orders[0]["order_type_code"] == "3"
+    assert orders[0]["entry_split_order_execution_mode"] == "probe_first_market"
+    assert orders[0]["entry_split_order_probe_continuation"]["residual_qty"] == 5
+
+
+def test_probe_first_still_excludes_simulated_and_additional_buy_paths():
+    opening_rotation = {
+        "code": "123456",
+        "strategy": "SCALPING",
+        "position_tag": "OPENING_ROTATION",
+    }
+    simulated = {
+        "code": "123456",
+        "strategy": "SCALPING",
+        "rising_missed_one_share_scout": True,
+        "scalp_live_simulator": True,
+    }
+    additional = {
+        "code": "123456",
+        "strategy": "SCALPING",
+        "rising_missed_one_share_scout": True,
+        "pending_add_order": True,
+    }
+    scout_upgrade = {
+        "code": "123456",
+        "strategy": "SCALPING",
+        "status": "HOLDING",
+        "buy_qty": 1,
+        "rising_missed_one_share_entry_forced": True,
+        "rising_missed_one_share_scout": True,
+        "rising_missed_scout_upgrade_pending": True,
+    }
+    scout_upgrade_order_pending = {
+        "code": "123456",
+        "strategy": "SCALPING",
+        "status": "WATCHING",
+        "buy_qty": 0,
+        "rising_missed_one_share_entry_forced": True,
+        "rising_missed_one_share_scout": True,
+        "rising_missed_scout_upgrade_pending": True,
+        "rising_missed_scout_upgrade_order_pending": True,
+    }
+
+    assert split_plan._probe_first_eligible(opening_rotation, 6) == (True, "eligible")
+    assert split_plan._probe_first_eligible(simulated, 6) == (
+        False,
+        "simulated_entry_excluded",
+    )
+    assert split_plan._probe_first_eligible(additional, 6) == (
+        False,
+        "non_initial_entry_excluded",
+    )
+    assert split_plan._probe_first_eligible(scout_upgrade, 6) == (
+        False,
+        "non_initial_entry_excluded",
+    )
+    assert split_plan._probe_first_eligible(scout_upgrade_order_pending, 6) == (
+        False,
+        "non_initial_entry_excluded",
+    )
+
+
 def test_probe_runtime_restart_recovery_restores_bundle_and_fails_closed_on_mismatch(
     monkeypatch, tmp_path
 ):

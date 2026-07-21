@@ -1889,30 +1889,45 @@ def _market_first_leg_reference_price(fields: dict[str, Any], base_price: int) -
 
 
 def _probe_first_eligible(stock: dict[str, Any], total_qty: int) -> tuple[bool, str]:
+    """Allow probe-first for every real SCALPING initial-entry source."""
+
     if total_qty <= 1:
         return False, "qty_lte_1"
     if str(stock.get("strategy") or "").strip().upper() not in {"SCALP", "SCALPING"}:
         return False, "non_scalping"
-    if str(stock.get("position_tag") or "").strip().upper() in {
-        "OPENING_ROTATION_1PCT",
-        "OPENING_ROTATION",
-    }:
-        return False, "opening_rotation_excluded"
     if any(
         _safe_bool(stock.get(key))
         for key in (
-            "rising_missed_one_share_scout",
-            "rising_missed_scout_upgrade_pending",
-            "rising_missed_scout_upgrade_order_pending",
-            "pending_add_order",
             "scalp_live_simulator",
             "simulation_book",
             "swing_live_order_dry_run",
         )
     ):
-        return False, "special_or_simulated_entry_excluded"
+        return False, "simulated_entry_excluded"
     if stock.get("simulation_owner") or stock.get("actual_order_submitted") is False:
         return False, "simulated_entry_excluded"
+
+    has_existing_position = bool(
+        _safe_int(stock.get("buy_qty"), 0) > 0
+        or str(stock.get("status") or "").strip().upper() in {"HOLDING", "SELL_ORDERED"}
+    )
+    forced_rising_missed_initial = bool(
+        _safe_bool(stock.get("rising_missed_one_share_entry_forced"))
+        and _safe_bool(stock.get("rising_missed_one_share_scout"))
+        and not has_existing_position
+        and not _safe_bool(stock.get("rising_missed_scout_upgrade_order_pending"))
+        and not _safe_bool(stock.get("pending_add_order"))
+    )
+    if (
+        has_existing_position
+        or _safe_bool(stock.get("rising_missed_scout_upgrade_order_pending"))
+        or _safe_bool(stock.get("pending_add_order"))
+        or (
+            _safe_bool(stock.get("rising_missed_scout_upgrade_pending"))
+            and not forced_rising_missed_initial
+        )
+    ):
+        return False, "non_initial_entry_excluded"
     return True, "eligible"
 
 
