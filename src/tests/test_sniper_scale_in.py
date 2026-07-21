@@ -6771,6 +6771,216 @@ def test_rising_missed_nxt_post_block_sampler_uses_only_fresh_actual_nxt_ws(
     )
 
 
+def test_rising_missed_nxt_downstream_block_registers_source_only_sampler(
+    monkeypatch,
+):
+    start_ts = datetime(2026, 7, 21, 16, 30, tzinfo=state_handlers._KST).timestamp()
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_ENABLED", "true"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_ACTIVE_DATE",
+        "2026-07-21",
+    )
+    events = []
+    published = []
+    monkeypatch.setattr(state_handlers.time, "time", lambda: start_ts)
+    monkeypatch.setattr(
+        state_handlers,
+        "EVENT_BUS",
+        SimpleNamespace(
+            publish=lambda name, payload: published.append((name, payload))
+        ),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, record_id=None, fields=None: events.append(
+            {"stage": stage, "fields": fields or {}}
+        ),
+    )
+    stock = {
+        "id": 17,
+        "name": "NXT DOWNSTREAM",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "rising_missed_tp1_submit_context_candidate_allowed": True,
+        "rising_missed_tp1_submit_context_evaluation_id": "nxt-downstream-1",
+        "rising_missed_tp1_submit_context_at": start_ts,
+        "rising_missed_tp1_submit_context_rising_missed_market_session_bucket": (
+            "nxt_entry_window"
+        ),
+        "rising_missed_tp1_submit_context_rising_missed_effective_venue": "NXT",
+    }
+
+    state_handlers._log_entry_pipeline(
+        stock,
+        "123471",
+        "latency_block",
+        actual_order_submitted=False,
+        broker_order_forbidden=True,
+        rising_missed_tp1_effective_price=24000,
+        canonical_mark_price=24800,
+        latest_price=24750,
+        reason="latency_state_danger",
+    )
+
+    sampler = state_handlers._RISING_MISSED_NXT_POST_BLOCK_SAMPLERS["nxt-downstream-1"]
+    assert sampler["entry_price"] == 24800
+    assert sampler["entry_price_source"] == "canonical_mark_price"
+    assert sampler["source_block_stage"] == "latency_block"
+    assert sampler["source_block_reason"] == "latency_state_danger"
+    registration = next(
+        item
+        for item in events
+        if item["stage"] == "rising_missed_nxt_post_block_sampler_registered"
+    )
+    assert [item["stage"] for item in events[:2]] == [
+        "latency_block",
+        "rising_missed_nxt_post_block_sampler_registered",
+    ]
+    assert (
+        registration["fields"][
+            "rising_missed_nxt_post_block_sampler_registration_reason"
+        ]
+        == "nxt_downstream_block"
+    )
+    assert (
+        registration["fields"]["rising_missed_nxt_post_block_source_block_stage"]
+        == "latency_block"
+    )
+    assert published == [
+        (
+            "COMMAND_WS_REG",
+            {"codes": ["123471"], "source": "rising_missed_nxt_post_block_sampler"},
+        )
+    ]
+    assert not any(
+        item["fields"].get("actual_order_submitted")
+        for item in events
+        if item["stage"].startswith("rising_missed_nxt_post_block_")
+    )
+
+    stock["rising_missed_tp1_submit_context_evaluation_id"] = "nxt-residual-1"
+    state_handlers._log_entry_pipeline(
+        stock,
+        "123471",
+        "residual_blocked",
+        actual_order_submitted=True,
+        broker_order_forbidden=True,
+        current_price_observed=9240,
+        residual_submitted_qty=3,
+        residual_submitted_leg_count=1,
+        reason="stale_or_conflicted_fresh_quote",
+    )
+    residual_sampler = state_handlers._RISING_MISSED_NXT_POST_BLOCK_SAMPLERS[
+        "nxt-residual-1"
+    ]
+    assert residual_sampler["entry_price"] == 9240
+    assert residual_sampler["source_block_stage"] == "residual_blocked"
+    assert residual_sampler["source_block_reason"] == (
+        "stale_or_conflicted_fresh_quote"
+    )
+    assert residual_sampler["source_block_actual_order_submitted"] is True
+    assert residual_sampler["source_block_residual_submitted_qty"] == 3
+    assert residual_sampler["source_block_residual_submitted_leg_count"] == 1
+
+
+def test_rising_missed_nxt_downstream_block_uses_cached_tp1_pass_context(monkeypatch):
+    start_ts = datetime(2026, 7, 21, 16, 40, tzinfo=state_handlers._KST).timestamp()
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_ENABLED", "true"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_ACTIVE_DATE",
+        "2026-07-21",
+    )
+    monkeypatch.setattr(state_handlers.time, "time", lambda: start_ts)
+    monkeypatch.setattr(state_handlers, "EVENT_BUS", None)
+    monkeypatch.setattr(
+        state_handlers,
+        "emit_pipeline_event",
+        lambda *args, **kwargs: None,
+    )
+    cached_context = {
+        "rising_missed_tp1_submit_context_at": start_ts,
+        "rising_missed_tp1_submit_context_evaluation_id": "nxt-cached-1",
+        "rising_missed_tp1_submit_context_candidate_allowed": True,
+        "rising_missed_tp1_submit_context_rising_missed_market_session_bucket": (
+            "nxt_entry_window"
+        ),
+        "rising_missed_tp1_submit_context_rising_missed_effective_venue": "NXT",
+    }
+    state_handlers._RISING_MISSED_TP1_SUBMIT_CONTEXT_CACHE[
+        "123472:promotion-cached"
+    ] = cached_context
+    stock = {
+        "id": 18,
+        "code": "123472",
+        "name": "NXT CACHED",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "scanner_promotion_id": "promotion-cached",
+    }
+
+    state_handlers._log_entry_pipeline(
+        stock,
+        "123472",
+        "latency_block",
+        actual_order_submitted=False,
+        broker_order_forbidden=True,
+        latest_price=10100,
+        reason="latency_state_danger",
+    )
+
+    sampler = state_handlers._RISING_MISSED_NXT_POST_BLOCK_SAMPLERS["nxt-cached-1"]
+    assert sampler["entry_price"] == 10100
+    assert sampler["source_block_stage"] == "latency_block"
+
+
+def test_rising_missed_nxt_downstream_block_ignores_stale_tp1_context(monkeypatch):
+    start_ts = datetime(2026, 7, 21, 16, 45, tzinfo=state_handlers._KST).timestamp()
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_ENABLED", "true"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_ACTIVE_DATE",
+        "2026-07-21",
+    )
+    monkeypatch.setattr(state_handlers.time, "time", lambda: start_ts)
+    monkeypatch.setattr(state_handlers, "EVENT_BUS", None)
+    monkeypatch.setattr(
+        state_handlers, "emit_pipeline_event", lambda *args, **kwargs: None
+    )
+    stock = {
+        "id": 19,
+        "name": "NXT STALE CONTEXT",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "rising_missed_tp1_submit_context_candidate_allowed": True,
+        "rising_missed_tp1_submit_context_evaluation_id": "nxt-stale-context-1",
+        "rising_missed_tp1_submit_context_at": start_ts - 61.0,
+        "rising_missed_tp1_submit_context_rising_missed_market_session_bucket": (
+            "nxt_entry_window"
+        ),
+        "rising_missed_tp1_submit_context_rising_missed_effective_venue": "NXT",
+    }
+
+    state_handlers._log_entry_pipeline(
+        stock,
+        "123473",
+        "latency_block",
+        actual_order_submitted=False,
+        broker_order_forbidden=True,
+        latest_price=10100,
+        reason="latency_state_danger",
+    )
+
+    assert "nxt-stale-context-1" not in (
+        state_handlers._RISING_MISSED_NXT_POST_BLOCK_SAMPLERS
+    )
+
+
 def test_rising_missed_nxt_post_block_sampler_uses_fresh_0d_bid_as_price_proxy(
     monkeypatch,
 ):

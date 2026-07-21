@@ -144,6 +144,23 @@ def test_nxt_post_block_sampler_recovers_counterfactual_first_hit_label(tmp_path
         "rising_missed_tp1_evaluation_id": "nxt-block-1",
         "rising_missed_market_session_bucket": "nxt_entry_window",
         "rising_missed_effective_venue": "NXT",
+        "rising_missed_nxt_post_block_source_block_stage": "tp1_selector",
+        "rising_missed_nxt_post_block_source_block_reason": (
+            "rising_missed_tp1_insufficient_positive_support"
+        ),
+        "rising_missed_nxt_post_block_entry_price_source": (
+            "rising_missed_tp1_effective_price"
+        ),
+    }
+    partial_residual_source = {
+        "rising_missed_nxt_post_block_source_block_stage": "residual_blocked",
+        "rising_missed_nxt_post_block_source_block_reason": (
+            "broker_rejected_after_first_residual_leg"
+        ),
+        "rising_missed_nxt_post_block_source_block_actual_order_submitted": True,
+        "rising_missed_nxt_post_block_source_block_broker_order_forbidden": True,
+        "rising_missed_nxt_post_block_source_block_residual_submitted_qty": 3,
+        "rising_missed_nxt_post_block_source_block_residual_submitted_leg_count": 1,
     }
     rows = [
         _event(
@@ -168,6 +185,7 @@ def test_nxt_post_block_sampler_recovers_counterfactual_first_hit_label(tmp_path
             "rising_missed_nxt_post_block_sampler_registered",
             {
                 **common,
+                **partial_residual_source,
                 "rising_missed_nxt_post_block_sampler_registration_state": "registered",
             },
             emitted_at="2026-07-14T16:20:00.100000+09:00",
@@ -179,6 +197,7 @@ def test_nxt_post_block_sampler_recovers_counterfactual_first_hit_label(tmp_path
             "rising_missed_nxt_post_block_price_sample",
             {
                 **common,
+                **partial_residual_source,
                 "current_price_observed": 10130,
                 "rising_missed_nxt_post_block_price_observation_state": "fresh_ws_0d_nxt_quote_proxy",
                 "rising_missed_nxt_post_block_price_source": "trusted_ws_0d_nxt_executable_bid_proxy",
@@ -211,6 +230,7 @@ def test_nxt_post_block_sampler_recovers_counterfactual_first_hit_label(tmp_path
             "rising_missed_nxt_post_block_price_sample",
             {
                 **common,
+                **partial_residual_source,
                 "current_price_observed": 10140,
                 "rising_missed_nxt_post_block_price_observation_state": "fresh_ws_0b_nxt",
                 "rising_missed_nxt_post_block_price_source": "trusted_ws_0b_nxt",
@@ -233,9 +253,37 @@ def test_nxt_post_block_sampler_recovers_counterfactual_first_hit_label(tmp_path
             901,
             "000901",
             "nxt-block",
+            "rising_missed_nxt_post_block_price_sample",
+            {
+                **common,
+                **partial_residual_source,
+                "rising_missed_nxt_post_block_price_observation_state": "source_gap",
+                "rising_missed_nxt_post_block_price_source": "unavailable",
+                "rising_missed_nxt_post_block_price_source_reason": "ws_0b_stale",
+                "rising_missed_nxt_post_block_fresh_sample": False,
+                "rising_missed_nxt_post_block_rest_fallback_enabled": True,
+                "rising_missed_nxt_post_block_rest_fallback_attempted": False,
+                "rising_missed_nxt_post_block_rest_fallback_applied": False,
+                "rising_missed_nxt_post_block_rest_fallback_reason": (
+                    "observation_rest_budget_deferred"
+                ),
+                "rising_missed_nxt_post_block_rest_fetch_state": "not_attempted",
+                "rising_missed_nxt_post_block_sample_attempt_count": 3,
+                "rising_missed_nxt_post_block_fresh_sample_count": 2,
+                "rising_missed_nxt_post_block_trade_price_sample_count": 1,
+                "rising_missed_nxt_post_block_quote_proxy_sample_count": 1,
+                "rising_missed_nxt_post_block_source_gap_sample_count": 1,
+            },
+            emitted_at="2026-07-14T16:30:00+09:00",
+        ),
+        _event(
+            901,
+            "000901",
+            "nxt-block",
             "rising_missed_nxt_post_block_price_sampler_completed",
             {
                 **common,
+                **partial_residual_source,
                 "rising_missed_nxt_post_block_sampler_completion_state": "completed",
                 "rising_missed_nxt_post_block_sampler_outcome_label": "gross_target_first",
                 "rising_missed_nxt_post_block_sampler_source_quality_state": "pass",
@@ -274,12 +322,28 @@ def test_nxt_post_block_sampler_recovers_counterfactual_first_hit_label(tmp_path
     assert summary["rising_missed_nxt_post_block_sampler_outcome_counts"] == [
         {"outcome_label": "gross_target_first", "count": 1}
     ]
+    assert summary["rising_missed_nxt_post_block_source_block_stage_counts"] == [
+        {"source_block_stage": "residual_blocked", "count": 1}
+    ]
+    assert (
+        summary["rising_missed_nxt_post_block_source_block_order_submitted_count"] == 1
+    )
+    assert (
+        summary["rising_missed_nxt_post_block_source_block_residual_submitted_qty"] == 3
+    )
+    assert summary["rising_missed_nxt_post_block_rest_fallback_attempted_count"] == 0
+    assert summary["rising_missed_nxt_post_block_rest_fallback_applied_count"] == 0
+    assert summary["rising_missed_nxt_post_block_rest_budget_deferred_count"] == 1
     completion = report["rising_missed_nxt_post_block_price_sampler_rows"][-1]
     assert completion["first_hit_move_pct"] == 1.3
     assert completion["mfe_after_block_pct"] == 1.8
     assert completion["mae_after_block_pct"] == -0.2
     assert completion["trade_price_sample_count"] == 1
     assert completion["quote_proxy_sample_count"] == 1
+    assert completion["source_block_stage"] == "residual_blocked"
+    assert completion["source_block_actual_order_submitted"] is True
+    assert completion["source_block_residual_submitted_qty"] == 3
+    assert completion["entry_price_source"] == "rising_missed_tp1_effective_price"
     assert completion["first_hit_price_source"] == (
         "trusted_ws_0d_nxt_executable_bid_proxy"
     )
@@ -291,6 +355,49 @@ def test_nxt_post_block_sampler_recovers_counterfactual_first_hit_label(tmp_path
     assert proxy["current_price_observed"] == 10130.0
     assert proxy["price_basis"] == "executable_sell_touch_quote_proxy"
     assert proxy["ws_0d_route"] == "krx_nxt_integrated"
+
+
+def test_nxt_session_observation_excludes_non_exact_session_or_venue(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-14.jsonl"
+    rows = [
+        _event(
+            951,
+            "000951",
+            "wrong-venue",
+            "rising_missed_nxt_post_block_sampler_registered",
+            {
+                "rising_missed_tp1_evaluation_id": "nxt-wrong-venue",
+                "rising_missed_market_session_bucket": "nxt_entry_window",
+                "rising_missed_effective_venue": "KRX",
+            },
+            emitted_at="2026-07-14T16:20:00+09:00",
+        ),
+        _event(
+            952,
+            "000952",
+            "wrong-session",
+            "rising_missed_nxt_post_block_sampler_registered",
+            {
+                "rising_missed_tp1_evaluation_id": "nxt-wrong-session",
+                "rising_missed_market_session_bucket": "nxt_preopen_window",
+                "rising_missed_effective_venue": "NXT",
+            },
+            emitted_at="2026-07-14T08:20:00+09:00",
+        ),
+    ]
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows), encoding="utf-8"
+    )
+
+    report = mod.build_report(
+        "2026-07-14", pipeline_path=pipeline_path, generated_at="fixed"
+    )
+
+    assert report["summary"]["rising_missed_nxt_evaluation_count"] == 0
+    assert (
+        report["summary"]["rising_missed_nxt_post_block_sampler_registered_count"] == 0
+    )
+    assert report["rising_missed_nxt_post_block_price_sampler_rows"] == []
 
 
 def test_tp1_first_hit_label_marks_adverse_first_and_can_confirm_net_with_costs(

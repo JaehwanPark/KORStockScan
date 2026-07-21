@@ -12031,6 +12031,12 @@ def _log_entry_pipeline(stock, code, stage, **fields):
         record_id=record_id,
         fields=merged_fields,
     )
+    _maybe_register_rising_missed_nxt_downstream_block_sampler(
+        stock,
+        code,
+        stage,
+        merged_fields,
+    )
 
 
 def _is_scanner_watching_runtime_observation_target(stock) -> bool:
@@ -12611,6 +12617,107 @@ _RISING_MISSED_NXT_POST_BLOCK_SAMPLERS_RESTORED = False
 _RISING_MISSED_NXT_POST_BLOCK_REST_RATE_LOCK = threading.Lock()
 _RISING_MISSED_NXT_POST_BLOCK_REST_RATE_EPOCHS: list[float] = []
 
+_RISING_MISSED_NXT_DOWNSTREAM_BLOCK_STAGES = frozenset(
+    {
+        "rising_missed_scout_quality_guard_blocked",
+        "real_weak_ai_micro_entry_block",
+        "rising_missed_tick_speed_entry_block",
+        "latency_block",
+        "entry_submit_revalidation_block",
+        "pre_submit_liquidity_guard_block",
+        "pre_submit_overbought_pullback_guard_block",
+        "residual_blocked",
+    }
+)
+
+
+def _maybe_register_rising_missed_nxt_downstream_block_sampler(
+    stock: dict | None,
+    code: str | None,
+    stage: str | None,
+    fields: dict[str, Any] | None,
+    *,
+    now_ts: float | None = None,
+) -> bool:
+    """Observe TP1-pass candidates blocked later without retrying submission."""
+
+    normalized_stage = str(stage or "").strip()
+    if normalized_stage not in _RISING_MISSED_NXT_DOWNSTREAM_BLOCK_STAGES:
+        return False
+    stock = stock if isinstance(stock, dict) else {}
+    decision_fields = dict(fields) if isinstance(fields, dict) else {}
+    if not _truthy_field(
+        decision_fields.get("rising_missed_tp1_submit_context_candidate_allowed")
+    ):
+        return False
+    if not _truthy_field(decision_fields.get("rising_missed_tp1_submit_context_fresh")):
+        return False
+    if (
+        decision_fields.get("rising_missed_market_session_bucket") != "nxt_entry_window"
+        or decision_fields.get("rising_missed_effective_venue") != "NXT"
+    ):
+        return False
+
+    entry_price = 0.0
+    entry_price_source = "missing"
+    for key in (
+        "canonical_mark_price",
+        "executable_sell_price",
+        "latest_price",
+        "current_price_observed",
+        "signal_price",
+        "rising_missed_tp1_effective_price",
+        "rising_missed_tp1_submit_context_anchor_price",
+    ):
+        candidate_price = _safe_float(decision_fields.get(key), 0.0)
+        if candidate_price > 0:
+            entry_price = candidate_price
+            entry_price_source = key
+            break
+    if entry_price <= 0:
+        return False
+
+    block_reason = str(
+        decision_fields.get("effective_reason")
+        or decision_fields.get("reason")
+        or decision_fields.get("block_reason")
+        or "unspecified_downstream_block"
+    ).strip()
+    sampler_fields = {
+        **decision_fields,
+        "rising_missed_tp1_effective_price": entry_price,
+        "selector_reason": (f"downstream_block:{normalized_stage}:{block_reason}"),
+        "selector_deferred": False,
+        "source_block_stage": normalized_stage,
+        "source_block_reason": block_reason,
+        "source_block_actual_order_submitted": _truthy_field(
+            decision_fields.get("actual_order_submitted")
+        ),
+        "source_block_broker_order_forbidden": _truthy_field(
+            decision_fields.get("broker_order_forbidden")
+        ),
+        "source_block_requested_qty": _safe_int(
+            decision_fields.get("requested_qty")
+            or decision_fields.get("entry_split_probe_requested_qty")
+            or decision_fields.get("entry_requested_qty"),
+            0,
+        ),
+        "source_block_filled_qty": _safe_int(decision_fields.get("filled_qty"), 0),
+        "source_block_residual_submitted_qty": _safe_int(
+            decision_fields.get("residual_submitted_qty"), 0
+        ),
+        "source_block_residual_submitted_leg_count": _safe_int(
+            decision_fields.get("residual_submitted_leg_count"), 0
+        ),
+        "rising_missed_nxt_post_block_entry_price_source": entry_price_source,
+    }
+    return _register_rising_missed_nxt_post_block_sampler(
+        stock,
+        code,
+        sampler_fields,
+        now_ts=now_ts,
+    )
+
 
 def _rising_missed_nxt_post_block_sampler_enabled(
     *, now_ts: float | None = None
@@ -12799,7 +12906,7 @@ def _rising_missed_nxt_post_block_sampler_contract_fields() -> dict[str, Any]:
     return {
         "metric_role": "source_quality_gate",
         "decision_authority": "source_only_nxt_post_block_price_observation",
-        "window_policy": "nxt_selector_block_or_defer_bounded_20m",
+        "window_policy": "nxt_tp1_or_downstream_block_bounded_20m",
         "sample_floor": "2_fresh_ws_or_observation_only_rest_price_samples",
         "primary_decision_metric": "gross_1.30_first_before_adverse_0.70",
         "source_quality_gate": (
@@ -12974,6 +13081,36 @@ def _emit_rising_missed_nxt_post_block_sampler_event(
             "rising_missed_nxt_post_block_selector_deferred": bool(
                 sampler.get("selector_deferred")
             ),
+            "rising_missed_nxt_post_block_source_block_stage": sampler.get(
+                "source_block_stage"
+            )
+            or "tp1_selector",
+            "rising_missed_nxt_post_block_source_block_reason": sampler.get(
+                "source_block_reason"
+            )
+            or "not_evaluated",
+            "rising_missed_nxt_post_block_entry_price_source": sampler.get(
+                "entry_price_source"
+            )
+            or "rising_missed_tp1_effective_price",
+            "rising_missed_nxt_post_block_source_block_actual_order_submitted": bool(
+                sampler.get("source_block_actual_order_submitted")
+            ),
+            "rising_missed_nxt_post_block_source_block_broker_order_forbidden": bool(
+                sampler.get("source_block_broker_order_forbidden")
+            ),
+            "rising_missed_nxt_post_block_source_block_requested_qty": _safe_int(
+                sampler.get("source_block_requested_qty"), 0
+            ),
+            "rising_missed_nxt_post_block_source_block_filled_qty": _safe_int(
+                sampler.get("source_block_filled_qty"), 0
+            ),
+            "rising_missed_nxt_post_block_source_block_residual_submitted_qty": (
+                _safe_int(sampler.get("source_block_residual_submitted_qty"), 0)
+            ),
+            "rising_missed_nxt_post_block_source_block_residual_submitted_leg_count": (
+                _safe_int(sampler.get("source_block_residual_submitted_leg_count"), 0)
+            ),
             **fields,
         },
     )
@@ -13015,6 +13152,32 @@ def _register_rising_missed_nxt_post_block_sampler(
         or fields.get("rising_missed_tp1_candidate_reason")
         or "not_evaluated",
         "selector_deferred": bool(fields.get("selector_deferred")),
+        "source_block_stage": str(fields.get("source_block_stage") or "tp1_selector"),
+        "source_block_reason": str(
+            fields.get("source_block_reason")
+            or fields.get("selector_reason")
+            or "not_evaluated"
+        ),
+        "entry_price_source": str(
+            fields.get("rising_missed_nxt_post_block_entry_price_source")
+            or "rising_missed_tp1_effective_price"
+        ),
+        "source_block_actual_order_submitted": bool(
+            fields.get("source_block_actual_order_submitted")
+        ),
+        "source_block_broker_order_forbidden": bool(
+            fields.get("source_block_broker_order_forbidden")
+        ),
+        "source_block_requested_qty": _safe_int(
+            fields.get("source_block_requested_qty"), 0
+        ),
+        "source_block_filled_qty": _safe_int(fields.get("source_block_filled_qty"), 0),
+        "source_block_residual_submitted_qty": _safe_int(
+            fields.get("source_block_residual_submitted_qty"), 0
+        ),
+        "source_block_residual_submitted_leg_count": _safe_int(
+            fields.get("source_block_residual_submitted_leg_count"), 0
+        ),
         "entry_price": float(entry_price or 0.0),
         "registered_at": observed_ts,
         "expires_at": observed_ts + horizon_sec,
@@ -13087,7 +13250,14 @@ def _register_rising_missed_nxt_post_block_sampler(
         sampler,
         "rising_missed_nxt_post_block_sampler_registered",
         rising_missed_nxt_post_block_sampler_registration_state="registered",
-        rising_missed_nxt_post_block_sampler_registration_reason="nxt_selector_block_or_defer",
+        rising_missed_nxt_post_block_sampler_registration_reason=(
+            "nxt_selector_block_or_defer"
+            if sampler["source_block_stage"] == "tp1_selector"
+            else "nxt_downstream_block"
+        ),
+        rising_missed_nxt_post_block_source_block_stage=sampler["source_block_stage"],
+        rising_missed_nxt_post_block_source_block_reason=sampler["source_block_reason"],
+        rising_missed_nxt_post_block_entry_price_source=sampler["entry_price_source"],
         rising_missed_nxt_post_block_sampler_entry_price=round(
             sampler["entry_price"], 4
         ),
@@ -49964,6 +50134,9 @@ def _rising_missed_tp1_observation_context_log_fields(
         return {}
     fields = {
         "rising_missed_tp1_evaluation_id": evaluation_id,
+        "rising_missed_tp1_submit_context_candidate_allowed": _truthy_field(
+            context.get("rising_missed_tp1_submit_context_candidate_allowed")
+        ),
         "rising_missed_tp1_submit_context_age_sec": (
             round(context_age_sec, 6) if context_age_sec is not None else "-"
         ),
