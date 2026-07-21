@@ -111,6 +111,20 @@ disable_expired_dated_runtime_overrides() {
     done
 }
 
+verify_threshold_runtime_env_handoff() {
+    local target_date="$1"
+    local verify_output
+    if ! verify_output="$(
+        PYTHONPATH=.. ../.venv/bin/python -m src.engine.threshold_cycle_preopen_apply \
+            --verify --target-date "$target_date" 2>&1
+    )"; then
+        echo "❌ threshold runtime env handoff 검증 실패: target_date=$target_date"
+        printf '%s\n' "$verify_output"
+        return 1
+    fi
+    echo "✅ threshold runtime env handoff 검증 통과: target_date=$target_date"
+}
+
 reset_runtime_policy_env_before_handoff() {
     unset KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED
     unset KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_FILE
@@ -138,11 +152,10 @@ reset_runtime_policy_env_before_handoff() {
 while true; do
     echo "🚀 KORStockScan 스나이퍼 엔진을 시작합니다..."
 
-    # 2026-06-10 operator sizing release:
-    # real scalping initial BUY uses 10%~30% of orderable cash, with no hard
-    # share cap and a one-share floor only when orderable cash can cover it.
+    # Parser-compatibility bounds only. Runtime sizing authority is the central
+    # five-tier allocator (10/15/20/25/25%, absolute cap 25%).
     export KORSTOCKSCAN_INVEST_RATIO_SCALPING_MIN=0.10
-    export KORSTOCKSCAN_INVEST_RATIO_SCALPING_MAX=0.30
+    export KORSTOCKSCAN_INVEST_RATIO_SCALPING_MAX=0.25
     export KORSTOCKSCAN_SCALPING_MAX_BUY_BUDGET_KRW=0
     export KORSTOCKSCAN_SCALPING_MIN_ONE_SHARE_FLOOR_ENABLED=true
     export KORSTOCKSCAN_SCALPING_SCALE_IN_MIN_ONE_SHARE_FLOOR_ENABLED=true
@@ -231,6 +244,7 @@ while true; do
         set +a
     fi
     disable_expired_dated_runtime_overrides "$RUNTIME_TARGET_DATE"
+    verify_threshold_runtime_env_handoff "$RUNTIME_TARGET_DATE" || exit 1
 
     # 봇 실행 (경로나 파일명은 환경에 맞게 수정)
     BOT_CPU_AFFINITY="${KORSTOCKSCAN_BOT_CPU_AFFINITY:-$DEFAULT_BOT_CPU_AFFINITY}"

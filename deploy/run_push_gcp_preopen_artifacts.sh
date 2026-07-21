@@ -23,6 +23,7 @@ APPLY_PLAN_FILE="$PROJECT_DIR/data/threshold_cycle/apply_plans/threshold_apply_$
 RUNTIME_ENV_FILE="$PROJECT_DIR/data/threshold_cycle/runtime_env/threshold_runtime_env_${TARGET_DATE}.env"
 RUNTIME_ENV_MANIFEST_FILE="$PROJECT_DIR/data/threshold_cycle/runtime_env/threshold_runtime_env_${TARGET_DATE}.json"
 RUNTIME_ENV_VERIFY_FILE="$PROJECT_DIR/data/threshold_cycle/runtime_env/threshold_runtime_env_verify_${TARGET_DATE}.json"
+OPERATOR_RUNTIME_OVERRIDE_FILE="$PROJECT_DIR/data/threshold_cycle/runtime_env/operator_runtime_overrides_${TARGET_DATE}.env"
 
 mkdir -p "$PROJECT_DIR/logs" "$STATUS_DIR"
 
@@ -150,6 +151,10 @@ REMOTE_FILES=(
 if [ -f "$RUNTIME_ENV_VERIFY_FILE" ]; then
   LOCAL_FILES+=("$RUNTIME_ENV_VERIFY_FILE")
   REMOTE_FILES+=("$REMOTE_RUNTIME_DIR/threshold_runtime_env_verify_${TARGET_DATE}.json")
+fi
+if [ -f "$OPERATOR_RUNTIME_OVERRIDE_FILE" ]; then
+  LOCAL_FILES+=("$OPERATOR_RUNTIME_OVERRIDE_FILE")
+  REMOTE_FILES+=("$REMOTE_RUNTIME_DIR/operator_runtime_overrides_${TARGET_DATE}.env")
 fi
 
 SSH_OPTS=()

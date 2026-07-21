@@ -17,12 +17,14 @@ STAGING_APPLY_FILE="$STAGING_ROOT/apply_plans/threshold_apply_${TARGET_DATE}.jso
 STAGING_RUNTIME_ENV_FILE="$STAGING_ROOT/runtime_env/threshold_runtime_env_${TARGET_DATE}.env"
 STAGING_RUNTIME_ENV_MANIFEST_FILE="$STAGING_ROOT/runtime_env/threshold_runtime_env_${TARGET_DATE}.json"
 STAGING_RUNTIME_ENV_VERIFY_FILE="$STAGING_ROOT/runtime_env/threshold_runtime_env_verify_${TARGET_DATE}.json"
+STAGING_OPERATOR_RUNTIME_OVERRIDE_FILE="$STAGING_ROOT/runtime_env/operator_runtime_overrides_${TARGET_DATE}.env"
 STAGING_PREOPEN_STATUS_FILE="$STAGING_REPORT_ROOT/threshold_cycle_preopen_status/threshold_cycle_preopen_${TARGET_DATE}.status.json"
 
 LIVE_APPLY_FILE="$LIVE_ROOT/apply_plans/threshold_apply_${TARGET_DATE}.json"
 LIVE_RUNTIME_ENV_FILE="$LIVE_ROOT/runtime_env/threshold_runtime_env_${TARGET_DATE}.env"
 LIVE_RUNTIME_ENV_MANIFEST_FILE="$LIVE_ROOT/runtime_env/threshold_runtime_env_${TARGET_DATE}.json"
 LIVE_RUNTIME_ENV_VERIFY_FILE="$LIVE_ROOT/runtime_env/threshold_runtime_env_verify_${TARGET_DATE}.json"
+LIVE_OPERATOR_RUNTIME_OVERRIDE_FILE="$LIVE_ROOT/runtime_env/operator_runtime_overrides_${TARGET_DATE}.env"
 LIVE_PREOPEN_STATUS_FILE="$LIVE_REPORT_ROOT/threshold_cycle_preopen_status/threshold_cycle_preopen_${TARGET_DATE}.status.json"
 
 PROMOTED_FILES=()
@@ -138,6 +140,9 @@ promote_file "$STAGING_RUNTIME_ENV_MANIFEST_FILE" "$LIVE_RUNTIME_ENV_MANIFEST_FI
 
 if [ -f "$STAGING_RUNTIME_ENV_VERIFY_FILE" ]; then
   promote_file "$STAGING_RUNTIME_ENV_VERIFY_FILE" "$LIVE_RUNTIME_ENV_VERIFY_FILE"
+fi
+if [ -f "$STAGING_OPERATOR_RUNTIME_OVERRIDE_FILE" ]; then
+  promote_file "$STAGING_OPERATOR_RUNTIME_OVERRIDE_FILE" "$LIVE_OPERATOR_RUNTIME_OVERRIDE_FILE"
 fi
 
 write_bridge_status succeeded promoted 0

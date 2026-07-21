@@ -9144,3 +9144,35 @@ def test_gap_provenance_written_during_auto_apply(tmp_path, monkeypatch):
     gap_artifact = json.loads(gap_path.read_text(encoding="utf-8"))
     assert gap_artifact["raw_preserved"] is True
     assert gap_artifact["active_gap_count"] == 2
+
+
+def test_main_fails_when_runtime_change_handoff_verification_fails(monkeypatch):
+    monkeypatch.setattr(
+        mod,
+        "build_preopen_apply_manifest",
+        lambda *args, **kwargs: {
+            "target_date": "2026-07-22",
+            "status": "auto_bounded_live_ready",
+            "runtime_change": True,
+            "runtime_env_handoff_verification": {"status": "fail"},
+        },
+    )
+
+    assert mod.main(["--target-date", "2026-07-22", "--auto-apply"]) == 2
+
+
+def test_main_accepts_runtime_change_only_after_handoff_verification_passes(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        mod,
+        "build_preopen_apply_manifest",
+        lambda *args, **kwargs: {
+            "target_date": "2026-07-22",
+            "status": "auto_bounded_live_ready",
+            "runtime_change": True,
+            "runtime_env_handoff_verification": {"status": "pass"},
+        },
+    )
+
+    assert mod.main(["--target-date", "2026-07-22", "--auto-apply"]) == 0

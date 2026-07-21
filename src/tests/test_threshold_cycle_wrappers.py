@@ -1096,6 +1096,15 @@ def test_run_bot_waits_for_threshold_runtime_env_before_launching_bot():
         '. "$THRESHOLD_RUNTIME_ENV"'
     )
     assert 'disable_expired_dated_runtime_overrides "$RUNTIME_TARGET_DATE"' in script
+    assert "verify_threshold_runtime_env_handoff" in script
+    assert "KORSTOCKSCAN_INVEST_RATIO_SCALPING_MAX=0.25" in script
+    assert "central" in script and "five-tier allocator" in script
+    assert script.index(
+        'verify_threshold_runtime_env_handoff "$RUNTIME_TARGET_DATE"'
+    ) > script.index('disable_expired_dated_runtime_overrides "$RUNTIME_TARGET_DATE"')
+    assert script.index(
+        'verify_threshold_runtime_env_handoff "$RUNTIME_TARGET_DATE"'
+    ) < script.index("../.venv/bin/python bot_main.py")
     assert (
         "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED:KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ACTIVE_DATE:"
         in script
@@ -1160,6 +1169,8 @@ def test_preopen_wrapper_treats_operator_lock_ready_manifest_as_succeeded():
     assert "handle_preopen_apply_result" in script
     assert "operator_runtime_env_lock_ready_missing_source_report" in script
     assert "operator_runtime_env_lock_preserved_missing_source_report" in script
+    assert "runtime_env_handoff_verification" in script
+    assert "extract_manifest_json" in script
 
 
 def test_preopen_wrapper_smoke_allows_operator_lock_runtime_env_without_source_report(
@@ -1188,11 +1199,13 @@ def test_preopen_wrapper_smoke_allows_operator_lock_runtime_env_without_source_r
         "    json_path = runtime_dir / f'threshold_runtime_env_{date}.json'\n"
         "    env_path.write_text('export A=1\\n', encoding='utf-8')\n"
         "    json_path.write_text(json.dumps({'target_date': date, 'report_type': 'threshold_runtime_env'}), encoding='utf-8')\n"
+        "    print('provider initialization banner')\n"
         "    print(json.dumps({\n"
         "        'target_date': date,\n"
         "        'status': 'operator_runtime_env_lock_ready_missing_source_report',\n"
         "        'runtime_change': True,\n"
         "        'runtime_env_file': str(env_path),\n"
+        "        'runtime_env_handoff_verification': {'status': 'pass'},\n"
         "    }, ensure_ascii=False))\n"
         "    return 2\n"
         "\n"
@@ -1258,6 +1271,7 @@ def test_gcp_preopen_push_wrapper_contract_is_fail_closed_and_artifact_only():
     assert "threshold_runtime_env_${TARGET_DATE}.env" in script
     assert "threshold_runtime_env_${TARGET_DATE}.json" in script
     assert "threshold_runtime_env_verify_${TARGET_DATE}.json" in script
+    assert "operator_runtime_overrides_${TARGET_DATE}.env" in script
     assert "threshold_cycle_remote/apply_plans" in script
     assert "threshold_cycle_remote/runtime_env" in script
     assert ".tmp.aws_push_${TARGET_DATE}_$$" in script
@@ -1320,6 +1334,9 @@ def test_gcp_preopen_push_wrapper_smoke_with_stubbed_ssh_and_scp(tmp_path):
         json.dumps({"target_date": date, "status": "pass"}),
         encoding="utf-8",
     )
+    (runtime_dir / f"operator_runtime_overrides_{date}.env").write_text(
+        "export B=2\n", encoding="utf-8"
+    )
 
     (bin_dir / "ssh").write_text(
         "#!/usr/bin/env bash\n" f"printf 'ssh %s\\n' \"$*\" >> {log_path}\n" "exit 0\n",
@@ -1362,8 +1379,8 @@ def test_gcp_preopen_push_wrapper_smoke_with_stubbed_ssh_and_scp(tmp_path):
         "mkdir -p -- '/srv/KORStockScan/data/threshold_cycle_remote/report/threshold_cycle_preopen_status'"
         in log_text
     )
-    assert log_text.count("scp ") == 5
-    assert log_text.count("mv -f --") == 5
+    assert log_text.count("scp ") == 6
+    assert log_text.count("mv -f --") == 6
     assert (
         f"threshold_cycle_preopen_{date}.status.json.tmp.aws_push_{date}_" in log_text
     )
@@ -1375,7 +1392,7 @@ def test_gcp_preopen_push_wrapper_smoke_with_stubbed_ssh_and_scp(tmp_path):
         ).read_text(encoding="utf-8")
     )
     assert status["status"] == "succeeded"
-    assert len(status["pushed_files"]) == 5
+    assert len(status["pushed_files"]) == 6
 
 
 def test_gcp_preopen_bridge_promotes_staging_artifacts_to_live_runtime_dir(tmp_path):
@@ -1420,6 +1437,9 @@ def test_gcp_preopen_bridge_promotes_staging_artifacts_to_live_runtime_dir(tmp_p
         json.dumps({"target_date": date, "status": "pass"}),
         encoding="utf-8",
     )
+    (staging_runtime_dir / f"operator_runtime_overrides_{date}.env").write_text(
+        "export B=2\n", encoding="utf-8"
+    )
 
     env = {
         **os.environ,
@@ -1445,6 +1465,9 @@ def test_gcp_preopen_bridge_promotes_staging_artifacts_to_live_runtime_dir(tmp_p
     ) == "export A=1\n"
     assert (live_runtime_dir / f"threshold_runtime_env_{date}.json").exists()
     assert (live_runtime_dir / f"threshold_runtime_env_verify_{date}.json").exists()
+    assert (live_runtime_dir / f"operator_runtime_overrides_{date}.env").read_text(
+        encoding="utf-8"
+    ) == "export B=2\n"
     status = json.loads(
         (
             project
@@ -1452,7 +1475,7 @@ def test_gcp_preopen_bridge_promotes_staging_artifacts_to_live_runtime_dir(tmp_p
         ).read_text(encoding="utf-8")
     )
     assert status["status"] == "succeeded"
-    assert len(status["promoted_files"]) == 5
+    assert len(status["promoted_files"]) == 6
 
 
 def test_gcp_preopen_bridge_skips_when_staging_artifacts_are_missing(tmp_path):

@@ -5693,19 +5693,21 @@ def main(argv: list[str] | None = None) -> int:
         include_families=set(args.include_family) if args.include_family else None,
     )
     print(json.dumps(manifest, ensure_ascii=False))
-    return (
-        0
-        if manifest.get("status")
-        in {
-            "manifest_ready",
-            "calibrated_manifest_ready",
-            "efficient_tradeoff_manifest_ready",
-            "auto_bounded_live_ready",
-            "auto_bounded_live_blocked",
-            "operator_runtime_env_lock_ready_missing_source_report",
-        }
-        else 2
-    )
+    accepted_status = manifest.get("status") in {
+        "manifest_ready",
+        "calibrated_manifest_ready",
+        "efficient_tradeoff_manifest_ready",
+        "auto_bounded_live_ready",
+        "auto_bounded_live_blocked",
+        "operator_runtime_env_lock_ready_missing_source_report",
+    }
+    if not accepted_status:
+        return 2
+    if bool(manifest.get("runtime_change")):
+        verification = manifest.get("runtime_env_handoff_verification")
+        if not isinstance(verification, dict) or verification.get("status") != "pass":
+            return 2
+    return 0
 
 
 if __name__ == "__main__":

@@ -91,11 +91,32 @@ if (
     and status == "operator_runtime_env_lock_ready_missing_source_report"
     and runtime_change
     and runtime_env_ready
+    and str(
+        (manifest.get("runtime_env_handoff_verification") or {}).get("status") or ""
+    )
+    == "pass"
 ):
     raise SystemExit(0)
 
 raise SystemExit(exit_code)
 PY
+}
+
+extract_manifest_json() {
+  "$VENV_PY" -c '
+import json
+import sys
+
+for line in reversed(sys.stdin.read().splitlines()):
+    try:
+        payload = json.loads(line)
+    except json.JSONDecodeError:
+        continue
+    if isinstance(payload, dict):
+        print(json.dumps(payload, ensure_ascii=False))
+        raise SystemExit(0)
+raise SystemExit("preopen_manifest_json_not_found")
+'
 }
 
 trap 'rc=$?; write_preopen_status failed command_failed "$rc" 1 || true; exit "$rc"' ERR
@@ -130,8 +151,9 @@ manifest_output="$(
   echo "__THRESHOLD_PREOPEN_EXIT_CODE__:$?"
 )"
 manifest_exit_code="$(printf '%s\n' "$manifest_output" | awk -F: '/__THRESHOLD_PREOPEN_EXIT_CODE__:/ {print $2}' | tail -n1)"
-manifest_json="$(printf '%s\n' "$manifest_output" | sed '/__THRESHOLD_PREOPEN_EXIT_CODE__:/d')"
-printf '%s\n' "$manifest_json"
+manifest_payload="$(printf '%s\n' "$manifest_output" | sed '/__THRESHOLD_PREOPEN_EXIT_CODE__:/d')"
+printf '%s\n' "$manifest_payload"
+manifest_json="$(printf '%s\n' "$manifest_payload" | extract_manifest_json)"
 printf '%s\n' "$manifest_json" > "$MANIFEST_CAPTURE_FILE"
 handle_preopen_apply_result "$MANIFEST_CAPTURE_FILE" "${manifest_exit_code:-1}"
 finished_at="$(TZ=Asia/Seoul date +%FT%T%z)"
