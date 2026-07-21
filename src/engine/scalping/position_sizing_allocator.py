@@ -98,24 +98,34 @@ def _coerce_reference_time(value: Any) -> datetime | None:
 
 
 def infer_scalping_venue(reference_time: Any, explicit_venue: Any = None) -> str:
-    """Resolve KRX/NXT without treating an unknown label as KRX."""
+    """Resolve only an explicit KRX/NXT venue; missing authority stays unknown.
+
+    KRX and NXT sessions overlap, so wall-clock time cannot safely identify the
+    execution venue.  Callers without explicit venue provenance must fail
+    closed to tier 1 through ``UNKNOWN``.
+    """
 
     venue = str(explicit_venue or "").strip().upper()
     if venue == "NXT" or venue.startswith("NXT_"):
         return "NXT"
     if venue == "KRX" or venue.startswith("KRX_"):
         return "KRX"
-    resolved = _coerce_reference_time(reference_time)
-    if resolved is None:
-        return "UNKNOWN"
-    current = resolved.time().replace(tzinfo=None)
-    if time(8, 0) <= current < time(9, 0):
-        return "NXT"
-    if time(9, 0) <= current < time(15, 30):
-        return "KRX"
-    if time(16, 0) <= current < time(20, 0):
-        return "NXT"
     return "UNKNOWN"
+
+
+def max_position_qty_cap_from_budget(
+    budget_base_krw: Any,
+    price_krw: Any,
+    max_position_pct: Any,
+) -> int:
+    """Convert a position-notional ratio guard into an absolute quantity cap."""
+
+    budget_base = max(0, _safe_int(budget_base_krw, 0))
+    price = max(0, _safe_int(price_krw, 0))
+    ratio = max(0.0, min(1.0, _safe_float(max_position_pct, 0.0)))
+    if budget_base <= 0 or price <= 0 or ratio <= 0.0:
+        return 0
+    return max(0, int((float(budget_base) * ratio) // price))
 
 
 def _validated_tier_ratios() -> tuple[tuple[float, ...], bool]:

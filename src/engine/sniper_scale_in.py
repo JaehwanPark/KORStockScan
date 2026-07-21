@@ -2374,7 +2374,8 @@ def describe_dynamic_scale_in_qty(
             venue_reference,
             effective_venue
             or stock.get("rising_missed_effective_venue")
-            or stock.get("effective_venue"),
+            or stock.get("effective_venue")
+            or stock.get("scalping_sizing_venue"),
         )
         initial_tier = _safe_int(stock.get("scalping_sizing_tier"), 0) or None
         initial_formula_version = str(

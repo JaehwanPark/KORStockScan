@@ -110,6 +110,7 @@ from src.engine.scalping.position_sizing_allocator import (
     FORMULA_VERSION as SCALPING_SIZING_FORMULA_VERSION,
     ScalpingSizingContext,
     infer_scalping_venue,
+    max_position_qty_cap_from_budget,
     resolve_scalping_allocation,
 )
 from src.engine.scalping.rising_missed_selection_prior import (
@@ -8845,6 +8846,7 @@ def _resolve_scalp_sim_entry_qty(stock: dict, ws_data: dict, runtime: dict) -> d
         or stock.get("rising_missed_effective_venue")
         or (runtime or {}).get("effective_venue")
         or stock.get("effective_venue")
+        or stock.get("scalping_sizing_venue")
     )
     budget_cap = int(_rule("SCALPING_MAX_BUY_BUDGET_KRW", 0) or 0)
     virtual_budget = _sim_virtual_budget_krw()
@@ -8862,6 +8864,11 @@ def _resolve_scalp_sim_entry_qty(stock: dict, ws_data: dict, runtime: dict) -> d
             price_krw=curr_price,
             safety_ratio=_rule_float("BUY_BUDGET_SAFETY_RATIO", 0.95),
             absolute_budget_cap_krw=budget_cap,
+            max_position_qty_cap=max_position_qty_cap_from_budget(
+                virtual_budget,
+                curr_price,
+                _rule_float("MAX_POSITION_PCT", 0.20),
+            ),
             min_one_share_floor_enabled=True,
             simulation=True,
         )
@@ -20875,7 +20882,7 @@ def _apply_initial_entry_qty_cap(
     if not planned_orders:
         return [], 0, 0, False
 
-    qty_cap = max(1, int(max_total_qty or 1))
+    qty_cap = max(0, int(max_total_qty or 0))
     updated_orders: list[dict] = []
     original_total = 0
     scaled_total = 0
@@ -20899,6 +20906,126 @@ def _apply_initial_entry_qty_cap(
 
     applied = scaled_total != original_total
     return updated_orders, original_total, scaled_total, applied
+
+
+def _final_price_sizing_contract_fields() -> dict[str, Any]:
+    return {
+        "metric_role": "safety_veto",
+        "decision_authority": "scalping_position_sizing_final_price_guard",
+        "window_policy": "same_submit_most_expensive_executable_price",
+        "sample_floor": 1,
+        "primary_decision_metric": "final_price_sizing_effective_qty",
+        "source_quality_gate": "positive_final_executable_price_or_fail_closed_zero",
+        "runtime_effect": True,
+        "allowed_runtime_apply": False,
+        "forbidden_uses": (
+            "threshold_mutation/provider_route_change/bot_restart/"
+            "broker_guard_bypass/position_cap_release"
+        ),
+    }
+
+
+def _revalidate_scalping_sizing_for_final_order_price(
+    sizing_context: ScalpingSizingContext | None,
+    sizing_decision,
+    planned_orders: list[dict],
+    *,
+    curr_price: int,
+    best_ask: int,
+) -> tuple[ScalpingSizingContext | None, Any, list[dict], dict[str, Any]]:
+    """Re-run sizing at the most expensive executable price before splitting.
+
+    Entry-price AI and observed-mark reconciliation may change the order price
+    after the initial budget decision.  The final pass may only preserve or
+    reduce the original quantity and runs before probe/multi-leg construction,
+    so their total-quantity contract is built from the final cap.
+    """
+
+    original_total = _entry_planned_total_qty(planned_orders)
+    fields = {
+        "final_price_sizing_revalidated": False,
+        "final_price_sizing_price": 0,
+        "final_price_sizing_original_qty": original_total,
+        "final_price_sizing_effective_qty": original_total,
+        "final_price_sizing_qty_reduced": False,
+    }
+    if sizing_context is None or sizing_decision is None:
+        fields["final_price_sizing_reason"] = "non_scalping_or_context_missing"
+        return sizing_context, sizing_decision, list(planned_orders or []), fields
+
+    price_candidates = [
+        max(0, _safe_int(curr_price, 0)),
+        max(0, _safe_int(best_ask, 0)),
+    ]
+    price_candidates.extend(
+        max(0, _safe_int((order or {}).get("price"), 0))
+        for order in planned_orders or []
+        if isinstance(order, dict)
+    )
+    final_price = max(price_candidates or [0])
+    if final_price <= 0:
+        blocked_context = dataclass_replace(
+            sizing_context,
+            price_krw=0,
+            max_position_qty_cap=0,
+            stage_qty_cap=0,
+        )
+        blocked_decision = resolve_scalping_allocation(blocked_context)
+        fields["final_price_sizing_reason"] = "final_order_price_missing"
+        capped_orders, _, capped_total, _ = _apply_initial_entry_qty_cap(
+            planned_orders,
+            max_total_qty=0,
+        )
+        fields.update(
+            {
+                "final_price_sizing_effective_qty": capped_total,
+                "final_price_sizing_qty_reduced": capped_total < original_total,
+            }
+        )
+        return blocked_context, blocked_decision, capped_orders, fields
+
+    prior_qty_cap = max(0, _safe_int(sizing_decision.effective_qty, 0))
+    stage_qty_cap = min(prior_qty_cap, original_total)
+    if sizing_context.stage_qty_cap is not None:
+        stage_qty_cap = min(
+            stage_qty_cap,
+            max(0, _safe_int(sizing_context.stage_qty_cap, 0)),
+        )
+    repriced_max_position_qty_cap = max_position_qty_cap_from_budget(
+        sizing_context.budget_base_krw,
+        final_price,
+        _rule_float("MAX_POSITION_PCT", 0.20),
+    )
+    if sizing_context.max_position_qty_cap is not None:
+        repriced_max_position_qty_cap = min(
+            repriced_max_position_qty_cap,
+            max(0, _safe_int(sizing_context.max_position_qty_cap, 0)),
+        )
+    final_context = dataclass_replace(
+        sizing_context,
+        price_krw=final_price,
+        max_position_qty_cap=repriced_max_position_qty_cap,
+        stage_qty_cap=stage_qty_cap,
+    )
+    final_decision = resolve_scalping_allocation(final_context)
+    capped_orders, _, capped_total, cap_applied = _apply_initial_entry_qty_cap(
+        planned_orders,
+        max_total_qty=final_decision.effective_qty,
+    )
+    fields.update(
+        {
+            "final_price_sizing_revalidated": True,
+            "final_price_sizing_reason": "final_executable_price_allocator_recheck",
+            "final_price_sizing_initial_price": max(
+                0, _safe_int(sizing_context.price_krw, 0)
+            ),
+            "final_price_sizing_price": final_price,
+            "final_price_sizing_original_qty": original_total,
+            "final_price_sizing_effective_qty": capped_total,
+            "final_price_sizing_qty_reduced": bool(cap_applied),
+        }
+    )
+    return final_context, final_decision, capped_orders, fields
 
 
 def _apply_wait6579_probe_canary(
@@ -45585,6 +45712,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             or stock.get("rising_missed_effective_venue")
             or runtime.get("effective_venue")
             or stock.get("effective_venue")
+            or stock.get("scalping_sizing_venue")
         )
         allocation_stage = (
             "rising_missed_scout_initial"
@@ -45625,6 +45753,11 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             safety_ratio=_rule_float("BUY_BUDGET_SAFETY_RATIO", 0.95),
             absolute_budget_cap_krw=budget_cap,
             current_position_qty=_safe_int(stock.get("buy_qty"), 0),
+            max_position_qty_cap=max_position_qty_cap_from_budget(
+                budget_base,
+                curr_price,
+                _rule_float("MAX_POSITION_PCT", 0.20),
+            ),
             cash_orderable_qty_cap=budget_context.get("cash_orderable_qty_cap"),
             min_one_share_floor_enabled=min_one_share_floor_enabled,
             initial_tier=initial_tier,
@@ -48400,6 +48533,61 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             f"\n└ agg={info.get('agg_value')} impact={info.get('impact_ratio')} chase={info.get('chase_pct')}"
         )
         _mutate_stock_state(stock, set_fields={"msg_audience": "ADMIN_ONLY"})
+
+    if strategy == "SCALPING":
+        (
+            sizing_context,
+            final_sizing_decision,
+            planned_orders,
+            final_price_sizing_fields,
+        ) = _revalidate_scalping_sizing_for_final_order_price(
+            sizing_context,
+            sizing_decision,
+            planned_orders,
+            curr_price=curr_price,
+            best_ask=best_ask_at_submit,
+        )
+        if final_sizing_decision is not None:
+            sizing_decision = final_sizing_decision
+            sizing_fields = _store_scalping_sizing_decision(stock, sizing_decision)
+            target_budget = sizing_decision.target_budget
+            safe_budget = sizing_decision.safe_budget
+            real_buy_qty = sizing_decision.effective_qty
+            used_safety_ratio = sizing_decision.safety_ratio
+            runtime["scalping_sizing_decision"] = sizing_fields
+        requested_qty = _entry_planned_total_qty(planned_orders)
+        latency_gate["orders"] = planned_orders
+        if forced_rising_missed_one_share:
+            forced_rising_missed_scout_qty = requested_qty
+            runtime["forced_entry_qty"] = requested_qty
+            _mutate_stock_state(stock, set_fields={"forced_entry_qty": requested_qty})
+        _log_entry_pipeline(
+            stock,
+            code,
+            "scalping_sizing_final_price_revalidated",
+            **_final_price_sizing_contract_fields(),
+            requested_qty=requested_qty,
+            target_budget=target_budget,
+            safe_budget=safe_budget,
+            safety_ratio=f"{used_safety_ratio:.4f}",
+            actual_order_submitted=False,
+            broker_order_forbidden=requested_qty <= 0,
+            **final_price_sizing_fields,
+        )
+        if requested_qty <= 0:
+            clear_signal_reference(stock)
+            _log_entry_pipeline(
+                stock,
+                code,
+                "blocked_zero_qty_final_price",
+                **_final_price_sizing_contract_fields(),
+                block_reason=final_price_sizing_fields.get("final_price_sizing_reason"),
+                requested_qty=0,
+                actual_order_submitted=False,
+                broker_order_forbidden=True,
+                **final_price_sizing_fields,
+            )
+            return False
 
     greenfield_real_order_subject = not (
         _is_any_simulated_position(stock, strategy)

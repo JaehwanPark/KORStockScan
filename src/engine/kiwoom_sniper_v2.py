@@ -66,6 +66,7 @@ from src.engine.scalping.market_data_enrichment import build_market_data_enrichm
 from src.engine.scalping.position_sizing_allocator import (
     ScalpingSizingContext,
     infer_scalping_venue,
+    max_position_qty_cap_from_budget,
     resolve_scalping_allocation,
 )
 from src.engine.scalping.entry_ai_gate import (
@@ -1280,6 +1281,11 @@ def check_watching_conditions(
                 budget_base_krw=deposit,
                 price_krw=curr_price,
                 absolute_budget_cap_krw=budget_cap,
+                max_position_qty_cap=max_position_qty_cap_from_budget(
+                    deposit,
+                    curr_price,
+                    getattr(TRADING_RULES, "MAX_POSITION_PCT", 0.20),
+                ),
                 min_one_share_floor_enabled=bool(
                     getattr(TRADING_RULES, "SCALPING_MIN_ONE_SHARE_FLOOR_ENABLED", True)
                 ),

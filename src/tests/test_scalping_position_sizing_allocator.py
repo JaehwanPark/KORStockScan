@@ -112,6 +112,23 @@ def test_nxt_and_unknown_venue_force_tier1():
     assert unknown.tier_reason == "unknown_venue_fallback"
 
 
+@pytest.mark.parametrize("venue", [None, "", "UNKNOWN", "UNRESOLVED"])
+def test_missing_or_unknown_venue_does_not_infer_krx_from_clock(venue):
+    decision = allocator.resolve_scalping_allocation(
+        _context("2026-07-21T10:00:00", "A,B,C", venue=venue)
+    )
+
+    assert decision.venue == "UNKNOWN"
+    assert (decision.tier, decision.ratio) == (1, pytest.approx(0.10))
+    assert decision.tier_reason == "unknown_venue_fallback"
+
+
+def test_max_position_qty_cap_is_derived_from_budget_and_price():
+    assert allocator.max_position_qty_cap_from_budget(10_000_000, 100_000, 0.20) == 20
+    assert allocator.max_position_qty_cap_from_budget(10_000_000, 100_000, 2.0) == 100
+    assert allocator.max_position_qty_cap_from_budget(10_000_000, 0, 0.20) == 0
+
+
 def test_invalid_ratio_configuration_fails_closed(monkeypatch):
     monkeypatch.setattr(allocator, "TIER_RATIOS", (0.10, 0.30, 0.20, 0.25, 0.25))
     decision = allocator.resolve_scalping_allocation(

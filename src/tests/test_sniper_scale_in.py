@@ -18250,6 +18250,139 @@ def test_scalp_loss_reentry_rebound_qty_cap_cannot_bypass_zero_central_qty():
     assert capped_decision.binding_caps == ("cash_orderable_qty_cap",)
 
 
+def test_initial_entry_qty_cap_allows_zero_without_one_share_revival():
+    orders, original_qty, effective_qty, applied = (
+        state_handlers._apply_initial_entry_qty_cap(
+            [{"tag": "normal", "qty": 3, "price": 10_000}],
+            max_total_qty=0,
+        )
+    )
+
+    assert original_qty == 3
+    assert effective_qty == 0
+    assert applied is True
+    assert orders[0]["qty"] == 0
+
+
+def test_final_order_price_revalidation_reduces_qty_and_position_cap():
+    context = state_handlers.ScalpingSizingContext(
+        allocation_stage="initial_entry",
+        reference_time=datetime(2026, 7, 21, 10, 0, tzinfo=state_handlers._KST),
+        source_signature="A,B,C",
+        effective_venue="KRX",
+        budget_base_krw=10_000_000,
+        price_krw=100_000,
+        max_position_qty_cap=20,
+    )
+    decision = state_handlers.resolve_scalping_allocation(context)
+
+    final_context, final_decision, orders, fields = (
+        state_handlers._revalidate_scalping_sizing_for_final_order_price(
+            context,
+            decision,
+            [{"tag": "normal", "qty": 20, "price": 100_000}],
+            curr_price=100_000,
+            best_ask=125_000,
+        )
+    )
+
+    assert decision.effective_qty == 20
+    assert final_context.price_krw == 125_000
+    assert final_context.max_position_qty_cap == 16
+    assert final_decision.effective_qty == 16
+    assert orders[0]["qty"] == 16
+    assert fields["final_price_sizing_qty_reduced"] is True
+    assert fields["final_price_sizing_original_qty"] == 20
+    assert fields["final_price_sizing_effective_qty"] == 16
+
+
+def test_final_order_price_revalidation_never_expands_original_qty():
+    context = state_handlers.ScalpingSizingContext(
+        allocation_stage="initial_entry",
+        reference_time=datetime(2026, 7, 21, 10, 0, tzinfo=state_handlers._KST),
+        source_signature="A,B,C",
+        effective_venue="KRX",
+        budget_base_krw=10_000_000,
+        price_krw=125_000,
+        max_position_qty_cap=16,
+    )
+    decision = state_handlers.resolve_scalping_allocation(context)
+
+    _, final_decision, orders, fields = (
+        state_handlers._revalidate_scalping_sizing_for_final_order_price(
+            context,
+            decision,
+            [{"tag": "normal", "qty": 16, "price": 100_000}],
+            curr_price=100_000,
+            best_ask=100_000,
+        )
+    )
+
+    assert final_decision.effective_qty == 16
+    assert orders[0]["qty"] == 16
+    assert fields["final_price_sizing_qty_reduced"] is False
+
+
+def test_final_order_price_revalidation_decision_matches_smaller_existing_plan():
+    context = state_handlers.ScalpingSizingContext(
+        allocation_stage="initial_entry",
+        reference_time=datetime(2026, 7, 21, 10, 0, tzinfo=state_handlers._KST),
+        source_signature="A,B,C",
+        effective_venue="KRX",
+        budget_base_krw=10_000_000,
+        price_krw=100_000,
+        max_position_qty_cap=20,
+    )
+    decision = state_handlers.resolve_scalping_allocation(context)
+
+    final_context, final_decision, orders, fields = (
+        state_handlers._revalidate_scalping_sizing_for_final_order_price(
+            context,
+            decision,
+            [{"tag": "normal", "qty": 7, "price": 100_000}],
+            curr_price=100_000,
+            best_ask=100_000,
+        )
+    )
+
+    assert decision.effective_qty == 20
+    assert final_context.stage_qty_cap == 7
+    assert final_decision.effective_qty == 7
+    assert orders[0]["qty"] == 7
+    assert fields["final_price_sizing_effective_qty"] == 7
+
+
+def test_final_order_price_revalidation_missing_price_returns_zero_decision():
+    context = state_handlers.ScalpingSizingContext(
+        allocation_stage="initial_entry",
+        reference_time=datetime(2026, 7, 21, 10, 0, tzinfo=state_handlers._KST),
+        source_signature="A,B,C",
+        effective_venue="KRX",
+        budget_base_krw=10_000_000,
+        price_krw=0,
+        max_position_qty_cap=20,
+    )
+    decision = state_handlers.resolve_scalping_allocation(context)
+
+    final_context, final_decision, orders, fields = (
+        state_handlers._revalidate_scalping_sizing_for_final_order_price(
+            context,
+            decision,
+            [{"tag": "normal", "qty": 3, "price": 0}],
+            curr_price=0,
+            best_ask=0,
+        )
+    )
+
+    assert final_context.price_krw == 0
+    assert final_context.max_position_qty_cap == 0
+    assert final_context.stage_qty_cap == 0
+    assert final_decision.effective_qty == 0
+    assert orders[0]["qty"] == 0
+    assert fields["final_price_sizing_reason"] == "final_order_price_missing"
+    assert fields["final_price_sizing_effective_qty"] == 0
+
+
 def test_scale_in_blocked_when_buy_side_paused(monkeypatch):
     from src.utils.constants import TRADING_RULES as CONFIG
 

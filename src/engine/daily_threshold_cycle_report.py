@@ -21,6 +21,7 @@ from src.engine.scalping.position_sizing_allocator import (
     ROLLBACK_FORMULA_VERSION as SCALPING_SIZING_ROLLBACK_VERSION,
     ScalpingSizingContext,
     infer_scalping_venue,
+    max_position_qty_cap_from_budget,
     resolve_scalping_allocation,
 )
 from src.utils.constants import (
@@ -5420,6 +5421,11 @@ def _compute_candidate_qty(
             price_krw=int(price or 0),
             safety_ratio=resolved_safety_ratio,
             absolute_budget_cap_krw=max(0, _safe_int(absolute_budget_cap_krw, 0)),
+            max_position_qty_cap=max_position_qty_cap_from_budget(
+                target_budget,
+                price,
+                getattr(TRADING_RULES, "MAX_POSITION_PCT", 0.20),
+            ),
             cash_orderable_qty_cap=_safe_int(cash_orderable_qty_cap, None),
             remaining_position_qty_cap=_safe_int(remaining_position_qty_cap, None),
             stage_qty_cap=_safe_int(stage_qty_cap, None),
@@ -5441,6 +5447,11 @@ def _compute_candidate_qty(
                 price_krw=int(price or 0),
                 safety_ratio=resolved_safety_ratio,
                 absolute_budget_cap_krw=max(0, _safe_int(absolute_budget_cap_krw, 0)),
+                max_position_qty_cap=max_position_qty_cap_from_budget(
+                    target_budget,
+                    price,
+                    getattr(TRADING_RULES, "MAX_POSITION_PCT", 0.20),
+                ),
                 cash_orderable_qty_cap=_safe_int(cash_orderable_qty_cap, None),
                 remaining_position_qty_cap=_safe_int(remaining_position_qty_cap, None),
                 stage_qty_cap=_safe_int(stage_qty_cap, None),

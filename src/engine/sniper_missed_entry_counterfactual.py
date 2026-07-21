@@ -11,6 +11,7 @@ from pathlib import Path
 from src.engine.scalping.position_sizing_allocator import (
     ScalpingSizingContext,
     infer_scalping_venue,
+    max_position_qty_cap_from_budget,
     resolve_scalping_allocation,
 )
 from src.utils.constants import DATA_DIR, TRADING_RULES
@@ -209,6 +210,11 @@ def _sim_virtual_qty(
             budget_base_krw=virtual_budget,
             price_krw=entry_price,
             absolute_budget_cap_krw=max_budget,
+            max_position_qty_cap=max_position_qty_cap_from_budget(
+                virtual_budget,
+                entry_price,
+                getattr(TRADING_RULES, "MAX_POSITION_PCT", 0.20),
+            ),
             simulation=True,
         )
     )
