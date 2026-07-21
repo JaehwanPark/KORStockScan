@@ -1,0 +1,51 @@
+# Microstructure Reaction Context - 2026-07-21
+
+- runtime_effect: `False`
+- decision_authority: `entry_confidence_modifier_source_only`
+- forbidden_uses: `['standalone_buy', 'broker_guard_bypass', 'threshold_mutation', 'provider_route_change', 'bot_restart', 'cap_release']`
+
+## Summary
+- available: `True`
+- row_count: `7246`
+- ok/missing_or_unusable: `148` / `7098`
+- real_submitted_count: `16`
+- status_counts: `{'missing': 6376, 'not_evaluated': 234, 'ok': 148, 'source_quality_partial': 26, 'stale': 462}`
+- entry_reaction_quality_counts: `{'-': 6376, 'favorable_reaction': 1, 'mixed_reaction': 45, 'neutral_unusable': 722, 'risk_context_only': 35, 'weak_reaction': 67}`
+- source_quality_counts: `{'-': 6376, 'ai_score_50_buy_hold_override_no_tick_audit': 1, 'fresh_short_window': 148, 'pre_ai_liquidity_gate': 3, 'pre_ai_overbought_gate': 2, 'snapshot_pre_contract_backfill': 221, 'stale_tick_or_quote': 462, 'tick_aggressor_pressure_unusable': 26, 'watching_ai_cooldown_active': 7}`
+- stage_counts: `{'ai_confirmed': 22, 'ai_confirmed_terminal_no_budget': 10, 'ai_cooldown_blocked': 7, 'ai_holding_review': 411, 'blocked_ai_score': 13, 'blocked_liquidity': 3, 'blocked_overbought': 2, 'latency_block': 159, 'latency_pass': 21, 'opening_rotation_1pct_observed': 96, 'order_bundle_submitted': 8, 'pre_submit_entry_ai_authority_guard_block': 11, 'pre_submit_micro_unavailable_block': 1, 'real_weak_ai_micro_entry_block': 1, 'rising_missed_one_share_entry': 305, 'rising_missed_one_share_entry_blocked': 33, 'rising_missed_tick_absolute_throughput_relief_applied': 3, 'rising_missed_tick_speed_entry_block': 35, 'rising_missed_tp1_candidate_blocked': 261, 'rising_missed_tp1_candidate_deferred': 36, 'rising_missed_tp1_counterfactual_submit_safety': 297, 'scalp_entry_action_decision_snapshot': 343, 'scalping_scanner_fast_precheck': 5168}`
+- v_pw_source_counts: `{'missing': 180, 'not_applicable': 6594, 'ws_0b_latest_strength': 472}`
+- v_pw_rest_fallback_rate_pct: `0.0`
+- v_pw_runtime_support_unusable_count: `7246`
+- ka10046_rest_fallback_quote_freshness_counts: `{}`
+- ka10046_strength_runtime_effect_true_count: `0`
+- ka10046_strength_missing_received_ts_count: `0`
+- ka10046_0b_strength_diff: avg=`0.0` max=`0.0` divergence20=`0` / `0` (`0.0`%)
+- market_data_signed_tape_state_counts: `{'buy_dominated': 651, 'insufficient': 988, 'missing': 1144, 'mixed': 373, 'sell_dominated': 624, 'stale': 3466}`
+- market_data_signed_tape_sample_count_total: `8857`
+- market_data_rest_signed_tape_pressure_usable_true_count: `0`
+- rest_signed_trade_ticks_row_count: `0`
+- rest_signed_trade_ticks_source_counts: `{}`
+- latency_true_ofi_direct_canary_signed_tape: sample_total=`2453` net_buy_volume_sum=`-27238` sell_dominated=`169` latest_single_sell_dominated=`211`
+- latency_true_ofi_direct_canary_signed_tape_latest_side_counts: `{'BUY': 288, 'SELL': 211, 'missing': 6747}`
+- latency_true_ofi_direct_canary_tape_block_reason_counts: `{'missing': 6747, 'signed_tape_sell_dominated': 169, 'tape_support_ok_missing_pressure': 330}`
+- tick_aggressor_source_counts: `{'kiwoom_0b_signed_trade_volume': 1020, 'missing_aggressor_side': 27, 'price_change_heuristic': 33}`
+- tick_trade_value_source_counts: `{'1313': 180}`
+- tick_trade_value_1313_missing_rate_pct: `0.0`
+- trade_volume_source_counts: `{'1030_1031_sum': 180}`
+- trade_volume_1030_1031_vs_15_mismatch: `180` / `180` (`100.0`%)
+- kiwoom_0b_latest_stock_count: `778`
+- kiwoom_0b_trade_value_source_counts: `{}`
+- kiwoom_0b_1313_missing_rate_pct: `0.0`
+- kiwoom_0b_trade_volume_source_counts: `{}`
+- kiwoom_0b_1030_1031_vs_15_mismatch: `0` / `0` (`0.0`%)
+- ka10003_buy_dominance_observation_source_counts: `{}`
+- ka10003_buy_dominance_observation_trade_value_source_counts: `{}`
+- ka10003_buy_dominance_observation_inside_spread_count: `0`
+- ka10003_buy_dominance_observation_split_vs_15_mismatch: `0` / `0` (`0.0`%)
+- avg_ask_sweep_score: `47.838`
+- avg_post_sweep_hold_score: `49.889`
+- avg_bid_replenishment_score: `53.543`
+- max_vi_proximity_risk: `17`
+- warnings: `[]`
+- code_improvement_order_count: `0`
+- top_code_improvement_orders: `[]`
