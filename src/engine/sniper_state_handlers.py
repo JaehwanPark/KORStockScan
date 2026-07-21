@@ -26667,6 +26667,15 @@ def _evaluate_rising_missed_tick_speed_entry_guard(
     tp1_micro_confidence = _safe_float(
         tp1_context.get("rising_missed_tp1_submit_context_micro_confidence"), 0.0
     )
+    tp1_true_ofi = _safe_float(
+        tp1_context.get("rising_missed_tp1_submit_context_true_ofi_ewma"), -1.0
+    )
+    tp1_pressure = _safe_float(
+        tp1_context.get("rising_missed_tp1_submit_context_pressure_ewma"), 0.0
+    )
+    tp1_depth_ratio = _safe_float(
+        tp1_context.get("rising_missed_tp1_submit_context_top_depth_ratio"), 0.0
+    )
     tp1_ws_micro_ready = _truthy_field(
         tp1_context.get("rising_missed_tp1_submit_context_ws_micro_ready")
     )
@@ -26725,7 +26734,36 @@ def _evaluate_rising_missed_tick_speed_entry_guard(
         ),
         "no_large_sell": not large_sell_detected,
     }
-    relief_applied = bool(is_rising_missed and all(relief_checks.values()))
+    absolute_throughput_path = bool(
+        relief_checks["only_relative_accel_slow"]
+        and relief_checks["absolute_tick_throughput"]
+        and relief_checks["fresh_quote"]
+        and relief_checks["positive_current_micro"]
+        and relief_checks["fresh_tp1_support"]
+    )
+    fresh_tp1_micro_path = bool(
+        relief_checks["only_relative_accel_slow"]
+        and relief_checks["fresh_quote"]
+        and relief_checks["fresh_tp1_support"]
+        and tp1_context_age_sec is not None
+        and tp1_context_age_sec <= 45.0
+        and tp1_true_ofi >= 0.0
+        and tp1_pressure >= 80.0
+        and tp1_depth_ratio >= 2.0
+        and orderbook_state not in {"bearish", "strong_bearish"}
+    )
+    relief_applied = bool(
+        is_rising_missed
+        and relief_checks["enabled"]
+        and relief_checks["active_date"]
+        and relief_checks["no_large_sell"]
+        and (absolute_throughput_path or fresh_tp1_micro_path)
+    )
+    relief_path = (
+        "fresh_tp1_micro"
+        if fresh_tp1_micro_path
+        else "absolute_tick_throughput" if absolute_throughput_path else "none"
+    )
     reasons = []
     if missing_window:
         reasons.append("tick_window_span_sec_missing")
@@ -26773,6 +26811,7 @@ def _evaluate_rising_missed_tick_speed_entry_guard(
         "rising_missed_tick_absolute_throughput_relief_active_date": relief_active_date,
         "rising_missed_tick_absolute_throughput_relief_current_date": relief_current_date,
         "rising_missed_tick_absolute_throughput_relief_applied": relief_applied,
+        "rising_missed_tick_absolute_throughput_relief_path": relief_path,
         "rising_missed_tick_absolute_throughput_relief_checks": ",".join(
             key for key, passed in relief_checks.items() if passed
         ),
@@ -26794,6 +26833,9 @@ def _evaluate_rising_missed_tick_speed_entry_guard(
         "rising_missed_tick_absolute_tp1_micro_confidence": (
             f"{tp1_micro_confidence:.3f}"
         ),
+        "rising_missed_tick_absolute_tp1_true_ofi": f"{tp1_true_ofi:.6f}",
+        "rising_missed_tick_absolute_tp1_pressure": f"{tp1_pressure:.3f}",
+        "rising_missed_tick_absolute_tp1_depth_ratio": f"{tp1_depth_ratio:.4f}",
         "rising_missed_tick_absolute_large_sell_detected": large_sell_detected,
         "metric_role": (
             "bounded_tunable"

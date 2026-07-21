@@ -8582,6 +8582,153 @@ def test_rising_missed_tick_speed_guard_relies_on_absolute_throughput_when_bulli
     assert decision["runtime_effect"] is True
     assert decision["broker_order_forbidden"] is False
 
+    stale_quote = state_handlers._evaluate_rising_missed_tick_speed_entry_guard(
+        stock=stock,
+        runtime={},
+        latency_gate={},
+        ws_data={
+            "curr": 10000,
+            "last_ws_update_ts": time.time(),
+            "market_data_effective_quote_age_ms": 501.0,
+        },
+        orderbook_fields={
+            "orderbook_micro_ready": True,
+            "orderbook_micro_state": "bullish",
+            "orderbook_micro_qi": 0.92,
+            "orderbook_micro_ofi_norm": 5.1,
+        },
+        microstructure_fields={
+            "tick_window_span_sec": 3.0,
+            "recent_5tick_seconds": 2.0,
+            "tick_sample_count": 10,
+            "tick_acceleration_ratio": 0.0,
+        },
+        rising_missed_entry_lineage=True,
+    )
+
+    assert stale_quote["blocked"] is True
+    assert stale_quote["rising_missed_tick_absolute_throughput_relief_path"] == "none"
+
+
+def test_rising_missed_tick_speed_guard_reuses_strong_fresh_tp1_micro(
+    monkeypatch,
+):
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RISING_MISSED_TICK_ABSOLUTE_THROUGHPUT_RELIEF_ENABLED",
+        "true",
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RISING_MISSED_TICK_ABSOLUTE_THROUGHPUT_RELIEF_ACTIVE_DATE",
+        state_handlers.datetime.now(tz=state_handlers._KST).strftime("%Y-%m-%d"),
+    )
+    now_ts = time.time()
+    stock = {
+        "rising_missed_normal_buy_bridge_allowed": True,
+        "rising_missed_tp1_submit_context_at": now_ts - 35.0,
+        "rising_missed_tp1_submit_context_evaluation_id": "eval-fresh-tp1-micro",
+        "rising_missed_tp1_submit_context_support_count": 2,
+        "rising_missed_tp1_submit_context_micro_confidence": 0.85,
+        "rising_missed_tp1_submit_context_true_ofi_ewma": 0.00005,
+        "rising_missed_tp1_submit_context_pressure_ewma": 86.59,
+        "rising_missed_tp1_submit_context_top_depth_ratio": 6.375,
+        "rising_missed_tp1_submit_context_ws_micro_ready": True,
+    }
+
+    decision = state_handlers._evaluate_rising_missed_tick_speed_entry_guard(
+        stock=stock,
+        runtime={},
+        latency_gate={},
+        ws_data={"market_data_effective_quote_age_ms": 1.0},
+        orderbook_fields={
+            "orderbook_micro_ready": False,
+            "orderbook_micro_state": "insufficient",
+            "orderbook_micro_qi": 0.50,
+            "orderbook_micro_ofi_norm": 0.001,
+        },
+        microstructure_fields={
+            "tick_window_span_sec": 58.0,
+            "recent_5tick_seconds": 49.0,
+            "tick_sample_count": 10,
+            "tick_acceleration_ratio": 0.163,
+        },
+        rising_missed_entry_lineage=True,
+    )
+
+    assert decision["blocked"] is False
+    assert decision["reason"] == "tick_speed_absolute_throughput_relief"
+    assert decision["rising_missed_tick_absolute_throughput_relief_applied"] is True
+    assert (
+        decision["rising_missed_tick_absolute_throughput_relief_path"]
+        == "fresh_tp1_micro"
+    )
+    assert decision["broker_order_forbidden"] is False
+
+    bearish = state_handlers._evaluate_rising_missed_tick_speed_entry_guard(
+        stock=stock,
+        runtime={},
+        latency_gate={},
+        ws_data={"market_data_effective_quote_age_ms": 1.0},
+        orderbook_fields={
+            "orderbook_micro_ready": True,
+            "orderbook_micro_state": "bearish",
+            "orderbook_micro_qi": 0.30,
+            "orderbook_micro_ofi_norm": -1.2,
+        },
+        microstructure_fields={
+            "tick_window_span_sec": 58.0,
+            "recent_5tick_seconds": 49.0,
+            "tick_sample_count": 10,
+            "tick_acceleration_ratio": 0.163,
+        },
+        rising_missed_entry_lineage=True,
+    )
+
+    assert bearish["blocked"] is True
+    assert bearish["rising_missed_tick_absolute_throughput_relief_path"] == "none"
+
+
+def test_rising_missed_tick_speed_fresh_tp1_micro_keeps_weak_pressure_blocked(
+    monkeypatch,
+):
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RISING_MISSED_TICK_ABSOLUTE_THROUGHPUT_RELIEF_ENABLED",
+        "true",
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RISING_MISSED_TICK_ABSOLUTE_THROUGHPUT_RELIEF_ACTIVE_DATE",
+        state_handlers.datetime.now(tz=state_handlers._KST).strftime("%Y-%m-%d"),
+    )
+    stock = {
+        "rising_missed_normal_buy_bridge_allowed": True,
+        "rising_missed_tp1_submit_context_at": time.time() - 35.0,
+        "rising_missed_tp1_submit_context_evaluation_id": "eval-weak-tp1-micro",
+        "rising_missed_tp1_submit_context_support_count": 2,
+        "rising_missed_tp1_submit_context_micro_confidence": 0.85,
+        "rising_missed_tp1_submit_context_true_ofi_ewma": 0.0029,
+        "rising_missed_tp1_submit_context_pressure_ewma": 32.24,
+        "rising_missed_tp1_submit_context_top_depth_ratio": 0.477,
+        "rising_missed_tp1_submit_context_ws_micro_ready": True,
+    }
+
+    decision = state_handlers._evaluate_rising_missed_tick_speed_entry_guard(
+        stock=stock,
+        runtime={},
+        latency_gate={},
+        ws_data={"market_data_effective_quote_age_ms": 1.0},
+        orderbook_fields={"orderbook_micro_ready": False},
+        microstructure_fields={
+            "tick_window_span_sec": 58.0,
+            "recent_5tick_seconds": 49.0,
+            "tick_sample_count": 10,
+            "tick_acceleration_ratio": 0.163,
+        },
+        rising_missed_entry_lineage=True,
+    )
+
+    assert decision["blocked"] is True
+    assert decision["block_reason"] == "tick_acceleration_ratio_lt_1"
+    assert decision["rising_missed_tick_absolute_throughput_relief_path"] == "none"
+
 
 def test_rising_missed_tick_speed_absolute_throughput_does_not_bypass_bearish_book(
     monkeypatch,

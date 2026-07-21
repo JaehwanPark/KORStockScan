@@ -2834,6 +2834,9 @@ def test_latency_true_ofi_direct_canary_dynamic_age_band_allows_strong_ws_tape(
         "stock": {
             "rising_missed_entry_lineage": True,
             "price_delta_since_first_seen_pct": "4.2",
+            "rising_missed_tp1_submit_context_fresh": True,
+            "rising_missed_tp1_submit_context_at": time.time(),
+            "rising_missed_tp1_submit_context_support_count": 2,
         },
         "ws_data": {
             "tick_aggressor_pressure_usable": True,
@@ -2894,6 +2897,142 @@ def test_latency_true_ofi_direct_canary_dynamic_age_band_allows_strong_ws_tape(
     assert blocked["latency_true_ofi_direct_canary_dynamic_age_band_eligible"] is False
     assert blocked["latency_true_ofi_direct_canary_reason"] == (
         "ws_age_above_direct_canary_cap"
+    )
+
+
+def test_latency_true_ofi_dynamic_age_band_allows_bounded_low_sample_buy_burst(
+    monkeypatch,
+):
+    _enable_latency_true_ofi_direct_canary(monkeypatch)
+    active_date = datetime.now(entry_latency_module._KST).strftime("%Y-%m-%d")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_DYNAMIC_AGE_BAND_ENABLED",
+        "true",
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_DYNAMIC_AGE_BAND_ACTIVE_DATE",
+        active_date,
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_DYNAMIC_AGE_BAND_MIN_SAMPLES",
+        "25",
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_DYNAMIC_AGE_BAND_MAX_WS_AGE_MS",
+        "1200",
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_DYNAMIC_AGE_BAND_MAX_SPREAD_BPS",
+        "70",
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_DYNAMIC_AGE_BAND_MIN_SIGNED_TAPE_BUY_RATIO",
+        "100",
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_DYNAMIC_AGE_BAND_MIN_SIGNED_TAPE_SAMPLES",
+        "4",
+    )
+    common = {
+        "stock": {
+            "rising_missed_entry_lineage": True,
+            "price_delta_since_first_seen_pct": "1.10",
+            "source_signature": "BID_IMBALANCE_SURGE,VOLUME_SURGE_POSITIVE",
+            "rising_missed_tp1_submit_context_fresh": True,
+            "rising_missed_tp1_submit_context_at": time.time(),
+            "rising_missed_tp1_submit_context_support_count": 2,
+        },
+        "ws_data": {
+            "orderbook_micro_state": "neutral",
+            "recent_trade_ticks": [
+                {
+                    "signed_trade_volume": value,
+                    "aggressor_source": "kiwoom_0b_signed_trade_volume",
+                }
+                for value in ("+813", "+500", "+400", "+217")
+            ],
+        },
+        "strategy_id": "SCALPING",
+        "policy_decision": entry_latency_module.EntryDecision.REJECT_DANGER,
+        "effective_decision": entry_latency_module.EntryDecision.REJECT_DANGER,
+        "latency_status": SimpleNamespace(quote_stale=False),
+        "danger_reasons": ["spread_above_caution_below_guard_cap"],
+        "spread_bps": 67.935,
+        "signal_score": 0.0,
+        "micro_estimator_reason": "ws_state_stale_or_missing",
+        "estimator_context": {
+            "latency_false_negative_remeasure_true_ofi_ewma": 0.0008,
+            "latency_false_negative_remeasure_true_ofi_sample_count": 29,
+            "latency_false_negative_remeasure_ws_age_ms": 1113.572,
+            "latency_false_negative_remeasure_source_state": (
+                "fresh_ws_order_flow_delta"
+            ),
+        },
+        "danger_relief_forbidden": False,
+    }
+
+    fields = entry_latency_module._latency_true_ofi_direct_canary_fields(**common)
+
+    assert fields["latency_true_ofi_direct_canary_applied"] is True
+    assert fields["latency_true_ofi_direct_canary_dynamic_age_band_eligible"] is True
+    assert fields["latency_true_ofi_direct_canary_dynamic_age_band_applied"] is True
+    assert fields["latency_true_ofi_direct_canary_reason"] == (
+        "direct_canary_dynamic_age_signed_tape_allow"
+    )
+    assert fields["latency_true_ofi_direct_canary_dynamic_age_band_min_samples"] == 25
+    assert (
+        fields[
+            "latency_true_ofi_direct_canary_dynamic_age_band_min_signed_tape_samples"
+        ]
+        == 4
+    )
+
+    negative_ofi = {
+        **common,
+        "estimator_context": {
+            **common["estimator_context"],
+            "latency_false_negative_remeasure_true_ofi_ewma": -0.001,
+        },
+    }
+    blocked = entry_latency_module._latency_true_ofi_direct_canary_fields(
+        **negative_ofi
+    )
+
+    assert blocked["latency_true_ofi_direct_canary_applied"] is False
+    assert blocked["latency_true_ofi_direct_canary_dynamic_age_band_eligible"] is False
+
+    thin_tape = {
+        **common,
+        "ws_data": {
+            **common["ws_data"],
+            "recent_trade_ticks": common["ws_data"]["recent_trade_ticks"][:3],
+        },
+    }
+    thin_tape_blocked = entry_latency_module._latency_true_ofi_direct_canary_fields(
+        **thin_tape
+    )
+
+    assert thin_tape_blocked["latency_true_ofi_direct_canary_applied"] is False
+    assert (
+        thin_tape_blocked["latency_true_ofi_direct_canary_dynamic_age_band_eligible"]
+        is False
+    )
+
+    stale_tp1 = {
+        **common,
+        "stock": {
+            **common["stock"],
+            "rising_missed_tp1_submit_context_at": time.time() - 61.0,
+        },
+    }
+    stale_tp1_blocked = entry_latency_module._latency_true_ofi_direct_canary_fields(
+        **stale_tp1
+    )
+
+    assert stale_tp1_blocked["latency_true_ofi_direct_canary_applied"] is False
+    assert (
+        stale_tp1_blocked["latency_true_ofi_direct_canary_dynamic_age_band_eligible"]
+        is False
     )
 
 
