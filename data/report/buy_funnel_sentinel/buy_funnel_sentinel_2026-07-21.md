@@ -15,23 +15,23 @@
 
 ## 근거
 
-- as_of: `2026-07-21T13:40:02`
+- as_of: `2026-07-21T15:20:03`
 - baseline_date: `2026-07-20`
 - ai_confirmed unique: `13`
-- budget_pass unique: `90`
+- budget_pass unique: `100`
 - latency_pass unique: `13`
 - submitted unique: `6`
-- holding_started unique: `3`
-- budget/ai unique: `692.3%` (baseline `340.0`)
-- submitted/ai unique: `46.2%` (baseline `70.0`)
+- holding_started unique: `4`
+- budget/ai unique: `769.2%` (baseline `365.2`)
+- submitted/ai unique: `46.2%` (baseline `73.9`)
 - critical submit thresholds: `submitted/ai < 20.0%` or `submitted/budget <= 10.0%` (floors: ai>=20, budget>=3)
-- top blockers: `latency_block:latency_state_danger=120, blocked_strength_momentum:below_strength_base=29, blocked_zero_qty:-=19, pre_submit_entry_ai_authority_guard_block:entry_ai_score_unavailable=11, blocked_vpw:-=11`
+- top blockers: `latency_block:latency_state_danger=146, blocked_strength_momentum:below_strength_base=29, blocked_zero_qty:-=19, pre_submit_entry_ai_authority_guard_block:entry_ai_score_unavailable=11, blocked_vpw:-=11`
 - swing blockers: `-`
 - upstream blockers: `blocked_ai_score:ai_score_50_buy_hold_override=4, blocked_ai_score:score_54.0=3, blocked_ai_score:score_0.0=2, blocked_ai_score:score_57.0=2, blocked_ai_score:score_72.0=2`
 - AI terminal reasons: `ai_terminal:entry_policy_no_buy_score_prior=9, ai_terminal:first_ai_wait_big_bite_not_confirmed=1`
-- latency blockers: `latency_block:latency_state_danger=120, latency_block:tp1_direct_recheck_expired=1`
+- latency blockers: `latency_block:latency_state_danger=146, latency_block:tp1_direct_recheck_expired=2`
 - price guards: `pre_submit_entry_ai_authority_guard_block:entry_ai_score_unavailable=11, entry_ai_price_canary_fallback:skip_low_confidence=1`
-- quote refresh: `attempted=67, applied=61, latency_recovered=12, submitted_after_refresh=4`
+- quote refresh: `attempted=75, applied=68, latency_recovered=12, submitted_after_refresh=4`
 - quote refresh downstream: `{'order_bundle_submitted': 4, 'price_guard_or_revalidation': 8}`
 
 ## 금지된 자동변경
@@ -50,6 +50,6 @@
 
 ## Window Summary
 
-- `5m`: ai=0, budget=1, latency=0, submitted=0, top=`latency_block:latency_state_danger=1`, swing=`-`, upstream=`-`, ai_terminal=`-`
-- `10m`: ai=0, budget=2, latency=0, submitted=0, top=`latency_block:latency_state_danger=3`, swing=`-`, upstream=`-`, ai_terminal=`-`
-- `30m`: ai=0, budget=7, latency=0, submitted=0, top=`latency_block:latency_state_danger=8`, swing=`-`, upstream=`-`, ai_terminal=`-`
+- `5m`: ai=0, budget=3, latency=0, submitted=0, top=`latency_block:latency_state_danger=2`, swing=`-`, upstream=`-`, ai_terminal=`-`
+- `10m`: ai=0, budget=3, latency=0, submitted=0, top=`latency_block:latency_state_danger=2`, swing=`-`, upstream=`-`, ai_terminal=`-`
+- `30m`: ai=0, budget=9, latency=0, submitted=0, top=`latency_block:latency_state_danger=9, latency_block:tp1_direct_recheck_expired=1`, swing=`-`, upstream=`-`, ai_terminal=`-`
