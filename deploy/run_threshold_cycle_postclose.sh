@@ -788,9 +788,26 @@ for i in $(seq 1 "$MAX_ITERATIONS"); do
       --max-cpu-busy-pct "$MAX_CPU_BUSY_PCT"
   )"
   echo "$out"
-  completed="$(printf '%s' "$out" | "$VENV_PY" -c 'import json,sys; print(str(json.load(sys.stdin).get("completed", False)).lower())')"
-  status="$(printf '%s' "$out" | "$VENV_PY" -c 'import json,sys; print(json.load(sys.stdin).get("status", ""))')"
-  paused_reason="$(printf '%s' "$out" | "$VENV_PY" -c 'import json,sys; print(json.load(sys.stdin).get("paused_reason") or "")')"
+  summary_json="$(
+    printf '%s\n' "$out" | "$VENV_PY" -c '
+import json
+import sys
+
+for line in reversed(sys.stdin.read().splitlines()):
+    try:
+        payload = json.loads(line)
+    except json.JSONDecodeError:
+        continue
+    if isinstance(payload, dict):
+        print(json.dumps(payload, ensure_ascii=True, separators=(",", ":")))
+        break
+else:
+    raise SystemExit("backfill summary JSON object missing from stdout")
+'
+  )"
+  completed="$(printf '%s' "$summary_json" | "$VENV_PY" -c 'import json,sys; print(str(json.load(sys.stdin).get("completed", False)).lower())')"
+  status="$(printf '%s' "$summary_json" | "$VENV_PY" -c 'import json,sys; print(json.load(sys.stdin).get("status", ""))')"
+  paused_reason="$(printf '%s' "$summary_json" | "$VENV_PY" -c 'import json,sys; print(json.load(sys.stdin).get("paused_reason") or "")')"
   if [ "$completed" = "true" ]; then
     break
   fi

@@ -864,6 +864,9 @@ def test_postclose_wrapper_marks_availability_guard_pause_as_fail():
     assert "[PAUSED] threshold-cycle postclose" in script
     assert "[FAIL] threshold-cycle postclose" in script
     assert "paused_by_availability_guard" in script
+    assert "for line in reversed(sys.stdin.read().splitlines())" in script
+    assert "backfill summary JSON object missing from stdout" in script
+    assert 'completed="$(printf \'%s\' "$summary_json"' in script
     assert 'if [ "${completed:-false}" != "true" ]; then' in script
     assert "compact collection incomplete" in script
 
