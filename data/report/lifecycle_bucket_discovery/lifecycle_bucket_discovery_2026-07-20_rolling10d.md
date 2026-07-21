@@ -25,7 +25,7 @@
 - sim_eligible_after_resolution: `0`
 - resolution_states: `{'resolution_blocked_thin_sample': 1}`
 
-- conflict_parent=`lifecycle_flow:combo_lifecycle_flow:entry_score_parent=score_unobserved|entry_so` state=`resolution_blocked_thin_sample` tag=`sample 부족 keep collecting` ev_before=`0.7587` ev_after=`0.7587` children=`2` sq_gap=`0` strategy_reversal=`0` exclude=`0` collecting=`1` positive_thin=`0` sim_eligible=`False` live_blockers=`['sample_below_live_floor']` 
+- conflict_parent=`lifecycle_flow:combo_lifecycle_flow:entry_score_parent=score_unobserved|entry_so` state=`resolution_blocked_thin_sample` tag=`sample 부족 keep collecting` ev_before=`0.7587` ev_after=`0.7587` children=`2` sq_gap=`0` strategy_reversal=`0` exclude=`0` collecting=`1` positive_thin=`0` sim_eligible=`False` live_blockers=`['sample_below_live_floor']`
 
 ## 근거
 

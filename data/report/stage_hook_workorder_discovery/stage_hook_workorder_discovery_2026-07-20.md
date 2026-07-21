@@ -60,4 +60,3 @@
 - readiness_tier: `producer_needed`
 - evidence_score: `51.0`
 - forbidden_uses: `account guard bypass, bot restart, broker guard bypass, broker order submit, cooldown guard bypass, emergency stop override, entry decision override, exit decision override, hard stop override, order guard bypass, position cap release, protect stop override, provider change, quantity guard bypass, real order enablement, threshold mutation, real_1share_as_preapply_primary_ev, real_one_share_as_preapply_primary_ev, merge_real_pnl_with_sim_probe_ev, runtime_change_from_preapply_real_sample`
-

@@ -23,4 +23,3 @@
 - initial_runtime_state: `disabled`
 - requires_separate_runtime_apply_candidate: `True`
 - action_namespace_scope: `review_only_labels_not_runtime_actions`
-

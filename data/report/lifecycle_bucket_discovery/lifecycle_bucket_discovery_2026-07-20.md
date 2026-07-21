@@ -25,7 +25,7 @@
 - sim_eligible_after_resolution: `0`
 - resolution_states: `{'resolution_blocked_source_quality': 1}`
 
-- conflict_parent=`lifecycle_flow:combo_lifecycle_flow:entry_score_parent=score_unobserved|entry_so` state=`resolution_blocked_source_quality` tag=`source-quality 때문에 판정 불가` ev_before=`-0.432715` ev_after=`-0.432715` children=`2` sq_gap=`2` strategy_reversal=`0` exclude=`0` collecting=`0` positive_thin=`0` sim_eligible=`False` live_blockers=`['source_quality_gap_children', 'parent_ev_not_positive']` 
+- conflict_parent=`lifecycle_flow:combo_lifecycle_flow:entry_score_parent=score_unobserved|entry_so` state=`resolution_blocked_source_quality` tag=`source-quality 때문에 판정 불가` ev_before=`-0.432715` ev_after=`-0.432715` children=`2` sq_gap=`2` strategy_reversal=`0` exclude=`0` collecting=`0` positive_thin=`0` sim_eligible=`False` live_blockers=`['source_quality_gap_children', 'parent_ev_not_positive']`
 
 ## 근거
 

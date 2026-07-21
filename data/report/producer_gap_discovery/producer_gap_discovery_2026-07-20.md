@@ -37,4 +37,3 @@
 - `producer_gap_sim_scale_in_counterfactual_gap_missing` type=`sim_scale_in_counterfactual_gap_missing` priority=`high` samples=`18924`
 
 ## Code Improvement Orders
-
