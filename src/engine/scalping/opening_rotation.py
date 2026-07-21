@@ -216,6 +216,97 @@ def _blocked(reason: str, state: dict[str, Any], **fields: Any) -> dict[str, Any
     }
 
 
+def _entry_micro_gate_preview(
+    packet: dict[str, Any], config: EntryConfig
+) -> tuple[dict[str, Any], tuple[tuple[bool, str], ...]]:
+    """Expose downstream gate readiness before the pullback state is complete."""
+
+    spread_bp = _number(packet.get("spread_bp"), 999.0)
+    buy_pressure = _number(packet.get("buy_pressure_10t"), 0.0)
+    trusted_ticks = int(_number(packet.get("tick_aggressor_trusted_count"), 0.0))
+    tick_acceleration = _number(packet.get("tick_acceleration_ratio"), 0.0)
+    tick_price_change = _number(packet.get("price_change_10t_pct"), 0.0)
+    volume_ratio = _number(packet.get("volume_ratio_pct"), 0.0)
+    vwap_available = _boolean(packet.get("micro_vwap_available"))
+    vwap_distance = _number(packet.get("curr_vs_micro_vwap_bp"), -999.0)
+    ask_sweep = _number(packet.get("microstructure_reaction_ask_sweep_score"), 0.0)
+    post_sweep_hold = _number(
+        packet.get("microstructure_reaction_post_sweep_hold_score"), 0.0
+    )
+    bid_replenishment = _number(
+        packet.get("microstructure_reaction_bid_replenishment_score"), 0.0
+    )
+    wall_risk = _number(
+        packet.get("microstructure_reaction_wall_replenishment_risk_score"), 100.0
+    )
+    vi_risk = _number(packet.get("microstructure_reaction_vi_proximity_risk"), 100.0)
+    checks = (
+        (0.0 < spread_bp <= config.max_spread_bp, "spread_too_wide"),
+        (buy_pressure >= config.min_buy_pressure_pct, "buy_pressure_below_min"),
+        (trusted_ticks >= config.min_trusted_ticks, "trusted_tick_sample_below_min"),
+        (
+            tick_acceleration >= config.min_tick_acceleration,
+            "tick_acceleration_below_min",
+        ),
+        (
+            tick_price_change >= config.min_tick_price_change_pct,
+            "tick_price_change_below_min",
+        ),
+        (
+            volume_ratio >= config.min_volume_ratio_pct,
+            "volume_reacceleration_below_min",
+        ),
+        (vwap_available, "micro_vwap_unavailable"),
+        (
+            config.min_vwap_distance_bp <= vwap_distance <= config.max_vwap_distance_bp,
+            "micro_vwap_distance_out_of_range",
+        ),
+        (ask_sweep >= config.min_ask_sweep_score, "ask_sweep_below_min"),
+        (
+            post_sweep_hold >= config.min_post_sweep_hold_score,
+            "post_sweep_hold_below_min",
+        ),
+        (
+            bid_replenishment >= config.min_bid_replenishment_score,
+            "bid_replenishment_below_min",
+        ),
+        (wall_risk <= config.max_wall_risk_score, "wall_replenishment_risk"),
+        (vi_risk <= config.max_vi_risk_score, "vi_proximity_risk"),
+    )
+    failed_reasons = [reason for passed, reason in checks if not passed]
+    metrics = {
+        "spread_bp": spread_bp,
+        "buy_pressure_10t": buy_pressure,
+        "tick_aggressor_trusted_count": trusted_ticks,
+        "tick_acceleration_ratio": tick_acceleration,
+        "price_change_10t_pct": tick_price_change,
+        "volume_ratio_pct": volume_ratio,
+        "micro_vwap_available": vwap_available,
+        "curr_vs_micro_vwap_bp": vwap_distance,
+        "microstructure_reaction_ask_sweep_score": ask_sweep,
+        "microstructure_reaction_post_sweep_hold_score": post_sweep_hold,
+        "microstructure_reaction_bid_replenishment_score": bid_replenishment,
+        "microstructure_reaction_wall_replenishment_risk_score": wall_risk,
+        "microstructure_reaction_vi_proximity_risk": vi_risk,
+        "opening_rotation_downstream_preview_evaluated": True,
+        "opening_rotation_downstream_preview_passed": not failed_reasons,
+        "opening_rotation_downstream_preview_pass_count": (
+            len(checks) - len(failed_reasons)
+        ),
+        "opening_rotation_downstream_preview_total_count": len(checks),
+        "opening_rotation_downstream_preview_first_blocker": (
+            failed_reasons[0] if failed_reasons else "all_downstream_gates_ready"
+        ),
+        "opening_rotation_downstream_preview_blockers": (
+            ",".join(failed_reasons) if failed_reasons else "-"
+        ),
+        "opening_rotation_downstream_preview_decision_authority": (
+            "observation_only_no_pattern_or_submit_bypass"
+        ),
+    }
+    return metrics, checks
+
+
 def evaluate_entry(
     *,
     previous_state: dict[str, Any] | None,
@@ -299,6 +390,19 @@ def evaluate_entry(
     if tick_quality != "fresh_computed" or not pressure_usable:
         return _blocked("trusted_tick_context_unavailable", state, **common)
 
+    micro_metrics, checks = _entry_micro_gate_preview(packet, config)
+    common.update(
+        {
+            "quote_age_ms": quote_age_ms,
+            "quote_stale_threshold_ms": quote_stale_threshold_ms,
+            "quote_stale": quote_stale,
+            "tick_context_stale": tick_stale,
+            "tick_context_quality": tick_quality,
+            "tick_aggressor_pressure_usable": pressure_usable,
+            **micro_metrics,
+        }
+    )
+
     pullback_seen = bool(state.get("pullback_seen")) or (
         config.min_pullback_pct <= pullback_pct <= config.max_pullback_pct
     )
@@ -322,83 +426,9 @@ def evaluate_entry(
     if curr_price <= previous_price:
         return _blocked("reacceleration_not_observed", state, **common)
 
-    spread_bp = _number(packet.get("spread_bp"), 999.0)
-    buy_pressure = _number(packet.get("buy_pressure_10t"), 0.0)
-    trusted_ticks = int(_number(packet.get("tick_aggressor_trusted_count"), 0.0))
-    tick_acceleration = _number(packet.get("tick_acceleration_ratio"), 0.0)
-    tick_price_change = _number(packet.get("price_change_10t_pct"), 0.0)
-    volume_ratio = _number(packet.get("volume_ratio_pct"), 0.0)
-    vwap_available = _boolean(packet.get("micro_vwap_available"))
-    vwap_distance = _number(packet.get("curr_vs_micro_vwap_bp"), -999.0)
-    ask_sweep = _number(packet.get("microstructure_reaction_ask_sweep_score"), 0.0)
-    post_sweep_hold = _number(
-        packet.get("microstructure_reaction_post_sweep_hold_score"), 0.0
-    )
-    bid_replenishment = _number(
-        packet.get("microstructure_reaction_bid_replenishment_score"), 0.0
-    )
-    wall_risk = _number(
-        packet.get("microstructure_reaction_wall_replenishment_risk_score"), 100.0
-    )
-    vi_risk = _number(packet.get("microstructure_reaction_vi_proximity_risk"), 100.0)
-    metrics = {
-        **common,
-        "quote_age_ms": quote_age_ms,
-        "quote_stale_threshold_ms": quote_stale_threshold_ms,
-        "quote_stale": quote_stale,
-        "tick_context_stale": tick_stale,
-        "tick_context_quality": tick_quality,
-        "tick_aggressor_pressure_usable": pressure_usable,
-        "spread_bp": spread_bp,
-        "buy_pressure_10t": buy_pressure,
-        "tick_aggressor_trusted_count": trusted_ticks,
-        "tick_acceleration_ratio": tick_acceleration,
-        "price_change_10t_pct": tick_price_change,
-        "volume_ratio_pct": volume_ratio,
-        "micro_vwap_available": vwap_available,
-        "curr_vs_micro_vwap_bp": vwap_distance,
-        "microstructure_reaction_ask_sweep_score": ask_sweep,
-        "microstructure_reaction_post_sweep_hold_score": post_sweep_hold,
-        "microstructure_reaction_bid_replenishment_score": bid_replenishment,
-        "microstructure_reaction_wall_replenishment_risk_score": wall_risk,
-        "microstructure_reaction_vi_proximity_risk": vi_risk,
-    }
-    checks = (
-        (0.0 < spread_bp <= config.max_spread_bp, "spread_too_wide"),
-        (buy_pressure >= config.min_buy_pressure_pct, "buy_pressure_below_min"),
-        (trusted_ticks >= config.min_trusted_ticks, "trusted_tick_sample_below_min"),
-        (
-            tick_acceleration >= config.min_tick_acceleration,
-            "tick_acceleration_below_min",
-        ),
-        (
-            tick_price_change >= config.min_tick_price_change_pct,
-            "tick_price_change_below_min",
-        ),
-        (
-            volume_ratio >= config.min_volume_ratio_pct,
-            "volume_reacceleration_below_min",
-        ),
-        (vwap_available, "micro_vwap_unavailable"),
-        (
-            config.min_vwap_distance_bp <= vwap_distance <= config.max_vwap_distance_bp,
-            "micro_vwap_distance_out_of_range",
-        ),
-        (ask_sweep >= config.min_ask_sweep_score, "ask_sweep_below_min"),
-        (
-            post_sweep_hold >= config.min_post_sweep_hold_score,
-            "post_sweep_hold_below_min",
-        ),
-        (
-            bid_replenishment >= config.min_bid_replenishment_score,
-            "bid_replenishment_below_min",
-        ),
-        (wall_risk <= config.max_wall_risk_score, "wall_replenishment_risk"),
-        (vi_risk <= config.max_vi_risk_score, "vi_proximity_risk"),
-    )
     for passed, reason in checks:
         if not passed:
-            return _blocked(reason, state, **metrics)
+            return _blocked(reason, state, **common)
 
     state.update(
         {
@@ -417,7 +447,7 @@ def evaluate_entry(
         "mechanical_signal_strength": config.mechanical_signal_strength,
         "ai_score_hard_gate": False,
         "ai_score_decision_authority": "feature_only_not_evaluated",
-        **metrics,
+        **common,
     }
 
 

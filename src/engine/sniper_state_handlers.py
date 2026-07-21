@@ -15838,7 +15838,6 @@ def _scanner_fast_precheck_fields(
         "budget_reallocated" if result == "budget_reallocated" else "observe_only"
     )
     return {
-        **_rising_missed_scanner_filter_fields(action=scanner_filter_action),
         **market_data_fields,
         "scanner_promotion_id": scanner_fields.get("scanner_promotion_id")
         or "not_applicable_scanner_promotion_id",
@@ -15983,6 +15982,12 @@ def _scanner_fast_precheck_fields(
         **signed_tape_strong_preserve_fields,
         **opening_rotation_handoff_fields,
         **_scanner_rising_relief_observation_fields(stock),
+        # Backoff helpers intentionally carry their own historical precheck
+        # decision for standalone callers.  Keep that evidence, but make the
+        # decision computed above authoritative after all evidence merges.
+        **_rising_missed_scanner_filter_fields(action=scanner_filter_action),
+        "fast_precheck_result": result,
+        "fast_precheck_reason": reason,
     }
 
 
@@ -40514,6 +40519,7 @@ def _opening_rotation_feature_packet(stock, code, ws_data, *, now_ts, now_dt):
         )
         with ENTRY_LOCK:
             _OPENING_ROTATION_CONTEXT_CACHE[code] = {
+                **cached,
                 "cached_at": now_ts,
                 "recent_candles": recent_candles,
             }
@@ -40700,6 +40706,37 @@ def _handle_watching_opening_rotation(stock, code, ws_data, runtime, config) -> 
                 _OPENING_ROTATION_CONTEXT_CACHE.pop(code, None)
         return bool(direct_position)
 
+    state_source = "empty"
+    state_restored_across_promotion = False
+    cached_state_promotion_id = "-"
+    previous_state = stock.get(OPENING_ROTATION_STATE_KEY)
+    if isinstance(previous_state, dict) and previous_state:
+        previous_state = dict(previous_state)
+        state_source = "stock"
+    else:
+        with ENTRY_LOCK:
+            cached_context = dict(_OPENING_ROTATION_CONTEXT_CACHE.get(code) or {})
+        cached_state = cached_context.get("entry_state")
+        cached_state_date = str(cached_context.get("entry_state_date") or "")
+        cached_state_promotion_id = str(
+            cached_context.get("entry_state_promotion_id") or "-"
+        )
+        if (
+            isinstance(cached_state, dict)
+            and cached_state
+            and cached_state_date == now_dt.date().isoformat()
+        ):
+            previous_state = dict(cached_state)
+            state_source = "symbol_cache"
+            current_promotion_id = str(stock.get("scanner_promotion_id") or "-")
+            state_restored_across_promotion = bool(
+                cached_state_promotion_id not in {"", "-"}
+                and current_promotion_id not in {"", "-"}
+                and cached_state_promotion_id != current_promotion_id
+            )
+        else:
+            previous_state = None
+
     try:
         feature_packet = _opening_rotation_feature_packet(
             stock, code, ws_data, now_ts=now_ts, now_dt=now_dt
@@ -40713,7 +40750,7 @@ def _handle_watching_opening_rotation(stock, code, ws_data, runtime, config) -> 
         }
     else:
         decision = evaluate_opening_rotation_entry(
-            previous_state=stock.get(OPENING_ROTATION_STATE_KEY),
+            previous_state=previous_state,
             feature_packet=feature_packet,
             source_signature=source_signature,
             day_change_pct=day_change_pct,
@@ -40723,6 +40760,20 @@ def _handle_watching_opening_rotation(stock, code, ws_data, runtime, config) -> 
         )
 
     decision_state = decision.get("state") if isinstance(decision, dict) else {}
+    if isinstance(decision_state, dict) and decision_state:
+        with ENTRY_LOCK:
+            cached_context = dict(_OPENING_ROTATION_CONTEXT_CACHE.get(code) or {})
+            cached_context.update(
+                {
+                    "entry_state": dict(decision_state),
+                    "entry_state_date": now_dt.date().isoformat(),
+                    "entry_state_cached_at": now_ts,
+                    "entry_state_promotion_id": str(
+                        stock.get("scanner_promotion_id") or "-"
+                    ),
+                }
+            )
+            _OPENING_ROTATION_CONTEXT_CACHE[code] = cached_context
     reason = str(decision.get("reason") or "not_evaluated")
     previous_reason = str(stock.get("opening_rotation_1pct_last_reason") or "")
     should_log = bool(
@@ -40760,6 +40811,14 @@ def _handle_watching_opening_rotation(stock, code, ws_data, runtime, config) -> 
             entry_window_end=entry_config.entry_end.isoformat(),
             opening_rotation_window_version=window_version,
             opening_rotation_decision_time_bucket=decision_time_bucket,
+            opening_rotation_state_source=state_source,
+            opening_rotation_state_restored_across_promotion=(
+                state_restored_across_promotion
+            ),
+            opening_rotation_state_cached_promotion_id=cached_state_promotion_id,
+            opening_rotation_state_current_promotion_id=(
+                stock.get("scanner_promotion_id") or "-"
+            ),
             **{
                 key: value
                 for key, value in decision.items()

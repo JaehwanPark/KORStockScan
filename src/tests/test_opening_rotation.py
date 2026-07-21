@@ -217,7 +217,11 @@ def test_opening_rotation_bounded_handoff_can_pass_scanner_stale_backoff(
     monkeypatch.setattr(
         handlers,
         "_scanner_ws_stale_backoff_fields",
-        lambda *args, **kwargs: {"scanner_ws_stale_backoff_active": True},
+        lambda *args, **kwargs: {
+            "fast_precheck_result": "budget_reallocated",
+            "fast_precheck_reason": "scanner_ws_stale_backoff_active",
+            "scanner_ws_stale_backoff_active": True,
+        },
     )
     monkeypatch.setattr(
         handlers,
@@ -255,6 +259,92 @@ def test_opening_rotation_bounded_handoff_can_pass_scanner_stale_backoff(
     assert fields["opening_rotation_upstream_handoff_allowed"] is True
 
 
+def test_opening_rotation_restores_pullback_state_across_scanner_repromotion(
+    monkeypatch,
+):
+    handlers._OPENING_ROTATION_CONTEXT_CACHE.clear()
+    emitted = []
+    monkeypatch.setattr(
+        handlers,
+        "_log_entry_pipeline",
+        lambda *args, **kwargs: emitted.append((args, kwargs)),
+    )
+    packet_prices = iter((10_000, 10_020))
+    monkeypatch.setattr(
+        handlers,
+        "_opening_rotation_feature_packet",
+        lambda *args, **kwargs: _packet(next(packet_prices)),
+    )
+    first_now = datetime(2026, 7, 21, 12, 40)
+    first_stock = {
+        "id": 42,
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "source_signature": "PRICE_JUMP_START",
+        "scanner_promotion_id": "SCANPROM-005930-1",
+        "intraday_high_price": 10_100,
+    }
+    first_runtime = {
+        "pos_tag": "SCANNER",
+        "now_ts": first_now.timestamp(),
+        "now_dt": first_now,
+        "fluctuation": 3.0,
+        "curr_price": 10_000,
+        "is_trigger": False,
+    }
+
+    assert handlers._handle_watching_opening_rotation(
+        first_stock,
+        "005930",
+        {"curr": 10_000, "fluctuation": 3.0},
+        first_runtime,
+        {"MIN_SCALP_LIQUIDITY": 500_000_000},
+    )
+    assert first_runtime["is_trigger"] is False
+    assert first_stock["opening_rotation_1pct_state"]["pullback_seen"] is True
+
+    second_now = datetime(2026, 7, 21, 12, 41)
+    second_stock = {
+        "id": 42,
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "source_signature": "PRICE_JUMP_START",
+        "scanner_promotion_id": "SCANPROM-005930-2",
+        "intraday_high_price": 10_100,
+    }
+    second_runtime = {
+        "pos_tag": "SCANNER",
+        "now_ts": second_now.timestamp(),
+        "now_dt": second_now,
+        "fluctuation": 3.2,
+        "curr_price": 10_020,
+        "is_trigger": False,
+    }
+
+    assert handlers._handle_watching_opening_rotation(
+        second_stock,
+        "005930",
+        {"curr": 10_020, "fluctuation": 3.2, "ask_tot": 10, "bid_tot": 10},
+        second_runtime,
+        {"MIN_SCALP_LIQUIDITY": 500_000_000},
+    )
+    assert second_runtime["is_trigger"] is True
+    qualified_fields = next(
+        fields
+        for args, fields in emitted
+        if args[2] == "opening_rotation_1pct_qualified"
+    )
+    assert qualified_fields["opening_rotation_state_source"] == "symbol_cache"
+    assert qualified_fields["opening_rotation_state_restored_across_promotion"] is True
+    assert (
+        qualified_fields["opening_rotation_state_cached_promotion_id"]
+        == "SCANPROM-005930-1"
+    )
+    handlers._OPENING_ROTATION_CONTEXT_CACHE.clear()
+
+
 def test_entry_collects_then_qualifies_on_pullback_reacceleration():
     config = EntryConfig()
     collecting = evaluate_entry(
@@ -283,6 +373,30 @@ def test_entry_collects_then_qualifies_on_pullback_reacceleration():
     assert qualified["position_tag"] == POSITION_TAG
     assert qualified["budget_ratio"] == pytest.approx(0.10)
     assert qualified["ai_score_hard_gate"] is False
+
+
+def test_pullback_wait_exposes_downstream_gate_preview_without_bypass():
+    decision = evaluate_entry(
+        previous_state=None,
+        feature_packet=_packet(10_000),
+        source_signature="PRICE_JUMP_START",
+        day_change_pct=3.0,
+        intraday_high_price=10_000,
+        now_dt=datetime(2026, 7, 21, 12, 40),
+    )
+
+    assert decision["qualified"] is False
+    assert decision["reason"] == "pullback_not_observed"
+    assert decision["opening_rotation_downstream_preview_evaluated"] is True
+    assert decision["opening_rotation_downstream_preview_passed"] is True
+    assert (
+        decision["opening_rotation_downstream_preview_first_blocker"]
+        == "all_downstream_gates_ready"
+    )
+    assert (
+        decision["opening_rotation_downstream_preview_decision_authority"]
+        == "observation_only_no_pattern_or_submit_bypass"
+    )
 
 
 @pytest.mark.parametrize(
