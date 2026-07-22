@@ -12126,6 +12126,7 @@ _SCALPING_SIZING_STATE_FIELD_MAP = {
     "scalping_sizing_source_count": "source_count",
     "scalping_sizing_reference_time": "reference_time",
     "scalping_sizing_venue": "venue",
+    "scalping_sizing_venue_resolution": "venue_resolution",
     "scalping_sizing_target_budget": "target_budget",
     "scalping_sizing_safe_budget": "safe_budget",
     "scalping_sizing_pre_cap_qty": "pre_cap_qty",
@@ -12133,6 +12134,60 @@ _SCALPING_SIZING_STATE_FIELD_MAP = {
     "scalping_sizing_binding_caps": "binding_caps",
     "scalping_sizing_allocation_stage": "allocation_stage",
 }
+
+
+def _explicit_current_entry_sizing_venue(value: Any) -> str:
+    """Accept only exact current execution venue provenance for entry sizing."""
+
+    venue = str(value or "").strip().upper()
+    return venue if venue in {"KRX", "NXT"} else "UNKNOWN"
+
+
+def _resolve_entry_sizing_effective_venue(
+    stock: dict | None,
+    runtime: dict | None,
+) -> tuple[str, str]:
+    """Return one unambiguous current KRX/NXT venue for entry sizing.
+
+    A runtime payload can retain a prior non-trading session marker while the
+    current candidate has explicit KRX/NXT provenance on ``stock``.  Such a
+    non-trading marker must not mask the current explicit venue.  Conversely,
+    conflicting tradable venue values remain unknown so the allocator keeps
+    its tier-1 fail-closed behavior.
+    """
+
+    stock_fields = stock if isinstance(stock, dict) else {}
+    runtime_fields = runtime if isinstance(runtime, dict) else {}
+    candidates = (
+        (
+            "stock.rising_missed_effective_venue",
+            stock_fields.get("rising_missed_effective_venue"),
+        ),
+        (
+            "runtime.rising_missed_effective_venue",
+            runtime_fields.get("rising_missed_effective_venue"),
+        ),
+        ("stock.effective_venue", stock_fields.get("effective_venue")),
+        ("runtime.effective_venue", runtime_fields.get("effective_venue")),
+    )
+    resolved: list[tuple[str, str]] = []
+    for source, value in candidates:
+        venue = _explicit_current_entry_sizing_venue(value)
+        if venue != "UNKNOWN":
+            resolved.append((source, venue))
+    venues = {venue for _, venue in resolved}
+    if len(venues) != 1:
+        return (
+            "UNKNOWN",
+            (
+                "conflicting_explicit_venue"
+                if venues
+                else "missing_tradable_explicit_venue"
+            ),
+        )
+    return next(iter(venues)), "consistent_explicit:" + ",".join(
+        source for source, _ in resolved
+    )
 
 
 def _scalping_sizing_state_fields(stock: dict | None) -> dict[str, Any]:
@@ -12156,8 +12211,15 @@ def _scalping_sizing_state_fields(stock: dict | None) -> dict[str, Any]:
     return event_fields
 
 
-def _store_scalping_sizing_decision(stock: dict, decision) -> dict[str, Any]:
+def _store_scalping_sizing_decision(
+    stock: dict,
+    decision,
+    *,
+    provenance_fields: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     event_fields = decision.event_fields()
+    if provenance_fields:
+        event_fields.update(provenance_fields)
     state_fields = {
         f"scalping_sizing_{key}": value
         for key, value in event_fields.items()
@@ -12170,6 +12232,7 @@ def _store_scalping_sizing_decision(stock: dict, decision) -> dict[str, Any]:
             "source_count",
             "reference_time",
             "venue",
+            "venue_resolution",
             "target_budget",
             "safe_budget",
             "pre_cap_qty",
@@ -45892,13 +45955,10 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         sizing_reference_time = runtime.get("now_dt") or datetime.fromtimestamp(
             float(now_ts), tz=_KST
         )
-        sizing_explicit_venue = (
-            runtime.get("rising_missed_effective_venue")
-            or stock.get("rising_missed_effective_venue")
-            or runtime.get("effective_venue")
-            or stock.get("effective_venue")
-            or stock.get("scalping_sizing_venue")
-        )
+        (
+            sizing_explicit_venue,
+            sizing_venue_resolution,
+        ) = _resolve_entry_sizing_effective_venue(stock, runtime)
         allocation_stage = (
             "rising_missed_scout_initial"
             if forced_rising_missed_one_share
@@ -45930,9 +45990,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 or stock.get("scanner_source_signature")
                 or runtime.get("source_signature")
             ),
-            effective_venue=infer_scalping_venue(
-                sizing_reference_time, sizing_explicit_venue
-            ),
+            effective_venue=sizing_explicit_venue,
             budget_base_krw=budget_base,
             price_krw=curr_price,
             safety_ratio=_rule_float("BUY_BUDGET_SAFETY_RATIO", 0.95),
@@ -45949,7 +46007,11 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             initial_formula_version=initial_formula_version,
         )
         sizing_decision = resolve_scalping_allocation(sizing_context)
-        sizing_fields = _store_scalping_sizing_decision(stock, sizing_decision)
+        sizing_fields = _store_scalping_sizing_decision(
+            stock,
+            sizing_decision,
+            provenance_fields={"venue_resolution": sizing_venue_resolution},
+        )
         ratio = sizing_decision.ratio
         target_budget = sizing_decision.target_budget
         safe_budget = sizing_decision.safe_budget
@@ -46227,7 +46289,11 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         )
         if loss_reentry_canary_qty_applied:
             sizing_decision = capped_sizing_decision
-            sizing_fields = _store_scalping_sizing_decision(stock, sizing_decision)
+            sizing_fields = _store_scalping_sizing_decision(
+                stock,
+                sizing_decision,
+                provenance_fields={"venue_resolution": sizing_venue_resolution},
+            )
             target_budget = sizing_decision.target_budget
             safe_budget = sizing_decision.safe_budget
             real_buy_qty = sizing_decision.effective_qty
@@ -46897,7 +46963,11 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             )
             if capped_sizing_decision is not None:
                 sizing_decision = capped_sizing_decision
-                sizing_fields = _store_scalping_sizing_decision(stock, sizing_decision)
+                sizing_fields = _store_scalping_sizing_decision(
+                    stock,
+                    sizing_decision,
+                    provenance_fields={"venue_resolution": sizing_venue_resolution},
+                )
                 target_budget = sizing_decision.target_budget
                 safe_budget = sizing_decision.safe_budget
                 real_buy_qty = sizing_decision.effective_qty
@@ -48836,7 +48906,11 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         )
         if final_sizing_decision is not None:
             sizing_decision = final_sizing_decision
-            sizing_fields = _store_scalping_sizing_decision(stock, sizing_decision)
+            sizing_fields = _store_scalping_sizing_decision(
+                stock,
+                sizing_decision,
+                provenance_fields={"venue_resolution": sizing_venue_resolution},
+            )
             target_budget = sizing_decision.target_budget
             safe_budget = sizing_decision.safe_budget
             real_buy_qty = sizing_decision.effective_qty

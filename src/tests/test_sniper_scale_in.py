@@ -154,6 +154,81 @@ class _DummyDB:
         return False
 
 
+def test_entry_sizing_uses_current_krx_when_runtime_has_non_tradable_marker():
+    venue, provenance = state_handlers._resolve_entry_sizing_effective_venue(
+        {"rising_missed_effective_venue": "KRX"},
+        {"rising_missed_effective_venue": "OFF_SESSION"},
+    )
+    decision = state_handlers.resolve_scalping_allocation(
+        state_handlers.ScalpingSizingContext(
+            allocation_stage="rising_missed_scout_initial",
+            reference_time=datetime(2026, 7, 22, 9, 56, tzinfo=state_handlers._KST),
+            source_signature="A,B,C,D,E",
+            effective_venue=venue,
+            budget_base_krw=3_000_000,
+            price_krw=10_000,
+        )
+    )
+
+    assert venue == "KRX"
+    assert provenance == "consistent_explicit:stock.rising_missed_effective_venue"
+    assert (decision.venue, decision.tier, decision.ratio) == (
+        "KRX",
+        2,
+        pytest.approx(0.15),
+    )
+
+
+def test_entry_sizing_venue_conflict_fails_closed_to_tier1_input():
+    venue, provenance = state_handlers._resolve_entry_sizing_effective_venue(
+        {"rising_missed_effective_venue": "KRX"},
+        {"rising_missed_effective_venue": "NXT"},
+    )
+
+    assert venue == "UNKNOWN"
+    assert provenance == "conflicting_explicit_venue"
+
+
+@pytest.mark.parametrize("value", ["KRX_ONLY_UNAVAILABLE", "NXT_ELIGIBILITY_UNKNOWN"])
+def test_entry_sizing_rejects_non_execution_venue_status_tokens(value):
+    venue, provenance = state_handlers._resolve_entry_sizing_effective_venue(
+        {"rising_missed_effective_venue": value},
+        {},
+    )
+
+    assert venue == "UNKNOWN"
+    assert provenance == "missing_tradable_explicit_venue"
+
+
+def test_entry_sizing_persists_venue_resolution_with_allocator_event_fields():
+    decision = state_handlers.resolve_scalping_allocation(
+        state_handlers.ScalpingSizingContext(
+            allocation_stage="rising_missed_scout_initial",
+            reference_time=datetime(2026, 7, 22, 10, 0, tzinfo=state_handlers._KST),
+            source_signature="A,B,C",
+            effective_venue="KRX",
+            budget_base_krw=3_000_000,
+            price_krw=10_000,
+        )
+    )
+    stock = {"strategy": "SCALPING"}
+
+    fields = state_handlers._store_scalping_sizing_decision(
+        stock,
+        decision,
+        provenance_fields={
+            "venue_resolution": "consistent_explicit:stock.rising_missed_effective_venue"
+        },
+    )
+
+    assert fields["venue"] == "KRX"
+    assert fields["venue_resolution"].startswith("consistent_explicit:")
+    assert stock["scalping_sizing_venue_resolution"].startswith("consistent_explicit:")
+    assert state_handlers._scalping_sizing_state_fields(stock)[
+        "venue_resolution"
+    ].startswith("consistent_explicit:")
+
+
 def _fresh_holding_score_fields(score=30, *, now_ts=None):
     now_ts = state_handlers.time.time() if now_ts is None else now_ts
     return {
