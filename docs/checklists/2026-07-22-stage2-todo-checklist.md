@@ -16,6 +16,20 @@
 - `actual_order_submitted=false`인 sim/probe 표본은 EV/source-quality 입력이며 실주문 전환 근거가 아니다.
 - Project/Calendar 동기화는 사용자가 표준 동기화 명령으로 수행한다.
 
+## 수시 구현 기록
+
+- [x] `[ManualControlAutoReleaseAtAveragePrice0722] auto_* 수동관리 제외 종목 평단가 도달 자동 해제 구현·리뷰` (`Due: 2026-07-22`, `Slot: INTRADAY`, `TimeWindow: 09:00~15:20`, `Track: RuntimeStability`)
+  - Source: [manual_control_exclusion.py](/home/ubuntu/KORStockScan/src/engine/risk/manual_control_exclusion.py), [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py), [manual_control_excluded_codes.txt](/home/ubuntu/KORStockScan/data/config/manual_control_excluded_codes.txt)
+  - 판정 기준: 파일 주석이 지원 `auto_*` provenance이고 HOLDING의 신선한 WS 현재가가 평단가 이상일 때만 파일 행과 인메모리 차단을 함께 해제한다. 수동 주석, env override, stale/missing 가격은 fail-closed로 유지한다.
+  - 금지: 평단가 미도달 종목, manual/env 제외, stale 가격 해제와 threshold/provider/broker/order/quantity/cap/hard-safety 변경을 금지한다.
+  - 완료 기록 (`2026-07-22 13:37 KST`): 구현·재리뷰 후 우아한 재기동으로 신규 PID `227280`에 반영했다. `950160`은 평단가 `60,900원`, 관찰 현재가 `30,050원` 조건에서 해제되지 않는 회귀 테스트를 포함했고 실제 제외 파일 행도 유지됐다. 리뷰 중 병행 반영된 probe residual 변경에서 계획수량 `buy_qty`가 명시 체결수량을 덮는 매도수량 회귀를 발견해 `entry_filled_qty -> pending filled -> buy_qty fallback` 순서로 보완했다. runtime env handoff=`pass`, selected family=`26`, missing/mismatch=`0`, provider=`main_openai`, WS login·`950160` 첫 0D 실수신=`pass`다.
+
+- [x] `[ManualControlAutoReleaseRuntimeVerify0723] auto_* 평단가 도달 해제 신규 PID runtime 검증` (`Due: 2026-07-23`, `Slot: PREOPEN`, `TimeWindow: 08:45~09:00`, `Track: RuntimeStability`)
+  - Source: [manual_control_exclusion.py](/home/ubuntu/KORStockScan/src/engine/risk/manual_control_exclusion.py), [pipeline_events_2026-07-23.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-07-23.jsonl)
+  - 판정 기준: 다음 허용된 기동 이후 `manual_control_auto_released_at_average_price`가 지원 auto provenance·fresh WS·`current_price >= average_price`에서만 발생하고 기존 차단 플래그가 함께 제거되는지 확인한다.
+  - 금지: 이 검증만을 위한 장중 재기동, 수동/env 제외 해제, stale 가격 해제, threshold/provider/broker/order/quantity/cap/hard-safety 변경을 금지한다.
+  - 완료 기록 (`2026-07-22 13:37 KST`, 조기 확인): old PID=`201512` 종료, new PID=`227280` 기동, runtime env handoff와 WS login·첫 0D 실수신을 확인했다. `950160` 제외 행은 유지됐고 평단가 도달 자연 표본은 없어 `no_natural_match_keep_observing`으로 닫았다. 강제 가격/주문, threshold/provider/cap 변경은 수행하지 않았다.
+
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_START -->
 ## 자동 생성 체크리스트 (`2026-07-21` postclose -> `2026-07-22`)
 
