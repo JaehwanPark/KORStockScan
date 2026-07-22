@@ -11908,6 +11908,9 @@ _LATENCY_FALSE_NEGATIVE_REMEASURE_LOG_KEYS = (
     "latency_true_ofi_direct_canary_signed_tape_net_buy_volume",
     "latency_true_ofi_direct_canary_signed_tape_buy_ratio",
     "latency_true_ofi_direct_canary_signed_tape_latest_side",
+    "latency_true_ofi_direct_canary_signed_tape_event_time_latest_side",
+    "latency_true_ofi_direct_canary_signed_tape_window_span_sec",
+    "latency_true_ofi_direct_canary_signed_tape_latest_age_ms",
     "latency_true_ofi_direct_canary_signed_tape_sell_dominated",
     "latency_true_ofi_direct_canary_signed_tape_latest_buy_single",
     "latency_true_ofi_direct_canary_signed_tape_latest_sell_single",
@@ -11933,6 +11936,16 @@ _LATENCY_FALSE_NEGATIVE_REMEASURE_LOG_KEYS = (
     "latency_true_ofi_nxt_probability_band_confidence",
     "latency_true_ofi_nxt_probability_band_pressure",
     "latency_true_ofi_nxt_probability_band_depth_ratio",
+    "latency_true_ofi_nxt_fast_tape_continuation_enabled",
+    "latency_true_ofi_nxt_fast_tape_continuation_applied",
+    "latency_true_ofi_nxt_fast_tape_continuation_reason",
+    "latency_true_ofi_nxt_fast_tape_min_depth_fraction",
+    "latency_true_ofi_nxt_fast_tape_min_depth_ratio",
+    "latency_true_ofi_nxt_fast_tape_max_window_span_sec",
+    "latency_true_ofi_nxt_fast_tape_max_latest_age_ms",
+    "latency_true_ofi_nxt_fast_tape_window_span_sec",
+    "latency_true_ofi_nxt_fast_tape_latest_age_ms",
+    "latency_true_ofi_nxt_fast_tape_probe_first_active",
 )
 
 
@@ -12158,11 +12171,16 @@ def _resolve_entry_sizing_effective_venue(
     """
 
     stock_fields = stock if isinstance(stock, dict) else {}
+    tp1_context = _rising_missed_tp1_observation_context_log_fields(stock_fields)
     runtime_fields = runtime if isinstance(runtime, dict) else {}
     candidates = (
         (
             "stock.rising_missed_effective_venue",
             stock_fields.get("rising_missed_effective_venue"),
+        ),
+        (
+            "stock.tp1_context.rising_missed_effective_venue",
+            tp1_context.get("rising_missed_effective_venue"),
         ),
         (
             "runtime.rising_missed_effective_venue",
@@ -31013,6 +31031,8 @@ _ENTRY_SPLIT_PROBE_RUNTIME_KEYS = (
     "entry_split_probe_direction_state",
     "entry_split_probe_continuation_action",
     "entry_split_probe_offset_profile",
+    "entry_split_probe_nxt_wait_fast_tape_bounded_single_leg",
+    "entry_split_probe_bounded_partial_submission",
     "entry_split_probe_reward_target_price",
     "entry_split_probe_soft_abort",
     "entry_split_probe_scale_in_recheck_allowed",
@@ -31190,6 +31210,83 @@ def _post_probe_direction_fields(
         and isinstance(stock.get("last_watching_ai_source_quality_fields"), dict)
         else {}
     )
+    effective_venue = (
+        str(
+            stock.get("rising_missed_effective_venue")
+            or stock.get(
+                "rising_missed_tp1_submit_context_rising_missed_effective_venue"
+            )
+            or ""
+        )
+        .strip()
+        .upper()
+    )
+    market_session_bucket = (
+        str(
+            stock.get("rising_missed_market_session_bucket")
+            or stock.get(
+                "rising_missed_tp1_submit_context_rising_missed_market_session_bucket"
+            )
+            or ""
+        )
+        .strip()
+        .lower()
+    )
+    nxt_entry_context = bool(
+        effective_venue == "NXT" and market_session_bucket == "nxt_entry_window"
+    )
+    tp1_context_at = _safe_float(stock.get("rising_missed_tp1_submit_context_at"), 0.0)
+    tp1_context_age_sec = observed_now - tp1_context_at if tp1_context_at > 0 else None
+    tp1_context_fresh = bool(
+        tp1_context_age_sec is not None
+        and tp1_context_age_sec >= -0.5
+        and tp1_context_age_sec <= max(0.1, float(max_context_age_sec))
+    )
+    tp1_tick_context_fresh = bool(
+        nxt_entry_context
+        and tp1_context_fresh
+        and _truthy_field(
+            stock.get("rising_missed_tp1_submit_context_tick_acceleration_fresh")
+        )
+    )
+    tp1_direction_fields = (
+        {
+            "tick_acceleration_ratio": stock.get(
+                "rising_missed_tp1_submit_context_tick_acceleration"
+            )
+        }
+        if tp1_tick_context_fresh
+        else {}
+    )
+    fresh_ws_momentum = _rising_missed_trusted_ws_momentum(
+        ws_data,
+        current_price=_safe_float(
+            quote_fields.get("canonical_mark_price")
+            or ws_data.get("curr")
+            or stock.get("curr_price"),
+            0.0,
+        ),
+        now_ts=observed_now,
+    )
+    fresh_ws_fast_tape = bool(
+        nxt_entry_context
+        and _truthy_field(fresh_ws_momentum.get("rising_missed_tp1_ws_fast_tape_fresh"))
+        and _truthy_field(
+            fresh_ws_momentum.get("rising_missed_tp1_ws_tick_acceleration_fresh")
+        )
+    )
+    fresh_ws_momentum_direction_fields = (
+        {
+            "tick_acceleration_ratio": fresh_ws_momentum.get(
+                "rising_missed_tp1_ws_tick_acceleration"
+            ),
+            "buy_pressure_10t": fresh_ws_momentum.get(
+                "rising_missed_tp1_ws_fast_tape_buy_ratio"
+            ),
+        }
+        if fresh_ws_fast_tape
+        else {}
+    )
     live_micro: dict[str, Any] = {}
     if code:
         live_micro_context = _build_live_orderbook_micro_context(
@@ -31235,9 +31332,21 @@ def _post_probe_direction_fields(
         if ws_tick_context_fresh
         else {}
     )
+    feature_tick_context_fresh = bool(
+        feature_probe_fresh
+        and str(source_quality_fields.get("tick_context_quality") or "").strip().lower()
+        == "fresh_computed"
+        and _truthy_field(
+            source_quality_fields.get("tick_aggressor_pressure_usable")
+            or feature_probe.get("tick_aggressor_pressure_usable")
+        )
+        and not _truthy_field(source_quality_fields.get("tick_context_stale"))
+    )
     sources = (
         live_micro,
         ws_direction_fields,
+        fresh_ws_momentum_direction_fields,
+        tp1_direction_fields,
         source_quality_fields,
         feature_probe,
         quote_fields,
@@ -31339,7 +31448,98 @@ def _post_probe_direction_fields(
     positives = [name for name, values in groups.items() if values[1]]
     negatives = [name for name, values in groups.items() if values[2]]
     directional_group_count = len(set(positives + negatives))
-    if len(available) < 2:
+    ai_action = str(stock.get("last_watching_ai_action") or "").strip().upper()
+    ai_result_source = (
+        str(stock.get("last_watching_ai_result_source") or "").strip().lower()
+    )
+    ai_confirmed_at = _safe_float(stock.get("last_watching_ai_confirmed_at"), 0.0)
+    ai_action_age_sec = observed_now - ai_confirmed_at if ai_confirmed_at > 0 else None
+    fresh_negative_ai_action = bool(
+        nxt_entry_context
+        and ai_action in {"DROP", "WAIT"}
+        and ai_result_source == "live"
+        and ai_action_age_sec is not None
+        and ai_action_age_sec >= -0.5
+        and ai_action_age_sec <= max(0.1, float(max_context_age_sec))
+    )
+    tick_context_fresh = bool(
+        ws_tick_context_fresh
+        or feature_tick_context_fresh
+        or tp1_tick_context_fresh
+        or fresh_ws_fast_tape
+    )
+    nxt_wait_fast_tape_min_buy_ratio = _env_float(
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_DYNAMIC_AGE_BAND_MIN_SIGNED_TAPE_BUY_RATIO",
+        80.0,
+    )
+    nxt_wait_fast_tape_enabled = _env_bool(
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_NXT_FAST_TAPE_CONTINUATION_ENABLED",
+        True,
+    )
+    nxt_wait_fast_tape_ready = bool(
+        nxt_wait_fast_tape_enabled
+        and fresh_negative_ai_action
+        and ai_action == "WAIT"
+        and fresh_ws_fast_tape
+        and tick_accel is not None
+        and tick_accel >= tick_min
+        and _safe_float(
+            fresh_ws_momentum.get("rising_missed_tp1_ws_fast_tape_buy_ratio"),
+            0.0,
+        )
+        >= nxt_wait_fast_tape_min_buy_ratio
+        and _safe_int(
+            fresh_ws_momentum.get("rising_missed_tp1_ws_fast_tape_buy_count"), 0
+        )
+        > _safe_int(
+            fresh_ws_momentum.get("rising_missed_tp1_ws_fast_tape_sell_count"), 0
+        )
+        and str(
+            fresh_ws_momentum.get("rising_missed_tp1_ws_fast_tape_latest_side") or ""
+        ).upper()
+        == "BUY"
+        and mark_price >= probe_fill_price > 0
+        and len(positives) >= 2
+        and not negatives
+    )
+    recheck_count = max(0, _safe_int(stock.get("entry_split_probe_recheck_count"), 0))
+    nxt_wait_fast_tape_bounded_single_leg = bool(
+        nxt_wait_fast_tape_ready and recheck_count >= 1
+    )
+    if fresh_negative_ai_action and ai_action == "DROP":
+        direction_state = "WEAK"
+        action = "DEFER"
+        reason = "post_probe_nxt_fresh_ai_drop"
+    elif fresh_negative_ai_action and ai_action == "WAIT":
+        if nxt_wait_fast_tape_ready and recheck_count >= 1:
+            direction_state = "STRONG"
+            action = "ALLOW_NARROW"
+            reason = "post_probe_nxt_wait_fast_tape_maintained"
+        else:
+            direction_state = "UNKNOWN"
+            action = "DEFER"
+            reason = (
+                "post_probe_nxt_wait_fast_tape_recheck_required"
+                if nxt_wait_fast_tape_ready
+                else "post_probe_nxt_fresh_ai_wait"
+            )
+    elif nxt_entry_context and ai_action in {"DROP", "WAIT"}:
+        direction_state = "UNKNOWN"
+        action = "DEFER"
+        reason = (
+            "post_probe_nxt_ai_veto_source_unverified"
+            if ai_result_source != "live"
+            else "post_probe_nxt_ai_veto_not_fresh"
+        )
+    elif nxt_entry_context and not tick_context_fresh:
+        direction_state = "UNKNOWN"
+        action = "DEFER"
+        reason = "post_probe_nxt_event_time_speed_unavailable"
+    elif nxt_entry_context and tick_accel is not None and tick_accel < tick_min:
+        direction_state = "WEAK"
+        action = "DEFER"
+        reason = "post_probe_nxt_event_time_speed_below_existing_floor"
+    elif len(available) < 2:
         direction_state = "UNKNOWN"
         action = "DEFER"
         reason = "post_probe_direction_source_gap"
@@ -31370,6 +31570,52 @@ def _post_probe_direction_fields(
             f"{tick_accel:.4f}" if tick_accel is not None else "-"
         ),
         "post_probe_direction_tick_acceleration_raw": tick_raw or "-",
+        "post_probe_direction_tick_context_fresh": tick_context_fresh,
+        "post_probe_direction_tp1_tick_context_fresh": tp1_tick_context_fresh,
+        "post_probe_direction_tp1_context_age_sec": (
+            f"{tp1_context_age_sec:.3f}"
+            if tp1_context_age_sec is not None
+            else "not_available"
+        ),
+        "post_probe_direction_effective_venue": effective_venue or "-",
+        "post_probe_direction_market_session_bucket": market_session_bucket or "-",
+        "post_probe_direction_nxt_entry_context": nxt_entry_context,
+        "post_probe_direction_ai_action": ai_action or "-",
+        "post_probe_direction_ai_result_source": ai_result_source or "-",
+        "post_probe_direction_ai_action_age_sec": (
+            f"{ai_action_age_sec:.3f}"
+            if ai_action_age_sec is not None
+            else "not_available"
+        ),
+        "post_probe_direction_fresh_negative_ai_action": fresh_negative_ai_action,
+        "post_probe_nxt_wait_fast_tape_ready": nxt_wait_fast_tape_ready,
+        "post_probe_nxt_wait_fast_tape_bounded_single_leg": (
+            nxt_wait_fast_tape_bounded_single_leg
+        ),
+        "post_probe_nxt_wait_fast_tape_enabled": nxt_wait_fast_tape_enabled,
+        "post_probe_nxt_wait_fast_tape_recheck_count": recheck_count,
+        "post_probe_nxt_wait_fast_tape_min_buy_ratio": round(
+            nxt_wait_fast_tape_min_buy_ratio, 3
+        ),
+        "post_probe_nxt_wait_fast_tape_sample_count": fresh_ws_momentum.get(
+            "rising_missed_tp1_ws_fast_tape_sample_count", 0
+        ),
+        "post_probe_nxt_wait_fast_tape_window_span_sec": fresh_ws_momentum.get(
+            "rising_missed_tp1_ws_fast_tape_window_span_sec", "-"
+        ),
+        "post_probe_nxt_wait_fast_tape_buy_ratio": fresh_ws_momentum.get(
+            "rising_missed_tp1_ws_fast_tape_buy_ratio", "-"
+        ),
+        "post_probe_nxt_wait_fast_tape_buy_count": fresh_ws_momentum.get(
+            "rising_missed_tp1_ws_fast_tape_buy_count", 0
+        ),
+        "post_probe_nxt_wait_fast_tape_sell_count": fresh_ws_momentum.get(
+            "rising_missed_tp1_ws_fast_tape_sell_count", 0
+        ),
+        "post_probe_nxt_wait_fast_tape_latest_side": fresh_ws_momentum.get(
+            "rising_missed_tp1_ws_fast_tape_latest_side", "-"
+        ),
+        "post_probe_nxt_wait_fast_tape_fresh": fresh_ws_fast_tape,
         "post_probe_direction_micro_state": micro_state or "-",
         "post_probe_direction_qi": f"{qi:.6f}" if qi_available else "-",
         "post_probe_direction_ofi_norm": f"{ofi:.6f}" if ofi_available else "-",
@@ -31890,6 +32136,103 @@ def _build_entry_ai_price_context(
     return ctx
 
 
+def _entry_ai_price_input_audit_fields(
+    *, result, price_ctx, ws_data, recent_ticks, recent_candles
+):
+    """Flatten the exact entry-price input contract for provider-route audits."""
+
+    result = result if isinstance(result, dict) else {}
+    ctx = price_ctx if isinstance(price_ctx, dict) else {}
+    schema = str(result.get("ai_input_schema") or "").strip()
+    if not schema:
+        schema = (
+            "entry_price_v2"
+            if bool(_rule("OPENAI_ENTRY_PRICE_V2_INPUT_ENABLED", False))
+            else (
+                "entry_price_compact_v1"
+                if bool(_rule("OPENAI_ENTRY_PRICE_COMPACT_INPUT_ENABLED", True))
+                else "entry_price_raw_v1"
+            )
+        )
+    try:
+        packet = extract_scalping_feature_packet(
+            ws_data or {}, recent_ticks or [], recent_candles or []
+        )
+        packet = packet if isinstance(packet, dict) else {}
+        packet_audit = build_scalping_feature_audit_fields(packet)
+        packet_audit = packet_audit if isinstance(packet_audit, dict) else {}
+    except Exception as exc:
+        packet = {}
+        packet_audit = {}
+        packet_audit_error = type(exc).__name__
+    else:
+        packet_audit_error = "-"
+
+    out = {
+        "entry_price_input_schema": schema,
+        "entry_price_input_current_price": _coerce_int_value(ctx.get("current_price")),
+        "entry_price_input_resolved_order_price": _coerce_int_value(
+            ctx.get("resolved_order_price")
+        ),
+        "entry_price_input_best_bid": _coerce_int_value(ctx.get("best_bid")),
+        "entry_price_input_best_ask": _coerce_int_value(ctx.get("best_ask")),
+        "quote_age_ms": packet.get(
+            "quote_age_ms", packet_audit.get("quote_age_ms", ctx.get("ws_age_ms", "-"))
+        ),
+        "quote_stale": packet.get(
+            "quote_stale",
+            packet_audit.get("quote_stale", ctx.get("quote_stale", "unknown")),
+        ),
+        "entry_price_input_audit_error": packet_audit_error,
+        "entry_price_input_metric_role": "source_quality_gate",
+        "entry_price_input_decision_authority": "provider_route_comparison_only",
+        "entry_price_input_window_policy": "same_event_pre_submit_context",
+        "entry_price_input_sample_floor": "1_fresh_complete_or_partial_row",
+        "entry_price_input_primary_decision_metric": (
+            "provider_schema_latency_and_price_guard_consistency"
+        ),
+        "entry_price_input_source_quality_gate": (
+            "required_features_present_and_quote_not_stale"
+        ),
+        "entry_price_input_forbidden_uses": (
+            "order_submit|threshold_change|broker_guard_bypass|provider_auto_apply"
+        ),
+    }
+    for key in (
+        "entry_liquidity_score",
+        "entry_liquidity_status",
+        "fillability_score",
+        "would_fill_now",
+        "quote_depth_present",
+        "quote_fresh_for_entry",
+        "order_flow_pressure_score",
+        "entry_order_flow_status",
+        "order_flow_pressure_source",
+        "entry_momentum_score",
+        "entry_momentum_status",
+        "entry_context_quality",
+        "entry_context_missing_features",
+        "buy_pressure_10t",
+        "net_aggressive_delta_10t",
+        "tick_acceleration_ratio",
+        "curr_vs_micro_vwap_bp",
+        "micro_vwap_available",
+        "minute_candle_window_fresh",
+        "top3_depth_ratio",
+        "spread_bp",
+    ):
+        value = packet.get(key, packet_audit.get(key))
+        if value not in (None, ""):
+            out[key] = value
+    quality = str(packet.get("entry_context_quality") or "").strip().lower()
+    out["ai_input_source_quality_status"] = quality or "not_evaluated"
+    out["ai_input_source_quality_reason"] = str(
+        packet.get("entry_context_missing_features")
+        or ("feature_packet_present" if packet else "feature_packet_missing")
+    )
+    return out
+
+
 def _apply_entry_ai_price_canary(
     *,
     stock,
@@ -32096,9 +32439,14 @@ def _apply_entry_ai_price_canary(
         or "live"
     )
     openai_transport_fields = {
-        str(key): value
-        for key, value in (result or {}).items()
-        if str(key).startswith("openai_")
+        **_build_ai_ops_log_fields(result),
+        **_entry_ai_price_input_audit_fields(
+            result=result,
+            price_ctx=price_ctx,
+            ws_data=ws_data,
+            recent_ticks=recent_ticks,
+            recent_candles=recent_candles,
+        ),
     }
 
     if parse_fail or not parse_ok:
@@ -32138,6 +32486,7 @@ def _apply_entry_ai_price_canary(
                 action=action,
                 confidence=confidence,
                 skip_min_confidence=skip_min_confidence,
+                **openai_transport_fields,
                 **micro_log_fields,
             )
             return planned_orders, False
@@ -32897,6 +33246,7 @@ def _rest_quote_only_hard_stop_confirmation_block(
         "scalp_hard_stop_pct",
         "scalp_soft_stop_pct",
         "scalp_mfe_protect_exit",
+        "scalp_trailing_take_profit",
     }:
         return False
     if not bool((stock or {}).get("holding_rest_quote_only_recovery")):
@@ -32906,7 +33256,11 @@ def _rest_quote_only_hard_stop_confirmation_block(
     block_stage = (
         "mfe_protect_rest_quote_only_confirmation_blocked"
         if str(exit_rule or "").strip() == "scalp_mfe_protect_exit"
-        else "hard_stop_rest_quote_only_confirmation_blocked"
+        else (
+            "trailing_rest_quote_only_confirmation_blocked"
+            if str(exit_rule or "").strip() == "scalp_trailing_take_profit"
+            else "hard_stop_rest_quote_only_confirmation_blocked"
+        )
     )
     _log_holding_pipeline(
         stock,
@@ -35705,12 +36059,16 @@ def _build_ai_ops_log_fields(
         "openai_transport_mode",
         "openai_transport_requested_mode",
         "openai_model",
+        "openai_primary_provider",
+        "openai_primary_error_type",
         "openai_request_id",
         "openai_endpoint_name",
         "openai_schema_name",
         "openai_ws_error_type",
         "openai_ws_http_fallback_error_type",
         "openai_http_error_type",
+        "bedrock_fallback_family",
+        "bedrock_fallback_error_type",
         "openai_input_tokens",
         "openai_output_tokens",
         "openai_total_tokens",
@@ -35724,6 +36082,8 @@ def _build_ai_ops_log_fields(
                 out[field_name] = str(payload.get(field_name, "-") or "-")
     for field_name in (
         "openai_timeout_budget_ms",
+        "openai_primary_timeout_budget_ms",
+        "openai_total_route_timeout_budget_ms",
         "openai_ws_queue_wait_ms",
         "openai_ws_roundtrip_ms",
         "openai_ws_attempt_timeout_ms",
@@ -35744,6 +36104,9 @@ def _build_ai_ops_log_fields(
         "openai_ws_http_fallback",
         "openai_ws_http_fallback_fail_closed",
         "openai_http_timeout_budget_exhausted",
+        "bedrock_primary_used",
+        "bedrock_failback_used",
+        "bedrock_fallback_used",
         "holding_score_timeout_like",
         "holding_score_transport_fail_closed",
         "holding_score_preflight_blocked",
@@ -50984,6 +51347,19 @@ def _rising_missed_tp1_submit_context_fields(
         "rising_missed_tp1_submit_context_ws_micro_ready": _truthy_field(
             log_fields.get("rising_missed_tp1_ws_micro_provenance_ready")
         ),
+        "rising_missed_tp1_submit_context_tick_acceleration": _safe_float(
+            log_fields.get("rising_missed_tp1_tick_acceleration"),
+            0.0,
+        ),
+        "rising_missed_tp1_submit_context_tick_acceleration_fresh": _truthy_field(
+            log_fields.get("rising_missed_tp1_tick_acceleration_fresh")
+        ),
+        "rising_missed_tp1_submit_context_tick_acceleration_source": (
+            log_fields.get("rising_missed_tp1_tick_acceleration_source") or "-"
+        ),
+        "rising_missed_tp1_submit_context_tick_acceleration_age_sec": (
+            log_fields.get("rising_missed_tp1_tick_acceleration_age_sec") or "-"
+        ),
         "rising_missed_tp1_submit_context_low_rebound_pct": _safe_float(
             log_fields.get("rising_missed_tp1_low_rebound_pct"),
             0.0,
@@ -51077,6 +51453,10 @@ def _rising_missed_tp1_observation_context_log_fields(
         "rising_missed_tp1_submit_context_top_depth_ratio",
         "rising_missed_tp1_submit_context_spread_ratio",
         "rising_missed_tp1_submit_context_ws_micro_ready",
+        "rising_missed_tp1_submit_context_tick_acceleration",
+        "rising_missed_tp1_submit_context_tick_acceleration_fresh",
+        "rising_missed_tp1_submit_context_tick_acceleration_source",
+        "rising_missed_tp1_submit_context_tick_acceleration_age_sec",
     ):
         fields[context_key] = context.get(context_key, "-")
     for source_key in (
@@ -51996,7 +52376,7 @@ def _rising_missed_trusted_ws_momentum(
         ticks = list(raw_ticks or [])
     except TypeError:
         ticks = []
-    trusted: list[dict[str, float]] = []
+    trusted: list[dict[str, Any]] = []
     for tick in ticks:
         if not isinstance(tick, dict):
             continue
@@ -52019,7 +52399,14 @@ def _rising_missed_trusted_ws_momentum(
         volume = abs(_safe_float(raw_signed_volume, 0.0))
         if observed_ts <= 0 or price <= 0:
             continue
-        trusted.append({"ts": observed_ts, "price": price, "volume": volume})
+        trusted.append(
+            {
+                "ts": observed_ts,
+                "price": price,
+                "volume": volume,
+                "side": "BUY" if raw_signed_volume.startswith("+") else "SELL",
+            }
+        )
     trusted.sort(key=lambda item: item["ts"], reverse=True)
     recent_ticks = [item for item in trusted if 0.0 <= now_ts - item["ts"] <= 60.0]
     latest_age_sec = now_ts - recent_ticks[0]["ts"] if recent_ticks else None
@@ -52037,6 +52424,37 @@ def _rising_missed_trusted_ws_momentum(
             effective_recent_span = recent_span if recent_span > 0 else 1.0
             tick_acceleration = previous_span / effective_recent_span
             tick_acceleration_fresh = True
+    fast_tape_ticks = recent_ticks[:5]
+    fast_tape_window_span_sec = (
+        max(0.0, fast_tape_ticks[0]["ts"] - fast_tape_ticks[-1]["ts"])
+        if len(fast_tape_ticks) >= 5
+        else None
+    )
+    fast_tape_buy_volume = sum(
+        item["volume"] for item in fast_tape_ticks if item.get("side") == "BUY"
+    )
+    fast_tape_sell_volume = sum(
+        item["volume"] for item in fast_tape_ticks if item.get("side") == "SELL"
+    )
+    fast_tape_total_volume = fast_tape_buy_volume + fast_tape_sell_volume
+    fast_tape_buy_count = sum(
+        1 for item in fast_tape_ticks if item.get("side") == "BUY"
+    )
+    fast_tape_sell_count = sum(
+        1 for item in fast_tape_ticks if item.get("side") == "SELL"
+    )
+    fast_tape_buy_ratio = (
+        (fast_tape_buy_volume / fast_tape_total_volume) * 100.0
+        if fast_tape_total_volume > 0.0
+        else None
+    )
+    fast_tape_fresh = bool(
+        len(fast_tape_ticks) >= 5
+        and latest_age_sec is not None
+        and latest_age_sec <= 0.5
+        and fast_tape_window_span_sec is not None
+        and fast_tape_window_span_sec <= 3.0
+    )
     vwap_ticks = recent_ticks[:10]
     weighted_volume = sum(item["volume"] for item in vwap_ticks if item["volume"] > 0)
     micro_vwap = (
@@ -52072,6 +52490,21 @@ def _rising_missed_trusted_ws_momentum(
             if tick_acceleration_fresh
             else "trusted_ws_signed_0b_insufficient_10tick_window"
         ),
+        "rising_missed_tp1_ws_fast_tape_sample_count": len(fast_tape_ticks),
+        "rising_missed_tp1_ws_fast_tape_window_span_sec": (
+            round(fast_tape_window_span_sec, 6)
+            if fast_tape_window_span_sec is not None
+            else "-"
+        ),
+        "rising_missed_tp1_ws_fast_tape_buy_ratio": (
+            round(fast_tape_buy_ratio, 6) if fast_tape_buy_ratio is not None else "-"
+        ),
+        "rising_missed_tp1_ws_fast_tape_buy_count": fast_tape_buy_count,
+        "rising_missed_tp1_ws_fast_tape_sell_count": fast_tape_sell_count,
+        "rising_missed_tp1_ws_fast_tape_latest_side": (
+            str(fast_tape_ticks[0].get("side") or "-") if fast_tape_ticks else "-"
+        ),
+        "rising_missed_tp1_ws_fast_tape_fresh": fast_tape_fresh,
         "rising_missed_tp1_ws_micro_vwap": (
             round(micro_vwap, 6) if micro_vwap > 0 else "-"
         ),
@@ -57323,6 +57756,7 @@ def _submit_entry_split_probe_residual_locked(
         return False
     direction_fields: dict[str, Any] = {}
     continuation_action = "ALLOW_NORMAL"
+    nxt_wait_fast_tape_bounded_single_leg = False
     resolved_leg_prices: list[int] | None = None
     resolver_fields: list[dict[str, Any]] = []
     if post_probe_resolver_enabled:
@@ -57338,6 +57772,9 @@ def _submit_entry_split_probe_residual_locked(
         continuation_action = str(
             direction_fields.get("post_probe_continuation_action") or "DEFER"
         ).upper()
+        nxt_wait_fast_tape_bounded_single_leg = bool(
+            direction_fields.get("post_probe_nxt_wait_fast_tape_bounded_single_leg")
+        )
         if continuation_action == "DEFER":
             recheck_count = (
                 _safe_int(stock.get("entry_split_probe_recheck_count"), 0) + 1
@@ -57379,7 +57816,9 @@ def _submit_entry_split_probe_residual_locked(
                 **direction_fields,
             )
             return False
-        if bool(stock.get("entry_split_probe_deferred_once")):
+        if bool(stock.get("entry_split_probe_deferred_once")) and not bool(
+            direction_fields.get("post_probe_nxt_wait_fast_tape_ready")
+        ):
             continuation_action = "ALLOW_RECOVERED_WIDE"
             direction_fields["post_probe_continuation_action"] = continuation_action
             direction_fields["post_probe_direction_reason"] = (
@@ -57549,6 +57988,9 @@ def _submit_entry_split_probe_residual_locked(
                 "entry_split_probe_offset_profile": first_resolution.get(
                     "offset_profile"
                 ),
+                "entry_split_probe_nxt_wait_fast_tape_bounded_single_leg": (
+                    nxt_wait_fast_tape_bounded_single_leg
+                ),
             },
         )
 
@@ -57695,7 +58137,9 @@ def _submit_entry_split_probe_residual_locked(
             if leg_action == "DEFER":
                 failure_reason = "residual_leg_direction_deferred"
                 break
-            if bool(stock.get("entry_split_probe_deferred_once")):
+            if bool(stock.get("entry_split_probe_deferred_once")) and not bool(
+                leg_direction_fields.get("post_probe_nxt_wait_fast_tape_ready")
+            ):
                 leg_action = "ALLOW_RECOVERED_WIDE"
             leg_index = max(
                 0,
@@ -57909,9 +58353,20 @@ def _submit_entry_split_probe_residual_locked(
                 },
             ),
         )
+        if (
+            nxt_wait_fast_tape_bounded_single_leg
+            and len(residual_orders) > 1
+            and len(successful_orders) == 1
+        ):
+            failure_reason = "post_probe_nxt_wait_fast_tape_single_residual_leg_cap"
+            break
 
     if failure_reason:
         if successful_orders:
+            bounded_partial_submission = bool(
+                failure_reason
+                == "post_probe_nxt_wait_fast_tape_single_residual_leg_cap"
+            )
             _mutate_stock_state(
                 stock,
                 set_fields={
@@ -57919,6 +58374,9 @@ def _submit_entry_split_probe_residual_locked(
                     "entry_split_probe_phase": "residual_partial_submitted",
                     "entry_split_probe_abort_reason": failure_reason,
                     "entry_split_probe_scale_in_forbidden": True,
+                    "entry_split_probe_bounded_partial_submission": (
+                        bounded_partial_submission
+                    ),
                 },
             )
             update_probe_runtime_bundle(
@@ -57930,6 +58388,7 @@ def _submit_entry_split_probe_residual_locked(
                     _safe_int(order.get("qty"), 0) for order in successful_orders
                 ),
                 residual_orders=successful_orders,
+                bounded_partial_submission=bounded_partial_submission,
             )
             _log_entry_pipeline(
                 stock,
@@ -57941,6 +58400,7 @@ def _submit_entry_split_probe_residual_locked(
                     _safe_int(order.get("qty"), 0) for order in successful_orders
                 ),
                 residual_submitted_leg_count=len(successful_orders),
+                bounded_partial_submission=bounded_partial_submission,
                 actual_order_submitted=True,
                 broker_order_forbidden=True,
                 runtime_effect=True,
@@ -58218,8 +58678,35 @@ def handle_holding_state(
         ai_engine=ai_engine,
     ):
         return
-    _append_holding_price_sample(stock, now_ts=now_ts, curr_price=curr_p)
     price_key = _price_tracking_key(stock, code)
+    rest_quote_only_recovery = bool(
+        stock.get("holding_rest_quote_only_recovery")
+        or ws_data.get("holding_rest_quote_only_recovery")
+    )
+    if rest_quote_only_recovery:
+        _log_holding_pipeline(
+            stock,
+            code,
+            "holding_rest_quote_peak_update_blocked",
+            metric_role="source_quality_gate",
+            decision_authority="holding_peak_source_quality_guard",
+            window_policy="same_position_rest_quote_only_recovery",
+            sample_floor="not_applicable_runtime_guard",
+            primary_decision_metric="executable_peak_price_available",
+            source_quality_gate=("fresh_executable_bid_or_trusted_ws_trade_required"),
+            forbidden_uses=(
+                "rest_quote_peak_update|trailing_peak_arm|threshold_mutation|"
+                "provider_change|broker_guard_bypass"
+            ),
+            holding_rest_quote_only_recovery=True,
+            holding_rest_quote_peak_candidate=curr_p,
+            holding_rest_quote_peak_update_applied=False,
+            actual_order_submitted=False,
+            broker_order_forbidden=False,
+            runtime_effect=True,
+        )
+    else:
+        _append_holding_price_sample(stock, now_ts=now_ts, curr_price=curr_p)
 
     # --------------------------------------------------------
     # HOLDING 제어 흐름(요약)
@@ -58237,8 +58724,13 @@ def handle_holding_state(
     if isinstance(highest_prices, dict):
         with ENTRY_LOCK:
             if price_key not in highest_prices:
-                highest_prices[price_key] = curr_p
-            highest_prices[price_key] = max(highest_prices[price_key], curr_p)
+                highest_prices[price_key] = (
+                    max(1, _safe_int(buy_p, curr_p))
+                    if rest_quote_only_recovery
+                    else curr_p
+                )
+            if not rest_quote_only_recovery:
+                highest_prices[price_key] = max(highest_prices[price_key], curr_p)
 
     profit_rate = calculate_net_profit_rate(buy_p, curr_p)
     peak_profit = calculate_net_profit_rate(
@@ -61517,6 +62009,19 @@ def handle_holding_state(
         )
 
     if is_sell_signal:
+        if str(exit_rule or "").strip() == "scalp_trailing_take_profit":
+            if _rest_quote_only_hard_stop_confirmation_block(
+                stock,
+                code,
+                exit_rule=exit_rule,
+                profit_rate=profit_rate,
+                emergency_pct=-999.0,
+                held_sec=held_sec,
+                curr_price=curr_p,
+                buy_price=buy_p,
+                quote_fields=holding_ws_fields,
+            ):
+                return
         if not opening_rotation_active:
             if not _evaluate_holding_flow_override(
                 stock=stock,

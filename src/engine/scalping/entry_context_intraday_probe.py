@@ -207,6 +207,7 @@ def _event_fields(row: dict[str, Any]) -> dict[str, Any]:
         "stock_name",
         "timestamp",
         "event_time",
+        "emitted_at",
     ):
         if key in row and key not in merged:
             merged[key] = row.get(key)
@@ -271,7 +272,15 @@ def _event_has_required_feature(fields: dict[str, Any], feature: str) -> bool:
     if feature == "price_context":
         return any(
             _nonempty(fields.get(key))
-            for key in ("order_price", "resolved_order_price", "best_bid", "best_ask")
+            for key in (
+                "order_price",
+                "resolved_order_price",
+                "best_bid",
+                "best_ask",
+                "entry_price_input_resolved_order_price",
+                "entry_price_input_best_bid",
+                "entry_price_input_best_ask",
+            )
         )
     if feature == "quote_freshness":
         return any(
@@ -403,7 +412,12 @@ def _decision_point_rows(
             rows_by_point[point].append(fields)
     for rows in rows_by_point.values():
         rows.sort(
-            key=lambda item: str(item.get("event_time") or item.get("timestamp") or ""),
+            key=lambda item: str(
+                item.get("event_time")
+                or item.get("timestamp")
+                or item.get("emitted_at")
+                or ""
+            ),
             reverse=True,
         )
     return rows_by_point
@@ -627,12 +641,28 @@ def _fields_to_ws_data(fields: dict[str, Any]) -> dict[str, Any]:
         fields,
         "curr",
         "current_price",
+        "entry_price_input_current_price",
         "order_price",
         "resolved_order_price",
+        "entry_price_input_resolved_order_price",
         default=0,
     )
-    best_bid = _first_nonempty(fields, "best_bid", "top_bid", "bid_price", default=0)
-    best_ask = _first_nonempty(fields, "best_ask", "top_ask", "ask_price", default=0)
+    best_bid = _first_nonempty(
+        fields,
+        "best_bid",
+        "entry_price_input_best_bid",
+        "top_bid",
+        "bid_price",
+        default=0,
+    )
+    best_ask = _first_nonempty(
+        fields,
+        "best_ask",
+        "entry_price_input_best_ask",
+        "top_ask",
+        "ask_price",
+        default=0,
+    )
     ws_data = {
         "curr": curr,
         "current_price": curr,
@@ -676,15 +706,20 @@ def _fields_to_price_ctx(fields: dict[str, Any]) -> dict[str, Any]:
         fields,
         "curr",
         "current_price",
+        "entry_price_input_current_price",
         "order_price",
         "resolved_order_price",
+        "entry_price_input_resolved_order_price",
         default=0,
     )
     order_price = _first_nonempty(
         fields,
         "order_price",
         "resolved_order_price",
+        "entry_price_input_resolved_order_price",
         "candidate_order_price",
+        "candidate_price",
+        "original_order_price",
         default=current_price,
     )
     return {
@@ -711,6 +746,12 @@ def _fields_to_price_ctx(fields: dict[str, Any]) -> dict[str, Any]:
         ),
         "entry_context_quality": _first_nonempty(
             fields, "entry_context_quality", default=None
+        ),
+        "best_bid": _int_or_zero(
+            _first_nonempty(fields, "best_bid", "entry_price_input_best_bid", default=0)
+        ),
+        "best_ask": _int_or_zero(
+            _first_nonempty(fields, "best_ask", "entry_price_input_best_ask", default=0)
         ),
         "orderbook_micro": {
             "spread_bp": _first_nonempty(fields, "spread_bp", default=None),
@@ -787,6 +828,9 @@ def _endpoint_summary(results: list[dict[str, Any]]) -> dict[str, Any]:
         "bedrock_failback_used_count": sum(
             1 for row in ok_rows if row.get("bedrock_failback_used")
         ),
+        "bedrock_fallback_used_count": sum(
+            1 for row in ok_rows if row.get("bedrock_fallback_used")
+        ),
     }
 
 
@@ -800,6 +844,16 @@ def _endpoint_provider_env(provider_mode: str) -> dict[str, str]:
             "KORSTOCKSCAN_BEDROCK_NOVA_LITE_ROUTE_MODE": "primary",
             "KORSTOCKSCAN_BEDROCK_NOVA_LITE_PRIMARY_FAMILY": "lite_v2",
             "KORSTOCKSCAN_BEDROCK_NOVA_LITE_PRIMARY_ENDPOINTS": "holding_flow",
+        }
+    if provider_mode == "openai_primary_bedrock_fallback":
+        return {
+            "KORSTOCKSCAN_BEDROCK_ENTRY_PRICE_ROUTE_MODE": "off",
+            "KORSTOCKSCAN_BEDROCK_NOVA_LITE_ROUTE_MODE": "off",
+            "KORSTOCKSCAN_OPENAI_PRIMARY_BEDROCK_FALLBACK_ENDPOINTS": "entry_price",
+            "KORSTOCKSCAN_OPENAI_PRIMARY_BEDROCK_FALLBACK_FAMILY": "lite_v2",
+            "KORSTOCKSCAN_OPENAI_PRIMARY_BEDROCK_FALLBACK_PRIMARY_TIMEOUT_MS": "7000",
+            "KORSTOCKSCAN_OPENAI_PRIMARY_BEDROCK_FALLBACK_TIMEOUT_MS": "7000",
+            "KORSTOCKSCAN_OPENAI_ENTRY_PRICE_TIMEOUT_MS": "15000",
         }
     return {
         "KORSTOCKSCAN_BEDROCK_ENTRY_PRICE_ROUTE_MODE": "off",
@@ -906,11 +960,12 @@ def _run_endpoint_provider_compare(
     model: str,
     effort: str,
     sample_limit: int,
+    points: tuple[str, ...] = ("entry_price", "holding_flow"),
+    fallback_endpoints: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     from src.engine import ai_engine_openai as openai_module
 
     keys = _api_keys()
-    points = ("entry_price", "holding_flow")
     if not keys:
         return {
             point: {
@@ -922,6 +977,86 @@ def _run_endpoint_provider_compare(
             for point in points
         }
 
+    point_results: dict[str, list[dict[str, Any]]] = {point: [] for point in points}
+    valid_rows_by_point: dict[str, list[dict[str, Any]]] = {
+        point: [] for point in points
+    }
+    for point in points:
+        contract = AI_DECISION_POINT_CONTRACTS[point]
+        source_rows = rows_by_point.get(point, [])[: max(1, int(sample_limit or 1))]
+        for fields in source_rows:
+            schema = _event_schema(fields)
+            missing_features = [
+                feature
+                for feature in contract["required_features"]
+                if not _event_has_required_feature(fields, feature)
+            ]
+            source_quality = (
+                str(fields.get("ai_input_source_quality_status") or "").strip().lower()
+            )
+            quote_stale_raw = fields.get("quote_stale")
+            quote_stale_text = str(quote_stale_raw).strip().lower()
+            quote_stale = _boolish(quote_stale_raw)
+            quote_stale_known = isinstance(
+                quote_stale_raw, bool
+            ) or quote_stale_text in {
+                "0",
+                "1",
+                "false",
+                "true",
+                "no",
+                "yes",
+                "n",
+                "y",
+                "off",
+                "on",
+            }
+            quote_fresh = _boolish(fields.get("quote_fresh_for_entry"))
+            quote_freshness_invalid = bool(
+                point == "entry_price"
+                and (quote_stale or (not quote_stale_known and not quote_fresh))
+            )
+            if (
+                schema not in contract["schemas"]
+                or missing_features
+                or quote_freshness_invalid
+                or not source_quality
+                or source_quality
+                in {
+                    "stale",
+                    "missing",
+                    "insufficient",
+                    "error",
+                    "unknown",
+                    "not_evaluated",
+                }
+            ):
+                point_results[point].append(
+                    {
+                        "status": "skipped",
+                        "reason": "source_quality_contract_missing",
+                        "stock_code": fields.get("stock_code"),
+                        "event_time": fields.get("event_time")
+                        or fields.get("timestamp")
+                        or fields.get("emitted_at"),
+                        "schema": schema,
+                        "missing_features": missing_features,
+                        "source_quality": source_quality or "not_recorded",
+                        "quote_stale": quote_stale,
+                        "quote_freshness_invalid": quote_freshness_invalid,
+                    }
+                )
+                continue
+            valid_rows_by_point[point].append(fields)
+    if not any(valid_rows_by_point.values()):
+        return {
+            point: {
+                "results": point_results[point],
+                "summary": _endpoint_summary(point_results[point]),
+            }
+            for point in points
+        }
+
     original_rules = openai_module.TRADING_RULES
     original_env = _temporary_env(_endpoint_provider_env(provider_mode))
     openai_module.TRADING_RULES = _RulesProxy(
@@ -929,17 +1064,20 @@ def _run_endpoint_provider_compare(
         GPT_REPORT_MODEL=model,
         OPENAI_TRANSPORT_MODE="http",
         OPENAI_REASONING_EFFORT=effort,
-        OPENAI_ENTRY_PRICE_TIMEOUT_MS=10000,
+        OPENAI_ENTRY_PRICE_TIMEOUT_MS=(
+            15000 if "entry_price" in fallback_endpoints else 10000
+        ),
         OPENAI_HOLDING_FLOW_TIMEOUT_MS=10000,
-        OPENAI_PRIMARY_BEDROCK_FALLBACK_ENDPOINTS=(),
+        OPENAI_PRIMARY_BEDROCK_FALLBACK_ENDPOINTS=fallback_endpoints,
+        OPENAI_PRIMARY_BEDROCK_FALLBACK_FAMILY="lite_v2",
+        OPENAI_PRIMARY_BEDROCK_FALLBACK_PRIMARY_TIMEOUT_MS=7000,
+        OPENAI_PRIMARY_BEDROCK_FALLBACK_TIMEOUT_MS=7000,
         OPENAI_RESPONSES_MAX_OUTPUT_TOKENS=512,
     )
     try:
         engine = openai_module.GPTSniperEngine(keys[:1], announce_startup=False)
-        point_results: dict[str, list[dict[str, Any]]] = {point: [] for point in points}
         for point in points:
-            rows = rows_by_point.get(point, [])[: max(1, int(sample_limit or 1))]
-            for index, fields in enumerate(rows, start=1):
+            for index, fields in enumerate(valid_rows_by_point[point], start=1):
                 started = time.perf_counter()
                 stock_code = str(
                     _first_nonempty(
@@ -971,7 +1109,13 @@ def _run_endpoint_provider_compare(
                         openai_action = str(result.get("action") or "-").upper()
                         baseline_order_price = _int_or_zero(
                             _first_nonempty(
-                                fields, "order_price", "resolved_order_price", default=0
+                                fields,
+                                "order_price",
+                                "resolved_order_price",
+                                "entry_price_input_resolved_order_price",
+                                "candidate_price",
+                                "original_order_price",
+                                default=0,
                             )
                         )
                         provider_order_price = _int_or_zero(result.get("order_price"))
@@ -984,7 +1128,8 @@ def _run_endpoint_provider_compare(
                                 "stock_code": stock_code,
                                 "stock_name": stock_name,
                                 "event_time": fields.get("event_time")
-                                or fields.get("timestamp"),
+                                or fields.get("timestamp")
+                                or fields.get("emitted_at"),
                                 "model": model,
                                 "effort": effort,
                                 "elapsed_ms": int(
@@ -1011,6 +1156,9 @@ def _run_endpoint_provider_compare(
                                 ),
                                 "bedrock_failback_used": bool(
                                     result.get("bedrock_failback_used", False)
+                                ),
+                                "bedrock_fallback_used": bool(
+                                    result.get("bedrock_fallback_used", False)
                                 ),
                             }
                         )
@@ -1042,7 +1190,8 @@ def _run_endpoint_provider_compare(
                                 "stock_code": stock_code,
                                 "stock_name": stock_name,
                                 "event_time": fields.get("event_time")
-                                or fields.get("timestamp"),
+                                or fields.get("timestamp")
+                                or fields.get("emitted_at"),
                                 "model": model,
                                 "effort": effort,
                                 "elapsed_ms": int(
@@ -1071,6 +1220,9 @@ def _run_endpoint_provider_compare(
                                 "bedrock_failback_used": bool(
                                     result.get("bedrock_failback_used", False)
                                 ),
+                                "bedrock_fallback_used": bool(
+                                    result.get("bedrock_fallback_used", False)
+                                ),
                             }
                         )
                 except Exception as exc:
@@ -1083,7 +1235,8 @@ def _run_endpoint_provider_compare(
                             "stock_code": stock_code,
                             "stock_name": stock_name,
                             "event_time": fields.get("event_time")
-                            or fields.get("timestamp"),
+                            or fields.get("timestamp")
+                            or fields.get("emitted_at"),
                             "model": model,
                             "effort": effort,
                             "elapsed_ms": int((time.perf_counter() - started) * 1000),
@@ -1126,6 +1279,16 @@ def _call_provider_endpoint_compare(
         effort=effort,
         sample_limit=sample_limit,
     )
+    entry_price_candidate_route = _run_endpoint_provider_compare(
+        rows_by_point,
+        provider_mode="openai_primary_bedrock_fallback",
+        provider_label="openai_primary_nova_lite_v2_fallback",
+        model=model,
+        effort=effort,
+        sample_limit=sample_limit,
+        points=("entry_price",),
+        fallback_endpoints=("entry_price",),
+    )
     return {
         "input_variant": "enriched_probe_context_v1",
         "bedrock_primary": {
@@ -1136,7 +1299,14 @@ def _call_provider_endpoint_compare(
             "provider_env": _endpoint_provider_env("openai_only"),
             "decision_points": openai_gpt54_mini,
         },
+        "entry_price_candidate_route": {
+            "provider_env": _endpoint_provider_env("openai_primary_bedrock_fallback"),
+            "decision_points": entry_price_candidate_route,
+        },
         "pairwise": _pair_provider_endpoint_results(bedrock_primary, openai_gpt54_mini),
+        "candidate_pairwise": _pair_provider_endpoint_results(
+            bedrock_primary, entry_price_candidate_route
+        ),
     }
 
 

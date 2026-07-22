@@ -242,12 +242,20 @@ def test_provider_endpoint_compare_runs_bedrock_primary_and_openai_then_restores
             assert (
                 getattr(openai_module.TRADING_RULES, "OPENAI_REASONING_EFFORT") == "low"
             )
+            expected_fallback_endpoints = (
+                ("entry_price",)
+                if mod.os.environ.get(
+                    "KORSTOCKSCAN_OPENAI_PRIMARY_BEDROCK_FALLBACK_ENDPOINTS"
+                )
+                == "entry_price"
+                else ()
+            )
             assert (
                 getattr(
                     openai_module.TRADING_RULES,
                     "OPENAI_PRIMARY_BEDROCK_FALLBACK_ENDPOINTS",
                 )
-                == ()
+                == expected_fallback_endpoints
             )
 
         def evaluate_scalping_entry_price(
@@ -313,10 +321,16 @@ def test_provider_endpoint_compare_runs_bedrock_primary_and_openai_then_restores
                 "stock_code": "123456",
                 "stock_name": "ProbeA",
                 "event_time": "2026-07-13T10:30:00",
+                "ai_input_schema": "entry_price_compact_v1",
                 "action": "USE_DEFENSIVE",
                 "order_price": "10000",
                 "quote_age_ms": "100",
+                "quote_stale": False,
+                "entry_liquidity_score": "70",
+                "fillability_score": "65",
+                "order_flow_pressure_score": "61",
                 "entry_context_quality": "partial",
+                "ai_input_source_quality_status": "partial",
             }
         ],
         "holding_flow": [
@@ -324,10 +338,13 @@ def test_provider_endpoint_compare_runs_bedrock_primary_and_openai_then_restores
                 "stock_code": "123456",
                 "stock_name": "ProbeA",
                 "event_time": "2026-07-13T10:35:00",
+                "ai_input_schema": "holding_flow_text_v1",
                 "flow_action": "HOLD",
                 "flow_state": "absorption",
                 "profit_rate": "0.20",
                 "peak_profit": "0.80",
+                "entry_context_quality": "partial",
+                "ai_input_source_quality_status": "partial",
             }
         ],
     }
@@ -353,6 +370,68 @@ def test_provider_endpoint_compare_runs_bedrock_primary_and_openai_then_restores
     assert result["pairwise"]["entry_price"]["summary"]["order_price_diff_count"] == 1
     assert result["pairwise"]["holding_flow"]["summary"]["action_diff_count"] == 1
     assert result["pairwise"]["holding_flow"]["summary"]["flow_state_diff_count"] == 1
+    candidate = result["entry_price_candidate_route"]
+    assert candidate["provider_env"]["KORSTOCKSCAN_OPENAI_ENTRY_PRICE_TIMEOUT_MS"] == (
+        "15000"
+    )
+    assert candidate["decision_points"]["entry_price"]["summary"]["row_count"] == 1
+    assert result["candidate_pairwise"]["entry_price"]["summary"]["pair_count"] == 1
+
+
+def test_provider_endpoint_compare_skips_source_quality_contract_gaps(monkeypatch):
+    from src.engine import ai_engine_openai as openai_module
+
+    class FailIfConstructed:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("provider must not run on invalid source rows")
+
+    monkeypatch.setattr(openai_module, "GPTSniperEngine", FailIfConstructed)
+    monkeypatch.setattr(mod, "_api_keys", lambda: ["test-key"])
+
+    result = mod._run_endpoint_provider_compare(
+        {
+            "entry_price": [
+                {
+                    "stock_code": "123456",
+                    "event_time": "2026-07-22T10:00:00",
+                    "openai_endpoint_name": "entry_price",
+                }
+            ]
+        },
+        provider_mode="openai_only",
+        provider_label="openai_only",
+        model="gpt-5.4-mini",
+        effort="low",
+        sample_limit=1,
+        points=("entry_price",),
+    )
+
+    assert result["entry_price"]["summary"]["row_count"] == 0
+    assert result["entry_price"]["summary"]["skipped_count"] == 1
+    assert result["entry_price"]["results"][0]["reason"] == (
+        "source_quality_contract_missing"
+    )
+
+
+def test_decision_point_rows_prefers_latest_emitted_at():
+    rows = mod._decision_point_rows(
+        [],
+        [
+            {
+                "stage": "entry_ai_price_canary_applied",
+                "emitted_at": "2026-07-22T10:00:00",
+                "fields": {"stock_code": "old", "openai_endpoint_name": "entry_price"},
+            },
+            {
+                "stage": "entry_ai_price_canary_applied",
+                "emitted_at": "2026-07-22T11:00:00",
+                "fields": {"stock_code": "new", "openai_endpoint_name": "entry_price"},
+            },
+        ],
+    )
+
+    assert rows["entry_price"][0]["stock_code"] == "new"
+    assert rows["entry_price"][0]["emitted_at"] == "2026-07-22T11:00:00"
 
 
 def test_probe_report_includes_endpoint_compare_when_requested(monkeypatch):

@@ -2792,6 +2792,14 @@ def test_build_ai_ops_log_fields_preserves_operational_meta():
             "openai_transport_requested_mode": "http",
             "openai_model": "gpt-5.4-nano",
             "openai_timeout_budget_ms": 5000,
+            "openai_primary_provider": "openai",
+            "openai_primary_error_type": "OpenAIResponsesHTTPError",
+            "openai_primary_timeout_budget_ms": 7000,
+            "openai_total_route_timeout_budget_ms": 15000,
+            "bedrock_fallback_family": "lite_v2",
+            "bedrock_fallback_used": True,
+            "bedrock_primary_used": False,
+            "bedrock_failback_used": False,
             "openai_request_id": "analyze_target:005930:1:abcd",
             "openai_endpoint_name": "analyze_target",
             "openai_schema_name": "entry_v1",
@@ -2847,6 +2855,14 @@ def test_build_ai_ops_log_fields_preserves_operational_meta():
     assert fields["openai_transport_requested_mode"] == "http"
     assert fields["openai_model"] == "gpt-5.4-nano"
     assert fields["openai_timeout_budget_ms"] == 5000
+    assert fields["openai_primary_provider"] == "openai"
+    assert fields["openai_primary_error_type"] == "OpenAIResponsesHTTPError"
+    assert fields["openai_primary_timeout_budget_ms"] == 7000
+    assert fields["openai_total_route_timeout_budget_ms"] == 15000
+    assert fields["bedrock_fallback_family"] == "lite_v2"
+    assert fields["bedrock_fallback_used"] is True
+    assert fields["bedrock_primary_used"] is False
+    assert fields["bedrock_failback_used"] is False
     assert fields["openai_request_id"] == "analyze_target:005930:1:abcd"
     assert fields["openai_endpoint_name"] == "analyze_target"
     assert fields["openai_schema_name"] == "entry_v1"
@@ -6027,3 +6043,52 @@ def test_apply_initial_entry_qty_cap_limits_total_qty_without_reordering():
     assert applied is True
     assert adjusted[0]["qty"] == 1
     assert adjusted[1]["qty"] == 0
+
+
+def test_entry_ai_price_input_audit_fields_flattens_provider_compare_contract(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        handlers,
+        "extract_scalping_feature_packet",
+        lambda *args, **kwargs: {
+            "entry_liquidity_score": 72,
+            "fillability_score": 68,
+            "order_flow_pressure_score": 61,
+            "entry_context_quality": "partial",
+            "entry_context_missing_features": "signed_tape",
+            "quote_age_ms": 120,
+            "quote_stale": False,
+        },
+    )
+    monkeypatch.setattr(
+        handlers,
+        "build_scalping_feature_audit_fields",
+        lambda packet: {"quote_age_ms": packet["quote_age_ms"]},
+    )
+
+    fields = handlers._entry_ai_price_input_audit_fields(
+        result={"ai_input_schema": "entry_price_compact_v1"},
+        price_ctx={
+            "current_price": 10020,
+            "resolved_order_price": 10000,
+            "best_bid": 10010,
+            "best_ask": 10030,
+            "quote_stale": False,
+        },
+        ws_data={"curr": 10020},
+        recent_ticks=[],
+        recent_candles=[],
+    )
+
+    assert fields["entry_price_input_schema"] == "entry_price_compact_v1"
+    assert fields["entry_price_input_resolved_order_price"] == 10000
+    assert fields["entry_price_input_best_bid"] == 10010
+    assert fields["entry_price_input_best_ask"] == 10030
+    assert fields["entry_liquidity_score"] == 72
+    assert fields["quote_age_ms"] == 120
+    assert fields["quote_stale"] is False
+    assert fields["ai_input_source_quality_status"] == "partial"
+    assert fields["entry_price_input_decision_authority"] == (
+        "provider_route_comparison_only"
+    )

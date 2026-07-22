@@ -152,6 +152,8 @@ def test_completed_sell_closes_persisted_probe_bundle(monkeypatch, tmp_path):
         "entry_split_probe_direction_state": "UNKNOWN",
         "entry_split_probe_continuation_action": "DEFER",
         "entry_split_probe_offset_profile": "recovered_wide",
+        "entry_split_probe_nxt_wait_fast_tape_bounded_single_leg": True,
+        "entry_split_probe_bounded_partial_submission": True,
         "rising_missed_scout_upgraded": True,
     }
 
@@ -173,6 +175,8 @@ def test_completed_sell_closes_persisted_probe_bundle(monkeypatch, tmp_path):
     assert "entry_split_probe_recheck_due_at" not in stock
     assert "entry_split_probe_direction_state" not in stock
     assert "entry_split_probe_offset_profile" not in stock
+    assert "entry_split_probe_nxt_wait_fast_tape_bounded_single_leg" not in stock
+    assert "entry_split_probe_bounded_partial_submission" not in stock
     assert "rising_missed_scout_upgraded" not in stock
 
 
@@ -952,9 +956,12 @@ def test_probe_residual_network_path_does_not_hold_shared_receipt_lock(monkeypat
     )
 
 
-@pytest.mark.parametrize("second_leg_weak", [False, True])
+@pytest.mark.parametrize(
+    ("second_leg_weak", "fast_tape_single_leg"),
+    [(False, False), (True, False), (False, True)],
+)
 def test_post_probe_unknown_defers_then_recovery_reprices_each_p1_leg(
-    monkeypatch, tmp_path, second_leg_weak
+    monkeypatch, tmp_path, second_leg_weak, fast_tape_single_leg
 ):
     sent = []
     direction = {"state": "UNKNOWN", "action": "DEFER", "recovery_calls": 0}
@@ -1004,11 +1011,15 @@ def test_post_probe_unknown_defers_then_recovery_reprices_each_p1_leg(
                     "post_probe_continuation_action": "DEFER",
                     "post_probe_direction_reason": "second_leg_weakened",
                 }
-        return {
+        fields = {
             "post_probe_direction_state": direction["state"],
             "post_probe_continuation_action": direction["action"],
             "post_probe_direction_reason": "test",
         }
+        if direction["state"] == "STRONG" and fast_tape_single_leg:
+            fields["post_probe_nxt_wait_fast_tape_ready"] = True
+            fields["post_probe_nxt_wait_fast_tape_bounded_single_leg"] = True
+        return fields
 
     monkeypatch.setattr(
         state_handlers, "_post_probe_direction_fields", _direction_fields
@@ -1020,6 +1031,11 @@ def test_post_probe_unknown_defers_then_recovery_reprices_each_p1_leg(
             "account_guard_allowed": True,
             "account_guard_reason": "probe_residual_account_guard_passed",
         },
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_post_probe_chase_guard_fields",
+        lambda *args, **kwargs: {"post_probe_chase_guard_blocked": False},
     )
     monkeypatch.setattr(
         state_handlers,
@@ -1110,12 +1126,26 @@ def test_post_probe_unknown_defers_then_recovery_reprices_each_p1_leg(
         now_ts=100.5,
         now_dt=datetime(2026, 7, 20, 10, 0, 1),
     )
-    expected_sent = [(2, 10060)] if second_leg_weak else [(2, 10060), (2, 10010)]
+    if fast_tape_single_leg:
+        expected_sent = [(2, 10090)]
+    elif second_leg_weak:
+        expected_sent = [(2, 10060)]
+    else:
+        expected_sent = [(2, 10060), (2, 10010)]
     assert sent == expected_sent
-    assert stock["entry_split_probe_offset_profile"] == "recovered_wide"
-    assert stock["entry_split_probe_phase"] == (
-        "residual_partial_submitted" if second_leg_weak else "residual_submitted"
+    assert stock["entry_split_probe_offset_profile"] == (
+        "narrow" if fast_tape_single_leg else "recovered_wide"
     )
+    assert stock["entry_split_probe_phase"] == (
+        "residual_partial_submitted"
+        if second_leg_weak or fast_tape_single_leg
+        else "residual_submitted"
+    )
+    if fast_tape_single_leg:
+        assert stock["entry_split_probe_abort_reason"] == (
+            "post_probe_nxt_wait_fast_tape_single_residual_leg_cap"
+        )
+        assert stock["entry_split_probe_bounded_partial_submission"] is True
 
 
 def test_probe_residual_timeout_keeps_one_share_and_releases_pyramid_recheck(

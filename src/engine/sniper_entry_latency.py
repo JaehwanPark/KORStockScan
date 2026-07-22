@@ -1687,7 +1687,7 @@ def _latency_signed_tape_fields(
             3000.0,
         ),
     )
-    rows: list[tuple[str, float]] = []
+    rows: list[tuple[str, float, float]] = []
     rest_fresh_count = 0
     rest_stale_or_unknown_count = 0
     trusted_ws_count = 0
@@ -1711,7 +1711,12 @@ def _latency_signed_tape_fields(
             rest_fresh_count += 1
         side, volume = _signed_trade_side_and_volume_from_tick(tick)
         if side in {"BUY", "SELL"} and volume > 0:
-            rows.append((side, volume))
+            received_at = _to_float(tick.get("received_at_ms"), 0.0)
+            if received_at > 10_000_000_000:
+                received_at /= 1000.0
+            if received_at <= 0.0:
+                received_at = _to_float(tick.get("ts"), 0.0)
+            rows.append((side, volume, received_at))
             aggressor_source = str(tick.get("aggressor_source") or "").strip()
             if aggressor_source == "kiwoom_0b_signed_trade_volume":
                 trusted_ws_count += 1
@@ -1720,10 +1725,10 @@ def _latency_signed_tape_fields(
         if len(rows) >= window:
             break
 
-    buy_volume = sum(volume for side, volume in rows if side == "BUY")
-    sell_volume = sum(volume for side, volume in rows if side == "SELL")
-    buy_count = sum(1 for side, _volume in rows if side == "BUY")
-    sell_count = sum(1 for side, _volume in rows if side == "SELL")
+    buy_volume = sum(volume for side, volume, _ts in rows if side == "BUY")
+    sell_volume = sum(volume for side, volume, _ts in rows if side == "SELL")
+    buy_count = sum(1 for side, _volume, _ts in rows if side == "BUY")
+    sell_count = sum(1 for side, _volume, _ts in rows if side == "SELL")
     sample_count = len(rows)
     total_volume = buy_volume + sell_volume
     buy_ratio = (buy_volume / total_volume * 100.0) if total_volume > 0 else 50.0
@@ -1734,6 +1739,24 @@ def _latency_signed_tape_fields(
         and buy_ratio <= max_buy_ratio
     )
     latest_side = rows[0][0] if rows else "UNKNOWN"
+    trusted_received_ts = [
+        received_at for _side, _volume, received_at in rows if received_at > 0
+    ]
+    latest_received_at = max(trusted_received_ts, default=0.0)
+    earliest_received_at = min(trusted_received_ts, default=0.0)
+    event_time_latest_side = (
+        max(rows, key=lambda row: row[2])[0]
+        if len(trusted_received_ts) == sample_count and sample_count > 0
+        else "UNKNOWN"
+    )
+    tape_window_span_sec = (
+        max(0.0, latest_received_at - earliest_received_at)
+        if len(trusted_received_ts) == sample_count and sample_count >= 2
+        else None
+    )
+    tape_latest_age_ms = (
+        (now_ts - latest_received_at) * 1000.0 if latest_received_at > 0.0 else None
+    )
     latest_buy_single = _first_present_float(
         ws.get("buy_exec_single"), item.get("buy_exec_single"), default=0.0
     )
@@ -1772,6 +1795,19 @@ def _latency_signed_tape_fields(
             float(buy_ratio), 3
         ),
         "latency_true_ofi_direct_canary_signed_tape_latest_side": latest_side,
+        "latency_true_ofi_direct_canary_signed_tape_event_time_latest_side": (
+            event_time_latest_side
+        ),
+        "latency_true_ofi_direct_canary_signed_tape_window_span_sec": (
+            round(tape_window_span_sec, 6)
+            if tape_window_span_sec is not None
+            else "not_available"
+        ),
+        "latency_true_ofi_direct_canary_signed_tape_latest_age_ms": (
+            round(tape_latest_age_ms, 3)
+            if tape_latest_age_ms is not None
+            else "not_available"
+        ),
         "latency_true_ofi_direct_canary_signed_tape_sell_dominated": sell_dominated,
         "latency_true_ofi_direct_canary_signed_tape_latest_buy_single": int(
             latest_buy_single
@@ -2513,6 +2549,51 @@ def _latency_true_ofi_direct_canary_fields(
         os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_NXT_PROBABILITY_BAND_MIN_DELTA_PCT"),
         8.0,
     )
+    nxt_fast_tape_continuation_enabled = _truthy(
+        os.getenv(
+            "KORSTOCKSCAN_LATENCY_TRUE_OFI_NXT_FAST_TAPE_CONTINUATION_ENABLED",
+            "true",
+        )
+    )
+    nxt_fast_tape_min_depth_fraction = min(
+        1.0,
+        max(
+            0.95,
+            _to_float(
+                os.getenv(
+                    "KORSTOCKSCAN_LATENCY_TRUE_OFI_NXT_FAST_TAPE_MIN_DEPTH_FRACTION"
+                ),
+                0.98,
+            ),
+        ),
+    )
+    nxt_fast_tape_min_depth_ratio = (
+        nxt_probability_band_min_depth_ratio * nxt_fast_tape_min_depth_fraction
+    )
+    nxt_fast_tape_max_window_span_sec = max(
+        0.1,
+        min(
+            5.0,
+            _to_float(
+                os.getenv(
+                    "KORSTOCKSCAN_LATENCY_TRUE_OFI_NXT_FAST_TAPE_MAX_WINDOW_SPAN_SEC"
+                ),
+                3.0,
+            ),
+        ),
+    )
+    nxt_fast_tape_max_latest_age_ms = max(
+        1.0,
+        min(
+            500.0,
+            _to_float(
+                os.getenv(
+                    "KORSTOCKSCAN_LATENCY_TRUE_OFI_NXT_FAST_TAPE_MAX_LATEST_AGE_MS"
+                ),
+                500.0,
+            ),
+        ),
+    )
     min_signal_score = max(
         0.0,
         _to_float(
@@ -2727,6 +2808,15 @@ def _latency_true_ofi_direct_canary_fields(
             0.0,
         )
     )
+    signed_tape_window = max(
+        1,
+        int(
+            _to_float(
+                tape_fields.get("latency_true_ofi_direct_canary_signed_tape_window"),
+                5.0,
+            )
+        ),
+    )
     signed_tape_trusted_ws_count = int(
         _to_float(
             tape_fields.get(
@@ -2754,6 +2844,53 @@ def _latency_true_ofi_direct_canary_fields(
     signed_tape_buy_ratio = _to_float(
         tape_fields.get("latency_true_ofi_direct_canary_signed_tape_buy_ratio"),
         -1.0,
+    )
+    signed_tape_net_buy_volume = int(
+        _to_float(
+            tape_fields.get(
+                "latency_true_ofi_direct_canary_signed_tape_net_buy_volume"
+            ),
+            0.0,
+        )
+    )
+    signed_tape_buy_count = int(
+        _to_float(
+            tape_fields.get("latency_true_ofi_direct_canary_signed_tape_buy_count"),
+            0.0,
+        )
+    )
+    signed_tape_sell_count = int(
+        _to_float(
+            tape_fields.get("latency_true_ofi_direct_canary_signed_tape_sell_count"),
+            0.0,
+        )
+    )
+    signed_tape_latest_side = str(
+        tape_fields.get(
+            "latency_true_ofi_direct_canary_signed_tape_event_time_latest_side"
+        )
+        or ""
+    ).upper()
+    signed_tape_window_span_sec = _to_float(
+        tape_fields.get("latency_true_ofi_direct_canary_signed_tape_window_span_sec"),
+        -1.0,
+    )
+    signed_tape_latest_age_ms = _to_float(
+        tape_fields.get("latency_true_ofi_direct_canary_signed_tape_latest_age_ms"),
+        -1.0,
+    )
+    probe_first_active = bool(
+        _truthy(os.getenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ENABLED", "false"))
+        and str(
+            os.getenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ACTIVE_DATE") or ""
+        ).strip()
+        == current_date
+        and _truthy(
+            os.getenv(
+                "KORSTOCKSCAN_DYNAMIC_ENTRY_PRICE_RESOLVER_POST_PROBE_ENABLED",
+                "false",
+            )
+        )
     )
     dynamic_age_eligible = bool(
         dynamic_age_active
@@ -2961,6 +3098,34 @@ def _latency_true_ofi_direct_canary_fields(
         "latency_true_ofi_nxt_probability_band_depth_ratio": round(
             estimator_depth_ratio, 4
         ),
+        "latency_true_ofi_nxt_fast_tape_continuation_enabled": (
+            nxt_fast_tape_continuation_enabled
+        ),
+        "latency_true_ofi_nxt_fast_tape_continuation_applied": False,
+        "latency_true_ofi_nxt_fast_tape_continuation_reason": "not_evaluated",
+        "latency_true_ofi_nxt_fast_tape_min_depth_fraction": round(
+            nxt_fast_tape_min_depth_fraction, 4
+        ),
+        "latency_true_ofi_nxt_fast_tape_min_depth_ratio": round(
+            nxt_fast_tape_min_depth_ratio, 4
+        ),
+        "latency_true_ofi_nxt_fast_tape_max_window_span_sec": round(
+            nxt_fast_tape_max_window_span_sec, 3
+        ),
+        "latency_true_ofi_nxt_fast_tape_max_latest_age_ms": round(
+            nxt_fast_tape_max_latest_age_ms, 3
+        ),
+        "latency_true_ofi_nxt_fast_tape_window_span_sec": (
+            round(signed_tape_window_span_sec, 6)
+            if signed_tape_window_span_sec >= 0.0
+            else "not_available"
+        ),
+        "latency_true_ofi_nxt_fast_tape_latest_age_ms": (
+            round(signed_tape_latest_age_ms, 3)
+            if signed_tape_latest_age_ms >= 0.0
+            else "not_available"
+        ),
+        "latency_true_ofi_nxt_fast_tape_probe_first_active": probe_first_active,
         "latency_true_ofi_direct_canary_min_signal_score": round(min_signal_score, 3),
         "latency_true_ofi_direct_canary_min_delta_pct": round(min_delta_pct, 3),
         "latency_true_ofi_direct_canary_signal_score": round(
@@ -3135,11 +3300,11 @@ def _latency_true_ofi_direct_canary_fields(
                 ),
             ),
         )
-        failed_check = next(
-            (reason for reason, passed in nxt_probability_band_checks if not passed),
-            "",
-        )
-        if not failed_check:
+        failed_checks = [
+            reason for reason, passed in nxt_probability_band_checks if not passed
+        ]
+        failed_check = failed_checks[0] if failed_checks else ""
+        if not failed_checks:
             fields.update(
                 {
                     "latency_true_ofi_direct_canary_applied": True,
@@ -3153,7 +3318,81 @@ def _latency_true_ofi_direct_canary_fields(
                 }
             )
             return fields
-        fields["latency_true_ofi_nxt_probability_band_reason"] = failed_check
+        nxt_fast_tape_checks = (
+            ("capability_disabled", nxt_fast_tape_continuation_enabled),
+            ("probe_first_post_probe_required", probe_first_active),
+            (
+                "non_marginal_depth_failure",
+                failed_checks == ["depth_ratio_below_floor"]
+                and estimator_depth_ratio >= nxt_fast_tape_min_depth_ratio,
+            ),
+            ("positive_true_ofi_required", true_ofi > 0.0),
+            (
+                "full_trusted_ws_tape_required",
+                signed_tape_sample_count >= signed_tape_window
+                and signed_tape_trusted_ws_count == signed_tape_sample_count
+                and signed_tape_rest_fresh_count == 0
+                and signed_tape_unknown_source_count == 0,
+            ),
+            (
+                "signed_buy_ratio_below_floor",
+                signed_tape_buy_ratio >= dynamic_age_min_signed_tape_buy_ratio,
+            ),
+            (
+                "signed_buy_count_dominance_required",
+                signed_tape_buy_count > signed_tape_sell_count,
+            ),
+            ("signed_net_buy_required", signed_tape_net_buy_volume > 0),
+            ("latest_signed_trade_not_buy", signed_tape_latest_side == "BUY"),
+            (
+                "fast_tape_window_unavailable_or_slow",
+                0.0 <= signed_tape_window_span_sec <= nxt_fast_tape_max_window_span_sec,
+            ),
+            (
+                "fast_tape_latest_trade_stale",
+                0.0 <= signed_tape_latest_age_ms <= nxt_fast_tape_max_latest_age_ms,
+            ),
+        )
+        fast_tape_failed_check = next(
+            (reason for reason, passed in nxt_fast_tape_checks if not passed),
+            "",
+        )
+        if not fast_tape_failed_check:
+            fields.update(
+                {
+                    "latency_true_ofi_direct_canary_applied": True,
+                    "latency_true_ofi_direct_canary_reason": (
+                        "direct_canary_nxt_fast_tape_probe_allow"
+                    ),
+                    "latency_true_ofi_direct_canary_runtime_effect": True,
+                    "latency_true_ofi_direct_canary_allowed_runtime_apply": True,
+                    "latency_true_ofi_nxt_probability_band_applied": True,
+                    "latency_true_ofi_nxt_probability_band_reason": (
+                        "fast_tape_marginal_depth_relief"
+                    ),
+                    "latency_true_ofi_nxt_fast_tape_continuation_applied": True,
+                    "latency_true_ofi_nxt_fast_tape_continuation_reason": (
+                        "eligible_probe_first_only"
+                    ),
+                }
+            )
+            return fields
+        fields.update(
+            {
+                "latency_true_ofi_direct_canary_reason": (
+                    f"nxt_probability_band_failed:{failed_check}"
+                ),
+                "latency_true_ofi_nxt_probability_band_reason": failed_check,
+                "latency_true_ofi_nxt_fast_tape_continuation_reason": (
+                    fast_tape_failed_check
+                ),
+            }
+        )
+        # NXT owns its bounded DANGER-latency exception while this context is
+        # active.  Falling through to the common direct-canary profiles would
+        # silently bypass a failed NXT check and mix KRX/common authority into
+        # the NXT entry window.
+        return fields
     if not normalized_reasons or not normalized_reasons.issubset(spread_reasons):
         fields["latency_true_ofi_direct_canary_reason"] = "non_spread_latency_danger"
         return fields

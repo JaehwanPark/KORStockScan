@@ -179,6 +179,69 @@ def test_entry_sizing_uses_current_krx_when_runtime_has_non_tradable_marker():
     )
 
 
+def test_entry_sizing_restores_krx_from_tp1_submit_context(monkeypatch):
+    stock = state_handlers._rising_missed_tp1_submit_context_fields(
+        {
+            "rising_missed_tp1_candidate_allowed": True,
+            "rising_missed_tp1_evaluation_id": "krx-sizing-eval",
+            "rising_missed_market_session_bucket": "krx_regular",
+            "rising_missed_effective_venue": "KRX",
+        },
+        now_ts=1000.0,
+    )
+    monkeypatch.setattr(state_handlers.time, "time", lambda: 1010.0)
+
+    venue, provenance = state_handlers._resolve_entry_sizing_effective_venue(
+        stock,
+        {},
+    )
+    decision = state_handlers.resolve_scalping_allocation(
+        state_handlers.ScalpingSizingContext(
+            allocation_stage="rising_missed_scout_initial",
+            reference_time=datetime(2026, 7, 22, 13, 40, tzinfo=state_handlers._KST),
+            source_signature="A,B,C,D,E",
+            effective_venue=venue,
+            budget_base_krw=3_000_000,
+            price_krw=10_000,
+        )
+    )
+
+    assert "rising_missed_effective_venue" not in stock
+    assert venue == "KRX"
+    assert provenance == (
+        "consistent_explicit:stock.tp1_context.rising_missed_effective_venue"
+    )
+    assert (decision.venue, decision.tier, decision.ratio) == (
+        "KRX",
+        2,
+        pytest.approx(0.15),
+    )
+
+
+def test_entry_sizing_tp1_context_conflict_with_current_stock_fails_closed(
+    monkeypatch,
+):
+    stock = state_handlers._rising_missed_tp1_submit_context_fields(
+        {
+            "rising_missed_tp1_candidate_allowed": True,
+            "rising_missed_tp1_evaluation_id": "stale-nxt-sizing-eval",
+            "rising_missed_market_session_bucket": "nxt_entry_window",
+            "rising_missed_effective_venue": "NXT",
+        },
+        now_ts=1000.0,
+    )
+    stock["rising_missed_effective_venue"] = "KRX"
+    monkeypatch.setattr(state_handlers.time, "time", lambda: 1010.0)
+
+    venue, provenance = state_handlers._resolve_entry_sizing_effective_venue(
+        stock,
+        {},
+    )
+
+    assert venue == "UNKNOWN"
+    assert provenance == "conflicting_explicit_venue"
+
+
 def test_entry_sizing_venue_conflict_fails_closed_to_tier1_input():
     venue, provenance = state_handlers._resolve_entry_sizing_effective_venue(
         {"rising_missed_effective_venue": "KRX"},
@@ -25796,6 +25859,34 @@ def test_rest_quote_only_hard_stop_allows_emergency(monkeypatch):
     assert blocked is False
 
 
+def test_rest_quote_only_trailing_requires_executable_confirmation(monkeypatch):
+    logs = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+    stock = {
+        "name": "TEST",
+        "holding_rest_quote_only_recovery": True,
+    }
+
+    blocked = state_handlers._rest_quote_only_hard_stop_confirmation_block(
+        stock,
+        "123456",
+        exit_rule="scalp_trailing_take_profit",
+        profit_rate=-0.23,
+        emergency_pct=-999.0,
+        held_sec=60,
+        curr_price=92_600,
+        buy_price=92_800,
+    )
+
+    assert blocked is True
+    assert logs[-1][0] == "trailing_rest_quote_only_confirmation_blocked"
+    assert logs[-1][1]["broker_order_forbidden"] is True
+
+
 def test_hard_stop_quote_revalidation_blocks_false_ws_spike(monkeypatch):
     logs = []
     monkeypatch.setattr(
@@ -33444,6 +33535,254 @@ def test_holding_stale_ws_rest_quote_recovery_allows_exit_evaluation(monkeypatch
     ]
     assert dynamic_logs
     assert exit_calls
+
+
+def test_holding_rest_quote_only_recovery_does_not_inflate_peak(monkeypatch):
+    state_handlers.TRADING_RULES = _dynamic_soft_stop_grace_config()
+    pipeline_logs, _exit_calls = _install_soft_stop_expert_test_doubles(monkeypatch)
+    monkeypatch.setattr(state_handlers, "KIWOOM_TOKEN", "token")
+    monkeypatch.setattr(
+        state_handlers,
+        "EVENT_BUS",
+        SimpleNamespace(publish=lambda *args, **kwargs: None),
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils,
+        "get_api_url",
+        lambda path: f"https://example.test{path}",
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils,
+        "fetch_kiwoom_api_continuous",
+        lambda *args, **kwargs: [{"cur_prc": "10,500"}],
+    )
+    stock = _dynamic_soft_stop_stock(**_fresh_holding_score_fields(90))
+
+    state_handlers.handle_holding_state(
+        stock=stock,
+        code="123456",
+        ws_data={
+            "curr": 10_000,
+            "quote_stale": True,
+            "last_ws_update_ts": state_handlers.time.time() - 120,
+            "orderbook": {"bids": [{"price": 10_000, "volume": 1000}]},
+        },
+        admin_id=1,
+        market_regime="BULL",
+        radar=None,
+        ai_engine=None,
+    )
+
+    assert state_handlers.HIGHEST_PRICES["123456"] == 10_000
+    peak_guard_logs = [
+        fields
+        for stage, fields in pipeline_logs
+        if stage == "holding_rest_quote_peak_update_blocked"
+    ]
+    assert peak_guard_logs
+    assert peak_guard_logs[-1]["holding_rest_quote_peak_candidate"] == 10_500
+    assert peak_guard_logs[-1]["holding_rest_quote_peak_update_applied"] is False
+
+
+def test_post_probe_nxt_requires_event_time_speed_and_honors_fresh_ai_veto(monkeypatch):
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_NXT_FAST_TAPE_CONTINUATION_ENABLED", "true"
+    )
+    tp1_context = state_handlers._rising_missed_tp1_submit_context_fields(
+        {
+            "rising_missed_tp1_candidate_allowed": True,
+            "rising_missed_tp1_evaluation_id": "nxt-post-probe-speed",
+            "rising_missed_tp1_tick_acceleration": 2.0,
+            "rising_missed_tp1_tick_acceleration_fresh": True,
+            "rising_missed_tp1_tick_acceleration_source": (
+                "trusted_ws_signed_0b_10tick_received_ts"
+            ),
+            "rising_missed_tp1_tick_acceleration_age_sec": 0.1,
+            "rising_missed_effective_venue": "NXT",
+            "rising_missed_market_session_bucket": "nxt_entry_window",
+        },
+        now_ts=1_000.0,
+    )
+    assert (
+        tp1_context["rising_missed_tp1_submit_context_tick_acceleration_fresh"] is True
+    )
+    assert tp1_context["rising_missed_tp1_submit_context_tick_acceleration"] == 2.0
+
+    base_stock = {
+        "rising_missed_effective_venue": "NXT",
+        "rising_missed_market_session_bucket": "nxt_entry_window",
+        **tp1_context,
+        "last_watching_ai_feature_probe_at": 1_000.0,
+        "last_watching_ai_feature_probe": {"buy_pressure_10t": 80.0},
+    }
+    quote_fields = {"canonical_mark_price": 10_020}
+
+    strong = state_handlers._post_probe_direction_fields(
+        dict(base_stock),
+        {},
+        quote_fields,
+        probe_fill_price=10_000,
+        now_ts=1_001.0,
+        max_context_age_sec=3.0,
+    )
+
+    assert strong["post_probe_direction_state"] == "STRONG"
+    assert strong["post_probe_continuation_action"] == "ALLOW_NARROW"
+    assert strong["post_probe_direction_tp1_tick_context_fresh"] is True
+
+    no_speed_stock = dict(base_stock)
+    no_speed_stock["rising_missed_tp1_submit_context_tick_acceleration_fresh"] = False
+    no_speed = state_handlers._post_probe_direction_fields(
+        no_speed_stock,
+        {},
+        quote_fields,
+        probe_fill_price=10_000,
+        now_ts=1_001.0,
+        max_context_age_sec=3.0,
+    )
+
+    assert no_speed["post_probe_continuation_action"] == "DEFER"
+    assert no_speed["post_probe_direction_reason"] == (
+        "post_probe_nxt_event_time_speed_unavailable"
+    )
+
+    def _fast_wait_ws(spacing_sec):
+        return {
+            "recent_trade_ticks": [
+                {
+                    "aggressor_source": "kiwoom_0b_signed_trade_volume",
+                    "signed_trade_volume": "+20" if index < 9 else "-2",
+                    "ts": 1_000.95 - (index * spacing_sec),
+                    "price": 10_020,
+                }
+                for index in range(10)
+            ]
+        }
+
+    ai_wait_stock = {
+        **base_stock,
+        "last_watching_ai_action": "WAIT",
+        "last_watching_ai_confirmed_at": 1_000.5,
+        "last_watching_ai_result_source": "live",
+    }
+    ai_wait_first = state_handlers._post_probe_direction_fields(
+        ai_wait_stock,
+        _fast_wait_ws(0.1),
+        quote_fields,
+        probe_fill_price=10_000,
+        now_ts=1_001.0,
+        max_context_age_sec=3.0,
+    )
+
+    assert ai_wait_first["post_probe_continuation_action"] == "DEFER"
+    assert ai_wait_first["post_probe_direction_reason"] == (
+        "post_probe_nxt_wait_fast_tape_recheck_required"
+    )
+    assert ai_wait_first["post_probe_nxt_wait_fast_tape_ready"] is True
+    assert ai_wait_first["post_probe_nxt_wait_fast_tape_bounded_single_leg"] is False
+
+    ai_wait_rechecked = state_handlers._post_probe_direction_fields(
+        {**ai_wait_stock, "entry_split_probe_recheck_count": 1},
+        _fast_wait_ws(0.1),
+        quote_fields,
+        probe_fill_price=10_000,
+        now_ts=1_001.0,
+        max_context_age_sec=3.0,
+    )
+
+    assert ai_wait_rechecked["post_probe_direction_state"] == "STRONG"
+    assert ai_wait_rechecked["post_probe_continuation_action"] == "ALLOW_NARROW"
+    assert ai_wait_rechecked["post_probe_direction_reason"] == (
+        "post_probe_nxt_wait_fast_tape_maintained"
+    )
+    assert ai_wait_rechecked["post_probe_nxt_wait_fast_tape_bounded_single_leg"] is True
+
+    monkeypatch.delenv(
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_NXT_FAST_TAPE_CONTINUATION_ENABLED"
+    )
+    ai_wait_default_on = state_handlers._post_probe_direction_fields(
+        {**ai_wait_stock, "entry_split_probe_recheck_count": 1},
+        _fast_wait_ws(0.1),
+        quote_fields,
+        probe_fill_price=10_000,
+        now_ts=1_001.0,
+        max_context_age_sec=3.0,
+    )
+
+    assert ai_wait_default_on["post_probe_continuation_action"] == "ALLOW_NARROW"
+    assert ai_wait_default_on["post_probe_nxt_wait_fast_tape_enabled"] is True
+    assert (
+        ai_wait_default_on["post_probe_nxt_wait_fast_tape_bounded_single_leg"] is True
+    )
+
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_NXT_FAST_TAPE_CONTINUATION_ENABLED", "false"
+    )
+    ai_wait_disabled = state_handlers._post_probe_direction_fields(
+        {**ai_wait_stock, "entry_split_probe_recheck_count": 1},
+        _fast_wait_ws(0.1),
+        quote_fields,
+        probe_fill_price=10_000,
+        now_ts=1_001.0,
+        max_context_age_sec=3.0,
+    )
+
+    assert ai_wait_disabled["post_probe_continuation_action"] == "DEFER"
+    assert ai_wait_disabled["post_probe_nxt_wait_fast_tape_enabled"] is False
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_NXT_FAST_TAPE_CONTINUATION_ENABLED", "true"
+    )
+
+    ai_wait_slow = state_handlers._post_probe_direction_fields(
+        {**ai_wait_stock, "entry_split_probe_recheck_count": 1},
+        _fast_wait_ws(1.0),
+        quote_fields,
+        probe_fill_price=10_000,
+        now_ts=1_001.0,
+        max_context_age_sec=3.0,
+    )
+
+    assert ai_wait_slow["post_probe_continuation_action"] == "DEFER"
+    assert ai_wait_slow["post_probe_direction_reason"] == (
+        "post_probe_nxt_fresh_ai_wait"
+    )
+
+    ai_wait_stale = state_handlers._post_probe_direction_fields(
+        {
+            **ai_wait_stock,
+            "entry_split_probe_recheck_count": 1,
+            "last_watching_ai_confirmed_at": 990.0,
+        },
+        _fast_wait_ws(0.1),
+        quote_fields,
+        probe_fill_price=10_000,
+        now_ts=1_001.0,
+        max_context_age_sec=3.0,
+    )
+
+    assert ai_wait_stale["post_probe_continuation_action"] == "DEFER"
+    assert ai_wait_stale["post_probe_direction_reason"] == (
+        "post_probe_nxt_ai_veto_not_fresh"
+    )
+
+    ai_drop_stock = {
+        **base_stock,
+        "last_watching_ai_action": "DROP",
+        "last_watching_ai_confirmed_at": 1_000.5,
+        "last_watching_ai_result_source": "live",
+    }
+    ai_drop = state_handlers._post_probe_direction_fields(
+        ai_drop_stock,
+        {},
+        quote_fields,
+        probe_fill_price=10_000,
+        now_ts=1_001.0,
+        max_context_age_sec=3.0,
+    )
+
+    assert ai_drop["post_probe_continuation_action"] == "DEFER"
+    assert ai_drop["post_probe_direction_reason"] == "post_probe_nxt_fresh_ai_drop"
+    assert ai_drop["post_probe_direction_fresh_negative_ai_action"] is True
 
 
 def test_holding_recent_ws_blocks_divergent_rest_quote_recovery(monkeypatch):

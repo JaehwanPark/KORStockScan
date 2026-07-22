@@ -1064,6 +1064,225 @@ def test_openai_primary_failure_uses_nova_lite_v2_fallback(monkeypatch):
     assert audit_rows[0]["bedrock_fallback_used"] is True
 
 
+def test_entry_price_openai_primary_route_bypasses_qwen_and_uses_http(monkeypatch):
+    engine = _build_engine()
+    requests = []
+
+    class Provider:
+        def converse(self, **kwargs):
+            raise AssertionError(
+                "Bedrock must not run after entry-price OpenAI success"
+            )
+
+    def _fake_http(request):
+        requests.append(request)
+        return OpenAITransportResult(
+            payload={
+                "action": "USE_DEFENSIVE",
+                "order_price": 9990,
+                "confidence": 80,
+                "reason": "openai-entry-price",
+            },
+            transport_mode="http",
+            roundtrip_ms=250,
+        )
+
+    monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_ENTRY_PRICE_ROUTE_MODE", "primary")
+    monkeypatch.setattr(
+        openai_module,
+        "TRADING_RULES",
+        replace(
+            openai_module.TRADING_RULES,
+            OPENAI_TRANSPORT_MODE="http",
+            OPENAI_ENTRY_PRICE_TIMEOUT_MS=15000,
+            OPENAI_PRIMARY_BEDROCK_FALLBACK_ENDPOINTS=("entry_price",),
+            OPENAI_PRIMARY_BEDROCK_FALLBACK_PRIMARY_TIMEOUT_MS=7000,
+            OPENAI_PRIMARY_BEDROCK_FALLBACK_TIMEOUT_MS=7000,
+        ),
+    )
+    monkeypatch.setattr(engine, "_call_openai_responses_http", _fake_http)
+    monkeypatch.setattr(bedrock_nova_provider, "runtime_provider", lambda: Provider())
+
+    result = GPTSniperEngine._call_openai_safe(
+        engine,
+        "PROMPT",
+        "payload",
+        require_json=True,
+        context_name="entry-price-primary-success",
+        model_override="gpt-5.4-mini",
+        endpoint_name="entry_price",
+        transport_mode_override="http",
+    )
+    meta = engine._consume_last_transport_meta()
+
+    assert result["reason"] == "openai-entry-price"
+    assert len(requests) == 1
+    assert requests[0].timeout_ms == 7000
+    assert meta["openai_transport_mode"] == "http"
+    assert meta["bedrock_fallback_used"] is False
+
+
+def test_entry_price_openai_failure_uses_only_nova_lite_v2_fallback(monkeypatch):
+    engine = _build_engine()
+    families = []
+
+    class Provider:
+        def converse(self, *, prompt, user_input, profile, deadline_perf=None):
+            families.append(profile.family)
+            return bedrock_nova_provider.BedrockNovaResult(
+                payload={
+                    "action": "USE_DEFENSIVE",
+                    "order_price": 9980,
+                    "confidence": 75,
+                    "reason": "nova-entry-price-fallback",
+                },
+                raw_text="{}",
+                parse_ok=True,
+                parse_error="",
+                model_id=profile.model_id,
+                region_name=profile.region_name,
+                key_index=0,
+                latency_ms=300,
+                input_tokens=20,
+                output_tokens=8,
+                cache_read_input_tokens=0,
+                cache_write_input_tokens=0,
+                total_input_tokens=20,
+                estimated_cost_usd=0.0,
+                attempted_key_count=1,
+            )
+
+    monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_ENTRY_PRICE_ROUTE_MODE", "primary")
+    monkeypatch.setattr(
+        openai_module,
+        "TRADING_RULES",
+        replace(
+            openai_module.TRADING_RULES,
+            OPENAI_TRANSPORT_MODE="http",
+            OPENAI_ENTRY_PRICE_TIMEOUT_MS=15000,
+            OPENAI_PRIMARY_BEDROCK_FALLBACK_ENDPOINTS=("entry_price",),
+            OPENAI_PRIMARY_BEDROCK_FALLBACK_FAMILY="lite_v2",
+            OPENAI_PRIMARY_BEDROCK_FALLBACK_PRIMARY_TIMEOUT_MS=7000,
+            OPENAI_PRIMARY_BEDROCK_FALLBACK_TIMEOUT_MS=7000,
+        ),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_call_openai_responses_http",
+        lambda request: (_ for _ in ()).throw(
+            OpenAIResponsesHTTPError("entry-price OpenAI timeout")
+        ),
+    )
+    monkeypatch.setattr(bedrock_nova_provider, "runtime_provider", lambda: Provider())
+    monkeypatch.setattr(
+        bedrock_nova_provider, "write_provider_audit_row", lambda row: None
+    )
+
+    result = GPTSniperEngine._call_openai_safe(
+        engine,
+        "PROMPT",
+        "payload",
+        require_json=True,
+        context_name="entry-price-primary-failure",
+        model_override="gpt-5.4-mini",
+        endpoint_name="entry_price",
+        transport_mode_override="http",
+    )
+    meta = engine._consume_last_transport_meta()
+
+    assert result["reason"] == "nova-entry-price-fallback"
+    assert families == ["lite_v2"]
+    assert meta["openai_primary_error_type"] == "OpenAIResponsesHTTPError"
+    assert meta["openai_transport_mode"] == "bedrock_fallback"
+    assert meta["bedrock_fallback_used"] is True
+
+
+def test_entry_price_openai_and_nova_failure_closes_with_defensive_price(monkeypatch):
+    engine = _build_engine()
+    ws_data, ticks, candles, price_ctx = _entry_price_compaction_sample(1)
+    families = []
+
+    class Provider:
+        def converse(self, *, prompt, user_input, profile, deadline_perf=None):
+            families.append(profile.family)
+            raise RuntimeError("nova fallback unavailable")
+
+    monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_ENTRY_PRICE_ROUTE_MODE", "primary")
+    monkeypatch.setattr(
+        openai_module,
+        "TRADING_RULES",
+        replace(
+            openai_module.TRADING_RULES,
+            OPENAI_TRANSPORT_MODE="http",
+            OPENAI_ENTRY_PRICE_TIMEOUT_MS=15000,
+            OPENAI_PRIMARY_BEDROCK_FALLBACK_ENDPOINTS=("entry_price",),
+            OPENAI_PRIMARY_BEDROCK_FALLBACK_FAMILY="lite_v2",
+            OPENAI_PRIMARY_BEDROCK_FALLBACK_PRIMARY_TIMEOUT_MS=7000,
+            OPENAI_PRIMARY_BEDROCK_FALLBACK_TIMEOUT_MS=7000,
+        ),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_call_openai_responses_http",
+        lambda request: (_ for _ in ()).throw(
+            OpenAIResponsesHTTPError("entry-price OpenAI timeout")
+        ),
+    )
+    monkeypatch.setattr(bedrock_nova_provider, "runtime_provider", lambda: Provider())
+    monkeypatch.setattr(
+        bedrock_nova_provider, "write_provider_audit_row", lambda row: None
+    )
+
+    result = GPTSniperEngine.evaluate_scalping_entry_price(
+        engine,
+        "테스트",
+        "005930",
+        ws_data,
+        ticks,
+        candles,
+        price_ctx,
+    )
+
+    assert result["action"] == "USE_DEFENSIVE"
+    assert result["order_price"] == price_ctx["resolved_order_price"]
+    assert result["reason"] == "ai_failure_use_defensive_fallback"
+    assert result["ai_parse_fail"] is True
+    assert families == ["lite_v2"]
+
+
+def test_entry_price_evaluate_preserves_bedrock_fallback_provenance(monkeypatch):
+    engine = _build_engine()
+    ws_data, ticks, candles, price_ctx = _entry_price_compaction_sample(1)
+    monkeypatch.setattr(
+        engine,
+        "_call_openai_safe",
+        lambda *args, **kwargs: {
+            "action": "USE_DEFENSIVE",
+            "order_price": price_ctx["resolved_order_price"],
+            "confidence": 75,
+            "reason": "nova-entry-price-fallback",
+            "provider": "bedrock",
+            "bedrock_fallback_used": True,
+            "bedrock_fallback_family": "lite_v2",
+            "openai_primary_error_type": "OpenAIResponsesHTTPError",
+        },
+    )
+
+    result = engine.evaluate_scalping_entry_price(
+        "테스트",
+        "005930",
+        ws_data,
+        ticks,
+        candles,
+        price_ctx,
+    )
+
+    assert result["provider"] == "bedrock"
+    assert result["bedrock_fallback_used"] is True
+    assert result["bedrock_fallback_family"] == "lite_v2"
+    assert result["openai_primary_error_type"] == "OpenAIResponsesHTTPError"
+
+
 def test_entry_price_qwen_parse_failure_falls_back_to_nova_lite_v2(monkeypatch):
     engine = _build_engine()
     families = []

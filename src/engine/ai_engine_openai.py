@@ -5242,7 +5242,7 @@ class GPTSniperEngine:
             )
             normalized["ai_model"] = self._get_tier2_model()
             for key, value in result.items():
-                if str(key).startswith("openai_"):
+                if str(key).startswith(("openai_", "bedrock_")) or key == "provider":
                     normalized[key] = value
             self._mark_successful_ai_call(update_last_call_time=False)
             return self._annotate_analysis_result(
