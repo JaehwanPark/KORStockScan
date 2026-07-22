@@ -1,13 +1,13 @@
 # DeepSeek Swing Pattern Lab - Data Quality Report
 
-## Analysis Window: 2026-07-21 ~ 2026-07-21
+## Analysis Window: 2026-07-22 ~ 2026-07-22
 
 ## Fact Table Row Counts
 
 - swing_trade_fact: `0`
 - swing_lifecycle_funnel_fact: `1`
-- swing_sequence_fact: `3`
-- swing_ofi_qi_fact: `0`
+- swing_sequence_fact: `18`
+- swing_ofi_qi_fact: `2`
 - completed_trades: `0`
 - valid_profit_trades: `0`
 
@@ -16,7 +16,7 @@
 - stale_missing_count: `0`
 - stale_missing_unique_record_count: `0`
 - stale_missing_ratio: `0.0`
-- reason_counts: `{}`
+- reason_counts: `{'micro_missing': 0, 'micro_stale': 0, 'observer_unhealthy': 0, 'micro_not_ready': 0, 'state_insufficient': 0}`
 - reason_combination_counts: `{}`
 - reason_combination_unique_record_counts: `{}`
 - stale_missing_group_counts: `{}`
@@ -29,12 +29,12 @@
 - trade_fact_broker_order_forbidden_true: `0`
 - sequence_fact_actual_order_submitted_false: `0`
 - sequence_fact_broker_order_forbidden_true: `0`
-- ofi_qi_fact_actual_order_submitted_false: `0`
-- ofi_qi_fact_broker_order_forbidden_true: `0`
+- ofi_qi_fact_actual_order_submitted_false: `2`
+- ofi_qi_fact_broker_order_forbidden_true: `2`
 - trade_fact_decision_authority_counts: `{}`
-- sequence_fact_decision_authority_counts: `{'real_order_event': 3}`
-- ofi_qi_fact_decision_authority_counts: `{}`
+- sequence_fact_decision_authority_counts: `{'real_order_event': 18}`
+- ofi_qi_fact_decision_authority_counts: `{'source_quality_only': 2}`
 
 ## Warnings
 
-- no OFI/QI micro context data found
+- none

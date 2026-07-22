@@ -1,7 +1,7 @@
 # 데이터 품질 보고서
 
-생성일: 2026-07-21 21:16:59
-분석 기간: 2026-06-04 ~ 2026-07-21
+생성일: 2026-07-22 20:56:34
+분석 기간: 2026-06-04 ~ 2026-07-22
 
 ---
 
@@ -9,18 +9,18 @@
 
 | 항목 | 값 |
 |---|---|
-| 총 거래수 | 294 |
-| COMPLETED | 255 |
-| valid_profit_rate | 255 |
-| 제외 건수 | 39 |
+| 총 거래수 | 306 |
+| COMPLETED | 266 |
+| valid_profit_rate | 266 |
+| 제외 건수 | 40 |
 
 **서버별:**
 
-- `local`: 294건
+- `local`: 306건
 
 **코호트별:**
 
-- `full_fill`: 256건
+- `full_fill`: 268건
 - `split-entry`: 38건
 
 
@@ -28,10 +28,10 @@
 
 ## 2. funnel_fact
 
-- 날짜 수: 33
+- 날짜 수: 34
 - 서버: ['local']
-- 기간 합계 latency_block_events: 141741
-- 기간 합계 submitted_events: 503
+- 기간 합계 latency_block_events: 141860
+- 기간 합계 submitted_events: 516
 
 ---
 
@@ -39,17 +39,17 @@
 
 | 플래그 | 건수 |
 |---|---|
-| 총 record 수 | 3329 |
-| multi_rebase (split-entry) | 52 |
-| partial_then_expand | 47 |
+| 총 record 수 | 3349 |
+| multi_rebase (split-entry) | 59 |
+| partial_then_expand | 54 |
 | rebase_integrity 이상 | 16 |
-| same_ts_multi_rebase | 18 |
-| same_symbol_repeat_soft_stop | 1264 |
+| same_ts_multi_rebase | 23 |
+| same_symbol_repeat_soft_stop | 1269 |
 
 **정합성 플래그 분포:**
 
 - `rebase_integrity_flag`: 16건
-- `same_ts_multi_rebase_flag`: 18건
+- `same_ts_multi_rebase_flag`: 23건
 
 ---
 
