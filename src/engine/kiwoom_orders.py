@@ -23,6 +23,7 @@ _LAST_SUCCESSFUL_DEPOSIT = 0
 _LAST_SUCCESSFUL_DEPOSIT_AT = 0.0
 _LAST_DEPOSIT_ERRORS = []
 _LAST_DEPOSIT_META = {}
+_LAST_DEPOSIT_FLOOR_LOG_MARKER = None
 _DEPOSIT_API_COOLDOWN_UNTIL = 0.0
 _DEPOSIT_API_COOLDOWN_REASON = ""
 _ORDERABLE_AMOUNT_CACHE_LOCK = threading.RLock()
@@ -67,13 +68,20 @@ def reset_orderable_amount_cache():
 
 def reset_deposit_diagnostics():
     """테스트/운영 진단용 최근 주문가능금액 에러/메타 초기화."""
-    global _LAST_DEPOSIT_META
+    global _LAST_DEPOSIT_META, _LAST_DEPOSIT_FLOOR_LOG_MARKER
     _LAST_DEPOSIT_META = {}
+    _LAST_DEPOSIT_FLOOR_LOG_MARKER = None
     _LAST_DEPOSIT_ERRORS.clear()
 
 
 def _set_last_deposit_meta(
-    source, *, amount=0, age_sec=None, cache_hit=False, fallback_used=False
+    source,
+    *,
+    amount=0,
+    age_sec=None,
+    cache_hit=False,
+    fallback_used=False,
+    extra=None,
 ):
     global _LAST_DEPOSIT_META
     meta = {
@@ -84,8 +92,62 @@ def _set_last_deposit_meta(
     }
     if age_sec is not None:
         meta["age_sec"] = round(float(age_sec), 3)
+    if isinstance(extra, dict):
+        meta.update(extra)
     _LAST_DEPOSIT_META = meta
     return meta
+
+
+def _apply_kt00001_orderable_amount_floor(
+    amount,
+    *,
+    source,
+    age_sec=None,
+    cache_hit=False,
+    fallback_used=False,
+):
+    """Apply the operator-approved live budget floor only to valid kt00001 values."""
+    global _LAST_DEPOSIT_FLOOR_LOG_MARKER
+    try:
+        raw_amount = max(0, int(float(amount or 0)))
+    except (TypeError, ValueError):
+        raw_amount = 0
+    floor_amount = max(
+        0,
+        int(
+            getattr(
+                TRADING_RULES,
+                "KT00001_ORDERABLE_AMOUNT_MIN_FLOOR_KRW",
+                0,
+            )
+            or 0
+        ),
+    )
+    floor_applied = floor_amount > 0 and raw_amount < floor_amount
+    effective_amount = floor_amount if floor_applied else raw_amount
+    _set_last_deposit_meta(
+        source,
+        amount=effective_amount,
+        age_sec=age_sec,
+        cache_hit=cache_hit,
+        fallback_used=fallback_used,
+        extra={
+            "raw_amount": raw_amount,
+            "effective_amount": effective_amount,
+            "minimum_floor_krw": floor_amount,
+            "minimum_floor_applied": floor_applied,
+            "minimum_floor_authority": "operator_approved_2026_07_22",
+            "minimum_floor_rollback_krw": 0,
+        },
+    )
+    marker = (raw_amount, floor_amount)
+    if floor_applied and _LAST_DEPOSIT_FLOOR_LOG_MARKER != marker:
+        log_info(
+            f"💰 [주문가능금액 보정] kt00001 원본 {raw_amount:,}원 -> "
+            f"적용 {effective_amount:,}원 (operator floor, rollback=0원)"
+        )
+        _LAST_DEPOSIT_FLOOR_LOG_MARKER = marker
+    return effective_amount
 
 
 def is_auth_failure_error(error) -> bool:
@@ -441,13 +503,12 @@ def _get_deposit_real(token, cache_key):
         cache_key, now_ts=now_ts
     )
     if loop_cached_amount > 0:
-        _set_last_deposit_meta(
-            "loop_cache",
-            amount=loop_cached_amount,
+        return _apply_kt00001_orderable_amount_floor(
+            loop_cached_amount,
+            source="loop_cache",
             age_sec=loop_cached_age,
             cache_hit=True,
         )
-        return loop_cached_amount
 
     if _DEPOSIT_API_COOLDOWN_UNTIL > now_ts:
         cooldown_remaining = _DEPOSIT_API_COOLDOWN_UNTIL - now_ts
@@ -476,13 +537,6 @@ def _get_deposit_real(token, cache_key):
         )
         if cached_amount > 0:
             cached_age = _cached_deposit_age_sec(cache_key)
-            _set_last_deposit_meta(
-                "cooldown_fallback",
-                amount=cached_amount,
-                age_sec=cached_age,
-                cache_hit=False,
-                fallback_used=True,
-            )
             _store_loop_cached_deposit(
                 cached_amount,
                 cache_key=cache_key,
@@ -493,7 +547,12 @@ def _get_deposit_real(token, cache_key):
                 f"⚠️ [예수금조회 cooldown fallback] 최근 정상 주문가능금액 사용 "
                 f"({cached_amount:,}원, cooldown_remaining={cooldown_remaining:.1f}s)"
             )
-            return cached_amount
+            return _apply_kt00001_orderable_amount_floor(
+                cached_amount,
+                source="cooldown_fallback",
+                age_sec=cached_age,
+                fallback_used=True,
+            )
         _set_last_deposit_meta("fail_closed_zero", amount=0)
         log_error(
             f"❌ [예수금조회 cooldown] {_DEPOSIT_API_COOLDOWN_REASON or 'kt00001 cooldown active'} "
@@ -547,8 +606,10 @@ def _get_deposit_real(token, cache_key):
                     _remember_successful_deposit(
                         amount, cache_key=cache_key, loop_cache_source="api_fresh"
                     )
-                _set_last_deposit_meta("api_fresh", amount=amount)
-                return amount
+                return _apply_kt00001_orderable_amount_floor(
+                    amount,
+                    source="api_fresh",
+                )
 
             err_msg = data.get("return_msg") or data.get("err_msg") or "상세 사유 없음"
             _LAST_DEPOSIT_ERRORS.append(
@@ -637,18 +698,16 @@ def _get_deposit_real(token, cache_key):
     cached_amount = get_cached_deposit(cache_key=cache_key)
     if cached_amount > 0:
         cached_age = _cached_deposit_age_sec(cache_key)
-        _set_last_deposit_meta(
-            "stale_cache_fallback",
-            amount=cached_amount,
-            age_sec=cached_age,
-            cache_hit=False,
-            fallback_used=True,
-        )
         log_info(
             f"⚠️ [예수금조회 fallback] 최근 정상 주문가능금액 사용 "
             f"({cached_amount:,}원, age={cached_age:.1f}s)"
         )
-        return cached_amount
+        return _apply_kt00001_orderable_amount_floor(
+            cached_amount,
+            source="stale_cache_fallback",
+            age_sec=cached_age,
+            fallback_used=True,
+        )
     _set_last_deposit_meta("fail_closed_zero", amount=0)
     return 0
 

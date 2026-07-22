@@ -330,6 +330,9 @@ class TradingConfig:
     BUY_BUDGET_RELAXED_SAFETY_RATIO: float = (
         1.00  # 1주도 안 나올 때만 재시도하는 완화 안전계수
     )
+    KT00001_ORDERABLE_AMOUNT_MIN_FLOOR_KRW: int = (
+        3_000_000  # 2026-07-22 operator-approved kt00001 실주문 예산 하한
+    )
     DEPOSIT_API_RETRY_COUNT: int = 2  # 주문가능금액 조회 일시 실패 시 재시도 횟수
     DEPOSIT_API_RETRY_DELAY_SEC: float = 0.15  # 주문가능금액 재시도 간격(초)
     DEPOSIT_LOOP_CACHE_ENABLED: bool = (
@@ -1592,6 +1595,14 @@ def _env_csv_tuple(name: str) -> tuple | None:
 
 def _build_trading_rules() -> TradingConfig:
     config = TradingConfig()
+    env_kt00001_orderable_floor = _env_int(
+        "KORSTOCKSCAN_KT00001_ORDERABLE_AMOUNT_MIN_FLOOR_KRW"
+    )
+    if env_kt00001_orderable_floor is not None:
+        config = replace(
+            config,
+            KT00001_ORDERABLE_AMOUNT_MIN_FLOOR_KRW=max(0, env_kt00001_orderable_floor),
+        )
     latency_profile = (
         str(os.getenv("KORSTOCKSCAN_LATENCY_CANARY_PROFILE", "") or "").strip().lower()
     )

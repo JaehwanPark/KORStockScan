@@ -1,5 +1,6 @@
 import sys
 import types
+from dataclasses import replace
 
 import pytest
 
@@ -11,6 +12,14 @@ import src.engine.sniper_config as sniper_config
 
 @pytest.fixture(autouse=True)
 def reset_deposit_cache(monkeypatch):
+    monkeypatch.setattr(
+        kiwoom_orders,
+        "TRADING_RULES",
+        replace(
+            kiwoom_orders.TRADING_RULES,
+            KT00001_ORDERABLE_AMOUNT_MIN_FLOOR_KRW=0,
+        ),
+    )
     monkeypatch.setattr(kiwoom_orders, "_LAST_SUCCESSFUL_DEPOSIT", 0)
     monkeypatch.setattr(kiwoom_orders, "_LAST_SUCCESSFUL_DEPOSIT_AT", 0.0)
     monkeypatch.setattr(kiwoom_orders, "_LAST_SUCCESSFUL_DEPOSIT_BY_KEY", {})
@@ -68,6 +77,89 @@ def test_get_deposit_falls_back_to_api_when_virtual_amount_disabled(monkeypatch)
     )
 
     assert kiwoom_orders.get_deposit("TOKEN") == 50_000_000
+
+
+def test_get_deposit_applies_operator_floor_to_valid_kt00001_amount(monkeypatch):
+    class DummyResponse:
+        status_code = 200
+
+        def json(self):
+            return {"rt_cd": "0", "ord_alow_amt": "1078208"}
+
+    monkeypatch.setattr(sniper_config, "CONF", {"VIRTUAL_ORDERABLE_AMOUNT": 0})
+    monkeypatch.setattr(
+        kiwoom_orders,
+        "TRADING_RULES",
+        replace(
+            kiwoom_orders.TRADING_RULES,
+            KT00001_ORDERABLE_AMOUNT_MIN_FLOOR_KRW=3_000_000,
+        ),
+    )
+    monkeypatch.setattr(
+        kiwoom_orders.kiwoom_utils,
+        "get_api_url",
+        lambda path: f"https://example.test{path}",
+    )
+    monkeypatch.setattr(
+        kiwoom_orders.requests,
+        "post",
+        lambda *args, **kwargs: DummyResponse(),
+    )
+    info_logs = []
+    monkeypatch.setattr(kiwoom_orders, "log_info", info_logs.append)
+
+    assert kiwoom_orders.get_deposit("TOKEN") == 3_000_000
+    meta = kiwoom_orders.get_last_deposit_meta()
+    assert meta == {
+        "source": "api_fresh",
+        "amount": 3_000_000,
+        "cache_hit": False,
+        "fallback_used": False,
+        "raw_amount": 1_078_208,
+        "effective_amount": 3_000_000,
+        "minimum_floor_krw": 3_000_000,
+        "minimum_floor_applied": True,
+        "minimum_floor_authority": "operator_approved_2026_07_22",
+        "minimum_floor_rollback_krw": 0,
+    }
+    assert any("1,078,208원 -> 적용 3,000,000원" in msg for msg in info_logs)
+
+
+def test_get_deposit_floor_does_not_turn_transport_failure_into_budget(monkeypatch):
+    class DummyResponse:
+        status_code = 200
+
+        def json(self):
+            return {
+                "rt_cd": "2000",
+                "err_msg": "(-994:fail to sendReceive:WINGSj)",
+            }
+
+    monkeypatch.setattr(sniper_config, "CONF", {"VIRTUAL_ORDERABLE_AMOUNT": 0})
+    monkeypatch.setattr(
+        kiwoom_orders,
+        "TRADING_RULES",
+        replace(
+            kiwoom_orders.TRADING_RULES,
+            KT00001_ORDERABLE_AMOUNT_MIN_FLOOR_KRW=3_000_000,
+            DEPOSIT_API_RETRY_COUNT=1,
+            DEPOSIT_API_RETRY_DELAY_SEC=0.0,
+        ),
+    )
+    monkeypatch.setattr(
+        kiwoom_orders.kiwoom_utils,
+        "get_api_url",
+        lambda path: f"https://example.test{path}",
+    )
+    monkeypatch.setattr(
+        kiwoom_orders.requests,
+        "post",
+        lambda *args, **kwargs: DummyResponse(),
+    )
+    monkeypatch.setattr(kiwoom_orders, "log_error", lambda *args, **kwargs: None)
+
+    assert kiwoom_orders.get_deposit("TOKEN") == 0
+    assert kiwoom_orders.get_last_deposit_meta()["source"] == "fail_closed_zero"
 
 
 def test_get_deposit_request_contract_matches_kiwoom_kt00001_guide(monkeypatch):

@@ -1309,6 +1309,22 @@ def test_observation_source_quality_audit_reviews_rising_missed_nxt_unknown_prov
                 },
                 record_id=4,
             ),
+            _event(
+                "probe_submitted",
+                {
+                    "rising_missed_nxt_eligible": "unknown",
+                    "rising_missed_nxt_observation_only": True,
+                    "rising_missed_nxt_metric_role": "source_quality_gate",
+                    "rising_missed_nxt_decision_authority": (
+                        "observe_only_no_runtime_mutation"
+                    ),
+                    "rising_missed_nxt_source_quality_gate": (
+                        "absolute_type_receive_ts_and_actual_ws_item_route"
+                    ),
+                    "rising_missed_effective_venue": "PREMARKET_KRX_LIKE",
+                },
+                record_id=5,
+            ),
         ],
     )
 

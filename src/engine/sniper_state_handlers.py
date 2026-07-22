@@ -2198,6 +2198,8 @@ def _safe_int(value, default=0):
 
 def _resolve_scalp_cash_budget_context(code, unit_price, fallback_orderable_amount):
     fallback = max(0, _safe_int(fallback_orderable_amount, 0))
+    deposit_meta = kiwoom_orders.get_last_deposit_meta()
+    kt00001_floor_applied = bool(deposit_meta.get("minimum_floor_applied", False))
     context = {
         "budget_base": fallback,
         "budget_source": "kt00001_ord_alow_amt",
@@ -2205,6 +2207,15 @@ def _resolve_scalp_cash_budget_context(code, unit_price, fallback_orderable_amou
         "cash_orderable_amount": fallback,
         "cash_orderable_qty_cap": None,
         "kt00011_error": "",
+        "kt00001_raw_orderable_amount": deposit_meta.get("raw_amount", fallback),
+        "kt00001_effective_orderable_amount": deposit_meta.get(
+            "effective_amount", fallback
+        ),
+        "kt00001_minimum_floor_krw": deposit_meta.get("minimum_floor_krw", 0),
+        "kt00001_minimum_floor_applied": kt00001_floor_applied,
+        "kt00001_minimum_floor_authority": deposit_meta.get(
+            "minimum_floor_authority", "not_applied"
+        ),
     }
     if not code or _safe_int(unit_price, 0) <= 0 or not KIWOOM_TOKEN:
         context["kt00011_error"] = "missing_code_price_or_token"
@@ -2228,8 +2239,14 @@ def _resolve_scalp_cash_budget_context(code, unit_price, fallback_orderable_amou
     cash_qty = max(0, _safe_int(snapshot.get("cash_only_orderable_qty"), 0))
     budget_candidates = [value for value in (account_deposit, cash_amount) if value > 0]
     if budget_candidates:
-        context["budget_base"] = min(budget_candidates)
-        context["budget_source"] = "kt00011_min_account_deposit_cash_orderable"
+        if kt00001_floor_applied:
+            context["budget_base"] = (
+                min(fallback, cash_amount) if cash_amount > 0 else fallback
+            )
+            context["budget_source"] = "kt00001_operator_floor_bounded_by_kt00011_cash"
+        else:
+            context["budget_base"] = min(budget_candidates)
+            context["budget_source"] = "kt00011_min_account_deposit_cash_orderable"
     context["account_deposit"] = account_deposit
     context["cash_orderable_amount"] = cash_amount
     context["cash_orderable_qty_cap"] = cash_qty
@@ -45856,6 +45873,21 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             cash_orderable_amount=budget_context.get("cash_orderable_amount"),
             cash_orderable_qty_cap=budget_context.get("cash_orderable_qty_cap", "-"),
             kt00011_error=budget_context.get("kt00011_error", ""),
+            kt00001_raw_orderable_amount=budget_context.get(
+                "kt00001_raw_orderable_amount", deposit
+            ),
+            kt00001_effective_orderable_amount=budget_context.get(
+                "kt00001_effective_orderable_amount", deposit
+            ),
+            kt00001_minimum_floor_krw=budget_context.get(
+                "kt00001_minimum_floor_krw", 0
+            ),
+            kt00001_minimum_floor_applied=budget_context.get(
+                "kt00001_minimum_floor_applied", False
+            ),
+            kt00001_minimum_floor_authority=budget_context.get(
+                "kt00001_minimum_floor_authority", "not_applied"
+            ),
             ratio=f"{ratio:.4f}",
             target_budget=target_budget,
             safe_budget=safe_budget,
@@ -45918,6 +45950,19 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         cash_orderable_amount=budget_context.get("cash_orderable_amount"),
         cash_orderable_qty_cap=budget_context.get("cash_orderable_qty_cap", "-"),
         kt00011_error=budget_context.get("kt00011_error", ""),
+        kt00001_raw_orderable_amount=budget_context.get(
+            "kt00001_raw_orderable_amount", deposit
+        ),
+        kt00001_effective_orderable_amount=budget_context.get(
+            "kt00001_effective_orderable_amount", deposit
+        ),
+        kt00001_minimum_floor_krw=budget_context.get("kt00001_minimum_floor_krw", 0),
+        kt00001_minimum_floor_applied=budget_context.get(
+            "kt00001_minimum_floor_applied", False
+        ),
+        kt00001_minimum_floor_authority=budget_context.get(
+            "kt00001_minimum_floor_authority", "not_applied"
+        ),
         ratio=f"{ratio:.4f}",
         target_budget=target_budget,
         safe_budget=safe_budget,
@@ -50477,6 +50522,8 @@ def _rising_missed_nxt_price_jump_recovery_enabled(runtime: dict | None) -> bool
 
 def _rising_missed_nxt_session_bucket(now_ts: float) -> str:
     now_t = datetime.fromtimestamp(float(now_ts), tz=_KST).time()
+    if datetime_time(hour=8) <= now_t < datetime_time(hour=8, minute=50):
+        return "krx_like_premarket"
     if datetime_time(hour=9) <= now_t < TIME_15_30:
         return "krx_regular"
     if datetime_time(hour=16) <= now_t < datetime_time(hour=16, minute=10):
@@ -50501,10 +50548,16 @@ def _rising_missed_nxt_observation_fields(
     enriched_ws = enriched_ws if isinstance(enriched_ws, dict) else {}
     session_bucket = _rising_missed_nxt_session_bucket(now_ts)
     nxt_window = session_bucket.startswith("nxt_")
+    krx_like_premarket = session_bucket == "krx_like_premarket"
     if nxt_window:
         nxt_eligible, nxt_flag_source = _holding_sell_nxt_enabled_status(stock, code)
     else:
-        nxt_eligible, nxt_flag_source = None, "not_applicable_outside_nxt_window"
+        nxt_eligible = None
+        nxt_flag_source = (
+            "not_applicable_krx_like_premarket"
+            if krx_like_premarket
+            else "not_applicable_outside_nxt_window"
+        )
     type_ts = raw_ws.get("last_realtime_type_ts")
     type_ts = type_ts if isinstance(type_ts, dict) else {}
     type_routes = raw_ws.get("last_realtime_type_market_route")
@@ -50527,7 +50580,9 @@ def _rising_missed_nxt_observation_fields(
         enriched_ws.get("market_data_effective_price_source") or "none"
     ).strip()
     conflicted = effective_source == "ws_rest_conflicted"
-    if not nxt_window:
+    if krx_like_premarket:
+        micro_state = "krx_like_premarket"
+    elif not nxt_window:
         micro_state = "not_nxt_window"
     elif conflicted or not ws_0d_fresh or not route_known:
         micro_state = "stale_or_conflicted"
@@ -50535,19 +50590,18 @@ def _rising_missed_nxt_observation_fields(
         micro_state = "fresh_active"
     else:
         micro_state = "fresh_trade_quiet"
-    effective_venue = (
-        "NXT"
-        if nxt_window and nxt_eligible is True
-        else (
-            "NXT_ELIGIBILITY_UNKNOWN"
-            if nxt_window and nxt_eligible is None
-            else (
-                "KRX_ONLY_UNAVAILABLE"
-                if nxt_window
-                else "KRX" if session_bucket == "krx_regular" else "OFF_SESSION"
-            )
-        )
-    )
+    if krx_like_premarket:
+        effective_venue = "PREMARKET_KRX_LIKE"
+    elif nxt_window and nxt_eligible is True:
+        effective_venue = "NXT"
+    elif nxt_window and nxt_eligible is None:
+        effective_venue = "NXT_ELIGIBILITY_UNKNOWN"
+    elif nxt_window:
+        effective_venue = "KRX_ONLY_UNAVAILABLE"
+    elif session_bucket == "krx_regular":
+        effective_venue = "KRX"
+    else:
+        effective_venue = "OFF_SESSION"
     return {
         "rising_missed_market_session_bucket": session_bucket,
         "rising_missed_market_session_state": raw_ws.get("market_session_state") or "-",
@@ -61378,13 +61432,59 @@ def handle_holding_state(
             )
             return
         buy_qty = mem_buy_qty
+        probe_phase = str(stock.get("entry_split_probe_phase") or "").strip()
+        probe_receipt_qty_authoritative = bool(
+            mem_buy_qty > 0
+            and str(stock.get("entry_split_probe_bundle_id") or "").strip()
+            and probe_phase in {"aborted", "partial_complete", "complete"}
+        )
         try:
             with DB.get_session() as session:
                 record = (
                     session.query(RecommendationHistory).filter_by(id=target_id).first()
                 )
                 if record and record.buy_qty:
-                    buy_qty = max(buy_qty, int(record.buy_qty))
+                    db_buy_qty = max(0, int(record.buy_qty))
+                    if probe_receipt_qty_authoritative:
+                        if db_buy_qty != mem_buy_qty:
+                            _log_holding_pipeline(
+                                stock,
+                                code,
+                                "probe_terminal_sell_qty_db_reexpansion_blocked",
+                                probe_bundle_id=stock.get("entry_split_probe_bundle_id")
+                                or "-",
+                                probe_phase=probe_phase,
+                                receipt_authoritative_qty=mem_buy_qty,
+                                stale_db_buy_qty=db_buy_qty,
+                                probe_abort_reason=stock.get(
+                                    "entry_split_probe_abort_reason"
+                                )
+                                or "-",
+                                metric_role="safety_veto",
+                                runtime_effect=True,
+                                decision_authority=(
+                                    "entry_split_probe_sell_quantity_safety"
+                                ),
+                                window_policy="same_probe_bundle_exit",
+                                sample_floor=(
+                                    "not_applicable_single_order_quantity_guard"
+                                ),
+                                primary_decision_metric=(
+                                    "receipt_authoritative_qty_vs_db_buy_qty"
+                                ),
+                                source_quality_gate=(
+                                    "terminal_probe_phase_and_positive_receipt_qty"
+                                ),
+                                allowed_runtime_apply=False,
+                                forbidden_uses=(
+                                    "threshold_mutation|provider_change|cap_release|"
+                                    "broker_guard_bypass|hard_safety_relaxation"
+                                ),
+                                actual_order_submitted=False,
+                                broker_order_forbidden=True,
+                            )
+                    else:
+                        buy_qty = max(buy_qty, db_buy_qty)
         except Exception as e:
             log_error(f"🚨 [DB 조회 에러] ID {target_id} 수량 조회 실패: {e}")
 

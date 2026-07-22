@@ -2547,7 +2547,7 @@ def _reviewed_unknown_reason_for_stage_field(
         )
         legacy_context_provenance_present = (
             str(key or "") == "rising_missed_nxt_eligible"
-            and effective_venue in {"OFF_SESSION", "KRX"}
+            and effective_venue in {"OFF_SESSION", "KRX", "PREMARKET_KRX_LIKE"}
             and _field_text("rising_missed_nxt_micro_state_role")
             == "ws_transport_activity_not_positive_evidence"
             and _field_text("rising_missed_nxt_positive_micro_authority")
@@ -2555,7 +2555,13 @@ def _reviewed_unknown_reason_for_stage_field(
         )
         return (
             standard_contract_present
-            and effective_venue in {"NXT_ELIGIBILITY_UNKNOWN", "OFF_SESSION", "KRX"}
+            and effective_venue
+            in {
+                "NXT_ELIGIBILITY_UNKNOWN",
+                "OFF_SESSION",
+                "KRX",
+                "PREMARKET_KRX_LIKE",
+            }
         ) or legacy_context_provenance_present
 
     def _is_reviewed_rising_missed_nxt_post_block_route_not_available() -> bool:

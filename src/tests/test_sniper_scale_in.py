@@ -6240,6 +6240,60 @@ def test_rising_missed_decision_input_observes_nxt_trade_quiet_without_changing_
     assert fields["rising_missed_tp1_input_reason"] == "tp1_micro_ws_unavailable"
 
 
+def test_rising_missed_premarket_is_krx_like_without_nxt_runtime_classification():
+    now_dt = datetime(2026, 7, 22, 8, 20, tzinfo=state_handlers._KST)
+    now_ts = now_dt.timestamp()
+
+    assert (
+        state_handlers._rising_missed_nxt_session_bucket(
+            datetime(2026, 7, 22, 7, 59, 59, tzinfo=state_handlers._KST).timestamp()
+        )
+        == "outside_krx_nxt_window"
+    )
+    assert (
+        state_handlers._rising_missed_nxt_session_bucket(
+            datetime(2026, 7, 22, 8, 49, 59, tzinfo=state_handlers._KST).timestamp()
+        )
+        == "krx_like_premarket"
+    )
+    assert (
+        state_handlers._rising_missed_nxt_session_bucket(
+            datetime(2026, 7, 22, 8, 50, tzinfo=state_handlers._KST).timestamp()
+        )
+        == "outside_krx_nxt_window"
+    )
+
+    fields = state_handlers._rising_missed_nxt_observation_fields(
+        {"is_nxt": True},
+        "123472",
+        {
+            "market_session_state": "P",
+            "last_ws_market_route": "krx_nxt_integrated",
+            "last_realtime_type_ts": {"0B": now_ts, "0D": now_ts},
+            "last_realtime_type_market_route": {
+                "0B": "krx_nxt_integrated",
+                "0D": "krx_nxt_integrated",
+            },
+        },
+        {"market_data_effective_price_source": "ws"},
+        now_ts=now_ts,
+    )
+
+    assert fields["rising_missed_market_session_bucket"] == "krx_like_premarket"
+    assert fields["rising_missed_effective_venue"] == "PREMARKET_KRX_LIKE"
+    assert (
+        state_handlers.infer_scalping_venue(
+            now_dt, fields["rising_missed_effective_venue"]
+        )
+        == "UNKNOWN"
+    )
+    assert fields["rising_missed_nxt_eligible"] == "unknown"
+    assert fields["rising_missed_nxt_flag_source"] == (
+        "not_applicable_krx_like_premarket"
+    )
+    assert fields["rising_missed_nxt_micro_state"] == "krx_like_premarket"
+
+
 def test_describe_buy_order_resolution_reports_nxt_market_remap():
     resolution = kiwoom_orders.describe_buy_order_resolution(
         "3",
@@ -16609,6 +16663,9 @@ def test_resolve_scalp_cash_budget_context_prefers_kt00011_deposit_with_cash_qty
 ):
     monkeypatch.setattr(state_handlers, "KIWOOM_TOKEN", "TOKEN")
     monkeypatch.setattr(
+        state_handlers.kiwoom_orders, "get_last_deposit_meta", lambda: {}
+    )
+    monkeypatch.setattr(
         state_handlers.kiwoom_utils,
         "get_orderable_by_margin_kt00011",
         lambda token, code, unit_price=None: {
@@ -16630,6 +16687,48 @@ def test_resolve_scalp_cash_budget_context_prefers_kt00011_deposit_with_cash_qty
     assert context["account_deposit"] == 1_827_370
     assert context["cash_orderable_amount"] == 2_394_255
     assert context["cash_orderable_qty_cap"] == 8
+
+
+def test_resolve_scalp_cash_budget_context_preserves_operator_kt00001_floor(
+    monkeypatch,
+):
+    monkeypatch.setattr(state_handlers, "KIWOOM_TOKEN", "TOKEN")
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "get_last_deposit_meta",
+        lambda: {
+            "raw_amount": 1_078_208,
+            "effective_amount": 3_000_000,
+            "minimum_floor_krw": 3_000_000,
+            "minimum_floor_applied": True,
+            "minimum_floor_authority": "operator_approved_2026_07_22",
+        },
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils,
+        "get_orderable_by_margin_kt00011",
+        lambda token, code, unit_price=None: {
+            "error": "",
+            "deposit": 1_078_208,
+            "cash_only_orderable_amount": 11_983_424,
+            "cash_only_orderable_qty": 699,
+            "stock_margin_rate": 100,
+            "applied_margin_rate": 100,
+        },
+    )
+
+    context = state_handlers._resolve_scalp_cash_budget_context(
+        "102940", 17_140, 3_000_000
+    )
+
+    assert context["budget_base"] == 3_000_000
+    assert context["budget_source"] == "kt00001_operator_floor_bounded_by_kt00011_cash"
+    assert context["account_deposit"] == 1_078_208
+    assert context["cash_orderable_amount"] == 11_983_424
+    assert context["cash_orderable_qty_cap"] == 699
+    assert context["kt00001_raw_orderable_amount"] == 1_078_208
+    assert context["kt00001_effective_orderable_amount"] == 3_000_000
+    assert context["kt00001_minimum_floor_applied"] is True
 
 
 def test_p2_observe_skip_does_not_change_live_order(monkeypatch):
@@ -31314,6 +31413,77 @@ def test_sell_reconciles_partial_entry_qty_before_residual_cancel(monkeypatch):
     assert stock["buy_qty"] == 30
     assert reconciled[-1]["requested_sell_qty"] == 61
     assert reconciled[-1]["reconciled_sell_qty"] == 30
+
+
+def test_terminal_probe_sell_does_not_reexpand_receipt_qty_from_stale_db(monkeypatch):
+    state_handlers.TRADING_RULES = replace(CONFIG, SCALE_IN_REQUIRE_HISTORY_TABLE=False)
+    state_handlers.COOLDOWNS = {}
+    state_handlers.ALERTED_STOCKS = set()
+    state_handlers.HIGHEST_PRICES = {"123456": 100}
+    state_handlers.LAST_AI_CALL_TIMES = {}
+    state_handlers.LAST_LOG_TIMES = {}
+
+    class _StaleProbeSession(_DummySession):
+        def first(self):
+            return SimpleNamespace(buy_qty=46)
+
+    class _StaleProbeDB(_DummyDB):
+        def get_session(self):
+            return _StaleProbeSession()
+
+    state_handlers.DB = _StaleProbeDB()
+    pipeline_logs = []
+    sell_calls = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: pipeline_logs.append((stage, fields)),
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_smart_sell_order",
+        lambda *args, **kwargs: sell_calls.append(kwargs)
+        or {"return_code": "0", "ord_no": "SELL-PROBE-1"},
+    )
+
+    stock = {
+        "id": 142,
+        "code": "123456",
+        "name": "TEST",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 100,
+        "buy_qty": 1,
+        "entry_split_probe_bundle_id": "123456-probe-test",
+        "entry_split_probe_phase": "aborted",
+        "entry_split_probe_abort_reason": "residual_revalidation_timeout",
+        "entry_split_probe_scale_in_forbidden": True,
+        "rt_ai_prob": 0.50,
+    }
+
+    state_handlers.handle_holding_state(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 98.0, "orderbook": {"bids": [{"price": 98, "volume": 1000}]}},
+        admin_id=1,
+        market_regime="BULL",
+        now_dt=datetime(2026, 5, 4, 15, 0, 0),
+        radar=None,
+        ai_engine=None,
+    )
+
+    guarded = [
+        fields
+        for stage, fields in pipeline_logs
+        if stage == "probe_terminal_sell_qty_db_reexpansion_blocked"
+    ]
+    assert sell_calls
+    assert sell_calls[-1]["qty"] == 1
+    assert guarded[-1]["receipt_authoritative_qty"] == 1
+    assert guarded[-1]["stale_db_buy_qty"] == 46
+    assert guarded[-1]["metric_role"] == "safety_veto"
+    assert guarded[-1]["allowed_runtime_apply"] is False
+    assert "threshold_mutation" in guarded[-1]["forbidden_uses"]
 
 
 def test_nxt_rising_missed_tp1_submits_half_and_keeps_runner(monkeypatch):

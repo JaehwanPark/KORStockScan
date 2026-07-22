@@ -12,6 +12,18 @@ def reload_constants_module():
     importlib.reload(constants)
 
 
+def test_kt00001_orderable_amount_floor_default_and_rollback_env(monkeypatch):
+    monkeypatch.delenv(
+        "KORSTOCKSCAN_KT00001_ORDERABLE_AMOUNT_MIN_FLOOR_KRW", raising=False
+    )
+    reloaded = importlib.reload(constants)
+    assert reloaded.TRADING_RULES.KT00001_ORDERABLE_AMOUNT_MIN_FLOOR_KRW == 3_000_000
+
+    monkeypatch.setenv("KORSTOCKSCAN_KT00001_ORDERABLE_AMOUNT_MIN_FLOOR_KRW", "0")
+    reloaded = importlib.reload(constants)
+    assert reloaded.TRADING_RULES.KT00001_ORDERABLE_AMOUNT_MIN_FLOOR_KRW == 0
+
+
 def test_trading_rules_default_latency_canary_thresholds(monkeypatch):
     monkeypatch.delenv("KORSTOCKSCAN_LATENCY_CANARY_PROFILE", raising=False)
     monkeypatch.delenv(
