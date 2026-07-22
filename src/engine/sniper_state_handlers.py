@@ -208,6 +208,7 @@ from src.engine.scalping.entry_reprice_after_submit import (
     DEFAULT_MAX_UPWARD_BPS as ENTRY_REPRICE_DEFAULT_MAX_UPWARD_BPS,
     POLICY_VERSION as ENTRY_REPRICE_POLICY_VERSION,
     RUNTIME_FAMILY as ENTRY_REPRICE_RUNTIME_FAMILY,
+    EntryRepriceDecision,
     evaluate_entry_reprice_after_submit,
 )
 from src.engine.scalping.market_data_enrichment import (
@@ -31013,6 +31014,9 @@ _ENTRY_SPLIT_PROBE_RUNTIME_KEYS = (
     "entry_split_probe_continuation_action",
     "entry_split_probe_offset_profile",
     "entry_split_probe_reward_target_price",
+    "entry_split_probe_soft_abort",
+    "entry_split_probe_scale_in_recheck_allowed",
+    "entry_split_probe_scale_in_recheck_reason",
 )
 
 # Residual submission can be reached by both the fill callback worker and the
@@ -31335,7 +31339,7 @@ def _post_probe_direction_fields(
     positives = [name for name, values in groups.items() if values[1]]
     negatives = [name for name, values in groups.items() if values[2]]
     directional_group_count = len(set(positives + negatives))
-    if len(available) < 2 or directional_group_count < 2:
+    if len(available) < 2:
         direction_state = "UNKNOWN"
         action = "DEFER"
         reason = "post_probe_direction_source_gap"
@@ -31403,10 +31407,22 @@ def _abort_entry_split_probe_residual(
 ) -> None:
     bundle_id = str(stock.get("entry_split_probe_bundle_id") or "").strip()
     filled_qty = _safe_int(stock.get("entry_filled_qty"), 0)
+    soft_abort_reasons = {
+        "residual_leg_direction_deferred",
+        "residual_revalidation_timeout",
+    }
+    soft_abort = bool(preserve_position and reason in soft_abort_reasons)
     set_fields = {
         "entry_split_probe_phase": "aborted",
         "entry_split_probe_abort_reason": reason,
-        "entry_split_probe_scale_in_forbidden": bool(preserve_position),
+        "entry_split_probe_scale_in_forbidden": bool(
+            preserve_position and not soft_abort
+        ),
+        "entry_split_probe_soft_abort": soft_abort,
+        "entry_split_probe_scale_in_recheck_allowed": soft_abort,
+        "entry_split_probe_scale_in_recheck_reason": (
+            reason if soft_abort else "hard_or_non_directional_abort"
+        ),
     }
     hard_negative_reasons = {
         "buy_authority_not_available",
@@ -31456,6 +31472,11 @@ def _abort_entry_split_probe_residual(
         actual_order_submitted=False,
         broker_order_forbidden=True,
         runtime_effect=True,
+        entry_split_probe_soft_abort=soft_abort,
+        entry_split_probe_scale_in_recheck_allowed=soft_abort,
+        entry_split_probe_scale_in_recheck_reason=(
+            reason if soft_abort else "hard_or_non_directional_abort"
+        ),
         post_probe_direction_state=("HARD_NEGATIVE" if hard_negative else "-"),
         post_probe_continuation_action=("HARD_NEGATIVE" if hard_negative else "BLOCK"),
         **_entry_split_probe_observation_contract_fields(),
@@ -31552,13 +31573,16 @@ def _finalize_entry_split_probe_partial_position(
 
 
 def _entry_bundle_filled_qty(stock) -> int:
-    filled = _safe_int((stock or {}).get("entry_filled_qty"), 0)
-    if filled > 0:
-        return filled
-    return sum(
+    pending_filled = sum(
         max(0, _safe_int((order or {}).get("filled_qty"), 0))
         for order in _iter_pending_entry_orders(stock)
         if isinstance(order, dict)
+    )
+    return max(
+        0,
+        _safe_int((stock or {}).get("entry_filled_qty"), 0),
+        _safe_int((stock or {}).get("buy_qty"), 0),
+        pending_filled,
     )
 
 
@@ -54659,6 +54683,60 @@ def _nxt_rising_missed_partial_fill_reprice_enabled(
     return bool(_open_entry_split_orders(stock))
 
 
+def _entry_split_probe_pending_residual_reprice_enabled(
+    stock: dict | None,
+    code: str,
+    *,
+    now_ts: float,
+) -> bool:
+    """Return whether P1 may reconsider only the unfilled probe residual."""
+
+    _ = (code, now_ts)
+    if not _post_probe_price_resolver_enabled():
+        return False
+    if str((stock or {}).get("status") or "").strip().upper() != "HOLDING":
+        return False
+    if str((stock or {}).get("entry_split_probe_phase") or "").strip() not in {
+        "residual_submitted",
+        "residual_partial_submitted",
+    }:
+        return False
+    if not str((stock or {}).get("entry_split_probe_bundle_id") or "").strip():
+        return False
+    if _safe_int((stock or {}).get("entry_filled_qty"), 0) <= 0:
+        return False
+    open_orders = _open_entry_split_orders(stock)
+    return bool(open_orders) and all(
+        str((order or {}).get("tag") or "").startswith("entry_split_probe_residual_")
+        for order in open_orders
+    )
+
+
+def _entry_split_probe_pending_reprice_contract_fields() -> dict[str, Any]:
+    return {
+        "probe_residual_reprice_runtime_family": "dynamic_entry_price_resolver",
+        "probe_residual_reprice_policy_version": (
+            "dynamic_entry_price_resolver_p1_post_probe"
+        ),
+        "probe_residual_reprice_metric_role": "real_execution_quality",
+        "probe_residual_reprice_decision_authority": (
+            "dynamic_entry_price_resolver_p1_leg_reprice"
+        ),
+        "probe_residual_reprice_window_policy": "same_day_open_probe_residual",
+        "probe_residual_reprice_sample_floor": "per_open_probe_residual_bundle",
+        "probe_residual_reprice_primary_decision_metric": (
+            "residual_fill_rate_slippage_and_net_ev"
+        ),
+        "probe_residual_reprice_source_quality_gate": (
+            "fresh_consistent_bbo_two_valid_direction_groups"
+        ),
+        "probe_residual_reprice_forbidden_uses": (
+            "quantity_increase|legacy_fixed_offset_fallback|stale_submit_bypass|"
+            "broker_guard_bypass|hard_safety_override|provider_route_change"
+        ),
+    }
+
+
 def _nxt_rising_missed_partial_fill_reprice_contract_fields() -> dict[str, Any]:
     return {
         "nxt_partial_fill_reprice_runtime_family": (
@@ -54710,6 +54788,13 @@ def _reset_entry_reprice_after_failed_resubmit(
                 "order_price",
             ],
         )
+        if str(stock.get("entry_split_probe_bundle_id") or "").strip():
+            _abort_entry_split_probe_residual(
+                stock,
+                code,
+                "residual_reprice_resubmit_failed",
+                preserve_position=True,
+            )
         return
     _mutate_stock_state(
         stock,
@@ -54744,14 +54829,52 @@ def _maybe_reprice_pending_entry_order(stock, code, strategy, *, timeout_sec=Non
         return "not_applicable"
 
     now_ts = time.time()
-    allow_partial_holding_reprice = _nxt_rising_missed_partial_fill_reprice_enabled(
+    nxt_partial_holding_reprice = _nxt_rising_missed_partial_fill_reprice_enabled(
         stock,
         code,
         now_ts=now_ts,
     )
-    open_orders = _open_reprice_candidate_orders(stock)
+    probe_residual_reprice = _entry_split_probe_pending_residual_reprice_enabled(
+        stock,
+        code,
+        now_ts=now_ts,
+    )
+    allow_partial_holding_reprice = bool(
+        nxt_partial_holding_reprice or probe_residual_reprice
+    )
     active_orders = _open_entry_split_orders(stock)
+    open_orders = (
+        [
+            order
+            for order in active_orders
+            if _coerce_int_value(order.get("qty"))
+            > _coerce_int_value(order.get("filled_qty"))
+        ]
+        if probe_residual_reprice
+        else _open_reprice_candidate_orders(stock)
+    )
     entry_bundle_filled_qty = _entry_bundle_filled_qty(stock)
+    partial_holding_reprice_fields: dict[str, Any] = {}
+    if nxt_partial_holding_reprice:
+        partial_holding_reprice_fields.update(
+            {
+                **_nxt_rising_missed_partial_fill_reprice_contract_fields(),
+                "nxt_partial_fill_reprice_applied": True,
+                "nxt_partial_fill_reprice_filled_qty_before_cancel": (
+                    entry_bundle_filled_qty
+                ),
+            }
+        )
+    if probe_residual_reprice:
+        partial_holding_reprice_fields.update(
+            {
+                **_entry_split_probe_pending_reprice_contract_fields(),
+                "probe_residual_reprice_applied": True,
+                "probe_residual_reprice_filled_qty_before_cancel": (
+                    entry_bundle_filled_qty
+                ),
+            }
+        )
     if (
         len(active_orders) > 1
         and (
@@ -54898,16 +55021,7 @@ def _maybe_reprice_pending_entry_order(stock, code, strategy, *, timeout_sec=Non
             "runtime_effect": False,
             "timeout_sec": timeout_sec if timeout_sec is not None else "-",
         }
-        if allow_partial_holding_reprice:
-            evaluated_fields.update(
-                {
-                    **_nxt_rising_missed_partial_fill_reprice_contract_fields(),
-                    "nxt_partial_fill_reprice_applied": True,
-                    "nxt_partial_fill_reprice_filled_qty_before_cancel": (
-                        entry_bundle_filled_qty
-                    ),
-                }
-            )
+        evaluated_fields.update(partial_holding_reprice_fields)
         if bundle_reprice:
             evaluated_fields.update(
                 {
@@ -54974,27 +55088,244 @@ def _maybe_reprice_pending_entry_order(stock, code, strategy, *, timeout_sec=Non
         )
         else reprice_latency_state
     )
-    decision = evaluate_entry_reprice_after_submit(
-        order=decision_order,
-        strategy=strategy,
-        elapsed_sec=elapsed_sec,
-        best_bid=best_bid,
-        best_ask=best_ask,
-        current_price=current_price,
-        quote_age_ms=quote_age_ms,
-        ai_score=order.get("ai_score"),
-        chosen_action=order.get("entry_reprice_action") or order.get("chosen_action"),
-        entry_adm_recommended_action=order.get("entry_adm_recommended_action"),
-        entry_adm_ev_pct=order.get("entry_adm_ev_pct"),
-        lifecycle_matrix_selected_action=order.get("lifecycle_matrix_selected_action"),
-        buy_pressure_10t=order.get("buy_pressure_10t"),
-        tick_aggressor_pressure_usable=order.get("tick_aggressor_pressure_usable"),
-        tick_aggressor_trusted_count=order.get("tick_aggressor_trusted_count"),
-        orderbook_micro_state=micro_state,
-        latency_state=effective_reprice_latency_state,
-        simulated_order=bool(order.get("simulated_order")),
-        **config,
-    )
+    if probe_residual_reprice:
+        direction_ws_data = dict(reprice_gap_ws_data)
+        if WS_MANAGER is not None:
+            try:
+                latest_ws_data = WS_MANAGER.get_latest_data(code)
+                if isinstance(latest_ws_data, dict) and latest_ws_data:
+                    direction_ws_data.update(latest_ws_data)
+            except Exception as exc:
+                log_error(
+                    f"[PROBE_RESIDUAL_REPRICE_WS] {stock.get('name')}({code}) "
+                    f"failed={exc}"
+                )
+        direction_quote_fields = {
+            "canonical_mark_price": current_price,
+            "passive_buy_price": best_bid,
+            "executable_buy_price": best_ask,
+        }
+        direction_fields = _post_probe_direction_fields(
+            stock,
+            direction_ws_data,
+            direction_quote_fields,
+            probe_fill_price=_safe_int(stock.get("entry_split_probe_fill_price"), 0),
+            code=code,
+            now_ts=now_ts,
+            max_context_age_sec=3.0,
+        )
+        continuation_action = str(
+            direction_fields.get("post_probe_continuation_action") or "DEFER"
+        ).upper()
+        if bool(
+            stock.get("entry_split_probe_deferred_once")
+        ) and continuation_action in {
+            "ALLOW_NARROW",
+            "ALLOW_NORMAL",
+        }:
+            continuation_action = "ALLOW_RECOVERED_WIDE"
+        leg_indexes = [
+            max(
+                0,
+                _safe_int((candidate or {}).get("entry_split_order_leg_index"), 1) - 1,
+            )
+            for candidate in orders_to_cancel
+        ]
+        p1_resolution = resolve_scalping_entry_price(
+            strategy_id="SCALPING",
+            defensive_order_price=_coerce_int_value(order.get("price")),
+            target_buy_price=0,
+            best_bid=best_bid,
+            best_ask=best_ask,
+            phase="leg_reprice",
+            probe_fill_price=_safe_int(stock.get("entry_split_probe_fill_price"), 0),
+            fresh_mark_price=current_price,
+            continuation_action=continuation_action,
+            residual_leg_index=min(leg_indexes, default=0),
+        )
+        p1_target_price = _safe_int(p1_resolution.get("resolved_order_price"), 0)
+        chase_guard_fields = _post_probe_chase_guard_fields(
+            stock,
+            probe_fill_price=_safe_int(stock.get("entry_split_probe_fill_price"), 0),
+            best_bid=best_bid,
+            best_ask=best_ask,
+            candidate_price=p1_target_price,
+        )
+        original_max_price = max(
+            (
+                _coerce_int_value(candidate.get("price"))
+                for candidate in orders_to_cancel
+            ),
+            default=0,
+        )
+        max_upward_price = clamp_price_to_tick(
+            max(1, original_max_price)
+            * (1.0 + (float(config["max_upward_bps"]) / 10000.0))
+        )
+        spread_bps = (
+            ((float(best_ask) - float(best_bid)) / float(best_ask)) * 10000.0
+            if best_ask > 0 and best_bid > 0 and best_ask >= best_bid
+            else float("inf")
+        )
+        remaining_qty = sum(
+            max(
+                0,
+                _coerce_int_value(candidate.get("qty"))
+                - _coerce_int_value(candidate.get("filled_qty")),
+            )
+            for candidate in orders_to_cancel
+        )
+        expected_remaining_qty = max(
+            0,
+            _safe_int(stock.get("entry_split_probe_requested_qty"), 0)
+            - entry_bundle_filled_qty,
+        )
+        price_guard_fields = _split_policy_pre_submit_price_guard_fields(
+            "SCALPING",
+            p1_target_price,
+            best_bid,
+            planned_order=order,
+        )
+        holding_buy_price = _safe_float(stock.get("buy_price"), 0.0)
+        holding_profit_rate = (
+            calculate_net_profit_rate(holding_buy_price, current_price)
+            if holding_buy_price > 0 and current_price > 0
+            else 0.0
+        )
+        hard_stop_pct = _safe_float(
+            stock.get("hard_stop_pct"),
+            _rule_float("SCALP_PRESET_HARD_STOP_PCT", -0.7),
+        )
+        soft_stop_trigger_pct = _rule_float(
+            "SCALP_PRESET_TP_SOFT_STOP_TRIGGER_PCT", hard_stop_pct
+        )
+        protect_profit_pct = _safe_float(stock.get("protect_profit_pct"), None)
+        trailing_stop_price = _safe_int(stock.get("trailing_stop_price"), 0)
+        stop_precedence = bool(
+            holding_profit_rate <= max(hard_stop_pct, soft_stop_trigger_pct)
+            or (
+                protect_profit_pct is not None
+                and holding_profit_rate <= float(protect_profit_pct)
+            )
+            or (trailing_stop_price > 0 and current_price <= trailing_stop_price)
+        )
+        account_guard_fields: dict[str, Any] = {}
+        block_reason = ""
+        nonterminal_block = False
+        if continuation_action == "DEFER":
+            block_reason = "post_probe_direction_deferred"
+            nonterminal_block = True
+        elif not p1_resolution.get("allowed") or p1_target_price <= 0:
+            block_reason = "post_probe_price_resolver_unavailable"
+            nonterminal_block = True
+        elif _safe_int(config.get("max_attempts"), 0) <= _coerce_int_value(
+            order.get("entry_reprice_attempt_count")
+        ):
+            block_reason = "attempt_limit"
+        elif quote_age_float < 0 or quote_age_float > float(config["max_quote_age_ms"]):
+            block_reason = "quote_stale"
+            nonterminal_block = True
+        elif reprice_latency_state not in {"SAFE", "CAUTION"}:
+            block_reason = "latency_state_not_safe"
+            nonterminal_block = True
+        elif spread_bps > float(config["max_spread_bps"]):
+            block_reason = "spread_too_wide"
+            nonterminal_block = True
+        elif _entry_split_probe_exit_authority_active(
+            stock
+        ) or _has_active_sell_order_pending(stock):
+            block_reason = "exit_authority_precedence"
+        elif stop_precedence:
+            block_reason = "hard_protect_stop_precedence"
+        elif (
+            not is_scalping_buy_time_allowed(datetime.fromtimestamp(now_ts, tz=_KST))
+            or is_buy_side_paused()
+        ):
+            block_reason = "buy_authority_not_available"
+        elif _safe_float((COOLDOWNS or {}).get(code), 0.0) > now_ts:
+            block_reason = "entry_cooldown_active"
+        elif remaining_qty <= 0 or remaining_qty != expected_remaining_qty:
+            block_reason = "probe_residual_quantity_invariant"
+        elif p1_target_price <= original_max_price:
+            block_reason = "price_not_improved"
+            nonterminal_block = True
+        elif p1_target_price > max_upward_price:
+            block_reason = "upward_cap"
+            nonterminal_block = True
+        elif p1_target_price > best_ask:
+            block_reason = "target_above_best_ask"
+            nonterminal_block = True
+        elif chase_guard_fields.get("post_probe_chase_guard_blocked"):
+            block_reason = str(
+                chase_guard_fields.get("post_probe_chase_guard_reason")
+                or "post_probe_chase_guard_blocked"
+            )
+            nonterminal_block = True
+        elif price_guard_fields.get("pre_submit_price_guard_blocked"):
+            block_reason = "pre_submit_price_guard_blocked"
+            nonterminal_block = True
+        else:
+            account_guard_fields = _probe_residual_account_guard_fields(
+                code,
+                unit_price=max(best_ask, p1_target_price),
+                residual_qty=remaining_qty,
+            )
+            if not account_guard_fields.get("account_guard_allowed"):
+                block_reason = str(
+                    account_guard_fields.get("account_guard_reason")
+                    or "probe_residual_account_guard_blocked"
+                )
+        decision_fields = {
+            **direction_fields,
+            **p1_resolution,
+            **chase_guard_fields,
+            **price_guard_fields,
+            **account_guard_fields,
+            **_entry_split_probe_pending_reprice_contract_fields(),
+            "runtime_family": "dynamic_entry_price_resolver",
+            "policy_version": "dynamic_entry_price_resolver_p1_post_probe",
+            "original_order_price": original_max_price,
+            "max_upward_cap_price": max_upward_price,
+            "spread_bps": f"{spread_bps:.3f}",
+            "latency_state": reprice_latency_state,
+            "quote_age_ms": f"{quote_age_float:.1f}",
+            "probe_residual_reprice_remaining_qty": remaining_qty,
+            "probe_residual_reprice_expected_remaining_qty": (expected_remaining_qty),
+            "probe_residual_reprice_holding_profit_rate": round(holding_profit_rate, 4),
+            "probe_residual_reprice_stop_precedence": stop_precedence,
+            "probe_residual_reprice_nonterminal_block": nonterminal_block,
+        }
+        decision = EntryRepriceDecision(
+            not block_reason,
+            block_reason or "allow",
+            p1_target_price if not block_reason else 0,
+            decision_fields,
+        )
+    else:
+        decision = evaluate_entry_reprice_after_submit(
+            order=decision_order,
+            strategy=strategy,
+            elapsed_sec=elapsed_sec,
+            best_bid=best_bid,
+            best_ask=best_ask,
+            current_price=current_price,
+            quote_age_ms=quote_age_ms,
+            ai_score=order.get("ai_score"),
+            chosen_action=order.get("entry_reprice_action")
+            or order.get("chosen_action"),
+            entry_adm_recommended_action=order.get("entry_adm_recommended_action"),
+            entry_adm_ev_pct=order.get("entry_adm_ev_pct"),
+            lifecycle_matrix_selected_action=order.get(
+                "lifecycle_matrix_selected_action"
+            ),
+            buy_pressure_10t=order.get("buy_pressure_10t"),
+            tick_aggressor_pressure_usable=order.get("tick_aggressor_pressure_usable"),
+            tick_aggressor_trusted_count=order.get("tick_aggressor_trusted_count"),
+            orderbook_micro_state=micro_state,
+            latency_state=effective_reprice_latency_state,
+            simulated_order=bool(order.get("simulated_order")),
+            **config,
+        )
     evaluated_fields = {
         **decision.as_log_fields(),
         **quote_refresh_fields,
@@ -55005,16 +55336,7 @@ def _maybe_reprice_pending_entry_order(stock, code, strategy, *, timeout_sec=Non
         "runtime_effect": False,
         "timeout_sec": timeout_sec if timeout_sec is not None else "-",
     }
-    if allow_partial_holding_reprice:
-        evaluated_fields.update(
-            {
-                **_nxt_rising_missed_partial_fill_reprice_contract_fields(),
-                "nxt_partial_fill_reprice_applied": True,
-                "nxt_partial_fill_reprice_filled_qty_before_cancel": (
-                    entry_bundle_filled_qty
-                ),
-            }
-        )
+    evaluated_fields.update(partial_holding_reprice_fields)
     if bundle_reprice:
         evaluated_fields.update(
             {
@@ -55029,7 +55351,9 @@ def _maybe_reprice_pending_entry_order(stock, code, strategy, *, timeout_sec=Non
         stock, code, "entry_reprice_after_submit_evaluated", **evaluated_fields
     )
 
-    terminal_block = decision.reason != "quote_stale"
+    terminal_block = decision.reason != "quote_stale" and not bool(
+        decision.fields.get("probe_residual_reprice_nonterminal_block")
+    )
     if not decision.allowed:
         _log_entry_pipeline(
             stock, code, "entry_reprice_after_submit_blocked", **evaluated_fields
@@ -55068,16 +55392,7 @@ def _maybe_reprice_pending_entry_order(stock, code, strategy, *, timeout_sec=Non
         "qty": qty,
         "dmst_stex_tp": child_dmst_stex_tp,
     }
-    if allow_partial_holding_reprice:
-        request_fields.update(
-            {
-                **_nxt_rising_missed_partial_fill_reprice_contract_fields(),
-                "nxt_partial_fill_reprice_applied": True,
-                "nxt_partial_fill_reprice_filled_qty_before_cancel": (
-                    entry_bundle_filled_qty
-                ),
-            }
-        )
+    request_fields.update(partial_holding_reprice_fields)
     if bundle_reprice:
         request_fields.update(
             {
@@ -55228,6 +55543,29 @@ def _maybe_reprice_pending_entry_order(stock, code, strategy, *, timeout_sec=Non
             preserve_holding=allow_partial_holding_reprice,
         )
         return "failed"
+    probe_reprice_remaining_ttl_sec = 0
+    if probe_residual_reprice:
+        original_sent_times = [
+            _safe_float(candidate.get("sent_at"), 0.0)
+            for candidate in orders_to_cancel
+            if _safe_float(candidate.get("sent_at"), 0.0) > 0
+        ]
+        original_hard_ttl_sec = max(
+            (
+                _safe_int(candidate.get("split_bundle_hard_ttl_sec"), 0)
+                for candidate in orders_to_cancel
+            ),
+            default=0,
+        )
+        if original_sent_times and original_hard_ttl_sec > 0:
+            probe_reprice_remaining_ttl_sec = max(
+                1,
+                int(
+                    math.ceil(
+                        min(original_sent_times) + original_hard_ttl_sec - time.time()
+                    )
+                ),
+            )
     child_order = {
         "tag": order.get("tag", "normal"),
         "qty": qty,
@@ -55270,7 +55608,8 @@ def _maybe_reprice_pending_entry_order(stock, code, strategy, *, timeout_sec=Non
         "entry_reprice_bundle_leg_count": (
             len(orders_to_cancel) if bundle_reprice else 1
         ),
-        "nxt_partial_fill_reprice_applied": allow_partial_holding_reprice,
+        "nxt_partial_fill_reprice_applied": nxt_partial_holding_reprice,
+        "probe_residual_reprice_applied": probe_residual_reprice,
         "ai_score": order.get("ai_score"),
         "entry_reprice_action": order.get("entry_reprice_action"),
         "entry_adm_recommended_action": order.get("entry_adm_recommended_action"),
@@ -55294,6 +55633,33 @@ def _maybe_reprice_pending_entry_order(stock, code, strategy, *, timeout_sec=Non
             for key, value in observed_mark_gap_fields.items()
             if str(key).startswith("observed_mark_gap_")
         },
+        **(
+            {
+                "entry_price_resolver_phase": "leg_reprice",
+                "entry_price_resolver_action": decision.fields.get("action"),
+                "entry_price_resolver_offset_profile": decision.fields.get(
+                    "offset_profile"
+                ),
+                "entry_price_resolver_anchor_price": decision.fields.get(
+                    "anchor_price"
+                ),
+                "entry_price_resolver_previous_price": decision.fields.get(
+                    "original_order_price"
+                ),
+                "entry_price_resolver_resolved_price": target_price,
+                "post_probe_direction_state": decision.fields.get(
+                    "post_probe_direction_state"
+                ),
+                "post_probe_direction_reason": decision.fields.get(
+                    "post_probe_direction_reason"
+                ),
+                "split_leg_ttl_sec": probe_reprice_remaining_ttl_sec,
+                "split_bundle_hard_ttl_sec": probe_reprice_remaining_ttl_sec,
+                **_entry_split_probe_pending_reprice_contract_fields(),
+            }
+            if probe_residual_reprice
+            else {}
+        ),
     }
     with ENTRY_LOCK:
         stock["pending_entry_orders"] = [child_order]
@@ -55306,30 +55672,54 @@ def _maybe_reprice_pending_entry_order(stock, code, strategy, *, timeout_sec=Non
         ]
         stock["entry_reprice_parent_ord_no"] = parent_order_no
         stock["entry_reprice_child_ord_no"] = child_order_no
+    if probe_residual_reprice:
+        bundle_id = str(stock.get("entry_split_probe_bundle_id") or "").strip()
+        try:
+            update_probe_runtime_bundle(
+                bundle_id,
+                phase=str(stock.get("entry_split_probe_phase") or "residual_submitted"),
+                reason="probe_residual_repriced_after_submit",
+                residual_order_nos=[child_order_no],
+                residual_submitted_qty=qty,
+                residual_orders=[child_order],
+                reprice_parent_order_nos=parent_order_no,
+                reprice_child_order_no=child_order_no,
+                reprice_order_price=target_price,
+            )
+        except Exception as exc:
+            log_error(
+                f"[PROBE_RESIDUAL_REPRICE_PERSIST] {stock.get('name')}({code}) "
+                f"failed={exc}"
+            )
+    submitted_log_fields = {
+        **decision.as_log_fields(),
+        **observed_mark_gap_fields,
+        **operator_latency_relief_fields,
+        **partial_holding_reprice_fields,
+        "runtime_effect": True,
+        "actual_order_submitted": True,
+        "broker_order_forbidden": False,
+        "broker_order_submitted": True,
+        "child_order_no": child_order_no,
+        "broker_order_no": child_order_no,
+        "order_no": child_order_no,
+        "qty": qty,
+        "entry_reprice_bundle_compression": bool(bundle_reprice),
+        "entry_reprice_bundle_leg_count": (
+            len(orders_to_cancel) if bundle_reprice else 1
+        ),
+        "entry_reprice_parent_order_nos": parent_order_no,
+        **{
+            **partial_holding_reprice_fields,
+            "nxt_partial_fill_reprice_applied": nxt_partial_holding_reprice,
+            "probe_residual_reprice_applied": probe_residual_reprice,
+        },
+    }
     _log_entry_pipeline(
         stock,
         code,
         "entry_reprice_resubmit_submitted",
-        **decision.as_log_fields(),
-        **observed_mark_gap_fields,
-        **operator_latency_relief_fields,
-        runtime_effect=True,
-        actual_order_submitted=True,
-        broker_order_forbidden=False,
-        broker_order_submitted=True,
-        child_order_no=child_order_no,
-        broker_order_no=child_order_no,
-        order_no=child_order_no,
-        qty=qty,
-        entry_reprice_bundle_compression=bool(bundle_reprice),
-        entry_reprice_bundle_leg_count=len(orders_to_cancel) if bundle_reprice else 1,
-        entry_reprice_parent_order_nos=parent_order_no,
-        **(
-            _nxt_rising_missed_partial_fill_reprice_contract_fields()
-            if allow_partial_holding_reprice
-            else {}
-        ),
-        nxt_partial_fill_reprice_applied=allow_partial_holding_reprice,
+        **submitted_log_fields,
     )
     log_info(
         f"[ENTRY_REPRICE_AFTER_SUBMIT] {stock.get('name')}({code}) "
@@ -57789,6 +58179,10 @@ def handle_holding_state(
         stock, code, now_ts=now_ts, curr_price=curr_p
     )
     if _nxt_rising_missed_partial_fill_reprice_enabled(
+        stock,
+        code,
+        now_ts=now_ts,
+    ) or _entry_split_probe_pending_residual_reprice_enabled(
         stock,
         code,
         now_ts=now_ts,

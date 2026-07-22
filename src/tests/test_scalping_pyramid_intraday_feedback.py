@@ -320,6 +320,7 @@ def test_pyramid_intraday_feedback_backtests_all_one_share_events(tmp_path):
             "rising_missed_one_share_entry",
             {
                 "forced_entry_reason": "rising_missed_one_share_entry",
+                "actual_order_submitted": True,
                 "forced_entry_qty": 5,
             },
         ),
@@ -345,6 +346,7 @@ def test_pyramid_intraday_feedback_backtests_all_one_share_events(tmp_path):
             "rising_missed_one_share_entry",
             {
                 "forced_entry_reason": "rising_missed_one_share_entry",
+                "actual_order_submitted": True,
                 "forced_entry_qty": 1,
             },
         ),
@@ -363,6 +365,7 @@ def test_pyramid_intraday_feedback_backtests_all_one_share_events(tmp_path):
             "rising_missed_one_share_entry",
             {
                 "forced_entry_reason": "rising_missed_one_share_entry",
+                "actual_order_submitted": True,
                 "forced_entry_qty": 1,
             },
         ),
@@ -427,6 +430,7 @@ def test_pyramid_intraday_feedback_uses_runtime_min_profit_for_one_share_opportu
             "rising_missed_one_share_entry",
             {
                 "forced_entry_reason": "rising_missed_one_share_entry",
+                "actual_order_submitted": True,
                 "forced_entry_qty": 1,
             },
         ),
@@ -451,3 +455,214 @@ def test_pyramid_intraday_feedback_uses_runtime_min_profit_for_one_share_opportu
     assert item["pyramid_opportunity_seen"] is True
     assert item["pyramid_opportunity_min_profit_pct"] == 1.2
     assert item["pyramid_opportunity_profit_rate"] == 1.3
+
+
+def test_one_share_peak_crossing_is_not_labeled_as_correctly_blocked(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-03.jsonl"
+    rows = [
+        _event(
+            601,
+            "555555",
+            "peak-only",
+            "rising_missed_one_share_entry",
+            {
+                "forced_entry_reason": "rising_missed_one_share_entry",
+                "actual_order_submitted": True,
+                "forced_entry_qty": 5,
+            },
+        ),
+        _event(
+            601,
+            "555555",
+            "peak-only",
+            "stat_action_decision_snapshot",
+            {"profit_rate": "+0.40", "peak_profit": "+1.40"},
+        ),
+        _event(
+            601,
+            "555555",
+            "peak-only",
+            "sell_completed",
+            {"profit_rate": "0.00", "peak_profit": "+1.40"},
+        ),
+        _event(
+            699,
+            "555599",
+            "runtime-threshold-source",
+            "pyramid_blocked_reason",
+            {
+                "scale_in_arm": "PYRAMID",
+                "scale_in_blocker_reason": "profit_not_enough",
+                "profit_rate": "+0.50",
+                "peak_profit": "+0.50",
+                "min_profit_pct": "+1.10",
+            },
+        ),
+    ]
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8"
+    )
+
+    report = mod.build_report(
+        "2026-07-03", pipeline_path=pipeline_path, generated_at="fixed"
+    )
+    item = report["one_share_pyramid_opportunity_rows"][0]
+
+    assert item["max_profit_seen"] == 1.4
+    assert item["pyramid_opportunity_seen"] is True
+    assert item["pyramid_opportunity_min_profit_pct"] == 1.1
+    assert item["pyramid_opportunity_threshold_source"] == (
+        "same_day_unique_runtime_pyramid_evaluation"
+    )
+    assert item["pyramid_opportunity_source"] == (
+        "holding_peak_runtime_threshold_crossed_postscan"
+    )
+    assert item["pyramid_feedback_label"] != "pyramid_correctly_blocked"
+
+
+def test_pyramid_blocked_event_below_min_does_not_invent_opportunity(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-03.jsonl"
+    rows = [
+        _event(
+            602,
+            "555556",
+            "below-min",
+            "rising_missed_one_share_entry",
+            {
+                "forced_entry_reason": "rising_missed_one_share_entry",
+                "actual_order_submitted": True,
+                "forced_entry_qty": 5,
+            },
+        ),
+        _event(
+            602,
+            "555556",
+            "below-min",
+            "pyramid_blocked_reason",
+            {
+                "scale_in_arm": "PYRAMID",
+                "scale_in_blocker_reason": "tick_accel_below_min",
+                "profit_rate": "+0.40",
+                "peak_profit": "+0.50",
+            },
+        ),
+        _event(
+            602,
+            "555556",
+            "below-min",
+            "sell_completed",
+            {"profit_rate": "+0.30", "peak_profit": "+0.50"},
+        ),
+    ]
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8"
+    )
+
+    report = mod.build_report(
+        "2026-07-03", pipeline_path=pipeline_path, generated_at="fixed"
+    )
+    item = report["one_share_pyramid_opportunity_rows"][0]
+
+    assert item.get("pyramid_opportunity_seen") is not True
+    assert report["summary"]["one_share_pyramid_opportunity_count"] == 0
+
+
+def test_probe_residual_soft_abort_and_pyramid_recheck_provenance(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-03.jsonl"
+    rows = [
+        _event(
+            603,
+            "555557",
+            "soft-abort",
+            "rising_missed_one_share_entry",
+            {
+                "forced_entry_reason": "rising_missed_one_share_entry",
+                "actual_order_submitted": False,
+                "forced_entry_qty": 5,
+            },
+        ),
+        _event(
+            603,
+            "555557",
+            "soft-abort",
+            "probe_filled",
+            {"probe_bundle_id": "bundle-603", "fill_qty": 1, "fill_price": 10000},
+        ),
+        _event(
+            603,
+            "555557",
+            "soft-abort",
+            "residual_blocked",
+            {
+                "probe_bundle_id": "bundle-603",
+                "reason": "residual_revalidation_timeout",
+                "entry_split_probe_scale_in_recheck_allowed": True,
+            },
+            pipeline="ENTRY_PIPELINE",
+        ),
+        _event(
+            603,
+            "555557",
+            "soft-abort",
+            "pyramid_blocked_reason",
+            {
+                "scale_in_arm": "PYRAMID",
+                "scale_in_blocker_reason": "tick_accel_below_min",
+                "profit_rate": "+1.20",
+                "peak_profit": "+1.70",
+            },
+        ),
+        _event(
+            603,
+            "555557",
+            "soft-abort",
+            "sell_completed",
+            {"profit_rate": "+1.20", "peak_profit": "+1.70"},
+        ),
+    ]
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8"
+    )
+
+    report = mod.build_report(
+        "2026-07-03", pipeline_path=pipeline_path, generated_at="fixed"
+    )
+    item = report["one_share_pyramid_opportunity_rows"][0]
+
+    assert item["residual_expected_qty"] == 4
+    assert item["forced_entry_qty"] == 5
+    assert item["one_share_actual_stage"] == "probe_filled"
+    assert item["residual_filled_qty"] == 0
+    assert item["residual_zero_fill"] is True
+    assert item["residual_soft_abort"] is True
+    assert item["residual_scale_in_recheck_allowed"] is True
+    assert item["pyramid_evaluation_seen"] is True
+    assert item["residual_missed_upside_candidate"] is True
+    assert report["summary"]["probe_residual_zero_fill_count"] == 1
+    assert report["summary"]["probe_residual_soft_abort_count"] == 1
+    assert report["summary"]["probe_residual_missed_upside_candidate_count"] == 1
+    assert report["summary"]["probe_residual_pyramid_evaluation_seen_count"] == 1
+
+
+def test_partial_submitted_direction_defer_is_not_soft_abort():
+    item = {}
+    row = _event(
+        604,
+        "555558",
+        "partial-submitted",
+        "residual_blocked",
+        {
+            "reason": "residual_leg_direction_deferred",
+            "actual_order_submitted": True,
+            "residual_submitted_qty": 3,
+            "residual_submitted_leg_count": 1,
+        },
+        pipeline="ENTRY_PIPELINE",
+    )
+
+    mod._update_probe_residual_observation(item, row)
+
+    assert item["residual_soft_abort"] is False
+    assert item["residual_hard_or_capacity_abort"] is True
+    assert item["residual_partial_submitted_before_block"] is True
+    assert item["residual_scale_in_recheck_allowed"] is False

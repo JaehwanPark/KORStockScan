@@ -236,6 +236,9 @@ _SELL_REVIVE_RESET_KEYS = (
     "entry_split_probe_continuation_action",
     "entry_split_probe_offset_profile",
     "entry_split_probe_scale_in_forbidden",
+    "entry_split_probe_soft_abort",
+    "entry_split_probe_scale_in_recheck_allowed",
+    "entry_split_probe_scale_in_recheck_reason",
     "entry_split_probe_abort_reason",
     "rising_missed_scout_upgraded",
 )
@@ -285,6 +288,9 @@ _SELL_COMPLETE_RESET_KEYS = (
     "entry_split_probe_continuation_action",
     "entry_split_probe_offset_profile",
     "entry_split_probe_scale_in_forbidden",
+    "entry_split_probe_soft_abort",
+    "entry_split_probe_scale_in_recheck_allowed",
+    "entry_split_probe_scale_in_recheck_reason",
     "entry_split_probe_abort_reason",
     "rising_missed_scout_upgraded",
 )

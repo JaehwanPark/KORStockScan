@@ -81,12 +81,21 @@ def _record_key(row: dict[str, Any], fields: dict[str, Any]) -> str:
 
 def _is_one_share_event(row: dict[str, Any]) -> bool:
     fields = _fields(row)
-    return (
-        str(row.get("stage") or "") == "rising_missed_one_share_entry"
-        or str(fields.get("forced_entry_reason") or "")
-        == "rising_missed_one_share_entry"
-        or _boolish(fields.get("rising_missed_one_share_entry_forced"))
+    stage = str(row.get("stage") or "")
+    return bool(
+        (
+            stage == "probe_filled"
+            and int(_safe_float(fields.get("fill_qty"), 0) or 0) == 1
+        )
+        or (
+            stage == "rising_missed_one_share_entry"
+            and _boolish(fields.get("actual_order_submitted"))
+        )
     )
+
+
+def _is_one_share_plan_event(row: dict[str, Any]) -> bool:
+    return str(row.get("stage") or "") == "rising_missed_one_share_entry"
 
 
 def _one_share_record(row: dict[str, Any]) -> dict[str, Any]:
@@ -208,10 +217,20 @@ def _pyramid_submit_record(row: dict[str, Any]) -> dict[str, Any]:
 def _update_snapshot(item: dict[str, Any], row: dict[str, Any]) -> None:
     fields = _fields(row)
     profit_rate = _safe_float(fields.get("profit_rate"))
+    peak_profit = _safe_float(fields.get("peak_profit"))
+    observed_peak = (
+        max(value for value in (profit_rate, peak_profit) if value is not None)
+        if profit_rate is not None or peak_profit is not None
+        else None
+    )
     item["latest_snapshot_ts"] = row.get("emitted_at")
     item["latest_stage"] = row.get("stage")
     item["latest_profit_rate"] = profit_rate
-    item["latest_peak_profit"] = _safe_float(fields.get("peak_profit"))
+    item["latest_peak_profit"] = peak_profit
+    observed_min_profit = _safe_float(fields.get("min_profit_pct"), None)
+    if observed_min_profit is not None and observed_min_profit > 0:
+        item["pyramid_opportunity_min_profit_pct"] = observed_min_profit
+        item["pyramid_opportunity_threshold_source"] = "exact_pyramid_evaluation_event"
     if profit_rate is not None:
         item["min_profit_seen"] = (
             profit_rate
@@ -219,9 +238,15 @@ def _update_snapshot(item: dict[str, Any], row: dict[str, Any]) -> None:
             else min(item["min_profit_seen"], profit_rate)
         )
         item["max_profit_seen"] = (
-            profit_rate
+            observed_peak
             if item.get("max_profit_seen") is None
-            else max(item["max_profit_seen"], profit_rate)
+            else max(item["max_profit_seen"], observed_peak)
+        )
+    elif observed_peak is not None:
+        item["max_profit_seen"] = (
+            observed_peak
+            if item.get("max_profit_seen") is None
+            else max(item["max_profit_seen"], observed_peak)
         )
     for key in (
         "current_ai_score",
@@ -251,18 +276,31 @@ def _update_snapshot(item: dict[str, Any], row: dict[str, Any]) -> None:
         opportunity_profit = _safe_float(
             item.get("pyramid_opportunity_profit_rate"), None
         )
-        min_profit_pct = _pyramid_min_profit_pct()
+        min_profit_pct = float(
+            _safe_float(
+                item.get("pyramid_opportunity_min_profit_pct"),
+                _pyramid_min_profit_pct(),
+            )
+            or _pyramid_min_profit_pct()
+        )
         item["pyramid_opportunity_min_profit_pct"] = min_profit_pct
-        if (
-            profit_rate is not None
-            and profit_rate >= min_profit_pct
-            and opportunity_profit is None
-        ):
+        item.setdefault(
+            "pyramid_opportunity_threshold_source",
+            "static_fallback_pending_runtime_threshold_provenance",
+        )
+        exact_cross = profit_rate is not None and profit_rate >= min_profit_pct
+        peak_cross = observed_peak is not None and observed_peak >= min_profit_pct
+        if (exact_cross or peak_cross) and opportunity_profit is None:
             item["pyramid_opportunity_seen"] = True
             item["pyramid_opportunity_ts"] = row.get("emitted_at")
-            item["pyramid_opportunity_profit_rate"] = profit_rate
-            item["pyramid_opportunity_peak_profit"] = _safe_float(
-                fields.get("peak_profit")
+            item["pyramid_opportunity_profit_rate"] = (
+                profit_rate if exact_cross else min_profit_pct
+            )
+            item["pyramid_opportunity_peak_profit"] = observed_peak
+            item["pyramid_opportunity_source"] = (
+                "exact_profit_snapshot"
+                if exact_cross
+                else "holding_peak_threshold_crossed"
             )
             if (
                 item.get("scale_in_blocker_reason")
@@ -272,6 +310,204 @@ def _update_snapshot(item: dict[str, Any], row: dict[str, Any]) -> None:
                     "one_share_pyramid_not_submitted_opportunity"
                 )
             item["scale_in_blocker_namespace"] = "ONE_SHARE_PYRAMID_BACKTEST"
+
+
+_PROBE_RESIDUAL_STAGES = {
+    "probe_filled",
+    "residual_submitted",
+    "residual_blocked",
+    "residual_partial_complete",
+}
+_SOFT_RESIDUAL_ABORT_REASONS = {
+    "residual_leg_direction_deferred",
+    "residual_revalidation_timeout",
+}
+
+
+def _update_probe_residual_observation(
+    item: dict[str, Any], row: dict[str, Any]
+) -> None:
+    stage = str(row.get("stage") or "")
+    fields = _fields(row)
+    requested_qty = int(
+        _safe_float(
+            fields.get("forced_entry_qty")
+            or fields.get("entry_split_probe_requested_qty"),
+            0.0,
+        )
+        or 0.0
+    )
+    if requested_qty > 0:
+        item["forced_entry_qty"] = max(
+            int(item.get("forced_entry_qty") or 0), requested_qty
+        )
+    if stage == "pyramid_blocked_reason":
+        item["pyramid_evaluation_seen"] = True
+        item["pyramid_evaluation_count"] = (
+            int(item.get("pyramid_evaluation_count") or 0) + 1
+        )
+    if stage not in _PROBE_RESIDUAL_STAGES:
+        for key in ("entry_filled_qty", "buy_qty"):
+            filled_qty = int(_safe_float(fields.get(key), 0.0) or 0.0)
+            if filled_qty > 0:
+                item["probe_bundle_max_buy_qty"] = max(
+                    int(item.get("probe_bundle_max_buy_qty") or 0), filled_qty
+                )
+        return
+
+    item["probe_residual_observation_seen"] = True
+    item["probe_bundle_id"] = fields.get("probe_bundle_id") or item.get(
+        "probe_bundle_id"
+    )
+    if stage == "probe_filled":
+        probe_fill_qty = max(1, int(_safe_float(fields.get("fill_qty"), 1.0) or 1.0))
+        item["probe_fill_qty"] = probe_fill_qty
+        item["probe_fill_price"] = _safe_float(fields.get("fill_price"))
+        item["probe_bundle_max_buy_qty"] = max(
+            int(item.get("probe_bundle_max_buy_qty") or 0), probe_fill_qty
+        )
+    elif stage == "residual_submitted":
+        order_no = str(fields.get("order_no") or "").strip()
+        submitted_orders = item.setdefault("residual_submitted_order_nos", [])
+        if not order_no or order_no not in submitted_orders:
+            if order_no:
+                submitted_orders.append(order_no)
+            qty = max(0, int(_safe_float(fields.get("qty"), 0.0) or 0.0))
+            item["residual_submitted_qty"] = (
+                int(item.get("residual_submitted_qty") or 0) + qty
+            )
+            price = int(_safe_float(fields.get("price"), 0.0) or 0.0)
+            if price > 0:
+                item.setdefault("residual_submitted_prices", []).append(price)
+        item["residual_submitted_leg_count"] = len(submitted_orders)
+    elif stage == "residual_blocked":
+        reason = str(fields.get("reason") or "unknown")
+        explicit_recheck_allowed = _optional_boolish(
+            fields.get("entry_split_probe_scale_in_recheck_allowed")
+        )
+        partial_submitted = bool(
+            _boolish(fields.get("actual_order_submitted"))
+            or int(_safe_float(fields.get("residual_submitted_qty"), 0.0) or 0.0) > 0
+            or int(_safe_float(fields.get("residual_submitted_leg_count"), 0.0) or 0.0)
+            > 0
+        )
+        soft_abort = bool(
+            explicit_recheck_allowed is True
+            or (
+                explicit_recheck_allowed is None
+                and reason in _SOFT_RESIDUAL_ABORT_REASONS
+                and not partial_submitted
+            )
+        )
+        item["residual_block_reason"] = reason
+        item["residual_soft_abort"] = soft_abort
+        item["residual_hard_or_capacity_abort"] = not soft_abort
+        item["residual_partial_submitted_before_block"] = partial_submitted
+        item["residual_scale_in_recheck_allowed"] = soft_abort
+    elif stage == "residual_partial_complete":
+        filled_qty = int(_safe_float(fields.get("filled_qty"), 0.0) or 0.0)
+        if filled_qty > 0:
+            item["probe_bundle_max_buy_qty"] = max(
+                int(item.get("probe_bundle_max_buy_qty") or 0), filled_qty
+            )
+
+
+def _finalize_probe_residual_observation(item: dict[str, Any]) -> None:
+    if not item.get("probe_residual_observation_seen"):
+        return
+    probe_fill_qty = max(1, int(item.get("probe_fill_qty") or 1))
+    requested_qty = max(
+        probe_fill_qty,
+        int(item.get("forced_entry_qty") or probe_fill_qty),
+    )
+    max_buy_qty = max(
+        probe_fill_qty, int(item.get("probe_bundle_max_buy_qty") or probe_fill_qty)
+    )
+    residual_expected_qty = max(0, requested_qty - probe_fill_qty)
+    residual_filled_qty = max(0, max_buy_qty - probe_fill_qty)
+    item["residual_expected_qty"] = residual_expected_qty
+    item["residual_filled_qty"] = residual_filled_qty
+    item["residual_zero_fill"] = bool(
+        residual_expected_qty > 0 and residual_filled_qty == 0
+    )
+    max_profit_seen = _safe_float(item.get("max_profit_seen"), None)
+    min_profit_pct = float(
+        _safe_float(
+            item.get("pyramid_opportunity_min_profit_pct"),
+            _pyramid_min_profit_pct(),
+        )
+        or _pyramid_min_profit_pct()
+    )
+    item["residual_missed_upside_candidate"] = bool(
+        item["residual_zero_fill"]
+        and max_profit_seen is not None
+        and max_profit_seen >= min_profit_pct
+    )
+
+
+def _apply_daily_pyramid_threshold_provenance(
+    one_share_records: dict[str, dict[str, Any]],
+    candidates: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    observed_thresholds = sorted(
+        {
+            round(float(value), 6)
+            for item in candidates.values()
+            for value in [_safe_float(item.get("min_profit_pct"), None)]
+            if value is not None and value > 0
+        }
+    )
+    unique_runtime_threshold = (
+        observed_thresholds[0] if len(observed_thresholds) == 1 else None
+    )
+    for item in one_share_records.values():
+        threshold_source = str(item.get("pyramid_opportunity_threshold_source") or "")
+        if threshold_source != "exact_pyramid_evaluation_event":
+            if unique_runtime_threshold is not None:
+                item["pyramid_opportunity_min_profit_pct"] = unique_runtime_threshold
+                item["pyramid_opportunity_threshold_source"] = (
+                    "same_day_unique_runtime_pyramid_evaluation"
+                )
+            else:
+                item["pyramid_opportunity_min_profit_pct"] = _pyramid_min_profit_pct()
+                item["pyramid_opportunity_threshold_source"] = (
+                    "static_fallback_no_unique_runtime_threshold"
+                )
+        threshold = float(item["pyramid_opportunity_min_profit_pct"])
+        max_profit_seen = _safe_float(item.get("max_profit_seen"), None)
+        if (
+            not item.get("pyramid_opportunity_seen")
+            and max_profit_seen is not None
+            and max_profit_seen >= threshold
+        ):
+            item["pyramid_opportunity_seen"] = True
+            item["pyramid_opportunity_ts"] = item.get("latest_snapshot_ts")
+            item["pyramid_opportunity_profit_rate"] = threshold
+            item["pyramid_opportunity_peak_profit"] = max_profit_seen
+            item["pyramid_opportunity_source"] = (
+                "holding_peak_runtime_threshold_crossed_postscan"
+            )
+            if (
+                item.get("scale_in_blocker_reason")
+                == "one_share_pyramid_no_opportunity_seen"
+            ):
+                item["scale_in_blocker_reason"] = (
+                    "one_share_pyramid_not_submitted_opportunity"
+                )
+    return {
+        "observed_min_profit_pct_values": observed_thresholds,
+        "selected_min_profit_pct": (
+            unique_runtime_threshold
+            if unique_runtime_threshold is not None
+            else _pyramid_min_profit_pct()
+        ),
+        "selection_source": (
+            "same_day_unique_runtime_pyramid_evaluation"
+            if unique_runtime_threshold is not None
+            else "static_fallback_no_unique_runtime_threshold"
+        ),
+        "ambiguous": len(observed_thresholds) > 1,
+    }
 
 
 def _pressure_provenance_missing(item: dict[str, Any]) -> bool:
@@ -468,6 +704,18 @@ def _one_share_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "one_share_pyramid_avg_opportunity_cost_pct": (
             sum(costs) / len(costs) if costs else 0.0
         ),
+        "probe_residual_zero_fill_count": sum(
+            1 for item in rows if item.get("residual_zero_fill")
+        ),
+        "probe_residual_soft_abort_count": sum(
+            1 for item in rows if item.get("residual_soft_abort")
+        ),
+        "probe_residual_missed_upside_candidate_count": sum(
+            1 for item in rows if item.get("residual_missed_upside_candidate")
+        ),
+        "probe_residual_pyramid_evaluation_seen_count": sum(
+            1 for item in rows if item.get("pyramid_evaluation_seen")
+        ),
         "one_share_pyramid_label_counts": [
             {"pyramid_feedback_label": key, "count": value}
             for key, value in label_counts.most_common()
@@ -489,16 +737,35 @@ def build_report(
     )
     candidates: dict[str, dict[str, Any]] = {}
     one_share_records: dict[str, dict[str, Any]] = {}
+    one_share_plans: dict[str, dict[str, Any]] = {}
 
     for row in iter_jsonl(pipeline_path):
         fields = _fields(row)
         key = _record_key(row, fields)
         if not key:
             continue
+        if _is_one_share_plan_event(row):
+            one_share_plans[key] = _one_share_record(row)
         if _is_one_share_event(row):
             one_share = _one_share_record(row)
+            planned = one_share_plans.get(key) or {}
+            planned_qty = int(planned.get("forced_entry_qty") or 0)
+            if planned_qty > 0:
+                one_share["forced_entry_qty"] = planned_qty
+            for plan_key in (
+                "source_signature",
+                "position_tag",
+                "rising_missed_class",
+                "scanner_promotion_reason",
+            ):
+                if planned.get(plan_key) not in (None, ""):
+                    one_share[plan_key] = planned[plan_key]
+            one_share["one_share_plan_ts"] = planned.get("first_one_share_ts")
+            one_share["one_share_actual_stage"] = row.get("stage")
             item = one_share_records.setdefault(key, one_share)
             item.update({k: v for k, v in one_share.items() if v not in (None, "")})
+        if key in one_share_records:
+            _update_probe_residual_observation(one_share_records[key], row)
         blocked = _pyramid_blocked_record(row)
         if blocked:
             item = candidates.setdefault(key, blocked)
@@ -507,11 +774,7 @@ def build_report(
                 one_share_records[key].update(
                     {k: v for k, v in blocked.items() if v not in (None, "")}
                 )
-                one_share_records[key]["pyramid_opportunity_seen"] = True
-                one_share_records[key]["pyramid_opportunity_ts"] = row.get("emitted_at")
-                one_share_records[key]["pyramid_opportunity_profit_rate"] = blocked.get(
-                    "profit_rate"
-                )
+                _update_snapshot(one_share_records[key], row)
         if _is_pyramid_submit_event(row):
             submitted = _pyramid_submit_record(row)
             item = candidates.setdefault(key, submitted)
@@ -525,6 +788,7 @@ def build_report(
         if key in candidates and row.get("pipeline") == "HOLDING_PIPELINE":
             stage = str(row.get("stage") or "")
             if stage == "sell_completed":
+                _update_snapshot(candidates[key], row)
                 _update_sell(candidates[key], row)
             elif (
                 stage
@@ -537,6 +801,7 @@ def build_report(
         if key in one_share_records and row.get("pipeline") == "HOLDING_PIPELINE":
             stage = str(row.get("stage") or "")
             if stage == "sell_completed":
+                _update_snapshot(one_share_records[key], row)
                 _update_sell(one_share_records[key], row)
             elif (
                 stage
@@ -546,6 +811,11 @@ def build_report(
                 _update_snapshot(one_share_records[key], row)
             if "submit" in stage or "receipt" in stage or "submitted" in stage:
                 _update_submit(one_share_records[key], row)
+
+    pyramid_threshold_provenance = _apply_daily_pyramid_threshold_provenance(
+        one_share_records,
+        candidates,
+    )
 
     rows = []
     for item in candidates.values():
@@ -568,6 +838,7 @@ def build_report(
 
     one_share_rows = []
     for item in one_share_records.values():
+        _finalize_probe_residual_observation(item)
         item["pyramid_feedback_label"] = _feedback_label(item)
         item["actual_order_submitted"] = bool(item.get("pyramid_submit_seen"))
         item["broker_order_forbidden"] = not bool(item.get("pyramid_submit_seen"))
@@ -647,9 +918,21 @@ def build_report(
             "forbidden_uses": FORBIDDEN_USES,
         },
         "source_paths": {"pipeline_events": str(resolved_pipeline_path)},
+        "pyramid_threshold_provenance": pyramid_threshold_provenance,
         "source_quality": {
             "status": source_quality_status,
             "pipeline_events_exists": resolved_pipeline_path.exists(),
+            "pyramid_threshold_provenance_status": (
+                "ambiguous"
+                if pyramid_threshold_provenance.get("ambiguous")
+                else (
+                    "pass"
+                    if pyramid_threshold_provenance.get(
+                        "observed_min_profit_pct_values"
+                    )
+                    else "static_fallback_no_runtime_observation"
+                )
+            ),
             "pressure_provenance_missing_count": pressure_provenance_missing_count,
             "pressure_provenance_unusable_count": pressure_provenance_unusable_count,
             "micro_vwap_provenance_missing_count": micro_vwap_provenance_missing_count,
@@ -723,6 +1006,12 @@ def write_outputs(
         f"- one_share_pyramid_missed_upside_count: {summary.get('one_share_pyramid_missed_upside_count')}",
         f"- one_share_pyramid_missed_upside_rate: {_safe_float(summary.get('one_share_pyramid_missed_upside_rate'), 0.0):.2f}",
         f"- one_share_pyramid_avg_opportunity_cost_pct: {_safe_float(summary.get('one_share_pyramid_avg_opportunity_cost_pct'), 0.0):.2f}",
+        f"- probe_residual_zero_fill_count: {summary.get('probe_residual_zero_fill_count')}",
+        f"- probe_residual_soft_abort_count: {summary.get('probe_residual_soft_abort_count')}",
+        f"- probe_residual_missed_upside_candidate_count: {summary.get('probe_residual_missed_upside_candidate_count')}",
+        f"- probe_residual_pyramid_evaluation_seen_count: {summary.get('probe_residual_pyramid_evaluation_seen_count')}",
+        f"- pyramid_min_profit_pct: {(report.get('pyramid_threshold_provenance') or {}).get('selected_min_profit_pct')}",
+        f"- pyramid_threshold_source: {(report.get('pyramid_threshold_provenance') or {}).get('selection_source')}",
         "",
         "## Blocker Metrics",
         "",
@@ -750,7 +1039,8 @@ def write_outputs(
             "- record_id={record_id} code={stock_code} name={stock_name} label={pyramid_feedback_label} "
             "opportunity_seen={pyramid_opportunity_seen} opportunity_profit={pyramid_opportunity_profit_rate} "
             "max_profit={max_profit_seen} opportunity_cost={pyramid_opportunity_cost_pct} "
-            "final={final_profit_rate}".format(
+            "final={final_profit_rate} residual_zero_fill={residual_zero_fill} "
+            "residual_soft_abort={residual_soft_abort} residual_missed_candidate={residual_missed_upside_candidate}".format(
                 **{
                     **item,
                     "pyramid_opportunity_seen": bool(
@@ -761,6 +1051,11 @@ def write_outputs(
                     ),
                     "max_profit_seen": item.get("max_profit_seen"),
                     "final_profit_rate": item.get("final_profit_rate"),
+                    "residual_zero_fill": bool(item.get("residual_zero_fill")),
+                    "residual_soft_abort": bool(item.get("residual_soft_abort")),
+                    "residual_missed_upside_candidate": bool(
+                        item.get("residual_missed_upside_candidate")
+                    ),
                 }
             )
         )

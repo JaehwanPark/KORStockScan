@@ -486,7 +486,7 @@ def test_probe_residual_submits_once_after_fresh_fill_revalidation(
     assert len(sent) == 2
 
 
-def test_post_probe_direction_classifies_strong_weak_and_hanwha_source_gap():
+def test_post_probe_direction_classifies_strong_weak_neutral_and_source_gap():
     observed_at = 100.0
     quote = {
         "canonical_mark_price": 10_010,
@@ -520,7 +520,7 @@ def test_post_probe_direction_classifies_strong_weak_and_hanwha_source_gap():
         probe_fill_price=10_000,
         now_ts=100.5,
     )
-    hanwha_gap = state_handlers._post_probe_direction_fields(
+    hanwha_neutral = state_handlers._post_probe_direction_fields(
         {
             "last_watching_ai_feature_probe_at": observed_at,
             "last_watching_ai_source_quality_fields": {
@@ -536,13 +536,44 @@ def test_post_probe_direction_classifies_strong_weak_and_hanwha_source_gap():
         probe_fill_price=83_200,
         now_ts=100.5,
     )
+    neutral = state_handlers._post_probe_direction_fields(
+        {
+            "last_watching_ai_feature_probe_at": observed_at,
+            "last_watching_ai_source_quality_fields": {
+                "buy_pressure_10t": 90.0,
+            },
+        },
+        {"curr": 10_000},
+        {
+            "canonical_mark_price": 10_000,
+            "passive_buy_price": 9_990,
+        },
+        probe_fill_price=10_000,
+        now_ts=100.5,
+    )
+    source_gap = state_handlers._post_probe_direction_fields(
+        {},
+        {"curr": 10_000},
+        {
+            "canonical_mark_price": 10_000,
+            "passive_buy_price": 9_990,
+        },
+        probe_fill_price=10_000,
+        now_ts=100.5,
+    )
 
     assert strong["post_probe_direction_state"] == "STRONG"
     assert strong["post_probe_continuation_action"] == "ALLOW_NARROW"
     assert weak["post_probe_direction_state"] == "WEAK"
     assert weak["post_probe_continuation_action"] == "DEFER"
-    assert hanwha_gap["post_probe_direction_state"] == "UNKNOWN"
-    assert hanwha_gap["post_probe_continuation_action"] == "DEFER"
+    assert neutral["post_probe_direction_group_count"] == 2
+    assert neutral["post_probe_directional_group_count"] == 1
+    assert neutral["post_probe_direction_state"] == "NEUTRAL"
+    assert neutral["post_probe_continuation_action"] == "ALLOW_NORMAL"
+    assert hanwha_neutral["post_probe_direction_state"] == "NEUTRAL"
+    assert hanwha_neutral["post_probe_continuation_action"] == "ALLOW_NORMAL"
+    assert source_gap["post_probe_direction_state"] == "UNKNOWN"
+    assert source_gap["post_probe_continuation_action"] == "DEFER"
 
 
 def test_post_probe_chase_guard_caps_fast_rise_and_checks_known_tp_reward_risk(
@@ -1087,7 +1118,7 @@ def test_post_probe_unknown_defers_then_recovery_reprices_each_p1_leg(
     )
 
 
-def test_probe_residual_timeout_aborts_one_share_without_scale_in(
+def test_probe_residual_timeout_keeps_one_share_and_releases_pyramid_recheck(
     monkeypatch, tmp_path
 ):
     events = []
@@ -1129,7 +1160,13 @@ def test_probe_residual_timeout_aborts_one_share_without_scale_in(
     assert submitted is False
     assert stock["entry_split_probe_phase"] == "aborted"
     assert stock["buy_qty"] == 1
-    assert stock["entry_split_probe_scale_in_forbidden"] is True
+    assert stock["entry_split_probe_scale_in_forbidden"] is False
+    assert stock["entry_split_probe_soft_abort"] is True
+    assert stock["entry_split_probe_scale_in_recheck_allowed"] is True
+    assert (
+        stock["entry_split_probe_scale_in_recheck_reason"]
+        == "residual_revalidation_timeout"
+    )
     assert events[-1][0] == "residual_blocked"
     assert events[-1][1]["reason"] == "residual_revalidation_timeout"
     scale_in = state_handlers.can_consider_scale_in(
@@ -1139,10 +1176,7 @@ def test_probe_residual_timeout_aborts_one_share_without_scale_in(
         "SCALPING",
         "NORMAL",
     )
-    assert scale_in == {
-        "allowed": False,
-        "reason": "entry_split_probe_scale_in_forbidden",
-    }
+    assert scale_in.get("reason") != "entry_split_probe_scale_in_forbidden"
 
 
 def test_rising_missed_total_qty_owns_scout_state_and_completed_bundle_stops_upgrade():
