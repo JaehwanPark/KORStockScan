@@ -1087,6 +1087,14 @@ def test_run_bot_waits_for_threshold_runtime_env_before_launching_bot():
         "../.venv/bin/python bot_main.py"
     )
     assert "operator_runtime_overrides_${RUNTIME_TARGET_DATE}.env" in script
+    assert "KORSTOCKSCAN_OPENAI_HOLDING_SCORE_MODEL=gpt-5.4-nano" in script
+    assert "KORSTOCKSCAN_OPENAI_HOLDING_FLOW_MODEL=gpt-5.4-mini" in script
+    assert "KORSTOCKSCAN_OPENAI_HOLDING_FLOW_TIMEOUT_MS=15000" in script
+    assert (
+        "KORSTOCKSCAN_OPENAI_PRIMARY_BEDROCK_FALLBACK_ENDPOINTS=holding_flow" in script
+    )
+    assert "KORSTOCKSCAN_OPENAI_PRIMARY_BEDROCK_FALLBACK_FAMILY=lite_v2" in script
+    assert "KORSTOCKSCAN_BEDROCK_NOVA_LITE_ROUTE_MODE=off" in script
     assert script.index('. "$DATED_OPERATOR_RUNTIME_OVERRIDES"') < script.index(
         'disable_expired_dated_runtime_overrides "$RUNTIME_TARGET_DATE"'
     )

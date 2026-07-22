@@ -28,7 +28,6 @@ from src.engine.sniper_state_handlers import (
     _should_apply_ai_score_50_buy_hold_override,
     _should_publish_watching_buy_analysis_telegram,
     _should_run_score65_74_recovery_probe,
-    _should_run_main_buy_recovery_canary,
     _should_first_ai_wait_for_big_bite,
     _resolve_early_accel_recheck,
     _resolve_early_accel_strong_bundle_recheck,
@@ -2790,6 +2789,9 @@ def test_build_ai_ops_log_fields_preserves_operational_meta():
             "ai_prompt_version": "split_v1",
             "ai_result_source": "live",
             "openai_transport_mode": "responses_ws",
+            "openai_transport_requested_mode": "http",
+            "openai_model": "gpt-5.4-nano",
+            "openai_timeout_budget_ms": 5000,
             "openai_request_id": "analyze_target:005930:1:abcd",
             "openai_endpoint_name": "analyze_target",
             "openai_schema_name": "entry_v1",
@@ -2842,6 +2844,9 @@ def test_build_ai_ops_log_fields_preserves_operational_meta():
     assert fields["ai_prompt_version"] == "split_v1"
     assert fields["ai_result_source"] == "live"
     assert fields["openai_transport_mode"] == "responses_ws"
+    assert fields["openai_transport_requested_mode"] == "http"
+    assert fields["openai_model"] == "gpt-5.4-nano"
+    assert fields["openai_timeout_budget_ms"] == 5000
     assert fields["openai_request_id"] == "analyze_target:005930:1:abcd"
     assert fields["openai_endpoint_name"] == "analyze_target"
     assert fields["openai_schema_name"] == "entry_v1"
@@ -4882,83 +4887,6 @@ def test_extract_ai_overlap_snapshot_ignores_price_change_heuristic_tick_directi
     assert snapshot["buy_pressure_10t"] == 61.2
 
 
-def test_should_run_main_buy_recovery_canary_with_feature_allowlist(monkeypatch):
-    rules = replace(
-        TRADING_RULES,
-        AI_MAIN_BUY_RECOVERY_CANARY_ENABLED=True,
-        AI_MAIN_BUY_RECOVERY_CANARY_MIN_SCORE=65,
-        AI_MAIN_BUY_RECOVERY_CANARY_MAX_SCORE=79,
-        AI_MAIN_BUY_RECOVERY_CANARY_MIN_BUY_PRESSURE=65.0,
-        AI_MAIN_BUY_RECOVERY_CANARY_MIN_TICK_ACCEL=1.2,
-        AI_MAIN_BUY_RECOVERY_CANARY_MIN_MICRO_VWAP_BP=0.0,
-    )
-    monkeypatch.setattr("src.engine.sniper_state_handlers.TRADING_RULES", rules)
-
-    class _Engine:
-        @staticmethod
-        def _extract_scalping_features(ws_data, recent_ticks, recent_candles):
-            return {
-                "buy_pressure_10t": 70.0,
-                "tick_aggressor_pressure_usable": True,
-                "tick_aggressor_trusted_count": 2,
-                "tick_acceleration_ratio": 1.35,
-                "curr_vs_micro_vwap_bp": 3.0,
-                "large_sell_print_detected": False,
-            }
-
-    assert (
-        _should_run_main_buy_recovery_canary(
-            {"action": "WAIT"}, 72, {}, [], [], _Engine()
-        )
-        is True
-    )
-
-
-def test_should_run_main_buy_recovery_canary_keeps_micro_context_feature_only(
-    monkeypatch,
-):
-    rules = replace(
-        TRADING_RULES,
-        AI_MAIN_BUY_RECOVERY_CANARY_ENABLED=True,
-        AI_MAIN_BUY_RECOVERY_CANARY_MIN_SCORE=65,
-        AI_MAIN_BUY_RECOVERY_CANARY_MAX_SCORE=79,
-        AI_MAIN_BUY_RECOVERY_CANARY_MIN_BUY_PRESSURE=65.0,
-        AI_MAIN_BUY_RECOVERY_CANARY_MIN_TICK_ACCEL=1.2,
-        AI_MAIN_BUY_RECOVERY_CANARY_MIN_MICRO_VWAP_BP=0.0,
-    )
-    monkeypatch.setattr("src.engine.sniper_state_handlers.TRADING_RULES", rules)
-
-    class _BadEngine:
-        @staticmethod
-        def _extract_scalping_features(ws_data, recent_ticks, recent_candles):
-            return {
-                "buy_pressure_10t": 70.0,
-                "tick_aggressor_pressure_usable": True,
-                "tick_aggressor_trusted_count": 2,
-                "tick_acceleration_ratio": 1.35,
-                "curr_vs_micro_vwap_bp": 3.0,
-                "large_sell_print_detected": True,
-            }
-
-    assert (
-        _should_run_main_buy_recovery_canary(
-            {"action": "WAIT"}, 72, {}, [], [], _BadEngine()
-        )
-        is True
-    )
-    assert (
-        _should_run_main_buy_recovery_canary(
-            {"action": "WAIT"},
-            72,
-            {"latency_state": "DANGER"},
-            [],
-            [],
-            _BadEngine(),
-        )
-        is False
-    )
-
-
 def test_should_run_score65_74_recovery_probe_uses_score_band_as_prior(monkeypatch):
     rules = replace(
         TRADING_RULES,
@@ -5893,24 +5821,11 @@ def test_score65_74_recovery_probe_entry_unlock_requires_armed_source(monkeypatc
         )
         is True
     )
-    assert (
-        _is_score65_74_recovery_probe_entry_unlocked(
-            {
-                "wait6579_probe_canary_armed": True,
-                "wait6579_probe_canary_source": "buy_recovery_canary_promoted",
-            }
-        )
-        is False
-    )
     assert _is_score65_74_recovery_probe_entry_unlocked({}) is False
 
 
 def test_wait6579_probe_entry_unlock_allows_only_enabled_sources(monkeypatch):
-    rules = replace(
-        TRADING_RULES,
-        AI_SCORE65_74_RECOVERY_PROBE_ENABLED=True,
-        AI_MAIN_BUY_RECOVERY_CANARY_ENABLED=True,
-    )
+    rules = replace(TRADING_RULES, AI_SCORE65_74_RECOVERY_PROBE_ENABLED=True)
     monkeypatch.setattr("src.engine.sniper_state_handlers.TRADING_RULES", rules)
 
     score65 = _resolve_wait6579_probe_entry_unlock(
@@ -5922,15 +5837,6 @@ def test_wait6579_probe_entry_unlock_allows_only_enabled_sources(monkeypatch):
     assert score65["unlocked"] is True
     assert score65["event_stage"] == "score65_74_recovery_probe_entry_unlocked"
 
-    promoted = _resolve_wait6579_probe_entry_unlock(
-        {
-            "wait6579_probe_canary_armed": True,
-            "wait6579_probe_canary_source": "buy_recovery_canary_promoted",
-        }
-    )
-    assert promoted["unlocked"] is True
-    assert promoted["event_stage"] == "buy_recovery_canary_entry_unlocked"
-
     assert (
         _resolve_wait6579_probe_entry_unlock(
             {
@@ -5940,25 +5846,6 @@ def test_wait6579_probe_entry_unlock_allows_only_enabled_sources(monkeypatch):
         )["unlocked"]
         is False
     )
-
-
-def test_wait6579_probe_entry_unlock_blocks_disabled_future_canary(monkeypatch):
-    rules = replace(
-        TRADING_RULES,
-        AI_SCORE65_74_RECOVERY_PROBE_ENABLED=True,
-        AI_MAIN_BUY_RECOVERY_CANARY_ENABLED=False,
-    )
-    monkeypatch.setattr("src.engine.sniper_state_handlers.TRADING_RULES", rules)
-
-    promoted = _resolve_wait6579_probe_entry_unlock(
-        {
-            "wait6579_probe_canary_armed": True,
-            "wait6579_probe_canary_source": "buy_recovery_canary_promoted",
-        }
-    )
-
-    assert promoted["unlocked"] is False
-    assert promoted["event_stage"] == "buy_recovery_canary_entry_unlocked"
 
 
 def test_ai_score_50_buy_hold_override_blocks_neutral_and_fallback(monkeypatch):

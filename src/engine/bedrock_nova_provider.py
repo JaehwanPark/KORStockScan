@@ -409,7 +409,12 @@ class BedrockNovaProvider:
         return client
 
     def converse(
-        self, *, prompt: str, user_input: str, profile: BedrockNovaModelProfile
+        self,
+        *,
+        prompt: str,
+        user_input: str,
+        profile: BedrockNovaModelProfile,
+        deadline_perf: float | None = None,
     ) -> BedrockNovaResult:
         if not self.api_keys:
             raise BedrockNovaProviderError(
@@ -419,7 +424,16 @@ class BedrockNovaProvider:
             )
         keys = self.api_keys if self.key_rotation_enabled else self.api_keys[:1]
         last_error: Exception | None = None
+        attempts_made = 0
         for idx, key in enumerate(keys):
+            timeout_ms = int(profile.timeout_ms)
+            if deadline_perf is not None:
+                remaining_ms = int((deadline_perf - time.perf_counter()) * 1000)
+                if remaining_ms <= 0:
+                    last_error = TimeoutError("Bedrock fallback deadline exhausted")
+                    break
+                timeout_ms = max(1, min(timeout_ms, remaining_ms))
+            attempts_made = idx + 1
             started = time.perf_counter()
             try:
                 system: list[dict[str, Any]] = [{"text": build_system_prompt(prompt)}]
@@ -429,7 +443,7 @@ class BedrockNovaProvider:
                     key_index=idx,
                     key=key,
                     region_name=profile.region_name,
-                    timeout_ms=profile.timeout_ms,
+                    timeout_ms=timeout_ms,
                 ).converse(
                     modelId=profile.model_id,
                     system=system,
@@ -490,7 +504,7 @@ class BedrockNovaProvider:
         raise BedrockNovaProviderError(
             str(last_error or "Bedrock Nova call failed"),
             error_type=error_type,
-            attempts=len(keys),
+            attempts=attempts_made,
         )
 
 
@@ -677,7 +691,9 @@ def provider_audit_row(
     action, score = normalize_action_score(payload)
     row: dict[str, Any] = {
         "schema_version": 1,
-        "event_type": "bedrock_nova_primary_provider",
+        "event_type": str(
+            request_meta.get("event_type") or "bedrock_nova_primary_provider"
+        ),
         "request_id": str(request_meta.get("request_id") or ""),
         "openai_request_id": str(
             request_meta.get("openai_request_id")
@@ -703,7 +719,7 @@ def provider_audit_row(
         "pipeline_event_emitted_at": str(
             request_meta.get("pipeline_event_emitted_at") or ""
         ),
-        "primary_provider": "bedrock",
+        "primary_provider": str(request_meta.get("primary_provider") or "bedrock"),
         "bedrock_model_family": str(request_meta.get("bedrock_model_family") or ""),
         "bedrock_primary_family": str(request_meta.get("bedrock_primary_family") or ""),
         "bedrock_failback_family": str(
@@ -712,9 +728,18 @@ def provider_audit_row(
         "bedrock_failback_used": bool(
             request_meta.get("bedrock_failback_used") or False
         ),
+        "bedrock_fallback_family": str(
+            request_meta.get("bedrock_fallback_family") or ""
+        ),
+        "bedrock_fallback_used": bool(
+            request_meta.get("bedrock_fallback_used") or False
+        ),
         "bedrock_attempted_key_count": int(result.attempted_key_count) if result else 0,
         "bedrock_primary_error_type": str(
             request_meta.get("bedrock_primary_error_type") or ""
+        ),
+        "openai_primary_error_type": str(
+            request_meta.get("openai_primary_error_type") or ""
         ),
         "bedrock_action": action,
         "bedrock_score": score,

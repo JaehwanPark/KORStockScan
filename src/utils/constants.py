@@ -1229,15 +1229,6 @@ class TradingConfig:
     AI_SCORE_50_BUY_HOLD_OVERRIDE_ENABLED: bool = (
         True  # score=50 fallback/neutral 진입은 매수보류
     )
-    AI_MAIN_BUY_RECOVERY_CANARY_ENABLED: bool = (
-        False  # same-day 교체: BUY recovery canary 기본 OFF
-    )
-    AI_MAIN_BUY_RECOVERY_CANARY_MIN_SCORE: int = 65  # 재평가 시작 점수
-    AI_MAIN_BUY_RECOVERY_CANARY_MAX_SCORE: int = 79  # 재평가 종료 점수
-    AI_MAIN_BUY_RECOVERY_CANARY_PROMOTE_SCORE: int = 75  # BUY 승격 최소 점수
-    AI_MAIN_BUY_RECOVERY_CANARY_MIN_BUY_PRESSURE: float = 65.0  # 최소 매수 압도율(%)
-    AI_MAIN_BUY_RECOVERY_CANARY_MIN_TICK_ACCEL: float = 1.20  # 최소 틱 가속 비율
-    AI_MAIN_BUY_RECOVERY_CANARY_MIN_MICRO_VWAP_BP: float = 0.0  # 최소 micro VWAP bp
     AI_WAIT6579_PROBE_CANARY_ENABLED: bool = (
         False  # 2026-04-27: soft_stop live canary 관찰 중 entry probe OFF
     )
@@ -1315,15 +1306,26 @@ class TradingConfig:
     OPENAI_ANALYZE_TARGET_TIMEOUT_MS: int = (
         3000  # entry/analyze_target live decision timeout
     )
+    OPENAI_SCALPING_ENTRY_MODEL: str = "gpt-5.4-nano"
+    OPENAI_SCALPING_ENTRY_TRANSPORT_MODE: str = "http"
+    OPENAI_SCALPING_ENTRY_TIMEOUT_MS: int = (
+        5000  # complete structured entry response budget on the HTTP primary path
+    )
     OPENAI_ENTRY_PRICE_TIMEOUT_MS: int = (
         7000  # entry_price OpenAI route timeout; Bedrock has provider timeout
     )
     OPENAI_HOLDING_SCORE_TIMEOUT_MS: int = (
         7000  # holding_score_v2 position-state score timeout
     )
+    OPENAI_HOLDING_SCORE_MODEL: str = "gpt-5.4-nano"
     OPENAI_HOLDING_FLOW_TIMEOUT_MS: int = (
-        7000  # holding_flow sell-candidate override/recheck timeout
+        15000  # holding_flow OpenAI primary plus Bedrock fallback total deadline
     )
+    OPENAI_HOLDING_FLOW_MODEL: str = "gpt-5.4-mini"
+    OPENAI_PRIMARY_BEDROCK_FALLBACK_ENDPOINTS: tuple = ("holding_flow",)
+    OPENAI_PRIMARY_BEDROCK_FALLBACK_FAMILY: str = "lite_v2"
+    OPENAI_PRIMARY_BEDROCK_FALLBACK_PRIMARY_TIMEOUT_MS: int = 7000
+    OPENAI_PRIMARY_BEDROCK_FALLBACK_TIMEOUT_MS: int = 7000
     OPENAI_SCANNER_REPORT_TIMEOUT_MS: int = (
         15000  # source-only morning scanner report timeout
     )
@@ -2094,27 +2096,6 @@ def _build_trading_rules() -> TradingConfig:
             ),
         )
 
-    env_main_buy_recovery_enabled = _env_bool(
-        "KORSTOCKSCAN_MAIN_BUY_RECOVERY_CANARY_ENABLED"
-    )
-    env_main_buy_recovery_min = _env_int(
-        "KORSTOCKSCAN_MAIN_BUY_RECOVERY_CANARY_MIN_SCORE"
-    )
-    env_main_buy_recovery_max = _env_int(
-        "KORSTOCKSCAN_MAIN_BUY_RECOVERY_CANARY_MAX_SCORE"
-    )
-    env_main_buy_recovery_promote = _env_int(
-        "KORSTOCKSCAN_MAIN_BUY_RECOVERY_CANARY_PROMOTE_SCORE"
-    )
-    env_main_buy_recovery_min_pressure = _env_float(
-        "KORSTOCKSCAN_MAIN_BUY_RECOVERY_CANARY_MIN_BUY_PRESSURE"
-    )
-    env_main_buy_recovery_min_accel = _env_float(
-        "KORSTOCKSCAN_MAIN_BUY_RECOVERY_CANARY_MIN_TICK_ACCEL"
-    )
-    env_main_buy_recovery_min_vwap_bp = _env_float(
-        "KORSTOCKSCAN_MAIN_BUY_RECOVERY_CANARY_MIN_MICRO_VWAP_BP"
-    )
     env_wait6579_probe_enabled = _env_bool("KORSTOCKSCAN_WAIT6579_PROBE_CANARY_ENABLED")
     env_wait6579_probe_max_budget = _env_int(
         "KORSTOCKSCAN_WAIT6579_PROBE_CANARY_MAX_BUDGET_KRW"
@@ -2198,14 +2179,7 @@ def _build_trading_rules() -> TradingConfig:
         "KORSTOCKSCAN_AI_SCORE_50_BUY_HOLD_OVERRIDE_ENABLED"
     )
     if (
-        env_main_buy_recovery_enabled is not None
-        or env_main_buy_recovery_min is not None
-        or env_main_buy_recovery_max is not None
-        or env_main_buy_recovery_promote is not None
-        or env_main_buy_recovery_min_pressure is not None
-        or env_main_buy_recovery_min_accel is not None
-        or env_main_buy_recovery_min_vwap_bp is not None
-        or env_wait6579_probe_enabled is not None
+        env_wait6579_probe_enabled is not None
         or env_wait6579_probe_max_budget is not None
         or env_wait6579_probe_min_qty is not None
         or env_wait6579_probe_max_qty is not None
@@ -2239,41 +2213,6 @@ def _build_trading_rules() -> TradingConfig:
     ):
         config = replace(
             config,
-            AI_MAIN_BUY_RECOVERY_CANARY_ENABLED=(
-                env_main_buy_recovery_enabled
-                if env_main_buy_recovery_enabled is not None
-                else config.AI_MAIN_BUY_RECOVERY_CANARY_ENABLED
-            ),
-            AI_MAIN_BUY_RECOVERY_CANARY_MIN_SCORE=(
-                env_main_buy_recovery_min
-                if env_main_buy_recovery_min is not None
-                else config.AI_MAIN_BUY_RECOVERY_CANARY_MIN_SCORE
-            ),
-            AI_MAIN_BUY_RECOVERY_CANARY_MAX_SCORE=(
-                env_main_buy_recovery_max
-                if env_main_buy_recovery_max is not None
-                else config.AI_MAIN_BUY_RECOVERY_CANARY_MAX_SCORE
-            ),
-            AI_MAIN_BUY_RECOVERY_CANARY_PROMOTE_SCORE=(
-                env_main_buy_recovery_promote
-                if env_main_buy_recovery_promote is not None
-                else config.AI_MAIN_BUY_RECOVERY_CANARY_PROMOTE_SCORE
-            ),
-            AI_MAIN_BUY_RECOVERY_CANARY_MIN_BUY_PRESSURE=(
-                env_main_buy_recovery_min_pressure
-                if env_main_buy_recovery_min_pressure is not None
-                else config.AI_MAIN_BUY_RECOVERY_CANARY_MIN_BUY_PRESSURE
-            ),
-            AI_MAIN_BUY_RECOVERY_CANARY_MIN_TICK_ACCEL=(
-                env_main_buy_recovery_min_accel
-                if env_main_buy_recovery_min_accel is not None
-                else config.AI_MAIN_BUY_RECOVERY_CANARY_MIN_TICK_ACCEL
-            ),
-            AI_MAIN_BUY_RECOVERY_CANARY_MIN_MICRO_VWAP_BP=(
-                env_main_buy_recovery_min_vwap_bp
-                if env_main_buy_recovery_min_vwap_bp is not None
-                else config.AI_MAIN_BUY_RECOVERY_CANARY_MIN_MICRO_VWAP_BP
-            ),
             AI_WAIT6579_PROBE_CANARY_ENABLED=(
                 env_wait6579_probe_enabled
                 if env_wait6579_probe_enabled is not None
@@ -6038,14 +5977,37 @@ def _build_trading_rules() -> TradingConfig:
     env_openai_analyze_target_timeout_ms = _env_int(
         "KORSTOCKSCAN_OPENAI_ANALYZE_TARGET_TIMEOUT_MS"
     )
+    env_openai_scalping_entry_model = _env_str(
+        "KORSTOCKSCAN_OPENAI_SCALPING_ENTRY_MODEL"
+    )
+    env_openai_scalping_entry_transport_mode = _env_str(
+        "KORSTOCKSCAN_OPENAI_SCALPING_ENTRY_TRANSPORT_MODE"
+    )
+    env_openai_scalping_entry_timeout_ms = _env_int(
+        "KORSTOCKSCAN_OPENAI_SCALPING_ENTRY_TIMEOUT_MS"
+    )
     env_openai_entry_price_timeout_ms = _env_int(
         "KORSTOCKSCAN_OPENAI_ENTRY_PRICE_TIMEOUT_MS"
     )
     env_openai_holding_score_timeout_ms = _env_int(
         "KORSTOCKSCAN_OPENAI_HOLDING_SCORE_TIMEOUT_MS"
     )
+    env_openai_holding_score_model = _env_str("KORSTOCKSCAN_OPENAI_HOLDING_SCORE_MODEL")
     env_openai_holding_flow_timeout_ms = _env_int(
         "KORSTOCKSCAN_OPENAI_HOLDING_FLOW_TIMEOUT_MS"
+    )
+    env_openai_holding_flow_model = _env_str("KORSTOCKSCAN_OPENAI_HOLDING_FLOW_MODEL")
+    env_openai_primary_bedrock_fallback_endpoints = _env_csv_tuple(
+        "KORSTOCKSCAN_OPENAI_PRIMARY_BEDROCK_FALLBACK_ENDPOINTS"
+    )
+    env_openai_primary_bedrock_fallback_family = _env_str(
+        "KORSTOCKSCAN_OPENAI_PRIMARY_BEDROCK_FALLBACK_FAMILY"
+    )
+    env_openai_primary_bedrock_fallback_primary_timeout_ms = _env_int(
+        "KORSTOCKSCAN_OPENAI_PRIMARY_BEDROCK_FALLBACK_PRIMARY_TIMEOUT_MS"
+    )
+    env_openai_primary_bedrock_fallback_timeout_ms = _env_int(
+        "KORSTOCKSCAN_OPENAI_PRIMARY_BEDROCK_FALLBACK_TIMEOUT_MS"
     )
     env_openai_scanner_report_timeout_ms = _env_int(
         "KORSTOCKSCAN_OPENAI_SCANNER_REPORT_TIMEOUT_MS"
@@ -6099,9 +6061,18 @@ def _build_trading_rules() -> TradingConfig:
         or env_openai_ws_timeout_ms is not None
         or env_openai_ws_http_fallback_reserve_ms is not None
         or env_openai_analyze_target_timeout_ms is not None
+        or env_openai_scalping_entry_model is not None
+        or env_openai_scalping_entry_transport_mode is not None
+        or env_openai_scalping_entry_timeout_ms is not None
         or env_openai_entry_price_timeout_ms is not None
         or env_openai_holding_score_timeout_ms is not None
+        or env_openai_holding_score_model is not None
         or env_openai_holding_flow_timeout_ms is not None
+        or env_openai_holding_flow_model is not None
+        or env_openai_primary_bedrock_fallback_endpoints is not None
+        or env_openai_primary_bedrock_fallback_family is not None
+        or env_openai_primary_bedrock_fallback_primary_timeout_ms is not None
+        or env_openai_primary_bedrock_fallback_timeout_ms is not None
         or env_openai_scanner_report_timeout_ms is not None
         or env_openai_overnight_timeout_ms is not None
         or env_openai_max_output_tokens is not None
@@ -6157,6 +6128,21 @@ def _build_trading_rules() -> TradingConfig:
                 if env_openai_analyze_target_timeout_ms is not None
                 else config.OPENAI_ANALYZE_TARGET_TIMEOUT_MS
             ),
+            OPENAI_SCALPING_ENTRY_MODEL=(
+                env_openai_scalping_entry_model
+                if env_openai_scalping_entry_model is not None
+                else config.OPENAI_SCALPING_ENTRY_MODEL
+            ),
+            OPENAI_SCALPING_ENTRY_TRANSPORT_MODE=(
+                env_openai_scalping_entry_transport_mode
+                if env_openai_scalping_entry_transport_mode is not None
+                else config.OPENAI_SCALPING_ENTRY_TRANSPORT_MODE
+            ),
+            OPENAI_SCALPING_ENTRY_TIMEOUT_MS=(
+                env_openai_scalping_entry_timeout_ms
+                if env_openai_scalping_entry_timeout_ms is not None
+                else config.OPENAI_SCALPING_ENTRY_TIMEOUT_MS
+            ),
             OPENAI_ENTRY_PRICE_TIMEOUT_MS=(
                 env_openai_entry_price_timeout_ms
                 if env_openai_entry_price_timeout_ms is not None
@@ -6167,10 +6153,40 @@ def _build_trading_rules() -> TradingConfig:
                 if env_openai_holding_score_timeout_ms is not None
                 else config.OPENAI_HOLDING_SCORE_TIMEOUT_MS
             ),
+            OPENAI_HOLDING_SCORE_MODEL=(
+                env_openai_holding_score_model
+                if env_openai_holding_score_model is not None
+                else config.OPENAI_HOLDING_SCORE_MODEL
+            ),
             OPENAI_HOLDING_FLOW_TIMEOUT_MS=(
                 env_openai_holding_flow_timeout_ms
                 if env_openai_holding_flow_timeout_ms is not None
                 else config.OPENAI_HOLDING_FLOW_TIMEOUT_MS
+            ),
+            OPENAI_HOLDING_FLOW_MODEL=(
+                env_openai_holding_flow_model
+                if env_openai_holding_flow_model is not None
+                else config.OPENAI_HOLDING_FLOW_MODEL
+            ),
+            OPENAI_PRIMARY_BEDROCK_FALLBACK_ENDPOINTS=(
+                env_openai_primary_bedrock_fallback_endpoints
+                if env_openai_primary_bedrock_fallback_endpoints is not None
+                else config.OPENAI_PRIMARY_BEDROCK_FALLBACK_ENDPOINTS
+            ),
+            OPENAI_PRIMARY_BEDROCK_FALLBACK_FAMILY=(
+                env_openai_primary_bedrock_fallback_family
+                if env_openai_primary_bedrock_fallback_family is not None
+                else config.OPENAI_PRIMARY_BEDROCK_FALLBACK_FAMILY
+            ),
+            OPENAI_PRIMARY_BEDROCK_FALLBACK_PRIMARY_TIMEOUT_MS=(
+                env_openai_primary_bedrock_fallback_primary_timeout_ms
+                if env_openai_primary_bedrock_fallback_primary_timeout_ms is not None
+                else config.OPENAI_PRIMARY_BEDROCK_FALLBACK_PRIMARY_TIMEOUT_MS
+            ),
+            OPENAI_PRIMARY_BEDROCK_FALLBACK_TIMEOUT_MS=(
+                env_openai_primary_bedrock_fallback_timeout_ms
+                if env_openai_primary_bedrock_fallback_timeout_ms is not None
+                else config.OPENAI_PRIMARY_BEDROCK_FALLBACK_TIMEOUT_MS
             ),
             OPENAI_SCANNER_REPORT_TIMEOUT_MS=(
                 env_openai_scanner_report_timeout_ms

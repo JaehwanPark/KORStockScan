@@ -346,60 +346,6 @@ Return JSON only:
 }
 """
 
-SCALPING_SYSTEM_PROMPT_75_CANARY = SCALPING_SYSTEM_PROMPT.replace(
-    "80-100 BUY", "75-100 BUY"
-).replace("50-79 WAIT", "50-74 WAIT")
-
-SCALPING_BUY_RECOVERY_CANARY_PROMPT = """
-You are a low-latency BUY recovery classifier for WAIT 65-79 candidates.
-Promote to BUY only when quantitative features have clearly recovered enough to invalidate the original WAIT.
-Do not chase.
-
-[Interpretation Order]
-1. Check quantitative supply-demand features first.
-2. Confirm whether the data has improved enough to overturn the prior WAIT.
-3. Recent ticks/orderbook are supporting evidence only.
-
-[Core Recovery Features]
-- Position: curr_vs_micro_vwap_bp, curr_vs_ma5_bp
-- Speed: tick_acceleration_ratio
-- Supply-demand: buy_pressure_10t, net_aggressive_delta_10t
-- Absorption: same_price_buy_absorption
-- Warnings: large_sell_print_detected, distance_from_day_high_pct, top3_depth_ratio
-
-[BUY Promotion Rules]
-This prompt is only for WAIT 65-79 candidates. To overturn WAIT, at least three must be favorable:
-   - Position advantage: curr_vs_micro_vwap_bp > 0 or curr_vs_ma5_bp > 0
-   - Speed recovery: tick_acceleration_ratio >= 1.20
-   - Supply-demand recovery: buy_pressure_10t >= 65 or net_aggressive_delta_10t > 0
-   - Absorption confirmed: same_price_buy_absorption >= 2
-Never promote to BUY when large_sell_print_detected=true.
-If distance_from_day_high_pct >= -0.35 and top3_depth_ratio >= 1.35, treat it as chase risk.
-
-[DROP Rules]
-Do not DROP on a single warning alone. DROP when one of these combinations is present:
-   - curr_vs_micro_vwap_bp <= 0 and tick_acceleration_ratio < 1.0
-   - large_sell_print_detected=true and distance_from_day_high_pct >= -0.35
-   - top3_depth_ratio >= 1.35 and buy_pressure_10t < 62
-
-[WAIT Rules]
-Keep WAIT when BUY promotion is incomplete and DROP combinations are absent.
-The reason must name the quantitative feature that blocked promotion or caused DROP.
-
-[Scoring]
-- 75-100 BUY: recovery BUY promotion is valid
-- 50-74 WAIT: keep observing
-- 0-49 DROP: no entry
-
-Return JSON only:
-{
-    "action": "BUY" | "WAIT" | "DROP",
-    "score": integer from 0 to 100,
-    "reason": "one concise recovery rationale"
-}
-"""
-
-
 # ==========================================
 # 1-2. Swing / quality-stock system prompt for KOSPI/KOSDAQ ML.
 # ==========================================

@@ -544,9 +544,79 @@ def test_gpt54_nano_always_uses_openai_after_fast_model_update(monkeypatch):
     assert "bedrock_primary_used" not in meta
 
 
+def test_scalping_entry_http_override_bypasses_global_ws_with_full_budget(
+    monkeypatch,
+):
+    engine = _build_engine()
+    captured_http = []
+
+    monkeypatch.setattr(
+        openai_module,
+        "TRADING_RULES",
+        replace(
+            openai_module.TRADING_RULES,
+            OPENAI_TRANSPORT_MODE="responses_ws",
+            OPENAI_RESPONSES_WS_ENABLED=True,
+        ),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_try_bedrock_primary_provider",
+        lambda **kwargs: None,
+    )
+    monkeypatch.setattr(
+        engine,
+        "_call_openai_responses_ws",
+        lambda request: (_ for _ in ()).throw(
+            AssertionError("scalping entry HTTP override must bypass WS")
+        ),
+    )
+
+    def _fake_http(request):
+        captured_http.append(request)
+        return OpenAITransportResult(
+            payload={"action": "WAIT", "score": 61, "reason": "http primary"},
+            transport_mode="http",
+            roundtrip_ms=1200,
+        )
+
+    monkeypatch.setattr(engine, "_call_openai_responses_http", _fake_http)
+
+    result = GPTSniperEngine._call_openai_safe(
+        engine,
+        "PROMPT",
+        "payload",
+        require_json=True,
+        context_name="scalping_entry_http_primary",
+        model_override="gpt-5.4-nano",
+        schema_name="entry_v1",
+        endpoint_name="analyze_target",
+        transport_mode_override="http",
+        timeout_ms_override=5000,
+    )
+    meta = engine._consume_last_transport_meta()
+
+    assert result["action"] == "WAIT"
+    assert len(captured_http) == 1
+    assert captured_http[0].model_name == "gpt-5.4-nano"
+    assert captured_http[0].timeout_ms == 5000
+    assert meta["openai_transport_requested_mode"] == "http"
+    assert meta["openai_transport_mode"] == "http"
+    assert meta["openai_model"] == "gpt-5.4-nano"
+    assert meta["openai_timeout_budget_ms"] == 5000
+
+
 def test_bedrock_primary_routes_gpt54_mini_independently(monkeypatch):
     engine = _build_engine()
     captured = {}
+    monkeypatch.setattr(
+        openai_module,
+        "TRADING_RULES",
+        replace(
+            openai_module.TRADING_RULES,
+            OPENAI_PRIMARY_BEDROCK_FALLBACK_ENDPOINTS=(),
+        ),
+    )
 
     class Provider:
         def converse(self, *, prompt, user_input, profile):
@@ -600,6 +670,14 @@ def test_lite_primary_holding_flow_does_not_call_openai(monkeypatch):
     engine = _build_engine()
     provider_endpoints = []
     openai_called = {"value": False}
+    monkeypatch.setattr(
+        openai_module,
+        "TRADING_RULES",
+        replace(
+            openai_module.TRADING_RULES,
+            OPENAI_PRIMARY_BEDROCK_FALLBACK_ENDPOINTS=(),
+        ),
+    )
 
     class Responses:
         def create(self, **kwargs):
@@ -748,7 +826,11 @@ def test_bedrock_lite_primary_endpoint_allowlist_keeps_other_tier2_on_openai(
     monkeypatch.setattr(
         openai_module,
         "TRADING_RULES",
-        replace(openai_module.TRADING_RULES, OPENAI_TRANSPORT_MODE="http"),
+        replace(
+            openai_module.TRADING_RULES,
+            OPENAI_TRANSPORT_MODE="http",
+            OPENAI_PRIMARY_BEDROCK_FALLBACK_ENDPOINTS=(),
+        ),
     )
 
     result = GPTSniperEngine._call_openai_safe(
@@ -826,7 +908,11 @@ def test_bedrock_primary_failure_falls_back_to_openai(monkeypatch):
     monkeypatch.setattr(
         openai_module,
         "TRADING_RULES",
-        replace(openai_module.TRADING_RULES, OPENAI_TRANSPORT_MODE="http"),
+        replace(
+            openai_module.TRADING_RULES,
+            OPENAI_TRANSPORT_MODE="http",
+            OPENAI_PRIMARY_BEDROCK_FALLBACK_ENDPOINTS=(),
+        ),
     )
 
     result = GPTSniperEngine._call_openai_safe(
@@ -843,6 +929,139 @@ def test_bedrock_primary_failure_falls_back_to_openai(monkeypatch):
     meta = engine._consume_last_transport_meta()
     assert meta["bedrock_failback_used"] is True
     assert meta["openai_transport_mode"] == "http"
+
+
+def test_openai_primary_success_does_not_call_bedrock_fallback(monkeypatch):
+    engine = _build_engine()
+    requests = []
+
+    class Provider:
+        def converse(self, **kwargs):
+            raise AssertionError("Bedrock fallback must not run after OpenAI success")
+
+    def _fake_http(request):
+        requests.append(request)
+        return OpenAITransportResult(
+            payload={"action": "HOLD", "score": 73, "reason": "openai-primary"},
+            transport_mode="http",
+            roundtrip_ms=321,
+        )
+
+    monkeypatch.setattr(
+        openai_module,
+        "TRADING_RULES",
+        replace(
+            openai_module.TRADING_RULES,
+            OPENAI_TRANSPORT_MODE="http",
+            OPENAI_HOLDING_FLOW_TIMEOUT_MS=15000,
+            OPENAI_PRIMARY_BEDROCK_FALLBACK_ENDPOINTS=("holding_flow",),
+            OPENAI_PRIMARY_BEDROCK_FALLBACK_PRIMARY_TIMEOUT_MS=7000,
+            OPENAI_PRIMARY_BEDROCK_FALLBACK_TIMEOUT_MS=7000,
+        ),
+    )
+    monkeypatch.setattr(engine, "_call_openai_responses_http", _fake_http)
+    monkeypatch.setattr(bedrock_nova_provider, "runtime_provider", lambda: Provider())
+
+    result = GPTSniperEngine._call_openai_safe(
+        engine,
+        "PROMPT",
+        "payload",
+        require_json=True,
+        context_name="holding-flow-primary-success",
+        model_override="gpt-5.4-mini",
+        endpoint_name="holding_flow",
+        transport_mode_override="http",
+    )
+    meta = engine._consume_last_transport_meta()
+
+    assert result["reason"] == "openai-primary"
+    assert len(requests) == 1
+    assert requests[0].timeout_ms == 7000
+    assert meta["openai_transport_mode"] == "http"
+    assert meta["openai_primary_provider"] == "openai"
+    assert meta["openai_primary_timeout_budget_ms"] == 7000
+    assert meta["openai_total_route_timeout_budget_ms"] == 15000
+    assert meta["bedrock_fallback_used"] is False
+
+
+def test_openai_primary_failure_uses_nova_lite_v2_fallback(monkeypatch):
+    engine = _build_engine()
+    captured = {}
+    audit_rows = []
+
+    class Provider:
+        def converse(self, *, prompt, user_input, profile, deadline_perf=None):
+            captured["family"] = profile.family
+            captured["timeout_ms"] = profile.timeout_ms
+            captured["deadline_perf"] = deadline_perf
+            return bedrock_nova_provider.BedrockNovaResult(
+                payload={"action": "HOLD", "score": 66, "reason": "nova-fallback"},
+                raw_text='{"action":"HOLD","score":66,"reason":"nova-fallback"}',
+                parse_ok=True,
+                parse_error="",
+                model_id=profile.model_id,
+                region_name=profile.region_name,
+                key_index=0,
+                latency_ms=456,
+                input_tokens=20,
+                output_tokens=8,
+                cache_read_input_tokens=0,
+                cache_write_input_tokens=0,
+                total_input_tokens=20,
+                estimated_cost_usd=0.2,
+                attempted_key_count=1,
+            )
+
+    monkeypatch.setattr(
+        openai_module,
+        "TRADING_RULES",
+        replace(
+            openai_module.TRADING_RULES,
+            OPENAI_TRANSPORT_MODE="http",
+            OPENAI_HOLDING_FLOW_TIMEOUT_MS=15000,
+            OPENAI_PRIMARY_BEDROCK_FALLBACK_ENDPOINTS=("holding_flow",),
+            OPENAI_PRIMARY_BEDROCK_FALLBACK_FAMILY="lite_v2",
+            OPENAI_PRIMARY_BEDROCK_FALLBACK_PRIMARY_TIMEOUT_MS=7000,
+            OPENAI_PRIMARY_BEDROCK_FALLBACK_TIMEOUT_MS=7000,
+        ),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_call_openai_responses_http",
+        lambda request: (_ for _ in ()).throw(
+            OpenAIResponsesHTTPError("OpenAI primary timed out")
+        ),
+    )
+    monkeypatch.setattr(bedrock_nova_provider, "runtime_provider", lambda: Provider())
+    monkeypatch.setattr(
+        bedrock_nova_provider, "write_provider_audit_row", audit_rows.append
+    )
+
+    result = GPTSniperEngine._call_openai_safe(
+        engine,
+        "PROMPT",
+        "payload",
+        require_json=True,
+        context_name="holding-flow-primary-failure",
+        model_override="gpt-5.4-mini",
+        endpoint_name="holding_flow",
+        transport_mode_override="http",
+    )
+    meta = engine._consume_last_transport_meta()
+
+    assert result["reason"] == "nova-fallback"
+    assert captured["family"] == "lite_v2"
+    assert 1 <= captured["timeout_ms"] <= 7000
+    assert captured["deadline_perf"] is not None
+    assert meta["openai_transport_mode"] == "bedrock_fallback"
+    assert meta["openai_primary_provider"] == "openai"
+    assert meta["openai_primary_error_type"] == "OpenAIResponsesHTTPError"
+    assert meta["bedrock_fallback_used"] is True
+    assert meta["bedrock_fallback_family"] == "lite_v2"
+    assert meta["bedrock_failback_used"] is False
+    assert audit_rows[0]["event_type"] == "openai_primary_bedrock_fallback"
+    assert audit_rows[0]["primary_provider"] == "openai"
+    assert audit_rows[0]["bedrock_fallback_used"] is True
 
 
 def test_entry_price_qwen_parse_failure_falls_back_to_nova_lite_v2(monkeypatch):
@@ -1096,6 +1315,16 @@ def test_openai_holding_flow_uses_flow_schema_and_normalizes_payload(monkeypatch
         captured["prompt"] = prompt
         captured["user_input"] = user_input
         captured["kwargs"] = kwargs
+        engine._set_last_transport_meta(
+            {
+                "openai_transport_mode": "bedrock_fallback",
+                "openai_primary_provider": "openai",
+                "openai_primary_error_type": "OpenAIResponsesHTTPError",
+                "bedrock_fallback_used": True,
+                "bedrock_fallback_family": "lite_v2",
+                "provider": "bedrock",
+            }
+        )
         return {
             "action": "TRIM",
             "score": "67",
@@ -1149,8 +1378,15 @@ def test_openai_holding_flow_uses_flow_schema_and_normalizes_payload(monkeypatch
     assert result["flow_state"] == "recovery"
     assert result["raw_flow_state"] == "회복"
     assert result["next_review_sec"] == 44
+    assert result["openai_transport_mode"] == "bedrock_fallback"
+    assert result["openai_primary_provider"] == "openai"
+    assert result["bedrock_fallback_used"] is True
+    assert result["bedrock_fallback_family"] == "lite_v2"
+    assert result["provider"] == "bedrock"
     assert captured["kwargs"]["schema_name"] == "holding_exit_flow_v1"
     assert captured["kwargs"]["endpoint_name"] == "holding_flow"
+    assert captured["kwargs"]["model_override"] == "gpt-5.4-mini"
+    assert captured["kwargs"]["transport_mode_override"] == "http"
     assert captured["kwargs"]["metadata_extra"]["sim_record_id"] == "SIM-HOLD-1"
     assert captured["kwargs"]["metadata_extra"]["entry_adm_candidate_id"] == "ADM-1"
     assert "To reverse the previous flow-review action" in captured["prompt"]
@@ -1648,9 +1884,11 @@ def test_ai_hot_path_v2_inputs_are_structured_json_across_large_sample(monkeypat
         "entry_price_v1",
         "holding_exit_flow_v1",
     ]
-    assert captured[0]["kwargs"]["model_override"] == engine.model_tier1_fast
+    assert captured[0]["kwargs"]["model_override"] == "gpt-5.4-nano"
+    assert captured[0]["kwargs"]["transport_mode_override"] == "http"
+    assert captured[0]["kwargs"]["timeout_ms_override"] == 5000
     assert captured[1]["kwargs"]["model_override"] == engine.model_tier2_balanced
-    assert captured[2]["kwargs"]["model_override"] == engine.model_tier2_balanced
+    assert captured[2]["kwargs"]["model_override"] == "gpt-5.4-mini"
     assert json.loads(captured[0]["user_input"])["input_schema"] == "entry_screen_v2"
     assert json.loads(captured[1]["user_input"])["input_schema"] == "entry_price_v2"
     assert json.loads(captured[2]["user_input"])["input_schema"] == "holding_flow_v2"
@@ -3079,11 +3317,11 @@ def test_openai_ws_request_id_mismatch_fails_closed_without_http_fallback(monkey
         _sample_ticks(),
         _sample_candles(),
         strategy="SCALPING",
-        prompt_profile="watching",
+        prompt_profile="holding",
     )
 
-    assert result["action"] == "DROP"
-    assert result["score"] == 0
+    assert result["action"] == "WAIT"
+    assert result["score"] == 50
     assert result["ai_parse_fail"] is True
     assert result["openai_transport_mode"] == "responses_ws"
     assert result["openai_ws_used"] is True

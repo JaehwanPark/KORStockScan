@@ -1556,3 +1556,89 @@ def test_trading_rules_log_text_noise_env_override(monkeypatch):
         "sell_order_failed",
     )
     assert reloaded.TRADING_RULES.WATCHING_STATE_DEBUG_LOG_ENABLED is True
+
+
+def test_scalping_entry_openai_http_primary_defaults_and_env_override(monkeypatch):
+    names = (
+        "KORSTOCKSCAN_OPENAI_SCALPING_ENTRY_MODEL",
+        "KORSTOCKSCAN_OPENAI_SCALPING_ENTRY_TRANSPORT_MODE",
+        "KORSTOCKSCAN_OPENAI_SCALPING_ENTRY_TIMEOUT_MS",
+    )
+    for name in names:
+        monkeypatch.delenv(name, raising=False)
+
+    reloaded = importlib.reload(constants)
+
+    assert reloaded.TRADING_RULES.OPENAI_SCALPING_ENTRY_MODEL == "gpt-5.4-nano"
+    assert reloaded.TRADING_RULES.OPENAI_SCALPING_ENTRY_TRANSPORT_MODE == "http"
+    assert reloaded.TRADING_RULES.OPENAI_SCALPING_ENTRY_TIMEOUT_MS == 5000
+
+    monkeypatch.setenv("KORSTOCKSCAN_OPENAI_SCALPING_ENTRY_MODEL", "gpt-entry")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_OPENAI_SCALPING_ENTRY_TRANSPORT_MODE", "responses_ws"
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_OPENAI_SCALPING_ENTRY_TIMEOUT_MS", "6500")
+    reloaded = importlib.reload(constants)
+
+    assert reloaded.TRADING_RULES.OPENAI_SCALPING_ENTRY_MODEL == "gpt-entry"
+    assert reloaded.TRADING_RULES.OPENAI_SCALPING_ENTRY_TRANSPORT_MODE == "responses_ws"
+    assert reloaded.TRADING_RULES.OPENAI_SCALPING_ENTRY_TIMEOUT_MS == 6500
+
+
+def test_holding_ai_models_and_openai_primary_fallback_defaults(monkeypatch):
+    names = (
+        "KORSTOCKSCAN_OPENAI_HOLDING_SCORE_MODEL",
+        "KORSTOCKSCAN_OPENAI_HOLDING_FLOW_MODEL",
+        "KORSTOCKSCAN_OPENAI_HOLDING_FLOW_TIMEOUT_MS",
+        "KORSTOCKSCAN_OPENAI_PRIMARY_BEDROCK_FALLBACK_ENDPOINTS",
+        "KORSTOCKSCAN_OPENAI_PRIMARY_BEDROCK_FALLBACK_FAMILY",
+        "KORSTOCKSCAN_OPENAI_PRIMARY_BEDROCK_FALLBACK_PRIMARY_TIMEOUT_MS",
+        "KORSTOCKSCAN_OPENAI_PRIMARY_BEDROCK_FALLBACK_TIMEOUT_MS",
+    )
+    for name in names:
+        monkeypatch.delenv(name, raising=False)
+
+    reloaded = importlib.reload(constants)
+
+    assert reloaded.TRADING_RULES.OPENAI_HOLDING_SCORE_MODEL == "gpt-5.4-nano"
+    assert reloaded.TRADING_RULES.OPENAI_HOLDING_FLOW_MODEL == "gpt-5.4-mini"
+    assert reloaded.TRADING_RULES.OPENAI_HOLDING_FLOW_TIMEOUT_MS == 15000
+    assert reloaded.TRADING_RULES.OPENAI_PRIMARY_BEDROCK_FALLBACK_ENDPOINTS == (
+        "holding_flow",
+    )
+    assert reloaded.TRADING_RULES.OPENAI_PRIMARY_BEDROCK_FALLBACK_FAMILY == "lite_v2"
+    assert (
+        reloaded.TRADING_RULES.OPENAI_PRIMARY_BEDROCK_FALLBACK_PRIMARY_TIMEOUT_MS
+        == 7000
+    )
+    assert reloaded.TRADING_RULES.OPENAI_PRIMARY_BEDROCK_FALLBACK_TIMEOUT_MS == 7000
+
+    monkeypatch.setenv("KORSTOCKSCAN_OPENAI_HOLDING_SCORE_MODEL", "holding-score")
+    monkeypatch.setenv("KORSTOCKSCAN_OPENAI_HOLDING_FLOW_MODEL", "holding-flow")
+    monkeypatch.setenv("KORSTOCKSCAN_OPENAI_HOLDING_FLOW_TIMEOUT_MS", "18000")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_OPENAI_PRIMARY_BEDROCK_FALLBACK_ENDPOINTS",
+        "holding_flow,overnight",
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_OPENAI_PRIMARY_BEDROCK_FALLBACK_FAMILY", "lite")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_OPENAI_PRIMARY_BEDROCK_FALLBACK_PRIMARY_TIMEOUT_MS", "8000"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_OPENAI_PRIMARY_BEDROCK_FALLBACK_TIMEOUT_MS", "9000"
+    )
+    reloaded = importlib.reload(constants)
+
+    assert reloaded.TRADING_RULES.OPENAI_HOLDING_SCORE_MODEL == "holding-score"
+    assert reloaded.TRADING_RULES.OPENAI_HOLDING_FLOW_MODEL == "holding-flow"
+    assert reloaded.TRADING_RULES.OPENAI_HOLDING_FLOW_TIMEOUT_MS == 18000
+    assert reloaded.TRADING_RULES.OPENAI_PRIMARY_BEDROCK_FALLBACK_ENDPOINTS == (
+        "holding_flow",
+        "overnight",
+    )
+    assert reloaded.TRADING_RULES.OPENAI_PRIMARY_BEDROCK_FALLBACK_FAMILY == "lite"
+    assert (
+        reloaded.TRADING_RULES.OPENAI_PRIMARY_BEDROCK_FALLBACK_PRIMARY_TIMEOUT_MS
+        == 8000
+    )
+    assert reloaded.TRADING_RULES.OPENAI_PRIMARY_BEDROCK_FALLBACK_TIMEOUT_MS == 9000

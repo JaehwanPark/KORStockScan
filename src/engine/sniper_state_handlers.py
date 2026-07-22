@@ -163,7 +163,6 @@ from src.engine.sniper_position_tags import (
     normalize_position_tag,
     normalize_strategy,
 )
-from src.engine.ai_prompt_contracts import SCALPING_BUY_RECOVERY_CANARY_PROMPT
 from src.engine.lifecycle.ofi_ai_smoothing import (
     NEUTRAL as OFI_NEUTRAL,
     STABLE_BEARISH as OFI_STABLE_BEARISH,
@@ -11482,7 +11481,6 @@ def _observed_greenfield_entry_bucket_id(stock) -> str | None:
     source = str(stock.get("wait6579_probe_canary_source") or "").strip()
     if source not in {
         "score65_74_recovery_probe",
-        "buy_recovery_canary_promoted",
         "wait6579_ev_cohort",
     }:
         return None
@@ -35705,6 +35703,8 @@ def _build_ai_ops_log_fields(
             out[field_name] = str(payload.get(field_name, "-") or "-")
     for field_name in (
         "openai_transport_mode",
+        "openai_transport_requested_mode",
+        "openai_model",
         "openai_request_id",
         "openai_endpoint_name",
         "openai_schema_name",
@@ -35723,6 +35723,7 @@ def _build_ai_ops_log_fields(
             else:
                 out[field_name] = str(payload.get(field_name, "-") or "-")
     for field_name in (
+        "openai_timeout_budget_ms",
         "openai_ws_queue_wait_ms",
         "openai_ws_roundtrip_ms",
         "openai_ws_attempt_timeout_ms",
@@ -40215,9 +40216,7 @@ def _is_wait65_79_candidate(action, ai_score) -> bool:
         score = float(ai_score or 0.0)
     except Exception:
         return False
-    min_score = float(_rule("AI_MAIN_BUY_RECOVERY_CANARY_MIN_SCORE", 65) or 65)
-    max_score = float(_rule("AI_MAIN_BUY_RECOVERY_CANARY_MAX_SCORE", 79) or 79)
-    return min_score <= score <= max_score
+    return 65.0 <= score <= 79.0
 
 
 def _log_wait65_79_ev_candidate(
@@ -40263,53 +40262,6 @@ def _log_wait65_79_ev_candidate(
         terminal_blocker="-",
         **_build_observation_contract_fields("source_quality_gate"),
     )
-
-
-def _should_run_main_buy_recovery_canary(
-    ai_decision,
-    ai_score,
-    ws_data,
-    recent_ticks,
-    recent_candles,
-    ai_engine,
-    *,
-    feature_probe=None,
-):
-    if not _rule_bool("AI_MAIN_BUY_RECOVERY_CANARY_ENABLED", False):
-        return False
-    if bool((ai_decision or {}).get("ai_fallback_score_50", False)):
-        return False
-    if str((ai_decision or {}).get("action", "WAIT") or "WAIT").upper() == "BUY":
-        return False
-
-    try:
-        score = float(ai_score or 0.0)
-    except Exception:
-        return False
-    min_score = _rule_float("AI_MAIN_BUY_RECOVERY_CANARY_MIN_SCORE", 65)
-    max_score = _rule_float("AI_MAIN_BUY_RECOVERY_CANARY_MAX_SCORE", 79)
-    if score < min_score or score > max_score:
-        return False
-
-    # DANGER latency 표본은 기회 회복 canary 대상에서 제외한다.
-    latency_state = str((ws_data or {}).get("latency_state", "") or "").strip().upper()
-    if latency_state == "DANGER":
-        return False
-
-    probe = feature_probe or _extract_buy_recovery_probe_features(
-        ai_engine,
-        ws_data,
-        recent_ticks,
-        recent_candles,
-    )
-    if not isinstance(probe, dict):
-        return False
-    if _buy_recovery_probe_source_quality_hard_block(probe):
-        return False
-
-    # Micro context is a bounded tunable feature for attribution, not a hard
-    # unlock gate. Hard safety remains latency/stale/broker/order/cap guards.
-    return True
 
 
 _SCORE65_74_RECOVERY_PROBE_WAIT_NEGATIVE_REASON_TOKENS = (
@@ -40709,13 +40661,6 @@ def _resolve_wait6579_probe_entry_unlock(stock) -> dict:
             "source": source,
             "event_stage": "score65_74_recovery_probe_entry_unlocked",
             "decision_source": "BUY_SCORE65_74_RECOVERY_PROBE",
-        }
-    if source == "buy_recovery_canary_promoted":
-        return {
-            "unlocked": _rule_bool("AI_MAIN_BUY_RECOVERY_CANARY_ENABLED", False),
-            "source": source,
-            "event_stage": "buy_recovery_canary_entry_unlocked",
-            "decision_source": "BUY_RECOVERY_CANARY_PROMOTED",
         }
     return {"unlocked": False, "source": source, "event_stage": ""}
 
@@ -44260,86 +44205,6 @@ def _handle_watching_strategy_branch(
                                 record_id=stock.get("id"),
                             )
 
-                            if (
-                                not smoothing_buy_guard_blocked
-                                and _should_run_main_buy_recovery_canary(
-                                    ai_decision,
-                                    ai_score,
-                                    ws_data,
-                                    recent_ticks,
-                                    recent_candles,
-                                    ai_engine,
-                                    feature_probe=feature_probe,
-                                )
-                            ):
-                                recovery_decision = ai_engine.analyze_target_shadow_prompt(
-                                    stock["name"],
-                                    ws_data,
-                                    recent_ticks,
-                                    recent_candles,
-                                    strategy="SCALPING",
-                                    prompt_override=SCALPING_BUY_RECOVERY_CANARY_PROMPT,
-                                    prompt_type="scalping_buy_recovery_canary",
-                                    cache_profile="watching_buy_recovery_canary",
-                                )
-                                recovery_action = str(
-                                    recovery_decision.get("action", "WAIT") or "WAIT"
-                                ).upper()
-                                recovery_score = float(
-                                    recovery_decision.get("score", 50) or 50
-                                )
-                                promote_threshold = float(
-                                    _rule(
-                                        "AI_MAIN_BUY_RECOVERY_CANARY_PROMOTE_SCORE", 75
-                                    )
-                                    or 75
-                                )
-                                can_promote = (
-                                    str(action or "WAIT").upper() != "BUY"
-                                    and recovery_action == "BUY"
-                                    and recovery_score >= promote_threshold
-                                )
-                                _log_entry_pipeline(
-                                    stock,
-                                    code,
-                                    "watching_buy_recovery_canary",
-                                    main_action=str(action or "WAIT").upper(),
-                                    main_score=f"{float(ai_score or 0.0):.1f}",
-                                    recovery_action=recovery_action,
-                                    recovery_score=f"{recovery_score:.1f}",
-                                    promoted=str(can_promote).lower(),
-                                    promote_threshold=f"{promote_threshold:.1f}",
-                                    **_build_ai_ops_log_fields(
-                                        recovery_decision,
-                                        ai_score_raw=recovery_score,
-                                        ai_score_after_bonus=recovery_score,
-                                        entry_score_threshold=promote_threshold,
-                                        big_bite_bonus_applied=False,
-                                        ai_cooldown_blocked=False,
-                                    ),
-                                )
-                                if can_promote:
-                                    action = "BUY"
-                                    ai_score = recovery_score
-                                    reason = (
-                                        f"{reason} | buy_recovery_canary:{recovery_score:.0f}"
-                                        if reason
-                                        else f"buy_recovery_canary:{recovery_score:.0f}"
-                                    )
-                                ai_decision = dict(ai_decision or {})
-                                ai_decision["action"] = action
-                                ai_decision["score"] = ai_score
-                                ai_decision["reason"] = reason
-                                if can_promote:
-                                    _mutate_stock_state(
-                                        stock,
-                                        set_fields={
-                                            "wait6579_probe_canary_armed": True,
-                                            "wait6579_probe_canary_source": "buy_recovery_canary_promoted",
-                                            "wait6579_probe_canary_score": f"{float(recovery_score):.1f}",
-                                        },
-                                    )
-
                             if ai_score != 50:
                                 _mutate_stock_state(
                                     stock, set_fields={"rt_ai_prob": ai_score / 100.0}
@@ -46956,11 +46821,9 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
     requested_qty = int(real_buy_qty or 0)
     planned_orders = latency_gate.get("orders") or []
     wait6579_probe_applied = False
-    wait6579_cap_enabled = (
-        bool(_rule("AI_WAIT6579_PROBE_CANARY_ENABLED", False))
-        or bool(_rule("AI_SCORE65_74_RECOVERY_PROBE_ENABLED", False))
-        or bool(_rule("AI_MAIN_BUY_RECOVERY_CANARY_ENABLED", False))
-    )
+    wait6579_cap_enabled = bool(
+        _rule("AI_WAIT6579_PROBE_CANARY_ENABLED", False)
+    ) or bool(_rule("AI_SCORE65_74_RECOVERY_PROBE_ENABLED", False))
     if (
         strategy == "SCALPING"
         and not opening_rotation_active

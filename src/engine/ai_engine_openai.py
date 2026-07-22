@@ -69,8 +69,6 @@ from src.engine.ai_prompt_contracts import (
     normalize_scalping_entry_price_result,
     normalize_condition_entry_from_scalping_result,
     normalize_condition_exit_from_scalping_result,
-    SCALPING_SYSTEM_PROMPT_75_CANARY,
-    SCALPING_BUY_RECOVERY_CANARY_PROMPT,
     SWING_SYSTEM_PROMPT,
     ENHANCED_MARKET_ANALYSIS_PROMPT,
     REALTIME_ANALYSIS_PROMPT_SCALP,
@@ -142,7 +140,6 @@ Return JSON only:
 
 OPENAI_RESPONSES_WS_ENDPOINTS = {
     "analyze_target",
-    "analyze_target_shadow_prompt",
     "entry_price",
 }
 OPENAI_METADATA_MAX_PROPERTIES = 16
@@ -877,6 +874,7 @@ class GPTSniperEngine:
         max_output_tokens=None,
         reasoning_effort=None,
         metadata_extra=None,
+        timeout_ms_override=None,
     ):
         request_id = self._build_openai_request_id(
             endpoint_name=endpoint_name, symbol=symbol or "-"
@@ -899,6 +897,12 @@ class GPTSniperEngine:
             schema_name=schema_name,
             endpoint_name=endpoint_name,
         )
+        timeout_ms = self._get_openai_timeout_ms(
+            endpoint_name=str(endpoint_name or "generic"),
+            require_json=bool(require_json),
+        )
+        if timeout_ms_override is not None:
+            timeout_ms = max(1, int(timeout_ms_override))
         return OpenAIResponseRequest(
             prompt=prompt,
             user_input=user_input,
@@ -914,10 +918,7 @@ class GPTSniperEngine:
             symbol=str(symbol or "-"),
             cache_key=str(cache_key or "-"),
             submitted_at_perf=time.perf_counter(),
-            timeout_ms=self._get_openai_timeout_ms(
-                endpoint_name=str(endpoint_name or "generic"),
-                require_json=bool(require_json),
-            ),
+            timeout_ms=timeout_ms,
             metadata=metadata,
         )
 
@@ -1001,12 +1002,22 @@ class GPTSniperEngine:
             return f"{OPENAI_PROMPT_CONTRACT_HEADER.strip()}\n{context_rule}\n[Task prompt]\n{base_prompt}"
         return f"{OPENAI_PROMPT_CONTRACT_HEADER.strip()}\n{context_rule}".strip()
 
-    def _should_use_responses_ws(self, request: OpenAIResponseRequest):
+    def _resolve_openai_transport_mode(self, transport_mode_override=None):
         transport_mode = (
-            str(getattr(TRADING_RULES, "OPENAI_TRANSPORT_MODE", "http") or "http")
+            str(
+                transport_mode_override
+                if transport_mode_override is not None
+                else getattr(TRADING_RULES, "OPENAI_TRANSPORT_MODE", "http") or "http"
+            )
             .strip()
             .lower()
         )
+        return transport_mode if transport_mode in {"http", "responses_ws"} else "http"
+
+    def _should_use_responses_ws(
+        self, request: OpenAIResponseRequest, *, transport_mode_override=None
+    ):
+        transport_mode = self._resolve_openai_transport_mode(transport_mode_override)
         if transport_mode != "responses_ws":
             return False
         if not bool(getattr(TRADING_RULES, "OPENAI_RESPONSES_WS_ENABLED", False)):
@@ -2439,6 +2450,8 @@ class GPTSniperEngine:
         symbol="-",
         cache_key="-",
         metadata_extra=None,
+        transport_mode_override=None,
+        timeout_ms_override=None,
     ):
         """Responses API HTTP/WS transport와 예외 처리를 전담하는 중앙 호출기."""
         target_model = model_override if model_override else self.current_model_name
@@ -2467,9 +2480,18 @@ class GPTSniperEngine:
             symbol=symbol,
             cache_key=cache_key,
             metadata_extra=metadata_extra,
+            timeout_ms_override=timeout_ms_override,
+        )
+        if self._uses_openai_primary_bedrock_fallback(request):
+            transport_mode_override = "http"
+        requested_transport_mode = self._resolve_openai_transport_mode(
+            transport_mode_override
         )
         transport_meta = {
             "openai_transport_mode": "http",
+            "openai_transport_requested_mode": requested_transport_mode,
+            "openai_model": request.model_name,
+            "openai_timeout_budget_ms": int(request.timeout_ms),
             "openai_ws_used": False,
             "openai_ws_http_fallback": False,
             "openai_ws_queue_wait_ms": 0,
@@ -2483,8 +2505,23 @@ class GPTSniperEngine:
         )
         if isinstance(bedrock_primary_payload, dict):
             return bedrock_primary_payload
+        total_deadline_request = request
+        request = self._build_openai_primary_attempt_request(request)
+        if request is not total_deadline_request:
+            transport_meta.update(
+                {
+                    "openai_primary_provider": "openai",
+                    "openai_primary_timeout_budget_ms": int(request.timeout_ms),
+                    "openai_total_route_timeout_budget_ms": int(
+                        total_deadline_request.timeout_ms
+                    ),
+                    "bedrock_fallback_used": False,
+                }
+            )
         result = None
-        if self._should_use_responses_ws(request):
+        if self._should_use_responses_ws(
+            request, transport_mode_override=transport_mode_override
+        ):
             try:
                 result = self._call_openai_responses_ws(request)
                 transport_meta.update(
@@ -2586,12 +2623,24 @@ class GPTSniperEngine:
                 log_info(fallback_msg)
         else:
             http_lock_wait_started = time.perf_counter()
-            with self.api_call_lock:
-                transport_meta["openai_http_lock_wait_ms"] = max(
-                    0,
-                    int((time.perf_counter() - http_lock_wait_started) * 1000),
+            try:
+                with self.api_call_lock:
+                    transport_meta["openai_http_lock_wait_ms"] = max(
+                        0,
+                        int((time.perf_counter() - http_lock_wait_started) * 1000),
+                    )
+                    result = self._call_openai_responses_http(request)
+            except Exception as primary_error:
+                if getattr(primary_error, "timing_meta", None):
+                    transport_meta.update(primary_error.timing_meta)
+                fallback_payload = self._try_openai_primary_bedrock_fallback(
+                    request=total_deadline_request,
+                    primary_error=primary_error,
+                    transport_meta=transport_meta,
                 )
-                result = self._call_openai_responses_http(request)
+                if isinstance(fallback_payload, dict):
+                    return fallback_payload
+                raise
             transport_meta.update(
                 {
                     "openai_transport_mode": result.transport_mode,
@@ -2613,6 +2662,8 @@ class GPTSniperEngine:
     def _try_bedrock_primary_provider(
         self, *, request: OpenAIResponseRequest, transport_meta: dict[str, Any]
     ):
+        if self._uses_openai_primary_bedrock_fallback(request):
+            return None
         if not bool(request.require_json):
             return None
         model_name = str(request.model_name or "")
@@ -2626,6 +2677,256 @@ class GPTSniperEngine:
             )
         else:
             return None
+        return self._try_configured_bedrock_primary_provider(
+            request=request,
+            transport_meta=transport_meta,
+            configured_route_mode=configured_route_mode,
+        )
+
+    @staticmethod
+    def _openai_primary_bedrock_fallback_endpoints() -> set[str]:
+        configured = getattr(
+            TRADING_RULES, "OPENAI_PRIMARY_BEDROCK_FALLBACK_ENDPOINTS", ()
+        )
+        if isinstance(configured, str):
+            configured = configured.split(",")
+        return {
+            str(endpoint or "").strip()
+            for endpoint in (configured or ())
+            if str(endpoint or "").strip()
+        }
+
+    def _uses_openai_primary_bedrock_fallback(
+        self, request: OpenAIResponseRequest
+    ) -> bool:
+        return (
+            bool(request.require_json)
+            and str(request.endpoint_name or "").strip()
+            in self._openai_primary_bedrock_fallback_endpoints()
+        )
+
+    def _build_openai_primary_attempt_request(
+        self, request: OpenAIResponseRequest
+    ) -> OpenAIResponseRequest:
+        if not self._uses_openai_primary_bedrock_fallback(request):
+            return request
+        primary_timeout_ms = max(
+            1,
+            int(
+                getattr(
+                    TRADING_RULES,
+                    "OPENAI_PRIMARY_BEDROCK_FALLBACK_PRIMARY_TIMEOUT_MS",
+                    7000,
+                )
+                or 7000
+            ),
+        )
+        return replace(
+            request,
+            submitted_at_perf=time.perf_counter(),
+            timeout_ms=min(int(request.timeout_ms), primary_timeout_ms),
+        )
+
+    @staticmethod
+    def _openai_primary_bedrock_fallback_profile():
+        from src.engine.bedrock_nova_provider import (
+            lite_profile_from_env,
+            lite_v2_profile_from_env,
+        )
+
+        family = (
+            str(
+                getattr(
+                    TRADING_RULES,
+                    "OPENAI_PRIMARY_BEDROCK_FALLBACK_FAMILY",
+                    "lite_v2",
+                )
+                or "lite_v2"
+            )
+            .strip()
+            .lower()
+        )
+        if family in {"lite_v2", "v2", "nova_lite_v2"}:
+            return lite_v2_profile_from_env()
+        if family in {"lite", "nova_lite"}:
+            return lite_profile_from_env()
+        return None
+
+    def _try_openai_primary_bedrock_fallback(
+        self,
+        *,
+        request: OpenAIResponseRequest,
+        primary_error: Exception,
+        transport_meta: dict[str, Any],
+    ):
+        if not self._uses_openai_primary_bedrock_fallback(request):
+            return None
+        total_deadline_perf = request.submitted_at_perf + (
+            int(request.timeout_ms) / 1000.0
+        )
+        remaining_ms = int((total_deadline_perf - time.perf_counter()) * 1000)
+        if remaining_ms <= 0:
+            transport_meta.update(
+                {
+                    "openai_primary_error_type": type(primary_error).__name__,
+                    "bedrock_fallback_used": False,
+                    "bedrock_fallback_error_type": "FallbackDeadlineExhausted",
+                }
+            )
+            self._set_last_transport_meta(transport_meta)
+            return None
+
+        fallback_family = ""
+        try:
+            from src.engine.bedrock_nova_provider import (
+                BedrockNovaProviderError,
+                provider_audit_row,
+                runtime_provider,
+                write_provider_audit_row,
+            )
+
+            profile = self._openai_primary_bedrock_fallback_profile()
+            if profile is None:
+                return None
+            fallback_family = profile.family
+            fallback_timeout_ms = max(
+                1,
+                int(
+                    getattr(
+                        TRADING_RULES,
+                        "OPENAI_PRIMARY_BEDROCK_FALLBACK_TIMEOUT_MS",
+                        7000,
+                    )
+                    or 7000
+                ),
+            )
+            profile = replace(
+                profile,
+                timeout_ms=min(profile.timeout_ms, fallback_timeout_ms, remaining_ms),
+            )
+            request_meta = self._build_bedrock_shadow_request_meta(
+                request=request, transport_meta=transport_meta, roundtrip_ms=0
+            )
+            request_meta.update(
+                {
+                    "request_id": request.request_id,
+                    "event_type": "openai_primary_bedrock_fallback",
+                    "primary_provider": "openai",
+                    "decision_authority": "openai_primary_with_bedrock_fallback",
+                    "bedrock_model_family": profile.family,
+                    "bedrock_fallback_family": profile.family,
+                    "bedrock_fallback_used": True,
+                    "openai_primary_error_type": type(primary_error).__name__,
+                }
+            )
+            result = runtime_provider().converse(
+                prompt=request.prompt or "",
+                user_input=request.user_input,
+                profile=profile,
+                deadline_perf=total_deadline_perf,
+            )
+            if (
+                not result.parse_ok
+                or not isinstance(result.payload, dict)
+                or not result.payload
+            ):
+                write_provider_audit_row(
+                    provider_audit_row(
+                        request_meta=request_meta,
+                        result=result,
+                        payload=result.payload,
+                        error_type=result.parse_error or "parse_failed",
+                    )
+                )
+                raise BedrockNovaProviderError(
+                    result.parse_error or "Bedrock fallback returned invalid JSON",
+                    error_type=result.parse_error or "parse_failed",
+                    attempts=result.attempted_key_count,
+                )
+            write_provider_audit_row(
+                provider_audit_row(
+                    request_meta=request_meta, result=result, payload=result.payload
+                )
+            )
+            transport_meta.update(result.transport_meta())
+            transport_meta.update(
+                {
+                    "openai_transport_mode": "bedrock_fallback",
+                    "openai_primary_provider": "openai",
+                    "openai_primary_error_type": type(primary_error).__name__,
+                    "openai_ws_used": False,
+                    "openai_ws_http_fallback": False,
+                    "openai_ws_roundtrip_ms": int(result.latency_ms),
+                    "bedrock_primary_used": False,
+                    "bedrock_fallback_used": True,
+                    "bedrock_fallback_family": profile.family,
+                    "bedrock_failback_used": False,
+                }
+            )
+            self._set_last_transport_meta(transport_meta)
+            log_error(
+                f"⚠️ [OpenAI primary Bedrock fallback] {request.context_name}: "
+                f"{type(primary_error).__name__}"
+            )
+            return result.payload
+        except Exception as fallback_error:
+            transport_meta.update(
+                {
+                    "openai_primary_provider": "openai",
+                    "openai_primary_error_type": type(primary_error).__name__,
+                    "bedrock_primary_used": False,
+                    "bedrock_fallback_used": True,
+                    "bedrock_fallback_family": fallback_family,
+                    "bedrock_fallback_error_type": type(fallback_error).__name__,
+                    "bedrock_failback_used": False,
+                }
+            )
+            try:
+                request_meta = self._build_bedrock_shadow_request_meta(
+                    request=request, transport_meta=transport_meta, roundtrip_ms=0
+                )
+                request_meta.update(
+                    {
+                        "request_id": request.request_id,
+                        "event_type": "openai_primary_bedrock_fallback",
+                        "primary_provider": "openai",
+                        "decision_authority": "openai_primary_with_bedrock_fallback",
+                        "bedrock_model_family": fallback_family,
+                        "bedrock_fallback_family": fallback_family,
+                        "bedrock_fallback_used": True,
+                        "openai_primary_error_type": type(primary_error).__name__,
+                    }
+                )
+                from src.engine.bedrock_nova_provider import (
+                    provider_audit_row,
+                    write_provider_audit_row,
+                )
+
+                write_provider_audit_row(
+                    provider_audit_row(
+                        request_meta=request_meta,
+                        result=None,
+                        payload={},
+                        error_type=type(fallback_error).__name__,
+                        error_message=str(fallback_error),
+                    )
+                )
+            except Exception:
+                pass
+            self._set_last_transport_meta(transport_meta)
+            log_error(
+                f"🚨 [OpenAI primary Bedrock fallback failed] {request.context_name}: "
+                f"{type(fallback_error).__name__}"
+            )
+            return None
+
+    def _try_configured_bedrock_primary_provider(
+        self,
+        *,
+        request: OpenAIResponseRequest,
+        transport_meta: dict[str, Any],
+        configured_route_mode: str,
+    ):
         if str(configured_route_mode or "").strip().lower() != "primary":
             return None
         if str(request.endpoint_name or "") == "entry_price":
@@ -5070,6 +5371,10 @@ class GPTSniperEngine:
                 getattr(TRADING_RULES, "OPENAI_ENTRY_SCREEN_V2_INPUT_ENABLED", False)
             )
         )
+        is_scalping_entry_call = (
+            strategy not in ["KOSPI_ML", "KOSDAQ_ML"]
+            and prompt_type != "scalping_holding"
+        )
         if strategy in ["KOSPI_ML", "KOSDAQ_ML"]:
             input_contract_fields = {
                 "ai_input_schema": "swing_market_text_v1",
@@ -5327,7 +5632,18 @@ class GPTSniperEngine:
                     formatted_data,
                     metadata_extra=metadata_extra,
                 )
-                target_model = self._get_tier1_model()
+                target_model = (
+                    str(
+                        getattr(
+                            TRADING_RULES,
+                            "OPENAI_SCALPING_ENTRY_MODEL",
+                            self._get_tier1_model(),
+                        )
+                        or self._get_tier1_model()
+                    ).strip()
+                    if is_scalping_entry_call
+                    else self._get_tier1_model()
+                )
                 feature_audit_fields = build_scalping_feature_audit_fields(
                     feature_packet
                 )
@@ -5392,6 +5708,24 @@ class GPTSniperEngine:
                 symbol=target_name,
                 cache_key=cache_key,
                 metadata_extra=metadata_extra,
+                transport_mode_override=(
+                    getattr(
+                        TRADING_RULES,
+                        "OPENAI_SCALPING_ENTRY_TRANSPORT_MODE",
+                        "http",
+                    )
+                    if is_scalping_entry_call
+                    else None
+                ),
+                timeout_ms_override=(
+                    getattr(
+                        TRADING_RULES,
+                        "OPENAI_SCALPING_ENTRY_TIMEOUT_MS",
+                        5000,
+                    )
+                    if is_scalping_entry_call
+                    else None
+                ),
             )
             result = self._merge_last_transport_meta(result)
 
@@ -5472,179 +5806,6 @@ class GPTSniperEngine:
                 cache_mode="miss",
                 result_source="exception",
                 input_contract_fields=input_contract_fields,
-            )
-        finally:
-            self.lock.release()
-
-    # ==========================================
-    # 퍼블릭 메서드: analyze_target_shadow_prompt (그림자 프롬프트)
-    # ==========================================
-
-    def analyze_target_shadow_prompt(
-        self,
-        target_name,
-        ws_data,
-        recent_ticks,
-        recent_candles,
-        *,
-        strategy="SCALPING",
-        prompt_override=None,
-        prompt_type="scalping_shadow",
-        cache_profile="shadow",
-        metadata_extra=None,
-    ):
-        if strategy in ["KOSPI_ML", "KOSDAQ_ML"]:
-            return self._annotate_analysis_result(
-                {
-                    "action": "WAIT",
-                    "score": 50,
-                    "reason": "shadow unsupported for swing",
-                },
-                prompt_type=prompt_type,
-                prompt_version="shadow_v1",
-                response_ms=0,
-                parse_ok=False,
-                parse_fail=False,
-                fallback_score_50=True,
-                cache_hit=False,
-                cache_mode="miss",
-                result_source="shadow_unsupported",
-            )
-
-        analysis_started = time.perf_counter()
-        cache_key = self._build_analysis_cache_key_with_profile(
-            target_name=target_name,
-            strategy=f"{strategy}:{prompt_type}",
-            ws_data=ws_data,
-            recent_ticks=recent_ticks,
-            recent_candles=recent_candles,
-            program_net_qty=0,
-            cache_profile=cache_profile,
-        )
-        cached_result = self._cache_get("_analysis_cache", cache_key)
-        if cached_result is not None:
-            return self._annotate_analysis_result(
-                cached_result,
-                prompt_type=prompt_type,
-                prompt_version="shadow_v1",
-                response_ms=int((time.perf_counter() - analysis_started) * 1000),
-                parse_ok=bool(cached_result.get("ai_parse_ok", False)),
-                parse_fail=bool(cached_result.get("ai_parse_fail", False)),
-                fallback_score_50=bool(
-                    cached_result.get("ai_fallback_score_50", False)
-                ),
-                cache_hit=True,
-                cache_mode="hit",
-                result_source="shadow_cache",
-            )
-
-        if self.ai_disabled:
-            return self._annotate_analysis_result(
-                {
-                    "action": "WAIT",
-                    "score": 50,
-                    "reason": "engine_disabled_skip_shadow_call",
-                },
-                prompt_type=prompt_type,
-                prompt_version="shadow_v1",
-                response_ms=int((time.perf_counter() - analysis_started) * 1000),
-                parse_ok=False,
-                parse_fail=False,
-                fallback_score_50=True,
-                cache_hit=False,
-                cache_mode="miss",
-                result_source="shadow_engine_disabled",
-            )
-
-        if not self.lock.acquire(blocking=False):
-            return self._annotate_analysis_result(
-                {"action": "WAIT", "score": 50, "reason": "AI shadow 경합"},
-                prompt_type=prompt_type,
-                prompt_version="shadow_v1",
-                response_ms=int((time.perf_counter() - analysis_started) * 1000),
-                parse_ok=False,
-                parse_fail=False,
-                fallback_score_50=True,
-                cache_hit=False,
-                cache_mode="miss",
-                result_source="shadow_lock_contention",
-            )
-
-        try:
-            cached_result = self._cache_get("_analysis_cache", cache_key)
-            if cached_result is not None:
-                return self._annotate_analysis_result(
-                    cached_result,
-                    prompt_type=prompt_type,
-                    prompt_version="shadow_v1",
-                    response_ms=int((time.perf_counter() - analysis_started) * 1000),
-                    parse_ok=bool(cached_result.get("ai_parse_ok", False)),
-                    parse_fail=bool(cached_result.get("ai_parse_fail", False)),
-                    fallback_score_50=bool(
-                        cached_result.get("ai_fallback_score_50", False)
-                    ),
-                    cache_hit=True,
-                    cache_mode="hit",
-                    result_source="shadow_cache",
-                )
-
-            formatted_data = self._format_market_data(
-                ws_data, recent_ticks, recent_candles
-            )
-            active_prompt = (
-                prompt_override if prompt_override else SCALPING_SYSTEM_PROMPT_75_CANARY
-            )
-
-            result = self._call_openai_safe(
-                active_prompt,
-                formatted_data,
-                require_json=True,
-                context_name=f"{target_name}(shadow:{prompt_type})",
-                model_override=self._get_tier1_model(),
-                schema_name=(
-                    "holding_exit_v1"
-                    if prompt_type == "scalping_holding"
-                    else "entry_v1"
-                ),
-                endpoint_name="analyze_target_shadow_prompt",
-                symbol=target_name,
-                cache_key=cache_key,
-                metadata_extra=metadata_extra,
-            )
-            result = self._merge_last_transport_meta(result)
-            result["ai_model"] = self._get_tier1_model()
-
-            self._cache_set(
-                "_analysis_cache",
-                cache_key,
-                result,
-                self._resolve_analysis_cache_ttl(cache_profile),
-            )
-            return self._annotate_analysis_result(
-                result,
-                prompt_type=prompt_type,
-                prompt_version="shadow_v1",
-                response_ms=int((time.perf_counter() - analysis_started) * 1000),
-                parse_ok=True,
-                parse_fail=False,
-                fallback_score_50=False,
-                cache_hit=False,
-                cache_mode="miss",
-                result_source="shadow_live",
-            )
-        except Exception as e:
-            log_error(f"🚨 [{target_name}] OpenAI shadow 분석 에러: {e}")
-            return self._annotate_analysis_result(
-                {"action": "WAIT", "score": 50, "reason": f"shadow 에러: {e}"},
-                prompt_type=prompt_type,
-                prompt_version="shadow_v1",
-                response_ms=int((time.perf_counter() - analysis_started) * 1000),
-                parse_ok=False,
-                parse_fail=True,
-                fallback_score_50=True,
-                cache_hit=False,
-                cache_mode="miss",
-                result_source="shadow_exception",
             )
         finally:
             self.lock.release()
@@ -6313,7 +6474,14 @@ class GPTSniperEngine:
                 user_input,
                 require_json=True,
                 context_name=f"HOLDING_SCORE:{stock_name}",
-                model_override=self._get_tier1_model(),
+                model_override=str(
+                    getattr(
+                        TRADING_RULES,
+                        "OPENAI_HOLDING_SCORE_MODEL",
+                        "gpt-5.4-nano",
+                    )
+                    or "gpt-5.4-nano"
+                ),
                 schema_name="holding_score_v2",
                 endpoint_name="holding_score",
                 symbol=stock_code,
@@ -6332,7 +6500,14 @@ class GPTSniperEngine:
                     normalized[key] = value
             normalized.update(
                 {
-                    "ai_model": self._get_tier1_model(),
+                    "ai_model": str(
+                        getattr(
+                            TRADING_RULES,
+                            "OPENAI_HOLDING_SCORE_MODEL",
+                            "gpt-5.4-nano",
+                        )
+                        or "gpt-5.4-nano"
+                    ),
                     "holding_score_input_schema": "holding_score_v2",
                     "holding_score_data_quality": normalized["data_quality"],
                     "holding_score_confidence": normalized["confidence"],
@@ -6817,15 +6992,27 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
                 user_input,
                 require_json=True,
                 context_name=f"HOLDING_FLOW:{stock_name}:{decision_kind}",
-                model_override=self._get_tier2_model(),
+                model_override=str(
+                    getattr(
+                        TRADING_RULES,
+                        "OPENAI_HOLDING_FLOW_MODEL",
+                        "gpt-5.4-mini",
+                    )
+                    or "gpt-5.4-mini"
+                ),
                 schema_name="holding_exit_flow_v1",
                 endpoint_name="holding_flow",
                 symbol=stock_code,
                 metadata_extra=metadata_extra,
+                transport_mode_override="http",
             )
+            result = self._merge_last_transport_meta(result)
             normalized = self._normalize_holding_flow_result(
                 result, decision_kind=decision_kind
             )
+            for key, value in result.items():
+                if str(key).startswith(("openai_", "bedrock_")) or key == "provider":
+                    normalized[key] = value
             normalized = merge_holding_exit_matrix_result_fields(
                 normalized,
                 matrix_runtime,
@@ -6834,7 +7021,14 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
             normalized = merge_lifecycle_ai_context_fields(
                 normalized, lifecycle_ai_runtime
             )
-            normalized["ai_model"] = self._get_tier2_model()
+            normalized["ai_model"] = str(
+                getattr(
+                    TRADING_RULES,
+                    "OPENAI_HOLDING_FLOW_MODEL",
+                    "gpt-5.4-mini",
+                )
+                or "gpt-5.4-mini"
+            )
             self._mark_successful_ai_call(update_last_call_time=False)
             return self._annotate_analysis_result(
                 normalized,
@@ -6854,7 +7048,7 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
                 context_name=f"HOLDING_FLOW:{stock_name}:{decision_kind}"
             )
             log_error(
-                f"🚨 [HOLDING_FLOW] OpenAI 판정 에러 ({stock_name}/{decision_kind}, 연속 실패 {failure_count}회): {e}"
+                f"🚨 [HOLDING_FLOW] AI provider route error ({stock_name}/{decision_kind}, 연속 실패 {failure_count}회): {e}"
             )
             return self._annotate_analysis_result(
                 {

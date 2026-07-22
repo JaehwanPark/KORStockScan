@@ -242,6 +242,13 @@ def test_provider_endpoint_compare_runs_bedrock_primary_and_openai_then_restores
             assert (
                 getattr(openai_module.TRADING_RULES, "OPENAI_REASONING_EFFORT") == "low"
             )
+            assert (
+                getattr(
+                    openai_module.TRADING_RULES,
+                    "OPENAI_PRIMARY_BEDROCK_FALLBACK_ENDPOINTS",
+                )
+                == ()
+            )
 
         def evaluate_scalping_entry_price(
             self,

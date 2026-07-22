@@ -8,14 +8,12 @@ from src.engine import ai_engine_openai as ai_engine_openai_module
 from src.engine.ai_prompt_contracts import (
     REALTIME_ANALYSIS_PROMPT_SCALP,
     REALTIME_ANALYSIS_PROMPT_SWING,
-    SCALPING_BUY_RECOVERY_CANARY_PROMPT,
     SCALPING_ENTRY_PRICE_PROMPT,
     SCALPING_HOLDING_FLOW_SYSTEM_PROMPT,
     SCALPING_HOLDING_SCORE_SYSTEM_PROMPT,
     SCALPING_HOLDING_SYSTEM_PROMPT,
     SCALPING_OVERNIGHT_DECISION_PROMPT,
     SCALPING_SYSTEM_PROMPT,
-    SCALPING_SYSTEM_PROMPT_75_CANARY,
     SCALPING_WATCHING_HOT_SYSTEM_PROMPT,
     SCALPING_WATCHING_SYSTEM_PROMPT,
     SWING_SYSTEM_PROMPT,
@@ -323,6 +321,7 @@ def test_holding_score_v2_payload_contains_position_pnl_and_source_quality(monke
     assert payload["hard_guard_context"]["hard_guards_remain_authoritative"] is True
     assert captured["kwargs"]["schema_name"] == "holding_score_v2"
     assert captured["kwargs"]["endpoint_name"] == "holding_score"
+    assert captured["kwargs"]["model_override"] == "gpt-5.4-nano"
     assert "position-state score classifier" in captured["prompt"]
     assert "Do not reuse entry logic" in SCALPING_HOLDING_SCORE_SYSTEM_PROMPT
     assert (
@@ -741,7 +740,7 @@ def test_analyze_target_uses_short_ttl_cache(monkeypatch):
     assert first["cache_hit"] is False
     assert second["cache_hit"] is True
     assert second["action"] == first["action"]
-    assert first["ai_model"] == "tier1-model"
+    assert first["ai_model"] == "gpt-5.4-nano"
 
 
 def test_holding_cache_provenance_reports_changed_bucket(monkeypatch):
@@ -1084,11 +1083,6 @@ def test_holding_cache_profile_absorbs_micro_market_noise(monkeypatch):
     assert second["score"] == 58
 
 
-def test_scalping_prompt_75_canary_rewrites_buy_band():
-    assert "75-100 BUY" in SCALPING_SYSTEM_PROMPT_75_CANARY
-    assert "50-74 WAIT" in SCALPING_SYSTEM_PROMPT_75_CANARY
-
-
 def test_scalping_entry_prompts_align_default_runtime_buy_band():
     for prompt in (
         SCALPING_SYSTEM_PROMPT,
@@ -1099,99 +1093,6 @@ def test_scalping_entry_prompts_align_default_runtime_buy_band():
         assert "50-74 WAIT" in prompt
         assert "0-49 DROP" in prompt
         assert "70-100 BUY" not in prompt
-
-
-def test_scalping_buy_recovery_prompt_mentions_recovery_band():
-    assert "WAIT 65-79 candidates" in SCALPING_BUY_RECOVERY_CANARY_PROMPT
-    assert "75-100 BUY" in SCALPING_BUY_RECOVERY_CANARY_PROMPT
-    assert "50-74 WAIT" in SCALPING_BUY_RECOVERY_CANARY_PROMPT
-
-
-def test_analyze_target_shadow_prompt_uses_shadow_prompt_type(monkeypatch):
-    engine = _build_engine()
-
-    monkeypatch.setattr(
-        engine, "_format_market_data", lambda ws, ticks, candles: "packet"
-    )
-    monkeypatch.setattr(
-        engine,
-        "_call_openai_safe",
-        lambda *args, **kwargs: {
-            "action": "BUY",
-            "score": 77,
-            "reason": "shadow-strong",
-        },
-    )
-
-    result = engine.analyze_target_shadow_prompt(
-        "테스트",
-        {"curr": 10000, "fluctuation": 2.1, "orderbook": {"asks": [], "bids": []}},
-        [{"time": "10:00:00", "price": 10000, "volume": 10, "dir": "BUY"}],
-        [{"체결시간": "10:00:00", "현재가": 10000, "거래량": 100}],
-        strategy="SCALPING",
-        prompt_type="scalping_buy75_shadow",
-        cache_profile="watching_prompt75_shadow",
-    )
-
-    assert result["action"] == "BUY"
-    assert result["ai_prompt_type"] == "scalping_buy75_shadow"
-    assert result["ai_result_source"] == "shadow_live"
-    assert result["cache_hit"] is False
-
-
-def test_analyze_target_shadow_prompt_skips_when_engine_disabled(monkeypatch):
-    engine = _build_engine()
-    engine.ai_disabled = True
-    called = {"value": False}
-
-    monkeypatch.setattr(
-        engine, "_format_market_data", lambda ws, ticks, candles: "packet"
-    )
-
-    def _fake_call(*args, **kwargs):
-        called["value"] = True
-        return {"action": "BUY", "score": 77, "reason": "should-not-call"}
-
-    monkeypatch.setattr(engine, "_call_openai_safe", _fake_call)
-
-    result = engine.analyze_target_shadow_prompt(
-        "테스트",
-        {"curr": 10000, "fluctuation": 2.1, "orderbook": {"asks": [], "bids": []}},
-        [{"time": "10:00:00", "price": 10000, "volume": 10, "dir": "BUY"}],
-        [{"체결시간": "10:00:00", "현재가": 10000, "거래량": 100}],
-        strategy="SCALPING",
-    )
-
-    assert called["value"] is False
-    assert result["ai_result_source"] == "shadow_engine_disabled"
-
-
-def test_analyze_target_shadow_prompt_honors_prompt_override(monkeypatch):
-    engine = _build_engine()
-    used_prompt = {"value": None}
-
-    monkeypatch.setattr(
-        engine, "_format_market_data", lambda ws, ticks, candles: "packet"
-    )
-
-    def _fake_call(prompt, *args, **kwargs):
-        used_prompt["value"] = prompt
-        return {"action": "WAIT", "score": 68, "reason": "recovery-check"}
-
-    monkeypatch.setattr(engine, "_call_openai_safe", _fake_call)
-
-    engine.analyze_target_shadow_prompt(
-        "테스트",
-        {"curr": 10000, "fluctuation": 2.1, "orderbook": {"asks": [], "bids": []}},
-        [{"time": "10:00:00", "price": 10000, "volume": 10, "dir": "BUY"}],
-        [{"체결시간": "10:00:00", "현재가": 10000, "거래량": 100}],
-        strategy="SCALPING",
-        prompt_override=SCALPING_BUY_RECOVERY_CANARY_PROMPT,
-        prompt_type="scalping_buy_recovery_canary",
-        cache_profile="watching_buy_recovery_canary",
-    )
-
-    assert used_prompt["value"] == SCALPING_BUY_RECOVERY_CANARY_PROMPT
 
 
 def test_tier2_surfaces_do_not_advance_analyze_target_cooldown(monkeypatch):
@@ -1291,7 +1192,7 @@ def test_analyze_target_routes_scalping_and_swing_to_expected_tiers(monkeypatch)
         "스윙", ws_data, recent_ticks, recent_candles, strategy="KOSDAQ_ML"
     )
 
-    assert used_models == ["tier1-model", "tier2-model"]
+    assert used_models == ["gpt-5.4-nano", "tier2-model"]
 
 
 def test_analyze_target_routes_scalping_prompt_profiles(monkeypatch):
@@ -1355,13 +1256,19 @@ def test_analyze_target_routes_scalping_prompt_profiles(monkeypatch):
         SCALPING_HOLDING_SYSTEM_PROMPT,
         SCALPING_SYSTEM_PROMPT,
     ]
-    assert used_models == ["tier1-model", "tier1-model", "tier1-model", "tier1-model"]
+    assert used_models == [
+        "gpt-5.4-nano",
+        "tier1-model",
+        "tier1-model",
+        "gpt-5.4-nano",
+    ]
     assert watching["ai_prompt_type"] == "scalping_entry"
     assert holding["ai_prompt_type"] == "scalping_holding"
     assert exiting["ai_prompt_type"] == "scalping_holding"
     assert shared["ai_prompt_type"] == "scalping_shared"
-    assert watching["ai_model"] == "tier1-model"
+    assert watching["ai_model"] == "gpt-5.4-nano"
     assert exiting["ai_model"] == "tier1-model"
+    assert shared["ai_model"] == "gpt-5.4-nano"
     assert watching["ai_prompt_version"] == "hot_v1"
 
 
@@ -1889,7 +1796,7 @@ def test_condition_entry_and_exit_reuse_scalping_routes(monkeypatch):
         "조건주", "000001", ws_data, recent_ticks, recent_candles, profile, 1.2, 2.1, 78
     )
 
-    assert used_models == ["tier1-model", "tier1-model"]
+    assert used_models == ["gpt-5.4-nano", "gpt-5.4-nano"]
     assert used_prompts == [
         SCALPING_WATCHING_HOT_SYSTEM_PROMPT,
         SCALPING_HOLDING_SCORE_SYSTEM_PROMPT,
@@ -2299,7 +2206,7 @@ def test_openai_overnight_uses_batch_timeout_profile(monkeypatch):
             OPENAI_ANALYZE_TARGET_TIMEOUT_MS=3000,
             OPENAI_ENTRY_PRICE_TIMEOUT_MS=7000,
             OPENAI_HOLDING_SCORE_TIMEOUT_MS=7000,
-            OPENAI_HOLDING_FLOW_TIMEOUT_MS=7000,
+            OPENAI_HOLDING_FLOW_TIMEOUT_MS=15000,
             OPENAI_SCANNER_REPORT_TIMEOUT_MS=15000,
             OPENAI_OVERNIGHT_TIMEOUT_MS=12000,
         ),
@@ -2330,7 +2237,7 @@ def test_openai_overnight_uses_batch_timeout_profile(monkeypatch):
     )
     assert (
         engine._get_openai_timeout_ms(endpoint_name="holding_flow", require_json=True)
-        == 7000
+        == 15000
     )
     assert (
         engine._get_openai_timeout_ms(endpoint_name="generic_json", require_json=True)

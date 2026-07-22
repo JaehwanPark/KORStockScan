@@ -198,8 +198,8 @@ def test_openai_scalping_analyze_target_returns_feature_audit_fields(monkeypatch
     assert result["ai_prompt_type"] == "scalping_entry"
     assert result["ai_prompt_version"] == "hot_v1"
     assert result["ai_input_schema"] == "entry_screen_hot_v1"
-    assert result["ai_model"] == "gpt-fast"
-    assert used_models == ["gpt-fast"]
+    assert result["ai_model"] == "gpt-5.4-nano"
+    assert used_models == ["gpt-5.4-nano"]
     assert result["ai_parse_ok"] is True
     assert result["ai_parse_fail"] is False
     assert result["ai_fallback_score_50"] is False
