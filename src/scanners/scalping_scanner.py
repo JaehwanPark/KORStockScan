@@ -20,6 +20,14 @@ from src.database.db_manager import DBManager
 from src.database.models import RecommendationHistory
 from src.core.event_bus import EventBus
 from src.engine.signal_radar import SniperRadar
+from src.engine.scalping.watch_budget import (
+    GENERAL_SCALPING,
+    OPENING_ROTATION,
+    RISING_MISSED,
+    classify_owner as classify_watch_budget_owner,
+    limits as watch_budget_limits,
+)
+from src.engine.scalping.opening_rotation import EntryConfig as OpeningRotationConfig
 from src.engine.sniper_time import (
     SCALPING_BUY_WINDOWS,
     describe_scalping_buy_windows,
@@ -139,10 +147,79 @@ def _window_start_epoch(now_dt, start):
 def _scalping_watching_max_active():
     raw = os.getenv("KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE", "")
     try:
-        value = int(str(raw).strip()) if str(raw).strip() else 24
+        value = int(str(raw).strip()) if str(raw).strip() else 16
     except (TypeError, ValueError):
-        value = 24
+        value = 16
     return max(1, min(value, 80))
+
+
+def _scanner_watch_budget_reallocation_enabled():
+    raw = os.getenv("KORSTOCKSCAN_SCANNER_WATCH_BUDGET_REALLOCATION_ENABLED", "")
+    if not str(raw).strip():
+        return True
+    return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _scanner_watch_budget_opening_config():
+    def _rule_value(name, default):
+        return getattr(TRADING_RULES, name, default)
+
+    def _opening_time(env_name, default, hard_default):
+        raw = str(os.getenv(env_name, default) or "").strip()
+        for fmt in ("%H:%M:%S", "%H:%M"):
+            try:
+                return datetime.strptime(raw, fmt).time()
+            except (TypeError, ValueError):
+                continue
+        log_error(
+            f"⚠️ {env_name} 값이 잘못되어 기본값을 사용합니다: {raw} -> {default}"
+        )
+        for fmt in ("%H:%M:%S", "%H:%M"):
+            try:
+                return datetime.strptime(str(default), fmt).time()
+            except (TypeError, ValueError):
+                continue
+        return datetime.strptime(hard_default, "%H:%M:%S").time()
+
+    enabled_raw = os.getenv(
+        "KORSTOCKSCAN_OPENING_ROTATION_1PCT_ENABLED",
+        str(_rule_value("OPENING_ROTATION_1PCT_ENABLED", True)),
+    )
+    enabled = (
+        enabled_raw
+        if isinstance(enabled_raw, bool)
+        else str(enabled_raw).strip().lower() in {"1", "true", "yes", "y", "on"}
+    )
+
+    observe_default = str(_rule_value("OPENING_ROTATION_1PCT_OBSERVE_START", "09:01"))
+    entry_end_default = str(_rule_value("OPENING_ROTATION_1PCT_ENTRY_END", "15:00"))
+    return OpeningRotationConfig(
+        enabled=enabled,
+        observe_start=_opening_time(
+            "KORSTOCKSCAN_OPENING_ROTATION_1PCT_OBSERVE_START",
+            observe_default,
+            "09:01:00",
+        ),
+        entry_end=_opening_time(
+            "KORSTOCKSCAN_OPENING_ROTATION_1PCT_ENTRY_END",
+            entry_end_default,
+            "15:00:00",
+        ),
+        min_day_change_pct=_safe_float(
+            os.getenv(
+                "KORSTOCKSCAN_OPENING_ROTATION_1PCT_MIN_DAY_CHANGE_PCT",
+                _rule_value("OPENING_ROTATION_1PCT_MIN_DAY_CHANGE_PCT", 1.5),
+            ),
+            1.5,
+        ),
+        max_day_change_pct=_safe_float(
+            os.getenv(
+                "KORSTOCKSCAN_OPENING_ROTATION_1PCT_MAX_DAY_CHANGE_PCT",
+                _rule_value("OPENING_ROTATION_1PCT_MAX_DAY_CHANGE_PCT", 8.0),
+            ),
+            8.0,
+        ),
+    )
 
 
 def _low_rebound_reserve_slots():
@@ -2573,6 +2650,11 @@ def _scanner_event_fields(target, source_guard=None):
         ),
         "scanner_candidate_role": source_guard.get("candidate_role")
         or _scanner_candidate_role(target),
+        "scanner_watch_budget_owner": target.get("ScannerWatchBudgetOwner")
+        or source_guard.get("scanner_watch_budget_owner")
+        or GENERAL_SCALPING,
+        "scanner_watch_budget_policy": "general1_opening3_rising_residual_v1",
+        "scanner_watch_budget_owner_source": "scanner_candidate_classification",
         "scanner_block_reason": (
             source_guard.get("reason") if source_guard.get("blocked") else ""
         ),
@@ -2734,6 +2816,12 @@ def _scanner_runtime_target_payload(
         "rank_change_score_input": fields.get("rank_change_score_input"),
         "rank_change_score_policy": fields.get("rank_change_score_policy"),
         "rising_missed_lineage": fields.get("rising_missed_lineage") or "",
+        "scanner_watch_budget_owner": fields.get("scanner_watch_budget_owner")
+        or GENERAL_SCALPING,
+        "scanner_watch_budget_policy": fields.get("scanner_watch_budget_policy"),
+        "scanner_watch_budget_owner_source": fields.get(
+            "scanner_watch_budget_owner_source"
+        ),
         "low_rebound_pct": fields.get("low_rebound_pct"),
         "intraday_low_price": fields.get("intraday_low_price"),
         "intraday_high_price": fields.get("intraday_high_price"),
@@ -2764,6 +2852,32 @@ def promote_candidates(
     recent_picks = _filter_picks_within_cooldown(
         recent_picks, now_ts, reentry_cooldown_sec
     )
+    watch_budget_enabled = _scanner_watch_budget_reallocation_enabled()
+    now_dt = datetime.fromtimestamp(now_ts)
+    opening_config = _scanner_watch_budget_opening_config()
+    for target in ranked_targets:
+        owner = classify_watch_budget_owner(
+            source_signature=_source_signature(target),
+            rising_missed_lineage=target.get("RisingMissedLineage"),
+            position_tag="SCANNER",
+            day_change_pct=_candidate_current_change_rate(target)[0],
+            now_dt=now_dt,
+            explicit_owner=target.get("ScannerWatchBudgetOwner"),
+            opening_config=opening_config,
+        )
+        target["ScannerWatchBudgetOwner"] = owner
+    owner_priority = {
+        OPENING_ROTATION: 0,
+        RISING_MISSED: 1,
+        GENERAL_SCALPING: 2,
+    }
+    if watch_budget_enabled:
+        ranked_targets = sorted(
+            ranked_targets,
+            key=lambda target: owner_priority.get(
+                target.get("ScannerWatchBudgetOwner"), 3
+            ),
+        )
     max_active = _scalping_watching_max_active()
     _expire_after_buy_window_scanner_watching(db, now_ts)
     active_count = _active_scanner_watching_count(db)
@@ -2814,8 +2928,24 @@ def promote_candidates(
                 f"codes={','.join(code for code in expired_for_low_rebound if code)} "
                 f"floor={low_rebound_active_floor} active_low_rebound={active_low_rebound_count}"
             )
+    max_new_limit = max(0, int(max_new_codes or 0))
+    open_slots = max(0, max_active - active_count)
+    replacement_probe_slots = 0
+    replacement_probe_mode = False
+    if (
+        open_slots == 0
+        and watch_budget_enabled
+        and any(
+            target.get("ScannerWatchBudgetOwner") in {OPENING_ROTATION, RISING_MISSED}
+            for target in ranked_targets
+        )
+    ):
+        replacement_probe_slots = min(4, max_new_limit)
+        replacement_probe_mode = replacement_probe_slots > 0
+        ranked_targets = ranked_targets[:replacement_probe_slots]
     remaining_slots = min(
-        max(0, int(max_new_codes or 0)), max(0, max_active - active_count)
+        max_new_limit,
+        open_slots + replacement_probe_slots,
     )
     if remaining_slots <= 0:
         print(
@@ -2836,6 +2966,15 @@ def promote_candidates(
     )
     low_rebound_promoted_count = 0
     general_promoted_count = 0
+    owner_promoted_counts = {
+        GENERAL_SCALPING: 0,
+        OPENING_ROTATION: 0,
+        RISING_MISSED: 0,
+    }
+    promotion_policy = watch_budget_limits(
+        max_new_limit,
+        opening_window_active=True,
+    )
 
     for target in ranked_targets:
         code = target["Code"]
@@ -2855,7 +2994,25 @@ def promote_candidates(
             and general_promoted_count >= general_slot_limit
         ):
             continue
-
+        watch_owner = target.get("ScannerWatchBudgetOwner") or GENERAL_SCALPING
+        if replacement_probe_mode and watch_owner == GENERAL_SCALPING:
+            continue
+        if watch_owner == GENERAL_SCALPING:
+            owner_limit = promotion_policy.general_max
+        elif watch_owner == OPENING_ROTATION:
+            owner_limit = promotion_policy.opening_protected
+        else:
+            # The general slot is never borrowed.  Unused opening slots are
+            # available to rising candidates after the opening-first pass.
+            owner_limit = min(
+                promotion_policy.rising_max_with_borrow,
+                promotion_policy.rising_guaranteed
+                + max(
+                    0,
+                    promotion_policy.opening_protected
+                    - owner_promoted_counts[OPENING_ROTATION],
+                ),
+            )
         pre_filter_reason = _scanner_candidate_pre_filter_reason(target)
         if pre_filter_reason:
             source_guard = {
@@ -2959,6 +3116,9 @@ def promote_candidates(
             },
         }
 
+        if watch_budget_enabled and owner_promoted_counts[watch_owner] >= owner_limit:
+            continue
+
         score = _freshness_score(target)
         source_sig = ",".join(_source_signature(target))
         display_flu, display_flu_metric, display_flu_source = _scanner_flu_metric(
@@ -3021,6 +3181,9 @@ def promote_candidates(
             "scanner_low_rebound_active_floor": low_rebound_active_floor,
             "scanner_low_rebound_active_count": active_low_rebound_count,
             "scanner_low_rebound_floor_shortfall": low_rebound_floor_shortfall,
+            "scanner_watch_budget_owner": watch_owner,
+            "scanner_watch_budget_owner_limit": owner_limit,
+            "scanner_watch_budget_total_limit": remaining_slots,
         }
         if bool(
             getattr(TRADING_RULES, "SCALP_SCANNER_REAL_SOURCE_GUARD_ENABLED", False)
@@ -3030,6 +3193,7 @@ def promote_candidates(
             )
         _remember_pick(recent_picks, target, now_ts)
         new_codes_found.append(code)
+        owner_promoted_counts[watch_owner] += 1
         if uses_low_rebound_reserved_slot:
             low_rebound_promoted_count += 1
         else:

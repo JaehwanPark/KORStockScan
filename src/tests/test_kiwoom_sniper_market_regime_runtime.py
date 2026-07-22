@@ -538,6 +538,7 @@ def test_scalping_scanner_promoted_target_attaches_active_watching(monkeypatch):
             "source_signature": "REALTIME_RANK_START",
             "current_price_observed": 70000,
             "price_delta_since_first_seen_pct": "0.50",
+            "scanner_watch_budget_owner": "rising_missed",
             "marcap": 123456789,
         }
     ]
@@ -769,15 +770,20 @@ def test_scalping_scanner_promoted_target_allows_higher_priority_capacity_candid
     )
 
     assert attached is True
-    assert [target["code"] for target in kiwoom_sniper_v2.ACTIVE_TARGETS] == [
-        "000001",
-        "000002",
-    ]
+    assert [target["code"] for target in kiwoom_sniper_v2.ACTIVE_TARGETS] == ["000002"]
     assert published == [
+        (
+            "COMMAND_WS_UNREG",
+            {
+                "codes": ["000001"],
+                "source": "scalping_scanner_watch_budget_reallocation",
+                "reason": "higher_priority_owner_slot_reclaimed",
+            },
+        ),
         (
             "COMMAND_WS_REG",
             {"codes": ["000002"], "source": "scanner_runtime_target_attach"},
-        )
+        ),
     ]
     assert emitted[-1]["fields"]["runtime_target_attach_outcome"] == "attached"
     kiwoom_sniper_v2._reset_scalping_dynamic_watch_cap_state()
@@ -939,15 +945,20 @@ def test_scalping_scanner_promoted_target_allows_recent_promotion_grace_capacity
     )
 
     assert attached is True
-    assert [target["code"] for target in kiwoom_sniper_v2.ACTIVE_TARGETS] == [
-        "000001",
-        "000002",
-    ]
+    assert [target["code"] for target in kiwoom_sniper_v2.ACTIVE_TARGETS] == ["000002"]
     assert published == [
+        (
+            "COMMAND_WS_UNREG",
+            {
+                "codes": ["000001"],
+                "source": "scalping_scanner_watch_budget_reallocation",
+                "reason": "higher_priority_owner_slot_reclaimed",
+            },
+        ),
         (
             "COMMAND_WS_REG",
             {"codes": ["000002"], "source": "scanner_runtime_target_attach"},
-        )
+        ),
     ]
     assert emitted[-1]["fields"]["runtime_target_attach_outcome"] == "attached"
     kiwoom_sniper_v2._reset_scalping_dynamic_watch_cap_state()
@@ -2636,7 +2647,7 @@ def test_scalping_fifo_max_active_env(monkeypatch, tmp_path):
     monkeypatch.delenv(
         "KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_CAP_ENABLED", raising=False
     )
-    assert kiwoom_sniper_v2._scalping_fifo_max_active() == 24
+    assert kiwoom_sniper_v2._scalping_fifo_max_active() == 16
 
     monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE", "12")
     assert kiwoom_sniper_v2._scalping_fifo_max_active() == 12

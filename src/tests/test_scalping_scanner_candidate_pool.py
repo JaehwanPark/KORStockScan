@@ -53,6 +53,16 @@ def test_resolve_scan_interval_matches_intraday_schedule():
     assert scalping_scanner._resolve_scan_interval_sec(time(15, 0)) == 60
 
 
+def test_watch_budget_opening_config_accepts_minute_precision_env(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_OPENING_ROTATION_1PCT_OBSERVE_START", "08:50")
+    monkeypatch.setenv("KORSTOCKSCAN_OPENING_ROTATION_1PCT_ENTRY_END", "14:55")
+
+    config = scalping_scanner._scanner_watch_budget_opening_config()
+
+    assert config.observe_start == time(8, 50)
+    assert config.entry_end == time(14, 55)
+
+
 def test_is_valid_stock_blocks_fund_prefix_products():
     blocked_names = [
         "SOL AI반도체TOP2플러스",
@@ -350,7 +360,7 @@ def test_promote_candidates_skips_when_active_scanner_cap_reached(monkeypatch):
     )
 
     assert codes == []
-    assert recent == {}
+    assert recent["000001"]["last_guard_block_reason"]
     assert event_bus.events == []
     assert len(db.records) == 1
 
@@ -412,6 +422,93 @@ def test_promote_candidates_limits_new_codes_to_remaining_active_slots(monkeypat
     ]
     assert len(_event_payloads(event_bus, "SCALPING_SCANNER_PROMOTED_TARGET")) == 1
     assert len(db.records) == 2
+
+
+def test_watch_budget_rollback_keeps_full_cap_short_circuit(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE", "1")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCANNER_WATCH_BUDGET_REALLOCATION_ENABLED", "false"
+    )
+    db = _DB()
+    db.records.append(
+        SimpleNamespace(
+            status="WATCHING",
+            strategy="SCALPING",
+            position_tag="SCANNER",
+            buy_time=None,
+            buy_qty=0,
+        )
+    )
+
+    codes, recent = scalping_scanner.promote_candidates(
+        db,
+        _EventBus(),
+        [
+            {
+                "Code": "000003",
+                "Name": "ROLLBACK",
+                "Price": 12000,
+                "Source": "PRICE_JUMP_START",
+            }
+        ],
+        {},
+        max_new_codes=12,
+        reentry_cooldown_sec=1500,
+        token="TOKEN",
+        now_ts=1000.0,
+    )
+
+    assert codes == []
+    assert recent == {}
+
+
+def test_promote_candidates_emits_rising_replacement_probe_at_full_cap(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE", "1")
+    monkeypatch.setattr(kiwoom_utils, "is_valid_stock", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        scalping_scanner, "_scanner_candidate_pre_filter_reason", lambda target: ""
+    )
+    monkeypatch.setattr(
+        scalping_scanner, "_should_promote_candidate", lambda *args, **kwargs: True
+    )
+    monkeypatch.setattr(
+        scalping_scanner,
+        "_scanner_real_source_guard_decision",
+        lambda *args, **kwargs: {"blocked": False},
+    )
+    db = _DB()
+    db.records.append(
+        SimpleNamespace(
+            status="WATCHING",
+            strategy="SCALPING",
+            position_tag="SCANNER",
+            buy_time=None,
+            buy_qty=0,
+        )
+    )
+    event_bus = _EventBus()
+
+    codes, _recent = scalping_scanner.promote_candidates(
+        db,
+        event_bus,
+        [
+            {
+                "Code": "000003",
+                "Name": "RISING_REPLACEMENT",
+                "Price": 12000,
+                "Source": "PRICE_JUMP_START",
+            }
+        ],
+        {},
+        max_new_codes=12,
+        reentry_cooldown_sec=1500,
+        token="TOKEN",
+        now_ts=1000.0,
+    )
+
+    assert codes == ["000003"]
+    payload = _event_payloads(event_bus, "SCALPING_SCANNER_PROMOTED_TARGET")[-1]
+    assert payload["scanner_watch_budget_owner"] == "rising_missed"
 
 
 def test_promote_candidates_skips_code_with_active_manual_scalp_base(monkeypatch):
@@ -4781,16 +4878,16 @@ def test_real_source_guard_promotes_immediate_acceleration_sources(monkeypatch):
         now_ts=1000.0,
     )
 
-    assert codes == ["000101", "000102"]
+    assert codes == ["000102", "000101"]
     assert _event_payloads(event_bus, "COMMAND_WS_REG") == [
-        {"codes": ["000101", "000102"], "source": "scalping_scanner_promote"}
+        {"codes": ["000102", "000101"], "source": "scalping_scanner_promote"}
     ]
     assert [
         p["code"]
         for p in _event_payloads(event_bus, "SCALPING_SCANNER_PROMOTED_TARGET")
     ] == [
-        "000101",
         "000102",
+        "000101",
     ]
 
 
@@ -4944,6 +5041,12 @@ def test_run_scalper_iteration_keeps_ws_payload_and_max_new_codes(monkeypatch):
         kiwoom_utils, "get_bid_balance_surge_ka10021", lambda *args, **kwargs: []
     )
     monkeypatch.setattr(
+        kiwoom_utils, "get_high_price_proximity_ka10018", lambda *args, **kwargs: []
+    )
+    monkeypatch.setattr(
+        kiwoom_utils, "get_new_high_ka10016", lambda *args, **kwargs: []
+    )
+    monkeypatch.setattr(
         kiwoom_utils,
         "get_top_open_fluctuation_ka10028",
         lambda *args, **kwargs: [],
@@ -5065,7 +5168,7 @@ def test_run_scalper_iteration_observes_low_rebound_before_scanner_cap(monkeypat
         if event["stage"] == "scalping_scanner_low_rebound_source_observed"
     ]
     assert codes == []
-    assert recent == {}
+    assert len(recent) <= 1
     assert event_bus.events == []
     assert len(low_events) == 1
     fields = low_events[0]["fields"]

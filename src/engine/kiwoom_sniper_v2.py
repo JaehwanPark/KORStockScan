@@ -62,6 +62,16 @@ from src.engine.risk.manual_control_exclusion import (
 from src.engine.scalping.rising_missed_selection_prior import (
     rising_missed_selection_rank_delta,
 )
+from src.engine.scalping.watch_budget import (
+    GENERAL_SCALPING,
+    OPENING_ROTATION,
+    RISING_MISSED,
+    classify_owner as classify_watch_budget_owner,
+    limits as watch_budget_limits,
+    normalize_owner as normalize_watch_budget_owner,
+    owner_allowances as watch_budget_owner_allowances,
+    slot_type as watch_budget_slot_type,
+)
 from src.engine.scalping.market_data_enrichment import build_market_data_enrichment
 from src.engine.scalping.position_sizing_allocator import (
     ScalpingSizingContext,
@@ -297,6 +307,7 @@ _SCANNER_HOT_RUNTIME_OVERRIDE_KEYS = frozenset(
         "KORSTOCKSCAN_SCANNER_FULL_EVAL_DEFERRED_EVICTION_MIN_AGE_SEC",
         "KORSTOCKSCAN_SCANNER_FULL_EVAL_DEFERRED_EVICTION_MAX_PER_LOOP",
         "KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE",
+        "KORSTOCKSCAN_SCANNER_WATCH_BUDGET_REALLOCATION_ENABLED",
         "KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_CAP_ENABLED",
         "KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_MIN_ACTIVE",
         "KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_PRESSURE_MS",
@@ -1835,6 +1846,28 @@ def _scanner_runtime_target_event_fields(payload, *, outcome, reason, target=Non
             payload.get("scanner_attach_capacity_candidate_overflow")
             if payload.get("scanner_attach_capacity_candidate_overflow") is not None
             else "not_applicable_scanner_attach_capacity_candidate_overflow"
+        ),
+        "scanner_watch_budget_owner": payload.get("scanner_watch_budget_owner")
+        or target.get("scanner_watch_budget_owner")
+        or "not_applicable_scanner_watch_budget_owner",
+        "scanner_watch_budget_policy": payload.get("scanner_watch_budget_policy")
+        or target.get("scanner_watch_budget_policy")
+        or "not_applicable_scanner_watch_budget_policy",
+        "scanner_watch_budget_owner_source": payload.get(
+            "scanner_watch_budget_owner_source"
+        )
+        or target.get("scanner_watch_budget_owner_source")
+        or "not_applicable_scanner_watch_budget_owner_source",
+        "scanner_watch_budget_slot_type": payload.get("scanner_watch_budget_slot_type")
+        or target.get("scanner_watch_budget_slot_type")
+        or "not_applicable_scanner_watch_budget_slot_type",
+        "scanner_watch_budget_candidate_overflow": payload.get(
+            "scanner_watch_budget_candidate_overflow",
+            "not_applicable_scanner_watch_budget_candidate_overflow",
+        ),
+        "scanner_watch_budget_replacement_count": payload.get(
+            "scanner_watch_budget_replacement_count",
+            "not_applicable_scanner_watch_budget_replacement_count",
         ),
         "runtime_record_id": payload.get("record_id")
         or target.get("id")
@@ -4054,9 +4087,9 @@ def _scalping_fifo_candidates(watching_stocks, now_ts):
 def _scalping_fifo_base_max_active():
     raw = _scanner_hot_or_env_value("KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE")
     try:
-        value = int(str(raw).strip()) if str(raw).strip() else 24
+        value = int(str(raw).strip()) if str(raw).strip() else 16
     except Exception:
-        value = 24
+        value = 16
     return max(1, min(value, 80))
 
 
@@ -4154,28 +4187,167 @@ def _scalping_fifo_max_active():
     return _scalping_dynamic_watch_cap_effective(base_cap)
 
 
-def _scalping_attach_capacity_allows(new_target, now_ts):
-    if not _is_scalping_fifo_target(new_target):
-        return True
-    scanner_limit = _scalping_fifo_max_active()
-    watching_targets = [
+def _scalping_watch_budget_reallocation_enabled():
+    raw = _scanner_hot_or_env_value(
+        "KORSTOCKSCAN_SCANNER_WATCH_BUDGET_REALLOCATION_ENABLED"
+    )
+    return _env_bool_from_value(raw, True)
+
+
+def _scalping_watch_budget_opening_window_active(now_ts):
+    now_time = datetime.fromtimestamp(float(now_ts)).time()
+    config = sniper_state_handlers._opening_rotation_entry_config()
+    return bool(config.enabled) and config.observe_start <= now_time <= config.entry_end
+
+
+def _scalping_watch_budget_owner(target, now_ts=None):
+    """Resolve observation-budget ownership; never changes trade ownership."""
+
+    target = target or {}
+    explicit = target.get("scanner_watch_budget_owner")
+    if str(explicit or "").strip().lower() in {
+        GENERAL_SCALPING,
+        OPENING_ROTATION,
+        RISING_MISSED,
+    }:
+        return normalize_watch_budget_owner(explicit)
+    if not _is_scanner_runtime_target(target):
+        return GENERAL_SCALPING
+    now_ts = time.time() if now_ts is None else now_ts
+    return classify_watch_budget_owner(
+        source_signature=target.get("source_signature"),
+        rising_missed_lineage=target.get("rising_missed_lineage"),
+        position_tag=target.get("position_tag") or "SCANNER",
+        day_change_pct=_safe_float(
+            target.get(
+                "current_flu_rate", target.get("price_delta_since_first_seen_pct")
+            ),
+            0.0,
+        ),
+        now_dt=datetime.fromtimestamp(float(now_ts)),
+        explicit_owner=explicit,
+        opening_config=sniper_state_handlers._opening_rotation_entry_config(),
+        # DB rows created before this contract have no source metadata.  Keep
+        # them in the rising-centered pool instead of inflating general slots.
+        missing_default=RISING_MISSED,
+    )
+
+
+def _scalping_watch_budget_policy_fields(targets, now_ts):
+    total = _scalping_fifo_max_active()
+    opening_active = _scalping_watch_budget_opening_window_active(now_ts)
+    policy = watch_budget_limits(total, opening_window_active=opening_active)
+    counts = {GENERAL_SCALPING: 0, OPENING_ROTATION: 0, RISING_MISSED: 0}
+    for target in targets or []:
+        owner = _scalping_watch_budget_owner(target, now_ts=now_ts)
+        counts[owner] = counts.get(owner, 0) + 1
+    allowances = watch_budget_owner_allowances(
+        counts,
+        total=total,
+        opening_window_active=opening_active,
+    )
+    return {
+        "scanner_watch_budget_policy": "general1_opening3_rising_residual_v1",
+        "scanner_watch_budget_total": total,
+        "scanner_watch_budget_opening_window_active": opening_active,
+        "scanner_watch_budget_general_max": policy.general_max,
+        "scanner_watch_budget_opening_protected": policy.opening_protected,
+        "scanner_watch_budget_rising_guaranteed": policy.rising_guaranteed,
+        "scanner_watch_budget_rising_max_with_borrow": policy.rising_max_with_borrow,
+        "scanner_watch_budget_owner_counts": counts,
+        "scanner_watch_budget_owner_allowances": allowances,
+    }
+
+
+def _scalping_watch_budget_overflow_candidates(targets, now_ts):
+    candidates = [
         target
-        for target in ACTIVE_TARGETS
+        for target in targets or []
         if str((target or {}).get("status") or "").upper() == "WATCHING"
         and _is_scalping_fifo_target(target)
     ]
-    if len(watching_targets) < scanner_limit:
-        return True
-    if not _scalping_attach_replace_enabled():
-        return False
+    total = _scalping_fifo_max_active()
+    if not _scalping_watch_budget_reallocation_enabled():
+        overflow = max(0, len(candidates) - total)
+        return _scalping_fifo_overflow_candidates(candidates, now_ts)[:overflow]
 
+    fields = _scalping_watch_budget_policy_fields(candidates, now_ts)
+    allowances = fields["scanner_watch_budget_owner_allowances"]
+    selected = []
+    selected_ids = set()
+    for owner in (GENERAL_SCALPING, OPENING_ROTATION, RISING_MISSED):
+        owner_targets = [
+            target
+            for target in candidates
+            if _scalping_watch_budget_owner(target, now_ts=now_ts) == owner
+        ]
+        excess = max(0, len(owner_targets) - allowances[owner])
+        for target in _scalping_fifo_overflow_candidates(owner_targets, now_ts)[
+            :excess
+        ]:
+            identity = id(target)
+            if identity not in selected_ids:
+                selected.append(target)
+                selected_ids.add(identity)
+
+    remaining = [target for target in candidates if id(target) not in selected_ids]
+    total_excess = max(0, len(remaining) - total)
+    for target in _scalping_fifo_overflow_candidates(remaining, now_ts)[:total_excess]:
+        identity = id(target)
+        if identity not in selected_ids:
+            selected.append(target)
+            selected_ids.add(identity)
+    return selected
+
+
+def _scalping_attach_capacity_decision(new_target, now_ts, watching_targets=None):
+    if not _is_scalping_fifo_target(new_target):
+        return True, [], {}
+    if watching_targets is None:
+        watching_targets = [
+            target
+            for target in ACTIVE_TARGETS
+            if str((target or {}).get("status") or "").upper() == "WATCHING"
+            and _is_scalping_fifo_target(target)
+        ]
     candidate = dict(new_target or {})
     candidate["_scanner_attach_capacity_candidate"] = True
-    overflow = _scalping_fifo_overflow_candidates(
-        [*watching_targets, candidate],
-        now_ts,
-    )[: max(0, len(watching_targets) + 1 - scanner_limit)]
-    return not any(item.get("_scanner_attach_capacity_candidate") for item in overflow)
+    combined = [*watching_targets, candidate]
+    overflow = _scalping_watch_budget_overflow_candidates(combined, now_ts)
+    candidate_overflow = any(
+        item.get("_scanner_attach_capacity_candidate") for item in overflow
+    )
+    replacements = [
+        item for item in overflow if not item.get("_scanner_attach_capacity_candidate")
+    ]
+    fields = _scalping_watch_budget_policy_fields(combined, now_ts)
+    owner = _scalping_watch_budget_owner(candidate, now_ts=now_ts)
+    owner_count = fields["scanner_watch_budget_owner_counts"].get(owner, 0)
+    fields.update(
+        {
+            "scanner_watch_budget_owner": owner,
+            "scanner_watch_budget_slot_type": watch_budget_slot_type(
+                owner,
+                owner_count,
+                total=fields["scanner_watch_budget_total"],
+                opening_window_active=fields[
+                    "scanner_watch_budget_opening_window_active"
+                ],
+            ),
+            "scanner_watch_budget_candidate_overflow": candidate_overflow,
+            "scanner_watch_budget_replacement_count": len(replacements),
+        }
+    )
+    return not candidate_overflow, replacements, fields
+
+
+def _scalping_attach_capacity_allows(new_target, now_ts):
+    allowed, replacements, _fields = _scalping_attach_capacity_decision(
+        new_target, now_ts
+    )
+    if replacements and not _scalping_attach_replace_enabled():
+        return False
+    return allowed
 
 
 def _update_scalping_dynamic_watch_cap(
@@ -4295,6 +4467,84 @@ def _scalping_fifo_overflow_candidates(scalp_fifo_targets, now_ts):
     return sorted(list(scalp_fifo_targets or []), key=_overflow_rank)
 
 
+def _expire_scalping_watch_budget_targets(
+    expired_targets,
+    active_targets,
+    *,
+    reason,
+):
+    """Expire displaced observation rows and unregister their WS symbols."""
+
+    expired_targets = list(expired_targets or [])
+    if not expired_targets:
+        return []
+    expired_ids = [target.get("id") for target in expired_targets if target.get("id")]
+    if expired_ids:
+        try:
+            with DB.get_session() as session:
+                session.query(RecommendationHistory).filter(
+                    RecommendationHistory.id.in_(expired_ids)
+                ).update({"status": "EXPIRED"}, synchronize_session=False)
+        except Exception as exc:
+            log_error(f"[SCANNER_WATCH_BUDGET] DB expiration failed: {exc}")
+
+    expired_codes = []
+    for target in expired_targets:
+        active_targets[:] = [item for item in active_targets if item is not target]
+        code = str(target.get("code") or "").strip()[:6]
+        if code:
+            expired_codes.append(code)
+        emit_pipeline_event(
+            "ENTRY_PIPELINE",
+            str(target.get("name") or "-"),
+            code,
+            "scalping_scanner_watch_budget_reallocated",
+            record_id=target.get("id"),
+            fields={
+                "metric_role": "runtime_capacity_provenance",
+                "decision_authority": "scanner_observation_budget_only",
+                "runtime_effect": True,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "scanner_watch_budget_owner": _scalping_watch_budget_owner(target),
+                "scanner_watch_budget_reallocation_reason": reason,
+                "forbidden_uses": (
+                    "order_submit,quantity_change,cash_budget_change,provider_change,"
+                    "entry_or_exit_threshold_change"
+                ),
+            },
+        )
+    active_codes = {
+        str(target.get("code") or "").strip()[:6]
+        for target in active_targets or []
+        if str(target.get("status") or "").upper() not in {"COMPLETED", "EXPIRED"}
+    }
+    unregister_codes = [
+        code
+        for code in sorted(set(expired_codes))
+        if code not in active_codes
+        and not should_retain_ws_subscription(code)
+        and not sniper_state_handlers.should_retain_rising_missed_nxt_post_block_subscription(
+            code
+        )
+    ]
+    if unregister_codes:
+        event_bus.publish(
+            "COMMAND_WS_UNREG",
+            {
+                "codes": unregister_codes,
+                "source": "scalping_scanner_watch_budget_reallocation",
+                "reason": reason,
+            },
+        )
+    log_info(
+        "[SCANNER_WATCH_BUDGET] "
+        f"expired={len(expired_targets)} reason={reason} "
+        f"codes={','.join(sorted(set(expired_codes)))}"
+    )
+    return expired_targets
+
+
 def _initial_ws_registration_groups(targets, now_ts=None):
     now_ts = time.time() if now_ts is None else now_ts
     priority_codes = []
@@ -4321,13 +4571,9 @@ def _initial_ws_registration_groups(targets, now_ts=None):
             priority_codes.append(code)
             seen_priority.add(code)
 
-    scanner_limit = _scalping_fifo_max_active()
-    overflow = max(0, len(scanner_targets) - scanner_limit)
     overflow_ids = {
         _target_key(item)
-        for item in _scalping_fifo_overflow_candidates(scanner_targets, now_ts)[
-            :overflow
-        ]
+        for item in _scalping_watch_budget_overflow_candidates(scanner_targets, now_ts)
     }
     scanner_codes = []
     seen_scanner = set()
@@ -4380,6 +4626,13 @@ def _runtime_iteration_targets(targets, now_ts):
             positive_delta = _scanner_positive_delta_value(target)
             selection_delta = rising_missed_selection_rank_delta(target)
             watch_budget_score = _scanner_common_watch_budget_priority_score(target)
+            owner_rank = 0
+            if _scalping_watch_budget_reallocation_enabled():
+                owner_rank = {
+                    OPENING_ROTATION: 0,
+                    RISING_MISSED: 1,
+                    GENERAL_SCALPING: 2,
+                }.get(_scalping_watch_budget_owner(target, now_ts=now_ts), 3)
             under_10000_priority = _under_10000_runtime_priority_rank(target)
             recency_key = (
                 (
@@ -4387,6 +4640,7 @@ def _runtime_iteration_targets(targets, now_ts):
                     if cooldown_waiting
                     else (0 if pending_recheck or rising_recheck else 1)
                 ),
+                owner_rank,
                 under_10000_priority,
                 -watch_budget_score,
                 -selection_delta,
@@ -5661,6 +5915,8 @@ def _scanner_runtime_context_updates(payload):
         "intraday_high_price",
         "distance_from_intraday_high_pct",
         "negative_display_rebound",
+        "scanner_watch_budget_owner",
+        "scanner_watch_budget_owner_source",
     ):
         value = payload.get(key)
         if value not in (None, ""):
@@ -5877,6 +6133,23 @@ def handle_scalping_scanner_promoted_target(payload):
                         **refresh_context_updates,
                     }
                 )
+                refresh_overflow = _scalping_watch_budget_overflow_candidates(
+                    ACTIVE_TARGETS, now_ts
+                )
+                if refresh_overflow:
+                    _expire_scalping_watch_budget_targets(
+                        refresh_overflow,
+                        ACTIVE_TARGETS,
+                        reason="owner_quota_refresh_rebalance",
+                    )
+                    if any(item is existing for item in refresh_overflow):
+                        _log_scanner_runtime_target_attach(
+                            payload_for_log,
+                            outcome="skipped",
+                            reason="scanner_watch_budget_owner_quota",
+                            target=existing,
+                        )
+                        return False
                 _reset_scanner_runtime_eval_state(existing)
                 if buy_price > 0 and not existing.get("marcap"):
                     existing["marcap"] = _resolve_stock_marcap(existing, code)
@@ -5932,7 +6205,23 @@ def handle_scalping_scanner_promoted_target(payload):
             "source_signature": payload.get("source_signature") or "",
             **scanner_context_updates,
         }
-        if not _scalping_attach_capacity_allows(new_target, now_ts):
+        allowed, replacements, budget_fields = _scalping_attach_capacity_decision(
+            new_target, now_ts
+        )
+        new_target.update(
+            {
+                key: value
+                for key, value in budget_fields.items()
+                if key
+                in {
+                    "scanner_watch_budget_owner",
+                }
+            }
+        )
+        payload_for_log = {**payload_for_log, **budget_fields}
+        if replacements and not _scalping_attach_replace_enabled():
+            allowed = False
+        if not allowed:
             _log_scanner_runtime_target_attach(
                 {
                     **payload_for_log,
@@ -5957,6 +6246,12 @@ def handle_scalping_scanner_promoted_target(payload):
                 f"reason=scalping_dynamic_watch_cap_capacity cap={_scalping_fifo_max_active()}"
             )
             return False
+        if replacements:
+            _expire_scalping_watch_budget_targets(
+                replacements,
+                ACTIVE_TARGETS,
+                reason="higher_priority_owner_slot_reclaimed",
+            )
         new_target["marcap"] = _resolve_stock_marcap(new_target, code)
         ACTIVE_TARGETS.append(new_target)
 
@@ -6015,6 +6310,15 @@ def attach_db_poll_target_if_missing(db_target, targets, now_ts):
 
     dt["added_time"] = _runtime_added_time_for_target(dt, now_ts=now_ts)
     if dt["strategy"] == "SCALPING" and dt["position_tag"] == "SCANNER":
+        owner_was_explicit = str(dt.get("scanner_watch_budget_owner") or "").strip()
+        dt["scanner_watch_budget_owner"] = _scalping_watch_budget_owner(
+            dt, now_ts=now_ts
+        )
+        dt["scanner_watch_budget_owner_source"] = (
+            "database_payload"
+            if owner_was_explicit
+            else "legacy_db_restore_default_rising"
+        )
         identity_payload = {
             "record_id": dt.get("id"),
             "code": code,
@@ -6026,6 +6330,11 @@ def attach_db_poll_target_if_missing(db_target, targets, now_ts):
             "buy_price": dt.get("buy_price"),
             "added_time": dt["added_time"],
             "entry_armed_at_epoch": dt.get("entry_armed_at_epoch") or dt["added_time"],
+            "scanner_watch_budget_owner": dt["scanner_watch_budget_owner"],
+            "scanner_watch_budget_owner_source": dt[
+                "scanner_watch_budget_owner_source"
+            ],
+            "scanner_watch_budget_policy": "general1_opening3_rising_residual_v1",
         }
         identity_ok, identity_fields = _scanner_identity_guard(
             identity_payload,
@@ -6050,6 +6359,50 @@ def attach_db_poll_target_if_missing(db_target, targets, now_ts):
             return False
     else:
         identity_payload = None
+
+    if dt["strategy"] == "SCALPING" and dt["position_tag"] == "SCANNER":
+        allowed, replacements, budget_fields = _scalping_attach_capacity_decision(
+            dt,
+            now_ts,
+            watching_targets=[
+                target
+                for target in targets
+                if str((target or {}).get("status") or "").upper() == "WATCHING"
+                and _is_scalping_fifo_target(target)
+            ],
+        )
+        identity_payload = {**identity_payload, **budget_fields}
+        dt.update(
+            {
+                key: value
+                for key, value in budget_fields.items()
+                if key
+                in {
+                    "scanner_watch_budget_owner",
+                }
+            }
+        )
+        if replacements and not _scalping_attach_replace_enabled():
+            allowed = False
+        if not allowed:
+            _expire_scalping_watch_budget_targets(
+                [dt],
+                targets,
+                reason="db_poll_owner_quota_rejected",
+            )
+            _log_scanner_runtime_target_attach(
+                identity_payload,
+                outcome="skipped",
+                reason="scanner_watch_budget_owner_quota",
+                target=dt,
+            )
+            return False
+        if replacements:
+            _expire_scalping_watch_budget_targets(
+                replacements,
+                targets,
+                reason="db_poll_higher_priority_owner_slot_reclaimed",
+            )
 
     targets.append(dt)
     reg_payload = {"codes": [code]}
@@ -6905,14 +7258,11 @@ def run_sniper(is_test_mode=False):
                 scalp_remaining = [
                     t for t in scalp_fifo_targets if t["id"] not in expired_ids
                 ]
-                scalp_max_active = _scalping_fifo_max_active()
-                if len(scalp_remaining) > scalp_max_active:
-                    overflow = len(scalp_remaining) - scalp_max_active
-                    for t in _scalping_fifo_overflow_candidates(
-                        scalp_remaining, now_ts
-                    )[:overflow]:
-                        expired_ids.append(t["id"])
-                        expired_names.append(t["name"])
+                for t in _scalping_watch_budget_overflow_candidates(
+                    scalp_remaining, now_ts
+                ):
+                    expired_ids.append(t["id"])
+                    expired_names.append(t["name"])
 
                 if expired_ids:
                     try:
