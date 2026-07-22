@@ -34,6 +34,8 @@ TP1_ADVERSE_STOP_PCT = -0.70
 TP1_COST_RESERVE_PCT = 0.30
 TP1_NET_TARGET_PCT = 1.00
 TP1_LABEL_HORIZON_SEC = 20 * 60
+TP1_POST_BLOCK_HORIZONS_MIN = (1, 3, 5, 10, 20, 30, 60)
+TP1_POST_BLOCK_MIN_FRESH_PRICE_SAMPLES = 2
 FORBIDDEN_USES = [
     "runtime_threshold_mutation",
     "intraday_runtime_apply",
@@ -1691,6 +1693,387 @@ def _tp1_actual_costs(fields: dict[str, Any]) -> tuple[float | None, float | Non
     return fee, tax
 
 
+def _tp1_effective_venue(fields: dict[str, Any]) -> str:
+    """Retain only explicit venue provenance; never infer a venue from session."""
+
+    value = (
+        str(
+            fields.get("rising_missed_effective_venue")
+            or fields.get("effective_venue")
+            or ""
+        )
+        .strip()
+        .upper()
+    )
+    return value if value in {"KRX", "NXT"} else "unknown"
+
+
+def _tp1_post_block_measurement_state(
+    *,
+    observation_watermark: datetime | None,
+    horizon_end: datetime,
+    observed_price_event_count: int,
+) -> str:
+    """Classify whether a bounded post-block window is actually measurable."""
+
+    if observation_watermark is None or observation_watermark < horizon_end:
+        return "pending_horizon"
+    if observed_price_event_count <= 0:
+        return "source_gap_no_post_block_price"
+    if observed_price_event_count < TP1_POST_BLOCK_MIN_FRESH_PRICE_SAMPLES:
+        return "source_gap_insufficient_post_block_price"
+    return "pass"
+
+
+def _tp1_post_block_horizon_measurements(
+    events: list[dict[str, Any]],
+    *,
+    start_index: int,
+    candidate_ts: datetime | None,
+    code: str,
+    entry_price: float | None,
+    observation_watermark: datetime | None,
+    evaluation_id: str = "",
+) -> dict[str, Any]:
+    """Build source-only bounded outcomes without treating the candidate anchor as a sample.
+
+    A later global pipeline event proves only that the clock advanced.  It does not
+    prove that the blocked symbol was observed.  Each horizon therefore keeps its
+    own same-symbol price coverage state before it can be labelled as ``no_hit``.
+    """
+
+    if candidate_ts is None or entry_price is None or entry_price <= 0 or not code:
+        return {
+            "evaluation_horizons_min": list(TP1_POST_BLOCK_HORIZONS_MIN),
+            "horizon_measurements": [],
+            "late_recovery_after_adverse": {
+                "detected": False,
+                "reason": "input_unavailable",
+            },
+        }
+
+    measurements = {
+        horizon_min: {
+            "horizon_min": horizon_min,
+            "horizon_sec": horizon_min * 60,
+            "horizon_end": candidate_ts + timedelta(minutes=horizon_min),
+            "observed_price_event_count": 0,
+            "first_hit_label": None,
+            "first_hit_ts": None,
+            "first_hit_move_pct": None,
+            "first_hit_price_source": None,
+            "max_move_pct": None,
+            "min_move_pct": None,
+            "sampler_completion_mfe_pct": None,
+            "sampler_completion_mae_pct": None,
+            "sampler_completion_label": None,
+            "sampler_completion_first_hit_ts": None,
+            "sampler_completion_first_hit_move_pct": None,
+        }
+        for horizon_min in TP1_POST_BLOCK_HORIZONS_MIN
+    }
+    max_horizon_end = measurements[max(TP1_POST_BLOCK_HORIZONS_MIN)]["horizon_end"]
+    first_adverse_ts: str | None = None
+    first_adverse_move_pct: float | None = None
+    first_target_after_adverse_ts: str | None = None
+    first_target_after_adverse_move_pct: float | None = None
+    first_boundary_label: str | None = None
+
+    observation_rows: list[tuple[datetime, int, dict[str, Any]]] = []
+    for position, subsequent in enumerate(events[start_index + 1 :], start_index + 1):
+        if _event_code(subsequent) != code:
+            continue
+        event_ts = _tp1_label_timestamp(_event_ts(subsequent))
+        if event_ts is None or event_ts <= candidate_ts or event_ts > max_horizon_end:
+            continue
+        observation_rows.append((event_ts, position, subsequent))
+
+    for event_ts, _position, subsequent in sorted(observation_rows):
+        fields = _fields(subsequent)
+        stage = str(subsequent.get("stage") or "")
+        event_evaluation_id = str(
+            fields.get("rising_missed_tp1_evaluation_id") or ""
+        ).strip()
+        is_nxt_sampler_event = stage.startswith("rising_missed_nxt_post_block_")
+        if is_nxt_sampler_event and (
+            not evaluation_id or event_evaluation_id != evaluation_id
+        ):
+            # NXT sampler prices are evaluation-scoped.  A legacy candidate
+            # without an evaluation id cannot safely consume them, and neither
+            # can a different evaluation for the same symbol.
+            continue
+        if stage in {
+            "rising_missed_nxt_post_block_sampler_registered",
+            "rising_missed_nxt_post_block_sampler_restored",
+            "rising_missed_nxt_post_block_sampler_registration_skipped",
+        }:
+            # Registration repeats the entry anchor; it is not a post-block price.
+            continue
+        if stage == "rising_missed_nxt_post_block_price_sampler_completed":
+            completion_horizon_sec = _safe_float(
+                fields.get("rising_missed_nxt_post_block_horizon_sec")
+            )
+            completion_horizon_sec = (
+                completion_horizon_sec
+                if completion_horizon_sec is not None and completion_horizon_sec > 0
+                else TP1_LABEL_HORIZON_SEC
+            )
+            completion_mfe = _safe_float(
+                fields.get("rising_missed_nxt_post_block_max_move_pct")
+            )
+            completion_mae = _safe_float(
+                fields.get("rising_missed_nxt_post_block_min_move_pct")
+            )
+            completion_label = str(
+                fields.get("rising_missed_nxt_post_block_sampler_outcome_label") or ""
+            )
+            completion_first_hit_move = _safe_float(
+                fields.get("rising_missed_nxt_post_block_first_hit_move_pct")
+            )
+            completion_first_hit_ts = fields.get(
+                "rising_missed_nxt_post_block_first_hit_ts"
+            )
+            for measurement in measurements.values():
+                if measurement["horizon_sec"] < completion_horizon_sec:
+                    continue
+                measurement["sampler_completion_mfe_pct"] = completion_mfe
+                measurement["sampler_completion_mae_pct"] = completion_mae
+                measurement["sampler_completion_label"] = completion_label
+                measurement["sampler_completion_first_hit_ts"] = completion_first_hit_ts
+                measurement["sampler_completion_first_hit_move_pct"] = (
+                    completion_first_hit_move
+                )
+            continue
+
+        price, price_source = _tp1_observation_price(subsequent)
+        if price is None or price <= 0:
+            continue
+        move_pct = ((price - entry_price) / entry_price) * 100.0
+        for measurement in measurements.values():
+            if event_ts > measurement["horizon_end"]:
+                continue
+            measurement["observed_price_event_count"] += 1
+            measurement["max_move_pct"] = (
+                move_pct
+                if measurement["max_move_pct"] is None
+                else max(float(measurement["max_move_pct"]), move_pct)
+            )
+            measurement["min_move_pct"] = (
+                move_pct
+                if measurement["min_move_pct"] is None
+                else min(float(measurement["min_move_pct"]), move_pct)
+            )
+            if measurement["first_hit_label"] is None:
+                if move_pct >= TP1_GROSS_TARGET_PCT:
+                    measurement["first_hit_label"] = "gross_target_first"
+                elif move_pct <= TP1_ADVERSE_STOP_PCT:
+                    measurement["first_hit_label"] = "adverse_stop_first"
+                if measurement["first_hit_label"] is not None:
+                    measurement["first_hit_ts"] = _event_ts(subsequent)
+                    measurement["first_hit_move_pct"] = move_pct
+                    measurement["first_hit_price_source"] = price_source
+        if first_boundary_label is None:
+            if move_pct >= TP1_GROSS_TARGET_PCT:
+                first_boundary_label = "gross_target_first"
+            elif move_pct <= TP1_ADVERSE_STOP_PCT:
+                first_boundary_label = "adverse_stop_first"
+                first_adverse_ts = _event_ts(subsequent)
+                first_adverse_move_pct = move_pct
+        elif (
+            first_boundary_label == "adverse_stop_first"
+            and first_target_after_adverse_ts is None
+            and move_pct >= TP1_GROSS_TARGET_PCT
+        ):
+            first_target_after_adverse_ts = _event_ts(subsequent)
+            first_target_after_adverse_move_pct = move_pct
+
+    rendered: list[dict[str, Any]] = []
+    for horizon_min in TP1_POST_BLOCK_HORIZONS_MIN:
+        measurement = measurements[horizon_min]
+        completion_mfe = measurement["sampler_completion_mfe_pct"]
+        completion_mae = measurement["sampler_completion_mae_pct"]
+        if completion_mfe is not None:
+            measurement["max_move_pct"] = (
+                completion_mfe
+                if measurement["max_move_pct"] is None
+                else max(float(measurement["max_move_pct"]), completion_mfe)
+            )
+        if completion_mae is not None:
+            measurement["min_move_pct"] = (
+                completion_mae
+                if measurement["min_move_pct"] is None
+                else min(float(measurement["min_move_pct"]), completion_mae)
+            )
+        if measurement["first_hit_label"] is None and measurement[
+            "sampler_completion_label"
+        ] in {"gross_target_first", "adverse_stop_first"}:
+            measurement["first_hit_label"] = measurement["sampler_completion_label"]
+            measurement["first_hit_ts"] = measurement["sampler_completion_first_hit_ts"]
+            measurement["first_hit_move_pct"] = measurement[
+                "sampler_completion_first_hit_move_pct"
+            ]
+            measurement["first_hit_price_source"] = "nxt_post_block_sampler_completion"
+
+        measurement_state = _tp1_post_block_measurement_state(
+            observation_watermark=observation_watermark,
+            horizon_end=measurement["horizon_end"],
+            observed_price_event_count=measurement["observed_price_event_count"],
+        )
+        if measurement["first_hit_label"] is not None:
+            outcome_label = measurement["first_hit_label"]
+        elif measurement_state == "pending_horizon":
+            outcome_label = "pending_horizon"
+        elif measurement_state == "pass":
+            outcome_label = f"no_hit_within_{horizon_min}m"
+        else:
+            outcome_label = measurement_state
+        rendered.append(
+            {
+                "horizon_min": horizon_min,
+                "horizon_sec": measurement["horizon_sec"],
+                "outcome_label": outcome_label,
+                "source_quality_state": measurement_state,
+                "observed_price_event_count": measurement["observed_price_event_count"],
+                "first_hit_ts": measurement["first_hit_ts"],
+                "first_hit_move_pct": (
+                    round(float(measurement["first_hit_move_pct"]), 4)
+                    if measurement["first_hit_move_pct"] is not None
+                    else None
+                ),
+                "first_hit_price_source": measurement["first_hit_price_source"],
+                "max_move_pct": (
+                    round(float(measurement["max_move_pct"]), 4)
+                    if measurement["max_move_pct"] is not None
+                    else None
+                ),
+                "min_move_pct": (
+                    round(float(measurement["min_move_pct"]), 4)
+                    if measurement["min_move_pct"] is not None
+                    else None
+                ),
+            }
+        )
+
+    late_recovery_horizon_min = None
+    if first_target_after_adverse_ts:
+        target_ts = _tp1_label_timestamp(first_target_after_adverse_ts)
+        if target_ts is not None:
+            late_recovery_horizon_min = next(
+                (
+                    horizon_min
+                    for horizon_min in TP1_POST_BLOCK_HORIZONS_MIN
+                    if target_ts <= measurements[horizon_min]["horizon_end"]
+                ),
+                None,
+            )
+    return {
+        "evaluation_horizons_min": list(TP1_POST_BLOCK_HORIZONS_MIN),
+        "horizon_measurements": rendered,
+        "late_recovery_after_adverse": {
+            "detected": bool(first_adverse_ts and first_target_after_adverse_ts),
+            "first_adverse_ts": first_adverse_ts,
+            "first_adverse_move_pct": (
+                round(first_adverse_move_pct, 4)
+                if first_adverse_move_pct is not None
+                else None
+            ),
+            "first_target_after_adverse_ts": first_target_after_adverse_ts,
+            "first_target_after_adverse_move_pct": (
+                round(first_target_after_adverse_move_pct, 4)
+                if first_target_after_adverse_move_pct is not None
+                else None
+            ),
+            "first_recovery_horizon_min": late_recovery_horizon_min,
+            "reason": (
+                "adverse_first_then_late_target_observed"
+                if first_adverse_ts and first_target_after_adverse_ts
+                else "not_observed"
+            ),
+        },
+    }
+
+
+def _tp1_primary_horizon_measurement(
+    multi_horizon: dict[str, Any], *, horizon_min: int = 20
+) -> dict[str, Any]:
+    for measurement in multi_horizon.get("horizon_measurements") or []:
+        if _safe_int(measurement.get("horizon_min")) == horizon_min:
+            return measurement
+    return {}
+
+
+def _tp1_counterfactual_multi_horizon_summary(
+    rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    coverage_counts: Counter[tuple[int, str]] = Counter()
+    outcome_counts: Counter[tuple[int, str]] = Counter()
+    late_recovery_count = 0
+    late_recovery_horizon_counts: Counter[str] = Counter()
+    for row in rows:
+        recovery = row.get("post_block_late_recovery_after_adverse") or {}
+        if recovery.get("detected"):
+            late_recovery_count += 1
+            late_recovery_horizon_counts[
+                str(recovery.get("first_recovery_horizon_min") or "unresolved")
+            ] += 1
+        for measurement in row.get("post_block_horizon_measurements") or []:
+            horizon_min = _safe_int(measurement.get("horizon_min"))
+            if horizon_min not in TP1_POST_BLOCK_HORIZONS_MIN:
+                continue
+            coverage_counts[
+                (horizon_min, str(measurement.get("source_quality_state") or "unknown"))
+            ] += 1
+            outcome_counts[
+                (horizon_min, str(measurement.get("outcome_label") or "unknown"))
+            ] += 1
+    return {
+        "rising_missed_tp1_counterfactual_multi_horizon_labeled_count": len(rows),
+        "rising_missed_tp1_counterfactual_multi_horizon_coverage_counts": [
+            {
+                "horizon_min": horizon_min,
+                "source_quality_state": source_quality_state,
+                "count": count,
+            }
+            for (horizon_min, source_quality_state), count in sorted(
+                coverage_counts.items()
+            )
+        ],
+        "rising_missed_tp1_counterfactual_multi_horizon_outcome_counts": [
+            {
+                "horizon_min": horizon_min,
+                "outcome_label": outcome_label,
+                "count": count,
+            }
+            for (horizon_min, outcome_label), count in sorted(outcome_counts.items())
+        ],
+        "rising_missed_tp1_counterfactual_late_recovery_after_adverse_count": (
+            late_recovery_count
+        ),
+        "rising_missed_tp1_counterfactual_late_recovery_horizon_counts": [
+            {"first_recovery_horizon_min": horizon, "count": count}
+            for horizon, count in sorted(late_recovery_horizon_counts.items())
+        ],
+    }
+
+
+def _tp1_counterfactual_multi_horizon_by_effective_venue(
+    rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Keep explicit KRX/NXT cohorts separate from unavailable venue provenance."""
+
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        venue = str(row.get("effective_venue") or "unknown")
+        grouped.setdefault(venue, []).append(row)
+    return [
+        {
+            "effective_venue": venue,
+            **_tp1_counterfactual_multi_horizon_summary(venue_rows),
+        }
+        for venue, venue_rows in sorted(grouped.items())
+    ]
+
+
 def _build_tp1_first_hit_labels(
     pipeline_path: Path,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -1789,6 +2172,26 @@ def _build_tp1_first_hit_labels(
             ):
                 label = "no_hit_within_20m"
 
+        multi_horizon = _tp1_post_block_horizon_measurements(
+            events,
+            start_index=index,
+            candidate_ts=candidate_ts,
+            code=code,
+            entry_price=entry_price,
+            observation_watermark=observation_watermark,
+            evaluation_id=evaluation_id,
+        )
+        primary_horizon = _tp1_primary_horizon_measurement(multi_horizon)
+        if primary_horizon:
+            label = str(primary_horizon.get("outcome_label") or label)
+            first_hit_ts = primary_horizon.get("first_hit_ts")
+            first_hit_move_pct = primary_horizon.get("first_hit_move_pct")
+            max_move_pct = primary_horizon.get("max_move_pct")
+            min_move_pct = primary_horizon.get("min_move_pct")
+            observed_event_count = _safe_int(
+                primary_horizon.get("observed_price_event_count")
+            )
+
         actual_costs_available = (
             actual_fee_krw is not None and actual_tax_krw is not None
         )
@@ -1823,6 +2226,12 @@ def _build_tp1_first_hit_labels(
                 "candidate_ts": candidate_ts_text,
                 "candidate_stage": candidate.get("stage"),
                 "candidate_lane": fields.get("rising_missed_tp1_candidate_lane"),
+                "effective_venue": _tp1_effective_venue(fields),
+                "market_session_bucket": fields.get(
+                    "rising_missed_market_session_bucket"
+                )
+                or fields.get("market_session_bucket")
+                or "unknown",
                 "evaluation_id": evaluation_id or None,
                 "entry_price": entry_price,
                 "entry_price_source": entry_price_source,
@@ -1840,6 +2249,14 @@ def _build_tp1_first_hit_labels(
                     round(min_move_pct, 4) if min_move_pct is not None else None
                 ),
                 "observed_price_event_count": observed_event_count,
+                "post_block_horizon_measurements": multi_horizon.get(
+                    "horizon_measurements"
+                )
+                or [],
+                "post_block_late_recovery_after_adverse": multi_horizon.get(
+                    "late_recovery_after_adverse"
+                )
+                or {},
                 "gross_target_pct": TP1_GROSS_TARGET_PCT,
                 "adverse_stop_pct": TP1_ADVERSE_STOP_PCT,
                 "horizon_sec": TP1_LABEL_HORIZON_SEC,
@@ -2093,6 +2510,26 @@ def _build_tp1_counterfactual_first_hit_labels(
             ):
                 label = "no_hit_within_20m"
 
+        multi_horizon = _tp1_post_block_horizon_measurements(
+            events,
+            start_index=index,
+            candidate_ts=candidate_ts,
+            code=code,
+            entry_price=entry_price,
+            observation_watermark=observation_watermark,
+            evaluation_id=evaluation_id,
+        )
+        primary_horizon = _tp1_primary_horizon_measurement(multi_horizon)
+        if primary_horizon:
+            label = str(primary_horizon.get("outcome_label") or label)
+            first_hit_ts = primary_horizon.get("first_hit_ts")
+            first_hit_move_pct = primary_horizon.get("first_hit_move_pct")
+            max_move_pct = primary_horizon.get("max_move_pct")
+            min_move_pct = primary_horizon.get("min_move_pct")
+            observed_event_count = _safe_int(
+                primary_horizon.get("observed_price_event_count")
+            )
+
         labels.append(
             {
                 "record_id": record_id,
@@ -2102,6 +2539,12 @@ def _build_tp1_counterfactual_first_hit_labels(
                 "evaluation_id": evaluation_id or None,
                 "selector_reason": fields.get("selector_reason"),
                 "selector_deferred": _boolish(fields.get("selector_deferred")),
+                "effective_venue": _tp1_effective_venue(fields),
+                "market_session_bucket": fields.get(
+                    "rising_missed_market_session_bucket"
+                )
+                or fields.get("market_session_bucket")
+                or "unknown",
                 "counterfactual_action": fields.get(
                     "rising_missed_tp1_counterfactual_submit_safety_action"
                 ),
@@ -2125,6 +2568,14 @@ def _build_tp1_counterfactual_first_hit_labels(
                     round(min_move_pct, 4) if min_move_pct is not None else None
                 ),
                 "observed_price_event_count": observed_event_count,
+                "post_block_horizon_measurements": multi_horizon.get(
+                    "horizon_measurements"
+                )
+                or [],
+                "post_block_late_recovery_after_adverse": multi_horizon.get(
+                    "late_recovery_after_adverse"
+                )
+                or {},
                 "gross_target_pct": TP1_GROSS_TARGET_PCT,
                 "adverse_stop_pct": TP1_ADVERSE_STOP_PCT,
                 "horizon_sec": TP1_LABEL_HORIZON_SEC,
@@ -2671,6 +3122,14 @@ def build_report(
     tp1_counterfactual_label_summary, tp1_counterfactual_label_rows = (
         _build_tp1_counterfactual_first_hit_labels(pipeline_path)
     )
+    tp1_counterfactual_multi_horizon_summary = (
+        _tp1_counterfactual_multi_horizon_summary(tp1_counterfactual_label_rows)
+    )
+    tp1_counterfactual_multi_horizon_by_effective_venue = (
+        _tp1_counterfactual_multi_horizon_by_effective_venue(
+            tp1_counterfactual_label_rows
+        )
+    )
     (
         nxt_session_summary,
         nxt_session_rows,
@@ -2859,6 +3318,22 @@ def build_report(
                 ),
                 "forbidden_uses": FORBIDDEN_USES,
             },
+            "rising_missed_tp1_counterfactual_multi_horizon_outcome": {
+                "metric_role": "source_only_missed_entry_horizon_observation",
+                "decision_authority": "source_only_tp1_counterfactual_multi_horizon",
+                "window_policy": (
+                    "selector_block_plus_1_3_5_10_20_30_60m_same_symbol_fresh_price_observations"
+                ),
+                "sample_floor": "2_post_block_price_observations_per_horizon",
+                "primary_decision_metric": (
+                    "rising_missed_tp1_counterfactual_late_recovery_after_adverse_count"
+                ),
+                "source_quality_gate": (
+                    "candidate_effective_price_same_symbol_post_block_price_and_"
+                    "explicit_effective_venue_provenance_for_venue_split"
+                ),
+                "forbidden_uses": FORBIDDEN_USES,
+            },
             "rising_missed_nxt_session_observation": {
                 "metric_role": "source_quality_gate",
                 "decision_authority": "observe_only_no_runtime_mutation",
@@ -2959,6 +3434,10 @@ def build_report(
             **tp1_label_summary,
             **tp1_counterfactual_summary,
             **tp1_counterfactual_label_summary,
+            **tp1_counterfactual_multi_horizon_summary,
+            "rising_missed_tp1_counterfactual_multi_horizon_by_effective_venue": (
+                tp1_counterfactual_multi_horizon_by_effective_venue
+            ),
             **nxt_session_summary,
             "code_improvement_order_count": len(code_improvement_orders),
         },
@@ -3071,6 +3550,14 @@ def write_outputs(
         f"{summary.get('rising_missed_tp1_counterfactual_risk_counts')}",
         f"- rising_missed_tp1_counterfactual_gross_label_counts: "
         f"{summary.get('rising_missed_tp1_counterfactual_gross_label_counts')}",
+        f"- rising_missed_tp1_counterfactual_multi_horizon_coverage_counts: "
+        f"{summary.get('rising_missed_tp1_counterfactual_multi_horizon_coverage_counts')}",
+        f"- rising_missed_tp1_counterfactual_multi_horizon_outcome_counts: "
+        f"{summary.get('rising_missed_tp1_counterfactual_multi_horizon_outcome_counts')}",
+        f"- rising_missed_tp1_counterfactual_late_recovery_after_adverse_count: "
+        f"{summary.get('rising_missed_tp1_counterfactual_late_recovery_after_adverse_count')}",
+        f"- rising_missed_tp1_counterfactual_multi_horizon_by_effective_venue: "
+        f"{summary.get('rising_missed_tp1_counterfactual_multi_horizon_by_effective_venue')}",
         f"- rising_missed_nxt_evaluation_count: "
         f"{summary.get('rising_missed_nxt_evaluation_count')}",
         f"- rising_missed_nxt_unique_symbol_count: "
@@ -3266,6 +3753,30 @@ def write_outputs(
             "spread={spread_ratio} true_ofi={true_ofi_ewma} pressure={pressure_ewma} "
             "depth={depth_imbalance_ewma} tick_accel={tick_acceleration} "
             "micro_state={micro_source_state}".format(**item)
+        )
+    lines.extend(["", "## TP1 Counterfactual Multi-horizon Coverage", ""])
+    for item in (
+        report.get("rising_missed_tp1_counterfactual_first_hit_label_rows") or []
+    ):
+        horizons = ";".join(
+            "{horizon_min}m:{outcome_label}/{source_quality_state}/n={observed_price_event_count}".format(
+                **measurement
+            )
+            for measurement in item.get("post_block_horizon_measurements") or []
+        )
+        recovery = item.get("post_block_late_recovery_after_adverse") or {}
+        lines.append(
+            "- ts={ts} code={code} name={name} horizons={horizons} "
+            "late_recovery_after_adverse={late_recovery} "
+            "recovery_horizon_min={recovery_horizon} reason={recovery_reason}".format(
+                ts=item.get("candidate_ts"),
+                code=item.get("stock_code"),
+                name=item.get("stock_name"),
+                horizons=horizons or "-",
+                late_recovery=recovery.get("detected", False),
+                recovery_horizon=recovery.get("first_recovery_horizon_min") or "-",
+                recovery_reason=recovery.get("reason") or "-",
+            )
         )
     lines.extend(
         [

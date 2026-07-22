@@ -788,12 +788,296 @@ def test_tp1_label_ignores_unfresh_decision_stage_current_price_before_submit_ma
     assert label["entry_price"] == 10000.0
     assert label["gross_first_hit_label"] == "pending_horizon"
     assert label["max_move_pct_within_20m"] == 0.5
-    assert label["observed_price_event_count"] == 3
+    # The effective candidate anchor is not a post-block price observation.
+    assert label["observed_price_event_count"] == 2
     blocker = report["submit_safety_blocker_rows"][0]
     assert blocker["block_price"] == 10050.0
     assert blocker["mfe_after_block_pct"] == -0.0995
     assert blocker["mae_after_block_pct"] == -0.0995
     assert blocker["post_block_price_event_count"] == 1
+
+
+def test_tp1_counterfactual_multi_horizon_marks_late_recovery_after_adverse(
+    tmp_path,
+):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-14.jsonl"
+    rows = [
+        _event(
+            811,
+            "000811",
+            "late-recovery",
+            "rising_missed_tp1_counterfactual_submit_safety",
+            {
+                "rising_missed_tp1_evaluation_id": "late-recovery-eval",
+                "rising_missed_tp1_effective_price": 10000,
+                "selector_reason": "rising_missed_tp1_insufficient_positive_support",
+                "selector_deferred": False,
+                "rising_missed_tp1_counterfactual_submit_safety_action": (
+                    "RECHECK_REQUIRED"
+                ),
+            },
+            emitted_at="2026-07-14T09:00:00+09:00",
+        ),
+        _event(
+            811,
+            "000811",
+            "late-recovery",
+            "holding_observation",
+            {"current_price_observed": 9900},
+            emitted_at="2026-07-14T09:00:30+09:00",
+            pipeline="HOLDING_PIPELINE",
+        ),
+        _event(
+            811,
+            "000811",
+            "late-recovery",
+            "holding_observation",
+            {"current_price_observed": 10000},
+            emitted_at="2026-07-14T09:05:00+09:00",
+            pipeline="HOLDING_PIPELINE",
+        ),
+        _event(
+            811,
+            "000811",
+            "late-recovery",
+            "holding_observation",
+            {"current_price_observed": 10130},
+            emitted_at="2026-07-14T09:25:00+09:00",
+            pipeline="HOLDING_PIPELINE",
+        ),
+        _event(
+            999,
+            "000999",
+            "watermark",
+            "holding_observation",
+            {"current_price_observed": 10000},
+            emitted_at="2026-07-14T10:01:00+09:00",
+            pipeline="HOLDING_PIPELINE",
+        ),
+    ]
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows), encoding="utf-8"
+    )
+
+    report = mod.build_report(
+        "2026-07-14", pipeline_path=pipeline_path, generated_at="fixed"
+    )
+
+    label = report["rising_missed_tp1_counterfactual_first_hit_label_rows"][0]
+    measurements = {
+        item["horizon_min"]: item for item in label["post_block_horizon_measurements"]
+    }
+    assert measurements[20]["outcome_label"] == "adverse_stop_first"
+    assert measurements[20]["source_quality_state"] == "pass"
+    assert measurements[30]["outcome_label"] == "adverse_stop_first"
+    assert measurements[30]["max_move_pct"] == 1.3
+    assert label["post_block_late_recovery_after_adverse"] == {
+        "detected": True,
+        "first_adverse_ts": "2026-07-14T09:00:30+09:00",
+        "first_adverse_move_pct": -1.0,
+        "first_target_after_adverse_ts": "2026-07-14T09:25:00+09:00",
+        "first_target_after_adverse_move_pct": 1.3,
+        "first_recovery_horizon_min": 30,
+        "reason": "adverse_first_then_late_target_observed",
+    }
+    summary = report["summary"]
+    assert (
+        summary["rising_missed_tp1_counterfactual_late_recovery_after_adverse_count"]
+        == 1
+    )
+
+
+def test_tp1_counterfactual_multi_horizon_marks_no_symbol_price_as_source_gap(
+    tmp_path,
+):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-14.jsonl"
+    rows = [
+        _event(
+            812,
+            "000812",
+            "coverage-gap",
+            "rising_missed_tp1_counterfactual_submit_safety",
+            {
+                "rising_missed_tp1_evaluation_id": "coverage-gap-eval",
+                "rising_missed_tp1_effective_price": 10000,
+                "rising_missed_effective_venue": "KRX",
+                "selector_reason": "rising_missed_tp1_lane_not_eligible",
+                "selector_deferred": False,
+                "rising_missed_tp1_counterfactual_submit_safety_action": (
+                    "RECHECK_REQUIRED"
+                ),
+            },
+            emitted_at="2026-07-14T09:00:00+09:00",
+        ),
+        _event(
+            999,
+            "000999",
+            "watermark",
+            "holding_observation",
+            {"current_price_observed": 10000},
+            emitted_at="2026-07-14T10:01:00+09:00",
+            pipeline="HOLDING_PIPELINE",
+        ),
+    ]
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows), encoding="utf-8"
+    )
+
+    report = mod.build_report(
+        "2026-07-14", pipeline_path=pipeline_path, generated_at="fixed"
+    )
+
+    label = report["rising_missed_tp1_counterfactual_first_hit_label_rows"][0]
+    measurement_20m = next(
+        item
+        for item in label["post_block_horizon_measurements"]
+        if item["horizon_min"] == 20
+    )
+    assert label["gross_first_hit_label"] == "source_gap_no_post_block_price"
+    assert label["effective_venue"] == "KRX"
+    assert measurement_20m["outcome_label"] == "source_gap_no_post_block_price"
+    assert measurement_20m["observed_price_event_count"] == 0
+    by_venue = {
+        item["effective_venue"]: item
+        for item in report["summary"][
+            "rising_missed_tp1_counterfactual_multi_horizon_by_effective_venue"
+        ]
+    }
+    assert (
+        by_venue["KRX"]["rising_missed_tp1_counterfactual_multi_horizon_labeled_count"]
+        == 1
+    )
+
+
+def test_tp1_counterfactual_multi_horizon_rejects_other_nxt_evaluation_samples(
+    tmp_path,
+):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-14.jsonl"
+    rows = [
+        _event(
+            814,
+            "000814",
+            "nxt-evaluation-isolation",
+            "rising_missed_tp1_counterfactual_submit_safety",
+            {
+                "rising_missed_tp1_evaluation_id": "candidate-evaluation",
+                "rising_missed_tp1_effective_price": 10000,
+                "selector_reason": "rising_missed_tp1_lane_not_eligible",
+                "selector_deferred": False,
+                "rising_missed_tp1_counterfactual_submit_safety_action": (
+                    "RECHECK_REQUIRED"
+                ),
+            },
+            emitted_at="2026-07-14T09:00:00+09:00",
+        ),
+        _event(
+            814,
+            "000814",
+            "nxt-evaluation-isolation",
+            "rising_missed_nxt_post_block_price_sample",
+            {
+                "rising_missed_tp1_evaluation_id": "other-evaluation",
+                "current_price_observed": 10130,
+                "rising_missed_nxt_post_block_fresh_sample": True,
+            },
+            emitted_at="2026-07-14T09:05:00+09:00",
+        ),
+        _event(
+            999,
+            "000999",
+            "watermark",
+            "holding_observation",
+            {"current_price_observed": 10000},
+            emitted_at="2026-07-14T10:01:00+09:00",
+            pipeline="HOLDING_PIPELINE",
+        ),
+    ]
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows), encoding="utf-8"
+    )
+
+    report = mod.build_report(
+        "2026-07-14", pipeline_path=pipeline_path, generated_at="fixed"
+    )
+
+    label = report["rising_missed_tp1_counterfactual_first_hit_label_rows"][0]
+    measurement_20m = next(
+        item
+        for item in label["post_block_horizon_measurements"]
+        if item["horizon_min"] == 20
+    )
+    assert measurement_20m["outcome_label"] == "source_gap_no_post_block_price"
+    assert measurement_20m["observed_price_event_count"] == 0
+
+
+def test_tp1_counterfactual_multi_horizon_does_not_call_target_first_a_recovery(
+    tmp_path,
+):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-14.jsonl"
+    rows = [
+        _event(
+            813,
+            "000813",
+            "target-first",
+            "rising_missed_tp1_counterfactual_submit_safety",
+            {
+                "rising_missed_tp1_evaluation_id": "target-first-eval",
+                "rising_missed_tp1_effective_price": 10000,
+                "selector_reason": "rising_missed_tp1_lane_not_eligible",
+                "selector_deferred": False,
+                "rising_missed_tp1_counterfactual_submit_safety_action": (
+                    "RECHECK_REQUIRED"
+                ),
+            },
+            emitted_at="2026-07-14T09:00:00+09:00",
+        ),
+        _event(
+            813,
+            "000813",
+            "target-first",
+            "holding_observation",
+            {"current_price_observed": 10130},
+            emitted_at="2026-07-14T09:01:00+09:00",
+            pipeline="HOLDING_PIPELINE",
+        ),
+        _event(
+            813,
+            "000813",
+            "target-first",
+            "holding_observation",
+            {"current_price_observed": 9900},
+            emitted_at="2026-07-14T09:05:00+09:00",
+            pipeline="HOLDING_PIPELINE",
+        ),
+        _event(
+            999,
+            "000999",
+            "watermark",
+            "holding_observation",
+            {"current_price_observed": 10000},
+            emitted_at="2026-07-14T10:01:00+09:00",
+            pipeline="HOLDING_PIPELINE",
+        ),
+    ]
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows), encoding="utf-8"
+    )
+
+    report = mod.build_report(
+        "2026-07-14", pipeline_path=pipeline_path, generated_at="fixed"
+    )
+
+    label = report["rising_missed_tp1_counterfactual_first_hit_label_rows"][0]
+    assert label["gross_first_hit_label"] == "gross_target_first"
+    assert label["post_block_late_recovery_after_adverse"] == {
+        "detected": False,
+        "first_adverse_ts": None,
+        "first_adverse_move_pct": None,
+        "first_target_after_adverse_ts": None,
+        "first_target_after_adverse_move_pct": None,
+        "first_recovery_horizon_min": None,
+        "reason": "not_observed",
+    }
 
 
 def test_tp1_counterfactual_submit_safety_is_aggregated_without_label_duplication(
