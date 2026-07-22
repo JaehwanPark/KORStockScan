@@ -179,6 +179,8 @@ from src.engine.risk.manual_control_exclusion import (
     ManualControlExclusionDecision,
     add_manual_control_exclusion_code,
     evaluate_manual_control_exclusion,
+    manual_control_auto_exclusion_source,
+    remove_auto_manual_control_exclusion_code,
 )
 from src.trading.entry.orderbook_stability_observer import ORDERBOOK_STABILITY_OBSERVER
 from src.trading.market.quote_consistency import (
@@ -31573,16 +31575,22 @@ def _finalize_entry_split_probe_partial_position(
 
 
 def _entry_bundle_filled_qty(stock) -> int:
+    explicit_filled = max(
+        0,
+        _safe_int((stock or {}).get("entry_filled_qty"), 0),
+    )
+    if explicit_filled > 0:
+        return explicit_filled
     pending_filled = sum(
         max(0, _safe_int((order or {}).get("filled_qty"), 0))
         for order in _iter_pending_entry_orders(stock)
         if isinstance(order, dict)
     )
+    if pending_filled > 0:
+        return pending_filled
     return max(
         0,
-        _safe_int((stock or {}).get("entry_filled_qty"), 0),
         _safe_int((stock or {}).get("buy_qty"), 0),
-        pending_filled,
     )
 
 
@@ -56297,6 +56305,107 @@ def _manual_control_exclusion_blocked(
     return True
 
 
+def _maybe_release_auto_manual_control_at_average_price(
+    stock,
+    code,
+    *,
+    ws_data: dict | None,
+    now_ts: float,
+) -> bool:
+    """Release file-backed auto exclusions after a fresh mark reaches average price."""
+    if str((stock or {}).get("status") or "").upper() != "HOLDING":
+        return False
+    if _has_sim_probe_provenance(stock):
+        return False
+    auto_source = manual_control_auto_exclusion_source(code)
+    if not auto_source:
+        return False
+
+    average_price = _safe_float((stock or {}).get("buy_price"), 0.0)
+    current_price = _safe_int((ws_data or {}).get("curr"), 0)
+    quote_stale = _boolish_true((ws_data or {}).get("quote_stale"))
+    last_ws_update_ts = _safe_float((ws_data or {}).get("last_ws_update_ts"), 0.0)
+    quote_age_sec = float(now_ts) - last_ws_update_ts if last_ws_update_ts > 0 else None
+    max_age_sec = _holding_exit_ws_max_age_sec()
+    fresh_quote = bool(
+        current_price > 0
+        and not quote_stale
+        and quote_age_sec is not None
+        and quote_age_sec >= 0
+        and quote_age_sec <= max_age_sec
+    )
+    if not fresh_quote or average_price <= 0 or current_price < average_price:
+        return False
+
+    removal = remove_auto_manual_control_exclusion_code(
+        code,
+        reason=(
+            f"average_price_reached source={auto_source} "
+            f"current={current_price} average={average_price:.2f}"
+        ),
+    )
+    remaining = evaluate_manual_control_exclusion(code)
+    released = bool(removal.removed and not remaining.excluded)
+    fields = {
+        "manual_control_auto_release_attempted": True,
+        "manual_control_auto_release_applied": released,
+        "manual_control_auto_release_source": auto_source,
+        "manual_control_auto_release_reason": removal.reason,
+        "manual_control_auto_release_remaining_excluded": bool(remaining.excluded),
+        "manual_control_auto_release_remaining_source": remaining.source or "-",
+        "average_price": round(float(average_price), 3),
+        "current_price": current_price,
+        "quote_age_sec": round(float(quote_age_sec), 3),
+        "quote_max_age_sec": round(float(max_age_sec), 3),
+        "metric_role": "operator_runtime_guard_release",
+        "decision_authority": "auto_manual_control_release_at_average_price",
+        "window_policy": "intraday_fresh_quote_same_holding",
+        "sample_floor": "not_applicable_operator_guard_release",
+        "primary_decision_metric": "current_price_vs_average_buy_price",
+        "source_quality_gate": "file_auto_provenance_and_fresh_ws_quote",
+        "runtime_effect": released,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": False,
+        "forbidden_uses": (
+            "manual_or_env_exclusion_release|stale_quote_release|average_price_mutation|"
+            "threshold_mutation|provider_change|broker_guard_bypass|hard_safety_relaxation"
+        ),
+    }
+    _log_holding_pipeline(
+        stock or {},
+        code,
+        (
+            "manual_control_auto_released_at_average_price"
+            if released
+            else "manual_control_auto_release_deferred"
+        ),
+        **fields,
+    )
+    if not released:
+        return False
+
+    _mutate_stock_state(
+        stock,
+        pop_fields=[
+            "manual_control_exclusion_blocked",
+            "manual_control_exclusion_reason",
+            "manual_control_exclusion_source",
+            "manual_control_auto_open_loss_blocked",
+            "manual_control_auto_scale_in_qty_blocked",
+            "manual_control_auto_hard_stop_blocked",
+            "manual_control_auto_exclusion_session",
+            "manual_control_auto_exclusion_profit_rate",
+            "manual_control_auto_exclusion_stop_line_pct",
+            "manual_control_auto_exclusion_source_stage",
+        ],
+    )
+    log_info(
+        f"[MANUAL_CONTROL_AUTO_RELEASE] {(stock or {}).get('name') or code}({code}) "
+        f"source={auto_source} current={current_price:,} average={average_price:,.2f}"
+    )
+    return True
+
+
 def _handoff_hard_stop_to_manual_control_if_enabled(
     stock,
     code,
@@ -58108,6 +58217,13 @@ def handle_holding_state(
     if now_dt is None:
         now_dt = datetime.now()
     now_t = now_dt.time()
+
+    _maybe_release_auto_manual_control_at_average_price(
+        stock,
+        code,
+        ws_data=ws_data,
+        now_ts=now_ts,
+    )
 
     if _retry_pending_hard_stop_manual_handoff(stock, code, now_ts=now_ts):
         return

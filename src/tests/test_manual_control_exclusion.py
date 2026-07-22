@@ -142,6 +142,203 @@ def test_manual_control_exclusion_remove_file_code_does_not_clear_env_override(
     assert decision.source == manual_control_exclusion.EXCLUDED_CODES_ENV
 
 
+def test_auto_exclusion_remove_only_deletes_supported_auto_rows(monkeypatch, tmp_path):
+    path = tmp_path / "manual_control_excluded_codes.txt"
+    path.write_text(
+        "005930 # auto_open_loss KRX_OPEN profit=-3.00%\n"
+        "000660 # operator manual control\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv(manual_control_exclusion.EXCLUDED_CODES_ENV, raising=False)
+    monkeypatch.setenv(manual_control_exclusion.EXCLUDED_CODES_FILE_ENV, str(path))
+
+    assert (
+        manual_control_exclusion.manual_control_auto_exclusion_source("005930")
+        == "auto_open_loss"
+    )
+    assert manual_control_exclusion.manual_control_auto_exclusion_source("000660") == ""
+
+    auto_result = manual_control_exclusion.remove_auto_manual_control_exclusion_code(
+        "005930", reason="average_price_reached"
+    )
+    manual_result = manual_control_exclusion.remove_auto_manual_control_exclusion_code(
+        "000660", reason="average_price_reached"
+    )
+
+    assert auto_result.removed is True
+    assert manual_result.removed is False
+    assert path.read_text(encoding="utf-8") == "000660 # operator manual control\n"
+
+
+def test_auto_exclusion_remove_does_not_override_env_guard(monkeypatch, tmp_path):
+    path = tmp_path / "manual_control_excluded_codes.txt"
+    path.write_text("005930 # auto_open_loss KRX_OPEN\n", encoding="utf-8")
+    monkeypatch.setenv(manual_control_exclusion.EXCLUDED_CODES_ENV, "005930")
+    monkeypatch.setenv(manual_control_exclusion.EXCLUDED_CODES_FILE_ENV, str(path))
+
+    result = manual_control_exclusion.remove_auto_manual_control_exclusion_code(
+        "005930", reason="average_price_reached"
+    )
+
+    assert result.removed is False
+    assert result.reason == "manual_control_auto_exclusion_env_override_active"
+    assert "005930" in path.read_text(encoding="utf-8")
+
+
+def test_auto_exclusion_releases_only_after_fresh_price_reaches_average(
+    monkeypatch, tmp_path
+):
+    path = tmp_path / "manual_control_excluded_codes.txt"
+    path.write_text(
+        "950160 # auto_open_loss KRX_OPEN profit=-29.72% stop=-5.00%\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv(manual_control_exclusion.EXCLUDED_CODES_ENV, raising=False)
+    monkeypatch.setenv(manual_control_exclusion.EXCLUDED_CODES_FILE_ENV, str(path))
+    monkeypatch.setattr(
+        sniper_state_handlers,
+        "_log_holding_pipeline",
+        lambda *args, **kwargs: None,
+    )
+    stock = {
+        "code": "950160",
+        "name": "TEST",
+        "status": "HOLDING",
+        "buy_price": 60_900,
+        "manual_control_exclusion_blocked": True,
+        "manual_control_auto_open_loss_blocked": True,
+    }
+
+    assert (
+        sniper_state_handlers._maybe_release_auto_manual_control_at_average_price(
+            stock,
+            "950160",
+            ws_data={"curr": 30_050, "last_ws_update_ts": 999.0},
+            now_ts=1_000.0,
+        )
+        is False
+    )
+    assert "950160" in path.read_text(encoding="utf-8")
+
+    assert (
+        sniper_state_handlers._maybe_release_auto_manual_control_at_average_price(
+            stock,
+            "950160",
+            ws_data={"curr": 60_900, "last_ws_update_ts": 999.0},
+            now_ts=1_000.0,
+        )
+        is True
+    )
+    assert path.read_text(encoding="utf-8") == ""
+    assert "manual_control_exclusion_blocked" not in stock
+    assert "manual_control_auto_open_loss_blocked" not in stock
+
+
+def test_auto_exclusion_does_not_release_on_stale_price(monkeypatch, tmp_path):
+    path = tmp_path / "manual_control_excluded_codes.txt"
+    path.write_text(
+        "005930 # auto_hard_stop_handoff source=holding\n", encoding="utf-8"
+    )
+    monkeypatch.delenv(manual_control_exclusion.EXCLUDED_CODES_ENV, raising=False)
+    monkeypatch.setenv(manual_control_exclusion.EXCLUDED_CODES_FILE_ENV, str(path))
+    stock = {
+        "code": "005930",
+        "status": "HOLDING",
+        "buy_price": 70_000,
+        "manual_control_auto_hard_stop_blocked": True,
+    }
+
+    assert (
+        sniper_state_handlers._maybe_release_auto_manual_control_at_average_price(
+            stock,
+            "005930",
+            ws_data={"curr": 71_000, "last_ws_update_ts": 900.0},
+            now_ts=1_000.0,
+        )
+        is False
+    )
+    assert "005930" in path.read_text(encoding="utf-8")
+
+
+def test_auto_exclusion_does_not_release_from_simulated_holding(monkeypatch, tmp_path):
+    path = tmp_path / "manual_control_excluded_codes.txt"
+    path.write_text("005930 # auto_open_loss KRX_OPEN\n", encoding="utf-8")
+    monkeypatch.delenv(manual_control_exclusion.EXCLUDED_CODES_ENV, raising=False)
+    monkeypatch.setenv(manual_control_exclusion.EXCLUDED_CODES_FILE_ENV, str(path))
+    stock = {
+        "code": "005930",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 70_000,
+        "simulation_book": sniper_state_handlers.SCALP_SIMULATION_BOOK,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+
+    assert (
+        sniper_state_handlers._maybe_release_auto_manual_control_at_average_price(
+            stock,
+            "005930",
+            ws_data={"curr": 71_000, "last_ws_update_ts": 999.0},
+            now_ts=1_000.0,
+        )
+        is False
+    )
+    assert "005930" in path.read_text(encoding="utf-8")
+
+
+def test_holding_handler_releases_auto_exclusion_before_block_guard(
+    monkeypatch, tmp_path
+):
+    path = tmp_path / "manual_control_excluded_codes.txt"
+    path.write_text("005930 # auto_open_loss KRX_OPEN\n", encoding="utf-8")
+    monkeypatch.delenv(manual_control_exclusion.EXCLUDED_CODES_ENV, raising=False)
+    monkeypatch.setenv(manual_control_exclusion.EXCLUDED_CODES_FILE_ENV, str(path))
+    stock = {
+        "code": "005930",
+        "name": "SAMSUNG",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 70_000,
+        "manual_control_exclusion_blocked": True,
+        "manual_control_auto_open_loss_blocked": True,
+    }
+    observed = {}
+
+    def stop_after_release(target, code, *, now_ts):
+        observed["excluded"] = (
+            manual_control_exclusion.evaluate_manual_control_exclusion(code).excluded
+        )
+        observed["in_memory_blocked"] = target.get(
+            "manual_control_auto_open_loss_blocked"
+        )
+        return True
+
+    monkeypatch.setattr(
+        sniper_state_handlers,
+        "_retry_pending_hard_stop_manual_handoff",
+        stop_after_release,
+    )
+    monkeypatch.setattr(
+        sniper_state_handlers,
+        "_log_holding_pipeline",
+        lambda *args, **kwargs: None,
+    )
+
+    sniper_state_handlers.handle_holding_state(
+        stock,
+        "005930",
+        {"curr": 70_000, "last_ws_update_ts": 999.0},
+        admin_id="admin",
+        market_regime="BULL",
+        now_ts=1_000.0,
+        now_dt=datetime(2026, 7, 22, 10, 0),
+    )
+
+    assert observed == {"excluded": False, "in_memory_blocked": None}
+    assert path.read_text(encoding="utf-8") == ""
+
+
 def test_manual_control_exclusion_empty_config_does_not_block(monkeypatch, tmp_path):
     monkeypatch.delenv(manual_control_exclusion.EXCLUDED_CODES_ENV, raising=False)
     monkeypatch.setenv(

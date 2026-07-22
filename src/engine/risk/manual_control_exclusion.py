@@ -23,6 +23,13 @@ DEFAULT_EXCLUDED_CODES_FILE = DATA_DIR / "config" / "manual_control_excluded_cod
 
 _CODE_TOKEN_RE = re.compile(r"[,\s;]+")
 _COMMENT_RE = re.compile(r"(?:#|//).*$")
+_AUTO_EXCLUSION_SOURCES = frozenset(
+    {
+        "auto_open_loss",
+        "auto_scale_in_qty_guard_block",
+        "auto_hard_stop_handoff",
+    }
+)
 _FILE_CACHE = {
     "path": None,
     "mtime_ns": None,
@@ -123,6 +130,16 @@ def _split_line_comment(line: str) -> tuple[str, str]:
     return line[: match.start()], line[match.start() :]
 
 
+def _auto_exclusion_source_from_comment(comment: object) -> str:
+    text = str(comment or "").strip()
+    if text.startswith("#"):
+        text = text[1:].strip()
+    elif text.startswith("//"):
+        text = text[2:].strip()
+    source = text.split(maxsplit=1)[0].lower() if text else ""
+    return source if source in _AUTO_EXCLUSION_SOURCES else ""
+
+
 def _load_file_codes(path: Path) -> frozenset[str]:
     codes: set[str] = set()
     try:
@@ -156,6 +173,27 @@ def _file_codes() -> frozenset[str]:
 
 def configured_manual_control_exclusion_codes() -> frozenset[str]:
     return frozenset((*_file_codes(), *_env_codes()))
+
+
+def manual_control_auto_exclusion_source(code: object) -> str:
+    """Return the file-backed auto registration source for a symbol, if any."""
+    norm_code = normalize_manual_control_exclusion_code(code)
+    if not norm_code or norm_code in _env_codes():
+        return ""
+    path = _file_path()
+    with _WRITE_LOCK:
+        try:
+            original_text = path.read_text(encoding="utf-8")
+        except OSError:
+            return ""
+    for line in original_text.splitlines():
+        uncommented, comment = _split_line_comment(line)
+        if norm_code not in set(_split_codes(uncommented)):
+            continue
+        auto_source = _auto_exclusion_source_from_comment(comment)
+        if auto_source:
+            return auto_source
+    return ""
 
 
 def evaluate_manual_control_exclusion(code: object) -> ManualControlExclusionDecision:
@@ -299,5 +337,97 @@ def remove_manual_control_exclusion_code(
         True,
         norm_code,
         f"manual_control_exclusion_removed{f':{suffix}' if suffix else ''}",
+        str(path),
+    )
+
+
+def remove_auto_manual_control_exclusion_code(
+    code: object,
+    *,
+    reason: object = "",
+) -> ManualControlExclusionRemoval:
+    """Remove only file rows carrying a supported ``auto_*`` provenance comment."""
+    norm_code = normalize_manual_control_exclusion_code(code)
+    if not norm_code:
+        return ManualControlExclusionRemoval(
+            False,
+            "",
+            "invalid_manual_control_exclusion_code",
+            "",
+        )
+    if norm_code in _env_codes():
+        return ManualControlExclusionRemoval(
+            False,
+            norm_code,
+            "manual_control_auto_exclusion_env_override_active",
+            EXCLUDED_CODES_ENV,
+        )
+
+    path = _file_path()
+    removed_sources: set[str] = set()
+    with _WRITE_LOCK:
+        try:
+            original_text = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return ManualControlExclusionRemoval(
+                False,
+                norm_code,
+                "manual_control_exclusion_file_missing",
+                str(path),
+            )
+        except OSError as exc:
+            return ManualControlExclusionRemoval(
+                False,
+                norm_code,
+                f"manual_control_exclusion_remove_failed:{exc.__class__.__name__}",
+                str(path),
+            )
+
+        output_lines: list[str] = []
+        for line in original_text.splitlines():
+            uncommented, comment = _split_line_comment(line)
+            codes = list(_split_codes(uncommented))
+            auto_source = _auto_exclusion_source_from_comment(comment)
+            if norm_code not in codes or not auto_source:
+                output_lines.append(line)
+                continue
+
+            removed_sources.add(auto_source)
+            remaining = [item for item in codes if item != norm_code]
+            if remaining:
+                rebuilt = ",".join(remaining)
+                if comment:
+                    rebuilt = f"{rebuilt} {comment.strip()}"
+                output_lines.append(rebuilt)
+
+        if not removed_sources:
+            return ManualControlExclusionRemoval(
+                False,
+                norm_code,
+                "manual_control_auto_exclusion_code_not_in_file",
+                str(path),
+            )
+
+        try:
+            suffix = "\n" if output_lines and original_text.endswith("\n") else ""
+            path.write_text("\n".join(output_lines) + suffix, encoding="utf-8")
+        except OSError as exc:
+            return ManualControlExclusionRemoval(
+                False,
+                norm_code,
+                f"manual_control_exclusion_remove_failed:{exc.__class__.__name__}",
+                str(path),
+            )
+        _invalidate_file_cache()
+
+    reason_suffix = _sanitize_append_comment(reason)
+    source_suffix = ",".join(sorted(removed_sources))
+    return ManualControlExclusionRemoval(
+        True,
+        norm_code,
+        (
+            f"manual_control_auto_exclusion_removed:{source_suffix}"
+            f"{f':{reason_suffix}' if reason_suffix else ''}"
+        ),
         str(path),
     )
