@@ -153,7 +153,7 @@ Bucket/dimension tuning의 primary evidence는 `sim_probe_lifecycle_ev`다. `rea
 15. `threshold_cycle_ev` pre-pass를 생성해 workorder source로 사용한다.
 16. `build_code_improvement_workorder`가 pattern lab currentness audit를 포함한 source bundle에서 code improvement JSON/Markdown을 생성한다.
 17. `threshold_cycle_ev` post-pass를 다시 생성해 workorder summary와 source-quality blocker를 refresh한다.
-18. `pattern_lab_propagation_audit`가 lab automation -> currentness -> workorder -> threshold EV -> runtime summary source link를 점검한다. 같은 wrapper에서는 runtime summary가 아직 생성 전일 수 있으므로 propagation audit 결과를 `threshold_cycle_ev`에 한 번 더 refresh한 뒤 runtime summary가 소비한다.
+18. `pattern_lab_propagation_audit`가 lab automation -> currentness -> workorder -> threshold EV -> runtime summary source link를 점검한다. audit 생성 직후 `pattern_lab_ai_review --refresh-source-provenance`가 기존 parsed OpenAI 응답과 provider provenance를 그대로 보존한 채 late-bound propagation/workorder/EV source만 재결합하며 새 provider call은 만들지 않는다. 그 뒤 propagation audit와 refreshed AI review를 `threshold_cycle_ev`에 한 번 더 반영하고 runtime summary가 소비한다. 기존 AI review provider가 없거나 parsed 상태가 아니면 refresh는 fail-closed한다.
 19. `runtime_approval_summary`는 refreshed EV/workorder/audit가 닫힌 뒤에만 실행한다.
 20. `runtime_apply_gap_audit`가 runtime uptake gap을 닫고, 이어 `key_lineage_ledger -> conversion_lane`이 active priority/hypothesis/bucket key continuity와 전환 blocker rank를 생성한다.
 21. conversion lane 생성 후 `build_code_improvement_workorder`를 한 번 갱신해 `conversion_impact_rank`, `conversion_candidate_id`, `blocks_bounded_real_canary`, `acceptance_test`를 order에 반영한다.

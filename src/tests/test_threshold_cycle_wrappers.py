@@ -320,6 +320,7 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
         'run_threshold_cycle_ev_and_wait "post_workorder_refresh"'
     )
     propagation_idx = script.index("src.engine.pattern_lab_propagation_audit")
+    ai_review_source_refresh_idx = script.index("--refresh-source-provenance")
     post_propagation_ev_idx = script.index(
         'run_threshold_cycle_ev_and_wait "post_propagation_audit_refresh"'
     )
@@ -376,6 +377,7 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
         < workorder_idx
         < post_ev_idx
         < propagation_idx
+        < ai_review_source_refresh_idx
         < post_propagation_ev_idx
         < runtime_summary_idx
         < runtime_gap_idx

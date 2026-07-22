@@ -3149,25 +3149,100 @@ def test_pattern_lab_ai_review_marks_report_only_source_quality_reviews_as_imple
 
 
 def test_pattern_lab_ai_review_keeps_sample_warning_followup_visible():
-    status, provenance = mod._implementation_marker_for_conclusion(
+    for review_id in (
+        "scalp_entry_adm_source_quality",
+        "scalp_entry_adm_source_quality_gate",
+    ):
+        status, provenance = mod._implementation_marker_for_conclusion(
+            {
+                "review_id": review_id,
+                "final_state": "source_quality_gap",
+                "final_decision": "block_runtime_use",
+                "explicit_gap_type": "source_quality_gap",
+                "auditor_pass": False,
+                "source_paths": ["/tmp/scalp_entry_action_decision_matrix.json"],
+            },
+            {},
+        )
+
+        assert status == "implemented_but_waiting_sample"
+        assert provenance["normalized_review_id"] == review_id
+        assert provenance["root_cause_closure_status_hint"] == (
+            "handoff_closed_root_cause_open"
+        )
+        assert provenance["runtime_effect"] is False
+        assert provenance["allowed_runtime_apply"] is False
+
+
+def test_pattern_lab_ai_review_refreshes_late_bound_sources_without_provider_call(
+    tmp_path,
+    monkeypatch,
+):
+    report_dir = tmp_path / "data" / "report"
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    existing_path = (
+        report_dir / "pattern_lab_ai_review" / "pattern_lab_ai_review_2026-07-22.json"
+    )
+    _write_json(
+        existing_path,
         {
-            "review_id": "scalp_entry_adm_source_quality",
-            "final_state": "source_quality_gap",
-            "final_decision": "block_runtime_use",
-            "explicit_gap_type": "source_quality_gap",
-            "auditor_pass": False,
-            "source_paths": ["/tmp/scalp_entry_action_decision_matrix.json"],
+            "generated_at": "2026-07-22T20:56:49+09:00",
+            "summary": {"fallback_used": False},
+            "ai_two_pass_review": {
+                "provider": "openai",
+                "status": "parsed",
+                "provider_status": {
+                    "provider": "openai",
+                    "status": "success",
+                    "model": "gpt-5.4-mini",
+                    "new_provider_call": True,
+                },
+                "interpretation": {"review_items": []},
+                "audit": {
+                    "status": "correction_required",
+                    "issues": ["missing_pattern_lab_propagation_audit_source"],
+                    "forbidden_use_violations": [],
+                },
+                "final_conclusions": [
+                    {
+                        "review_id": "pattern_lab_propagation_audit_missing",
+                        "domain": "cross_domain",
+                        "final_state": "ai_review_gap",
+                        "final_decision": "block_runtime_use",
+                        "reason": "Propagation audit source was missing.",
+                        "explicit_gap_type": "ai_review_gap",
+                        "auditor_pass": False,
+                        "source_paths": [],
+                    }
+                ],
+            },
         },
-        {},
+    )
+    _write_json(
+        report_dir
+        / "pattern_lab_propagation_audit"
+        / "pattern_lab_propagation_audit_2026-07-22.json",
+        {
+            "status": "warning",
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "summary": {"warning_count": 2},
+        },
     )
 
-    assert status == "implemented_but_waiting_sample"
-    assert provenance["normalized_review_id"] == "scalp_entry_adm_source_quality"
-    assert provenance["root_cause_closure_status_hint"] == (
-        "handoff_closed_root_cause_open"
-    )
-    assert provenance["runtime_effect"] is False
-    assert provenance["allowed_runtime_apply"] is False
+    def _unexpected_provider_call(*args, **kwargs):
+        raise AssertionError("source provenance refresh must not call the provider")
+
+    monkeypatch.setattr(mod, "_call_openai_ai_review", _unexpected_provider_call)
+
+    report = mod.refresh_pattern_lab_ai_review_source_provenance("2026-07-22")
+
+    assert report["summary"]["provider"] == "openai"
+    assert report["summary"]["model"] == "gpt-5.4-mini"
+    assert report["source_provenance_refresh"]["new_provider_call"] is False
+    provider_status = report["ai_two_pass_review"]["provider_status"]
+    assert provider_status["status"] == "success"
+    assert provider_status["source_provenance_refresh"]["provider"] == "openai"
 
 
 def test_pattern_lab_ai_review_marks_present_propagation_audit_missing_review_as_implemented():

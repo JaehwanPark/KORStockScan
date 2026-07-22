@@ -1590,10 +1590,22 @@ if [ "$RUN_PATTERN_LAB_PROPAGATION_AUDIT" = "true" ] || [ "$RUN_PATTERN_LAB_PROP
       "$PROJECT_DIR/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_${TARGET_DATE}.json" \
       "$PROJECT_DIR/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_${TARGET_DATE}.md" \
       "pattern_lab_propagation_audit"
-    run_threshold_cycle_ev_and_wait "post_propagation_audit_refresh" \
-      "$PROJECT_DIR/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_${TARGET_DATE}.json" \
-      "$PROJECT_DIR/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_${TARGET_DATE}.md"
   fi
+  if [ "$RUN_PATTERN_LAB_AI_REVIEW" = "true" ] || [ "$RUN_PATTERN_LAB_AI_REVIEW" = "1" ]; then
+    wait_for_postclose_resources "pattern_lab_ai_review_source_provenance_refresh"
+    run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.pattern_lab_ai_review \
+      --date "$TARGET_DATE" \
+      --refresh-source-provenance
+    wait_for_report_artifact \
+      "$PROJECT_DIR/data/report/pattern_lab_ai_review/pattern_lab_ai_review_${TARGET_DATE}.json" \
+      "$PROJECT_DIR/data/report/pattern_lab_ai_review/pattern_lab_ai_review_${TARGET_DATE}.md" \
+      "pattern_lab_ai_review_source_provenance_refresh"
+  fi
+  run_threshold_cycle_ev_and_wait "post_propagation_audit_refresh" \
+    "$PROJECT_DIR/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_${TARGET_DATE}.json" \
+    "$PROJECT_DIR/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_${TARGET_DATE}.md" \
+    "$PROJECT_DIR/data/report/pattern_lab_ai_review/pattern_lab_ai_review_${TARGET_DATE}.json" \
+    "$PROJECT_DIR/data/report/pattern_lab_ai_review/pattern_lab_ai_review_${TARGET_DATE}.md"
 fi
 wait_for_postclose_resources "runtime_approval_summary"
 run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.runtime_approval_summary --date "$TARGET_DATE"

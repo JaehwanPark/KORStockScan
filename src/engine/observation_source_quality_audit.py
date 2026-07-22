@@ -2449,6 +2449,8 @@ def _reviewed_unknown_reason_for_stage_field(
             "ai_confirmed_terminal_no_budget",
             "ai_holding_review",
             "blocked_ai_score",
+            "entry_ai_price_canary_applied",
+            "entry_ai_price_canary_fallback",
             "order_bundle_submitted",
             "pre_submit_entry_ai_authority_guard_block",
             "rising_missed_tick_absolute_throughput_relief_applied",
@@ -2468,6 +2470,82 @@ def _reviewed_unknown_reason_for_stage_field(
                 "micro_vwap",
                 "minute_candle",
             }
+        )
+
+    def _is_reviewed_sizing_unknown_venue_fallback() -> bool:
+        if str(key or "") not in {"tier_reason", "venue"}:
+            return False
+        if _field_text("tier_reason") != "unknown_venue_fallback":
+            return False
+        if _field_text("venue").upper() != "UNKNOWN":
+            return False
+        return (
+            _field_text("formula_version") == "entry_type_5stage_cap25_v1"
+            and _field_text("tier") == "1"
+            and _field_text("reference_time") not in {"", "-", "missing"}
+        )
+
+    def _is_reviewed_nxt_post_block_source_gap() -> bool:
+        if str(key or "") not in {
+            "rising_missed_nxt_post_block_selector_reason",
+            "rising_missed_nxt_post_block_source_block_reason",
+        }:
+            return False
+        if _field_text("decision_authority") != (
+            "source_only_nxt_post_block_price_observation"
+        ):
+            return False
+        if not _is_falseish("runtime_effect") or not _is_falseish(
+            "actual_order_submitted"
+        ):
+            return False
+        if not _is_trueish("broker_order_forbidden"):
+            return False
+        source_reason = _field_text("rising_missed_nxt_post_block_source_block_reason")
+        selector_reason = _field_text("rising_missed_nxt_post_block_selector_reason")
+        return source_reason == "source_quality_unknown" and selector_reason.endswith(
+            ":source_quality_unknown"
+        )
+
+    def _is_reviewed_post_probe_direction_source_gap() -> bool:
+        if str(key or "") != "post_probe_direction_state":
+            return False
+        group_counts = (
+            _field_text("post_probe_direction_group_count"),
+            _field_text("post_probe_directional_group_count"),
+        )
+        return (
+            str(value or "").strip().upper() == "UNKNOWN"
+            and _field_text("decision_authority")
+            == "dynamic_entry_price_resolver_p1_post_probe"
+            and _field_text("post_probe_continuation_action") == "DEFER"
+            and _field_text("post_probe_direction_reason")
+            == "post_probe_direction_source_gap"
+            and group_counts in {("1", "1"), ("2", "1")}
+            and _is_falseish("allowed_runtime_apply")
+        )
+
+    def _is_reviewed_quote_recovery_large_sell_not_available() -> bool:
+        if (
+            stage != "scalp_trailing_continuation_recheck"
+            or str(key or "") != "quote_recovery_large_sell_state"
+        ):
+            return False
+        return (
+            str(value or "").strip().lower() == "unknown"
+            and _field_text("quote_recovery_fetch_state") in {"ok", "not_requested"}
+            and _is_falseish("reversal_feature_context_usable")
+            and _is_falseish("large_sell_print_detected")
+            and _is_falseish("micro_source_trusted_ws")
+            and _is_falseish("actual_order_submitted")
+            and _is_trueish("broker_order_forbidden")
+            and (
+                _field_text("quote_recovery_fetch_state") == "ok"
+                or (
+                    _is_falseish("quote_recovery_candidate")
+                    and _is_falseish("quote_recovery_eligible")
+                )
+            )
         )
 
     def _is_reviewed_shallow_stale_not_available() -> bool:
@@ -2580,7 +2658,10 @@ def _reviewed_unknown_reason_for_stage_field(
             and _field_text("actual_order_submitted").lower() in {"false", "0", "no"}
             and _field_text("broker_order_forbidden").lower() in {"true", "1", "yes"}
             and _field_text("source_quality_gate")
-            == "fresh_absolute_0b_receive_ts_and_actual_nxt_item_route"
+            in {
+                "fresh_absolute_0b_receive_ts_and_actual_nxt_item_route",
+                "fresh_absolute_nxt_ws_route_or_bounded_ka10004_receive_observation",
+            }
         )
 
     def _is_reviewed_entry_adm_bucket_provenance() -> bool:
@@ -2633,6 +2714,14 @@ def _reviewed_unknown_reason_for_stage_field(
         return "reviewed_holding_score_preflight_not_available"
     if _is_reviewed_entry_order_flow_not_available():
         return "reviewed_entry_order_flow_not_available"
+    if _is_reviewed_sizing_unknown_venue_fallback():
+        return "reviewed_explicit_sizing_unknown_venue_fallback"
+    if _is_reviewed_nxt_post_block_source_gap():
+        return "reviewed_nxt_post_block_source_gap_provenance"
+    if _is_reviewed_post_probe_direction_source_gap():
+        return "reviewed_post_probe_direction_source_gap"
+    if _is_reviewed_quote_recovery_large_sell_not_available():
+        return "reviewed_quote_recovery_large_sell_not_available"
     if _is_reviewed_shallow_stale_not_available():
         return "reviewed_shallow_stale_flag_not_available"
     if _is_reviewed_first_touch_quote_stale_not_available():

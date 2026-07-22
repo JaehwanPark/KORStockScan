@@ -684,6 +684,7 @@ def _is_resolved_classified_source_quality_warning_gap(
         )
     if review_id in {
         "scalp_entry_adm_sample_floor",
+        "scalp_entry_adm_source_quality_gate",
         "scalping_scalp_entry_adm_status_warning",
         "scalp_entry_adm_status_warning",
         "scalping_pattern_lab_automation",
@@ -738,7 +739,11 @@ def _is_resolved_classified_source_quality_warning_gap(
             source.get("runtime_effect") is False
             and source.get("allowed_runtime_apply") is False
             and (
-                review_id != "scalp_entry_adm_sample_floor"
+                review_id
+                not in {
+                    "scalp_entry_adm_sample_floor",
+                    "scalp_entry_adm_source_quality_gate",
+                }
                 or exact_sample_floor_contract_ready
             )
             and source_only_warning
@@ -1883,7 +1888,7 @@ def _implementation_marker_for_conclusion(
         "threshold_cycle_ev",
     }
     generic_source_quality_followup = normalized_review_id.endswith(
-        ("_source_quality", "_warnings")
+        ("_source_quality", "_source_quality_gate", "_warnings")
     )
     if (
         normalized_review_id in source_quality_review_ids
@@ -2398,6 +2403,85 @@ def build_pattern_lab_ai_review_report(
     return report
 
 
+def refresh_pattern_lab_ai_review_source_provenance(
+    target_date: str,
+) -> dict[str, Any]:
+    """Reconcile late-bound sources without issuing a second provider call."""
+
+    json_path, md_path = report_paths(str(target_date).strip())
+    existing = _load_json(json_path)
+    review = (
+        existing.get("ai_two_pass_review")
+        if isinstance(existing.get("ai_two_pass_review"), dict)
+        else {}
+    )
+    provider = str(review.get("provider") or "").strip().lower()
+    if provider in {"", "none", "off", "false", "0"}:
+        raise RuntimeError("existing_pattern_lab_ai_review_provider_missing")
+    if str(review.get("status") or "") != "parsed":
+        raise RuntimeError("existing_pattern_lab_ai_review_not_parsed")
+    raw_response = {
+        "schema_version": 1,
+        "interpretation": review.get("interpretation") or {},
+        "audit": review.get("audit") or {},
+        "final_conclusions": review.get("final_conclusions") or [],
+    }
+    original_provider_status = (
+        dict(review.get("provider_status"))
+        if isinstance(review.get("provider_status"), dict)
+        else {}
+    )
+    original_generated_at = existing.get("generated_at")
+    existing_summary = (
+        existing.get("summary") if isinstance(existing.get("summary"), dict) else {}
+    )
+    report = build_pattern_lab_ai_review_report(
+        target_date,
+        provider=provider,
+        ai_raw_response=raw_response,
+    )
+    refreshed_at = datetime.now().astimezone().isoformat(timespec="seconds")
+    refresh_provenance = {
+        "status": "refreshed_from_existing_parsed_provider_response",
+        "provider": provider,
+        "new_provider_call": False,
+        "original_generated_at": original_generated_at,
+        "refreshed_at": refreshed_at,
+        "late_bound_sources": [
+            "threshold_cycle_ev",
+            "code_improvement_workorder",
+            "pattern_lab_propagation_audit",
+        ],
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+    }
+    refreshed_review = (
+        report.get("ai_two_pass_review")
+        if isinstance(report.get("ai_two_pass_review"), dict)
+        else {}
+    )
+    refreshed_review["provider_status"] = {
+        **original_provider_status,
+        "provider": provider,
+        "last_operation_new_provider_call": False,
+        "source_provenance_refresh": refresh_provenance,
+    }
+    refreshed_review["source_provenance_refresh"] = refresh_provenance
+    report["ai_two_pass_review"] = refreshed_review
+    report["source_provenance_refresh"] = refresh_provenance
+    summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+    summary["provider"] = provider
+    summary["model"] = original_provider_status.get("model") or summary.get("model")
+    summary["fallback_used"] = bool(existing_summary.get("fallback_used"))
+    summary["source_provenance_refresh_status"] = refresh_provenance["status"]
+    report["summary"] = summary
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    md_path.write_text(render_markdown(report), encoding="utf-8")
+    return report
+
+
 def render_markdown(report: dict[str, Any]) -> str:
     summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
     review = (
@@ -2472,8 +2556,17 @@ def main(argv: list[str] | None = None) -> int:
         ),
         choices=["openai", "none", "off", "false", "0"],
     )
+    parser.add_argument(
+        "--refresh-source-provenance",
+        action="store_true",
+        help="Reuse the existing parsed provider response and reconcile late-bound sources.",
+    )
     args = parser.parse_args(argv)
-    report = build_pattern_lab_ai_review_report(args.date, provider=args.provider)
+    report = (
+        refresh_pattern_lab_ai_review_source_provenance(args.date)
+        if args.refresh_source_provenance
+        else build_pattern_lab_ai_review_report(args.date, provider=args.provider)
+    )
     json_path, md_path = report_paths(args.date)
     print(
         json.dumps(

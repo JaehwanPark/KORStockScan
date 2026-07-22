@@ -1717,6 +1717,187 @@ def test_observation_source_quality_audit_reviews_20260713_unknown_provenance_ga
     )
 
 
+def test_observation_source_quality_audit_reviews_20260722_explicit_unknown_provenance(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-07-22",
+        [
+            _event(
+                "budget_pass",
+                {
+                    "formula_version": "entry_type_5stage_cap25_v1",
+                    "tier": 1,
+                    "tier_reason": "unknown_venue_fallback",
+                    "venue": "UNKNOWN",
+                    "reference_time": "2026-07-22T10:00:00+09:00",
+                },
+                record_id=1,
+            ),
+            _event(
+                "rising_missed_nxt_post_block_price_sample",
+                {
+                    "metric_role": "source_quality_gate",
+                    "decision_authority": "source_only_nxt_post_block_price_observation",
+                    "runtime_effect": False,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "source_quality_gate": "fresh_absolute_nxt_ws_route_or_bounded_ka10004_receive_observation",
+                    "rising_missed_nxt_post_block_selector_reason": "downstream_block:real_weak_ai_micro_entry_block:source_quality_unknown",
+                    "rising_missed_nxt_post_block_source_block_reason": "source_quality_unknown",
+                    "rising_missed_nxt_post_block_ws_0b_route": "unknown",
+                    "rising_missed_nxt_post_block_ws_0d_route": "unknown",
+                },
+                record_id=2,
+            ),
+            _event(
+                "probe_continuation_deferred",
+                {
+                    "decision_authority": "dynamic_entry_price_resolver_p1_post_probe",
+                    "post_probe_direction_state": "UNKNOWN",
+                    "post_probe_continuation_action": "DEFER",
+                    "post_probe_direction_reason": "post_probe_direction_source_gap",
+                    "post_probe_direction_group_count": 1,
+                    "post_probe_directional_group_count": 1,
+                    "allowed_runtime_apply": False,
+                },
+                record_id=3,
+            ),
+            _event(
+                "scalp_trailing_continuation_recheck",
+                {
+                    "quote_recovery_large_sell_state": "unknown",
+                    "quote_recovery_fetch_state": "not_requested",
+                    "quote_recovery_candidate": False,
+                    "quote_recovery_eligible": False,
+                    "reversal_feature_context_usable": False,
+                    "large_sell_print_detected": False,
+                    "micro_source_trusted_ws": False,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                },
+                record_id=4,
+            ),
+            _event(
+                "entry_ai_price_canary_applied",
+                {
+                    "entry_order_flow_status": "unknown",
+                    "entry_context_quality": "partial",
+                    "entry_context_missing_features": "order_flow_pressure",
+                },
+                record_id=5,
+            ),
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-07-22")
+
+    assert report["unknown_token_findings"] == []
+    reviewed = {
+        item["stage"]: {
+            field["field"]: field["reviewed_reason"] for field in item["fields"]
+        }
+        for item in report["reviewed_unknown_token_findings"]
+    }
+    assert reviewed["budget_pass"]["venue"] == (
+        "reviewed_explicit_sizing_unknown_venue_fallback"
+    )
+    assert (
+        reviewed["rising_missed_nxt_post_block_price_sample"][
+            "rising_missed_nxt_post_block_source_block_reason"
+        ]
+        == "reviewed_nxt_post_block_source_gap_provenance"
+    )
+    assert reviewed["probe_continuation_deferred"]["post_probe_direction_state"] == (
+        "reviewed_post_probe_direction_source_gap"
+    )
+    assert (
+        reviewed["scalp_trailing_continuation_recheck"][
+            "quote_recovery_large_sell_state"
+        ]
+        == "reviewed_quote_recovery_large_sell_not_available"
+    )
+    assert reviewed["entry_ai_price_canary_applied"]["entry_order_flow_status"] == (
+        "reviewed_entry_order_flow_not_available"
+    )
+
+
+def test_observation_source_quality_audit_does_not_review_unproven_unknown_provenance(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-07-22",
+        [
+            _event(
+                "budget_pass",
+                {
+                    "formula_version": "entry_type_5stage_cap25_v1",
+                    "tier": 1,
+                    "tier_reason": "unknown_venue_fallback",
+                    "venue": "UNKNOWN",
+                    "reference_time": "missing",
+                },
+                record_id=1,
+            ),
+            _event(
+                "rising_missed_nxt_post_block_price_sample",
+                {
+                    "decision_authority": "source_only_nxt_post_block_price_observation",
+                    "runtime_effect": True,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "rising_missed_nxt_post_block_selector_reason": "downstream_block:source_quality_unknown",
+                    "rising_missed_nxt_post_block_source_block_reason": "source_quality_unknown",
+                },
+                record_id=2,
+            ),
+            _event(
+                "probe_continuation_deferred",
+                {
+                    "decision_authority": "dynamic_entry_price_resolver_p1_post_probe",
+                    "post_probe_direction_state": "UNKNOWN",
+                    "post_probe_continuation_action": "DEFER",
+                    "post_probe_direction_reason": "post_probe_direction_source_gap",
+                    "post_probe_direction_group_count": 2,
+                    "post_probe_directional_group_count": 2,
+                    "allowed_runtime_apply": False,
+                },
+                record_id=3,
+            ),
+            _event(
+                "scalp_trailing_continuation_recheck",
+                {
+                    "quote_recovery_large_sell_state": "unknown",
+                    "quote_recovery_fetch_state": "not_requested",
+                    "quote_recovery_candidate": True,
+                    "quote_recovery_eligible": False,
+                    "reversal_feature_context_usable": False,
+                    "large_sell_print_detected": False,
+                    "micro_source_trusted_ws": False,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                },
+                record_id=4,
+            ),
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-07-22")
+
+    assert {item["stage"] for item in report["unknown_token_findings"]} == {
+        "budget_pass",
+        "probe_continuation_deferred",
+        "rising_missed_nxt_post_block_price_sample",
+        "scalp_trailing_continuation_recheck",
+    }
+
+
 def test_observation_source_quality_audit_reviews_unknown_fill_quality_without_requested_qty(
     monkeypatch,
     tmp_path,
