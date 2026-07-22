@@ -1257,12 +1257,81 @@ def test_allocator_probe_first_reserves_one_share_and_builds_fill_anchored_resid
         now=datetime(2026, 7, 20, 10, 1, tzinfo=timezone(timedelta(hours=9))),
     )
     assert fallback_fields["entry_split_order_probe_first_skip_reason"] == (
-        "probe_daily_cap_reached"
+        "probe_active_bundle_cap_reached"
     )
-    assert len(fallback_orders) >= 2
-    assert not any(
-        order.get("entry_split_order_probe_first_applied") for order in fallback_orders
+    assert fallback_orders == []
+    assert fallback_fields["entry_split_order_probe_first_required"] is True
+    assert fallback_fields["entry_split_order_probe_capacity_deferred"] is True
+
+    split_plan.update_probe_runtime_bundle(
+        orders[0]["entry_split_order_probe_bundle_id"],
+        phase="complete",
+        now=datetime(2026, 7, 20, 10, 1, tzinfo=timezone(timedelta(hours=9))),
     )
+    next_orders, next_fields = split_plan.apply_entry_split_order_policy(
+        [{"tag": "normal", "qty": 10, "price": 10000, "tif": "DAY"}],
+        stock={"code": "654322", "strategy": "SCALPING"},
+        latency_gate={
+            "latency_state": "SAFE",
+            "best_ask_at_submit": 10050,
+            "quote_stale_at_submit": False,
+        },
+        now=datetime(2026, 7, 20, 10, 2, tzinfo=timezone(timedelta(hours=9))),
+    )
+    assert next_fields["entry_split_order_probe_first_applied"] is True
+    assert len(next_orders) == 1
+    assert next_orders[0]["qty"] == 1
+
+
+def test_probe_first_capacity_counts_all_nonterminal_bundle_phases(
+    monkeypatch, tmp_path
+):
+    target_date = "2026-07-20"
+    state_path = tmp_path / "entry_split_probe_runtime_state.json"
+    state_path.write_text(
+        json.dumps(
+            {
+                "schema_version": split_plan.PROBE_RUNTIME_STATE_SCHEMA_VERSION,
+                "target_date": target_date,
+                "submitted_bundle_count": 1,
+                "circuit_open": False,
+                "circuit_reason": "",
+                "bundles": {
+                    "inflight": {"phase": "probe_recheck_pending"},
+                    "aborted": {"phase": "aborted"},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(split_plan, "PROBE_RUNTIME_STATE_PATH", state_path)
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ACTIVE_DATE", target_date)
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_QTY", "1")
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_MAX_BUNDLES", "1")
+
+    bundle_id, reason = split_plan._reserve_probe_runtime_bundle(
+        stock={"code": "654321", "strategy": "SCALPING"},
+        total_qty=2,
+        now=datetime(2026, 7, 20, 10, 0, tzinfo=timezone(timedelta(hours=9))),
+    )
+
+    assert bundle_id == ""
+    assert reason == "probe_active_bundle_cap_reached"
+
+    split_plan.update_probe_runtime_bundle(
+        "inflight",
+        phase="aborted",
+        now=datetime(2026, 7, 20, 10, 1, tzinfo=timezone(timedelta(hours=9))),
+    )
+    released_bundle_id, released_reason = split_plan._reserve_probe_runtime_bundle(
+        stock={"code": "654322", "strategy": "SCALPING"},
+        total_qty=2,
+        now=datetime(2026, 7, 20, 10, 2, tzinfo=timezone(timedelta(hours=9))),
+    )
+
+    assert released_bundle_id
+    assert released_reason == "reserved"
 
 
 def test_allocator_probe_first_applies_to_real_rising_missed_initial_entry(

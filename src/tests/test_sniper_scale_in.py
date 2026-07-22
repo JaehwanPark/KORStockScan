@@ -25243,6 +25243,29 @@ def test_resolve_live_entry_order_request_uses_market_only_for_authorized_first_
     assert residual["order_type_code"] == "00"
 
 
+def test_entry_split_probe_capacity_defer_blocks_broker_submit_contract():
+    assert (
+        state_handlers._entry_split_probe_first_deferred(
+            {
+                "entry_split_order_probe_first_required": True,
+                "entry_split_order_probe_first_applied": False,
+                "entry_split_order_probe_capacity_deferred": True,
+            }
+        )
+        is True
+    )
+    assert (
+        state_handlers._entry_split_probe_first_deferred(
+            {
+                "entry_split_order_probe_first_required": True,
+                "entry_split_order_probe_first_applied": False,
+                "entry_split_order_probe_capacity_deferred": False,
+            }
+        )
+        is False
+    )
+
+
 def test_entry_split_leg_provenance_overrides_bundle_without_duplicate_keys():
     bundle = {
         "entry_split_order_market_first_leg_applied": True,

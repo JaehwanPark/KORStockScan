@@ -30771,6 +30771,17 @@ def _decorate_entry_split_leg_ttls(planned_orders, stock, strategy):
     return decorated
 
 
+def _entry_split_probe_first_deferred(fields: dict | None) -> bool:
+    """Return whether the mandatory probe-first plan must block broker submit."""
+
+    fields = fields if isinstance(fields, dict) else {}
+    return bool(
+        fields.get("entry_split_order_probe_first_required")
+        and not fields.get("entry_split_order_probe_first_applied")
+        and fields.get("entry_split_order_probe_capacity_deferred")
+    )
+
+
 def _decorate_scale_in_split_leg_ttls(split_orders, stock, strategy):
     if not isinstance(split_orders, list) or len(split_orders) <= 1:
         return split_orders
@@ -49035,16 +49046,24 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             stock,
             code,
             (
-                "entry_split_order_plan_applied"
-                if entry_split_fields.get("entry_split_order_policy_applied")
-                else "entry_split_order_plan_skipped"
+                "entry_split_probe_capacity_deferred"
+                if _entry_split_probe_first_deferred(entry_split_fields)
+                else (
+                    "entry_split_order_plan_applied"
+                    if entry_split_fields.get("entry_split_order_policy_applied")
+                    else "entry_split_order_plan_skipped"
+                )
             ),
             strategy=strategy,
             entry_mode=entry_mode,
             actual_order_submitted=False,
-            broker_order_forbidden=False,
+            broker_order_forbidden=_entry_split_probe_first_deferred(
+                entry_split_fields
+            ),
             **entry_split_fields,
         )
+        if _entry_split_probe_first_deferred(entry_split_fields):
+            return False
         if entry_split_fields.get("entry_split_order_probe_first_applied"):
             probe_order = planned_orders[0] if planned_orders else {}
             probe_bundle_id = str(

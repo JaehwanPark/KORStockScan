@@ -59,6 +59,13 @@ ALLOWED_PRICE_CANDIDATES = {
 PROBE_RUNTIME_STATE_SCHEMA_VERSION = "entry_split_probe_runtime_state_v1"
 PROBE_RUNTIME_STATE_PATH = PROJECT_ROOT / "tmp" / "entry_split_probe_runtime_state.json"
 PROBE_VARIANT_SUFFIX = "probe1_fill_clamped_bbo"
+# An aborted probe can still be restored on restart to preserve its
+# scale-in-forbidden holding state, so recovery deliberately has a narrower
+# terminal set.  Capacity, however, must release as soon as no order bundle is
+# in flight.
+PROBE_CAPACITY_TERMINAL_PHASES = frozenset(
+    {"aborted", "complete", "bundle_completed", "partial_complete"}
+)
 PROBE_RECOVERY_TERMINAL_PHASES = frozenset(
     {"complete", "bundle_completed", "partial_complete"}
 )
@@ -374,15 +381,23 @@ def _reserve_probe_runtime_bundle(
         if _safe_bool(payload.get("circuit_open")):
             return "", "probe_circuit_open"
         current_count = _safe_int(payload.get("submitted_bundle_count"), 0)
-        active_reservations = sum(
+        active_bundle_count = sum(
             1
             for bundle in (payload.get("bundles") or {}).values()
             if isinstance(bundle, dict)
-            and not _safe_bool(bundle.get("counted_submitted"))
-            and str(bundle.get("phase") or "") in {"planned", "probe_submitting"}
+            # Unknown/missing phase is conservatively treated as in-flight;
+            # only explicit terminal phases release a probe slot.
+            and str(bundle.get("phase") or "") not in PROBE_CAPACITY_TERMINAL_PHASES
         )
-        if current_count + active_reservations >= config["max_bundles"]:
-            return "", "probe_daily_cap_reached"
+        # `MAX_BUNDLES` bounds concurrent probe reservations, not the number of
+        # initial entries that may use probe-first over a day.  A cumulative
+        # cap silently reverted every later real SCALPING initial entry to
+        # direct multi-leg submission once the early probe budget was consumed.
+        # Every non-terminal phase, including fill/recheck/residual phases,
+        # consumes capacity.  Completed/aborted bundles retain recovery
+        # provenance but no longer occupy a live probe slot.
+        if active_bundle_count >= config["max_bundles"]:
+            return "", "probe_active_bundle_cap_reached"
         code = str(stock.get("code") or stock.get("stock_code") or "unknown")[:6]
         nonce = f"{target_date}:{code}:{time_ns()}:{current_count + 1}"
         bundle_id = f"{code}-probe-{hashlib.sha1(nonce.encode()).hexdigest()[:12]}"
@@ -2327,7 +2342,24 @@ def apply_entry_split_order_policy(
                 }
             )
             return [probe_order], fields
-        fields["entry_split_order_probe_first_skip_reason"] = reservation_reason
+        # Probe-first is the real SCALPING initial-entry contract.  Capacity
+        # and circuit conditions defer the candidate to its next scanner-loop
+        # evaluation; they must never fall through to a direct multi-leg order.
+        fields.update(
+            {
+                "entry_split_order_skip_reason": reservation_reason,
+                "entry_split_order_probe_first_enabled": True,
+                "entry_split_order_probe_first_required": True,
+                "entry_split_order_probe_first_applied": False,
+                "entry_split_order_probe_first_skip_reason": reservation_reason,
+                "entry_split_order_probe_capacity_deferred": True,
+                "entry_split_order_probe_max_bundles": probe_config["max_bundles"],
+                "entry_split_order_bucket": bucket,
+                "entry_split_order_policy_version": policy.get("policy_version"),
+                "entry_split_order_policy_mode": policy_mode,
+            }
+        )
+        return [], fields
     elif probe_config["configured_enabled"]:
         fields["entry_split_order_probe_first_skip_reason"] = probe_eligibility_reason
     split_orders: list[dict[str, Any]] = []
