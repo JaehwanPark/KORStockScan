@@ -28633,6 +28633,163 @@ def _entry_ai_submit_authority_fields(
     }
 
 
+def _evaluate_krx_direct_canary_live_ai_wait_submit_block(
+    *,
+    strategy,
+    stock,
+    runtime,
+    latency_gate,
+    entry_ai_submit_authority,
+    retry_fields,
+    now_ts: float,
+) -> dict[str, Any]:
+    """Veto the historically negative KRX DANGER-direct-canary/live-WAIT cohort."""
+    stock = stock if isinstance(stock, dict) else {}
+    runtime = runtime if isinstance(runtime, dict) else {}
+    latency_fields = latency_gate if isinstance(latency_gate, dict) else {}
+    authority_fields = (
+        entry_ai_submit_authority if isinstance(entry_ai_submit_authority, dict) else {}
+    )
+    retry_fields = retry_fields if isinstance(retry_fields, dict) else {}
+
+    enabled = _env_bool(
+        "KORSTOCKSCAN_KRX_DIRECT_CANARY_LIVE_AI_WAIT_BLOCK_ENABLED", True
+    )
+    simulated = bool(
+        _is_any_simulated_position(stock, strategy)
+        or _is_swing_live_order_dry_run(strategy)
+    )
+    latency_state = (
+        str(
+            _entry_submit_field(
+                latency_fields,
+                runtime,
+                stock,
+                key="latency_state",
+                aliases=("status", "entry_latency_state"),
+                default="",
+            )
+            or ""
+        )
+        .strip()
+        .upper()
+    )
+    direct_canary_applied = _truthy_field(
+        _entry_submit_field(
+            latency_fields,
+            key="latency_true_ofi_direct_canary_applied",
+            default=False,
+        )
+    )
+    effective_venue = (
+        str(
+            _entry_submit_field(
+                latency_fields,
+                runtime,
+                stock,
+                key="rising_missed_effective_venue",
+                aliases=("effective_venue", "scalping_sizing_venue"),
+                default="",
+            )
+            or ""
+        )
+        .strip()
+        .upper()
+    )
+    action = (
+        str(
+            retry_fields.get("pre_submit_entry_ai_authority_retry_action")
+            or authority_fields.get("entry_ai_submit_authority_action")
+            or stock.get("last_watching_ai_action")
+            or ""
+        )
+        .strip()
+        .upper()
+    )
+    result_source = (
+        str(
+            retry_fields.get("pre_submit_entry_ai_authority_retry_result_source")
+            or authority_fields.get("entry_ai_submit_authority_result_source")
+            or stock.get("last_watching_ai_result_source")
+            or ""
+        )
+        .strip()
+        .lower()
+    )
+    score = _safe_float(
+        retry_fields.get("pre_submit_entry_ai_authority_retry_score"),
+        _safe_float(
+            authority_fields.get("entry_ai_submit_authority_score"),
+            _safe_float(stock.get("last_watching_ai_score"), 0.0),
+        ),
+    )
+    confirmed_at = _safe_float(stock.get("last_watching_ai_confirmed_at"), 0.0)
+    max_age_sec = max(
+        1.0,
+        _safe_float(
+            authority_fields.get("entry_ai_submit_authority_max_prior_age_sec"),
+            _rule_float("AI_WATCHING_COOLDOWN", 300.0),
+        ),
+    )
+    age_sec = max(0.0, float(now_ts) - confirmed_at) if confirmed_at > 0 else None
+    fresh_live_wait = bool(
+        action == "WAIT"
+        and result_source == "live"
+        and age_sec is not None
+        and age_sec <= max_age_sec
+    )
+    blocked = bool(
+        enabled
+        and str(strategy or "").upper() in {"SCALPING", "SCALP"}
+        and not simulated
+        and effective_venue == "KRX"
+        and latency_state == "DANGER"
+        and direct_canary_applied
+        and fresh_live_wait
+    )
+    reason = (
+        "krx_danger_direct_canary_fresh_live_ai_wait" if blocked else "cohort_not_met"
+    )
+    return {
+        "blocked": blocked,
+        "reason": reason,
+        "block_reason": reason,
+        "krx_direct_canary_live_ai_wait_blocked": blocked,
+        "krx_direct_canary_live_ai_wait_block_enabled": enabled,
+        "krx_direct_canary_live_ai_wait_effective_venue": effective_venue or "-",
+        "krx_direct_canary_live_ai_wait_latency_state": latency_state or "-",
+        "krx_direct_canary_live_ai_wait_direct_canary_applied": bool(
+            direct_canary_applied
+        ),
+        "krx_direct_canary_live_ai_wait_action": action or "not_evaluated",
+        "krx_direct_canary_live_ai_wait_score": f"{score:.1f}",
+        "krx_direct_canary_live_ai_wait_result_source": (
+            result_source or "not_available"
+        ),
+        "krx_direct_canary_live_ai_wait_fresh": fresh_live_wait,
+        "krx_direct_canary_live_ai_wait_confirmed_age_sec": (
+            f"{age_sec:.3f}" if age_sec is not None else "not_available"
+        ),
+        "krx_direct_canary_live_ai_wait_max_age_sec": f"{max_age_sec:.1f}",
+        "threshold_family": "latency_true_ofi_direct_canary",
+        "metric_role": "bounded_tunable",
+        "decision_authority": "krx_direct_canary_live_ai_wait_submit_veto",
+        "window_policy": "clean_baseline_explicit_krx_completed_trades",
+        "sample_floor": "9_completed_explicit_krx_trades",
+        "primary_decision_metric": "notional_weighted_ev_pct",
+        "source_quality_gate": (
+            "explicit_krx_and_fresh_live_ai_and_latency_provenance"
+        ),
+        "runtime_effect": blocked,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": blocked,
+        "forbidden_uses": (
+            "nxt_or_unknown_venue_apply,provider_route_change,quantity_cap_release,"
+            "broker_guard_bypass,stale_quote_bypass,hard_safety_relaxation"
+        ),
+    }
+
+
 def _evaluate_rising_missed_post_ai_hard_negative_submit_block(
     *,
     strategy,
@@ -48211,6 +48368,80 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             actual_order_submitted=False,
             broker_order_forbidden=True,
             extra_fields=entry_ai_submit_authority,
+        )
+        return False
+
+    krx_direct_canary_ai_wait_block = (
+        _evaluate_krx_direct_canary_live_ai_wait_submit_block(
+            strategy=strategy,
+            stock=stock,
+            runtime=runtime,
+            latency_gate=latency_gate,
+            entry_ai_submit_authority=entry_ai_submit_authority,
+            retry_fields=retry_fields,
+            now_ts=now_ts,
+        )
+    )
+    if krx_direct_canary_ai_wait_block.get("blocked"):
+        backoff_fields = _record_rising_missed_submit_safety_backoff(
+            stock,
+            code,
+            krx_direct_canary_ai_wait_block.get("block_reason"),
+            now_ts=now_ts,
+            source_stage="krx_direct_canary_live_ai_wait_submit_block",
+            runtime=runtime,
+        )
+        log_info(
+            f"[KRX_DIRECT_CANARY_LIVE_AI_WAIT_BLOCK] {stock.get('name')}({code}) "
+            f"ai={krx_direct_canary_ai_wait_block.get('krx_direct_canary_live_ai_wait_action')}"
+            f"/{krx_direct_canary_ai_wait_block.get('krx_direct_canary_live_ai_wait_score')} "
+            f"source={krx_direct_canary_ai_wait_block.get('krx_direct_canary_live_ai_wait_result_source')}"
+        )
+        _mutate_stock_state(
+            stock,
+            pop_fields=[
+                "rising_missed_one_share_entry_forced",
+                "rising_missed_one_share_scout",
+                "rising_missed_scout_upgrade_pending",
+                "forced_entry_qty",
+                "forced_entry_reason",
+                "target_buy_price",
+                "rising_missed_normal_buy_bridge_allowed",
+                "rising_missed_normal_buy_bridge_reason",
+                "rising_missed_normal_buy_bridge_at",
+            ],
+        )
+        clear_signal_reference(stock)
+        block_fields = _merge_entry_pipeline_field_groups(
+            real_pre_submit_guard_fields,
+            submit_revalidation_fields,
+            latency_price_snapshot,
+            entry_orderbook_micro_fields,
+            microstructure_submit_log_fields,
+            pre_ai_gate_submit_log_fields,
+            entry_ai_submit_authority,
+            krx_direct_canary_ai_wait_block,
+            backoff_fields,
+        )
+        _log_entry_pipeline(
+            stock,
+            code,
+            "krx_direct_canary_live_ai_wait_submit_block",
+            **block_fields,
+        )
+        _emit_scalp_entry_adm_snapshot(
+            stock,
+            code,
+            "krx_direct_canary_live_ai_wait_submit_block",
+            ai_score=latency_signal_score,
+            chosen_action="WAIT_DIRECT_CANARY_VETO",
+            latency_gate=latency_gate,
+            submit_fields=submit_revalidation_fields,
+            price_snapshot=latency_price_snapshot,
+            orderbook_fields=entry_orderbook_micro_fields,
+            actual_order_submitted=False,
+            broker_order_forbidden=True,
+            extra_fields=block_fields,
         )
         return False
 

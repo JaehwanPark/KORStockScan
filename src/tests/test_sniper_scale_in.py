@@ -2788,6 +2788,125 @@ def test_entry_ai_submit_authority_blocks_not_evaluated_zero_score():
     assert decision["entry_ai_submit_authority_result_source"] == "not_available"
 
 
+def test_krx_direct_canary_live_ai_wait_blocks_exact_negative_ev_cohort():
+    now_ts = 1_784_684_276.0
+    stock = {
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "rising_missed_effective_venue": "KRX",
+        "last_watching_ai_action": "WAIT",
+        "last_watching_ai_score": 66.0,
+        "last_watching_ai_result_source": "live",
+        "last_watching_ai_confirmed_at": now_ts - 1.0,
+    }
+    decision = state_handlers._evaluate_krx_direct_canary_live_ai_wait_submit_block(
+        strategy="SCALPING",
+        stock=stock,
+        runtime={},
+        latency_gate={
+            "latency_state": "DANGER",
+            "latency_true_ofi_direct_canary_applied": True,
+        },
+        entry_ai_submit_authority={
+            "entry_ai_submit_authority_action": "WAIT",
+            "entry_ai_submit_authority_score": "66.0",
+            "entry_ai_submit_authority_result_source": "live",
+            "entry_ai_submit_authority_max_prior_age_sec": "300.0",
+        },
+        retry_fields={},
+        now_ts=now_ts,
+    )
+
+    assert decision["blocked"] is True
+    assert decision["broker_order_forbidden"] is True
+    assert decision["runtime_effect"] is True
+    assert decision["block_reason"] == ("krx_danger_direct_canary_fresh_live_ai_wait")
+    assert decision["krx_direct_canary_live_ai_wait_effective_venue"] == "KRX"
+    assert decision["krx_direct_canary_live_ai_wait_result_source"] == "live"
+
+
+@pytest.mark.parametrize(
+    ("venue", "latency_state", "direct_applied", "action", "result_source"),
+    [
+        ("NXT", "DANGER", True, "WAIT", "live"),
+        ("KRX", "CAUTION", True, "WAIT", "live"),
+        ("KRX", "DANGER", False, "WAIT", "live"),
+        ("KRX", "DANGER", True, "BUY", "live"),
+        ("KRX", "DANGER", True, "WAIT", "transport_timeout"),
+    ],
+)
+def test_krx_direct_canary_live_ai_wait_does_not_expand_beyond_exact_cohort(
+    venue,
+    latency_state,
+    direct_applied,
+    action,
+    result_source,
+):
+    now_ts = 1_784_684_276.0
+    decision = state_handlers._evaluate_krx_direct_canary_live_ai_wait_submit_block(
+        strategy="SCALPING",
+        stock={
+            "rising_missed_effective_venue": venue,
+            "last_watching_ai_action": action,
+            "last_watching_ai_score": 66.0,
+            "last_watching_ai_result_source": result_source,
+            "last_watching_ai_confirmed_at": now_ts - 1.0,
+        },
+        runtime={},
+        latency_gate={
+            "latency_state": latency_state,
+            "latency_true_ofi_direct_canary_applied": direct_applied,
+        },
+        entry_ai_submit_authority={
+            "entry_ai_submit_authority_action": action,
+            "entry_ai_submit_authority_score": "66.0",
+            "entry_ai_submit_authority_result_source": result_source,
+            "entry_ai_submit_authority_max_prior_age_sec": "300.0",
+        },
+        retry_fields={},
+        now_ts=now_ts,
+    )
+
+    assert decision["blocked"] is False
+    assert decision["broker_order_forbidden"] is False
+    assert decision["runtime_effect"] is False
+
+
+def test_krx_direct_canary_live_ai_wait_block_has_bounded_rollback(monkeypatch):
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_KRX_DIRECT_CANARY_LIVE_AI_WAIT_BLOCK_ENABLED", "false"
+    )
+    now_ts = 1_784_684_276.0
+
+    decision = state_handlers._evaluate_krx_direct_canary_live_ai_wait_submit_block(
+        strategy="SCALPING",
+        stock={
+            "rising_missed_effective_venue": "KRX",
+            "last_watching_ai_action": "WAIT",
+            "last_watching_ai_score": 66.0,
+            "last_watching_ai_result_source": "live",
+            "last_watching_ai_confirmed_at": now_ts - 1.0,
+        },
+        runtime={},
+        latency_gate={
+            "latency_state": "DANGER",
+            "latency_true_ofi_direct_canary_applied": True,
+        },
+        entry_ai_submit_authority={
+            "entry_ai_submit_authority_action": "WAIT",
+            "entry_ai_submit_authority_score": "66.0",
+            "entry_ai_submit_authority_result_source": "live",
+            "entry_ai_submit_authority_max_prior_age_sec": "300.0",
+        },
+        retry_fields={},
+        now_ts=now_ts,
+    )
+
+    assert decision["krx_direct_canary_live_ai_wait_block_enabled"] is False
+    assert decision["blocked"] is False
+    assert decision["broker_order_forbidden"] is False
+
+
 def test_rising_missed_post_ai_hard_negative_blocks_only_complete_bundle(monkeypatch):
     now_ts = time.time()
     active_date = (
