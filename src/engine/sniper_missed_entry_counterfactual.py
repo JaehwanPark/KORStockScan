@@ -18,8 +18,13 @@ from src.utils.constants import DATA_DIR, TRADING_RULES
 from src.utils.jsonl_io import read_jsonl
 from src.utils.logger import log_error
 
-MISSED_ENTRY_COUNTERFACTUAL_SCHEMA_VERSION = 4
+MISSED_ENTRY_COUNTERFACTUAL_SCHEMA_VERSION = 5
 _EXPLICIT_TRADABLE_VENUES = {"KRX", "NXT", "PREMARKET_KRX_LIKE"}
+_WATCH_CYCLE_HORIZONS_MIN = (1, 3, 5, 10, 20, 30, 60)
+_WATCH_CYCLE_ESTIMATED_ROUND_TRIP_COST_PCT = 0.23
+_SCANNER_PROMOTED_STAGE = "scalping_scanner_candidate_promoted"
+_SCANNER_ATTACH_STAGE = "scalping_scanner_runtime_target_attach"
+_SCANNER_EVICTION_STAGE = "scalping_scanner_watch_eviction"
 _ENTRY_ARMED_STAGES = {"entry_armed", "entry_armed_resume"}
 _INFERRED_BUY_INTENT_STAGES = _ENTRY_ARMED_STAGES | {
     "score65_74_recovery_probe_entry_unlocked"
@@ -685,9 +690,12 @@ def _dedupe_inferred_pre_submit_attempts(candidates: list[dict]) -> list[dict]:
 
 
 def _build_buy_attempts(
-    target_date: str, *, include_submitted: bool = True
+    target_date: str,
+    *,
+    include_submitted: bool = True,
+    events: list[EntryEvent] | None = None,
 ) -> list[dict]:
-    events = _load_entry_events(target_date)
+    events = list(events) if events is not None else _load_entry_events(target_date)
     by_stock: dict[tuple[str, str], list[EntryEvent]] = defaultdict(list)
     for event in events:
         by_stock[(event.name, event.code)].append(event)
@@ -965,6 +973,857 @@ def _classify_candidate(metrics_5m: dict, metrics_10m: dict) -> str:
     if mae_10m <= _BUY_AVOIDED_MAE_PCT and close_10m <= _BUY_AVOIDED_CLOSE_PCT:
         return "AVOIDED_LOSER"
     return "NEUTRAL"
+
+
+def _clean_cycle_identity(value) -> str:
+    candidate = str(value or "").strip()
+    if not candidate or candidate.lower() in {
+        "none",
+        "null",
+        "not_applicable",
+        "not_applicable_runtime_record_id",
+        "not_applicable_existing_runtime_record_id",
+        "not_applicable_scanner_promotion_id",
+    }:
+        return ""
+    return candidate
+
+
+def _event_observed_price(event: EntryEvent) -> float:
+    for key in (
+        "current_price_observed",
+        "current_price",
+        "latest_price",
+        "mark_price_at_submit",
+        "submitted_order_price",
+        "target_buy_price",
+        "price",
+    ):
+        price = abs(_safe_float(event.fields.get(key), 0.0))
+        if price > 0:
+            return price
+    return 0.0
+
+
+def _event_market_observed_price(event: EntryEvent) -> float:
+    """Return market observations only; never use intended/submitted order prices."""
+
+    for key in (
+        "current_price_observed",
+        "current_price",
+        "latest_price",
+        "mark_price_at_submit",
+    ):
+        price = abs(_safe_float(event.fields.get(key), 0.0))
+        if price > 0:
+            return price
+    return 0.0
+
+
+def _watch_cycle_terminal_priority(stage: str) -> int:
+    normalized = str(stage or "").strip()
+    if normalized == "order_bundle_submitted":
+        return 1000
+    if normalized in {
+        "entry_submit_revalidation_block",
+        "pre_submit_entry_ai_authority_guard_block",
+        "pre_submit_liquidity_guard_block",
+        "pre_submit_overbought_pullback_guard_block",
+        "pre_submit_weak_context_late_entry_guard_block",
+        "real_weak_pullback_entry_block",
+        "latency_block",
+        "krx_direct_canary_live_ai_wait_submit_block",
+        "rising_missed_tick_speed_entry_block",
+    }:
+        return 900
+    if normalized in {
+        "blocked_zero_qty",
+        "auth_zero_qty",
+        "blocked_cooldown",
+        "ai_cooldown_blocked",
+        "scalp_same_symbol_loss_reentry_blocked",
+    }:
+        return 800
+    if normalized in {
+        "scalp_entry_action_decision_snapshot",
+        "blocked_ai_score",
+        "first_ai_wait",
+        "ai_confirmed_terminal_no_budget",
+    }:
+        return 700
+    if normalized in {
+        "blocked_strength_momentum",
+        "blocked_vpw",
+        "blocked_liquidity",
+        "blocked_overbought",
+        "blocked_gap_from_scan",
+        "blocked_big_bite_hard_gate",
+    }:
+        return 600
+    if normalized == "scalping_scanner_real_source_guard_block":
+        return 500
+    if normalized == _SCANNER_EVICTION_STAGE:
+        return 300
+    if normalized == _SCANNER_ATTACH_STAGE:
+        return 200
+    if normalized == _SCANNER_PROMOTED_STAGE:
+        return 100
+    return 0
+
+
+def _watch_cycle_blocker_class(stage: str, reason: str, ai_action: str) -> str:
+    stage_text = str(stage or "").lower()
+    reason_text = str(reason or "").lower()
+    if str(ai_action or "").upper() == "DROP":
+        return "ai_veto"
+    if "ai_authority_guard" in stage_text or "ai_veto" in reason_text:
+        return "ai_veto"
+    if any(
+        token in f"{stage_text} {reason_text}"
+        for token in (
+            "hard_stop",
+            "protect_stop",
+            "emergency",
+            "account",
+            "quantity",
+            "cooldown",
+            "duplicate",
+            "manual_control",
+            "same_symbol",
+        )
+    ):
+        return "hard_safety_or_broker_guard"
+    if any(
+        token in f"{stage_text} {reason_text}"
+        for token in ("stale", "conflict", "source_guard", "source_quality")
+    ):
+        return "source_quality_guard"
+    if (
+        stage_text
+        in {
+            "",
+            _SCANNER_PROMOTED_STAGE,
+            _SCANNER_ATTACH_STAGE,
+            _SCANNER_EVICTION_STAGE,
+            "runtime_target_attach_skipped",
+            "no_entry_evaluation_reached",
+            "scanner_promotion_not_attached",
+        }
+        or stage_text.startswith("scalping_scanner_")
+        or stage_text.startswith("rising_missed_watch_")
+    ):
+        return "upstream_participation_gap"
+    return "bounded_strategy_or_execution_gate"
+
+
+def _latest_cycle_ai_action(events: list[EntryEvent]) -> str:
+    for event in reversed(events):
+        for key in (
+            "latest_ai_action",
+            "pre_submit_ai_action",
+            "action",
+            "chosen_action",
+        ):
+            action = str(event.fields.get(key) or "").strip().upper()
+            if action in {"BUY", "WAIT", "DROP"}:
+                return action
+            if action == "NO_BUY_AI":
+                return "WAIT"
+    return "UNKNOWN"
+
+
+def _observed_price_horizon_metrics(
+    *,
+    anchor_dt: datetime,
+    anchor_price: float,
+    price_points: list[tuple[datetime, float]],
+    horizon_min: int,
+) -> dict:
+    end_dt = anchor_dt + timedelta(minutes=horizon_min)
+    relevant = [
+        (observed_at, price)
+        for observed_at, price in price_points
+        if anchor_dt < observed_at <= end_dt and price > 0
+    ]
+    if anchor_price <= 0 or not relevant:
+        return {
+            "entry_price_used": int(round(anchor_price)),
+            "close_ret_pct": 0.0,
+            "mfe_pct": 0.0,
+            "mae_pct": 0.0,
+            "hit_tp_05": False,
+            "hit_sl_05": False,
+            "tp05_before_sl05": False,
+            "bars": 0,
+            "latest_offset_sec": 0.0,
+            "source_quality_state": "source_gap_insufficient_post_reference_price",
+        }
+
+    returns = [
+        (((price / anchor_price) - 1.0) * 100.0, observed_at)
+        for observed_at, price in relevant
+    ]
+    first_tp = next(
+        (observed_at for value, observed_at in returns if value >= _BUY_TP_PCT),
+        None,
+    )
+    first_sl = next(
+        (observed_at for value, observed_at in returns if value <= _BUY_SL_PCT),
+        None,
+    )
+    latest_offset_sec = max(
+        (observed_at - anchor_dt).total_seconds() for observed_at, _price in relevant
+    )
+    minimum_complete_offset_sec = max(1.0, horizon_min * 60.0 * 0.8)
+    minimum_observation_count = 1 if horizon_min == 1 else 2 if horizon_min == 3 else 3
+    if len(relevant) < minimum_observation_count:
+        source_quality_state = "sparse_horizon"
+    elif latest_offset_sec < minimum_complete_offset_sec:
+        source_quality_state = "partial_horizon"
+    else:
+        source_quality_state = "pass"
+    values = [value for value, _observed_at in returns]
+    return {
+        "entry_price_used": int(round(anchor_price)),
+        "close_ret_pct": round(values[-1], 3),
+        "mfe_pct": round(max(values), 3),
+        "mae_pct": round(min(values), 3),
+        "hit_tp_05": max(values) >= _BUY_TP_PCT,
+        "hit_sl_05": min(values) <= _BUY_SL_PCT,
+        "tp05_before_sl05": bool(
+            first_tp is not None and (first_sl is None or first_tp < first_sl)
+        ),
+        "bars": len(relevant),
+        "latest_offset_sec": round(latest_offset_sec, 3),
+        "source_quality_state": source_quality_state,
+    }
+
+
+def _metric_source_quality_state(metrics: dict, horizon_min: int) -> str:
+    explicit = str(metrics.get("source_quality_state") or "").strip()
+    if explicit:
+        return explicit
+    bars = _safe_int(metrics.get("bars"), 0)
+    if bars <= 0:
+        return "source_gap_insufficient_post_reference_price"
+    if bars < horizon_min:
+        return "partial_horizon"
+    return "pass"
+
+
+def _build_watch_cycle_participation_ledger(
+    target_date: str,
+    events: list[EntryEvent],
+    evaluations: list[dict],
+) -> dict:
+    """Collapse scanner promotions and repeated attempts into unique watch cycles."""
+
+    promotions: dict[str, EntryEvent] = {}
+    for event in events:
+        if event.stage != _SCANNER_PROMOTED_STAGE:
+            continue
+        promotion_id = _clean_cycle_identity(event.fields.get("scanner_promotion_id"))
+        if promotion_id:
+            promotions[promotion_id] = event
+
+    cycles: dict[str, dict] = {}
+    runtime_cycle_by_id: dict[str, str] = {}
+    promotion_cycle: dict[str, str] = {}
+
+    def _new_cycle(
+        cycle_id: str,
+        *,
+        stock_code: str,
+        stock_name: str,
+        cycle_type: str,
+        runtime_record_id: str = "",
+    ) -> dict:
+        return cycles.setdefault(
+            cycle_id,
+            {
+                "watch_cycle_id": cycle_id,
+                "cycle_type": cycle_type,
+                "stock_code": stock_code,
+                "stock_name": stock_name,
+                "runtime_record_id": runtime_record_id,
+                "promotion_ids": set(),
+                "events": [],
+                "event_keys": set(),
+                "evaluations": [],
+            },
+        )
+
+    def _append_event(cycle: dict, event: EntryEvent) -> None:
+        event_key = (event.emitted_at, event.stage, event.record_id)
+        if event_key in cycle["event_keys"]:
+            return
+        cycle["event_keys"].add(event_key)
+        cycle["events"].append(event)
+
+    for event in events:
+        if event.stage != _SCANNER_ATTACH_STAGE:
+            continue
+        fields = event.fields
+        outcome = str(fields.get("runtime_target_attach_outcome") or "").lower()
+        runtime_record_id = _clean_cycle_identity(fields.get("runtime_record_id"))
+        existing_record_id = _clean_cycle_identity(
+            fields.get("existing_runtime_record_id")
+        )
+        promotion_id = _clean_cycle_identity(fields.get("scanner_promotion_id"))
+        resolved_runtime_id = (
+            runtime_record_id if outcome == "attached" else existing_record_id
+        )
+        if not resolved_runtime_id:
+            continue
+        cycle_id = f"{target_date}:SCANNER:{resolved_runtime_id}"
+        cycle = _new_cycle(
+            cycle_id,
+            stock_code=event.code,
+            stock_name=event.name,
+            cycle_type="runtime_watch",
+            runtime_record_id=resolved_runtime_id,
+        )
+        runtime_cycle_by_id[resolved_runtime_id] = cycle_id
+        if promotion_id:
+            promotion_cycle[promotion_id] = cycle_id
+            cycle["promotion_ids"].add(promotion_id)
+            promotion_event = promotions.get(promotion_id)
+            if promotion_event is not None:
+                _append_event(cycle, promotion_event)
+        _append_event(cycle, event)
+
+    for promotion_id, promotion_event in promotions.items():
+        if promotion_id in promotion_cycle:
+            continue
+        cycle_id = f"{target_date}:PROMOTION:{promotion_id}"
+        cycle = _new_cycle(
+            cycle_id,
+            stock_code=promotion_event.code,
+            stock_name=promotion_event.name,
+            cycle_type="promotion_not_attached",
+        )
+        promotion_cycle[promotion_id] = cycle_id
+        cycle["promotion_ids"].add(promotion_id)
+        _append_event(cycle, promotion_event)
+
+    for event in events:
+        promotion_id = _clean_cycle_identity(event.fields.get("scanner_promotion_id"))
+        runtime_record_id = (
+            _clean_cycle_identity(event.record_id)
+            or _clean_cycle_identity(event.fields.get("runtime_record_id"))
+            or _clean_cycle_identity(event.fields.get("existing_runtime_record_id"))
+        )
+        cycle_id = ""
+        if runtime_record_id:
+            cycle_id = runtime_cycle_by_id.get(runtime_record_id, "")
+        if not cycle_id and promotion_id:
+            cycle_id = promotion_cycle.get(promotion_id, "")
+        if cycle_id:
+            _append_event(cycles[cycle_id], event)
+
+    events_by_record: dict[tuple[str, str], list[EntryEvent]] = defaultdict(list)
+    for event in events:
+        record_id = _clean_cycle_identity(event.record_id)
+        if record_id:
+            events_by_record[(event.code, record_id)].append(event)
+
+    for evaluation in evaluations:
+        record_id = _clean_cycle_identity(evaluation.get("record_id"))
+        stock_code = str(evaluation.get("stock_code") or "")
+        cycle_id = runtime_cycle_by_id.get(record_id, "") if record_id else ""
+        if not cycle_id:
+            fallback_identity = record_id or str(
+                evaluation.get("candidate_id") or "unknown"
+            )
+            cycle_id = f"{target_date}:ENTRY:{evaluation.get('stock_code')}:{fallback_identity}"
+            _new_cycle(
+                cycle_id,
+                stock_code=stock_code,
+                stock_name=str(evaluation.get("stock_name") or ""),
+                cycle_type="entry_attempt_fallback",
+                runtime_record_id=record_id,
+            )
+        cycle = cycles[cycle_id]
+        cycle["evaluations"].append(evaluation)
+        for event in events_by_record.get((stock_code, record_id), []):
+            _append_event(cycle, event)
+
+    price_points_by_stock: dict[str, list[tuple[datetime, float]]] = defaultdict(list)
+    for event in events:
+        observed_at = _parse_event_dt(event.emitted_at)
+        observed_price = _event_market_observed_price(event)
+        if observed_at is None or observed_price <= 0:
+            continue
+        price_points_by_stock[event.code].append((observed_at, observed_price))
+    for points in price_points_by_stock.values():
+        points.sort(key=lambda item: item[0])
+
+    ledger_rows: list[dict] = []
+    for cycle in cycles.values():
+        cycle_events = sorted(
+            cycle["events"],
+            key=lambda item: _parse_event_dt(item.emitted_at) or datetime.min,
+        )
+        cycle_evaluations = sorted(
+            cycle["evaluations"],
+            key=lambda item: (
+                str(item.get("signal_date") or ""),
+                str(item.get("signal_time") or ""),
+            ),
+        )
+        submitted = any(
+            str(item.get("attempt_status") or "") == "ENTERED"
+            for item in cycle_evaluations
+        ) or any(event.stage == "order_bundle_submitted" for event in cycle_events)
+
+        terminal_candidates: list[tuple[int, datetime, str, str, str]] = []
+        for item in cycle_evaluations:
+            stage = str(item.get("terminal_stage") or "")
+            terminal_fields = (
+                item.get("terminal_fields")
+                if isinstance(item.get("terminal_fields"), dict)
+                else {}
+            )
+            reason = str(
+                terminal_fields.get("reason")
+                or terminal_fields.get("no_submit_reason")
+                or terminal_fields.get("chosen_action")
+                or item.get("no_submit_reason")
+                or ""
+            )
+            emitted_at = (
+                _parse_event_dt(f"{item.get('signal_date')} {item.get('signal_time')}")
+                or datetime.min
+            )
+            terminal_candidates.append(
+                (
+                    _watch_cycle_terminal_priority(stage),
+                    emitted_at,
+                    stage,
+                    reason,
+                    stage,
+                )
+            )
+        for event in cycle_events:
+            if event.stage == _SCANNER_PROMOTED_STAGE:
+                continue
+            if (
+                event.stage == _SCANNER_ATTACH_STAGE
+                and str(event.fields.get("runtime_target_attach_outcome") or "").lower()
+                == "attached"
+            ):
+                continue
+            candidate_stage = event.stage
+            if event.stage == _SCANNER_ATTACH_STAGE:
+                candidate_stage = "runtime_target_attach_skipped"
+            elif event.stage == _SCANNER_EVICTION_STAGE:
+                candidate_stage = (
+                    _clean_cycle_identity(event.fields.get("terminal_stage"))
+                    or event.stage
+                )
+            priority = _watch_cycle_terminal_priority(event.stage)
+            if priority <= 0:
+                continue
+            reason = str(
+                event.fields.get("reason")
+                or event.fields.get("runtime_target_attach_reason")
+                or event.fields.get("terminal_reason")
+                or event.fields.get("eviction_reason")
+                or event.fields.get("chosen_action")
+                or ""
+            )
+            terminal_candidates.append(
+                (
+                    priority,
+                    _parse_event_dt(event.emitted_at) or datetime.min,
+                    candidate_stage,
+                    reason,
+                    event.stage,
+                )
+            )
+        if submitted:
+            terminal_stage = "order_bundle_submitted"
+            terminal_reason = "submitted"
+        elif cycle["cycle_type"] == "promotion_not_attached" and not any(
+            event.stage == _SCANNER_ATTACH_STAGE for event in cycle_events
+        ):
+            terminal_stage = "scanner_promotion_not_attached"
+            terminal_reason = "runtime_target_attach_not_observed"
+            terminal_source_stage = _SCANNER_PROMOTED_STAGE
+        elif terminal_candidates:
+            _priority, _at, terminal_stage, terminal_reason, terminal_source_stage = (
+                max(terminal_candidates, key=lambda item: (item[0], item[1]))
+            )
+        else:
+            terminal_stage = "no_entry_evaluation_reached"
+            terminal_reason = "no_terminal_entry_stage_observed"
+            terminal_source_stage = "watch_cycle_aggregation"
+        if submitted:
+            terminal_source_stage = "order_bundle_submitted"
+
+        reference_evaluation = next(
+            (
+                item
+                for item in cycle_evaluations
+                if str(item.get("attempt_status") or "") == "MISSED"
+            ),
+            cycle_evaluations[0] if cycle_evaluations else None,
+        )
+        if reference_evaluation is not None:
+            reference_dt = _parse_event_dt(
+                f"{reference_evaluation.get('signal_date')} "
+                f"{reference_evaluation.get('signal_time')}"
+            )
+            reference_price = _safe_float(
+                reference_evaluation.get("entry_price_used"), 0.0
+            )
+            reference_source = "first_missed_entry_attempt"
+        else:
+            reference_event = next(
+                (
+                    event
+                    for event in cycle_events
+                    if event.stage in {_SCANNER_ATTACH_STAGE, _SCANNER_PROMOTED_STAGE}
+                    and _event_observed_price(event) > 0
+                ),
+                cycle_events[0] if cycle_events else None,
+            )
+            reference_dt = (
+                _parse_event_dt(reference_event.emitted_at)
+                if reference_event is not None
+                else None
+            )
+            reference_price = (
+                _event_observed_price(reference_event)
+                if reference_event is not None
+                else 0.0
+            )
+            reference_source = "scanner_watch_or_promotion_price"
+
+        horizon_metrics: dict[str, dict] = {}
+        if reference_evaluation is not None:
+            stored_horizons = reference_evaluation.get("forward_horizon_metrics")
+            if isinstance(stored_horizons, dict):
+                horizon_metrics = {
+                    str(key): dict(value)
+                    for key, value in stored_horizons.items()
+                    if isinstance(value, dict)
+                }
+        if reference_dt is not None:
+            price_points = price_points_by_stock.get(cycle["stock_code"], [])
+            for horizon_min in _WATCH_CYCLE_HORIZONS_MIN:
+                key = str(horizon_min)
+                if key in horizon_metrics:
+                    continue
+                horizon_metrics[key] = _observed_price_horizon_metrics(
+                    anchor_dt=reference_dt,
+                    anchor_price=reference_price,
+                    price_points=price_points,
+                    horizon_min=horizon_min,
+                )
+
+        reference_venue = (
+            str(reference_evaluation.get("effective_venue") or "").strip().upper()
+            if reference_evaluation is not None
+            else ""
+        )
+        if (
+            reference_evaluation is not None
+            and bool(reference_evaluation.get("venue_tuning_allowed"))
+            and reference_venue in _EXPLICIT_TRADABLE_VENUES
+        ):
+            effective_venue = reference_venue
+            venue_source_quality = "pass"
+            venue_resolution = "reference_attempt_contract"
+        elif reference_evaluation is not None:
+            effective_venue = "UNKNOWN"
+            venue_source_quality = str(
+                reference_evaluation.get("venue_source_quality") or "missing"
+            )
+            venue_resolution = str(
+                reference_evaluation.get("venue_resolution")
+                or "reference_attempt_contract_blocked"
+            )
+        else:
+            authoritative_venues: set[str] = set()
+            fallback_venues: set[str] = set()
+            scoped_events = [
+                event
+                for event in cycle_events
+                if reference_dt is None
+                or (_parse_event_dt(event.emitted_at) or datetime.max) <= reference_dt
+            ]
+            for event in scoped_events:
+                for key in ("rising_missed_effective_venue", "effective_venue"):
+                    venue = str(event.fields.get(key) or "").strip().upper()
+                    if venue in _EXPLICIT_TRADABLE_VENUES:
+                        authoritative_venues.add(venue)
+                venue = str(event.fields.get("venue") or "").strip().upper()
+                if venue in _EXPLICIT_TRADABLE_VENUES:
+                    fallback_venues.add(venue)
+            if len(authoritative_venues) == 1:
+                effective_venue = next(iter(authoritative_venues))
+                venue_source_quality = "pass"
+                venue_resolution = "reference_event_authoritative"
+            elif len(authoritative_venues) > 1:
+                effective_venue = "UNKNOWN"
+                venue_source_quality = "conflict"
+                venue_resolution = "reference_event_authoritative_conflict"
+            elif len(fallback_venues) == 1:
+                effective_venue = next(iter(fallback_venues))
+                venue_source_quality = "pass"
+                venue_resolution = "reference_event_fallback"
+            elif len(fallback_venues) > 1:
+                effective_venue = "UNKNOWN"
+                venue_source_quality = "conflict"
+                venue_resolution = "reference_event_fallback_conflict"
+            else:
+                effective_venue = "UNKNOWN"
+                venue_source_quality = "missing"
+                venue_resolution = "reference_event_venue_missing"
+
+        reference_session = (
+            str(reference_evaluation.get("market_session_bucket") or "").strip()
+            if reference_evaluation is not None
+            else ""
+        )
+        if reference_session:
+            market_session_bucket = reference_session
+            market_session_source_quality = "pass"
+        else:
+            session_observations: list[tuple[datetime, str]] = []
+            for event in cycle_events:
+                event_dt = _parse_event_dt(event.emitted_at)
+                if event_dt is None or (
+                    reference_dt is not None and event_dt > reference_dt
+                ):
+                    continue
+                for key in (
+                    "rising_missed_market_session_bucket",
+                    "market_session_bucket",
+                ):
+                    session = str(event.fields.get(key) or "").strip()
+                    if session:
+                        session_observations.append((event_dt, session))
+            if session_observations:
+                latest_session_dt = max(item[0] for item in session_observations)
+                latest_sessions = {
+                    session
+                    for observed_at, session in session_observations
+                    if observed_at == latest_session_dt
+                }
+                if len(latest_sessions) == 1:
+                    market_session_bucket = next(iter(latest_sessions))
+                    market_session_source_quality = "pass"
+                else:
+                    market_session_bucket = "UNKNOWN"
+                    market_session_source_quality = "conflict"
+            else:
+                market_session_bucket = "UNKNOWN"
+                market_session_source_quality = "missing"
+        ai_action = _latest_cycle_ai_action(cycle_events)
+        blocker_class = _watch_cycle_blocker_class(
+            terminal_stage, terminal_reason, ai_action
+        )
+        primary_metrics = horizon_metrics.get("20", {})
+        primary_source_quality = _metric_source_quality_state(primary_metrics, 20)
+        gross_close_ret_pct = _safe_float(primary_metrics.get("close_ret_pct"), 0.0)
+        cost_adjusted_return_pct = round(
+            gross_close_ret_pct - _WATCH_CYCLE_ESTIMATED_ROUND_TRIP_COST_PCT, 4
+        )
+        notional = (
+            _safe_int(reference_evaluation.get("counterfactual_notional_krw"), 0)
+            if reference_evaluation is not None
+            else 0
+        )
+        estimated_net_pnl = (
+            int(round(notional * cost_adjusted_return_pct / 100.0))
+            if notional > 0 and primary_source_quality == "pass"
+            else None
+        )
+        if primary_source_quality != "pass":
+            opportunity_label = "source_gap_or_partial_horizon"
+        elif bool(primary_metrics.get("tp05_before_sl05")):
+            opportunity_label = "gross_target_first"
+        elif bool(primary_metrics.get("hit_sl_05")):
+            opportunity_label = "adverse_stop_first"
+        else:
+            opportunity_label = "no_hit_within_20m"
+
+        actionable_missed_winner = bool(
+            not submitted
+            and opportunity_label == "gross_target_first"
+            and cost_adjusted_return_pct > 0
+            and notional > 0
+            and effective_venue in _EXPLICIT_TRADABLE_VENUES
+            and venue_source_quality == "pass"
+            and market_session_source_quality == "pass"
+            and blocker_class == "bounded_strategy_or_execution_gate"
+            and ai_action != "DROP"
+        )
+        ledger_rows.append(
+            {
+                "watch_cycle_id": cycle["watch_cycle_id"],
+                "cycle_type": cycle["cycle_type"],
+                "stock_code": cycle["stock_code"],
+                "stock_name": cycle["stock_name"],
+                "runtime_record_id": cycle["runtime_record_id"] or None,
+                "scanner_promotion_ids": sorted(cycle["promotion_ids"]),
+                "scanner_promotion_count": len(cycle["promotion_ids"]),
+                "attempt_count": len(cycle_evaluations),
+                "participation_state": "SUBMITTED" if submitted else "UNSUBMITTED",
+                "single_terminal_blocker": terminal_stage,
+                "single_terminal_blocker_reason": terminal_reason,
+                "single_terminal_blocker_source_stage": terminal_source_stage,
+                "single_terminal_blocker_class": blocker_class,
+                "latest_ai_action": ai_action,
+                "reference_time": (
+                    reference_dt.isoformat() if reference_dt is not None else None
+                ),
+                "reference_price": int(round(reference_price)),
+                "reference_price_source": reference_source,
+                "effective_venue": effective_venue,
+                "venue_source_quality": venue_source_quality,
+                "venue_resolution": venue_resolution,
+                "market_session_bucket": market_session_bucket,
+                "market_session_source_quality": market_session_source_quality,
+                "forward_horizon_metrics": horizon_metrics,
+                "primary_horizon_min": 20,
+                "primary_source_quality_state": primary_source_quality,
+                "opportunity_label": opportunity_label,
+                "estimated_round_trip_cost_pct": (
+                    _WATCH_CYCLE_ESTIMATED_ROUND_TRIP_COST_PCT
+                ),
+                "cost_adjusted_counterfactual_return_pct": (
+                    cost_adjusted_return_pct
+                    if primary_source_quality == "pass"
+                    else None
+                ),
+                "counterfactual_notional_krw": notional,
+                "estimated_counterfactual_net_pnl_krw": estimated_net_pnl,
+                "actionable_missed_winner": actionable_missed_winner,
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "actual_order_submitted": submitted,
+                "broker_order_forbidden": True,
+            }
+        )
+
+    ledger_rows.sort(
+        key=lambda row: (
+            str(row.get("reference_time") or ""),
+            str(row.get("watch_cycle_id") or ""),
+        )
+    )
+    unsubmitted_rows = [
+        row for row in ledger_rows if row["participation_state"] == "UNSUBMITTED"
+    ]
+    ev_rows = [
+        row
+        for row in unsubmitted_rows
+        if row["primary_source_quality_state"] == "pass"
+        and row["venue_source_quality"] == "pass"
+        and row["market_session_source_quality"] == "pass"
+        and int(row["counterfactual_notional_krw"] or 0) > 0
+        and row["cost_adjusted_counterfactual_return_pct"] is not None
+    ]
+    notional_sum = sum(int(row["counterfactual_notional_krw"] or 0) for row in ev_rows)
+    notional_weighted_ev_pct = (
+        round(
+            sum(
+                float(row["cost_adjusted_counterfactual_return_pct"])
+                * int(row["counterfactual_notional_krw"])
+                for row in ev_rows
+            )
+            / notional_sum,
+            4,
+        )
+        if notional_sum > 0
+        else None
+    )
+    blocker_counts = Counter(
+        str(row["single_terminal_blocker"]) for row in unsubmitted_rows
+    )
+    venue_counts = Counter(str(row["effective_venue"]) for row in ledger_rows)
+    source_quality_counts = Counter(
+        str(row["primary_source_quality_state"]) for row in ledger_rows
+    )
+    return {
+        "schema_version": 1,
+        "contract": {
+            "metric_role": "counterfactual_opportunity_attribution",
+            "decision_authority": "watch_cycle_source_only_no_runtime_apply",
+            "window_policy": (
+                "unique_scanner_runtime_watch_or_unattached_promotion_cycle_"
+                "with_1_3_5_10_20_30_60m_forward_observation"
+            ),
+            "sample_floor": "rolling_closed_source_quality_valid_cycles_ge_20",
+            "primary_decision_metric": "notional_weighted_ev_pct",
+            "source_quality_gate": (
+                "single_conflict_free_explicit_venue_and_complete_20m_price_"
+                "horizon_and_counterfactual_notional"
+            ),
+            "forbidden_uses": [
+                "daily_only_threshold_mutation",
+                "broker_order_submit",
+                "provider_route_change",
+                "bot_restart",
+                "hard_safety_or_broker_guard_bypass",
+                "unknown_or_conflicting_venue_tuning",
+                "gross_mfe_as_realized_pnl",
+                "promotion_attempt_count_as_unique_symbol_count",
+            ],
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        },
+        "summary": {
+            "unique_watch_cycle_count": len(ledger_rows),
+            "unique_stock_count": len({str(row["stock_code"]) for row in ledger_rows}),
+            "runtime_watch_cycle_count": sum(
+                1 for row in ledger_rows if row["cycle_type"] == "runtime_watch"
+            ),
+            "unattached_promotion_cycle_count": sum(
+                1
+                for row in ledger_rows
+                if row["cycle_type"] == "promotion_not_attached"
+            ),
+            "submitted_cycle_count": len(ledger_rows) - len(unsubmitted_rows),
+            "unsubmitted_cycle_count": len(unsubmitted_rows),
+            "actionable_missed_winner_count": sum(
+                1 for row in unsubmitted_rows if row["actionable_missed_winner"]
+            ),
+            "unsubmitted_ev_eligible_cycle_count": len(ev_rows),
+            "complete_20m_price_cycle_count": sum(
+                1
+                for row in ledger_rows
+                if row["primary_source_quality_state"] == "pass"
+            ),
+            "venue_source_quality_valid_cycle_count": sum(
+                1 for row in ledger_rows if row["venue_source_quality"] == "pass"
+            ),
+            "market_session_source_quality_valid_cycle_count": sum(
+                1
+                for row in ledger_rows
+                if row["market_session_source_quality"] == "pass"
+            ),
+            "unsubmitted_counterfactual_notional_available_cycle_count": sum(
+                1
+                for row in unsubmitted_rows
+                if int(row["counterfactual_notional_krw"] or 0) > 0
+            ),
+            "unsubmitted_ev_ineligible_cycle_count": len(unsubmitted_rows)
+            - len(ev_rows),
+            "counterfactual_notional_krw": notional_sum,
+            "notional_weighted_ev_pct": notional_weighted_ev_pct,
+            "estimated_counterfactual_net_pnl_krw": sum(
+                int(row["estimated_counterfactual_net_pnl_krw"] or 0) for row in ev_rows
+            ),
+            "single_terminal_blocker_counts": dict(blocker_counts),
+            "effective_venue_counts": dict(venue_counts),
+            "primary_source_quality_counts": dict(source_quality_counts),
+        },
+        "rows": ledger_rows,
+    }
 
 
 def _build_blocker_outcome_metrics(items: list[dict]) -> dict:
@@ -1578,7 +2437,12 @@ def build_missed_entry_counterfactual_report(
         kiwoom_utils = None
 
     safe_date = str(target_date or datetime.now().strftime("%Y-%m-%d")).strip()
-    all_buy_attempts = _build_buy_attempts(safe_date, include_submitted=True)
+    entry_events = _load_entry_events(safe_date)
+    all_buy_attempts = _build_buy_attempts(
+        safe_date,
+        include_submitted=True,
+        events=entry_events,
+    )
     candidates = [
         item
         for item in all_buy_attempts
@@ -1589,6 +2453,11 @@ def build_missed_entry_counterfactual_report(
 
     if not candidates:
         empty_rising_metrics = _build_rising_missed_refinement_metrics([])
+        watch_cycle_ledger = _build_watch_cycle_participation_ledger(
+            safe_date,
+            entry_events,
+            [],
+        )
         return {
             "date": safe_date,
             "summary": missed_entry_counterfactual_summary_to_dict(summary),
@@ -1655,6 +2524,7 @@ def build_missed_entry_counterfactual_report(
                 "confidence_breakdown": [],
                 "rows": [],
             },
+            "watch_cycle_participation_ledger": watch_cycle_ledger,
             "insight": {
                 "headline": "AI BUY 후 미진입 counterfactual 표본이 없습니다.",
                 "comment": "장중 BUY 후 주문전 차단 사례가 쌓이면 missed winner / avoided loser를 함께 해석할 수 있습니다.",
@@ -1690,24 +2560,37 @@ def build_missed_entry_counterfactual_report(
 
     for candidate in all_buy_attempts:
         code = str(candidate.get("stock_code") or "").strip()[:6]
-        if not code or token is None or kiwoom_utils is None:
+        if not code:
             continue
         if code not in candle_cache:
-            try:
-                candle_cache[code] = _fetch_minute_candles_with_meta(
-                    kiwoom_utils, token, code, limit=700
+            if token is None or kiwoom_utils is None:
+                candle_cache[code] = (
+                    [],
+                    _minute_candle_meta([], requested_limit=700),
                 )
-            except Exception as exc:
-                log_error(
-                    f"[MISSED_ENTRY_CF] {code} minute candles fetch failed: {exc}"
-                )
-                candle_cache[code] = ([], _minute_candle_meta([], requested_limit=700))
+            else:
+                try:
+                    candle_cache[code] = _fetch_minute_candles_with_meta(
+                        kiwoom_utils, token, code, limit=700
+                    )
+                except Exception as exc:
+                    log_error(
+                        f"[MISSED_ENTRY_CF] {code} minute candles fetch failed: {exc}"
+                    )
+                    candle_cache[code] = (
+                        [],
+                        _minute_candle_meta([], requested_limit=700),
+                    )
 
         candles, candle_meta = candle_cache.get(
             code, ([], _minute_candle_meta([], requested_limit=700))
         )
-        metrics_5m = _compute_window_metrics(candidate, candles, 5)
-        metrics_10m = _compute_window_metrics(candidate, candles, 10)
+        forward_horizon_metrics = {
+            str(horizon_min): _compute_window_metrics(candidate, candles, horizon_min)
+            for horizon_min in _WATCH_CYCLE_HORIZONS_MIN
+        }
+        metrics_5m = forward_horizon_metrics["5"]
+        metrics_10m = forward_horizon_metrics["10"]
         metrics_15m = _compute_window_metrics(candidate, candles, 15)
         outcome = _classify_candidate(metrics_5m, metrics_10m)
         source_quality = _minute_forward_source_quality(metrics_10m, candle_meta)
@@ -1742,6 +2625,7 @@ def build_missed_entry_counterfactual_report(
                 "metrics_5m": metrics_5m,
                 "metrics_10m": metrics_10m,
                 "metrics_15m": metrics_15m,
+                "forward_horizon_metrics": forward_horizon_metrics,
                 "entry_price_used": entry_price_used,
                 "price_source": (
                     "explicit_target_buy_price"
@@ -1784,6 +2668,11 @@ def build_missed_entry_counterfactual_report(
         for item in all_buy_evaluations
         if str(item.get("attempt_status") or "") == "MISSED"
     ]
+    watch_cycle_ledger = _build_watch_cycle_participation_ledger(
+        safe_date,
+        entry_events,
+        all_buy_evaluations,
+    )
 
     summary.evaluated_candidates = len(evaluations)
     outcome_counts: dict[str, int] = {
@@ -1910,16 +2799,12 @@ def build_missed_entry_counterfactual_report(
     )
     venue_source_quality_counts = dict(
         Counter(
-            str(item.get("venue_source_quality") or "unknown")
-            for item in evaluations
+            str(item.get("venue_source_quality") or "unknown") for item in evaluations
         )
     )
     venue_outcome_breakdown = []
     for venue in sorted(
-        {
-            str(item.get("effective_venue") or "UNKNOWN").upper()
-            for item in evaluations
-        }
+        {str(item.get("effective_venue") or "UNKNOWN").upper() for item in evaluations}
     ):
         venue_rows = [
             item
@@ -2055,14 +2940,10 @@ def build_missed_entry_counterfactual_report(
             "reference_time": str(item.get("reference_time") or ""),
             "effective_venue": str(item.get("effective_venue") or "UNKNOWN"),
             "venue_resolution": str(item.get("venue_resolution") or ""),
-            "venue_source_quality": str(
-                item.get("venue_source_quality") or "unknown"
-            ),
+            "venue_source_quality": str(item.get("venue_source_quality") or "unknown"),
             "venue_tuning_allowed": bool(item.get("venue_tuning_allowed")),
             "venue_field_sources": list(item.get("venue_field_sources") or []),
-            "market_session_bucket": str(
-                item.get("market_session_bucket") or ""
-            ),
+            "market_session_bucket": str(item.get("market_session_bucket") or ""),
             "signal_price": int(_safe_int(item.get("signal_price"), 0)),
             "entry_price_used": int(_safe_int(item.get("entry_price_used"), 0)),
             "target_qty": int(_safe_int(item.get("target_qty"), 0)),
@@ -2262,6 +3143,7 @@ def build_missed_entry_counterfactual_report(
                 )[: max(1, int(top_n or 10) * 3)]
             ],
         },
+        "watch_cycle_participation_ledger": watch_cycle_ledger,
         "insight": {
             "headline": headline,
             "comment": (

@@ -1138,3 +1138,360 @@ def test_recovery_unlock_pre_submit_resume_loop_is_deduped(monkeypatch, tmp_path
     )
     assert report["reason_breakdown"][0]["candidates"] == 1
     assert report["rows"][0]["buy_intent_source"] == "inferred_entry_armed_path"
+
+
+def test_watch_cycle_ledger_collapses_repeated_attempts_and_assigns_one_blocker():
+    target_date = "2026-07-23"
+
+    def _entry_event(
+        emitted_at: str,
+        stage: str,
+        *,
+        record_id: str = "",
+        fields: dict | None = None,
+    ):
+        return report_mod.EntryEvent(
+            emitted_at=emitted_at,
+            signal_date=target_date,
+            name="감시승자",
+            code="111111",
+            stage=stage,
+            record_id=record_id,
+            fields={str(key): str(value) for key, value in (fields or {}).items()},
+        )
+
+    events = [
+        _entry_event(
+            "2026-07-23T10:00:00",
+            "scalping_scanner_candidate_promoted",
+            fields={
+                "scanner_promotion_id": "P1",
+                "current_price_observed": 10_000,
+                "rising_missed_effective_venue": "KRX",
+                "rising_missed_market_session_bucket": "krx_regular",
+            },
+        ),
+        _entry_event(
+            "2026-07-23T10:00:01",
+            "scalping_scanner_runtime_target_attach",
+            fields={
+                "runtime_target_attach_outcome": "attached",
+                "runtime_record_id": "77",
+                "scanner_promotion_id": "P1",
+                "current_price_observed": 10_000,
+                "rising_missed_effective_venue": "KRX",
+            },
+        ),
+        _entry_event(
+            "2026-07-23T10:00:02",
+            "ai_confirmed",
+            record_id="77",
+            fields={"action": "BUY"},
+        ),
+        _entry_event(
+            "2026-07-23T10:00:03",
+            "latency_block",
+            record_id="77",
+            fields={"reason": "latency_state_danger"},
+        ),
+        _entry_event(
+            "2026-07-23T10:00:04",
+            "scalping_scanner_real_source_guard_block",
+            record_id="77",
+            fields={"reason": "later_lower_priority_source_guard"},
+        ),
+        _entry_event(
+            "2026-07-23T10:02:00",
+            "scalping_scanner_candidate_promoted",
+            fields={
+                "scanner_promotion_id": "P2",
+                "current_price_observed": 10_100,
+            },
+        ),
+        _entry_event(
+            "2026-07-23T10:02:01",
+            "scalping_scanner_runtime_target_attach",
+            fields={
+                "runtime_target_attach_outcome": "skipped",
+                "runtime_target_attach_reason": "same_symbol_active_order_or_holding",
+                "existing_runtime_record_id": "77",
+                "scanner_promotion_id": "P2",
+                "current_price_observed": 10_100,
+            },
+        ),
+    ]
+    forward_metrics = {
+        str(horizon): {
+            "entry_price_used": 10_000,
+            "close_ret_pct": 1.0,
+            "mfe_pct": 1.2,
+            "mae_pct": -0.1,
+            "hit_tp_05": True,
+            "hit_sl_05": False,
+            "tp05_before_sl05": True,
+            "bars": horizon,
+        }
+        for horizon in report_mod._WATCH_CYCLE_HORIZONS_MIN
+    }
+    evaluations = [
+        {
+            "candidate_id": "111111:77:100002",
+            "signal_date": target_date,
+            "signal_time": "10:00:02",
+            "stock_code": "111111",
+            "stock_name": "감시승자",
+            "record_id": "77",
+            "attempt_status": "MISSED",
+            "terminal_stage": "blocked_strength_momentum",
+            "terminal_fields": {"reason": "below_window_buy_value"},
+            "entry_price_used": 10_000,
+            "counterfactual_notional_krw": 100_000,
+            "effective_venue": "KRX",
+            "venue_tuning_allowed": True,
+            "forward_horizon_metrics": forward_metrics,
+        },
+        {
+            "candidate_id": "111111:77:100003",
+            "signal_date": target_date,
+            "signal_time": "10:00:03",
+            "stock_code": "111111",
+            "stock_name": "감시승자",
+            "record_id": "77",
+            "attempt_status": "MISSED",
+            "terminal_stage": "latency_block",
+            "terminal_fields": {"reason": "latency_state_danger"},
+            "entry_price_used": 10_000,
+            "counterfactual_notional_krw": 100_000,
+            "effective_venue": "KRX",
+            "venue_tuning_allowed": True,
+            "forward_horizon_metrics": forward_metrics,
+        },
+    ]
+
+    ledger = report_mod._build_watch_cycle_participation_ledger(
+        target_date, events, evaluations
+    )
+
+    assert ledger["summary"]["unique_watch_cycle_count"] == 1
+    assert ledger["summary"]["unsubmitted_cycle_count"] == 1
+    assert ledger["summary"]["actionable_missed_winner_count"] == 1
+    assert ledger["summary"]["notional_weighted_ev_pct"] == 0.77
+    row = ledger["rows"][0]
+    assert row["scanner_promotion_count"] == 2
+    assert row["attempt_count"] == 2
+    assert row["single_terminal_blocker"] == "latency_block"
+    assert row["single_terminal_blocker_class"] == "bounded_strategy_or_execution_gate"
+    assert row["opportunity_label"] == "gross_target_first"
+    assert row["estimated_counterfactual_net_pnl_krw"] == 770
+    assert row["actionable_missed_winner"] is True
+    assert ledger["contract"]["runtime_effect"] is False
+    assert ledger["contract"]["allowed_runtime_apply"] is False
+
+
+def test_watch_cycle_ledger_later_submit_prevents_false_missed_winner():
+    target_date = "2026-07-23"
+    events = [
+        report_mod.EntryEvent(
+            emitted_at="2026-07-23T10:00:00",
+            signal_date=target_date,
+            name="후속제출",
+            code="222222",
+            stage="scalping_scanner_runtime_target_attach",
+            record_id="",
+            fields={
+                "runtime_target_attach_outcome": "attached",
+                "runtime_record_id": "88",
+                "rising_missed_effective_venue": "NXT",
+                "current_price_observed": "20000",
+            },
+        ),
+        report_mod.EntryEvent(
+            emitted_at="2026-07-23T10:01:00",
+            signal_date=target_date,
+            name="후속제출",
+            code="222222",
+            stage="order_bundle_submitted",
+            record_id="88",
+            fields={"rising_missed_effective_venue": "NXT"},
+        ),
+    ]
+    evaluations = [
+        {
+            "candidate_id": "222222:88:100010",
+            "signal_date": target_date,
+            "signal_time": "10:00:10",
+            "stock_code": "222222",
+            "stock_name": "후속제출",
+            "record_id": "88",
+            "attempt_status": "MISSED",
+            "terminal_stage": "latency_block",
+            "terminal_fields": {"reason": "latency_state_danger"},
+            "entry_price_used": 20_000,
+            "counterfactual_notional_krw": 200_000,
+            "effective_venue": "NXT",
+            "venue_tuning_allowed": True,
+            "forward_horizon_metrics": {
+                "20": {
+                    "close_ret_pct": 1.0,
+                    "mfe_pct": 1.2,
+                    "mae_pct": -0.1,
+                    "hit_tp_05": True,
+                    "hit_sl_05": False,
+                    "tp05_before_sl05": True,
+                    "bars": 20,
+                }
+            },
+        },
+        {
+            "candidate_id": "222222:88:100100",
+            "signal_date": target_date,
+            "signal_time": "10:01:00",
+            "stock_code": "222222",
+            "stock_name": "후속제출",
+            "record_id": "88",
+            "attempt_status": "ENTERED",
+            "terminal_stage": "order_bundle_submitted",
+            "terminal_fields": {},
+            "entry_price_used": 20_000,
+            "counterfactual_notional_krw": 200_000,
+            "effective_venue": "NXT",
+            "venue_tuning_allowed": True,
+            "forward_horizon_metrics": {},
+        },
+    ]
+
+    ledger = report_mod._build_watch_cycle_participation_ledger(
+        target_date, events, evaluations
+    )
+
+    assert ledger["summary"]["submitted_cycle_count"] == 1
+    assert ledger["summary"]["unsubmitted_cycle_count"] == 0
+    assert ledger["summary"]["actionable_missed_winner_count"] == 0
+    row = ledger["rows"][0]
+    assert row["participation_state"] == "SUBMITTED"
+    assert row["single_terminal_blocker"] == "order_bundle_submitted"
+    assert row["effective_venue"] == "NXT"
+    assert row["actionable_missed_winner"] is False
+
+
+def test_watch_cycle_ledger_excludes_drop_and_conflicting_venue_from_actionable_ev():
+    target_date = "2026-07-23"
+    events = [
+        report_mod.EntryEvent(
+            emitted_at="2026-07-23T10:00:00",
+            signal_date=target_date,
+            name="DROP충돌",
+            code="444444",
+            stage="scalping_scanner_runtime_target_attach",
+            record_id="",
+            fields={
+                "runtime_target_attach_outcome": "attached",
+                "runtime_record_id": "99",
+                "rising_missed_effective_venue": "KRX",
+                "rising_missed_market_session_bucket": "krx_regular",
+                "current_price_observed": "10000",
+            },
+        ),
+        report_mod.EntryEvent(
+            emitted_at="2026-07-23T10:00:01",
+            signal_date=target_date,
+            name="DROP충돌",
+            code="444444",
+            stage="pre_submit_entry_ai_authority_guard_block",
+            record_id="99",
+            fields={
+                "pre_submit_ai_action": "DROP",
+                "rising_missed_effective_venue": "NXT",
+                "reason": "fresh_ai_drop_veto",
+            },
+        ),
+    ]
+    evaluation = {
+        "candidate_id": "444444:99:100001",
+        "signal_date": target_date,
+        "signal_time": "10:00:01",
+        "stock_code": "444444",
+        "stock_name": "DROP충돌",
+        "record_id": "99",
+        "attempt_status": "MISSED",
+        "terminal_stage": "pre_submit_entry_ai_authority_guard_block",
+        "terminal_fields": {
+            "pre_submit_ai_action": "DROP",
+            "reason": "fresh_ai_drop_veto",
+        },
+        "entry_price_used": 10_000,
+        "counterfactual_notional_krw": 100_000,
+        "effective_venue": "UNKNOWN",
+        "venue_tuning_allowed": False,
+        "venue_source_quality": "conflict",
+        "venue_resolution": "conflicting_explicit_effective_venue",
+        "market_session_bucket": "krx_regular",
+        "forward_horizon_metrics": {
+            "20": {
+                "close_ret_pct": 1.0,
+                "mfe_pct": 1.2,
+                "mae_pct": -0.1,
+                "hit_tp_05": True,
+                "hit_sl_05": False,
+                "tp05_before_sl05": True,
+                "bars": 20,
+            }
+        },
+    }
+
+    ledger = report_mod._build_watch_cycle_participation_ledger(
+        target_date, events, [evaluation]
+    )
+
+    row = ledger["rows"][0]
+    assert row["latest_ai_action"] == "DROP"
+    assert row["single_terminal_blocker_class"] == "ai_veto"
+    assert row["effective_venue"] == "UNKNOWN"
+    assert row["venue_source_quality"] == "conflict"
+    assert row["actionable_missed_winner"] is False
+    assert ledger["summary"]["unsubmitted_ev_eligible_cycle_count"] == 0
+    assert ledger["summary"]["notional_weighted_ev_pct"] is None
+
+
+def test_report_keeps_unattached_scanner_promotion_in_watch_cycle_denominator(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    target_date = "2026-07-23"
+    _write_pipeline_events(
+        tmp_path,
+        target_date,
+        [
+            {
+                "pipeline": "ENTRY_PIPELINE",
+                "stage": "scalping_scanner_candidate_promoted",
+                "stock_name": "미부착감시",
+                "stock_code": "333333",
+                "record_id": None,
+                "fields": {
+                    "scanner_promotion_id": "P-NO-ATTACH",
+                    "current_price_observed": "30000",
+                    "rising_missed_effective_venue": "PREMARKET_KRX_LIKE",
+                    "venue": "NXT",
+                    "rising_missed_market_session_bucket": "premarket_krx_like",
+                },
+                "emitted_at": "2026-07-23T08:10:00",
+                "emitted_date": target_date,
+            }
+        ],
+    )
+
+    report = report_mod.build_missed_entry_counterfactual_report(
+        target_date, token="dummy"
+    )
+
+    ledger = report["watch_cycle_participation_ledger"]
+    assert ledger["summary"]["unique_watch_cycle_count"] == 1
+    assert ledger["summary"]["unattached_promotion_cycle_count"] == 1
+    assert ledger["summary"]["unsubmitted_cycle_count"] == 1
+    row = ledger["rows"][0]
+    assert row["single_terminal_blocker"] == "scanner_promotion_not_attached"
+    assert row["single_terminal_blocker_class"] == "upstream_participation_gap"
+    assert row["effective_venue"] == "PREMARKET_KRX_LIKE"
+    assert row["venue_resolution"] == "reference_event_authoritative"
+    assert row["primary_source_quality_state"].startswith("source_gap")
