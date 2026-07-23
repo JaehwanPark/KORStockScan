@@ -134,6 +134,38 @@ def test_ka10080_preserves_explicit_nxt_market_suffix(monkeypatch):
     assert meta["api_id"] == "ka10080"
 
 
+def test_ka10080_explicit_request_code_does_not_apply_db_integrated_route(
+    monkeypatch,
+):
+    _clear_market_data_cache()
+    monkeypatch.setattr(
+        kiwoom_utils,
+        "get_effective_kiwoom_code",
+        lambda _code: "005930_AL",
+    )
+    monkeypatch.setattr(
+        kiwoom_utils, "get_api_url", lambda path: f"https://example.test{path}"
+    )
+    calls = []
+
+    def fake_fetch(**kwargs):
+        calls.append(kwargs)
+        return ([], {"api_id": "ka10080"})
+
+    monkeypatch.setattr(kiwoom_utils, "fetch_kiwoom_api_continuous", fake_fetch)
+
+    _candles, meta = kiwoom_utils.get_minute_candles_ka10080_with_meta(
+        "token",
+        "A005930",
+        limit=1,
+        explicit_request_code=True,
+    )
+
+    assert calls[0]["payload"]["stk_cd"] == "005930"
+    assert meta["request_code"] == "005930"
+    assert meta["explicit_request_code"] is True
+
+
 def test_ka10081_dataframe_keeps_source_meta_and_sorts_index(monkeypatch):
     _clear_market_data_cache()
     monkeypatch.setattr(

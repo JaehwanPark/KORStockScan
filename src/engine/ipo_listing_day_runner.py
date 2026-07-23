@@ -32,6 +32,7 @@ from src.engine.trade_pause_control import is_buy_side_paused
 from src.engine.scalping.entry_candle_context import (
     build_entry_candle_context,
     entry_candle_context_enabled,
+    fetch_entry_candles_with_meta,
 )
 
 OUTPUT_ROOT = Path("data/ipo_listing_day")
@@ -744,10 +745,14 @@ class IpoListingDayEngine:
             now_ts=now_dt,
         ):
             try:
-                candles, candle_source_meta = (
-                    kiwoom_utils.get_minute_candles_ka10080_with_meta(
-                        self.token, target.code, limit=40
-                    )
+                candles, candle_source_meta = fetch_entry_candles_with_meta(
+                    self.token,
+                    target.code,
+                    ws_data,
+                    venue="KRX",
+                    session="krx_regular",
+                    limit=40,
+                    now_ts=now_dt,
                 )
                 candle_context = build_entry_candle_context(
                     self.token,

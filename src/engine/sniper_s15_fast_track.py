@@ -11,6 +11,7 @@ from src.engine.scalping.entry_ai_gate import evaluate_ai_score_prior
 from src.engine.scalping.entry_candle_context import (
     build_entry_candle_context,
     entry_candle_context_enabled,
+    fetch_entry_candles_with_meta,
     resolve_entry_candle_session,
     resolve_entry_candle_venue,
 )
@@ -472,10 +473,13 @@ def execute_fast_track_scalp_v2(code, name, trigger_price, ratio=0.10):
         recent_candles = []
         candle_context = None
         if candle_axis_active:
-            recent_candles, candle_source_meta = (
-                kiwoom_utils.get_minute_candles_ka10080_with_meta(
-                    KIWOOM_TOKEN, code, limit=40
-                )
+            recent_candles, candle_source_meta = fetch_entry_candles_with_meta(
+                KIWOOM_TOKEN,
+                code,
+                rt_data or {},
+                venue=candle_venue,
+                session=candle_session,
+                limit=40,
             )
             candle_context = build_entry_candle_context(
                 KIWOOM_TOKEN,

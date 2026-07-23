@@ -178,6 +178,51 @@ def resolve_entry_candle_request_code(
     return base
 
 
+def fetch_entry_candles_with_meta(
+    token: str | None,
+    code: str,
+    ws_data: dict[str, Any] | None,
+    *,
+    venue: str | None = None,
+    session: str | None = None,
+    limit: int = 40,
+    now_ts: Any = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Fetch entry candles from the route owned by the effective venue/session."""
+
+    now = _now_kst(now_ts)
+    session_value = resolve_entry_candle_session(now, session)
+    ws = ws_data if isinstance(ws_data, dict) else {}
+    venue_value = resolve_entry_candle_venue(ws, venue, session_value)
+    if venue_value == "NXT" and session_value == "krx_regular":
+        session_value = "nxt_regular_overlap"
+    request_code = resolve_entry_candle_request_code(
+        code,
+        venue=venue_value,
+        session=session_value,
+        ws_data=ws,
+    )
+    from src.utils import kiwoom_utils
+
+    candles, source_meta = kiwoom_utils.get_minute_candles_ka10080_with_meta(
+        token,
+        request_code,
+        limit=max(1, int(limit)),
+        explicit_request_code=True,
+    )
+    metadata = dict(source_meta or {})
+    metadata.update(
+        {
+            "request_code": request_code,
+            "explicit_request_code": True,
+            "entry_candle_request_code": request_code,
+            "entry_candle_request_venue": venue_value,
+            "entry_candle_request_session": session_value,
+        }
+    )
+    return list(candles or []), metadata
+
+
 def _number(value: Any, default: float = 0.0) -> float:
     try:
         result = float(str(value).replace(",", "").replace("+", ""))
@@ -235,7 +280,7 @@ def _normalized_bar(candle: dict[str, Any], moment: datetime) -> dict[str, Any]:
     }
 
 
-def _nxt_integrated_aftermarket_route_proof(
+def _nxt_integrated_closed_krx_session_route_proof(
     *,
     now: datetime,
     venue: str,
@@ -245,22 +290,43 @@ def _nxt_integrated_aftermarket_route_proof(
     ws_route: str,
 ) -> dict[str, Any]:
     session_value = str(session or "").strip().lower()
+    within_premarket_clock = dt_time(8, 0) <= now.time() < dt_time(9, 0)
     within_aftermarket_clock = dt_time(16, 0) <= now.time() <= dt_time(20, 0)
-    proven = bool(
-        str(venue or "").strip().upper() == "NXT"
-        and session_value == "nxt_aftermarket"
-        and within_aftermarket_clock
-        and request_suffix == "_NX"
+    common_route_proof = bool(
+        request_suffix == "_NX"
         and ws_suffix == "_AL"
         and ws_route == "krx_nxt_integrated"
     )
+    premarket_proven = bool(
+        str(venue or "").strip().upper() == "PREMARKET_KRX_LIKE"
+        and session_value == "premarket_krx_like"
+        and within_premarket_clock
+        and common_route_proof
+    )
+    aftermarket_proven = bool(
+        str(venue or "").strip().upper() == "NXT"
+        and session_value == "nxt_aftermarket"
+        and within_aftermarket_clock
+        and common_route_proof
+    )
+    proven = premarket_proven or aftermarket_proven
+    if premarket_proven:
+        route_equivalence = "nxt_premarket_integrated_ws_to_nx_rest"
+        proof_session = "premarket_krx_like"
+    elif aftermarket_proven:
+        route_equivalence = "nxt_aftermarket_integrated_ws_to_nx_rest"
+        proof_session = "nxt_aftermarket"
+    else:
+        route_equivalence = "not_proven"
+        proof_session = "not_proven"
     return {
         "proven": proven,
-        "route_equivalence": (
-            "nxt_aftermarket_integrated_ws_to_nx_rest" if proven else "not_proven"
+        "route_equivalence": route_equivalence,
+        "proof_session": proof_session,
+        "krx_regular_closed_by_clock": (
+            within_premarket_clock or within_aftermarket_clock
         ),
-        "krx_regular_closed_by_clock": within_aftermarket_clock,
-        "required_session": "nxt_aftermarket",
+        "required_session": "premarket_krx_like|nxt_aftermarket",
         "required_rest_suffix": "_NX",
         "required_ws_suffix": "_AL",
         "required_ws_route": "krx_nxt_integrated",
@@ -272,11 +338,11 @@ def _route_compatible(
     *,
     request_suffix: str,
     ws_route: str,
-    allow_nxt_integrated_aftermarket: bool = False,
+    allow_nxt_integrated_closed_krx_session: bool = False,
 ) -> bool:
     tick_suffix = str(tick.get("market_suffix") or "").upper()
     tick_route = str(tick.get("market_route") or "").lower()
-    if allow_nxt_integrated_aftermarket:
+    if allow_nxt_integrated_closed_krx_session:
         return tick_suffix == "_AL" and tick_route == "krx_nxt_integrated"
     if request_suffix and tick_suffix != request_suffix:
         return False
@@ -293,7 +359,7 @@ def select_route_trade_ticks(
     request_suffix: str,
     ws_suffix: str,
     ws_route: str,
-    allow_nxt_integrated_aftermarket: bool = False,
+    allow_nxt_integrated_closed_krx_session: bool = False,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Select the route-owned tick buffer without weakening route validation.
 
@@ -304,14 +370,12 @@ def select_route_trade_ticks(
 
     ws = ws_data if isinstance(ws_data, dict) else {}
     shared = [
-        tick
-        for tick in (ws.get("recent_trade_ticks") or [])
-        if isinstance(tick, dict)
+        tick for tick in (ws.get("recent_trade_ticks") or []) if isinstance(tick, dict)
     ]
     partitions = ws.get("recent_trade_ticks_by_route")
     expected_suffix = (
         "_AL"
-        if allow_nxt_integrated_aftermarket
+        if allow_nxt_integrated_closed_krx_session
         else str(request_suffix or ws_suffix or "").upper()
     )
     if expected_suffix == "_AL":
@@ -576,7 +640,7 @@ def build_session_candle_source(
     )
     _, request_suffix = _split_code(request_code)
     ws_suffix, ws_route = _ws_route(ws, now_ts=now.timestamp())
-    route_proof = _nxt_integrated_aftermarket_route_proof(
+    route_proof = _nxt_integrated_closed_krx_session_route_proof(
         now=now,
         venue=venue_value,
         session=session_value,
@@ -590,17 +654,28 @@ def build_session_candle_source(
     if recent_candles is None:
         fetch_started = time.perf_counter()
         try:
-            from src.utils import kiwoom_utils
-
-            recent_candles, source_meta = (
-                kiwoom_utils.get_minute_candles_ka10080_with_meta(
-                    token, request_code, limit=max(1, int(limit))
-                )
+            recent_candles, source_meta = fetch_entry_candles_with_meta(
+                token,
+                code,
+                ws,
+                venue=venue_value,
+                session=session_value,
+                limit=limit,
+                now_ts=now,
             )
         except Exception as exc:
             recent_candles, source_meta = [], {}
             fetch_error = f"{type(exc).__name__}:{str(exc)[:120]}"
         fetch_ms = int((time.perf_counter() - fetch_started) * 1000)
+    source_meta = dict(source_meta or {})
+    supplied_request_code = str(
+        source_meta.get("entry_candle_request_code")
+        or source_meta.get("request_code")
+        or ""
+    ).strip()
+    rest_request_code_conflict = bool(
+        supplied_request_code and supplied_request_code.upper() != request_code.upper()
+    )
     candles = [candle for candle in (recent_candles or []) if isinstance(candle, dict)]
     duplicate_count = 0
     duplicate_price_conflict = False
@@ -636,7 +711,7 @@ def build_session_candle_source(
         request_suffix=request_suffix,
         ws_suffix=ws_suffix,
         ws_route=ws_route,
-        allow_nxt_integrated_aftermarket=route_equivalence_proven,
+        allow_nxt_integrated_closed_krx_session=route_equivalence_proven,
     )
     tick_ws_suffix = (
         str(route_partition["selected_suffix"])
@@ -644,9 +719,7 @@ def build_session_candle_source(
         else ws_suffix
     )
     tick_ws_route = (
-        str(route_partition["selected_route"])
-        if route_partition["used"]
-        else ws_route
+        str(route_partition["selected_route"]) if route_partition["used"] else ws_route
     )
     route_conflict_count = 0
     current_minute = now.replace(second=0, microsecond=0)
@@ -662,7 +735,7 @@ def build_session_candle_source(
             tick,
             request_suffix=request_suffix,
             ws_route=tick_ws_route,
-            allow_nxt_integrated_aftermarket=route_equivalence_proven,
+            allow_nxt_integrated_closed_krx_session=route_equivalence_proven,
         ):
             route_conflict_count += 1
             continue
@@ -731,8 +804,7 @@ def build_session_candle_source(
         or (
             venue_value == "KRX"
             and tick_ws_route
-            and tick_ws_route
-            not in {"krx_regular", "krx_only", "krx_nxt_integrated"}
+            and tick_ws_route not in {"krx_regular", "krx_only", "krx_nxt_integrated"}
         )
         or (
             venue_value == "NXT"
@@ -744,6 +816,8 @@ def build_session_candle_source(
     quality_blockers = []
     if fetch_error:
         quality_blockers.append("fetch_error")
+    if rest_request_code_conflict:
+        quality_blockers.append("rest_request_code_conflict")
     if (
         venue_value == "PREMARKET_KRX_LIKE"
         and request_suffix == "_AL"
@@ -833,9 +907,7 @@ def build_session_candle_source(
             "route_partition_selected_suffix": route_partition["selected_suffix"],
             "route_partition_selected_route": route_partition["selected_route"],
             "route_partition_available_keys": route_partition["available_keys"],
-            "route_partition_ignored_tick_count": route_partition[
-                "ignored_tick_count"
-            ],
+            "route_partition_ignored_tick_count": route_partition["ignored_tick_count"],
             "route_partition_fallback_reason": route_partition["fallback_reason"],
             "route_equivalence_proof": route_proof,
             "source_meta": {
@@ -849,6 +921,11 @@ def build_session_candle_source(
                     "truncated_window",
                     "sort_direction_detected",
                     "latest_source_timestamp",
+                    "request_code",
+                    "explicit_request_code",
+                    "entry_candle_request_code",
+                    "entry_candle_request_venue",
+                    "entry_candle_request_session",
                 }
             },
         },

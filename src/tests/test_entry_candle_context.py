@@ -18,6 +18,7 @@ from src.engine.scalping.entry_candle_context import (
     apply_entry_candle_hybrid_guard,
     build_entry_candle_context,
     entry_candle_context_enabled,
+    fetch_entry_candles_with_meta,
     resolve_entry_candle_request_code,
 )
 
@@ -274,6 +275,66 @@ def test_venue_request_code_contract_and_dated_activation(monkeypatch):
     )
 
 
+def test_fetch_entry_candles_uses_effective_route_and_records_provenance(monkeypatch):
+    _enable(monkeypatch)
+    requested = []
+
+    def _fetch(_token, code, limit, *, explicit_request_code=False):
+        requested.append((code, limit, explicit_request_code))
+        return _candles(3, start_hour=16), {"api_id": "ka10080"}
+
+    monkeypatch.setattr(
+        "src.utils.kiwoom_utils.get_minute_candles_ka10080_with_meta",
+        _fetch,
+    )
+    candles, metadata = fetch_entry_candles_with_meta(
+        "token",
+        "000660",
+        {
+            **_ws(),
+            "market_suffix": "_NX",
+            "market_route": "nxt_only",
+        },
+        venue="NXT",
+        session="nxt_aftermarket",
+        limit=40,
+        now_ts=datetime(2026, 7, 23, 16, 3, tzinfo=KST),
+    )
+
+    assert requested == [("000660_NX", 40, True)]
+    assert len(candles) == 3
+    assert metadata["entry_candle_request_code"] == "000660_NX"
+    assert metadata["entry_candle_request_venue"] == "NXT"
+    assert metadata["entry_candle_request_session"] == "nxt_aftermarket"
+
+
+def test_builder_blocks_prefetched_candles_from_wrong_rest_route(monkeypatch):
+    _enable(monkeypatch)
+    context = build_entry_candle_context(
+        "token",
+        "000660",
+        {
+            **_ws(),
+            "market_suffix": "_NX",
+            "market_route": "nxt_only",
+        },
+        venue="NXT",
+        session="nxt_regular_overlap",
+        now_ts=datetime(2026, 7, 23, 10, 0, tzinfo=KST),
+        recent_candles=_candles(20, start_minute=40),
+        source_meta={
+            "api_id": "ka10080",
+            "entry_candle_request_code": "000660",
+            "entry_candle_request_venue": "KRX",
+            "entry_candle_request_session": "krx_regular",
+        },
+    )
+
+    assert context["request_code"] == "000660_NX"
+    assert context["source_quality"]["status"] == "blocked"
+    assert "rest_request_code_conflict" in context["risk_flags"]
+
+
 def test_actual_ws_route_keys_select_nxt_and_premarket_al_requires_proof(monkeypatch):
     _enable(monkeypatch)
     nxt_ws = _ws(10000)
@@ -379,6 +440,64 @@ def test_nxt_aftermarket_accepts_integrated_ws_only_with_closed_session_proof(
     assert context["source_quality"]["status"] == "fresh_consistent"
     assert context["source_quality"]["route_conflict_count"] == 0
     assert context["bars"][-1]["c"] == 10210
+
+
+def test_premarket_accepts_integrated_ws_with_closed_krx_session_proof(monkeypatch):
+    _enable(monkeypatch)
+    ws = _ws(128300)
+    ws["market_suffix"] = "_AL"
+    ws["market_route"] = "krx_nxt_integrated"
+    ws["recent_trade_ticks"] = [
+        {
+            "time": "08:08:20",
+            "price": 128300,
+            "volume": 3,
+            "market_suffix": "_AL",
+            "market_route": "krx_nxt_integrated",
+        }
+    ]
+
+    context = build_entry_candle_context(
+        "token",
+        "096770",
+        ws,
+        venue="PREMARKET_KRX_LIKE",
+        session="premarket_krx_like",
+        now_ts=datetime(2026, 7, 24, 8, 8, 30, tzinfo=KST),
+        recent_candles=_candles(9, start_hour=8),
+        source_meta={},
+    )
+
+    assert context["request_code"] == "096770_NX"
+    assert context["route_equivalence_proven"] is True
+    assert context["route_equivalence"] == "nxt_premarket_integrated_ws_to_nx_rest"
+    proof = context["source_quality"]["route_equivalence_proof"]
+    assert proof["proof_session"] == "premarket_krx_like"
+    assert proof["krx_regular_closed_by_clock"] is True
+    assert context["source_quality"]["status"] == "fresh_consistent"
+
+
+def test_premarket_integrated_equivalence_closes_at_krx_regular_open(monkeypatch):
+    _enable(monkeypatch)
+    ws = _ws(128300)
+    ws["market_suffix"] = "_AL"
+    ws["market_route"] = "krx_nxt_integrated"
+
+    context = build_entry_candle_context(
+        "token",
+        "096770",
+        ws,
+        venue="PREMARKET_KRX_LIKE",
+        session="premarket_krx_like",
+        now_ts=datetime(2026, 7, 24, 9, 0, 0, tzinfo=KST),
+        recent_candles=_candles(20, start_minute=40),
+        source_meta={},
+    )
+
+    assert context["request_code"] == "096770_NX"
+    assert context["route_equivalence_proven"] is False
+    assert context["source_quality"]["status"] == "blocked"
+    assert "venue_conflict" in context["risk_flags"]
 
 
 def test_nxt_integrated_ws_is_not_equivalent_during_regular_overlap(monkeypatch):
@@ -683,6 +802,11 @@ def test_runtime_call_sites_use_context_and_s15_no_longer_sends_empty_candles():
     assert "candle_context=candle_context" in s15_source
     assert "candle_context=candle_context" in analysis_source
     assert "entry_candle_context" in ipo_source
+    for source in (state_source, s15_source, analysis_source, ipo_source):
+        assert "fetch_entry_candles_with_meta" in source
+    assert "get_minute_candles_ka10080_with_meta" not in s15_source
+    assert "get_minute_candles_ka10080_with_meta" not in analysis_source
+    assert "get_minute_candles_ka10080_with_meta" not in ipo_source
     assert (
         "candle_context" in inspect.signature(GPTSniperEngine.analyze_target).parameters
     )

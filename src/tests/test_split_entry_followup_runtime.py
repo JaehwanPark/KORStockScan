@@ -763,6 +763,85 @@ def test_post_probe_wait_uses_submit_timestamp_and_latest_drop_still_vetoes(
     )
 
 
+def test_wait_probe_confirmation_requires_a_new_market_evidence_version(monkeypatch):
+    monkeypatch.setattr(
+        state_handlers,
+        "_post_probe_recheck_interval_sec",
+        lambda: 0.25,
+    )
+    stock = {}
+    first = {
+        "post_probe_direction_state": "STRONG",
+        "post_probe_confirmation_source_version_signature": "snapshot-a",
+        "post_probe_confirmation_evidence_version_proven": True,
+    }
+    ready, count = state_handlers._advance_wait_probe_confirmation(
+        stock,
+        first,
+        now_ts=100.0,
+    )
+    assert ready is False
+    assert count == 1
+
+    same = dict(first)
+    ready, count = state_handlers._advance_wait_probe_confirmation(
+        stock,
+        same,
+        now_ts=100.3,
+    )
+    assert ready is False
+    assert count == 1
+    assert same["probe_confirmation_evidence_changed"] is False
+
+    changed = {
+        **first,
+        "post_probe_confirmation_source_version_signature": "snapshot-b",
+    }
+    ready, count = state_handlers._advance_wait_probe_confirmation(
+        stock,
+        changed,
+        now_ts=100.6,
+    )
+    assert ready is True
+    assert count == 2
+    assert changed["probe_confirmation_evidence_changed"] is True
+
+
+def test_post_probe_source_epoch_normalizes_milliseconds():
+    assert state_handlers._post_probe_source_epoch(1_765_000_000.25) == 1_765_000_000.25
+    assert state_handlers._post_probe_source_epoch(1_765_000_000_250) == (
+        1_765_000_000.25
+    )
+
+
+def test_wait_probe_confirmation_does_not_accept_unversioned_evidence(monkeypatch):
+    monkeypatch.setattr(
+        state_handlers,
+        "_post_probe_recheck_interval_sec",
+        lambda: 0.25,
+    )
+    stock = {}
+    first = {
+        "post_probe_direction_state": "STRONG",
+        "post_probe_confirmation_source_version_signature": "snapshot-a",
+        "post_probe_confirmation_evidence_version_proven": False,
+    }
+    assert state_handlers._advance_wait_probe_confirmation(
+        stock,
+        first,
+        now_ts=100.0,
+    ) == (False, 1)
+    changed = {
+        **first,
+        "post_probe_confirmation_source_version_signature": "snapshot-b",
+    }
+    assert state_handlers._advance_wait_probe_confirmation(
+        stock,
+        changed,
+        now_ts=100.3,
+    ) == (False, 1)
+
+
 def test_post_probe_nxt_stale_wait_requires_existing_fast_tape(monkeypatch):
     monkeypatch.setattr(
         state_handlers,

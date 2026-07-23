@@ -318,7 +318,10 @@ def _build_overnight_holding_context(code, mem_stock, ws_data, ctx):
         try:
             recent_candles, candle_meta = (
                 kiwoom_utils.get_minute_candles_ka10080_with_meta(
-                    KIWOOM_TOKEN, request_code, limit=60
+                    KIWOOM_TOKEN,
+                    request_code,
+                    limit=60,
+                    explicit_request_code=True,
                 )
             )
         except Exception as exc:

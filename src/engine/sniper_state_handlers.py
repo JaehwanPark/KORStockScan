@@ -1,6 +1,7 @@
 """State machine handlers for the sniper engine."""
 
 import fcntl
+import hashlib
 import json
 import os
 import queue
@@ -72,6 +73,7 @@ from src.engine.scalping.entry_candle_context import (
     build_entry_candle_context,
     entry_candle_context_enabled,
     entry_candle_context_log_fields,
+    fetch_entry_candles_with_meta,
     resolve_entry_candle_request_code,
     resolve_entry_candle_session,
     resolve_entry_candle_venue,
@@ -4639,6 +4641,16 @@ def _attempt_stop_line_touch_mandatory_avg_down(
             and reason_type == "LOSS"
             and rule in {"scalp_soft_stop_pct", "scalp_hard_stop_pct"}
         ):
+            defer_started_at = _safe_float(
+                (stock or {}).get("stop_line_touch_avg_down_defer_started_at"),
+                0.0,
+            )
+            defer_active_at_block = defer_started_at > 0.0
+            defer_elapsed_sec = (
+                max(0.0, float(now_ts) - defer_started_at)
+                if defer_active_at_block
+                else 0.0
+            )
             _log_holding_pipeline(
                 stock,
                 code,
@@ -4671,6 +4683,24 @@ def _attempt_stop_line_touch_mandatory_avg_down(
                 add_type="AVG_DOWN",
                 add_reason=_DEEP_RECOVERY_AVG_DOWN_REASON,
                 replaced_legacy_add_reason=_STOP_LINE_TOUCH_MANDATORY_AVG_DOWN_REASON,
+                deep_recovery_defer_active_at_block=defer_active_at_block,
+                deep_recovery_defer_interrupted=bool(
+                    defer_active_at_block and reason != "stop_line_not_touched"
+                ),
+                deep_recovery_defer_interrupted_reason=(
+                    reason if defer_active_at_block else "-"
+                ),
+                deep_recovery_defer_elapsed_sec=f"{defer_elapsed_sec:.3f}",
+                deep_recovery_defer_anchor_profit=(
+                    (stock or {}).get("stop_line_touch_avg_down_defer_anchor_profit")
+                    if defer_active_at_block
+                    else "-"
+                ),
+                deep_recovery_defer_anchor_price=(
+                    (stock or {}).get("stop_line_touch_avg_down_defer_anchor_price")
+                    if defer_active_at_block
+                    else "-"
+                ),
                 actual_order_submitted=False,
                 broker_order_forbidden=True,
                 **context_fields,
@@ -19989,7 +20019,10 @@ def _get_holding_minute_candles_with_meta(
     )
     try:
         candles, metadata = kiwoom_utils.get_minute_candles_ka10080_with_meta(
-            KIWOOM_TOKEN, request_code, limit=limit
+            KIWOOM_TOKEN,
+            request_code,
+            limit=limit,
+            explicit_request_code=True,
         )
         resolved_metadata = dict(metadata or {})
         resolved_metadata["holding_context_request_code"] = request_code
@@ -31113,15 +31146,17 @@ def _retry_entry_ai_submit_authority_before_block(
         },
     )
     try:
+        retry_ws_data = dict(ws_data or {})
         recent_ticks = (
             kiwoom_utils.get_tick_history_ka10003(KIWOOM_TOKEN, code, limit=10) or []
         )
-        recent_candles, candle_source_meta = (
-            kiwoom_utils.get_minute_candles_ka10080_with_meta(
-                KIWOOM_TOKEN, code, limit=40
-            )
+        recent_candles, candle_source_meta = fetch_entry_candles_with_meta(
+            KIWOOM_TOKEN,
+            code,
+            retry_ws_data,
+            limit=40,
+            now_ts=now_ts,
         )
-        retry_ws_data = dict(ws_data or {})
         try:
             _update_ai_quote_freshness_fields(retry_ws_data)
         except Exception as exc:
@@ -32713,6 +32748,7 @@ _ENTRY_SPLIT_PROBE_RUNTIME_KEYS = (
     "probe_confirmation_count",
     "probe_confirmation_last_at",
     "probe_confirmation_last_state",
+    "probe_confirmation_last_signature",
     "probe_expand_forbidden",
 )
 
@@ -32736,6 +32772,13 @@ def _post_probe_recheck_interval_sec() -> float:
     return max(0.1, min(1.0, raw / 1000.0))
 
 
+def _post_probe_source_epoch(value: Any) -> float:
+    observed_at = _safe_float(value, 0.0)
+    if observed_at > 10_000_000_000:
+        observed_at /= 1000.0
+    return round(observed_at, 6) if observed_at > 0 else 0.0
+
+
 def _advance_wait_probe_confirmation(
     stock: dict,
     direction_fields: dict[str, Any],
@@ -32749,27 +32792,51 @@ def _advance_wait_probe_confirmation(
     ).upper()
     previous_state = str(stock.get("probe_confirmation_last_state") or "").upper()
     previous_at = _safe_float(stock.get("probe_confirmation_last_at"), 0.0)
+    previous_signature = str(
+        stock.get("probe_confirmation_last_signature") or ""
+    ).strip()
+    evidence_signature = str(
+        direction_fields.get("post_probe_confirmation_source_version_signature") or ""
+    ).strip()
+    evidence_version_proven = bool(
+        direction_fields.get("post_probe_confirmation_evidence_version_proven")
+    )
     confirmation_count = max(0, _safe_int(stock.get("probe_confirmation_count"), 0))
     next_at = float(now_ts)
+    next_signature = evidence_signature
+    evidence_changed = False
     if direction_state == "STRONG":
-        if previous_state != "STRONG" or previous_at <= 0:
+        if previous_state != "STRONG" or previous_at <= 0 or not previous_signature:
             confirmation_count = 1
-        elif now_ts - previous_at >= _post_probe_recheck_interval_sec() - 1e-6:
+        elif (
+            now_ts - previous_at >= _post_probe_recheck_interval_sec() - 1e-6
+            and evidence_version_proven
+            and evidence_signature
+            and evidence_signature != previous_signature
+        ):
             confirmation_count += 1
+            evidence_changed = True
         else:
             next_at = previous_at
+            next_signature = previous_signature
     else:
         confirmation_count = 0
+        next_signature = ""
     _mutate_stock_state(
         stock,
         set_fields={
             "probe_confirmation_count": confirmation_count,
             "probe_confirmation_last_at": next_at,
             "probe_confirmation_last_state": direction_state or "UNKNOWN",
+            "probe_confirmation_last_signature": next_signature,
         },
     )
     direction_fields["probe_confirmation_count"] = confirmation_count
     direction_fields["probe_confirmation_required_count"] = 2
+    direction_fields["probe_confirmation_evidence_changed"] = evidence_changed
+    direction_fields["probe_confirmation_evidence_version_proven"] = (
+        evidence_version_proven
+    )
     return (
         bool(direction_state == "STRONG" and confirmation_count >= 2),
         confirmation_count,
@@ -33406,6 +33473,84 @@ def _post_probe_direction_fields(
     snapshot_session = market_session_bucket or resolve_entry_candle_session(
         now_ts=observed_now
     )
+    realtime_type_ts = (
+        ws_data.get("last_realtime_type_ts")
+        if isinstance(ws_data.get("last_realtime_type_ts"), dict)
+        else {}
+    )
+    recent_trade_ticks = [
+        tick
+        for tick in (ws_data.get("recent_trade_ticks") or [])
+        if isinstance(tick, dict)
+    ]
+    latest_tick = (
+        max(
+            recent_trade_ticks,
+            key=lambda tick: _post_probe_source_epoch(
+                tick.get("received_at_ms") or tick.get("ts") or tick.get("timestamp")
+            ),
+        )
+        if recent_trade_ticks
+        else {}
+    )
+    evidence_versions = {
+        "ws_update": _post_probe_source_epoch(ws_data.get("last_ws_update_ts")),
+        "ws_0b": _post_probe_source_epoch(realtime_type_ts.get("0B")),
+        "ws_0d": _post_probe_source_epoch(realtime_type_ts.get("0D")),
+        "tick": _post_probe_source_epoch(
+            latest_tick.get("received_at_ms")
+            or latest_tick.get("ts")
+            or latest_tick.get("timestamp")
+        ),
+        "feature_probe": _post_probe_source_epoch(feature_probe_at),
+        "live_micro": _post_probe_source_epoch(
+            live_micro.get("orderbook_micro_captured_at_ms")
+        ),
+    }
+    confirmation_payload = {
+        "versions": evidence_versions,
+        "mark_price": mark_price,
+        "best_bid": _safe_int(quote_fields.get("passive_buy_price"), 0),
+        "best_ask": _safe_int(quote_fields.get("executable_buy_price"), 0),
+        "positive_groups": positives,
+        "negative_groups": negatives,
+        "tick_acceleration": tick_accel,
+        "micro_state": micro_state,
+        "qi": qi if qi_available else None,
+        "ofi": ofi if ofi_available else None,
+        "buy_pressure": buy_pressure if pressure_available else None,
+        "latest_tick": {
+            key: latest_tick.get(key)
+            for key in (
+                "received_at_ms",
+                "ts",
+                "timestamp",
+                "time",
+                "price",
+                "volume",
+                "aggressor_side",
+            )
+        },
+    }
+    confirmation_signature = hashlib.sha256(
+        json.dumps(
+            confirmation_payload,
+            sort_keys=True,
+            ensure_ascii=True,
+            default=str,
+        ).encode("utf-8")
+    ).hexdigest()[:20]
+    source_version_signature = hashlib.sha256(
+        json.dumps(
+            evidence_versions,
+            sort_keys=True,
+            ensure_ascii=True,
+            default=str,
+        ).encode("utf-8")
+    ).hexdigest()[:20]
+    confirmation_version_proven = any(
+        _safe_float(value, 0.0) > 0 for value in evidence_versions.values()
+    )
     market_snapshot = build_ai_market_snapshot(
         stock_code=code,
         decision_stage="post_probe",
@@ -33452,6 +33597,17 @@ def _post_probe_direction_fields(
             "last_watching_ai_snapshot_id"
         ),
         "post_probe_direction_market_snapshot_id": market_snapshot.get("snapshot_id"),
+        "post_probe_confirmation_evidence_signature": confirmation_signature,
+        "post_probe_confirmation_source_version_signature": (source_version_signature),
+        "post_probe_confirmation_evidence_version_proven": (
+            confirmation_version_proven
+        ),
+        "post_probe_confirmation_ws_update_at": evidence_versions["ws_update"],
+        "post_probe_confirmation_ws_0b_at": evidence_versions["ws_0b"],
+        "post_probe_confirmation_ws_0d_at": evidence_versions["ws_0d"],
+        "post_probe_confirmation_tick_at": evidence_versions["tick"],
+        "post_probe_confirmation_feature_probe_at": evidence_versions["feature_probe"],
+        "post_probe_confirmation_live_micro_at": evidence_versions["live_micro"],
         "post_probe_direction_ai_action_age_sec": (
             f"{ai_action_age_sec:.3f}"
             if ai_action_age_sec is not None
@@ -34374,10 +34530,13 @@ def _apply_entry_ai_price_canary(
             kiwoom_utils.get_tick_history_ka10003(KIWOOM_TOKEN, code, limit=tick_limit)
             or []
         )
-        recent_candles, candle_source_meta = (
-            kiwoom_utils.get_minute_candles_ka10080_with_meta(
-                KIWOOM_TOKEN, code, limit=fetch_candle_limit
-            )
+        recent_candles, candle_source_meta = fetch_entry_candles_with_meta(
+            KIWOOM_TOKEN,
+            code,
+            ws_data or {},
+            venue=candle_venue,
+            session=candle_session,
+            limit=fetch_candle_limit,
         )
     except Exception as exc:
         _log_entry_pipeline(
@@ -38030,10 +38189,12 @@ def _run_watching_score_projection_refresh(
         recent_ticks = kiwoom_utils.get_tick_history_ka10003(
             KIWOOM_TOKEN, code, limit=10
         )
-        recent_candles, candle_source_meta = (
-            kiwoom_utils.get_minute_candles_ka10080_with_meta(
-                KIWOOM_TOKEN, code, limit=40
-            )
+        recent_candles, candle_source_meta = fetch_entry_candles_with_meta(
+            KIWOOM_TOKEN,
+            code,
+            ws_data,
+            limit=40,
+            now_ts=now_ts,
         )
         if not recent_ticks:
             _mutate_stock_state(
@@ -42381,6 +42542,11 @@ def _evaluate_holding_flow_override(
             **swing_exit_micro_fields,
         )
     micro_log_fields_for_smoothing = {} if swing_exit_micro_fields else micro_log_fields
+    holding_flow_ai_ops_fields = {
+        key: value
+        for key, value in _build_ai_ops_log_fields(flow_result).items()
+        if key not in holding_context_log_fields
+    }
     _log_holding_pipeline(
         stock,
         code,
@@ -42397,7 +42563,7 @@ def _evaluate_holding_flow_override(
         held_sec=held_sec,
         elapsed_sec=elapsed_sec,
         worsen_from_candidate=f"{worsen_from_candidate:.2f}",
-        **_build_ai_ops_log_fields(flow_result),
+        **holding_flow_ai_ops_fields,
         holding_context_raw_flow_action=raw_flow_action,
         holding_context_change_count=change_count,
         holding_context_change_groups=change_groups,
@@ -45950,8 +46116,12 @@ def _handle_watching_strategy_branch(
                             KIWOOM_TOKEN, code, limit=10
                         )
                         recent_candles, candle_source_meta = (
-                            kiwoom_utils.get_minute_candles_ka10080_with_meta(
-                                KIWOOM_TOKEN, code, limit=40
+                            fetch_entry_candles_with_meta(
+                                KIWOOM_TOKEN,
+                                code,
+                                ws_data,
+                                limit=40,
+                                now_ts=now_ts,
                             )
                         )
                         if ws_data.get("orderbook") and recent_ticks:
@@ -48081,8 +48251,12 @@ def _handle_watching_strategy_branch(
                                 quant_metrics=metrics,
                             )
                             gatekeeper_candles, gatekeeper_candle_meta = (
-                                kiwoom_utils.get_minute_candles_ka10080_with_meta(
-                                    KIWOOM_TOKEN, code, limit=40
+                                fetch_entry_candles_with_meta(
+                                    KIWOOM_TOKEN,
+                                    code,
+                                    ws_data,
+                                    limit=40,
+                                    now_ts=now_ts,
                                 )
                             )
                             gatekeeper_candle_context = build_entry_candle_context(
@@ -52180,6 +52354,9 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                         or "-"
                     ),
                     "probe_confirmation_count": 0,
+                    "probe_confirmation_last_at": 0.0,
+                    "probe_confirmation_last_state": "UNKNOWN",
+                    "probe_confirmation_last_signature": "",
                     "probe_expand_forbidden": False,
                 },
             )

@@ -3294,12 +3294,23 @@ def _normalize_ka10080_time(raw_time):
     return text, text
 
 
-def get_minute_candles_ka10080_with_meta(token, code, limit=10):
+def get_minute_candles_ka10080_with_meta(
+    token,
+    code,
+    limit=10,
+    *,
+    explicit_request_code=False,
+):
     """
     [REST API] ka10080: 주식분봉차트조회
     - 시간 역순 배열 방지 및 AI/지표 연산용 무결점 데이터 정제
     """
-    req_code = get_effective_kiwoom_code(code)
+    if explicit_request_code:
+        _raw_code, explicit_suffix = _split_kiwoom_market_suffix(code)
+        normalized_code = normalize_stock_code(code)
+        req_code = f"{normalized_code}{explicit_suffix}"
+    else:
+        req_code = get_effective_kiwoom_code(code)
     cache_key = (str(req_code), int(limit))
     cached = _cache_get("ka10080_minutes_with_meta", cache_key)
     if cached is not None:
@@ -3336,6 +3347,8 @@ def get_minute_candles_ka10080_with_meta(token, code, limit=10):
     source_meta.update(
         {
             "requested_limit": int(limit or 0),
+            "request_code": str(req_code),
+            "explicit_request_code": bool(explicit_request_code),
             "received_count": len(all_candles),
             "sort_direction_detected": _detect_sort_direction(all_candles, "cntr_tm"),
             "latest_source_timestamp": max(

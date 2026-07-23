@@ -3387,7 +3387,11 @@ def test_wait_probe_requires_two_distinct_strong_confirmations(monkeypatch):
         "KORSTOCKSCAN_DYNAMIC_ENTRY_PRICE_RESOLVER_POST_PROBE_RECHECK_MS", "250"
     )
     stock = {}
-    fields = {"post_probe_direction_state": "STRONG"}
+    fields = {
+        "post_probe_direction_state": "STRONG",
+        "post_probe_confirmation_source_version_signature": "source-version-a",
+        "post_probe_confirmation_evidence_version_proven": True,
+    }
 
     ready, count = state_handlers._advance_wait_probe_confirmation(
         stock, fields, now_ts=1_000.0
@@ -3403,6 +3407,13 @@ def test_wait_probe_requires_two_distinct_strong_confirmations(monkeypatch):
 
     ready, count = state_handlers._advance_wait_probe_confirmation(
         stock, fields, now_ts=1_000.25
+    )
+    assert ready is False
+    assert count == 1
+
+    fields["post_probe_confirmation_source_version_signature"] = "source-version-b"
+    ready, count = state_handlers._advance_wait_probe_confirmation(
+        stock, fields, now_ts=1_000.5
     )
     assert ready is True
     assert count == 2
@@ -8353,6 +8364,9 @@ def test_holding_flow_override_passes_micro_estimator_fields_to_ai(monkeypatch):
                 "reason": "test_hold",
                 "flow_state": "UPTREND",
                 "evidence": ["supportive_micro_context"],
+                # Provider results may echo holding-context provenance. The
+                # runtime context remains the canonical log-field owner.
+                "holding_context_schema": "provider_echo_should_not_override",
             }
 
     real_rule_bool = state_handlers._rule_bool
@@ -8435,6 +8449,10 @@ def test_holding_flow_override_passes_micro_estimator_fields_to_ai(monkeypatch):
     assert (
         "standalone_exit" in captured_ctx["holding_flow_micro_estimator_forbidden_uses"]
     )
+    review_fields = next(
+        fields for stage, fields in logs if stage == "holding_flow_override_review"
+    )
+    assert review_fields["holding_context_schema"] == "holding_decision_context_v1"
     assert any(stage == "holding_flow_override_defer_exit" for stage, _fields in logs)
 
 
@@ -41555,6 +41573,121 @@ def test_soft_stop_line_touch_avg_down_defer_waits_for_extra_dip(monkeypatch):
     candidate = by_stage["stop_line_touch_mandatory_avg_down_candidate"]
     assert candidate["defer_reason"] == "extra_dip_reached"
     assert candidate["defer_extra_worsen_pct"] == "0.22"
+
+
+def test_soft_stop_line_touch_avg_down_logs_defer_interruption(monkeypatch):
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        DEEP_RECOVERY_AVG_DOWN_ENABLED=True,
+        DEEP_RECOVERY_AVG_DOWN_PNL_MAX=-3.00,
+        DEEP_RECOVERY_AVG_DOWN_MAX_HOLD_SEC=2_000,
+        DEEP_RECOVERY_AVG_DOWN_MIN_AI_SCORE=1,
+        SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_ENABLED=True,
+        SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_MAX_SEC=3,
+        SCALP_STOP_LINE_TOUCH_AVG_DOWN_EXTRA_DIP_PCT=0.20,
+    )
+    stock = {
+        "id": 15104,
+        "code": "038500",
+        "name": "삼표시멘트",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 9_880,
+        "buy_qty": 1,
+        "actual_order_submitted": True,
+        "last_reversal_features": _trusted_reversal_features(
+            buy_pressure_10t=82.0,
+            tick_acceleration_ratio=1.08,
+            large_sell_print_detected=False,
+            curr_vs_micro_vwap_bp=1.5,
+        ),
+        **_fresh_holding_score_fields(62, now_ts=1_000.0),
+    }
+    pipeline_events = []
+    add_calls = []
+    monkeypatch.setattr(
+        state_handlers,
+        "can_consider_scale_in",
+        lambda *args, **kwargs: {"allowed": True, "reason": "ok"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_holding_flow_max_defer_micro_support",
+        lambda *args, **kwargs: (False, {}),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_process_scale_in_action",
+        lambda **kwargs: add_calls.append(kwargs),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: pipeline_events.append((stage, fields)),
+    )
+
+    first = state_handlers._attempt_stop_line_touch_mandatory_avg_down(
+        stock=stock,
+        code="038500",
+        ws_data={"curr": 9_580, "best_bid": 9_570, "best_ask": 9_580},
+        strategy="SCALPING",
+        market_regime="NORMAL",
+        admin_id=1,
+        sell_reason_type="LOSS",
+        exit_rule="scalp_soft_stop_pct",
+        profit_rate=-3.06,
+        peak_profit=0.27,
+        current_ai_score=62,
+        held_sec=1_331,
+        dynamic_stop_pct=-3.00,
+        now_ts=1_000.0,
+        context_fields={"sell_intercept_context": "soft_stop_touch_before_grace"},
+    )
+    stock["last_reversal_features"] = _trusted_reversal_features(
+        buy_pressure_10t=82.0,
+        tick_acceleration_ratio=1.08,
+        large_sell_print_detected=False,
+        curr_vs_micro_vwap_bp=-20.0,
+    )
+    second = state_handlers._attempt_stop_line_touch_mandatory_avg_down(
+        stock=stock,
+        code="038500",
+        ws_data={"curr": 9_585, "best_bid": 9_575, "best_ask": 9_585},
+        strategy="SCALPING",
+        market_regime="NORMAL",
+        admin_id=1,
+        sell_reason_type="LOSS",
+        exit_rule="scalp_soft_stop_pct",
+        profit_rate=-3.01,
+        peak_profit=0.27,
+        current_ai_score=62,
+        held_sec=1_332,
+        dynamic_stop_pct=-3.00,
+        now_ts=1_001.0,
+        context_fields={"sell_intercept_context": "soft_stop_touch_before_grace"},
+    )
+
+    assert first["deferred"] is True
+    assert second == {
+        "attempted": False,
+        "submitted": False,
+        "reason": "deep_recovery_micro_vwap_not_met",
+    }
+    assert add_calls == []
+    interrupted = [
+        fields
+        for stage, fields in pipeline_events
+        if stage == "stop_line_touch_mandatory_avg_down_not_eligible"
+        and fields.get("deep_recovery_defer_interrupted")
+    ][0]
+    assert interrupted["deep_recovery_defer_active_at_block"] is True
+    assert (
+        interrupted["deep_recovery_defer_interrupted_reason"]
+        == "deep_recovery_micro_vwap_not_met"
+    )
+    assert interrupted["deep_recovery_defer_elapsed_sec"] == "1.000"
+    assert interrupted["deep_recovery_defer_anchor_profit"] == -3.06
+    assert interrupted["deep_recovery_defer_anchor_price"] == 9_580
 
 
 def test_hard_stop_line_touch_avg_down_forbidden_before_real_submit(monkeypatch):

@@ -8,6 +8,7 @@ from src.engine.sniper_s15_fast_track import bind_s15_dependencies
 from src.engine.scalping.entry_candle_context import (
     build_entry_candle_context,
     entry_candle_context_enabled,
+    fetch_entry_candles_with_meta,
     resolve_entry_candle_session,
     resolve_entry_candle_venue,
 )
@@ -347,10 +348,11 @@ def get_detailed_reason(code):
         recent_ticks = kiwoom_utils.get_tick_history_ka10003(
             KIWOOM_TOKEN, code, limit=10
         )
-        recent_candles, candle_source_meta = (
-            kiwoom_utils.get_minute_candles_ka10080_with_meta(
-                KIWOOM_TOKEN, code, limit=40
-            )
+        recent_candles, candle_source_meta = fetch_entry_candles_with_meta(
+            KIWOOM_TOKEN,
+            code,
+            ws_data,
+            limit=40,
         )
 
         if recent_ticks:
@@ -485,10 +487,11 @@ def get_realtime_ai_scores(codes):
 
         try:
             ticks = kiwoom_utils.get_tick_history_ka10003(KIWOOM_TOKEN, code, limit=10)
-            candles, candle_source_meta = (
-                kiwoom_utils.get_minute_candles_ka10080_with_meta(
-                    KIWOOM_TOKEN, code, limit=40
-                )
+            candles, candle_source_meta = fetch_entry_candles_with_meta(
+                KIWOOM_TOKEN,
+                code,
+                ws_data,
+                limit=40,
             )
 
             if ticks:
