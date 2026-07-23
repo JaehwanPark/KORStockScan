@@ -17944,6 +17944,20 @@ def _append_pyramid_probe_fields(fields: dict, probe: dict | None) -> dict:
     return merged
 
 
+def _reversal_add_state_provenance_fields(stock: dict | None) -> dict[str, str]:
+    stock = stock if isinstance(stock, dict) else {}
+    state = str(stock.get("reversal_add_state") or "").strip()
+    if state:
+        return {
+            "state": state,
+            "state_provenance": "runtime_reversal_add_state",
+        }
+    return {
+        "state": "REVERSAL_NOT_ARMED",
+        "state_provenance": "default_not_armed_before_candidate_transition",
+    }
+
+
 def _append_reversal_add_probe_fields(fields: dict, probe: dict | None) -> dict:
     merged = dict(fields or {})
     if not isinstance(probe, dict) or not probe:
@@ -22193,6 +22207,10 @@ def _fast_exit_execution_route_fields(
     execution_cohort = _early_volatility_tp_execution_cohort(
         float(now_ts), broker_route
     )
+    execution_cohort_resolution = "session_and_broker_route_resolved"
+    if execution_cohort == "UNKNOWN":
+        execution_cohort = "OUTSIDE_SUPPORTED_SESSION"
+        execution_cohort_resolution = "outside_supported_execution_session"
     recorded_route_mismatch = bool(
         recorded_entry_cohort in {"NXT", "PREMARKET_KRX_LIKE"}
         and recorded_entry_route
@@ -22270,6 +22288,7 @@ def _fast_exit_execution_route_fields(
     return {
         "fast_exit_broker_route": broker_route or "-",
         "fast_exit_execution_cohort": execution_cohort,
+        "fast_exit_execution_cohort_resolution": execution_cohort_resolution,
         "fast_exit_market_session_bucket": session_bucket,
         "fast_exit_nxt_enabled": resolution.get("nxt_enabled"),
         "fast_exit_nxt_flag_source": resolution.get("nxt_flag_source") or "-",
@@ -56385,7 +56404,11 @@ def _resolve_holding_sell_dmst_stex_tp(
         "dmst_stex_tp": "NXT",
         "nxt_enabled": is_nxt_enabled,
         "nxt_flag_source": source,
-        "reason": "nxt_session_nxt_enabled_or_unknown",
+        "reason": (
+            "nxt_session_nxt_enabled"
+            if is_nxt_enabled is True
+            else "nxt_session_nxt_capability_unconfirmed"
+        ),
     }
 
 
@@ -67682,8 +67705,7 @@ def handle_holding_state(
                             "reversal_add_blocked_reason",
                             **_append_reversal_add_probe_fields(
                                 {
-                                    "state": stock.get("reversal_add_state", "")
-                                    or "reversal_state_unknown",
+                                    **_reversal_add_state_provenance_fields(stock),
                                     "scale_in_arm": "AVG_DOWN",
                                     "scale_in_blocker_namespace": _scale_in_namespace_for_arm(
                                         "AVG_DOWN", _ra_probe_reason
@@ -67784,8 +67806,7 @@ def handle_holding_state(
                         "reversal_add_gate_blocked",
                         **_append_reversal_add_probe_fields(
                             {
-                                "state": stock.get("reversal_add_state", "")
-                                or "reversal_state_unknown",
+                                **_reversal_add_state_provenance_fields(stock),
                                 "scale_in_arm": "AVG_DOWN",
                                 "scale_in_blocker_namespace": _scale_in_namespace_for_arm(
                                     "AVG_DOWN", gate.get("reason") or "-"

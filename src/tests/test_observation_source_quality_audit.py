@@ -1983,6 +1983,98 @@ def test_observation_source_quality_audit_does_not_review_unproven_unknown_prove
     }
 
 
+def test_observation_source_quality_audit_reviews_explicit_fail_closed_unknown_provenance(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-07-23",
+        [
+            _event(
+                "reversal_add_blocked_reason",
+                _reversal_add_blocked_fields(state="reversal_state_unknown"),
+                record_id=1,
+            ),
+            _event(
+                "probe_continuation_deferred",
+                {
+                    "decision_authority": "dynamic_entry_price_resolver_p1_post_probe",
+                    "post_probe_direction_state": "UNKNOWN",
+                    "post_probe_continuation_action": "DEFER",
+                    "post_probe_direction_reason": "post_probe_ai_action_not_fresh",
+                    "post_probe_direction_group_count": 2,
+                    "post_probe_directional_group_count": 2,
+                    "allowed_runtime_apply": False,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                },
+                record_id=2,
+            ),
+            _event(
+                "scalp_trailing_continuation_recheck",
+                {
+                    "quote_recovery_large_sell_state": "unknown",
+                    "quote_recovery_fetch_state": "ok",
+                    "quote_recovery_candidate": True,
+                    "quote_recovery_eligible": True,
+                    "reversal_feature_context_usable": False,
+                    "large_sell_print_detected": False,
+                    "micro_source_trusted_ws": True,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                },
+                record_id=3,
+            ),
+            _event(
+                "scalp_fast_exit_quote_blocked",
+                {
+                    "fast_exit_route_resolution_reason": (
+                        "nxt_session_nxt_enabled_or_unknown"
+                    ),
+                    "fast_exit_execution_cohort": "UNKNOWN",
+                    "fast_exit_broker_route": "NXT",
+                    "fast_exit_nxt_enabled": True,
+                    "fast_exit_nxt_flag_source": "daily_stock_quotes.is_nxt",
+                    "fast_exit_route_guard_reason": "nxt_ws_route_proven",
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                },
+                record_id=4,
+            ),
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-07-23")
+
+    assert report["unknown_token_findings"] == []
+    reviewed = {
+        item["stage"]: {
+            field["field"]: field["reviewed_reason"] for field in item["fields"]
+        }
+        for item in report["reviewed_unknown_token_findings"]
+    }
+    assert reviewed["reversal_add_blocked_reason"]["state"] == (
+        "reviewed_reversal_state_not_initialized"
+    )
+    assert reviewed["probe_continuation_deferred"]["post_probe_direction_state"] == (
+        "reviewed_post_probe_direction_source_gap"
+    )
+    assert (
+        reviewed["scalp_trailing_continuation_recheck"][
+            "quote_recovery_large_sell_state"
+        ]
+        == "reviewed_quote_recovery_large_sell_not_available"
+    )
+    assert reviewed["scalp_fast_exit_quote_blocked"][
+        "fast_exit_route_resolution_reason"
+    ] == "reviewed_legacy_fast_exit_route_provenance"
+    assert reviewed["scalp_fast_exit_quote_blocked"][
+        "fast_exit_execution_cohort"
+    ] == "reviewed_legacy_fast_exit_route_provenance"
+
+
 def test_observation_source_quality_audit_reviews_unknown_fill_quality_without_requested_qty(
     monkeypatch,
     tmp_path,

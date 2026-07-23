@@ -1125,7 +1125,40 @@ def test_holding_sell_exchange_resolution_uses_nxt_after_krx_regular_session(
 
     assert decision["blocked"] is False
     assert decision["dmst_stex_tp"] == "NXT"
-    assert decision["reason"] == "nxt_session_nxt_enabled_or_unknown"
+    assert decision["reason"] == "nxt_session_nxt_enabled"
+
+
+def test_holding_sell_exchange_resolution_labels_unconfirmed_nxt_capability(
+    monkeypatch,
+):
+    monkeypatch.setattr(state_handlers, "DB", None)
+
+    decision = state_handlers._resolve_holding_sell_dmst_stex_tp(
+        {"name": "미확인"},
+        "123456",
+        now_t=dt_time(16, 39),
+    )
+
+    assert decision["blocked"] is False
+    assert decision["dmst_stex_tp"] == "NXT"
+    assert decision["nxt_enabled"] is None
+    assert decision["reason"] == "nxt_session_nxt_capability_unconfirmed"
+
+
+def test_reversal_add_state_provenance_uses_explicit_not_armed_label():
+    missing = state_handlers._reversal_add_state_provenance_fields({})
+    active = state_handlers._reversal_add_state_provenance_fields(
+        {"reversal_add_state": "REVERSAL_CANDIDATE"}
+    )
+
+    assert missing == {
+        "state": "REVERSAL_NOT_ARMED",
+        "state_provenance": "default_not_armed_before_candidate_transition",
+    }
+    assert active == {
+        "state": "REVERSAL_CANDIDATE",
+        "state_provenance": "runtime_reversal_add_state",
+    }
 
 
 def test_entry_submit_exchange_request_overrides_session_route():

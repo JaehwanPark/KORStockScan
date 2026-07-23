@@ -776,6 +776,12 @@ def test_fast_exit_route_guard_resolves_nxt_and_premarket_as_nxt():
     )
     assert nxt_fields["fast_exit_broker_route"] == "NXT"
     assert nxt_fields["fast_exit_execution_cohort"] == "NXT"
+    assert nxt_fields["fast_exit_execution_cohort_resolution"] == (
+        "session_and_broker_route_resolved"
+    )
+    assert nxt_fields["fast_exit_route_resolution_reason"] == (
+        "nxt_session_nxt_enabled"
+    )
     assert nxt_fields["fast_exit_ws_nxt_route_ready"] is True
     assert nxt_fields["fast_exit_route_source_quality_blocked"] is False
 
@@ -798,6 +804,29 @@ def test_fast_exit_route_guard_resolves_nxt_and_premarket_as_nxt():
         == "PREMARKET_KRX_LIKE"
     )
     assert premarket_fields["fast_exit_route_source_quality_blocked"] is False
+
+
+def test_fast_exit_route_provenance_labels_outside_supported_session():
+    code = "123456"
+    outside_ts = datetime(
+        2026, 7, 23, 15, 45, tzinfo=handlers._KST
+    ).timestamp()
+
+    fields = handlers._fast_exit_execution_route_fields(
+        {"is_nxt": True},
+        code,
+        _nxt_quote_snapshot(code, outside_ts),
+        now_ts=outside_ts,
+    )
+
+    assert fields["fast_exit_broker_route"] == "NXT"
+    assert fields["fast_exit_execution_cohort"] == "OUTSIDE_SUPPORTED_SESSION"
+    assert fields["fast_exit_execution_cohort_resolution"] == (
+        "outside_supported_execution_session"
+    )
+    assert fields["fast_exit_route_resolution_reason"] == (
+        "nxt_session_nxt_enabled"
+    )
 
 
 def test_fast_exit_known_session_routes_do_not_wait_for_nxt_metadata(monkeypatch):

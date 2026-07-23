@@ -2510,19 +2510,36 @@ def _reviewed_unknown_reason_for_stage_field(
     def _is_reviewed_post_probe_direction_source_gap() -> bool:
         if str(key or "") != "post_probe_direction_state":
             return False
+        if stage != "probe_continuation_deferred":
+            return False
         group_counts = (
             _field_text("post_probe_direction_group_count"),
             _field_text("post_probe_directional_group_count"),
         )
-        return (
+        base_contract = (
             str(value or "").strip().upper() == "UNKNOWN"
             and _field_text("decision_authority")
             == "dynamic_entry_price_resolver_p1_post_probe"
             and _field_text("post_probe_continuation_action") == "DEFER"
-            and _field_text("post_probe_direction_reason")
-            == "post_probe_direction_source_gap"
-            and group_counts in {("1", "1"), ("2", "1")}
             and _is_falseish("allowed_runtime_apply")
+        )
+        if not base_contract:
+            return False
+        reason = _field_text("post_probe_direction_reason")
+        if reason == "post_probe_direction_source_gap":
+            return group_counts in {("1", "1"), ("2", "1")}
+        return (
+            reason
+            in {
+                "post_probe_ai_action_not_fresh",
+                "post_probe_ai_action_source_unverified",
+                "post_probe_nxt_ai_veto_not_fresh",
+                "post_probe_nxt_ai_veto_source_unverified",
+                "post_probe_nxt_event_time_speed_unavailable",
+                "post_probe_resolver_unavailable",
+            }
+            and _is_falseish("actual_order_submitted")
+            and _is_trueish("broker_order_forbidden")
         )
 
     def _is_reviewed_quote_recovery_large_sell_not_available() -> bool:
@@ -2536,7 +2553,6 @@ def _reviewed_unknown_reason_for_stage_field(
             and _field_text("quote_recovery_fetch_state") in {"ok", "not_requested"}
             and _is_falseish("reversal_feature_context_usable")
             and _is_falseish("large_sell_print_detected")
-            and _is_falseish("micro_source_trusted_ws")
             and _is_falseish("actual_order_submitted")
             and _is_trueish("broker_order_forbidden")
             and (
@@ -2547,6 +2563,50 @@ def _reviewed_unknown_reason_for_stage_field(
                 )
             )
         )
+
+    def _is_reviewed_reversal_state_not_initialized() -> bool:
+        if (
+            stage != "reversal_add_blocked_reason"
+            or str(key or "") != "state"
+            or str(value or "").strip().lower() != "reversal_state_unknown"
+        ):
+            return False
+        return (
+            _field_text("decision_authority")
+            == "scale_in_attribution_source_only"
+            and _field_text("scale_in_arm") == "AVG_DOWN"
+            and bool(_field_text("scale_in_blocker_reason"))
+            and _is_falseish("runtime_effect")
+            and _is_falseish("allowed_runtime_apply")
+            and _is_falseish("actual_order_submitted")
+            and _is_trueish("broker_order_forbidden")
+        )
+
+    def _is_reviewed_fast_exit_route_provenance() -> bool:
+        if stage != "scalp_fast_exit_quote_blocked":
+            return False
+        field = str(key or "")
+        value_text = str(value or "").strip().lower()
+        if field == "fast_exit_route_resolution_reason":
+            if value_text != "nxt_session_nxt_enabled_or_unknown":
+                return False
+            return (
+                _field_text("fast_exit_broker_route") == "NXT"
+                and _field_text("fast_exit_nxt_enabled").lower()
+                in {"true", "1", "yes"}
+                and bool(_field_text("fast_exit_nxt_flag_source"))
+            )
+        if field == "fast_exit_execution_cohort":
+            if value_text != "unknown":
+                return False
+            return (
+                _field_text("fast_exit_broker_route") == "NXT"
+                and _field_text("fast_exit_route_guard_reason")
+                in {"nxt_ws_route_proven", "nxt_rest_route_proven"}
+                and _is_falseish("actual_order_submitted")
+                and _is_trueish("broker_order_forbidden")
+            )
+        return False
 
     def _is_reviewed_shallow_stale_not_available() -> bool:
         if stage not in {"loss_fallback_probe", "stat_action_decision_snapshot"}:
@@ -2722,6 +2782,10 @@ def _reviewed_unknown_reason_for_stage_field(
         return "reviewed_post_probe_direction_source_gap"
     if _is_reviewed_quote_recovery_large_sell_not_available():
         return "reviewed_quote_recovery_large_sell_not_available"
+    if _is_reviewed_reversal_state_not_initialized():
+        return "reviewed_reversal_state_not_initialized"
+    if _is_reviewed_fast_exit_route_provenance():
+        return "reviewed_legacy_fast_exit_route_provenance"
     if _is_reviewed_shallow_stale_not_available():
         return "reviewed_shallow_stale_flag_not_available"
     if _is_reviewed_first_touch_quote_stale_not_available():
