@@ -819,6 +819,8 @@ _RISING_MISSED_COMPLETED_SCALP_EVENT_CACHE: dict[str, Any] = {
     "size": 0,
     "rows_by_code": {},
 }
+_EARLY_VOLATILITY_TP_OBSERVATION_SIGNATURES: dict[str, str] = {}
+_EARLY_VOLATILITY_TP_OBSERVATION_SIGNATURE_CACHE_MAX = 2048
 _SCALP_LOSS_REENTRY_EVENT_CACHE: dict[str, Any] = {
     "date": "",
     "path": "",
@@ -931,6 +933,37 @@ def _mutate_stock_state(
                 stock[key] = value
         for key in pop_fields:
             stock.pop(key, None)
+
+
+def _early_volatility_tp_observation_seen(
+    cycle_id: str,
+    signature: str,
+) -> bool:
+    with ENTRY_LOCK:
+        return (
+            _EARLY_VOLATILITY_TP_OBSERVATION_SIGNATURES.get(str(cycle_id))
+            == str(signature)
+        )
+
+
+def _remember_early_volatility_tp_observation(
+    cycle_id: str,
+    signature: str,
+) -> None:
+    cache_key = str(cycle_id)
+    with ENTRY_LOCK:
+        if (
+            cache_key not in _EARLY_VOLATILITY_TP_OBSERVATION_SIGNATURES
+            and len(_EARLY_VOLATILITY_TP_OBSERVATION_SIGNATURES)
+            >= _EARLY_VOLATILITY_TP_OBSERVATION_SIGNATURE_CACHE_MAX
+        ):
+            oldest_key = next(
+                iter(_EARLY_VOLATILITY_TP_OBSERVATION_SIGNATURES),
+                None,
+            )
+            if oldest_key is not None:
+                _EARLY_VOLATILITY_TP_OBSERVATION_SIGNATURES.pop(oldest_key, None)
+        _EARLY_VOLATILITY_TP_OBSERVATION_SIGNATURES[cache_key] = str(signature)
 
 
 def _rule(name, default=None):
@@ -17163,13 +17196,15 @@ def _emit_scalp_entry_adm_snapshot(
             if fallback not in (None, "", "-", "None", "none"):
                 fields[key] = fallback
     entry_snapshot_defaults = {
-        "tick_acceleration_ratio": "-",
-        "tick_acceleration_ratio_raw": "-",
+        "tick_acceleration_ratio": "not_evaluated",
+        "tick_acceleration_ratio_raw": "not_evaluated",
         "tick_accel_source": "not_evaluated",
-        "recent_5tick_seconds": "-",
-        "prev_5tick_seconds": "-",
-        "tick_accel_effective_recent_5tick_seconds": "-",
-        "buy_pressure_10t": "-" if runtime_effective_block else 50.0,
+        "recent_5tick_seconds": "not_evaluated",
+        "prev_5tick_seconds": "not_evaluated",
+        "tick_accel_effective_recent_5tick_seconds": "not_evaluated",
+        "buy_pressure_10t": (
+            "not_evaluated_runtime_block" if runtime_effective_block else 50.0
+        ),
         "curr_vs_micro_vwap_bp": 0.0,
         "curr_vs_ma5_bp": 0.0,
         "micro_vwap_available": False,
@@ -17377,7 +17412,7 @@ def _reversal_add_probe_for_log(action_or_probe):
 
 def _ai_score_source_for_snapshot(stock):
     if not isinstance(stock, dict):
-        return "-"
+        return "not_evaluated_no_stock_context"
     explicit = str(
         stock.get("ai_score_source")
         or stock.get("holding_ai_score_source")
@@ -17396,7 +17431,7 @@ def _ai_score_source_for_snapshot(stock):
     model = str(stock.get("ai_model") or stock.get("last_ai_model") or "").strip()
     if model:
         return "model"
-    return "-"
+    return "not_evaluated_no_ai_score_source"
 
 
 def _spread_bps_from_ws(ws_data, curr_price):
@@ -17713,6 +17748,8 @@ def _append_pyramid_probe_fields(fields: dict, probe: dict | None) -> dict:
         "tick_aggressor_trusted_count",
         "tick_aggressor_pressure_usable",
         "tick_aggressor_pressure_source_quality",
+        "tick_pressure_evaluation_state",
+        "minute_candle_evaluation_state",
         "tick_latest_age_ms",
         "tick_accel_source",
         "quote_stale",
@@ -17820,6 +17857,9 @@ def _append_reversal_add_probe_fields(fields: dict, probe: dict | None) -> dict:
         "tick_context_stale",
         "tick_aggressor_trusted_count",
         "tick_aggressor_pressure_usable",
+        "tick_aggressor_pressure_source_quality",
+        "tick_pressure_evaluation_state",
+        "minute_candle_evaluation_state",
         "tick_latest_age_ms",
         "tick_accel_source",
         "quote_stale",
@@ -17846,6 +17886,36 @@ def _scale_in_feature_contract_defaults(probe: dict | None) -> dict:
     payload.setdefault("curr_vs_micro_vwap_bp", 0.0)
     payload.setdefault("supply_pass_count", 0)
     payload.setdefault("large_sell_print_detected", False)
+    payload.setdefault(
+        "minute_candle_latest_age_ms", "not_evaluated_no_candle_timestamp"
+    )
+    payload.setdefault(
+        "tick_aggressor_pressure_source_quality",
+        (
+            "usable"
+            if _truthy_field(payload.get("tick_aggressor_pressure_usable"))
+            or _safe_int(payload.get("tick_aggressor_trusted_count"), 0) > 0
+            else "unavailable_fail_closed"
+        ),
+    )
+    payload.setdefault(
+        "tick_pressure_evaluation_state",
+        (
+            "evaluated_usable"
+            if _truthy_field(payload.get("tick_aggressor_pressure_usable"))
+            or _safe_int(payload.get("tick_aggressor_trusted_count"), 0) > 0
+            else "unavailable_fail_closed"
+        ),
+    )
+    payload.setdefault(
+        "minute_candle_evaluation_state",
+        (
+            "evaluated_fresh"
+            if _truthy_field(payload.get("micro_vwap_available"))
+            and _truthy_field(payload.get("minute_candle_window_fresh"))
+            else "unavailable_fail_closed"
+        ),
+    )
     for key, value in quality.items():
         payload.setdefault(key, value)
     return payload
@@ -22589,61 +22659,68 @@ def evaluate_and_dispatch_fast_scalp_exit(
         f"(profit={profit_rate:+.2f}%, peak={peak_profit:+.2f}%, "
         f"drawdown={trailing_drawdown_pct:.2f}%, worsen={trailing_worsen:.2f}%p)"
     )
-    _log_holding_pipeline(
-        stock,
-        code,
-        "scalp_fast_exit_claimed",
-        exit_token=exit_token,
-        trigger_kind=trigger_kind,
-        exit_rule=exit_rule,
-        decision_price=decision_price,
-        mark_price=_safe_int(mark_price, 0),
-        executable_sell_price=decision_price,
-        peak_price=peak_price,
-        profit_rate=f"{profit_rate:+.2f}",
-        peak_profit=f"{peak_profit:+.2f}",
-        trailing_peak_worsen=f"{trailing_worsen:.2f}",
-        trailing_drawdown_pct=f"{trailing_drawdown_pct:.2f}",
-        trailing_limit=f"{trailing_limit:.2f}",
-        rest_check_state=rest_state,
-        rest_check_elapsed_ms=round(rest_elapsed_ms, 3),
-        metric_role="safety_veto",
-        decision_authority="real_scalping_fast_exit_guard",
-        window_policy="same_position_first_threshold_cross",
-        sample_floor="not_applicable_runtime_guard",
-        primary_decision_metric="decision_to_order_sent_ms",
-        source_quality_gate="fresh_ws_or_bounded_rest_consistent_sell_quote",
-        forbidden_uses=(
-            "threshold_mutation|provider_route_change|quantity_cap_release|"
-            "broker_guard_bypass|stale_quote_bypass|full_live_approval"
-        ),
-        actual_order_submitted=False,
-        broker_order_forbidden=False,
-        runtime_effect=True,
-        **{
-            key: value
-            for key, value in route_fields.items()
-            if key.startswith("fast_exit_")
-        },
-        **{
-            key: value
-            for key, value in quote_fields.items()
-            if key
-            not in {
-                "metric_role",
-                "decision_authority",
-                "window_policy",
-                "sample_floor",
-                "primary_decision_metric",
-                "source_quality_gate",
-                "forbidden_uses",
-                "actual_order_submitted",
-                "broker_order_forbidden",
-                "runtime_effect",
-            }
-        },
-        **_holding_score_role_log_fields(score_context),
-    )
+    try:
+        _log_holding_pipeline(
+            stock,
+            code,
+            "scalp_fast_exit_claimed",
+            exit_token=exit_token,
+            trigger_kind=trigger_kind,
+            exit_rule=exit_rule,
+            decision_price=decision_price,
+            mark_price=_safe_int(mark_price, 0),
+            executable_sell_price=decision_price,
+            peak_price=peak_price,
+            profit_rate=f"{profit_rate:+.2f}",
+            peak_profit=f"{peak_profit:+.2f}",
+            trailing_peak_worsen=f"{trailing_worsen:.2f}",
+            trailing_drawdown_pct=f"{trailing_drawdown_pct:.2f}",
+            trailing_limit=f"{trailing_limit:.2f}",
+            rest_check_state=rest_state,
+            rest_check_elapsed_ms=round(rest_elapsed_ms, 3),
+            metric_role="safety_veto",
+            decision_authority="real_scalping_fast_exit_guard",
+            window_policy="same_position_first_threshold_cross",
+            sample_floor="not_applicable_runtime_guard",
+            primary_decision_metric="decision_to_order_sent_ms",
+            source_quality_gate="fresh_ws_or_bounded_rest_consistent_sell_quote",
+            forbidden_uses=(
+                "threshold_mutation|provider_route_change|quantity_cap_release|"
+                "broker_guard_bypass|stale_quote_bypass|full_live_approval"
+            ),
+            actual_order_submitted=False,
+            broker_order_forbidden=False,
+            runtime_effect=True,
+            **{
+                key: value
+                for key, value in route_fields.items()
+                if key.startswith("fast_exit_")
+            },
+            **{
+                key: value
+                for key, value in quote_fields.items()
+                if key
+                not in {
+                    "metric_role",
+                    "decision_authority",
+                    "window_policy",
+                    "sample_floor",
+                    "primary_decision_metric",
+                    "source_quality_gate",
+                    "forbidden_uses",
+                    "actual_order_submitted",
+                    "broker_order_forbidden",
+                    "runtime_effect",
+                    "executable_sell_price",
+                }
+            },
+            **_holding_score_role_log_fields(score_context),
+        )
+    except Exception as exc:
+        log_error(
+            f"[SCALP_FAST_EXIT] {stock.get('name')}({code}) "
+            f"claim logging failed; continuing exit dispatch: {exc}"
+        )
     try:
         dispatch_ws = dict(ws_data or {})
         dispatch_ws["curr"] = int(mark_price or decision_price)
@@ -23526,6 +23603,9 @@ def _reversal_feature_payload(feat: dict | None, now_ts: float) -> dict:
         "minute_candle_window_fresh": feat.get("minute_candle_window_fresh", False),
         "minute_candle_context_quality": feat.get(
             "minute_candle_context_quality", "missing"
+        ),
+        "minute_candle_latest_age_ms": feat.get(
+            "minute_candle_latest_age_ms", "not_evaluated"
         ),
         "net_aggressive_delta_10t": feat.get("net_aggressive_delta_10t", 0),
         "same_price_buy_absorption": feat.get("same_price_buy_absorption", 0),
@@ -35247,6 +35327,8 @@ def _extract_ai_overlap_snapshot(
         "distance_from_day_high_pct": None,
         "intraday_range_pct": None,
         "overlap_context_source_quality": "missing_range_context",
+        "distance_from_day_high_pct_observation_state": "not_evaluated",
+        "intraday_range_pct_observation_state": "not_evaluated",
     }
 
     ticks = list(recent_ticks or [])
@@ -35302,6 +35384,9 @@ def _extract_ai_overlap_snapshot(
         snapshot["distance_from_day_high_pct"] = (
             (curr_price - high_price) / high_price
         ) * 100.0
+        snapshot["distance_from_day_high_pct_observation_state"] = (
+            "observed_ws_high"
+        )
     if (
         curr_price > 0
         and high_price
@@ -35311,6 +35396,7 @@ def _extract_ai_overlap_snapshot(
     ):
         snapshot["intraday_range_pct"] = ((high_price - low_price) / low_price) * 100.0
         snapshot["overlap_context_source_quality"] = "ws_high_low"
+        snapshot["intraday_range_pct_observation_state"] = "observed_ws_high_low"
 
     if candles and curr_price > 0:
         highs = []
@@ -35327,11 +35413,17 @@ def _extract_ai_overlap_snapshot(
             snapshot["distance_from_day_high_pct"] = (
                 (curr_price - candle_high_price) / candle_high_price
             ) * 100.0
+            snapshot["distance_from_day_high_pct_observation_state"] = (
+                "observed_recent_candles"
+            )
         if candle_low_price > 0 and candle_high_price >= candle_low_price:
             snapshot["intraday_range_pct"] = (
                 (candle_high_price - candle_low_price) / candle_low_price
             ) * 100.0
             snapshot["overlap_context_source_quality"] = "recent_candles"
+            snapshot["intraday_range_pct_observation_state"] = (
+                "observed_recent_candles"
+            )
 
     if ai_engine and hasattr(ai_engine, "_extract_scalping_features"):
         try:
@@ -35347,10 +35439,44 @@ def _extract_ai_overlap_snapshot(
             feature_distance = feature_map.get("distance_from_day_high_pct")
             feature_range = feature_map.get("intraday_range_pct")
             if feature_distance not in (None, "", "-", "None", "none", "null"):
-                snapshot["distance_from_day_high_pct"] = float(feature_distance)
+                feature_distance_value = float(feature_distance)
+                observed_distance = snapshot.get("distance_from_day_high_pct")
+                observed_distance_state = str(
+                    snapshot.get("distance_from_day_high_pct_observation_state") or ""
+                )
+                snapshot["distance_from_day_high_pct"] = feature_distance_value
+                if (
+                    observed_distance is not None
+                    and observed_distance_state.startswith("observed_")
+                    and abs(float(observed_distance) - feature_distance_value) <= 1e-9
+                ):
+                    snapshot["distance_from_day_high_pct_observation_state"] = (
+                        f"{observed_distance_state}_feature_packet_consistent"
+                    )
+                else:
+                    snapshot["distance_from_day_high_pct_observation_state"] = (
+                        "derived_feature_packet_without_consistent_raw_range"
+                    )
             if feature_range not in (None, "", "-", "None", "none", "null"):
-                snapshot["intraday_range_pct"] = float(feature_range)
+                feature_range_value = float(feature_range)
+                observed_range = snapshot.get("intraday_range_pct")
+                observed_range_state = str(
+                    snapshot.get("intraday_range_pct_observation_state") or ""
+                )
+                snapshot["intraday_range_pct"] = feature_range_value
                 snapshot["overlap_context_source_quality"] = "scalping_feature_packet"
+                if (
+                    observed_range is not None
+                    and observed_range_state.startswith("observed_")
+                    and abs(float(observed_range) - feature_range_value) <= 1e-9
+                ):
+                    snapshot["intraday_range_pct_observation_state"] = (
+                        f"{observed_range_state}_feature_packet_consistent"
+                    )
+                else:
+                    snapshot["intraday_range_pct_observation_state"] = (
+                        "derived_feature_packet_without_consistent_raw_range"
+                    )
         except Exception:
             pass
 
@@ -37031,6 +37157,14 @@ def _build_ai_overlap_log_fields(
         ),
         "ai_overlap_source_quality": snapshot.get("overlap_context_source_quality")
         or "missing_range_context",
+        "distance_from_day_high_pct_observation_state": snapshot.get(
+            "distance_from_day_high_pct_observation_state"
+        )
+        or "not_evaluated",
+        "intraday_range_pct_observation_state": snapshot.get(
+            "intraday_range_pct_observation_state"
+        )
+        or "not_evaluated",
         "momentum_tag": momentum_tag
         or stock.get("entry_momentum_tag")
         or stock.get("position_tag")
@@ -48144,7 +48278,8 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             ),
             latency_spread_relief_block_reason=latency_gate.get(
                 "latency_spread_relief_block_reason"
-            ),
+            )
+            or "not_applicable_no_spread_relief_block",
             latency_spread_relief_signal_score_source=latency_gate.get(
                 "latency_spread_relief_signal_score_source"
             ),
@@ -48156,10 +48291,12 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             ),
             latency_spread_relief_candidate_ai_score_source=latency_gate.get(
                 "latency_spread_relief_candidate_ai_score_source"
-            ),
+            )
+            or "not_evaluated_no_candidate_ai_score",
             latency_spread_relief_source_quality_gap=latency_gate.get(
                 "latency_spread_relief_source_quality_gap"
-            ),
+            )
+            or "not_applicable_no_source_quality_gap",
             latency_spread_block_bucket=latency_gate.get("latency_spread_block_bucket"),
             latency_spread_block_price_bucket=latency_gate.get(
                 "latency_spread_block_price_bucket"
@@ -48174,7 +48311,8 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 "latency_spread_block_spread_ticks"
             ),
             latency_relief_attempted=bool(latency_gate.get("latency_relief_attempted")),
-            latency_relief_block_reason=latency_gate.get("latency_relief_block_reason"),
+            latency_relief_block_reason=latency_gate.get("latency_relief_block_reason")
+            or "not_applicable_no_latency_relief_block",
             **_latency_spread_relief_micro_estimator_log_fields(latency_gate),
             **_latency_false_negative_remeasure_log_fields(latency_gate),
             **_rising_missed_reversal_up_volatile_prefixed_fields(
@@ -49223,7 +49361,8 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         ),
         latency_spread_relief_block_reason=latency_gate.get(
             "latency_spread_relief_block_reason"
-        ),
+        )
+        or "not_applicable_no_spread_relief_block",
         latency_spread_relief_signal_score_source=latency_gate.get(
             "latency_spread_relief_signal_score_source"
         ),
@@ -49235,10 +49374,12 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         ),
         latency_spread_relief_candidate_ai_score_source=latency_gate.get(
             "latency_spread_relief_candidate_ai_score_source"
-        ),
+        )
+        or "not_evaluated_no_candidate_ai_score",
         latency_spread_relief_source_quality_gap=latency_gate.get(
             "latency_spread_relief_source_quality_gap"
-        ),
+        )
+        or "not_applicable_no_source_quality_gap",
         latency_spread_block_bucket=latency_gate.get("latency_spread_block_bucket"),
         latency_spread_block_price_bucket=latency_gate.get(
             "latency_spread_block_price_bucket"
@@ -49253,7 +49394,8 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             "latency_spread_block_spread_ticks"
         ),
         latency_relief_attempted=bool(latency_gate.get("latency_relief_attempted")),
-        latency_relief_block_reason=latency_gate.get("latency_relief_block_reason"),
+        latency_relief_block_reason=latency_gate.get("latency_relief_block_reason")
+        or "not_applicable_no_latency_relief_block",
         **_latency_spread_relief_micro_estimator_log_fields(latency_gate),
         **_latency_false_negative_remeasure_log_fields(latency_gate),
         pre_submit_quote_refresh_enabled=bool(
@@ -55423,7 +55565,7 @@ def _maybe_manage_early_volatility_tp(
         )
         if str(stock.get("early_volatility_tp_logged_observation_signature") or "") == (
             signature
-        ):
+        ) or _early_volatility_tp_observation_seen(cycle_id, signature):
             return
         _log_holding_pipeline(
             stock,
@@ -55463,6 +55605,7 @@ def _maybe_manage_early_volatility_tp(
             runtime_effect=False,
             **extra_fields,
         )
+        _remember_early_volatility_tp_observation(cycle_id, signature)
         _mutate_stock_state(
             stock,
             set_fields={
@@ -55619,8 +55762,13 @@ def _maybe_manage_early_volatility_tp(
             "early_volatility_tp_last_observation_signature": observation_signature,
         },
     )
-    if str(stock.get("early_volatility_tp_logged_observation_signature") or "") != (
-        observation_signature
+    if (
+        str(stock.get("early_volatility_tp_logged_observation_signature") or "")
+        != observation_signature
+        and not _early_volatility_tp_observation_seen(
+            cycle_id,
+            observation_signature,
+        )
     ):
         _log_holding_pipeline(
             stock,
@@ -55652,6 +55800,10 @@ def _maybe_manage_early_volatility_tp(
             actual_order_submitted=False,
             broker_order_forbidden=not decision.eligible,
             runtime_effect=False,
+        )
+        _remember_early_volatility_tp_observation(
+            cycle_id,
+            observation_signature,
         )
         _mutate_stock_state(
             stock,
@@ -68124,14 +68276,20 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
         )
     )
     budget_base = max(0, _safe_int(budget_context.get("budget_base"), deposit))
-    sim_budget_fields = (
+    budget_authority_fields = (
         {
             "virtual_budget_override": True,
             "virtual_budget_krw": deposit,
             "budget_authority": "sim_virtual_not_real_orderable_amount",
         }
         if simulated_position
-        else {}
+        else {
+            "virtual_budget_override": False,
+            "budget_authority": (
+                str(budget_context.get("budget_source") or "").strip()
+                or "real_account_orderable_budget"
+            ),
+        }
     )
     pre_sizing_initial_qty_limit = (
         _scale_in_quantity_limit_decision(stock, requested_qty=0)
@@ -68287,7 +68445,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             **scale_in_qty_budget_fields,
             **scale_in_feature_quality_fields,
             **scale_in_quote_refresh_fields,
-            **sim_budget_fields,
+            **budget_authority_fields,
             **sim_funnel_fields,
             **swing_scale_micro_fields,
             **scale_in_micro_estimator_fields,
@@ -68364,7 +68522,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
         **scale_in_qty_budget_fields,
         **scale_in_feature_quality_fields,
         **scale_in_quote_refresh_non_price_source_fields,
-        **sim_budget_fields,
+        **budget_authority_fields,
         **swing_scale_micro_fields,
         **scale_in_micro_estimator_fields,
     )
@@ -68535,7 +68693,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
                             "passive_filled" if touched else "passive_unfilled"
                         ),
                         runtime_effect="sim_passive_execution_diagnostic_only",
-                        **sim_budget_fields,
+                        **budget_authority_fields,
                         **scale_in_micro_estimator_fields,
                         **_scalp_sim_candidate_window_context_fields(stock),
                     ),
@@ -68618,7 +68776,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
                     quote_touched=True,
                     scale_in_candidate_funnel_state="marketable_filled",
                     runtime_effect="sim_shadow_tranche_only",
-                    **sim_budget_fields,
+                    **budget_authority_fields,
                     **scale_in_micro_estimator_fields,
                     **_scalp_sim_candidate_window_context_fields(stock),
                 ),
@@ -68673,7 +68831,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
                     floor_applied=floor_applied,
                     qty_reason=qty_reason,
                     **scale_in_qty_budget_fields,
-                    **sim_budget_fields,
+                    **budget_authority_fields,
                     **scale_in_micro_estimator_fields,
                     **_scalp_sim_candidate_window_context_fields(stock),
                 ),
@@ -68758,7 +68916,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
                 avg_down_count=stock.get("avg_down_count", 0),
                 pyramid_count=stock.get("pyramid_count", 0),
                 **scale_in_qty_budget_fields,
-                **sim_budget_fields,
+                **budget_authority_fields,
                 **scale_in_micro_estimator_fields,
                 runtime_effect="simulated_holding_only",
                 **_scalp_sim_candidate_window_context_fields(stock),
@@ -68867,7 +69025,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             pyramid_count=stock.get("pyramid_count", 0),
             **_swing_sim_priority_event_fields(stock),
             **scale_in_qty_budget_fields,
-            **sim_budget_fields,
+            **budget_authority_fields,
             **swing_scale_micro_fields,
         )
         if _is_swing_intraday_probe_target(stock):
@@ -68901,7 +69059,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
                     floor_applied=floor_applied,
                     qty_reason=qty_reason,
                     **scale_in_qty_budget_fields,
-                    **sim_budget_fields,
+                    **budget_authority_fields,
                     **swing_scale_micro_fields,
                 ),
             )
@@ -69315,7 +69473,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             broker_order_forbidden=False,
             runtime_effect=True,
             **scale_in_qty_budget_fields,
-            **sim_budget_fields,
+            **budget_authority_fields,
         )
     _publish_greenfield_stage_notice(
         stock,

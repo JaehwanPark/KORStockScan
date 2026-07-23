@@ -3220,7 +3220,41 @@ def _shallow_source_gap_recheck_contract_violations(
     return violations
 
 
-def _pressure_provenance_unusable(fields: dict[str, Any]) -> bool:
+def _blocked_observation_records_fail_closed_source_gap(
+    stage: str, fields: dict[str, Any], *, source: str
+) -> bool:
+    """Accept explicit fail-closed source gaps on non-authoritative block rows."""
+    if stage == "score65_74_recovery_probe_blocked":
+        reason = str(
+            fields.get("score65_74_recovery_probe_skip_reason") or ""
+        ).lower()
+        return "source_quality" in reason or "unusable" in reason or "stale" in reason
+    if stage == "adverse_fill_observed":
+        return not _contract_bool(fields.get("feature_valid"), True)
+    if stage not in {
+        "pyramid_blocked_reason",
+        "reversal_add_blocked_reason",
+        "reversal_add_gate_blocked",
+    }:
+        return False
+    state_field = (
+        "tick_pressure_evaluation_state"
+        if source == "tick"
+        else "minute_candle_evaluation_state"
+    )
+    return (
+        str(fields.get(state_field) or "").strip().lower()
+        == "unavailable_fail_closed"
+    )
+
+
+def _pressure_provenance_unusable(
+    fields: dict[str, Any], *, stage: str = ""
+) -> bool:
+    if _blocked_observation_records_fail_closed_source_gap(
+        stage, fields, source="tick"
+    ):
+        return False
     if not (
         _is_present(fields.get("buy_pressure_10t"))
         or _is_present(fields.get("buy_pressure"))
@@ -3243,7 +3277,13 @@ def _stage_requires_tick_pressure_provenance(stage: str) -> bool:
     return set(TICK_PRESSURE_PROVENANCE_FIELDS).issubset(required)
 
 
-def _micro_vwap_provenance_unusable(fields: dict[str, Any]) -> bool:
+def _micro_vwap_provenance_unusable(
+    fields: dict[str, Any], *, stage: str = ""
+) -> bool:
+    if _blocked_observation_records_fail_closed_source_gap(
+        stage, fields, source="minute_candle"
+    ):
+        return False
     raw_value = (
         fields.get("curr_vs_micro_vwap_bp")
         if _is_present(fields.get("curr_vs_micro_vwap_bp"))
@@ -3252,12 +3292,26 @@ def _micro_vwap_provenance_unusable(fields: dict[str, Any]) -> bool:
     if not _is_present(raw_value):
         return False
     micro_value = _safe_float(raw_value)
-    if micro_value is None or abs(micro_value) <= 1e-9:
-        return False
+    if micro_value is None:
+        return True
+    minute_age_ms = _safe_float(fields.get("minute_candle_latest_age_ms"))
+    if (
+        _contract_bool(fields.get("minute_candle_window_fresh"), True)
+        and minute_age_ms is None
+    ):
+        return True
     return not (
         _contract_bool(fields.get("micro_vwap_available"), True)
         and _contract_bool(fields.get("minute_candle_window_fresh"), True)
     )
+
+
+def _zero_sensitive_contract_gap(field: str, fields: dict[str, Any]) -> bool:
+    value = _safe_float(fields.get(field))
+    if value is None or abs(value) > 1e-9:
+        return False
+    state = str(fields.get(f"{field}_observation_state") or "").strip().lower()
+    return not state.startswith("observed_")
 
 
 def _stage_requires_minute_candle_provenance(stage: str) -> bool:
@@ -3322,7 +3376,7 @@ def _row_contract_violations(
     zero = [
         field
         for field in contract.zero_sensitive_fields
-        if (value := _safe_float(fields.get(field))) is not None and abs(value) <= 1e-9
+        if _zero_sensitive_contract_gap(field, fields)
     ]
     invalid: list[str] = []
     if stage == "soft_stop_whipsaw_confirmation" and _is_present(
@@ -3359,11 +3413,11 @@ def _row_contract_violations(
         )
     if _stage_requires_tick_pressure_provenance(
         stage
-    ) and _pressure_provenance_unusable(fields):
+    ) and _pressure_provenance_unusable(fields, stage=stage):
         invalid.append("tick_aggressor_pressure_usable_contract")
     if _stage_requires_minute_candle_provenance(
         stage
-    ) and _micro_vwap_provenance_unusable(fields):
+    ) and _micro_vwap_provenance_unusable(fields, stage=stage):
         invalid.append("minute_candle_window_fresh_contract")
     if contract.required_fields == () or not set(PRE_AI_RISK_CONTEXT_FIELDS).issubset(
         set(contract.required_fields)
@@ -3829,7 +3883,8 @@ def _evaluate_contracts(
                 1
                 for row in stage_rows
                 if _pressure_provenance_unusable(
-                    _normalized_fields_for_contract(stage, row["fields"])
+                    _normalized_fields_for_contract(stage, row["fields"]),
+                    stage=stage,
                 )
             )
         if _stage_requires_minute_candle_provenance(stage):
@@ -3837,7 +3892,8 @@ def _evaluate_contracts(
                 1
                 for row in stage_rows
                 if _micro_vwap_provenance_unusable(
-                    _normalized_fields_for_contract(stage, row["fields"])
+                    _normalized_fields_for_contract(stage, row["fields"]),
+                    stage=stage,
                 )
             )
         if set(PRE_AI_RISK_CONTEXT_FIELDS).issubset(set(contract.required_fields)):
@@ -3858,13 +3914,10 @@ def _evaluate_contracts(
             zero_counts[field] = sum(
                 1
                 for row in stage_rows
-                if (
-                    value := _safe_float(
-                        _normalized_fields_for_contract(stage, row["fields"]).get(field)
-                    )
+                if _zero_sensitive_contract_gap(
+                    field,
+                    _normalized_fields_for_contract(stage, row["fields"]),
                 )
-                is not None
-                and abs(value) <= 1e-9
             )
 
         missing_rates = {

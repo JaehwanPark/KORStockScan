@@ -76,7 +76,11 @@ def test_fast_exit_claims_once_and_dispatches_without_holding_ai(monkeypatch):
         handlers,
         "_build_quote_consistency_fields",
         lambda *args, **kwargs: (
-            {"quote_consistency_state": "consistent", "quote_consistency_reason": "ok"},
+            {
+                "quote_consistency_state": "consistent",
+                "quote_consistency_reason": "ok",
+                "executable_sell_price": 9_800,
+            },
             9_800,
             0,
             9_800,
@@ -166,6 +170,97 @@ def test_fast_exit_claims_once_and_dispatches_without_holding_ai(monkeypatch):
         is False
     )
     assert len(dispatches) == 1
+
+
+def test_fast_exit_dispatch_survives_claim_logging_failure(monkeypatch):
+    now_ts = 1_784_778_400.0
+    active_date = datetime.fromtimestamp(now_ts, tz=handlers._KST).date().isoformat()
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_FAST_EXIT_GUARD_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_FAST_EXIT_GUARD_ACTIVE_DATE", active_date)
+    monkeypatch.setattr(
+        handlers,
+        "_build_quote_consistency_fields",
+        lambda *args, **kwargs: (
+            {
+                "quote_consistency_state": "consistent",
+                "quote_consistency_reason": "ok",
+                "executable_sell_price": 9_800,
+            },
+            9_800,
+            0,
+            9_800,
+        ),
+    )
+    monkeypatch.setattr(
+        handlers,
+        "calculate_net_profit_rate",
+        lambda buy_price, price: ((float(price) - float(buy_price)) / float(buy_price))
+        * 100.0,
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_rule_float",
+        lambda name, default=0.0: {
+            "SCALP_TRAILING_START_PCT": 0.6,
+            "SCALP_TRAILING_LIMIT_WEAK": 0.4,
+            "SCALP_TRAILING_LIMIT_STRONG": 0.8,
+        }.get(name, default),
+    )
+    monkeypatch.setattr(handlers, "_has_active_sell_order_pending", lambda stock: False)
+    monkeypatch.setattr(handlers, "_is_any_simulated_position", lambda *args: False)
+    monkeypatch.setattr(
+        handlers,
+        "_holding_score_runtime_context",
+        lambda *args, **kwargs: {"usable_for_negative_exit": False},
+    )
+    monkeypatch.setattr(handlers, "_holding_score_role_log_fields", lambda context: {})
+    monkeypatch.setattr(
+        handlers,
+        "_log_holding_pipeline",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            RuntimeError("instrumentation unavailable")
+        ),
+    )
+    monkeypatch.setattr(handlers, "log_error", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        handlers, "_scalping_micro_estimator_log_fields", lambda **_kwargs: {}
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_evaluate_scalp_trailing_loss_conversion_recheck",
+        lambda **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_evaluate_scalp_trailing_continuation_recheck",
+        lambda **_kwargs: False,
+    )
+    dispatches = []
+    monkeypatch.setattr(
+        handlers,
+        "_dispatch_scalp_preset_exit",
+        lambda **kwargs: dispatches.append(kwargs),
+    )
+    handlers.HIGHEST_PRICES = {"123456": 10_077}
+    stock = {
+        "id": 1,
+        "name": "동양",
+        "code": "123456",
+        "strategy": "SCALPING",
+        "status": "HOLDING",
+        "buy_price": 10_000,
+        "buy_qty": 1,
+    }
+
+    assert handlers.evaluate_and_dispatch_fast_scalp_exit(
+        stock,
+        "123456",
+        {"curr": 9_800},
+        now_ts=now_ts,
+    )
+    assert len(dispatches) == 1
+    assert dispatches[0]["fast_exit"] is True
+    assert stock["exit_requested"] is True
 
 
 def test_fast_exit_uses_trailing_continuation_owner_before_claim(monkeypatch):

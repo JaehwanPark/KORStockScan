@@ -137,6 +137,11 @@ def test_scale_in_feature_defaults_mark_missing_features_unusable():
     assert fields["micro_vwap_available"] is False
     assert fields["minute_candle_context_quality"] == "missing"
     assert fields["minute_candle_window_fresh"] is False
+    assert fields["minute_candle_latest_age_ms"] == (
+        "not_evaluated_no_candle_timestamp"
+    )
+    assert fields["tick_pressure_evaluation_state"] == "unavailable_fail_closed"
+    assert fields["minute_candle_evaluation_state"] == "unavailable_fail_closed"
     assert fields["reversal_feature_source_quality"] == "stale"
     assert "features_missing" in fields["reversal_feature_stale_reason"]
 
@@ -1776,6 +1781,19 @@ def test_ai_ops_log_fields_preserve_tick_acceleration_ratio_raw_precision():
     assert fields["tick_acceleration_ratio"] == "2.000"
 
 
+def test_reversal_feature_payload_preserves_minute_candle_age():
+    payload = handlers._reversal_feature_payload(
+        {
+            "minute_candle_latest_age_ms": 12000,
+            "minute_candle_context_quality": "fresh_bar_window",
+            "minute_candle_window_fresh": True,
+        },
+        100.0,
+    )
+
+    assert payload["minute_candle_latest_age_ms"] == 12000
+
+
 def test_scalp_entry_snapshot_marks_final_submit_safety_block(monkeypatch):
     logs = []
 
@@ -1829,7 +1847,12 @@ def test_scalp_entry_snapshot_marks_final_submit_safety_block(monkeypatch):
     assert fields["entry_action_final_decision"] == "BLOCKED"
     assert fields["entry_action_final_blocked"] is True
     assert fields["entry_action_final_block_reason"] == "source_quality_unknown"
-    assert fields["buy_pressure_10t"] == "-"
+    assert fields["buy_pressure_10t"] == "not_evaluated_runtime_block"
+    assert fields["tick_acceleration_ratio"] == "not_evaluated"
+    assert fields["tick_acceleration_ratio_raw"] == "not_evaluated"
+    assert fields["recent_5tick_seconds"] == "not_evaluated"
+    assert fields["prev_5tick_seconds"] == "not_evaluated"
+    assert fields["tick_accel_effective_recent_5tick_seconds"] == "not_evaluated"
     assert fields["weak_ai_micro_entry_block_buy_pressure_10t"] == "-"
 
 
@@ -4866,6 +4889,51 @@ def test_extract_ai_overlap_snapshot_uses_ws_day_high_low_without_candles():
     assert round(snapshot["intraday_range_pct"], 3) == 5.263
     assert snapshot["latest_strength"] == 123.4
     assert snapshot["buy_pressure_10t"] == 61.2
+
+
+def test_extract_ai_overlap_snapshot_marks_feature_packet_conflict_as_derived():
+    class FeatureEngine:
+        @staticmethod
+        def _extract_scalping_features(ws_data, ticks, candles):
+            return {
+                "distance_from_day_high_pct": 0.0,
+                "intraday_range_pct": 0.0,
+            }
+
+    snapshot = _extract_ai_overlap_snapshot(
+        ws_data={"curr": 9800, "high": 10000, "low": 9500},
+        ai_engine=FeatureEngine(),
+    )
+
+    assert snapshot["distance_from_day_high_pct"] == 0.0
+    assert (
+        snapshot["distance_from_day_high_pct_observation_state"]
+        == "derived_feature_packet_without_consistent_raw_range"
+    )
+    assert (
+        snapshot["intraday_range_pct_observation_state"]
+        == "derived_feature_packet_without_consistent_raw_range"
+    )
+
+
+def test_extract_ai_overlap_snapshot_keeps_consistent_observed_zero_provenance():
+    class FeatureEngine:
+        @staticmethod
+        def _extract_scalping_features(ws_data, ticks, candles):
+            return {
+                "distance_from_day_high_pct": 0.0,
+                "intraday_range_pct": 0.0,
+            }
+
+    snapshot = _extract_ai_overlap_snapshot(
+        ws_data={"curr": 10000, "high": 10000, "low": 10000},
+        ai_engine=FeatureEngine(),
+    )
+
+    assert snapshot["distance_from_day_high_pct_observation_state"].startswith(
+        "observed_"
+    )
+    assert snapshot["intraday_range_pct_observation_state"].startswith("observed_")
 
 
 def test_extract_ai_overlap_snapshot_ignores_price_change_heuristic_tick_direction():

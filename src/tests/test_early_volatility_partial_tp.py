@@ -521,6 +521,7 @@ def test_nxt_early_tp_requires_confirmed_symbol_eligibility(monkeypatch):
 def test_early_tp_ineligible_reason_is_logged_once_per_position_state(monkeypatch):
     from src.engine import sniper_state_handlers as handlers
 
+    handlers._EARLY_VOLATILITY_TP_OBSERVATION_SIGNATURES.clear()
     now_dt = datetime(2026, 7, 23, 10, 0, tzinfo=timezone(timedelta(hours=9)))
     now_ts = now_dt.timestamp()
     monkeypatch.setattr(
@@ -602,6 +603,30 @@ def test_early_tp_ineligible_reason_is_logged_once_per_position_state(monkeypatc
     assert observed[0]["eligible"] is False
     assert observed[0]["broker_order_forbidden"] is True
     assert observed[0]["holding_qty"] == 1
+
+    # Runtime holding rows can be reconstructed between monitor loops. The
+    # process-local cycle cache must still suppress the same observation even
+    # when the transient stock-dict signature is absent.
+    rehydrated = dict(stock)
+    rehydrated.pop("early_volatility_tp_logged_observation_signature", None)
+    assert (
+        handlers._maybe_manage_early_volatility_tp(
+            rehydrated,
+            "123456",
+            {"curr": 41_450},
+            strategy="SCALPING",
+            now_ts=now_ts,
+            now_dt=now_dt,
+            quote_fields=quote_fields,
+        )
+        is False
+    )
+    observed = [
+        fields
+        for stage, fields in events
+        if stage == "early_volatility_tp_decision_observed"
+    ]
+    assert len(observed) == 1
 
     # LG전자 regression: partial residual fill left five shares, but the entry
     # bundle became terminal only after the short observation window.

@@ -13663,7 +13663,7 @@ def test_stat_action_decision_snapshot_logs_observe_only_with_rate_limit(monkeyp
     assert logs[0][1]["scale_in_arm"] == "AVG_DOWN"
     assert logs[0][1]["scale_in_blocker_namespace"] == "AVG_DOWN"
     assert logs[0][1]["scale_in_blocker_reason"] == "pnl_out_of_range"
-    assert logs[0][1]["ai_score_source"] == "-"
+    assert logs[0][1]["ai_score_source"] == "not_evaluated_no_ai_score_source"
     assert logs[0][1]["source_quality_gate"] == "stat_action_snapshot_source_only"
     assert logs[0][1]["has_reversal_features"] is True
     assert logs[0][1]["reversal_feature_source_quality"] == "usable"
@@ -14565,6 +14565,8 @@ def test_execute_scalping_pyramid_sends_resolved_best_bid_with_dynamic_budget_qt
     ]
     assert resolved["would_qty"] == 95
     assert resolved["effective_qty"] == 15
+    assert resolved["virtual_budget_override"] is False
+    assert resolved["budget_authority"] == "kt00001_ord_alow_amt"
     assert resolved["pyramid_sizing_mode"] == "dynamic_budget"
     assert resolved["pyramid_position_ratio_cap_applied"] is False
     assert any(stage == "scale_in_price_p2_observe" for stage, _ in logs)
