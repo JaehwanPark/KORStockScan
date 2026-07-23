@@ -439,7 +439,7 @@ def test_normal_winner_expansion_tracks_post_candidate_incremental_ev_and_probe_
     summary = report["summary"]["normal_winner_expansion"]
     item = report["normal_winner_expansion_rows"][0]
 
-    assert report["schema_version"] == 2
+    assert report["schema_version"] == 3
     assert summary["candidate_count"] == 1
     assert summary["source_quality_valid_candidate_count"] == 1
     assert summary["realized_incremental_winner_count"] == 1
@@ -502,10 +502,7 @@ def test_normal_winner_expansion_venue_provenance_keeps_premarket_cohort_separat
 
     assert item["effective_venue"] == "UNKNOWN"
     assert item["venue_source_quality_valid"] is False
-    assert (
-        item["effective_venue_resolution"]
-        == "conflicting_explicit_effective_venue"
-    )
+    assert item["effective_venue_resolution"] == "conflicting_explicit_effective_venue"
 
 
 def test_pyramid_intraday_feedback_backtests_all_one_share_events(tmp_path):
@@ -864,3 +861,239 @@ def test_partial_submitted_direction_defer_is_not_soft_abort():
     assert item["residual_hard_or_capacity_abort"] is True
     assert item["residual_partial_submitted_before_block"] is True
     assert item["residual_scale_in_recheck_allowed"] is False
+
+
+def test_probe_residual_fill_uses_exact_bundle_terminal_not_later_buy_qty(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-03.jsonl"
+    rows = [
+        _event(
+            605,
+            "117730",
+            "exact-bundle",
+            "rising_missed_one_share_entry",
+            {
+                "forced_entry_reason": "rising_missed_one_share_entry",
+                "forced_entry_qty": 80,
+                "actual_order_submitted": False,
+            },
+        ),
+        _event(
+            605,
+            "117730",
+            "exact-bundle",
+            "probe_filled",
+            {
+                "probe_bundle_id": "bundle-605",
+                "fill_qty": 1,
+                "fill_price": 14100,
+                "effective_venue": "KRX",
+                "market_session_bucket": "krx_regular",
+            },
+        ),
+        _event(
+            605,
+            "117730",
+            "exact-bundle",
+            "residual_submitted",
+            {
+                "probe_bundle_id": "bundle-605",
+                "order_no": "R605",
+                "qty": 79,
+                "price": 14050,
+            },
+            pipeline="ENTRY_PIPELINE",
+        ),
+        _event(
+            605,
+            "117730",
+            "exact-bundle",
+            "holding_snapshot_after_later_scale_in",
+            {"buy_qty": 153, "entry_filled_qty": 153, "profit_rate": "+0.30"},
+        ),
+        _event(
+            605,
+            "117730",
+            "exact-bundle",
+            "bundle_completed",
+            {
+                "probe_bundle_id": "bundle-605",
+                "requested_qty": 80,
+                "filled_qty": 80,
+            },
+        ),
+    ]
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8"
+    )
+
+    report = mod.build_report(
+        "2026-07-03", pipeline_path=pipeline_path, generated_at="fixed"
+    )
+    item = report["one_share_pyramid_opportunity_rows"][0]
+
+    assert item["residual_submitted_qty"] == 79
+    assert item["residual_filled_qty"] == 79
+    assert item["residual_unfilled_qty"] == 0
+    assert item["residual_fill_attribution_valid"] is True
+    assert item["residual_fill_attribution_state"] == "full_fill"
+    assert item["effective_venue"] == "KRX"
+    assert item["market_session_bucket"] == "krx_regular"
+
+
+def test_probe_residual_without_terminal_receipt_is_open_unresolved(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-03.jsonl"
+    rows = [
+        _event(
+            606,
+            "117731",
+            "open-bundle",
+            "rising_missed_one_share_entry",
+            {
+                "forced_entry_reason": "rising_missed_one_share_entry",
+                "forced_entry_qty": 5,
+                "actual_order_submitted": False,
+            },
+        ),
+        _event(
+            606,
+            "117731",
+            "open-bundle",
+            "probe_filled",
+            {
+                "probe_bundle_id": "bundle-606",
+                "fill_qty": 1,
+                "fill_price": 10000,
+            },
+        ),
+        _event(
+            606,
+            "117731",
+            "open-bundle",
+            "residual_submitted",
+            {
+                "probe_bundle_id": "bundle-606",
+                "order_no": "R606",
+                "qty": 4,
+                "price": 9990,
+            },
+            pipeline="ENTRY_PIPELINE",
+        ),
+    ]
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8"
+    )
+
+    report = mod.build_report(
+        "2026-07-03", pipeline_path=pipeline_path, generated_at="fixed"
+    )
+    item = report["one_share_pyramid_opportunity_rows"][0]
+
+    assert item["residual_fill_attribution_valid"] is None
+    assert item["residual_fill_attribution_state"] == "open_unresolved"
+    assert item["residual_filled_qty"] is None
+    assert item["residual_unfilled_qty"] is None
+    assert item["residual_zero_fill"] is None
+
+
+def test_invalid_probe_fill_attribution_is_excluded_from_expansion_ev(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-03.jsonl"
+    rows = [
+        _event(
+            607,
+            "117732",
+            "invalid-bundle",
+            "rising_missed_one_share_entry",
+            {
+                "forced_entry_reason": "rising_missed_one_share_entry",
+                "forced_entry_qty": 80,
+                "actual_order_submitted": False,
+            },
+        ),
+        _event(
+            607,
+            "117732",
+            "invalid-bundle",
+            "probe_filled",
+            {
+                "probe_bundle_id": "bundle-607",
+                "fill_qty": 1,
+                "fill_price": 10000,
+                "effective_venue": "KRX",
+                "market_session_bucket": "krx_regular",
+            },
+        ),
+        _event(
+            607,
+            "117732",
+            "invalid-bundle",
+            "residual_submitted",
+            {
+                "probe_bundle_id": "bundle-607",
+                "order_no": "R607",
+                "qty": 79,
+                "price": 9990,
+            },
+            pipeline="ENTRY_PIPELINE",
+        ),
+        _event(
+            607,
+            "117732",
+            "invalid-bundle",
+            "bundle_completed",
+            {
+                "probe_bundle_id": "bundle-607",
+                "requested_qty": 80,
+                "filled_qty": 153,
+            },
+        ),
+        _event(
+            607,
+            "117732",
+            "invalid-bundle",
+            "pyramid_blocked_reason",
+            {
+                "scale_in_arm": "PYRAMID",
+                "scale_in_blocker_reason": "profit_not_enough",
+                "profit_rate": "+1.20",
+                "current_ai_score": 70,
+                "buy_pressure_10t": 80,
+                "tick_aggressor_trusted_count": 10,
+                "tick_aggressor_pressure_usable": True,
+                "tick_acceleration_ratio": 1.2,
+                "curr_vs_micro_vwap_bp": 10,
+                "micro_vwap_available": True,
+                "minute_candle_window_fresh": True,
+            },
+        ),
+        _event(
+            607,
+            "117732",
+            "invalid-bundle",
+            "sell_completed",
+            {"profit_rate": "+1.50"},
+        ),
+    ]
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8"
+    )
+
+    report = mod.build_report(
+        "2026-07-03", pipeline_path=pipeline_path, generated_at="fixed"
+    )
+    item = report["one_share_pyramid_opportunity_rows"][0]
+
+    assert item["residual_fill_attribution_valid"] is False
+    assert item["residual_fill_attribution_state"] == (
+        "filled_qty_exceeds_submitted_or_expected"
+    )
+    assert item["normal_winner_expansion_label"] == "source_quality_blocked"
+    assert report["source_quality"]["residual_fill_attribution_invalid_count"] == 1
+    assert report["source_quality"]["status"] == "pass"
+    assert report["summary"]["probe_residual_fill_attribution_invalid_count"] == 1
+    assert (
+        report["summary"]["normal_winner_expansion"][
+            "source_quality_blocked_candidate_count"
+        ]
+        == 1
+    )
+    assert report["summary"]["normal_winner_expansion"]["closed_candidate_count"] == 0

@@ -126,6 +126,30 @@
   - 판정 기준: fresh DROP 차단 수, WAIT probe 확대/폐기, BUY probe 기존 확대, 중복·초과 주문, `decision_to_order_sent_ms`, 실제 체결 손익과 source quality를 분리 귀속하고 다음 PREOPEN 영구 활성화 또는 rollback 후보를 기록한다.
   - 금지: 당일 단일 표본만으로 threshold/provider/cap/broker guard를 변경하거나 부분익절 정책의 효과를 합산하지 않는다.
 
+- [x] `[HoldingDecisionContextImplementation0723] 보유·청산 AI 공통 문맥 구현·검증 및 독립 rollback 축 추가` (`Due: 2026-07-23`, `Slot: INTRADAY`, `TimeWindow: 15:20~17:10`, `Track: ScalpingLogic`)
+  - Source: [holding_decision_context.py](/home/ubuntu/KORStockScan/src/engine/scalping/holding_decision_context.py), [entry_candle_context.py](/home/ubuntu/KORStockScan/src/engine/scalping/entry_candle_context.py), [ai_engine_openai.py](/home/ubuntu/KORStockScan/src/engine/ai_engine_openai.py), [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py), [sniper_overnight_gatekeeper.py](/home/ubuntu/KORStockScan/src/engine/sniper_overnight_gatekeeper.py)
+  - 구현 결과: 공통 venue/session 60봉 원천과 `holding_decision_context_v1`을 holding score, submit-authority 재평가, intraday holding-flow, overnight 1·2차 판단 및 provider probe에 연결했다. AI 입력은 최근 20봉을 `minute/open/high/low/close/volume/is_forming/volume_is_partial` 명시적 객체로 제공하고 1·3·5·10·20·60분 구조, trusted same-route WS signed tape, BBO/OFI, executable PnL, 포지션·주문·시장 문맥을 함께 공급한다.
+  - 판정 안전성: `hold_defer_allowed`는 fresh venue-consistent candle/BBO/position과 trusted tape 또는 fresh orderbook/OFI, 주문 정합성, 비활성 exit token을 모두 요구한다. 결손·충돌 시 HOLD/TRIM과 overnight HOLD는 기존 deterministic exit를 유예하지 못하며 hard/protect/emergency/fast-exit에는 context·AI·추가 REST 호출을 만들지 않는다.
+  - 검증 결과: 배열 legend 의존성을 제거한 명시적 객체형으로 주문 권한 없는 provider probe를 재측정했다. endpoint별 직렬 승인 표본은 holding score 10/10 parse, p95 3,709ms, 최대 4,430ms, 입력 2,885 tokens; holding-flow 10/10, p95 2,595ms, 최대 2,948ms, 입력 3,145 tokens; overnight 10/10, p95 2,835ms, 최대 2,948ms, 입력 2,492 tokens였다. 기존 7초/15초/12초 timeout 내 여유가 확인되어 timeout은 변경하지 않았다. local context build 200회 p95 0.789ms이며 관련 회귀, Ruff 신규 지적 0건, compile, parser, `git diff --check`와 `$korstockscan-review-gate` 미해결 지적 0건을 승인 기준으로 둔다. 세 endpoint를 동시에 부하시킨 이전 배열형 사전 probe에서는 score 1/10이 7,017ms timeout이었으나 운영형 endpoint별 직렬 재측정에서 재현되지 않았다.
+  - Runtime/rollback: 모든 `KORSTOCKSCAN_HOLDING_DECISION_CONTEXT_*`, `KORSTOCKSCAN_HOLDING_SCORE_CONTEXT_ENABLED`, `KORSTOCKSCAN_HOLDING_FLOW_CONTEXT_ENABLED`, `KORSTOCKSCAN_OVERNIGHT_CONTEXT_ENABLED` 기본값은 OFF이며 `runtime_effect=false`다. threshold, stop/trailing, 조기 부분익절, provider route, 주문가격·수량은 변경하지 않았고 구현만으로 봇을 재기동하지 않았다. 이후 적용 시 stage·cohort 축별 OFF가 즉시 rollback이다.
+
+- [ ] `[HoldingDecisionContextPreopenCanary0724] 보유 문맥 KRX/NXT/PREMARKET 및 score/flow/overnight 독립 canary 적용·사후 귀속` (`Due: 2026-07-24`, `Slot: PREOPEN`, `TimeWindow: 08:45~09:00`, `Track: ScalpingLogic`)
+  - Source: [holding_decision_context.py](/home/ubuntu/KORStockScan/src/engine/scalping/holding_decision_context.py), [operator_runtime_overrides.env](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/operator_runtime_overrides.env), [operator_runtime_overrides_2026-07-24.env](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/operator_runtime_overrides_2026-07-24.env), [holding_decision_context_all_preopen_2026-07-24.json](/home/ubuntu/KORStockScan/data/threshold_cycle/operator_runtime_env_locks/holding_decision_context_all_preopen_2026-07-24.json), [pipeline_events_2026-07-24.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-07-24.jsonl), [threshold_events_2026-07-24.jsonl](/home/ubuntu/KORStockScan/data/threshold_cycle/threshold_events_2026-07-24.jsonl)
+  - 적용 전제: 2026-07-23 장중 operator override는 NXT holding score/flow만 열었으므로, 다음 PREOPEN에는 KRX/PREMARKET/overnight를 각각 별도 검토한다. provider route, threshold, stop/trailing, 부분익절, 주문가격·수량은 유지한다.
+  - 판정 기준: route/session 혼합, JSON 절단, REST 호출 폭증, context 예외, hard-exit 지연, 중복·초과매도 여부와 provider expected/actual/failback을 확인한다. 하나라도 발생하면 해당 stage·cohort 축을 OFF하고 재기동 전 review gate를 다시 통과한다.
+  - Post-apply 귀속: exit별 `source_quality_adjusted_ev_pct`, deferral 후 추가 MFE, deferral로 늘어난 손실, 실제 순손익, `decision_to_order_sent_ms`를 분리한다. 당일 표본은 안전/source-quality rollback에만 사용하고 영구 활성화는 rolling/post-apply window로 판단한다.
+  - 2026-07-23 18:46 사전 승인·준비: 사용자 `전체 ON` 지시에 따라 persistent와 2026-07-24 dated override에 master, KRX/NXT/PREMARKET, score/flow/overnight 8개 값을 모두 ON으로 넣고 `ACTIVE_DATE=2026-07-24`로 격리했다. dated rollover는 현재 선택값을 그대로 보존하고 active date만 넘기며, holding context만 NXT-only에서 전체 ON으로 바꾼다. 사전 verifier `passed=true`, findings·missing family 0건, 활성화 행렬 12/12, 관련 테스트 65건, shell/JSON/parser/diff 검증과 재리뷰 미해결 0건이다. 현재 PID는 2026-07-23 dated override가 후순위로 덮어 NXT-only를 유지하며, 평일 cron의 07:30 기존 bot 종료와 07:55 신규 기동에서 내일 값을 로드한 뒤 PID env·첫 cohort/stage 이벤트를 확인하기 전까지 본 항목은 미완료로 유지한다.
+
+- [x] `[HoldingDecisionContextNXTIntradayApply0723] NXT holding score/flow 문맥 장중 operator override 적용` (`Due: 2026-07-23`, `Slot: INTRADAY`, `TimeWindow: 18:25~18:45`, `Track: ScalpingLogic`)
+  - Source: [holding_decision_context_nxt_intraday_2026-07-23.json](/home/ubuntu/KORStockScan/data/threshold_cycle/operator_runtime_env_locks/holding_decision_context_nxt_intraday_2026-07-23.json), [operator_runtime_overrides_2026-07-23.env](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/operator_runtime_overrides_2026-07-23.env), [pipeline_events_2026-07-23.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-07-23.jsonl)
+  - 적용 범위: 기존 bounded input-context 한 축에서 NXT cohort의 holding score·submit-authority score·holding-flow만 ON한다. KRX, PREMARKET, overnight는 OFF이며 threshold, stop/trailing, provider, 주문가격·수량, broker/account/order/cooldown, 조기 부분익절은 변경하지 않는다.
+  - 적용 근거: NXT 실제 보유 경로 SK이노베이션(096770)·에스피지(058610)에서 `venue=NXT`, `broker_route=NXT`, fresh/conflict-free quote 표본을 확인했다. 객체형 provider probe는 score/flow 각각 10/10 parse, p95 3,709ms/2,595ms였다.
+  - Rollback: route/session 혼합, JSON 절단·parse failure, REST 호출 폭증, context 예외, hard/protect/emergency/fast-exit 지연, 중복·초과매도 발생 시 `KORSTOCKSCAN_HOLDING_DECISION_CONTEXT_NXT_ENABLED=false` 또는 master OFF 후 review gate와 graceful restart를 수행한다.
+  - Post-apply: `ai_holding_review`, `holding_flow_override_review`의 context source quality, defer 허용/차단, expected/actual provider, 추가 MFE·증가 손실·실제 순손익·`decision_to_order_sent_ms`를 NXT 전용으로 귀속한다.
+  - 18:32 rollback: 첫 적용 후 `_log_holding_pipeline()`에 `decision_authority`가 중복 전달되어 TypeError가 발생했다. 주문 제출 전 context logging 결함으로 판정해 master/NXT/score/flow를 즉시 OFF하고 graceful restart한다. 결함 수정·재리뷰·표적 회귀 전에는 재활성화하지 않는다.
+  - 18:37 보완·재적용 승인: submit-authority retry가 holding context 관측 계약을 scale-in stage 계약에 원시 키로 합성한 것이 원인이었다. cross-stage 반환 필드의 관측 계약 7개 전체를 `holding_context_` 네임스페이스로 분리하고 실오류 형태 회귀를 추가했다. 관련 900건, Ruff 신규 지적 0건, compile 및 diff 검증과 재리뷰 미해결 0건을 확인해 NXT score/flow 축만 재적용한다. KRX/PREMARKET/overnight는 계속 OFF이며 재발 시 즉시 전체 holding-context 축을 rollback한다.
+  - 18:39 실제 경로 확인: graceful restart `472430 -> 476184`, env handoff `passed=true`, `pid_passed=true`, missing/mismatch 0건이다. `scale_in_ai_authority_retry`가 18:38:48·18:39:20 두 차례 정상 종료했고 scale-in `decision_authority`와 `holding_context_decision_authority`가 분리 기록됐다. TypeError·치명 루프·중복 주문은 0건이다. 첫 holding-score 1건의 7초 transport timeout은 기존 fail-closed로 종료되고 다음 submit-authority 응답은 parse 성공했으므로 JSON 절단과 분리 관측한다.
+
 
 ## Project/Calendar 동기화
 
@@ -134,3 +158,18 @@
 ```bash
 PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTHONPATH=. .venv/bin/python -m src.engine.sync_github_project_calendar
 ```
+
+<!-- AUTO_SERVER_COMPARISON_START -->
+### 본서버 vs songstockscan 자동 비교 (`2026-07-23 15:46:21`)
+
+- 기준: `profit-derived metrics are excluded by default because fallback-normalized values such as NULL -> 0 can distort comparison`
+- 상세 리포트: `data/report/server_comparison/server_comparison_2026-07-23.md`
+- `Trade Review`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Performance Tuning`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Post Sell Feedback`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Entry Pipeline Flow`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+<!-- AUTO_SERVER_COMPARISON_END -->

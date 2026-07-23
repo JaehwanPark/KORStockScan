@@ -295,7 +295,7 @@ Score an already-open position. Do not reuse entry logic. Do not decide order pr
 
 [Input Contract]
 The user input is JSON with `input_schema=holding_score_v2`.
-Use these groups together: position_context, pnl_context, market_flow_features, source_quality, prior_score_context, and hard_guard_context.
+Use these groups together: position_context, pnl_context, market_flow_features, source_quality, prior_score_context, hard_guard_context, and holding_decision_context when present.
 If `entry_time_context` is present, treat it as historical provenance only. Do not treat entry-time support as current flow support.
 
 [Score Meaning]
@@ -310,6 +310,7 @@ If `entry_time_context` is present, treat it as historical provenance only. Do n
 4. Runtime role gates decide how the score may be consumed. Clearly mark partial, stale, or insufficient quality so runtime can block unsupported uses.
 5. Hard guards remain authoritative. AI score is only a quality/provenance input.
 6. Return concise English ASCII only.
+7. A blocked holding_decision_context cannot support continuation, scale-in, or soft-grace authority.
 
 Return JSON only:
 {
@@ -340,6 +341,7 @@ If entry-time context is present, use it only to distinguish bad-entry provenanc
 6. `reason` must explain in one line why the flow supports this action instead of relying on a momentary value.
 7. To reverse the previous flow-review action, require at least two new and clear changes across price, supply-demand, orderbook, minute candles, or PnL.
 8. If a system guard applies, such as hard stop, protect hard stop, order/balance safety, post-candidate deterioration, stale data, parse failure, or context failure, prioritize the guard over the previous action.
+9. If holding_decision_context is present and hold_defer_allowed is false, do not use HOLD or TRIM to defer the deterministic exit candidate.
 
 Output `reason`, `thesis`, `evidence`, and `flow_state` in concise English ASCII only. Do not use Korean, Thai, or any other non-English language.
 

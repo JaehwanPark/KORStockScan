@@ -300,6 +300,63 @@ def test_soft_stop_candidate_with_flow_hold_defers_sell(monkeypatch):
     assert any(stage == "holding_flow_override_defer_exit" for stage, _ in logs)
 
 
+def test_enabled_holding_context_blocks_ai_hold_deferral_when_sources_conflict(
+    monkeypatch,
+):
+    logs = []
+    _patch_holding_context(monkeypatch, logs)
+    blocked_context = {
+        "schema": "holding_decision_context_v1",
+        "enabled": True,
+        "flow_signature": {
+            "executable_pnl_pct": -1.1,
+            "candle_regime": "range",
+            "signed_tape_state": "missing",
+            "ofi_regime": "neutral",
+            "source_quality_status": "blocked",
+        },
+        "source_quality": {
+            "status": "blocked",
+            "hold_defer_allowed": False,
+            "blockers": ["executable_bbo", "order_or_quantity_conflict"],
+        },
+    }
+    monkeypatch.setattr(
+        handlers,
+        "_build_holding_ai_decision_context",
+        lambda **kwargs: blocked_context,
+    )
+    ai = DummyFlowAI("HOLD")
+
+    proceed = handlers._evaluate_holding_flow_override(
+        stock=_stock(),
+        code="005930",
+        strategy="SCALPING",
+        ws_data=_ws(),
+        ai_engine=ai,
+        exit_rule="scalp_soft_stop_pct",
+        sell_reason_type="LOSS",
+        reason="soft stop",
+        profit_rate=-1.10,
+        peak_profit=0.00,
+        drawdown=1.10,
+        current_ai_score=25,
+        held_sec=80,
+        curr_price=10000,
+        buy_price=10110,
+        now_ts=1000.0,
+    )
+
+    assert proceed is True
+    assert ai.calls[0][1]["holding_context"] is blocked_context
+    assert any(
+        stage == "holding_flow_override_force_exit"
+        and fields.get("force_reason") == "holding_context_cannot_defer"
+        for stage, fields in logs
+    )
+    assert not any(stage == "holding_flow_override_defer_exit" for stage, _ in logs)
+
+
 def test_bad_entry_candidate_with_flow_exit_allows_sell(monkeypatch):
     logs = []
     _patch_holding_context(monkeypatch, logs)

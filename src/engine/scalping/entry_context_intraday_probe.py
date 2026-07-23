@@ -13,6 +13,9 @@ from pathlib import Path
 from typing import Any
 
 from src.engine import scalp_entry_action_decision_matrix as adm_mod
+from src.engine.scalping.holding_decision_context import (
+    OBSERVATION_CONTRACT as HOLDING_CONTEXT_OBSERVATION_CONTRACT,
+)
 from src.engine.sniper_config import CONF
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -817,6 +820,168 @@ def _fields_to_entry_candle_context(fields: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _entry_context_to_recent_candles(
+    context: dict[str, Any],
+) -> list[dict[str, Any]]:
+    rows = []
+    for bar in context.get("bars") or []:
+        if not isinstance(bar, dict):
+            continue
+        rows.append(
+            {
+                "time": bar.get("t"),
+                "open": bar.get("o"),
+                "high": bar.get("h"),
+                "low": bar.get("l"),
+                "close": bar.get("c"),
+                "volume": bar.get("v"),
+                "forming": bool(bar.get("forming")),
+                "partial_volume": bool(bar.get("partial_volume")),
+            }
+        )
+    return rows
+
+
+def _fields_to_holding_decision_context(
+    fields: dict[str, Any],
+) -> dict[str, Any]:
+    """Rehydrate compact report evidence without inventing trade direction."""
+
+    embedded = fields.get("holding_decision_context")
+    if isinstance(embedded, dict) and embedded.get("schema"):
+        return dict(embedded)
+    entry_context = _fields_to_entry_candle_context(fields)
+    source_status = str(
+        _first_nonempty(
+            fields,
+            "holding_context_source_quality_status",
+            default="observation_summary_only",
+        )
+    )
+    blockers = fields.get("holding_context_blockers")
+    if not isinstance(blockers, list):
+        blockers = ["provider_compare_missing_full_holding_source"]
+    return {
+        "schema": "holding_decision_context_v1",
+        "enabled": _boolish(
+            _first_nonempty(fields, "holding_context_enabled", default=False)
+        ),
+        "decision_kind": "intraday_probe_compare",
+        "venue": _first_nonempty(
+            fields, "holding_context_venue", "entry_candle_venue", default="unknown"
+        ),
+        "session": _first_nonempty(
+            fields,
+            "holding_context_session",
+            "entry_candle_session",
+            default="unknown",
+        ),
+        "rest_route": _first_nonempty(
+            fields, "holding_context_rest_route", default="unknown"
+        ),
+        "ws_route": _first_nonempty(
+            fields, "holding_context_ws_route", default="unknown"
+        ),
+        "candle": {
+            "current_session_bar_count": _int_or_zero(
+                _first_nonempty(
+                    fields,
+                    "holding_context_candle_bar_count",
+                    "entry_candle_current_session_bar_count",
+                    default=0,
+                )
+            ),
+            "latest_bar_age_sec": _first_nonempty(
+                fields,
+                "holding_context_candle_latest_age_sec",
+                "entry_candle_latest_bar_age_sec",
+                default=None,
+            ),
+            "bars": list(entry_context.get("bars") or []),
+            "structure": dict(entry_context.get("structure") or {}),
+            "regime": _first_nonempty(
+                fields,
+                "holding_context_candle_regime",
+                "entry_candle_regime",
+                default="unknown",
+            ),
+            "risk_flags": list(fields.get("holding_context_candle_risk_flags") or []),
+        },
+        "signed_tape": {
+            "state": _first_nonempty(
+                fields, "holding_context_tape_state", default="missing"
+            ),
+            "source": _first_nonempty(
+                fields, "holding_context_tape_source", default="missing"
+            ),
+            "sample_count": _int_or_zero(
+                _first_nonempty(fields, "holding_context_tape_sample_count", default=0)
+            ),
+            "age_ms": _first_nonempty(
+                fields, "holding_context_tape_age_ms", default=None
+            ),
+        },
+        "microstructure": {
+            "best_bid": _int_or_zero(
+                _first_nonempty(fields, "holding_context_best_bid", default=0)
+            ),
+            "best_ask": _int_or_zero(
+                _first_nonempty(fields, "holding_context_best_ask", default=0)
+            ),
+            "quote_age_ms": _first_nonempty(
+                fields, "holding_context_quote_age_ms", default=None
+            ),
+            "bbo_fresh": _boolish(
+                _first_nonempty(fields, "holding_context_bbo_fresh", default=False)
+            ),
+            "spread_bps": _first_nonempty(
+                fields, "holding_context_spread_bps", default=None
+            ),
+            "ofi_regime": _first_nonempty(
+                fields, "holding_context_ofi_regime", default=None
+            ),
+        },
+        "execution_pnl": {
+            "mark_pnl_pct": _first_nonempty(
+                fields, "holding_context_mark_pnl_pct", default=None
+            ),
+            "executable_pnl_pct": _first_nonempty(
+                fields, "holding_context_executable_pnl_pct", default=None
+            ),
+        },
+        "position_lifecycle": {
+            "memory_qty": _int_or_zero(
+                _first_nonempty(fields, "holding_context_memory_qty", default=0)
+            ),
+            "broker_qty": _int_or_zero(
+                _first_nonempty(fields, "holding_context_broker_qty", default=0)
+            ),
+        },
+        "order_reconciliation": {
+            "exit_token_active": _boolish(
+                _first_nonempty(
+                    fields, "holding_context_exit_token_active", default=False
+                )
+            ),
+            "order_or_quantity_conflict": _boolish(
+                _first_nonempty(fields, "holding_context_order_conflict", default=False)
+            ),
+        },
+        "source_quality": {
+            "status": source_status,
+            "hold_defer_allowed": _boolish(
+                _first_nonempty(
+                    fields,
+                    "holding_context_hold_defer_allowed",
+                    default=False,
+                )
+            ),
+            "blockers": blockers,
+        },
+        "observation_contract": HOLDING_CONTEXT_OBSERVATION_CONTRACT,
+    }
+
+
 def _fields_to_position_ctx(fields: dict[str, Any]) -> dict[str, Any]:
     profit_rate = _float_or_zero(
         _first_nonempty(fields, "profit_rate", "pnl_pct", default=0.0)
@@ -1228,18 +1393,32 @@ def _run_endpoint_provider_compare(
                             }
                         )
                     else:
+                        holding_context = _fields_to_holding_decision_context(fields)
+                        probe_candles = _entry_context_to_recent_candles(
+                            holding_context.get("candle") or {}
+                        )
+                        holding_flow_kwargs = {
+                            "flow_history": [],
+                            "decision_kind": "intraday_probe_compare",
+                            "metadata_extra": {
+                                "source_event_stage": "entry_context_intraday_probe_provider_compare",
+                            },
+                        }
+                        if (
+                            "holding_context"
+                            in inspect.signature(
+                                engine.evaluate_scalping_holding_flow
+                            ).parameters
+                        ):
+                            holding_flow_kwargs["holding_context"] = holding_context
                         result = engine.evaluate_scalping_holding_flow(
                             stock_name,
                             stock_code,
                             _fields_to_ws_data(fields),
                             [],
-                            [],
+                            probe_candles,
                             _fields_to_position_ctx(fields),
-                            flow_history=[],
-                            decision_kind="intraday_probe_compare",
-                            metadata_extra={
-                                "source_event_stage": "entry_context_intraday_probe_provider_compare",
-                            },
+                            **holding_flow_kwargs,
                         )
                         openai_action = str(result.get("action") or "-").upper()
                         baseline_flow_state = str(

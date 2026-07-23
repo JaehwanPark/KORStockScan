@@ -66,8 +66,17 @@ from src.engine.scalping.entry_candle_context import (
     build_entry_candle_context,
     entry_candle_context_enabled,
     entry_candle_context_log_fields,
+    resolve_entry_candle_request_code,
     resolve_entry_candle_session,
     resolve_entry_candle_venue,
+)
+from src.engine.scalping.holding_decision_context import (
+    OBSERVATION_CONTRACT as HOLDING_CONTEXT_OBSERVATION_CONTRACT,
+    SCHEMA as HOLDING_CONTEXT_SCHEMA,
+    build_holding_decision_context,
+    count_holding_context_changes,
+    holding_decision_context_enabled,
+    holding_decision_context_log_fields,
 )
 from src.engine.scalping.opening_rotation import (
     EntryConfig as OpeningRotationEntryConfig,
@@ -989,9 +998,8 @@ def _early_volatility_tp_observation_seen(
     signature: str,
 ) -> bool:
     with ENTRY_LOCK:
-        return (
-            _EARLY_VOLATILITY_TP_OBSERVATION_SIGNATURES.get(str(cycle_id))
-            == str(signature)
+        return _EARLY_VOLATILITY_TP_OBSERVATION_SIGNATURES.get(str(cycle_id)) == str(
+            signature
         )
 
 
@@ -6951,8 +6959,7 @@ def _requires_scalping_discretionary_sell_quote_revalidation(
     normalized_rule = str(exit_rule or "").strip().lower()
     return bool(
         _is_scalp_strategy(strategy)
-        and normalized_rule
-        in _SCALP_FRESH_QUOTE_REQUIRED_DISCRETIONARY_EXIT_RULES
+        and normalized_rule in _SCALP_FRESH_QUOTE_REQUIRED_DISCRETIONARY_EXIT_RULES
         and not _is_sell_side_open_time_safety_exit(normalized_rule, sell_reason_type)
     )
 
@@ -12530,9 +12537,9 @@ def _canonicalize_rising_missed_venue_fields(
     """
 
     normalized = dict(fields or {})
-    rising_venue = str(
-        normalized.get("rising_missed_effective_venue") or ""
-    ).strip().upper()
+    rising_venue = (
+        str(normalized.get("rising_missed_effective_venue") or "").strip().upper()
+    )
     if not rising_venue or rising_venue in {"-", "NOT_AVAILABLE"}:
         return normalized
 
@@ -12546,9 +12553,7 @@ def _canonicalize_rising_missed_venue_fields(
 
     normalized["venue"] = rising_venue
     if not str(normalized.get("venue_resolution") or "").strip():
-        normalized["venue_resolution"] = (
-            "canonicalized:rising_missed_effective_venue"
-        )
+        normalized["venue_resolution"] = "canonicalized:rising_missed_effective_venue"
     return normalized
 
 
@@ -19821,6 +19826,179 @@ def _holding_score_preflight_source_quality(
     }
 
 
+def _build_holding_ai_decision_context(
+    *,
+    stock: dict | None,
+    code: str,
+    ws_data: dict | None,
+    decision_kind: str,
+    now_ts: float,
+    recent_candles: list | None,
+    candle_meta: dict | None = None,
+    recent_ticks: list | None = None,
+    position_ctx: dict | None = None,
+) -> dict | None:
+    """Build context only for an explicitly enabled holding stage/cohort."""
+
+    ws = ws_data if isinstance(ws_data, dict) else {}
+    session = resolve_entry_candle_session(now_ts=now_ts)
+    venue = resolve_entry_candle_venue(ws, session=session)
+    if not holding_decision_context_enabled(
+        venue=venue,
+        session=session,
+        decision_kind=decision_kind,
+        now_ts=now_ts,
+    ):
+        return None
+    combined = dict(stock or {})
+    combined.update(position_ctx or {})
+    try:
+        return build_holding_decision_context(
+            KIWOOM_TOKEN,
+            code,
+            ws,
+            combined,
+            venue,
+            session,
+            decision_kind,
+            limit=60,
+            model_bar_limit=20,
+            now_ts=now_ts,
+            recent_candles=recent_candles or [],
+            candle_meta=candle_meta or {},
+            recent_ticks=recent_ticks or [],
+        )
+    except Exception as exc:
+        return {
+            "schema": HOLDING_CONTEXT_SCHEMA,
+            "enabled": True,
+            "decision_kind": decision_kind,
+            "venue": venue,
+            "session": session,
+            "source_quality": {
+                "status": "blocked",
+                "hold_defer_allowed": False,
+                "blockers": [f"context_build_error:{type(exc).__name__}"],
+            },
+            "timing": {
+                "candle_fetch_ms": 0,
+                "signed_tape_fetch_ms": 0,
+                "build_ms": 0,
+            },
+            "observation_contract": HOLDING_CONTEXT_OBSERVATION_CONTRACT,
+        }
+
+
+def _resolve_holding_context_request_code(
+    code: str,
+    *,
+    ws_data: dict | None = None,
+    decision_kind: str,
+    now_ts: float,
+) -> str:
+    session = resolve_entry_candle_session(now_ts=now_ts)
+    venue = resolve_entry_candle_venue(ws_data or {}, session=session)
+    if holding_decision_context_enabled(
+        venue=venue,
+        session=session,
+        decision_kind=decision_kind,
+        now_ts=now_ts,
+    ):
+        return resolve_entry_candle_request_code(
+            code,
+            venue=venue,
+            session=session,
+            ws_data=ws_data or {},
+        )
+    return code
+
+
+def _get_holding_minute_candles_with_meta(
+    code: str,
+    *,
+    limit: int,
+    legacy_limit: int | None = None,
+    ws_data: dict | None = None,
+    decision_kind: str,
+    now_ts: float,
+) -> tuple[list, dict]:
+    session = resolve_entry_candle_session(now_ts=now_ts)
+    venue = resolve_entry_candle_venue(ws_data or {}, session=session)
+    context_enabled = holding_decision_context_enabled(
+        venue=venue,
+        session=session,
+        decision_kind=decision_kind,
+        now_ts=now_ts,
+    )
+    if not context_enabled:
+        try:
+            candles = kiwoom_utils.get_minute_candles_ka10080(
+                KIWOOM_TOKEN,
+                code,
+                limit=max(1, int(legacy_limit or limit)),
+            )
+            return list(candles or []), {}
+        except Exception as exc:
+            return [], {"fetch_error": f"{type(exc).__name__}:{str(exc)[:120]}"}
+    request_code = _resolve_holding_context_request_code(
+        code,
+        ws_data=ws_data,
+        decision_kind=decision_kind,
+        now_ts=now_ts,
+    )
+    try:
+        candles, metadata = kiwoom_utils.get_minute_candles_ka10080_with_meta(
+            KIWOOM_TOKEN, request_code, limit=limit
+        )
+        resolved_metadata = dict(metadata or {})
+        resolved_metadata["holding_context_request_code"] = request_code
+        return list(candles or []), resolved_metadata
+    except Exception as exc:
+        return [], {
+            "holding_context_request_code": request_code,
+            "fetch_error": f"{type(exc).__name__}:{str(exc)[:120]}",
+        }
+
+
+def _holding_context_allows_defer(context: dict | None) -> bool:
+    if not isinstance(context, dict) or not context.get("enabled"):
+        return True
+    quality = (
+        context.get("source_quality")
+        if isinstance(context.get("source_quality"), dict)
+        else {}
+    )
+    return bool(quality.get("hold_defer_allowed", False))
+
+
+def _holding_context_prohibited_exit_candidate(
+    *,
+    strategy: str,
+    opening_rotation_active: bool,
+    is_sell_signal: bool,
+    exit_requested: bool,
+    profit_rate: float,
+    trailing_stop_price: float,
+    current_price: int,
+) -> bool:
+    hard_stop_pct = min(
+        _rule_float("SCALP_STOP", -1.5),
+        _rule_float("SCALP_HARD_STOP", -2.5),
+    )
+    return bool(
+        is_sell_signal
+        or exit_requested
+        or (
+            strategy == "SCALPING"
+            and not opening_rotation_active
+            and (
+                profit_rate <= hard_stop_pct
+                or (trailing_stop_price > 0 and current_price <= trailing_stop_price)
+            )
+        )
+    )
+
+
 def _recent_exit_candidate_pyramid_block_context(
     stock: dict | None,
     *,
@@ -21970,15 +22148,19 @@ def _fast_exit_execution_route_fields(
 ) -> dict[str, Any]:
     """Resolve the executable venue and prove NXT quote provenance."""
 
-    recorded_entry_route = str(
-        stock.get("entry_execution_broker_route") or ""
-    ).strip().upper()
-    recorded_entry_cohort = str(
-        stock.get("entry_execution_cohort")
-        or stock.get("effective_venue")
-        or stock.get("rising_missed_effective_venue")
-        or ""
-    ).strip().upper()
+    recorded_entry_route = (
+        str(stock.get("entry_execution_broker_route") or "").strip().upper()
+    )
+    recorded_entry_cohort = (
+        str(
+            stock.get("entry_execution_cohort")
+            or stock.get("effective_venue")
+            or stock.get("rising_missed_effective_venue")
+            or ""
+        )
+        .strip()
+        .upper()
+    )
     confirmed_nxt_entry_position = bool(
         str(stock.get("status") or "").strip().upper() == "HOLDING"
         and _safe_int(stock.get("buy_qty"), 0) > 0
@@ -22068,9 +22250,7 @@ def _fast_exit_execution_route_fields(
         and rest_request_code.endswith(("_AL", "_NX"))
     )
     source_quality_ready = bool(
-        broker_route in {"KRX", "SOR"}
-        or ws_nxt_route_ready
-        or rest_nxt_route_ready
+        broker_route in {"KRX", "SOR"} or ws_nxt_route_ready or rest_nxt_route_ready
     )
     source_quality_blocked = bool(not broker_route_blocked and not source_quality_ready)
     if resolution.get("blocked"):
@@ -22154,9 +22334,9 @@ def _dispatch_scalp_preset_exit(
     orig_ord_no = stock.get("preset_tp_ord_no", "")
     preset_ai_score = float(stock.get("rt_ai_prob", 0.5) or 0.5) * 100
     preset_held_sec = _resolve_holding_elapsed_sec(stock, now_ts=now_ts)
-    fast_exit_broker_route = str(
-        stock.get("fast_exit_broker_route") or ""
-    ).strip().upper()
+    fast_exit_broker_route = (
+        str(stock.get("fast_exit_broker_route") or "").strip().upper()
+    )
 
     def _defer_fast_exit_retry(
         retry_reason: str, *, retry_delay_sec: float = 0.25
@@ -22306,7 +22486,7 @@ def _dispatch_scalp_preset_exit(
                 actual_order_submitted=False,
                 broker_order_forbidden=True,
                 runtime_effect=True,
-                **_entry_split_probe_observation_contract_fields(),
+                **_entry_split_probe_observation_contract_fields(stock),
             )
             if _defer_fast_exit_retry("probe_buy_cancel_unconfirmed"):
                 return
@@ -22323,7 +22503,7 @@ def _dispatch_scalp_preset_exit(
                 actual_order_submitted=False,
                 broker_order_forbidden=True,
                 runtime_effect=True,
-                **_entry_split_probe_observation_contract_fields(),
+                **_entry_split_probe_observation_contract_fields(stock),
             )
 
     sell_time_block_fields = _sell_side_open_time_block_fields(
@@ -22471,9 +22651,7 @@ def _dispatch_scalp_preset_exit(
             exit_token=stock.get("exit_token") or "-",
             fast_exit=bool(fast_exit),
             fast_exit_broker_route=fast_exit_broker_route or "implicit_legacy_route",
-            fast_exit_execution_cohort=(
-                stock.get("fast_exit_execution_cohort") or "-"
-            ),
+            fast_exit_execution_cohort=(stock.get("fast_exit_execution_cohort") or "-"),
             decision_to_order_sent_ms=round(
                 max(
                     0.0,
@@ -22707,9 +22885,7 @@ def evaluate_and_dispatch_fast_scalp_exit(
     if not trigger_kind:
         if not retry_pending:
             return False
-        trigger_kind = str(
-            stock.get("fast_exit_trigger_kind") or "claimed_exit_retry"
-        )
+        trigger_kind = str(stock.get("fast_exit_trigger_kind") or "claimed_exit_retry")
         exit_rule = str(stock.get("last_exit_rule") or "scalp_fast_exit_retry")
 
     if trigger_kind == "trailing_peak_worsen_floor" and not retry_pending:
@@ -22799,9 +22975,7 @@ def evaluate_and_dispatch_fast_scalp_exit(
                     "conflicted",
                     "price_conflict",
                 }
-                and not wide_route_fields.get(
-                    "fast_exit_route_source_quality_blocked"
-                )
+                and not wide_route_fields.get("fast_exit_route_source_quality_blocked")
             )
             _log_holding_pipeline(
                 stock,
@@ -22828,18 +23002,14 @@ def evaluate_and_dispatch_fast_scalp_exit(
                 rest_best_bid=wide_bid,
                 rest_best_ask=wide_ask,
                 rest_spread_bps=(
-                    f"{wide_spread_bps:.3f}"
-                    if math.isfinite(wide_spread_bps)
-                    else "-"
+                    f"{wide_spread_bps:.3f}" if math.isfinite(wide_spread_bps) else "-"
                 ),
                 metric_role="source_quality_gate",
                 decision_authority="scalp_trailing_take_profit",
                 window_policy="same_trailing_candidate_bounded_rest_recheck",
                 sample_floor="not_applicable_runtime_guard",
                 primary_decision_metric="fresh_rest_executable_spread_bps",
-                source_quality_gate=(
-                    "fresh_conflict_free_rest_bbo_within_spread_cap"
-                ),
+                source_quality_gate=("fresh_conflict_free_rest_bbo_within_spread_cap"),
                 forbidden_uses=(
                     "hard_stop_delay|protect_stop_delay|emergency_stop_delay|"
                     "stale_submit|quantity_change|broker_guard_bypass"
@@ -22912,18 +23082,16 @@ def evaluate_and_dispatch_fast_scalp_exit(
             consumer_stage="scalp_fast_exit_monitor",
             tier="hot",
         )
-        loss_conversion_deferred = (
-            _evaluate_scalp_trailing_loss_conversion_recheck(
-                stock=stock,
-                code=code,
-                ws_data=ws_data,
-                profit_rate=profit_rate,
-                peak_profit=peak_profit,
-                trailing_peak_worsen=trailing_worsen,
-                now_ts=observed_at,
-                emit_deferred_log=False,
-                recheck_invoker="fast_exit_monitor",
-            )
+        loss_conversion_deferred = _evaluate_scalp_trailing_loss_conversion_recheck(
+            stock=stock,
+            code=code,
+            ws_data=ws_data,
+            profit_rate=profit_rate,
+            peak_profit=peak_profit,
+            trailing_peak_worsen=trailing_worsen,
+            now_ts=observed_at,
+            emit_deferred_log=False,
+            recheck_invoker="fast_exit_monitor",
         )
         continuation_deferred = False
         if not loss_conversion_deferred:
@@ -22974,9 +23142,7 @@ def evaluate_and_dispatch_fast_scalp_exit(
                 "last_exit_rule": exit_rule,
                 "fast_exit_trigger_kind": trigger_kind,
                 "fast_exit_retry_pending": False,
-                "fast_exit_broker_route": route_fields.get(
-                    "fast_exit_broker_route"
-                ),
+                "fast_exit_broker_route": route_fields.get("fast_exit_broker_route"),
                 "fast_exit_execution_cohort": route_fields.get(
                     "fast_exit_execution_cohort"
                 ),
@@ -23777,11 +23943,25 @@ def _retry_holding_ai_submit_authority_before_block(
                     ),
                 }
             )
-        recent_ticks = (
-            kiwoom_utils.get_tick_history_ka10003(KIWOOM_TOKEN, code, limit=10) or []
+        holding_request_code = _resolve_holding_context_request_code(
+            code,
+            ws_data=retry_ws_data,
+            decision_kind="holding_score_submit_authority",
+            now_ts=now_ts,
         )
-        recent_candles = (
-            kiwoom_utils.get_minute_candles_ka10080(KIWOOM_TOKEN, code, limit=40) or []
+        recent_ticks = (
+            kiwoom_utils.get_tick_history_ka10003(
+                KIWOOM_TOKEN, holding_request_code, limit=10
+            )
+            or []
+        )
+        recent_candles, recent_candle_meta = _get_holding_minute_candles_with_meta(
+            code,
+            limit=60,
+            legacy_limit=40,
+            ws_data=retry_ws_data,
+            decision_kind="holding_score_submit_authority",
+            now_ts=now_ts,
         )
     except Exception as exc:
         fields[f"{field_prefix}_input_retry_reason"] = "input_fetch_error"
@@ -23821,22 +24001,56 @@ def _retry_holding_ai_submit_authority_before_block(
         or "-",
         "source_event_stage": source_event_stage,
     }
-    try:
-        ai_decision = ai_engine.evaluate_scalping_holding_score(
-            (stock or {}).get("name"),
-            code,
-            retry_ws_data,
-            recent_ticks,
-            recent_candles,
-            holding_score_position_ctx,
-            metadata_extra={
-                "record_id": (stock or {}).get("id"),
-                "sim_record_id": (stock or {}).get("sim_record_id"),
-                "sim_parent_record_id": (stock or {}).get("sim_parent_record_id"),
-                "entry_adm_candidate_id": (stock or {}).get("entry_adm_candidate_id"),
-                "source_event_stage": source_event_stage,
-            },
+    holding_context = _build_holding_ai_decision_context(
+        stock=stock,
+        code=code,
+        ws_data=retry_ws_data,
+        decision_kind="holding_score_submit_authority",
+        now_ts=now_ts,
+        recent_candles=recent_candles,
+        candle_meta=recent_candle_meta,
+        recent_ticks=recent_ticks,
+        position_ctx=holding_score_position_ctx,
+    )
+    if holding_context:
+        # These fields are returned to a caller that already owns the scale-in
+        # observation contract. Keep the nested holding-context contract
+        # namespaced so **fields cannot collide with the caller's authority.
+        fields.update(
+            holding_decision_context_log_fields(
+                holding_context,
+                observation_contract_prefix="holding_context_",
+            )
         )
+    try:
+        metadata_extra = {
+            "record_id": (stock or {}).get("id"),
+            "sim_record_id": (stock or {}).get("sim_record_id"),
+            "sim_parent_record_id": (stock or {}).get("sim_parent_record_id"),
+            "entry_adm_candidate_id": (stock or {}).get("entry_adm_candidate_id"),
+            "source_event_stage": source_event_stage,
+        }
+        if holding_context is None:
+            ai_decision = ai_engine.evaluate_scalping_holding_score(
+                (stock or {}).get("name"),
+                code,
+                retry_ws_data,
+                recent_ticks,
+                recent_candles,
+                holding_score_position_ctx,
+                metadata_extra=metadata_extra,
+            )
+        else:
+            ai_decision = ai_engine.evaluate_scalping_holding_score(
+                (stock or {}).get("name"),
+                code,
+                retry_ws_data,
+                recent_ticks,
+                recent_candles,
+                holding_score_position_ctx,
+                metadata_extra=metadata_extra,
+                holding_context=holding_context,
+            )
     except Exception as exc:
         fields[f"{field_prefix}_input_retry_reason"] = "holding_ai_error"
         fields[f"{field_prefix}_input_retry_error"] = str(exc)[:180]
@@ -32299,7 +32513,9 @@ def _split_order_meta_fields(order: dict | None) -> dict:
     }
 
 
-def _entry_split_probe_observation_contract_fields() -> dict[str, Any]:
+def _entry_split_probe_observation_contract_fields(
+    stock: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     fields = {
         "metric_role": "real_execution_quality",
         "decision_authority": "operator_override_observation_only",
@@ -32326,6 +32542,34 @@ def _entry_split_probe_observation_contract_fields() -> dict[str, Any]:
                 ),
             }
         )
+    stock = stock if isinstance(stock, dict) else {}
+    effective_venue = (
+        str(
+            stock.get("entry_execution_cohort")
+            or stock.get("rising_missed_effective_venue")
+            or stock.get("effective_venue")
+            or stock.get(
+                "rising_missed_tp1_submit_context_rising_missed_effective_venue"
+            )
+            or ""
+        )
+        .strip()
+        .upper()
+    )
+    if effective_venue in {"KRX", "NXT", "PREMARKET_KRX_LIKE"}:
+        fields["effective_venue"] = effective_venue
+        fields["rising_missed_effective_venue"] = effective_venue
+    market_session_bucket = str(
+        stock.get("rising_missed_market_session_bucket")
+        or stock.get("market_session_bucket")
+        or stock.get(
+            "rising_missed_tp1_submit_context_rising_missed_market_session_bucket"
+        )
+        or ""
+    ).strip()
+    if market_session_bucket:
+        fields["market_session_bucket"] = market_session_bucket
+        fields["rising_missed_market_session_bucket"] = market_session_bucket
     return fields
 
 
@@ -32855,9 +33099,7 @@ def _post_probe_direction_fields(
     positives = [name for name, values in groups.items() if values[1]]
     negatives = [name for name, values in groups.items() if values[2]]
     directional_group_count = len(set(positives + negatives))
-    latest_ai_action = (
-        str(stock.get("last_watching_ai_action") or "").strip().upper()
-    )
+    latest_ai_action = str(stock.get("last_watching_ai_action") or "").strip().upper()
     latest_ai_result_source = (
         str(stock.get("last_watching_ai_result_source") or "").strip().lower()
     )
@@ -32865,9 +33107,7 @@ def _post_probe_direction_fields(
         stock.get("last_watching_ai_confirmed_at"), 0.0
     )
     latest_ai_action_age_sec = (
-        observed_now - latest_ai_confirmed_at
-        if latest_ai_confirmed_at > 0
-        else None
+        observed_now - latest_ai_confirmed_at if latest_ai_confirmed_at > 0 else None
     )
     latest_ai_fresh = bool(
         latest_ai_action in {"BUY", "DROP", "WAIT"}
@@ -32877,9 +33117,7 @@ def _post_probe_direction_fields(
         and latest_ai_action_age_sec <= max(0.1, float(max_context_age_sec))
     )
     submit_ai_action = (
-        str(stock.get("entry_split_probe_ai_action_at_submit") or "")
-        .strip()
-        .upper()
+        str(stock.get("entry_split_probe_ai_action_at_submit") or "").strip().upper()
     )
     submit_ai_result_source = (
         str(stock.get("entry_split_probe_ai_result_source_at_submit") or "")
@@ -32890,9 +33128,7 @@ def _post_probe_direction_fields(
         stock.get("entry_split_probe_ai_confirmed_at_submit"), 0.0
     )
     submit_ai_action_age_sec = (
-        observed_now - submit_ai_confirmed_at
-        if submit_ai_confirmed_at > 0
-        else None
+        observed_now - submit_ai_confirmed_at if submit_ai_confirmed_at > 0 else None
     )
     submit_wait_fresh = bool(
         submit_ai_action == "WAIT"
@@ -32943,8 +33179,9 @@ def _post_probe_direction_fields(
     )
     nxt_wait_fast_tape_ready = bool(
         nxt_wait_fast_tape_enabled
-        and fresh_negative_ai_action
         and ai_action == "WAIT"
+        and (fresh_negative_ai_action or wait_probe_origin)
+        and ai_result_source in {"live", "prior_valid"}
         and fresh_ws_fast_tape
         and tick_accel is not None
         and tick_accel >= tick_min
@@ -32989,7 +33226,11 @@ def _post_probe_direction_fields(
             and len(positives) >= 2
             and not negatives
         )
-        if wait_positive and wait_probe_origin:
+        if (
+            wait_positive
+            and wait_probe_origin
+            and (not nxt_entry_context or nxt_wait_fast_tape_ready)
+        ):
             direction_state = "STRONG"
             action = "ALLOW_NARROW"
             reason = "post_probe_wait_two_group_positive"
@@ -33007,10 +33248,42 @@ def _post_probe_direction_fields(
                     "post_probe_nxt_wait_fast_tape_recheck_required"
                     if nxt_wait_fast_tape_ready
                     else (
-                        "post_probe_nxt_fresh_ai_wait"
-                        if nxt_entry_context and not wait_probe_origin
-                        else "post_probe_wait_positive_confirmation_required"
+                        "post_probe_nxt_wait_fast_tape_required"
+                        if nxt_entry_context and wait_probe_origin
+                        else (
+                            "post_probe_nxt_fresh_ai_wait"
+                            if nxt_entry_context and not wait_probe_origin
+                            else "post_probe_wait_positive_confirmation_required"
+                        )
                     )
+                )
+            )
+    elif (
+        ai_action == "WAIT"
+        and wait_probe_origin
+        and ai_result_source in {"live", "prior_valid"}
+    ):
+        wait_positive = bool(
+            price_available
+            and mark_price >= probe_fill_price > 0
+            and len(available) >= 2
+            and len(positives) >= 2
+            and not negatives
+        )
+        if wait_positive and (not nxt_entry_context or nxt_wait_fast_tape_ready):
+            direction_state = "STRONG"
+            action = "ALLOW_NARROW"
+            reason = "post_probe_stale_wait_two_group_positive_candidate"
+        else:
+            direction_state = "UNKNOWN"
+            action = "DEFER"
+            reason = (
+                "post_probe_wait_negative_group"
+                if negatives
+                else (
+                    "post_probe_nxt_wait_fast_tape_required"
+                    if nxt_entry_context
+                    else "post_probe_stale_wait_positive_confirmation_required"
                 )
             )
     elif ai_action in {"DROP", "WAIT"}:
@@ -33050,11 +33323,15 @@ def _post_probe_direction_fields(
         reason = "post_probe_multi_group_strong"
     else:
         direction_state = "NEUTRAL"
-        action = "DEFER" if wait_probe_origin else "ALLOW_NORMAL"
+        action = "DEFER" if wait_probe_origin or negatives else "ALLOW_NORMAL"
         reason = (
             "post_probe_wait_mixed_or_neutral"
             if wait_probe_origin
-            else "post_probe_mixed_or_neutral"
+            else (
+                "post_probe_neutral_negative_group_deferred"
+                if negatives
+                else "post_probe_mixed_or_neutral"
+            )
         )
     return {
         "post_probe_direction_state": direction_state,
@@ -33090,6 +33367,23 @@ def _post_probe_direction_fields(
             else "not_available"
         ),
         "post_probe_direction_fresh_negative_ai_action": fresh_negative_ai_action,
+        "post_probe_direction_ai_authority": (
+            "fresh_negative_veto"
+            if fresh_negative_ai_action
+            else (
+                "stale_wait_non_authoritative_two_group_confirmation"
+                if (
+                    ai_action == "WAIT"
+                    and wait_probe_origin
+                    and ai_result_source in {"live", "prior_valid"}
+                )
+                else (
+                    "stale_or_unverified_negative_fail_closed"
+                    if ai_action in {"DROP", "WAIT"}
+                    else "no_negative_ai_veto"
+                )
+            )
+        ),
         "post_probe_direction_latest_ai_action": latest_ai_action or "-",
         "post_probe_direction_latest_ai_result_source": (
             latest_ai_result_source or "-"
@@ -33262,6 +33556,10 @@ def _abort_entry_split_probe_residual(
         reason == "residual_revalidation_timeout"
         and last_direction_reason in source_quality_timeout_reasons
     )
+    directional_soft_abort = bool(
+        reason == "residual_revalidation_timeout"
+        and last_direction_reason == "post_probe_neutral_negative_group_deferred"
+    )
     soft_abort = bool(
         preserve_position
         and (
@@ -33274,6 +33572,7 @@ def _abort_entry_split_probe_residual(
                 and not action_guard_active
             )
             or source_quality_timeout
+            or directional_soft_abort
         )
     )
     set_fields = {
@@ -33288,11 +33587,7 @@ def _abort_entry_split_probe_residual(
         "entry_split_probe_soft_abort": soft_abort,
         "entry_split_probe_scale_in_recheck_allowed": soft_abort,
         "entry_split_probe_scale_in_recheck_reason": (
-            (
-                f"{reason}:source_quality_recovery"
-                if source_quality_timeout
-                else reason
-            )
+            (f"{reason}:source_quality_recovery" if source_quality_timeout else reason)
             if soft_abort
             else "hard_or_non_directional_abort"
         ),
@@ -33381,11 +33676,7 @@ def _abort_entry_split_probe_residual(
         entry_split_probe_soft_abort=soft_abort,
         entry_split_probe_scale_in_recheck_allowed=soft_abort,
         entry_split_probe_scale_in_recheck_reason=(
-            (
-                f"{reason}:source_quality_recovery"
-                if source_quality_timeout
-                else reason
-            )
+            (f"{reason}:source_quality_recovery" if source_quality_timeout else reason)
             if soft_abort
             else "hard_or_non_directional_abort"
         ),
@@ -33398,7 +33689,7 @@ def _abort_entry_split_probe_residual(
         ),
         post_probe_direction_state=("HARD_NEGATIVE" if hard_negative else "-"),
         post_probe_continuation_action=("HARD_NEGATIVE" if hard_negative else "BLOCK"),
-        **_entry_split_probe_observation_contract_fields(),
+        **_entry_split_probe_observation_contract_fields(stock),
     )
 
 
@@ -33487,7 +33778,7 @@ def _finalize_entry_split_probe_partial_position(
         actual_order_submitted=False,
         broker_order_forbidden=False,
         runtime_effect=True,
-        **_entry_split_probe_observation_contract_fields(),
+        **_entry_split_probe_observation_contract_fields(stock),
     )
     return True
 
@@ -34988,9 +35279,7 @@ def _holding_quote_provenance_fields(
     """Return explicit quote-age provenance for holding observation rows."""
     ws_data = ws_data if isinstance(ws_data, dict) else {}
     quote_fields = quote_fields if isinstance(quote_fields, dict) else {}
-    quote_age_ms = _safe_float(
-        quote_fields.get("quote_consistency_age_ms"), -1.0
-    )
+    quote_age_ms = _safe_float(quote_fields.get("quote_consistency_age_ms"), -1.0)
     quote_age_source = "quote_consistency_age_ms"
     if quote_age_ms < 0:
         age_sec = _get_ws_snapshot_age_sec(ws_data)
@@ -34999,16 +35288,12 @@ def _holding_quote_provenance_fields(
             quote_age_source = "last_ws_update_ts"
         else:
             quote_age_source = "unavailable_fail_closed"
-    quote_state = str(
-        quote_fields.get("quote_consistency_state") or ""
-    ).strip().lower()
+    quote_state = str(quote_fields.get("quote_consistency_state") or "").strip().lower()
     return {
         "quote_stale": bool(
             _boolish_true(ws_data.get("quote_stale"))
             or quote_age_ms < 0
-            or _boolish_true(
-                quote_fields.get("quote_consistency_entry_blocked")
-            )
+            or _boolish_true(quote_fields.get("quote_consistency_entry_blocked"))
             or quote_state in {"missing", "stale", "conflict", "diverged"}
         ),
         "quote_age_ms": round(quote_age_ms, 3),
@@ -36009,9 +36294,7 @@ def _extract_ai_overlap_snapshot(
         snapshot["distance_from_day_high_pct"] = (
             (curr_price - high_price) / high_price
         ) * 100.0
-        snapshot["distance_from_day_high_pct_observation_state"] = (
-            "observed_ws_high"
-        )
+        snapshot["distance_from_day_high_pct_observation_state"] = "observed_ws_high"
     if (
         curr_price > 0
         and high_price
@@ -36046,9 +36329,7 @@ def _extract_ai_overlap_snapshot(
                 (candle_high_price - candle_low_price) / candle_low_price
             ) * 100.0
             snapshot["overlap_context_source_quality"] = "recent_candles"
-            snapshot["intraday_range_pct_observation_state"] = (
-                "observed_recent_candles"
-            )
+            snapshot["intraday_range_pct_observation_state"] = "observed_recent_candles"
 
     if ai_engine and hasattr(ai_engine, "_extract_scalping_features"):
         try:
@@ -37932,6 +38213,9 @@ def _build_ai_ops_log_fields(
     ):
         if field_name in payload:
             out[field_name] = str(payload.get(field_name, "-") or "-")
+    for field_name, value in payload.items():
+        if str(field_name).startswith("holding_context_"):
+            out[field_name] = value
     for field_name in (
         "openai_transport_mode",
         "openai_transport_requested_mode",
@@ -39978,7 +40262,13 @@ def _build_sim_pre_submit_guard_observation_fields(
 
 
 def _append_holding_flow_history(
-    stock: dict, *, now_ts: float, exit_rule: str, profit_rate: float, flow_result: dict
+    stock: dict,
+    *,
+    now_ts: float,
+    exit_rule: str,
+    profit_rate: float,
+    flow_result: dict,
+    holding_context: dict | None = None,
 ) -> None:
     flow_state = normalize_flow_state_label(flow_result.get("flow_state", "-"))
     history = list(stock.get("holding_flow_review_history") or [])
@@ -39993,6 +40283,11 @@ def _append_holding_flow_history(
             "profit_rate": f"{float(profit_rate or 0.0):+.2f}",
             "exit_rule": exit_rule or "-",
             "reason": str(flow_result.get("reason", "-") or "-")[:120],
+            "holding_context_signature": (
+                dict(holding_context.get("flow_signature") or {})
+                if isinstance(holding_context, dict)
+                else {}
+            ),
         }
     )
     _mutate_stock_state(stock, set_fields={"holding_flow_review_history": history[-5:]})
@@ -41033,6 +41328,15 @@ def _evaluate_holding_flow_override(
         0.0, _rule_float("HOLDING_FLOW_REVIEW_PRICE_TRIGGER_PCT", 0.35)
     )
     max_ws_age = max(0.0, _rule_float("HOLDING_FLOW_REVIEW_MAX_WS_AGE_SEC", 3.0))
+    flow_context_axis_active = holding_decision_context_enabled(
+        venue=resolve_entry_candle_venue(
+            ws_data if isinstance(ws_data, dict) else {},
+            session=resolve_entry_candle_session(now_ts=now_ts),
+        ),
+        session=resolve_entry_candle_session(now_ts=now_ts),
+        decision_kind="holding_flow",
+        now_ts=now_ts,
+    )
     candidate_key = f"{exit_rule}:{sell_reason_type}"
     existing_key = str(stock.get("holding_flow_override_candidate_key", "") or "")
     candidate_started_at = _safe_float(
@@ -41488,6 +41792,21 @@ def _evaluate_holding_flow_override(
             and profit_move_since_review < price_trigger_pct
         )
         and not state_change_review_requested
+        and (
+            not flow_context_axis_active
+            or (
+                bool(stock.get("holding_flow_last_context_hold_defer_allowed"))
+                and not bool(
+                    stock.get("exit_token")
+                    or stock.get("fast_exit_token")
+                    or stock.get("exit_claimed")
+                    or stock.get("exit_decided_at")
+                    or stock.get("broker_order_conflict")
+                    or stock.get("quantity_mismatch")
+                    or stock.get("reconciliation_conflict")
+                )
+            )
+        )
     ):
         if _rule_bool("HOLDING_FLOW_OFI_SMOOTHING_OVERRIDE_ENABLED", True):
             orderbook_micro, ofi_state = _evaluate_holding_flow_ofi_state(
@@ -41684,11 +42003,22 @@ def _evaluate_holding_flow_override(
     tick_limit = max(1, _rule_int("HOLDING_FLOW_REVIEW_TICK_LIMIT", 30))
     candle_limit = max(1, _rule_int("HOLDING_FLOW_REVIEW_CANDLE_LIMIT", 60))
     try:
-        recent_ticks = kiwoom_utils.get_tick_history_ka10003(
-            KIWOOM_TOKEN, code, limit=tick_limit
+        holding_request_code = _resolve_holding_context_request_code(
+            code,
+            ws_data=ws_data,
+            decision_kind="holding_flow",
+            now_ts=now_ts,
         )
-        recent_candles = kiwoom_utils.get_minute_candles_ka10080(
-            KIWOOM_TOKEN, code, limit=candle_limit
+        recent_ticks = kiwoom_utils.get_tick_history_ka10003(
+            KIWOOM_TOKEN, holding_request_code, limit=tick_limit
+        )
+        recent_candles, recent_candle_meta = _get_holding_minute_candles_with_meta(
+            code,
+            limit=max(60, candle_limit),
+            legacy_limit=candle_limit,
+            ws_data=ws_data,
+            decision_kind="holding_flow",
+            now_ts=now_ts,
         )
     except Exception as exc:
         _log_holding_pipeline(
@@ -41729,6 +42059,20 @@ def _evaluate_holding_flow_override(
         )
         return True
 
+    pre_ai_orderbook_micro = None
+    pre_ai_ofi_state = None
+    if _rule_bool("HOLDING_FLOW_OFI_SMOOTHING_OVERRIDE_ENABLED", True):
+        pre_ai_orderbook_micro, pre_ai_ofi_state = _evaluate_holding_flow_ofi_state(
+            stock,
+            code,
+            curr_price=curr_price,
+            now_ts=now_ts,
+        )
+    elif _is_swing_orderbook_micro_context_enabled(strategy):
+        pre_ai_orderbook_micro = _build_live_orderbook_micro_context(
+            code, curr_price=curr_price
+        )
+
     position_ctx = {
         "exit_rule": exit_rule,
         "sell_reason_type": sell_reason_type,
@@ -41742,8 +42086,35 @@ def _evaluate_holding_flow_override(
         "current_ai_score": current_ai_score,
         "worsen_pct": worsen_pct,
         "entry_time_context": _build_entry_time_context_from_stock(stock),
+        "orderbook_micro": pre_ai_orderbook_micro or {},
+        "holding_flow_ofi_regime": (
+            pre_ai_ofi_state.regime if pre_ai_ofi_state is not None else None
+        ),
+        "holding_flow_ofi_micro_score_raw": (
+            pre_ai_ofi_state.micro_score_raw if pre_ai_ofi_state is not None else None
+        ),
+        "holding_flow_ofi_micro_score_smooth": (
+            pre_ai_ofi_state.micro_score_smooth
+            if pre_ai_ofi_state is not None
+            else None
+        ),
+        "holding_flow_ofi_snapshot_age_ms": (
+            pre_ai_ofi_state.snapshot_age_ms if pre_ai_ofi_state is not None else None
+        ),
         **holding_flow_micro_estimator_fields,
     }
+    holding_context = _build_holding_ai_decision_context(
+        stock=stock,
+        code=code,
+        ws_data=ws_data,
+        decision_kind="holding_flow",
+        now_ts=now_ts,
+        recent_candles=recent_candles,
+        candle_meta=recent_candle_meta,
+        recent_ticks=recent_ticks,
+        position_ctx=position_ctx,
+    )
+    holding_context_log_fields = holding_decision_context_log_fields(holding_context)
     holding_flow_metadata = {
         "record_id": stock.get("record_id") or stock.get("id"),
         "sim_record_id": stock.get("sim_record_id"),
@@ -41754,6 +42125,16 @@ def _evaluate_holding_flow_override(
         or stock.get("candidate_id"),
         "source_event_stage": "holding_flow",
     }
+    previous_context_signature = dict(
+        stock.get("holding_flow_last_context_signature") or {}
+    )
+    holding_flow_kwargs = {
+        "flow_history": stock.get("holding_flow_review_history") or [],
+        "decision_kind": "intraday_exit",
+        "metadata_extra": holding_flow_metadata,
+    }
+    if holding_context is not None:
+        holding_flow_kwargs["holding_context"] = holding_context
     flow_result = ai_engine.evaluate_scalping_holding_flow(
         stock.get("name", code),
         code,
@@ -41761,10 +42142,34 @@ def _evaluate_holding_flow_override(
         recent_ticks,
         recent_candles,
         position_ctx,
-        flow_history=stock.get("holding_flow_review_history") or [],
-        decision_kind="intraday_exit",
-        metadata_extra=holding_flow_metadata,
+        **holding_flow_kwargs,
     )
+    raw_flow_action = str(flow_result.get("action", "EXIT") or "EXIT").upper()
+    change_count, change_groups = count_holding_context_changes(
+        previous_context_signature,
+        (
+            holding_context.get("flow_signature")
+            if isinstance(holding_context, dict)
+            else {}
+        ),
+        price_trigger_pct=price_trigger_pct,
+    )
+    context_reversal_guard_active = bool(
+        isinstance(holding_context, dict) and holding_context.get("enabled")
+    )
+    reversal_clamped = bool(
+        context_reversal_guard_active
+        and last_review_action in {"HOLD", "TRIM", "EXIT"}
+        and raw_flow_action in {"HOLD", "TRIM", "EXIT"}
+        and raw_flow_action != last_review_action
+        and change_count < 2
+    )
+    if reversal_clamped:
+        flow_result = dict(flow_result)
+        flow_result["action"] = last_review_action
+        flow_result["reason"] = (
+            f"Retain prior action; only {change_count} independent context changes"
+        )
     _mutate_stock_state(
         stock,
         set_fields={
@@ -41783,6 +42188,14 @@ def _evaluate_holding_flow_override(
             "holding_flow_override_next_review_sec": _safe_int(
                 flow_result.get("next_review_sec"), min_review_sec
             ),
+            "holding_flow_last_context_signature": (
+                dict(holding_context.get("flow_signature") or {})
+                if isinstance(holding_context, dict)
+                else {}
+            ),
+            "holding_flow_last_context_hold_defer_allowed": (
+                _holding_context_allows_defer(holding_context)
+            ),
         },
     )
     _append_holding_flow_history(
@@ -41791,6 +42204,7 @@ def _evaluate_holding_flow_override(
         exit_rule=exit_rule,
         profit_rate=profit_rate,
         flow_result=flow_result,
+        holding_context=holding_context,
     )
     flow_action = str(flow_result.get("action", "EXIT") or "EXIT").upper()
     flow_state = normalize_flow_state_label(flow_result.get("flow_state", "-"))
@@ -41799,12 +42213,14 @@ def _evaluate_holding_flow_override(
         "TRIM",
         "EXIT",
     }
-    orderbook_micro = None
-    ofi_state = None
+    orderbook_micro = pre_ai_orderbook_micro
+    ofi_state = pre_ai_ofi_state
     ofi_log_fields = {}
     micro_log_fields = {}
     swing_exit_micro_fields = {}
-    if _rule_bool("HOLDING_FLOW_OFI_SMOOTHING_OVERRIDE_ENABLED", True):
+    if _rule_bool("HOLDING_FLOW_OFI_SMOOTHING_OVERRIDE_ENABLED", True) and (
+        orderbook_micro is None or ofi_state is None
+    ):
         orderbook_micro, ofi_state = _evaluate_holding_flow_ofi_state(
             stock,
             code,
@@ -41813,7 +42229,9 @@ def _evaluate_holding_flow_override(
         )
         ofi_log_fields = ofi_smoothing_log_fields(ofi_state, prefix="holding_flow_ofi")
         micro_log_fields = _build_orderbook_micro_log_fields(orderbook_micro)
-    elif _is_swing_orderbook_micro_context_enabled(strategy):
+    elif orderbook_micro is None and _is_swing_orderbook_micro_context_enabled(
+        strategy
+    ):
         orderbook_micro = _build_live_orderbook_micro_context(
             code, curr_price=curr_price
         )
@@ -41848,6 +42266,12 @@ def _evaluate_holding_flow_override(
         elapsed_sec=elapsed_sec,
         worsen_from_candidate=f"{worsen_from_candidate:.2f}",
         **_build_ai_ops_log_fields(flow_result),
+        holding_context_raw_flow_action=raw_flow_action,
+        holding_context_change_count=change_count,
+        holding_context_change_groups=change_groups,
+        holding_context_reversal_guard_active=context_reversal_guard_active,
+        holding_context_reversal_clamped=reversal_clamped,
+        **holding_context_log_fields,
         **holding_flow_micro_estimator_fields,
         **swing_exit_micro_fields,
     )
@@ -41867,6 +42291,24 @@ def _evaluate_holding_flow_override(
             ),
             **_holding_flow_override_force_exit_contract_fields(),
             **holding_flow_micro_estimator_fields,
+        )
+        return True
+    if flow_action in {"HOLD", "TRIM"} and not _holding_context_allows_defer(
+        holding_context
+    ):
+        context_force_exit_fields = {
+            **holding_context_log_fields,
+            **_holding_flow_override_force_exit_contract_fields(),
+        }
+        _log_holding_pipeline(
+            stock,
+            code,
+            "holding_flow_override_force_exit",
+            exit_rule=exit_rule,
+            force_reason="holding_context_cannot_defer",
+            raw_flow_action=flow_action,
+            profit_rate=f"{profit_rate:+.2f}",
+            **context_force_exit_fields,
         )
         return True
     if (
@@ -50616,9 +51058,8 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             "ai_score_hard_gate": False,
             "ai_score_decision_authority": "feature_only_not_evaluated",
         }
-        if opening_rotation_active and not _rising_missed_ai_action_guard_active(
-            now_ts=now_ts
-        )
+        if opening_rotation_active
+        and not _rising_missed_ai_action_guard_active(now_ts=now_ts)
         else _entry_ai_submit_authority_fields(
             strategy=strategy,
             stock=stock,
@@ -51458,7 +51899,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                     actual_order_submitted=False,
                     broker_order_forbidden=True,
                     runtime_effect=True,
-                    **_entry_split_probe_observation_contract_fields(),
+                    **_entry_split_probe_observation_contract_fields(stock),
                 )
                 return False
             _mutate_stock_state(
@@ -52209,7 +52650,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 actual_order_submitted=True,
                 broker_order_forbidden=False,
                 runtime_effect=True,
-                **_entry_split_probe_observation_contract_fields(),
+                **_entry_split_probe_observation_contract_fields(stock),
             )
         log_info(
             f"[LATENCY_ENTRY_ORDER_SENT] {stock.get('name')}({code}) "
@@ -53354,9 +53795,11 @@ def _rising_missed_initial_block_venue_fields(
         stock,
         runtime,
     )
-    observed_venue = str(
-        observation_fields.get("rising_missed_effective_venue") or "UNKNOWN"
-    ).strip().upper()
+    observed_venue = (
+        str(observation_fields.get("rising_missed_effective_venue") or "UNKNOWN")
+        .strip()
+        .upper()
+    )
     if explicit_resolution == "conflicting_explicit_venue":
         canonical_fields["venue"] = "UNKNOWN"
         canonical_fields["venue_resolution"] = (
@@ -53373,13 +53816,14 @@ def _rising_missed_initial_block_venue_fields(
     if explicit_venue != "UNKNOWN":
         canonical_fields["venue"] = explicit_venue
         canonical_fields["venue_resolution"] = (
-            "rising_missed_initial_gate:consistent_explicit:"
-            + explicit_resolution
+            "rising_missed_initial_gate:consistent_explicit:" + explicit_resolution
         )
         return canonical_fields
     canonical_fields["venue_resolution"] = (
         "rising_missed_initial_gate:"
-        + str(observation_fields.get("rising_missed_market_session_bucket") or "unknown")
+        + str(
+            observation_fields.get("rising_missed_market_session_bucket") or "unknown"
+        )
         + ":"
         + str(observation_fields.get("rising_missed_nxt_flag_source") or "unknown")
     )
@@ -56620,13 +57064,11 @@ def _maybe_manage_early_volatility_tp(
             "early_volatility_tp_last_observation_signature": observation_signature,
         },
     )
-    if (
-        str(stock.get("early_volatility_tp_logged_observation_signature") or "")
-        != observation_signature
-        and not _early_volatility_tp_observation_seen(
-            cycle_id,
-            observation_signature,
-        )
+    if str(
+        stock.get("early_volatility_tp_logged_observation_signature") or ""
+    ) != observation_signature and not _early_volatility_tp_observation_seen(
+        cycle_id,
+        observation_signature,
     ):
         _log_holding_pipeline(
             stock,
@@ -60985,8 +61427,13 @@ def _submit_entry_split_probe_residual_locked(
                 **direction_fields,
             )
             return False
-        if bool(stock.get("entry_split_probe_deferred_once")) and not bool(
-            direction_fields.get("post_probe_nxt_wait_fast_tape_ready")
+        stale_wait_recovery = bool(
+            direction_fields.get("post_probe_direction_ai_authority")
+            == "stale_wait_non_authoritative_two_group_confirmation"
+        )
+        if bool(stock.get("entry_split_probe_deferred_once")) and (
+            stale_wait_recovery
+            or not bool(direction_fields.get("post_probe_nxt_wait_fast_tape_ready"))
         ):
             continuation_action = "ALLOW_RECOVERED_WIDE"
             direction_fields["post_probe_continuation_action"] = continuation_action
@@ -61239,7 +61686,7 @@ def _submit_entry_split_probe_residual_locked(
                 for key, value in direction_fields.items()
                 if str(key).startswith("post_probe_")
             },
-            _entry_split_probe_observation_contract_fields(),
+            _entry_split_probe_observation_contract_fields(stock),
         ),
     )
 
@@ -61313,8 +61760,15 @@ def _submit_entry_split_probe_residual_locked(
             if leg_action == "DEFER":
                 failure_reason = "residual_leg_direction_deferred"
                 break
-            if bool(stock.get("entry_split_probe_deferred_once")) and not bool(
-                leg_direction_fields.get("post_probe_nxt_wait_fast_tape_ready")
+            stale_wait_recovery = bool(
+                leg_direction_fields.get("post_probe_direction_ai_authority")
+                == "stale_wait_non_authoritative_two_group_confirmation"
+            )
+            if bool(stock.get("entry_split_probe_deferred_once")) and (
+                stale_wait_recovery
+                or not bool(
+                    leg_direction_fields.get("post_probe_nxt_wait_fast_tape_ready")
+                )
             ):
                 leg_action = "ALLOW_RECOVERED_WIDE"
             leg_index = max(
@@ -61466,7 +61920,7 @@ def _submit_entry_split_probe_residual_locked(
                 runtime_effect=True,
                 **_merge_entry_pipeline_field_groups(
                     plan_fields,
-                    _entry_split_probe_observation_contract_fields(),
+                    _entry_split_probe_observation_contract_fields(stock),
                     {
                         key: residual_order.get(key)
                         for key in (
@@ -61515,7 +61969,7 @@ def _submit_entry_split_probe_residual_locked(
             runtime_effect=True,
             **_merge_entry_pipeline_field_groups(
                 plan_fields,
-                _entry_split_probe_observation_contract_fields(),
+                _entry_split_probe_observation_contract_fields(stock),
                 {
                     key: residual_order.get(key)
                     for key in (
@@ -61587,7 +62041,7 @@ def _submit_entry_split_probe_residual_locked(
                 actual_order_submitted=True,
                 broker_order_forbidden=True,
                 runtime_effect=True,
-                **_entry_split_probe_observation_contract_fields(),
+                **_entry_split_probe_observation_contract_fields(stock),
             )
             return True
         _abort_entry_split_probe_residual(
@@ -62328,6 +62782,17 @@ def handle_holding_state(
     opening_rotation_active = bool(
         strategy == "SCALPING" and is_opening_rotation_position(pos_tag)
     )
+    holding_context_forbidden_exit_candidate = (
+        _holding_context_prohibited_exit_candidate(
+            strategy=strategy,
+            opening_rotation_active=opening_rotation_active,
+            is_sell_signal=is_sell_signal,
+            exit_requested=bool(stock.get("exit_requested")),
+            profit_rate=profit_rate,
+            trailing_stop_price=trailing_stop_price,
+            current_price=curr_p,
+        )
+    )
 
     if daily_limit_up_triggered:
         is_sell_signal = True
@@ -62400,7 +62865,13 @@ def handle_holding_state(
             current_ai_score=current_ai_score,
         )
 
-    if strategy == "SCALPING" and ai_engine and radar and not opening_rotation_active:
+    if (
+        strategy == "SCALPING"
+        and ai_engine
+        and radar
+        and not opening_rotation_active
+        and not holding_context_forbidden_exit_candidate
+    ):
         safe_profit_pct = _rule_float("SCALP_SAFE_PROFIT", 0.5)
         near_safe_profit_zone = abs(profit_rate - safe_profit_pct) <= 0.20
         is_critical_zone = (
@@ -62743,16 +63214,29 @@ def handle_holding_state(
                         []
                         if sim_ai_budget_skip
                         else kiwoom_utils.get_tick_history_ka10003(
-                            KIWOOM_TOKEN, code, limit=10
+                            KIWOOM_TOKEN,
+                            _resolve_holding_context_request_code(
+                                code,
+                                ws_data=ws_data,
+                                decision_kind="holding_score",
+                                now_ts=now_ts,
+                            ),
+                            limit=10,
                         )
                     )
-                    recent_candles = (
-                        []
-                        if sim_ai_budget_skip
-                        else kiwoom_utils.get_minute_candles_ka10080(
-                            KIWOOM_TOKEN, code, limit=40
+                    if sim_ai_budget_skip:
+                        recent_candles, recent_candle_meta = [], {}
+                    else:
+                        recent_candles, recent_candle_meta = (
+                            _get_holding_minute_candles_with_meta(
+                                code,
+                                limit=60,
+                                legacy_limit=40,
+                                ws_data=ws_data,
+                                decision_kind="holding_score",
+                                now_ts=now_ts,
+                            )
                         )
-                    )
                     holding_ai_orderbook_refresh_fields = {}
                     if (
                         not sim_ai_budget_skip
@@ -62839,7 +63323,34 @@ def handle_holding_state(
                             ),
                             **holding_exit_micro_estimator_fields,
                         }
+                        holding_context = _build_holding_ai_decision_context(
+                            stock=stock,
+                            code=code,
+                            ws_data=ws_data,
+                            decision_kind="holding_score",
+                            now_ts=now_ts,
+                            recent_candles=recent_candles,
+                            candle_meta=recent_candle_meta,
+                            recent_ticks=recent_ticks,
+                            position_ctx=holding_score_position_ctx,
+                        )
                         if hasattr(ai_engine, "evaluate_scalping_holding_score"):
+                            metadata_extra = {
+                                "record_id": stock.get("id"),
+                                "sim_record_id": stock.get("sim_record_id"),
+                                "sim_parent_record_id": stock.get(
+                                    "sim_parent_record_id"
+                                ),
+                                "entry_adm_candidate_id": stock.get(
+                                    "entry_adm_candidate_id"
+                                ),
+                                "source_event_stage": "scalp_sim_holding_review",
+                            }
+                            holding_call_kwargs = {
+                                "metadata_extra": metadata_extra,
+                            }
+                            if holding_context is not None:
+                                holding_call_kwargs["holding_context"] = holding_context
                             ai_decision = ai_engine.evaluate_scalping_holding_score(
                                 stock["name"],
                                 code,
@@ -62847,17 +63358,7 @@ def handle_holding_state(
                                 recent_ticks,
                                 recent_candles,
                                 holding_score_position_ctx,
-                                metadata_extra={
-                                    "record_id": stock.get("id"),
-                                    "sim_record_id": stock.get("sim_record_id"),
-                                    "sim_parent_record_id": stock.get(
-                                        "sim_parent_record_id"
-                                    ),
-                                    "entry_adm_candidate_id": stock.get(
-                                        "entry_adm_candidate_id"
-                                    ),
-                                    "source_event_stage": "scalp_sim_holding_review",
-                                },
+                                **holding_call_kwargs,
                             )
                         else:
                             ai_decision = {
@@ -66325,9 +66826,9 @@ def handle_holding_state(
                     QuoteConsistencyConfig.from_env().emergency_rest_timeout_ms,
                 )
             )
-        sell_quote_checked_at = float(now_ts) + max(
-            0.0, float(rest_check_elapsed_ms)
-        ) / 1000.0
+        sell_quote_checked_at = (
+            float(now_ts) + max(0.0, float(rest_check_elapsed_ms)) / 1000.0
+        )
         sell_quote_fields, sell_mark_price, _, sell_order_price = (
             _build_quote_consistency_fields(
                 ws_data,
@@ -70501,7 +71002,7 @@ def handle_buy_ordered_state(stock, code):
                     actual_order_submitted=False,
                     broker_order_forbidden=True,
                     runtime_effect=True,
-                    **_entry_split_probe_observation_contract_fields(),
+                    **_entry_split_probe_observation_contract_fields(stock),
                 )
             else:
                 trip_probe_runtime_circuit("probe_timeout_cancel_failed")
@@ -70515,7 +71016,7 @@ def handle_buy_ordered_state(stock, code):
                     actual_order_submitted=False,
                     broker_order_forbidden=True,
                     runtime_effect=True,
-                    **_entry_split_probe_observation_contract_fields(),
+                    **_entry_split_probe_observation_contract_fields(stock),
                 )
             return
 

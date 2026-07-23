@@ -59,6 +59,10 @@ from src.engine.scalping.entry_candle_context import (
     apply_entry_candle_hybrid_guard,
     entry_candle_context_log_fields,
 )
+from src.engine.scalping.holding_decision_context import (  # noqa: E402
+    holding_decision_context_log_fields,
+    holding_decision_context_model_payload,
+)
 from src.utils.logger import log_error, log_info
 from src.utils.constants import TRADING_RULES
 from src.engine.macro_briefing_complete import build_scanner_data_input
@@ -6376,6 +6380,7 @@ class GPTSniperEngine:
         *,
         feature_packet=None,
         feature_audit_fields=None,
+        holding_context=None,
     ):
         ctx = position_ctx if isinstance(position_ctx, dict) else {}
         ws = ws_data if isinstance(ws_data, dict) else {}
@@ -6395,6 +6400,32 @@ class GPTSniperEngine:
         )
         source_quality = self._derive_holding_score_source_quality(packet, audit)
         compact_features = self._compact_holding_score_feature_packet(packet, audit)
+        holding_payload = holding_decision_context_model_payload(holding_context)
+        market_flow_features = (
+            {
+                "source": "holding_decision_context_v1",
+                "duplicate_legacy_feature_bundle_omitted": True,
+            }
+            if holding_payload
+            else {
+                "compact_features": compact_features,
+                "tick_summary": self._summarize_tick_windows(
+                    recent_ticks, windows=(5, 10, 20)
+                ),
+                "candle_summary": self._summarize_candle_windows(
+                    recent_candles, windows=(3, 5, 10)
+                ),
+                "live_supply_demand_orderbook": {
+                    "execution_strength": ws.get("v_pw", 0.0),
+                    "buy_ratio": ws.get("buy_ratio", 0.0),
+                    "buy_exec_volume": ws.get("buy_exec_volume", 0),
+                    "sell_exec_volume": ws.get("sell_exec_volume", 0),
+                    "ask_total_depth": ws.get("ask_tot", 0),
+                    "bid_total_depth": ws.get("bid_tot", 0),
+                    **self._extract_quote_snapshot(ws),
+                },
+            }
+        )
         payload = {
             "input_schema": "holding_score_v2",
             "position_context": {
@@ -6421,29 +6452,13 @@ class GPTSniperEngine:
                 "drawdown_from_peak_pct": round(drawdown, 4),
                 "distance_to_profit_peak_pct": round(drawdown, 4),
             },
-            "market_flow_features": {
-                "compact_features": compact_features,
-                "tick_summary": self._summarize_tick_windows(
-                    recent_ticks, windows=(5, 10, 20)
-                ),
-                "candle_summary": self._summarize_candle_windows(
-                    recent_candles, windows=(3, 5, 10)
-                ),
-                "live_supply_demand_orderbook": {
-                    "execution_strength": ws.get("v_pw", 0.0),
-                    "buy_ratio": ws.get("buy_ratio", 0.0),
-                    "buy_exec_volume": ws.get("buy_exec_volume", 0),
-                    "sell_exec_volume": ws.get("sell_exec_volume", 0),
-                    "ask_total_depth": ws.get("ask_tot", 0),
-                    "bid_total_depth": ws.get("bid_tot", 0),
-                    **self._extract_quote_snapshot(ws),
-                },
-            },
+            "market_flow_features": market_flow_features,
             "source_quality": {
                 **source_quality,
                 "aggressor_quality_preserved": True,
                 "price_change_heuristic_is_not_aggressor": True,
             },
+            "holding_decision_context": holding_payload,
             "prior_score_context": {
                 "prior_score": ctx.get("prior_score"),
                 "prior_effective_score": ctx.get("prior_effective_score"),
@@ -6585,6 +6600,7 @@ class GPTSniperEngine:
         recent_candles,
         position_ctx,
         metadata_extra=None,
+        holding_context=None,
     ):
         started = time.perf_counter()
         input_contract_fields = {
@@ -6617,18 +6633,27 @@ class GPTSniperEngine:
                     "ai_lock_wait_limit_ms": lock_wait_ms,
                     "ai_retry_attempted": bool(lock_wait_ms > 0),
                     "ai_retry_result": "lock_contention_retry_exhausted",
+                    "holding_context_provider_expected": "openai",
+                    **holding_decision_context_log_fields(holding_context),
                 }
             )
             return payload
 
         try:
             if self.ai_disabled:
-                return self._neutral_holding_score_result(
+                payload = self._neutral_holding_score_result(
                     "engine_disabled",
                     started=started,
                     result_source="engine_disabled",
                     input_contract_fields=input_contract_fields,
                 )
+                payload.update(
+                    {
+                        "holding_context_provider_expected": "openai",
+                        **holding_decision_context_log_fields(holding_context),
+                    }
+                )
+                return payload
 
             feature_packet = extract_scalping_feature_packet(
                 ws_data or {}, recent_ticks or [], recent_candles or []
@@ -6646,6 +6671,7 @@ class GPTSniperEngine:
                 position_ctx or {},
                 feature_packet=feature_packet,
                 feature_audit_fields=feature_audit_fields,
+                holding_context=holding_context,
             )
             input_contract_fields = self._resolve_ai_input_contract_fields(
                 user_input,
@@ -6676,6 +6702,35 @@ class GPTSniperEngine:
             normalized = self._normalize_holding_score_result(
                 result, source_quality=source_quality
             )
+            holding_payload = holding_decision_context_model_payload(holding_context)
+            holding_quality = (
+                holding_payload.get("source_quality")
+                if isinstance(holding_payload.get("source_quality"), dict)
+                else {}
+            )
+            if holding_payload.get("enabled") and not bool(
+                holding_quality.get("hold_defer_allowed", False)
+            ):
+                normalized.update(
+                    {
+                        "action": "HOLD",
+                        "score": 50,
+                        "confidence": 0,
+                        "position_state": "stale_or_insufficient",
+                        "data_quality": "stale",
+                        "score_basis": "holding_context_source_quality_blocked",
+                        "reason": "Holding context cannot authorize continuation support",
+                    }
+                )
+                normalized["risk_factors"] = list(
+                    dict.fromkeys(
+                        list(normalized.get("risk_factors") or [])
+                        + [
+                            f"holding_context:{blocker}"
+                            for blocker in holding_quality.get("blockers", [])
+                        ]
+                    )
+                )
             normalized.update(feature_audit_fields)
             meta_source = result if isinstance(result, dict) else transport_meta
             for key, value in meta_source.items():
@@ -6713,6 +6768,8 @@ class GPTSniperEngine:
                     "holding_score_source_quality_reason": source_quality.get(
                         "source_quality_reason", "-"
                     ),
+                    "holding_context_provider_expected": "openai",
+                    **holding_decision_context_log_fields(holding_context),
                 }
             )
             self._mark_successful_ai_call(update_last_call_time=False)
@@ -6758,6 +6815,12 @@ class GPTSniperEngine:
             payload["holding_score_timeout_like"] = bool(timeout_like)
             payload["holding_score_transport_fail_closed"] = True
             payload["holding_score_transport_fail_closed_reason"] = str(e)[:160]
+            payload.update(
+                {
+                    "holding_context_provider_expected": "openai",
+                    **holding_decision_context_log_fields(holding_context),
+                }
+            )
             return payload
         finally:
             self.lock.release()
@@ -6775,6 +6838,7 @@ class GPTSniperEngine:
         decision_kind="intraday_exit",
         matrix_runtime=None,
         lifecycle_ai_runtime=None,
+        holding_context=None,
     ):
         ctx = position_ctx or {}
         ws = ws_data if isinstance(ws_data, dict) else {}
@@ -6809,6 +6873,7 @@ class GPTSniperEngine:
             if isinstance(ctx.get("orderbook_micro"), dict)
             else {}
         )
+        holding_payload = holding_decision_context_model_payload(holding_context)
         payload = {
             "input_schema": "holding_flow_v2",
             "decision_type": {
@@ -6870,17 +6935,24 @@ class GPTSniperEngine:
                 **self._extract_quote_snapshot(ws),
             },
             "tick_summary": self._summarize_tick_windows(
-                recent_ticks, windows=(5, 10, 20, 30)
+                [] if holding_payload else recent_ticks,
+                windows=(5, 10, 20, 30),
             ),
             "candle_summary": self._summarize_candle_windows(
-                recent_candles, windows=(3, 5, 10)
+                [] if holding_payload else recent_candles,
+                windows=(3, 5, 10),
             ),
-            "recent_ticks_latest_first": self._compact_recent_ticks(
-                recent_ticks, limit=5
+            "recent_ticks_latest_first": (
+                []
+                if holding_payload
+                else self._compact_recent_ticks(recent_ticks, limit=5)
             ),
-            "recent_candles_latest_window": self._compact_recent_candles(
-                recent_candles, limit=5
+            "recent_candles_latest_window": (
+                []
+                if holding_payload
+                else self._compact_recent_candles(recent_candles, limit=5)
             ),
+            "holding_decision_context": holding_payload,
             "runtime_advisory_context": {
                 "holding_exit_matrix": (matrix_runtime or {}).get("prompt_context", ""),
                 "lifecycle_ai": (lifecycle_ai_runtime or {}).get("prompt_context", ""),
@@ -6911,6 +6983,7 @@ class GPTSniperEngine:
         position_ctx,
         flow_history=None,
         decision_kind="intraday_exit",
+        holding_context=None,
     ):
         ctx = position_ctx or {}
         curr_price = int(
@@ -6941,6 +7014,23 @@ class GPTSniperEngine:
             separators=(",", ":"),
             default=str,
         )
+        holding_payload = holding_decision_context_model_payload(holding_context)
+        holding_context_text = json.dumps(
+            holding_payload,
+            ensure_ascii=True,
+            separators=(",", ":"),
+            default=str,
+        )
+        tick_summary = (
+            "provided_by_holding_decision_context"
+            if holding_payload
+            else self._summarize_flow_ticks(recent_ticks)
+        )
+        candle_summary = (
+            "provided_by_holding_decision_context"
+            if holding_payload
+            else self._summarize_flow_candles(recent_candles)
+        )
         return f"""
 [DECISION_TYPE]
 - kind: {decision_kind}
@@ -6962,14 +7052,17 @@ class GPTSniperEngine:
 [ENTRY_TIME_CONTEXT]
 {entry_time_context}
 
+[HOLDING_DECISION_CONTEXT]
+{holding_context_text}
+
 [RECENT_FLOW_REVIEW]
 {self._format_flow_history(flow_history)}
 
 [TICK_FLOW_SUMMARY]
-{self._summarize_flow_ticks(recent_ticks)}
+{tick_summary}
 
 [MINUTE_CANDLE_FLOW_SUMMARY]
-{self._summarize_flow_candles(recent_candles)}
+{candle_summary}
 
 [LIVE_SUPPLY_DEMAND_AND_ORDERBOOK]
 - execution_strength: {self._safe_float((ws_data or {}).get('v_pw', 0.0)):.1f}
@@ -7029,6 +7122,7 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
         flow_history=None,
         decision_kind="intraday_exit",
         metadata_extra=None,
+        holding_context=None,
     ):
         started = time.perf_counter()
         input_contract_fields = {
@@ -7062,6 +7156,10 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
                     "evidence": ["lock_contention"],
                     "reason": "ai_lock_contention_keep_exit_candidate",
                     "next_review_sec": 30,
+                    "holding_context_provider_expected": (
+                        "bedrock_nova_lite_v2_primary_openai_failback"
+                    ),
+                    **holding_decision_context_log_fields(holding_context),
                 },
                 prompt_type="holding_exit_flow",
                 prompt_version="flow_v1",
@@ -7086,6 +7184,10 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
                         "evidence": ["engine_disabled"],
                         "reason": "engine_disabled_keep_exit_candidate",
                         "next_review_sec": 30,
+                        "holding_context_provider_expected": (
+                            "bedrock_nova_lite_v2_primary_openai_failback"
+                        ),
+                        **holding_decision_context_log_fields(holding_context),
                     },
                     prompt_type="holding_exit_flow",
                     prompt_version="flow_v1",
@@ -7131,6 +7233,7 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
                     decision_kind=decision_kind,
                     matrix_runtime=matrix_runtime,
                     lifecycle_ai_runtime=lifecycle_ai_runtime,
+                    holding_context=holding_context,
                 )
             else:
                 user_input = self._format_scalping_holding_flow_context(
@@ -7142,6 +7245,7 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
                     position_ctx or {},
                     flow_history=flow_history,
                     decision_kind=decision_kind,
+                    holding_context=holding_context,
                 )
                 if matrix_runtime.get("prompt_context"):
                     user_input = f"{user_input}\n\n{matrix_runtime['prompt_context']}"
@@ -7212,6 +7316,10 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
                 )
                 or "gpt-5.4-mini"
             )
+            normalized["holding_context_provider_expected"] = (
+                "bedrock_nova_lite_v2_primary_openai_failback"
+            )
+            normalized.update(holding_decision_context_log_fields(holding_context))
             self._mark_successful_ai_call(update_last_call_time=False)
             return self._annotate_analysis_result(
                 normalized,
@@ -7242,6 +7350,10 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
                     "evidence": [str(e)],
                     "reason": "ai_flow_failure_keep_exit_candidate",
                     "next_review_sec": 30,
+                    "holding_context_provider_expected": (
+                        "bedrock_nova_lite_v2_primary_openai_failback"
+                    ),
+                    **holding_decision_context_log_fields(holding_context),
                 },
                 prompt_type="holding_exit_flow",
                 prompt_version="flow_v1",
@@ -7258,7 +7370,7 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
             self.lock.release()
 
     def evaluate_scalping_overnight_decision(
-        self, stock_name, stock_code, realtime_ctx
+        self, stock_name, stock_code, realtime_ctx, holding_context=None
     ):
         """장마감 전 SCALPING 포지션의 오버나이트/당일청산 의사결정을 JSON으로 반환합니다."""
         started = time.perf_counter()
@@ -7271,7 +7383,9 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
                     "confidence": 0,
                     "reason": "ai_lock_contention",
                     "risk_note": "lock_contention",
+                    "holding_context_provider_expected": "openai_tier2",
                     "raw": {},
+                    **holding_decision_context_log_fields(holding_context),
                 },
                 prompt_type=prompt_type,
                 prompt_version=prompt_version,
@@ -7291,7 +7405,9 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
                         "confidence": 0,
                         "reason": "engine_disabled_sell_today_fallback",
                         "risk_note": "engine_disabled",
+                        "holding_context_provider_expected": "openai_tier2",
                         "raw": {},
+                        **holding_decision_context_log_fields(holding_context),
                     },
                     prompt_type=prompt_type,
                     prompt_version=prompt_version,
@@ -7307,6 +7423,13 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
                 f"[SCALPING_OVERNIGHT_DECISION_REQUEST]\n"
                 f"stock_name: {stock_name}\nstock_code: {stock_code}\n\n"
                 f"[DECISION_INPUT]\n{self._format_scalping_overnight_context(realtime_ctx)}"
+                "\n\n[HOLDING_DECISION_CONTEXT]\n"
+                + json.dumps(
+                    holding_decision_context_model_payload(holding_context),
+                    ensure_ascii=True,
+                    separators=(",", ":"),
+                    default=str,
+                )
             )
             result = self._call_openai_safe(
                 SCALPING_OVERNIGHT_DECISION_PROMPT,
@@ -7335,6 +7458,18 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
             action = str(result.get("action", "SELL_TODAY") or "SELL_TODAY").upper()
             if action not in {"SELL_TODAY", "HOLD_OVERNIGHT"}:
                 action = "SELL_TODAY"
+            holding_payload = holding_decision_context_model_payload(holding_context)
+            holding_quality = (
+                holding_payload.get("source_quality")
+                if isinstance(holding_payload.get("source_quality"), dict)
+                else {}
+            )
+            holding_context_blocked = bool(
+                holding_payload.get("enabled")
+                and not holding_quality.get("hold_defer_allowed", False)
+            )
+            if action == "HOLD_OVERNIGHT" and holding_context_blocked:
+                action = "SELL_TODAY"
             try:
                 confidence = int(float(result.get("confidence", 0) or 0))
             except Exception:
@@ -7345,7 +7480,10 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
                 "reason": str(result.get("reason", "") or "reason_unavailable"),
                 "risk_note": str(result.get("risk_note", "") or "risk_unavailable"),
                 "ai_model": self._get_tier2_model(),
+                "holding_context_provider_expected": "openai_tier2",
+                "holding_context_action_clamped": holding_context_blocked,
                 "raw": result,
+                **holding_decision_context_log_fields(holding_context),
             }
             for key, value in result.items():
                 if str(key).startswith("openai_"):
@@ -7385,7 +7523,9 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
                     "ai_exception_type": type(e).__name__,
                     "ai_exception_message": str(e),
                     "sim_observation_failure_isolated": sim_observation_only,
+                    "holding_context_provider_expected": "openai_tier2",
                     "raw": {},
+                    **holding_decision_context_log_fields(holding_context),
                 },
                 prompt_type=prompt_type,
                 prompt_version=prompt_version,

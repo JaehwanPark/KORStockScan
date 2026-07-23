@@ -3,9 +3,30 @@ from datetime import datetime
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
+import pytest
+
+import src.engine.sniper_state_handlers as state_handlers
 from src.engine.scalping.entry_reprice_after_submit import (
     evaluate_entry_reprice_after_submit,
 )
+
+
+@pytest.fixture(autouse=True)
+def _reset_state_handler_trading_rules(monkeypatch):
+    # This unit contract exercises the fallback configuration used before the
+    # runtime dependency injector binds globals. A preceding large test module
+    # must not make the result collection-order dependent or trigger real REST.
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", None)
+    monkeypatch.setattr(state_handlers, "KIWOOM_TOKEN", None)
+    monkeypatch.setattr(state_handlers, "DB", None)
+    monkeypatch.setattr(state_handlers, "EVENT_BUS", None)
+    monkeypatch.setattr(state_handlers, "ACTIVE_TARGETS", None)
+    monkeypatch.setattr(state_handlers, "COOLDOWNS", None)
+    monkeypatch.setattr(state_handlers, "ALERTED_STOCKS", None)
+    monkeypatch.setattr(state_handlers, "HIGHEST_PRICES", None)
+    monkeypatch.setattr(state_handlers, "LAST_AI_CALL_TIMES", None)
+    monkeypatch.setattr(state_handlers, "LAST_LOG_TIMES", None)
+    monkeypatch.setattr(state_handlers, "datetime", datetime)
 
 
 def _base_order(**overrides):

@@ -7,6 +7,7 @@ from sqlalchemy.orm.exc import DetachedInstanceError
 from src.database.models import RecommendationHistory
 from src.engine import kiwoom_sniper_v2
 from src.engine.sniper_overnight_gatekeeper import (
+    _apply_overnight_flow_override,
     _clean_telegram_text,
     _eod_label,
     _format_order_error,
@@ -178,3 +179,71 @@ def test_submit_overnight_dual_persona_shadow_is_disabled_when_dual_persona_off(
     )
 
     assert submit_calls == []
+
+
+def test_overnight_flow_hold_cannot_override_sell_with_blocked_context(monkeypatch):
+    logs = []
+    monkeypatch.setattr(
+        "src.engine.sniper_overnight_gatekeeper._log_holding_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+    blocked_context = {
+        "schema": "holding_decision_context_v1",
+        "enabled": True,
+        "source_quality": {
+            "status": "blocked",
+            "hold_defer_allowed": False,
+            "blockers": ["order_or_quantity_conflict"],
+        },
+        "flow_signature": {
+            "executable_pnl_pct": -0.4,
+            "candle_regime": "range",
+            "signed_tape_state": "missing",
+            "ofi_regime": "neutral",
+            "source_quality_status": "blocked",
+        },
+    }
+    ctx = {
+        "avg_price": 10_000,
+        "curr_price": 9_960,
+        "buy_qty": 3,
+        "pnl_pct": -0.4,
+        "_holding_decision_context": blocked_context,
+        "_holding_recent_ticks": [{"price": 9960, "volume": 10}],
+        "_holding_recent_candles": [{"현재가": 9960}],
+    }
+    record = SimpleNamespace(
+        stock_code="005930",
+        stock_name="테스트",
+        buy_price=10_000,
+        buy_qty=3,
+        status="HOLDING",
+    )
+
+    class HoldAI:
+        def evaluate_scalping_holding_flow(self, *args, **kwargs):
+            assert kwargs["holding_context"] is blocked_context
+            return {
+                "action": "HOLD",
+                "score": 80,
+                "flow_state": "absorption",
+                "reason": "hold",
+                "evidence": ["support"],
+                "ai_parse_fail": False,
+            }
+
+    decision = _apply_overnight_flow_override(
+        record,
+        {"buy_qty": 3},
+        {"curr": 9960},
+        ctx,
+        {"action": "SELL_TODAY", "confidence": 70, "reason": "sell"},
+        HoldAI(),
+    )
+
+    assert decision["action"] == "SELL_TODAY"
+    assert any(
+        stage == "overnight_flow_override_exit_confirmed"
+        and fields.get("force_reason") == "holding_context_cannot_defer"
+        for stage, fields in logs
+    )

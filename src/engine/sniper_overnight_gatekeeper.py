@@ -10,6 +10,20 @@ from src.utils.constants import TRADING_RULES
 from src.utils.logger import log_error, log_info
 from src.utils.pipeline_event_logger import emit_pipeline_event
 from src.engine.ai_response_contracts import normalize_flow_state_label
+from src.engine.scalping.entry_candle_context import (
+    resolve_entry_candle_request_code,
+    resolve_entry_candle_session,
+    resolve_entry_candle_venue,
+)
+from src.engine.scalping.holding_decision_context import (
+    OBSERVATION_CONTRACT as HOLDING_CONTEXT_OBSERVATION_CONTRACT,
+    SCHEMA as HOLDING_CONTEXT_SCHEMA,
+    build_holding_decision_context,
+    count_holding_context_changes,
+    holding_decision_context_enabled,
+    holding_decision_context_log_fields,
+    holding_decision_context_model_payload,
+)
 
 KIWOOM_TOKEN = None
 DB = None
@@ -263,6 +277,7 @@ def _build_scalping_overnight_ctx(record, mem_stock=None, ws_data=None):
     ctx["stock_code"] = record.stock_code
     ctx["position_status"] = record.status
     ctx["avg_price"] = avg_price
+    ctx["buy_qty"] = int(float(getattr(record, "buy_qty", 0) or 0))
     ctx["pnl_pct"] = pnl_pct
     ctx["held_minutes"] = _calc_held_minutes(mem_stock, record)
     ctx["strat_label"] = "SCALPING_EOD_REVIEW"
@@ -276,6 +291,95 @@ def _build_scalping_overnight_ctx(record, mem_stock=None, ws_data=None):
         f"sell_ord_no={(mem_stock or {}).get('sell_odno', '') if mem_stock else ''}"
     )
     return ctx
+
+
+def _build_overnight_holding_context(code, mem_stock, ws_data, ctx):
+    now_ts = time.time()
+    session = resolve_entry_candle_session(now_ts=now_ts)
+    venue = resolve_entry_candle_venue(ws_data or {}, session=session)
+    if not holding_decision_context_enabled(
+        venue=venue,
+        session=session,
+        decision_kind="overnight",
+        now_ts=now_ts,
+    ):
+        return None, [], [], {}
+    request_code = resolve_entry_candle_request_code(
+        code,
+        venue=venue,
+        session=session,
+        ws_data=ws_data or {},
+    )
+    try:
+        recent_ticks = (
+            kiwoom_utils.get_tick_history_ka10003(KIWOOM_TOKEN, request_code, limit=30)
+            or []
+        )
+        try:
+            recent_candles, candle_meta = (
+                kiwoom_utils.get_minute_candles_ka10080_with_meta(
+                    KIWOOM_TOKEN, request_code, limit=60
+                )
+            )
+        except Exception as exc:
+            recent_candles = []
+            candle_meta = {
+                "holding_context_request_code": request_code,
+                "fetch_error": f"{type(exc).__name__}:{str(exc)[:120]}",
+            }
+    except Exception:
+        recent_ticks, recent_candles, candle_meta = [], [], {}
+    position = dict(mem_stock or {})
+    position.update(
+        {
+            "avg_price": ctx.get("avg_price"),
+            "curr_price": ctx.get("curr_price"),
+            "buy_qty": position.get("buy_qty") or ctx.get("buy_qty"),
+            "market_regime": ctx.get("market_regime"),
+            "sector_relative_trend": ctx.get("sector_relative_trend"),
+        }
+    )
+    try:
+        holding_context = build_holding_decision_context(
+            KIWOOM_TOKEN,
+            code,
+            ws_data or {},
+            position,
+            venue,
+            session,
+            "overnight",
+            limit=60,
+            model_bar_limit=20,
+            now_ts=now_ts,
+            recent_candles=list(recent_candles or []),
+            candle_meta=dict(candle_meta or {}),
+            recent_ticks=list(recent_ticks or []),
+        )
+    except Exception as exc:
+        holding_context = {
+            "schema": HOLDING_CONTEXT_SCHEMA,
+            "enabled": True,
+            "decision_kind": "overnight",
+            "venue": venue,
+            "session": session,
+            "source_quality": {
+                "status": "blocked",
+                "hold_defer_allowed": False,
+                "blockers": [f"context_build_error:{type(exc).__name__}"],
+            },
+            "timing": {
+                "candle_fetch_ms": 0,
+                "signed_tape_fetch_ms": 0,
+                "build_ms": 0,
+            },
+            "observation_contract": HOLDING_CONTEXT_OBSERVATION_CONTRACT,
+        }
+    return (
+        holding_context,
+        list(recent_ticks or []),
+        list(recent_candles or []),
+        dict(candle_meta or {}),
+    )
 
 
 def _publish_scalping_overnight_decision(stock_name, code, decision, action_taken):
@@ -494,7 +598,9 @@ def _flow_evidence_text(flow_result: dict) -> str:
     return str(evidence or "-").replace("\n", " ")
 
 
-def _append_mem_flow_history(mem_stock, *, exit_rule, profit_rate, flow_result):
+def _append_mem_flow_history(
+    mem_stock, *, exit_rule, profit_rate, flow_result, holding_context=None
+):
     if mem_stock is None:
         return
     flow_state = normalize_flow_state_label(flow_result.get("flow_state", "-"))
@@ -508,6 +614,11 @@ def _append_mem_flow_history(mem_stock, *, exit_rule, profit_rate, flow_result):
             "profit_rate": f"{float(profit_rate or 0.0):+.2f}",
             "exit_rule": exit_rule,
             "reason": str(flow_result.get("reason", "-") or "-")[:120],
+            "holding_context_signature": (
+                dict(holding_context.get("flow_signature") or {})
+                if isinstance(holding_context, dict)
+                else {}
+            ),
         }
     )
     mem_stock["holding_flow_review_history"] = history[-5:]
@@ -567,22 +678,30 @@ def _apply_overnight_flow_override(
     candle_limit = max(
         1, _safe_int(getattr(TRADING_RULES, "HOLDING_FLOW_REVIEW_CANDLE_LIMIT", 60), 60)
     )
-    try:
-        recent_ticks = kiwoom_utils.get_tick_history_ka10003(
-            KIWOOM_TOKEN, code, limit=tick_limit
-        )
-        recent_candles = kiwoom_utils.get_minute_candles_ka10080(
-            KIWOOM_TOKEN, code, limit=candle_limit
-        )
-    except Exception as exc:
-        _log_holding_pipeline(
-            name,
-            code,
-            "overnight_flow_override_skip",
-            skip_reason="context_fetch_failed",
-            error=str(exc)[:160],
-        )
-        return decision
+    holding_context = (
+        ctx.get("_holding_decision_context")
+        if isinstance(ctx.get("_holding_decision_context"), dict)
+        else None
+    )
+    recent_ticks = list(ctx.get("_holding_recent_ticks") or [])
+    recent_candles = list(ctx.get("_holding_recent_candles") or [])
+    if holding_context is None:
+        try:
+            recent_ticks = kiwoom_utils.get_tick_history_ka10003(
+                KIWOOM_TOKEN, code, limit=tick_limit
+            )
+            recent_candles = kiwoom_utils.get_minute_candles_ka10080(
+                KIWOOM_TOKEN, code, limit=candle_limit
+            )
+        except Exception as exc:
+            _log_holding_pipeline(
+                name,
+                code,
+                "overnight_flow_override_skip",
+                skip_reason="context_fetch_failed",
+                error=str(exc)[:160],
+            )
+            return decision
     if not recent_ticks:
         _log_holding_pipeline(
             name, code, "overnight_flow_override_skip", skip_reason="no_recent_ticks"
@@ -616,16 +735,10 @@ def _apply_overnight_flow_override(
         ),
         "entry_time_context": _entry_time_context_from_mem_stock(mem_stock),
     }
-    flow_result = ai_engine.evaluate_scalping_holding_flow(
-        name,
-        code,
-        ws_data or {},
-        recent_ticks,
-        recent_candles,
-        position_ctx,
-        flow_history=(mem_stock or {}).get("holding_flow_review_history") or [],
-        decision_kind="overnight_sell_today",
-        metadata_extra={
+    flow_kwargs = {
+        "flow_history": (mem_stock or {}).get("holding_flow_review_history") or [],
+        "decision_kind": "overnight_sell_today",
+        "metadata_extra": {
             "record_id": (mem_stock or {}).get("record_id")
             or (mem_stock or {}).get("id"),
             "sim_record_id": (mem_stock or {}).get("sim_record_id"),
@@ -636,12 +749,54 @@ def _apply_overnight_flow_override(
             or (mem_stock or {}).get("candidate_id"),
             "source_event_stage": "overnight_holding_flow",
         },
+    }
+    if holding_context is not None:
+        flow_kwargs["holding_context"] = holding_context
+    flow_result = ai_engine.evaluate_scalping_holding_flow(
+        name,
+        code,
+        ws_data or {},
+        recent_ticks,
+        recent_candles,
+        position_ctx,
+        **flow_kwargs,
     )
+    prior_history = list((mem_stock or {}).get("holding_flow_review_history") or [])
+    prior_review = (
+        prior_history[-1]
+        if prior_history and isinstance(prior_history[-1], dict)
+        else {}
+    )
+    prior_action = str(prior_review.get("action") or "").upper()
+    raw_flow_action = str(flow_result.get("action", "EXIT") or "EXIT").upper()
+    context_change_count, context_change_groups = count_holding_context_changes(
+        prior_review.get("holding_context_signature"),
+        (
+            holding_context.get("flow_signature")
+            if isinstance(holding_context, dict)
+            else {}
+        ),
+    )
+    context_reversal_clamped = bool(
+        isinstance(holding_context, dict)
+        and holding_context.get("enabled")
+        and prior_action in {"HOLD", "TRIM", "EXIT"}
+        and raw_flow_action in {"HOLD", "TRIM", "EXIT"}
+        and raw_flow_action != prior_action
+        and context_change_count < 2
+    )
+    if context_reversal_clamped:
+        flow_result = dict(flow_result)
+        flow_result["action"] = prior_action
+        flow_result["reason"] = (
+            "Retain prior action; fewer than two independent context changes"
+        )
     _append_mem_flow_history(
         mem_stock,
         exit_rule="overnight_sell_today",
         profit_rate=pnl_pct,
         flow_result=flow_result,
+        holding_context=holding_context,
     )
     flow_action = str(flow_result.get("action", "EXIT") or "EXIT").upper()
     flow_state = normalize_flow_state_label(flow_result.get("flow_state", "-"))
@@ -662,6 +817,11 @@ def _apply_overnight_flow_override(
         flow_evidence=_flow_evidence_text(flow_result),
         profit_rate=f"{pnl_pct:+.2f}",
         ai_parse_fail=parse_failed,
+        holding_context_raw_flow_action=raw_flow_action,
+        holding_context_change_count=context_change_count,
+        holding_context_change_groups=context_change_groups,
+        holding_context_reversal_clamped=context_reversal_clamped,
+        **holding_decision_context_log_fields(holding_context),
     )
     if parse_failed or flow_action in {"EXIT", "TRIM"}:
         _log_holding_pipeline(
@@ -675,6 +835,25 @@ def _apply_overnight_flow_override(
                 else ("flow_trim_unsupported" if flow_action == "TRIM" else "flow_exit")
             ),
             profit_rate=f"{pnl_pct:+.2f}",
+        )
+        return decision
+    if (
+        isinstance(holding_context, dict)
+        and holding_context.get("enabled")
+        and not bool(
+            (holding_context.get("source_quality") or {}).get(
+                "hold_defer_allowed", False
+            )
+        )
+    ):
+        _log_holding_pipeline(
+            name,
+            code,
+            "overnight_flow_override_exit_confirmed",
+            flow_action=flow_action,
+            force_reason="holding_context_cannot_defer",
+            profit_rate=f"{pnl_pct:+.2f}",
+            **holding_decision_context_log_fields(holding_context),
         )
         return decision
 
@@ -759,8 +938,60 @@ def run_scalping_overnight_gatekeeper(ai_engine=None):
         ws_data = WS_MANAGER.get_latest_data(code) if WS_MANAGER else {}
 
         ctx = _build_scalping_overnight_ctx(record, mem_stock, ws_data)
-        decision = ai_engine.evaluate_scalping_overnight_decision(name, code, ctx)
-        _submit_overnight_dual_persona_shadow(name, code, ctx, decision)
+        (
+            holding_context,
+            holding_recent_ticks,
+            holding_recent_candles,
+            holding_candle_meta,
+        ) = _build_overnight_holding_context(code, mem_stock, ws_data, ctx)
+        if holding_context is None:
+            decision = ai_engine.evaluate_scalping_overnight_decision(name, code, ctx)
+        else:
+            decision = ai_engine.evaluate_scalping_overnight_decision(
+                name, code, ctx, holding_context=holding_context
+            )
+        if (
+            str(decision.get("action") or "").upper() == "HOLD_OVERNIGHT"
+            and isinstance(holding_context, dict)
+            and holding_context.get("enabled")
+            and not bool(
+                (holding_context.get("source_quality") or {}).get(
+                    "hold_defer_allowed", False
+                )
+            )
+        ):
+            decision = dict(decision)
+            decision.update(
+                {
+                    "action": "SELL_TODAY",
+                    "confidence": 0,
+                    "reason": "holding_context_cannot_authorize_overnight_hold",
+                    "risk_note": "source_quality_or_position_reconciliation_blocked",
+                }
+            )
+        ctx["_holding_decision_context"] = holding_context
+        ctx["_holding_recent_ticks"] = holding_recent_ticks
+        ctx["_holding_recent_candles"] = holding_recent_candles
+        ctx["_holding_candle_meta"] = holding_candle_meta
+        _log_holding_pipeline(
+            name,
+            code,
+            "overnight_primary_decision",
+            action=decision.get("action"),
+            confidence=decision.get("confidence"),
+            reason=decision.get("reason"),
+            **holding_decision_context_log_fields(holding_context),
+        )
+        shadow_ctx = {
+            key: value
+            for key, value in ctx.items()
+            if not str(key).startswith("_holding_")
+        }
+        if holding_context is not None:
+            shadow_ctx["holding_decision_context"] = (
+                holding_decision_context_model_payload(holding_context)
+            )
+        _submit_overnight_dual_persona_shadow(name, code, shadow_ctx, decision)
         decision = _apply_overnight_flow_override(
             record, mem_stock, ws_data, ctx, decision, ai_engine
         )

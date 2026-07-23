@@ -3212,11 +3212,11 @@ def test_entry_ai_submit_authority_allows_fresh_live_score(monkeypatch):
 
 def test_entry_ai_submit_authority_vetoes_fresh_drop_for_real_buy(monkeypatch):
     now_ts = 1_784_778_400.0
-    active_date = datetime.fromtimestamp(now_ts, tz=state_handlers._KST).date().isoformat()
-    monkeypatch.setattr(state_handlers.time, "time", lambda: now_ts)
-    monkeypatch.setenv(
-        "KORSTOCKSCAN_RISING_MISSED_AI_ACTION_GUARD_ENABLED", "true"
+    active_date = (
+        datetime.fromtimestamp(now_ts, tz=state_handlers._KST).date().isoformat()
     )
+    monkeypatch.setattr(state_handlers.time, "time", lambda: now_ts)
+    monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_AI_ACTION_GUARD_ENABLED", "true")
     monkeypatch.setenv(
         "KORSTOCKSCAN_RISING_MISSED_AI_ACTION_GUARD_ACTIVE_DATE", active_date
     )
@@ -3244,9 +3244,9 @@ def test_entry_ai_submit_authority_latest_fresh_drop_overrides_stale_buy_context
     monkeypatch,
 ):
     now_ts = 1_784_778_400.0
-    active_date = datetime.fromtimestamp(
-        now_ts, tz=state_handlers._KST
-    ).date().isoformat()
+    active_date = (
+        datetime.fromtimestamp(now_ts, tz=state_handlers._KST).date().isoformat()
+    )
     monkeypatch.setattr(state_handlers.time, "time", lambda: now_ts)
     monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_AI_ACTION_GUARD_ENABLED", "true")
     monkeypatch.setenv(
@@ -3275,9 +3275,9 @@ def test_entry_ai_submit_authority_guard_fails_closed_for_expired_or_conflict(
     monkeypatch,
 ):
     now_ts = 1_784_778_400.0
-    active_date = datetime.fromtimestamp(
-        now_ts, tz=state_handlers._KST
-    ).date().isoformat()
+    active_date = (
+        datetime.fromtimestamp(now_ts, tz=state_handlers._KST).date().isoformat()
+    )
     monkeypatch.setattr(state_handlers.time, "time", lambda: now_ts)
     monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_AI_ACTION_GUARD_ENABLED", "true")
     monkeypatch.setenv(
@@ -3317,11 +3317,11 @@ def test_entry_ai_submit_authority_guard_fails_closed_for_expired_or_conflict(
 
 def test_entry_ai_submit_authority_limits_fresh_wait_to_probe(monkeypatch):
     now_ts = 1_784_778_400.0
-    active_date = datetime.fromtimestamp(now_ts, tz=state_handlers._KST).date().isoformat()
-    monkeypatch.setattr(state_handlers.time, "time", lambda: now_ts)
-    monkeypatch.setenv(
-        "KORSTOCKSCAN_RISING_MISSED_AI_ACTION_GUARD_ENABLED", "true"
+    active_date = (
+        datetime.fromtimestamp(now_ts, tz=state_handlers._KST).date().isoformat()
     )
+    monkeypatch.setattr(state_handlers.time, "time", lambda: now_ts)
+    monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_AI_ACTION_GUARD_ENABLED", "true")
     monkeypatch.setenv(
         "KORSTOCKSCAN_RISING_MISSED_AI_ACTION_GUARD_ACTIVE_DATE", active_date
     )
@@ -3341,9 +3341,7 @@ def test_entry_ai_submit_authority_limits_fresh_wait_to_probe(monkeypatch):
 
     assert decision["blocked"] is False
     assert decision["entry_ai_submit_authority_wait_probe_required"] is True
-    assert (
-        decision["entry_ai_submit_authority_confirmed_at"] == now_ts - 0.2
-    )
+    assert decision["entry_ai_submit_authority_confirmed_at"] == now_ts - 0.2
 
 
 def test_wait_probe_requires_two_distinct_strong_confirmations(monkeypatch):
@@ -3374,10 +3372,10 @@ def test_wait_probe_requires_two_distinct_strong_confirmations(monkeypatch):
 
 def test_wait_probe_neutral_defers_but_buy_probe_keeps_existing_behavior(monkeypatch):
     now_ts = 1_784_778_400.0
-    active_date = datetime.fromtimestamp(now_ts, tz=state_handlers._KST).date().isoformat()
-    monkeypatch.setenv(
-        "KORSTOCKSCAN_RISING_MISSED_AI_ACTION_GUARD_ENABLED", "true"
+    active_date = (
+        datetime.fromtimestamp(now_ts, tz=state_handlers._KST).date().isoformat()
     )
+    monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_AI_ACTION_GUARD_ENABLED", "true")
     monkeypatch.setenv(
         "KORSTOCKSCAN_RISING_MISSED_AI_ACTION_GUARD_ACTIVE_DATE", active_date
     )
@@ -8935,8 +8933,7 @@ def test_rising_missed_same_day_reentry_blocks_after_loss_exit(monkeypatch):
     assert entry_logs[-1][1]["venue"] == "KRX"
     assert entry_logs[-1][1]["rising_missed_effective_venue"] == "KRX"
     assert entry_logs[-1][1]["venue_resolution"] == (
-        "rising_missed_initial_gate:krx_regular:"
-        "not_applicable_outside_nxt_window"
+        "rising_missed_initial_gate:krx_regular:" "not_applicable_outside_nxt_window"
     )
 
 
@@ -10435,8 +10432,7 @@ def test_rising_missed_one_share_hook_blocks_price_above_cap_without_submit(
     assert entry_logs[-1][1]["venue"] == "KRX"
     assert entry_logs[-1][1]["rising_missed_effective_venue"] == "KRX"
     assert entry_logs[-1][1]["venue_resolution"] == (
-        "rising_missed_initial_gate:krx_regular:"
-        "not_applicable_outside_nxt_window"
+        "rising_missed_initial_gate:krx_regular:" "not_applicable_outside_nxt_window"
     )
 
 
@@ -10446,8 +10442,7 @@ def test_rising_missed_pipeline_canonicalizes_strategy_venue_and_conflicts():
     )
     assert canonical["venue"] == "KRX"
     assert (
-        canonical["venue_resolution"]
-        == "canonicalized:rising_missed_effective_venue"
+        canonical["venue_resolution"] == "canonicalized:rising_missed_effective_venue"
     )
 
     conflict = state_handlers._canonicalize_rising_missed_venue_fields(
@@ -16867,6 +16862,15 @@ def test_real_pyramid_score_50_retry_success_allows_dynamic_qty(monkeypatch):
         "_pre_submit_input_snapshot_needs_rest_orderbook_recheck",
         lambda *args, **kwargs: False,
     )
+    monkeypatch.setattr(
+        state_handlers,
+        "_build_holding_ai_decision_context",
+        lambda **kwargs: {
+            "schema": "holding_decision_context_v1",
+            "enabled": True,
+            "decision_kind": "holding_score_submit_authority",
+        },
+    )
 
     class FakeEngine:
         def evaluate_scalping_holding_score(self, *args, **kwargs):
@@ -16917,6 +16921,25 @@ def test_real_pyramid_score_50_retry_success_allows_dynamic_qty(monkeypatch):
 
     assert retry_fields["scale_in_ai_authority_input_retry_attempted"] is True
     assert retry_fields["scale_in_ai_authority_input_retry_success"] is True
+    assert "decision_authority" not in retry_fields
+    assert (
+        retry_fields["holding_context_decision_authority"]
+        == "bounded_holding_confirmation"
+    )
+
+    # Regression: this is the exact composition that crashed the live holding
+    # loop when both dictionaries contained decision_authority.
+    def capture_log_fields(**fields):
+        return fields
+
+    composed_log_fields = capture_log_fields(
+        decision_authority="real_scale_in_submit_source_quality_guard",
+        **retry_fields,
+    )
+    assert (
+        composed_log_fields["decision_authority"]
+        == "real_scale_in_submit_source_quality_guard"
+    )
     assert stock["holding_score_effective"] == 72
     details = scale_in.describe_dynamic_scale_in_qty(
         stock=stock,
@@ -30535,8 +30558,7 @@ def test_holding_exit_signal_logs_exit_rule(monkeypatch):
     assert sent_logs[-1]["broker_order_forbidden"] is False
     assert sent_logs[-1]["metric_role"] == "execution_quality_real_only"
     assert (
-        sent_logs[-1]["decision_authority"]
-        == "broker_sell_submission_observation_only"
+        sent_logs[-1]["decision_authority"] == "broker_sell_submission_observation_only"
     )
     assert sent_logs[-1]["window_policy"] == "same_position_cycle_broker_submission"
     assert sent_logs[-1]["sample_floor"] == "1_successful_broker_sell_submission"

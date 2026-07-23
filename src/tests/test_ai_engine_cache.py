@@ -340,6 +340,128 @@ def test_holding_score_v2_payload_contains_position_pnl_and_source_quality(monke
     assert result["ai_prompt_type"] == "scalping_holding_score"
 
 
+def test_holding_context_is_shared_and_blocks_unsupported_continuation(monkeypatch):
+    engine = _build_engine()
+    captured = {}
+    holding_context = {
+        "schema": "holding_decision_context_v1",
+        "enabled": True,
+        "decision_kind": "holding_score",
+        "venue": "KRX",
+        "session": "krx_regular",
+        "candle": {
+            "bars": [{"t": "10:00", "o": 10000, "h": 10020, "l": 9990, "c": 10010}],
+            "regime": "range",
+            "structure": {},
+        },
+        "signed_tape": {"state": "missing", "sample_count": 0},
+        "microstructure": {"bbo_fresh": False},
+        "execution_pnl": {
+            "mark_pnl_pct": 0.1,
+            "executable_pnl_pct": None,
+        },
+        "position_lifecycle": {"memory_qty": 1},
+        "order_reconciliation": {"order_or_quantity_conflict": True},
+        "market_session": {"phase": "krx_regular"},
+        "source_quality": {
+            "status": "blocked",
+            "hold_defer_allowed": False,
+            "blockers": ["executable_bbo", "order_or_quantity_conflict"],
+        },
+        "observation_contract": {
+            "metric_role": "holding_context_feature_bundle",
+            "decision_authority": "bounded_holding_confirmation",
+        },
+    }
+
+    def _fake_call(_prompt, user_input, **kwargs):
+        captured[kwargs["endpoint_name"]] = user_input
+        if kwargs["endpoint_name"] == "holding_score":
+            return {
+                "action": "HOLD",
+                "score": 88,
+                "confidence": 90,
+                "position_state": "continuation",
+                "score_basis": "supportive",
+                "risk_factors": [],
+                "support_factors": [],
+                "data_quality": "fresh",
+                "reason": "hold",
+            }
+        if kwargs["endpoint_name"] == "holding_flow":
+            return {
+                "action": "HOLD",
+                "score": 80,
+                "flow_state": "absorption",
+                "thesis": "hold",
+                "evidence": ["support"],
+                "reason": "hold",
+                "next_review_sec": 30,
+            }
+        return {
+            "action": "HOLD_OVERNIGHT",
+            "confidence": 90,
+            "reason": "hold overnight",
+            "risk_note": "low",
+        }
+
+    monkeypatch.setattr(engine, "_call_openai_safe", _fake_call)
+    ws_data = {
+        "curr": 10010,
+        "quote_age_ms": 100,
+        "orderbook": {
+            "asks": [{"price": 10020, "volume": 100}],
+            "bids": [{"price": 10010, "volume": 100}],
+        },
+    }
+    ticks = [{"price": 10010, "volume": 10, "side": "BUY"}]
+    candles = [{"현재가": 10010, "고가": 10020, "저가": 9990, "거래량": 100}]
+    position = {
+        "buy_price": 10000,
+        "buy_qty": 1,
+        "profit_rate": 0.1,
+        "peak_profit": 0.2,
+    }
+
+    score = engine.evaluate_scalping_holding_score(
+        "테스트",
+        "005930",
+        ws_data,
+        ticks,
+        candles,
+        position,
+        holding_context=holding_context,
+    )
+    flow = engine.evaluate_scalping_holding_flow(
+        "테스트",
+        "005930",
+        ws_data,
+        ticks,
+        candles,
+        position,
+        holding_context=holding_context,
+    )
+    overnight = engine.evaluate_scalping_overnight_decision(
+        "테스트",
+        "005930",
+        {"avg_price": 10000, "curr_price": 10010, "buy_qty": 1},
+        holding_context=holding_context,
+    )
+
+    assert (
+        json.loads(captured["holding_score"])["holding_decision_context"]["schema"]
+        == "holding_decision_context_v1"
+    )
+    assert "holding_decision_context_v1" in captured["holding_flow"]
+    assert "holding_decision_context_v1" in captured["overnight"]
+    assert score["score"] == 50
+    assert score["holding_context_hold_defer_allowed"] is False
+    assert flow["action"] == "HOLD"
+    assert flow["holding_context_hold_defer_allowed"] is False
+    assert overnight["action"] == "SELL_TODAY"
+    assert overnight["holding_context_action_clamped"] is True
+
+
 def test_holding_score_timeout_returns_timeout_source_with_timing_meta(monkeypatch):
     engine = _build_engine()
 

@@ -309,18 +309,14 @@ def _update_snapshot(item: dict[str, Any], row: dict[str, Any]) -> None:
         if post_values:
             item["normal_winner_expansion_post_candidate_max_profit_pct"] = max(
                 _safe_float(
-                    item.get(
-                        "normal_winner_expansion_post_candidate_max_profit_pct"
-                    ),
+                    item.get("normal_winner_expansion_post_candidate_max_profit_pct"),
                     post_values[0],
                 ),
                 *post_values,
             )
             item["normal_winner_expansion_post_candidate_min_profit_pct"] = min(
                 _safe_float(
-                    item.get(
-                        "normal_winner_expansion_post_candidate_min_profit_pct"
-                    ),
+                    item.get("normal_winner_expansion_post_candidate_min_profit_pct"),
                     post_values[0],
                 ),
                 *post_values,
@@ -394,6 +390,7 @@ _PROBE_RESIDUAL_STAGES = {
     "residual_submitted",
     "residual_blocked",
     "residual_partial_complete",
+    "bundle_completed",
 }
 _PROBE_DIRECTION_STAGES = {
     "probe_continuation_deferred",
@@ -410,11 +407,23 @@ def _update_probe_residual_observation(
 ) -> None:
     stage = str(row.get("stage") or "")
     fields = _fields(row)
+    row_bundle_id = str(fields.get("probe_bundle_id") or "").strip()
+    if row_bundle_id == "-":
+        row_bundle_id = ""
+    item_bundle_id = str(item.get("probe_bundle_id") or "").strip()
+    if row_bundle_id and item_bundle_id and row_bundle_id != item_bundle_id:
+        item["residual_fill_attribution_valid"] = False
+        item["residual_fill_attribution_state"] = "bundle_mismatch"
+        reasons = item.setdefault("residual_fill_attribution_reasons", [])
+        reason = f"probe_bundle_mismatch:{item_bundle_id}:{row_bundle_id}"
+        if reason not in reasons:
+            reasons.append(reason)
+        return
+    if row_bundle_id and not item_bundle_id:
+        item["probe_bundle_id"] = row_bundle_id
     if stage in _PROBE_DIRECTION_STAGES:
         state = str(fields.get("post_probe_direction_state") or "").strip().upper()
-        action = str(
-            fields.get("post_probe_continuation_action") or ""
-        ).strip().upper()
+        action = str(fields.get("post_probe_continuation_action") or "").strip().upper()
         reason = str(fields.get("post_probe_direction_reason") or "").strip()
         positive_groups = {
             token.strip()
@@ -450,9 +459,7 @@ def _update_probe_residual_observation(
             item.get("probe_direction_current_consecutive_strong_count") or 0
         )
         current_consecutive = previous_consecutive + 1 if strong else 0
-        item["probe_direction_current_consecutive_strong_count"] = (
-            current_consecutive
-        )
+        item["probe_direction_current_consecutive_strong_count"] = current_consecutive
         item["probe_direction_max_consecutive_strong_count"] = max(
             int(item.get("probe_direction_max_consecutive_strong_count") or 0),
             current_consecutive,
@@ -460,10 +467,9 @@ def _update_probe_residual_observation(
         item["probe_direction_evaluation_count"] = (
             int(item.get("probe_direction_evaluation_count") or 0) + 1
         )
-        item["probe_direction_strong_evaluation_count"] = (
-            int(item.get("probe_direction_strong_evaluation_count") or 0)
-            + int(strong)
-        )
+        item["probe_direction_strong_evaluation_count"] = int(
+            item.get("probe_direction_strong_evaluation_count") or 0
+        ) + int(strong)
         item["probe_direction_max_positive_group_count"] = max(
             int(item.get("probe_direction_max_positive_group_count") or 0),
             len(positive_groups),
@@ -501,32 +507,27 @@ def _update_probe_residual_observation(
             int(item.get("pyramid_evaluation_count") or 0) + 1
         )
     if stage not in _PROBE_RESIDUAL_STAGES:
-        for key in ("entry_filled_qty", "buy_qty"):
-            filled_qty = int(_safe_float(fields.get(key), 0.0) or 0.0)
-            if filled_qty > 0:
-                item["probe_bundle_max_buy_qty"] = max(
-                    int(item.get("probe_bundle_max_buy_qty") or 0), filled_qty
-                )
         return
 
     item["probe_residual_observation_seen"] = True
-    item["probe_bundle_id"] = fields.get("probe_bundle_id") or item.get(
-        "probe_bundle_id"
-    )
+    item["probe_bundle_id"] = row_bundle_id or item.get("probe_bundle_id")
     if stage == "probe_filled":
         probe_fill_qty = max(1, int(_safe_float(fields.get("fill_qty"), 1.0) or 1.0))
         item["probe_fill_qty"] = probe_fill_qty
         item["probe_fill_price"] = _safe_float(fields.get("fill_price"))
-        item["probe_bundle_max_buy_qty"] = max(
-            int(item.get("probe_bundle_max_buy_qty") or 0), probe_fill_qty
-        )
     elif stage == "residual_submitted":
         order_no = str(fields.get("order_no") or "").strip()
         submitted_orders = item.setdefault("residual_submitted_order_nos", [])
+        qty = max(0, int(_safe_float(fields.get("qty"), 0.0) or 0.0))
+        if qty > 0 and not order_no:
+            item["residual_fill_attribution_valid"] = False
+            item["residual_fill_attribution_state"] = "submission_order_no_missing"
+            reasons = item.setdefault("residual_fill_attribution_reasons", [])
+            if "residual_submission_order_no_missing" not in reasons:
+                reasons.append("residual_submission_order_no_missing")
         if not order_no or order_no not in submitted_orders:
             if order_no:
                 submitted_orders.append(order_no)
-            qty = max(0, int(_safe_float(fields.get("qty"), 0.0) or 0.0))
             item["residual_submitted_qty"] = (
                 int(item.get("residual_submitted_qty") or 0) + qty
             )
@@ -534,6 +535,7 @@ def _update_probe_residual_observation(
             if price > 0:
                 item.setdefault("residual_submitted_prices", []).append(price)
         item["residual_submitted_leg_count"] = len(submitted_orders)
+        item["residual_fill_attribution_state"] = "open_unresolved"
     elif stage == "residual_blocked":
         reason = str(fields.get("reason") or "unknown")
         explicit_recheck_allowed = _optional_boolish(
@@ -558,12 +560,16 @@ def _update_probe_residual_observation(
         item["residual_hard_or_capacity_abort"] = not soft_abort
         item["residual_partial_submitted_before_block"] = partial_submitted
         item["residual_scale_in_recheck_allowed"] = soft_abort
-    elif stage == "residual_partial_complete":
+        if not partial_submitted:
+            item["probe_bundle_terminal_seen"] = True
+            item["probe_bundle_terminal_filled_qty"] = int(
+                item.get("probe_fill_qty") or 1
+            )
+    elif stage in {"residual_partial_complete", "bundle_completed"}:
         filled_qty = int(_safe_float(fields.get("filled_qty"), 0.0) or 0.0)
         if filled_qty > 0:
-            item["probe_bundle_max_buy_qty"] = max(
-                int(item.get("probe_bundle_max_buy_qty") or 0), filled_qty
-            )
+            item["probe_bundle_terminal_seen"] = True
+            item["probe_bundle_terminal_filled_qty"] = filled_qty
 
 
 def _finalize_probe_residual_observation(item: dict[str, Any]) -> None:
@@ -574,19 +580,58 @@ def _finalize_probe_residual_observation(item: dict[str, Any]) -> None:
         probe_fill_qty,
         int(item.get("forced_entry_qty") or probe_fill_qty),
     )
-    max_buy_qty = max(
-        probe_fill_qty, int(item.get("probe_bundle_max_buy_qty") or probe_fill_qty)
-    )
     residual_expected_qty = max(0, requested_qty - probe_fill_qty)
-    residual_filled_qty = max(0, max_buy_qty - probe_fill_qty)
     item["residual_expected_qty"] = residual_expected_qty
-    item["residual_filled_qty"] = residual_filled_qty
-    item["residual_unfilled_qty"] = max(
-        0, residual_expected_qty - residual_filled_qty
-    )
-    item["residual_zero_fill"] = bool(
-        residual_expected_qty > 0 and residual_filled_qty == 0
-    )
+    submitted_qty = max(0, int(item.get("residual_submitted_qty") or 0))
+    item.setdefault("residual_fill_attribution_reasons", [])
+    if item.get("residual_fill_attribution_valid") is False:
+        item["residual_filled_qty"] = None
+        item["residual_unfilled_qty"] = None
+        item["residual_zero_fill"] = None
+    elif not item.get("probe_bundle_terminal_seen"):
+        item["residual_fill_attribution_valid"] = None
+        item["residual_fill_attribution_state"] = "open_unresolved"
+        item["residual_filled_qty"] = None
+        item["residual_unfilled_qty"] = None
+        item["residual_zero_fill"] = None
+    else:
+        terminal_filled_qty = max(
+            probe_fill_qty,
+            int(item.get("probe_bundle_terminal_filled_qty") or probe_fill_qty),
+        )
+        residual_filled_qty = max(0, terminal_filled_qty - probe_fill_qty)
+        if (
+            residual_filled_qty > residual_expected_qty
+            or residual_filled_qty > submitted_qty
+        ):
+            item["residual_fill_attribution_valid"] = False
+            item["residual_fill_attribution_state"] = (
+                "filled_qty_exceeds_submitted_or_expected"
+            )
+            item["residual_fill_attribution_reasons"].append(
+                "residual_filled_qty_exceeds_submitted_or_expected"
+            )
+            item["residual_filled_qty"] = None
+            item["residual_unfilled_qty"] = None
+            item["residual_zero_fill"] = None
+        else:
+            item["residual_fill_attribution_valid"] = True
+            item["residual_filled_qty"] = residual_filled_qty
+            item["residual_unfilled_qty"] = max(
+                0, residual_expected_qty - residual_filled_qty
+            )
+            item["residual_zero_fill"] = bool(
+                residual_expected_qty > 0 and residual_filled_qty == 0
+            )
+            item["residual_fill_attribution_state"] = (
+                "zero_fill"
+                if item["residual_zero_fill"]
+                else (
+                    "full_fill"
+                    if residual_filled_qty == residual_expected_qty
+                    else "partial_fill"
+                )
+            )
     max_profit_seen = _safe_float(item.get("max_profit_seen"), None)
     min_profit_pct = float(
         _safe_float(
@@ -596,7 +641,7 @@ def _finalize_probe_residual_observation(item: dict[str, Any]) -> None:
         or _pyramid_min_profit_pct()
     )
     item["residual_missed_upside_candidate"] = bool(
-        item["residual_zero_fill"]
+        item.get("residual_zero_fill") is True
         and max_profit_seen is not None
         and max_profit_seen >= min_profit_pct
     )
@@ -676,8 +721,7 @@ def _incremental_return_pct(
     if denominator <= 0:
         return None
     return round(
-        (((1.0 + (float(outcome_profit_pct) / 100.0)) / denominator) - 1.0)
-        * 100.0,
+        (((1.0 + (float(outcome_profit_pct) / 100.0)) / denominator) - 1.0) * 100.0,
         4,
     )
 
@@ -716,12 +760,8 @@ def _update_normal_winner_expansion_candidate(
     item["normal_winner_expansion_blocker_reason"] = blocked.get(
         "scale_in_blocker_reason"
     )
-    item["normal_winner_expansion_current_ai_score"] = blocked.get(
-        "current_ai_score"
-    )
-    item["normal_winner_expansion_buy_pressure_10t"] = blocked.get(
-        "buy_pressure_10t"
-    )
+    item["normal_winner_expansion_current_ai_score"] = blocked.get("current_ai_score")
+    item["normal_winner_expansion_buy_pressure_10t"] = blocked.get("buy_pressure_10t")
     item["normal_winner_expansion_tick_acceleration_ratio"] = blocked.get(
         "tick_acceleration_ratio"
     )
@@ -737,6 +777,22 @@ def _finalize_normal_winner_expansion(item: dict[str, Any]) -> None:
     if not item.get("normal_winner_expansion_candidate_seen"):
         item["normal_winner_expansion_label"] = "not_observed"
         return
+    base_source_quality_valid = bool(
+        item.get("normal_winner_expansion_source_quality_valid")
+    )
+    source_quality_reasons = []
+    if item.get("residual_fill_attribution_valid") is not True:
+        source_quality_reasons.append(
+            f"residual_fill_attribution:{item.get('residual_fill_attribution_state') or 'unknown'}"
+        )
+    if not bool(item.get("venue_source_quality_valid")):
+        source_quality_reasons.append(
+            f"effective_venue:{item.get('effective_venue_resolution') or 'missing'}"
+        )
+    item["normal_winner_expansion_source_quality_valid"] = bool(
+        base_source_quality_valid and not source_quality_reasons
+    )
+    item["normal_winner_expansion_source_quality_reasons"] = source_quality_reasons
     entry_profit = _safe_float(
         item.get("normal_winner_expansion_entry_profit_pct"), None
     )
@@ -751,8 +807,7 @@ def _finalize_normal_winner_expansion(item: dict[str, Any]) -> None:
     gross_incremental_mae = _incremental_return_pct(post_min, entry_profit)
     gross_incremental_final = _incremental_return_pct(final_profit, entry_profit)
     assumed_trade_cost_pct = round(
-        max(0.0, float(getattr(TRADING_RULES, "TRADE_COST_RATE", 0.0) or 0.0))
-        * 100.0,
+        max(0.0, float(getattr(TRADING_RULES, "TRADE_COST_RATE", 0.0) or 0.0)) * 100.0,
         4,
     )
     incremental_mfe = (
@@ -770,15 +825,9 @@ def _finalize_normal_winner_expansion(item: dict[str, Any]) -> None:
         if gross_incremental_final is not None
         else None
     )
-    item["normal_winner_expansion_assumed_trade_cost_pct"] = (
-        assumed_trade_cost_pct
-    )
-    item["normal_winner_expansion_gross_incremental_mfe_pct"] = (
-        gross_incremental_mfe
-    )
-    item["normal_winner_expansion_gross_incremental_mae_pct"] = (
-        gross_incremental_mae
-    )
+    item["normal_winner_expansion_assumed_trade_cost_pct"] = assumed_trade_cost_pct
+    item["normal_winner_expansion_gross_incremental_mfe_pct"] = gross_incremental_mfe
+    item["normal_winner_expansion_gross_incremental_mae_pct"] = gross_incremental_mae
     item["normal_winner_expansion_gross_incremental_final_profit_pct"] = (
         gross_incremental_final
     )
@@ -797,10 +846,13 @@ def _finalize_normal_winner_expansion(item: dict[str, Any]) -> None:
         if candidate_price is not None and candidate_price > 0
         else 0
     )
-    if residual_unfilled_qty <= 0:
-        label = "not_underexpanded"
+    residual_fill_state = str(item.get("residual_fill_attribution_state") or "").strip()
+    if residual_fill_state == "open_unresolved":
+        label = "open_unresolved"
     elif not item.get("normal_winner_expansion_source_quality_valid"):
         label = "source_quality_blocked"
+    elif residual_unfilled_qty <= 0:
+        label = "not_underexpanded"
     elif final_profit is None:
         label = "open_unresolved"
     elif incremental_final is not None and incremental_final > 0:
@@ -1018,6 +1070,20 @@ def _one_share_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "probe_residual_pyramid_evaluation_seen_count": sum(
             1 for item in rows if item.get("pyramid_evaluation_seen")
         ),
+        "probe_residual_fill_attribution_invalid_count": sum(
+            1 for item in rows if item.get("residual_fill_attribution_valid") is False
+        ),
+        "probe_residual_fill_open_unresolved_count": sum(
+            1
+            for item in rows
+            if item.get("residual_fill_attribution_state") == "open_unresolved"
+        ),
+        "probe_residual_venue_source_quality_invalid_count": sum(
+            1
+            for item in rows
+            if item.get("probe_residual_observation_seen")
+            and item.get("venue_source_quality_valid") is not True
+        ),
         "one_share_pyramid_label_counts": [
             {"pyramid_feedback_label": key, "count": value}
             for key, value in label_counts.most_common()
@@ -1030,7 +1096,16 @@ def _normal_winner_expansion_summary(rows: list[dict[str, Any]]) -> dict[str, An
         item
         for item in rows
         if bool(item.get("normal_winner_expansion_candidate_seen"))
-        and int(item.get("residual_unfilled_qty") or 0) > 0
+        and (
+            int(item.get("residual_unfilled_qty") or 0) > 0
+            or str(item.get("residual_fill_attribution_state") or "")
+            in {
+                "open_unresolved",
+                "bundle_mismatch",
+                "submission_order_no_missing",
+                "filled_qty_exceeds_submitted_or_expected",
+            }
+        )
     ]
     valid = [
         item
@@ -1076,9 +1151,7 @@ def _normal_winner_expansion_summary(rows: list[dict[str, Any]]) -> dict[str, An
             "two_consecutive_strong_no_negative"
             if (
                 int(item.get("probe_confirmation_max_count") or 0) >= 2
-                or int(
-                    item.get("probe_direction_max_consecutive_strong_count") or 0
-                )
+                or int(item.get("probe_direction_max_consecutive_strong_count") or 0)
                 >= 2
             )
             and not bool(item.get("probe_direction_negative_seen"))
@@ -1094,10 +1167,7 @@ def _normal_winner_expansion_summary(rows: list[dict[str, Any]]) -> dict[str, An
         )
         item["normal_winner_expansion_probe_confirmation_signature"] = signature
         signature_counts[signature] += 1
-        if (
-            item.get("normal_winner_expansion_label")
-            == "realized_incremental_winner"
-        ):
+        if item.get("normal_winner_expansion_label") == "realized_incremental_winner":
             signature_winners[signature] += 1
 
     def _bucket(value: float | None, cuts: tuple[float, float]) -> str:
@@ -1111,21 +1181,15 @@ def _normal_winner_expansion_summary(rows: list[dict[str, Any]]) -> dict[str, An
 
     axis_getters = {
         "entry_profit_pct": lambda item: _bucket(
-            _safe_float(
-                item.get("normal_winner_expansion_entry_profit_pct"), None
-            ),
+            _safe_float(item.get("normal_winner_expansion_entry_profit_pct"), None),
             (0.4, 0.8),
         ),
         "ai_score": lambda item: _bucket(
-            _safe_float(
-                item.get("normal_winner_expansion_current_ai_score"), None
-            ),
+            _safe_float(item.get("normal_winner_expansion_current_ai_score"), None),
             (60.0, 70.0),
         ),
         "buy_pressure_10t": lambda item: _bucket(
-            _safe_float(
-                item.get("normal_winner_expansion_buy_pressure_10t"), None
-            ),
+            _safe_float(item.get("normal_winner_expansion_buy_pressure_10t"), None),
             (50.0, 70.0),
         ),
         "tick_acceleration_ratio": lambda item: _bucket(
@@ -1170,17 +1234,11 @@ def _normal_winner_expansion_summary(rows: list[dict[str, Any]]) -> dict[str, An
                         0.0,
                     ),
                     int(
-                        item.get(
-                            "normal_winner_expansion_candidate_notional_krw"
-                        )
-                        or 0
+                        item.get("normal_winner_expansion_candidate_notional_krw") or 0
                     ),
                 )
                 for item in bucket_items
-                if int(
-                    item.get("normal_winner_expansion_candidate_notional_krw")
-                    or 0
-                )
+                if int(item.get("normal_winner_expansion_candidate_notional_krw") or 0)
                 > 0
             ]
             axis_rows.append(
@@ -1225,17 +1283,11 @@ def _normal_winner_expansion_summary(rows: list[dict[str, Any]]) -> dict[str, An
                         0.0,
                     ),
                     int(
-                        item.get(
-                            "normal_winner_expansion_candidate_notional_krw"
-                        )
-                        or 0
+                        item.get("normal_winner_expansion_candidate_notional_krw") or 0
                     ),
                 )
                 for item in bucket_items
-                if int(
-                    item.get("normal_winner_expansion_candidate_notional_krw")
-                    or 0
-                )
+                if int(item.get("normal_winner_expansion_candidate_notional_krw") or 0)
                 > 0
             ]
             metrics.append(
@@ -1301,16 +1353,14 @@ def _normal_winner_expansion_summary(rows: list[dict[str, Any]]) -> dict[str, An
         ),
         "diagnostic_win_rate": (
             round(
-                label_counts.get("realized_incremental_winner", 0)
-                / len(closed),
+                label_counts.get("realized_incremental_winner", 0) / len(closed),
                 4,
             )
             if closed
             else 0.0
         ),
         "label_counts": [
-            {"label": key, "count": value}
-            for key, value in label_counts.most_common()
+            {"label": key, "count": value} for key, value in label_counts.most_common()
         ],
         "probe_confirmation_signature_metrics": [
             {
@@ -1329,9 +1379,7 @@ def _normal_winner_expansion_summary(rows: list[dict[str, Any]]) -> dict[str, An
         "venue_source_quality_valid_closed_count": len(venue_valid_closed),
         "venue_source_quality_blocked_closed_count": len(closed)
         - len(venue_valid_closed),
-        "by_effective_venue": _dimension_metrics(
-            "effective_venue", venue_valid_closed
-        ),
+        "by_effective_venue": _dimension_metrics("effective_venue", venue_valid_closed),
         "by_market_session_bucket": _dimension_metrics(
             "market_session_bucket", venue_valid_closed
         ),
@@ -1490,9 +1538,7 @@ def build_report(
     )
     blocker_metrics = _aggregate_by_blocker(rows)
     one_share_opportunity_summary = _one_share_summary(one_share_rows)
-    normal_winner_expansion_summary = _normal_winner_expansion_summary(
-        one_share_rows
-    )
+    normal_winner_expansion_summary = _normal_winner_expansion_summary(one_share_rows)
     pressure_provenance_missing_count = _pressure_provenance_missing_count(
         rows + one_share_rows
     )
@@ -1505,6 +1551,11 @@ def build_report(
     micro_vwap_provenance_unusable_count = _micro_vwap_provenance_unusable_count(
         rows + one_share_rows
     )
+    residual_fill_attribution_invalid_count = sum(
+        1
+        for item in one_share_rows
+        if item.get("residual_fill_attribution_valid") is False
+    )
     if pressure_provenance_missing_count:
         source_quality_status = "pressure_provenance_missing"
     if pressure_provenance_unusable_count:
@@ -1514,7 +1565,7 @@ def build_report(
     if micro_vwap_provenance_unusable_count:
         source_quality_status = "micro_vwap_provenance_unusable"
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "report_type": REPORT_TYPE,
         "target_date": target_date,
         "generated_at": generated_at,
@@ -1541,8 +1592,8 @@ def build_report(
             "sample_floor": "rolling_closed_one_share_pyramid_rows_ge_20",
             "primary_decision_metric": "one_share_pyramid_missed_upside_rate_and_avg_opportunity_cost_pct",
             "source_quality_gate": (
-                "one_share_event_record_id_joined_to_holding_snapshots_and_sell_completed_with_"
-                "fresh_minute_candle_provenance_for_micro_vwap_when_present"
+                "exact_probe_bundle_receipt_and_terminal_fill_join_with_explicit_"
+                "effective_venue_and_fresh_minute_candle_provenance_when_present"
             ),
             "forbidden_uses": FORBIDDEN_USES,
         },
@@ -1583,6 +1634,9 @@ def build_report(
             "pressure_provenance_unusable_count": pressure_provenance_unusable_count,
             "micro_vwap_provenance_missing_count": micro_vwap_provenance_missing_count,
             "micro_vwap_provenance_unusable_count": micro_vwap_provenance_unusable_count,
+            "residual_fill_attribution_invalid_count": (
+                residual_fill_attribution_invalid_count
+            ),
         },
         "summary": {
             "pyramid_feedback_row_count": len(rows),
@@ -1590,6 +1644,9 @@ def build_report(
             "pressure_provenance_unusable_count": pressure_provenance_unusable_count,
             "micro_vwap_provenance_missing_count": micro_vwap_provenance_missing_count,
             "micro_vwap_provenance_unusable_count": micro_vwap_provenance_unusable_count,
+            "residual_fill_attribution_invalid_count": (
+                residual_fill_attribution_invalid_count
+            ),
             "closed_pyramid_row_count": sum(
                 1
                 for item in rows

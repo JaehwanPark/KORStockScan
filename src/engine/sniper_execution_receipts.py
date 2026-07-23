@@ -1,5 +1,6 @@
 """Order execution receipt handlers for the sniper engine."""
 
+import os
 import threading
 import time
 from datetime import datetime
@@ -81,6 +82,73 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return int(float(value))
     except Exception:
         return int(default)
+
+
+def _probe_venue_provenance_fields(stock: dict[str, Any]) -> dict[str, str]:
+    effective_venue = (
+        str(
+            stock.get("entry_execution_cohort")
+            or stock.get("rising_missed_effective_venue")
+            or stock.get("effective_venue")
+            or stock.get(
+                "rising_missed_tp1_submit_context_rising_missed_effective_venue"
+            )
+            or ""
+        )
+        .strip()
+        .upper()
+    )
+    market_session_bucket = str(
+        stock.get("rising_missed_market_session_bucket")
+        or stock.get("market_session_bucket")
+        or stock.get(
+            "rising_missed_tp1_submit_context_rising_missed_market_session_bucket"
+        )
+        or ""
+    ).strip()
+    fields: dict[str, str] = {}
+    if effective_venue in {"KRX", "NXT", "PREMARKET_KRX_LIKE"}:
+        fields["effective_venue"] = effective_venue
+        fields["rising_missed_effective_venue"] = effective_venue
+    if market_session_bucket:
+        fields["market_session_bucket"] = market_session_bucket
+        fields["rising_missed_market_session_bucket"] = market_session_bucket
+    return fields
+
+
+def _probe_observation_contract_fields(stock: dict[str, Any]) -> dict[str, Any]:
+    fields: dict[str, Any] = {
+        "metric_role": "real_execution_quality",
+        "decision_authority": "operator_override_observation_only",
+        "window_policy": "same_day_operator_canary",
+        "sample_floor": "5_bundles",
+        "primary_decision_metric": "probe_fill_to_first_residual_limit_gap_bps",
+        "source_quality_gate": "exact_probe_receipt_and_fresh_consistent_bbo",
+        "allowed_runtime_apply": False,
+        "forbidden_uses": (
+            "live_auto_promotion|threshold_mutation|provider_route_change|"
+            "quantity_cap_release|broker_guard_bypass|full_live_approval"
+        ),
+    }
+    post_probe_enabled = str(
+        os.getenv("KORSTOCKSCAN_DYNAMIC_ENTRY_PRICE_RESOLVER_POST_PROBE_ENABLED", "")
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    probe_first_enabled = str(
+        os.getenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ENABLED", "")
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    if post_probe_enabled and probe_first_enabled:
+        fields.update(
+            {
+                "decision_authority": "dynamic_entry_price_resolver_p1_post_probe",
+                "window_policy": "same_day_probe_fill_ttl",
+                "primary_decision_metric": "post_probe_direction_state",
+                "source_quality_gate": (
+                    "exact_probe_receipt_fresh_bbo_two_direction_groups"
+                ),
+            }
+        )
+    fields.update(_probe_venue_provenance_fields(stock))
+    return fields
 
 
 _BUY_RECEIPT_SNAPSHOT_KEYS = (
@@ -1325,9 +1393,7 @@ def _handle_early_volatility_tp_sell_execution(
                 allow_decrease=True,
             )
             if peak_row:
-                target_stock["position_peak_cycle_id"] = peak_row[
-                    "position_cycle_id"
-                ]
+                target_stock["position_peak_cycle_id"] = peak_row["position_cycle_id"]
                 target_stock["position_peak_persisted_price"] = peak_row["peak_price"]
                 target_stock["position_peak_persisted_at"] = peak_row[
                     "updated_at_epoch"
@@ -3001,20 +3067,10 @@ def _handle_entry_buy_execution(
                     3,
                 ),
                 probe_fill_slippage_bps=round(slippage_bps, 4),
-                metric_role="real_execution_quality",
-                decision_authority="operator_override_observation_only",
-                window_policy="same_day_operator_canary",
-                sample_floor="5_bundles",
-                primary_decision_metric="probe_fill_to_first_residual_limit_gap_bps",
-                source_quality_gate="exact_probe_receipt_and_fresh_consistent_bbo",
-                allowed_runtime_apply=False,
-                forbidden_uses=(
-                    "live_auto_promotion|threshold_mutation|provider_route_change|"
-                    "quantity_cap_release|broker_guard_bypass|full_live_approval"
-                ),
                 actual_order_submitted=True,
                 broker_order_forbidden=False,
                 runtime_effect=True,
+                **_probe_observation_contract_fields(target_stock),
             )
             if _probe_fill_continuation_callback is not None:
                 threading.Thread(
@@ -3137,20 +3193,10 @@ def _handle_entry_buy_execution(
                 requested_qty=requested_entry_qty,
                 filled_qty=cum_filled_qty,
                 avg_buy_price=round(float(new_avg or 0.0), 4),
-                metric_role="real_execution_quality",
-                decision_authority="operator_override_observation_only",
-                window_policy="same_day_operator_canary",
-                sample_floor="5_bundles",
-                primary_decision_metric="probe_fill_to_first_residual_limit_gap_bps",
-                source_quality_gate="exact_probe_receipt_and_fresh_consistent_bbo",
-                allowed_runtime_apply=False,
-                forbidden_uses=(
-                    "live_auto_promotion|threshold_mutation|provider_route_change|"
-                    "quantity_cap_release|broker_guard_bypass|full_live_approval"
-                ),
                 actual_order_submitted=True,
                 broker_order_forbidden=False,
                 runtime_effect=True,
+                **_probe_observation_contract_fields(target_stock),
             )
         if target_stock.get("rising_missed_one_share_scout"):
             target_stock["rising_missed_scout_upgraded"] = True

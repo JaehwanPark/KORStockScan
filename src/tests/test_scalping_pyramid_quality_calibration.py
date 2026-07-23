@@ -224,6 +224,36 @@ def test_pyramid_quality_calibration_uses_all_one_share_rows_for_thresholds(
     )
 
 
+def test_pyramid_quality_calibration_excludes_invalid_probe_attribution_rows(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(mod, "INPUT_REPORT_DIR", tmp_path / "input")
+    mod.INPUT_REPORT_DIR.mkdir(parents=True)
+    one_share_rows = [_row(i, "pyramid_would_have_helped") for i in range(20)]
+    for row in one_share_rows:
+        row.update(
+            {
+                "probe_residual_observation_seen": True,
+                "residual_fill_attribution_valid": True,
+                "venue_source_quality_valid": True,
+            }
+        )
+    one_share_rows[0]["residual_fill_attribution_valid"] = False
+    one_share_rows[1]["venue_source_quality_valid"] = False
+    path = _feedback(
+        mod.INPUT_REPORT_DIR / "scalping_pyramid_intraday_feedback_2026-07-03.json",
+        [],
+        one_share_rows=one_share_rows,
+    )
+
+    report = mod.build_report("2026-07-03", input_paths=[path], generated_at="fixed")
+    candidate = report["calibration_candidates"][0]
+
+    assert candidate["sample_count"] == 18
+    assert candidate["calibration_state"] == "hold_sample"
+    assert candidate["source_metrics"]["one_share_closed_pyramid_row_count"] == 18
+
+
 def test_pyramid_quality_calibration_consumes_normal_winner_expansion_as_source_only(
     tmp_path, monkeypatch
 ):

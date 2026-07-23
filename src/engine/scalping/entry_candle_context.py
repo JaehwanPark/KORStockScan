@@ -1,6 +1,7 @@
-"""Session-aware minute-candle context for bounded entry confirmation.
+"""Session-aware minute-candle source and bounded entry confirmation context.
 
-This module owns observation and BUY-to-WAIT demotion only.  It cannot create
+The neutral source builder may be reused by entry and holding consumers.  The
+entry wrapper owns observation and BUY-to-WAIT demotion only; it cannot create
 BUY authority, choose an order price/quantity, or bypass broker/safety guards.
 """
 
@@ -14,6 +15,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 SCHEMA = "entry_candle_context_v1"
+SOURCE_SCHEMA = "session_candle_source_v1"
 KST = ZoneInfo("Asia/Seoul")
 ADVERSE_REGIMES = {
     "failed_breakout",
@@ -337,9 +339,10 @@ def _structure(bars: list[dict[str, Any]]) -> dict[str, Any]:
         if low > 0 and latest_close > 0
         else None
     )
-    returns = {str(window): _return_pct(active, window) for window in (3, 5, 10, 20)}
-    slopes = {str(window): _slope_pct(active, window) for window in (3, 5, 10, 20)}
-    ranges = {str(window): _range_pct(active, window) for window in (3, 5, 10, 20)}
+    windows = (1, 3, 5, 10, 20, 60)
+    returns = {str(window): _return_pct(active, window) for window in windows}
+    slopes = {str(window): _slope_pct(active, window) for window in windows}
+    ranges = {str(window): _range_pct(active, window) for window in windows}
     prior = active[:-1]
     prior_high = max((bar["h"] for bar in prior[-10:]), default=0)
     long_slope = slopes["20"] if slopes["20"] is not None else slopes["10"]
@@ -452,7 +455,7 @@ def _structure(bars: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def build_entry_candle_context(
+def build_session_candle_source(
     token: str | None,
     code: str,
     ws_data: dict[str, Any] | None,
@@ -465,14 +468,14 @@ def build_entry_candle_context(
     recent_candles: list[dict[str, Any]] | None = None,
     source_meta: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Build a common model/audit bundle, fetching ka10080 only when needed."""
+    """Build a neutral venue/session candle bundle for bounded consumers."""
 
     started = time.perf_counter()
     now = _now_kst(now_ts)
     session_value = resolve_entry_candle_session(now, session)
     ws = ws_data if isinstance(ws_data, dict) else {}
     venue_value = resolve_entry_candle_venue(ws, venue, session_value)
-    if session is None and venue_value == "NXT" and session_value == "krx_regular":
+    if venue_value == "NXT" and session_value == "krx_regular":
         session_value = "nxt_regular_overlap"
     request_code = resolve_entry_candle_request_code(
         code, venue=venue_value, session=session_value, ws_data=ws
@@ -596,6 +599,9 @@ def build_entry_candle_context(
             )
             current_session[-1] = forming
 
+    # The forming-bar overlay is an additional live observation. Keep the
+    # consumer-visible source window bounded after that overlay as well.
+    current_session = current_session[-max(1, int(limit)) :]
     missing_bar_count = 0
     max_consecutive_missing_bar_count = 0
     for left, right in zip(current_session, current_session[1:]):
@@ -676,10 +682,7 @@ def build_entry_candle_context(
     ]
     build_ms = int((time.perf_counter() - started) * 1000)
     return {
-        "schema": SCHEMA,
-        "enabled": entry_candle_context_enabled(
-            venue=venue_value, session=session_value, now_ts=now
-        ),
+        "schema": SOURCE_SCHEMA,
         "venue": venue_value,
         "session": session_value,
         "request_code": request_code,
@@ -728,8 +731,48 @@ def build_entry_candle_context(
             },
         },
         "timing": {"fetch_ms": fetch_ms, "build_ms": build_ms},
-        "observation_contract": OBSERVATION_CONTRACT,
     }
+
+
+def build_entry_candle_context(
+    token: str | None,
+    code: str,
+    ws_data: dict[str, Any] | None,
+    venue: str | None,
+    session: str | None,
+    limit: int = 40,
+    model_bar_limit: int = 20,
+    now_ts: Any = None,
+    *,
+    recent_candles: list[dict[str, Any]] | None = None,
+    source_meta: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build the entry-owned view over the neutral candle source."""
+
+    context = build_session_candle_source(
+        token,
+        code,
+        ws_data,
+        venue,
+        session,
+        limit=limit,
+        model_bar_limit=model_bar_limit,
+        now_ts=now_ts,
+        recent_candles=recent_candles,
+        source_meta=source_meta,
+    )
+    context.update(
+        {
+            "schema": SCHEMA,
+            "enabled": entry_candle_context_enabled(
+                venue=str(context.get("venue") or ""),
+                session=str(context.get("session") or ""),
+                now_ts=now_ts,
+            ),
+            "observation_contract": OBSERVATION_CONTRACT,
+        }
+    )
+    return context
 
 
 def _best_levels(ws_data: dict[str, Any]) -> tuple[int, int, float, float]:

@@ -208,12 +208,19 @@ def test_post_probe_observation_contract_uses_existing_resolver_family(monkeypat
     )
     monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ENABLED", "true")
 
-    fields = state_handlers._entry_split_probe_observation_contract_fields()
+    fields = state_handlers._entry_split_probe_observation_contract_fields(
+        {
+            "entry_execution_cohort": "PREMARKET_KRX_LIKE",
+            "market_session_bucket": "krx_like_premarket",
+        }
+    )
 
     assert fields["metric_role"] == "real_execution_quality"
     assert fields["decision_authority"] == "dynamic_entry_price_resolver_p1_post_probe"
     assert fields["window_policy"] == "same_day_probe_fill_ttl"
     assert fields["allowed_runtime_apply"] is False
+    assert fields["effective_venue"] == "PREMARKET_KRX_LIKE"
+    assert fields["market_session_bucket"] == "krx_like_premarket"
     assert {
         threshold_family_for_stage(stage)
         for stage in (
@@ -227,6 +234,10 @@ def test_post_probe_observation_contract_uses_existing_resolver_family(monkeypat
 
 def test_probe_receipt_marks_fill_once_and_schedules_residual(monkeypatch, tmp_path):
     scheduled = []
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_DYNAMIC_ENTRY_PRICE_RESOLVER_POST_PROBE_ENABLED", "true"
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ENABLED", "true")
 
     class _ImmediateThread:
         def __init__(self, *, target, args, **kwargs):
@@ -274,6 +285,8 @@ def test_probe_receipt_marks_fill_once_and_schedules_residual(monkeypatch, tmp_p
         "entry_split_probe_order_no": "P0",
         "entry_split_probe_submit_best_ask": 10000,
         "entry_split_probe_submitted_at": 1.0,
+        "entry_execution_cohort": "KRX",
+        "market_session_bucket": "krx_regular",
         "pending_entry_orders": [
             {
                 "tag": "entry_split_probe_0",
@@ -310,6 +323,13 @@ def test_probe_receipt_marks_fill_once_and_schedules_residual(monkeypatch, tmp_p
     assert stock["entry_split_probe_phase"] == "probe_filled"
     assert stock["entry_split_probe_fill_price"] == 10010
     assert [stage for stage, _ in events].count("probe_filled") == 1
+    probe_fields = next(fields for stage, fields in events if stage == "probe_filled")
+    assert probe_fields["effective_venue"] == "KRX"
+    assert probe_fields["market_session_bucket"] == "krx_regular"
+    assert (
+        probe_fields["decision_authority"]
+        == "dynamic_entry_price_resolver_p1_post_probe"
+    )
     assert scheduled == [(stock, "123456")]
     runtime_state = split_plan._load_json(split_plan.PROBE_RUNTIME_STATE_PATH)
     assert runtime_state["bundles"]["123456-probe-test"]["phase"] == "probe_filled"
@@ -324,9 +344,7 @@ def test_probe_bundle_completion_rebaselines_peak_before_fast_monitor(monkeypatc
             pass
 
     monkeypatch.setattr(receipts.threading, "Thread", _NoopThread)
-    monkeypatch.setattr(
-        receipts, "_log_holding_pipeline", lambda *args, **kwargs: None
-    )
+    monkeypatch.setattr(receipts, "_log_holding_pipeline", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         receipts, "_refresh_scalp_preset_exit_order", lambda *args, **kwargs: True
     )
@@ -638,7 +656,11 @@ def test_post_probe_direction_classifies_strong_weak_neutral_and_source_gap():
     assert neutral["post_probe_direction_state"] == "NEUTRAL"
     assert neutral["post_probe_continuation_action"] == "ALLOW_NORMAL"
     assert hanwha_neutral["post_probe_direction_state"] == "NEUTRAL"
-    assert hanwha_neutral["post_probe_continuation_action"] == "ALLOW_NORMAL"
+    assert hanwha_neutral["post_probe_continuation_action"] == "DEFER"
+    assert (
+        hanwha_neutral["post_probe_direction_reason"]
+        == "post_probe_neutral_negative_group_deferred"
+    )
     assert source_gap["post_probe_direction_state"] == "UNKNOWN"
     assert source_gap["post_probe_continuation_action"] == "DEFER"
 
@@ -677,8 +699,7 @@ def test_post_probe_wait_uses_submit_timestamp_and_latest_drop_still_vetoes(
     assert wait_result["post_probe_direction_state"] == "STRONG"
     assert wait_result["post_probe_continuation_action"] == "ALLOW_NARROW"
     assert (
-        wait_result["post_probe_direction_ai_context_source"]
-        == "probe_submit_snapshot"
+        wait_result["post_probe_direction_ai_context_source"] == "probe_submit_snapshot"
     )
     assert wait_result["post_probe_direction_submit_wait_fresh"] is True
     assert wait_result["post_probe_direction_ai_action_age_sec"] == "0.500"
@@ -715,9 +736,103 @@ def test_post_probe_wait_uses_submit_timestamp_and_latest_drop_still_vetoes(
         probe_fill_price=10_000,
         now_ts=100.5,
     )
-    assert stale_result["post_probe_direction_state"] == "UNKNOWN"
-    assert stale_result["post_probe_continuation_action"] == "DEFER"
+    assert stale_result["post_probe_direction_state"] == "STRONG"
+    assert stale_result["post_probe_continuation_action"] == "ALLOW_NARROW"
+    assert (
+        stale_result["post_probe_direction_reason"]
+        == "post_probe_stale_wait_two_group_positive_candidate"
+    )
+    assert (
+        stale_result["post_probe_direction_ai_authority"]
+        == "stale_wait_non_authoritative_two_group_confirmation"
+    )
     assert stale_result["post_probe_direction_submit_wait_fresh"] is False
+
+    stock["entry_split_probe_ai_result_source_at_submit"] = "fallback"
+    unverified_result = state_handlers._post_probe_direction_fields(
+        stock,
+        {"curr": 10_010},
+        quote,
+        probe_fill_price=10_000,
+        now_ts=100.5,
+    )
+    assert unverified_result["post_probe_direction_state"] == "UNKNOWN"
+    assert unverified_result["post_probe_continuation_action"] == "DEFER"
+    assert unverified_result["post_probe_direction_reason"] == (
+        "post_probe_ai_action_source_unverified"
+    )
+
+
+def test_post_probe_nxt_stale_wait_requires_existing_fast_tape(monkeypatch):
+    monkeypatch.setattr(
+        state_handlers,
+        "_rising_missed_ai_action_guard_active",
+        lambda **_kwargs: True,
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_NXT_FAST_TAPE_CONTINUATION_ENABLED", "true"
+    )
+    stock = {
+        "rising_missed_effective_venue": "NXT",
+        "rising_missed_market_session_bucket": "nxt_entry_window",
+        "entry_split_probe_ai_action_at_submit": "WAIT",
+        "entry_split_probe_ai_result_source_at_submit": "live",
+        "entry_split_probe_ai_confirmed_at_submit": 90.0,
+        "last_watching_ai_feature_probe_at": 100.0,
+        "last_watching_ai_source_quality_fields": {
+            "orderbook_micro_state": "bullish",
+            "tick_context_quality": "fresh_computed",
+            "tick_aggressor_pressure_usable": True,
+            "tick_context_stale": False,
+            "tick_acceleration_ratio": 2.0,
+        },
+    }
+    quote = {"canonical_mark_price": 10_010, "passive_buy_price": 10_000}
+    monkeypatch.setattr(
+        state_handlers,
+        "_rising_missed_trusted_ws_momentum",
+        lambda *_args, **_kwargs: {},
+    )
+
+    without_fast_tape = state_handlers._post_probe_direction_fields(
+        stock,
+        {"curr": 10_010},
+        quote,
+        probe_fill_price=10_000,
+        now_ts=100.0,
+        max_context_age_sec=3.0,
+    )
+
+    assert without_fast_tape["post_probe_continuation_action"] == "DEFER"
+    assert without_fast_tape["post_probe_direction_reason"] == (
+        "post_probe_nxt_wait_fast_tape_required"
+    )
+
+    monkeypatch.setattr(
+        state_handlers,
+        "_rising_missed_trusted_ws_momentum",
+        lambda *_args, **_kwargs: {
+            "rising_missed_tp1_ws_fast_tape_fresh": True,
+            "rising_missed_tp1_ws_tick_acceleration_fresh": True,
+            "rising_missed_tp1_ws_tick_acceleration": 2.0,
+            "rising_missed_tp1_ws_fast_tape_buy_ratio": 90.0,
+            "rising_missed_tp1_ws_fast_tape_buy_count": 9,
+            "rising_missed_tp1_ws_fast_tape_sell_count": 1,
+            "rising_missed_tp1_ws_fast_tape_latest_side": "BUY",
+        },
+    )
+    with_fast_tape = state_handlers._post_probe_direction_fields(
+        stock,
+        {"curr": 10_010},
+        quote,
+        probe_fill_price=10_000,
+        now_ts=100.0,
+        max_context_age_sec=3.0,
+    )
+
+    assert with_fast_tape["post_probe_direction_state"] == "STRONG"
+    assert with_fast_tape["post_probe_continuation_action"] == "ALLOW_NARROW"
+    assert with_fast_tape["post_probe_nxt_wait_fast_tape_ready"] is True
 
 
 def test_post_probe_chase_guard_caps_fast_rise_and_checks_known_tp_reward_risk(
@@ -1097,11 +1212,21 @@ def test_probe_residual_network_path_does_not_hold_shared_receipt_lock(monkeypat
 
 
 @pytest.mark.parametrize(
-    ("second_leg_weak", "fast_tape_single_leg"),
-    [(False, False), (True, False), (False, True)],
+    ("second_leg_weak", "fast_tape_single_leg", "wait_probe_single_leg"),
+    [
+        (False, False, False),
+        (True, False, False),
+        (False, True, False),
+        (False, False, True),
+        (False, True, True),
+    ],
 )
 def test_post_probe_unknown_defers_then_recovery_reprices_each_p1_leg(
-    monkeypatch, tmp_path, second_leg_weak, fast_tape_single_leg
+    monkeypatch,
+    tmp_path,
+    second_leg_weak,
+    fast_tape_single_leg,
+    wait_probe_single_leg,
 ):
     sent = []
     direction = {"state": "UNKNOWN", "action": "DEFER", "recovery_calls": 0}
@@ -1109,6 +1234,17 @@ def test_post_probe_unknown_defers_then_recovery_reprices_each_p1_leg(
         "KORSTOCKSCAN_DYNAMIC_ENTRY_PRICE_RESOLVER_POST_PROBE_ENABLED", "true"
     )
     monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ENABLED", "true")
+    monkeypatch.setattr(
+        state_handlers,
+        "_rising_missed_ai_action_guard_active",
+        lambda **_kwargs: wait_probe_single_leg,
+    )
+    if wait_probe_single_leg:
+        monkeypatch.setattr(
+            state_handlers,
+            "_advance_wait_probe_confirmation",
+            lambda *_args, **_kwargs: (True, 2),
+        )
     monkeypatch.setattr(
         split_plan,
         "PROBE_RUNTIME_STATE_PATH",
@@ -1159,6 +1295,10 @@ def test_post_probe_unknown_defers_then_recovery_reprices_each_p1_leg(
         if direction["state"] == "STRONG" and fast_tape_single_leg:
             fields["post_probe_nxt_wait_fast_tape_ready"] = True
             fields["post_probe_nxt_wait_fast_tape_bounded_single_leg"] = True
+        if direction["state"] == "STRONG" and wait_probe_single_leg:
+            fields["post_probe_direction_ai_authority"] = (
+                "stale_wait_non_authoritative_two_group_confirmation"
+            )
         return fields
 
     monkeypatch.setattr(
@@ -1226,6 +1366,9 @@ def test_post_probe_unknown_defers_then_recovery_reprices_each_p1_leg(
         "entry_split_probe_submitted_at": 100.0,
         "entry_split_probe_filled_at": 100.1,
         "entry_split_probe_fill_price": 10000,
+        "entry_split_probe_ai_action_at_submit": (
+            "WAIT" if wait_probe_single_leg else "BUY"
+        ),
         "entry_split_probe_continuation": {
             "base_order": {"tag": "normal", "tif": "DAY", "order_type_code": "00"},
             "requested_qty": 5,
@@ -1266,24 +1409,33 @@ def test_post_probe_unknown_defers_then_recovery_reprices_each_p1_leg(
         now_ts=100.5,
         now_dt=datetime(2026, 7, 20, 10, 0, 1),
     )
-    if fast_tape_single_leg:
-        expected_sent = [(2, 10090)]
+    if fast_tape_single_leg or wait_probe_single_leg:
+        expected_sent = [
+            (
+                2,
+                10090 if fast_tape_single_leg and not wait_probe_single_leg else 10060,
+            )
+        ]
     elif second_leg_weak:
         expected_sent = [(2, 10060)]
     else:
         expected_sent = [(2, 10060), (2, 10010)]
     assert sent == expected_sent
     assert stock["entry_split_probe_offset_profile"] == (
-        "narrow" if fast_tape_single_leg else "recovered_wide"
+        "narrow"
+        if fast_tape_single_leg and not wait_probe_single_leg
+        else "recovered_wide"
     )
     assert stock["entry_split_probe_phase"] == (
         "residual_partial_submitted"
-        if second_leg_weak or fast_tape_single_leg
+        if second_leg_weak or fast_tape_single_leg or wait_probe_single_leg
         else "residual_submitted"
     )
-    if fast_tape_single_leg:
+    if fast_tape_single_leg or wait_probe_single_leg:
         assert stock["entry_split_probe_abort_reason"] == (
             "post_probe_nxt_wait_fast_tape_single_residual_leg_cap"
+            if fast_tape_single_leg
+            else "post_probe_wait_single_residual_leg_cap"
         )
         assert stock["entry_split_probe_bounded_partial_submission"] is True
 
@@ -1383,6 +1535,45 @@ def test_probe_residual_source_quality_timeout_releases_guarded_scale_in_recheck
     assert stock["entry_split_probe_source_quality_recheck_unfilled_qty"] == 40
     assert stock["entry_split_probe_scale_in_recheck_reason"].endswith(
         ":source_quality_recovery"
+    )
+
+
+def test_probe_residual_neutral_negative_timeout_keeps_scale_in_recheck(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        state_handlers,
+        "_rising_missed_ai_action_guard_active",
+        lambda **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        state_handlers, "_log_entry_pipeline", lambda *_args, **_kwargs: None
+    )
+    stock = {
+        "status": "HOLDING",
+        "buy_qty": 1,
+        "entry_filled_qty": 1,
+        "entry_split_probe_requested_qty": 5,
+        "entry_split_probe_direction_reason": (
+            "post_probe_neutral_negative_group_deferred"
+        ),
+    }
+
+    state_handlers._abort_entry_split_probe_residual(
+        stock,
+        "123456",
+        "residual_revalidation_timeout",
+        preserve_position=True,
+        now_ts=100.0,
+    )
+
+    assert stock["entry_split_probe_soft_abort"] is True
+    assert stock["entry_split_probe_scale_in_forbidden"] is False
+    assert stock["probe_expand_forbidden"] is False
+    assert stock["entry_split_probe_source_quality_recheck_released"] is False
+    assert (
+        stock["entry_split_probe_scale_in_recheck_reason"]
+        == "residual_revalidation_timeout"
     )
 
 

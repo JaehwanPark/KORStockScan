@@ -175,6 +175,11 @@ def _closed_one_share_pyramid_rows(
                 continue
             if str(row.get("pyramid_feedback_label") or "") not in CLOSED_LABELS:
                 continue
+            if row.get("probe_residual_observation_seen") and (
+                row.get("residual_fill_attribution_valid") is not True
+                or row.get("venue_source_quality_valid") is not True
+            ):
+                continue
             rows.append(row)
     return rows, section_present
 
@@ -198,18 +203,14 @@ def _normal_winner_expansion_observation(
                 not in NORMAL_WINNER_EXPANSION_CLOSED_LABELS
             ):
                 continue
-            if not _boolish(
-                row.get("normal_winner_expansion_source_quality_valid")
-            ):
+            if not _boolish(row.get("normal_winner_expansion_source_quality_valid")):
                 continue
             provenance_valid = bool(
                 row.get("runtime_effect") is False
                 and row.get("allowed_runtime_apply") is False
                 and row.get("actual_order_submitted") is False
                 and row.get("broker_order_forbidden") is True
-                and str(row.get("decision_authority") or "").startswith(
-                    "source_only_"
-                )
+                and str(row.get("decision_authority") or "").startswith("source_only_")
                 and isinstance(row.get("forbidden_uses"), list)
             )
             if not provenance_valid:
@@ -230,8 +231,7 @@ def _normal_winner_expansion_observation(
     winner_count = sum(
         1
         for row in rows
-        if row.get("normal_winner_expansion_label")
-        == "realized_incremental_winner"
+        if row.get("normal_winner_expansion_label") == "realized_incremental_winner"
     )
     sample_floor_met = len(rows) >= 20
     notional_weighted_ev_pct = (
@@ -266,23 +266,13 @@ def _normal_winner_expansion_observation(
             bucket_weighted = [
                 (
                     _safe_float(
-                        row.get(
-                            "normal_winner_expansion_incremental_final_profit_pct"
-                        ),
+                        row.get("normal_winner_expansion_incremental_final_profit_pct"),
                         0.0,
                     ),
-                    int(
-                        row.get(
-                            "normal_winner_expansion_candidate_notional_krw"
-                        )
-                        or 0
-                    ),
+                    int(row.get("normal_winner_expansion_candidate_notional_krw") or 0),
                 )
                 for row in bucket_rows
-                if int(
-                    row.get("normal_winner_expansion_candidate_notional_krw")
-                    or 0
-                )
+                if int(row.get("normal_winner_expansion_candidate_notional_krw") or 0)
                 > 0
             ]
             result.append(
@@ -308,6 +298,7 @@ def _normal_winner_expansion_observation(
                 }
             )
         return result
+
     return {
         "state": state,
         "section_present": section_present,
@@ -316,14 +307,10 @@ def _normal_winner_expansion_observation(
         "sample_floor_met": sample_floor_met,
         "provenance_rejected_count": provenance_rejected_count,
         "realized_incremental_winner_count": winner_count,
-        "diagnostic_win_rate": (
-            round(winner_count / len(rows), 4) if rows else 0.0
-        ),
+        "diagnostic_win_rate": (round(winner_count / len(rows), 4) if rows else 0.0),
         "notional_weighted_ev_pct": notional_weighted_ev_pct,
         "by_effective_venue": _dimension_rollup("effective_venue"),
-        "by_market_session_bucket": _dimension_rollup(
-            "market_session_bucket"
-        ),
+        "by_market_session_bucket": _dimension_rollup("market_session_bucket"),
         "runtime_effect": False,
         "allowed_runtime_apply": False,
         "metric_role": "bounded_tunable_scale_in_counterfactual",
