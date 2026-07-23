@@ -504,6 +504,25 @@ def record_post_sell_candidate(
                 resolved_exit_rule, profit_rate
             ),
             "exit_decision_source": str(stock.get("last_exit_decision_source") or "-"),
+            "exit_decision_mark_price": (
+                _safe_int(stock.get("fast_exit_decision_mark_price"), 0) or "-"
+            ),
+            "exit_decision_executable_sell_price": (
+                _safe_int(
+                    stock.get("fast_exit_decision_executable_sell_price"), 0
+                )
+                or "-"
+            ),
+            "exit_decision_peak_price": (
+                _safe_int(stock.get("fast_exit_decision_peak_price"), 0) or "-"
+            ),
+            "exit_decision_quote_state": str(
+                stock.get("fast_exit_decision_quote_state") or "-"
+            ),
+            "exit_decision_quote_reason": str(
+                stock.get("fast_exit_decision_quote_reason") or "-"
+            ),
+            "actual_fill_price": safe_sell_price,
             "revive": bool(revive),
             "peak_profit": round(
                 _safe_float(peak_profit, stock.get("last_exit_peak_profit", 0.0)), 3

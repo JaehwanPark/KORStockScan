@@ -216,6 +216,28 @@ def test_execution_target_binds_unique_submitting_early_tp(monkeypatch):
     assert stock["early_volatility_tp_ord_no"] == "456"
 
 
+def test_position_cycle_reset_and_sell_snapshot_cover_early_tp_and_fast_exit():
+    from src.engine import sniper_execution_receipts as receipts
+
+    required_reset = {
+        "early_volatility_tp_state",
+        "early_volatility_tp_position_cycle_id",
+        "early_volatility_tp_logged_observation_signature",
+        "fast_exit_decision_executable_sell_price",
+        "entry_split_probe_direction_reason",
+        "entry_split_probe_source_quality_recheck_released",
+    }
+    assert required_reset.issubset(set(receipts._SELL_REVIVE_RESET_KEYS))
+    assert required_reset.issubset(set(receipts._SELL_COMPLETE_RESET_KEYS))
+    assert {
+        "fast_exit_decision_mark_price",
+        "fast_exit_decision_executable_sell_price",
+        "fast_exit_decision_peak_price",
+        "fast_exit_decision_quote_state",
+        "fast_exit_decision_quote_reason",
+    }.issubset(set(receipts._SELL_RECEIPT_SNAPSHOT_KEYS))
+
+
 def test_replay_candidate_uses_observed_first_hit_and_keeps_runner():
     from src.engine.scalping.early_volatility_partial_tp_replay import (
         Trade,
@@ -494,6 +516,119 @@ def test_nxt_early_tp_requires_confirmed_symbol_eligibility(monkeypatch):
         )
         is False
     )
+
+
+def test_early_tp_ineligible_reason_is_logged_once_per_position_state(monkeypatch):
+    from src.engine import sniper_state_handlers as handlers
+
+    now_dt = datetime(2026, 7, 23, 10, 0, tzinfo=timezone(timedelta(hours=9)))
+    now_ts = now_dt.timestamp()
+    monkeypatch.setattr(
+        handlers,
+        "_resolve_holding_sell_dmst_stex_tp",
+        lambda *_args, **_kwargs: {
+            "blocked": False,
+            "dmst_stex_tp": "SOR",
+            "nxt_enabled": "not_required",
+        },
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_early_volatility_tp_policy",
+        lambda *_args, **_kwargs: {
+            "enabled": True,
+            "broker_route": "SOR",
+            "policy_version": "early_volatility_partial_tp_v1",
+            "active_from_epoch": now_ts - 60,
+            "target_net_profit_pct": 0.55,
+            "partial_ratio": 0.30,
+            "ttl_sec": 150,
+            "observation_window_sec": 20,
+            "min_range_pct": 0.60,
+            "min_tick_samples": 3,
+            "min_observation_span_sec": 2.0,
+        },
+    )
+    events = []
+    monkeypatch.setattr(
+        handlers,
+        "_log_holding_pipeline",
+        lambda _stock, _code, stage, **fields: events.append((stage, fields)),
+    )
+    stock = {
+        "id": 1,
+        "name": "지엔씨에너지",
+        "strategy": "SCALPING",
+        "status": "HOLDING",
+        "buy_price": 41_200,
+        "buy_qty": 1,
+        "holding_started_at": now_ts - 3,
+        "entry_execution_cohort": "KRX",
+        "entry_execution_broker_route": "SOR",
+        "entry_split_probe_phase": "aborted",
+        "holding_price_samples": [
+            {"ts": now_ts - 3, "price": 41_200},
+            {"ts": now_ts - 1, "price": 41_500},
+            {"ts": now_ts, "price": 41_450},
+        ],
+    }
+    quote_fields = {
+        "quote_consistency_state": "ok",
+        "quote_consistency_reason": "ws_only_fresh",
+        "quote_consistency_entry_blocked": False,
+    }
+
+    for _ in range(2):
+        assert (
+            handlers._maybe_manage_early_volatility_tp(
+                stock,
+                "123456",
+                {"curr": 41_450},
+                strategy="SCALPING",
+                now_ts=now_ts,
+                now_dt=now_dt,
+                quote_fields=quote_fields,
+            )
+            is False
+        )
+
+    observed = [
+        fields
+        for stage, fields in events
+        if stage == "early_volatility_tp_decision_observed"
+    ]
+    assert len(observed) == 1
+    assert observed[0]["reason"] == "runner_minimum_not_met"
+    assert observed[0]["eligible"] is False
+    assert observed[0]["broker_order_forbidden"] is True
+    assert observed[0]["holding_qty"] == 1
+
+    # LG전자 regression: partial residual fill left five shares, but the entry
+    # bundle became terminal only after the short observation window.
+    stock["name"] = "LG전자"
+    stock["buy_qty"] = 5
+    stock["holding_started_at"] = now_ts - 30
+    for _ in range(2):
+        assert (
+            handlers._maybe_manage_early_volatility_tp(
+                stock,
+                "123456",
+                {"curr": 41_450},
+                strategy="SCALPING",
+                now_ts=now_ts,
+                now_dt=now_dt,
+                quote_fields=quote_fields,
+            )
+            is False
+        )
+    observed = [
+        fields
+        for stage, fields in events
+        if stage == "early_volatility_tp_decision_observed"
+    ]
+    assert len(observed) == 2
+    assert observed[-1]["reason"] == "observation_window_expired"
+    assert observed[-1]["holding_qty"] == 5
 
 
 def test_final_runner_sell_composes_early_partial_realized_pnl(monkeypatch):

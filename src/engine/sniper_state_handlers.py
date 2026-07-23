@@ -22456,25 +22456,24 @@ def evaluate_and_dispatch_fast_scalp_exit(
     )
     trigger_kind = ""
     exit_rule = ""
-    if (
+    hard_stop_pct = _safe_float(stock.get("hard_stop_pct"), None)
+    emergency_pct = _safe_float(stock.get("hard_stop_emergency_pct"), None)
+    protect_pct = _safe_float(stock.get("protect_profit_pct"), None)
+    if emergency_pct is not None and profit_rate <= emergency_pct:
+        trigger_kind = "emergency_stop"
+        exit_rule = "scalp_hard_stop_emergency"
+    elif hard_stop_pct is not None and profit_rate <= hard_stop_pct:
+        trigger_kind = "hard_stop"
+        exit_rule = "scalp_hard_stop_pct"
+    elif protect_pct is not None and profit_rate <= protect_pct:
+        trigger_kind = "protect_stop"
+        exit_rule = "scalp_protect_profit_stop"
+    elif (
         peak_profit >= trailing_start_pct
         and trailing_drawdown_pct + 1e-9 >= trailing_limit
     ):
         trigger_kind = "trailing_peak_worsen_floor"
         exit_rule = "scalp_trailing_take_profit"
-    else:
-        hard_stop_pct = _safe_float(stock.get("hard_stop_pct"), None)
-        emergency_pct = _safe_float(stock.get("hard_stop_emergency_pct"), None)
-        protect_pct = _safe_float(stock.get("protect_profit_pct"), None)
-        if emergency_pct is not None and profit_rate <= emergency_pct:
-            trigger_kind = "emergency_stop"
-            exit_rule = "scalp_hard_stop_emergency"
-        elif hard_stop_pct is not None and profit_rate <= hard_stop_pct:
-            trigger_kind = "hard_stop"
-            exit_rule = "scalp_hard_stop_pct"
-        elif protect_pct is not None and profit_rate <= protect_pct:
-            trigger_kind = "protect_stop"
-            exit_rule = "scalp_protect_profit_stop"
     if not trigger_kind:
         if not retry_pending:
             return False
@@ -22482,6 +22481,61 @@ def evaluate_and_dispatch_fast_scalp_exit(
             stock.get("fast_exit_trigger_kind") or "claimed_exit_retry"
         )
         exit_rule = str(stock.get("last_exit_rule") or "scalp_fast_exit_retry")
+
+    if trigger_kind == "trailing_peak_worsen_floor" and not retry_pending:
+        in_pyramid_trailing_grace, _, _ = _pyramid_post_add_trailing_grace(
+            stock, observed_at
+        )
+        if in_pyramid_trailing_grace:
+            _log_pyramid_post_add_trailing_grace(
+                stock,
+                code,
+                now_ts=observed_at,
+                exit_rule_candidate="scalp_trailing_take_profit",
+                profit_rate=profit_rate,
+                peak_profit=peak_profit,
+                drawdown=trailing_drawdown_pct,
+            )
+            return False
+        fast_exit_micro_fields = _scalping_micro_estimator_log_fields(
+            stock=stock,
+            code=code,
+            ws_data=ws_data,
+            now_ts=observed_at,
+            prefix="holding_flow_micro_estimator",
+            consumer_stage="scalp_fast_exit_monitor",
+            tier="hot",
+        )
+        loss_conversion_deferred = (
+            _evaluate_scalp_trailing_loss_conversion_recheck(
+                stock=stock,
+                code=code,
+                ws_data=ws_data,
+                profit_rate=profit_rate,
+                peak_profit=peak_profit,
+                trailing_peak_worsen=trailing_worsen,
+                now_ts=observed_at,
+                emit_deferred_log=False,
+                recheck_invoker="fast_exit_monitor",
+            )
+        )
+        continuation_deferred = False
+        if not loss_conversion_deferred:
+            continuation_deferred = _evaluate_scalp_trailing_continuation_recheck(
+                stock=stock,
+                code=code,
+                ws_data=ws_data,
+                micro_fields=fast_exit_micro_fields,
+                profit_rate=profit_rate,
+                peak_profit=peak_profit,
+                trailing_peak_worsen=trailing_worsen,
+                current_ai_score=current_ai_score,
+                now_ts=observed_at,
+                emit_deferred_log=False,
+                recheck_invoker="fast_exit_monitor",
+            )
+        if loss_conversion_deferred or continuation_deferred:
+            return False
 
     exit_token = existing_exit_token or uuid4().hex
     with ENTRY_LOCK:
@@ -22523,6 +22577,11 @@ def evaluate_and_dispatch_fast_scalp_exit(
                 "fast_exit_route_guard_reason": route_fields.get(
                     "fast_exit_route_guard_reason"
                 ),
+                "fast_exit_decision_mark_price": _safe_int(mark_price, 0),
+                "fast_exit_decision_executable_sell_price": decision_price,
+                "fast_exit_decision_peak_price": peak_price,
+                "fast_exit_decision_quote_state": quote_state or "-",
+                "fast_exit_decision_quote_reason": quote_reason or "-",
             }
         )
     reason = (
@@ -22538,6 +22597,9 @@ def evaluate_and_dispatch_fast_scalp_exit(
         trigger_kind=trigger_kind,
         exit_rule=exit_rule,
         decision_price=decision_price,
+        mark_price=_safe_int(mark_price, 0),
+        executable_sell_price=decision_price,
+        peak_price=peak_price,
         profit_rate=f"{profit_rate:+.2f}",
         peak_profit=f"{peak_profit:+.2f}",
         trailing_peak_worsen=f"{trailing_worsen:.2f}",
@@ -22562,6 +22624,23 @@ def evaluate_and_dispatch_fast_scalp_exit(
             key: value
             for key, value in route_fields.items()
             if key.startswith("fast_exit_")
+        },
+        **{
+            key: value
+            for key, value in quote_fields.items()
+            if key
+            not in {
+                "metric_role",
+                "decision_authority",
+                "window_policy",
+                "sample_floor",
+                "primary_decision_metric",
+                "source_quality_gate",
+                "forbidden_uses",
+                "actual_order_submitted",
+                "broker_order_forbidden",
+                "runtime_effect",
+            }
         },
         **_holding_score_role_log_fields(score_context),
     )
@@ -31870,6 +31949,7 @@ _ENTRY_SPLIT_PROBE_RUNTIME_KEYS = (
     "entry_split_probe_recheck_count",
     "entry_split_probe_deferred_once",
     "entry_split_probe_direction_state",
+    "entry_split_probe_direction_reason",
     "entry_split_probe_continuation_action",
     "entry_split_probe_offset_profile",
     "entry_split_probe_nxt_wait_fast_tape_bounded_single_leg",
@@ -31878,6 +31958,10 @@ _ENTRY_SPLIT_PROBE_RUNTIME_KEYS = (
     "entry_split_probe_soft_abort",
     "entry_split_probe_scale_in_recheck_allowed",
     "entry_split_probe_scale_in_recheck_reason",
+    "entry_split_probe_source_quality_recheck_released",
+    "entry_split_probe_source_quality_recheck_released_at",
+    "entry_split_probe_source_quality_recheck_unfilled_qty",
+    "entry_split_probe_source_quality_recheck_reason",
     "entry_split_probe_ai_action_at_submit",
     "probe_confirmation_count",
     "probe_confirmation_last_at",
@@ -32580,16 +32664,42 @@ def _abort_entry_split_probe_residual(
     reason: str,
     *,
     preserve_position: bool,
+    now_ts: float | None = None,
 ) -> None:
     bundle_id = str(stock.get("entry_split_probe_bundle_id") or "").strip()
     filled_qty = _safe_int(stock.get("entry_filled_qty"), 0)
-    soft_abort_reasons = {
-        "residual_leg_direction_deferred",
-        "residual_revalidation_timeout",
+    last_direction_reason = str(
+        stock.get("entry_split_probe_direction_reason") or ""
+    ).strip()
+    source_quality_timeout_reasons = {
+        "post_probe_ai_action_not_fresh",
+        "post_probe_ai_action_source_unverified",
+        "post_probe_direction_source_gap",
+        "post_probe_nxt_ai_veto_not_fresh",
+        "post_probe_nxt_ai_veto_source_unverified",
+        "post_probe_nxt_event_time_speed_unavailable",
+        "post_probe_price_resolver_unavailable",
+        "post_probe_resolver_unavailable",
     }
-    action_guard_active = _rising_missed_ai_action_guard_active()
+    observed_at = float(time.time() if now_ts is None else now_ts)
+    action_guard_active = _rising_missed_ai_action_guard_active(now_ts=observed_at)
+    source_quality_timeout = bool(
+        reason == "residual_revalidation_timeout"
+        and last_direction_reason in source_quality_timeout_reasons
+    )
     soft_abort = bool(
-        preserve_position and reason in soft_abort_reasons and not action_guard_active
+        preserve_position
+        and (
+            (
+                reason
+                in {
+                    "residual_leg_direction_deferred",
+                    "residual_revalidation_timeout",
+                }
+                and not action_guard_active
+            )
+            or source_quality_timeout
+        )
     )
     set_fields = {
         "entry_split_probe_phase": "aborted",
@@ -32597,11 +32707,35 @@ def _abort_entry_split_probe_residual(
         "entry_split_probe_scale_in_forbidden": bool(
             preserve_position and not soft_abort
         ),
-        "probe_expand_forbidden": bool(preserve_position and action_guard_active),
+        "probe_expand_forbidden": bool(
+            preserve_position and action_guard_active and not soft_abort
+        ),
         "entry_split_probe_soft_abort": soft_abort,
         "entry_split_probe_scale_in_recheck_allowed": soft_abort,
         "entry_split_probe_scale_in_recheck_reason": (
-            reason if soft_abort else "hard_or_non_directional_abort"
+            (
+                f"{reason}:source_quality_recovery"
+                if source_quality_timeout
+                else reason
+            )
+            if soft_abort
+            else "hard_or_non_directional_abort"
+        ),
+        "entry_split_probe_source_quality_recheck_released": source_quality_timeout,
+        "entry_split_probe_source_quality_recheck_released_at": (
+            observed_at if source_quality_timeout else 0.0
+        ),
+        "entry_split_probe_source_quality_recheck_unfilled_qty": (
+            max(
+                0,
+                _safe_int(stock.get("entry_split_probe_requested_qty"), filled_qty)
+                - filled_qty,
+            )
+            if source_quality_timeout
+            else 0
+        ),
+        "entry_split_probe_source_quality_recheck_reason": (
+            last_direction_reason if source_quality_timeout else "-"
         ),
     }
     hard_negative_reasons = {
@@ -32656,7 +32790,20 @@ def _abort_entry_split_probe_residual(
         entry_split_probe_soft_abort=soft_abort,
         entry_split_probe_scale_in_recheck_allowed=soft_abort,
         entry_split_probe_scale_in_recheck_reason=(
-            reason if soft_abort else "hard_or_non_directional_abort"
+            (
+                f"{reason}:source_quality_recovery"
+                if source_quality_timeout
+                else reason
+            )
+            if soft_abort
+            else "hard_or_non_directional_abort"
+        ),
+        entry_split_probe_source_quality_recheck_released=source_quality_timeout,
+        entry_split_probe_source_quality_recheck_unfilled_qty=set_fields[
+            "entry_split_probe_source_quality_recheck_unfilled_qty"
+        ],
+        entry_split_probe_source_quality_recheck_reason=(
+            last_direction_reason if source_quality_timeout else "-"
         ),
         post_probe_direction_state=("HARD_NEGATIVE" if hard_negative else "-"),
         post_probe_continuation_action=("HARD_NEGATIVE" if hard_negative else "BLOCK"),
@@ -39440,6 +39587,8 @@ def _evaluate_scalp_trailing_loss_conversion_recheck(
     peak_profit: float,
     trailing_peak_worsen: float,
     now_ts: float,
+    emit_deferred_log: bool = True,
+    recheck_invoker: str = "holding_flow",
 ) -> bool:
     """Defer one shallow loss-conversion trailing exit on a fresh REST quote."""
     config = _scalp_trailing_loss_conversion_recheck_config(now_ts)
@@ -39542,6 +39691,7 @@ def _evaluate_scalp_trailing_loss_conversion_recheck(
         and spread_bps <= config["max_spread_bps"]
     )
     state_fields = {
+        "recheck_invoker": recheck_invoker,
         "recheck_enabled": config["enabled"],
         "recheck_active": config["active"],
         "recheck_active_date": config["active_date"] or "-",
@@ -39622,15 +39772,16 @@ def _evaluate_scalp_trailing_loss_conversion_recheck(
             )
         },
     )
-    _log_holding_pipeline(
-        stock,
-        code,
-        "scalp_trailing_loss_conversion_recheck",
-        recheck_state="deferred",
-        recheck_elapsed_sec=f"{elapsed_sec:.3f}",
-        recheck_until_epoch=f"{until_epoch:.3f}",
-        **state_fields,
-    )
+    if emit_deferred_log:
+        _log_holding_pipeline(
+            stock,
+            code,
+            "scalp_trailing_loss_conversion_recheck",
+            recheck_state="deferred",
+            recheck_elapsed_sec=f"{elapsed_sec:.3f}",
+            recheck_until_epoch=f"{until_epoch:.3f}",
+            **state_fields,
+        )
     return True
 
 
@@ -39679,6 +39830,8 @@ def _evaluate_scalp_trailing_continuation_recheck(
     trailing_peak_worsen: float,
     current_ai_score: float,
     now_ts: float,
+    emit_deferred_log: bool = True,
+    recheck_invoker: str = "holding_flow",
 ) -> bool:
     """Defer only a shallow profitable trailing exit while fresh WS support persists."""
     config = _scalp_trailing_continuation_recheck_config(now_ts)
@@ -39881,6 +40034,7 @@ def _evaluate_scalp_trailing_continuation_recheck(
         name for name, passed in high_peak_checks.items() if not passed
     ]
     state_fields = {
+        "recheck_invoker": recheck_invoker,
         "recheck_enabled": bool(config["enabled"]),
         "recheck_active": bool(config["active"]),
         "recheck_active_date": config["active_date"] or "-",
@@ -39998,15 +40152,16 @@ def _evaluate_scalp_trailing_continuation_recheck(
             )
         },
     )
-    _log_holding_pipeline(
-        stock,
-        code,
-        "scalp_trailing_continuation_recheck",
-        recheck_state="deferred",
-        recheck_elapsed_sec=f"{elapsed_sec:.3f}",
-        recheck_until_epoch=f"{until_epoch:.3f}",
-        **state_fields,
-    )
+    if emit_deferred_log:
+        _log_holding_pipeline(
+            stock,
+            code,
+            "scalp_trailing_continuation_recheck",
+            recheck_state="deferred",
+            recheck_elapsed_sec=f"{elapsed_sec:.3f}",
+            recheck_until_epoch=f"{until_epoch:.3f}",
+            **state_fields,
+        )
     return True
 
 
@@ -55252,6 +55407,75 @@ def _maybe_manage_early_volatility_tp(
         return False
     if str(policy.get("broker_route") or "").strip().upper() != broker_route:
         return False
+    cycle_id = _early_volatility_tp_cycle_id(stock)
+    probe_phase = str(stock.get("entry_split_probe_phase") or "").strip()
+
+    def _observe_early_tp_precondition(reason: str, **extra_fields: Any) -> None:
+        signature = "|".join(
+            (
+                cycle_id,
+                "precondition",
+                reason,
+                str(_safe_int(stock.get("buy_qty"), 0)),
+                probe_phase or "none",
+                str(stock.get("early_volatility_tp_state") or "IDLE").upper(),
+            )
+        )
+        if str(stock.get("early_volatility_tp_logged_observation_signature") or "") == (
+            signature
+        ):
+            return
+        _log_holding_pipeline(
+            stock,
+            code,
+            "early_volatility_tp_decision_observed",
+            policy_version=str(policy.get("policy_version") or "-"),
+            eligible=False,
+            reason=reason,
+            position_cycle_id=cycle_id,
+            venue=cohort,
+            broker_route=broker_route,
+            entry_lineage=str(
+                stock.get("entry_source_parent")
+                or stock.get("position_tag")
+                or stock.get("entry_mode")
+                or "SCALPING"
+            ),
+            holding_qty=_safe_int(stock.get("buy_qty"), 0),
+            entry_bundle_phase=probe_phase or "none",
+            metric_role="funnel_count",
+            decision_authority=(
+                "scalp_early_volatility_partial_tp_eligibility_observation"
+            ),
+            window_policy="same_position_cycle_state_change",
+            sample_floor="1_policy_evaluation",
+            primary_decision_metric="eligibility_reason",
+            source_quality_gate=(
+                "explicit_cohort_and_broker_route_fresh_conflict_free_quote"
+            ),
+            allowed_runtime_apply=False,
+            forbidden_uses=(
+                "standalone_threshold_mutation|cross_cohort_attribution_merge|"
+                "sim_real_mix|hard_safety_bypass|broker_guard_bypass"
+            ),
+            actual_order_submitted=False,
+            broker_order_forbidden=True,
+            runtime_effect=False,
+            **extra_fields,
+        )
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                "early_volatility_tp_logged_observation_signature": signature,
+                "early_volatility_tp_last_decision_reason": reason,
+                "early_volatility_tp_cohort": cohort,
+                "early_volatility_tp_broker_route": broker_route,
+                "early_volatility_tp_policy_version": str(
+                    policy.get("policy_version") or "-"
+                ),
+            },
+        )
+
     active_from = _safe_float(policy.get("active_from_epoch"), 0.0)
     buy_time = stock.get("holding_started_at") or stock.get("buy_time")
     buy_epoch = (
@@ -55260,23 +55484,41 @@ def _maybe_manage_early_volatility_tp(
         else _safe_float(buy_time, 0.0)
     )
     if buy_epoch <= 0 or buy_epoch < active_from:
+        _observe_early_tp_precondition(
+            "entry_before_policy_active",
+            buy_epoch=round(buy_epoch, 3),
+            active_from_epoch=round(active_from, 3),
+        )
         return False
     if stock.get("nxt_rising_missed_tp1_partial_pending") or stock.get(
         "nxt_rising_missed_tp1_partial_applied"
     ):
+        _observe_early_tp_precondition("legacy_nxt_partial_conflict")
         return False
     if _safe_float(stock.get("early_volatility_tp_next_retry_at"), 0.0) > now_ts:
+        _observe_early_tp_precondition(
+            "retry_backoff",
+            next_retry_at=round(
+                _safe_float(stock.get("early_volatility_tp_next_retry_at"), 0.0), 3
+            ),
+        )
         return False
     if _has_active_sell_order_pending(stock) or _has_open_pending_entry_orders(stock):
+        _observe_early_tp_precondition("pending_exit_or_entry_order")
         return False
     if stock.get("pending_add_order") or stock.get("pending_add_ord_no"):
+        _observe_early_tp_precondition("pending_add_order")
         return False
     observation_window_sec = max(
         2.0, _safe_float(policy.get("observation_window_sec"), 20.0)
     )
     if now_ts - buy_epoch > observation_window_sec:
+        _observe_early_tp_precondition(
+            "observation_window_expired",
+            observation_window_sec=round(observation_window_sec, 3),
+            observation_age_sec=round(max(0.0, now_ts - buy_epoch), 3),
+        )
         return False
-    probe_phase = str(stock.get("entry_split_probe_phase") or "").strip()
     bundle_complete = probe_phase in {"", "complete", "partial_complete", "aborted"}
     samples = [
         item
@@ -55316,7 +55558,6 @@ def _maybe_manage_early_volatility_tp(
             or quote_reason in {"ws_only_fresh", "rest_only_fresh"}
         )
     )
-    cycle_id = _early_volatility_tp_cycle_id(stock)
     decision = resolve_early_volatility_tp(
         EarlyVolatilityTPContext(
             position_cycle_id=cycle_id,
@@ -55355,6 +55596,18 @@ def _maybe_manage_early_volatility_tp(
             ),
         )
     )
+    observation_signature = "|".join(
+        (
+            cycle_id,
+            str(decision.eligible).lower(),
+            decision.reason,
+            str(_safe_int(stock.get("buy_qty"), 0)),
+            probe_phase or "none",
+            str(quote_fresh).lower(),
+            str(quote_conflict).lower(),
+            _early_volatility_tp_direction_state(stock, prices),
+        )
+    )
     _mutate_stock_state(
         stock,
         set_fields={
@@ -55363,8 +55616,51 @@ def _maybe_manage_early_volatility_tp(
             "early_volatility_tp_cohort": cohort,
             "early_volatility_tp_broker_route": broker_route,
             "early_volatility_tp_policy_version": decision.policy_version,
+            "early_volatility_tp_last_observation_signature": observation_signature,
         },
     )
+    if str(stock.get("early_volatility_tp_logged_observation_signature") or "") != (
+        observation_signature
+    ):
+        _log_holding_pipeline(
+            stock,
+            code,
+            "early_volatility_tp_decision_observed",
+            **decision.as_fields(),
+            entry_bundle_phase=probe_phase or "none",
+            entry_bundle_complete=bundle_complete,
+            holding_qty=_safe_int(stock.get("buy_qty"), 0),
+            quote_fresh=quote_fresh,
+            quote_conflict=quote_conflict,
+            observation_window_sec=round(observation_window_sec, 3),
+            observation_age_sec=round(max(0.0, now_ts - buy_epoch), 3),
+            metric_role="funnel_count",
+            decision_authority=(
+                "scalp_early_volatility_partial_tp_eligibility_observation"
+            ),
+            window_policy="same_position_cycle_state_change",
+            sample_floor="1_policy_evaluation",
+            primary_decision_metric="eligibility_reason",
+            source_quality_gate=(
+                "explicit_cohort_and_broker_route_fresh_conflict_free_quote"
+            ),
+            allowed_runtime_apply=False,
+            forbidden_uses=(
+                "standalone_threshold_mutation|cross_cohort_attribution_merge|"
+                "sim_real_mix|hard_safety_bypass|broker_guard_bypass"
+            ),
+            actual_order_submitted=False,
+            broker_order_forbidden=not decision.eligible,
+            runtime_effect=False,
+        )
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                "early_volatility_tp_logged_observation_signature": (
+                    observation_signature
+                )
+            },
+        )
     if not decision.eligible:
         return False
     broker_qty = _reconcile_early_volatility_tp_inventory(stock, code)
@@ -59458,7 +59754,11 @@ def _submit_entry_split_probe_residual_locked(
         return False
     if now_ts - filled_at > timeout_sec:
         _abort_entry_split_probe_residual(
-            stock, code, "residual_revalidation_timeout", preserve_position=True
+            stock,
+            code,
+            "residual_revalidation_timeout",
+            preserve_position=True,
+            now_ts=now_ts,
         )
         return False
     if phase == "probe_recheck_pending" and now_ts < _safe_float(
@@ -59639,6 +59939,9 @@ def _submit_entry_split_probe_residual_locked(
                     "entry_split_probe_direction_state": direction_fields.get(
                         "post_probe_direction_state"
                     ),
+                    "entry_split_probe_direction_reason": direction_fields.get(
+                        "post_probe_direction_reason"
+                    ),
                     "entry_split_probe_continuation_action": "DEFER",
                 },
             )
@@ -59718,6 +60021,9 @@ def _submit_entry_split_probe_residual_locked(
                     "entry_split_probe_recheck_count": recheck_count,
                     "entry_split_probe_deferred_once": True,
                     "entry_split_probe_direction_state": "UNKNOWN",
+                    "entry_split_probe_direction_reason": (
+                        "post_probe_resolver_unavailable"
+                    ),
                     "entry_split_probe_continuation_action": "DEFER",
                 },
             )
@@ -59770,6 +60076,9 @@ def _submit_entry_split_probe_residual_locked(
                     "entry_split_probe_deferred_once": True,
                     "entry_split_probe_direction_state": direction_fields.get(
                         "post_probe_direction_state"
+                    ),
+                    "entry_split_probe_direction_reason": direction_fields.get(
+                        "post_probe_direction_reason"
                     ),
                     "entry_split_probe_continuation_action": "DEFER",
                 },
@@ -59865,6 +60174,7 @@ def _submit_entry_split_probe_residual_locked(
             code,
             "residual_revalidation_timeout",
             preserve_position=True,
+            now_ts=now_ts,
         )
         return False
 

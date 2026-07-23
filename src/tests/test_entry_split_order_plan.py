@@ -703,6 +703,11 @@ def test_post_sell_candidate_preserves_entry_split_variant_metadata(
     stock = {
         "name": "TEST",
         "strategy": "SCALPING",
+        "fast_exit_decision_mark_price": 1012,
+        "fast_exit_decision_executable_sell_price": 1010,
+        "fast_exit_decision_peak_price": 1020,
+        "fast_exit_decision_quote_state": "consistent",
+        "fast_exit_decision_quote_reason": "ok",
         "pending_entry_orders": [
             {
                 "entry_split_order_policy_applied": True,
@@ -738,6 +743,10 @@ def test_post_sell_candidate_preserves_entry_split_variant_metadata(
     assert payload["entry_split_order_variant_id"] == "equal_50_50_offset_0pct_0_3pct"
     assert payload["entry_split_order_price_offsets_ticks"] == "0,1"
     assert payload["entry_split_order_runtime_default_policy_applied"] is True
+    assert payload["exit_decision_mark_price"] == 1012
+    assert payload["exit_decision_executable_sell_price"] == 1010
+    assert payload["exit_decision_peak_price"] == 1020
+    assert payload["actual_fill_price"] == 1010
 
 
 def test_allocator_preserves_qty_and_respects_leg_limits(monkeypatch, tmp_path):

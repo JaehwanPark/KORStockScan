@@ -1272,6 +1272,76 @@ def test_probe_residual_timeout_keeps_one_share_and_releases_pyramid_recheck(
     assert scale_in.get("reason") != "entry_split_probe_scale_in_forbidden"
 
 
+def test_probe_residual_source_quality_timeout_releases_guarded_scale_in_recheck(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        state_handlers,
+        "_rising_missed_ai_action_guard_active",
+        lambda **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        state_handlers, "_log_entry_pipeline", lambda *_args, **_kwargs: None
+    )
+    stock = {
+        "status": "HOLDING",
+        "buy_qty": 1,
+        "entry_filled_qty": 1,
+        "entry_split_probe_requested_qty": 41,
+        "entry_split_probe_direction_reason": "post_probe_ai_action_not_fresh",
+    }
+
+    state_handlers._abort_entry_split_probe_residual(
+        stock,
+        "123456",
+        "residual_revalidation_timeout",
+        preserve_position=True,
+        now_ts=100.0,
+    )
+
+    assert stock["entry_split_probe_soft_abort"] is True
+    assert stock["entry_split_probe_scale_in_forbidden"] is False
+    assert stock["probe_expand_forbidden"] is False
+    assert stock["entry_split_probe_source_quality_recheck_released"] is True
+    assert stock["entry_split_probe_source_quality_recheck_unfilled_qty"] == 40
+    assert stock["entry_split_probe_scale_in_recheck_reason"].endswith(
+        ":source_quality_recovery"
+    )
+
+
+def test_probe_residual_directional_weak_timeout_remains_terminal_with_action_guard(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        state_handlers,
+        "_rising_missed_ai_action_guard_active",
+        lambda **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        state_handlers, "_log_entry_pipeline", lambda *_args, **_kwargs: None
+    )
+    stock = {
+        "status": "HOLDING",
+        "buy_qty": 1,
+        "entry_filled_qty": 1,
+        "entry_split_probe_requested_qty": 41,
+        "entry_split_probe_direction_reason": "post_probe_multi_group_weak",
+    }
+
+    state_handlers._abort_entry_split_probe_residual(
+        stock,
+        "123456",
+        "residual_revalidation_timeout",
+        preserve_position=True,
+        now_ts=100.0,
+    )
+
+    assert stock["entry_split_probe_soft_abort"] is False
+    assert stock["entry_split_probe_scale_in_forbidden"] is True
+    assert stock["probe_expand_forbidden"] is True
+    assert stock["entry_split_probe_source_quality_recheck_released"] is False
+
+
 def test_rising_missed_total_qty_owns_scout_state_and_completed_bundle_stops_upgrade():
     stock = {
         "status": "HOLDING",
