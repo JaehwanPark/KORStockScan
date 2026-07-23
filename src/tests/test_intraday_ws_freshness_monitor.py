@@ -176,6 +176,52 @@ def test_build_report_surfaces_provider_none_as_separate_incident(tmp_path):
     }
 
 
+def test_build_report_surfaces_explicit_scanner_stale_backoff_separately(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-13.jsonl"
+    threshold_path = tmp_path / "threshold_events_2026-07-13.jsonl"
+    _write_jsonl(
+        pipeline_path,
+        [
+            _event(
+                "scalping_scanner_watching_runtime_skip",
+                {
+                    "skip_reason": "scanner_fast_precheck_budget_reallocated",
+                    "fast_precheck_observed_reason": "scanner_ws_stale_backoff_active",
+                    "scanner_ws_stale_backoff_reason": "persistent_ws_gap",
+                    "ws_last_strength_history_age_ms": "7886.226",
+                },
+                code="047920",
+            )
+        ],
+    )
+    _write_jsonl(threshold_path, [])
+
+    report = mod.build_report(
+        "2026-07-13",
+        pipeline_path=pipeline_path,
+        threshold_path=threshold_path,
+        generated_at="fixed",
+    )
+
+    assert report["pipeline_counts"]["decision_stage_stale_backoff"] == 1
+    assert report["pipeline_counts"].get("subscription_stale", 0) == 0
+    assert report["by_stage"]["decision_stage_stale_backoff"] == [
+        {
+            "stage": "scalping_scanner_watching_runtime_skip",
+            "count": 1,
+        }
+    ]
+    assert report["by_symbol"]["decision_stage_stale_backoff"] == [
+        {"stock_code": "047920", "count": 1}
+    ]
+    assert {item["order_id"] for item in report["workorder_directives"]} == {
+        "order_ws_decision_stage_stale_backoff_attribution"
+    }
+    contract = report["decision_stage_stale_backoff_metric_contract"]
+    assert contract["runtime_effect"] is False
+    assert contract["decision_authority"] == "instrumentation_only_no_runtime_mutation"
+
+
 def test_write_report_outputs_monitor_and_workorder_files(tmp_path, monkeypatch):
     monkeypatch.setattr(mod, "REPORT_DIR", tmp_path / "monitor")
     monkeypatch.setattr(mod, "WORKORDER_REPORT_DIR", tmp_path / "workorder-report")

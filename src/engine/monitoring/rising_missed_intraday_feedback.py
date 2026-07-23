@@ -1700,12 +1700,19 @@ def _tp1_effective_venue(fields: dict[str, Any]) -> str:
         str(
             fields.get("rising_missed_effective_venue")
             or fields.get("effective_venue")
+            or fields.get("venue")
             or ""
         )
         .strip()
         .upper()
     )
-    return value if value in {"KRX", "NXT"} else "unknown"
+    return value if value in {"KRX", "NXT", "PREMARKET_KRX_LIKE"} else "unknown"
+
+
+def _tp1_venue_resolution(fields: dict[str, Any]) -> str:
+    """Preserve the explicit producer resolution without session inference."""
+
+    return str(fields.get("venue_resolution") or "missing").strip() or "missing"
 
 
 def _tp1_post_block_measurement_state(
@@ -2227,6 +2234,7 @@ def _build_tp1_first_hit_labels(
                 "candidate_stage": candidate.get("stage"),
                 "candidate_lane": fields.get("rising_missed_tp1_candidate_lane"),
                 "effective_venue": _tp1_effective_venue(fields),
+                "venue_resolution": _tp1_venue_resolution(fields),
                 "market_session_bucket": fields.get(
                     "rising_missed_market_session_bucket"
                 )
@@ -2346,6 +2354,8 @@ def _build_tp1_counterfactual_submit_safety(
                 ),
                 "counterfactual_action": action,
                 "counterfactual_risks": risks,
+                "effective_venue": _tp1_effective_venue(fields),
+                "venue_resolution": _tp1_venue_resolution(fields),
                 **_tp1_counterfactual_decision_context(fields),
                 "runtime_effect": False,
                 "allowed_runtime_apply": False,
@@ -2540,6 +2550,7 @@ def _build_tp1_counterfactual_first_hit_labels(
                 "selector_reason": fields.get("selector_reason"),
                 "selector_deferred": _boolish(fields.get("selector_deferred")),
                 "effective_venue": _tp1_effective_venue(fields),
+                "venue_resolution": _tp1_venue_resolution(fields),
                 "market_session_bucket": fields.get(
                     "rising_missed_market_session_bucket"
                 )
@@ -2633,9 +2644,7 @@ def _build_nxt_session_observation(
         session_bucket = str(
             fields.get("rising_missed_market_session_bucket") or "missing"
         ).strip()
-        effective_venue = str(
-            fields.get("rising_missed_effective_venue") or "unknown"
-        ).strip()
+        effective_venue = _tp1_effective_venue(fields)
         is_exact_nxt_cohort = bool(
             session_bucket == "nxt_entry_window" and effective_venue == "NXT"
         )

@@ -56,6 +56,19 @@ METRIC_CONTRACT = {
     "broker_order_forbidden": True,
 }
 
+DECISION_STAGE_STALE_BACKOFF_METRIC_CONTRACT = {
+    "metric_role": "source_quality_diagnostic",
+    "decision_authority": "instrumentation_only_no_runtime_mutation",
+    "window_policy": "daily_intraday_operational_by_decision_stage",
+    "sample_floor": "at_least_one_explicit_stale_backoff_event",
+    "primary_decision_metric": "decision_stage_stale_backoff_count",
+    "source_quality_gate": "explicit_scanner_stale_or_backoff_reason",
+    "forbidden_uses": FORBIDDEN_USES,
+    "runtime_effect": False,
+    "allowed_runtime_apply": False,
+    "broker_order_forbidden": True,
+}
+
 WS_AGE_FIELDS_MS = (
     "ws_last_0b_age_ms",
     "ws_last_0d_age_ms",
@@ -235,9 +248,22 @@ def _pipeline_event_class(row: dict[str, Any], *, stale_ms: float) -> dict[str, 
     reason_values = {
         str(row.get("source_quality_block_reason") or "").strip(),
         str(row.get("reason") or "").strip(),
+        str(row.get("skip_reason") or "").strip(),
+        str(row.get("fast_precheck_reason") or "").strip(),
+        str(row.get("fast_precheck_observed_reason") or "").strip(),
+        str(row.get("scanner_ws_stale_backoff_reason") or "").strip(),
         str(row.get("risk_state") or "").strip(),
         str(row.get("zero_context_blocker") or "").strip(),
     }
+    decision_stage_stale_backoff_reasons = {
+        "persistent_ws_gap",
+        "scanner_ws_stale_backoff_active",
+        "stale_ws_snapshot",
+        "ws_snapshot_missing_or_zero",
+    }
+    decision_stage_stale_backoff = bool(
+        reason_values & decision_stage_stale_backoff_reasons
+    )
     trade_tick_quiet = (
         _boolish(row.get("trade_tick_quiet"))
         or "trade_tick_quiet" in reason_values
@@ -287,6 +313,7 @@ def _pipeline_event_class(row: dict[str, Any], *, stale_ms: float) -> dict[str, 
         "time_bucket": _time_bucket(row),
         "trade_tick_quiet": bool(trade_tick_quiet),
         "subscription_stale": bool(subscription_stale),
+        "decision_stage_stale_backoff": decision_stage_stale_backoff,
         "both_ws_stale": bool(both_stale),
         "fresh_0d_stale_0b": bool(quiet_by_age),
         "provider_none": _row_provider_none(row),
@@ -418,6 +445,35 @@ def _build_workorders(
                 ],
             }
         )
+    if counts.get("decision_stage_stale_backoff", 0):
+        orders.append(
+            {
+                **base,
+                "order_id": "order_ws_decision_stage_stale_backoff_attribution",
+                "title": "WS decision-stage stale backoff attribution",
+                "priority": 1,
+                "intent": (
+                    "Attribute explicit scanner stale/backoff rows to subscription repair, "
+                    "decision-stage freshness, and watchlist eviction timing without weakening "
+                    "the stale submit boundary."
+                ),
+                "evidence": [
+                    "decision_stage_stale_backoff_count="
+                    f"{counts.get('decision_stage_stale_backoff', 0)}"
+                ],
+                "files_likely_touched": [
+                    "src/engine/kiwoom_websocket.py",
+                    "src/engine/sniper.py",
+                    "src/engine/monitoring/intraday_ws_freshness_monitor.py",
+                    "src/tests/test_intraday_ws_freshness_monitor.py",
+                ],
+                "acceptance_tests": [
+                    "PYTHONPATH=. .venv/bin/python -m pytest -q "
+                    "src/tests/test_kiwoom_websocket.py "
+                    "src/tests/test_intraday_ws_freshness_monitor.py",
+                ],
+            }
+        )
     if counts.get("trade_tick_quiet", 0) or snapshot.get("trade_tick_quiet_count", 0):
         orders.append(
             {
@@ -534,6 +590,7 @@ def build_report(
         for key in (
             "trade_tick_quiet",
             "subscription_stale",
+            "decision_stage_stale_backoff",
             "both_ws_stale",
             "fresh_0d_stale_0b",
             "provider_none",
@@ -549,6 +606,7 @@ def build_report(
         for key in (
             "trade_tick_quiet",
             "subscription_stale",
+            "decision_stage_stale_backoff",
             "both_ws_stale",
             "provider_none",
         ):
@@ -568,6 +626,9 @@ def build_report(
         "generated_at": generated_at or datetime.now(tz=KST).isoformat(),
         "report_type": REPORT_TYPE,
         "metric_contract": METRIC_CONTRACT,
+        "decision_stage_stale_backoff_metric_contract": (
+            DECISION_STAGE_STALE_BACKOFF_METRIC_CONTRACT
+        ),
         "source_paths": {name: str(path) for name, path in paths.items()},
         "source_missing": source_missing,
         "subscription_snapshot_path": (
@@ -582,6 +643,9 @@ def build_report(
             ),
             "subscription_stale_rate_pct": _rate_pct(
                 int(counts.get("subscription_stale", 0)), total_events
+            ),
+            "decision_stage_stale_backoff_rate_pct": _rate_pct(
+                int(counts.get("decision_stage_stale_backoff", 0)), total_events
             ),
             "both_ws_stale_rate_pct": _rate_pct(
                 int(counts.get("both_ws_stale", 0)), total_events

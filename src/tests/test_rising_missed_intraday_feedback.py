@@ -39,6 +39,8 @@ def test_tp1_first_hit_label_prefers_gross_target_and_requires_actual_costs_for_
                 "rising_missed_tp1_candidate_reason": "rising_missed_tp1_candidate_pass",
                 "rising_missed_tp1_candidate_lane": "low_rebound",
                 "current_price_observed": 10000,
+                "venue": "PREMARKET_KRX_LIKE",
+                "venue_resolution": "canonicalized:rising_missed_effective_venue",
             },
             emitted_at="2026-07-14T09:00:00+09:00",
         ),
@@ -64,7 +66,57 @@ def test_tp1_first_hit_label_prefers_gross_target_and_requires_actual_costs_for_
     assert label["gross_first_hit_label"] == "gross_target_first"
     assert label["first_hit_move_pct"] == 1.4
     assert label["net_label"] == "unavailable_fee_tax_missing"
+    assert label["effective_venue"] == "PREMARKET_KRX_LIKE"
+    assert label["venue_resolution"] == "canonicalized:rising_missed_effective_venue"
     assert report["summary"]["rising_missed_tp1_net_confirmed_count"] == 0
+
+
+def test_tp1_counterfactual_preserves_explicit_premarket_venue_provenance(
+    tmp_path,
+):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-14.jsonl"
+    rows = [
+        _event(
+            710,
+            "000710",
+            "premarket",
+            "rising_missed_tp1_counterfactual_submit_safety",
+            {
+                "rising_missed_tp1_evaluation_id": "premarket-eval-1",
+                "rising_missed_tp1_effective_price": 10000,
+                "venue": "PREMARKET_KRX_LIKE",
+                "venue_resolution": ("canonicalized:rising_missed_effective_venue"),
+                "market_session_bucket": "krx_like_premarket",
+                "selector_reason": "rising_missed_tp1_hard_negative_evidence",
+                "rising_missed_tp1_counterfactual_submit_safety_action": (
+                    "HARD_VETO_EXPECTED"
+                ),
+            },
+            emitted_at="2026-07-14T08:05:00+09:00",
+        ),
+        _event(
+            999,
+            "000999",
+            "watermark",
+            "holding_observation",
+            {"current_price_observed": 10000},
+            emitted_at="2026-07-14T08:06:01+09:00",
+            pipeline="HOLDING_PIPELINE",
+        ),
+    ]
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows), encoding="utf-8"
+    )
+
+    report = mod.build_report(
+        "2026-07-14", pipeline_path=pipeline_path, generated_at="fixed"
+    )
+
+    observation = report["rising_missed_tp1_counterfactual_submit_safety_rows"][0]
+    label = report["rising_missed_tp1_counterfactual_first_hit_label_rows"][0]
+    for row in (observation, label):
+        assert row["effective_venue"] == "PREMARKET_KRX_LIKE"
+        assert row["venue_resolution"] == "canonicalized:rising_missed_effective_venue"
 
 
 def test_nxt_session_observation_separates_micro_state_and_effective_order_type(
