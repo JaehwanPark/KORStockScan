@@ -79,6 +79,7 @@ from src.engine.scalping.position_sizing_allocator import (
     max_position_qty_cap_from_budget,
     resolve_scalping_allocation,
 )
+from src.engine.scalping.position_peak_ledger import POSITION_PEAK_LEDGER
 from src.engine.scalping.entry_ai_gate import (
     entry_buy_decision_allowed,
     evaluate_ai_score_prior,
@@ -6554,7 +6555,28 @@ def _restore_holding_runtime_state(targets):
             stock["holding_started_at"] = stock.get("buy_time")
 
         if code and buy_price > 0:
-            highest_prices[code] = max(_safe_float(highest_prices.get(code)), buy_price)
+            restored_peak = 0
+            restore_reason = "not_scalping"
+            if strategy == "SCALPING":
+                try:
+                    restored_peak, restore_reason = POSITION_PEAK_LEDGER.restore_peak(
+                        stock
+                    )
+                except Exception as exc:
+                    restore_reason = f"ledger_restore_failed:{type(exc).__name__}"
+                    log_error(
+                        f"[SCALP_PEAK_LEDGER] {stock.get('name', code)}({code}) "
+                        f"restore failed: {exc}"
+                    )
+            highest_prices[code] = max(
+                _safe_float(highest_prices.get(code)),
+                buy_price,
+                float(restored_peak or 0),
+            )
+            if strategy == "SCALPING":
+                stock["position_peak_restore_reason"] = restore_reason
+                stock["position_peak_restored_price"] = int(restored_peak or 0)
+                stock["position_peak_runtime_price"] = int(highest_prices[code])
 
         if strategy == "SCALPING":
             stock.setdefault("last_ai_reviewed_at", None)

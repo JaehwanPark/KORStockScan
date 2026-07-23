@@ -3,6 +3,8 @@ import json
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from src.engine import observation_source_quality_audit as audit
 
 
@@ -545,6 +547,89 @@ def test_observation_source_quality_audit_warns_on_high_rate_unknown_tokens(
     assert report["summary"]["review_warning_count"] == 1
     assert report["summary"]["hard_blocking_contract_gap_count"] == 0
     assert finding["runtime_effect"] is False
+
+
+def test_entry_latency_block_accepts_explicit_fail_closed_candle_gap(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-07-23",
+        [
+            _event(
+                "scalp_entry_action_decision_snapshot",
+                {
+                    "tick_source_quality_fields_sent": True,
+                    "tick_accel_source": "unavailable_fail_closed",
+                    "tick_context_quality": "unavailable_fail_closed",
+                    "quote_age_source": "unavailable_fail_closed",
+                    "candidate_id": "ADM-LATENCY-BLOCK",
+                    "entry_adm_candidate_id": "ADM-LATENCY-BLOCK",
+                    "ai_score": "50",
+                    "ai_action": "WAIT",
+                    "chosen_action": "SKIP_PRE_SUBMIT_SAFETY",
+                    "eligible_actions": "SKIP_PRE_SUBMIT_SAFETY",
+                    "rejected_actions": "BUY_NOW",
+                    "source_stage": "latency_block",
+                    "metric_role": "action_decision_matrix",
+                    "decision_authority": "entry_advisory_prompt_context_only",
+                    "source_quality_gate": "entry pipeline event + post-sell sim evaluation join when available",
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "forbidden_uses": "runtime_threshold_apply/order_submit/provider_route_change/bot_restart",
+                    "tick_acceleration_ratio": "not_evaluated",
+                    "tick_acceleration_ratio_raw": "not_evaluated",
+                    "recent_5tick_seconds": "not_evaluated",
+                    "prev_5tick_seconds": "not_evaluated",
+                    "tick_accel_effective_recent_5tick_seconds": "not_evaluated",
+                    "buy_pressure_10t": "not_evaluated_runtime_block",
+                    "curr_vs_micro_vwap_bp": 0.0,
+                    "curr_vs_ma5_bp": 0.0,
+                    "micro_vwap_available": False,
+                    "minute_candle_context_quality": "unavailable_fail_closed",
+                    "minute_candle_window_fresh": False,
+                    "minute_candle_latest_age_ms": -1.0,
+                    "minute_candle_evaluation_state": "unavailable_fail_closed",
+                },
+            )
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-07-23")
+
+    contract = report["stage_contracts"]["scalp_entry_action_decision_snapshot"]
+    assert contract["status"] == "pass"
+    assert contract["invalid_label_violations"] == {}
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("source_stage", "entry_candidate"),
+        ("minute_candle_evaluation_state", "available"),
+        ("actual_order_submitted", True),
+        ("broker_order_forbidden", False),
+    ),
+)
+def test_entry_candle_gap_exemption_rejects_authoritative_or_non_block_rows(
+    field, value
+):
+    fields = {
+        "source_stage": "latency_block",
+        "minute_candle_evaluation_state": "unavailable_fail_closed",
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    fields[field] = value
+
+    assert not audit._blocked_observation_records_fail_closed_source_gap(
+        "scalp_entry_action_decision_snapshot",
+        fields,
+        source="minute_candle",
+    )
 
 
 def test_observation_source_quality_audit_reviews_entry_block_source_quality_unknown(

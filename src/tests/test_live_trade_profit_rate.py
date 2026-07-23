@@ -550,6 +550,57 @@ def test_periodic_account_sync_does_not_remove_manual_control_exclusion_on_db_er
     assert removals == []
 
 
+def test_periodic_account_sync_preserves_original_buy_time_for_recovered_fill(
+    monkeypatch,
+):
+    original_buy_time = datetime(2026, 7, 23, 12, 12, 28)
+    record = type(
+        "Record",
+        (),
+        {
+            "stock_code": "066570",
+            "stock_name": "LG전자",
+            "status": "BUY_ORDERED",
+            "buy_price": 182_350.0,
+            "buy_qty": 1,
+            "buy_time": original_buy_time,
+            "scale_in_locked": False,
+        },
+    )()
+
+    sniper_sync.KIWOOM_TOKEN = "token"
+    sniper_sync.DB = _SyncDB([], [record])
+    sniper_sync.ACTIVE_TARGETS = [
+        {
+            "code": "066570",
+            "status": "BUY_ORDERED",
+            "buy_time": original_buy_time,
+        }
+    ]
+    sniper_sync.HIGHEST_PRICES = {}
+    sniper_sync.STATE_LOCK = _DummyLock()
+    monkeypatch.setattr(
+        sniper_sync.kiwoom_utils,
+        "get_account_balance_kt00005",
+        lambda token: (
+            [{"code": "066570", "qty": 1, "buy_price": 182_350}],
+            {"KRX"},
+        ),
+    )
+    monkeypatch.setattr(
+        sniper_sync,
+        "_recover_missing_broker_holdings",
+        lambda session, real_codes: 0,
+    )
+
+    sniper_sync.periodic_account_sync()
+
+    assert record.status == "HOLDING"
+    assert record.buy_time == original_buy_time
+    assert sniper_sync.ACTIVE_TARGETS[0]["status"] == "HOLDING"
+    assert sniper_sync.ACTIVE_TARGETS[0]["holding_started_at"] == original_buy_time
+
+
 def test_periodic_account_sync_recovers_broker_only_holding_from_watching_record(
     monkeypatch,
 ):

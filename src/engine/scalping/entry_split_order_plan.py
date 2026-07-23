@@ -205,10 +205,26 @@ def recover_probe_runtime_bundle_for_stock(
         persisted_fill_qty = _safe_int(bundle.get("fill_qty"), 0)
         if phase == "probe_recheck_pending" and actual_qty == 1:
             close_reason = "post_probe_recheck_cleared_on_restart"
+            source_quality_recheck = _safe_bool(
+                bundle.get("source_quality_recheck_pending")
+            )
             bundle.update(
                 {
                     "phase": "aborted",
                     "reason": close_reason,
+                    "soft_abort": source_quality_recheck,
+                    "scale_in_recheck_allowed": source_quality_recheck,
+                    "scale_in_recheck_reason": (
+                        f"{close_reason}:source_quality_recovery"
+                        if source_quality_recheck
+                        else "hard_or_non_directional_abort"
+                    ),
+                    "source_quality_recheck_released": source_quality_recheck,
+                    "source_quality_recheck_unfilled_qty": (
+                        max(0, requested_qty - actual_qty)
+                        if source_quality_recheck
+                        else 0
+                    ),
                     "recovered_actual_qty": actual_qty,
                     "restart_recovered_at": datetime.now(timezone.utc).isoformat(),
                     "updated_at": datetime.now(timezone.utc).isoformat(),
@@ -221,7 +237,23 @@ def recover_probe_runtime_bundle_for_stock(
                     "entry_split_probe_phase": "aborted",
                     "entry_split_probe_bundle_id": bundle_id,
                     "entry_split_probe_abort_reason": close_reason,
-                    "entry_split_probe_scale_in_forbidden": True,
+                    "entry_split_probe_scale_in_forbidden": (
+                        not source_quality_recheck
+                    ),
+                    "entry_split_probe_soft_abort": source_quality_recheck,
+                    "entry_split_probe_scale_in_recheck_allowed": (
+                        source_quality_recheck
+                    ),
+                    "entry_split_probe_scale_in_recheck_reason": bundle[
+                        "scale_in_recheck_reason"
+                    ],
+                    "entry_split_probe_source_quality_recheck_released": (
+                        source_quality_recheck
+                    ),
+                    "entry_split_probe_source_quality_recheck_unfilled_qty": bundle[
+                        "source_quality_recheck_unfilled_qty"
+                    ],
+                    "entry_split_probe_source_quality_recheck_pending": False,
                     "entry_requested_qty": actual_qty,
                     "requested_buy_qty": actual_qty,
                 }
@@ -274,6 +306,7 @@ def recover_probe_runtime_bundle_for_stock(
                 "circuit_open": True,
             }
 
+        soft_abort = _safe_bool(bundle.get("soft_abort"))
         recovery_fields = {
             "entry_split_probe_phase": phase,
             "entry_split_probe_bundle_id": bundle_id,
@@ -295,9 +328,31 @@ def recover_probe_runtime_bundle_for_stock(
                 "residual_submitted",
                 "residual_partial_submitted",
             },
-            "entry_split_probe_scale_in_forbidden": phase != "complete",
-            "entry_requested_qty": requested_qty,
-            "requested_buy_qty": requested_qty,
+            "entry_split_probe_scale_in_forbidden": bool(
+                phase != "complete" and not soft_abort
+            ),
+            "entry_split_probe_soft_abort": soft_abort,
+            "entry_split_probe_scale_in_recheck_allowed": _safe_bool(
+                bundle.get("scale_in_recheck_allowed")
+            ),
+            "entry_split_probe_scale_in_recheck_reason": bundle.get(
+                "scale_in_recheck_reason"
+            ),
+            "entry_split_probe_source_quality_recheck_released": _safe_bool(
+                bundle.get("source_quality_recheck_released")
+            ),
+            "entry_split_probe_source_quality_recheck_released_at": bundle.get(
+                "source_quality_recheck_released_at"
+            ),
+            "entry_split_probe_source_quality_recheck_unfilled_qty": bundle.get(
+                "source_quality_recheck_unfilled_qty"
+            ),
+            "entry_split_probe_source_quality_recheck_reason": bundle.get(
+                "source_quality_recheck_reason"
+            ),
+            "entry_split_probe_source_quality_recheck_pending": False,
+            "entry_requested_qty": actual_qty if soft_abort else requested_qty,
+            "requested_buy_qty": actual_qty if soft_abort else requested_qty,
         }
         stock.update(
             {key: value for key, value in recovery_fields.items() if value is not None}

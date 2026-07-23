@@ -145,6 +145,7 @@ def test_holding_early_tp_receipt_stays_holding_and_resets_runner_peak(
         "code": "005930",
         "name": "test",
         "status": "HOLDING",
+        "buy_price": 10_000,
         "buy_qty": 10,
         "early_volatility_tp_position_cycle_id": "cycle-1",
         "early_volatility_tp_ord_no": "123",
@@ -158,6 +159,14 @@ def test_holding_early_tp_receipt_stays_holding_and_resets_runner_peak(
         "_EARLY_VOLATILITY_TP_LEDGER",
         EarlyTPRuntimeLedger(tmp_path / "receipt-ledger.json"),
     )
+    from src.engine.scalping.position_peak_ledger import PositionPeakRuntimeLedger
+
+    monkeypatch.setattr(
+        receipts,
+        "POSITION_PEAK_LEDGER",
+        PositionPeakRuntimeLedger(tmp_path / "peak-ledger.json"),
+    )
+    monkeypatch.setattr(receipts, "highest_prices", {"005930": 10_250})
 
     receipts._handle_early_volatility_tp_sell_execution(
         target_id=1,
@@ -174,7 +183,12 @@ def test_holding_early_tp_receipt_stays_holding_and_resets_runner_peak(
     assert stock["buy_qty"] == 7
     assert stock["early_volatility_tp_state"] == "FILLED_RUNNER"
     assert stock["early_volatility_tp_applied"] is True
-    assert stock["early_volatility_tp_runner_peak_reset_pending"] is True
+    assert stock["early_volatility_tp_runner_peak_reset_pending"] is False
+    assert receipts.highest_prices["005930"] == 10_100
+    assert receipts.POSITION_PEAK_LEDGER.restore_peak(stock) == (
+        10_100,
+        "ledger_peak_restored",
+    )
     assert record.status == "HOLDING"
     assert record.buy_qty == 7
 
@@ -235,6 +249,11 @@ def test_position_cycle_reset_and_sell_snapshot_cover_early_tp_and_fast_exit():
         "fast_exit_decision_peak_price",
         "fast_exit_decision_quote_state",
         "fast_exit_decision_quote_reason",
+        "exit_decision_mark_price",
+        "exit_decision_executable_sell_price",
+        "exit_decision_peak_price",
+        "exit_decision_quote_state",
+        "exit_decision_quote_reason",
     }.issubset(set(receipts._SELL_RECEIPT_SNAPSHOT_KEYS))
 
 

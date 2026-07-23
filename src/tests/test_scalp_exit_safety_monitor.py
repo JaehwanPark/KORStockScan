@@ -1,9 +1,18 @@
 from datetime import datetime
 import threading
 
+import pytest
+
 from src.engine import sniper_state_handlers as handlers
 from src.engine import sniper_trade_utils
 from src.engine.scalping.exit_safety_monitor import ScalpExitSafetyMonitor
+
+
+@pytest.fixture(autouse=True)
+def _disable_real_peak_ledger(monkeypatch):
+    monkeypatch.setattr(
+        handlers, "_persist_scalping_position_peak", lambda *args, **kwargs: None
+    )
 
 
 def test_monitor_polls_only_holding_targets():
@@ -170,6 +179,244 @@ def test_fast_exit_claims_once_and_dispatches_without_holding_ai(monkeypatch):
         is False
     )
     assert len(dispatches) == 1
+
+
+def test_dongyang_wide_spread_trailing_uses_confirmed_rest_bid(monkeypatch):
+    now_ts = 1_784_778_400.0
+    active_date = datetime.fromtimestamp(now_ts, tz=handlers._KST).date().isoformat()
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_FAST_EXIT_GUARD_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_FAST_EXIT_GUARD_ACTIVE_DATE", active_date)
+    monkeypatch.setattr(handlers, "_has_active_sell_order_pending", lambda stock: False)
+    monkeypatch.setattr(handlers, "_is_any_simulated_position", lambda *args: False)
+    monkeypatch.setattr(
+        handlers, "_manual_control_exclusion_blocked", lambda *args, **kwargs: False
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_fast_exit_execution_route_fields",
+        lambda *args, **kwargs: {
+            "fast_exit_broker_route": "SOR",
+            "fast_exit_execution_cohort": "KRX",
+            "fast_exit_route_source_quality_blocked": False,
+            "fast_exit_broker_route_blocked": False,
+        },
+    )
+
+    def quote_fields(*_args, rest_snapshot=None, **_kwargs):
+        if rest_snapshot:
+            return (
+                {
+                    "quote_consistency_state": "consistent",
+                    "quote_consistency_reason": "ok",
+                    "quote_consistency_rest_age_ms": 10.0,
+                },
+                1134,
+                1135,
+                1133,
+            )
+        return (
+            {
+                "quote_consistency_state": "consistent",
+                "quote_consistency_reason": "ok",
+            },
+            1133,
+            1145,
+            1121,
+        )
+
+    monkeypatch.setattr(handlers, "_build_quote_consistency_fields", quote_fields)
+    monkeypatch.setattr(
+        handlers,
+        "_fetch_rest_orderbook_snapshot_bounded",
+        lambda *args, **kwargs: (
+            {
+                "best_bid": 1133,
+                "best_ask": 1135,
+                "rest_received_ts": now_ts,
+            },
+            "ok",
+            12.0,
+        ),
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_scalp_trailing_loss_conversion_recheck_config",
+        lambda _now: {
+            "max_spread_bps": 150.0,
+            "rest_timeout_ms": 300,
+            "max_rest_age_ms": 1500.0,
+        },
+    )
+    monkeypatch.setattr(
+        handlers,
+        "calculate_net_profit_rate",
+        lambda buy, price: ((float(price) - float(buy)) / float(buy)) * 100.0,
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_rule_float",
+        lambda name, default=0.0: {
+            "SCALP_TRAILING_START_PCT": 0.6,
+            "SCALP_TRAILING_LIMIT_WEAK": 0.4,
+            "SCALP_TRAILING_LIMIT_STRONG": 0.8,
+        }.get(name, default),
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_holding_score_runtime_context",
+        lambda *args, **kwargs: {"usable_for_negative_exit": False},
+    )
+    monkeypatch.setattr(handlers, "_holding_score_role_log_fields", lambda context: {})
+    monkeypatch.setattr(
+        handlers, "_scalping_micro_estimator_log_fields", lambda **_kwargs: {}
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_evaluate_scalp_trailing_loss_conversion_recheck",
+        lambda **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_evaluate_scalp_trailing_continuation_recheck",
+        lambda **_kwargs: False,
+    )
+    logs = []
+    monkeypatch.setattr(
+        handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+    dispatches = []
+    monkeypatch.setattr(
+        handlers,
+        "_dispatch_scalp_preset_exit",
+        lambda **kwargs: dispatches.append(kwargs),
+    )
+    handlers.HIGHEST_PRICES = {"001520": 1140}
+    stock = {
+        "id": 117,
+        "name": "동양",
+        "code": "001520",
+        "strategy": "SCALPING",
+        "status": "HOLDING",
+        "buy_price": 1123,
+        "buy_qty": 1,
+    }
+
+    assert handlers.evaluate_and_dispatch_fast_scalp_exit(
+        stock, "001520", {"curr": 1133}, now_ts=now_ts
+    )
+    assert dispatches[0]["curr_p"] == 1134
+    assert dispatches[0]["ws_data"]["executable_sell_price"] == 1133
+    assert any(
+        stage == "scalp_trailing_wide_spread_recheck"
+        and fields["recheck_state"] == "confirmed"
+        for stage, fields in logs
+    )
+
+
+def test_wide_spread_trailing_defers_when_rest_bbo_is_not_narrow(monkeypatch):
+    now_ts = 1_784_778_400.0
+    active_date = datetime.fromtimestamp(now_ts, tz=handlers._KST).date().isoformat()
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_FAST_EXIT_GUARD_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_FAST_EXIT_GUARD_ACTIVE_DATE", active_date)
+    monkeypatch.setattr(handlers, "_has_active_sell_order_pending", lambda stock: False)
+    monkeypatch.setattr(handlers, "_is_any_simulated_position", lambda *args: False)
+    monkeypatch.setattr(
+        handlers, "_manual_control_exclusion_blocked", lambda *args, **kwargs: False
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_fast_exit_execution_route_fields",
+        lambda *args, **kwargs: {
+            "fast_exit_broker_route": "SOR",
+            "fast_exit_execution_cohort": "KRX",
+            "fast_exit_route_source_quality_blocked": False,
+            "fast_exit_broker_route_blocked": False,
+        },
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_build_quote_consistency_fields",
+        lambda *_args, **_kwargs: (
+            {
+                "quote_consistency_state": "consistent",
+                "quote_consistency_reason": "ok",
+                "quote_consistency_rest_age_ms": 10.0,
+            },
+            1133,
+            1145,
+            1121,
+        ),
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_fetch_rest_orderbook_snapshot_bounded",
+        lambda *args, **kwargs: (
+            {
+                "best_bid": 1121,
+                "best_ask": 1145,
+                "rest_received_ts": now_ts,
+            },
+            "ok",
+            12.0,
+        ),
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_scalp_trailing_loss_conversion_recheck_config",
+        lambda _now: {
+            "max_spread_bps": 150.0,
+            "rest_timeout_ms": 300,
+            "max_rest_age_ms": 1500.0,
+        },
+    )
+    monkeypatch.setattr(
+        handlers,
+        "calculate_net_profit_rate",
+        lambda buy, price: ((float(price) - float(buy)) / float(buy)) * 100.0,
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_rule_float",
+        lambda name, default=0.0: {
+            "SCALP_TRAILING_START_PCT": 0.6,
+            "SCALP_TRAILING_LIMIT_WEAK": 0.4,
+            "SCALP_TRAILING_LIMIT_STRONG": 0.8,
+        }.get(name, default),
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_holding_score_runtime_context",
+        lambda *args, **kwargs: {"usable_for_negative_exit": False},
+    )
+    monkeypatch.setattr(handlers, "_holding_score_role_log_fields", lambda context: {})
+    monkeypatch.setattr(handlers, "_log_holding_pipeline", lambda *args, **kwargs: None)
+    dispatches = []
+    monkeypatch.setattr(
+        handlers,
+        "_dispatch_scalp_preset_exit",
+        lambda **kwargs: dispatches.append(kwargs),
+    )
+    handlers.HIGHEST_PRICES = {"001520": 1140}
+    stock = {
+        "id": 117,
+        "name": "동양",
+        "code": "001520",
+        "strategy": "SCALPING",
+        "status": "HOLDING",
+        "buy_price": 1123,
+        "buy_qty": 1,
+    }
+
+    assert (
+        handlers.evaluate_and_dispatch_fast_scalp_exit(
+            stock, "001520", {"curr": 1133}, now_ts=now_ts
+        )
+        is False
+    )
+    assert dispatches == []
+    assert not stock.get("exit_token")
 
 
 def test_fast_exit_dispatch_survives_claim_logging_failure(monkeypatch):
