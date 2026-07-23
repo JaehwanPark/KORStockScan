@@ -16,13 +16,24 @@ def send_market_exit_now(code, qty, token):
     )
 
 
-def send_exit_best_ioc(code, qty, token):
+def send_exit_best_ioc(
+    code,
+    qty,
+    token,
+    *,
+    dmst_stex_tp=None,
+    reason_type=None,
+    strategy=None,
+):
     """[공통 긴급 청산 래퍼] 최유리(IOC, 16) 조건으로 즉각 청산 시도"""
     return kiwoom_orders.send_sell_order_market(
         code=code,
         qty=qty,
         token=token,
         order_type="16",
+        dmst_stex_tp=dmst_stex_tp,
+        reason_type=reason_type,
+        strategy=strategy,
     )
 
 

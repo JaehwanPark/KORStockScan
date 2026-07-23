@@ -315,6 +315,69 @@ def test_probe_receipt_marks_fill_once_and_schedules_residual(monkeypatch, tmp_p
     assert runtime_state["bundles"]["123456-probe-test"]["phase"] == "probe_filled"
 
 
+def test_probe_bundle_completion_rebaselines_peak_before_fast_monitor(monkeypatch):
+    class _NoopThread:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(receipts.threading, "Thread", _NoopThread)
+    monkeypatch.setattr(
+        receipts, "_log_holding_pipeline", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        receipts, "_refresh_scalp_preset_exit_order", lambda *args, **kwargs: True
+    )
+    monkeypatch.setattr(
+        receipts, "update_probe_runtime_bundle", lambda *args, **kwargs: None
+    )
+    receipts.highest_prices = {"123456": 10_200}
+    stock = {
+        "id": 1,
+        "name": "PROBE",
+        "code": "123456",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "buy_qty": 1,
+        "buy_price": 10_010,
+        "entry_requested_qty": 3,
+        "requested_buy_qty": 3,
+        "entry_filled_qty": 1,
+        "entry_fill_amount": 10_010,
+        "entry_split_probe_phase": "residual_submitted",
+        "entry_split_probe_bundle_id": "123456-probe-complete",
+        "pending_entry_orders": [
+            {
+                "tag": "entry_split_probe_residual_0",
+                "ord_no": "R1",
+                "qty": 2,
+                "filled_qty": 0,
+                "price": 10_000,
+                "status": "OPEN",
+            }
+        ],
+    }
+
+    receipts._handle_entry_buy_execution(
+        target_id=1,
+        target_stock=stock,
+        code="123456",
+        order_no="R1",
+        exec_price=10_000,
+        exec_qty=2,
+        now=datetime(2026, 7, 23, 10, 0, 0),
+    )
+
+    assert stock["entry_split_probe_phase"] == "complete"
+    assert stock["peak_rebaseline_pending"] is False
+    assert stock["peak_basis_qty"] == 3
+    assert stock["peak_basis_avg_price"] == pytest.approx(10_003.3333, abs=0.0001)
+    assert receipts.highest_prices["123456"] == pytest.approx(10_003.3333)
+
+
 def test_probe_fill_callback_uses_fresh_ws_and_submits_immediately(monkeypatch):
     now_ts = 1_774_150_400.0
     stock = {"name": "PROBE", "entry_split_probe_phase": "probe_filled"}

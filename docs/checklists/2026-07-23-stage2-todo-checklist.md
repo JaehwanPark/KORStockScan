@@ -25,17 +25,21 @@
 
 ## 장전 체크리스트 (08:45~09:00)
 
-- [ ] `[ThresholdEnvAutoApplyPreopen0723] threshold env 자동 apply 산출물 및 사용자 개입 여부 확인` (`Due: 2026-07-23`, `Slot: PREOPEN`, `TimeWindow: 08:50~08:55`, `Track: RuntimeStability`)
+- [x] `[ThresholdEnvAutoApplyPreopen0723] threshold env 자동 apply 산출물 및 사용자 개입 여부 확인` (`Due: 2026-07-23`, `Slot: PREOPEN`, `TimeWindow: 08:50~08:55`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-07-22.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-07-22.json), [threshold_cycle_preopen_apply.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_preopen_apply.py), [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh)
   - 판정 기준: 전일 postclose EV와 당일 apply plan/runtime env를 확인하고 `auto_bounded_live` guard 통과분만 runtime env로 인정한다.
   - 금지: blocked family, approval artifact missing, same-stage owner conflict를 수동 env override로 우회하지 않는다.
   - 다음 액션: `applied_guard_passed_env`, `blocked_no_env`, `partial_apply_with_blocked_families`, `failed_preopen_wrapper`, `not_yet_due` 중 하나로 닫는다.
+  - 08:40 조기 관측: PID `10557`은 07:55:01 KST 시작 후 생존했고 PREOPEN runtime env verify는 pass였다. 관측 종료 전 표본은 모두 `PREMARKET_KRX_LIKE`여서 KRX 정규장 EV·threshold 판단에는 사용하지 않았으며, 이 시점에는 원래 TimeWindow 항목을 미완료로 유지했다.
+  - 최종 판정: `applied_guard_passed_env`. 08:47:39 KST 재기동 후 PID `41693` 기준 verify `passed=true`, `pid_passed=true`, missing/mismatch 0건을 확인했다.
 
-- [ ] `[RisingMissedScoutRuntimePreopen0723] rising_missed_scout_workorder 구현분 다음 장전 runtime 반영 여부 확인` (`Due: 2026-07-23`, `Slot: PREOPEN`, `TimeWindow: 08:55~09:00`, `Track: ScalpingLogic`)
+- [x] `[RisingMissedScoutRuntimePreopen0723] rising_missed_scout_workorder 구현분 다음 장전 runtime 반영 여부 확인` (`Due: 2026-07-23`, `Slot: PREOPEN`, `TimeWindow: 08:55~09:00`, `Track: ScalpingLogic`)
   - Source: [rising_missed_scout_workorder_2026-07-22.json](/home/ubuntu/KORStockScan/data/report/rising_missed_scout_workorder/rising_missed_scout_workorder_2026-07-22.json), [rising_missed_normal_buy_bridge_candidate_discovery_2026-07-22.json](/home/ubuntu/KORStockScan/data/report/rising_missed_normal_buy_bridge_candidate_discovery/rising_missed_normal_buy_bridge_candidate_discovery_2026-07-22.json), [code_improvement_workorder_2026-07-22.json](/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-07-22.json), [threshold_apply_2026-07-23.json](/home/ubuntu/KORStockScan/data/threshold_cycle/apply_plans/threshold_apply_2026-07-23.json), [threshold_runtime_env_2026-07-23.json](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_2026-07-23.json), [threshold_runtime_env_verify_2026-07-23.json](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_verify_2026-07-23.json)
   - 판정 기준: 전일 `rising_missed_scout_workorder` 요약(code_improvement_order_count=`4`, forced_scout_with_post_sell_count=`16`, profitable_forced_scout_count=`7`, loss_or_flat_forced_scout_count=`9`, current_missed_count=`0`)과 `rising_missed_normal_buy_bridge_candidate_discovery` 요약(status=`source_missing`, bridge_candidate_count=`0`, code_improvement_order_count=`0`, runtime_env_key=`KORSTOCKSCAN_RISING_MISSED_NORMAL_BUY_BRIDGE_ENABLED`)을 함께 보고 구현 완료된 mapped family가 당일 PREOPEN apply plan/runtime env/verify에 반영됐는지 확인한다. source-only order는 별도 runtime family/env mapping과 guard 통과가 있을 때만 반영으로 인정한다.
   - 금지: `rising_missed_scout_workorder`/bridge discovery 생성 또는 forced 1-share scout 손익만으로 runtime threshold mutation, stale submit bypass, broker/order guard 완화, provider/bot/cap 변경, real execution quality approval을 열지 않는다.
   - 다음 액션: `runtime_env_reflected_and_verified`, `implemented_but_runtime_not_selected`, `source_only_no_runtime_authority`, `blocked_by_apply_guard`, `report_missing_or_stale`, `verify_missing_or_failed` 중 하나로 닫는다.
+  - 08:40 조기 관측: KRX-like 실주문에서 중앙 5단계 배분, 1주 probe-first, residual multi-leg/reprice, 최초 tier 재사용을 확인했다. 08:47:39 KST 사용자 승인 graceful restart 후 source provenance 및 reversal recheck dedup 보완이 PID `41693`에 반영됐고, runtime env PID verify는 pass(누락·불일치 0건)였다. 로드 provenance는 commit `7c4928a7c499559f4930e1b5461853711083af3f`, `source_dirty=true`다.
+  - 최종 판정: `runtime_env_reflected_and_verified`. 새 supervisor까지 재기동해 수정된 `run_bot.sh` 함수 정의와 Python source를 함께 반영했다.
 
 ## 장중 체크리스트 (09:05~15:20)
 
@@ -96,6 +100,23 @@
   - 다음 액션: `trigger_contract_pass`, `unexpected_all_run`, `skip_marker_missing`, `source_missing_run_required`, `force_override_detected`, `needs_followup_patch` 중 하나로 닫는다.
 
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_END -->
+
+- [x] `[GeumhoEntryTrailingDefectHotfix0723] 금호건설 진입·probe 확대·트레일링 청산 결함 보완 및 장중 재기동` (`Due: 2026-07-23`, `Slot: INTRADAY`, `TimeWindow: 09:50~15:20`, `Track: ScalpingLogic`)
+  - Source: [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py), [exit_safety_monitor.py](/home/ubuntu/KORStockScan/src/engine/scalping/exit_safety_monitor.py), [operator_runtime_overrides_2026-07-23.env](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/operator_runtime_overrides_2026-07-23.env)
+  - 판정 기준: fresh DROP BUY 제출 0회, fresh WAIT 1주 probe 후 250ms 간격 2회 강확인에서만 첫 잔량 leg 허용, BUY probe 기존 확대 유지, fast exit 단일 token 및 `decision_to_order_sent_ms<=500`, 부분익절 정책 불변, review gate 지적 0건과 표적 테스트 통과 후 graceful restart 및 새 PID env 확인.
+  - 금지: BUY 코호트 NEUTRAL 확대 차단, trailing/hard/protect/emergency 수치 변경, stale/broker/account/order/quantity/cooldown guard 우회, 부분익절 0.35/+0.55%/210초 변경.
+  - Rollback: entry와 holding/exit 일자축을 각각 false로 전환하고 review gate 후 graceful restart한다.
+  - 완료 결과: `$korstockscan-review-gate` 미해결 지적 0건, 관련 회귀 988건과 추가 수동관리 제외 표적 46건, compile/shell/location/parser/diff 검증을 통과했다. 최초 PID `127918`에서 monitor가 수동관리 제외 보유분을 stale REST 재검증하는 권한 누수를 첫 이벤트로 발견해 매도 없이 즉시 보완했고, corrective graceful restart 후 PID `130148`에서 entry/exit 축과 기존 부분익절 KRX/NXT policy를 재확인했다.
+  - 재기동 후 첫 monitor 이벤트: `manual_control_fast_exit_monitor_blocked`(950160) 1회이며 이후 stale REST 반복, 중복/초과 주문, monitor 예외, fast-exit SELL은 0건이다. 자연 발생 DROP/WAIT/probe/trailing 표본은 장후 귀속 항목에서 계속 확인한다.
+  - 11:04 venue 보완: `PREMARKET_KRX_LIKE`를 관측 cohort, `NXT`를 실제 broker route로 분리하고 fast-exit IOC에 `dmst_stex_tp`를 명시 전달한다. KRX-only 종목, entry cohort/route 충돌, 실제 NXT 0D 또는 NXT suffix REST provenance 결손은 exit token 선점 전에 차단한다. 단, 같은 position cycle이 `HOLDING + buy_qty>0 + entry_execution_broker_route=NXT`로 확인되면 stale DB `is_nxt=false`보다 실제 진입 route를 우선하여 청산 불능을 방지한다.
+  - venue 보완 적용 상태: source 및 회귀 검증 대상이며 PID `130148`에는 아직 재반영하지 않았다. 본 요청 범위에는 추가 재기동이 포함되지 않으므로 review gate가 닫혀도 bot state는 유지한다.
+  - venue 보완 review gate: NXT route 미명시, 확인된 NXT 체결 포지션의 stale DB 오차, 250ms monitor의 불필요한 DB 조회, legacy 3-인자 exit callback 호환성 지적을 모두 보완했다. 최종 관련 회귀 985건, compile, checklist parser, `git diff --check` 통과 후 미해결 지적 0건으로 닫는다.
+  - 11:11 사용자 지시 재기동: 표준 `./restart.sh` graceful 경로로 PID `130148 -> 147049` 교체, `restart.flag` 소모, runtime env verify `passed=true`, `pid_passed=true`, missing/mismatch 0건을 확인했다. 새 PID env에는 fresh DROP/WAIT action guard, 250ms fast-exit guard와 기존 KRX/NXT 부분익절 policy가 동일하게 로드됐고, 재기동 후 첫 monitor 이벤트는 수동관리 제외 종목 `950160`의 `manual_control_fast_exit_monitor_blocked`로 주문 없이 닫혔다.
+
+- [ ] `[GeumhoEntryTrailingPostcloseAttribution0723] 진입 veto·WAIT probe·fast-exit 장후 귀속 및 다음 PREOPEN 영구화 판단` (`Due: 2026-07-23`, `Slot: POSTCLOSE`, `TimeWindow: 16:35~16:50`, `Track: ScalpingLogic`)
+  - Source: [pipeline_events_2026-07-23.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-07-23.jsonl), [threshold_events_2026-07-23.jsonl](/home/ubuntu/KORStockScan/data/threshold_cycle/threshold_events_2026-07-23.jsonl)
+  - 판정 기준: fresh DROP 차단 수, WAIT probe 확대/폐기, BUY probe 기존 확대, 중복·초과 주문, `decision_to_order_sent_ms`, 실제 체결 손익과 source quality를 분리 귀속하고 다음 PREOPEN 영구 활성화 또는 rollback 후보를 기록한다.
+  - 금지: 당일 단일 표본만으로 threshold/provider/cap/broker guard를 변경하거나 부분익절 정책의 효과를 합산하지 않는다.
 
 
 ## Project/Calendar 동기화

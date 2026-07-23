@@ -16,6 +16,13 @@ from src.utils import kiwoom_utils
 from src.utils.constants import DATA_DIR
 
 POLICY_VERSION = "early_volatility_partial_tp_v1"
+PREMARKET_POLICY_VERSION = "early_volatility_partial_tp_premarket_v1"
+NXT_POLICY_VERSION = "early_volatility_partial_tp_nxt_v1"
+SUPPORTED_POLICY_VERSIONS = {
+    POLICY_VERSION,
+    PREMARKET_POLICY_VERSION,
+    NXT_POLICY_VERSION,
+}
 RUNTIME_FAMILY = "scalp_early_volatility_partial_tp"
 DEFAULT_LEDGER_PATH = (
     Path(DATA_DIR) / "runtime" / "early_volatility_partial_tp_state.json"
@@ -40,6 +47,10 @@ class EarlyVolatilityTPContext:
     observation_span_sec: float
     tick_sample_count: int
     partial_already_filled: bool = False
+    policy_version: str = POLICY_VERSION
+    allowed_venue: str = "KRX"
+    broker_route: str = "SOR"
+    allowed_broker_routes: tuple[str, ...] = ("SOR", "KRX")
     target_net_profit_pct: float = 0.60
     partial_ratio: float = 0.30
     ttl_sec: int = 180
@@ -56,6 +67,7 @@ class EarlyVolatilityTPDecision:
     reason: str
     position_cycle_id: str
     venue: str
+    broker_route: str
     entry_lineage: str
     partial_qty: int
     runner_qty: int
@@ -100,9 +112,21 @@ def resolve_early_volatility_tp(
     reason = "eligible"
 
     venue = str(context.venue or "").strip().upper()
+    allowed_venue = str(context.allowed_venue or "").strip().upper()
+    broker_route = str(context.broker_route or "").strip().upper()
+    allowed_broker_routes = {
+        str(route or "").strip().upper()
+        for route in context.allowed_broker_routes
+        if str(route or "").strip()
+    }
+    policy_version = str(context.policy_version or "").strip()
     direction = str(context.direction_state or "").strip().upper()
-    if venue != "KRX":
-        reason = "venue_not_krx"
+    if policy_version not in SUPPORTED_POLICY_VERSIONS:
+        reason = "policy_version_unsupported"
+    elif not allowed_venue or venue != allowed_venue:
+        reason = "venue_not_policy_cohort"
+    elif not broker_route or broker_route not in allowed_broker_routes:
+        reason = "broker_route_not_policy_allowed"
     elif not str(context.position_cycle_id or "").strip():
         reason = "position_cycle_missing"
     elif float(context.average_price or 0) <= 0:
@@ -158,11 +182,12 @@ def resolve_early_volatility_tp(
             limit_price = 0
 
     return EarlyVolatilityTPDecision(
-        policy_version=POLICY_VERSION,
+        policy_version=policy_version or POLICY_VERSION,
         eligible=eligible,
         reason=reason,
         position_cycle_id=str(context.position_cycle_id or ""),
         venue=venue or "UNKNOWN",
+        broker_route=broker_route or "UNKNOWN",
         entry_lineage=str(context.entry_lineage or "-") or "-",
         partial_qty=partial_qty,
         runner_qty=runner_qty,

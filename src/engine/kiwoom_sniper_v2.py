@@ -85,6 +85,7 @@ from src.engine.scalping.entry_ai_gate import (
     evaluate_entry_score_role_gate,
     get_entry_buy_score_threshold,
 )
+from src.engine.scalping.exit_safety_monitor import ScalpExitSafetyMonitor
 from src.engine.sniper_entry_state import ENTRY_LOCK
 from src.engine.sniper_config import CONF
 from src.engine.sniper_time import (
@@ -723,9 +724,24 @@ def _is_runtime_probe_target(stock):
     )
 
 
-def _send_exit_best_ioc(code, qty, token):
+def _send_exit_best_ioc(
+    code,
+    qty,
+    token,
+    *,
+    dmst_stex_tp=None,
+    reason_type=None,
+    strategy=None,
+):
     """[공통 긴급 청산 래퍼] 최유리(IOC, 16) 조건으로 즉각 청산 시도"""
-    return sniper_trade_utils.send_exit_best_ioc(code, qty, token)
+    return sniper_trade_utils.send_exit_best_ioc(
+        code,
+        qty,
+        token,
+        dmst_stex_tp=dmst_stex_tp,
+        reason_type=reason_type,
+        strategy=strategy,
+    )
 
 
 def _confirm_cancel_or_reload_remaining(code, orig_ord_no, token, expected_qty):
@@ -7153,6 +7169,32 @@ def run_sniper(is_test_mode=False):
     last_msg_min = -1
     scanner_ws_reg_last_emit_ts: dict[tuple[str, str], float] = {}
     scanner_ws_repair_cycle_state_by_code: dict[str, dict] = {}
+    try:
+        fast_exit_interval_sec = max(
+            0.05,
+            float(os.getenv("KORSTOCKSCAN_SCALP_FAST_EXIT_POLL_MS", "250"))
+            / 1000.0,
+        )
+    except (TypeError, ValueError):
+        fast_exit_interval_sec = 0.25
+    fast_exit_monitor = ScalpExitSafetyMonitor(
+        targets_provider=lambda: targets,
+        ws_snapshot_provider=(
+            lambda code: (
+                WS_MANAGER.get_latest_data(code)
+                if WS_MANAGER is not None
+                and hasattr(WS_MANAGER, "get_latest_data")
+                else {}
+            )
+        ),
+        evaluator=sniper_state_handlers.evaluate_and_dispatch_fast_scalp_exit,
+        state_lock=ENTRY_LOCK,
+        interval_sec=fast_exit_interval_sec,
+        error_handler=lambda message: log_error(
+            f"[SCALP_FAST_EXIT_MONITOR] {message}"
+        ),
+    )
+    fast_exit_monitor.start()
 
     try:
         while True:
@@ -8969,6 +9011,7 @@ def run_sniper(is_test_mode=False):
         print("\n🛑 스나이퍼 매매 엔진 종료")
 
     finally:
+        fast_exit_monitor.stop()
         if WS_MANAGER:
             try:
                 WS_MANAGER.stop()

@@ -1115,6 +1115,20 @@ def test_run_bot_waits_for_threshold_runtime_env_before_launching_bot():
     assert script.index(
         'verify_threshold_runtime_env_handoff "$RUNTIME_TARGET_DATE"'
     ) < script.index("../.venv/bin/python bot_main.py")
+    assert "export_runtime_source_provenance" in script
+    assert 'git -C "$PROJECT_DIR" rev-parse --verify HEAD' in script
+    assert (
+        'git -C "$PROJECT_DIR" status --porcelain --untracked-files=normal -- src deploy'
+        in script
+    )
+    assert 'export KORSTOCKSCAN_RUNTIME_GIT_COMMIT="$commit"' in script
+    assert 'export KORSTOCKSCAN_RUNTIME_SOURCE_ROOT="$PROJECT_DIR"' in script
+    assert 'export KORSTOCKSCAN_RUNTIME_SOURCE_DIRTY="$source_dirty"' in script
+    assert "KORSTOCKSCAN_RUNTIME_STARTED_AT_KST" in script
+    assert (
+        'verify_threshold_runtime_env_handoff "$RUNTIME_TARGET_DATE" || exit 1\n'
+        "    export_runtime_source_provenance\n" in script
+    )
     assert (
         "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED:KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ACTIVE_DATE:"
         in script

@@ -254,6 +254,25 @@ _SELL_REVIVE_RESET_KEYS = (
     "entry_split_probe_scale_in_recheck_allowed",
     "entry_split_probe_scale_in_recheck_reason",
     "entry_split_probe_abort_reason",
+    "entry_split_probe_ai_action_at_submit",
+    "probe_confirmation_count",
+    "probe_confirmation_last_at",
+    "probe_confirmation_last_state",
+    "probe_expand_forbidden",
+    "peak_rebaseline_pending",
+    "peak_basis_qty",
+    "peak_basis_avg_price",
+    "peak_basis_mark_price",
+    "peak_basis_at",
+    "exit_token",
+    "exit_decided_at",
+    "exit_order_sent_at",
+    "fast_exit_retry_pending",
+    "fast_exit_retry_reason",
+    "fast_exit_retry_at",
+    "fast_exit_last_error",
+    "fast_exit_trigger_kind",
+    "fast_exit_rest_retry_after",
     "rising_missed_scout_upgraded",
 )
 _SELL_COMPLETE_RESET_KEYS = (
@@ -308,6 +327,25 @@ _SELL_COMPLETE_RESET_KEYS = (
     "entry_split_probe_scale_in_recheck_allowed",
     "entry_split_probe_scale_in_recheck_reason",
     "entry_split_probe_abort_reason",
+    "entry_split_probe_ai_action_at_submit",
+    "probe_confirmation_count",
+    "probe_confirmation_last_at",
+    "probe_confirmation_last_state",
+    "probe_expand_forbidden",
+    "peak_rebaseline_pending",
+    "peak_basis_qty",
+    "peak_basis_avg_price",
+    "peak_basis_mark_price",
+    "peak_basis_at",
+    "exit_token",
+    "exit_decided_at",
+    "exit_order_sent_at",
+    "fast_exit_retry_pending",
+    "fast_exit_retry_reason",
+    "fast_exit_retry_at",
+    "fast_exit_last_error",
+    "fast_exit_trigger_kind",
+    "fast_exit_rest_retry_after",
     "rising_missed_scout_upgraded",
 )
 _ENTRY_RECEIPT_FILLED_BY_ORDER_KEY = "_entry_receipt_filled_by_order_no"
@@ -1154,9 +1192,7 @@ def _handle_early_volatility_tp_sell_execution(
         {
             "status": "HOLDING",
             "buy_qty": remaining_qty,
-            "early_volatility_tp_state": (
-                "FILLED_RUNNER" if completed else "PARTIAL"
-            ),
+            "early_volatility_tp_state": ("FILLED_RUNNER" if completed else "PARTIAL"),
             "early_volatility_tp_filled_qty": filled_qty,
             "early_volatility_tp_fill_amount": fill_amount,
             "early_volatility_tp_avg_sell_price": _avg_from_totals(
@@ -1230,7 +1266,12 @@ def _handle_early_volatility_tp_sell_execution(
             if completed
             else "early_volatility_tp_fill_progress"
         ),
-        policy_version=EARLY_VOLATILITY_TP_POLICY_VERSION,
+        policy_version=str(
+            target_stock.get("early_volatility_tp_policy_version")
+            or EARLY_VOLATILITY_TP_POLICY_VERSION
+        ),
+        effective_venue=target_stock.get("early_volatility_tp_cohort") or "-",
+        broker_route=target_stock.get("early_volatility_tp_broker_route") or "-",
         position_cycle_id=cycle_id or "-",
         ord_no=order_no or "-",
         fill_price=exec_price,
@@ -1241,9 +1282,7 @@ def _handle_early_volatility_tp_sell_execution(
         realized_profit_pct=target_stock.get(
             "early_volatility_tp_realized_profit_pct", "-"
         ),
-        realized_pnl_krw=target_stock.get(
-            "early_volatility_tp_realized_pnl_krw", "-"
-        ),
+        realized_pnl_krw=target_stock.get("early_volatility_tp_realized_pnl_krw", "-"),
         actual_order_submitted=True,
         broker_order_forbidden=False,
         runtime_effect=True,
@@ -1759,12 +1798,10 @@ def _apply_order_notice_to_target(target_stock, *, code, exec_type, order_no, st
             changed = True
 
     elif exec_type == "SELL":
-        early_state = str(
-            target_stock.get("early_volatility_tp_state") or ""
-        ).strip().upper()
-        early_ord_no = str(
-            target_stock.get("early_volatility_tp_ord_no") or ""
-        ).strip()
+        early_state = (
+            str(target_stock.get("early_volatility_tp_state") or "").strip().upper()
+        )
+        early_ord_no = str(target_stock.get("early_volatility_tp_ord_no") or "").strip()
         if order_no and (
             early_ord_no == order_no
             or (early_state == "SUBMITTING" and not early_ord_no)
@@ -2303,9 +2340,7 @@ def _update_db_for_sell(
                 getattr(record, "position_tag", None)
                 or receipt_snapshot.get("position_tag"),
             )
-            realized_pnl_krw = (
-                partial_realized_pnl_krw + runner_realized_pnl_krw
-            )
+            realized_pnl_krw = partial_realized_pnl_krw + runner_realized_pnl_krw
             receipt_snapshot.update(
                 {
                     "buy_price": safe_buy_price,
@@ -2918,7 +2953,21 @@ def _handle_entry_buy_execution(
         target_stock.pop("entry_bundle_id", None)
         target_stock.pop("rising_missed_scout_upgrade_order_pending", None)
         if probe_bundle_completed:
+            rebaseline_mark = max(
+                float(new_avg or 0.0),
+                float(exec_price or 0.0),
+            )
+            if isinstance(highest_prices, dict):
+                # The execution receipt is the first fresh post-fill mark.  Reset
+                # synchronously so the 250ms monitor cannot consume the probe-only
+                # peak before the next holding-loop pass.
+                highest_prices[code] = rebaseline_mark
             target_stock["entry_split_probe_phase"] = "complete"
+            target_stock["peak_rebaseline_pending"] = False
+            target_stock["peak_basis_qty"] = int(new_qty or 0)
+            target_stock["peak_basis_avg_price"] = round(float(new_avg or 0.0), 4)
+            target_stock["peak_basis_mark_price"] = round(rebaseline_mark, 4)
+            target_stock["peak_basis_at"] = time.time()
             target_stock.pop("entry_split_probe_residual_claimed", None)
             target_stock.pop("entry_split_probe_scale_in_forbidden", None)
             update_probe_runtime_bundle(
@@ -3322,9 +3371,9 @@ def handle_real_execution(exec_data):
                 return
             _, safe_buy_price, profit_rate, strategy, is_scalp_revive = sell_context
 
-            early_state = str(
-                target_stock.get("early_volatility_tp_state") or ""
-            ).strip().upper()
+            early_state = (
+                str(target_stock.get("early_volatility_tp_state") or "").strip().upper()
+            )
             early_ord_no = str(
                 target_stock.get("early_volatility_tp_ord_no") or ""
             ).strip()

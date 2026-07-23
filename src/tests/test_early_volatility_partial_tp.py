@@ -4,6 +4,8 @@ import json
 from datetime import datetime, timedelta, timezone
 
 from src.engine.scalping.early_volatility_partial_tp import (
+    NXT_POLICY_VERSION,
+    PREMARKET_POLICY_VERSION,
     EarlyTPRuntimeLedger,
     EarlyVolatilityTPContext,
     resolve_early_volatility_tp,
@@ -45,7 +47,8 @@ def test_resolver_keeps_runner_and_builds_fee_aware_sell_limit():
 
 def test_resolver_fail_closed_contracts():
     cases = [
-        (_context(venue="NXT"), "venue_not_krx"),
+        (_context(venue="NXT"), "venue_not_policy_cohort"),
+        (_context(broker_route="NXT"), "broker_route_not_policy_allowed"),
         (_context(holding_qty=1), "runner_minimum_not_met"),
         (_context(entry_bundle_complete=False), "entry_bundle_not_terminal"),
         (_context(quote_fresh=False), "quote_source_unusable"),
@@ -63,6 +66,27 @@ def test_resolver_fail_closed_contracts():
         assert decision.reason == expected_reason
         assert decision.partial_qty == 0
         assert decision.runner_qty == context.holding_qty
+
+
+def test_resolver_accepts_separate_premarket_and_nxt_policy_cohorts():
+    for venue, policy_version in (
+        ("PREMARKET_KRX_LIKE", PREMARKET_POLICY_VERSION),
+        ("NXT", NXT_POLICY_VERSION),
+    ):
+        decision = resolve_early_volatility_tp(
+            _context(
+                venue=venue,
+                allowed_venue=venue,
+                policy_version=policy_version,
+                broker_route="NXT",
+                allowed_broker_routes=("NXT",),
+            )
+        )
+
+        assert decision.eligible is True
+        assert decision.policy_version == policy_version
+        assert decision.venue == venue
+        assert decision.broker_route == "NXT"
 
 
 def test_runtime_ledger_atomic_round_trip(tmp_path):
@@ -267,6 +291,7 @@ def test_runtime_policy_requires_qualification_and_activation_epoch(
         "decision": "implemented_historical_real_validation_pass",
         "qualified_for_runtime": True,
         "effective_venue": "KRX",
+        "broker_route": "SOR",
         "partial_ratio": 0.35,
         "target_net_profit_pct": 0.55,
         "ttl_sec": 210,
@@ -289,6 +314,43 @@ def test_runtime_policy_requires_qualification_and_activation_epoch(
     handlers._EARLY_VOLATILITY_TP_POLICY_CACHE.clear()
     policy = handlers._early_volatility_tp_policy(datetime(2026, 7, 23))
     assert policy == {"enabled": False, "reason": "policy_not_qualified"}
+
+
+def test_runtime_policy_selects_premarket_and_nxt_independently(monkeypatch, tmp_path):
+    from src.engine import sniper_state_handlers as handlers
+
+    for cohort, suffix, version in (
+        ("PREMARKET_KRX_LIKE", "PREMARKET", PREMARKET_POLICY_VERSION),
+        ("NXT", "NXT", NXT_POLICY_VERSION),
+    ):
+        path = tmp_path / f"{suffix.lower()}.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "policy_version": version,
+                    "decision": "operator_directed_fallback_applied",
+                    "qualified_for_runtime": True,
+                    "effective_venue": cohort,
+                    "broker_route": "NXT",
+                    "partial_ratio": 0.35,
+                    "target_net_profit_pct": 0.55,
+                    "ttl_sec": 210,
+                    "active_from_epoch": 1000.0,
+                }
+            ),
+            encoding="utf-8",
+        )
+        prefix = f"KORSTOCKSCAN_EARLY_VOLATILITY_TP_{suffix}"
+        monkeypatch.setenv(f"{prefix}_ENABLED", "true")
+        monkeypatch.setenv(f"{prefix}_ACTIVE_DATE", "2026-07-23")
+        monkeypatch.setenv(f"{prefix}_POLICY_FILE", str(path))
+
+        policy = handlers._early_volatility_tp_policy(datetime(2026, 7, 23), cohort)
+
+        assert policy["enabled"] is True
+        assert policy["cohort"] == cohort
+        assert policy["broker_route"] == "NXT"
+        assert policy["policy_version"] == version
 
 
 def test_cancel_confirms_unfilled_absence_and_reconciles_broker_qty(
@@ -331,6 +393,7 @@ def test_cancel_confirms_unfilled_absence_and_reconciles_broker_qty(
         "early_volatility_tp_position_cycle_id": "cycle-1",
         "early_volatility_tp_state": "OPEN",
         "early_volatility_tp_ord_no": "123",
+        "early_volatility_tp_broker_route": "NXT",
     }
     monkeypatch.setattr(handlers, "DB", DB())
     monkeypatch.setattr(handlers, "KIWOOM_TOKEN", "token")
@@ -339,10 +402,11 @@ def test_cancel_confirms_unfilled_absence_and_reconciles_broker_qty(
         "_EARLY_VOLATILITY_TP_LEDGER",
         EarlyTPRuntimeLedger(tmp_path / "cancel-ledger.json"),
     )
+    cancel_calls = []
     monkeypatch.setattr(
         handlers.sniper_trade_utils,
         "send_cancel_order_with_exchange_retry",
-        lambda **_kwargs: {"return_code": "0"},
+        lambda **kwargs: cancel_calls.append(kwargs) or {"return_code": "0"},
     )
     monkeypatch.setattr(
         handlers.kiwoom_utils,
@@ -364,6 +428,72 @@ def test_cancel_confirms_unfilled_absence_and_reconciles_broker_qty(
     assert stock["early_volatility_tp_state"] == "CANCELLED"
     assert stock["buy_qty"] == 7
     assert record.buy_qty == 7
+    assert cancel_calls[0]["dmst_stex_tp"] == "NXT"
+
+
+def test_open_early_tp_ttl_is_managed_after_cohort_session_boundary(monkeypatch):
+    from src.engine import sniper_state_handlers as handlers
+
+    stock = {
+        "strategy": "SCALPING",
+        "early_volatility_tp_state": "OPEN",
+        "early_volatility_tp_expires_at": 999.0,
+        "early_volatility_tp_cohort": "PREMARKET_KRX_LIKE",
+        "early_volatility_tp_broker_route": "NXT",
+    }
+    cancel_calls = []
+    monkeypatch.setattr(
+        handlers,
+        "_cancel_early_volatility_tp",
+        lambda *args, **kwargs: cancel_calls.append((args, kwargs)) or True,
+    )
+
+    handled = handlers._maybe_manage_early_volatility_tp(
+        stock,
+        "117730",
+        {},
+        strategy="SCALPING",
+        now_ts=1000.0,
+        now_dt=datetime(2026, 7, 23, 9, 0),
+        quote_fields={},
+    )
+
+    assert handled is True
+    assert cancel_calls[0][1]["reason"] == "ttl_expired"
+
+
+def test_nxt_early_tp_requires_confirmed_symbol_eligibility(monkeypatch):
+    from src.engine import sniper_state_handlers as handlers
+
+    monkeypatch.setattr(
+        handlers,
+        "_resolve_holding_sell_dmst_stex_tp",
+        lambda *_args, **_kwargs: {
+            "blocked": False,
+            "dmst_stex_tp": "NXT",
+            "nxt_enabled": None,
+        },
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_early_volatility_tp_policy",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("policy must not load when NXT eligibility is unknown")
+        ),
+    )
+
+    assert (
+        handlers._maybe_manage_early_volatility_tp(
+            {"status": "HOLDING"},
+            "459510",
+            {},
+            strategy="SCALPING",
+            now_ts=1000.0,
+            now_dt=datetime(2026, 7, 23, 16, 15),
+            quote_fields={},
+        )
+        is False
+    )
 
 
 def test_final_runner_sell_composes_early_partial_realized_pnl(monkeypatch):
@@ -442,3 +572,121 @@ def test_final_runner_sell_composes_early_partial_realized_pnl(monkeypatch):
     assert snapshot["partial_realized_qty"] == 3
     assert snapshot["runner_realized_qty"] == 7
     assert events[-1]["realized_pnl_krw"] == expected
+
+
+def test_nxt_replay_uses_current_krx_policy_when_no_nxt_hit(monkeypatch, tmp_path):
+    from src.engine.scalping import early_volatility_partial_tp_replay as replay
+
+    krx_policy = tmp_path / "krx-policy.json"
+    krx_policy.write_text(
+        json.dumps(
+            {
+                "policy_version": "early_volatility_partial_tp_v1",
+                "decision": "implemented_historical_real_validation_pass",
+                "qualified_for_runtime": True,
+                "effective_venue": "KRX",
+                "broker_route": "SOR",
+                "selection_basis": "operator_directed_named_trade_bootstrap",
+                "partial_ratio": 0.35,
+                "target_net_profit_pct": 0.55,
+                "ttl_sec": 210,
+                "observation_window_sec": 120,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        replay,
+        "_load_cohort_trades",
+        lambda *_args, **_kwargs: ([], {"venue_missing": 2}, "test_source"),
+    )
+
+    report = replay.build_nxt_report(
+        tmp_path,
+        datetime(2026, 7, 23, tzinfo=timezone(timedelta(hours=9))),
+        duckdb_path=None,
+        fallback_policy_path=krx_policy,
+    )
+
+    assert report["eligible_trade_count"] == 0
+    assert report["nxt_replay_qualified"] is False
+    assert report["qualified_for_runtime"] is True
+    assert report["decision"] == "operator_directed_fallback_applied"
+    assert report["selected"]["partial_ratio"] == 0.35
+    assert report["selected"]["target_net_profit_pct"] == 0.55
+    assert report["selected"]["ttl_sec"] == 210
+    assert report["fallback"]["used"] is True
+
+
+def test_premarket_policy_requires_exact_named_trade_nxt_routes(monkeypatch, tmp_path):
+    from src.engine.scalping import early_volatility_partial_tp_replay as replay
+
+    krx_policy = tmp_path / "krx-policy.json"
+    krx_policy.write_text(
+        json.dumps(
+            {
+                "policy_version": "early_volatility_partial_tp_v1",
+                "decision": "implemented_historical_real_validation_pass",
+                "qualified_for_runtime": True,
+                "effective_venue": "KRX",
+                "broker_route": "SOR",
+                "partial_ratio": 0.35,
+                "target_net_profit_pct": 0.55,
+                "ttl_sec": 210,
+                "observation_window_sec": 120,
+            }
+        ),
+        encoding="utf-8",
+    )
+    trades = [
+        replay.Trade(record_id="1", code="117730", broker_routes={"NXT"}),
+        replay.Trade(record_id="2", code="459510", broker_routes={"NXT"}),
+    ]
+    monkeypatch.setattr(
+        replay,
+        "load_operator_bootstrap_trades",
+        lambda *_args, **_kwargs: (trades, {}),
+    )
+
+    report = replay.build_premarket_report(
+        tmp_path,
+        datetime(2026, 7, 23, tzinfo=timezone(timedelta(hours=9))),
+        source_policy_path=krx_policy,
+    )
+
+    assert report["qualified_for_runtime"] is True
+    assert report["broker_route"] == "NXT"
+    assert report["selected"]["partial_ratio"] == 0.35
+    assert report["attribution_contract"]["cohort"] == "PREMARKET_KRX_LIKE"
+
+
+def test_cohort_policy_writer_records_snapshot_as_activation_floor(
+    monkeypatch, tmp_path
+):
+    from src.engine.scalping import early_volatility_partial_tp_replay as replay
+
+    monkeypatch.setattr(replay, "DATA_DIR", str(tmp_path))
+    snapshot_at = "2026-07-23T10:20:50+09:00"
+    report = {
+        "policy_version": PREMARKET_POLICY_VERSION,
+        "decision": "operator_directed_fallback_applied",
+        "qualified_for_runtime": True,
+        "effective_venue": "PREMARKET_KRX_LIKE",
+        "market_session": "KRX_LIKE_PREMARKET_0800_0850",
+        "broker_route": "NXT",
+        "snapshot_at": snapshot_at,
+        "selected": {
+            "partial_ratio": 0.35,
+            "target_net_profit_pct": 0.55,
+            "ttl_sec": 210,
+        },
+    }
+
+    _, policy_path = replay.write_cohort_artifacts(
+        report, "2026-07-23", cohort="PREMARKET_KRX_LIKE"
+    )
+    policy = json.loads(policy_path.read_text(encoding="utf-8"))
+
+    assert (
+        policy["active_from_epoch"] == datetime.fromisoformat(snapshot_at).timestamp()
+    )

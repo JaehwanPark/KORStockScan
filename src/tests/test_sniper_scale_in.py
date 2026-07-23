@@ -1,5 +1,6 @@
 from dataclasses import replace
 from datetime import date, datetime, timedelta, time as dt_time
+from concurrent.futures import ThreadPoolExecutor
 import json
 import time
 from types import SimpleNamespace
@@ -3207,6 +3208,209 @@ def test_entry_ai_submit_authority_allows_fresh_live_score(monkeypatch):
     assert decision["blocked"] is False
     assert decision["reason"] == "ok"
     assert decision["entry_ai_submit_authority_fresh_prior"] is True
+
+
+def test_entry_ai_submit_authority_vetoes_fresh_drop_for_real_buy(monkeypatch):
+    now_ts = 1_784_778_400.0
+    active_date = datetime.fromtimestamp(now_ts, tz=state_handlers._KST).date().isoformat()
+    monkeypatch.setattr(state_handlers.time, "time", lambda: now_ts)
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RISING_MISSED_AI_ACTION_GUARD_ENABLED", "true"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RISING_MISSED_AI_ACTION_GUARD_ACTIVE_DATE", active_date
+    )
+
+    decision = state_handlers._entry_ai_submit_authority_fields(
+        strategy="SCALPING",
+        stock={
+            "strategy": "SCALPING",
+            "last_watching_ai_action": "DROP",
+            "last_watching_ai_score": 28.0,
+            "last_watching_ai_result_source": "live",
+            "last_watching_ai_confirmed_at": now_ts - 0.2,
+        },
+        latency_gate={"ai_action": "DROP", "ai_score": 28.0},
+        latency_signal_score=28.0,
+    )
+
+    assert decision["blocked"] is True
+    assert decision["broker_order_forbidden"] is True
+    assert decision["reason"] == "fresh_ai_drop_real_buy_veto"
+    assert decision["metric_role"] == "safety_veto"
+
+
+def test_entry_ai_submit_authority_latest_fresh_drop_overrides_stale_buy_context(
+    monkeypatch,
+):
+    now_ts = 1_784_778_400.0
+    active_date = datetime.fromtimestamp(
+        now_ts, tz=state_handlers._KST
+    ).date().isoformat()
+    monkeypatch.setattr(state_handlers.time, "time", lambda: now_ts)
+    monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_AI_ACTION_GUARD_ENABLED", "true")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RISING_MISSED_AI_ACTION_GUARD_ACTIVE_DATE", active_date
+    )
+
+    decision = state_handlers._entry_ai_submit_authority_fields(
+        strategy="SCALPING",
+        stock={
+            "strategy": "SCALPING",
+            "last_watching_ai_action": "DROP",
+            "last_watching_ai_score": 31.0,
+            "last_watching_ai_result_source": "live",
+            "last_watching_ai_confirmed_at": now_ts - 0.1,
+        },
+        latency_gate={"ai_action": "BUY", "ai_score": 79.0},
+        latency_signal_score=79.0,
+    )
+
+    assert decision["blocked"] is True
+    assert decision["entry_ai_submit_authority_action"] == "DROP"
+    assert decision["entry_ai_submit_authority_action_source"] == "latest_stock_ai"
+
+
+def test_entry_ai_submit_authority_guard_fails_closed_for_expired_or_conflict(
+    monkeypatch,
+):
+    now_ts = 1_784_778_400.0
+    active_date = datetime.fromtimestamp(
+        now_ts, tz=state_handlers._KST
+    ).date().isoformat()
+    monkeypatch.setattr(state_handlers.time, "time", lambda: now_ts)
+    monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_AI_ACTION_GUARD_ENABLED", "true")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RISING_MISSED_AI_ACTION_GUARD_ACTIVE_DATE", active_date
+    )
+
+    expired = state_handlers._entry_ai_submit_authority_fields(
+        strategy="SCALPING",
+        stock={
+            "strategy": "SCALPING",
+            "last_watching_ai_action": "BUY",
+            "last_watching_ai_score": 80.0,
+            "last_watching_ai_result_source": "live",
+            "last_watching_ai_confirmed_at": now_ts - 301.0,
+        },
+        latency_gate={"ai_action": "BUY", "ai_score": 80.0},
+        latency_signal_score=80.0,
+    )
+    conflict = state_handlers._entry_ai_submit_authority_fields(
+        strategy="SCALPING",
+        stock={
+            "strategy": "SCALPING",
+            "last_watching_ai_action": "HOLD",
+            "last_watching_ai_score": 80.0,
+            "last_watching_ai_result_source": "live",
+            "last_watching_ai_confirmed_at": now_ts - 0.1,
+        },
+        latency_gate={"ai_action": "HOLD", "ai_score": 80.0},
+        latency_signal_score=80.0,
+    )
+
+    assert expired["reason"] == "entry_ai_result_stale_or_untrusted"
+    assert expired["blocked"] is True
+    assert conflict["reason"] == "entry_ai_action_conflict"
+    assert conflict["blocked"] is True
+
+
+def test_entry_ai_submit_authority_limits_fresh_wait_to_probe(monkeypatch):
+    now_ts = 1_784_778_400.0
+    active_date = datetime.fromtimestamp(now_ts, tz=state_handlers._KST).date().isoformat()
+    monkeypatch.setattr(state_handlers.time, "time", lambda: now_ts)
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RISING_MISSED_AI_ACTION_GUARD_ENABLED", "true"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RISING_MISSED_AI_ACTION_GUARD_ACTIVE_DATE", active_date
+    )
+
+    decision = state_handlers._entry_ai_submit_authority_fields(
+        strategy="SCALPING",
+        stock={
+            "strategy": "SCALPING",
+            "last_watching_ai_action": "WAIT",
+            "last_watching_ai_score": 53.0,
+            "last_watching_ai_result_source": "live",
+            "last_watching_ai_confirmed_at": now_ts - 0.2,
+        },
+        latency_gate={"ai_action": "WAIT", "ai_score": 53.0},
+        latency_signal_score=53.0,
+    )
+
+    assert decision["blocked"] is False
+    assert decision["entry_ai_submit_authority_wait_probe_required"] is True
+
+
+def test_wait_probe_requires_two_distinct_strong_confirmations(monkeypatch):
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_DYNAMIC_ENTRY_PRICE_RESOLVER_POST_PROBE_RECHECK_MS", "250"
+    )
+    stock = {}
+    fields = {"post_probe_direction_state": "STRONG"}
+
+    ready, count = state_handlers._advance_wait_probe_confirmation(
+        stock, fields, now_ts=1_000.0
+    )
+    assert ready is False
+    assert count == 1
+
+    ready, count = state_handlers._advance_wait_probe_confirmation(
+        stock, fields, now_ts=1_000.1
+    )
+    assert ready is False
+    assert count == 1
+
+    ready, count = state_handlers._advance_wait_probe_confirmation(
+        stock, fields, now_ts=1_000.25
+    )
+    assert ready is True
+    assert count == 2
+
+
+def test_wait_probe_neutral_defers_but_buy_probe_keeps_existing_behavior(monkeypatch):
+    now_ts = 1_784_778_400.0
+    active_date = datetime.fromtimestamp(now_ts, tz=state_handlers._KST).date().isoformat()
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RISING_MISSED_AI_ACTION_GUARD_ENABLED", "true"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RISING_MISSED_AI_ACTION_GUARD_ACTIVE_DATE", active_date
+    )
+    quote_fields = {"canonical_mark_price": 10_000}
+    base = {
+        "last_watching_ai_feature_probe_at": now_ts,
+        "last_watching_ai_feature_probe": {
+            "buy_pressure_10t": 50.0,
+            "tick_aggressor_pressure_usable": True,
+        },
+        "last_watching_ai_source_quality_fields": {
+            "tick_context_quality": "fresh_computed",
+            "tick_aggressor_pressure_usable": True,
+            "tick_context_stale": False,
+        },
+    }
+
+    wait_decision = state_handlers._post_probe_direction_fields(
+        {**base, "entry_split_probe_ai_action_at_submit": "WAIT"},
+        {},
+        quote_fields,
+        probe_fill_price=10_000,
+        now_ts=now_ts,
+        max_context_age_sec=3.0,
+    )
+    buy_decision = state_handlers._post_probe_direction_fields(
+        {**base, "entry_split_probe_ai_action_at_submit": "BUY"},
+        {},
+        quote_fields,
+        probe_fill_price=10_000,
+        now_ts=now_ts,
+        max_context_age_sec=3.0,
+    )
+
+    assert wait_decision["post_probe_continuation_action"] == "DEFER"
+    assert buy_decision["post_probe_continuation_action"] == "ALLOW_NORMAL"
 
 
 def test_pre_submit_entry_ai_authority_retry_refreshes_missing_ai(monkeypatch):
@@ -9934,6 +10138,62 @@ def test_apply_rising_missed_reversal_up_volatile_recheck_sets_scanner_recheck_s
     assert duplicate["rising_missed_reversal_up_volatile_recheck_deduplicated"] is True
     assert duplicate["rising_missed_reversal_up_volatile_recheck_reason"] == (
         "reversal_up_volatile_recheck_already_pending"
+    )
+
+
+@pytest.mark.parametrize(
+    ("apply_name", "field_prefix"),
+    [
+        (
+            "_apply_rising_missed_reversal_up_watch_recheck",
+            "rising_missed_reversal_up_watch",
+        ),
+        (
+            "_apply_rising_missed_reversal_up_volatile_recheck",
+            "rising_missed_reversal_up_volatile",
+        ),
+    ],
+)
+def test_rising_missed_reversal_recheck_dedup_is_atomic(
+    monkeypatch,
+    apply_name,
+    field_prefix,
+):
+    stock = {}
+    original_mutate = state_handlers._mutate_stock_state
+
+    def delayed_mutate(*args, **kwargs):
+        time.sleep(0.05)
+        return original_mutate(*args, **kwargs)
+
+    monkeypatch.setattr(state_handlers, "_mutate_stock_state", delayed_mutate)
+    apply_recheck = getattr(state_handlers, apply_name)
+
+    def apply_once():
+        return apply_recheck(
+            stock,
+            "123456",
+            {
+                f"{field_prefix}_recheck_enqueued": True,
+                f"{field_prefix}_recheck_ttl_sec": "20.000",
+                f"{field_prefix}_recheck_until_epoch": "1020.000",
+            },
+            now_ts=1000.0,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(lambda _: apply_once(), range(2)))
+
+    assert (
+        sum(result[f"{field_prefix}_recheck_enqueued"] is True for result in results)
+        == 1
+    )
+    assert (
+        sum(
+            result.get(f"{field_prefix}_recheck_deduplicated") is True
+            for result in results
+        )
+        == 1
     )
 
 
@@ -42080,12 +42340,16 @@ def test_emit_same_symbol_soft_stop_cooldown_shadow_once(monkeypatch):
                 return self._overrides[name]
             return getattr(self._base, name)
 
-    state_handlers.TRADING_RULES = _RulesProxy(
-        CONFIG,
-        SCALP_SOFT_STOP_SAME_SYMBOL_COOLDOWN_SHADOW_ENABLED=True,
-        SCALP_SOFT_STOP_SAME_SYMBOL_COOLDOWN_SHADOW_SEC=600,
+    monkeypatch.setattr(
+        state_handlers,
+        "TRADING_RULES",
+        _RulesProxy(
+            CONFIG,
+            SCALP_SOFT_STOP_SAME_SYMBOL_COOLDOWN_SHADOW_ENABLED=True,
+            SCALP_SOFT_STOP_SAME_SYMBOL_COOLDOWN_SHADOW_SEC=600,
+        ),
     )
-    state_handlers._SAME_SYMBOL_SOFT_STOP_TS = {}
+    monkeypatch.setattr(state_handlers, "_SAME_SYMBOL_SOFT_STOP_TS", {})
     logs = []
 
     monkeypatch.setattr(
@@ -42130,11 +42394,15 @@ def test_emit_partial_only_timeout_shadow_logs_when_partial_stuck(monkeypatch):
                 return self._overrides[name]
             return getattr(self._base, name)
 
-    state_handlers.TRADING_RULES = _RulesProxy(
-        CONFIG,
-        SCALP_PARTIAL_ONLY_TIMEOUT_SHADOW_ENABLED=True,
-        SCALP_PARTIAL_ONLY_TIMEOUT_SHADOW_SEC=180,
-        SCALP_PARTIAL_ONLY_TIMEOUT_SHADOW_MAX_PEAK_PCT=0.20,
+    monkeypatch.setattr(
+        state_handlers,
+        "TRADING_RULES",
+        _RulesProxy(
+            CONFIG,
+            SCALP_PARTIAL_ONLY_TIMEOUT_SHADOW_ENABLED=True,
+            SCALP_PARTIAL_ONLY_TIMEOUT_SHADOW_SEC=180,
+            SCALP_PARTIAL_ONLY_TIMEOUT_SHADOW_MAX_PEAK_PCT=0.20,
+        ),
     )
     logs = []
 

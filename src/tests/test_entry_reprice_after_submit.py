@@ -1125,6 +1125,12 @@ def test_nxt_rising_missed_holding_reprices_open_residual_bundle(monkeypatch):
     cancel_calls = []
     buy_calls = []
     monkeypatch.setattr(handlers.time, "time", lambda: now)
+    monkeypatch.setattr(handlers, "WS_MANAGER", None)
+    monkeypatch.setattr(
+        handlers,
+        "_entry_reprice_refresh_snapshot",
+        lambda code, snapshot, stock, order, strategy, now_ts: (snapshot, {}),
+    )
     monkeypatch.setattr(
         handlers,
         "_nxt_rising_missed_partial_fill_reprice_enabled",
@@ -1234,6 +1240,12 @@ def test_nxt_single_residual_fill_during_cancel_blocks_duplicate_resubmit(monkey
         ],
     }
     monkeypatch.setattr(handlers.time, "time", lambda: now)
+    monkeypatch.setattr(handlers, "WS_MANAGER", None)
+    monkeypatch.setattr(
+        handlers,
+        "_entry_reprice_refresh_snapshot",
+        lambda code, snapshot, stock, order, strategy, now_ts: (snapshot, {}),
+    )
     monkeypatch.setattr(
         handlers,
         "_nxt_rising_missed_partial_fill_reprice_enabled",

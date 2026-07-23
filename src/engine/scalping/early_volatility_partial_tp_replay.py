@@ -16,7 +16,11 @@ import duckdb
 from sqlalchemy import text
 
 from src.database.db_manager import DBManager
-from src.engine.scalping.early_volatility_partial_tp import POLICY_VERSION
+from src.engine.scalping.early_volatility_partial_tp import (
+    NXT_POLICY_VERSION,
+    POLICY_VERSION,
+    PREMARKET_POLICY_VERSION,
+)
 from src.engine.trade_profit import calculate_net_realized_pnl, get_trade_cost_rate
 from src.utils import kiwoom_utils
 from src.utils.constants import DATA_DIR
@@ -32,6 +36,8 @@ MIN_SPAN_SEC = 2.0
 OBSERVATION_WINDOW_SEC = 20.0
 BOOTSTRAP_OBSERVATION_WINDOW_SEC = 120.0
 OPERATOR_BOOTSTRAP_CODES = ("117730", "459510")
+NXT_SESSION_START = time(16, 0)
+NXT_SESSION_END = time(20, 0)
 VENUE_PROVENANCE_STAGES = {
     "scalping_sizing_final_price_revalidated",
     "entry_order_sent",
@@ -114,6 +120,7 @@ class Trade:
     qty: int = 0
     actual_submit_seen: bool = False
     completed_seen: bool = False
+    broker_routes: set[str] = field(default_factory=set)
     events: list[dict[str, Any]] = field(default_factory=list)
 
 
@@ -154,6 +161,14 @@ def _consume_event(trades: dict[str, Trade], row: dict[str, Any]) -> None:
                 break
     if _truthy(fields.get("actual_order_submitted")):
         trade.actual_submit_seen = True
+        for key in (
+            "dmst_stex_tp",
+            "effective_dmst_stex_tp",
+            "sell_order_dmst_stex_tp",
+        ):
+            broker_route = str(fields.get(key) or "").strip().upper()
+            if broker_route in {"KRX", "NXT", "SOR"}:
+                trade.broker_routes.add(broker_route)
     if pipeline != "HOLDING_PIPELINE":
         return
     if stage == "bundle_completed":
@@ -186,7 +201,11 @@ def _consume_event(trades: dict[str, Trade], row: dict[str, Any]) -> None:
 
 
 def load_trades_duckdb(
-    duckdb_path: Path, snapshot_at: datetime, events_dir: Path | None = None
+    duckdb_path: Path,
+    snapshot_at: datetime,
+    events_dir: Path | None = None,
+    *,
+    cohort: str = "KRX",
 ) -> tuple[list[Trade], dict[str, int]]:
     trades: dict[str, Trade] = {}
     excluded = defaultdict(int)
@@ -301,7 +320,7 @@ def load_trades_duckdb(
                 snapshot_at=snapshot_at,
                 completed_ids=completed_ids,
             )
-    return _filter_accepted_trades(trades, excluded)
+    return _filter_accepted_trades(trades, excluded, cohort=cohort)
 
 
 def _merge_current_raw_events(
@@ -341,19 +360,40 @@ def _merge_current_raw_events(
 
 
 def _filter_accepted_trades(
-    trades: dict[str, Trade], excluded: defaultdict[str, int]
+    trades: dict[str, Trade],
+    excluded: defaultdict[str, int],
+    *,
+    cohort: str = "KRX",
 ) -> tuple[list[Trade], dict[str, int]]:
+    normalized_cohort = str(cohort or "").strip().upper()
+    if normalized_cohort not in {"KRX", "NXT"}:
+        raise ValueError(f"unsupported replay cohort: {cohort}")
     accepted = []
     for trade in trades.values():
-        if trade.venue != "KRX":
+        if trade.venue != normalized_cohort:
             excluded[f"venue_{trade.venue or 'missing'}"] += 1
             continue
-        if not trade.entry_terminal_at or not (
-            time(9, 0)
-            <= trade.entry_terminal_at.timetz().replace(tzinfo=None)
-            < time(15, 30)
-        ):
-            excluded["entry_not_krx_regular"] += 1
+        entry_time = (
+            trade.entry_terminal_at.timetz().replace(tzinfo=None)
+            if trade.entry_terminal_at
+            else None
+        )
+        in_session = bool(
+            entry_time is not None
+            and (
+                time(9, 0) <= entry_time < time(15, 30)
+                if normalized_cohort == "KRX"
+                else NXT_SESSION_START <= entry_time < NXT_SESSION_END
+            )
+        )
+        if not in_session:
+            excluded[
+                (
+                    "entry_not_krx_regular"
+                    if normalized_cohort == "KRX"
+                    else "entry_not_nxt_session"
+                )
+            ] += 1
             continue
         if not trade.completed_seen or trade.exit_price <= 0:
             excluded["not_completed_valid_sell"] += 1
@@ -369,7 +409,7 @@ def _filter_accepted_trades(
 
 
 def load_trades(
-    events_dir: Path, snapshot_at: datetime
+    events_dir: Path, snapshot_at: datetime, *, cohort: str = "KRX"
 ) -> tuple[list[Trade], dict[str, int]]:
     trades: dict[str, Trade] = {}
     excluded = defaultdict(int)
@@ -400,7 +440,7 @@ def load_trades(
                 if emitted is None or emitted < CLEAN_BASELINE or emitted > snapshot_at:
                     continue
                 _consume_event(trades, row)
-    return _filter_accepted_trades(trades, excluded)
+    return _filter_accepted_trades(trades, excluded, cohort=cohort)
 
 
 def replay_candidate(
@@ -650,6 +690,235 @@ def _evaluate_grid(
     )
 
 
+def _load_qualified_krx_policy(path: Path) -> dict[str, Any]:
+    try:
+        policy = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"KRX fallback policy unreadable: {path}") from exc
+    if not isinstance(policy, dict):
+        raise ValueError("KRX fallback policy must be an object")
+    if str(policy.get("policy_version") or "") != POLICY_VERSION:
+        raise ValueError("KRX fallback policy version mismatch")
+    if str(policy.get("effective_venue") or "").strip().upper() != "KRX":
+        raise ValueError("KRX fallback policy venue mismatch")
+    if str(policy.get("broker_route") or "").strip().upper() != "SOR":
+        raise ValueError("KRX fallback policy broker route mismatch")
+    if not bool(policy.get("qualified_for_runtime")):
+        raise ValueError("KRX fallback policy is not qualified")
+    if str(policy.get("decision") or "").strip() not in {
+        "implemented_historical_real_validation_pass",
+        "bounded_change_applied_attributed",
+    }:
+        raise ValueError("KRX fallback policy decision is not approved")
+    ratio = _float(policy.get("partial_ratio"), 0.0)
+    target = _float(policy.get("target_net_profit_pct"), 0.0)
+    ttl = _int(policy.get("ttl_sec"), 0)
+    if not (0.0 < ratio < 1.0 and target > 0.0 and ttl > 0):
+        raise ValueError("KRX fallback policy values invalid")
+    return policy
+
+
+def _load_cohort_trades(
+    events_dir: Path,
+    snapshot_at: datetime,
+    *,
+    duckdb_path: Path | None,
+    cohort: str,
+) -> tuple[list[Trade], dict[str, int], str]:
+    if duckdb_path is not None and duckdb_path.exists():
+        trades, excluded = load_trades_duckdb(
+            duckdb_path,
+            snapshot_at,
+            events_dir=events_dir,
+            cohort=cohort,
+        )
+        return (
+            trades,
+            excluded,
+            "analytics_duckdb_plus_current_raw_pipeline_events",
+        )
+    trades, excluded = load_trades(events_dir, snapshot_at, cohort=cohort)
+    return trades, excluded, "raw_pipeline_jsonl"
+
+
+def build_nxt_report(
+    events_dir: Path,
+    snapshot_at: datetime,
+    *,
+    duckdb_path: Path | None,
+    fallback_policy_path: Path,
+) -> dict[str, Any]:
+    trades, excluded, source_kind = _load_cohort_trades(
+        events_dir,
+        snapshot_at,
+        duckdb_path=duckdb_path,
+        cohort="NXT",
+    )
+    ranked = _evaluate_grid(trades, observation_window_sec=OBSERVATION_WINDOW_SEC)
+    replay_selected = next(
+        (item for item in ranked if item["valid_first_hit_count"] > 0), None
+    )
+    replay_qualified = bool(
+        replay_selected
+        and replay_selected["delta_net_profit_krw"] > 0
+        and replay_selected["notional_weighted_ev_delta_pct"] >= 0
+    )
+    fallback_policy = None
+    fallback_error = ""
+    if not replay_qualified:
+        try:
+            fallback_policy = _load_qualified_krx_policy(fallback_policy_path)
+        except ValueError as exc:
+            fallback_error = str(exc)
+    if replay_qualified:
+        selected = dict(replay_selected or {})
+        selection_basis = "clean_baseline_explicit_nxt_replay"
+        decision = "implemented_historical_real_validation_pass"
+    elif fallback_policy is not None:
+        selected = {
+            "partial_ratio": _float(fallback_policy.get("partial_ratio")),
+            "target_net_profit_pct": _float(
+                fallback_policy.get("target_net_profit_pct")
+            ),
+            "ttl_sec": _int(fallback_policy.get("ttl_sec")),
+            "observation_window_sec": _float(
+                fallback_policy.get("observation_window_sec"),
+                OBSERVATION_WINDOW_SEC,
+            ),
+            "valid_first_hit_count": 0,
+            "delta_net_profit_krw": 0,
+            "notional_weighted_ev_delta_pct": 0.0,
+        }
+        selection_basis = (
+            "operator_directed_krx_policy_fallback_no_qualified_nxt_replay"
+        )
+        decision = "operator_directed_fallback_applied"
+    else:
+        selected = None
+        selection_basis = "explicit_nxt_replay_unqualified_and_fallback_invalid"
+        decision = "implemented_insufficient_history_keep_guarded"
+    return {
+        "schema_version": 1,
+        "policy_version": NXT_POLICY_VERSION,
+        "generated_at": datetime.now(KST).isoformat(),
+        "snapshot_at": snapshot_at.isoformat(),
+        "source_kind": source_kind,
+        "clean_baseline_ts_kst": CLEAN_BASELINE.isoformat(),
+        "effective_venue": "NXT",
+        "market_session": "NXT_SESSION",
+        "broker_route": "NXT",
+        "selection_basis": selection_basis,
+        "decision": decision,
+        "qualified_for_runtime": bool(replay_qualified or fallback_policy is not None),
+        "eligible_trade_count": len(trades),
+        "excluded_counts": excluded,
+        "selected": selected,
+        "candidates": ranked,
+        "nxt_replay_selected": replay_selected,
+        "nxt_replay_qualified": replay_qualified,
+        "fallback": {
+            "explicit_user_authority": True,
+            "used": bool(not replay_qualified and fallback_policy is not None),
+            "source_policy_file": str(fallback_policy_path),
+            "source_policy_version": (
+                fallback_policy.get("policy_version") if fallback_policy else None
+            ),
+            "source_selection_basis": (
+                fallback_policy.get("selection_basis") if fallback_policy else None
+            ),
+            "error": fallback_error or None,
+            "forbidden_uses": (
+                "merge_nxt_and_krx_attribution|claim_nxt_historical_validation|"
+                "hard_safety_relaxation|broker_route_change"
+            ),
+        },
+        "grid": {
+            "partial_ratios": list(PARTIAL_RATIOS),
+            "target_net_profit_pcts": list(TARGET_NET_PCTS),
+            "ttl_secs": list(TTL_SECS),
+            "min_range_pct": MIN_RANGE_PCT,
+            "min_tick_samples": MIN_TICK_SAMPLES,
+            "min_observation_span_sec": MIN_SPAN_SEC,
+            "observation_window_sec": OBSERVATION_WINDOW_SEC,
+        },
+    }
+
+
+def build_premarket_report(
+    events_dir: Path,
+    snapshot_at: datetime,
+    *,
+    source_policy_path: Path,
+) -> dict[str, Any]:
+    source_policy = _load_qualified_krx_policy(source_policy_path)
+    trades, excluded = load_operator_bootstrap_trades(events_dir, snapshot_at)
+    route_rows = [
+        {
+            "record_id": trade.record_id,
+            "stock_code": trade.code,
+            "stock_name": trade.name,
+            "broker_routes": sorted(trade.broker_routes),
+        }
+        for trade in trades
+    ]
+    route_contract_passed = bool(
+        len(trades) == len(OPERATOR_BOOTSTRAP_CODES)
+        and {trade.code for trade in trades} == set(OPERATOR_BOOTSTRAP_CODES)
+        and all(trade.broker_routes == {"NXT"} for trade in trades)
+    )
+    return {
+        "schema_version": 1,
+        "policy_version": PREMARKET_POLICY_VERSION,
+        "generated_at": datetime.now(KST).isoformat(),
+        "snapshot_at": snapshot_at.isoformat(),
+        "clean_baseline_ts_kst": CLEAN_BASELINE.isoformat(),
+        "effective_venue": "PREMARKET_KRX_LIKE",
+        "market_session": "KRX_LIKE_PREMARKET_0800_0850",
+        "broker_route": "NXT",
+        "selection_basis": "operator_directed_same_values_as_current_krx_policy",
+        "decision": (
+            "operator_directed_fallback_applied"
+            if route_contract_passed
+            else "implemented_insufficient_history_keep_guarded"
+        ),
+        "qualified_for_runtime": route_contract_passed,
+        "eligible_trade_count": len(trades),
+        "excluded_counts": excluded,
+        "route_contract_passed": route_contract_passed,
+        "route_evidence": route_rows,
+        "source_policy_file": str(source_policy_path),
+        "source_policy_version": source_policy.get("policy_version"),
+        "selected": {
+            "partial_ratio": _float(source_policy.get("partial_ratio")),
+            "target_net_profit_pct": _float(source_policy.get("target_net_profit_pct")),
+            "ttl_sec": _int(source_policy.get("ttl_sec")),
+            "observation_window_sec": _float(
+                source_policy.get("observation_window_sec"),
+                BOOTSTRAP_OBSERVATION_WINDOW_SEC,
+            ),
+            "valid_first_hit_count": _int(
+                source_policy.get("valid_first_hit_count"), 0
+            ),
+            "delta_net_profit_krw": _int(source_policy.get("delta_net_profit_krw"), 0),
+            "notional_weighted_ev_delta_pct": _float(
+                source_policy.get("notional_weighted_ev_delta_pct"), 0.0
+            ),
+        },
+        "attribution_contract": {
+            "cohort": "PREMARKET_KRX_LIKE",
+            "must_not_merge_with": ["KRX", "NXT"],
+            "broker_route_dimension": "NXT",
+        },
+        "rollback": {
+            "enabled": False,
+            "trigger": (
+                "route_mismatch|cross_cohort_attribution|quantity_invariant|"
+                "duplicate_tp|hard_exit_delay|cancel_fill_reconciliation"
+            ),
+        },
+    }
+
+
 def build_report(
     events_dir: Path, snapshot_at: datetime, *, duckdb_path: Path | None = None
 ) -> dict[str, Any]:
@@ -695,6 +964,7 @@ def build_report(
         "clean_baseline_ts_kst": CLEAN_BASELINE.isoformat(),
         "effective_venue": "KRX",
         "market_session": "KRX_REGULAR",
+        "broker_route": "SOR",
         "selection_basis": selection_basis,
         "operator_bootstrap": {
             "enabled_only_when_regular_first_hit_zero": True,
@@ -751,6 +1021,7 @@ def write_artifacts(report: dict[str, Any], target_date: str) -> tuple[Path, Pat
         json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
     selected = report.get("selected") or {}
+    snapshot_at = _timestamp(report.get("snapshot_at"))
     policy = {
         "schema_version": 1,
         "policy_version": POLICY_VERSION,
@@ -762,6 +1033,7 @@ def write_artifacts(report: dict[str, Any], target_date: str) -> tuple[Path, Pat
         "operator_bootstrap": report.get("operator_bootstrap"),
         "source_report": str(report_path),
         "snapshot_at": report.get("snapshot_at"),
+        "active_from_epoch": snapshot_at.timestamp() if snapshot_at else 0.0,
         "partial_ratio": selected.get("partial_ratio"),
         "target_net_profit_pct": selected.get("target_net_profit_pct"),
         "ttl_sec": selected.get("ttl_sec"),
@@ -776,6 +1048,106 @@ def write_artifacts(report: dict[str, Any], target_date: str) -> tuple[Path, Pat
         "notional_weighted_ev_delta_pct": selected.get(
             "notional_weighted_ev_delta_pct", 0.0
         ),
+        "sample_floor": "operator_directed_replay_valid_first_hit_at_least_1",
+    }
+    policy_path.write_text(
+        json.dumps(policy, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    return report_path, policy_path
+
+
+def write_cohort_artifacts(
+    report: dict[str, Any], target_date: str, *, cohort: str
+) -> tuple[Path, Path]:
+    normalized = str(cohort or "").strip().upper()
+    if normalized not in {"NXT", "PREMARKET_KRX_LIKE"}:
+        raise ValueError(f"unsupported cohort artifact: {cohort}")
+    suffix = "nxt" if normalized == "NXT" else "premarket"
+    report_dir = Path(DATA_DIR) / "report" / "early_volatility_partial_tp_replay"
+    policy_dir = Path(DATA_DIR) / "threshold_cycle" / "runtime_policy"
+    report_dir.mkdir(parents=True, exist_ok=True)
+    policy_dir.mkdir(parents=True, exist_ok=True)
+    report_path = (
+        report_dir / f"early_volatility_partial_tp_{suffix}_replay_{target_date}.json"
+    )
+    policy_path = (
+        policy_dir / f"early_volatility_partial_tp_{suffix}_policy_{target_date}.json"
+    )
+    report_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    selected = report.get("selected") or {}
+    snapshot_at = _timestamp(report.get("snapshot_at"))
+    fallback = (
+        report.get("fallback") if isinstance(report.get("fallback"), dict) else {}
+    )
+    policy = {
+        "schema_version": 1,
+        "policy_version": report.get("policy_version"),
+        "decision": report.get("decision"),
+        "qualified_for_runtime": bool(report.get("qualified_for_runtime")),
+        "effective_venue": normalized,
+        "market_session": report.get("market_session"),
+        "broker_route": report.get("broker_route"),
+        "selection_basis": report.get("selection_basis"),
+        "source_report": str(report_path),
+        "snapshot_at": report.get("snapshot_at"),
+        "active_from_epoch": snapshot_at.timestamp() if snapshot_at else 0.0,
+        "partial_ratio": selected.get("partial_ratio"),
+        "target_net_profit_pct": selected.get("target_net_profit_pct"),
+        "ttl_sec": selected.get("ttl_sec"),
+        "min_range_pct": MIN_RANGE_PCT,
+        "min_tick_samples": MIN_TICK_SAMPLES,
+        "min_observation_span_sec": MIN_SPAN_SEC,
+        "observation_window_sec": selected.get(
+            "observation_window_sec",
+            (
+                BOOTSTRAP_OBSERVATION_WINDOW_SEC
+                if normalized == "PREMARKET_KRX_LIKE"
+                else OBSERVATION_WINDOW_SEC
+            ),
+        ),
+        "valid_first_hit_count": selected.get("valid_first_hit_count", 0),
+        "delta_net_profit_krw": selected.get("delta_net_profit_krw", 0),
+        "notional_weighted_ev_delta_pct": selected.get(
+            "notional_weighted_ev_delta_pct", 0.0
+        ),
+        "fallback_source_policy_file": fallback.get("source_policy_file"),
+        "fallback_source_policy_version": fallback.get("source_policy_version"),
+        "route_evidence": report.get("route_evidence"),
+        "attribution_contract": report.get("attribution_contract")
+        or {
+            "cohort": normalized,
+            "must_not_merge_with": [
+                item
+                for item in ("KRX", "NXT", "PREMARKET_KRX_LIKE")
+                if item != normalized
+            ],
+            "broker_route_dimension": report.get("broker_route"),
+        },
+        "sample_floor": (
+            "explicit_nxt_replay_valid_first_hit_at_least_1_or_operator_krx_fallback"
+            if normalized == "NXT"
+            else "operator_named_premarket_pair_with_exact_nxt_broker_route"
+        ),
+        "post_apply_attribution": {
+            "eligible_new_position_count": 0,
+            "early_tp_submitted_count": 0,
+            "early_tp_filled_count": 0,
+            "quantity_invariant_violation_count": 0,
+            "duplicate_tp_count": 0,
+            "hard_exit_delay_count": 0,
+            "reconciliation_failure_count": 0,
+            "outcome_status": "insufficient_sample_keep_observing",
+        },
+        "rollback": report.get("rollback")
+        or {
+            "enabled": False,
+            "trigger": (
+                "route_mismatch|cross_cohort_attribution|quantity_invariant|"
+                "duplicate_tp|hard_exit_delay|cancel_fill_reconciliation"
+            ),
+        },
     }
     policy_path.write_text(
         json.dumps(policy, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
@@ -786,6 +1158,11 @@ def write_artifacts(report: dict[str, Any], target_date: str) -> tuple[Path, Pat
 def main(argv: Iterable[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--target-date", required=True)
+    parser.add_argument(
+        "--cohort",
+        choices=("KRX", "NXT", "PREMARKET_KRX_LIKE"),
+        default="KRX",
+    )
     parser.add_argument("--snapshot-at")
     parser.add_argument("--events-dir", default=str(Path(DATA_DIR) / "pipeline_events"))
     parser.add_argument(
@@ -794,6 +1171,7 @@ def main(argv: Iterable[str] | None = None) -> int:
             Path(DATA_DIR) / "analytics" / "duckdb" / "korstockscan_analytics.duckdb"
         ),
     )
+    parser.add_argument("--fallback-policy-file")
     parser.add_argument("--write", action="store_true")
     args = parser.parse_args(list(argv) if argv is not None else None)
     snapshot_at = (
@@ -801,12 +1179,40 @@ def main(argv: Iterable[str] | None = None) -> int:
     )
     if snapshot_at is None:
         raise SystemExit("invalid --snapshot-at")
-    report = build_report(
-        Path(args.events_dir), snapshot_at, duckdb_path=Path(args.duckdb_path)
+    fallback_policy_path = Path(
+        args.fallback_policy_file
+        or (
+            Path(DATA_DIR)
+            / "threshold_cycle"
+            / "runtime_policy"
+            / f"early_volatility_partial_tp_policy_{args.target_date}.json"
+        )
     )
+    if args.cohort == "NXT":
+        report = build_nxt_report(
+            Path(args.events_dir),
+            snapshot_at,
+            duckdb_path=Path(args.duckdb_path),
+            fallback_policy_path=fallback_policy_path,
+        )
+    elif args.cohort == "PREMARKET_KRX_LIKE":
+        report = build_premarket_report(
+            Path(args.events_dir),
+            snapshot_at,
+            source_policy_path=fallback_policy_path,
+        )
+    else:
+        report = build_report(
+            Path(args.events_dir), snapshot_at, duckdb_path=Path(args.duckdb_path)
+        )
     output = {"report": report}
     if args.write:
-        report_path, policy_path = write_artifacts(report, args.target_date)
+        if args.cohort == "KRX":
+            report_path, policy_path = write_artifacts(report, args.target_date)
+        else:
+            report_path, policy_path = write_cohort_artifacts(
+                report, args.target_date, cohort=args.cohort
+            )
         output.update(
             {"report_path": str(report_path), "policy_path": str(policy_path)}
         )
