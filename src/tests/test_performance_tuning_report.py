@@ -495,8 +495,10 @@ def test_performance_tuning_report_builds_metrics(monkeypatch):
     assert len(report["strategy_rows"]) >= 2
     assert any(item["label"] == "스캘핑" for item in report["strategy_rows"])
     assert any(item["label"] == "스윙" for item in report["strategy_rows"])
-    assert report["meta"]["outcome_basis"] == "기준일 누적 성과 (trade review 정규화)"
-    assert report["meta"]["trend_basis"] == "최근 2개 거래일 rolling 성과"
+    assert report["meta"]["outcome_basis"] == (
+        "기준일 누적 실거래 성과 (유효 COMPLETED + fee-aware 순실현손익)"
+    )
+    assert report["meta"]["trend_basis"] == ("최근 2개 거래일 rolling 실거래 순성과")
     assert (
         report["meta"]["schema_version"] == report_mod.PERFORMANCE_TUNING_SCHEMA_VERSION
     )
@@ -858,13 +860,81 @@ def test_performance_tuning_ignores_null_profit_from_incomplete_or_broken_rows(
     scalping = next(
         item for item in report["strategy_rows"] if item["key"] == "scalping"
     )
-    assert scalping["outcomes"]["completed_rows"] == 2
+    assert scalping["outcomes"]["completed_rows"] == 1
+    assert scalping["outcomes"]["invalid_completed_rows"] == 1
+    assert scalping["outcomes"]["invalid_completed_reason_counts"] == {
+        "missing_profit_rate": 1
+    }
     assert scalping["outcomes"]["win_count"] == 1
     assert scalping["outcomes"]["loss_count"] == 0
     assert scalping["outcomes"]["avg_profit_rate"] == 1.0
-    assert scalping["trends"]["summary_5d"]["completed_rows"] == 2
+    assert scalping["trends"]["summary_5d"]["completed_rows"] == 1
+    assert scalping["trends"]["summary_5d"]["invalid_completed_rows"] == 1
     assert scalping["trends"]["summary_5d"]["win_count"] == 1
     assert scalping["trends"]["summary_5d"]["avg_profit_rate"] == 1.0
+    quality = report["sections"]["real_trade_outcome_quality"]
+    assert quality["current_invalid_completed_rows"] == 1
+    assert quality["rolling_invalid_completed_rows"] == 1
+    assert quality["runtime_effect"] is False
+
+
+def test_history_trade_normalization_blocks_zero_sell_and_uses_net_pnl():
+    watching = report_mod._normalize_history_trade_row(
+        {
+            "id": 0,
+            "rec_date": "2026-07-23",
+            "stock_code": "000000",
+            "stock_name": "관찰중",
+            "status": "WATCHING",
+            "strategy": "SCALPING",
+            "buy_price": 0,
+            "buy_qty": 0,
+            "sell_price": 0,
+            "profit_rate": None,
+        }
+    )
+    invalid = report_mod._normalize_history_trade_row(
+        {
+            "id": 1,
+            "rec_date": "2026-07-20",
+            "stock_code": "000001",
+            "stock_name": "무효완료",
+            "status": "COMPLETED",
+            "strategy": "SCALPING",
+            "buy_price": 10_000,
+            "buy_qty": 10,
+            "sell_price": 0,
+            "profit_rate": -100.0,
+        }
+    )
+    valid = report_mod._normalize_history_trade_row(
+        {
+            "id": 2,
+            "rec_date": "2026-07-23",
+            "stock_code": "000002",
+            "stock_name": "정상완료",
+            "status": "COMPLETED",
+            "strategy": "SCALPING",
+            "buy_price": 10_000,
+            "buy_qty": 10,
+            "sell_price": 10_100,
+            "profit_rate": 0.77,
+        }
+    )
+
+    assert watching["completed_execution_quality"] == "not_applicable"
+    assert watching["realized_pnl_source"] == "not_applicable_open_status"
+    assert invalid["completed_execution_quality"] == "nonpositive_sell_price"
+    assert invalid["realized_pnl_source"] == "source_quality_blocked"
+    assert invalid["realized_pnl_krw"] == 0
+    assert report_mod._is_completed_trade(invalid) is False
+    assert valid["completed_execution_quality"] == "valid"
+    assert valid["realized_pnl_source"] == "fee_aware_price_reconstruction"
+    assert valid["realized_pnl_krw"] == 768
+    summary = report_mod._summarize_trade_rows([invalid, valid], 1)
+    assert summary["completed_rows"] == 1
+    assert summary["invalid_completed_rows"] == 1
+    assert summary["realized_pnl_krw"] == 768
 
 
 def test_swing_daily_summary_includes_market_regime_and_blockers(monkeypatch, tmp_path):

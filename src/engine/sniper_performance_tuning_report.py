@@ -15,6 +15,7 @@ from src.engine.log_archive_service import iter_target_log_lines, load_monitor_s
 from src.engine.ai_response_contracts import normalize_gatekeeper_action_key
 from src.engine.monitor_snapshot_runtime import guard_stdin_heavy_build
 from src.engine.sniper_trade_review_report import build_trade_review_report
+from src.engine.trade_profit import calculate_net_realized_pnl
 from src.market_regime import summarize_market_regime
 from src.utils.constants import DATA_DIR, LOGS_DIR, POSTGRES_URL, TRADING_RULES
 from src.engine.dashboard_data_repository import load_pipeline_events
@@ -52,7 +53,7 @@ _STRATEGY_LABELS = {
     "other": "기타",
 }
 _STRATEGY_ORDER = ("scalping", "swing")
-PERFORMANCE_TUNING_SCHEMA_VERSION = 7
+PERFORMANCE_TUNING_SCHEMA_VERSION = 8
 _BLOCKER_LABELS = {
     "blocked_strength_momentum": "동적 체결강도",
     "blocked_liquidity": "유동성",
@@ -399,8 +400,36 @@ def _is_entered_trade(row: dict) -> bool:
     return status in {"BUY_ORDERED", "HOLDING", "SELL_ORDERED", "COMPLETED"}
 
 
-def _is_completed_trade(row: dict) -> bool:
+def _is_completed_status(row: dict) -> bool:
     return str(row.get("status") or "").upper() == "COMPLETED"
+
+
+def _completed_execution_quality_reason(row: dict) -> str | None:
+    """Return why a COMPLETED row is unusable for real PnL/EV attribution."""
+    if not _is_completed_status(row):
+        return "not_completed"
+    if (_safe_float(row.get("buy_price"), None) or 0.0) <= 0:
+        return "nonpositive_buy_price"
+    if (_safe_float(row.get("sell_price"), None) or 0.0) <= 0:
+        return "nonpositive_sell_price"
+    if (_safe_int(row.get("buy_qty"), 0) or 0) <= 0:
+        return "nonpositive_buy_qty"
+    if _safe_float(row.get("profit_rate"), None) is None:
+        return "missing_profit_rate"
+    return None
+
+
+def _is_completed_trade(row: dict) -> bool:
+    return _completed_execution_quality_reason(row) is None
+
+
+def _invalid_completed_reason_counts(rows: list[dict]) -> Counter[str]:
+    return Counter(
+        reason
+        for row in rows
+        if _is_completed_status(row)
+        and (reason := _completed_execution_quality_reason(row)) is not None
+    )
 
 
 def _valid_completed_profit_values(rows: list[dict]) -> list[float]:
@@ -1420,7 +1449,12 @@ def _build_strategy_outcomes(
         ]
         entered_rows = [row for row in group_rows if _is_entered_trade(row)]
         completed_rows = [row for row in entered_rows if _is_completed_trade(row)]
-        open_rows = [row for row in entered_rows if not _is_completed_trade(row)]
+        invalid_completed_rows = [
+            row
+            for row in entered_rows
+            if _is_completed_status(row) and not _is_completed_trade(row)
+        ]
+        open_rows = [row for row in entered_rows if not _is_completed_status(row)]
         completed_profit_values = _valid_completed_profit_values(completed_rows)
         win_count = sum(1 for value in completed_profit_values if value > 0)
         loss_count = sum(1 for value in completed_profit_values if value < 0)
@@ -1428,6 +1462,7 @@ def _build_strategy_outcomes(
             "rows": group_rows,
             "entered_rows": entered_rows,
             "completed_rows": completed_rows,
+            "invalid_completed_rows": invalid_completed_rows,
             "open_rows": open_rows,
             "watching_rows": [
                 row
@@ -1513,6 +1548,10 @@ def _build_strategy_outcomes(
                     "total_rows": len(out["rows"]),
                     "entered_rows": len(out["entered_rows"]),
                     "completed_rows": len(out["completed_rows"]),
+                    "invalid_completed_rows": len(out["invalid_completed_rows"]),
+                    "invalid_completed_reason_counts": dict(
+                        _invalid_completed_reason_counts(out["invalid_completed_rows"])
+                    ),
                     "open_rows": len(out["open_rows"]),
                     "watching_rows": len(out["watching_rows"]),
                     "expired_rows": len(out["expired_rows"]),
@@ -1595,11 +1634,20 @@ def _fetch_trade_history_rows(
                 conn.execute(
                     text("""
                     SELECT
-                        rec_date, stock_code, stock_name, status, strategy,
-                        buy_price, buy_qty, buy_time, sell_price, sell_time, profit_rate
-                    FROM recommendation_history
-                    WHERE rec_date >= :oldest_date AND rec_date <= :target_date
-                    ORDER BY rec_date DESC, COALESCE(sell_time, buy_time) DESC NULLS LAST, stock_code
+                        rh.id, rh.rec_date, rh.stock_code, rh.stock_name,
+                        rh.status, rh.strategy, rh.buy_price, rh.buy_qty,
+                        rh.buy_time, rh.sell_price, rh.sell_time,
+                        COALESCE(tpf.profit_rate, rh.profit_rate) AS profit_rate,
+                        tpf.recommendation_id AS performance_fact_id,
+                        tpf.realized_pnl_krw AS performance_fact_realized_pnl_krw
+                    FROM recommendation_history rh
+                    LEFT JOIN trade_performance_facts tpf
+                      ON tpf.recommendation_id = rh.id
+                    WHERE rh.rec_date >= :oldest_date
+                      AND rh.rec_date <= :target_date
+                    ORDER BY rh.rec_date DESC,
+                             COALESCE(rh.sell_time, rh.buy_time) DESC NULLS LAST,
+                             rh.stock_code
                     """),
                     {"oldest_date": oldest, "target_date": target_date_obj},
                 )
@@ -1610,48 +1658,83 @@ def _fetch_trade_history_rows(
         warnings.append(f"성과 추세 이력 조회 실패: {exc}")
         return [], warnings, []
 
-    rows: list[dict] = []
-    for row in result:
-        status = str(row.get("status") or "")
-        buy_price = _safe_float(row.get("buy_price"))
-        sell_price = _safe_float(row.get("sell_price"))
-        buy_qty = _safe_int(row.get("buy_qty"), 0) or 0
-        raw_profit_rate = _safe_float(row.get("profit_rate"), None)
-        profit_rate = (
+    rows = [_normalize_history_trade_row(row) for row in result]
+    return rows, warnings, recent_dates
+
+
+def _normalize_history_trade_row(row: dict) -> dict:
+    status = str(row.get("status") or "")
+    buy_price = _safe_float(row.get("buy_price"))
+    sell_price = _safe_float(row.get("sell_price"))
+    buy_qty = _safe_int(row.get("buy_qty"), 0) or 0
+    raw_profit_rate = _safe_float(row.get("profit_rate"), None)
+    normalized = {
+        "id": _safe_int(row.get("id"), None),
+        "rec_date": _safe_date_string(row.get("rec_date")),
+        "code": str(row.get("stock_code") or "").strip()[:6],
+        "name": str(row.get("stock_name") or ""),
+        "status": status,
+        "strategy": str(row.get("strategy") or ""),
+        "buy_price": buy_price,
+        "buy_qty": buy_qty,
+        "buy_time": str(row.get("buy_time") or ""),
+        "sell_price": _safe_int(sell_price, 0) or 0,
+        "sell_time": str(row.get("sell_time") or ""),
+        "profit_rate": (
             round(raw_profit_rate, 2)
             if raw_profit_rate is not None and status.upper() == "COMPLETED"
             else None
-        )
-        pnl_krw = (
-            int(round((sell_price - buy_price) * buy_qty))
-            if status.upper() == "COMPLETED"
-            and sell_price is not None
-            and buy_price is not None
-            and buy_qty
-            else 0
-        )
-        rows.append(
-            {
-                "rec_date": _safe_date_string(row.get("rec_date")),
-                "code": str(row.get("stock_code") or "").strip()[:6],
-                "name": str(row.get("stock_name") or ""),
-                "status": status,
-                "strategy": str(row.get("strategy") or ""),
-                "buy_price": buy_price,
-                "buy_qty": buy_qty,
-                "buy_time": str(row.get("buy_time") or ""),
-                "sell_price": _safe_int(sell_price, 0) or 0,
-                "sell_time": str(row.get("sell_time") or ""),
-                "profit_rate": profit_rate,
-                "realized_pnl_krw": pnl_krw,
-            }
-        )
-    return rows, warnings, recent_dates
+        ),
+    }
+    quality_reason = _completed_execution_quality_reason(normalized)
+    valid_completed = quality_reason is None
+    fact_present = _safe_int(row.get("performance_fact_id"), None) is not None
+    fact_pnl = _safe_int(row.get("performance_fact_realized_pnl_krw"), 0) or 0
+    calculated_net_pnl = (
+        calculate_net_realized_pnl(buy_price, sell_price, buy_qty)
+        if valid_completed
+        else 0
+    )
+    normalized.update(
+        {
+            "completed_execution_quality": (
+                "valid"
+                if valid_completed
+                else (
+                    "not_applicable"
+                    if quality_reason == "not_completed"
+                    else quality_reason
+                )
+            ),
+            "realized_pnl_source": (
+                "trade_performance_fact"
+                if valid_completed and fact_present
+                else (
+                    "fee_aware_price_reconstruction"
+                    if valid_completed
+                    else (
+                        "not_applicable_open_status"
+                        if quality_reason == "not_completed"
+                        else "source_quality_blocked"
+                    )
+                )
+            ),
+            "realized_pnl_krw": (
+                fact_pnl if valid_completed and fact_present else calculated_net_pnl
+            ),
+        }
+    )
+    return normalized
 
 
 def _summarize_trade_rows(rows: list[dict], date_count: int) -> dict:
     entered_rows = [row for row in rows if _is_entered_trade(row)]
     completed_rows = [row for row in entered_rows if _is_completed_trade(row)]
+    invalid_completed_rows = [
+        row
+        for row in entered_rows
+        if _is_completed_status(row) and not _is_completed_trade(row)
+    ]
     completed_profit_values = _valid_completed_profit_values(completed_rows)
     win_count = sum(1 for value in completed_profit_values if value > 0)
     loss_count = sum(1 for value in completed_profit_values if value < 0)
@@ -1659,6 +1742,10 @@ def _summarize_trade_rows(rows: list[dict], date_count: int) -> dict:
         "date_count": date_count,
         "entered_rows": len(entered_rows),
         "completed_rows": len(completed_rows),
+        "invalid_completed_rows": len(invalid_completed_rows),
+        "invalid_completed_reason_counts": dict(
+            _invalid_completed_reason_counts(invalid_completed_rows)
+        ),
         "win_count": win_count,
         "loss_count": loss_count,
         "win_rate": _ratio(win_count, len(completed_rows)),
@@ -1672,6 +1759,36 @@ def _summarize_trade_rows(rows: list[dict], date_count: int) -> dict:
                 _safe_int(row.get("realized_pnl_krw"), 0) or 0 for row in completed_rows
             )
         ),
+    }
+
+
+def _build_real_trade_outcome_quality(
+    current_rows: list[dict], history_rows: list[dict]
+) -> dict:
+    current_reasons = _invalid_completed_reason_counts(current_rows)
+    history_reasons = _invalid_completed_reason_counts(history_rows)
+    return {
+        "current_invalid_completed_rows": sum(current_reasons.values()),
+        "current_invalid_reason_counts": dict(current_reasons),
+        "rolling_invalid_completed_rows": sum(history_reasons.values()),
+        "rolling_invalid_reason_counts": dict(history_reasons),
+        "metric_role": "source_quality_gate",
+        "decision_authority": "real_trade_pnl_ev_input_eligibility_only",
+        "window_policy": "current_day_and_configured_recent_trading_dates",
+        "sample_floor": "not_applicable_hard_execution_validity",
+        "primary_decision_metric": "valid_completed_realized_pnl_krw",
+        "source_quality_gate": (
+            "COMPLETED_and_positive_buy_sell_qty_and_non_null_profit_rate"
+        ),
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "forbidden_uses": [
+            "broker_order_submit",
+            "threshold_mutation",
+            "provider_route_change",
+            "quantity_cap_release",
+            "bot_restart",
+        ],
     }
 
 
@@ -1742,6 +1859,7 @@ def _build_strategy_trends(
                     "date": rec_date,
                     "entered_rows": summary["entered_rows"],
                     "completed_rows": summary["completed_rows"],
+                    "invalid_completed_rows": summary["invalid_completed_rows"],
                     "win_rate": summary["win_rate"],
                     "avg_profit_rate": summary["avg_profit_rate"],
                     "realized_pnl_krw": summary["realized_pnl_krw"],
@@ -3086,6 +3204,9 @@ def build_performance_tuning_report(
     sections = {
         "strategy_rows": strategy_rows,
         "swing_daily_summary": swing_daily_summary,
+        "real_trade_outcome_quality": _build_real_trade_outcome_quality(
+            trade_rows, history_rows
+        ),
         "top_holding_slow": top_holding_slow,
         "top_gatekeeper_slow": top_gatekeeper_slow,
         "top_dual_persona_slow": top_dual_persona_slow,
@@ -3236,12 +3357,12 @@ def build_performance_tuning_report(
         "meta": {
             "schema_version": PERFORMANCE_TUNING_SCHEMA_VERSION,
             "warnings": trade_warnings + history_warnings,
-            "outcome_basis": "기준일 누적 성과 (trade review 정규화)",
+            "outcome_basis": "기준일 누적 실거래 성과 (유효 COMPLETED + fee-aware 순실현손익)",
             "engine_basis": "조회 구간 엔진 지표",
             "trend_basis": (
-                f"최근 {len(recent_history_dates)}개 거래일 rolling 성과"
+                f"최근 {len(recent_history_dates)}개 거래일 rolling 실거래 순성과"
                 if recent_history_dates
-                else "최근 거래일 rolling 성과"
+                else "최근 거래일 rolling 실거래 순성과"
             ),
             "trend_max_dates": trend_max_dates,
         },
