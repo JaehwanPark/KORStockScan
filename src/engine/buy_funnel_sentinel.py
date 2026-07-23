@@ -86,8 +86,8 @@ SUBMIT_DROUGHT_MIN_BUDGET_UNIQUE = 3
 SUBMIT_TO_AI_CRITICAL_PCT = 20.0
 SUBMIT_TO_BUDGET_CRITICAL_PCT = 10.0
 REPORT_DIRNAME = "buy_funnel_sentinel"
-EVENT_CACHE_SCHEMA_VERSION = 4
-LOSSLESS_EVENT_CACHE_SCHEMA_VERSION = 6
+EVENT_CACHE_SCHEMA_VERSION = 5
+LOSSLESS_EVENT_CACHE_SCHEMA_VERSION = 7
 EVENT_CACHE_NAME = "buy_funnel_sentinel_events"
 FORBIDDEN_AUTOMATIONS = [
     "score_threshold_relaxation",
@@ -273,6 +273,7 @@ def _payload_to_cache_row(
     if not (
         stage in ENTRY_STAGES
         or stage in HOLDING_STAGES
+        or stage in PROBE_BUNDLE_LIFECYCLE_STAGES
         or stage in AI_TERMINAL_ATTRIBUTION_STAGES
         or stage in BLOCKER_STAGES
         or stage in UPSTREAM_BLOCK_STAGES
@@ -616,9 +617,7 @@ def _economic_submit_participation(events: list[PipelineEvent]) -> dict[str, Any
     rows: list[dict[str, Any]] = []
     for attempt_key, attempt_events in events_by_attempt.items():
         order_events = [
-            event
-            for event in attempt_events
-            if event.stage == "order_bundle_submitted"
+            event for event in attempt_events if event.stage == "order_bundle_submitted"
         ]
         probe_events = [
             event for event in attempt_events if event.stage == "probe_submitted"
@@ -726,8 +725,7 @@ def _economic_submit_participation(events: list[PipelineEvent]) -> dict[str, Any
         fallback_venue_values = {
             _safe_str(event.fields.get("venue")).upper()
             for event in attempt_events
-            if _safe_str(event.fields.get("venue")).upper()
-            in EXPLICIT_TRADABLE_VENUES
+            if _safe_str(event.fields.get("venue")).upper() in EXPLICIT_TRADABLE_VENUES
         }
         if len(authoritative_venue_values) == 1:
             effective_venue = next(iter(authoritative_venue_values))
@@ -803,9 +801,7 @@ def _economic_submit_participation(events: list[PipelineEvent]) -> dict[str, Any
             "submitted_qty": submitted_qty,
             "requested_notional_krw": requested_notional,
             "submitted_notional_krw": submitted_notional,
-            "submitted_qty_to_requested_qty_pct": _ratio(
-                submitted_qty, requested_qty
-            ),
+            "submitted_qty_to_requested_qty_pct": _ratio(submitted_qty, requested_qty),
             "submitted_notional_to_requested_notional_pct": _ratio(
                 submitted_notional, requested_notional
             ),
@@ -813,9 +809,7 @@ def _economic_submit_participation(events: list[PipelineEvent]) -> dict[str, Any
 
     valid_rows = [row for row in rows if row["source_quality_valid"]]
     by_venue = {
-        venue: _summary(
-            [row for row in valid_rows if row["effective_venue"] == venue]
-        )
+        venue: _summary([row for row in valid_rows if row["effective_venue"] == venue])
         for venue in sorted(EXPLICIT_TRADABLE_VENUES)
         if any(row["effective_venue"] == venue for row in valid_rows)
     }
