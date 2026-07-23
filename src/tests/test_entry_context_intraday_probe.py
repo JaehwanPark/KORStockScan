@@ -521,6 +521,47 @@ def test_decision_point_rows_prefers_latest_emitted_at():
     assert rows["entry_price"][0]["emitted_at"] == "2026-07-22T11:00:00"
 
 
+def test_holding_provider_probe_rehydrates_model_bars_and_structured_flags():
+    bars = [
+        {
+            "t": f"09:{index:02d}",
+            "o": 10000 + index,
+            "h": 10002 + index,
+            "l": 9998 + index,
+            "c": 10001 + index,
+            "v": 100 + index,
+            "forming": index == 19,
+            "partial_volume": index == 19,
+        }
+        for index in range(20)
+    ]
+    fields = {
+        "holding_context_enabled": "True",
+        "holding_context_venue": "NXT",
+        "holding_context_session": "nxt_aftermarket",
+        "holding_context_rest_route": "_NX",
+        "holding_context_ws_route": "krx_nxt_integrated",
+        "holding_context_model_bars": repr(bars),
+        "holding_context_model_structure": repr(
+            {"returns_pct": {"3": 0.2, "20": 0.8}}
+        ),
+        "holding_context_candle_risk_flags": "['venue_conflict']",
+        "holding_context_blockers": "['candle_source_quality']",
+        "holding_context_source_quality_status": "blocked",
+    }
+
+    context = mod._fields_to_holding_decision_context(fields)
+    candles = mod._entry_context_to_recent_candles(context["candle"])
+
+    assert len(context["candle"]["bars"]) == 20
+    assert context["candle"]["risk_flags"] == ["venue_conflict"]
+    assert context["source_quality"]["blockers"] == ["candle_source_quality"]
+    assert context["candle"]["structure"]["returns_pct"]["20"] == 0.8
+    assert len(candles) == 20
+    assert candles[-1]["close"] == 10020
+    assert candles[-1]["forming"] is True
+
+
 def test_probe_report_includes_endpoint_compare_when_requested(monkeypatch):
     monkeypatch.setattr(
         mod,

@@ -432,6 +432,56 @@ def test_nxt_aftermarket_rejects_tick_from_non_equivalent_route(monkeypatch):
     assert context["source_quality"]["status"] == "blocked"
 
 
+def test_nxt_aftermarket_uses_route_partition_without_cross_route_poisoning(
+    monkeypatch,
+):
+    _enable(monkeypatch)
+    ws = _ws(10200)
+    # A KRX tick may be the latest aggregate observation even while the
+    # position-owned NXT route has a valid partition.
+    ws["market_suffix"] = ""
+    ws["market_route"] = "krx_regular"
+    nxt_tick = {
+        "time": "16:20:20",
+        "price": 10210,
+        "volume": 3,
+        "market_suffix": "_NX",
+        "market_route": "nxt_only",
+    }
+    krx_tick = {
+        "time": "16:20:21",
+        "price": 9990,
+        "volume": 9,
+        "market_suffix": "",
+        "market_route": "krx_regular",
+    }
+    ws["recent_trade_ticks"] = [krx_tick, nxt_tick]
+    ws["recent_trade_ticks_by_route"] = {
+        "_NX|nxt_only": [nxt_tick],
+        "KRX|krx_regular": [krx_tick],
+    }
+
+    context = build_entry_candle_context(
+        "token",
+        "000660",
+        ws,
+        venue="NXT",
+        session="nxt_aftermarket",
+        now_ts=datetime(2026, 7, 23, 16, 20, 30, tzinfo=KST),
+        recent_candles=_candles(20, start_hour=16),
+        source_meta={},
+    )
+
+    quality = context["source_quality"]
+    assert quality["status"] == "fresh_consistent"
+    assert quality["route_conflict_count"] == 0
+    assert quality["route_partition_used"] is True
+    assert quality["route_partition_expected_key"] == "_NX|nxt_only"
+    assert quality["route_partition_selected_route"] == "nxt_only"
+    assert quality["route_partition_ignored_tick_count"] == 1
+    assert context["bars"][-1]["c"] == 10210
+
+
 def test_krx_context_blocks_nxt_ws_suffix_even_without_route_label(monkeypatch):
     _enable(monkeypatch)
     ws = _ws(10000)

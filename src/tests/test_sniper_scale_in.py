@@ -30722,6 +30722,7 @@ def test_holding_limit_up_immediate_exit_submits_sell(monkeypatch):
 
     pipeline_logs = []
     sell_calls = []
+    holding_ai_calls = []
 
     monkeypatch.setattr(
         state_handlers,
@@ -30739,6 +30740,44 @@ def test_holding_limit_up_immediate_exit_submits_sell(monkeypatch):
         "can_consider_scale_in",
         lambda *args, **kwargs: {"allowed": False, "reason": "test_block"},
     )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils,
+        "get_tick_history_ka10003",
+        lambda *args, **kwargs: [
+            {
+                "price": 13000,
+                "volume": 10,
+                "aggressor_side": "BUY",
+                "aggressor_source": "kiwoom_0b_signed_trade_volume",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_get_holding_minute_candles_with_meta",
+        lambda *args, **kwargs: ([], {}),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_holding_score_preflight_source_quality",
+        lambda *args, **kwargs: {
+            "blocked": False,
+            "block_reason": "-",
+            "data_quality": "fresh",
+            "source_quality_reason": "test_fresh",
+        },
+    )
+
+    class _HoldingAI:
+        def evaluate_scalping_holding_score(self, *args, **kwargs):
+            holding_ai_calls.append((args, kwargs))
+            return {
+                "action": "HOLD",
+                "score": 90,
+                "holding_score_data_quality": "fresh",
+                "holding_score_source": "live",
+                "ai_parse_ok": True,
+            }
 
     stock = {
         "id": 130,
@@ -30757,13 +30796,19 @@ def test_holding_limit_up_immediate_exit_submits_sell(monkeypatch):
         ws_data={
             "curr": 13000,
             "fluctuation": "+29.95",
-            "orderbook": {"bids": [{"price": 13000, "volume": 1000}]},
+            "best_bid": 13000,
+            "best_ask": 13010,
+            "quote_age_ms": 0,
+            "orderbook": {
+                "bids": [{"price": 13000, "volume": 1000}],
+                "asks": [{"price": 13010, "volume": 1000}],
+            },
         },
         admin_id=1,
         market_regime="BULL",
         now_dt=datetime(2026, 6, 24, 10, 0, 0),
-        radar=None,
-        ai_engine=None,
+        radar=object(),
+        ai_engine=_HoldingAI(),
     )
 
     exit_logs = [fields for stage, fields in pipeline_logs if stage == "exit_signal"]
@@ -30775,6 +30820,7 @@ def test_holding_limit_up_immediate_exit_submits_sell(monkeypatch):
     assert stock["last_exit_rule"] == "daily_limit_up_immediate_exit"
     assert stock["last_exit_decision_source"] == "DAILY_LIMIT_UP_EXIT"
     assert sell_calls
+    assert holding_ai_calls == []
     assert sell_calls[-1][1]["reason_type"] == "LIMIT_UP"
     assert sell_calls[-1][1]["bypass_open_time_block"] is True
     assert exit_logs[-1]["sell_reason_type"] == "LIMIT_UP"

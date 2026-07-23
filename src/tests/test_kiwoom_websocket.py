@@ -193,6 +193,48 @@ def test_signed_trade_volume_primary_classifies_without_orderbook_touch(monkeypa
     assert tick["aggressor_aux_pressure_usable"] is False
 
 
+def test_recent_trade_ticks_are_partitioned_by_subscription_route(monkeypatch):
+    monkeypatch.setattr(kiwoom_websocket.time, "time", lambda: _epoch_at_090010())
+    manager = KiwoomWSManager("test-token")
+    manager.subscribed_codes = {"005930"}
+
+    for item, signed_volume in (("005930", "+10"), ("005930_AL", "+20")):
+        asyncio.run(
+            manager._handle_message(
+                json.dumps(
+                    {
+                        "trnm": "REAL",
+                        "data": [
+                            {
+                                "type": "0B",
+                                "item": item,
+                                "values": {
+                                    "10": "10110",
+                                    "15": signed_volume,
+                                    "20": "090010",
+                                    "27": "10110",
+                                    "28": "10100",
+                                },
+                            }
+                        ],
+                    }
+                )
+            )
+        )
+
+    latest = manager.get_latest_data("005930")
+    partitions = latest["recent_trade_ticks_by_route"]
+    assert set(partitions) == {
+        "KRX|krx_regular",
+        "_AL|krx_nxt_integrated",
+    }
+    assert partitions["KRX|krx_regular"][0]["market_suffix"] == ""
+    assert (
+        partitions["_AL|krx_nxt_integrated"][0]["market_route"]
+        == "krx_nxt_integrated"
+    )
+
+
 def test_signed_trade_volume_primary_records_orderbook_touch_conflict(monkeypatch):
     monkeypatch.setattr(kiwoom_websocket.time, "time", lambda: _epoch_at_090010())
     manager = KiwoomWSManager("test-token")

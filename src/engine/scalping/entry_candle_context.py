@@ -287,6 +287,81 @@ def _route_compatible(
     return True
 
 
+def select_route_trade_ticks(
+    ws_data: dict[str, Any] | None,
+    *,
+    request_suffix: str,
+    ws_suffix: str,
+    ws_route: str,
+    allow_nxt_integrated_aftermarket: bool = False,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Select the route-owned tick buffer without weakening route validation.
+
+    Older snapshots expose only the shared buffer and retain the strict
+    conflict behavior. New snapshots expose per-route buffers so a valid NXT
+    stream is not poisoned by a concurrent KRX subscription for the same code.
+    """
+
+    ws = ws_data if isinstance(ws_data, dict) else {}
+    shared = [
+        tick
+        for tick in (ws.get("recent_trade_ticks") or [])
+        if isinstance(tick, dict)
+    ]
+    partitions = ws.get("recent_trade_ticks_by_route")
+    expected_suffix = (
+        "_AL"
+        if allow_nxt_integrated_aftermarket
+        else str(request_suffix or ws_suffix or "").upper()
+    )
+    if expected_suffix == "_AL":
+        expected_route = "krx_nxt_integrated"
+    elif expected_suffix == "_NX":
+        expected_route = "nxt_only"
+    else:
+        expected_route = "krx_regular"
+    expected_key = f"{expected_suffix or 'KRX'}|{expected_route or 'unknown'}"
+    if not isinstance(partitions, dict):
+        return shared, {
+            "used": False,
+            "expected_key": expected_key,
+            "selected_suffix": "",
+            "selected_route": "",
+            "available_keys": [],
+            "ignored_tick_count": 0,
+            "fallback_reason": "route_partition_unavailable",
+        }
+
+    available = {
+        str(key): [row for row in (rows or []) if isinstance(row, dict)]
+        for key, rows in partitions.items()
+        if isinstance(rows, (list, tuple))
+    }
+    selected = available.get(expected_key)
+    if selected is None:
+        return shared, {
+            "used": False,
+            "expected_key": expected_key,
+            "selected_suffix": "",
+            "selected_route": "",
+            "available_keys": sorted(available),
+            "ignored_tick_count": 0,
+            "fallback_reason": "expected_route_partition_missing",
+        }
+    ignored_count = sum(
+        len(rows) for key, rows in available.items() if key != expected_key
+    )
+    return selected, {
+        "used": True,
+        "expected_key": expected_key,
+        "selected_suffix": expected_suffix,
+        "selected_route": expected_route,
+        "available_keys": sorted(available),
+        "ignored_tick_count": ignored_count,
+        "fallback_reason": None,
+    }
+
+
 def _tick_dt(tick: dict[str, Any], now: datetime) -> datetime | None:
     received = _number(
         tick.get("received_at_ms", tick.get("received_timestamp_ms")), 0.0
@@ -556,9 +631,23 @@ def build_session_candle_source(
     ]
     previous_session = [bar for bar in parsed if bar not in current_session]
 
-    ticks = [
-        tick for tick in (ws.get("recent_trade_ticks") or []) if isinstance(tick, dict)
-    ]
+    ticks, route_partition = select_route_trade_ticks(
+        ws,
+        request_suffix=request_suffix,
+        ws_suffix=ws_suffix,
+        ws_route=ws_route,
+        allow_nxt_integrated_aftermarket=route_equivalence_proven,
+    )
+    tick_ws_suffix = (
+        str(route_partition["selected_suffix"])
+        if route_partition["used"]
+        else ws_suffix
+    )
+    tick_ws_route = (
+        str(route_partition["selected_route"])
+        if route_partition["used"]
+        else ws_route
+    )
     route_conflict_count = 0
     current_minute = now.replace(second=0, microsecond=0)
     if current_session and current_session[-1]["dt"] == current_minute:
@@ -572,7 +661,7 @@ def build_session_candle_source(
         if not _route_compatible(
             tick,
             request_suffix=request_suffix,
-            ws_route=ws_route,
+            ws_route=tick_ws_route,
             allow_nxt_integrated_aftermarket=route_equivalence_proven,
         ):
             route_conflict_count += 1
@@ -634,16 +723,21 @@ def build_session_candle_source(
     latest_age_sec = max(0.0, (now - latest["dt"]).total_seconds()) if latest else None
     venue_conflict = bool(
         route_conflict_count
-        or (not route_equivalence_proven and ws_suffix and request_suffix != ws_suffix)
+        or (
+            not route_equivalence_proven
+            and tick_ws_suffix
+            and request_suffix != tick_ws_suffix
+        )
         or (
             venue_value == "KRX"
-            and ws_route
-            and ws_route not in {"krx_regular", "krx_only", "krx_nxt_integrated"}
+            and tick_ws_route
+            and tick_ws_route
+            not in {"krx_regular", "krx_only", "krx_nxt_integrated"}
         )
         or (
             venue_value == "NXT"
-            and ws_route
-            and ws_route not in {"nxt_only"}
+            and tick_ws_route
+            and tick_ws_route not in {"nxt_only"}
             and not route_equivalence_proven
         )
     )
@@ -734,6 +828,15 @@ def build_session_candle_source(
             "duplicate_price_conflict": duplicate_price_conflict,
             "time_monotonic": not time_reversal,
             "route_conflict_count": route_conflict_count,
+            "route_partition_used": bool(route_partition["used"]),
+            "route_partition_expected_key": route_partition["expected_key"],
+            "route_partition_selected_suffix": route_partition["selected_suffix"],
+            "route_partition_selected_route": route_partition["selected_route"],
+            "route_partition_available_keys": route_partition["available_keys"],
+            "route_partition_ignored_tick_count": route_partition[
+                "ignored_tick_count"
+            ],
+            "route_partition_fallback_reason": route_partition["fallback_reason"],
             "route_equivalence_proof": route_proof,
             "source_meta": {
                 key: value

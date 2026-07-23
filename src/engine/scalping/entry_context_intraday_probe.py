@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import gzip
 import inspect
 import json
@@ -939,6 +940,38 @@ def _boolish(value: Any) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
+def _structured_list(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return list(value)
+    if isinstance(value, tuple):
+        return list(value)
+    if not isinstance(value, str) or not value.strip():
+        return []
+    for loader in (json.loads, ast.literal_eval):
+        try:
+            parsed = loader(value)
+        except (TypeError, ValueError, SyntaxError, json.JSONDecodeError):
+            continue
+        if isinstance(parsed, (list, tuple)):
+            return list(parsed)
+    return []
+
+
+def _structured_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    if not isinstance(value, str) or not value.strip():
+        return {}
+    for loader in (json.loads, ast.literal_eval):
+        try:
+            parsed = loader(value)
+        except (TypeError, ValueError, SyntaxError, json.JSONDecodeError):
+            continue
+        if isinstance(parsed, dict):
+            return dict(parsed)
+    return {}
+
+
 def _temporary_env(overrides: dict[str, str]) -> dict[str, str | None]:
     original = {key: os.environ.get(key) for key in overrides}
     for key, value in overrides.items():
@@ -1143,14 +1176,16 @@ def _entry_context_to_recent_candles(
             continue
         rows.append(
             {
-                "time": bar.get("t"),
-                "open": bar.get("o"),
-                "high": bar.get("h"),
-                "low": bar.get("l"),
-                "close": bar.get("c"),
-                "volume": bar.get("v"),
-                "forming": bool(bar.get("forming")),
-                "partial_volume": bool(bar.get("partial_volume")),
+                "time": bar.get("t", bar.get("minute")),
+                "open": bar.get("o", bar.get("open")),
+                "high": bar.get("h", bar.get("high")),
+                "low": bar.get("l", bar.get("low")),
+                "close": bar.get("c", bar.get("close")),
+                "volume": bar.get("v", bar.get("volume")),
+                "forming": bool(bar.get("forming", bar.get("is_forming"))),
+                "partial_volume": bool(
+                    bar.get("partial_volume", bar.get("volume_is_partial"))
+                ),
             }
         )
     return rows
@@ -1165,6 +1200,13 @@ def _fields_to_holding_decision_context(
     if isinstance(embedded, dict) and embedded.get("schema"):
         return dict(embedded)
     entry_context = _fields_to_entry_candle_context(fields)
+    model_bars = _structured_list(fields.get("holding_context_model_bars"))
+    model_structure = _structured_dict(
+        fields.get("holding_context_model_structure")
+    )
+    market_snapshot = _structured_dict(
+        fields.get("holding_context_ai_market_snapshot")
+    )
     source_status = str(
         _first_nonempty(
             fields,
@@ -1172,10 +1214,10 @@ def _fields_to_holding_decision_context(
             default="observation_summary_only",
         )
     )
-    blockers = fields.get("holding_context_blockers")
-    if not isinstance(blockers, list):
+    blockers = _structured_list(fields.get("holding_context_blockers"))
+    if not blockers and source_status != "fresh_consistent":
         blockers = ["provider_compare_missing_full_holding_source"]
-    return {
+    context = {
         "schema": "holding_decision_context_v1",
         "enabled": _boolish(
             _first_nonempty(fields, "holding_context_enabled", default=False)
@@ -1211,15 +1253,24 @@ def _fields_to_holding_decision_context(
                 "entry_candle_latest_bar_age_sec",
                 default=None,
             ),
-            "bars": list(entry_context.get("bars") or []),
-            "structure": dict(entry_context.get("structure") or {}),
+            "bars": model_bars or list(entry_context.get("bars") or []),
+            "structure": model_structure
+            or dict(entry_context.get("structure") or {}),
             "regime": _first_nonempty(
                 fields,
                 "holding_context_candle_regime",
                 "entry_candle_regime",
                 default="unknown",
             ),
-            "risk_flags": list(fields.get("holding_context_candle_risk_flags") or []),
+            "alignment": _first_nonempty(
+                fields,
+                "holding_context_candle_alignment",
+                "entry_candle_alignment",
+                default="unknown",
+            ),
+            "risk_flags": _structured_list(
+                fields.get("holding_context_candle_risk_flags")
+            ),
         },
         "signed_tape": {
             "state": _first_nonempty(
@@ -1294,6 +1345,9 @@ def _fields_to_holding_decision_context(
         },
         "observation_contract": HOLDING_CONTEXT_OBSERVATION_CONTRACT,
     }
+    if market_snapshot:
+        context["ai_market_snapshot_v1"] = market_snapshot
+    return context
 
 
 def _fields_to_position_ctx(fields: dict[str, Any]) -> dict[str, Any]:

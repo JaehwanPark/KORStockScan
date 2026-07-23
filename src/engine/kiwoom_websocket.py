@@ -1459,6 +1459,7 @@ class KiwoomWSManager:
                 "program_history": deque(maxlen=120),
                 "strength_momentum_history": deque(maxlen=history_maxlen),
                 "recent_trade_ticks": deque(maxlen=120),
+                "recent_trade_ticks_by_route": {},
                 "_first_tick_logged": False,
                 "last_trade_tick": None,
                 "top_of_book_cache": self._get_tob_cache(item_code),
@@ -1577,6 +1578,14 @@ class KiwoomWSManager:
         ):
             if isinstance(snapshot.get(key), deque):
                 snapshot[key] = list(snapshot[key])
+        route_ticks = snapshot.get("recent_trade_ticks_by_route")
+        if isinstance(route_ticks, dict):
+            snapshot["recent_trade_ticks_by_route"] = {
+                str(route_key): (
+                    list(rows) if isinstance(rows, deque) else list(rows or [])
+                )
+                for route_key, rows in route_ticks.items()
+            }
         return snapshot
 
     def _maybe_write_dashboard_snapshot(self):
@@ -2508,9 +2517,9 @@ class KiwoomWSManager:
                                     "price": trade_price,
                                     "volume": int(trade_volume or 0),
                                     "market_suffix": self._ws_item_market_suffix(
-                                        item_code
+                                        raw_item_code
                                     ),
-                                    "market_route": self._ws_item_route(item_code),
+                                    "market_route": self._ws_item_route(raw_item_code),
                                     "volume_source": aux_fields["trade_volume_source"],
                                     "dir": aggressor_side,
                                     "aggressor_side": aggressor_side,
@@ -2592,6 +2601,19 @@ class KiwoomWSManager:
                                     target["recent_trade_ticks"].appendleft(
                                         normalized_tick
                                     )
+                                route_tick_buffers = target.setdefault(
+                                    "recent_trade_ticks_by_route", {}
+                                )
+                                if isinstance(route_tick_buffers, dict):
+                                    route_key = (
+                                        f"{normalized_tick['market_suffix'] or 'KRX'}"
+                                        f"|{normalized_tick['market_route'] or 'unknown'}"
+                                    )
+                                    route_buffer = route_tick_buffers.get(route_key)
+                                    if not isinstance(route_buffer, deque):
+                                        route_buffer = deque(maxlen=120)
+                                        route_tick_buffers[route_key] = route_buffer
+                                    route_buffer.appendleft(normalized_tick)
                                 ORDERBOOK_STABILITY_OBSERVER.record_trade(
                                     item_code,
                                     price=trade_price,

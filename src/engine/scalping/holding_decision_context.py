@@ -20,7 +20,10 @@ from src.engine.scalping.ai_market_snapshot import (
     build_ai_market_snapshot,
     runtime_preflight_required,
 )
-from src.engine.scalping.entry_candle_context import build_session_candle_source
+from src.engine.scalping.entry_candle_context import (
+    build_session_candle_source,
+    select_route_trade_ticks,
+)
 from src.engine.scalping.market_data_enrichment import (
     rest_signed_tape_tick_freshness,
 )
@@ -563,11 +566,20 @@ def build_holding_decision_context(
         now_ts=now,
     )
     request_suffix = _request_suffix(str(candle.get("request_code") or ""))
+    ws_suffix = str(candle.get("ws_suffix") or "").upper()
     ws_route = str(candle.get("ws_route") or "").lower()
+    route_equivalence_proven = bool(candle.get("route_equivalence_proven", False))
+    route_ticks, route_tick_partition = select_route_trade_ticks(
+        ws,
+        request_suffix=request_suffix,
+        ws_suffix=ws_suffix,
+        ws_route=ws_route,
+        allow_nxt_integrated_aftermarket=route_equivalence_proven,
+    )
     ws_ticks = [
         tick
         for tick in (
-            list(ws.get("recent_trade_ticks") or []) + list(recent_ticks or [])
+            list(route_ticks or []) + list(recent_ticks or [])
         )
         if isinstance(tick, dict)
     ]
@@ -895,6 +907,38 @@ def build_holding_decision_context(
             "blockers": blockers,
             "candle_status": candle_quality.get("status"),
             "candle_blockers": candle_quality.get("blockers", []),
+            "candle_route_conflict_count": candle_quality.get(
+                "route_conflict_count", 0
+            ),
+            "candle_route_partition_used": candle_quality.get(
+                "route_partition_used", False
+            ),
+            "candle_route_partition_expected_key": candle_quality.get(
+                "route_partition_expected_key"
+            ),
+            "candle_route_partition_available_keys": candle_quality.get(
+                "route_partition_available_keys", []
+            ),
+            "candle_route_partition_selected_suffix": candle_quality.get(
+                "route_partition_selected_suffix"
+            ),
+            "candle_route_partition_selected_route": candle_quality.get(
+                "route_partition_selected_route"
+            ),
+            "candle_route_partition_ignored_tick_count": candle_quality.get(
+                "route_partition_ignored_tick_count", 0
+            ),
+            "tape_route_partition_used": bool(route_tick_partition["used"]),
+            "tape_route_partition_expected_key": route_tick_partition["expected_key"],
+            "tape_route_partition_selected_suffix": route_tick_partition[
+                "selected_suffix"
+            ],
+            "tape_route_partition_selected_route": route_tick_partition[
+                "selected_route"
+            ],
+            "tape_route_partition_ignored_tick_count": route_tick_partition[
+                "ignored_tick_count"
+            ],
             "bbo_fresh": bbo_fresh,
             "signed_tape_fresh": signed_tape_fresh,
             "rest_signed_tape_advisory_fresh": rest_signed_tape_advisory_fresh,
@@ -1216,6 +1260,10 @@ def holding_decision_context_log_fields(
         "holding_context_candle_latest_age_sec": candle.get("latest_bar_age_sec"),
         "holding_context_candle_regime": candle.get("regime"),
         "holding_context_candle_risk_flags": candle.get("risk_flags", []),
+        "holding_context_model_bars": candle.get("bars", []),
+        "holding_context_model_structure": candle.get("structure", {}),
+        "holding_context_candle_alignment": candle.get("alignment"),
+        "holding_context_ai_market_snapshot": context.get("ai_market_snapshot_v1", {}),
         "holding_context_tape_state": tape.get("state"),
         "holding_context_tape_source": tape.get("source"),
         "holding_context_tape_sample_count": tape.get("sample_count", 0),
@@ -1267,6 +1315,42 @@ def holding_decision_context_log_fields(
             quality.get("order_consistent", False)
         ),
         "holding_context_blockers": quality.get("blockers", []),
+        "holding_context_candle_route_conflict_count": quality.get(
+            "candle_route_conflict_count", 0
+        ),
+        "holding_context_candle_route_partition_used": bool(
+            quality.get("candle_route_partition_used", False)
+        ),
+        "holding_context_candle_route_partition_expected_key": quality.get(
+            "candle_route_partition_expected_key"
+        ),
+        "holding_context_candle_route_partition_available_keys": quality.get(
+            "candle_route_partition_available_keys", []
+        ),
+        "holding_context_candle_route_partition_selected_suffix": quality.get(
+            "candle_route_partition_selected_suffix"
+        ),
+        "holding_context_candle_route_partition_selected_route": quality.get(
+            "candle_route_partition_selected_route"
+        ),
+        "holding_context_candle_route_partition_ignored_tick_count": quality.get(
+            "candle_route_partition_ignored_tick_count", 0
+        ),
+        "holding_context_tape_route_partition_used": bool(
+            quality.get("tape_route_partition_used", False)
+        ),
+        "holding_context_tape_route_partition_expected_key": quality.get(
+            "tape_route_partition_expected_key"
+        ),
+        "holding_context_tape_route_partition_selected_suffix": quality.get(
+            "tape_route_partition_selected_suffix"
+        ),
+        "holding_context_tape_route_partition_selected_route": quality.get(
+            "tape_route_partition_selected_route"
+        ),
+        "holding_context_tape_route_partition_ignored_tick_count": quality.get(
+            "tape_route_partition_ignored_tick_count", 0
+        ),
         "holding_context_candle_fetch_ms": timing.get("candle_fetch_ms", 0),
         "holding_context_signed_tape_fetch_ms": timing.get("signed_tape_fetch_ms", 0),
         "holding_context_build_ms": timing.get("build_ms", 0),

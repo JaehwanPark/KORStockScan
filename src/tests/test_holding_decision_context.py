@@ -154,6 +154,12 @@ def test_fresh_krx_context_contains_sixty_minute_structure_and_executable_pnl(
         "is_forming": False,
         "volume_is_partial": False,
     }
+    log_fields = holding_decision_context_log_fields(context)
+    assert len(log_fields["holding_context_model_bars"]) == 20
+    assert log_fields["holding_context_model_structure"]["returns_pct"]["60"] is not None
+    assert log_fields["holding_context_ai_market_snapshot"]["schema"] == (
+        "ai_market_snapshot_v1"
+    )
 
 
 def test_nxt_route_and_conflicting_ws_route_are_kept_separate(monkeypatch):

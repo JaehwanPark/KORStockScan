@@ -63103,6 +63103,7 @@ def handle_holding_state(
         and ai_engine
         and radar
         and not opening_rotation_active
+        and not is_sell_signal
         and not holding_context_forbidden_exit_candidate
     ):
         safe_profit_pct = _rule_float("SCALP_SAFE_PROFIT", 0.5)
