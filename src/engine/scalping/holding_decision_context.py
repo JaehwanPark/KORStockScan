@@ -574,7 +574,7 @@ def build_holding_decision_context(
         request_suffix=request_suffix,
         ws_suffix=ws_suffix,
         ws_route=ws_route,
-        allow_nxt_integrated_aftermarket=route_equivalence_proven,
+        allow_nxt_integrated_closed_krx_session=route_equivalence_proven,
     )
     ws_ticks = [
         tick

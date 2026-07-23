@@ -231,6 +231,59 @@ def test_premarket_uses_nxt_route_and_al_requires_equivalence_proof(monkeypatch)
     assert "premarket_al_proof_missing" in unproven_al["candle"]["risk_flags"]
 
 
+def test_premarket_nx_candles_accept_integrated_ws_only_during_closed_krx_session(
+    monkeypatch,
+):
+    _enable(monkeypatch)
+    premarket_now = datetime(2026, 7, 23, 8, 20, 30, tzinfo=KST)
+    bars = _candles(20, start=datetime(2026, 7, 23, 8, 0, tzinfo=KST))
+    integrated_ws = _ws(
+        premarket_now,
+        suffix="_AL",
+        route="krx_nxt_integrated",
+    )
+
+    premarket = build_holding_decision_context(
+        None,
+        "000660",
+        integrated_ws,
+        _stock(),
+        "PREMARKET_KRX_LIKE",
+        "premarket_krx_like",
+        "holding_score",
+        now_ts=premarket_now,
+        recent_candles=bars,
+    )
+
+    assert premarket["request_code"] == "000660_NX"
+    assert premarket["candle"]["route_equivalence_proven"] is True
+    assert (
+        premarket["candle"]["route_equivalence"]
+        == "nxt_premarket_integrated_ws_to_nx_rest"
+    )
+    assert premarket["source_quality"]["hold_defer_allowed"] is True
+
+    regular_now = datetime(2026, 7, 23, 10, 0, 30, tzinfo=KST)
+    regular = build_holding_decision_context(
+        None,
+        "000660",
+        _ws(regular_now, suffix="_AL", route="krx_nxt_integrated"),
+        _stock(),
+        "NXT",
+        "nxt_regular_overlap",
+        "holding_score",
+        now_ts=regular_now,
+        recent_candles=_candles(
+            60,
+            start=datetime(2026, 7, 23, 9, 0, tzinfo=KST),
+        ),
+    )
+
+    assert regular["candle"]["route_equivalence_proven"] is False
+    assert regular["source_quality"]["hold_defer_allowed"] is False
+    assert "venue_conflict" in regular["candle"]["risk_flags"]
+
+
 def test_untrusted_ka10003_is_ignored_and_ka10084_fallback_is_bounded(
     monkeypatch,
 ):
