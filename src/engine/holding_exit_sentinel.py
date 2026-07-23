@@ -292,6 +292,34 @@ def _non_real_attempt_keys(events: list[PipelineEvent]) -> set[str]:
     }
 
 
+def _is_explicit_real_sell_execution(event: PipelineEvent) -> bool:
+    """Return whether a sell event proves a real broker submission or fill."""
+    if event.stage not in {"sell_order_sent", "sell_completed"}:
+        return False
+    if _is_non_real_observation(event):
+        return False
+    fields = event.fields
+    if _is_true_like(fields.get("actual_order_submitted", "")):
+        return True
+    if event.stage == "sell_order_sent":
+        order_no = _safe_str(
+            fields.get("ord_no")
+            or fields.get("order_no")
+            or fields.get("broker_order_no")
+        ).strip().lower()
+        return bool(order_no and order_no not in {"-", "0", "none", "null"})
+    return False
+
+
+def _real_sell_execution_attempt_keys(events: list[PipelineEvent]) -> set[str]:
+    """Prefer explicit broker evidence over counterfactual siblings on the same record."""
+    return {
+        _attempt_key(event)
+        for event in events
+        if _attempt_key(event) and _is_explicit_real_sell_execution(event)
+    }
+
+
 def _count_cache_miss(events: list[PipelineEvent]) -> int:
     return sum(
         1
@@ -411,16 +439,24 @@ def _summarize_events(
 ) -> dict[str, Any]:
     scoped = [event for event in events if start_at <= event.emitted_at <= end_at]
     non_real_keys = _non_real_attempt_keys(scoped)
+    real_sell_keys = _real_sell_execution_attempt_keys(scoped)
     real_scoped = [
         event
         for event in scoped
-        if _attempt_key(event) not in non_real_keys
-        and not _is_non_real_observation(event)
+        if not _is_non_real_observation(event)
+        and (
+            _attempt_key(event) in real_sell_keys
+            or _attempt_key(event) not in non_real_keys
+        )
     ]
     non_real_scoped = [
         event
         for event in scoped
-        if _attempt_key(event) in non_real_keys or _is_non_real_observation(event)
+        if _is_non_real_observation(event)
+        or (
+            _attempt_key(event) in non_real_keys
+            and _attempt_key(event) not in real_sell_keys
+        )
     ]
     stage_events = Counter(event.stage for event in scoped)
     stage_unique = {

@@ -12509,14 +12509,51 @@ def _store_scalping_sizing_decision(
     return event_fields
 
 
+def _canonicalize_rising_missed_venue_fields(
+    fields: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Expose the Rising Missed venue under the canonical event contract.
+
+    Rising Missed resolves its observation cohort before the central sizing
+    owner runs.  Preserve that strategy-specific provenance, while also
+    publishing the canonical ``venue`` / ``venue_resolution`` pair expected by
+    generic funnel and source-quality consumers.  Conflicting explicit values
+    remain observable as UNKNOWN instead of silently preferring one source.
+    """
+
+    normalized = dict(fields or {})
+    rising_venue = str(
+        normalized.get("rising_missed_effective_venue") or ""
+    ).strip().upper()
+    if not rising_venue or rising_venue in {"-", "NOT_AVAILABLE"}:
+        return normalized
+
+    canonical_venue = str(normalized.get("venue") or "").strip().upper()
+    if canonical_venue and canonical_venue != rising_venue:
+        normalized["venue"] = "UNKNOWN"
+        normalized["venue_resolution"] = (
+            "conflicting_explicit:venue,rising_missed_effective_venue"
+        )
+        return normalized
+
+    normalized["venue"] = rising_venue
+    if not str(normalized.get("venue_resolution") or "").strip():
+        normalized["venue_resolution"] = (
+            "canonicalized:rising_missed_effective_venue"
+        )
+    return normalized
+
+
 def _log_entry_pipeline(stock, code, stage, **fields):
     record_id = stock.get("id") if isinstance(stock, dict) else None
-    merged_fields = {
-        **_scanner_promotion_correlation_fields(stock),
-        **_rising_missed_tp1_observation_context_log_fields(stock),
-        **_scalping_sizing_state_fields(stock),
-        **fields,
-    }
+    merged_fields = _canonicalize_rising_missed_venue_fields(
+        {
+            **_scanner_promotion_correlation_fields(stock),
+            **_rising_missed_tp1_observation_context_log_fields(stock),
+            **_scalping_sizing_state_fields(stock),
+            **fields,
+        }
+    )
     _remember_scanner_terminal_block(stock, stage, merged_fields)
     emit_pipeline_event(
         "ENTRY_PIPELINE",
@@ -17325,6 +17362,26 @@ def _log_holding_pipeline(stock, code, stage, **fields):
         record_id=record_id,
         fields=fields,
     )
+
+
+def _real_sell_submission_contract_fields() -> dict[str, Any]:
+    return {
+        "metric_role": "execution_quality_real_only",
+        "decision_authority": "broker_sell_submission_observation_only",
+        "window_policy": "same_position_cycle_broker_submission",
+        "sample_floor": "1_successful_broker_sell_submission",
+        "primary_decision_metric": "broker_sell_order_sent_qty",
+        "source_quality_gate": (
+            "successful_broker_response_and_execution_route_provenance"
+        ),
+        "runtime_effect": True,
+        "actual_order_submitted": True,
+        "broker_order_forbidden": False,
+        "forbidden_uses": (
+            "threshold_mutation|provider_route_change|quantity_cap_release|"
+            "broker_guard_bypass|bot_restart"
+        ),
+    }
 
 
 def _log_scale_in_counterfactual_started(
@@ -22391,6 +22448,7 @@ def _dispatch_scalp_preset_exit(
             stock,
             code,
             "sell_order_sent",
+            **_real_sell_submission_contract_fields(),
             sell_reason_type=sell_reason_type,
             exit_rule=exit_rule or "-",
             exit_decision_source=exit_decision_source,
@@ -53051,6 +53109,60 @@ def _rising_missed_nxt_observation_fields(
     }
 
 
+def _rising_missed_initial_block_venue_fields(
+    stock: dict | None,
+    code: str,
+    raw_ws: dict | None,
+    enriched_ws: dict | None,
+    runtime: dict | None,
+) -> dict[str, Any]:
+    """Build canonical venue provenance for gates that run before TP1 input."""
+
+    runtime = runtime if isinstance(runtime, dict) else {}
+    observation_fields = _rising_missed_nxt_observation_fields(
+        stock,
+        code,
+        raw_ws,
+        enriched_ws,
+        now_ts=_safe_float(runtime.get("now_ts"), time.time()),
+    )
+    canonical_fields = _canonicalize_rising_missed_venue_fields(observation_fields)
+    explicit_venue, explicit_resolution = _resolve_entry_sizing_effective_venue(
+        stock,
+        runtime,
+    )
+    observed_venue = str(
+        observation_fields.get("rising_missed_effective_venue") or "UNKNOWN"
+    ).strip().upper()
+    if explicit_resolution == "conflicting_explicit_venue":
+        canonical_fields["venue"] = "UNKNOWN"
+        canonical_fields["venue_resolution"] = (
+            "rising_missed_initial_gate:conflicting_explicit_venue"
+        )
+        return canonical_fields
+    if explicit_venue != "UNKNOWN" and explicit_venue != observed_venue:
+        canonical_fields["venue"] = "UNKNOWN"
+        canonical_fields["venue_resolution"] = (
+            "rising_missed_initial_gate:session_explicit_conflict:"
+            + explicit_resolution
+        )
+        return canonical_fields
+    if explicit_venue != "UNKNOWN":
+        canonical_fields["venue"] = explicit_venue
+        canonical_fields["venue_resolution"] = (
+            "rising_missed_initial_gate:consistent_explicit:"
+            + explicit_resolution
+        )
+        return canonical_fields
+    canonical_fields["venue_resolution"] = (
+        "rising_missed_initial_gate:"
+        + str(observation_fields.get("rising_missed_market_session_bucket") or "unknown")
+        + ":"
+        + str(observation_fields.get("rising_missed_nxt_flag_source") or "unknown")
+    )
+    return canonical_fields
+
+
 def _rising_missed_tp1_source_gap_relief_enabled() -> bool:
     return _env_bool("KORSTOCKSCAN_RISING_MISSED_TP1_SOURCE_GAP_RELIEF_ENABLED", False)
 
@@ -55099,6 +55211,13 @@ def _maybe_submit_rising_missed_one_share_entry(
                 **_merge_entry_pipeline_field_groups(
                     decision.log_fields or {},
                     _rising_missed_scanner_filter_fields(action="budget_reallocated"),
+                    _rising_missed_initial_block_venue_fields(
+                        stock,
+                        code,
+                        current_ws_data,
+                        ws_data,
+                        runtime,
+                    ),
                 ),
             )
             return True
@@ -55133,6 +55252,13 @@ def _maybe_submit_rising_missed_one_share_entry(
             forbidden_uses=TRADE_QUALITY_RUNTIME_FORBIDDEN_USES,
             **_rising_missed_candidate_filter_fields(allowed=False),
             **_rising_missed_same_day_reentry_log_fields(reentry_guard),
+            **_rising_missed_initial_block_venue_fields(
+                stock,
+                code,
+                current_ws_data,
+                ws_data,
+                runtime,
+            ),
         )
         return True
     retry_fields = {"rising_missed_entry_ai_retry_reason": "not_needed"}
@@ -55191,7 +55317,15 @@ def _maybe_submit_rising_missed_one_share_entry(
             broker_order_forbidden=True,
             runtime_effect=decision.reason == RISING_MISSED_BLOCK_PRICE_ABOVE_CAP,
             **_merge_entry_pipeline_field_groups(
-                decision_log_fields, candidate_backoff_fields
+                decision_log_fields,
+                candidate_backoff_fields,
+                _rising_missed_initial_block_venue_fields(
+                    stock,
+                    code,
+                    current_ws_data,
+                    ws_data,
+                    runtime,
+                ),
             ),
         )
         return True
@@ -55407,6 +55541,8 @@ def _maybe_submit_rising_missed_one_share_entry(
         "rising_missed_one_share_entry",
         forced_entry_reason=RISING_MISSED_FORCED_ENTRY_REASON,
         forced_entry_qty=forced_entry_qty,
+        entry_phase="candidate_selected_pre_submit",
+        submission_state="not_submitted",
         actual_order_submitted=False,
         broker_order_forbidden=False,
         runtime_effect=True,
@@ -66280,6 +66416,7 @@ def handle_holding_state(
             sell_order_log_fields = dict(sell_time_block_fields or {})
             sell_order_log_fields.update(exit_extra_fields or {})
             sell_order_log_fields.update(sell_quote_fields or {})
+            sell_order_log_fields.update(_real_sell_submission_contract_fields())
             _log_holding_pipeline(
                 stock,
                 code,

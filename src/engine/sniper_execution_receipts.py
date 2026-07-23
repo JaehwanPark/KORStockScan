@@ -1476,7 +1476,23 @@ def _handle_scalp_revive_sell_execution(
                 code,
                 target_id,
                 "sell_completed",
+                metric_role="execution_quality_real_only",
+                decision_authority="broker_sell_fill_observation_only",
+                window_policy="same_position_cycle_broker_fill",
+                sample_floor="1_confirmed_broker_sell_fill",
+                primary_decision_metric="confirmed_sell_fill_price_and_profit_rate",
+                source_quality_gate=(
+                    "broker_execution_receipt_with_real_submission_provenance"
+                ),
+                runtime_effect=True,
+                actual_order_submitted=True,
+                broker_order_forbidden=False,
+                forbidden_uses=(
+                    "threshold_mutation|provider_route_change|quantity_cap_release|"
+                    "broker_guard_bypass|bot_restart"
+                ),
                 sell_price=int(exec_price or 0),
+                sell_qty=int(getattr(record, "buy_qty", 0) or 0),
                 profit_rate=f"{profit_rate:+.2f}",
                 exit_rule=target_stock.get("last_exit_rule") or "-",
                 exit_decision_source=target_stock.get("last_exit_decision_source")

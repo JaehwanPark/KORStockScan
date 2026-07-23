@@ -3712,6 +3712,9 @@ def test_rising_missed_one_share_hook_retries_not_evaluated_ai_before_block(
         entry_logs[-1][1]["rising_missed_one_share_entry_position_tag"]
         == "OPEN_RECLAIM"
     )
+    assert entry_logs[-1][1]["entry_phase"] == "candidate_selected_pre_submit"
+    assert entry_logs[-1][1]["submission_state"] == "not_submitted"
+    assert entry_logs[-1][1]["actual_order_submitted"] is False
 
 
 def test_rising_missed_one_share_hook_skips_retry_for_general_non_candidate_not_evaluated(
@@ -7384,6 +7387,10 @@ def test_rising_missed_nxt_downstream_block_registers_source_only_sampler(
         "latency_block",
         "rising_missed_nxt_post_block_sampler_registered",
     ]
+    assert events[0]["fields"]["venue"] == "NXT"
+    assert events[0]["fields"]["venue_resolution"] == (
+        "canonicalized:rising_missed_effective_venue"
+    )
     assert (
         registration["fields"][
             "rising_missed_nxt_post_block_sampler_registration_reason"
@@ -8925,6 +8932,12 @@ def test_rising_missed_same_day_reentry_blocks_after_loss_exit(monkeypatch):
     assert entry_logs[-1][1]["watching_budget_priority"] == "blocked"
     assert entry_logs[-1][1]["runtime_effect"] is True
     assert entry_logs[-1][1]["broker_order_forbidden"] is True
+    assert entry_logs[-1][1]["venue"] == "KRX"
+    assert entry_logs[-1][1]["rising_missed_effective_venue"] == "KRX"
+    assert entry_logs[-1][1]["venue_resolution"] == (
+        "rising_missed_initial_gate:krx_regular:"
+        "not_applicable_outside_nxt_window"
+    )
 
 
 def test_rising_missed_same_day_reentry_low_priority_after_avgdown_recovery(
@@ -10419,6 +10432,108 @@ def test_rising_missed_one_share_hook_blocks_price_above_cap_without_submit(
     assert entry_logs[-1][1]["block_reason"] == BLOCK_PRICE_ABOVE_CAP
     assert entry_logs[-1][1]["broker_order_forbidden"] is True
     assert entry_logs[-1][1]["runtime_effect"] is True
+    assert entry_logs[-1][1]["venue"] == "KRX"
+    assert entry_logs[-1][1]["rising_missed_effective_venue"] == "KRX"
+    assert entry_logs[-1][1]["venue_resolution"] == (
+        "rising_missed_initial_gate:krx_regular:"
+        "not_applicable_outside_nxt_window"
+    )
+
+
+def test_rising_missed_pipeline_canonicalizes_strategy_venue_and_conflicts():
+    canonical = state_handlers._canonicalize_rising_missed_venue_fields(
+        {"rising_missed_effective_venue": "KRX"}
+    )
+    assert canonical["venue"] == "KRX"
+    assert (
+        canonical["venue_resolution"]
+        == "canonicalized:rising_missed_effective_venue"
+    )
+
+    conflict = state_handlers._canonicalize_rising_missed_venue_fields(
+        {
+            "venue": "NXT",
+            "rising_missed_effective_venue": "KRX",
+        }
+    )
+    assert conflict["venue"] == "UNKNOWN"
+    assert conflict["venue_resolution"] == (
+        "conflicting_explicit:venue,rising_missed_effective_venue"
+    )
+
+
+def test_rising_missed_initial_block_venue_preserves_explicit_conflict():
+    fields = state_handlers._rising_missed_initial_block_venue_fields(
+        {
+            "effective_venue": "NXT",
+        },
+        "123456",
+        {"curr": 10000},
+        {"curr": 10000},
+        {
+            "now_ts": datetime(
+                2026,
+                7,
+                23,
+                10,
+                0,
+                tzinfo=state_handlers._KST,
+            ).timestamp(),
+            "effective_venue": "KRX",
+        },
+    )
+
+    assert fields["rising_missed_effective_venue"] == "KRX"
+    assert fields["venue"] == "UNKNOWN"
+    assert fields["venue_resolution"] == (
+        "rising_missed_initial_gate:conflicting_explicit_venue"
+    )
+
+
+@pytest.mark.parametrize(
+    ("hour", "minute", "stock_fields", "expected_venue", "expected_bucket"),
+    [
+        (8, 20, {}, "PREMARKET_KRX_LIKE", "krx_like_premarket"),
+        (10, 0, {}, "KRX", "krx_regular"),
+        (16, 30, {"is_nxt": True}, "NXT", "nxt_entry_window"),
+        (
+            16,
+            30,
+            {"is_nxt": False},
+            "KRX_ONLY_UNAVAILABLE",
+            "nxt_entry_window",
+        ),
+    ],
+)
+def test_rising_missed_initial_block_venue_keeps_session_cohorts_separate(
+    hour,
+    minute,
+    stock_fields,
+    expected_venue,
+    expected_bucket,
+):
+    now_ts = datetime(
+        2026,
+        7,
+        23,
+        hour,
+        minute,
+        tzinfo=state_handlers._KST,
+    ).timestamp()
+    fields = state_handlers._rising_missed_initial_block_venue_fields(
+        stock_fields,
+        "123456",
+        {"curr": 10000},
+        {"curr": 10000},
+        {"now_ts": now_ts},
+    )
+
+    assert fields["venue"] == expected_venue
+    assert fields["rising_missed_effective_venue"] == expected_venue
+    assert fields["rising_missed_market_session_bucket"] == expected_bucket
+    assert fields["venue_resolution"].startswith(
+        f"rising_missed_initial_gate:{expected_bucket}:"
+    )
 
 
 def test_rising_missed_one_share_skip_hook_allows_normal_watching_branch(monkeypatch):
@@ -30416,6 +30531,20 @@ def test_holding_exit_signal_logs_exit_rule(monkeypatch):
     assert exit_logs[-1]["exit_decision_source"] == "SOFT_STOP"
     assert sent_logs and sent_logs[-1]["exit_rule"] == "scalp_soft_stop_pct"
     assert sent_logs[-1]["exit_decision_source"] == "SOFT_STOP"
+    assert sent_logs[-1]["actual_order_submitted"] is True
+    assert sent_logs[-1]["broker_order_forbidden"] is False
+    assert sent_logs[-1]["metric_role"] == "execution_quality_real_only"
+    assert (
+        sent_logs[-1]["decision_authority"]
+        == "broker_sell_submission_observation_only"
+    )
+    assert sent_logs[-1]["window_policy"] == "same_position_cycle_broker_submission"
+    assert sent_logs[-1]["sample_floor"] == "1_successful_broker_sell_submission"
+    assert sent_logs[-1]["primary_decision_metric"] == "broker_sell_order_sent_qty"
+    assert (
+        sent_logs[-1]["source_quality_gate"]
+        == "successful_broker_response_and_execution_route_provenance"
+    )
 
 
 def test_holding_limit_up_immediate_exit_submits_sell(monkeypatch):

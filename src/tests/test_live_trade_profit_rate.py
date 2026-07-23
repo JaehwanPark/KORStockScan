@@ -273,6 +273,73 @@ def test_sell_receipt_persists_net_profit_rate(monkeypatch):
     assert "-0.13%" in payload["message"]
 
 
+def test_scalp_revive_sell_receipt_declares_real_execution_contract(monkeypatch):
+    record = type(
+        "Record",
+        (),
+        {
+            "buy_price": 10_000.0,
+            "buy_qty": 7,
+            "stock_name": "TEST",
+            "prob": 0.8,
+            "status": "SELL_ORDERED",
+            "sell_price": 0,
+            "sell_time": None,
+            "profit_rate": 0.0,
+        },
+    )()
+
+    class _ReviveSession(_ReceiptSession):
+        def add(self, added):
+            added.id = 99
+
+        def flush(self):
+            return None
+
+    class _ReviveDB:
+        def get_session(self):
+            return _ReviveSession(record)
+
+    logged = {}
+    monkeypatch.setattr(receipts, "DB", _ReviveDB())
+    monkeypatch.setattr(
+        receipts,
+        "_log_holding_pipeline",
+        lambda *args, **kwargs: logged.update(kwargs),
+    )
+    monkeypatch.setattr(
+        receipts, "_publish_sell_execution_message", lambda **kwargs: None
+    )
+    monkeypatch.setattr(receipts, "record_post_sell_candidate", lambda **kwargs: {})
+    monkeypatch.setattr(
+        receipts, "_apply_scalp_revive_memory_state", lambda **kwargs: None
+    )
+
+    handled = receipts._handle_scalp_revive_sell_execution(
+        target_id=7,
+        target_stock={"name": "TEST", "position_tag": "SCANNER"},
+        code="123456",
+        exec_price=10_100,
+        now=datetime(2026, 7, 23, 10, 0, 0),
+        profit_rate=0.77,
+        safe_buy_price=10_000,
+        strategy="SCALPING",
+    )
+
+    assert handled is True
+    assert logged["actual_order_submitted"] is True
+    assert logged["broker_order_forbidden"] is False
+    assert logged["metric_role"] == "execution_quality_real_only"
+    assert logged["decision_authority"] == "broker_sell_fill_observation_only"
+    assert logged["window_policy"] == "same_position_cycle_broker_fill"
+    assert logged["sample_floor"] == "1_confirmed_broker_sell_fill"
+    assert (
+        logged["primary_decision_metric"] == "confirmed_sell_fill_price_and_profit_rate"
+    )
+    assert logged["sell_price"] == 10_100
+    assert logged["sell_qty"] == 7
+
+
 def test_sell_receipt_propagates_scale_in_counterfactual_diagnostics(monkeypatch):
     record = type(
         "Record",

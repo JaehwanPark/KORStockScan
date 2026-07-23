@@ -356,6 +356,129 @@ def test_probe_sibling_marks_sparse_exit_signal_as_non_real(monkeypatch, tmp_pat
     assert report["current"]["session"]["stage_unique"]["non_real_exit_signal"] == 1
 
 
+def test_real_sell_evidence_overrides_non_real_sibling_provenance(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-05-06",
+        [
+            _event(
+                "2026-05-06",
+                "10:00:00",
+                "scalp_fast_exit_claimed",
+                record_id=1,
+                fields={
+                    "actual_order_submitted": "False",
+                    "broker_order_forbidden": "False",
+                },
+            ),
+            _event("2026-05-06", "10:00:01", "exit_signal", record_id=1),
+            _event(
+                "2026-05-06",
+                "10:00:02",
+                "sell_order_sent",
+                record_id=1,
+                fields={"ord_no": "0045325"},
+            ),
+            _event("2026-05-06", "10:00:03", "sell_completed", record_id=1),
+        ],
+    )
+
+    report = sentinel.build_holding_exit_sentinel_report(
+        "2026-05-06",
+        as_of=sentinel._parse_as_of("2026-05-06", "10:05:00"),
+    )
+
+    unique = report["current"]["session"]["stage_unique"]
+    assert unique["real_exit_signal"] == 1
+    assert unique["real_sell_order_sent"] == 1
+    assert unique["real_sell_completed"] == 1
+    assert unique["non_real_exit_signal"] == 0
+    assert unique["non_real_sell_order_sent"] == 0
+    assert unique["non_real_sell_completed"] == 0
+
+
+def test_explicit_non_real_sell_order_is_not_promoted_by_order_number(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-05-06",
+        [
+            _event(
+                "2026-05-06",
+                "10:00:00",
+                "exit_signal",
+                record_id=1,
+                fields={
+                    "actual_order_submitted": "False",
+                    "broker_order_forbidden": "True",
+                },
+            ),
+            _event(
+                "2026-05-06",
+                "10:00:01",
+                "sell_order_sent",
+                record_id=1,
+                fields={
+                    "ord_no": "SIM-1",
+                    "actual_order_submitted": "False",
+                    "broker_order_forbidden": "True",
+                },
+            ),
+        ],
+    )
+
+    report = sentinel.build_holding_exit_sentinel_report(
+        "2026-05-06",
+        as_of=sentinel._parse_as_of("2026-05-06", "10:05:00"),
+    )
+
+    unique = report["current"]["session"]["stage_unique"]
+    assert unique["real_exit_signal"] == 0
+    assert unique["real_sell_order_sent"] == 0
+    assert unique["non_real_exit_signal"] == 1
+    assert unique["non_real_sell_order_sent"] == 1
+
+
+def test_conflicting_simulation_provenance_cannot_promote_real_sell(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-05-06",
+        [
+            _event("2026-05-06", "10:00:00", "exit_signal", record_id=1),
+            _event(
+                "2026-05-06",
+                "10:00:01",
+                "sell_order_sent",
+                record_id=1,
+                fields={
+                    "ord_no": "None",
+                    "actual_order_submitted": "True",
+                    "simulated_order": "True",
+                },
+            ),
+        ],
+    )
+
+    report = sentinel.build_holding_exit_sentinel_report(
+        "2026-05-06",
+        as_of=sentinel._parse_as_of("2026-05-06", "10:05:00"),
+    )
+
+    unique = report["current"]["session"]["stage_unique"]
+    assert unique["real_exit_signal"] == 0
+    assert unique["real_sell_order_sent"] == 0
+    assert unique["non_real_exit_signal"] == 1
+    assert unique["non_real_sell_order_sent"] == 1
+
+
 def test_use_cache_reads_only_appended_holding_raw_bytes(monkeypatch, tmp_path):
     monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
     _write_events(
