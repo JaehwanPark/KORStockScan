@@ -237,6 +237,13 @@ from src.engine.scalping.entry_split_order_plan import (
 from src.engine.scalping.scale_in_split_order_plan import (
     apply_scale_in_split_order_policy,
 )
+from src.engine.scalping.early_volatility_partial_tp import (
+    POLICY_VERSION as EARLY_VOLATILITY_TP_POLICY_VERSION,
+    RUNTIME_FAMILY as EARLY_VOLATILITY_TP_RUNTIME_FAMILY,
+    EarlyTPRuntimeLedger,
+    EarlyVolatilityTPContext,
+    resolve_early_volatility_tp,
+)
 
 KIWOOM_TOKEN = None
 DB = None
@@ -269,6 +276,9 @@ _KST = timezone(timedelta(hours=9))
 _MAX_SCALE_IN_EXECUTIONS_PER_TYPE = 1
 _SCALE_IN_INITIAL_QTY_CAP_NUMERATOR = 3
 _SCALE_IN_INITIAL_QTY_CAP_DENOMINATOR = 2
+_EARLY_VOLATILITY_TP_LEDGER = EarlyTPRuntimeLedger()
+_EARLY_VOLATILITY_TP_POLICY_CACHE: dict[str, Any] = {}
+_EARLY_VOLATILITY_TP_CODE_LOADED_AT_EPOCH = time.time()
 
 
 def _mark_entry_opportunity_recheck_outcome(
@@ -11171,6 +11181,101 @@ def sanitize_pending_add_states(active_targets=None):
     """재시작/복구 시 pending add 정합성을 보수 정리합니다."""
     targets = active_targets if active_targets is not None else ACTIVE_TARGETS
     _sanitize_pending_add_states(targets)
+    _sanitize_early_volatility_tp_states(targets)
+
+
+def _sanitize_early_volatility_tp_states(active_targets=None):
+    targets = active_targets if active_targets is not None else ACTIVE_TARGETS
+    if not isinstance(targets, list) or not KIWOOM_TOKEN:
+        return
+    ledger_rows = _EARLY_VOLATILITY_TP_LEDGER.load()
+    open_rows = {
+        key: row
+        for key, row in ledger_rows.items()
+        if isinstance(row, dict)
+        and str(row.get("state") or "").upper()
+        in {"SUBMITTING", "OPEN", "PARTIAL", "CANCEL_PENDING"}
+    }
+    if not open_rows:
+        return
+    try:
+        broker_rows = kiwoom_utils.get_unfilled_order_snapshot_ka10075(
+            KIWOOM_TOKEN, stex_tp="0"
+        )
+    except Exception as exc:
+        log_error(f"[EARLY_TP_RESTORE] broker unfilled snapshot failed: {exc}")
+        broker_rows = []
+    broker_by_order = {
+        str((row or {}).get("ord_no") or "").strip(): row
+        for row in broker_rows or []
+        if str((row or {}).get("ord_no") or "").strip()
+    }
+    by_id = {_safe_int(stock.get("id"), 0): stock for stock in targets}
+    for cycle_id, row in open_rows.items():
+        stock = by_id.get(_safe_int(row.get("target_id"), 0))
+        if not isinstance(stock, dict):
+            continue
+        order_no = str(row.get("order_no") or "").strip()
+        broker_row = broker_by_order.get(order_no) if order_no else None
+        if not order_no and str(row.get("state") or "").upper() == "SUBMITTING":
+            possible = [
+                candidate
+                for candidate in broker_rows or []
+                if str((candidate or {}).get("code") or "").strip()[:6]
+                == str(row.get("code") or "").strip()[:6]
+                and str((candidate or {}).get("side") or "").strip().upper()
+                == "SELL"
+                and _safe_int((candidate or {}).get("unit_price"), 0)
+                == _safe_int(row.get("limit_price"), 0)
+                and _safe_int((candidate or {}).get("qty"), 0)
+                == _safe_int(row.get("reserved_qty"), 0)
+            ]
+            if len(possible) == 1:
+                broker_row = possible[0]
+                order_no = str(broker_row.get("ord_no") or "").strip()
+        if broker_row is None:
+            _mutate_stock_state(
+                stock,
+                set_fields={
+                    "early_volatility_tp_position_cycle_id": cycle_id,
+                    "early_volatility_tp_ord_no": order_no,
+                    "early_volatility_tp_state": "FAILED_RECONCILIATION",
+                    "early_volatility_tp_last_error": "restart_unfilled_order_not_found",
+                },
+            )
+            _EARLY_VOLATILITY_TP_LEDGER.upsert(
+                cycle_id,
+                state="FAILED_RECONCILIATION",
+                last_error="restart_unfilled_order_not_found",
+                updated_at=time.time(),
+            )
+            continue
+        requested_qty = max(0, _safe_int(row.get("reserved_qty"), 0))
+        remaining_qty = max(
+            0,
+            _safe_int(
+                broker_row.get("remaining_qty")
+                or broker_row.get("unfilled_qty")
+                or (broker_row.get("raw") or {}).get("oso_qty"),
+                requested_qty,
+            ),
+        )
+        filled_qty = max(0, requested_qty - remaining_qty)
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                "early_volatility_tp_position_cycle_id": cycle_id,
+                "early_volatility_tp_ord_no": order_no,
+                "early_volatility_tp_state": "PARTIAL" if filled_qty else "OPEN",
+                "early_volatility_tp_requested_qty": requested_qty,
+                "early_volatility_tp_filled_qty": filled_qty,
+                "early_volatility_tp_original_qty": _safe_int(row.get("original_qty"), 0),
+                "early_volatility_tp_limit_price": _safe_int(row.get("limit_price"), 0),
+                "early_volatility_tp_submitted_at": _safe_float(row.get("submitted_at"), 0.0),
+                "early_volatility_tp_expires_at": _safe_float(row.get("expires_at"), 0.0),
+                "early_volatility_tp_policy_version": EARLY_VOLATILITY_TP_POLICY_VERSION,
+            },
+        )
 
 
 def _publish_gatekeeper_report_proxy(stock, code, gatekeeper, allowed):
@@ -21634,6 +21739,21 @@ def _dispatch_scalp_preset_exit(
             profit_rate=profit_rate,
         )
         return
+
+    if _early_volatility_tp_order_unresolved(stock):
+        cancelled = _cancel_early_volatility_tp(
+            stock,
+            code,
+            reason=(
+                "hard_or_emergency_exit_precedence"
+                if _is_greenfield_hard_safety_exit(exit_rule, sell_reason_type)
+                else "full_exit_precedence"
+            ),
+            now_ts=now_ts,
+        )
+        if not cancelled:
+            return
+        expected_qty = _safe_int(stock.get("buy_qty"), 0)
 
     probe_phase = str(stock.get("entry_split_probe_phase") or "").strip()
     if probe_phase in {
@@ -46272,6 +46392,14 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             sizing_decision,
             provenance_fields={"venue_resolution": sizing_venue_resolution},
         )
+        if str(sizing_decision.venue or "").strip().upper() in {"KRX", "NXT"}:
+            _mutate_stock_state(
+                stock,
+                set_fields={
+                    "effective_venue": str(sizing_decision.venue).strip().upper(),
+                    "effective_venue_source": "position_sizing_dynamic_formula",
+                },
+            )
         ratio = sizing_decision.ratio
         target_budget = sizing_decision.target_budget
         safe_budget = sizing_decision.safe_budget
@@ -53766,6 +53894,648 @@ def _nxt_rising_missed_tp1_partial_runner_enabled(now_dt: datetime) -> bool:
     return bool(active_date and active_date == now_dt.strftime("%Y-%m-%d"))
 
 
+def _early_volatility_tp_policy(now_dt: datetime) -> dict[str, Any]:
+    enabled = _env_bool("KORSTOCKSCAN_EARLY_VOLATILITY_TP_ENABLED", False)
+    active_date = str(
+        os.getenv("KORSTOCKSCAN_EARLY_VOLATILITY_TP_ACTIVE_DATE", "")
+    ).strip()
+    path_text = str(
+        os.getenv("KORSTOCKSCAN_EARLY_VOLATILITY_TP_POLICY_FILE", "")
+    ).strip()
+    if not enabled or not active_date or active_date != now_dt.strftime("%Y-%m-%d"):
+        return {"enabled": False, "reason": "runtime_not_active"}
+    if not path_text:
+        return {"enabled": False, "reason": "policy_file_missing"}
+    path = Path(path_text)
+    try:
+        stat = path.stat()
+        cache_key = f"{path.resolve()}:{stat.st_mtime_ns}:{stat.st_size}"
+        if _EARLY_VOLATILITY_TP_POLICY_CACHE.get("cache_key") != cache_key:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict):
+                raise ValueError("policy payload must be an object")
+            _EARLY_VOLATILITY_TP_POLICY_CACHE.clear()
+            _EARLY_VOLATILITY_TP_POLICY_CACHE.update(
+                {"cache_key": cache_key, "payload": payload}
+            )
+        policy = dict(_EARLY_VOLATILITY_TP_POLICY_CACHE.get("payload") or {})
+    except Exception as exc:
+        return {"enabled": False, "reason": f"policy_load_failed:{type(exc).__name__}"}
+    if str(policy.get("policy_version") or "") != EARLY_VOLATILITY_TP_POLICY_VERSION:
+        return {"enabled": False, "reason": "policy_version_mismatch"}
+    if str(policy.get("effective_venue") or "").strip().upper() != "KRX":
+        return {"enabled": False, "reason": "policy_venue_not_krx"}
+    if not bool(policy.get("qualified_for_runtime")):
+        return {"enabled": False, "reason": "policy_not_qualified"}
+    if str(policy.get("decision") or "").strip() not in {
+        "implemented_historical_real_validation_pass",
+        "bounded_change_applied_attributed",
+    }:
+        return {"enabled": False, "reason": "policy_not_approved"}
+    partial_ratio = _safe_float(policy.get("partial_ratio"), 0.0)
+    target_net_profit_pct = _safe_float(policy.get("target_net_profit_pct"), 0.0)
+    ttl_sec = _safe_int(policy.get("ttl_sec"), 0)
+    if not (0.0 < partial_ratio < 1.0) or target_net_profit_pct <= 0 or ttl_sec <= 0:
+        return {"enabled": False, "reason": "policy_values_invalid"}
+    active_from_epoch = _safe_float(policy.get("active_from_epoch"), 0.0)
+    if active_from_epoch <= 0:
+        return {"enabled": False, "reason": "active_from_missing"}
+    return {
+        **policy,
+        "active_from_epoch": max(
+            active_from_epoch, _EARLY_VOLATILITY_TP_CODE_LOADED_AT_EPOCH
+        ),
+        "enabled": True,
+        "reason": "active",
+    }
+
+
+def _early_volatility_tp_cycle_id(stock: dict) -> str:
+    existing = str(stock.get("early_volatility_tp_position_cycle_id") or "").strip()
+    if existing:
+        return existing
+    raw_time = stock.get("holding_started_at") or stock.get("buy_time")
+    if isinstance(raw_time, datetime):
+        time_token = f"{raw_time.timestamp():.6f}"
+    else:
+        time_token = f"{_safe_float(raw_time, 0.0):.6f}"
+    return f"{_safe_int(stock.get('id'), 0)}:{str(stock.get('code') or '')[:6]}:{time_token}"
+
+
+def _early_volatility_tp_direction_state(stock: dict, prices: list[int]) -> str:
+    explicit = str(
+        stock.get("entry_split_probe_direction_state")
+        or stock.get("post_probe_direction_state")
+        or ""
+    ).strip().upper()
+    if explicit in {"STRONG", "NEUTRAL", "HARD_NEGATIVE"}:
+        return explicit
+    features = stock.get("last_reversal_features")
+    if isinstance(features, dict) and features:
+        quality = reversal_feature_source_quality(features)
+        if not quality.get("reversal_feature_stale"):
+            buy_pressure = _safe_float(features.get("buy_pressure_10t"), 0.0)
+            tick_accel = _safe_float(features.get("tick_acceleration_ratio"), 0.0)
+            if bool(features.get("large_sell_print_detected")):
+                return "HARD_NEGATIVE"
+            if buy_pressure >= 75.0 and tick_accel >= 1.0:
+                return "STRONG"
+            if buy_pressure >= 50.0:
+                return "NEUTRAL"
+    if len(prices) >= 2 and prices[-1] >= prices[0]:
+        return "NEUTRAL"
+    return "UNKNOWN"
+
+
+def _early_volatility_tp_state_open(stock: dict) -> bool:
+    return str(stock.get("early_volatility_tp_state") or "").strip().upper() in {
+        "SUBMITTING",
+        "OPEN",
+        "PARTIAL",
+        "CANCEL_PENDING",
+    }
+
+
+def _early_volatility_tp_order_unresolved(stock: dict) -> bool:
+    if _early_volatility_tp_state_open(stock):
+        return True
+    return bool(
+        str(stock.get("early_volatility_tp_state") or "").strip().upper()
+        == "FAILED_RECONCILIATION"
+        and str(stock.get("early_volatility_tp_ord_no") or "").strip()
+    )
+
+
+def _reconcile_early_volatility_tp_inventory(stock: dict, code: str) -> int | None:
+    """Return broker holding qty and synchronize runtime/DB, or None on uncertainty."""
+    try:
+        real_inventory, successful_exchanges = kiwoom_orders.get_my_inventory(
+            KIWOOM_TOKEN
+        )
+    except Exception as exc:
+        log_error(f"[EARLY_TP_RECONCILE] {code} inventory lookup failed: {exc}")
+        return None
+    if not successful_exchanges:
+        return None
+    real_stock = next(
+        (
+            item
+            for item in (real_inventory or [])
+            if str((item or {}).get("code") or "").strip()[:6] == code
+        ),
+        None,
+    )
+    real_qty = _safe_int((real_stock or {}).get("qty"), 0)
+    if real_qty <= 0:
+        # The policy always leaves at least one runner share. A missing holding is
+        # therefore a reconciliation failure, not permission to assume zero.
+        return None
+    _mutate_stock_state(stock, set_fields={"buy_qty": real_qty})
+    try:
+        with DB.get_session() as session:
+            record = (
+                session.query(RecommendationHistory)
+                .filter_by(id=_safe_int(stock.get("id"), 0))
+                .first()
+            )
+            if record:
+                record.buy_qty = real_qty
+                record.status = "HOLDING"
+    except Exception as exc:
+        log_error(f"[EARLY_TP_RECONCILE] {code} DB qty update failed: {exc}")
+        return None
+    return real_qty
+
+
+def _cancel_early_volatility_tp(
+    stock: dict,
+    code: str,
+    *,
+    reason: str,
+    now_ts: float,
+) -> bool:
+    """Cancel an early TP and confirm broker order/inventory reconciliation."""
+    if not _early_volatility_tp_order_unresolved(stock):
+        return True
+    ord_no = str(stock.get("early_volatility_tp_ord_no") or "").strip()
+    if not ord_no:
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                "early_volatility_tp_state": "FAILED_RECONCILIATION",
+                "early_volatility_tp_last_error": "open_state_without_order_number",
+            },
+        )
+        return False
+    _mutate_stock_state(
+        stock,
+        set_fields={
+            "early_volatility_tp_state": "CANCEL_PENDING",
+            "early_volatility_tp_cancel_reason": reason,
+            "early_volatility_tp_cancel_requested_at": now_ts,
+        },
+    )
+    response = sniper_trade_utils.send_cancel_order_with_exchange_retry(
+        code=code,
+        orig_ord_no=ord_no,
+        token=KIWOOM_TOKEN,
+        qty=0,
+        dmst_stex_tp="SOR",
+    )
+    ok = bool(response) and (
+        not isinstance(response, dict)
+        or str(response.get("return_code", response.get("rt_cd", ""))) == "0"
+    )
+    message = (
+        str(response.get("return_msg") or "")
+        if isinstance(response, dict)
+        else str(response or "")
+    )
+    already_terminal = any(
+        token in message for token in ("취소가능수량", "주문없음", "체결")
+    )
+    cycle_id = _early_volatility_tp_cycle_id(stock)
+    if not (ok or already_terminal):
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                "early_volatility_tp_state": "FAILED_RECONCILIATION",
+                "early_volatility_tp_last_error": message or "cancel_failed",
+            },
+        )
+        try:
+            _EARLY_VOLATILITY_TP_LEDGER.upsert(
+                cycle_id,
+                state="FAILED_RECONCILIATION",
+                last_error=message or "cancel_failed",
+                updated_at=now_ts,
+            )
+        except Exception as exc:
+            log_error(f"[EARLY_TP_LEDGER] {code} cancel failure persist failed: {exc}")
+        _log_holding_pipeline(
+            stock,
+            code,
+            "early_volatility_tp_cancel_failed",
+            policy_version=EARLY_VOLATILITY_TP_POLICY_VERSION,
+            position_cycle_id=cycle_id,
+            ord_no=ord_no,
+            cancel_reason=reason,
+            error=message or "cancel_failed",
+            actual_order_submitted=False,
+            broker_order_forbidden=True,
+            runtime_effect=True,
+        )
+        return False
+    unfilled_rows = None
+    order_still_open = True
+    for attempt in range(2):
+        try:
+            unfilled_rows = kiwoom_utils.get_unfilled_order_snapshot_ka10075(
+                KIWOOM_TOKEN,
+                stk_cd=code,
+                stex_tp="0",
+            )
+        except Exception as exc:
+            unfilled_rows = None
+            message = f"cancel_snapshot_failed:{type(exc).__name__}"
+            break
+        order_still_open = any(
+            str((row or {}).get("ord_no") or "").strip() == ord_no
+            for row in unfilled_rows
+        )
+        if not order_still_open:
+            break
+        if attempt == 0:
+            time.sleep(0.15)
+    if unfilled_rows is None or order_still_open:
+        failure_reason = message or "cancel_not_confirmed"
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                "early_volatility_tp_state": "FAILED_RECONCILIATION",
+                "early_volatility_tp_last_error": failure_reason,
+            },
+        )
+        try:
+            _EARLY_VOLATILITY_TP_LEDGER.upsert(
+                cycle_id,
+                state="FAILED_RECONCILIATION",
+                last_error=failure_reason,
+                updated_at=now_ts,
+            )
+        except Exception as exc:
+            log_error(f"[EARLY_TP_LEDGER] {code} reconcile failure persist failed: {exc}")
+        return False
+    reconciled_qty = _reconcile_early_volatility_tp_inventory(stock, code)
+    if reconciled_qty is None:
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                "early_volatility_tp_state": "FAILED_RECONCILIATION",
+                "early_volatility_tp_last_error": "inventory_reconciliation_failed",
+            },
+        )
+        try:
+            _EARLY_VOLATILITY_TP_LEDGER.upsert(
+                cycle_id,
+                state="FAILED_RECONCILIATION",
+                last_error="inventory_reconciliation_failed",
+                updated_at=now_ts,
+            )
+        except Exception as exc:
+            log_error(f"[EARLY_TP_LEDGER] {code} inventory failure persist failed: {exc}")
+        return False
+    _mutate_stock_state(
+        stock,
+        set_fields={
+            "early_volatility_tp_state": "CANCELLED",
+            "early_volatility_tp_cancelled_at": now_ts,
+            "early_volatility_tp_rearm_forbidden": bool(
+                reason in {
+                    "ttl_expired",
+                    "hard_or_emergency_exit_precedence",
+                    "full_exit_precedence",
+                    "ledger_persist_failed",
+                }
+            ),
+            "early_volatility_tp_next_retry_at": (
+                now_ts + 10.0 if str(reason).startswith("scale_in_recheck:") else 0.0
+            ),
+            "early_volatility_tp_reconciled_holding_qty": reconciled_qty,
+        },
+    )
+    try:
+        _EARLY_VOLATILITY_TP_LEDGER.upsert(
+            cycle_id,
+            state="CANCELLED",
+            cancel_reason=reason,
+            cancelled_at=now_ts,
+            updated_at=now_ts,
+        )
+    except Exception as exc:
+        log_error(f"[EARLY_TP_LEDGER] {code} cancel persist failed: {exc}")
+    _log_holding_pipeline(
+        stock,
+        code,
+        "early_volatility_tp_cancelled",
+        policy_version=EARLY_VOLATILITY_TP_POLICY_VERSION,
+        position_cycle_id=cycle_id,
+        ord_no=ord_no,
+        cancel_reason=reason,
+        cancel_response="success" if ok else "already_terminal",
+        actual_order_submitted=False,
+        broker_order_forbidden=False,
+        runtime_effect=True,
+    )
+    return True
+
+
+def _maybe_manage_early_volatility_tp(
+    stock: dict,
+    code: str,
+    ws_data: dict,
+    *,
+    strategy: str,
+    now_ts: float,
+    now_dt: datetime,
+    quote_fields: dict,
+) -> bool:
+    """Maintain or submit the single KRX early partial-profit order."""
+    if strategy != "SCALPING" or _is_any_simulated_position(stock, strategy):
+        return False
+    policy = _early_volatility_tp_policy(now_dt)
+    if not policy.get("enabled"):
+        return False
+    active_from = _safe_float(policy.get("active_from_epoch"), 0.0)
+    buy_time = stock.get("holding_started_at") or stock.get("buy_time")
+    buy_epoch = buy_time.timestamp() if isinstance(buy_time, datetime) else _safe_float(buy_time, 0.0)
+    if buy_epoch <= 0 or buy_epoch < active_from:
+        return False
+    state = str(stock.get("early_volatility_tp_state") or "IDLE").strip().upper()
+    if state in {"FILLED_RUNNER", "FAILED_RECONCILIATION"}:
+        return False
+    if bool(stock.get("early_volatility_tp_rearm_forbidden")):
+        return False
+    if stock.get("nxt_rising_missed_tp1_partial_pending") or stock.get(
+        "nxt_rising_missed_tp1_partial_applied"
+    ):
+        return False
+    if state in {"SUBMITTING", "OPEN", "PARTIAL", "CANCEL_PENDING"}:
+        expires_at = _safe_float(stock.get("early_volatility_tp_expires_at"), 0.0)
+        if expires_at > 0 and now_ts >= expires_at:
+            _cancel_early_volatility_tp(
+                stock, code, reason="ttl_expired", now_ts=now_ts
+            )
+            return True
+        return False
+    if _safe_float(stock.get("early_volatility_tp_next_retry_at"), 0.0) > now_ts:
+        return False
+    if _has_active_sell_order_pending(stock) or _has_open_pending_entry_orders(stock):
+        return False
+    if stock.get("pending_add_order") or stock.get("pending_add_ord_no"):
+        return False
+    observation_window_sec = max(
+        2.0, _safe_float(policy.get("observation_window_sec"), 20.0)
+    )
+    if now_ts - buy_epoch > observation_window_sec:
+        return False
+    probe_phase = str(stock.get("entry_split_probe_phase") or "").strip()
+    bundle_complete = probe_phase in {"", "complete", "partial_complete", "aborted"}
+    samples = [
+        item
+        for item in list(stock.get("holding_price_samples") or [])
+        if isinstance(item, dict)
+        and _safe_int(item.get("price"), 0) > 0
+        and _safe_float(item.get("ts"), 0.0)
+        >= max(buy_epoch, now_ts - observation_window_sec)
+    ]
+    prices = [_safe_int(item.get("price"), 0) for item in samples]
+    span_sec = (
+        max(0.0, _safe_float(samples[-1].get("ts"), 0.0) - _safe_float(samples[0].get("ts"), 0.0))
+        if len(samples) >= 2
+        else 0.0
+    )
+    quote_reason = str(quote_fields.get("quote_consistency_reason") or "").strip().lower()
+    quote_state = str(quote_fields.get("quote_consistency_state") or "").strip().lower()
+    quote_conflict = quote_reason in {
+        "conflicted",
+        "price_conflict",
+        "quote_diverged",
+    } or quote_state == "diverged"
+    quote_fresh = bool(
+        not quote_fields.get("quote_consistency_entry_blocked")
+        and (
+            quote_state in {"ok", "warning"}
+            or quote_reason in {"ws_only_fresh", "rest_only_fresh"}
+        )
+    )
+    explicit_venue = str(
+        stock.get("effective_venue")
+        or stock.get("rising_missed_effective_venue")
+        or ""
+    ).strip().upper()
+    venue = explicit_venue if explicit_venue in {"KRX", "NXT"} else "UNKNOWN"
+    cycle_id = _early_volatility_tp_cycle_id(stock)
+    decision = resolve_early_volatility_tp(
+        EarlyVolatilityTPContext(
+            position_cycle_id=cycle_id,
+            venue=venue,
+            entry_lineage=str(
+                stock.get("entry_source_parent")
+                or stock.get("position_tag")
+                or stock.get("entry_mode")
+                or "SCALPING"
+            ),
+            average_price=_safe_float(stock.get("buy_price"), 0.0),
+            holding_qty=_safe_int(stock.get("buy_qty"), 0),
+            entry_bundle_complete=bundle_complete,
+            pending_entry=_has_open_pending_entry_orders(stock),
+            pending_add=bool(stock.get("pending_add_order")),
+            quote_fresh=quote_fresh,
+            quote_conflict=quote_conflict,
+            direction_state=_early_volatility_tp_direction_state(stock, prices),
+            observed_prices=tuple(prices),
+            observation_span_sec=span_sec,
+            tick_sample_count=len(prices),
+            partial_already_filled=bool(stock.get("early_volatility_tp_applied")),
+            target_net_profit_pct=_safe_float(policy.get("target_net_profit_pct"), 0.60),
+            partial_ratio=_safe_float(policy.get("partial_ratio"), 0.30),
+            ttl_sec=max(1, _safe_int(policy.get("ttl_sec"), 180)),
+            min_range_pct=max(0.0, _safe_float(policy.get("min_range_pct"), 0.60)),
+            min_tick_samples=max(2, _safe_int(policy.get("min_tick_samples"), 3)),
+            min_observation_span_sec=max(
+                0.0, _safe_float(policy.get("min_observation_span_sec"), 2.0)
+            ),
+        )
+    )
+    _mutate_stock_state(
+        stock,
+        set_fields={
+            "early_volatility_tp_position_cycle_id": cycle_id,
+            "early_volatility_tp_last_decision_reason": decision.reason,
+        },
+    )
+    if not decision.eligible:
+        return False
+    broker_qty = _reconcile_early_volatility_tp_inventory(stock, code)
+    if broker_qty is None or broker_qty != decision.partial_qty + decision.runner_qty:
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                "early_volatility_tp_last_decision_reason": (
+                    "broker_holding_qty_recheck_failed"
+                    if broker_qty is None
+                    else "broker_holding_qty_changed_recompute"
+                ),
+                "early_volatility_tp_next_retry_at": now_ts + 2.0,
+            },
+        )
+        _log_holding_pipeline(
+            stock,
+            code,
+            "early_volatility_tp_broker_qty_revalidation_blocked",
+            policy_version=EARLY_VOLATILITY_TP_POLICY_VERSION,
+            runtime_qty=decision.partial_qty + decision.runner_qty,
+            broker_qty=broker_qty if broker_qty is not None else "unavailable",
+            actual_order_submitted=False,
+            broker_order_forbidden=True,
+            runtime_effect=True,
+            decision_authority=EARLY_VOLATILITY_TP_RUNTIME_FAMILY,
+        )
+        return False
+    exchange = _resolve_holding_sell_dmst_stex_tp(stock, code, now_t=now_dt.time())
+    if exchange.get("blocked") or exchange.get("dmst_stex_tp") not in {"SOR", "KRX"}:
+        return False
+    expires_at = now_ts + decision.ttl_sec
+    submitting_fields = {
+        "early_volatility_tp_state": "SUBMITTING",
+        "early_volatility_tp_ord_no": "",
+        "early_volatility_tp_requested_qty": decision.partial_qty,
+        "early_volatility_tp_filled_qty": 0,
+        "early_volatility_tp_fill_amount": 0,
+        "early_volatility_tp_original_qty": _safe_int(stock.get("buy_qty"), 0),
+        "early_volatility_tp_limit_price": decision.limit_price,
+        "early_volatility_tp_submitted_at": now_ts,
+        "early_volatility_tp_expires_at": expires_at,
+        "early_volatility_tp_policy_version": EARLY_VOLATILITY_TP_POLICY_VERSION,
+        "early_volatility_tp_entry_lineage": decision.entry_lineage,
+    }
+    _mutate_stock_state(stock, set_fields=submitting_fields)
+    try:
+        _EARLY_VOLATILITY_TP_LEDGER.upsert(
+            cycle_id,
+            state="SUBMITTING",
+            code=code,
+            target_id=stock.get("id"),
+            venue="KRX",
+            order_no="",
+            original_qty=submitting_fields["early_volatility_tp_original_qty"],
+            reserved_qty=decision.partial_qty,
+            filled_qty=0,
+            limit_price=decision.limit_price,
+            submitted_at=now_ts,
+            expires_at=expires_at,
+            policy_version=EARLY_VOLATILITY_TP_POLICY_VERSION,
+        )
+    except Exception as exc:
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                "early_volatility_tp_state": "FAILED_RECONCILIATION",
+                "early_volatility_tp_last_error": (
+                    f"pre_submit_ledger_persist_failed:{type(exc).__name__}"
+                ),
+            },
+        )
+        log_error(f"[EARLY_TP_LEDGER] {stock.get('name')}({code}) pre-submit persist failed: {exc}")
+        return False
+    response = kiwoom_orders.send_sell_order_market(
+        code=code,
+        qty=decision.partial_qty,
+        token=KIWOOM_TOKEN,
+        order_type="00",
+        price=decision.limit_price,
+        reason_type="PROFIT",
+        strategy=strategy,
+        bypass_open_time_block=False,
+        dmst_stex_tp=exchange.get("dmst_stex_tp", "SOR"),
+    )
+    ok = bool(response) and (
+        not isinstance(response, dict)
+        or str(response.get("return_code", response.get("rt_cd", ""))) == "0"
+    )
+    ord_no = (
+        str(response.get("ord_no") or response.get("odno") or "")
+        if isinstance(response, dict)
+        else ""
+    )
+    if not ok or not ord_no:
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                "early_volatility_tp_state": "IDLE",
+                "early_volatility_tp_ord_no": "",
+                "early_volatility_tp_next_retry_at": now_ts + 5.0,
+            },
+        )
+        try:
+            _EARLY_VOLATILITY_TP_LEDGER.upsert(
+                cycle_id,
+                state="CANCELLED",
+                cancel_reason="submit_failed_before_order_number",
+                updated_at=now_ts,
+            )
+        except Exception as exc:
+            log_error(f"[EARLY_TP_LEDGER] {code} submit failure persist failed: {exc}")
+        _log_holding_pipeline(
+            stock,
+            code,
+            "early_volatility_tp_submit_failed",
+            **decision.as_fields(),
+            error=(response or {}).get("return_msg", "missing_order_number") if isinstance(response, dict) else "empty_response",
+            actual_order_submitted=False,
+            broker_order_forbidden=False,
+            runtime_effect=True,
+        )
+        return False
+    receipt_state = str(stock.get("early_volatility_tp_state") or "").strip().upper()
+    receipt_filled_qty = _safe_int(stock.get("early_volatility_tp_filled_qty"), 0)
+    set_fields = dict(submitting_fields)
+    set_fields.update(
+        {
+            "early_volatility_tp_state": (
+                receipt_state
+                if receipt_state in {"PARTIAL", "FILLED_RUNNER", "FAILED_RECONCILIATION"}
+                else "OPEN"
+            ),
+            "early_volatility_tp_ord_no": ord_no,
+            "early_volatility_tp_filled_qty": receipt_filled_qty,
+        }
+    )
+    _mutate_stock_state(stock, set_fields=set_fields)
+    try:
+        _EARLY_VOLATILITY_TP_LEDGER.upsert(
+            cycle_id,
+            state=set_fields["early_volatility_tp_state"],
+            code=code,
+            target_id=stock.get("id"),
+            venue="KRX",
+            order_no=ord_no,
+            original_qty=set_fields["early_volatility_tp_original_qty"],
+            reserved_qty=decision.partial_qty,
+            filled_qty=receipt_filled_qty,
+            limit_price=decision.limit_price,
+            submitted_at=now_ts,
+            expires_at=expires_at,
+            policy_version=EARLY_VOLATILITY_TP_POLICY_VERSION,
+        )
+    except Exception as exc:
+        log_error(f"[EARLY_TP_LEDGER] {stock.get('name')}({code}) persist failed: {exc}")
+        _cancel_early_volatility_tp(
+            stock, code, reason="ledger_persist_failed", now_ts=now_ts
+        )
+        return False
+    _log_holding_pipeline(
+        stock,
+        code,
+        "early_volatility_tp_order_sent",
+        **decision.as_fields(),
+        ord_no=ord_no,
+        expires_at=round(expires_at, 3),
+        metric_role="bounded_tunable",
+        decision_authority=EARLY_VOLATILITY_TP_RUNTIME_FAMILY,
+        window_policy="same_position_post_entry_short_volatility_window",
+        sample_floor="operator_directed_replay_valid_first_hit_at_least_1",
+        primary_decision_metric="net_profit_and_notional_weighted_ev_delta",
+        source_quality_gate="explicit_krx_fresh_conflict_free_quote_and_terminal_entry_bundle",
+        forbidden_uses="nxt_apply|sim_real_mix|hard_safety_bypass|quantity_cap_release|broker_guard_bypass",
+        actual_order_submitted=True,
+        broker_order_forbidden=False,
+        runtime_effect=True,
+    )
+    return True
+
+
 def _maybe_submit_nxt_rising_missed_tp1_partial_runner(
     stock: dict,
     code: str,
@@ -53780,6 +54550,10 @@ def _maybe_submit_nxt_rising_missed_tp1_partial_runner(
     quote_fields: dict | None = None,
 ) -> bool:
     if not _nxt_rising_missed_tp1_partial_runner_enabled(now_dt):
+        return False
+    if _early_volatility_tp_order_unresolved(stock) or stock.get(
+        "early_volatility_tp_applied"
+    ):
         return False
     if strategy != "SCALPING" or not _has_rising_missed_entry_lineage(stock):
         return False
@@ -58723,6 +59497,15 @@ def handle_holding_state(
 
     if isinstance(highest_prices, dict):
         with ENTRY_LOCK:
+            if stock.get("early_volatility_tp_runner_peak_reset_pending"):
+                reset_price = max(
+                    1,
+                    _safe_int(stock.get("early_volatility_tp_runner_peak_price"), 0),
+                    curr_p,
+                )
+                highest_prices[price_key] = reset_price
+                stock["early_volatility_tp_runner_peak_reset_pending"] = False
+                stock["early_volatility_tp_runner_started_at"] = now_ts
             if price_key not in highest_prices:
                 highest_prices[price_key] = (
                     max(1, _safe_int(buy_p, curr_p))
@@ -58777,6 +59560,20 @@ def handle_holding_state(
                 "runtime_effect": False,
             },
         )
+        return
+
+    if (
+        not daily_limit_up_triggered
+        and _maybe_manage_early_volatility_tp(
+            stock,
+            code,
+            ws_data,
+            strategy=strategy,
+            now_ts=now_ts,
+            now_dt=now_dt,
+            quote_fields=holding_quote_fields,
+        )
+    ):
         return
 
     if (
@@ -62724,6 +63521,39 @@ def handle_holding_state(
                     decision_authority="partial_entry_sell_quantity_safety",
                 )
 
+        if _early_volatility_tp_order_unresolved(stock):
+            cancel_reason = (
+                "hard_or_emergency_exit_precedence"
+                if _is_greenfield_hard_safety_exit(exit_rule, sell_reason_type)
+                else "full_exit_precedence"
+            )
+            cancelled = _cancel_early_volatility_tp(
+                stock,
+                code,
+                reason=cancel_reason,
+                now_ts=now_ts,
+            )
+            _log_holding_pipeline(
+                stock,
+                code,
+                (
+                    "early_volatility_tp_exit_reconciled"
+                    if cancelled
+                    else "early_volatility_tp_exit_recheck_required"
+                ),
+                policy_version=EARLY_VOLATILITY_TP_POLICY_VERSION,
+                cancel_reason=cancel_reason,
+                exit_rule=exit_rule or "-",
+                sell_reason_type=sell_reason_type or "-",
+                actual_order_submitted=False,
+                broker_order_forbidden=not cancelled,
+                runtime_effect=True,
+                decision_authority="early_tp_exit_order_coordinator",
+            )
+            if not cancelled:
+                return
+            buy_qty = _safe_int(stock.get("buy_qty"), 0)
+
         if buy_qty <= 0:
             log_info(
                 f"⚠️ [{stock['name']}] 고유 ID({target_id})의 수량이 0주입니다. 실제 키움 잔고로 폴백합니다..."
@@ -64021,6 +64851,11 @@ def can_consider_scale_in(
     """추가매수 공통 게이트: 조건을 만족하는 경우에만 True."""
     _ = (code, ws_data)
 
+    if str(stock.get("early_volatility_tp_state") or "").upper() == (
+        "FAILED_RECONCILIATION"
+    ):
+        return {"allowed": False, "reason": "early_tp_reconciliation_failed"}
+
     if stock.get("entry_split_probe_scale_in_forbidden") or str(
         stock.get("entry_split_probe_phase") or ""
     ) in {
@@ -65306,6 +66141,58 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
     add_type = (action.get("add_type") or "").upper()
     if add_type not in ("AVG_DOWN", "PYRAMID"):
         log_info(f"[ADD_BLOCKED] {stock.get('name')}({code}) reason=invalid_add_type")
+        return None
+    if bool(stock.get("early_volatility_tp_applied")):
+        if add_type == "AVG_DOWN":
+            _log_holding_pipeline(
+                stock,
+                code,
+                "early_volatility_tp_post_partial_avg_down_blocked",
+                policy_version=EARLY_VOLATILITY_TP_POLICY_VERSION,
+                add_type=add_type,
+                add_reason=action.get("reason") or "-",
+                actual_order_submitted=False,
+                broker_order_forbidden=True,
+                runtime_effect=True,
+                decision_authority="early_tp_exit_order_coordinator",
+            )
+            return None
+        if not bool(action.get("strong_continuation_allowed")):
+            _log_holding_pipeline(
+                stock,
+                code,
+                "early_volatility_tp_post_partial_pyramid_blocked",
+                policy_version=EARLY_VOLATILITY_TP_POLICY_VERSION,
+                add_type=add_type,
+                add_reason=action.get("reason") or "-",
+                strong_continuation_allowed=bool(
+                    action.get("strong_continuation_allowed")
+                ),
+                actual_order_submitted=False,
+                broker_order_forbidden=True,
+                runtime_effect=True,
+                decision_authority="early_tp_exit_order_coordinator",
+            )
+            return None
+    if _early_volatility_tp_order_unresolved(stock):
+        _cancel_early_volatility_tp(
+            stock,
+            code,
+            reason=f"scale_in_recheck:{add_type}",
+            now_ts=time.time(),
+        )
+        _log_holding_pipeline(
+            stock,
+            code,
+            "early_volatility_tp_scale_in_recheck_required",
+            policy_version=EARLY_VOLATILITY_TP_POLICY_VERSION,
+            add_type=add_type,
+            add_reason=action.get("reason") or "-",
+            actual_order_submitted=False,
+            broker_order_forbidden=True,
+            runtime_effect=True,
+            decision_authority="early_tp_exit_order_coordinator",
+        )
         return None
     execution_limit = _scale_in_execution_limit_decision(stock, add_type)
     if not execution_limit["allowed"]:

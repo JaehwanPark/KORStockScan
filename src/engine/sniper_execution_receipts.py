@@ -15,6 +15,10 @@ from src.engine.scalping.entry_split_order_plan import (
     trip_probe_runtime_circuit,
     update_probe_runtime_bundle,
 )
+from src.engine.scalping.early_volatility_partial_tp import (
+    POLICY_VERSION as EARLY_VOLATILITY_TP_POLICY_VERSION,
+    EarlyTPRuntimeLedger,
+)
 from src.engine.sniper_entry_state import (
     ENTRY_LOCK,
     get_terminal_entry_order,
@@ -102,6 +106,10 @@ _SELL_RECEIPT_SNAPSHOT_KEYS = (
     "buy_price",
     "buy_qty",
     "code",
+    "early_volatility_tp_fill_amount",
+    "early_volatility_tp_filled_qty",
+    "early_volatility_tp_avg_sell_price",
+    "early_volatility_tp_realized_pnl_krw",
     "last_exit_current_ai_score",
     "last_exit_decision_source",
     "last_exit_held_sec",
@@ -111,6 +119,10 @@ _SELL_RECEIPT_SNAPSHOT_KEYS = (
     "last_exit_soft_stop_threshold_pct",
     "msg_audience",
     "name",
+    "nxt_rising_missed_tp1_partial_fill_amount",
+    "nxt_rising_missed_tp1_partial_filled_qty",
+    "nxt_rising_missed_tp1_partial_avg_sell_price",
+    "nxt_rising_missed_tp1_partial_realized_pnl_krw",
     "no_scale_in_counterfactual_profit_pct",
     "opening_rotation_entry_time_bucket",
     "opening_rotation_window_version",
@@ -305,6 +317,7 @@ _ADD_RECEIPT_FILLED_BY_ORDER_KEY = "_add_receipt_filled_by_order_no"
 _ADD_RECEIPT_REQUESTED_BY_ORDER_KEY = "_add_receipt_requested_by_order_no"
 _ADD_RECEIPT_AMOUNT_BY_ORDER_KEY = "_add_receipt_filled_amount_by_order_no"
 _ADD_RECEIPT_NO_ORDER_KEY = "__add_without_order_no__"
+_EARLY_VOLATILITY_TP_LEDGER = EarlyTPRuntimeLedger()
 
 
 def bind_execution_dependencies(
@@ -1105,6 +1118,139 @@ def _handle_nxt_rising_missed_tp1_partial_sell_execution(
         )
 
 
+def _handle_early_volatility_tp_sell_execution(
+    *,
+    target_id: int,
+    target_stock: dict[str, Any],
+    code: str,
+    order_no: str,
+    exec_price: int,
+    exec_qty: int,
+    now: datetime,
+    safe_buy_price: float,
+) -> None:
+    requested_qty = max(
+        0, _safe_int(target_stock.get("early_volatility_tp_requested_qty"), 0)
+    )
+    filled_before = max(
+        0, _safe_int(target_stock.get("early_volatility_tp_filled_qty"), 0)
+    )
+    effective_qty = min(max(0, exec_qty), max(0, requested_qty - filled_before))
+    if requested_qty <= 0 or effective_qty <= 0:
+        log_error(
+            f"[EARLY_TP_RECEIPT_INVALID] {target_stock.get('name')}({code}) "
+            f"requested={requested_qty} filled={filled_before} exec={exec_qty}"
+        )
+        return
+
+    filled_qty = filled_before + effective_qty
+    fill_amount = max(
+        0, _safe_int(target_stock.get("early_volatility_tp_fill_amount"), 0)
+    ) + (exec_price * effective_qty)
+    current_qty = max(0, _safe_int(target_stock.get("buy_qty"), 0))
+    remaining_qty = max(0, current_qty - effective_qty)
+    completed = filled_qty >= requested_qty
+    target_stock.update(
+        {
+            "status": "HOLDING",
+            "buy_qty": remaining_qty,
+            "early_volatility_tp_state": (
+                "FILLED_RUNNER" if completed else "PARTIAL"
+            ),
+            "early_volatility_tp_filled_qty": filled_qty,
+            "early_volatility_tp_fill_amount": fill_amount,
+            "early_volatility_tp_avg_sell_price": _avg_from_totals(
+                fill_amount, filled_qty
+            ),
+            "early_volatility_tp_last_fill_at": now.timestamp(),
+            "early_volatility_tp_applied": True,
+            "early_volatility_tp_runner_peak_reset_pending": filled_before == 0,
+            "early_volatility_tp_runner_peak_price": max(
+                exec_price,
+                _safe_int(
+                    target_stock.get("early_volatility_tp_avg_sell_price"),
+                    exec_price,
+                ),
+            ),
+        }
+    )
+    if completed:
+        avg_sell_price = _safe_int(
+            target_stock.get("early_volatility_tp_avg_sell_price"), exec_price
+        )
+        target_stock.update(
+            {
+                "early_volatility_tp_completed_at": now.timestamp(),
+                "early_volatility_tp_realized_profit_pct": calculate_net_profit_rate(
+                    safe_buy_price, avg_sell_price
+                ),
+                "early_volatility_tp_realized_pnl_krw": calculate_net_realized_pnl(
+                    safe_buy_price, avg_sell_price, filled_qty
+                ),
+            }
+        )
+    try:
+        with DB.get_session() as session:
+            record = (
+                session.query(RecommendationHistory).filter_by(id=target_id).first()
+            )
+            if record:
+                record.status = "HOLDING"
+                record.buy_qty = remaining_qty
+    except Exception as exc:
+        log_error(f"[EARLY_TP_DB] ID {target_id} partial receipt update failed: {exc}")
+
+    cycle_id = str(
+        target_stock.get("early_volatility_tp_position_cycle_id") or ""
+    ).strip()
+    if cycle_id:
+        try:
+            _EARLY_VOLATILITY_TP_LEDGER.upsert(
+                cycle_id,
+                state="FILLED_RUNNER" if completed else "PARTIAL",
+                order_no=order_no,
+                filled_qty=filled_qty,
+                remaining_holding_qty=remaining_qty,
+                avg_sell_price=target_stock.get("early_volatility_tp_avg_sell_price"),
+                updated_at=now.timestamp(),
+            )
+        except Exception as exc:
+            target_stock["early_volatility_tp_state"] = "FAILED_RECONCILIATION"
+            target_stock["early_volatility_tp_last_error"] = (
+                f"receipt_ledger_persist_failed:{type(exc).__name__}"
+            )
+            log_error(f"[EARLY_TP_LEDGER] {code} receipt persist failed: {exc}")
+
+    _log_holding_pipeline(
+        target_stock.get("name"),
+        code,
+        target_id,
+        (
+            "early_volatility_tp_sell_completed"
+            if completed
+            else "early_volatility_tp_fill_progress"
+        ),
+        policy_version=EARLY_VOLATILITY_TP_POLICY_VERSION,
+        position_cycle_id=cycle_id or "-",
+        ord_no=order_no or "-",
+        fill_price=exec_price,
+        fill_qty=effective_qty,
+        filled_qty=filled_qty,
+        requested_qty=requested_qty,
+        runner_qty=remaining_qty,
+        realized_profit_pct=target_stock.get(
+            "early_volatility_tp_realized_profit_pct", "-"
+        ),
+        realized_pnl_krw=target_stock.get(
+            "early_volatility_tp_realized_pnl_krw", "-"
+        ),
+        actual_order_submitted=True,
+        broker_order_forbidden=False,
+        runtime_effect=True,
+        decision_authority="scalp_early_volatility_partial_tp",
+    )
+
+
 def _handle_scalp_revive_sell_execution(
     *,
     target_id: int,
@@ -1445,6 +1591,30 @@ def _find_execution_target(code, exec_type, order_no):
         status_key = "BUY_ORDERED"
         order_key = "odno"
     else:
+        if normalized_order_no:
+            early_tp_match = next(
+                (
+                    stock
+                    for stock in ACTIVE_TARGETS
+                    if str(stock.get("code", "")).strip()[:6] == code
+                    and str(stock.get("early_volatility_tp_ord_no") or "").strip()
+                    == normalized_order_no
+                ),
+                None,
+            )
+            if early_tp_match:
+                return early_tp_match
+            early_submitting = [
+                stock
+                for stock in ACTIVE_TARGETS
+                if str(stock.get("code", "")).strip()[:6] == code
+                and str(stock.get("status") or "") == "HOLDING"
+                and str(stock.get("early_volatility_tp_state") or "").strip().upper()
+                == "SUBMITTING"
+                and not str(stock.get("early_volatility_tp_ord_no") or "").strip()
+            ]
+            if len(early_submitting) == 1:
+                return early_submitting[0]
         status_key = "SELL_ORDERED"
         order_key = "sell_odno"
 
@@ -1589,7 +1759,21 @@ def _apply_order_notice_to_target(target_stock, *, code, exec_type, order_no, st
             changed = True
 
     elif exec_type == "SELL":
-        if order_no and not str(target_stock.get("sell_odno", "") or "").strip():
+        early_state = str(
+            target_stock.get("early_volatility_tp_state") or ""
+        ).strip().upper()
+        early_ord_no = str(
+            target_stock.get("early_volatility_tp_ord_no") or ""
+        ).strip()
+        if order_no and (
+            early_ord_no == order_no
+            or (early_state == "SUBMITTING" and not early_ord_no)
+        ):
+            target_stock["early_volatility_tp_ord_no"] = order_no
+            target_stock["early_volatility_tp_notice_status"] = status
+            target_stock["early_volatility_tp_notice_at"] = time.time()
+            changed = True
+        elif order_no and not str(target_stock.get("sell_odno", "") or "").strip():
             target_stock["sell_odno"] = order_no
             changed = True
 
@@ -2039,6 +2223,20 @@ def _update_db_for_sell(
             safe_buy_price = (
                 float(record.buy_price) if record.buy_price is not None else 0.0
             )
+            early_partial_qty = _safe_int(
+                receipt_snapshot.get("early_volatility_tp_filled_qty"), 0
+            )
+            early_partial_amount = _safe_int(
+                receipt_snapshot.get("early_volatility_tp_fill_amount"), 0
+            )
+            nxt_partial_qty = _safe_int(
+                receipt_snapshot.get("nxt_rising_missed_tp1_partial_filled_qty"), 0
+            )
+            nxt_partial_amount = _safe_int(
+                receipt_snapshot.get("nxt_rising_missed_tp1_partial_fill_amount"), 0
+            )
+            partial_qty = early_partial_qty or nxt_partial_qty
+            partial_amount = early_partial_amount or nxt_partial_amount
             if safe_buy_price > 0:
                 profit_rate = calculate_net_profit_rate(safe_buy_price, exec_price)
             else:
@@ -2064,21 +2262,49 @@ def _update_db_for_sell(
                 )
 
             record.status = "COMPLETED"
-            record.sell_price = exec_price
             record.sell_time = now
+            completed_runner_qty = _safe_int(getattr(record, "buy_qty", 0), 0)
+            if completed_runner_qty <= 0:
+                completed_runner_qty = _safe_int(receipt_snapshot.get("buy_qty"), 0)
+            completed_buy_qty = completed_runner_qty + partial_qty
+            position_weighted_sell_price = int(exec_price or 0)
+            runner_realized_pnl_krw = calculate_net_realized_pnl(
+                safe_buy_price,
+                exec_price,
+                completed_runner_qty,
+            )
+            partial_realized_pnl_krw = 0
+            if partial_qty > 0 and partial_amount > 0 and safe_buy_price > 0:
+                partial_avg_sell_price = partial_amount / partial_qty
+                partial_realized_pnl_krw = calculate_net_realized_pnl(
+                    safe_buy_price,
+                    partial_avg_sell_price,
+                    partial_qty,
+                )
+                total_sell_amount = partial_amount + (
+                    int(exec_price or 0) * completed_runner_qty
+                )
+                position_weighted_sell_price = int(
+                    round(total_sell_amount / max(1, completed_buy_qty))
+                )
+                total_notional = safe_buy_price * completed_buy_qty
+                profit_rate = (
+                    (partial_realized_pnl_krw + runner_realized_pnl_krw)
+                    / total_notional
+                    * 100.0
+                    if total_notional > 0
+                    else 0.0
+                )
+            record.buy_qty = completed_buy_qty
+            record.sell_price = position_weighted_sell_price
             record.profit_rate = profit_rate
-            completed_buy_qty = _safe_int(getattr(record, "buy_qty", 0), 0)
-            if completed_buy_qty <= 0:
-                completed_buy_qty = _safe_int(receipt_snapshot.get("buy_qty"), 0)
             completed_position_tag = normalize_position_tag(
                 strategy,
                 getattr(record, "position_tag", None)
                 or receipt_snapshot.get("position_tag"),
             )
-            realized_pnl_krw = calculate_net_realized_pnl(
-                safe_buy_price,
-                exec_price,
-                completed_buy_qty,
+            realized_pnl_krw = (
+                partial_realized_pnl_krw + runner_realized_pnl_krw
             )
             receipt_snapshot.update(
                 {
@@ -2087,6 +2313,11 @@ def _update_db_for_sell(
                     "position_tag": completed_position_tag,
                     "strategy": strategy,
                     "realized_pnl_krw": realized_pnl_krw,
+                    "runner_realized_pnl_krw": runner_realized_pnl_krw,
+                    "partial_realized_pnl_krw": partial_realized_pnl_krw,
+                    "partial_realized_qty": partial_qty,
+                    "runner_realized_qty": completed_runner_qty,
+                    "position_weighted_sell_price": position_weighted_sell_price,
                     "actual_order_submitted": True,
                     "broker_order_forbidden": False,
                 }
@@ -2110,6 +2341,7 @@ def _update_db_for_sell(
                 target_id,
                 "sell_completed",
                 sell_price=int(exec_price or 0),
+                position_weighted_sell_price=position_weighted_sell_price,
                 profit_rate=f"{profit_rate:+.2f}",
                 exit_rule=receipt_snapshot.get("last_exit_rule") or "-",
                 exit_decision_source=receipt_snapshot.get("last_exit_decision_source")
@@ -2120,6 +2352,10 @@ def _update_db_for_sell(
                 buy_price=f"{safe_buy_price:.2f}",
                 buy_qty=completed_buy_qty,
                 realized_pnl_krw=realized_pnl_krw,
+                partial_realized_pnl_krw=partial_realized_pnl_krw,
+                runner_realized_pnl_krw=runner_realized_pnl_krw,
+                partial_realized_qty=partial_qty,
+                runner_realized_qty=completed_runner_qty,
                 actual_order_submitted=True,
                 broker_order_forbidden=False,
                 no_scale_in_counterfactual_profit_pct=receipt_snapshot.get(
@@ -3085,6 +3321,29 @@ def handle_real_execution(exec_data):
             if not sell_context:
                 return
             _, safe_buy_price, profit_rate, strategy, is_scalp_revive = sell_context
+
+            early_state = str(
+                target_stock.get("early_volatility_tp_state") or ""
+            ).strip().upper()
+            early_ord_no = str(
+                target_stock.get("early_volatility_tp_ord_no") or ""
+            ).strip()
+            if order_no and (
+                order_no == early_ord_no
+                or (early_state == "SUBMITTING" and not early_ord_no)
+            ):
+                target_stock["early_volatility_tp_ord_no"] = order_no
+                _handle_early_volatility_tp_sell_execution(
+                    target_id=target_id,
+                    target_stock=target_stock,
+                    code=code,
+                    order_no=order_no,
+                    exec_price=exec_price,
+                    exec_qty=exec_qty,
+                    now=now,
+                    safe_buy_price=safe_buy_price,
+                )
+                return
 
             if target_stock.get("nxt_rising_missed_tp1_partial_pending"):
                 _handle_nxt_rising_missed_tp1_partial_sell_execution(
