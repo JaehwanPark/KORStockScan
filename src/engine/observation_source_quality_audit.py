@@ -3224,6 +3224,17 @@ def _blocked_observation_records_fail_closed_source_gap(
     stage: str, fields: dict[str, Any], *, source: str
 ) -> bool:
     """Accept explicit fail-closed source gaps on non-authoritative block rows."""
+    if stage == "scalp_entry_action_decision_snapshot" and source == "minute_candle":
+        return (
+            str(fields.get("source_stage") or "").strip().lower()
+            == "latency_block"
+            and str(fields.get("minute_candle_evaluation_state") or "")
+            .strip()
+            .lower()
+            == "unavailable_fail_closed"
+            and _contract_bool(fields.get("actual_order_submitted"), False)
+            and _contract_bool(fields.get("broker_order_forbidden"), True)
+        )
     if stage == "score65_74_recovery_probe_blocked":
         reason = str(
             fields.get("score65_74_recovery_probe_skip_reason") or ""

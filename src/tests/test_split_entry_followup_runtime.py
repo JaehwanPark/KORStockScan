@@ -1309,6 +1309,67 @@ def test_probe_residual_source_quality_timeout_releases_guarded_scale_in_recheck
     )
 
 
+def test_probe_residual_stale_quote_defers_until_ttl_without_broker_submit(
+    monkeypatch, tmp_path
+):
+    events = []
+    monkeypatch.setattr(
+        split_plan,
+        "PROBE_RUNTIME_STATE_PATH",
+        tmp_path / "entry_split_probe_runtime_state.json",
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: events.append((stage, fields)),
+    )
+    stock = {
+        "code": "001520",
+        "name": "동양",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_qty": 1,
+        "buy_price": 1123,
+        "entry_filled_qty": 1,
+        "entry_split_probe_bundle_id": "001520-dongyang",
+        "entry_split_probe_requested_qty": 1013,
+    }
+
+    state_handlers._defer_entry_split_probe_source_quality(
+        stock,
+        "001520",
+        reason="stale_or_conflicted_fresh_quote",
+        now_ts=100.5,
+        filled_at=100.0,
+        timeout_sec=3,
+    )
+
+    assert stock["entry_split_probe_phase"] == "probe_recheck_pending"
+    assert stock["entry_split_probe_continuation_action"] == "DEFER"
+    assert stock["entry_split_probe_source_quality_recheck_pending"] is True
+    assert events[-1][0] == "probe_source_quality_deferred"
+    assert events[-1][1]["actual_order_submitted"] is False
+    assert events[-1][1]["broker_order_forbidden"] is True
+
+    monkeypatch.setattr(
+        state_handlers,
+        "_rising_missed_ai_action_guard_active",
+        lambda **_kwargs: True,
+    )
+    state_handlers._abort_entry_split_probe_residual(
+        stock,
+        "001520",
+        "residual_revalidation_timeout",
+        preserve_position=True,
+        now_ts=103.1,
+    )
+    assert stock["entry_split_probe_phase"] == "aborted"
+    assert stock["entry_split_probe_soft_abort"] is True
+    assert stock["entry_split_probe_scale_in_recheck_allowed"] is True
+    assert stock["entry_split_probe_source_quality_recheck_pending"] is False
+    assert stock["entry_split_probe_source_quality_recheck_unfilled_qty"] == 1012
+
+
 def test_probe_residual_directional_weak_timeout_remains_terminal_with_action_guard(
     monkeypatch,
 ):

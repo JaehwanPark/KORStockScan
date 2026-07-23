@@ -3,6 +3,7 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def isolate_module_logs(tmp_path, monkeypatch):
+    from src.engine.scalping.position_peak_ledger import POSITION_PEAK_LEDGER
     import src.utils.logger as logger
     import src.utils.pipeline_event_logger as pipeline_event_logger
 
@@ -20,6 +21,11 @@ def isolate_module_logs(tmp_path, monkeypatch):
     # threshold compact events inside the pytest temp dir.
     monkeypatch.setattr(pipeline_event_logger, "DATA_DIR", tmp_path / "data")
     pipeline_event_logger._PRODUCER_COMPACTOR = None
+    monkeypatch.setattr(
+        POSITION_PEAK_LEDGER,
+        "path",
+        tmp_path / "runtime" / "scalp_position_peak_state.json",
+    )
 
     yield
 

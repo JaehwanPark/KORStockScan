@@ -19,6 +19,7 @@ from src.engine.scalping.early_volatility_partial_tp import (
     POLICY_VERSION as EARLY_VOLATILITY_TP_POLICY_VERSION,
     EarlyTPRuntimeLedger,
 )
+from src.engine.scalping.position_peak_ledger import POSITION_PEAK_LEDGER
 from src.engine.sniper_entry_state import (
     ENTRY_LOCK,
     get_terminal_entry_order,
@@ -115,6 +116,11 @@ _SELL_RECEIPT_SNAPSHOT_KEYS = (
     "fast_exit_decision_peak_price",
     "fast_exit_decision_quote_state",
     "fast_exit_decision_quote_reason",
+    "exit_decision_mark_price",
+    "exit_decision_executable_sell_price",
+    "exit_decision_peak_price",
+    "exit_decision_quote_state",
+    "exit_decision_quote_reason",
     "last_exit_current_ai_score",
     "last_exit_decision_source",
     "last_exit_held_sec",
@@ -243,6 +249,21 @@ _FAST_EXIT_DECISION_RESET_KEYS = (
     "fast_exit_decision_quote_state",
     "fast_exit_decision_quote_reason",
 )
+_EXIT_DECISION_RESET_KEYS = (
+    "exit_decision_mark_price",
+    "exit_decision_executable_sell_price",
+    "exit_decision_peak_price",
+    "exit_decision_quote_state",
+    "exit_decision_quote_reason",
+)
+_POSITION_PEAK_RESET_KEYS = (
+    "position_peak_cycle_id",
+    "position_peak_persisted_price",
+    "position_peak_persisted_at",
+    "position_peak_restore_reason",
+    "position_peak_restored_price",
+    "position_peak_runtime_price",
+)
 _SELL_REVIVE_RESET_KEYS = (
     "odno",
     "order_time",
@@ -309,6 +330,7 @@ _SELL_REVIVE_RESET_KEYS = (
     "entry_split_probe_source_quality_recheck_released_at",
     "entry_split_probe_source_quality_recheck_unfilled_qty",
     "entry_split_probe_source_quality_recheck_reason",
+    "entry_split_probe_source_quality_recheck_pending",
     "entry_split_probe_abort_reason",
     "entry_split_probe_ai_action_at_submit",
     "probe_confirmation_count",
@@ -330,6 +352,8 @@ _SELL_REVIVE_RESET_KEYS = (
     "fast_exit_trigger_kind",
     "fast_exit_rest_retry_after",
     *_FAST_EXIT_DECISION_RESET_KEYS,
+    *_EXIT_DECISION_RESET_KEYS,
+    *_POSITION_PEAK_RESET_KEYS,
     *_EARLY_VOLATILITY_TP_RESET_KEYS,
     "rising_missed_scout_upgraded",
 )
@@ -389,6 +413,7 @@ _SELL_COMPLETE_RESET_KEYS = (
     "entry_split_probe_source_quality_recheck_released_at",
     "entry_split_probe_source_quality_recheck_unfilled_qty",
     "entry_split_probe_source_quality_recheck_reason",
+    "entry_split_probe_source_quality_recheck_pending",
     "entry_split_probe_abort_reason",
     "entry_split_probe_ai_action_at_submit",
     "probe_confirmation_count",
@@ -410,6 +435,8 @@ _SELL_COMPLETE_RESET_KEYS = (
     "fast_exit_trigger_kind",
     "fast_exit_rest_retry_after",
     *_FAST_EXIT_DECISION_RESET_KEYS,
+    *_EXIT_DECISION_RESET_KEYS,
+    *_POSITION_PEAK_RESET_KEYS,
     *_EARLY_VOLATILITY_TP_RESET_KEYS,
     "rising_missed_scout_upgraded",
 )
@@ -1048,6 +1075,13 @@ def _finalize_standard_sell_execution(
     is_scalp_revive: bool,
     code: str,
 ) -> None:
+    try:
+        POSITION_PEAK_LEDGER.remove_for_stock(target_stock)
+    except Exception as exc:
+        log_error(
+            f"[SCALP_PEAK_LEDGER] {target_stock.get('name', code)}({code}) "
+            f"cleanup failed after sell receipt: {exc}"
+        )
     highest_prices.pop(code, None)
     target_stock["status"] = "COMPLETED"
     target_stock["sell_time"] = now.strftime("%H:%M:%S")
@@ -1275,6 +1309,35 @@ def _handle_early_volatility_tp_sell_execution(
             ),
         }
     )
+    runner_peak_price = _safe_int(
+        target_stock.get("early_volatility_tp_runner_peak_price"), exec_price
+    )
+    if filled_before == 0 and runner_peak_price > 0:
+        with _active_state_lock():
+            if isinstance(highest_prices, dict):
+                highest_prices[code] = runner_peak_price
+        try:
+            peak_row = POSITION_PEAK_LEDGER.record(
+                target_stock,
+                peak_price=runner_peak_price,
+                observed_at=now.timestamp(),
+                reason="early_partial_runner_rebaseline",
+                allow_decrease=True,
+            )
+            if peak_row:
+                target_stock["position_peak_cycle_id"] = peak_row[
+                    "position_cycle_id"
+                ]
+                target_stock["position_peak_persisted_price"] = peak_row["peak_price"]
+                target_stock["position_peak_persisted_at"] = peak_row[
+                    "updated_at_epoch"
+                ]
+                target_stock["early_volatility_tp_runner_peak_reset_pending"] = False
+        except Exception as exc:
+            log_error(
+                f"[SCALP_PEAK_LEDGER] {target_stock.get('name', code)}({code}) "
+                f"early partial rebaseline persist failed: {exc}"
+            )
     if completed:
         avg_sell_price = _safe_int(
             target_stock.get("early_volatility_tp_avg_sell_price"), exec_price
@@ -1476,6 +1539,13 @@ def _apply_scalp_revive_memory_state(
     revived_position_tag: str,
     revived_at_ts: float | None = None,
 ) -> None:
+    try:
+        POSITION_PEAK_LEDGER.remove_for_stock(target_stock)
+    except Exception as exc:
+        log_error(
+            f"[SCALP_PEAK_LEDGER] {target_stock.get('name', code)}({code}) "
+            f"cleanup failed before revive: {exc}"
+        )
     highest_prices.pop(code, None)
     target_stock["id"] = new_watch_id
     target_stock["status"] = "WATCHING"

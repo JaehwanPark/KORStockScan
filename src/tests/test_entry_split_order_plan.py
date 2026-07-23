@@ -749,6 +749,44 @@ def test_post_sell_candidate_preserves_entry_split_variant_metadata(
     assert payload["actual_fill_price"] == 1010
 
 
+def test_post_sell_candidate_prefers_standard_exit_decision_provenance(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(post_sell_feedback, "DATA_DIR", tmp_path / "data")
+    post_sell_feedback._RECORDED_KEYS.clear()
+    stock = {
+        "name": "LG전자",
+        "strategy": "SCALPING",
+        "last_exit_decision_source": "HOLDING_FLOW_OVERRIDE",
+        "exit_decision_mark_price": 184_000,
+        "exit_decision_executable_sell_price": 184_000,
+        "exit_decision_peak_price": 184_100,
+        "exit_decision_quote_state": "single_source",
+        "exit_decision_quote_reason": "rest_only_fresh",
+        "fast_exit_decision_mark_price": 1,
+    }
+
+    payload = post_sell_feedback.record_post_sell_candidate(
+        recommendation_id=23086,
+        stock=stock,
+        code="066570",
+        sell_time=datetime(2026, 7, 23, 12, 52, 55),
+        buy_price=182_350,
+        sell_price=184_000,
+        profit_rate=0.67,
+        buy_qty=1,
+        exit_rule="scalp_low_profit_stagnation_hard_exit",
+        strategy="SCALPING",
+    )
+
+    assert payload is not None
+    assert payload["exit_decision_mark_price"] == 184_000
+    assert payload["exit_decision_executable_sell_price"] == 184_000
+    assert payload["exit_decision_peak_price"] == 184_100
+    assert payload["exit_decision_quote_state"] == "single_source"
+    assert payload["exit_decision_quote_reason"] == "rest_only_fresh"
+
+
 def test_allocator_preserves_qty_and_respects_leg_limits(monkeypatch, tmp_path):
     _patch_dirs(monkeypatch, tmp_path)
     target_date = datetime.now(timezone(timedelta(hours=9))).date().isoformat()
@@ -1583,6 +1621,85 @@ def test_probe_runtime_restart_clears_pending_recheck_without_opening_circuit(
     state = split_plan._load_json(state_path)
     assert state["circuit_open"] is False
     assert state["bundles"]["123456-probe-recheck-restart"]["phase"] == "aborted"
+
+
+def test_probe_runtime_restart_releases_source_quality_recheck_for_scale_in(
+    monkeypatch, tmp_path
+):
+    state_path = tmp_path / "entry_split_probe_runtime_state.json"
+    monkeypatch.setattr(split_plan, "PROBE_RUNTIME_STATE_PATH", state_path)
+    now = datetime(2026, 7, 23, 12, 22, tzinfo=timezone(timedelta(hours=9)))
+    split_plan.update_probe_runtime_bundle(
+        "001520-probe-source-recheck",
+        phase="probe_recheck_pending",
+        now=now,
+        code="001520",
+        target_id=117,
+        requested_qty=1013,
+        fill_qty=1,
+        recheck_count=5,
+        post_probe_direction_state="UNKNOWN",
+        post_probe_direction_reason="post_probe_stale_or_conflicted_fresh_quote",
+        source_quality_recheck_pending=True,
+    )
+    stock = {
+        "id": 117,
+        "code": "001520",
+        "buy_qty": 1,
+        "status": "HOLDING",
+    }
+
+    result = split_plan.recover_probe_runtime_bundle_for_stock(stock, now=now)
+
+    assert result["reason"] == "post_probe_recheck_cleared_on_restart"
+    assert stock["entry_split_probe_phase"] == "aborted"
+    assert stock["entry_split_probe_soft_abort"] is True
+    assert stock["entry_split_probe_scale_in_forbidden"] is False
+    assert stock["entry_split_probe_scale_in_recheck_allowed"] is True
+    assert stock["entry_split_probe_source_quality_recheck_released"] is True
+    assert stock["entry_split_probe_source_quality_recheck_unfilled_qty"] == 1012
+
+
+def test_probe_runtime_restart_preserves_persisted_soft_abort_quantity_truth(
+    monkeypatch, tmp_path
+):
+    state_path = tmp_path / "entry_split_probe_runtime_state.json"
+    monkeypatch.setattr(split_plan, "PROBE_RUNTIME_STATE_PATH", state_path)
+    now = datetime(2026, 7, 23, 12, 23, tzinfo=timezone(timedelta(hours=9)))
+    split_plan.update_probe_runtime_bundle(
+        "001520-probe-soft-abort",
+        phase="aborted",
+        now=now,
+        code="001520",
+        target_id=117,
+        requested_qty=1013,
+        fill_qty=1,
+        soft_abort=True,
+        scale_in_recheck_allowed=True,
+        scale_in_recheck_reason=(
+            "residual_revalidation_timeout:source_quality_recovery"
+        ),
+        source_quality_recheck_released=True,
+        source_quality_recheck_unfilled_qty=1012,
+        source_quality_recheck_reason=(
+            "post_probe_stale_or_conflicted_fresh_quote"
+        ),
+    )
+    stock = {
+        "id": 117,
+        "code": "001520",
+        "buy_qty": 1,
+        "status": "HOLDING",
+    }
+
+    result = split_plan.recover_probe_runtime_bundle_for_stock(stock, now=now)
+
+    assert result["phase"] == "aborted"
+    assert stock["entry_split_probe_scale_in_forbidden"] is False
+    assert stock["entry_split_probe_scale_in_recheck_allowed"] is True
+    assert stock["entry_requested_qty"] == 1
+    assert stock["requested_buy_qty"] == 1
+    assert stock["entry_split_probe_source_quality_recheck_unfilled_qty"] == 1012
 
 
 def test_probe_runtime_restart_ignores_partial_complete_bundle(monkeypatch, tmp_path):

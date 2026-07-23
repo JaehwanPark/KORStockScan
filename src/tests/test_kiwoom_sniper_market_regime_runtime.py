@@ -434,6 +434,11 @@ def test_scanner_ws_reg_recovery_throttle_keeps_state_by_source_and_code(monkeyp
 
 def test_restore_holding_runtime_state_rehydrates_scalping_defaults(monkeypatch):
     monkeypatch.setattr(kiwoom_sniper_v2, "highest_prices", {})
+    monkeypatch.setattr(
+        kiwoom_sniper_v2.POSITION_PEAK_LEDGER,
+        "restore_peak",
+        lambda stock: (0, "ledger_row_missing"),
+    )
 
     targets = [
         {
@@ -458,6 +463,34 @@ def test_restore_holding_runtime_state_rehydrates_scalping_defaults(monkeypatch)
     assert stock["buy_qty"] == 5
     assert stock["holding_started_at"] == "2026-04-08 09:10:00"
     assert kiwoom_sniper_v2.highest_prices["123456"] == 10000
+
+
+def test_restore_holding_runtime_state_restores_durable_scalping_peak(monkeypatch):
+    monkeypatch.setattr(kiwoom_sniper_v2, "highest_prices", {})
+    monkeypatch.setattr(
+        kiwoom_sniper_v2.POSITION_PEAK_LEDGER,
+        "restore_peak",
+        lambda stock: (1140, "ledger_peak_restored"),
+    )
+    targets = [
+        {
+            "id": 117,
+            "code": "001520",
+            "name": "동양",
+            "status": "HOLDING",
+            "strategy": "SCALPING",
+            "position_tag": "SCALP_BASE",
+            "buy_price": 1123,
+            "buy_qty": 1,
+            "buy_time": "2026-07-23 12:09:30",
+        }
+    ]
+
+    kiwoom_sniper_v2._restore_holding_runtime_state(targets)
+
+    assert kiwoom_sniper_v2.highest_prices["001520"] == 1140
+    assert targets[0]["position_peak_restore_reason"] == "ledger_peak_restored"
+    assert targets[0]["position_peak_runtime_price"] == 1140
 
 
 def test_scalping_scanner_promoted_target_attaches_active_watching(monkeypatch):

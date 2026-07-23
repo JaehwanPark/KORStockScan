@@ -137,13 +137,51 @@ def test_scale_in_feature_defaults_mark_missing_features_unusable():
     assert fields["micro_vwap_available"] is False
     assert fields["minute_candle_context_quality"] == "missing"
     assert fields["minute_candle_window_fresh"] is False
-    assert fields["minute_candle_latest_age_ms"] == (
-        "not_evaluated_no_candle_timestamp"
-    )
+    assert fields["minute_candle_latest_age_ms"] == -1.0
     assert fields["tick_pressure_evaluation_state"] == "unavailable_fail_closed"
     assert fields["minute_candle_evaluation_state"] == "unavailable_fail_closed"
     assert fields["reversal_feature_source_quality"] == "stale"
     assert "features_missing" in fields["reversal_feature_stale_reason"]
+
+
+def test_scale_in_feature_defaults_normalize_unavailable_candle_age():
+    fields = _scale_in_feature_contract_defaults(
+        {
+            "micro_vwap_available": False,
+            "minute_candle_window_fresh": False,
+            "minute_candle_latest_age_ms": "-",
+        }
+    )
+
+    assert fields["minute_candle_latest_age_ms"] == -1.0
+    assert fields["minute_candle_evaluation_state"] == "unavailable_fail_closed"
+
+
+def test_holding_quote_provenance_uses_fresh_consistency_age():
+    fields = handlers._holding_quote_provenance_fields(
+        {"quote_stale": False},
+        {
+            "quote_consistency_state": "single_source",
+            "quote_consistency_age_ms": 125.5,
+        },
+        now_ts=100.0,
+    )
+
+    assert fields["quote_stale"] is False
+    assert fields["quote_age_ms"] == 125.5
+    assert fields["quote_age_source"] == "quote_consistency_age_ms"
+
+
+def test_holding_quote_provenance_fails_closed_when_age_is_unavailable():
+    fields = handlers._holding_quote_provenance_fields(
+        {},
+        {},
+        now_ts=100.0,
+    )
+
+    assert fields["quote_stale"] is True
+    assert fields["quote_age_ms"] == -1.0
+    assert fields["quote_age_source"] == "unavailable_fail_closed"
 
 
 def test_watching_strategy_initializes_ai_call_executed_before_optional_ai_call():
@@ -1757,9 +1795,10 @@ def test_entry_adm_snapshot_records_feature_parity_and_numeric_consistency(monke
     assert fields["curr_vs_micro_vwap_bp"] == "11.400"
     assert fields["curr_vs_ma5_bp"] == "9.800"
     assert fields["micro_vwap_available"] is False
-    assert fields["minute_candle_context_quality"] == "not_evaluated"
+    assert fields["minute_candle_context_quality"] == "unavailable_fail_closed"
     assert fields["minute_candle_window_fresh"] is False
-    assert fields["minute_candle_latest_age_ms"] == "not_evaluated"
+    assert fields["minute_candle_latest_age_ms"] == -1.0
+    assert fields["minute_candle_evaluation_state"] == "unavailable_fail_closed"
     assert fields["ai_reason_numeric_inconsistency"] is True
     assert fields["source_quality_gate"] == "ai_numeric_consistency_review_required"
     assert fields["allowed_runtime_apply"] is False

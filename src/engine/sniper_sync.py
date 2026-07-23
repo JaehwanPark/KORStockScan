@@ -1151,7 +1151,8 @@ def periodic_account_sync():
                         record.status = "HOLDING"
                         record.buy_price = buy_uv
                         record.buy_qty = cur_qty
-                        record.buy_time = datetime.now()
+                        if not record.buy_time:
+                            record.buy_time = datetime.now()
 
                         with _with_state_lock():
                             for t in ACTIVE_TARGETS:
@@ -1159,6 +1160,12 @@ def periodic_account_sync():
                                     t["status"] = "HOLDING"
                                     t["buy_price"] = buy_uv
                                     t["buy_qty"] = cur_qty
+                                    if not t.get("buy_time"):
+                                        t["buy_time"] = record.buy_time
+                                    if not t.get("holding_started_at"):
+                                        t["holding_started_at"] = (
+                                            t.get("buy_time") or record.buy_time
+                                        )
 
                         synced_count += 1
 

@@ -38170,6 +38170,210 @@ def test_handle_holding_state_blocks_trailing_sell_when_pre_submit_quote_stale(
     assert blocked[0]["actual_order_submitted"] is False
 
 
+def test_handle_holding_state_blocks_low_profit_stagnation_sell_when_quote_stale(
+    monkeypatch,
+):
+    original_rules = state_handlers.TRADING_RULES
+    try:
+        state_handlers.TRADING_RULES = replace(
+            CONFIG,
+            SCALE_IN_REQUIRE_HISTORY_TABLE=False,
+            SCALP_BAD_ENTRY_REFINED_CANARY_ENABLED=False,
+            SCALP_BAD_ENTRY_REFINED_OBSERVE_ENABLED=False,
+            SCALP_MFE_PROTECT_EXIT_ENABLED=False,
+            SCALP_TRAILING_START_PCT=10.0,
+            SCALP_SAFE_PROFIT=10.0,
+        )
+        state_handlers.COOLDOWNS = {}
+        state_handlers.ALERTED_STOCKS = set()
+        state_handlers.HIGHEST_PRICES = {"123456": 10_070}
+        state_handlers.LAST_AI_CALL_TIMES = {}
+        state_handlers.LAST_LOG_TIMES = {}
+        state_handlers.DB = _DummyDB()
+        state_handlers.KIWOOM_TOKEN = "token"
+
+        sell_calls = []
+        pipeline_events = []
+        monkeypatch.setattr(
+            state_handlers,
+            "_evaluate_scalp_low_profit_stagnation_hard_exit",
+            lambda *args, **kwargs: {
+                "should_exit": True,
+                "min_hold_sec": 1800,
+                "elapsed_sec": 230,
+                "confirmation_sec": 180,
+                "adjusted_profit_pct": 0.52,
+                "assumed_exit_slippage_bps": 15.0,
+            },
+        )
+        rest_available = {"value": False}
+
+        def fake_quote_fields(
+            ws_data, *, rest_snapshot=None, side="mark", safety_exit=False, now_ts=None
+        ):
+            if rest_snapshot:
+                return (
+                    {
+                        "quote_consistency_state": "single_source",
+                        "quote_consistency_reason": "rest_only_fresh",
+                        "quote_consistency_entry_blocked": False,
+                        "price_source": "rest_mid",
+                    },
+                    10_070,
+                    10_080,
+                    10_060,
+                )
+            return (
+                {
+                    "quote_consistency_state": "stale",
+                    "quote_consistency_reason": "quote_stale",
+                    "quote_consistency_entry_blocked": True,
+                    "price_source": "stale_cached",
+                },
+                10_070,
+                10_080,
+                10_060,
+            )
+
+        monkeypatch.setattr(
+            state_handlers, "_build_quote_consistency_fields", fake_quote_fields
+        )
+        monkeypatch.setattr(
+            state_handlers,
+            "_fetch_rest_orderbook_snapshot_bounded",
+            lambda code, timeout_ms: (
+                (
+                    {"best_bid": 10_060, "best_ask": 10_080}
+                    if rest_available["value"]
+                    else {}
+                ),
+                "ok" if rest_available["value"] else "unavailable",
+                12.0 if rest_available["value"] else 0.0,
+            ),
+        )
+        monkeypatch.setattr(
+            state_handlers,
+            "can_consider_scale_in",
+            lambda *args, **kwargs: {"allowed": False, "reason": "test_no_add"},
+        )
+        monkeypatch.setattr(
+            state_handlers.kiwoom_orders,
+            "send_smart_sell_order",
+            lambda **kwargs: sell_calls.append(kwargs)
+            or {"return_code": "0", "ord_no": "S1"},
+        )
+        monkeypatch.setattr(
+            state_handlers,
+            "_log_holding_pipeline",
+            lambda stock, code, stage, **fields: pipeline_events.append(
+                (stage, fields)
+            ),
+        )
+        stock = {
+            "id": 1,
+            "code": "123456",
+            "name": "LG전자",
+            "status": "HOLDING",
+            "strategy": "SCALPING",
+            "buy_price": 10_000,
+            "buy_qty": 1,
+            "rt_ai_prob": 0.63,
+            "buy_time": 1_000.0,
+        }
+
+        state_handlers.handle_holding_state(
+            stock=stock,
+            code="123456",
+            ws_data={"curr": 10_070},
+            admin_id=1,
+            market_regime="BULL",
+            now_ts=4_000.0,
+            now_dt=datetime(2026, 7, 23, 12, 52, 54),
+            radar=None,
+            ai_engine=None,
+        )
+
+        assert sell_calls == []
+        assert stock["status"] == "HOLDING"
+        rest_available["value"] = True
+        state_handlers.handle_holding_state(
+            stock=stock,
+            code="123456",
+            ws_data={"curr": 10_070},
+            admin_id=1,
+            market_regime="BULL",
+            now_ts=4_001.0,
+            now_dt=datetime(2026, 7, 23, 12, 52, 55),
+            radar=None,
+            ai_engine=None,
+        )
+    finally:
+        state_handlers.TRADING_RULES = original_rules
+
+    assert len(sell_calls) == 1
+    blocked = [
+        fields
+        for stage, fields in pipeline_events
+        if stage == "scalping_discretionary_sell_quote_revalidation_blocked"
+    ]
+    assert blocked, pipeline_events
+    assert blocked[0]["exit_rule"] == "scalp_low_profit_stagnation_hard_exit"
+    assert blocked[0]["quote_consistency_reason"] == "quote_stale"
+    assert blocked[0]["actual_order_submitted"] is False
+    assert blocked[0]["broker_order_forbidden"] is True
+    assert stock["status"] == "SELL_ORDERED"
+    assert stock["exit_decision_mark_price"] == 10_070
+    assert stock["exit_decision_executable_sell_price"] == 10_060
+    assert stock["exit_decision_quote_state"] == "single_source"
+    assert stock["exit_decision_quote_reason"] == "rest_only_fresh"
+
+
+def test_scalping_discretionary_quote_revalidation_excludes_emergency_exits():
+    assert (
+        state_handlers._requires_scalping_discretionary_sell_quote_revalidation(
+            strategy="SCALPING",
+            exit_rule="scalp_low_profit_stagnation_hard_exit",
+            sell_reason_type="LOW_PROFIT_STAGNATION",
+        )
+        is True
+    )
+    assert (
+        state_handlers._requires_scalping_discretionary_sell_quote_revalidation(
+            strategy="SCALPING",
+            exit_rule="scalp_emergency_stop",
+            sell_reason_type="EMERGENCY",
+        )
+        is False
+    )
+    assert (
+        state_handlers._requires_scalping_discretionary_sell_quote_revalidation(
+            strategy="SCALPING",
+            exit_rule="scalp_soft_stop_pct",
+            sell_reason_type="LOSS",
+        )
+        is False
+    )
+    assert (
+        state_handlers._sell_quote_revalidation_blocked(
+            {
+                "quote_consistency_rest_check_state": "unavailable",
+                "quote_consistency_entry_blocked": False,
+            }
+        )
+        is True
+    )
+    assert (
+        state_handlers._sell_quote_revalidation_blocked(
+            {
+                "quote_consistency_state": "single_source",
+                "quote_consistency_reason": "rest_only_fresh",
+                "quote_consistency_entry_blocked": False,
+            }
+        )
+        is False
+    )
+
+
 def test_handle_holding_state_defers_trailing_sell_on_executable_recovery(
     monkeypatch,
 ):

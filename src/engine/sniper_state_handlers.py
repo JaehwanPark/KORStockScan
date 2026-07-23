@@ -247,6 +247,7 @@ from src.engine.scalping.early_volatility_partial_tp import (
     EarlyVolatilityTPContext,
     resolve_early_volatility_tp,
 )
+from src.engine.scalping.position_peak_ledger import POSITION_PEAK_LEDGER
 
 KIWOOM_TOKEN = None
 DB = None
@@ -282,6 +283,40 @@ _SCALE_IN_INITIAL_QTY_CAP_DENOMINATOR = 2
 _EARLY_VOLATILITY_TP_LEDGER = EarlyTPRuntimeLedger()
 _EARLY_VOLATILITY_TP_POLICY_CACHE: dict[str, Any] = {}
 _EARLY_VOLATILITY_TP_CODE_LOADED_AT_EPOCH = time.time()
+
+
+def _persist_scalping_position_peak(
+    stock: dict,
+    code: str,
+    *,
+    peak_price: int,
+    observed_at: float,
+    reason: str,
+    allow_decrease: bool = False,
+) -> None:
+    if normalize_strategy(stock.get("strategy")) != "SCALPING":
+        return
+    if _is_any_simulated_position(stock, "SCALPING"):
+        return
+    if not stock.get("code"):
+        stock["code"] = str(code or "").strip()[:6]
+    try:
+        row = POSITION_PEAK_LEDGER.record(
+            stock,
+            peak_price=peak_price,
+            observed_at=observed_at,
+            reason=reason,
+            allow_decrease=allow_decrease,
+        )
+        if row:
+            stock["position_peak_cycle_id"] = row["position_cycle_id"]
+            stock["position_peak_persisted_price"] = row["peak_price"]
+            stock["position_peak_persisted_at"] = row["updated_at_epoch"]
+    except Exception as exc:
+        log_error(
+            f"[SCALP_PEAK_LEDGER] {stock.get('name', code)}({code}) "
+            f"persist failed: {exc}"
+        )
 
 
 def _mark_entry_opportunity_recheck_outcome(
@@ -835,6 +870,12 @@ _HOLDING_FLOW_OVERRIDE_EXIT_RULES = {
     "scalp_profit_stagnation_time_exit",
     "scalp_low_profit_stagnation_hard_exit",
     "scalp_bad_entry_refined_canary",
+}
+_SCALP_FRESH_QUOTE_REQUIRED_DISCRETIONARY_EXIT_RULES = {
+    "scalp_ai_momentum_decay",
+    "scalp_trailing_take_profit",
+    "scalp_profit_stagnation_time_exit",
+    "scalp_low_profit_stagnation_hard_exit",
 }
 _PROFIT_STAGNATION_STATE_FIELDS = (
     "profit_stagnation_started_at",
@@ -6890,6 +6931,41 @@ def _is_sell_side_open_time_safety_exit(
             "daily_limit_up",
             "limit_up",
         )
+    )
+
+
+def _requires_scalping_discretionary_sell_quote_revalidation(
+    *,
+    strategy: str | None,
+    exit_rule: str | None,
+    sell_reason_type: str | None,
+) -> bool:
+    normalized_rule = str(exit_rule or "").strip().lower()
+    return bool(
+        _is_scalp_strategy(strategy)
+        and normalized_rule
+        in _SCALP_FRESH_QUOTE_REQUIRED_DISCRETIONARY_EXIT_RULES
+        and not _is_sell_side_open_time_safety_exit(normalized_rule, sell_reason_type)
+    )
+
+
+def _sell_quote_revalidation_blocked(fields: dict | None) -> bool:
+    fields = fields if isinstance(fields, dict) else {}
+    state = str(fields.get("quote_consistency_state") or "").strip().lower()
+    reason = str(fields.get("quote_consistency_reason") or "").strip().lower()
+    return bool(
+        not fields
+        or state not in {"ok", "warning", "single_source"}
+        or reason
+        in {
+            "quote_stale",
+            "stale_quote",
+            "conflicted",
+            "price_conflict",
+            "quote_missing",
+            "missing_quote",
+        }
+        or _truthy_log_value(fields.get("quote_consistency_entry_blocked"))
     )
 
 
@@ -17208,13 +17284,21 @@ def _emit_scalp_entry_adm_snapshot(
         "curr_vs_micro_vwap_bp": 0.0,
         "curr_vs_ma5_bp": 0.0,
         "micro_vwap_available": False,
-        "minute_candle_context_quality": "not_evaluated",
+        "minute_candle_context_quality": "unavailable_fail_closed",
         "minute_candle_window_fresh": False,
-        "minute_candle_latest_age_ms": "not_evaluated",
+        "minute_candle_latest_age_ms": -1.0,
+        "minute_candle_evaluation_state": "unavailable_fail_closed",
     }
     for key, value in entry_snapshot_defaults.items():
         if fields.get(key) in (None, "", "-", "None", "none", "null"):
             fields[key] = value
+    if (
+        not _truthy_field(fields.get("micro_vwap_available"))
+        and not _truthy_field(fields.get("minute_candle_window_fresh"))
+        and _safe_float(fields.get("minute_candle_latest_age_ms"), None) is None
+    ):
+        fields["minute_candle_latest_age_ms"] = -1.0
+        fields["minute_candle_evaluation_state"] = "unavailable_fail_closed"
     if fields.get("ai_reason_numeric_inconsistency") is True:
         fields["source_quality_gate"] = "ai_numeric_consistency_review_required"
         fields["allowed_runtime_apply"] = False
@@ -17886,9 +17970,12 @@ def _scale_in_feature_contract_defaults(probe: dict | None) -> dict:
     payload.setdefault("curr_vs_micro_vwap_bp", 0.0)
     payload.setdefault("supply_pass_count", 0)
     payload.setdefault("large_sell_print_detected", False)
-    payload.setdefault(
-        "minute_candle_latest_age_ms", "not_evaluated_no_candle_timestamp"
-    )
+    if (
+        not _truthy_field(payload.get("micro_vwap_available"))
+        and not _truthy_field(payload.get("minute_candle_window_fresh"))
+        and _safe_float(payload.get("minute_candle_latest_age_ms"), None) is None
+    ):
+        payload["minute_candle_latest_age_ms"] = -1.0
     payload.setdefault(
         "tick_aggressor_pressure_source_quality",
         (
@@ -22009,9 +22096,7 @@ def _dispatch_scalp_preset_exit(
     ) -> bool:
         if not fast_exit:
             return False
-        retry_at = max(time.time(), float(now_ts)) + max(
-            0.25, float(retry_delay_sec)
-        )
+        retry_at = float(now_ts) + max(0.25, float(retry_delay_sec))
         _mutate_stock_state(
             stock,
             set_fields={
@@ -22404,7 +22489,7 @@ def evaluate_and_dispatch_fast_scalp_exit(
         )
         return False
 
-    quote_fields, mark_price, _, executable_sell_price = (
+    quote_fields, mark_price, executable_buy_price, executable_sell_price = (
         _build_quote_consistency_fields(ws_data, side="sell", now_ts=observed_at)
     )
     quote_reason = str(quote_fields.get("quote_consistency_reason") or "").lower()
@@ -22437,7 +22522,7 @@ def evaluate_and_dispatch_fast_scalp_exit(
                 QuoteConsistencyConfig.from_env().emergency_rest_timeout_ms,
             )
         )
-        quote_fields, mark_price, _, executable_sell_price = (
+        quote_fields, mark_price, executable_buy_price, executable_sell_price = (
             _build_quote_consistency_fields(
                 ws_data,
                 rest_snapshot=rest_snapshot if rest_snapshot else None,
@@ -22493,6 +22578,13 @@ def evaluate_and_dispatch_fast_scalp_exit(
         )
         if isinstance(HIGHEST_PRICES, dict):
             HIGHEST_PRICES[price_key] = peak_price
+    _persist_scalping_position_peak(
+        stock,
+        code,
+        peak_price=peak_price,
+        observed_at=observed_at,
+        reason="fast_exit_peak_observation",
+    )
     profit_rate = calculate_net_profit_rate(buy_price, decision_price)
     peak_profit = calculate_net_profit_rate(buy_price, peak_price)
     trailing_start_pct = _rule_float("SCALP_TRAILING_START_PCT", 0.6)
@@ -22551,6 +22643,182 @@ def evaluate_and_dispatch_fast_scalp_exit(
             stock.get("fast_exit_trigger_kind") or "claimed_exit_retry"
         )
         exit_rule = str(stock.get("last_exit_rule") or "scalp_fast_exit_retry")
+
+    if trigger_kind == "trailing_peak_worsen_floor" and not retry_pending:
+        mark_profit_rate = calculate_net_profit_rate(buy_price, mark_price)
+        best_ask = _safe_int(executable_buy_price, 0)
+        spread_bps = (
+            ((best_ask - decision_price) / max(decision_price, 1)) * 10000.0
+            if best_ask >= decision_price > 0
+            else float("inf")
+        )
+        mark_to_bid_gap_bps = (
+            ((mark_price - decision_price) / max(mark_price, 1)) * 10000.0
+            if mark_price > decision_price > 0
+            else 0.0
+        )
+        wide_config = _scalp_trailing_loss_conversion_recheck_config(observed_at)
+        max_spread_bps = float(wide_config["max_spread_bps"])
+        wide_loss_conversion = bool(
+            profit_rate < 0.0 <= mark_profit_rate
+            and max(spread_bps, mark_to_bid_gap_bps) > max_spread_bps
+        )
+        if wide_loss_conversion:
+            wide_rest, wide_rest_state, wide_rest_elapsed_ms = (
+                _fetch_rest_orderbook_snapshot_bounded(
+                    code,
+                    int(wide_config["rest_timeout_ms"]),
+                )
+            )
+            wide_rest = dict(wide_rest or {})
+            if wide_rest and not any(
+                wide_rest.get(key)
+                for key in (
+                    "rest_received_ts_ms",
+                    "received_at_ms",
+                    "rest_received_ts",
+                    "received_ts",
+                )
+            ):
+                wide_rest["rest_received_ts"] = time.time()
+            (
+                wide_quote_fields,
+                wide_mark_price,
+                wide_best_ask,
+                wide_executable_sell_price,
+            ) = _build_quote_consistency_fields(
+                ws_data,
+                rest_snapshot=wide_rest,
+                side="sell",
+                safety_exit=True,
+                now_ts=observed_at,
+            )
+            wide_quote_state = str(
+                wide_quote_fields.get("quote_consistency_state") or ""
+            ).lower()
+            wide_quote_reason = str(
+                wide_quote_fields.get("quote_consistency_reason") or ""
+            ).lower()
+            wide_rest_age_ms = _safe_float(
+                wide_quote_fields.get("quote_consistency_rest_age_ms"),
+                float("inf"),
+            )
+            wide_bid = _safe_int(wide_executable_sell_price, 0)
+            wide_ask = _safe_int(wide_best_ask, 0)
+            wide_spread_bps = (
+                ((wide_ask - wide_bid) / max(wide_bid, 1)) * 10000.0
+                if wide_ask >= wide_bid > 0
+                else float("inf")
+            )
+            wide_route_fields = _fast_exit_execution_route_fields(
+                stock,
+                code,
+                ws_data,
+                rest_snapshot=wide_rest,
+                now_ts=observed_at,
+            )
+            wide_rest_confirmed = bool(
+                wide_rest_state == "ok"
+                and 0.0 <= wide_rest_age_ms <= wide_config["max_rest_age_ms"]
+                and wide_bid > 0
+                and wide_ask >= wide_bid
+                and wide_spread_bps <= max_spread_bps
+                and wide_quote_state not in {"missing", "diverged", "blocked"}
+                and wide_quote_reason
+                not in {
+                    "quote_stale",
+                    "stale_quote",
+                    "conflicted",
+                    "price_conflict",
+                }
+                and not wide_route_fields.get(
+                    "fast_exit_route_source_quality_blocked"
+                )
+            )
+            _log_holding_pipeline(
+                stock,
+                code,
+                "scalp_trailing_wide_spread_recheck",
+                recheck_state=("confirmed" if wide_rest_confirmed else "deferred"),
+                ws_mark_price=_safe_int(mark_price, 0),
+                ws_executable_sell_price=decision_price,
+                ws_executable_buy_price=best_ask,
+                ws_mark_profit_rate=f"{mark_profit_rate:+.2f}",
+                ws_executable_profit_rate=f"{profit_rate:+.2f}",
+                ws_spread_bps=(
+                    f"{spread_bps:.3f}" if math.isfinite(spread_bps) else "-"
+                ),
+                ws_mark_to_bid_gap_bps=f"{mark_to_bid_gap_bps:.3f}",
+                max_spread_bps=f"{max_spread_bps:.3f}",
+                rest_fetch_state=wide_rest_state,
+                rest_fetch_elapsed_ms=f"{wide_rest_elapsed_ms:.3f}",
+                rest_quote_age_ms=(
+                    f"{wide_rest_age_ms:.3f}"
+                    if math.isfinite(wide_rest_age_ms)
+                    else "-"
+                ),
+                rest_best_bid=wide_bid,
+                rest_best_ask=wide_ask,
+                rest_spread_bps=(
+                    f"{wide_spread_bps:.3f}"
+                    if math.isfinite(wide_spread_bps)
+                    else "-"
+                ),
+                metric_role="source_quality_gate",
+                decision_authority="scalp_trailing_take_profit",
+                window_policy="same_trailing_candidate_bounded_rest_recheck",
+                sample_floor="not_applicable_runtime_guard",
+                primary_decision_metric="fresh_rest_executable_spread_bps",
+                source_quality_gate=(
+                    "fresh_conflict_free_rest_bbo_within_spread_cap"
+                ),
+                forbidden_uses=(
+                    "hard_stop_delay|protect_stop_delay|emergency_stop_delay|"
+                    "stale_submit|quantity_change|broker_guard_bypass"
+                ),
+                actual_order_submitted=False,
+                broker_order_forbidden=not wide_rest_confirmed,
+                runtime_effect=True,
+            )
+            if not wide_rest_confirmed:
+                return False
+            quote_fields = wide_quote_fields
+            quote_state = wide_quote_state
+            quote_reason = wide_quote_reason
+            route_fields = wide_route_fields
+            mark_price = _safe_int(wide_mark_price, wide_bid)
+            executable_buy_price = wide_ask
+            executable_sell_price = wide_bid
+            decision_price = wide_bid
+            rest_snapshot = wide_rest
+            rest_state = wide_rest_state
+            rest_elapsed_ms = wide_rest_elapsed_ms
+            profit_rate = calculate_net_profit_rate(buy_price, decision_price)
+            peak_profit = calculate_net_profit_rate(buy_price, peak_price)
+            trailing_worsen = peak_profit - profit_rate
+            trailing_drawdown_pct = (
+                ((float(peak_price) - float(decision_price)) / float(peak_price))
+                * 100.0
+                if peak_price > 0
+                else 0.0
+            )
+            if emergency_pct is not None and profit_rate <= emergency_pct:
+                trigger_kind = "emergency_stop"
+                exit_rule = "scalp_hard_stop_emergency"
+            elif hard_stop_pct is not None and profit_rate <= hard_stop_pct:
+                trigger_kind = "hard_stop"
+                exit_rule = "scalp_hard_stop_pct"
+            elif protect_pct is not None and profit_rate <= protect_pct:
+                trigger_kind = "protect_stop"
+                exit_rule = "scalp_protect_profit_stop"
+            elif (
+                peak_profit >= trailing_start_pct
+                and trailing_drawdown_pct + 1e-9 >= trailing_limit
+            ):
+                trigger_kind = "trailing_peak_worsen_floor"
+                exit_rule = "scalp_trailing_take_profit"
+            else:
+                return False
 
     if trigger_kind == "trailing_peak_worsen_floor" and not retry_pending:
         in_pyramid_trailing_grace, _, _ = _pyramid_post_add_trailing_grace(
@@ -22749,7 +23017,7 @@ def evaluate_and_dispatch_fast_scalp_exit(
                 stock["status"] = "HOLDING"
                 stock["fast_exit_retry_pending"] = True
                 stock["fast_exit_retry_reason"] = "dispatch_exception"
-                stock["fast_exit_retry_at"] = time.time() + 0.25
+                stock["fast_exit_retry_at"] = observed_at + 0.25
                 stock["fast_exit_last_error"] = str(exc)[:240]
         log_error(
             f"[SCALP_FAST_EXIT] {stock.get('name')}({code}) dispatch failed: {exc}"
@@ -32738,6 +33006,70 @@ def _post_probe_direction_fields(
     }
 
 
+def _defer_entry_split_probe_source_quality(
+    stock: dict,
+    code: str,
+    *,
+    reason: str,
+    now_ts: float,
+    filled_at: float,
+    timeout_sec: int,
+) -> None:
+    """Keep immediate submit blocked while allowing one bounded fresh-quote retry."""
+
+    bundle_id = str(stock.get("entry_split_probe_bundle_id") or "").strip()
+    recheck_count = _safe_int(stock.get("entry_split_probe_recheck_count"), 0) + 1
+    recheck_due_at = min(
+        float(filled_at) + float(timeout_sec),
+        float(now_ts) + _post_probe_recheck_interval_sec(),
+    )
+    direction_reason = f"post_probe_{reason}"
+    set_fields = {
+        "entry_split_probe_phase": "probe_recheck_pending",
+        "entry_split_probe_recheck_due_at": recheck_due_at,
+        "entry_split_probe_recheck_count": recheck_count,
+        "entry_split_probe_deferred_once": True,
+        "entry_split_probe_direction_state": "UNKNOWN",
+        "entry_split_probe_direction_reason": direction_reason,
+        "entry_split_probe_continuation_action": "DEFER",
+        "entry_split_probe_source_quality_recheck_pending": True,
+    }
+    _mutate_stock_state(stock, set_fields=set_fields)
+    if bundle_id:
+        update_probe_runtime_bundle(
+            bundle_id,
+            phase="probe_recheck_pending",
+            recheck_count=recheck_count,
+            recheck_due_at=recheck_due_at,
+            post_probe_direction_state="UNKNOWN",
+            post_probe_direction_reason=direction_reason,
+            post_probe_continuation_action="DEFER",
+            source_quality_recheck_pending=True,
+        )
+    _log_entry_pipeline(
+        stock,
+        code,
+        "probe_source_quality_deferred",
+        probe_bundle_id=bundle_id or "-",
+        reason=reason,
+        recheck_count=recheck_count,
+        recheck_due_at=f"{recheck_due_at:.6f}",
+        metric_role="source_quality_gate",
+        decision_authority="dynamic_entry_price_resolver_p1_post_probe",
+        window_policy="same_probe_fill_ttl_bounded_recheck",
+        sample_floor="not_applicable_runtime_guard",
+        primary_decision_metric="fresh_conflict_free_bbo_recovered",
+        source_quality_gate="fresh_conflict_free_bbo_required_before_residual_submit",
+        forbidden_uses=(
+            "stale_submit|conflict_bypass|ttl_extension|quantity_increase|"
+            "broker_guard_bypass|hard_stop_bypass"
+        ),
+        actual_order_submitted=False,
+        broker_order_forbidden=True,
+        runtime_effect=True,
+    )
+
+
 def _abort_entry_split_probe_residual(
     stock: dict,
     code: str,
@@ -32760,6 +33092,8 @@ def _abort_entry_split_probe_residual(
         "post_probe_nxt_event_time_speed_unavailable",
         "post_probe_price_resolver_unavailable",
         "post_probe_resolver_unavailable",
+        "post_probe_stale_or_conflicted_fresh_quote",
+        "post_probe_fresh_bbo_unavailable",
     }
     observed_at = float(time.time() if now_ts is None else now_ts)
     action_guard_active = _rising_missed_ai_action_guard_active(now_ts=observed_at)
@@ -32817,6 +33151,7 @@ def _abort_entry_split_probe_residual(
         "entry_split_probe_source_quality_recheck_reason": (
             last_direction_reason if source_quality_timeout else "-"
         ),
+        "entry_split_probe_source_quality_recheck_pending": False,
     }
     hard_negative_reasons = {
         "buy_authority_not_available",
@@ -32856,6 +33191,21 @@ def _abort_entry_split_probe_residual(
             phase="aborted",
             reason=reason,
             filled_qty=filled_qty,
+            soft_abort=soft_abort,
+            scale_in_recheck_allowed=soft_abort,
+            scale_in_recheck_reason=set_fields[
+                "entry_split_probe_scale_in_recheck_reason"
+            ],
+            source_quality_recheck_released=source_quality_timeout,
+            source_quality_recheck_released_at=set_fields[
+                "entry_split_probe_source_quality_recheck_released_at"
+            ],
+            source_quality_recheck_unfilled_qty=set_fields[
+                "entry_split_probe_source_quality_recheck_unfilled_qty"
+            ],
+            source_quality_recheck_reason=set_fields[
+                "entry_split_probe_source_quality_recheck_reason"
+            ],
         )
     _log_entry_pipeline(
         stock,
@@ -34390,6 +34740,44 @@ def _holding_ws_freshness_recover_or_block(stock, code, ws_data, *, now_ts):
         stock.pop("holding_rest_quote_only_recovery", None)
         stock.pop("holding_rest_quote_only_recovered_at", None)
     return ws_data, True, fields
+
+
+def _holding_quote_provenance_fields(
+    ws_data: dict | None,
+    quote_fields: dict | None,
+    *,
+    now_ts: float,
+) -> dict:
+    """Return explicit quote-age provenance for holding observation rows."""
+    ws_data = ws_data if isinstance(ws_data, dict) else {}
+    quote_fields = quote_fields if isinstance(quote_fields, dict) else {}
+    quote_age_ms = _safe_float(
+        quote_fields.get("quote_consistency_age_ms"), -1.0
+    )
+    quote_age_source = "quote_consistency_age_ms"
+    if quote_age_ms < 0:
+        age_sec = _get_ws_snapshot_age_sec(ws_data)
+        if age_sec is not None:
+            quote_age_ms = max(0.0, float(age_sec) * 1000.0)
+            quote_age_source = "last_ws_update_ts"
+        else:
+            quote_age_source = "unavailable_fail_closed"
+    quote_state = str(
+        quote_fields.get("quote_consistency_state") or ""
+    ).strip().lower()
+    return {
+        "quote_stale": bool(
+            _boolish_true(ws_data.get("quote_stale"))
+            or quote_age_ms < 0
+            or _boolish_true(
+                quote_fields.get("quote_consistency_entry_blocked")
+            )
+            or quote_state in {"missing", "stale", "conflict", "diverged"}
+        ),
+        "quote_age_ms": round(quote_age_ms, 3),
+        "quote_age_source": quote_age_source,
+        "quote_provenance_observed_at": round(float(now_ts), 6),
+    }
 
 
 def _rest_quote_only_hard_stop_confirmation_block(
@@ -59983,13 +60371,23 @@ def _submit_entry_split_probe_residual_locked(
         "conflicted",
         "price_conflict",
     }:
-        _abort_entry_split_probe_residual(
-            stock, code, "stale_or_conflicted_fresh_quote", preserve_position=True
+        _defer_entry_split_probe_source_quality(
+            stock,
+            code,
+            reason="stale_or_conflicted_fresh_quote",
+            now_ts=now_ts,
+            filled_at=filled_at,
+            timeout_sec=timeout_sec,
         )
         return False
     if best_bid <= 0 or best_ask <= 0 or best_bid > best_ask:
-        _abort_entry_split_probe_residual(
-            stock, code, "fresh_bbo_unavailable", preserve_position=True
+        _defer_entry_split_probe_source_quality(
+            stock,
+            code,
+            reason="fresh_bbo_unavailable",
+            now_ts=now_ts,
+            filled_at=filled_at,
+            timeout_sec=timeout_sec,
         )
         return False
 
@@ -60918,6 +61316,11 @@ def handle_holding_state(
             now_ts=now_ts,
         )
     )
+    holding_quote_provenance = _holding_quote_provenance_fields(
+        ws_data,
+        holding_quote_fields,
+        now_ts=now_ts,
+    )
     if canonical_mark_price > 0:
         curr_p = int(canonical_mark_price)
         ws_data = dict(ws_data or {})
@@ -61042,6 +61445,10 @@ def handle_holding_state(
     # 9) 아니면 HOLD 유지
     # --------------------------------------------------------
 
+    peak_rebaseline_applied = bool(
+        stock.get("peak_rebaseline_pending")
+        or stock.get("early_volatility_tp_runner_peak_reset_pending")
+    )
     if isinstance(highest_prices, dict):
         with ENTRY_LOCK:
             if stock.get("peak_rebaseline_pending"):
@@ -61069,6 +61476,18 @@ def handle_holding_state(
                 )
             if not rest_quote_only_recovery:
                 highest_prices[price_key] = max(highest_prices[price_key], curr_p)
+        _persist_scalping_position_peak(
+            stock,
+            code,
+            peak_price=_safe_int(highest_prices.get(price_key), 0),
+            observed_at=now_ts,
+            reason=(
+                "position_peak_rebaseline"
+                if peak_rebaseline_applied
+                else "holding_peak_update"
+            ),
+            allow_decrease=peak_rebaseline_applied,
+        )
 
     profit_rate = calculate_net_profit_rate(buy_p, curr_p)
     peak_profit = calculate_net_profit_rate(
@@ -64217,9 +64636,7 @@ def handle_holding_state(
                     max_peak_improve=low_profit_stagnation_exit.get(
                         "max_peak_improve", "-"
                     ),
-                    quote_stale=holding_ws_fields.get("quote_stale", "-"),
-                    quote_age_ms=holding_ws_fields.get("quote_age_ms", "-"),
-                    quote_age_source=holding_ws_fields.get("quote_age_source", "-"),
+                    **holding_quote_provenance,
                     metric_role="bounded_tunable_exit_confirmation",
                     decision_authority="profit_stagnation_exit_runtime_confirmation_only",
                     window_policy="same_position_runtime_state",
@@ -65415,6 +65832,13 @@ def handle_holding_state(
             exit_rule or stock.get("last_exit_rule"),
             sell_reason_type,
         )
+        discretionary_scalp_pre_submit_recheck = (
+            _requires_scalping_discretionary_sell_quote_revalidation(
+                strategy=strategy,
+                exit_rule=exit_rule or stock.get("last_exit_rule"),
+                sell_reason_type=sell_reason_type,
+            )
+        )
         rest_snapshot = {}
         rest_check_state = "not_attempted"
         rest_check_elapsed_ms = 0.0
@@ -65424,23 +65848,30 @@ def handle_holding_state(
             == "scalp_trailing_take_profit"
         )
         trailing_signal_profit_rate = float(profit_rate)
-        if sell_safety_exit or trailing_pre_submit_recheck:
+        if sell_safety_exit or discretionary_scalp_pre_submit_recheck:
             rest_snapshot, rest_check_state, rest_check_elapsed_ms = (
                 _fetch_rest_orderbook_snapshot_bounded(
                     code,
                     QuoteConsistencyConfig.from_env().emergency_rest_timeout_ms,
                 )
             )
+        sell_quote_checked_at = float(now_ts) + max(
+            0.0, float(rest_check_elapsed_ms)
+        ) / 1000.0
         sell_quote_fields, sell_mark_price, _, sell_order_price = (
             _build_quote_consistency_fields(
                 ws_data,
                 rest_snapshot=rest_snapshot if rest_snapshot else None,
                 side="sell",
                 safety_exit=sell_safety_exit,
-                now_ts=now_ts,
+                now_ts=sell_quote_checked_at,
             )
         )
-        if not sell_quote_fields and holding_quote_fields:
+        if (
+            not sell_quote_fields
+            and holding_quote_fields
+            and not discretionary_scalp_pre_submit_recheck
+        ):
             sell_quote_fields = dict(holding_quote_fields)
         sell_quote_fields.update(
             {
@@ -65448,21 +65879,28 @@ def handle_holding_state(
                 "quote_consistency_rest_check_elapsed_ms": round(
                     float(rest_check_elapsed_ms), 3
                 ),
+                "quote_consistency_final_checked_at_epoch": round(
+                    sell_quote_checked_at, 6
+                ),
                 "quote_consistency_safety_exit": bool(sell_safety_exit),
                 "trailing_pre_submit_recheck": bool(trailing_pre_submit_recheck),
+                "scalping_discretionary_pre_submit_recheck": bool(
+                    discretionary_scalp_pre_submit_recheck
+                ),
             }
         )
-        if trailing_pre_submit_recheck and (
-            str(sell_quote_fields.get("quote_consistency_reason") or "").strip().lower()
-            in {"quote_stale", "stale_quote"}
-            or _truthy_log_value(
-                sell_quote_fields.get("quote_consistency_entry_blocked")
-            )
+        if discretionary_scalp_pre_submit_recheck and _sell_quote_revalidation_blocked(
+            sell_quote_fields
         ):
+            blocked_stage = (
+                "trailing_sell_quote_revalidation_blocked"
+                if trailing_pre_submit_recheck
+                else "scalping_discretionary_sell_quote_revalidation_blocked"
+            )
             _log_holding_pipeline(
                 stock,
                 code,
-                "trailing_sell_quote_revalidation_blocked",
+                blocked_stage,
                 **{
                     **sell_quote_fields,
                     "exit_rule": exit_rule or stock.get("last_exit_rule") or "-",
@@ -65476,8 +65914,17 @@ def handle_holding_state(
                     "actual_order_submitted": False,
                     "broker_order_forbidden": True,
                     "runtime_effect": True,
-                    "decision_authority": "real_scalping_trailing_pre_submit_quote_guard",
-                    "source_quality_gate": "fresh_sell_quote_required_for_trailing_submit",
+                    "metric_role": "source_quality_gate",
+                    "decision_authority": (
+                        "real_scalping_discretionary_pre_submit_quote_guard"
+                    ),
+                    "window_policy": "same_position_next_monitor_loop_recheck",
+                    "sample_floor": "not_applicable_runtime_safety_guard",
+                    "primary_decision_metric": "quote_consistency_state",
+                    "source_quality_gate": (
+                        "fresh_sell_quote_required_for_discretionary_submit"
+                    ),
+                    "allowed_runtime_apply": False,
                     "forbidden_uses": TRADE_QUALITY_RUNTIME_FORBIDDEN_USES,
                 },
             )
@@ -65525,6 +65972,24 @@ def handle_holding_state(
             orderbook["bids"] = bids
             ws_data["orderbook"] = orderbook
             ws_data["curr"] = curr_p if curr_p > 0 else sell_order_price
+
+        if strategy == "SCALPING":
+            _mutate_stock_state(
+                stock,
+                set_fields={
+                    "exit_decision_mark_price": _safe_int(sell_mark_price, 0),
+                    "exit_decision_executable_sell_price": sell_order_price,
+                    "exit_decision_peak_price": _safe_int(
+                        HIGHEST_PRICES.get(_price_tracking_key(stock, code)), 0
+                    ),
+                    "exit_decision_quote_state": str(
+                        sell_quote_fields.get("quote_consistency_state") or "-"
+                    ),
+                    "exit_decision_quote_reason": str(
+                        sell_quote_fields.get("quote_consistency_reason") or "-"
+                    ),
+                },
+            )
 
         if trailing_pre_submit_recheck:
             recovery_decision = _trailing_pre_submit_executable_recovery_decision(

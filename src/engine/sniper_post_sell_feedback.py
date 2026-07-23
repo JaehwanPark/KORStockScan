@@ -482,6 +482,16 @@ def record_post_sell_candidate(
         resolved_ai_effective = round(
             _safe_float(stock.get("last_exit_ai_score_effective"), resolved_ai_score), 1
         )
+        has_standard_exit_decision = any(
+            key in stock
+            for key in (
+                "exit_decision_mark_price",
+                "exit_decision_executable_sell_price",
+                "exit_decision_peak_price",
+                "exit_decision_quote_state",
+                "exit_decision_quote_reason",
+            )
+        )
         payload = {
             "post_sell_id": uuid.uuid4().hex[:16],
             "actual_order_submitted": True,
@@ -505,22 +515,53 @@ def record_post_sell_candidate(
             ),
             "exit_decision_source": str(stock.get("last_exit_decision_source") or "-"),
             "exit_decision_mark_price": (
-                _safe_int(stock.get("fast_exit_decision_mark_price"), 0) or "-"
+                _safe_int(
+                    (
+                        stock.get("exit_decision_mark_price")
+                        if has_standard_exit_decision
+                        else stock.get("fast_exit_decision_mark_price")
+                    ),
+                    0,
+                )
+                or "-"
             ),
             "exit_decision_executable_sell_price": (
                 _safe_int(
-                    stock.get("fast_exit_decision_executable_sell_price"), 0
+                    (
+                        stock.get("exit_decision_executable_sell_price")
+                        if has_standard_exit_decision
+                        else stock.get("fast_exit_decision_executable_sell_price")
+                    ),
+                    0,
                 )
                 or "-"
             ),
             "exit_decision_peak_price": (
-                _safe_int(stock.get("fast_exit_decision_peak_price"), 0) or "-"
+                _safe_int(
+                    (
+                        stock.get("exit_decision_peak_price")
+                        if has_standard_exit_decision
+                        else stock.get("fast_exit_decision_peak_price")
+                    ),
+                    0,
+                )
+                or "-"
             ),
             "exit_decision_quote_state": str(
-                stock.get("fast_exit_decision_quote_state") or "-"
+                (
+                    stock.get("exit_decision_quote_state")
+                    if has_standard_exit_decision
+                    else stock.get("fast_exit_decision_quote_state")
+                )
+                or "-"
             ),
             "exit_decision_quote_reason": str(
-                stock.get("fast_exit_decision_quote_reason") or "-"
+                (
+                    stock.get("exit_decision_quote_reason")
+                    if has_standard_exit_decision
+                    else stock.get("fast_exit_decision_quote_reason")
+                )
+                or "-"
             ),
             "actual_fill_price": safe_sell_price,
             "revive": bool(revive),
