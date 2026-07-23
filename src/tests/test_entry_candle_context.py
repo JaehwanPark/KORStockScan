@@ -5,6 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from src.engine import sniper_state_handlers as state_handlers
 from src.engine.ai_engine_openai import GPTSniperEngine
 from src.engine.ai_prompt_contracts import (
     SCALPING_SYSTEM_PROMPT,
@@ -309,6 +310,95 @@ def test_actual_ws_route_keys_select_nxt_and_premarket_al_requires_proof(monkeyp
     assert "premarket_al_proof_missing" in premarket["risk_flags"]
 
 
+def test_nxt_aftermarket_accepts_integrated_ws_only_with_closed_session_proof(
+    monkeypatch,
+):
+    _enable(monkeypatch)
+    ws = _ws(10200)
+    ws.pop("market_suffix")
+    ws.pop("market_route")
+    ws["last_ws_market_suffix"] = "_AL"
+    ws["last_ws_market_route"] = "krx_nxt_integrated"
+    ws["recent_trade_ticks"] = [
+        {
+            "time": "16:20:20",
+            "price": 10210,
+            "volume": 3,
+            "market_suffix": "_AL",
+            "market_route": "krx_nxt_integrated",
+        }
+    ]
+    context = build_entry_candle_context(
+        "token",
+        "000660",
+        ws,
+        venue="NXT",
+        session="nxt_aftermarket",
+        now_ts=datetime(2026, 7, 23, 16, 20, 30, tzinfo=KST),
+        recent_candles=_candles(20, start_hour=16),
+        source_meta={},
+    )
+
+    assert context["request_code"] == "000660_NX"
+    assert context["route_equivalence_proven"] is True
+    assert context["route_equivalence"] == "nxt_aftermarket_integrated_ws_to_nx_rest"
+    assert context["source_quality"]["route_equivalence_proof"]["proven"] is True
+    assert context["source_quality"]["status"] == "fresh_consistent"
+    assert context["source_quality"]["route_conflict_count"] == 0
+    assert context["bars"][-1]["c"] == 10210
+
+
+def test_nxt_integrated_ws_is_not_equivalent_during_regular_overlap(monkeypatch):
+    _enable(monkeypatch)
+    ws = _ws(10200)
+    ws["market_suffix"] = "_AL"
+    ws["market_route"] = "krx_nxt_integrated"
+    context = build_entry_candle_context(
+        "token",
+        "000660",
+        ws,
+        venue="NXT",
+        session="nxt_regular_overlap",
+        now_ts=datetime(2026, 7, 23, 10, 0, 30, tzinfo=KST),
+        recent_candles=_candles(20, start_minute=40),
+        source_meta={},
+    )
+
+    assert context["route_equivalence_proven"] is False
+    assert context["source_quality"]["status"] == "blocked"
+    assert "venue_conflict" in context["risk_flags"]
+
+
+def test_nxt_aftermarket_rejects_tick_from_non_equivalent_route(monkeypatch):
+    _enable(monkeypatch)
+    ws = _ws(10200)
+    ws["market_suffix"] = "_AL"
+    ws["market_route"] = "krx_nxt_integrated"
+    ws["recent_trade_ticks"] = [
+        {
+            "time": "16:20:20",
+            "price": 10210,
+            "volume": 3,
+            "market_suffix": "_NX",
+            "market_route": "nxt_only",
+        }
+    ]
+    context = build_entry_candle_context(
+        "token",
+        "000660",
+        ws,
+        venue="NXT",
+        session="nxt_aftermarket",
+        now_ts=datetime(2026, 7, 23, 16, 20, 30, tzinfo=KST),
+        recent_candles=_candles(20, start_hour=16),
+        source_meta={},
+    )
+
+    assert context["route_equivalence_proven"] is True
+    assert context["source_quality"]["route_conflict_count"] == 1
+    assert context["source_quality"]["status"] == "blocked"
+
+
 def test_krx_context_blocks_nxt_ws_suffix_even_without_route_label(monkeypatch):
     _enable(monkeypatch)
     ws = _ws(10000)
@@ -496,3 +586,158 @@ def test_runtime_call_sites_use_context_and_s15_no_longer_sends_empty_candles():
         "candle_context"
         in inspect.signature(GPTSniperEngine.evaluate_scalping_entry_price).parameters
     )
+
+
+def test_entry_price_skips_provider_and_blocks_submit_for_blocked_context(
+    monkeypatch,
+):
+    _enable(monkeypatch)
+    now = datetime(2026, 7, 23, 16, 20, 30, tzinfo=KST)
+    monkeypatch.setattr(state_handlers.time, "time", lambda: now.timestamp())
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils,
+        "get_tick_history_ka10003",
+        lambda *args, **kwargs: [],
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils,
+        "get_minute_candles_ka10080_with_meta",
+        lambda *args, **kwargs: (
+            _candles(20, start_hour=16),
+            {"api_id": "ka10080", "received_count": 20},
+        ),
+    )
+    logs = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+
+    class DummyAI:
+        def __init__(self):
+            self.calls = 0
+
+        def evaluate_scalping_entry_price(self, *args, **kwargs):
+            self.calls += 1
+            raise AssertionError("blocked candle context must skip provider")
+
+    ai = DummyAI()
+    latency_gate = {
+        "target_buy_price": 10000,
+        "latency_guarded_order_price": 10000,
+        "normal_defensive_order_price": 10000,
+        "order_price": 10000,
+        "latency_state": "SAFE",
+        "quote_stale": False,
+    }
+    planned_orders = [{"tag": "normal", "qty": 1, "price": 10000}]
+    ws = _ws(10010)
+    ws["market_suffix"] = ""
+    ws["market_route"] = "krx_regular"
+
+    adjusted, touched = state_handlers._apply_entry_ai_price_canary(
+        stock={"name": "TEST", "strategy": "SCALPING", "position_tag": "SCANNER"},
+        code="000660",
+        strategy="SCALPING",
+        ws_data=ws,
+        ai_engine=ai,
+        latency_gate=latency_gate,
+        planned_orders=planned_orders,
+        curr_price=10010,
+        best_bid=10000,
+        best_ask=10020,
+        requested_qty=1,
+        real_order_subject=True,
+    )
+
+    assert ai.calls == 0
+    assert adjusted == []
+    assert touched is True
+    assert latency_gate["ai_entry_price_canary_submit_blocked"] is True
+    assert (
+        latency_gate["ai_entry_price_canary_submit_block_reason"]
+        == "entry_candle_source_quality_blocked"
+    )
+    assert latency_gate["ai_entry_price_provider_skipped"] is True
+    assert latency_gate["ai_entry_price_provider_call_count"] == 0
+    assert latency_gate["ai_entry_price_canary_eval_ms"] == 0
+    assert latency_gate["entry_candle_source_quality_blockers"] == ["venue_conflict"]
+    assert logs[-1][0] == "entry_ai_price_candle_source_block"
+    assert logs[-1][1]["actual_order_submitted"] is False
+    assert logs[-1][1]["broker_order_forbidden"] is True
+
+
+def test_entry_price_calls_provider_for_proven_nxt_aftermarket_equivalence(
+    monkeypatch,
+):
+    _enable(monkeypatch)
+    now = datetime(2026, 7, 23, 16, 20, 30, tzinfo=KST)
+    monkeypatch.setattr(state_handlers.time, "time", lambda: now.timestamp())
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils,
+        "get_tick_history_ka10003",
+        lambda *args, **kwargs: [],
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils,
+        "get_minute_candles_ka10080_with_meta",
+        lambda *args, **kwargs: (
+            _candles(20, start_hour=16),
+            {"api_id": "ka10080", "received_count": 20},
+        ),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda *args, **kwargs: None,
+    )
+
+    class DummyAI:
+        def __init__(self):
+            self.calls = 0
+
+        def evaluate_scalping_entry_price(self, *args, **kwargs):
+            self.calls += 1
+            return {
+                "action": "USE_DEFENSIVE",
+                "confidence": 90,
+                "reason": "Fresh equivalent route",
+                "ai_parse_ok": True,
+                "ai_parse_fail": False,
+            }
+
+    ai = DummyAI()
+    latency_gate = {
+        "target_buy_price": 10000,
+        "latency_guarded_order_price": 10000,
+        "normal_defensive_order_price": 10000,
+        "order_price": 10000,
+        "latency_state": "SAFE",
+        "quote_stale": False,
+    }
+    ws = _ws(10010)
+    ws.pop("market_suffix")
+    ws.pop("market_route")
+    ws["last_ws_market_suffix"] = "_AL"
+    ws["last_ws_market_route"] = "krx_nxt_integrated"
+
+    adjusted, touched = state_handlers._apply_entry_ai_price_canary(
+        stock={"name": "TEST", "strategy": "SCALPING", "position_tag": "SCANNER"},
+        code="000660",
+        strategy="SCALPING",
+        ws_data=ws,
+        ai_engine=ai,
+        latency_gate=latency_gate,
+        planned_orders=[{"tag": "normal", "qty": 1, "price": 10000}],
+        curr_price=10010,
+        best_bid=10000,
+        best_ask=10020,
+        requested_qty=1,
+        real_order_subject=True,
+    )
+
+    assert ai.calls == 1
+    assert adjusted
+    assert touched is True
+    assert latency_gate.get("ai_entry_price_canary_submit_blocked") is not True

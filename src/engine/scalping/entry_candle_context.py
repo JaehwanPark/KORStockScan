@@ -214,11 +214,49 @@ def _normalized_bar(candle: dict[str, Any], moment: datetime) -> dict[str, Any]:
     }
 
 
+def _nxt_integrated_aftermarket_route_proof(
+    *,
+    now: datetime,
+    venue: str,
+    session: str,
+    request_suffix: str,
+    ws_suffix: str,
+    ws_route: str,
+) -> dict[str, Any]:
+    session_value = str(session or "").strip().lower()
+    within_aftermarket_clock = dt_time(16, 0) <= now.time() <= dt_time(20, 0)
+    proven = bool(
+        str(venue or "").strip().upper() == "NXT"
+        and session_value == "nxt_aftermarket"
+        and within_aftermarket_clock
+        and request_suffix == "_NX"
+        and ws_suffix == "_AL"
+        and ws_route == "krx_nxt_integrated"
+    )
+    return {
+        "proven": proven,
+        "route_equivalence": (
+            "nxt_aftermarket_integrated_ws_to_nx_rest" if proven else "not_proven"
+        ),
+        "krx_regular_closed_by_clock": within_aftermarket_clock,
+        "required_session": "nxt_aftermarket",
+        "required_rest_suffix": "_NX",
+        "required_ws_suffix": "_AL",
+        "required_ws_route": "krx_nxt_integrated",
+    }
+
+
 def _route_compatible(
-    tick: dict[str, Any], *, request_suffix: str, ws_route: str
+    tick: dict[str, Any],
+    *,
+    request_suffix: str,
+    ws_route: str,
+    allow_nxt_integrated_aftermarket: bool = False,
 ) -> bool:
     tick_suffix = str(tick.get("market_suffix") or "").upper()
     tick_route = str(tick.get("market_route") or "").lower()
+    if allow_nxt_integrated_aftermarket:
+        return tick_suffix == "_AL" and tick_route == "krx_nxt_integrated"
     if request_suffix and tick_suffix != request_suffix:
         return False
     if not request_suffix and tick_suffix:
@@ -441,6 +479,15 @@ def build_entry_candle_context(
     )
     _, request_suffix = _split_code(request_code)
     ws_suffix, ws_route = _ws_route(ws)
+    route_proof = _nxt_integrated_aftermarket_route_proof(
+        now=now,
+        venue=venue_value,
+        session=session_value,
+        request_suffix=request_suffix,
+        ws_suffix=ws_suffix,
+        ws_route=ws_route,
+    )
+    route_equivalence_proven = bool(route_proof["proven"])
     fetch_ms = 0
     fetch_error = ""
     if recent_candles is None:
@@ -501,7 +548,10 @@ def build_entry_candle_context(
         if moment is None or moment.replace(second=0, microsecond=0) != current_minute:
             continue
         if not _route_compatible(
-            tick, request_suffix=request_suffix, ws_route=ws_route
+            tick,
+            request_suffix=request_suffix,
+            ws_route=ws_route,
+            allow_nxt_integrated_aftermarket=route_equivalence_proven,
         ):
             route_conflict_count += 1
             continue
@@ -559,13 +609,18 @@ def build_entry_candle_context(
     latest_age_sec = max(0.0, (now - latest["dt"]).total_seconds()) if latest else None
     venue_conflict = bool(
         route_conflict_count
-        or (ws_suffix and request_suffix != ws_suffix)
+        or (not route_equivalence_proven and ws_suffix and request_suffix != ws_suffix)
         or (
             venue_value == "KRX"
             and ws_route
             and ws_route not in {"krx_regular", "krx_only"}
         )
-        or (venue_value == "NXT" and ws_route and ws_route not in {"nxt_only"})
+        or (
+            venue_value == "NXT"
+            and ws_route
+            and ws_route not in {"nxt_only"}
+            and not route_equivalence_proven
+        )
     )
     quality_blockers = []
     if fetch_error:
@@ -631,6 +686,8 @@ def build_entry_candle_context(
         "rest_route": request_suffix or "KRX",
         "ws_route": ws_route or "unknown",
         "ws_suffix": ws_suffix or "",
+        "route_equivalence": route_proof["route_equivalence"],
+        "route_equivalence_proven": route_equivalence_proven,
         "current_session_bar_count": len(current_session),
         "previous_session_bar_count": len(previous_session),
         "completed_bar_count": completed_count,
@@ -655,6 +712,7 @@ def build_entry_candle_context(
             "duplicate_price_conflict": duplicate_price_conflict,
             "time_monotonic": not time_reversal,
             "route_conflict_count": route_conflict_count,
+            "route_equivalence_proof": route_proof,
             "source_meta": {
                 key: value
                 for key, value in (source_meta or {}).items()
@@ -851,6 +909,10 @@ def entry_candle_context_log_fields(
         "entry_candle_session": context.get("session"),
         "entry_candle_rest_route": context.get("rest_route"),
         "entry_candle_ws_route": context.get("ws_route"),
+        "entry_candle_route_equivalence": context.get("route_equivalence"),
+        "entry_candle_route_equivalence_proven": bool(
+            context.get("route_equivalence_proven", False)
+        ),
         "entry_candle_current_session_bar_count": context.get(
             "current_session_bar_count", 0
         ),

@@ -34020,6 +34020,54 @@ def _apply_entry_ai_price_canary(
             recent_candles=recent_candles,
             source_meta=candle_source_meta,
         )
+        candle_source_quality = (
+            candle_context.get("source_quality")
+            if isinstance(candle_context.get("source_quality"), dict)
+            else {}
+        )
+        if candle_source_quality.get("status") != "fresh_consistent":
+            block_reason = "entry_candle_source_quality_blocked"
+            decision_ts = time.time()
+            context_age_ms = int(
+                round(max(0.0, decision_ts - price_context_started_at) * 1000.0)
+            )
+            candle_log_fields = entry_candle_context_log_fields(candle_context)
+            submit_block_fields = {
+                "ai_entry_price_canary_action": "SKIP",
+                "ai_entry_price_canary_final_action": "SKIP",
+                "ai_entry_price_canary_applied": True,
+                "ai_entry_price_canary_confidence": 0,
+                "ai_entry_price_canary_reason": block_reason,
+                "ai_entry_price_canary_submit_blocked": True,
+                "ai_entry_price_canary_submit_block_reason": block_reason,
+                "ai_entry_price_canary_eval_ms": 0,
+                "ai_entry_price_canary_decision_ts": decision_ts,
+                "ai_entry_price_canary_context_age_ms": context_age_ms,
+                "ai_entry_price_provider_skipped": True,
+                "ai_entry_price_provider_skip_reason": block_reason,
+                "ai_entry_price_provider_call_count": 0,
+                "ai_entry_price_provider_result_source": (
+                    "deterministic_source_quality_guard"
+                ),
+                **candle_log_fields,
+            }
+            latency_gate.update(submit_block_fields)
+            block_log_fields = {
+                **submit_block_fields,
+                **micro_log_fields,
+                "decision_authority": "entry_candle_source_quality_fail_closed",
+                "runtime_effect": bool(real_order_subject),
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+            }
+            _log_entry_pipeline(
+                stock,
+                code,
+                "entry_ai_price_candle_source_block",
+                reason=block_reason,
+                **block_log_fields,
+            )
+            return [], True
 
     ai_eval_started_at = time.perf_counter()
     entry_price_metadata = {
