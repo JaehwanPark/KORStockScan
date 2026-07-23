@@ -310,6 +310,204 @@ def test_pyramid_intraday_feedback_counts_submitted_then_profit_rows(tmp_path):
     assert report["blocker_metrics"][0]["submitted_then_profit_rate"] == 1.0
 
 
+def test_normal_winner_expansion_tracks_post_candidate_incremental_ev_and_probe_confirmation(
+    tmp_path,
+):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-23.jsonl"
+    rows = [
+        _event(
+            350,
+            "350350",
+            "normal-winner",
+            "rising_missed_one_share_entry",
+            {
+                "actual_order_submitted": True,
+                "forced_entry_qty": 10,
+                "rising_missed_effective_venue": "KRX",
+                "rising_missed_market_session_bucket": "krx_regular",
+            },
+            emitted_at="2026-07-23T10:00:00",
+            pipeline="ENTRY_PIPELINE",
+        ),
+        _event(
+            350,
+            "350350",
+            "normal-winner",
+            "probe_filled",
+            {
+                "probe_bundle_id": "350350-probe",
+                "fill_qty": 1,
+                "fill_price": 10000,
+            },
+            emitted_at="2026-07-23T10:00:01",
+            pipeline="ENTRY_PIPELINE",
+        ),
+        _event(
+            350,
+            "350350",
+            "normal-winner",
+            "probe_continuation_deferred",
+            {
+                "post_probe_direction_state": "STRONG",
+                "post_probe_continuation_action": "DEFER",
+                "post_probe_direction_reason": (
+                    "post_probe_second_strong_confirmation_required"
+                ),
+                "post_probe_direction_positive_groups": "price_tick,orderbook",
+                "post_probe_direction_negative_groups": "-",
+                "probe_confirmation_count": 1,
+            },
+            emitted_at="2026-07-23T10:00:02.000000",
+            pipeline="ENTRY_PIPELINE",
+        ),
+        _event(
+            350,
+            "350350",
+            "normal-winner",
+            "residual_planned",
+            {
+                "post_probe_direction_state": "STRONG",
+                "post_probe_continuation_action": "ALLOW_NARROW",
+                "post_probe_direction_reason": "post_probe_wait_two_group_positive",
+                "post_probe_direction_positive_groups": "price_tick,orderbook",
+                "post_probe_direction_negative_groups": "-",
+                "probe_confirmation_count": 2,
+            },
+            emitted_at="2026-07-23T10:00:02.300000",
+            pipeline="ENTRY_PIPELINE",
+        ),
+        _event(
+            350,
+            "350350",
+            "normal-winner",
+            "residual_blocked",
+            {
+                "probe_bundle_id": "350350-probe",
+                "reason": "residual_revalidation_timeout",
+                "forced_entry_qty": 10,
+                "actual_order_submitted": False,
+            },
+            emitted_at="2026-07-23T10:00:04",
+            pipeline="ENTRY_PIPELINE",
+        ),
+        _event(
+            350,
+            "350350",
+            "normal-winner",
+            "pyramid_blocked_reason",
+            {
+                "scale_in_arm": "PYRAMID",
+                "scale_in_blocker_reason": "profit_not_enough",
+                "profit_rate": 0.5,
+                "peak_profit": 0.5,
+                "current_ai_score": 72,
+                "buy_pressure_10t": 70,
+                "tick_aggressor_trusted_count": 5,
+                "tick_aggressor_pressure_usable": True,
+                "tick_acceleration_ratio": 1.2,
+                "curr_vs_micro_vwap_bp": 20,
+                "micro_vwap_available": True,
+                "minute_candle_window_fresh": True,
+                "min_profit_pct": 1.1,
+            },
+            emitted_at="2026-07-23T10:01:00",
+        ),
+        _event(
+            350,
+            "350350",
+            "normal-winner",
+            "stat_action_decision_snapshot",
+            {"profit_rate": 1.2, "peak_profit": 1.2},
+            emitted_at="2026-07-23T10:02:00",
+        ),
+        _event(
+            350,
+            "350350",
+            "normal-winner",
+            "sell_completed",
+            {"profit_rate": 1.0},
+            emitted_at="2026-07-23T10:03:00",
+        ),
+    ]
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8"
+    )
+
+    report = mod.build_report(
+        "2026-07-23", pipeline_path=pipeline_path, generated_at="fixed"
+    )
+    summary = report["summary"]["normal_winner_expansion"]
+    item = report["normal_winner_expansion_rows"][0]
+
+    assert report["schema_version"] == 2
+    assert summary["candidate_count"] == 1
+    assert summary["source_quality_valid_candidate_count"] == 1
+    assert summary["realized_incremental_winner_count"] == 1
+    assert summary["equal_weight_avg_profit_pct"] > 0
+    assert summary["notional_weighted_ev_pct"] > 0
+    assert item["normal_winner_expansion_label"] == "realized_incremental_winner"
+    assert item["normal_winner_expansion_incremental_mfe_pct"] > 0.4
+    assert item["normal_winner_expansion_incremental_final_profit_pct"] > 0.2
+    assert item["normal_winner_expansion_assumed_trade_cost_pct"] == 0.23
+    assert item["normal_winner_expansion_candidate_notional_krw"] > 0
+    assert item["effective_venue"] == "KRX"
+    assert item["market_session_bucket"] == "krx_regular"
+    assert item["venue_source_quality_valid"] is True
+    assert item["actual_order_submitted"] is False
+    assert item["broker_order_forbidden"] is True
+    assert item["runtime_effect"] is False
+    assert item["allowed_runtime_apply"] is False
+    assert summary["by_effective_venue"][0]["effective_venue"] == "KRX"
+    assert item["probe_direction_max_consecutive_strong_count"] == 2
+    assert item["probe_confirmation_max_count"] == 2
+    assert item["probe_direction_negative_seen"] is False
+    assert (
+        item["normal_winner_expansion_probe_confirmation_signature"]
+        == "two_consecutive_strong_no_negative"
+    )
+    contract = report["normal_winner_expansion_metric_contract"]
+    assert contract["primary_decision_metric"] == "notional_weighted_ev_pct"
+    assert (
+        contract["decision_authority"]
+        == "source_only_normal_winner_expansion_attribution_no_runtime_mutation"
+    )
+
+
+def test_normal_winner_expansion_venue_provenance_keeps_premarket_cohort_separate():
+    item = {}
+    premarket = _event(
+        351,
+        "351351",
+        "premarket",
+        "rising_missed_one_share_entry",
+        {
+            "rising_missed_effective_venue": "PREMARKET_KRX_LIKE",
+            "rising_missed_market_session_bucket": "krx_like_premarket",
+        },
+    )
+    mod._update_venue_provenance(item, premarket)
+
+    assert item["effective_venue"] == "PREMARKET_KRX_LIKE"
+    assert item["market_session_bucket"] == "krx_like_premarket"
+    assert item["venue_source_quality_valid"] is True
+
+    conflicting_nxt = _event(
+        351,
+        "351351",
+        "premarket",
+        "probe_filled",
+        {"effective_venue": "NXT"},
+    )
+    mod._update_venue_provenance(item, conflicting_nxt)
+
+    assert item["effective_venue"] == "UNKNOWN"
+    assert item["venue_source_quality_valid"] is False
+    assert (
+        item["effective_venue_resolution"]
+        == "conflicting_explicit_effective_venue"
+    )
+
+
 def test_pyramid_intraday_feedback_backtests_all_one_share_events(tmp_path):
     pipeline_path = tmp_path / "pipeline_events_2026-07-03.jsonl"
     rows = [

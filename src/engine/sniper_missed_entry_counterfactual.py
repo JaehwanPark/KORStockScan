@@ -18,7 +18,8 @@ from src.utils.constants import DATA_DIR, TRADING_RULES
 from src.utils.jsonl_io import read_jsonl
 from src.utils.logger import log_error
 
-MISSED_ENTRY_COUNTERFACTUAL_SCHEMA_VERSION = 3
+MISSED_ENTRY_COUNTERFACTUAL_SCHEMA_VERSION = 4
+_EXPLICIT_TRADABLE_VENUES = {"KRX", "NXT", "PREMARKET_KRX_LIKE"}
 _ENTRY_ARMED_STAGES = {"entry_armed", "entry_armed_resume"}
 _INFERRED_BUY_INTENT_STAGES = _ENTRY_ARMED_STAGES | {
     "score65_74_recovery_probe_entry_unlocked"
@@ -251,6 +252,88 @@ _COUNTERFACTUAL_SIZING_KEYS = (
 
 def _counterfactual_sizing_fields(capacity: dict) -> dict:
     return {key: capacity.get(key) for key in _COUNTERFACTUAL_SIZING_KEYS}
+
+
+def _attempt_source_contract(
+    attempt_events: list["EntryEvent"], anchor_event: "EntryEvent"
+) -> dict:
+    """Resolve venue/provenance without treating clock inference as venue evidence."""
+
+    authoritative_venue_values: set[str] = set()
+    fallback_venue_values: set[str] = set()
+    venue_field_sources: list[str] = []
+    for event in attempt_events:
+        for key in ("rising_missed_effective_venue", "effective_venue", "venue"):
+            value = str(event.fields.get(key) or "").strip().upper()
+            if value not in _EXPLICIT_TRADABLE_VENUES:
+                continue
+            if key == "venue":
+                fallback_venue_values.add(value)
+            else:
+                authoritative_venue_values.add(value)
+            venue_field_sources.append(f"{event.stage}.{key}")
+
+    if len(authoritative_venue_values) == 1:
+        effective_venue = next(iter(authoritative_venue_values))
+        venue_resolution = "explicit_effective_venue_field"
+        venue_source_quality = "pass"
+        venue_tuning_allowed = True
+    elif len(authoritative_venue_values) > 1:
+        effective_venue = "UNKNOWN"
+        venue_resolution = "conflicting_explicit_effective_venue"
+        venue_source_quality = "conflict"
+        venue_tuning_allowed = False
+    elif len(fallback_venue_values) == 1:
+        effective_venue = next(iter(fallback_venue_values))
+        venue_resolution = "explicit_venue_fallback"
+        venue_source_quality = "pass"
+        venue_tuning_allowed = True
+    elif len(fallback_venue_values) > 1:
+        effective_venue = "UNKNOWN"
+        venue_resolution = "conflicting_explicit_venue_fallback"
+        venue_source_quality = "conflict"
+        venue_tuning_allowed = False
+    else:
+        effective_venue = "UNKNOWN"
+        venue_resolution = "missing_explicit_venue"
+        venue_source_quality = "missing"
+        venue_tuning_allowed = False
+
+    def _latest_field(*keys: str) -> str:
+        for event in reversed(attempt_events):
+            for key in keys:
+                value = str(event.fields.get(key) or "").strip()
+                if value:
+                    return value
+        return ""
+
+    return {
+        "effective_venue": effective_venue,
+        "venue_resolution": venue_resolution,
+        "venue_source_quality": venue_source_quality,
+        "venue_tuning_allowed": venue_tuning_allowed,
+        "venue_field_sources": sorted(set(venue_field_sources)),
+        "market_session_bucket": _latest_field(
+            "rising_missed_market_session_bucket", "market_session_bucket"
+        ),
+        "source_signature": _latest_field("source_signature"),
+        "reference_time": anchor_event.emitted_at,
+        "metric_role": "source_quality_gate",
+        "decision_authority": "missed_entry_counterfactual_source_only",
+        "window_policy": "same_entry_attempt_explicit_event_fields",
+        "sample_floor": "1_attempt_with_explicit_tradable_venue",
+        "primary_decision_metric": "source_quality_adjusted_ev_pct",
+        "source_quality_gate": (
+            "single_conflict_free_explicit_effective_venue_or_venue_fallback"
+        ),
+        "forbidden_uses": [
+            "clock_only_venue_inference_for_tuning",
+            "intraday_threshold_mutation",
+            "live_auto_promotion",
+            "runtime_apply_bridge",
+            "broker_order_submit",
+        ],
+    }
 
 
 def _avg(values: list[float]) -> float:
@@ -711,6 +794,7 @@ def _build_buy_attempts(
                 ),
                 None,
             )
+            source_contract = _attempt_source_contract(attempt_events, anchor_event)
 
             candidates.append(
                 {
@@ -742,6 +826,7 @@ def _build_buy_attempts(
                     ),
                     "buy_signal_count": len(buy_events),
                     "buy_intent_source": buy_intent_source,
+                    **source_contract,
                     "stage_flow": [event.stage for event in attempt_events],
                     "blocker_counts": dict(blocker_counts),
                     "terminal_fields": dict(terminal_event.fields),
@@ -1044,6 +1129,9 @@ def _rising_missed_stage_count(item: dict) -> int:
 
 
 def _rising_missed_source_field(item: dict, key: str) -> str:
+    direct_value = item.get(key)
+    if direct_value not in (None, ""):
+        return str(direct_value)
     for field_name in ("rising_missed_fields", "terminal_fields"):
         fields = item.get(field_name)
         if isinstance(fields, dict):
@@ -1517,6 +1605,25 @@ def build_missed_entry_counterfactual_report(
                 "avg_mfe_15m_pct": 0.0,
                 "avg_mae_15m_pct": 0.0,
                 "estimated_counterfactual_pnl_10m_krw_sum": 0,
+                "venue_source_quality_counts": {},
+                "venue_outcome_breakdown": [],
+                "venue_attribution_contract": {
+                    "metric_role": "source_quality_gate",
+                    "decision_authority": "missed_entry_counterfactual_source_only",
+                    "window_policy": "same_entry_attempt_explicit_event_fields",
+                    "sample_floor": "1_attempt_with_explicit_tradable_venue",
+                    "primary_decision_metric": "source_quality_adjusted_ev_pct",
+                    "source_quality_gate": (
+                        "single_conflict_free_explicit_effective_venue_or_venue_fallback"
+                    ),
+                    "forbidden_uses": [
+                        "clock_only_venue_inference_for_tuning",
+                        "unknown_or_conflicting_venue_specific_tuning",
+                        "intraday_threshold_mutation",
+                        "live_auto_promotion",
+                        "runtime_apply_bridge",
+                    ],
+                },
                 "blocker_outcome_metrics": {},
                 "cohort_outcome_metrics": {},
                 "rising_missed_refinement": empty_rising_metrics,
@@ -1611,7 +1718,7 @@ def build_missed_entry_counterfactual_report(
         capacity = _sim_virtual_qty(
             entry_price_used,
             _safe_float(candidate.get("ai_score"), 0.0),
-            reference_time=candidate.get("emitted_at") or candidate.get("buy_time"),
+            reference_time=candidate.get("reference_time"),
             source_signature=candidate.get("source_signature"),
             effective_venue=candidate.get("effective_venue"),
         )
@@ -1801,6 +1908,46 @@ def build_missed_entry_counterfactual_report(
             for item in evaluations
         )
     )
+    venue_source_quality_counts = dict(
+        Counter(
+            str(item.get("venue_source_quality") or "unknown")
+            for item in evaluations
+        )
+    )
+    venue_outcome_breakdown = []
+    for venue in sorted(
+        {
+            str(item.get("effective_venue") or "UNKNOWN").upper()
+            for item in evaluations
+        }
+    ):
+        venue_rows = [
+            item
+            for item in evaluations
+            if str(item.get("effective_venue") or "UNKNOWN").upper() == venue
+        ]
+        valid_rows = [
+            item for item in venue_rows if bool(item.get("venue_tuning_allowed"))
+        ]
+        venue_outcome_breakdown.append(
+            {
+                "effective_venue": venue,
+                "candidate_count": len(venue_rows),
+                "source_quality_valid_count": len(valid_rows),
+                "source_quality_blocked_count": len(venue_rows) - len(valid_rows),
+                "missed_winner_count": sum(
+                    1
+                    for item in valid_rows
+                    if str(item.get("outcome") or "") == "MISSED_WINNER"
+                ),
+                "avoided_loser_count": sum(
+                    1
+                    for item in valid_rows
+                    if str(item.get("outcome") or "") == "AVOIDED_LOSER"
+                ),
+                "venue_specific_tuning_allowed": bool(valid_rows),
+            }
+        )
 
     if missed_winner_rate >= avoided_loser_rate + 20.0:
         headline = "BUY 후 미진입 차단이 과한 쪽으로 기울었을 가능성이 큽니다."
@@ -1905,6 +2052,17 @@ def build_missed_entry_counterfactual_report(
                 else ""
             ),
             "signal_time": str(item.get("signal_time") or ""),
+            "reference_time": str(item.get("reference_time") or ""),
+            "effective_venue": str(item.get("effective_venue") or "UNKNOWN"),
+            "venue_resolution": str(item.get("venue_resolution") or ""),
+            "venue_source_quality": str(
+                item.get("venue_source_quality") or "unknown"
+            ),
+            "venue_tuning_allowed": bool(item.get("venue_tuning_allowed")),
+            "venue_field_sources": list(item.get("venue_field_sources") or []),
+            "market_session_bucket": str(
+                item.get("market_session_bucket") or ""
+            ),
             "signal_price": int(_safe_int(item.get("signal_price"), 0)),
             "entry_price_used": int(_safe_int(item.get("entry_price_used"), 0)),
             "target_qty": int(_safe_int(item.get("target_qty"), 0)),
@@ -2010,6 +2168,25 @@ def build_missed_entry_counterfactual_report(
             "avg_mae_15m_pct": float(avg_mae_15m),
             "estimated_counterfactual_pnl_10m_krw_sum": int(estimated_pnl_sum),
             "minute_candle_source_quality_counts": minute_candle_source_quality_counts,
+            "venue_source_quality_counts": venue_source_quality_counts,
+            "venue_outcome_breakdown": venue_outcome_breakdown,
+            "venue_attribution_contract": {
+                "metric_role": "source_quality_gate",
+                "decision_authority": "missed_entry_counterfactual_source_only",
+                "window_policy": "same_entry_attempt_explicit_event_fields",
+                "sample_floor": "1_attempt_with_explicit_tradable_venue",
+                "primary_decision_metric": "source_quality_adjusted_ev_pct",
+                "source_quality_gate": (
+                    "single_conflict_free_explicit_effective_venue_or_venue_fallback"
+                ),
+                "forbidden_uses": [
+                    "clock_only_venue_inference_for_tuning",
+                    "unknown_or_conflicting_venue_specific_tuning",
+                    "intraday_threshold_mutation",
+                    "live_auto_promotion",
+                    "runtime_apply_bridge",
+                ],
+            },
             "blocker_outcome_metrics": blocker_outcome_metrics,
             "cohort_outcome_metrics": cohort_outcome_metrics,
             "rising_missed_refinement": rising_missed_refinement_metrics,

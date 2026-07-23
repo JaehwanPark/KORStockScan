@@ -126,6 +126,8 @@ def test_build_missed_entry_counterfactual_report(monkeypatch, tmp_path):
                 "record_id": 1,
                 "fields": {
                     "source_signature": "OPEN_TOP,PRICE_JUMP_START",
+                    "rising_missed_effective_venue": "KRX",
+                    "rising_missed_market_session_bucket": "krx_regular",
                     "scanner_promotion_reason": "price_jump_start_acceleration",
                     "price_delta_since_first_seen_pct": "2.5",
                     "rising_missed_class": "rising_missed_raw",
@@ -276,6 +278,22 @@ def test_build_missed_entry_counterfactual_report(monkeypatch, tmp_path):
         == "rising_missed_missed_winner_positive"
     )
     assert winner["source_signature"] == "OPEN_TOP,PRICE_JUMP_START"
+    assert winner["effective_venue"] == "KRX"
+    assert winner["venue_resolution"] == "explicit_effective_venue_field"
+    assert winner["venue_source_quality"] == "pass"
+    assert winner["venue_tuning_allowed"] is True
+    assert report["metrics"]["venue_source_quality_counts"]["pass"] == 1
+    assert report["metrics"]["venue_source_quality_counts"]["missing"] == 1
+    venue_rows = {
+        row["effective_venue"]: row
+        for row in report["metrics"]["venue_outcome_breakdown"]
+    }
+    assert venue_rows["KRX"]["venue_specific_tuning_allowed"] is True
+    assert venue_rows["UNKNOWN"]["venue_specific_tuning_allowed"] is False
+    assert (
+        report["metrics"]["venue_attribution_contract"]["decision_authority"]
+        == "missed_entry_counterfactual_source_only"
+    )
     assert winner["scanner_promotion_reason"] == "price_jump_start_acceleration"
     assert winner["price_delta_since_first_seen_pct"] == 2.5
     assert winner["rising_missed_class"] == "rising_missed_raw"
@@ -341,6 +359,37 @@ def test_build_missed_entry_counterfactual_report(monkeypatch, tmp_path):
         == "surface_positive_prior_candidates_in_daily_calibration_source_bundle"
     )
     assert len(report["full_rows"]) == 2
+
+
+def test_attempt_source_contract_rejects_conflicting_explicit_venue():
+    anchor = report_mod.EntryEvent(
+        emitted_at="2026-07-23T10:00:00",
+        signal_date="2026-07-23",
+        name="충돌",
+        code="123456",
+        stage="entry_armed",
+        record_id="1",
+        fields={
+            "rising_missed_effective_venue": "KRX",
+            "source_signature": "PRICE_JUMP_START",
+        },
+    )
+    conflict = report_mod.EntryEvent(
+        emitted_at="2026-07-23T10:00:01",
+        signal_date="2026-07-23",
+        name="충돌",
+        code="123456",
+        stage="latency_block",
+        record_id="1",
+        fields={"effective_venue": "NXT"},
+    )
+
+    contract = report_mod._attempt_source_contract([anchor, conflict], anchor)
+
+    assert contract["effective_venue"] == "UNKNOWN"
+    assert contract["venue_resolution"] == "conflicting_explicit_effective_venue"
+    assert contract["venue_source_quality"] == "conflict"
+    assert contract["venue_tuning_allowed"] is False
 
 
 def test_missed_entry_counterfactual_adds_15m_metrics_and_quick_profit_bucket(

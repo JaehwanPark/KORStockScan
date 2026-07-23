@@ -29975,6 +29975,9 @@ def _entry_ai_submit_authority_fields(
         "entry_ai_submit_authority_confirmed_age_sec": (
             f"{age_sec:.3f}" if age_sec is not None else "not_available"
         ),
+        "entry_ai_submit_authority_confirmed_at": (
+            confirmed_at if fresh_prior else 0.0
+        ),
         "entry_ai_submit_authority_max_prior_age_sec": f"{max_prior_age_sec:.1f}",
         "forbidden_uses": (
             "score_threshold_mutation,provider_route_change,quantity_cap_release,"
@@ -32311,6 +32314,9 @@ _ENTRY_SPLIT_PROBE_RUNTIME_KEYS = (
     "entry_split_probe_source_quality_recheck_unfilled_qty",
     "entry_split_probe_source_quality_recheck_reason",
     "entry_split_probe_ai_action_at_submit",
+    "entry_split_probe_ai_result_source_at_submit",
+    "entry_split_probe_ai_confirmed_at_submit",
+    "entry_split_probe_ai_action_source_at_submit",
     "probe_confirmation_count",
     "probe_confirmation_last_at",
     "probe_confirmation_last_state",
@@ -32766,12 +32772,71 @@ def _post_probe_direction_fields(
     positives = [name for name, values in groups.items() if values[1]]
     negatives = [name for name, values in groups.items() if values[2]]
     directional_group_count = len(set(positives + negatives))
-    ai_action = str(stock.get("last_watching_ai_action") or "").strip().upper()
-    ai_result_source = (
+    latest_ai_action = (
+        str(stock.get("last_watching_ai_action") or "").strip().upper()
+    )
+    latest_ai_result_source = (
         str(stock.get("last_watching_ai_result_source") or "").strip().lower()
     )
-    ai_confirmed_at = _safe_float(stock.get("last_watching_ai_confirmed_at"), 0.0)
-    ai_action_age_sec = observed_now - ai_confirmed_at if ai_confirmed_at > 0 else None
+    latest_ai_confirmed_at = _safe_float(
+        stock.get("last_watching_ai_confirmed_at"), 0.0
+    )
+    latest_ai_action_age_sec = (
+        observed_now - latest_ai_confirmed_at
+        if latest_ai_confirmed_at > 0
+        else None
+    )
+    latest_ai_fresh = bool(
+        latest_ai_action in {"BUY", "DROP", "WAIT"}
+        and latest_ai_result_source in {"live", "prior_valid"}
+        and latest_ai_action_age_sec is not None
+        and latest_ai_action_age_sec >= -0.5
+        and latest_ai_action_age_sec <= max(0.1, float(max_context_age_sec))
+    )
+    submit_ai_action = (
+        str(stock.get("entry_split_probe_ai_action_at_submit") or "")
+        .strip()
+        .upper()
+    )
+    submit_ai_result_source = (
+        str(stock.get("entry_split_probe_ai_result_source_at_submit") or "")
+        .strip()
+        .lower()
+    )
+    submit_ai_confirmed_at = _safe_float(
+        stock.get("entry_split_probe_ai_confirmed_at_submit"), 0.0
+    )
+    submit_ai_action_age_sec = (
+        observed_now - submit_ai_confirmed_at
+        if submit_ai_confirmed_at > 0
+        else None
+    )
+    submit_wait_fresh = bool(
+        submit_ai_action == "WAIT"
+        and submit_ai_result_source in {"live", "prior_valid"}
+        and submit_ai_action_age_sec is not None
+        and submit_ai_action_age_sec >= -0.5
+        and submit_ai_action_age_sec <= max(0.1, float(max_context_age_sec))
+    )
+    wait_probe_origin = bool(
+        _rising_missed_ai_action_guard_active(now_ts=observed_now)
+        and submit_ai_action == "WAIT"
+    )
+    if latest_ai_fresh and latest_ai_action == "DROP":
+        ai_action = latest_ai_action
+        ai_result_source = latest_ai_result_source
+        ai_action_age_sec = latest_ai_action_age_sec
+        ai_context_source = "latest_stock_ai_drop_veto"
+    elif wait_probe_origin:
+        ai_action = submit_ai_action
+        ai_result_source = submit_ai_result_source
+        ai_action_age_sec = submit_ai_action_age_sec
+        ai_context_source = "probe_submit_snapshot"
+    else:
+        ai_action = latest_ai_action
+        ai_result_source = latest_ai_result_source
+        ai_action_age_sec = latest_ai_action_age_sec
+        ai_context_source = "latest_stock_ai"
     fresh_negative_ai_action = bool(
         ai_action in {"DROP", "WAIT"}
         and ai_result_source in {"live", "prior_valid"}
@@ -32820,13 +32885,6 @@ def _post_probe_direction_fields(
         and not negatives
     )
     recheck_count = max(0, _safe_int(stock.get("entry_split_probe_recheck_count"), 0))
-    wait_probe_origin = bool(
-        _rising_missed_ai_action_guard_active(now_ts=observed_now)
-        and str(stock.get("entry_split_probe_ai_action_at_submit") or "")
-        .strip()
-        .upper()
-        == "WAIT"
-    )
     nxt_wait_fast_tape_bounded_single_leg = bool(
         nxt_wait_fast_tape_ready and recheck_count >= 1
     )
@@ -32942,12 +33000,32 @@ def _post_probe_direction_fields(
         "post_probe_direction_nxt_entry_context": nxt_entry_context,
         "post_probe_direction_ai_action": ai_action or "-",
         "post_probe_direction_ai_result_source": ai_result_source or "-",
+        "post_probe_direction_ai_context_source": ai_context_source,
         "post_probe_direction_ai_action_age_sec": (
             f"{ai_action_age_sec:.3f}"
             if ai_action_age_sec is not None
             else "not_available"
         ),
         "post_probe_direction_fresh_negative_ai_action": fresh_negative_ai_action,
+        "post_probe_direction_latest_ai_action": latest_ai_action or "-",
+        "post_probe_direction_latest_ai_result_source": (
+            latest_ai_result_source or "-"
+        ),
+        "post_probe_direction_latest_ai_action_age_sec": (
+            f"{latest_ai_action_age_sec:.3f}"
+            if latest_ai_action_age_sec is not None
+            else "not_available"
+        ),
+        "post_probe_direction_submit_ai_action": submit_ai_action or "-",
+        "post_probe_direction_submit_ai_result_source": (
+            submit_ai_result_source or "-"
+        ),
+        "post_probe_direction_submit_ai_action_age_sec": (
+            f"{submit_ai_action_age_sec:.3f}"
+            if submit_ai_action_age_sec is not None
+            else "not_available"
+        ),
+        "post_probe_direction_submit_wait_fresh": submit_wait_fresh,
         "post_probe_hard_veto": hard_veto,
         "post_probe_wait_origin": wait_probe_origin,
         "post_probe_nxt_wait_fast_tape_ready": nxt_wait_fast_tape_ready,
@@ -51135,6 +51213,24 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                         )
                         or "-"
                     ),
+                    "entry_split_probe_ai_result_source_at_submit": (
+                        entry_ai_submit_authority.get(
+                            "entry_ai_submit_authority_result_source"
+                        )
+                        or "-"
+                    ),
+                    "entry_split_probe_ai_confirmed_at_submit": _safe_float(
+                        entry_ai_submit_authority.get(
+                            "entry_ai_submit_authority_confirmed_at"
+                        ),
+                        0.0,
+                    ),
+                    "entry_split_probe_ai_action_source_at_submit": (
+                        entry_ai_submit_authority.get(
+                            "entry_ai_submit_authority_action_source"
+                        )
+                        or "-"
+                    ),
                     "probe_confirmation_count": 0,
                     "probe_expand_forbidden": False,
                 },
@@ -51158,6 +51254,21 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 ),
                 anchor_mode=probe_order.get("entry_split_order_probe_anchor_mode"),
                 submitting_at=now_ts,
+                ai_action_at_submit=entry_ai_submit_authority.get(
+                    "entry_ai_submit_authority_action"
+                ),
+                ai_result_source_at_submit=entry_ai_submit_authority.get(
+                    "entry_ai_submit_authority_result_source"
+                ),
+                ai_confirmed_at_submit=_safe_float(
+                    entry_ai_submit_authority.get(
+                        "entry_ai_submit_authority_confirmed_at"
+                    ),
+                    0.0,
+                ),
+                ai_action_source_at_submit=entry_ai_submit_authority.get(
+                    "entry_ai_submit_authority_action_source"
+                ),
             )
 
     msg = msg or (

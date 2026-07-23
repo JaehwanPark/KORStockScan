@@ -20,7 +20,14 @@ def _row(record_id, label, *, max_profit_seen=None, final_profit_rate=None):
     return row
 
 
-def _feedback(path, rows, *, source_quality="pass", one_share_rows=None):
+def _feedback(
+    path,
+    rows,
+    *,
+    source_quality="pass",
+    one_share_rows=None,
+    normal_winner_expansion_rows=None,
+):
     payload = {
         "report_type": "scalping_pyramid_intraday_feedback",
         "target_date": path.stem.rsplit("_", 1)[-1],
@@ -29,6 +36,8 @@ def _feedback(path, rows, *, source_quality="pass", one_share_rows=None):
     }
     if one_share_rows is not None:
         payload["one_share_pyramid_opportunity_rows"] = one_share_rows
+    if normal_winner_expansion_rows is not None:
+        payload["normal_winner_expansion_rows"] = normal_winner_expansion_rows
     path.write_text(json.dumps(payload), encoding="utf-8")
     return path
 
@@ -213,6 +222,88 @@ def test_pyramid_quality_calibration_uses_all_one_share_rows_for_thresholds(
         candidate["recommended_values"]["min_ai_score"]
         == candidate["current_values"]["min_ai_score"] - 5.0
     )
+
+
+def test_pyramid_quality_calibration_consumes_normal_winner_expansion_as_source_only(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(mod, "INPUT_REPORT_DIR", tmp_path / "input")
+    mod.INPUT_REPORT_DIR.mkdir(parents=True)
+    normal_rows = [
+        {
+            "record_id": str(index),
+            "normal_winner_expansion_label": "realized_incremental_winner",
+            "normal_winner_expansion_source_quality_valid": True,
+            "normal_winner_expansion_incremental_final_profit_pct": 0.4,
+            "normal_winner_expansion_candidate_notional_krw": 100_000,
+            "effective_venue": "KRX",
+            "venue_source_quality_valid": True,
+            "market_session_bucket": "krx_regular",
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "decision_authority": (
+                "source_only_one_share_pyramid_opportunity_backtest_no_runtime_mutation"
+            ),
+            "forbidden_uses": ["intraday_runtime_apply"],
+        }
+        for index in range(20)
+    ]
+    path = _feedback(
+        mod.INPUT_REPORT_DIR / "scalping_pyramid_intraday_feedback_2026-07-03.json",
+        [],
+        normal_winner_expansion_rows=normal_rows,
+    )
+
+    report = mod.build_report("2026-07-03", input_paths=[path], generated_at="fixed")
+    observation = report["normal_winner_expansion_observation"]
+
+    assert observation["state"] == "positive_ev_profile_candidate"
+    assert observation["sample_count"] == 20
+    assert observation["notional_weighted_ev_pct"] == 0.4
+    assert observation["provenance_rejected_count"] == 0
+    assert observation["by_effective_venue"][0]["effective_venue"] == "KRX"
+    assert observation["by_effective_venue"][0]["sample_floor_met"] is True
+    assert observation["allowed_runtime_apply"] is False
+    assert observation["runtime_effect"] is False
+    assert (
+        observation["decision_authority"]
+        == "rolling_source_only_normal_winner_expansion_observation"
+    )
+
+
+def test_pyramid_quality_calibration_rejects_normal_winner_authority_leak(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(mod, "INPUT_REPORT_DIR", tmp_path / "input")
+    mod.INPUT_REPORT_DIR.mkdir(parents=True)
+    leaked_row = {
+        "record_id": "leaked",
+        "normal_winner_expansion_label": "realized_incremental_winner",
+        "normal_winner_expansion_source_quality_valid": True,
+        "normal_winner_expansion_incremental_final_profit_pct": 1.0,
+        "normal_winner_expansion_candidate_notional_krw": 100_000,
+        "actual_order_submitted": True,
+        "broker_order_forbidden": False,
+        "runtime_effect": True,
+        "allowed_runtime_apply": True,
+        "decision_authority": "live_runtime",
+        "forbidden_uses": [],
+    }
+    path = _feedback(
+        mod.INPUT_REPORT_DIR / "scalping_pyramid_intraday_feedback_2026-07-03.json",
+        [],
+        normal_winner_expansion_rows=[leaked_row],
+    )
+
+    report = mod.build_report("2026-07-03", input_paths=[path], generated_at="fixed")
+    observation = report["normal_winner_expansion_observation"]
+
+    assert observation["state"] == "hold_sample"
+    assert observation["sample_count"] == 0
+    assert observation["provenance_rejected_count"] == 1
+    assert observation["allowed_runtime_apply"] is False
 
 
 def test_pyramid_quality_calibration_profit_grid_sets_one_step_min_profit(

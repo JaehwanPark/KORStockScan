@@ -3341,6 +3341,9 @@ def test_entry_ai_submit_authority_limits_fresh_wait_to_probe(monkeypatch):
 
     assert decision["blocked"] is False
     assert decision["entry_ai_submit_authority_wait_probe_required"] is True
+    assert (
+        decision["entry_ai_submit_authority_confirmed_at"] == now_ts - 0.2
+    )
 
 
 def test_wait_probe_requires_two_distinct_strong_confirmations(monkeypatch):

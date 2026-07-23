@@ -109,9 +109,20 @@ SUBMIT_DROUGHT_OBSERVATION_AXIS_ORDER = (
     "BUDGET_PASS_COLLAPSE",
     "LATENCY_PRE_SUBMIT",
     "BROKER_RECEIPT",
+    "ECONOMIC_PARTICIPATION",
     "SIM_REAL_AUTHORITY",
     "SOURCE_TAXONOMY_LEAKAGE",
 )
+PROBE_BUNDLE_LIFECYCLE_STAGES = {
+    "probe_submitted",
+    "probe_filled",
+    "residual_submitted",
+    "residual_blocked",
+    "residual_partial_complete",
+    "bundle_completed",
+    "order_bundle_submitted",
+}
+EXPLICIT_TRADABLE_VENUES = {"KRX", "NXT", "PREMARKET_KRX_LIKE"}
 
 
 @dataclass(frozen=True)
@@ -594,6 +605,247 @@ def _count_unique(events: list[PipelineEvent], stage: str) -> int:
     return len({_attempt_key(event) for event in events if event.stage == stage})
 
 
+def _economic_submit_participation(events: list[PipelineEvent]) -> dict[str, Any]:
+    """Measure submitted quantity/notional for probe bundles, not just symbol count."""
+
+    events_by_attempt: dict[str, list[PipelineEvent]] = {}
+    for event in events:
+        if event.stage in PROBE_BUNDLE_LIFECYCLE_STAGES:
+            events_by_attempt.setdefault(_attempt_key(event), []).append(event)
+
+    rows: list[dict[str, Any]] = []
+    for attempt_key, attempt_events in events_by_attempt.items():
+        order_events = [
+            event
+            for event in attempt_events
+            if event.stage == "order_bundle_submitted"
+        ]
+        probe_events = [
+            event for event in attempt_events if event.stage == "probe_submitted"
+        ]
+        if not order_events or not probe_events:
+            continue
+
+        requested_qty = max(
+            [
+                int(
+                    _safe_float(
+                        event.fields.get("requested_qty")
+                        or event.fields.get("forced_entry_qty")
+                        or event.fields.get("entry_split_probe_requested_qty")
+                    )
+                    or 0
+                )
+                for event in attempt_events
+            ]
+            or [0]
+        )
+        reference_price = next(
+            (
+                int(
+                    _safe_float(
+                        event.fields.get("order_price")
+                        or event.fields.get("latest_price")
+                        or event.fields.get("signal_price")
+                    )
+                    or 0
+                )
+                for event in reversed(order_events)
+                if _safe_float(
+                    event.fields.get("order_price")
+                    or event.fields.get("latest_price")
+                    or event.fields.get("signal_price")
+                )
+            ),
+            0,
+        )
+        probe_fill_prices = {
+            _safe_str(event.fields.get("probe_bundle_id")): int(
+                _safe_float(event.fields.get("fill_price")) or 0
+            )
+            for event in attempt_events
+            if event.stage == "probe_filled"
+            and _safe_str(event.fields.get("probe_bundle_id"))
+        }
+        fallback_probe_fill_price = next(
+            (price for price in probe_fill_prices.values() if price > 0),
+            0,
+        )
+        if reference_price <= 0:
+            reference_price = fallback_probe_fill_price
+
+        submitted_qty = 0
+        submitted_notional = 0
+        residual_submitted_qty = 0
+        seen_orders: set[str] = set()
+        for event in attempt_events:
+            if event.stage not in {"probe_submitted", "residual_submitted"}:
+                continue
+            if not _is_truthy_text(event.fields.get("actual_order_submitted")):
+                continue
+            order_identity = _safe_str(event.fields.get("order_no"))
+            if not order_identity:
+                order_identity = (
+                    f"{event.stage}:{event.fields.get('probe_bundle_id')}:"
+                    f"{event.emitted_at.isoformat()}"
+                )
+            if order_identity in seen_orders:
+                continue
+            seen_orders.add(order_identity)
+            qty = max(0, int(_safe_float(event.fields.get("qty")) or 0))
+            if qty <= 0:
+                continue
+            price = int(
+                _safe_float(
+                    event.fields.get("price")
+                    or event.fields.get("order_price")
+                    or event.fields.get("probe_price")
+                )
+                or 0
+            )
+            if price <= 0 and event.stage == "probe_submitted":
+                price = (
+                    probe_fill_prices.get(
+                        _safe_str(event.fields.get("probe_bundle_id")), 0
+                    )
+                    or fallback_probe_fill_price
+                    or reference_price
+                )
+            submitted_qty += qty
+            submitted_notional += qty * max(0, price)
+            if event.stage == "residual_submitted":
+                residual_submitted_qty += qty
+
+        authoritative_venue_values = {
+            value
+            for event in attempt_events
+            for key in ("rising_missed_effective_venue", "effective_venue")
+            for value in (_safe_str(event.fields.get(key)).upper(),)
+            if value in EXPLICIT_TRADABLE_VENUES
+        }
+        fallback_venue_values = {
+            _safe_str(event.fields.get("venue")).upper()
+            for event in attempt_events
+            if _safe_str(event.fields.get("venue")).upper()
+            in EXPLICIT_TRADABLE_VENUES
+        }
+        if len(authoritative_venue_values) == 1:
+            effective_venue = next(iter(authoritative_venue_values))
+            venue_source_quality = "pass"
+        elif len(authoritative_venue_values) > 1:
+            effective_venue = "UNKNOWN"
+            venue_source_quality = "conflict"
+        elif len(fallback_venue_values) == 1:
+            effective_venue = next(iter(fallback_venue_values))
+            venue_source_quality = "pass"
+        elif len(fallback_venue_values) > 1:
+            effective_venue = "UNKNOWN"
+            venue_source_quality = "conflict"
+        else:
+            effective_venue = "UNKNOWN"
+            venue_source_quality = "missing"
+
+        requested_notional = requested_qty * max(0, reference_price)
+        source_quality_valid = bool(
+            venue_source_quality == "pass"
+            and requested_qty > 0
+            and requested_notional > 0
+            and submitted_qty > 0
+            and submitted_notional > 0
+        )
+        rows.append(
+            {
+                "attempt_key": attempt_key,
+                "stock_code": order_events[-1].stock_code,
+                "effective_venue": effective_venue,
+                "venue_source_quality": venue_source_quality,
+                "source_quality_valid": source_quality_valid,
+                "requested_qty": requested_qty,
+                "submitted_qty": submitted_qty,
+                "requested_notional_krw": requested_notional,
+                "submitted_notional_krw": submitted_notional,
+                "residual_submitted_qty": residual_submitted_qty,
+                "bundle_state": (
+                    "full_submitted"
+                    if requested_qty > 0 and submitted_qty >= requested_qty
+                    else (
+                        "partial_residual_submitted"
+                        if residual_submitted_qty > 0
+                        else "probe_only"
+                    )
+                ),
+            }
+        )
+
+    def _summary(source_rows: list[dict[str, Any]]) -> dict[str, Any]:
+        requested_qty = sum(int(row["requested_qty"]) for row in source_rows)
+        submitted_qty = sum(int(row["submitted_qty"]) for row in source_rows)
+        requested_notional = sum(
+            int(row["requested_notional_krw"]) for row in source_rows
+        )
+        submitted_notional = sum(
+            int(row["submitted_notional_krw"]) for row in source_rows
+        )
+        return {
+            "bundle_count": len(source_rows),
+            "probe_only_bundle_count": sum(
+                1 for row in source_rows if row["bundle_state"] == "probe_only"
+            ),
+            "partial_residual_bundle_count": sum(
+                1
+                for row in source_rows
+                if row["bundle_state"] == "partial_residual_submitted"
+            ),
+            "full_submitted_bundle_count": sum(
+                1 for row in source_rows if row["bundle_state"] == "full_submitted"
+            ),
+            "requested_qty": requested_qty,
+            "submitted_qty": submitted_qty,
+            "requested_notional_krw": requested_notional,
+            "submitted_notional_krw": submitted_notional,
+            "submitted_qty_to_requested_qty_pct": _ratio(
+                submitted_qty, requested_qty
+            ),
+            "submitted_notional_to_requested_notional_pct": _ratio(
+                submitted_notional, requested_notional
+            ),
+        }
+
+    valid_rows = [row for row in rows if row["source_quality_valid"]]
+    by_venue = {
+        venue: _summary(
+            [row for row in valid_rows if row["effective_venue"] == venue]
+        )
+        for venue in sorted(EXPLICIT_TRADABLE_VENUES)
+        if any(row["effective_venue"] == venue for row in valid_rows)
+    }
+    return {
+        **_summary(valid_rows),
+        "observed_bundle_count": len(rows),
+        "source_quality_valid_bundle_count": len(valid_rows),
+        "source_quality_blocked_bundle_count": len(rows) - len(valid_rows),
+        "by_venue": by_venue,
+        "rows": rows,
+        "metric_role": "funnel_count",
+        "decision_authority": "submit_drought_attribution_only",
+        "window_policy": "same_session_probe_bundle_lifecycle",
+        "sample_floor": "1_explicit_venue_probe_bundle",
+        "primary_decision_metric": "submitted_notional_to_requested_notional_pct",
+        "source_quality_gate": (
+            "explicit_conflict_free_venue_and_positive_requested_submitted_qty_price"
+        ),
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "forbidden_uses": [
+            "broker_order_submit",
+            "intraday_threshold_mutation",
+            "quantity_cap_release",
+            "live_auto_promotion",
+            "bot_restart_trigger",
+        ],
+    }
+
+
 def _summary_row_count_in_range(
     row: dict[str, Any], *, start_at: datetime, end_at: datetime
 ) -> tuple[int, datetime | None]:
@@ -804,6 +1056,7 @@ def _summarize_events(
         if latest_candidates
         else None
     )
+    economic_participation = _economic_submit_participation(lossless_scoped)
 
     return {
         "start_at": start_at.isoformat(timespec="seconds"),
@@ -812,6 +1065,7 @@ def _summarize_events(
         "lossless_event_count": len(lossless_scoped),
         "summary_event_count": summary_event_count,
         "latest_event_at": latest_event_at,
+        "economic_participation": economic_participation,
         "stage_events": dict(sorted(stage_event_counts.items())),
         "stage_unique": stage_unique_counts,
         "blocker_top": [
@@ -1393,6 +1647,13 @@ def _entry_submit_drought_contract(
                 "SIM_REAL_AUTHORITY",
             ]
         )
+    economic_participation = (
+        session_summary.get("economic_participation")
+        if isinstance(session_summary.get("economic_participation"), dict)
+        else {}
+    )
+    if int(economic_participation.get("observed_bundle_count", 0) or 0) > 0:
+        weak_contract_matches.append("ECONOMIC_PARTICIPATION")
     if "LATENCY_DROUGHT" in matches:
         weak_contract_matches.append("LATENCY_PRE_SUBMIT")
     if "PRICE_GUARD_DROUGHT" in matches:
@@ -1443,6 +1704,7 @@ def _entry_submit_drought_contract(
             "budget_to_ai_unique_pct": ratios.get("budget_to_ai_unique_pct"),
             "latency_to_budget_unique_pct": ratios.get("latency_to_budget_unique_pct"),
         },
+        "economic_participation": economic_participation,
         "thresholds": classification.get("submit_drought_thresholds") or {},
         "weak_contract_matches": weak_contract_matches,
         "observation_breakdown": observation_breakdown,
@@ -1492,6 +1754,11 @@ def _entry_submit_drought_observation_breakdown(
     upstream_blockers = session_summary.get("upstream_blocker_top")
     latency_blockers = session_summary.get("latency_blocker_top")
     blocker_top = session_summary.get("blocker_top")
+    economic_participation = (
+        session_summary.get("economic_participation")
+        if isinstance(session_summary.get("economic_participation"), dict)
+        else {}
+    )
 
     axes = {
         "UPSTREAM_GATE": {
@@ -1562,6 +1829,21 @@ def _entry_submit_drought_observation_breakdown(
                 ),
             },
             "next_repair_action": "join post-submit broker receipt and fill provenance when submitted samples exist",
+        },
+        "ECONOMIC_PARTICIPATION": {
+            "status": (
+                "observed"
+                if "ECONOMIC_PARTICIPATION" in weak_contract_matches
+                else "no_current_signal"
+            ),
+            "observed_count": int(
+                economic_participation.get("observed_bundle_count", 0) or 0
+            ),
+            "evidence": economic_participation,
+            "next_repair_action": (
+                "attribute probe-only and residual-submitted quantity/notional by "
+                "explicit venue before interpreting submit conversion"
+            ),
         },
         "SIM_REAL_AUTHORITY": {
             "status": (
@@ -1732,6 +2014,11 @@ def build_markdown(report: dict[str, Any]) -> str:
     quote_freshness = quote_freshness if isinstance(quote_freshness, dict) else {}
     baseline = report["baseline"]["same_time_summary"]
     baseline_ratios = baseline["ratios"] if baseline else {}
+    economic = (
+        session.get("economic_participation")
+        if isinstance(session.get("economic_participation"), dict)
+        else {}
+    )
     lines = [
         f"# BUY Funnel Sentinel {report['target_date']}",
         "",
@@ -1761,6 +2048,18 @@ def build_markdown(report: dict[str, Any]) -> str:
         f" (baseline `{baseline_ratios.get('budget_to_ai_unique_pct', '-')}`)",
         f"- submitted/ai unique: `{ratios.get('submitted_to_ai_unique_pct', 0.0)}%`"
         f" (baseline `{baseline_ratios.get('submitted_to_ai_unique_pct', '-')}`)",
+        f"- economic bundles: `observed={economic.get('observed_bundle_count', 0)}, "
+        f"valid={economic.get('source_quality_valid_bundle_count', 0)}, "
+        f"probe_only={economic.get('probe_only_bundle_count', 0)}, "
+        f"partial_residual={economic.get('partial_residual_bundle_count', 0)}, "
+        f"full={economic.get('full_submitted_bundle_count', 0)}`",
+        f"- economic submitted/requested: `qty={economic.get('submitted_qty', 0)}/"
+        f"{economic.get('requested_qty', 0)} "
+        f"({economic.get('submitted_qty_to_requested_qty_pct', 0.0)}%), "
+        f"notional={economic.get('submitted_notional_krw', 0)}/"
+        f"{economic.get('requested_notional_krw', 0)} "
+        f"({economic.get('submitted_notional_to_requested_notional_pct', 0.0)}%)`",
+        f"- economic participation by venue: `{economic.get('by_venue') or {}}`",
         f"- critical submit thresholds: `submitted/ai < {SUBMIT_TO_AI_CRITICAL_PCT}%` "
         f"or `submitted/budget <= {SUBMIT_TO_BUDGET_CRITICAL_PCT}%` "
         f"(floors: ai>={SUBMIT_DROUGHT_MIN_AI_UNIQUE}, budget>={SUBMIT_DROUGHT_MIN_BUDGET_UNIQUE})",

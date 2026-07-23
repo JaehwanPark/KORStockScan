@@ -256,6 +256,7 @@ def test_latency_drought_when_budget_pass_exists_but_no_submitted(
         "BUDGET_PASS_COLLAPSE",
         "LATENCY_PRE_SUBMIT",
         "BROKER_RECEIPT",
+        "ECONOMIC_PARTICIPATION",
         "SIM_REAL_AUTHORITY",
         "SOURCE_TAXONOMY_LEAKAGE",
     ]
@@ -277,6 +278,130 @@ def test_latency_drought_when_budget_pass_exists_but_no_submitted(
     assert root_cause["unknown_latency_workorder_required"] is True
     assert report["current"]["session"]["stage_unique"]["budget_pass"] == 5
     assert report["current"]["session"]["stage_unique"]["order_bundle_submitted"] == 0
+
+
+def test_probe_only_bundle_is_not_counted_as_full_economic_submission(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+    target_date = "2026-07-23"
+    rows = [
+        _event(
+            target_date,
+            "10:00:00",
+            "probe_submitted",
+            record_id=1,
+            fields={
+                "probe_bundle_id": "A",
+                "qty": 1,
+                "actual_order_submitted": True,
+                "rising_missed_effective_venue": "KRX",
+                "forced_entry_qty": 5,
+            },
+        ),
+        _event(
+            target_date,
+            "10:00:01",
+            "probe_filled",
+            record_id=1,
+            fields={"probe_bundle_id": "A", "fill_qty": 1, "fill_price": 100},
+        ),
+        _event(
+            target_date,
+            "10:00:02",
+            "residual_submitted",
+            record_id=1,
+            fields={
+                "probe_bundle_id": "A",
+                "order_no": "R1",
+                "qty": 4,
+                "price": 100,
+                "actual_order_submitted": True,
+                "rising_missed_effective_venue": "KRX",
+            },
+        ),
+        _event(
+            target_date,
+            "10:00:03",
+            "order_bundle_submitted",
+            record_id=1,
+            fields={
+                "requested_qty": 5,
+                "order_price": 100,
+                "rising_missed_effective_venue": "KRX",
+            },
+        ),
+        _event(
+            target_date,
+            "10:01:00",
+            "probe_submitted",
+            record_id=2,
+            fields={
+                "probe_bundle_id": "B",
+                "qty": 1,
+                "actual_order_submitted": True,
+                "rising_missed_effective_venue": "UNKNOWN",
+                "venue": "KRX",
+                "forced_entry_qty": 10,
+            },
+        ),
+        _event(
+            target_date,
+            "10:01:01",
+            "probe_filled",
+            record_id=2,
+            fields={"probe_bundle_id": "B", "fill_qty": 1, "fill_price": 200},
+        ),
+        _event(
+            target_date,
+            "10:01:02",
+            "residual_blocked",
+            record_id=2,
+            fields={
+                "probe_bundle_id": "B",
+                "reason": "residual_revalidation_timeout",
+                "actual_order_submitted": False,
+                "rising_missed_effective_venue": "UNKNOWN",
+                "venue": "KRX",
+            },
+        ),
+        _event(
+            target_date,
+            "10:01:03",
+            "order_bundle_submitted",
+            record_id=2,
+            fields={
+                "requested_qty": 10,
+                "order_price": 200,
+                "rising_missed_effective_venue": "UNKNOWN",
+                "venue": "KRX",
+            },
+        ),
+    ]
+    _write_events(tmp_path, target_date, rows)
+
+    report = sentinel.build_buy_funnel_sentinel_report(
+        target_date,
+        as_of=sentinel._parse_as_of(target_date, "10:02:00"),
+        dry_run=True,
+    )
+    economic = report["current"]["session"]["economic_participation"]
+
+    assert economic["observed_bundle_count"] == 2
+    assert economic["source_quality_valid_bundle_count"] == 2
+    assert economic["full_submitted_bundle_count"] == 1
+    assert economic["probe_only_bundle_count"] == 1
+    assert economic["requested_qty"] == 15
+    assert economic["submitted_qty"] == 6
+    assert economic["submitted_qty_to_requested_qty_pct"] == 40.0
+    assert economic["requested_notional_krw"] == 2500
+    assert economic["submitted_notional_krw"] == 700
+    assert economic["submitted_notional_to_requested_notional_pct"] == 28.0
+    assert economic["by_venue"]["KRX"]["probe_only_bundle_count"] == 1
+    assert (
+        economic["decision_authority"] == "submit_drought_attribution_only"
+    )
+    assert economic["runtime_effect"] is False
 
 
 def test_latency_drought_uses_latency_danger_reason_breakdown(monkeypatch, tmp_path):

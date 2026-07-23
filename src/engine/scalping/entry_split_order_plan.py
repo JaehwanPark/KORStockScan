@@ -351,6 +351,18 @@ def recover_probe_runtime_bundle_for_stock(
                 "source_quality_recheck_reason"
             ),
             "entry_split_probe_source_quality_recheck_pending": False,
+            "entry_split_probe_ai_action_at_submit": bundle.get(
+                "ai_action_at_submit"
+            ),
+            "entry_split_probe_ai_result_source_at_submit": bundle.get(
+                "ai_result_source_at_submit"
+            ),
+            "entry_split_probe_ai_confirmed_at_submit": bundle.get(
+                "ai_confirmed_at_submit"
+            ),
+            "entry_split_probe_ai_action_source_at_submit": bundle.get(
+                "ai_action_source_at_submit"
+            ),
             "entry_requested_qty": actual_qty if soft_abort else requested_qty,
             "requested_buy_qty": actual_qty if soft_abort else requested_qty,
         }

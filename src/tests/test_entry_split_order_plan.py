@@ -1530,6 +1530,10 @@ def test_probe_runtime_restart_recovery_restores_bundle_and_fails_closed_on_mism
         fill_price=10010,
         fill_qty=1,
         order_no="P0",
+        ai_action_at_submit="WAIT",
+        ai_result_source_at_submit="live",
+        ai_confirmed_at_submit=99.8,
+        ai_action_source_at_submit="latest_stock_ai",
         residual_orders=[
             {"tag": "planned_only", "qty": 2, "status": "OPEN"},
             {"tag": "submitted", "qty": 2, "status": "OPEN", "ord_no": "R1"},
@@ -1564,6 +1568,13 @@ def test_probe_runtime_restart_recovery_restores_bundle_and_fails_closed_on_mism
     assert recovered_stock["entry_split_probe_phase"] == "probe_filled"
     assert recovered_stock["entry_split_probe_continuation"] == continuation
     assert recovered_stock["entry_split_probe_scale_in_forbidden"] is True
+    assert recovered_stock["entry_split_probe_ai_action_at_submit"] == "WAIT"
+    assert recovered_stock["entry_split_probe_ai_result_source_at_submit"] == "live"
+    assert recovered_stock["entry_split_probe_ai_confirmed_at_submit"] == 99.8
+    assert (
+        recovered_stock["entry_split_probe_ai_action_source_at_submit"]
+        == "latest_stock_ai"
+    )
     assert recovered_stock["pending_entry_orders"] == [
         {"tag": "submitted", "qty": 2, "status": "OPEN", "ord_no": "R1"}
     ]

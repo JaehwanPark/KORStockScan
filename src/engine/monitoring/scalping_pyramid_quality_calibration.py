@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
-from collections import Counter
+from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -20,6 +20,11 @@ CLOSED_LABELS = {
     "pyramid_would_have_helped",
     "pyramid_correctly_blocked",
     "pyramid_overheat_or_reversal_risk",
+}
+NORMAL_WINNER_EXPANSION_CLOSED_LABELS = {
+    "realized_incremental_winner",
+    "transient_extension_exit_timing_needed",
+    "correctly_not_expanded_or_reversal",
 }
 FORBIDDEN_USES = [
     "intraday_threshold_mutation",
@@ -172,6 +177,166 @@ def _closed_one_share_pyramid_rows(
                 continue
             rows.append(row)
     return rows, section_present
+
+
+def _normal_winner_expansion_observation(
+    reports: list[dict[str, Any]],
+) -> dict[str, Any]:
+    rows: list[dict[str, Any]] = []
+    section_present = False
+    provenance_rejected_count = 0
+    for report in reports:
+        source_rows = report.get("normal_winner_expansion_rows")
+        if not isinstance(source_rows, list):
+            continue
+        section_present = True
+        for row in source_rows:
+            if not isinstance(row, dict):
+                continue
+            if (
+                str(row.get("normal_winner_expansion_label") or "")
+                not in NORMAL_WINNER_EXPANSION_CLOSED_LABELS
+            ):
+                continue
+            if not _boolish(
+                row.get("normal_winner_expansion_source_quality_valid")
+            ):
+                continue
+            provenance_valid = bool(
+                row.get("runtime_effect") is False
+                and row.get("allowed_runtime_apply") is False
+                and row.get("actual_order_submitted") is False
+                and row.get("broker_order_forbidden") is True
+                and str(row.get("decision_authority") or "").startswith(
+                    "source_only_"
+                )
+                and isinstance(row.get("forbidden_uses"), list)
+            )
+            if not provenance_valid:
+                provenance_rejected_count += 1
+                continue
+            rows.append(row)
+    weighted = [
+        (
+            _safe_float(
+                row.get("normal_winner_expansion_incremental_final_profit_pct"),
+                0.0,
+            ),
+            int(row.get("normal_winner_expansion_candidate_notional_krw") or 0),
+        )
+        for row in rows
+        if int(row.get("normal_winner_expansion_candidate_notional_krw") or 0) > 0
+    ]
+    winner_count = sum(
+        1
+        for row in rows
+        if row.get("normal_winner_expansion_label")
+        == "realized_incremental_winner"
+    )
+    sample_floor_met = len(rows) >= 20
+    notional_weighted_ev_pct = (
+        round(
+            sum(value * notional for value, notional in weighted)
+            / sum(notional for _, notional in weighted),
+            4,
+        )
+        if weighted
+        else 0.0
+    )
+    if not section_present:
+        state = "not_available"
+    elif not sample_floor_met:
+        state = "hold_sample"
+    elif notional_weighted_ev_pct > 0:
+        state = "positive_ev_profile_candidate"
+    else:
+        state = "non_positive_ev_hold"
+
+    def _dimension_rollup(dimension: str) -> list[dict[str, Any]]:
+        grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for row in rows:
+            if dimension == "effective_venue" and not _boolish(
+                row.get("venue_source_quality_valid")
+            ):
+                continue
+            value = str(row.get(dimension) or "UNKNOWN").strip() or "UNKNOWN"
+            grouped[value].append(row)
+        result = []
+        for value, bucket_rows in sorted(grouped.items()):
+            bucket_weighted = [
+                (
+                    _safe_float(
+                        row.get(
+                            "normal_winner_expansion_incremental_final_profit_pct"
+                        ),
+                        0.0,
+                    ),
+                    int(
+                        row.get(
+                            "normal_winner_expansion_candidate_notional_krw"
+                        )
+                        or 0
+                    ),
+                )
+                for row in bucket_rows
+                if int(
+                    row.get("normal_winner_expansion_candidate_notional_krw")
+                    or 0
+                )
+                > 0
+            ]
+            result.append(
+                {
+                    dimension: value,
+                    "sample_count": len(bucket_rows),
+                    "sample_floor": 20,
+                    "sample_floor_met": len(bucket_rows) >= 20,
+                    "notional_weighted_ev_pct": (
+                        round(
+                            sum(
+                                outcome * notional
+                                for outcome, notional in bucket_weighted
+                            )
+                            / sum(notional for _, notional in bucket_weighted),
+                            4,
+                        )
+                        if bucket_weighted
+                        else 0.0
+                    ),
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                }
+            )
+        return result
+    return {
+        "state": state,
+        "section_present": section_present,
+        "sample_count": len(rows),
+        "sample_floor": 20,
+        "sample_floor_met": sample_floor_met,
+        "provenance_rejected_count": provenance_rejected_count,
+        "realized_incremental_winner_count": winner_count,
+        "diagnostic_win_rate": (
+            round(winner_count / len(rows), 4) if rows else 0.0
+        ),
+        "notional_weighted_ev_pct": notional_weighted_ev_pct,
+        "by_effective_venue": _dimension_rollup("effective_venue"),
+        "by_market_session_bucket": _dimension_rollup(
+            "market_session_bucket"
+        ),
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "metric_role": "bounded_tunable_scale_in_counterfactual",
+        "decision_authority": (
+            "rolling_source_only_normal_winner_expansion_observation"
+        ),
+        "window_policy": "rolling_clean_baseline_closed_normal_winner_expansion_rows",
+        "primary_decision_metric": "notional_weighted_ev_pct",
+        "source_quality_gate": (
+            "source_quality_valid_positive_pyramid_candidate_with_post_candidate_sell"
+        ),
+        "forbidden_uses": FORBIDDEN_USES,
+    }
 
 
 def _provenance_present(rows: list[dict[str, Any]]) -> bool:
@@ -419,6 +584,7 @@ def _calibration_candidate(
     source_paths: list[Path],
 ) -> dict[str, Any]:
     one_share_rows, one_share_source_present = _closed_one_share_pyramid_rows(reports)
+    normal_winner_expansion = _normal_winner_expansion_observation(reports)
     rows = one_share_rows if one_share_source_present else _closed_pyramid_rows(reports)
     calibration_source_scope = (
         "one_share_event_opportunity"
@@ -521,6 +687,7 @@ def _calibration_candidate(
             "provenance_present": provenance_present,
             "recommended_action": state,
             "recommended_action_reason": reason,
+            "normal_winner_expansion_observation": normal_winner_expansion,
         },
         "source_reports": [str(path) for path in source_paths],
         "runtime_effect": False,
@@ -569,6 +736,9 @@ def build_report(
             "source_quality_gate": "all_consumed_intraday_feedback_reports_source_quality_pass_and_provenance_present",
             "forbidden_uses": FORBIDDEN_USES,
         },
+        "normal_winner_expansion_observation": (
+            candidate["source_metrics"]["normal_winner_expansion_observation"]
+        ),
         "source_quality": {
             "status": (
                 "pass"

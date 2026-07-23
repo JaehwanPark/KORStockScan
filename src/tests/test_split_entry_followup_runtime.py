@@ -643,6 +643,83 @@ def test_post_probe_direction_classifies_strong_weak_neutral_and_source_gap():
     assert source_gap["post_probe_continuation_action"] == "DEFER"
 
 
+def test_post_probe_wait_uses_submit_timestamp_and_latest_drop_still_vetoes(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        state_handlers,
+        "_rising_missed_ai_action_guard_active",
+        lambda **_kwargs: True,
+    )
+    stock = {
+        "entry_split_probe_ai_action_at_submit": "WAIT",
+        "entry_split_probe_ai_result_source_at_submit": "live",
+        "entry_split_probe_ai_confirmed_at_submit": 100.0,
+        "last_watching_ai_action": "WAIT",
+        "last_watching_ai_result_source": "live",
+        "last_watching_ai_confirmed_at": 50.0,
+        "last_watching_ai_feature_probe_at": 100.0,
+        "last_watching_ai_source_quality_fields": {
+            "orderbook_micro_state": "bullish",
+            "buy_pressure_10t": 60.0,
+        },
+    }
+    quote = {"canonical_mark_price": 10_010, "passive_buy_price": 10_000}
+
+    wait_result = state_handlers._post_probe_direction_fields(
+        stock,
+        {"curr": 10_010},
+        quote,
+        probe_fill_price=10_000,
+        now_ts=100.5,
+    )
+
+    assert wait_result["post_probe_direction_state"] == "STRONG"
+    assert wait_result["post_probe_continuation_action"] == "ALLOW_NARROW"
+    assert (
+        wait_result["post_probe_direction_ai_context_source"]
+        == "probe_submit_snapshot"
+    )
+    assert wait_result["post_probe_direction_submit_wait_fresh"] is True
+    assert wait_result["post_probe_direction_ai_action_age_sec"] == "0.500"
+
+    stock.update(
+        {
+            "last_watching_ai_action": "DROP",
+            "last_watching_ai_result_source": "live",
+            "last_watching_ai_confirmed_at": 100.4,
+        }
+    )
+    drop_result = state_handlers._post_probe_direction_fields(
+        stock,
+        {"curr": 10_010},
+        quote,
+        probe_fill_price=10_000,
+        now_ts=100.5,
+    )
+
+    assert drop_result["post_probe_direction_state"] == "WEAK"
+    assert drop_result["post_probe_continuation_action"] == "DEFER"
+    assert drop_result["post_probe_hard_veto"] is True
+    assert (
+        drop_result["post_probe_direction_ai_context_source"]
+        == "latest_stock_ai_drop_veto"
+    )
+
+    stock.pop("entry_split_probe_ai_confirmed_at_submit")
+    stock["last_watching_ai_confirmed_at"] = 50.0
+    stale_result = state_handlers._post_probe_direction_fields(
+        stock,
+        {"curr": 10_010},
+        quote,
+        probe_fill_price=10_000,
+        now_ts=100.5,
+    )
+    assert stale_result["post_probe_direction_state"] == "UNKNOWN"
+    assert stale_result["post_probe_continuation_action"] == "DEFER"
+    assert stale_result["post_probe_direction_submit_wait_fresh"] is False
+
+
 def test_post_probe_chase_guard_caps_fast_rise_and_checks_known_tp_reward_risk(
     monkeypatch,
 ):
