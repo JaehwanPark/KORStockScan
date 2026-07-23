@@ -1,5 +1,4 @@
 # Swing EV Improvement Backlog for OPS
-
 ## 개요
 
 - total_findings: `5`

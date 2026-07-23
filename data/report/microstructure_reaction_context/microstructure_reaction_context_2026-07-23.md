@@ -1,0 +1,51 @@
+# Microstructure Reaction Context - 2026-07-23
+
+- runtime_effect: `False`
+- decision_authority: `entry_confidence_modifier_source_only`
+- forbidden_uses: `['standalone_buy', 'broker_guard_bypass', 'threshold_mutation', 'provider_route_change', 'bot_restart', 'cap_release']`
+
+## Summary
+- available: `True`
+- row_count: `6969`
+- ok/missing_or_unusable: `215` / `6754`
+- real_submitted_count: `24`
+- status_counts: `{'missing': 5969, 'not_evaluated': 60, 'ok': 215, 'source_quality_partial': 17, 'stale': 708}`
+- entry_reaction_quality_counts: `{'-': 5969, 'favorable_reaction': 2, 'mixed_reaction': 91, 'neutral_unusable': 785, 'risk_context_only': 63, 'weak_reaction': 59}`
+- source_quality_counts: `{'-': 5969, 'ai_score_50_buy_hold_override_no_tick_audit': 4, 'fresh_short_window': 215, 'pre_ai_liquidity_gate': 6, 'snapshot_pre_contract_backfill': 42, 'stale_tick_or_quote': 708, 'tick_aggressor_pressure_unusable': 17, 'watching_ai_cooldown_active': 8}`
+- stage_counts: `{'ai_confirmed': 77, 'ai_confirmed_terminal_no_budget': 77, 'ai_cooldown_blocked': 8, 'ai_holding_review': 464, 'blocked_ai_score': 23, 'blocked_liquidity': 6, 'krx_direct_canary_live_ai_wait_submit_block': 4, 'latency_block': 50, 'latency_pass': 8, 'opening_rotation_1pct_observed': 716, 'order_bundle_submitted': 12, 'pre_submit_entry_ai_authority_guard_block': 4, 'rising_missed_one_share_entry': 202, 'rising_missed_one_share_entry_blocked': 30, 'rising_missed_tick_absolute_throughput_relief_applied': 5, 'rising_missed_tick_speed_entry_block': 41, 'rising_missed_tp1_candidate_blocked': 120, 'rising_missed_tp1_candidate_deferred': 17, 'rising_missed_tp1_counterfactual_submit_safety': 137, 'scalp_entry_action_decision_snapshot': 279, 'scalping_scanner_fast_precheck': 4689}`
+- v_pw_source_counts: `{'missing': 59, 'not_applicable': 6239, 'ws_0b_latest_strength': 671}`
+- v_pw_rest_fallback_rate_pct: `0.0`
+- v_pw_runtime_support_unusable_count: `6969`
+- ka10046_rest_fallback_quote_freshness_counts: `{}`
+- ka10046_strength_runtime_effect_true_count: `0`
+- ka10046_strength_missing_received_ts_count: `0`
+- ka10046_0b_strength_diff: avg=`0.0` max=`0.0` divergence20=`0` / `0` (`0.0`%)
+- market_data_signed_tape_state_counts: `{'buy_dominated': 612, 'insufficient': 875, 'missing': 1758, 'mixed': 318, 'sell_dominated': 586, 'stale': 2820}`
+- market_data_signed_tape_sample_count_total: `8143`
+- market_data_rest_signed_tape_pressure_usable_true_count: `0`
+- rest_signed_trade_ticks_row_count: `0`
+- rest_signed_trade_ticks_source_counts: `{}`
+- latency_true_ofi_direct_canary_signed_tape: sample_total=`1031` net_buy_volume_sum=`1720` sell_dominated=`78` latest_single_sell_dominated=`102`
+- latency_true_ofi_direct_canary_signed_tape_latest_side_counts: `{'BUY': 113, 'SELL': 102, 'missing': 6754}`
+- latency_true_ofi_direct_canary_tape_block_reason_counts: `{'missing': 6754, 'signed_tape_sell_dominated': 78, 'tape_support_ok_missing_pressure': 137}`
+- tick_aggressor_source_counts: `{'kiwoom_0b_signed_trade_volume': 6894, 'missing_aggressor_side': 540, 'price_change_heuristic': 250}`
+- tick_trade_value_source_counts: `{'1313': 288}`
+- tick_trade_value_1313_missing_rate_pct: `0.0`
+- trade_volume_source_counts: `{'1030_1031_sum': 288}`
+- trade_volume_1030_1031_vs_15_mismatch: `288` / `288` (`100.0`%)
+- kiwoom_0b_latest_stock_count: `676`
+- kiwoom_0b_trade_value_source_counts: `{'1313': 179}`
+- kiwoom_0b_1313_missing_rate_pct: `0.0`
+- kiwoom_0b_trade_volume_source_counts: `{'1030_1031_sum': 179}`
+- kiwoom_0b_1030_1031_vs_15_mismatch: `179` / `179` (`100.0`%)
+- ka10003_buy_dominance_observation_source_counts: `{}`
+- ka10003_buy_dominance_observation_trade_value_source_counts: `{}`
+- ka10003_buy_dominance_observation_inside_spread_count: `0`
+- ka10003_buy_dominance_observation_split_vs_15_mismatch: `0` / `0` (`0.0`%)
+- avg_ask_sweep_score: `45.376`
+- avg_post_sweep_hold_score: `49.657`
+- avg_bid_replenishment_score: `57.161`
+- max_vi_proximity_risk: `20`
+- warnings: `[]`
+- code_improvement_order_count: `0`
+- top_code_improvement_orders: `[]`
