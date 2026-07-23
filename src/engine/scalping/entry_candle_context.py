@@ -14,6 +14,14 @@ from datetime import datetime, time as dt_time, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from src.engine.scalping.ai_market_snapshot import (
+    ai_market_snapshot_log_fields,
+    build_ai_market_snapshot,
+    preferred_ws_route,
+    realtime_type_provenance,
+)
+from src.engine.kiwoom_orders import resolve_order_dmst_stex_tp
+
 SCHEMA = "entry_candle_context_v1"
 SOURCE_SCHEMA = "session_candle_source_v1"
 KST = ZoneInfo("Asia/Seoul")
@@ -102,22 +110,10 @@ def _split_code(code: str) -> tuple[str, str]:
     return (digits[-6:].zfill(6) if digits else raw), ""
 
 
-def _ws_route(ws_data: dict[str, Any]) -> tuple[str, str]:
-    candidates = (
-        ws_data.get("market_suffix"),
-        ws_data.get("last_market_suffix"),
-        ws_data.get("last_ws_market_suffix"),
-        ws_data.get("realtime_market_suffix"),
-    )
-    suffix = next((str(value).upper() for value in candidates if value), "")
-    routes = (
-        ws_data.get("market_route"),
-        ws_data.get("last_market_route"),
-        ws_data.get("last_ws_market_route"),
-        ws_data.get("realtime_market_route"),
-    )
-    route = next((str(value).lower() for value in routes if value), "")
-    return suffix, route
+def _ws_route(
+    ws_data: dict[str, Any], *, now_ts: float | None = None
+) -> tuple[str, str]:
+    return preferred_ws_route(ws_data, now_ts=now_ts)
 
 
 def resolve_entry_candle_venue(
@@ -126,16 +122,35 @@ def resolve_entry_candle_venue(
     session: str | None = None,
 ) -> str:
     if venue:
-        return str(venue).upper()
+        venue_value = str(venue).upper()
+        session_value = str(session or "").lower()
+        if venue_value in {"SOR", "INTEGRATED", "KRX_NXT_INTEGRATED"}:
+            if "premarket" in session_value:
+                return "PREMARKET_KRX_LIKE"
+            if "nxt" in session_value:
+                return "NXT"
+            if "krx" in session_value:
+                return "KRX"
+        return venue_value
     ws = ws_data if isinstance(ws_data, dict) else {}
     suffix, route = _ws_route(ws)
     session_value = str(session or "").lower()
     if "premarket" in session_value:
         return "PREMARKET_KRX_LIKE"
-    if suffix == "_NX" or route == "nxt_only" or session_value.startswith("nxt_"):
+    if session_value.startswith("nxt_"):
         return "NXT"
-    if suffix == "_AL" or route == "krx_nxt_integrated":
-        return "SOR"
+    exact_venues = {
+        str(row.get("effective_venue") or "").strip().upper()
+        for row in realtime_type_provenance(ws).values()
+        if row.get("quality") == "fresh"
+        and str(row.get("effective_venue") or "").strip().upper() in {"KRX", "NXT"}
+    }
+    if len(exact_venues) == 1:
+        return next(iter(exact_venues))
+    if suffix == "_NX" or route == "nxt_only":
+        return "NXT"
+    if "krx" in session_value:
+        return "KRX"
     return "KRX"
 
 
@@ -156,6 +171,10 @@ def resolve_entry_candle_request_code(
         return f"{base}_NX"
     if venue_upper in {"SOR", "INTEGRATED", "KRX_NXT_INTEGRATED"}:
         return f"{base}_AL"
+    if venue_upper == "KRX":
+        ws_suffix, ws_route = _ws_route(ws_data if isinstance(ws_data, dict) else {})
+        if ws_suffix == "_AL" and ws_route == "krx_nxt_integrated":
+            return f"{base}_AL"
     return base
 
 
@@ -481,7 +500,7 @@ def build_session_candle_source(
         code, venue=venue_value, session=session_value, ws_data=ws
     )
     _, request_suffix = _split_code(request_code)
-    ws_suffix, ws_route = _ws_route(ws)
+    ws_suffix, ws_route = _ws_route(ws, now_ts=now.timestamp())
     route_proof = _nxt_integrated_aftermarket_route_proof(
         now=now,
         venue=venue_value,
@@ -619,7 +638,7 @@ def build_session_candle_source(
         or (
             venue_value == "KRX"
             and ws_route
-            and ws_route not in {"krx_regular", "krx_only"}
+            and ws_route not in {"krx_regular", "krx_only", "krx_nxt_integrated"}
         )
         or (
             venue_value == "NXT"
@@ -746,6 +765,7 @@ def build_entry_candle_context(
     *,
     recent_candles: list[dict[str, Any]] | None = None,
     source_meta: dict[str, Any] | None = None,
+    broker_route: str | None = None,
 ) -> dict[str, Any]:
     """Build the entry-owned view over the neutral candle source."""
 
@@ -771,6 +791,20 @@ def build_entry_candle_context(
             ),
             "observation_contract": OBSERVATION_CONTRACT,
         }
+    )
+    now_kst = _now_kst(now_ts)
+    planned_broker_route = str(
+        broker_route or resolve_order_dmst_stex_tp(now=now_kst)
+    ).upper()
+    context["ai_market_snapshot_v1"] = build_ai_market_snapshot(
+        stock_code=code,
+        decision_stage="entry_context",
+        ws_data=ws_data,
+        effective_venue=str(context.get("venue") or ""),
+        session_bucket=str(context.get("session") or ""),
+        broker_route=planned_broker_route,
+        candle_context=context,
+        now_ts=now_kst.timestamp(),
     )
     return context
 
@@ -976,5 +1010,6 @@ def entry_candle_context_log_fields(
         "entry_candle_hybrid_guard_result": guard.get("result"),
         "entry_candle_context_fetch_ms": timing.get("fetch_ms", 0),
         "entry_candle_context_build_ms": timing.get("build_ms", 0),
+        **ai_market_snapshot_log_fields(context),
         **OBSERVATION_CONTRACT,
     }

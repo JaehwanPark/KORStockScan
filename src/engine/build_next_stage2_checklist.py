@@ -523,7 +523,7 @@ def _build_tasks(
         "[run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh)"
     )
     threshold_lines = [
-        f"판정 기준: 전일 postclose EV와 당일 apply plan/runtime env를 확인하고 `auto_bounded_live` guard 통과분만 runtime env로 인정한다.",
+        "판정 기준: 전일 postclose EV와 당일 apply plan/runtime env를 확인하고 `auto_bounded_live` guard 통과분만 runtime env로 인정한다.",
         "금지: blocked family, approval artifact missing, same-stage owner conflict를 수동 env override로 우회하지 않는다.",
         "다음 액션: `applied_guard_passed_env`, `blocked_no_env`, `partial_apply_with_blocked_families`, `failed_preopen_wrapper`, `not_yet_due` 중 하나로 닫는다.",
     ]
@@ -602,7 +602,7 @@ def _build_tasks(
                 source=f"[threshold_cycle_ev_{source_date}.json](/home/ubuntu/KORStockScan/{_rel(ev_path)})",
                 lines=(
                     f"판정 기준: selected_families={', '.join(selected) if selected else '-'}가 runtime event provenance에 찍히는지 확인한다.",
-                    "금지: 장중 관찰 결과로 runtime threshold mutation을 수행하지 않는다.",
+                    "금지: 관찰 결과만으로 장중 runtime을 변경하지 않는다. 사용자 명시 override는 fresh/conflict-free source, 단일 blocker 인과, 기존 bounded_tunable 단일 축, rollback과 즉시 attribution 계약을 모두 충족해야 한다.",
                     "다음 액션: provenance present/missing, rollback guard breach 여부를 분리 기록한다.",
                 ),
             )
@@ -749,7 +749,7 @@ def _build_tasks(
                         ),
                         lines=(
                             f"판정 기준: runtime apply gap audit의 Codex 작업지시 {runtime_gap_directives}를 구현 필요, 이미 해결, 설계 보류, reject로 분류한다.",
-                            "금지: 작업지시를 approval artifact나 즉시 runtime env 수정으로 해석하지 않는다. broker/order/provider/cap guard 우회와 장중 threshold mutation은 금지한다.",
+                            "금지: 작업지시만을 approval artifact나 즉시 runtime env 수정 권한으로 해석하지 않는다. 장중 반영은 별도의 사용자 명시 지시와 bounded 단일축 계약이 필요하며 broker/order/provider/cap guard는 우회하지 않는다.",
                             "다음 액션: `implement_now`, `already_implemented`, `defer_design`, `reject`, `needs_new_workorder` 중 하나로 닫고, 구현 시 테스트와 postclose verifier handoff를 같이 확인한다.",
                         ),
                     )
@@ -877,7 +877,7 @@ def _render_new_document(target_date: str, auto_block: str) -> str:
             "",
             "## 오늘 강제 규칙",
             "",
-            "- 장중 runtime threshold mutation은 금지한다. 적용은 PREOPEN `threshold_cycle_preopen_apply`가 생성한 runtime env만 source로 본다.",
+            "- 장중 runtime 변경은 사용자 명시 지시가 있을 때만 기존 `bounded_tunable` 단일 축에 한해 허용한다. fresh/conflict-free source, 유효 effective price, 단일 blocker 인과, same-stage owner 비충돌, before/after·PID/env provenance·rollback·즉시 attribution을 모두 남긴다. hard safety, stale/conflict, price freshness, broker/account/order/quantity/cooldown, provider, bot, cap, 요청수량은 변경하거나 우회하지 않는다.",
             "- 튜닝 데이터 기준은 `clean_tuning_baseline_date=2026-06-04`, `clean_tuning_baseline_ts_kst=2026-06-04T14:29:09+09:00`이다. 기준 이전 raw/report/analytics artifact는 archive/audit evidence로만 보고 EV/rolling/MTD/cumulative tuning, live-auto promotion, runtime approval, pattern lab promotion, real execution quality approval 입력으로 쓰지 않는다.",
             "- Baseline 이후 raw source-quality contract 결손은 날짜 전체 차단이 아니라 결손 row/window를 `raw_row_exclusion`으로 제외하는 것이 기본이다. 전체 block은 preflight missing/invalid, row/window exclusion 실패, 또는 결손을 안정적으로 특정할 수 없는 high-volume no-contract 상황에만 사용한다.",
             "- 장중과 장후에는 `observation_source_quality_audit --write` 또는 최신 artifact로 raw source-quality를 반복 확인한다. Hard contract gap은 결손 row/window 제외 또는 `source_quality_blocked` 없이는 튜닝 입력에 들어갈 수 없고, unknown-token warning은 hard block이 아니더라도 code-improvement workorder handoff 확인 대상이다.",

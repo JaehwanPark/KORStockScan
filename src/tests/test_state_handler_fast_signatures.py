@@ -2888,6 +2888,10 @@ def test_build_ai_ops_log_fields_preserves_operational_meta():
             "openai_total_tokens": 1290,
             "openai_cached_input_tokens": 120,
             "openai_reasoning_tokens": 8,
+            "ai_request_envelope_sha256": "e" * 64,
+            "ai_request_temperature": 0.2,
+            "ai_request_max_output_tokens": 700,
+            "ai_request_reasoning_effort": "low",
             "holding_score_source_quality_reason": "feature_packet_fresh",
             "holding_score_score50_origin": "post_call_source_quality_neutralized",
             "holding_score_preflight_blocked": True,
@@ -2951,6 +2955,10 @@ def test_build_ai_ops_log_fields_preserves_operational_meta():
     assert fields["openai_total_tokens"] == 1290
     assert fields["openai_cached_input_tokens"] == 120
     assert fields["openai_reasoning_tokens"] == 8
+    assert fields["ai_request_envelope_sha256"] == "e" * 64
+    assert fields["ai_request_temperature"] == 0.2
+    assert fields["ai_request_max_output_tokens"] == 700
+    assert fields["ai_request_reasoning_effort"] == "low"
     assert fields["holding_score_source_quality_reason"] == "feature_packet_fresh"
     assert (
         fields["holding_score_score50_origin"] == "post_call_source_quality_neutralized"
@@ -2974,6 +2982,18 @@ def test_build_ai_ops_log_fields_preserves_operational_meta():
     assert fields["entry_score_threshold"] == "75.0"
     assert fields["big_bite_bonus_applied"] is True
     assert fields["ai_cooldown_blocked"] is False
+
+
+def test_build_ai_ops_log_fields_preserves_missing_request_config_as_null():
+    fields = _build_ai_ops_log_fields(
+        {
+            "ai_request_temperature": None,
+            "ai_request_max_output_tokens": None,
+        }
+    )
+
+    assert fields["ai_request_temperature"] is None
+    assert fields["ai_request_max_output_tokens"] is None
 
 
 def test_holding_score_preflight_blocks_stale_tick_context():

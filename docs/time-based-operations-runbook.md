@@ -726,6 +726,31 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - GitHub Actions의 `Black` workflow는 모든 push와 pull request에서 Python 3.11 및 `black==26.5.1`로 `black --check .`을 실행한다.
 - 포맷 커밋에는 runtime report/cache, 주문·provider·threshold·bot 상태 변경을 포함하지 않는다. 대형 실시간 주문 모듈은 AST 동등성, compile, 대응 producer/consumer 테스트, `git diff --check`까지 통과한 뒤 독립 커밋으로 닫는다.
 
+## 실주문 SCALPING AI 입력 preflight
+
+- 2026-07-24부터 enhanced AI 입력은 `ai_market_snapshot_v1`과 `ai_input_preflight_v1`을 사용한다. provider·model·threshold·P1 가격·중앙 수량 owner는 기존 값을 유지한다.
+- 초기 보호 mode는 `KORSTOCKSCAN_AI_INPUT_PREFLIGHT_MODE=baseline_v1`이다. clean baseline 이후 real 이벤트와 당일 source-quality audit로 `data/report/ai_input_quality_baseline/ai_input_quality_baseline_YYYY-MM-DD.json`을 생성한다. legacy field는 source-quality proxy일 뿐 exact venue provenance가 아니며, 정책은 provider 호출·scale-in support·exit defer·overnight HOLD 권한을 줄일 수만 있다.
+- `exact_v2` target-date artifact는 `data/report/entry_context_intraday_probe/entry_context_intraday_probe_YYYY-MM-DD.json`이다. `venue_preflight_matrix.overall_status=ready`, 모든 required row의 valid rows 1건 이상, cross-venue contamination/missing-as-zero/provider-called-while-blocked 0건을 확인한 뒤에만 mode 승격을 검토한다.
+- session/effective venue cohort는 `PREMARKET_KRX_LIKE`, `KRX`, `NXT_REGULAR_OVERLAP`, `NXT_AFTERMARKET`, `OVERNIGHT`로 분리한다. 주문 `broker_route=KRX|NXT|SOR`, 시세 `market_data_route=krx_only|nxt_only|krx_nxt_integrated`, 실제 event venue는 별도 직교 차원이다. `SOR`는 venue cohort가 아니다.
+- KRX 정규장 기본 주문은 `broker_route=SOR`일 수 있으므로 SOR 주문 route 자체는 venue 오염이 아니다. 다만 exact AI 입력 preflight에서 `market_data_route=krx_nxt_integrated`인 시세는 per-realtime-type `effective_venue=KRX`가 확인되어야 KRX 입력으로 허용한다. 증명되지 않은 underlying event venue는 `UNKNOWN + not_provided`로 보존하고 provider 입력을 fail-closed하며, baseline replay의 route lineage 표본으로만 사용한다.
+- `KORSTOCKSCAN_AI_INPUT_PREFLIGHT_REQUIRED=true`인데 선택 mode의 artifact가 없거나 `not_ready`이면 provider 호출과 enhanced context 권한은 fail-closed다. `baseline_v1`은 orthogonal route matrix와 payload 계약 replay가 통과하기 전에는 활성화하지 않고, `exact_v2`의 부족한 자연 표본과 decision point는 matrix의 `not_ready_rows`로 보고한다.
+- 실행 중 새로 생성된 PASS artifact는 현재 PID에서 `ready_pending_restart`로 유지한다. 해당 artifact보다 나중에 시작된 단일 graceful restart PID에서만 `ready` handoff를 인정한다.
+- holding-flow/overnight는 주기 계좌 동기화의 `kt00005 + ka10075` broker position/open-order snapshot과 실제 entry broker route를 대사한다. 결손·60초 초과·venue mismatch에서는 AI가 scale-in을 지지하거나 deterministic exit/`SELL_TODAY`를 유예할 수 없다.
+- 검증 명령:
+
+  ```bash
+  PYTHONPATH=. .venv/bin/python \
+    -m src.engine.scalping.ai_input_quality_baseline_replay \
+    --target-date "$(TZ=Asia/Seoul date +%F)"
+
+  PYTHONPATH=. .venv/bin/python -m src.engine.scalping.entry_context_intraday_probe \
+    --date "$(TZ=Asia/Seoul date +%F)" --write
+  ```
+
+- 선택 mode report가 `not_ready`이면 봇 재기동으로 강제 통과시키지 않는다. provider 호출 payload는 schema, SHA-256, byte size, snapshot ID, venue/broker/market-data route, canonical candle owner를 남긴다. 같은 분봉을 summary/raw/context로 중복 전송하지 않는다. 첫 자연 표본의 exact snapshot/preflight/provider provenance와 payload hash를 확인한 뒤 당일 exact matrix로 정책을 고도화한다. review gate, parser, provider `none=0`, PID/env handoff를 모두 확인한 한 번의 graceful restart만 허용한다.
+- `KORSTOCKSCAN_AI_DECISION_TRACE_ENABLED`는 기본 `true`인 source-only 계측 kill switch다. 판단 trace는 `data/ai_decision_trace`, exact user input은 `data/ai_decision_payloads`, prompt registry는 `data/ai_decision_prompts`, pending/mature outcome은 `data/ai_decision_outcomes`에 일자별 JSONL로 저장한다. 계측은 provider/model/threshold/order/price/quantity/exit 권한을 갖지 않는다.
+- 다음 기동의 첫 자연 AI 표본에서 trace ID가 payload/prompt hash, exact snapshot, pipeline event 및 probe bundle까지 이어지는지 확인한다. payload/prompt에 redaction이 발생하면 secret 값이 파일에 남지 않았는지 확인하고 해당 행은 `replay_exact=false`로 제외한다. write failure나 schema 결손은 `instrumentation_gap`으로 처리하며 실주문 경로를 중단하거나 fallback action을 변경하지 않는다.
+
 ## 장애 대응 기준
 
 | 증상 | 우선 판정 | 다음 액션 |

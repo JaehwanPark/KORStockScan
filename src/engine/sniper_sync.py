@@ -1008,6 +1008,9 @@ def periodic_account_sync():
         for item in real_inventory
         if item.get("code")
     }
+    broker_snapshot_at = datetime.now().timestamp()
+    unfilled_snapshot_ok = False
+    open_qty_by_code = {}
 
     def get_exchange(code):
         is_nxt = DB.get_latest_is_nxt(code)
@@ -1024,6 +1027,45 @@ def periodic_account_sync():
                 .filter(RecommendationHistory.status.in_(["HOLDING", "SELL_ORDERED"]))
                 .all()
             )
+            active_real_codes = {
+                str(record.stock_code).strip()[:6]
+                for record in active_records
+                if str(record.stock_code).strip()[:6] in real_codes
+            }
+            if active_real_codes:
+                try:
+                    unfilled_rows, unfilled_source_meta = (
+                        kiwoom_utils.get_unfilled_order_snapshot_ka10075_with_meta(
+                            KIWOOM_TOKEN,
+                            all_stk_tp="1",
+                            trde_tp="0",
+                            stex_tp="0",
+                        )
+                    )
+                    unfilled_snapshot_ok = bool(
+                        (unfilled_source_meta or {}).get("request_succeeded", False)
+                    )
+                    if not unfilled_snapshot_ok:
+                        log_error(
+                            "🚨 [정기 동기화] 미체결 스냅샷 응답 상태 불명확: "
+                            f"{unfilled_source_meta}"
+                        )
+                except Exception as exc:
+                    unfilled_rows = []
+                    log_error(f"🚨 [정기 동기화] 미체결 스냅샷 조회 실패: {exc}")
+                for row in unfilled_rows or []:
+                    code = str(row.get("code") or "").strip()[:6]
+                    if code not in active_real_codes:
+                        continue
+                    side = str(row.get("side") or "").strip().upper()
+                    remaining_qty = max(0, _to_int(row.get("remaining_qty", 0)))
+                    summary = open_qty_by_code.setdefault(
+                        code, {"open_buy_qty": 0, "open_sell_qty": 0}
+                    )
+                    if side in {"매수", "BUY", "B", "2"}:
+                        summary["open_buy_qty"] += remaining_qty
+                    elif side in {"매도", "SELL", "S", "1"}:
+                        summary["open_sell_qty"] += remaining_qty
 
             for record in active_records:
                 code = str(record.stock_code).strip()[:6]
@@ -1089,6 +1131,26 @@ def periodic_account_sync():
                 else:
                     real_data = real_codes[code]
                     real_qty = _to_int(real_data.get("qty", 0))
+                    if unfilled_snapshot_ok:
+                        open_orders = open_qty_by_code.get(
+                            code, {"open_buy_qty": 0, "open_sell_qty": 0}
+                        )
+                        with _with_state_lock():
+                            for target in ACTIVE_TARGETS:
+                                if str(target.get("code", "")).strip()[:6] == code:
+                                    target.update(
+                                        {
+                                            "broker_holding_qty": real_qty,
+                                            "broker_snapshot_at": broker_snapshot_at,
+                                            "open_buy_qty": open_orders["open_buy_qty"],
+                                            "open_sell_qty": open_orders[
+                                                "open_sell_qty"
+                                            ],
+                                            "broker_reconciliation_source": (
+                                                "kt00005_plus_ka10075"
+                                            ),
+                                        }
+                                    )
 
                     raw_price = (
                         real_data.get("buy_price")

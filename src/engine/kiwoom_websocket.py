@@ -685,6 +685,17 @@ class KiwoomWSManager:
         return "krx_regular"
 
     @classmethod
+    def _ws_item_effective_venue(cls, item):
+        """Return only venue identity proven by the subscription item itself."""
+
+        suffix = cls._ws_item_market_suffix(item)
+        if suffix == "_NX":
+            return "NXT"
+        if suffix == "_AL":
+            return ""
+        return "KRX"
+
+    @classmethod
     def _ws_item_route_counts(cls, items):
         counts = {}
         for item in items or ():
@@ -1439,6 +1450,7 @@ class KiwoomWSManager:
                 "last_realtime_type_item": {},
                 "last_realtime_type_market_suffix": {},
                 "last_realtime_type_market_route": {},
+                "last_realtime_type_effective_venue": {},
                 "received_types": set(),
                 "last_ws_update_ts": 0.0,
                 "last_realtime_type_ts": {},
@@ -1937,8 +1949,6 @@ class KiwoomWSManager:
             except Exception as e:
                 if self._stop_event.is_set():
                     break
-                from src.utils.logger import log_error
-
                 log_error(f"🚨 [WS] 예상치 못한 오류: {e}")
                 print(f"🚨 [WS] 예상치 못한 오류: {e}")
                 self.websocket = None
@@ -2807,6 +2817,13 @@ class KiwoomWSManager:
                             )
                             if isinstance(type_routes, dict):
                                 type_routes[real_type] = market_route
+                            type_venues = target.setdefault(
+                                "last_realtime_type_effective_venue", {}
+                            )
+                            if isinstance(type_venues, dict):
+                                type_venues[real_type] = self._ws_item_effective_venue(
+                                    raw_item_code
+                                )
                             target["time"] = datetime.now().strftime("%H:%M:%S")
 
                             if not target.get(
@@ -2834,8 +2851,6 @@ class KiwoomWSManager:
         except websockets.ConnectionClosed:
             pass
         except Exception as e:
-            from src.utils.logger import log_error
-
             log_error(f"🚨 [WS] 메시지 파싱 에러 발생: {e} | Payload: {message[:150]}")
 
     def start(self):

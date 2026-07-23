@@ -5427,10 +5427,10 @@ def build_preopen_apply_manifest(
                 "intraday source phase는 manual forensic/legacy manifest-only이며 runtime env apply 금지"
                 if intraday_source_auto_apply_blocked
                 else (
-                    "장전 자동 bounded env apply; 장중 threshold mutation은 계속 금지"
+                    "장전 자동 bounded env apply; 사용자 명시 장중 override는 별도 bounded 단일축 계약"
                     if runtime_change
                     else (
-                        "장전 자동 bounded env apply 후보 없음; 장중 threshold mutation은 계속 금지"
+                        "장전 자동 bounded env apply 후보 없음; 사용자 명시 장중 override는 별도 bounded 단일축 계약"
                         if auto_apply_requested
                         else "장중 자동 mutation 금지; calibrated/efficient trade-off 후보도 승인된 family의 다음 장전 bounded apply 후보만 생성"
                     )

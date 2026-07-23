@@ -574,6 +574,68 @@ def test_periodic_account_sync_uses_net_profit_rate_for_missing_sell_receipt(
     ]
 
 
+def test_periodic_account_sync_attaches_fresh_broker_reconciliation(monkeypatch):
+    record = type(
+        "Record",
+        (),
+        {
+            "stock_code": "005930",
+            "stock_name": "삼성전자",
+            "status": "HOLDING",
+            "buy_price": 70_000.0,
+            "buy_qty": 3,
+            "scale_in_locked": False,
+        },
+    )()
+    target = {
+        "code": "005930",
+        "status": "HOLDING",
+        "buy_price": 70_000,
+        "buy_qty": 3,
+        "entry_execution_broker_route": "SOR",
+    }
+    sniper_sync.KIWOOM_TOKEN = "token"
+    sniper_sync.DB = _SyncDB([record], [])
+    sniper_sync.ACTIVE_TARGETS = [target]
+    sniper_sync.HIGHEST_PRICES = {}
+    sniper_sync.STATE_LOCK = _DummyLock()
+    monkeypatch.setattr(
+        sniper_sync.kiwoom_utils,
+        "get_account_balance_kt00005",
+        lambda token: (
+            [{"code": "005930", "qty": 3, "buy_price": 70_000}],
+            {"KRX"},
+        ),
+    )
+    monkeypatch.setattr(
+        sniper_sync.kiwoom_utils,
+        "get_unfilled_order_snapshot_ka10075_with_meta",
+        lambda *args, **kwargs: (
+            [
+                {"code": "005930", "side": "BUY", "remaining_qty": 2},
+                {"code": "005930", "side": "SELL", "remaining_qty": 1},
+            ],
+            {"request_succeeded": True},
+        ),
+    )
+    monkeypatch.setattr(
+        sniper_sync,
+        "_recover_missing_broker_holdings",
+        lambda session, real_codes: 0,
+    )
+
+    sniper_sync.periodic_account_sync()
+
+    assert target["broker_holding_qty"] == 3
+    assert target["open_buy_qty"] == 2
+    assert target["open_sell_qty"] == 1
+    assert target["entry_execution_broker_route"] == "SOR"
+    assert "broker_route" not in target
+    assert target["broker_reconciliation_source"] == "kt00005_plus_ka10075"
+    assert target["broker_snapshot_at"] > 0
+    assert "broker_snapshot_age_sec" not in target
+
+
 def test_periodic_account_sync_does_not_remove_manual_control_exclusion_on_db_error(
     monkeypatch,
 ):

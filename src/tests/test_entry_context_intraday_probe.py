@@ -168,6 +168,93 @@ def test_probe_report_can_build_adm_before_sampling(monkeypatch):
     assert report["coverage"]["row_count"] == 1
 
 
+def test_venue_preflight_matrix_separates_cohort_and_blocks_provider_leak():
+    base = {
+        "stage": "holding_flow_review",
+        "fields": {
+            "ai_input_schema": "holding_flow_v2",
+            "ai_market_snapshot_id": "aims-1",
+            "ai_market_snapshot_captured_at": "2026-07-23T18:00:00+09:00",
+            "ai_market_snapshot_effective_venue": "NXT",
+            "ai_market_snapshot_session_bucket": "nxt_aftermarket",
+            "ai_market_snapshot_broker_route": "NXT",
+            "ai_market_snapshot_market_data_route": "nxt_only",
+            "ai_market_snapshot_underlying_event_venue": "NXT",
+            "ai_market_snapshot_underlying_event_venue_source": (
+                "exact_per_realtime_type"
+            ),
+            "ai_market_snapshot_venue_resolution": "explicit_or_session",
+            "ai_input_preflight_source_allowed": True,
+            "ai_input_preflight_allowed": False,
+            "ai_input_preflight_venue_consistent": True,
+            "ai_input_preflight_position_reconciled": True,
+            "ai_market_snapshot_missing_as_zero": False,
+            "provider_called": False,
+        },
+    }
+    matrix = mod._venue_preflight_matrix([base])
+    row = next(
+        item
+        for item in matrix["rows"]
+        if item["row_id"] == "NXT_AFTERMARKET:holding_flow"
+    )
+
+    assert row["valid_rows"] == 1
+    assert row["provider_called_while_blocked"] == 0
+    assert row["broker_route_counts"] == {"NXT": 1}
+    assert row["market_data_route_counts"] == {"NXT_ONLY": 1}
+    assert row["underlying_event_venue_counts"] == {"NXT": 1}
+    assert row["status"] == "ready"
+    assert matrix["overall_status"] == "not_ready"
+
+
+def test_venue_preflight_requires_payload_identity_for_provider_rows():
+    fields = {
+        "ai_input_schema": "entry_screen_hot_v1",
+        "ai_market_snapshot_id": "aims-krx",
+        "ai_market_snapshot_captured_at": "2026-07-23T10:00:00+09:00",
+        "ai_market_snapshot_effective_venue": "KRX",
+        "ai_market_snapshot_session_bucket": "krx_regular",
+        "ai_market_snapshot_broker_route": "SOR",
+        "ai_market_snapshot_market_data_route": "krx_nxt_integrated",
+        "ai_market_snapshot_underlying_event_venue_source": "not_provided",
+        "ai_market_snapshot_venue_resolution": "explicit",
+        "ai_input_preflight_source_allowed": True,
+        "ai_input_preflight_allowed": True,
+        "ai_input_preflight_venue_consistent": True,
+        "ai_market_snapshot_missing_as_zero": False,
+        "provider_called": True,
+    }
+
+    missing = mod._venue_preflight_matrix(
+        [{"stage": "scalp_entry_action_decision_snapshot", "fields": fields}]
+    )
+    missing_row = next(
+        item for item in missing["rows"] if item["row_id"] == "KRX:entry_screen"
+    )
+    assert missing_row["payload_contract_missing"] == 1
+    assert missing_row["duplicate_candle_contract_missing"] == 1
+    assert missing_row["status"] == "not_ready"
+
+    fields.update(
+        {
+            "ai_input_payload_sha256": "a" * 64,
+            "ai_input_payload_bytes": 1234,
+            "ai_input_duplicate_candle_views_omitted": True,
+        }
+    )
+    complete = mod._venue_preflight_matrix(
+        [{"stage": "scalp_entry_action_decision_snapshot", "fields": fields}]
+    )
+    complete_row = next(
+        item for item in complete["rows"] if item["row_id"] == "KRX:entry_screen"
+    )
+    assert complete_row["payload_contract_missing"] == 0
+    assert complete_row["duplicate_candle_contract_missing"] == 0
+    assert complete_row["duplicate_candle_views_present"] == 0
+    assert complete_row["status"] == "ready"
+
+
 def test_live_openai_is_skipped_without_api_key(monkeypatch):
     monkeypatch.setattr(
         mod,

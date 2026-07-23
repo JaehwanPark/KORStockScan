@@ -163,6 +163,37 @@ def test_unfilled_order_snapshot_ka10075_preserves_exchange_fields(monkeypatch):
     assert rows[0]["sor_yn"] == "N"
 
 
+def test_unfilled_order_snapshot_meta_distinguishes_empty_success_from_failure(
+    monkeypatch,
+):
+    response = [{"oso": [], "return_code": 0}]
+    monkeypatch.setattr(
+        kiwoom_utils,
+        "_fetch_kiwoom_api_continuous_with_meta",
+        lambda **kwargs: (
+            response,
+            {"api_id": "ka10075", "page_count": 1, "rest_received_ts_ms": 123},
+        ),
+    )
+    monkeypatch.setattr(
+        kiwoom_utils, "get_api_url", lambda path: f"https://example.test{path}"
+    )
+
+    rows, meta = kiwoom_utils.get_unfilled_order_snapshot_ka10075_with_meta("token")
+
+    assert rows == []
+    assert meta["request_succeeded"] is True
+    assert meta["response_codes"] == ["0"]
+    assert meta["received_count"] == 0
+
+    response[:] = [{"return_code": 17, "return_msg": "rejected"}]
+    rows, meta = kiwoom_utils.get_unfilled_order_snapshot_ka10075_with_meta("token")
+
+    assert rows == []
+    assert meta["request_succeeded"] is False
+    assert meta["response_codes"] == ["17"]
+
+
 def test_find_order_reference_match_by_code_side_qty_price():
     rows = [
         {

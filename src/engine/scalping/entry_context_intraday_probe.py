@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import gzip
 import inspect
 import json
 import os
@@ -23,6 +24,8 @@ DATA_DIR = PROJECT_ROOT / "data"
 REPORT_DIR = DATA_DIR / "report"
 PROBE_REPORT_DIR = REPORT_DIR / "entry_context_intraday_probe"
 PIPELINE_EVENTS_DIR = DATA_DIR / "pipeline_events"
+CLEAN_BASELINE_POLICY_PATH = DATA_DIR / "source_quality" / "clean_baseline_policy.json"
+AI_MARKET_SNAPSHOT_SCHEMA_INTRODUCED_DATE = "2026-07-23"
 
 PROBE_FEATURE_KEYS = (
     "source_stage",
@@ -126,6 +129,40 @@ AI_DECISION_POINT_CONTRACTS = {
     },
 }
 
+VENUE_PREFLIGHT_REQUIRED_ROWS = {
+    "PREMARKET_KRX_LIKE": (
+        "entry_screen",
+        "gatekeeper",
+        "entry_price",
+        "post_probe",
+    ),
+    "KRX": (
+        "entry_screen",
+        "gatekeeper",
+        "entry_price",
+        "post_probe",
+        "holding_score",
+        "holding_flow",
+    ),
+    "NXT_REGULAR_OVERLAP": (
+        "entry_screen",
+        "gatekeeper",
+        "entry_price",
+        "post_probe",
+        "holding_score",
+        "holding_flow",
+    ),
+    "NXT_AFTERMARKET": (
+        "entry_screen",
+        "gatekeeper",
+        "entry_price",
+        "post_probe",
+        "holding_score",
+        "holding_flow",
+    ),
+    "OVERNIGHT": ("overnight",),
+}
+
 
 def _today() -> str:
     return datetime.now().date().isoformat()
@@ -201,6 +238,52 @@ def _read_pipeline_events(target_date: str) -> dict[str, Any]:
     }
 
 
+def _clean_baseline_date() -> str:
+    try:
+        payload = json.loads(CLEAN_BASELINE_POLICY_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        payload = {}
+    return str(payload.get("clean_tuning_baseline_date") or "2026-06-04")
+
+
+def _read_clean_baseline_pipeline_events(target_date: str) -> dict[str, Any]:
+    baseline = _clean_baseline_date()
+    exact_provenance_start = max(baseline, AI_MARKET_SNAPSHOT_SCHEMA_INTRODUCED_DATE)
+    rows: list[dict[str, Any]] = []
+    artifacts: list[str] = []
+    parse_errors = 0
+    paths = sorted(
+        set(PIPELINE_EVENTS_DIR.glob("pipeline_events_*.jsonl"))
+        | set(PIPELINE_EVENTS_DIR.glob("pipeline_events_*.jsonl.gz"))
+    )
+    for path in paths:
+        date_token = path.name.removeprefix("pipeline_events_").split(".jsonl", 1)[0]
+        if not (exact_provenance_start <= date_token <= target_date):
+            continue
+        artifacts.append(str(path))
+        opener = gzip.open if path.suffix == ".gz" else open
+        with opener(path, "rt", encoding="utf-8", errors="replace") as stream:
+            for line in stream:
+                if "ai_market_snapshot_id" not in line:
+                    continue
+                try:
+                    payload = json.loads(line)
+                except Exception:
+                    parse_errors += 1
+                    continue
+                if isinstance(payload, dict):
+                    rows.append(payload)
+    return {
+        "baseline_date": baseline,
+        "exact_provenance_start_date": exact_provenance_start,
+        "target_date": target_date,
+        "artifact_count": len(artifacts),
+        "artifacts": artifacts,
+        "parse_error_count": parse_errors,
+        "rows": rows,
+    }
+
+
 def _event_fields(row: dict[str, Any]) -> dict[str, Any]:
     fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}
     merged = dict(fields)
@@ -257,6 +340,237 @@ def _classify_decision_point(fields: dict[str, Any]) -> str | None:
     ):
         return "holding_flow"
     return None
+
+
+def _classify_preflight_decision_point(fields: dict[str, Any]) -> str | None:
+    point = _classify_decision_point(fields)
+    if point:
+        return point
+    stage = str(fields.get("stage") or fields.get("event") or "").lower()
+    endpoint = str(
+        fields.get("openai_endpoint_name") or fields.get("bedrock_endpoint_name") or ""
+    ).lower()
+    if "gatekeeper" in stage or endpoint == "gatekeeper":
+        return "gatekeeper"
+    if "post_probe" in stage or "probe_recheck" in stage or "leg_reprice" in stage:
+        return "post_probe"
+    if "overnight" in stage or endpoint == "overnight":
+        return "overnight"
+    return None
+
+
+def _preflight_cohort(fields: dict[str, Any], point: str) -> str | None:
+    if point == "overnight":
+        return "OVERNIGHT"
+    venue = str(
+        fields.get("ai_market_snapshot_effective_venue")
+        or fields.get("entry_candle_venue")
+        or fields.get("holding_context_venue")
+        or ""
+    ).upper()
+    session = str(
+        fields.get("ai_market_snapshot_session_bucket")
+        or fields.get("entry_candle_session")
+        or fields.get("holding_context_session")
+        or ""
+    ).lower()
+    if "premarket" in session or venue == "PREMARKET_KRX_LIKE":
+        return "PREMARKET_KRX_LIKE"
+    if venue == "NXT" and ("aftermarket" in session or "nxt_entry_window" in session):
+        return "NXT_AFTERMARKET"
+    if venue == "NXT":
+        return "NXT_REGULAR_OVERLAP"
+    if venue in {"SOR", "INTEGRATED", "KRX_NXT_INTEGRATED"} and "krx" in session:
+        return "KRX"
+    if venue == "KRX":
+        return "KRX"
+    return None
+
+
+def _truth_value(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _venue_preflight_matrix(
+    pipeline_rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    exact_rows = 0
+    for row in pipeline_rows:
+        if not isinstance(row, dict):
+            continue
+        fields = _event_fields(row)
+        point = _classify_preflight_decision_point(fields)
+        if point is None:
+            continue
+        cohort = _preflight_cohort(fields, point)
+        if cohort is None:
+            continue
+        if _nonempty(fields.get("ai_market_snapshot_id")):
+            exact_rows += 1
+        grouped.setdefault((cohort, point), []).append(fields)
+
+    matrix_rows = []
+    not_ready_rows = []
+    for cohort, points in VENUE_PREFLIGHT_REQUIRED_ROWS.items():
+        for point in points:
+            rows = grouped.get((cohort, point), [])
+            exact = [
+                row
+                for row in rows
+                if _nonempty(row.get("ai_market_snapshot_id"))
+                and _nonempty(row.get("ai_market_snapshot_captured_at"))
+                and _nonempty(row.get("ai_market_snapshot_effective_venue"))
+                and _nonempty(row.get("ai_market_snapshot_session_bucket"))
+                and _nonempty(row.get("ai_market_snapshot_broker_route"))
+                and _nonempty(row.get("ai_market_snapshot_market_data_route"))
+                and _nonempty(row.get("ai_market_snapshot_venue_resolution"))
+                and _nonempty(
+                    row.get("ai_market_snapshot_underlying_event_venue_source")
+                )
+            ]
+            valid = [
+                row
+                for row in exact
+                if _truth_value(
+                    row.get(
+                        "ai_input_preflight_source_allowed",
+                        row.get("ai_input_preflight_allowed"),
+                    )
+                )
+            ]
+            blocked = [
+                row
+                for row in exact
+                if not _truth_value(row.get("ai_input_preflight_allowed"))
+            ]
+            contamination = [
+                row
+                for row in exact
+                if not _truth_value(row.get("ai_input_preflight_venue_consistent"))
+            ]
+            provider_while_blocked = [
+                row
+                for row in blocked
+                if _truth_value(row.get("provider_called"))
+                or _nonempty(row.get("openai_transport_mode"))
+                or _nonempty(row.get("bedrock_transport_mode"))
+            ]
+            provider_rows = [
+                row
+                for row in exact
+                if _truth_value(row.get("provider_called"))
+                or _nonempty(row.get("openai_transport_mode"))
+                or _nonempty(row.get("bedrock_transport_mode"))
+            ]
+            payload_contract_missing = [
+                row
+                for row in provider_rows
+                if not _nonempty(row.get("ai_input_payload_sha256"))
+                or not _nonempty(row.get("ai_input_payload_bytes"))
+            ]
+            duplicate_candle_contract_missing = [
+                row
+                for row in provider_rows
+                if "ai_input_duplicate_candle_views_omitted" not in row
+            ]
+            duplicate_candle_views_present = [
+                row
+                for row in provider_rows
+                if not _truth_value(row.get("ai_input_duplicate_candle_views_omitted"))
+            ]
+            missing_as_zero = [
+                row
+                for row in exact
+                if _truth_value(row.get("ai_market_snapshot_missing_as_zero"))
+            ]
+            missing_as_zero_unknown = [
+                row for row in exact if "ai_market_snapshot_missing_as_zero" not in row
+            ]
+            requires_broker = point in {
+                "holding_flow",
+                "overnight",
+            }
+            reconciled = [
+                row
+                for row in valid
+                if _truth_value(row.get("ai_input_preflight_position_reconciled"))
+            ]
+            broker_route_counts: dict[str, int] = {}
+            market_data_route_counts: dict[str, int] = {}
+            underlying_event_venue_counts: dict[str, int] = {}
+            for row in exact:
+                for field, target in (
+                    ("ai_market_snapshot_broker_route", broker_route_counts),
+                    (
+                        "ai_market_snapshot_market_data_route",
+                        market_data_route_counts,
+                    ),
+                    (
+                        "ai_market_snapshot_underlying_event_venue",
+                        underlying_event_venue_counts,
+                    ),
+                ):
+                    value = str(row.get(field) or "UNKNOWN").strip().upper()
+                    target[value] = target.get(value, 0) + 1
+            ready = bool(
+                valid
+                and not contamination
+                and not provider_while_blocked
+                and not payload_contract_missing
+                and not duplicate_candle_contract_missing
+                and not duplicate_candle_views_present
+                and not missing_as_zero
+                and not missing_as_zero_unknown
+                and (not requires_broker or reconciled)
+            )
+            status = "ready" if ready else "not_ready"
+            row_id = f"{cohort}:{point}"
+            if not ready:
+                not_ready_rows.append(row_id)
+            matrix_rows.append(
+                {
+                    "row_id": row_id,
+                    "cohort": cohort,
+                    "decision_point": point,
+                    "status": status,
+                    "valid_rows": len(valid),
+                    "blocked_rows": len(blocked),
+                    "cross_venue_contamination": len(contamination),
+                    "missing_as_zero": len(missing_as_zero),
+                    "missing_as_zero_unknown": len(missing_as_zero_unknown),
+                    "provider_called_while_blocked": len(provider_while_blocked),
+                    "provider_rows": len(provider_rows),
+                    "payload_contract_missing": len(payload_contract_missing),
+                    "duplicate_candle_contract_missing": len(
+                        duplicate_candle_contract_missing
+                    ),
+                    "duplicate_candle_views_present": len(
+                        duplicate_candle_views_present
+                    ),
+                    "broker_reconciled_rows": len(reconciled),
+                    "observed_rows": len(rows),
+                    "exact_provenance_rows": len(exact),
+                    "broker_route_counts": dict(sorted(broker_route_counts.items())),
+                    "market_data_route_counts": dict(
+                        sorted(market_data_route_counts.items())
+                    ),
+                    "underlying_event_venue_counts": dict(
+                        sorted(underlying_event_venue_counts.items())
+                    ),
+                }
+            )
+    return {
+        "source_scope": "all_clean_baseline_exact_provenance_rows",
+        "overall_status": "ready" if not not_ready_rows else "not_ready",
+        "required_row_count": len(matrix_rows),
+        "ready_row_count": len(matrix_rows) - len(not_ready_rows),
+        "exact_provenance_row_count": exact_rows,
+        "not_ready_rows": not_ready_rows,
+        "rows": matrix_rows,
+    }
 
 
 def _event_has_required_feature(fields: dict[str, Any], feature: str) -> bool:
@@ -1591,6 +1905,12 @@ def build_probe_report(
         if isinstance(pipeline_report.get("rows"), list)
         else []
     )
+    clean_pipeline_report = _read_clean_baseline_pipeline_events(target_date)
+    clean_pipeline_rows = (
+        clean_pipeline_report.get("rows")
+        if isinstance(clean_pipeline_report.get("rows"), list)
+        else []
+    )
     candidates = _candidate_rows(rows, sample_limit)
     live_results = (
         _call_openai(candidates, model=model, effort=effort) if live_openai else []
@@ -1641,6 +1961,17 @@ def build_probe_report(
             ),
         },
         "coverage": _coverage(candidates),
+        "venue_preflight_matrix": _venue_preflight_matrix(clean_pipeline_rows),
+        "venue_preflight_source": {
+            key: clean_pipeline_report.get(key)
+            for key in (
+                "baseline_date",
+                "exact_provenance_start_date",
+                "target_date",
+                "artifact_count",
+                "parse_error_count",
+            )
+        },
         "ai_decision_contract_probe": _decision_contract_probe(
             rows,
             pipeline_rows,

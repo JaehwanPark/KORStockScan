@@ -59,6 +59,20 @@
 - 상태에는 `probe_confirmation_count`, `probe_expand_forbidden`, `peak_basis_qty`, `peak_basis_avg_price`, `exit_token`, `exit_decided_at`, `exit_order_sent_at`을 남긴다. 이벤트에는 AI veto, probe 평가별 독립 신호, 기준 이탈 가격·시각, cancel/reload/sell 수량과 청산 지연을 남긴다.
 - 새 관측값은 생성 시 `metric_role`, `decision_authority`, `window_policy`, `sample_floor`, `primary_decision_metric`, `source_quality_gate`, `forbidden_uses`를 모두 선언한다. 계약이 없으면 runtime 판단에 사용하지 않고 `instrumentation_gap` 또는 `source_quality_blocker`로만 보낸다.
 
+## 감시~청산 AI 입력 공통 사전점검
+
+- 실주문 SCALPING의 `감시 -> 진입 재확인 -> Gatekeeper -> entry-price -> post-probe/leg-reprice -> holding/scale-in -> exit -> overnight`는 `ai_market_snapshot_v1`과 `ai_input_preflight_v1`을 공통 source-quality 계약으로 사용한다.
+- 각 호출은 snapshot ID, decision stage, effective venue cohort, broker order route, market-data route, underlying event venue, session bucket과 current price/BBO/tape/candle/program/investor/broker position/open orders의 source·observed time·age·suffix·route·quality·missing reason을 남긴다. 결손값은 `null + missing_reason`이며 실제 0으로 보간하지 않는다.
+- WS route 판정은 aggregate suffix보다 0B·0D별 `last_realtime_type_item/suffix/route/effective_venue/ts`를 우선한다. cohort는 `PREMARKET_KRX_LIKE/KRX/NXT_REGULAR_OVERLAP/NXT_AFTERMARKET/OVERNIGHT`, broker route는 `KRX/NXT/SOR`, market-data route는 `krx_only/nxt_only/krx_nxt_integrated`의 직교 차원이다. KRX 정규장 `broker_route=SOR`를 별도 venue나 오염으로 판정하지 않는다. 통합 시세의 underlying event venue가 증명되지 않으면 `UNKNOWN + missing reason`으로 보존하며 NXT 전용 판단 근거로 쓰지 않는다.
+- preflight blocked이면 entry/watch/Gatekeeper/holding score/holding-flow provider 호출은 0회여야 한다. entry는 DROP/WAIT, holding score는 unusable 50, holding-flow는 deterministic exit 후보 유지, overnight는 `SELL_TODAY`로 닫는다. post-probe/leg-reprice에는 새 AI 호출을 만들지 않고 사용한 AI snapshot과 fresh market snapshot을 함께 기록한다.
+- scale-in support와 AI exit defer는 fresh broker holding qty, open BUY/SELL order, snapshot age와 venue-matching broker route가 정합할 때만 허용한다. hard/protect/emergency/trailing, P1 가격 owner, 중앙 수량 owner와 provider route는 변경하지 않는다.
+- 첫 적용은 clean baseline 이후 real 이벤트 replay로 생성한 `ai_input_quality_baseline_YYYY-MM-DD.json`의 `baseline_v1` 보호 정책을 사용한다. 이 artifact는 legacy quality proxy와 downstream 실주문 route lineage로 결손·stale·conflict 패턴을 재현하지만 이를 exact provider-input provenance로 승격하지 않는다. provider/scale-in/exit-defer/overnight HOLD 권한을 줄이는 데만 사용하며 real overnight broker reconciliation처럼 검증 표본이 없는 경로는 제한형으로 유지한다.
+- `entry_context_intraday_probe_YYYY-MM-DD.json`의 venue/session/decision-point exact matrix는 `exact_v2` 승격 기준이다. clean baseline 이후 exact provenance row만 사용하며 valid row가 0인 cohort는 `not_ready`다. venue cohort를 합산하거나 SOR 주문 route를 venue로 세거나 `baseline_v1` proxy 표본으로 exact matrix를 통과시키지 않는다. 각 provider payload에는 schema, SHA-256, byte size, snapshot ID, venue/broker/market-data route와 canonical candle owner를 남기며 동일 분봉을 summary/raw/context로 중복 전송하지 않는다.
+- `KORSTOCKSCAN_AI_INPUT_PREFLIGHT_MODE=baseline_v1|exact_v2`를 명시한다. 선택 mode의 artifact가 없거나 계약이 손상되면 enhanced AI 입력은 fail-closed한다. 현재 PID 기동 후 생성된 PASS artifact는 `ready_pending_restart`이며 artifact보다 나중에 시작된 graceful restart PID에서만 활성화한다.
+- AI 판단 품질은 input preflight와 별도로 `ai_decision_trace_v1`로 관측한다. 감시/진입, Gatekeeper, entry-price, holding score/flow, overnight는 immutable `decision_trace_id`, prompt·payload SHA-256, sanitized exact input, provider/model/action/score, snapshot·venue·route와 lifecycle correlation을 남긴다. post-probe는 원래 entry trace ID를 `probe_bundle_id`에 전파하며 신규 AI 호출을 만들지 않는다.
+- exact user input과 prompt는 각각 hash별 1회 registry에 저장한다. 민감 필드가 탐지되면 값을 제거하고 `replay_exact=false`로 표시하며, redacted payload를 exact replay 입력으로 사용하지 않는다. trace 저장 실패가 provider·주문·기존 deterministic 판단을 바꾸어서는 안 된다.
+- 각 trace는 `ai_decision_outcome_label_v1` pending 행을 만들고 1/3/5/10/20/30/60분 horizon이 성숙한 뒤 별도 producer가 MFE/MAE, target/adverse first-hit, submit/fill/PnL을 연결한다. trace와 counterfactual은 `runtime_effect=false`, `allowed_runtime_apply=false`이며 실현손익과 합산하거나 단독 prompt/runtime 승격 근거로 사용하지 않는다.
+
 ## KRX 작업지시문
 
 `[종료시각]`까지 EV 및 순이익 극대화를 위한 KRX 장중 모니터링·보완 작업을 수행한다.

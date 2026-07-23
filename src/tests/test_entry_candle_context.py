@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import json
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -310,6 +311,38 @@ def test_actual_ws_route_keys_select_nxt_and_premarket_al_requires_proof(monkeyp
     assert "premarket_al_proof_missing" in premarket["risk_flags"]
 
 
+def test_krx_sor_order_route_stays_krx_cohort_with_integrated_market_data(
+    monkeypatch,
+):
+    _enable(monkeypatch)
+    ws = _ws(10000)
+    ws["market_suffix"] = "_AL"
+    ws["market_route"] = "krx_nxt_integrated"
+
+    context = build_entry_candle_context(
+        "token",
+        "000660",
+        ws,
+        venue="SOR",
+        session="krx_regular",
+        now_ts=datetime(2026, 7, 23, 10, 0, tzinfo=KST),
+        recent_candles=_candles(20, start_minute=40),
+        source_meta={},
+        broker_route="SOR",
+    )
+
+    assert context["venue"] == "KRX"
+    assert context["request_code"] == "000660_AL"
+    assert context["rest_route"] == "_AL"
+    assert context["ws_route"] == "krx_nxt_integrated"
+    assert context["source_quality"]["status"] == "fresh_consistent"
+    snapshot = context["ai_market_snapshot_v1"]
+    assert snapshot["effective_venue"] == "KRX"
+    assert snapshot["broker_route"] == "SOR"
+    assert snapshot["market_data_route"] == "krx_nxt_integrated"
+    assert snapshot["underlying_event_venue"] is None
+
+
 def test_nxt_aftermarket_accepts_integrated_ws_only_with_closed_session_proof(
     monkeypatch,
 ):
@@ -501,8 +534,18 @@ def test_hot_and_entry_price_payloads_include_common_context(monkeypatch):
     context = {
         **_guard_context(regime="range"),
         "schema": "entry_candle_context_v1",
+        "enabled": True,
         "venue": "KRX",
         "session": "krx_regular",
+        "ai_market_snapshot_v1": {
+            "schema": "ai_market_snapshot_v1",
+            "snapshot_id": "aims-payload-contract",
+            "effective_venue": "KRX",
+            "broker_route": "SOR",
+            "market_data_route": "krx_nxt_integrated",
+            "underlying_event_venue": None,
+            "underlying_event_venue_source": "not_provided",
+        },
         "current_session_bar_count": 10,
         "completed_bar_count": 10,
         "forming_bar_present": False,
@@ -527,8 +570,19 @@ def test_hot_and_entry_price_payloads_include_common_context(monkeypatch):
         price_ctx={},
         candle_context=context,
     )
+    price_payload = json.loads(price)
     assert hot["entry_candle_context"]["schema"] == "entry_candle_context_v1"
-    assert '"entry_candle_context"' in price
+    assert hot["entry_candle_context"]["bar_schema"]["order"] == "oldest_to_latest"
+    assert hot["ai_market_snapshot_v1"]["snapshot_id"] == "aims-payload-contract"
+    assert hot["ai_input_semantics"]["canonical_candle_owner"] == (
+        "entry_candle_context"
+    )
+    assert price_payload["entry_candle_context"]["schema"] == (
+        "entry_candle_context_v1"
+    )
+    assert "recent_candles" not in price_payload
+    assert "candle_summary" not in price_payload
+    assert price_payload["ai_input_semantics"]["duplicate_candle_views_omitted"] is True
 
 
 def test_gatekeeper_packet_and_entry_prompts_keep_compact_context_contract(monkeypatch):

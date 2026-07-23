@@ -981,6 +981,48 @@ def get_unfilled_order_snapshot_ka10075(
     return _normalize_order_history_rows(results=results, source_api="ka10075")
 
 
+def get_unfilled_order_snapshot_ka10075_with_meta(
+    token,
+    *,
+    stk_cd="",
+    all_stk_tp="1",
+    trde_tp="0",
+    stex_tp="0",
+    extra_payload=None,
+):
+    """Return normalized open orders plus an explicit request-success contract."""
+
+    url = get_api_url("/api/dostk/acnt")
+    payload = {
+        "all_stk_tp": str(all_stk_tp or "1"),
+        "trde_tp": str(trde_tp or "0"),
+        "stk_cd": str(stk_cd or ""),
+        "stex_tp": str(stex_tp or "0"),
+    }
+    if extra_payload:
+        payload.update({k: v for k, v in dict(extra_payload).items() if v is not None})
+    results, source_meta = _fetch_kiwoom_api_continuous_with_meta(
+        url=url,
+        token=token,
+        api_id="ka10075",
+        payload=payload,
+        use_continuous=True,
+    )
+    source_meta = _normalize_kiwoom_source_meta(source_meta, "ka10075")
+    response_codes = [
+        str((row or {}).get("return_code", (row or {}).get("rt_cd", "0")))
+        for row in results or []
+        if isinstance(row, dict)
+    ]
+    source_meta["response_codes"] = response_codes
+    source_meta["request_succeeded"] = bool(results) and all(
+        code == "0" for code in response_codes
+    )
+    rows = _normalize_order_history_rows(results=results, source_api="ka10075")
+    source_meta["received_count"] = len(rows)
+    return rows, source_meta
+
+
 def get_order_reference_snapshot_2nd_pass(
     token, *, qry_tp="0", stk_bond_tp="0", sell_tp="0"
 ):
@@ -4177,12 +4219,63 @@ def build_realtime_analysis_context(
     best_ask = _coerce_int(asks[0].get("price") if asks else 0, 0)
     best_bid = _coerce_int(bids[0].get("price") if bids else 0, 0)
 
-    strength_pack = check_execution_strength_ka10046(token, code)
-    program_pack = get_program_flow_realtime(token, code, ws_data)
-    investor_pack = get_investor_flow_summary_ka10059(token, code)
-    tick_pack = summarize_ticks_for_realtime_ka10003(token, code, limit=20)
-    minute_candles = get_minute_candles_ka10080(token, code, limit=40)
-    daily_df = get_daily_ohlcv_ka10081_df(token, code)
+    rest_source_manifest = {}
+
+    def _capture_source(name, producer, default):
+        started_at = time.time()
+        try:
+            value = producer()
+            error = None
+        except Exception as exc:
+            value = default
+            error = f"{type(exc).__name__}:{str(exc)[:160]}"
+        observed_at = time.time()
+        if isinstance(value, pd.DataFrame):
+            present = not value.empty
+        else:
+            present = bool(value)
+        rest_source_manifest[name] = {
+            "source": name,
+            "observed_at": datetime.fromtimestamp(observed_at).isoformat(),
+            "received_ts_ms": int(observed_at * 1000),
+            "latency_ms": int((observed_at - started_at) * 1000),
+            "quality": ("error" if error else ("present" if present else "missing")),
+            "missing_reason": (
+                error if error else (None if present else "empty_response")
+            ),
+        }
+        return value
+
+    strength_pack = _capture_source(
+        "ka10046_execution_strength",
+        lambda: check_execution_strength_ka10046(token, code),
+        {},
+    )
+    program_pack = _capture_source(
+        "program_flow_realtime",
+        lambda: get_program_flow_realtime(token, code, ws_data),
+        {},
+    )
+    investor_pack = _capture_source(
+        "ka10059_investor_flow",
+        lambda: get_investor_flow_summary_ka10059(token, code),
+        {},
+    )
+    tick_pack = _capture_source(
+        "ka10003_signed_tape",
+        lambda: summarize_ticks_for_realtime_ka10003(token, code, limit=20),
+        {},
+    )
+    minute_candles = _capture_source(
+        "ka10080_minute_candles",
+        lambda: get_minute_candles_ka10080(token, code, limit=40),
+        [],
+    )
+    daily_df = _capture_source(
+        "ka10081_daily_ohlcv",
+        lambda: get_daily_ohlcv_ka10081_df(token, code),
+        pd.DataFrame(),
+    )
 
     if today_vol <= 0:
         today_vol = _coerce_int(strength_pack.get("trde_qty"), 0)
@@ -4555,5 +4648,44 @@ def build_realtime_analysis_context(
         "prev_low": prev_low,
         "near_20d_high_pct": near_20d_high_pct,
         "drawdown_from_high_pct": drawdown_from_high_pct,
+        "source_manifest": rest_source_manifest,
+        "null_aware_sources": {
+            "execution_strength": {
+                "value": (
+                    strength_pack
+                    if rest_source_manifest["ka10046_execution_strength"]["quality"]
+                    == "present"
+                    else None
+                ),
+                **rest_source_manifest["ka10046_execution_strength"],
+            },
+            "program_flow": {
+                "value": (
+                    program_pack
+                    if rest_source_manifest["program_flow_realtime"]["quality"]
+                    == "present"
+                    else None
+                ),
+                **rest_source_manifest["program_flow_realtime"],
+            },
+            "investor_flow": {
+                "value": (
+                    investor_pack
+                    if rest_source_manifest["ka10059_investor_flow"]["quality"]
+                    == "present"
+                    else None
+                ),
+                **rest_source_manifest["ka10059_investor_flow"],
+            },
+            "signed_tape": {
+                "value": (
+                    tick_pack
+                    if rest_source_manifest["ka10003_signed_tape"]["quality"]
+                    == "present"
+                    else None
+                ),
+                **rest_source_manifest["ka10003_signed_tape"],
+            },
+        },
     }
     return ctx

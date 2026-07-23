@@ -14,6 +14,12 @@ from datetime import datetime, time as dt_time
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from src.engine.scalping.ai_market_snapshot import (
+    ai_input_preflight,
+    ai_market_snapshot_log_fields,
+    build_ai_market_snapshot,
+    runtime_preflight_required,
+)
 from src.engine.scalping.entry_candle_context import build_session_candle_source
 from src.engine.scalping.market_data_enrichment import (
     rest_signed_tape_tick_freshness,
@@ -668,11 +674,17 @@ def build_holding_decision_context(
         broker_qty_raw,
         0,
     )
-    broker_snapshot_age_sec = _safe_float(
-        position.get("broker_snapshot_age_sec")
-        or position.get("holding_snapshot_age_sec"),
-        None,
-    )
+    broker_snapshot_at = _safe_float(position.get("broker_snapshot_at"), None)
+    if broker_snapshot_at is not None and broker_snapshot_at > 0:
+        broker_snapshot_age_sec = max(0.0, now_epoch - broker_snapshot_at)
+    else:
+        broker_snapshot_age_sec = _safe_float(
+            position.get("broker_snapshot_age_sec"), None
+        )
+        if broker_snapshot_age_sec is None:
+            broker_snapshot_age_sec = _safe_float(
+                position.get("holding_snapshot_age_sec"), None
+            )
     curr_price = abs(_safe_int(ws.get("curr") or position.get("curr_price"), 0))
     mark_pnl_pct = (
         round((curr_price / avg_price - 1.0) * 100.0, 4)
@@ -897,6 +909,53 @@ def build_holding_decision_context(
         },
         "observation_contract": OBSERVATION_CONTRACT,
     }
+    requires_reconciliation = (
+        "flow" in str(decision_kind or "").lower()
+        or "overnight" in str(decision_kind or "").lower()
+    )
+    context["ai_market_snapshot_v1"] = build_ai_market_snapshot(
+        stock_code=code,
+        decision_stage=str(decision_kind or "holding"),
+        ws_data=ws,
+        effective_venue=str(candle.get("venue") or ""),
+        session_bucket=str(candle.get("session") or ""),
+        broker_route=(
+            position.get("entry_execution_broker_route")
+            or position.get("broker_route")
+            or position.get("last_fill_broker_route")
+            or position.get("early_volatility_tp_broker_route")
+            or position.get("entry_order_exchange")
+            or position.get("exchange")
+            or position.get("market_route")
+        ),
+        candle_context=candle,
+        position=position,
+        now_ts=now_epoch,
+        require_position_reconciliation=requires_reconciliation,
+    )
+    preflight = ai_input_preflight(context)
+    if (
+        enabled
+        and runtime_preflight_required()
+        and not bool(preflight.get("allowed", False))
+    ):
+        preflight_blockers = [
+            f"ai_preflight:{blocker}" for blocker in (preflight.get("blockers") or [])
+        ]
+        context["source_quality"]["blockers"] = sorted(
+            set(context["source_quality"]["blockers"] + preflight_blockers)
+        )
+        context["source_quality"]["status"] = "blocked"
+        context["source_quality"]["hold_defer_allowed"] = False
+    context["source_quality"]["position_reconciled"] = bool(
+        preflight.get("position_reconciled", False)
+    )
+    context["source_quality"]["scale_in_support_allowed"] = bool(
+        preflight.get("allowed", False)
+        and preflight.get("position_reconciled", False)
+        and not active_exit_token
+        and not order_conflict
+    )
     context["flow_signature"] = _flow_signature(context)
     return context
 
@@ -1088,8 +1147,11 @@ def holding_decision_context_model_payload(
                     "orderbook_or_ofi_fresh",
                     "position_valid",
                     "order_consistent",
+                    "position_reconciled",
+                    "scale_in_support_allowed",
                 ),
             ),
+            "ai_market_snapshot_v1": source.get("ai_market_snapshot_v1"),
         }
     )
     return _prune(payload)
@@ -1184,6 +1246,10 @@ def holding_decision_context_log_fields(
         ),
         "holding_context_open_buy_qty": reconciliation.get("open_buy_qty"),
         "holding_context_open_sell_qty": reconciliation.get("open_sell_qty"),
+        **ai_market_snapshot_log_fields(
+            context,
+            observation_contract_prefix=observation_contract_prefix,
+        ),
         "holding_context_exit_token_active": bool(
             reconciliation.get("exit_token_active", False)
         ),

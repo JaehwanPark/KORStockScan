@@ -53,6 +53,266 @@ def _has_hangul(text: str) -> bool:
     return any("\uac00" <= char <= "\ud7a3" for char in text)
 
 
+def _blocked_ai_context():
+    snapshot = {
+        "schema": "ai_market_snapshot_v1",
+        "snapshot_id": "aims-blocked",
+        "captured_at": "2026-07-23T10:00:00+09:00",
+        "decision_stage": "entry_screen",
+        "effective_venue": "KRX",
+        "session_bucket": "krx_regular",
+        "ai_input_preflight_v1": {
+            "schema": "ai_input_preflight_v1",
+            "allowed": False,
+            "source_allowed": False,
+            "status": "blocked",
+            "blockers": ["bbo_stale"],
+            "missing_sources": [],
+            "venue_consistent": True,
+            "position_reconciled": False,
+            "max_source_skew_ms": 0,
+        },
+    }
+    return {
+        "schema": "entry_candle_context_v1",
+        "enabled": True,
+        "ai_market_snapshot_v1": snapshot,
+        "source_quality": {"status": "blocked", "blockers": ["bbo_stale"]},
+    }
+
+
+def test_ai_input_contract_records_payload_identity_and_route_dimensions():
+    engine = _build_engine()
+    payload = json.dumps(
+        {
+            "input_schema": "entry_screen_hot_v1",
+            "ai_market_snapshot_v1": {
+                "schema": "ai_market_snapshot_v1",
+                "snapshot_id": "aims-contract",
+                "effective_venue": "KRX",
+                "broker_route": "SOR",
+                "market_data_route": "krx_nxt_integrated",
+                "underlying_event_venue": None,
+                "underlying_event_venue_source": "not_provided",
+            },
+            "ai_input_semantics": {
+                "canonical_candle_owner": "entry_candle_context",
+                "duplicate_candle_views_omitted": True,
+            },
+        },
+        separators=(",", ":"),
+    )
+
+    fields = engine._resolve_ai_input_contract_fields(
+        payload,
+        default_schema="entry_screen_hot_v1",
+        default_mode="structured_json",
+    )
+
+    assert len(fields["ai_input_payload_sha256"]) == 64
+    assert fields["ai_input_payload_bytes"] == len(payload.encode("utf-8"))
+    assert fields["ai_input_snapshot_id"] == "aims-contract"
+    assert fields["ai_market_snapshot_id"] == "aims-contract"
+    assert fields["ai_input_effective_venue"] == "KRX"
+    assert fields["ai_input_broker_route"] == "SOR"
+    assert fields["ai_input_market_data_route"] == "krx_nxt_integrated"
+    assert fields["ai_input_underlying_event_venue"] is None
+    assert fields["ai_input_underlying_event_venue_source"] == "not_provided"
+    assert fields["ai_input_canonical_candle_owner"] == "entry_candle_context"
+    assert fields["ai_input_duplicate_candle_views_omitted"] is True
+
+
+def test_cached_analysis_gets_new_trace_linked_to_live_parent(monkeypatch):
+    engine = _build_engine()
+    seen = []
+
+    def _record(payload, **_kwargs):
+        seen.append(dict(payload))
+        return {"ai_decision_trace_id": f"trace-{len(seen)}"}
+
+    monkeypatch.setattr(ai_engine_openai_module, "record_ai_decision_trace", _record)
+    live = engine._annotate_analysis_result(
+        {"action": "WAIT", "ai_decision_trace_id": "trace-live"},
+        prompt_type="scalping_entry",
+        prompt_version="entry_v1",
+        response_ms=20,
+        parse_ok=True,
+        parse_fail=False,
+        fallback_score_50=False,
+        cache_hit=False,
+        cache_mode="miss",
+        result_source="live",
+    )
+    cached = engine._annotate_analysis_result(
+        live,
+        prompt_type="scalping_entry",
+        prompt_version="entry_v1",
+        response_ms=1,
+        parse_ok=True,
+        parse_fail=False,
+        fallback_score_50=False,
+        cache_hit=True,
+        cache_mode="hit",
+        result_source="cache",
+    )
+
+    assert cached["ai_decision_trace_id"] == "trace-2"
+    assert seen[1]["ai_decision_parent_trace_id"] == "trace-1"
+    assert seen[1].get("openai_request_id") is None
+
+
+def test_ai_input_preflight_blocks_provider_calls(monkeypatch):
+    engine = _build_engine()
+    monkeypatch.setenv("KORSTOCKSCAN_AI_INPUT_PREFLIGHT_REQUIRED", "true")
+    monkeypatch.setattr(
+        engine,
+        "_call_openai_safe",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("provider must not be called")
+        ),
+    )
+    candle_context = _blocked_ai_context()
+    holding_context = {
+        **candle_context,
+        "schema": "holding_decision_context_v1",
+        "decision_kind": "holding_score",
+    }
+
+    entry = engine.analyze_target(
+        "테스트",
+        {},
+        [],
+        [],
+        strategy="SCALPING",
+        candle_context=candle_context,
+    )
+    entry_price = engine.evaluate_scalping_entry_price(
+        "테스트",
+        "005930",
+        {},
+        [],
+        [],
+        {"resolved_order_price": 70_000},
+        candle_context=candle_context,
+    )
+    gatekeeper = engine.evaluate_realtime_gatekeeper(
+        "테스트",
+        "005930",
+        {"entry_candle_context": candle_context},
+        analysis_mode="SCALP",
+    )
+    score = engine.evaluate_scalping_holding_score(
+        "테스트",
+        "005930",
+        {},
+        [],
+        [],
+        {},
+        holding_context=holding_context,
+    )
+    flow = engine.evaluate_scalping_holding_flow(
+        "테스트",
+        "005930",
+        {},
+        [],
+        [],
+        {},
+        holding_context=holding_context,
+    )
+    overnight = engine.evaluate_scalping_overnight_decision(
+        "테스트",
+        "005930",
+        {},
+        holding_context=holding_context,
+    )
+
+    assert entry["action"] == "DROP"
+    assert entry_price["action"] == "USE_DEFENSIVE"
+    assert gatekeeper["allow_entry"] is False
+    assert score["score"] == 50
+    assert score["holding_score_effective_usable"] is False
+    assert flow["action"] == "EXIT"
+    assert overnight["action"] == "SELL_TODAY"
+    assert all(
+        result["ai_result_source"] == "input_preflight_blocked"
+        for result in (entry, entry_price, score, flow, overnight)
+    )
+
+
+def test_required_preflight_blocks_when_context_is_missing(monkeypatch):
+    engine = _build_engine()
+    monkeypatch.setenv("KORSTOCKSCAN_AI_INPUT_PREFLIGHT_MODE", "baseline_v1")
+    monkeypatch.setattr(
+        engine,
+        "_call_openai_safe",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("provider must not be called without required snapshot")
+        ),
+    )
+
+    entry = engine.analyze_target(
+        "테스트",
+        {},
+        [],
+        [],
+        strategy="SCALPING",
+        candle_context=None,
+    )
+    holding = engine.evaluate_scalping_holding_score(
+        "테스트",
+        "005930",
+        {},
+        [],
+        [],
+        {},
+        holding_context=None,
+    )
+    overnight = engine.evaluate_scalping_overnight_decision(
+        "테스트",
+        "005930",
+        {},
+        holding_context=None,
+    )
+
+    assert entry["action"] == "DROP"
+    assert entry["provider_called"] is False
+    assert holding["score"] == 50
+    assert holding["provider_called"] is False
+    assert overnight["action"] == "SELL_TODAY"
+    assert overnight["provider_called"] is False
+
+
+def test_ai_input_preflight_does_not_activate_without_master_flag(monkeypatch):
+    engine = _build_engine()
+    monkeypatch.delenv("KORSTOCKSCAN_AI_INPUT_PREFLIGHT_REQUIRED", raising=False)
+    calls = []
+
+    def fake_provider(*args, **kwargs):
+        calls.append(kwargs.get("endpoint_name"))
+        return {
+            "action": "USE_DEFENSIVE",
+            "order_price": 70_000,
+            "confidence": 70,
+            "reason": "fresh provider result",
+            "max_wait_sec": 90,
+        }
+
+    monkeypatch.setattr(engine, "_call_openai_safe", fake_provider)
+
+    result = engine.evaluate_scalping_entry_price(
+        "테스트",
+        "005930",
+        {},
+        [],
+        [],
+        {"resolved_order_price": 70_000},
+        candle_context=_blocked_ai_context(),
+    )
+
+    assert calls == ["entry_price"]
+    assert result["ai_result_source"] == "live"
+
+
 def test_remote_entry_guard_ignores_untrusted_pressure_axes(monkeypatch):
     engine = _build_engine()
     monkeypatch.setattr(
@@ -836,6 +1096,7 @@ def _holding_matrix_runtime_context(cache_token: str) -> dict:
 def test_analyze_target_uses_short_ttl_cache(monkeypatch):
     engine = _build_engine()
     call_count = {"value": 0}
+    trace_count = {"value": 0}
 
     monkeypatch.setattr(
         engine, "_format_market_data", lambda ws, ticks, candles: "packet"
@@ -846,6 +1107,14 @@ def test_analyze_target_uses_short_ttl_cache(monkeypatch):
         return {"action": "BUY", "score": 88, "reason": "strong"}
 
     monkeypatch.setattr(engine, "_call_openai_safe", _fake_call)
+
+    def _fake_trace(_payload, **_kwargs):
+        trace_count["value"] += 1
+        return {"ai_decision_trace_id": f"trace-{trace_count['value']}"}
+
+    monkeypatch.setattr(
+        ai_engine_openai_module, "record_ai_decision_trace", _fake_trace
+    )
 
     ws_data = {"curr": 10000, "fluctuation": 2.1, "orderbook": {"asks": [], "bids": []}}
     recent_ticks = [{"time": "10:00:00", "price": 10000, "volume": 10, "dir": "BUY"}]
@@ -863,6 +1132,9 @@ def test_analyze_target_uses_short_ttl_cache(monkeypatch):
     assert second["cache_hit"] is True
     assert second["action"] == first["action"]
     assert first["ai_model"] == "gpt-5.4-nano"
+    assert first["ai_decision_trace_id"] == "trace-1"
+    assert second["ai_decision_trace_id"] == "trace-2"
+    assert second["ai_decision_parent_trace_id"] == "trace-1"
 
 
 def test_holding_cache_provenance_reports_changed_bucket(monkeypatch):
@@ -972,6 +1244,8 @@ def test_gatekeeper_cache_ignores_captured_at(monkeypatch):
 
     def _fake_report_payload(*args, **kwargs):
         call_count["value"] += 1
+        context = kwargs["input_data_text"]
+        snapshot_id = context["ai_market_snapshot_v1"]["snapshot_id"]
         return {
             "report": "[즉시 매수]\n수급 양호",
             "selected_mode": "SWING",
@@ -980,6 +1254,11 @@ def test_gatekeeper_cache_ignores_captured_at(monkeypatch):
             "model_call_ms": 0,
             "total_ms": 0,
             "error": "",
+            "input_contract_fields": {
+                "ai_input_snapshot_id": snapshot_id,
+                "ai_input_payload_sha256": "a" * 64,
+                "ai_input_payload_bytes": 100,
+            },
         }
 
     monkeypatch.setattr(
@@ -994,9 +1273,29 @@ def test_gatekeeper_cache_ignores_captured_at(monkeypatch):
         "tick_trade_value": 21000,
         "net_buy_exec_volume": 350,
         "captured_at": "2026-04-03 10:00:00",
+        "ai_market_snapshot_v1": {
+            "schema": "ai_market_snapshot_v1",
+            "snapshot_id": "aims-gatekeeper-1",
+            "ai_input_preflight_v1": {
+                "schema": "ai_input_preflight_v1",
+                "allowed": True,
+                "source_allowed": True,
+                "status": "fresh_consistent",
+                "blockers": [],
+                "missing_sources": [],
+                "venue_consistent": True,
+                "position_reconciled": False,
+                "broker_route_matches_venue": True,
+                "max_source_skew_ms": 0,
+            },
+        },
     }
     later_ctx = dict(base_ctx)
     later_ctx["captured_at"] = "2026-04-03 10:00:08"
+    later_ctx["ai_market_snapshot_v1"] = {
+        **base_ctx["ai_market_snapshot_v1"],
+        "snapshot_id": "aims-gatekeeper-2",
+    }
 
     first = engine.evaluate_realtime_gatekeeper(
         "테스트", "000001", base_ctx, analysis_mode="SWING"
@@ -1010,6 +1309,12 @@ def test_gatekeeper_cache_ignores_captured_at(monkeypatch):
     assert second["cache_hit"] is True
     assert second["allow_entry"] is True
     assert second["action_key"] == "immediate_buy"
+    assert first["provider_called"] is True
+    assert first["ai_decision_snapshot_id"] == "aims-gatekeeper-1"
+    assert second["provider_called"] is False
+    assert second["ai_result_source"] == "cache"
+    assert second["ai_decision_snapshot_id"] == "aims-gatekeeper-1"
+    assert second["ai_market_snapshot_id"] == "aims-gatekeeper-2"
 
 
 def test_gatekeeper_cache_absorbs_small_context_noise(monkeypatch):

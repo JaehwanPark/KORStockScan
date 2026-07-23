@@ -3229,6 +3229,7 @@ def test_entry_ai_submit_authority_allows_fresh_live_score(monkeypatch):
             "position_tag": "SCANNER",
             "last_watching_ai_confirmed_at": now_ts - 20.0,
             "last_watching_ai_result_source": "live",
+            "last_watching_ai_decision_trace_id": "analyze_target:005930:trace",
         },
         latency_gate={
             "decision": "ALLOW_NORMAL",
@@ -3241,6 +3242,10 @@ def test_entry_ai_submit_authority_allows_fresh_live_score(monkeypatch):
     assert decision["blocked"] is False
     assert decision["reason"] == "ok"
     assert decision["entry_ai_submit_authority_fresh_prior"] is True
+    assert (
+        decision["entry_ai_submit_authority_decision_trace_id"]
+        == "analyze_target:005930:trace"
+    )
 
 
 def test_entry_ai_submit_authority_vetoes_fresh_drop_for_real_buy(monkeypatch):
@@ -24335,6 +24340,108 @@ def test_entry_ai_price_canary_improves_live_order_price(monkeypatch):
     ][0]
     assert applied["openai_endpoint_name"] == "entry_price"
     assert applied["openai_ws_roundtrip_ms"] == 1200
+
+
+def test_entry_ai_price_preflight_blocks_submit_before_provider(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_AI_INPUT_PREFLIGHT_REQUIRED", "true")
+    monkeypatch.setattr(
+        state_handlers,
+        "TRADING_RULES",
+        replace(CONFIG, SCALPING_ENTRY_AI_PRICE_CANARY_ENABLED=True),
+    )
+    monkeypatch.setattr(
+        state_handlers, "entry_candle_context_enabled", lambda **kwargs: True
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils,
+        "get_tick_history_ka10003",
+        lambda *args, **kwargs: [],
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils,
+        "get_minute_candles_ka10080_with_meta",
+        lambda *args, **kwargs: ([], {}),
+    )
+    blocked_context = {
+        "schema": "entry_candle_context_v1",
+        "enabled": True,
+        "source_quality": {"status": "fresh_consistent", "blockers": []},
+        "ai_market_snapshot_v1": {
+            "schema": "ai_market_snapshot_v1",
+            "snapshot_id": "aims-entry-price-blocked",
+            "captured_at": "2026-07-23T10:00:00+09:00",
+            "decision_stage": "entry_price",
+            "effective_venue": "KRX",
+            "session_bucket": "krx_regular",
+            "ai_input_preflight_v1": {
+                "schema": "ai_input_preflight_v1",
+                "allowed": False,
+                "source_allowed": True,
+                "status": "blocked",
+                "blockers": ["runtime_preflight_artifact_not_ready"],
+                "missing_sources": [],
+                "venue_consistent": True,
+                "position_reconciled": False,
+                "max_source_skew_ms": 0,
+            },
+        },
+    }
+    monkeypatch.setattr(
+        state_handlers,
+        "build_entry_candle_context",
+        lambda *args, **kwargs: blocked_context,
+    )
+    logs = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+
+    class DummyAI:
+        def evaluate_scalping_entry_price(self, *args, **kwargs):
+            raise AssertionError("provider must not be called")
+
+    latency_gate = {
+        "target_buy_price": 9_980,
+        "latency_guarded_order_price": 9_990,
+        "normal_defensive_order_price": 9_990,
+        "order_price": 9_990,
+        "price_resolution_reason": "defensive_order_price",
+        "latency_state": "SAFE",
+    }
+
+    adjusted, touched = state_handlers._apply_entry_ai_price_canary(
+        stock={
+            "name": "TEST",
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "prob": 0.8,
+        },
+        code="123456",
+        strategy="SCALPING",
+        ws_data={"curr": 10_020},
+        ai_engine=DummyAI(),
+        latency_gate=latency_gate,
+        planned_orders=[
+            {
+                "tag": "normal",
+                "qty": 1,
+                "price": 9_990,
+                "tif": "DAY",
+                "order_type": "LIMIT",
+            }
+        ],
+        curr_price=10_020,
+        best_bid=10_020,
+        best_ask=10_030,
+    )
+
+    assert adjusted == []
+    assert touched is True
+    assert latency_gate["ai_entry_price_provider_call_count"] == 0
+    assert latency_gate["ai_entry_price_canary_submit_blocked"] is True
+    assert any(stage == "entry_ai_price_input_preflight_block" for stage, _ in logs)
 
 
 def test_entry_ai_price_canary_rebases_defensive_price_to_fresh_bid(monkeypatch):

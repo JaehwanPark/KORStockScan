@@ -61,6 +61,12 @@ from src.engine.scalping.microstructure_reaction_context import (
     infer_tick_aggressor_side,
     neutral_microstructure_reaction_context,
 )
+from src.engine.scalping.ai_market_snapshot import (
+    ai_input_preflight,
+    ai_market_snapshot_log_fields,
+    build_ai_market_snapshot,
+    runtime_preflight_required,
+)
 from src.engine.scalping.entry_candle_context import (
     apply_entry_candle_hybrid_guard,
     build_entry_candle_context,
@@ -19469,8 +19475,21 @@ def _holding_score_runtime_context(
     partial_support_allowed = bool(
         usable and data_quality == "partial" and microstructure_confirmed
     )
+    broker_snapshot_age_sec = _safe_float(stock.get("broker_snapshot_age_sec"), None)
+    if broker_snapshot_age_sec is None:
+        broker_snapshot_at = _safe_float(stock.get("broker_snapshot_at"), 0.0)
+        if broker_snapshot_at > 0:
+            broker_snapshot_age_sec = max(0.0, now_ts - broker_snapshot_at)
+    position_reconciled = bool(
+        stock.get("broker_holding_qty") is not None
+        and broker_snapshot_age_sec is not None
+        and broker_snapshot_age_sec <= 60.0
+        and "open_buy_qty" in stock
+        and "open_sell_qty" in stock
+    )
     usable_for_scale_in_support = bool(
-        (usable and data_quality == "fresh") or partial_support_allowed
+        ((usable and data_quality == "fresh") or partial_support_allowed)
+        and (position_reconciled or not runtime_preflight_required())
     )
     usable_for_soft_grace = bool(
         (usable and data_quality == "fresh") or partial_support_allowed
@@ -19511,6 +19530,8 @@ def _holding_score_runtime_context(
         "excluded_reason": excluded_reason,
         "holding_score_role_gate": role_gate,
         "microstructure_confirmed": bool(microstructure_confirmed),
+        "position_reconciled": position_reconciled,
+        "broker_snapshot_age_sec": broker_snapshot_age_sec,
         "usable_for_scale_in_support": usable_for_scale_in_support,
         "usable_for_negative_exit": usable_for_negative_exit,
         "usable_for_state_history": usable_for_state_history,
@@ -19544,6 +19565,12 @@ def _holding_score_role_log_fields(context: dict | None) -> dict:
         ),
         "holding_score_role_microstructure_confirmed": bool(
             context.get("microstructure_confirmed", False)
+        ),
+        "holding_score_role_position_reconciled": bool(
+            context.get("position_reconciled", False)
+        ),
+        "holding_score_role_broker_snapshot_age_sec": context.get(
+            "broker_snapshot_age_sec", "-"
         ),
         "holding_score_role_source": context.get("source", "-"),
         "holding_score_role_data_quality": context.get("data_quality", "-"),
@@ -30265,6 +30292,10 @@ def _entry_ai_submit_authority_fields(
         "entry_ai_submit_authority_fresh_prior": bool(fresh_prior),
         "entry_ai_submit_authority_action_guard_active": bool(action_guard_active),
         "entry_ai_submit_authority_action_source": authoritative_action_source,
+        "entry_ai_submit_authority_decision_trace_id": str(
+            stock.get("last_watching_ai_decision_trace_id") or ""
+        )
+        or "not_available",
         "entry_ai_submit_authority_fresh_drop_veto": bool(fresh_drop_veto),
         "entry_ai_submit_authority_action_recognized": bool(recognized_action),
         "entry_ai_submit_authority_action_authority_unavailable": bool(
@@ -31162,6 +31193,14 @@ def _retry_entry_ai_submit_authority_before_block(
                 "last_watching_ai_reason": reason,
                 "last_watching_ai_confirmed_at": now_ts,
                 "last_watching_ai_result_source": result_source,
+                "last_watching_ai_snapshot_id": (
+                    ai_decision.get("ai_decision_snapshot_id")
+                    or ai_decision.get("ai_input_snapshot_id")
+                    or ai_decision.get("ai_market_snapshot_id")
+                ),
+                "last_watching_ai_decision_trace_id": (
+                    ai_decision.get("ai_decision_trace_id") or ""
+                ),
                 "last_watching_ai_source_quality_fields": source_quality_fields,
                 "last_watching_ai_call_trigger_reason": "pre_submit_entry_ai_authority_retry",
             },
@@ -32589,6 +32628,13 @@ def _entry_split_probe_observation_contract_fields(
     if market_session_bucket:
         fields["market_session_bucket"] = market_session_bucket
         fields["rising_missed_market_session_bucket"] = market_session_bucket
+    ai_decision_trace_id = str(
+        stock.get("entry_split_probe_ai_decision_trace_id")
+        or stock.get("last_watching_ai_decision_trace_id")
+        or ""
+    ).strip()
+    if ai_decision_trace_id:
+        fields["ai_decision_trace_id"] = ai_decision_trace_id
     return fields
 
 
@@ -32663,6 +32709,7 @@ _ENTRY_SPLIT_PROBE_RUNTIME_KEYS = (
     "entry_split_probe_ai_result_source_at_submit",
     "entry_split_probe_ai_confirmed_at_submit",
     "entry_split_probe_ai_action_source_at_submit",
+    "entry_split_probe_ai_decision_trace_id",
     "probe_confirmation_count",
     "probe_confirmation_last_at",
     "probe_confirmation_last_state",
@@ -33352,6 +33399,27 @@ def _post_probe_direction_fields(
                 else "post_probe_mixed_or_neutral"
             )
         )
+    snapshot_venue = effective_venue or resolve_entry_candle_venue(
+        ws_data,
+        session=resolve_entry_candle_session(now_ts=observed_now),
+    )
+    snapshot_session = market_session_bucket or resolve_entry_candle_session(
+        now_ts=observed_now
+    )
+    market_snapshot = build_ai_market_snapshot(
+        stock_code=code,
+        decision_stage="post_probe",
+        ws_data=ws_data,
+        effective_venue=snapshot_venue,
+        session_bucket=snapshot_session,
+        broker_route=(
+            stock.get("entry_execution_broker_route")
+            or stock.get("broker_route")
+            or stock.get("market_route")
+        ),
+        position=stock,
+        now_ts=observed_now,
+    )
     return {
         "post_probe_direction_state": direction_state,
         "post_probe_continuation_action": action,
@@ -33380,6 +33448,10 @@ def _post_probe_direction_fields(
         "post_probe_direction_ai_action": ai_action or "-",
         "post_probe_direction_ai_result_source": ai_result_source or "-",
         "post_probe_direction_ai_context_source": ai_context_source,
+        "post_probe_direction_ai_snapshot_id": stock.get(
+            "last_watching_ai_snapshot_id"
+        ),
+        "post_probe_direction_market_snapshot_id": market_snapshot.get("snapshot_id"),
         "post_probe_direction_ai_action_age_sec": (
             f"{ai_action_age_sec:.3f}"
             if ai_action_age_sec is not None
@@ -33466,6 +33538,8 @@ def _post_probe_direction_fields(
             if feature_probe_age_sec is not None
             else "not_available"
         ),
+        "provider_called": False,
+        **ai_market_snapshot_log_fields(market_snapshot),
         "metric_role": "real_execution_quality",
         "decision_authority": "dynamic_entry_price_resolver_p1_post_probe",
         "window_policy": "same_day_probe_fill_ttl",
@@ -34335,8 +34409,19 @@ def _apply_entry_ai_price_canary(
             if isinstance(candle_context.get("source_quality"), dict)
             else {}
         )
-        if candle_source_quality.get("status") != "fresh_consistent":
-            block_reason = "entry_candle_source_quality_blocked"
+        entry_price_preflight = ai_input_preflight(candle_context)
+        candle_source_blocked = (
+            candle_source_quality.get("status") != "fresh_consistent"
+        )
+        ai_preflight_blocked = runtime_preflight_required() and not bool(
+            entry_price_preflight.get("allowed", False)
+        )
+        if candle_source_blocked or ai_preflight_blocked:
+            block_reason = (
+                "entry_candle_source_quality_blocked"
+                if candle_source_blocked
+                else "ai_input_preflight_blocked"
+            )
             decision_ts = time.time()
             context_age_ms = int(
                 round(max(0.0, decision_ts - price_context_started_at) * 1000.0)
@@ -34373,7 +34458,11 @@ def _apply_entry_ai_price_canary(
             _log_entry_pipeline(
                 stock,
                 code,
-                "entry_ai_price_candle_source_block",
+                (
+                    "entry_ai_price_candle_source_block"
+                    if candle_source_blocked
+                    else "entry_ai_price_input_preflight_block"
+                ),
                 reason=block_reason,
                 **block_log_fields,
             )
@@ -38140,6 +38229,15 @@ def _build_ai_ops_log_fields(
         "cache_mode": str(payload.get("cache_mode", "-") or "-"),
     }
     for field_name in (
+        "ai_decision_trace_schema",
+        "ai_decision_trace_id",
+        "ai_decision_outcome_label_status",
+        "ai_prompt_sha256",
+        "ai_prompt_store_date",
+        "ai_input_payload_sha256",
+        "ai_input_payload_store_date",
+        "ai_request_envelope_sha256",
+        "ai_request_reasoning_effort",
         "cache_profile",
         "cache_strategy",
         "cache_key_status",
@@ -38276,6 +38374,7 @@ def _build_ai_ops_log_fields(
         "openai_http_provider_ms",
         "openai_http_provider_total_ms",
         "openai_http_attempt_count",
+        "ai_input_payload_bytes",
         "entry_candle_current_session_bar_count",
         "entry_candle_previous_session_bar_count",
         "entry_candle_completed_bar_count",
@@ -38284,6 +38383,16 @@ def _build_ai_ops_log_fields(
     ):
         if field_name in payload:
             out[field_name] = int(payload.get(field_name, 0) or 0)
+    if "ai_request_temperature" in payload:
+        value = payload.get("ai_request_temperature")
+        out["ai_request_temperature"] = (
+            float(value) if value not in (None, "", "-") else None
+        )
+    if "ai_request_max_output_tokens" in payload:
+        value = payload.get("ai_request_max_output_tokens")
+        out["ai_request_max_output_tokens"] = (
+            int(value) if value not in (None, "", "-") else None
+        )
     for field_name in (
         "openai_ws_used",
         "openai_ws_http_fallback",
@@ -38292,6 +38401,10 @@ def _build_ai_ops_log_fields(
         "bedrock_primary_used",
         "bedrock_failback_used",
         "bedrock_fallback_used",
+        "ai_prompt_redacted",
+        "ai_prompt_replay_exact",
+        "ai_input_payload_redacted",
+        "ai_input_payload_replay_exact",
         "holding_score_timeout_like",
         "holding_score_transport_fail_closed",
         "holding_score_preflight_blocked",
@@ -45951,6 +46064,14 @@ def _handle_watching_strategy_branch(
                                     "last_watching_ai_result_source": str(
                                         ai_decision.get("ai_result_source") or "live"
                                     ).lower(),
+                                    "last_watching_ai_snapshot_id": (
+                                        ai_decision.get("ai_decision_snapshot_id")
+                                        or ai_decision.get("ai_input_snapshot_id")
+                                        or ai_decision.get("ai_market_snapshot_id")
+                                    ),
+                                    "last_watching_ai_decision_trace_id": (
+                                        ai_decision.get("ai_decision_trace_id") or ""
+                                    ),
                                     "last_watching_ai_source_quality_fields": ai_source_quality_fields,
                                     "watching_score_smoothing_observations": smoothing_observations,
                                 },
@@ -46303,6 +46424,23 @@ def _handle_watching_strategy_branch(
                                                 recheck_decision.get("ai_result_source")
                                                 or "live"
                                             ).lower(),
+                                            "last_watching_ai_snapshot_id": (
+                                                recheck_decision.get(
+                                                    "ai_decision_snapshot_id"
+                                                )
+                                                or recheck_decision.get(
+                                                    "ai_input_snapshot_id"
+                                                )
+                                                or recheck_decision.get(
+                                                    "ai_market_snapshot_id"
+                                                )
+                                            ),
+                                            "last_watching_ai_decision_trace_id": (
+                                                recheck_decision.get(
+                                                    "ai_decision_trace_id"
+                                                )
+                                                or ""
+                                            ),
                                             "last_watching_ai_source_quality_fields": _build_tick_source_quality_log_fields(
                                                 recheck_decision
                                             ),
@@ -46564,6 +46702,23 @@ def _handle_watching_strategy_branch(
                                                 recheck_decision.get("ai_result_source")
                                                 or "live"
                                             ).lower(),
+                                            "last_watching_ai_snapshot_id": (
+                                                recheck_decision.get(
+                                                    "ai_decision_snapshot_id"
+                                                )
+                                                or recheck_decision.get(
+                                                    "ai_input_snapshot_id"
+                                                )
+                                                or recheck_decision.get(
+                                                    "ai_market_snapshot_id"
+                                                )
+                                            ),
+                                            "last_watching_ai_decision_trace_id": (
+                                                recheck_decision.get(
+                                                    "ai_decision_trace_id"
+                                                )
+                                                or ""
+                                            ),
                                             "last_watching_ai_source_quality_fields": _build_tick_source_quality_log_fields(
                                                 recheck_decision
                                             ),
@@ -47942,6 +48097,52 @@ def _handle_watching_strategy_branch(
                                 recent_candles=gatekeeper_candles,
                                 source_meta=gatekeeper_candle_meta,
                             )
+                            gatekeeper_snapshot_ws = dict(ws_data or {})
+                            null_aware_sources = realtime_ctx.get("null_aware_sources")
+                            if isinstance(null_aware_sources, dict):
+                                program_source = null_aware_sources.get("program_flow")
+                                investor_source = null_aware_sources.get(
+                                    "investor_flow"
+                                )
+                                if isinstance(program_source, dict):
+                                    gatekeeper_snapshot_ws["program_context"] = (
+                                        program_source.get("value")
+                                    )
+                                    gatekeeper_snapshot_ws["program_observed_ts"] = (
+                                        program_source.get("received_ts_ms")
+                                    )
+                                if isinstance(investor_source, dict):
+                                    gatekeeper_snapshot_ws["investor_context"] = (
+                                        investor_source.get("value")
+                                    )
+                                    gatekeeper_snapshot_ws["investor_observed_ts"] = (
+                                        investor_source.get("received_ts_ms")
+                                    )
+                            gatekeeper_snapshot = build_ai_market_snapshot(
+                                stock_code=code,
+                                decision_stage="gatekeeper",
+                                ws_data=gatekeeper_snapshot_ws,
+                                effective_venue=str(
+                                    gatekeeper_candle_context.get("venue") or ""
+                                ),
+                                session_bucket=str(
+                                    gatekeeper_candle_context.get("session") or ""
+                                ),
+                                broker_route=(
+                                    (
+                                        gatekeeper_candle_context.get(
+                                            "ai_market_snapshot_v1"
+                                        )
+                                        or {}
+                                    ).get("broker_route")
+                                ),
+                                candle_context=dict(gatekeeper_candle_context),
+                                now_ts=now_ts,
+                            )
+                            gatekeeper_candle_context["ai_market_snapshot_v1"] = (
+                                gatekeeper_snapshot
+                            )
+                            realtime_ctx["ai_market_snapshot_v1"] = gatekeeper_snapshot
                             realtime_ctx["entry_candle_context"] = (
                                 gatekeeper_candle_context
                             )
@@ -47950,7 +48151,7 @@ def _handle_watching_strategy_branch(
                                 stock_name=stock["name"],
                                 stock_code=code,
                                 realtime_ctx=realtime_ctx,
-                                analysis_mode="SWING",
+                                analysis_mode="SCALP",
                             )
                             if bool(gatekeeper.get("allow_entry", False)):
                                 gatekeeper_guard = apply_entry_candle_hybrid_guard(
@@ -51972,6 +52173,12 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                         )
                         or "-"
                     ),
+                    "entry_split_probe_ai_decision_trace_id": (
+                        entry_ai_submit_authority.get(
+                            "entry_ai_submit_authority_decision_trace_id"
+                        )
+                        or "-"
+                    ),
                     "probe_confirmation_count": 0,
                     "probe_expand_forbidden": False,
                 },
@@ -52009,6 +52216,9 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 ),
                 ai_action_source_at_submit=entry_ai_submit_authority.get(
                     "entry_ai_submit_authority_action_source"
+                ),
+                ai_decision_trace_id=entry_ai_submit_authority.get(
+                    "entry_ai_submit_authority_decision_trace_id"
                 ),
             )
 

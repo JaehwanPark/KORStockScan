@@ -1795,6 +1795,16 @@ def test_real_payload_with_exchange_suffix_updates_canonical_snapshot():
     assert manager.realtime_data["039490"]["last_realtime_type_market_route"]["0B"] == (
         "krx_nxt_integrated"
     )
+    assert (
+        manager.realtime_data["039490"]["last_realtime_type_effective_venue"]["0B"]
+        == ""
+    )
+
+
+def test_ws_item_effective_venue_does_not_invent_integrated_underlying_venue():
+    assert KiwoomWSManager._ws_item_effective_venue("005930") == "KRX"
+    assert KiwoomWSManager._ws_item_effective_venue("005930_NX") == "NXT"
+    assert KiwoomWSManager._ws_item_effective_venue("005930_AL") == ""
 
 
 def test_subscription_freshness_snapshot_classifies_no_tick_stale_and_fresh(

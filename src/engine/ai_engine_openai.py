@@ -55,6 +55,15 @@ from src.engine.scalping_feature_packet import (
 from src.engine.scalping.microstructure_reaction_context import (
     infer_tick_aggressor_side,
 )
+from src.engine.scalping.ai_market_snapshot import (  # noqa: E402
+    ai_input_preflight,
+    ai_market_snapshot_log_fields,
+    runtime_preflight_required,
+)
+from src.engine.scalping.ai_decision_trace import (  # noqa: E402
+    capture_ai_request,
+    record_ai_decision_trace,
+)
 from src.engine.scalping.entry_candle_context import (
     apply_entry_candle_hybrid_guard,
     entry_candle_context_log_fields,
@@ -1196,6 +1205,16 @@ class GPTSniperEngine:
                     "entry_candle_context": self._entry_candle_model_payload(
                         candle_context
                     ),
+                    "ai_market_snapshot_id": (
+                        candle_context.get("ai_market_snapshot_v1", {}).get(
+                            "snapshot_id"
+                        )
+                        if isinstance(candle_context, dict)
+                        and isinstance(
+                            candle_context.get("ai_market_snapshot_v1"), dict
+                        )
+                        else None
+                    ),
                 }
             )
         return self._build_cache_digest(
@@ -1209,6 +1228,12 @@ class GPTSniperEngine:
                 "program_net_qty": program_net_qty,
                 "entry_candle_context": self._entry_candle_model_payload(
                     candle_context
+                ),
+                "ai_market_snapshot_id": (
+                    candle_context.get("ai_market_snapshot_v1", {}).get("snapshot_id")
+                    if isinstance(candle_context, dict)
+                    and isinstance(candle_context.get("ai_market_snapshot_v1"), dict)
+                    else None
                 ),
             }
         )
@@ -1226,13 +1251,46 @@ class GPTSniperEngine:
             "forming_bar_present": context.get("forming_bar_present"),
             "latest_bar_age_sec": context.get("latest_bar_age_sec"),
             "sample_mode": context.get("sample_mode"),
+            "request_code": context.get("request_code"),
+            "rest_route": context.get("rest_route"),
+            "ws_route": context.get("ws_route"),
+            "route_equivalence": context.get("route_equivalence"),
             "bars": context.get("bars", []),
+            "bar_schema": {
+                "order": "oldest_to_latest",
+                "timezone": "Asia/Seoul",
+                "interval": "1m",
+                "price_unit": "KRW",
+                "volume_unit": "shares",
+                "forming_field": "forming",
+                "partial_volume_field": "partial_volume",
+                "missing_value_contract": "null_with_missing_reason",
+            },
             "structure": context.get("structure", {}),
             "regime": context.get("regime"),
             "alignment": context.get("alignment"),
             "risk_flags": context.get("risk_flags", []),
             "source_quality": context.get("source_quality", {}),
         }
+
+    def _attach_entry_candle_inputs(self, payload, candle_context):
+        target = payload if isinstance(payload, dict) else {}
+        candle_payload = self._entry_candle_model_payload(candle_context)
+        if not candle_payload:
+            return False
+        context = candle_context if isinstance(candle_context, dict) else {}
+        target["entry_candle_context"] = candle_payload
+        snapshot = context.get("ai_market_snapshot_v1")
+        if isinstance(snapshot, dict):
+            target["ai_market_snapshot_v1"] = snapshot
+        target["ai_input_semantics"] = {
+            "canonical_candle_owner": "entry_candle_context",
+            "duplicate_candle_views_omitted": True,
+            "missing_is_not_zero": True,
+            "source_timestamp_and_route_are_authoritative": True,
+            "forming_bar_volume_is_partial": True,
+        }
+        return True
 
     def _bucket_int_for_cache(self, value, bucket):
         try:
@@ -1402,6 +1460,17 @@ class GPTSniperEngine:
         input_contract_fields=None,
     ):
         payload = dict(result or {})
+        if cache_hit:
+            parent_trace_id = payload.get("ai_decision_trace_id")
+            for trace_key in (
+                "ai_decision_trace_id",
+                "ai_decision_trace_schema",
+                "ai_decision_outcome_label_status",
+                "openai_request_id",
+            ):
+                payload.pop(trace_key, None)
+            if parent_trace_id:
+                payload["ai_decision_parent_trace_id"] = parent_trace_id
         payload["ai_parse_ok"] = bool(parse_ok)
         payload["ai_parse_fail"] = bool(parse_fail)
         payload["ai_fallback_score_50"] = bool(fallback_score_50)
@@ -1415,14 +1484,37 @@ class GPTSniperEngine:
             payload.update(
                 {k: v for k, v in input_contract_fields.items() if v not in (None, "")}
             )
+        if "ai_decision_trace_id" not in payload and str(result_source or "") in {
+            "error",
+            "exception",
+        }:
+            transport_meta = self._consume_last_transport_meta()
+            if transport_meta:
+                payload.update(transport_meta)
+        payload.update(
+            record_ai_decision_trace(
+                payload,
+                prompt_type=str(prompt_type or "-"),
+                prompt_version=str(prompt_version or "-"),
+                result_source=str(result_source or "-"),
+                input_contract_fields=input_contract_fields,
+            )
+        )
         return payload
 
     def _resolve_ai_input_contract_fields(
         self, user_input, *, default_schema, default_mode
     ):
+        raw_bytes = (
+            user_input.encode("utf-8")
+            if isinstance(user_input, str)
+            else json.dumps(user_input, sort_keys=True, default=str).encode("utf-8")
+        )
         fields = {
             "ai_input_schema": str(default_schema or "-"),
             "ai_input_contract_mode": str(default_mode or "plain_text"),
+            "ai_input_payload_sha256": hashlib.sha256(raw_bytes).hexdigest(),
+            "ai_input_payload_bytes": len(raw_bytes),
         }
         if not isinstance(user_input, str):
             return fields
@@ -1442,6 +1534,35 @@ class GPTSniperEngine:
         fallback_reason = str(payload.get("input_build_fallback") or "").strip()
         if fallback_reason:
             fields["ai_input_build_fallback"] = fallback_reason
+        snapshot = payload.get("ai_market_snapshot_v1")
+        if not isinstance(snapshot, dict):
+            holding_context = payload.get("holding_decision_context")
+            if isinstance(holding_context, dict):
+                snapshot = holding_context.get("ai_market_snapshot_v1")
+        if isinstance(snapshot, dict):
+            fields.update(
+                {
+                    "ai_input_snapshot_id": snapshot.get("snapshot_id"),
+                    "ai_input_effective_venue": snapshot.get("effective_venue"),
+                    "ai_input_broker_route": snapshot.get("broker_route"),
+                    "ai_input_market_data_route": snapshot.get("market_data_route"),
+                    "ai_input_underlying_event_venue": snapshot.get(
+                        "underlying_event_venue"
+                    ),
+                    "ai_input_underlying_event_venue_source": snapshot.get(
+                        "underlying_event_venue_source"
+                    ),
+                }
+            )
+            fields.update(ai_market_snapshot_log_fields(snapshot))
+        semantics = payload.get("ai_input_semantics")
+        if isinstance(semantics, dict):
+            fields["ai_input_canonical_candle_owner"] = semantics.get(
+                "canonical_candle_owner"
+            )
+            fields["ai_input_duplicate_candle_views_omitted"] = bool(
+                semantics.get("duplicate_candle_views_omitted", False)
+            )
         return fields
 
     def _mark_successful_ai_call(self, *, update_last_call_time=True):
@@ -2536,6 +2657,22 @@ class GPTSniperEngine:
             "openai_endpoint_name": request.endpoint_name,
             "openai_schema_name": request.schema_name or "-",
         }
+        transport_meta.update(
+            capture_ai_request(
+                prompt=request.prompt,
+                user_input=request.user_input,
+                endpoint_name=request.endpoint_name,
+                symbol=request.symbol,
+                request_id=request.request_id,
+                model=request.model_name,
+                schema_name=request.schema_name,
+                require_json=request.require_json,
+                temperature=request.temperature,
+                max_output_tokens=request.max_output_tokens,
+                reasoning_effort=request.reasoning_effort,
+                metadata=request.metadata,
+            )
+        )
         bedrock_primary_payload = self._try_bedrock_primary_provider(
             request=request, transport_meta=transport_meta
         )
@@ -2628,6 +2765,7 @@ class GPTSniperEngine:
                         if getattr(fallback_error, "timing_meta", None):
                             transport_meta.update(fallback_error.timing_meta)
                         if not self._is_openai_timeout_like_error(fallback_error):
+                            self._set_last_transport_meta(transport_meta)
                             raise
                         result = self._build_ws_http_fallback_timeout_result(
                             fallback_request,
@@ -2676,6 +2814,7 @@ class GPTSniperEngine:
                 )
                 if isinstance(fallback_payload, dict):
                     return fallback_payload
+                self._set_last_transport_meta(transport_meta)
                 raise
             transport_meta.update(
                 {
@@ -3692,9 +3831,9 @@ class GPTSniperEngine:
                 "price_change_heuristic_is_not_aggressor": True,
             },
         }
-        candle_payload = self._entry_candle_model_payload(candle_context)
-        if candle_payload:
-            payload["entry_candle_context"] = candle_payload
+        if self._attach_entry_candle_inputs(payload, candle_context):
+            payload.pop("candle_summary", None)
+            payload.pop("recent_candles_latest_window", None)
         return payload
 
     def _clean_hot_entry_value(self, value):
@@ -3884,9 +4023,7 @@ class GPTSniperEngine:
                 "price_change_heuristic_is_not_aggressor": True,
             },
         }
-        candle_payload = self._entry_candle_model_payload(candle_context)
-        if candle_payload:
-            payload["entry_candle_context"] = candle_payload
+        self._attach_entry_candle_inputs(payload, candle_context)
         return self._clean_hot_entry_payload(payload)
 
     def _format_entry_screen_hot_data(
@@ -4054,9 +4191,8 @@ class GPTSniperEngine:
                     "price_change_heuristic_is_not_aggressor": True,
                 },
             }
-            candle_payload = self._entry_candle_model_payload(candle_context)
-            if candle_payload:
-                compact_payload["entry_candle_context"] = candle_payload
+            if self._attach_entry_candle_inputs(compact_payload, candle_context):
+                compact_payload.pop("recent_candles_latest_window", None)
             return json.dumps(
                 compact_payload, ensure_ascii=False, separators=(",", ":"), default=str
             )
@@ -4274,6 +4410,8 @@ class GPTSniperEngine:
             f"- ask_depth_ratio: {feature_packet['ask_depth_ratio']}\n"
             f"- net_ask_depth: {feature_packet['net_ask_depth']}"
         )
+        if self._entry_candle_model_payload(candle_context):
+            candle_str = "provided_by_entry_candle_context"
 
         user_input = f"""
 [현재 상태]
@@ -4546,6 +4684,32 @@ class GPTSniperEngine:
             packet += "\n[ENTRY_CANDLE_CONTEXT]\n" + json.dumps(
                 candle_payload, ensure_ascii=True, default=str
             )
+        market_snapshot = realtime_ctx.get("ai_market_snapshot_v1")
+        if isinstance(market_snapshot, dict):
+            packet += "\n[AI_MARKET_SNAPSHOT_V1]\n" + json.dumps(
+                market_snapshot,
+                ensure_ascii=True,
+                separators=(",", ":"),
+                default=str,
+            )
+            packet += (
+                "\n[AI_INPUT_SEMANTICS]\n"
+                "- Treat effective_venue, broker_route, market_data_route, and "
+                "underlying_event_venue as independent dimensions.\n"
+                "- Missing or null values are unknown, never zero or neutral.\n"
+                "- The entry_candle_context bars are ordered oldest-to-latest; "
+                "forming-bar volume is partial.\n"
+                "- Source timestamps and source-quality blockers outrank inferred "
+                "market direction.\n"
+            )
+        null_aware_sources = realtime_ctx.get("null_aware_sources")
+        if isinstance(null_aware_sources, dict):
+            packet += "\n[NULL_AWARE_SOURCES]\n" + json.dumps(
+                null_aware_sources,
+                ensure_ascii=True,
+                separators=(",", ":"),
+                default=str,
+            )
         return packet
 
     # ==========================================
@@ -4674,6 +4838,45 @@ class GPTSniperEngine:
                 input_data_text=input_data_text,
                 analysis_mode=analysis_mode,
             )
+            input_contract_fields = self._resolve_ai_input_contract_fields(
+                request["user_input"],
+                default_schema="gatekeeper_quant_packet_v2",
+                default_mode="plain_text",
+            )
+            if isinstance(input_data_text, dict) and isinstance(
+                input_data_text.get("entry_candle_context"), dict
+            ):
+                input_contract_fields.update(
+                    {
+                        "ai_input_canonical_candle_owner": "entry_candle_context",
+                        "ai_input_duplicate_candle_views_omitted": True,
+                    }
+                )
+            market_snapshot = (
+                input_data_text.get("ai_market_snapshot_v1")
+                if isinstance(input_data_text, dict)
+                and isinstance(input_data_text.get("ai_market_snapshot_v1"), dict)
+                else {}
+            )
+            if market_snapshot:
+                input_contract_fields.update(
+                    {
+                        "ai_input_snapshot_id": market_snapshot.get("snapshot_id"),
+                        "ai_input_effective_venue": market_snapshot.get(
+                            "effective_venue"
+                        ),
+                        "ai_input_broker_route": market_snapshot.get("broker_route"),
+                        "ai_input_market_data_route": market_snapshot.get(
+                            "market_data_route"
+                        ),
+                        "ai_input_underlying_event_venue": market_snapshot.get(
+                            "underlying_event_venue"
+                        ),
+                        "ai_input_underlying_event_venue_source": market_snapshot.get(
+                            "underlying_event_venue_source"
+                        ),
+                    }
+                )
             packet_build_ms = int((time.perf_counter() - build_started_at) * 1000)
 
             model_started_at = time.perf_counter()
@@ -4687,11 +4890,17 @@ class GPTSniperEngine:
                     model_override=self._get_tier2_model(),
                     endpoint_name="realtime_report",
                     symbol=stock_code,
+                    metadata_extra={
+                        "ai_trace_strategy": request["selected_mode"],
+                    },
                 )
             except Exception as e:
                 report_error = str(e)
                 log_error(f"🚨 [{request['context_name']}] OpenAI 에러: {e}")
                 report = f"⚠️ AI 실시간 분석 생성 중 에러 발생: {e}"
+            transport_meta = self._consume_last_transport_meta()
+            if transport_meta:
+                input_contract_fields.update(transport_meta)
             model_call_ms = int((time.perf_counter() - model_started_at) * 1000)
 
         total_ms = int((time.perf_counter() - total_started_at) * 1000)
@@ -4704,6 +4913,7 @@ class GPTSniperEngine:
             "model_call_ms": model_call_ms,
             "total_ms": total_ms,
             "error": report_error,
+            "input_contract_fields": input_contract_fields,
         }
 
     # ==========================================
@@ -4721,21 +4931,17 @@ class GPTSniperEngine:
         price_ctx,
         candle_context=None,
     ):
-        return json.dumps(
-            {
-                "stock_name": stock_name,
-                "stock_code": stock_code,
-                "ws_data": ws_data or {},
-                "recent_ticks": (recent_ticks or [])[:20],
-                "recent_candles": (recent_candles or [])[:20],
-                "price_context": price_ctx or {},
-                "entry_candle_context": self._entry_candle_model_payload(
-                    candle_context
-                ),
-            },
-            ensure_ascii=True,
-            default=str,
-        )
+        payload = {
+            "stock_name": stock_name,
+            "stock_code": stock_code,
+            "ws_data": ws_data or {},
+            "recent_ticks": (recent_ticks or [])[:20],
+            "recent_candles": (recent_candles or [])[:20],
+            "price_context": price_ctx or {},
+        }
+        if self._attach_entry_candle_inputs(payload, candle_context):
+            payload.pop("recent_candles", None)
+        return json.dumps(payload, ensure_ascii=True, default=str)
 
     def _compact_entry_price_orderbook(self, ws_data, *, limit=10):
         orderbook = (
@@ -5123,9 +5329,9 @@ class GPTSniperEngine:
                 recent_candles, limit=5
             ),
         }
-        candle_payload = self._entry_candle_model_payload(candle_context)
-        if candle_payload:
-            payload["entry_candle_context"] = candle_payload
+        if self._attach_entry_candle_inputs(payload, candle_context):
+            payload.pop("candle_summary", None)
+            payload.pop("recent_candles_latest_window", None)
         return json.dumps(
             payload, ensure_ascii=True, separators=(",", ":"), default=str
         )
@@ -5155,9 +5361,8 @@ class GPTSniperEngine:
                 price_ctx=price_ctx,
             ),
         }
-        candle_payload = self._entry_candle_model_payload(candle_context)
-        if candle_payload:
-            payload["entry_candle_context"] = candle_payload
+        if self._attach_entry_candle_inputs(payload, candle_context):
+            payload.pop("recent_candles", None)
         return json.dumps(
             payload, ensure_ascii=True, separators=(",", ":"), default=str
         )
@@ -5252,6 +5457,34 @@ class GPTSniperEngine:
         if isinstance(candle_context, dict) and candle_context:
             input_contract_fields.update(
                 entry_candle_context_log_fields(candle_context)
+            )
+        entry_price_preflight = ai_input_preflight(candle_context)
+        if runtime_preflight_required() and not bool(
+            entry_price_preflight.get("allowed", False)
+        ):
+            return self._annotate_analysis_result(
+                normalize_scalping_entry_price_result(
+                    {
+                        "action": "USE_DEFENSIVE",
+                        "order_price": fallback_price,
+                        "confidence": 0,
+                        "reason": "ai_input_preflight_blocked",
+                        "max_wait_sec": 90,
+                        "provider_called": False,
+                        **ai_market_snapshot_log_fields(candle_context),
+                    },
+                    fallback_price=fallback_price,
+                ),
+                prompt_type="entry_price",
+                prompt_version="entry_price_v1",
+                response_ms=int((time.perf_counter() - started) * 1000),
+                parse_ok=False,
+                parse_fail=False,
+                fallback_score_50=False,
+                cache_hit=False,
+                cache_mode="miss",
+                result_source="input_preflight_blocked",
+                input_contract_fields=input_contract_fields,
             )
         if not self.lock.acquire(blocking=False):
             return self._annotate_analysis_result(
@@ -5556,6 +5789,34 @@ class GPTSniperEngine:
                 merged = merge_scalp_entry_adm_result_fields(merged, entry_adm_runtime)
             return merge_lifecycle_ai_context_fields(merged, lifecycle_ai_runtime)
 
+        candle_preflight = ai_input_preflight(candle_context)
+        if (
+            is_scalping_entry_call
+            and runtime_preflight_required()
+            and not bool(candle_preflight.get("allowed", False))
+        ):
+            return self._annotate_analysis_result(
+                _merge_runtime_fields(
+                    {
+                        "action": "DROP",
+                        "score": 0,
+                        "reason": "ai_input_preflight_blocked",
+                        "provider_called": False,
+                        **ai_market_snapshot_log_fields(candle_context),
+                    }
+                ),
+                prompt_type=prompt_type,
+                prompt_version=prompt_version,
+                response_ms=int((time.perf_counter() - analysis_started) * 1000),
+                parse_ok=False,
+                parse_fail=False,
+                fallback_score_50=False,
+                cache_hit=False,
+                cache_mode="miss",
+                result_source="input_preflight_blocked",
+                input_contract_fields=input_contract_fields,
+            )
+
         cache_key = self._build_analysis_cache_key_with_profile(
             target_name=target_name,
             strategy=cache_strategy,
@@ -5848,6 +6109,13 @@ class GPTSniperEngine:
                         entry_candle_context_log_fields(candle_context)
                     )
 
+            trace_metadata_extra = dict(metadata_extra or {})
+            trace_metadata_extra.update(
+                {
+                    "ai_trace_strategy": strategy,
+                    "ai_trace_prompt_type": prompt_type,
+                }
+            )
             result = self._call_openai_safe(
                 prompt,
                 formatted_data,
@@ -5862,7 +6130,7 @@ class GPTSniperEngine:
                 endpoint_name="analyze_target",
                 symbol=target_name,
                 cache_key=cache_key,
-                metadata_extra=metadata_extra,
+                metadata_extra=trace_metadata_extra,
                 transport_mode_override=(
                     getattr(
                         TRADING_RULES,
@@ -5923,13 +6191,7 @@ class GPTSniperEngine:
             result = _merge_runtime_fields(result)
             result["openai_min_interval_wait_ms"] = min_interval_wait_ms
             self._mark_successful_ai_call()
-            self._cache_set(
-                "_analysis_cache",
-                cache_key,
-                result,
-                self._resolve_analysis_cache_ttl(cache_profile),
-            )
-            return self._annotate_analysis_result(
+            result = self._annotate_analysis_result(
                 result,
                 prompt_type=prompt_type,
                 prompt_version=prompt_version,
@@ -5942,6 +6204,13 @@ class GPTSniperEngine:
                 result_source="live",
                 input_contract_fields=input_contract_fields,
             )
+            self._cache_set(
+                "_analysis_cache",
+                cache_key,
+                result,
+                self._resolve_analysis_cache_ttl(cache_profile),
+            )
+            return result
 
         except Exception as e:
             failure_count = self._record_failure_and_maybe_disable(
@@ -6071,6 +6340,43 @@ class GPTSniperEngine:
         self, stock_name, stock_code, realtime_ctx, analysis_mode="AUTO"
     ):
         """generate_realtime_report 결과를 마지막 진입 게이트 판단용으로 정규화합니다."""
+        context = realtime_ctx if isinstance(realtime_ctx, dict) else {}
+        candle_context = context.get("entry_candle_context")
+        preflight_source = (
+            context
+            if isinstance(context.get("ai_market_snapshot_v1"), dict)
+            else candle_context
+        )
+        preflight = ai_input_preflight(preflight_source)
+        if runtime_preflight_required() and not bool(preflight.get("allowed", False)):
+            result = {
+                "allow_entry": False,
+                "action_label": "WAIT",
+                "action_key": "wait",
+                "report": "ai_input_preflight_blocked",
+                "selected_mode": str(analysis_mode or "AUTO").upper(),
+                "lock_wait_ms": 0,
+                "packet_build_ms": 0,
+                "model_call_ms": 0,
+                "total_internal_ms": 0,
+                "cache_hit": False,
+                "cache_mode": "miss",
+                "provider_called": False,
+                "ai_result_source": "input_preflight_blocked",
+                **ai_market_snapshot_log_fields(preflight_source),
+            }
+            result.update(
+                record_ai_decision_trace(
+                    result,
+                    prompt_type="realtime_gatekeeper",
+                    prompt_version="gatekeeper_quant_packet_v2",
+                    result_source="input_preflight_blocked",
+                    decision_stage="gatekeeper",
+                    stock_code=stock_code,
+                    provider_called=False,
+                )
+            )
+            return result
         cache_key = self._build_gatekeeper_cache_key(
             stock_name=stock_name,
             stock_code=stock_code,
@@ -6079,7 +6385,43 @@ class GPTSniperEngine:
         )
         cached_gatekeeper = self._cache_get("_gatekeeper_cache", cache_key)
         if cached_gatekeeper is not None:
-            return cached_gatekeeper
+            cached_result = dict(cached_gatekeeper)
+            parent_trace_id = cached_result.get("ai_decision_trace_id")
+            for trace_key in (
+                "ai_decision_trace_id",
+                "ai_decision_trace_schema",
+                "ai_decision_outcome_label_status",
+                "openai_request_id",
+            ):
+                cached_result.pop(trace_key, None)
+            if parent_trace_id:
+                cached_result["ai_decision_parent_trace_id"] = parent_trace_id
+            cached_result.update(ai_market_snapshot_log_fields(preflight_source))
+            cached_result.update(
+                {
+                    "cache_hit": True,
+                    "cache_mode": "hit",
+                    "provider_called": False,
+                    "ai_result_source": "cache",
+                    "ai_decision_snapshot_id": (
+                        cached_gatekeeper.get("ai_input_snapshot_id")
+                        or cached_gatekeeper.get("ai_decision_snapshot_id")
+                        or cached_gatekeeper.get("ai_market_snapshot_id")
+                    ),
+                }
+            )
+            cached_result.update(
+                record_ai_decision_trace(
+                    cached_result,
+                    prompt_type="realtime_gatekeeper",
+                    prompt_version="gatekeeper_quant_packet_v2",
+                    result_source="cache",
+                    decision_stage="gatekeeper",
+                    stock_code=stock_code,
+                    provider_called=False,
+                )
+            )
+            return cached_result
 
         report_payload = self._generate_realtime_report_payload(
             stock_name=stock_name,
@@ -6104,7 +6446,45 @@ class GPTSniperEngine:
             "total_internal_ms": int(report_payload.get("total_ms", 0) or 0),
             "cache_hit": False,
             "cache_mode": "miss",
+            "provider_called": True,
+            "ai_result_source": "live",
+            "ai_decision_snapshot_id": (
+                (
+                    report_payload.get("input_contract_fields")
+                    if isinstance(report_payload.get("input_contract_fields"), dict)
+                    else {}
+                ).get("ai_input_snapshot_id")
+                or (
+                    ai_market_snapshot_log_fields(preflight_source).get(
+                        "ai_market_snapshot_id"
+                    )
+                )
+            ),
+            **ai_market_snapshot_log_fields(preflight_source),
+            **(
+                report_payload.get("input_contract_fields")
+                if isinstance(report_payload.get("input_contract_fields"), dict)
+                else {}
+            ),
         }
+        result.update(
+            record_ai_decision_trace(
+                result,
+                prompt_type="realtime_gatekeeper",
+                prompt_version="gatekeeper_quant_packet_v2",
+                result_source=(
+                    "live" if not report_payload.get("error") else "exception"
+                ),
+                input_contract_fields=(
+                    report_payload.get("input_contract_fields")
+                    if isinstance(report_payload.get("input_contract_fields"), dict)
+                    else {}
+                ),
+                decision_stage="gatekeeper",
+                stock_code=stock_code,
+                provider_called=not bool(report_payload.get("error")),
+            )
+        )
         self._cache_set(
             "_gatekeeper_cache", cache_key, result, self.gatekeeper_cache_ttl
         )
@@ -6459,6 +6839,17 @@ class GPTSniperEngine:
                 "price_change_heuristic_is_not_aggressor": True,
             },
             "holding_decision_context": holding_payload,
+            "ai_input_semantics": {
+                "canonical_candle_owner": (
+                    "holding_decision_context"
+                    if holding_payload
+                    else "legacy_recent_candles_fallback"
+                ),
+                "duplicate_candle_views_omitted": bool(holding_payload),
+                "missing_is_not_zero": True,
+                "source_timestamp_and_route_are_authoritative": True,
+                "forming_bar_volume_is_partial": True,
+            },
             "prior_score_context": {
                 "prior_score": ctx.get("prior_score"),
                 "prior_effective_score": ctx.get("prior_effective_score"),
@@ -6608,6 +6999,24 @@ class GPTSniperEngine:
             "ai_input_contract_mode": "structured_json",
             "ai_input_build_fallback": "not_built",
         }
+        holding_preflight = ai_input_preflight(holding_context)
+        if runtime_preflight_required() and not bool(
+            holding_preflight.get("allowed", False)
+        ):
+            payload = self._neutral_holding_score_result(
+                "ai_input_preflight_blocked",
+                started=started,
+                result_source="input_preflight_blocked",
+                input_contract_fields=input_contract_fields,
+            )
+            payload.update(
+                {
+                    "provider_called": False,
+                    "holding_context_provider_expected": "openai",
+                    **holding_decision_context_log_fields(holding_context),
+                }
+            )
+            return payload
         lock_wait_ms = max(
             0,
             int(getattr(TRADING_RULES, "OPENAI_ANALYZE_TARGET_LOCK_WAIT_MS", 250) or 0),
@@ -6953,6 +7362,17 @@ class GPTSniperEngine:
                 else self._compact_recent_candles(recent_candles, limit=5)
             ),
             "holding_decision_context": holding_payload,
+            "ai_input_semantics": {
+                "canonical_candle_owner": (
+                    "holding_decision_context"
+                    if holding_payload
+                    else "legacy_recent_candles_fallback"
+                ),
+                "duplicate_candle_views_omitted": bool(holding_payload),
+                "missing_is_not_zero": True,
+                "source_timestamp_and_route_are_authoritative": True,
+                "forming_bar_volume_is_partial": True,
+            },
             "runtime_advisory_context": {
                 "holding_exit_matrix": (matrix_runtime or {}).get("prompt_context", ""),
                 "lifecycle_ai": (lifecycle_ai_runtime or {}).get("prompt_context", ""),
@@ -7146,6 +7566,36 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
             ),
             "ai_input_build_fallback": "not_built",
         }
+        holding_preflight = ai_input_preflight(holding_context)
+        if runtime_preflight_required() and not bool(
+            holding_preflight.get("allowed", False)
+        ):
+            return self._annotate_analysis_result(
+                {
+                    "action": "EXIT",
+                    "score": 0,
+                    "flow_state": "input_preflight_blocked",
+                    "thesis": "input_preflight_blocked",
+                    "evidence": list(holding_preflight.get("blockers") or []),
+                    "reason": "ai_input_preflight_blocked_keep_exit_candidate",
+                    "next_review_sec": 30,
+                    "provider_called": False,
+                    "holding_context_provider_expected": (
+                        "bedrock_nova_lite_v2_primary_openai_failback"
+                    ),
+                    **holding_decision_context_log_fields(holding_context),
+                },
+                prompt_type="holding_exit_flow",
+                prompt_version="flow_v1",
+                response_ms=int((time.perf_counter() - started) * 1000),
+                parse_ok=False,
+                parse_fail=False,
+                fallback_score_50=False,
+                cache_hit=False,
+                cache_mode="miss",
+                result_source="input_preflight_blocked",
+                input_contract_fields=input_contract_fields,
+            )
         if not self.lock.acquire(blocking=False):
             return self._annotate_analysis_result(
                 {
@@ -7274,6 +7724,13 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
                     else "plain_text"
                 ),
             )
+            if holding_decision_context_model_payload(holding_context):
+                input_contract_fields.update(
+                    {
+                        "ai_input_canonical_candle_owner": ("holding_decision_context"),
+                        "ai_input_duplicate_candle_views_omitted": True,
+                    }
+                )
             result = self._call_openai_safe(
                 SCALPING_HOLDING_FLOW_SYSTEM_PROMPT,
                 user_input,
@@ -7376,6 +7833,38 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
         started = time.perf_counter()
         prompt_type = "scalping_overnight"
         prompt_version = "overnight_v1"
+        input_contract_fields = {
+            "ai_input_schema": "overnight_text_v1",
+            "ai_input_contract_mode": "plain_text",
+            "ai_input_build_fallback": "not_built",
+        }
+        holding_preflight = ai_input_preflight(holding_context)
+        if runtime_preflight_required() and (
+            not bool(holding_preflight.get("allowed", False))
+            or not bool(holding_preflight.get("position_reconciled", False))
+        ):
+            return self._annotate_analysis_result(
+                {
+                    "action": "SELL_TODAY",
+                    "confidence": 0,
+                    "reason": "ai_input_preflight_blocked_sell_today",
+                    "risk_note": "broker_or_venue_snapshot_unreconciled",
+                    "holding_context_provider_expected": "openai_tier2",
+                    "provider_called": False,
+                    "raw": {},
+                    **holding_decision_context_log_fields(holding_context),
+                },
+                prompt_type=prompt_type,
+                prompt_version=prompt_version,
+                response_ms=int((time.perf_counter() - started) * 1000),
+                parse_ok=False,
+                parse_fail=False,
+                fallback_score_50=False,
+                cache_hit=False,
+                cache_mode="miss",
+                result_source="input_preflight_blocked",
+                input_contract_fields=input_contract_fields,
+            )
         if not self.lock.acquire(blocking=False):
             return self._annotate_analysis_result(
                 {
@@ -7431,6 +7920,18 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
                     default=str,
                 )
             )
+            input_contract_fields = self._resolve_ai_input_contract_fields(
+                user_input,
+                default_schema="overnight_text_v1",
+                default_mode="plain_text",
+            )
+            if holding_decision_context_model_payload(holding_context):
+                input_contract_fields.update(
+                    {
+                        "ai_input_canonical_candle_owner": ("holding_decision_context"),
+                        "ai_input_duplicate_candle_views_omitted": True,
+                    }
+                )
             result = self._call_openai_safe(
                 SCALPING_OVERNIGHT_DECISION_PROMPT,
                 user_input,
@@ -7500,6 +8001,7 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
                 cache_hit=False,
                 cache_mode="miss",
                 result_source="live",
+                input_contract_fields=input_contract_fields,
             )
         except Exception as e:
             sim_observation_only = self._is_sim_observation_overnight_context(
@@ -7536,6 +8038,7 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
                 cache_hit=False,
                 cache_mode="miss",
                 result_source="exception",
+                input_contract_fields=input_contract_fields,
             )
         finally:
             self.lock.release()
