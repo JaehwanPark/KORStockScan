@@ -2497,6 +2497,10 @@ class KiwoomWSManager:
                                     "time": tick_time,
                                     "price": trade_price,
                                     "volume": int(trade_volume or 0),
+                                    "market_suffix": self._ws_item_market_suffix(
+                                        item_code
+                                    ),
+                                    "market_route": self._ws_item_route(item_code),
                                     "volume_source": aux_fields["trade_volume_source"],
                                     "dir": aggressor_side,
                                     "aggressor_side": aggressor_side,

@@ -1,9 +1,16 @@
 """Analysis/report helpers for the sniper engine."""
 
+import inspect
 import time
 from datetime import datetime
 
 from src.engine.sniper_s15_fast_track import bind_s15_dependencies
+from src.engine.scalping.entry_candle_context import (
+    build_entry_candle_context,
+    entry_candle_context_enabled,
+    resolve_entry_candle_session,
+    resolve_entry_candle_venue,
+)
 from src.utils import kiwoom_utils
 from src.utils.logger import log_error, log_info
 
@@ -229,8 +236,33 @@ def analyze_stock_now(code):
 
     if AI_ENGINE is not None:
         try:
+            candle_session = resolve_entry_candle_session()
+            candle_venue = resolve_entry_candle_venue(
+                ws_data,
+                session=candle_session,
+            )
+            candle_context = None
+            if entry_candle_context_enabled(
+                venue=candle_venue,
+                session=candle_session,
+            ):
+                candle_context = build_entry_candle_context(
+                    KIWOOM_TOKEN,
+                    code,
+                    ws_data,
+                    venue=candle_venue,
+                    session=candle_session,
+                    limit=40,
+                    model_bar_limit=20,
+                )
+            report_kwargs = {}
+            if (
+                "candle_context"
+                in inspect.signature(AI_ENGINE.generate_realtime_report).parameters
+            ):
+                report_kwargs["candle_context"] = candle_context
             ai_report = AI_ENGINE.generate_realtime_report(
-                stock_name, code, quant_data_text
+                stock_name, code, quant_data_text, **report_kwargs
             )
         except Exception as exc:
             ai_report = f"⚠️ AI 리포트 생성 중 오류: {exc}"
@@ -315,13 +347,30 @@ def get_detailed_reason(code):
         recent_ticks = kiwoom_utils.get_tick_history_ka10003(
             KIWOOM_TOKEN, code, limit=10
         )
-        recent_candles = kiwoom_utils.get_minute_candles_ka10080(
-            KIWOOM_TOKEN, code, limit=40
+        recent_candles, candle_source_meta = (
+            kiwoom_utils.get_minute_candles_ka10080_with_meta(
+                KIWOOM_TOKEN, code, limit=40
+            )
         )
 
         if recent_ticks:
+            candle_context = build_entry_candle_context(
+                KIWOOM_TOKEN,
+                code,
+                ws_data,
+                venue=None,
+                session=None,
+                limit=40,
+                model_bar_limit=20,
+                recent_candles=recent_candles,
+                source_meta=candle_source_meta,
+            )
             ai_decision = AI_ENGINE.analyze_target(
-                target["name"], ws_data, recent_ticks, recent_candles
+                target["name"],
+                ws_data,
+                recent_ticks,
+                recent_candles,
+                candle_context=candle_context,
             )
             ai_action = ai_decision.get("action", "WAIT")
             ai_reason = ai_decision.get("reason", "분석 사유 없음")
@@ -436,12 +485,31 @@ def get_realtime_ai_scores(codes):
 
         try:
             ticks = kiwoom_utils.get_tick_history_ka10003(KIWOOM_TOKEN, code, limit=10)
-            candles = kiwoom_utils.get_minute_candles_ka10080(
-                KIWOOM_TOKEN, code, limit=40
+            candles, candle_source_meta = (
+                kiwoom_utils.get_minute_candles_ka10080_with_meta(
+                    KIWOOM_TOKEN, code, limit=40
+                )
             )
 
             if ticks:
-                ai_decision = AI_ENGINE.analyze_target(name, ws_data, ticks, candles)
+                candle_context = build_entry_candle_context(
+                    KIWOOM_TOKEN,
+                    code,
+                    ws_data,
+                    venue=None,
+                    session=None,
+                    limit=40,
+                    model_bar_limit=20,
+                    recent_candles=candles,
+                    source_meta=candle_source_meta,
+                )
+                ai_decision = AI_ENGINE.analyze_target(
+                    name,
+                    ws_data,
+                    ticks,
+                    candles,
+                    candle_context=candle_context,
+                )
                 scores[code] = ai_decision.get("score", 50)
 
                 if target and scores[code] != 50:

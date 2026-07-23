@@ -8,6 +8,7 @@ own session state and artifacts under data/ipo_listing_day/.
 from __future__ import annotations
 
 import argparse
+import inspect
 import json
 import math
 import time
@@ -28,6 +29,10 @@ from src.utils import kiwoom_utils
 from src.utils.constants import CONFIG_PATH, DEV_PATH
 from src.utils.logger import log_error, log_info
 from src.engine.trade_pause_control import is_buy_side_paused
+from src.engine.scalping.entry_candle_context import (
+    build_entry_candle_context,
+    entry_candle_context_enabled,
+)
 
 OUTPUT_ROOT = Path("data/ipo_listing_day")
 STOP_FILE = OUTPUT_ROOT / "STOP"
@@ -588,9 +593,17 @@ class IpoAiAdvisor:
         )
 
     def review_entry(
-        self, target: IpoTarget, ws_data: dict[str, Any]
+        self,
+        target: IpoTarget,
+        ws_data: dict[str, Any],
+        candle_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        return self._call("ipo_entry_risk", target, ws_data)
+        return self._call(
+            "ipo_entry_risk",
+            target,
+            ws_data,
+            {"entry_candle_context": candle_context or {}},
+        )
 
     def review_exit(
         self, target: IpoTarget, ws_data: dict[str, Any], position: IpoPosition
@@ -724,7 +737,37 @@ class IpoListingDayEngine:
             return IpoDecision(
                 False, "outside_entry_window", {"now": now_dt.isoformat()}
             )
-        ai_result = self.ai_advisor.review_entry(target, ws_data)
+        candle_context = {}
+        if entry_candle_context_enabled(
+            venue="KRX",
+            session="krx_regular",
+            now_ts=now_dt,
+        ):
+            try:
+                candles, candle_source_meta = (
+                    kiwoom_utils.get_minute_candles_ka10080_with_meta(
+                        self.token, target.code, limit=40
+                    )
+                )
+                candle_context = build_entry_candle_context(
+                    self.token,
+                    target.code,
+                    ws_data,
+                    venue="KRX",
+                    session="krx_regular",
+                    limit=40,
+                    model_bar_limit=20,
+                    now_ts=now_dt,
+                    recent_candles=candles,
+                    source_meta=candle_source_meta,
+                )
+            except Exception:
+                candle_context = {}
+        review_entry = self.ai_advisor.review_entry
+        if "candle_context" in inspect.signature(review_entry).parameters:
+            ai_result = review_entry(target, ws_data, candle_context=candle_context)
+        else:
+            ai_result = review_entry(target, ws_data)
         decision = evaluate_entry_gate(
             target, ws_data, now_ts=now_dt.timestamp(), ai_result=ai_result
         )

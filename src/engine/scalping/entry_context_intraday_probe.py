@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import inspect
 import json
 import os
 import time
@@ -764,6 +765,58 @@ def _fields_to_price_ctx(fields: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _fields_to_entry_candle_context(fields: dict[str, Any]) -> dict[str, Any]:
+    """Rehydrate the common schema for report-only provider comparisons."""
+    embedded = fields.get("entry_candle_context")
+    if isinstance(embedded, dict) and embedded.get("schema"):
+        return dict(embedded)
+    quality = str(
+        _first_nonempty(
+            fields,
+            "entry_candle_source_quality_status",
+            default="observation_summary_only",
+        )
+    )
+    return {
+        "schema": str(
+            _first_nonempty(
+                fields,
+                "entry_candle_context_schema",
+                default="entry_candle_context_v1",
+            )
+        ),
+        "enabled": True,
+        "venue": _first_nonempty(fields, "entry_candle_venue", default="unknown"),
+        "session": _first_nonempty(fields, "entry_candle_session", default="unknown"),
+        "current_session_bar_count": _int_or_zero(
+            _first_nonempty(fields, "entry_candle_current_session_bar_count", default=0)
+        ),
+        "completed_bar_count": _int_or_zero(
+            _first_nonempty(fields, "entry_candle_completed_bar_count", default=0)
+        ),
+        "forming_bar_present": _boolish(
+            _first_nonempty(fields, "entry_candle_forming_bar_present", default=False)
+        ),
+        "latest_bar_age_sec": _first_nonempty(
+            fields, "entry_candle_latest_bar_age_sec", default=None
+        ),
+        "sample_mode": _first_nonempty(
+            fields, "entry_candle_sample_mode", default="unknown"
+        ),
+        "bars": [],
+        "structure": {},
+        "regime": _first_nonempty(fields, "entry_candle_regime", default="unknown"),
+        "alignment": _first_nonempty(
+            fields, "entry_candle_alignment", default="unknown"
+        ),
+        "risk_flags": ["provider_compare_missing_raw_bar_path"],
+        "source_quality": {
+            "status": quality,
+            "blockers": ["provider_compare_missing_raw_bar_path"],
+        },
+    }
+
+
 def _fields_to_position_ctx(fields: dict[str, Any]) -> dict[str, Any]:
     profit_rate = _float_or_zero(
         _first_nonempty(fields, "profit_rate", "pnl_pct", default=0.0)
@@ -1095,6 +1148,20 @@ def _run_endpoint_provider_compare(
                 ).upper()
                 try:
                     if point == "entry_price":
+                        entry_price_kwargs = {
+                            "metadata_extra": {
+                                "source_event_stage": "entry_context_intraday_probe_provider_compare",
+                            }
+                        }
+                        if (
+                            "candle_context"
+                            in inspect.signature(
+                                engine.evaluate_scalping_entry_price
+                            ).parameters
+                        ):
+                            entry_price_kwargs["candle_context"] = (
+                                _fields_to_entry_candle_context(fields)
+                            )
                         result = engine.evaluate_scalping_entry_price(
                             stock_name,
                             stock_code,
@@ -1102,9 +1169,7 @@ def _run_endpoint_provider_compare(
                             [],
                             [],
                             _fields_to_price_ctx(fields),
-                            metadata_extra={
-                                "source_event_stage": "entry_context_intraday_probe_provider_compare",
-                            },
+                            **entry_price_kwargs,
                         )
                         openai_action = str(result.get("action") or "-").upper()
                         baseline_order_price = _int_or_zero(

@@ -8,6 +8,12 @@ from src.engine import kiwoom_orders
 from src.engine.sniper_entry_latency import evaluate_live_buy_entry
 from src.engine.trade_profit import calculate_net_profit_rate
 from src.engine.scalping.entry_ai_gate import evaluate_ai_score_prior
+from src.engine.scalping.entry_candle_context import (
+    build_entry_candle_context,
+    entry_candle_context_enabled,
+    resolve_entry_candle_session,
+    resolve_entry_candle_venue,
+)
 from src.database.models import RecommendationHistory
 from src.utils.constants import TRADING_RULES
 from src.utils.runtime_flags import is_trading_paused
@@ -454,12 +460,41 @@ def execute_fast_track_scalp_v2(code, name, trigger_price, ratio=0.10):
             return
 
         ticks = kiwoom_utils.get_tick_history_ka10003(KIWOOM_TOKEN, code, limit=10)
+        candle_session = resolve_entry_candle_session()
+        candle_venue = resolve_entry_candle_venue(
+            rt_data or {},
+            session=candle_session,
+        )
+        candle_axis_active = entry_candle_context_enabled(
+            venue=candle_venue,
+            session=candle_session,
+        )
+        recent_candles = []
+        candle_context = None
+        if candle_axis_active:
+            recent_candles, candle_source_meta = (
+                kiwoom_utils.get_minute_candles_ka10080_with_meta(
+                    KIWOOM_TOKEN, code, limit=40
+                )
+            )
+            candle_context = build_entry_candle_context(
+                KIWOOM_TOKEN,
+                code,
+                rt_data or {},
+                venue=candle_venue,
+                session=candle_session,
+                limit=40,
+                model_bar_limit=20,
+                recent_candles=recent_candles,
+                source_meta=candle_source_meta,
+            )
         ai_res = AI_ENGINE.analyze_target(
             name,
             rt_data or {"curr": curr_price, "orderbook": {"asks": [], "bids": []}},
             ticks,
-            recent_candles=[],
+            recent_candles=recent_candles,
             strategy="SCALPING",
+            candle_context=candle_context,
         )
 
         s15_buy_score_threshold = int(

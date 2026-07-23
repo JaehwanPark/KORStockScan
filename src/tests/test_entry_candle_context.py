@@ -1,0 +1,498 @@
+from __future__ import annotations
+
+import inspect
+from datetime import datetime
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+from src.engine.ai_engine_openai import GPTSniperEngine
+from src.engine.ai_prompt_contracts import (
+    SCALPING_SYSTEM_PROMPT,
+    SCALPING_WATCHING_HOT_SYSTEM_PROMPT,
+    SCALPING_WATCHING_SYSTEM_PROMPT,
+)
+from src.engine.scalping.entry_candle_context import (
+    OBSERVATION_CONTRACT,
+    apply_entry_candle_hybrid_guard,
+    build_entry_candle_context,
+    entry_candle_context_enabled,
+    resolve_entry_candle_request_code,
+)
+
+KST = ZoneInfo("Asia/Seoul")
+
+
+def _enable(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_CANDLE_CONTEXT_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_CANDLE_CONTEXT_ACTIVE_DATE", "2026-07-23")
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_CANDLE_CONTEXT_KRX_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_CANDLE_CONTEXT_NXT_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_CANDLE_CONTEXT_PREMARKET_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_CANDLE_HYBRID_GUARD_ENABLED", "true")
+
+
+def _candles(
+    count: int,
+    *,
+    day: str = "20260723",
+    start_hour: int = 9,
+    start_minute: int = 0,
+    base: int = 10000,
+    step: int = 10,
+):
+    rows = []
+    total_start = start_hour * 60 + start_minute
+    for index in range(count):
+        minute_of_day = total_start + index
+        hour, minute = divmod(minute_of_day, 60)
+        close = base + index * step
+        rows.append(
+            {
+                "source_timestamp": f"{day}{hour:02d}{minute:02d}00",
+                "체결시간": f"{hour:02d}:{minute:02d}:00",
+                "시가": close - 3,
+                "고가": close + 5,
+                "저가": close - 5,
+                "현재가": close,
+                "거래량": 100 + index,
+            }
+        )
+    return rows
+
+
+def _ws(price=10400):
+    return {
+        "curr": price,
+        "quote_age_ms": 100,
+        "quote_stale": False,
+        "market_suffix": "",
+        "market_route": "krx_regular",
+        "orderbook": {
+            "asks": [{"price": price + 10, "volume": 100}],
+            "bids": [{"price": price, "volume": 200}],
+        },
+        "recent_trade_ticks": [],
+    }
+
+
+def test_builder_keeps_current_session_separate_and_compresses_latest_twenty(
+    monkeypatch,
+):
+    _enable(monkeypatch)
+    bars = _candles(5, day="20260722") + _candles(25)
+    context = build_entry_candle_context(
+        "token",
+        "000660",
+        _ws(),
+        venue="KRX",
+        session="krx_regular",
+        now_ts=datetime(2026, 7, 23, 9, 25, 30, tzinfo=KST),
+        recent_candles=bars,
+        source_meta={"api_id": "ka10080", "received_count": 30},
+    )
+
+    assert context["schema"] == "entry_candle_context_v1"
+    assert context["enabled"] is True
+    assert context["current_session_bar_count"] == 25
+    assert context["previous_session_bar_count"] == 5
+    assert len(context["bars"]) == 20
+    assert context["bars"][0]["t"] == "09:05"
+    assert context["bars"][-1]["t"] == "09:24"
+    assert context["sample_mode"] == "full_structure"
+    assert context["structure"]["returns_pct"]["20"] is not None
+    assert context["structure"]["slopes_pct_per_bar"]["20"] is not None
+    assert context["structure"]["ranges_pct"]["20"] is not None
+    assert "latest_body_ratio" in context["structure"]
+    assert "latest_lower_wick_ratio" in context["structure"]
+    assert "volume_direction_alignment" in context["structure"]
+    assert context["observation_contract"] == OBSERVATION_CONTRACT
+
+
+def test_builder_uses_route_consistent_ws_tick_for_forming_bar(monkeypatch):
+    _enable(monkeypatch)
+    now = datetime(2026, 7, 23, 9, 20, 30, tzinfo=KST)
+    ws = _ws(10200)
+    ws["market_suffix"] = "_NX"
+    ws["market_route"] = "nxt_only"
+    ws["recent_trade_ticks"] = [
+        {
+            "time": "09:20:20",
+            "price": 10210,
+            "volume": 3,
+            "market_suffix": "_NX",
+            "market_route": "nxt_only",
+        },
+        {
+            "time": "09:20:10",
+            "price": 9900,
+            "volume": 2,
+            "market_suffix": "",
+            "market_route": "krx_regular",
+        },
+    ]
+    context = build_entry_candle_context(
+        "token",
+        "000660_NX",
+        ws,
+        venue="NXT",
+        session="krx_regular",
+        now_ts=now,
+        recent_candles=_candles(20),
+        source_meta={},
+    )
+
+    assert context["forming_bar_present"] is True
+    assert context["bars"][-1]["c"] == 10210
+    assert context["bars"][-1]["partial_volume"] is True
+    assert context["source_quality"]["route_conflict_count"] == 1
+    assert context["source_quality"]["status"] == "blocked"
+
+
+def test_builder_marks_two_or_more_missing_bars_as_source_quality_block(monkeypatch):
+    _enable(monkeypatch)
+    bars = _candles(5)
+    bars.pop(2)
+    bars.pop(2)
+    context = build_entry_candle_context(
+        "token",
+        "000660",
+        _ws(),
+        venue="KRX",
+        session="krx_regular",
+        now_ts=datetime(2026, 7, 23, 9, 5, 20, tzinfo=KST),
+        recent_candles=bars,
+        source_meta={},
+    )
+
+    assert context["source_quality"]["missing_bar_count"] >= 2
+    assert context["source_quality"]["max_consecutive_missing_bar_count"] >= 2
+    assert "consecutive_bar_gap" in context["risk_flags"]
+
+
+def test_builder_does_not_treat_separate_single_gaps_as_consecutive(monkeypatch):
+    _enable(monkeypatch)
+    bars = _candles(7)
+    bars = [bar for index, bar in enumerate(bars) if index not in {1, 5}]
+    context = build_entry_candle_context(
+        "token",
+        "000660",
+        _ws(),
+        venue="KRX",
+        session="krx_regular",
+        now_ts=datetime(2026, 7, 23, 9, 7, 20, tzinfo=KST),
+        recent_candles=bars,
+        source_meta={},
+    )
+
+    assert context["source_quality"]["missing_bar_count"] == 2
+    assert context["source_quality"]["max_consecutive_missing_bar_count"] == 1
+    assert "consecutive_bar_gap" not in context["risk_flags"]
+
+
+def test_rest_current_minute_is_forming_without_ws_tick(monkeypatch):
+    _enable(monkeypatch)
+    context = build_entry_candle_context(
+        "token",
+        "000660",
+        {**_ws(10040), "recent_trade_ticks": []},
+        venue="KRX",
+        session="krx_regular",
+        now_ts=datetime(2026, 7, 23, 9, 4, 20, tzinfo=KST),
+        recent_candles=_candles(5),
+        source_meta={},
+    )
+
+    assert context["forming_bar_present"] is True
+    assert context["completed_bar_count"] == 4
+    assert context["bars"][-1]["partial_volume"] is True
+
+
+def test_opening_sample_does_not_infer_full_trend(monkeypatch):
+    _enable(monkeypatch)
+    context = build_entry_candle_context(
+        "token",
+        "000660",
+        _ws(),
+        venue="KRX",
+        session="krx_regular",
+        now_ts=datetime(2026, 7, 23, 9, 2, 30, tzinfo=KST),
+        recent_candles=_candles(2),
+        source_meta={},
+    )
+
+    assert context["sample_mode"] == "opening_flow_only"
+    assert context["regime"] == "opening_flow"
+
+
+def test_venue_request_code_contract_and_dated_activation(monkeypatch):
+    _enable(monkeypatch)
+    assert (
+        resolve_entry_candle_request_code("000660", venue="KRX", session="krx_regular")
+        == "000660"
+    )
+    assert (
+        resolve_entry_candle_request_code(
+            "000660_NX", venue="KRX", session="krx_regular"
+        )
+        == "000660"
+    )
+    assert (
+        resolve_entry_candle_request_code(
+            "000660", venue="NXT", session="nxt_aftermarket"
+        )
+        == "000660_NX"
+    )
+    assert (
+        resolve_entry_candle_request_code(
+            "000660", venue="PREMARKET_KRX_LIKE", session="premarket_krx_like"
+        )
+        == "000660_NX"
+    )
+    assert (
+        resolve_entry_candle_request_code(
+            "000660_AL",
+            venue="PREMARKET_KRX_LIKE",
+            session="premarket_krx_like",
+        )
+        == "000660_AL"
+    )
+    assert (
+        resolve_entry_candle_request_code("000660", venue="SOR", session="krx_regular")
+        == "000660_AL"
+    )
+    assert entry_candle_context_enabled(
+        venue="KRX",
+        session="krx_regular",
+        now_ts=datetime(2026, 7, 23, 10, 0, tzinfo=KST),
+    )
+    assert not entry_candle_context_enabled(
+        venue="KRX",
+        session="krx_regular",
+        now_ts=datetime(2026, 7, 24, 10, 0, tzinfo=KST),
+    )
+
+
+def test_actual_ws_route_keys_select_nxt_and_premarket_al_requires_proof(monkeypatch):
+    _enable(monkeypatch)
+    nxt_ws = _ws(10000)
+    nxt_ws.pop("market_suffix")
+    nxt_ws.pop("market_route")
+    nxt_ws["last_ws_market_suffix"] = "_NX"
+    nxt_ws["last_ws_market_route"] = "nxt_only"
+    nxt = build_entry_candle_context(
+        "token",
+        "000660",
+        nxt_ws,
+        venue=None,
+        session=None,
+        now_ts=datetime(2026, 7, 23, 10, 0, tzinfo=KST),
+        recent_candles=_candles(20, start_minute=40),
+        source_meta={},
+    )
+    premarket = build_entry_candle_context(
+        "token",
+        "000660_AL",
+        {
+            **_ws(10000),
+            "market_suffix": "_AL",
+            "market_route": "krx_nxt_integrated",
+        },
+        venue="PREMARKET_KRX_LIKE",
+        session="premarket_krx_like",
+        now_ts=datetime(2026, 7, 23, 8, 20, tzinfo=KST),
+        recent_candles=_candles(20, start_hour=8),
+        source_meta={},
+    )
+    assert nxt["venue"] == "NXT"
+    assert nxt["session"] == "nxt_regular_overlap"
+    assert nxt["request_code"] == "000660_NX"
+    assert "premarket_al_proof_missing" in premarket["risk_flags"]
+
+
+def test_krx_context_blocks_nxt_ws_suffix_even_without_route_label(monkeypatch):
+    _enable(monkeypatch)
+    ws = _ws(10000)
+    ws["market_suffix"] = "_NX"
+    ws["market_route"] = ""
+    context = build_entry_candle_context(
+        "token",
+        "000660",
+        ws,
+        venue="KRX",
+        session="krx_regular",
+        now_ts=datetime(2026, 7, 23, 9, 20, 30, tzinfo=KST),
+        recent_candles=_candles(20),
+        source_meta={},
+    )
+
+    assert context["source_quality"]["status"] == "blocked"
+    assert "venue_conflict" in context["risk_flags"]
+
+
+def _guard_context(*, regime: str, quality: str = "fresh_consistent"):
+    return {
+        "enabled": True,
+        "regime": regime,
+        "source_quality": {"status": quality, "blockers": []},
+        "structure": {"returns_pct": {"3": 0.2}},
+        "bars": [{"c": 10000}],
+    }
+
+
+def test_hybrid_guard_preserves_neutral_buy_and_never_upgrades_wait(monkeypatch):
+    _enable(monkeypatch)
+    buy = apply_entry_candle_hybrid_guard(
+        {"action": "BUY", "score": 80, "reason": "valid"},
+        _guard_context(regime="range"),
+        _ws(10000),
+        [],
+    )
+    wait = apply_entry_candle_hybrid_guard(
+        {"action": "WAIT", "score": 70, "reason": "mixed"},
+        _guard_context(regime="breakout"),
+        _ws(10000),
+        [],
+    )
+    assert buy["action"] == "BUY"
+    assert buy["entry_candle_hybrid_guard"]["result"].startswith("preserve")
+    assert wait["action"] == "WAIT"
+
+
+def test_hybrid_guard_demotes_quality_conflict_and_unconfirmed_adverse(monkeypatch):
+    _enable(monkeypatch)
+    stale = apply_entry_candle_hybrid_guard(
+        {"action": "BUY", "score": 90, "reason": "valid"},
+        _guard_context(regime="range", quality="blocked"),
+        _ws(10000),
+        [],
+    )
+    adverse_ws = _ws(9990)
+    adverse_ws["orderbook"] = {
+        "asks": [{"price": 10000, "volume": 300}],
+        "bids": [{"price": 9990, "volume": 100}],
+    }
+    adverse = apply_entry_candle_hybrid_guard(
+        {"action": "BUY", "score": 86, "reason": "valid"},
+        _guard_context(regime="downtrend_bounce"),
+        adverse_ws,
+        [{"aggressor_side": "SELL", "volume": 50}],
+    )
+    assert stale["action"] == "WAIT"
+    assert stale["score"] == 74
+    assert adverse["action"] == "WAIT"
+    assert (
+        adverse["entry_candle_hybrid_guard"]["result"] == "demote_adverse_unconfirmed"
+    )
+
+
+def test_hybrid_guard_keeps_adverse_buy_only_with_two_clean_groups(monkeypatch):
+    _enable(monkeypatch)
+    result = apply_entry_candle_hybrid_guard(
+        {"action": "BUY", "score": 82, "reason": "valid"},
+        _guard_context(regime="failed_breakout"),
+        _ws(10010),
+        [
+            {"aggressor_side": "BUY", "volume": 30},
+            {"aggressor_side": "BUY", "volume": 20},
+            {"aggressor_side": "SELL", "volume": 5},
+        ],
+    )
+    assert result["action"] == "BUY"
+    assert (
+        result["entry_candle_hybrid_guard"]["result"]
+        == "preserve_independent_confirmation"
+    )
+    assert len(result["entry_candle_hybrid_guard"]["positive_groups"]) >= 2
+
+
+def test_hot_and_entry_price_payloads_include_common_context(monkeypatch):
+    _enable(monkeypatch)
+    engine = GPTSniperEngine.__new__(GPTSniperEngine)
+    context = {
+        **_guard_context(regime="range"),
+        "schema": "entry_candle_context_v1",
+        "venue": "KRX",
+        "session": "krx_regular",
+        "current_session_bar_count": 10,
+        "completed_bar_count": 10,
+        "forming_bar_present": False,
+        "latest_bar_age_sec": 10,
+        "sample_mode": "full_structure",
+        "alignment": "neutral",
+        "risk_flags": [],
+    }
+    hot = engine._build_entry_screen_hot_payload(
+        _ws(10000),
+        [],
+        _candles(10),
+        feature_packet={},
+        candle_context=context,
+    )
+    price = engine._build_scalping_entry_price_user_input(
+        stock_name="test",
+        stock_code="000660",
+        ws_data=_ws(10000),
+        recent_ticks=[],
+        recent_candles=_candles(10),
+        price_ctx={},
+        candle_context=context,
+    )
+    assert hot["entry_candle_context"]["schema"] == "entry_candle_context_v1"
+    assert '"entry_candle_context"' in price
+
+
+def test_gatekeeper_packet_and_entry_prompts_keep_compact_context_contract(monkeypatch):
+    _enable(monkeypatch)
+    engine = GPTSniperEngine.__new__(GPTSniperEngine)
+    context = {
+        **_guard_context(regime="range"),
+        "schema": "entry_candle_context_v1",
+        "venue": "KRX",
+        "session": "krx_regular",
+        "current_session_bar_count": 10,
+        "completed_bar_count": 10,
+        "forming_bar_present": False,
+        "latest_bar_age_sec": 10,
+        "sample_mode": "full_structure",
+        "alignment": "neutral",
+        "risk_flags": [],
+    }
+    packet = engine._build_realtime_quant_packet(
+        "test",
+        "000660",
+        {"entry_candle_context": context},
+        "SWING",
+    )
+    assert "[ENTRY_CANDLE_CONTEXT]" in packet
+    assert "entry_candle_context_v1" in packet
+    for prompt in (
+        SCALPING_SYSTEM_PROMPT,
+        SCALPING_WATCHING_SYSTEM_PROMPT,
+        SCALPING_WATCHING_HOT_SYSTEM_PROMPT,
+    ):
+        assert "20 or fewer words" in prompt
+        assert '"action"' in prompt
+        assert '"score"' in prompt
+        assert '"reason"' in prompt
+
+
+def test_runtime_call_sites_use_context_and_s15_no_longer_sends_empty_candles():
+    root = Path(__file__).resolve().parents[1]
+    state_source = (root / "engine" / "sniper_state_handlers.py").read_text()
+    s15_source = (root / "engine" / "sniper_s15_fast_track.py").read_text()
+    analysis_source = (root / "engine" / "sniper_analysis.py").read_text()
+    ipo_source = (root / "engine" / "ipo_listing_day_runner.py").read_text()
+
+    assert "candle_context=candle_context" in state_source
+    assert "candle_context=gatekeeper_candle_context" not in state_source
+    assert "recent_candles=[]" not in s15_source
+    assert "candle_context=candle_context" in s15_source
+    assert "candle_context=candle_context" in analysis_source
+    assert "entry_candle_context" in ipo_source
+    assert (
+        "candle_context" in inspect.signature(GPTSniperEngine.analyze_target).parameters
+    )
+    assert (
+        "candle_context"
+        in inspect.signature(GPTSniperEngine.evaluate_scalping_entry_price).parameters
+    )

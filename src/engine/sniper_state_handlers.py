@@ -61,6 +61,14 @@ from src.engine.scalping.microstructure_reaction_context import (
     infer_tick_aggressor_side,
     neutral_microstructure_reaction_context,
 )
+from src.engine.scalping.entry_candle_context import (
+    apply_entry_candle_hybrid_guard,
+    build_entry_candle_context,
+    entry_candle_context_enabled,
+    entry_candle_context_log_fields,
+    resolve_entry_candle_session,
+    resolve_entry_candle_venue,
+)
 from src.engine.scalping.opening_rotation import (
     EntryConfig as OpeningRotationEntryConfig,
     ExitConfig as OpeningRotationExitConfig,
@@ -21838,6 +21846,7 @@ def _submit_watching_shared_prompt_shadow(
     recent_candles,
     gemini_result,
     record_id=None,
+    candle_context=None,
 ):
     if (
         not _shadow_runtime_enabled()
@@ -21853,6 +21862,7 @@ def _submit_watching_shared_prompt_shadow(
             recent_ticks=recent_ticks,
             recent_candles=recent_candles,
             gemini_result=gemini_result,
+            candle_context=candle_context,
             callback=lambda payload: _log_watching_shared_prompt_shadow_result(
                 stock_name,
                 code,
@@ -30842,8 +30852,10 @@ def _retry_entry_ai_submit_authority_before_block(
         recent_ticks = (
             kiwoom_utils.get_tick_history_ka10003(KIWOOM_TOKEN, code, limit=10) or []
         )
-        recent_candles = (
-            kiwoom_utils.get_minute_candles_ka10080(KIWOOM_TOKEN, code, limit=40) or []
+        recent_candles, candle_source_meta = (
+            kiwoom_utils.get_minute_candles_ka10080_with_meta(
+                KIWOOM_TOKEN, code, limit=40
+            )
         )
         retry_ws_data = dict(ws_data or {})
         try:
@@ -30860,6 +30872,18 @@ def _retry_entry_ai_submit_authority_before_block(
         retry_ws_data.setdefault("current_ai_score", _safe_float(current_ai_score, 0.0))
         retry_ws_data.setdefault(
             "ai_score_baseline_source", "pre_submit_entry_ai_authority_retry"
+        )
+        candle_context = build_entry_candle_context(
+            KIWOOM_TOKEN,
+            code,
+            retry_ws_data,
+            venue=None,
+            session=None,
+            limit=40,
+            model_bar_limit=20,
+            now_ts=now_ts,
+            recent_candles=recent_candles,
+            source_meta=candle_source_meta,
         )
         try:
             overlap_snapshot = _extract_ai_overlap_snapshot(
@@ -30885,6 +30909,7 @@ def _retry_entry_ai_submit_authority_before_block(
                 "entry_adm_candidate_id": (stock or {}).get("entry_adm_candidate_id"),
                 "source_event_stage": "pre_submit_entry_ai_authority_retry",
             },
+            candle_context=candle_context,
         )
         ai_decision = dict(ai_decision or {})
         action = str(ai_decision.get("action") or "not_evaluated").upper()
@@ -33948,15 +33973,27 @@ def _apply_entry_ai_price_canary(
     try:
         tick_limit = int(_rule("SCALPING_ENTRY_AI_PRICE_TICK_LIMIT", 20) or 20)
         candle_limit = int(_rule("SCALPING_ENTRY_AI_PRICE_CANDLE_LIMIT", 20) or 20)
+        candle_session = resolve_entry_candle_session(time.time())
+        candle_venue = resolve_entry_candle_venue(
+            ws_data or {},
+            session=candle_session,
+        )
+        candle_axis_active = entry_candle_context_enabled(
+            venue=candle_venue,
+            session=candle_session,
+            now_ts=time.time(),
+        )
+        fetch_candle_limit = (
+            max(40, candle_limit) if candle_axis_active else candle_limit
+        )
         recent_ticks = (
             kiwoom_utils.get_tick_history_ka10003(KIWOOM_TOKEN, code, limit=tick_limit)
             or []
         )
-        recent_candles = (
-            kiwoom_utils.get_minute_candles_ka10080(
-                KIWOOM_TOKEN, code, limit=candle_limit
+        recent_candles, candle_source_meta = (
+            kiwoom_utils.get_minute_candles_ka10080_with_meta(
+                KIWOOM_TOKEN, code, limit=fetch_candle_limit
             )
-            or []
         )
     except Exception as exc:
         _log_entry_pipeline(
@@ -33968,6 +34005,21 @@ def _apply_entry_ai_price_canary(
             **micro_log_fields,
         )
         return planned_orders, False
+
+    candle_context = None
+    if candle_axis_active:
+        candle_context = build_entry_candle_context(
+            KIWOOM_TOKEN,
+            code,
+            ws_data or {},
+            venue=candle_venue,
+            session=candle_session,
+            limit=fetch_candle_limit,
+            model_bar_limit=20,
+            now_ts=time.time(),
+            recent_candles=recent_candles,
+            source_meta=candle_source_meta,
+        )
 
     ai_eval_started_at = time.perf_counter()
     entry_price_metadata = {
@@ -33988,6 +34040,7 @@ def _apply_entry_ai_price_canary(
         recent_candles,
         price_ctx,
         metadata_extra=entry_price_metadata,
+        candle_context=candle_context,
     )
     ai_eval_ms = int(round((time.perf_counter() - ai_eval_started_at) * 1000.0))
     decision_ts = time.time()
@@ -37540,8 +37593,10 @@ def _run_watching_score_projection_refresh(
         recent_ticks = kiwoom_utils.get_tick_history_ka10003(
             KIWOOM_TOKEN, code, limit=10
         )
-        recent_candles = kiwoom_utils.get_minute_candles_ka10080(
-            KIWOOM_TOKEN, code, limit=40
+        recent_candles, candle_source_meta = (
+            kiwoom_utils.get_minute_candles_ka10080_with_meta(
+                KIWOOM_TOKEN, code, limit=40
+            )
         )
         if not recent_ticks:
             _mutate_stock_state(
@@ -37552,6 +37607,18 @@ def _run_watching_score_projection_refresh(
         ws_data.setdefault("current_ai_score", current_ai_score)
         ws_data.setdefault(
             "ai_score_baseline_source", "pre_analyze_target_runtime_score"
+        )
+        candle_context = build_entry_candle_context(
+            KIWOOM_TOKEN,
+            code,
+            ws_data,
+            venue=None,
+            session=None,
+            limit=40,
+            model_bar_limit=20,
+            now_ts=now_ts,
+            recent_candles=recent_candles,
+            source_meta=candle_source_meta,
         )
 
         def _on_projection(result):
@@ -37627,6 +37694,7 @@ def _run_watching_score_projection_refresh(
             recent_ticks=list(recent_ticks),
             recent_candles=list(recent_candles),
             record_id=stock.get("id"),
+            candle_context=candle_context,
             callback=_on_projection,
         )
         if projection_future is None:
@@ -37793,6 +37861,26 @@ def _build_ai_ops_log_fields(
         "holding_score_transport_fail_closed_reason",
         "holding_score_action",
         "holding_score_position_state",
+        "entry_candle_context_schema",
+        "entry_candle_venue",
+        "entry_candle_session",
+        "entry_candle_rest_route",
+        "entry_candle_ws_route",
+        "entry_candle_sample_mode",
+        "entry_candle_regime",
+        "entry_candle_alignment",
+        "entry_candle_risk_flags",
+        "entry_candle_source_quality_status",
+        "entry_candle_source_quality_blockers",
+        "entry_candle_hybrid_guard_result",
+        "entry_candle_latest_bar_age_sec",
+        "metric_role",
+        "decision_authority",
+        "window_policy",
+        "sample_floor",
+        "primary_decision_metric",
+        "source_quality_gate",
+        "forbidden_uses",
     ):
         if field_name in payload:
             out[field_name] = str(payload.get(field_name, "-") or "-")
@@ -37837,6 +37925,11 @@ def _build_ai_ops_log_fields(
         "openai_http_provider_ms",
         "openai_http_provider_total_ms",
         "openai_http_attempt_count",
+        "entry_candle_current_session_bar_count",
+        "entry_candle_previous_session_bar_count",
+        "entry_candle_completed_bar_count",
+        "entry_candle_context_fetch_ms",
+        "entry_candle_context_build_ms",
     ):
         if field_name in payload:
             out[field_name] = int(payload.get(field_name, 0) or 0)
@@ -37852,6 +37945,8 @@ def _build_ai_ops_log_fields(
         "holding_score_transport_fail_closed",
         "holding_score_preflight_blocked",
         "holding_score_raw_score_non50_neutralized",
+        "entry_candle_context_enabled",
+        "entry_candle_forming_bar_present",
     ):
         if field_name in payload:
             raw_value = payload.get(field_name)
@@ -45232,8 +45327,10 @@ def _handle_watching_strategy_branch(
                         recent_ticks = kiwoom_utils.get_tick_history_ka10003(
                             KIWOOM_TOKEN, code, limit=10
                         )
-                        recent_candles = kiwoom_utils.get_minute_candles_ka10080(
-                            KIWOOM_TOKEN, code, limit=40
+                        recent_candles, candle_source_meta = (
+                            kiwoom_utils.get_minute_candles_ka10080_with_meta(
+                                KIWOOM_TOKEN, code, limit=40
+                            )
                         )
                         if ws_data.get("orderbook") and recent_ticks:
                             adm_overlap_snapshot = _extract_ai_overlap_snapshot(
@@ -45250,6 +45347,18 @@ def _handle_watching_strategy_branch(
                             )
                             for adm_key, adm_value in adm_overlap_snapshot.items():
                                 ws_data.setdefault(adm_key, adm_value)
+                            candle_context = build_entry_candle_context(
+                                KIWOOM_TOKEN,
+                                code,
+                                ws_data,
+                                venue=None,
+                                session=None,
+                                limit=40,
+                                model_bar_limit=20,
+                                now_ts=now_ts,
+                                recent_candles=recent_candles,
+                                source_meta=candle_source_meta,
+                            )
                             ai_decision = ai_engine.analyze_target(
                                 stock["name"],
                                 ws_data,
@@ -45267,6 +45376,7 @@ def _handle_watching_strategy_branch(
                                     ),
                                     "source_event_stage": "watching_analyze_target",
                                 },
+                                candle_context=candle_context,
                             )
                             ai_decision.update(pre_ai_ws_refresh_fields)
                             ai_call_executed = True
@@ -45590,6 +45700,7 @@ def _handle_watching_strategy_branch(
                                             :240
                                         ],
                                     },
+                                    candle_context=candle_context,
                                 )
                                 recheck_action = str(
                                     (recheck_decision or {}).get("action") or "WAIT"
@@ -45859,6 +45970,7 @@ def _handle_watching_strategy_branch(
                                             or "0.00"
                                         ),
                                     },
+                                    candle_context=candle_context,
                                 )
                                 recheck_action = str(
                                     (recheck_decision or {}).get("action") or "WAIT"
@@ -46315,6 +46427,7 @@ def _handle_watching_strategy_branch(
                                 recent_candles=recent_candles,
                                 gemini_result=ai_decision,
                                 record_id=stock.get("id"),
+                                candle_context=candle_context,
                             )
 
                             if ai_score != 50:
@@ -47143,6 +47256,16 @@ def _handle_watching_strategy_branch(
                     str(stock.get("last_gatekeeper_action", "") or "").strip()
                 )
                 has_last_allow_flag = "last_gatekeeper_allow_entry" in stock
+                gatekeeper_candle_session = resolve_entry_candle_session(now_ts)
+                gatekeeper_candle_venue = resolve_entry_candle_venue(
+                    ws_data,
+                    session=gatekeeper_candle_session,
+                )
+                gatekeeper_candle_axis_active = entry_candle_context_enabled(
+                    venue=gatekeeper_candle_venue,
+                    session=gatekeeper_candle_session,
+                    now_ts=now_ts,
+                )
                 can_fast_reuse = (
                     fast_sig_matches
                     and fast_sig_fresh
@@ -47150,6 +47273,7 @@ def _handle_watching_strategy_branch(
                     and not near_score_boundary
                     and has_last_action
                     and has_last_allow_flag
+                    and not gatekeeper_candle_axis_active
                 )
 
                 if can_fast_reuse:
@@ -47230,6 +47354,9 @@ def _handle_watching_strategy_branch(
                             score_boundary=not near_score_boundary,
                             missing_action=has_last_action,
                             missing_allow_flag=has_last_allow_flag,
+                            candle_context_fresh_required=(
+                                not gatekeeper_candle_axis_active
+                            ),
                         ),
                     )
                     reject_cache_gatekeeper = _build_gatekeeper_reject_cache_result(
@@ -47289,6 +47416,26 @@ def _handle_watching_strategy_branch(
                                 conclusion=conclusion,
                                 quant_metrics=metrics,
                             )
+                            gatekeeper_candles, gatekeeper_candle_meta = (
+                                kiwoom_utils.get_minute_candles_ka10080_with_meta(
+                                    KIWOOM_TOKEN, code, limit=40
+                                )
+                            )
+                            gatekeeper_candle_context = build_entry_candle_context(
+                                KIWOOM_TOKEN,
+                                code,
+                                ws_data,
+                                venue=None,
+                                session=None,
+                                limit=40,
+                                model_bar_limit=20,
+                                now_ts=now_ts,
+                                recent_candles=gatekeeper_candles,
+                                source_meta=gatekeeper_candle_meta,
+                            )
+                            realtime_ctx["entry_candle_context"] = (
+                                gatekeeper_candle_context
+                            )
                             gatekeeper_started_at = time.perf_counter()
                             gatekeeper = ai_engine.evaluate_realtime_gatekeeper(
                                 stock_name=stock["name"],
@@ -47296,6 +47443,34 @@ def _handle_watching_strategy_branch(
                                 realtime_ctx=realtime_ctx,
                                 analysis_mode="SWING",
                             )
+                            if bool(gatekeeper.get("allow_entry", False)):
+                                gatekeeper_guard = apply_entry_candle_hybrid_guard(
+                                    {
+                                        "action": "BUY",
+                                        "score": gatekeeper.get("score", score),
+                                        "reason": gatekeeper.get("report", ""),
+                                    },
+                                    gatekeeper_candle_context,
+                                    ws_data,
+                                    list(
+                                        (ws_data or {}).get("recent_trade_ticks") or []
+                                    ),
+                                )
+                                if gatekeeper_guard.get("action") != "BUY":
+                                    gatekeeper["allow_entry"] = False
+                                    gatekeeper["action_label"] = "WAIT"
+                                    gatekeeper["action_key"] = "wait"
+                                    gatekeeper["report"] = gatekeeper_guard.get(
+                                        "reason"
+                                    )
+                                gatekeeper.update(
+                                    entry_candle_context_log_fields(
+                                        gatekeeper_candle_context,
+                                        gatekeeper_guard.get(
+                                            "entry_candle_hybrid_guard"
+                                        ),
+                                    )
+                                )
                             gatekeeper_eval_ms = int(
                                 (time.perf_counter() - gatekeeper_started_at) * 1000
                             )

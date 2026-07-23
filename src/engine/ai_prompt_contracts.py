@@ -14,10 +14,10 @@ Do not infer news, fundamentals, or long-term outlooks that are not in the input
 Decide only BUY, WAIT, or DROP. Do not decide order price, quantity, holding, or exit.
 
 [Decision Priority]
-1. Supply-demand: buy_pressure_10t, net_aggressive_delta_10t, strength change
-2. Speed: tick_acceleration_ratio, recent 5-10 tick interval
-3. Position: micro VWAP/MA5 position, distance from intraday high
-4. Orderbook/risk: large_sell_print_detected, top3_depth_ratio, spread/quote deterioration
+1. Source quality: venue/session consistency, freshness, missing/conflicting bars
+2. 10-20 minute structure: regime, slopes, high/low direction, peak drawdown
+3. 3-5 minute impulse or healthy pullback
+4. Tick, tape, and orderbook confirmation
 
 [Action]
 - BUY: supply-demand, speed, and position are jointly favorable and immediate reaction is likely.
@@ -29,7 +29,7 @@ Decide only BUY, WAIT, or DROP. Do not decide order price, quantity, holding, or
 - 50-74 WAIT: keep observing
 - 0-49 DROP: no entry
 
-Output `reason` in concise English ASCII only. Do not use Korean, Thai, or any other non-English language.
+Output `reason` in 20 or fewer words, English ASCII only. Never repeat input arrays or summaries.
 
 Return JSON only:
 {
@@ -46,9 +46,11 @@ Mechanical gate pass is assumed, but any immediate deterioration visible in the 
 Do not decide order price, quantity, holding, or exit.
 
 [Interpretation Order]
-1. Quantitative features: supply-demand -> speed -> position -> orderbook risk
-2. Recent ticks/orderbook details are supporting evidence only when they conflict with quantitative features.
-3. Do not infer prices, news, or investor flow not present in the input.
+1. Source quality: venue/session consistency, freshness, missing/conflicting bars
+2. 10-20 minute candle structure: regime, slopes, high/low direction
+3. 3-5 minute impulse or healthy pullback
+4. Tick, tape, and orderbook confirmation
+5. Do not infer prices, news, or investor flow not present in the input.
 
 [Core Quantitative Features]
 - Position: curr_vs_micro_vwap_bp, curr_vs_ma5_bp
@@ -77,7 +79,7 @@ The reason must name the quantitative feature that prevents BUY or DROP.
 Never describe `tick_acceleration_ratio >= 1.10` as a failed speed condition.
 Never describe position advantage as failed when either `curr_vs_micro_vwap_bp > 0` or `curr_vs_ma5_bp > 0`.
 Never describe supply-demand advantage as failed when `buy_pressure_10t >= 68` or `net_aggressive_delta_10t > 0`.
-Output `reason` in concise English ASCII only. Do not use Korean, Thai, or any other non-English language.
+Output `reason` in 20 or fewer words, English ASCII only. Never repeat input arrays or summaries.
 
 [Scoring]
 - 75-100 BUY: valid immediate entry
@@ -98,11 +100,16 @@ Classify only BUY, WAIT, or DROP from the supplied quantitative JSON.
 Do not decide order price, quantity, holding, exit, provider route, or hard guard policy.
 Hard safety and broker guards are external and cannot be bypassed.
 
-Use this priority: supply-demand, speed, position, then quote/orderbook risk.
+Use this priority:
+1. Source quality and venue/session consistency.
+2. 10-20 minute candle structure.
+3. 3-5 minute impulse or healthy pullback.
+4. Tick, tape, and quote/orderbook confirmation.
 BUY only when at least two core groups are favorable and no clear deterioration is present.
 WAIT when evidence is mixed, stale, or incomplete. Name the blocker.
 DROP when multiple deterioration signals align or source quality makes entry unsafe.
 Do not infer news, fundamentals, investor flow, missing ticks, or missing candles.
+Neutral, range, and normal opening-flow candle context are not standalone blockers.
 
 Core groups:
 - Supply-demand: buy_pressure_10t, net_aggressive_delta_10t, same_price_buy_absorption, order_flow_pressure_score
@@ -116,7 +123,7 @@ Core groups:
 - 50-74 WAIT: keep observing
 - 0-49 DROP: no entry
 
-Output `reason` in concise English ASCII only. Do not use Korean, Thai, or any other non-English language.
+Output `reason` in 20 or fewer words, English ASCII only. Never repeat input arrays or summaries.
 
 Return JSON only:
 {
@@ -131,7 +138,9 @@ You are a pre-submit scalping order-price classifier for Korean equities.
 The BUY/submitted candidate already passed entry checks. Do not re-decide BUY vs WAIT.
 Decide only how the order price should be submitted now.
 Focus only on price, chase risk, fill probability, and quote freshness.
-If `entry_context_features` is present, use it only as pre-submit liquidity/fillability/source-quality context.
+If `entry_context_features` or `entry_candle_context` is present, use it only as
+pre-submit liquidity, fillability, source-quality, and chase-risk context. It must
+not re-decide BUY versus WAIT.
 
 [Decision Rules]
 1. `reference_target_price` is advisory, not authoritative.

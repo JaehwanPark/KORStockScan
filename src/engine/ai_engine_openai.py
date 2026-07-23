@@ -55,6 +55,10 @@ from src.engine.scalping_feature_packet import (
 from src.engine.scalping.microstructure_reaction_context import (
     infer_tick_aggressor_side,
 )
+from src.engine.scalping.entry_candle_context import (
+    apply_entry_candle_hybrid_guard,
+    entry_candle_context_log_fields,
+)
 from src.utils.logger import log_error, log_info
 from src.utils.constants import TRADING_RULES
 from src.engine.macro_briefing_complete import build_scanner_data_input
@@ -1169,6 +1173,7 @@ class GPTSniperEngine:
         recent_candles,
         program_net_qty,
         cache_profile,
+        candle_context=None,
     ):
         if cache_profile == "holding":
             return self._build_cache_digest(
@@ -1184,6 +1189,9 @@ class GPTSniperEngine:
                     "program_net_qty": self._bucket_int_for_cache(
                         program_net_qty, 1_000
                     ),
+                    "entry_candle_context": self._entry_candle_model_payload(
+                        candle_context
+                    ),
                 }
             )
         return self._build_cache_digest(
@@ -1195,8 +1203,32 @@ class GPTSniperEngine:
                 "recent_ticks": recent_ticks,
                 "recent_candles": recent_candles,
                 "program_net_qty": program_net_qty,
+                "entry_candle_context": self._entry_candle_model_payload(
+                    candle_context
+                ),
             }
         )
+
+    def _entry_candle_model_payload(self, candle_context):
+        context = candle_context if isinstance(candle_context, dict) else {}
+        if not context or not bool(context.get("enabled", False)):
+            return None
+        return {
+            "schema": context.get("schema"),
+            "venue": context.get("venue"),
+            "session": context.get("session"),
+            "current_session_bar_count": context.get("current_session_bar_count"),
+            "completed_bar_count": context.get("completed_bar_count"),
+            "forming_bar_present": context.get("forming_bar_present"),
+            "latest_bar_age_sec": context.get("latest_bar_age_sec"),
+            "sample_mode": context.get("sample_mode"),
+            "bars": context.get("bars", []),
+            "structure": context.get("structure", {}),
+            "regime": context.get("regime"),
+            "alignment": context.get("alignment"),
+            "risk_flags": context.get("risk_flags", []),
+            "source_quality": context.get("source_quality", {}),
+        }
 
     def _bucket_int_for_cache(self, value, bucket):
         try:
@@ -3554,7 +3586,13 @@ class GPTSniperEngine:
         return summary
 
     def _build_entry_screen_v2_payload(
-        self, ws_data, recent_ticks, recent_candles, *, feature_packet=None
+        self,
+        ws_data,
+        recent_ticks,
+        recent_candles,
+        *,
+        feature_packet=None,
+        candle_context=None,
     ):
         ws = ws_data if isinstance(ws_data, dict) else {}
         if feature_packet is None:
@@ -3573,7 +3611,7 @@ class GPTSniperEngine:
             )
         except Exception:
             ws_age_sec = None
-        return {
+        payload = {
             "input_schema": "entry_screen_v2",
             "current": {
                 "price": ws.get("curr"),
@@ -3650,6 +3688,10 @@ class GPTSniperEngine:
                 "price_change_heuristic_is_not_aggressor": True,
             },
         }
+        candle_payload = self._entry_candle_model_payload(candle_context)
+        if candle_payload:
+            payload["entry_candle_context"] = candle_payload
+        return payload
 
     def _clean_hot_entry_value(self, value):
         if value is None or value == "":
@@ -3721,6 +3763,7 @@ class GPTSniperEngine:
         matrix_runtime=None,
         entry_adm_runtime=None,
         lifecycle_ai_runtime=None,
+        candle_context=None,
     ):
         ws = ws_data if isinstance(ws_data, dict) else {}
         ticks = [tick for tick in (recent_ticks or []) if isinstance(tick, dict)]
@@ -3837,16 +3880,27 @@ class GPTSniperEngine:
                 "price_change_heuristic_is_not_aggressor": True,
             },
         }
+        candle_payload = self._entry_candle_model_payload(candle_context)
+        if candle_payload:
+            payload["entry_candle_context"] = candle_payload
         return self._clean_hot_entry_payload(payload)
 
     def _format_entry_screen_hot_data(
-        self, ws_data, recent_ticks, recent_candles, *, feature_packet=None, **runtime
+        self,
+        ws_data,
+        recent_ticks,
+        recent_candles,
+        *,
+        feature_packet=None,
+        candle_context=None,
+        **runtime,
     ):
         payload = self._build_entry_screen_hot_payload(
             ws_data,
             recent_ticks,
             recent_candles,
             feature_packet=feature_packet,
+            candle_context=candle_context,
             **runtime,
         )
         return json.dumps(
@@ -3854,7 +3908,13 @@ class GPTSniperEngine:
         )
 
     def _format_market_data(
-        self, ws_data, recent_ticks, recent_candles=None, *, feature_packet=None
+        self,
+        ws_data,
+        recent_ticks,
+        recent_candles=None,
+        *,
+        feature_packet=None,
+        candle_context=None,
     ):
         if recent_candles is None:
             recent_candles = []
@@ -3884,6 +3944,7 @@ class GPTSniperEngine:
                     recent_ticks,
                     recent_candles,
                     feature_packet=feature_packet,
+                    candle_context=candle_context,
                 ),
                 ensure_ascii=False,
                 separators=(",", ":"),
@@ -3989,6 +4050,9 @@ class GPTSniperEngine:
                     "price_change_heuristic_is_not_aggressor": True,
                 },
             }
+            candle_payload = self._entry_candle_model_payload(candle_context)
+            if candle_payload:
+                compact_payload["entry_candle_context"] = candle_payload
             return json.dumps(
                 compact_payload, ensure_ascii=False, separators=(",", ":"), default=str
             )
@@ -4235,12 +4299,24 @@ class GPTSniperEngine:
 [최근 10틱 상세 내역 (최신순)]
 {tick_str}
 """
+        candle_payload = self._entry_candle_model_payload(candle_context)
+        if candle_payload:
+            user_input += "\n\n[ENTRY_CANDLE_CONTEXT]\n" + json.dumps(
+                candle_payload, ensure_ascii=True, default=str
+            )
         return user_input
 
     def _extract_scalping_features(self, ws_data, recent_ticks, recent_candles=None):
         return extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles)
 
-    def _format_swing_market_data(self, ws_data, recent_candles, program_net_qty=0):
+    def _format_swing_market_data(
+        self,
+        ws_data,
+        recent_candles,
+        program_net_qty=0,
+        *,
+        candle_context=None,
+    ):
         curr_price = ws_data.get("curr", 0)
         fluctuation = ws_data.get("fluctuation", 0.0)
         v_pw = ws_data.get("v_pw", 0)
@@ -4278,6 +4354,11 @@ class GPTSniperEngine:
 [CHART_POSITION]
 {candle_str}
 """
+        candle_payload = self._entry_candle_model_payload(candle_context)
+        if candle_payload:
+            user_input += "\n\n[ENTRY_CANDLE_CONTEXT]\n" + json.dumps(
+                candle_payload, ensure_ascii=True, default=str
+            )
         return user_input
 
     def _infer_realtime_mode(self, realtime_ctx):
@@ -4449,10 +4530,19 @@ class GPTSniperEngine:
 """
 
         if selected_mode == "SCALP":
-            return common_block + scalp_block
-        if selected_mode == "SWING":
-            return common_block + swing_block
-        return common_block + scalp_block + swing_block
+            packet = common_block + scalp_block
+        elif selected_mode == "SWING":
+            packet = common_block + swing_block
+        else:
+            packet = common_block + scalp_block + swing_block
+        candle_payload = self._entry_candle_model_payload(
+            realtime_ctx.get("entry_candle_context")
+        )
+        if candle_payload:
+            packet += "\n[ENTRY_CANDLE_CONTEXT]\n" + json.dumps(
+                candle_payload, ensure_ascii=True, default=str
+            )
+        return packet
 
     # ==========================================
     # 게이트키퍼 캐시
@@ -4507,6 +4597,9 @@ class GPTSniperEngine:
             "spread_tick": self._bucket_int_for_cache(ctx.get("spread_tick", 0), 1),
             "vol_ratio": self._bucket_float_for_cache(ctx.get("vol_ratio", 0.0), 25.0),
             "today_vol": self._bucket_int_for_cache(ctx.get("today_vol", 0), 100_000),
+            "entry_candle_context": self._entry_candle_model_payload(
+                ctx.get("entry_candle_context")
+            ),
         }
 
     def _build_gatekeeper_cache_key(
@@ -4622,6 +4715,7 @@ class GPTSniperEngine:
         recent_ticks,
         recent_candles,
         price_ctx,
+        candle_context=None,
     ):
         return json.dumps(
             {
@@ -4631,6 +4725,9 @@ class GPTSniperEngine:
                 "recent_ticks": (recent_ticks or [])[:20],
                 "recent_candles": (recent_candles or [])[:20],
                 "price_context": price_ctx or {},
+                "entry_candle_context": self._entry_candle_model_payload(
+                    candle_context
+                ),
             },
             ensure_ascii=True,
             default=str,
@@ -4908,6 +5005,7 @@ class GPTSniperEngine:
         recent_ticks,
         recent_candles,
         price_ctx,
+        candle_context=None,
     ):
         ctx = price_ctx if isinstance(price_ctx, dict) else {}
         start_quote = {
@@ -5021,6 +5119,9 @@ class GPTSniperEngine:
                 recent_candles, limit=5
             ),
         }
+        candle_payload = self._entry_candle_model_payload(candle_context)
+        if candle_payload:
+            payload["entry_candle_context"] = candle_payload
         return json.dumps(
             payload, ensure_ascii=True, separators=(",", ":"), default=str
         )
@@ -5034,6 +5135,7 @@ class GPTSniperEngine:
         recent_ticks,
         recent_candles,
         price_ctx,
+        candle_context=None,
     ):
         payload = {
             "stock_name": stock_name,
@@ -5049,6 +5151,9 @@ class GPTSniperEngine:
                 price_ctx=price_ctx,
             ),
         }
+        candle_payload = self._entry_candle_model_payload(candle_context)
+        if candle_payload:
+            payload["entry_candle_context"] = candle_payload
         return json.dumps(
             payload, ensure_ascii=True, separators=(",", ":"), default=str
         )
@@ -5062,6 +5167,7 @@ class GPTSniperEngine:
         recent_ticks,
         recent_candles,
         price_ctx,
+        candle_context=None,
     ):
         if bool(
             getattr(TRADING_RULES, "OPENAI_ENTRY_PRICE_COMPACT_INPUT_ENABLED", True)
@@ -5076,6 +5182,7 @@ class GPTSniperEngine:
                     recent_ticks=recent_ticks,
                     recent_candles=recent_candles,
                     price_ctx=price_ctx,
+                    candle_context=candle_context,
                 )
             return self._build_scalping_entry_price_user_input(
                 stock_name=stock_name,
@@ -5084,6 +5191,7 @@ class GPTSniperEngine:
                 recent_ticks=recent_ticks,
                 recent_candles=recent_candles,
                 price_ctx=price_ctx,
+                candle_context=candle_context,
             )
         return self._build_scalping_entry_price_raw_input(
             stock_name=stock_name,
@@ -5092,6 +5200,7 @@ class GPTSniperEngine:
             recent_ticks=recent_ticks,
             recent_candles=recent_candles,
             price_ctx=price_ctx,
+            candle_context=candle_context,
         )
 
     def evaluate_scalping_entry_price(
@@ -5103,6 +5212,7 @@ class GPTSniperEngine:
         recent_candles,
         price_ctx,
         metadata_extra=None,
+        candle_context=None,
     ):
         started = time.perf_counter()
         fallback_price = int((price_ctx or {}).get("resolved_order_price", 0) or 0)
@@ -5135,6 +5245,10 @@ class GPTSniperEngine:
             ),
             "ai_input_build_fallback": "not_built",
         }
+        if isinstance(candle_context, dict) and candle_context:
+            input_contract_fields.update(
+                entry_candle_context_log_fields(candle_context)
+            )
         if not self.lock.acquire(blocking=False):
             return self._annotate_analysis_result(
                 normalize_scalping_entry_price_result(
@@ -5191,6 +5305,7 @@ class GPTSniperEngine:
                 recent_ticks=recent_ticks or [],
                 recent_candles=recent_candles or [],
                 price_ctx=price_ctx or {},
+                candle_context=candle_context,
             )
             input_contract_fields = self._resolve_ai_input_contract_fields(
                 user_input,
@@ -5225,6 +5340,10 @@ class GPTSniperEngine:
                     else "plain_text"
                 ),
             )
+            if isinstance(candle_context, dict) and candle_context:
+                input_contract_fields.update(
+                    entry_candle_context_log_fields(candle_context)
+                )
             result = self._call_openai_safe(
                 SCALPING_ENTRY_PRICE_PROMPT,
                 user_input,
@@ -5301,6 +5420,7 @@ class GPTSniperEngine:
         cache_profile="default",
         prompt_profile="shared",
         metadata_extra=None,
+        candle_context=None,
     ):
         analysis_started = time.perf_counter()
         prompt_version = "default_v1"
@@ -5421,6 +5541,10 @@ class GPTSniperEngine:
                 ),
                 "ai_input_build_fallback": "not_built",
             }
+        if isinstance(candle_context, dict) and candle_context:
+            input_contract_fields.update(
+                entry_candle_context_log_fields(candle_context)
+            )
 
         def _merge_runtime_fields(payload: dict[str, Any] | None) -> dict[str, Any]:
             merged = merge_holding_exit_matrix_result_fields(payload, matrix_runtime)
@@ -5436,6 +5560,7 @@ class GPTSniperEngine:
             recent_candles=recent_candles,
             program_net_qty=program_net_qty,
             cache_profile=cache_profile,
+            candle_context=candle_context,
         )
         cached_result = self._cache_get("_analysis_cache", cache_key)
         if cached_result is not None:
@@ -5545,9 +5670,17 @@ class GPTSniperEngine:
                 min_interval_wait_ms = int(round(min_interval_remaining * 1000))
 
             if strategy in ["KOSPI_ML", "KOSDAQ_ML"]:
-                formatted_data = self._format_swing_market_data(
-                    ws_data, recent_candles, program_net_qty
-                )
+                if candle_context is not None:
+                    formatted_data = self._format_swing_market_data(
+                        ws_data,
+                        recent_candles,
+                        program_net_qty,
+                        candle_context=candle_context,
+                    )
+                else:
+                    formatted_data = self._format_swing_market_data(
+                        ws_data, recent_candles, program_net_qty
+                    )
                 target_model = self._get_tier2_model()
                 feature_audit_fields = {}
                 input_contract_fields = self._resolve_ai_input_contract_fields(
@@ -5555,32 +5688,46 @@ class GPTSniperEngine:
                     default_schema="swing_market_text_v1",
                     default_mode="plain_text",
                 )
+                if isinstance(candle_context, dict) and candle_context:
+                    input_contract_fields.update(
+                        entry_candle_context_log_fields(candle_context)
+                    )
             else:
                 feature_packet = extract_scalping_feature_packet(
                     ws_data, recent_ticks, recent_candles
                 )
                 if use_hot_entry_input:
+                    hot_runtime = {
+                        "feature_packet": feature_packet,
+                        "matrix_runtime": matrix_runtime,
+                        "entry_adm_runtime": entry_adm_runtime,
+                        "lifecycle_ai_runtime": lifecycle_ai_runtime,
+                    }
+                    if candle_context is not None:
+                        hot_runtime["candle_context"] = candle_context
                     formatted_data = self._format_entry_screen_hot_data(
-                        ws_data,
-                        recent_ticks,
-                        recent_candles,
-                        feature_packet=feature_packet,
-                        matrix_runtime=matrix_runtime,
-                        entry_adm_runtime=entry_adm_runtime,
-                        lifecycle_ai_runtime=lifecycle_ai_runtime,
+                        ws_data, recent_ticks, recent_candles, **hot_runtime
                     )
                 else:
                     try:
+                        format_kwargs = {"feature_packet": feature_packet}
+                        if candle_context is not None:
+                            format_kwargs["candle_context"] = candle_context
                         formatted_data = self._format_market_data(
-                            ws_data,
-                            recent_ticks,
-                            recent_candles,
-                            feature_packet=feature_packet,
+                            ws_data, recent_ticks, recent_candles, **format_kwargs
                         )
                     except TypeError:
-                        formatted_data = self._format_market_data(
-                            ws_data, recent_ticks, recent_candles
-                        )
+                        if candle_context is not None:
+                            formatted_data = self._format_market_data(
+                                ws_data,
+                                recent_ticks,
+                                recent_candles,
+                                candle_context=candle_context,
+                            )
+                        else:
+                            formatted_data = self._format_market_data(
+                                ws_data, recent_ticks, recent_candles
+                            )
                 if bool(
                     getattr(
                         TRADING_RULES, "OPENAI_ENTRY_SCREEN_V2_INPUT_ENABLED", False
@@ -5692,6 +5839,10 @@ class GPTSniperEngine:
                         else "plain_text"
                     ),
                 )
+                if isinstance(candle_context, dict) and candle_context:
+                    input_contract_fields.update(
+                        entry_candle_context_log_fields(candle_context)
+                    )
 
             result = self._call_openai_safe(
                 prompt,
@@ -5740,6 +5891,23 @@ class GPTSniperEngine:
                 result = self._normalize_scalping_action_schema(
                     result, prompt_type=prompt_type
                 )
+                if (
+                    prompt_type != "scalping_holding"
+                    and isinstance(candle_context, dict)
+                    and candle_context
+                ):
+                    result = apply_entry_candle_hybrid_guard(
+                        result,
+                        candle_context,
+                        ws_data,
+                        recent_ticks,
+                    )
+                    result.update(
+                        entry_candle_context_log_fields(
+                            candle_context,
+                            result.get("entry_candle_hybrid_guard"),
+                        )
+                    )
                 result.update(feature_audit_fields)
                 result = self._annotate_entry_numeric_consistency(
                     result,
@@ -5850,9 +6018,24 @@ class GPTSniperEngine:
     # ==========================================
 
     def generate_realtime_report(
-        self, stock_name, stock_code, input_data_text, analysis_mode="AUTO"
+        self,
+        stock_name,
+        stock_code,
+        input_data_text,
+        analysis_mode="AUTO",
+        candle_context=None,
     ):
         """실시간 종목 분석 리포트 생성"""
+        candle_payload = self._entry_candle_model_payload(candle_context)
+        if candle_payload:
+            if isinstance(input_data_text, dict):
+                input_data_text = dict(input_data_text)
+                input_data_text["entry_candle_context"] = candle_payload
+            else:
+                input_data_text = (
+                    f"{input_data_text}\n\n[ENTRY_CANDLE_CONTEXT]\n"
+                    + json.dumps(candle_payload, ensure_ascii=True, default=str)
+                )
         return self._generate_realtime_report_payload(
             stock_name=stock_name,
             stock_code=stock_code,
@@ -7229,6 +7412,7 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
         recent_ticks,
         recent_candles,
         condition_profile,
+        candle_context=None,
     ):
         """조건검색식 진입 판단: 전용 prompt 대신 기존 scalping entry route를 재사용한다."""
         try:
@@ -7240,6 +7424,7 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
                 strategy="SCALPING",
                 cache_profile="condition_entry",
                 prompt_profile="watching",
+                candle_context=candle_context,
             )
             return normalize_condition_entry_from_scalping_result(result)
         except Exception as e:
@@ -7797,10 +7982,21 @@ class OpenAIDualPersonaShadowEngine(GPTSniperEngine):
         recent_ticks,
         recent_candles,
         gemini_result,
+        candle_context=None,
     ):
         started_at = time.perf_counter()
         try:
-            formatted = self._format_market_data(ws_data, recent_ticks, recent_candles)
+            if candle_context is not None:
+                formatted = self._format_market_data(
+                    ws_data,
+                    recent_ticks,
+                    recent_candles,
+                    candle_context=candle_context,
+                )
+            else:
+                formatted = self._format_market_data(
+                    ws_data, recent_ticks, recent_candles
+                )
             result = self._call_openai_safe(
                 SCALPING_SYSTEM_PROMPT,
                 formatted,
@@ -7848,6 +8044,7 @@ class OpenAIDualPersonaShadowEngine(GPTSniperEngine):
         recent_ticks,
         recent_candles,
         gemini_result,
+        candle_context=None,
         callback=None,
     ):
         future = self.shadow_executor.submit(
@@ -7858,6 +8055,7 @@ class OpenAIDualPersonaShadowEngine(GPTSniperEngine):
             recent_ticks,
             recent_candles,
             gemini_result,
+            candle_context,
         )
         if callback is not None:
 
@@ -7881,6 +8079,7 @@ class OpenAIDualPersonaShadowEngine(GPTSniperEngine):
         recent_ticks,
         recent_candles,
         record_id=None,
+        candle_context=None,
         callback=None,
     ):
         """Run the exact WATCHING contract on the isolated shadow engine."""
@@ -7897,6 +8096,7 @@ class OpenAIDualPersonaShadowEngine(GPTSniperEngine):
                 "source_event_stage": "ai_watching_score_projection",
                 "decision_authority": "report_only_no_runtime_effect",
             },
+            candle_context=candle_context,
         )
         if callback is not None:
 
