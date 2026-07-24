@@ -447,6 +447,9 @@ def test_send_cancel_order_uses_requested_exchange(monkeypatch):
     assert captured["headers"]["api-id"] == "kt10003"
     assert captured["payload"]["dmst_stex_tp"] == "KRX"
     assert captured["payload"]["orig_ord_no"] == "0062482"
+    assert result["broker_route"] == "KRX"
+    assert result["broker_route_resolution"] == "explicit_request"
+    assert result["broker_route_attempted"] is True
 
 
 def test_get_deposit_loop_cache_can_be_disabled_by_string_config(monkeypatch):

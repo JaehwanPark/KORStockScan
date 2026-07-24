@@ -260,17 +260,14 @@ def _broker_route_matches_cohort(
 ) -> bool:
     route = str(broker_route or "").strip().upper()
     cohort = str(venue_cohort or "").strip().upper()
-    session_value = str(session or "").strip().lower()
     if not route:
         return False
     if cohort == "KRX":
-        return route in {"KRX", "SOR"}
+        return route == "SOR"
     if cohort == "PREMARKET_KRX_LIKE":
-        return route in {"NXT", "SOR"}
+        return route == "NXT"
     if cohort == "NXT":
-        if "aftermarket" in session_value or "after_market" in session_value:
-            return route == "NXT"
-        return route in {"NXT", "SOR"}
+        return route == "NXT"
     return False
 
 

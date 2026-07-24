@@ -697,7 +697,7 @@ def test_legacy_sor_venue_input_normalizes_to_krx_without_inventing_event_venue(
     )
 
 
-def test_position_authority_requires_fresh_qty_orders_and_matching_route():
+def test_krx_position_authority_rejects_direct_krx_route_under_sor_contract():
     now = datetime(2026, 7, 23, 14, 0, tzinfo=KST).timestamp()
     position = {
         "broker_holding_qty": 3,
@@ -720,9 +720,10 @@ def test_position_authority_requires_fresh_qty_orders_and_matching_route():
     )
 
     preflight = snapshot["ai_input_preflight_v1"]
-    assert preflight["source_allowed"] is True
+    assert preflight["source_allowed"] is False
     assert preflight["position_reconciled"] is True
-    assert preflight["broker_route_matches_venue"] is True
+    assert preflight["broker_route_matches_venue"] is False
+    assert "broker_route_venue_mismatch_or_missing" in preflight["source_blockers"]
 
 
 def test_krx_position_authority_accepts_normal_sor_broker_route():
@@ -767,6 +768,49 @@ def test_krx_position_authority_accepts_normal_sor_broker_route():
     assert snapshot["venue_attribution_allowed"] is False
 
 
+def test_broker_route_contract_is_exact_per_scalping_cohort():
+    assert (
+        mod._broker_route_matches_cohort(
+            broker_route="SOR",
+            venue_cohort="KRX",
+            session="krx_regular",
+        )
+        is True
+    )
+    assert (
+        mod._broker_route_matches_cohort(
+            broker_route="KRX",
+            venue_cohort="KRX",
+            session="krx_regular",
+        )
+        is False
+    )
+    assert (
+        mod._broker_route_matches_cohort(
+            broker_route="NXT",
+            venue_cohort="PREMARKET_KRX_LIKE",
+            session="premarket_krx_like",
+        )
+        is True
+    )
+    assert (
+        mod._broker_route_matches_cohort(
+            broker_route="SOR",
+            venue_cohort="PREMARKET_KRX_LIKE",
+            session="premarket_krx_like",
+        )
+        is False
+    )
+    assert (
+        mod._broker_route_matches_cohort(
+            broker_route="NXT",
+            venue_cohort="NXT",
+            session="nxt_entry_window",
+        )
+        is True
+    )
+
+
 def test_broker_snapshot_timestamp_expires_even_if_legacy_age_is_zero():
     now = datetime(2026, 7, 23, 14, 0, tzinfo=KST).timestamp()
     position = {
@@ -782,7 +826,7 @@ def test_broker_snapshot_timestamp_expires_even_if_legacy_age_is_zero():
         ws_data=_ws(now),
         effective_venue="KRX",
         session_bucket="krx_regular",
-        broker_route="KRX",
+        broker_route="SOR",
         candle_context=_candle(),
         position=position,
         now_ts=now,
@@ -806,7 +850,7 @@ def test_future_broker_snapshot_is_not_reconciled():
         ws_data=_ws(now),
         effective_venue="KRX",
         session_bucket="krx_regular",
-        broker_route="KRX",
+        broker_route="SOR",
         candle_context=_candle(),
         position=position,
         now_ts=now,

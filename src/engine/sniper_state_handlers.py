@@ -12571,22 +12571,42 @@ def _canonicalize_rising_missed_venue_fields(
     """
 
     normalized = dict(fields or {})
+    supported_cohorts = {"KRX", "NXT", "PREMARKET_KRX_LIKE"}
     rising_venue = (
         str(normalized.get("rising_missed_effective_venue") or "").strip().upper()
     )
-    if not rising_venue or rising_venue in {"-", "NOT_AVAILABLE"}:
+    if rising_venue not in supported_cohorts:
+        if rising_venue not in {"", "-", "NOT_AVAILABLE", "UNKNOWN"}:
+            normalized.setdefault("venue", rising_venue)
         return normalized
 
     canonical_venue = str(normalized.get("venue") or "").strip().upper()
-    if canonical_venue and canonical_venue != rising_venue:
+    canonical_effective_venue = str(
+        normalized.get("effective_venue") or ""
+    ).strip().upper()
+    conflicting_values = {
+        venue
+        for venue in (canonical_venue, canonical_effective_venue)
+        if venue in supported_cohorts and venue != rising_venue
+    }
+    if conflicting_values:
         normalized["venue"] = "UNKNOWN"
+        normalized["effective_venue"] = "UNKNOWN"
         normalized["venue_resolution"] = (
             "conflicting_explicit:venue,rising_missed_effective_venue"
         )
         return normalized
 
     normalized["venue"] = rising_venue
-    if not str(normalized.get("venue_resolution") or "").strip():
+    normalized["effective_venue"] = rising_venue
+    existing_resolution = str(
+        normalized.get("venue_resolution") or ""
+    ).strip()
+    if (
+        not existing_resolution
+        or existing_resolution == "missing_tradable_explicit_venue"
+        or existing_resolution.startswith("unknown_placeholder")
+    ):
         normalized["venue_resolution"] = "canonicalized:rising_missed_effective_venue"
     return normalized
 
@@ -12900,6 +12920,22 @@ def _apply_latency_true_ofi_direct_recheck(
         gate.get("latency_true_ofi_direct_canary_recheck_positive_micro_recovered")
     )
     if elapsed_sec > ttl_sec or reason == "tp1_recheck_expired":
+        scheduler_lag_sec = max(0.0, elapsed_sec - ttl_sec)
+        result.update(
+            {
+                "latency_true_ofi_direct_canary_recheck_scheduler_window_missed": (
+                    scheduler_lag_sec > 0.0
+                ),
+                "latency_true_ofi_direct_canary_recheck_scheduler_lag_sec": round(
+                    scheduler_lag_sec, 3
+                ),
+                "latency_true_ofi_direct_canary_recheck_scheduler_outcome": (
+                    "expired_before_runtime_dispatch"
+                    if scheduler_lag_sec > 0.0
+                    else "expired_within_runtime_dispatch"
+                ),
+            }
+        )
         _mutate_stock_state(
             stock,
             set_fields={
@@ -22688,6 +22724,28 @@ def _dispatch_scalp_preset_exit(
                     )
             _defer_fast_exit_retry("broker_sell_submit_rejected")
             return
+        sell_broker_route = str(
+            (
+                sell_res.get("broker_route")
+                or sell_res.get("effective_dmst_stex_tp")
+            )
+            if isinstance(sell_res, dict)
+            else ""
+        ).strip().upper()
+        if sell_broker_route not in {"KRX", "NXT", "SOR"}:
+            sell_broker_route = (
+                fast_exit_broker_route
+                if fast_exit_broker_route in {"KRX", "NXT", "SOR"}
+                else kiwoom_orders.resolve_order_dmst_stex_tp()
+            )
+        sell_broker_route_resolution = str(
+            sell_res.get("broker_route_resolution")
+            if isinstance(sell_res, dict)
+            else ""
+        ).strip() or "caller_route_fallback"
+        sell_execution_cohort = _early_volatility_tp_execution_cohort(
+            time.time(), sell_broker_route
+        )
         set_fields.update(
             {
                 "exit_requested": True,
@@ -22695,6 +22753,11 @@ def _dispatch_scalp_preset_exit(
                 "exit_order_time": now_ts,
                 "sell_order_time": now_ts,
                 "exit_order_sent_at": exit_order_sent_at,
+                "last_sell_execution_broker_route": sell_broker_route,
+                "last_sell_execution_broker_route_resolution": (
+                    sell_broker_route_resolution
+                ),
+                "last_sell_execution_cohort": sell_execution_cohort,
             }
         )
         ord_no = (
@@ -22727,6 +22790,9 @@ def _dispatch_scalp_preset_exit(
             fast_exit=bool(fast_exit),
             fast_exit_broker_route=fast_exit_broker_route or "implicit_legacy_route",
             fast_exit_execution_cohort=(stock.get("fast_exit_execution_cohort") or "-"),
+            broker_route=sell_broker_route,
+            broker_route_resolution=sell_broker_route_resolution,
+            effective_venue=sell_execution_cohort,
             decision_to_order_sent_ms=round(
                 max(
                     0.0,
@@ -23364,11 +23430,21 @@ def _disable_scalp_preset_tp_order_for_trailing(
         return False
 
     try:
+        preset_broker_route = str(
+            stock.get("preset_tp_broker_route")
+            or stock.get("entry_execution_broker_route")
+            or ""
+        ).strip().upper()
         res = kiwoom_orders.send_cancel_order(
             code=code,
             orig_ord_no=orig_ord_no,
             token=KIWOOM_TOKEN,
             qty=0,
+            dmst_stex_tp=(
+                preset_broker_route
+                if preset_broker_route in {"KRX", "NXT", "SOR"}
+                else None
+            ),
         )
     except Exception as exc:
         _mutate_stock_state(
@@ -31427,6 +31503,466 @@ def _retry_entry_ai_submit_authority_before_block(
         return fields
 
 
+FRESH_SPREAD_AI_RECHECK_FORBIDDEN_USES = (
+    "stale_quote_bypass|venue_conflict_bypass|absolute_spread_cap_bypass|"
+    "broker_guard_bypass|account_guard_bypass|order_guard_bypass|"
+    "quantity_guard_bypass|cooldown_bypass|direct_order_price_or_quantity|"
+    "provider_route_change|threshold_mutation|position_cap_release"
+)
+
+
+def _fresh_spread_ai_recheck_runtime_active(*, now_ts: float | None = None) -> bool:
+    if not _env_bool("KORSTOCKSCAN_FRESH_SPREAD_AI_RECHECK_ENABLED", False):
+        return False
+    active_date = str(
+        os.getenv("KORSTOCKSCAN_FRESH_SPREAD_AI_RECHECK_ACTIVE_DATE") or ""
+    ).strip()
+    if not active_date:
+        return True
+    current_date = datetime.fromtimestamp(
+        time.time() if now_ts is None else float(now_ts),
+        tz=_KST,
+    ).date()
+    return active_date == current_date.isoformat()
+
+
+def _fresh_spread_ai_recheck_eligibility(
+    *,
+    strategy,
+    stock,
+    latency_gate,
+    now_ts: float | None = None,
+) -> dict[str, Any]:
+    gate = latency_gate if isinstance(latency_gate, dict) else {}
+    simulated = bool(
+        _is_any_simulated_position(stock, strategy)
+        or _is_swing_live_order_dry_run(strategy)
+    )
+    configured_enabled = _env_bool(
+        "KORSTOCKSCAN_FRESH_SPREAD_AI_RECHECK_ENABLED", False
+    )
+    runtime_active = _fresh_spread_ai_recheck_runtime_active(now_ts=now_ts)
+    latency_state = str(gate.get("latency_state") or "").strip().upper()
+    decision = str(gate.get("decision") or "").strip().upper()
+    source_quality_state = (
+        str(gate.get("latency_danger_source_quality_state") or "").strip().lower()
+    )
+    quote_stale = _truthy_field(gate.get("quote_stale"))
+    detail_reasons = {
+        token.strip().lower()
+        for token in str(
+            gate.get("latency_danger_detail_reason")
+            or gate.get("latency_danger_reasons")
+            or ""
+        ).split(",")
+        if token.strip()
+    }
+    spread_only = detail_reasons == {"spread_above_caution_below_guard_cap"}
+    spread_ratio = max(0.0, _safe_float(gate.get("spread_ratio"), 0.0))
+    absolute_spread_cap = max(
+        0.0,
+        _safe_float(gate.get("latency_danger_guard_max_spread_ratio"), 0.0100),
+    )
+    within_absolute_cap = bool(
+        spread_ratio > 0.0
+        and absolute_spread_cap > 0.0
+        and spread_ratio <= absolute_spread_cap
+    )
+    eligible = bool(
+        runtime_active
+        and str(strategy or "").strip().upper() in {"SCALPING", "SCALP"}
+        and not simulated
+        and not bool(gate.get("allowed"))
+        and decision == "REJECT_DANGER"
+        and latency_state == "DANGER"
+        and source_quality_state == "fresh"
+        and not quote_stale
+        and spread_only
+        and within_absolute_cap
+    )
+    if not configured_enabled:
+        reason = "disabled"
+    elif not runtime_active:
+        reason = "inactive_date"
+    elif str(strategy or "").strip().upper() not in {"SCALPING", "SCALP"}:
+        reason = "non_scalping"
+    elif simulated:
+        reason = "sim_or_dry_run"
+    elif bool(gate.get("allowed")):
+        reason = "latency_already_allowed"
+    elif decision != "REJECT_DANGER" or latency_state != "DANGER":
+        reason = "not_danger_reject"
+    elif quote_stale:
+        reason = "quote_stale"
+    elif source_quality_state != "fresh":
+        reason = "source_quality_not_fresh"
+    elif not spread_only:
+        reason = "not_spread_only"
+    elif not within_absolute_cap:
+        reason = "absolute_spread_cap_exceeded"
+    else:
+        reason = "eligible"
+    return {
+        "fresh_spread_ai_recheck_enabled": configured_enabled,
+        "fresh_spread_ai_recheck_runtime_active": runtime_active,
+        "fresh_spread_ai_recheck_eligible": eligible,
+        "fresh_spread_ai_recheck_reason": reason,
+        "fresh_spread_ai_recheck_initial_decision": decision or "-",
+        "fresh_spread_ai_recheck_initial_latency_state": latency_state or "-",
+        "fresh_spread_ai_recheck_source_quality_state": (
+            source_quality_state or "unknown"
+        ),
+        "fresh_spread_ai_recheck_quote_stale": quote_stale,
+        "fresh_spread_ai_recheck_detail_reasons": (
+            ",".join(sorted(detail_reasons)) if detail_reasons else "-"
+        ),
+        "fresh_spread_ai_recheck_spread_ratio": round(spread_ratio, 6),
+        "fresh_spread_ai_recheck_absolute_spread_cap": round(
+            absolute_spread_cap, 6
+        ),
+        "fresh_spread_ai_recheck_within_absolute_spread_cap": within_absolute_cap,
+        "metric_role": "bounded_tunable",
+        "decision_authority": "bounded_entry_confirmation",
+        "window_policy": "same_candidate_pre_submit_ai_then_fresh_quote",
+        "sample_floor": "fresh_spread_only_with_trusted_ai",
+        "primary_decision_metric": "source_quality_adjusted_ev_pct",
+        "source_quality_gate": (
+            "fresh_nonstale_quote_spread_below_absolute_cap_and_fresh_ai"
+        ),
+        "forbidden_uses": FRESH_SPREAD_AI_RECHECK_FORBIDDEN_USES,
+    }
+
+
+def _maybe_recheck_fresh_spread_latency_with_ai(
+    *,
+    stock,
+    code,
+    ws_data,
+    ai_engine,
+    strategy,
+    planned_qty,
+    signal_price,
+    target_buy_price,
+    current_ai_score,
+    latency_gate,
+    now_ts: float | None = None,
+) -> tuple[dict, dict, dict]:
+    gate = dict(latency_gate or {})
+    snapshot = dict(ws_data or {})
+    recheck_now_ts = time.time() if now_ts is None else float(now_ts)
+    fields = {
+        **_fresh_spread_ai_recheck_eligibility(
+            strategy=strategy,
+            stock=stock,
+            latency_gate=gate,
+            now_ts=recheck_now_ts,
+        ),
+        "fresh_spread_ai_recheck_attempted": False,
+        "fresh_spread_ai_recheck_ai_retry_attempted": False,
+        "fresh_spread_ai_recheck_ai_action": "not_evaluated",
+        "fresh_spread_ai_recheck_ai_score": "0.0",
+        "fresh_spread_ai_recheck_ai_result_source": "not_available",
+        "fresh_spread_ai_recheck_quote_refresh_applied": False,
+        "fresh_spread_ai_recheck_post_ai_decision": gate.get("decision") or "-",
+        "fresh_spread_ai_recheck_post_ai_latency_state": (
+            gate.get("latency_state") or "-"
+        ),
+        "fresh_spread_ai_recheck_latency_recovered": False,
+    }
+    if not fields["fresh_spread_ai_recheck_eligible"]:
+        return gate, snapshot, fields
+
+    fields["fresh_spread_ai_recheck_attempted"] = True
+    authority = _entry_ai_submit_authority_fields(
+        strategy=strategy,
+        stock=stock,
+        latency_gate=gate,
+        latency_signal_score=current_ai_score,
+    )
+    max_ai_age_sec = max(
+        1.0,
+        _env_float(
+            "KORSTOCKSCAN_FRESH_SPREAD_AI_RECHECK_MAX_AI_AGE_SEC",
+            15.0,
+        ),
+    )
+    confirmed_at = _safe_float(stock.get("last_watching_ai_confirmed_at"), 0.0)
+    ai_age_sec = (
+        max(0.0, recheck_now_ts - confirmed_at) if confirmed_at > 0 else None
+    )
+    authority_action = str(
+        authority.get("entry_ai_submit_authority_action") or ""
+    ).strip().upper()
+    authority_result_source = str(
+        authority.get("entry_ai_submit_authority_result_source") or ""
+    ).strip().lower()
+    authority_score = _safe_float(
+        authority.get("entry_ai_submit_authority_score"), 0.0
+    )
+    tight_fresh_authority = bool(
+        authority_action in {"BUY", "WAIT"}
+        and authority_result_source in {"live", "prior_valid"}
+        and authority_score > 0.0
+        and ai_age_sec is not None
+        and ai_age_sec <= max_ai_age_sec
+    )
+    cached_source_quality = (
+        stock.get("last_watching_ai_source_quality_fields")
+        if isinstance(stock.get("last_watching_ai_source_quality_fields"), dict)
+        else {}
+    )
+    cached_candle_guard_result = str(
+        cached_source_quality.get("entry_candle_hybrid_guard_result") or ""
+    ).strip().lower()
+    cached_candle_authority_fresh = bool(
+        _truthy_field(cached_source_quality.get("entry_candle_context_enabled"))
+        and str(
+            cached_source_quality.get("entry_candle_source_quality_status") or ""
+        )
+        .strip()
+        .lower()
+        == "fresh_consistent"
+        and cached_candle_guard_result
+        not in {"demote_source_quality", "demote_adverse_unconfirmed"}
+    )
+    retry_fields: dict[str, Any] = {}
+    fresh_drop_veto = bool(
+        authority.get("entry_ai_submit_authority_fresh_drop_veto")
+    )
+    if not fresh_drop_veto and (
+        authority.get("blocked")
+        or not tight_fresh_authority
+        or not cached_candle_authority_fresh
+    ):
+        retry_fields = _retry_entry_ai_submit_authority_before_block(
+            stock=stock,
+            code=code,
+            ws_data=snapshot,
+            ai_engine=ai_engine,
+            now_ts=time.time(),
+            current_ai_score=current_ai_score,
+        )
+        fields["fresh_spread_ai_recheck_ai_retry_attempted"] = bool(
+            retry_fields.get("pre_submit_entry_ai_authority_retry_attempted")
+        )
+        authority = _entry_ai_submit_authority_fields(
+            strategy=strategy,
+            stock=stock,
+            latency_gate=gate,
+            latency_signal_score=current_ai_score,
+        )
+
+    authority_now_ts = (
+        time.time()
+        if fields["fresh_spread_ai_recheck_ai_retry_attempted"]
+        else recheck_now_ts
+    )
+    confirmed_at = _safe_float(stock.get("last_watching_ai_confirmed_at"), 0.0)
+    ai_age_sec = (
+        max(0.0, authority_now_ts - confirmed_at) if confirmed_at > 0 else None
+    )
+    action = str(
+        retry_fields.get("pre_submit_entry_ai_authority_retry_action")
+        or authority.get("entry_ai_submit_authority_action")
+        or ""
+    ).strip().upper()
+    score = _safe_float(
+        retry_fields.get("pre_submit_entry_ai_authority_retry_score"),
+        _safe_float(authority.get("entry_ai_submit_authority_score"), 0.0),
+    )
+    result_source = str(
+        retry_fields.get("pre_submit_entry_ai_authority_retry_result_source")
+        or authority.get("entry_ai_submit_authority_result_source")
+        or ""
+    ).strip().lower()
+    tight_fresh_ai = bool(
+        action in {"BUY", "WAIT"}
+        and result_source in {"live", "prior_valid"}
+        and score > 0.0
+        and ai_age_sec is not None
+        and ai_age_sec <= max_ai_age_sec
+    )
+    ai_source_quality = (
+        stock.get("last_watching_ai_source_quality_fields")
+        if isinstance(stock.get("last_watching_ai_source_quality_fields"), dict)
+        else {}
+    )
+    candle_context_enabled = _truthy_field(
+        ai_source_quality.get("entry_candle_context_enabled")
+    )
+    candle_source_quality_status = str(
+        ai_source_quality.get("entry_candle_source_quality_status") or ""
+    ).strip().lower()
+    candle_guard_result = str(
+        ai_source_quality.get("entry_candle_hybrid_guard_result") or ""
+    ).strip().lower()
+    candle_authority_fresh = bool(
+        candle_context_enabled
+        and candle_source_quality_status == "fresh_consistent"
+        and candle_guard_result
+        not in {"demote_source_quality", "demote_adverse_unconfirmed"}
+    )
+    fields.update(
+        {
+            "fresh_spread_ai_recheck_ai_action": action or "not_evaluated",
+            "fresh_spread_ai_recheck_ai_score": f"{score:.1f}",
+            "fresh_spread_ai_recheck_ai_result_source": (
+                result_source or "not_available"
+            ),
+            "fresh_spread_ai_recheck_ai_age_sec": (
+                f"{ai_age_sec:.3f}" if ai_age_sec is not None else "not_available"
+            ),
+            "fresh_spread_ai_recheck_ai_max_age_sec": f"{max_ai_age_sec:.1f}",
+            "fresh_spread_ai_recheck_ai_tight_fresh": tight_fresh_ai,
+            "fresh_spread_ai_recheck_candle_context_enabled": (
+                candle_context_enabled
+            ),
+            "fresh_spread_ai_recheck_candle_source_quality_status": (
+                candle_source_quality_status or "not_available"
+            ),
+            "fresh_spread_ai_recheck_candle_guard_result": (
+                candle_guard_result or "not_available"
+            ),
+            "fresh_spread_ai_recheck_candle_authority_fresh": (
+                candle_authority_fresh
+            ),
+        }
+    )
+    if action == "DROP":
+        fields["fresh_spread_ai_recheck_reason"] = "fresh_ai_drop_veto"
+        return gate, snapshot, fields
+    if action not in {"BUY", "WAIT"}:
+        fields["fresh_spread_ai_recheck_reason"] = "ai_action_not_buy_or_wait"
+        return gate, snapshot, fields
+    if result_source not in {"live", "prior_valid"} or score <= 0.0:
+        fields["fresh_spread_ai_recheck_reason"] = "ai_result_untrusted"
+        return gate, snapshot, fields
+    if not tight_fresh_ai:
+        fields["fresh_spread_ai_recheck_reason"] = "ai_result_not_tight_fresh"
+        return gate, snapshot, fields
+    if not candle_authority_fresh:
+        fields["fresh_spread_ai_recheck_reason"] = (
+            "candle_authority_not_fresh_consistent"
+        )
+        return gate, snapshot, fields
+
+    refreshed_snapshot, refresh_fields = _pre_submit_refresh_real_ws_snapshot(
+        code, snapshot, strategy
+    )
+    fields.update(refresh_fields)
+    fields.update(
+        {
+            "fresh_spread_ai_recheck_quote_refresh_applied": bool(
+                refresh_fields.get("pre_submit_ws_snapshot_refresh_applied")
+            ),
+            "fresh_spread_ai_recheck_quote_refresh_reason": (
+                refresh_fields.get("pre_submit_ws_snapshot_refresh_reason")
+                or "not_available"
+            ),
+            "fresh_spread_ai_recheck_quote_refresh_age_ms": (
+                refresh_fields.get("pre_submit_ws_snapshot_refresh_age_ms")
+            ),
+            "fresh_spread_ai_recheck_quote_refresh_best_bid": _safe_int(
+                refresh_fields.get("pre_submit_ws_snapshot_refresh_best_bid"), 0
+            ),
+            "fresh_spread_ai_recheck_quote_refresh_best_ask": _safe_int(
+                refresh_fields.get("pre_submit_ws_snapshot_refresh_best_ask"), 0
+            ),
+            "fresh_spread_ai_recheck_quote_refresh_latest_price": _safe_int(
+                refresh_fields.get("pre_submit_ws_snapshot_refresh_latest_price"), 0
+            ),
+        }
+    )
+    refreshed_price = _safe_int(refreshed_snapshot.get("curr"), 0)
+    original_signal_price = _safe_int(
+        gate.get("signal_price") or signal_price, 0
+    )
+    if refreshed_price <= 0 or original_signal_price <= 0:
+        fields["fresh_spread_ai_recheck_reason"] = "fresh_quote_price_unavailable"
+        return gate, snapshot, fields
+
+    clear_signal_reference(stock)
+    rechecked_gate = evaluate_live_buy_entry(
+        stock=stock,
+        code=code,
+        ws_data=refreshed_snapshot,
+        strategy_id=strategy,
+        planned_qty=int(planned_qty or 0),
+        signal_price=original_signal_price,
+        signal_strength=max(0.0, min(1.0, score / 100.0)),
+        signal_time=datetime.now(timezone.utc),
+        target_buy_price=int(target_buy_price or 0),
+    )
+    rechecked_gate = dict(rechecked_gate or {})
+    post_ai_quote_stale = _truthy_field(rechecked_gate.get("quote_stale"))
+    post_ai_spread_ratio = max(
+        0.0, _safe_float(rechecked_gate.get("spread_ratio"), 0.0)
+    )
+    absolute_spread_cap = max(
+        0.0,
+        _safe_float(
+            fields.get("fresh_spread_ai_recheck_absolute_spread_cap"),
+            0.0,
+        ),
+    )
+    post_ai_within_absolute_cap = bool(
+        post_ai_spread_ratio > 0.0
+        and absolute_spread_cap > 0.0
+        and post_ai_spread_ratio <= absolute_spread_cap
+    )
+    recovered = bool(
+        rechecked_gate.get("allowed")
+        and not post_ai_quote_stale
+        and post_ai_within_absolute_cap
+    )
+    if rechecked_gate.get("allowed") and not recovered:
+        rechecked_gate.update(
+            {
+                "allowed": False,
+                "decision": "REJECT_DANGER",
+                "reason": (
+                    "fresh_spread_ai_recheck_quote_stale"
+                    if post_ai_quote_stale
+                    else "fresh_spread_ai_recheck_absolute_spread_cap_exceeded"
+                ),
+            }
+        )
+    fields.update(
+        {
+            "fresh_spread_ai_recheck_reason": (
+                "latency_recovered_after_fresh_ai"
+                if recovered
+                else "post_ai_latency_still_blocked"
+            ),
+            "fresh_spread_ai_recheck_post_ai_decision": (
+                rechecked_gate.get("decision") or "-"
+            ),
+            "fresh_spread_ai_recheck_post_ai_latency_state": (
+                rechecked_gate.get("latency_state") or "-"
+            ),
+            "fresh_spread_ai_recheck_post_ai_reason": (
+                rechecked_gate.get("reason") or "-"
+            ),
+            "fresh_spread_ai_recheck_post_ai_ws_age_ms": rechecked_gate.get(
+                "ws_age_ms"
+            ),
+            "fresh_spread_ai_recheck_post_ai_spread_ratio": rechecked_gate.get(
+                "spread_ratio"
+            ),
+            "fresh_spread_ai_recheck_post_ai_quote_stale": post_ai_quote_stale,
+            "fresh_spread_ai_recheck_post_ai_within_absolute_spread_cap": (
+                post_ai_within_absolute_cap
+            ),
+            "fresh_spread_ai_recheck_signal_price_preserved": original_signal_price,
+            "fresh_spread_ai_recheck_refreshed_price": refreshed_price,
+            "fresh_spread_ai_recheck_latency_recovered": recovered,
+        }
+    )
+    rechecked_gate.update(refresh_fields)
+    rechecked_gate.update(fields)
+    return rechecked_gate, refreshed_snapshot, fields
+
+
 def _entry_planned_total_qty(planned_orders) -> int:
     total = 0
     for order in planned_orders or []:
@@ -38821,6 +39357,12 @@ def _build_ai_ops_log_fields(
         "microstructure_reaction_bid_replenishment_score",
         "microstructure_reaction_wall_replenishment_risk_score",
         "microstructure_reaction_vi_proximity_risk",
+        "entry_candle_current_session_bar_count",
+        "entry_candle_previous_session_bar_count",
+        "entry_candle_completed_bar_count",
+        "entry_candle_latest_bar_age_sec",
+        "entry_candle_context_fetch_ms",
+        "entry_candle_context_build_ms",
     ):
         if field_name in payload:
             raw_value = payload.get(field_name)
@@ -38870,6 +39412,17 @@ def _build_ai_ops_log_fields(
         "microstructure_reaction_entry_reaction_quality",
         "microstructure_reaction_source_quality",
         "microstructure_reaction_context_hash",
+        "entry_candle_context_schema",
+        "entry_candle_venue",
+        "entry_candle_session",
+        "entry_candle_rest_route",
+        "entry_candle_ws_route",
+        "entry_candle_route_equivalence",
+        "entry_candle_sample_mode",
+        "entry_candle_regime",
+        "entry_candle_alignment",
+        "entry_candle_source_quality_status",
+        "entry_candle_hybrid_guard_result",
     ):
         if field_name in payload:
             out[field_name] = str(payload.get(field_name, "-") or "-")
@@ -38882,6 +39435,9 @@ def _build_ai_ops_log_fields(
         "quote_fresh_for_entry",
         "large_sell_print_detected",
         "large_buy_print_detected",
+        "entry_candle_context_enabled",
+        "entry_candle_route_equivalence_proven",
+        "entry_candle_forming_bar_present",
     ):
         if field_name in payload:
             raw_value = payload.get(field_name)
@@ -39073,6 +39629,12 @@ def _build_tick_source_quality_log_fields(feature_probe):
         "microstructure_reaction_bid_replenishment_score",
         "microstructure_reaction_wall_replenishment_risk_score",
         "microstructure_reaction_vi_proximity_risk",
+        "entry_candle_current_session_bar_count",
+        "entry_candle_previous_session_bar_count",
+        "entry_candle_completed_bar_count",
+        "entry_candle_latest_bar_age_sec",
+        "entry_candle_context_fetch_ms",
+        "entry_candle_context_build_ms",
     ):
         if field_name in payload:
             raw_value = payload.get(field_name)
@@ -39097,6 +39659,17 @@ def _build_tick_source_quality_log_fields(feature_probe):
         "microstructure_reaction_entry_reaction_quality",
         "microstructure_reaction_source_quality",
         "microstructure_reaction_context_hash",
+        "entry_candle_context_schema",
+        "entry_candle_venue",
+        "entry_candle_session",
+        "entry_candle_rest_route",
+        "entry_candle_ws_route",
+        "entry_candle_route_equivalence",
+        "entry_candle_sample_mode",
+        "entry_candle_regime",
+        "entry_candle_alignment",
+        "entry_candle_source_quality_status",
+        "entry_candle_hybrid_guard_result",
     ):
         if field_name in payload:
             out[field_name] = str(payload.get(field_name, "-") or "-")
@@ -39111,6 +39684,9 @@ def _build_tick_source_quality_log_fields(feature_probe):
         "quote_fresh_for_entry",
         "large_sell_print_detected",
         "large_buy_print_detected",
+        "entry_candle_context_enabled",
+        "entry_candle_route_equivalence_proven",
+        "entry_candle_forming_bar_present",
     ):
         if field_name in payload:
             raw_value = payload.get(field_name)
@@ -49638,15 +50214,73 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         signal_strength=latency_signal_strength,
         target_buy_price=final_price if strategy == "SCALPING" else 0,
     )
+    (
+        latency_gate,
+        ws_data,
+        fresh_spread_ai_recheck_fields,
+    ) = _maybe_recheck_fresh_spread_latency_with_ai(
+        stock=stock,
+        code=code,
+        ws_data=ws_data,
+        ai_engine=ai_engine,
+        strategy=strategy,
+        planned_qty=real_buy_qty,
+        signal_price=curr_price,
+        target_buy_price=final_price if strategy == "SCALPING" else 0,
+        current_ai_score=latency_signal_score,
+        latency_gate=latency_gate,
+        now_ts=time.time(),
+    )
+    if fresh_spread_ai_recheck_fields.get("fresh_spread_ai_recheck_attempted"):
+        curr_price = _safe_int(ws_data.get("curr"), curr_price) or curr_price
+        _log_entry_pipeline(
+            stock,
+            code,
+            "fresh_spread_ai_recheck",
+            actual_order_submitted=False,
+            broker_order_forbidden=True,
+            runtime_effect=bool(
+                fresh_spread_ai_recheck_fields.get(
+                    "fresh_spread_ai_recheck_latency_recovered"
+                )
+            ),
+            allowed_runtime_apply=bool(
+                fresh_spread_ai_recheck_fields.get(
+                    "fresh_spread_ai_recheck_runtime_active"
+                )
+            ),
+            **_without_entry_pipeline_fields(
+                fresh_spread_ai_recheck_fields,
+                "actual_order_submitted",
+                "broker_order_forbidden",
+                "runtime_effect",
+                "allowed_runtime_apply",
+            ),
+        )
     latency_gate.update(latency_false_negative_report_fields)
-    latency_gate.update(pre_submit_ws_snapshot_refresh)
+    if fresh_spread_ai_recheck_fields.get(
+        "pre_submit_ws_snapshot_refresh_reason"
+    ):
+        latency_gate.update(
+            _pre_submit_ws_snapshot_refresh_log_fields(
+                fresh_spread_ai_recheck_fields
+            )
+        )
+    else:
+        latency_gate.update(pre_submit_ws_snapshot_refresh)
     latency_gate.update(pre_submit_rest_orderbook_refresh)
     latency_gate.update(nxt_tp1_context_refresh_fields)
     latency_direct_recheck_fields = _apply_latency_true_ofi_direct_recheck(
         stock,
         code,
         latency_gate,
-        now_ts=_runtime_action_now_ts(runtime),
+        now_ts=(
+            time.time()
+            if fresh_spread_ai_recheck_fields.get(
+                "fresh_spread_ai_recheck_attempted"
+            )
+            else _runtime_action_now_ts(runtime)
+        ),
     )
     latency_gate.update(latency_direct_recheck_fields)
     if latency_direct_recheck_fields.get(
@@ -52589,11 +53223,18 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         )
         submit_dmst_stex_tp = str(order_resolution["effective_dmst_stex_tp"])
         order_resolution_fields = {
+            "requested_dmst_stex_tp": order_resolution[
+                "requested_dmst_stex_tp"
+            ],
             "requested_order_type": order_resolution["requested_order_type"],
             "requested_order_price": order_resolution["requested_order_price"],
             "effective_order_type": order_resolution["effective_order_type"],
             "effective_order_price": order_resolution["effective_order_price"],
             "effective_dmst_stex_tp": submit_dmst_stex_tp,
+            "broker_route": order_resolution["broker_route"],
+            "broker_route_resolution": order_resolution[
+                "broker_route_resolution"
+            ],
             "dmst_stex_tp_source": submit_dmst_stex_tp_source,
             "order_type_remapped": order_resolution["order_type_remapped"],
             "order_type_remap_reason": order_resolution["order_type_remap_reason"],
@@ -52933,6 +53574,16 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 **real_pre_submit_guard_fields,
             )
             continue
+        response_broker_route = str(
+            res.get("broker_route")
+            or res.get("effective_dmst_stex_tp")
+            or submit_dmst_stex_tp
+        ).strip().upper()
+        response_route_resolution = str(
+            res.get("broker_route_resolution")
+            or order_resolution.get("broker_route_resolution")
+            or "caller_fallback"
+        ).strip()
         ord_no = _extract_broker_order_no(res)
         if (
             bool(planned_order.get("entry_split_order_probe_first_applied"))
@@ -52946,15 +53597,19 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 preserve_position=_safe_int(stock.get("buy_qty"), 0) > 0,
             )
             continue
+        route_recorded_at = time.time()
         entry_execution_cohort = _early_volatility_tp_execution_cohort(
-            now_ts, submit_dmst_stex_tp
+            route_recorded_at, response_broker_route
         )
         _mutate_stock_state(
             stock,
             set_fields={
-                "entry_execution_broker_route": submit_dmst_stex_tp,
+                "entry_execution_broker_route": response_broker_route,
                 "entry_execution_cohort": entry_execution_cohort,
-                "entry_execution_route_recorded_at": time.time(),
+                "entry_execution_broker_route_resolution": (
+                    response_route_resolution
+                ),
+                "entry_execution_route_recorded_at": route_recorded_at,
             },
         )
         if opening_rotation_active and not is_opening_rotation_position(
@@ -52989,7 +53644,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             submit_trusted_count = entry_orderbook_micro_fields.get(
                 "tick_aggressor_trusted_count"
             )
-        order_sent_ts = time.time()
+        order_sent_ts = route_recorded_at
         successful_orders.append(
             {
                 "tag": request["tag"],
@@ -53003,8 +53658,11 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 "status": "OPEN",
                 "filled_qty": 0,
                 "sent_at": order_sent_ts,
-                "dmst_stex_tp": submit_dmst_stex_tp,
+                "dmst_stex_tp": response_broker_route,
                 "dmst_stex_tp_source": submit_dmst_stex_tp_source,
+                "broker_route": response_broker_route,
+                "broker_route_resolution": response_route_resolution,
+                "entry_execution_cohort": entry_execution_cohort,
                 "requested_order_type": order_resolution["requested_order_type"],
                 "effective_order_type": order_resolution["effective_order_type"],
                 "order_type_remapped": order_resolution["order_type_remapped"],
@@ -53118,7 +53776,10 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 submitted_at=order_sent_ts,
                 requested_order_type=order_resolution.get("requested_order_type"),
                 effective_order_type=order_resolution.get("effective_order_type"),
-                dmst_stex_tp=submit_dmst_stex_tp,
+                dmst_stex_tp=response_broker_route,
+                broker_route=response_broker_route,
+                broker_route_resolution=response_route_resolution,
+                effective_venue=entry_execution_cohort,
                 order_type_remapped=bool(order_resolution.get("order_type_remapped")),
                 order_type_remap_reason=order_resolution.get("order_type_remap_reason"),
             )
@@ -53134,7 +53795,10 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 ),
                 requested_order_type=order_resolution.get("requested_order_type"),
                 effective_order_type=order_resolution.get("effective_order_type"),
-                dmst_stex_tp=submit_dmst_stex_tp,
+                dmst_stex_tp=response_broker_route,
+                broker_route=response_broker_route,
+                broker_route_resolution=response_route_resolution,
+                effective_venue=entry_execution_cohort,
                 order_type_remapped=bool(order_resolution.get("order_type_remapped")),
                 order_type_remap_reason=order_resolution.get("order_type_remap_reason"),
                 actual_order_submitted=True,
@@ -53157,6 +53821,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             order_no=ord_no,
             order_response_ord_no=ord_no,
             **order_resolution_fields,
+            effective_venue=entry_execution_cohort,
             **split_leg_meta_fields,
             **_merge_entry_pipeline_field_groups(
                 real_pre_submit_guard_fields,
@@ -53300,6 +53965,51 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         for order in successful_orders
         if isinstance(order, dict)
     )
+    submitted_broker_routes = sorted(
+        {
+            str(
+                order.get("broker_route")
+                or order.get("dmst_stex_tp")
+                or ""
+            )
+            .strip()
+            .upper()
+            for order in successful_orders
+            if isinstance(order, dict)
+            and str(
+                order.get("broker_route")
+                or order.get("dmst_stex_tp")
+                or ""
+            )
+            .strip()
+            .upper()
+            in {"KRX", "NXT", "SOR"}
+        }
+    )
+    bundle_broker_route = (
+        submitted_broker_routes[0]
+        if len(submitted_broker_routes) == 1
+        else "UNKNOWN"
+    )
+    bundle_route_resolution = (
+        "consistent_submitted_legs"
+        if len(submitted_broker_routes) == 1
+        else "missing_or_conflicting_submitted_leg_routes"
+    )
+    submitted_execution_cohorts = sorted(
+        {
+            str(order.get("entry_execution_cohort") or "").strip().upper()
+            for order in successful_orders
+            if isinstance(order, dict)
+            and str(order.get("entry_execution_cohort") or "").strip().upper()
+            in {"KRX", "NXT", "PREMARKET_KRX_LIKE"}
+        }
+    )
+    bundle_execution_cohort = (
+        submitted_execution_cohorts[0]
+        if len(submitted_execution_cohorts) == 1
+        else "UNKNOWN"
+    )
     broker_order_numbers = [
         str(order.get("ord_no") or "").strip()
         for order in successful_orders
@@ -53399,6 +54109,9 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         broker_order_no_list=",".join(broker_order_numbers),
         order_response_ord_no=primary_broker_order_no,
         submit_attempt_id=submit_attempt_id,
+        broker_route=bundle_broker_route,
+        broker_route_resolution=bundle_route_resolution,
+        effective_venue=bundle_execution_cohort,
         **_opening_rotation_provenance_fields(stock),
         **{
             "ai_call_trigger_reason": ai_call_trigger_reason_at_submit,
@@ -53416,6 +54129,9 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 _latency_false_negative_remeasure_log_fields(latency_gate),
             ),
             "quote_stale",
+            "effective_venue",
+            "broker_route",
+            "broker_route_resolution",
         ),
     )
     _emit_scalp_entry_adm_snapshot(
@@ -53441,6 +54157,9 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             "broker_order_no_list": ",".join(broker_order_numbers),
             "order_response_ord_no": primary_broker_order_no,
             "submit_attempt_id": submit_attempt_id,
+            "broker_route": bundle_broker_route,
+            "broker_route_resolution": bundle_route_resolution,
+            "effective_venue": bundle_execution_cohort,
             "ai_call_trigger_reason": ai_call_trigger_reason_at_submit,
             **entry_runtime_retry_submit_exclusion_fields,
             **real_pre_submit_guard_fields,
@@ -54153,7 +54872,7 @@ def _early_volatility_tp_execution_cohort(now_ts: float, broker_route: str) -> s
     session_bucket = _rising_missed_nxt_session_bucket(now_ts)
     if session_bucket == "krx_like_premarket" and route == "NXT":
         return "PREMARKET_KRX_LIKE"
-    if session_bucket == "krx_regular" and route in {"SOR", "KRX"}:
+    if session_bucket == "krx_regular" and route == "SOR":
         return "KRX"
     if session_bucket.startswith("nxt_") and route == "NXT":
         return "NXT"
@@ -59774,6 +60493,8 @@ def _maybe_reprice_pending_entry_order(stock, code, strategy, *, timeout_sec=Non
         "parent_order_no": parent_order_no,
         "qty": qty,
         "dmst_stex_tp": child_dmst_stex_tp,
+        "broker_route": child_dmst_stex_tp,
+        "broker_route_resolution": "inherited_original_entry_order_route",
     }
     request_fields.update(partial_holding_reprice_fields)
     if bundle_reprice:
@@ -59926,6 +60647,15 @@ def _maybe_reprice_pending_entry_order(stock, code, strategy, *, timeout_sec=Non
             preserve_holding=allow_partial_holding_reprice,
         )
         return "failed"
+    child_broker_route = str(
+        buy_res.get("broker_route")
+        or buy_res.get("effective_dmst_stex_tp")
+        or child_dmst_stex_tp
+    ).strip().upper()
+    child_route_resolution = str(
+        buy_res.get("broker_route_resolution")
+        or "inherited_original_entry_order_route"
+    ).strip()
     probe_reprice_remaining_ttl_sec = 0
     if probe_residual_reprice:
         original_sent_times = [
@@ -59958,8 +60688,10 @@ def _maybe_reprice_pending_entry_order(stock, code, strategy, *, timeout_sec=Non
         "order_type": "00",
         "status": "OPEN",
         "filled_qty": 0,
-        "dmst_stex_tp": child_dmst_stex_tp,
+        "dmst_stex_tp": child_broker_route,
         "dmst_stex_tp_source": str(order.get("dmst_stex_tp_source") or "inherited"),
+        "broker_route": child_broker_route,
+        "broker_route_resolution": child_route_resolution,
         "sent_at": time.time(),
         "entry_order_lifecycle": (
             "bundle_repriced_after_submit"
@@ -62402,6 +63134,20 @@ def _submit_entry_split_probe_residual_locked(
             trip_probe_runtime_circuit(failure_reason)
             break
         sent_at = time.time()
+        residual_broker_route = str(
+            response.get("broker_route")
+            or response.get("effective_dmst_stex_tp")
+            or resolution.get("broker_route")
+            or dmst_stex_tp
+        ).strip().upper()
+        residual_route_resolution = str(
+            response.get("broker_route_resolution")
+            or resolution.get("broker_route_resolution")
+            or "probe_inherited_route"
+        ).strip()
+        residual_execution_cohort = _early_volatility_tp_execution_cohort(
+            sent_at, residual_broker_route
+        )
         successful_orders.append(
             {
                 **residual_order,
@@ -62409,9 +63155,11 @@ def _submit_entry_split_probe_residual_locked(
                 "status": "OPEN",
                 "filled_qty": 0,
                 "sent_at": sent_at,
-                "dmst_stex_tp": resolution.get("effective_dmst_stex_tp")
-                or dmst_stex_tp,
+                "dmst_stex_tp": residual_broker_route,
                 "dmst_stex_tp_source": "probe_inherited",
+                "broker_route": residual_broker_route,
+                "broker_route_resolution": residual_route_resolution,
+                "entry_execution_cohort": residual_execution_cohort,
                 "requested_order_type": resolution.get("requested_order_type"),
                 "effective_order_type": resolution.get("effective_order_type"),
                 "order_type_remapped": resolution.get("order_type_remapped"),
@@ -62433,6 +63181,9 @@ def _submit_entry_split_probe_residual_locked(
                 price=price,
                 residual_leg_index=residual_order.get("entry_split_order_leg_index"),
                 receipt_completed_before_order_bind=True,
+                dmst_stex_tp=residual_broker_route,
+                broker_route=residual_broker_route,
+                broker_route_resolution=residual_route_resolution,
                 actual_order_submitted=True,
                 broker_order_forbidden=False,
                 runtime_effect=True,
@@ -62481,7 +63232,9 @@ def _submit_entry_split_probe_residual_locked(
             residual_leg_index=residual_order.get("entry_split_order_leg_index"),
             requested_order_type=resolution.get("requested_order_type"),
             effective_order_type=resolution.get("effective_order_type"),
-            dmst_stex_tp=resolution.get("effective_dmst_stex_tp") or dmst_stex_tp,
+            dmst_stex_tp=residual_broker_route,
+            broker_route=residual_broker_route,
+            broker_route_resolution=residual_route_resolution,
             actual_order_submitted=True,
             broker_order_forbidden=False,
             runtime_effect=True,
@@ -67642,6 +68395,28 @@ def handle_holding_state(
             is_success = True
 
         if is_success:
+            sell_broker_route = str(
+                (
+                    res.get("broker_route")
+                    or res.get("effective_dmst_stex_tp")
+                )
+                if isinstance(res, dict)
+                else sell_exchange_resolution.get("dmst_stex_tp")
+            ).strip().upper()
+            if sell_broker_route not in {"KRX", "NXT", "SOR"}:
+                sell_broker_route = str(
+                    sell_exchange_resolution.get("dmst_stex_tp") or ""
+                ).strip().upper()
+            sell_broker_route_resolution = str(
+                res.get("broker_route_resolution")
+                if isinstance(res, dict)
+                else ""
+            ).strip() or str(
+                sell_exchange_resolution.get("reason") or "caller_route_fallback"
+            )
+            sell_execution_cohort = _early_volatility_tp_execution_cohort(
+                time.time(), sell_broker_route
+            )
             log_info(
                 f"✅ [{stock['name']}] 매도 주문 전송 완료. 체결 영수증 처리 대기 중..."
             )
@@ -67653,6 +68428,11 @@ def handle_holding_state(
                 "sell_order_failure_count": 0,
                 "last_sell_order_error": "",
                 "last_sell_order_failed_at": 0.0,
+                "last_sell_execution_broker_route": sell_broker_route,
+                "last_sell_execution_broker_route_resolution": (
+                    sell_broker_route_resolution
+                ),
+                "last_sell_execution_cohort": sell_execution_cohort,
             }
             if ord_no:
                 set_fields["sell_odno"] = ord_no
@@ -67662,6 +68442,13 @@ def handle_holding_state(
             sell_order_log_fields.update(exit_extra_fields or {})
             sell_order_log_fields.update(sell_quote_fields or {})
             sell_order_log_fields.update(_real_sell_submission_contract_fields())
+            sell_order_log_fields.update(
+                {
+                    "broker_route": sell_broker_route,
+                    "broker_route_resolution": sell_broker_route_resolution,
+                    "effective_venue": sell_execution_cohort,
+                }
+            )
             _log_holding_pipeline(
                 stock,
                 code,
@@ -71107,6 +71894,8 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
 
     submitted_results: list[dict] = []
     submitted_ord_nos: list[str] = []
+    submitted_broker_routes: set[str] = set()
+    submitted_route_resolutions: set[str] = set()
     submitted_qty = 0
     last_res: dict | None = None
     total_leg_count = len(scale_in_split_orders)
@@ -71187,6 +71976,13 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             "add_order_time": pending_registered_at,
         },
     )
+    scale_in_route_plan = kiwoom_orders.describe_order_route_resolution()
+    planned_scale_in_broker_route = str(
+        scale_in_route_plan.get("broker_route") or ""
+    ).strip().upper()
+    planned_scale_in_route_resolution = str(
+        scale_in_route_plan.get("broker_route_resolution") or ""
+    ).strip()
     for leg_index, leg_order in enumerate(scale_in_split_orders, start=1):
         leg_qty = int(leg_order.get("qty", 0) or 0)
         leg_price = int(leg_order.get("price", final_price) or 0)
@@ -71211,7 +72007,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             order_type_desc=f"추가매수({add_type})",
             allow_time_block_override=bool(buy_time_block_override_reason),
             time_block_override_reason=buy_time_block_override_reason,
-            dmst_stex_tp=kiwoom_orders.resolve_order_dmst_stex_tp(),
+            dmst_stex_tp=planned_scale_in_broker_route,
         )
 
         if res is None:
@@ -71230,6 +72026,19 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             rt_cd = str(res.get("return_code", res.get("rt_cd", "")))
             if rt_cd == "0":
                 ord_no = str(res.get("ord_no", "") or res.get("odno", ""))
+                leg_broker_route = str(
+                    res.get("broker_route")
+                    or res.get("effective_dmst_stex_tp")
+                    or planned_scale_in_broker_route
+                ).strip().upper()
+                if leg_broker_route in {"KRX", "NXT", "SOR"}:
+                    submitted_broker_routes.add(leg_broker_route)
+                leg_route_resolution = str(
+                    res.get("broker_route_resolution")
+                    or planned_scale_in_route_resolution
+                ).strip()
+                if leg_route_resolution:
+                    submitted_route_resolutions.add(leg_route_resolution)
                 submitted_results.append(res)
                 last_res = res
                 submitted_qty += leg_qty
@@ -71275,6 +72084,10 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
                         ),
                         "scale_in_split_order_market_order_applied": bool(
                             leg_order.get("scale_in_split_order_market_order_applied")
+                        ),
+                        "broker_route": leg_broker_route or "UNKNOWN",
+                        "broker_route_resolution": (
+                            leg_route_resolution or "response_route_missing"
                         ),
                     }
                     _mutate_stock_state(
@@ -71410,6 +72223,33 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             f"type={add_type}, qty={submitted_qty}, ord_no={joined_ord_nos}"
         )
     if strategy == "SCALPING":
+        scale_in_broker_route = (
+            next(iter(submitted_broker_routes))
+            if len(submitted_broker_routes) == 1
+            else "UNKNOWN"
+        )
+        scale_in_route_resolution = (
+            next(iter(submitted_route_resolutions))
+            if len(submitted_route_resolutions) == 1
+            else (
+                "consistent_submitted_legs"
+                if len(submitted_broker_routes) == 1
+                else "missing_or_conflicting_submitted_leg_routes"
+            )
+        )
+        scale_in_execution_cohort = _early_volatility_tp_execution_cohort(
+            now_ts, scale_in_broker_route
+        )
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                "last_scale_in_execution_broker_route": scale_in_broker_route,
+                "last_scale_in_execution_broker_route_resolution": (
+                    scale_in_route_resolution
+                ),
+                "last_scale_in_execution_cohort": scale_in_execution_cohort,
+            },
+        )
         _log_holding_pipeline(
             stock,
             code,
@@ -71425,6 +72265,9 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             ord_no=joined_ord_nos or "-",
             resolved_price=resolved_price,
             partial_submit_failure=partial_submit_failure or "-",
+            broker_route=scale_in_broker_route,
+            broker_route_resolution=scale_in_route_resolution,
+            effective_venue=scale_in_execution_cohort,
             actual_order_submitted=True,
             broker_order_forbidden=False,
             runtime_effect=True,

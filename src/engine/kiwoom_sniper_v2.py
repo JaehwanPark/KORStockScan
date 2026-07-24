@@ -1888,6 +1888,47 @@ def _scanner_runtime_target_event_fields(payload, *, outcome, reason, target=Non
     existing = payload.get("existing_target")
     if not isinstance(existing, dict):
         existing = {}
+    tp1_context = target.get("tp1_context")
+    if not isinstance(tp1_context, dict):
+        tp1_context = {}
+    venue_candidates = (
+        (
+            "payload.rising_missed_effective_venue",
+            payload.get("rising_missed_effective_venue"),
+        ),
+        ("payload.effective_venue", payload.get("effective_venue")),
+        ("payload.venue", payload.get("venue")),
+        (
+            "target.rising_missed_effective_venue",
+            target.get("rising_missed_effective_venue"),
+        ),
+        (
+            "target.tp1_context.rising_missed_effective_venue",
+            tp1_context.get("rising_missed_effective_venue"),
+        ),
+        ("target.effective_venue", target.get("effective_venue")),
+        ("target.venue", target.get("venue")),
+    )
+    explicit_venues = []
+    supported_cohorts = {"KRX", "NXT", "PREMARKET_KRX_LIKE"}
+    for venue_source, venue_value in venue_candidates:
+        normalized_venue = str(venue_value or "").strip().upper()
+        if normalized_venue in supported_cohorts:
+            explicit_venues.append((venue_source, normalized_venue))
+    unique_venues = {venue for _, venue in explicit_venues}
+    if len(unique_venues) == 1:
+        canonical_venue = next(iter(unique_venues))
+        venue_resolution = "consistent_explicit:" + ",".join(
+            source for source, _ in explicit_venues
+        )
+    elif unique_venues:
+        canonical_venue = "UNKNOWN"
+        venue_resolution = "conflicting_explicit_venue:" + ",".join(
+            f"{source}={venue}" for source, venue in explicit_venues
+        )
+    else:
+        canonical_venue = "UNKNOWN"
+        venue_resolution = "missing_tradable_explicit_venue"
     return {
         "metric_role": "runtime_handoff_observation",
         "decision_authority": "real_scalping_scanner_runtime_watchlist_handoff_only",
@@ -1902,6 +1943,9 @@ def _scanner_runtime_target_event_fields(payload, *, outcome, reason, target=Non
         "runtime_effect": True,
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
+        "venue": canonical_venue,
+        "effective_venue": canonical_venue,
+        "venue_resolution": venue_resolution,
         "runtime_target_attach_outcome": outcome,
         "runtime_target_attach_reason": reason,
         "manual_control_exclusion_applied": payload.get(

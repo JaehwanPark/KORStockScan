@@ -6943,10 +6943,86 @@ def test_describe_buy_order_resolution_reports_nxt_market_remap():
         "requested_order_price": 0,
         "effective_order_type": "6",
         "effective_order_price": 0,
+        "requested_dmst_stex_tp": "NXT",
         "effective_dmst_stex_tp": "NXT",
+        "broker_route": "NXT",
+        "broker_route_resolution": "explicit_request",
         "order_type_remapped": True,
         "order_type_remap_reason": "nxt_market_to_best_limit",
     }
+
+
+def test_rising_missed_premarket_canonicalization_replaces_unknown_placeholder():
+    fields = state_handlers._canonicalize_rising_missed_venue_fields(
+        {
+            "venue": "UNKNOWN",
+            "effective_venue": "UNKNOWN",
+            "venue_resolution": "missing_tradable_explicit_venue",
+            "rising_missed_effective_venue": "PREMARKET_KRX_LIKE",
+        }
+    )
+
+    assert fields["venue"] == "PREMARKET_KRX_LIKE"
+    assert fields["effective_venue"] == "PREMARKET_KRX_LIKE"
+    assert fields["venue_resolution"] == (
+        "canonicalized:rising_missed_effective_venue"
+    )
+
+
+def test_execution_cohort_requires_canonical_broker_route():
+    krx_ts = datetime(
+        2026, 7, 24, 10, 0, tzinfo=state_handlers._KST
+    ).timestamp()
+    premarket_ts = datetime(
+        2026, 7, 24, 8, 30, tzinfo=state_handlers._KST
+    ).timestamp()
+
+    assert state_handlers._early_volatility_tp_execution_cohort(krx_ts, "SOR") == (
+        "KRX"
+    )
+    assert state_handlers._early_volatility_tp_execution_cohort(krx_ts, "KRX") == (
+        "UNKNOWN"
+    )
+    assert state_handlers._early_volatility_tp_execution_cohort(
+        premarket_ts, "NXT"
+    ) == "PREMARKET_KRX_LIKE"
+
+
+def test_entry_receipt_provenance_keeps_cohort_and_broker_route_separate():
+    fields = receipts._probe_venue_provenance_fields(
+        {
+            "entry_execution_cohort": "KRX",
+            "entry_execution_broker_route": "SOR",
+            "entry_execution_broker_route_resolution": (
+                "krx_regular_session_default_sor"
+            ),
+        }
+    )
+
+    assert fields["effective_venue"] == "KRX"
+    assert fields["broker_route"] == "SOR"
+    assert fields["entry_execution_broker_route"] == "SOR"
+    assert fields["broker_route_resolution"] == (
+        "krx_regular_session_default_sor"
+    )
+
+
+def test_legacy_preset_cancel_inherits_recorded_entry_broker_route(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        kiwoom_orders,
+        "send_cancel_order",
+        lambda **kwargs: captured.update(kwargs) or {"return_code": "0"},
+    )
+    stock = {
+        "name": "TEST",
+        "preset_tp_ord_no": "NXT-TP-1",
+        "entry_execution_broker_route": "NXT",
+    }
+
+    assert receipts._refresh_scalp_preset_exit_order(stock, "123456", 2) is True
+    assert captured["dmst_stex_tp"] == "NXT"
+    assert stock["preset_tp_ord_no"] == ""
 
 
 def test_rising_missed_nxt_context_propagates_only_while_submit_context_is_fresh(
@@ -19734,6 +19810,11 @@ def test_send_buy_order_market_uses_sor_during_krx_regular_session(monkeypatch):
 
     assert result["ord_no"] == "BKRX"
     assert captured["payload"]["dmst_stex_tp"] == "SOR"
+    assert result["broker_route"] == "SOR"
+    assert result["effective_dmst_stex_tp"] == "SOR"
+    assert result["requested_dmst_stex_tp"] == "AUTO"
+    assert result["broker_route_resolution"] == "krx_regular_session_default_sor"
+    assert result["broker_route_attempted"] is True
 
 
 def test_send_buy_order_market_uses_nxt_after_krx_regular_session(monkeypatch):
@@ -19765,6 +19846,10 @@ def test_send_buy_order_market_uses_nxt_after_krx_regular_session(monkeypatch):
 
     assert result["ord_no"] == "BNXT"
     assert captured["payload"]["dmst_stex_tp"] == "NXT"
+    assert result["broker_route"] == "NXT"
+    assert result["broker_route_resolution"] == (
+        "outside_krx_regular_session_default_nxt"
+    )
 
 
 def test_send_buy_order_market_remaps_nxt_aftermarket_market_buy(monkeypatch):
@@ -27879,6 +27964,19 @@ def test_latency_direct_recheck_arms_then_blocks_early_normal_reentry():
     assert expired_gate["allowed"] is False
     assert expired_gate["reason"] == "tp1_direct_recheck_expired"
     assert expired["latency_true_ofi_direct_canary_recheck_enforcement"] == "expired"
+    assert (
+        expired[
+            "latency_true_ofi_direct_canary_recheck_scheduler_window_missed"
+        ]
+        is True
+    )
+    assert (
+        expired["latency_true_ofi_direct_canary_recheck_scheduler_lag_sec"] == 0.1
+    )
+    assert (
+        expired["latency_true_ofi_direct_canary_recheck_scheduler_outcome"]
+        == "expired_before_runtime_dispatch"
+    )
     assert "_scanner_rising_latency_direct_recheck_after_epoch" not in expired_stock
 
 
@@ -30005,6 +30103,7 @@ def test_s15_fast_track_submitted_logs_score_prior_fields(monkeypatch):
         "avg_buy_price": 0,
     }
     clock = {"now": 1_000.0}
+    cancel_calls = []
 
     def _fast_now():
         clock["now"] += 25.0
@@ -30044,7 +30143,7 @@ def test_s15_fast_track_submitted_logs_score_prior_fields(monkeypatch):
     monkeypatch.setattr(
         s15.kiwoom_orders,
         "send_cancel_order",
-        lambda *args, **kwargs: {"return_code": "0"},
+        lambda *args, **kwargs: cancel_calls.append(kwargs) or {"return_code": "0"},
     )
     monkeypatch.setattr(
         s15,
@@ -30060,7 +30159,12 @@ def test_s15_fast_track_submitted_logs_score_prior_fields(monkeypatch):
     monkeypatch.setattr(
         s15,
         "_send_s15_limit_buy",
-        lambda code, qty, price: {"return_code": "0", "ord_no": "S15-1"},
+        lambda code, qty, price: {
+            "return_code": "0",
+            "ord_no": "S15-1",
+            "broker_route": "NXT",
+            "broker_route_resolution": "explicit_request",
+        },
     )
     monkeypatch.setattr(
         s15,
@@ -30103,6 +30207,8 @@ def test_s15_fast_track_submitted_logs_score_prior_fields(monkeypatch):
     assert submitted["fields"]["s15_hard_gate_veto"] is False
     assert submitted["fields"]["s15_score_prior_band"] == "low"
     assert cancelled["fields"]["s15_score_gate_converted_to_prior"] is True
+    assert cancel_calls
+    assert cancel_calls[0]["dmst_stex_tp"] == "NXT"
 
 
 def test_add_receipt_without_order_no_matches_single_pending_target(monkeypatch):
@@ -33033,6 +33139,8 @@ def test_send_sell_order_market_uses_nxt_after_krx_regular_session(monkeypatch):
     assert captured["payload"]["dmst_stex_tp"] == "NXT"
     assert captured["payload"]["trde_tp"] == "6"
     assert captured["payload"]["ord_uv"] == ""
+    assert result["broker_route"] == "NXT"
+    assert result["broker_route_attempted"] is True
 
 
 def test_scalp_preset_tp_hard_stop_grace_delays_exit(monkeypatch):

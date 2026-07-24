@@ -113,6 +113,16 @@ def _probe_venue_provenance_fields(stock: dict[str, Any]) -> dict[str, str]:
     if market_session_bucket:
         fields["market_session_bucket"] = market_session_bucket
         fields["rising_missed_market_session_bucket"] = market_session_bucket
+    broker_route = str(
+        stock.get("entry_execution_broker_route") or ""
+    ).strip().upper()
+    if broker_route in {"KRX", "NXT", "SOR"}:
+        fields["broker_route"] = broker_route
+        fields["entry_execution_broker_route"] = broker_route
+        fields["broker_route_resolution"] = str(
+            stock.get("entry_execution_broker_route_resolution")
+            or "recorded_at_successful_entry_submit"
+        )
     return fields
 
 
@@ -724,6 +734,8 @@ def _split_receipt_leg_meta_fields(
             "split_fill_after_ttl": "-",
             "scale_in_split_order_leg_index": "-",
             "scale_in_split_order_market_order_applied": "-",
+            "broker_route": "-",
+            "broker_route_resolution": "receipt_leg_route_missing",
         }
     ttl_sec = _safe_int(leg_meta.get("split_leg_ttl_sec"), 0)
     sent_at = _safe_float(leg_meta.get("sent_at"), 0.0)
@@ -757,6 +769,13 @@ def _split_receipt_leg_meta_fields(
         or "-",
         "scale_in_split_order_market_order_applied": bool(
             leg_meta.get("scale_in_split_order_market_order_applied")
+        ),
+        "broker_route": (
+            str(leg_meta.get("broker_route") or "").strip().upper() or "-"
+        ),
+        "broker_route_resolution": (
+            str(leg_meta.get("broker_route_resolution") or "").strip()
+            or "receipt_leg_route_missing"
         ),
     }
 
@@ -2126,8 +2145,21 @@ def _refresh_scalp_preset_exit_order(target_stock, code, total_qty):
     preset_ord_no = str(target_stock.get("preset_tp_ord_no", "") or "").strip()
 
     if preset_ord_no:
+        preset_broker_route = str(
+            target_stock.get("preset_tp_broker_route")
+            or target_stock.get("entry_execution_broker_route")
+            or ""
+        ).strip().upper()
         cancel_res = kiwoom_orders.send_cancel_order(
-            code=code, orig_ord_no=preset_ord_no, token=KIWOOM_TOKEN, qty=0
+            code=code,
+            orig_ord_no=preset_ord_no,
+            token=KIWOOM_TOKEN,
+            qty=0,
+            dmst_stex_tp=(
+                preset_broker_route
+                if preset_broker_route in {"KRX", "NXT", "SOR"}
+                else None
+            ),
         )
         if not _is_ok_response(cancel_res):
             log_error(
@@ -2610,6 +2642,15 @@ def _update_db_for_sell(
                 runner_realized_pnl_krw=runner_realized_pnl_krw,
                 partial_realized_qty=partial_qty,
                 runner_realized_qty=completed_runner_qty,
+                broker_route=receipt_snapshot.get(
+                    "last_sell_execution_broker_route", "-"
+                ),
+                broker_route_resolution=receipt_snapshot.get(
+                    "last_sell_execution_broker_route_resolution", "-"
+                ),
+                effective_venue=receipt_snapshot.get(
+                    "last_sell_execution_cohort", "-"
+                ),
                 actual_order_submitted=True,
                 broker_order_forbidden=False,
                 no_scale_in_counterfactual_profit_pct=receipt_snapshot.get(
@@ -3328,6 +3369,7 @@ def _handle_entry_buy_execution(
         preset_tp_ord_no_before=preset_tp_ord_no_before or "-",
         preset_tp_ord_no_after=preset_tp_ord_no_after or "-",
         sync_status=preset_sync_status,
+        **_probe_venue_provenance_fields(target_stock),
     )
     _emit_split_entry_followup_shadows(
         target_stock=target_stock,
@@ -3398,6 +3440,7 @@ def _handle_entry_buy_execution(
             f"{float(submit_ai_score):.1f}" if submit_ai_score is not None else "-"
         ),
         holding_ai_score_seeded_from_entry=holding_ai_seeded,
+        **_probe_venue_provenance_fields(target_stock),
     )
 
     buy_receipt_snapshot = _receipt_snapshot(target_stock, _BUY_RECEIPT_SNAPSHOT_KEYS)

@@ -223,6 +223,365 @@ def test_entry_ai_snapshots_use_post_fetch_clocks():
     assert "now_ts=gatekeeper_context_now_ts" in gatekeeper_block
 
 
+def _fresh_spread_latency_gate(**overrides):
+    gate = {
+        "allowed": False,
+        "decision": "REJECT_DANGER",
+        "reason": "latency_state_danger",
+        "latency_state": "DANGER",
+        "signal_price": 10_000,
+        "latest_price": 10_000,
+        "ws_age_ms": 120,
+        "ws_jitter_ms": 0,
+        "spread_ratio": 0.006,
+        "quote_stale": False,
+        "latency_danger_reasons": "spread_above_caution_below_guard_cap",
+        "latency_danger_detail_reason": "spread_above_caution_below_guard_cap",
+        "latency_danger_source_quality_state": "fresh",
+        "latency_danger_guard_max_spread_ratio": 0.01,
+    }
+    gate.update(overrides)
+    return gate
+
+
+def test_fresh_spread_ai_recheck_eligibility_separates_liquidity_from_staleness(
+    monkeypatch,
+):
+    monkeypatch.setenv("KORSTOCKSCAN_FRESH_SPREAD_AI_RECHECK_ENABLED", "true")
+    monkeypatch.delenv(
+        "KORSTOCKSCAN_FRESH_SPREAD_AI_RECHECK_ACTIVE_DATE", raising=False
+    )
+
+    eligible = handlers._fresh_spread_ai_recheck_eligibility(
+        strategy="SCALPING",
+        stock={"strategy": "SCALPING"},
+        latency_gate=_fresh_spread_latency_gate(),
+        now_ts=1000.0,
+    )
+    stale = handlers._fresh_spread_ai_recheck_eligibility(
+        strategy="SCALPING",
+        stock={"strategy": "SCALPING"},
+        latency_gate=_fresh_spread_latency_gate(
+            quote_stale=True,
+            latency_danger_source_quality_state="stale",
+        ),
+        now_ts=1000.0,
+    )
+    above_cap = handlers._fresh_spread_ai_recheck_eligibility(
+        strategy="SCALPING",
+        stock={"strategy": "SCALPING"},
+        latency_gate=_fresh_spread_latency_gate(spread_ratio=0.011),
+        now_ts=1000.0,
+    )
+
+    assert eligible["fresh_spread_ai_recheck_eligible"] is True
+    assert eligible["decision_authority"] == "bounded_entry_confirmation"
+    assert stale["fresh_spread_ai_recheck_eligible"] is False
+    assert stale["fresh_spread_ai_recheck_reason"] == "quote_stale"
+    assert above_cap["fresh_spread_ai_recheck_eligible"] is False
+    assert above_cap["fresh_spread_ai_recheck_reason"] == (
+        "absolute_spread_cap_exceeded"
+    )
+
+
+def test_fresh_spread_ai_recheck_is_default_off(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_FRESH_SPREAD_AI_RECHECK_ENABLED", raising=False)
+    monkeypatch.delenv(
+        "KORSTOCKSCAN_FRESH_SPREAD_AI_RECHECK_ACTIVE_DATE", raising=False
+    )
+
+    fields = handlers._fresh_spread_ai_recheck_eligibility(
+        strategy="SCALPING",
+        stock={"strategy": "SCALPING"},
+        latency_gate=_fresh_spread_latency_gate(),
+        now_ts=1000.0,
+    )
+
+    assert fields["fresh_spread_ai_recheck_eligible"] is False
+    assert fields["fresh_spread_ai_recheck_reason"] == "disabled"
+
+
+def test_fresh_spread_ai_recheck_uses_ai_then_fresh_quote_without_reanchoring_price(
+    monkeypatch,
+):
+    captured = {}
+    stock = {
+        "strategy": "SCALPING",
+        "entry_signal_price": 10_000,
+        "entry_signal_time": datetime(2026, 7, 24, 10, 0),
+        "last_watching_ai_confirmed_at": 995.0,
+        "last_watching_ai_source_quality_fields": {
+            "entry_candle_context_enabled": True,
+            "entry_candle_source_quality_status": "fresh_consistent",
+            "entry_candle_hybrid_guard_result": "preserve_neutral_or_supportive",
+        },
+    }
+    refreshed_ws = {
+        "curr": 10_010,
+        "last_ws_update_ts": 1000.0,
+        "orderbook": {
+            "asks": [{"price": 10_020, "volume": 100}],
+            "bids": [{"price": 10_000, "volume": 100}],
+        },
+    }
+    monkeypatch.setenv("KORSTOCKSCAN_FRESH_SPREAD_AI_RECHECK_ENABLED", "true")
+    monkeypatch.setattr(
+        handlers,
+        "_entry_ai_submit_authority_fields",
+        lambda **kwargs: {
+            "blocked": False,
+            "entry_ai_submit_authority_action": "BUY",
+            "entry_ai_submit_authority_score": "88.0",
+            "entry_ai_submit_authority_result_source": "live",
+        },
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_pre_submit_refresh_real_ws_snapshot",
+        lambda *args, **kwargs: (
+            refreshed_ws,
+            {
+                "pre_submit_ws_snapshot_refresh_applied": True,
+                "pre_submit_ws_snapshot_refresh_reason": "latest_ws_snapshot_fresh",
+                "pre_submit_ws_snapshot_refresh_age_ms": 50,
+                "pre_submit_ws_snapshot_refresh_best_bid": 10_000,
+                "pre_submit_ws_snapshot_refresh_best_ask": 10_020,
+            },
+        ),
+    )
+
+    def fake_evaluate(**kwargs):
+        captured.update(kwargs)
+        return {
+            "allowed": True,
+            "decision": "ALLOW_NORMAL",
+            "reason": "latency_spread_relief_normal_override",
+            "latency_state": "DANGER",
+            "ws_age_ms": 50,
+            "spread_ratio": 0.002,
+            "quote_stale": False,
+            "orders": [{"qty": 1, "price": 10_000}],
+        }
+
+    monkeypatch.setattr(handlers, "evaluate_live_buy_entry", fake_evaluate)
+
+    gate, snapshot, fields = handlers._maybe_recheck_fresh_spread_latency_with_ai(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 10_000},
+        ai_engine=object(),
+        strategy="SCALPING",
+        planned_qty=10,
+        signal_price=10_000,
+        target_buy_price=9_990,
+        current_ai_score=70.0,
+        latency_gate=_fresh_spread_latency_gate(),
+        now_ts=1000.0,
+    )
+
+    assert snapshot is refreshed_ws
+    assert captured["signal_price"] == 10_000
+    assert captured["signal_strength"] == 0.88
+    assert captured["ws_data"] is refreshed_ws
+    assert captured["signal_time"].tzinfo is not None
+    assert fields["fresh_spread_ai_recheck_latency_recovered"] is True
+    assert fields["fresh_spread_ai_recheck_ai_tight_fresh"] is True
+    assert fields["pre_submit_ws_snapshot_refresh_reason"] == (
+        "latest_ws_snapshot_fresh"
+    )
+    assert gate["allowed"] is True
+
+
+def test_fresh_spread_ai_recheck_keeps_final_absolute_spread_cap(monkeypatch):
+    stock = {
+        "strategy": "SCALPING",
+        "last_watching_ai_confirmed_at": 995.0,
+        "last_watching_ai_source_quality_fields": {
+            "entry_candle_context_enabled": True,
+            "entry_candle_source_quality_status": "fresh_consistent",
+            "entry_candle_hybrid_guard_result": "preserve_neutral_or_supportive",
+        },
+    }
+    monkeypatch.setenv("KORSTOCKSCAN_FRESH_SPREAD_AI_RECHECK_ENABLED", "true")
+    monkeypatch.setattr(
+        handlers,
+        "_entry_ai_submit_authority_fields",
+        lambda **kwargs: {
+            "blocked": False,
+            "entry_ai_submit_authority_action": "BUY",
+            "entry_ai_submit_authority_score": "88.0",
+            "entry_ai_submit_authority_result_source": "live",
+        },
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_pre_submit_refresh_real_ws_snapshot",
+        lambda *args, **kwargs: (
+            {"curr": 10_010},
+            {
+                "pre_submit_ws_snapshot_refresh_applied": True,
+                "pre_submit_ws_snapshot_refresh_reason": "latest_ws_snapshot_fresh",
+                "pre_submit_ws_snapshot_refresh_age_ms": 50,
+                "pre_submit_ws_snapshot_refresh_best_bid": 9_950,
+                "pre_submit_ws_snapshot_refresh_best_ask": 10_070,
+                "pre_submit_ws_snapshot_refresh_latest_price": 10_010,
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        handlers,
+        "evaluate_live_buy_entry",
+        lambda **kwargs: {
+            "allowed": True,
+            "decision": "ALLOW_NORMAL",
+            "reason": "extended_spread_canary",
+            "latency_state": "DANGER",
+            "ws_age_ms": 50,
+            "spread_ratio": 0.012,
+            "quote_stale": False,
+        },
+    )
+
+    gate, _snapshot, fields = handlers._maybe_recheck_fresh_spread_latency_with_ai(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 10_000},
+        ai_engine=object(),
+        strategy="SCALPING",
+        planned_qty=10,
+        signal_price=10_000,
+        target_buy_price=9_990,
+        current_ai_score=70.0,
+        latency_gate=_fresh_spread_latency_gate(),
+        now_ts=1000.0,
+    )
+
+    assert gate["allowed"] is False
+    assert gate["reason"] == "fresh_spread_ai_recheck_absolute_spread_cap_exceeded"
+    assert fields["fresh_spread_ai_recheck_latency_recovered"] is False
+    assert (
+        fields["fresh_spread_ai_recheck_post_ai_within_absolute_spread_cap"]
+        is False
+    )
+
+
+def test_fresh_spread_ai_recheck_retries_old_buy_and_fails_closed(monkeypatch):
+    stock = {
+        "strategy": "SCALPING",
+        "last_watching_ai_confirmed_at": 900.0,
+    }
+    monkeypatch.setenv("KORSTOCKSCAN_FRESH_SPREAD_AI_RECHECK_ENABLED", "true")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_FRESH_SPREAD_AI_RECHECK_MAX_AI_AGE_SEC", "15"
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_entry_ai_submit_authority_fields",
+        lambda **kwargs: {
+            "blocked": False,
+            "entry_ai_submit_authority_action": "BUY",
+            "entry_ai_submit_authority_score": "88.0",
+            "entry_ai_submit_authority_result_source": "live",
+        },
+    )
+    retry_calls = []
+    monkeypatch.setattr(
+        handlers,
+        "_retry_entry_ai_submit_authority_before_block",
+        lambda **kwargs: retry_calls.append(kwargs)
+        or {
+            "pre_submit_entry_ai_authority_retry_attempted": True,
+            "pre_submit_entry_ai_authority_retry_action": "not_evaluated",
+            "pre_submit_entry_ai_authority_retry_score": "0.0",
+            "pre_submit_entry_ai_authority_retry_result_source": "not_available",
+        },
+    )
+    monkeypatch.setattr(
+        handlers,
+        "evaluate_live_buy_entry",
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("stale BUY authority must fail closed")
+        ),
+    )
+
+    gate, _snapshot, fields = handlers._maybe_recheck_fresh_spread_latency_with_ai(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 10_000},
+        ai_engine=object(),
+        strategy="SCALPING",
+        planned_qty=10,
+        signal_price=10_000,
+        target_buy_price=9_990,
+        current_ai_score=70.0,
+        latency_gate=_fresh_spread_latency_gate(),
+        now_ts=1000.0,
+    )
+
+    assert len(retry_calls) == 1
+    assert gate["allowed"] is False
+    assert fields["fresh_spread_ai_recheck_ai_retry_attempted"] is True
+    assert fields["fresh_spread_ai_recheck_reason"] == "ai_action_not_buy_or_wait"
+
+
+def test_fresh_spread_ai_recheck_never_rechecks_fresh_drop(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_FRESH_SPREAD_AI_RECHECK_ENABLED", "true")
+    monkeypatch.setattr(
+        handlers,
+        "_entry_ai_submit_authority_fields",
+        lambda **kwargs: {
+            "blocked": True,
+            "entry_ai_submit_authority_fresh_drop_veto": True,
+            "entry_ai_submit_authority_action": "DROP",
+            "entry_ai_submit_authority_score": "91.0",
+            "entry_ai_submit_authority_result_source": "live",
+        },
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_retry_entry_ai_submit_authority_before_block",
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("fresh DROP must not trigger another AI call")
+        ),
+    )
+    monkeypatch.setattr(
+        handlers,
+        "evaluate_live_buy_entry",
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("fresh DROP must not re-evaluate latency")
+        ),
+    )
+
+    gate, _snapshot, fields = handlers._maybe_recheck_fresh_spread_latency_with_ai(
+        stock={"strategy": "SCALPING"},
+        code="123456",
+        ws_data={"curr": 10_000},
+        ai_engine=object(),
+        strategy="SCALPING",
+        planned_qty=10,
+        signal_price=10_000,
+        target_buy_price=9_990,
+        current_ai_score=70.0,
+        latency_gate=_fresh_spread_latency_gate(),
+        now_ts=1000.0,
+    )
+
+    assert gate["allowed"] is False
+    assert fields["fresh_spread_ai_recheck_reason"] == "fresh_ai_drop_veto"
+    assert fields["fresh_spread_ai_recheck_latency_recovered"] is False
+
+
+def test_submit_runs_fresh_spread_ai_recheck_before_post_latency_guards():
+    source = inspect.getsource(handlers._submit_watching_triggered_entry)
+    initial_latency_idx = source.index("latency_gate = evaluate_live_buy_entry(")
+    recheck_idx = source.index("_maybe_recheck_fresh_spread_latency_with_ai(")
+    direct_recheck_idx = source.index(
+        "latency_direct_recheck_fields = _apply_latency_true_ofi_direct_recheck("
+    )
+
+    assert initial_latency_idx < recheck_idx < direct_recheck_idx
+
+
 def test_update_ai_quote_freshness_fields_overwrites_stale_provenance(monkeypatch):
     monkeypatch.setattr(handlers.time, "time", lambda: 1000.0)
     ws_data = {
@@ -5834,6 +6193,11 @@ def test_score65_74_recovery_probe_log_fields_preserve_micro_vwap_provenance():
             "minute_candle_context_quality": "fresh_bar_window",
             "minute_candle_window_fresh": True,
             "minute_candle_latest_age_ms": 12000,
+            "entry_candle_context_enabled": True,
+            "entry_candle_venue": "KRX",
+            "entry_candle_route_equivalence_proven": True,
+            "entry_candle_source_quality_status": "fresh_consistent",
+            "entry_candle_hybrid_guard_result": "preserve_neutral_or_supportive",
         }
     )
 
@@ -5843,6 +6207,14 @@ def test_score65_74_recovery_probe_log_fields_preserve_micro_vwap_provenance():
     assert fields["minute_candle_context_quality"] == "fresh_bar_window"
     assert fields["minute_candle_window_fresh"] is True
     assert fields["minute_candle_latest_age_ms"] == 12000
+    assert fields["entry_candle_context_enabled"] is True
+    assert fields["entry_candle_venue"] == "KRX"
+    assert fields["entry_candle_route_equivalence_proven"] is True
+    assert fields["entry_candle_source_quality_status"] == "fresh_consistent"
+    assert (
+        fields["entry_candle_hybrid_guard_result"]
+        == "preserve_neutral_or_supportive"
+    )
     assert fields["tick_source_quality_fields_sent"] is True
 
 

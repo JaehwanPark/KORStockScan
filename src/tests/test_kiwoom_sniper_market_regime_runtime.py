@@ -585,6 +585,12 @@ def test_scalping_scanner_promoted_target_attaches_active_watching(monkeypatch):
     assert emitted[-1]["fields"]["runtime_target_attach_outcome"] == "attached"
     assert emitted[-1]["fields"]["actual_order_submitted"] is False
     assert emitted[-1]["fields"]["broker_order_forbidden"] is True
+    assert emitted[-1]["fields"]["venue"] == "UNKNOWN"
+    assert emitted[-1]["fields"]["effective_venue"] == "UNKNOWN"
+    assert (
+        emitted[-1]["fields"]["venue_resolution"]
+        == "missing_tradable_explicit_venue"
+    )
     assert emitted[-1]["fields"]["rank_change"] == -12
     assert emitted[-1]["fields"]["rank_change_sign"] == "-"
     assert (
@@ -598,6 +604,63 @@ def test_scalping_scanner_promoted_target_attaches_active_watching(monkeypatch):
         emitted[-1]["fields"]["rank_change_score_policy"]
         == "positive_signed_rank_delta_only_raw_rank_sign_unverified"
     )
+
+
+def test_scanner_runtime_target_event_fields_preserve_explicit_venue_provenance():
+    fields = kiwoom_sniper_v2._scanner_runtime_target_event_fields(
+        {
+            "code": "005930",
+            "effective_venue": "KRX",
+            "source_signature": "REALTIME_RANK_START",
+        },
+        outcome="attached",
+        reason="scanner_runtime_target_attach",
+        target={
+            "code": "005930",
+            "tp1_context": {"rising_missed_effective_venue": "KRX"},
+        },
+    )
+
+    assert fields["venue"] == "KRX"
+    assert fields["effective_venue"] == "KRX"
+    assert fields["venue_resolution"] == (
+        "consistent_explicit:payload.effective_venue,"
+        "target.tp1_context.rising_missed_effective_venue"
+    )
+
+
+def test_scanner_runtime_target_event_fields_fail_closed_on_venue_conflict():
+    fields = kiwoom_sniper_v2._scanner_runtime_target_event_fields(
+        {"code": "005930", "effective_venue": "KRX"},
+        outcome="attached",
+        reason="scanner_runtime_target_attach",
+        target={"code": "005930", "effective_venue": "NXT"},
+    )
+
+    assert fields["venue"] == "UNKNOWN"
+    assert fields["effective_venue"] == "UNKNOWN"
+    assert fields["venue_resolution"].startswith("conflicting_explicit_venue:")
+
+
+def test_scanner_runtime_target_event_fields_preserve_premarket_cohort():
+    fields = kiwoom_sniper_v2._scanner_runtime_target_event_fields(
+        {
+            "code": "096770",
+            "effective_venue": "PREMARKET_KRX_LIKE",
+        },
+        outcome="attached",
+        reason="scanner_runtime_target_attach",
+        target={
+            "code": "096770",
+            "tp1_context": {
+                "rising_missed_effective_venue": "PREMARKET_KRX_LIKE"
+            },
+        },
+    )
+
+    assert fields["venue"] == "PREMARKET_KRX_LIKE"
+    assert fields["effective_venue"] == "PREMARKET_KRX_LIKE"
+    assert fields["venue_resolution"].startswith("consistent_explicit:")
 
 
 def test_scalping_scanner_promoted_target_skips_manual_control_excluded_code(

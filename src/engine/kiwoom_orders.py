@@ -877,7 +877,8 @@ def describe_buy_order_resolution(
     emit_log=False,
 ):
     """Return requested/effective order metadata without submitting an order."""
-    resolved_exchange = resolve_order_dmst_stex_tp(dmst_stex_tp, now=now)
+    route_resolution = describe_order_route_resolution(dmst_stex_tp, now=now)
+    resolved_exchange = route_resolution["effective_dmst_stex_tp"]
     effective_type, effective_price = _resolve_buy_order_type(
         order_type,
         price=price,
@@ -902,11 +903,11 @@ def describe_buy_order_resolution(
     elif str(tif or "DAY").upper() == "IOC" and str(effective_type) == "16":
         remap_reason = "ioc_to_best_ioc"
     return {
+        **route_resolution,
         "requested_order_type": requested_type,
         "requested_order_price": requested_price,
         "effective_order_type": str(effective_type),
         "effective_order_price": int(effective_price or 0),
-        "effective_dmst_stex_tp": resolved_exchange,
         "order_type_remapped": remapped,
         "order_type_remap_reason": remap_reason,
     }
@@ -1046,6 +1047,51 @@ def resolve_order_dmst_stex_tp(dmst_stex_tp=None, *, now=None) -> str:
     if explicit in {"KRX", "NXT", "SOR"}:
         return explicit
     return "SOR" if is_krx_regular_order_session(now) else "NXT"
+
+
+def describe_order_route_resolution(dmst_stex_tp=None, *, now=None) -> dict:
+    """Describe the broker route independently from the venue cohort.
+
+    ``dmst_stex_tp`` is the Kiwoom execution route.  It must never be reused as
+    an effective venue/cohort label: KRX regular-session orders use SOR, while
+    premarket and NXT-session orders default to NXT.
+    """
+
+    explicit = str(dmst_stex_tp or "").strip().upper()
+    effective = (
+        resolve_order_dmst_stex_tp(dmst_stex_tp)
+        if now is None
+        else resolve_order_dmst_stex_tp(dmst_stex_tp, now=now)
+    )
+    if explicit in {"KRX", "NXT", "SOR"}:
+        resolution = "explicit_request"
+        requested = explicit
+    elif effective == "SOR":
+        resolution = "krx_regular_session_default_sor"
+        requested = "AUTO"
+    else:
+        resolution = "outside_krx_regular_session_default_nxt"
+        requested = "AUTO"
+    return {
+        "requested_dmst_stex_tp": requested,
+        "effective_dmst_stex_tp": effective,
+        "broker_route": effective,
+        "broker_route_resolution": resolution,
+    }
+
+
+def _with_order_route_provenance(
+    data,
+    *,
+    route_resolution: dict,
+    broker_route_attempted: bool,
+):
+    if not isinstance(data, dict):
+        return data
+    enriched = dict(data)
+    enriched.update(route_resolution)
+    enriched["broker_route_attempted"] = bool(broker_route_attempted)
+    return enriched
 
 
 def _inside_scalping_buy_window(now_t) -> bool:
@@ -1343,7 +1389,19 @@ def send_buy_order_market(
         )
 
         if res.status_code == 200 and is_success:
-            return data
+            return _with_order_route_provenance(
+                data,
+                route_resolution={
+                    key: order_resolution[key]
+                    for key in (
+                        "requested_dmst_stex_tp",
+                        "effective_dmst_stex_tp",
+                        "broker_route",
+                        "broker_route_resolution",
+                    )
+                },
+                broker_route_attempted=True,
+            )
         else:
             if str(payload.get("trde_tp")) == "3" and _is_sor_market_time_reject(data):
                 retry_payload = dict(payload)
@@ -1361,7 +1419,19 @@ def send_buy_order_market(
                     or str(retry_data.get("return_code", "")) == "0"
                 )
                 if retry_res.status_code == 200 and retry_success:
-                    return retry_data
+                    return _with_order_route_provenance(
+                        retry_data,
+                        route_resolution={
+                            key: order_resolution[key]
+                            for key in (
+                                "requested_dmst_stex_tp",
+                                "effective_dmst_stex_tp",
+                                "broker_route",
+                                "broker_route_resolution",
+                            )
+                        },
+                        broker_route_attempted=True,
+                    )
                 data = retry_data
             err_msg = data.get("return_msg") or data.get("err_msg") or "상세 사유 없음"
             err_code = data.get("return_code", data.get("rt_cd", ""))
@@ -1370,7 +1440,19 @@ def send_buy_order_market(
             msg = f"❌ [매수거절] 종목:{clean_code}, 사유:{err_msg} (코드:{err_code})"
             log_error(msg)
             # EventBus().publish("TELEGRAM_ADMIN_NOTIFY", {"text": msg})
-            return data  # 에러 데이터를 그대로 반환하여 상위에서 처리하게 함
+            return _with_order_route_provenance(
+                data,
+                route_resolution={
+                    key: order_resolution[key]
+                    for key in (
+                        "requested_dmst_stex_tp",
+                        "effective_dmst_stex_tp",
+                        "broker_route",
+                        "broker_route_resolution",
+                    )
+                },
+                broker_route_attempted=True,
+            )
 
     except Exception as e:
         msg = f"🔥 [매수주문] 시스템 예외: {str(e)}"
@@ -1460,7 +1542,8 @@ def send_sell_order_market(
         "api-id": "kt10001",
     }
 
-    resolved_dmst_stex_tp = resolve_order_dmst_stex_tp(dmst_stex_tp)
+    route_resolution = describe_order_route_resolution(dmst_stex_tp)
+    resolved_dmst_stex_tp = route_resolution["effective_dmst_stex_tp"]
     normalized_type, normalized_price = _resolve_sell_order_type(
         order_type,
         price=price,
@@ -1505,7 +1588,11 @@ def send_sell_order_market(
         )
 
         if res.status_code == 200 and is_success:
-            return data
+            return _with_order_route_provenance(
+                data,
+                route_resolution=route_resolution,
+                broker_route_attempted=True,
+            )
         else:
             if str(payload.get("trde_tp")) == "3" and _is_sor_market_sell_time_reject(
                 data
@@ -1525,7 +1612,11 @@ def send_sell_order_market(
                     or str(retry_data.get("return_code", "")) == "0"
                 )
                 if retry_res.status_code == 200 and retry_success:
-                    return retry_data
+                    return _with_order_route_provenance(
+                        retry_data,
+                        route_resolution=route_resolution,
+                        broker_route_attempted=True,
+                    )
                 data = retry_data
             err_msg = data.get("return_msg") or data.get("err_msg") or "상세 사유 없음"
             err_code = data.get("return_code", data.get("rt_cd", ""))
@@ -1540,7 +1631,11 @@ def send_sell_order_market(
             else:
                 log_error(msg)
             # EventBus().publish("TELEGRAM_ADMIN_NOTIFY", {"text": msg})
-            return data
+            return _with_order_route_provenance(
+                data,
+                route_resolution=route_resolution,
+                broker_route_attempted=True,
+            )
 
     except Exception as e:
         msg = f"🔥 [매도주문] 시스템 예외: {str(e)}"
@@ -1572,8 +1667,21 @@ def send_cancel_order(code, orig_ord_no, token, qty=0, dmst_stex_tp=None):
         "api-id": "kt10003",  # 주식 취소 전용 TR 명시
     }
 
+    explicit_cancel_route = str(dmst_stex_tp or "").strip().upper()
+    if explicit_cancel_route in {"KRX", "NXT", "SOR"}:
+        route_resolution = describe_order_route_resolution(explicit_cancel_route)
+    else:
+        # Preserve the legacy cancel fallback.  A cancellation must inherit the
+        # original order route; missing provenance is surfaced rather than
+        # silently changing the live cancel destination by current wall clock.
+        route_resolution = {
+            "requested_dmst_stex_tp": "AUTO",
+            "effective_dmst_stex_tp": "SOR",
+            "broker_route": "SOR",
+            "broker_route_resolution": "legacy_cancel_default_sor_original_route_missing",
+        }
     payload = {
-        "dmst_stex_tp": _normalize_dmst_stex_tp(dmst_stex_tp),  # 국내거래소구분
+        "dmst_stex_tp": route_resolution["effective_dmst_stex_tp"],  # 국내거래소구분
         "orig_ord_no": str(orig_ord_no),  # 원주문번호
         "stk_cd": clean_code,  # 종목코드
         "cncl_qty": str(qty),  # 🚀 '0'이면 남은 물량 싹 다 취소!
@@ -1590,13 +1698,21 @@ def send_cancel_order(code, orig_ord_no, token, qty=0, dmst_stex_tp=None):
             print(
                 f"✅ [취소접수] {clean_code} {cncl_qty_result}주 취소 성공 (새주문번호:{new_ord_no})"
             )
-            return data
+            return _with_order_route_provenance(
+                data,
+                route_resolution=route_resolution,
+                broker_route_attempted=True,
+            )
         else:
             err_msg = data.get("return_msg", "상세 사유 없음")
             msg = f"❌ [취소거절] {clean_code}: {err_msg}"
             log_error(msg)
             # EventBus().publish("TELEGRAM_ADMIN_NOTIFY", {"text": msg})
-            return data
+            return _with_order_route_provenance(
+                data,
+                route_resolution=route_resolution,
+                broker_route_attempted=True,
+            )
 
     except Exception as e:
         msg = f"🔥 [취소주문] 시스템 예외: {str(e)}"

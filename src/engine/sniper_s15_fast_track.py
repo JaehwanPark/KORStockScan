@@ -646,10 +646,20 @@ def execute_fast_track_scalp_v2(code, name, trigger_price, ratio=0.10):
             )
             return
 
+        buy_route_fields = buy_res if isinstance(buy_res, dict) else {}
         with state["lock"]:
             state["status"] = "BUY_SENT"
             state["buy_ord_no"] = _extract_ord_no(buy_res)
             state["req_buy_qty"] = req_qty
+            state["entry_execution_broker_route"] = str(
+                buy_route_fields.get("broker_route")
+                or buy_route_fields.get("effective_dmst_stex_tp")
+                or "UNKNOWN"
+            ).upper()
+            state["entry_execution_broker_route_resolution"] = str(
+                buy_route_fields.get("broker_route_resolution")
+                or "response_route_missing"
+            )
             state["updated_at"] = _now_ts()
         update_s15_shadow_record(state.get("shadow_id"), status="BUY_ORDERED")
         _log_s15_event(
@@ -664,6 +674,11 @@ def execute_fast_track_scalp_v2(code, name, trigger_price, ratio=0.10):
             requested_qty=req_qty,
             order_price=buy_price,
             broker_order_no=state.get("buy_ord_no", ""),
+            broker_route=state.get("entry_execution_broker_route", "UNKNOWN"),
+            broker_route_resolution=state.get(
+                "entry_execution_broker_route_resolution",
+                "response_route_missing",
+            ),
             ai_action=ai_res.get("action"),
             ai_score=ai_res.get("score", 0),
             ai_score_threshold=s15_buy_score_threshold,
@@ -692,7 +707,11 @@ def execute_fast_track_scalp_v2(code, name, trigger_price, ratio=0.10):
             cleanup_allowed = True
             if buy_ord_no:
                 kiwoom_orders.send_cancel_order(
-                    code=code, orig_ord_no=buy_ord_no, token=KIWOOM_TOKEN, qty=0
+                    code=code,
+                    orig_ord_no=buy_ord_no,
+                    token=KIWOOM_TOKEN,
+                    qty=0,
+                    dmst_stex_tp=state.get("entry_execution_broker_route"),
                 )
             state["status"] = "CANCELLED"
             update_s15_shadow_record(state.get("shadow_id"), status="EXPIRED")
@@ -720,7 +739,11 @@ def execute_fast_track_scalp_v2(code, name, trigger_price, ratio=0.10):
 
         if real_buy_qty < req_qty and buy_ord_no:
             kiwoom_orders.send_cancel_order(
-                code=code, orig_ord_no=buy_ord_no, token=KIWOOM_TOKEN, qty=0
+                code=code,
+                orig_ord_no=buy_ord_no,
+                token=KIWOOM_TOKEN,
+                qty=0,
+                dmst_stex_tp=state.get("entry_execution_broker_route"),
             )
 
         if avg_buy_price <= 0:
@@ -754,6 +777,18 @@ def execute_fast_track_scalp_v2(code, name, trigger_price, ratio=0.10):
         )
 
         sell_res = _send_s15_limit_sell(code, real_buy_qty, target_price)
+        sell_route_fields = sell_res if isinstance(sell_res, dict) else {}
+        with state["lock"]:
+            state["sell_execution_broker_route"] = str(
+                sell_route_fields.get("broker_route")
+                or sell_route_fields.get("effective_dmst_stex_tp")
+                or state.get("entry_execution_broker_route")
+                or "UNKNOWN"
+            ).upper()
+            state["sell_execution_broker_route_resolution"] = str(
+                sell_route_fields.get("broker_route_resolution")
+                or "response_route_missing"
+            )
 
         if not _is_ok_response(sell_res):
             print(
@@ -808,7 +843,11 @@ def execute_fast_track_scalp_v2(code, name, trigger_price, ratio=0.10):
 
                 if sell_ord_no:
                     cancel_res = kiwoom_orders.send_cancel_order(
-                        code=code, orig_ord_no=sell_ord_no, token=KIWOOM_TOKEN, qty=0
+                        code=code,
+                        orig_ord_no=sell_ord_no,
+                        token=KIWOOM_TOKEN,
+                        qty=0,
+                        dmst_stex_tp=state.get("sell_execution_broker_route"),
                     )
                     if _is_ok_response(cancel_res):
                         with state["lock"]:

@@ -39,6 +39,12 @@
 
 ## 장중 체크리스트 (09:05~15:20)
 
+- [ ] `[FreshSpreadAIRecheckIntradayApply0724] fresh spread-only candle/AI 재확인 축 수동 재기동 적용 및 첫 자연표본 확인` (`Due: 2026-07-24`, `Slot: INTRADAY`, `TimeWindow: 11:30~15:20`, `Track: ScalpingLogic`)
+  - Source: [operator_runtime_overrides_2026-07-24.env](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/operator_runtime_overrides_2026-07-24.env), [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py), [pipeline_events_2026-07-24.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-07-24.jsonl)
+  - 판정 기준: 사용자 수동 우아한 재기동 후 새 bot PID에 `KORSTOCKSCAN_FRESH_SPREAD_AI_RECHECK_ENABLED=true`, `ACTIVE_DATE=2026-07-24`, `MAX_AI_AGE_SEC=15`가 로드됐는지 확인하고, 첫 `fresh_spread_ai_recheck` 이벤트에서 fresh spread-only·fresh venue-consistent candle·BUY/WAIT만 재평가되며 DROP, stale/conflict, 최종 absolute spread cap 초과가 계속 차단되는지 확인한다.
+  - 금지: 이 축으로 stale quote, venue conflict, absolute spread cap, broker/account/order/quantity/cooldown guard를 우회하거나 provider, 주문가격·수량, threshold, bot 상태를 추가 변경하지 않는다.
+  - 다음 액션: `runtime_loaded_and_first_event_valid`, `runtime_loaded_waiting_natural_sample`, `pid_env_missing_restart_required`, `source_quality_or_guard_breach_disable_axis` 중 하나로 닫는다. guard breach이면 `KORSTOCKSCAN_FRESH_SPREAD_AI_RECHECK_ENABLED=false`로 되돌리고 수동 우아한 재기동한다.
+
 - [ ] `[RuntimeEnvIntradayObserve0724] 전일 selected runtime family 장중 provenance 및 rollback guard 확인` (`Due: 2026-07-24`, `Slot: INTRADAY`, `TimeWindow: 09:05~09:20`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-07-23.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-07-23.json)
   - 판정 기준: selected_families=soft_stop_whipsaw_confirmation, entry_split_order_plan, scale_in_split_order_plan, score65_74_recovery_probe, scalping_scanner_real_source_guard_runtime, score65_74_recovery_probe_strong_micro_override_runtime, entry_price_gap_profile_runtime, profit_stagnation_exit_runtime, latency_spread_relief_real_operator_override, quote_consistency_normalization, scalp_sim_candidate_window_expansion, scalp_sim_ai_budget_manager, ai_watching_score_smoothing_report_only, weak_pullback_entry_block_runtime, early_accel_recheck_runtime, real_pyramid_scale_in_quality_guard_runtime, sell_side_open_time_block_runtime, pre_submit_liquidity_relief_runtime, entry_opportunity_recheck_runtime, weak_context_late_entry_guard_runtime, rising_missed_normal_buy_bridge, persistent_operator_overrides_2026_06_26가 runtime event provenance에 찍히는지 확인한다.
