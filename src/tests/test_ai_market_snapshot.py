@@ -140,6 +140,65 @@ def test_future_or_missing_realtime_identity_is_not_fresh():
     )
 
 
+def test_post_fetch_capture_clock_avoids_false_future_without_weakening_guard():
+    cycle_started_at = datetime(2026, 7, 24, 9, 31, 49, tzinfo=KST).timestamp()
+    snapshot_captured_at = cycle_started_at + 6.0
+    ws = _ws(
+        snapshot_captured_at,
+        suffix="_AL",
+        route="krx_nxt_integrated",
+        code="011200",
+        effective_venue="KRX",
+    )
+    common = {
+        "stock_code": "011200",
+        "decision_stage": "entry_screen",
+        "ws_data": ws,
+        "effective_venue": "KRX",
+        "session_bucket": "krx_regular",
+        "broker_route": "SOR",
+        "candle_context": _candle(
+            rest_route="_AL",
+            ws_route="krx_nxt_integrated",
+            request_code="011200_AL",
+        ),
+    }
+
+    stale_loop_clock = mod.build_ai_market_snapshot(
+        **common,
+        now_ts=cycle_started_at,
+    )
+    post_fetch_clock = mod.build_ai_market_snapshot(
+        **common,
+        now_ts=snapshot_captured_at,
+    )
+    truly_future_ws = _ws(
+        snapshot_captured_at,
+        suffix="_AL",
+        route="krx_nxt_integrated",
+        code="011200",
+        effective_venue="KRX",
+    )
+    truly_future_ws["last_realtime_type_ts"]["0B"] = snapshot_captured_at + 2.0
+    truly_future = mod.build_ai_market_snapshot(
+        **{**common, "ws_data": truly_future_ws},
+        now_ts=snapshot_captured_at,
+    )
+
+    assert (
+        "current_price_future"
+        in stale_loop_clock["ai_input_preflight_v1"]["source_blockers"]
+    )
+    assert post_fetch_clock["ai_input_preflight_v1"]["source_allowed"] is True
+    assert not {
+        "bbo_future",
+        "current_price_future",
+        "tape_future",
+    }.intersection(post_fetch_clock["ai_input_preflight_v1"]["source_blockers"])
+    assert truly_future["realtime_type_provenance"]["0B"]["quality"] == "future"
+    assert truly_future["ai_input_preflight_v1"]["source_allowed"] is False
+
+
 def test_item_suffix_conflict_is_blocked():
     now = datetime(2026, 7, 23, 10, 0, tzinfo=KST).timestamp()
     ws = _ws(now, suffix="_NX", route="nxt_only")
@@ -253,7 +312,13 @@ def test_holding_sor_accepts_exact_integrated_execution_route_without_inventing_
     assert snapshot["integrated_sor_route_proven"] is True
     assert (
         snapshot["integrated_sor_route_proof"]
-        == "holding_sor_integrated_execution_route"
+        == "holding_sor_integrated_execution_view"
+    )
+    assert snapshot["integrated_sor_execution_view_only"] is True
+    assert snapshot["venue_attribution_allowed"] is False
+    assert (
+        snapshot["venue_attribution_reason"]
+        == "integrated_sor_execution_view_not_event_venue"
     )
 
 
@@ -296,7 +361,7 @@ def test_holding_sor_active_position_prefers_authoritative_broker_quantity():
     assert broker_flat["integrated_sor_route_proven"] is False
 
 
-def test_integrated_sor_proof_never_opens_entry_or_premarket_krx_authority():
+def test_integrated_sor_execution_view_opens_regular_entry_ai_only():
     position = {"buy_qty": 1, "buy_price": 10000}
     regular_now = datetime(2026, 7, 23, 10, 0, tzinfo=KST).timestamp()
     entry = mod.build_ai_market_snapshot(
@@ -329,10 +394,86 @@ def test_integrated_sor_proof_never_opens_entry_or_premarket_krx_authority():
         now_ts=premarket_now,
     )
 
-    assert entry["integrated_sor_route_proven"] is False
-    assert entry["ai_input_preflight_v1"]["source_allowed"] is False
+    assert entry["integrated_sor_route_proven"] is True
+    assert entry["integrated_sor_route_proof"] == (
+        "entry_sor_integrated_execution_view"
+    )
+    assert entry["underlying_event_venue"] is None
+    assert entry["underlying_event_venue_source"] == "not_provided"
+    assert entry["integrated_sor_execution_view_only"] is True
+    assert entry["venue_attribution_allowed"] is False
+    assert entry["ai_input_preflight_v1"]["source_allowed"] is True
     assert premarket_mislabeled["integrated_sor_route_proven"] is False
     assert premarket_mislabeled["ai_input_preflight_v1"]["source_allowed"] is False
+
+
+def test_integrated_sor_execution_view_accepts_runtime_entry_context_schema():
+    now = datetime(2026, 7, 23, 10, 0, tzinfo=KST).timestamp()
+    candle = {
+        **_candle(
+            rest_route="_AL",
+            ws_route="krx_nxt_integrated",
+            request_code="005930_AL",
+        ),
+        "schema": "entry_candle_context_v1",
+    }
+
+    for stage in ("entry_context", "gatekeeper"):
+        snapshot = mod.build_ai_market_snapshot(
+            stock_code="005930",
+            decision_stage=stage,
+            ws_data=_ws(now, suffix="_AL", route="krx_nxt_integrated"),
+            effective_venue="KRX",
+            session_bucket="krx_regular",
+            broker_route="SOR",
+            candle_context=candle,
+            now_ts=now,
+        )
+
+        assert snapshot["integrated_sor_route_proven"] is True
+        assert snapshot["ai_input_preflight_v1"]["source_allowed"] is True
+        assert snapshot["venue_attribution_allowed"] is False
+        log_fields = mod.ai_market_snapshot_log_fields(snapshot)
+        assert (
+            log_fields["ai_market_snapshot_integrated_sor_execution_view_only"] is True
+        )
+        assert log_fields["ai_market_snapshot_venue_attribution_allowed"] is False
+
+
+def test_integrated_sor_execution_view_rejects_nxt_event_and_post_probe():
+    now = datetime(2026, 7, 23, 10, 0, tzinfo=KST).timestamp()
+    common = {
+        "stock_code": "005930",
+        "effective_venue": "KRX",
+        "session_bucket": "krx_regular",
+        "broker_route": "SOR",
+        "candle_context": _candle(
+            rest_route="_AL",
+            ws_route="krx_nxt_integrated",
+            request_code="005930_AL",
+        ),
+        "now_ts": now,
+    }
+    nxt_event = mod.build_ai_market_snapshot(
+        **common,
+        decision_stage="entry_context",
+        ws_data=_ws(
+            now,
+            suffix="_AL",
+            route="krx_nxt_integrated",
+            effective_venue="NXT",
+        ),
+    )
+    post_probe = mod.build_ai_market_snapshot(
+        **common,
+        decision_stage="post_probe",
+        ws_data=_ws(now, suffix="_AL", route="krx_nxt_integrated"),
+    )
+
+    for snapshot in (nxt_event, post_probe):
+        assert snapshot["integrated_sor_route_proven"] is False
+        assert snapshot["ai_input_preflight_v1"]["source_allowed"] is False
+        assert snapshot["venue_attribution_allowed"] is False
 
 
 def test_integrated_sor_holding_requires_matching_al_candle_route():
@@ -560,6 +701,7 @@ def test_position_authority_requires_fresh_qty_orders_and_matching_route():
     now = datetime(2026, 7, 23, 14, 0, tzinfo=KST).timestamp()
     position = {
         "broker_holding_qty": 3,
+        "buy_price": 10000,
         "broker_snapshot_at": now - 1,
         "open_buy_qty": 0,
         "open_sell_qty": 0,
@@ -587,6 +729,7 @@ def test_krx_position_authority_accepts_normal_sor_broker_route():
     now = datetime(2026, 7, 23, 14, 0, tzinfo=KST).timestamp()
     position = {
         "broker_holding_qty": 3,
+        "buy_price": 10000,
         "broker_snapshot_at": now - 1,
         "open_buy_qty": 0,
         "open_sell_qty": 0,
@@ -603,7 +746,10 @@ def test_krx_position_authority_accepts_normal_sor_broker_route():
         effective_venue="KRX",
         session_bucket="krx_regular",
         broker_route="SOR",
-        candle_context=_candle(),
+        candle_context=_candle(
+            rest_route="_AL",
+            ws_route="krx_nxt_integrated",
+        ),
         position=position,
         now_ts=now,
         require_position_reconciliation=True,
@@ -615,6 +761,10 @@ def test_krx_position_authority_accepts_normal_sor_broker_route():
     assert preflight["broker_route_matches_venue"] is True
     assert snapshot["broker_route"] == "SOR"
     assert snapshot["market_data_route"] == "krx_nxt_integrated"
+    assert snapshot["underlying_event_venue"] is None
+    assert snapshot["underlying_event_venue_source"] == "not_provided"
+    assert snapshot["integrated_sor_execution_view_only"] is True
+    assert snapshot["venue_attribution_allowed"] is False
 
 
 def test_broker_snapshot_timestamp_expires_even_if_legacy_age_is_zero():

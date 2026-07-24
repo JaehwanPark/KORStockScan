@@ -113,12 +113,7 @@ def test_reversal_add_runtime_supply_context_accepts_trusted_pressure():
             "quote_age_ms": 100,
             "tick_aggressor_trusted_count": 3,
             "tick_aggressor_pressure_usable": True,
-            "micro_vwap_available": True,
-            "minute_candle_context_quality": "fresh_bar_window",
-            "minute_candle_window_fresh": True,
             "minute_candle_latest_age_ms": 7000,
-            "tick_context_quality": "fresh_computed",
-            "tick_context_stale": False,
             "tick_accel_source": "computed_10ticks",
         }
     )
@@ -191,6 +186,41 @@ def test_watching_strategy_initializes_ai_call_executed_before_optional_ai_call(
     first_wait_idx = source.index("first_ai_big_bite_wait_bypassed = bool(")
 
     assert init_idx < optional_call_idx < first_wait_idx
+
+
+def test_entry_ai_snapshots_use_post_fetch_clocks():
+    source = inspect.getsource(handlers._handle_watching_strategy_branch)
+    fetch_idx = source.index("recent_candles, candle_source_meta = (")
+    clock_idx = source.index("entry_context_now_ts = time.time()")
+    context_idx = source.index(
+        "candle_context = build_entry_candle_context(",
+        clock_idx,
+    )
+    analyze_idx = source.index("ai_decision = ai_engine.analyze_target(")
+    context_block = source[context_idx:analyze_idx]
+
+    assert fetch_idx < clock_idx < context_idx < analyze_idx
+    assert "now_ts=entry_context_now_ts" in context_block
+
+    retry_source = inspect.getsource(
+        handlers._retry_entry_ai_submit_authority_before_block
+    )
+    assert "retry_context_now_ts = time.time()" in retry_source
+    assert "now_ts=retry_context_now_ts" in retry_source
+
+    projection_source = inspect.getsource(
+        handlers._run_watching_score_projection_refresh
+    )
+    assert "projection_context_now_ts = time.time()" in projection_source
+    assert "now_ts=projection_context_now_ts" in projection_source
+
+    gatekeeper_clock_idx = source.index("gatekeeper_context_now_ts = time.time()")
+    gatekeeper_snapshot_idx = source.index(
+        "gatekeeper_snapshot = build_ai_market_snapshot(",
+        gatekeeper_clock_idx,
+    )
+    gatekeeper_block = source[gatekeeper_clock_idx : gatekeeper_snapshot_idx + 1800]
+    assert "now_ts=gatekeeper_context_now_ts" in gatekeeper_block
 
 
 def test_update_ai_quote_freshness_fields_overwrites_stale_provenance(monkeypatch):

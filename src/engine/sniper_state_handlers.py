@@ -48,7 +48,7 @@ from src.engine.sniper_condition_handlers_big_bite import (
 )
 from src.engine.sniper_scale_in import (
     describe_dynamic_scale_in_qty,
-    describe_scale_in_qty,
+    describe_scale_in_qty,  # noqa: F401 - compatibility monkeypatch surface
     evaluate_scalping_pyramid,
     evaluate_swing_avg_down,
     evaluate_swing_pyramid,
@@ -105,7 +105,7 @@ from src.engine.scalping.watching_score_smoothing import (
 )
 from src.engine.scalping.micro_estimator_state import (
     DEFAULT_STORE as DEFAULT_MICRO_ESTIMATOR_STORE,
-    MicroEstimatorStore,
+    MicroEstimatorStore,  # noqa: F401 - compatibility construction surface
     estimate_orderbook_pressure,
     feature_only_fields_from_snapshot,
 )
@@ -215,7 +215,6 @@ from src.trading.market.quote_consistency import (
 )
 from src.trading.order.tick_utils import clamp_price_to_tick, move_price_down_by_bps
 from src.engine.scalping.entry_cancel_wait_attribution import (
-    EntryCancelWaitAttributionResult,
     compute_entry_cancel_wait_attribution,
 )
 from src.engine.scalping.entry_cancel_wait_runtime import (
@@ -4265,7 +4264,6 @@ def _evaluate_first_touch_avgdown_decision_gate(
     has_recovery_support = base_has_recovery_support
     hard_block_reasons: list[str] = []
     if not bool(submit_authority.get("allowed")):
-        submit_reason = submit_authority_reason
         risk_signals.append(f"ai_score_no_submit_authority:{submit_authority_reason}")
         if not ai_retry_partial_recovery:
             hard_block_reasons.append(
@@ -16668,8 +16666,6 @@ def _scanner_fast_precheck_fields(
             "score_threshold_change,provider_route_change,order_price_change,"
             "quantity_or_cap_change,broker_guard_change,real_execution_quality_approval"
         ),
-        "fast_precheck_result": result,
-        "fast_precheck_reason": reason,
         "fast_precheck_realtime_relief_applied": bool(rising_realtime_relief),
         "fast_precheck_subscription_recheck_relief_applied": bool(
             rising_subscription_recheck_curr_relief
@@ -28470,6 +28466,83 @@ def _rising_missed_price_anchor(
     )
 
 
+def _refresh_rising_missed_watch_delta_from_current_price(
+    stock: dict | None,
+    current_price: Any,
+) -> dict[str, Any]:
+    """Refresh scanner watch delta before the Rising Missed fast candidate gate.
+
+    This repair only updates same-symbol observation state.  Freshness, TP1,
+    submit-safety, broker, and quantity owners remain downstream and cannot be
+    bypassed by this value.
+    """
+
+    stock = stock if isinstance(stock, dict) else {}
+    observed_price = _safe_float(current_price, 0.0)
+    fields: dict[str, Any] = {
+        "rising_missed_watch_delta_refresh_attempted": observed_price > 0,
+        "rising_missed_watch_delta_refresh_applied": False,
+        "rising_missed_watch_delta_refresh_reason": "missing_current_price",
+        "rising_missed_watch_delta_refresh_decision_authority": (
+            "candidate_observation_only"
+        ),
+        "rising_missed_watch_delta_refresh_forbidden_uses": (
+            "standalone_buy,submit_safety_bypass,stale_quote_bypass,"
+            "broker_guard_bypass,quantity_or_cap_change"
+        ),
+    }
+    if observed_price <= 0:
+        return fields
+
+    anchor_price, _anchor_source, anchor_fields = _rising_missed_price_anchor(
+        stock,
+        reference_price=observed_price,
+    )
+    fields.update(anchor_fields)
+    if anchor_price <= 0:
+        fields["rising_missed_watch_delta_refresh_reason"] = "missing_valid_anchor"
+        return fields
+
+    observed_delta_pct = ((observed_price - anchor_price) / anchor_price) * 100.0
+    previous_delta_pct = _safe_float(stock.get("price_delta_since_first_seen_pct"), 0.0)
+    previous_max_delta_pct = _safe_float(
+        stock.get("max_price_delta_since_first_seen_pct"),
+        previous_delta_pct,
+    )
+    effective_max_delta_pct = max(previous_max_delta_pct, observed_delta_pct)
+    normalized_observed_price: int | float = (
+        int(observed_price) if observed_price.is_integer() else observed_price
+    )
+    _mutate_stock_state(
+        stock,
+        set_fields={
+            "current_price": normalized_observed_price,
+            "current_price_observed": normalized_observed_price,
+            "price_delta_since_first_seen_pct": f"{observed_delta_pct:.2f}",
+            "max_price_delta_since_first_seen_pct": (f"{effective_max_delta_pct:.2f}"),
+        },
+    )
+    fields.update(
+        {
+            "rising_missed_watch_delta_refresh_applied": True,
+            "rising_missed_watch_delta_refresh_reason": (
+                "same_symbol_current_price_observed"
+            ),
+            "rising_missed_watch_delta_refresh_previous_pct": (
+                f"{previous_delta_pct:.4f}"
+            ),
+            "rising_missed_watch_delta_refresh_observed_pct": observed_delta_pct,
+            "rising_missed_watch_delta_refresh_max_pct": (
+                f"{effective_max_delta_pct:.4f}"
+            ),
+            "rising_missed_watch_delta_refresh_current_price": (
+                normalized_observed_price
+            ),
+        }
+    )
+    return fields
+
+
 def _evaluate_rising_missed_reversal_pre_submit_guard(
     *,
     stock: dict | None,
@@ -31178,6 +31251,7 @@ def _retry_entry_ai_submit_authority_before_block(
         retry_ws_data.setdefault(
             "ai_score_baseline_source", "pre_submit_entry_ai_authority_retry"
         )
+        retry_context_now_ts = time.time()
         candle_context = build_entry_candle_context(
             KIWOOM_TOKEN,
             code,
@@ -31186,7 +31260,7 @@ def _retry_entry_ai_submit_authority_before_block(
             session=None,
             limit=40,
             model_bar_limit=20,
-            now_ts=now_ts,
+            now_ts=retry_context_now_ts,
             recent_candles=recent_candles,
             source_meta=candle_source_meta,
         )
@@ -32426,10 +32500,6 @@ def _resolve_buy_order_timeout_sec(stock, strategy):
             return max(
                 5, min(1200, int(stored_result.get("cancel_wait_sec", 90) or 90))
             )
-
-    explicit_timeout = _coerce_int_value(
-        (stock or {}).get("entry_timeout_sec_override")
-    )
 
     profile = (
         str(
@@ -38212,6 +38282,7 @@ def _run_watching_score_projection_refresh(
         ws_data.setdefault(
             "ai_score_baseline_source", "pre_analyze_target_runtime_score"
         )
+        projection_context_now_ts = time.time()
         candle_context = build_entry_candle_context(
             KIWOOM_TOKEN,
             code,
@@ -38220,7 +38291,7 @@ def _run_watching_score_projection_refresh(
             session=None,
             limit=40,
             model_bar_limit=20,
-            now_ts=now_ts,
+            now_ts=projection_context_now_ts,
             recent_candles=recent_candles,
             source_meta=candle_source_meta,
         )
@@ -45181,7 +45252,6 @@ def _handle_watching_strategy_branch(
             if liquidity_totals_present
             else "missing_orderbook_totals"
         )
-        big_bite_hit = False
         big_bite_armed = False
         big_bite_confirmed = False
         big_bite_info = {}
@@ -45344,7 +45414,6 @@ def _handle_watching_strategy_branch(
                     ws_data=ws_data,
                     runtime_state=BIG_BITE_STATE,
                 )
-                big_bite_hit = bool(big_bite_confirmed)
                 big_bite_info = {**(big_bite_info or {}), **(confirm_info or {})}
             except Exception as exc:
                 log_error(f"⚠️ [Big-Bite] 보조 신호 계산 실패 ({code}): {exc}")
@@ -46149,6 +46218,12 @@ def _handle_watching_strategy_branch(
                             )
                             for adm_key, adm_value in adm_overlap_snapshot.items():
                                 ws_data.setdefault(adm_key, adm_value)
+                            # The outer WATCHING loop timestamp can be minutes old
+                            # when earlier symbols perform REST/AI work.  Capture
+                            # the exact entry snapshot after those fetches so
+                            # freshly updated WS provenance is not mislabeled as
+                            # future relative to the stale loop timestamp.
+                            entry_context_now_ts = time.time()
                             candle_context = build_entry_candle_context(
                                 KIWOOM_TOKEN,
                                 code,
@@ -46157,7 +46232,7 @@ def _handle_watching_strategy_branch(
                                 session=None,
                                 limit=40,
                                 model_bar_limit=20,
-                                now_ts=now_ts,
+                                now_ts=entry_context_now_ts,
                                 recent_candles=recent_candles,
                                 source_meta=candle_source_meta,
                             )
@@ -47974,7 +48049,6 @@ def _handle_watching_strategy_branch(
             vpw_condition = current_vpw >= vpw_limit_base
             ratio_min = float(config["INVEST_RATIO_KOSDAQ_MIN"])
             ratio_max = float(config["INVEST_RATIO_KOSDAQ_MAX"])
-            ai_score_threshold = int(config["AI_SCORE_THRESHOLD_KOSDAQ"])
             ai_prob = stock.get("prob", config["SNIPER_AGGRESSIVE_PROB"])
             v_pw_limit = vpw_limit_base if ai_prob >= 0.70 else strong_vpw
         else:
@@ -47984,7 +48058,6 @@ def _handle_watching_strategy_branch(
             vpw_condition = current_vpw >= 103
             ratio_min = float(config["INVEST_RATIO_KOSPI_MIN"])
             ratio_max = float(config["INVEST_RATIO_KOSPI_MAX"])
-            ai_score_threshold = int(config["AI_SCORE_THRESHOLD_KOSPI"])
             ai_prob = stock.get("prob", config["SNIPER_AGGRESSIVE_PROB"])
             v_pw_limit = vpw_limit_base if ai_prob >= 0.70 else strong_vpw
 
@@ -48269,6 +48342,7 @@ def _handle_watching_strategy_branch(
                                     now_ts=now_ts,
                                 )
                             )
+                            gatekeeper_context_now_ts = time.time()
                             gatekeeper_candle_context = build_entry_candle_context(
                                 KIWOOM_TOKEN,
                                 code,
@@ -48277,7 +48351,7 @@ def _handle_watching_strategy_branch(
                                 session=None,
                                 limit=40,
                                 model_bar_limit=20,
-                                now_ts=now_ts,
+                                now_ts=gatekeeper_context_now_ts,
                                 recent_candles=gatekeeper_candles,
                                 source_meta=gatekeeper_candle_meta,
                             )
@@ -48321,7 +48395,7 @@ def _handle_watching_strategy_branch(
                                     ).get("broker_route")
                                 ),
                                 candle_context=dict(gatekeeper_candle_context),
-                                now_ts=now_ts,
+                                now_ts=gatekeeper_context_now_ts,
                             )
                             gatekeeper_candle_context["ai_market_snapshot_v1"] = (
                                 gatekeeper_snapshot
@@ -55134,6 +55208,18 @@ def _evaluate_rising_missed_normal_buy_bridge(
         bridge_fields.update(entry_score_role_log_fields(entry_score_role_gate))
         return bridge_fields
 
+    watch_delta_refresh_fields = _refresh_rising_missed_watch_delta_from_current_price(
+        stock, curr_price
+    )
+    refreshed_positive_delta_pct = max(
+        _scanner_positive_delta_pct(stock),
+        _safe_float(
+            watch_delta_refresh_fields.get(
+                "rising_missed_watch_delta_refresh_observed_pct"
+            ),
+            0.0,
+        ),
+    )
     decision = evaluate_rising_missed_normal_buy_bridge(
         stock,
         strategy=strategy,
@@ -55142,7 +55228,7 @@ def _evaluate_rising_missed_normal_buy_bridge(
         has_open_pending=_has_open_pending_entry_orders(stock),
         already_holding=_already_holding_entry_position(stock),
         current_ai_action=current_ai_action,
-        positive_delta_pct=_scanner_positive_delta_pct(stock),
+        positive_delta_pct=refreshed_positive_delta_pct,
         min_delta_pct=_scanner_rising_entry_min_delta_pct(),
         current_price=curr_price,
         max_entry_price_krw=_rising_missed_one_share_entry_max_price_krw(),
@@ -55198,6 +55284,7 @@ def _evaluate_rising_missed_normal_buy_bridge(
                 },
                 now_ts=_runtime_action_now_ts(runtime),
             )
+    bridge_fields.update(watch_delta_refresh_fields)
     bridge_fields.update(decision.log_fields or {})
     if tp1_decision is not None:
         bridge_fields.update(tp1_decision.log_fields or {})
@@ -56247,6 +56334,18 @@ def _maybe_submit_rising_missed_one_share_entry(
     ws_data = _merge_scanner_market_data_enrichment_into_ws_data(
         stock, ws_data, runtime
     )
+    watch_delta_refresh_fields = _refresh_rising_missed_watch_delta_from_current_price(
+        stock, curr_price
+    )
+    refreshed_positive_delta_pct = max(
+        _scanner_positive_delta_pct(stock),
+        _safe_float(
+            watch_delta_refresh_fields.get(
+                "rising_missed_watch_delta_refresh_observed_pct"
+            ),
+            0.0,
+        ),
+    )
     decision = evaluate_rising_missed_one_share_entry(
         stock,
         strategy=strategy,
@@ -56254,7 +56353,7 @@ def _maybe_submit_rising_missed_one_share_entry(
         feature_enabled=feature_enabled,
         has_open_pending=_has_open_pending_entry_orders(stock),
         already_holding=_already_holding_entry_position(stock),
-        positive_delta_pct=_scanner_positive_delta_pct(stock),
+        positive_delta_pct=refreshed_positive_delta_pct,
         min_delta_pct=_scanner_rising_entry_min_delta_pct(),
         current_price=curr_price,
         max_entry_price_krw=_rising_missed_one_share_entry_max_price_krw(),
@@ -56294,6 +56393,7 @@ def _maybe_submit_rising_missed_one_share_entry(
                 **_merge_entry_pipeline_field_groups(
                     decision.log_fields or {},
                     _rising_missed_scanner_filter_fields(action="budget_reallocated"),
+                    watch_delta_refresh_fields,
                     _rising_missed_initial_block_venue_fields(
                         stock,
                         code,
@@ -56377,6 +56477,7 @@ def _maybe_submit_rising_missed_one_share_entry(
             )
     decision_log_fields = dict(decision.log_fields or {})
     decision_log_fields.update(market_data_enrichment_log_fields(ws_data))
+    decision_log_fields.update(watch_delta_refresh_fields)
     if retry_fields.get("rising_missed_entry_ai_retry_reason") != "not_needed":
         decision_log_fields.update(retry_fields)
     if (
@@ -61295,9 +61396,6 @@ def handle_watching_state(
             )
             return
 
-    MAX_SURGE = MAX_SCALP_SURGE_PCT
-    MAX_INTRADAY_SURGE = MAX_INTRADAY_SURGE
-    MIN_LIQUIDITY = MIN_SCALP_LIQUIDITY
     scalp_reentry_rebound_watch_bypass_allowed = False
     if strategy == "SCALPING":
         scalp_reentry_guard = evaluate_scalp_same_symbol_loss_reentry_guard(

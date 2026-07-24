@@ -3897,6 +3897,127 @@ def test_rising_missed_watch_not_rising_candidate_consumes_without_watching_budg
     assert entry_logs[-1][1]["actual_order_submitted"] is False
 
 
+def test_rising_missed_fast_gate_refreshes_live_delta_before_classification(
+    monkeypatch,
+):
+    monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_ONE_SHARE_ENTRY_ENABLED", "true")
+    captured = {}
+    entry_logs = []
+
+    def fake_evaluate(*args, **kwargs):
+        captured["positive_delta_pct"] = kwargs["positive_delta_pct"]
+        return SimpleNamespace(
+            allowed=False,
+            reason=BLOCK_NOT_CANDIDATE,
+            forced_qty=1,
+            log_fields={
+                "rising_missed_class": "not_rising_missed",
+            },
+        )
+
+    monkeypatch.setattr(
+        state_handlers,
+        "evaluate_rising_missed_one_share_entry",
+        fake_evaluate,
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: entry_logs.append((stage, fields)),
+    )
+
+    stock = {
+        "id": 23615,
+        "name": "LIVE_DELTA",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "rising_missed_buy": True,
+        "first_seen_price": 45800,
+        "current_price": 45800,
+        "current_price_observed": 45800,
+        "price_delta_since_first_seen_pct": "0.00",
+    }
+
+    handled = state_handlers._maybe_submit_rising_missed_one_share_entry(
+        stock,
+        "119850",
+        {"curr": 49250},
+        admin_id=1,
+        runtime={"now_ts": 1000.0},
+        strategy="SCALPING",
+        pos_tag="SCANNER",
+        curr_price=49250,
+    )
+
+    assert handled is True
+    assert captured["positive_delta_pct"] == pytest.approx(7.532751, rel=1e-6)
+    assert stock["current_price"] == 49250
+    assert stock["current_price_observed"] == 49250
+    assert stock["price_delta_since_first_seen_pct"] == "7.53"
+    assert stock["max_price_delta_since_first_seen_pct"] == "7.53"
+    assert entry_logs[-1][0] == "rising_missed_watch_not_rising_skipped"
+    assert (
+        entry_logs[-1][1]["rising_missed_watch_delta_refresh_reason"]
+        == "same_symbol_current_price_observed"
+    )
+    assert (
+        entry_logs[-1][1]["rising_missed_watch_delta_refresh_decision_authority"]
+        == "candidate_observation_only"
+    )
+
+
+def test_rising_missed_normal_bridge_refreshes_live_delta_before_classification(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        state_handlers, "_rising_missed_normal_buy_bridge_enabled", lambda: True
+    )
+    monkeypatch.setattr(
+        state_handlers, "_rising_missed_tp1_selector_enabled", lambda: False
+    )
+    captured = {}
+
+    def fake_evaluate(*args, **kwargs):
+        captured["positive_delta_pct"] = kwargs["positive_delta_pct"]
+        return SimpleNamespace(
+            allowed=False,
+            reason="captured",
+            log_fields={},
+        )
+
+    monkeypatch.setattr(
+        state_handlers,
+        "evaluate_rising_missed_normal_buy_bridge",
+        fake_evaluate,
+    )
+    stock = {
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "first_seen_price": 45800,
+        "price_delta_since_first_seen_pct": "0.00",
+        "last_watching_ai_action": "BUY",
+    }
+
+    result = state_handlers._evaluate_rising_missed_normal_buy_bridge(
+        stock,
+        "119850",
+        {"curr": 49250},
+        {"now_ts": 1000.0},
+        strategy="SCALPING",
+        pos_tag="SCANNER",
+        curr_price=49250,
+        ai_decision={"action": "BUY"},
+        current_ai_score=60.0,
+        entry_score_threshold=70.0,
+        entry_score_role_gate={"entry_score_usable_for_entry_submit": True},
+    )
+
+    assert captured["positive_delta_pct"] == pytest.approx(7.532751, rel=1e-6)
+    assert stock["price_delta_since_first_seen_pct"] == "7.53"
+    assert result["rising_missed_watch_delta_refresh_applied"] is True
+    assert result["rising_missed_normal_buy_bridge_allowed"] is False
+
+
 def test_scanner_fast_precheck_reallocates_not_rising_missed_without_recovery(
     monkeypatch,
 ):
