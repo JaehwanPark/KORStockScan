@@ -2155,6 +2155,81 @@ def test_deadline_scheduler_orders_precheck_before_holding_and_recovery(
     ]
 
 
+@pytest.mark.parametrize("lane", ["commit", "fast_precheck"])
+def test_deadline_scheduler_attach_yields_to_ready_precheck(lane):
+    pending = {
+        "id": "pending",
+        "code": "000003",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "scanner_generation_id": "GEN-000003-1",
+        "_scanner_scheduler_lane": lane,
+    }
+
+    assert (
+        kiwoom_sniper_v2._scanner_scheduler_attach_must_yield_to_runtime_work(
+            [pending]
+        )
+        is True
+    )
+
+
+@pytest.mark.parametrize("lane", ["recovery", "heavy_eval", "", None])
+def test_deadline_scheduler_attach_can_interleave_after_precheck(lane):
+    target = {
+        "id": "post-precheck",
+        "code": "000003",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "scanner_generation_id": "GEN-000003-1",
+        "_scanner_scheduler_lane": lane,
+    }
+
+    assert (
+        kiwoom_sniper_v2._scanner_scheduler_attach_must_yield_to_runtime_work(
+            [target]
+        )
+        is False
+    )
+
+
+@pytest.mark.parametrize("status", ["BUY_ORDERED", "SELL_ORDERED"])
+def test_deadline_scheduler_attach_yields_to_order_safety_work(status):
+    ordered = {
+        "id": "ordered",
+        "code": "000004",
+        "status": status,
+        "strategy": "SCALPING",
+        "scanner_generation_id": "GEN-000004-1",
+        "_scanner_scheduler_lane": "fast_precheck",
+    }
+
+    assert (
+        kiwoom_sniper_v2._scanner_scheduler_attach_must_yield_to_runtime_work(
+            [ordered]
+        )
+        is True
+    )
+
+
+def test_deadline_scheduler_runtime_drains_one_attach_between_prechecks():
+    source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
+
+    assert source.count("_drain_scanner_promotion_inbox(") == 2
+    assert source.count("max_items=1") >= 2
+    assert (
+        "_scanner_scheduler_attach_must_yield_to_runtime_work(targets)" in source
+    )
+    assert (
+        "_scanner_scheduler_attach_must_yield_to_runtime_work(\n"
+        "                    runtime_work_queue\n"
+        "                )"
+        in source
+    )
+
+
 def test_runtime_admit_live_scanner_attaches_prioritizes_new_target_without_mutating_active_targets():
     old = {
         "id": "old",

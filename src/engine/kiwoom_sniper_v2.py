@@ -7136,6 +7136,32 @@ def _drain_scanner_promotion_inbox(scheduler, *, max_items):
     return {"drained": drained, "applied": applied}
 
 
+def _scanner_scheduler_attach_must_yield_to_runtime_work(work_queue):
+    """Do not attach a promotion ahead of order safety or ready precheck work.
+
+    Applying a promotion may synchronously register WS subscriptions.  Draining
+    another envelope while an already attached generation is waiting for its
+    first precheck recreates scanner starvation even when each drain is bounded
+    to one item.  The same blocking attach must not precede receipt/fill work.
+    """
+
+    for target in work_queue or ():
+        status = str((target or {}).get("status") or "").upper()
+        if status in {"BUY_ORDERED", "SELL_ORDERED"}:
+            return True
+        if not _is_scanner_watching_target(target):
+            continue
+        if not str((target or {}).get("scanner_generation_id") or "").strip():
+            continue
+        lane = str((target or {}).get("_scanner_scheduler_lane") or "").strip()
+        if lane in {
+            ScannerLane.COMMIT.value,
+            ScannerLane.FAST_PRECHECK.value,
+        }:
+            return True
+    return False
+
+
 def _scanner_scheduler_target_generation(scheduler, target):
     if not isinstance(scheduler, ScannerRuntimeScheduler):
         return None
@@ -8614,10 +8640,13 @@ def run_sniper(is_test_mode=False):
             # 상태 라우팅
             # ✅ 주문대기 상태는 ws_data 없이도 먼저 처리
             # =====================================================
-            if _scanner_scheduler_startup_mode() in {"deadline_v1", "async_v1"}:
+            if _scanner_scheduler_startup_mode() in {
+                "deadline_v1",
+                "async_v1",
+            } and not _scanner_scheduler_attach_must_yield_to_runtime_work(targets):
                 _drain_scanner_promotion_inbox(
                     run_sniper.scanner_runtime_scheduler,
-                    max_items=max(2, _scalping_fifo_max_active() * 2),
+                    max_items=1,
                 )
                 _scanner_scheduler_reconcile_active_targets(
                     run_sniper.scanner_runtime_scheduler,
@@ -9548,10 +9577,12 @@ def run_sniper(is_test_mode=False):
                 if _scanner_scheduler_startup_mode() in {
                     "deadline_v1",
                     "async_v1",
-                }:
+                } and not _scanner_scheduler_attach_must_yield_to_runtime_work(
+                    runtime_work_queue
+                ):
                     _drain_scanner_promotion_inbox(
                         run_sniper.scanner_runtime_scheduler,
-                        max_items=max(2, _scalping_fifo_max_active()),
+                        max_items=1,
                     )
                 runtime_work_queue, live_attaches = (
                     _runtime_admit_live_scanner_attaches(
