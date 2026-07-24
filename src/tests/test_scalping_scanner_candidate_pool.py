@@ -431,8 +431,8 @@ def test_promote_candidates_limits_new_codes_to_remaining_active_slots(monkeypat
         {"codes": ["000001"], "source": "scalping_scanner_promote"}
     ]
     assert [name for name, _payload in event_bus.events[-3:]] == [
-        "SCALPING_SCANNER_PROMOTED_TARGET",
         "SCALPING_SCANNER_PROMOTION_BATCH_PENDING",
+        "SCALPING_SCANNER_PROMOTED_TARGET",
         "COMMAND_WS_REG",
     ]
     assert len(_event_payloads(event_bus, "SCALPING_SCANNER_PROMOTED_TARGET")) == 1

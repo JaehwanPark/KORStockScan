@@ -3201,12 +3201,18 @@ def promote_candidates(
             low_rebound_promoted_count += 1
         else:
             general_promoted_count += 1
-        event_bus.publish(
-            "SCALPING_SCANNER_PROMOTED_TARGET",
-            _scanner_runtime_target_payload(
-                target, source_guard, record_id=record_id, now_ts=now_ts
-            ),
+        runtime_target_payload = _scanner_runtime_target_payload(
+            target, source_guard, record_id=record_id, now_ts=now_ts
         )
+        event_bus.publish(
+            "SCALPING_SCANNER_PROMOTION_BATCH_PENDING",
+            {
+                "codes": [code],
+                "source": "scalping_scanner_promote",
+                "emitted_epoch": float(now_ts or 0.0),
+            },
+        )
+        event_bus.publish("SCALPING_SCANNER_PROMOTED_TARGET", runtime_target_payload)
 
         if len(new_codes_found) >= remaining_slots:
             break
@@ -3217,14 +3223,6 @@ def promote_candidates(
             break
 
     if new_codes_found:
-        event_bus.publish(
-            "SCALPING_SCANNER_PROMOTION_BATCH_PENDING",
-            {
-                "codes": list(new_codes_found),
-                "source": "scalping_scanner_promote",
-                "emitted_epoch": float(now_ts or 0.0),
-            },
-        )
         event_bus.publish(
             "COMMAND_WS_REG",
             {"codes": new_codes_found, "source": "scalping_scanner_promote"},
