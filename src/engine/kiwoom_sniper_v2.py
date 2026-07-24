@@ -5245,6 +5245,49 @@ def _runtime_admit_live_scanner_attaches(
     return [*safety_barrier, *ordered_new, *remaining], newly_attached
 
 
+def _runtime_requeue_pending_scanner_scheduler_targets(
+    work_queue,
+    active_targets,
+    *,
+    now_ts,
+):
+    """Restore pending scheduler continuations to the main runtime queue.
+
+    A target can enqueue its next precheck or recovery continuation after it
+    has already been popped from the current loop snapshot.  Scheduler state
+    remains authoritative, but the main thread must surface that target again
+    before admitting another blocking promotion attach.  HEAVY_EVAL stays with
+    the dedicated delayed-heavy queue owner.
+    """
+
+    queue = list(work_queue or [])
+    if _scanner_scheduler_startup_mode() not in {"deadline_v1", "async_v1"}:
+        return queue, []
+    queued_ids = {id(target) for target in queue}
+    continuations = []
+    continuation_lanes = {
+        ScannerLane.COMMIT.value,
+        ScannerLane.FAST_PRECHECK.value,
+        ScannerLane.RECOVERY.value,
+    }
+    for target in active_targets or ():
+        if id(target) in queued_ids or not _is_scanner_watching_target(target):
+            continue
+        if not str((target or {}).get("scanner_generation_id") or "").strip():
+            continue
+        lane = str((target or {}).get("_scanner_scheduler_lane") or "").strip()
+        if lane not in continuation_lanes:
+            continue
+        continuations.append(target)
+        queued_ids.add(id(target))
+    if not continuations:
+        return queue, []
+    return (
+        _runtime_iteration_targets([*queue, *continuations], now_ts=now_ts),
+        continuations,
+    )
+
+
 def _runtime_queue_rank_fields(iteration_targets):
     iteration_targets = list(iteration_targets or [])
     scanner_watching = [
@@ -9574,6 +9617,26 @@ def run_sniper(is_test_mode=False):
 
             def _admit_runtime_live_attaches():
                 nonlocal runtime_work_queue, scanner_heavy_eval_flushed
+                runtime_work_queue, scheduler_continuations = (
+                    _runtime_requeue_pending_scanner_scheduler_targets(
+                        runtime_work_queue,
+                        targets,
+                        now_ts=time.time(),
+                    )
+                )
+                if scheduler_continuations:
+                    queue_context.update(
+                        _runtime_queue_rank_fields(runtime_work_queue)
+                    )
+                    log_info(
+                        "[SCANNER_RUNTIME_SCHEDULER_CONTINUATION] "
+                        f"requeued={len(scheduler_continuations)} "
+                        "codes="
+                        + ",".join(
+                            str(target.get("code") or "").strip()[:6]
+                            for target in scheduler_continuations
+                        )
+                    )
                 if _scanner_scheduler_startup_mode() in {
                     "deadline_v1",
                     "async_v1",

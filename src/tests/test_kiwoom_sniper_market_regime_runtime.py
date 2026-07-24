@@ -2230,6 +2230,21 @@ def test_deadline_scheduler_runtime_drains_one_attach_between_prechecks():
     )
 
 
+def test_deadline_scheduler_runtime_requeues_continuation_before_attach_drain():
+    source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
+    helper_idx = source.index("def _admit_runtime_live_attaches")
+    continuation_idx = source.index(
+        "_runtime_requeue_pending_scanner_scheduler_targets(",
+        helper_idx,
+    )
+    drain_idx = source.index(
+        "_drain_scanner_promotion_inbox(",
+        helper_idx,
+    )
+
+    assert continuation_idx < drain_idx
+
+
 def test_runtime_admit_live_scanner_attaches_prioritizes_new_target_without_mutating_active_targets():
     old = {
         "id": "old",
@@ -2262,6 +2277,152 @@ def test_runtime_admit_live_scanner_attaches_prioritizes_new_target_without_muta
     assert admitted == [new]
     assert queue == [new, old]
     assert active_targets == [old, new]
+
+
+def test_runtime_requeues_scheduler_continuation_before_holding(monkeypatch):
+    monkeypatch.setattr(
+        kiwoom_sniper_v2.run_sniper,
+        "scanner_scheduler_mode",
+        "deadline_v1",
+        raising=False,
+    )
+    ordered = {
+        "id": "ordered",
+        "code": "000001",
+        "status": "SELL_ORDERED",
+        "strategy": "SCALPING",
+    }
+    holding = {
+        "id": "holding",
+        "code": "000002",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "actual_order_submitted": True,
+    }
+    continuation = {
+        "id": "continuation",
+        "code": "000003",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "effective_venue": "NXT",
+        "scanner_generation_id": "000003:PROMO-1:r1",
+        "_scanner_scheduler_lane": "fast_precheck",
+        "_scanner_scheduler_deadline_epoch": 1001.0,
+    }
+
+    queue, requeued = (
+        kiwoom_sniper_v2._runtime_requeue_pending_scanner_scheduler_targets(
+            [ordered, holding],
+            [ordered, holding, continuation],
+            now_ts=1000.0,
+        )
+    )
+
+    assert requeued == [continuation]
+    assert [target["id"] for target in queue] == [
+        "ordered",
+        "continuation",
+        "holding",
+    ]
+
+
+@pytest.mark.parametrize("lane", ["commit", "fast_precheck", "recovery"])
+def test_runtime_requeues_each_main_scheduler_continuation_lane(monkeypatch, lane):
+    monkeypatch.setattr(
+        kiwoom_sniper_v2.run_sniper,
+        "scanner_scheduler_mode",
+        "deadline_v1",
+        raising=False,
+    )
+    continuation = {
+        "id": lane,
+        "code": "000003",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "effective_venue": "NXT",
+        "scanner_generation_id": "000003:PROMO-1:r1",
+        "_scanner_scheduler_lane": lane,
+        "_scanner_scheduler_deadline_epoch": 1001.0,
+    }
+
+    queue, requeued = (
+        kiwoom_sniper_v2._runtime_requeue_pending_scanner_scheduler_targets(
+            [],
+            [continuation],
+            now_ts=1000.0,
+        )
+    )
+
+    assert queue == [continuation]
+    assert requeued == [continuation]
+
+
+def test_runtime_does_not_duplicate_queued_scheduler_continuation(monkeypatch):
+    monkeypatch.setattr(
+        kiwoom_sniper_v2.run_sniper,
+        "scanner_scheduler_mode",
+        "deadline_v1",
+        raising=False,
+    )
+    continuation = {
+        "id": "queued",
+        "code": "000003",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "effective_venue": "NXT",
+        "scanner_generation_id": "000003:PROMO-1:r1",
+        "_scanner_scheduler_lane": "fast_precheck",
+        "_scanner_scheduler_deadline_epoch": 1001.0,
+    }
+
+    queue, requeued = (
+        kiwoom_sniper_v2._runtime_requeue_pending_scanner_scheduler_targets(
+            [continuation],
+            [continuation],
+            now_ts=1000.0,
+        )
+    )
+
+    assert queue == [continuation]
+    assert requeued == []
+
+
+@pytest.mark.parametrize(
+    "mode,lane",
+    [("legacy", "fast_precheck"), ("deadline_v1", "heavy_eval")],
+)
+def test_runtime_does_not_requeue_non_main_scheduler_owner(monkeypatch, mode, lane):
+    monkeypatch.setattr(
+        kiwoom_sniper_v2.run_sniper,
+        "scanner_scheduler_mode",
+        mode,
+        raising=False,
+    )
+    target = {
+        "id": "excluded",
+        "code": "000003",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "effective_venue": "NXT",
+        "scanner_generation_id": "000003:PROMO-1:r1",
+        "_scanner_scheduler_lane": lane,
+        "_scanner_scheduler_deadline_epoch": 1001.0,
+    }
+
+    queue, requeued = (
+        kiwoom_sniper_v2._runtime_requeue_pending_scanner_scheduler_targets(
+            [],
+            [target],
+            now_ts=1000.0,
+        )
+    )
+
+    assert queue == []
+    assert requeued == []
 
 
 def test_runtime_admit_live_scanner_attach_gets_first_precheck_after_safety_barrier():
