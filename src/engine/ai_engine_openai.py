@@ -1671,6 +1671,29 @@ class GPTSniperEngine:
         return payload
 
     @staticmethod
+    def _copy_ai_transport_trace_metadata(target, source):
+        target_payload = target if isinstance(target, dict) else {}
+        source_payload = source if isinstance(source, dict) else {}
+        for key, value in source_payload.items():
+            key_text = str(key)
+            if (
+                key_text.startswith(
+                    (
+                        "openai_",
+                        "bedrock_",
+                        "ai_prompt_",
+                        "ai_input_payload_",
+                        "ai_request_",
+                        "ai_trace_",
+                    )
+                )
+                or key_text == "ai_decision_trace_id"
+                or key_text == "provider"
+            ):
+                target_payload[key] = value
+        return target_payload
+
+    @staticmethod
     def _feature_packet_pressure_usable(feature_packet):
         packet = feature_packet if isinstance(feature_packet, dict) else {}
         raw_flag = packet.get("tick_aggressor_pressure_usable")
@@ -5596,10 +5619,8 @@ class GPTSniperEngine:
             normalized = normalize_scalping_entry_price_result(
                 result, fallback_price=fallback_price
             )
+            self._copy_ai_transport_trace_metadata(normalized, result)
             normalized["ai_model"] = self._get_tier2_model()
-            for key, value in result.items():
-                if str(key).startswith(("openai_", "bedrock_")) or key == "provider":
-                    normalized[key] = value
             self._mark_successful_ai_call(update_last_call_time=False)
             return self._annotate_analysis_result(
                 normalized,
@@ -6877,6 +6898,60 @@ class GPTSniperEngine:
             payload, ensure_ascii=True, separators=(",", ":"), default=str
         )
 
+    def _holding_trace_context_fields(
+        self,
+        *,
+        stock_code,
+        ws_data,
+        position_ctx,
+        holding_context,
+    ):
+        ws = ws_data if isinstance(ws_data, dict) else {}
+        position = position_ctx if isinstance(position_ctx, dict) else {}
+        holding_fields = holding_decision_context_log_fields(holding_context)
+        quote = self._extract_quote_snapshot(ws)
+
+        def _positive_price(*values):
+            for value in values:
+                price = int(self._safe_float(value, 0.0))
+                if price > 0:
+                    return price
+            return None
+
+        best_bid = _positive_price(
+            holding_fields.get("holding_context_best_bid"),
+            quote.get("best_bid"),
+        )
+        best_ask = _positive_price(
+            holding_fields.get("holding_context_best_ask"),
+            quote.get("best_ask"),
+        )
+        current_price = _positive_price(
+            ws.get("curr"),
+            ws.get("current_price"),
+            position.get("curr_price"),
+            position.get("current_price"),
+        )
+        reference_price = best_bid or current_price
+        reference_price_type = (
+            "executable_bid" if best_bid is not None else "current_price"
+        )
+        if reference_price is None:
+            reference_price_type = None
+
+        return {
+            **holding_fields,
+            "ai_trace_stock_code": stock_code,
+            "ai_trace_record_id": position.get("record_id"),
+            "ai_trace_probe_bundle_id": position.get("probe_bundle_id"),
+            "ai_trace_position_cycle_id": position.get("position_cycle_id"),
+            "ai_trace_broker_order_no": position.get("broker_order_no"),
+            "ai_trace_reference_price_type": reference_price_type,
+            "ai_trace_reference_price": reference_price,
+            "ai_trace_best_bid": best_bid,
+            "ai_trace_best_ask": best_ask,
+        }
+
     def _normalize_holding_score_result(self, result, *, source_quality=None):
         payload = dict(result or {}) if isinstance(result, dict) else {}
         raw_action = str(payload.get("action", "HOLD") or "HOLD").upper().strip()
@@ -6936,6 +7011,7 @@ class GPTSniperEngine:
         result_source,
         parse_fail=False,
         input_contract_fields=None,
+        provider_called=False,
     ):
         reason_text = str(reason or result_source or "holding_score_unusable")
         payload = {
@@ -6962,6 +7038,7 @@ class GPTSniperEngine:
             "holding_score_effective_usable": False,
             "holding_score_excluded_reason": reason_text,
             "holding_score_age_sec": 0,
+            "provider_called": bool(provider_called),
         }
         return self._annotate_analysis_result(
             payload,
@@ -6994,10 +7071,17 @@ class GPTSniperEngine:
         holding_context=None,
     ):
         started = time.perf_counter()
+        trace_context_fields = self._holding_trace_context_fields(
+            stock_code=stock_code,
+            ws_data=ws_data,
+            position_ctx=position_ctx,
+            holding_context=holding_context,
+        )
         input_contract_fields = {
             "ai_input_schema": "holding_score_v2",
             "ai_input_contract_mode": "structured_json",
             "ai_input_build_fallback": "not_built",
+            **trace_context_fields,
         }
         holding_preflight = ai_input_preflight(holding_context)
         if runtime_preflight_required() and not bool(
@@ -7087,6 +7171,7 @@ class GPTSniperEngine:
                 default_schema="holding_score_v2",
                 default_mode="structured_json",
             )
+            input_contract_fields.update(trace_context_fields)
             result = self._call_openai_safe(
                 SCALPING_HOLDING_SCORE_SYSTEM_PROMPT,
                 user_input,
@@ -7142,9 +7227,7 @@ class GPTSniperEngine:
                 )
             normalized.update(feature_audit_fields)
             meta_source = result if isinstance(result, dict) else transport_meta
-            for key, value in meta_source.items():
-                if str(key).startswith("openai_"):
-                    normalized[key] = value
+            self._copy_ai_transport_trace_metadata(normalized, meta_source)
             normalized.update(
                 {
                     "ai_model": str(
@@ -7205,14 +7288,21 @@ class GPTSniperEngine:
                 f"🚨 [HOLDING_SCORE] OpenAI score {result_source} fail-closed "
                 f"({stock_name}, failures {failure_count}): {e}"
             )
+            failure_transport_meta = self._consume_last_transport_meta()
+            if failure_transport_meta:
+                input_contract_fields.update(failure_transport_meta)
+            input_contract_fields.update(trace_context_fields)
+            timing_meta = getattr(e, "timing_meta", None)
+            if isinstance(timing_meta, dict):
+                input_contract_fields.update(timing_meta)
             payload = self._neutral_holding_score_result(
                 result_source,
                 started=started,
                 result_source=result_source,
                 parse_fail=True,
                 input_contract_fields=input_contract_fields,
+                provider_called=True,
             )
-            timing_meta = getattr(e, "timing_meta", None)
             if isinstance(timing_meta, dict):
                 payload.update(
                     {
@@ -7545,6 +7635,12 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
         holding_context=None,
     ):
         started = time.perf_counter()
+        trace_context_fields = self._holding_trace_context_fields(
+            stock_code=stock_code,
+            ws_data=ws_data,
+            position_ctx=position_ctx,
+            holding_context=holding_context,
+        )
         input_contract_fields = {
             "ai_input_schema": (
                 "holding_flow_v2"
@@ -7565,6 +7661,7 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
                 else "plain_text"
             ),
             "ai_input_build_fallback": "not_built",
+            **trace_context_fields,
         }
         holding_preflight = ai_input_preflight(holding_context)
         if runtime_preflight_required() and not bool(
@@ -7609,6 +7706,7 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
                     "holding_context_provider_expected": (
                         "bedrock_nova_lite_v2_primary_openai_failback"
                     ),
+                    "provider_called": False,
                     **holding_decision_context_log_fields(holding_context),
                 },
                 prompt_type="holding_exit_flow",
@@ -7637,6 +7735,7 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
                         "holding_context_provider_expected": (
                             "bedrock_nova_lite_v2_primary_openai_failback"
                         ),
+                        "provider_called": False,
                         **holding_decision_context_log_fields(holding_context),
                     },
                     prompt_type="holding_exit_flow",
@@ -7724,6 +7823,7 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
                     else "plain_text"
                 ),
             )
+            input_contract_fields.update(trace_context_fields)
             if holding_decision_context_model_payload(holding_context):
                 input_contract_fields.update(
                     {
@@ -7754,9 +7854,7 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
             normalized = self._normalize_holding_flow_result(
                 result, decision_kind=decision_kind
             )
-            for key, value in result.items():
-                if str(key).startswith(("openai_", "bedrock_")) or key == "provider":
-                    normalized[key] = value
+            self._copy_ai_transport_trace_metadata(normalized, result)
             normalized = merge_holding_exit_matrix_result_fields(
                 normalized,
                 matrix_runtime,
@@ -7798,6 +7896,10 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
             log_error(
                 f"🚨 [HOLDING_FLOW] AI provider route error ({stock_name}/{decision_kind}, 연속 실패 {failure_count}회): {e}"
             )
+            failure_transport_meta = self._consume_last_transport_meta()
+            if failure_transport_meta:
+                input_contract_fields.update(failure_transport_meta)
+            input_contract_fields.update(trace_context_fields)
             return self._annotate_analysis_result(
                 {
                     "action": "EXIT",
@@ -7810,6 +7912,7 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
                     "holding_context_provider_expected": (
                         "bedrock_nova_lite_v2_primary_openai_failback"
                     ),
+                    "provider_called": True,
                     **holding_decision_context_log_fields(holding_context),
                 },
                 prompt_type="holding_exit_flow",
@@ -7833,10 +7936,17 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
         started = time.perf_counter()
         prompt_type = "scalping_overnight"
         prompt_version = "overnight_v1"
+        trace_context_fields = self._holding_trace_context_fields(
+            stock_code=stock_code,
+            ws_data=realtime_ctx,
+            position_ctx=realtime_ctx,
+            holding_context=holding_context,
+        )
         input_contract_fields = {
             "ai_input_schema": "overnight_text_v1",
             "ai_input_contract_mode": "plain_text",
             "ai_input_build_fallback": "not_built",
+            **trace_context_fields,
         }
         holding_preflight = ai_input_preflight(holding_context)
         if runtime_preflight_required() and (
@@ -7873,6 +7983,7 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
                     "reason": "ai_lock_contention",
                     "risk_note": "lock_contention",
                     "holding_context_provider_expected": "openai_tier2",
+                    "provider_called": False,
                     "raw": {},
                     **holding_decision_context_log_fields(holding_context),
                 },
@@ -7885,6 +7996,7 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
                 cache_hit=False,
                 cache_mode="miss",
                 result_source="lock_contention",
+                input_contract_fields=input_contract_fields,
             )
         try:
             if self.ai_disabled:
@@ -7895,6 +8007,7 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
                         "reason": "engine_disabled_sell_today_fallback",
                         "risk_note": "engine_disabled",
                         "holding_context_provider_expected": "openai_tier2",
+                        "provider_called": False,
                         "raw": {},
                         **holding_decision_context_log_fields(holding_context),
                     },
@@ -7907,6 +8020,7 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
                     cache_hit=False,
                     cache_mode="miss",
                     result_source="engine_disabled",
+                    input_contract_fields=input_contract_fields,
                 )
             user_input = (
                 f"[SCALPING_OVERNIGHT_DECISION_REQUEST]\n"
@@ -7925,6 +8039,7 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
                 default_schema="overnight_text_v1",
                 default_mode="plain_text",
             )
+            input_contract_fields.update(trace_context_fields)
             if holding_decision_context_model_payload(holding_context):
                 input_contract_fields.update(
                     {
@@ -7986,9 +8101,7 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
                 "raw": result,
                 **holding_decision_context_log_fields(holding_context),
             }
-            for key, value in result.items():
-                if str(key).startswith("openai_"):
-                    payload[key] = value
+            self._copy_ai_transport_trace_metadata(payload, result)
             self._mark_successful_ai_call(update_last_call_time=False)
             return self._annotate_analysis_result(
                 payload,
@@ -8016,6 +8129,10 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
             log_error(
                 f"🚨 [SCALPING 오버나이트 판정] OpenAI 에러 ({stock_name}, 연속 실패 {failure_count}회): {e}"
             )
+            failure_transport_meta = self._consume_last_transport_meta()
+            if failure_transport_meta:
+                input_contract_fields.update(failure_transport_meta)
+            input_contract_fields.update(trace_context_fields)
             return self._annotate_analysis_result(
                 {
                     "action": "SELL_TODAY",
@@ -8026,6 +8143,7 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
                     "ai_exception_message": str(e),
                     "sim_observation_failure_isolated": sim_observation_only,
                     "holding_context_provider_expected": "openai_tier2",
+                    "provider_called": True,
                     "raw": {},
                     **holding_decision_context_log_fields(holding_context),
                 },

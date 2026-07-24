@@ -239,6 +239,76 @@ def test_ai_input_preflight_blocks_provider_calls(monkeypatch):
     )
 
 
+def test_holding_score_preflight_block_trace_keeps_snapshot_symbol_and_bid(
+    monkeypatch,
+):
+    engine = _build_engine()
+    captured = {}
+    monkeypatch.setenv("KORSTOCKSCAN_AI_INPUT_PREFLIGHT_REQUIRED", "true")
+    monkeypatch.setattr(
+        engine,
+        "_call_openai_safe",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("provider must not be called")
+        ),
+    )
+
+    def _capture_trace(payload, **kwargs):
+        captured["payload"] = dict(payload)
+        captured["kwargs"] = dict(kwargs)
+        return {"ai_decision_trace_id": "holding-blocked-trace"}
+
+    monkeypatch.setattr(
+        ai_engine_openai_module, "record_ai_decision_trace", _capture_trace
+    )
+    holding_context = {
+        **_blocked_ai_context(),
+        "schema": "holding_decision_context_v1",
+        "decision_kind": "holding_score",
+        "microstructure": {
+            "bbo_fresh": False,
+            "best_bid": 10_040,
+            "best_ask": 10_060,
+        },
+    }
+
+    result = engine.evaluate_scalping_holding_score(
+        "테스트",
+        "005930",
+        {
+            "curr": 10_050,
+            "orderbook": {
+                "asks": [{"price": 10_060, "volume": 100}],
+                "bids": [{"price": 10_040, "volume": 120}],
+            },
+        },
+        [],
+        [],
+        {
+            "record_id": "REC-BLOCKED",
+            "position_cycle_id": "POS-1",
+            "buy_price": 10_000,
+            "buy_qty": 1,
+        },
+        holding_context=holding_context,
+    )
+
+    trace_payload = captured["payload"]
+    assert result["provider_called"] is False
+    assert result["ai_decision_trace_id"] == "holding-blocked-trace"
+    assert trace_payload["provider_called"] is False
+    assert trace_payload["ai_trace_stock_code"] == "005930"
+    assert trace_payload["ai_trace_record_id"] == "REC-BLOCKED"
+    assert trace_payload["ai_trace_position_cycle_id"] == "POS-1"
+    assert trace_payload["ai_market_snapshot_id"] == "aims-blocked"
+    assert trace_payload["ai_input_preflight_status"] == "blocked"
+    assert trace_payload["ai_input_preflight_allowed"] is False
+    assert trace_payload["ai_trace_reference_price_type"] == "executable_bid"
+    assert trace_payload["ai_trace_reference_price"] == 10_040
+    assert trace_payload["ai_trace_best_bid"] == 10_040
+    assert trace_payload["ai_trace_best_ask"] == 10_060
+
+
 def test_required_preflight_blocks_when_context_is_missing(monkeypatch):
     engine = _build_engine()
     monkeypatch.setenv("KORSTOCKSCAN_AI_INPUT_PREFLIGHT_MODE", "baseline_v1")
@@ -495,6 +565,17 @@ def test_holding_score_v2_payload_contains_position_pnl_and_source_quality(monke
                 "openai_endpoint_name": "holding_score",
                 "openai_schema_name": "holding_score_v2",
                 "openai_total_tokens": 123,
+                "ai_decision_trace_id": "holding-trace-1",
+                "ai_prompt_sha256": "a" * 64,
+                "ai_prompt_store_date": "2026-07-24",
+                "ai_prompt_redacted": False,
+                "ai_prompt_replay_exact": True,
+                "ai_input_payload_sha256": "b" * 64,
+                "ai_input_payload_store_date": "2026-07-24",
+                "ai_input_payload_redacted": False,
+                "ai_input_payload_replay_exact": True,
+                "ai_request_envelope_sha256": "c" * 64,
+                "ai_trace_stock_code": "005930",
             }
         )
         return {
@@ -598,6 +679,17 @@ def test_holding_score_v2_payload_contains_position_pnl_and_source_quality(monke
     assert result["openai_schema_name"] == "holding_score_v2"
     assert result["openai_total_tokens"] == 123
     assert result["ai_prompt_type"] == "scalping_holding_score"
+    assert result["ai_decision_trace_id"] == "holding-trace-1"
+    assert result["ai_prompt_sha256"] == "a" * 64
+    assert result["ai_prompt_store_date"] == "2026-07-24"
+    assert result["ai_prompt_replay_exact"] is True
+    assert len(result["ai_input_payload_sha256"]) == 64
+    assert result["ai_input_payload_store_date"] == "2026-07-24"
+    assert result["ai_input_payload_replay_exact"] is True
+    assert result["ai_request_envelope_sha256"] == "c" * 64
+    assert result["ai_trace_stock_code"] == "005930"
+    assert result["ai_trace_reference_price_type"] == "executable_bid"
+    assert result["ai_trace_reference_price"] == 10_050
 
 
 def test_holding_context_is_shared_and_blocks_unsupported_continuation(monkeypatch):
@@ -722,10 +814,157 @@ def test_holding_context_is_shared_and_blocks_unsupported_continuation(monkeypat
     assert overnight["holding_context_action_clamped"] is True
 
 
+def test_holding_flow_and_overnight_preserve_exact_request_trace_fields(monkeypatch):
+    engine = _build_engine()
+    captured_traces = []
+
+    def _fake_call(*args, **kwargs):
+        endpoint = kwargs["endpoint_name"]
+        trace_id = f"{endpoint}-trace"
+        engine._set_last_transport_meta(
+            {
+                "openai_transport_mode": "http",
+                "openai_endpoint_name": endpoint,
+                "ai_decision_trace_id": trace_id,
+                "ai_prompt_sha256": "a" * 64,
+                "ai_prompt_store_date": "2026-07-24",
+                "ai_prompt_redacted": False,
+                "ai_prompt_replay_exact": True,
+                "ai_input_payload_sha256": "b" * 64,
+                "ai_input_payload_store_date": "2026-07-24",
+                "ai_input_payload_redacted": False,
+                "ai_input_payload_replay_exact": True,
+                "ai_request_envelope_sha256": "c" * 64,
+                "ai_trace_stock_code": "005930",
+                "ai_trace_reference_price_type": "executable_ask",
+                "ai_trace_reference_price": 10_060,
+                "ai_trace_best_bid": 10_040,
+                "ai_trace_best_ask": 10_060,
+            }
+        )
+        if endpoint == "holding_flow":
+            return {
+                "action": "HOLD",
+                "score": 70,
+                "flow_state": "absorption",
+                "thesis": "flow remains supportive",
+                "evidence": ["fresh bid support"],
+                "reason": "hold",
+                "next_review_sec": 45,
+            }
+        return {
+            "action": "SELL_TODAY",
+            "confidence": 60,
+            "reason": "close risk",
+            "risk_note": "gap risk",
+        }
+
+    def _capture_trace(payload, **kwargs):
+        captured_traces.append((dict(payload), dict(kwargs)))
+        return {}
+
+    monkeypatch.setattr(engine, "_call_openai_safe", _fake_call)
+    monkeypatch.setattr(
+        ai_engine_openai_module, "record_ai_decision_trace", _capture_trace
+    )
+    holding_context = {
+        "schema": "holding_decision_context_v1",
+        "enabled": True,
+        "decision_kind": "holding_score",
+        "microstructure": {
+            "bbo_fresh": True,
+            "best_bid": 10_040,
+            "best_ask": 10_060,
+        },
+        "source_quality": {
+            "status": "fresh_consistent",
+            "hold_defer_allowed": True,
+            "position_valid": True,
+            "order_consistent": True,
+        },
+    }
+    ws_data = {
+        "curr": 10_050,
+        "v_pw": 130,
+        "buy_ratio": 60,
+        "orderbook": {
+            "asks": [{"price": 10_060, "volume": 100}],
+            "bids": [{"price": 10_040, "volume": 120}],
+        },
+    }
+    position = {
+        "record_id": "REC-EXACT",
+        "position_cycle_id": "POS-EXACT",
+        "curr_price": 10_050,
+        "buy_price": 10_000,
+        "buy_qty": 1,
+        "profit_rate": 0.5,
+        "peak_profit": 0.8,
+        "held_sec": 75,
+    }
+
+    flow = engine.evaluate_scalping_holding_flow(
+        "테스트",
+        "005930",
+        ws_data,
+        [{"price": 10_050, "volume": 10, "side": "BUY"}],
+        [{"close": 10_050, "high": 10_080, "low": 10_000, "volume": 1_000}],
+        position,
+        holding_context=holding_context,
+    )
+    overnight = engine.evaluate_scalping_overnight_decision(
+        "테스트",
+        "005930",
+        {**position, **ws_data},
+        holding_context=holding_context,
+    )
+
+    assert [row[0]["ai_decision_trace_id"] for row in captured_traces] == [
+        "holding_flow-trace",
+        "overnight-trace",
+    ]
+    for result in (flow, overnight):
+        assert result["ai_prompt_sha256"] == "a" * 64
+        assert result["ai_prompt_store_date"] == "2026-07-24"
+        assert result["ai_prompt_replay_exact"] is True
+        assert len(result["ai_input_payload_sha256"]) == 64
+        assert result["ai_input_payload_store_date"] == "2026-07-24"
+        assert result["ai_input_payload_replay_exact"] is True
+        assert result["ai_request_envelope_sha256"] == "c" * 64
+        assert result["ai_trace_stock_code"] == "005930"
+        assert result["ai_trace_record_id"] == "REC-EXACT"
+        assert result["ai_trace_position_cycle_id"] == "POS-EXACT"
+        assert result["ai_trace_reference_price_type"] == "executable_bid"
+        assert result["ai_trace_reference_price"] == 10_040
+        assert result["ai_trace_best_bid"] == 10_040
+        assert result["ai_trace_best_ask"] == 10_060
+
+
 def test_holding_score_timeout_returns_timeout_source_with_timing_meta(monkeypatch):
     engine = _build_engine()
 
     def _raise_timeout(*args, **kwargs):
+        engine._set_last_transport_meta(
+            {
+                "openai_transport_mode": "http",
+                "openai_endpoint_name": "holding_score",
+                "ai_decision_trace_id": "holding-timeout-trace",
+                "ai_prompt_sha256": "d" * 64,
+                "ai_prompt_store_date": "2026-07-24",
+                "ai_prompt_redacted": False,
+                "ai_prompt_replay_exact": True,
+                "ai_input_payload_sha256": "e" * 64,
+                "ai_input_payload_store_date": "2026-07-24",
+                "ai_input_payload_redacted": False,
+                "ai_input_payload_replay_exact": True,
+                "ai_request_envelope_sha256": "f" * 64,
+                "ai_trace_stock_code": "005930",
+                "ai_trace_reference_price_type": "executable_ask",
+                "ai_trace_reference_price": 10_060,
+                "ai_trace_best_bid": 10_040,
+                "ai_trace_best_ask": 10_060,
+            }
+        )
         raise ai_engine_openai_module.OpenAIResponsesHTTPError(
             "OpenAI Responses HTTP timeout budget exhausted: endpoint=holding_score, last_error=request timed out",
             timing_meta={
@@ -742,7 +981,14 @@ def test_holding_score_timeout_returns_timeout_source_with_timing_meta(monkeypat
     result = engine.evaluate_scalping_holding_score(
         "테스트",
         "005930",
-        {"curr": 10050, "v_pw": 120, "orderbook": {"asks": [], "bids": []}},
+        {
+            "curr": 10_050,
+            "v_pw": 120,
+            "orderbook": {
+                "asks": [{"price": 10_060, "volume": 100}],
+                "bids": [{"price": 10_040, "volume": 120}],
+            },
+        },
         [
             {
                 "time": datetime.now().strftime("%H:%M:%S"),
@@ -771,6 +1017,18 @@ def test_holding_score_timeout_returns_timeout_source_with_timing_meta(monkeypat
     assert result["openai_http_timeout_budget_exhausted"] is True
     assert result["ai_result_source"] == "timeout"
     assert result["ai_parse_fail"] is True
+    assert result["provider_called"] is True
+    assert result["ai_decision_trace_id"] == "holding-timeout-trace"
+    assert result["ai_prompt_sha256"] == "d" * 64
+    assert result["ai_prompt_replay_exact"] is True
+    assert result["ai_input_payload_store_date"] == "2026-07-24"
+    assert result["ai_input_payload_replay_exact"] is True
+    assert result["ai_request_envelope_sha256"] == "f" * 64
+    assert result["ai_trace_stock_code"] == "005930"
+    assert result["ai_trace_reference_price_type"] == "executable_bid"
+    assert result["ai_trace_reference_price"] == 10_040
+    assert result["ai_trace_best_bid"] == 10_040
+    assert result["ai_trace_best_ask"] == 10_060
 
 
 def test_holding_score_v2_payload_stays_compact_for_low_latency(monkeypatch):
@@ -2599,6 +2857,10 @@ def test_provider_overnight_engine_disabled_is_annotated():
         assert result["ai_prompt_version"] == "overnight_v1"
         assert result["ai_result_source"] == "engine_disabled"
         assert result["ai_parse_fail"] is False
+        assert result["provider_called"] is False
+        assert result["ai_trace_stock_code"] == "000001"
+        assert result["ai_trace_reference_price_type"] == "current_price"
+        assert result["ai_trace_reference_price"] == 10000
 
 
 def test_provider_overnight_failure_disables_engine(monkeypatch):

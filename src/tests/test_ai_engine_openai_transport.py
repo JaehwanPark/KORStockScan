@@ -1283,6 +1283,69 @@ def test_entry_price_evaluate_preserves_bedrock_fallback_provenance(monkeypatch)
     assert result["openai_primary_error_type"] == "OpenAIResponsesHTTPError"
 
 
+def test_entry_price_evaluate_preserves_exact_request_trace_fields(monkeypatch):
+    engine = _build_engine()
+    ws_data, ticks, candles, price_ctx = _entry_price_compaction_sample(1)
+    captured_trace = {}
+    exact_fields = {
+        "ai_decision_trace_id": "entry-price-trace-1",
+        "ai_prompt_sha256": "a" * 64,
+        "ai_prompt_store_date": "2026-07-24",
+        "ai_prompt_redacted": False,
+        "ai_prompt_replay_exact": True,
+        "ai_input_payload_sha256": "b" * 64,
+        "ai_input_payload_store_date": "2026-07-24",
+        "ai_input_payload_redacted": False,
+        "ai_input_payload_replay_exact": True,
+        "ai_request_envelope_sha256": "c" * 64,
+        "ai_trace_stock_code": "005930",
+        "ai_trace_reference_price_type": "resolved_order_price",
+        "ai_trace_reference_price": price_ctx["resolved_order_price"],
+        "ai_trace_best_bid": price_ctx["best_bid"],
+        "ai_trace_best_ask": price_ctx["best_ask"],
+    }
+
+    monkeypatch.setattr(
+        engine,
+        "_call_openai_safe",
+        lambda *args, **kwargs: {
+            "action": "USE_DEFENSIVE",
+            "order_price": price_ctx["resolved_order_price"],
+            "confidence": 75,
+            "reason": "defensive entry price",
+            "provider": "bedrock",
+            "bedrock_primary_used": True,
+            "bedrock_model_family": "qwen3_32b",
+            **exact_fields,
+        },
+    )
+
+    def _capture_trace(payload, **kwargs):
+        captured_trace.update(payload)
+        return {}
+
+    monkeypatch.setattr(openai_module, "record_ai_decision_trace", _capture_trace)
+
+    result = engine.evaluate_scalping_entry_price(
+        "테스트",
+        "005930",
+        ws_data,
+        ticks,
+        candles,
+        price_ctx,
+    )
+
+    for key, value in exact_fields.items():
+        if key == "ai_input_payload_sha256":
+            continue
+        assert result[key] == value
+        assert captured_trace[key] == value
+    assert len(result["ai_input_payload_sha256"]) == 64
+    assert (
+        captured_trace["ai_input_payload_sha256"] == result["ai_input_payload_sha256"]
+    )
+
+
 def test_entry_price_qwen_parse_failure_falls_back_to_nova_lite_v2(monkeypatch):
     engine = _build_engine()
     families = []

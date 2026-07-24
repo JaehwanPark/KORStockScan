@@ -77,12 +77,163 @@ def test_capture_ai_request_persists_exact_payload_once(monkeypatch, tmp_path):
     assert first["ai_trace_stock_code"] == "005930"
     assert first["ai_trace_snapshot_id"] == "aims-1"
     assert first["ai_trace_reference_price"] == 70100
+    assert first["ai_trace_reference_price_type"] == "executable_ask"
     assert first["ai_trace_best_bid"] == 70000
     assert first["ai_trace_best_ask"] == 70100
     payload_row = _rows(path)[0]
     assert payload_row["temperature"] == 0.2
     assert payload_row["max_output_tokens"] == 700
     assert payload_row["reasoning_effort"] == "low"
+
+
+def test_capture_ai_request_prefers_resolved_entry_price_over_earlier_market_values(
+    monkeypatch, tmp_path
+):
+    _enable(monkeypatch, tmp_path)
+
+    fields = trace.capture_ai_request(
+        prompt="prompt",
+        user_input={
+            "input_schema": "entry_price_v2",
+            "stock_code": "005930",
+            "ws_data": {"curr": 70100},
+            "quote_change": {
+                "decision_start_quote": {
+                    "current_price": 70100,
+                    "best_bid": 70000,
+                    "best_ask": 70200,
+                }
+            },
+            "candidate_prices": {
+                "resolved_order_price": 69900,
+            },
+        },
+        endpoint_name="entry_price",
+        symbol="005930",
+        request_id="entry-price-request",
+        model="gpt-test",
+        schema_name="entry_price_v1",
+        require_json=True,
+    )
+
+    assert fields["ai_trace_reference_price"] == 69900
+    assert fields["ai_trace_reference_price_type"] == "resolved_order_price"
+    assert fields["ai_trace_best_bid"] == 70000
+    assert fields["ai_trace_best_ask"] == 70200
+
+    zero_resolved_fields = trace.capture_ai_request(
+        prompt="prompt",
+        user_input={
+            "input_schema": "entry_price_v2",
+            "stock_code": "005930",
+            "quote_change": {
+                "decision_start_quote": {
+                    "current_price": 70100,
+                    "best_bid": 70000,
+                    "best_ask": 70200,
+                }
+            },
+            "candidate_prices": {"resolved_order_price": 0},
+        },
+        endpoint_name="entry_price",
+        symbol="005930",
+        request_id="entry-price-zero-request",
+        model="gpt-test",
+        schema_name="entry_price_v1",
+        require_json=True,
+    )
+    assert zero_resolved_fields["ai_trace_reference_price"] == 70200
+    assert zero_resolved_fields["ai_trace_reference_price_type"] == "executable_ask"
+
+    trace.record_ai_decision_trace(
+        {
+            **fields,
+            "action": "USE_DEFENSIVE",
+            "order_price": 69800,
+            "provider_called": True,
+            "provider": "bedrock",
+            "bedrock_primary_used": True,
+            "bedrock_model_family": "qwen3_32b",
+            "ai_parse_ok": True,
+        },
+        prompt_type="entry_price",
+        prompt_version="entry_price_v1",
+        result_source="live",
+    )
+
+    trace_row = _rows(trace._trace_path(trace._date_text()))[0]
+    outcome_row = _rows(trace._outcome_path(trace._date_text()))[0]
+    assert trace_row["decision_trace_id"] == "entry-price-request"
+    assert trace_row["prompt_sha256"] == fields["ai_prompt_sha256"]
+    assert trace_row["prompt_store_date"] == fields["ai_prompt_store_date"]
+    assert trace_row["payload_sha256"] == fields["ai_input_payload_sha256"]
+    assert trace_row["payload_store_date"] == fields["ai_input_payload_store_date"]
+    assert trace_row["request_envelope_sha256"] == fields["ai_request_envelope_sha256"]
+    assert trace_row["provider_actual"] == "bedrock"
+    assert trace_row["model"] == "qwen3_32b"
+    assert trace_row["reference_price"] == 69800
+    assert trace_row["reference_price_type"] == "resolved_order_price"
+    assert trace_row["prompt_replay_exact"] is True
+    assert trace_row["payload_replay_exact"] is True
+    assert outcome_row["reference_price"] == 69800
+    assert outcome_row["reference_price_type"] == "resolved_order_price"
+    assert outcome_row["source_quality_status"] == "pending_future_window"
+    assert outcome_row["invalid_reasons"] == []
+
+    trace.record_ai_decision_trace(
+        {
+            **zero_resolved_fields,
+            "action": "USE_DEFENSIVE",
+            "order_price": 0,
+            "provider_called": True,
+            "provider": "bedrock",
+            "bedrock_primary_used": True,
+            "bedrock_model_family": "qwen3_32b",
+            "ai_parse_ok": True,
+        },
+        prompt_type="entry_price",
+        prompt_version="entry_price_v1",
+        result_source="live",
+    )
+    zero_trace_row = _rows(trace._trace_path(trace._date_text()))[1]
+    zero_outcome_row = _rows(trace._outcome_path(trace._date_text()))[1]
+    assert zero_trace_row["reference_price"] == 70200
+    assert zero_trace_row["reference_price_type"] == "executable_ask"
+    assert zero_outcome_row["reference_price"] == 70200
+    assert zero_outcome_row["source_quality_status"] == "pending_future_window"
+
+
+def test_capture_holding_request_uses_executable_bid_not_historical_entry_price(
+    monkeypatch, tmp_path
+):
+    _enable(monkeypatch, tmp_path)
+
+    fields = trace.capture_ai_request(
+        prompt="prompt",
+        user_input={
+            "input_schema": "holding_score_v2",
+            "stock_code": "005930",
+            "entry_time_context": {"resolved_order_price": 69_900},
+            "position_context": {"current_price": 70_100},
+            "holding_decision_context": {
+                "microstructure": {
+                    "best_bid": 70_000,
+                    "best_ask": 70_200,
+                }
+            },
+        },
+        endpoint_name="holding_score",
+        symbol="005930",
+        request_id="holding-score-request",
+        model="gpt-test",
+        schema_name="holding_score_v2",
+        require_json=True,
+    )
+
+    assert fields["ai_trace_reference_price"] == 70_000
+    assert fields["ai_trace_reference_price_type"] == "executable_bid"
+    assert fields["ai_trace_best_bid"] == 70_000
+    assert fields["ai_trace_best_ask"] == 70_200
 
 
 def test_capture_ai_request_redacts_sensitive_values(monkeypatch, tmp_path):

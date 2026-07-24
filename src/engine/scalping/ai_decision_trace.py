@@ -193,6 +193,22 @@ def _walk(value: Any):
             yield from _walk(child)
 
 
+def _first_positive_named_value(
+    value: Any, keys: tuple[str, ...]
+) -> tuple[str | None, Any]:
+    for key in keys:
+        for row in _walk(value):
+            candidate = row.get(key)
+            if key not in row or candidate in (None, "", "-", "None", "null"):
+                continue
+            try:
+                if float(candidate) > 0:
+                    return key, candidate
+            except Exception:
+                continue
+    return None, None
+
+
 def _first_value(value: Any, keys: tuple[str, ...]) -> Any:
     for row in _walk(value):
         for key in keys:
@@ -217,8 +233,57 @@ def _normalize_stock_code(value: Any) -> str:
     return match.group(1) if match else "-"
 
 
-def _request_context(user_input: Any, metadata: dict[str, Any]) -> dict[str, Any]:
+def _request_context(
+    user_input: Any,
+    metadata: dict[str, Any],
+    *,
+    endpoint_name: str | None = None,
+) -> dict[str, Any]:
     _, parsed = _parse_user_input(user_input)
+    endpoint = str(endpoint_name or "").strip().lower()
+    if endpoint in {"holding_score", "holding_flow", "overnight"}:
+        reference_keys = (
+            "executable_bid",
+            "best_bid",
+            "current_price",
+            "curr_price",
+            "curr",
+            "price",
+        )
+    elif endpoint == "entry_price":
+        reference_keys = (
+            "resolved_order_price",
+            "executable_ask",
+            "best_ask",
+            "current_price",
+            "curr_price",
+            "curr",
+            "price",
+        )
+    else:
+        reference_keys = (
+            "executable_ask",
+            "best_ask",
+            "current_price",
+            "curr_price",
+            "curr",
+            "price",
+        )
+    reference_price_key, reference_price_value = _first_positive_named_value(
+        parsed,
+        reference_keys,
+    )
+    reference_price_type = {
+        "resolved_order_price": "resolved_order_price",
+        "executable_ask": "executable_ask",
+        "best_ask": "executable_ask",
+        "executable_bid": "executable_bid",
+        "best_bid": "executable_bid",
+        "current_price": "current_price",
+        "curr_price": "current_price",
+        "curr": "current_price",
+        "price": "current_price",
+    }.get(str(reference_price_key or ""))
     context = {
         "stock_code": _first_value(parsed, ("stock_code", "code", "종목코드"))
         or metadata.get("stock_code"),
@@ -252,19 +317,8 @@ def _request_context(user_input: Any, metadata: dict[str, Any]) -> dict[str, Any
         ),
         "broker_route": _first_value(parsed, ("broker_route",)),
         "market_data_route": _first_value(parsed, ("market_data_route",)),
-        "reference_price": _safe_number(
-            _first_value(
-                parsed,
-                (
-                    "resolved_order_price",
-                    "executable_ask",
-                    "best_ask",
-                    "current_price",
-                    "curr_price",
-                    "price",
-                ),
-            )
-        ),
+        "reference_price_type": reference_price_type,
+        "reference_price": _safe_number(reference_price_value),
         "best_bid": _safe_number(_first_value(parsed, ("best_bid",))),
         "best_ask": _safe_number(_first_value(parsed, ("best_ask", "executable_ask"))),
         "target_price": _safe_number(_first_value(parsed, ("target_price",))),
@@ -330,7 +384,11 @@ def capture_ai_request(
         input_format, parsed_input = _parse_user_input(user_input)
         sanitized_input, redacted = _sanitize(parsed_input)
         sanitized_prompt, prompt_redacted = _sanitize(str(prompt or ""))
-        context = _request_context(parsed_input, metadata_row)
+        context = _request_context(
+            parsed_input,
+            metadata_row,
+            endpoint_name=endpoint_name,
+        )
         trace_id = str(request_id or "").strip() or f"aidt-{uuid.uuid4().hex}"
         payload_row = {
             "schema": PAYLOAD_SCHEMA,
@@ -407,6 +465,7 @@ def capture_ai_request(
             "ai_trace_session_bucket": context.get("session_bucket"),
             "ai_trace_broker_route": context.get("broker_route"),
             "ai_trace_market_data_route": context.get("market_data_route"),
+            "ai_trace_reference_price_type": context.get("reference_price_type"),
             "ai_trace_reference_price": context.get("reference_price"),
             "ai_trace_best_bid": context.get("best_bid"),
             "ai_trace_best_ask": context.get("best_ask"),
@@ -523,6 +582,13 @@ def record_ai_decision_trace(
                 else str(result_source or "") == "live"
             )
         stage = _decision_stage(prompt_type, decision_stage)
+        reference_price_type = _optional(merged, "ai_trace_reference_price_type")
+        reference_price = _safe_number(_optional(merged, "ai_trace_reference_price"))
+        if stage == "entry_price":
+            decision_order_price = _safe_number(_optional(merged, "order_price"))
+            if decision_order_price is not None and decision_order_price > 0:
+                reference_price_type = "resolved_order_price"
+                reference_price = decision_order_price
         stock_identifier = str(
             stock_code
             or _optional(
@@ -655,13 +721,14 @@ def record_ai_decision_trace(
                 merged.get("ai_input_preflight_max_source_skew_ms")
             ),
             "reference_price_type": (
-                "executable_ask"
-                if _optional(merged, "ai_trace_best_ask") is not None
-                else "best_available_input_price"
+                reference_price_type
+                or (
+                    "executable_ask"
+                    if _optional(merged, "ai_trace_best_ask") is not None
+                    else "best_available_input_price"
+                )
             ),
-            "reference_price": _safe_number(
-                _optional(merged, "ai_trace_reference_price")
-            ),
+            "reference_price": reference_price,
             "best_bid": _safe_number(_optional(merged, "ai_trace_best_bid")),
             "best_ask": _safe_number(_optional(merged, "ai_trace_best_ask")),
             "target_price": _safe_number(_optional(merged, "ai_trace_target_price")),
@@ -695,6 +762,7 @@ def record_ai_decision_trace(
             "action": trace_row["action"],
             "score": trace_row["score"],
             "result_source": trace_row["result_source"],
+            "reference_price_type": trace_row["reference_price_type"],
             "reference_price": trace_row["reference_price"],
             "best_bid": trace_row["best_bid"],
             "best_ask": trace_row["best_ask"],
