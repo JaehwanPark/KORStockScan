@@ -22,13 +22,17 @@ from src.engine.sniper_scale_in_utils import (
     record_add_history_event,
     find_latest_open_add_order_no,
 )
-from src.engine.trade_profit import calculate_net_profit_rate
+from src.engine.trade_profit import (
+    calculate_net_profit_rate,
+    calculate_net_realized_pnl,
+)
 from src.engine.risk.manual_control_exclusion import (
     remove_manual_control_exclusion_code,
 )
 from src.utils import kiwoom_utils
 from src.utils.constants import RESTART_FLAG_PATH, TRADING_RULES
 from src.utils.logger import log_error, log_info
+from src.utils.pipeline_event_logger import emit_pipeline_event
 from src.engine import kiwoom_orders
 
 KIWOOM_TOKEN = None
@@ -981,6 +985,41 @@ def sync_state_with_broker():
 # =====================================================================
 
 
+def _unique_sell_execution_reconciliation(
+    rows,
+    *,
+    code,
+    qty,
+    trade_date,
+):
+    """Return one exact same-day broker sell row or a fail-closed reason."""
+
+    normalized_code = str(code or "").strip()[:6]
+    expected_qty = max(0, _to_int(qty))
+    expected_date = str(trade_date or "").replace("-", "").strip()
+    matches = []
+    for row in rows or []:
+        row_code = str((row or {}).get("code") or "").strip()[:6]
+        row_side = str((row or {}).get("side") or "").strip().upper()
+        row_date = str((row or {}).get("trade_date") or "").replace("-", "").strip()
+        row_qty = max(0, _to_int((row or {}).get("qty")))
+        row_price = max(0, _to_int((row or {}).get("unit_price")))
+        if (
+            row_code == normalized_code
+            and row_side in {"매도", "SELL", "S", "1"}
+            and row_date == expected_date
+            and expected_qty > 0
+            and row_qty == expected_qty
+            and row_price > 0
+        ):
+            matches.append(dict(row))
+    if len(matches) == 1:
+        return matches[0], "unique_same_day_code_side_qty_execution"
+    if not matches:
+        return None, "exact_sell_execution_not_found"
+    return None, "ambiguous_multiple_sell_executions"
+
+
 def periodic_account_sync():
     """
     주기적으로 실제 증권사 잔고를 조회하여, 웹소켓 체결 누락으로 인해
@@ -1011,6 +1050,23 @@ def periodic_account_sync():
     broker_snapshot_at = datetime.now().timestamp()
     unfilled_snapshot_ok = False
     open_qty_by_code = {}
+    sell_execution_snapshot = None
+
+    def _sell_execution_rows():
+        nonlocal sell_execution_snapshot
+        if sell_execution_snapshot is None:
+            try:
+                sell_execution_snapshot = (
+                    kiwoom_utils.get_account_execution_snapshot_kt00008(KIWOOM_TOKEN)
+                    or []
+                )
+            except Exception as exc:
+                log_error(
+                    "🚨 [정기 동기화] 매도 체결 reconciliation snapshot 조회 실패: "
+                    f"{exc}"
+                )
+                sell_execution_snapshot = []
+        return sell_execution_snapshot
 
     def get_exchange(code):
         is_nxt = DB.get_latest_is_nxt(code)
@@ -1018,6 +1074,10 @@ def periodic_account_sync():
 
     synced_count = 0
     pending_manual_control_removals = []
+    pending_sell_reconciliation_events = []
+
+    def _queue_sell_reconciliation_event(*args, **kwargs):
+        pending_sell_reconciliation_events.append((args, kwargs))
 
     try:
         with DB.get_session() as session:
@@ -1073,11 +1133,12 @@ def periodic_account_sync():
                 if code not in real_codes:
                     exchange = get_exchange(code)
                     if exchange in successful_exchanges:
+                        prior_record_status = str(record.status or "").upper()
                         print(
                             f"⚠️ [정기 동기화] {record.stock_name}({code}) 잔고 없음. 매도 영수증 누락으로 판단하여 COMPLETED 강제 전환."
                         )
                         record.status = "COMPLETED"
-                        record.sell_time = datetime.now()
+                        record.sell_time = None
                         pending_manual_control_removals.append(
                             (code, "periodic_sync_completed_no_broker_holding")
                         )
@@ -1091,37 +1152,214 @@ def periodic_account_sync():
                                 ),
                                 None,
                             )
-                            estimated_sell_price = (
-                                target_stock.get("sell_target_price", 0)
-                                if target_stock
-                                else 0
-                            )
-                            fallback_price = (
-                                record.buy_price if record.buy_price is not None else 0
-                            )
+                            target_snapshot = dict(target_stock or {})
 
-                            if not record.sell_price or record.sell_price == 0:
-                                record.sell_price = (
-                                    estimated_sell_price
-                                    if estimated_sell_price > 0
-                                    else fallback_price
+                        estimated_sell_price = target_snapshot.get(
+                            "sell_target_price", 0
+                        )
+                        prior_status = str(
+                            target_snapshot.get("status") or prior_record_status or ""
+                        ).upper()
+                        sell_order_no = str(
+                            target_snapshot.get("sell_odno") or ""
+                        ).strip()
+                        prior_partial_qty = max(
+                            _to_int(
+                                target_snapshot.get("early_volatility_tp_filled_qty")
+                            ),
+                            _to_int(
+                                target_snapshot.get(
+                                    "nxt_rising_missed_tp1_partial_filled_qty"
                                 )
-
-                            if (
-                                record.buy_price
-                                and record.buy_price > 0
-                                and record.sell_price
-                                and record.sell_price > 0
-                            ):
-                                record.profit_rate = calculate_net_profit_rate(
-                                    record.buy_price, record.sell_price
+                            ),
+                        )
+                        exact_execution = None
+                        exact_execution_reason = "prior_status_not_sell_ordered"
+                        if prior_partial_qty > 0:
+                            exact_execution_reason = (
+                                "partial_realized_context_requires_fill_receipt"
+                            )
+                        elif prior_status == "SELL_ORDERED":
+                            exact_execution, exact_execution_reason = (
+                                _unique_sell_execution_reconciliation(
+                                    _sell_execution_rows(),
+                                    code=code,
+                                    qty=getattr(record, "buy_qty", 0),
+                                    trade_date=datetime.now().strftime("%Y%m%d"),
                                 )
+                            )
 
+                        # Balance absence proves that the position is no
+                        # longer held.  Only a unique same-day broker
+                        # execution row proves fill price and realized PnL;
+                        # an intended target price never does.
+                        if exact_execution:
+                            record.sell_price = _to_int(
+                                exact_execution.get("unit_price")
+                            )
+                            record.profit_rate = calculate_net_profit_rate(
+                                record.buy_price,
+                                record.sell_price,
+                            )
+                            realized_pnl_krw = calculate_net_realized_pnl(
+                                record.buy_price,
+                                record.sell_price,
+                                getattr(record, "buy_qty", 0),
+                            )
+                            reconciliation_state = "broker_execution_snapshot_recovered"
+                        else:
+                            record.sell_price = None
+                            record.profit_rate = None
+                            realized_pnl_krw = None
+                            reconciliation_state = (
+                                "broker_holding_absent_fill_receipt_missing"
+                            )
+
+                        with STATE_LOCK:
                             if target_stock:
-                                target_stock["status"] = "COMPLETED"
+                                target_stock.update(
+                                    {
+                                        "status": "COMPLETED",
+                                        "sell_completion_reconciliation_state": (
+                                            reconciliation_state
+                                        ),
+                                        "sell_completion_reconciliation_at": (
+                                            broker_snapshot_at
+                                        ),
+                                        "sell_completion_reconciliation_exchange": (
+                                            exchange
+                                        ),
+                                    }
+                                )
+                                if exact_execution:
+                                    target_stock.update(
+                                        {
+                                            "sell_price": record.sell_price,
+                                            "profit_rate": record.profit_rate,
+                                        }
+                                    )
 
                             if HIGHEST_PRICES is not None:
                                 HIGHEST_PRICES.pop(code, None)
+                        try:
+                            _queue_sell_reconciliation_event(
+                                "HOLDING_PIPELINE",
+                                record.stock_name,
+                                code,
+                                (
+                                    "sell_completed"
+                                    if exact_execution
+                                    else "sell_completion_reconciliation_gap"
+                                ),
+                                record_id=getattr(record, "id", None),
+                                fields={
+                                    "metric_role": (
+                                        "execution_quality_real_only"
+                                        if exact_execution
+                                        else "source_quality_gap"
+                                    ),
+                                    "decision_authority": (
+                                        "broker_balance_reconciliation_only"
+                                    ),
+                                    "window_policy": (
+                                        "same_position_cycle_periodic_account_sync"
+                                    ),
+                                    "sample_floor": (
+                                        (
+                                            "one_unique_same_day_broker_sell_execution"
+                                            if exact_execution
+                                            else (
+                                                "one_missing_holding_with_no_fill_receipt"
+                                            )
+                                        )
+                                    ),
+                                    "primary_decision_metric": (
+                                        "confirmed_broker_sell_fill_price"
+                                    ),
+                                    "source_quality_gate": (
+                                        "unique_same_day_code_side_qty_broker_execution"
+                                    ),
+                                    "runtime_effect": True,
+                                    "actual_order_submitted": bool(exact_execution),
+                                    "broker_order_forbidden": not bool(exact_execution),
+                                    "forbidden_uses": (
+                                        (
+                                            "threshold_mutation|provider_change|"
+                                            "order_price_change|quantity_cap_change"
+                                            if exact_execution
+                                            else (
+                                                "realized_pnl|EV|rolling|MTD|"
+                                                "cumulative_tuning|"
+                                                "live_auto_promotion|"
+                                                "runtime_apply_bridge|"
+                                                "threshold_mutation|"
+                                                "provider_change|"
+                                                "order_price_change|"
+                                                "quantity_cap_change"
+                                            )
+                                        )
+                                    ),
+                                    "reconciliation_result": (reconciliation_state),
+                                    "execution_match_reason": (exact_execution_reason),
+                                    "execution_match_count": (
+                                        1 if exact_execution else 0
+                                    ),
+                                    "sell_price": (
+                                        record.sell_price if exact_execution else "-"
+                                    ),
+                                    "profit_rate": (
+                                        record.profit_rate if exact_execution else "-"
+                                    ),
+                                    "realized_pnl_krw": (
+                                        realized_pnl_krw if exact_execution else "-"
+                                    ),
+                                    "trade_status": "COMPLETED",
+                                    "buy_price": getattr(record, "buy_price", "-"),
+                                    "buy_qty": getattr(record, "buy_qty", "-"),
+                                    "sell_qty": (
+                                        exact_execution.get("qty")
+                                        if exact_execution
+                                        else "-"
+                                    ),
+                                    "strategy": (
+                                        target_snapshot.get("strategy")
+                                        or getattr(record, "strategy", "-")
+                                        or "-"
+                                    ),
+                                    "position_tag": (
+                                        target_snapshot.get("position_tag")
+                                        or getattr(record, "position_tag", "-")
+                                        or "-"
+                                    ),
+                                    "sell_completion_receipt_source": (
+                                        "kt00008_unique_execution_reconciliation"
+                                        if exact_execution
+                                        else "missing"
+                                    ),
+                                    "sell_time_precision": (
+                                        "date_only" if exact_execution else "missing"
+                                    ),
+                                    "sell_time_forbidden_for_intraday_horizon": True,
+                                    "prior_status": prior_status or "-",
+                                    "prior_sell_submission_observed": (
+                                        prior_status == "SELL_ORDERED"
+                                    ),
+                                    "sell_order_no": sell_order_no or "-",
+                                    "sell_target_price_observed": (
+                                        estimated_sell_price or "-"
+                                    ),
+                                    "sell_target_price_forbidden_for_pnl": True,
+                                    "prior_partial_realized_qty": prior_partial_qty,
+                                    "broker_holding_present": False,
+                                    "successful_exchange": exchange,
+                                    "broker_snapshot_at": broker_snapshot_at,
+                                },
+                            )
+                        except Exception as exc:
+                            log_error(
+                                "🚨 [정기 동기화] 매도 영수증 누락 "
+                                f"source-quality 이벤트 기록 실패: {exc}"
+                            )
                         synced_count += 1
                     else:
                         print(
@@ -1236,6 +1474,14 @@ def periodic_account_sync():
     except Exception as exc:
         log_error(f"🚨 정기 계좌 동기화 DB 에러: {exc}")
     else:
+        for event_args, event_kwargs in pending_sell_reconciliation_events:
+            try:
+                emit_pipeline_event(*event_args, **event_kwargs)
+            except Exception as exc:
+                log_error(
+                    "🚨 [정기 동기화] 매도 영수증 누락 "
+                    f"source-quality 이벤트 기록 실패: {exc}"
+                )
         for code, reason in pending_manual_control_removals:
             _remove_manual_control_exclusion_for_completed_holding(code, reason=reason)
 

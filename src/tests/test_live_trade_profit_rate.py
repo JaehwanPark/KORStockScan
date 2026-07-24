@@ -5,7 +5,10 @@ import src.engine.sniper_execution_receipts as receipts
 import src.engine.sniper_s15_fast_track as s15
 import src.engine.sniper_sync as sniper_sync
 import src.engine.sniper_state_handlers as state_handlers
-from src.engine.trade_profit import calculate_net_profit_rate
+from src.engine.trade_profit import (
+    calculate_net_profit_rate,
+    calculate_net_realized_pnl,
+)
 from src.utils.constants import TRADING_RULES as CONFIG
 
 
@@ -507,7 +510,7 @@ def test_opening_rotation_intraday_sell_does_not_revive_same_symbol():
     assert context[-1] is False
 
 
-def test_periodic_account_sync_uses_net_profit_rate_for_missing_sell_receipt(
+def test_periodic_account_sync_does_not_invent_pnl_for_missing_sell_receipt(
     monkeypatch,
 ):
     record = type(
@@ -538,6 +541,11 @@ def test_periodic_account_sync_uses_net_profit_rate_for_missing_sell_receipt(
         "get_account_balance_kt00005",
         lambda token: ([], {"KRX"}),
     )
+    monkeypatch.setattr(
+        sniper_sync.kiwoom_utils,
+        "get_account_execution_snapshot_kt00008",
+        lambda token: [],
+    )
     removals = []
 
     def fake_remove_manual_control_exclusion_code(code, *, reason):
@@ -558,20 +566,133 @@ def test_periodic_account_sync_uses_net_profit_rate_for_missing_sell_receipt(
         "remove_manual_control_exclusion_code",
         fake_remove_manual_control_exclusion_code,
     )
+    emitted = []
+    monkeypatch.setattr(
+        sniper_sync,
+        "emit_pipeline_event",
+        lambda *args, **kwargs: emitted.append((args, kwargs)),
+    )
 
     sniper_sync.periodic_account_sync()
 
     assert record.status == "COMPLETED"
-    assert record.sell_price == 100100
-    assert record.profit_rate == -0.13
+    assert record.sell_price is None
+    assert record.profit_rate is None
     assert sniper_sync.ACTIVE_TARGETS[0]["status"] == "COMPLETED"
+    assert (
+        sniper_sync.ACTIVE_TARGETS[0]["sell_completion_reconciliation_state"]
+        == "broker_holding_absent_fill_receipt_missing"
+    )
     assert "123456" not in sniper_sync.HIGHEST_PRICES
+    assert len(emitted) == 1
+    assert emitted[0][0][3] == "sell_completion_reconciliation_gap"
+    fields = emitted[0][1]["fields"]
+    assert fields["reconciliation_result"] == (
+        "broker_holding_absent_fill_receipt_missing"
+    )
+    assert fields["prior_sell_submission_observed"] is True
+    assert fields["sell_target_price_observed"] == 100100
+    assert fields["sell_target_price_forbidden_for_pnl"] is True
+    assert "EV" in fields["forbidden_uses"]
     assert removals == [
         {
             "code": "123456",
             "reason": "periodic_sync_completed_no_broker_holding",
         }
     ]
+
+
+def test_periodic_account_sync_recovers_unique_exact_sell_execution(monkeypatch):
+    record = type(
+        "Record",
+        (),
+        {
+            "id": 22758,
+            "stock_code": "096770",
+            "stock_name": "SK이노베이션",
+            "status": "SELL_ORDERED",
+            "buy_price": 132100.0,
+            "buy_qty": 1,
+            "sell_price": 0,
+            "sell_time": None,
+            "profit_rate": None,
+            "scale_in_locked": False,
+        },
+    )()
+    target = {
+        "code": "096770",
+        "status": "SELL_ORDERED",
+        "sell_odno": "0015635",
+        "sell_target_price": 132000,
+    }
+    sniper_sync.KIWOOM_TOKEN = "token"
+    sniper_sync.DB = _SyncDB([record], [])
+    sniper_sync.ACTIVE_TARGETS = [target]
+    sniper_sync.HIGHEST_PRICES = {"096770": 135000}
+    sniper_sync.STATE_LOCK = _DummyLock()
+    monkeypatch.setattr(
+        sniper_sync.kiwoom_utils,
+        "get_account_balance_kt00005",
+        lambda token: ([], {"KRX"}),
+    )
+    monkeypatch.setattr(
+        sniper_sync.kiwoom_utils,
+        "get_account_execution_snapshot_kt00008",
+        lambda token: [
+            {
+                "trade_date": datetime.now().strftime("%Y%m%d"),
+                "code": "096770",
+                "side": "매도",
+                "qty": 1,
+                "unit_price": 132250,
+                "seq": "1",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        sniper_sync,
+        "remove_manual_control_exclusion_code",
+        lambda code, **kwargs: type(
+            "Removal",
+            (),
+            {
+                "removed": False,
+                "code": code,
+                "source": "manual_control_excluded_codes.txt",
+                "reason": "not_present",
+            },
+        )(),
+    )
+    emitted = []
+    monkeypatch.setattr(
+        sniper_sync,
+        "emit_pipeline_event",
+        lambda *args, **kwargs: emitted.append((args, kwargs)),
+    )
+
+    sniper_sync.periodic_account_sync()
+
+    assert record.status == "COMPLETED"
+    assert record.sell_price == 132250
+    assert record.profit_rate == calculate_net_profit_rate(132100, 132250)
+    assert target["sell_completion_reconciliation_state"] == (
+        "broker_execution_snapshot_recovered"
+    )
+    assert target["sell_price"] == 132250
+    assert emitted[0][0][3] == "sell_completed"
+    exact_fields = emitted[0][1]["fields"]
+    assert exact_fields["execution_match_count"] == 1
+    assert exact_fields["actual_order_submitted"] is True
+    assert exact_fields["broker_order_forbidden"] is False
+    assert exact_fields["sell_completion_receipt_source"] == (
+        "kt00008_unique_execution_reconciliation"
+    )
+    assert exact_fields["sell_time_precision"] == "date_only"
+    assert exact_fields["sell_time_forbidden_for_intraday_horizon"] is True
+    assert exact_fields["realized_pnl_krw"] == calculate_net_realized_pnl(
+        132100, 132250, 1
+    )
+    assert "EV" not in exact_fields["forbidden_uses"]
 
 
 def test_periodic_account_sync_attaches_fresh_broker_reconciliation(monkeypatch):
@@ -667,16 +788,28 @@ def test_periodic_account_sync_does_not_remove_manual_control_exclusion_on_db_er
         "get_account_balance_kt00005",
         lambda token: ([], {"KRX"}),
     )
+    monkeypatch.setattr(
+        sniper_sync.kiwoom_utils,
+        "get_account_execution_snapshot_kt00008",
+        lambda token: [],
+    )
     removals = []
+    emitted = []
     monkeypatch.setattr(
         sniper_sync,
         "remove_manual_control_exclusion_code",
         lambda code, *, reason: removals.append({"code": code, "reason": reason}),
     )
+    monkeypatch.setattr(
+        sniper_sync,
+        "emit_pipeline_event",
+        lambda *args, **kwargs: emitted.append((args, kwargs)),
+    )
 
     sniper_sync.periodic_account_sync()
 
     assert removals == []
+    assert emitted == []
 
 
 def test_periodic_account_sync_preserves_original_buy_time_for_recovered_fill(
