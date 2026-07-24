@@ -248,6 +248,47 @@ def test_scanner_promotion_context_accepts_explicit_zero_strength():
     assert state_handlers._scanner_promotion_context_present(stock) is True
 
 
+def test_fresh_watching_promotion_context_does_not_rescan_event_history(monkeypatch):
+    def fail_history_load(_target_date):
+        raise AssertionError(
+            "fresh immutable promotion context must remain authoritative"
+        )
+
+    monkeypatch.setattr(
+        state_handlers,
+        "_load_scanner_promotion_context_events",
+        fail_history_load,
+    )
+    stock = {
+        "code": "117730",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "entry_armed_at_epoch": 1_784_886_100.435,
+        "scanner_generation_id": (
+            "117730:SCANPROM-117730-1784886100435:r1"
+        ),
+        "scanner_promotion_id": "SCANPROM-117730-1784886100435",
+        "scanner_promotion_emitted_epoch": "1784886100.435",
+        "scanner_promotion_reason": "low_rebound_rising_missed_candidate",
+        "source_signature": "LOW_REBOUND_RISING_MISSED,PRICE_JUMP_START",
+        "first_seen_price": "12540",
+        "current_price": "12540",
+        "current_price_observed": "12540",
+        "price_delta_since_first_seen_pct": "0.00",
+        "comparable_flu_delta_since_first_seen": "0.00",
+        "cntr_str_available": False,
+        "cntr_str": "0.0",
+    }
+
+    assert state_handlers._scanner_positive_delta_pct(stock) == 0.0
+    hydrated = state_handlers._hydrate_scanner_promotion_runtime_context(stock)
+
+    assert hydrated["scanner_promotion_id"] == stock["scanner_promotion_id"]
+    assert hydrated["current_price_observed"] == "12540"
+    assert "buy_price" not in stock
+
+
 def test_early_accel_strong_bundle_pre_recheck_fields_are_contract_values(monkeypatch):
     monkeypatch.setattr(state_handlers, "_rule_bool", lambda key, default=False: False)
     decision = state_handlers._resolve_early_accel_strong_bundle_recheck(

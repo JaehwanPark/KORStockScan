@@ -764,12 +764,24 @@ def _hydrate_scanner_promotion_runtime_context(
     if (
         _scanner_promotion_context_present(stock)
         and _scanner_promotion_price_anchor_present(stock)
-        and _safe_int(stock.get("buy_price"), 0) > 0
         and anchor_epoch > 0.0
         and str(stock.get("scanner_promotion_id") or "").strip()
         and existing_promotion_epoch > 0.0
         and abs(existing_promotion_epoch - anchor_epoch) <= 5.0
+        and (
+            _safe_int(stock.get("buy_price"), 0) > 0
+            or (
+                str(stock.get("status") or "").upper() == "WATCHING"
+                and str(stock.get("scanner_generation_id") or "").strip()
+            )
+        )
     ):
+        # A freshly attached WATCHING generation has no buy price yet. Its
+        # immutable promotion envelope is already the canonical context, so
+        # requiring ``buy_price`` here caused every WS-only fast precheck to
+        # rescan the growing pipeline-event file after the dispatch event
+        # changed its mtime. Restored rows that lack or mismatch the canonical
+        # promotion fields still fall through to historical hydration.
         return {key: stock.get(key) for key in _SCANNER_PROMOTION_CONTEXT_FIELDS}
 
     code = str(stock.get("code") or stock.get("stock_code") or "").strip()[:6]
