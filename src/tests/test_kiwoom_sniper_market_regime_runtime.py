@@ -2410,6 +2410,49 @@ def test_runtime_does_not_duplicate_queued_scheduler_continuation(monkeypatch):
     assert requeued == []
 
 
+def test_runtime_does_not_requeue_scheduler_target_processed_in_same_loop(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        kiwoom_sniper_v2.run_sniper,
+        "scanner_scheduler_mode",
+        "deadline_v1",
+        raising=False,
+    )
+    scheduler = object()
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "_scanner_scheduler_target_generation",
+        lambda current_scheduler, target: (
+            object() if current_scheduler is scheduler else None
+        ),
+    )
+    continuation = {
+        "id": "processed",
+        "code": "000003",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "effective_venue": "NXT",
+        "scanner_generation_id": "000003:PROMO-1:r1",
+        "_scanner_scheduler_lane": "fast_precheck",
+        "_scanner_scheduler_deadline_epoch": 1001.0,
+    }
+
+    queue, requeued = (
+        kiwoom_sniper_v2._runtime_requeue_pending_scanner_scheduler_targets(
+            [],
+            [continuation],
+            scheduler=scheduler,
+            now_ts=1000.0,
+            processed_target_ids={id(continuation)},
+        )
+    )
+
+    assert queue == []
+    assert requeued == []
+
+
 @pytest.mark.parametrize("lane", ["fast_precheck", "recovery"])
 def test_scheduler_lane_owns_missing_ws_before_generic_recovery(
     monkeypatch,

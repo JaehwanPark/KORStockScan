@@ -5251,20 +5251,24 @@ def _runtime_requeue_pending_scanner_scheduler_targets(
     *,
     scheduler,
     now_ts,
+    processed_target_ids=None,
 ):
     """Restore pending scheduler continuations to the main runtime queue.
 
     A target can enqueue its next precheck or recovery continuation after it
     has already been popped from the current loop snapshot.  Scheduler state
-    remains authoritative, but the main thread must surface that target again
-    before admitting another blocking promotion attach.  HEAVY_EVAL stays with
-    the dedicated delayed-heavy queue owner.
+    remains authoritative, but only targets not yet processed in this outer
+    loop are surfaced immediately.  A processed target remains pending for the
+    next outer loop so its fresh continuation cannot starve safety, holding, or
+    delayed-heavy work.  HEAVY_EVAL stays with the dedicated delayed-heavy
+    queue owner.
     """
 
     queue = list(work_queue or [])
     if _scanner_scheduler_startup_mode() not in {"deadline_v1", "async_v1"}:
         return queue, []
     queued_ids = {id(target) for target in queue}
+    processed_ids = set(processed_target_ids or ())
     continuations = []
     continuation_lanes = {
         ScannerLane.COMMIT.value,
@@ -5272,7 +5276,11 @@ def _runtime_requeue_pending_scanner_scheduler_targets(
         ScannerLane.RECOVERY.value,
     }
     for target in active_targets or ():
-        if id(target) in queued_ids or not _is_scanner_watching_target(target):
+        if (
+            id(target) in queued_ids
+            or id(target) in processed_ids
+            or not _is_scanner_watching_target(target)
+        ):
             continue
         if not str((target or {}).get("scanner_generation_id") or "").strip():
             continue
@@ -9654,6 +9662,7 @@ def run_sniper(is_test_mode=False):
                         targets,
                         scheduler=run_sniper.scanner_runtime_scheduler,
                         now_ts=time.time(),
+                        processed_target_ids=runtime_processed_target_ids,
                     )
                 )
                 if scheduler_continuations:
@@ -10046,10 +10055,8 @@ def run_sniper(is_test_mode=False):
                                     enqueued_epoch=heavy_queue_enter_epoch,
                                     attempt=retry_attempt,
                                 )
-                                runtime_work_queue.append(stock)
                                 continue
                             if scheduler_claim.action == "not_next":
-                                runtime_work_queue.append(stock)
                                 continue
                             if scheduler_claim.action != "dispatch":
                                 continue
