@@ -2474,6 +2474,91 @@ def test_runtime_admit_live_scanner_attaches_prioritizes_new_target_without_muta
     assert active_targets == [old, new]
 
 
+def test_runtime_prioritizes_refreshed_generation_even_if_target_was_already_queued():
+    ordered = {
+        "id": "ordered",
+        "code": "000001",
+        "status": "BUY_ORDERED",
+        "strategy": "SCALPING",
+    }
+    refreshed = {
+        "id": "refreshed",
+        "code": "000002",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "scanner_generation_id": "000002:PROMO-NEW:r2",
+        "_scanner_scheduler_lane": "fast_precheck",
+    }
+    holding = {
+        "id": "holding",
+        "code": "000003",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+    }
+
+    queue = kiwoom_sniper_v2._runtime_prioritize_registered_scanner_targets(
+        [holding, refreshed, ordered],
+        [refreshed, refreshed],
+    )
+
+    assert queue == [ordered, refreshed, holding]
+    assert queue.count(refreshed) == 1
+
+
+def test_runtime_discards_old_delayed_heavy_for_refreshed_generation():
+    refreshed = {
+        "id": "refreshed",
+        "code": "000002",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "scanner_generation_id": "000002:PROMO-NEW:r2",
+    }
+    other = {
+        "id": "other",
+        "code": "000003",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "scanner_generation_id": "000003:PROMO:r1",
+    }
+    delayed = [
+        (refreshed, "000002", {"curr": 10_000}, 1000.0),
+        (other, "000003", {"curr": 20_000}, 1001.0),
+    ]
+
+    kept = kiwoom_sniper_v2._runtime_discard_superseded_delayed_heavy(
+        delayed,
+        [refreshed],
+    )
+
+    assert kept == [delayed[1]]
+    assert delayed == [
+        (refreshed, "000002", {"curr": 10_000}, 1000.0),
+        (other, "000003", {"curr": 20_000}, 1001.0),
+    ]
+
+
+def test_deadline_scheduler_runtime_surfaces_inbox_registration_before_target_revisit():
+    source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
+    helper_idx = source.index("def _admit_runtime_live_attaches")
+    drain_idx = source.index(
+        "drain_result = _drain_scanner_promotion_inbox(",
+        helper_idx,
+    )
+    prioritize_idx = source.index(
+        "_runtime_prioritize_registered_scanner_targets(",
+        drain_idx,
+    )
+    live_admit_idx = source.index(
+        "_runtime_admit_live_scanner_attaches(",
+        prioritize_idx,
+    )
+
+    assert drain_idx < prioritize_idx < live_admit_idx
+
+
 def test_runtime_requeues_scheduler_continuation_before_holding(monkeypatch):
     monkeypatch.setattr(
         kiwoom_sniper_v2.run_sniper,
@@ -4628,10 +4713,13 @@ def test_run_sniper_builds_scanner_ws_cache_before_target_iteration():
     helper_idx = source.index("def _admit_runtime_live_attaches", cache_idx)
     admit_idx = source.index("_runtime_admit_live_scanner_attaches(", helper_idx)
     accounting_extend_idx = source.index(
-        "runtime_iteration_accounting_targets.extend(live_attaches)", admit_idx
+        "runtime_iteration_accounting_targets.extend(", admit_idx
+    )
+    admitted_accounting_idx = source.index(
+        "for target in admitted_targets", accounting_extend_idx
     )
     preserved_loop_anchor_idx = source.index(
-        'now_ts=queue_context["loop_started_epoch"]', accounting_extend_idx
+        'now_ts=queue_context["loop_started_epoch"]', admitted_accounting_idx
     )
     loop_idx = source.index("while True:", admit_idx)
     empty_guard_idx = source.index("if not runtime_work_queue:", loop_idx)
@@ -4642,7 +4730,8 @@ def test_run_sniper_builds_scanner_ws_cache_before_target_iteration():
     )
 
     assert context_idx < cache_idx < helper_idx < admit_idx
-    assert admit_idx < accounting_extend_idx < preserved_loop_anchor_idx
+    assert admit_idx < accounting_extend_idx < admitted_accounting_idx
+    assert admitted_accounting_idx < preserved_loop_anchor_idx
     assert preserved_loop_anchor_idx < loop_idx < empty_guard_idx < select_idx
     assert select_idx < cached_lookup_idx < fallback_lookup_idx
 
@@ -4811,7 +4900,7 @@ def test_runtime_live_attach_reopens_delayed_heavy_eval_flush():
     nonlocal_idx = source.index(
         "nonlocal runtime_work_queue, scanner_heavy_eval_flushed", helper_idx
     )
-    attached_idx = source.index("if live_attaches:", nonlocal_idx)
+    attached_idx = source.index("if admitted_targets:", nonlocal_idx)
     reopen_idx = source.index("scanner_heavy_eval_flushed = False", attached_idx)
     queue_update_idx = source.index("runtime_live_attach_ids.update(", reopen_idx)
 

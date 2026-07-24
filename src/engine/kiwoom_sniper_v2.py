@@ -5245,6 +5245,62 @@ def _runtime_admit_live_scanner_attaches(
     return [*safety_barrier, *ordered_new, *remaining], newly_attached
 
 
+def _runtime_prioritize_registered_scanner_targets(work_queue, registered_targets):
+    """Surface newly registered generations immediately after order safety.
+
+    A promotion can refresh a WATCHING target that was already processed in the
+    current outer loop.  Identity-based live-attach discovery then considers
+    the target old and leaves its initial precheck pending until the next outer
+    loop.  Reinsert the exact target once from the inbox-drain result so the
+    scheduler deadline is owned by the current main-thread queue rather than by
+    a later target revisit.
+    """
+
+    queue = list(work_queue or [])
+    prioritized = []
+    prioritized_ids = set()
+    for target in registered_targets or ():
+        target_id = id(target)
+        if (
+            target_id in prioritized_ids
+            or not _is_scanner_watching_target(target)
+            or not str((target or {}).get("scanner_generation_id") or "").strip()
+        ):
+            continue
+        prioritized.append(target)
+        prioritized_ids.add(target_id)
+    if not prioritized:
+        return queue
+
+    remaining = [target for target in queue if id(target) not in prioritized_ids]
+    safety_barrier = []
+    non_safety = []
+    for target in remaining:
+        status = str((target or {}).get("status") or "").upper()
+        if status in {"BUY_ORDERED", "SELL_ORDERED"}:
+            safety_barrier.append(target)
+        else:
+            non_safety.append(target)
+    return [*safety_barrier, *prioritized, *non_safety]
+
+
+def _runtime_discard_superseded_delayed_heavy(delayed_heavy, registered_targets):
+    """Remove old-generation heavy tuples for targets refreshed from the inbox."""
+
+    registered_ids = {
+        id(target)
+        for target in registered_targets or ()
+        if isinstance(target, dict)
+    }
+    if not registered_ids:
+        return list(delayed_heavy or [])
+    return [
+        item
+        for item in delayed_heavy or ()
+        if not item or id(item[0]) not in registered_ids
+    ]
+
+
 def _runtime_requeue_pending_scanner_scheduler_targets(
     work_queue,
     active_targets,
@@ -7207,6 +7263,7 @@ def _register_scanner_scheduler_generation(
 def _drain_scanner_promotion_inbox(scheduler, *, max_items):
     drained = 0
     applied = 0
+    applied_targets = []
     while drained < max(1, int(max_items)):
         try:
             envelope = _SCANNER_PROMOTION_INBOX.get_nowait()
@@ -7241,12 +7298,14 @@ def _drain_scanner_promotion_inbox(scheduler, *, max_items):
                 ACTIVE_TARGETS,
                 now_epoch=attach_epoch,
             )
-            _register_scanner_scheduler_generation(
+            generation = _register_scanner_scheduler_generation(
                 scheduler,
                 payload=payload,
                 target=target,
                 attach_epoch=attach_epoch,
             )
+            if generation is not None:
+                applied_targets.append(target)
         else:
             _emit_scanner_scheduler_event(
                 payload=payload,
@@ -7275,7 +7334,11 @@ def _drain_scanner_promotion_inbox(scheduler, *, max_items):
                     ),
                 },
             )
-    return {"drained": drained, "applied": applied}
+    return {
+        "drained": drained,
+        "applied": applied,
+        "applied_targets": tuple(applied_targets),
+    }
 
 
 def _scanner_scheduler_attach_must_yield_to_runtime_work(work_queue):
@@ -9839,10 +9902,28 @@ def run_sniper(is_test_mode=False):
                 } and not _scanner_scheduler_attach_must_yield_to_runtime_work(
                     runtime_work_queue
                 ):
-                    _drain_scanner_promotion_inbox(
+                    drain_result = _drain_scanner_promotion_inbox(
                         run_sniper.scanner_runtime_scheduler,
                         max_items=1,
                     )
+                    registered_targets = list(
+                        drain_result.get("applied_targets") or ()
+                    )
+                    if registered_targets:
+                        delayed_scanner_heavy_eval[:] = (
+                            _runtime_discard_superseded_delayed_heavy(
+                                delayed_scanner_heavy_eval,
+                                registered_targets,
+                            )
+                        )
+                        runtime_work_queue = (
+                            _runtime_prioritize_registered_scanner_targets(
+                                runtime_work_queue,
+                                registered_targets,
+                            )
+                        )
+                else:
+                    registered_targets = []
                 runtime_work_queue, live_attaches = (
                     _runtime_admit_live_scanner_attaches(
                         runtime_work_queue,
@@ -9858,12 +9939,27 @@ def run_sniper(is_test_mode=False):
                         ),
                     )
                 )
-                if live_attaches:
+                admitted_targets = []
+                admitted_ids = set()
+                for target in [*registered_targets, *live_attaches]:
+                    if id(target) in admitted_ids:
+                        continue
+                    admitted_targets.append(target)
+                    admitted_ids.add(id(target))
+                if admitted_targets:
                     scanner_heavy_eval_flushed = False
                     runtime_live_attach_ids.update(
-                        id(target) for target in live_attaches
+                        id(target) for target in admitted_targets
                     )
-                    runtime_iteration_accounting_targets.extend(live_attaches)
+                    accounting_ids = {
+                        id(target)
+                        for target in runtime_iteration_accounting_targets
+                    }
+                    runtime_iteration_accounting_targets.extend(
+                        target
+                        for target in admitted_targets
+                        if id(target) not in accounting_ids
+                    )
                     refreshed_queue_context = _runtime_queue_context(
                         runtime_iteration_accounting_targets,
                         now_ts=queue_context["loop_started_epoch"],
@@ -9871,15 +9967,15 @@ def run_sniper(is_test_mode=False):
                     queue_context.update(refreshed_queue_context)
                     queue_context.update(_runtime_queue_rank_fields(runtime_work_queue))
                     scanner_ws_snapshot_cache.update(
-                        _runtime_scanner_ws_snapshot_cache(live_attaches)
+                        _runtime_scanner_ws_snapshot_cache(admitted_targets)
                     )
                     log_info(
                         "[SCANNER_RUNTIME_LIVE_ATTACH] "
-                        f"admitted={len(live_attaches)} "
+                        f"admitted={len(admitted_targets)} "
                         f"total={len(runtime_live_attach_ids)} "
-                        f"codes={','.join(str(target.get('code') or '').strip()[:6] for target in live_attaches)}"
+                        f"codes={','.join(str(target.get('code') or '').strip()[:6] for target in admitted_targets)}"
                     )
-                return len(live_attaches)
+                return len(admitted_targets)
 
             while True:
                 if not runtime_work_queue:
