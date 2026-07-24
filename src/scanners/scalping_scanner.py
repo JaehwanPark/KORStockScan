@@ -3223,10 +3223,6 @@ def promote_candidates(
             break
 
     if new_codes_found:
-        event_bus.publish(
-            "COMMAND_WS_REG",
-            {"codes": new_codes_found, "source": "scalping_scanner_promote"},
-        )
         print(f"📡 웹소켓 감시 등록 요청 완료: {len(new_codes_found)} 종목")
 
     return new_codes_found, recent_picks
@@ -3909,7 +3905,8 @@ def run_scalper(is_test_mode=False):
     1. 데이터 수집: kiwoom_utils/signal_radar(REST API)를 호출하여 등락률 상위 및 거래량 급증 종목을 가져옵니다.
     2. 필터링: is_valid_stock을 통해 동전주, ETF, 스팩주 등의 불순물을 걸러냅니다.
     3. DB 저장: 발굴된 종목을 SQLAlchemy ORM을 사용하여 안전하게 Upsert(삽입/업데이트) 합니다.
-    4. 이벤트 발행: 'COMMAND_WS_REG' 이벤트를 EventBus에 쏘아, 웹소켓 모듈이 해당 종목의 실시간 틱 데이터 감시를 즉각 시작하도록 지시합니다.
+    4. 이벤트 발행: 후보별 pending 보호 후 'SCALPING_SCANNER_PROMOTED_TARGET'을
+       즉시 발행합니다. live runtime attach handler가 WS 등록의 단일 owner입니다.
     """
     print(
         "⚡ [SCALPING 스캐너] 초단타 감시 엔진 가동 (장초반/후반 60초, 그 외 90초 주기)..."
