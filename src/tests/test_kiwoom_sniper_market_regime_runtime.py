@@ -1869,6 +1869,88 @@ def test_runtime_iteration_targets_prioritizes_recent_scanner_without_mutating_t
     ]
 
 
+def test_runtime_admit_live_scanner_attaches_prioritizes_new_target_without_mutating_active_targets():
+    old = {
+        "id": "old",
+        "code": "000001",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "entry_armed_at_epoch": 1000.0,
+        "price_delta_since_first_seen_pct": 1.0,
+    }
+    new = {
+        "id": "new",
+        "code": "000002",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "entry_armed_at_epoch": 1200.0,
+        "price_delta_since_first_seen_pct": 5.0,
+    }
+    active_targets = [old, new]
+
+    queue, admitted = kiwoom_sniper_v2._runtime_admit_live_scanner_attaches(
+        [old],
+        active_targets,
+        processed_target_ids=set(),
+        admitted_target_ids=set(),
+        now_ts=1300.0,
+    )
+
+    assert admitted == [new]
+    assert queue == [new, old]
+    assert active_targets == [old, new]
+
+
+def test_runtime_admit_live_scanner_attaches_is_bounded_and_does_not_reprocess():
+    old = {
+        "id": "old",
+        "code": "000001",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+    }
+    first = {
+        "id": "first",
+        "code": "000002",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "price_delta_since_first_seen_pct": 5.0,
+    }
+    second = {
+        "id": "second",
+        "code": "000003",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "price_delta_since_first_seen_pct": 4.0,
+    }
+
+    queue, admitted = kiwoom_sniper_v2._runtime_admit_live_scanner_attaches(
+        [],
+        [old, first, second],
+        processed_target_ids={id(old)},
+        admitted_target_ids=set(),
+        now_ts=1300.0,
+        max_new_targets=1,
+    )
+
+    assert admitted == [first]
+    assert queue == [first]
+    queue, admitted = kiwoom_sniper_v2._runtime_admit_live_scanner_attaches(
+        queue,
+        [old, first, second],
+        processed_target_ids={id(old)},
+        admitted_target_ids={id(first)},
+        now_ts=1301.0,
+        max_new_targets=1,
+    )
+    assert admitted == []
+    assert queue == [first]
+
+
 def test_runtime_iteration_targets_moves_non_real_holding_behind_scanner():
     targets = [
         {
@@ -3390,15 +3472,25 @@ def test_run_sniper_builds_scanner_ws_cache_before_target_iteration():
     cache_idx = source.index(
         "scanner_ws_snapshot_cache = _runtime_scanner_ws_snapshot_cache", context_idx
     )
-    loop_idx = source.index(
-        'for stock in queue_context["iteration_targets"]:', cache_idx
+    loop_idx = source.index("while True:", cache_idx)
+    admit_idx = source.index("_runtime_admit_live_scanner_attaches(", loop_idx)
+    accounting_extend_idx = source.index(
+        "runtime_iteration_accounting_targets.extend(live_attaches)", admit_idx
     )
+    preserved_loop_anchor_idx = source.index(
+        'now_ts=queue_context["loop_started_epoch"]', accounting_extend_idx
+    )
+    empty_guard_idx = source.index("if not runtime_work_queue:", admit_idx)
+    select_idx = source.index("stock = runtime_work_queue.pop(0)", admit_idx)
     cached_lookup_idx = source.index("scanner_ws_snapshot_cache.get(code)", loop_idx)
     fallback_lookup_idx = source.index(
         "WS_MANAGER.get_latest_data(code)", cached_lookup_idx
     )
 
-    assert context_idx < cache_idx < loop_idx < cached_lookup_idx < fallback_lookup_idx
+    assert context_idx < cache_idx < loop_idx < admit_idx
+    assert admit_idx < accounting_extend_idx < preserved_loop_anchor_idx
+    assert preserved_loop_anchor_idx < empty_guard_idx < select_idx
+    assert select_idx < cached_lookup_idx < fallback_lookup_idx
 
 
 def test_run_sniper_batches_scanner_ws_recovery_reg_before_loop_end():
@@ -3463,9 +3555,7 @@ def test_run_sniper_defers_scanner_precheck_and_lag_event_emits_until_loop_tail(
     heavy_def_idx = source.index(
         "def _defer_emit_scanner_heavy_eval_lag", queue_def_idx
     )
-    loop_idx = source.index(
-        'for stock in queue_context["iteration_targets"]:', heavy_def_idx
-    )
+    loop_idx = source.index("while True:", heavy_def_idx)
     fast_call_idx = source.index("_defer_emit_scanner_fast_precheck(", loop_idx)
     queue_call_idx = source.index(
         "_defer_emit_scanner_runtime_queue_lag(", fast_call_idx
@@ -3495,7 +3585,10 @@ def test_run_sniper_defers_scanner_precheck_and_lag_event_emits_until_loop_tail(
 
 def test_run_sniper_checks_queue_lag_eviction_before_stale_recovery():
     source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
-    loop_idx = source.index('for stock in queue_context["iteration_targets"]:')
+    work_queue_idx = source.index(
+        'runtime_work_queue = list(queue_context["iteration_targets"])'
+    )
+    loop_idx = source.index("while True:", work_queue_idx)
     queue_call_idx = source.index(
         "queue_lag_fields = _defer_emit_scanner_runtime_queue_lag(", loop_idx
     )

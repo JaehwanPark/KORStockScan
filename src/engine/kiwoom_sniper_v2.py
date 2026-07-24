@@ -5055,6 +5055,51 @@ def _runtime_iteration_targets(targets, now_ts):
     return [target for _, target in sorted(indexed, key=_priority)]
 
 
+def _runtime_admit_live_scanner_attaches(
+    work_queue,
+    active_targets,
+    *,
+    processed_target_ids,
+    admitted_target_ids,
+    now_ts,
+    max_new_targets=8,
+):
+    """Admit bounded scanner attaches that arrived after the loop snapshot.
+
+    The scanner event thread only appends to ``ACTIVE_TARGETS``. Evaluation
+    remains in the sniper main loop so order authority and all existing guards
+    stay single-threaded.
+    """
+    queue = list(work_queue or [])
+    processed_ids = set(processed_target_ids or ())
+    already_admitted_ids = set(admitted_target_ids or ())
+    queued_ids = {id(target) for target in queue}
+    remaining_slots = max(0, int(max_new_targets) - len(already_admitted_ids))
+    if remaining_slots <= 0:
+        return queue, []
+
+    newly_attached = []
+    for target in _runtime_iteration_targets(active_targets, now_ts=now_ts):
+        target_id = id(target)
+        if (
+            target_id in processed_ids
+            or target_id in already_admitted_ids
+            or target_id in queued_ids
+            or not _is_scanner_watching_target(target)
+        ):
+            continue
+        newly_attached.append(target)
+        if len(newly_attached) >= remaining_slots:
+            break
+
+    if not newly_attached:
+        return queue, []
+    return (
+        _runtime_iteration_targets([*queue, *newly_attached], now_ts=now_ts),
+        newly_attached,
+    )
+
+
 def _runtime_queue_context(targets, now_ts):
     iteration_targets = _runtime_iteration_targets(targets, now_ts=now_ts)
     watching = [
@@ -8575,7 +8620,43 @@ def run_sniper(is_test_mode=False):
                             emit_event_fn=_defer_scanner_entry_pipeline_log,
                         )
 
-            for stock in queue_context["iteration_targets"]:
+            runtime_work_queue = list(queue_context["iteration_targets"])
+            runtime_iteration_accounting_targets = list(runtime_work_queue)
+            runtime_processed_target_ids = set()
+            runtime_live_attach_ids = set()
+            while True:
+                runtime_work_queue, live_attaches = (
+                    _runtime_admit_live_scanner_attaches(
+                        runtime_work_queue,
+                        targets,
+                        processed_target_ids=runtime_processed_target_ids,
+                        admitted_target_ids=runtime_live_attach_ids,
+                        now_ts=time.time(),
+                    )
+                )
+                if live_attaches:
+                    runtime_live_attach_ids.update(
+                        id(target) for target in live_attaches
+                    )
+                    runtime_iteration_accounting_targets.extend(live_attaches)
+                    refreshed_queue_context = _runtime_queue_context(
+                        runtime_iteration_accounting_targets,
+                        now_ts=queue_context["loop_started_epoch"],
+                    )
+                    queue_context.update(refreshed_queue_context)
+                    scanner_ws_snapshot_cache.update(
+                        _runtime_scanner_ws_snapshot_cache(live_attaches)
+                    )
+                    log_info(
+                        "[SCANNER_RUNTIME_LIVE_ATTACH] "
+                        f"admitted={len(live_attaches)} "
+                        f"total={len(runtime_live_attach_ids)} "
+                        f"codes={','.join(str(target.get('code') or '').strip()[:6] for target in live_attaches)}"
+                    )
+                if not runtime_work_queue:
+                    break
+                stock = runtime_work_queue.pop(0)
+                runtime_processed_target_ids.add(id(stock))
                 code = str(stock.get("code", "")).strip()[:6]
                 status = stock.get("status")
 
