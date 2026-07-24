@@ -5327,6 +5327,26 @@ def _scanner_scheduler_owns_missing_ws_lane(target, *, scheduler):
     }
 
 
+def _scanner_scheduler_pre_recovery_block_reason(target, *, scheduler):
+    """Fail closed before generic WS/REST recovery can block the main loop."""
+
+    target = target if isinstance(target, dict) else {}
+    if _scanner_scheduler_startup_mode() not in {"deadline_v1", "async_v1"}:
+        return ""
+    if not _is_scanner_watching_target(target):
+        return ""
+    venue = normalize_scanner_scheduler_venue(
+        target.get("effective_venue") or target.get("venue")
+    )
+    if venue not in {"KRX", "PREMARKET_KRX_LIKE", "NXT"}:
+        return "scanner_scheduler_canonical_venue_missing_fail_closed"
+    if not _scanner_scheduler_enabled_for_venue(venue):
+        return ""
+    if _scanner_scheduler_target_generation(scheduler, target) is None:
+        return "scanner_scheduler_generation_unavailable_fail_closed"
+    return ""
+
+
 def _runtime_queue_rank_fields(iteration_targets):
     iteration_targets = list(iteration_targets or [])
     scanner_watching = [
@@ -9770,14 +9790,48 @@ def run_sniper(is_test_mode=False):
                             now_ts=now_ts,
                         )
                     )
+                scheduler = getattr(
+                    run_sniper,
+                    "scanner_runtime_scheduler",
+                    None,
+                )
+                scanner_pre_recovery_block_reason = (
+                    _scanner_scheduler_pre_recovery_block_reason(
+                        stock,
+                        scheduler=scheduler,
+                    )
+                )
+                if scanner_pre_recovery_block_reason:
+                    scanner_runtime_venue = normalize_scanner_scheduler_venue(
+                        stock.get("effective_venue") or stock.get("venue")
+                    )
+                    _defer_scanner_watching_runtime_skip(
+                        stock,
+                        code,
+                        skip_reason=scanner_pre_recovery_block_reason,
+                        now_ts=time.time(),
+                        ws_data=ws_data,
+                        ws_manager_available=bool(WS_MANAGER),
+                        scanner_observed_venue=(
+                            scanner_runtime_venue or "UNKNOWN"
+                        ),
+                        scanner_observed_venue_resolution=stock.get(
+                            "venue_resolution"
+                        )
+                        or "missing_tradable_explicit_venue",
+                        scanner_scheduler_registration_blocked=bool(
+                            stock.get("_scanner_scheduler_registration_blocked")
+                        ),
+                        scanner_scheduler_registration_reason=stock.get(
+                            "_scanner_scheduler_registration_reason"
+                        )
+                        or "generation_not_registered",
+                    )
+                    continue
                 scheduler_owns_missing_ws_lane = (
                     _scanner_scheduler_owns_missing_ws_lane(
                         stock,
-                        scheduler=getattr(
-                            run_sniper,
-                            "scanner_runtime_scheduler",
-                            None,
-                        ),
+                        scheduler=scheduler,
                     )
                 )
                 if (
@@ -9941,36 +9995,9 @@ def run_sniper(is_test_mode=False):
                     if _is_scanner_watching_target(stock):
                         scanner_precheck_seen = True
                         heavy_queue_enter_epoch = time.time()
-                        scheduler = getattr(
-                            run_sniper, "scanner_runtime_scheduler", None
-                        )
                         scanner_runtime_venue = normalize_scanner_scheduler_venue(
                             stock.get("effective_venue") or stock.get("venue")
                         )
-                        if (
-                            _scanner_scheduler_startup_mode()
-                            in {"deadline_v1", "async_v1"}
-                            and scanner_runtime_venue
-                            not in {"KRX", "PREMARKET_KRX_LIKE", "NXT"}
-                        ):
-                            _defer_scanner_watching_runtime_skip(
-                                stock,
-                                code,
-                                skip_reason=(
-                                    "scanner_scheduler_canonical_venue_missing_fail_closed"
-                                ),
-                                now_ts=heavy_queue_enter_epoch,
-                                ws_data=ws_data,
-                                ws_manager_available=bool(WS_MANAGER),
-                                scanner_observed_venue=(
-                                    scanner_runtime_venue or "UNKNOWN"
-                                ),
-                                scanner_observed_venue_resolution=stock.get(
-                                    "venue_resolution"
-                                )
-                                or "missing_tradable_explicit_venue",
-                            )
-                            continue
                         scheduler_selected = _scanner_scheduler_enabled_for_venue(
                             scanner_runtime_venue
                         )
@@ -9979,27 +10006,6 @@ def run_sniper(is_test_mode=False):
                             if scheduler_selected
                             else None
                         )
-                        if scheduler_selected and scheduler_generation is None:
-                            _defer_scanner_watching_runtime_skip(
-                                stock,
-                                code,
-                                skip_reason=(
-                                    "scanner_scheduler_generation_unavailable_fail_closed"
-                                ),
-                                now_ts=heavy_queue_enter_epoch,
-                                ws_data=ws_data,
-                                ws_manager_available=bool(WS_MANAGER),
-                                scanner_scheduler_registration_blocked=bool(
-                                    stock.get(
-                                        "_scanner_scheduler_registration_blocked"
-                                    )
-                                ),
-                                scanner_scheduler_registration_reason=stock.get(
-                                    "_scanner_scheduler_registration_reason"
-                                )
-                                or "generation_not_registered",
-                            )
-                            continue
                         scheduler_precheck_item = None
                         scheduler_recovery_item = None
                         scheduler_recovery_only = False

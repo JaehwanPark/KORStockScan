@@ -2551,6 +2551,81 @@ def test_generic_recovery_keeps_non_scheduler_missing_ws_ownership(
 
 
 @pytest.mark.parametrize(
+    "mode,venue,generation_available,expected_reason",
+    [
+        (
+            "deadline_v1",
+            "UNKNOWN",
+            False,
+            "scanner_scheduler_canonical_venue_missing_fail_closed",
+        ),
+        (
+            "deadline_v1",
+            "NXT",
+            False,
+            "scanner_scheduler_generation_unavailable_fail_closed",
+        ),
+        ("deadline_v1", "NXT", True, ""),
+        ("legacy", "UNKNOWN", False, ""),
+    ],
+)
+def test_scheduler_pre_recovery_gate_blocks_invalid_runtime_provenance(
+    monkeypatch,
+    mode,
+    venue,
+    generation_available,
+    expected_reason,
+):
+    monkeypatch.setattr(
+        kiwoom_sniper_v2.run_sniper,
+        "scanner_scheduler_mode",
+        mode,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2.run_sniper,
+        "scanner_scheduler_venues",
+        frozenset({"NXT"}),
+        raising=False,
+    )
+    scheduler = object()
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "_scanner_scheduler_target_generation",
+        lambda current_scheduler, target: (
+            object()
+            if generation_available and current_scheduler is scheduler
+            else None
+        ),
+    )
+    target = {
+        "code": "100090",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "effective_venue": venue,
+        "scanner_generation_id": "100090:PROMO-1:r1",
+    }
+
+    assert (
+        kiwoom_sniper_v2._scanner_scheduler_pre_recovery_block_reason(
+            target,
+            scheduler=scheduler,
+        )
+        == expected_reason
+    )
+
+
+def test_scheduler_pre_recovery_gate_runs_before_blocking_ws_recovery():
+    source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
+
+    gate_idx = source.index("_scanner_scheduler_pre_recovery_block_reason(")
+    recovery_idx = source.index("_recover_missing_ws_snapshot(", gate_idx)
+
+    assert gate_idx < recovery_idx
+
+
+@pytest.mark.parametrize(
     "mode,lane",
     [("legacy", "fast_precheck"), ("deadline_v1", "heavy_eval")],
 )
