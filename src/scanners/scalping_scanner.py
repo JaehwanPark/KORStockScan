@@ -2852,7 +2852,6 @@ def promote_candidates(
 ):
     now_ts = time.time() if now_ts is None else now_ts
     new_codes_found = []
-    promoted_target_payloads = []
     recent_picks = _filter_picks_within_cooldown(
         recent_picks, now_ts, reentry_cooldown_sec
     )
@@ -3202,10 +3201,11 @@ def promote_candidates(
             low_rebound_promoted_count += 1
         else:
             general_promoted_count += 1
-        promoted_target_payloads.append(
+        event_bus.publish(
+            "SCALPING_SCANNER_PROMOTED_TARGET",
             _scanner_runtime_target_payload(
                 target, source_guard, record_id=record_id, now_ts=now_ts
-            )
+            ),
         )
 
         if len(new_codes_found) >= remaining_slots:
@@ -3229,8 +3229,6 @@ def promote_candidates(
             "COMMAND_WS_REG",
             {"codes": new_codes_found, "source": "scalping_scanner_promote"},
         )
-        for payload in promoted_target_payloads:
-            event_bus.publish("SCALPING_SCANNER_PROMOTED_TARGET", payload)
         print(f"📡 웹소켓 감시 등록 요청 완료: {len(new_codes_found)} 종목")
 
     return new_codes_found, recent_picks

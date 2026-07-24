@@ -1037,6 +1037,15 @@ def handle_scalping_scanner_promotion_batch_pending(payload):
     }
     if not codes:
         return False
+    with _state_lock:
+        attached_codes = {
+            str((target or {}).get("code") or "").strip()[:6]
+            for target in (ACTIVE_TARGETS or [])
+            if str((target or {}).get("code") or "").strip()[:6]
+        }
+    codes.difference_update(attached_codes)
+    if not codes:
+        return True
     now_ts = _safe_float(payload.get("emitted_epoch"), time.time())
     if now_ts <= 0:
         now_ts = time.time()

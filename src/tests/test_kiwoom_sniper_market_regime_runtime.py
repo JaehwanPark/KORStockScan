@@ -6344,6 +6344,26 @@ def test_scanner_promotion_pending_attach_prevents_prune_until_attach_resolution
         kiwoom_sniper_v2._SCANNER_PROMOTION_PENDING_ATTACH_UNTIL.clear()
 
 
+def test_scanner_promotion_pending_attach_skips_already_attached_target(monkeypatch):
+    kiwoom_sniper_v2._SCANNER_PROMOTION_PENDING_ATTACH_UNTIL.clear()
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "ACTIVE_TARGETS",
+        [{"code": "005930", "status": "WATCHING"}],
+    )
+
+    try:
+        assert (
+            kiwoom_sniper_v2.handle_scalping_scanner_promotion_batch_pending(
+                {"codes": ["005930"], "emitted_epoch": 1000.0}
+            )
+            is True
+        )
+        assert kiwoom_sniper_v2._SCANNER_PROMOTION_PENDING_ATTACH_UNTIL == {}
+    finally:
+        kiwoom_sniper_v2._SCANNER_PROMOTION_PENDING_ATTACH_UNTIL.clear()
+
+
 def test_scanner_fast_precheck_retention_requires_bounded_signed_tape_reason(
     monkeypatch,
 ):

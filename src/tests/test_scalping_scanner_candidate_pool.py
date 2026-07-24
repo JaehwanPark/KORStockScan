@@ -33,11 +33,14 @@ class _DB:
 
 
 class _EventBus:
-    def __init__(self):
+    def __init__(self, on_publish=None):
         self.events = []
+        self.on_publish = on_publish
 
     def publish(self, name, payload):
         self.events.append((name, payload))
+        if self.on_publish is not None:
+            self.on_publish(name, payload)
 
 
 def _event_payloads(event_bus, name):
@@ -428,9 +431,9 @@ def test_promote_candidates_limits_new_codes_to_remaining_active_slots(monkeypat
         {"codes": ["000001"], "source": "scalping_scanner_promote"}
     ]
     assert [name for name, _payload in event_bus.events[-3:]] == [
+        "SCALPING_SCANNER_PROMOTED_TARGET",
         "SCALPING_SCANNER_PROMOTION_BATCH_PENDING",
         "COMMAND_WS_REG",
-        "SCALPING_SCANNER_PROMOTED_TARGET",
     ]
     assert len(_event_payloads(event_bus, "SCALPING_SCANNER_PROMOTED_TARGET")) == 1
     assert len(db.records) == 2
@@ -643,7 +646,14 @@ def test_promote_candidates_reserves_two_slots_for_low_rebound(monkeypatch):
         lambda *args, **kwargs: {"blocked": False},
     )
     db = _DB()
-    event_bus = _EventBus()
+    promotion_record_counts = []
+    event_bus = _EventBus(
+        on_publish=lambda name, _payload: (
+            promotion_record_counts.append(len(db.records))
+            if name == "SCALPING_SCANNER_PROMOTED_TARGET"
+            else None
+        )
+    )
 
     ranked_targets = [
         {
@@ -709,6 +719,7 @@ def test_promote_candidates_reserves_two_slots_for_low_rebound(monkeypatch):
         "100001",
         "100002",
     ]
+    assert promotion_record_counts == [1, 2, 3]
     assert (
         promoted_payloads[1]["source_signature"]
         == scalping_scanner.LOW_REBOUND_RISING_MISSED_SOURCE
