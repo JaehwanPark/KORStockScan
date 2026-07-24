@@ -227,6 +227,180 @@ def test_claim_respects_earliest_deadline_within_lane():
     assert dispatched.action == "dispatch"
 
 
+def test_initial_precheck_precedes_earlier_recurring_recheck():
+    scheduler = ScannerRuntimeScheduler(max_active=16)
+    observed = _register(
+        scheduler,
+        code="000001",
+        promotion_id="PROMO-OBSERVED",
+        attach_epoch=100.0,
+        promotion_epoch=99.0,
+    )
+    first = scheduler.claim(
+        observed.item.generation,
+        lane=ScannerLane.FAST_PRECHECK,
+        now_epoch=100.1,
+    )
+    scheduler.complete(first.item, completed_epoch=100.2, outcome="source_quality_blocked")
+    recurring = scheduler.enqueue(
+        observed.item.generation,
+        lane=ScannerLane.FAST_PRECHECK,
+        owner="precheck_not_eligible_fresh_recheck",
+        enqueued_epoch=100.2,
+        deadline_epoch=110.2,
+        attempt=2,
+    )
+    newcomer = _register(
+        scheduler,
+        code="000002",
+        promotion_id="PROMO-NEW",
+        attach_epoch=101.0,
+        promotion_epoch=100.5,
+    )
+
+    reserved = scheduler.claim(
+        newcomer.item.generation,
+        lane=ScannerLane.FAST_PRECHECK,
+        now_epoch=101.1,
+    )
+
+    assert recurring.item.deadline_epoch < newcomer.item.deadline_epoch
+    assert recurring.item.precheck_phase == "recheck"
+    assert newcomer.item.precheck_phase == "initial"
+    assert reserved.action == "dispatch"
+    assert reserved.item.generation == newcomer.item.generation
+    assert reserved.fields["scanner_scheduler_precheck_phase"] == "initial"
+    assert reserved.fields["attach_to_first_precheck_sec"] == 0.1
+
+    scheduler.complete(reserved.item, completed_epoch=101.2, outcome="pass")
+    retry = scheduler.claim(
+        observed.item.generation,
+        lane=ScannerLane.FAST_PRECHECK,
+        now_epoch=101.3,
+    )
+    assert retry.action == "dispatch"
+    assert retry.item == recurring.item
+    assert retry.fields["scanner_scheduler_precheck_phase"] == "recheck"
+    assert "attach_to_first_precheck_sec" not in retry.fields
+    assert retry.fields["precheck_recheck_wait_sec"] == 1.1
+
+
+def test_expired_undispatched_precheck_retry_remains_initial():
+    scheduler = ScannerRuntimeScheduler(max_active=16)
+    registered = _register(
+        scheduler,
+        attach_epoch=100.0,
+        promotion_epoch=99.0,
+    )
+    expired = scheduler.claim(
+        registered.item.generation,
+        lane=ScannerLane.FAST_PRECHECK,
+        now_epoch=110.1,
+    )
+    retry = scheduler.enqueue(
+        registered.item.generation,
+        lane=ScannerLane.FAST_PRECHECK,
+        owner="fresh_recheck_after_deadline",
+        enqueued_epoch=110.1,
+        attempt=2,
+    )
+
+    assert expired.action == "deadline_expired"
+    assert expired.item.precheck_phase == "initial"
+    assert retry.item.precheck_phase == "initial"
+    assert retry.fields["scanner_scheduler_precheck_phase"] == "initial"
+
+
+def test_next_decision_reserves_initial_precheck_over_recurring_recheck():
+    scheduler = ScannerRuntimeScheduler(max_active=16)
+    observed = _register(
+        scheduler,
+        code="000001",
+        promotion_id="PROMO-OBSERVED",
+        attach_epoch=100.0,
+        promotion_epoch=99.0,
+    )
+    first = scheduler.next_decision(now_epoch=100.1)
+    scheduler.complete(first.item, completed_epoch=100.2, outcome="pass")
+    scheduler.enqueue(
+        observed.item.generation,
+        lane=ScannerLane.FAST_PRECHECK,
+        owner="post_heavy_eval_fresh_recheck",
+        enqueued_epoch=100.2,
+        deadline_epoch=110.2,
+        attempt=2,
+    )
+    newcomer = _register(
+        scheduler,
+        code="000002",
+        promotion_id="PROMO-NEW",
+        attach_epoch=101.0,
+        promotion_epoch=100.5,
+    )
+
+    selected = scheduler.next_decision(now_epoch=101.1)
+
+    assert selected.action == "dispatch"
+    assert selected.item.generation == newcomer.item.generation
+    assert selected.item.precheck_phase == "initial"
+
+
+def test_recurring_recheck_cannot_consume_sixteen_symbol_first_precheck_budget():
+    scheduler = ScannerRuntimeScheduler(max_active=16)
+    observed = _register(
+        scheduler,
+        code="000001",
+        promotion_id="PROMO-OBSERVED",
+        attach_epoch=100.0,
+        promotion_epoch=99.0,
+    )
+    first = scheduler.next_decision(now_epoch=100.1)
+    scheduler.complete(first.item, completed_epoch=100.2, outcome="pass")
+    recurring = scheduler.enqueue(
+        observed.item.generation,
+        lane=ScannerLane.FAST_PRECHECK,
+        owner="precheck_not_eligible_fresh_recheck",
+        enqueued_epoch=100.2,
+        deadline_epoch=110.2,
+        attempt=2,
+    )
+    newcomers = [
+        _register(
+            scheduler,
+            code=f"{index:06d}",
+            promotion_id=f"PROMO-{index}",
+            attach_epoch=101.0,
+            promotion_epoch=100.5,
+        )
+        for index in range(2, 17)
+    ]
+
+    dispatched = []
+    for offset, newcomer in enumerate(newcomers):
+        now_epoch = 101.1 + (offset * 0.5)
+        decision = scheduler.next_decision(now_epoch=now_epoch)
+        dispatched.append(decision)
+        scheduler.complete(
+            decision.item,
+            completed_epoch=now_epoch + 0.4,
+            outcome="pass",
+        )
+
+    assert all(
+        decision.item.precheck_phase == "initial" for decision in dispatched
+    )
+    assert {
+        decision.item.generation.generation_id for decision in dispatched
+    } == {newcomer.item.generation.generation_id for newcomer in newcomers}
+    assert max(
+        decision.fields["attach_to_first_precheck_sec"] for decision in dispatched
+    ) <= 10.0
+
+    after_initials = scheduler.next_decision(now_epoch=108.6)
+    assert after_initials.item == recurring.item
+    assert after_initials.item.precheck_phase == "recheck"
+
+
 def test_service_time_excludes_queue_wait():
     scheduler = ScannerRuntimeScheduler(max_active=16)
     _register(scheduler, attach_epoch=100.0)

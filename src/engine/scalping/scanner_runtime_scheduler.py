@@ -217,6 +217,7 @@ class ScannerWorkItem:
     deadline_epoch: float
     priority: int = 0
     attempt: int = 1
+    precheck_phase: str = "not_applicable"
 
     @property
     def work_id(self) -> str:
@@ -260,6 +261,7 @@ class ScannerRuntimeScheduler:
         self._heap: list[tuple[float, int, int, int, str]] = []
         self._in_flight: dict[str, ScannerWorkItem] = {}
         self._dispatched_epoch_by_work_id: dict[str, float] = {}
+        self._first_precheck_dispatched_generation_ids: set[str] = set()
         self._blocking_heavy_since_precheck = 0
 
     def current_generation(self, code: str) -> ScannerGeneration | None:
@@ -449,12 +451,7 @@ class ScannerRuntimeScheduler:
                 if pending_prechecks:
                     selected = min(
                         pending_prechecks,
-                        key=lambda item: (
-                            item.deadline_epoch,
-                            -item.priority,
-                            item.enqueued_epoch,
-                            item.work_id,
-                        ),
+                        key=self._precheck_selection_key_locked,
                     )
                     self._work_by_id.pop(selected.work_id, None)
                     self._remove_heap_work_id_locked(selected.work_id)
@@ -479,6 +476,30 @@ class ScannerRuntimeScheduler:
                 heapq.heappush(self._heap, entry)
             if selected is None:
                 return None
+            if (
+                selected.lane is ScannerLane.FAST_PRECHECK
+                and selected.precheck_phase == "recheck"
+            ):
+                pending_initial_prechecks = [
+                    item
+                    for item in self._work_by_id.values()
+                    if item.lane is ScannerLane.FAST_PRECHECK
+                    and item.precheck_phase == "initial"
+                    and self.is_current(item.generation)
+                ]
+                if pending_initial_prechecks:
+                    reserved = min(
+                        pending_initial_prechecks,
+                        key=self._precheck_selection_key_locked,
+                    )
+                    self._work_by_id[selected.work_id] = selected
+                    heapq.heappush(
+                        self._heap,
+                        self._heap_entry_locked(selected),
+                    )
+                    selected = reserved
+                    self._work_by_id.pop(selected.work_id, None)
+                    self._remove_heap_work_id_locked(selected.work_id)
 
             fields = self._decision_fields(selected, now_epoch=now_value)
             if (
@@ -554,12 +575,7 @@ class ScannerRuntimeScheduler:
                 if pending_prechecks:
                     selected_precheck = min(
                         pending_prechecks,
-                        key=lambda item: (
-                            item.deadline_epoch,
-                            -item.priority,
-                            item.enqueued_epoch,
-                            item.work_id,
-                        ),
+                        key=self._precheck_selection_key_locked,
                     )
                     return ScannerSchedulerDecision(
                         action="not_next",
@@ -572,12 +588,16 @@ class ScannerRuntimeScheduler:
                     )
             selected = min(
                 candidates,
-                key=lambda item: (
-                    item.deadline_epoch,
-                    _LANE_TIE_PRIORITY[item.lane],
-                    -item.priority,
-                    item.enqueued_epoch,
-                    item.work_id,
+                key=(
+                    self._precheck_selection_key_locked
+                    if normalized_lane is ScannerLane.FAST_PRECHECK
+                    else lambda item: (
+                        item.deadline_epoch,
+                        _LANE_TIE_PRIORITY[item.lane],
+                        -item.priority,
+                        item.enqueued_epoch,
+                        item.work_id,
+                    )
                 ),
             )
             if selected.generation.generation_id != generation.generation_id:
@@ -738,6 +758,19 @@ class ScannerRuntimeScheduler:
             deadline_epoch=deadline,
             priority=int(priority),
             attempt=max(1, int(attempt)),
+            precheck_phase=(
+                "initial"
+                if (
+                    lane is ScannerLane.FAST_PRECHECK
+                    and generation.generation_id
+                    not in self._first_precheck_dispatched_generation_ids
+                )
+                else (
+                    "recheck"
+                    if lane is ScannerLane.FAST_PRECHECK
+                    else "not_applicable"
+                )
+            ),
         )
         # Coalesce repeated scheduling of the same generation/lane.
         for work_id, current in list(self._work_by_id.items()):
@@ -748,26 +781,26 @@ class ScannerRuntimeScheduler:
                 self._work_by_id.pop(work_id, None)
                 self._remove_heap_work_id_locked(work_id)
         self._work_by_id[item.work_id] = item
-        heapq.heappush(
-            self._heap,
-            (
-                item.deadline_epoch,
-                _LANE_TIE_PRIORITY[item.lane],
-                -item.priority,
-                next(self._sequence),
-                item.work_id,
-            ),
-        )
+        heapq.heappush(self._heap, self._heap_entry_locked(item))
         return item
 
     def _record_dispatch_locked(self, item: ScannerWorkItem) -> None:
         if item.lane is ScannerLane.FAST_PRECHECK:
+            if item.precheck_phase == "initial":
+                self._first_precheck_dispatched_generation_ids.add(
+                    item.generation.generation_id
+                )
             self._blocking_heavy_since_precheck = 0
         elif item.lane is ScannerLane.HEAVY_EVAL:
             self._blocking_heavy_since_precheck += 1
 
     def _invalidate_code_locked(self, code: str) -> list[str]:
         superseded: list[str] = []
+        current_generation = self._generations.get(code)
+        if current_generation is not None:
+            self._first_precheck_dispatched_generation_ids.discard(
+                current_generation.generation_id
+            )
         for work_id, item in list(self._work_by_id.items()):
             if item.generation.code == code:
                 superseded.append(work_id)
@@ -781,6 +814,33 @@ class ScannerRuntimeScheduler:
                 self._in_flight.pop(work_id, None)
                 self._dispatched_epoch_by_work_id.pop(work_id, None)
         return superseded
+
+    def _heap_entry_locked(
+        self, item: ScannerWorkItem
+    ) -> tuple[float, int, int, int, str]:
+        return (
+            item.deadline_epoch,
+            _LANE_TIE_PRIORITY[item.lane],
+            -item.priority,
+            next(self._sequence),
+            item.work_id,
+        )
+
+    @staticmethod
+    def _precheck_selection_key_locked(
+        item: ScannerWorkItem,
+    ) -> tuple[int, float, int, float, str]:
+        # A generation that has never reached its first WS-only precheck owns
+        # admission ahead of recurring rechecks.  Deadlines remain EDF within
+        # each phase, so one already-observed symbol cannot consume the
+        # attach-to-first-precheck budget of newly attached generations.
+        return (
+            0 if item.precheck_phase == "initial" else 1,
+            item.deadline_epoch,
+            -item.priority,
+            item.enqueued_epoch,
+            item.work_id,
+        )
 
     def _remove_heap_work_id_locked(self, work_id: str) -> None:
         if not self._heap:
@@ -813,6 +873,7 @@ class ScannerRuntimeScheduler:
                 "scanner_scheduler_work_id": item.work_id,
                 "scanner_scheduler_attempt": item.attempt,
                 "scanner_scheduler_priority": item.priority,
+                "scanner_scheduler_precheck_phase": item.precheck_phase,
                 "scanner_scheduler_enqueued_epoch": round(item.enqueued_epoch, 6),
                 "scanner_scheduler_deadline_epoch": round(item.deadline_epoch, 6),
                 "scanner_scheduler_queue_wait_sec": round(
@@ -821,9 +882,14 @@ class ScannerRuntimeScheduler:
             }
         )
         if item.lane is ScannerLane.FAST_PRECHECK:
-            fields["attach_to_first_precheck_sec"] = round(
-                max(0.0, now_epoch - item.generation.attach_epoch), 6
-            )
+            if item.precheck_phase == "initial":
+                fields["attach_to_first_precheck_sec"] = round(
+                    max(0.0, now_epoch - item.generation.attach_epoch), 6
+                )
+            else:
+                fields["precheck_recheck_wait_sec"] = round(
+                    max(0.0, now_epoch - item.enqueued_epoch), 6
+                )
         elif item.lane is ScannerLane.RECOVERY:
             fields["precheck_to_recovery_sec"] = round(
                 max(0.0, now_epoch - item.enqueued_epoch), 6

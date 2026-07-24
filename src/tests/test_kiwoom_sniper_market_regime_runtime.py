@@ -767,6 +767,74 @@ def test_scheduler_submit_guard_blocks_promotion_arriving_during_heavy_eval(
     assert superseded["scanner_pending_promotion_id"] == "PROMO-NEW"
 
 
+def test_scheduler_deferred_claim_keeps_candidate_and_blocker_identity_separate(
+    monkeypatch,
+):
+    scheduler = kiwoom_sniper_v2.ScannerRuntimeScheduler(max_active=16)
+    blocker = scheduler.register_generation(
+        code="000001",
+        promotion_id="PROMO-BLOCKER",
+        record_id=1,
+        venue="KRX",
+        promotion_epoch=99.0,
+        attach_epoch=100.0,
+        observed_price=10_000,
+        source_signature="VALUE_TOP",
+    )
+    candidate = scheduler.register_generation(
+        code="000002",
+        promotion_id="PROMO-CANDIDATE",
+        record_id=2,
+        venue="KRX",
+        promotion_epoch=100.5,
+        attach_epoch=101.0,
+        observed_price=11_000,
+        source_signature="OPEN_TOP",
+    )
+    candidate_target = {
+        "id": 2,
+        "code": "000002",
+        "name": "candidate",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "effective_venue": "KRX",
+        "venue_resolution": "consistent_explicit:target.effective_venue",
+        "scanner_generation_id": candidate.item.generation.generation_id,
+    }
+    emitted = []
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "_emit_scanner_scheduler_event",
+        lambda **kwargs: emitted.append(kwargs),
+    )
+
+    decision = kiwoom_sniper_v2._scanner_scheduler_claim_target(
+        scheduler,
+        candidate_target,
+        lane=kiwoom_sniper_v2.ScannerLane.FAST_PRECHECK,
+        now_epoch=101.1,
+    )
+
+    assert decision.action == "not_next"
+    assert emitted[-1]["payload"]["code"] == "000002"
+    fields = emitted[-1]["fields"]
+    assert (
+        fields["scanner_generation_id"]
+        == candidate.item.generation.generation_id
+    )
+    assert (
+        fields["scanner_scheduler_claim_candidate_generation_id"]
+        == candidate.item.generation.generation_id
+    )
+    assert (
+        fields["scanner_scheduler_blocking_generation_id"]
+        == blocker.item.generation.generation_id
+    )
+    assert fields["scanner_scheduler_blocking_generation_code"] == "000001"
+    assert "attach_to_first_precheck_sec" not in fields
+
+
 def test_scheduler_reconciles_replaced_watch_before_new_capacity_registration(
     monkeypatch,
 ):

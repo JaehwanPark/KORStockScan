@@ -7513,6 +7513,45 @@ def _scanner_scheduler_claim_target(scheduler, target, *, lane, now_epoch):
         "not_next": "scalping_scanner_scheduler_claim_deferred",
         "missing": "scalping_scanner_scheduler_claim_missing",
     }
+    event_fields = dict(decision.fields)
+    if decision.action == "not_next" and decision.item is not None:
+        blocking_item = decision.item
+        # The event identity is the candidate whose claim was deferred.  Keep
+        # its generation fields canonical and namespace the EDF winner so
+        # candidate and blocking-generation latency cannot be mixed.
+        event_fields = {
+            **generation.timing_fields(now_epoch=float(now_epoch)),
+            "scanner_scheduler_lane": (
+                lane.value if isinstance(lane, ScannerLane) else str(lane)
+            ),
+            "scanner_scheduler_claim_candidate_generation_id": (
+                generation.generation_id
+            ),
+            "scanner_scheduler_claim_wait_sec": round(
+                max(0.0, float(now_epoch) - generation.attach_epoch),
+                6,
+            ),
+            "scanner_scheduler_blocking_generation_id": (
+                blocking_item.generation.generation_id
+            ),
+            "scanner_scheduler_blocking_generation_code": (
+                blocking_item.generation.code
+            ),
+            "scanner_scheduler_blocking_lane": blocking_item.lane.value,
+            "scanner_scheduler_blocking_owner": blocking_item.owner,
+            "scanner_scheduler_blocking_work_id": blocking_item.work_id,
+            "scanner_scheduler_blocking_deadline_epoch": round(
+                blocking_item.deadline_epoch,
+                6,
+            ),
+            "scanner_scheduler_blocking_queue_wait_sec": round(
+                max(0.0, float(now_epoch) - blocking_item.enqueued_epoch),
+                6,
+            ),
+            "scanner_scheduler_blocking_precheck_phase": (
+                blocking_item.precheck_phase
+            ),
+        }
     _emit_scanner_scheduler_event(
         payload=target,
         target=target,
@@ -7520,7 +7559,7 @@ def _scanner_scheduler_claim_target(scheduler, target, *, lane, now_epoch):
             decision.action, "scalping_scanner_scheduler_claim_rejected"
         ),
         fields={
-            **decision.fields,
+            **event_fields,
             "scheduler_action": decision.action,
             "scheduler_reason": decision.reason,
         },
