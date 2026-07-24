@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from datetime import time
+from datetime import datetime, time, timezone
 
 from src.scanners import scalping_scanner
 from src.utils import kiwoom_utils
@@ -417,9 +417,7 @@ def test_promote_candidates_limits_new_codes_to_remaining_active_slots(monkeypat
     )
 
     assert codes == ["000001"]
-    assert _event_payloads(
-        event_bus, "SCALPING_SCANNER_PROMOTION_BATCH_PENDING"
-    ) == [
+    assert _event_payloads(event_bus, "SCALPING_SCANNER_PROMOTION_BATCH_PENDING") == [
         {
             "codes": ["000001"],
             "source": "scalping_scanner_promote",
@@ -2731,6 +2729,57 @@ def test_realtime_rank_change_sign_authority_reaches_scanner_payload(monkeypatch
         payload["rank_change_score_policy"]
         == "positive_signed_rank_delta_only_raw_rank_sign_unverified"
     )
+    assert payload["effective_venue"] == "KRX"
+    assert payload["venue_resolution"] == "scanner_session_clock:krx_regular"
+    assert payload["market_session_bucket"] == "krx_regular"
+
+
+def test_scanner_runtime_target_payload_keeps_session_cohorts_separate():
+    target = {
+        "Code": "005930",
+        "Name": "SAMSUNG",
+        "Price": 70000,
+        "Source": "REALTIME_RANK_START",
+    }
+    guard = {
+        "blocked": False,
+        "reason": "new_realtime_rank_start_source",
+        "source_signature": "REALTIME_RANK_START",
+    }
+
+    def at(hour, minute):
+        return datetime(2026, 7, 24, hour, minute).timestamp()
+
+    premarket = scalping_scanner._scanner_runtime_target_payload(
+        target, guard, now_ts=at(8, 20)
+    )
+    krx = scalping_scanner._scanner_runtime_target_payload(
+        target, guard, now_ts=at(10, 0)
+    )
+    nxt = scalping_scanner._scanner_runtime_target_payload(
+        target, guard, now_ts=at(16, 30)
+    )
+    unsupported = scalping_scanner._scanner_runtime_target_payload(
+        target, guard, now_ts=at(15, 45)
+    )
+
+    assert premarket["effective_venue"] == "PREMARKET_KRX_LIKE"
+    assert premarket["market_session_bucket"] == "krx_like_premarket"
+    assert krx["effective_venue"] == "KRX"
+    assert krx["market_session_bucket"] == "krx_regular"
+    assert nxt["effective_venue"] == "NXT"
+    assert nxt["market_session_bucket"] == "nxt"
+    assert unsupported["effective_venue"] == "UNKNOWN"
+    assert unsupported["market_session_bucket"] == "outside_supported_session"
+
+
+def test_scalping_session_venue_provenance_normalizes_aware_datetime_to_kst():
+    utc_time = datetime(2026, 7, 24, 7, 30, tzinfo=timezone.utc)
+
+    fields = scalping_scanner.scalping_session_venue_provenance(utc_time)
+
+    assert fields["effective_venue"] == "NXT"
+    assert fields["market_session_bucket"] == "nxt"
 
 
 def test_ka00198_realtime_rank_change_preserves_negative_sign(monkeypatch):

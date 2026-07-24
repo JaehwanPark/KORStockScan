@@ -578,11 +578,7 @@ def test_periodic_account_sync_does_not_invent_pnl_for_missing_sell_receipt(
     assert record.status == "COMPLETED"
     assert record.sell_price is None
     assert record.profit_rate is None
-    assert sniper_sync.ACTIVE_TARGETS[0]["status"] == "COMPLETED"
-    assert (
-        sniper_sync.ACTIVE_TARGETS[0]["sell_completion_reconciliation_state"]
-        == "broker_holding_absent_fill_receipt_missing"
-    )
+    assert sniper_sync.ACTIVE_TARGETS == []
     assert "123456" not in sniper_sync.HIGHEST_PRICES
     assert len(emitted) == 1
     assert emitted[0][0][3] == "sell_completion_reconciliation_gap"
@@ -600,6 +596,171 @@ def test_periodic_account_sync_does_not_invent_pnl_for_missing_sell_receipt(
             "reason": "periodic_sync_completed_no_broker_holding",
         }
     ]
+
+
+def test_periodic_account_sync_quarantines_prebaseline_scalping_ghost(
+    monkeypatch,
+):
+    record = type(
+        "Record",
+        (),
+        {
+            "id": 1,
+            "rec_date": datetime(2026, 3, 17).date(),
+            "stock_code": "412350",
+            "stock_name": "레이저쎌",
+            "status": "HOLDING",
+            "strategy": "SCALPING",
+            "buy_price": 10010.0,
+            "buy_qty": 1,
+            "buy_time": datetime(2026, 3, 17, 10, 0),
+            "sell_price": None,
+            "sell_time": None,
+            "profit_rate": None,
+            "scale_in_locked": False,
+        },
+    )()
+
+    sniper_sync.KIWOOM_TOKEN = "token"
+    sniper_sync.DB = _SyncDB([record], [])
+    sniper_sync.ACTIVE_TARGETS = [{"id": 1, "code": "412350", "status": "HOLDING"}]
+    sniper_sync.HIGHEST_PRICES = {"412350": 10100}
+    sniper_sync.STATE_LOCK = _DummyLock()
+    monkeypatch.setattr(
+        sniper_sync.kiwoom_utils,
+        "get_account_balance_kt00005",
+        lambda token: ([], {"KRX"}),
+    )
+    emitted = []
+    monkeypatch.setattr(
+        sniper_sync,
+        "emit_pipeline_event",
+        lambda *args, **kwargs: emitted.append((args, kwargs)),
+    )
+    removals = []
+    monkeypatch.setattr(
+        sniper_sync,
+        "_remove_manual_control_exclusion_for_completed_holding",
+        lambda code, *, reason: removals.append((code, reason)),
+    )
+
+    sniper_sync.periodic_account_sync()
+
+    assert record.status == "EXPIRED"
+    assert sniper_sync.ACTIVE_TARGETS[0]["status"] == "EXPIRED"
+    assert (
+        sniper_sync.ACTIVE_TARGETS[0]["prebaseline_scalping_ghost_quarantined"] is True
+    )
+    assert "412350" not in sniper_sync.HIGHEST_PRICES
+    assert emitted == []
+    assert removals == [
+        ("412350", "periodic_sync_prebaseline_scalping_ghost_quarantined")
+    ]
+
+
+def test_prebaseline_scalping_record_is_not_quarantined_when_broker_holds_it():
+    record = type(
+        "Record",
+        (),
+        {
+            "id": 1,
+            "rec_date": datetime(2026, 3, 17).date(),
+            "stock_code": "412350",
+            "stock_name": "레이저쎌",
+            "status": "HOLDING",
+            "strategy": "SCALPING",
+        },
+    )()
+
+    assert (
+        sniper_sync._quarantine_prebaseline_scalping_ghost(
+            record,
+            real_codes={"412350": {"qty": 1}},
+            broker_absence_verified=True,
+            source="test",
+        )
+        is False
+    )
+    assert record.status == "HOLDING"
+
+
+def test_prebaseline_rec_date_with_recent_buy_time_is_not_quarantined():
+    record = type(
+        "Record",
+        (),
+        {
+            "id": 1,
+            "rec_date": datetime(2026, 3, 17).date(),
+            "stock_code": "412350",
+            "stock_name": "레이저쎌",
+            "status": "HOLDING",
+            "strategy": "SCALPING",
+            "buy_time": datetime(2026, 7, 20, 10, 0),
+        },
+    )()
+
+    assert (
+        sniper_sync._quarantine_prebaseline_scalping_ghost(
+            record,
+            real_codes={},
+            broker_absence_verified=True,
+            source="test",
+        )
+        is False
+    )
+    assert record.status == "HOLDING"
+
+
+def test_prebaseline_scalping_record_is_not_quarantined_without_exchange_proof():
+    record = type(
+        "Record",
+        (),
+        {
+            "id": 1,
+            "rec_date": datetime(2026, 3, 17).date(),
+            "stock_code": "412350",
+            "stock_name": "레이저쎌",
+            "status": "HOLDING",
+            "strategy": "SCALPING",
+        },
+    )()
+
+    assert (
+        sniper_sync._quarantine_prebaseline_scalping_ghost(
+            record,
+            real_codes={},
+            broker_absence_verified=False,
+            source="test",
+        )
+        is False
+    )
+    assert record.status == "HOLDING"
+
+
+def test_prebaseline_scalping_buy_order_is_not_quarantined_as_missing_holding():
+    record = type(
+        "Record",
+        (),
+        {
+            "id": 1,
+            "rec_date": datetime(2026, 3, 17).date(),
+            "stock_code": "412350",
+            "stock_name": "레이저쎌",
+            "status": "BUY_ORDERED",
+            "strategy": "SCALPING",
+        },
+    )()
+
+    assert (
+        sniper_sync._quarantine_prebaseline_scalping_ghost(
+            record,
+            real_codes={},
+            broker_absence_verified=True,
+            source="test",
+        )
+        is False
+    )
+    assert record.status == "BUY_ORDERED"
 
 
 def test_periodic_account_sync_recovers_unique_exact_sell_execution(monkeypatch):
@@ -810,6 +971,7 @@ def test_periodic_account_sync_does_not_remove_manual_control_exclusion_on_db_er
 
     assert removals == []
     assert emitted == []
+    assert len(sniper_sync.ACTIVE_TARGETS) == 1
 
 
 def test_periodic_account_sync_preserves_original_buy_time_for_recovered_fill(
@@ -1097,6 +1259,75 @@ def test_sync_balance_with_db_requests_restart_on_auth_failure(tmp_path, monkeyp
 
     assert restart_flag.exists() is True
     assert invalidations == ["auth_restart:인증 실패(8005)"]
+
+
+def test_startup_sync_quarantines_prebaseline_scalping_ghosts(monkeypatch):
+    records = [
+        type(
+            "Record",
+            (),
+            {
+                "id": 1,
+                "rec_date": datetime(2026, 3, 17).date(),
+                "stock_code": "412350",
+                "stock_name": "레이저쎌",
+                "status": "HOLDING",
+                "strategy": "SCALPING",
+                "buy_price": 10010.0,
+                "buy_qty": 1,
+                "buy_time": datetime(2026, 3, 17, 10, 0),
+                "sell_time": None,
+            },
+        )(),
+        type(
+            "Record",
+            (),
+            {
+                "id": 7,
+                "rec_date": datetime(2026, 3, 17).date(),
+                "stock_code": "393890",
+                "stock_name": "더블유씨피",
+                "status": "SELL_ORDERED",
+                "strategy": "SCALPING",
+                "buy_price": 0.0,
+                "buy_qty": 66,
+                "buy_time": None,
+                "sell_time": None,
+            },
+        )(),
+    ]
+    sniper_sync.KIWOOM_TOKEN = "token"
+    sniper_sync.DB = _SyncDB(records, [])
+    sniper_sync.ACTIVE_TARGETS = [
+        {"id": record.id, "code": record.stock_code, "status": record.status}
+        for record in records
+    ]
+    sniper_sync.HIGHEST_PRICES = {"412350": 10100, "393890": 10000}
+    sniper_sync.STATE_LOCK = _DummyLock()
+    monkeypatch.setattr(
+        sniper_sync.kiwoom_orders,
+        "get_my_inventory",
+        lambda token: ([], {"KRX"}),
+    )
+    removals = []
+    monkeypatch.setattr(
+        sniper_sync,
+        "_remove_manual_control_exclusion_for_completed_holding",
+        lambda code, *, reason: removals.append((code, reason)),
+    )
+
+    sniper_sync.sync_balance_with_db()
+
+    assert [record.status for record in records] == ["EXPIRED", "EXPIRED"]
+    assert [target["status"] for target in sniper_sync.ACTIVE_TARGETS] == [
+        "EXPIRED",
+        "EXPIRED",
+    ]
+    assert sniper_sync.HIGHEST_PRICES == {}
+    assert removals == [
+        ("412350", "startup_sync_prebaseline_scalping_ghost_quarantined"),
+        ("393890", "startup_sync_prebaseline_scalping_ghost_quarantined"),
+    ]
 
 
 def test_auth_restart_cooldown_still_invalidates_token_cache(tmp_path, monkeypatch):

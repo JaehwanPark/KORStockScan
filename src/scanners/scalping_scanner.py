@@ -32,6 +32,7 @@ from src.engine.sniper_time import (
     SCALPING_BUY_WINDOWS,
     describe_scalping_buy_windows,
     is_scalping_buy_time_allowed,
+    scalping_session_venue_provenance,
 )
 from src.utils.constants import TRADING_RULES
 from src.utils.pipeline_event_logger import emit_pipeline_event
@@ -2786,6 +2787,8 @@ def _scanner_runtime_target_payload(
     target, source_guard, record_id=None, *, now_ts=None
 ):
     fields = _scanner_event_fields(target, source_guard)
+    observed_ts = float(time.time() if now_ts is None else now_ts)
+    venue_fields = scalping_session_venue_provenance(observed_ts)
     return {
         "record_id": record_id,
         "code": str(target.get("Code") or "").strip()[:6],
@@ -2829,6 +2832,7 @@ def _scanner_runtime_target_payload(
             "distance_from_intraday_high_pct"
         ),
         "negative_display_rebound": bool(fields.get("negative_display_rebound")),
+        **venue_fields,
         "runtime_effect": True,
         "actual_order_submitted": False,
         "broker_order_forbidden": True,

@@ -208,11 +208,28 @@ def recover_probe_runtime_bundle_for_stock(
             source_quality_recheck = _safe_bool(
                 bundle.get("source_quality_recheck_pending")
             )
+            confirmation_count = max(
+                0, _safe_int(bundle.get("probe_confirmation_count"), 0)
+            )
+            scale_in_forbidden = not source_quality_recheck
+            probe_expand_forbidden = not source_quality_recheck
             bundle.update(
                 {
                     "phase": "aborted",
                     "reason": close_reason,
                     "soft_abort": source_quality_recheck,
+                    "entry_split_probe_scale_in_forbidden": scale_in_forbidden,
+                    "probe_expand_forbidden": probe_expand_forbidden,
+                    "probe_confirmation_count": confirmation_count,
+                    "probe_confirmation_last_at": bundle.get(
+                        "probe_confirmation_last_at", 0.0
+                    ),
+                    "probe_confirmation_last_state": bundle.get(
+                        "probe_confirmation_last_state", "UNKNOWN"
+                    ),
+                    "probe_confirmation_last_signature": bundle.get(
+                        "probe_confirmation_last_signature", ""
+                    ),
                     "scale_in_recheck_allowed": source_quality_recheck,
                     "scale_in_recheck_reason": (
                         f"{close_reason}:source_quality_recovery"
@@ -237,9 +254,16 @@ def recover_probe_runtime_bundle_for_stock(
                     "entry_split_probe_phase": "aborted",
                     "entry_split_probe_bundle_id": bundle_id,
                     "entry_split_probe_abort_reason": close_reason,
-                    "entry_split_probe_scale_in_forbidden": (
-                        not source_quality_recheck
-                    ),
+                    "entry_split_probe_scale_in_forbidden": scale_in_forbidden,
+                    "probe_expand_forbidden": probe_expand_forbidden,
+                    "probe_confirmation_count": confirmation_count,
+                    "probe_confirmation_last_at": bundle["probe_confirmation_last_at"],
+                    "probe_confirmation_last_state": bundle[
+                        "probe_confirmation_last_state"
+                    ],
+                    "probe_confirmation_last_signature": bundle[
+                        "probe_confirmation_last_signature"
+                    ],
                     "entry_split_probe_soft_abort": source_quality_recheck,
                     "entry_split_probe_scale_in_recheck_allowed": (
                         source_quality_recheck
@@ -287,6 +311,8 @@ def recover_probe_runtime_bundle_for_stock(
             bundle["phase"] = "aborted"
             bundle["reason"] = "probe_restart_recovery_quantity_mismatch"
             bundle["recovered_actual_qty"] = actual_qty
+            bundle["entry_split_probe_scale_in_forbidden"] = True
+            bundle["probe_expand_forbidden"] = True
             bundle["updated_at"] = datetime.now(timezone.utc).isoformat()
             payload.setdefault("bundles", {})[bundle_id] = bundle
             _write_probe_runtime_state(payload)
@@ -298,6 +324,7 @@ def recover_probe_runtime_bundle_for_stock(
                         "probe_restart_recovery_quantity_mismatch"
                     ),
                     "entry_split_probe_scale_in_forbidden": True,
+                    "probe_expand_forbidden": True,
                 }
             )
             return {
@@ -307,6 +334,19 @@ def recover_probe_runtime_bundle_for_stock(
             }
 
         soft_abort = _safe_bool(bundle.get("soft_abort"))
+        scale_in_forbidden = (
+            _safe_bool(bundle.get("entry_split_probe_scale_in_forbidden"))
+            if "entry_split_probe_scale_in_forbidden" in bundle
+            else bool(phase != "complete" and not soft_abort)
+        )
+        probe_expand_forbidden = (
+            _safe_bool(bundle.get("probe_expand_forbidden"))
+            if "probe_expand_forbidden" in bundle
+            else bool(phase == "aborted" and not soft_abort)
+        )
+        confirmation_count = max(
+            0, _safe_int(bundle.get("probe_confirmation_count"), 0)
+        )
         recovery_fields = {
             "entry_split_probe_phase": phase,
             "entry_split_probe_bundle_id": bundle_id,
@@ -328,8 +368,15 @@ def recover_probe_runtime_bundle_for_stock(
                 "residual_submitted",
                 "residual_partial_submitted",
             },
-            "entry_split_probe_scale_in_forbidden": bool(
-                phase != "complete" and not soft_abort
+            "entry_split_probe_scale_in_forbidden": scale_in_forbidden,
+            "probe_expand_forbidden": probe_expand_forbidden,
+            "probe_confirmation_count": confirmation_count,
+            "probe_confirmation_last_at": bundle.get("probe_confirmation_last_at", 0.0),
+            "probe_confirmation_last_state": bundle.get(
+                "probe_confirmation_last_state", "UNKNOWN"
+            ),
+            "probe_confirmation_last_signature": bundle.get(
+                "probe_confirmation_last_signature", ""
             ),
             "entry_split_probe_soft_abort": soft_abort,
             "entry_split_probe_scale_in_recheck_allowed": _safe_bool(
@@ -351,9 +398,7 @@ def recover_probe_runtime_bundle_for_stock(
                 "source_quality_recheck_reason"
             ),
             "entry_split_probe_source_quality_recheck_pending": False,
-            "entry_split_probe_ai_action_at_submit": bundle.get(
-                "ai_action_at_submit"
-            ),
+            "entry_split_probe_ai_action_at_submit": bundle.get("ai_action_at_submit"),
             "entry_split_probe_ai_result_source_at_submit": bundle.get(
                 "ai_result_source_at_submit"
             ),
@@ -378,6 +423,12 @@ def recover_probe_runtime_bundle_for_stock(
             ]
         bundle["restart_recovered_at"] = datetime.now(timezone.utc).isoformat()
         bundle["recovered_actual_qty"] = actual_qty
+        bundle["entry_split_probe_scale_in_forbidden"] = scale_in_forbidden
+        bundle["probe_expand_forbidden"] = probe_expand_forbidden
+        bundle["probe_confirmation_count"] = confirmation_count
+        bundle.setdefault("probe_confirmation_last_at", 0.0)
+        bundle.setdefault("probe_confirmation_last_state", "UNKNOWN")
+        bundle.setdefault("probe_confirmation_last_signature", "")
         payload.setdefault("bundles", {})[bundle_id] = bundle
         _write_probe_runtime_state(payload)
         return {

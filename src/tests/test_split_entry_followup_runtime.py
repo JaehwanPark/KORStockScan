@@ -6,6 +6,7 @@ import pytest
 
 import src.engine.sniper_execution_receipts as receipts
 import src.engine.sniper_state_handlers as state_handlers
+import src.engine.sniper_sync as sniper_sync
 from src.engine.scalping import entry_split_order_plan as split_plan
 from src.utils.threshold_cycle_registry import threshold_family_for_stage
 
@@ -322,6 +323,8 @@ def test_probe_receipt_marks_fill_once_and_schedules_residual(monkeypatch, tmp_p
     assert stock["entry_filled_qty"] == 1
     assert stock["entry_split_probe_phase"] == "probe_filled"
     assert stock["entry_split_probe_fill_price"] == 10010
+    assert stock["entry_split_probe_scale_in_forbidden"] is True
+    assert stock["probe_expand_forbidden"] is False
     assert [stage for stage, _ in events].count("probe_filled") == 1
     probe_fields = next(fields for stage, fields in events if stage == "probe_filled")
     assert probe_fields["effective_venue"] == "KRX"
@@ -332,7 +335,10 @@ def test_probe_receipt_marks_fill_once_and_schedules_residual(monkeypatch, tmp_p
     )
     assert scheduled == [(stock, "123456")]
     runtime_state = split_plan._load_json(split_plan.PROBE_RUNTIME_STATE_PATH)
-    assert runtime_state["bundles"]["123456-probe-test"]["phase"] == "probe_filled"
+    persisted = runtime_state["bundles"]["123456-probe-test"]
+    assert persisted["phase"] == "probe_filled"
+    assert persisted["entry_split_probe_scale_in_forbidden"] is True
+    assert persisted["probe_expand_forbidden"] is False
 
 
 def test_probe_bundle_completion_rebaselines_peak_before_fast_monitor(monkeypatch):
@@ -1014,6 +1020,7 @@ def test_terminal_partial_probe_bundle_releases_scale_in_lock(monkeypatch, tmp_p
         "entry_split_probe_bundle_id": "123456-probe-partial-complete",
         "entry_split_probe_requested_qty": 10,
         "entry_split_probe_scale_in_forbidden": True,
+        "probe_expand_forbidden": False,
         "entry_split_probe_reward_target_price": 10_500,
         "pending_entry_orders": [
             {
@@ -1035,6 +1042,7 @@ def test_terminal_partial_probe_bundle_releases_scale_in_lock(monkeypatch, tmp_p
     assert stock["entry_split_probe_partial_complete_qty"] == 4
     assert stock["entry_fill_quality"] == "PARTIAL_FILL"
     assert "entry_split_probe_scale_in_forbidden" not in stock
+    assert "probe_expand_forbidden" not in stock
     assert "entry_requested_qty" not in stock
     assert "requested_buy_qty" not in stock
     assert "order_time" not in stock
@@ -1718,22 +1726,44 @@ def test_probe_residual_stale_quote_defers_until_ttl_without_broker_submit(
 
 
 def test_probe_residual_directional_weak_timeout_remains_terminal_with_action_guard(
-    monkeypatch,
+    monkeypatch, tmp_path
 ):
+    events = []
+    monkeypatch.setattr(
+        split_plan,
+        "PROBE_RUNTIME_STATE_PATH",
+        tmp_path / "entry_split_probe_runtime_state.json",
+    )
     monkeypatch.setattr(
         state_handlers,
         "_rising_missed_ai_action_guard_active",
         lambda **_kwargs: True,
     )
     monkeypatch.setattr(
-        state_handlers, "_log_entry_pipeline", lambda *_args, **_kwargs: None
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: events.append((stage, fields)),
+    )
+    split_plan.update_probe_runtime_bundle(
+        "123456-probe-directional-weak",
+        phase="probe_filled",
+        code="123456",
+        target_id=7,
+        requested_qty=41,
+        fill_qty=1,
     )
     stock = {
+        "id": 7,
         "status": "HOLDING",
         "buy_qty": 1,
         "entry_filled_qty": 1,
+        "entry_split_probe_bundle_id": "123456-probe-directional-weak",
         "entry_split_probe_requested_qty": 41,
         "entry_split_probe_direction_reason": "post_probe_multi_group_weak",
+        "probe_confirmation_count": 1,
+        "probe_confirmation_last_at": 99.75,
+        "probe_confirmation_last_state": "STRONG",
+        "probe_confirmation_last_signature": "price+tape",
     }
 
     state_handlers._abort_entry_split_probe_residual(
@@ -1748,6 +1778,68 @@ def test_probe_residual_directional_weak_timeout_remains_terminal_with_action_gu
     assert stock["entry_split_probe_scale_in_forbidden"] is True
     assert stock["probe_expand_forbidden"] is True
     assert stock["entry_split_probe_source_quality_recheck_released"] is False
+    persisted = split_plan._load_json(split_plan.PROBE_RUNTIME_STATE_PATH)["bundles"][
+        "123456-probe-directional-weak"
+    ]
+    assert persisted["phase"] == "aborted"
+    assert persisted["entry_split_probe_scale_in_forbidden"] is True
+    assert persisted["probe_expand_forbidden"] is True
+    assert persisted["probe_confirmation_count"] == 1
+    assert persisted["probe_confirmation_last_state"] == "STRONG"
+    stage, event = events[-1]
+    assert stage == "residual_blocked"
+    assert event["entry_split_probe_phase"] == "aborted"
+    assert event["probe_confirmation_count"] == 1
+    assert event["probe_confirmation_required_count"] == 2
+    assert event["probe_expand_forbidden"] is True
+    assert event["entry_split_probe_scale_in_forbidden"] is True
+
+
+def test_probe_restart_recovery_emits_structured_guard_state(monkeypatch):
+    events = []
+    monkeypatch.setattr(
+        sniper_sync,
+        "emit_pipeline_event",
+        lambda *args, **kwargs: events.append((args, kwargs)),
+    )
+    target = {
+        "id": 23735,
+        "name": "SK이노베이션",
+        "code": "096770",
+        "entry_split_probe_phase": "aborted",
+        "entry_split_probe_bundle_id": "096770-probe-runtime",
+        "entry_split_probe_abort_reason": "residual_revalidation_timeout",
+        "probe_confirmation_count": 1,
+        "probe_confirmation_last_state": "STRONG",
+        "probe_expand_forbidden": True,
+        "entry_split_probe_scale_in_forbidden": True,
+    }
+
+    sniper_sync._emit_probe_recovery_event(
+        target,
+        {
+            "recovered": True,
+            "reason": "incomplete_bundle_restored",
+            "phase": "aborted",
+        },
+    )
+
+    assert len(events) == 1
+    args, kwargs = events[0]
+    assert args[:4] == (
+        "HOLDING_PIPELINE",
+        "SK이노베이션",
+        "096770",
+        "probe_restart_recovered",
+    )
+    assert kwargs["record_id"] == 23735
+    fields = kwargs["fields"]
+    assert fields["probe_confirmation_count"] == 1
+    assert fields["probe_confirmation_required_count"] == 2
+    assert fields["probe_expand_forbidden"] is True
+    assert fields["entry_split_probe_scale_in_forbidden"] is True
+    assert fields["decision_authority"] == "probe_restart_state_reconciliation"
+    assert fields["actual_order_submitted"] is False
 
 
 def test_rising_missed_total_qty_owns_scout_state_and_completed_bundle_stops_upgrade():
@@ -2046,12 +2138,15 @@ def test_probe_residual_orders_are_cancelled_before_hard_exit_sell(monkeypatch):
     assert stock["entry_split_probe_phase"] == "aborted"
     assert stock["entry_split_probe_abort_reason"] == "exit_authority_precedence"
     assert stock["entry_split_probe_scale_in_forbidden"] is True
+    assert stock["probe_expand_forbidden"] is True
     assert len(persisted_updates) == 1
     persisted_bundle_id, persisted_fields = persisted_updates[0]
     assert persisted_bundle_id == "123456-probe-exit"
     assert persisted_fields["phase"] == "aborted"
     assert persisted_fields["target_id"] == 7
     assert persisted_fields["reason"] == "exit_authority_precedence"
+    assert persisted_fields["entry_split_probe_scale_in_forbidden"] is True
+    assert persisted_fields["probe_expand_forbidden"] is True
     assert persisted_fields["exit_rule"] == "hard_stop"
     assert persisted_fields["exit_requested_at"]
 

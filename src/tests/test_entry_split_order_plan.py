@@ -1534,6 +1534,12 @@ def test_probe_runtime_restart_recovery_restores_bundle_and_fails_closed_on_mism
         ai_result_source_at_submit="live",
         ai_confirmed_at_submit=99.8,
         ai_action_source_at_submit="latest_stock_ai",
+        probe_confirmation_count=1,
+        probe_confirmation_last_at=101.1,
+        probe_confirmation_last_state="STRONG",
+        probe_confirmation_last_signature="price+tape",
+        entry_split_probe_scale_in_forbidden=True,
+        probe_expand_forbidden=False,
         residual_orders=[
             {"tag": "planned_only", "qty": 2, "status": "OPEN"},
             {"tag": "submitted", "qty": 2, "status": "OPEN", "ord_no": "R1"},
@@ -1568,6 +1574,11 @@ def test_probe_runtime_restart_recovery_restores_bundle_and_fails_closed_on_mism
     assert recovered_stock["entry_split_probe_phase"] == "probe_filled"
     assert recovered_stock["entry_split_probe_continuation"] == continuation
     assert recovered_stock["entry_split_probe_scale_in_forbidden"] is True
+    assert recovered_stock["probe_expand_forbidden"] is False
+    assert recovered_stock["probe_confirmation_count"] == 1
+    assert recovered_stock["probe_confirmation_last_at"] == 101.1
+    assert recovered_stock["probe_confirmation_last_state"] == "STRONG"
+    assert recovered_stock["probe_confirmation_last_signature"] == "price+tape"
     assert recovered_stock["entry_split_probe_ai_action_at_submit"] == "WAIT"
     assert recovered_stock["entry_split_probe_ai_result_source_at_submit"] == "live"
     assert recovered_stock["entry_split_probe_ai_confirmed_at_submit"] == 99.8
@@ -1590,9 +1601,16 @@ def test_probe_runtime_restart_recovery_restores_bundle_and_fails_closed_on_mism
     )
     assert mismatch["circuit_open"] is True
     assert mismatched_stock["entry_split_probe_phase"] == "aborted"
+    assert mismatched_stock["entry_split_probe_scale_in_forbidden"] is True
+    assert mismatched_stock["probe_expand_forbidden"] is True
     state = split_plan._load_json(state_path)
     assert state["circuit_open"] is True
     assert state["circuit_reason"] == "probe_restart_recovery_quantity_mismatch"
+    assert (
+        state["bundles"]["123456-probe-restart"]["entry_split_probe_scale_in_forbidden"]
+        is True
+    )
+    assert state["bundles"]["123456-probe-restart"]["probe_expand_forbidden"] is True
 
 
 def test_probe_runtime_restart_clears_pending_recheck_without_opening_circuit(
@@ -1628,10 +1646,17 @@ def test_probe_runtime_restart_clears_pending_recheck_without_opening_circuit(
     }
     assert stock["entry_split_probe_phase"] == "aborted"
     assert stock["entry_requested_qty"] == 1
+    assert stock["entry_split_probe_scale_in_forbidden"] is True
+    assert stock["probe_expand_forbidden"] is True
+    assert stock["probe_confirmation_count"] == 0
+    assert stock["probe_confirmation_last_state"] == "UNKNOWN"
     assert "entry_split_probe_direction_state" not in stock
     state = split_plan._load_json(state_path)
     assert state["circuit_open"] is False
-    assert state["bundles"]["123456-probe-recheck-restart"]["phase"] == "aborted"
+    persisted = state["bundles"]["123456-probe-recheck-restart"]
+    assert persisted["phase"] == "aborted"
+    assert persisted["entry_split_probe_scale_in_forbidden"] is True
+    assert persisted["probe_expand_forbidden"] is True
 
 
 def test_probe_runtime_restart_releases_source_quality_recheck_for_scale_in(
@@ -1666,6 +1691,7 @@ def test_probe_runtime_restart_releases_source_quality_recheck_for_scale_in(
     assert stock["entry_split_probe_phase"] == "aborted"
     assert stock["entry_split_probe_soft_abort"] is True
     assert stock["entry_split_probe_scale_in_forbidden"] is False
+    assert stock["probe_expand_forbidden"] is False
     assert stock["entry_split_probe_scale_in_recheck_allowed"] is True
     assert stock["entry_split_probe_source_quality_recheck_released"] is True
     assert stock["entry_split_probe_source_quality_recheck_unfilled_qty"] == 1012
@@ -1692,9 +1718,7 @@ def test_probe_runtime_restart_preserves_persisted_soft_abort_quantity_truth(
         ),
         source_quality_recheck_released=True,
         source_quality_recheck_unfilled_qty=1012,
-        source_quality_recheck_reason=(
-            "post_probe_stale_or_conflicted_fresh_quote"
-        ),
+        source_quality_recheck_reason=("post_probe_stale_or_conflicted_fresh_quote"),
     )
     stock = {
         "id": 117,
@@ -1707,10 +1731,60 @@ def test_probe_runtime_restart_preserves_persisted_soft_abort_quantity_truth(
 
     assert result["phase"] == "aborted"
     assert stock["entry_split_probe_scale_in_forbidden"] is False
+    assert stock["probe_expand_forbidden"] is False
     assert stock["entry_split_probe_scale_in_recheck_allowed"] is True
     assert stock["entry_requested_qty"] == 1
     assert stock["requested_buy_qty"] == 1
     assert stock["entry_split_probe_source_quality_recheck_unfilled_qty"] == 1012
+    persisted = split_plan._load_json(state_path)["bundles"]["001520-probe-soft-abort"]
+    assert persisted["entry_split_probe_scale_in_forbidden"] is False
+    assert persisted["probe_expand_forbidden"] is False
+
+
+def test_probe_runtime_restart_restores_terminal_abort_guards_and_confirmation(
+    monkeypatch, tmp_path
+):
+    state_path = tmp_path / "entry_split_probe_runtime_state.json"
+    monkeypatch.setattr(split_plan, "PROBE_RUNTIME_STATE_PATH", state_path)
+    now = datetime(2026, 7, 24, 12, 0, tzinfo=timezone(timedelta(hours=9)))
+    split_plan.update_probe_runtime_bundle(
+        "096770-probe-hard-abort",
+        phase="aborted",
+        now=now,
+        code="096770",
+        target_id=23735,
+        requested_qty=8,
+        fill_qty=1,
+        reason="residual_revalidation_timeout",
+        soft_abort=False,
+        probe_confirmation_count=1,
+        probe_confirmation_last_at=100.25,
+        probe_confirmation_last_state="STRONG",
+        probe_confirmation_last_signature="price+tape",
+    )
+    stock = {
+        "id": 23735,
+        "code": "096770",
+        "buy_qty": 1,
+        "status": "HOLDING",
+    }
+
+    result = split_plan.recover_probe_runtime_bundle_for_stock(stock, now=now)
+
+    assert result == {
+        "recovered": True,
+        "reason": "incomplete_bundle_restored",
+        "phase": "aborted",
+    }
+    assert stock["entry_split_probe_scale_in_forbidden"] is True
+    assert stock["probe_expand_forbidden"] is True
+    assert stock["probe_confirmation_count"] == 1
+    assert stock["probe_confirmation_last_at"] == 100.25
+    assert stock["probe_confirmation_last_state"] == "STRONG"
+    assert stock["probe_confirmation_last_signature"] == "price+tape"
+    persisted = split_plan._load_json(state_path)["bundles"]["096770-probe-hard-abort"]
+    assert persisted["entry_split_probe_scale_in_forbidden"] is True
+    assert persisted["probe_expand_forbidden"] is True
 
 
 def test_probe_runtime_restart_ignores_partial_complete_bundle(monkeypatch, tmp_path):

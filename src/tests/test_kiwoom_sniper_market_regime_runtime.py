@@ -538,6 +538,10 @@ def test_scalping_scanner_promoted_target_attaches_active_watching(monkeypatch):
             "scanner_promotion_reason": "rank_jump_acceleration",
             "scanner_promotion_emitted_epoch": "1000.000",
             "source_signature": "REALTIME_RANK_START",
+            "venue": "KRX",
+            "effective_venue": "KRX",
+            "venue_resolution": "scanner_session_clock:krx_regular",
+            "market_session_bucket": "krx_regular",
             "current_price_observed": 70000,
             "price_delta_since_first_seen_pct": "0.50",
             "scanner_source_family": "scalping_scanner_rising_start_source_v1",
@@ -585,11 +589,11 @@ def test_scalping_scanner_promoted_target_attaches_active_watching(monkeypatch):
     assert emitted[-1]["fields"]["runtime_target_attach_outcome"] == "attached"
     assert emitted[-1]["fields"]["actual_order_submitted"] is False
     assert emitted[-1]["fields"]["broker_order_forbidden"] is True
-    assert emitted[-1]["fields"]["venue"] == "UNKNOWN"
-    assert emitted[-1]["fields"]["effective_venue"] == "UNKNOWN"
+    assert emitted[-1]["fields"]["venue"] == "KRX"
+    assert emitted[-1]["fields"]["effective_venue"] == "KRX"
     assert (
         emitted[-1]["fields"]["venue_resolution"]
-        == "missing_tradable_explicit_venue"
+        == "consistent_explicit:payload.effective_venue,payload.venue"
     )
     assert emitted[-1]["fields"]["rank_change"] == -12
     assert emitted[-1]["fields"]["rank_change_sign"] == "-"
@@ -652,9 +656,7 @@ def test_scanner_runtime_target_event_fields_preserve_premarket_cohort():
         reason="scanner_runtime_target_attach",
         target={
             "code": "096770",
-            "tp1_context": {
-                "rising_missed_effective_venue": "PREMARKET_KRX_LIKE"
-            },
+            "tp1_context": {"rising_missed_effective_venue": "PREMARKET_KRX_LIKE"},
         },
     )
 
@@ -6205,15 +6207,9 @@ def test_scanner_fast_precheck_signed_tape_retention_skips_budget_eviction():
 def test_scanner_fast_precheck_ws_backoff_retains_then_evicts_after_recovery_window(
     monkeypatch,
 ):
-    monkeypatch.setenv(
-        "KORSTOCKSCAN_SCANNER_WS_BACKOFF_WATCH_RETENTION_MIN_SEC", "10"
-    )
-    monkeypatch.setenv(
-        "KORSTOCKSCAN_SCANNER_WS_BACKOFF_WATCH_RETENTION_MAX_SEC", "20"
-    )
-    monkeypatch.setenv(
-        "KORSTOCKSCAN_SCANNER_WS_BACKOFF_WATCH_RETENTION_MIN_COUNT", "2"
-    )
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_WS_BACKOFF_WATCH_RETENTION_MIN_SEC", "10")
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_WS_BACKOFF_WATCH_RETENTION_MAX_SEC", "20")
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_WS_BACKOFF_WATCH_RETENTION_MIN_COUNT", "2")
     target = _scanner_watch_stock(
         code="005930",
         _scanner_fast_precheck_fields={
@@ -6276,12 +6272,8 @@ def test_scanner_ws_backoff_recovery_precedes_generic_queue_lag_eviction():
 def test_scanner_fast_precheck_ws_backoff_missing_until_still_expires(
     monkeypatch,
 ):
-    monkeypatch.setenv(
-        "KORSTOCKSCAN_SCANNER_WS_BACKOFF_WATCH_RETENTION_MIN_SEC", "10"
-    )
-    monkeypatch.setenv(
-        "KORSTOCKSCAN_SCANNER_WS_BACKOFF_WATCH_RETENTION_MAX_SEC", "20"
-    )
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_WS_BACKOFF_WATCH_RETENTION_MIN_SEC", "10")
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_WS_BACKOFF_WATCH_RETENTION_MAX_SEC", "20")
     target = _scanner_watch_stock(
         code="005930",
         _scanner_fast_precheck_fields={
@@ -6317,9 +6309,7 @@ def test_scanner_promotion_pending_attach_prevents_prune_until_attach_resolution
         kiwoom_sniper_v2,
         "event_bus",
         SimpleNamespace(
-            publish=lambda event_name, payload: published.append(
-                (event_name, payload)
-            )
+            publish=lambda event_name, payload: published.append((event_name, payload))
         ),
     )
     monkeypatch.setattr(
@@ -6912,6 +6902,10 @@ def test_db_poll_scanner_target_attach_logs_recovery(monkeypatch):
     ]
     assert emitted[-1]["stage"] == "scalping_scanner_runtime_target_attach"
     assert emitted[-1]["fields"]["runtime_target_attach_outcome"] == "db_poll_attached"
+    assert emitted[-1]["fields"]["effective_venue"] == "KRX"
+    assert emitted[-1]["fields"]["venue_resolution"] == (
+        "consistent_explicit:payload.effective_venue,payload.venue"
+    )
     assert (
         emitted[-1]["fields"]["runtime_target_attach_reason"]
         == "eventbus_attach_missing_recovered_from_database_poll"

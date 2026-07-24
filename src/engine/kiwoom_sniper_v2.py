@@ -105,6 +105,7 @@ from src.engine.sniper_time import (
     TIME_23_59,
     describe_scalping_buy_windows,
     is_scalping_buy_time_allowed,
+    scalping_session_venue_provenance,
     scalping_buy_time_block_reason,
 )
 from src.engine.sniper_s15_fast_track import (
@@ -3203,25 +3204,17 @@ def _scanner_watch_eviction_event_fields(target, *, decision):
             "ws_backoff_retention_first_epoch"
         )
         or "not_applicable_ws_backoff_retention_first_epoch",
-        "ws_backoff_retention_age_sec": decision.get(
-            "ws_backoff_retention_age_sec"
-        )
+        "ws_backoff_retention_age_sec": decision.get("ws_backoff_retention_age_sec")
         or "not_applicable_ws_backoff_retention_age_sec",
-        "ws_backoff_retention_min_sec": decision.get(
-            "ws_backoff_retention_min_sec"
-        )
+        "ws_backoff_retention_min_sec": decision.get("ws_backoff_retention_min_sec")
         or "not_applicable_ws_backoff_retention_min_sec",
-        "ws_backoff_retention_max_sec": decision.get(
-            "ws_backoff_retention_max_sec"
-        )
+        "ws_backoff_retention_max_sec": decision.get("ws_backoff_retention_max_sec")
         or "not_applicable_ws_backoff_retention_max_sec",
         "ws_backoff_retention_attempt_count": decision.get(
             "ws_backoff_retention_attempt_count"
         )
         or "not_applicable_ws_backoff_retention_attempt_count",
-        "ws_backoff_retention_min_count": decision.get(
-            "ws_backoff_retention_min_count"
-        )
+        "ws_backoff_retention_min_count": decision.get("ws_backoff_retention_min_count")
         or "not_applicable_ws_backoff_retention_min_count",
         "ws_backoff_until": decision.get("ws_backoff_until")
         or "not_applicable_ws_backoff_until",
@@ -3515,9 +3508,7 @@ def _scanner_watch_eviction_decision_from_fast_precheck_budget(
             "should_evict": False,
             "retention_active": True,
             "retention_reason": retention_reason,
-            "fast_precheck_result": fast_precheck_fields.get(
-                "fast_precheck_result"
-            )
+            "fast_precheck_result": fast_precheck_fields.get("fast_precheck_result")
             or "budget_reallocated",
             "fast_precheck_reason": fast_precheck_reason,
             "fast_precheck_fields": fast_precheck_fields,
@@ -3539,9 +3530,7 @@ def _scanner_watch_eviction_decision_from_fast_precheck_budget(
             first_epoch = previous_first_epoch
             attempt_count = (
                 _safe_int(
-                    (target or {}).get(
-                        "_scanner_ws_backoff_watch_retention_count"
-                    ),
+                    (target or {}).get("_scanner_ws_backoff_watch_retention_count"),
                     0,
                 )
                 + 1
@@ -3582,9 +3571,7 @@ def _scanner_watch_eviction_decision_from_fast_precheck_budget(
                 "scanner_ws_stale_backoff_bounded_watch_retention"
             ),
             "scanner_source_quality_reallocation_candidate": True,
-            "fast_precheck_result": fast_precheck_fields.get(
-                "fast_precheck_result"
-            )
+            "fast_precheck_result": fast_precheck_fields.get("fast_precheck_result")
             or "budget_reallocated",
             "fast_precheck_reason": fast_precheck_reason,
             "fast_precheck_fields": fast_precheck_fields,
@@ -3681,15 +3668,9 @@ def _maybe_expire_scanner_watch_for_fast_precheck_budget(
                     "retention_first_epoch": decision.get(
                         "ws_backoff_retention_first_epoch"
                     ),
-                    "retention_age_sec": decision.get(
-                        "ws_backoff_retention_age_sec"
-                    ),
-                    "retention_min_sec": decision.get(
-                        "ws_backoff_retention_min_sec"
-                    ),
-                    "retention_max_sec": decision.get(
-                        "ws_backoff_retention_max_sec"
-                    ),
+                    "retention_age_sec": decision.get("ws_backoff_retention_age_sec"),
+                    "retention_min_sec": decision.get("ws_backoff_retention_min_sec"),
+                    "retention_max_sec": decision.get("ws_backoff_retention_max_sec"),
                     "retention_attempt_count": decision.get(
                         "ws_backoff_retention_attempt_count"
                     ),
@@ -3701,9 +3682,9 @@ def _maybe_expire_scanner_watch_for_fast_precheck_budget(
                     "fast_precheck_reason": decision.get("fast_precheck_reason"),
                     "runtime_record_id": (target or {}).get("id")
                     or "not_applicable_runtime_record_id",
-                    "stock_code": str(
-                        code or (target or {}).get("code") or ""
-                    ).strip()[:6],
+                    "stock_code": str(code or (target or {}).get("code") or "").strip()[
+                        :6
+                    ],
                     "target_status": (target or {}).get("status")
                     or "not_applicable_target_status",
                     "target_strategy": normalize_strategy(
@@ -6733,6 +6714,7 @@ def attach_db_poll_target_if_missing(db_target, targets, now_ts):
                 "scanner_watch_budget_owner_source"
             ],
             "scanner_watch_budget_policy": "general1_opening3_rising_residual_v1",
+            **scalping_session_venue_provenance(float(now_ts)),
         }
         identity_ok, identity_fields = _scanner_identity_guard(
             identity_payload,
@@ -7579,8 +7561,7 @@ def run_sniper(is_test_mode=False):
     try:
         fast_exit_interval_sec = max(
             0.05,
-            float(os.getenv("KORSTOCKSCAN_SCALP_FAST_EXIT_POLL_MS", "250"))
-            / 1000.0,
+            float(os.getenv("KORSTOCKSCAN_SCALP_FAST_EXIT_POLL_MS", "250")) / 1000.0,
         )
     except (TypeError, ValueError):
         fast_exit_interval_sec = 0.25
@@ -7589,17 +7570,14 @@ def run_sniper(is_test_mode=False):
         ws_snapshot_provider=(
             lambda code: (
                 WS_MANAGER.get_latest_data(code)
-                if WS_MANAGER is not None
-                and hasattr(WS_MANAGER, "get_latest_data")
+                if WS_MANAGER is not None and hasattr(WS_MANAGER, "get_latest_data")
                 else {}
             )
         ),
         evaluator=sniper_state_handlers.evaluate_and_dispatch_fast_scalp_exit,
         state_lock=ENTRY_LOCK,
         interval_sec=fast_exit_interval_sec,
-        error_handler=lambda message: log_error(
-            f"[SCALP_FAST_EXIT_MONITOR] {message}"
-        ),
+        error_handler=lambda message: log_error(f"[SCALP_FAST_EXIT_MONITOR] {message}"),
     )
     fast_exit_monitor.start()
 
@@ -9017,11 +8995,9 @@ def run_sniper(is_test_mode=False):
                         if fast_precheck_result != "eligible_for_heavy_entry_eval":
                             fast_precheck_budget_decision = None
                             if fast_precheck_result == "budget_reallocated":
-                                fast_precheck_budget_decision = (
-                                    _scanner_watch_eviction_decision_from_fast_precheck_budget(
-                                        stock,
-                                        now_ts=heavy_queue_enter_epoch,
-                                    )
+                                fast_precheck_budget_decision = _scanner_watch_eviction_decision_from_fast_precheck_budget(
+                                    stock,
+                                    now_ts=heavy_queue_enter_epoch,
                                 )
                             skip_reason = (
                                 "scanner_fast_precheck_budget_reallocated"
@@ -9136,10 +9112,9 @@ def run_sniper(is_test_mode=False):
                                 ):
                                     continue
                                 if bool(
-                                    (
-                                        fast_precheck_budget_decision
-                                        or {}
-                                    ).get("retention_active")
+                                    (fast_precheck_budget_decision or {}).get(
+                                        "retention_active"
+                                    )
                                 ):
                                     continue
                             if queue_lag_fields:

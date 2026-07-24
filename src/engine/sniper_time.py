@@ -1,10 +1,11 @@
 """Trading time rules for the sniper engine."""
 
-from datetime import datetime, time as dt_time
+from datetime import datetime, time as dt_time, timedelta, timezone
 
 from src.utils.constants import TRADING_RULES
 
 DEFAULT_SCALPING_BUY_WINDOWS = "08:01:00-08:40:00,09:01:00-15:00:00,16:00:00-19:45:00"
+KST = timezone(timedelta(hours=9))
 
 
 def _rule_time(rule_name, default_value):
@@ -87,6 +88,37 @@ def scalping_buy_time_block_reason(now_value=None):
     if now_t > last_end:
         return "scalping_new_buy_cutoff"
     return "outside_scalping_buy_window"
+
+
+def scalping_session_venue_provenance(now_value=None):
+    """Resolve the scalping observation cohort without inferring broker route."""
+
+    if now_value is None:
+        now_t = datetime.now(tz=KST).time()
+    elif isinstance(now_value, (int, float)):
+        now_t = datetime.fromtimestamp(float(now_value), tz=KST).time()
+    elif isinstance(now_value, datetime) and now_value.tzinfo is not None:
+        now_t = now_value.astimezone(KST).time()
+    else:
+        now_t = _coerce_time(now_value)
+    if dt_time(hour=8) <= now_t < dt_time(hour=9):
+        venue = "PREMARKET_KRX_LIKE"
+        session_bucket = "krx_like_premarket"
+    elif dt_time(hour=9) <= now_t < dt_time(hour=15, minute=30):
+        venue = "KRX"
+        session_bucket = "krx_regular"
+    elif dt_time(hour=16) <= now_t < dt_time(hour=20):
+        venue = "NXT"
+        session_bucket = "nxt"
+    else:
+        venue = "UNKNOWN"
+        session_bucket = "outside_supported_session"
+    return {
+        "venue": venue,
+        "effective_venue": venue,
+        "venue_resolution": f"scanner_session_clock:{session_bucket}",
+        "market_session_bucket": session_bucket,
+    }
 
 
 TIME_07_00 = _rule_time("PREMARKET_START_TIME", "07:00:00")

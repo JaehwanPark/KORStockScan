@@ -1,7 +1,7 @@
 """Account/DB sync helpers for the sniper engine."""
 
 import time
-from datetime import datetime
+from datetime import date, datetime
 from math import isclose
 from pathlib import Path
 import re
@@ -30,7 +30,11 @@ from src.engine.risk.manual_control_exclusion import (
     remove_manual_control_exclusion_code,
 )
 from src.utils import kiwoom_utils
-from src.utils.constants import RESTART_FLAG_PATH, TRADING_RULES
+from src.utils.constants import (
+    RESTART_FLAG_PATH,
+    SCALPING_RUNTIME_ARCHIVE_CUTOFF_DATE,
+    TRADING_RULES,
+)
 from src.utils.logger import log_error, log_info
 from src.utils.pipeline_event_logger import emit_pipeline_event
 from src.engine import kiwoom_orders
@@ -57,6 +61,9 @@ _PIPELINE_LEG_RE = re.compile(
 )
 _PIPELINE_TP_RE = re.compile(
     r"\((?P<code>\d{6})\).*?\bpreset_exit_setup\b.*?\bord_no=(?P<ord_no>\S+)"
+)
+_SCALPING_RUNTIME_ARCHIVE_CUTOFF_DATE = date.fromisoformat(
+    SCALPING_RUNTIME_ARCHIVE_CUTOFF_DATE
 )
 
 
@@ -85,6 +92,130 @@ def bind_sync_dependencies(
         STATE_LOCK = state_lock
     if conf is not None:
         CONF = conf
+
+
+def _quarantine_prebaseline_scalping_ghost(
+    record,
+    *,
+    real_codes: set[str] | dict[str, object],
+    broker_absence_verified: bool,
+    source: str,
+) -> bool:
+    """Expire archive-only SCALPING rows unless broker inventory proves a holding."""
+    code = str(getattr(record, "stock_code", "") or "").strip()[:6]
+    strategy = normalize_strategy(getattr(record, "strategy", None))
+    rec_date = getattr(record, "rec_date", None)
+    if isinstance(rec_date, datetime):
+        rec_date = rec_date.date()
+    buy_time = getattr(record, "buy_time", None)
+    if isinstance(buy_time, datetime):
+        lifecycle_date = buy_time.date()
+    elif isinstance(buy_time, date):
+        lifecycle_date = buy_time
+    else:
+        lifecycle_date = rec_date
+    if (
+        not code
+        or code in real_codes
+        or not broker_absence_verified
+        or strategy != "SCALPING"
+        or not isinstance(rec_date, date)
+        or not isinstance(lifecycle_date, date)
+        or lifecycle_date >= _SCALPING_RUNTIME_ARCHIVE_CUTOFF_DATE
+    ):
+        return False
+
+    prior_status = str(getattr(record, "status", "") or "").upper()
+    if prior_status not in {"HOLDING", "SELL_ORDERED"}:
+        return False
+
+    record.status = "EXPIRED"
+    with _with_state_lock():
+        target = next(
+            (
+                item
+                for item in (ACTIVE_TARGETS or [])
+                if _to_int(item.get("id")) == _to_int(getattr(record, "id", 0))
+            ),
+            None,
+        )
+        if target is not None:
+            target["status"] = "EXPIRED"
+            target["prebaseline_scalping_ghost_quarantined"] = True
+        if HIGHEST_PRICES is not None:
+            HIGHEST_PRICES.pop(code, None)
+
+    log_info(
+        "[PREBASELINE_SCALPING_GHOST_QUARANTINED] "
+        f"{getattr(record, 'stock_name', code)}({code}) id={getattr(record, 'id', '-')} "
+        f"rec_date={rec_date} lifecycle_date={lifecycle_date} "
+        f"prior_status={prior_status} source={source} "
+        f"broker_holding_present=False cutoff={_SCALPING_RUNTIME_ARCHIVE_CUTOFF_DATE}"
+    )
+    return True
+
+
+def _emit_probe_recovery_event(target: dict, recovery: dict) -> None:
+    if not (recovery.get("recovered") or recovery.get("circuit_open")):
+        return
+    code = str(target.get("code") or target.get("stock_code") or "").strip()[:6]
+    stage = (
+        "probe_restart_recovery_blocked"
+        if recovery.get("circuit_open")
+        else "probe_restart_recovered"
+    )
+    try:
+        confirmation_count = max(0, int(target.get("probe_confirmation_count") or 0))
+    except (TypeError, ValueError):
+        confirmation_count = 0
+    try:
+        emit_pipeline_event(
+            "HOLDING_PIPELINE",
+            target.get("name") or code,
+            code,
+            stage,
+            record_id=target.get("id"),
+            fields={
+                "reason": recovery.get("reason") or "-",
+                "entry_split_probe_phase": (
+                    target.get("entry_split_probe_phase")
+                    or recovery.get("phase")
+                    or "unknown"
+                ),
+                "entry_split_probe_bundle_id": (
+                    target.get("entry_split_probe_bundle_id") or "-"
+                ),
+                "entry_split_probe_abort_reason": (
+                    target.get("entry_split_probe_abort_reason") or "-"
+                ),
+                "probe_confirmation_count": confirmation_count,
+                "probe_confirmation_required_count": 2,
+                "probe_confirmation_last_state": (
+                    target.get("probe_confirmation_last_state") or "UNKNOWN"
+                ),
+                "probe_expand_forbidden": bool(
+                    target.get("probe_expand_forbidden", False)
+                ),
+                "entry_split_probe_scale_in_forbidden": bool(
+                    target.get("entry_split_probe_scale_in_forbidden", False)
+                ),
+                "metric_role": "source_quality_gate",
+                "decision_authority": "probe_restart_state_reconciliation",
+                "window_policy": "same_day_position_cycle_restart_recovery",
+                "sample_floor": "one_persisted_probe_bundle_and_live_holding",
+                "primary_decision_metric": ("probe_terminal_expansion_guard_restored"),
+                "source_quality_gate": ("code_target_id_and_broker_quantity_match"),
+                "forbidden_uses": (
+                    "new_order_authority|threshold_mutation|provider_route_change|"
+                    "quantity_cap_release|broker_guard_bypass"
+                ),
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "runtime_effect": True,
+            },
+        )
+    except Exception as exc:
+        log_error(f"[ENTRY_SPLIT_PROBE_RECOVERY_EVENT] {code} failed={exc}")
 
 
 def _refresh_kiwoom_token(reason, error_detail=None):
@@ -383,6 +514,7 @@ def _ensure_runtime_target(record, *, buy_qty=None, buy_price=None):
                 f"result={probe_recovery.get('reason')} "
                 f"phase={probe_recovery.get('phase', '-')}"
             )
+            _emit_probe_recovery_event(target, probe_recovery)
         ACTIVE_TARGETS.append(target)
         if EVENT_BUS is not None and code:
             EVENT_BUS.publish("COMMAND_WS_REG", {"codes": [code]})
@@ -435,6 +567,7 @@ def _ensure_runtime_target(record, *, buy_qty=None, buy_price=None):
             f"result={probe_recovery.get('reason')} "
             f"phase={probe_recovery.get('phase', '-')}"
         )
+        _emit_probe_recovery_event(target, probe_recovery)
     return target
 
 
@@ -806,9 +939,35 @@ def sync_balance_with_db():
     pending_manual_control_removals = []
     try:
         with DB.get_session() as session:
+            archive_active_records = (
+                session.query(RecommendationHistory)
+                .filter(RecommendationHistory.status.in_(("HOLDING", "SELL_ORDERED")))
+                .all()
+            )
+            for record in archive_active_records:
+                code = str(record.stock_code).strip()[:6]
+                exchange = get_exchange(code)
+                if _quarantine_prebaseline_scalping_ghost(
+                    record,
+                    real_codes=real_codes,
+                    broker_absence_verified=exchange in successful_exchanges,
+                    source="startup_balance_sync",
+                ):
+                    pending_manual_control_removals.append(
+                        (
+                            code,
+                            "startup_sync_prebaseline_scalping_ghost_quarantined",
+                        )
+                    )
+
             db_holdings = (
                 session.query(RecommendationHistory).filter_by(status="HOLDING").all()
             )
+            db_holdings = [
+                record
+                for record in db_holdings
+                if str(getattr(record, "status", "") or "").upper() == "HOLDING"
+            ]
 
             for record in db_holdings:
                 code = str(record.stock_code).strip()[:6]
@@ -1075,6 +1234,7 @@ def periodic_account_sync():
     synced_count = 0
     pending_manual_control_removals = []
     pending_sell_reconciliation_events = []
+    pending_runtime_target_removals = []
 
     def _queue_sell_reconciliation_event(*args, **kwargs):
         pending_sell_reconciliation_events.append((args, kwargs))
@@ -1129,9 +1289,23 @@ def periodic_account_sync():
 
             for record in active_records:
                 code = str(record.stock_code).strip()[:6]
+                exchange = get_exchange(code)
+
+                if _quarantine_prebaseline_scalping_ghost(
+                    record,
+                    real_codes=real_codes,
+                    broker_absence_verified=exchange in successful_exchanges,
+                    source="periodic_account_sync",
+                ):
+                    pending_manual_control_removals.append(
+                        (
+                            code,
+                            "periodic_sync_prebaseline_scalping_ghost_quarantined",
+                        )
+                    )
+                    continue
 
                 if code not in real_codes:
-                    exchange = get_exchange(code)
                     if exchange in successful_exchanges:
                         prior_record_status = str(record.status or "").upper()
                         print(
@@ -1360,6 +1534,8 @@ def periodic_account_sync():
                                 "🚨 [정기 동기화] 매도 영수증 누락 "
                                 f"source-quality 이벤트 기록 실패: {exc}"
                             )
+                        if target_stock is not None:
+                            pending_runtime_target_removals.append(target_stock)
                         synced_count += 1
                     else:
                         print(
@@ -1474,6 +1650,16 @@ def periodic_account_sync():
     except Exception as exc:
         log_error(f"🚨 정기 계좌 동기화 DB 에러: {exc}")
     else:
+        if pending_runtime_target_removals:
+            removed_target_ids = {
+                id(target) for target in pending_runtime_target_removals
+            }
+            with _with_state_lock():
+                ACTIVE_TARGETS[:] = [
+                    target
+                    for target in ACTIVE_TARGETS
+                    if id(target) not in removed_target_ids
+                ]
         for event_args, event_kwargs in pending_sell_reconciliation_events:
             try:
                 emit_pipeline_event(*event_args, **event_kwargs)

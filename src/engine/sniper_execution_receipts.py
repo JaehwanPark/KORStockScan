@@ -22,7 +22,6 @@ from src.engine.scalping.early_volatility_partial_tp import (
 )
 from src.engine.scalping.position_peak_ledger import POSITION_PEAK_LEDGER
 from src.engine.sniper_entry_state import (
-    ENTRY_LOCK,
     get_terminal_entry_order,
     move_orders_to_terminal,
 )
@@ -113,9 +112,7 @@ def _probe_venue_provenance_fields(stock: dict[str, Any]) -> dict[str, str]:
     if market_session_bucket:
         fields["market_session_bucket"] = market_session_bucket
         fields["rising_missed_market_session_bucket"] = market_session_bucket
-    broker_route = str(
-        stock.get("entry_execution_broker_route") or ""
-    ).strip().upper()
+    broker_route = str(stock.get("entry_execution_broker_route") or "").strip().upper()
     if broker_route in {"KRX", "NXT", "SOR"}:
         fields["broker_route"] = broker_route
         fields["entry_execution_broker_route"] = broker_route
@@ -158,6 +155,27 @@ def _probe_observation_contract_fields(stock: dict[str, Any]) -> dict[str, Any]:
             }
         )
     fields.update(_probe_venue_provenance_fields(stock))
+    fields.update(
+        {
+            "entry_split_probe_phase": (
+                stock.get("entry_split_probe_phase") or "unknown"
+            ),
+            "entry_split_probe_abort_reason": (
+                stock.get("entry_split_probe_abort_reason") or "-"
+            ),
+            "probe_confirmation_count": max(
+                0, _safe_int(stock.get("probe_confirmation_count"), 0)
+            ),
+            "probe_confirmation_required_count": 2,
+            "probe_confirmation_last_state": (
+                stock.get("probe_confirmation_last_state") or "UNKNOWN"
+            ),
+            "probe_expand_forbidden": bool(stock.get("probe_expand_forbidden", False)),
+            "entry_split_probe_scale_in_forbidden": bool(
+                stock.get("entry_split_probe_scale_in_forbidden", False)
+            ),
+        }
+    )
     return fields
 
 
@@ -2145,11 +2163,15 @@ def _refresh_scalp_preset_exit_order(target_stock, code, total_qty):
     preset_ord_no = str(target_stock.get("preset_tp_ord_no", "") or "").strip()
 
     if preset_ord_no:
-        preset_broker_route = str(
-            target_stock.get("preset_tp_broker_route")
-            or target_stock.get("entry_execution_broker_route")
-            or ""
-        ).strip().upper()
+        preset_broker_route = (
+            str(
+                target_stock.get("preset_tp_broker_route")
+                or target_stock.get("entry_execution_broker_route")
+                or ""
+            )
+            .strip()
+            .upper()
+        )
         cancel_res = kiwoom_orders.send_cancel_order(
             code=code,
             orig_ord_no=preset_ord_no,
@@ -2465,8 +2487,6 @@ def _update_db_for_add(
             record.scale_in_locked = bool(
                 receipt_snapshot.get("scale_in_locked", False)
             )
-            add_count_after = int(record.add_count or 0)
-
             # 보호선 보정값을 DB에도 반영 (있을 때만)
             if receipt_snapshot.get("trailing_stop_price") is not None:
                 record.trailing_stop_price = float(
@@ -2648,9 +2668,7 @@ def _update_db_for_sell(
                 broker_route_resolution=receipt_snapshot.get(
                     "last_sell_execution_broker_route_resolution", "-"
                 ),
-                effective_venue=receipt_snapshot.get(
-                    "last_sell_execution_cohort", "-"
-                ),
+                effective_venue=receipt_snapshot.get("last_sell_execution_cohort", "-"),
                 actual_order_submitted=True,
                 broker_order_forbidden=False,
                 no_scale_in_counterfactual_profit_pct=receipt_snapshot.get(
@@ -3039,6 +3057,7 @@ def _handle_entry_buy_execution(
                 "probe_receipt_order_number_mismatch"
             )
             target_stock["entry_split_probe_scale_in_forbidden"] = True
+            target_stock["probe_expand_forbidden"] = True
             if bundle_id:
                 update_probe_runtime_bundle(
                     bundle_id,
@@ -3047,6 +3066,8 @@ def _handle_entry_buy_execution(
                     target_id=target_id,
                     observed_order_no=order_no,
                     filled_qty=int(new_qty or 0),
+                    entry_split_probe_scale_in_forbidden=True,
+                    probe_expand_forbidden=True,
                 )
         elif effective_exec_qty != 1 or int(new_qty or 0) != 1:
             trip_probe_runtime_circuit("probe_fill_quantity_invariant")
@@ -3055,6 +3076,7 @@ def _handle_entry_buy_execution(
                 "probe_fill_quantity_invariant"
             )
             target_stock["entry_split_probe_scale_in_forbidden"] = True
+            target_stock["probe_expand_forbidden"] = True
             if bundle_id:
                 update_probe_runtime_bundle(
                     bundle_id,
@@ -3062,6 +3084,8 @@ def _handle_entry_buy_execution(
                     reason="probe_fill_quantity_invariant",
                     target_id=target_id,
                     filled_qty=int(new_qty or 0),
+                    entry_split_probe_scale_in_forbidden=True,
+                    probe_expand_forbidden=True,
                 )
         else:
             filled_at_ts = time.time()
@@ -3069,6 +3093,8 @@ def _handle_entry_buy_execution(
             target_stock["entry_split_probe_order_no"] = order_no
             target_stock["entry_split_probe_fill_price"] = exec_price
             target_stock["entry_split_probe_filled_at"] = filled_at_ts
+            target_stock["entry_split_probe_scale_in_forbidden"] = True
+            target_stock["probe_expand_forbidden"] = False
             update_probe_runtime_bundle(
                 bundle_id,
                 phase="probe_filled",
@@ -3076,6 +3102,8 @@ def _handle_entry_buy_execution(
                 fill_price=exec_price,
                 filled_at=filled_at_ts,
                 fill_qty=effective_exec_qty,
+                entry_split_probe_scale_in_forbidden=True,
+                probe_expand_forbidden=False,
             )
             submit_best_ask = _safe_int(
                 target_stock.get("entry_split_probe_submit_best_ask"), 0
@@ -3220,12 +3248,15 @@ def _handle_entry_buy_execution(
             target_stock["peak_basis_at"] = time.time()
             target_stock.pop("entry_split_probe_residual_claimed", None)
             target_stock.pop("entry_split_probe_scale_in_forbidden", None)
+            target_stock.pop("probe_expand_forbidden", None)
             update_probe_runtime_bundle(
                 probe_bundle_id,
                 phase="complete",
                 requested_qty=requested_entry_qty,
                 filled_qty=cum_filled_qty,
                 avg_buy_price=round(float(new_avg or 0.0), 4),
+                entry_split_probe_scale_in_forbidden=False,
+                probe_expand_forbidden=False,
             )
             _log_holding_pipeline(
                 target_stock.get("name"),
@@ -3324,7 +3355,6 @@ def _handle_entry_buy_execution(
         preset_tp_ord_no_after = str(
             target_stock.get("preset_tp_ord_no", "") or ""
         ).strip()
-        preset_tp_qty = int(target_stock.get("preset_tp_qty", 0) or 0)
         preset_tp_price = int(target_stock.get("preset_tp_price") or 0)
 
         if not refreshed:

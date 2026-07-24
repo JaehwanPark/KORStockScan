@@ -39,11 +39,18 @@
 
 ## 장중 체크리스트 (09:05~15:20)
 
-- [ ] `[FreshSpreadAIRecheckIntradayApply0724] fresh spread-only candle/AI 재확인 축 수동 재기동 적용 및 첫 자연표본 확인` (`Due: 2026-07-24`, `Slot: INTRADAY`, `TimeWindow: 11:30~15:20`, `Track: ScalpingLogic`)
+- [x] `[FreshSpreadAIRecheckIntradayApply0724] fresh spread-only candle/AI 재확인 축 수동 재기동 적용 및 첫 자연표본 확인` (`Due: 2026-07-24`, `Slot: INTRADAY`, `TimeWindow: 11:30~15:20`, `Track: ScalpingLogic`)
   - Source: [operator_runtime_overrides_2026-07-24.env](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/operator_runtime_overrides_2026-07-24.env), [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py), [pipeline_events_2026-07-24.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-07-24.jsonl)
   - 판정 기준: 사용자 수동 우아한 재기동 후 새 bot PID에 `KORSTOCKSCAN_FRESH_SPREAD_AI_RECHECK_ENABLED=true`, `ACTIVE_DATE=2026-07-24`, `MAX_AI_AGE_SEC=15`가 로드됐는지 확인하고, 첫 `fresh_spread_ai_recheck` 이벤트에서 fresh spread-only·fresh venue-consistent candle·BUY/WAIT만 재평가되며 DROP, stale/conflict, 최종 absolute spread cap 초과가 계속 차단되는지 확인한다.
   - 금지: 이 축으로 stale quote, venue conflict, absolute spread cap, broker/account/order/quantity/cooldown guard를 우회하거나 provider, 주문가격·수량, threshold, bot 상태를 추가 변경하지 않는다.
   - 다음 액션: `runtime_loaded_and_first_event_valid`, `runtime_loaded_waiting_natural_sample`, `pid_env_missing_restart_required`, `source_quality_or_guard_breach_disable_axis` 중 하나로 닫는다. guard breach이면 `KORSTOCKSCAN_FRESH_SPREAD_AI_RECHECK_ENABLED=false`로 되돌리고 수동 우아한 재기동한다.
+  - 결과: `runtime_loaded_and_first_event_valid`. 새 bot PID `170827`에 세 환경값이 로드됐다. 첫 자연표본 한화솔루션(009830)은 KRX·fresh quote·spread-only `0.008389`·absolute cap `0.010000`·candle `fresh_consistent`였고, 최신 live AI `DROP 32`를 받아 `fresh_ai_drop_veto`로 종료됐다. quote 재평가, BUY 제출, broker call은 0건이며 후속 `latency_block`이 유지됐다.
+
+- [ ] `[FreshSpreadAIRecheckRecoverySample0724] fresh BUY/WAIT latency 회복 분기 첫 자연표본 및 후속 submit guard 확인` (`Due: 2026-07-24`, `Slot: INTRADAY`, `TimeWindow: 11:40~15:20`, `Track: ScalpingLogic`)
+  - Source: [pipeline_events_2026-07-24.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-07-24.jsonl), [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py)
+  - 판정 기준: `fresh_spread_ai_recheck_ai_action=BUY|WAIT` 자연표본에서 AI age 15초 이내, candle `fresh_consistent`, quote refresh 이후 stale=false와 final spread cap 이내가 유지되는지 확인한다. `latency_recovered_after_fresh_ai`이면 이후 AI authority, WAIT probe, entry-price, source-quality, broker/account/order/quantity/cooldown guard를 모두 통과한 경우에만 단일 제출되는지 확인한다.
+  - 금지: DROP 표본만으로 BUY/WAIT 회복 분기 정상작동을 확정하거나, 자연표본 확보를 위해 주문·threshold·provider·가격·수량·guard를 변경하지 않는다.
+  - 다음 액션: `recovery_sample_valid`, `recovery_sample_blocked_by_expected_guard`, `no_natural_recovery_sample`, `guard_breach_disable_axis` 중 하나로 닫는다.
 
 - [ ] `[RuntimeEnvIntradayObserve0724] 전일 selected runtime family 장중 provenance 및 rollback guard 확인` (`Due: 2026-07-24`, `Slot: INTRADAY`, `TimeWindow: 09:05~09:20`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-07-23.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-07-23.json)
