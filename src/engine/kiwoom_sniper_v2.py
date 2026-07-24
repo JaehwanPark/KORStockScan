@@ -8410,13 +8410,15 @@ def run_sniper(is_test_mode=False):
                 nonlocal scanner_heavy_eval_flushed
                 if scanner_heavy_eval_flushed:
                     return
-                scanner_heavy_eval_flushed = True
-                for (
-                    delayed_stock,
-                    delayed_code,
-                    delayed_ws_data,
-                    queue_enter_epoch,
-                ) in delayed_scanner_heavy_eval:
+                while delayed_scanner_heavy_eval:
+                    if _admit_runtime_live_attaches():
+                        return
+                    (
+                        delayed_stock,
+                        delayed_code,
+                        delayed_ws_data,
+                        queue_enter_epoch,
+                    ) = delayed_scanner_heavy_eval.pop(0)
                     if delayed_stock.get("status") != "WATCHING":
                         continue
                     eval_ws_data = delayed_ws_data
@@ -8619,12 +8621,15 @@ def run_sniper(is_test_mode=False):
                             now_ts=time.time(),
                             emit_event_fn=_defer_scanner_entry_pipeline_log,
                         )
+                scanner_heavy_eval_flushed = True
 
             runtime_work_queue = list(queue_context["iteration_targets"])
             runtime_iteration_accounting_targets = list(runtime_work_queue)
             runtime_processed_target_ids = set()
             runtime_live_attach_ids = set()
-            while True:
+
+            def _admit_runtime_live_attaches():
+                nonlocal runtime_work_queue, scanner_heavy_eval_flushed
                 runtime_work_queue, live_attaches = (
                     _runtime_admit_live_scanner_attaches(
                         runtime_work_queue,
@@ -8635,6 +8640,7 @@ def run_sniper(is_test_mode=False):
                     )
                 )
                 if live_attaches:
+                    scanner_heavy_eval_flushed = False
                     runtime_live_attach_ids.update(
                         id(target) for target in live_attaches
                     )
@@ -8653,7 +8659,14 @@ def run_sniper(is_test_mode=False):
                         f"total={len(runtime_live_attach_ids)} "
                         f"codes={','.join(str(target.get('code') or '').strip()[:6] for target in live_attaches)}"
                     )
+                return len(live_attaches)
+
+            while True:
+                _admit_runtime_live_attaches()
                 if not runtime_work_queue:
+                    _flush_delayed_scanner_heavy_eval()
+                    if runtime_work_queue:
+                        continue
                     break
                 stock = runtime_work_queue.pop(0)
                 runtime_processed_target_ids.add(id(stock))

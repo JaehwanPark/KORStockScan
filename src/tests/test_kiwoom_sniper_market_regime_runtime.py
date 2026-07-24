@@ -3472,24 +3472,25 @@ def test_run_sniper_builds_scanner_ws_cache_before_target_iteration():
     cache_idx = source.index(
         "scanner_ws_snapshot_cache = _runtime_scanner_ws_snapshot_cache", context_idx
     )
-    loop_idx = source.index("while True:", cache_idx)
-    admit_idx = source.index("_runtime_admit_live_scanner_attaches(", loop_idx)
+    helper_idx = source.index("def _admit_runtime_live_attaches", cache_idx)
+    admit_idx = source.index("_runtime_admit_live_scanner_attaches(", helper_idx)
     accounting_extend_idx = source.index(
         "runtime_iteration_accounting_targets.extend(live_attaches)", admit_idx
     )
     preserved_loop_anchor_idx = source.index(
         'now_ts=queue_context["loop_started_epoch"]', accounting_extend_idx
     )
-    empty_guard_idx = source.index("if not runtime_work_queue:", admit_idx)
+    loop_idx = source.index("while True:", admit_idx)
+    empty_guard_idx = source.index("if not runtime_work_queue:", loop_idx)
     select_idx = source.index("stock = runtime_work_queue.pop(0)", admit_idx)
     cached_lookup_idx = source.index("scanner_ws_snapshot_cache.get(code)", loop_idx)
     fallback_lookup_idx = source.index(
         "WS_MANAGER.get_latest_data(code)", cached_lookup_idx
     )
 
-    assert context_idx < cache_idx < loop_idx < admit_idx
+    assert context_idx < cache_idx < helper_idx < admit_idx
     assert admit_idx < accounting_extend_idx < preserved_loop_anchor_idx
-    assert preserved_loop_anchor_idx < empty_guard_idx < select_idx
+    assert preserved_loop_anchor_idx < loop_idx < empty_guard_idx < select_idx
     assert select_idx < cached_lookup_idx < fallback_lookup_idx
 
 
@@ -3623,6 +3624,51 @@ def test_scanner_pipeline_events_flush_before_heavy_eval_handler():
     )
 
     assert flush_def_idx < heavy_lag_idx < pipeline_flush_idx < heavy_handle_idx
+
+
+def test_run_sniper_yields_delayed_heavy_eval_when_live_scanner_attach_arrives():
+    source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
+    flush_idx = source.index("def _flush_delayed_scanner_heavy_eval")
+    delayed_loop_idx = source.index("while delayed_scanner_heavy_eval:", flush_idx)
+    live_admit_idx = source.index(
+        "if _admit_runtime_live_attaches():", delayed_loop_idx
+    )
+    return_idx = source.index("return", live_admit_idx)
+    pop_idx = source.index("delayed_scanner_heavy_eval.pop(0)", return_idx)
+    handler_idx = source.index("handle_watching_state(", pop_idx)
+    flushed_idx = source.index("scanner_heavy_eval_flushed = True", handler_idx)
+
+    assert flush_idx < delayed_loop_idx < live_admit_idx < return_idx < pop_idx
+    assert pop_idx < handler_idx < flushed_idx
+
+
+def test_runtime_live_attach_reopens_delayed_heavy_eval_flush():
+    source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
+    helper_idx = source.index("def _admit_runtime_live_attaches")
+    nonlocal_idx = source.index(
+        "nonlocal runtime_work_queue, scanner_heavy_eval_flushed", helper_idx
+    )
+    attached_idx = source.index("if live_attaches:", nonlocal_idx)
+    reopen_idx = source.index("scanner_heavy_eval_flushed = False", attached_idx)
+    queue_update_idx = source.index("runtime_live_attach_ids.update(", reopen_idx)
+
+    assert helper_idx < nonlocal_idx < attached_idx < reopen_idx < queue_update_idx
+
+
+def test_run_sniper_rechecks_work_queue_after_delayed_heavy_eval_flush():
+    source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
+    work_queue_idx = source.index(
+        'runtime_work_queue = list(queue_context["iteration_targets"])'
+    )
+    main_loop_idx = source.index("while True:", work_queue_idx)
+    empty_idx = source.index("if not runtime_work_queue:", main_loop_idx)
+    flush_idx = source.index("_flush_delayed_scanner_heavy_eval()", empty_idx)
+    recheck_idx = source.index("if runtime_work_queue:", flush_idx)
+    continue_idx = source.index("continue", recheck_idx)
+    break_idx = source.index("break", continue_idx)
+
+    assert main_loop_idx < empty_idx < flush_idx < recheck_idx
+    assert recheck_idx < continue_idx < break_idx
 
 
 def test_scanner_heavy_eval_refreshes_ws_snapshot_before_handler():
