@@ -600,6 +600,17 @@ def _entry_ai_action_for_rising_missed(stock: dict[str, Any]) -> tuple[str, str]
         value = stock.get(key)
         text = str(value or "").strip()
         if text:
+            if key == "last_watching_ai_action":
+                result_source = (
+                    str(stock.get("last_watching_ai_result_source") or "")
+                    .strip()
+                    .lower()
+                )
+                if result_source and result_source not in {"live", "prior_valid"}:
+                    return (
+                        "not_evaluated",
+                        f"{key}_untrusted_result_source:{result_source}",
+                    )
             return text, key
     return "-", "missing"
 

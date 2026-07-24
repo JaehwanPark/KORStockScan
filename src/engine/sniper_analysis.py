@@ -255,6 +255,7 @@ def analyze_stock_now(code):
                     session=candle_session,
                     limit=40,
                     model_bar_limit=20,
+                    include_investor_source=True,
                 )
             report_kwargs = {}
             if (
@@ -366,6 +367,7 @@ def get_detailed_reason(code):
                 model_bar_limit=20,
                 recent_candles=recent_candles,
                 source_meta=candle_source_meta,
+                include_investor_source=True,
             )
             ai_decision = AI_ENGINE.analyze_target(
                 target["name"],
@@ -505,6 +507,7 @@ def get_realtime_ai_scores(codes):
                     model_bar_limit=20,
                     recent_candles=candles,
                     source_meta=candle_source_meta,
+                    include_investor_source=True,
                 )
                 ai_decision = AI_ENGINE.analyze_target(
                     name,

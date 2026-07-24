@@ -4,6 +4,7 @@ import inspect
 import json
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 from src.engine import sniper_state_handlers as state_handlers
@@ -21,6 +22,7 @@ from src.engine.scalping.entry_candle_context import (
     fetch_entry_candles_with_meta,
     resolve_entry_candle_request_code,
 )
+from src.engine.scalping import ai_market_snapshot as snapshot_module
 
 KST = ZoneInfo("Asia/Seoul")
 
@@ -109,6 +111,53 @@ def test_builder_keeps_current_session_separate_and_compresses_latest_twenty(
     assert "latest_lower_wick_ratio" in context["structure"]
     assert "volume_direction_alignment" in context["structure"]
     assert context["observation_contract"] == OBSERVATION_CONTRACT
+
+
+def test_entry_snapshot_collects_null_aware_investor_source(monkeypatch):
+    _enable(monkeypatch)
+    source_date = datetime(2026, 7, 23, tzinfo=KST)
+    monkeypatch.setattr(
+        snapshot_module.kiwoom_utils,
+        "get_investor_daily_ka10059_df",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            empty=False,
+            index=[source_date],
+        ),
+    )
+    monkeypatch.setattr(
+        snapshot_module.kiwoom_utils,
+        "get_investor_flow_summary_ka10059",
+        lambda *_args, **_kwargs: {
+            "foreign_net": 8000,
+            "inst_net": 2000,
+            "smart_money_net": 10000,
+        },
+    )
+    now = datetime(2026, 7, 23, 10, 0, tzinfo=KST)
+
+    context = build_entry_candle_context(
+        "token",
+        "000660",
+        _ws(),
+        venue="KRX",
+        session="krx_regular",
+        now_ts=now,
+        recent_candles=_candles(20, start_minute=40),
+        source_meta={},
+        include_investor_source=True,
+    )
+
+    investor = context["ai_market_snapshot_v1"]["sources"]["investor"]
+    assert investor["quality"] == "fresh"
+    assert investor["source"] == "ka10059_process_cache_or_live"
+    assert investor["value"]["foreign_net"] == 8000
+    assert investor["value"]["source_data_date"] == "2026-07-23"
+    assert (
+        "investor"
+        not in context["ai_market_snapshot_v1"]["ai_input_preflight_v1"][
+            "missing_sources"
+        ]
+    )
 
 
 def test_builder_uses_route_consistent_ws_tick_for_forming_bar(monkeypatch):

@@ -491,6 +491,7 @@ def execute_fast_track_scalp_v2(code, name, trigger_price, ratio=0.10):
                 model_bar_limit=20,
                 recent_candles=recent_candles,
                 source_meta=candle_source_meta,
+                include_investor_source=True,
             )
         ai_res = AI_ENGINE.analyze_target(
             name,

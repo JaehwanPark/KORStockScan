@@ -357,6 +357,7 @@ def _build_overnight_holding_context(code, mem_stock, ws_data, ctx):
             recent_candles=list(recent_candles or []),
             candle_meta=dict(candle_meta or {}),
             recent_ticks=list(recent_ticks or []),
+            include_investor_source=True,
         )
     except Exception as exc:
         holding_context = {

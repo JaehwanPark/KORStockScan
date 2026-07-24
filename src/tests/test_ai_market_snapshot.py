@@ -81,6 +81,111 @@ def test_krx_snapshot_uses_exact_per_type_provenance():
     )
 
 
+def test_program_source_uses_ws_0w_canonical_fields_and_timestamp():
+    now = datetime(2026, 7, 23, 10, 0, tzinfo=KST).timestamp()
+    ws = _ws(now)
+    ws["received_types"] = {"0B", "0D", "0w"}
+    ws["last_realtime_type_ts"]["0w"] = now - 0.4
+    ws["last_realtime_type_market_suffix"]["0w"] = ""
+    ws["last_realtime_type_market_route"]["0w"] = "krx_regular"
+    ws.update(
+        {
+            "prog_net_qty": 0,
+            "prog_delta_qty": 0,
+            "prog_net_amt": 0,
+            "prog_delta_amt": 0,
+            "prog_buy_qty": 120,
+            "prog_sell_qty": 120,
+        }
+    )
+
+    snapshot = mod.build_ai_market_snapshot(
+        stock_code="005930",
+        decision_stage="entry_screen",
+        ws_data=ws,
+        effective_venue="KRX",
+        session_bucket="krx_regular",
+        candle_context=_candle(),
+        now_ts=now,
+    )
+
+    program = snapshot["sources"]["program"]
+    assert program["source"] == "ws_0w"
+    assert program["quality"] == "fresh"
+    assert program["value"]["net_qty"] == 0
+    assert program["value"]["buy_qty"] == 120
+    assert "program" not in snapshot["ai_input_preflight_v1"]["missing_sources"]
+
+
+def test_shared_broker_snapshot_preserves_verified_zero_for_entry_context():
+    now = datetime(2026, 7, 23, 10, 0, tzinfo=KST).timestamp()
+    mod.publish_broker_account_snapshot(
+        inventory=[],
+        successful_exchanges={"KRX", "NXT"},
+        open_orders=[],
+        open_orders_request_succeeded=True,
+        captured_at=now - 1,
+    )
+    try:
+        snapshot = mod.build_ai_market_snapshot(
+            stock_code="005930",
+            decision_stage="entry_screen",
+            ws_data=_ws(now),
+            effective_venue="KRX",
+            session_bucket="krx_regular",
+            broker_route="SOR",
+            candle_context=_candle(),
+            now_ts=now,
+        )
+    finally:
+        mod._clear_broker_account_snapshot_for_tests()
+
+    assert snapshot["sources"]["broker_position"]["value"] == 0
+    assert snapshot["sources"]["broker_position"]["verification"] == "verified_absent"
+    assert snapshot["sources"]["open_orders"]["value"] == {
+        "open_buy_qty": 0,
+        "open_sell_qty": 0,
+    }
+    assert snapshot["sources"]["open_orders"]["verification"] == "verified_zero"
+    assert snapshot["ai_input_preflight_v1"]["position_reconciled"] is True
+    assert "broker_position" not in snapshot["ai_input_preflight_v1"]["missing_sources"]
+    assert "open_orders" not in snapshot["ai_input_preflight_v1"]["missing_sources"]
+
+
+def test_shared_pre_fill_zero_is_not_used_as_holding_reconciliation():
+    now = datetime(2026, 7, 23, 10, 0, tzinfo=KST).timestamp()
+    mod.publish_broker_account_snapshot(
+        inventory=[],
+        successful_exchanges={"KRX"},
+        open_orders=[],
+        open_orders_request_succeeded=True,
+        captured_at=now - 1,
+    )
+    try:
+        snapshot = mod.build_ai_market_snapshot(
+            stock_code="005930",
+            decision_stage="holding_flow",
+            ws_data=_ws(now),
+            effective_venue="KRX",
+            session_bucket="krx_regular",
+            broker_route="SOR",
+            candle_context=_candle(),
+            position={"status": "HOLDING", "buy_qty": 1, "remaining_qty": 1},
+            now_ts=now,
+            require_position_reconciliation=True,
+        )
+    finally:
+        mod._clear_broker_account_snapshot_for_tests()
+
+    assert snapshot["sources"]["broker_position"]["quality"] == "missing"
+    assert snapshot["sources"]["open_orders"]["quality"] == "missing"
+    assert snapshot["ai_input_preflight_v1"]["position_reconciled"] is False
+    assert (
+        "broker_position_or_open_orders_unreconciled"
+        in snapshot["ai_input_preflight_v1"]["blockers"]
+    )
+
+
 def test_disabled_preflight_does_not_read_runtime_artifact(monkeypatch):
     monkeypatch.delenv("KORSTOCKSCAN_AI_INPUT_PREFLIGHT_REQUIRED", raising=False)
     monkeypatch.delenv("KORSTOCKSCAN_AI_INPUT_PREFLIGHT_MODE", raising=False)

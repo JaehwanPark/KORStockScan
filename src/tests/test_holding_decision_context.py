@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from src.engine import sniper_state_handlers as state_handlers
+from src.engine.scalping import ai_market_snapshot as snapshot_module
 from src.engine.scalping.holding_decision_context import (
     OBSERVATION_CONTRACT,
     build_holding_decision_context,
@@ -30,6 +31,53 @@ def _enable(monkeypatch) -> None:
     monkeypatch.setenv("KORSTOCKSCAN_HOLDING_SCORE_CONTEXT_ENABLED", "true")
     monkeypatch.setenv("KORSTOCKSCAN_HOLDING_FLOW_CONTEXT_ENABLED", "true")
     monkeypatch.setenv("KORSTOCKSCAN_OVERNIGHT_CONTEXT_ENABLED", "true")
+
+
+def test_holding_snapshot_collects_null_aware_investor_source(monkeypatch):
+    _enable(monkeypatch)
+    source_date = datetime(2026, 7, 23, tzinfo=KST)
+    investor_frame = type(
+        "InvestorFrame",
+        (),
+        {"empty": False, "index": [source_date]},
+    )()
+    monkeypatch.setattr(
+        snapshot_module.kiwoom_utils,
+        "get_investor_daily_ka10059_df",
+        lambda *_args, **_kwargs: investor_frame,
+    )
+    monkeypatch.setattr(
+        snapshot_module.kiwoom_utils,
+        "get_investor_flow_summary_ka10059",
+        lambda *_args, **_kwargs: {
+            "foreign_net": 5000,
+            "inst_net": 22000,
+            "smart_money_net": 27000,
+        },
+    )
+    now = datetime(2026, 7, 23, 10, 0, 30, tzinfo=KST)
+
+    context = build_holding_decision_context(
+        "token",
+        "322000",
+        _ws(now),
+        _stock(),
+        "KRX",
+        "krx_regular",
+        "holding_flow",
+        now_ts=now,
+        recent_candles=_candles(
+            60,
+            start=datetime(2026, 7, 23, 9, 0, tzinfo=KST),
+        ),
+        include_investor_source=True,
+    )
+
+    investor = context["ai_market_snapshot_v1"]["sources"]["investor"]
+    assert investor["quality"] == "fresh"
+    assert investor["source"] == "ka10059_process_cache_or_live"
+    assert investor["value"]["smart_money_net"] == 27000
+    assert investor["value"]["source_data_date"] == "2026-07-23"
 
 
 def _candles(
@@ -156,7 +204,9 @@ def test_fresh_krx_context_contains_sixty_minute_structure_and_executable_pnl(
     }
     log_fields = holding_decision_context_log_fields(context)
     assert len(log_fields["holding_context_model_bars"]) == 20
-    assert log_fields["holding_context_model_structure"]["returns_pct"]["60"] is not None
+    assert (
+        log_fields["holding_context_model_structure"]["returns_pct"]["60"] is not None
+    )
     assert log_fields["holding_context_ai_market_snapshot"]["schema"] == (
         "ai_market_snapshot_v1"
     )

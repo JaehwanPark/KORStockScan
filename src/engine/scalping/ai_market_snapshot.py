@@ -10,11 +10,14 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
+
+from src.utils import kiwoom_utils
 
 SCHEMA = "ai_market_snapshot_v1"
 PREFLIGHT_SCHEMA = "ai_input_preflight_v1"
@@ -57,6 +60,8 @@ _ARTIFACT_STATUS_CACHE: dict[tuple[str, str, float, float], dict[str, Any]] = {}
 _INTEGRATED_ROUTES = {"krx_nxt_integrated", "integrated", "sor"}
 _KRX_ROUTES = {"krx_only", "krx_regular"}
 _NXT_ROUTES = {"nxt_only", "nxt_regular"}
+_BROKER_ACCOUNT_SNAPSHOT_LOCK = threading.RLock()
+_BROKER_ACCOUNT_SNAPSHOT: dict[str, Any] = {}
 
 
 def _safe_float(value: Any, default: float | None = None) -> float | None:
@@ -103,6 +108,212 @@ def _item_suffix(value: Any) -> str:
 def _mapping(source: dict[str, Any], key: str) -> dict[str, Any]:
     value = source.get(key)
     return value if isinstance(value, dict) else {}
+
+
+def publish_broker_account_snapshot(
+    *,
+    inventory: list[dict[str, Any]] | None,
+    successful_exchanges: set[str] | list[str] | tuple[str, ...] | None,
+    open_orders: list[dict[str, Any]] | None = None,
+    open_orders_request_succeeded: bool = False,
+    captured_at: float | None = None,
+) -> None:
+    """Publish one read-only broker reconciliation snapshot for AI contexts.
+
+    The snapshot only exposes facts already returned by the account sync
+    owner.  It does not call the broker, submit/cancel orders, or grant AI any
+    order authority.
+    """
+
+    captured_epoch = float(captured_at if captured_at is not None else time.time())
+    inventory_by_code: dict[str, dict[str, Any]] = {}
+    for item in inventory or []:
+        if not isinstance(item, dict):
+            continue
+        code = _base_code(item.get("code") or item.get("stock_code"))
+        if code:
+            inventory_by_code[code] = dict(item)
+
+    open_qty_by_code: dict[str, dict[str, int]] = {}
+    for item in open_orders or []:
+        if not isinstance(item, dict):
+            continue
+        code = _base_code(item.get("code") or item.get("stock_code"))
+        if not code:
+            continue
+        try:
+            remaining_qty = max(
+                0,
+                int(
+                    float(str(item.get("remaining_qty") or 0).replace(",", "").strip())
+                ),
+            )
+        except (TypeError, ValueError):
+            remaining_qty = 0
+        side = str(item.get("side") or "").strip().upper()
+        row = open_qty_by_code.setdefault(
+            code,
+            {"open_buy_qty": 0, "open_sell_qty": 0},
+        )
+        if side in {"매수", "BUY", "B", "2"}:
+            row["open_buy_qty"] += remaining_qty
+        elif side in {"매도", "SELL", "S", "1"}:
+            row["open_sell_qty"] += remaining_qty
+
+    snapshot = {
+        "captured_at": captured_epoch,
+        "inventory_by_code": inventory_by_code,
+        "successful_exchanges": {
+            str(value or "").strip().upper()
+            for value in (successful_exchanges or [])
+            if str(value or "").strip()
+        },
+        "open_qty_by_code": open_qty_by_code,
+        "open_orders_request_succeeded": bool(open_orders_request_succeeded),
+    }
+    with _BROKER_ACCOUNT_SNAPSHOT_LOCK:
+        _BROKER_ACCOUNT_SNAPSHOT.clear()
+        _BROKER_ACCOUNT_SNAPSHOT.update(snapshot)
+
+
+def _broker_account_context(
+    *,
+    stock_code: str,
+    effective_venue: str,
+    session_bucket: str,
+    now_ts: float,
+) -> dict[str, Any]:
+    with _BROKER_ACCOUNT_SNAPSHOT_LOCK:
+        snapshot = dict(_BROKER_ACCOUNT_SNAPSHOT)
+        snapshot["inventory_by_code"] = dict(
+            _BROKER_ACCOUNT_SNAPSHOT.get("inventory_by_code") or {}
+        )
+        snapshot["open_qty_by_code"] = dict(
+            _BROKER_ACCOUNT_SNAPSHOT.get("open_qty_by_code") or {}
+        )
+        snapshot["successful_exchanges"] = set(
+            _BROKER_ACCOUNT_SNAPSHOT.get("successful_exchanges") or set()
+        )
+    captured_at = _epoch(snapshot.get("captured_at"))
+    if captured_at is None or captured_at - float(now_ts) > (
+        _FUTURE_TOLERANCE_MS / 1000.0
+    ):
+        return {}
+
+    code = _base_code(stock_code)
+    venue, _resolution = _normalize_venue_cohort(
+        venue=effective_venue,
+        session=session_bucket,
+    )
+    expected_exchange = "NXT" if venue in {"NXT", "PREMARKET_KRX_LIKE"} else "KRX"
+    inventory_row = (snapshot.get("inventory_by_code") or {}).get(code)
+    successful_exchanges = snapshot.get("successful_exchanges") or set()
+    position_verified = bool(
+        isinstance(inventory_row, dict) or expected_exchange in successful_exchanges
+    )
+    open_orders_verified = bool(snapshot.get("open_orders_request_succeeded"))
+    if not position_verified and not open_orders_verified:
+        return {}
+
+    context: dict[str, Any] = {
+        "broker_snapshot_at": captured_at,
+        "broker_snapshot_source": "account_sync_shared_snapshot",
+    }
+    if position_verified:
+        raw_qty = (inventory_row or {}).get("qty", 0)
+        try:
+            context["broker_holding_qty"] = max(
+                0, int(float(str(raw_qty or 0).replace(",", "").strip()))
+            )
+        except (TypeError, ValueError):
+            context["broker_holding_qty"] = 0
+        context["broker_position_verification"] = (
+            "present" if isinstance(inventory_row, dict) else "verified_absent"
+        )
+    if open_orders_verified:
+        open_qty = (snapshot.get("open_qty_by_code") or {}).get(
+            code,
+            {"open_buy_qty": 0, "open_sell_qty": 0},
+        )
+        context["open_buy_qty"] = int(open_qty.get("open_buy_qty") or 0)
+        context["open_sell_qty"] = int(open_qty.get("open_sell_qty") or 0)
+        context["broker_open_orders_verification"] = (
+            "present"
+            if context["open_buy_qty"] or context["open_sell_qty"]
+            else "verified_zero"
+        )
+    return context
+
+
+def _clear_broker_account_snapshot_for_tests() -> None:
+    with _BROKER_ACCOUNT_SNAPSHOT_LOCK:
+        _BROKER_ACCOUNT_SNAPSHOT.clear()
+
+
+def enrich_investor_source(
+    *,
+    token: str | None,
+    stock_code: str,
+    request_code: str | None,
+    ws_data: dict[str, Any] | None,
+    observed_at: float,
+) -> dict[str, Any]:
+    """Attach one null-aware ka10059 observation without changing AI authority."""
+
+    enriched = dict(ws_data or {})
+    if enriched.get("investor_context"):
+        return enriched
+    if not token:
+        enriched["investor_missing_reason"] = "investor_token_missing"
+        return enriched
+
+    api_code = str(request_code or stock_code or "").strip()
+    try:
+        investor_df = kiwoom_utils.get_investor_daily_ka10059_df(token, api_code)
+        if investor_df is None or investor_df.empty:
+            enriched["investor_missing_reason"] = "ka10059_empty_response"
+            return enriched
+        investor_context = kiwoom_utils.get_investor_flow_summary_ka10059(
+            token,
+            api_code,
+        )
+        latest_index = investor_df.index[-1]
+        enriched["investor_context"] = {
+            **investor_context,
+            "request_code": api_code,
+            "source_data_date": (
+                latest_index.date().isoformat()
+                if hasattr(latest_index, "date")
+                else str(latest_index)
+            ),
+        }
+        enriched["investor_observed_ts"] = float(observed_at)
+        enriched["investor_source"] = "ka10059_process_cache_or_live"
+        suffix = (
+            "_NX"
+            if api_code.upper().endswith("_NX")
+            else ("_AL" if api_code.upper().endswith("_AL") else "")
+        )
+        enriched["investor_market_suffix"] = suffix
+        enriched["investor_market_route"] = (
+            "nxt_only"
+            if suffix == "_NX"
+            else ("krx_nxt_integrated" if suffix == "_AL" else "krx_only")
+        )
+        enriched["investor_freshness_limit_ms"] = (
+            float(
+                getattr(
+                    kiwoom_utils.TRADING_RULES,
+                    "KIWOOM_INVESTOR_CACHE_TTL_SEC",
+                    60.0,
+                )
+                or 60.0
+            )
+            * 1000.0
+        )
+    except Exception as exc:
+        enriched["investor_missing_reason"] = f"ka10059_error:{type(exc).__name__}"
+    return enriched
 
 
 def _market_data_route(*, suffix: str, route: str) -> str:
@@ -517,13 +728,38 @@ def build_ai_market_snapshot(
     require_position_reconciliation: bool = False,
 ) -> dict[str, Any]:
     ws = ws_data if isinstance(ws_data, dict) else {}
-    position_ctx = position if isinstance(position, dict) else {}
     candle_ctx = candle_context if isinstance(candle_context, dict) else {}
     now_epoch = float(now_ts if now_ts is not None else time.time())
     normalized_venue, venue_resolution = _normalize_venue_cohort(
         venue=effective_venue,
         session=session_bucket,
     )
+    shared_broker_ctx = _broker_account_context(
+        stock_code=stock_code,
+        effective_venue=normalized_venue,
+        session_bucket=session_bucket,
+        now_ts=now_epoch,
+    )
+    explicit_position_ctx = position if isinstance(position, dict) else {}
+    stage_value = str(decision_stage or "").strip().lower()
+    position_stage = any(
+        token in stage_value
+        for token in ("holding", "exit", "overnight", "scale_in", "scale-in")
+    )
+    explicit_position_status = (
+        str(explicit_position_ctx.get("status") or "").strip().upper()
+    )
+    explicit_position_is_active = _active_holding_position(
+        explicit_position_ctx
+    ) or explicit_position_status in {"HOLDING", "SELL_ORDERED"}
+    # An account snapshot captured before a fresh fill may legitimately say
+    # zero.  It is safe for a pre-entry context, but must never be promoted to
+    # exact holding reconciliation merely because the process-wide snapshot is
+    # still inside its TTL.  Holding/exit callers must carry their explicit
+    # broker reconciliation; otherwise the broker sources stay missing.
+    allow_shared_broker_fallback = not (position_stage and explicit_position_is_active)
+    position_ctx = dict(shared_broker_ctx) if allow_shared_broker_fallback else {}
+    position_ctx.update(explicit_position_ctx)
     provenance = realtime_type_provenance(ws, now_ts=now_epoch)
     suffix, route = preferred_ws_route(ws, now_ts=now_epoch)
     market_data_route = _market_data_route(suffix=suffix, route=route)
@@ -589,6 +825,52 @@ def build_ai_market_snapshot(
         if "open_buy_qty" in position_ctx and "open_sell_qty" in position_ctx
         else None
     )
+    realtime_type_timestamps = _mapping(ws, "last_realtime_type_ts")
+    realtime_type_suffixes = _mapping(ws, "last_realtime_type_market_suffix")
+    realtime_type_routes = _mapping(ws, "last_realtime_type_market_route")
+    explicit_program_context = "program_context" in ws
+    program_epoch = _epoch(
+        ws.get("program_observed_ts")
+        if explicit_program_context
+        else (realtime_type_timestamps.get("0w") or ws.get("last_prog_update_ts"))
+    )
+    received_types = {
+        str(value or "").strip() for value in (ws.get("received_types") or [])
+    }
+    has_program_source = bool(
+        explicit_program_context or "0w" in received_types or program_epoch is not None
+    )
+    program_value = (
+        ws.get("program_context")
+        if explicit_program_context
+        else (
+            {
+                "net_qty": ws.get("prog_net_qty"),
+                "delta_qty": ws.get("prog_delta_qty"),
+                "net_amt": ws.get("prog_net_amt"),
+                "delta_amt": ws.get("prog_delta_amt"),
+                "buy_qty": ws.get("prog_buy_qty"),
+                "sell_qty": ws.get("prog_sell_qty"),
+                "buy_amt": ws.get("prog_buy_amt"),
+                "sell_amt": ws.get("prog_sell_amt"),
+            }
+            if has_program_source
+            else None
+        )
+    )
+    program_suffix = (
+        str(realtime_type_suffixes.get("0w") or "").upper()
+        if program_epoch is not None
+        else suffix
+    )
+    program_route = (
+        str(realtime_type_routes.get("0w") or "").lower()
+        if program_epoch is not None
+        else route
+    )
+    investor_freshness_limit_ms = (
+        _safe_float(ws.get("investor_freshness_limit_ms")) or 60_000.0
+    )
     sources = {
         "current_price": _source_row(
             value=current_price if current_price and current_price > 0 else None,
@@ -643,30 +925,41 @@ def build_ai_market_snapshot(
             freshness_limit_ms=_CANDLE_FRESH_MS,
         ),
         "program": _source_row(
-            value=(
-                ws.get("program_context")
-                if "program_context" in ws
-                else ws.get("program_net_qty")
+            value=program_value,
+            source=(
+                str(ws.get("program_source") or "runtime_context")
+                if explicit_program_context
+                else "ws_0w"
             ),
-            source="runtime_context",
-            observed_epoch=_epoch(ws.get("program_observed_ts")),
+            observed_epoch=program_epoch,
             now_epoch=now_epoch,
-            market_suffix=suffix,
-            market_route=route,
-            missing_reason="program_source_missing",
+            market_suffix=program_suffix,
+            market_route=program_route,
+            missing_reason=str(
+                ws.get("program_missing_reason") or "program_source_missing"
+            ),
         ),
         "investor": _source_row(
             value=ws.get("investor_context") or None,
-            source="runtime_context",
+            source=str(ws.get("investor_source") or "runtime_context"),
             observed_epoch=_epoch(ws.get("investor_observed_ts")),
             now_epoch=now_epoch,
-            market_suffix=suffix,
-            market_route=route,
-            missing_reason="investor_source_missing",
+            market_suffix=str(
+                ws.get("investor_market_suffix")
+                if ws.get("investor_market_suffix") is not None
+                else suffix
+            ),
+            market_route=str(ws.get("investor_market_route") or route),
+            missing_reason=str(
+                ws.get("investor_missing_reason") or "investor_source_missing"
+            ),
+            freshness_limit_ms=investor_freshness_limit_ms,
         ),
         "broker_position": _source_row(
             value=broker_qty,
-            source="broker_position_snapshot",
+            source=str(
+                position_ctx.get("broker_snapshot_source") or "broker_position_snapshot"
+            ),
             observed_epoch=broker_epoch,
             now_epoch=now_epoch,
             market_suffix=None,
@@ -675,7 +968,10 @@ def build_ai_market_snapshot(
         ),
         "open_orders": _source_row(
             value=open_orders,
-            source="broker_open_order_snapshot",
+            source=str(
+                position_ctx.get("broker_snapshot_source")
+                or "broker_open_order_snapshot"
+            ),
             observed_epoch=broker_epoch,
             now_epoch=now_epoch,
             market_suffix=None,
@@ -683,6 +979,12 @@ def build_ai_market_snapshot(
             missing_reason="broker_open_orders_snapshot_missing",
         ),
     }
+    sources["broker_position"]["verification"] = position_ctx.get(
+        "broker_position_verification"
+    )
+    sources["open_orders"]["verification"] = position_ctx.get(
+        "broker_open_orders_verification"
+    )
     integrated_sor_route_proven, integrated_sor_route_proof = (
         _integrated_sor_execution_view_proof(
             stock_code=stock_code,
@@ -705,7 +1007,6 @@ def build_ai_market_snapshot(
         integrated_sor_execution_view_proven=integrated_sor_route_proven,
     )
     blockers = list(venue_blockers)
-    stage_value = str(decision_stage or "").strip().lower()
     required_sources = ["current_price", "bbo", "tape"]
     if not any(
         token in stage_value for token in ("post_probe", "probe_recheck", "leg_reprice")

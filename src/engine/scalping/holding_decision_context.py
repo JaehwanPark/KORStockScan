@@ -18,6 +18,7 @@ from src.engine.scalping.ai_market_snapshot import (
     ai_input_preflight,
     ai_market_snapshot_log_fields,
     build_ai_market_snapshot,
+    enrich_investor_source,
     runtime_preflight_required,
 )
 from src.engine.scalping.entry_candle_context import (
@@ -547,6 +548,7 @@ def build_holding_decision_context(
     candle_meta: dict[str, Any] | None = None,
     recent_ticks: list[dict[str, Any]] | None = None,
     rest_signed_ticks: list[dict[str, Any]] | None = None,
+    include_investor_source: bool = False,
 ) -> dict[str, Any]:
     started = time.perf_counter()
     now = _now_kst(now_ts)
@@ -584,9 +586,7 @@ def build_holding_decision_context(
     )
     ws_ticks = [
         tick
-        for tick in (
-            list(route_ticks or []) + list(recent_ticks or [])
-        )
+        for tick in (list(route_ticks or []) + list(recent_ticks or []))
         if isinstance(tick, dict)
     ]
     tape = _trusted_ws_tape(
@@ -963,10 +963,21 @@ def build_holding_decision_context(
         "flow" in str(decision_kind or "").lower()
         or "overnight" in str(decision_kind or "").lower()
     )
+    snapshot_ws = (
+        enrich_investor_source(
+            token=token,
+            stock_code=code,
+            request_code=str(candle.get("request_code") or code),
+            ws_data=ws,
+            observed_at=now_epoch,
+        )
+        if include_investor_source
+        else ws
+    )
     context["ai_market_snapshot_v1"] = build_ai_market_snapshot(
         stock_code=code,
         decision_stage=str(decision_kind or "holding"),
-        ws_data=ws,
+        ws_data=snapshot_ws,
         effective_venue=str(candle.get("venue") or ""),
         session_bucket=str(candle.get("session") or ""),
         broker_route=(

@@ -1975,6 +1975,34 @@ def test_rising_missed_one_share_entry_blocks_not_evaluated_entry_ai_action():
     assert decision.log_fields["rising_missed_entry_ai_not_evaluated_excluded"] is True
 
 
+def test_rising_missed_one_share_entry_does_not_reuse_preflight_drop_as_ai_veto():
+    decision = evaluate_rising_missed_one_share_entry(
+        {
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "scanner_promotion_id": "scan-ai-preflight-drop",
+            "price_delta_since_first_seen_pct": 2.4,
+            "last_watching_ai_action": "DROP",
+            "last_watching_ai_score": 0.0,
+            "last_watching_ai_result_source": "input_preflight_blocked",
+        },
+        strategy="SCALPING",
+        position_tag="SCANNER",
+        feature_enabled=True,
+        has_open_pending=False,
+        already_holding=False,
+        min_delta_pct=0.5,
+    )
+
+    assert decision.allowed is False
+    assert decision.reason == BLOCK_ENTRY_AI_NOT_EVALUATED
+    assert decision.log_fields["rising_missed_entry_ai_action"] == "not_evaluated"
+    assert (
+        decision.log_fields["rising_missed_entry_ai_action_source"]
+        == "last_watching_ai_action_untrusted_result_source:input_preflight_blocked"
+    )
+
+
 def test_rising_missed_one_share_entry_does_not_block_missing_entry_ai_action():
     decision = evaluate_rising_missed_one_share_entry(
         {
@@ -3765,6 +3793,42 @@ def test_rising_missed_one_share_hook_retries_not_evaluated_ai_before_block(
     assert entry_logs[-1][1]["entry_phase"] == "candidate_selected_pre_submit"
     assert entry_logs[-1][1]["submission_state"] == "not_submitted"
     assert entry_logs[-1][1]["actual_order_submitted"] is False
+
+
+def test_rising_missed_retry_rechecks_preflight_blocked_cached_drop(monkeypatch):
+    calls = []
+
+    def fake_retry(**kwargs):
+        calls.append(kwargs)
+        return {
+            "pre_submit_entry_ai_authority_retry_attempted": True,
+            "pre_submit_entry_ai_authority_retry_success": False,
+            "pre_submit_entry_ai_authority_retry_reason": "input_preflight_blocked",
+        }
+
+    monkeypatch.setattr(
+        state_handlers, "_retry_entry_ai_submit_authority_before_block", fake_retry
+    )
+    stock = {
+        "last_watching_ai_action": "DROP",
+        "last_watching_ai_score": 0.0,
+        "last_watching_ai_result_source": "input_preflight_blocked",
+    }
+
+    fields = state_handlers._maybe_retry_rising_missed_entry_ai_not_evaluated(
+        stock,
+        "049720",
+        {"curr": 10950},
+        {"ai_engine": object(), "now_ts": 1000.0, "current_ai_score": 0.0},
+        curr_price=10950,
+    )
+
+    assert len(calls) == 1
+    assert fields["rising_missed_entry_ai_retry_attempted"] is True
+    assert (
+        fields["rising_missed_entry_ai_retry_cached_result_source"]
+        == "input_preflight_blocked"
+    )
 
 
 def test_rising_missed_one_share_hook_skips_retry_for_general_non_candidate_not_evaluated(
@@ -6967,18 +7031,12 @@ def test_rising_missed_premarket_canonicalization_replaces_unknown_placeholder()
 
     assert fields["venue"] == "PREMARKET_KRX_LIKE"
     assert fields["effective_venue"] == "PREMARKET_KRX_LIKE"
-    assert fields["venue_resolution"] == (
-        "canonicalized:rising_missed_effective_venue"
-    )
+    assert fields["venue_resolution"] == ("canonicalized:rising_missed_effective_venue")
 
 
 def test_execution_cohort_requires_canonical_broker_route():
-    krx_ts = datetime(
-        2026, 7, 24, 10, 0, tzinfo=state_handlers._KST
-    ).timestamp()
-    premarket_ts = datetime(
-        2026, 7, 24, 8, 30, tzinfo=state_handlers._KST
-    ).timestamp()
+    krx_ts = datetime(2026, 7, 24, 10, 0, tzinfo=state_handlers._KST).timestamp()
+    premarket_ts = datetime(2026, 7, 24, 8, 30, tzinfo=state_handlers._KST).timestamp()
 
     assert state_handlers._early_volatility_tp_execution_cohort(krx_ts, "SOR") == (
         "KRX"
@@ -6986,9 +7044,10 @@ def test_execution_cohort_requires_canonical_broker_route():
     assert state_handlers._early_volatility_tp_execution_cohort(krx_ts, "KRX") == (
         "UNKNOWN"
     )
-    assert state_handlers._early_volatility_tp_execution_cohort(
-        premarket_ts, "NXT"
-    ) == "PREMARKET_KRX_LIKE"
+    assert (
+        state_handlers._early_volatility_tp_execution_cohort(premarket_ts, "NXT")
+        == "PREMARKET_KRX_LIKE"
+    )
 
 
 def test_entry_receipt_provenance_keeps_cohort_and_broker_route_separate():
@@ -7005,9 +7064,7 @@ def test_entry_receipt_provenance_keeps_cohort_and_broker_route_separate():
     assert fields["effective_venue"] == "KRX"
     assert fields["broker_route"] == "SOR"
     assert fields["entry_execution_broker_route"] == "SOR"
-    assert fields["broker_route_resolution"] == (
-        "krx_regular_session_default_sor"
-    )
+    assert fields["broker_route_resolution"] == ("krx_regular_session_default_sor")
 
 
 def test_legacy_preset_cancel_inherits_recorded_entry_broker_route(monkeypatch):
@@ -27968,14 +28025,10 @@ def test_latency_direct_recheck_arms_then_blocks_early_normal_reentry():
     assert expired_gate["reason"] == "tp1_direct_recheck_expired"
     assert expired["latency_true_ofi_direct_canary_recheck_enforcement"] == "expired"
     assert (
-        expired[
-            "latency_true_ofi_direct_canary_recheck_scheduler_window_missed"
-        ]
+        expired["latency_true_ofi_direct_canary_recheck_scheduler_window_missed"]
         is True
     )
-    assert (
-        expired["latency_true_ofi_direct_canary_recheck_scheduler_lag_sec"] == 0.1
-    )
+    assert expired["latency_true_ofi_direct_canary_recheck_scheduler_lag_sec"] == 0.1
     assert (
         expired["latency_true_ofi_direct_canary_recheck_scheduler_outcome"]
         == "expired_before_runtime_dispatch"
@@ -28935,12 +28988,10 @@ def test_post_submit_db_state_preserves_receipt_advanced_fill():
         "entry_filled_qty": 1,
     }
 
-    status, qty, price, runtime_status = (
-        state_handlers._resolve_post_submit_db_state(
-            stock,
-            curr_price=19110,
-            requested_qty=53,
-        )
+    status, qty, price, runtime_status = state_handlers._resolve_post_submit_db_state(
+        stock,
+        curr_price=19110,
+        requested_qty=53,
     )
 
     assert status == "HOLDING"
@@ -28957,12 +29008,10 @@ def test_post_submit_db_state_keeps_planned_values_before_any_fill():
         "entry_filled_qty": 0,
     }
 
-    status, qty, price, runtime_status = (
-        state_handlers._resolve_post_submit_db_state(
-            stock,
-            curr_price=19110,
-            requested_qty=53,
-        )
+    status, qty, price, runtime_status = state_handlers._resolve_post_submit_db_state(
+        stock,
+        curr_price=19110,
+        requested_qty=53,
     )
 
     assert status == "BUY_ORDERED"

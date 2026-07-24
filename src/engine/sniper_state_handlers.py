@@ -19969,6 +19969,7 @@ def _build_holding_ai_decision_context(
             recent_candles=recent_candles or [],
             candle_meta=candle_meta or {},
             recent_ticks=recent_ticks or [],
+            include_investor_source=True,
         )
     except Exception as exc:
         return {
@@ -31349,6 +31350,7 @@ def _retry_entry_ai_submit_authority_before_block(
             now_ts=retry_context_now_ts,
             recent_candles=recent_candles,
             source_meta=candle_source_meta,
+            include_investor_source=True,
         )
         try:
             overlap_snapshot = _extract_ai_overlap_snapshot(
@@ -35228,6 +35230,7 @@ def _apply_entry_ai_price_canary(
             now_ts=time.time(),
             recent_candles=recent_candles,
             source_meta=candle_source_meta,
+            include_investor_source=True,
         )
         candle_source_quality = (
             candle_context.get("source_quality")
@@ -38884,6 +38887,7 @@ def _run_watching_score_projection_refresh(
             now_ts=projection_context_now_ts,
             recent_candles=recent_candles,
             source_meta=candle_source_meta,
+            include_investor_source=True,
         )
 
         def _on_projection(result):
@@ -46866,6 +46870,7 @@ def _handle_watching_strategy_branch(
                                 now_ts=entry_context_now_ts,
                                 recent_candles=recent_candles,
                                 source_meta=candle_source_meta,
+                                include_investor_source=True,
                             )
                             ai_decision = ai_engine.analyze_target(
                                 stock["name"],
@@ -48990,6 +48995,7 @@ def _handle_watching_strategy_branch(
                                 now_ts=gatekeeper_context_now_ts,
                                 recent_candles=gatekeeper_candles,
                                 source_meta=gatekeeper_candle_meta,
+                                include_investor_source=True,
                             )
                             gatekeeper_snapshot_ws = dict(ws_data or {})
                             null_aware_sources = realtime_ctx.get("null_aware_sources")
@@ -56109,19 +56115,33 @@ def _maybe_retry_rising_missed_entry_ai_not_evaluated(
     if not isinstance(stock, dict):
         fields["rising_missed_entry_ai_retry_reason"] = "missing_stock"
         return fields
-    action = (
-        str(
-            stock.get("rising_missed_entry_ai_action")
-            or stock.get("entry_ai_action")
-            or stock.get("ai_action")
-            or stock.get("last_ai_action")
-            or stock.get("current_ai_action")
-            or stock.get("last_watching_ai_action")
-            or ""
-        )
-        .strip()
-        .lower()
+    action = ""
+    action_source_key = ""
+    for key in (
+        "rising_missed_entry_ai_action",
+        "entry_ai_action",
+        "ai_action",
+        "last_ai_action",
+        "current_ai_action",
+        "last_watching_ai_action",
+    ):
+        text = str(stock.get(key) or "").strip().lower()
+        if text:
+            action = text
+            action_source_key = key
+            break
+    cached_result_source = (
+        str(stock.get("last_watching_ai_result_source") or "").strip().lower()
     )
+    if (
+        action_source_key == "last_watching_ai_action"
+        and cached_result_source
+        and cached_result_source not in {"live", "prior_valid"}
+    ):
+        action = "not_evaluated"
+        fields["rising_missed_entry_ai_retry_cached_result_source"] = (
+            cached_result_source
+        )
     if action != "not_evaluated":
         return fields
     ai_engine = (runtime or {}).get("ai_engine")
@@ -60893,13 +60913,10 @@ def _resolve_post_submit_db_state(
 
     current_status = str(stock.get("status") or "").strip().upper()
     entry_already_filled = bool(
-        current_status == "HOLDING"
-        or _safe_int(stock.get("entry_filled_qty"), 0) > 0
+        current_status == "HOLDING" or _safe_int(stock.get("entry_filled_qty"), 0) > 0
     )
     db_status = (
-        "HOLDING"
-        if scout_upgrade_entry or entry_already_filled
-        else "BUY_ORDERED"
+        "HOLDING" if scout_upgrade_entry or entry_already_filled else "BUY_ORDERED"
     )
     if db_status == "HOLDING":
         db_buy_qty = max(

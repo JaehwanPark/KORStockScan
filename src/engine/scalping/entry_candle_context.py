@@ -17,6 +17,7 @@ from zoneinfo import ZoneInfo
 from src.engine.scalping.ai_market_snapshot import (
     ai_market_snapshot_log_fields,
     build_ai_market_snapshot,
+    enrich_investor_source,
     preferred_ws_route,
     realtime_type_provenance,
 )
@@ -982,6 +983,7 @@ def build_entry_candle_context(
     recent_candles: list[dict[str, Any]] | None = None,
     source_meta: dict[str, Any] | None = None,
     broker_route: str | None = None,
+    include_investor_source: bool = False,
 ) -> dict[str, Any]:
     """Build the entry-owned view over the neutral candle source."""
 
@@ -1012,10 +1014,19 @@ def build_entry_candle_context(
     planned_broker_route = str(
         broker_route or resolve_order_dmst_stex_tp(now=now_kst)
     ).upper()
+    snapshot_ws_data = dict(ws_data or {})
+    if include_investor_source:
+        snapshot_ws_data = enrich_investor_source(
+            token=token,
+            stock_code=code,
+            request_code=str(context.get("request_code") or code),
+            ws_data=snapshot_ws_data,
+            observed_at=now_kst.timestamp(),
+        )
     context["ai_market_snapshot_v1"] = build_ai_market_snapshot(
         stock_code=code,
         decision_stage="entry_context",
-        ws_data=ws_data,
+        ws_data=snapshot_ws_data,
         effective_venue=str(context.get("venue") or ""),
         session_bucket=str(context.get("session") or ""),
         broker_route=planned_broker_route,

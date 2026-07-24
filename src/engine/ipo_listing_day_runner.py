@@ -765,6 +765,7 @@ class IpoListingDayEngine:
                     now_ts=now_dt,
                     recent_candles=candles,
                     source_meta=candle_source_meta,
+                    include_investor_source=True,
                 )
             except Exception:
                 candle_context = {}
