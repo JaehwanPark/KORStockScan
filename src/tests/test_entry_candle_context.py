@@ -504,11 +504,26 @@ def test_nxt_aftermarket_accepts_integrated_ws_only_with_closed_session_proof(
     monkeypatch,
 ):
     _enable(monkeypatch)
+    observed_at = datetime(2026, 7, 23, 16, 20, 30, tzinfo=KST)
+    observed_epoch = observed_at.timestamp()
     ws = _ws(10200)
     ws.pop("market_suffix")
     ws.pop("market_route")
     ws["last_ws_market_suffix"] = "_AL"
     ws["last_ws_market_route"] = "krx_nxt_integrated"
+    ws["last_realtime_type_ts"] = {
+        "0B": observed_epoch - 0.1,
+        "0D": observed_epoch - 0.2,
+    }
+    ws["last_realtime_type_item"] = {
+        "0B": "000660_AL",
+        "0D": "000660_AL",
+    }
+    ws["last_realtime_type_market_suffix"] = {"0B": "_AL", "0D": "_AL"}
+    ws["last_realtime_type_market_route"] = {
+        "0B": "krx_nxt_integrated",
+        "0D": "krx_nxt_integrated",
+    }
     ws["recent_trade_ticks"] = [
         {
             "time": "16:20:20",
@@ -524,7 +539,7 @@ def test_nxt_aftermarket_accepts_integrated_ws_only_with_closed_session_proof(
         ws,
         venue="NXT",
         session="nxt_aftermarket",
-        now_ts=datetime(2026, 7, 23, 16, 20, 30, tzinfo=KST),
+        now_ts=observed_at,
         recent_candles=_candles(20, start_hour=16),
         source_meta={},
     )
@@ -536,6 +551,11 @@ def test_nxt_aftermarket_accepts_integrated_ws_only_with_closed_session_proof(
     assert context["source_quality"]["status"] == "fresh_consistent"
     assert context["source_quality"]["route_conflict_count"] == 0
     assert context["bars"][-1]["c"] == 10210
+    snapshot = context["ai_market_snapshot_v1"]
+    assert snapshot["nxt_integrated_execution_view_proven"] is True
+    assert snapshot["ai_input_preflight_v1"]["source_allowed"] is True
+    assert snapshot["underlying_event_venue"] is None
+    assert snapshot["venue_attribution_allowed"] is False
 
 
 def test_premarket_accepts_integrated_ws_with_closed_krx_session_proof(monkeypatch):

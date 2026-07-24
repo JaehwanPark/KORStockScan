@@ -55,6 +55,29 @@ def _candle(
     }
 
 
+def _nxt_integrated_candle():
+    candle = _candle(
+        rest_route="_NX",
+        ws_route="krx_nxt_integrated",
+        request_code="005930_NX",
+    )
+    candle.update(
+        {
+            "route_equivalence_proven": True,
+            "route_equivalence": "nxt_aftermarket_integrated_ws_to_nx_rest",
+        }
+    )
+    candle["source_quality"]["route_equivalence_proof"] = {
+        "proven": True,
+        "proof_session": "nxt_aftermarket",
+        "krx_regular_closed_by_clock": True,
+        "required_rest_suffix": "_NX",
+        "required_ws_suffix": "_AL",
+        "required_ws_route": "krx_nxt_integrated",
+    }
+    return candle
+
+
 def test_krx_snapshot_uses_exact_per_type_provenance():
     now = datetime(2026, 7, 23, 10, 0, tzinfo=KST).timestamp()
     snapshot = mod.build_ai_market_snapshot(
@@ -708,6 +731,140 @@ def test_nxt_aftermarket_rejects_integrated_route_without_event_venue_proof():
         "nxt_aftermarket_source_unproven"
         in snapshot["ai_input_preflight_v1"]["source_blockers"]
     )
+
+
+def test_nxt_aftermarket_accepts_bounded_integrated_execution_view_without_attribution():
+    now = datetime(2026, 7, 23, 18, 0, tzinfo=KST).timestamp()
+    snapshot = mod.build_ai_market_snapshot(
+        stock_code="005930",
+        decision_stage="entry_context",
+        ws_data=_ws(now, suffix="_AL", route="krx_nxt_integrated"),
+        effective_venue="NXT",
+        session_bucket="nxt_aftermarket",
+        broker_route="NXT",
+        candle_context=_nxt_integrated_candle(),
+        now_ts=now,
+    )
+
+    assert snapshot["ai_input_preflight_v1"]["source_allowed"] is True
+    assert snapshot["ai_input_preflight_v1"]["venue_consistent"] is True
+    assert snapshot["nxt_integrated_execution_view_proven"] is True
+    assert snapshot["nxt_integrated_execution_view_only"] is True
+    assert snapshot["underlying_event_venue"] is None
+    assert snapshot["venue_attribution_allowed"] is False
+    assert (
+        snapshot["venue_attribution_reason"]
+        == "nxt_integrated_execution_view_not_event_venue"
+    )
+    fields = mod.ai_market_snapshot_log_fields(snapshot)
+    assert fields["ai_market_snapshot_nxt_integrated_execution_view_proven"] is True
+
+
+def test_nxt_integrated_execution_view_rejects_unproven_candle_route():
+    now = datetime(2026, 7, 23, 18, 0, tzinfo=KST).timestamp()
+    candle = _candle(
+        rest_route="_NX",
+        ws_route="krx_nxt_integrated",
+        request_code="005930_NX",
+    )
+    candle.update(
+        {
+            "route_equivalence_proven": True,
+            "route_equivalence": "nxt_aftermarket_integrated_ws_to_nx_rest",
+        }
+    )
+    snapshot = mod.build_ai_market_snapshot(
+        stock_code="005930",
+        decision_stage="entry_context",
+        ws_data=_ws(now, suffix="_AL", route="krx_nxt_integrated"),
+        effective_venue="NXT",
+        session_bucket="nxt_aftermarket",
+        broker_route="NXT",
+        candle_context=candle,
+        now_ts=now,
+    )
+
+    assert snapshot["nxt_integrated_execution_view_proven"] is False
+    assert snapshot["ai_input_preflight_v1"]["source_allowed"] is False
+    assert (
+        "nxt_aftermarket_source_unproven"
+        in snapshot["ai_input_preflight_v1"]["source_blockers"]
+    )
+
+
+def test_nxt_integrated_execution_view_rejects_wrong_broker_route_and_clock():
+    for now, broker_route in (
+        (datetime(2026, 7, 23, 18, 0, tzinfo=KST).timestamp(), "SOR"),
+        (datetime(2026, 7, 23, 15, 30, tzinfo=KST).timestamp(), "NXT"),
+    ):
+        snapshot = mod.build_ai_market_snapshot(
+            stock_code="005930",
+            decision_stage="entry_context",
+            ws_data=_ws(now, suffix="_AL", route="krx_nxt_integrated"),
+            effective_venue="NXT",
+            session_bucket="nxt_aftermarket",
+            broker_route=broker_route,
+            candle_context=_nxt_integrated_candle(),
+            now_ts=now,
+        )
+
+        assert snapshot["nxt_integrated_execution_view_proven"] is False
+        assert snapshot["ai_input_preflight_v1"]["source_allowed"] is False
+        assert (
+            "nxt_aftermarket_source_unproven"
+            in snapshot["ai_input_preflight_v1"]["source_blockers"]
+        )
+
+
+def test_nxt_holding_accepts_integrated_execution_view_only_with_position():
+    now = datetime(2026, 7, 23, 18, 0, tzinfo=KST).timestamp()
+    common = {
+        "stock_code": "005930",
+        "decision_stage": "holding_score",
+        "ws_data": _ws(now, suffix="_AL", route="krx_nxt_integrated"),
+        "effective_venue": "NXT",
+        "session_bucket": "nxt_aftermarket",
+        "broker_route": "NXT",
+        "candle_context": _nxt_integrated_candle(),
+        "now_ts": now,
+    }
+    active = mod.build_ai_market_snapshot(
+        **common,
+        position={"buy_qty": 1, "buy_price": 10000},
+    )
+    flat = mod.build_ai_market_snapshot(**common, position={})
+
+    assert active["nxt_integrated_execution_view_proven"] is True
+    assert active["ai_input_preflight_v1"]["source_allowed"] is True
+    assert active["venue_attribution_allowed"] is False
+    assert flat["nxt_integrated_execution_view_proven"] is False
+    assert flat["ai_input_preflight_v1"]["source_allowed"] is False
+
+
+def test_nxt_integrated_execution_view_does_not_bypass_stale_realtime_sources():
+    now = datetime(2026, 7, 23, 18, 0, tzinfo=KST).timestamp()
+    ws = _ws(now, suffix="_AL", route="krx_nxt_integrated")
+    ws["last_realtime_type_ts"] = {"0B": now - 4.0, "0D": now - 4.0}
+    snapshot = mod.build_ai_market_snapshot(
+        stock_code="005930",
+        decision_stage="entry_context",
+        ws_data=ws,
+        effective_venue="NXT",
+        session_bucket="nxt_aftermarket",
+        broker_route="NXT",
+        candle_context=_nxt_integrated_candle(),
+        now_ts=now,
+    )
+
+    assert snapshot["nxt_integrated_execution_view_proven"] is False
+    assert snapshot["ai_input_preflight_v1"]["source_allowed"] is False
+    assert (
+        "realtime_type_provenance_missing_or_stale"
+        in snapshot["ai_input_preflight_v1"]["source_blockers"]
+    )
+    assert "bbo_stale" in snapshot["ai_input_preflight_v1"]["source_blockers"]
+    assert "current_price_stale" in snapshot["ai_input_preflight_v1"]["source_blockers"]
+    assert "tape_stale" in snapshot["ai_input_preflight_v1"]["source_blockers"]
 
 
 def test_nxt_aftermarket_rejects_suffix_route_mismatch():

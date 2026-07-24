@@ -630,6 +630,102 @@ def _integrated_sor_execution_view_proof(
     return True, "entry_sor_integrated_execution_view"
 
 
+def _nxt_aftermarket_integrated_execution_view_proof(
+    *,
+    stock_code: str,
+    decision_stage: str,
+    venue: str,
+    session: str,
+    broker_route: str,
+    candle_context: dict[str, Any],
+    position: dict[str, Any],
+    provenance: dict[str, dict[str, Any]],
+    now_epoch: float,
+) -> tuple[bool, str]:
+    """Accept a bounded NXT execution view without inventing event venue.
+
+    Kiwoom may deliver NXT-aftermarket 0B/0D observations through the
+    integrated ``_AL`` route.  The route is usable for an NXT decision only
+    when the session candle producer independently proved the closed-KRX
+    ``_AL`` -> ``_NX`` equivalence and every required realtime type carries
+    the same fresh integrated route.  This proof never grants underlying
+    event-venue attribution.
+    """
+
+    stage = str(decision_stage or "").strip().lower()
+    session_value = str(session or "").strip().lower()
+    clock = datetime.fromtimestamp(now_epoch, tz=KST).time()
+    holding_stage = stage in {
+        "holding_score",
+        "holding_score_submit_authority",
+        "holding_flow",
+    } or stage.startswith("overnight")
+    entry_stage = stage in {"entry_context", "entry_screen", "gatekeeper"}
+    candle_quality = (
+        candle_context.get("source_quality")
+        if isinstance(candle_context.get("source_quality"), dict)
+        else {}
+    )
+    route_proof = (
+        candle_quality.get("route_equivalence_proof")
+        if isinstance(candle_quality.get("route_equivalence_proof"), dict)
+        else {}
+    )
+    rows = [provenance[key] for key in _MARKET_TYPES]
+    conditions = {
+        "supported_stage": holding_stage or entry_stage,
+        "stage_position_contract": (
+            _active_holding_position(position) if holding_stage else entry_stage
+        ),
+        "nxt_aftermarket_cohort": str(venue or "").strip().upper() == "NXT"
+        and session_value == "nxt_aftermarket"
+        and datetime.strptime("16:00", "%H:%M").time()
+        <= clock
+        <= datetime.strptime("20:00", "%H:%M").time(),
+        "nxt_broker_route": str(broker_route or "").strip().upper() == "NXT",
+        "candle_route_equivalence": (
+            str(candle_context.get("schema") or "").strip()
+            in {"session_candle_source_v1", "entry_candle_context_v1"}
+            and _base_code(candle_context.get("request_code")) == _base_code(stock_code)
+            and str(candle_context.get("rest_route") or "").strip().upper() == "_NX"
+            and str(candle_context.get("ws_route") or "").strip().lower()
+            == "krx_nxt_integrated"
+            and bool(candle_context.get("route_equivalence_proven", False))
+            and str(candle_context.get("route_equivalence") or "").strip()
+            == "nxt_aftermarket_integrated_ws_to_nx_rest"
+            and candle_quality.get("status") == "fresh_consistent"
+        ),
+        "candle_route_proof": (
+            bool(route_proof.get("proven", False))
+            and str(route_proof.get("proof_session") or "").strip() == "nxt_aftermarket"
+            and bool(route_proof.get("krx_regular_closed_by_clock", False))
+            and str(route_proof.get("required_rest_suffix") or "").strip().upper()
+            == "_NX"
+            and str(route_proof.get("required_ws_suffix") or "").strip().upper()
+            == "_AL"
+            and str(route_proof.get("required_ws_route") or "").strip().lower()
+            == "krx_nxt_integrated"
+        ),
+        "integrated_realtime_routes": all(
+            row.get("quality") == "fresh"
+            and _base_code(row.get("item")) == _base_code(stock_code)
+            and str(row.get("market_suffix") or "").strip().upper() == "_AL"
+            and _market_data_route(
+                suffix=str(row.get("market_suffix") or ""),
+                route=str(row.get("market_route") or ""),
+            )
+            == "krx_nxt_integrated"
+            for row in rows
+        ),
+    }
+    missing = [name for name, passed in conditions.items() if not passed]
+    if missing:
+        return False, "missing:" + ",".join(missing)
+    if holding_stage:
+        return True, "holding_nxt_aftermarket_integrated_execution_view"
+    return True, "entry_nxt_aftermarket_integrated_execution_view"
+
+
 def _venue_consistency(
     *,
     stock_code: str,
@@ -638,6 +734,7 @@ def _venue_consistency(
     provenance: dict[str, dict[str, Any]],
     now_epoch: float,
     integrated_sor_execution_view_proven: bool = False,
+    nxt_integrated_execution_view_proven: bool = False,
 ) -> tuple[bool, list[str]]:
     blockers: list[str] = []
     rows = [provenance[key] for key in _MARKET_TYPES]
@@ -692,7 +789,10 @@ def _venue_consistency(
             nx_exact = data_route == "nxt_only"
             al_proven = (
                 data_route == "krx_nxt_integrated"
-                and str(row.get("effective_venue") or "").strip().upper() == "NXT"
+                and (
+                    str(row.get("effective_venue") or "").strip().upper() == "NXT"
+                    or nxt_integrated_execution_view_proven
+                )
                 and datetime.strptime("16:00", "%H:%M").time()
                 <= now_clock
                 <= datetime.strptime("20:00", "%H:%M").time()
@@ -998,6 +1098,20 @@ def build_ai_market_snapshot(
             now_epoch=now_epoch,
         )
     )
+    (
+        nxt_integrated_execution_view_proven,
+        nxt_integrated_execution_view_proof,
+    ) = _nxt_aftermarket_integrated_execution_view_proof(
+        stock_code=stock_code,
+        decision_stage=decision_stage,
+        venue=normalized_venue,
+        session=session_bucket,
+        broker_route=str(broker_route or ""),
+        candle_context=candle_ctx,
+        position=position_ctx,
+        provenance=provenance,
+        now_epoch=now_epoch,
+    )
     venue_consistent, venue_blockers = _venue_consistency(
         stock_code=stock_code,
         venue=normalized_venue,
@@ -1005,6 +1119,7 @@ def build_ai_market_snapshot(
         provenance=provenance,
         now_epoch=now_epoch,
         integrated_sor_execution_view_proven=integrated_sor_route_proven,
+        nxt_integrated_execution_view_proven=(nxt_integrated_execution_view_proven),
     )
     blockers = list(venue_blockers)
     required_sources = ["current_price", "bbo", "tape"]
@@ -1091,6 +1206,9 @@ def build_ai_market_snapshot(
     integrated_sor_execution_view_only = bool(
         integrated_sor_route_proven and underlying_event_venue is None
     )
+    nxt_integrated_execution_view_only = bool(
+        nxt_integrated_execution_view_proven and underlying_event_venue is None
+    )
     venue_attribution_allowed = bool(
         underlying_event_venue in {"KRX", "NXT"}
         and venue_consistent
@@ -1103,9 +1221,13 @@ def build_ai_market_snapshot(
             "integrated_sor_execution_view_not_event_venue"
             if integrated_sor_execution_view_only
             else (
-                "source_quality_blocked_even_with_event_venue"
-                if underlying_event_venue in {"KRX", "NXT"}
-                else underlying_event_venue_source
+                "nxt_integrated_execution_view_not_event_venue"
+                if nxt_integrated_execution_view_only
+                else (
+                    "source_quality_blocked_even_with_event_venue"
+                    if underlying_event_venue in {"KRX", "NXT"}
+                    else underlying_event_venue_source
+                )
             )
         )
     )
@@ -1123,6 +1245,9 @@ def build_ai_market_snapshot(
         "integrated_sor_route_proven": integrated_sor_route_proven,
         "integrated_sor_route_proof": integrated_sor_route_proof,
         "integrated_sor_execution_view_only": integrated_sor_execution_view_only,
+        "nxt_integrated_execution_view_proven": (nxt_integrated_execution_view_proven),
+        "nxt_integrated_execution_view_proof": nxt_integrated_execution_view_proof,
+        "nxt_integrated_execution_view_only": nxt_integrated_execution_view_only,
         "venue_attribution_allowed": venue_attribution_allowed,
         "venue_attribution_reason": venue_attribution_reason,
         "session_bucket": session_bucket,
@@ -1147,6 +1272,9 @@ def build_ai_market_snapshot(
         "integrated_sor_route_proven": integrated_sor_route_proven,
         "integrated_sor_route_proof": integrated_sor_route_proof,
         "integrated_sor_execution_view_only": integrated_sor_execution_view_only,
+        "nxt_integrated_execution_view_proven": (nxt_integrated_execution_view_proven),
+        "nxt_integrated_execution_view_proof": nxt_integrated_execution_view_proof,
+        "nxt_integrated_execution_view_only": nxt_integrated_execution_view_only,
         "venue_attribution_allowed": venue_attribution_allowed,
         "venue_attribution_reason": venue_attribution_reason,
         "session_bucket": session_bucket,
@@ -1230,6 +1358,15 @@ def ai_market_snapshot_log_fields(
         ),
         "ai_market_snapshot_integrated_sor_execution_view_only": bool(
             snapshot.get("integrated_sor_execution_view_only", False)
+        ),
+        "ai_market_snapshot_nxt_integrated_execution_view_proven": bool(
+            snapshot.get("nxt_integrated_execution_view_proven", False)
+        ),
+        "ai_market_snapshot_nxt_integrated_execution_view_proof": snapshot.get(
+            "nxt_integrated_execution_view_proof"
+        ),
+        "ai_market_snapshot_nxt_integrated_execution_view_only": bool(
+            snapshot.get("nxt_integrated_execution_view_only", False)
         ),
         "ai_market_snapshot_venue_attribution_allowed": bool(
             snapshot.get("venue_attribution_allowed", False)
