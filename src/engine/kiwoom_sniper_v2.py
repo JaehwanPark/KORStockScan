@@ -8427,8 +8427,10 @@ def run_sniper(is_test_mode=False):
                 nonlocal scanner_heavy_eval_flushed
                 if scanner_heavy_eval_flushed:
                     return
+                # Guarantee backlog progress before newly attached watches preempt it.
+                heavy_eval_attempted = False
                 while delayed_scanner_heavy_eval:
-                    if _admit_runtime_live_attaches():
+                    if heavy_eval_attempted and _admit_runtime_live_attaches():
                         return
                     (
                         delayed_stock,
@@ -8436,6 +8438,7 @@ def run_sniper(is_test_mode=False):
                         delayed_ws_data,
                         queue_enter_epoch,
                     ) = delayed_scanner_heavy_eval.pop(0)
+                    heavy_eval_attempted = True
                     if delayed_stock.get("status") != "WATCHING":
                         continue
                     eval_ws_data = delayed_ws_data
@@ -8638,6 +8641,8 @@ def run_sniper(is_test_mode=False):
                             now_ts=time.time(),
                             emit_event_fn=_defer_scanner_entry_pipeline_log,
                         )
+                if heavy_eval_attempted and _admit_runtime_live_attaches():
+                    return
                 scanner_heavy_eval_flushed = True
 
             runtime_work_queue = list(queue_context["iteration_targets"])
@@ -8680,11 +8685,12 @@ def run_sniper(is_test_mode=False):
                 return len(live_attaches)
 
             while True:
-                _admit_runtime_live_attaches()
                 if not runtime_work_queue:
                     _flush_delayed_scanner_heavy_eval()
                     if runtime_work_queue:
                         continue
+                _admit_runtime_live_attaches()
+                if not runtime_work_queue:
                     break
                 stock = runtime_work_queue.pop(0)
                 runtime_processed_target_ids.add(id(stock))

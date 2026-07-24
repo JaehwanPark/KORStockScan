@@ -3678,20 +3678,25 @@ def test_scanner_pipeline_events_flush_before_heavy_eval_handler():
     assert flush_def_idx < heavy_lag_idx < pipeline_flush_idx < heavy_handle_idx
 
 
-def test_run_sniper_yields_delayed_heavy_eval_when_live_scanner_attach_arrives():
+def test_run_sniper_processes_one_delayed_heavy_eval_before_live_attach_yield():
     source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
     flush_idx = source.index("def _flush_delayed_scanner_heavy_eval")
+    attempted_init_idx = source.index("heavy_eval_attempted = False", flush_idx)
     delayed_loop_idx = source.index("while delayed_scanner_heavy_eval:", flush_idx)
-    live_admit_idx = source.index(
-        "if _admit_runtime_live_attaches():", delayed_loop_idx
+    attempted_gate_idx = source.index(
+        "if heavy_eval_attempted and _admit_runtime_live_attaches():",
+        delayed_loop_idx,
     )
+    live_admit_idx = source.index("_admit_runtime_live_attaches()", attempted_gate_idx)
     return_idx = source.index("return", live_admit_idx)
     pop_idx = source.index("delayed_scanner_heavy_eval.pop(0)", return_idx)
+    attempted_set_idx = source.index("heavy_eval_attempted = True", pop_idx)
     handler_idx = source.index("handle_watching_state(", pop_idx)
     flushed_idx = source.index("scanner_heavy_eval_flushed = True", handler_idx)
 
-    assert flush_idx < delayed_loop_idx < live_admit_idx < return_idx < pop_idx
-    assert pop_idx < handler_idx < flushed_idx
+    assert flush_idx < attempted_init_idx < delayed_loop_idx < attempted_gate_idx
+    assert attempted_gate_idx < live_admit_idx < return_idx < pop_idx
+    assert pop_idx < attempted_set_idx < handler_idx < flushed_idx
 
 
 def test_runtime_live_attach_reopens_delayed_heavy_eval_flush():
@@ -3717,10 +3722,13 @@ def test_run_sniper_rechecks_work_queue_after_delayed_heavy_eval_flush():
     flush_idx = source.index("_flush_delayed_scanner_heavy_eval()", empty_idx)
     recheck_idx = source.index("if runtime_work_queue:", flush_idx)
     continue_idx = source.index("continue", recheck_idx)
-    break_idx = source.index("break", continue_idx)
+    live_admit_idx = source.index("_admit_runtime_live_attaches()", continue_idx)
+    second_empty_idx = source.index("if not runtime_work_queue:", live_admit_idx)
+    break_idx = source.index("break", second_empty_idx)
 
     assert main_loop_idx < empty_idx < flush_idx < recheck_idx
-    assert recheck_idx < continue_idx < break_idx
+    assert recheck_idx < continue_idx < live_admit_idx
+    assert live_admit_idx < second_empty_idx < break_idx
 
 
 def test_scanner_heavy_eval_refreshes_ws_snapshot_before_handler():
