@@ -5124,13 +5124,46 @@ def test_run_sniper_processes_one_delayed_heavy_eval_before_live_attach_yield():
     live_admit_idx = source.index("_admit_runtime_live_attaches()", attempted_gate_idx)
     return_idx = source.index("return", live_admit_idx)
     pop_idx = source.index("delayed_scanner_heavy_eval.pop(0)", return_idx)
+    same_symbol_pending_idx = source.index(
+        "_SCANNER_PROMOTION_INBOX.pending_for(delayed_code)", pop_idx
+    )
+    same_symbol_admit_idx = source.index(
+        "_admit_runtime_live_attaches()", same_symbol_pending_idx
+    )
+    scheduler_dispatch_idx = source.index(
+        'if scheduler_claim.action != "dispatch":', same_symbol_admit_idx
+    )
     attempted_set_idx = source.index("heavy_eval_attempted = True", pop_idx)
     handler_idx = source.index("handle_watching_state(", pop_idx)
     flushed_idx = source.index("scanner_heavy_eval_flushed = True", handler_idx)
 
     assert flush_idx < attempted_init_idx < delayed_loop_idx < attempted_gate_idx
     assert attempted_gate_idx < live_admit_idx < return_idx < pop_idx
-    assert pop_idx < attempted_set_idx < handler_idx < flushed_idx
+    assert pop_idx < same_symbol_pending_idx < same_symbol_admit_idx
+    assert same_symbol_admit_idx < scheduler_dispatch_idx < attempted_set_idx
+    assert attempted_set_idx < handler_idx < flushed_idx
+
+
+def test_scheduler_ready_heavy_eval_flushes_before_next_promotion_attach():
+    source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
+    enqueue_idx = source.index(
+        'owner="eligible_precheck_heavy_eval"',
+    )
+    delayed_append_idx = source.index(
+        "delayed_scanner_heavy_eval.append", enqueue_idx
+    )
+    scheduler_guard_idx = source.index(
+        "# Stage-1 deadline mode keeps preparation", delayed_append_idx
+    )
+    immediate_flush_idx = source.index(
+        "_flush_delayed_scanner_heavy_eval()", scheduler_guard_idx
+    )
+    legacy_budget_flush_idx = source.index(
+        "scanner_full_eval_count >= scanner_full_eval_limit", immediate_flush_idx
+    )
+
+    assert enqueue_idx < delayed_append_idx < scheduler_guard_idx
+    assert scheduler_guard_idx < immediate_flush_idx < legacy_budget_flush_idx
 
 
 def test_runtime_live_attach_reopens_delayed_heavy_eval_flush():

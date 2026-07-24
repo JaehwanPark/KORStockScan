@@ -9619,7 +9619,6 @@ def run_sniper(is_test_mode=False):
                         delayed_ws_data,
                         queue_enter_epoch,
                     ) = delayed_scanner_heavy_eval.pop(0)
-                    heavy_eval_attempted = True
                     if delayed_stock.get("status") != "WATCHING":
                         scheduler = getattr(
                             run_sniper, "scanner_runtime_scheduler", None
@@ -9647,8 +9646,13 @@ def run_sniper(is_test_mode=False):
                     scheduler_heavy_item = None
                     if scheduler_generation is not None:
                         # A promotion received while another unit was blocking
-                        # must supersede this item before heavy evaluation begins.
-                        if _admit_runtime_live_attaches():
+                        # must supersede the same-symbol item before heavy
+                        # evaluation begins.  An unrelated inbox envelope must
+                        # not preempt the first ready heavy unit indefinitely.
+                        if (
+                            _SCANNER_PROMOTION_INBOX.pending_for(delayed_code)
+                            is not None
+                        ):
                             delayed_scanner_heavy_eval.append(
                                 (
                                     delayed_stock,
@@ -9657,6 +9661,7 @@ def run_sniper(is_test_mode=False):
                                     queue_enter_epoch,
                                 )
                             )
+                            _admit_runtime_live_attaches()
                             return
                         scheduler_generation = (
                             _scanner_scheduler_target_generation(
@@ -9700,6 +9705,7 @@ def run_sniper(is_test_mode=False):
                         if scheduler_claim.action != "dispatch":
                             continue
                         scheduler_heavy_item = scheduler_claim.item
+                    heavy_eval_attempted = True
                     eval_ws_data = delayed_ws_data
                     opening_rotation_handoff_allowed = False
                     if _is_scanner_watching_target(delayed_stock):
@@ -11092,6 +11098,12 @@ def run_sniper(is_test_mode=False):
                         delayed_scanner_heavy_eval.append(
                             (stock, code, ws_data, heavy_queue_enter_epoch)
                         )
+                        if scheduler_generation is not None:
+                            # Stage-1 deadline mode keeps preparation on the
+                            # main thread.  Dispatch one ready heavy unit now
+                            # so a stream of synchronous promotion attaches
+                            # cannot age every heavy item past its deadline.
+                            _flush_delayed_scanner_heavy_eval()
                         if (
                             scheduler_generation is None
                             and scanner_full_eval_count >= scanner_full_eval_limit
