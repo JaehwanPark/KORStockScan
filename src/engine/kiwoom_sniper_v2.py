@@ -2184,33 +2184,56 @@ def _emit_scanner_scheduler_event(
     payload = payload or {}
     target = target or {}
     venue_fields = _scanner_runtime_target_venue_fields(payload, target=target)
-    emit_pipeline_event(
-        "ENTRY_PIPELINE",
-        str(payload.get("name") or target.get("name") or "-"),
-        str(payload.get("code") or target.get("code") or "").strip()[:6],
-        str(stage),
-        record_id=payload.get("record_id") or target.get("id"),
-        fields={
-            "metric_role": "runtime_scheduler_latency",
-            "decision_authority": "scanner_runtime_scheduler_only_no_order_authority",
-            "window_policy": "per_scanner_generation_action_timestamps",
-            "sample_floor": "one_valid_scanner_generation",
-            "primary_decision_metric": "attach_to_first_precheck_sec",
-            "source_quality_gate": "canonical_generation_and_venue_provenance_required",
-            "scanner_scheduler_action_epoch": round(time.time(), 6),
-            "runtime_effect": True,
-            "actual_order_submitted": False,
-            "broker_order_forbidden": True,
-            "allowed_runtime_apply": False,
-            "forbidden_uses": (
-                "standalone_buy,broker_submit,threshold_mutation,provider_route_change,"
-                "order_price_change,quantity_or_cap_change,broker_guard_bypass,"
-                "stale_quote_bypass,hard_safety_bypass"
-            ),
-            **venue_fields,
-            **dict(fields or {}),
-        },
-    )
+    stock_name = str(payload.get("name") or target.get("name") or "-")
+    stock_code = str(payload.get("code") or target.get("code") or "").strip()[:6]
+    stage_name = str(stage)
+    record_id = payload.get("record_id") or target.get("id")
+    event_fields = {
+        "metric_role": "runtime_scheduler_latency",
+        "decision_authority": "scanner_runtime_scheduler_only_no_order_authority",
+        "window_policy": "per_scanner_generation_action_timestamps",
+        "sample_floor": "one_valid_scanner_generation",
+        "primary_decision_metric": "attach_to_first_precheck_sec",
+        "source_quality_gate": "canonical_generation_and_venue_provenance_required",
+        "scanner_scheduler_action_epoch": round(time.time(), 6),
+        "scanner_scheduler_event_sink": "async_observation_executor",
+        "runtime_effect": True,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "allowed_runtime_apply": False,
+        "forbidden_uses": (
+            "standalone_buy,broker_submit,threshold_mutation,provider_route_change,"
+            "order_price_change,quantity_or_cap_change,broker_guard_bypass,"
+            "stale_quote_bypass,hard_safety_bypass"
+        ),
+        **venue_fields,
+        **dict(fields or {}),
+    }
+
+    def _emit_observation():
+        try:
+            emit_pipeline_event(
+                "ENTRY_PIPELINE",
+                stock_name,
+                stock_code,
+                stage_name,
+                record_id=record_id,
+                fields=event_fields,
+            )
+        except Exception as exc:
+            log_error(
+                "[SCANNER_SCHEDULER_OBSERVATION] "
+                f"event sink failed stage={stage_name} code={stock_code}: {exc}"
+            )
+
+    try:
+        _SCANNER_OBSERVATION_EXECUTOR.submit(_emit_observation)
+    except RuntimeError as exc:
+        # Instrumentation shutdown must never abort scanner state handling.
+        log_error(
+            "[SCANNER_SCHEDULER_OBSERVATION] "
+            f"event submit failed stage={stage_name} code={stock_code}: {exc}"
+        )
 
 
 def _resolve_scanner_runtime_record_id(payload, code, strategy):

@@ -761,6 +761,79 @@ def test_scheduler_boot_restore_without_canonical_venue_is_isolated(
     )
 
 
+def test_scheduler_event_sink_snapshots_action_for_observation_executor(monkeypatch):
+    submitted = []
+    emitted = []
+
+    class _InlineExecutor:
+        @staticmethod
+        def submit(callback):
+            submitted.append(callback)
+            callback()
+
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "_SCANNER_OBSERVATION_EXECUTOR",
+        _InlineExecutor(),
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "emit_pipeline_event",
+        lambda *args, **kwargs: emitted.append((args, kwargs)),
+    )
+
+    kiwoom_sniper_v2._emit_scanner_scheduler_event(
+        payload={
+            "name": "SAMSUNG",
+            "code": "005930",
+            "record_id": 77,
+            "effective_venue": "KRX",
+        },
+        stage="scalping_scanner_scheduler_work_dispatched",
+        fields={"scheduler_action": "dispatch"},
+    )
+
+    assert len(submitted) == 1
+    assert emitted[0][0][:4] == (
+        "ENTRY_PIPELINE",
+        "SAMSUNG",
+        "005930",
+        "scalping_scanner_scheduler_work_dispatched",
+    )
+    assert emitted[0][1]["record_id"] == 77
+    assert emitted[0][1]["fields"]["scheduler_action"] == "dispatch"
+    assert (
+        emitted[0][1]["fields"]["scanner_scheduler_event_sink"]
+        == "async_observation_executor"
+    )
+    assert emitted[0][1]["fields"]["scanner_scheduler_action_epoch"] > 0
+
+
+def test_scheduler_event_sink_shutdown_cannot_abort_runtime(monkeypatch):
+    errors = []
+
+    class _ClosedExecutor:
+        @staticmethod
+        def submit(callback):
+            raise RuntimeError("executor shutdown")
+
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "_SCANNER_OBSERVATION_EXECUTOR",
+        _ClosedExecutor(),
+    )
+    monkeypatch.setattr(kiwoom_sniper_v2, "log_error", errors.append)
+
+    kiwoom_sniper_v2._emit_scanner_scheduler_event(
+        payload={"code": "005930", "effective_venue": "KRX"},
+        stage="scalping_scanner_scheduler_work_dispatched",
+        fields={"scheduler_action": "dispatch"},
+    )
+
+    assert len(errors) == 1
+    assert "event submit failed" in errors[0]
+
+
 def test_fresh_canonical_generation_releases_boot_restore_isolation(
     monkeypatch,
 ):
