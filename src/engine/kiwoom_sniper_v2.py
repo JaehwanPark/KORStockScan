@@ -5299,6 +5299,37 @@ def _runtime_requeue_pending_scanner_scheduler_targets(
     )
 
 
+def _runtime_scheduler_deferred_winner_target(
+    decision,
+    active_targets,
+    *,
+    queued_target_ids=None,
+    delayed_target_ids=None,
+    forced_target_ids=None,
+):
+    """Surface one deferred EDF winner without reopening same-loop starvation."""
+
+    item = getattr(decision, "item", None)
+    generation = getattr(item, "generation", None)
+    generation_id = str(getattr(generation, "generation_id", "") or "").strip()
+    if not generation_id:
+        return None
+    excluded_ids = {
+        *set(queued_target_ids or ()),
+        *set(delayed_target_ids or ()),
+        *set(forced_target_ids or ()),
+    }
+    for target in active_targets or ():
+        if id(target) in excluded_ids or not _is_scanner_watching_target(target):
+            continue
+        if (
+            str((target or {}).get("scanner_generation_id") or "").strip()
+            == generation_id
+        ):
+            return target
+    return None
+
+
 def _scanner_scheduler_owns_missing_ws_lane(target, *, scheduler):
     """Let deadline lanes observe and recover a missing WS snapshot themselves.
 
@@ -9673,6 +9704,7 @@ def run_sniper(is_test_mode=False):
             runtime_iteration_accounting_targets = list(runtime_work_queue)
             runtime_processed_target_ids = set()
             runtime_live_attach_ids = set()
+            runtime_scheduler_forced_target_ids = set()
 
             def _admit_runtime_live_attaches():
                 nonlocal runtime_work_queue, scanner_heavy_eval_flushed
@@ -10063,6 +10095,35 @@ def run_sniper(is_test_mode=False):
                                 )
                                 continue
                             if scheduler_claim.action == "not_next":
+                                deferred_winner = (
+                                    _runtime_scheduler_deferred_winner_target(
+                                        scheduler_claim,
+                                        targets,
+                                        queued_target_ids={
+                                            id(target)
+                                            for target in runtime_work_queue
+                                        },
+                                        delayed_target_ids={
+                                            id(item[0])
+                                            for item in delayed_scanner_heavy_eval
+                                        },
+                                        forced_target_ids=(
+                                            runtime_scheduler_forced_target_ids
+                                        ),
+                                    )
+                                )
+                                if deferred_winner is not None:
+                                    runtime_scheduler_forced_target_ids.add(
+                                        id(deferred_winner)
+                                    )
+                                    runtime_work_queue.insert(0, deferred_winner)
+                                    log_info(
+                                        "[SCANNER_RUNTIME_SCHEDULER_EDF_YIELD] "
+                                        "candidate="
+                                        f"{code} winner="
+                                        f"{str(deferred_winner.get('code') or '').strip()[:6]} "
+                                        "forced_once=true"
+                                    )
                                 continue
                             if scheduler_claim.action != "dispatch":
                                 continue

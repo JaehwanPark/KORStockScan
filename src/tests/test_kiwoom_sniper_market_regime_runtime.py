@@ -2453,6 +2453,97 @@ def test_runtime_does_not_requeue_scheduler_target_processed_in_same_loop(
     assert requeued == []
 
 
+def test_runtime_scheduler_surfaces_deferred_edf_winner_once():
+    winner = {
+        "code": "460930",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "scanner_generation_id": "460930:PROMO-1:r1",
+    }
+    candidate = {
+        "code": "100090",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "scanner_generation_id": "100090:PROMO-2:r1",
+    }
+    decision = SimpleNamespace(
+        item=SimpleNamespace(
+            generation=SimpleNamespace(generation_id="460930:PROMO-1:r1")
+        )
+    )
+
+    assert (
+        kiwoom_sniper_v2._runtime_scheduler_deferred_winner_target(
+            decision,
+            [candidate, winner],
+        )
+        is winner
+    )
+    assert (
+        kiwoom_sniper_v2._runtime_scheduler_deferred_winner_target(
+            decision,
+            [candidate, winner],
+            forced_target_ids={id(winner)},
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    "exclusion_name",
+    ["queued_target_ids", "delayed_target_ids", "forced_target_ids"],
+)
+def test_runtime_scheduler_does_not_duplicate_deferred_edf_winner(
+    exclusion_name,
+):
+    winner = {
+        "code": "460930",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "scanner_generation_id": "460930:PROMO-1:r1",
+    }
+    decision = SimpleNamespace(
+        item=SimpleNamespace(
+            generation=SimpleNamespace(generation_id="460930:PROMO-1:r1")
+        )
+    )
+
+    assert (
+        kiwoom_sniper_v2._runtime_scheduler_deferred_winner_target(
+            decision,
+            [winner],
+            **{exclusion_name: {id(winner)}},
+        )
+        is None
+    )
+
+
+def test_runtime_scheduler_does_not_surface_stale_deferred_generation():
+    stale = {
+        "code": "460930",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "scanner_generation_id": "460930:PROMO-NEW:r2",
+    }
+    decision = SimpleNamespace(
+        item=SimpleNamespace(
+            generation=SimpleNamespace(generation_id="460930:PROMO-OLD:r1")
+        )
+    )
+
+    assert (
+        kiwoom_sniper_v2._runtime_scheduler_deferred_winner_target(
+            decision,
+            [stale],
+        )
+        is None
+    )
+
+
 @pytest.mark.parametrize("lane", ["fast_precheck", "recovery"])
 def test_scheduler_lane_owns_missing_ws_before_generic_recovery(
     monkeypatch,
