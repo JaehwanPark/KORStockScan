@@ -721,7 +721,10 @@ def precompute_microstructure_reaction_inputs(
         "tick_aggressor_price_heuristic_count": sum(
             1 for row in aggressor_rows if row.get("source") == "price_change_heuristic"
         ),
-        "tick_aggressor_trusted_count": len(candidate_pressure_rows),
+        # This count is consumed as an authority signal in entry/holding
+        # guards.  Keep it aligned with pressure_rows rather than exposing
+        # otherwise trusted rows from a mixed window that was failed closed.
+        "tick_aggressor_trusted_count": len(pressure_rows),
         "tick_aggressor_pressure_usable": bool(pressure_rows),
         "tick_sample_count": len(ticks),
         "tick_latest_time": tick_latest_time,

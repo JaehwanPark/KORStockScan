@@ -605,8 +605,10 @@ def test_extract_scalping_feature_packet_rejects_cumulative_split_tick_volume():
     assert packet["tick_aggressor_orderbook_touch_count"] == 0
     assert packet["tick_aggressor_cached_orderbook_touch_count"] == 0
     assert packet["tick_aggressor_source_counts"]["kiwoom_0b_signed_trade_volume"] == 5
-    assert packet["tick_aggressor_trusted_count"] == 1
+    assert packet["tick_aggressor_trusted_count"] == 0
     assert packet["tick_aggressor_pressure_usable"] is False
+    assert packet["entry_order_flow_status"] == "unknown"
+    assert packet["order_flow_pressure_source"] == "untrusted_or_missing"
     assert packet["tick_trade_value_source_counts"] == {
         "1313": 2,
         "calc_price_x_1030_1031_sum": 2,
