@@ -2286,6 +2286,14 @@ def test_runtime_requeues_scheduler_continuation_before_holding(monkeypatch):
         "deadline_v1",
         raising=False,
     )
+    scheduler = object()
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "_scanner_scheduler_target_generation",
+        lambda current_scheduler, target: (
+            object() if current_scheduler is scheduler else None
+        ),
+    )
     ordered = {
         "id": "ordered",
         "code": "000001",
@@ -2315,6 +2323,7 @@ def test_runtime_requeues_scheduler_continuation_before_holding(monkeypatch):
         kiwoom_sniper_v2._runtime_requeue_pending_scanner_scheduler_targets(
             [ordered, holding],
             [ordered, holding, continuation],
+            scheduler=scheduler,
             now_ts=1000.0,
         )
     )
@@ -2335,6 +2344,14 @@ def test_runtime_requeues_each_main_scheduler_continuation_lane(monkeypatch, lan
         "deadline_v1",
         raising=False,
     )
+    scheduler = object()
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "_scanner_scheduler_target_generation",
+        lambda current_scheduler, target: (
+            object() if current_scheduler is scheduler else None
+        ),
+    )
     continuation = {
         "id": lane,
         "code": "000003",
@@ -2351,6 +2368,7 @@ def test_runtime_requeues_each_main_scheduler_continuation_lane(monkeypatch, lan
         kiwoom_sniper_v2._runtime_requeue_pending_scanner_scheduler_targets(
             [],
             [continuation],
+            scheduler=scheduler,
             now_ts=1000.0,
         )
     )
@@ -2366,6 +2384,7 @@ def test_runtime_does_not_duplicate_queued_scheduler_continuation(monkeypatch):
         "deadline_v1",
         raising=False,
     )
+    scheduler = object()
     continuation = {
         "id": "queued",
         "code": "000003",
@@ -2382,12 +2401,110 @@ def test_runtime_does_not_duplicate_queued_scheduler_continuation(monkeypatch):
         kiwoom_sniper_v2._runtime_requeue_pending_scanner_scheduler_targets(
             [continuation],
             [continuation],
+            scheduler=scheduler,
             now_ts=1000.0,
         )
     )
 
     assert queue == [continuation]
     assert requeued == []
+
+
+@pytest.mark.parametrize("lane", ["fast_precheck", "recovery"])
+def test_scheduler_lane_owns_missing_ws_before_generic_recovery(
+    monkeypatch,
+    lane,
+):
+    monkeypatch.setattr(
+        kiwoom_sniper_v2.run_sniper,
+        "scanner_scheduler_mode",
+        "deadline_v1",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2.run_sniper,
+        "scanner_scheduler_venues",
+        frozenset({"NXT"}),
+        raising=False,
+    )
+    scheduler = object()
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "_scanner_scheduler_target_generation",
+        lambda current_scheduler, target: (
+            object() if current_scheduler is scheduler else None
+        ),
+    )
+    target = {
+        "code": "100090",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "effective_venue": "NXT",
+        "scanner_generation_id": "100090:PROMO-1:r1",
+        "_scanner_scheduler_lane": lane,
+    }
+
+    assert (
+        kiwoom_sniper_v2._scanner_scheduler_owns_missing_ws_lane(
+            target,
+            scheduler=scheduler,
+        )
+        is True
+    )
+
+
+@pytest.mark.parametrize(
+    "mode,lane,venue",
+    [
+        ("legacy", "fast_precheck", "NXT"),
+        ("deadline_v1", "heavy_eval", "NXT"),
+        ("deadline_v1", "fast_precheck", "UNKNOWN"),
+    ],
+)
+def test_generic_recovery_keeps_non_scheduler_missing_ws_ownership(
+    monkeypatch,
+    mode,
+    lane,
+    venue,
+):
+    monkeypatch.setattr(
+        kiwoom_sniper_v2.run_sniper,
+        "scanner_scheduler_mode",
+        mode,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2.run_sniper,
+        "scanner_scheduler_venues",
+        frozenset({"NXT"}),
+        raising=False,
+    )
+    scheduler = object()
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "_scanner_scheduler_target_generation",
+        lambda current_scheduler, target: (
+            object() if current_scheduler is scheduler else None
+        ),
+    )
+    target = {
+        "code": "100090",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "effective_venue": venue,
+        "scanner_generation_id": "100090:PROMO-1:r1",
+        "_scanner_scheduler_lane": lane,
+    }
+
+    assert (
+        kiwoom_sniper_v2._scanner_scheduler_owns_missing_ws_lane(
+            target,
+            scheduler=scheduler,
+        )
+        is False
+    )
 
 
 @pytest.mark.parametrize(
@@ -2401,6 +2518,7 @@ def test_runtime_does_not_requeue_non_main_scheduler_owner(monkeypatch, mode, la
         mode,
         raising=False,
     )
+    scheduler = object()
     target = {
         "id": "excluded",
         "code": "000003",
@@ -2417,6 +2535,44 @@ def test_runtime_does_not_requeue_non_main_scheduler_owner(monkeypatch, mode, la
         kiwoom_sniper_v2._runtime_requeue_pending_scanner_scheduler_targets(
             [],
             [target],
+            scheduler=scheduler,
+            now_ts=1000.0,
+        )
+    )
+
+    assert queue == []
+    assert requeued == []
+
+
+def test_runtime_does_not_requeue_stale_scheduler_generation(monkeypatch):
+    monkeypatch.setattr(
+        kiwoom_sniper_v2.run_sniper,
+        "scanner_scheduler_mode",
+        "deadline_v1",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "_scanner_scheduler_target_generation",
+        lambda scheduler, target: None,
+    )
+    target = {
+        "id": "stale",
+        "code": "000003",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "effective_venue": "NXT",
+        "scanner_generation_id": "000003:PROMO-OLD:r1",
+        "_scanner_scheduler_lane": "fast_precheck",
+        "_scanner_scheduler_deadline_epoch": 1001.0,
+    }
+
+    queue, requeued = (
+        kiwoom_sniper_v2._runtime_requeue_pending_scanner_scheduler_targets(
+            [],
+            [target],
+            scheduler=object(),
             now_ts=1000.0,
         )
     )

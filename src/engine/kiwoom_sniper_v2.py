@@ -5249,6 +5249,7 @@ def _runtime_requeue_pending_scanner_scheduler_targets(
     work_queue,
     active_targets,
     *,
+    scheduler,
     now_ts,
 ):
     """Restore pending scheduler continuations to the main runtime queue.
@@ -5278,6 +5279,8 @@ def _runtime_requeue_pending_scanner_scheduler_targets(
         lane = str((target or {}).get("_scanner_scheduler_lane") or "").strip()
         if lane not in continuation_lanes:
             continue
+        if _scanner_scheduler_target_generation(scheduler, target) is None:
+            continue
         continuations.append(target)
         queued_ids.add(id(target))
     if not continuations:
@@ -5286,6 +5289,34 @@ def _runtime_requeue_pending_scanner_scheduler_targets(
         _runtime_iteration_targets([*queue, *continuations], now_ts=now_ts),
         continuations,
     )
+
+
+def _scanner_scheduler_owns_missing_ws_lane(target, *, scheduler):
+    """Let deadline lanes observe and recover a missing WS snapshot themselves.
+
+    The generic WATCHING recovery path runs before scheduler claim.  Entering
+    it for a requeued continuation leaves the scheduler work pending and can
+    spin the same target indefinitely.  FAST_PRECHECK must record the WS-only
+    miss, while RECOVERY owns the bounded REST/subscription recovery.
+    """
+
+    target = target if isinstance(target, dict) else {}
+    if _scanner_scheduler_startup_mode() not in {"deadline_v1", "async_v1"}:
+        return False
+    if not _is_scanner_watching_target(target):
+        return False
+    if not str(target.get("scanner_generation_id") or "").strip():
+        return False
+    if not _scanner_scheduler_enabled_for_venue(
+        target.get("effective_venue") or target.get("venue")
+    ):
+        return False
+    if _scanner_scheduler_target_generation(scheduler, target) is None:
+        return False
+    return str(target.get("_scanner_scheduler_lane") or "").strip() in {
+        ScannerLane.FAST_PRECHECK.value,
+        ScannerLane.RECOVERY.value,
+    }
 
 
 def _runtime_queue_rank_fields(iteration_targets):
@@ -9621,6 +9652,7 @@ def run_sniper(is_test_mode=False):
                     _runtime_requeue_pending_scanner_scheduler_targets(
                         runtime_work_queue,
                         targets,
+                        scheduler=run_sniper.scanner_runtime_scheduler,
                         now_ts=time.time(),
                     )
                 )
@@ -9729,7 +9761,20 @@ def run_sniper(is_test_mode=False):
                             now_ts=now_ts,
                         )
                     )
-                if not ws_data or ws_data.get("curr", 0) == 0:
+                scheduler_owns_missing_ws_lane = (
+                    _scanner_scheduler_owns_missing_ws_lane(
+                        stock,
+                        scheduler=getattr(
+                            run_sniper,
+                            "scanner_runtime_scheduler",
+                            None,
+                        ),
+                    )
+                )
+                if (
+                    not scheduler_owns_missing_ws_lane
+                    and (not ws_data or ws_data.get("curr", 0) == 0)
+                ):
                     if status == "WATCHING":
                         recheck_snapshot_applied = False
                         rest_quote_allowed, rest_quote_deferred_reason = (
@@ -9849,7 +9894,10 @@ def run_sniper(is_test_mode=False):
                             )
                         continue
 
-                if _is_scanner_watching_target(stock):
+                if (
+                    _is_scanner_watching_target(stock)
+                    and not scheduler_owns_missing_ws_lane
+                ):
                     no_trade_decision = _scanner_watch_eviction_decision_from_no_trade(
                         stock,
                         ws_data,
