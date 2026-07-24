@@ -2474,6 +2474,55 @@ def test_runtime_admit_live_scanner_attaches_prioritizes_new_target_without_muta
     assert active_targets == [old, new]
 
 
+def test_deadline_runtime_live_attach_does_not_jump_registered_precheck(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        kiwoom_sniper_v2.run_sniper,
+        "scanner_scheduler_mode",
+        "deadline_v1",
+        raising=False,
+    )
+    registered = {
+        "id": "registered",
+        "code": "000001",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "effective_venue": "NXT",
+        "entry_armed_at_epoch": 1000.0,
+        "scanner_generation_id": "000001:PROMO:r1",
+        "_scanner_scheduler_lane": "fast_precheck",
+        "_scanner_scheduler_deadline_epoch": 1002.0,
+    }
+    db_poll_attach = {
+        "id": "db-poll",
+        "code": "000002",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "effective_venue": "NXT",
+        "entry_armed_at_epoch": 1100.0,
+    }
+    ordered = {
+        "id": "ordered",
+        "code": "000003",
+        "status": "SELL_ORDERED",
+        "strategy": "SCALPING",
+    }
+
+    queue, admitted = kiwoom_sniper_v2._runtime_admit_live_scanner_attaches(
+        [registered, ordered],
+        [registered, ordered, db_poll_attach],
+        processed_target_ids=set(),
+        admitted_target_ids=set(),
+        now_ts=1200.0,
+    )
+
+    assert admitted == [db_poll_attach]
+    assert queue == [ordered, registered, db_poll_attach]
+
+
 def test_runtime_prioritizes_refreshed_generation_even_if_target_was_already_queued():
     ordered = {
         "id": "ordered",

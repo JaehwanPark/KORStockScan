@@ -5225,15 +5225,29 @@ def _runtime_admit_live_scanner_attaches(
         return queue, []
 
     ordered = _runtime_iteration_targets([*queue, *newly_attached], now_ts=now_ts)
+    deadline_scheduler_active = _scanner_scheduler_startup_mode() in {
+        "deadline_v1",
+        "async_v1",
+    }
+    if deadline_scheduler_active:
+        # Preserve the scheduler's deadline order. A DB-poll attach may be a
+        # new object, but it has no authority to jump ahead of an already
+        # registered initial precheck or continuation.
+        safety_barrier = []
+        remaining = []
+        for target in ordered:
+            status = str((target or {}).get("status") or "").upper()
+            if status in {"BUY_ORDERED", "SELL_ORDERED"}:
+                safety_barrier.append(target)
+            else:
+                remaining.append(target)
+        return [*safety_barrier, *remaining], newly_attached
+
     new_ids = {id(target) for target in newly_attached}
     ordered_new = [target for target in ordered if id(target) in new_ids]
     ordered_existing = [target for target in ordered if id(target) not in new_ids]
     safety_barrier = []
     remaining = []
-    deadline_scheduler_active = _scanner_scheduler_startup_mode() in {
-        "deadline_v1",
-        "async_v1",
-    }
     for target in ordered_existing:
         status = str((target or {}).get("status") or "").upper()
         if status in {"BUY_ORDERED", "SELL_ORDERED"} or (
