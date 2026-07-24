@@ -3662,6 +3662,63 @@ def test_observation_source_quality_audit_accepts_scanner_rank_sign_consistency(
     assert contract["invalid_label_violations"] == {}
 
 
+def test_observation_source_quality_audit_contracts_all_scheduler_events(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    fields = {
+        "metric_role": "runtime_scheduler_latency",
+        "decision_authority": (
+            "scanner_runtime_scheduler_only_no_order_authority"
+        ),
+        "window_policy": "per_scanner_generation_action_timestamps",
+        "sample_floor": "one_valid_scanner_generation",
+        "primary_decision_metric": "attach_to_first_precheck_sec",
+        "source_quality_gate": (
+            "canonical_generation_and_venue_provenance_required"
+        ),
+        "runtime_effect": True,
+        "forbidden_uses": "standalone_buy,broker_submit",
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "scheduler_version": "scanner_deadline_scheduler_v1",
+        "scheduler_action": "test_action",
+        "scanner_scheduler_action_epoch": 1_750_000_000.0,
+        "effective_venue": "KRX",
+        "venue_resolution": "consistent_explicit:payload.effective_venue",
+    }
+    _write_events(
+        tmp_path,
+        "2026-06-17",
+        [
+            *[_event(stage, fields) for stage in audit.SCANNER_SCHEDULER_STAGES],
+            _event(
+                "scalping_scanner_scheduler_pre_submit_rejected",
+                {
+                    **fields,
+                    "decision_authority": (
+                        "scanner_generation_consistency_pre_submit_safety_veto"
+                    ),
+                    "metric_role": "safety_veto",
+                    "scanner_generation_submit_allowed": False,
+                },
+            ),
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-06-17")
+
+    for stage in audit.SCANNER_SCHEDULER_STAGES:
+        contract = report["stage_contracts"][stage]
+        assert contract["status"] == "pass"
+        assert contract["missing_violations"] == {}
+    submit_contract = report["stage_contracts"][
+        "scalping_scanner_scheduler_pre_submit_rejected"
+    ]
+    assert submit_contract["status"] == "pass"
+    assert submit_contract["missing_violations"] == {}
+
+
 def test_observation_source_quality_audit_keeps_rank_sign_fields_rollout_compatible(
     monkeypatch, tmp_path
 ):

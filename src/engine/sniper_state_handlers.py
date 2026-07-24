@@ -872,6 +872,7 @@ LAST_LOG_TIMES = None
 TRADING_RULES = None
 PUBLISH_GATEKEEPER_REPORT = None
 SHOULD_BLOCK_SWING_ENTRY = None
+SCANNER_GENERATION_SUBMIT_GUARD = None
 CONFIRM_CANCEL_OR_RELOAD_REMAINING = None
 SEND_EXIT_BEST_IOC = None
 DUAL_PERSONA_ENGINE = None
@@ -11313,11 +11314,12 @@ def bind_state_dependencies(
     confirm_cancel_or_reload_remaining=None,
     send_exit_best_ioc=None,
     dual_persona_engine=None,
+    scanner_generation_submit_guard=None,
 ):
     global KIWOOM_TOKEN, DB, EVENT_BUS, ACTIVE_TARGETS, COOLDOWNS, ALERTED_STOCKS, HIGHEST_PRICES
     global LAST_AI_CALL_TIMES, LAST_LOG_TIMES, TRADING_RULES, PUBLISH_GATEKEEPER_REPORT
     global SHOULD_BLOCK_SWING_ENTRY, CONFIRM_CANCEL_OR_RELOAD_REMAINING, SEND_EXIT_BEST_IOC
-    global DUAL_PERSONA_ENGINE, WS_MANAGER
+    global DUAL_PERSONA_ENGINE, WS_MANAGER, SCANNER_GENERATION_SUBMIT_GUARD
 
     if kiwoom_token is not None:
         KIWOOM_TOKEN = kiwoom_token
@@ -11351,6 +11353,8 @@ def bind_state_dependencies(
         SEND_EXIT_BEST_IOC = send_exit_best_ioc
     if dual_persona_engine is not None:
         DUAL_PERSONA_ENGINE = dual_persona_engine
+    if scanner_generation_submit_guard is not None:
+        SCANNER_GENERATION_SUBMIT_GUARD = scanner_generation_submit_guard
 
 
 def sanitize_pending_add_states(active_targets=None):
@@ -53359,6 +53363,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
     }
     swing_order_dry_run = _is_swing_live_order_dry_run(strategy)
     broker_order_forbidden_for_request = bool(swing_order_dry_run)
+    scanner_generation_submit_committed = False
     for planned_order in planned_orders:
         split_leg_meta_fields = _split_order_meta_fields(planned_order)
         leg_submit_revalidation_fields = _merge_entry_pipeline_field_groups(
@@ -53700,6 +53705,73 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 ),
             )
             continue
+        if not scanner_generation_submit_committed:
+            try:
+                scanner_generation_guard = (
+                    SCANNER_GENERATION_SUBMIT_GUARD(stock, code)
+                    if callable(SCANNER_GENERATION_SUBMIT_GUARD)
+                    else {
+                        "allowed": not bool(stock.get("scanner_generation_id")),
+                        "reason": "scanner_generation_submit_guard_not_bound",
+                        "scheduler_version": stock.get(
+                            "scanner_scheduler_version"
+                        )
+                        or "not_available_scheduler_version",
+                        "scheduler_action": "pre_submit_generation_revalidation",
+                        "scanner_scheduler_action_epoch": round(time.time(), 6),
+                        "effective_venue": stock.get("effective_venue")
+                        or stock.get("venue")
+                        or "UNKNOWN",
+                        "venue_resolution": stock.get("venue_resolution")
+                        or "missing_tradable_explicit_venue",
+                    }
+                )
+            except Exception as exc:
+                scanner_generation_guard = {
+                    "allowed": False,
+                    "reason": "scanner_generation_submit_guard_exception",
+                    "scheduler_version": stock.get("scanner_scheduler_version")
+                    or "not_available_scheduler_version",
+                    "scheduler_action": "pre_submit_generation_revalidation",
+                    "scanner_scheduler_action_epoch": round(time.time(), 6),
+                    "effective_venue": stock.get("effective_venue")
+                    or stock.get("venue")
+                    or "UNKNOWN",
+                    "venue_resolution": stock.get("venue_resolution")
+                    or "missing_tradable_explicit_venue",
+                    "scanner_generation_submit_guard_error": str(exc)[:160],
+                }
+            if not bool(scanner_generation_guard.get("allowed", False)):
+                _log_entry_pipeline(
+                    stock,
+                    code,
+                    "scalping_scanner_scheduler_pre_submit_rejected",
+                    metric_role="safety_veto",
+                    decision_authority=(
+                        "scanner_generation_consistency_pre_submit_safety_veto"
+                    ),
+                    window_policy="per_scanner_generation_action_timestamps",
+                    sample_floor="not_applicable_generation_safety_veto",
+                    primary_decision_metric="scanner_generation_submit_allowed",
+                    source_quality_gate=(
+                        "canonical_generation_and_venue_provenance_required"
+                    ),
+                    runtime_effect=True,
+                    allowed_runtime_apply=False,
+                    actual_order_submitted=False,
+                    broker_order_forbidden=True,
+                    forbidden_uses=(
+                        "standalone_buy|threshold_mutation|provider_route_change|"
+                        "order_price_change|quantity_or_cap_change|broker_guard_bypass"
+                    ),
+                    scanner_generation_submit_allowed=False,
+                    **{
+                        key: value
+                        for key, value in scanner_generation_guard.items()
+                        if key != "allowed"
+                    },
+                )
+                break
         res = kiwoom_orders.send_buy_order(
             code,
             qty,
@@ -53736,6 +53808,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 **real_pre_submit_guard_fields,
             )
             continue
+        scanner_generation_submit_committed = True
         response_broker_route = (
             str(
                 res.get("broker_route")

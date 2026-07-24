@@ -405,6 +405,28 @@ HIGH_VOLUME_DIAGNOSTIC_STAGE_ROLES = {
     "swing_same_symbol_loss_reentry_cooldowns_restored": "ops_volume_diagnostic",
 }
 
+SCANNER_SCHEDULER_STAGES = frozenset(
+    {
+        "scalping_scanner_scheduler_attach_rejected",
+        "scalping_scanner_scheduler_claim_deferred",
+        "scalping_scanner_scheduler_claim_missing",
+        "scalping_scanner_scheduler_claim_rejected",
+        "scalping_scanner_scheduler_deadline_expired",
+        "scalping_scanner_scheduler_generation_invalidated",
+        "scalping_scanner_scheduler_generation_registered",
+        "scalping_scanner_scheduler_generation_rejected",
+        "scalping_scanner_scheduler_inbox_capacity_rejected",
+        "scalping_scanner_scheduler_inbox_enqueued",
+        "scalping_scanner_scheduler_inbox_superseded",
+        "scalping_scanner_scheduler_result_superseded",
+        "scalping_scanner_scheduler_venue_not_selected",
+        "scalping_scanner_scheduler_work_completed",
+        "scalping_scanner_scheduler_work_dispatched",
+        "scalping_scanner_scheduler_work_enqueued",
+        "scalping_scanner_scheduler_work_superseded",
+    }
+)
+
 SIM_SUBMIT_GUARD_STAGE_ACTIONS = {
     "scalp_sim_pre_submit_liquidity_guard_would_block": (
         "sim_pre_submit_liquidity_guard_action",
@@ -2132,6 +2154,36 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
         )
         for stage in HIGH_VOLUME_DIAGNOSTIC_STAGE_ROLES
     },
+    **{
+        stage: StageContract(
+            required_fields=(
+                *REAL_EXECUTION_DIAGNOSTIC_FIELDS,
+                "scheduler_version",
+                "scheduler_action",
+                "scanner_scheduler_action_epoch",
+                "effective_venue",
+                "venue_resolution",
+            ),
+            decision_authority=(
+                "scanner_runtime_scheduler_only_no_order_authority"
+            ),
+        )
+        for stage in SCANNER_SCHEDULER_STAGES
+    },
+    "scalping_scanner_scheduler_pre_submit_rejected": StageContract(
+        required_fields=(
+            *REAL_EXECUTION_DIAGNOSTIC_FIELDS,
+            "scheduler_version",
+            "scheduler_action",
+            "scanner_scheduler_action_epoch",
+            "scanner_generation_submit_allowed",
+            "effective_venue",
+            "venue_resolution",
+        ),
+        decision_authority=(
+            "scanner_generation_consistency_pre_submit_safety_veto"
+        ),
+    ),
 }
 
 

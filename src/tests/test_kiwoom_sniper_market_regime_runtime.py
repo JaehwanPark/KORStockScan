@@ -1,5 +1,6 @@
 import inspect
 import os
+from queue import SimpleQueue
 import threading
 import time
 from types import SimpleNamespace
@@ -557,28 +558,21 @@ def test_scalping_scanner_promoted_target_attaches_active_watching(monkeypatch):
     )
 
     assert attached is True
-    assert kiwoom_sniper_v2.ACTIVE_TARGETS == [
-        {
-            "id": 77,
-            "code": "005930",
-            "name": "SAMSUNG",
-            "strategy": "SCALPING",
-            "status": "WATCHING",
-            "type": "SCALP",
-            "buy_price": 70000,
-            "added_time": 1000.0,
-            "entry_armed_at_epoch": 1000.0,
-            "position_tag": "SCANNER",
-            "scanner_promotion_id": "SCANPROM-005930-1000000",
-            "scanner_promotion_reason": "rank_jump_acceleration",
-            "scanner_promotion_emitted_epoch": "1000.000",
-            "source_signature": "REALTIME_RANK_START",
-            "current_price_observed": 70000,
-            "price_delta_since_first_seen_pct": "0.50",
-            "scanner_watch_budget_owner": "rising_missed",
-            "marcap": 123456789,
-        }
-    ]
+    assert len(kiwoom_sniper_v2.ACTIVE_TARGETS) == 1
+    attached_target = kiwoom_sniper_v2.ACTIVE_TARGETS[0]
+    assert attached_target["id"] == 77
+    assert attached_target["code"] == "005930"
+    assert attached_target["status"] == "WATCHING"
+    assert attached_target["buy_price"] == 70000
+    assert attached_target["scanner_promotion_id"] == "SCANPROM-005930-1000000"
+    assert attached_target["source_signature"] == "REALTIME_RANK_START"
+    assert attached_target["scanner_watch_budget_owner"] == "rising_missed"
+    assert attached_target["effective_venue"] == "KRX"
+    assert (
+        attached_target["venue_resolution"]
+        == "consistent_explicit:payload.effective_venue,payload.venue"
+    )
+    assert attached_target["marcap"] == 123456789
     assert published == [
         (
             "COMMAND_WS_REG",
@@ -593,7 +587,8 @@ def test_scalping_scanner_promoted_target_attaches_active_watching(monkeypatch):
     assert emitted[-1]["fields"]["effective_venue"] == "KRX"
     assert (
         emitted[-1]["fields"]["venue_resolution"]
-        == "consistent_explicit:payload.effective_venue,payload.venue"
+        == "consistent_explicit:payload.effective_venue,payload.venue,"
+        "target.effective_venue,target.venue"
     )
     assert emitted[-1]["fields"]["rank_change"] == -12
     assert emitted[-1]["fields"]["rank_change_sign"] == "-"
@@ -608,6 +603,229 @@ def test_scalping_scanner_promoted_target_attaches_active_watching(monkeypatch):
         emitted[-1]["fields"]["rank_change_score_policy"]
         == "positive_signed_rank_delta_only_raw_rank_sign_unverified"
     )
+
+
+def test_deadline_scheduler_callback_only_enqueues_immutable_promotion(monkeypatch):
+    inbox = SimpleQueue()
+    monkeypatch.setattr(kiwoom_sniper_v2, "ACTIVE_TARGETS", [])
+    monkeypatch.setattr(kiwoom_sniper_v2, "_SCANNER_PROMOTION_INBOX", inbox)
+    monkeypatch.setattr(
+        kiwoom_sniper_v2.run_sniper,
+        "scanner_scheduler_mode",
+        "deadline_v1",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2.run_sniper,
+        "scanner_scheduler_venues",
+        frozenset({"KRX", "PREMARKET_KRX_LIKE", "NXT"}),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "_emit_scanner_scheduler_event",
+        lambda **kwargs: None,
+    )
+    payload = {
+        "code": "005930",
+        "strategy": "SCALPING",
+        "scanner_promotion_id": "PROMO-1",
+        "effective_venue": "KRX",
+        "buy_price": 70_000,
+    }
+
+    accepted = kiwoom_sniper_v2.handle_scalping_scanner_promoted_target(payload)
+    payload["buy_price"] = 1
+    envelope = inbox.get_nowait()
+
+    assert accepted is True
+    assert kiwoom_sniper_v2.ACTIVE_TARGETS == []
+    assert envelope.payload["buy_price"] == 70_000
+    with pytest.raises(TypeError):
+        envelope.payload["buy_price"] = 2
+
+
+def test_scheduler_boot_generation_does_not_reuse_old_promotion_anchor(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        kiwoom_sniper_v2.run_sniper,
+        "scanner_scheduler_mode",
+        "deadline_v1",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2.run_sniper,
+        "scanner_scheduler_venues",
+        frozenset({"KRX", "PREMARKET_KRX_LIKE", "NXT"}),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "_emit_scanner_scheduler_event",
+        lambda **kwargs: None,
+    )
+    target = {
+        "id": 1,
+        "code": "005930",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "effective_venue": "KRX",
+        "scanner_promotion_id": "OLD-PROMOTION",
+        "scanner_promotion_emitted_epoch": 100.0,
+        "current_price_observed": 70_000,
+    }
+    scheduler = kiwoom_sniper_v2.ScannerRuntimeScheduler(max_active=16)
+
+    generation = kiwoom_sniper_v2._register_scanner_scheduler_generation(
+        scheduler,
+        payload={
+            **target,
+            "scanner_promotion_id": "SCANSCHEDBOOT-005930-200000",
+            "scanner_promotion_emitted_epoch": 200.0,
+            "current_price_observed": 0,
+            "buy_price": 0,
+        },
+        target=target,
+        attach_epoch=200.0,
+    )
+
+    assert generation.promotion_id == "SCANSCHEDBOOT-005930-200000"
+    assert generation.promotion_epoch == 200.0
+    assert generation.attach_epoch == 200.0
+    assert generation.observed_price == 0
+    assert target["scanner_promotion_id"] == "OLD-PROMOTION"
+
+
+def test_scheduler_submit_guard_blocks_promotion_arriving_during_heavy_eval(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        kiwoom_sniper_v2.run_sniper,
+        "scanner_scheduler_mode",
+        "deadline_v1",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2.run_sniper,
+        "scanner_scheduler_venues",
+        frozenset({"KRX", "PREMARKET_KRX_LIKE", "NXT"}),
+        raising=False,
+    )
+    scheduler = kiwoom_sniper_v2.ScannerRuntimeScheduler(max_active=16)
+    registration = scheduler.register_generation(
+        code="005930",
+        promotion_id="PROMO-OLD",
+        record_id=1,
+        venue="KRX",
+        promotion_epoch=100.0,
+        attach_epoch=101.0,
+        observed_price=70_000,
+        source_signature="VALUE_TOP",
+    )
+    generation = registration.item.generation
+    target = {
+        "id": 1,
+        "code": "005930",
+        "status": "BUY_ORDERED",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "effective_venue": "KRX",
+        "venue_resolution": "consistent_explicit:payload.effective_venue",
+        "scanner_generation_id": generation.generation_id,
+        "scanner_generation_revision": generation.revision,
+    }
+    inbox = kiwoom_sniper_v2.ScannerPromotionInbox(max_active=16)
+    monkeypatch.setattr(
+        kiwoom_sniper_v2.run_sniper,
+        "scanner_runtime_scheduler",
+        scheduler,
+        raising=False,
+    )
+    monkeypatch.setattr(kiwoom_sniper_v2, "_SCANNER_PROMOTION_INBOX", inbox)
+
+    current = kiwoom_sniper_v2._scanner_generation_submit_guard(target, "005930")
+    assert current["allowed"] is True
+
+    inbox.put(
+        kiwoom_sniper_v2.ScannerPromotionEnvelope.from_payload(
+            {
+                "code": "005930",
+                "scanner_promotion_id": "PROMO-NEW",
+                "effective_venue": "KRX",
+            },
+            enqueued_epoch=105.0,
+        )
+    )
+    superseded = kiwoom_sniper_v2._scanner_generation_submit_guard(
+        target, "005930"
+    )
+
+    assert superseded["allowed"] is False
+    assert superseded["reason"] == "newer_promotion_pending_main_thread_attach"
+    assert superseded["scanner_pending_promotion_id"] == "PROMO-NEW"
+
+
+def test_scheduler_reconciles_replaced_watch_before_new_capacity_registration(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "_emit_scanner_scheduler_event",
+        lambda **kwargs: None,
+    )
+    scheduler = kiwoom_sniper_v2.ScannerRuntimeScheduler(max_active=1)
+    scheduler.register_generation(
+        code="000001",
+        promotion_id="PROMO-OLD",
+        record_id=1,
+        venue="KRX",
+        promotion_epoch=100.0,
+        attach_epoch=101.0,
+        observed_price=10_000,
+        source_signature="VALUE_TOP",
+    )
+    replacement_target = {
+        "id": 2,
+        "code": "000002",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+    }
+
+    invalidated = kiwoom_sniper_v2._scanner_scheduler_reconcile_active_targets(
+        scheduler,
+        [replacement_target],
+        now_epoch=102.0,
+    )
+    replacement = scheduler.register_generation(
+        code="000002",
+        promotion_id="PROMO-NEW",
+        record_id=2,
+        venue="KRX",
+        promotion_epoch=102.0,
+        attach_epoch=103.0,
+        observed_price=11_000,
+        source_signature="OPEN_TOP",
+    )
+
+    assert invalidated == 1
+    assert replacement.action == "generation_registered"
+    assert scheduler.generation_codes() == frozenset({"000002"})
+
+
+def test_scanner_generation_guard_runs_immediately_before_first_broker_submit():
+    source = inspect.getsource(
+        kiwoom_sniper_v2.sniper_state_handlers._submit_watching_triggered_entry
+    )
+    loop_idx = source.index("for planned_order in planned_orders:")
+    guard_idx = source.index(
+        "SCANNER_GENERATION_SUBMIT_GUARD(stock, code)", loop_idx
+    )
+    send_idx = source.index("kiwoom_orders.send_buy_order(", guard_idx)
+
+    assert loop_idx < guard_idx < send_idx
 
 
 def test_scanner_runtime_target_event_fields_preserve_explicit_venue_provenance():
@@ -1384,16 +1602,21 @@ def test_scalping_scanner_promoted_target_refresh_preserves_higher_positive_delt
     )
 
     assert refreshed is True
-    assert existing["price_delta_since_first_seen_pct"] == "7.72"
-    assert existing["comparable_flu_delta_since_first_seen"] == "7.72"
-    assert existing["entry_armed_at_epoch"] == 1000.0
-    assert existing["added_time"] == 1000.0
-    assert existing["scanner_promotion_id"] == "SCANPROM-397030-1000000"
-    assert existing["scanner_promotion_emitted_epoch"] == "1000.000"
-    assert existing["source_signature"] == "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE"
+    assert existing["price_delta_since_first_seen_pct"] == "0.00"
+    assert existing["comparable_flu_delta_since_first_seen"] == "0.00"
+    assert existing["entry_armed_at_epoch"] == 2000.0
+    assert existing["added_time"] == 2000.0
+    assert existing["scanner_promotion_id"] == "SCANPROM-397030-2000000"
+    assert existing["scanner_promotion_emitted_epoch"] == "2000.000"
+    assert existing["source_signature"] == "PRICE_JUMP_START"
+    assert existing["scanner_evidence_peak_positive_delta_pct"] == 7.72
+    assert (
+        existing["scanner_evidence_peak_promotion_id"]
+        == "SCANPROM-397030-1000000"
+    )
     assert existing["cntr_str"] == "190.0"
-    assert emitted[-1]["fields"]["price_delta_since_first_seen_pct"] == "7.72"
-    assert emitted[-1]["fields"]["scanner_promotion_id"] == "SCANPROM-397030-1000000"
+    assert emitted[-1]["fields"]["price_delta_since_first_seen_pct"] == "0.00"
+    assert emitted[-1]["fields"]["scanner_promotion_id"] == "SCANPROM-397030-2000000"
     assert emitted[-1]["fields"]["scanner_positive_delta_context_preserved"] is True
     assert (
         emitted[-1]["fields"]["scanner_positive_delta_context_previous_pct"] == "7.72"
@@ -1866,6 +2089,69 @@ def test_runtime_iteration_targets_prioritizes_recent_scanner_without_mutating_t
         "base",
         "new",
         "ordered",
+    ]
+
+
+def test_deadline_scheduler_orders_precheck_before_holding_and_recovery(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        kiwoom_sniper_v2.run_sniper,
+        "scanner_scheduler_mode",
+        "deadline_v1",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2.run_sniper,
+        "scanner_scheduler_venues",
+        frozenset({"KRX", "PREMARKET_KRX_LIKE", "NXT"}),
+        raising=False,
+    )
+    targets = [
+        {
+            "id": "recovery",
+            "code": "000001",
+            "status": "WATCHING",
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "effective_venue": "KRX",
+            "_scanner_scheduler_lane": "recovery",
+            "_scanner_scheduler_deadline_epoch": 1001.0,
+        },
+        {
+            "id": "holding",
+            "code": "000002",
+            "status": "HOLDING",
+            "strategy": "SCALPING",
+            "actual_order_submitted": True,
+        },
+        {
+            "id": "precheck",
+            "code": "000003",
+            "status": "WATCHING",
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "effective_venue": "NXT",
+            "_scanner_scheduler_lane": "fast_precheck",
+            "_scanner_scheduler_deadline_epoch": 1002.0,
+        },
+        {
+            "id": "receipt",
+            "code": "000004",
+            "status": "BUY_ORDERED",
+            "strategy": "SCALPING",
+        },
+    ]
+
+    ordered = kiwoom_sniper_v2._runtime_iteration_targets(
+        targets, now_ts=1000.0
+    )
+
+    assert [target["id"] for target in ordered] == [
+        "receipt",
+        "precheck",
+        "holding",
+        "recovery",
     ]
 
 
@@ -3444,7 +3730,8 @@ def test_scanner_full_eval_budget_defers_before_watching_handler():
         "scanner_full_eval_limit = _scanner_full_eval_effective_limit("
     )
     budget_check_idx = source.index(
-        "if scanner_full_eval_count >= scanner_full_eval_limit:"
+        "and scanner_full_eval_count >= scanner_full_eval_limit",
+        effective_limit_idx,
     )
     append_idx = source.index("delayed_scanner_heavy_eval.append", budget_check_idx)
     continue_idx = source.index("continue", append_idx)
@@ -3459,7 +3746,7 @@ def test_scanner_full_eval_budget_defers_before_watching_handler():
 def test_scanner_rising_full_eval_relief_is_checked_before_budget_defer():
     source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
     budget_check_idx = source.index(
-        "if scanner_full_eval_count >= scanner_full_eval_limit:"
+        "and scanner_full_eval_count >= scanner_full_eval_limit"
     )
     relief_idx = source.index("relief_allowed = (", budget_check_idx)
     skip_idx = source.index(
@@ -3636,31 +3923,36 @@ def test_run_sniper_defers_scanner_precheck_and_lag_event_emits_until_loop_tail(
     assert direct_heavy_emit == -1
 
 
-def test_run_sniper_checks_queue_lag_eviction_before_stale_recovery():
+def test_run_sniper_disables_legacy_queue_lag_eviction_in_scheduler_mode():
     source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
     work_queue_idx = source.index(
         'runtime_work_queue = list(queue_context["iteration_targets"])'
     )
     loop_idx = source.index("while True:", work_queue_idx)
+    queue_assignment_idx = source.index("queue_lag_fields = (", loop_idx)
+    scheduler_archive_guard_idx = source.index(
+        "if scheduler_generation is not None", queue_assignment_idx
+    )
     queue_call_idx = source.index(
-        "queue_lag_fields = _defer_emit_scanner_runtime_queue_lag(", loop_idx
+        "else _defer_emit_scanner_runtime_queue_lag(", scheduler_archive_guard_idx
     )
     fast_result_idx = source.index(
         'fast_precheck_result = str(\n                            stock.get("_scanner_fast_precheck_result")',
         queue_call_idx,
     )
-    queue_decision_idx = source.index(
-        "_scanner_watch_eviction_decision_from_queue_lag(", fast_result_idx
+    scheduler_complete_idx = source.index(
+        "_scanner_scheduler_complete_target(", fast_result_idx
+    )
+    recovery_enqueue_idx = source.index(
+        "lane=ScannerLane.RECOVERY", scheduler_complete_idx
     )
     stale_recovery_idx = source.index(
         "scanner_fast_precheck_stale_ws_recovery", fast_result_idx
     )
-    late_queue_decision_idx = source.index(
-        "_scanner_watch_eviction_decision_from_queue_lag(", stale_recovery_idx
-    )
 
-    assert queue_call_idx < fast_result_idx < queue_decision_idx < stale_recovery_idx
-    assert stale_recovery_idx < late_queue_decision_idx
+    assert queue_assignment_idx < scheduler_archive_guard_idx < queue_call_idx
+    assert queue_call_idx < fast_result_idx < scheduler_complete_idx
+    assert scheduler_complete_idx < recovery_enqueue_idx < stale_recovery_idx
 
 
 def test_scanner_pipeline_events_flush_before_heavy_eval_handler():
@@ -3671,7 +3963,7 @@ def test_scanner_pipeline_events_flush_before_heavy_eval_handler():
         "_flush_deferred_scanner_pipeline_events()", heavy_lag_idx
     )
     heavy_handle_idx = source.index(
-        "handle_watching_state(\n                        delayed_stock",
+        "handle_watching_state(\n                            delayed_stock",
         pipeline_flush_idx,
     )
 
@@ -3740,7 +4032,7 @@ def test_scanner_heavy_eval_refreshes_ws_snapshot_before_handler():
     )
     assign_idx = source.index("eval_ws_data = recheck_snapshot", recheck_idx)
     handle_idx = source.index(
-        "handle_watching_state(\n                        delayed_stock",
+        "handle_watching_state(\n                            delayed_stock",
         assign_idx,
     )
     eval_arg_idx = source.index("eval_ws_data", handle_idx)
@@ -3771,7 +4063,7 @@ def test_scanner_heavy_eval_stale_recheck_repairs_before_handler():
     merged_arg_idx = source.index("**heavy_recheck_skip_fields", skip_idx)
     continue_idx = source.index("continue", skip_idx)
     handle_idx = source.index(
-        "handle_watching_state(\n                        delayed_stock",
+        "handle_watching_state(\n                            delayed_stock",
         continue_idx,
     )
 
@@ -3791,7 +4083,7 @@ def test_scanner_heavy_eval_allows_bounded_opening_handoff_before_recovery():
         "scanner_heavy_eval_stale_ws_recovery", bounded_branch_idx
     )
     handle_idx = source.index(
-        "handle_watching_state(\n                        delayed_stock",
+        "handle_watching_state(\n                            delayed_stock",
         recover_idx,
     )
     fresh_clock_idx = source.index(
@@ -3833,7 +4125,7 @@ def test_scanner_strength_recheck_waiting_skips_before_full_eval_budget():
     source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
     waiting_idx = source.index("if _scanner_strength_recheck_waiting(")
     budget_idx = source.index(
-        "if scanner_full_eval_count >= scanner_full_eval_limit:", waiting_idx
+        "and scanner_full_eval_count >= scanner_full_eval_limit", waiting_idx
     )
     append_idx = source.index("delayed_scanner_heavy_eval.append", budget_idx)
 
@@ -3859,7 +4151,7 @@ def test_scanner_fast_precheck_not_eligible_skips_before_heavy_eval():
         "if _scanner_strength_recheck_waiting(", not_eligible_idx
     )
     budget_idx = source.index(
-        "if scanner_full_eval_count >= scanner_full_eval_limit:", waiting_idx
+        "and scanner_full_eval_count >= scanner_full_eval_limit", waiting_idx
     )
     append_idx = source.index("delayed_scanner_heavy_eval.append", budget_idx)
 
@@ -6148,7 +6440,7 @@ def test_rest_quote_price_only_strength_gap_eviction_runs_before_full_eval_budge
     reason_idx = source.index('"rising_rest_quote_recovery_without_realtime_strength"')
     eviction_idx = source.index("_maybe_expire_scanner_watch_for_stale", reason_idx)
     budget_idx = source.index(
-        "if scanner_full_eval_count >= scanner_full_eval_limit", eviction_idx
+        "and scanner_full_eval_count >= scanner_full_eval_limit", eviction_idx
     )
 
     assert reason_idx < eviction_idx < budget_idx

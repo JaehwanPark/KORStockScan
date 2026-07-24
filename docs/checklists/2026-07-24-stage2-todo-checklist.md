@@ -124,6 +124,22 @@
   - 금지: counterfactual과 실현손익 합산, venue 혼합, 결손 0 보간, thin categorical label 단독 promotion, runtime/order/provider/threshold 자동 변경을 금지한다.
   - 다음 액션: `control_baseline_ready_for_paired_replay | partial_horizons_keep_maturing | source_quality_gap_fix_required | correlation_gap_fix_required` 중 하나로 닫는다.
 
+## Scanner scheduler 단계 적용 후속
+
+아래 두 항목은 현재 PID 변경이나 `async_v1` 선행 구현을 승인하지 않는다.
+
+- [ ] `[ScannerDeadlineSchedulerFullCycle0727] deadline_v1 별도 승인·재기동 및 venue별 전체 운영주기 귀속` (`Due: 2026-07-27`, `Slot: PREOPEN`, `TimeWindow: 07:35~20:00`, `Track: RuntimeStability`)
+  - Source: [scanner_runtime_scheduler.py](/home/ubuntu/KORStockScan/src/engine/scalping/scanner_runtime_scheduler.py), [scanner_scheduler_replay.py](/home/ubuntu/KORStockScan/src/engine/scalping/scanner_scheduler_replay.py), [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)
+  - 판정 기준: 별도 operator 승인 후 startup env를 `KORSTOCKSCAN_SCANNER_SCHEDULER_MODE=deadline_v1`, `KORSTOCKSCAN_SCANNER_SCHEDULER_VENUES=KRX,PREMARKET_KRX_LIKE,NXT`로 고정하고 graceful restart한다. 신규 PID/commit/env와 broker reconciliation을 확인한 뒤 `PREMARKET_KRX_LIKE -> KRX -> NXT`를 venue별로 귀속해 attach→first-precheck p95/max, supersede/deadline-expire, order/receipt와 fast-exit cadence를 확인한다.
+  - 금지: 현재 PID hot mutation, venue 혼합, legacy queue-lag/full-eval pressure의 scheduler 결정권 복원, threshold/가격/수량/provider/broker/hard-safety 변경을 금지한다.
+  - 다음 액션: `deadline_v1_full_cycle_pass | deadline_v1_keep_observing | rollback_deadline_v1_to_legacy | source_quality_gap` 중 하나로 닫는다.
+
+- [ ] `[ScannerAsyncEvalStage2Gate0727] deadline_v1 전체주기 통과 후 async_v1 2단계 구현 승인 판정` (`Due: 2026-07-27`, `Slot: POSTCLOSE`, `TimeWindow: 20:00~20:20`, `Track: ScalpingLogic`)
+  - Source: [2026-07-24-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/checklists/2026-07-24-stage2-todo-checklist.md), [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)
+  - 판정 기준: 1단계가 venue별 acceptance와 safety 비악화를 통과한 경우에만 `scanner_async_eval_commit_v1`, market-data worker 1개, 공용 hot-path AI dispatcher와 main-thread commit 계약의 별도 구현·리뷰·replay/stress 작업을 승인한다.
+  - 금지: 1단계 전체주기 귀속 전 `async_v1` 활성화, in-flight 복원, worker의 DB/ACTIVE_TARGETS/broker/order/Telegram mutation, provider endpoint/failback 변경을 금지한다.
+  - 다음 액션: `approve_stage2_implementation | keep_deadline_v1_observing | rollback_stage1 | blocked_source_quality` 중 하나로 닫는다.
+
 ## Project/Calendar 동기화
 
 문서/checklist를 수정했으면 parser 검증은 실행하고, Project/Calendar 동기화는 사용자가 아래 명령으로 수동 실행한다.
