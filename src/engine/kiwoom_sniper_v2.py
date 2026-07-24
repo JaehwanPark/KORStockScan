@@ -5330,6 +5330,15 @@ def _runtime_scheduler_deferred_winner_target(
     return None
 
 
+def _runtime_requeue_expired_heavy_target(work_queue, target):
+    """Return one expired-heavy target to main-thread fresh-precheck routing."""
+
+    if any(item is target for item in work_queue or ()):
+        return False
+    work_queue.insert(0, target)
+    return True
+
+
 def _scanner_scheduler_owns_missing_ws_lane(target, *, scheduler):
     """Let deadline lanes observe and recover a missing WS snapshot themselves.
 
@@ -7567,6 +7576,56 @@ def _scanner_scheduler_claim_target(scheduler, target, *, lane, now_epoch):
     return decision
 
 
+def _scanner_scheduler_refresh_claim_after_expiry(
+    scheduler,
+    target,
+    *,
+    previous_decision,
+    now_epoch,
+):
+    """Replace expired work and claim the fresh precheck in one encounter.
+
+    Deferring the claim to the next outer loop makes a 10-second replacement
+    expire again when many scanner watches are active.  The expired decision
+    remains observable, while this fresh claim still runs through the normal
+    generation and EDF checks before any evaluation can continue.
+    """
+
+    previous_item = getattr(previous_decision, "item", None)
+    previous_action = str(getattr(previous_decision, "action", "") or "")
+    retry_attempt = (
+        _safe_int(
+            (
+                getattr(previous_item, "attempt", None)
+                if previous_item is not None
+                else (target or {}).get("_scanner_scheduler_attempt")
+            ),
+            0,
+        )
+        + 1
+    )
+    enqueued = _scanner_scheduler_enqueue_target(
+        scheduler,
+        target,
+        lane=ScannerLane.FAST_PRECHECK,
+        owner=(
+            "fresh_recheck_after_deadline"
+            if previous_action == "deadline_expired"
+            else "fresh_precheck_after_missing_work"
+        ),
+        enqueued_epoch=float(now_epoch),
+        attempt=retry_attempt,
+    )
+    if enqueued is None or enqueued.item is None:
+        return None
+    return _scanner_scheduler_claim_target(
+        scheduler,
+        target,
+        lane=ScannerLane.FAST_PRECHECK,
+        now_epoch=float(now_epoch),
+    )
+
+
 def _scanner_scheduler_complete_target(
     scheduler,
     target,
@@ -9480,7 +9539,12 @@ def run_sniper(is_test_mode=False):
                                 now_epoch=time.time(),
                                 owner="heavy_eval_deadline_fresh_recheck",
                             )
-                            continue
+                            _runtime_requeue_expired_heavy_target(
+                                runtime_work_queue,
+                                delayed_stock,
+                            )
+                            scanner_heavy_eval_flushed = False
+                            return
                         if scheduler_claim.action != "dispatch":
                             continue
                         scheduler_heavy_item = scheduler_claim.item
@@ -10110,29 +10174,17 @@ def run_sniper(is_test_mode=False):
                                 "missing",
                                 "deadline_expired",
                             }:
-                                retry_attempt = (
-                                    _safe_int(
-                                        (
-                                            scheduler_claim.item.attempt
-                                            if scheduler_claim
-                                            and scheduler_claim.item is not None
-                                            else stock.get(
-                                                "_scanner_scheduler_attempt"
-                                            )
-                                        ),
-                                        0,
+                                scheduler_claim = (
+                                    _scanner_scheduler_refresh_claim_after_expiry(
+                                        scheduler,
+                                        stock,
+                                        previous_decision=scheduler_claim,
+                                        now_epoch=heavy_queue_enter_epoch,
                                     )
-                                    + 1
                                 )
-                                _scanner_scheduler_enqueue_target(
-                                    scheduler,
-                                    stock,
-                                    lane=ScannerLane.FAST_PRECHECK,
-                                    owner="fresh_recheck_after_deadline",
-                                    enqueued_epoch=heavy_queue_enter_epoch,
-                                    attempt=retry_attempt,
-                                )
-                                continue
+                                scheduled_lane = ScannerLane.FAST_PRECHECK
+                                if scheduler_claim is None:
+                                    continue
                             if scheduler_claim.action == "not_next":
                                 deferred_winner = (
                                     _runtime_scheduler_deferred_winner_target(

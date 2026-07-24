@@ -835,6 +835,133 @@ def test_scheduler_deferred_claim_keeps_candidate_and_blocker_identity_separate(
     assert "attach_to_first_precheck_sec" not in fields
 
 
+def test_scheduler_expired_recheck_is_refreshed_and_claimed_same_encounter(
+    monkeypatch,
+):
+    scheduler = kiwoom_sniper_v2.ScannerRuntimeScheduler(max_active=16)
+    registration = scheduler.register_generation(
+        code="000001",
+        promotion_id="PROMO-1",
+        record_id=1,
+        venue="KRX",
+        promotion_epoch=99.0,
+        attach_epoch=100.0,
+        observed_price=10_000,
+        source_signature="VALUE_TOP",
+    )
+    generation = registration.item.generation
+    target = {
+        "id": 1,
+        "code": "000001",
+        "name": "target",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "effective_venue": "KRX",
+        "venue_resolution": "consistent_explicit:target.effective_venue",
+        "scanner_generation_id": generation.generation_id,
+    }
+    emitted = []
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "_emit_scanner_scheduler_event",
+        lambda **kwargs: emitted.append(kwargs),
+    )
+    initial = kiwoom_sniper_v2._scanner_scheduler_claim_target(
+        scheduler,
+        target,
+        lane=kiwoom_sniper_v2.ScannerLane.FAST_PRECHECK,
+        now_epoch=100.1,
+    )
+    scheduler.complete(initial.item, completed_epoch=100.2, outcome="pass")
+    scheduler.enqueue(
+        generation,
+        lane=kiwoom_sniper_v2.ScannerLane.FAST_PRECHECK,
+        owner="precheck_not_eligible_fresh_recheck",
+        enqueued_epoch=100.2,
+        deadline_epoch=110.2,
+        attempt=2,
+    )
+    emitted.clear()
+
+    expired = kiwoom_sniper_v2._scanner_scheduler_claim_target(
+        scheduler,
+        target,
+        lane=kiwoom_sniper_v2.ScannerLane.FAST_PRECHECK,
+        now_epoch=110.3,
+    )
+    refreshed = kiwoom_sniper_v2._scanner_scheduler_refresh_claim_after_expiry(
+        scheduler,
+        target,
+        previous_decision=expired,
+        now_epoch=110.3,
+    )
+
+    assert expired.action == "deadline_expired"
+    assert refreshed.action == "dispatch"
+    assert refreshed.item.attempt == 3
+    assert refreshed.item.precheck_phase == "recheck"
+    assert refreshed.fields["precheck_recheck_wait_sec"] == 0.0
+    assert [event["stage"] for event in emitted] == [
+        "scalping_scanner_scheduler_deadline_expired",
+        "scalping_scanner_scheduler_work_enqueued",
+        "scalping_scanner_scheduler_work_dispatched",
+    ]
+    metrics = scheduler.snapshot_metrics(now_epoch=110.3)
+    assert metrics["scheduler_queue_depth"] == 0
+    assert metrics["scheduler_in_flight_count"] == 1
+
+
+def test_scheduler_expired_initial_retry_remains_initial_when_claimed_immediately(
+    monkeypatch,
+):
+    scheduler = kiwoom_sniper_v2.ScannerRuntimeScheduler(max_active=16)
+    registration = scheduler.register_generation(
+        code="000001",
+        promotion_id="PROMO-1",
+        record_id=1,
+        venue="KRX",
+        promotion_epoch=99.0,
+        attach_epoch=100.0,
+        observed_price=10_000,
+        source_signature="VALUE_TOP",
+    )
+    target = {
+        "id": 1,
+        "code": "000001",
+        "name": "target",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "effective_venue": "KRX",
+        "venue_resolution": "consistent_explicit:target.effective_venue",
+        "scanner_generation_id": registration.item.generation.generation_id,
+    }
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "_emit_scanner_scheduler_event",
+        lambda **kwargs: None,
+    )
+
+    expired = kiwoom_sniper_v2._scanner_scheduler_claim_target(
+        scheduler,
+        target,
+        lane=kiwoom_sniper_v2.ScannerLane.FAST_PRECHECK,
+        now_epoch=110.1,
+    )
+    refreshed = kiwoom_sniper_v2._scanner_scheduler_refresh_claim_after_expiry(
+        scheduler,
+        target,
+        previous_decision=expired,
+        now_epoch=110.1,
+    )
+
+    assert expired.action == "deadline_expired"
+    assert refreshed.action == "dispatch"
+    assert refreshed.item.precheck_phase == "initial"
+    assert refreshed.item.attempt == 2
+
+
 def test_scheduler_reconciles_replaced_watch_before_new_capacity_registration(
     monkeypatch,
 ):
@@ -2519,6 +2646,24 @@ def test_runtime_does_not_requeue_scheduler_target_processed_in_same_loop(
 
     assert queue == []
     assert requeued == []
+
+
+def test_runtime_requeues_expired_heavy_target_once_for_fresh_precheck():
+    target = {"code": "000001"}
+    queue = [{"code": "000002"}]
+
+    inserted = kiwoom_sniper_v2._runtime_requeue_expired_heavy_target(
+        queue,
+        target,
+    )
+    duplicate = kiwoom_sniper_v2._runtime_requeue_expired_heavy_target(
+        queue,
+        target,
+    )
+
+    assert inserted is True
+    assert duplicate is False
+    assert queue == [target, {"code": "000002"}]
 
 
 def test_runtime_scheduler_surfaces_deferred_edf_winner_once():
