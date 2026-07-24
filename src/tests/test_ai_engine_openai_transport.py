@@ -71,6 +71,35 @@ def _build_engine():
     return engine
 
 
+def test_entry_price_context_uses_frozen_packet_without_rebuild(monkeypatch):
+    engine = _build_engine()
+    monkeypatch.setattr(
+        openai_module,
+        "extract_scalping_feature_packet",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("frozen provider input must not be recomputed")
+        ),
+    )
+
+    features = engine._compact_entry_context_features(
+        {"curr": 10_020},
+        [],
+        [],
+        price_ctx={
+            "entry_context_features": {
+                "entry_context_quality": "complete",
+                "entry_context_missing_features": "",
+                "quote_age_ms": 2_800,
+                "quote_stale": False,
+            }
+        },
+    )
+
+    assert features["entry_context_quality"] == "complete"
+    assert features["quote_age_ms"] == 2_800
+    assert features["quote_stale"] is False
+
+
 def _has_hangul(text: str) -> bool:
     return any("\uac00" <= char <= "\ud7a3" for char in text)
 

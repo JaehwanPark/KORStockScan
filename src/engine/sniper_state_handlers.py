@@ -673,7 +673,8 @@ def _scanner_promotion_context_present(stock: dict[str, Any] | None) -> bool:
         "comparable_flu_delta_since_first_seen",
         "cntr_str",
     ):
-        if str(stock.get(key) or "").strip() == "":
+        value = stock.get(key)
+        if value is None or str(value).strip() == "":
             return False
     return "cntr_str_available" in stock
 
@@ -722,14 +723,23 @@ def _load_scanner_promotion_context_events(
         fields = (
             payload.get("fields") if isinstance(payload.get("fields"), dict) else {}
         )
+        emitted_epoch = _parse_iso_epoch(payload.get("emitted_at"))
+        promotion_epoch = _safe_float(
+            fields.get("scanner_promotion_emitted_epoch"), emitted_epoch
+        )
         events_by_code.setdefault(code, []).append(
             {
-                "emitted_epoch": _parse_iso_epoch(payload.get("emitted_at")),
+                "emitted_epoch": emitted_epoch,
+                "promotion_epoch": promotion_epoch,
                 "fields": fields,
             }
         )
     for code_rows in events_by_code.values():
-        code_rows.sort(key=lambda item: float(item.get("emitted_epoch") or 0.0))
+        code_rows.sort(
+            key=lambda item: float(
+                item.get("promotion_epoch") or item.get("emitted_epoch") or 0.0
+            )
+        )
     cache.update(
         {
             "date": target_date,
@@ -776,13 +786,15 @@ def _hydrate_scanner_promotion_runtime_context(
         eligible = [
             row
             for row in code_rows
-            if float(row.get("emitted_epoch") or 0.0) <= anchor_epoch + 5.0
+            if float(row.get("promotion_epoch") or row.get("emitted_epoch") or 0.0)
+            <= anchor_epoch + 5.0
         ]
         if eligible:
             selected = min(
                 eligible,
                 key=lambda row: abs(
-                    float(row.get("emitted_epoch") or 0.0) - anchor_epoch
+                    float(row.get("promotion_epoch") or row.get("emitted_epoch") or 0.0)
+                    - anchor_epoch
                 ),
             )
     if selected is None:
@@ -795,7 +807,9 @@ def _hydrate_scanner_promotion_runtime_context(
         or fields.get("first_seen_price"),
         0,
     )
-    emitted_epoch = _safe_float(selected.get("emitted_epoch"), 0.0)
+    emitted_epoch = _safe_float(
+        selected.get("promotion_epoch") or selected.get("emitted_epoch"), 0.0
+    )
     hydrated = {
         "scanner_promotion_id": str(
             fields.get("scanner_promotion_id")
@@ -31901,7 +31915,7 @@ def _maybe_recheck_fresh_spread_latency_with_ai(
         planned_qty=int(planned_qty or 0),
         signal_price=original_signal_price,
         signal_strength=max(0.0, min(1.0, score / 100.0)),
-        signal_time=datetime.now(timezone.utc),
+        signal_time=datetime.fromtimestamp(recheck_now_ts, tz=timezone.utc),
         target_buy_price=int(target_buy_price or 0),
     )
     rechecked_gate = dict(rechecked_gate or {})
@@ -35019,9 +35033,15 @@ def _build_entry_ai_price_context(
 
 
 def _entry_ai_price_input_audit_fields(
-    *, result, price_ctx, ws_data, recent_ticks, recent_candles
+    *,
+    result,
+    price_ctx,
+    ws_data,
+    recent_ticks,
+    recent_candles,
+    feature_packet=None,
 ):
-    """Flatten the exact entry-price input contract for provider-route audits."""
+    """Flatten the exact frozen entry-price input contract for source audits."""
 
     result = result if isinstance(result, dict) else {}
     ctx = price_ctx if isinstance(price_ctx, dict) else {}
@@ -35037,8 +35057,12 @@ def _entry_ai_price_input_audit_fields(
             )
         )
     try:
-        packet = extract_scalping_feature_packet(
-            ws_data or {}, recent_ticks or [], recent_candles or []
+        packet = (
+            feature_packet
+            if isinstance(feature_packet, dict)
+            else extract_scalping_feature_packet(
+                ws_data or {}, recent_ticks or [], recent_candles or []
+            )
         )
         packet = packet if isinstance(packet, dict) else {}
         packet_audit = build_scalping_feature_audit_fields(packet)
@@ -35067,17 +35091,18 @@ def _entry_ai_price_input_audit_fields(
         ),
         "entry_price_input_audit_error": packet_audit_error,
         "entry_price_input_metric_role": "source_quality_gate",
-        "entry_price_input_decision_authority": "provider_route_comparison_only",
+        "entry_price_input_decision_authority": "provider_call_fail_closed_only",
         "entry_price_input_window_policy": "same_event_pre_submit_context",
         "entry_price_input_sample_floor": "1_fresh_complete_or_partial_row",
         "entry_price_input_primary_decision_metric": (
-            "provider_schema_latency_and_price_guard_consistency"
+            "frozen_provider_input_source_quality_and_price_guard_consistency"
         ),
         "entry_price_input_source_quality_gate": (
             "required_features_present_and_quote_not_stale"
         ),
         "entry_price_input_forbidden_uses": (
-            "order_submit|threshold_change|broker_guard_bypass|provider_auto_apply"
+            "standalone_buy_authority|order_price_or_quantity_change|"
+            "threshold_change|broker_guard_bypass|provider_auto_apply"
         ),
     }
     for key in (
@@ -35296,6 +35321,81 @@ def _apply_entry_ai_price_canary(
             )
             return [], True
 
+    try:
+        frozen_feature_packet = extract_scalping_feature_packet(
+            ws_data or {},
+            recent_ticks or [],
+            recent_candles or [],
+            now=time.time(),
+        )
+        frozen_feature_packet = (
+            frozen_feature_packet
+            if isinstance(frozen_feature_packet, dict)
+            else {}
+        )
+    except Exception as exc:
+        frozen_feature_packet = {}
+        frozen_feature_packet_error = type(exc).__name__
+    else:
+        frozen_feature_packet_error = "-"
+    price_ctx["entry_context_features"] = frozen_feature_packet
+    entry_price_input_audit = _entry_ai_price_input_audit_fields(
+        result={},
+        price_ctx=price_ctx,
+        ws_data=ws_data,
+        recent_ticks=recent_ticks,
+        recent_candles=recent_candles,
+        feature_packet=frozen_feature_packet,
+    )
+    entry_price_input_audit["entry_price_feature_packet_build_error"] = (
+        frozen_feature_packet_error
+    )
+    frozen_input_quality = str(
+        entry_price_input_audit.get("ai_input_source_quality_status") or ""
+    ).strip().lower()
+    if runtime_preflight_required() and frozen_input_quality not in {
+        "complete",
+        "partial",
+    }:
+        block_reason = "entry_price_feature_packet_source_quality_blocked"
+        decision_ts = time.time()
+        context_age_ms = int(
+            round(max(0.0, decision_ts - price_context_started_at) * 1000.0)
+        )
+        submit_block_fields = {
+            "ai_entry_price_canary_action": "SKIP",
+            "ai_entry_price_canary_final_action": "SKIP",
+            "ai_entry_price_canary_applied": True,
+            "ai_entry_price_canary_confidence": 0,
+            "ai_entry_price_canary_reason": block_reason,
+            "ai_entry_price_canary_submit_blocked": True,
+            "ai_entry_price_canary_submit_block_reason": block_reason,
+            "ai_entry_price_canary_eval_ms": 0,
+            "ai_entry_price_canary_decision_ts": decision_ts,
+            "ai_entry_price_canary_context_age_ms": context_age_ms,
+            "ai_entry_price_provider_skipped": True,
+            "ai_entry_price_provider_skip_reason": block_reason,
+            "ai_entry_price_provider_call_count": 0,
+            "ai_entry_price_provider_result_source": (
+                "deterministic_source_quality_guard"
+            ),
+            **entry_price_input_audit,
+        }
+        latency_gate.update(submit_block_fields)
+        _log_entry_pipeline(
+            stock,
+            code,
+            "entry_ai_price_feature_packet_source_block",
+            reason=block_reason,
+            **submit_block_fields,
+            **micro_log_fields,
+            decision_authority="entry_price_input_source_quality_fail_closed",
+            runtime_effect=bool(real_order_subject),
+            actual_order_submitted=False,
+            broker_order_forbidden=True,
+        )
+        return [], True
+
     ai_eval_started_at = time.perf_counter()
     entry_price_metadata = {
         "record_id": stock.get("record_id") or stock.get("id"),
@@ -35417,14 +35517,13 @@ def _apply_entry_ai_price_canary(
     )
     openai_transport_fields = {
         **_build_ai_ops_log_fields(result),
-        **_entry_ai_price_input_audit_fields(
-            result=result,
-            price_ctx=price_ctx,
-            ws_data=ws_data,
-            recent_ticks=recent_ticks,
-            recent_candles=recent_candles,
-        ),
+        **entry_price_input_audit,
     }
+    openai_transport_fields["entry_price_input_schema"] = str(
+        (result or {}).get("ai_input_schema")
+        or openai_transport_fields.get("entry_price_input_schema")
+        or ""
+    )
 
     if parse_fail or not parse_ok:
         _log_entry_pipeline(

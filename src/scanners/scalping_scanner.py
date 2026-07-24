@@ -2809,6 +2809,11 @@ def _scanner_runtime_target_payload(
         "price_delta_since_first_seen_pct": fields.get(
             "price_delta_since_first_seen_pct"
         ),
+        "comparable_flu_delta_since_first_seen": fields.get(
+            "comparable_flu_delta_since_first_seen"
+        ),
+        "cntr_str_available": fields.get("cntr_str_available"),
+        "cntr_str": fields.get("cntr_str"),
         "scanner_source_family": fields.get("scanner_source_family"),
         "scanner_source_role": fields.get("scanner_source_role"),
         "rank_change": fields.get("rank_change"),

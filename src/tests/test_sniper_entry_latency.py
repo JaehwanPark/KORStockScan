@@ -148,6 +148,106 @@ def test_scanner_promotion_context_hydrates_missing_recheck_anchor(monkeypatch):
     assert stock["entry_armed_at_epoch"] == 1_781_830_800.0
 
 
+def test_scanner_promotion_context_selects_internal_promotion_epoch(monkeypatch):
+    monkeypatch.setattr(
+        state_handlers,
+        "_load_scanner_promotion_context_events",
+        lambda target_date: {
+            "123456": [
+                {
+                    "emitted_epoch": 1_000.0,
+                    "promotion_epoch": 1_000.0,
+                    "fields": {
+                        "scanner_promotion_id": "OLD",
+                        "scanner_promotion_reason": "price_jump_start_acceleration",
+                        "source_signature": "PRICE_JUMP_START",
+                        "current_price_observed": "1000",
+                    },
+                },
+                {
+                    # The pipeline write was delayed, but this row owns the
+                    # promotion whose runtime anchor is 2_000.
+                    "emitted_epoch": 2_080.0,
+                    "promotion_epoch": 2_000.0,
+                    "fields": {
+                        "scanner_promotion_id": "CURRENT",
+                        "scanner_promotion_emitted_epoch": "2000.000",
+                        "scanner_promotion_reason": "price_jump_start_acceleration",
+                        "source_signature": "PRICE_JUMP_START",
+                        "current_price_observed": "1044",
+                    },
+                },
+            ]
+        },
+    )
+    stock = {
+        "code": "123456",
+        "date": "2026-07-24",
+        "entry_armed_at_epoch": 2_000.0,
+    }
+
+    hydrated = state_handlers._hydrate_scanner_promotion_runtime_context(stock)
+
+    assert hydrated["scanner_promotion_id"] == "CURRENT"
+    assert hydrated["scanner_promotion_emitted_epoch"] == "2000.000"
+    assert hydrated["current_price_observed"] == "1044"
+
+
+def test_scanner_promotion_loader_prefers_internal_epoch_over_delayed_emit(
+    monkeypatch, tmp_path
+):
+    path = tmp_path / "pipeline_events_2026-07-24.jsonl"
+    rows = [
+        {
+            "stage": "scalping_scanner_candidate_promoted",
+            "stock_code": "123456",
+            "emitted_at": "2026-07-24T14:15:19+09:00",
+            "fields": {
+                "scanner_promotion_id": "CURRENT",
+                "scanner_promotion_emitted_epoch": "1784870038.498",
+            },
+        },
+        {
+            "stage": "scalping_scanner_candidate_promoted",
+            "stock_code": "123456",
+            "emitted_at": "2026-07-24T14:14:00+09:00",
+            "fields": {
+                "scanner_promotion_id": "OLD",
+                "scanner_promotion_emitted_epoch": "1784862655.815",
+            },
+        },
+    ]
+    path.write_text(
+        "\n".join(json.dumps(row, ensure_ascii=True) for row in rows) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        state_handlers, "_scanner_promotion_events_path", lambda target_date: path
+    )
+    monkeypatch.setattr(state_handlers, "_SCANNER_PROMOTION_CONTEXT_CACHE", {})
+
+    loaded = state_handlers._load_scanner_promotion_context_events("2026-07-24")
+
+    assert [row["fields"]["scanner_promotion_id"] for row in loaded["123456"]] == [
+        "OLD",
+        "CURRENT",
+    ]
+    assert loaded["123456"][-1]["promotion_epoch"] == 1784870038.498
+
+
+def test_scanner_promotion_context_accepts_explicit_zero_strength():
+    stock = {
+        "scanner_promotion_reason": "price_jump_start_acceleration",
+        "source_signature": "PRICE_JUMP_START",
+        "price_delta_since_first_seen_pct": "0.00",
+        "comparable_flu_delta_since_first_seen": "0.00",
+        "cntr_str_available": False,
+        "cntr_str": 0.0,
+    }
+
+    assert state_handlers._scanner_promotion_context_present(stock) is True
+
+
 def test_early_accel_strong_bundle_pre_recheck_fields_are_contract_values(monkeypatch):
     monkeypatch.setattr(state_handlers, "_rule_bool", lambda key, default=False: False)
     decision = state_handlers._resolve_early_accel_strong_bundle_recheck(

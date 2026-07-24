@@ -512,8 +512,12 @@ def precompute_microstructure_reaction_inputs(
     recent_ticks: list[dict[str, Any]] | None,
     recent_candles: list[dict[str, Any]] | None = None,
     *,
-    now: datetime | None = None,
+    now: datetime | float | int | None = None,
 ) -> dict[str, Any]:
+    if isinstance(now, (int, float)):
+        now = datetime.fromtimestamp(float(now))
+    elif now is not None and not isinstance(now, datetime):
+        now = None
     ws_data = ws_data if isinstance(ws_data, dict) else {}
     recent_ticks = recent_ticks if isinstance(recent_ticks, list) else []
     recent_candles = recent_candles if isinstance(recent_candles, list) else []
@@ -575,17 +579,14 @@ def precompute_microstructure_reaction_inputs(
     candidate_pressure_rows = [
         (tick, inferred)
         for tick, inferred in zip(ticks, aggressor_rows)
-        if _aggressor_pressure_usable(inferred)
-        and _tick_volume_pressure_usable(tick)
+        if _aggressor_pressure_usable(inferred) and _tick_volume_pressure_usable(tick)
     ]
     explicit_untrusted_volume_present = any(
         not _tick_volume_pressure_usable(tick)
         for tick in ticks
         if tick.get("volume_source") or tick.get("trade_volume_source")
     )
-    pressure_rows = (
-        [] if explicit_untrusted_volume_present else candidate_pressure_rows
-    )
+    pressure_rows = [] if explicit_untrusted_volume_present else candidate_pressure_rows
     buy_vol = sum(
         _safe_float(tick.get("volume"), 0.0)
         for tick, inferred in pressure_rows

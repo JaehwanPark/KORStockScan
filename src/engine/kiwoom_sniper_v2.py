@@ -5094,10 +5094,43 @@ def _runtime_admit_live_scanner_attaches(
 
     if not newly_attached:
         return queue, []
-    return (
-        _runtime_iteration_targets([*queue, *newly_attached], now_ts=now_ts),
-        newly_attached,
-    )
+
+    ordered = _runtime_iteration_targets([*queue, *newly_attached], now_ts=now_ts)
+    new_ids = {id(target) for target in newly_attached}
+    ordered_new = [target for target in ordered if id(target) in new_ids]
+    ordered_existing = [target for target in ordered if id(target) not in new_ids]
+    safety_barrier = []
+    remaining = []
+    for target in ordered_existing:
+        status = str((target or {}).get("status") or "").upper()
+        if status in {"BUY_ORDERED", "SELL_ORDERED"} or _is_real_holding_target(target):
+            safety_barrier.append(target)
+        else:
+            remaining.append(target)
+    return [*safety_barrier, *ordered_new, *remaining], newly_attached
+
+
+def _runtime_queue_rank_fields(iteration_targets):
+    iteration_targets = list(iteration_targets or [])
+    scanner_watching = [
+        target for target in iteration_targets if _is_scanner_watching_target(target)
+    ]
+    return {
+        "queue_rank_by_obj": {
+            id(target): idx + 1 for idx, target in enumerate(iteration_targets)
+        },
+        "scanner_rank_by_obj": {
+            id(target): idx + 1 for idx, target in enumerate(scanner_watching)
+        },
+        "pre_scanner_runtime_count": next(
+            (
+                idx
+                for idx, target in enumerate(iteration_targets)
+                if _is_scanner_watching_target(target)
+            ),
+            len(iteration_targets),
+        ),
+    }
 
 
 def _runtime_queue_context(targets, now_ts):
@@ -5115,30 +5148,14 @@ def _runtime_queue_context(targets, now_ts):
         if str((t or {}).get("status") or "").upper() == "HOLDING"
         and not _is_real_holding_target(t)
     ]
-    queue_rank_by_obj = {
-        id(target): idx + 1 for idx, target in enumerate(iteration_targets)
-    }
-    scanner_rank_by_obj = {
-        id(target): idx + 1 for idx, target in enumerate(scanner_watching)
-    }
-    first_scanner_index = next(
-        (
-            idx
-            for idx, target in enumerate(iteration_targets)
-            if _is_scanner_watching_target(target)
-        ),
-        len(iteration_targets),
-    )
     return {
         "iteration_targets": iteration_targets,
-        "queue_rank_by_obj": queue_rank_by_obj,
-        "scanner_rank_by_obj": scanner_rank_by_obj,
         "watching_count": len(watching),
         "scanner_watching_count": len(scanner_watching),
         "real_holding_count": len(real_holding),
         "non_real_holding_count": len(non_real_holding),
-        "pre_scanner_runtime_count": first_scanner_index,
         "loop_started_epoch": now_ts,
+        **_runtime_queue_rank_fields(iteration_targets),
     }
 
 
@@ -8650,6 +8667,7 @@ def run_sniper(is_test_mode=False):
                         now_ts=queue_context["loop_started_epoch"],
                     )
                     queue_context.update(refreshed_queue_context)
+                    queue_context.update(_runtime_queue_rank_fields(runtime_work_queue))
                     scanner_ws_snapshot_cache.update(
                         _runtime_scanner_ws_snapshot_cache(live_attaches)
                     )

@@ -459,10 +459,7 @@ def test_fresh_spread_ai_recheck_keeps_final_absolute_spread_cap(monkeypatch):
     assert gate["allowed"] is False
     assert gate["reason"] == "fresh_spread_ai_recheck_absolute_spread_cap_exceeded"
     assert fields["fresh_spread_ai_recheck_latency_recovered"] is False
-    assert (
-        fields["fresh_spread_ai_recheck_post_ai_within_absolute_spread_cap"]
-        is False
-    )
+    assert fields["fresh_spread_ai_recheck_post_ai_within_absolute_spread_cap"] is False
 
 
 def test_fresh_spread_ai_recheck_retries_old_buy_and_fails_closed(monkeypatch):
@@ -471,9 +468,7 @@ def test_fresh_spread_ai_recheck_retries_old_buy_and_fails_closed(monkeypatch):
         "last_watching_ai_confirmed_at": 900.0,
     }
     monkeypatch.setenv("KORSTOCKSCAN_FRESH_SPREAD_AI_RECHECK_ENABLED", "true")
-    monkeypatch.setenv(
-        "KORSTOCKSCAN_FRESH_SPREAD_AI_RECHECK_MAX_AI_AGE_SEC", "15"
-    )
+    monkeypatch.setenv("KORSTOCKSCAN_FRESH_SPREAD_AI_RECHECK_MAX_AI_AGE_SEC", "15")
     monkeypatch.setattr(
         handlers,
         "_entry_ai_submit_authority_fields",
@@ -6212,8 +6207,7 @@ def test_score65_74_recovery_probe_log_fields_preserve_micro_vwap_provenance():
     assert fields["entry_candle_route_equivalence_proven"] is True
     assert fields["entry_candle_source_quality_status"] == "fresh_consistent"
     assert (
-        fields["entry_candle_hybrid_guard_result"]
-        == "preserve_neutral_or_supportive"
+        fields["entry_candle_hybrid_guard_result"] == "preserve_neutral_or_supportive"
     )
     assert fields["tick_source_quality_fields_sent"] is True
 
@@ -6619,5 +6613,38 @@ def test_entry_ai_price_input_audit_fields_flattens_provider_compare_contract(
     assert fields["quote_stale"] is False
     assert fields["ai_input_source_quality_status"] == "partial"
     assert fields["entry_price_input_decision_authority"] == (
-        "provider_route_comparison_only"
+        "provider_call_fail_closed_only"
     )
+
+
+def test_entry_ai_price_input_audit_uses_frozen_feature_packet(monkeypatch):
+    monkeypatch.setattr(
+        handlers,
+        "extract_scalping_feature_packet",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("frozen packet must not be rebuilt after provider latency")
+        ),
+    )
+
+    fields = handlers._entry_ai_price_input_audit_fields(
+        result={"ai_input_schema": "entry_price_compact_v1"},
+        price_ctx={
+            "current_price": 10020,
+            "resolved_order_price": 10000,
+            "best_bid": 10010,
+            "best_ask": 10030,
+        },
+        ws_data={"curr": 10020},
+        recent_ticks=[],
+        recent_candles=[],
+        feature_packet={
+            "entry_context_quality": "complete",
+            "entry_context_missing_features": "",
+            "quote_age_ms": 2800,
+            "quote_stale": False,
+        },
+    )
+
+    assert fields["ai_input_source_quality_status"] == "complete"
+    assert fields["quote_age_ms"] == 2800
+    assert fields["quote_stale"] is False

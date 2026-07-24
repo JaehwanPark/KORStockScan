@@ -2067,12 +2067,14 @@ def test_observation_source_quality_audit_reviews_explicit_fail_closed_unknown_p
         ]
         == "reviewed_quote_recovery_large_sell_not_available"
     )
-    assert reviewed["scalp_fast_exit_quote_blocked"][
-        "fast_exit_route_resolution_reason"
-    ] == "reviewed_legacy_fast_exit_route_provenance"
-    assert reviewed["scalp_fast_exit_quote_blocked"][
-        "fast_exit_execution_cohort"
-    ] == "reviewed_legacy_fast_exit_route_provenance"
+    assert (
+        reviewed["scalp_fast_exit_quote_blocked"]["fast_exit_route_resolution_reason"]
+        == "reviewed_legacy_fast_exit_route_provenance"
+    )
+    assert (
+        reviewed["scalp_fast_exit_quote_blocked"]["fast_exit_execution_cohort"]
+        == "reviewed_legacy_fast_exit_route_provenance"
+    )
 
 
 def test_observation_source_quality_audit_reviews_unknown_fill_quality_without_requested_qty(
@@ -2495,9 +2497,10 @@ def test_observation_source_quality_audit_accepts_explicit_fail_closed_probe_sou
 
     contract = report["stage_contracts"]["score65_74_recovery_probe_blocked"]
     assert contract["status"] == "pass"
-    assert "tick_aggressor_pressure_usable_contract" not in contract[
-        "invalid_label_violations"
-    ]
+    assert (
+        "tick_aggressor_pressure_usable_contract"
+        not in contract["invalid_label_violations"]
+    )
 
 
 def test_observation_source_quality_audit_accepts_observed_zero_distance_from_high(
@@ -2910,9 +2913,10 @@ def test_observation_source_quality_audit_accepts_fail_closed_pyramid_source_gap
 
     contract = report["stage_contracts"]["pyramid_blocked_reason"]
     assert contract["status"] == "pass"
-    assert "tick_aggressor_pressure_usable_contract" not in contract[
-        "invalid_label_violations"
-    ]
+    assert (
+        "tick_aggressor_pressure_usable_contract"
+        not in contract["invalid_label_violations"]
+    )
 
 
 def test_observation_source_quality_audit_blocks_pyramid_micro_vwap_without_fresh_candle_provenance(
@@ -4771,9 +4775,7 @@ def test_observation_source_quality_accepts_scanner_ws_backoff_watch_retention(
                         "provider_route_change,order_price_change,quantity_or_cap_change,"
                         "broker_guard_change,real_execution_quality_approval"
                     ),
-                    "retention_reason": (
-                        "scanner_ws_stale_backoff_bounded_recovery"
-                    ),
+                    "retention_reason": ("scanner_ws_stale_backoff_bounded_recovery"),
                     "retention_first_epoch": "1000.000",
                     "retention_age_sec": 0.0,
                     "retention_min_sec": 15.0,
@@ -4795,9 +4797,7 @@ def test_observation_source_quality_accepts_scanner_ws_backoff_watch_retention(
 
     report = audit.write_report("2026-07-24")
 
-    contract = report["stage_contracts"][
-        "scalping_scanner_ws_backoff_watch_retained"
-    ]
+    contract = report["stage_contracts"]["scalping_scanner_ws_backoff_watch_retained"]
     assert contract["status"] == "pass"
     assert report["summary"]["hard_blocking_contract_gap_count"] == 0
     assert report["summary"]["tuning_input_allowed"] is True
@@ -5218,6 +5218,22 @@ def test_observation_source_quality_audit_accepts_score_vpw_prior_sentinel():
     assert normalized["actual_order_submitted"] is False
     assert normalized["broker_order_forbidden"] is True
     assert normalized["runtime_effect"] is False
+
+
+def test_observation_source_quality_audit_accepts_canonical_unknown_flow_state():
+    normalized = audit._normalized_fields_for_contract(
+        "holding_flow_override_review",
+        {
+            "flow_state": "unknown_flow_state",
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "runtime_effect": False,
+        },
+    )
+
+    assert normalized["flow_state"] == "unknown_flow_state"
+    assert "invalid_flow_state_label" not in normalized
+    assert "source_quality_blocker" not in normalized
 
 
 def test_observation_source_quality_audit_fails_unknown_flow_state_label(

@@ -1302,3 +1302,25 @@ def test_openai_market_packet_tolerates_missing_orderbook():
         parsed["features"]["microstructure_reaction_context_status"]
         == "source_quality_missing"
     )
+
+
+def test_feature_packet_accepts_epoch_seconds_for_frozen_decision_time():
+    decision_time = datetime(2026, 7, 24, 9, 0, 11)
+
+    datetime_packet = extract_scalping_feature_packet(
+        _sample_ws_data(),
+        _sample_ticks(),
+        _sample_candles(),
+        now=decision_time,
+    )
+    epoch_packet = extract_scalping_feature_packet(
+        _sample_ws_data(),
+        _sample_ticks(),
+        _sample_candles(),
+        now=decision_time.timestamp(),
+    )
+
+    assert epoch_packet["tick_latest_age_ms"] == datetime_packet["tick_latest_age_ms"]
+    assert (
+        epoch_packet["tick_context_quality"] == datetime_packet["tick_context_quality"]
+    )

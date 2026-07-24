@@ -523,6 +523,33 @@ def test_promote_candidates_emits_rising_replacement_probe_at_full_cap(monkeypat
     assert payload["scanner_watch_budget_owner"] == "rising_missed"
 
 
+def test_runtime_target_payload_preserves_promotion_strength_context():
+    payload = scalping_scanner._scanner_runtime_target_payload(
+        {
+            "Code": "285800",
+            "Name": "진영",
+            "Price": 1044,
+            "Source": "PRICE_JUMP_START",
+            "CntrStrAvailable": True,
+            "CntrStr": 61.84,
+        },
+        {
+            "blocked": False,
+            "reason": "price_jump_start_acceleration",
+            "scanner_promotion_id": "SCANPROM-285800-2000000",
+            "scanner_promotion_emitted_epoch": "2000.000",
+            "price_delta_since_first_seen_pct": "0.00",
+            "comparable_flu_delta_since_first_seen": "0.00",
+        },
+        record_id=123,
+        now_ts=2000.0,
+    )
+
+    assert payload["comparable_flu_delta_since_first_seen"] == "0.00"
+    assert payload["cntr_str_available"] is True
+    assert payload["cntr_str"] == 61.84
+
+
 def test_promote_candidates_skips_code_with_active_manual_scalp_base(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE", "2")
     monkeypatch.setattr(kiwoom_utils, "is_valid_stock", lambda *args, **kwargs: True)

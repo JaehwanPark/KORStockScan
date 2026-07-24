@@ -24736,6 +24736,95 @@ def test_entry_ai_price_preflight_blocks_submit_before_provider(monkeypatch):
     assert any(stage == "entry_ai_price_input_preflight_block" for stage, _ in logs)
 
 
+def test_entry_ai_price_frozen_feature_packet_blocks_stale_provider_input(
+    monkeypatch,
+):
+    monkeypatch.setenv("KORSTOCKSCAN_AI_INPUT_PREFLIGHT_REQUIRED", "true")
+    monkeypatch.setattr(
+        state_handlers,
+        "TRADING_RULES",
+        replace(CONFIG, SCALPING_ENTRY_AI_PRICE_CANARY_ENABLED=True),
+    )
+    monkeypatch.setattr(
+        state_handlers, "entry_candle_context_enabled", lambda **kwargs: False
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils,
+        "get_tick_history_ka10003",
+        lambda *args, **kwargs: [{"price": 10_020}],
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "fetch_entry_candles_with_meta",
+        lambda *args, **kwargs: ([{"close": 10_020}], {}),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "extract_scalping_feature_packet",
+        lambda *args, **kwargs: {
+            "entry_context_quality": "stale",
+            "entry_context_missing_features": "quote_freshness",
+            "quote_age_ms": 3_100,
+            "quote_stale": True,
+        },
+    )
+    logs = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+
+    class DummyAI:
+        def evaluate_scalping_entry_price(self, *args, **kwargs):
+            raise AssertionError("stale frozen input must skip provider")
+
+    latency_gate = {
+        "target_buy_price": 9_980,
+        "latency_guarded_order_price": 9_990,
+        "normal_defensive_order_price": 9_990,
+        "order_price": 9_990,
+        "price_resolution_reason": "defensive_order_price",
+        "latency_state": "SAFE",
+    }
+
+    adjusted, touched = state_handlers._apply_entry_ai_price_canary(
+        stock={
+            "name": "TEST",
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "prob": 0.8,
+        },
+        code="123456",
+        strategy="SCALPING",
+        ws_data={"curr": 10_020},
+        ai_engine=DummyAI(),
+        latency_gate=latency_gate,
+        planned_orders=[
+            {
+                "tag": "normal",
+                "qty": 1,
+                "price": 9_990,
+                "tif": "DAY",
+                "order_type": "LIMIT",
+            }
+        ],
+        curr_price=10_020,
+        best_bid=10_020,
+        best_ask=10_030,
+        real_order_subject=True,
+    )
+
+    assert adjusted == []
+    assert touched is True
+    assert latency_gate["ai_entry_price_provider_call_count"] == 0
+    assert latency_gate["ai_input_source_quality_status"] == "stale"
+    assert latency_gate["quote_age_ms"] == 3_100
+    assert logs[-1][0] == "entry_ai_price_feature_packet_source_block"
+    assert logs[-1][1]["actual_order_submitted"] is False
+    assert logs[-1][1]["broker_order_forbidden"] is True
+
+
 def test_entry_ai_price_canary_rebases_defensive_price_to_fresh_bid(monkeypatch):
     monkeypatch.setattr(
         state_handlers,

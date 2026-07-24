@@ -5127,12 +5127,15 @@ class GPTSniperEngine:
             if isinstance(ctx.get("entry_context_features"), dict)
             else {}
         )
-        try:
-            packet = extract_scalping_feature_packet(
-                ws, recent_ticks or [], recent_candles or []
-            )
-        except Exception:
+        if nested_ctx:
             packet = {}
+        else:
+            try:
+                packet = extract_scalping_feature_packet(
+                    ws, recent_ticks or [], recent_candles or []
+                )
+            except Exception:
+                packet = {}
         summary = {}
         for key in keys:
             for source in (nested_ctx, packet, ctx, ws):

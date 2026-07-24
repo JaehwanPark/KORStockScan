@@ -1903,6 +1903,58 @@ def test_runtime_admit_live_scanner_attaches_prioritizes_new_target_without_muta
     assert active_targets == [old, new]
 
 
+def test_runtime_admit_live_scanner_attach_gets_first_precheck_after_safety_barrier():
+    ordered = {
+        "id": "ordered",
+        "code": "000010",
+        "status": "SELL_ORDERED",
+        "strategy": "SCALPING",
+    }
+    holding = {
+        "id": "holding",
+        "code": "000011",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "actual_order_submitted": True,
+    }
+    old_high_priority = {
+        "id": "old",
+        "code": "000012",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "price_delta_since_first_seen_pct": 5.0,
+    }
+    new_low_priority = {
+        "id": "new",
+        "code": "000013",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "price_delta_since_first_seen_pct": 0.0,
+    }
+
+    queue, admitted = kiwoom_sniper_v2._runtime_admit_live_scanner_attaches(
+        [ordered, holding, old_high_priority],
+        [ordered, holding, old_high_priority, new_low_priority],
+        processed_target_ids=set(),
+        admitted_target_ids=set(),
+        now_ts=1300.0,
+    )
+
+    assert admitted == [new_low_priority]
+    assert [target["id"] for target in queue] == [
+        "ordered",
+        "holding",
+        "new",
+        "old",
+    ]
+    rank_fields = kiwoom_sniper_v2._runtime_queue_rank_fields(queue)
+    assert rank_fields["queue_rank_by_obj"][id(new_low_priority)] == 3
+    assert rank_fields["scanner_rank_by_obj"][id(new_low_priority)] == 1
+    assert rank_fields["pre_scanner_runtime_count"] == 2
+
+
 def test_runtime_admit_live_scanner_attaches_is_bounded_and_does_not_reprocess():
     old = {
         "id": "old",

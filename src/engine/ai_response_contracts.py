@@ -38,6 +38,7 @@ CANONICAL_FLOW_STATES = {"absorption", "recovery", "distribution", "breakdown", 
 KNOWN_FLOW_STATE_SENTINELS = {
     "-",
     "unknown",
+    "unknown_flow_state",
     "flow_state_unavailable",
     "ai_lock_contention",
     "engine_disabled",
