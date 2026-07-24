@@ -38,10 +38,19 @@ def _ws(
     }
 
 
-def _candle():
+def _candle(
+    *,
+    age_sec=1.0,
+    rest_route="KRX",
+    ws_route="krx_only",
+    request_code="005930",
+):
     return {
-        "schema": "entry_candle_context_v1",
-        "latest_bar_age_sec": 1.0,
+        "schema": "session_candle_source_v1",
+        "request_code": request_code,
+        "rest_route": rest_route,
+        "ws_route": ws_route,
+        "latest_bar_age_sec": age_sec,
         "source_quality": {"status": "fresh_consistent", "blockers": []},
     }
 
@@ -208,6 +217,212 @@ def test_krx_rejects_integrated_source_without_event_venue_proof():
     assert snapshot["market_data_route"] == "krx_nxt_integrated"
     assert snapshot["underlying_event_venue"] is None
     assert snapshot["underlying_event_venue_source"] == "not_provided"
+    assert snapshot["integrated_sor_route_proven"] is False
+
+
+def test_holding_sor_accepts_exact_integrated_execution_route_without_inventing_venue():
+    now = datetime(2026, 7, 23, 10, 0, tzinfo=KST).timestamp()
+    position = {
+        "buy_qty": 1,
+        "buy_price": 10000,
+        "broker_holding_qty": 1,
+        "broker_snapshot_at": now - 1,
+        "open_buy_qty": 0,
+        "open_sell_qty": 0,
+    }
+    snapshot = mod.build_ai_market_snapshot(
+        stock_code="005930",
+        decision_stage="holding_flow",
+        ws_data=_ws(now, suffix="_AL", route="krx_nxt_integrated"),
+        effective_venue="KRX",
+        session_bucket="krx_regular",
+        broker_route="SOR",
+        candle_context=_candle(
+            rest_route="_AL",
+            ws_route="krx_nxt_integrated",
+        ),
+        position=position,
+        now_ts=now,
+        require_position_reconciliation=True,
+    )
+
+    preflight = snapshot["ai_input_preflight_v1"]
+    assert preflight["source_allowed"] is True
+    assert preflight["venue_consistent"] is True
+    assert snapshot["underlying_event_venue"] is None
+    assert snapshot["integrated_sor_route_proven"] is True
+    assert (
+        snapshot["integrated_sor_route_proof"]
+        == "holding_sor_integrated_execution_route"
+    )
+
+
+def test_holding_sor_active_position_prefers_authoritative_broker_quantity():
+    now = datetime(2026, 7, 23, 10, 0, tzinfo=KST).timestamp()
+    common = {
+        "stock_code": "005930",
+        "decision_stage": "holding_flow",
+        "ws_data": _ws(now, suffix="_AL", route="krx_nxt_integrated"),
+        "effective_venue": "KRX",
+        "session_bucket": "krx_regular",
+        "broker_route": "SOR",
+        "candle_context": _candle(
+            rest_route="_AL",
+            ws_route="krx_nxt_integrated",
+        ),
+        "now_ts": now,
+    }
+
+    broker_holding = mod.build_ai_market_snapshot(
+        **common,
+        position={
+            "remaining_qty": 0,
+            "buy_qty": 1,
+            "buy_price": 10000,
+            "broker_holding_qty": 1,
+        },
+    )
+    broker_flat = mod.build_ai_market_snapshot(
+        **common,
+        position={
+            "remaining_qty": 1,
+            "buy_qty": 1,
+            "buy_price": 10000,
+            "broker_holding_qty": 0,
+        },
+    )
+
+    assert broker_holding["integrated_sor_route_proven"] is True
+    assert broker_flat["integrated_sor_route_proven"] is False
+
+
+def test_integrated_sor_proof_never_opens_entry_or_premarket_krx_authority():
+    position = {"buy_qty": 1, "buy_price": 10000}
+    regular_now = datetime(2026, 7, 23, 10, 0, tzinfo=KST).timestamp()
+    entry = mod.build_ai_market_snapshot(
+        stock_code="005930",
+        decision_stage="entry_screen",
+        ws_data=_ws(regular_now, suffix="_AL", route="krx_nxt_integrated"),
+        effective_venue="KRX",
+        session_bucket="krx_regular",
+        broker_route="SOR",
+        candle_context=_candle(
+            rest_route="_AL",
+            ws_route="krx_nxt_integrated",
+        ),
+        position=position,
+        now_ts=regular_now,
+    )
+    premarket_now = datetime(2026, 7, 23, 8, 59, tzinfo=KST).timestamp()
+    premarket_mislabeled = mod.build_ai_market_snapshot(
+        stock_code="005930",
+        decision_stage="holding_score",
+        ws_data=_ws(premarket_now, suffix="_AL", route="krx_nxt_integrated"),
+        effective_venue="KRX",
+        session_bucket="krx_regular",
+        broker_route="SOR",
+        candle_context=_candle(
+            rest_route="_AL",
+            ws_route="krx_nxt_integrated",
+        ),
+        position=position,
+        now_ts=premarket_now,
+    )
+
+    assert entry["integrated_sor_route_proven"] is False
+    assert entry["ai_input_preflight_v1"]["source_allowed"] is False
+    assert premarket_mislabeled["integrated_sor_route_proven"] is False
+    assert premarket_mislabeled["ai_input_preflight_v1"]["source_allowed"] is False
+
+
+def test_integrated_sor_holding_requires_matching_al_candle_route():
+    now = datetime(2026, 7, 23, 10, 0, tzinfo=KST).timestamp()
+    snapshot = mod.build_ai_market_snapshot(
+        stock_code="005930",
+        decision_stage="holding_score",
+        ws_data=_ws(now, suffix="_AL", route="krx_nxt_integrated"),
+        effective_venue="KRX",
+        session_bucket="krx_regular",
+        broker_route="SOR",
+        candle_context=_candle(),
+        position={"buy_qty": 1, "buy_price": 10000},
+        now_ts=now,
+    )
+
+    assert snapshot["integrated_sor_route_proven"] is False
+    assert (
+        "krx_integrated_event_venue_unproven"
+        in snapshot["ai_input_preflight_v1"]["source_blockers"]
+    )
+
+
+def test_integrated_sor_holding_rejects_cross_symbol_candle_context():
+    now = datetime(2026, 7, 23, 10, 0, tzinfo=KST).timestamp()
+    snapshot = mod.build_ai_market_snapshot(
+        stock_code="005930",
+        decision_stage="holding_score",
+        ws_data=_ws(now, suffix="_AL", route="krx_nxt_integrated"),
+        effective_venue="KRX",
+        session_bucket="krx_regular",
+        broker_route="SOR",
+        candle_context=_candle(
+            rest_route="_AL",
+            ws_route="krx_nxt_integrated",
+            request_code="000660_AL",
+        ),
+        position={"buy_qty": 1, "buy_price": 10000},
+        now_ts=now,
+    )
+
+    assert snapshot["integrated_sor_route_proven"] is False
+    assert (
+        "krx_integrated_event_venue_unproven"
+        in snapshot["ai_input_preflight_v1"]["source_blockers"]
+    )
+
+
+def test_minute_candle_has_interval_aware_freshness_without_weakening_ws():
+    now = datetime(2026, 7, 23, 10, 0, tzinfo=KST).timestamp()
+    fresh_candle = mod.build_ai_market_snapshot(
+        stock_code="005930",
+        decision_stage="holding_score",
+        ws_data=_ws(now),
+        effective_venue="KRX",
+        session_bucket="krx_regular",
+        candle_context=_candle(age_sec=55.0),
+        now_ts=now,
+    )
+    stale_candle = mod.build_ai_market_snapshot(
+        stock_code="005930",
+        decision_stage="holding_score",
+        ws_data=_ws(now),
+        effective_venue="KRX",
+        session_bucket="krx_regular",
+        candle_context=_candle(age_sec=91.0),
+        now_ts=now,
+    )
+    stale_ws_data = _ws(now)
+    stale_ws_data["last_realtime_type_ts"] = {
+        "0B": now - 3.1,
+        "0D": now - 3.1,
+    }
+    stale_ws = mod.build_ai_market_snapshot(
+        stock_code="005930",
+        decision_stage="holding_score",
+        ws_data=stale_ws_data,
+        effective_venue="KRX",
+        session_bucket="krx_regular",
+        candle_context=_candle(age_sec=55.0),
+        now_ts=now,
+    )
+
+    assert fresh_candle["sources"]["candle"]["quality"] == "fresh"
+    assert fresh_candle["sources"]["candle"]["freshness_limit_ms"] == 90000.0
+    assert fresh_candle["ai_input_preflight_v1"]["source_allowed"] is True
+    assert stale_candle["sources"]["candle"]["quality"] == "stale"
+    assert "candle_stale" in stale_candle["ai_input_preflight_v1"]["source_blockers"]
+    assert stale_ws["sources"]["current_price"]["quality"] == "stale"
+    assert stale_ws["sources"]["bbo"]["quality"] == "stale"
 
 
 def test_nxt_aftermarket_accepts_integrated_route_with_event_and_clock_proof():

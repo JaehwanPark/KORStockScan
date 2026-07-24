@@ -25,7 +25,9 @@ OBSERVATION_CONTRACT = {
     "window_policy": "exact_decision_snapshot",
     "sample_floor": "one_exact_provenance_row_per_venue_session_decision_point",
     "primary_decision_metric": "ai_input_preflight_status",
-    "source_quality_gate": "fresh_conflict_free_exact_venue_provenance",
+    "source_quality_gate": (
+        "fresh_conflict_free_exact_venue_or_holding_sor_execution_route_provenance"
+    ),
     "forbidden_uses": [
         "standalone_buy_hold_or_exit_authority",
         "provider_or_model_change",
@@ -37,6 +39,11 @@ OBSERVATION_CONTRACT = {
 
 _MARKET_TYPES = ("0B", "0D")
 _FRESH_MS = 3000.0
+# A one-minute candle is observed from its bar-open timestamp.  Reusing the
+# sub-second WS TTL would incorrectly mark a healthy forming bar stale for most
+# of its lifetime.  Keep one full interval plus a bounded 30-second delivery
+# allowance; the candle producer's own structural quality gate remains active.
+_CANDLE_FRESH_MS = 90_000.0
 _FUTURE_TOLERANCE_MS = 1000.0
 _POSITION_FRESH_SEC = 60.0
 _PROCESS_STARTED_AT = time.time()
@@ -266,6 +273,7 @@ def _source_row(
     market_suffix: str = "",
     market_route: str = "",
     missing_reason: str | None = None,
+    freshness_limit_ms: float = _FRESH_MS,
 ) -> dict[str, Any]:
     raw_age_ms = (
         (now_epoch - observed_epoch) * 1000.0 if observed_epoch is not None else None
@@ -278,7 +286,7 @@ def _source_row(
         quality = "unknown_age"
     elif raw_age_ms is not None and raw_age_ms < -_FUTURE_TOLERANCE_MS:
         quality = "future"
-    elif age_ms > _FRESH_MS:
+    elif age_ms > freshness_limit_ms:
         quality = "stale"
     return {
         "value": value,
@@ -287,9 +295,111 @@ def _source_row(
         "age_ms": age_ms,
         "market_suffix": market_suffix or None,
         "market_route": market_route or None,
+        "freshness_limit_ms": freshness_limit_ms,
         "quality": quality,
         "missing_reason": missing_reason if value is None else None,
     }
+
+
+def _active_holding_position(position: dict[str, Any]) -> bool:
+    broker_quantity = next(
+        (
+            _safe_float(position.get(key))
+            for key in (
+                "broker_holding_qty",
+                "verified_holding_qty",
+                "broker_qty",
+            )
+            if position.get(key) not in (None, "")
+        ),
+        None,
+    )
+    memory_quantity = next(
+        (
+            _safe_float(position.get(key))
+            for key in ("remaining_qty", "buy_qty", "qty")
+            if position.get(key) not in (None, "")
+        ),
+        None,
+    )
+    # A reconciled broker quantity is authoritative, including an explicit
+    # zero.  Only fall back to runtime memory when no broker quantity exists.
+    quantity = broker_quantity if broker_quantity is not None else memory_quantity
+    avg_price = next(
+        (
+            _safe_float(position.get(key))
+            for key in ("avg_price", "buy_price")
+            if position.get(key) not in (None, "")
+        ),
+        None,
+    )
+    return bool(quantity is not None and quantity > 0 and avg_price and avg_price > 0)
+
+
+def _integrated_sor_holding_route_proof(
+    *,
+    stock_code: str,
+    decision_stage: str,
+    venue: str,
+    session: str,
+    broker_route: str,
+    candle_context: dict[str, Any],
+    position: dict[str, Any],
+    provenance: dict[str, dict[str, Any]],
+    now_epoch: float,
+) -> tuple[bool, str]:
+    """Prove an executable SOR holding view without inventing an event venue.
+
+    ``_AL`` does not identify the underlying exchange.  It can still be the
+    exact executable route for an existing SOR position when every source is
+    consistently integrated.  This exception is deliberately unavailable to
+    entry and post-probe decisions.
+    """
+
+    stage = str(decision_stage or "").strip().lower()
+    session_value = str(session or "").strip().lower()
+    clock = datetime.fromtimestamp(now_epoch, tz=KST).time()
+    candle_quality = (
+        candle_context.get("source_quality")
+        if isinstance(candle_context.get("source_quality"), dict)
+        else {}
+    )
+    rows = [provenance[key] for key in _MARKET_TYPES]
+    conditions = {
+        "holding_stage": stage
+        in {"holding_score", "holding_score_submit_authority", "holding_flow"}
+        or stage.startswith("overnight"),
+        "active_position": _active_holding_position(position),
+        "krx_regular_cohort": str(venue or "").strip().upper() == "KRX"
+        and session_value == "krx_regular"
+        and datetime.strptime("09:00", "%H:%M").time()
+        <= clock
+        <= datetime.strptime("15:30", "%H:%M").time(),
+        "sor_broker_route": str(broker_route or "").strip().upper() == "SOR",
+        "integrated_candle_route": (
+            str(candle_context.get("schema") or "").strip()
+            == "session_candle_source_v1"
+            and _base_code(candle_context.get("request_code")) == _base_code(stock_code)
+            and str(candle_context.get("rest_route") or "").strip().upper() == "_AL"
+            and str(candle_context.get("ws_route") or "").strip().lower()
+            == "krx_nxt_integrated"
+            and candle_quality.get("status") == "fresh_consistent"
+        ),
+        "integrated_realtime_routes": all(
+            row.get("quality") == "fresh"
+            and str(row.get("market_suffix") or "").strip().upper() == "_AL"
+            and _market_data_route(
+                suffix=str(row.get("market_suffix") or ""),
+                route=str(row.get("market_route") or ""),
+            )
+            == "krx_nxt_integrated"
+            for row in rows
+        ),
+    }
+    missing = [name for name, passed in conditions.items() if not passed]
+    if missing:
+        return False, "missing:" + ",".join(missing)
+    return True, "holding_sor_integrated_execution_route"
 
 
 def _venue_consistency(
@@ -299,6 +409,7 @@ def _venue_consistency(
     session: str,
     provenance: dict[str, dict[str, Any]],
     now_epoch: float,
+    integrated_sor_holding_route_proven: bool = False,
 ) -> tuple[bool, list[str]]:
     blockers: list[str] = []
     rows = [provenance[key] for key in _MARKET_TYPES]
@@ -346,6 +457,7 @@ def _venue_consistency(
                 blockers.append("krx_compatible_market_data_route_required")
             elif (
                 data_route == "krx_nxt_integrated"
+                and not integrated_sor_holding_route_proven
                 and str(row.get("effective_venue") or "").strip().upper() != "KRX"
             ):
                 blockers.append("krx_integrated_event_venue_unproven")
@@ -512,6 +624,7 @@ def build_ai_market_snapshot(
             market_suffix=suffix,
             market_route=route,
             missing_reason="candle_context_missing",
+            freshness_limit_ms=_CANDLE_FRESH_MS,
         ),
         "program": _source_row(
             value=(
@@ -554,12 +667,26 @@ def build_ai_market_snapshot(
             missing_reason="broker_open_orders_snapshot_missing",
         ),
     }
+    integrated_sor_route_proven, integrated_sor_route_proof = (
+        _integrated_sor_holding_route_proof(
+            stock_code=stock_code,
+            decision_stage=decision_stage,
+            venue=normalized_venue,
+            session=session_bucket,
+            broker_route=str(broker_route or ""),
+            candle_context=candle_ctx,
+            position=position_ctx,
+            provenance=provenance,
+            now_epoch=now_epoch,
+        )
+    )
     venue_consistent, venue_blockers = _venue_consistency(
         stock_code=stock_code,
         venue=normalized_venue,
         session=session_bucket,
         provenance=provenance,
         now_epoch=now_epoch,
+        integrated_sor_holding_route_proven=integrated_sor_route_proven,
     )
     blockers = list(venue_blockers)
     stage_value = str(decision_stage or "").strip().lower()
@@ -655,6 +782,8 @@ def build_ai_market_snapshot(
         "market_data_route": market_data_route,
         "underlying_event_venue": underlying_event_venue,
         "underlying_event_venue_source": underlying_event_venue_source,
+        "integrated_sor_route_proven": integrated_sor_route_proven,
+        "integrated_sor_route_proof": integrated_sor_route_proof,
         "session_bucket": session_bucket,
         "provenance": provenance,
     }
@@ -674,6 +803,8 @@ def build_ai_market_snapshot(
         "market_data_route": market_data_route,
         "underlying_event_venue": underlying_event_venue,
         "underlying_event_venue_source": underlying_event_venue_source,
+        "integrated_sor_route_proven": integrated_sor_route_proven,
+        "integrated_sor_route_proof": integrated_sor_route_proof,
         "session_bucket": session_bucket,
         "required_sources": required_sources,
         "realtime_type_provenance": provenance,
@@ -746,6 +877,12 @@ def ai_market_snapshot_log_fields(
         ),
         "ai_market_snapshot_underlying_event_venue_source": snapshot.get(
             "underlying_event_venue_source"
+        ),
+        "ai_market_snapshot_integrated_sor_route_proven": bool(
+            snapshot.get("integrated_sor_route_proven", False)
+        ),
+        "ai_market_snapshot_integrated_sor_route_proof": snapshot.get(
+            "integrated_sor_route_proof"
         ),
         "ai_market_snapshot_session_bucket": snapshot.get("session_bucket"),
         "ai_input_preflight_schema": preflight.get("schema", PREFLIGHT_SCHEMA),

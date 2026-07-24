@@ -24022,11 +24022,12 @@ def _retry_holding_ai_submit_authority_before_block(
                     ),
                 }
             )
+        fetch_now_ts = time.time()
         holding_request_code = _resolve_holding_context_request_code(
             code,
             ws_data=retry_ws_data,
             decision_kind="holding_score_submit_authority",
-            now_ts=now_ts,
+            now_ts=fetch_now_ts,
         )
         recent_ticks = (
             kiwoom_utils.get_tick_history_ka10003(
@@ -24040,7 +24041,7 @@ def _retry_holding_ai_submit_authority_before_block(
             legacy_limit=40,
             ws_data=retry_ws_data,
             decision_kind="holding_score_submit_authority",
-            now_ts=now_ts,
+            now_ts=fetch_now_ts,
         )
     except Exception as exc:
         fields[f"{field_prefix}_input_retry_reason"] = "input_fetch_error"
@@ -24080,12 +24081,17 @@ def _retry_holding_ai_submit_authority_before_block(
         or "-",
         "source_event_stage": source_event_stage,
     }
+    # The REST/tick/candle calls above may take seconds while the shallow WS
+    # snapshot's nested provenance maps continue to receive updates.  Compare
+    # those observations against a post-I/O clock, not the loop timestamp from
+    # before the calls, or healthy data is mislabeled as future.
+    context_now_ts = time.time()
     holding_context = _build_holding_ai_decision_context(
         stock=stock,
         code=code,
         ws_data=retry_ws_data,
         decision_kind="holding_score_submit_authority",
-        now_ts=now_ts,
+        now_ts=context_now_ts,
         recent_candles=recent_candles,
         candle_meta=recent_candle_meta,
         recent_ticks=recent_ticks,
@@ -42396,12 +42402,16 @@ def _evaluate_holding_flow_override(
         ),
         **holding_flow_micro_estimator_fields,
     }
+    # External context fetches can outlive the loop timestamp while WS
+    # provenance continues to update in-place.  Use the post-fetch clock for
+    # the exact AI snapshot so fresh data is never classified as future.
+    holding_context_now_ts = time.time()
     holding_context = _build_holding_ai_decision_context(
         stock=stock,
         code=code,
         ws_data=ws_data,
         decision_kind="holding_flow",
-        now_ts=now_ts,
+        now_ts=holding_context_now_ts,
         recent_candles=recent_candles,
         candle_meta=recent_candle_meta,
         recent_ticks=recent_ticks,
@@ -63676,12 +63686,13 @@ def handle_holding_state(
                         and holding_ai_orderbook_usable
                         and recent_ticks
                     ):
+                        holding_context_now_ts = time.time()
                         holding_score_preflight = (
                             _holding_score_preflight_source_quality(
                                 ws_data,
                                 recent_ticks,
                                 recent_candles,
-                                now_ts=now_ts,
+                                now_ts=holding_context_now_ts,
                             )
                         )
                     holding_score_preflight_blocked = bool(
@@ -63734,12 +63745,13 @@ def handle_holding_state(
                             ),
                             **holding_exit_micro_estimator_fields,
                         }
+                        holding_context_now_ts = time.time()
                         holding_context = _build_holding_ai_decision_context(
                             stock=stock,
                             code=code,
                             ws_data=ws_data,
                             decision_kind="holding_score",
-                            now_ts=now_ts,
+                            now_ts=holding_context_now_ts,
                             recent_candles=recent_candles,
                             candle_meta=recent_candle_meta,
                             recent_ticks=recent_ticks,

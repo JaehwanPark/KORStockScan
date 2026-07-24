@@ -16918,15 +16918,22 @@ def test_real_pyramid_score_50_retry_success_allows_dynamic_qty(monkeypatch):
         "_pre_submit_input_snapshot_needs_rest_orderbook_recheck",
         lambda *args, **kwargs: False,
     )
-    monkeypatch.setattr(
-        state_handlers,
-        "_build_holding_ai_decision_context",
-        lambda **kwargs: {
+    context_call = {}
+
+    def capture_holding_context(**kwargs):
+        context_call.update(kwargs)
+        return {
             "schema": "holding_decision_context_v1",
             "enabled": True,
             "decision_kind": "holding_score_submit_authority",
-        },
+        }
+
+    monkeypatch.setattr(
+        state_handlers,
+        "_build_holding_ai_decision_context",
+        capture_holding_context,
     )
+    monkeypatch.setattr(state_handlers.time, "time", lambda: 1_002.0)
 
     class FakeEngine:
         def evaluate_scalping_holding_score(self, *args, **kwargs):
@@ -16977,6 +16984,7 @@ def test_real_pyramid_score_50_retry_success_allows_dynamic_qty(monkeypatch):
 
     assert retry_fields["scale_in_ai_authority_input_retry_attempted"] is True
     assert retry_fields["scale_in_ai_authority_input_retry_success"] is True
+    assert context_call["now_ts"] == 1_002.0
     assert "decision_authority" not in retry_fields
     assert (
         retry_fields["holding_context_decision_authority"]
