@@ -398,6 +398,11 @@ SCANNER_WATCH_EVICTION_SOURCE_QUALITY_REASONS = {
     "rising_rest_quote_recovery_without_realtime_strength",
 }
 SCANNER_WATCH_EVICTION_STALE_REASONS = {
+    # ``_scanner_fast_precheck_fields`` emits this canonical WS-only miss
+    # before the recovery lane has run.  Keep the older runtime-skip label
+    # below for parser compatibility, but both must route to RECOVERY instead
+    # of immediately re-enqueuing FAST_PRECHECK.
+    "missing_or_zero_curr",
     "rest_quote_without_realtime_strength",
     "subscription_recheck_without_realtime_strength",
     "stale_ws_snapshot",
@@ -405,6 +410,15 @@ SCANNER_WATCH_EVICTION_STALE_REASONS = {
     "scanner_fast_precheck_stability_pending",
     *SCANNER_WATCH_EVICTION_SOURCE_QUALITY_REASONS,
 }
+
+
+def _scanner_fast_precheck_requires_recovery(result, reason):
+    """Route WS/source-quality misses to recovery before another precheck."""
+
+    return (
+        str(result or "") != "eligible_for_heavy_entry_eval"
+        and str(reason or "") in SCANNER_WATCH_EVICTION_STALE_REASONS
+    )
 
 
 def _run_account_sync_with_cleanup():
@@ -10491,6 +10505,12 @@ def run_sniper(is_test_mode=False):
                         fast_precheck_stale_like = (
                             fast_precheck_reason in SCANNER_WATCH_EVICTION_STALE_REASONS
                         )
+                        fast_precheck_requires_recovery = (
+                            _scanner_fast_precheck_requires_recovery(
+                                fast_precheck_result,
+                                fast_precheck_reason,
+                            )
+                        )
                         if scheduler_precheck_item is not None:
                             precheck_completed = _scanner_scheduler_complete_target(
                                 scheduler,
@@ -10505,11 +10525,7 @@ def run_sniper(is_test_mode=False):
                                 == "superseded_result"
                             ):
                                 continue
-                            if (
-                                fast_precheck_result
-                                != "eligible_for_heavy_entry_eval"
-                                and fast_precheck_stale_like
-                            ):
+                            if fast_precheck_requires_recovery:
                                 _scanner_scheduler_enqueue_target(
                                     scheduler,
                                     stock,
@@ -10551,10 +10567,7 @@ def run_sniper(is_test_mode=False):
                                 )
                             ):
                                 continue
-                        if (
-                            fast_precheck_result != "eligible_for_heavy_entry_eval"
-                            and fast_precheck_stale_like
-                        ):
+                        if fast_precheck_requires_recovery:
                             rest_quote_allowed, rest_quote_deferred_reason = (
                                 _scanner_rest_quote_recovery_options(
                                     stock,

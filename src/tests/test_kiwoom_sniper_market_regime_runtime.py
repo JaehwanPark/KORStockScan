@@ -5617,6 +5617,22 @@ def test_scanner_watch_stale_eviction_requires_three_attempts_and_age():
     assert third["stale_age_sec"] == 91.0
 
 
+def test_scanner_fast_precheck_missing_curr_routes_to_recovery_contract():
+    assert (
+        "missing_or_zero_curr"
+        in kiwoom_sniper_v2.SCANNER_WATCH_EVICTION_STALE_REASONS
+    )
+
+    assert kiwoom_sniper_v2._scanner_fast_precheck_requires_recovery(
+        "source_quality_blocked",
+        "missing_or_zero_curr",
+    )
+    assert not kiwoom_sniper_v2._scanner_fast_precheck_requires_recovery(
+        "eligible_for_heavy_entry_eval",
+        "fast_precheck_pass",
+    )
+
+
 def test_scanner_watch_insufficient_history_eviction_requires_three_attempts_and_age():
     stock = _scanner_watch_stock()
     for observed_epoch in (1000.0, 1050.0, 1091.0):
