@@ -40864,6 +40864,13 @@ def _find_scanner_rising_strength_context(
         return current
     if not isinstance(stock, dict):
         return current
+    if str(stock.get("scanner_generation_id") or "").strip():
+        # Deadline-scheduler work must remain bound to its immutable current
+        # generation.  Older promotion rows are evidence only and cannot
+        # qualify the current generation or enter a latency-critical rescan.
+        current["scanner_context_source"] = "current_generation_only"
+        current["historical_promotion_fallback_blocked"] = True
+        return current
 
     code = str(stock.get("code") or stock.get("stock_code") or "").strip()[:6]
     if not code:

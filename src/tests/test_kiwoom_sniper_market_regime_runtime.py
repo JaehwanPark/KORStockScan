@@ -698,6 +698,125 @@ def test_scheduler_boot_generation_does_not_reuse_old_promotion_anchor(
     assert target["scanner_promotion_id"] == "OLD-PROMOTION"
 
 
+def test_scheduler_boot_restore_without_canonical_venue_is_isolated(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        kiwoom_sniper_v2.run_sniper,
+        "scanner_scheduler_mode",
+        "deadline_v1",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2.run_sniper,
+        "scanner_scheduler_venues",
+        frozenset({"KRX", "PREMARKET_KRX_LIKE", "NXT"}),
+        raising=False,
+    )
+    emitted = []
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "_emit_scanner_scheduler_event",
+        lambda **kwargs: emitted.append(kwargs),
+    )
+    target = {
+        "id": 1,
+        "code": "005930",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "effective_venue": "UNKNOWN",
+        "scanner_generation_id": "005930:STALE:r1",
+        "_scanner_scheduler_lane": "heavy_eval",
+    }
+    scheduler = kiwoom_sniper_v2.ScannerRuntimeScheduler(max_active=16)
+
+    generation = kiwoom_sniper_v2._register_scanner_scheduler_generation(
+        scheduler,
+        payload={
+            **target,
+            "scanner_promotion_id": "SCANSCHEDBOOT-005930-200000",
+            "scanner_promotion_emitted_epoch": 200.0,
+            "current_price_observed": 0,
+            "buy_price": 0,
+        },
+        target=target,
+        attach_epoch=200.0,
+    )
+
+    assert generation is None
+    assert target["status"] == "WATCHING"
+    assert "scanner_generation_id" not in target
+    assert "_scanner_scheduler_lane" not in target
+    assert target["_scanner_scheduler_registration_blocked"] is True
+    assert target["_scanner_scheduler_boot_restore_isolated"] is True
+    assert (
+        target["_scanner_scheduler_registration_reason"]
+        == "scanner_scheduler_canonical_venue_missing_fail_closed"
+    )
+    assert emitted[-1]["stage"] == "scalping_scanner_scheduler_generation_rejected"
+    assert (
+        emitted[-1]["fields"]["scheduler_action"]
+        == "canonical_venue_missing_fail_closed"
+    )
+
+
+def test_fresh_canonical_generation_releases_boot_restore_isolation(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        kiwoom_sniper_v2.run_sniper,
+        "scanner_scheduler_mode",
+        "deadline_v1",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2.run_sniper,
+        "scanner_scheduler_venues",
+        frozenset({"KRX", "PREMARKET_KRX_LIKE", "NXT"}),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "_emit_scanner_scheduler_event",
+        lambda **kwargs: None,
+    )
+    target = {
+        "id": 1,
+        "code": "005930",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "effective_venue": "UNKNOWN",
+        "_scanner_scheduler_registration_blocked": True,
+        "_scanner_scheduler_registration_reason": (
+            "scanner_scheduler_canonical_venue_missing_fail_closed"
+        ),
+        "_scanner_scheduler_boot_restore_isolated": True,
+    }
+    scheduler = kiwoom_sniper_v2.ScannerRuntimeScheduler(max_active=16)
+
+    generation = kiwoom_sniper_v2._register_scanner_scheduler_generation(
+        scheduler,
+        payload={
+            **target,
+            "effective_venue": "KRX",
+            "venue_resolution": "consistent_explicit:payload.effective_venue",
+            "scanner_promotion_id": "PROMO-FRESH",
+            "scanner_promotion_emitted_epoch": 210.0,
+            "current_price_observed": 70_000,
+        },
+        target=target,
+        attach_epoch=211.0,
+    )
+
+    assert generation is not None
+    assert target["_scanner_scheduler_registration_blocked"] is False
+    assert target["_scanner_scheduler_registration_reason"] == "-"
+    assert target["_scanner_scheduler_boot_restore_isolated"] is False
+    assert target["scanner_generation_id"] == generation.generation_id
+
+
 def test_scheduler_submit_guard_blocks_promotion_arriving_during_heavy_eval(
     monkeypatch,
 ):
@@ -3853,6 +3972,77 @@ def test_scanner_positive_delta_uses_promotion_fallback_when_stock_delta_is_zero
     assert kiwoom_sniper_v2._scanner_positive_delta_value(stock) == 7.8
     assert stock["price_delta_since_first_seen_pct"] == "7.80"
     assert stock["_scanner_rising_context_source"] == "promotion_event_fallback"
+
+
+def test_scanner_positive_delta_does_not_reuse_history_for_current_generation(
+    monkeypatch,
+):
+    _enable_scanner_rising_ws_gap_test_mode(monkeypatch)
+    fallback_called = False
+
+    def fake_find_context(*args, **kwargs):
+        nonlocal fallback_called
+        fallback_called = True
+        return {
+            "allowed": True,
+            "price_delta_since_first_seen_pct": "7.80",
+        }
+
+    stock = {
+        "code": "010690",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "scanner_generation_id": "010690:PROMO-CURRENT:r1",
+        "price_delta_since_first_seen_pct": "0.25",
+    }
+    monkeypatch.setattr(
+        kiwoom_sniper_v2.sniper_state_handlers,
+        "_find_scanner_rising_strength_context",
+        fake_find_context,
+    )
+
+    assert kiwoom_sniper_v2._scanner_positive_delta_value(stock) == 0.25
+    assert fallback_called is False
+    assert stock["price_delta_since_first_seen_pct"] == "0.25"
+
+
+def test_rising_strength_context_does_not_scan_history_for_current_generation(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        kiwoom_sniper_v2.sniper_state_handlers,
+        "_load_scanner_promotion_context_events",
+        lambda *_args, **_kwargs: pytest.fail(
+            "current scheduler generation must not scan promotion history"
+        ),
+    )
+    stock = {
+        "code": "300080",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "scanner_generation_id": "300080:PROMO-CURRENT:r1",
+        "scanner_promotion_emitted_epoch": "1784887168.434",
+        "scanner_promotion_reason": "price_jump_multisource_confirmation",
+        "source_signature": (
+            "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE,REALTIME_RANK_START"
+        ),
+        "price_delta_since_first_seen_pct": "0.51",
+    }
+
+    result = (
+        kiwoom_sniper_v2.sniper_state_handlers._find_scanner_rising_strength_context(
+            stock,
+            min_delta=1.0,
+            require_bid_imbalance=False,
+        )
+    )
+
+    assert result["allowed"] is False
+    assert result["skip_reason"] == "price_delta_below_min"
+    assert result["scanner_context_source"] == "current_generation_only"
+    assert result["historical_promotion_fallback_blocked"] is True
 
 
 def test_scalping_fifo_overflow_preserves_unevaluated_scanner_before_generic_watching(

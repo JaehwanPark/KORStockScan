@@ -3913,6 +3913,11 @@ def _scanner_positive_delta_value(target):
     )
     if delta >= _scanner_rising_entry_min_delta_pct():
         return delta
+    if str(target.get("scanner_generation_id") or "").strip():
+        # A deadline-scheduler generation is immutable.  Falling back to an
+        # older promotion here both mixes provenance and rescans the growing
+        # pipeline-event file on the latency-critical fast-precheck path.
+        return delta
     try:
         fallback_context = sniper_state_handlers._find_scanner_rising_strength_context(
             target,
@@ -7164,7 +7169,62 @@ def _register_scanner_scheduler_generation(
     target = target if isinstance(target, dict) else {}
     venue_fields = _scanner_runtime_target_venue_fields(payload, target=target)
     venue = venue_fields["effective_venue"]
+    if venue not in {"KRX", "PREMARKET_KRX_LIKE", "NXT"}:
+        registration_reason = (
+            "scanner_scheduler_canonical_venue_missing_fail_closed"
+        )
+        with ENTRY_LOCK:
+            for key in (
+                "scanner_generation_id",
+                "scanner_generation_revision",
+                "scanner_attach_epoch",
+                "_scanner_scheduler_lane",
+                "_scanner_scheduler_deadline_epoch",
+                "_scanner_scheduler_work_id",
+            ):
+                target.pop(key, None)
+            target.update(
+                {
+                    "scanner_scheduler_mode": _scanner_scheduler_startup_mode(),
+                    "scanner_scheduler_version": (
+                        SCANNER_DEADLINE_SCHEDULER_VERSION
+                    ),
+                    "_scanner_scheduler_registration_blocked": True,
+                    "_scanner_scheduler_registration_reason": registration_reason,
+                    "_scanner_scheduler_boot_restore_isolated": bool(
+                        str(payload.get("scanner_promotion_id") or "").startswith(
+                            "SCANSCHEDBOOT-"
+                        )
+                    ),
+                }
+            )
+        _emit_scanner_scheduler_event(
+            payload=payload,
+            target=target,
+            stage="scalping_scanner_scheduler_generation_rejected",
+            fields={
+                "scheduler_version": SCANNER_DEADLINE_SCHEDULER_VERSION,
+                "scheduler_mode": _scanner_scheduler_startup_mode(),
+                "scheduler_action": "canonical_venue_missing_fail_closed",
+                "scheduler_reason": registration_reason,
+                "scanner_scheduler_boot_restore_isolated": bool(
+                    target.get("_scanner_scheduler_boot_restore_isolated")
+                ),
+                **venue_fields,
+            },
+        )
+        return None
     if not _scanner_scheduler_enabled_for_venue(venue):
+        with ENTRY_LOCK:
+            target.update(
+                {
+                    "_scanner_scheduler_registration_blocked": False,
+                    "_scanner_scheduler_registration_reason": (
+                        "venue_not_selected_legacy_route"
+                    ),
+                    "_scanner_scheduler_boot_restore_isolated": False,
+                }
+            )
         _emit_scanner_scheduler_event(
             payload=payload,
             target=target,
@@ -7256,6 +7316,7 @@ def _register_scanner_scheduler_generation(
                 ),
                 "_scanner_scheduler_registration_blocked": False,
                 "_scanner_scheduler_registration_reason": "-",
+                "_scanner_scheduler_boot_restore_isolated": False,
             }
         )
     _emit_scanner_scheduler_event(
