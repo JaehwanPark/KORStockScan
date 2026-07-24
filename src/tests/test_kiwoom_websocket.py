@@ -273,18 +273,19 @@ def test_signed_trade_volume_primary_records_orderbook_touch_conflict(monkeypatc
     assert tick["aggressor_touch_confirms_signed"] is False
 
 
-def test_0b_auxiliary_fields_prefer_1313_and_fallback_to_split_volume():
+def test_0b_auxiliary_fields_prefer_1313_and_use_trusted_tick_volume():
     parsed = KiwoomWSManager._parse_0b_auxiliary_fields(
         {"10": "+1000", "15": "+40", "1030": "20", "1031": "30", "1032": "60.0"},
         trade_price=1000,
     )
     assert parsed["buy_qty"] == 30
     assert parsed["sell_qty"] == 20
-    assert parsed["trade_volume"] == 50
-    assert parsed["trade_volume_source"] == "1030_1031_sum"
-    assert parsed["trade_value"] == 50000
-    assert parsed["trade_value_source"] == "calc_price_x_1030_1031_sum"
-    assert parsed["trade_value_fallback_volume_source"] == "1030_1031_sum"
+    assert parsed["trade_volume"] == 40
+    assert parsed["trade_volume_source"] == "15_abs"
+    assert parsed["trade_value"] == 40000
+    assert parsed["trade_value_source"] == "calc_price_x_15_abs"
+    assert parsed["trade_value_fallback_volume_source"] == "15_abs"
+    assert parsed["split_qty_advisory_only"] is True
     assert parsed["split_qty_vs_15_mismatch"] is True
     assert parsed["split_qty_vs_15_delta"] == 10
 
@@ -295,6 +296,28 @@ def test_0b_auxiliary_fields_prefer_1313_and_fallback_to_split_volume():
     assert with_1313["trade_value"] == 123456
     assert with_1313["trade_value_source"] == "1313"
     assert with_1313["trade_value_fallback_volume_source"] == "none"
+
+
+def test_0b_auxiliary_fields_fall_back_to_positive_cumulative_volume_delta():
+    parsed = KiwoomWSManager._parse_0b_auxiliary_fields(
+        {"10": "1000", "13": "107", "15": ""},
+        trade_price=1000,
+        previous_tick={"cum_volume": 100},
+    )
+    assert parsed["trade_volume"] == 7
+    assert parsed["trade_volume_source"] == "13_delta"
+    assert parsed["cum_volume_delta"] == 7
+    assert parsed["trade_value"] == 7000
+    assert parsed["trade_value_source"] == "calc_price_x_13_delta"
+
+    unavailable = KiwoomWSManager._parse_0b_auxiliary_fields(
+        {"10": "1000", "13": "107", "15": "", "1030": "20", "1031": "30"},
+        trade_price=1000,
+    )
+    assert unavailable["trade_volume"] == 0
+    assert unavailable["trade_volume_source"] == "unknown"
+    assert unavailable["trade_value"] == 0
+    assert unavailable["trade_value_source"] == "unknown"
 
 
 def test_realtime_0b_logs_trade_value_fallback_and_volume_mismatch(monkeypatch):
@@ -331,29 +354,31 @@ def test_realtime_0b_logs_trade_value_fallback_and_volume_mismatch(monkeypatch):
     latest = manager.get_latest_data("005930")
     tick = latest["recent_trade_ticks"][0]
     momentum = latest["strength_momentum_history"][0]
-    assert tick["volume"] == 50
-    assert tick["volume_source"] == "1030_1031_sum"
-    assert tick["buyer_vol"] == 30
-    assert tick["seller_vol"] == 20
-    assert tick["tick_trade_value"] == 50000
-    assert tick["tick_trade_value_source"] == "calc_price_x_1030_1031_sum"
-    assert tick["tick_trade_value_fallback_volume_source"] == "1030_1031_sum"
+    assert tick["volume"] == 40
+    assert tick["volume_source"] == "15_abs"
+    assert tick["buyer_vol"] == 40
+    assert tick["seller_vol"] == 0
+    assert tick["buy_exec_cum_1031"] == 30
+    assert tick["sell_exec_cum_1030"] == 20
+    assert tick["tick_trade_value"] == 40000
+    assert tick["tick_trade_value_source"] == "calc_price_x_15_abs"
+    assert tick["tick_trade_value_fallback_volume_source"] == "15_abs"
     assert tick["trade_volume_1030_1031_vs_15_mismatch"] is True
     assert tick["trade_volume_1030_1031_vs_15_delta"] == 10
-    assert latest["tick_trade_value"] == 50000
-    assert latest["tick_trade_value_source"] == "calc_price_x_1030_1031_sum"
+    assert latest["tick_trade_value"] == 40000
+    assert latest["tick_trade_value_source"] == "calc_price_x_15_abs"
     assert latest["trade_volume_1030_1031_vs_15_mismatch"] is True
     assert latest["kiwoom_0b_aux_observed_count"] == 1
     assert latest["kiwoom_0b_1313_present_count"] == 0
     assert latest["kiwoom_0b_1313_missing_count"] == 1
     assert latest["kiwoom_0b_trade_value_source_counts"] == {
-        "calc_price_x_1030_1031_sum": 1
+        "calc_price_x_15_abs": 1
     }
-    assert latest["kiwoom_0b_trade_volume_source_counts"] == {"1030_1031_sum": 1}
+    assert latest["kiwoom_0b_trade_volume_source_counts"] == {"15_abs": 1}
     assert latest["kiwoom_0b_1030_1031_vs_15_evaluable_count"] == 1
     assert latest["kiwoom_0b_1030_1031_vs_15_mismatch_count"] == 1
-    assert momentum["tick_value"] == 50000
-    assert momentum["tick_value_source"] == "calc_price_x_1030_1031_sum"
+    assert momentum["tick_value"] == 40000
+    assert momentum["tick_value_source"] == "calc_price_x_15_abs"
 
 
 def test_trade_auxiliary_score_uses_exec_imbalance_cum_volume_and_prev_price(

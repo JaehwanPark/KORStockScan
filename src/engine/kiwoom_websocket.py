@@ -345,45 +345,55 @@ class KiwoomWSManager:
         return text or "signed_trade_volume_missing_or_neutral"
 
     @staticmethod
-    def _parse_0b_auxiliary_fields(values, *, trade_price=0):
+    def _parse_0b_auxiliary_fields(values, *, trade_price=0, previous_tick=None):
         values = values if isinstance(values, dict) else {}
+        previous_tick = previous_tick if isinstance(previous_tick, dict) else {}
         buy_qty = KiwoomWSManager._safe_abs_int(values.get("1031"), None)
         sell_qty = KiwoomWSManager._safe_abs_int(values.get("1030"), None)
         signed_qty_abs = KiwoomWSManager._safe_abs_int(values.get("15"), None)
+        cum_volume = KiwoomWSManager._safe_abs_int(values.get("13"), None)
+        prev_cum_volume = KiwoomWSManager._safe_abs_int(
+            previous_tick.get("cum_volume"), None
+        )
+        cum_volume_delta = (
+            int(cum_volume - prev_cum_volume)
+            if cum_volume is not None
+            and prev_cum_volume is not None
+            and cum_volume > prev_cum_volume
+            else None
+        )
         price = KiwoomWSManager._safe_abs_int(trade_price or values.get("10"), 0)
         split_qty_available = buy_qty is not None and sell_qty is not None
         split_qty_sum = (
             int((buy_qty or 0) + (sell_qty or 0)) if split_qty_available else None
         )
 
+        # Kiwoom 1030/1031 are cumulative execution totals in the live 0B
+        # stream.  Preserve them for source-quality diagnostics, but never use
+        # their sum as a per-tick volume or trade-value multiplier.
+        if signed_qty_abs is not None and signed_qty_abs > 0:
+            trade_volume = signed_qty_abs
+            trade_volume_source = "15_abs"
+        elif cum_volume_delta is not None and cum_volume_delta > 0:
+            trade_volume = cum_volume_delta
+            trade_volume_source = "13_delta"
+        else:
+            trade_volume = 0
+            trade_volume_source = "unknown"
+
         trade_value = KiwoomWSManager._safe_abs_int(values.get("1313"), None)
         trade_value_source = (
             "1313" if trade_value is not None and trade_value > 0 else "unknown"
         )
         fallback_volume_source = "none"
-        fallback_volume = None
         if trade_value_source == "unknown":
-            if split_qty_sum is not None and split_qty_sum > 0:
-                fallback_volume = split_qty_sum
-                fallback_volume_source = "1030_1031_sum"
-            elif signed_qty_abs is not None and signed_qty_abs > 0:
-                fallback_volume = signed_qty_abs
-                fallback_volume_source = "15_abs"
-            if price > 0 and fallback_volume is not None and fallback_volume > 0:
-                trade_value = int(price * fallback_volume)
+            if trade_volume > 0:
+                fallback_volume_source = trade_volume_source
+            if price > 0 and trade_volume > 0:
+                trade_value = int(price * trade_volume)
                 trade_value_source = f"calc_price_x_{fallback_volume_source}"
             else:
                 trade_value = 0
-
-        if split_qty_sum is not None and split_qty_sum > 0:
-            trade_volume = split_qty_sum
-            trade_volume_source = "1030_1031_sum"
-        elif signed_qty_abs is not None and signed_qty_abs > 0:
-            trade_volume = signed_qty_abs
-            trade_volume_source = "15_abs"
-        else:
-            trade_volume = 0
-            trade_volume_source = "unknown"
 
         mismatch = (
             split_qty_sum is not None
@@ -399,8 +409,14 @@ class KiwoomWSManager:
             "buy_qty": int(buy_qty or 0),
             "sell_qty": int(sell_qty or 0),
             "signed_qty_abs": int(signed_qty_abs or 0),
+            "cum_volume": int(cum_volume or 0),
+            "prev_cum_volume": int(prev_cum_volume or 0),
+            "cum_volume_delta": (
+                int(cum_volume_delta) if cum_volume_delta is not None else None
+            ),
             "split_qty_sum": int(split_qty_sum or 0),
             "split_qty_available": bool(split_qty_available),
+            "split_qty_advisory_only": True,
             "trade_volume": int(trade_volume or 0),
             "trade_volume_source": trade_volume_source,
             "trade_value": int(trade_value or 0),
@@ -1336,6 +1352,7 @@ class KiwoomWSManager:
         buy_ratio,
         buy_qty,
         sell_qty,
+        aggressor_side="UNKNOWN",
         tick_value_source="unknown",
     ):
         history = target.get("strength_momentum_history")
@@ -1346,18 +1363,19 @@ class KiwoomWSManager:
 
         buy_tick_value = 0
         sell_tick_value = 0
+        tick_direction_source = "unknown"
         if signed_qty > 0:
             buy_tick_value = tick_value
+            tick_direction_source = "signed_trade_volume"
         elif signed_qty < 0:
             sell_tick_value = tick_value
-        elif buy_qty > sell_qty:
+            tick_direction_source = "signed_trade_volume"
+        elif str(aggressor_side or "").upper() == "BUY":
             buy_tick_value = tick_value
-        elif sell_qty > buy_qty:
+            tick_direction_source = "trusted_aggressor"
+        elif str(aggressor_side or "").upper() == "SELL":
             sell_tick_value = tick_value
-        elif buy_ratio >= 50.0:
-            buy_tick_value = tick_value
-        else:
-            sell_tick_value = tick_value
+            tick_direction_source = "trusted_aggressor"
 
         now_ts = time.time()
         history.append(
@@ -1372,6 +1390,7 @@ class KiwoomWSManager:
                 "sell_exec_qty_cum": int(sell_qty or 0),
                 "tick_value": int(tick_value or 0),
                 "tick_value_source": str(tick_value_source or "unknown"),
+                "tick_direction_source": tick_direction_source,
                 "buy_tick_value": int(buy_tick_value or 0),
                 "sell_tick_value": int(sell_tick_value or 0),
                 "buy_ratio": float(buy_ratio or 0.0),
@@ -2337,8 +2356,29 @@ class KiwoomWSManager:
                                 current_price = target.get("curr", 0)
                                 trade_price = safe_int(values.get("10"), current_price)
                                 current_vpw = target.get("v_pw", 0.0)
+                                current_tick_suffix = self._ws_item_market_suffix(
+                                    raw_item_code
+                                )
+                                current_tick_route = self._ws_item_route(raw_item_code)
+                                previous_tick = (
+                                    target["recent_trade_ticks"][0]
+                                    if isinstance(
+                                        target.get("recent_trade_ticks"), deque
+                                    )
+                                    and len(target.get("recent_trade_ticks")) > 0
+                                    else None
+                                )
+                                if previous_tick and (
+                                    str(previous_tick.get("market_suffix") or "")
+                                    != current_tick_suffix
+                                    or str(previous_tick.get("market_route") or "")
+                                    != current_tick_route
+                                ):
+                                    previous_tick = None
                                 aux_fields = self._parse_0b_auxiliary_fields(
-                                    values, trade_price=trade_price
+                                    values,
+                                    trade_price=trade_price,
+                                    previous_tick=previous_tick,
                                 )
                                 tick_value = aux_fields["trade_value"]
                                 buy_qty = aux_fields["buy_qty"]
@@ -2457,14 +2497,6 @@ class KiwoomWSManager:
                                 else:
                                     touch_side = "UNKNOWN"
                                     touch_quality = "missing_best_quote"
-                                previous_tick = (
-                                    target["recent_trade_ticks"][0]
-                                    if isinstance(
-                                        target.get("recent_trade_ticks"), deque
-                                    )
-                                    and len(target.get("recent_trade_ticks")) > 0
-                                    else None
-                                )
                                 aux_context = self._infer_trade_auxiliary_score(
                                     values,
                                     previous_tick=previous_tick,
@@ -2512,14 +2544,18 @@ class KiwoomWSManager:
                                     "SELL",
                                 }:
                                     touch_confirms_signed = signed_side == touch_side
+                                trusted_buy_volume = (
+                                    trade_volume if aggressor_side == "BUY" else 0
+                                )
+                                trusted_sell_volume = (
+                                    trade_volume if aggressor_side == "SELL" else 0
+                                )
                                 normalized_tick = {
                                     "time": tick_time,
                                     "price": trade_price,
                                     "volume": int(trade_volume or 0),
-                                    "market_suffix": self._ws_item_market_suffix(
-                                        raw_item_code
-                                    ),
-                                    "market_route": self._ws_item_route(raw_item_code),
+                                    "market_suffix": current_tick_suffix,
+                                    "market_route": current_tick_route,
                                     "volume_source": aux_fields["trade_volume_source"],
                                     "dir": aggressor_side,
                                     "aggressor_side": aggressor_side,
@@ -2563,8 +2599,10 @@ class KiwoomWSManager:
                                     "aggressor_aux_pressure_usable": False,
                                     "aggressor_aux_raw_15": str(values.get("15") or ""),
                                     "signed_trade_volume": str(values.get("15") or ""),
-                                    "buyer_vol": buy_qty,
-                                    "seller_vol": sell_qty,
+                                    "buyer_vol": trusted_buy_volume,
+                                    "seller_vol": trusted_sell_volume,
+                                    "buy_exec_cum_1031": buy_qty,
+                                    "sell_exec_cum_1030": sell_qty,
                                     "buy_ratio_1032": str(values.get("1032") or ""),
                                     "tick_trade_value": tick_value,
                                     "tick_trade_value_source": aux_fields[
@@ -2579,6 +2617,9 @@ class KiwoomWSManager:
                                     "trade_volume_1030_1031_available": aux_fields[
                                         "split_qty_available"
                                     ],
+                                    "trade_volume_1030_1031_advisory_only": aux_fields[
+                                        "split_qty_advisory_only"
+                                    ],
                                     "trade_volume_1030_1031_vs_15_mismatch": aux_fields[
                                         "split_qty_vs_15_mismatch"
                                     ],
@@ -2588,6 +2629,8 @@ class KiwoomWSManager:
                                     "best_ask": best_ask,
                                     "best_bid": best_bid,
                                     "cum_volume": safe_int(values.get("13"), 0),
+                                    "prev_cum_volume": aux_fields["prev_cum_volume"],
+                                    "cum_volume_delta": aux_fields["cum_volume_delta"],
                                     "quote_age_ms": quote_resolution["quote_age_ms"],
                                     "strength": current_vpw,
                                     "received_at_ms": int(received_ts * 1000),
@@ -2629,6 +2672,7 @@ class KiwoomWSManager:
                                     buy_ratio=buy_ratio,
                                     buy_qty=buy_qty,
                                     sell_qty=sell_qty,
+                                    aggressor_side=aggressor_side,
                                 )
 
                             # '0D' 주식호가잔량 데이터 파싱 (1~5호가)

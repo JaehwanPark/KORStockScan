@@ -16,6 +16,7 @@ from src.utils.constants import DATA_DIR
 CONTEXT_VERSION = "microstructure_reaction_context_v1"
 REPORT_DIR = DATA_DIR / "report" / "microstructure_reaction_context"
 PIPELINE_EVENTS_DIR = DATA_DIR / "pipeline_events"
+TRUSTED_TICK_VOLUME_SOURCES = {"15_abs", "13_delta"}
 
 CONTEXT_KEYS = (
     "microstructure_reaction_context_version",
@@ -426,6 +427,17 @@ def _aggressor_pressure_usable(inferred: dict[str, Any] | None) -> bool:
     return str(inferred.get("source") or "").strip() in TRUSTED_AGGRESSOR_SOURCES
 
 
+def _tick_volume_pressure_usable(tick: dict[str, Any] | None) -> bool:
+    tick = tick if isinstance(tick, dict) else {}
+    source = str(
+        tick.get("volume_source") or tick.get("trade_volume_source") or ""
+    ).strip()
+    # Legacy/test rows without explicit provenance remain usable. Once the WS
+    # producer declares a source, cumulative 1030/1031 totals must not acquire
+    # per-tick pressure authority.
+    return not source or source in TRUSTED_TICK_VOLUME_SOURCES
+
+
 def _age_ms_from_hhmmss(value: Any, *, now: datetime | None = None) -> int | None:
     tick_sec = _safe_hhmmss_to_seconds(value)
     if tick_sec is None:
@@ -560,11 +572,20 @@ def precompute_microstructure_reaction_inputs(
         for tick in trade_volume_mismatch_rows
         if _safe_bool(tick.get("trade_volume_1030_1031_vs_15_mismatch"), False)
     )
-    pressure_rows = [
+    candidate_pressure_rows = [
         (tick, inferred)
         for tick, inferred in zip(ticks, aggressor_rows)
         if _aggressor_pressure_usable(inferred)
+        and _tick_volume_pressure_usable(tick)
     ]
+    explicit_untrusted_volume_present = any(
+        not _tick_volume_pressure_usable(tick)
+        for tick in ticks
+        if tick.get("volume_source") or tick.get("trade_volume_source")
+    )
+    pressure_rows = (
+        [] if explicit_untrusted_volume_present else candidate_pressure_rows
+    )
     buy_vol = sum(
         _safe_float(tick.get("volume"), 0.0)
         for tick, inferred in pressure_rows
@@ -584,7 +605,11 @@ def precompute_microstructure_reaction_inputs(
         price_value = _safe_float(tick.get("price"), 0.0)
         if price_value > 0:
             prices.append(price_value)
-        volume_value = _safe_float(tick.get("volume"), 0.0)
+        volume_value = (
+            _safe_float(tick.get("volume"), 0.0)
+            if _tick_volume_pressure_usable(tick)
+            else 0.0
+        )
         if volume_value > 0:
             volumes.append(volume_value)
     for tick, _inferred in pressure_rows:
@@ -696,7 +721,7 @@ def precompute_microstructure_reaction_inputs(
         "tick_aggressor_price_heuristic_count": sum(
             1 for row in aggressor_rows if row.get("source") == "price_change_heuristic"
         ),
-        "tick_aggressor_trusted_count": len(pressure_rows),
+        "tick_aggressor_trusted_count": len(candidate_pressure_rows),
         "tick_aggressor_pressure_usable": bool(pressure_rows),
         "tick_sample_count": len(ticks),
         "tick_latest_time": tick_latest_time,
@@ -801,8 +826,6 @@ def build_microstructure_reaction_context(
     top3_bid_vol = _safe_float(snapshot.get("top3_bid_vol"), 0.0)
     top3_depth_ratio = top3_ask_vol / top3_bid_vol if top3_bid_vol > 0 else 9.99
 
-    ticks = snapshot.get("ticks") if isinstance(snapshot.get("ticks"), list) else []
-    buy_vol = _safe_float(snapshot.get("buy_vol"), 0.0)
     sell_vol = _safe_float(snapshot.get("sell_vol"), 0.0)
     total_vol = _safe_float(snapshot.get("total_vol"), 0.0)
     pressure_usable = (

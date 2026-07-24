@@ -151,6 +151,53 @@ def test_builder_uses_route_consistent_ws_tick_for_forming_bar(monkeypatch):
     assert context["source_quality"]["status"] == "blocked"
 
 
+def test_builder_excludes_untrusted_tick_volume_from_forming_bar(monkeypatch):
+    _enable(monkeypatch)
+    now = datetime(2026, 7, 23, 9, 20, 30, tzinfo=KST)
+    ws = _ws(10200)
+    ws["recent_trade_ticks"] = [
+        {
+            "time": "09:20:20",
+            "price": 10210,
+            "volume": 999_999_999,
+            "volume_source": "1030_1031_sum",
+            "market_suffix": "",
+            "market_route": "krx_regular",
+        },
+        {
+            "time": "09:20:10",
+            "price": 10200,
+            "volume": 7,
+            "volume_source": "15_abs",
+            "market_suffix": "",
+            "market_route": "krx_regular",
+        },
+    ]
+    context = build_entry_candle_context(
+        "token",
+        "000660",
+        ws,
+        venue="KRX",
+        session="krx_regular",
+        now_ts=now,
+        recent_candles=_candles(21),
+        source_meta={},
+    )
+
+    assert context["bars"][-1]["v"] == 120
+    assert context["structure"]["volume_ratio"] is None
+    assert (
+        context["structure"]["volume_direction_alignment"]
+        == "forming_partial_not_comparable"
+    )
+    assert context["source_quality"]["trusted_tick_volume_count"] == 1
+    assert context["source_quality"]["untrusted_tick_volume_count"] == 1
+    assert context["source_quality"]["tick_volume_source_counts"] == {
+        "1030_1031_sum": 1,
+        "15_abs": 1,
+    }
+
+
 def test_builder_marks_two_or_more_missing_bars_as_source_quality_block(monkeypatch):
     _enable(monkeypatch)
     bars = _candles(5)

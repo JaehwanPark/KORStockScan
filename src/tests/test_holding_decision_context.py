@@ -348,6 +348,34 @@ def test_untrusted_ka10003_is_ignored_and_ka10084_fallback_is_bounded(
     assert cached["signed_tape"]["fallback_cache_hit"] is True
 
 
+def test_holding_tape_rejects_declared_cumulative_split_volume(monkeypatch):
+    _enable(monkeypatch)
+    now = datetime(2026, 7, 23, 10, 0, 30, tzinfo=KST)
+    ws = _ws(now)
+    for tick in ws["recent_trade_ticks"]:
+        tick["volume"] = 100_000_000
+        tick["volume_source"] = "1030_1031_sum"
+    context = build_holding_decision_context(
+        None,
+        "000660",
+        ws,
+        _stock(),
+        "KRX",
+        "krx_regular",
+        "holding_score",
+        now_ts=now,
+        recent_candles=_candles(
+            60,
+            start=datetime(2026, 7, 23, 9, 0, tzinfo=KST),
+        ),
+    )
+
+    assert context["signed_tape"]["sample_count"] == 0
+    assert context["signed_tape"]["buy_volume"] == 0
+    assert context["signed_tape"]["sell_volume"] == 0
+    assert context["source_quality"]["signed_tape_fresh"] is False
+
+
 def test_exit_token_and_order_conflict_prevent_hold_deferral(monkeypatch):
     _enable(monkeypatch)
     now = datetime(2026, 7, 23, 10, 0, 30, tzinfo=KST)

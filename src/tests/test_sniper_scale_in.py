@@ -3465,11 +3465,14 @@ def test_wait_probe_neutral_defers_but_buy_probe_keeps_existing_behavior(monkeyp
 
 def test_pre_submit_entry_ai_authority_retry_refreshes_missing_ai(monkeypatch):
     now_ts = 1_783_471_000.0
+    response_completed_at = now_ts + 86.0
+    clock = {"now": now_ts}
     logs = []
     snapshots = []
 
     class DummyAI:
         def analyze_target(self, *args, **kwargs):
+            clock["now"] = response_completed_at
             return {
                 "action": "WAIT",
                 "score": 62.0,
@@ -3478,7 +3481,7 @@ def test_pre_submit_entry_ai_authority_retry_refreshes_missing_ai(monkeypatch):
                 "ai_parse_ok": True,
             }
 
-    monkeypatch.setattr(state_handlers.time, "time", lambda: now_ts)
+    monkeypatch.setattr(state_handlers.time, "time", lambda: clock["now"])
     monkeypatch.setattr(
         state_handlers.kiwoom_utils,
         "get_tick_history_ka10003",
@@ -3539,7 +3542,7 @@ def test_pre_submit_entry_ai_authority_retry_refreshes_missing_ai(monkeypatch):
     assert retry["pre_submit_entry_ai_authority_retry_attempted"] is True
     assert retry["pre_submit_entry_ai_authority_retry_success"] is True
     assert stock["last_watching_ai_result_source"] == "live"
-    assert stock["last_watching_ai_confirmed_at"] == now_ts
+    assert stock["last_watching_ai_confirmed_at"] == response_completed_at
     assert after["blocked"] is False
     assert after["entry_ai_submit_authority_fresh_prior"] is True
     assert logs[-1][0] == "ai_confirmed"
@@ -28922,6 +28925,162 @@ def test_stage_buy_order_submission_preserves_early_fill_state(monkeypatch):
     assert stock["pending_entry_orders"][0]["ord_no"] == "O1"
     assert stock["pending_entry_orders"][0]["filled_qty"] == 1
     assert stock["pending_entry_orders"][0]["status"] == "FILLED"
+
+
+def test_post_submit_db_state_preserves_receipt_advanced_fill():
+    stock = {
+        "status": "HOLDING",
+        "buy_price": 19100,
+        "buy_qty": 1,
+        "entry_filled_qty": 1,
+    }
+
+    status, qty, price, runtime_status = (
+        state_handlers._resolve_post_submit_db_state(
+            stock,
+            curr_price=19110,
+            requested_qty=53,
+        )
+    )
+
+    assert status == "HOLDING"
+    assert qty == 1
+    assert price == 19100
+    assert runtime_status == "HOLDING"
+
+
+def test_post_submit_db_state_keeps_planned_values_before_any_fill():
+    stock = {
+        "status": "BUY_ORDERED",
+        "buy_price": 0,
+        "buy_qty": 0,
+        "entry_filled_qty": 0,
+    }
+
+    status, qty, price, runtime_status = (
+        state_handlers._resolve_post_submit_db_state(
+            stock,
+            curr_price=19110,
+            requested_qty=53,
+        )
+    )
+
+    assert status == "BUY_ORDERED"
+    assert qty == 53
+    assert price == 19110
+    assert runtime_status == "BUY_ORDERED"
+
+
+def test_post_submit_db_persistence_does_not_downgrade_early_fill(monkeypatch):
+    captured = {}
+
+    class Query:
+        def filter_by(self, **kwargs):
+            captured["filter_by"] = kwargs
+            return self
+
+        def filter(self, *criteria):
+            captured["criteria"] = criteria
+            return self
+
+        def update(self, values, **kwargs):
+            captured["values"] = values
+            captured["update_kwargs"] = kwargs
+            return 1
+
+    class Session:
+        def query(self, model):
+            captured["model"] = model
+            return Query()
+
+    class SessionContext:
+        def __enter__(self):
+            return Session()
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class DB:
+        def get_session(self):
+            return SessionContext()
+
+    monkeypatch.setattr(state_handlers, "DB", DB())
+    stock = {
+        "id": 23752,
+        "code": "100090",
+        "name": "SK오션플랜트",
+        "status": "HOLDING",
+        "buy_price": 19100,
+        "buy_qty": 1,
+        "entry_filled_qty": 1,
+    }
+
+    updated_rows = state_handlers._persist_post_submit_db_state(
+        stock,
+        code="100090",
+        curr_price=19110,
+        requested_qty=53,
+    )
+
+    assert updated_rows == 1
+    assert captured["filter_by"] == {"id": 23752}
+    assert captured["criteria"]
+    compiled_criterion = str(
+        captured["criteria"][0].compile(compile_kwargs={"literal_binds": True})
+    )
+    assert "SELL_ORDERED" in compiled_criterion
+    assert "COMPLETED" in compiled_criterion
+    assert "EXPIRED" in compiled_criterion
+    assert captured["values"] == {
+        "status": "HOLDING",
+        "buy_price": 19100,
+        "buy_qty": 1,
+    }
+    assert captured["update_kwargs"] == {"synchronize_session": False}
+
+
+@pytest.mark.parametrize("terminal_status", ["SELL_ORDERED", "COMPLETED", "EXPIRED"])
+def test_post_submit_db_persistence_skips_terminal_runtime_state(
+    monkeypatch, terminal_status
+):
+    logs = []
+
+    class Session:
+        def query(self, _model):
+            raise AssertionError("terminal runtime state must not write entry DB state")
+
+    class SessionContext:
+        def __enter__(self):
+            return Session()
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class DB:
+        def get_session(self):
+            return SessionContext()
+
+    monkeypatch.setattr(state_handlers, "DB", DB())
+    monkeypatch.setattr(state_handlers, "log_info", logs.append)
+    stock = {
+        "id": 23752,
+        "code": "100090",
+        "name": "SK오션플랜트",
+        "status": terminal_status,
+        "buy_price": 19100,
+        "buy_qty": 1,
+        "entry_filled_qty": 1,
+    }
+
+    updated_rows = state_handlers._persist_post_submit_db_state(
+        stock,
+        code="100090",
+        curr_price=19110,
+        requested_qty=53,
+    )
+
+    assert updated_rows == 0
+    assert logs and "[ENTRY_DB_STATE_PRESERVED]" in logs[-1]
 
 
 def test_entry_receipt_caps_cumulative_or_duplicate_qty_to_requested_leg(monkeypatch):

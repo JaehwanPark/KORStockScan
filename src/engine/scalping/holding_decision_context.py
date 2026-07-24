@@ -30,6 +30,7 @@ from src.engine.scalping.market_data_enrichment import (
 
 SCHEMA = "holding_decision_context_v1"
 KST = ZoneInfo("Asia/Seoul")
+TRUSTED_TICK_VOLUME_SOURCES = {"15_abs", "13_delta"}
 OBSERVATION_CONTRACT = {
     "metric_role": "holding_context_feature_bundle",
     "decision_authority": "bounded_holding_confirmation",
@@ -283,6 +284,11 @@ def _trusted_ws_tape(
             continue
         side = str(tick.get("aggressor_side") or tick.get("side") or "").upper()
         if side not in {"BUY", "SELL"}:
+            continue
+        volume_source = str(
+            tick.get("volume_source") or tick.get("trade_volume_source") or ""
+        ).strip()
+        if volume_source and volume_source not in TRUSTED_TICK_VOLUME_SOURCES:
             continue
         age = _tick_age_ms(tick, now_epoch)
         if age is None or age > max_age_ms:

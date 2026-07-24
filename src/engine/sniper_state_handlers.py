@@ -22,6 +22,7 @@ from typing import Any
 from uuid import uuid4
 
 import numpy as np
+from sqlalchemy import or_
 
 from src.database.models import HoldingAddHistory, RecommendationHistory
 from src.engine import kiwoom_orders, sniper_trade_utils
@@ -31375,6 +31376,7 @@ def _retry_entry_ai_submit_authority_before_block(
             },
             candle_context=candle_context,
         )
+        ai_response_completed_at = time.time()
         ai_decision = dict(ai_decision or {})
         action = str(ai_decision.get("action") or "not_evaluated").upper()
         score = _safe_float(ai_decision.get("score"), 0.0)
@@ -31391,7 +31393,7 @@ def _retry_entry_ai_submit_authority_before_block(
                 "last_watching_ai_score": float(score or 0.0),
                 "last_watching_ai_score_raw": float(score or 0.0),
                 "last_watching_ai_reason": reason,
-                "last_watching_ai_confirmed_at": now_ts,
+                "last_watching_ai_confirmed_at": ai_response_completed_at,
                 "last_watching_ai_result_source": result_source,
                 "last_watching_ai_snapshot_id": (
                     ai_decision.get("ai_decision_snapshot_id")
@@ -31406,7 +31408,7 @@ def _retry_entry_ai_submit_authority_before_block(
             },
         )
         if isinstance(LAST_AI_CALL_TIMES, dict):
-            LAST_AI_CALL_TIMES[code] = now_ts
+            LAST_AI_CALL_TIMES[code] = ai_response_completed_at
         try:
             feature_probe = (
                 _extract_buy_recovery_probe_features(
@@ -46761,6 +46763,7 @@ def _handle_watching_strategy_branch(
                     )
                 )
                 ai_call_executed = False
+                ai_call_completed_at = now_ts
                 wait6579_probe_entry_unlock = {
                     "unlocked": False,
                     "source": "",
@@ -46883,6 +46886,7 @@ def _handle_watching_strategy_branch(
                                 },
                                 candle_context=candle_context,
                             )
+                            ai_call_completed_at = time.time()
                             ai_decision.update(pre_ai_ws_refresh_fields)
                             ai_call_executed = True
                             _mutate_stock_state(
@@ -46900,7 +46904,7 @@ def _handle_watching_strategy_branch(
                                 evaluate_watching_score(
                                     stock.get("watching_score_smoothing_observations")
                                     or [],
-                                    now_ts=now_ts,
+                                    now_ts=ai_call_completed_at,
                                     raw_score=raw_ai_score,
                                     action=action,
                                     mode=smoothing_mode,
@@ -46943,7 +46947,7 @@ def _handle_watching_strategy_branch(
                                         raw_ai_score or 0.0
                                     ),
                                     "last_watching_ai_reason": str(reason or "")[:240],
-                                    "last_watching_ai_confirmed_at": now_ts,
+                                    "last_watching_ai_confirmed_at": ai_call_completed_at,
                                     "last_watching_ai_result_source": str(
                                         ai_decision.get("ai_result_source") or "live"
                                     ).lower(),
@@ -47215,6 +47219,8 @@ def _handle_watching_strategy_branch(
                                     },
                                     candle_context=candle_context,
                                 )
+                                recheck_completed_at = time.time()
+                                ai_call_completed_at = recheck_completed_at
                                 recheck_action = str(
                                     (recheck_decision or {}).get("action") or "WAIT"
                                 ).upper()
@@ -47302,7 +47308,7 @@ def _handle_watching_strategy_branch(
                                                 or recheck_reason
                                                 or ""
                                             )[:240],
-                                            "last_watching_ai_confirmed_at": now_ts,
+                                            "last_watching_ai_confirmed_at": recheck_completed_at,
                                             "last_watching_ai_result_source": str(
                                                 recheck_decision.get("ai_result_source")
                                                 or "live"
@@ -47502,6 +47508,8 @@ def _handle_watching_strategy_branch(
                                     },
                                     candle_context=candle_context,
                                 )
+                                recheck_completed_at = time.time()
+                                ai_call_completed_at = recheck_completed_at
                                 recheck_action = str(
                                     (recheck_decision or {}).get("action") or "WAIT"
                                 ).upper()
@@ -47580,7 +47588,7 @@ def _handle_watching_strategy_branch(
                                                 or early_accel_recheck_reason
                                                 or ""
                                             )[:240],
-                                            "last_watching_ai_confirmed_at": now_ts,
+                                            "last_watching_ai_confirmed_at": recheck_completed_at,
                                             "last_watching_ai_result_source": str(
                                                 recheck_decision.get("ai_result_source")
                                                 or "live"
@@ -48051,7 +48059,7 @@ def _handle_watching_strategy_branch(
 
                     if ai_call_executed:
                         with ENTRY_LOCK:
-                            LAST_AI_CALL_TIMES[code] = now_ts
+                            LAST_AI_CALL_TIMES[code] = ai_call_completed_at
 
                     if _block_ai_score_50_buy_hold_override_if_needed(
                         stock=stock,
@@ -53060,6 +53068,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                     **_entry_split_probe_observation_contract_fields(stock),
                 )
                 return False
+            probe_submitting_at = time.time()
             _mutate_stock_state(
                 stock,
                 set_fields={
@@ -53082,7 +53091,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                     "entry_split_probe_anchor_mode": probe_order.get(
                         "entry_split_order_probe_anchor_mode"
                     ),
-                    "entry_split_probe_submitting_at": now_ts,
+                    "entry_split_probe_submitting_at": probe_submitting_at,
                     "requested_buy_qty": requested_qty,
                     "entry_requested_qty": requested_qty,
                     "entry_filled_qty": _safe_int(stock.get("entry_filled_qty"), 0),
@@ -53142,7 +53151,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                     50.0,
                 ),
                 anchor_mode=probe_order.get("entry_split_order_probe_anchor_mode"),
-                submitting_at=now_ts,
+                submitting_at=probe_submitting_at,
                 ai_action_at_submit=entry_ai_submit_authority.get(
                     "entry_ai_submit_authority_action"
                 ),
@@ -54220,29 +54229,14 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         )
 
     try:
-        db_status = "HOLDING" if scout_upgrade_entry else "BUY_ORDERED"
-        db_buy_qty = (
-            _safe_int(stock.get("buy_qty"), 0) if scout_upgrade_entry else requested_qty
+        _persist_post_submit_db_state(
+            stock,
+            code=code,
+            curr_price=curr_price,
+            requested_qty=requested_qty,
+            scout_upgrade_entry=scout_upgrade_entry,
+            opening_rotation_active=opening_rotation_active,
         )
-        db_buy_price = (
-            _safe_int(stock.get("buy_price"), 0) if scout_upgrade_entry else curr_price
-        )
-        with DB.get_session() as session:
-            buy_order_update = {
-                "status": db_status,
-                "buy_price": db_buy_price,
-                "buy_qty": db_buy_qty,
-            }
-            if opening_rotation_active:
-                buy_order_update.update(
-                    {
-                        "position_tag": OPENING_ROTATION_POSITION_TAG,
-                        "scale_in_locked": True,
-                    }
-                )
-            session.query(RecommendationHistory).filter_by(id=stock.get("id")).update(
-                buy_order_update
-            )
     except Exception as e:
         log_error(f"🚨 [DB 에러] {stock['name']} BUY_ORDERED 장부 업데이트 실패: {e}")
 
@@ -60886,6 +60880,103 @@ def _maybe_reprice_pending_entry_order(stock, code, strategy, *, timeout_sec=Non
         f"parent={parent_order_no} child={child_order_no} qty={qty} price={target_price}"
     )
     return "submitted"
+
+
+def _resolve_post_submit_db_state(
+    stock,
+    *,
+    curr_price,
+    requested_qty,
+    scout_upgrade_entry=False,
+):
+    """Keep a receipt-advanced entry from being downgraded after submit returns."""
+
+    current_status = str(stock.get("status") or "").strip().upper()
+    entry_already_filled = bool(
+        current_status == "HOLDING"
+        or _safe_int(stock.get("entry_filled_qty"), 0) > 0
+    )
+    db_status = (
+        "HOLDING"
+        if scout_upgrade_entry or entry_already_filled
+        else "BUY_ORDERED"
+    )
+    if db_status == "HOLDING":
+        db_buy_qty = max(
+            _safe_int(stock.get("buy_qty"), 0),
+            _safe_int(stock.get("entry_filled_qty"), 0),
+        )
+        db_buy_price = _safe_int(stock.get("buy_price"), 0)
+        if db_buy_price <= 0:
+            db_buy_price = _safe_int(curr_price, 0)
+    else:
+        db_buy_qty = _safe_int(requested_qty, 0)
+        db_buy_price = _safe_int(curr_price, 0)
+    return db_status, db_buy_qty, db_buy_price, current_status
+
+
+def _persist_post_submit_db_state(
+    stock,
+    *,
+    code,
+    curr_price,
+    requested_qty,
+    scout_upgrade_entry=False,
+    opening_rotation_active=False,
+):
+    (
+        db_status,
+        db_buy_qty,
+        db_buy_price,
+        current_entry_status,
+    ) = _resolve_post_submit_db_state(
+        stock,
+        curr_price=curr_price,
+        requested_qty=requested_qty,
+        scout_upgrade_entry=scout_upgrade_entry,
+    )
+    buy_order_update = {
+        "status": db_status,
+        "buy_price": db_buy_price,
+        "buy_qty": db_buy_qty,
+    }
+    if opening_rotation_active:
+        buy_order_update.update(
+            {
+                "position_tag": OPENING_ROTATION_POSITION_TAG,
+                "scale_in_locked": True,
+            }
+        )
+    terminal_statuses = {"SELL_ORDERED", "COMPLETED", "EXPIRED"}
+    protected_statuses = set(terminal_statuses)
+    if db_status == "BUY_ORDERED":
+        protected_statuses.add("HOLDING")
+
+    with DB.get_session() as session:
+        if current_entry_status in terminal_statuses:
+            updated_rows = 0
+        else:
+            buy_order_query = session.query(RecommendationHistory).filter_by(
+                id=stock.get("id")
+            )
+            buy_order_query = buy_order_query.filter(
+                or_(
+                    RecommendationHistory.status.is_(None),
+                    ~RecommendationHistory.status.in_(sorted(protected_statuses)),
+                )
+            )
+            updated_rows = buy_order_query.update(
+                buy_order_update,
+                synchronize_session=False,
+            )
+    if not updated_rows:
+        log_info(
+            f"[ENTRY_DB_STATE_PRESERVED] {stock.get('name')}({code}) "
+            f"post_submit_status={db_status} current_runtime_status="
+            f"{current_entry_status or '-'} protected="
+            f"{','.join(sorted(protected_statuses))}"
+        )
+    return int(updated_rows or 0)
 
 
 def _stage_buy_order_submission(

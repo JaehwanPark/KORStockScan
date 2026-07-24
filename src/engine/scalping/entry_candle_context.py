@@ -30,6 +30,7 @@ ADVERSE_REGIMES = {
     "lower_high_distribution",
     "downtrend_bounce",
 }
+TRUSTED_TICK_VOLUME_SOURCES = {"15_abs", "13_delta"}
 OBSERVATION_CONTRACT = {
     "metric_role": "entry_context_feature_bundle",
     "decision_authority": "bounded_entry_confirmation",
@@ -533,14 +534,20 @@ def _structure(bars: list[dict[str, Any]]) -> dict[str, Any]:
         if latest_range > 0
         else 0.0
     )
+    latest_volume_partial = bool(latest.get("partial_volume"))
     volumes = [bar["v"] for bar in active if bar["v"] >= 0]
     prior_volume = volumes[:-1][-10:]
     volume_ratio = (
         round(volumes[-1] / (sum(prior_volume) / len(prior_volume)), 3)
-        if volumes and prior_volume and sum(prior_volume) > 0
+        if not latest_volume_partial
+        and volumes
+        and prior_volume
+        and sum(prior_volume) > 0
         else None
     )
-    if volume_ratio is None or short_return is None:
+    if latest_volume_partial:
+        volume_direction_alignment = "forming_partial_not_comparable"
+    elif volume_ratio is None or short_return is None:
         volume_direction_alignment = "not_available"
     elif volume_ratio >= 1.1 and short_return > 0:
         volume_direction_alignment = "bullish_confirmed"
@@ -727,6 +734,9 @@ def build_session_candle_source(
         current_session[-1]["forming"] = True
         current_session[-1]["partial_volume"] = True
     minute_ticks: list[tuple[datetime, dict[str, Any]]] = []
+    tick_volume_source_counts: dict[str, int] = {}
+    trusted_tick_volume_count = 0
+    untrusted_tick_volume_count = 0
     for tick in ticks:
         moment = _tick_dt(tick, now)
         if moment is None or moment.replace(second=0, microsecond=0) != current_minute:
@@ -740,10 +750,30 @@ def build_session_candle_source(
             route_conflict_count += 1
             continue
         minute_ticks.append((moment, tick))
+        volume_source = str(
+            tick.get("volume_source") or tick.get("trade_volume_source") or "unknown"
+        )
+        tick_volume_source_counts[volume_source] = (
+            tick_volume_source_counts.get(volume_source, 0) + 1
+        )
+        if volume_source in TRUSTED_TICK_VOLUME_SOURCES:
+            trusted_tick_volume_count += 1
+        else:
+            untrusted_tick_volume_count += 1
     if minute_ticks:
         minute_ticks.sort(key=lambda item: item[0])
         prices = [_integer(item[1].get("price")) for item in minute_ticks]
         prices = [price for price in prices if price > 0]
+        trusted_tick_volume = sum(
+            _integer(tick.get("volume"))
+            for _, tick in minute_ticks
+            if str(
+                tick.get("volume_source")
+                or tick.get("trade_volume_source")
+                or "unknown"
+            )
+            in TRUSTED_TICK_VOLUME_SOURCES
+        )
         if prices:
             if current_session and current_session[-1]["dt"] == current_minute:
                 forming = dict(current_session[-1])
@@ -772,7 +802,7 @@ def build_session_candle_source(
                     "c": prices[-1],
                     "v": max(
                         _integer(forming.get("v")),
-                        sum(_integer(item[1].get("volume")) for item in minute_ticks),
+                        trusted_tick_volume,
                     ),
                     "forming": True,
                     "partial_volume": True,
@@ -909,6 +939,12 @@ def build_session_candle_source(
             "route_partition_available_keys": route_partition["available_keys"],
             "route_partition_ignored_tick_count": route_partition["ignored_tick_count"],
             "route_partition_fallback_reason": route_partition["fallback_reason"],
+            "tick_volume_source_counts": dict(
+                sorted(tick_volume_source_counts.items())
+            ),
+            "trusted_tick_volume_count": trusted_tick_volume_count,
+            "untrusted_tick_volume_count": untrusted_tick_volume_count,
+            "trusted_tick_volume_sources": sorted(TRUSTED_TICK_VOLUME_SOURCES),
             "route_equivalence_proof": route_proof,
             "source_meta": {
                 key: value

@@ -503,7 +503,7 @@ def test_extract_scalping_feature_packet_prefers_cached_orderbook_touch_ws_ticks
     assert compact["aggressor_quality"]["cached_orderbook_touch"] == 5
 
 
-def test_extract_scalping_feature_packet_prefers_signed_0b_ws_ticks_without_touch_count():
+def test_extract_scalping_feature_packet_rejects_cumulative_split_tick_volume():
     ws_data = _sample_ws_data()
     ws_data.update(
         {
@@ -600,13 +600,13 @@ def test_extract_scalping_feature_packet_prefers_signed_0b_ws_ticks_without_touc
         now=datetime.strptime("09:00:12", "%H:%M:%S"),
     )
 
-    assert packet["buy_pressure_10t"] == 86.67
-    assert packet["net_aggressive_delta_10t"] == 220
+    assert packet["buy_pressure_10t"] == 50.0
+    assert packet["net_aggressive_delta_10t"] == 0
     assert packet["tick_aggressor_orderbook_touch_count"] == 0
     assert packet["tick_aggressor_cached_orderbook_touch_count"] == 0
     assert packet["tick_aggressor_source_counts"]["kiwoom_0b_signed_trade_volume"] == 5
-    assert packet["tick_aggressor_trusted_count"] == 5
-    assert packet["tick_aggressor_pressure_usable"] is True
+    assert packet["tick_aggressor_trusted_count"] == 1
+    assert packet["tick_aggressor_pressure_usable"] is False
     assert packet["tick_trade_value_source_counts"] == {
         "1313": 2,
         "calc_price_x_1030_1031_sum": 2,
