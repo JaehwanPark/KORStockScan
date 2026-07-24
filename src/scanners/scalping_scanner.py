@@ -3214,6 +3214,14 @@ def promote_candidates(
 
     if new_codes_found:
         event_bus.publish(
+            "SCALPING_SCANNER_PROMOTION_BATCH_PENDING",
+            {
+                "codes": list(new_codes_found),
+                "source": "scalping_scanner_promote",
+                "emitted_epoch": float(now_ts or 0.0),
+            },
+        )
+        event_bus.publish(
             "COMMAND_WS_REG",
             {"codes": new_codes_found, "source": "scalping_scanner_promote"},
         )

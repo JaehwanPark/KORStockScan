@@ -6139,6 +6139,158 @@ def test_scanner_fast_precheck_signed_tape_retention_skips_budget_eviction():
     )
 
 
+def test_scanner_fast_precheck_ws_backoff_retains_then_evicts_after_recovery_window(
+    monkeypatch,
+):
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCANNER_WS_BACKOFF_WATCH_RETENTION_MIN_SEC", "10"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCANNER_WS_BACKOFF_WATCH_RETENTION_MAX_SEC", "20"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCANNER_WS_BACKOFF_WATCH_RETENTION_MIN_COUNT", "2"
+    )
+    target = _scanner_watch_stock(
+        code="005930",
+        _scanner_fast_precheck_fields={
+            "fast_precheck_result": "budget_reallocated",
+            "fast_precheck_reason": "scanner_ws_stale_backoff_active",
+            "scanner_ws_stale_backoff_until": "1100.000",
+        },
+    )
+
+    first = kiwoom_sniper_v2._scanner_watch_eviction_decision_from_fast_precheck_budget(
+        target,
+        now_ts=1035.0,
+    )
+    emitted = []
+    expired = kiwoom_sniper_v2._maybe_expire_scanner_watch_for_fast_precheck_budget(
+        target,
+        "005930",
+        [target],
+        now_ts=1035.0,
+        decision=first,
+        emit_event_fn=lambda *args: emitted.append(args),
+    )
+    second = (
+        kiwoom_sniper_v2._scanner_watch_eviction_decision_from_fast_precheck_budget(
+            target,
+            now_ts=1046.0,
+        )
+    )
+
+    assert first["should_evict"] is False
+    assert first["retention_active"] is True
+    assert first["ws_recovery_outcome"] == "bounded_ws_recovery_pending"
+    assert expired is False
+    assert emitted[0][2] == "scalping_scanner_ws_backoff_watch_retained"
+    assert emitted[0][3]["runtime_effect"] is True
+    assert emitted[0][3]["actual_order_submitted"] is False
+    assert emitted[0][3]["broker_order_forbidden"] is True
+    assert second["should_evict"] is True
+    assert second["eviction_reason"] == "scanner_ws_stale_backoff_recovery_exhausted"
+    assert second["eviction_attempt_count"] == 2
+    assert second["ws_backoff_retention_age_sec"] == 11.0
+    assert second["ws_recovery_outcome"] == "bounded_ws_recovery_exhausted"
+
+
+def test_scanner_ws_backoff_recovery_precedes_generic_queue_lag_eviction():
+    assert (
+        kiwoom_sniper_v2._scanner_queue_lag_eviction_allowed_before_recovery(
+            "scanner_ws_stale_backoff_active"
+        )
+        is False
+    )
+    assert (
+        kiwoom_sniper_v2._scanner_queue_lag_eviction_allowed_before_recovery(
+            "signed_tape_sell_dominated"
+        )
+        is True
+    )
+
+
+def test_scanner_fast_precheck_ws_backoff_missing_until_still_expires(
+    monkeypatch,
+):
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCANNER_WS_BACKOFF_WATCH_RETENTION_MIN_SEC", "10"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCANNER_WS_BACKOFF_WATCH_RETENTION_MAX_SEC", "20"
+    )
+    target = _scanner_watch_stock(
+        code="005930",
+        _scanner_fast_precheck_fields={
+            "fast_precheck_result": "budget_reallocated",
+            "fast_precheck_reason": "scanner_ws_stale_backoff_active",
+        },
+    )
+
+    first = kiwoom_sniper_v2._scanner_watch_eviction_decision_from_fast_precheck_budget(
+        target,
+        now_ts=1035.0,
+    )
+    second = (
+        kiwoom_sniper_v2._scanner_watch_eviction_decision_from_fast_precheck_budget(
+            target,
+            now_ts=1056.0,
+        )
+    )
+
+    assert first["retention_active"] is True
+    assert first["ws_backoff_until"] == "not_available_ws_backoff_until"
+    assert second["should_evict"] is True
+    assert second["ws_backoff_retention_age_sec"] == 21.0
+
+
+def test_scanner_promotion_pending_attach_prevents_prune_until_attach_resolution(
+    monkeypatch,
+):
+    published = []
+    manager = SimpleNamespace(subscribed_codes={"005930"})
+    monkeypatch.setattr(kiwoom_sniper_v2, "WS_MANAGER", manager)
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "event_bus",
+        SimpleNamespace(
+            publish=lambda event_name, payload: published.append(
+                (event_name, payload)
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "should_retain_ws_subscription",
+        lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2.sniper_state_handlers,
+        "should_retain_rising_missed_nxt_post_block_subscription",
+        lambda *_args, **_kwargs: False,
+    )
+    kiwoom_sniper_v2._SCANNER_PROMOTION_PENDING_ATTACH_UNTIL.clear()
+
+    try:
+        assert (
+            kiwoom_sniper_v2.handle_scalping_scanner_promotion_batch_pending(
+                {"codes": ["005930"], "emitted_epoch": 1000.0}
+            )
+            is True
+        )
+        monkeypatch.setattr(kiwoom_sniper_v2.time, "time", lambda: 1001.0)
+        kiwoom_sniper_v2._prune_ws_subscriptions_for_inactive_targets([])
+        assert published == []
+
+        kiwoom_sniper_v2._clear_scanner_promotion_pending_attach("005930")
+        kiwoom_sniper_v2._prune_ws_subscriptions_for_inactive_targets([])
+        assert published == [
+            ("COMMAND_WS_UNREG", {"codes": ["005930"]}),
+        ]
+    finally:
+        kiwoom_sniper_v2._SCANNER_PROMOTION_PENDING_ATTACH_UNTIL.clear()
+
+
 def test_scanner_fast_precheck_retention_requires_bounded_signed_tape_reason(
     monkeypatch,
 ):

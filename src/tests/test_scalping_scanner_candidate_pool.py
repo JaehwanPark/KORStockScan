@@ -417,8 +417,22 @@ def test_promote_candidates_limits_new_codes_to_remaining_active_slots(monkeypat
     )
 
     assert codes == ["000001"]
+    assert _event_payloads(
+        event_bus, "SCALPING_SCANNER_PROMOTION_BATCH_PENDING"
+    ) == [
+        {
+            "codes": ["000001"],
+            "source": "scalping_scanner_promote",
+            "emitted_epoch": 1000.0,
+        }
+    ]
     assert _event_payloads(event_bus, "COMMAND_WS_REG") == [
         {"codes": ["000001"], "source": "scalping_scanner_promote"}
+    ]
+    assert [name for name, _payload in event_bus.events[-3:]] == [
+        "SCALPING_SCANNER_PROMOTION_BATCH_PENDING",
+        "COMMAND_WS_REG",
+        "SCALPING_SCANNER_PROMOTED_TARGET",
     ]
     assert len(_event_payloads(event_bus, "SCALPING_SCANNER_PROMOTED_TARGET")) == 1
     assert len(db.records) == 2

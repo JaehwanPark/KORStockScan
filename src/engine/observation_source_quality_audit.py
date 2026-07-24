@@ -566,6 +566,30 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
         ),
         decision_authority="real_scalping_scanner_watch_eviction_pool_management_only",
     ),
+    "scalping_scanner_ws_backoff_watch_retained": StageContract(
+        required_fields=(
+            *REAL_EXECUTION_DIAGNOSTIC_FIELDS,
+            "retention_reason",
+            "retention_first_epoch",
+            "retention_age_sec",
+            "retention_min_sec",
+            "retention_max_sec",
+            "retention_attempt_count",
+            "retention_min_count",
+            "ws_backoff_until",
+            "fast_precheck_result",
+            "fast_precheck_reason",
+            "runtime_record_id",
+            "stock_code",
+            "target_status",
+            "target_strategy",
+            "target_position_tag",
+            "source_quality_route",
+        ),
+        decision_authority=(
+            "real_scalping_scanner_ws_backoff_watch_retention_only"
+        ),
+    ),
     "krx_open_watchlist_reset": StageContract(
         required_fields=(
             *REAL_EXECUTION_DIAGNOSTIC_FIELDS,

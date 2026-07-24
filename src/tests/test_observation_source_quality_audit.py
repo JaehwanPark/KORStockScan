@@ -4739,6 +4739,70 @@ def test_observation_source_quality_accepts_scalping_scanner_watch_eviction(
     assert report["summary"]["tuning_input_allowed"] is True
 
 
+def test_observation_source_quality_accepts_scanner_ws_backoff_watch_retention(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-07-24",
+        [
+            _event(
+                "scalping_scanner_ws_backoff_watch_retained",
+                {
+                    "metric_role": "runtime_source_quality_recovery_guard",
+                    "decision_authority": (
+                        "real_scalping_scanner_ws_backoff_watch_retention_only"
+                    ),
+                    "window_policy": "same_watch_bounded_ws_recovery",
+                    "sample_floor": "not_applicable_runtime_recovery_guard",
+                    "primary_decision_metric": "ws_backoff_retention_age_sec",
+                    "source_quality_gate": (
+                        "scalping_scanner_ws_backoff_watch_retention_contract"
+                    ),
+                    "source_quality_route": (
+                        "runtime_watch_retained_without_entry_evaluation"
+                    ),
+                    "runtime_effect": True,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "forbidden_uses": (
+                        "stale_submit_bypass,heavy_eval_bypass,score_threshold_change,"
+                        "provider_route_change,order_price_change,quantity_or_cap_change,"
+                        "broker_guard_change,real_execution_quality_approval"
+                    ),
+                    "retention_reason": (
+                        "scanner_ws_stale_backoff_bounded_recovery"
+                    ),
+                    "retention_first_epoch": "1000.000",
+                    "retention_age_sec": 0.0,
+                    "retention_min_sec": 15.0,
+                    "retention_max_sec": 30.0,
+                    "retention_attempt_count": 1,
+                    "retention_min_count": 2,
+                    "ws_backoff_until": "1120.000",
+                    "fast_precheck_result": "budget_reallocated",
+                    "fast_precheck_reason": "scanner_ws_stale_backoff_active",
+                    "runtime_record_id": 77,
+                    "stock_code": "047920",
+                    "target_status": "WATCHING",
+                    "target_strategy": "SCALPING",
+                    "target_position_tag": "SCANNER",
+                },
+            )
+        ],
+    )
+
+    report = audit.write_report("2026-07-24")
+
+    contract = report["stage_contracts"][
+        "scalping_scanner_ws_backoff_watch_retained"
+    ]
+    assert contract["status"] == "pass"
+    assert report["summary"]["hard_blocking_contract_gap_count"] == 0
+    assert report["summary"]["tuning_input_allowed"] is True
+
+
 def test_observation_source_quality_accepts_krx_open_watchlist_reset(
     monkeypatch, tmp_path
 ):
