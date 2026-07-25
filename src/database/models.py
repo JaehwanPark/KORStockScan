@@ -102,6 +102,13 @@ class RecommendationHistory(Base):
     prob = Column(Float, server_default=text("0.70"))
     nxt = Column(Float)
     entry_armed_at_epoch = Column(Float)
+    effective_venue = Column(Text)
+    venue_resolution = Column(Text)
+    market_session_bucket = Column(Text)
+    scanner_promotion_id = Column(Text)
+    scanner_promotion_reason = Column(Text)
+    scanner_promotion_emitted_epoch = Column(Float)
+    scanner_source_signature = Column(Text)
 
     buy_price = Column(Float)
     buy_qty = Column(Integer, server_default=text("0"))

@@ -761,6 +761,151 @@ def test_scheduler_boot_restore_without_canonical_venue_is_isolated(
     )
 
 
+def test_scheduler_boot_restore_reuses_persisted_same_session_generation(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "scalping_session_venue_provenance",
+        lambda _epoch: {"effective_venue": "NXT"},
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "_scalping_watching_ttl_sec",
+        lambda: 1800.0,
+    )
+    target = {
+        "id": 1,
+        "code": "005930",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "effective_venue": "NXT",
+        "venue_resolution": "session_window:nxt",
+        "scanner_promotion_id": "SCANPROM-005930-190000",
+        "scanner_promotion_emitted_epoch": 190.0,
+        "source_signature": "PRICE_JUMP_START",
+        "buy_price": 70_000,
+    }
+
+    payload = kiwoom_sniper_v2._scanner_scheduler_boot_restore_payload(
+        target,
+        boot_epoch=200.0,
+    )
+
+    assert payload["scanner_scheduler_boot_restore"] is True
+    assert payload["scanner_scheduler_boot_restore_block_reason"] == ""
+    assert payload["scanner_promotion_id"] == "SCANPROM-005930-190000"
+    assert payload["scanner_promotion_emitted_epoch"] == 190.0
+    assert payload["effective_venue"] == "NXT"
+    assert payload["current_price_observed"] == 70_000
+    assert payload["scanner_scheduler_boot_promotion_age_sec"] == 10.0
+
+
+@pytest.mark.parametrize(
+    "persisted_venue,promotion_epoch,expected_reason",
+    [
+        ("KRX", 190.0, "scanner_scheduler_boot_session_venue_mismatch"),
+        ("NXT", 100.0, "scanner_scheduler_boot_promotion_ttl_expired"),
+        ("UNKNOWN", 190.0, "scanner_scheduler_boot_persisted_venue_missing"),
+    ],
+)
+def test_scheduler_boot_restore_rejects_invalid_persisted_provenance(
+    monkeypatch,
+    persisted_venue,
+    promotion_epoch,
+    expected_reason,
+):
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "scalping_session_venue_provenance",
+        lambda _epoch: {"effective_venue": "NXT"},
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "_scalping_watching_ttl_sec",
+        lambda: 30.0,
+    )
+    target = {
+        "code": "005930",
+        "effective_venue": persisted_venue,
+        "venue_resolution": "session_window:persisted",
+        "scanner_promotion_id": "SCANPROM-005930-190000",
+        "scanner_promotion_emitted_epoch": promotion_epoch,
+        "buy_price": 70_000,
+    }
+
+    payload = kiwoom_sniper_v2._scanner_scheduler_boot_restore_payload(
+        target,
+        boot_epoch=200.0,
+    )
+
+    assert payload["scanner_scheduler_boot_restore_block_reason"] == expected_reason
+    assert payload["effective_venue"] == persisted_venue
+    assert payload["current_price_observed"] == 0
+    assert payload["scanner_promotion_id"].startswith("SCANSCHEDBOOT-005930-")
+
+
+def test_invalid_scheduler_boot_restore_expires_unfilled_watching_row(
+    monkeypatch,
+):
+    executed = []
+    emitted = []
+
+    class _Session:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def execute(self, statement, params):
+            executed.append((str(statement), params))
+            return SimpleNamespace(rowcount=1)
+
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "DB",
+        SimpleNamespace(get_session=lambda: _Session()),
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "_emit_scanner_scheduler_event",
+        lambda **kwargs: emitted.append(kwargs),
+    )
+    target = {
+        "id": 77,
+        "code": "005930",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+    }
+    targets = [target]
+    payload = {
+        **target,
+        "scanner_scheduler_boot_restore": True,
+        "scanner_scheduler_boot_restore_block_reason": (
+            "scanner_scheduler_boot_persisted_venue_missing"
+        ),
+        "scanner_scheduler_boot_persisted_venue": "UNKNOWN",
+        "scanner_scheduler_boot_current_venue": "NXT",
+    }
+
+    expired = kiwoom_sniper_v2._expire_invalid_scanner_scheduler_boot_restore(
+        target,
+        targets,
+        payload,
+    )
+
+    assert expired is True
+    assert target["status"] == "EXPIRED"
+    assert executed[0][1] == {"record_id": 77, "stock_code": "005930"}
+    assert emitted[-1]["stage"] == (
+        "scalping_scanner_scheduler_boot_restore_expired"
+    )
+    assert emitted[-1]["fields"]["actual_order_submitted"] is False
+
+
 def test_scheduler_event_sink_snapshots_action_for_observation_executor(monkeypatch):
     submitted = []
     emitted = []
@@ -8664,6 +8809,11 @@ def test_db_poll_scanner_target_attach_logs_recovery(monkeypatch):
             "position_tag": "SCANNER",
             "buy_price": 70000,
             "type": "SCALP",
+            "effective_venue": "KRX",
+            "venue_resolution": "session_window:krx_regular",
+            "scanner_promotion_id": "SCANPROM-005930-1000000",
+            "scanner_promotion_emitted_epoch": 1000.0,
+            "source_signature": "PRICE_JUMP_START",
         },
         targets,
         now_ts=1002.0,
@@ -8679,7 +8829,8 @@ def test_db_poll_scanner_target_attach_logs_recovery(monkeypatch):
     assert emitted[-1]["fields"]["runtime_target_attach_outcome"] == "db_poll_attached"
     assert emitted[-1]["fields"]["effective_venue"] == "KRX"
     assert emitted[-1]["fields"]["venue_resolution"] == (
-        "consistent_explicit:payload.effective_venue,payload.venue"
+        "consistent_explicit:payload.effective_venue,payload.venue,"
+        "target.effective_venue"
     )
     assert (
         emitted[-1]["fields"]["runtime_target_attach_reason"]

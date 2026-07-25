@@ -3719,6 +3719,56 @@ def test_observation_source_quality_audit_contracts_all_scheduler_events(
     assert submit_contract["missing_violations"] == {}
 
 
+def test_observation_source_quality_allows_expired_boot_restore_unknown_venue(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-06-17",
+        [
+            _event(
+                "scalping_scanner_scheduler_boot_restore_expired",
+                {
+                    "metric_role": "runtime_scheduler_latency",
+                    "decision_authority": (
+                        "scanner_runtime_scheduler_only_no_order_authority"
+                    ),
+                    "window_policy": (
+                        "per_scanner_generation_action_timestamps"
+                    ),
+                    "sample_floor": "one_valid_scanner_generation",
+                    "primary_decision_metric": "attach_to_first_precheck_sec",
+                    "source_quality_gate": (
+                        "canonical_generation_and_venue_provenance_required"
+                    ),
+                    "runtime_effect": True,
+                    "forbidden_uses": "standalone_buy,broker_submit",
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "scheduler_version": "scanner_deadline_scheduler_v1",
+                    "scheduler_action": "invalid_boot_restore_expired",
+                    "scanner_scheduler_action_epoch": 1_750_000_000.0,
+                    "effective_venue": "UNKNOWN",
+                    "venue": "UNKNOWN",
+                    "venue_resolution": (
+                        "scanner_scheduler_boot_persisted_venue_missing"
+                    ),
+                },
+            )
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-06-17")
+
+    contract = report["stage_contracts"][
+        "scalping_scanner_scheduler_boot_restore_expired"
+    ]
+    assert contract["status"] == "pass"
+    assert contract["invalid_label_violations"] == {}
+
+
 def test_observation_source_quality_audit_keeps_rank_sign_fields_rollout_compatible(
     monkeypatch, tmp_path
 ):

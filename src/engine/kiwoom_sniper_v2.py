@@ -7205,10 +7205,25 @@ def _register_scanner_scheduler_generation(
     payload = dict(payload or {})
     target = target if isinstance(target, dict) else {}
     venue_fields = _scanner_runtime_target_venue_fields(payload, target=target)
+    boot_restore = bool(payload.get("scanner_scheduler_boot_restore"))
+    boot_restore_block_reason = str(
+        payload.get("scanner_scheduler_boot_restore_block_reason") or ""
+    ).strip()
+    if boot_restore_block_reason:
+        venue_fields = {
+            "venue": "UNKNOWN",
+            "effective_venue": "UNKNOWN",
+            "venue_resolution": boot_restore_block_reason,
+        }
     venue = venue_fields["effective_venue"]
     if venue not in {"KRX", "PREMARKET_KRX_LIKE", "NXT"}:
-        registration_reason = (
+        registration_reason = boot_restore_block_reason or (
             "scanner_scheduler_canonical_venue_missing_fail_closed"
+        )
+        boot_restore_isolated = boot_restore or bool(
+            str(payload.get("scanner_promotion_id") or "").startswith(
+                "SCANSCHEDBOOT-"
+            )
         )
         with ENTRY_LOCK:
             for key in (
@@ -7228,11 +7243,7 @@ def _register_scanner_scheduler_generation(
                     ),
                     "_scanner_scheduler_registration_blocked": True,
                     "_scanner_scheduler_registration_reason": registration_reason,
-                    "_scanner_scheduler_boot_restore_isolated": bool(
-                        str(payload.get("scanner_promotion_id") or "").startswith(
-                            "SCANSCHEDBOOT-"
-                        )
-                    ),
+                    "_scanner_scheduler_boot_restore_isolated": boot_restore_isolated,
                 }
             )
         _emit_scanner_scheduler_event(
@@ -7244,9 +7255,19 @@ def _register_scanner_scheduler_generation(
                 "scheduler_mode": _scanner_scheduler_startup_mode(),
                 "scheduler_action": "canonical_venue_missing_fail_closed",
                 "scheduler_reason": registration_reason,
-                "scanner_scheduler_boot_restore_isolated": bool(
-                    target.get("_scanner_scheduler_boot_restore_isolated")
-                ),
+                "scanner_scheduler_boot_restore_isolated": boot_restore_isolated,
+                "scanner_scheduler_boot_persisted_venue": payload.get(
+                    "scanner_scheduler_boot_persisted_venue"
+                )
+                or "UNKNOWN",
+                "scanner_scheduler_boot_current_venue": payload.get(
+                    "scanner_scheduler_boot_current_venue"
+                )
+                or "UNKNOWN",
+                "scanner_scheduler_boot_promotion_age_sec": payload.get(
+                    "scanner_scheduler_boot_promotion_age_sec"
+                )
+                or "not_available",
                 **venue_fields,
             },
         )
@@ -7370,6 +7391,160 @@ def _register_scanner_scheduler_generation(
         },
     )
     return generation
+
+
+def _scanner_scheduler_boot_restore_payload(target, *, boot_epoch):
+    """Build a fail-closed boot envelope from persisted scanner provenance."""
+    target = target if isinstance(target, dict) else {}
+    persisted_venue_fields = _scanner_runtime_target_venue_fields({}, target=target)
+    persisted_venue = persisted_venue_fields["effective_venue"]
+    current_venue_fields = scalping_session_venue_provenance(float(boot_epoch))
+    current_venue = str(
+        current_venue_fields.get("effective_venue") or "UNKNOWN"
+    ).strip().upper()
+    promotion_id = str(target.get("scanner_promotion_id") or "").strip()
+    promotion_epoch = _safe_float(
+        target.get("scanner_promotion_emitted_epoch"),
+        0.0,
+    )
+    persisted_resolution = str(target.get("venue_resolution") or "").strip()
+    observed_price = _safe_int(
+        target.get("current_price_observed") or target.get("buy_price"),
+        0,
+    )
+    promotion_age_sec = (
+        max(0.0, float(boot_epoch) - promotion_epoch)
+        if promotion_epoch > 0
+        else float("inf")
+    )
+    block_reason = ""
+    if persisted_venue not in {"KRX", "PREMARKET_KRX_LIKE", "NXT"}:
+        block_reason = "scanner_scheduler_boot_persisted_venue_missing"
+    elif current_venue not in {"KRX", "PREMARKET_KRX_LIKE", "NXT"}:
+        block_reason = "scanner_scheduler_boot_current_session_unsupported"
+    elif persisted_venue != current_venue:
+        block_reason = "scanner_scheduler_boot_session_venue_mismatch"
+    elif not persisted_resolution:
+        block_reason = "scanner_scheduler_boot_venue_resolution_missing"
+    elif not promotion_id or promotion_epoch <= 0:
+        block_reason = "scanner_scheduler_boot_promotion_provenance_missing"
+    elif observed_price <= 0:
+        block_reason = "scanner_scheduler_boot_observed_price_missing"
+    elif promotion_epoch > float(boot_epoch) + 5.0:
+        block_reason = "scanner_scheduler_boot_promotion_epoch_in_future"
+    elif promotion_age_sec > _scalping_watching_ttl_sec():
+        block_reason = "scanner_scheduler_boot_promotion_ttl_expired"
+
+    common = {
+        **dict(target),
+        "scanner_scheduler_boot_restore": True,
+        "scanner_scheduler_boot_restore_block_reason": block_reason,
+        "scanner_scheduler_boot_persisted_venue": persisted_venue,
+        "scanner_scheduler_boot_current_venue": current_venue,
+        "scanner_scheduler_boot_promotion_age_sec": (
+            round(promotion_age_sec, 3)
+            if promotion_age_sec != float("inf")
+            else "not_available"
+        ),
+    }
+    if block_reason:
+        return {
+            **common,
+            "scanner_promotion_id": (
+                "SCANSCHEDBOOT-"
+                f"{str(target.get('code') or '').strip()[:6]}-"
+                f"{int(float(boot_epoch) * 1000)}"
+            ),
+            "scanner_promotion_emitted_epoch": float(boot_epoch),
+            "entry_armed_at_epoch": float(boot_epoch),
+            "added_time": float(boot_epoch),
+            "current_price_observed": 0,
+            "buy_price": 0,
+        }
+    return {
+        **common,
+        "scanner_promotion_id": promotion_id,
+        "scanner_promotion_emitted_epoch": promotion_epoch,
+        "entry_armed_at_epoch": promotion_epoch,
+        "added_time": promotion_epoch,
+        "current_price_observed": observed_price,
+        "buy_price": observed_price,
+        "effective_venue": persisted_venue,
+        "venue": persisted_venue,
+        "venue_resolution": persisted_venue_fields["venue_resolution"],
+    }
+
+
+def _expire_invalid_scanner_scheduler_boot_restore(target, targets, payload):
+    """Expire an unfilled WATCHING row that cannot be safely hydrated."""
+    reason = str(
+        (payload or {}).get("scanner_scheduler_boot_restore_block_reason") or ""
+    ).strip()
+    if not reason:
+        return False
+    record_id = (target or {}).get("id")
+    code = str((target or {}).get("code") or "").strip()[:6]
+    updated = 0
+    try:
+        with DB.get_session() as session:
+            updated = int(
+                session.execute(
+                    text(
+                        """
+                        UPDATE recommendation_history
+                        SET status = 'EXPIRED'
+                        WHERE id = :record_id
+                          AND stock_code = :stock_code
+                          AND status = 'WATCHING'
+                          AND strategy = 'SCALPING'
+                          AND position_tag = 'SCANNER'
+                          AND buy_time IS NULL
+                          AND COALESCE(buy_qty, 0) = 0
+                        """
+                    ),
+                    {"record_id": record_id, "stock_code": code},
+                ).rowcount
+                or 0
+            )
+    except Exception as exc:
+        log_error(
+            "[SCANNER_SCHEDULER] invalid boot restore expiry failed "
+            f"code={code} id={record_id} reason={reason}: {exc}"
+        )
+        return False
+    if updated <= 0:
+        return False
+    target["status"] = "EXPIRED"
+    _emit_scanner_scheduler_event(
+        payload=payload,
+        target=target,
+        stage="scalping_scanner_scheduler_boot_restore_expired",
+        fields={
+            "scheduler_version": SCANNER_DEADLINE_SCHEDULER_VERSION,
+            "scheduler_mode": _scanner_scheduler_startup_mode(),
+            "scheduler_action": "invalid_boot_restore_expired",
+            "scheduler_reason": reason,
+            "scanner_scheduler_boot_persisted_venue": payload.get(
+                "scanner_scheduler_boot_persisted_venue"
+            )
+            or "UNKNOWN",
+            "scanner_scheduler_boot_current_venue": payload.get(
+                "scanner_scheduler_boot_current_venue"
+            )
+            or "UNKNOWN",
+            "scanner_scheduler_boot_promotion_age_sec": payload.get(
+                "scanner_scheduler_boot_promotion_age_sec"
+            )
+            or "not_available",
+            "venue": "UNKNOWN",
+            "effective_venue": "UNKNOWN",
+            "venue_resolution": reason,
+            "runtime_effect": True,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+        },
+    )
+    return True
 
 
 def _drain_scanner_promotion_inbox(scheduler, *, max_items):
@@ -7902,7 +8077,7 @@ def attach_db_poll_target_if_missing(db_target, targets, now_ts):
                 "scanner_watch_budget_owner_source"
             ],
             "scanner_watch_budget_policy": "general1_opening3_rising_residual_v1",
-            **scalping_session_venue_provenance(float(now_ts)),
+            **_scanner_runtime_target_venue_fields({}, target=dt),
         }
         identity_ok, identity_fields = _scanner_identity_guard(
             identity_payload,
@@ -7973,6 +8148,28 @@ def attach_db_poll_target_if_missing(db_target, targets, now_ts):
             )
 
     targets.append(dt)
+    if (
+        dt["strategy"] == "SCALPING"
+        and dt["position_tag"] == "SCANNER"
+        and _scanner_scheduler_startup_mode() in {"deadline_v1", "async_v1"}
+    ):
+        scheduler_payload = _scanner_scheduler_boot_restore_payload(
+            dt,
+            boot_epoch=float(now_ts),
+        )
+        generation = _register_scanner_scheduler_generation(
+            run_sniper.scanner_runtime_scheduler,
+            payload=scheduler_payload,
+            target=dt,
+            attach_epoch=float(now_ts),
+        )
+        if generation is None and _expire_invalid_scanner_scheduler_boot_restore(
+            dt,
+            targets,
+            scheduler_payload,
+        ):
+            targets[:] = [target for target in targets if target is not dt]
+            return False
     reg_payload = {"codes": [code]}
     if dt["strategy"] == "SCALPING" and dt["position_tag"] == "SCANNER":
         reg_payload["source"] = "scanner_db_poll_attach"
@@ -8749,25 +8946,27 @@ def run_sniper(is_test_mode=False):
         for scheduler_target in list(ACTIVE_TARGETS):
             if not _is_scanner_watching_target(scheduler_target):
                 continue
-            scheduler_boot_payload = {
-                **dict(scheduler_target),
-                "scanner_promotion_id": (
-                    "SCANSCHEDBOOT-"
-                    f"{str(scheduler_target.get('code') or '').strip()[:6]}-"
-                    f"{int(scheduler_boot_epoch * 1000)}"
-                ),
-                "scanner_promotion_emitted_epoch": scheduler_boot_epoch,
-                "entry_armed_at_epoch": scheduler_boot_epoch,
-                "added_time": scheduler_boot_epoch,
-                "current_price_observed": 0,
-                "buy_price": 0,
-            }
-            _register_scanner_scheduler_generation(
+            scheduler_boot_payload = _scanner_scheduler_boot_restore_payload(
+                scheduler_target,
+                boot_epoch=scheduler_boot_epoch,
+            )
+            generation = _register_scanner_scheduler_generation(
                 run_sniper.scanner_runtime_scheduler,
                 payload=scheduler_boot_payload,
                 target=scheduler_target,
                 attach_epoch=scheduler_boot_epoch,
             )
+            if generation is None:
+                _expire_invalid_scanner_scheduler_boot_restore(
+                    scheduler_target,
+                    ACTIVE_TARGETS,
+                    scheduler_boot_payload,
+                )
+        ACTIVE_TARGETS[:] = [
+            target
+            for target in ACTIVE_TARGETS
+            if str((target or {}).get("status") or "").upper() != "EXPIRED"
+        ]
     sniper_state_handlers.sync_scalp_simulator_targets_from_state(ACTIVE_TARGETS)
     try:
         run_sniper.last_scalp_sim_state_mtime = (

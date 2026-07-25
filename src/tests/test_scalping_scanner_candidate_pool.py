@@ -330,6 +330,62 @@ def test_scanner_records_source_identity_pass_on_promotion(monkeypatch):
     assert fields["scanner_source_identity_authoritative_name"] == "삼화콘덴서"
 
 
+def test_promote_candidates_persists_same_envelope_published_to_runtime(
+    monkeypatch,
+):
+    db = _DB()
+    db.get_latest_stock_name = lambda code: "삼성전자"
+    event_bus = _EventBus()
+    monkeypatch.setattr(kiwoom_utils, "is_valid_stock", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        scalping_scanner,
+        "_scanner_real_source_guard_decision",
+        lambda *args, **kwargs: {
+            "blocked": False,
+            "reason": "new_price_jump_start_source",
+            "source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+        },
+    )
+    now_ts = datetime(2026, 7, 24, 16, 30).timestamp()
+
+    codes, _recent = scalping_scanner.promote_candidates(
+        db,
+        event_bus,
+        [
+            {
+                "Code": "005930",
+                "Name": "삼성전자",
+                "Price": 70_000,
+                "Source": "PRICE_JUMP_START",
+                "SourceSet": {"PRICE_JUMP_START", "VOLUME_SURGE_POSITIVE"},
+                "PriceJumpFluRate": 2.0,
+                "VolumeSurgeFluRate": 2.0,
+                "VolumeSurgeRate": 10.0,
+            }
+        ],
+        {},
+        max_new_codes=12,
+        reentry_cooldown_sec=1500,
+        token="TOKEN",
+        now_ts=now_ts,
+    )
+
+    assert codes == ["005930"]
+    persisted = db.records[0]
+    published = _event_payloads(
+        event_bus,
+        "SCALPING_SCANNER_PROMOTED_TARGET",
+    )[0]
+    assert persisted.effective_venue == "NXT"
+    assert persisted.market_session_bucket == "nxt"
+    assert persisted.scanner_promotion_id == published["scanner_promotion_id"]
+    assert (
+        persisted.scanner_promotion_emitted_epoch
+        == float(published["scanner_promotion_emitted_epoch"])
+    )
+    assert persisted.scanner_source_signature == published["source_signature"]
+
+
 def test_promote_candidates_skips_when_active_scanner_cap_reached(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE", "1")
     db = _DB()
@@ -2796,6 +2852,32 @@ def test_scanner_runtime_target_payload_keeps_session_cohorts_separate():
     assert nxt["market_session_bucket"] == "nxt"
     assert unsupported["effective_venue"] == "UNKNOWN"
     assert unsupported["market_session_bucket"] == "outside_supported_session"
+
+
+def test_scanner_promotion_provenance_persists_exact_runtime_handoff():
+    record = SimpleNamespace()
+    payload = {
+        "effective_venue": "NXT",
+        "venue_resolution": "session_window:nxt",
+        "market_session_bucket": "nxt",
+        "scanner_promotion_id": "SCANPROM-005930-123",
+        "scanner_promotion_reason": "price_jump_start_acceleration",
+        "scanner_promotion_emitted_epoch": "123.500",
+        "source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+    }
+
+    scalping_scanner._persist_scanner_promotion_provenance(record, payload)
+
+    assert record.effective_venue == "NXT"
+    assert record.venue_resolution == "session_window:nxt"
+    assert record.market_session_bucket == "nxt"
+    assert record.scanner_promotion_id == "SCANPROM-005930-123"
+    assert record.scanner_promotion_reason == "price_jump_start_acceleration"
+    assert record.scanner_promotion_emitted_epoch == 123.5
+    assert (
+        record.scanner_source_signature
+        == "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE"
+    )
 
 
 def test_scalping_session_venue_provenance_normalizes_aware_datetime_to_kst():

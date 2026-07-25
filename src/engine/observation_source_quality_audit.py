@@ -408,6 +408,7 @@ HIGH_VOLUME_DIAGNOSTIC_STAGE_ROLES = {
 SCANNER_SCHEDULER_STAGES = frozenset(
     {
         "scalping_scanner_scheduler_attach_rejected",
+        "scalping_scanner_scheduler_boot_restore_expired",
         "scalping_scanner_scheduler_claim_deferred",
         "scalping_scanner_scheduler_claim_missing",
         "scalping_scanner_scheduler_claim_rejected",
@@ -2335,6 +2336,18 @@ def _reviewed_unknown_reason_for_stage_field(
     def _field_text(field: str) -> str:
         value = normalized.get(field)
         return "" if value is None else str(value).strip()
+
+    if (
+        stage == "scalping_scanner_scheduler_boot_restore_expired"
+        and str(key or "") in {"venue", "effective_venue"}
+        and str(value or "").strip().upper() == "UNKNOWN"
+        and _field_text("venue_resolution").startswith("scanner_scheduler_boot_")
+        and _field_text("decision_authority")
+        == "scanner_runtime_scheduler_only_no_order_authority"
+        and _field_text("actual_order_submitted").lower() in {"false", "0", "no"}
+        and _field_text("broker_order_forbidden").lower() in {"true", "1", "yes"}
+    ):
+        return "reviewed_scanner_boot_restore_fail_closed_provenance"
 
     def _is_reviewed_stale_flag_not_available() -> bool:
         field = str(key or "")
