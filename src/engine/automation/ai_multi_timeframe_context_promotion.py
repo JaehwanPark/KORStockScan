@@ -61,6 +61,7 @@ PREMARKET_REVIEW_END = time(8, 40)
 PREMARKET_APPLY_END = time(9, 0)
 REVIEWED_SOURCE_FILES = (
     "src/engine/automation/ai_multi_timeframe_context_promotion.py",
+    "src/engine/ai_engine_openai.py",
     "src/engine/scalping/multi_timeframe_context.py",
     "src/engine/scalping/entry_candle_context.py",
     "src/engine/scalping/holding_decision_context.py",

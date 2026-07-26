@@ -1880,6 +1880,42 @@ def test_analyze_target_routes_scalping_and_swing_to_expected_tiers(monkeypatch)
     assert used_models == ["gpt-5.4-nano", "tier2-model"]
 
 
+def test_analyze_target_uses_exact_snapshot_stock_code_for_request_provenance(
+    monkeypatch,
+):
+    engine = _build_engine()
+    captured = {}
+
+    monkeypatch.setattr(
+        engine,
+        "_format_market_data",
+        lambda ws, ticks, candles, **kwargs: "scalp-packet",
+    )
+
+    def _fake_call(*args, **kwargs):
+        captured.update(kwargs)
+        return {"action": "WAIT", "score": 60, "reason": "ok"}
+
+    monkeypatch.setattr(engine, "_call_openai_safe", _fake_call)
+
+    engine.analyze_target(
+        "삼성전자",
+        {"curr": 10000, "orderbook": {"asks": [], "bids": []}},
+        [],
+        [],
+        strategy="SCALPING",
+        metadata_extra={"stock_code": "999999"},
+        candle_context={
+            "schema": "entry_candle_context_v1",
+            "enabled": True,
+            "ai_market_snapshot_v1": {"stock_code": "005930"},
+        },
+    )
+
+    assert captured["endpoint_name"] == "analyze_target"
+    assert captured["symbol"] == "005930"
+
+
 def test_analyze_target_routes_scalping_prompt_profiles(monkeypatch):
     engine = _build_engine()
     used_prompts = []
