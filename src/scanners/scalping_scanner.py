@@ -2755,13 +2755,22 @@ def _scanner_event_fields(target, source_guard=None):
     }
 
 
-def _log_scanner_candidate_event(stage, target, source_guard=None):
+def _log_scanner_candidate_event(
+    stage,
+    target,
+    source_guard=None,
+    *,
+    venue_fields=None,
+):
     emit_pipeline_event(
         "ENTRY_PIPELINE",
         str(target.get("Name") or "-"),
         str(target.get("Code") or ""),
         stage,
-        fields=_scanner_event_fields(target, source_guard),
+        fields={
+            **_scanner_event_fields(target, source_guard),
+            **dict(venue_fields or {}),
+        },
     )
 
 
@@ -3219,7 +3228,17 @@ def promote_candidates(
             getattr(TRADING_RULES, "SCALP_SCANNER_REAL_SOURCE_GUARD_ENABLED", False)
         ):
             _log_scanner_candidate_event(
-                "scalping_scanner_candidate_promoted", target, source_guard
+                "scalping_scanner_candidate_promoted",
+                target,
+                source_guard,
+                venue_fields={
+                    key: runtime_target_payload.get(key)
+                    for key in (
+                        "effective_venue",
+                        "venue_resolution",
+                        "market_session_bucket",
+                    )
+                },
             )
         _remember_pick(recent_picks, target, now_ts)
         new_codes_found.append(code)

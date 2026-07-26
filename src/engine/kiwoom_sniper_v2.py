@@ -3772,6 +3772,7 @@ def _maybe_expire_scanner_watch_for_fast_precheck_budget(
                     "runtime_effect": True,
                     "actual_order_submitted": False,
                     "broker_order_forbidden": True,
+                    **_scanner_runtime_target_venue_fields({}, target=target),
                     "retention_reason": decision.get("ws_backoff_retention_reason"),
                     "retention_first_epoch": decision.get(
                         "ws_backoff_retention_first_epoch"
@@ -7314,9 +7315,26 @@ def _register_scanner_scheduler_generation(
         or target.get("source_signature")
         or "",
     )
-    generation = decision.item.generation if decision.item else None
+    generation = (
+        scheduler.current_generation(target.get("code") or payload.get("code"))
+        if decision.action == "generation_coalesced"
+        else (decision.item.generation if decision.item else None)
+    )
     if generation is None:
         with ENTRY_LOCK:
+            if decision.reason in {
+                "same_promotion_provenance_conflict",
+                "promotion_provenance_conflict_quarantined",
+            }:
+                for key in (
+                    "scanner_generation_id",
+                    "scanner_generation_revision",
+                    "scanner_attach_epoch",
+                    "_scanner_scheduler_lane",
+                    "_scanner_scheduler_deadline_epoch",
+                    "_scanner_scheduler_work_id",
+                ):
+                    target.pop(key, None)
             target.update(
                 {
                     "scanner_scheduler_mode": _scanner_scheduler_startup_mode(),
@@ -7337,32 +7355,41 @@ def _register_scanner_scheduler_generation(
             },
         )
         return None
-    with ENTRY_LOCK:
-        target.update(
+    target_updates = {
+        "scanner_generation_id": generation.generation_id,
+        "scanner_generation_revision": generation.revision,
+        "scanner_attach_epoch": generation.attach_epoch,
+        "scanner_scheduler_mode": _scanner_scheduler_startup_mode(),
+        "scanner_scheduler_version": SCANNER_DEADLINE_SCHEDULER_VERSION,
+        "_scanner_scheduler_registration_blocked": False,
+        "_scanner_scheduler_registration_reason": "-",
+        "_scanner_scheduler_boot_restore_isolated": False,
+    }
+    if decision.item is not None:
+        target_updates.update(
             {
-                "scanner_generation_id": generation.generation_id,
-                "scanner_generation_revision": generation.revision,
-                "scanner_attach_epoch": generation.attach_epoch,
-                "scanner_scheduler_mode": _scanner_scheduler_startup_mode(),
-                "scanner_scheduler_version": SCANNER_DEADLINE_SCHEDULER_VERSION,
-                "_scanner_scheduler_lane": ScannerLane.FAST_PRECHECK.value,
-                "_scanner_scheduler_deadline_epoch": (
-                    decision.item.deadline_epoch
-                    if decision.item
-                    else generation.attach_epoch + 2.0
-                ),
-                "_scanner_scheduler_work_id": (
-                    decision.item.work_id if decision.item else ""
-                ),
-                "_scanner_scheduler_registration_blocked": False,
-                "_scanner_scheduler_registration_reason": "-",
-                "_scanner_scheduler_boot_restore_isolated": False,
+                "_scanner_scheduler_lane": decision.item.lane.value,
+                "_scanner_scheduler_deadline_epoch": decision.item.deadline_epoch,
+                "_scanner_scheduler_work_id": decision.item.work_id,
             }
         )
+    with ENTRY_LOCK:
+        if decision.action == "generation_coalesced" and decision.item is None:
+            for key in (
+                "_scanner_scheduler_lane",
+                "_scanner_scheduler_deadline_epoch",
+                "_scanner_scheduler_work_id",
+            ):
+                target.pop(key, None)
+        target.update(target_updates)
     _emit_scanner_scheduler_event(
         payload=payload,
         target=target,
-        stage="scalping_scanner_scheduler_generation_registered",
+        stage=(
+            "scalping_scanner_scheduler_generation_coalesced"
+            if decision.action == "generation_coalesced"
+            else "scalping_scanner_scheduler_generation_registered"
+        ),
         fields={
             **decision.fields,
             "scheduler_reason": decision.reason,
@@ -7527,9 +7554,88 @@ def _expire_invalid_scanner_scheduler_boot_restore(target, targets, payload):
     return True
 
 
+def _scanner_scheduler_coalesce_duplicate_inbox(
+    scheduler,
+    payload,
+    *,
+    inbox_enqueued_epoch,
+):
+    """Discard an event-bus duplicate already recovered from the persisted row."""
+    if not isinstance(scheduler, ScannerRuntimeScheduler):
+        return None
+    payload = dict(payload or {})
+    code = str(payload.get("code") or "").strip()[:6]
+    promotion_id = str(payload.get("scanner_promotion_id") or "").strip()
+    if not code or not promotion_id:
+        return None
+    current = scheduler.current_generation(code)
+    if current is None or current.promotion_id != promotion_id:
+        return None
+    target = next(
+        (
+            item
+            for item in ACTIVE_TARGETS
+            if _is_scanner_watching_target(item)
+            and str((item or {}).get("code") or "").strip()[:6] == code
+            and str((item or {}).get("scanner_generation_id") or "")
+            == current.generation_id
+        ),
+        None,
+    )
+    if target is None:
+        return None
+    venue = _scanner_runtime_target_venue_fields(
+        payload,
+        target=target,
+    )["effective_venue"]
+    observed_price = _safe_int(
+        payload.get("current_price_observed") or payload.get("buy_price"),
+        0,
+    )
+    promotion_epoch = _safe_float(
+        payload.get("scanner_promotion_emitted_epoch"),
+        0.0,
+    )
+    payload_record_id = payload.get("record_id")
+    record_matches = (
+        payload_record_id in (None, "")
+        or current.record_id in (None, "")
+        or str(payload_record_id) == str(current.record_id)
+    )
+    if not (
+        venue == current.venue
+        and abs(promotion_epoch - current.promotion_epoch) <= 1e-6
+        and observed_price == current.observed_price
+        and str(payload.get("source_signature") or "").strip()
+        == current.source_signature
+        and record_matches
+    ):
+        return None
+    _clear_scanner_promotion_pending_attach(code)
+    _emit_scanner_scheduler_event(
+        payload=payload,
+        target=target,
+        stage="scalping_scanner_scheduler_inbox_duplicate_coalesced",
+        fields={
+            **current.timing_fields(now_epoch=time.time()),
+            "scheduler_version": SCANNER_DEADLINE_SCHEDULER_VERSION,
+            "scheduler_mode": _scanner_scheduler_startup_mode(),
+            "scheduler_action": "inbox_duplicate_coalesced",
+            "scheduler_reason": "same_promotion_already_registered_from_db_poll",
+            "scanner_inbox_enqueued_epoch": round(
+                float(inbox_enqueued_epoch),
+                6,
+            ),
+            "scanner_inbox_duplicate_coalesced": True,
+        },
+    )
+    return target
+
+
 def _drain_scanner_promotion_inbox(scheduler, *, max_items):
     drained = 0
     applied = 0
+    coalesced = 0
     applied_targets = []
     while drained < max(1, int(max_items)):
         try:
@@ -7538,6 +7644,14 @@ def _drain_scanner_promotion_inbox(scheduler, *, max_items):
             break
         drained += 1
         payload = dict(envelope.payload)
+        duplicate_target = _scanner_scheduler_coalesce_duplicate_inbox(
+            scheduler,
+            payload,
+            inbox_enqueued_epoch=envelope.enqueued_epoch,
+        )
+        if duplicate_target is not None:
+            coalesced += 1
+            continue
         attach_attempt_epoch = time.time()
         success = _apply_scalping_scanner_promoted_target(
             payload, mutation_lock=ENTRY_LOCK
@@ -7600,6 +7714,7 @@ def _drain_scanner_promotion_inbox(scheduler, *, max_items):
     return {
         "drained": drained,
         "applied": applied,
+        "coalesced": coalesced,
         "applied_targets": tuple(applied_targets),
     }
 
@@ -8036,6 +8151,12 @@ def attach_db_poll_target_if_missing(db_target, targets, now_ts):
             "buy_price": dt.get("buy_price"),
             "added_time": dt["added_time"],
             "entry_armed_at_epoch": dt.get("entry_armed_at_epoch") or dt["added_time"],
+            "scanner_promotion_id": dt.get("scanner_promotion_id"),
+            "scanner_promotion_reason": dt.get("scanner_promotion_reason"),
+            "scanner_promotion_emitted_epoch": dt.get(
+                "scanner_promotion_emitted_epoch"
+            ),
+            "source_signature": dt.get("source_signature"),
             "scanner_watch_budget_owner": dt["scanner_watch_budget_owner"],
             "scanner_watch_budget_owner_source": dt[
                 "scanner_watch_budget_owner_source"
@@ -8117,6 +8238,15 @@ def attach_db_poll_target_if_missing(db_target, targets, now_ts):
         and dt["position_tag"] == "SCANNER"
         and _scanner_scheduler_startup_mode() in {"deadline_v1", "async_v1"}
     ):
+        # The watch-budget owner may have expired replacements immediately
+        # above. Release their scheduler generations before reserving the new
+        # DB-recovered target, otherwise stale slots can create a false
+        # capacity rejection until the next main-loop reconciliation.
+        _scanner_scheduler_reconcile_active_targets(
+            run_sniper.scanner_runtime_scheduler,
+            targets,
+            now_epoch=float(now_ts),
+        )
         scheduler_payload = _scanner_scheduler_boot_restore_payload(
             dt,
             boot_epoch=float(now_ts),

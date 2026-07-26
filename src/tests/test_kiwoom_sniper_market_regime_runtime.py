@@ -645,6 +645,74 @@ def test_deadline_scheduler_callback_only_enqueues_immutable_promotion(monkeypat
         envelope.payload["buy_price"] = 2
 
 
+def test_scheduler_inbox_duplicate_after_db_poll_attach_is_coalesced(monkeypatch):
+    scheduler = kiwoom_sniper_v2.ScannerRuntimeScheduler(max_active=16)
+    inbox = kiwoom_sniper_v2.ScannerPromotionInbox(max_active=16)
+    payload = {
+        "record_id": 77,
+        "code": "005930",
+        "name": "SAMSUNG",
+        "strategy": "SCALPING",
+        "status": "WATCHING",
+        "position_tag": "SCANNER",
+        "effective_venue": "KRX",
+        "venue_resolution": "consistent_explicit:payload.effective_venue",
+        "scanner_promotion_id": "SCANPROM-005930-1000000",
+        "scanner_promotion_emitted_epoch": 1000.0,
+        "current_price_observed": 70_000,
+        "buy_price": 70_000,
+        "source_signature": "REALTIME_RANK_START",
+    }
+    target = dict(payload)
+    registration = scheduler.register_generation(
+        code="005930",
+        promotion_id=payload["scanner_promotion_id"],
+        record_id=payload["record_id"],
+        venue="KRX",
+        promotion_epoch=1000.0,
+        attach_epoch=1000.2,
+        observed_price=70_000,
+        source_signature="REALTIME_RANK_START",
+    )
+    target["scanner_generation_id"] = registration.item.generation.generation_id
+    target["scanner_generation_revision"] = registration.item.generation.revision
+    emitted = []
+    applied = []
+    inbox.put(
+        kiwoom_sniper_v2.ScannerPromotionEnvelope.from_payload(
+            payload,
+            enqueued_epoch=1000.1,
+        )
+    )
+    monkeypatch.setattr(kiwoom_sniper_v2, "ACTIVE_TARGETS", [target])
+    monkeypatch.setattr(kiwoom_sniper_v2, "_SCANNER_PROMOTION_INBOX", inbox)
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "_emit_scanner_scheduler_event",
+        lambda **kwargs: emitted.append(kwargs),
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "_apply_scalping_scanner_promoted_target",
+        lambda *args, **kwargs: applied.append((args, kwargs)) or True,
+    )
+
+    result = kiwoom_sniper_v2._drain_scanner_promotion_inbox(
+        scheduler,
+        max_items=1,
+    )
+
+    assert result["drained"] == 1
+    assert result["applied"] == 0
+    assert result["coalesced"] == 1
+    assert applied == []
+    assert scheduler.current_generation("005930").revision == 1
+    assert (
+        emitted[-1]["stage"]
+        == "scalping_scanner_scheduler_inbox_duplicate_coalesced"
+    )
+
+
 def test_scheduler_boot_generation_does_not_reuse_old_promotion_anchor(
     monkeypatch,
 ):
@@ -8086,6 +8154,8 @@ def test_scanner_fast_precheck_ws_backoff_retains_then_evicts_after_recovery_win
     monkeypatch.setenv("KORSTOCKSCAN_SCANNER_WS_BACKOFF_WATCH_RETENTION_MIN_COUNT", "2")
     target = _scanner_watch_stock(
         code="005930",
+        effective_venue="KRX",
+        venue_resolution="consistent_explicit:target.effective_venue",
         _scanner_fast_precheck_fields={
             "fast_precheck_result": "budget_reallocated",
             "fast_precheck_reason": "scanner_ws_stale_backoff_active",
@@ -8121,6 +8191,8 @@ def test_scanner_fast_precheck_ws_backoff_retains_then_evicts_after_recovery_win
     assert emitted[0][3]["runtime_effect"] is True
     assert emitted[0][3]["actual_order_submitted"] is False
     assert emitted[0][3]["broker_order_forbidden"] is True
+    assert emitted[0][3]["effective_venue"] == "KRX"
+    assert emitted[0][3]["venue_resolution"].startswith("consistent_explicit:")
     assert second["should_evict"] is True
     assert second["eviction_reason"] == "scanner_ws_stale_backoff_recovery_exhausted"
     assert second["eviction_attempt_count"] == 2
@@ -8811,6 +8883,147 @@ def test_db_poll_scanner_target_attach_logs_recovery(monkeypatch):
         == "eventbus_attach_missing_recovered_from_database_poll"
     )
     assert emitted[-1]["fields"]["runtime_record_id"] == 99
+    assert (
+        emitted[-1]["fields"]["scanner_promotion_id"]
+        == "SCANPROM-005930-1000000"
+    )
+    assert emitted[-1]["fields"]["scanner_promotion_emitted_epoch"] == 1000.0
+    assert emitted[-1]["fields"]["source_signature"] == "PRICE_JUMP_START"
+
+
+def test_db_poll_replacement_releases_stale_scheduler_capacity(monkeypatch):
+    old_target = {
+        "id": 1,
+        "code": "000001",
+        "name": "OLD",
+        "strategy": "SCALPING",
+        "status": "WATCHING",
+        "position_tag": "SCANNER",
+        "effective_venue": "KRX",
+    }
+    targets = [old_target]
+    scheduler = kiwoom_sniper_v2.ScannerRuntimeScheduler(max_active=1)
+    old_registration = scheduler.register_generation(
+        code="000001",
+        promotion_id="PROMO-OLD",
+        record_id=1,
+        venue="KRX",
+        promotion_epoch=999.0,
+        attach_epoch=1000.0,
+        observed_price=10_000,
+        source_signature="VALUE_TOP",
+    )
+    assert old_registration.action == "generation_registered"
+    published = []
+    attach_logs = []
+    monkeypatch.setattr(
+        kiwoom_sniper_v2.run_sniper,
+        "scanner_scheduler_mode",
+        "deadline_v1",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2.run_sniper,
+        "scanner_scheduler_venues",
+        frozenset({"KRX", "PREMARKET_KRX_LIKE", "NXT"}),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2.run_sniper,
+        "scanner_runtime_scheduler",
+        scheduler,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "_scalping_attach_capacity_decision",
+        lambda *args, **kwargs: (
+            True,
+            [old_target],
+            {"scanner_watch_budget_owner": "rising_missed"},
+        ),
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "_scalping_attach_replace_enabled",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "_expire_scalping_watch_budget_targets",
+        lambda replacements, *args, **kwargs: [
+            replacement.update({"status": "EXPIRED"})
+            for replacement in replacements
+        ],
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "_scanner_scheduler_boot_restore_payload",
+        lambda target, *, boot_epoch: {
+            **target,
+            "scanner_promotion_id": "PROMO-NEW",
+            "scanner_promotion_emitted_epoch": 1001.0,
+            "current_price_observed": 11_000,
+            "source_signature": "OPEN_TOP",
+            "effective_venue": "KRX",
+            "venue_resolution": "consistent_explicit:target.effective_venue",
+        },
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "_emit_scanner_scheduler_event",
+        lambda **kwargs: None,
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "_scanner_identity_guard",
+        lambda payload, code, price: (
+            True,
+            {"scanner_identity_guard_reason": "identity_verified"},
+        ),
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "_log_scanner_runtime_target_attach",
+        lambda payload, **kwargs: attach_logs.append((payload, kwargs)),
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "event_bus",
+        SimpleNamespace(
+            publish=lambda name, payload: published.append((name, payload))
+        ),
+    )
+
+    attached = kiwoom_sniper_v2.attach_db_poll_target_if_missing(
+        {
+            "id": 2,
+            "code": "000002",
+            "name": "NEW",
+            "strategy": "SCALPING",
+            "status": "WATCHING",
+            "position_tag": "SCANNER",
+            "buy_price": 11_000,
+            "type": "SCALP",
+            "effective_venue": "KRX",
+            "venue_resolution": "consistent_explicit:target.effective_venue",
+            "scanner_promotion_id": "PROMO-NEW",
+            "scanner_promotion_emitted_epoch": 1001.0,
+            "source_signature": "OPEN_TOP",
+        },
+        targets,
+        now_ts=1002.0,
+    )
+
+    assert attached is True, attach_logs
+    assert old_target["status"] == "EXPIRED"
+    assert scheduler.generation_codes() == frozenset({"000002"})
+    assert targets[-1]["scanner_generation_revision"] == 1
+    assert targets[-1]["_scanner_scheduler_registration_blocked"] is False
+    assert published[-1] == (
+        "COMMAND_WS_REG",
+        {"codes": ["000002"], "source": "scanner_db_poll_attach"},
+    )
 
 
 def test_db_poll_scanner_target_skips_manual_control_excluded_code(

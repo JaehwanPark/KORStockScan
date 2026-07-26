@@ -257,6 +257,7 @@ class ScannerRuntimeScheduler:
         self._sequence = itertools.count()
         self._revisions: dict[str, int] = {}
         self._generations: dict[str, ScannerGeneration] = {}
+        self._rejected_promotion_ids: dict[str, str] = {}
         self._work_by_id: dict[str, ScannerWorkItem] = {}
         self._heap: list[tuple[float, int, int, int, str]] = []
         self._in_flight: dict[str, ScannerWorkItem] = {}
@@ -326,6 +327,28 @@ class ScannerRuntimeScheduler:
             )
         with self._lock:
             if (
+                self._rejected_promotion_ids.get(norm_code)
+                == normalized_promotion_id
+            ):
+                return ScannerSchedulerDecision(
+                    action="generation_rejected",
+                    reason="promotion_provenance_conflict_quarantined",
+                    decided_epoch=decided_epoch,
+                    fields={
+                        "scheduler_version": SCANNER_DEADLINE_SCHEDULER_VERSION,
+                        "scheduler_action": "generation_rejected",
+                        "scanner_generation_code": norm_code,
+                        "scanner_promotion_id": normalized_promotion_id,
+                        "scanner_promotion_emitted_epoch": round(
+                            normalized_promotion_epoch, 6
+                        ),
+                        "scanner_attach_epoch": round(decided_epoch, 6),
+                        "effective_venue": normalized_venue,
+                        "scanner_duplicate_provenance_match": False,
+                        "scanner_duplicate_conflict_fields": "quarantined_promotion_id",
+                    },
+                )
+            if (
                 norm_code not in self._generations
                 and len(self._generations) >= self.max_active
             ):
@@ -342,8 +365,69 @@ class ScannerRuntimeScheduler:
                         "scanner_generation_code": norm_code,
                     },
                 )
+            current = self._generations.get(norm_code)
+            if current is not None and current.promotion_id == normalized_promotion_id:
+                incoming_record_id = (
+                    ""
+                    if record_id in (None, "")
+                    else str(record_id)
+                )
+                current_record_id = (
+                    ""
+                    if current.record_id in (None, "")
+                    else str(current.record_id)
+                )
+                conflicts = []
+                if current.venue != normalized_venue:
+                    conflicts.append("venue")
+                if abs(current.promotion_epoch - normalized_promotion_epoch) > 1e-6:
+                    conflicts.append("promotion_epoch")
+                if current.observed_price != max(0, int(observed_price or 0)):
+                    conflicts.append("observed_price")
+                if current.source_signature != str(source_signature or "").strip():
+                    conflicts.append("source_signature")
+                if (
+                    incoming_record_id
+                    and current_record_id
+                    and incoming_record_id != current_record_id
+                ):
+                    conflicts.append("record_id")
+                fields = current.timing_fields(now_epoch=decided_epoch)
+                fields.update(
+                    {
+                        "scanner_duplicate_attach_epoch": round(decided_epoch, 6),
+                        "scanner_duplicate_provenance_match": not conflicts,
+                        "scanner_duplicate_conflict_fields": (
+                            ",".join(conflicts) if conflicts else "-"
+                        ),
+                    }
+                )
+                if conflicts:
+                    superseded = self._invalidate_code_locked(norm_code)
+                    self._generations.pop(norm_code, None)
+                    self._rejected_promotion_ids[norm_code] = (
+                        normalized_promotion_id
+                    )
+                    fields["scheduler_action"] = "generation_rejected"
+                    fields["scheduler_superseded_count"] = len(superseded)
+                    return ScannerSchedulerDecision(
+                        action="generation_rejected",
+                        reason="same_promotion_provenance_conflict",
+                        decided_epoch=decided_epoch,
+                        superseded_work_ids=tuple(superseded),
+                        fields=fields,
+                    )
+                fields["scheduler_action"] = "generation_coalesced"
+                return ScannerSchedulerDecision(
+                    action="generation_coalesced",
+                    reason="same_promotion_already_registered",
+                    decided_epoch=decided_epoch,
+                    item=self._latest_item_locked(current),
+                    fields=fields,
+                )
             revision = self._revisions.get(norm_code, 0) + 1
             self._revisions[norm_code] = revision
+            self._rejected_promotion_ids.pop(norm_code, None)
             generation = ScannerGeneration(
                 code=norm_code,
                 promotion_id=normalized_promotion_id,
@@ -852,10 +936,20 @@ class ScannerRuntimeScheduler:
     def _latest_item_locked(
         self, generation: ScannerGeneration
     ) -> ScannerWorkItem | None:
-        return next(
+        queued = next(
             (
                 item
                 for item in self._work_by_id.values()
+                if item.generation.generation_id == generation.generation_id
+            ),
+            None,
+        )
+        if queued is not None:
+            return queued
+        return next(
+            (
+                item
+                for item in self._in_flight.values()
                 if item.generation.generation_id == generation.generation_id
             ),
             None,
