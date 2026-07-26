@@ -1466,6 +1466,77 @@ def get_index_daily_ka20006(token, inds_cd="001"):
     return None, None
 
 
+def get_index_minute_candles_ka20005_with_meta(token, inds_cd="001", limit=60):
+    """Return canonical one-minute industry/index rows and Kiwoom provenance."""
+
+    requested_limit = max(1, int(limit or 1))
+    cache_key = (str(inds_cd), requested_limit)
+    cached = _cache_get("ka20005_index_minutes_with_meta", cache_key)
+    if cached is not None:
+        return cached
+
+    url = get_api_url("/api/dostk/chart")
+    results, source_meta = _fetch_kiwoom_api_continuous_with_meta(
+        url=url,
+        token=token,
+        api_id="ka20005",
+        payload={"inds_cd": str(inds_cd), "tic_scope": "1"},
+        use_continuous=False,
+        max_pages=1,
+    )
+    source_meta = _normalize_kiwoom_source_meta(
+        source_meta, "ka20005", requested_limit=requested_limit
+    )
+    raw_rows = []
+    for response in results or []:
+        rows = response.get("inds_min_pole_qry", [])
+        if isinstance(rows, list):
+            raw_rows.extend(row for row in rows if isinstance(row, dict))
+
+    normalized = []
+    for row in raw_rows:
+        raw_time = "".join(
+            char for char in str(row.get("cntr_tm") or "") if char.isdigit()
+        )
+        if len(raw_time) >= 14:
+            source_timestamp = raw_time[:14]
+        elif len(raw_time) >= 6:
+            source_timestamp = datetime.now().strftime("%Y%m%d") + raw_time[-6:]
+        else:
+            source_timestamp = raw_time
+        display_time = (
+            f"{source_timestamp[8:10]}:{source_timestamp[10:12]}:"
+            f"{source_timestamp[12:14]}"
+            if len(source_timestamp) >= 14
+            else str(row.get("cntr_tm") or "")
+        )
+        normalized.append(
+            {
+                "source_timestamp": source_timestamp,
+                "체결시간": display_time,
+                "현재가": row.get("cur_prc"),
+                "시가": row.get("open_pric"),
+                "고가": row.get("high_pric"),
+                "저가": row.get("low_pric"),
+                "거래량": row.get("trde_qty"),
+            }
+        )
+    normalized.sort(key=lambda item: str(item.get("source_timestamp") or ""))
+    normalized = normalized[-requested_limit:]
+    source_meta.update(
+        {
+            "received_count": len(raw_rows),
+            "returned_count": len(normalized),
+            "sort_direction_detected": _detect_sort_direction(raw_rows, "cntr_tm"),
+            "latest_source_timestamp": (
+                normalized[-1].get("source_timestamp") if normalized else None
+            ),
+        }
+    )
+    result = (normalized, source_meta)
+    return _cache_set("ka20005_index_minutes_with_meta", cache_key, result, 5.0)
+
+
 def get_realtime_hot_stocks_ka00198(token, config=None, as_dict=True):
     """
     [ka00198] 실시간 종목조회 순위 데이터 전체 파싱

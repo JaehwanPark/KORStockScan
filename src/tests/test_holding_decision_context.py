@@ -31,6 +31,10 @@ def _enable(monkeypatch) -> None:
     monkeypatch.setenv("KORSTOCKSCAN_HOLDING_SCORE_CONTEXT_ENABLED", "true")
     monkeypatch.setenv("KORSTOCKSCAN_HOLDING_FLOW_CONTEXT_ENABLED", "true")
     monkeypatch.setenv("KORSTOCKSCAN_OVERNIGHT_CONTEXT_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_MULTI_TIMEFRAME_AI_CONTEXT_ENABLED", "true")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_MULTI_TIMEFRAME_AI_CONTEXT_ACTIVE_DATE", "2026-07-23"
+    )
 
 
 def test_holding_snapshot_collects_null_aware_investor_source(monkeypatch):
@@ -154,6 +158,101 @@ def _stock() -> dict:
     }
 
 
+def test_holding_excursion_context_tracks_mfe_mae_and_rebaselines():
+    stock = {"buy_qty": 10}
+
+    state_handlers._update_holding_excursion_context(
+        stock,
+        average_entry_price=10_000,
+        current_profit_pct=1.2,
+        peak_profit_pct=1.8,
+        now_ts=100.0,
+    )
+    state_handlers._update_holding_excursion_context(
+        stock,
+        average_entry_price=10_000,
+        current_profit_pct=-0.7,
+        peak_profit_pct=1.8,
+        now_ts=110.0,
+    )
+
+    assert stock["mfe_pct"] == 1.8
+    assert stock["mae_pct"] == -0.7
+    assert stock["excursion_tracking_started_at"] == 100.0
+    assert stock["excursion_context_authority"] == "instrumentation_only"
+
+    stock["buy_qty"] = 15
+    state_handlers._update_holding_excursion_context(
+        stock,
+        average_entry_price=9_900,
+        current_profit_pct=0.2,
+        peak_profit_pct=0.4,
+        now_ts=120.0,
+    )
+    assert stock["mfe_pct"] == 0.4
+    assert stock["mae_pct"] == 0.2
+    assert stock["excursion_tracking_started_at"] == 120.0
+
+
+def test_holding_snapshot_recovers_program_context_from_position_state(
+    monkeypatch,
+):
+    _enable(monkeypatch)
+    now = datetime(2026, 7, 23, 10, 0, 30, tzinfo=KST)
+    stock = _stock()
+    stock.update(
+        {
+            "program_context": {"net_qty": 1234, "delta_qty": 50},
+            "program_source": "position_runtime_state",
+            "program_observed_ts": now.timestamp(),
+        }
+    )
+
+    context = build_holding_decision_context(
+        None,
+        "000660",
+        _ws(now),
+        stock,
+        "KRX",
+        "krx_regular",
+        "holding_score",
+        now_ts=now,
+        recent_candles=_candles(
+            60, start=datetime(2026, 7, 23, 9, 0, tzinfo=KST)
+        ),
+    )
+
+    program = context["ai_market_snapshot_v1"]["sources"]["program"]
+    assert program["quality"] == "fresh"
+    assert program["source"] == "position_runtime_state"
+    assert program["value"]["net_qty"] == 1234
+
+
+def test_holding_model_omits_multi_timeframe_before_global_promotion(monkeypatch):
+    _enable(monkeypatch)
+    monkeypatch.setenv("KORSTOCKSCAN_MULTI_TIMEFRAME_AI_CONTEXT_ENABLED", "false")
+    now = datetime(2026, 7, 23, 10, 0, 30, tzinfo=KST)
+    context = build_holding_decision_context(
+        None,
+        "000660",
+        _ws(now),
+        _stock(),
+        "KRX",
+        "krx_regular",
+        "holding_score",
+        now_ts=now,
+        recent_candles=_candles(
+            60, start=datetime(2026, 7, 23, 9, 0, tzinfo=KST)
+        ),
+    )
+
+    assert "multi_timeframe_context" in context["candle"]
+    payload = holding_decision_context_model_payload(context)
+    assert payload["candle"]["multi_timeframe_ai_input_enabled"] is False
+    assert "multi_timeframe_context" not in payload["candle"]
+    assert "input_bundle_version" not in payload["candle"]
+
+
 def test_fresh_krx_context_contains_sixty_minute_structure_and_executable_pnl(
     monkeypatch,
 ):
@@ -174,10 +273,16 @@ def test_fresh_krx_context_contains_sixty_minute_structure_and_executable_pnl(
 
     assert context["schema"] == "holding_decision_context_v1"
     assert context["enabled"] is True
-    assert context["candle"]["current_session_bar_count"] == 60
+    assert context["candle"]["current_session_bar_count"] == 61
     assert len(context["candle"]["bars"]) == 20
     assert context["candle"]["structure"]["returns_pct"]["1"] is not None
-    assert context["candle"]["structure"]["returns_pct"]["60"] is not None
+    assert context["candle"]["structure"]["returns_pct"]["60"] is None
+    assert (
+        context["candle"]["structure"]["window_source_bar_counts"]["60"][
+            "return_complete"
+        ]
+        is False
+    )
     assert context["execution_pnl"]["mark_pnl_pct"] == 3.0
     assert context["execution_pnl"]["executable_pnl_pct"] == 2.99
     assert context["source_quality"]["hold_defer_allowed"] is True
@@ -185,6 +290,10 @@ def test_fresh_krx_context_contains_sixty_minute_structure_and_executable_pnl(
     model_payload = holding_decision_context_model_payload(context)
     assert model_payload["schema"] == "holding_decision_context_v1"
     assert model_payload["candle"]["model_bar_count"] == 20
+    assert (
+        model_payload["candle"]["input_bundle_version"]
+        == "scalping_multi_timeframe_context_v1"
+    )
     assert model_payload["candle"]["bar_schema"] == {
         "sequence": "oldest_to_latest",
         "timezone": "Asia/Seoul",
@@ -205,11 +314,49 @@ def test_fresh_krx_context_contains_sixty_minute_structure_and_executable_pnl(
     log_fields = holding_decision_context_log_fields(context)
     assert len(log_fields["holding_context_model_bars"]) == 20
     assert (
-        log_fields["holding_context_model_structure"]["returns_pct"]["60"] is not None
+        log_fields["holding_context_model_structure"]["returns_pct"]["60"] is None
     )
     assert log_fields["holding_context_ai_market_snapshot"]["schema"] == (
         "ai_market_snapshot_v1"
     )
+
+
+def test_entry_time_context_is_logged_exactly_but_not_duplicated_in_model_payload(
+    monkeypatch,
+):
+    _enable(monkeypatch)
+    now = datetime(2026, 7, 23, 10, 0, 30, tzinfo=KST)
+    entry_time_context = {
+        "entry_context_quality": "complete",
+        "entry_liquidity_score": 73.5,
+        "fillability_score": 68.0,
+        "source": "last_watching_ai_source_quality_fields",
+    }
+    context = build_holding_decision_context(
+        None,
+        "000660",
+        _ws(now),
+        {**_stock(), "entry_time_context": entry_time_context},
+        "KRX",
+        "krx_regular",
+        "holding_flow",
+        now_ts=now,
+        recent_candles=_candles(
+            60,
+            start=datetime(2026, 7, 23, 9, 0, tzinfo=KST),
+        ),
+        candle_meta={"api_id": "ka10080", "received_count": 60},
+    )
+
+    log_fields = holding_decision_context_log_fields(context)
+    model_payload = holding_decision_context_model_payload(context)
+    assert log_fields["holding_context_entry_time_context_status"] == (
+        "exact_captured"
+    )
+    assert log_fields["holding_context_entry_time_context"] == entry_time_context
+    assert len(log_fields["holding_context_entry_time_context_sha256"]) == 64
+    assert "entry_time_context_provenance" not in model_payload
+    assert "entry_time_context" not in model_payload
 
 
 def test_nxt_route_and_conflicting_ws_route_are_kept_separate(monkeypatch):

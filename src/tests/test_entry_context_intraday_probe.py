@@ -309,6 +309,232 @@ def test_live_openai_restores_temporary_rules_override(monkeypatch):
     assert results[0]["action_score_mismatch"] is False
 
 
+def test_live_openai_retries_semantic_failure_and_records_provenance(monkeypatch):
+    from src.engine import ai_engine_openai as openai_module
+
+    finalized = []
+    responses = [
+        {
+            "action": "WAIT",
+            "score": 55,
+            "issue": "insufficient_context",
+            "confidence": 0.4,
+            "missing_features": ["stop_loss"],
+            "reason": "needs stop data",
+        },
+        {
+            "action": "WAIT",
+            "score": 55,
+            "issue": "insufficient_context",
+            "confidence": 0.4,
+            "missing_features": ["signed_tape"],
+            "reason": "signed tape unavailable",
+        },
+    ]
+
+    class FakeEngine:
+        def __init__(self, keys, announce_startup=False):
+            self.last = {}
+
+        def _call_openai_safe(self, *args, **kwargs):
+            response = responses.pop(0)
+            self.last = {
+                "openai_request_id": f"request-{len(responses)}",
+                "openai_response_id": f"response-{len(responses)}",
+                "openai_transport_mode": "http",
+                "openai_model": "gpt-5-nano",
+                "openai_input_tokens": 100,
+                "openai_output_tokens": 20,
+                "openai_total_tokens": 120,
+            }
+            return response
+
+        def _consume_last_transport_meta(self):
+            result = dict(self.last)
+            self.last = {}
+            return result
+
+    monkeypatch.setattr(openai_module, "GPTSniperEngine", FakeEngine)
+    monkeypatch.setattr(mod, "_api_keys", lambda: ["test-key"])
+    monkeypatch.setattr(
+        mod,
+        "record_ai_decision_trace",
+        lambda result, **kwargs: finalized.append((dict(result), dict(kwargs))) or {},
+    )
+
+    result = mod._call_openai(
+        [_base_row()], model="gpt-5-nano", effort="minimal"
+    )[0]
+
+    assert result["status"] == "accepted"
+    assert result["correction_attempted"] is True
+    assert result["attempt_count"] == 2
+    assert result["missing_features"] == ["signed_tape"]
+    assert result["provider"] == "openai"
+    assert result["request_id"] == "request-0"
+    assert result["provider_response_id"] == "response-0"
+    assert result["total_tokens"] == 120
+    assert len(result["response_sha256"]) == 64
+    assert [row[0]["openai_request_id"] for row in finalized] == [
+        "request-1",
+        "request-0",
+    ]
+    assert [row[1]["result_source"] for row in finalized] == [
+        "schema_semantic_rejected_retry",
+        "forensic_observation_accepted",
+    ]
+    assert all(row[1]["provider_called"] is True for row in finalized)
+    assert all(row[0]["actual_order_authority"] is False for row in finalized)
+
+
+def test_live_openai_rejects_second_stage_semantic_failure(monkeypatch):
+    from src.engine import ai_engine_openai as openai_module
+
+    class FakeEngine:
+        def __init__(self, keys, announce_startup=False):
+            pass
+
+        def _call_openai_safe(self, *args, **kwargs):
+            return {
+                "action": "WAIT",
+                "score": 55,
+                "issue": "stop_loss_timing",
+                "confidence": 0.4,
+                "missing_features": ["soft_stop"],
+                "reason": "손절 정보 필요",
+            }
+
+    monkeypatch.setattr(openai_module, "GPTSniperEngine", FakeEngine)
+    monkeypatch.setattr(mod, "_api_keys", lambda: ["test-key"])
+
+    result = mod._call_openai(
+        [_base_row()], model="gpt-5-nano", effort="minimal"
+    )[0]
+
+    assert result["status"] == "schema_semantic_rejected"
+    assert result["attempt_count"] == 2
+    assert result["semantic_errors"] == [
+        "issue_invalid",
+        "missing_features_semantic_invalid",
+        "reason_non_ascii",
+    ]
+
+
+def test_physical_provider_called_requires_transport_attempt_on_exception():
+    pre_send_meta = {
+        "openai_model": "gpt-5-nano",
+        "openai_transport_mode": "http",
+    }
+    attempted_meta = {
+        **pre_send_meta,
+        "openai_http_attempt_count": 1,
+    }
+
+    assert (
+        mod._physical_provider_called(
+            pre_send_meta,
+            response_returned=False,
+        )
+        is False
+    )
+    assert (
+        mod._physical_provider_called(
+            attempted_meta,
+            response_returned=False,
+        )
+        is True
+    )
+    assert (
+        mod._physical_provider_called(
+            pre_send_meta,
+            response_returned=True,
+        )
+        is True
+    )
+
+
+def test_live_openai_request_and_final_trace_are_one_to_one(monkeypatch, tmp_path):
+    from src.engine import ai_engine_openai as openai_module
+    from src.engine.scalping import ai_decision_trace as trace_module
+
+    monkeypatch.setenv("KORSTOCKSCAN_AI_DECISION_TRACE_ENABLED", "true")
+    monkeypatch.setattr(trace_module, "DATA_DIR", tmp_path)
+    trace_module._SEEN_PAYLOAD_HASHES.clear()
+    trace_module._SEEN_PROMPT_HASHES.clear()
+    trace_module._SEEN_TRACE_IDS.clear()
+    trace_module._SEEN_REQUEST_IDS.clear()
+    trace_module._SEEN_OUTCOME_LABEL_IDS.clear()
+    monkeypatch.setattr(
+        mod,
+        "record_ai_decision_trace",
+        trace_module.record_ai_decision_trace,
+    )
+
+    class FakeEngine:
+        def __init__(self, keys, announce_startup=False):
+            self.last = {}
+
+        def _call_openai_safe(self, prompt, user_input, **kwargs):
+            request_id = "forensic-request-1"
+            captured = trace_module.capture_ai_request(
+                prompt=prompt,
+                user_input=user_input,
+                endpoint_name=kwargs["endpoint_name"],
+                symbol=kwargs["symbol"],
+                request_id=request_id,
+                model=kwargs["model_override"],
+                schema_name="entry_v1",
+                require_json=kwargs["require_json"],
+            )
+            self.last = {
+                **captured,
+                "openai_request_id": request_id,
+                "openai_response_id": "forensic-response-1",
+                "openai_transport_mode": "http",
+                "openai_model": kwargs["model_override"],
+            }
+            return {
+                "action": "WAIT",
+                "score": 55,
+                "issue": "insufficient_context",
+                "confidence": 0.4,
+                "missing_features": ["signed_tape"],
+                "reason": "signed tape unavailable",
+            }
+
+        def _consume_last_transport_meta(self):
+            result = dict(self.last)
+            self.last = {}
+            return result
+
+    monkeypatch.setattr(openai_module, "GPTSniperEngine", FakeEngine)
+    monkeypatch.setattr(mod, "_api_keys", lambda: ["test-key"])
+
+    result = mod._call_openai(
+        [_base_row()],
+        model="gpt-5-nano",
+        effort="minimal",
+    )[0]
+
+    request_rows = [
+        json.loads(line)
+        for line in trace_module._request_path(
+            trace_module._date_text()
+        ).read_text(encoding="utf-8").splitlines()
+    ]
+    trace_rows = [
+        json.loads(line)
+        for line in trace_module._trace_path(
+            trace_module._date_text()
+        ).read_text(encoding="utf-8").splitlines()
+    ]
+    assert result["status"] == "accepted"
+    assert [row["request_id"] for row in request_rows] == ["forensic-request-1"]
+    assert [row["request_id"] for row in trace_rows] == ["forensic-request-1"]
+    assert trace_rows[0]["provider_actual"] == "openai"
+    assert trace_rows[0]["result_source"] == "forensic_observation_accepted"
+
+
 def test_provider_endpoint_compare_runs_bedrock_primary_and_openai_then_restores_env(
     monkeypatch,
 ):
@@ -368,9 +594,16 @@ def test_provider_endpoint_compare_runs_bedrock_primary_and_openai_then_restores
                 "order_price": 10005 if bedrock_route else 10010,
                 "confidence": 62,
                 "reason": "bedrock compare" if bedrock_route else "openai compare",
-                "openai_transport_mode": "bedrock_primary" if bedrock_route else "http",
+                "openai_transport_mode": (
+                    "bedrock_primary" if bedrock_route else "http"
+                ),
                 "bedrock_primary_used": bedrock_route,
                 "bedrock_failback_used": False,
+                (
+                    "bedrock_response_sha256"
+                    if bedrock_route
+                    else "openai_response_sha256"
+                ): ("a" if bedrock_route else "b") * 64,
             }
 
         def evaluate_scalping_holding_flow(
@@ -397,9 +630,16 @@ def test_provider_endpoint_compare_runs_bedrock_primary_and_openai_then_restores
                 "reason": (
                     "bedrock flow compare" if bedrock_route else "openai flow compare"
                 ),
-                "openai_transport_mode": "bedrock_primary" if bedrock_route else "http",
+                "openai_transport_mode": (
+                    "bedrock_primary" if bedrock_route else "http"
+                ),
                 "bedrock_primary_used": bedrock_route,
                 "bedrock_failback_used": False,
+                (
+                    "bedrock_response_sha256"
+                    if bedrock_route
+                    else "openai_response_sha256"
+                ): ("c" if bedrock_route else "d") * 64,
             }
 
     rows_by_point = {
@@ -430,8 +670,25 @@ def test_provider_endpoint_compare_runs_bedrock_primary_and_openai_then_restores
                 "flow_state": "absorption",
                 "profit_rate": "0.20",
                 "peak_profit": "0.80",
-                "entry_context_quality": "partial",
-                "ai_input_source_quality_status": "partial",
+                "holding_context_entry_time_context": {
+                    "entry_context_quality": "complete",
+                    "entry_liquidity_score": 72,
+                    "source": "same_event_test_fixture",
+                },
+                "holding_context_entry_time_context_status": "exact_captured",
+                "holding_context_entry_time_context_sha256": (
+                    mod._canonical_sha256(
+                        {
+                            "entry_context_quality": "complete",
+                            "entry_liquidity_score": 72,
+                            "source": "same_event_test_fixture",
+                        }
+                    )
+                ),
+                "ai_input_source_quality_status": "fresh_consistent",
+                "ai_input_preflight_allowed": True,
+                "ai_input_preflight_position_reconciled": True,
+                "ai_input_preflight_venue_consistent": True,
             }
         ],
     }
@@ -500,6 +757,225 @@ def test_provider_endpoint_compare_skips_source_quality_contract_gaps(monkeypatc
     )
 
 
+def test_provider_endpoint_compare_scans_past_invalid_row_for_valid_sample(monkeypatch):
+    from src.engine import ai_engine_openai as openai_module
+
+    class FakeEngine:
+        def __init__(self, keys, announce_startup=False):
+            pass
+
+        def evaluate_scalping_entry_price(self, *args, **kwargs):
+            return {
+                "action": "USE_DEFENSIVE",
+                "order_price": 10000,
+                "confidence": 60,
+                "reason": "valid forensic row",
+                "openai_transport_mode": "http",
+                "openai_request_id": "request-valid",
+                "openai_response_id": "response-valid",
+                "openai_response_sha256": "b" * 64,
+            }
+
+    monkeypatch.setattr(openai_module, "GPTSniperEngine", FakeEngine)
+    monkeypatch.setattr(mod, "_api_keys", lambda: ["test-key"])
+    result = mod._run_endpoint_provider_compare(
+        {
+            "entry_price": [
+                {
+                    "stock_code": "invalid",
+                    "openai_endpoint_name": "entry_price",
+                },
+                {
+                    "stock_code": "valid",
+                    "stock_name": "Valid",
+                    "ai_input_schema": "entry_price_compact_v1",
+                    "action": "USE_DEFENSIVE",
+                    "order_price": "10000",
+                    "quote_age_ms": "100",
+                    "quote_stale": False,
+                    "entry_liquidity_score": "70",
+                    "fillability_score": "65",
+                    "order_flow_pressure_score": "61",
+                    "entry_context_quality": "partial",
+                    "ai_input_source_quality_status": "partial",
+                },
+            ]
+        },
+        provider_mode="openai_only",
+        provider_label="openai_only",
+        model="gpt-5.4-mini",
+        effort="low",
+        sample_limit=1,
+        points=("entry_price",),
+    )
+
+    assert result["entry_price"]["summary"]["row_count"] == 1
+    assert any(
+        row.get("stock_code") == "valid" and row["status"] == "ok"
+        for row in result["entry_price"]["results"]
+    )
+
+
+def test_provider_endpoint_compare_fails_provider_none(monkeypatch):
+    from src.engine import ai_engine_openai as openai_module
+
+    class FakeEngine:
+        def __init__(self, keys, announce_startup=False):
+            pass
+
+        def evaluate_scalping_entry_price(self, *args, **kwargs):
+            return {
+                "action": "USE_DEFENSIVE",
+                "order_price": 10_000,
+                "confidence": 60,
+                "reason": "local fallback without provider provenance",
+            }
+
+    monkeypatch.setattr(openai_module, "GPTSniperEngine", FakeEngine)
+    monkeypatch.setattr(mod, "_api_keys", lambda: ["test-key"])
+    result = mod._run_endpoint_provider_compare(
+        {
+            "entry_price": [
+                {
+                    "stock_code": "provider-none",
+                    "ai_input_schema": "entry_price_compact_v1",
+                    "order_price": "10000",
+                    "quote_age_ms": "100",
+                    "quote_stale": False,
+                    "entry_liquidity_score": "70",
+                    "fillability_score": "65",
+                    "order_flow_pressure_score": "61",
+                    "entry_context_quality": "partial",
+                    "ai_input_source_quality_status": "partial",
+                },
+            ]
+        },
+        provider_mode="openai_only",
+        provider_label="openai_only",
+        model="gpt-5.4-mini",
+        effort="low",
+        sample_limit=1,
+        points=("entry_price",),
+    )
+
+    row = result["entry_price"]["results"][0]
+    assert row["status"] == "error"
+    assert row["error_type"] == "provider_none"
+    assert result["entry_price"]["summary"]["row_count"] == 0
+    assert result["entry_price"]["summary"]["error_count"] == 1
+    assert result["entry_price"]["summary"]["provider_none_count"] == 1
+
+
+def test_provider_endpoint_compare_does_not_treat_transport_only_as_success(
+    monkeypatch,
+):
+    from src.engine import ai_engine_openai as openai_module
+
+    class FakeEngine:
+        def __init__(self, keys, announce_startup=False):
+            pass
+
+        def evaluate_scalping_entry_price(self, *args, **kwargs):
+            return {
+                "action": "USE_DEFENSIVE",
+                "order_price": 10_000,
+                "confidence": 60,
+                "reason": "local fallback with requested transport metadata",
+                "provider": "openai",
+                "openai_transport_mode": "http",
+                "openai_model": "gpt-5.4-mini",
+            }
+
+    monkeypatch.setattr(openai_module, "GPTSniperEngine", FakeEngine)
+    monkeypatch.setattr(mod, "_api_keys", lambda: ["test-key"])
+    result = mod._run_endpoint_provider_compare(
+        {
+            "entry_price": [
+                {
+                    "stock_code": "transport-only",
+                    "ai_input_schema": "entry_price_compact_v1",
+                    "order_price": "10000",
+                    "quote_age_ms": "100",
+                    "quote_stale": False,
+                    "entry_liquidity_score": "70",
+                    "fillability_score": "65",
+                    "order_flow_pressure_score": "61",
+                    "entry_context_quality": "partial",
+                    "ai_input_source_quality_status": "partial",
+                },
+            ]
+        },
+        provider_mode="openai_only",
+        provider_label="openai_only",
+        model="gpt-5.4-mini",
+        effort="low",
+        sample_limit=1,
+        points=("entry_price",),
+    )
+
+    row = result["entry_price"]["results"][0]
+    assert row["status"] == "error"
+    assert row["error_type"] == "provider_none"
+    assert row["provider"] == "none"
+
+
+def test_holding_score_forensic_endpoint_records_provider_provenance(monkeypatch):
+    from src.engine import ai_engine_openai as openai_module
+
+    class FakeEngine:
+        def __init__(self, keys, announce_startup=False):
+            pass
+
+        def evaluate_scalping_holding_score(self, *args, **kwargs):
+            assert kwargs["metadata_extra"]["source_event_stage"].endswith(
+                "provider_compare"
+            )
+            return {
+                "action": "HOLD",
+                "score": 73,
+                "confidence": 68,
+                "reason": "holding context remains valid",
+                "openai_transport_mode": "http",
+                "openai_request_id": "hold-request-1",
+                "openai_response_id": "hold-response-1",
+                "openai_response_sha256": "a" * 64,
+                "openai_model": "gpt-5-nano",
+                "openai_total_tokens": 140,
+            }
+
+    monkeypatch.setattr(openai_module, "GPTSniperEngine", FakeEngine)
+    monkeypatch.setattr(mod, "_api_keys", lambda: ["test-key"])
+    result = mod._run_endpoint_provider_compare(
+        {
+            "holding_score": [
+                {
+                    "stock_code": "096770",
+                    "stock_name": "SK Innovation",
+                    "ai_input_schema": "holding_score_v2",
+                    "holding_score_data_quality": "partial",
+                    "entry_context_quality": "partial",
+                    "profit_rate": "0.2",
+                    "peak_profit": "0.5",
+                }
+            ]
+        },
+        provider_mode="openai_only",
+        provider_label="openai_holding_score_forensics",
+        model="gpt-5-nano",
+        effort="minimal",
+        sample_limit=1,
+        points=("holding_score",),
+    )
+
+    row = result["holding_score"]["results"][0]
+    assert row["status"] == "ok"
+    assert row["provider"] == "openai"
+    assert row["request_id"] == "hold-request-1"
+    assert row["provider_response_id"] == "hold-response-1"
+    assert row["response_sha256"] == "a" * 64
+    assert result["holding_score"]["summary"]["provider_none_count"] == 0
+
+
 def test_decision_point_rows_prefers_latest_emitted_at():
     rows = mod._decision_point_rows(
         [],
@@ -560,6 +1036,154 @@ def test_holding_provider_probe_rehydrates_model_bars_and_structured_flags():
     assert len(candles) == 20
     assert candles[-1]["close"] == 10020
     assert candles[-1]["forming"] is True
+
+
+def test_forensic_provider_rehydration_converts_logged_numeric_strings():
+    fields = {
+        "current_price": "12345",
+        "latest_strength": "101.5",
+        "buy_pressure_10t": "62.3",
+        "buy_exec_volume": "120",
+        "sell_exec_volume": "80",
+        "top3_ask_notional": "1000000",
+        "top3_bid_notional": "1200000",
+        "quote_age_ms": "250",
+        "buy_price": "12000",
+        "profit_rate": "2.5",
+        "peak_profit": "3.0",
+        "score": "71",
+    }
+
+    ws_data = mod._fields_to_ws_data(fields)
+    position = mod._fields_to_position_ctx(fields)
+
+    assert ws_data["curr"] == 12345
+    assert ws_data["v_pw"] == 101.5
+    assert ws_data["buy_ratio"] == 62.3
+    assert ws_data["quote_age_ms"] == 250.0
+    assert position["buy_price"] == 12000
+    assert position["curr_price"] == 12345
+    assert position["current_ai_score"] == 71.0
+
+
+def test_holding_flow_exact_context_recovery_verifies_same_event_hash():
+    context = {
+        "entry_context_quality": "complete",
+        "entry_liquidity_score": 74,
+        "source": "last_watching_ai_source_quality_fields",
+    }
+    fields, provenance = mod._recover_holding_flow_exact_context(
+        {
+            "record_id": 123,
+            "holding_context_entry_time_context": context,
+            "holding_context_entry_time_context_status": "exact_captured",
+            "holding_context_entry_time_context_sha256": mod._canonical_sha256(
+                context
+            ),
+        }
+    )
+
+    assert provenance["status"] == "exact_recovered"
+    assert provenance["record_id"] == 123
+    assert provenance["runtime_effect"] is False
+    assert provenance["actual_order_submitted"] is False
+    assert fields["entry_time_context"] == context
+    assert mod._fields_to_position_ctx(fields)["entry_time_context"] == context
+
+
+def test_holding_flow_exact_context_recovery_rejects_hash_mismatch():
+    fields, provenance = mod._recover_holding_flow_exact_context(
+        {
+            "record_id": 123,
+            "holding_context_entry_time_context": {
+                "entry_context_quality": "complete"
+            },
+            "holding_context_entry_time_context_status": "exact_captured",
+            "holding_context_entry_time_context_sha256": "0" * 64,
+        }
+    )
+
+    assert provenance["status"] == "hash_mismatch"
+    assert "entry_time_context" not in fields
+
+
+def test_holding_flow_exact_context_recovery_requires_producer_status_and_features():
+    context = {"source": "same_event_without_features"}
+    digest = mod._canonical_sha256(context)
+    missing_quality_context = {
+        "source": "same_event_with_unusable_quality",
+        "entry_context_quality": "missing",
+    }
+
+    _fields, missing_status = mod._recover_holding_flow_exact_context(
+        {
+            "holding_context_entry_time_context": context,
+            "holding_context_entry_time_context_sha256": digest,
+        }
+    )
+    _fields, missing_features = mod._recover_holding_flow_exact_context(
+        {
+            "holding_context_entry_time_context": context,
+            "holding_context_entry_time_context_status": "exact_captured",
+            "holding_context_entry_time_context_sha256": digest,
+        }
+    )
+    _fields, unusable_quality = mod._recover_holding_flow_exact_context(
+        {
+            "holding_context_entry_time_context": missing_quality_context,
+            "holding_context_entry_time_context_status": "exact_captured",
+            "holding_context_entry_time_context_sha256": (
+                mod._canonical_sha256(missing_quality_context)
+            ),
+        }
+    )
+
+    assert missing_status["status"] == "producer_status_unverified"
+    assert missing_features["status"] == "required_features_missing"
+    assert unusable_quality["status"] == "required_features_missing"
+
+
+def test_holding_flow_provider_compare_blocks_legacy_inexact_context(monkeypatch):
+    from src.engine import ai_engine_openai as openai_module
+
+    class FailIfConstructed:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("provider must not run without exact context")
+
+    monkeypatch.setattr(openai_module, "GPTSniperEngine", FailIfConstructed)
+    monkeypatch.setattr(mod, "_api_keys", lambda: ["test-key"])
+    result = mod._run_endpoint_provider_compare(
+        {
+            "holding_flow": [
+                {
+                    "stock_code": "096770",
+                    "record_id": 123,
+                    "ai_input_schema": "holding_flow_v2",
+                    "flow_state": "absorption",
+                    "profit_rate": "0.20",
+                    "entry_context_quality": "complete",
+                    "ai_input_source_quality_status": "fresh_consistent",
+                    "ai_input_preflight_allowed": True,
+                    "ai_input_preflight_position_reconciled": True,
+                    "ai_input_preflight_venue_consistent": True,
+                }
+            ]
+        },
+        provider_mode="openai_only",
+        provider_label="openai_only",
+        model="gpt-5.4-mini",
+        effort="low",
+        sample_limit=1,
+        points=("holding_flow",),
+    )
+
+    row = result["holding_flow"]["results"][0]
+    assert row["status"] == "skipped"
+    assert row["reason"] == "holding_flow_exact_context_unavailable"
+    assert row["missing_features"] == ["entry_time_context"]
+    assert row["holding_flow_exact_context_recovery"]["status"] == (
+        "source_unavailable"
+    )
 
 
 def test_probe_report_includes_endpoint_compare_when_requested(monkeypatch):

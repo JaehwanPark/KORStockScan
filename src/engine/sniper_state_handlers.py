@@ -87,6 +87,7 @@ from src.engine.scalping.holding_decision_context import (
     holding_decision_context_enabled,
     holding_decision_context_log_fields,
 )
+from src.engine.scalping.multi_timeframe_context import SOURCE_BAR_LIMIT
 from src.engine.scalping.opening_rotation import (
     EntryConfig as OpeningRotationEntryConfig,
     ExitConfig as OpeningRotationExitConfig,
@@ -20083,17 +20084,65 @@ def _get_holding_minute_candles_with_meta(
         candles, metadata = kiwoom_utils.get_minute_candles_ka10080_with_meta(
             KIWOOM_TOKEN,
             request_code,
-            limit=limit,
+            limit=max(int(limit), SOURCE_BAR_LIMIT),
             explicit_request_code=True,
         )
         resolved_metadata = dict(metadata or {})
         resolved_metadata["holding_context_request_code"] = request_code
+        resolved_metadata["multi_timeframe_auxiliary_fetch"] = True
         return list(candles or []), resolved_metadata
     except Exception as exc:
         return [], {
             "holding_context_request_code": request_code,
             "fetch_error": f"{type(exc).__name__}:{str(exc)[:120]}",
         }
+
+
+def _update_holding_excursion_context(
+    stock: dict,
+    *,
+    average_entry_price: float,
+    current_profit_pct: float,
+    peak_profit_pct: float,
+    now_ts: float,
+    force_rebaseline: bool = False,
+) -> None:
+    """Track position-basis MFE/MAE for AI context without decision authority."""
+
+    quantity = max(0, _safe_int(stock.get("buy_qty"), 0))
+    basis_key = f"{quantity}:{round(float(average_entry_price), 4)}"
+    prior_basis = str(stock.get("excursion_basis_key") or "")
+    reset = force_rebaseline or prior_basis != basis_key
+    if reset:
+        mfe = max(float(current_profit_pct), float(peak_profit_pct))
+        mae = float(current_profit_pct)
+        started_at = now_ts
+    else:
+        mfe = max(
+            _safe_float(stock.get("mfe_pct"), float(current_profit_pct)),
+            float(current_profit_pct),
+            float(peak_profit_pct),
+        )
+        mae = min(
+            _safe_float(stock.get("mae_pct"), float(current_profit_pct)),
+            float(current_profit_pct),
+        )
+        started_at = _safe_float(
+            stock.get("excursion_tracking_started_at"), now_ts
+        )
+    with ENTRY_LOCK:
+        stock.update(
+            {
+                "mfe_pct": round(mfe, 6),
+                "mae_pct": round(mae, 6),
+                "excursion_basis_key": basis_key,
+                "excursion_basis_qty": quantity,
+                "excursion_basis_avg_price": round(float(average_entry_price), 4),
+                "excursion_tracking_started_at": started_at,
+                "excursion_last_observed_at": now_ts,
+                "excursion_context_authority": "instrumentation_only",
+            }
+        )
 
 
 def _holding_context_allows_defer(context: dict | None) -> bool:
@@ -64049,6 +64098,14 @@ def handle_holding_state(
     profit_rate = calculate_net_profit_rate(buy_p, curr_p)
     peak_profit = calculate_net_profit_rate(
         buy_p, highest_prices.get(price_key, curr_p)
+    )
+    _update_holding_excursion_context(
+        stock,
+        average_entry_price=buy_p,
+        current_profit_pct=profit_rate,
+        peak_profit_pct=peak_profit,
+        now_ts=now_ts,
+        force_rebaseline=peak_rebaseline_applied,
     )
     _mark_entry_opportunity_recheck_outcome(
         stock,

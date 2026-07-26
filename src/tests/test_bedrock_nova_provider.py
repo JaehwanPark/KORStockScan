@@ -42,6 +42,7 @@ def test_provider_rotates_keys_on_retryable_error():
                     "message": {"content": [{"text": '{"action":"WAIT","score":61}'}]}
                 },
                 "usage": {"inputTokens": 10, "outputTokens": 5},
+                "ResponseMetadata": {"RequestId": "bedrock-response-1"},
             }
 
     provider = mod.BedrockNovaProvider(
@@ -58,6 +59,9 @@ def test_provider_rotates_keys_on_retryable_error():
     assert result.payload["action"] == "WAIT"
     assert result.key_index == 1
     assert result.attempted_key_count == 2
+    assert result.response_id == "bedrock-response-1"
+    assert result.transport_meta()["provider_response_id"] == "bedrock-response-1"
+    assert result.transport_meta()["bedrock_response_id"] == "bedrock-response-1"
 
 
 def test_provider_result_records_parse_failure_without_raising():

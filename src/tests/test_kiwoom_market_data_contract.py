@@ -166,6 +166,58 @@ def test_ka10080_explicit_request_code_does_not_apply_db_integrated_route(
     assert meta["explicit_request_code"] is True
 
 
+def test_ka20005_index_minutes_preserve_raw_x100_price_basis(monkeypatch):
+    _clear_market_data_cache()
+    monkeypatch.setattr(
+        kiwoom_utils, "get_api_url", lambda path: f"https://example.test{path}"
+    )
+    calls = []
+
+    def fake_fetch(**kwargs):
+        calls.append(kwargs)
+        return (
+            [
+                {
+                    "inds_min_pole_qry": [
+                        {
+                            "cntr_tm": "20260727090200",
+                            "cur_prc": "+300120",
+                            "open_pric": "300100",
+                            "high_pric": "300150",
+                            "low_pric": "300090",
+                            "trde_qty": "200",
+                        },
+                        {
+                            "cntr_tm": "20260727090100",
+                            "cur_prc": "+300100",
+                            "open_pric": "300080",
+                            "high_pric": "300120",
+                            "low_pric": "300070",
+                            "trde_qty": "100",
+                        },
+                    ]
+                }
+            ],
+            {"api_id": "ka20005"},
+        )
+
+    monkeypatch.setattr(kiwoom_utils, "fetch_kiwoom_api_continuous", fake_fetch)
+
+    rows, meta = kiwoom_utils.get_index_minute_candles_ka20005_with_meta(
+        "token", "001", limit=2
+    )
+
+    assert calls[0]["api_id"] == "ka20005"
+    assert calls[0]["payload"] == {"inds_cd": "001", "tic_scope": "1"}
+    assert [row["source_timestamp"] for row in rows] == [
+        "20260727090100",
+        "20260727090200",
+    ]
+    assert rows[-1]["현재가"] == "+300120"
+    assert meta["received_count"] == 2
+    assert meta["latest_source_timestamp"] == "20260727090200"
+
+
 def test_ka10081_dataframe_keeps_source_meta_and_sorts_index(monkeypatch):
     _clear_market_data_cache()
     monkeypatch.setattr(

@@ -22,6 +22,10 @@ from src.engine.scalping.ai_market_snapshot import (
     realtime_type_provenance,
 )
 from src.engine.kiwoom_orders import resolve_order_dmst_stex_tp
+from src.engine.scalping.multi_timeframe_context import (
+    SOURCE_BAR_LIMIT,
+    build_multi_timeframe_context,
+)
 
 SCHEMA = "entry_candle_context_v1"
 SOURCE_SCHEMA = "session_candle_source_v1"
@@ -209,7 +213,7 @@ def fetch_entry_candles_with_meta(
     candles, source_meta = kiwoom_utils.get_minute_candles_ka10080_with_meta(
         token,
         request_code,
-        limit=max(1, int(limit)),
+        limit=max(max(1, int(limit)), SOURCE_BAR_LIMIT),
         explicit_request_code=True,
     )
     metadata = dict(source_meta or {})
@@ -220,6 +224,7 @@ def fetch_entry_candles_with_meta(
             "entry_candle_request_code": request_code,
             "entry_candle_request_venue": venue_value,
             "entry_candle_request_session": session_value,
+            "multi_timeframe_auxiliary_fetch": True,
         }
     )
     return list(candles or []), metadata
@@ -449,14 +454,15 @@ def _tick_dt(tick: dict[str, Any], now: datetime) -> datetime | None:
 
 def _return_pct(bars: list[dict[str, Any]], minutes: int) -> float | None:
     usable = bars[-(minutes + 1) :]
-    if len(usable) < 2 or usable[0]["c"] <= 0:
+    if len(usable) < minutes + 1 or usable[0]["c"] <= 0:
         return None
     return round((usable[-1]["c"] / usable[0]["c"] - 1.0) * 100.0, 4)
 
 
 def _slope_pct(bars: list[dict[str, Any]], minutes: int) -> float | None:
-    usable = bars[-max(2, minutes) :]
-    if len(usable) < 2:
+    required = max(2, minutes)
+    usable = bars[-required:]
+    if len(usable) < required:
         return None
     first = usable[0]["c"]
     if first <= 0:
@@ -472,7 +478,10 @@ def _slope_pct(bars: list[dict[str, Any]], minutes: int) -> float | None:
 
 
 def _range_pct(bars: list[dict[str, Any]], minutes: int) -> float | None:
-    usable = bars[-max(1, minutes) :]
+    required = max(1, minutes)
+    usable = bars[-required:]
+    if len(usable) < required:
+        return None
     highs = [bar["h"] for bar in usable if bar["h"] > 0]
     lows = [bar["l"] for bar in usable if bar["l"] > 0]
     if not highs or not lows or min(lows) <= 0:
@@ -482,7 +491,7 @@ def _range_pct(bars: list[dict[str, Any]], minutes: int) -> float | None:
 
 def _structure(bars: list[dict[str, Any]]) -> dict[str, Any]:
     completed = [bar for bar in bars if not bar.get("forming")]
-    active = bars or completed
+    active = completed
     highs = [bar["h"] for bar in active if bar["h"] > 0]
     lows = [bar["l"] for bar in active if bar["l"] > 0]
     latest = active[-1] if active else {}
@@ -503,6 +512,18 @@ def _structure(bars: list[dict[str, Any]]) -> dict[str, Any]:
     returns = {str(window): _return_pct(active, window) for window in windows}
     slopes = {str(window): _slope_pct(active, window) for window in windows}
     ranges = {str(window): _range_pct(active, window) for window in windows}
+    window_source_bar_counts = {
+        str(window): {
+            "available_completed_bars": len(active),
+            "return_required_bars": window + 1,
+            "slope_required_bars": max(2, window),
+            "range_required_bars": max(1, window),
+            "return_complete": len(active) >= window + 1,
+            "slope_complete": len(active) >= max(2, window),
+            "range_complete": len(active) >= max(1, window),
+        }
+        for window in windows
+    }
     prior = active[:-1]
     prior_high = max((bar["h"] for bar in prior[-10:]), default=0)
     long_slope = slopes["20"] if slopes["20"] is not None else slopes["10"]
@@ -596,6 +617,8 @@ def _structure(bars: list[dict[str, Any]]) -> dict[str, Any]:
         "returns_pct": returns,
         "slopes_pct_per_bar": slopes,
         "ranges_pct": ranges,
+        "window_source_bar_counts": window_source_bar_counts,
+        "forming_bar_excluded": True,
         "range_pct": (
             round((peak / low - 1.0) * 100.0, 4) if peak > 0 and low > 0 else None
         ),
@@ -659,6 +682,10 @@ def build_session_candle_source(
     route_equivalence_proven = bool(route_proof["proven"])
     fetch_ms = 0
     fetch_error = ""
+    fetch_auxiliary_sources = recent_candles is None or bool(
+        (source_meta or {}).get("multi_timeframe_auxiliary_fetch")
+    )
+    source_limit = max(max(1, int(limit)), SOURCE_BAR_LIMIT)
     if recent_candles is None:
         fetch_started = time.perf_counter()
         try:
@@ -668,7 +695,7 @@ def build_session_candle_source(
                 ws,
                 venue=venue_value,
                 session=session_value,
-                limit=limit,
+                limit=source_limit,
                 now_ts=now,
             )
         except Exception as exc:
@@ -706,7 +733,7 @@ def build_session_candle_source(
         input_order[index] < input_order[index - 1]
         for index in range(1, len(input_order))
     )
-    parsed = [by_minute[key] for key in sorted(by_minute)][-max(1, int(limit)) :]
+    parsed = [by_minute[key] for key in sorted(by_minute)][-source_limit:]
     current_session = [
         bar
         for bar in parsed
@@ -813,7 +840,7 @@ def build_session_candle_source(
 
     # The forming-bar overlay is an additional live observation. Keep the
     # consumer-visible source window bounded after that overlay as well.
-    current_session = current_session[-max(1, int(limit)) :]
+    current_session = current_session[-source_limit:]
     missing_bar_count = 0
     max_consecutive_missing_bar_count = 0
     for left, right in zip(current_session, current_session[1:]):
@@ -898,6 +925,30 @@ def build_session_candle_source(
         }
         for bar in model_bars
     ]
+    feature_rows = [
+        {
+            "source_timestamp": bar["dt"].strftime("%Y%m%d%H%M%S"),
+            "현재가": bar["c"],
+            "시가": bar["o"],
+            "고가": bar["h"],
+            "저가": bar["l"],
+            "거래량": bar["v"],
+            "forming": bool(bar.get("forming")),
+            "partial_volume": bool(bar.get("partial_volume")),
+            "effective_venue": venue_value,
+        }
+        for bar in current_session
+    ]
+    multi_timeframe_context = build_multi_timeframe_context(
+        feature_rows,
+        token=token,
+        symbol=code,
+        venue=venue_value,
+        session=session_value,
+        ws_data=ws,
+        captured_at=now,
+        fetch_external_sources=fetch_auxiliary_sources,
+    )
     build_ms = int((time.perf_counter() - started) * 1000)
     return {
         "schema": SOURCE_SCHEMA,
@@ -920,6 +971,11 @@ def build_session_candle_source(
         ),
         "sample_mode": sample_mode,
         "bars": model_path,
+        "input_bundle_version": multi_timeframe_context["input_bundle_version"],
+        "multi_timeframe_ai_input_enabled": multi_timeframe_context[
+            "ai_input_enabled"
+        ],
+        "multi_timeframe_context": multi_timeframe_context,
         "structure": structure,
         "regime": structure["regime"],
         "alignment": structure["alignment"],

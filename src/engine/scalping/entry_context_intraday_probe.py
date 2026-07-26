@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import ast
 import gzip
+import hashlib
 import inspect
 import json
 import os
@@ -15,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from src.engine import scalp_entry_action_decision_matrix as adm_mod
+from src.engine.scalping.ai_decision_trace import record_ai_decision_trace
 from src.engine.scalping.holding_decision_context import (
     OBSERVATION_CONTRACT as HOLDING_CONTEXT_OBSERVATION_CONTRACT,
 )
@@ -27,6 +29,31 @@ PROBE_REPORT_DIR = REPORT_DIR / "entry_context_intraday_probe"
 PIPELINE_EVENTS_DIR = DATA_DIR / "pipeline_events"
 CLEAN_BASELINE_POLICY_PATH = DATA_DIR / "source_quality" / "clean_baseline_policy.json"
 AI_MARKET_SNAPSHOT_SCHEMA_INTRODUCED_DATE = "2026-07-23"
+HOLDING_FLOW_EXACT_CONTEXT_RECOVERY_CONTRACT = {
+    "metric_role": "holding_flow_exact_context_recovery",
+    "decision_authority": "forensics_only_no_runtime_change",
+    "window_policy": "same_decision_event_exact_logged_context_only",
+    "sample_floor": "one_hash_verified_row_per_symbol_venue_session",
+    "primary_decision_metric": "exact_context_recovery_status",
+    "source_quality_gate": (
+        "hash_verified_same_event_fresh_venue_consistent_position_reconciled"
+    ),
+    "runtime_effect": False,
+    "allowed_runtime_apply": False,
+    "actual_order_submitted": False,
+    "broker_order_forbidden": True,
+    "forbidden_uses": (
+        "symbol_only_join|future_event_join|cross_venue_join|live_prompt_mutation|"
+        "order_or_exit_authority|provider_or_threshold_change"
+    ),
+}
+HOLDING_FLOW_ENTRY_CONTEXT_FEATURES = {
+    "entry_context_quality",
+    "entry_liquidity_score",
+    "fillability_score",
+    "order_flow_pressure_score",
+    "entry_momentum_score",
+}
 
 PROBE_FEATURE_KEYS = (
     "source_stage",
@@ -291,13 +318,18 @@ def _event_fields(row: dict[str, Any]) -> dict[str, Any]:
     for key in (
         "stage",
         "event",
+        "record_id",
+        "recommendation_id",
+        "sim_record_id",
+        "sim_parent_record_id",
+        "position_cycle_id",
         "stock_code",
         "stock_name",
         "timestamp",
         "event_time",
         "emitted_at",
     ):
-        if key in row and key not in merged:
+        if key in row and not _nonempty(merged.get(key)):
             merged[key] = row.get(key)
     return merged
 
@@ -626,6 +658,10 @@ def _event_has_required_feature(fields: dict[str, Any], feature: str) -> bool:
             )
         )
     if feature == "entry_time_context":
+        if _nonempty(fields.get("holding_context_entry_time_context")):
+            _recovered, provenance = _recover_holding_flow_exact_context(fields)
+            if provenance.get("status") == "exact_recovered":
+                return True
         return any(
             _nonempty(fields.get(key))
             for key in (
@@ -835,6 +871,180 @@ class _RulesProxy:
         return getattr(self._base, name)
 
 
+FORENSIC_ENTRY_MISSING_FEATURES = {
+    "current_price",
+    "bbo",
+    "orderbook",
+    "quote_freshness",
+    "signed_tape",
+    "micro_vwap",
+    "minute_candles",
+    "multi_timeframe_bars",
+    "session_vwap",
+    "opening_range",
+    "previous_day_levels",
+    "program_flow",
+    "investor_flow",
+    "market_regime",
+    "sector_relative_trend",
+    "execution_strength",
+    "buy_ratio",
+}
+FORENSIC_ENTRY_ISSUES = {
+    "bad_entry",
+    "insufficient_context",
+    "acceptable_risk",
+    "source_quality_gap",
+}
+
+
+def _forensic_response_errors(result: Any) -> list[str]:
+    if not isinstance(result, dict):
+        return ["response_not_object"]
+    errors: list[str] = []
+    action = str(result.get("action") or "")
+    if action not in {"BUY", "WAIT", "DROP"}:
+        errors.append("action_invalid")
+    try:
+        score = int(float(result.get("score")))
+    except (TypeError, ValueError):
+        score = -1
+        errors.append("score_invalid")
+    if not 0 <= score <= 100:
+        errors.append("score_out_of_range")
+    elif (
+        (action == "DROP" and score > 39)
+        or (action == "WAIT" and not 40 <= score <= 69)
+        or (action == "BUY" and score < 70)
+    ):
+        errors.append("action_score_contract_mismatch")
+    if str(result.get("issue") or "") not in FORENSIC_ENTRY_ISSUES:
+        errors.append("issue_invalid")
+    confidence = result.get("confidence")
+    try:
+        confidence_value = float(confidence)
+    except (TypeError, ValueError):
+        confidence_value = -1.0
+    if not 0.0 <= confidence_value <= 1.0:
+        errors.append("confidence_invalid")
+    missing = result.get("missing_features")
+    if not isinstance(missing, list) or any(
+        not isinstance(item, str) or item not in FORENSIC_ENTRY_MISSING_FEATURES
+        for item in (missing or [])
+    ):
+        errors.append("missing_features_semantic_invalid")
+    reason = str(result.get("reason") or "")
+    try:
+        reason.encode("ascii")
+    except UnicodeEncodeError:
+        errors.append("reason_non_ascii")
+    if not reason.strip() or len(reason) > 120:
+        errors.append("reason_invalid")
+    return sorted(set(errors))
+
+
+def _forensic_provider(transport_meta: dict[str, Any], *, called: bool) -> str:
+    explicit = str(
+        transport_meta.get("provider")
+        or transport_meta.get("provider_actual")
+        or ""
+    ).strip()
+    if explicit and explicit.lower() != "none":
+        return explicit
+    if transport_meta.get("bedrock_primary_used") or transport_meta.get(
+        "bedrock_fallback_used"
+    ):
+        return "bedrock"
+    if transport_meta.get("bedrock_failback_used"):
+        return "openai"
+    if called and (
+        transport_meta.get("openai_transport_mode")
+        or transport_meta.get("openai_model")
+    ):
+        return "openai"
+    return "none"
+
+
+def _physical_provider_called(
+    transport_meta: dict[str, Any],
+    *,
+    response_returned: bool,
+) -> bool:
+    if response_returned:
+        return True
+    explicit = str(
+        transport_meta.get("provider")
+        or transport_meta.get("provider_actual")
+        or ""
+    ).strip().lower()
+    if explicit and explicit != "none":
+        return True
+    if any(
+        transport_meta.get(key)
+        for key in (
+            "bedrock_primary_used",
+            "bedrock_fallback_used",
+            "bedrock_failback_used",
+            "openai_ws_used",
+            "openai_response_id",
+            "provider_response_id",
+            "bedrock_response_id",
+        )
+    ):
+        return True
+    try:
+        return int(transport_meta.get("openai_http_attempt_count") or 0) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _finalize_forensic_entry_attempt(
+    *,
+    result: dict[str, Any],
+    transport_meta: dict[str, Any],
+    row: dict[str, Any],
+    semantic_errors: list[str],
+    attempt: int,
+    final_attempt: bool,
+    provider_called: bool,
+) -> None:
+    merged = {
+        **dict(transport_meta or {}),
+        **dict(result or {}),
+        "provider_called": bool(provider_called),
+        "provider": _forensic_provider(
+            transport_meta,
+            called=provider_called,
+        ),
+        "ai_parse_ok": not semantic_errors,
+        "ai_trace_stock_code": row.get("stock_code"),
+        "ai_trace_record_id": row.get("record_id"),
+        "actual_order_authority": False,
+        "ai_decision_outcome_eligible": not semantic_errors,
+        "forensic_attempt": int(attempt),
+        "forensic_attempt_final": bool(final_attempt),
+        "forensic_semantic_errors": list(semantic_errors),
+    }
+    result_source = (
+        "forensic_observation_accepted"
+        if not semantic_errors
+        else (
+            "schema_semantic_rejected"
+            if final_attempt
+            else "schema_semantic_rejected_retry"
+        )
+    )
+    record_ai_decision_trace(
+        merged,
+        prompt_type="scalping_entry",
+        prompt_version="entry_context_intraday_probe_forensics_v1",
+        result_source=result_source,
+        decision_stage="entry_screen_forensics",
+        stock_code=str(row.get("stock_code") or "-"),
+        provider_called=provider_called,
+    )
+
+
 def _call_openai(
     rows: list[dict[str, Any]], *, model: str, effort: str
 ) -> list[dict[str, Any]]:
@@ -860,31 +1070,114 @@ def _call_openai(
             "with keys action, score, issue, confidence, missing_features, reason. action must be BUY, WAIT, "
             "or DROP as if this candidate appeared now with the same observable facts. score is entry suitability "
             "from 0 to 100. Use DROP only when score is 0-39, WAIT only when score is 40-69, BUY only when "
-            "score is 70-100. issue must be bad_entry, stop_loss_timing, insufficient_context, or acceptable_risk. "
-            "missing_features must be an array of pre-entry market/source fields only. reason must be Korean "
-            "and at most 6 words. Do not recommend broker, threshold, bot, provider, or cap changes."
+            "score is 70-100. issue must be bad_entry, insufficient_context, acceptable_risk, or "
+            "source_quality_gap. missing_features must contain only canonical names from this list: "
+            + ",".join(sorted(FORENSIC_ENTRY_MISSING_FEATURES))
+            + ". reason must contain English ASCII only and be at most 120 characters. "
+            "Do not emit stop, exit, realized outcome, broker, threshold, bot, provider, or cap fields."
         )
         results = []
         for index, row in enumerate(rows, start=1):
             started = time.perf_counter()
-            result = engine._call_openai_safe(
-                prompt,
-                json.dumps(
-                    _probe_payload(row, index),
-                    ensure_ascii=False,
-                    separators=(",", ":"),
-                ),
-                require_json=True,
-                context_name=f"INTRADAY_ENTRY_CONTEXT_PROBE:{model}:{effort}:{row.get('stock_code')}",
-                model_override=model,
-                endpoint_name="analyze_target",
-                symbol=str(row.get("stock_code") or "INTRADAY_PROBE"),
-                cache_key=(
-                    f"intraday-entry-context-probe:{model}:{effort}:"
-                    f"{row.get('candidate_id')}:{row.get('event_time')}"
-                ),
+            payload_text = json.dumps(
+                _probe_payload(row, index),
+                ensure_ascii=True,
+                separators=(",", ":"),
             )
-            score = int(float(result.get("score", 0) or 0))
+            result: dict[str, Any] = {}
+            errors: list[str] = []
+            transport_meta: dict[str, Any] = {}
+            attempts = 0
+            call_error_type = None
+            provider_was_called = False
+            for attempt in range(2):
+                attempts = attempt + 1
+                active_prompt = prompt
+                if attempt:
+                    active_prompt += (
+                        " Correction retry: the previous response violated these contract rules: "
+                        + ",".join(errors)
+                        + ". Return a corrected object only."
+                    )
+                try:
+                    candidate = engine._call_openai_safe(
+                        active_prompt,
+                        payload_text,
+                        require_json=True,
+                        context_name=(
+                            f"INTRADAY_ENTRY_CONTEXT_PROBE:{model}:{effort}:"
+                            f"{row.get('stock_code')}:attempt{attempt + 1}"
+                        ),
+                        model_override=model,
+                        endpoint_name="analyze_target",
+                        symbol=str(row.get("stock_code") or "INTRADAY_PROBE"),
+                        cache_key=(
+                            f"intraday-entry-context-probe:{model}:{effort}:"
+                            f"{row.get('candidate_id')}:{row.get('event_time')}:"
+                            f"attempt{attempt + 1}"
+                        ),
+                    )
+                except Exception as exc:
+                    candidate = None
+                    call_error_type = type(exc).__name__
+                if hasattr(engine, "_consume_last_transport_meta"):
+                    transport_meta = engine._consume_last_transport_meta()
+                elif isinstance(candidate, dict):
+                    transport_meta = {
+                        "provider": "openai",
+                        "openai_model": model,
+                        "openai_transport_mode": "test_double",
+                    }
+                provider_was_called = _physical_provider_called(
+                    transport_meta,
+                    response_returned=call_error_type is None,
+                )
+                if call_error_type:
+                    result = {}
+                    errors = [f"provider_call_failed:{call_error_type}"]
+                    if (
+                        _forensic_provider(
+                            transport_meta,
+                            called=provider_was_called,
+                        )
+                        == "none"
+                    ):
+                        errors.append("provider_none")
+                    errors = sorted(set(errors))
+                    _finalize_forensic_entry_attempt(
+                        result=result,
+                        transport_meta=transport_meta,
+                        row=row,
+                        semantic_errors=errors,
+                        attempt=attempts,
+                        final_attempt=True,
+                        provider_called=provider_was_called,
+                    )
+                    break
+                result = dict(candidate) if isinstance(candidate, dict) else {}
+                errors = _forensic_response_errors(result)
+                provider = _forensic_provider(
+                    transport_meta,
+                    called=provider_was_called,
+                )
+                if provider == "none":
+                    errors = sorted(set([*errors, "provider_none"]))
+                final_attempt = bool(not errors or attempt == 1)
+                _finalize_forensic_entry_attempt(
+                    result=result,
+                    transport_meta=transport_meta,
+                    row=row,
+                    semantic_errors=errors,
+                    attempt=attempts,
+                    final_attempt=final_attempt,
+                    provider_called=provider_was_called,
+                )
+                if not errors:
+                    break
+            try:
+                score = int(float(result.get("score", 0) or 0))
+            except (TypeError, ValueError):
+                score = 0
             action = str(result.get("action") or "")
             mismatch = (
                 (action == "DROP" and score > 39)
@@ -902,6 +1195,47 @@ def _call_openai(
                     "entry_momentum_status": row.get("entry_momentum_status"),
                     "model": model,
                     "effort": effort,
+                    "status": (
+                        "accepted" if not errors else "schema_semantic_rejected"
+                    ),
+                    "semantic_errors": errors,
+                    "provider_call_error_type": call_error_type,
+                    "correction_attempted": attempts > 1,
+                    "attempt_count": attempts,
+                    "request_id": transport_meta.get("openai_request_id"),
+                    "provider": _forensic_provider(
+                        transport_meta,
+                        called=provider_was_called,
+                    ),
+                    "provider_response_id": transport_meta.get(
+                        "openai_response_id"
+                    )
+                    or transport_meta.get("provider_response_id"),
+                    "transport": transport_meta.get("openai_transport_mode"),
+                    "response_sha256": transport_meta.get(
+                        "openai_response_sha256"
+                    )
+                    or hashlib.sha256(
+                        json.dumps(
+                            result,
+                            ensure_ascii=False,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        ).encode("utf-8")
+                    ).hexdigest(),
+                    "input_tokens": transport_meta.get("openai_input_tokens"),
+                    "output_tokens": transport_meta.get("openai_output_tokens"),
+                    "total_tokens": transport_meta.get("openai_total_tokens"),
+                    "failback_chain": [
+                        key
+                        for key in (
+                            "bedrock_primary_used",
+                            "bedrock_fallback_used",
+                            "bedrock_failback_used",
+                            "openai_ws_http_fallback",
+                        )
+                        if transport_meta.get(key)
+                    ],
                     "elapsed_ms": int((time.perf_counter() - started) * 1000),
                     "action": action,
                     "score": score,
@@ -972,6 +1306,84 @@ def _structured_dict(value: Any) -> dict[str, Any]:
     return {}
 
 
+def _canonical_sha256(value: Any) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _recover_holding_flow_exact_context(
+    fields: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    recovered = dict(fields)
+    logged = _structured_dict(fields.get("holding_context_entry_time_context"))
+    embedded = _structured_dict(fields.get("entry_time_context"))
+    context = logged or embedded
+    expected_hash = str(
+        fields.get("holding_context_entry_time_context_sha256") or ""
+    ).strip()
+    actual_hash = _canonical_sha256(context) if context else ""
+    producer_status = str(
+        fields.get(
+            "holding_context_entry_time_context_status"
+            if logged
+            else "entry_time_context_status"
+        )
+        or ""
+    ).strip()
+    source = (
+        "holding_context_same_event_log"
+        if logged
+        else ("entry_time_context_same_event_log" if embedded else "unavailable")
+    )
+    if not context:
+        status = "source_unavailable"
+    elif producer_status != "exact_captured":
+        status = "producer_status_unverified"
+    elif not expected_hash:
+        status = "hash_missing"
+    elif expected_hash and expected_hash != actual_hash:
+        status = "hash_mismatch"
+    elif not (
+        str(context.get("entry_context_quality") or "").strip().lower()
+        in {"complete", "partial"}
+        or any(
+            _nonempty(context.get(key))
+            for key in (
+                HOLDING_FLOW_ENTRY_CONTEXT_FEATURES
+                - {"entry_context_quality"}
+            )
+        )
+    ):
+        status = "required_features_missing"
+    else:
+        status = "exact_recovered"
+        recovered["entry_time_context"] = context
+    provenance = {
+        "status": status,
+        "source": source,
+        "context_sha256": actual_hash or None,
+        "expected_sha256": expected_hash or None,
+        "producer_status": producer_status or None,
+        "record_id": _first_nonempty(
+            fields,
+            "record_id",
+            "sim_parent_record_id",
+            "sim_record_id",
+            default=None,
+        ),
+        **HOLDING_FLOW_EXACT_CONTEXT_RECOVERY_CONTRACT,
+    }
+    recovered["holding_flow_exact_context_recovery"] = provenance
+    return recovered, provenance
+
+
 def _temporary_env(overrides: dict[str, str]) -> dict[str, str | None]:
     original = {key: os.environ.get(key) for key in overrides}
     for key, value in overrides.items():
@@ -1015,19 +1427,31 @@ def _fields_to_ws_data(fields: dict[str, Any]) -> dict[str, Any]:
         default=0,
     )
     ws_data = {
-        "curr": curr,
-        "current_price": curr,
-        "v_pw": _first_nonempty(
-            fields, "v_pw", "latest_strength", "execution_strength", default=0
+        "curr": _int_or_zero(curr),
+        "current_price": _int_or_zero(curr),
+        "v_pw": _float_or_zero(
+            _first_nonempty(
+                fields, "v_pw", "latest_strength", "execution_strength", default=0
+            )
         ),
-        "buy_ratio": _first_nonempty(
-            fields, "buy_ratio", "buy_pressure_10t", default=0
+        "buy_ratio": _float_or_zero(
+            _first_nonempty(fields, "buy_ratio", "buy_pressure_10t", default=0)
         ),
-        "buy_exec_volume": _first_nonempty(fields, "buy_exec_volume", default=0),
-        "sell_exec_volume": _first_nonempty(fields, "sell_exec_volume", default=0),
-        "ask_tot": _first_nonempty(fields, "ask_tot", "top3_ask_notional", default=0),
-        "bid_tot": _first_nonempty(fields, "bid_tot", "top3_bid_notional", default=0),
-        "quote_age_ms": _first_nonempty(fields, "quote_age_ms", default=0),
+        "buy_exec_volume": _float_or_zero(
+            _first_nonempty(fields, "buy_exec_volume", default=0)
+        ),
+        "sell_exec_volume": _float_or_zero(
+            _first_nonempty(fields, "sell_exec_volume", default=0)
+        ),
+        "ask_tot": _float_or_zero(
+            _first_nonempty(fields, "ask_tot", "top3_ask_notional", default=0)
+        ),
+        "bid_tot": _float_or_zero(
+            _first_nonempty(fields, "bid_tot", "top3_bid_notional", default=0)
+        ),
+        "quote_age_ms": _float_or_zero(
+            _first_nonempty(fields, "quote_age_ms", default=0)
+        ),
         "quote_stale": _boolish(_first_nonempty(fields, "quote_stale", default=False)),
     }
     if _nonempty(best_bid) or _nonempty(best_ask):
@@ -1357,41 +1781,32 @@ def _fields_to_position_ctx(fields: dict[str, Any]) -> dict[str, Any]:
     peak_profit = _float_or_zero(
         _first_nonempty(fields, "peak_profit", default=profit_rate)
     )
+    exact_entry_time_context = _structured_dict(fields.get("entry_time_context"))
     return {
         "record_id": _first_nonempty(fields, "record_id", default=None),
-        "buy_price": _first_nonempty(
-            fields, "buy_price", "avg_price", "average_entry_price", default=0
+        "buy_price": _int_or_zero(
+            _first_nonempty(
+                fields, "buy_price", "avg_price", "average_entry_price", default=0
+            )
         ),
-        "curr_price": _first_nonempty(fields, "curr", "current_price", default=0),
+        "curr_price": _int_or_zero(
+            _first_nonempty(fields, "curr", "current_price", default=0)
+        ),
         "profit_rate": profit_rate,
         "peak_profit": peak_profit,
         "drawdown": max(0.0, peak_profit - profit_rate),
         "held_sec": _int_or_zero(_first_nonempty(fields, "held_sec", default=0)),
-        "current_ai_score": _first_nonempty(
-            fields, "current_ai_score", "score", "ai_score", default=0
+        "current_ai_score": _float_or_zero(
+            _first_nonempty(
+                fields, "current_ai_score", "score", "ai_score", default=0
+            )
         ),
         "exit_rule": _first_nonempty(
             fields, "exit_rule", "candidate_exit_rule", default="-"
         ),
         "flow_state": _first_nonempty(fields, "flow_state", default="-"),
         "reason": _first_nonempty(fields, "reason", default="-"),
-        "entry_time_context": {
-            "entry_context_quality": _first_nonempty(
-                fields, "entry_context_quality", default=None
-            ),
-            "entry_liquidity_score": _first_nonempty(
-                fields, "entry_liquidity_score", default=None
-            ),
-            "fillability_score": _first_nonempty(
-                fields, "fillability_score", default=None
-            ),
-            "order_flow_pressure_score": _first_nonempty(
-                fields, "order_flow_pressure_score", default=None
-            ),
-            "entry_momentum_score": _first_nonempty(
-                fields, "entry_momentum_score", default=None
-            ),
-        },
+        "entry_time_context": exact_entry_time_context,
     }
 
 
@@ -1401,6 +1816,12 @@ def _endpoint_summary(results: list[dict[str, Any]]) -> dict[str, Any]:
         "row_count": len(ok_rows),
         "skipped_count": sum(1 for row in results if row.get("status") == "skipped"),
         "error_count": sum(1 for row in results if row.get("status") == "error"),
+        "provider_none_count": sum(
+            1 for row in results if row.get("provider") == "none"
+        ),
+        "provider_response_id_count": sum(
+            1 for row in ok_rows if row.get("provider_response_id")
+        ),
         "action_changed_count": sum(1 for row in ok_rows if row.get("action_changed")),
         "order_price_changed_count": sum(
             1 for row in ok_rows if row.get("order_price_changed")
@@ -1452,6 +1873,75 @@ def _endpoint_result_key(row: dict[str, Any]) -> tuple[str, str]:
         str(row.get("stock_code") or "-"),
         str(row.get("event_time") or "-"),
     )
+
+
+def _provider_result_provenance(result: dict[str, Any]) -> dict[str, Any]:
+    explicit_provider = str(result.get("provider") or "").strip().lower()
+    response_id = (
+        result.get("openai_response_id")
+        or result.get("bedrock_response_id")
+        or result.get("provider_response_id")
+    )
+    response_sha256 = (
+        result.get("openai_response_sha256")
+        or result.get("bedrock_response_sha256")
+        or result.get("ai_response_sha256")
+    )
+    openai_response_evidence = bool(
+        result.get("openai_response_id")
+        or result.get("openai_response_sha256")
+    )
+    bedrock_response_evidence = bool(
+        result.get("bedrock_response_id")
+        or result.get("bedrock_response_sha256")
+    )
+    if bedrock_response_evidence:
+        provider = "bedrock"
+    elif openai_response_evidence:
+        provider = "openai"
+    elif (
+        explicit_provider
+        and explicit_provider != "none"
+        and (response_id or response_sha256)
+    ):
+        provider = explicit_provider
+    else:
+        provider = "none"
+    total_tokens = result.get("openai_total_tokens")
+    if total_tokens is None and (
+        result.get("bedrock_total_input_tokens") is not None
+        or result.get("bedrock_output_tokens") is not None
+    ):
+        total_tokens = _int_or_zero(
+            result.get("bedrock_total_input_tokens")
+        ) + _int_or_zero(result.get("bedrock_output_tokens"))
+    return {
+        "request_id": result.get("openai_request_id")
+        or result.get("ai_decision_trace_id"),
+        "provider": provider,
+        "provider_response_id": response_id,
+        "model_id": result.get("bedrock_model_id")
+        or result.get("openai_model")
+        or result.get("ai_model"),
+        "transport": result.get("openai_transport_mode")
+        or ("bedrock_converse" if provider == "bedrock" else None),
+        "response_sha256": response_sha256,
+        "input_tokens": result.get("openai_input_tokens")
+        or result.get("bedrock_input_tokens"),
+        "output_tokens": result.get("openai_output_tokens")
+        or result.get("bedrock_output_tokens"),
+        "total_tokens": total_tokens,
+        "failback_chain": [
+            key
+            for key in (
+                "bedrock_primary_used",
+                "bedrock_fallback_used",
+                "bedrock_failback_used",
+                "openai_ws_http_fallback",
+            )
+            if result.get(key)
+        ],
+    }
 
 
 def _pair_provider_endpoint_results(
@@ -1569,16 +2059,42 @@ def _run_endpoint_provider_compare(
     }
     for point in points:
         contract = AI_DECISION_POINT_CONTRACTS[point]
-        source_rows = rows_by_point.get(point, [])[: max(1, int(sample_limit or 1))]
-        for fields in source_rows:
+        valid_sample_limit = max(1, int(sample_limit or 1))
+        source_rows = rows_by_point.get(point, [])
+        for source_fields in source_rows:
+            fields = dict(source_fields)
+            exact_context_recovery: dict[str, Any] = {}
+            if point == "holding_flow":
+                fields, exact_context_recovery = (
+                    _recover_holding_flow_exact_context(fields)
+                )
             schema = _event_schema(fields)
             missing_features = [
                 feature
                 for feature in contract["required_features"]
-                if not _event_has_required_feature(fields, feature)
+                if (
+                    point == "holding_flow"
+                    and feature == "entry_time_context"
+                    and exact_context_recovery.get("status") != "exact_recovered"
+                )
+                or (
+                    not (
+                        point == "holding_flow"
+                        and feature == "entry_time_context"
+                    )
+                    and not _event_has_required_feature(fields, feature)
+                )
             ]
             source_quality = (
-                str(fields.get("ai_input_source_quality_status") or "").strip().lower()
+                str(
+                    fields.get("ai_input_source_quality_status")
+                    or fields.get("holding_score_data_quality")
+                    or fields.get("data_quality")
+                    or fields.get("holding_context_source_quality_status")
+                    or ""
+                )
+                .strip()
+                .lower()
             )
             quote_stale_raw = fields.get("quote_stale")
             quote_stale_text = str(quote_stale_raw).strip().lower()
@@ -1602,13 +2118,29 @@ def _run_endpoint_provider_compare(
                 point == "entry_price"
                 and (quote_stale or (not quote_stale_known and not quote_fresh))
             )
+            holding_flow_preflight_invalid = bool(
+                point == "holding_flow"
+                and (
+                    source_quality not in {"fresh", "fresh_consistent"}
+                    or not _truth_value(fields.get("ai_input_preflight_allowed"))
+                    or not _truth_value(
+                        fields.get("ai_input_preflight_position_reconciled")
+                    )
+                    or not _truth_value(
+                        fields.get("ai_input_preflight_venue_consistent")
+                    )
+                )
+            )
             if (
                 schema not in contract["schemas"]
                 or missing_features
                 or quote_freshness_invalid
+                or holding_flow_preflight_invalid
                 or not source_quality
                 or source_quality
                 in {
+                    "blocked",
+                    "conflicted",
                     "stale",
                     "missing",
                     "insufficient",
@@ -1617,23 +2149,40 @@ def _run_endpoint_provider_compare(
                     "not_evaluated",
                 }
             ):
-                point_results[point].append(
-                    {
-                        "status": "skipped",
-                        "reason": "source_quality_contract_missing",
-                        "stock_code": fields.get("stock_code"),
-                        "event_time": fields.get("event_time")
-                        or fields.get("timestamp")
-                        or fields.get("emitted_at"),
-                        "schema": schema,
-                        "missing_features": missing_features,
-                        "source_quality": source_quality or "not_recorded",
-                        "quote_stale": quote_stale,
-                        "quote_freshness_invalid": quote_freshness_invalid,
-                    }
-                )
+                if len(point_results[point]) < valid_sample_limit:
+                    point_results[point].append(
+                        {
+                            "status": "skipped",
+                            "reason": (
+                                "holding_flow_exact_context_unavailable"
+                                if (
+                                    point == "holding_flow"
+                                    and exact_context_recovery.get("status")
+                                    != "exact_recovered"
+                                )
+                                else "source_quality_contract_missing"
+                            ),
+                            "stock_code": fields.get("stock_code"),
+                            "event_time": fields.get("event_time")
+                            or fields.get("timestamp")
+                            or fields.get("emitted_at"),
+                            "schema": schema,
+                            "missing_features": missing_features,
+                            "source_quality": source_quality or "not_recorded",
+                            "quote_stale": quote_stale,
+                            "quote_freshness_invalid": quote_freshness_invalid,
+                            "holding_flow_preflight_invalid": (
+                                holding_flow_preflight_invalid
+                            ),
+                            "holding_flow_exact_context_recovery": (
+                                exact_context_recovery
+                            ),
+                        }
+                    )
                 continue
             valid_rows_by_point[point].append(fields)
+            if len(valid_rows_by_point[point]) >= valid_sample_limit:
+                break
     if not any(valid_rows_by_point.values()):
         return {
             point: {
@@ -1705,6 +2254,7 @@ def _run_endpoint_provider_compare(
                             **entry_price_kwargs,
                         )
                         openai_action = str(result.get("action") or "-").upper()
+                        provider_provenance = _provider_result_provenance(result)
                         baseline_order_price = _int_or_zero(
                             _first_nonempty(
                                 fields,
@@ -1719,7 +2269,16 @@ def _run_endpoint_provider_compare(
                         provider_order_price = _int_or_zero(result.get("order_price"))
                         point_results[point].append(
                             {
-                                "status": "ok",
+                                "status": (
+                                    "ok"
+                                    if provider_provenance["provider"] != "none"
+                                    else "error"
+                                ),
+                                "error_type": (
+                                    None
+                                    if provider_provenance["provider"] != "none"
+                                    else "provider_none"
+                                ),
                                 "provider_label": provider_label,
                                 "provider_mode": provider_mode,
                                 "input_variant": "enriched_probe_context_v1",
@@ -1758,6 +2317,65 @@ def _run_endpoint_provider_compare(
                                 "bedrock_fallback_used": bool(
                                     result.get("bedrock_fallback_used", False)
                                 ),
+                                **provider_provenance,
+                            }
+                        )
+                    elif point == "holding_score":
+                        holding_context = _fields_to_holding_decision_context(fields)
+                        probe_candles = _entry_context_to_recent_candles(
+                            holding_context.get("candle") or {}
+                        )
+                        result = engine.evaluate_scalping_holding_score(
+                            stock_name,
+                            stock_code,
+                            _fields_to_ws_data(fields),
+                            [],
+                            probe_candles,
+                            _fields_to_position_ctx(fields),
+                            holding_context=holding_context,
+                            metadata_extra={
+                                "source_event_stage": (
+                                    "entry_context_intraday_probe_provider_compare"
+                                ),
+                            },
+                        )
+                        openai_action = str(result.get("action") or "-").upper()
+                        provider_provenance = _provider_result_provenance(result)
+                        point_results[point].append(
+                            {
+                                "status": (
+                                    "ok"
+                                    if provider_provenance["provider"] != "none"
+                                    else "error"
+                                ),
+                                "error_type": (
+                                    None
+                                    if provider_provenance["provider"] != "none"
+                                    else "provider_none"
+                                ),
+                                "provider_label": provider_label,
+                                "provider_mode": provider_mode,
+                                "input_variant": "enriched_probe_context_v1",
+                                "stock_code": stock_code,
+                                "stock_name": stock_name,
+                                "event_time": fields.get("event_time")
+                                or fields.get("timestamp")
+                                or fields.get("emitted_at"),
+                                "model": model,
+                                "effort": effort,
+                                "elapsed_ms": int(
+                                    (time.perf_counter() - started) * 1000
+                                ),
+                                "baseline_action": baseline_action,
+                                "provider_action": openai_action,
+                                "action_changed": bool(
+                                    baseline_action != "-"
+                                    and openai_action != baseline_action
+                                ),
+                                "score": result.get("score"),
+                                "confidence": result.get("confidence"),
+                                "reason": str(result.get("reason") or "")[:160],
+                                **provider_provenance,
                             }
                         )
                     else:
@@ -1789,13 +2407,23 @@ def _run_endpoint_provider_compare(
                             **holding_flow_kwargs,
                         )
                         openai_action = str(result.get("action") or "-").upper()
+                        provider_provenance = _provider_result_provenance(result)
                         baseline_flow_state = str(
                             _first_nonempty(fields, "flow_state", default="-") or "-"
                         )
                         openai_flow_state = str(result.get("flow_state") or "-")
                         point_results[point].append(
                             {
-                                "status": "ok",
+                                "status": (
+                                    "ok"
+                                    if provider_provenance["provider"] != "none"
+                                    else "error"
+                                ),
+                                "error_type": (
+                                    None
+                                    if provider_provenance["provider"] != "none"
+                                    else "provider_none"
+                                ),
                                 "provider_label": provider_label,
                                 "provider_mode": provider_mode,
                                 "input_variant": "enriched_probe_context_v1",
@@ -1835,6 +2463,10 @@ def _run_endpoint_provider_compare(
                                 "bedrock_fallback_used": bool(
                                     result.get("bedrock_fallback_used", False)
                                 ),
+                                "holding_flow_exact_context_recovery": fields.get(
+                                    "holding_flow_exact_context_recovery"
+                                ),
+                                **provider_provenance,
                             }
                         )
                 except Exception as exc:
@@ -1854,6 +2486,9 @@ def _run_endpoint_provider_compare(
                             "elapsed_ms": int((time.perf_counter() - started) * 1000),
                             "error_type": type(exc).__name__,
                             "reason": str(exc)[:160],
+                            "holding_flow_exact_context_recovery": fields.get(
+                                "holding_flow_exact_context_recovery"
+                            ),
                         }
                     )
         return {
@@ -1950,6 +2585,8 @@ def build_probe_report(
     compare_openai_endpoints: bool = False,
     endpoint_compare_model: str = "gpt-5.4-mini",
     endpoint_compare_effort: str = "low",
+    live_holding_score: bool = False,
+    probe_symbols: list[str] | None = None,
 ) -> dict[str, Any]:
     adm_report = _read_adm_report(target_date, build_adm=build_adm)
     rows = adm_report.get("rows") if isinstance(adm_report.get("rows"), list) else []
@@ -1965,11 +2602,47 @@ def build_probe_report(
         if isinstance(clean_pipeline_report.get("rows"), list)
         else []
     )
-    candidates = _candidate_rows(rows, sample_limit)
+    symbol_filter = {
+        str(item).strip()
+        for item in (probe_symbols or [])
+        if str(item).strip()
+    }
+    filtered_rows = (
+        [
+            row
+            for row in rows
+            if str(row.get("stock_code") or "").strip() in symbol_filter
+        ]
+        if symbol_filter
+        else rows
+    )
+    candidates = _candidate_rows(filtered_rows, sample_limit)
     live_results = (
         _call_openai(candidates, model=model, effort=effort) if live_openai else []
     )
     rows_by_point = _decision_point_rows(rows, pipeline_rows)
+    if symbol_filter:
+        rows_by_point = {
+            point: [
+                row
+                for row in point_rows
+                if str(row.get("stock_code") or "").strip() in symbol_filter
+            ]
+            for point, point_rows in rows_by_point.items()
+        }
+    holding_score_compare = (
+        _run_endpoint_provider_compare(
+            rows_by_point,
+            provider_mode="openai_only",
+            provider_label="openai_holding_score_forensics",
+            model=model,
+            effort=effort,
+            sample_limit=sample_limit,
+            points=("holding_score",),
+        )
+        if live_holding_score
+        else {}
+    )
     provider_endpoint_compare = (
         _call_provider_endpoint_compare(
             rows_by_point,
@@ -1990,7 +2663,8 @@ def build_probe_report(
     decision_results = [
         item
         for item in live_results
-        if str(item.get("action") or "") in {"BUY", "WAIT", "DROP"}
+        if item.get("status") == "accepted"
+        and str(item.get("action") or "") in {"BUY", "WAIT", "DROP"}
     ]
     return {
         "report_type": "entry_context_intraday_probe",
@@ -2053,6 +2727,14 @@ def build_probe_report(
             "summary": {
                 "row_count": len(decision_results),
                 "skipped_count": len(live_results) - len(decision_results),
+                "schema_semantic_rejected_count": sum(
+                    1
+                    for item in live_results
+                    if item.get("status") == "schema_semantic_rejected"
+                ),
+                "provider_none_count": sum(
+                    1 for item in live_results if item.get("provider") == "none"
+                ),
                 "buy_count": sum(
                     1 for item in decision_results if item.get("action") == "BUY"
                 ),
@@ -2071,6 +2753,12 @@ def build_probe_report(
                     if item.get("issue") == "insufficient_context"
                 ),
             },
+        },
+        "live_holding_score": {
+            "enabled": bool(live_holding_score),
+            "runtime_effect": False,
+            "decision_authority": "forensics_only_no_runtime_change",
+            "result": holding_score_compare,
         },
         "openai_endpoint_compare": {
             "enabled": bool(compare_openai_endpoints),
@@ -2129,6 +2817,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--model", default="gpt-5-nano")
     parser.add_argument("--effort", default="minimal")
     parser.add_argument(
+        "--symbols",
+        default="",
+        help="Optional comma-separated forensic sample symbols.",
+    )
+    parser.add_argument(
+        "--live-holding-score",
+        action="store_true",
+        help="Run one or more observation-only OpenAI holding_score calls.",
+    )
+    parser.add_argument(
         "--compare-openai-endpoints",
         action="store_true",
         help="Compare entry_price and holding_flow endpoint rows with Bedrock primary and OpenAI.",
@@ -2157,6 +2855,10 @@ def main(argv: list[str] | None = None) -> int:
         ),
         endpoint_compare_model=args.endpoint_compare_model,
         endpoint_compare_effort=args.endpoint_compare_effort,
+        live_holding_score=args.live_holding_score,
+        probe_symbols=[
+            item.strip() for item in args.symbols.split(",") if item.strip()
+        ],
     )
     if args.write:
         report["artifact"] = str(_write_report(report))

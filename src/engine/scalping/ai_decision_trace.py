@@ -21,6 +21,7 @@ from src.utils.logger import log_error
 
 TRACE_SCHEMA = "ai_decision_trace_v1"
 PAYLOAD_SCHEMA = "ai_decision_payload_v1"
+REQUEST_SCHEMA = "ai_decision_request_provenance_v1"
 PROMPT_SCHEMA = "ai_decision_prompt_v1"
 OUTCOME_SCHEMA = "ai_decision_outcome_label_v1"
 OUTCOME_HORIZONS_MIN = (1, 3, 5, 10, 20, 30, 60)
@@ -42,17 +43,65 @@ OBSERVATION_CONTRACT = {
         "counterfactual_realized_pnl_merge"
     ),
 }
+STORAGE_SECURITY_CONTRACT = {
+    "storage_security_policy": "ai_trace_payload_security_v2",
+    "sensitive_value_policy": "key_and_embedded_credential_redaction_v2",
+    "storage_file_mode": "0600",
+    "storage_directory_mode": "0700",
+    "raw_secret_storage": False,
+}
 
 _WRITE_LOCK = threading.RLock()
 _SEEN_PAYLOAD_HASHES: dict[str, set[str]] = {}
 _SEEN_PROMPT_HASHES: dict[str, set[str]] = {}
 _SEEN_TRACE_IDS: dict[str, set[str]] = {}
-_SENSITIVE_KEY = re.compile(
-    r"(?:api[_-]?key|authorization|access[_-]?token|secret|password|"
-    r"account[_-]?(?:no|number)|acct[_-]?(?:no|number))",
-    re.IGNORECASE,
+_SEEN_REQUEST_IDS: dict[str, set[str]] = {}
+_SEEN_OUTCOME_LABEL_IDS: dict[str, set[str]] = {}
+_SENSITIVE_KEY_SUFFIXES = (
+    "api_key",
+    "app_key",
+    "appkey",
+    "app_secret",
+    "appsecret",
+    "client_secret",
+    "token",
+    "authorization",
+    "proxy_authorization",
+    "cookie",
+    "set_cookie",
+    "credential",
+    "credentials",
+    "secret",
+    "password",
+    "passphrase",
+    "private_key",
+    "signing_key",
+    "account_id",
+    "account_no",
+    "account_number",
+    "acct_id",
+    "acct_no",
+    "acct_number",
 )
-_BEARER_VALUE = re.compile(r"^\s*bearer\s+\S+", re.IGNORECASE)
+_AUTH_VALUE = re.compile(r"\b(?:bearer|basic)\s+[^\s,;]+", re.IGNORECASE)
+_EMBEDDED_SECRET_ASSIGNMENT = re.compile(
+    r"(?i)\b("
+    r"api[_-]?key|app[_-]?(?:key|secret)|client[_-]?secret|"
+    r"(?:access|refresh|session|auth|id)[_-]?token|authorization|"
+    r"password|passphrase|cookie|set[_-]?cookie|"
+    r"account[_-]?(?:id|no|number)|acct[_-]?(?:id|no|number)|token"
+    r")(\s*[:=]\s*|=)(\"[^\"]*\"|'[^']*'|[^&\s,;]+)"
+)
+_OPENAI_KEY_VALUE = re.compile(r"\bsk-[A-Za-z0-9_-]{16,}\b")
+_AWS_ACCESS_KEY_VALUE = re.compile(r"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b")
+_JWT_VALUE = re.compile(
+    r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b"
+)
+_PRIVATE_KEY_BLOCK = re.compile(
+    r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?"
+    r"-----END [A-Z ]*PRIVATE KEY-----",
+    re.DOTALL,
+)
 _STAGE_BY_PROMPT_TYPE = {
     "scalping_entry": "entry_screen",
     "scalping_shared": "entry_screen",
@@ -98,6 +147,14 @@ def _payload_path(target_date: str) -> Path:
     )
 
 
+def _request_path(target_date: str) -> Path:
+    return (
+        DATA_DIR
+        / "ai_decision_requests"
+        / f"ai_decision_requests_{target_date}.jsonl"
+    )
+
+
 def _prompt_path(target_date: str) -> Path:
     return DATA_DIR / "ai_decision_prompts" / f"ai_decision_prompts_{target_date}.jsonl"
 
@@ -119,21 +176,64 @@ def _json_bytes(value: Any) -> bytes:
 
 
 def _append_jsonl(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     line = (
         json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str)
         + "\n"
     )
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(line)
+    parent_flags = os.O_RDONLY
+    if hasattr(os, "O_DIRECTORY"):
+        parent_flags |= os.O_DIRECTORY
+    if hasattr(os, "O_NOFOLLOW"):
+        parent_flags |= os.O_NOFOLLOW
+    parent_descriptor = os.open(path.parent, parent_flags)
+    descriptor = -1
+    flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        os.fchmod(parent_descriptor, 0o700)
+        descriptor = os.open(
+            path.name,
+            flags,
+            0o600,
+            dir_fd=parent_descriptor,
+        )
+        os.fchmod(descriptor, 0o600)
+        encoded = line.encode("utf-8")
+        written = 0
+        while written < len(encoded):
+            count = os.write(descriptor, encoded[written:])
+            if count <= 0:
+                raise OSError(f"short write for trace file: {path}")
+            written += count
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        os.close(parent_descriptor)
 
 
 def _load_seen(path: Path, field: str) -> set[str]:
     values: set[str] = set()
     if not path.exists():
         return values
+    parent_descriptor = -1
+    descriptor = -1
     try:
-        with path.open("r", encoding="utf-8") as handle:
+        parent_flags = os.O_RDONLY
+        if hasattr(os, "O_DIRECTORY"):
+            parent_flags |= os.O_DIRECTORY
+        if hasattr(os, "O_NOFOLLOW"):
+            parent_flags |= os.O_NOFOLLOW
+        parent_descriptor = os.open(path.parent, parent_flags)
+        os.fchmod(parent_descriptor, 0o700)
+        flags = os.O_RDONLY
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        descriptor = os.open(path.name, flags, dir_fd=parent_descriptor)
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
+            descriptor = -1
             for line in handle:
                 try:
                     row = json.loads(line)
@@ -144,19 +244,82 @@ def _load_seen(path: Path, field: str) -> set[str]:
                     values.add(value)
     except Exception:
         return values
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        if parent_descriptor >= 0:
+            os.close(parent_descriptor)
     return values
 
 
+def _sanitize_text(value: str) -> tuple[str, bool]:
+    cleaned = str(value)
+    redacted = False
+    for pattern in (
+        _AUTH_VALUE,
+        _OPENAI_KEY_VALUE,
+        _AWS_ACCESS_KEY_VALUE,
+        _JWT_VALUE,
+        _PRIVATE_KEY_BLOCK,
+    ):
+        replaced, count = pattern.subn("[REDACTED]", cleaned)
+        cleaned = replaced
+        redacted = redacted or count > 0
+
+    def _redact_assignment(match: re.Match[str]) -> str:
+        return f"{match.group(1)}{match.group(2)}[REDACTED]"
+
+    cleaned, count = _EMBEDDED_SECRET_ASSIGNMENT.subn(
+        _redact_assignment,
+        cleaned,
+    )
+    return cleaned, bool(redacted or count > 0)
+
+
+def _is_sensitive_key(key: Any) -> bool:
+    key_text = re.sub(
+        r"(?<=[a-z0-9])(?=[A-Z])",
+        "_",
+        str(key or "").strip(),
+    )
+    normalized = re.sub(
+        r"[^a-z0-9]+",
+        "_",
+        key_text.lower(),
+    ).strip("_")
+    if not normalized:
+        return False
+    exact_or_suffix = any(
+        normalized == suffix or normalized.endswith(f"_{suffix}")
+        for suffix in _SENSITIVE_KEY_SUFFIXES
+    )
+    collapsed = normalized.replace("_", "")
+    collapsed_match = any(
+        collapsed == suffix.replace("_", "")
+        or collapsed.endswith(suffix.replace("_", ""))
+        for suffix in _SENSITIVE_KEY_SUFFIXES
+    )
+    return exact_or_suffix or collapsed_match
+
+
 def _sanitize(value: Any, *, key: str = "") -> tuple[Any, bool]:
-    if _SENSITIVE_KEY.search(str(key or "")):
+    if _is_sensitive_key(key):
         return "[REDACTED]", True
     if isinstance(value, dict):
         cleaned: dict[str, Any] = {}
         redacted = False
-        for child_key, child_value in value.items():
-            safe_value, child_redacted = _sanitize(child_value, key=str(child_key))
-            cleaned[str(child_key)] = safe_value
-            redacted = redacted or child_redacted
+        for index, (child_key, child_value) in enumerate(value.items(), start=1):
+            safe_key, key_redacted = _sanitize_text(str(child_key))
+            if key_redacted:
+                safe_key = f"[REDACTED_KEY_{index}]"
+                safe_value, child_redacted = "[REDACTED]", True
+            else:
+                safe_value, child_redacted = _sanitize(
+                    child_value,
+                    key=str(child_key),
+                )
+            cleaned[safe_key] = safe_value
+            redacted = redacted or key_redacted or child_redacted
         return cleaned, redacted
     if isinstance(value, (list, tuple)):
         cleaned_list = []
@@ -166,9 +329,19 @@ def _sanitize(value: Any, *, key: str = "") -> tuple[Any, bool]:
             cleaned_list.append(safe_value)
             redacted = redacted or child_redacted
         return cleaned_list, redacted
-    if isinstance(value, str) and _BEARER_VALUE.match(value):
-        return "[REDACTED]", True
-    return value, False
+    if isinstance(value, str):
+        return _sanitize_text(value)
+    if isinstance(value, (bytes, bytearray)):
+        return _sanitize_text(bytes(value).decode("utf-8", errors="replace"))
+    if value is None or isinstance(value, (bool, int, float)):
+        return value, False
+    return _sanitize_text(str(value))
+
+
+def sanitize_ai_trace_value(value: Any) -> tuple[Any, bool]:
+    """Return a storage-safe value plus whether any credential was removed."""
+
+    return _sanitize(value)
 
 
 def _parse_user_input(user_input: Any) -> tuple[str, Any]:
@@ -393,6 +566,12 @@ def capture_ai_request(
         payload_row = {
             "schema": PAYLOAD_SCHEMA,
             "captured_at": now.isoformat(),
+            "request_id": trace_id,
+            "symbol": context.get("stock_code") or str(symbol or "") or None,
+            "effective_venue": context.get("effective_venue"),
+            "session_bucket": context.get("session_bucket"),
+            "broker_route": context.get("broker_route"),
+            "market_data_route": context.get("market_data_route"),
             "payload_sha256": payload_sha256,
             "payload_bytes": len(raw_input),
             "request_envelope_sha256": request_envelope_sha256,
@@ -408,6 +587,7 @@ def capture_ai_request(
             "redacted": bool(redacted),
             "replay_exact": not redacted,
             "sanitized_user_input": sanitized_input,
+            **STORAGE_SECURITY_CONTRACT,
             **OBSERVATION_CONTRACT,
         }
         prompt_row = {
@@ -420,6 +600,27 @@ def capture_ai_request(
             "redacted": bool(prompt_redacted),
             "replay_exact": not prompt_redacted,
             "sanitized_prompt": sanitized_prompt,
+            **STORAGE_SECURITY_CONTRACT,
+            **OBSERVATION_CONTRACT,
+        }
+        request_row = {
+            "schema": REQUEST_SCHEMA,
+            "captured_at": now.isoformat(),
+            "request_id": trace_id,
+            "symbol": context.get("stock_code") or str(symbol or "") or None,
+            "endpoint": str(endpoint_name or "generic"),
+            "model": str(model or "-"),
+            "schema_name": str(schema_name or "-"),
+            "effective_venue": context.get("effective_venue"),
+            "session_bucket": context.get("session_bucket"),
+            "broker_route": context.get("broker_route"),
+            "market_data_route": context.get("market_data_route"),
+            "payload_sha256": payload_sha256,
+            "request_envelope_sha256": request_envelope_sha256,
+            "prompt_sha256": prompt_sha256,
+            "payload_redacted": bool(redacted),
+            "prompt_redacted": bool(prompt_redacted),
+            **STORAGE_SECURITY_CONTRACT,
             **OBSERVATION_CONTRACT,
         }
         with _WRITE_LOCK:
@@ -439,6 +640,16 @@ def capture_ai_request(
             if prompt_sha256 not in seen_prompts:
                 _append_jsonl(_prompt_path(target_date), prompt_row)
                 seen_prompts.add(prompt_sha256)
+            # Commit the request ledger last. A request row must never point at
+            # payload/prompt content that failed to persist.
+            seen_requests = _SEEN_REQUEST_IDS.get(target_date)
+            if seen_requests is None:
+                request_path = _request_path(target_date)
+                seen_requests = _load_seen(request_path, "request_id")
+                _SEEN_REQUEST_IDS[target_date] = seen_requests
+            if trace_id not in seen_requests:
+                _append_jsonl(_request_path(target_date), request_row)
+                seen_requests.add(trace_id)
         return {
             "ai_decision_trace_id": trace_id,
             "ai_prompt_sha256": prompt_sha256,
@@ -542,6 +753,17 @@ def _reason_codes(payload: dict[str, Any]) -> list[str]:
     return [str(value)] if value not in (None, "", "-") else []
 
 
+def _total_tokens(payload: dict[str, Any]) -> float | int | None:
+    openai_total = _safe_number(payload.get("openai_total_tokens"))
+    if openai_total is not None:
+        return openai_total
+    bedrock_input = _safe_number(payload.get("bedrock_total_input_tokens"))
+    bedrock_output = _safe_number(payload.get("bedrock_output_tokens"))
+    if bedrock_input is None and bedrock_output is None:
+        return None
+    return int(bedrock_input or 0) + int(bedrock_output or 0)
+
+
 def record_ai_decision_trace(
     result: dict[str, Any] | None,
     *,
@@ -575,6 +797,19 @@ def record_ai_decision_trace(
             ).strip()
             or f"aidt-{uuid.uuid4().hex}"
         )
+        request_capture_markers = (
+            _optional(merged, "ai_prompt_sha256"),
+            _optional(merged, "ai_prompt_store_date"),
+            _optional(merged, "ai_input_payload_sha256"),
+            _optional(merged, "ai_input_payload_store_date"),
+            _optional(merged, "ai_request_envelope_sha256"),
+        )
+        if all(request_capture_markers):
+            request_capture_status = "captured"
+        elif any(request_capture_markers):
+            request_capture_status = "partial"
+        else:
+            request_capture_status = "missing"
         if provider_called is None:
             provider_called = bool(
                 payload.get("provider_called")
@@ -602,6 +837,10 @@ def record_ai_decision_trace(
         trace_row = {
             "schema": TRACE_SCHEMA,
             "decision_trace_id": trace_id,
+            "request_id": _optional(
+                merged, "openai_request_id", "ai_decision_trace_id"
+            )
+            or trace_id,
             "decision_ts": now.isoformat(),
             "decision_stage": stage,
             "stock_code": _normalize_stock_code(stock_identifier),
@@ -656,8 +895,27 @@ def record_ai_decision_trace(
             ),
             "provider_actual": _provider_actual(merged, bool(provider_called)),
             "provider_decision_origin": _provider_decision_origin(merged),
+            "provider_response_id": _optional(
+                merged,
+                "openai_response_id",
+                "provider_response_id",
+                "bedrock_response_id",
+            ),
             "model": _model_actual(merged),
             "model_requested": _optional(merged, "openai_model", "ai_model"),
+            "model_id": _optional(
+                merged,
+                "bedrock_model_id",
+                "openai_model",
+                "ai_model",
+            ),
+            "provider_region": _optional(
+                merged, "bedrock_region_name", "provider_region"
+            ),
+            "failback_chain": merged.get(
+                "provider_failback_chain",
+                merged.get("failback_chain", []),
+            ),
             "prompt_type": str(prompt_type or "-"),
             "prompt_version": str(prompt_version or "-"),
             "prompt_sha256": _optional(merged, "ai_prompt_sha256"),
@@ -677,6 +935,7 @@ def record_ai_decision_trace(
             "request_reasoning_effort": _optional(
                 merged, "ai_request_reasoning_effort"
             ),
+            "request_capture_status": request_capture_status,
             "payload_redacted": bool(merged.get("ai_input_payload_redacted", False)),
             "payload_replay_exact": bool(
                 merged.get("ai_input_payload_replay_exact", False)
@@ -684,8 +943,35 @@ def record_ai_decision_trace(
             "provider_called": bool(provider_called),
             "transport": _optional(merged, "openai_transport_mode"),
             "response_ms": _safe_number(
-                _optional(merged, "ai_response_ms", "openai_ws_roundtrip_ms")
+                _optional(
+                    merged,
+                    "ai_response_ms",
+                    "openai_ws_roundtrip_ms",
+                    "bedrock_latency_ms",
+                )
             ),
+            "response_sha256": _optional(
+                merged,
+                "ai_response_sha256",
+                "openai_response_sha256",
+                "bedrock_response_sha256",
+            )
+            or decision_result_sha256,
+            "input_tokens": _safe_number(
+                _optional(
+                    merged,
+                    "openai_input_tokens",
+                    "bedrock_input_tokens",
+                )
+            ),
+            "output_tokens": _safe_number(
+                _optional(
+                    merged,
+                    "openai_output_tokens",
+                    "bedrock_output_tokens",
+                )
+            ),
+            "total_tokens": _total_tokens(merged),
             "cache_hit": bool(merged.get("cache_hit", False)),
             "timeout": bool(
                 merged.get("openai_transport_fail_closed")
@@ -693,6 +979,17 @@ def record_ai_decision_trace(
             ),
             "parse_ok": bool(merged.get("ai_parse_ok", False)),
             "result_source": str(result_source or "-"),
+            "attempt": _safe_number(merged.get("forensic_attempt")),
+            "attempt_final": (
+                bool(merged.get("forensic_attempt_final"))
+                if "forensic_attempt_final" in merged
+                else None
+            ),
+            "semantic_errors": (
+                list(merged.get("forensic_semantic_errors") or [])
+                if isinstance(merged.get("forensic_semantic_errors"), list)
+                else []
+            ),
             "action": _optional(
                 merged, "action_v2", "action", "action_key", "action_label"
             ),
@@ -736,8 +1033,15 @@ def record_ai_decision_trace(
             "target_pct": _safe_number(_optional(merged, "ai_trace_target_pct")),
             "adverse_pct": _safe_number(_optional(merged, "ai_trace_adverse_pct")),
             "actual_order_authority": bool(merged.get("actual_order_authority", False)),
+            "outcome_label_eligible": bool(
+                merged.get("ai_decision_outcome_eligible", True)
+            ),
+            **STORAGE_SECURITY_CONTRACT,
             **OBSERVATION_CONTRACT,
         }
+        sanitized_trace_row, trace_redacted = _sanitize(trace_row)
+        trace_row = dict(sanitized_trace_row)
+        trace_row["trace_storage_redacted"] = bool(trace_redacted)
         pending_row = {
             "schema": OUTCOME_SCHEMA,
             "label_id": f"{trace_id}:v1",
@@ -782,6 +1086,7 @@ def record_ai_decision_trace(
                 if trace_row["reference_price"] is not None
                 else ["reference_price_missing"]
             ),
+            **STORAGE_SECURITY_CONTRACT,
             **OBSERVATION_CONTRACT,
         }
         with _WRITE_LOCK:
@@ -792,12 +1097,25 @@ def record_ai_decision_trace(
                 _SEEN_TRACE_IDS[target_date] = seen
             if trace_id not in seen:
                 _append_jsonl(_trace_path(target_date), trace_row)
-                _append_jsonl(_outcome_path(target_date), pending_row)
                 seen.add(trace_id)
+            if trace_row["outcome_label_eligible"]:
+                seen_outcomes = _SEEN_OUTCOME_LABEL_IDS.get(target_date)
+                if seen_outcomes is None:
+                    outcome_path = _outcome_path(target_date)
+                    seen_outcomes = _load_seen(outcome_path, "label_id")
+                    _SEEN_OUTCOME_LABEL_IDS[target_date] = seen_outcomes
+                label_id = str(pending_row["label_id"])
+                if label_id not in seen_outcomes:
+                    _append_jsonl(_outcome_path(target_date), pending_row)
+                    seen_outcomes.add(label_id)
         return {
             "ai_decision_trace_schema": TRACE_SCHEMA,
             "ai_decision_trace_id": trace_id,
-            "ai_decision_outcome_label_status": "pending",
+            "ai_decision_outcome_label_status": (
+                "pending"
+                if trace_row["outcome_label_eligible"]
+                else "not_applicable_rejected_attempt"
+            ),
         }
     except Exception as exc:
         log_error(f"[AI_DECISION_TRACE] decision append failed: {exc}")
