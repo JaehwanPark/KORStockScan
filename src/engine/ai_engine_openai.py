@@ -6161,6 +6161,18 @@ class GPTSniperEngine:
                     "ai_trace_prompt_type": prompt_type,
                 }
             )
+            snapshot = (
+                candle_context.get("ai_market_snapshot_v1")
+                if isinstance(candle_context, dict)
+                and isinstance(candle_context.get("ai_market_snapshot_v1"), dict)
+                else {}
+            )
+            trace_symbol = str(
+                snapshot.get("stock_code")
+                or trace_metadata_extra.get("stock_code")
+                or target_name
+                or "-"
+            ).strip()
             result = self._call_openai_safe(
                 prompt,
                 formatted_data,
@@ -6173,7 +6185,7 @@ class GPTSniperEngine:
                     else "entry_v1"
                 ),
                 endpoint_name="analyze_target",
-                symbol=target_name,
+                symbol=trace_symbol or "-",
                 cache_key=cache_key,
                 metadata_extra=trace_metadata_extra,
                 transport_mode_override=(

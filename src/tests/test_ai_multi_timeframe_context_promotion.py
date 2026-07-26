@@ -157,6 +157,10 @@ def test_evaluate_promotion_fails_closed_on_reviewed_source_drift(tmp_path):
     assert report["env_overrides"] == {}
 
 
+def test_reviewed_source_hash_covers_live_ai_payload_producer():
+    assert "src/engine/ai_engine_openai.py" in promotion.REVIEWED_SOURCE_FILES
+
+
 def test_evaluate_promotion_is_not_due_before_target_premarket(tmp_path):
     report = promotion.evaluate_promotion(
         target_date="2026-07-27",
