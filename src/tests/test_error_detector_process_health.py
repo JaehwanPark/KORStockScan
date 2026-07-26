@@ -85,15 +85,21 @@ class TestProcessHealthDetector:
         result = detector.check()
         assert result.severity == "pass"
 
-    def test_detector_fail_when_no_heartbeat(self):
+    def test_detector_fail_when_no_heartbeat(self, monkeypatch):
         if HEARTBEAT_PATH.exists():
             HEARTBEAT_PATH.unlink()
+        monkeypatch.setattr(
+            process_health_module, "_is_bot_expected_running", lambda: True
+        )
         detector = ProcessHealthDetector()
         result = detector.check()
         assert result.severity == "fail"
         assert "not found" in result.summary.lower()
 
-    def test_detector_fail_when_main_loop_stale(self):
+    def test_detector_fail_when_main_loop_stale(self, monkeypatch):
+        monkeypatch.setattr(
+            process_health_module, "_is_bot_expected_running", lambda: True
+        )
         write_heartbeat("main_loop")
         stale_data = {
             "main_loop": {
