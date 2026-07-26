@@ -30,6 +30,7 @@ from src.engine.scalping.entry_candle_context import (
 from src.engine.scalping.market_data_enrichment import (
     rest_signed_tape_tick_freshness,
 )
+from src.engine.scalping.multi_timeframe_context import promotion_activation_state
 
 SCHEMA = "holding_decision_context_v1"
 KST = ZoneInfo("Asia/Seoul")
@@ -145,12 +146,18 @@ def holding_decision_context_enabled(
     decision_kind: str,
     now_ts: Any = None,
 ) -> bool:
+    now = _now_kst(now_ts)
+    activation = promotion_activation_state(now)
+    if activation.get("activation_source") == "atomic_promotion_artifact":
+        return True
+    if activation.get("promotion_artifact_required"):
+        return False
     if not _env_bool("KORSTOCKSCAN_HOLDING_DECISION_CONTEXT_ENABLED", False):
         return False
     active_date = str(
         os.getenv("KORSTOCKSCAN_HOLDING_DECISION_CONTEXT_ACTIVE_DATE", "")
     ).strip()
-    if active_date and _now_kst(now_ts).date().isoformat() != active_date:
+    if active_date and now.date().isoformat() != active_date:
         return False
     cohort = _cohort(venue, session)
     if not _env_bool(f"KORSTOCKSCAN_HOLDING_DECISION_CONTEXT_{cohort}_ENABLED", False):

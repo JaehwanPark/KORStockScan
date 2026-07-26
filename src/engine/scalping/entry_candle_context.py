@@ -25,6 +25,7 @@ from src.engine.kiwoom_orders import resolve_order_dmst_stex_tp
 from src.engine.scalping.multi_timeframe_context import (
     SOURCE_BAR_LIMIT,
     build_multi_timeframe_context,
+    promotion_activation_state,
 )
 
 SCHEMA = "entry_candle_context_v1"
@@ -81,12 +82,18 @@ def _cohort(venue: str, session: str) -> str:
 def entry_candle_context_enabled(
     *, venue: str = "", session: str = "", now_ts: Any = None
 ) -> bool:
+    now = _now_kst(now_ts)
+    activation = promotion_activation_state(now)
+    if activation.get("activation_source") == "atomic_promotion_artifact":
+        return True
+    if activation.get("promotion_artifact_required"):
+        return False
     if not _env_bool("KORSTOCKSCAN_ENTRY_CANDLE_CONTEXT_ENABLED", False):
         return False
     active_date = str(
         os.getenv("KORSTOCKSCAN_ENTRY_CANDLE_CONTEXT_ACTIVE_DATE", "")
     ).strip()
-    if active_date and _now_kst(now_ts).date().isoformat() != active_date:
+    if active_date and now.date().isoformat() != active_date:
         return False
     cohort = _cohort(venue, session)
     return _env_bool(f"KORSTOCKSCAN_ENTRY_CANDLE_CONTEXT_{cohort}_ENABLED", False)

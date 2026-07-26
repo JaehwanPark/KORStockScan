@@ -9,7 +9,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-from datetime import datetime, timedelta
+import os
+from collections import Counter
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable
 from xml.etree import ElementTree
@@ -31,11 +33,9 @@ TRACE_DIR = PROJECT_ROOT / "data" / "ai_decision_trace"
 REQUEST_DIR = PROJECT_ROOT / "data" / "ai_decision_requests"
 SCHEMA = "ai_input_external_validation_v1"
 STRICT_STATUSES = {"MATCH", "MISMATCH"}
-KRX_LOADER_URL = (
-    "https://data.krx.co.kr/contents/MDC/MDI/outerLoader/"
-    "index.cmd?screenId=MDCSTAT015"
-)
-KRX_DATA_URL = "https://data.krx.co.kr/comm/bldAttendant/getJsonData.cmd"
+KRX_OPEN_API_BASE_URL = "https://data-dbg.krx.co.kr/svc/apis/sto"
+KRX_OPEN_API_AUTH_ENV = "KRX_OPEN_API_AUTH_KEY"
+KRX_OPEN_API_ENDPOINTS = ("stk_bydd_trd", "ksq_bydd_trd")
 NAVER_CHART_URL = "https://fchart.stock.naver.com/sise.nhn"
 
 
@@ -50,6 +50,22 @@ def _sha256_json(value: Any) -> str:
 def _sanitize_metadata(value: Any) -> Any:
     sanitized, _redacted = sanitize_ai_trace_value(value)
     return sanitized
+
+
+def _validated_provenance_date(
+    target_date: str,
+    provenance_date: str | None,
+) -> str:
+    try:
+        market_date = date.fromisoformat(str(target_date))
+        capture_date = date.fromisoformat(str(provenance_date or target_date))
+    except ValueError as exc:
+        raise ValueError("target/provenance date must use YYYY-MM-DD") from exc
+    if capture_date < market_date:
+        raise ValueError("provenance capture date cannot precede the market date")
+    if capture_date > datetime.now(KST).date():
+        raise ValueError("provenance capture date cannot be in the future")
+    return capture_date.isoformat()
 
 
 def _int(value: Any) -> int | None:
@@ -235,49 +251,100 @@ def _fetch_naver_chart(
 def _fetch_krx_daily(
     target_date: str,
     *,
-    session_factory: Callable[[], Any] = requests.Session,
+    auth_key: str | None = None,
+    get: Callable[..., Any] = requests.get,
 ) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
-    session = session_factory()
-    headers = {
-        "User-Agent": "Mozilla/5.0 KORStockScan-source-quality-audit/1.0",
-        "Referer": KRX_LOADER_URL,
-    }
-    session.get(KRX_LOADER_URL, headers=headers, timeout=15).raise_for_status()
-    response = session.post(
-        KRX_DATA_URL,
-        headers=headers,
-        data={
-            "bld": "dbms/MDC/STAT/standard/MDCSTAT01501",
-            "locale": "ko_KR",
-            "mktId": "ALL",
-            "trdDd": target_date.replace("-", ""),
-            "share": "1",
-            "money": "1",
-            "csvxls_isNo": "false",
-        },
-        timeout=20,
+    """Fetch official KOSPI/KOSDAQ daily rows through the authenticated KRX API.
+
+    The unauthenticated Data Marketplace web JSON backend returns ``LOGOUT`` and
+    is intentionally not used here.  Authentication material is request-only
+    and never included in returned report metadata.
+    """
+
+    resolved_auth_key = (
+        os.getenv(KRX_OPEN_API_AUTH_ENV, "").strip()
+        if auth_key is None
+        else str(auth_key).strip()
     )
-    response.raise_for_status()
-    payload = response.json()
-    output: dict[str, dict[str, Any]] = {}
-    for row in payload.get("OutBlock_1", []) or []:
-        symbol = str(row.get("ISU_SRT_CD") or "").strip()
-        if not symbol:
-            continue
-        output[symbol] = {
-            "open": _int(row.get("TDD_OPNPRC")),
-            "high": _int(row.get("TDD_HGPRC")),
-            "low": _int(row.get("TDD_LWPRC")),
-            "close": _int(row.get("TDD_CLSPRC")),
-            "volume": _int(row.get("ACC_TRDVOL")),
-            "raw": row,
-        }
-    return output, {
-        "url": KRX_DATA_URL,
-        "screen": "MDCSTAT015",
-        "response_sha256": _sha256_json(payload),
+    metadata: dict[str, Any] = {
+        "source": "KRX_OPEN_API_STOCK_DAILY",
+        "base_url": KRX_OPEN_API_BASE_URL,
+        "api_ids": list(KRX_OPEN_API_ENDPOINTS),
+        "auth_env": KRX_OPEN_API_AUTH_ENV,
+        "auth_configured": bool(resolved_auth_key),
+        "auth_value_recorded": False,
+        "legacy_mdc_endpoint_called": False,
         "retrieved_at": datetime.now(KST).isoformat(),
     }
+    if not resolved_auth_key:
+        metadata.update(
+            {
+                "status": "source_unavailable",
+                "error": "krx_open_api_auth_key_not_configured",
+                "response_sha256": None,
+            }
+        )
+        return {}, metadata
+
+    request_date = date.fromisoformat(target_date).strftime("%Y%m%d")
+    output: dict[str, dict[str, Any]] = {}
+    payloads: dict[str, Any] = {}
+    endpoint_errors: dict[str, str] = {}
+    for api_id in KRX_OPEN_API_ENDPOINTS:
+        url = f"{KRX_OPEN_API_BASE_URL}/{api_id}"
+        try:
+            response = get(
+                url,
+                params={"basDd": request_date},
+                headers={
+                    "AUTH_KEY": resolved_auth_key,
+                    "Accept": "application/json",
+                    "User-Agent": "KORStockScan-source-quality-audit/1.0",
+                },
+                timeout=20,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            response_rows = payload.get("OutBlock_1")
+            if not isinstance(response_rows, list) or not response_rows:
+                raise ValueError("krx_open_api_outblock_missing_or_empty")
+            response_dates = {
+                str(row.get("BAS_DD") or "").strip()
+                for row in response_rows
+                if isinstance(row, dict)
+            }
+            if response_dates != {request_date}:
+                raise ValueError("krx_open_api_response_date_mismatch")
+            payloads[api_id] = payload
+        except Exception as exc:
+            endpoint_errors[api_id] = f"{type(exc).__name__}:{exc}"
+            continue
+        for row in response_rows:
+            symbol = str(row.get("ISU_CD") or "").strip()
+            if not symbol:
+                continue
+            output[symbol] = {
+                "open": _int(row.get("TDD_OPNPRC")),
+                "high": _int(row.get("TDD_HGPRC")),
+                "low": _int(row.get("TDD_LWPRC")),
+                "close": _int(row.get("TDD_CLSPRC")),
+                "volume": _int(row.get("ACC_TRDVOL")),
+                "raw": row,
+            }
+    metadata.update(
+        {
+            "status": (
+                "pass"
+                if not endpoint_errors
+                else ("partial" if payloads else "source_unavailable")
+            ),
+            "error": ("krx_open_api_endpoint_failure" if endpoint_errors else None),
+            "endpoint_errors": endpoint_errors,
+            "response_sha256": _sha256_json(payloads) if payloads else None,
+            "row_count": len(output),
+        }
+    )
+    return output, metadata
 
 
 def _find_nested(value: Any, key: str) -> Any:
@@ -771,6 +838,7 @@ def build_exact_payload_comparisons(
 ) -> dict[str, Any]:
     rows: list[dict[str, Any]] = []
     request_count = 0
+    endpoint_counts: Counter[str] = Counter()
     provider_none_count = 0
     forming_bar_count = 0
     for payload_row in payload_rows:
@@ -779,6 +847,7 @@ def build_exact_payload_comparisons(
         if not isinstance(bars, list) or not bars:
             continue
         request_count += 1
+        endpoint_counts[str(payload_row.get("endpoint") or "unknown")] += 1
         provider = _payload_provider(payload_row)
         if provider == "none":
             provider_none_count += 1
@@ -869,6 +938,7 @@ def build_exact_payload_comparisons(
         "comparison_rows": rows,
         "summary": {
             "request_count": request_count,
+            "endpoint_counts": dict(sorted(endpoint_counts.items())),
             "comparable_field_count": sum(
                 row["status"] in STRICT_STATUSES for row in rows
             ),
@@ -938,7 +1008,9 @@ def build_symbol_comparison(
         venue=venue,
     )
     rows: list[dict[str, Any]] = []
-    daily_source = str(source_meta.get("daily_external_source") or "KRX_MDCSTAT015")
+    daily_source = str(
+        source_meta.get("daily_external_source") or "KRX_OPEN_API_STOCK_DAILY"
+    )
     daily_comparable_fields = set(
         source_meta.get(
             "daily_external_comparable_fields",
@@ -1147,19 +1219,25 @@ def build_symbol_comparison(
     }
 
 
-def build_live_report(target_date: str, symbols: list[str]) -> dict[str, Any]:
+def build_live_report(
+    target_date: str,
+    symbols: list[str],
+    *,
+    provenance_date: str | None = None,
+) -> dict[str, Any]:
     from src.utils import kiwoom_utils
 
+    capture_date = _validated_provenance_date(target_date, provenance_date)
     token = kiwoom_utils.get_kiwoom_token()
     if not token:
         raise RuntimeError("Kiwoom token unavailable")
     payloads = enrich_payloads_with_response_provenance(
-        target_date, load_ai_payloads(target_date)
+        capture_date, load_ai_payloads(capture_date)
     )
-    request_provenance = load_request_provenance(target_date)
+    request_provenance = load_request_provenance(capture_date)
     try:
         krx_daily, krx_meta = _fetch_krx_daily(target_date)
-        krx_error = None
+        krx_error = krx_meta.get("error")
     except Exception as exc:
         krx_daily, krx_meta = {}, {}
         krx_error = f"{type(exc).__name__}:{exc}"
@@ -1224,7 +1302,9 @@ def build_live_report(target_date: str, symbols: list[str]) -> dict[str, Any]:
         )
         external_daily = krx_daily.get(symbol) or naver_daily
         daily_source = (
-            "KRX_MDCSTAT015" if krx_daily.get(symbol) else "NAVER_FCHART_DAILY"
+            "KRX_OPEN_API_STOCK_DAILY"
+            if krx_daily.get(symbol)
+            else "NAVER_FCHART_DAILY"
         )
         daily_external_comparable_fields = (
             ("open", "high", "low", "close", "volume")
@@ -1312,6 +1392,12 @@ def build_live_report(target_date: str, symbols: list[str]) -> dict[str, Any]:
         "schema": SCHEMA,
         "generated_at": datetime.now(KST).isoformat(),
         "date": target_date,
+        "provenance_capture_date": capture_date,
+        "provenance_join_policy": (
+            "explicit_forensic_replay_market_date_to_capture_date"
+            if capture_date != target_date
+            else "same_date_natural_capture"
+        ),
         "status": (
             "pass"
             if mismatch_count == 0
@@ -1331,7 +1417,9 @@ def build_live_report(target_date: str, symbols: list[str]) -> dict[str, Any]:
         },
         "results": results,
         "external_source_policy": {
-            "daily_index_flow_primary": "KRX_MDCSTAT015",
+            "daily_stock_primary": "KRX_OPEN_API_STOCK_DAILY_AUTH_KEY",
+            "daily_stock_fallback": "NAVER_FCHART_DAILY_OHLC_ONLY",
+            "legacy_krx_mdc_web_json": "disabled_logout_session_dependency",
             "minute_close_volume_secondary": "NAVER_FCHART",
             "nxt_integrated_not_equal_to_krx": True,
             "closing_call_auction_separate": True,
@@ -1386,11 +1474,22 @@ def main(argv: list[str] | None = None) -> int:
         description="Compare observation-only scalping AI inputs with external data."
     )
     parser.add_argument("--date", dest="target_date", required=True)
+    parser.add_argument(
+        "--provenance-date",
+        help=(
+            "Date of the immutable request/trace/payload ledger. "
+            "Defaults to --date; use a later date only for explicit forensic replay."
+        ),
+    )
     parser.add_argument("--symbols", default="005930,096770,100090,005930_NX")
     parser.add_argument("--write", action="store_true")
     args = parser.parse_args(argv)
     symbols = [item.strip() for item in args.symbols.split(",") if item.strip()]
-    report = build_live_report(args.target_date, symbols)
+    report = build_live_report(
+        args.target_date,
+        symbols,
+        provenance_date=args.provenance_date,
+    )
     if args.write:
         json_path, md_path = _write_report(report)
         report["artifacts"] = [str(json_path), str(md_path)]

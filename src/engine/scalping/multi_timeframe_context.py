@@ -12,6 +12,7 @@ import os
 import threading
 import time
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -23,6 +24,12 @@ KST = ZoneInfo("Asia/Seoul")
 SCHEMA = "scalping_multi_timeframe_context_v1"
 SOURCE_BAR_LIMIT = 430
 MODEL_MULTI_TIMEFRAME_BAR_LIMIT = 20
+REPO_ROOT = Path(__file__).resolve().parents[3]
+PROMOTION_DIR = REPO_ROOT / "data" / "runtime"
+RUNTIME_ENV_DIR = REPO_ROOT / "data" / "threshold_cycle" / "runtime_env"
+PROMOTION_SCHEMA = "ai_multi_timeframe_context_promotion_v1"
+PROMOTION_AUTHORITY_ID = "operator_full_market_context_promotion_2026-07-27"
+PROMOTION_ARTIFACT_REQUIRED_FROM_DATE = "2026-07-27"
 
 INPUT_CONTRACT = {
     "metric_role": "ai_input_feature_bundle",
@@ -32,6 +39,8 @@ INPUT_CONTRACT = {
     "primary_decision_metric": "required_source_field_availability",
     "source_quality_gate": "fresh_same_basis_conflict_free",
     "runtime_effect": False,
+    "standalone_runtime_effect": False,
+    "live_payload_inclusion": "promotion_gated_binary_full_market",
     "allowed_runtime_apply": False,
     "actual_order_submitted": False,
     "broker_order_forbidden": True,
@@ -49,26 +58,214 @@ INPUT_CONTRACT = {
 _PREVIOUS_DAY_CACHE: dict[tuple[str, str], tuple[float, dict[str, Any]]] = {}
 _PREVIOUS_DAY_CACHE_LOCK = threading.Lock()
 _PREVIOUS_DAY_CACHE_TTL_SEC = 21_600.0
+_PROMOTION_CACHE_LOCK = threading.Lock()
+_PROMOTION_CACHE: dict[str, tuple[int, int, dict[str, Any]]] = {}
+_ACTIVATION_CACHE_LOCK = threading.Lock()
+_ACTIVATION_CACHE: dict[
+    str, tuple[tuple[tuple[int, int] | None, ...], dict[str, Any]]
+] = {}
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(65_536), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _file_signature(path: Path) -> tuple[int, int] | None:
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    return stat.st_mtime_ns, stat.st_size
+
+
+def _promotion_artifact(target_date: str) -> dict[str, Any]:
+    path = PROMOTION_DIR / f"ai_multi_timeframe_context_promotion_{target_date}.json"
+    try:
+        stat = path.stat()
+    except OSError:
+        return {}
+    cache_key = str(path)
+    with _PROMOTION_CACHE_LOCK:
+        cached = _PROMOTION_CACHE.get(cache_key)
+        if cached and cached[:2] == (stat.st_mtime_ns, stat.st_size):
+            return dict(cached[2])
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    artifact = value if isinstance(value, dict) else {}
+    with _PROMOTION_CACHE_LOCK:
+        _PROMOTION_CACHE[cache_key] = (stat.st_mtime_ns, stat.st_size, artifact)
+    return dict(artifact)
+
+
+def _latest_promotion_artifact(
+    target_date: str,
+) -> tuple[str, dict[str, Any]]:
+    candidates: list[str] = []
+    for path in PROMOTION_DIR.glob("ai_multi_timeframe_context_promotion_*.json"):
+        artifact_date = path.stem.removeprefix("ai_multi_timeframe_context_promotion_")
+        try:
+            datetime.strptime(artifact_date, "%Y-%m-%d")
+        except ValueError:
+            continue
+        if artifact_date <= target_date:
+            candidates.append(artifact_date)
+    for artifact_date in sorted(set(candidates), reverse=True):
+        artifact = _promotion_artifact(artifact_date)
+        if artifact:
+            return artifact_date, artifact
+    return "", {}
+
+
+def _parse_promotion_ts(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=KST)
+    return parsed.astimezone(KST)
+
+
+def _activation_state_at_capture(
+    state: dict[str, Any],
+    captured_at: datetime,
+) -> dict[str, Any]:
+    resolved = dict(state)
+    promoted_at = _parse_promotion_ts(resolved.get("promoted_at"))
+    capture = (
+        captured_at.replace(tzinfo=KST)
+        if captured_at.tzinfo is None
+        else captured_at.astimezone(KST)
+    )
+    if resolved.get("active") and (promoted_at is None or capture < promoted_at):
+        resolved.update(
+            {
+                "active": False,
+                "activation_source": "promotion_not_effective_at_capture",
+            }
+        )
+    return resolved
+
+
+def promotion_activation_state(captured_at: datetime) -> dict[str, Any]:
+    """Resolve the fail-closed env or atomic promotion-marker activation state."""
+
+    capture = (
+        captured_at.replace(tzinfo=KST)
+        if captured_at.tzinfo is None
+        else captured_at.astimezone(KST)
+    )
+    target_date = capture.date().isoformat()
+    promotion_artifact_required = target_date >= PROMOTION_ARTIFACT_REQUIRED_FROM_DATE
+    enabled = str(
+        os.getenv("KORSTOCKSCAN_MULTI_TIMEFRAME_AI_CONTEXT_ENABLED", "false")
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    active_date = str(
+        os.getenv("KORSTOCKSCAN_MULTI_TIMEFRAME_AI_CONTEXT_ACTIVE_DATE", "")
+    ).strip()
+    env_date_allowed = not active_date or target_date >= active_date
+    if enabled and env_date_allowed and not promotion_artifact_required:
+        return {
+            "active": True,
+            "activation_source": "process_env",
+            "target_date": active_date or target_date,
+            "promotion_artifact": None,
+            "promotion_artifact_required": False,
+        }
+    promotion_target_date, artifact = _latest_promotion_artifact(target_date)
+    if (
+        artifact.get("schema") != PROMOTION_SCHEMA
+        or artifact.get("decision") != "promoted_all_market_sessions_full"
+        or artifact.get("runtime_activation") is not True
+        or artifact.get("transaction_status") != "committed"
+        or artifact.get("operator_authorization_id") != PROMOTION_AUTHORITY_ID
+        or str(artifact.get("target_date") or "") != promotion_target_date
+    ):
+        return {
+            "active": False,
+            "activation_source": (
+                "promotion_artifact_required_missing_or_invalid"
+                if promotion_artifact_required
+                else "none"
+            ),
+            "target_date": target_date,
+            "promotion_artifact": None,
+            "promotion_artifact_required": promotion_artifact_required,
+        }
+    artifact_path = (
+        PROMOTION_DIR
+        / f"ai_multi_timeframe_context_promotion_{promotion_target_date}.json"
+    )
+    env_path = RUNTIME_ENV_DIR / f"threshold_runtime_env_{promotion_target_date}.env"
+    manifest_path = (
+        RUNTIME_ENV_DIR / f"threshold_runtime_env_{promotion_target_date}.json"
+    )
+    if artifact.get("runtime_env_path") not in (None, str(env_path)) or artifact.get(
+        "runtime_manifest_path"
+    ) not in (None, str(manifest_path)):
+        return {
+            "active": False,
+            "activation_source": "promotion_artifact_path_mismatch",
+            "target_date": target_date,
+            "promotion_artifact": str(artifact_path),
+            "promotion_target_date": promotion_target_date,
+            "promotion_artifact_required": promotion_artifact_required,
+        }
+    signature = tuple(
+        _file_signature(path) for path in (artifact_path, env_path, manifest_path)
+    )
+    with _ACTIVATION_CACHE_LOCK:
+        cached = _ACTIVATION_CACHE.get(target_date)
+        if cached and cached[0] == signature:
+            return _activation_state_at_capture(cached[1], capture)
+    try:
+        hash_ok = _file_sha256(env_path) == artifact.get(
+            "runtime_env_sha256"
+        ) and _file_sha256(manifest_path) == artifact.get("runtime_manifest_sha256")
+    except OSError:
+        hash_ok = False
+    if not hash_ok:
+        state = {
+            "active": False,
+            "activation_source": "promotion_artifact_hash_mismatch",
+            "target_date": target_date,
+            "promotion_artifact": str(artifact_path),
+            "promotion_target_date": promotion_target_date,
+            "promotion_artifact_required": promotion_artifact_required,
+        }
+    else:
+        state = {
+            "active": True,
+            "activation_source": "atomic_promotion_artifact",
+            "target_date": target_date,
+            "promotion_artifact": str(artifact_path),
+            "promotion_target_date": promotion_target_date,
+            "promotion_artifact_required": promotion_artifact_required,
+            "promotion_sha256": _file_sha256(artifact_path),
+            "promoted_at": artifact.get("promoted_at"),
+        }
+    with _ACTIVATION_CACHE_LOCK:
+        _ACTIVATION_CACHE[target_date] = (signature, state)
+    return _activation_state_at_capture(state, capture)
+
+
+def full_market_promotion_active(captured_at: datetime) -> bool:
+    return bool(promotion_activation_state(captured_at).get("active"))
 
 
 def multi_timeframe_ai_input_enabled(captured_at: datetime) -> bool:
     """Return the single global post-validation promotion state."""
 
-    enabled = str(
-        os.getenv("KORSTOCKSCAN_MULTI_TIMEFRAME_AI_CONTEXT_ENABLED", "false")
-    ).strip().lower() in {"1", "true", "yes", "on"}
-    if not enabled:
-        return False
-    active_date = str(
-        os.getenv("KORSTOCKSCAN_MULTI_TIMEFRAME_AI_CONTEXT_ACTIVE_DATE", "")
-    ).strip()
-    if not active_date:
-        return True
-    try:
-        first_active_date = datetime.strptime(active_date, "%Y-%m-%d").date()
-    except ValueError:
-        return False
-    return captured_at.astimezone(KST).date() >= first_active_date
+    return full_market_promotion_active(captured_at)
 
 
 def _clean_code(code: str) -> str:
@@ -289,6 +486,7 @@ def build_multi_timeframe_context(
         market_context=market_context,
         sector_context=sector_context,
     )
+    activation = promotion_activation_state(captured_at)
     bundle = {
         "schema": SCHEMA,
         "input_bundle_version": SCHEMA,
@@ -310,7 +508,13 @@ def build_multi_timeframe_context(
         "sector_context": derived.get("sector_context"),
         "source_quality": derived.get("source_quality"),
         "input_contract": INPUT_CONTRACT,
-        "ai_input_enabled": multi_timeframe_ai_input_enabled(captured_at),
+        "ai_input_enabled": bool(activation.get("active")),
+        "live_payload_inclusion_effect": (
+            "active_full_market"
+            if activation.get("active")
+            else "source_only_not_promoted"
+        ),
+        "promotion_activation": activation,
     }
     bundle["payload_hash"] = hashlib.sha256(
         json.dumps(

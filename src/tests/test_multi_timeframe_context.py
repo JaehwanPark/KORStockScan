@@ -12,17 +12,16 @@ from src.engine.scalping.multi_timeframe_context import (
 KST = ZoneInfo("Asia/Seoul")
 
 
-def test_global_promotion_date_is_a_start_date_not_a_one_day_limit(monkeypatch):
+def test_post_cutover_env_alone_cannot_bypass_promotion_artifact(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_MULTI_TIMEFRAME_AI_CONTEXT_ENABLED", "true")
     monkeypatch.setenv(
         "KORSTOCKSCAN_MULTI_TIMEFRAME_AI_CONTEXT_ACTIVE_DATE", "2026-07-27"
     )
 
     assert not multi_timeframe_ai_input_enabled(
-        datetime(2026, 7, 26, 23, 59, tzinfo=KST)
+        datetime(2026, 7, 27, 8, 30, tzinfo=KST)
     )
-    assert multi_timeframe_ai_input_enabled(datetime(2026, 7, 27, 8, 30, tzinfo=KST))
-    assert multi_timeframe_ai_input_enabled(datetime(2026, 7, 28, 9, 0, tzinfo=KST))
+    assert not multi_timeframe_ai_input_enabled(datetime(2026, 7, 28, 9, 0, tzinfo=KST))
 
 
 def _rows(*, base: int, step: int, count: int = 20) -> list[dict]:

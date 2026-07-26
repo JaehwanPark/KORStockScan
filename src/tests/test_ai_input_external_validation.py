@@ -1,6 +1,8 @@
 import json
 from datetime import datetime
 
+import pytest
+
 from src.engine.scalping import ai_input_external_validation as mod
 
 
@@ -227,6 +229,133 @@ def test_source_metadata_redacts_auth_fields():
     }
 
 
+def test_krx_open_api_is_not_called_without_auth_key():
+    calls = []
+
+    def unexpected_get(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise AssertionError("network must not be called without KRX auth")
+
+    rows, metadata = mod._fetch_krx_daily(
+        "2026-07-24",
+        auth_key="",
+        get=unexpected_get,
+    )
+
+    assert rows == {}
+    assert calls == []
+    assert metadata["status"] == "source_unavailable"
+    assert metadata["error"] == "krx_open_api_auth_key_not_configured"
+    assert metadata["auth_configured"] is False
+    assert metadata["legacy_mdc_endpoint_called"] is False
+
+
+def test_krx_open_api_fetches_both_markets_without_recording_auth():
+    calls = []
+
+    class Response:
+        def __init__(self, row):
+            self._row = row
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"OutBlock_1": [self._row]}
+
+    def fake_get(url, **kwargs):
+        calls.append((url, kwargs))
+        symbol = "005930" if url.endswith("/stk_bydd_trd") else "100090"
+        return Response(
+            {
+                "BAS_DD": "20260724",
+                "ISU_CD": symbol,
+                "TDD_OPNPRC": "266000",
+                "TDD_HGPRC": "266500",
+                "TDD_LWPRC": "247000",
+                "TDD_CLSPRC": "249500",
+                "ACC_TRDVOL": "26175580",
+            }
+        )
+
+    rows, metadata = mod._fetch_krx_daily(
+        "2026-07-24",
+        auth_key="secret-auth-key",
+        get=fake_get,
+    )
+
+    assert [url.rsplit("/", 1)[-1] for url, _kwargs in calls] == [
+        "stk_bydd_trd",
+        "ksq_bydd_trd",
+    ]
+    assert all(call[1]["params"] == {"basDd": "20260724"} for call in calls)
+    assert all(call[1]["headers"]["AUTH_KEY"] == "secret-auth-key" for call in calls)
+    assert rows["005930"] == {
+        "open": 266000,
+        "high": 266500,
+        "low": 247000,
+        "close": 249500,
+        "volume": 26175580,
+        "raw": {
+            "BAS_DD": "20260724",
+            "ISU_CD": "005930",
+            "TDD_OPNPRC": "266000",
+            "TDD_HGPRC": "266500",
+            "TDD_LWPRC": "247000",
+            "TDD_CLSPRC": "249500",
+            "ACC_TRDVOL": "26175580",
+        },
+    }
+    serialized_metadata = json.dumps(metadata, ensure_ascii=False)
+    assert "secret-auth-key" not in serialized_metadata
+    assert metadata["status"] == "pass"
+    assert metadata["auth_configured"] is True
+    assert metadata["auth_value_recorded"] is False
+    assert metadata["legacy_mdc_endpoint_called"] is False
+
+
+def test_krx_open_api_rejects_http_200_error_or_wrong_date_payload():
+    class Response:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self._payload
+
+    payloads = iter(
+        [
+            {"result_code": "AUTH_ERROR"},
+            {
+                "OutBlock_1": [
+                    {
+                        "BAS_DD": "20260723",
+                        "ISU_CD": "100090",
+                    }
+                ]
+            },
+        ]
+    )
+
+    rows, metadata = mod._fetch_krx_daily(
+        "2026-07-24",
+        auth_key="secret-auth-key",
+        get=lambda *args, **kwargs: Response(next(payloads)),
+    )
+
+    assert rows == {}
+    assert metadata["status"] == "source_unavailable"
+    assert metadata["error"] == "krx_open_api_endpoint_failure"
+    assert metadata["response_sha256"] is None
+    assert set(metadata["endpoint_errors"]) == {
+        "stk_bydd_trd",
+        "ksq_bydd_trd",
+    }
+    assert "secret-auth-key" not in json.dumps(metadata)
+
+
 def test_exact_payload_validation_reads_entry_and_holding_bars():
     entry_row = {
         "request_id": "entry-1",
@@ -312,6 +441,7 @@ def test_exact_payload_validation_reads_entry_and_holding_bars():
 
     assert result["summary"] == {
         "request_count": 2,
+        "endpoint_counts": {"entry_price": 1, "holding_score": 1},
         "comparable_field_count": 10,
         "match_count": 10,
         "mismatch_count": 0,
@@ -450,9 +580,44 @@ def test_live_report_uses_explicit_market_request_code_for_krx_and_nxt(
         "_fetch_naver_chart",
         lambda symbol, timeframe, count: ([], {}),
     )
-    monkeypatch.setattr(mod, "load_ai_payloads", lambda target_date: {})
-    monkeypatch.setattr(mod, "load_request_provenance", lambda target_date: {})
+    payload_dates = []
+    request_dates = []
 
-    mod.build_live_report("2026-07-24", ["005930", "005930_NX"])
+    def load_payloads(target_date):
+        payload_dates.append(target_date)
+        return {}
+
+    def load_requests(target_date):
+        request_dates.append(target_date)
+        return {}
+
+    monkeypatch.setattr(mod, "load_ai_payloads", load_payloads)
+    monkeypatch.setattr(mod, "load_request_provenance", load_requests)
+
+    report = mod.build_live_report(
+        "2026-07-24",
+        ["005930", "005930_NX"],
+        provenance_date="2026-07-26",
+    )
 
     assert calls == [("005930", True), ("005930_NX", True)]
+    assert payload_dates == ["2026-07-26"]
+    assert request_dates == ["2026-07-26"]
+    assert report["date"] == "2026-07-24"
+    assert report["provenance_capture_date"] == "2026-07-26"
+    assert (
+        report["provenance_join_policy"]
+        == "explicit_forensic_replay_market_date_to_capture_date"
+    )
+
+
+def test_live_report_rejects_provenance_date_before_market_date():
+    with pytest.raises(
+        ValueError,
+        match="provenance capture date cannot precede",
+    ):
+        mod.build_live_report(
+            "2026-07-24",
+            ["005930"],
+            provenance_date="2026-07-23",
+        )
