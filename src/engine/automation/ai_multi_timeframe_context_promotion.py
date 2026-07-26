@@ -59,6 +59,10 @@ REQUIRED_REVIEW_CHECKS = ("tests", "compile", "diff_check")
 PREMARKET_REVIEW_START = time(8, 20)
 PREMARKET_REVIEW_END = time(8, 40)
 PREMARKET_APPLY_END = time(9, 0)
+KRX_POST_APPLY_VALIDATION_START = time(9, 20)
+DEFAULT_KRX_GOLDEN_DATE = "2026-07-24"
+DEFAULT_PREMARKET_SYMBOLS = ("005930_NX", "096770_NX", "100090_NX")
+DEFAULT_KRX_GOLDEN_SYMBOLS = ("005930", "096770", "100090")
 REVIEWED_SOURCE_FILES = (
     "src/engine/automation/ai_multi_timeframe_context_promotion.py",
     "src/engine/ai_engine_openai.py",
@@ -74,8 +78,10 @@ REVIEWED_SOURCE_FILES = (
 PROMOTION_CONTRACT = {
     "metric_role": "ai_input_runtime_promotion_gate",
     "decision_authority": "operator_authorized_binary_context_inclusion_only",
-    "window_policy": "target_date_premarket_exact_validation",
-    "sample_floor": "one_valid_exact_request_per_required_symbol_route",
+    "window_policy": ("target_date_nxt_premarket_exact_plus_krx_golden_then_0920_krx"),
+    "sample_floor": (
+        "one_valid_exact_request_per_nxt_symbol_route_and_one_krx_golden_row"
+    ),
     "primary_decision_metric": "required_source_field_match_status",
     "source_quality_gate": "fresh_same_basis_conflict_free_completed_bar",
     "runtime_effect": True,
@@ -96,7 +102,9 @@ PROMOTION_CONTRACT = {
 OBSERVATION_CONTRACT = {
     "metric_role": "ai_input_post_promotion_observation",
     "decision_authority": "context_only_rollback_observation",
-    "window_policy": "first_natural_call_per_endpoint_venue_session",
+    "window_policy": (
+        "first_natural_call_per_endpoint_venue_session_and_0920_krx_exact"
+    ),
     "sample_floor": "one_natural_call_per_applicable_endpoint",
     "primary_decision_metric": "exact_promoted_payload_contract_status",
     "source_quality_gate": "fresh_same_route_completed_bar_exact_payload",
@@ -241,28 +249,16 @@ def context_only_rollback_env(target_date: str) -> dict[str, str]:
     }
 
 
-def _validation_findings(
+def _premarket_validation_findings(
     validation: dict[str, Any],
     target_date: str,
     required_symbols: Iterable[str],
 ) -> list[str]:
     findings: list[str] = []
     if validation.get("schema") != "ai_input_external_validation_v1":
-        findings.append("validation_schema_invalid")
+        findings.append("premarket_validation_schema_invalid")
     if str(validation.get("date") or "") != target_date:
-        findings.append("validation_target_date_mismatch")
-    if validation.get("status") != "pass":
-        findings.append("validation_status_not_pass")
-    summary = validation.get("summary")
-    summary = summary if isinstance(summary, dict) else {}
-    for field in (
-        "mismatch_count",
-        "payload_mismatch_count",
-        "payload_source_unavailable_count",
-        "provider_none_count",
-    ):
-        if int(summary.get(field) or 0) != 0:
-            findings.append(f"validation_{field}_nonzero")
+        findings.append("premarket_validation_target_date_mismatch")
     results = {
         str(row.get("symbol") or ""): row
         for row in validation.get("results") or []
@@ -272,20 +268,26 @@ def _validation_findings(
     for symbol in required_symbols:
         row = results.get(symbol)
         if row is None:
-            findings.append(f"required_symbol_missing:{symbol}")
+            findings.append(f"premarket_required_symbol_missing:{symbol}")
             continue
-        source_summary = row.get("summary")
-        source_summary = source_summary if isinstance(source_summary, dict) else {}
+        if str(row.get("venue") or "").upper() != "NXT":
+            findings.append(f"premarket_symbol_not_nxt:{symbol}")
         exact = row.get("ai_payload_exact_validation")
         exact = exact if isinstance(exact, dict) else {}
         exact_summary = exact.get("summary")
         exact_summary = exact_summary if isinstance(exact_summary, dict) else {}
-        if source_summary.get("required_source_field_match_status") != "pass":
-            findings.append(f"source_match_failed:{symbol}")
         if exact_summary.get("required_payload_match_status") != "pass":
-            findings.append(f"payload_match_failed:{symbol}")
-        if int(exact_summary.get("request_count") or 0) < 1:
-            findings.append(f"exact_request_missing:{symbol}")
+            findings.append(f"premarket_payload_match_failed:{symbol}")
+        if int(exact_summary.get("valid_exact_request_count") or 0) < 1:
+            findings.append(f"premarket_exact_request_missing:{symbol}")
+        for field in (
+            "mismatch_count",
+            "source_unavailable_count",
+            "provider_none_count",
+            "forming_bar_included_count",
+        ):
+            if int(exact_summary.get(field) or 0) != 0:
+                findings.append(f"premarket_{field}_nonzero:{symbol}")
         endpoint_counts.update(
             {
                 str(endpoint): int(count or 0)
@@ -294,11 +296,101 @@ def _validation_findings(
                 ).items()
             }
         )
-        if int(exact_summary.get("forming_bar_included_count") or 0) != 0:
-            findings.append(f"forming_bar_included:{symbol}")
     for endpoint in REQUIRED_VALIDATION_ENDPOINTS:
         if endpoint_counts[endpoint] < 1:
-            findings.append(f"required_endpoint_exact_request_missing:{endpoint}")
+            findings.append(
+                f"premarket_required_endpoint_exact_request_missing:{endpoint}"
+            )
+    return findings
+
+
+def _krx_golden_findings(
+    validation: dict[str, Any],
+    golden_date: str,
+    required_symbols: Iterable[str],
+) -> list[str]:
+    findings: list[str] = []
+    if validation.get("schema") != "ai_input_external_validation_v1":
+        findings.append("krx_golden_validation_schema_invalid")
+    if str(validation.get("date") or "") != golden_date:
+        findings.append("krx_golden_validation_date_mismatch")
+    results = {
+        str(row.get("symbol") or ""): row
+        for row in validation.get("results") or []
+        if isinstance(row, dict)
+    }
+    for symbol in required_symbols:
+        row = results.get(symbol)
+        if row is None:
+            findings.append(f"krx_golden_required_symbol_missing:{symbol}")
+            continue
+        if str(row.get("venue") or "").upper() != "KRX":
+            findings.append(f"krx_golden_symbol_not_krx:{symbol}")
+        source_summary = row.get("summary")
+        source_summary = source_summary if isinstance(source_summary, dict) else {}
+        if source_summary.get("required_source_field_match_status") != "pass":
+            findings.append(f"krx_golden_source_match_failed:{symbol}")
+        if int(source_summary.get("mismatch_count") or 0) != 0:
+            findings.append(f"krx_golden_symbol_mismatch:{symbol}")
+    return findings
+
+
+def _same_day_krx_findings(
+    validation: dict[str, Any],
+    target_date: str,
+    required_symbols: Iterable[str],
+) -> list[str]:
+    findings: list[str] = []
+    if validation.get("schema") != "ai_input_external_validation_v1":
+        findings.append("krx_post_apply_validation_schema_invalid")
+    if str(validation.get("date") or "") != target_date:
+        findings.append("krx_post_apply_validation_target_date_mismatch")
+    results = {
+        str(row.get("symbol") or ""): row
+        for row in validation.get("results") or []
+        if isinstance(row, dict)
+    }
+    endpoint_counts: Counter[str] = Counter()
+    for symbol in required_symbols:
+        row = results.get(symbol)
+        if row is None:
+            findings.append(f"krx_post_apply_required_symbol_missing:{symbol}")
+            continue
+        if str(row.get("venue") or "").upper() != "KRX":
+            findings.append(f"krx_post_apply_symbol_not_krx:{symbol}")
+        source_summary = row.get("summary")
+        source_summary = source_summary if isinstance(source_summary, dict) else {}
+        if source_summary.get("required_source_field_match_status") != "pass":
+            findings.append(f"krx_post_apply_source_match_failed:{symbol}")
+        if int(source_summary.get("mismatch_count") or 0) != 0:
+            findings.append(f"krx_post_apply_source_mismatch:{symbol}")
+        exact = row.get("ai_payload_exact_validation")
+        exact = exact if isinstance(exact, dict) else {}
+        exact_summary = exact.get("summary")
+        exact_summary = exact_summary if isinstance(exact_summary, dict) else {}
+        if exact_summary.get("required_payload_match_status") != "pass":
+            findings.append(f"krx_post_apply_payload_match_failed:{symbol}")
+        if int(exact_summary.get("valid_exact_request_count") or 0) < 1:
+            findings.append(f"krx_post_apply_exact_request_missing:{symbol}")
+        for field in (
+            "mismatch_count",
+            "source_unavailable_count",
+            "provider_none_count",
+            "forming_bar_included_count",
+        ):
+            if int(exact_summary.get(field) or 0) != 0:
+                findings.append(f"krx_post_apply_{field}_nonzero:{symbol}")
+        endpoint_counts.update(
+            {
+                str(endpoint): int(count or 0)
+                for endpoint, count in (
+                    exact_summary.get("endpoint_counts") or {}
+                ).items()
+            }
+        )
+    for endpoint in REQUIRED_VALIDATION_ENDPOINTS:
+        if endpoint_counts[endpoint] < 1:
+            findings.append(f"krx_post_apply_required_endpoint_missing:{endpoint}")
     return findings
 
 
@@ -343,16 +435,20 @@ def evaluate_promotion(
     *,
     target_date: str,
     validation: dict[str, Any],
+    golden_validation: dict[str, Any],
+    golden_date: str = DEFAULT_KRX_GOLDEN_DATE,
     review: dict[str, Any],
     runtime_manifest: dict[str, Any],
     runtime_verify: dict[str, Any],
-    required_symbols: Iterable[str] = ("005930", "096770", "100090", "005930_NX"),
+    premarket_symbols: Iterable[str] = DEFAULT_PREMARKET_SYMBOLS,
+    krx_golden_symbols: Iterable[str] = DEFAULT_KRX_GOLDEN_SYMBOLS,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     evaluated_at = now or datetime.now(KST)
     window_status = _promotion_window_status(target_date, evaluated_at)
     findings = [
-        *_validation_findings(validation, target_date, required_symbols),
+        *_premarket_validation_findings(validation, target_date, premarket_symbols),
+        *_krx_golden_findings(golden_validation, golden_date, krx_golden_symbols),
         *_review_findings(review, target_date),
     ]
     if window_status != "pass":
@@ -399,11 +495,29 @@ def evaluate_promotion(
             "endpoints": list(EXPECTED_ENDPOINTS),
             "rollout": "binary_full_market_no_canary_no_partial_cohort",
         },
+        "evidence_basis": {
+            "premarket_exact": {
+                "date": target_date,
+                "venue": "NXT_PREMARKET",
+                "symbols": list(premarket_symbols),
+                "required_endpoints": list(REQUIRED_VALIDATION_ENDPOINTS),
+            },
+            "krx_golden_source": {
+                "date": golden_date,
+                "venue": "KRX_REGULAR",
+                "symbols": list(krx_golden_symbols),
+            },
+            "same_day_krx_post_apply": {
+                "required_from": f"{target_date}T09:20:00+09:00",
+                "failure_action": "context_only_rollback",
+            },
+        },
         "findings": findings,
         "env_overrides": env,
         "rollback_env_overrides": context_only_rollback_env(target_date),
         "source_hashes": {
             "validation_sha256": _sha256(validation),
+            "golden_validation_sha256": _sha256(golden_validation),
             "review_sha256": _sha256(review),
             "runtime_manifest_sha256": _sha256(runtime_manifest),
             "runtime_verify_sha256": _sha256(runtime_verify),
@@ -653,13 +767,55 @@ def _payload_context_evidence(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _krx_post_apply_validation(
+    *,
+    target_date: str,
+    validation: dict[str, Any],
+    now: datetime,
+    required_symbols: Iterable[str] = DEFAULT_KRX_GOLDEN_SYMBOLS,
+) -> dict[str, Any]:
+    current = now.astimezone(KST)
+    try:
+        target_day = datetime.strptime(target_date, "%Y-%m-%d").date()
+    except ValueError:
+        return {
+            "status": "fail",
+            "required_from": None,
+            "findings": ["krx_post_apply_target_date_invalid"],
+        }
+    required_from = datetime.combine(
+        target_day,
+        KRX_POST_APPLY_VALIDATION_START,
+        tzinfo=KST,
+    )
+    if current < required_from:
+        return {
+            "status": "pending_same_day_krx_validation",
+            "required_from": f"{target_date}T09:20:00+09:00",
+            "findings": [],
+        }
+    findings = _same_day_krx_findings(
+        validation,
+        target_date,
+        required_symbols,
+    )
+    return {
+        "status": "pass" if not findings else "fail",
+        "required_from": f"{target_date}T09:20:00+09:00",
+        "findings": findings,
+    }
+
+
 def build_first_observation_report(
     *,
     target_date: str,
     promotion: dict[str, Any],
     traces: list[dict[str, Any]],
     payloads: list[dict[str, Any]],
+    validation: dict[str, Any] | None = None,
+    now: datetime | None = None,
 ) -> dict[str, Any]:
+    generated_at = now or datetime.now(KST)
     if (
         promotion.get("decision") != "promoted_all_market_sessions_full"
         or promotion.get("runtime_activation") is not True
@@ -668,7 +824,7 @@ def build_first_observation_report(
         return {
             "schema": OBSERVATION_SCHEMA,
             "target_date": target_date,
-            "generated_at": datetime.now(KST).isoformat(),
+            "generated_at": generated_at.isoformat(),
             "status": "promotion_not_authorized",
             "observations": [],
             **OBSERVATION_CONTRACT,
@@ -757,28 +913,41 @@ def build_first_observation_report(
         session for session in EXPECTED_SESSIONS if session not in observed_sessions
     ]
     failed = [row for row in first.values() if row["status"] == "fail"]
+    krx_post_apply = _krx_post_apply_validation(
+        target_date=target_date,
+        validation=validation or {},
+        now=generated_at,
+    )
+    krx_post_apply_failed = krx_post_apply["status"] == "fail"
     status = (
         "rolled_back_context_only"
-        if failed
+        if failed or krx_post_apply_failed
         else (
             "all_market_first_observation_pass"
-            if not pending and not pending_sessions
+            if (
+                not pending
+                and not pending_sessions
+                and krx_post_apply["status"] == "pass"
+            )
             else "global_runtime_full_pending_natural_endpoint"
         )
     )
     return {
         "schema": OBSERVATION_SCHEMA,
         "target_date": target_date,
-        "generated_at": datetime.now(KST).isoformat(),
+        "generated_at": generated_at.isoformat(),
         "status": status,
         "promotion_artifact": str(promotion_path(target_date)),
         "promotion_sha256": _sha256(promotion),
         "observations": list(first.values()),
         "pending_natural_endpoints": pending,
         "pending_natural_sessions": pending_sessions,
-        "failed_observation_count": len(failed),
-        "rollback_required": bool(failed),
-        "rollback_scope": "multi_timeframe_context_only" if failed else None,
+        "krx_post_apply_validation": krx_post_apply,
+        "failed_observation_count": len(failed) + int(krx_post_apply_failed),
+        "rollback_required": bool(failed or krx_post_apply_failed),
+        "rollback_scope": (
+            "multi_timeframe_context_only" if failed or krx_post_apply_failed else None
+        ),
         **OBSERVATION_CONTRACT,
     }
 
@@ -789,6 +958,7 @@ def write_first_observation_report(target_date: str) -> dict[str, Any]:
         promotion=_load_json(promotion_path(target_date)),
         traces=_iter_jsonl(TRACE_DIR / f"ai_decision_trace_{target_date}.jsonl"),
         payloads=_iter_jsonl(PAYLOAD_DIR / f"ai_decision_payloads_{target_date}.jsonl"),
+        validation=_load_json(validation_path(target_date)),
     )
     _atomic_write_json(observation_path(target_date), report)
     return report
@@ -806,7 +976,15 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--review-artifact")
     parser.add_argument("--runtime-verify")
-    parser.add_argument("--required-symbols", default="005930,096770,100090,005930_NX")
+    parser.add_argument("--golden-validation-date", default=DEFAULT_KRX_GOLDEN_DATE)
+    parser.add_argument(
+        "--premarket-symbols",
+        default=",".join(DEFAULT_PREMARKET_SYMBOLS),
+    )
+    parser.add_argument(
+        "--krx-golden-symbols",
+        default=",".join(DEFAULT_KRX_GOLDEN_SYMBOLS),
+    )
     parser.add_argument("--write", action="store_true")
     args = parser.parse_args(argv)
     if args.mode in {"observe", "rollback"}:
@@ -831,11 +1009,16 @@ def main(argv: list[str] | None = None) -> int:
     report = evaluate_promotion(
         target_date=args.date,
         validation=_load_json(validation_path(args.date)),
+        golden_validation=_load_json(validation_path(args.golden_validation_date)),
+        golden_date=args.golden_validation_date,
         review=review,
         runtime_manifest=manifest,
         runtime_verify=_load_json(runtime_verify_file),
-        required_symbols=[
-            item.strip() for item in args.required_symbols.split(",") if item.strip()
+        premarket_symbols=[
+            item.strip() for item in args.premarket_symbols.split(",") if item.strip()
+        ],
+        krx_golden_symbols=[
+            item.strip() for item in args.krx_golden_symbols.split(",") if item.strip()
         ],
     )
     if args.mode == "apply" and report.get("status") == "pass":
