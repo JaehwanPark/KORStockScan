@@ -837,34 +837,59 @@ def build_exact_payload_comparisons(
     target_date: str,
 ) -> dict[str, Any]:
     rows: list[dict[str, Any]] = []
-    request_count = 0
+    observed_request_count = 0
+    valid_exact_request_count = 0
     endpoint_counts: Counter[str] = Counter()
+    observed_endpoint_counts: Counter[str] = Counter()
     provider_none_count = 0
+    non_exact_payload_count = 0
+    request_capture_missing_count = 0
+    response_hash_missing_count = 0
     forming_bar_count = 0
     for payload_row in payload_rows:
         context = _payload_context(payload_row.get("sanitized_user_input"))
         bars = context.get("bars")
         if not isinstance(bars, list) or not bars:
             continue
-        request_count += 1
-        endpoint_counts[str(payload_row.get("endpoint") or "unknown")] += 1
+        observed_request_count += 1
+        endpoint = str(payload_row.get("endpoint") or "unknown")
+        observed_endpoint_counts[endpoint] += 1
+        provenance = payload_row.get("_response_provenance")
+        provenance = provenance if isinstance(provenance, dict) else {}
         provider = _payload_provider(payload_row)
         if provider == "none":
             provider_none_count += 1
+        payload_exact = (
+            payload_row.get("replay_exact") is True
+            and payload_row.get("redacted") is not True
+            and provenance.get("payload_replay_exact") is True
+        )
+        if not payload_exact:
+            non_exact_payload_count += 1
+        request_captured = provenance.get("request_capture_status") == "captured"
+        if not request_captured:
+            request_capture_missing_count += 1
+        response_hash_present = bool(provenance.get("response_sha256"))
+        if not response_hash_present:
+            response_hash_missing_count += 1
+        if not (
+            payload_exact
+            and request_captured
+            and response_hash_present
+            and provider != "none"
+        ):
+            continue
+        valid_exact_request_count += 1
+        endpoint_counts[endpoint] += 1
         request_code = _payload_request_code(payload_row, context)
         api_by_time = _minute_by_time(
             route_minutes.get(request_code, []),
             target_date,
         )
-        provenance = payload_row.get("_response_provenance")
         request_id = str(
             payload_row.get("request_id")
-            or (provenance.get("request_id") if isinstance(provenance, dict) else "")
-            or (
-                provenance.get("decision_trace_id")
-                if isinstance(provenance, dict)
-                else ""
-            )
+            or provenance.get("request_id")
+            or provenance.get("decision_trace_id")
             or ""
         ).strip()
         for bar in bars:
@@ -937,8 +962,11 @@ def build_exact_payload_comparisons(
     return {
         "comparison_rows": rows,
         "summary": {
-            "request_count": request_count,
+            "request_count": valid_exact_request_count,
+            "observed_request_count": observed_request_count,
+            "valid_exact_request_count": valid_exact_request_count,
             "endpoint_counts": dict(sorted(endpoint_counts.items())),
+            "observed_endpoint_counts": dict(sorted(observed_endpoint_counts.items())),
             "comparable_field_count": sum(
                 row["status"] in STRICT_STATUSES for row in rows
             ),
@@ -946,10 +974,14 @@ def build_exact_payload_comparisons(
             "mismatch_count": len(mismatches),
             "source_unavailable_count": len(unavailable),
             "forming_bar_excluded_count": forming_bar_count,
+            "forming_bar_included_count": 0,
             "provider_none_count": provider_none_count,
+            "non_exact_payload_count": non_exact_payload_count,
+            "request_capture_missing_count": request_capture_missing_count,
+            "response_hash_missing_count": response_hash_missing_count,
             "required_payload_match_status": (
                 "pass"
-                if request_count
+                if valid_exact_request_count
                 and not mismatches
                 and not unavailable
                 and provider_none_count == 0
@@ -1481,7 +1513,10 @@ def main(argv: list[str] | None = None) -> int:
             "Defaults to --date; use a later date only for explicit forensic replay."
         ),
     )
-    parser.add_argument("--symbols", default="005930,096770,100090,005930_NX")
+    parser.add_argument(
+        "--symbols",
+        default=("005930,096770,100090," "005930_NX,096770_NX,100090_NX"),
+    )
     parser.add_argument("--write", action="store_true")
     args = parser.parse_args(argv)
     symbols = [item.strip() for item in args.symbols.split(",") if item.strip()]

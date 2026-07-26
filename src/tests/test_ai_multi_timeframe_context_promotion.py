@@ -17,21 +17,17 @@ TEST_NOW = datetime(2026, 7, 27, 8, 30, tzinfo=KST)
 
 def _validation(provider_none=0):
     results = []
-    for symbol, venue in (
-        ("005930", "KRX"),
-        ("096770", "KRX"),
-        ("100090", "KRX"),
-        ("005930_NX", "NXT"),
-    ):
+    for symbol in promotion.DEFAULT_PREMARKET_SYMBOLS:
         results.append(
             {
                 "symbol": symbol,
-                "venue": venue,
-                "summary": {"required_source_field_match_status": "pass"},
+                "venue": "NXT",
+                "summary": {"required_source_field_match_status": "fail"},
                 "ai_payload_exact_validation": {
                     "summary": {
                         "required_payload_match_status": "pass",
                         "request_count": 1,
+                        "valid_exact_request_count": 1,
                         "endpoint_counts": {
                             "analyze_target": 1,
                             "entry_price": 1,
@@ -40,7 +36,7 @@ def _validation(provider_none=0):
                         },
                         "mismatch_count": 0,
                         "source_unavailable_count": 0,
-                        "provider_none_count": 0,
+                        "provider_none_count": provider_none,
                         "forming_bar_included_count": 0,
                     }
                 },
@@ -58,6 +54,74 @@ def _validation(provider_none=0):
         },
         "results": results,
     }
+
+
+def _golden_validation():
+    return {
+        "schema": "ai_input_external_validation_v1",
+        "date": promotion.DEFAULT_KRX_GOLDEN_DATE,
+        "status": "fail",
+        "summary": {
+            "mismatch_count": 0,
+            "payload_mismatch_count": 0,
+            "payload_source_unavailable_count": 0,
+            "provider_none_count": 0,
+        },
+        "results": [
+            {
+                "symbol": symbol,
+                "venue": "KRX",
+                "summary": {
+                    "required_source_field_match_status": "pass",
+                    "mismatch_count": 0,
+                },
+                "ai_payload_exact_validation": {
+                    "summary": {
+                        "required_payload_match_status": "fail",
+                        "request_count": 0,
+                        "valid_exact_request_count": 0,
+                        "endpoint_counts": {},
+                    }
+                },
+            }
+            for symbol in promotion.DEFAULT_KRX_GOLDEN_SYMBOLS
+        ],
+    }
+
+
+def _same_day_krx_validation():
+    validation = _validation()
+    validation["status"] = "fail"
+    validation["results"] = []
+    for symbol in promotion.DEFAULT_KRX_GOLDEN_SYMBOLS:
+        validation["results"].append(
+            {
+                "symbol": symbol,
+                "venue": "KRX",
+                "summary": {
+                    "required_source_field_match_status": "pass",
+                    "mismatch_count": 0,
+                },
+                "ai_payload_exact_validation": {
+                    "summary": {
+                        "required_payload_match_status": "pass",
+                        "request_count": 1,
+                        "valid_exact_request_count": 1,
+                        "endpoint_counts": {
+                            "analyze_target": 1,
+                            "entry_price": 1,
+                            "holding_score": 1,
+                            "holding_flow": 1,
+                        },
+                        "mismatch_count": 0,
+                        "source_unavailable_count": 0,
+                        "provider_none_count": 0,
+                        "forming_bar_included_count": 0,
+                    }
+                },
+            }
+        )
+    return validation
 
 
 def _review():
@@ -87,6 +151,7 @@ def test_evaluate_promotion_is_binary_full_market(tmp_path):
     report = promotion.evaluate_promotion(
         target_date="2026-07-27",
         validation=_validation(),
+        golden_validation=_golden_validation(),
         review=_review(),
         runtime_manifest=_runtime_manifest(tmp_path),
         runtime_verify={"status": "pass", "passed": True},
@@ -108,6 +173,7 @@ def test_evaluate_promotion_fails_closed_on_provider_none(tmp_path):
     report = promotion.evaluate_promotion(
         target_date="2026-07-27",
         validation=_validation(provider_none=1),
+        golden_validation=_golden_validation(),
         review=_review(),
         runtime_manifest=_runtime_manifest(tmp_path),
         runtime_verify={"status": "pass", "passed": True},
@@ -129,6 +195,7 @@ def test_evaluate_promotion_requires_actual_exact_calls_for_each_core_endpoint(
     report = promotion.evaluate_promotion(
         target_date="2026-07-27",
         validation=validation,
+        golden_validation=_golden_validation(),
         review=_review(),
         runtime_manifest=_runtime_manifest(tmp_path),
         runtime_verify={"status": "pass", "passed": True},
@@ -137,7 +204,72 @@ def test_evaluate_promotion_requires_actual_exact_calls_for_each_core_endpoint(
 
     assert report["status"] == "fail"
     assert report["decision"] == "blocked_provider_or_schema"
-    assert "required_endpoint_exact_request_missing:holding_flow" in report["findings"]
+    assert (
+        "premarket_required_endpoint_exact_request_missing:holding_flow"
+        in report["findings"]
+    )
+
+
+def test_evaluate_promotion_uses_nxt_exact_and_krx_golden_split(tmp_path):
+    report = promotion.evaluate_promotion(
+        target_date="2026-07-27",
+        validation=_validation(),
+        golden_validation=_golden_validation(),
+        review=_review(),
+        runtime_manifest=_runtime_manifest(tmp_path),
+        runtime_verify={"status": "pass", "passed": True},
+        now=TEST_NOW,
+    )
+
+    assert report["status"] == "pass"
+    assert report["evidence_basis"]["premarket_exact"]["venue"] == "NXT_PREMARKET"
+    assert report["evidence_basis"]["krx_golden_source"]["date"] == "2026-07-24"
+
+
+def test_evaluate_promotion_fails_on_krx_golden_mismatch(tmp_path):
+    golden = _golden_validation()
+    golden["results"][0]["summary"]["mismatch_count"] = 1
+    report = promotion.evaluate_promotion(
+        target_date="2026-07-27",
+        validation=_validation(),
+        golden_validation=golden,
+        review=_review(),
+        runtime_manifest=_runtime_manifest(tmp_path),
+        runtime_verify={"status": "pass", "passed": True},
+        now=TEST_NOW,
+    )
+
+    assert report["status"] == "fail"
+    assert (
+        f"krx_golden_symbol_mismatch:{promotion.DEFAULT_KRX_GOLDEN_SYMBOLS[0]}"
+        in report["findings"]
+    )
+
+
+def test_evaluate_promotion_ignores_other_venue_summary_failures(tmp_path):
+    validation = _validation()
+    validation["summary"].update(
+        {
+            "payload_mismatch_count": 99,
+            "payload_source_unavailable_count": 99,
+            "provider_none_count": 99,
+        }
+    )
+    golden = _golden_validation()
+    golden["summary"]["mismatch_count"] = 99
+
+    report = promotion.evaluate_promotion(
+        target_date="2026-07-27",
+        validation=validation,
+        golden_validation=golden,
+        review=_review(),
+        runtime_manifest=_runtime_manifest(tmp_path),
+        runtime_verify={"status": "pass", "passed": True},
+        now=TEST_NOW,
+    )
+
+    assert report["status"] == "pass"
+    assert report["findings"] == []
 
 
 def test_evaluate_promotion_fails_closed_on_reviewed_source_drift(tmp_path):
@@ -146,6 +278,7 @@ def test_evaluate_promotion_fails_closed_on_reviewed_source_drift(tmp_path):
     report = promotion.evaluate_promotion(
         target_date="2026-07-27",
         validation=_validation(),
+        golden_validation=_golden_validation(),
         review=review,
         runtime_manifest=_runtime_manifest(tmp_path),
         runtime_verify={"status": "pass", "passed": True},
@@ -165,6 +298,7 @@ def test_evaluate_promotion_is_not_due_before_target_premarket(tmp_path):
     report = promotion.evaluate_promotion(
         target_date="2026-07-27",
         validation=_validation(),
+        golden_validation=_golden_validation(),
         review=_review(),
         runtime_manifest=_runtime_manifest(tmp_path),
         runtime_verify={"status": "pass", "passed": True},
@@ -188,6 +322,7 @@ def test_apply_transaction_preserves_env_and_writes_commit_marker_last(
     report = promotion.evaluate_promotion(
         target_date="2026-07-27",
         validation=_validation(),
+        golden_validation=_golden_validation(),
         review=_review(),
         runtime_manifest=manifest,
         runtime_verify={"status": "pass", "passed": True},
@@ -216,6 +351,7 @@ def test_apply_transaction_rejects_outside_target_premarket(tmp_path):
     report = promotion.evaluate_promotion(
         target_date="2026-07-27",
         validation=_validation(),
+        golden_validation=_golden_validation(),
         review=_review(),
         runtime_manifest=manifest,
         runtime_verify={"status": "pass", "passed": True},
@@ -241,6 +377,7 @@ def test_runtime_hook_trusts_only_committed_hash_matched_artifact(
     report = promotion.evaluate_promotion(
         target_date="2026-07-27",
         validation=_validation(),
+        golden_validation=_golden_validation(),
         review=_review(),
         runtime_manifest=manifest,
         runtime_verify={"status": "pass", "passed": True},
@@ -331,11 +468,67 @@ def test_first_observation_keeps_missing_endpoint_pending():
         },
         traces=traces,
         payloads=payloads,
+        now=TEST_NOW,
     )
     assert report["status"] == "global_runtime_full_pending_natural_endpoint"
     assert "entry_price" in report["pending_natural_endpoints"]
     assert "NXT_AFTERMARKET" in report["pending_natural_sessions"]
     assert report["rollback_required"] is False
+
+
+def test_krx_post_apply_validation_is_pending_before_0920():
+    report = promotion._krx_post_apply_validation(
+        target_date="2026-07-27",
+        validation={},
+        now=TEST_NOW,
+    )
+
+    assert report["status"] == "pending_same_day_krx_validation"
+    assert report["findings"] == []
+
+
+def test_krx_post_apply_validation_fails_closed_after_0920():
+    report = promotion._krx_post_apply_validation(
+        target_date="2026-07-27",
+        validation={},
+        now=datetime(2026, 7, 27, 9, 20, tzinfo=KST),
+    )
+
+    assert report["status"] == "fail"
+    assert "krx_post_apply_validation_schema_invalid" in report["findings"]
+
+
+def test_krx_post_apply_validation_passes_same_day_exact_contract():
+    report = promotion._krx_post_apply_validation(
+        target_date="2026-07-27",
+        validation=_same_day_krx_validation(),
+        now=datetime(2026, 7, 27, 9, 20, tzinfo=KST),
+    )
+
+    assert report["status"] == "pass"
+    assert report["findings"] == []
+
+
+def test_krx_post_apply_validation_remains_required_after_target_date():
+    report = promotion._krx_post_apply_validation(
+        target_date="2026-07-27",
+        validation={},
+        now=datetime(2026, 7, 28, 8, 0, tzinfo=KST),
+    )
+
+    assert report["status"] == "fail"
+    assert "krx_post_apply_validation_schema_invalid" in report["findings"]
+
+
+def test_krx_post_apply_validation_fails_closed_on_invalid_target_date():
+    report = promotion._krx_post_apply_validation(
+        target_date="invalid",
+        validation={},
+        now=TEST_NOW,
+    )
+
+    assert report["status"] == "fail"
+    assert report["findings"] == ["krx_post_apply_target_date_invalid"]
 
 
 def test_first_observation_rejects_uncommitted_evaluation():
@@ -348,6 +541,7 @@ def test_first_observation_rejects_uncommitted_evaluation():
         },
         traces=[_trace("analyze_target")],
         payloads=[_payload("analyze_target", "entry_candle_context_v1")],
+        now=TEST_NOW,
     )
 
     assert report["status"] == "promotion_not_authorized"
@@ -365,6 +559,7 @@ def test_first_observation_requests_context_only_rollback_on_provider_none():
         },
         traces=[{**_trace("analyze_target"), "provider_actual": "none"}],
         payloads=[_payload("analyze_target", "entry_candle_context_v1")],
+        now=TEST_NOW,
     )
     assert report["status"] == "rolled_back_context_only"
     assert report["rollback_required"] is True
@@ -390,6 +585,7 @@ def test_observation_allows_separately_marked_forming_one_minute_bar():
         },
         traces=[_trace("analyze_target")],
         payloads=[payload],
+        now=TEST_NOW,
     )
     assert report["failed_observation_count"] == 0
 
@@ -427,6 +623,7 @@ def test_observation_joins_duplicate_payload_hash_by_endpoint():
         },
         traces=[trace],
         payloads=[holding, entry],
+        now=TEST_NOW,
     )
     assert report["failed_observation_count"] == 0
 
@@ -441,6 +638,7 @@ def test_context_rollback_invalidates_commit_marker(tmp_path, monkeypatch):
     report = promotion.evaluate_promotion(
         target_date="2026-07-27",
         validation=_validation(),
+        golden_validation=_golden_validation(),
         review=_review(),
         runtime_manifest=manifest,
         runtime_verify={"status": "pass", "passed": True},

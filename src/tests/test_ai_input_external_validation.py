@@ -361,6 +361,8 @@ def test_exact_payload_validation_reads_entry_and_holding_bars():
         "request_id": "entry-1",
         "payload_sha256": "a" * 64,
         "endpoint": "entry_price",
+        "redacted": False,
+        "replay_exact": True,
         "sanitized_user_input": {
             "stock_code": "100090",
             "entry_candle_context": {
@@ -391,12 +393,19 @@ def test_exact_payload_validation_reads_entry_and_holding_bars():
                 ],
             },
         },
-        "_response_provenance": {"provider_actual": "bedrock"},
+        "_response_provenance": {
+            "provider_actual": "bedrock",
+            "payload_replay_exact": True,
+            "request_capture_status": "captured",
+            "response_sha256": "c" * 64,
+        },
     }
     holding_row = {
         "request_id": "holding-1",
         "payload_sha256": "b" * 64,
         "endpoint": "holding_score",
+        "redacted": False,
+        "replay_exact": True,
         "sanitized_user_input": {
             "stock_code": "100090",
             "holding_decision_context": {
@@ -419,7 +428,12 @@ def test_exact_payload_validation_reads_entry_and_holding_bars():
                 },
             },
         },
-        "_response_provenance": {"provider_actual": "openai"},
+        "_response_provenance": {
+            "provider_actual": "openai",
+            "payload_replay_exact": True,
+            "request_capture_status": "captured",
+            "response_sha256": "d" * 64,
+        },
     }
 
     result = mod.build_exact_payload_comparisons(
@@ -441,15 +455,71 @@ def test_exact_payload_validation_reads_entry_and_holding_bars():
 
     assert result["summary"] == {
         "request_count": 2,
+        "observed_request_count": 2,
+        "valid_exact_request_count": 2,
         "endpoint_counts": {"entry_price": 1, "holding_score": 1},
+        "observed_endpoint_counts": {"entry_price": 1, "holding_score": 1},
         "comparable_field_count": 10,
         "match_count": 10,
         "mismatch_count": 0,
         "source_unavailable_count": 0,
         "forming_bar_excluded_count": 1,
+        "forming_bar_included_count": 0,
         "provider_none_count": 0,
+        "non_exact_payload_count": 0,
+        "request_capture_missing_count": 0,
+        "response_hash_missing_count": 0,
         "required_payload_match_status": "pass",
     }
+
+
+def test_exact_payload_validation_rejects_redacted_or_uncaptured_rows():
+    payload = {
+        "request_id": "entry-redacted",
+        "payload_sha256": "e" * 64,
+        "endpoint": "entry_price",
+        "redacted": True,
+        "replay_exact": False,
+        "sanitized_user_input": {
+            "stock_code": "100090",
+            "entry_candle_context": {
+                "venue": "KRX",
+                "session": "krx_regular",
+                "request_code": "100090",
+                "bars": [
+                    {
+                        "t": "10:00",
+                        "o": 100,
+                        "h": 102,
+                        "l": 99,
+                        "c": 101,
+                        "v": 10,
+                        "forming": False,
+                        "partial_volume": False,
+                    }
+                ],
+            },
+        },
+        "_response_provenance": {
+            "provider_actual": "openai",
+            "payload_replay_exact": False,
+            "request_capture_status": "missing",
+            "response_sha256": None,
+        },
+    }
+
+    result = mod.build_exact_payload_comparisons(
+        payload_rows=[payload],
+        route_minutes={"100090": []},
+        target_date="2026-07-24",
+    )
+
+    assert result["summary"]["observed_request_count"] == 1
+    assert result["summary"]["valid_exact_request_count"] == 0
+    assert result["summary"]["non_exact_payload_count"] == 1
+    assert result["summary"]["request_capture_missing_count"] == 1
+    assert result["summary"]["response_hash_missing_count"] == 1
+    assert result["summary"]["required_payload_match_status"] == "fail"
 
 
 def test_payload_provenance_falls_back_to_unique_payload_hash(tmp_path, monkeypatch):
