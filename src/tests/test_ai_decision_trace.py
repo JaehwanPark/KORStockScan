@@ -480,6 +480,7 @@ def test_record_decision_creates_pending_outcome_idempotently(monkeypatch, tmp_p
         "ai_trace_session_bucket": "KRX_REGULAR",
         "ai_trace_reference_price": 70100,
         "ai_input_preflight_status": "fresh_consistent",
+        "ai_input_runtime_preflight_mode": "exact_v2",
         "ai_input_preflight_allowed": True,
         "ai_input_preflight_venue_consistent": True,
     }
@@ -507,6 +508,7 @@ def test_record_decision_creates_pending_outcome_idempotently(monkeypatch, tmp_p
     assert trace_rows[0]["input_tokens"] == 100
     assert trace_rows[0]["output_tokens"] == 20
     assert trace_rows[0]["total_tokens"] == 120
+    assert trace_rows[0]["input_preflight_mode"] == "exact_v2"
     assert len(trace_rows[0]["response_sha256"]) == 64
     assert trace_rows[0]["provider_decision_origin"] == "openai"
     assert trace_rows[0]["payload_replay_exact"] is True
@@ -518,6 +520,7 @@ def test_record_decision_creates_pending_outcome_idempotently(monkeypatch, tmp_p
     assert outcome_rows[0]["decision_ts"] == trace_rows[0]["decision_ts"]
     assert outcome_rows[0]["action"] == "WAIT"
     assert outcome_rows[0]["pending_horizons_min"] == [1, 3, 5, 10, 20, 30, 60]
+    assert outcome_rows[0]["input_preflight_mode"] == "exact_v2"
     assert outcome_rows[0]["allowed_runtime_apply"] is False
 
 
@@ -626,6 +629,8 @@ def test_pending_outcome_is_recovered_without_duplicate_trace_after_write_failur
     result = {
         "ai_decision_trace_id": "recover-outcome-1",
         "action": "WAIT",
+        "confidence": 84,
+        "reason_codes": ["mixed_tape"],
         "provider_called": True,
         "provider": "openai",
     }
@@ -645,7 +650,10 @@ def test_pending_outcome_is_recovered_without_duplicate_trace_after_write_failur
     assert first == {}
     assert second["ai_decision_outcome_label_status"] == "pending"
     assert len(_rows(trace._trace_path(trace._date_text()))) == 1
-    assert len(_rows(trace._outcome_path(trace._date_text()))) == 1
+    outcomes = _rows(trace._outcome_path(trace._date_text()))
+    assert len(outcomes) == 1
+    assert outcomes[0]["confidence"] == 84
+    assert outcomes[0]["reason_codes"] == ["mixed_tape"]
 
 
 def test_cache_trace_separates_provider_call_from_decision_origin(

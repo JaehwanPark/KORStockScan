@@ -602,3 +602,96 @@ Return JSON only:
   "risk_note": "one concise main risk"
 }
 """
+
+# Offline-only Prompt V2 candidates. These prompts are never selected by the
+# live engine directly; decision-quality paired replay owns their evaluation.
+DECISION_QUALITY_V2_RESPONSE_SCHEMA = {
+    "edge_state": "EDGE|NO_EDGE|INSUFFICIENT_DATA",
+    "action": "stage_specific_action",
+    "expected_upside_pct": "number_or_null",
+    "expected_downside_pct": "number_or_null",
+    "confidence": "integer_0_100",
+    "reason_codes": ["canonical_ascii_reason_code"],
+    "evidence": {
+        "trend": "supportive|mixed|adverse|insufficient",
+        "liquidity": "supportive|mixed|adverse|insufficient",
+        "tape": "supportive|mixed|adverse|insufficient",
+        "risk": "low|medium|high|insufficient",
+        "uncertainty": "low|medium|high",
+    },
+}
+
+_DECISION_QUALITY_V2_STAGE_RULES = {
+    "entry": (
+        "Compare immediate upside edge with adverse-first risk. "
+        "Return BUY, WAIT, or DROP."
+    ),
+    "entry_price": (
+        "Separate instrument attractiveness from submit fillability. "
+        "Return USE_DEFENSIVE, USE_REFERENCE, IMPROVE_LIMIT, or SKIP."
+    ),
+    "post_probe": (
+        "Evaluate freshness and recovery after the probe without inventing a new "
+        "entry signal. Return CONTINUE or STOP."
+    ),
+    "scale_in": (
+        "Separate holding the existing position from committing additional capital. "
+        "Return ADD or NO_ADD."
+    ),
+    "holding": (
+        "Compare secured continuation upside with enlarged loss risk. "
+        "Return HOLD, TRIM, or EXIT."
+    ),
+    "exit": (
+        "Separate profit protection, remaining upside, and loss-expansion risk. "
+        "Return HOLD, TRIM, or EXIT."
+    ),
+    "overnight": (
+        "Evaluate next-session gap and carry risk with broker-state consistency. "
+        "Return HOLD_OVERNIGHT or EXIT_BEFORE_CLOSE."
+    ),
+}
+
+
+def decision_quality_v2_system_prompt(stage: str) -> str:
+    """Return an English ASCII offline paired-replay prompt for one stage."""
+
+    normalized = str(stage or "").strip().lower()
+    stage_rule = _DECISION_QUALITY_V2_STAGE_RULES.get(normalized)
+    if stage_rule is None:
+        raise ValueError(f"unsupported decision-quality stage: {stage}")
+    return f"""
+You are an offline Korean-stock scalping decision-quality evaluator.
+You have no live order, threshold, provider, model-routing, quantity, or safety authority.
+Use only the exact captured payload. Do not infer missing data.
+
+Stage objective:
+{stage_rule}
+
+Rules:
+1. Distinguish completed bars from forming bars.
+2. Require timestamp and venue/session consistency across price, BBO, tape, and context.
+3. Use NO_EDGE when data is sufficient but expected edge is absent.
+4. Use INSUFFICIENT_DATA when a required source is missing, stale, or conflicted.
+5. Do not derive BUY, ADD, HOLD, TRIM, or EXIT from one score alone.
+6. Return expected upside and expected downside together.
+7. Return canonical English ASCII reason codes and structured evidence.
+8. Never repeat input arrays, secrets, credentials, or authorization headers.
+
+Return JSON only with this contract:
+{{
+  "edge_state": "EDGE" | "NO_EDGE" | "INSUFFICIENT_DATA",
+  "action": "stage-specific action",
+  "expected_upside_pct": number | null,
+  "expected_downside_pct": number | null,
+  "confidence": integer from 0 to 100,
+  "reason_codes": ["canonical_ascii_reason_code"],
+  "evidence": {{
+    "trend": "supportive" | "mixed" | "adverse" | "insufficient",
+    "liquidity": "supportive" | "mixed" | "adverse" | "insufficient",
+    "tape": "supportive" | "mixed" | "adverse" | "insufficient",
+    "risk": "low" | "medium" | "high" | "insufficient",
+    "uncertainty": "low" | "medium" | "high"
+  }}
+}}
+""".strip()

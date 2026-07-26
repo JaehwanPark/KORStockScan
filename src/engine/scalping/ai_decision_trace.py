@@ -997,6 +997,9 @@ def record_ai_decision_trace(
                 merged, "ai_decision_parent_trace_id"
             ),
             "input_preflight_status": _optional(merged, "ai_input_preflight_status"),
+            "input_preflight_mode": _optional(
+                merged, "ai_input_runtime_preflight_mode"
+            ),
             "input_preflight_allowed": (
                 bool(merged.get("ai_input_preflight_allowed"))
                 if "ai_input_preflight_allowed" in merged
@@ -1060,7 +1063,10 @@ def record_ai_decision_trace(
             "snapshot_id": trace_row["snapshot_id"],
             "action": trace_row["action"],
             "score": trace_row["score"],
+            "confidence": trace_row["confidence"],
+            "reason_codes": trace_row["reason_codes"],
             "result_source": trace_row["result_source"],
+            "input_preflight_mode": trace_row["input_preflight_mode"],
             "reference_price_type": trace_row["reference_price_type"],
             "reference_price": trace_row["reference_price"],
             "best_bid": trace_row["best_bid"],
