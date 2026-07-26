@@ -98,6 +98,80 @@ def test_new_generation_supersedes_queued_and_inflight_work():
     assert late.fields["result_current_generation"] is False
 
 
+def test_same_promotion_with_same_provenance_coalesces_without_new_revision():
+    scheduler = ScannerRuntimeScheduler(max_active=16)
+    first = _register(scheduler)
+    generation = first.item.generation
+
+    duplicate = _register(scheduler, attach_epoch=102.0)
+
+    assert duplicate.action == "generation_coalesced"
+    assert duplicate.reason == "same_promotion_already_registered"
+    assert duplicate.item.generation == generation
+    assert duplicate.superseded_work_ids == ()
+    assert scheduler.current_generation("000001") == generation
+    assert duplicate.fields["scanner_duplicate_provenance_match"] is True
+
+
+def test_same_promotion_coalesce_preserves_inflight_work_identity():
+    scheduler = ScannerRuntimeScheduler(max_active=16)
+    first = _register(scheduler)
+    dispatched = scheduler.next_decision(now_epoch=101.1)
+
+    duplicate = _register(scheduler, attach_epoch=102.0)
+
+    assert duplicate.action == "generation_coalesced"
+    assert duplicate.item == dispatched.item
+    assert scheduler.is_current(first.item.generation) is True
+    completed = scheduler.complete(
+        dispatched.item,
+        completed_epoch=102.1,
+        outcome="pass",
+    )
+    assert completed.action == "completed"
+
+
+def test_same_promotion_with_conflicting_provenance_invalidates_fail_closed():
+    scheduler = ScannerRuntimeScheduler(max_active=16)
+    first = _register(scheduler)
+    generation = first.item.generation
+
+    conflict = scheduler.register_generation(
+        code="000001",
+        promotion_id="PROMO-1",
+        record_id=1,
+        venue="KRX",
+        promotion_epoch=100.0,
+        attach_epoch=102.0,
+        observed_price=10_100,
+        source_signature="VALUE_TOP,VOLUME_SURGE_POSITIVE",
+    )
+
+    assert conflict.action == "generation_rejected"
+    assert conflict.reason == "same_promotion_provenance_conflict"
+    assert any(
+        work_id.startswith(generation.generation_id)
+        for work_id in conflict.superseded_work_ids
+    )
+    assert conflict.fields["scanner_duplicate_conflict_fields"] == "observed_price"
+    assert scheduler.current_generation("000001") is None
+    assert scheduler.snapshot_metrics(now_epoch=102.0)["scheduler_queue_depth"] == 0
+
+    quarantined = _register(scheduler, attach_epoch=103.0)
+    assert quarantined.action == "generation_rejected"
+    assert quarantined.reason == "promotion_provenance_conflict_quarantined"
+    assert scheduler.current_generation("000001") is None
+
+    fresh = _register(
+        scheduler,
+        promotion_id="PROMO-2",
+        promotion_epoch=103.5,
+        attach_epoch=104.0,
+    )
+    assert fresh.action == "generation_registered"
+    assert scheduler.current_generation("000001") == fresh.item.generation
+
+
 def test_scheduler_uses_absolute_deadline_then_lane_tie_priority():
     scheduler = ScannerRuntimeScheduler(max_active=16)
     registered = _register(scheduler)

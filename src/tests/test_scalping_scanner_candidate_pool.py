@@ -328,6 +328,9 @@ def test_scanner_records_source_identity_pass_on_promotion(monkeypatch):
     assert fields["scanner_source_identity_guard_reason"] == "scanner_identity_ok"
     assert fields["scanner_source_identity_payload_name"] == "삼화콘덴서"
     assert fields["scanner_source_identity_authoritative_name"] == "삼화콘덴서"
+    assert fields["effective_venue"] == "KRX"
+    assert fields["venue_resolution"] == "scanner_session_clock:krx_regular"
+    assert fields["market_session_bucket"] == "krx_regular"
 
 
 def test_promote_candidates_persists_same_envelope_published_to_runtime(
