@@ -1516,9 +1516,7 @@ def test_lifecycle_flow_handoff_warns_only_for_present_source_gap():
 
     assert report["status"] == "warning"
     assert report["missing"] == ["lifecycle_complete_flow_absent"]
-    assert report["warnings"] == [
-        "lifecycle_complete_flow_absent_workorder_handoff"
-    ]
+    assert report["warnings"] == ["lifecycle_complete_flow_absent_workorder_handoff"]
 
 
 def test_lifecycle_flow_handoff_keeps_adm_bridge_direct_zero_closure_fields():

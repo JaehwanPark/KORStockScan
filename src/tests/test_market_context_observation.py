@@ -18,7 +18,14 @@ def _bar(minute, o, h, l, c, v, **extra):
 
 def test_observation_resamples_completed_bars_and_excludes_forming_bar():
     rows = [
-        _bar(f"09:{minute:02d}", 100 + minute, 102 + minute, 99 + minute, 101 + minute, 10)
+        _bar(
+            f"09:{minute:02d}",
+            100 + minute,
+            102 + minute,
+            99 + minute,
+            101 + minute,
+            10,
+        )
         for minute in range(15)
     ]
     rows.append(_bar("09:15", 200, 201, 199, 200, 999, forming=True))

@@ -180,12 +180,16 @@ def normalize_completed_bars(
         if not _in_session(normalized["minute"], session):
             excluded_other_session_count += 1
             continue
-        observed_venue = str(
-            raw.get("effective_venue")
-            or raw.get("venue")
-            or raw.get("market")
-            or ""
-        ).strip().upper()
+        observed_venue = (
+            str(
+                raw.get("effective_venue")
+                or raw.get("venue")
+                or raw.get("market")
+                or ""
+            )
+            .strip()
+            .upper()
+        )
         if (
             observed_venue
             and expected_venue
@@ -205,7 +209,9 @@ def normalize_completed_bars(
         existing = by_minute.get(minute)
         if existing is not None:
             duplicate_count += 1
-            if any(existing[key] != normalized[key] for key in ("o", "h", "l", "c", "v")):
+            if any(
+                existing[key] != normalized[key] for key in ("o", "h", "l", "c", "v")
+            ):
                 duplicate_conflict_count += 1
         by_minute[minute] = normalized
 
@@ -276,14 +282,18 @@ def resample_completed_bars(
         offset = int((moment - anchor_dt).total_seconds() // 60)
         if offset < 0:
             continue
-        grouped.setdefault((moment.date().isoformat(), offset // interval), []).append(bar)
+        grouped.setdefault((moment.date().isoformat(), offset // interval), []).append(
+            bar
+        )
 
     output: list[dict[str, Any]] = []
     for (_date_key, bucket), rows in sorted(grouped.items()):
         rows = sorted(rows, key=lambda item: item["minute"])
         anchor_dt = datetime.combine(rows[0]["minute"].date(), anchor, tzinfo=KST)
         bucket_start = anchor_dt + timedelta(minutes=bucket * interval)
-        expected = [bucket_start + timedelta(minutes=index) for index in range(interval)]
+        expected = [
+            bucket_start + timedelta(minutes=index) for index in range(interval)
+        ]
         observed = {row["minute"] for row in rows}
         complete = all(item in observed for item in expected)
         output.append(
@@ -312,7 +322,9 @@ def _opening_range(
 ) -> dict[str, Any]:
     if not bars:
         return {"status": "source_quality_blocked", "reason": "no_completed_bars"}
-    anchor = datetime.combine(bars[0]["minute"].date(), _session_anchor(session), tzinfo=KST)
+    anchor = datetime.combine(
+        bars[0]["minute"].date(), _session_anchor(session), tzinfo=KST
+    )
     expected = [anchor + timedelta(minutes=index) for index in range(minutes)]
     by_minute = {bar["minute"]: bar for bar in bars}
     missing = [item for item in expected if item not in by_minute]
@@ -330,19 +342,23 @@ def _opening_range(
         "low": min(row["l"] for row in selected),
         "open": selected[0]["o"],
         "close": selected[-1]["c"],
-        "range_pct": round(
-            (max(row["h"] for row in selected) / min(row["l"] for row in selected) - 1)
-            * 100,
-            6,
-        )
-        if min(row["l"] for row in selected) > 0
-        else None,
+        "range_pct": (
+            round(
+                (
+                    max(row["h"] for row in selected)
+                    / min(row["l"] for row in selected)
+                    - 1
+                )
+                * 100,
+                6,
+            )
+            if min(row["l"] for row in selected) > 0
+            else None
+        ),
     }
 
 
-def _session_bar_vwap(
-    bars: list[dict[str, Any]], *, session: str
-) -> dict[str, Any]:
+def _session_bar_vwap(bars: list[dict[str, Any]], *, session: str) -> dict[str, Any]:
     if not bars:
         return {
             "status": "source_quality_blocked",
@@ -358,7 +374,9 @@ def _session_bar_vwap(
             "reason": "session_start_bar_missing",
             "value": None,
         }
-    usable = [row for row in bars if row["v"] > 0 and min(row["h"], row["l"], row["c"]) > 0]
+    usable = [
+        row for row in bars if row["v"] > 0 and min(row["h"], row["l"], row["c"]) > 0
+    ]
     total_volume = sum(row["v"] for row in usable)
     if total_volume <= 0:
         return {
@@ -366,7 +384,9 @@ def _session_bar_vwap(
             "reason": "positive_completed_volume_missing",
             "value": None,
         }
-    numerator = sum(((row["h"] + row["l"] + row["c"]) / 3.0) * row["v"] for row in usable)
+    numerator = sum(
+        ((row["h"] + row["l"] + row["c"]) / 3.0) * row["v"] for row in usable
+    )
     return {
         "status": "pass",
         "value": round(numerator / total_volume, 6),
@@ -457,25 +477,21 @@ def derive_scalping_market_features(
     continuous_completed = [row for row in completed if row not in call_auction]
     derived_allowed = quality["status"] == "pass"
     resampled = {
-        f"{interval}m": resample_completed_bars(
-            continuous_completed, interval_min=interval, session=session
+        f"{interval}m": (
+            resample_completed_bars(
+                continuous_completed, interval_min=interval, session=session
+            )
+            if derived_allowed
+            else []
         )
-        if derived_allowed
-        else []
         for interval in INTERVALS
     }
     multi = {
-        key: [
-            row for row in rows_for_interval if row["source_quality"] == "pass"
-        ]
+        key: [row for row in rows_for_interval if row["source_quality"] == "pass"]
         for key, rows_for_interval in resampled.items()
     }
     incomplete_multi = {
-        key: [
-            row
-            for row in rows_for_interval
-            if row["source_quality"] != "pass"
-        ]
+        key: [row for row in rows_for_interval if row["source_quality"] != "pass"]
         for key, rows_for_interval in resampled.items()
     }
     previous = dict(previous_day or {})

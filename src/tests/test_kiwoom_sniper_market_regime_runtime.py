@@ -900,9 +900,7 @@ def test_invalid_scheduler_boot_restore_expires_unfilled_watching_row(
     assert expired is True
     assert target["status"] == "EXPIRED"
     assert executed[0][1] == {"record_id": 77, "stock_code": "005930"}
-    assert emitted[-1]["stage"] == (
-        "scalping_scanner_scheduler_boot_restore_expired"
-    )
+    assert emitted[-1]["stage"] == ("scalping_scanner_scheduler_boot_restore_expired")
     assert emitted[-1]["fields"]["actual_order_submitted"] is False
 
 
@@ -1095,9 +1093,7 @@ def test_scheduler_submit_guard_blocks_promotion_arriving_during_heavy_eval(
             enqueued_epoch=105.0,
         )
     )
-    superseded = kiwoom_sniper_v2._scanner_generation_submit_guard(
-        target, "005930"
-    )
+    superseded = kiwoom_sniper_v2._scanner_generation_submit_guard(target, "005930")
 
     assert superseded["allowed"] is False
     assert superseded["reason"] == "newer_promotion_pending_main_thread_attach"
@@ -1156,10 +1152,7 @@ def test_scheduler_deferred_claim_keeps_candidate_and_blocker_identity_separate(
     assert decision.action == "not_next"
     assert emitted[-1]["payload"]["code"] == "000002"
     fields = emitted[-1]["fields"]
-    assert (
-        fields["scanner_generation_id"]
-        == candidate.item.generation.generation_id
-    )
+    assert fields["scanner_generation_id"] == candidate.item.generation.generation_id
     assert (
         fields["scanner_scheduler_claim_candidate_generation_id"]
         == candidate.item.generation.generation_id
@@ -1352,9 +1345,7 @@ def test_scanner_generation_guard_runs_immediately_before_first_broker_submit():
         kiwoom_sniper_v2.sniper_state_handlers._submit_watching_triggered_entry
     )
     loop_idx = source.index("for planned_order in planned_orders:")
-    guard_idx = source.index(
-        "SCANNER_GENERATION_SUBMIT_GUARD(stock, code)", loop_idx
-    )
+    guard_idx = source.index("SCANNER_GENERATION_SUBMIT_GUARD(stock, code)", loop_idx)
     send_idx = source.index("kiwoom_orders.send_buy_order(", guard_idx)
 
     assert loop_idx < guard_idx < send_idx
@@ -2142,10 +2133,7 @@ def test_scalping_scanner_promoted_target_refresh_preserves_higher_positive_delt
     assert existing["scanner_promotion_emitted_epoch"] == "2000.000"
     assert existing["source_signature"] == "PRICE_JUMP_START"
     assert existing["scanner_evidence_peak_positive_delta_pct"] == 7.72
-    assert (
-        existing["scanner_evidence_peak_promotion_id"]
-        == "SCANPROM-397030-1000000"
-    )
+    assert existing["scanner_evidence_peak_promotion_id"] == "SCANPROM-397030-1000000"
     assert existing["cntr_str"] == "190.0"
     assert emitted[-1]["fields"]["price_delta_since_first_seen_pct"] == "0.00"
     assert emitted[-1]["fields"]["scanner_promotion_id"] == "SCANPROM-397030-2000000"
@@ -2675,9 +2663,7 @@ def test_deadline_scheduler_orders_precheck_before_holding_and_recovery(
         },
     ]
 
-    ordered = kiwoom_sniper_v2._runtime_iteration_targets(
-        targets, now_ts=1000.0
-    )
+    ordered = kiwoom_sniper_v2._runtime_iteration_targets(targets, now_ts=1000.0)
 
     assert [target["id"] for target in ordered] == [
         "receipt",
@@ -2700,9 +2686,7 @@ def test_deadline_scheduler_attach_yields_to_ready_precheck(lane):
     }
 
     assert (
-        kiwoom_sniper_v2._scanner_scheduler_attach_must_yield_to_runtime_work(
-            [pending]
-        )
+        kiwoom_sniper_v2._scanner_scheduler_attach_must_yield_to_runtime_work([pending])
         is True
     )
 
@@ -2720,9 +2704,7 @@ def test_deadline_scheduler_attach_can_interleave_after_precheck(lane):
     }
 
     assert (
-        kiwoom_sniper_v2._scanner_scheduler_attach_must_yield_to_runtime_work(
-            [target]
-        )
+        kiwoom_sniper_v2._scanner_scheduler_attach_must_yield_to_runtime_work([target])
         is False
     )
 
@@ -2739,9 +2721,7 @@ def test_deadline_scheduler_attach_yields_to_order_safety_work(status):
     }
 
     assert (
-        kiwoom_sniper_v2._scanner_scheduler_attach_must_yield_to_runtime_work(
-            [ordered]
-        )
+        kiwoom_sniper_v2._scanner_scheduler_attach_must_yield_to_runtime_work([ordered])
         is True
     )
 
@@ -2751,14 +2731,11 @@ def test_deadline_scheduler_runtime_drains_one_attach_between_prechecks():
 
     assert source.count("_drain_scanner_promotion_inbox(") == 2
     assert source.count("max_items=1") >= 2
-    assert (
-        "_scanner_scheduler_attach_must_yield_to_runtime_work(targets)" in source
-    )
+    assert "_scanner_scheduler_attach_must_yield_to_runtime_work(targets)" in source
     assert (
         "_scanner_scheduler_attach_must_yield_to_runtime_work(\n"
         "                    runtime_work_queue\n"
-        "                )"
-        in source
+        "                )" in source
     )
 
 
@@ -5367,9 +5344,7 @@ def test_scheduler_ready_heavy_eval_flushes_before_next_promotion_attach():
     enqueue_idx = source.index(
         'owner="eligible_precheck_heavy_eval"',
     )
-    delayed_append_idx = source.index(
-        "delayed_scanner_heavy_eval.append", enqueue_idx
-    )
+    delayed_append_idx = source.index("delayed_scanner_heavy_eval.append", enqueue_idx)
     scheduler_guard_idx = source.index(
         "# Stage-1 deadline mode keeps preparation", delayed_append_idx
     )
@@ -5870,8 +5845,7 @@ def test_scanner_watch_stale_eviction_requires_three_attempts_and_age():
 
 def test_scanner_fast_precheck_missing_curr_routes_to_recovery_contract():
     assert (
-        "missing_or_zero_curr"
-        in kiwoom_sniper_v2.SCANNER_WATCH_EVICTION_STALE_REASONS
+        "missing_or_zero_curr" in kiwoom_sniper_v2.SCANNER_WATCH_EVICTION_STALE_REASONS
     )
 
     assert kiwoom_sniper_v2._scanner_fast_precheck_requires_recovery(

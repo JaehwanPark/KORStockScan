@@ -98,8 +98,7 @@ _JWT_VALUE = re.compile(
     r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b"
 )
 _PRIVATE_KEY_BLOCK = re.compile(
-    r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?"
-    r"-----END [A-Z ]*PRIVATE KEY-----",
+    r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?" r"-----END [A-Z ]*PRIVATE KEY-----",
     re.DOTALL,
 )
 _STAGE_BY_PROMPT_TYPE = {
@@ -149,9 +148,7 @@ def _payload_path(target_date: str) -> Path:
 
 def _request_path(target_date: str) -> Path:
     return (
-        DATA_DIR
-        / "ai_decision_requests"
-        / f"ai_decision_requests_{target_date}.jsonl"
+        DATA_DIR / "ai_decision_requests" / f"ai_decision_requests_{target_date}.jsonl"
     )
 
 
@@ -837,9 +834,7 @@ def record_ai_decision_trace(
         trace_row = {
             "schema": TRACE_SCHEMA,
             "decision_trace_id": trace_id,
-            "request_id": _optional(
-                merged, "openai_request_id", "ai_decision_trace_id"
-            )
+            "request_id": _optional(merged, "openai_request_id", "ai_decision_trace_id")
             or trace_id,
             "decision_ts": now.isoformat(),
             "decision_stage": stage,

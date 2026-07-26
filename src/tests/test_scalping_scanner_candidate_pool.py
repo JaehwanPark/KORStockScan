@@ -379,9 +379,8 @@ def test_promote_candidates_persists_same_envelope_published_to_runtime(
     assert persisted.effective_venue == "NXT"
     assert persisted.market_session_bucket == "nxt"
     assert persisted.scanner_promotion_id == published["scanner_promotion_id"]
-    assert (
-        persisted.scanner_promotion_emitted_epoch
-        == float(published["scanner_promotion_emitted_epoch"])
+    assert persisted.scanner_promotion_emitted_epoch == float(
+        published["scanner_promotion_emitted_epoch"]
     )
     assert persisted.scanner_source_signature == published["source_signature"]
 
@@ -2874,10 +2873,7 @@ def test_scanner_promotion_provenance_persists_exact_runtime_handoff():
     assert record.scanner_promotion_id == "SCANPROM-005930-123"
     assert record.scanner_promotion_reason == "price_jump_start_acceleration"
     assert record.scanner_promotion_emitted_epoch == 123.5
-    assert (
-        record.scanner_source_signature
-        == "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE"
-    )
+    assert record.scanner_source_signature == "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE"
 
 
 def test_scalping_session_venue_provenance_normalizes_aware_datetime_to_kst():

@@ -761,9 +761,7 @@ def _nxt_quote_snapshot(code: str, now_ts: float) -> dict:
 
 def test_fast_exit_route_guard_resolves_nxt_and_premarket_as_nxt():
     code = "123456"
-    nxt_ts = datetime(
-        2026, 7, 23, 16, 20, tzinfo=handlers._KST
-    ).timestamp()
+    nxt_ts = datetime(2026, 7, 23, 16, 20, tzinfo=handlers._KST).timestamp()
     nxt_fields = handlers._fast_exit_execution_route_fields(
         {
             "is_nxt": True,
@@ -785,9 +783,7 @@ def test_fast_exit_route_guard_resolves_nxt_and_premarket_as_nxt():
     assert nxt_fields["fast_exit_ws_nxt_route_ready"] is True
     assert nxt_fields["fast_exit_route_source_quality_blocked"] is False
 
-    premarket_ts = datetime(
-        2026, 7, 23, 8, 30, tzinfo=handlers._KST
-    ).timestamp()
+    premarket_ts = datetime(2026, 7, 23, 8, 30, tzinfo=handlers._KST).timestamp()
     premarket_fields = handlers._fast_exit_execution_route_fields(
         {
             "is_nxt": True,
@@ -799,18 +795,13 @@ def test_fast_exit_route_guard_resolves_nxt_and_premarket_as_nxt():
         now_ts=premarket_ts,
     )
     assert premarket_fields["fast_exit_broker_route"] == "NXT"
-    assert (
-        premarket_fields["fast_exit_execution_cohort"]
-        == "PREMARKET_KRX_LIKE"
-    )
+    assert premarket_fields["fast_exit_execution_cohort"] == "PREMARKET_KRX_LIKE"
     assert premarket_fields["fast_exit_route_source_quality_blocked"] is False
 
 
 def test_fast_exit_route_provenance_labels_outside_supported_session():
     code = "123456"
-    outside_ts = datetime(
-        2026, 7, 23, 15, 45, tzinfo=handlers._KST
-    ).timestamp()
+    outside_ts = datetime(2026, 7, 23, 15, 45, tzinfo=handlers._KST).timestamp()
 
     fields = handlers._fast_exit_execution_route_fields(
         {"is_nxt": True},
@@ -824,9 +815,7 @@ def test_fast_exit_route_provenance_labels_outside_supported_session():
     assert fields["fast_exit_execution_cohort_resolution"] == (
         "outside_supported_execution_session"
     )
-    assert fields["fast_exit_route_resolution_reason"] == (
-        "nxt_session_nxt_enabled"
-    )
+    assert fields["fast_exit_route_resolution_reason"] == ("nxt_session_nxt_enabled")
 
 
 def test_fast_exit_known_session_routes_do_not_wait_for_nxt_metadata(monkeypatch):
@@ -838,17 +827,13 @@ def test_fast_exit_known_session_routes_do_not_wait_for_nxt_metadata(monkeypatch
         ),
     )
     code = "123456"
-    regular_ts = datetime(
-        2026, 7, 23, 12, 0, tzinfo=handlers._KST
-    ).timestamp()
+    regular_ts = datetime(2026, 7, 23, 12, 0, tzinfo=handlers._KST).timestamp()
     regular = handlers._fast_exit_execution_route_fields(
         {}, code, {"curr": 9_800}, now_ts=regular_ts
     )
     assert regular["fast_exit_broker_route"] == "SOR"
 
-    nxt_ts = datetime(
-        2026, 7, 23, 16, 20, tzinfo=handlers._KST
-    ).timestamp()
+    nxt_ts = datetime(2026, 7, 23, 16, 20, tzinfo=handlers._KST).timestamp()
     nxt = handlers._fast_exit_execution_route_fields(
         {
             "status": "HOLDING",
@@ -866,9 +851,7 @@ def test_fast_exit_known_session_routes_do_not_wait_for_nxt_metadata(monkeypatch
 
 def test_fast_exit_route_guard_blocks_krx_only_and_unproven_nxt_quote():
     code = "123456"
-    nxt_ts = datetime(
-        2026, 7, 23, 16, 20, tzinfo=handlers._KST
-    ).timestamp()
+    nxt_ts = datetime(2026, 7, 23, 16, 20, tzinfo=handlers._KST).timestamp()
     krx_only = handlers._fast_exit_execution_route_fields(
         {"is_nxt": False},
         code,
@@ -935,9 +918,7 @@ def test_fast_exit_route_guard_blocks_krx_only_and_unproven_nxt_quote():
 
 
 def test_fast_exit_dispatch_passes_explicit_nxt_route(monkeypatch):
-    now_ts = datetime(
-        2026, 7, 23, 16, 20, tzinfo=handlers._KST
-    ).timestamp()
+    now_ts = datetime(2026, 7, 23, 16, 20, tzinfo=handlers._KST).timestamp()
     monkeypatch.setattr(handlers, "_remember_exit_context", lambda **kwargs: None)
     monkeypatch.setattr(handlers, "_log_holding_pipeline", lambda *args, **kwargs: None)
     monkeypatch.setattr(

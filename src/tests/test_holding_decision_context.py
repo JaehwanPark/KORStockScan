@@ -217,9 +217,7 @@ def test_holding_snapshot_recovers_program_context_from_position_state(
         "krx_regular",
         "holding_score",
         now_ts=now,
-        recent_candles=_candles(
-            60, start=datetime(2026, 7, 23, 9, 0, tzinfo=KST)
-        ),
+        recent_candles=_candles(60, start=datetime(2026, 7, 23, 9, 0, tzinfo=KST)),
     )
 
     program = context["ai_market_snapshot_v1"]["sources"]["program"]
@@ -241,9 +239,7 @@ def test_holding_model_omits_multi_timeframe_before_global_promotion(monkeypatch
         "krx_regular",
         "holding_score",
         now_ts=now,
-        recent_candles=_candles(
-            60, start=datetime(2026, 7, 23, 9, 0, tzinfo=KST)
-        ),
+        recent_candles=_candles(60, start=datetime(2026, 7, 23, 9, 0, tzinfo=KST)),
     )
 
     assert "multi_timeframe_context" in context["candle"]
@@ -313,9 +309,7 @@ def test_fresh_krx_context_contains_sixty_minute_structure_and_executable_pnl(
     }
     log_fields = holding_decision_context_log_fields(context)
     assert len(log_fields["holding_context_model_bars"]) == 20
-    assert (
-        log_fields["holding_context_model_structure"]["returns_pct"]["60"] is None
-    )
+    assert log_fields["holding_context_model_structure"]["returns_pct"]["60"] is None
     assert log_fields["holding_context_ai_market_snapshot"]["schema"] == (
         "ai_market_snapshot_v1"
     )
@@ -350,9 +344,7 @@ def test_entry_time_context_is_logged_exactly_but_not_duplicated_in_model_payloa
 
     log_fields = holding_decision_context_log_fields(context)
     model_payload = holding_decision_context_model_payload(context)
-    assert log_fields["holding_context_entry_time_context_status"] == (
-        "exact_captured"
-    )
+    assert log_fields["holding_context_entry_time_context_status"] == ("exact_captured")
     assert log_fields["holding_context_entry_time_context"] == entry_time_context
     assert len(log_fields["holding_context_entry_time_context_sha256"]) == 64
     assert "entry_time_context_provenance" not in model_payload

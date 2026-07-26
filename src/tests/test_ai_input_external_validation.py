@@ -322,9 +322,7 @@ def test_exact_payload_validation_reads_entry_and_holding_bars():
     }
 
 
-def test_payload_provenance_falls_back_to_unique_payload_hash(
-    tmp_path, monkeypatch
-):
+def test_payload_provenance_falls_back_to_unique_payload_hash(tmp_path, monkeypatch):
     trace_dir = tmp_path / "traces"
     trace_dir.mkdir()
     monkeypatch.setattr(mod, "TRACE_DIR", trace_dir)
@@ -353,10 +351,7 @@ def test_payload_provenance_falls_back_to_unique_payload_hash(
         },
     )
 
-    assert (
-        enriched["005930"][0]["_response_provenance"]["provider_actual"]
-        == "openai"
-    )
+    assert enriched["005930"][0]["_response_provenance"]["provider_actual"] == "openai"
 
 
 def test_naver_daily_fallback_volume_is_not_strictly_compared():
@@ -393,9 +388,7 @@ def test_naver_daily_fallback_volume_is_not_strictly_compared():
     )
 
     volume = next(
-        row
-        for row in result["comparison_rows"]
-        if row["field"] == "daily.volume"
+        row for row in result["comparison_rows"] if row["field"] == "daily.volume"
     )
     assert volume["status"] == "NOT_COMPARABLE"
     assert volume["reason"] == "naver_daily_volume_snapshot_not_final_krx_basis"
@@ -458,9 +451,7 @@ def test_live_report_uses_explicit_market_request_code_for_krx_and_nxt(
         lambda symbol, timeframe, count: ([], {}),
     )
     monkeypatch.setattr(mod, "load_ai_payloads", lambda target_date: {})
-    monkeypatch.setattr(
-        mod, "load_request_provenance", lambda target_date: {}
-    )
+    monkeypatch.setattr(mod, "load_request_provenance", lambda target_date: {})
 
     mod.build_live_report("2026-07-24", ["005930", "005930_NX"])
 

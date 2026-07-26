@@ -766,9 +766,7 @@ class ScannerRuntimeScheduler:
                     not in self._first_precheck_dispatched_generation_ids
                 )
                 else (
-                    "recheck"
-                    if lane is ScannerLane.FAST_PRECHECK
-                    else "not_applicable"
+                    "recheck" if lane is ScannerLane.FAST_PRECHECK else "not_applicable"
                 )
             ),
         )

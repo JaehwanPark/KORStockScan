@@ -241,7 +241,9 @@ def test_initial_precheck_precedes_earlier_recurring_recheck():
         lane=ScannerLane.FAST_PRECHECK,
         now_epoch=100.1,
     )
-    scheduler.complete(first.item, completed_epoch=100.2, outcome="source_quality_blocked")
+    scheduler.complete(
+        first.item, completed_epoch=100.2, outcome="source_quality_blocked"
+    )
     recurring = scheduler.enqueue(
         observed.item.generation,
         lane=ScannerLane.FAST_PRECHECK,
@@ -386,15 +388,14 @@ def test_recurring_recheck_cannot_consume_sixteen_symbol_first_precheck_budget()
             outcome="pass",
         )
 
-    assert all(
-        decision.item.precheck_phase == "initial" for decision in dispatched
+    assert all(decision.item.precheck_phase == "initial" for decision in dispatched)
+    assert {decision.item.generation.generation_id for decision in dispatched} == {
+        newcomer.item.generation.generation_id for newcomer in newcomers
+    }
+    assert (
+        max(decision.fields["attach_to_first_precheck_sec"] for decision in dispatched)
+        <= 10.0
     )
-    assert {
-        decision.item.generation.generation_id for decision in dispatched
-    } == {newcomer.item.generation.generation_id for newcomer in newcomers}
-    assert max(
-        decision.fields["attach_to_first_precheck_sec"] for decision in dispatched
-    ) <= 10.0
 
     after_initials = scheduler.next_decision(now_epoch=108.6)
     assert after_initials.item == recurring.item

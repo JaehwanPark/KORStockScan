@@ -20127,9 +20127,7 @@ def _update_holding_excursion_context(
             _safe_float(stock.get("mae_pct"), float(current_profit_pct)),
             float(current_profit_pct),
         )
-        started_at = _safe_float(
-            stock.get("excursion_tracking_started_at"), now_ts
-        )
+        started_at = _safe_float(stock.get("excursion_tracking_started_at"), now_ts)
     with ENTRY_LOCK:
         stock.update(
             {
@@ -35394,9 +35392,7 @@ def _apply_entry_ai_price_canary(
             now=time.time(),
         )
         frozen_feature_packet = (
-            frozen_feature_packet
-            if isinstance(frozen_feature_packet, dict)
-            else {}
+            frozen_feature_packet if isinstance(frozen_feature_packet, dict) else {}
         )
     except Exception as exc:
         frozen_feature_packet = {}
@@ -35415,9 +35411,11 @@ def _apply_entry_ai_price_canary(
     entry_price_input_audit["entry_price_feature_packet_build_error"] = (
         frozen_feature_packet_error
     )
-    frozen_input_quality = str(
-        entry_price_input_audit.get("ai_input_source_quality_status") or ""
-    ).strip().lower()
+    frozen_input_quality = (
+        str(entry_price_input_audit.get("ai_input_source_quality_status") or "")
+        .strip()
+        .lower()
+    )
     if runtime_preflight_required() and frozen_input_quality not in {
         "complete",
         "partial",
@@ -53781,9 +53779,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                     else {
                         "allowed": not bool(stock.get("scanner_generation_id")),
                         "reason": "scanner_generation_submit_guard_not_bound",
-                        "scheduler_version": stock.get(
-                            "scanner_scheduler_version"
-                        )
+                        "scheduler_version": stock.get("scanner_scheduler_version")
                         or "not_available_scheduler_version",
                         "scheduler_action": "pre_submit_generation_revalidation",
                         "scanner_scheduler_action_epoch": round(time.time(), 6),

@@ -93,9 +93,7 @@ def compare_value(
         reason = reason or "api_value_missing"
     elif value_type == "integer":
         status = (
-            "MATCH"
-            if _int(normalized_value) == _int(external_value)
-            else "MISMATCH"
+            "MATCH" if _int(normalized_value) == _int(external_value) else "MISMATCH"
         )
     else:
         left = _float(normalized_value)
@@ -398,9 +396,7 @@ def enrich_payloads_with_response_provenance(
 def load_request_provenance(
     target_date: str,
 ) -> dict[str, list[dict[str, Any]]]:
-    request_path = (
-        REQUEST_DIR / f"ai_decision_requests_{target_date}.jsonl"
-    )
+    request_path = REQUEST_DIR / f"ai_decision_requests_{target_date}.jsonl"
     trace_path = TRACE_DIR / f"ai_decision_trace_{target_date}.jsonl"
     traces: dict[str, dict[str, Any]] = {}
     if trace_path.exists():
@@ -486,9 +482,7 @@ def _naver_observation_rows(
     rows: list[dict[str, Any]], target_date: str
 ) -> list[dict[str, Any]]:
     target_rows = [
-        row
-        for row in rows
-        if str(row.get("timestamp") or "").startswith(target_date)
+        row for row in rows if str(row.get("timestamp") or "").startswith(target_date)
     ]
     deltas = naver_minute_volume_deltas(target_rows)
     output = []
@@ -497,8 +491,7 @@ def _naver_observation_rows(
         if not timestamp.startswith(target_date):
             continue
         if any(
-            _int(row.get(field)) is None
-            for field in ("open", "high", "low", "close")
+            _int(row.get(field)) is None for field in ("open", "high", "low", "close")
         ):
             continue
         minute = timestamp[11:16]
@@ -532,10 +525,7 @@ def _independent_api_observation(
     for row in rows:
         stamp = str(row.get("source_timestamp") or "")
         hhmm = stamp[8:12] if len(stamp) >= 12 else ""
-        if (
-            not stamp.startswith(target)
-            or not (session_start <= hhmm <= session_end)
-        ):
+        if not stamp.startswith(target) or not (session_start <= hhmm <= session_end):
             continue
         values = {
             "o": _int(row.get("시가", row.get("o"))),
@@ -576,9 +566,9 @@ def _independent_api_observation(
     opening_ranges = {}
     by_minute = {row["minute"]: row for row in normalized}
     if normalized:
-        anchor = datetime.strptime(
-            target + session_start, "%Y%m%d%H%M"
-        ).replace(tzinfo=KST)
+        anchor = datetime.strptime(target + session_start, "%Y%m%d%H%M").replace(
+            tzinfo=KST
+        )
     else:
         anchor = None
     for minutes in (5, 15):
@@ -602,17 +592,13 @@ def _independent_api_observation(
         grouped: dict[int, list[dict[str, Any]]] = {}
         if anchor:
             for row in normalized:
-                offset = int(
-                    (row["minute"] - anchor).total_seconds() // 60
-                )
+                offset = int((row["minute"] - anchor).total_seconds() // 60)
                 if offset >= 0:
                     grouped.setdefault(offset // interval, []).append(row)
         interval_rows = []
         for bucket, bucket_rows in sorted(grouped.items()):
             start = anchor + timedelta(minutes=bucket * interval)
-            expected = {
-                start + timedelta(minutes=index) for index in range(interval)
-            }
+            expected = {start + timedelta(minutes=index) for index in range(interval)}
             observed = {row["minute"] for row in bucket_rows}
             if expected != observed:
                 continue
@@ -646,19 +632,12 @@ def _append_derived_comparisons(
     venue: str,
     basis: dict[str, Any],
 ) -> None:
-    api_quality = (
-        (api_observation.get("source_quality") or {}).get("status") == "pass"
-    )
-    independent_quality = (
-        (independent_observation.get("source_quality") or {}).get("status")
-        == "pass"
-    )
+    api_quality = (api_observation.get("source_quality") or {}).get("status") == "pass"
+    independent_quality = (independent_observation.get("source_quality") or {}).get(
+        "status"
+    ) == "pass"
     comparable = api_quality and independent_quality
-    reason = (
-        ""
-        if comparable
-        else "derived_source_quality_not_comparable"
-    )
+    reason = "" if comparable else "derived_source_quality_not_comparable"
     rows.append(
         compare_value(
             field="derived.session_bar_vwap",
@@ -666,12 +645,10 @@ def _append_derived_comparisons(
             normalized_value=(api_observation.get("session_bar_vwap") or {}).get(
                 "value"
             ),
-            ai_payload_value=_ai_nested_value(
-                ai_payload, "session_bar_vwap", "value"
+            ai_payload_value=_ai_nested_value(ai_payload, "session_bar_vwap", "value"),
+            external_value=(independent_observation.get("session_bar_vwap") or {}).get(
+                "value"
             ),
-            external_value=(
-                independent_observation.get("session_bar_vwap") or {}
-            ).get("value"),
             value_type="float",
             comparable=comparable,
             reason=reason,
@@ -681,9 +658,7 @@ def _append_derived_comparisons(
     )
     for minutes in (5, 15):
         api_range = api_observation.get(f"opening_range_{minutes}m") or {}
-        external_range = independent_observation.get(
-            f"opening_range_{minutes}m"
-        ) or {}
+        external_range = independent_observation.get(f"opening_range_{minutes}m") or {}
         for field in ("open", "high", "low", "close"):
             rows.append(
                 compare_value(
@@ -753,11 +728,7 @@ def _payload_rows_for_venue(
     for row in payload_rows:
         context = _payload_context(row.get("sanitized_user_input"))
         request_code = str(context.get("request_code") or "").upper()
-        observed = str(
-            context.get("venue")
-            or row.get("effective_venue")
-            or ""
-        ).upper()
+        observed = str(context.get("venue") or row.get("effective_venue") or "").upper()
         if expected == "NXT":
             if request_code.endswith("_NX") or observed in {
                 "NXT",
@@ -782,11 +753,7 @@ def _payload_request_code(
         return explicit
     symbol = _payload_symbol(row)
     rest_route = str(resolved.get("rest_route") or "").strip().upper()
-    return (
-        f"{symbol}{rest_route}"
-        if symbol and rest_route.startswith("_")
-        else symbol
-    )
+    return f"{symbol}{rest_route}" if symbol and rest_route.startswith("_") else symbol
 
 
 def _payload_provider(row: dict[str, Any]) -> str:
@@ -823,11 +790,7 @@ def build_exact_payload_comparisons(
         provenance = payload_row.get("_response_provenance")
         request_id = str(
             payload_row.get("request_id")
-            or (
-                provenance.get("request_id")
-                if isinstance(provenance, dict)
-                else ""
-            )
+            or (provenance.get("request_id") if isinstance(provenance, dict) else "")
             or (
                 provenance.get("decision_trace_id")
                 if isinstance(provenance, dict)
@@ -838,15 +801,8 @@ def build_exact_payload_comparisons(
         for bar in bars:
             if not isinstance(bar, dict):
                 continue
-            minute = str(
-                bar.get("t")
-                or bar.get("time")
-                or bar.get("minute")
-                or ""
-            )[:5]
-            forming = bool(
-                bar.get("forming", bar.get("is_forming", False))
-            )
+            minute = str(bar.get("t") or bar.get("time") or bar.get("minute") or "")[:5]
+            forming = bool(bar.get("forming", bar.get("is_forming", False)))
             partial = bool(
                 bar.get(
                     "partial_volume",
@@ -868,12 +824,8 @@ def build_exact_payload_comparisons(
                 "o": (api_row or {}).get("시가", (api_row or {}).get("o")),
                 "h": (api_row or {}).get("고가", (api_row or {}).get("h")),
                 "l": (api_row or {}).get("저가", (api_row or {}).get("l")),
-                "c": (api_row or {}).get(
-                    "현재가", (api_row or {}).get("c")
-                ),
-                "v": (api_row or {}).get(
-                    "거래량", (api_row or {}).get("v")
-                ),
+                "c": (api_row or {}).get("현재가", (api_row or {}).get("c")),
+                "v": (api_row or {}).get("거래량", (api_row or {}).get("v")),
             }
             for field in ("o", "h", "l", "c", "v"):
                 if api_row is None or _int(api_values[field]) is None:
@@ -898,9 +850,7 @@ def build_exact_payload_comparisons(
                         "minute": minute,
                         "field": field,
                         "api_raw_value": api_values[field],
-                        "normalized_or_derived_value": _int(
-                            api_values[field]
-                        ),
+                        "normalized_or_derived_value": _int(api_values[field]),
                         "ai_payload_value": values[field],
                         "status": status,
                         "reason": reason,
@@ -914,9 +864,7 @@ def build_exact_payload_comparisons(
                     }
                 )
     mismatches = [row for row in rows if row["status"] == "MISMATCH"]
-    unavailable = [
-        row for row in rows if row["status"] == "SOURCE_UNAVAILABLE"
-    ]
+    unavailable = [row for row in rows if row["status"] == "SOURCE_UNAVAILABLE"]
     return {
         "comparison_rows": rows,
         "summary": {
@@ -966,9 +914,7 @@ def build_symbol_comparison(
     selected_payload_rows = list(ai_payload_rows or [])
     if not selected_payload_rows and ai_payload_row:
         selected_payload_rows = [ai_payload_row]
-    representative_payload = (
-        selected_payload_rows[0] if selected_payload_rows else {}
-    )
+    representative_payload = selected_payload_rows[0] if selected_payload_rows else {}
     ai_payload = representative_payload.get("sanitized_user_input")
     observation = build_market_context_observation(
         kiwoom_minutes,
@@ -992,9 +938,7 @@ def build_symbol_comparison(
         venue=venue,
     )
     rows: list[dict[str, Any]] = []
-    daily_source = str(
-        source_meta.get("daily_external_source") or "KRX_MDCSTAT015"
-    )
+    daily_source = str(source_meta.get("daily_external_source") or "KRX_MDCSTAT015")
     daily_comparable_fields = set(
         source_meta.get(
             "daily_external_comparable_fields",
@@ -1033,8 +977,7 @@ def build_symbol_comparison(
         if str(row.get("timestamp") or "").startswith(target_date)
     ]
     naver_by_time = {
-        str(row.get("timestamp") or "")[11:16]: row
-        for row in target_naver_minutes
+        str(row.get("timestamp") or "")[11:16]: row for row in target_naver_minutes
     }
     naver_deltas = naver_minute_volume_deltas(target_naver_minutes)
     kiwoom_by_time = _minute_by_time(kiwoom_minutes, target_date)
@@ -1052,18 +995,9 @@ def build_symbol_comparison(
         symbol,
         symbol[:6],
     }
-    ai_bars = (
-        representative_context.get("bars")
-        if same_report_route
-        else []
-    )
+    ai_bars = representative_context.get("bars") if same_report_route else []
     ai_by_time = {
-        str(
-            row.get("t")
-            or row.get("time")
-            or row.get("minute")
-            or ""
-        )[:5]: row
+        str(row.get("t") or row.get("time") or row.get("minute") or "")[:5]: row
         for row in (ai_bars or [])
         if isinstance(row, dict)
     }
@@ -1178,15 +1112,15 @@ def build_symbol_comparison(
             "prompt_sha256": representative_payload.get("prompt_sha256"),
             "endpoint": representative_payload.get("endpoint"),
             "model": representative_payload.get("model"),
-            "provider": (
-                representative_payload.get("_response_provenance") or {}
-            ).get("provider_actual"),
-            "model_id": (
-                representative_payload.get("_response_provenance") or {}
-            ).get("model_id"),
-            "transport": (
-                representative_payload.get("_response_provenance") or {}
-            ).get("transport"),
+            "provider": (representative_payload.get("_response_provenance") or {}).get(
+                "provider_actual"
+            ),
+            "model_id": (representative_payload.get("_response_provenance") or {}).get(
+                "model_id"
+            ),
+            "transport": (representative_payload.get("_response_provenance") or {}).get(
+                "transport"
+            ),
             "provider_response_id": (
                 representative_payload.get("_response_provenance") or {}
             ).get("provider_response_id"),
@@ -1209,9 +1143,7 @@ def build_symbol_comparison(
                 representative_payload.get("_response_provenance") or {}
             ).get("failback_chain", []),
         },
-        "ai_request_provenance_rows": source_meta.get(
-            "ai_request_provenance_rows", []
-        ),
+        "ai_request_provenance_rows": source_meta.get("ai_request_provenance_rows", []),
     }
 
 
@@ -1232,9 +1164,7 @@ def build_live_report(target_date: str, symbols: list[str]) -> dict[str, Any]:
         krx_daily, krx_meta = {}, {}
         krx_error = f"{type(exc).__name__}:{exc}"
     results = []
-    minute_route_cache: dict[
-        str, tuple[list[dict[str, Any]], dict[str, Any]]
-    ] = {}
+    minute_route_cache: dict[str, tuple[list[dict[str, Any]], dict[str, Any]]] = {}
 
     def _route_minutes(
         request_code: str,
@@ -1267,9 +1197,7 @@ def build_live_report(target_date: str, symbols: list[str]) -> dict[str, Any]:
         )
         payload_route_minutes: dict[str, list[dict[str, Any]]] = {}
         for payload_row in selected_payload_rows:
-            context = _payload_context(
-                payload_row.get("sanitized_user_input")
-            )
+            context = _payload_context(payload_row.get("sanitized_user_input"))
             payload_request_code = _payload_request_code(
                 payload_row,
                 context,
@@ -1277,9 +1205,7 @@ def build_live_report(target_date: str, symbols: list[str]) -> dict[str, Any]:
             route_rows, _route_meta = _route_minutes(payload_request_code)
             payload_route_minutes[payload_request_code] = route_rows
         try:
-            naver_minutes, naver_meta = _fetch_naver_chart(
-                symbol, "minute", count=1200
-            )
+            naver_minutes, naver_meta = _fetch_naver_chart(symbol, "minute", count=1200)
             naver_daily_rows, naver_daily_meta = _fetch_naver_chart(
                 symbol, "day", count=20
             )
@@ -1315,9 +1241,7 @@ def build_live_report(target_date: str, symbols: list[str]) -> dict[str, Any]:
                 external_daily=external_daily,
                 naver_minutes=naver_minutes,
                 ai_payload_row=(
-                    selected_payload_rows[0]
-                    if selected_payload_rows
-                    else None
+                    selected_payload_rows[0] if selected_payload_rows else None
                 ),
                 ai_payload_rows=selected_payload_rows,
                 payload_route_minutes=payload_route_minutes,
@@ -1341,22 +1265,20 @@ def build_live_report(target_date: str, symbols: list[str]) -> dict[str, Any]:
         )
     mismatch_count = sum(item["summary"]["mismatch_count"] for item in results)
     payload_mismatch_count = sum(
-        (
-            item.get("ai_payload_exact_validation", {}).get("summary", {})
-        ).get("mismatch_count", 0)
+        (item.get("ai_payload_exact_validation", {}).get("summary", {})).get(
+            "mismatch_count", 0
+        )
         for item in results
     )
     payload_source_unavailable_count = sum(
-        (
-            item.get("ai_payload_exact_validation", {}).get("summary", {})
-        ).get("source_unavailable_count", 0)
+        (item.get("ai_payload_exact_validation", {}).get("summary", {})).get(
+            "source_unavailable_count", 0
+        )
         for item in results
     )
     provider_none = []
     for item in results:
-        exact_summary = (
-            item.get("ai_payload_exact_validation", {}).get("summary", {})
-        )
+        exact_summary = item.get("ai_payload_exact_validation", {}).get("summary", {})
         if exact_summary.get("provider_none_count", 0):
             provider_none.append(item["symbol"])
             continue
@@ -1368,9 +1290,11 @@ def build_live_report(target_date: str, symbols: list[str]) -> dict[str, Any]:
             ):
                 provider_none.append(item["symbol"])
             continue
-        if item["ai_request_provenance"].get("endpoint") and str(
-            item["ai_request_provenance"].get("provider") or "none"
-        ).lower() == "none":
+        if (
+            item["ai_request_provenance"].get("endpoint")
+            and str(item["ai_request_provenance"].get("provider") or "none").lower()
+            == "none"
+        ):
             provider_none.append(item["symbol"])
     krx_required_failed = any(
         item["venue"] == "KRX"
@@ -1378,9 +1302,9 @@ def build_live_report(target_date: str, symbols: list[str]) -> dict[str, Any]:
         for item in results
     )
     payload_required_failed = any(
-        (
-            item.get("ai_payload_exact_validation", {}).get("summary", {})
-        ).get("required_payload_match_status")
+        (item.get("ai_payload_exact_validation", {}).get("summary", {})).get(
+            "required_payload_match_status"
+        )
         != "pass"
         for item in results
     )
@@ -1402,9 +1326,7 @@ def build_live_report(target_date: str, symbols: list[str]) -> dict[str, Any]:
             "symbol_count": len(results),
             "mismatch_count": mismatch_count,
             "payload_mismatch_count": payload_mismatch_count,
-            "payload_source_unavailable_count": (
-                payload_source_unavailable_count
-            ),
+            "payload_source_unavailable_count": (payload_source_unavailable_count),
             "provider_none_count": len(provider_none),
         },
         "results": results,
@@ -1446,9 +1368,7 @@ def _write_report(report: dict[str, Any]) -> tuple[Path, Path]:
     ]
     for item in report["results"]:
         summary = item["summary"]
-        payload_summary = (
-            item.get("ai_payload_exact_validation", {}).get("summary", {})
-        )
+        payload_summary = item.get("ai_payload_exact_validation", {}).get("summary", {})
         lines.append(
             f"| {item['symbol']} | {item['venue']} | {summary['comparable_count']} | "
             f"{summary['match_count']} | {summary['mismatch_count']} | "
@@ -1466,9 +1386,7 @@ def main(argv: list[str] | None = None) -> int:
         description="Compare observation-only scalping AI inputs with external data."
     )
     parser.add_argument("--date", dest="target_date", required=True)
-    parser.add_argument(
-        "--symbols", default="005930,096770,100090,005930_NX"
-    )
+    parser.add_argument("--symbols", default="005930,096770,100090,005930_NX")
     parser.add_argument("--write", action="store_true")
     args = parser.parse_args(argv)
     symbols = [item.strip() for item in args.symbols.split(",") if item.strip()]

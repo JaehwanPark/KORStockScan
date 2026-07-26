@@ -4206,11 +4206,7 @@ def _lifecycle_flow_bucket_handoff_status(
                 "lifecycle_join_contract_blocked_workorder_handoff"
             ),
         }
-        warnings = [
-            warning_by_gap[item]
-            for item in missing
-            if item in warning_by_gap
-        ]
+        warnings = [warning_by_gap[item] for item in missing if item in warning_by_gap]
     return {
         "status": "warning" if warnings else "fail" if missing else "pass",
         "flow_count": flow_count,
@@ -4839,10 +4835,10 @@ def build_threshold_cycle_postclose_verification(
             for item in (lifecycle_flow_bucket_handoff.get("warnings") or [])
             if str(item)
         )
-    if (
-        lifecycle_flow_bucket_handoff.get("status") == "fail"
-        and "lifecycle_complete_flow_absent"
-        in (lifecycle_flow_bucket_handoff.get("missing") or [])
+    if lifecycle_flow_bucket_handoff.get(
+        "status"
+    ) == "fail" and "lifecycle_complete_flow_absent" in (
+        lifecycle_flow_bucket_handoff.get("missing") or []
     ):
         log_issues.append("lifecycle_complete_flow_absent")
     lifecycle_bucket_discovery_handoff = _lifecycle_bucket_discovery_handoff_status(

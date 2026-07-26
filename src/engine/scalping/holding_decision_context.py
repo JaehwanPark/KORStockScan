@@ -823,9 +823,7 @@ def build_holding_decision_context(
         if hold_defer_allowed
         else ("disabled" if not enabled else "blocked")
     )
-    entry_time_context, entry_time_context_sha256 = _exact_entry_time_context(
-        position
-    )
+    entry_time_context, entry_time_context_sha256 = _exact_entry_time_context(position)
     phase, minutes_to_close = _session_phase(now, str(candle.get("session") or ""))
     context = {
         "schema": SCHEMA,

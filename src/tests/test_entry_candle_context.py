@@ -117,18 +117,12 @@ def test_builder_keeps_current_session_separate_and_compresses_latest_twenty(
     assert "volume_direction_alignment" in context["structure"]
     assert context["observation_contract"] == OBSERVATION_CONTRACT
     assert context["input_bundle_version"] == "scalping_multi_timeframe_context_v1"
-    assert (
-        context["multi_timeframe_context"]["session_bar_vwap"]["status"] == "pass"
-    )
-    assert (
-        context["multi_timeframe_context"]["opening_range_15m"]["status"] == "pass"
-    )
+    assert context["multi_timeframe_context"]["session_bar_vwap"]["status"] == "pass"
+    assert context["multi_timeframe_context"]["opening_range_15m"]["status"] == "pass"
     ai_payload = GPTSniperEngine.__new__(GPTSniperEngine)._entry_candle_model_payload(
         context
     )
-    assert ai_payload["input_bundle_version"] == (
-        "scalping_multi_timeframe_context_v1"
-    )
+    assert ai_payload["input_bundle_version"] == ("scalping_multi_timeframe_context_v1")
     assert ai_payload["multi_timeframe_context"]["payload_hash"] == (
         context["multi_timeframe_context"]["payload_hash"]
     )

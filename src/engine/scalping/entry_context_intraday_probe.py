@@ -945,9 +945,7 @@ def _forensic_response_errors(result: Any) -> list[str]:
 
 def _forensic_provider(transport_meta: dict[str, Any], *, called: bool) -> str:
     explicit = str(
-        transport_meta.get("provider")
-        or transport_meta.get("provider_actual")
-        or ""
+        transport_meta.get("provider") or transport_meta.get("provider_actual") or ""
     ).strip()
     if explicit and explicit.lower() != "none":
         return explicit
@@ -972,11 +970,15 @@ def _physical_provider_called(
 ) -> bool:
     if response_returned:
         return True
-    explicit = str(
-        transport_meta.get("provider")
-        or transport_meta.get("provider_actual")
-        or ""
-    ).strip().lower()
+    explicit = (
+        str(
+            transport_meta.get("provider")
+            or transport_meta.get("provider_actual")
+            or ""
+        )
+        .strip()
+        .lower()
+    )
     if explicit and explicit != "none":
         return True
     if any(
@@ -1207,14 +1209,10 @@ def _call_openai(
                         transport_meta,
                         called=provider_was_called,
                     ),
-                    "provider_response_id": transport_meta.get(
-                        "openai_response_id"
-                    )
+                    "provider_response_id": transport_meta.get("openai_response_id")
                     or transport_meta.get("provider_response_id"),
                     "transport": transport_meta.get("openai_transport_mode"),
-                    "response_sha256": transport_meta.get(
-                        "openai_response_sha256"
-                    )
+                    "response_sha256": transport_meta.get("openai_response_sha256")
                     or hashlib.sha256(
                         json.dumps(
                             result,
@@ -1355,10 +1353,7 @@ def _recover_holding_flow_exact_context(
         in {"complete", "partial"}
         or any(
             _nonempty(context.get(key))
-            for key in (
-                HOLDING_FLOW_ENTRY_CONTEXT_FEATURES
-                - {"entry_context_quality"}
-            )
+            for key in (HOLDING_FLOW_ENTRY_CONTEXT_FEATURES - {"entry_context_quality"})
         )
     ):
         status = "required_features_missing"
@@ -1625,12 +1620,8 @@ def _fields_to_holding_decision_context(
         return dict(embedded)
     entry_context = _fields_to_entry_candle_context(fields)
     model_bars = _structured_list(fields.get("holding_context_model_bars"))
-    model_structure = _structured_dict(
-        fields.get("holding_context_model_structure")
-    )
-    market_snapshot = _structured_dict(
-        fields.get("holding_context_ai_market_snapshot")
-    )
+    model_structure = _structured_dict(fields.get("holding_context_model_structure"))
+    market_snapshot = _structured_dict(fields.get("holding_context_ai_market_snapshot"))
     source_status = str(
         _first_nonempty(
             fields,
@@ -1678,8 +1669,7 @@ def _fields_to_holding_decision_context(
                 default=None,
             ),
             "bars": model_bars or list(entry_context.get("bars") or []),
-            "structure": model_structure
-            or dict(entry_context.get("structure") or {}),
+            "structure": model_structure or dict(entry_context.get("structure") or {}),
             "regime": _first_nonempty(
                 fields,
                 "holding_context_candle_regime",
@@ -1797,9 +1787,7 @@ def _fields_to_position_ctx(fields: dict[str, Any]) -> dict[str, Any]:
         "drawdown": max(0.0, peak_profit - profit_rate),
         "held_sec": _int_or_zero(_first_nonempty(fields, "held_sec", default=0)),
         "current_ai_score": _float_or_zero(
-            _first_nonempty(
-                fields, "current_ai_score", "score", "ai_score", default=0
-            )
+            _first_nonempty(fields, "current_ai_score", "score", "ai_score", default=0)
         ),
         "exit_rule": _first_nonempty(
             fields, "exit_rule", "candidate_exit_rule", default="-"
@@ -1888,12 +1876,10 @@ def _provider_result_provenance(result: dict[str, Any]) -> dict[str, Any]:
         or result.get("ai_response_sha256")
     )
     openai_response_evidence = bool(
-        result.get("openai_response_id")
-        or result.get("openai_response_sha256")
+        result.get("openai_response_id") or result.get("openai_response_sha256")
     )
     bedrock_response_evidence = bool(
-        result.get("bedrock_response_id")
-        or result.get("bedrock_response_sha256")
+        result.get("bedrock_response_id") or result.get("bedrock_response_sha256")
     )
     if bedrock_response_evidence:
         provider = "bedrock"
@@ -2065,8 +2051,8 @@ def _run_endpoint_provider_compare(
             fields = dict(source_fields)
             exact_context_recovery: dict[str, Any] = {}
             if point == "holding_flow":
-                fields, exact_context_recovery = (
-                    _recover_holding_flow_exact_context(fields)
+                fields, exact_context_recovery = _recover_holding_flow_exact_context(
+                    fields
                 )
             schema = _event_schema(fields)
             missing_features = [
@@ -2078,10 +2064,7 @@ def _run_endpoint_provider_compare(
                     and exact_context_recovery.get("status") != "exact_recovered"
                 )
                 or (
-                    not (
-                        point == "holding_flow"
-                        and feature == "entry_time_context"
-                    )
+                    not (point == "holding_flow" and feature == "entry_time_context")
                     and not _event_has_required_feature(fields, feature)
                 )
             ]
@@ -2603,9 +2586,7 @@ def build_probe_report(
         else []
     )
     symbol_filter = {
-        str(item).strip()
-        for item in (probe_symbols or [])
-        if str(item).strip()
+        str(item).strip() for item in (probe_symbols or []) if str(item).strip()
     }
     filtered_rows = (
         [

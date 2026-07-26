@@ -5344,9 +5344,7 @@ def _runtime_discard_superseded_delayed_heavy(delayed_heavy, registered_targets)
     """Remove old-generation heavy tuples for targets refreshed from the inbox."""
 
     registered_ids = {
-        id(target)
-        for target in registered_targets or ()
-        if isinstance(target, dict)
+        id(target) for target in registered_targets or () if isinstance(target, dict)
     }
     if not registered_ids:
         return list(delayed_heavy or [])
@@ -6775,12 +6773,8 @@ def _scanner_merge_context_preserving_positive_delta(
         "price_delta_since_first_seen_pct",
         "comparable_flu_delta_since_first_seen",
     )
-    existing_delta = max(
-        _safe_float(existing.get(key), 0.0) for key in delta_keys
-    )
-    incoming_delta = max(
-        _safe_float(updates.get(key), 0.0) for key in delta_keys
-    )
+    existing_delta = max(_safe_float(existing.get(key), 0.0) for key in delta_keys)
+    incoming_delta = max(_safe_float(updates.get(key), 0.0) for key in delta_keys)
     previous_peak = _safe_float(
         existing.get("scanner_evidence_peak_positive_delta_pct"), 0.0
     )
@@ -6872,9 +6866,7 @@ def handle_scalping_scanner_promoted_target(payload):
             "accepted",
             inbox_decision is not False,
         )
-        superseded_envelope = getattr(
-            inbox_decision, "superseded_envelope", None
-        )
+        superseded_envelope = getattr(inbox_decision, "superseded_envelope", None)
         venue_fields = _scanner_runtime_target_venue_fields(payload)
         promotion_epoch = _safe_float(
             payload.get("scanner_promotion_emitted_epoch")
@@ -6923,11 +6915,9 @@ def handle_scalping_scanner_promoted_target(payload):
                     "scheduler_version": SCANNER_DEADLINE_SCHEDULER_VERSION,
                     "scheduler_mode": _scanner_scheduler_startup_mode(),
                     "scheduler_action": "inbox_generation_superseded",
-                    "scanner_promotion_id": payload.get("scanner_promotion_id")
-                    or "-",
+                    "scanner_promotion_id": payload.get("scanner_promotion_id") or "-",
                     "superseded_scanner_promotion_id": (
-                        superseded_envelope.payload.get("scanner_promotion_id")
-                        or "-"
+                        superseded_envelope.payload.get("scanner_promotion_id") or "-"
                     ),
                     "superseded_scanner_inbox_enqueued_epoch": round(
                         superseded_envelope.enqueued_epoch, 6
@@ -6940,9 +6930,7 @@ def handle_scalping_scanner_promoted_target(payload):
                 str(payload.get("code") or "").strip()[:6]
             )
         return bool(accepted)
-    return _apply_scalping_scanner_promoted_target(
-        payload, mutation_lock=_state_lock
-    )
+    return _apply_scalping_scanner_promoted_target(payload, mutation_lock=_state_lock)
 
 
 def _apply_scalping_scanner_promoted_target(payload, *, mutation_lock=ENTRY_LOCK):
@@ -7032,9 +7020,7 @@ def _apply_scalping_scanner_promoted_target(payload, *, mutation_lock=ENTRY_LOCK
                 refresh_added_time = now_ts
                 refresh_anchor_ts = promotion_anchor_ts
                 refresh_promotion_id = payload.get("scanner_promotion_id") or ""
-                refresh_promotion_reason = (
-                    payload.get("scanner_promotion_reason") or ""
-                )
+                refresh_promotion_reason = payload.get("scanner_promotion_reason") or ""
                 refresh_promotion_epoch = (
                     payload.get("scanner_promotion_emitted_epoch") or ""
                 )
@@ -7221,9 +7207,7 @@ def _register_scanner_scheduler_generation(
             "scanner_scheduler_canonical_venue_missing_fail_closed"
         )
         boot_restore_isolated = boot_restore or bool(
-            str(payload.get("scanner_promotion_id") or "").startswith(
-                "SCANSCHEDBOOT-"
-            )
+            str(payload.get("scanner_promotion_id") or "").startswith("SCANSCHEDBOOT-")
         )
         with ENTRY_LOCK:
             for key in (
@@ -7238,9 +7222,7 @@ def _register_scanner_scheduler_generation(
             target.update(
                 {
                     "scanner_scheduler_mode": _scanner_scheduler_startup_mode(),
-                    "scanner_scheduler_version": (
-                        SCANNER_DEADLINE_SCHEDULER_VERSION
-                    ),
+                    "scanner_scheduler_version": (SCANNER_DEADLINE_SCHEDULER_VERSION),
                     "_scanner_scheduler_registration_blocked": True,
                     "_scanner_scheduler_registration_reason": registration_reason,
                     "_scanner_scheduler_boot_restore_isolated": boot_restore_isolated,
@@ -7399,9 +7381,9 @@ def _scanner_scheduler_boot_restore_payload(target, *, boot_epoch):
     persisted_venue_fields = _scanner_runtime_target_venue_fields({}, target=target)
     persisted_venue = persisted_venue_fields["effective_venue"]
     current_venue_fields = scalping_session_venue_provenance(float(boot_epoch))
-    current_venue = str(
-        current_venue_fields.get("effective_venue") or "UNKNOWN"
-    ).strip().upper()
+    current_venue = (
+        str(current_venue_fields.get("effective_venue") or "UNKNOWN").strip().upper()
+    )
     promotion_id = str(target.get("scanner_promotion_id") or "").strip()
     promotion_epoch = _safe_float(
         target.get("scanner_promotion_emitted_epoch"),
@@ -7489,8 +7471,7 @@ def _expire_invalid_scanner_scheduler_boot_restore(target, targets, payload):
         with DB.get_session() as session:
             updated = int(
                 session.execute(
-                    text(
-                        """
+                    text("""
                         UPDATE recommendation_history
                         SET status = 'EXPIRED'
                         WHERE id = :record_id
@@ -7500,8 +7481,7 @@ def _expire_invalid_scanner_scheduler_boot_restore(target, targets, payload):
                           AND position_tag = 'SCANNER'
                           AND buy_time IS NULL
                           AND COALESCE(buy_qty, 0) = 0
-                        """
-                    ),
+                        """),
                     {"record_id": record_id, "stock_code": code},
                 ).rowcount
                 or 0
@@ -7602,12 +7582,8 @@ def _drain_scanner_promotion_inbox(scheduler, *, max_items):
                     "scheduler_version": SCANNER_DEADLINE_SCHEDULER_VERSION,
                     "scheduler_mode": _scanner_scheduler_startup_mode(),
                     "scheduler_action": "attach_rejected",
-                    "scanner_inbox_enqueued_epoch": round(
-                        envelope.enqueued_epoch, 6
-                    ),
-                    "scanner_attach_attempt_epoch": round(
-                        attach_attempt_epoch, 6
-                    ),
+                    "scanner_inbox_enqueued_epoch": round(envelope.enqueued_epoch, 6),
+                    "scanner_attach_attempt_epoch": round(attach_attempt_epoch, 6),
                     "inbox_to_attach_attempt_sec": round(
                         max(
                             0.0,
@@ -7687,9 +7663,7 @@ def _scanner_generation_submit_guard(stock, code):
     )
     scanner_lineage = bool(target.get("scanner_generation_id")) and (
         normalize_strategy(target.get("strategy")) == "SCALPING"
-        and normalize_position_tag(
-            target.get("strategy"), target.get("position_tag")
-        )
+        and normalize_position_tag(target.get("strategy"), target.get("position_tag"))
         == "SCANNER"
     )
     if mode not in {"deadline_v1", "async_v1"} or not scanner_lineage:
@@ -7727,9 +7701,7 @@ def _scanner_generation_submit_guard(stock, code):
             "effective_venue": venue or "UNKNOWN",
             "venue_resolution": target.get("venue_resolution")
             or "missing_tradable_explicit_venue",
-            "scanner_pending_promotion_id": pending.payload.get(
-                "scanner_promotion_id"
-            )
+            "scanner_pending_promotion_id": pending.payload.get("scanner_promotion_id")
             or "-",
             "scanner_pending_promotion_enqueued_epoch": round(
                 pending.enqueued_epoch, 6
@@ -7775,9 +7747,7 @@ def _scanner_scheduler_reconcile_active_targets(scheduler, targets, *, now_epoch
                 ),
                 "scheduler_action": decision.action,
                 "scheduler_reason": decision.reason,
-                "scheduler_superseded_work_ids": ",".join(
-                    decision.superseded_work_ids
-                )
+                "scheduler_superseded_work_ids": ",".join(decision.superseded_work_ids)
                 or "-",
             },
         )
@@ -7828,9 +7798,7 @@ def _scanner_scheduler_enqueue_target(
     return decision
 
 
-def _scanner_scheduler_enqueue_fresh_precheck(
-    scheduler, target, *, now_epoch, owner
-):
+def _scanner_scheduler_enqueue_fresh_precheck(scheduler, target, *, now_epoch, owner):
     if not _is_scanner_watching_target(target):
         if isinstance(scheduler, ScannerRuntimeScheduler):
             scheduler.invalidate(
@@ -7845,9 +7813,7 @@ def _scanner_scheduler_enqueue_fresh_precheck(
         lane=ScannerLane.FAST_PRECHECK,
         owner=owner,
         enqueued_epoch=float(now_epoch),
-        attempt=(
-            _safe_int((target or {}).get("_scanner_scheduler_attempt"), 0) + 1
-        ),
+        attempt=(_safe_int((target or {}).get("_scanner_scheduler_attempt"), 0) + 1),
     )
 
 
@@ -7907,9 +7873,7 @@ def _scanner_scheduler_claim_target(scheduler, target, *, lane, now_epoch):
                 max(0.0, float(now_epoch) - blocking_item.enqueued_epoch),
                 6,
             ),
-            "scanner_scheduler_blocking_precheck_phase": (
-                blocking_item.precheck_phase
-            ),
+            "scanner_scheduler_blocking_precheck_phase": (blocking_item.precheck_phase),
         }
     _emit_scanner_scheduler_event(
         payload=target,
@@ -9829,9 +9793,7 @@ def run_sniper(is_test_mode=False):
                         return
                     delayed_scanner_heavy_eval.sort(
                         key=lambda item: _safe_float(
-                            (item[0] or {}).get(
-                                "_scanner_scheduler_deadline_epoch"
-                            ),
+                            (item[0] or {}).get("_scanner_scheduler_deadline_epoch"),
                             float("inf"),
                         )
                     )
@@ -9852,13 +9814,9 @@ def run_sniper(is_test_mode=False):
                                 reason="heavy_eval_target_not_watching",
                             )
                         continue
-                    scheduler = getattr(
-                        run_sniper, "scanner_runtime_scheduler", None
-                    )
+                    scheduler = getattr(run_sniper, "scanner_runtime_scheduler", None)
                     scheduler_generation = (
-                        _scanner_scheduler_target_generation(
-                            scheduler, delayed_stock
-                        )
+                        _scanner_scheduler_target_generation(scheduler, delayed_stock)
                         if _scanner_scheduler_enabled_for_venue(
                             delayed_stock.get("effective_venue")
                             or delayed_stock.get("venue")
@@ -9885,10 +9843,8 @@ def run_sniper(is_test_mode=False):
                             )
                             _admit_runtime_live_attaches()
                             return
-                        scheduler_generation = (
-                            _scanner_scheduler_target_generation(
-                                scheduler, delayed_stock
-                            )
+                        scheduler_generation = _scanner_scheduler_target_generation(
+                            scheduler, delayed_stock
                         )
                         if scheduler_generation is None:
                             continue
@@ -10076,9 +10032,7 @@ def run_sniper(is_test_mode=False):
                                         delayed_stock,
                                         item=scheduler_heavy_item,
                                         completed_epoch=time.time(),
-                                        outcome=(
-                                            "heavy_eval_stale_snapshot_recheck"
-                                        ),
+                                        outcome=("heavy_eval_stale_snapshot_recheck"),
                                     )
                                     _scanner_scheduler_enqueue_fresh_precheck(
                                         scheduler,
@@ -10155,8 +10109,7 @@ def run_sniper(is_test_mode=False):
                             item=scheduler_heavy_item,
                             completed_epoch=time.time(),
                             outcome=str(
-                                delayed_stock.get("status")
-                                or "heavy_eval_completed"
+                                delayed_stock.get("status") or "heavy_eval_completed"
                             ),
                         )
                         if (
@@ -10201,9 +10154,7 @@ def run_sniper(is_test_mode=False):
                     )
                 )
                 if scheduler_continuations:
-                    queue_context.update(
-                        _runtime_queue_rank_fields(runtime_work_queue)
-                    )
+                    queue_context.update(_runtime_queue_rank_fields(runtime_work_queue))
                     log_info(
                         "[SCANNER_RUNTIME_SCHEDULER_CONTINUATION] "
                         f"requeued={len(scheduler_continuations)} "
@@ -10223,9 +10174,7 @@ def run_sniper(is_test_mode=False):
                         run_sniper.scanner_runtime_scheduler,
                         max_items=1,
                     )
-                    registered_targets = list(
-                        drain_result.get("applied_targets") or ()
-                    )
+                    registered_targets = list(drain_result.get("applied_targets") or ())
                     if registered_targets:
                         delayed_scanner_heavy_eval[:] = (
                             _runtime_discard_superseded_delayed_heavy(
@@ -10269,8 +10218,7 @@ def run_sniper(is_test_mode=False):
                         id(target) for target in admitted_targets
                     )
                     accounting_ids = {
-                        id(target)
-                        for target in runtime_iteration_accounting_targets
+                        id(target) for target in runtime_iteration_accounting_targets
                     }
                     runtime_iteration_accounting_targets.extend(
                         target
@@ -10360,12 +10308,8 @@ def run_sniper(is_test_mode=False):
                         now_ts=time.time(),
                         ws_data=ws_data,
                         ws_manager_available=bool(WS_MANAGER),
-                        scanner_observed_venue=(
-                            scanner_runtime_venue or "UNKNOWN"
-                        ),
-                        scanner_observed_venue_resolution=stock.get(
-                            "venue_resolution"
-                        )
+                        scanner_observed_venue=(scanner_runtime_venue or "UNKNOWN"),
+                        scanner_observed_venue_resolution=stock.get("venue_resolution")
                         or "missing_tradable_explicit_venue",
                         scanner_scheduler_registration_blocked=bool(
                             stock.get("_scanner_scheduler_registration_blocked")
@@ -10382,9 +10326,8 @@ def run_sniper(is_test_mode=False):
                         scheduler=scheduler,
                     )
                 )
-                if (
-                    not scheduler_owns_missing_ws_lane
-                    and (not ws_data or ws_data.get("curr", 0) == 0)
+                if not scheduler_owns_missing_ws_lane and (
+                    not ws_data or ws_data.get("curr", 0) == 0
                 ):
                     if status == "WATCHING":
                         recheck_snapshot_applied = False
@@ -10604,8 +10547,7 @@ def run_sniper(is_test_mode=False):
                                         scheduler_claim,
                                         targets,
                                         queued_target_ids={
-                                            id(target)
-                                            for target in runtime_work_queue
+                                            id(target) for target in runtime_work_queue
                                         },
                                         delayed_target_ids={
                                             id(item[0])
@@ -10674,9 +10616,9 @@ def run_sniper(is_test_mode=False):
                                 stock["_scanner_market_data_enrichment_ws_data"] = dict(
                                     ws_data or {}
                                 )
-                                stock[
-                                    "_scanner_market_data_enrichment_stored_at"
-                                ] = heavy_queue_enter_epoch
+                                stock["_scanner_market_data_enrichment_stored_at"] = (
+                                    heavy_queue_enter_epoch
+                                )
                             _defer_emit_scanner_fast_precheck(
                                 stock,
                                 code,
@@ -10749,8 +10691,7 @@ def run_sniper(is_test_mode=False):
                             )
                             if (
                                 precheck_completed is None
-                                or precheck_completed.action
-                                == "superseded_result"
+                                or precheck_completed.action == "superseded_result"
                             ):
                                 continue
                             if fast_precheck_requires_recovery:
@@ -10907,8 +10848,7 @@ def run_sniper(is_test_mode=False):
                             )
                             if (
                                 recovery_completed is None
-                                or recovery_completed.action
-                                == "superseded_result"
+                                or recovery_completed.action == "superseded_result"
                             ):
                                 continue
                         if fast_precheck_reason != "scanner_ws_stale_backoff_active":
@@ -11071,9 +11011,7 @@ def run_sniper(is_test_mode=False):
                                             scheduler,
                                             stock,
                                             now_epoch=time.time(),
-                                            owner=(
-                                                "budget_retention_fresh_recheck"
-                                            ),
+                                            owner=("budget_retention_fresh_recheck"),
                                         )
                                     continue
                             if queue_lag_fields:

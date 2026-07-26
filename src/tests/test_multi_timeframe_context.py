@@ -21,12 +21,8 @@ def test_global_promotion_date_is_a_start_date_not_a_one_day_limit(monkeypatch):
     assert not multi_timeframe_ai_input_enabled(
         datetime(2026, 7, 26, 23, 59, tzinfo=KST)
     )
-    assert multi_timeframe_ai_input_enabled(
-        datetime(2026, 7, 27, 8, 30, tzinfo=KST)
-    )
-    assert multi_timeframe_ai_input_enabled(
-        datetime(2026, 7, 28, 9, 0, tzinfo=KST)
-    )
+    assert multi_timeframe_ai_input_enabled(datetime(2026, 7, 27, 8, 30, tzinfo=KST))
+    assert multi_timeframe_ai_input_enabled(datetime(2026, 7, 28, 9, 0, tzinfo=KST))
 
 
 def _rows(*, base: int, step: int, count: int = 20) -> list[dict]:
@@ -91,9 +87,7 @@ def test_shared_bundle_contains_completed_multi_timeframe_and_macro_context():
     assert len(bundle["multi_timeframe_bars"]["3m"]) == 6
     assert len(bundle["multi_timeframe_bars"]["5m"]) == 4
     assert len(bundle["multi_timeframe_bars"]["15m"]) == 1
-    assert bundle["incomplete_multi_timeframe_bars"]["15m"][-1][
-        "source_quality"
-    ] == (
+    assert bundle["incomplete_multi_timeframe_bars"]["15m"][-1]["source_quality"] == (
         "source_quality_blocked"
     )
     assert bundle["previous_day_levels"]["close"] == 10000

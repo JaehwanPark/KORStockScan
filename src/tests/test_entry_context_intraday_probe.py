@@ -362,9 +362,7 @@ def test_live_openai_retries_semantic_failure_and_records_provenance(monkeypatch
         lambda result, **kwargs: finalized.append((dict(result), dict(kwargs))) or {},
     )
 
-    result = mod._call_openai(
-        [_base_row()], model="gpt-5-nano", effort="minimal"
-    )[0]
+    result = mod._call_openai([_base_row()], model="gpt-5-nano", effort="minimal")[0]
 
     assert result["status"] == "accepted"
     assert result["correction_attempted"] is True
@@ -407,9 +405,7 @@ def test_live_openai_rejects_second_stage_semantic_failure(monkeypatch):
     monkeypatch.setattr(openai_module, "GPTSniperEngine", FakeEngine)
     monkeypatch.setattr(mod, "_api_keys", lambda: ["test-key"])
 
-    result = mod._call_openai(
-        [_base_row()], model="gpt-5-nano", effort="minimal"
-    )[0]
+    result = mod._call_openai([_base_row()], model="gpt-5-nano", effort="minimal")[0]
 
     assert result["status"] == "schema_semantic_rejected"
     assert result["attempt_count"] == 2
@@ -518,15 +514,15 @@ def test_live_openai_request_and_final_trace_are_one_to_one(monkeypatch, tmp_pat
 
     request_rows = [
         json.loads(line)
-        for line in trace_module._request_path(
-            trace_module._date_text()
-        ).read_text(encoding="utf-8").splitlines()
+        for line in trace_module._request_path(trace_module._date_text())
+        .read_text(encoding="utf-8")
+        .splitlines()
     ]
     trace_rows = [
         json.loads(line)
-        for line in trace_module._trace_path(
-            trace_module._date_text()
-        ).read_text(encoding="utf-8").splitlines()
+        for line in trace_module._trace_path(trace_module._date_text())
+        .read_text(encoding="utf-8")
+        .splitlines()
     ]
     assert result["status"] == "accepted"
     assert [row["request_id"] for row in request_rows] == ["forensic-request-1"]
@@ -603,7 +599,8 @@ def test_provider_endpoint_compare_runs_bedrock_primary_and_openai_then_restores
                     "bedrock_response_sha256"
                     if bedrock_route
                     else "openai_response_sha256"
-                ): ("a" if bedrock_route else "b") * 64,
+                ): ("a" if bedrock_route else "b")
+                * 64,
             }
 
         def evaluate_scalping_holding_flow(
@@ -639,7 +636,8 @@ def test_provider_endpoint_compare_runs_bedrock_primary_and_openai_then_restores
                     "bedrock_response_sha256"
                     if bedrock_route
                     else "openai_response_sha256"
-                ): ("c" if bedrock_route else "d") * 64,
+                ): ("c" if bedrock_route else "d")
+                * 64,
             }
 
     rows_by_point = {
@@ -1018,9 +1016,7 @@ def test_holding_provider_probe_rehydrates_model_bars_and_structured_flags():
         "holding_context_rest_route": "_NX",
         "holding_context_ws_route": "krx_nxt_integrated",
         "holding_context_model_bars": repr(bars),
-        "holding_context_model_structure": repr(
-            {"returns_pct": {"3": 0.2, "20": 0.8}}
-        ),
+        "holding_context_model_structure": repr({"returns_pct": {"3": 0.2, "20": 0.8}}),
         "holding_context_candle_risk_flags": "['venue_conflict']",
         "holding_context_blockers": "['candle_source_quality']",
         "holding_context_source_quality_status": "blocked",
@@ -1077,9 +1073,7 @@ def test_holding_flow_exact_context_recovery_verifies_same_event_hash():
             "record_id": 123,
             "holding_context_entry_time_context": context,
             "holding_context_entry_time_context_status": "exact_captured",
-            "holding_context_entry_time_context_sha256": mod._canonical_sha256(
-                context
-            ),
+            "holding_context_entry_time_context_sha256": mod._canonical_sha256(context),
         }
     )
 
@@ -1095,9 +1089,7 @@ def test_holding_flow_exact_context_recovery_rejects_hash_mismatch():
     fields, provenance = mod._recover_holding_flow_exact_context(
         {
             "record_id": 123,
-            "holding_context_entry_time_context": {
-                "entry_context_quality": "complete"
-            },
+            "holding_context_entry_time_context": {"entry_context_quality": "complete"},
             "holding_context_entry_time_context_status": "exact_captured",
             "holding_context_entry_time_context_sha256": "0" * 64,
         }

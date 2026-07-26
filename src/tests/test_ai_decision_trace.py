@@ -298,7 +298,7 @@ def test_capture_ai_request_redacts_embedded_credentials_without_redacting_sessi
             },
             "note": (
                 "jwt=eyJabcdefghijk.abcdefghijk.abcdefghijk "
-                "aws=AKIA1234567890ABCDEF password=\"two word secret\""
+                'aws=AKIA1234567890ABCDEF password="two word secret"'
             ),
         },
         endpoint_name="analyze_target",
@@ -375,9 +375,7 @@ def test_payload_sanitizer_preserves_nonsecret_token_metrics_and_redacts_opaque_
     assert "sk-abcdefghijklmnopqrstuvwxyz" not in serialized
 
 
-def test_request_ledger_is_not_written_when_payload_store_fails(
-    monkeypatch, tmp_path
-):
+def test_request_ledger_is_not_written_when_payload_store_fails(monkeypatch, tmp_path):
     _enable(monkeypatch, tmp_path)
     original_append = trace._append_jsonl
 
@@ -434,9 +432,7 @@ def test_trace_storage_uses_private_directory_and_file_modes(monkeypatch, tmp_pa
         trace._outcome_path(trace._date_text()),
     )
     assert all(stat.S_IMODE(path.stat().st_mode) == 0o600 for path in paths)
-    assert all(
-        stat.S_IMODE(path.parent.stat().st_mode) == 0o700 for path in paths
-    )
+    assert all(stat.S_IMODE(path.parent.stat().st_mode) == 0o700 for path in paths)
 
 
 def test_trace_storage_refuses_payload_file_symlink(monkeypatch, tmp_path):

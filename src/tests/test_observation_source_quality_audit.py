@@ -2052,9 +2052,10 @@ def test_observation_source_quality_audit_reviews_20260724_fail_closed_unknown_p
     assert reviewed["scalping_scanner_runtime_target_attach"]["venue"] == (
         "reviewed_scanner_venue_fail_closed_provenance"
     )
-    assert reviewed["scalping_scanner_watching_runtime_skip"][
-        "scanner_observed_venue"
-    ] == "reviewed_scanner_venue_fail_closed_provenance"
+    assert (
+        reviewed["scalping_scanner_watching_runtime_skip"]["scanner_observed_venue"]
+        == "reviewed_scanner_venue_fail_closed_provenance"
+    )
     assert reviewed["scalp_fast_exit_quote_blocked"]["fast_exit_ws_0d_route"] == (
         "reviewed_legacy_fast_exit_route_provenance"
     )
@@ -2070,9 +2071,12 @@ def test_observation_source_quality_audit_reviews_20260724_fail_closed_unknown_p
     assert reviewed["probe_continuation_deferred"]["post_probe_direction_state"] == (
         "reviewed_post_probe_direction_source_gap"
     )
-    assert reviewed["scalp_trailing_continuation_recheck"][
-        "quote_recovery_large_sell_state"
-    ] == "reviewed_quote_recovery_large_sell_not_available"
+    assert (
+        reviewed["scalp_trailing_continuation_recheck"][
+            "quote_recovery_large_sell_state"
+        ]
+        == "reviewed_quote_recovery_large_sell_not_available"
+    )
 
 
 def test_observation_source_quality_audit_does_not_review_unproven_unknown_provenance(
@@ -3833,15 +3837,11 @@ def test_observation_source_quality_audit_contracts_all_scheduler_events(
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     fields = {
         "metric_role": "runtime_scheduler_latency",
-        "decision_authority": (
-            "scanner_runtime_scheduler_only_no_order_authority"
-        ),
+        "decision_authority": ("scanner_runtime_scheduler_only_no_order_authority"),
         "window_policy": "per_scanner_generation_action_timestamps",
         "sample_floor": "one_valid_scanner_generation",
         "primary_decision_metric": "attach_to_first_precheck_sec",
-        "source_quality_gate": (
-            "canonical_generation_and_venue_provenance_required"
-        ),
+        "source_quality_gate": ("canonical_generation_and_venue_provenance_required"),
         "runtime_effect": True,
         "forbidden_uses": "standalone_buy,broker_submit",
         "actual_order_submitted": False,
@@ -3900,9 +3900,7 @@ def test_observation_source_quality_allows_expired_boot_restore_unknown_venue(
                     "decision_authority": (
                         "scanner_runtime_scheduler_only_no_order_authority"
                     ),
-                    "window_policy": (
-                        "per_scanner_generation_action_timestamps"
-                    ),
+                    "window_policy": ("per_scanner_generation_action_timestamps"),
                     "sample_floor": "one_valid_scanner_generation",
                     "primary_decision_metric": "attach_to_first_precheck_sec",
                     "source_quality_gate": (

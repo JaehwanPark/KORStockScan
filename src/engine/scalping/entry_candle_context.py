@@ -972,9 +972,7 @@ def build_session_candle_source(
         "sample_mode": sample_mode,
         "bars": model_path,
         "input_bundle_version": multi_timeframe_context["input_bundle_version"],
-        "multi_timeframe_ai_input_enabled": multi_timeframe_context[
-            "ai_input_enabled"
-        ],
+        "multi_timeframe_ai_input_enabled": multi_timeframe_context["ai_input_enabled"],
         "multi_timeframe_context": multi_timeframe_context,
         "structure": structure,
         "regime": structure["regime"],

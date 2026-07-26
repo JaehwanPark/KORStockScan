@@ -404,9 +404,7 @@ def _next_krx_trading_date(target_date: str) -> str:
         current += timedelta(days=1)
         if is_krx_trading_day(current):
             return current.isoformat()
-    raise RuntimeError(
-        f"could not resolve next KRX trading day after {target_date}"
-    )
+    raise RuntimeError(f"could not resolve next KRX trading day after {target_date}")
 
 
 def _build_next_preopen_apply_action(target_date: str) -> RecoveryAction:

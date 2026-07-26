@@ -2852,18 +2852,14 @@ def _persist_scanner_promotion_provenance(record, payload):
     record.market_session_bucket = str(
         payload.get("market_session_bucket") or ""
     ).strip()
-    record.scanner_promotion_id = str(
-        payload.get("scanner_promotion_id") or ""
-    ).strip()
+    record.scanner_promotion_id = str(payload.get("scanner_promotion_id") or "").strip()
     record.scanner_promotion_reason = str(
         payload.get("scanner_promotion_reason") or ""
     ).strip()
     record.scanner_promotion_emitted_epoch = _safe_float(
         payload.get("scanner_promotion_emitted_epoch")
     )
-    record.scanner_source_signature = str(
-        payload.get("source_signature") or ""
-    ).strip()
+    record.scanner_source_signature = str(payload.get("source_signature") or "").strip()
 
 
 def promote_candidates(

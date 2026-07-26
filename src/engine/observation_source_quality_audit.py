@@ -609,9 +609,7 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
             "target_position_tag",
             "source_quality_route",
         ),
-        decision_authority=(
-            "real_scalping_scanner_ws_backoff_watch_retention_only"
-        ),
+        decision_authority=("real_scalping_scanner_ws_backoff_watch_retention_only"),
     ),
     "krx_open_watchlist_reset": StageContract(
         required_fields=(
@@ -2165,9 +2163,7 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
                 "effective_venue",
                 "venue_resolution",
             ),
-            decision_authority=(
-                "scanner_runtime_scheduler_only_no_order_authority"
-            ),
+            decision_authority=("scanner_runtime_scheduler_only_no_order_authority"),
         )
         for stage in SCANNER_SCHEDULER_STAGES
     },
@@ -2181,9 +2177,7 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
             "effective_venue",
             "venue_resolution",
         ),
-        decision_authority=(
-            "scanner_generation_consistency_pre_submit_safety_veto"
-        ),
+        decision_authority=("scanner_generation_consistency_pre_submit_safety_veto"),
     ),
 }
 
@@ -2677,7 +2671,8 @@ def _reviewed_unknown_reason_for_stage_field(
             return (
                 field == "venue"
                 and venue_resolution == "scheduler_generation_canonical_venue"
-                and _field_text("effective_venue") in {"KRX", "NXT", "PREMARKET_KRX_LIKE"}
+                and _field_text("effective_venue")
+                in {"KRX", "NXT", "PREMARKET_KRX_LIKE"}
             )
         if stage == "scalping_scanner_scheduler_boot_restore_expired":
             return venue_resolution.startswith("scanner_scheduler_boot_")
@@ -2760,8 +2755,7 @@ def _reviewed_unknown_reason_for_stage_field(
         ):
             return False
         return (
-            _field_text("decision_authority")
-            == "scale_in_attribution_source_only"
+            _field_text("decision_authority") == "scale_in_attribution_source_only"
             and _field_text("scale_in_arm") == "AVG_DOWN"
             and bool(_field_text("scale_in_blocker_reason"))
             and _is_falseish("runtime_effect")
@@ -2771,7 +2765,10 @@ def _reviewed_unknown_reason_for_stage_field(
         )
 
     def _is_reviewed_fast_exit_route_provenance() -> bool:
-        if stage not in {"scalp_fast_exit_quote_blocked", "scalp_fast_exit_venue_blocked"}:
+        if stage not in {
+            "scalp_fast_exit_quote_blocked",
+            "scalp_fast_exit_venue_blocked",
+        }:
             return False
         field = str(key or "")
         value_text = str(value or "").strip().lower()
@@ -2800,8 +2797,7 @@ def _reviewed_unknown_reason_for_stage_field(
                 return False
             return (
                 _field_text("fast_exit_broker_route") == "NXT"
-                and _field_text("fast_exit_nxt_enabled").lower()
-                in {"true", "1", "yes"}
+                and _field_text("fast_exit_nxt_enabled").lower() in {"true", "1", "yes"}
                 and bool(_field_text("fast_exit_nxt_flag_source"))
             )
         if field == "fast_exit_execution_cohort":
@@ -3506,19 +3502,14 @@ def _blocked_observation_records_fail_closed_source_gap(
     """Accept explicit fail-closed source gaps on non-authoritative block rows."""
     if stage == "scalp_entry_action_decision_snapshot" and source == "minute_candle":
         return (
-            str(fields.get("source_stage") or "").strip().lower()
-            == "latency_block"
-            and str(fields.get("minute_candle_evaluation_state") or "")
-            .strip()
-            .lower()
+            str(fields.get("source_stage") or "").strip().lower() == "latency_block"
+            and str(fields.get("minute_candle_evaluation_state") or "").strip().lower()
             == "unavailable_fail_closed"
             and _contract_bool(fields.get("actual_order_submitted"), False)
             and _contract_bool(fields.get("broker_order_forbidden"), True)
         )
     if stage == "score65_74_recovery_probe_blocked":
-        reason = str(
-            fields.get("score65_74_recovery_probe_skip_reason") or ""
-        ).lower()
+        reason = str(fields.get("score65_74_recovery_probe_skip_reason") or "").lower()
         return "source_quality" in reason or "unusable" in reason or "stale" in reason
     if stage == "adverse_fill_observed":
         return not _contract_bool(fields.get("feature_valid"), True)
@@ -3534,14 +3525,11 @@ def _blocked_observation_records_fail_closed_source_gap(
         else "minute_candle_evaluation_state"
     )
     return (
-        str(fields.get(state_field) or "").strip().lower()
-        == "unavailable_fail_closed"
+        str(fields.get(state_field) or "").strip().lower() == "unavailable_fail_closed"
     )
 
 
-def _pressure_provenance_unusable(
-    fields: dict[str, Any], *, stage: str = ""
-) -> bool:
+def _pressure_provenance_unusable(fields: dict[str, Any], *, stage: str = "") -> bool:
     if _blocked_observation_records_fail_closed_source_gap(
         stage, fields, source="tick"
     ):
@@ -3568,9 +3556,7 @@ def _stage_requires_tick_pressure_provenance(stage: str) -> bool:
     return set(TICK_PRESSURE_PROVENANCE_FIELDS).issubset(required)
 
 
-def _micro_vwap_provenance_unusable(
-    fields: dict[str, Any], *, stage: str = ""
-) -> bool:
+def _micro_vwap_provenance_unusable(fields: dict[str, Any], *, stage: str = "") -> bool:
     if _blocked_observation_records_fail_closed_source_gap(
         stage, fields, source="minute_candle"
     ):
