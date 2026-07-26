@@ -838,10 +838,10 @@ def _select_recent_ticks_for_feature_packet(ws_data, recent_ticks, *, now=None):
         int(count or 0)
         for count in (snapshot.get("trade_volume_source_counts") or {}).values()
     )
-    if age_ms is None or age_ms > 5000 or (
-        touch_count <= 0
-        and trusted_count <= 0
-        and declared_volume_count <= 0
+    if (
+        age_ms is None
+        or age_ms > 5000
+        or (touch_count <= 0 and trusted_count <= 0 and declared_volume_count <= 0)
     ):
         return rest_ticks
     return ws_ticks

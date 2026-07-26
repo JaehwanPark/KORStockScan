@@ -2844,6 +2844,24 @@ def _scanner_runtime_target_payload(
     }
 
 
+def _persist_scanner_promotion_provenance(record, payload):
+    """Persist the immutable scanner handoff required for safe boot hydration."""
+    payload = payload or {}
+    record.effective_venue = str(payload.get("effective_venue") or "").strip().upper()
+    record.venue_resolution = str(payload.get("venue_resolution") or "").strip()
+    record.market_session_bucket = str(
+        payload.get("market_session_bucket") or ""
+    ).strip()
+    record.scanner_promotion_id = str(payload.get("scanner_promotion_id") or "").strip()
+    record.scanner_promotion_reason = str(
+        payload.get("scanner_promotion_reason") or ""
+    ).strip()
+    record.scanner_promotion_emitted_epoch = _safe_float(
+        payload.get("scanner_promotion_emitted_epoch")
+    )
+    record.scanner_source_signature = str(payload.get("source_signature") or "").strip()
+
+
 def promote_candidates(
     db,
     event_bus,
@@ -3138,6 +3156,22 @@ def promote_candidates(
             f"체결강도: {_format_strength_display(target)}, "
             f"신선도점수: {score:.1f} | 출처: {target['Source']} [{source_sig}])"
         )
+        source_guard = {
+            **source_guard,
+            "scanner_promotion_id": f"SCANPROM-{code}-{int(float(now_ts or 0.0) * 1000)}",
+            "scanner_promotion_emitted_epoch": f"{float(now_ts or 0.0):.3f}",
+            "scanner_low_rebound_reserved_slots": low_rebound_reserved_slots,
+            "scanner_low_rebound_reserved_promotion": uses_low_rebound_reserved_slot,
+            "scanner_low_rebound_active_floor": low_rebound_active_floor,
+            "scanner_low_rebound_active_count": active_low_rebound_count,
+            "scanner_low_rebound_floor_shortfall": low_rebound_floor_shortfall,
+            "scanner_watch_budget_owner": watch_owner,
+            "scanner_watch_budget_owner_limit": owner_limit,
+            "scanner_watch_budget_total_limit": remaining_slots,
+        }
+        runtime_target_payload = _scanner_runtime_target_payload(
+            target, source_guard, record_id=None, now_ts=now_ts
+        )
         try:
             with db.get_session() as session:
                 today_date = datetime.now().date()
@@ -3173,6 +3207,7 @@ def promote_candidates(
                     session.add(new_record)
                     record = new_record
 
+                _persist_scanner_promotion_provenance(record, runtime_target_payload)
                 if hasattr(session, "flush"):
                     session.flush()
                 record_id = getattr(record, "id", None)
@@ -3180,19 +3215,6 @@ def promote_candidates(
             log_error(f"⚠️ DB 저장 실패 ({code}): {e}")
             continue
 
-        source_guard = {
-            **source_guard,
-            "scanner_promotion_id": f"SCANPROM-{code}-{int(float(now_ts or 0.0) * 1000)}",
-            "scanner_promotion_emitted_epoch": f"{float(now_ts or 0.0):.3f}",
-            "scanner_low_rebound_reserved_slots": low_rebound_reserved_slots,
-            "scanner_low_rebound_reserved_promotion": uses_low_rebound_reserved_slot,
-            "scanner_low_rebound_active_floor": low_rebound_active_floor,
-            "scanner_low_rebound_active_count": active_low_rebound_count,
-            "scanner_low_rebound_floor_shortfall": low_rebound_floor_shortfall,
-            "scanner_watch_budget_owner": watch_owner,
-            "scanner_watch_budget_owner_limit": owner_limit,
-            "scanner_watch_budget_total_limit": remaining_slots,
-        }
         if bool(
             getattr(TRADING_RULES, "SCALP_SCANNER_REAL_SOURCE_GUARD_ENABLED", False)
         ):
@@ -3206,9 +3228,7 @@ def promote_candidates(
             low_rebound_promoted_count += 1
         else:
             general_promoted_count += 1
-        runtime_target_payload = _scanner_runtime_target_payload(
-            target, source_guard, record_id=record_id, now_ts=now_ts
-        )
+        runtime_target_payload["record_id"] = record_id
         event_bus.publish(
             "SCALPING_SCANNER_PROMOTION_BATCH_PENDING",
             {

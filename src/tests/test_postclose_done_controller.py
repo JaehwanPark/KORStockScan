@@ -1440,6 +1440,10 @@ def test_postclose_done_controller_accepts_report_only_followup_warnings(
                 "swing_lifecycle_bucket_discovery:ai_two_pass_review_partial_fail_closed",
                 "swing_lifecycle_bucket_discovery:ai_two_pass_review_partial_source_only",
             ],
+            "conversion_kpi": {
+                "status": "warning",
+                "warnings": ["active_or_hypothesis_not_instrumented"],
+            },
         },
     )
 
@@ -1557,6 +1561,15 @@ def test_postclose_done_controller_repairs_active_priority_handoff_by_refreshing
     assert not any(
         cmd[:2] == ["bash", "deploy/run_threshold_cycle_postclose.sh"] for cmd in calls
     )
+
+
+def test_next_preopen_apply_uses_next_krx_trading_day_after_friday():
+    action = mod._build_next_preopen_apply_action("2026-07-24")
+
+    assert action.command is not None
+    assert "--date" in action.command
+    assert action.command[action.command.index("--date") + 1] == "2026-07-27"
+    assert action.command[action.command.index("--source-date") + 1] == "2026-07-24"
 
 
 def test_postclose_done_controller_accepts_missing_next_preopen_apply_as_optional(

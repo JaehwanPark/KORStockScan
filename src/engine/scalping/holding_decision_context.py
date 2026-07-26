@@ -7,6 +7,8 @@ price/quantity, defer hard safety, mutate thresholds, or change provider route.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import threading
 import time
@@ -65,6 +67,29 @@ _KNOWN_OFI_STATES = {
 _REST_TAPE_TTL_SEC = 3.0
 _REST_TAPE_CACHE: dict[str, tuple[float, list[dict[str, Any]]]] = {}
 _REST_TAPE_CACHE_LOCK = threading.Lock()
+
+
+def _exact_entry_time_context(position: dict[str, Any]) -> tuple[dict[str, Any], str]:
+    raw = position.get("entry_time_context")
+    if not isinstance(raw, dict) or not raw:
+        return {}, ""
+    context = {
+        str(key): value
+        for key, value in raw.items()
+        if value is not None and str(value).strip() not in {"", "-", "None", "null"}
+    }
+    if not context:
+        return {}, ""
+    digest = hashlib.sha256(
+        json.dumps(
+            context,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+    ).hexdigest()
+    return context, digest
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -555,10 +580,33 @@ def build_holding_decision_context(
     now_epoch = now.timestamp()
     ws = ws_data if isinstance(ws_data, dict) else {}
     position = stock if isinstance(stock, dict) else {}
+    candle_ws = dict(ws)
+    for key in (
+        "market_type",
+        "mrkt_tp",
+        "market_code",
+        "market_segment",
+        "market",
+        "strategy",
+        "market_index_code",
+        "market_inds_cd",
+        "sector_index_code",
+        "sector_inds_cd",
+        "industry_index_code",
+        "previous_day_levels",
+        "market_context",
+        "sector_context",
+    ):
+        if candle_ws.get(key) in (None, "", {}) and position.get(key) not in (
+            None,
+            "",
+            {},
+        ):
+            candle_ws[key] = position.get(key)
     candle = build_session_candle_source(
         token,
         code,
-        ws,
+        candle_ws,
         venue,
         session,
         limit=limit,
@@ -775,6 +823,7 @@ def build_holding_decision_context(
         if hold_defer_allowed
         else ("disabled" if not enabled else "blocked")
     )
+    entry_time_context, entry_time_context_sha256 = _exact_entry_time_context(position)
     phase, minutes_to_close = _session_phase(now, str(candle.get("session") or ""))
     context = {
         "schema": SCHEMA,
@@ -785,6 +834,20 @@ def build_holding_decision_context(
         "rest_route": candle.get("rest_route"),
         "ws_route": candle.get("ws_route"),
         "request_code": candle.get("request_code"),
+        # Observation-only exact copy. The model payload intentionally omits this
+        # field because holding prompts already receive position.entry_time_context.
+        "entry_time_context_provenance": {
+            "status": (
+                "exact_captured" if entry_time_context else "source_unavailable"
+            ),
+            "source": (
+                entry_time_context.get("source")
+                if entry_time_context
+                else "not_recorded"
+            ),
+            "sha256": entry_time_context_sha256 or None,
+            "value": entry_time_context,
+        },
         "candle": {
             key: candle.get(key)
             for key in (
@@ -796,6 +859,9 @@ def build_holding_decision_context(
                 "sample_mode",
                 "bars",
                 "structure",
+                "input_bundle_version",
+                "multi_timeframe_ai_input_enabled",
+                "multi_timeframe_context",
                 "regime",
                 "alignment",
                 "risk_flags",
@@ -963,16 +1029,35 @@ def build_holding_decision_context(
         "flow" in str(decision_kind or "").lower()
         or "overnight" in str(decision_kind or "").lower()
     )
+    snapshot_ws_base = dict(ws)
+    for key in (
+        "program_context",
+        "program_source",
+        "program_observed_ts",
+        "program_missing_reason",
+        "investor_context",
+        "investor_source",
+        "investor_observed_ts",
+        "investor_missing_reason",
+        "investor_market_suffix",
+        "investor_market_route",
+    ):
+        if snapshot_ws_base.get(key) in (None, "", {}) and position.get(key) not in (
+            None,
+            "",
+            {},
+        ):
+            snapshot_ws_base[key] = position.get(key)
     snapshot_ws = (
         enrich_investor_source(
             token=token,
             stock_code=code,
             request_code=str(candle.get("request_code") or code),
-            ws_data=ws,
+            ws_data=snapshot_ws_base,
             observed_at=now_epoch,
         )
         if include_investor_source
-        else ws
+        else snapshot_ws_base
     )
     context["ai_market_snapshot_v1"] = build_ai_market_snapshot(
         stock_code=code,
@@ -1048,6 +1133,9 @@ def holding_decision_context_model_payload(
         return {key: source_mapping.get(key) for key in keys}
 
     candle = dict(source.get("candle") or {})
+    if not bool(candle.get("multi_timeframe_ai_input_enabled")):
+        candle.pop("input_bundle_version", None)
+        candle.pop("multi_timeframe_context", None)
     structure = dict(candle.get("structure") or {})
     structure.pop("regime", None)
     structure.pop("alignment", None)
@@ -1261,6 +1349,11 @@ def holding_decision_context_log_fields(
         else {}
     )
     timing = context.get("timing") if isinstance(context.get("timing"), dict) else {}
+    entry_time = (
+        context.get("entry_time_context_provenance")
+        if isinstance(context.get("entry_time_context_provenance"), dict)
+        else {}
+    )
     contract_fields = {
         f"{observation_contract_prefix}{key}": value
         for key, value in OBSERVATION_CONTRACT.items()
@@ -1273,6 +1366,10 @@ def holding_decision_context_log_fields(
         "holding_context_session": context.get("session"),
         "holding_context_rest_route": context.get("rest_route"),
         "holding_context_ws_route": context.get("ws_route"),
+        "holding_context_entry_time_context_status": entry_time.get("status"),
+        "holding_context_entry_time_context_source": entry_time.get("source"),
+        "holding_context_entry_time_context_sha256": entry_time.get("sha256"),
+        "holding_context_entry_time_context": entry_time.get("value", {}),
         "holding_context_candle_bar_count": candle.get("current_session_bar_count", 0),
         "holding_context_candle_latest_age_sec": candle.get("latest_bar_age_sec"),
         "holding_context_candle_regime": candle.get("regime"),

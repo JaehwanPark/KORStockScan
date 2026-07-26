@@ -159,6 +159,41 @@ class DBManager:
                 )
                 conn.execute(
                     text(
+                        "ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS effective_venue TEXT;"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS venue_resolution TEXT;"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS market_session_bucket TEXT;"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS scanner_promotion_id TEXT;"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS scanner_promotion_reason TEXT;"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS scanner_promotion_emitted_epoch DOUBLE PRECISION;"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS scanner_source_signature TEXT;"
+                    )
+                )
+                conn.execute(
+                    text(
                         "ALTER TABLE recommendation_history "
                         "ALTER COLUMN buy_price TYPE DOUBLE PRECISION USING buy_price::double precision;"
                     )
@@ -684,6 +719,10 @@ class DBManager:
                         shallow_volatility_avg_down_count, shallow_volatility_avg_down_last_at,
                         scale_in_locked, hard_stop_price, trailing_stop_price,
                         entry_armed_at_epoch,
+                        effective_venue, venue_resolution, market_session_bucket,
+                        scanner_promotion_id, scanner_promotion_reason,
+                        scanner_promotion_emitted_epoch,
+                        scanner_source_signature as source_signature,
                         (
                             SELECT dsq.marcap
                             FROM daily_stock_quotes dsq

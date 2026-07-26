@@ -1,6 +1,6 @@
 # 2026-07-24 Scalping Pyramid Intraday Feedback
 
-- generated_at: 2026-07-24T12:35:02+09:00
+- generated_at: 2026-07-24T20:10:49+09:00
 - decision_authority: source_only_pyramid_intraday_feedback_no_runtime_mutation
 - runtime_effect: false
 - allowed_runtime_apply: false
@@ -15,7 +15,7 @@
 - pyramid_overheat_or_reversal_risk_count: 1
 - pyramid_open_unresolved_count: 0
 - one_share_event_count: 2
-- one_share_closed_count: 1
+- one_share_closed_count: 2
 - one_share_pyramid_opportunity_count: 0
 - one_share_pyramid_missed_upside_count: 0
 - one_share_pyramid_missed_upside_rate: 0.00
@@ -39,7 +39,7 @@
 ## One Share Opportunity Rows
 
 - record_id=23735 code=096770 name=SK이노베이션 label=pyramid_correctly_blocked opportunity_seen=False opportunity_profit=None max_profit=0.84 opportunity_cost=0.84 final=0.31 residual_zero_fill=True residual_soft_abort=False residual_missed_candidate=False
-- record_id=23752 code=100090 name=SK오션플랜트 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=-0.13 opportunity_cost=0.0 final=None residual_zero_fill=True residual_soft_abort=False residual_missed_candidate=False
+- record_id=23752 code=100090 name=SK오션플랜트 label=pyramid_correctly_blocked opportunity_seen=False opportunity_profit=None max_profit=0.81 opportunity_cost=0.81 final=0.45 residual_zero_fill=True residual_soft_abort=False residual_missed_candidate=False
 
 ## Normal Winner Expansion Rows
 

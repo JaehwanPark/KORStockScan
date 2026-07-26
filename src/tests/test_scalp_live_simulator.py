@@ -4601,6 +4601,9 @@ def test_performance_tuning_source_split_combines_real_and_scalp_sim():
             {
                 "status": "COMPLETED",
                 "strategy": "SCALPING",
+                "buy_price": 1000,
+                "sell_price": 1002,
+                "buy_qty": 1,
                 "profit_rate": 0.2,
             }
         ],

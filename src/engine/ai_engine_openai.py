@@ -207,10 +207,14 @@ def _coerce_usage_int(value: Any) -> int | None:
         return None
 
 
-def _extract_openai_usage_meta(response: Any) -> dict[str, int]:
+def _extract_openai_usage_meta(response: Any) -> dict[str, Any]:
+    meta: dict[str, Any] = {}
+    response_id = _get_usage_value(response, "id")
+    if response_id not in (None, ""):
+        meta["openai_response_id"] = str(response_id)
     usage = _get_usage_value(response, "usage")
     if not usage:
-        return {}
+        return meta
 
     input_tokens = _coerce_usage_int(_get_usage_value(usage, "input_tokens"))
     output_tokens = _coerce_usage_int(_get_usage_value(usage, "output_tokens"))
@@ -228,7 +232,6 @@ def _extract_openai_usage_meta(response: Any) -> dict[str, int]:
     if total_tokens is None and (input_tokens is not None or output_tokens is not None):
         total_tokens = int(input_tokens or 0) + int(output_tokens or 0)
 
-    meta: dict[str, int] = {}
     if input_tokens is not None:
         meta["openai_input_tokens"] = input_tokens
     if output_tokens is not None:
@@ -496,6 +499,10 @@ class OpenAIResponsesWSWorker:
                     )
                     self._record("openai_ws_completed", 1)
                     self._record("openai_ws_roundtrip_ms", roundtrip_ms)
+                    usage_meta = _extract_openai_usage_meta(response)
+                    usage_meta["openai_response_sha256"] = hashlib.sha256(
+                        raw_text.encode("utf-8")
+                    ).hexdigest()
                     return OpenAITransportResult(
                         payload=payload,
                         transport_mode="responses_ws",
@@ -503,7 +510,7 @@ class OpenAIResponsesWSWorker:
                         ws_http_fallback=False,
                         queue_wait_ms=queue_wait_ms,
                         roundtrip_ms=roundtrip_ms,
-                        usage_meta=_extract_openai_usage_meta(response),
+                        usage_meta=usage_meta,
                         timing_meta={
                             "openai_ws_attempt_timeout_ms": int(request.timeout_ms),
                             "openai_ws_total_timeout_ms": int(
@@ -1242,7 +1249,7 @@ class GPTSniperEngine:
         context = candle_context if isinstance(candle_context, dict) else {}
         if not context or not bool(context.get("enabled", False)):
             return None
-        return {
+        payload = {
             "schema": context.get("schema"),
             "venue": context.get("venue"),
             "session": context.get("session"),
@@ -1267,11 +1274,20 @@ class GPTSniperEngine:
                 "missing_value_contract": "null_with_missing_reason",
             },
             "structure": context.get("structure", {}),
+            "multi_timeframe_ai_input_enabled": bool(
+                context.get("multi_timeframe_ai_input_enabled")
+            ),
             "regime": context.get("regime"),
             "alignment": context.get("alignment"),
             "risk_flags": context.get("risk_flags", []),
             "source_quality": context.get("source_quality", {}),
         }
+        if payload["multi_timeframe_ai_input_enabled"]:
+            payload["input_bundle_version"] = context.get("input_bundle_version")
+            payload["multi_timeframe_context"] = context.get(
+                "multi_timeframe_context", {}
+            )
+        return payload
 
     def _attach_entry_candle_inputs(self, payload, candle_context):
         target = payload if isinstance(payload, dict) else {}
@@ -1688,6 +1704,7 @@ class GPTSniperEngine:
                     )
                 )
                 or key_text == "ai_decision_trace_id"
+                or key_text == "provider_response_id"
                 or key_text == "provider"
             ):
                 target_payload[key] = value
@@ -2452,6 +2469,10 @@ class GPTSniperEngine:
                 roundtrip_ms = max(
                     0, int((time.perf_counter() - request.submitted_at_perf) * 1000)
                 )
+                usage_meta = _extract_openai_usage_meta(response)
+                usage_meta["openai_response_sha256"] = hashlib.sha256(
+                    raw_text.encode("utf-8")
+                ).hexdigest()
                 return OpenAITransportResult(
                     payload=payload,
                     transport_mode="http",
@@ -2459,7 +2480,7 @@ class GPTSniperEngine:
                     ws_http_fallback=False,
                     queue_wait_ms=0,
                     roundtrip_ms=roundtrip_ms,
-                    usage_meta=_extract_openai_usage_meta(response),
+                    usage_meta=usage_meta,
                     timing_meta={
                         "openai_http_provider_ms": provider_ms,
                         "openai_http_provider_total_ms": provider_total_ms,

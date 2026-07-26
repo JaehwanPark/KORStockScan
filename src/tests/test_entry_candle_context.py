@@ -23,6 +23,7 @@ from src.engine.scalping.entry_candle_context import (
     resolve_entry_candle_request_code,
 )
 from src.engine.scalping import ai_market_snapshot as snapshot_module
+from src.engine.scalping import multi_timeframe_context as multi_context_module
 
 KST = ZoneInfo("Asia/Seoul")
 
@@ -34,6 +35,10 @@ def _enable(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_ENTRY_CANDLE_CONTEXT_NXT_ENABLED", "true")
     monkeypatch.setenv("KORSTOCKSCAN_ENTRY_CANDLE_CONTEXT_PREMARKET_ENABLED", "true")
     monkeypatch.setenv("KORSTOCKSCAN_ENTRY_CANDLE_HYBRID_GUARD_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_MULTI_TIMEFRAME_AI_CONTEXT_ENABLED", "true")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_MULTI_TIMEFRAME_AI_CONTEXT_ACTIVE_DATE", "2026-07-23"
+    )
 
 
 def _candles(
@@ -111,6 +116,77 @@ def test_builder_keeps_current_session_separate_and_compresses_latest_twenty(
     assert "latest_lower_wick_ratio" in context["structure"]
     assert "volume_direction_alignment" in context["structure"]
     assert context["observation_contract"] == OBSERVATION_CONTRACT
+    assert context["input_bundle_version"] == "scalping_multi_timeframe_context_v1"
+    assert context["multi_timeframe_context"]["session_bar_vwap"]["status"] == "pass"
+    assert context["multi_timeframe_context"]["opening_range_15m"]["status"] == "pass"
+    ai_payload = GPTSniperEngine.__new__(GPTSniperEngine)._entry_candle_model_payload(
+        context
+    )
+    assert ai_payload["input_bundle_version"] == ("scalping_multi_timeframe_context_v1")
+    assert ai_payload["multi_timeframe_context"]["payload_hash"] == (
+        context["multi_timeframe_context"]["payload_hash"]
+    )
+
+
+def test_structure_excludes_forming_bar_and_requires_exact_window_sample(
+    monkeypatch,
+):
+    _enable(monkeypatch)
+    rows = _candles(20)
+    rows.append(
+        {
+            "source_timestamp": "20260723092000",
+            "체결시간": "09:20:00",
+            "시가": 100_000,
+            "고가": 100_000,
+            "저가": 100_000,
+            "현재가": 100_000,
+            "거래량": 999_999,
+        }
+    )
+    context = build_entry_candle_context(
+        None,
+        "000660",
+        _ws(100_000),
+        venue="KRX",
+        session="krx_regular",
+        now_ts=datetime(2026, 7, 23, 9, 20, 30, tzinfo=KST),
+        recent_candles=rows,
+        source_meta={},
+    )
+
+    structure = context["structure"]
+    assert structure["forming_bar_excluded"] is True
+    assert structure["returns_pct"]["20"] is None
+    assert structure["returns_pct"]["60"] is None
+    assert structure["window_source_bar_counts"]["20"]["return_complete"] is False
+    assert structure["window_source_bar_counts"]["20"]["slope_complete"] is True
+    assert -1.0 < structure["peak_drawdown_pct"] <= 0.0
+
+
+def test_multi_timeframe_bundle_is_not_sent_before_global_promotion(monkeypatch):
+    _enable(monkeypatch)
+    monkeypatch.setenv("KORSTOCKSCAN_MULTI_TIMEFRAME_AI_CONTEXT_ENABLED", "false")
+    context = build_entry_candle_context(
+        None,
+        "000660",
+        _ws(),
+        venue="KRX",
+        session="krx_regular",
+        now_ts=datetime(2026, 7, 23, 9, 20, 30, tzinfo=KST),
+        recent_candles=_candles(20),
+        source_meta={},
+    )
+
+    payload = GPTSniperEngine.__new__(GPTSniperEngine)._entry_candle_model_payload(
+        context
+    )
+    assert context["multi_timeframe_context"]["schema"] == (
+        "scalping_multi_timeframe_context_v1"
+    )
+    assert payload["multi_timeframe_ai_input_enabled"] is False
+    assert "multi_timeframe_context" not in payload
+    assert "input_bundle_version" not in payload
 
 
 def test_entry_snapshot_collects_null_aware_investor_source(monkeypatch):
@@ -234,10 +310,10 @@ def test_builder_excludes_untrusted_tick_volume_from_forming_bar(monkeypatch):
     )
 
     assert context["bars"][-1]["v"] == 120
-    assert context["structure"]["volume_ratio"] is None
-    assert (
-        context["structure"]["volume_direction_alignment"]
-        == "forming_partial_not_comparable"
+    assert context["structure"]["volume_ratio"] is not None
+    assert context["structure"]["forming_bar_excluded"] is True
+    assert context["structure"]["volume_direction_alignment"] != (
+        "forming_partial_not_comparable"
     )
     assert context["source_quality"]["trusted_tick_volume_count"] == 1
     assert context["source_quality"]["untrusted_tick_volume_count"] == 1
@@ -397,11 +473,61 @@ def test_fetch_entry_candles_uses_effective_route_and_records_provenance(monkeyp
         now_ts=datetime(2026, 7, 23, 16, 3, tzinfo=KST),
     )
 
-    assert requested == [("000660_NX", 40, True)]
+    assert requested == [("000660_NX", 430, True)]
     assert len(candles) == 3
     assert metadata["entry_candle_request_code"] == "000660_NX"
     assert metadata["entry_candle_request_venue"] == "NXT"
     assert metadata["entry_candle_request_session"] == "nxt_aftermarket"
+    assert metadata["multi_timeframe_auxiliary_fetch"] is True
+
+
+def test_runtime_builder_fetches_full_session_window_and_auxiliary_context(
+    monkeypatch,
+):
+    _enable(monkeypatch)
+    requested_limits = []
+    requested_indexes = []
+
+    def _fetch(_token, _code, limit, *, explicit_request_code=False):
+        requested_limits.append((limit, explicit_request_code))
+        return _candles(20), {"api_id": "ka10080", "received_count": 20}
+
+    def _index_source(_token, index_code, *, source_role):
+        requested_indexes.append((index_code, source_role))
+        return {"source": "fixture", "minute_rows": _candles(20, base=300_000)}
+
+    monkeypatch.setattr(
+        "src.utils.kiwoom_utils.get_minute_candles_ka10080_with_meta", _fetch
+    )
+    monkeypatch.setattr(
+        multi_context_module,
+        "_previous_day_source",
+        lambda *_args, **_kwargs: {
+            "date": "2026-07-22",
+            "high": 10100,
+            "low": 9900,
+            "close": 10000,
+            "source_quality": "pass",
+        },
+    )
+    monkeypatch.setattr(multi_context_module, "_index_context_source", _index_source)
+
+    context = build_entry_candle_context(
+        "token",
+        "000660",
+        {
+            **_ws(),
+            "market_type": "KOSPI",
+            "sector_index_code": "013",
+        },
+        venue="KRX",
+        session="krx_regular",
+        now_ts=datetime(2026, 7, 23, 9, 20, 30, tzinfo=KST),
+    )
+
+    assert requested_limits == [(430, True)]
+    assert requested_indexes == [("001", "market"), ("013", "sector")]
+    assert context["multi_timeframe_context"]["previous_day_levels"]["close"] == 10000
 
 
 def test_builder_blocks_prefetched_candles_from_wrong_rest_route(monkeypatch):

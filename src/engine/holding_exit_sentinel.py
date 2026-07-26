@@ -302,11 +302,15 @@ def _is_explicit_real_sell_execution(event: PipelineEvent) -> bool:
     if _is_true_like(fields.get("actual_order_submitted", "")):
         return True
     if event.stage == "sell_order_sent":
-        order_no = _safe_str(
-            fields.get("ord_no")
-            or fields.get("order_no")
-            or fields.get("broker_order_no")
-        ).strip().lower()
+        order_no = (
+            _safe_str(
+                fields.get("ord_no")
+                or fields.get("order_no")
+                or fields.get("broker_order_no")
+            )
+            .strip()
+            .lower()
+        )
         return bool(order_no and order_no not in {"-", "0", "none", "null"})
     return False
 

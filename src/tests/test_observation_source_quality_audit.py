@@ -1910,6 +1910,175 @@ def test_observation_source_quality_audit_reviews_20260722_explicit_unknown_prov
     )
 
 
+def test_observation_source_quality_audit_reviews_20260724_fail_closed_unknown_provenance(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    order_forbidden = {
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    _write_events(
+        tmp_path,
+        "2026-07-24",
+        [
+            _event(
+                "scalping_scanner_runtime_target_attach",
+                {
+                    **order_forbidden,
+                    "decision_authority": (
+                        "real_scalping_scanner_runtime_watchlist_handoff_only"
+                    ),
+                    "venue": "UNKNOWN",
+                    "effective_venue": "UNKNOWN",
+                    "venue_resolution": "missing_tradable_explicit_venue",
+                },
+                record_id=1,
+            ),
+            _event(
+                "scalping_scanner_watching_runtime_skip",
+                {
+                    **order_forbidden,
+                    "decision_authority": (
+                        "real_scalping_scanner_runtime_watchlist_observation_only"
+                    ),
+                    "scanner_observed_venue": "UNKNOWN",
+                    "scanner_observed_venue_resolution": (
+                        "missing_tradable_explicit_venue"
+                    ),
+                },
+                record_id=7,
+            ),
+            _event(
+                "scalp_fast_exit_quote_blocked",
+                {
+                    **order_forbidden,
+                    "fast_exit_ws_0d_route": "unknown",
+                    "fast_exit_rest_nxt_route_ready": True,
+                    "fast_exit_route_guard_reason": "nxt_rest_route_proven",
+                },
+                record_id=2,
+            ),
+            _event(
+                "ai_holding_review",
+                {
+                    "holding_context_ws_route": "unknown",
+                    "holding_context_ai_market_snapshot": {
+                        "market_data_route": "unknown",
+                    },
+                    "holding_context_source_quality_status": "blocked",
+                    "holding_context_blockers": ["ai_preflight:bbo_unknown_age"],
+                    "ai_result_source": "input_preflight_blocked",
+                },
+                record_id=3,
+            ),
+            _event(
+                "holding_flow_override_review",
+                {
+                    "flow_state": "unknown_flow_state",
+                    "flow_score": 0,
+                },
+                record_id=4,
+            ),
+            _event(
+                "probe_filled",
+                {
+                    "probe_confirmation_last_state": "UNKNOWN",
+                    "probe_confirmation_count": 0,
+                    "decision_authority": (
+                        "dynamic_entry_price_resolver_p1_post_probe"
+                    ),
+                    "allowed_runtime_apply": False,
+                },
+                record_id=5,
+            ),
+            _event(
+                "probe_continuation_deferred",
+                {
+                    **order_forbidden,
+                    "post_probe_direction_state": "UNKNOWN",
+                    "post_probe_continuation_action": "DEFER",
+                    "post_probe_direction_reason": (
+                        "post_probe_stale_wait_positive_confirmation_required"
+                    ),
+                    "post_probe_direction_group_count": 2,
+                    "post_probe_directional_group_count": 1,
+                    "decision_authority": (
+                        "dynamic_entry_price_resolver_p1_post_probe"
+                    ),
+                    "allowed_runtime_apply": False,
+                },
+                record_id=6,
+            ),
+            _event(
+                "scalp_fast_exit_quote_blocked",
+                {
+                    **order_forbidden,
+                    "fast_exit_ws_0d_route": "unknown",
+                    "fast_exit_rest_nxt_route_ready": False,
+                    "fast_exit_route_guard_reason": (
+                        "nxt_executable_quote_route_unproven"
+                    ),
+                    "rest_check_state": "timeout",
+                },
+                record_id=8,
+            ),
+            _event(
+                "scalp_trailing_continuation_recheck",
+                {
+                    **order_forbidden,
+                    "quote_recovery_large_sell_state": "unknown",
+                    "quote_recovery_fetch_state": "timeout",
+                    "quote_recovery_candidate": True,
+                    "quote_recovery_eligible": False,
+                    "reversal_feature_context_usable": False,
+                    "large_sell_print_detected": False,
+                },
+                record_id=9,
+            ),
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-07-24")
+
+    assert report["unknown_token_findings"] == []
+    reviewed = {
+        item["stage"]: {
+            field["field"]: field["reviewed_reason"] for field in item["fields"]
+        }
+        for item in report["reviewed_unknown_token_findings"]
+    }
+    assert reviewed["scalping_scanner_runtime_target_attach"]["venue"] == (
+        "reviewed_scanner_venue_fail_closed_provenance"
+    )
+    assert (
+        reviewed["scalping_scanner_watching_runtime_skip"]["scanner_observed_venue"]
+        == "reviewed_scanner_venue_fail_closed_provenance"
+    )
+    assert reviewed["scalp_fast_exit_quote_blocked"]["fast_exit_ws_0d_route"] == (
+        "reviewed_legacy_fast_exit_route_provenance"
+    )
+    assert reviewed["ai_holding_review"]["holding_context_ws_route"] == (
+        "reviewed_holding_input_preflight_blocked_provenance"
+    )
+    assert reviewed["holding_flow_override_review"]["flow_state"] == (
+        "reviewed_canonical_unknown_flow_state"
+    )
+    assert reviewed["probe_filled"]["probe_confirmation_last_state"] == (
+        "reviewed_probe_confirmation_not_evaluated"
+    )
+    assert reviewed["probe_continuation_deferred"]["post_probe_direction_state"] == (
+        "reviewed_post_probe_direction_source_gap"
+    )
+    assert (
+        reviewed["scalp_trailing_continuation_recheck"][
+            "quote_recovery_large_sell_state"
+        ]
+        == "reviewed_quote_recovery_large_sell_not_available"
+    )
+
+
 def test_observation_source_quality_audit_does_not_review_unproven_unknown_provenance(
     monkeypatch,
     tmp_path,
@@ -3668,15 +3837,11 @@ def test_observation_source_quality_audit_contracts_all_scheduler_events(
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     fields = {
         "metric_role": "runtime_scheduler_latency",
-        "decision_authority": (
-            "scanner_runtime_scheduler_only_no_order_authority"
-        ),
+        "decision_authority": ("scanner_runtime_scheduler_only_no_order_authority"),
         "window_policy": "per_scanner_generation_action_timestamps",
         "sample_floor": "one_valid_scanner_generation",
         "primary_decision_metric": "attach_to_first_precheck_sec",
-        "source_quality_gate": (
-            "canonical_generation_and_venue_provenance_required"
-        ),
+        "source_quality_gate": ("canonical_generation_and_venue_provenance_required"),
         "runtime_effect": True,
         "forbidden_uses": "standalone_buy,broker_submit",
         "actual_order_submitted": False,
@@ -3717,6 +3882,54 @@ def test_observation_source_quality_audit_contracts_all_scheduler_events(
     ]
     assert submit_contract["status"] == "pass"
     assert submit_contract["missing_violations"] == {}
+
+
+def test_observation_source_quality_allows_expired_boot_restore_unknown_venue(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-06-17",
+        [
+            _event(
+                "scalping_scanner_scheduler_boot_restore_expired",
+                {
+                    "metric_role": "runtime_scheduler_latency",
+                    "decision_authority": (
+                        "scanner_runtime_scheduler_only_no_order_authority"
+                    ),
+                    "window_policy": ("per_scanner_generation_action_timestamps"),
+                    "sample_floor": "one_valid_scanner_generation",
+                    "primary_decision_metric": "attach_to_first_precheck_sec",
+                    "source_quality_gate": (
+                        "canonical_generation_and_venue_provenance_required"
+                    ),
+                    "runtime_effect": True,
+                    "forbidden_uses": "standalone_buy,broker_submit",
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "scheduler_version": "scanner_deadline_scheduler_v1",
+                    "scheduler_action": "invalid_boot_restore_expired",
+                    "scanner_scheduler_action_epoch": 1_750_000_000.0,
+                    "effective_venue": "UNKNOWN",
+                    "venue": "UNKNOWN",
+                    "venue_resolution": (
+                        "scanner_scheduler_boot_persisted_venue_missing"
+                    ),
+                },
+            )
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-06-17")
+
+    contract = report["stage_contracts"][
+        "scalping_scanner_scheduler_boot_restore_expired"
+    ]
+    assert contract["status"] == "pass"
+    assert contract["invalid_label_violations"] == {}
 
 
 def test_observation_source_quality_audit_keeps_rank_sign_fields_rollout_compatible(

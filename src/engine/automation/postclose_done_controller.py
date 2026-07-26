@@ -13,6 +13,8 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable
 
+from src.utils.market_day import is_krx_trading_day
+
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 REPORT_DIR = PROJECT_ROOT / "data" / "report"
 OUTPUT_DIR = REPORT_DIR / "postclose_done_controller"
@@ -44,6 +46,7 @@ DONE_ACCEPTABLE_WARNING_ISSUES = {
     "active_sim_priority_preopen_handoff_pending",
     "active_sim_priority_runtime_observation_missing",
     "active_or_hypothesis_preopen_handoff_pending",
+    "active_or_hypothesis_not_instrumented",
     "ai_watching_score_smoothing_diagnostic_followup_open",
     "quote_consistency_divergence_without_safety_exit_rows",
     "quote_consistency_required_fields_excluded",
@@ -51,6 +54,8 @@ DONE_ACCEPTABLE_WARNING_ISSUES = {
     "real_sample_unused_by_postclose_decision",
     "lifecycle_bucket_discovery_mtd_parent_granularity_not_target",
     "lifecycle_bucket_discovery_rolling5d_parent_granularity_not_target",
+    "lifecycle_complete_flow_absent_workorder_handoff",
+    "lifecycle_join_contract_blocked_workorder_handoff",
     "swing_active_arm_priority_preopen_handoff_pending",
     "swing_active_arm_priority_runtime_observation_missing",
     "swing_lifecycle_bucket_discovery:ai_two_pass_review_fail_closed_sim_auto_blocked",
@@ -390,15 +395,20 @@ def _build_pending_verify_action(target_date: str) -> RecoveryAction:
     )
 
 
-def _next_calendar_date(target_date: str) -> str:
+def _next_krx_trading_date(target_date: str) -> str:
     try:
-        return (date.fromisoformat(target_date) + timedelta(days=1)).isoformat()
+        current = date.fromisoformat(target_date)
     except ValueError:
         return target_date
+    for _ in range(14):
+        current += timedelta(days=1)
+        if is_krx_trading_day(current):
+            return current.isoformat()
+    raise RuntimeError(f"could not resolve next KRX trading day after {target_date}")
 
 
 def _build_next_preopen_apply_action(target_date: str) -> RecoveryAction:
-    next_date = _next_calendar_date(target_date)
+    next_date = _next_krx_trading_date(target_date)
     return RecoveryAction(
         "refresh_next_preopen_apply",
         [

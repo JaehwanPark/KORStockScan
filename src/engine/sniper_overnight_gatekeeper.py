@@ -24,6 +24,7 @@ from src.engine.scalping.holding_decision_context import (
     holding_decision_context_log_fields,
     holding_decision_context_model_payload,
 )
+from src.engine.scalping.multi_timeframe_context import SOURCE_BAR_LIMIT
 
 KIWOOM_TOKEN = None
 DB = None
@@ -320,10 +321,12 @@ def _build_overnight_holding_context(code, mem_stock, ws_data, ctx):
                 kiwoom_utils.get_minute_candles_ka10080_with_meta(
                     KIWOOM_TOKEN,
                     request_code,
-                    limit=60,
+                    limit=SOURCE_BAR_LIMIT,
                     explicit_request_code=True,
                 )
             )
+            candle_meta = dict(candle_meta or {})
+            candle_meta["multi_timeframe_auxiliary_fetch"] = True
         except Exception as exc:
             recent_candles = []
             candle_meta = {

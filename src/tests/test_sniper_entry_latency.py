@@ -265,9 +265,7 @@ def test_fresh_watching_promotion_context_does_not_rescan_event_history(monkeypa
         "strategy": "SCALPING",
         "position_tag": "SCANNER",
         "entry_armed_at_epoch": 1_784_886_100.435,
-        "scanner_generation_id": (
-            "117730:SCANPROM-117730-1784886100435:r1"
-        ),
+        "scanner_generation_id": ("117730:SCANPROM-117730-1784886100435:r1"),
         "scanner_promotion_id": "SCANPROM-117730-1784886100435",
         "scanner_promotion_emitted_epoch": "1784886100.435",
         "scanner_promotion_reason": "low_rebound_rising_missed_candidate",

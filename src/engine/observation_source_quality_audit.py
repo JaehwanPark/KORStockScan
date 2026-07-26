@@ -408,6 +408,7 @@ HIGH_VOLUME_DIAGNOSTIC_STAGE_ROLES = {
 SCANNER_SCHEDULER_STAGES = frozenset(
     {
         "scalping_scanner_scheduler_attach_rejected",
+        "scalping_scanner_scheduler_boot_restore_expired",
         "scalping_scanner_scheduler_claim_deferred",
         "scalping_scanner_scheduler_claim_missing",
         "scalping_scanner_scheduler_claim_rejected",
@@ -608,9 +609,7 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
             "target_position_tag",
             "source_quality_route",
         ),
-        decision_authority=(
-            "real_scalping_scanner_ws_backoff_watch_retention_only"
-        ),
+        decision_authority=("real_scalping_scanner_ws_backoff_watch_retention_only"),
     ),
     "krx_open_watchlist_reset": StageContract(
         required_fields=(
@@ -2164,9 +2163,7 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
                 "effective_venue",
                 "venue_resolution",
             ),
-            decision_authority=(
-                "scanner_runtime_scheduler_only_no_order_authority"
-            ),
+            decision_authority=("scanner_runtime_scheduler_only_no_order_authority"),
         )
         for stage in SCANNER_SCHEDULER_STAGES
     },
@@ -2180,9 +2177,7 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
             "effective_venue",
             "venue_resolution",
         ),
-        decision_authority=(
-            "scanner_generation_consistency_pre_submit_safety_veto"
-        ),
+        decision_authority=("scanner_generation_consistency_pre_submit_safety_veto"),
     ),
 }
 
@@ -2335,6 +2330,18 @@ def _reviewed_unknown_reason_for_stage_field(
     def _field_text(field: str) -> str:
         value = normalized.get(field)
         return "" if value is None else str(value).strip()
+
+    if (
+        stage == "scalping_scanner_scheduler_boot_restore_expired"
+        and str(key or "") in {"venue", "effective_venue"}
+        and str(value or "").strip().upper() == "UNKNOWN"
+        and _field_text("venue_resolution").startswith("scanner_scheduler_boot_")
+        and _field_text("decision_authority")
+        == "scanner_runtime_scheduler_only_no_order_authority"
+        and _field_text("actual_order_submitted").lower() in {"false", "0", "no"}
+        and _field_text("broker_order_forbidden").lower() in {"true", "1", "yes"}
+    ):
+        return "reviewed_scanner_boot_restore_fail_closed_provenance"
 
     def _is_reviewed_stale_flag_not_available() -> bool:
         field = str(key or "")
@@ -2613,9 +2620,108 @@ def _reviewed_unknown_reason_for_stage_field(
                 "post_probe_nxt_ai_veto_source_unverified",
                 "post_probe_nxt_event_time_speed_unavailable",
                 "post_probe_resolver_unavailable",
+                "post_probe_stale_wait_positive_confirmation_required",
+                "post_probe_wait_negative_group",
             }
             and _is_falseish("actual_order_submitted")
             and _is_trueish("broker_order_forbidden")
+        )
+
+    def _is_reviewed_scanner_venue_not_available() -> bool:
+        field = str(key or "")
+        if field not in {"scanner_observed_venue", "venue", "effective_venue"}:
+            return False
+        if str(value or "").strip().upper() != "UNKNOWN":
+            return False
+        if not _is_falseish("actual_order_submitted") or not _is_trueish(
+            "broker_order_forbidden"
+        ):
+            return False
+        venue_resolution = _field_text("venue_resolution")
+        if stage == "scalping_scanner_watching_runtime_skip":
+            observed_resolution = _field_text("scanner_observed_venue_resolution")
+            return (
+                field == "scanner_observed_venue"
+                and _field_text("decision_authority")
+                == "real_scalping_scanner_runtime_watchlist_observation_only"
+                and (
+                    observed_resolution == "missing_tradable_explicit_venue"
+                    or venue_resolution.startswith("conflicting_explicit:")
+                )
+            )
+        if stage == "scalping_scanner_runtime_target_attach":
+            return (
+                _field_text("decision_authority")
+                == "real_scalping_scanner_runtime_watchlist_handoff_only"
+                and venue_resolution == "missing_tradable_explicit_venue"
+            )
+        if stage not in {
+            "scalping_scanner_scheduler_boot_restore_expired",
+            "scalping_scanner_scheduler_generation_invalidated",
+            "scalping_scanner_scheduler_generation_rejected",
+            "scalping_scanner_scheduler_venue_not_selected",
+        }:
+            return False
+        if (
+            _field_text("decision_authority")
+            != "scanner_runtime_scheduler_only_no_order_authority"
+        ):
+            return False
+        if stage == "scalping_scanner_scheduler_generation_invalidated":
+            return (
+                field == "venue"
+                and venue_resolution == "scheduler_generation_canonical_venue"
+                and _field_text("effective_venue")
+                in {"KRX", "NXT", "PREMARKET_KRX_LIKE"}
+            )
+        if stage == "scalping_scanner_scheduler_boot_restore_expired":
+            return venue_resolution.startswith("scanner_scheduler_boot_")
+        return venue_resolution == "missing_tradable_explicit_venue"
+
+    def _is_reviewed_holding_preflight_unknown_provenance() -> bool:
+        if stage not in {"ai_holding_review", "scale_in_ai_authority_retry"}:
+            return False
+        if str(key or "") not in {
+            "holding_context_ws_route",
+            "holding_context_ai_market_snapshot",
+            "ai_market_snapshot_market_data_route",
+            "ai_input_preflight_blockers",
+            "holding_context_blockers",
+            "holding_context_candle_route_partition_expected_key",
+            "holding_context_tape_route_partition_expected_key",
+        }:
+            return False
+        return (
+            _field_text("holding_context_source_quality_status") == "blocked"
+            and bool(_field_text("holding_context_blockers"))
+            and (
+                _field_text("ai_result_source") == "input_preflight_blocked"
+                or _field_text("scale_in_ai_authority_input_retry_result_source")
+                == "input_preflight_blocked"
+            )
+        )
+
+    def _is_reviewed_canonical_unknown_flow_state() -> bool:
+        return (
+            str(key or "") == "flow_state"
+            and is_known_flow_state_label(value)
+            and normalize_flow_state_label(value) == "unknown_flow_state"
+            and _field_text("flow_score") in {"0", "0.0"}
+        )
+
+    def _is_reviewed_probe_confirmation_not_evaluated() -> bool:
+        if stage not in {"probe_filled", "probe_submitted", "residual_blocked"}:
+            return False
+        if (
+            str(key or "") != "probe_confirmation_last_state"
+            or str(value or "").strip().upper() != "UNKNOWN"
+        ):
+            return False
+        return (
+            _field_text("decision_authority")
+            == "dynamic_entry_price_resolver_p1_post_probe"
+            and _field_text("probe_confirmation_count") in {"", "0"}
+            and _field_text("allowed_runtime_apply").lower() in {"false", "0", "no"}
         )
 
     def _is_reviewed_quote_recovery_large_sell_not_available() -> bool:
@@ -2626,13 +2732,14 @@ def _reviewed_unknown_reason_for_stage_field(
             return False
         return (
             str(value or "").strip().lower() == "unknown"
-            and _field_text("quote_recovery_fetch_state") in {"ok", "not_requested"}
+            and _field_text("quote_recovery_fetch_state")
+            in {"ok", "not_requested", "timeout"}
             and _is_falseish("reversal_feature_context_usable")
             and _is_falseish("large_sell_print_detected")
             and _is_falseish("actual_order_submitted")
             and _is_trueish("broker_order_forbidden")
             and (
-                _field_text("quote_recovery_fetch_state") == "ok"
+                _field_text("quote_recovery_fetch_state") in {"ok", "timeout"}
                 or (
                     _is_falseish("quote_recovery_candidate")
                     and _is_falseish("quote_recovery_eligible")
@@ -2648,8 +2755,7 @@ def _reviewed_unknown_reason_for_stage_field(
         ):
             return False
         return (
-            _field_text("decision_authority")
-            == "scale_in_attribution_source_only"
+            _field_text("decision_authority") == "scale_in_attribution_source_only"
             and _field_text("scale_in_arm") == "AVG_DOWN"
             and bool(_field_text("scale_in_blocker_reason"))
             and _is_falseish("runtime_effect")
@@ -2659,17 +2765,39 @@ def _reviewed_unknown_reason_for_stage_field(
         )
 
     def _is_reviewed_fast_exit_route_provenance() -> bool:
-        if stage != "scalp_fast_exit_quote_blocked":
+        if stage not in {
+            "scalp_fast_exit_quote_blocked",
+            "scalp_fast_exit_venue_blocked",
+        }:
             return False
         field = str(key or "")
         value_text = str(value or "").strip().lower()
+        if field == "fast_exit_ws_0d_route":
+            if value_text != "unknown":
+                return False
+            return (
+                _is_falseish("actual_order_submitted")
+                and _is_trueish("broker_order_forbidden")
+                and (
+                    _is_trueish("fast_exit_rest_nxt_route_ready")
+                    or _field_text("fast_exit_route_guard_reason")
+                    in {
+                        "krx_only_outside_krx_regular_session",
+                        "nxt_rest_route_proven",
+                    }
+                    or (
+                        _field_text("rest_check_state") == "timeout"
+                        and _field_text("fast_exit_route_guard_reason")
+                        == "nxt_executable_quote_route_unproven"
+                    )
+                )
+            )
         if field == "fast_exit_route_resolution_reason":
             if value_text != "nxt_session_nxt_enabled_or_unknown":
                 return False
             return (
                 _field_text("fast_exit_broker_route") == "NXT"
-                and _field_text("fast_exit_nxt_enabled").lower()
-                in {"true", "1", "yes"}
+                and _field_text("fast_exit_nxt_enabled").lower() in {"true", "1", "yes"}
                 and bool(_field_text("fast_exit_nxt_flag_source"))
             )
         if field == "fast_exit_execution_cohort":
@@ -2856,6 +2984,14 @@ def _reviewed_unknown_reason_for_stage_field(
         return "reviewed_nxt_post_block_source_gap_provenance"
     if _is_reviewed_post_probe_direction_source_gap():
         return "reviewed_post_probe_direction_source_gap"
+    if _is_reviewed_scanner_venue_not_available():
+        return "reviewed_scanner_venue_fail_closed_provenance"
+    if _is_reviewed_holding_preflight_unknown_provenance():
+        return "reviewed_holding_input_preflight_blocked_provenance"
+    if _is_reviewed_canonical_unknown_flow_state():
+        return "reviewed_canonical_unknown_flow_state"
+    if _is_reviewed_probe_confirmation_not_evaluated():
+        return "reviewed_probe_confirmation_not_evaluated"
     if _is_reviewed_quote_recovery_large_sell_not_available():
         return "reviewed_quote_recovery_large_sell_not_available"
     if _is_reviewed_reversal_state_not_initialized():
@@ -3366,19 +3502,14 @@ def _blocked_observation_records_fail_closed_source_gap(
     """Accept explicit fail-closed source gaps on non-authoritative block rows."""
     if stage == "scalp_entry_action_decision_snapshot" and source == "minute_candle":
         return (
-            str(fields.get("source_stage") or "").strip().lower()
-            == "latency_block"
-            and str(fields.get("minute_candle_evaluation_state") or "")
-            .strip()
-            .lower()
+            str(fields.get("source_stage") or "").strip().lower() == "latency_block"
+            and str(fields.get("minute_candle_evaluation_state") or "").strip().lower()
             == "unavailable_fail_closed"
             and _contract_bool(fields.get("actual_order_submitted"), False)
             and _contract_bool(fields.get("broker_order_forbidden"), True)
         )
     if stage == "score65_74_recovery_probe_blocked":
-        reason = str(
-            fields.get("score65_74_recovery_probe_skip_reason") or ""
-        ).lower()
+        reason = str(fields.get("score65_74_recovery_probe_skip_reason") or "").lower()
         return "source_quality" in reason or "unusable" in reason or "stale" in reason
     if stage == "adverse_fill_observed":
         return not _contract_bool(fields.get("feature_valid"), True)
@@ -3394,14 +3525,11 @@ def _blocked_observation_records_fail_closed_source_gap(
         else "minute_candle_evaluation_state"
     )
     return (
-        str(fields.get(state_field) or "").strip().lower()
-        == "unavailable_fail_closed"
+        str(fields.get(state_field) or "").strip().lower() == "unavailable_fail_closed"
     )
 
 
-def _pressure_provenance_unusable(
-    fields: dict[str, Any], *, stage: str = ""
-) -> bool:
+def _pressure_provenance_unusable(fields: dict[str, Any], *, stage: str = "") -> bool:
     if _blocked_observation_records_fail_closed_source_gap(
         stage, fields, source="tick"
     ):
@@ -3428,9 +3556,7 @@ def _stage_requires_tick_pressure_provenance(stage: str) -> bool:
     return set(TICK_PRESSURE_PROVENANCE_FIELDS).issubset(required)
 
 
-def _micro_vwap_provenance_unusable(
-    fields: dict[str, Any], *, stage: str = ""
-) -> bool:
+def _micro_vwap_provenance_unusable(fields: dict[str, Any], *, stage: str = "") -> bool:
     if _blocked_observation_records_fail_closed_source_gap(
         stage, fields, source="minute_candle"
     ):

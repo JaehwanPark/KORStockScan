@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import time
@@ -80,10 +81,16 @@ class BedrockNovaResult:
     total_input_tokens: int
     estimated_cost_usd: float
     attempted_key_count: int
+    response_id: str = ""
 
     def transport_meta(self) -> dict[str, Any]:
         return {
             "provider": "bedrock",
+            "provider_response_id": self.response_id or None,
+            "bedrock_response_id": self.response_id or None,
+            "bedrock_response_sha256": hashlib.sha256(
+                self.raw_text.encode("utf-8")
+            ).hexdigest(),
             "bedrock_model_id": self.model_id,
             "bedrock_region_name": self.region_name,
             "bedrock_key_index": self.key_index,
@@ -459,6 +466,14 @@ class BedrockNovaProvider:
                 text = _extract_converse_text(response)
                 parsed, parse_error = parse_nova_response_text(text)
                 usage = response.get("usage") if isinstance(response, dict) else {}
+                response_metadata = (
+                    response.get("ResponseMetadata")
+                    if isinstance(response, dict)
+                    else {}
+                )
+                response_id = str(
+                    (response_metadata or {}).get("RequestId") or ""
+                ).strip()
                 input_tokens = _safe_int((usage or {}).get("inputTokens"))
                 output_tokens = _safe_int((usage or {}).get("outputTokens"))
                 cache_read = _usage_int(usage, "cacheReadInputTokens")
@@ -491,6 +506,7 @@ class BedrockNovaProvider:
                         cache_write_input_usd_per_1m=profile.cache_write_input_usd_per_1m,
                     ),
                     attempted_key_count=idx + 1,
+                    response_id=response_id,
                 )
             except Exception as exc:
                 last_error = exc

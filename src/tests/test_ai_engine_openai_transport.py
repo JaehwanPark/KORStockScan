@@ -2473,6 +2473,14 @@ def test_openai_usage_meta_is_exposed_for_pipeline_events(monkeypatch):
     assert result["openai_reasoning_tokens"] == 8
 
 
+def test_openai_usage_meta_includes_provider_response_id_without_usage():
+    response = SimpleNamespace(id="resp-forensics-1", usage=None)
+
+    assert openai_module._extract_openai_usage_meta(response) == {
+        "openai_response_id": "resp-forensics-1"
+    }
+
+
 def test_openai_reasoning_effort_auto_uses_none_for_gpt54_family(monkeypatch):
     monkeypatch.setattr(
         openai_module,
@@ -3638,3 +3646,20 @@ def test_openai_ws_request_id_mismatch_fails_closed_without_http_fallback(monkey
     assert result["openai_ws_used"] is True
     assert result["openai_ws_http_fallback"] is False
     assert result["openai_ws_error_type"] == "OpenAIWSRequestIdMismatchError"
+
+
+def test_transport_trace_copy_preserves_generic_provider_response_id():
+    target = {}
+
+    openai_module.GPTSniperEngine._copy_ai_transport_trace_metadata(
+        target,
+        {
+            "provider": "bedrock",
+            "provider_response_id": "aws-request-1",
+            "bedrock_response_id": "aws-request-1",
+        },
+    )
+
+    assert target["provider"] == "bedrock"
+    assert target["provider_response_id"] == "aws-request-1"
+    assert target["bedrock_response_id"] == "aws-request-1"

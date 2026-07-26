@@ -230,8 +230,7 @@ def test_recent_trade_ticks_are_partitioned_by_subscription_route(monkeypatch):
     }
     assert partitions["KRX|krx_regular"][0]["market_suffix"] == ""
     assert (
-        partitions["_AL|krx_nxt_integrated"][0]["market_route"]
-        == "krx_nxt_integrated"
+        partitions["_AL|krx_nxt_integrated"][0]["market_route"] == "krx_nxt_integrated"
     )
 
 
@@ -371,9 +370,7 @@ def test_realtime_0b_logs_trade_value_fallback_and_volume_mismatch(monkeypatch):
     assert latest["kiwoom_0b_aux_observed_count"] == 1
     assert latest["kiwoom_0b_1313_present_count"] == 0
     assert latest["kiwoom_0b_1313_missing_count"] == 1
-    assert latest["kiwoom_0b_trade_value_source_counts"] == {
-        "calc_price_x_15_abs": 1
-    }
+    assert latest["kiwoom_0b_trade_value_source_counts"] == {"calc_price_x_15_abs": 1}
     assert latest["kiwoom_0b_trade_volume_source_counts"] == {"15_abs": 1}
     assert latest["kiwoom_0b_1030_1031_vs_15_evaluable_count"] == 1
     assert latest["kiwoom_0b_1030_1031_vs_15_mismatch_count"] == 1
