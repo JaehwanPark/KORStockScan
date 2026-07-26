@@ -13,11 +13,11 @@
 
 ## 근거
 
-- as_of: `2026-07-24T12:35:03`
-- exit_signal unique: `2`
-- sell_order_sent unique: `2`
-- sell_completed unique: `1`
-- real exit/sell_sent/sell_completed: `2` / `2` / `1`
+- as_of: `2026-07-24T15:30:02`
+- exit_signal unique: `3`
+- sell_order_sent unique: `3`
+- sell_completed unique: `2`
+- real exit/sell_sent/sell_completed: `3` / `3` / `2`
 - non-real exit/sell_sent/sell_completed: `0` / `0` / `0`
 - sell_sent/exit_signal: `100.0%`
 - real sell_sent/exit_signal: `100.0%`
@@ -29,7 +29,7 @@
 - score50 raw-non50 neutralized: `0`
 - soft_stop rebound above sell 10m: `96.6%`
 - trailing missed-upside: `34.0%`
-- top reasons: `청산신호:scalp_soft_stop_pct=87, soft_stop_grace=64, AI보유감시:cache_miss=34, 청산신호:scalp_trailing_take_profit=2, sell_order_sent=2`
+- top reasons: `청산신호:scalp_soft_stop_pct=87, soft_stop_grace=64, AI보유감시:cache_miss=35, 청산신호:scalp_trailing_take_profit=3, sell_order_sent=3`
 
 ## 금지된 자동변경
 
