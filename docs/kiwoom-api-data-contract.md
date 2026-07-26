@@ -7,6 +7,67 @@ reporting code. It is a data quality contract only. It must not change real
 order authority, threshold/env values, provider routes, bot state, caps, or
 quantity guards.
 
+## Official Kiwoom Reference Gate
+
+The official upstream implementation reference is
+[`Kiwoom-Securities/Kiwoom-REST-API`](https://github.com/Kiwoom-Securities/Kiwoom-REST-API).
+Initial registration was verified at `2026-07-26T19:28:13+09:00` against
+upstream `main` commit `1504d45fa145eb11fdd662a08aa9d873eee55849`; this
+commit is audit provenance, not a permanent pin. Every change that creates or
+modifies a Kiwoom REST or WebSocket request, response parser, realtime FID
+mapping, subscription/recovery flow, authentication flow, account/order call,
+or continuation handler must inspect the current upstream revision before code
+is written.
+
+Required upstream references:
+
+- [`kiwoom_docs`](https://github.com/Kiwoom-Securities/Kiwoom-REST-API/tree/main/kiwoom_docs)
+  owns the endpoint, request/response field, and realtime message
+  documentation. For WebSocket work, always inspect
+  [`실시간시세.md`](https://github.com/Kiwoom-Securities/Kiwoom-REST-API/blob/main/kiwoom_docs/%EC%8B%A4%EC%8B%9C%EA%B0%84%EC%8B%9C%EC%84%B8.md)
+  and the relevant REST category document together.
+- [`kiwoom/specs.py`](https://github.com/Kiwoom-Securities/Kiwoom-REST-API/blob/main/kiwoom/specs.py),
+  [`kiwoom/core`](https://github.com/Kiwoom-Securities/Kiwoom-REST-API/tree/main/kiwoom/core),
+  and
+  [`kiwoom/realtime`](https://github.com/Kiwoom-Securities/Kiwoom-REST-API/tree/main/kiwoom/realtime)
+  are implementation and machine-readable contract cross-checks.
+- [`postman`](https://github.com/Kiwoom-Securities/Kiwoom-REST-API/tree/main/postman)
+  is a request-envelope cross-check.
+- [`examples`](https://github.com/Kiwoom-Securities/Kiwoom-REST-API/tree/main/examples)
+  is sample code only. It must not override the documented contract, local
+  safety rules, or observed source-quality requirements, and order examples
+  must never be executed merely to validate a code change.
+- The
+  [Kiwoom OpenAPI portal](https://openapi.kiwoom.com/m/guide/apiguide)
+  remains an official conflict/gap reference. If current official sources
+  disagree or leave a field undefined, stop semantic promotion and record an
+  upstream contract gap instead of guessing.
+
+Before implementation, record the upstream commit SHA, inspected upstream
+paths, and retrieval time in the change/review evidence. Verify at least:
+
+1. REST path, `api-id`, headers, request fields, response fields, sign/unit/time
+   semantics, continuation headers (`cont-yn`, `next-key`), return/error
+   contract, and real/demo separation.
+2. WebSocket URL, login and control messages, REG/REMOVE semantics, realtime
+   type, item/suffix/route, FID names, field sign/unit/time semantics,
+   reconnect/resubscribe behavior, and subscription limits documented by the
+   upstream source.
+3. Account/order code against the relevant official account/order document,
+   while preserving KORStockScan broker, account, order, quantity, cooldown,
+   stale/conflict, and hard-safety guards.
+4. Parser/request tests for the documented happy path, missing/unknown fields,
+   sign and unit preservation, continuation, venue/session routing, and
+   redaction of credentials/account identifiers.
+
+Official documentation establishes the vendor protocol, but does not grant
+runtime authority. KORStockScan may remain more conservative. An upstream
+example or field description must not relax stale/conflict handling, broker
+guards, order/quantity limits, provider routes, thresholds, bot state, or
+hard/protect/emergency safety. A newly observed field that is absent from the
+official contract remains raw/source-quality provenance until its semantics
+are confirmed and the local producer-to-consumer contract is reviewed.
+
 ## 0B Trade Aggressor
 
 - Prefer the 0B event's explicit signed trade volume `15` when it starts with

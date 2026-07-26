@@ -88,6 +88,15 @@ KORStockScan working rules:
 - Ask for user decision before installing, upgrading, or removing packages.
 - Prefer reproducible commands and project-standard execution paths over temporary scripts.
 
+### 4.1 Kiwoom Official API Reference Gate
+
+- Before writing or modifying any Kiwoom REST/WebSocket request, response parser, realtime FID mapping, REG/REMOVE or recovery flow, authentication flow, account/order call, or continuation handler, inspect the current official [`Kiwoom-Securities/Kiwoom-REST-API`](https://github.com/Kiwoom-Securities/Kiwoom-REST-API) revision and the relevant upstream files.
+- Use [Kiwoom API Data Contract](./docs/kiwoom-api-data-contract.md) `Official Kiwoom Reference Gate` as the local owner for source precedence and the mandatory verification checklist. Record the upstream commit SHA, inspected paths, and retrieval time in change/review evidence.
+- Treat upstream `kiwoom_docs` as the protocol documentation owner; cross-check `kiwoom/specs.py`, `kiwoom/core`, `kiwoom/realtime`, and Postman. Treat `examples` as samples only, never as authority to execute real orders or bypass local guards.
+- Verify REST path, `api-id`, headers, fields, sign/unit/time semantics, continuation, errors, and real/demo separation. Verify WebSocket URL, login/control packets, realtime type/FIDs, item/suffix/route, REG/REMOVE, reconnect/resubscribe, and documented limits.
+- If official repository documents, SDK/specs, portal guidance, or observed packets conflict or leave semantics undefined, do not guess. Preserve raw provenance, fail closed for semantic/runtime promotion, and open a source-quality or contract gap with tests.
+- Official protocol evidence does not override KORStockScan hard safety. Never relax stale/conflict, broker/account/order/quantity/cooldown, provider, threshold, cap, bot-state, or hard/protect/emergency guards solely because an upstream example permits a call.
+
 ## 5. Codebase Work Review And Fix Loop
 
 - Every codebase modification must close through `implementation -> self code review -> supplemental fixes -> revalidation -> result report`.
