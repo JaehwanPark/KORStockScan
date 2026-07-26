@@ -326,10 +326,7 @@ class ScannerRuntimeScheduler:
                 },
             )
         with self._lock:
-            if (
-                self._rejected_promotion_ids.get(norm_code)
-                == normalized_promotion_id
-            ):
+            if self._rejected_promotion_ids.get(norm_code) == normalized_promotion_id:
                 return ScannerSchedulerDecision(
                     action="generation_rejected",
                     reason="promotion_provenance_conflict_quarantined",
@@ -367,15 +364,9 @@ class ScannerRuntimeScheduler:
                 )
             current = self._generations.get(norm_code)
             if current is not None and current.promotion_id == normalized_promotion_id:
-                incoming_record_id = (
-                    ""
-                    if record_id in (None, "")
-                    else str(record_id)
-                )
+                incoming_record_id = "" if record_id in (None, "") else str(record_id)
                 current_record_id = (
-                    ""
-                    if current.record_id in (None, "")
-                    else str(current.record_id)
+                    "" if current.record_id in (None, "") else str(current.record_id)
                 )
                 conflicts = []
                 if current.venue != normalized_venue:
@@ -405,9 +396,7 @@ class ScannerRuntimeScheduler:
                 if conflicts:
                     superseded = self._invalidate_code_locked(norm_code)
                     self._generations.pop(norm_code, None)
-                    self._rejected_promotion_ids[norm_code] = (
-                        normalized_promotion_id
-                    )
+                    self._rejected_promotion_ids[norm_code] = normalized_promotion_id
                     fields["scheduler_action"] = "generation_rejected"
                     fields["scheduler_superseded_count"] = len(superseded)
                     return ScannerSchedulerDecision(

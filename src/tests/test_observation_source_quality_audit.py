@@ -5061,9 +5061,7 @@ def test_observation_source_quality_accepts_scanner_ws_backoff_watch_retention(
                     "target_strategy": "SCALPING",
                     "target_position_tag": "SCANNER",
                     "effective_venue": "KRX",
-                    "venue_resolution": (
-                        "consistent_explicit:target.effective_venue"
-                    ),
+                    "venue_resolution": ("consistent_explicit:target.effective_venue"),
                 },
             )
         ],

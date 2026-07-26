@@ -708,8 +708,7 @@ def test_scheduler_inbox_duplicate_after_db_poll_attach_is_coalesced(monkeypatch
     assert applied == []
     assert scheduler.current_generation("005930").revision == 1
     assert (
-        emitted[-1]["stage"]
-        == "scalping_scanner_scheduler_inbox_duplicate_coalesced"
+        emitted[-1]["stage"] == "scalping_scanner_scheduler_inbox_duplicate_coalesced"
     )
 
 
@@ -8883,10 +8882,7 @@ def test_db_poll_scanner_target_attach_logs_recovery(monkeypatch):
         == "eventbus_attach_missing_recovered_from_database_poll"
     )
     assert emitted[-1]["fields"]["runtime_record_id"] == 99
-    assert (
-        emitted[-1]["fields"]["scanner_promotion_id"]
-        == "SCANPROM-005930-1000000"
-    )
+    assert emitted[-1]["fields"]["scanner_promotion_id"] == "SCANPROM-005930-1000000"
     assert emitted[-1]["fields"]["scanner_promotion_emitted_epoch"] == 1000.0
     assert emitted[-1]["fields"]["source_signature"] == "PRICE_JUMP_START"
 
@@ -8952,8 +8948,7 @@ def test_db_poll_replacement_releases_stale_scheduler_capacity(monkeypatch):
         kiwoom_sniper_v2,
         "_expire_scalping_watch_budget_targets",
         lambda replacements, *args, **kwargs: [
-            replacement.update({"status": "EXPIRED"})
-            for replacement in replacements
+            replacement.update({"status": "EXPIRED"}) for replacement in replacements
         ],
     )
     monkeypatch.setattr(
