@@ -4187,8 +4187,32 @@ def _lifecycle_flow_bucket_handoff_status(
         missing.append("lifecycle_complete_flow_absent")
     if join_contract_blocked:
         missing.append("lifecycle_join_contract_blocked")
+    warnings: list[str] = []
+    source_gap_only = bool(missing) and set(missing).issubset(
+        {
+            "lifecycle_complete_flow_absent",
+            "lifecycle_join_contract_blocked",
+        }
+    )
+    source_gap_workorders_handed_off = bool(expected_order_ids) and not (
+        missing_workorder_order_ids
+    )
+    if source_gap_only and source_gap_workorders_handed_off:
+        warning_by_gap = {
+            "lifecycle_complete_flow_absent": (
+                "lifecycle_complete_flow_absent_workorder_handoff"
+            ),
+            "lifecycle_join_contract_blocked": (
+                "lifecycle_join_contract_blocked_workorder_handoff"
+            ),
+        }
+        warnings = [
+            warning_by_gap[item]
+            for item in missing
+            if item in warning_by_gap
+        ]
     return {
-        "status": "fail" if missing else "pass",
+        "status": "warning" if warnings else "fail" if missing else "pass",
         "flow_count": flow_count,
         "complete_flow_count": complete_flow_count,
         "direct_sim_record_complete_flow_count": direct_sim_record_complete_flow_count,
@@ -4213,13 +4237,18 @@ def _lifecycle_flow_bucket_handoff_status(
         "actual_workorder_order_ids": sorted(actual_order_ids),
         "missing_workorder_order_ids": missing_workorder_order_ids,
         "missing": missing,
+        "warnings": warnings,
         "interpretation": (
             "LDM lifecycle-flow parent bucket candidates and workorders propagated to threshold EV, runtime summary, and code workorder."
             if not missing
             else (
-                "LDM lifecycle-flow parent bucket is fail-closed because complete entry-submit-holding-exit flow is absent."
-                if "lifecycle_complete_flow_absent" in missing
-                else "LDM lifecycle-flow parent bucket output was generated but one or more downstream consumers dropped it."
+                "LDM lifecycle-flow join remains blocked, but every runtime_effect=false producer follow-up workorder reached the code-improvement queue."
+                if warnings
+                else (
+                    "LDM lifecycle-flow parent bucket is fail-closed because complete entry-submit-holding-exit flow is absent."
+                    if "lifecycle_complete_flow_absent" in missing
+                    else "LDM lifecycle-flow parent bucket output was generated but one or more downstream consumers dropped it."
+                )
             )
         ),
     }
@@ -4589,7 +4618,6 @@ def build_threshold_cycle_postclose_verification(
     conversion_lane = _load_json(paths["conversion_lane"])
     bridge_report = _load_json(paths["runtime_apply_bridge"])
     entry_split_order_plan = _load_json(paths["entry_split_order_plan"])
-    scale_in_split_order_plan = _load_json(paths["scale_in_split_order_plan"])
     quote_consistency_report = _load_json(paths["quote_consistency"])
     preopen_apply_current = _load_json(paths["threshold_preopen_apply_current"])
     preopen_apply_next = _load_json(paths["threshold_preopen_apply_next"])
@@ -4805,8 +4833,16 @@ def build_threshold_cycle_postclose_verification(
         and lifecycle_flow_bucket_handoff.get("status") == "fail"
     ):
         log_issues.append("ldm_lifecycle_flow_bucket_handoff_missing")
-    if "lifecycle_complete_flow_absent" in (
-        lifecycle_flow_bucket_handoff.get("missing") or []
+    elif lifecycle_flow_bucket_handoff.get("status") == "warning":
+        handoff_warnings.extend(
+            str(item)
+            for item in (lifecycle_flow_bucket_handoff.get("warnings") or [])
+            if str(item)
+        )
+    if (
+        lifecycle_flow_bucket_handoff.get("status") == "fail"
+        and "lifecycle_complete_flow_absent"
+        in (lifecycle_flow_bucket_handoff.get("missing") or [])
     ):
         log_issues.append("lifecycle_complete_flow_absent")
     lifecycle_bucket_discovery_handoff = _lifecycle_bucket_discovery_handoff_status(

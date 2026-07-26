@@ -1451,6 +1451,76 @@ def test_lifecycle_flow_handoff_fails_when_complete_flow_absent():
     assert report["adm_bridge_complete_flow_count"] == 0
 
 
+def test_lifecycle_flow_handoff_warns_when_source_gap_workorder_is_handed_off():
+    workorder = {
+        "lifecycle_flow_bucket_id": "flow:incomplete",
+    }
+    order_id = mod._lifecycle_flow_bucket_order_id(workorder)
+    ldm = {
+        "lifecycle_flow_bucket_attribution": {
+            "summary": {
+                "flow_count": 4,
+                "complete_flow_count": 0,
+                "incomplete_flow_count": 4,
+                "join_contract_blocked": True,
+                "bundle_ev_tuning_state": "blocked_join_gap",
+            },
+            "runtime_approval_candidates": [],
+            "code_improvement_workorders": [workorder],
+        }
+    }
+
+    report = mod._lifecycle_flow_bucket_handoff_status(
+        ldm,
+        {},
+        {},
+        {"orders": [{"order_id": order_id}]},
+    )
+
+    assert report["status"] == "warning"
+    assert report["missing"] == [
+        "lifecycle_complete_flow_absent",
+        "lifecycle_join_contract_blocked",
+    ]
+    assert report["warnings"] == [
+        "lifecycle_complete_flow_absent_workorder_handoff",
+        "lifecycle_join_contract_blocked_workorder_handoff",
+    ]
+
+
+def test_lifecycle_flow_handoff_warns_only_for_present_source_gap():
+    workorder = {
+        "lifecycle_flow_bucket_id": "flow:incomplete",
+    }
+    order_id = mod._lifecycle_flow_bucket_order_id(workorder)
+    ldm = {
+        "lifecycle_flow_bucket_attribution": {
+            "summary": {
+                "flow_count": 4,
+                "complete_flow_count": 0,
+                "incomplete_flow_count": 4,
+                "join_contract_blocked": False,
+                "bundle_ev_tuning_state": "hold_sample",
+            },
+            "runtime_approval_candidates": [],
+            "code_improvement_workorders": [workorder],
+        }
+    }
+
+    report = mod._lifecycle_flow_bucket_handoff_status(
+        ldm,
+        {},
+        {},
+        {"orders": [{"order_id": order_id}]},
+    )
+
+    assert report["status"] == "warning"
+    assert report["missing"] == ["lifecycle_complete_flow_absent"]
+    assert report["warnings"] == [
+        "lifecycle_complete_flow_absent_workorder_handoff"
+    ]
+
+
 def test_lifecycle_flow_handoff_keeps_adm_bridge_direct_zero_closure_fields():
     ldm = {
         "lifecycle_flow_bucket_attribution": {
