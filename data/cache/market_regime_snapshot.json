@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-07-26T14:23:05.222387",
+  "timestamp": "2026-07-26T14:15:14.863115",
   "vix_close": 18.579999923706055,
   "vix_ma3": 17.97333335876465,
   "vix_peak_passed": false,
@@ -96,5 +96,5 @@
     "local_breadth_signal": "none"
   },
   "cached_session_date": "2026-07-26",
-  "cached_at": "2026-07-26T14:23:05.227612+09:00"
+  "cached_at": "2026-07-26T14:15:14.868334+09:00"
 }
