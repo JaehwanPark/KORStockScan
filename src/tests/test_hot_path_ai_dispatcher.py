@@ -160,17 +160,13 @@ def test_dispatcher_preserves_results_owned_by_other_consumers():
     deadline = time.time() + 1
     scanner_results = []
     while not scanner_results and time.time() < deadline:
-        scanner_results = dispatcher.drain_completed(
-            request_ids={"scanner:req"}
-        )
+        scanner_results = dispatcher.drain_completed(request_ids={"scanner:req"})
         if not scanner_results:
             time.sleep(0.005)
     deadline = time.time() + 1
     holding_results = []
     while not holding_results and time.time() < deadline:
-        holding_results = dispatcher.drain_completed(
-            request_ids={"holding:req"}
-        )
+        holding_results = dispatcher.drain_completed(request_ids={"holding:req"})
         if not holding_results:
             time.sleep(0.005)
     dispatcher.shutdown()

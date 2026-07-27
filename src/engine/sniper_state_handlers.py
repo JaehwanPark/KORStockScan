@@ -45996,8 +45996,7 @@ def _scanner_async_entry_state_version(stock: dict) -> str:
         "buy_qty": _safe_int(stock.get("buy_qty"), 0),
         "buy_price": _safe_int(stock.get("buy_price"), 0),
         "entry_split_probe_phase": stock.get("entry_split_probe_phase"),
-        "pending_order_no": stock.get("pending_order_no")
-        or stock.get("order_no"),
+        "pending_order_no": stock.get("pending_order_no") or stock.get("order_no"),
     }
     encoded = json.dumps(payload, sort_keys=True, ensure_ascii=True, default=str)
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:20]
@@ -46025,9 +46024,7 @@ def _scanner_async_entry_cache_key(
     trigger_reason: str,
     last_ai_time: float,
 ) -> str:
-    existing_generation = str(
-        stock.get("_scanner_async_generation_id") or ""
-    ).strip()
+    existing_generation = str(stock.get("_scanner_async_generation_id") or "").strip()
     existing_key = str(stock.get("_scanner_async_cache_key") or "").strip()
     if existing_generation == generation.generation_id and existing_key:
         return existing_key
@@ -46089,8 +46086,7 @@ def _resolve_scanner_async_entry_ai(
             venue_resolution_valid=bool(
                 str(stock.get("venue_resolution") or "").strip()
                 and not any(
-                    token
-                    in str(stock.get("venue_resolution") or "").strip().lower()
+                    token in str(stock.get("venue_resolution") or "").strip().lower()
                     for token in ("missing", "unknown", "conflict", "unresolved")
                 )
             ),
@@ -46251,9 +46247,7 @@ def _resolve_scanner_async_entry_ai(
                 metadata_extra={
                     "record_id": stock_snapshot.get("id"),
                     "sim_record_id": stock_snapshot.get("sim_record_id"),
-                    "sim_parent_record_id": stock_snapshot.get(
-                        "sim_parent_record_id"
-                    ),
+                    "sim_parent_record_id": stock_snapshot.get("sim_parent_record_id"),
                     "entry_adm_candidate_id": stock_snapshot.get(
                         "entry_adm_candidate_id"
                     ),
@@ -47362,9 +47356,7 @@ def _handle_watching_strategy_branch(
                             candle_context = dict(
                                 prepared_context.get("candle_context") or {}
                             )
-                            prepared_ws = dict(
-                                prepared_context.get("ws_data") or {}
-                            )
+                            prepared_ws = dict(prepared_context.get("ws_data") or {})
                             for context_key in (
                                 "current_ai_score",
                                 "ai_score_baseline_source",

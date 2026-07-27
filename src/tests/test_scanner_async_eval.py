@@ -154,9 +154,7 @@ def test_coordinator_can_release_without_closing_shared_dispatcher():
             time.sleep(0.005)
     dispatcher.shutdown()
 
-    assert [result.request_id for result in results] == [
-        "shared-dispatcher-still-open"
-    ]
+    assert [result.request_id for result in results] == ["shared-dispatcher-still-open"]
 
 
 def test_commit_rejects_stale_quote_and_generation_change():

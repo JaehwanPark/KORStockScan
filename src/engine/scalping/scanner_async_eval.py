@@ -300,9 +300,7 @@ class ScannerAsyncEvalCoordinator:
         finished = 0
         with self._lock:
             request_ids = frozenset(self._requests)
-        for ai_result in self.ai_dispatcher.drain_completed(
-            request_ids=request_ids
-        ):
+        for ai_result in self.ai_dispatcher.drain_completed(request_ids=request_ids):
             request_id = ai_result.request_id
             with self._lock:
                 request = self._requests.get(request_id)

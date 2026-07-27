@@ -108,8 +108,7 @@ def _canonical_initial_precheck_dispatch(
         str(fields.get("scheduler_version") or "").strip()
         != "scanner_deadline_scheduler_v1"
         or str(fields.get("scheduler_action") or "").strip() != "dispatch"
-        or str(fields.get("scanner_scheduler_lane") or "").strip()
-        != "fast_precheck"
+        or str(fields.get("scanner_scheduler_lane") or "").strip() != "fast_precheck"
         or str(fields.get("scanner_scheduler_precheck_phase") or "").strip()
         != "initial"
     ):
@@ -118,9 +117,7 @@ def _canonical_initial_precheck_dispatch(
     promotion_id = str(fields.get("scanner_promotion_id") or "").strip()
     venue = str(fields.get("effective_venue") or "").strip().upper()
     attach_epoch = _float_or_none(fields.get("scanner_attach_epoch"))
-    dispatch_epoch = _float_or_none(
-        fields.get("scanner_scheduler_dispatched_epoch")
-    )
+    dispatch_epoch = _float_or_none(fields.get("scanner_scheduler_dispatched_epoch"))
     if dispatch_epoch is None:
         dispatch_epoch = _float_or_none(fields.get("scanner_scheduler_action_epoch"))
     if venue not in VALID_VENUES:
@@ -192,8 +189,7 @@ def replay_scanner_events(
             attach = pending.get(key)
             if attach is None:
                 exclusions["scheduler_dispatch_without_canonical_attach"] = (
-                    exclusions.get("scheduler_dispatch_without_canonical_attach", 0)
-                    + 1
+                    exclusions.get("scheduler_dispatch_without_canonical_attach", 0) + 1
                 )
                 continue
             if dispatch["venue"] != attach["venue"]:
@@ -205,10 +201,7 @@ def replay_scanner_events(
             if dispatch["attach_epoch"] < attach["promotion_epoch"]:
                 pending.pop(key, None)
                 exclusions["scheduler_dispatch_attach_before_promotion"] = (
-                    exclusions.get(
-                        "scheduler_dispatch_attach_before_promotion", 0
-                    )
-                    + 1
+                    exclusions.get("scheduler_dispatch_attach_before_promotion", 0) + 1
                 )
                 continue
             samples.append(
