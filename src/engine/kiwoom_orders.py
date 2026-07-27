@@ -1182,8 +1182,6 @@ def _sell_side_open_time_strategy_allowed(strategy=None) -> bool:
 
 
 def sell_side_open_time_passthrough_reason(reason_type=None) -> str:
-    if _sell_side_scope_applies_to_all():
-        return ""
     reason_key = str(reason_type or "").strip().upper()
     if not reason_key:
         return "scope_unknown_passthrough"

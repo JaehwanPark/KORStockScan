@@ -7173,12 +7173,12 @@ def _sell_side_open_time_block_fields(
         reason_type=sell_reason_type,
         strategy=strategy,
     )
-    if str(fields.get("sell_time_block_scope") or "").lower() not in {
-        "all",
-        "all_exit",
-        "all_sells",
-        "all_sell",
-    } and _is_sell_side_open_time_safety_exit(exit_rule, sell_reason_type):
+    open_time_passthrough = bool(
+        kiwoom_orders.sell_side_open_time_passthrough_reason(sell_reason_type)
+    )
+    if open_time_passthrough or _is_sell_side_open_time_safety_exit(
+        exit_rule, sell_reason_type
+    ):
         fields["sell_time_block_applied"] = False
         fields["sell_time_block_passthrough_reason"] = "safety_exit_passthrough"
     elif (
@@ -35069,9 +35069,48 @@ def _abort_entry_split_probe_residual(
         reason == "residual_revalidation_timeout"
         and last_direction_reason in source_quality_timeout_reasons
     )
+    effective_venue = (
+        str(
+            stock.get("rising_missed_effective_venue")
+            or stock.get(
+                "rising_missed_tp1_submit_context_rising_missed_effective_venue"
+            )
+            or stock.get("effective_venue")
+            or ""
+        )
+        .strip()
+        .upper()
+    )
+    market_session_bucket = (
+        str(
+            stock.get("rising_missed_market_session_bucket")
+            or stock.get(
+                "rising_missed_tp1_submit_context_rising_missed_market_session_bucket"
+            )
+            or stock.get("market_session_bucket")
+            or ""
+        )
+        .strip()
+        .lower()
+    )
+    nxt_entry_context = bool(
+        effective_venue == "NXT" and market_session_bucket == "nxt_entry_window"
+    )
+    wait_direction_timeout_reasons = {
+        "post_probe_wait_negative_group",
+        "post_probe_wait_mixed_or_neutral",
+        "post_probe_wait_positive_confirmation_required",
+        "post_probe_stale_wait_positive_confirmation_required",
+    }
     directional_soft_abort = bool(
         reason == "residual_revalidation_timeout"
-        and last_direction_reason == "post_probe_neutral_negative_group_deferred"
+        and (
+            last_direction_reason == "post_probe_neutral_negative_group_deferred"
+            or (
+                not nxt_entry_context
+                and last_direction_reason in wait_direction_timeout_reasons
+            )
+        )
     )
     soft_abort = bool(
         preserve_position

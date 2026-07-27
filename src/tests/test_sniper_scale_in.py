@@ -3498,6 +3498,76 @@ def test_wait_probe_neutral_defers_but_buy_probe_keeps_existing_behavior(monkeyp
     assert buy_decision["post_probe_continuation_action"] == "ALLOW_NORMAL"
 
 
+def test_krx_like_wait_probe_timeout_releases_existing_scale_in_owner(monkeypatch):
+    now_ts = 1_784_778_400.0
+    active_date = (
+        datetime.fromtimestamp(now_ts, tz=state_handlers._KST).date().isoformat()
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_AI_ACTION_GUARD_ENABLED", "true")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RISING_MISSED_AI_ACTION_GUARD_ACTIVE_DATE", active_date
+    )
+    monkeypatch.setattr(
+        state_handlers, "_log_entry_pipeline", lambda *args, **kwargs: None
+    )
+    stock = {
+        "status": "HOLDING",
+        "entry_filled_qty": 1,
+        "entry_split_probe_requested_qty": 20,
+        "entry_split_probe_direction_reason": "post_probe_wait_negative_group",
+        "rising_missed_effective_venue": "PREMARKET_KRX_LIKE",
+        "rising_missed_market_session_bucket": "krx_like_premarket",
+    }
+
+    state_handlers._abort_entry_split_probe_residual(
+        stock,
+        "123456",
+        "residual_revalidation_timeout",
+        preserve_position=True,
+        now_ts=now_ts,
+    )
+
+    assert stock["entry_split_probe_soft_abort"] is True
+    assert stock["entry_split_probe_scale_in_recheck_allowed"] is True
+    assert stock["entry_split_probe_scale_in_forbidden"] is False
+    assert stock["probe_expand_forbidden"] is False
+
+
+def test_nxt_wait_probe_timeout_keeps_fast_tape_fail_closed(monkeypatch):
+    now_ts = 1_784_778_400.0
+    active_date = (
+        datetime.fromtimestamp(now_ts, tz=state_handlers._KST).date().isoformat()
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_AI_ACTION_GUARD_ENABLED", "true")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RISING_MISSED_AI_ACTION_GUARD_ACTIVE_DATE", active_date
+    )
+    monkeypatch.setattr(
+        state_handlers, "_log_entry_pipeline", lambda *args, **kwargs: None
+    )
+    stock = {
+        "status": "HOLDING",
+        "entry_filled_qty": 1,
+        "entry_split_probe_requested_qty": 20,
+        "entry_split_probe_direction_reason": "post_probe_wait_negative_group",
+        "rising_missed_effective_venue": "NXT",
+        "rising_missed_market_session_bucket": "nxt_entry_window",
+    }
+
+    state_handlers._abort_entry_split_probe_residual(
+        stock,
+        "123456",
+        "residual_revalidation_timeout",
+        preserve_position=True,
+        now_ts=now_ts,
+    )
+
+    assert stock["entry_split_probe_soft_abort"] is False
+    assert stock["entry_split_probe_scale_in_recheck_allowed"] is False
+    assert stock["entry_split_probe_scale_in_forbidden"] is True
+    assert stock["probe_expand_forbidden"] is True
+
+
 def test_pre_submit_entry_ai_authority_retry_refreshes_missing_ai(monkeypatch):
     now_ts = 1_783_471_000.0
     response_completed_at = now_ts + 86.0
@@ -20480,7 +20550,7 @@ def test_sell_side_time_block_uses_sell_windows_for_all_scope(monkeypatch):
     )
     today = datetime.now().date()
 
-    assert kiwoom_orders.is_sell_side_open_time_blocked(
+    assert not kiwoom_orders.is_sell_side_open_time_blocked(
         datetime.combine(today, dt_time(8, 4, 59)),
         reason_type="LOSS",
         strategy="SCALPING",
@@ -20495,7 +20565,7 @@ def test_sell_side_time_block_uses_sell_windows_for_all_scope(monkeypatch):
         reason_type="PROFIT_STAGNATION",
         strategy="SCALPING",
     )
-    assert kiwoom_orders.is_sell_side_open_time_blocked(
+    assert not kiwoom_orders.is_sell_side_open_time_blocked(
         datetime.combine(today, dt_time(15, 19, 1)),
         reason_type="HARD_STOP",
         strategy="SCALPING",
@@ -20505,25 +20575,30 @@ def test_sell_side_time_block_uses_sell_windows_for_all_scope(monkeypatch):
         reason_type="PANIC",
         strategy="SCALPING",
     )
-    assert kiwoom_orders.is_sell_side_open_time_blocked(
+    assert not kiwoom_orders.is_sell_side_open_time_blocked(
         datetime.combine(today, dt_time(19, 49, 1)),
         reason_type="SAFETY",
         strategy="SCALPING",
     )
-    assert kiwoom_orders.is_sell_side_open_time_blocked(
+    assert not kiwoom_orders.is_sell_side_open_time_blocked(
         datetime.combine(today, dt_time(15, 19, 1)),
         reason_type="HARD_STOP",
         strategy="KOSPI",
     )
-    assert kiwoom_orders.is_sell_side_open_time_blocked(
+    assert not kiwoom_orders.is_sell_side_open_time_blocked(
         datetime.combine(today, dt_time(15, 19, 1)),
         reason_type="HARD_STOP",
         strategy="",
     )
+    assert kiwoom_orders.is_sell_side_open_time_blocked(
+        datetime.combine(today, dt_time(15, 19, 1)),
+        reason_type="PROFIT_STAGNATION",
+        strategy="SCALPING",
+    )
 
     fields = kiwoom_orders.get_sell_side_open_time_block_fields(
         now=datetime.combine(today, dt_time(15, 19, 1)),
-        reason_type="HARD_STOP",
+        reason_type="PROFIT_STAGNATION",
         strategy="SCALPING",
     )
     assert fields["sell_time_block_applied"] is True
@@ -20606,6 +20681,30 @@ def test_send_sell_order_market_safety_reason_passes_sell_time_block(monkeypatch
     assert result["rt_cd"] == "0"
     assert result["ord_no"] == "S123"
     assert captured["payload"]["stk_cd"] == "123456"
+
+
+def test_sell_time_block_all_scope_cannot_block_trailing_loss(monkeypatch):
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "get_sell_side_open_time_block_fields",
+        lambda **kwargs: {
+            "runtime_family": "sell_side_open_time_block_runtime",
+            "policy_version": "sell_side_open_time_block_v1",
+            "sell_time_block_checked": True,
+            "sell_time_block_applied": True,
+            "sell_time_block_scope": "all",
+            "sell_time_block_passthrough_reason": "-",
+        },
+    )
+
+    fields = state_handlers._sell_side_open_time_block_fields(
+        strategy="SCALPING",
+        sell_reason_type="LOSS",
+        exit_rule="scalp_trailing_take_profit",
+    )
+
+    assert fields["sell_time_block_applied"] is False
+    assert fields["sell_time_block_passthrough_reason"] == "safety_exit_passthrough"
 
 
 def test_send_sell_order_market_remaps_pre0830_sor_market_sell(monkeypatch):
