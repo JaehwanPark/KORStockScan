@@ -1,6 +1,7 @@
 """State machine handlers for the sniper engine."""
 
 import fcntl
+import gzip
 import hashlib
 import json
 import os
@@ -930,9 +931,13 @@ _EARLY_VOLATILITY_TP_OBSERVATION_SIGNATURE_CACHE_MAX = 2048
 _SCALP_LOSS_REENTRY_EVENT_CACHE: dict[str, Any] = {
     "date": "",
     "path": "",
+    "device": 0,
+    "inode": 0,
     "mtime_ns": 0,
     "size": 0,
+    "offset": 0,
     "rows_by_code": {},
+    "sell_completed_by_code": {},
 }
 _HOLDING_FLOW_OVERRIDE_EXIT_RULES = {
     "scalp_soft_stop_pct",
@@ -18444,6 +18449,64 @@ def _record_scalp_same_symbol_loss_reentry_cooldown(
     return row
 
 
+def _read_pipeline_events_for_stages(
+    path: Path,
+    stages: set[str] | tuple[str, ...],
+    *,
+    start_offset: int = 0,
+) -> tuple[list[dict], int]:
+    """Decode only pipeline rows that can belong to the requested stages.
+
+    The live pipeline file can grow to hundreds of megabytes.  ``iter_jsonl``
+    decodes every row before its caller filters by stage, so an mtime-based
+    cache refresh can hold the scanner main thread for tens of seconds.  A byte
+    prefilter plus a byte offset lets the live cache decode only matching rows
+    from the newly appended tail.  An incomplete final line is deliberately
+    left for the next refresh.
+    """
+
+    stage_tokens = tuple(
+        str(stage or "").strip().encode("utf-8")
+        for stage in stages
+        if str(stage or "").strip()
+    )
+    if not stage_tokens:
+        return [], max(0, int(start_offset or 0))
+    is_gzip = path.suffix.lower() == ".gz"
+    opener = gzip.open if is_gzip else open
+    rows: list[dict] = []
+    next_offset = 0 if is_gzip else max(0, int(start_offset or 0))
+    try:
+        with opener(path, "rb") as handle:
+            if next_offset:
+                handle.seek(next_offset)
+            while True:
+                line_offset = int(handle.tell())
+                raw_line = handle.readline()
+                if not raw_line:
+                    break
+                if not raw_line.endswith(b"\n"):
+                    next_offset = line_offset
+                    break
+                next_offset = int(handle.tell())
+                if not any(token in raw_line for token in stage_tokens):
+                    continue
+                try:
+                    payload = json.loads(raw_line)
+                except (json.JSONDecodeError, TypeError, UnicodeDecodeError):
+                    continue
+                if isinstance(payload, dict):
+                    rows.append(payload)
+    except (OSError, EOFError):
+        return [], max(0, int(start_offset or 0))
+    return rows, next_offset
+
+
+def _iter_pipeline_events_for_stages(path: Path, stages: set[str] | tuple[str, ...]):
+    payloads, _ = _read_pipeline_events_for_stages(path, stages)
+    yield from payloads
+
+
 def _load_scalp_loss_reentry_cooldown_events(target_date: str) -> dict[str, list[dict]]:
     path = existing_or_gzip_path(
         DATA_DIR / "pipeline_events" / f"pipeline_events_{target_date}.jsonl"
@@ -18454,9 +18517,13 @@ def _load_scalp_loss_reentry_cooldown_events(target_date: str) -> dict[str, list
             {
                 "date": target_date,
                 "path": str(path),
+                "device": 0,
+                "inode": 0,
                 "mtime_ns": 0,
                 "size": 0,
+                "offset": 0,
                 "rows_by_code": {},
+                "sell_completed_by_code": {},
             }
         )
         return {}
@@ -18466,12 +18533,36 @@ def _load_scalp_loss_reentry_cooldown_events(target_date: str) -> dict[str, list
         and cache.get("path") == str(path)
         and int(cache.get("mtime_ns") or 0) == int(getattr(stat, "st_mtime_ns", 0) or 0)
         and int(cache.get("size") or 0) == int(getattr(stat, "st_size", 0) or 0)
+        and (
+            path.suffix.lower() == ".gz"
+            or int(cache.get("offset") or 0) >= int(getattr(stat, "st_size", 0) or 0)
+        )
     ):
         return cache.get("rows_by_code") or {}
 
-    rows_by_code: dict[str, list[dict]] = {}
-    for payload in iter_jsonl(path, errors="ignore"):
-        if str(payload.get("stage") or "") != "same_symbol_loss_reentry_cooldown":
+    same_file = (
+        path.suffix.lower() != ".gz"
+        and cache.get("date") == target_date
+        and cache.get("path") == str(path)
+        and int(cache.get("device") or 0) == int(getattr(stat, "st_dev", 0) or 0)
+        and int(cache.get("inode") or 0) == int(getattr(stat, "st_ino", 0) or 0)
+        and 0 <= int(cache.get("offset") or 0) <= int(getattr(stat, "st_size", 0) or 0)
+    )
+    start_offset = int(cache.get("offset") or 0) if same_file else 0
+    rows_by_code: dict[str, list[dict]] = (
+        cache.get("rows_by_code") or {} if same_file else {}
+    )
+    sell_completed_by_code: dict[str, list[dict]] = (
+        cache.get("sell_completed_by_code") or {} if same_file else {}
+    )
+    payloads, next_offset = _read_pipeline_events_for_stages(
+        path,
+        {"same_symbol_loss_reentry_cooldown", "sell_completed"},
+        start_offset=start_offset,
+    )
+    for payload in payloads:
+        stage = str(payload.get("stage") or "")
+        if stage not in {"same_symbol_loss_reentry_cooldown", "sell_completed"}:
             continue
         fields = (
             payload.get("fields") if isinstance(payload.get("fields"), dict) else {}
@@ -18480,6 +18571,9 @@ def _load_scalp_loss_reentry_cooldown_events(target_date: str) -> dict[str, list
             :6
         ]
         if not code:
+            continue
+        if stage == "sell_completed":
+            sell_completed_by_code.setdefault(code, []).append(payload)
             continue
         marked_at = _parse_iso_epoch(payload.get("emitted_at"))
         cooldown_sec = _safe_int(fields.get("cooldown_sec"), 0)
@@ -18500,13 +18594,18 @@ def _load_scalp_loss_reentry_cooldown_events(target_date: str) -> dict[str, list
         )
     for rows in rows_by_code.values():
         rows.sort(key=lambda row: float(row.get("marked_at") or 0.0))
+    refreshed_stat = path.stat()
     cache.update(
         {
             "date": target_date,
             "path": str(path),
-            "mtime_ns": int(getattr(stat, "st_mtime_ns", 0) or 0),
-            "size": int(getattr(stat, "st_size", 0) or 0),
+            "device": int(getattr(refreshed_stat, "st_dev", 0) or 0),
+            "inode": int(getattr(refreshed_stat, "st_ino", 0) or 0),
+            "mtime_ns": int(getattr(refreshed_stat, "st_mtime_ns", 0) or 0),
+            "size": int(getattr(refreshed_stat, "st_size", 0) or 0),
+            "offset": next_offset,
             "rows_by_code": rows_by_code,
+            "sell_completed_by_code": sell_completed_by_code,
         }
     )
     return rows_by_code
@@ -18524,23 +18623,15 @@ def _scalp_loss_reentry_cooldown_invalidated_by_sell_completed(
     target_date = (
         datetime.fromtimestamp(float(now_ts or time.time())).date().isoformat()
     )
-    path = existing_or_gzip_path(
-        DATA_DIR / "pipeline_events" / f"pipeline_events_{target_date}.jsonl"
-    )
-    if not path.exists():
+    _load_scalp_loss_reentry_cooldown_events(target_date)
+    cache = _SCALP_LOSS_REENTRY_EVENT_CACHE
+    if cache.get("date") != target_date:
         return {"invalidated": False, "reason": "pipeline_events_missing"}
     exit_rule = str((row or {}).get("exit_rule") or "-")
-    for payload in iter_jsonl(path, errors="ignore"):
-        if str(payload.get("stage") or "") != "sell_completed":
-            continue
+    for payload in (cache.get("sell_completed_by_code") or {}).get(norm_code, []):
         fields = (
             payload.get("fields") if isinstance(payload.get("fields"), dict) else {}
         )
-        payload_code = str(
-            payload.get("stock_code") or fields.get("stock_code") or ""
-        ).strip()[:6]
-        if payload_code != norm_code:
-            continue
         completed_at = _parse_iso_epoch(payload.get("emitted_at"))
         if completed_at < marked_at:
             continue
@@ -19240,7 +19331,9 @@ def _snapshot_rising_missed_same_day_reentry_guard(
                 "profit_rate": reconciliation.get(
                     "realized_profit_rate", row.get("profit_rate")
                 ),
-                "exit_rule": reconciliation.get("realized_exit_rule", row.get("exit_rule")),
+                "exit_rule": reconciliation.get(
+                    "realized_exit_rule", row.get("exit_rule")
+                ),
             }
         )
     reentry_action = str(row.get("reentry_action") or "block")
@@ -19257,9 +19350,7 @@ def _snapshot_rising_missed_same_day_reentry_guard(
         "last_exit_profit_rate": row.get("profit_rate"),
         "last_exit_avg_down_count": row.get("avg_down_count", 0),
         "reentry_action": reentry_action,
-        "watching_budget_priority": (
-            "blocked" if reentry_action == "block" else "low"
-        ),
+        "watching_budget_priority": ("blocked" if reentry_action == "block" else "low"),
     }
 
 
@@ -64562,8 +64653,7 @@ def handle_scanner_async_rising_missed_commit(
     generation_matches_prepared_reentry = bool(
         isinstance(generation, ScannerGeneration)
         and isinstance(prepared_reentry, dict)
-        and str(prepared_reentry.get("generation_id") or "")
-        == generation.generation_id
+        and str(prepared_reentry.get("generation_id") or "") == generation.generation_id
     )
     owns_rising_result = cache_key.startswith("rising_missed:") or (
         cache_key.startswith("watching:")

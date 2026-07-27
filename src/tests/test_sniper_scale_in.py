@@ -84,10 +84,11 @@ def _clear_scalp_loss_reentry_state(request, monkeypatch, tmp_path):
     monkeypatch.setenv(
         "KORSTOCKSCAN_MANUAL_CONTROL_OPEN_LOSS_EXCLUSION_WINDOW_SEC", "0"
     )
-    if (
-        request.node.name
-        != "test_scalp_same_symbol_loss_reentry_guard_hydrates_from_pipeline_events"
-    ):
+    if request.node.name not in {
+        "test_scalp_same_symbol_loss_reentry_guard_hydrates_from_pipeline_events",
+        "test_scalp_loss_reentry_event_cache_reads_only_appended_tail",
+        "test_scalp_loss_reentry_cooldown_invalidated_by_realized_sell_profit",
+    }:
         monkeypatch.setattr(
             state_handlers,
             "_load_scalp_loss_reentry_cooldown_events",
@@ -38505,29 +38506,51 @@ def test_scalp_same_symbol_loss_reentry_guard_hydrates_from_pipeline_events(
         event_dir.mkdir(parents=True)
         event_path = event_dir / "pipeline_events_2026-06-18.jsonl"
         event_path.write_text(
-            json.dumps(
-                {
-                    "stage": "same_symbol_loss_reentry_cooldown",
-                    "stock_code": "000500",
-                    "stock_name": "가온전선",
-                    "emitted_at": "2026-06-18T12:48:37+09:00",
-                    "fields": {
-                        "cooldown_sec": 3600,
-                        "exit_rule": "scalp_hard_stop_pct",
-                        "profit_rate": "-2.55",
-                    },
-                },
-                ensure_ascii=False,
+            "\n".join(
+                [
+                    json.dumps(
+                        {
+                            "stage": "unrelated_observation",
+                            "stock_code": "999999",
+                            "fields": {"payload": "x" * 50_000},
+                        },
+                        ensure_ascii=False,
+                    ),
+                    "not-json-without-target-stage",
+                    json.dumps(
+                        {
+                            "stage": "same_symbol_loss_reentry_cooldown",
+                            "stock_code": "000500",
+                            "stock_name": "가온전선",
+                            "emitted_at": "2026-06-18T12:48:37+09:00",
+                            "fields": {
+                                "cooldown_sec": 3600,
+                                "exit_rule": "scalp_hard_stop_pct",
+                                "profit_rate": "-2.55",
+                            },
+                        },
+                        ensure_ascii=False,
+                    ),
+                ]
             )
             + "\n",
             encoding="utf-8",
         )
+        original_json_loads = json.loads
+        decoded_rows = []
+
+        def tracking_json_loads(payload, *args, **kwargs):
+            decoded_rows.append(payload)
+            return original_json_loads(payload, *args, **kwargs)
+
+        monkeypatch.setattr(state_handlers.json, "loads", tracking_json_loads)
         now_ts = datetime.fromisoformat("2026-06-18T13:00:00+09:00").timestamp()
 
         decision = state_handlers.evaluate_scalp_same_symbol_loss_reentry_guard(
             "000500", now_ts
         )
 
+        assert len(decoded_rows) == 1
         assert decision["allowed"] is False
         assert decision["reason"] == "same_symbol_loss_reentry_cooldown"
         assert decision["last_exit_rule"] == "scalp_hard_stop_pct"
@@ -38539,6 +38562,92 @@ def test_scalp_same_symbol_loss_reentry_guard_hydrates_from_pipeline_events(
             {"date": "", "path": "", "mtime_ns": 0, "size": 0, "rows_by_code": {}}
         )
         state_handlers.TRADING_RULES = original_rules
+
+
+def test_scalp_loss_reentry_stage_prefilter_ignores_malformed_target_row(
+    tmp_path,
+):
+    path = tmp_path / "pipeline_events.jsonl"
+    valid_payload = {
+        "stage": "sell_completed",
+        "stock_code": "000500",
+        "fields": {"profit_rate": "1.0"},
+    }
+    path.write_bytes(
+        b"not-json mentioning sell_completed\n"
+        + json.dumps(valid_payload).encode("utf-8")
+        + b"\n"
+    )
+
+    rows = list(
+        state_handlers._iter_pipeline_events_for_stages(path, {"sell_completed"})
+    )
+
+    assert rows == [valid_payload]
+
+
+def test_scalp_loss_reentry_event_cache_reads_only_appended_tail(tmp_path, monkeypatch):
+    original_cache = dict(state_handlers._SCALP_LOSS_REENTRY_EVENT_CACHE)
+    try:
+        monkeypatch.setattr(state_handlers, "DATA_DIR", tmp_path)
+        event_dir = tmp_path / "pipeline_events"
+        event_dir.mkdir(parents=True)
+        event_path = event_dir / "pipeline_events_2026-06-26.jsonl"
+        cooldown_payload = {
+            "stage": "same_symbol_loss_reentry_cooldown",
+            "stock_code": "000500",
+            "emitted_at": "2026-06-26T08:20:39+09:00",
+            "fields": {
+                "cooldown_sec": 3600,
+                "exit_rule": "scalp_hard_stop_pct",
+                "profit_rate": "-2.0",
+            },
+        }
+        event_path.write_text(
+            json.dumps(cooldown_payload, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        state_handlers._SCALP_LOSS_REENTRY_EVENT_CACHE.clear()
+        state_handlers._SCALP_LOSS_REENTRY_EVENT_CACHE.update(original_cache)
+        first_rows = state_handlers._load_scalp_loss_reentry_cooldown_events(
+            "2026-06-26"
+        )
+        first_offset = state_handlers._SCALP_LOSS_REENTRY_EVENT_CACHE["offset"]
+
+        original_json_loads = json.loads
+        decoded_rows = []
+
+        def tracking_json_loads(payload, *args, **kwargs):
+            decoded_rows.append(payload)
+            return original_json_loads(payload, *args, **kwargs)
+
+        monkeypatch.setattr(state_handlers.json, "loads", tracking_json_loads)
+        sell_payload = {
+            "stage": "sell_completed",
+            "stock_code": "000500",
+            "emitted_at": "2026-06-26T08:20:40+09:00",
+            "fields": {
+                "exit_rule": "scalp_hard_stop_pct",
+                "profit_rate": "-0.1",
+            },
+        }
+        with event_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(sell_payload, ensure_ascii=False) + "\n")
+
+        second_rows = state_handlers._load_scalp_loss_reentry_cooldown_events(
+            "2026-06-26"
+        )
+
+        assert second_rows == first_rows
+        assert len(decoded_rows) == 1
+        assert decoded_rows[0].startswith(b'{"stage": "sell_completed"')
+        assert state_handlers._SCALP_LOSS_REENTRY_EVENT_CACHE["offset"] > first_offset
+        assert state_handlers._SCALP_LOSS_REENTRY_EVENT_CACHE["sell_completed_by_code"][
+            "000500"
+        ] == [sell_payload]
+    finally:
+        state_handlers._SCALP_LOSS_REENTRY_EVENT_CACHE.clear()
+        state_handlers._SCALP_LOSS_REENTRY_EVENT_CACHE.update(original_cache)
 
 
 def test_same_symbol_loss_reentry_cooldown_marker_is_not_order_submit(monkeypatch):
