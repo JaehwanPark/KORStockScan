@@ -173,3 +173,37 @@ def test_dispatcher_preserves_results_owned_by_other_consumers():
 
     assert [result.request_id for result in scanner_results] == ["scanner:req"]
     assert [result.request_id for result in holding_results] == ["holding:req"]
+
+
+def test_dispatcher_does_not_coalesce_distinct_endpoints_with_same_snapshot_key():
+    """Endpoint results are not interchangeable for one position snapshot."""
+
+    dispatcher = HotPathAIDispatcher(loaded_key_count=2)
+    now = time.time()
+    holding_score = HotPathAIRequest.create(
+        request_id="position:holding-score",
+        generation_id="position-cycle-1",
+        cache_key="snapshot-42",
+        endpoint="holding_score",
+        venue="KRX",
+        submitted_epoch=now,
+        deadline_epoch=now + 1,
+        execute=lambda: {"score": 71},
+    )
+    holding_flow = HotPathAIRequest.create(
+        request_id="position:holding-flow",
+        generation_id="position-cycle-1",
+        cache_key="snapshot-42",
+        endpoint="holding_flow",
+        venue="KRX",
+        submitted_epoch=now,
+        deadline_epoch=now + 1,
+        execute=lambda: {"action": "HOLD"},
+    )
+
+    assert dispatcher.submit(holding_score).accepted is True
+    assert dispatcher.submit(holding_flow).accepted is True
+    results = _wait_for_results(dispatcher, 2)
+    dispatcher.shutdown()
+
+    assert {result.endpoint for result in results} == {"holding_score", "holding_flow"}

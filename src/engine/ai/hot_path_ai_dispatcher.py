@@ -95,8 +95,17 @@ class HotPathAIRequest:
         )
 
     @property
-    def dedupe_key(self) -> tuple[str, str]:
-        return self.generation_id, self.cache_key
+    def dedupe_key(self) -> tuple[str, str, str]:
+        """Return the transport coalescing identity for one AI endpoint.
+
+        A position/generation can legitimately have a holding-score, holding-flow,
+        entry-price, and gatekeeper request in flight at the same time. Those
+        calls share dispatcher capacity, but their results are not interchangeable.
+        Coalescing only by generation and cache key could silently discard a
+        different endpoint's request when both use the same snapshot key.
+        """
+
+        return self.endpoint, self.generation_id, self.cache_key
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,7 +153,9 @@ class HotPathAIDispatcher:
             thread_name_prefix="hot_path_ai",
         )
         self._lock = threading.RLock()
-        self._pending: dict[tuple[str, str], tuple[HotPathAIRequest, Future]] = {}
+        self._pending: dict[
+            tuple[str, str, str], tuple[HotPathAIRequest, Future]
+        ] = {}
         self._completed: deque[HotPathAIResult] = deque()
         self._closed = False
 
@@ -250,7 +261,7 @@ class HotPathAIDispatcher:
 
     def _on_done(
         self,
-        dedupe_key: tuple[str, str],
+        dedupe_key: tuple[str, str, str],
         future: Future,
     ) -> None:
         with self._lock:
