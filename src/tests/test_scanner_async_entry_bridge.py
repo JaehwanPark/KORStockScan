@@ -365,6 +365,55 @@ def test_rising_missed_async_final_commit_avoids_generic_reentry_history(monkeyp
     assert called[0]["rising_missed_async_final_commit"] is True
 
 
+def test_rising_missed_async_commit_is_handled_when_ai_dispatch_is_pending(
+    monkeypatch,
+):
+    generation = _generation("NXT")
+    stock = {
+        "id": 7,
+        "code": "005930",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "scanner_generation_id": generation.generation_id,
+        "_scanner_async_generation_id": generation.generation_id,
+        "_scanner_async_cache_key": "rising_missed:test",
+    }
+    monkeypatch.setattr(
+        handlers, "_manual_control_exclusion_blocked", lambda *_a, **_k: False
+    )
+    monkeypatch.setattr(handlers, "is_buy_side_paused", lambda: False)
+    monkeypatch.setattr(handlers, "is_scalping_buy_time_allowed", lambda _time: True)
+    monkeypatch.setattr(handlers, "COOLDOWNS", {})
+    monkeypatch.setattr(handlers, "ALERTED_STOCKS", set())
+    monkeypatch.setattr(
+        handlers, "_has_open_pending_entry_orders", lambda _stock: False
+    )
+    calls = []
+
+    def _dispatch_only(_stock, _code, _ws, _admin_id, runtime, **_kwargs):
+        calls.append(runtime)
+        return False
+
+    monkeypatch.setattr(
+        handlers, "_maybe_submit_rising_missed_one_share_entry", _dispatch_only
+    )
+
+    handled = handlers.handle_scanner_async_rising_missed_commit(
+        stock,
+        "005930",
+        {"curr": 1001, "last_ws_update_ts": time.time()},
+        admin_id=1,
+        now_ts=time.time(),
+        now_dt=datetime.now(),
+        scanner_async_generation=generation,
+    )
+
+    assert handled is True
+    assert len(calls) == 1
+    assert calls[0]["scanner_async_commit_phase"] is True
+
+
 def test_rising_missed_context_does_not_claim_followup_generic_ai_commit(monkeypatch):
     generation = _generation("KRX")
     coordinator = ScannerAsyncEvalCoordinator(

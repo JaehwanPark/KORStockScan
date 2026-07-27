@@ -64693,7 +64693,9 @@ def handle_scanner_async_rising_missed_commit(
     history snapshot.  This adapter deliberately performs only current-state
     checks before delegating to the established Rising Missed candidate and
     broker-submit owners.  It neither submits directly nor relaxes their
-    account/order/quantity/broker guards.
+    account/order/quantity/broker guards.  The return value reports whether
+    this adapter owns the outstanding result; it does not report whether a
+    broker order was submitted.
     """
 
     stock = stock if isinstance(stock, dict) else {}
@@ -64777,18 +64779,22 @@ def handle_scanner_async_rising_missed_commit(
         "scanner_async_commit_phase": True,
         "rising_missed_async_final_commit": True,
     }
-    return bool(
-        _maybe_submit_rising_missed_one_share_entry(
-            stock,
-            code,
-            ws_data,
-            admin_id,
-            runtime,
-            strategy=strategy,
-            pos_tag=runtime["pos_tag"],
-            curr_price=curr_price,
-        )
+    _maybe_submit_rising_missed_one_share_entry(
+        stock,
+        code,
+        ws_data,
+        admin_id,
+        runtime,
+        strategy=strategy,
+        pos_tag=runtime["pos_tag"],
+        curr_price=curr_price,
     )
+    # This return value is an adapter-ownership contract, not a broker-submit
+    # result. A normal async-AI dispatch intentionally submits no order yet,
+    # but the Rising Missed COMMIT has still been fully handled. Returning the
+    # inner result would make the caller re-enter generic WATCHING and perform
+    # a second, synchronous provider call on the COMMIT lane.
+    return True
 
 
 def _submit_entry_split_probe_residual_locked(
