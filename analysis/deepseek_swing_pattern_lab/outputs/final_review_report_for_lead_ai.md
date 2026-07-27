@@ -2,9 +2,9 @@
 
 ## 판정
 
-- 분석 기간: `2026-07-24` ~ `2026-07-24`
+- 분석 기간: `2026-07-27` ~ `2026-07-27`
 - trade_rows: `0`
-- lifecycle_event_rows: `3`
+- lifecycle_event_rows: `2`
 - completed_valid_profit_rows: `0`
 - ofi_qi_rows: `0`
 - total_findings: `3`

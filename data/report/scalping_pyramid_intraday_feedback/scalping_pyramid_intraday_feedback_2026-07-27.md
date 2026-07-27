@@ -1,6 +1,6 @@
 # 2026-07-27 Scalping Pyramid Intraday Feedback
 
-- generated_at: 2026-07-27T16:40:01+09:00
+- generated_at: 2026-07-27T21:46:12+09:00
 - decision_authority: source_only_pyramid_intraday_feedback_no_runtime_mutation
 - runtime_effect: false
 - allowed_runtime_apply: false
@@ -14,13 +14,13 @@
 - pyramid_correctly_blocked_count: 1
 - pyramid_overheat_or_reversal_risk_count: 0
 - pyramid_open_unresolved_count: 0
-- one_share_event_count: 1
-- one_share_closed_count: 1
+- one_share_event_count: 2
+- one_share_closed_count: 2
 - one_share_pyramid_opportunity_count: 1
 - one_share_pyramid_missed_upside_count: 0
 - one_share_pyramid_missed_upside_rate: 0.00
 - one_share_pyramid_avg_opportunity_cost_pct: 0.00
-- probe_residual_zero_fill_count: 1
+- probe_residual_zero_fill_count: 2
 - probe_residual_soft_abort_count: 0
 - probe_residual_missed_upside_candidate_count: 1
 - probe_residual_pyramid_evaluation_seen_count: 1
@@ -39,6 +39,7 @@
 ## One Share Opportunity Rows
 
 - record_id=24195 code=010120 name=LS ELECTRIC label=pyramid_correctly_blocked opportunity_seen=True opportunity_profit=1.13 max_profit=1.13 opportunity_cost=0.0 final=0.63 residual_zero_fill=True residual_soft_abort=False residual_missed_candidate=True
+- record_id=24492 code=439090 name=마녀공장 label=pyramid_correctly_blocked opportunity_seen=False opportunity_profit=None max_profit=0.33 opportunity_cost=0.33 final=-0.11 residual_zero_fill=True residual_soft_abort=False residual_missed_candidate=False
 
 ## Normal Winner Expansion Rows
 
