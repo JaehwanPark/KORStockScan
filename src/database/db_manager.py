@@ -194,6 +194,11 @@ class DBManager:
                 )
                 conn.execute(
                     text(
+                        "ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS scanner_watch_budget_owner TEXT;"
+                    )
+                )
+                conn.execute(
+                    text(
                         "ALTER TABLE recommendation_history "
                         "ALTER COLUMN buy_price TYPE DOUBLE PRECISION USING buy_price::double precision;"
                     )
@@ -723,6 +728,7 @@ class DBManager:
                         scanner_promotion_id, scanner_promotion_reason,
                         scanner_promotion_emitted_epoch,
                         scanner_source_signature as source_signature,
+                        scanner_watch_budget_owner,
                         (
                             SELECT dsq.marcap
                             FROM daily_stock_quotes dsq

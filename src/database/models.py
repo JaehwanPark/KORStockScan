@@ -109,6 +109,7 @@ class RecommendationHistory(Base):
     scanner_promotion_reason = Column(Text)
     scanner_promotion_emitted_epoch = Column(Float)
     scanner_source_signature = Column(Text)
+    scanner_watch_budget_owner = Column(Text)
 
     buy_price = Column(Float)
     buy_qty = Column(Integer, server_default=text("0"))

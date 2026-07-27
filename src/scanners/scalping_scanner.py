@@ -2876,6 +2876,9 @@ def _persist_scanner_promotion_provenance(record, payload):
         payload.get("scanner_promotion_emitted_epoch")
     )
     record.scanner_source_signature = str(payload.get("source_signature") or "").strip()
+    record.scanner_watch_budget_owner = str(
+        payload.get("scanner_watch_budget_owner") or ""
+    ).strip()
 
 
 def promote_candidates(

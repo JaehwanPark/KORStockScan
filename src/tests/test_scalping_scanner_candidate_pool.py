@@ -2866,6 +2866,7 @@ def test_scanner_promotion_provenance_persists_exact_runtime_handoff():
         "scanner_promotion_reason": "price_jump_start_acceleration",
         "scanner_promotion_emitted_epoch": "123.500",
         "source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+        "scanner_watch_budget_owner": "opening_rotation",
     }
 
     scalping_scanner._persist_scanner_promotion_provenance(record, payload)
@@ -2877,6 +2878,7 @@ def test_scanner_promotion_provenance_persists_exact_runtime_handoff():
     assert record.scanner_promotion_reason == "price_jump_start_acceleration"
     assert record.scanner_promotion_emitted_epoch == 123.5
     assert record.scanner_source_signature == "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE"
+    assert record.scanner_watch_budget_owner == "opening_rotation"
 
 
 def test_scalping_session_venue_provenance_normalizes_aware_datetime_to_kst():

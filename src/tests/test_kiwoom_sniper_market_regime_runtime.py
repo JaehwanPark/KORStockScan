@@ -8932,6 +8932,7 @@ def test_db_poll_scanner_target_attach_logs_recovery(monkeypatch):
             "scanner_promotion_id": "SCANPROM-005930-1000000",
             "scanner_promotion_emitted_epoch": 1000.0,
             "source_signature": "PRICE_JUMP_START",
+            "scanner_watch_budget_owner": "opening_rotation",
         },
         targets,
         now_ts=1002.0,
@@ -8958,6 +8959,10 @@ def test_db_poll_scanner_target_attach_logs_recovery(monkeypatch):
     assert emitted[-1]["fields"]["scanner_promotion_id"] == "SCANPROM-005930-1000000"
     assert emitted[-1]["fields"]["scanner_promotion_emitted_epoch"] == 1000.0
     assert emitted[-1]["fields"]["source_signature"] == "PRICE_JUMP_START"
+    assert targets[0]["scanner_watch_budget_owner"] == "opening_rotation"
+    assert (
+        emitted[-1]["fields"]["scanner_watch_budget_owner_source"] == "database_payload"
+    )
 
 
 def test_db_poll_scanner_target_rejects_generation_older_than_pending_inbox(
