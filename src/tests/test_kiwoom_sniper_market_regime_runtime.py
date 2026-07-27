@@ -568,6 +568,7 @@ def test_scalping_scanner_promoted_target_attaches_active_watching(monkeypatch):
     assert attached_target["source_signature"] == "REALTIME_RANK_START"
     assert attached_target["scanner_watch_budget_owner"] == "rising_missed"
     assert attached_target["effective_venue"] == "KRX"
+    assert attached_target["market_session_bucket"] == "krx_regular"
     assert (
         attached_target["venue_resolution"]
         == "consistent_explicit:payload.effective_venue,payload.venue"
@@ -585,6 +586,7 @@ def test_scalping_scanner_promoted_target_attaches_active_watching(monkeypatch):
     assert emitted[-1]["fields"]["broker_order_forbidden"] is True
     assert emitted[-1]["fields"]["venue"] == "KRX"
     assert emitted[-1]["fields"]["effective_venue"] == "KRX"
+    assert emitted[-1]["fields"]["market_session_bucket"] == "krx_regular"
     assert (
         emitted[-1]["fields"]["venue_resolution"]
         == "consistent_explicit:payload.effective_venue,payload.venue,"
@@ -603,6 +605,70 @@ def test_scalping_scanner_promoted_target_attaches_active_watching(monkeypatch):
         emitted[-1]["fields"]["rank_change_score_policy"]
         == "positive_signed_rank_delta_only_raw_rank_sign_unverified"
     )
+
+
+def test_scanner_runtime_target_venue_fields_fail_closed_on_session_conflict():
+    fields = kiwoom_sniper_v2._scanner_runtime_target_venue_fields(
+        {
+            "effective_venue": "KRX",
+            "market_session_bucket": "krx_regular",
+        },
+        target={
+            "effective_venue": "KRX",
+            "market_session_bucket": "nxt",
+        },
+    )
+
+    assert fields == {
+        "venue": "UNKNOWN",
+        "effective_venue": "UNKNOWN",
+        "venue_resolution": (
+            "conflicting_explicit_market_session_bucket:"
+            "payload.market_session_bucket=krx_regular,"
+            "target.market_session_bucket=nxt"
+        ),
+        "market_session_bucket": "UNKNOWN",
+    }
+
+
+def test_scanner_runtime_target_venue_fields_fail_closed_on_session_venue_mismatch():
+    fields = kiwoom_sniper_v2._scanner_runtime_target_venue_fields(
+        {
+            "effective_venue": "KRX",
+            "market_session_bucket": "nxt",
+        }
+    )
+
+    assert fields == {
+        "venue": "UNKNOWN",
+        "effective_venue": "UNKNOWN",
+        "venue_resolution": (
+            "market_session_bucket_venue_mismatch:"
+            "effective_venue=KRX,market_session_bucket=nxt"
+        ),
+        "market_session_bucket": "nxt",
+    }
+
+
+def test_scanner_runtime_target_venue_fields_preserve_canonical_session_by_venue():
+    expected_buckets = {
+        "KRX": "krx_regular",
+        "PREMARKET_KRX_LIKE": "krx_like_premarket",
+        "NXT": "nxt",
+    }
+
+    for venue, market_session_bucket in expected_buckets.items():
+        fields = kiwoom_sniper_v2._scanner_runtime_target_venue_fields(
+            {
+                "effective_venue": venue,
+                "market_session_bucket": market_session_bucket,
+            }
+        )
+
+        assert fields["effective_venue"] == venue
+        assert fields["venue"] == venue
+        assert fields["market_session_bucket"] == market_session_bucket
+        assert fields["venue_resolution"].startswith("consistent_explicit:")
 
 
 def test_deadline_scheduler_callback_only_enqueues_immutable_promotion(monkeypatch):
@@ -4167,6 +4233,10 @@ def test_scanner_promotion_latency_trace_fields_measure_ws_and_heavy_latency():
         "scanner_promotion_id": "SCANPROM-123456-1000",
         "scanner_promotion_emitted_epoch": "1000.000",
         "source_signature": "REALTIME_RANK_START",
+        "venue": "KRX",
+        "effective_venue": "KRX",
+        "venue_resolution": "scanner_session_clock:krx_regular",
+        "market_session_bucket": "krx_regular",
         "_scanner_fast_precheck_result": "eligible_for_heavy_entry_eval",
         "_scanner_fast_precheck_reason": "fast_precheck_pass",
     }
@@ -4193,6 +4263,9 @@ def test_scanner_promotion_latency_trace_fields_measure_ws_and_heavy_latency():
     )
     assert fields["actual_order_submitted"] is False
     assert fields["broker_order_forbidden"] is True
+    assert fields["effective_venue"] == "KRX"
+    assert fields["venue_resolution"] == "scanner_session_clock:krx_regular"
+    assert fields["market_session_bucket"] == "krx_regular"
     assert fields["promotion_to_trace_sec"] == 5.0
     assert fields["promotion_to_last_0b_sec"] == 2.5
     assert fields["last_0b_to_trace_sec"] == 2.5
@@ -8885,6 +8958,74 @@ def test_db_poll_scanner_target_attach_logs_recovery(monkeypatch):
     assert emitted[-1]["fields"]["scanner_promotion_id"] == "SCANPROM-005930-1000000"
     assert emitted[-1]["fields"]["scanner_promotion_emitted_epoch"] == 1000.0
     assert emitted[-1]["fields"]["source_signature"] == "PRICE_JUMP_START"
+
+
+def test_db_poll_scanner_target_rejects_generation_older_than_pending_inbox(
+    monkeypatch,
+):
+    emitted = []
+    published = []
+    targets = []
+    inbox = kiwoom_sniper_v2.ScannerPromotionInbox(max_active=4)
+    inbox.put(
+        kiwoom_sniper_v2.ScannerPromotionEnvelope.from_payload(
+            {
+                "code": "009320",
+                "scanner_promotion_id": "SCANPROM-009320-NEW",
+                "scanner_promotion_emitted_epoch": 1010.0,
+                "effective_venue": "KRX",
+            },
+            enqueued_epoch=1010.1,
+        )
+    )
+    monkeypatch.setattr(kiwoom_sniper_v2, "_SCANNER_PROMOTION_INBOX", inbox)
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, *, record_id=None, fields=None: emitted.append(
+            {"stage": stage, "code": code, "fields": fields or {}}
+        ),
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "event_bus",
+        SimpleNamespace(
+            publish=lambda name, payload: published.append((name, payload))
+        ),
+    )
+
+    attached = kiwoom_sniper_v2.attach_db_poll_target_if_missing(
+        {
+            "id": 24315,
+            "code": "009320",
+            "name": "AJIN",
+            "strategy": "SCALPING",
+            "status": "WATCHING",
+            "position_tag": "SCANNER",
+            "buy_price": 997,
+            "type": "SCALP",
+            "effective_venue": "KRX",
+            "venue_resolution": "scanner_session_clock:krx_regular",
+            "scanner_promotion_id": "SCANPROM-009320-OLD",
+            "scanner_promotion_emitted_epoch": 1000.0,
+            "source_signature": "PRICE_JUMP_START",
+        },
+        targets,
+        now_ts=1011.0,
+    )
+
+    assert attached is False
+    assert targets == []
+    assert published == []
+    assert emitted[-1]["stage"] == "scalping_scanner_runtime_target_attach"
+    assert emitted[-1]["fields"]["runtime_target_attach_outcome"] == "skipped"
+    assert emitted[-1]["fields"]["runtime_target_attach_reason"] == (
+        "db_poll_blocked_by_pending_promotion_generation_mismatch"
+    )
+    assert emitted[-1]["fields"]["scanner_db_poll_generation_guard_applied"] is True
+    assert (
+        emitted[-1]["fields"]["scanner_pending_promotion_id"] == "SCANPROM-009320-NEW"
+    )
 
 
 def test_db_poll_replacement_releases_stale_scheduler_capacity(monkeypatch):

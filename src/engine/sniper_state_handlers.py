@@ -12690,6 +12690,66 @@ def _is_scanner_watching_runtime_observation_target(stock) -> bool:
     )
 
 
+def _scanner_runtime_event_venue_fields(stock) -> dict[str, str]:
+    """Copy canonical scanner venue provenance without session inference.
+
+    Scanner attach owns venue resolution.  Downstream funnel instrumentation
+    must preserve that immutable target provenance instead of reconstructing a
+    venue from the clock, broker route, or WS item suffix.
+    """
+
+    stock = stock if isinstance(stock, dict) else {}
+    supported_venues = {"KRX", "NXT", "PREMARKET_KRX_LIKE"}
+    explicit_values = []
+    for key in ("effective_venue", "venue"):
+        value = str(stock.get(key) or "").strip().upper()
+        if value in supported_venues:
+            explicit_values.append((key, value))
+    unique_venues = {value for _, value in explicit_values}
+    if len(unique_venues) == 1:
+        canonical_venue = next(iter(unique_venues))
+        venue_resolution = str(stock.get("venue_resolution") or "").strip()
+        if not venue_resolution:
+            venue_resolution = "scanner_runtime_event:explicit_venue_resolution_missing"
+    elif unique_venues:
+        canonical_venue = "UNKNOWN"
+        venue_resolution = (
+            "scanner_runtime_event:conflicting_explicit_target_venue:"
+            + ",".join(f"{key}={value}" for key, value in explicit_values)
+        )
+    else:
+        canonical_venue = "UNKNOWN"
+        venue_resolution = "scanner_runtime_event:explicit_target_venue_missing"
+    market_session_bucket = str(stock.get("market_session_bucket") or "").strip()
+    expected_bucket_by_venue = {
+        "KRX": "krx_regular",
+        "PREMARKET_KRX_LIKE": "krx_like_premarket",
+        "NXT": "nxt",
+    }
+    expected_bucket = expected_bucket_by_venue.get(canonical_venue)
+    if (
+        expected_bucket
+        and market_session_bucket
+        and market_session_bucket != expected_bucket
+    ):
+        observed_venue = canonical_venue
+        canonical_venue = "UNKNOWN"
+        venue_resolution = (
+            "scanner_runtime_event:market_session_bucket_venue_mismatch:"
+            f"effective_venue={observed_venue},"
+            f"market_session_bucket={market_session_bucket}"
+        )
+    return {
+        "venue": canonical_venue,
+        "effective_venue": canonical_venue,
+        "venue_resolution": venue_resolution,
+        "market_session_bucket": (
+            market_session_bucket
+            or "scanner_runtime_event:market_session_bucket_missing"
+        ),
+    }
+
+
 def _env_bool(name: str, default: bool = False) -> bool:
     raw = os.getenv(name, "")
     text = str(raw).strip().lower()
@@ -16715,6 +16775,7 @@ def _scanner_fast_precheck_fields(
         "budget_reallocated" if result == "budget_reallocated" else "observe_only"
     )
     return {
+        **_scanner_runtime_event_venue_fields(stock),
         **market_data_fields,
         "scanner_promotion_id": scanner_fields.get("scanner_promotion_id")
         or "not_applicable_scanner_promotion_id",
@@ -16914,6 +16975,7 @@ def _scanner_heavy_eval_lag_fields(
         float(now_ts),
     )
     return {
+        **_scanner_runtime_event_venue_fields(stock),
         "scanner_promotion_id": scanner_fields.get("scanner_promotion_id")
         or "not_applicable_scanner_promotion_id",
         "scanner_promotion_emitted_epoch": scanner_fields.get(

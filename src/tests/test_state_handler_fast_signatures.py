@@ -4424,6 +4424,10 @@ def test_emit_scanner_fast_precheck_and_heavy_eval_lag_are_order_forbidden(monke
         "scanner_promotion_id": "SCANPROM-000081-1000000",
         "scanner_promotion_emitted_epoch": "1000.000",
         "source_signature": "PRICE_JUMP_START",
+        "venue": "KRX",
+        "effective_venue": "KRX",
+        "venue_resolution": "scanner_session_clock:krx_regular",
+        "market_session_bucket": "krx_regular",
     }
     ws_data = {"curr": 1200, "last_ws_update_ts": 1011.9}
 
@@ -4453,6 +4457,9 @@ def test_emit_scanner_fast_precheck_and_heavy_eval_lag_are_order_forbidden(monke
     assert fast["runtime_effect"] is False
     assert fast["actual_order_submitted"] is False
     assert fast["broker_order_forbidden"] is True
+    assert fast["effective_venue"] == "KRX"
+    assert fast["venue_resolution"] == "scanner_session_clock:krx_regular"
+    assert fast["market_session_bucket"] == "krx_regular"
     assert fast["heavy_queue_enter_epoch"] == "1012.000"
     assert fast["rising_entry_relief_eligible"] is False
     assert emitted[-1]["stage"] == "scalping_scanner_heavy_eval_lag"
@@ -4460,10 +4467,58 @@ def test_emit_scanner_fast_precheck_and_heavy_eval_lag_are_order_forbidden(monke
     assert heavy["runtime_effect"] is False
     assert heavy["actual_order_submitted"] is False
     assert heavy["broker_order_forbidden"] is True
+    assert heavy["effective_venue"] == "KRX"
+    assert heavy["venue_resolution"] == "scanner_session_clock:krx_regular"
+    assert heavy["market_session_bucket"] == "krx_regular"
     assert (
         heavy["scanner_full_eval_budget_source"]
         == "not_applicable_full_eval_budget_source"
     )
+
+
+def test_scanner_runtime_event_venue_fields_fail_closed_without_inference():
+    conflict = handlers._scanner_runtime_event_venue_fields(
+        {
+            "effective_venue": "KRX",
+            "venue": "NXT",
+            "venue_resolution": "stale_resolution_must_not_override_conflict",
+            "market_session_bucket": "krx_regular",
+        }
+    )
+    missing = handlers._scanner_runtime_event_venue_fields(
+        {"broker_route": "SOR", "ws_item": "005930_AL"}
+    )
+    session_mismatch = handlers._scanner_runtime_event_venue_fields(
+        {
+            "effective_venue": "KRX",
+            "venue": "KRX",
+            "venue_resolution": "consistent_explicit:effective_venue,venue",
+            "market_session_bucket": "nxt",
+        }
+    )
+
+    assert conflict["effective_venue"] == "UNKNOWN"
+    assert conflict["venue"] == "UNKNOWN"
+    assert conflict["venue_resolution"].startswith(
+        "scanner_runtime_event:conflicting_explicit_target_venue:"
+    )
+    assert missing == {
+        "venue": "UNKNOWN",
+        "effective_venue": "UNKNOWN",
+        "venue_resolution": "scanner_runtime_event:explicit_target_venue_missing",
+        "market_session_bucket": (
+            "scanner_runtime_event:market_session_bucket_missing"
+        ),
+    }
+    assert session_mismatch == {
+        "venue": "UNKNOWN",
+        "effective_venue": "UNKNOWN",
+        "venue_resolution": (
+            "scanner_runtime_event:market_session_bucket_venue_mismatch:"
+            "effective_venue=KRX,market_session_bucket=nxt"
+        ),
+        "market_session_bucket": "nxt",
+    }
 
 
 def test_scanner_terminal_block_insufficient_history_is_not_fresh_for_eviction():

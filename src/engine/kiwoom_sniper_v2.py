@@ -1984,11 +1984,56 @@ def _scanner_runtime_target_venue_fields(payload, *, target=None):
     else:
         canonical_venue = "UNKNOWN"
         venue_resolution = "missing_tradable_explicit_venue"
-    return {
+    bucket_candidates = tuple(
+        (source, str(value or "").strip())
+        for source, value in (
+            ("payload.market_session_bucket", payload.get("market_session_bucket")),
+            ("target.market_session_bucket", target.get("market_session_bucket")),
+        )
+        if str(value or "").strip()
+    )
+    unique_buckets = {value for _, value in bucket_candidates}
+    venue_fields = {
         "venue": canonical_venue,
         "effective_venue": canonical_venue,
         "venue_resolution": venue_resolution,
     }
+    if len(unique_buckets) == 1:
+        market_session_bucket = next(iter(unique_buckets))
+        venue_fields["market_session_bucket"] = market_session_bucket
+        expected_bucket_by_venue = {
+            "KRX": "krx_regular",
+            "PREMARKET_KRX_LIKE": "krx_like_premarket",
+            "NXT": "nxt",
+        }
+        expected_bucket = expected_bucket_by_venue.get(canonical_venue)
+        if expected_bucket and market_session_bucket != expected_bucket:
+            venue_fields.update(
+                {
+                    "venue": "UNKNOWN",
+                    "effective_venue": "UNKNOWN",
+                    "venue_resolution": (
+                        "market_session_bucket_venue_mismatch:"
+                        f"effective_venue={canonical_venue},"
+                        f"market_session_bucket={market_session_bucket}"
+                    ),
+                }
+            )
+    elif unique_buckets:
+        venue_fields.update(
+            {
+                "venue": "UNKNOWN",
+                "effective_venue": "UNKNOWN",
+                "venue_resolution": (
+                    "conflicting_explicit_market_session_bucket:"
+                    + ",".join(
+                        f"{source}={value}" for source, value in bucket_candidates
+                    )
+                ),
+                "market_session_bucket": "UNKNOWN",
+            }
+        )
+    return venue_fields
 
 
 def _scanner_runtime_target_event_fields(payload, *, outcome, reason, target=None):
@@ -2066,6 +2111,11 @@ def _scanner_runtime_target_event_fields(payload, *, outcome, reason, target=Non
         or "not_applicable_runtime_record_id",
         "scanner_promotion_id": payload.get("scanner_promotion_id")
         or "not_applicable_scanner_promotion_id",
+        "scanner_pending_promotion_id": payload.get("scanner_pending_promotion_id")
+        or "not_applicable_scanner_pending_promotion_id",
+        "scanner_db_poll_generation_guard_applied": bool(
+            payload.get("scanner_db_poll_generation_guard_applied", False)
+        ),
         "scanner_promotion_reason": payload.get("scanner_promotion_reason")
         or "not_applicable_scanner_promotion_reason",
         "scanner_promotion_emitted_epoch": payload.get(
@@ -5619,6 +5669,7 @@ def _scanner_promotion_latency_trace_fields(
     )
     strategy = normalize_strategy(target.get("strategy"))
     return {
+        **sniper_state_handlers._scanner_runtime_event_venue_fields(target),
         "metric_role": "funnel_count",
         "decision_authority": "real_scalping_scanner_latency_observation_only",
         "window_policy": "same_day_intraday_light",
@@ -8163,6 +8214,35 @@ def attach_db_poll_target_if_missing(db_target, targets, now_ts):
             f"{code} strategy={dt['strategy']} env={SWING_REAL_WATCHING_ENABLED_ENV}"
         )
         return False
+    if dt["strategy"] == "SCALPING" and dt["position_tag"] == "SCANNER":
+        pending = _SCANNER_PROMOTION_INBOX.pending_for(code)
+        pending_promotion_id = (
+            str((pending.payload or {}).get("scanner_promotion_id") or "").strip()
+            if pending is not None
+            else ""
+        )
+        db_promotion_id = str(dt.get("scanner_promotion_id") or "").strip()
+        if pending is not None and (
+            not pending_promotion_id
+            or not db_promotion_id
+            or pending_promotion_id != db_promotion_id
+        ):
+            block_reason = (
+                "db_poll_blocked_by_pending_promotion_provenance_missing"
+                if not pending_promotion_id or not db_promotion_id
+                else "db_poll_blocked_by_pending_promotion_generation_mismatch"
+            )
+            _log_scanner_runtime_target_attach(
+                {
+                    **dt,
+                    "scanner_pending_promotion_id": pending_promotion_id,
+                    "scanner_db_poll_generation_guard_applied": True,
+                },
+                outcome="skipped",
+                reason=block_reason,
+                target=dt,
+            )
+            return False
 
     identity = target_identity(code, dt["strategy"])
     for target in targets:
