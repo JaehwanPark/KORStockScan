@@ -66,6 +66,13 @@
   - fallback: 키 미설정·승인대기·endpoint 장애는 `source_unavailable_reasoned`로 닫고 Naver 일봉 OHLC만 secondary 비교한다. 일봉 volume은 `NOT_COMPARABLE`이며 MDC `getJsonData.cmd`의 `HTTP 400 LOGOUT` 재시도로 우회하지 않는다.
   - 다음 액션: `krx_open_api_ready`, `auth_issue_pending_source_unavailable`, `endpoint_failure_use_reasoned_fallback`, `secret_persistence_violation_fix_required` 중 하나로 닫는다.
 
+- [ ] `[ScannerAsyncEvalCommitRuntimeActivation0727] scanner_async_eval_commit_v1 별도 승인·우아한 재기동·전 venue 귀속` (`Due: 2026-07-27`, `Slot: INTRADAY`, `TimeWindow: operator-approved`, `Track: RuntimeStability`)
+  - Source: [hot_path_ai_dispatcher.py](/home/ubuntu/KORStockScan/src/engine/ai/hot_path_ai_dispatcher.py), [scanner_async_eval.py](/home/ubuntu/KORStockScan/src/engine/scalping/scanner_async_eval.py), [scanner_runtime_scheduler.py](/home/ubuntu/KORStockScan/src/engine/scalping/scanner_runtime_scheduler.py), [kiwoom_sniper_v2.py](/home/ubuntu/KORStockScan/src/engine/kiwoom_sniper_v2.py), [scanner_scheduler_replay.py](/home/ubuntu/KORStockScan/src/engine/scalping/scanner_scheduler_replay.py)
+  - 현재 상태: `implemented_not_runtime_reflected`(scanner WATCHING/analyze_target 핵심 bridge). 시장자료 준비 worker 1개와 loaded OpenAI key 수 이내 AI dispatcher, generation별 중복 병합, deadline 이후 observation-only 폐기, main-thread generation·venue·source·fresh quote·position/order/cooldown 재검증이 구현됐다. holding score/flow, pre-submit retry, entry-price, gatekeeper의 공용 dispatcher 이관은 남아 있으므로 코드 소유 activation gate가 `async_v1` 요청을 `deadline_v1`로 fail-closed 처리한다. 현재 PID와 startup mode는 변경하지 않는다.
+  - 적용 기준: 계획에 명시된 전체 hot-path endpoint의 dispatcher 이관과 endpoint별 state/version commit guard를 완료한 뒤 review finding 0건, targeted test·compile·parser·diff PASS, 16-symbol stress PASS와 `deadline_v1`의 PREMARKET→KRX→NXT 전체 운영주기 안전성·order/receipt/fast-exit cadence 비악화 확인, 현재 broker 보유·미체결 snapshot/reconciliation PASS가 모두 필요하다. 그 다음 코드 activation gate를 리뷰로 해제하고 사용자의 별도 재기동 승인을 받아 `KORSTOCKSCAN_SCANNER_SCHEDULER_MODE=async_v1`로 우아하게 재기동한다. KRX·PREMARKET_KRX_LIKE·NXT 결과는 분리 귀속한다.
+  - rollback: stale/superseded generation broker 도달, 중복 submit, worker의 DB/runtime truth 또는 broker mutation, hard exit/receipt 지연, 가격·수량 불변식 위반, venue/source 혼입, `provider=none` 또는 failback 계약 위반 시 `async_v1 -> deadline_v1`로 되돌린다.
+  - 다음 액션: `complete_hot_path_endpoint_migration`, `implemented_not_runtime_reflected`, `async_v1_runtime_attribution_started`, `async_v1_full_cycle_pass`, `rollback_to_deadline_v1` 중 하나로 닫는다.
+
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_START -->
 ## 자동 생성 체크리스트 (`2026-07-24` postclose -> `2026-07-27`)
 

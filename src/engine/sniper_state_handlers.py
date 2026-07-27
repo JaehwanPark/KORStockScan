@@ -274,6 +274,14 @@ from src.engine.scalping.early_volatility_partial_tp import (
     resolve_early_volatility_tp,
 )
 from src.engine.scalping.position_peak_ledger import POSITION_PEAK_LEDGER
+from src.engine.scalping.scanner_async_eval import (
+    ScannerAsyncEvalContext,
+    ScannerAsyncEvalCoordinator,
+    ScannerAsyncEvalRequest,
+    thaw_scanner_async_value,
+    validate_scanner_async_commit,
+)
+from src.engine.scalping.scanner_runtime_scheduler import ScannerGeneration
 
 KIWOOM_TOKEN = None
 DB = None
@@ -45977,6 +45985,328 @@ def _handle_watching_opening_rotation(stock, code, ws_data, runtime, config) -> 
     return True
 
 
+def _scanner_async_entry_state_version(stock: dict) -> str:
+    """Fingerprint only state that must remain stable across async evaluation."""
+
+    payload = {
+        "record_id": stock.get("id"),
+        "status": str(stock.get("status") or "").upper(),
+        "scanner_generation_id": stock.get("scanner_generation_id"),
+        "scanner_promotion_id": stock.get("scanner_promotion_id"),
+        "buy_qty": _safe_int(stock.get("buy_qty"), 0),
+        "buy_price": _safe_int(stock.get("buy_price"), 0),
+        "entry_split_probe_phase": stock.get("entry_split_probe_phase"),
+        "pending_order_no": stock.get("pending_order_no") or stock.get("order_no"),
+    }
+    encoded = json.dumps(payload, sort_keys=True, ensure_ascii=True, default=str)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:20]
+
+
+def _scanner_async_quote_is_fresh(ws_data: dict, *, now_ts: float) -> bool:
+    if _safe_int((ws_data or {}).get("curr"), 0) <= 0:
+        return False
+    _update_ai_quote_freshness_fields(ws_data)
+    if bool(
+        ws_data.get("quote_stale")
+        or ws_data.get("context_stale")
+        or ws_data.get("price_conflict")
+        or ws_data.get("source_conflict")
+    ):
+        return False
+    quote_age_sec = _get_ws_snapshot_age_sec(ws_data)
+    return bool(quote_age_sec is not None and quote_age_sec <= 2.0)
+
+
+def _scanner_async_entry_cache_key(
+    stock: dict,
+    *,
+    generation: ScannerGeneration,
+    trigger_reason: str,
+    last_ai_time: float,
+) -> str:
+    existing_generation = str(stock.get("_scanner_async_generation_id") or "").strip()
+    existing_key = str(stock.get("_scanner_async_cache_key") or "").strip()
+    if existing_generation == generation.generation_id and existing_key:
+        return existing_key
+    seed = (
+        f"{generation.generation_id}|{str(trigger_reason or 'unknown')}|"
+        f"{float(last_ai_time):.6f}"
+    )
+    return "watching:" + hashlib.sha256(seed.encode("utf-8")).hexdigest()[:16]
+
+
+def _resolve_scanner_async_entry_ai(
+    stock: dict,
+    code: str,
+    ws_data: dict,
+    ai_engine,
+    runtime: dict,
+    *,
+    trigger_reason: str,
+    last_ai_time: float,
+    current_ai_score: float,
+) -> dict:
+    """Dispatch immutable preparation/AI and apply only on main-thread commit."""
+
+    coordinator = runtime.get("scanner_async_eval_coordinator")
+    generation = runtime.get("scanner_async_generation")
+    if not isinstance(coordinator, ScannerAsyncEvalCoordinator) or not isinstance(
+        generation, ScannerGeneration
+    ):
+        return {"status": "not_enabled"}
+
+    cache_key = _scanner_async_entry_cache_key(
+        stock,
+        generation=generation,
+        trigger_reason=trigger_reason,
+        last_ai_time=last_ai_time,
+    )
+    state_version = _scanner_async_entry_state_version(stock)
+    commit_phase = bool(runtime.get("scanner_async_commit_phase"))
+    result = (
+        coordinator.take_completed(
+            generation_id=generation.generation_id,
+            cache_key=cache_key,
+        )
+        if commit_phase
+        else None
+    )
+    if result is not None:
+        now_epoch = time.time()
+        decision = validate_scanner_async_commit(
+            result,
+            current_generation=generation,
+            current_status=stock.get("status") or "",
+            current_venue=stock.get("effective_venue")
+            or stock.get("venue")
+            or "UNKNOWN",
+            current_source_signature=stock.get("source_signature")
+            or stock.get("scanner_source_signature")
+            or "",
+            venue_resolution_valid=bool(
+                str(stock.get("venue_resolution") or "").strip()
+                and not any(
+                    token in str(stock.get("venue_resolution") or "").strip().lower()
+                    for token in ("missing", "unknown", "conflict", "unresolved")
+                )
+            ),
+            current_state_version=_scanner_async_entry_state_version(stock),
+            quote_fresh=_scanner_async_quote_is_fresh(
+                ws_data,
+                now_ts=now_epoch,
+            ),
+            position_or_pending_order_present=bool(
+                _safe_int(stock.get("buy_qty"), 0) > 0
+                or _has_open_pending_entry_orders(stock)
+            ),
+            cooldown_active=bool(
+                _safe_float((COOLDOWNS or {}).get(code), 0.0) > now_epoch
+            ),
+            now_epoch=now_epoch,
+        )
+        _log_entry_pipeline(
+            stock,
+            code,
+            "scanner_async_result_commit",
+            **dict(decision.fields),
+            scanner_async_cache_key=cache_key,
+            preparation_wait_sec=round(result.preparation_wait_sec, 6),
+            preparation_service_sec=round(result.preparation_service_sec, 6),
+            ai_dispatch_wait_sec=round(result.ai_dispatch_wait_sec, 6),
+            ai_response_sec=round(result.ai_response_sec, 6),
+        )
+        _mutate_stock_state(
+            stock,
+            pop_fields=[
+                "_scanner_async_generation_id",
+                "_scanner_async_cache_key",
+                "_scanner_async_state_version",
+                "_scanner_async_submitted_at",
+            ],
+        )
+        if not decision.allowed:
+            return {"status": "commit_rejected", "reason": decision.reason}
+        return {
+            "status": "completed",
+            "prepared_context": dict(result.prepared_context),
+            "ai_decision": dict(result.ai_payload),
+            "completed_epoch": result.completed_epoch,
+        }
+
+    if commit_phase:
+        return {"status": "commit_result_missing"}
+    if coordinator.is_pending(
+        generation_id=generation.generation_id,
+        cache_key=cache_key,
+    ):
+        return {"status": "pending"}
+
+    submitted_epoch = time.time()
+    deadline_sec = 5.0
+    context = ScannerAsyncEvalContext.create(
+        generation=generation,
+        cache_key=cache_key,
+        submitted_epoch=submitted_epoch,
+        deadline_epoch=submitted_epoch + deadline_sec,
+        stock_snapshot=stock,
+        ws_snapshot=ws_data,
+        state_version=state_version,
+    )
+
+    def prepare(
+        async_context: ScannerAsyncEvalContext,
+    ) -> dict:
+        prepared_ws = thaw_scanner_async_value(async_context.ws_snapshot)
+        entry_request_code = resolve_entry_candle_request_code(
+            code,
+            venue=generation.venue,
+            session=resolve_entry_candle_session(
+                datetime.now(tz=_KST),
+                None,
+            ),
+            ws_data=prepared_ws,
+        )
+        recent_ticks = kiwoom_utils.get_tick_history_ka10003(
+            KIWOOM_TOKEN,
+            entry_request_code,
+            limit=10,
+        )
+        recent_candles, candle_source_meta = fetch_entry_candles_with_meta(
+            KIWOOM_TOKEN,
+            code,
+            prepared_ws,
+            venue=generation.venue,
+            limit=40,
+            now_ts=time.time(),
+        )
+        if not prepared_ws.get("orderbook") or not recent_ticks:
+            return {
+                "source_quality_ok": False,
+                "recent_ticks": recent_ticks or [],
+                "recent_candles": recent_candles or [],
+                "candle_source_meta": candle_source_meta or {},
+                "ws_data": prepared_ws,
+                "candle_context": {},
+            }
+        adm_overlap_snapshot = _extract_ai_overlap_snapshot(
+            ws_data=prepared_ws,
+            recent_ticks=recent_ticks,
+            recent_candles=recent_candles,
+            ai_engine=ai_engine,
+        )
+        _update_ai_quote_freshness_fields(prepared_ws)
+        prepared_ws.setdefault("current_ai_score", current_ai_score)
+        prepared_ws.setdefault(
+            "ai_score_baseline_source",
+            "pre_analyze_target_runtime_score",
+        )
+        for adm_key, adm_value in adm_overlap_snapshot.items():
+            prepared_ws.setdefault(adm_key, adm_value)
+        candle_context = build_entry_candle_context(
+            KIWOOM_TOKEN,
+            code,
+            prepared_ws,
+            venue=None,
+            session=None,
+            limit=40,
+            model_bar_limit=20,
+            now_ts=time.time(),
+            recent_candles=recent_candles,
+            source_meta=candle_source_meta,
+            include_investor_source=True,
+        )
+        return {
+            "source_quality_ok": True,
+            "recent_ticks": recent_ticks,
+            "recent_candles": recent_candles,
+            "candle_source_meta": candle_source_meta,
+            "entry_request_code": entry_request_code,
+            "ws_data": prepared_ws,
+            "candle_context": candle_context,
+        }
+
+    def evaluate(
+        async_context: ScannerAsyncEvalContext,
+        prepared: dict,
+    ) -> dict:
+        if not prepared.get("source_quality_ok"):
+            return {
+                "action": "WAIT",
+                "score": 50,
+                "reason": "scanner_async_source_quality_incomplete",
+                "ai_result_source": "fail_closed_before_provider",
+            }
+        stock_snapshot = async_context.stock_snapshot
+        return dict(
+            ai_engine.analyze_target(
+                stock_snapshot.get("name") or code,
+                thaw_scanner_async_value(prepared.get("ws_data") or {}),
+                thaw_scanner_async_value(prepared.get("recent_ticks") or []),
+                thaw_scanner_async_value(prepared.get("recent_candles") or []),
+                prompt_profile="watching",
+                metadata_extra={
+                    "record_id": stock_snapshot.get("id"),
+                    "sim_record_id": stock_snapshot.get("sim_record_id"),
+                    "sim_parent_record_id": stock_snapshot.get("sim_parent_record_id"),
+                    "entry_adm_candidate_id": stock_snapshot.get(
+                        "entry_adm_candidate_id"
+                    ),
+                    "source_event_stage": "watching_analyze_target_async_v1",
+                    "scanner_generation_id": generation.generation_id,
+                },
+                candle_context=thaw_scanner_async_value(
+                    prepared.get("candle_context") or {}
+                ),
+            )
+            or {}
+        )
+
+    submit_decision = coordinator.submit(
+        ScannerAsyncEvalRequest(
+            context=context,
+            prepare=prepare,
+            evaluate=evaluate,
+        )
+    )
+    if submit_decision.accepted:
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                "_scanner_async_generation_id": generation.generation_id,
+                "_scanner_async_cache_key": cache_key,
+                "_scanner_async_state_version": state_version,
+                "_scanner_async_submitted_at": submitted_epoch,
+            },
+        )
+    _log_entry_pipeline(
+        stock,
+        code,
+        "scanner_async_eval_dispatched",
+        metric_role="runtime_scheduler_latency",
+        decision_authority="scanner_async_preparation_dispatch_only",
+        window_policy="per_scanner_generation_action_timestamps",
+        sample_floor="one_async_scanner_dispatch",
+        primary_decision_metric="ai_dispatch_wait_sec",
+        source_quality_gate="canonical_generation_venue_and_snapshot_required",
+        forbidden_uses=(
+            "standalone_buy,broker_submit,threshold_mutation,provider_route_change,"
+            "order_price_change,quantity_or_cap_change,broker_guard_bypass"
+        ),
+        runtime_effect=False,
+        actual_order_submitted=False,
+        broker_order_forbidden=True,
+        scanner_generation_id=generation.generation_id,
+        scanner_async_cache_key=cache_key,
+        scanner_async_dispatch_accepted=submit_decision.accepted,
+        scanner_async_dispatch_reason=submit_decision.reason,
+        scanner_async_deadline_epoch=round(context.deadline_epoch, 6),
+    )
+    return {
+        "status": "dispatched" if submit_decision.accepted else "dispatch_rejected",
+        "reason": submit_decision.reason,
+    }
+
+
 def _handle_watching_strategy_branch(
     stock, code, ws_data, radar, ai_engine, runtime, config
 ):
@@ -46995,18 +47325,70 @@ def _handle_watching_strategy_branch(
                     )
                 ):
                     try:
-                        recent_ticks = kiwoom_utils.get_tick_history_ka10003(
-                            KIWOOM_TOKEN, code, limit=10
+                        async_resolution = _resolve_scanner_async_entry_ai(
+                            stock,
+                            code,
+                            ws_data,
+                            ai_engine,
+                            runtime,
+                            trigger_reason=ai_call_trigger_reason,
+                            last_ai_time=last_ai_time,
+                            current_ai_score=current_ai_score,
                         )
-                        recent_candles, candle_source_meta = (
-                            fetch_entry_candles_with_meta(
-                                KIWOOM_TOKEN,
-                                code,
-                                ws_data,
-                                limit=40,
-                                now_ts=now_ts,
+                        scanner_async_enabled = (
+                            async_resolution.get("status") != "not_enabled"
+                        )
+                        if scanner_async_enabled:
+                            if async_resolution.get("status") != "completed":
+                                return False
+                            prepared_context = dict(
+                                async_resolution.get("prepared_context") or {}
                             )
-                        )
+                            recent_ticks = list(
+                                prepared_context.get("recent_ticks") or []
+                            )
+                            recent_candles = list(
+                                prepared_context.get("recent_candles") or []
+                            )
+                            candle_source_meta = dict(
+                                prepared_context.get("candle_source_meta") or {}
+                            )
+                            candle_context = dict(
+                                prepared_context.get("candle_context") or {}
+                            )
+                            prepared_ws = dict(prepared_context.get("ws_data") or {})
+                            for context_key in (
+                                "current_ai_score",
+                                "ai_score_baseline_source",
+                                "quote_stale",
+                                "context_stale",
+                                "latency_state",
+                            ):
+                                if context_key in prepared_ws:
+                                    ws_data.setdefault(
+                                        context_key,
+                                        prepared_ws.get(context_key),
+                                    )
+                            ai_decision = dict(
+                                async_resolution.get("ai_decision") or {}
+                            )
+                            ai_call_completed_at = _safe_float(
+                                async_resolution.get("completed_epoch"),
+                                time.time(),
+                            )
+                        else:
+                            recent_ticks = kiwoom_utils.get_tick_history_ka10003(
+                                KIWOOM_TOKEN, code, limit=10
+                            )
+                            recent_candles, candle_source_meta = (
+                                fetch_entry_candles_with_meta(
+                                    KIWOOM_TOKEN,
+                                    code,
+                                    ws_data,
+                                    limit=40,
+                                    now_ts=now_ts,
+                                )
+                            )
                         if ws_data.get("orderbook") and recent_ticks:
                             adm_overlap_snapshot = _extract_ai_overlap_snapshot(
                                 ws_data=ws_data,
@@ -47022,45 +47404,45 @@ def _handle_watching_strategy_branch(
                             )
                             for adm_key, adm_value in adm_overlap_snapshot.items():
                                 ws_data.setdefault(adm_key, adm_value)
-                            # The outer WATCHING loop timestamp can be minutes old
-                            # when earlier symbols perform REST/AI work.  Capture
-                            # the exact entry snapshot after those fetches so
-                            # freshly updated WS provenance is not mislabeled as
-                            # future relative to the stale loop timestamp.
-                            entry_context_now_ts = time.time()
-                            candle_context = build_entry_candle_context(
-                                KIWOOM_TOKEN,
-                                code,
-                                ws_data,
-                                venue=None,
-                                session=None,
-                                limit=40,
-                                model_bar_limit=20,
-                                now_ts=entry_context_now_ts,
-                                recent_candles=recent_candles,
-                                source_meta=candle_source_meta,
-                                include_investor_source=True,
-                            )
-                            ai_decision = ai_engine.analyze_target(
-                                stock["name"],
-                                ws_data,
-                                recent_ticks,
-                                recent_candles,
-                                prompt_profile="watching",
-                                metadata_extra={
-                                    "record_id": stock.get("id"),
-                                    "sim_record_id": stock.get("sim_record_id"),
-                                    "sim_parent_record_id": stock.get(
-                                        "sim_parent_record_id"
-                                    ),
-                                    "entry_adm_candidate_id": stock.get(
-                                        "entry_adm_candidate_id"
-                                    ),
-                                    "source_event_stage": "watching_analyze_target",
-                                },
-                                candle_context=candle_context,
-                            )
-                            ai_call_completed_at = time.time()
+                            if not scanner_async_enabled:
+                                # The outer WATCHING loop timestamp can be minutes
+                                # old when earlier symbols perform REST/AI work.
+                                entry_context_now_ts = time.time()
+                                candle_context = build_entry_candle_context(
+                                    KIWOOM_TOKEN,
+                                    code,
+                                    ws_data,
+                                    venue=None,
+                                    session=None,
+                                    limit=40,
+                                    model_bar_limit=20,
+                                    now_ts=entry_context_now_ts,
+                                    recent_candles=recent_candles,
+                                    source_meta=candle_source_meta,
+                                    include_investor_source=True,
+                                )
+                                ai_decision = ai_engine.analyze_target(
+                                    stock["name"],
+                                    ws_data,
+                                    recent_ticks,
+                                    recent_candles,
+                                    prompt_profile="watching",
+                                    metadata_extra={
+                                        "record_id": stock.get("id"),
+                                        "sim_record_id": stock.get("sim_record_id"),
+                                        "sim_parent_record_id": stock.get(
+                                            "sim_parent_record_id"
+                                        ),
+                                        "entry_adm_candidate_id": stock.get(
+                                            "entry_adm_candidate_id"
+                                        ),
+                                        "source_event_stage": (
+                                            "watching_analyze_target"
+                                        ),
+                                    },
+                                    candle_context=candle_context,
+                                )
+                                ai_call_completed_at = time.time()
                             ai_decision.update(pre_ai_ws_refresh_fields)
                             ai_call_executed = True
                             _mutate_stock_state(
@@ -62384,6 +62766,9 @@ def handle_watching_state(
     ai_engine=None,
     skip_rising_missed_hook=False,
     scout_upgrade_entry=False,
+    scanner_async_eval_coordinator=None,
+    scanner_async_generation=None,
+    scanner_async_commit_phase=False,
 ):
     """
     [WATCHING 상태] 진입 타점 감시 및 AI 교차 검증
@@ -62716,6 +63101,9 @@ def handle_watching_state(
         "event_bus": event_bus,
         "ai_engine": ai_engine,
         "scout_upgrade_entry": bool(scout_upgrade_entry),
+        "scanner_async_eval_coordinator": scanner_async_eval_coordinator,
+        "scanner_async_generation": scanner_async_generation,
+        "scanner_async_commit_phase": bool(scanner_async_commit_phase),
     }
     config = {
         "MAX_SCALP_SURGE_PCT": MAX_SCALP_SURGE_PCT,
