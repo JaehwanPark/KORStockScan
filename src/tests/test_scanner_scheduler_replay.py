@@ -60,6 +60,80 @@ def test_replay_keeps_exact_generation_and_separates_venues():
     assert replay["venues"]["PREMARKET_KRX_LIKE"]["valid_generation_count"] == 0
 
 
+def test_replay_accepts_canonical_db_poll_recovery_attach():
+    promotion_epoch = datetime(2026, 7, 24, 9, 0, 0, tzinfo=KST).timestamp()
+    events = [
+        _event(
+            "scalping_scanner_runtime_target_attach",
+            "2026-07-24T09:00:01",
+            runtime_target_attach_outcome="db_poll_attached",
+            runtime_target_attach_reason=(
+                "eventbus_attach_missing_recovered_from_database_poll"
+            ),
+            scanner_promotion_id="PROMO-DB-POLL",
+            scanner_promotion_emitted_epoch=promotion_epoch,
+            effective_venue="KRX",
+            venue_resolution=(
+                "consistent_explicit:payload.effective_venue,"
+                "payload.venue,target.effective_venue"
+            ),
+        ),
+        _event(
+            "scalping_scanner_fast_precheck",
+            "2026-07-24T09:00:04",
+            scanner_promotion_id="PROMO-DB-POLL",
+        ),
+    ]
+
+    replay = replay_scanner_events(events)
+
+    assert replay["valid_generation_count"] == 1
+    assert replay["venues"]["KRX"]["attach_to_first_precheck_p95_sec"] == 3.0
+    assert "attach_not_applied" not in replay["exclusions"]
+
+
+def test_replay_prefers_scheduler_action_timestamps_over_async_sink_time():
+    promotion_epoch = datetime(2026, 7, 24, 9, 0, 0, tzinfo=KST).timestamp()
+    attach_epoch = promotion_epoch + 1.1
+    dispatch_epoch = promotion_epoch + 1.4
+    events = [
+        _event(
+            "scalping_scanner_runtime_target_attach",
+            "2026-07-24T09:00:01",
+            runtime_target_attach_outcome="db_poll_attached",
+            scanner_promotion_id="PROMO-ACTION-TIME",
+            scanner_promotion_emitted_epoch=promotion_epoch,
+            effective_venue="KRX",
+            venue_resolution="consistent_explicit:payload.effective_venue",
+        ),
+        _event(
+            "scalping_scanner_scheduler_work_dispatched",
+            "2026-07-24T09:00:30",
+            scanner_promotion_id="PROMO-ACTION-TIME",
+            scheduler_version="scanner_deadline_scheduler_v1",
+            scheduler_action="dispatch",
+            scanner_scheduler_lane="fast_precheck",
+            scanner_scheduler_precheck_phase="initial",
+            scanner_attach_epoch=attach_epoch,
+            scanner_scheduler_dispatched_epoch=dispatch_epoch,
+            effective_venue="KRX",
+        ),
+        _event(
+            "scalping_scanner_fast_precheck",
+            "2026-07-24T09:00:31",
+            scanner_promotion_id="PROMO-ACTION-TIME",
+            fast_precheck_seen_epoch=dispatch_epoch + 0.1,
+        ),
+    ]
+
+    replay = replay_scanner_events(events)
+
+    assert replay["valid_generation_count"] == 1
+    assert replay["venues"]["KRX"]["promotion_to_attach_p95_sec"] == 1.1
+    assert replay["venues"]["KRX"]["attach_to_first_precheck_p95_sec"] == 0.3
+    assert "precheck_without_canonical_attach" not in replay["exclusions"]
+
+
 def test_replay_excludes_missing_venue_and_superseded_generation():
     promotion_epoch = datetime(2026, 7, 24, 9, 0, 0, tzinfo=KST).timestamp()
     events = [

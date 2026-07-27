@@ -91,6 +91,8 @@ from src.engine.scalping.scanner_runtime_scheduler import (
     normalize_scanner_scheduler_venue,
     parse_scanner_scheduler_venues,
 )
+from src.engine.ai.hot_path_ai_dispatcher import HotPathAIDispatcher
+from src.engine.scalping.scanner_async_eval import ScannerAsyncEvalCoordinator
 from src.engine.scalping.entry_ai_gate import (
     entry_buy_decision_allowed,
     evaluate_ai_score_prior,
@@ -292,6 +294,11 @@ _SCANNER_PROMOTION_PENDING_ATTACH_UNTIL: dict[str, float] = {}
 _SCANNER_PROMOTION_PENDING_ATTACH_LOCK = threading.Lock()
 _SCANNER_PROMOTION_INBOX = ScannerPromotionInbox(max_active=40)
 _SCANNER_SCHEDULER_DEFAULT_VENUES = "KRX,PREMARKET_KRX_LIKE,NXT"
+# Stage-2 is not runtime-selectable until every hot-path endpoint named in the
+# scanner_async_eval_commit_v1 contract is migrated and the full-cycle gate is
+# closed.  Keep this code-owned gate fail-closed; an env toggle must not turn a
+# partially migrated dispatcher into live authority.
+_SCANNER_ASYNC_RUNTIME_ACTIVATION_READY = False
 _SCANNER_REST_QUOTE_FALLBACK_DEFER_SEC = 5.0
 _SCANNER_REST_QUOTE_FALLBACK_DYNAMIC_PRESSURE_WINDOW_SEC = 30.0
 _SCANNER_REST_QUOTE_FALLBACK_DYNAMIC_BOOST_TTL_SEC = 45.0
@@ -827,7 +834,17 @@ def _ensure_state_handler_deps():
 
 
 def handle_watching_state(
-    stock, code, ws_data, admin_id, radar=None, ai_engine=None, now_ts=None, now_dt=None
+    stock,
+    code,
+    ws_data,
+    admin_id,
+    radar=None,
+    ai_engine=None,
+    now_ts=None,
+    now_dt=None,
+    scanner_async_eval_coordinator=None,
+    scanner_async_generation=None,
+    scanner_async_commit_phase=False,
 ):
     return sniper_state_handlers.handle_watching_state(
         stock,
@@ -838,6 +855,9 @@ def handle_watching_state(
         ai_engine=ai_engine,
         now_ts=now_ts,
         now_dt=now_dt,
+        scanner_async_eval_coordinator=scanner_async_eval_coordinator,
+        scanner_async_generation=scanner_async_generation,
+        scanner_async_commit_phase=scanner_async_commit_phase,
     )
 
 
@@ -7289,6 +7309,9 @@ def _register_scanner_scheduler_generation(
         or payload.get("added_time"),
         0.0,
     )
+    previous_generation = scheduler.current_generation(
+        target.get("code") or payload.get("code")
+    )
     decision = scheduler.register_generation(
         code=target.get("code") or payload.get("code"),
         promotion_id=payload.get("scanner_promotion_id")
@@ -7320,6 +7343,20 @@ def _register_scanner_scheduler_generation(
         if decision.action == "generation_coalesced"
         else (decision.item.generation if decision.item else None)
     )
+    if (
+        previous_generation is not None
+        and generation is not None
+        and previous_generation.generation_id != generation.generation_id
+    ):
+        async_coordinator = getattr(
+            run_sniper,
+            "scanner_async_eval_coordinator",
+            None,
+        )
+        if isinstance(async_coordinator, ScannerAsyncEvalCoordinator):
+            async_coordinator.invalidate_generation(
+                previous_generation.generation_id
+            )
     if generation is None:
         with ENTRY_LOCK:
             if decision.reason in {
@@ -7844,6 +7881,19 @@ def _scanner_scheduler_reconcile_active_targets(scheduler, targets, *, now_epoch
     }
     stale_codes = scheduler.generation_codes() - active_codes
     for code in sorted(stale_codes):
+        previous_generation = scheduler.current_generation(code)
+        async_coordinator = getattr(
+            run_sniper,
+            "scanner_async_eval_coordinator",
+            None,
+        )
+        if (
+            previous_generation is not None
+            and isinstance(async_coordinator, ScannerAsyncEvalCoordinator)
+        ):
+            async_coordinator.invalidate_generation(
+                previous_generation.generation_id
+            )
         decision = scheduler.invalidate(
             code,
             now_epoch=float(now_epoch),
@@ -8764,13 +8814,13 @@ def run_sniper(is_test_mode=False):
         )
     )
     run_sniper.scanner_scheduler_requested_mode = requested_scheduler_mode
-    # async_v1 is a separate stage gate.  Until its full-cycle deadline_v1
-    # attribution is approved, fail closed to the implemented main-thread
-    # scheduler rather than pretending asynchronous authority is active.
-    if requested_scheduler_mode == "async_v1":
+    if (
+        requested_scheduler_mode == "async_v1"
+        and not _SCANNER_ASYNC_RUNTIME_ACTIVATION_READY
+    ):
         log_error(
-            "[SCANNER_SCHEDULER] async_v1 requested before stage-2 runtime gate; "
-            "falling back to deadline_v1"
+            "[SCANNER_ASYNC] async_v1 requested before full hot-path endpoint "
+            "migration and full-cycle acceptance; falling back to deadline_v1"
         )
         requested_scheduler_mode = "deadline_v1"
     if requested_scheduler_mode != "legacy" and not configured_scheduler_venues:
@@ -8781,6 +8831,8 @@ def run_sniper(is_test_mode=False):
         requested_scheduler_mode = "legacy"
     run_sniper.scanner_scheduler_mode = requested_scheduler_mode
     run_sniper.scanner_scheduler_venues = configured_scheduler_venues
+    run_sniper.hot_path_ai_dispatcher = None
+    run_sniper.scanner_async_eval_coordinator = None
     run_sniper.scanner_runtime_scheduler = ScannerRuntimeScheduler(
         max_active=_scalping_fifo_base_max_active()
     )
@@ -9003,6 +9055,49 @@ def run_sniper(is_test_mode=False):
             f"🧭 AI 라우팅 활성화: role={runtime_role} "
             f"(main_openai={'ON' if runtime_role == 'main' else 'OFF'})"
         )
+
+    if run_sniper.scanner_scheduler_mode == "async_v1":
+        if AI_ENGINE is None or not openai_api_keys:
+            log_error(
+                "[SCANNER_ASYNC] async_v1 requested without a loaded OpenAI "
+                "engine/key; falling back to deadline_v1"
+            )
+            run_sniper.scanner_scheduler_mode = "deadline_v1"
+        else:
+            try:
+                run_sniper.hot_path_ai_dispatcher = HotPathAIDispatcher(
+                    loaded_key_count=len(openai_api_keys),
+                    max_workers=2,
+                )
+                run_sniper.scanner_async_eval_coordinator = (
+                    ScannerAsyncEvalCoordinator(
+                        ai_dispatcher=run_sniper.hot_path_ai_dispatcher,
+                        owns_ai_dispatcher=False,
+                    )
+                )
+                log_info(
+                    "[SCANNER_ASYNC] initialized "
+                    f"workers={run_sniper.hot_path_ai_dispatcher.max_workers} "
+                    "market_prepare_workers=1 startup_only=true"
+                )
+            except Exception as exc:
+                log_error(
+                    "[SCANNER_ASYNC] initialization failed; "
+                    f"falling back to deadline_v1: {exc}"
+                )
+                pending_dispatcher = run_sniper.hot_path_ai_dispatcher
+                if isinstance(pending_dispatcher, HotPathAIDispatcher):
+                    pending_dispatcher.shutdown(wait=False)
+                run_sniper.hot_path_ai_dispatcher = None
+                run_sniper.scanner_async_eval_coordinator = None
+                run_sniper.scanner_scheduler_mode = "deadline_v1"
+    log_info(
+        "[SCANNER_SCHEDULER_RUNTIME_MODE] "
+        f"requested_mode={run_sniper.scanner_scheduler_requested_mode} "
+        f"effective_mode={run_sniper.scanner_scheduler_mode} "
+        f"async_coordinator_ready={bool(run_sniper.scanner_async_eval_coordinator)} "
+        "startup_only=true"
+    )
 
     bind_analysis_dependencies(ai_engine=AI_ENGINE)
     bind_state_dependencies(dual_persona_engine=DUAL_PERSONA_ENGINE)
@@ -9352,6 +9447,96 @@ def run_sniper(is_test_mode=False):
                     targets,
                     now_epoch=time.time(),
                 )
+            async_coordinator = getattr(
+                run_sniper,
+                "scanner_async_eval_coordinator",
+                None,
+            )
+            if (
+                _scanner_scheduler_startup_mode() == "async_v1"
+                and isinstance(async_coordinator, ScannerAsyncEvalCoordinator)
+            ):
+                for async_result in async_coordinator.drain_completed():
+                    async_target = next(
+                        (
+                            target
+                            for target in targets
+                            if str(
+                                (target or {}).get("scanner_generation_id") or ""
+                            ).strip()
+                            == async_result.generation_id
+                            and _is_scanner_watching_target(target)
+                        ),
+                        None,
+                    )
+                    if (
+                        async_target is None
+                        or async_result.status != "completed"
+                        or async_result.observation_only
+                    ):
+                        async_coordinator.discard_completed(
+                            generation_id=async_result.generation_id,
+                            cache_key=async_result.cache_key,
+                        )
+                        _emit_scanner_scheduler_event(
+                            payload={
+                                "code": async_result.code,
+                                "effective_venue": async_result.venue,
+                            },
+                            stage="scalping_scanner_async_result_rejected",
+                            fields={
+                                "metric_role": "runtime_scheduler_latency",
+                                "decision_authority": (
+                                    "scanner_async_observation_only_reject"
+                                ),
+                                "window_policy": (
+                                    "per_scanner_generation_action_timestamps"
+                                ),
+                                "sample_floor": "one_completed_async_result",
+                                "primary_decision_metric": "result_to_commit_sec",
+                                "source_quality_gate": (
+                                    "current_generation_and_watching_required"
+                                ),
+                                "forbidden_uses": (
+                                    "standalone_buy,broker_submit,threshold_mutation,"
+                                    "provider_route_change,order_price_change,"
+                                    "quantity_or_cap_change,broker_guard_bypass"
+                                ),
+                                "runtime_effect": False,
+                                "actual_order_submitted": False,
+                                "broker_order_forbidden": True,
+                                "scanner_generation_id": (
+                                    async_result.generation_id
+                                ),
+                                "scanner_async_cache_key": async_result.cache_key,
+                                "scanner_async_result_status": async_result.status,
+                                "scanner_async_result_observation_only": bool(
+                                    async_result.observation_only
+                                ),
+                                "scanner_async_result_reject_reason": (
+                                    "target_or_generation_missing"
+                                    if async_target is None
+                                    else "result_not_commit_eligible"
+                                ),
+                            },
+                        )
+                        continue
+                    commit_decision = _scanner_scheduler_enqueue_target(
+                        run_sniper.scanner_runtime_scheduler,
+                        async_target,
+                        lane=ScannerLane.COMMIT,
+                        owner="scanner_async_result_ready",
+                        enqueued_epoch=time.time(),
+                        deadline_epoch=async_result.completed_epoch + 2.0,
+                    )
+                    if (
+                        commit_decision is None
+                        or commit_decision.action != "enqueued"
+                    ):
+                        async_coordinator.discard_completed(
+                            generation_id=async_result.generation_id,
+                            cache_key=async_result.cache_key,
+                        )
             queue_context = _runtime_queue_context(targets, now_ts=now_ts)
             active_scanner_watch_codes = {
                 str(t.get("code", "")).strip()[:6]
@@ -10221,6 +10406,21 @@ def run_sniper(is_test_mode=False):
                             now_dt=handler_now_dt,
                             radar=radar,
                             ai_engine=ai_engine,
+                            scanner_async_eval_coordinator=(
+                                getattr(
+                                    run_sniper,
+                                    "scanner_async_eval_coordinator",
+                                    None,
+                                )
+                                if _scanner_scheduler_startup_mode() == "async_v1"
+                                else None
+                            ),
+                            scanner_async_generation=(
+                                scheduler_generation
+                                if _scanner_scheduler_startup_mode() == "async_v1"
+                                else None
+                            ),
+                            scanner_async_commit_phase=False,
                         )
                     except Exception:
                         if scheduler_heavy_item is not None:
@@ -10660,6 +10860,37 @@ def run_sniper(is_test_mode=False):
                                 "missing",
                                 "deadline_expired",
                             }:
+                                if scheduled_lane is ScannerLane.COMMIT:
+                                    async_coordinator = getattr(
+                                        run_sniper,
+                                        "scanner_async_eval_coordinator",
+                                        None,
+                                    )
+                                    async_cache_key = str(
+                                        stock.get("_scanner_async_cache_key") or ""
+                                    ).strip()
+                                    if (
+                                        isinstance(
+                                            async_coordinator,
+                                            ScannerAsyncEvalCoordinator,
+                                        )
+                                        and scheduler_generation is not None
+                                        and async_cache_key
+                                    ):
+                                        async_coordinator.discard_completed(
+                                            generation_id=(
+                                                scheduler_generation.generation_id
+                                            ),
+                                            cache_key=async_cache_key,
+                                        )
+                                    with ENTRY_LOCK:
+                                        for async_key in (
+                                            "_scanner_async_generation_id",
+                                            "_scanner_async_cache_key",
+                                            "_scanner_async_state_version",
+                                            "_scanner_async_submitted_at",
+                                        ):
+                                            stock.pop(async_key, None)
                                 scheduler_claim = (
                                     _scanner_scheduler_refresh_claim_after_expiry(
                                         scheduler,
@@ -10702,6 +10933,146 @@ def run_sniper(is_test_mode=False):
                                     )
                                 continue
                             if scheduler_claim.action != "dispatch":
+                                continue
+                            if scheduled_lane is ScannerLane.COMMIT:
+                                async_coordinator = getattr(
+                                    run_sniper,
+                                    "scanner_async_eval_coordinator",
+                                    None,
+                                )
+                                if not isinstance(
+                                    async_coordinator,
+                                    ScannerAsyncEvalCoordinator,
+                                ):
+                                    _scanner_scheduler_complete_target(
+                                        scheduler,
+                                        stock,
+                                        item=scheduler_claim.item,
+                                        completed_epoch=time.time(),
+                                        outcome="async_coordinator_missing",
+                                    )
+                                    _scanner_scheduler_enqueue_fresh_precheck(
+                                        scheduler,
+                                        stock,
+                                        now_epoch=time.time(),
+                                        owner=(
+                                            "async_commit_coordinator_missing_recheck"
+                                        ),
+                                    )
+                                    continue
+                                try:
+                                    async_cache_key = str(
+                                        stock.get("_scanner_async_cache_key") or ""
+                                    ).strip()
+                                    handle_watching_state(
+                                        stock,
+                                        code,
+                                        ws_data,
+                                        admin_id,
+                                        now_ts=time.time(),
+                                        now_dt=datetime.now(),
+                                        radar=radar,
+                                        ai_engine=ai_engine,
+                                        scanner_async_eval_coordinator=(
+                                            async_coordinator
+                                        ),
+                                        scanner_async_generation=(
+                                            scheduler_generation
+                                        ),
+                                        scanner_async_commit_phase=True,
+                                    )
+                                except Exception:
+                                    _scanner_scheduler_complete_target(
+                                        scheduler,
+                                        stock,
+                                        item=scheduler_claim.item,
+                                        completed_epoch=time.time(),
+                                        outcome="async_commit_exception",
+                                    )
+                                    raise
+                                if async_cache_key:
+                                    unused_result = (
+                                        async_coordinator.discard_completed(
+                                            generation_id=(
+                                                scheduler_generation.generation_id
+                                            ),
+                                            cache_key=async_cache_key,
+                                        )
+                                    )
+                                    if unused_result is not None:
+                                        with ENTRY_LOCK:
+                                            for async_key in (
+                                                "_scanner_async_generation_id",
+                                                "_scanner_async_cache_key",
+                                                "_scanner_async_state_version",
+                                                "_scanner_async_submitted_at",
+                                            ):
+                                                stock.pop(async_key, None)
+                                        _emit_scanner_scheduler_event(
+                                            payload=stock,
+                                            target=stock,
+                                            stage=(
+                                                "scalping_scanner_async_commit_unused"
+                                            ),
+                                            fields={
+                                                "metric_role": (
+                                                    "runtime_scheduler_latency"
+                                                ),
+                                                "decision_authority": (
+                                                    "scanner_main_thread_commit_guard"
+                                                ),
+                                                "window_policy": (
+                                                    "per_scanner_generation_action_timestamps"
+                                                ),
+                                                "sample_floor": (
+                                                    "one_completed_async_result"
+                                                ),
+                                                "primary_decision_metric": (
+                                                    "result_to_commit_sec"
+                                                ),
+                                                "source_quality_gate": (
+                                                    "current_pre_ai_mechanical_gate_required"
+                                                ),
+                                                "forbidden_uses": (
+                                                    "standalone_buy,broker_submit,"
+                                                    "threshold_mutation,provider_route_change,"
+                                                    "order_price_change,quantity_or_cap_change,"
+                                                    "broker_guard_bypass"
+                                                ),
+                                                "scheduler_action": (
+                                                    "async_result_discarded"
+                                                ),
+                                                "scheduler_reason": (
+                                                    "main_thread_pre_ai_gate_no_longer_eligible"
+                                                ),
+                                                "scanner_generation_id": (
+                                                    scheduler_generation.generation_id
+                                                ),
+                                                "scanner_async_cache_key": (
+                                                    async_cache_key
+                                                ),
+                                                "runtime_effect": False,
+                                                "actual_order_submitted": False,
+                                                "broker_order_forbidden": True,
+                                            },
+                                        )
+                                _scanner_scheduler_complete_target(
+                                    scheduler,
+                                    stock,
+                                    item=scheduler_claim.item,
+                                    completed_epoch=time.time(),
+                                    outcome=str(
+                                        stock.get("status")
+                                        or "async_commit_completed"
+                                    ),
+                                )
+                                if _is_scanner_watching_target(stock):
+                                    _scanner_scheduler_enqueue_fresh_precheck(
+                                        scheduler,
+                                        stock,
+                                        now_epoch=time.time(),
+                                        owner="post_async_commit_fresh_recheck",
+                                    )
                                 continue
                             if scheduled_lane is ScannerLane.RECOVERY:
                                 scheduler_recovery_item = scheduler_claim.item
@@ -11509,6 +11880,30 @@ def run_sniper(is_test_mode=False):
 
     finally:
         fast_exit_monitor.stop()
+        async_coordinator = getattr(
+            run_sniper,
+            "scanner_async_eval_coordinator",
+            None,
+        )
+        hot_path_dispatcher = getattr(
+            run_sniper,
+            "hot_path_ai_dispatcher",
+            None,
+        )
+        if isinstance(async_coordinator, ScannerAsyncEvalCoordinator):
+            try:
+                async_coordinator.shutdown(wait=False)
+            except Exception as e:
+                log_error(f"scanner async coordinator stop failed: {e}")
+            finally:
+                run_sniper.scanner_async_eval_coordinator = None
+        if isinstance(hot_path_dispatcher, HotPathAIDispatcher):
+            try:
+                hot_path_dispatcher.shutdown(wait=False)
+            except Exception as e:
+                log_error(f"hot path AI dispatcher stop failed: {e}")
+            finally:
+                run_sniper.hot_path_ai_dispatcher = None
         if WS_MANAGER:
             try:
                 WS_MANAGER.stop()

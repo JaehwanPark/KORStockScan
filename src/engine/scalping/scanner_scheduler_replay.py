@@ -18,9 +18,10 @@ from zoneinfo import ZoneInfo
 
 KST = ZoneInfo("Asia/Seoul")
 VALID_VENUES = frozenset({"KRX", "PREMARKET_KRX_LIKE", "NXT"})
-VALID_ATTACH_OUTCOMES = frozenset({"attached", "refreshed"})
+VALID_ATTACH_OUTCOMES = frozenset({"attached", "refreshed", "db_poll_attached"})
 ATTACH_STAGE = "scalping_scanner_runtime_target_attach"
 PRECHECK_STAGE = "scalping_scanner_fast_precheck"
+SCHEDULER_DISPATCH_STAGE = "scalping_scanner_scheduler_work_dispatched"
 DEFAULT_BASELINE = datetime.fromisoformat("2026-06-04T14:29:09+09:00")
 
 
@@ -97,12 +98,58 @@ def _canonical_attach(event: dict[str, Any]) -> tuple[dict[str, Any] | None, str
     }, "valid_attach"
 
 
+def _canonical_initial_precheck_dispatch(
+    event: dict[str, Any],
+) -> tuple[dict[str, Any] | None, str]:
+    fields = event.get("fields")
+    if not isinstance(fields, dict):
+        return None, "scheduler_dispatch_fields_missing"
+    if (
+        str(fields.get("scheduler_version") or "").strip()
+        != "scanner_deadline_scheduler_v1"
+        or str(fields.get("scheduler_action") or "").strip() != "dispatch"
+        or str(fields.get("scanner_scheduler_lane") or "").strip()
+        != "fast_precheck"
+        or str(fields.get("scanner_scheduler_precheck_phase") or "").strip()
+        != "initial"
+    ):
+        return None, "not_initial_deadline_precheck_dispatch"
+    code = str(event.get("stock_code") or "").strip()[:6]
+    promotion_id = str(fields.get("scanner_promotion_id") or "").strip()
+    venue = str(fields.get("effective_venue") or "").strip().upper()
+    attach_epoch = _float_or_none(fields.get("scanner_attach_epoch"))
+    dispatch_epoch = _float_or_none(
+        fields.get("scanner_scheduler_dispatched_epoch")
+    )
+    if dispatch_epoch is None:
+        dispatch_epoch = _float_or_none(fields.get("scanner_scheduler_action_epoch"))
+    if venue not in VALID_VENUES:
+        return None, "scheduler_dispatch_explicit_venue_missing"
+    if (
+        not code
+        or not promotion_id
+        or promotion_id.startswith("not_")
+        or attach_epoch is None
+        or dispatch_epoch is None
+        or dispatch_epoch < attach_epoch
+    ):
+        return None, "scheduler_dispatch_action_unrestorable"
+    return {
+        "code": code,
+        "promotion_id": promotion_id,
+        "venue": venue,
+        "attach_epoch": attach_epoch,
+        "dispatch_epoch": dispatch_epoch,
+    }, "valid_initial_precheck_dispatch"
+
+
 def replay_scanner_events(
     events: Iterable[dict[str, Any]],
     *,
     baseline_epoch: float = DEFAULT_BASELINE.timestamp(),
 ) -> dict[str, Any]:
     pending: dict[tuple[str, str], dict[str, Any]] = {}
+    sampled_keys: set[tuple[str, str]] = set()
     samples: list[ScannerReplaySample] = []
     exclusions: dict[str, int] = {}
 
@@ -133,6 +180,50 @@ def replay_scanner_events(
                 )
             pending[(code, attach["promotion_id"])] = attach
             continue
+        if stage == SCHEDULER_DISPATCH_STAGE:
+            dispatch, reason = _canonical_initial_precheck_dispatch(event)
+            if dispatch is None:
+                if reason != "not_initial_deadline_precheck_dispatch":
+                    exclusions[reason] = exclusions.get(reason, 0) + 1
+                continue
+            key = (dispatch["code"], dispatch["promotion_id"])
+            if key in sampled_keys:
+                continue
+            attach = pending.get(key)
+            if attach is None:
+                exclusions["scheduler_dispatch_without_canonical_attach"] = (
+                    exclusions.get("scheduler_dispatch_without_canonical_attach", 0)
+                    + 1
+                )
+                continue
+            if dispatch["venue"] != attach["venue"]:
+                pending.pop(key, None)
+                exclusions["scheduler_dispatch_venue_conflict"] = (
+                    exclusions.get("scheduler_dispatch_venue_conflict", 0) + 1
+                )
+                continue
+            if dispatch["attach_epoch"] < attach["promotion_epoch"]:
+                pending.pop(key, None)
+                exclusions["scheduler_dispatch_attach_before_promotion"] = (
+                    exclusions.get(
+                        "scheduler_dispatch_attach_before_promotion", 0
+                    )
+                    + 1
+                )
+                continue
+            samples.append(
+                ScannerReplaySample(
+                    code=attach["code"],
+                    promotion_id=attach["promotion_id"],
+                    venue=attach["venue"],
+                    promotion_epoch=attach["promotion_epoch"],
+                    attach_epoch=dispatch["attach_epoch"],
+                    first_precheck_epoch=dispatch["dispatch_epoch"],
+                )
+            )
+            sampled_keys.add(key)
+            pending.pop(key, None)
+            continue
         if stage != PRECHECK_STAGE:
             continue
         fields = event.get("fields")
@@ -144,6 +235,8 @@ def replay_scanner_events(
         code = str(event.get("stock_code") or "").strip()[:6]
         promotion_id = str(fields.get("scanner_promotion_id") or "").strip()
         key = (code, promotion_id)
+        if key in sampled_keys:
+            continue
         attach = pending.get(key)
         if attach is None:
             exclusions["precheck_without_canonical_attach"] = (
@@ -172,6 +265,7 @@ def replay_scanner_events(
                 first_precheck_epoch=event_epoch,
             )
         )
+        sampled_keys.add(key)
         pending.pop(key, None)
 
     if pending:
