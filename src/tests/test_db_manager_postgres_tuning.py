@@ -132,6 +132,11 @@ def test_get_active_targets_filters_only_swing_watching_by_default(monkeypatch):
                 "strategy": "SCALPING",
                 "position_tag": "SCANNER",
                 "prob": 0.7,
+                "current_price_observed": float("nan"),
+                "price_delta_since_first_seen_pct": float("nan"),
+                "comparable_flu_delta_since_first_seen": float("nan"),
+                "cntr_str_available": None,
+                "cntr_str": float("nan"),
             },
         ]
     )
@@ -140,5 +145,11 @@ def test_get_active_targets_filters_only_swing_watching_by_default(monkeypatch):
 
     targets = db.get_active_targets()
     codes = {target["code"] for target in targets}
+    scanner_target = next(target for target in targets if target["code"] == "123456")
 
     assert codes == {"000660", "123456"}
+    assert scanner_target["current_price_observed"] is None
+    assert scanner_target["price_delta_since_first_seen_pct"] is None
+    assert scanner_target["comparable_flu_delta_since_first_seen"] is None
+    assert scanner_target["cntr_str_available"] is None
+    assert scanner_target["cntr_str"] is None

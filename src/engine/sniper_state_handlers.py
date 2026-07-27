@@ -719,6 +719,39 @@ def _scanner_generation_matches_promotion(stock: dict[str, Any] | None) -> bool:
     return promotion_id in generation_id.split(":")
 
 
+def _persist_hydrated_scanner_promotion_context(
+    stock: dict[str, Any], hydrated: dict[str, Any]
+) -> None:
+    record_id = _safe_int(stock.get("id"), 0)
+    if DB is None or record_id <= 0 or not hasattr(DB, "get_session"):
+        return
+    try:
+        with DB.get_session() as session:
+            record = (
+                session.query(RecommendationHistory)
+                .filter(RecommendationHistory.id == record_id)
+                .first()
+            )
+            if record is None:
+                return
+            record.scanner_current_price_observed = _safe_float(
+                hydrated.get("current_price_observed"), 0.0
+            )
+            record.scanner_price_delta_since_first_seen_pct = _safe_float(
+                hydrated.get("price_delta_since_first_seen_pct"), 0.0
+            )
+            record.scanner_comparable_flu_delta_since_first_seen = _safe_float(
+                hydrated.get("comparable_flu_delta_since_first_seen"), 0.0
+            )
+            record.scanner_cntr_str_available = bool(hydrated.get("cntr_str_available"))
+            record.scanner_cntr_str = _safe_float(hydrated.get("cntr_str"), 0.0)
+    except Exception as exc:
+        log_error(
+            "[SCANNER_PROMOTION_HYDRATION] "
+            f"persist failed record_id={record_id}: {exc}"
+        )
+
+
 def _load_scanner_promotion_context_events(
     target_date: str,
 ) -> dict[str, list[dict[str, Any]]]:
@@ -927,6 +960,7 @@ def _hydrate_scanner_promotion_runtime_context(
         ):
             hydrated["entry_armed_at_epoch"] = emitted_epoch
         stock.update(hydrated)
+        _persist_hydrated_scanner_promotion_context(stock, hydrated)
         return hydrated
     return {}
 

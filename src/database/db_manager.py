@@ -199,6 +199,31 @@ class DBManager:
                 )
                 conn.execute(
                     text(
+                        "ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS scanner_current_price_observed DOUBLE PRECISION;"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS scanner_price_delta_since_first_seen_pct DOUBLE PRECISION;"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS scanner_comparable_flu_delta_since_first_seen DOUBLE PRECISION;"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS scanner_cntr_str_available BOOLEAN;"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS scanner_cntr_str DOUBLE PRECISION;"
+                    )
+                )
+                conn.execute(
+                    text(
                         "ALTER TABLE recommendation_history "
                         "ALTER COLUMN buy_price TYPE DOUBLE PRECISION USING buy_price::double precision;"
                     )
@@ -729,6 +754,11 @@ class DBManager:
                         scanner_promotion_emitted_epoch,
                         scanner_source_signature as source_signature,
                         scanner_watch_budget_owner,
+                        scanner_current_price_observed as current_price_observed,
+                        scanner_price_delta_since_first_seen_pct as price_delta_since_first_seen_pct,
+                        scanner_comparable_flu_delta_since_first_seen as comparable_flu_delta_since_first_seen,
+                        scanner_cntr_str_available as cntr_str_available,
+                        scanner_cntr_str as cntr_str,
                         (
                             SELECT dsq.marcap
                             FROM daily_stock_quotes dsq
@@ -854,6 +884,16 @@ class DBManager:
                     return False
                 return default
 
+            def _safe_optional_float(value):
+                if value is None or pd.isna(value):
+                    return None
+                return _safe_float(value)
+
+            def _safe_optional_bool(value):
+                if value is None or pd.isna(value):
+                    return None
+                return _safe_bool(value)
+
             for t in targets:
                 t["prob"] = _safe_float(t.get("prob"), default_prob)
                 t["buy_qty"] = _safe_int(t.get("buy_qty"))
@@ -890,6 +930,16 @@ class DBManager:
                 t["hard_stop_price"] = _safe_float(t.get("hard_stop_price"))
                 t["trailing_stop_price"] = _safe_float(t.get("trailing_stop_price"))
                 t["entry_armed_at_epoch"] = _safe_float(t.get("entry_armed_at_epoch"))
+                for key in (
+                    "current_price_observed",
+                    "price_delta_since_first_seen_pct",
+                    "comparable_flu_delta_since_first_seen",
+                    "cntr_str",
+                ):
+                    t[key] = _safe_optional_float(t.get(key))
+                t["cntr_str_available"] = _safe_optional_bool(
+                    t.get("cntr_str_available")
+                )
 
             return targets
 

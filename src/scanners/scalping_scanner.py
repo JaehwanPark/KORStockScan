@@ -2939,6 +2939,19 @@ def _scanner_runtime_target_payload(
 def _persist_scanner_promotion_provenance(record, payload):
     """Persist the immutable scanner handoff required for safe boot hydration."""
     payload = payload or {}
+
+    def optional_float(key):
+        value = payload.get(key)
+        return _safe_float(value) if value not in (None, "") else None
+
+    def optional_bool(key):
+        value = payload.get(key)
+        if value in (None, ""):
+            return None
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(value)
+
     record.effective_venue = str(payload.get("effective_venue") or "").strip().upper()
     record.venue_resolution = str(payload.get("venue_resolution") or "").strip()
     record.market_session_bucket = str(
@@ -2955,6 +2968,15 @@ def _persist_scanner_promotion_provenance(record, payload):
     record.scanner_watch_budget_owner = str(
         payload.get("scanner_watch_budget_owner") or ""
     ).strip()
+    record.scanner_current_price_observed = optional_float("current_price_observed")
+    record.scanner_price_delta_since_first_seen_pct = optional_float(
+        "price_delta_since_first_seen_pct"
+    )
+    record.scanner_comparable_flu_delta_since_first_seen = optional_float(
+        "comparable_flu_delta_since_first_seen"
+    )
+    record.scanner_cntr_str_available = optional_bool("cntr_str_available")
+    record.scanner_cntr_str = optional_float("cntr_str")
 
 
 def promote_candidates(

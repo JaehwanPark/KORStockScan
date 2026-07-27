@@ -1,5 +1,6 @@
 import json
 import time
+from contextlib import contextmanager
 from dataclasses import replace
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -464,6 +465,63 @@ def test_restored_watching_generation_mismatch_still_hydrates_history(monkeypatc
 
     assert hydrated == {}
     assert history_calls == ["2026-07-27"]
+
+
+def test_historical_scanner_hydration_persists_boot_context(monkeypatch):
+    record = SimpleNamespace()
+
+    class Session:
+        def query(self, _model):
+            return self
+
+        def filter(self, _clause):
+            return self
+
+        def first(self):
+            return record
+
+    class DB:
+        @contextmanager
+        def get_session(self):
+            yield Session()
+
+    monkeypatch.setattr(state_handlers, "DB", DB())
+    monkeypatch.setattr(
+        state_handlers,
+        "_load_scanner_promotion_context_events",
+        lambda _target_date: {
+            "035420": [
+                {
+                    "emitted_epoch": 1_785_145_065.744,
+                    "promotion_epoch": 1_785_145_065.744,
+                    "fields": {
+                        "scanner_promotion_id": "SCANPROM-035420-1785145065744",
+                        "scanner_promotion_reason": "price_jump_start_acceleration",
+                        "source_signature": "PRICE_JUMP_START",
+                        "current_price_observed": "227500",
+                        "price_delta_since_first_seen_pct": "1.25",
+                        "comparable_flu_delta_since_first_seen": "1.10",
+                        "cntr_str_available": True,
+                        "cntr_str": "123.4",
+                    },
+                }
+            ]
+        },
+    )
+    stock = {
+        "id": 24227,
+        "code": "035420",
+        "date": "2026-07-27",
+        "entry_armed_at_epoch": 1_785_145_065.744,
+    }
+
+    state_handlers._hydrate_scanner_promotion_runtime_context(stock)
+
+    assert record.scanner_current_price_observed == 227_500.0
+    assert record.scanner_price_delta_since_first_seen_pct == 1.25
+    assert record.scanner_comparable_flu_delta_since_first_seen == 1.10
+    assert record.scanner_cntr_str_available is True
+    assert record.scanner_cntr_str == 123.4
 
 
 def test_early_accel_strong_bundle_pre_recheck_fields_are_contract_values(monkeypatch):
