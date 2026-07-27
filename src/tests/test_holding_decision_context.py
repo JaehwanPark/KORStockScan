@@ -5,6 +5,7 @@ from zoneinfo import ZoneInfo
 
 from src.engine import sniper_state_handlers as state_handlers
 from src.engine.scalping import ai_market_snapshot as snapshot_module
+from src.engine.scalping import holding_decision_context as holding_context_module
 from src.engine.scalping.holding_decision_context import (
     OBSERVATION_CONTRACT,
     build_holding_decision_context,
@@ -645,6 +646,79 @@ def test_runtime_axes_default_off_and_stage_disjoint(monkeypatch):
     assert not holding_decision_context_enabled(
         venue="KRX",
         session="krx_regular",
+        decision_kind="holding_flow",
+        now_ts=now,
+    )
+
+
+def test_runtime_keeps_bounded_nxt_operator_lock_after_activation_date(monkeypatch):
+    _enable(monkeypatch)
+    monkeypatch.setenv("KORSTOCKSCAN_HOLDING_DECISION_CONTEXT_KRX_ENABLED", "false")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_HOLDING_DECISION_CONTEXT_PREMARKET_ENABLED", "false"
+    )
+    monkeypatch.setattr(
+        holding_context_module,
+        "promotion_activation_state",
+        lambda _now: {
+            "active": False,
+            "activation_source": "promotion_artifact_required_missing_or_invalid",
+            "promotion_artifact_required": True,
+        },
+    )
+    now = datetime(2026, 7, 28, 17, 0, tzinfo=KST)
+
+    assert holding_decision_context_enabled(
+        venue="NXT",
+        session="nxt_aftermarket",
+        decision_kind="holding_score",
+        now_ts=now,
+    )
+    assert not holding_decision_context_enabled(
+        venue="KRX",
+        session="krx_regular",
+        decision_kind="holding_score",
+        now_ts=now,
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_HOLDING_DECISION_CONTEXT_ACTIVE_DATE", "2026-07-29"
+    )
+    assert not holding_decision_context_enabled(
+        venue="NXT",
+        session="nxt_aftermarket",
+        decision_kind="holding_score",
+        now_ts=now,
+    )
+
+
+def test_runtime_limits_invalid_full_market_promotion_to_bounded_nxt(monkeypatch):
+    _enable(monkeypatch)
+    monkeypatch.setattr(
+        holding_context_module,
+        "promotion_activation_state",
+        lambda _now: {
+            "active": False,
+            "activation_source": "promotion_artifact_required_missing_or_invalid",
+            "promotion_artifact_required": True,
+        },
+    )
+
+    now = datetime(2026, 7, 28, 17, 0, tzinfo=KST)
+    assert holding_decision_context_enabled(
+        venue="NXT",
+        session="nxt_aftermarket",
+        decision_kind="holding_flow",
+        now_ts=now,
+    )
+    assert not holding_decision_context_enabled(
+        venue="KRX",
+        session="krx_regular",
+        decision_kind="holding_flow",
+        now_ts=now,
+    )
+    assert not holding_decision_context_enabled(
+        venue="PREMARKET_KRX_LIKE",
+        session="premarket_krx_like",
         decision_kind="holding_flow",
         now_ts=now,
     )

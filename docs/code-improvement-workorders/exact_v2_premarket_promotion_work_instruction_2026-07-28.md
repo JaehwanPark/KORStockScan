@@ -18,12 +18,14 @@
 
 ## 현재 상태와 출발점
 
-- `2026-07-27 15:46:22 KST` clean 재기동 프로세스 PID `342799`에서 loaded commit `0dea2b31`, `source_dirty=false`, runtime-env verify=`pass`, `main_openai=ON`, holding decision/score/flow context env=`true`가 확인됐다.
-- exact context capture 보완 커밋 `c016ab2b`는 위 프로세스에 포함돼 있다. live 승격 전에도 entry/holding 자연 호출의 exact source/model/call-input 후보를 observation-only artifact로 남기되, runtime context나 provider 호출 권한으로 사용하지 않는다.
-- `2026-07-27` promotion artifact는 `decision=blocked_provider_or_schema`, `runtime_activation=false`다. 필수 endpoint exact request와 필수 symbol/route source·payload match가 충족되지 않았으므로 전면 승격되지 않았다.
-- clean 재기동 뒤 자연 holding review가 아직 발생하지 않아 holding exact candidate는 `runtime_reflected_pending_natural_holding_sample`이다.
-- promotion 이전 자연 호출과 `baseline_v1` 호출은 exact_v2 Control/Baseline primary cohort로 사용하지 않는다.
-- 작업 시작 시 프로세스 PID, loaded commit, source dirty 여부, runtime env, 최신 promotion/review artifact를 다시 읽고 위 상태와 달라진 부분을 새 provenance로 교체한다.
+- historical evidence: `2026-07-27 15:46:22 KST` PID `342799`, commit `0dea2b31`, `source_dirty=false` runtime에 exact capture 보완 `c016ab2b`가 반영됐다. 이 기록은 현재 runtime authority가 아니다.
+- current startup evidence: `2026-07-28 07:55:02 KST` PID `712183`은 commit `436b98e5e721b7ddeae18e42d4f8a98a15522194`를 로드했고 scanner scheduler `async_v1` 초기화까지 통과했다. 그러나 `KORSTOCKSCAN_RUNTIME_SOURCE_DIRTY=true`이므로 clean runtime acceptance 또는 PREMARKET promotion evidence로 사용할 수 없다.
+- current effective env는 holding decision/score/flow/overnight cohort keys를 모두 `true`로 로드했지만, `input_preflight_mode=baseline_v1`이다. `2026-07-28` exact validation, promotion, first-observation, decision request/trace artifact는 아직 없다.
+- 실제 현재 코드·PID env 재현에서 promotion activation은 `promotion_artifact_required_missing_or_invalid`이며 `promotion_artifact_required=true`다. 따라서 `holding_score`와 `holding_flow`의 effective context는 `NXT=true`, `KRX=false`, `PREMARKET_KRX_LIKE=false`다. 이는 full-market PASS가 아니라 failed/missing promotion artifact에서 기존 NXT holding context만 보존하는 bounded fallback이다.
+- 최신 promotion artifact는 `2026-07-27`의 `decision=blocked_provider_or_schema`, `runtime_activation=false`다. 필수 endpoint exact request와 필수 symbol/route source·payload match가 충족되지 않았으므로 전면 승격되지 않았다.
+- current decision: `blocked_review_or_env`. 이 문서는 현 PID에 대해 promotion validation-only 호출, runtime activation, first-observation hook, exact_v2 Control/Baseline 수집을 승인하지 않는다.
+- clean review·commit·graceful restart로 `source_dirty=false` PID와 runtime-env handoff가 확인된 경우에만, 같은 날 PREMARKET 창에서 이 문서의 재검증을 재개한다. 이 문서 자체는 restart를 실행하거나 승인하지 않는다.
+- promotion 이전 자연 호출, compact forensic payload, `baseline_v1` 호출은 exact_v2 Control/Baseline primary cohort로 사용하지 않는다.
 
 ## 1. PREMARKET promotion 재검증
 
@@ -32,7 +34,7 @@
 - 검증 실행은 `2026-07-28 08:20~08:40 KST`에만 한다. 창 밖에서는 artifact와 기존 계측을 읽기만 하고 promotion transaction을 실행하지 않는다.
 - 코드 변경이 남아 있으면 `$korstockscan-review-gate`의 `review -> 결함 보완 -> 재리뷰 -> targeted validation`을 finding 0건까지 닫는다.
 - 관련 targeted tests, compile, `git diff --check`, runtime env/rollback mapping, first-observation hook가 모두 PASS여야 한다.
-- 현재 프로세스가 검증 대상 코드를 실제로 로드하지 않았거나 source가 dirty면 `blocked_review_or_env`로 닫는다. 이 작업지시만으로 bot restart를 수행하지 않는다.
+- 현재 프로세스가 검증 대상 코드를 실제로 로드하지 않았거나 source가 dirty면 `blocked_review_or_env`로 닫는다. `2026-07-28 07:55` PID `712183`은 이 조건으로 이미 차단됐다. 이 작업지시만으로 bot restart를 수행하지 않는다.
 
 ### 1.2 검증 표본과 호출 경계
 

@@ -7099,6 +7099,26 @@ class GPTSniperEngine:
             "ai_trace_best_ask": best_ask,
         }
 
+    @staticmethod
+    def _holding_snapshot_context(
+        holding_context,
+        forensic_context_candidate,
+    ):
+        """Return the exact holding snapshot used for preflight and provenance.
+
+        A disabled pre-promotion context is deliberately excluded from the live
+        prompt, but it can still carry the exact, fresh snapshot of the legacy
+        holding inputs.  Keep these two concerns separate: the snapshot may
+        authorize the existing prompt/provider call, while only an enabled
+        context may add the multi-timeframe holding payload to that prompt.
+        """
+
+        if isinstance(holding_context, dict) and holding_context:
+            return holding_context
+        if isinstance(forensic_context_candidate, dict) and forensic_context_candidate:
+            return forensic_context_candidate
+        return None
+
     def _normalize_holding_score_result(self, result, *, source_quality=None):
         payload = dict(result or {}) if isinstance(result, dict) else {}
         raw_action = str(payload.get("action", "HOLD") or "HOLD").upper().strip()
@@ -7219,11 +7239,15 @@ class GPTSniperEngine:
         forensic_context_candidate=None,
     ):
         started = time.perf_counter()
+        snapshot_context = self._holding_snapshot_context(
+            holding_context,
+            forensic_context_candidate,
+        )
         trace_context_fields = self._holding_trace_context_fields(
             stock_code=stock_code,
             ws_data=ws_data,
             position_ctx=position_ctx,
-            holding_context=holding_context,
+            holding_context=snapshot_context,
         )
         input_contract_fields = {
             "ai_input_schema": "holding_score_v2",
@@ -7231,15 +7255,7 @@ class GPTSniperEngine:
             "ai_input_build_fallback": "not_built",
             **trace_context_fields,
         }
-        capture_context = (
-            holding_context
-            if isinstance(holding_context, dict) and holding_context
-            else (
-                forensic_context_candidate
-                if isinstance(forensic_context_candidate, dict)
-                else None
-            )
-        )
+        capture_context = snapshot_context
         if isinstance(capture_context, dict) and capture_context:
             input_contract_fields.update(
                 self._capture_prepromotion_context_candidate(
@@ -7257,7 +7273,7 @@ class GPTSniperEngine:
                     metadata=metadata_extra,
                 )
             )
-        holding_preflight = ai_input_preflight(holding_context)
+        holding_preflight = ai_input_preflight(snapshot_context)
         if runtime_preflight_required() and not bool(
             holding_preflight.get("allowed", False)
         ):
@@ -7271,7 +7287,7 @@ class GPTSniperEngine:
                 {
                     "provider_called": False,
                     "holding_context_provider_expected": "openai",
-                    **holding_decision_context_log_fields(holding_context),
+                    **holding_decision_context_log_fields(snapshot_context),
                 }
             )
             return payload
@@ -7301,7 +7317,7 @@ class GPTSniperEngine:
                     "ai_retry_attempted": bool(lock_wait_ms > 0),
                     "ai_retry_result": "lock_contention_retry_exhausted",
                     "holding_context_provider_expected": "openai",
-                    **holding_decision_context_log_fields(holding_context),
+                    **holding_decision_context_log_fields(snapshot_context),
                 }
             )
             return payload
@@ -7317,7 +7333,7 @@ class GPTSniperEngine:
                 payload.update(
                     {
                         "holding_context_provider_expected": "openai",
-                        **holding_decision_context_log_fields(holding_context),
+                        **holding_decision_context_log_fields(snapshot_context),
                     }
                 )
                 return payload
@@ -7435,7 +7451,7 @@ class GPTSniperEngine:
                         "source_quality_reason", "-"
                     ),
                     "holding_context_provider_expected": "openai",
-                    **holding_decision_context_log_fields(holding_context),
+                    **holding_decision_context_log_fields(snapshot_context),
                 }
             )
             self._mark_successful_ai_call(update_last_call_time=False)
@@ -7491,7 +7507,7 @@ class GPTSniperEngine:
             payload.update(
                 {
                     "holding_context_provider_expected": "openai",
-                    **holding_decision_context_log_fields(holding_context),
+                    **holding_decision_context_log_fields(snapshot_context),
                 }
             )
             return payload
@@ -7810,11 +7826,15 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
         forensic_context_candidate=None,
     ):
         started = time.perf_counter()
+        snapshot_context = self._holding_snapshot_context(
+            holding_context,
+            forensic_context_candidate,
+        )
         trace_context_fields = self._holding_trace_context_fields(
             stock_code=stock_code,
             ws_data=ws_data,
             position_ctx=position_ctx,
-            holding_context=holding_context,
+            holding_context=snapshot_context,
         )
         input_contract_fields = {
             "ai_input_schema": (
@@ -7838,15 +7858,7 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
             "ai_input_build_fallback": "not_built",
             **trace_context_fields,
         }
-        capture_context = (
-            holding_context
-            if isinstance(holding_context, dict) and holding_context
-            else (
-                forensic_context_candidate
-                if isinstance(forensic_context_candidate, dict)
-                else None
-            )
-        )
+        capture_context = snapshot_context
         if isinstance(capture_context, dict) and capture_context:
             input_contract_fields.update(
                 self._capture_prepromotion_context_candidate(
@@ -7866,7 +7878,7 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
                     metadata=metadata_extra,
                 )
             )
-        holding_preflight = ai_input_preflight(holding_context)
+        holding_preflight = ai_input_preflight(snapshot_context)
         if runtime_preflight_required() and not bool(
             holding_preflight.get("allowed", False)
         ):
@@ -7883,7 +7895,7 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
                     "holding_context_provider_expected": (
                         "bedrock_nova_lite_v2_primary_openai_failback"
                     ),
-                    **holding_decision_context_log_fields(holding_context),
+                    **holding_decision_context_log_fields(snapshot_context),
                 },
                 prompt_type="holding_exit_flow",
                 prompt_version="flow_v1",
@@ -7910,7 +7922,7 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
                         "bedrock_nova_lite_v2_primary_openai_failback"
                     ),
                     "provider_called": False,
-                    **holding_decision_context_log_fields(holding_context),
+                    **holding_decision_context_log_fields(snapshot_context),
                 },
                 prompt_type="holding_exit_flow",
                 prompt_version="flow_v1",
@@ -7939,7 +7951,7 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
                             "bedrock_nova_lite_v2_primary_openai_failback"
                         ),
                         "provider_called": False,
-                        **holding_decision_context_log_fields(holding_context),
+                        **holding_decision_context_log_fields(snapshot_context),
                     },
                     prompt_type="holding_exit_flow",
                     prompt_version="flow_v1",
@@ -8077,7 +8089,7 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
             normalized["holding_context_provider_expected"] = (
                 "bedrock_nova_lite_v2_primary_openai_failback"
             )
-            normalized.update(holding_decision_context_log_fields(holding_context))
+            normalized.update(holding_decision_context_log_fields(snapshot_context))
             self._mark_successful_ai_call(update_last_call_time=False)
             return self._annotate_analysis_result(
                 normalized,
@@ -8116,7 +8128,7 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
                         "bedrock_nova_lite_v2_primary_openai_failback"
                     ),
                     "provider_called": True,
-                    **holding_decision_context_log_fields(holding_context),
+                    **holding_decision_context_log_fields(snapshot_context),
                 },
                 prompt_type="holding_exit_flow",
                 prompt_version="flow_v1",

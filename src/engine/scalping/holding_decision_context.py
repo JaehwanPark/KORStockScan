@@ -150,16 +150,25 @@ def holding_decision_context_enabled(
     activation = promotion_activation_state(now)
     if activation.get("activation_source") == "atomic_promotion_artifact":
         return True
-    if activation.get("promotion_artifact_required"):
-        return False
     if not _env_bool("KORSTOCKSCAN_HOLDING_DECISION_CONTEXT_ENABLED", False):
         return False
     active_date = str(
         os.getenv("KORSTOCKSCAN_HOLDING_DECISION_CONTEXT_ACTIVE_DATE", "")
     ).strip()
-    if active_date and now.date().isoformat() != active_date:
-        return False
+    if active_date:
+        try:
+            activation_date = datetime.strptime(active_date, "%Y-%m-%d").date()
+        except ValueError:
+            return False
+        if now.date() < activation_date:
+            return False
     cohort = _cohort(venue, session)
+    if activation.get("promotion_artifact_required"):
+        # A failed atomic promotion must not leak the requested full-market
+        # overlay into KRX/PREMARKET.  Keep the previously approved NXT
+        # holding context available as the bounded fallback.
+        if cohort != "NXT":
+            return False
     if not _env_bool(f"KORSTOCKSCAN_HOLDING_DECISION_CONTEXT_{cohort}_ENABLED", False):
         return False
     stage = (

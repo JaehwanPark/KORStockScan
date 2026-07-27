@@ -81,6 +81,48 @@ def _blocked_ai_context():
     }
 
 
+def _allowed_forensic_holding_context():
+    """Exact snapshot for a disabled pre-promotion holding context."""
+
+    return {
+        "schema": "holding_decision_context_v1",
+        "enabled": False,
+        "forensic_context_only": True,
+        "decision_kind": "holding_score",
+        "venue": "KRX",
+        "session": "krx_regular",
+        "microstructure": {
+            "bbo_fresh": True,
+            "best_bid": 10_040,
+            "best_ask": 10_060,
+        },
+        "ai_market_snapshot_v1": {
+            "schema": "ai_market_snapshot_v1",
+            "snapshot_id": "aims-forensic-holding",
+            "captured_at": "2026-07-28T08:17:11+09:00",
+            "decision_stage": "holding_score",
+            "effective_venue": "KRX",
+            "session_bucket": "krx_regular",
+            "ai_input_preflight_v1": {
+                "schema": "ai_input_preflight_v1",
+                "allowed": True,
+                "source_allowed": True,
+                "status": "pass",
+                "blockers": [],
+                "missing_sources": [],
+                "venue_consistent": True,
+                "position_reconciled": True,
+                "max_source_skew_ms": 0,
+            },
+        },
+        "source_quality": {
+            "status": "disabled",
+            "hold_defer_allowed": False,
+            "blockers": [],
+        },
+    }
+
+
 def test_ai_input_contract_records_payload_identity_and_route_dimensions():
     engine = _build_engine()
     payload = json.dumps(
@@ -461,6 +503,109 @@ def test_holding_score_preflight_block_trace_keeps_snapshot_symbol_and_bid(
     assert trace_payload["ai_trace_reference_price"] == 10_040
     assert trace_payload["ai_trace_best_bid"] == 10_040
     assert trace_payload["ai_trace_best_ask"] == 10_060
+
+
+def test_holding_score_uses_forensic_snapshot_for_preflight_not_live_prompt(
+    monkeypatch,
+):
+    engine = _build_engine()
+    provider_calls = []
+    traces = []
+    monkeypatch.setenv("KORSTOCKSCAN_AI_INPUT_PREFLIGHT_REQUIRED", "true")
+    monkeypatch.setattr(
+        engine,
+        "_capture_prepromotion_context_candidate",
+        lambda **_kwargs: {},
+    )
+    monkeypatch.setattr(
+        ai_engine_openai_module,
+        "record_ai_decision_trace",
+        lambda payload, **_kwargs: (
+            traces.append(dict(payload)) or {"ai_decision_trace_id": "trace-live"}
+        ),
+    )
+
+    def _provider(*args, **kwargs):
+        provider_calls.append((args, kwargs))
+        return {
+            "action": "HOLD",
+            "score": 72,
+            "confidence": 78,
+            "position_state": "stable",
+            "score_basis": "fresh_legacy_holding_inputs",
+            "risk_factors": [],
+            "support_factors": ["fresh_quote"],
+            "data_quality": "fresh",
+            "reason": "fresh legacy holding inputs",
+        }
+
+    monkeypatch.setattr(engine, "_call_openai_safe", _provider)
+
+    result = engine.evaluate_scalping_holding_score(
+        "테스트",
+        "005930",
+        {"curr": 10_050, "best_bid": 10_040, "best_ask": 10_060},
+        [{"price": 10_050, "volume": 17}],
+        [{"현재가": 10_050, "거래량": 1000}],
+        {"buy_price": 10_000, "buy_qty": 1},
+        forensic_context_candidate=_allowed_forensic_holding_context(),
+    )
+
+    assert len(provider_calls) == 1
+    live_payload = json.loads(provider_calls[0][0][1])
+    assert live_payload["holding_decision_context"] == {}
+    assert live_payload["ai_input_semantics"]["canonical_candle_owner"] == (
+        "legacy_recent_candles_fallback"
+    )
+    assert result["ai_result_source"] == "live"
+    assert result["holding_context_enabled"] is False
+    assert result["ai_market_snapshot_id"] == "aims-forensic-holding"
+    assert traces[-1]["ai_input_preflight_allowed"] is True
+    assert traces[-1]["ai_market_snapshot_id"] == "aims-forensic-holding"
+
+
+def test_holding_flow_uses_forensic_snapshot_for_preflight_not_live_prompt(
+    monkeypatch,
+):
+    engine = _build_engine()
+    provider_calls = []
+    monkeypatch.setenv("KORSTOCKSCAN_AI_INPUT_PREFLIGHT_REQUIRED", "true")
+    monkeypatch.setattr(
+        engine,
+        "_capture_prepromotion_context_candidate",
+        lambda **_kwargs: {},
+    )
+
+    def _provider(*args, **kwargs):
+        provider_calls.append((args, kwargs))
+        return {
+            "action": "HOLD",
+            "score": 72,
+            "flow_state": "recovery",
+            "thesis": "fresh legacy holding inputs",
+            "evidence": ["fresh_quote"],
+            "reason": "fresh legacy holding inputs",
+            "next_review_sec": 60,
+        }
+
+    monkeypatch.setattr(engine, "_call_openai_safe", _provider)
+
+    result = engine.evaluate_scalping_holding_flow(
+        "테스트",
+        "005930",
+        {"curr": 10_050, "best_bid": 10_040, "best_ask": 10_060},
+        [{"price": 10_050, "volume": 17}],
+        [{"현재가": 10_050, "거래량": 1000}],
+        {"buy_price": 10_000, "buy_qty": 1},
+        flow_history=[{"action": "HOLD"}],
+        forensic_context_candidate=_allowed_forensic_holding_context(),
+    )
+
+    assert len(provider_calls) == 1
+    assert "holding_decision_context_v1" not in provider_calls[0][0][1]
+    assert result["ai_result_source"] == "live"
+    assert result["holding_context_enabled"] is False
+    assert result["ai_market_snapshot_id"] == "aims-forensic-holding"
 
 
 def test_required_preflight_blocks_when_context_is_missing(monkeypatch):
