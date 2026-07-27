@@ -22,6 +22,7 @@ def _enable(monkeypatch, tmp_path):
     trace._SEEN_TRACE_IDS.clear()
     trace._SEEN_REQUEST_IDS.clear()
     trace._SEEN_OUTCOME_LABEL_IDS.clear()
+    trace._SEEN_CONTEXT_CANDIDATE_HASHES.clear()
 
 
 def test_capture_ai_request_persists_exact_payload_once(monkeypatch, tmp_path):
@@ -286,6 +287,150 @@ def test_capture_marks_canonical_completed_bars_as_exact_candidate(
     )
     assert fields["ai_trace_canonical_context_completed_bar_count"] == 1
     assert fields["ai_trace_canonical_context_forming_bar_present"] is True
+
+
+def test_capture_canonical_context_candidate_is_separate_from_ai_request(
+    monkeypatch, tmp_path
+):
+    _enable(monkeypatch, tmp_path)
+    source_context = {
+        "schema": "entry_candle_context_v1",
+        "enabled": False,
+        "venue": "KRX",
+        "session": "krx_regular",
+        "input_bundle_version": "scalping_multi_timeframe_context_v1",
+        "bars": [{"t": "09:00", "c": 70000, "forming": False}],
+        "source_quality": {"status": "fresh_consistent", "blockers": []},
+    }
+    model_context = {
+        **source_context,
+        "multi_timeframe_ai_input_enabled": True,
+        "multi_timeframe_context": {
+            "schema": "scalping_multi_timeframe_context_v1",
+            "source_quality": {"status": "pass"},
+        },
+    }
+
+    fields = trace.capture_canonical_context_candidate(
+        source_context=source_context,
+        model_context=model_context,
+        endpoint_name="analyze_target",
+        symbol="005930",
+        call_inputs={
+            "target_name": "삼성전자",
+            "ws_data": {"curr": 70050},
+            "recent_ticks": [],
+            "recent_candles": [{"현재가": 70050}],
+            "strategy": "SCALPING",
+            "program_net_qty": 0,
+            "cache_profile": "default",
+            "prompt_profile": "watching",
+        },
+        metadata={"source_event_stage": "watching_analyze_target_async_v1"},
+    )
+
+    rows = _rows(trace._context_candidate_path(trace._date_text()))
+    assert len(rows) == 1
+    assert rows[0]["validation_only_eligible"] is True
+    assert rows[0]["request_capture_status"] == "not_called_candidate_only"
+    assert rows[0]["provider_called"] is False
+    assert rows[0]["decision_authority"] == "forensics_only_no_runtime_change"
+    assert rows[0]["runtime_effect"] is False
+    assert rows[0]["actual_order_submitted"] is False
+    assert rows[0]["call_inputs"]["ws_data"]["curr"] == 70050
+    assert rows[0]["call_inputs_contract"]["ready"] is True
+    assert rows[0]["canonical_context_capture"]["status"] == (
+        "exact_completed_bars_captured"
+    )
+    assert fields["ai_context_candidate_sha256"] == rows[0]["candidate_sha256"]
+    assert not trace._request_path(trace._date_text()).exists()
+    assert not trace._payload_path(trace._date_text()).exists()
+
+
+def test_capture_canonical_context_candidate_rejects_redacted_source(
+    monkeypatch, tmp_path
+):
+    _enable(monkeypatch, tmp_path)
+    source_context = {
+        "schema": "entry_candle_context_v1",
+        "enabled": False,
+        "venue": "KRX",
+        "session": "krx_regular",
+        "input_bundle_version": "scalping_multi_timeframe_context_v1",
+        "bars": [{"t": "09:00", "c": 70000, "forming": False}],
+        "source_quality": {"status": "fresh_consistent", "blockers": []},
+        "api_key": "must-not-persist",
+    }
+
+    trace.capture_canonical_context_candidate(
+        source_context=source_context,
+        model_context=source_context,
+        endpoint_name="analyze_target",
+        symbol="005930",
+        call_inputs={
+            "target_name": "삼성전자",
+            "ws_data": {},
+            "recent_ticks": [],
+            "recent_candles": [],
+            "strategy": "SCALPING",
+            "program_net_qty": 0,
+            "cache_profile": "default",
+            "prompt_profile": "watching",
+        },
+    )
+
+    row = _rows(trace._context_candidate_path(trace._date_text()))[0]
+    assert row["source_context"]["api_key"] == "[REDACTED]"
+    assert row["validation_only_eligible"] is False
+
+
+def test_capture_holding_candidate_accepts_feature_disabled_clean_source(
+    monkeypatch, tmp_path
+):
+    _enable(monkeypatch, tmp_path)
+    candle = {
+        "schema": "entry_candle_context_v1",
+        "enabled": False,
+        "venue": "KRX",
+        "session": "krx_regular",
+        "input_bundle_version": "scalping_multi_timeframe_context_v1",
+        "bars": [{"t": "09:00", "c": 70000, "forming": False}],
+        "source_quality": {"status": "fresh_consistent", "blockers": []},
+    }
+    source_context = {
+        "schema": "holding_decision_context_v1",
+        "enabled": False,
+        "venue": "KRX",
+        "session": "krx_regular",
+        "candle": candle,
+        "source_quality": {"status": "disabled", "blockers": []},
+    }
+    model_context = {
+        **source_context,
+        "candle": {
+            **candle,
+            "multi_timeframe_ai_input_enabled": True,
+        },
+    }
+
+    trace.capture_canonical_context_candidate(
+        source_context=source_context,
+        model_context=model_context,
+        endpoint_name="holding_score",
+        symbol="005930",
+        call_inputs={
+            "stock_name": "삼성전자",
+            "stock_code": "005930",
+            "ws_data": {"curr": 70000},
+            "recent_ticks": [],
+            "recent_candles": [{"현재가": 70000}],
+            "position_ctx": {"buy_price": 69000, "quantity": 1},
+        },
+    )
+
+    row = _rows(trace._context_candidate_path(trace._date_text()))[0]
+    assert row["promotion_disabled_only"] is True
+    assert row["validation_only_eligible"] is True
 
 
 def test_capture_holding_request_uses_executable_bid_not_historical_entry_price(

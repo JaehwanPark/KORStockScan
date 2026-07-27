@@ -29,6 +29,189 @@ def _base_row(**overrides):
     return row
 
 
+def test_prepromotion_exact_capture_calls_fresh_candidate_without_runtime_authority(
+    tmp_path, monkeypatch
+):
+    from src.engine import ai_engine_openai
+
+    candidate_dir = tmp_path / "ai_canonical_context_candidates"
+    candidate_dir.mkdir()
+    target_date = "2026-07-27"
+    candidate_path = (
+        candidate_dir / f"ai_canonical_context_candidates_{target_date}.jsonl"
+    )
+    source_context = {
+        "schema": "entry_candle_context_v1",
+        "enabled": False,
+        "venue": "KRX",
+        "session": "krx_regular",
+        "input_bundle_version": "scalping_multi_timeframe_context_v1",
+        "multi_timeframe_ai_input_enabled": False,
+        "multi_timeframe_context": {
+            "schema": "scalping_multi_timeframe_context_v1",
+            "source_quality": {"status": "pass"},
+        },
+        "bars": [
+            {
+                "t": "14:20",
+                "o": 70000,
+                "h": 70100,
+                "l": 69900,
+                "c": 70050,
+                "v": 1000,
+                "forming": False,
+            }
+        ],
+        "source_quality": {"status": "fresh_consistent", "blockers": []},
+    }
+    candidate_path.write_text(
+        json.dumps(
+            {
+                "schema": mod.CONTEXT_CANDIDATE_SCHEMA,
+                "captured_at": mod.datetime.now().astimezone().isoformat(),
+                "candidate_sha256": "candidate-1",
+                "endpoint": "analyze_target",
+                "symbol": "005930",
+                "validation_only_eligible": True,
+                "source_context": source_context,
+                "call_inputs": {
+                    "target_name": "삼성전자",
+                    "ws_data": {
+                        "curr": 70050,
+                        "best_bid": 70000,
+                        "best_ask": 70100,
+                        "orderbook": {
+                            "asks": [{"price": 70100, "volume": 3210}],
+                            "bids": [{"price": 70000, "volume": 4321}],
+                        },
+                    },
+                    "recent_ticks": [{"price": 70050, "volume": 17}],
+                    "recent_candles": [{"현재가": 70050, "거래량": 1000}],
+                    "strategy": "SCALPING",
+                    "program_net_qty": 13579,
+                    "cache_profile": "default",
+                    "prompt_profile": "watching",
+                },
+                "call_inputs_contract": {"ready": True},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    captured = {}
+
+    class FakeEngine:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def analyze_target(self, *args, **kwargs):
+            captured["args"] = args
+            captured.update(kwargs)
+            return {
+                "provider": "openai",
+                "openai_response_id": "resp-validation",
+                "openai_response_sha256": "response-hash",
+                "openai_request_id": "request-validation",
+                "openai_model": "gpt-test",
+            }
+
+    monkeypatch.setattr(mod, "CONTEXT_CANDIDATE_DIR", candidate_dir)
+    monkeypatch.setattr(mod, "_api_keys", lambda: ["test-key"])
+    monkeypatch.setattr(ai_engine_openai, "GPTSniperEngine", FakeEngine)
+
+    report = mod.run_prepromotion_exact_context_capture(
+        target_date,
+        symbols=["005930"],
+        max_candidate_age_sec=120,
+    )
+
+    assert report["status"] == "exact_provider_calls_captured"
+    assert report["endpoint_counts"] == {"analyze_target": 1}
+    assert report["actual_order_submitted"] is False
+    assert report["broker_order_forbidden"] is True
+    assert captured["candle_context"]["enabled"] is True
+    assert captured["candle_context"]["multi_timeframe_ai_input_enabled"] is True
+    assert captured["program_net_qty"] == 13579
+    assert captured["args"][1]["orderbook"]["asks"][0]["volume"] == 3210
+    assert (
+        captured["metadata_extra"]["decision_authority"]
+        == "forensics_only_no_runtime_change"
+    )
+    assert captured["metadata_extra"]["runtime_effect"] is False
+
+
+def test_validation_only_holding_context_normalizes_only_disabled_feature_state():
+    source = {
+        "schema": "holding_decision_context_v1",
+        "enabled": False,
+        "candle": {
+            "multi_timeframe_ai_input_enabled": False,
+            "source_quality": {"status": "fresh_consistent", "blockers": []},
+        },
+        "source_quality": {
+            "status": "disabled",
+            "hold_defer_allowed": False,
+            "blockers": [],
+        },
+    }
+
+    context = mod._validation_only_source_context(
+        source,
+        promotion_disabled_only=True,
+    )
+
+    assert context["enabled"] is True
+    assert context["candle"]["multi_timeframe_ai_input_enabled"] is True
+    assert context["source_quality"]["status"] == "fresh_consistent"
+    assert context["source_quality"]["hold_defer_allowed"] is True
+    assert context["source_quality"]["blockers"] == []
+    assert source["source_quality"]["status"] == "disabled"
+
+
+def test_prepromotion_exact_capture_rejects_future_candidate_before_provider_init(
+    tmp_path, monkeypatch
+):
+    from datetime import timedelta
+
+    from src.engine import ai_engine_openai
+
+    candidate_dir = tmp_path / "ai_canonical_context_candidates"
+    candidate_dir.mkdir()
+    target_date = "2026-07-27"
+    candidate_path = (
+        candidate_dir / f"ai_canonical_context_candidates_{target_date}.jsonl"
+    )
+    candidate_path.write_text(
+        json.dumps(
+            {
+                "schema": mod.CONTEXT_CANDIDATE_SCHEMA,
+                "captured_at": (
+                    mod.datetime.now().astimezone() + timedelta(minutes=5)
+                ).isoformat(),
+                "endpoint": "analyze_target",
+                "symbol": "005930",
+                "validation_only_eligible": True,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(mod, "CONTEXT_CANDIDATE_DIR", candidate_dir)
+    monkeypatch.setattr(
+        ai_engine_openai,
+        "GPTSniperEngine",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("provider engine must not initialize")
+        ),
+    )
+
+    report = mod.run_prepromotion_exact_context_capture(target_date)
+
+    assert report["status"] == "no_fresh_candidates"
+    assert report["excluded_counts"] == {"candidate_future_timestamp": 1}
+
+
 def test_probe_report_reads_existing_adm_and_summarizes_context(tmp_path, monkeypatch):
     report_path = tmp_path / "adm.json"
     pipeline_dir = tmp_path / "pipeline_events"

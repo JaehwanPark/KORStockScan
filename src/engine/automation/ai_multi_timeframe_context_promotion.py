@@ -218,6 +218,9 @@ def _atomic_write_json(path: Path, value: dict[str, Any]) -> None:
 
 def full_market_env(target_date: str) -> dict[str, str]:
     return {
+        "KORSTOCKSCAN_AI_INPUT_PREFLIGHT_MODE": "exact_v2",
+        "KORSTOCKSCAN_AI_INPUT_PREFLIGHT_REQUIRED": "true",
+        "KORSTOCKSCAN_AI_INPUT_PREFLIGHT_ARTIFACT_DATE": target_date,
         "KORSTOCKSCAN_MULTI_TIMEFRAME_AI_CONTEXT_ENABLED": "true",
         "KORSTOCKSCAN_MULTI_TIMEFRAME_AI_CONTEXT_ACTIVE_DATE": target_date,
         "KORSTOCKSCAN_ENTRY_CANDLE_CONTEXT_ENABLED": "true",
@@ -236,17 +239,41 @@ def full_market_env(target_date: str) -> dict[str, str]:
     }
 
 
-def context_only_rollback_env(target_date: str) -> dict[str, str]:
-    return {
+def context_only_rollback_env(
+    target_date: str,
+    previous_env: dict[str, Any] | None = None,
+) -> dict[str, str]:
+    previous = previous_env if isinstance(previous_env, dict) else {}
+
+    def _previous_value(key: str, default: str) -> str:
+        value = previous.get(key)
+        if value is None or str(value).strip() == "":
+            return default
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        return str(value)
+
+    rollback = {
         **{
             key: "false"
             for key in full_market_env(target_date)
             if not key.endswith("_ACTIVE_DATE")
+            and not key.startswith("KORSTOCKSCAN_AI_INPUT_PREFLIGHT_")
         },
         "KORSTOCKSCAN_MULTI_TIMEFRAME_AI_CONTEXT_ACTIVE_DATE": target_date,
         "KORSTOCKSCAN_ENTRY_CANDLE_CONTEXT_ACTIVE_DATE": target_date,
         "KORSTOCKSCAN_HOLDING_DECISION_CONTEXT_ACTIVE_DATE": target_date,
+        "KORSTOCKSCAN_AI_INPUT_PREFLIGHT_MODE": _previous_value(
+            "KORSTOCKSCAN_AI_INPUT_PREFLIGHT_MODE", "baseline_v1"
+        ),
+        "KORSTOCKSCAN_AI_INPUT_PREFLIGHT_REQUIRED": _previous_value(
+            "KORSTOCKSCAN_AI_INPUT_PREFLIGHT_REQUIRED", "true"
+        ),
+        "KORSTOCKSCAN_AI_INPUT_PREFLIGHT_ARTIFACT_DATE": _previous_value(
+            "KORSTOCKSCAN_AI_INPUT_PREFLIGHT_ARTIFACT_DATE", target_date
+        ),
     }
+    return rollback
 
 
 def _premarket_validation_findings(
@@ -514,7 +541,10 @@ def evaluate_promotion(
         },
         "findings": findings,
         "env_overrides": env,
-        "rollback_env_overrides": context_only_rollback_env(target_date),
+        "rollback_env_overrides": context_only_rollback_env(
+            target_date,
+            runtime_manifest.get("env_overrides"),
+        ),
         "source_hashes": {
             "validation_sha256": _sha256(validation),
             "golden_validation_sha256": _sha256(golden_validation),

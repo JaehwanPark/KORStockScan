@@ -24,6 +24,7 @@ PAYLOAD_SCHEMA = "ai_decision_payload_v1"
 REQUEST_SCHEMA = "ai_decision_request_provenance_v1"
 PROMPT_SCHEMA = "ai_decision_prompt_v1"
 OUTCOME_SCHEMA = "ai_decision_outcome_label_v1"
+CONTEXT_CANDIDATE_SCHEMA = "ai_canonical_context_candidate_v1"
 OUTCOME_HORIZONS_MIN = (1, 3, 5, 10, 20, 30, 60)
 
 OBSERVATION_CONTRACT = {
@@ -50,6 +51,22 @@ STORAGE_SECURITY_CONTRACT = {
     "storage_directory_mode": "0700",
     "raw_secret_storage": False,
 }
+CONTEXT_CANDIDATE_OBSERVATION_CONTRACT = {
+    "metric_role": "ai_input_source_quality",
+    "decision_authority": "forensics_only_no_runtime_change",
+    "window_policy": "same_natural_decision_context_explicit_provider_call",
+    "sample_floor": "one_valid_row_per_symbol_venue_session_endpoint",
+    "primary_decision_metric": "required_source_field_match_status",
+    "source_quality_gate": "fresh_same_basis_conflict_free",
+    "runtime_effect": False,
+    "allowed_runtime_apply": False,
+    "actual_order_submitted": False,
+    "broker_order_forbidden": True,
+    "forbidden_uses": (
+        "runtime_decision|order_submit|provider_route_change|threshold_change|"
+        "price_or_quantity_change|bot_restart|live_promotion_without_review"
+    ),
+}
 
 _WRITE_LOCK = threading.RLock()
 _SEEN_PAYLOAD_HASHES: dict[str, set[str]] = {}
@@ -57,6 +74,7 @@ _SEEN_PROMPT_HASHES: dict[str, set[str]] = {}
 _SEEN_TRACE_IDS: dict[str, set[str]] = {}
 _SEEN_REQUEST_IDS: dict[str, set[str]] = {}
 _SEEN_OUTCOME_LABEL_IDS: dict[str, set[str]] = {}
+_SEEN_CONTEXT_CANDIDATE_HASHES: dict[str, set[str]] = {}
 _SENSITIVE_KEY_SUFFIXES = (
     "api_key",
     "app_key",
@@ -140,6 +158,44 @@ _EXPECTED_CONTEXT_SCHEMA_BY_ENDPOINT = {
     "holding_flow": _HOLDING_CONTEXT_SCHEMA,
     "overnight": _HOLDING_CONTEXT_SCHEMA,
 }
+_REQUIRED_CANDIDATE_CALL_INPUTS = {
+    "analyze_target": {
+        "target_name",
+        "ws_data",
+        "recent_ticks",
+        "recent_candles",
+        "strategy",
+        "program_net_qty",
+        "cache_profile",
+        "prompt_profile",
+    },
+    "entry_price": {
+        "stock_name",
+        "stock_code",
+        "ws_data",
+        "recent_ticks",
+        "recent_candles",
+        "price_ctx",
+    },
+    "holding_score": {
+        "stock_name",
+        "stock_code",
+        "ws_data",
+        "recent_ticks",
+        "recent_candles",
+        "position_ctx",
+    },
+    "holding_flow": {
+        "stock_name",
+        "stock_code",
+        "ws_data",
+        "recent_ticks",
+        "recent_candles",
+        "position_ctx",
+        "flow_history",
+        "decision_kind",
+    },
+}
 
 
 def trace_enabled() -> bool:
@@ -180,6 +236,14 @@ def _prompt_path(target_date: str) -> Path:
 def _outcome_path(target_date: str) -> Path:
     return (
         DATA_DIR / "ai_decision_outcomes" / f"ai_decision_outcomes_{target_date}.jsonl"
+    )
+
+
+def _context_candidate_path(target_date: str) -> Path:
+    return (
+        DATA_DIR
+        / "ai_canonical_context_candidates"
+        / f"ai_canonical_context_candidates_{target_date}.jsonl"
     )
 
 
@@ -639,6 +703,174 @@ def _canonical_context_capture(
             selected.get("forming_bar_present") if selected else None
         ),
     }
+
+
+def capture_canonical_context_candidate(
+    *,
+    source_context: dict[str, Any] | None,
+    model_context: dict[str, Any] | None,
+    endpoint_name: str,
+    symbol: str,
+    call_inputs: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Persist a source-complete, non-authoritative prepromotion context.
+
+    This does not represent an AI request and can never be promoted directly.
+    The explicit validation-only probe must still send ``model_context`` to the
+    real endpoint and produce the normal request/payload/response provenance.
+    """
+
+    if not trace_enabled():
+        return {}
+    endpoint = str(endpoint_name or "").strip().lower()
+    expected_schema = _EXPECTED_CONTEXT_SCHEMA_BY_ENDPOINT.get(endpoint)
+    if endpoint not in _SCALPING_ENDPOINTS or not expected_schema:
+        return {}
+    source = source_context if isinstance(source_context, dict) else {}
+    model = model_context if isinstance(model_context, dict) else {}
+    if (
+        source.get("schema") != expected_schema
+        or model.get("schema") != expected_schema
+    ):
+        return {}
+    context_key = (
+        "entry_candle_context"
+        if expected_schema == _ENTRY_CONTEXT_SCHEMA
+        else "holding_decision_context"
+    )
+    evidence = _canonical_context_capture(
+        {context_key: model},
+        endpoint_name=endpoint,
+    )
+    source_quality = (
+        source.get("source_quality")
+        if isinstance(source.get("source_quality"), dict)
+        else {}
+    )
+    if expected_schema == _HOLDING_CONTEXT_SCHEMA:
+        candle = source.get("candle") if isinstance(source.get("candle"), dict) else {}
+        candle_quality = (
+            candle.get("source_quality")
+            if isinstance(candle.get("source_quality"), dict)
+            else {}
+        )
+        blockers = list(source_quality.get("blockers") or []) + list(
+            candle_quality.get("blockers") or []
+        )
+    else:
+        blockers = list(source_quality.get("blockers") or [])
+    source_quality_status = str(
+        source_quality.get("status") or "fresh_consistent"
+    ).strip()
+    promotion_disabled_only = bool(
+        expected_schema == _HOLDING_CONTEXT_SCHEMA
+        and source.get("enabled") is False
+        and source_quality_status == "disabled"
+        and not blockers
+    )
+    eligible = bool(
+        evidence.get("exact_v2_candidate")
+        and not blockers
+        and (source_quality_status == "fresh_consistent" or promotion_disabled_only)
+    )
+    now = _now()
+    target_date = _date_text(now)
+    safe_source, source_redacted = _sanitize(source)
+    safe_model, model_redacted = _sanitize(model)
+    inputs = call_inputs if isinstance(call_inputs, dict) else {}
+    safe_inputs, inputs_redacted = _sanitize(inputs)
+    required_call_inputs = _REQUIRED_CANDIDATE_CALL_INPUTS.get(endpoint, set())
+    missing_call_inputs = sorted(required_call_inputs - set(inputs))
+    call_inputs_ready = bool(required_call_inputs) and not missing_call_inputs
+    candidate_sha256 = hashlib.sha256(
+        _json_bytes(
+            {
+                "endpoint": endpoint,
+                "symbol": _normalize_stock_code(symbol),
+                "source_context": safe_source,
+                "model_context": safe_model,
+                "call_inputs": safe_inputs,
+            }
+        )
+    ).hexdigest()
+    row = {
+        "schema": CONTEXT_CANDIDATE_SCHEMA,
+        "captured_at": now.isoformat(),
+        "candidate_sha256": candidate_sha256,
+        "endpoint": endpoint,
+        "symbol": _normalize_stock_code(symbol),
+        "effective_venue": safe_source.get("venue"),
+        "session_bucket": safe_source.get("session"),
+        "expected_context_schema": expected_schema,
+        "canonical_context_capture": evidence,
+        "source_context": safe_source,
+        "model_context": safe_model,
+        "call_inputs": safe_inputs,
+        "call_inputs_contract": {
+            "required_keys": sorted(required_call_inputs),
+            "missing_keys": missing_call_inputs,
+            "ready": call_inputs_ready,
+            "replay_policy": "reuse_exact_sanitized_natural_call_inputs",
+        },
+        "redacted": bool(source_redacted or model_redacted or inputs_redacted),
+        "validation_only_eligible": eligible
+        and not source_redacted
+        and not model_redacted
+        and not inputs_redacted
+        and call_inputs_ready,
+        "validation_only_status": (
+            "ready_for_explicit_provider_call"
+            if (
+                eligible
+                and not source_redacted
+                and not model_redacted
+                and not inputs_redacted
+                and call_inputs_ready
+            )
+            else "source_candidate_ineligible"
+        ),
+        "source_quality_blockers": sorted({str(item) for item in blockers if item}),
+        "source_quality_status": source_quality_status,
+        "promotion_disabled_only": promotion_disabled_only,
+        "source_event_stage": str(
+            _sanitize_text(
+                str((metadata or {}).get("source_event_stage") or "unknown")
+            )[0]
+        ),
+        "request_capture_status": "not_called_candidate_only",
+        "provider_called": False,
+        "provider": "none",
+        "validation_only_contract": {
+            "decision_authority": "forensics_only_no_runtime_change",
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "result_consumer": "artifact_only_never_runtime_decision",
+        },
+        **STORAGE_SECURITY_CONTRACT,
+        **OBSERVATION_CONTRACT,
+        **CONTEXT_CANDIDATE_OBSERVATION_CONTRACT,
+    }
+    try:
+        with _WRITE_LOCK:
+            seen = _SEEN_CONTEXT_CANDIDATE_HASHES.get(target_date)
+            if seen is None:
+                path = _context_candidate_path(target_date)
+                seen = _load_seen(path, "candidate_sha256")
+                _SEEN_CONTEXT_CANDIDATE_HASHES[target_date] = seen
+            if candidate_sha256 not in seen:
+                _append_jsonl(_context_candidate_path(target_date), row)
+                seen.add(candidate_sha256)
+        return {
+            "ai_context_candidate_sha256": candidate_sha256,
+            "ai_context_candidate_status": row["validation_only_status"],
+            "ai_context_candidate_schema": expected_schema,
+        }
+    except Exception as exc:
+        log_error(f"[AI_DECISION_TRACE] context candidate capture failed: {exc}")
+        return {}
 
 
 def capture_ai_request(

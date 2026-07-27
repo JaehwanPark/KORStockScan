@@ -16,7 +16,10 @@ from pathlib import Path
 from typing import Any
 
 from src.engine import scalp_entry_action_decision_matrix as adm_mod
-from src.engine.scalping.ai_decision_trace import record_ai_decision_trace
+from src.engine.scalping.ai_decision_trace import (
+    CONTEXT_CANDIDATE_SCHEMA,
+    record_ai_decision_trace,
+)
 from src.engine.scalping.holding_decision_context import (
     OBSERVATION_CONTRACT as HOLDING_CONTEXT_OBSERVATION_CONTRACT,
 )
@@ -27,6 +30,7 @@ DATA_DIR = PROJECT_ROOT / "data"
 REPORT_DIR = DATA_DIR / "report"
 PROBE_REPORT_DIR = REPORT_DIR / "entry_context_intraday_probe"
 PIPELINE_EVENTS_DIR = DATA_DIR / "pipeline_events"
+CONTEXT_CANDIDATE_DIR = DATA_DIR / "ai_canonical_context_candidates"
 CLEAN_BASELINE_POLICY_PATH = DATA_DIR / "source_quality" / "clean_baseline_policy.json"
 AI_MARKET_SNAPSHOT_SCHEMA_INTRODUCED_DATE = "2026-07-23"
 HOLDING_FLOW_EXACT_CONTEXT_RECOVERY_CONTRACT = {
@@ -53,6 +57,22 @@ HOLDING_FLOW_ENTRY_CONTEXT_FEATURES = {
     "fillability_score",
     "order_flow_pressure_score",
     "entry_momentum_score",
+}
+PREPROMOTION_EXACT_CAPTURE_CONTRACT = {
+    "metric_role": "ai_input_source_quality",
+    "decision_authority": "forensics_only_no_runtime_change",
+    "window_policy": "same_natural_decision_context_explicit_provider_call",
+    "sample_floor": "one_valid_row_per_symbol_venue_session_endpoint",
+    "primary_decision_metric": "required_source_field_match_status",
+    "source_quality_gate": "fresh_same_basis_conflict_free",
+    "runtime_effect": False,
+    "allowed_runtime_apply": False,
+    "actual_order_submitted": False,
+    "broker_order_forbidden": True,
+    "forbidden_uses": (
+        "runtime_decision|order_submit|provider_route_change|threshold_change|"
+        "price_or_quantity_change|bot_restart|live_promotion_without_review"
+    ),
 }
 
 PROBE_FEATURE_KEYS = (
@@ -2557,6 +2577,245 @@ def _call_openai_endpoint_compare(
     )
 
 
+def _load_context_candidates(target_date: str) -> list[dict[str, Any]]:
+    path = (
+        CONTEXT_CANDIDATE_DIR / f"ai_canonical_context_candidates_{target_date}.jsonl"
+    )
+    if not path.exists():
+        return []
+    rows: list[dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(row, dict) and row.get("schema") == CONTEXT_CANDIDATE_SCHEMA:
+            rows.append(row)
+    return rows
+
+
+def _validation_only_source_context(
+    context: dict[str, Any],
+    *,
+    promotion_disabled_only: bool = False,
+) -> dict[str, Any]:
+    source = json.loads(json.dumps(context, ensure_ascii=False, default=str))
+    source["enabled"] = True
+    if source.get("schema") == "holding_decision_context_v1":
+        candle = source.get("candle") if isinstance(source.get("candle"), dict) else {}
+        candle["multi_timeframe_ai_input_enabled"] = True
+        source["candle"] = candle
+        if promotion_disabled_only:
+            quality = (
+                dict(source.get("source_quality") or {})
+                if isinstance(source.get("source_quality"), dict)
+                else {}
+            )
+            quality["status"] = "fresh_consistent"
+            quality["hold_defer_allowed"] = True
+            quality["promotion_validation_transform"] = (
+                "feature_disabled_to_enabled_no_source_blockers"
+            )
+            source["source_quality"] = quality
+    else:
+        source["multi_timeframe_ai_input_enabled"] = True
+    source["validation_only_contract"] = dict(PREPROMOTION_EXACT_CAPTURE_CONTRACT)
+    return source
+
+
+def run_prepromotion_exact_context_capture(
+    target_date: str,
+    *,
+    symbols: list[str] | None = None,
+    sample_limit: int = 1,
+    max_candidate_age_sec: float = 120.0,
+) -> dict[str, Any]:
+    """Call real endpoints with captured context; never return into runtime state."""
+
+    from src.engine import ai_engine_openai as openai_module
+
+    now = datetime.now().astimezone()
+    symbol_filter = {str(item).strip() for item in (symbols or []) if str(item).strip()}
+    latest: dict[tuple[str, str], dict[str, Any]] = {}
+    exclusions: Counter[str] = Counter()
+    for row in _load_context_candidates(target_date):
+        symbol = str(row.get("symbol") or "").strip()
+        endpoint = str(row.get("endpoint") or "").strip()
+        if symbol_filter and symbol not in symbol_filter:
+            continue
+        if row.get("validation_only_eligible") is not True:
+            exclusions["candidate_ineligible"] += 1
+            continue
+        try:
+            captured_at = datetime.fromisoformat(str(row.get("captured_at") or ""))
+            if captured_at.tzinfo is None:
+                captured_at = captured_at.astimezone()
+            age_sec = (now - captured_at.astimezone()).total_seconds()
+        except (TypeError, ValueError):
+            exclusions["captured_at_invalid"] += 1
+            continue
+        if age_sec < -5.0:
+            exclusions["candidate_future_timestamp"] += 1
+            continue
+        if age_sec > max(1.0, float(max_candidate_age_sec)):
+            exclusions["candidate_stale"] += 1
+            continue
+        key = (endpoint, symbol)
+        if key not in latest or str(row.get("captured_at")) > str(
+            latest[key].get("captured_at")
+        ):
+            latest[key] = row
+    per_endpoint: Counter[str] = Counter()
+    selected = []
+    for key in sorted(latest):
+        endpoint = key[0]
+        if per_endpoint[endpoint] >= max(1, int(sample_limit)):
+            continue
+        selected.append(latest[key])
+        per_endpoint[endpoint] += 1
+    if not selected:
+        return {
+            "status": "no_fresh_candidates",
+            "results": [],
+            "endpoint_counts": {},
+            "excluded_counts": dict(exclusions),
+            **PREPROMOTION_EXACT_CAPTURE_CONTRACT,
+        }
+    keys = _api_keys()
+    if not keys:
+        return {
+            "status": "provider_unavailable",
+            "reason": "OPENAI_API_KEY_not_configured",
+            "results": [],
+            "endpoint_counts": {},
+            "excluded_counts": dict(exclusions),
+            **PREPROMOTION_EXACT_CAPTURE_CONTRACT,
+        }
+    engine = openai_module.GPTSniperEngine(keys[:1], announce_startup=False)
+    results: list[dict[str, Any]] = []
+    for candidate in selected:
+        endpoint = str(candidate.get("endpoint") or "")
+        symbol = str(candidate.get("symbol") or "-")
+        source = candidate.get("source_context")
+        source = source if isinstance(source, dict) else {}
+        context = _validation_only_source_context(
+            source,
+            promotion_disabled_only=bool(candidate.get("promotion_disabled_only")),
+        )
+        call_inputs = candidate.get("call_inputs")
+        call_inputs = call_inputs if isinstance(call_inputs, dict) else {}
+        call_contract = candidate.get("call_inputs_contract")
+        call_contract = call_contract if isinstance(call_contract, dict) else {}
+        if not call_inputs or call_contract.get("ready") is not True:
+            exclusions["exact_call_inputs_missing"] += 1
+            continue
+        metadata = {
+            "source_event_stage": "prepromotion_validation_only_exact_capture",
+            "validation_only_context_candidate_sha256": candidate.get(
+                "candidate_sha256"
+            ),
+            **PREPROMOTION_EXACT_CAPTURE_CONTRACT,
+        }
+        started = time.perf_counter()
+        try:
+            if endpoint == "analyze_target":
+                result = engine.analyze_target(
+                    call_inputs["target_name"],
+                    call_inputs["ws_data"],
+                    call_inputs["recent_ticks"],
+                    call_inputs["recent_candles"],
+                    strategy=call_inputs["strategy"],
+                    program_net_qty=call_inputs["program_net_qty"],
+                    cache_profile=call_inputs["cache_profile"],
+                    prompt_profile=call_inputs["prompt_profile"],
+                    metadata_extra=metadata,
+                    candle_context=context,
+                )
+            elif endpoint == "entry_price":
+                result = engine.evaluate_scalping_entry_price(
+                    call_inputs["stock_name"],
+                    call_inputs["stock_code"],
+                    call_inputs["ws_data"],
+                    call_inputs["recent_ticks"],
+                    call_inputs["recent_candles"],
+                    call_inputs["price_ctx"],
+                    metadata_extra=metadata,
+                    candle_context=context,
+                )
+            elif endpoint == "holding_score":
+                result = engine.evaluate_scalping_holding_score(
+                    call_inputs["stock_name"],
+                    call_inputs["stock_code"],
+                    call_inputs["ws_data"],
+                    call_inputs["recent_ticks"],
+                    call_inputs["recent_candles"],
+                    call_inputs["position_ctx"],
+                    metadata_extra=metadata,
+                    holding_context=context,
+                )
+            elif endpoint == "holding_flow":
+                result = engine.evaluate_scalping_holding_flow(
+                    call_inputs["stock_name"],
+                    call_inputs["stock_code"],
+                    call_inputs["ws_data"],
+                    call_inputs["recent_ticks"],
+                    call_inputs["recent_candles"],
+                    call_inputs["position_ctx"],
+                    flow_history=call_inputs["flow_history"],
+                    decision_kind=call_inputs["decision_kind"],
+                    metadata_extra=metadata,
+                    holding_context=context,
+                )
+            else:
+                exclusions["endpoint_not_supported"] += 1
+                continue
+            provenance = _provider_result_provenance(
+                result if isinstance(result, dict) else {}
+            )
+            results.append(
+                {
+                    "endpoint": endpoint,
+                    "symbol": symbol,
+                    "candidate_sha256": candidate.get("candidate_sha256"),
+                    "status": (
+                        "called"
+                        if provenance.get("provider") != "none"
+                        else "provider_none"
+                    ),
+                    "elapsed_ms": int((time.perf_counter() - started) * 1000),
+                    **provenance,
+                }
+            )
+        except Exception as exc:
+            results.append(
+                {
+                    "endpoint": endpoint,
+                    "symbol": symbol,
+                    "candidate_sha256": candidate.get("candidate_sha256"),
+                    "status": "call_failed",
+                    "error_type": type(exc).__name__,
+                }
+            )
+    status = (
+        "exact_provider_calls_captured"
+        if results and all(row.get("status") == "called" for row in results)
+        else ("no_fresh_candidates" if not results else "provider_call_gap")
+    )
+    return {
+        "status": status,
+        "results": results,
+        "endpoint_counts": dict(
+            Counter(
+                str(row.get("endpoint"))
+                for row in results
+                if row.get("status") == "called"
+            )
+        ),
+        "excluded_counts": dict(exclusions),
+        **PREPROMOTION_EXACT_CAPTURE_CONTRACT,
+    }
+
+
 def build_probe_report(
     target_date: str,
     *,
@@ -2570,6 +2829,8 @@ def build_probe_report(
     endpoint_compare_effort: str = "low",
     live_holding_score: bool = False,
     probe_symbols: list[str] | None = None,
+    capture_prepromotion_exact: bool = False,
+    context_candidate_max_age_sec: float = 120.0,
 ) -> dict[str, Any]:
     adm_report = _read_adm_report(target_date, build_adm=build_adm)
     rows = adm_report.get("rows") if isinstance(adm_report.get("rows"), list) else []
@@ -2647,6 +2908,20 @@ def build_probe_report(
         if item.get("status") == "accepted"
         and str(item.get("action") or "") in {"BUY", "WAIT", "DROP"}
     ]
+    prepromotion_exact_capture = (
+        run_prepromotion_exact_context_capture(
+            target_date,
+            symbols=probe_symbols,
+            sample_limit=max(1, min(sample_limit, 4)),
+            max_candidate_age_sec=context_candidate_max_age_sec,
+        )
+        if capture_prepromotion_exact
+        else {
+            "status": "not_requested",
+            "results": [],
+            **PREPROMOTION_EXACT_CAPTURE_CONTRACT,
+        }
+    )
     return {
         "report_type": "entry_context_intraday_probe",
         "date": target_date,
@@ -2669,6 +2944,7 @@ def build_probe_report(
                 "parse_error_count", 0
             ),
         },
+        "prepromotion_exact_context_capture": prepromotion_exact_capture,
         "coverage": _coverage(candidates),
         "venue_preflight_matrix": _venue_preflight_matrix(clean_pipeline_rows),
         "venue_preflight_source": {
@@ -2817,6 +3093,20 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Alias for --compare-openai-endpoints with clearer provider-comparison naming.",
     )
+    parser.add_argument(
+        "--capture-prepromotion-exact",
+        action="store_true",
+        help=(
+            "Call fresh canonical-context candidates through their real endpoint "
+            "for validation only; results never enter runtime decisions."
+        ),
+    )
+    parser.add_argument(
+        "--context-candidate-max-age-sec",
+        type=float,
+        default=120.0,
+        help="Reject validation-only context candidates older than this many seconds.",
+    )
     parser.add_argument("--endpoint-compare-model", default="gpt-5.4-mini")
     parser.add_argument("--endpoint-compare-effort", default="low")
     parser.add_argument(
@@ -2840,6 +3130,8 @@ def main(argv: list[str] | None = None) -> int:
         probe_symbols=[
             item.strip() for item in args.symbols.split(",") if item.strip()
         ],
+        capture_prepromotion_exact=args.capture_prepromotion_exact,
+        context_candidate_max_age_sec=args.context_candidate_max_age_sec,
     )
     if args.write:
         report["artifact"] = str(_write_report(report))

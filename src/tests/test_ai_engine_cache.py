@@ -239,6 +239,56 @@ def test_ai_input_preflight_blocks_provider_calls(monkeypatch):
     )
 
 
+def test_disabled_entry_context_capture_receives_exact_natural_call_inputs(
+    monkeypatch,
+):
+    engine = _build_engine()
+    captured = {}
+    candle_context = _blocked_ai_context()
+    candle_context["enabled"] = False
+    ws_data = {
+        "curr": 70050,
+        "best_bid": 70000,
+        "best_ask": 70100,
+        "orderbook": {
+            "asks": [{"price": 70100, "volume": 3210}],
+            "bids": [{"price": 70000, "volume": 4321}],
+        },
+    }
+    recent_ticks = [{"price": 70050, "volume": 17}]
+    recent_candles = [{"현재가": 70050, "거래량": 1000}]
+
+    def _capture(**kwargs):
+        captured.update(kwargs)
+        return {"ai_context_candidate_status": "ready_for_explicit_provider_call"}
+
+    monkeypatch.setenv("KORSTOCKSCAN_AI_INPUT_PREFLIGHT_REQUIRED", "true")
+    monkeypatch.setattr(
+        ai_engine_openai_module,
+        "capture_canonical_context_candidate",
+        _capture,
+    )
+
+    result = engine.analyze_target(
+        "삼성전자",
+        ws_data,
+        recent_ticks,
+        recent_candles,
+        strategy="SCALPING",
+        program_net_qty=13579,
+        cache_profile="default",
+        prompt_profile="watching",
+        candle_context=candle_context,
+    )
+
+    assert result["reason"] == "ai_input_preflight_blocked"
+    assert captured["endpoint_name"] == "analyze_target"
+    assert captured["call_inputs"]["ws_data"] is ws_data
+    assert captured["call_inputs"]["recent_ticks"] is recent_ticks
+    assert captured["call_inputs"]["recent_candles"] is recent_candles
+    assert captured["call_inputs"]["program_net_qty"] == 13579
+
+
 def test_holding_score_preflight_block_trace_keeps_snapshot_symbol_and_bid(
     monkeypatch,
 ):

@@ -162,10 +162,17 @@ def test_evaluate_promotion_is_binary_full_market(tmp_path):
     assert report["runtime_activation"] is True
     assert report["scope"]["sessions"] == list(promotion.EXPECTED_SESSIONS)
     assert report["scope"]["endpoints"] == list(promotion.EXPECTED_ENDPOINTS)
+    assert report["env_overrides"]["KORSTOCKSCAN_AI_INPUT_PREFLIGHT_MODE"] == "exact_v2"
+    assert report["env_overrides"]["KORSTOCKSCAN_AI_INPUT_PREFLIGHT_REQUIRED"] == "true"
+    assert (
+        report["env_overrides"]["KORSTOCKSCAN_AI_INPUT_PREFLIGHT_ARTIFACT_DATE"]
+        == "2026-07-27"
+    )
     assert all(
         value == "true"
         for key, value in report["env_overrides"].items()
         if not key.endswith("_ACTIVE_DATE")
+        and not key.startswith("KORSTOCKSCAN_AI_INPUT_PREFLIGHT_")
     )
 
 
@@ -338,12 +345,48 @@ def test_apply_transaction_preserves_env_and_writes_commit_marker_last(
         == "true"
     )
     assert saved["selected_families"] == ["existing_family"]
+    assert saved["env_overrides"]["KORSTOCKSCAN_AI_INPUT_PREFLIGHT_MODE"] == "exact_v2"
     assert (
         saved["ai_multi_timeframe_context_promotion_status"]
         == "promoted_all_market_sessions_full"
     )
     assert committed["transaction_status"] == "committed"
     assert promotion.promotion_path("2026-07-27").exists()
+
+
+def test_promotion_rollback_restores_previous_preflight_contract(tmp_path):
+    manifest = _runtime_manifest(tmp_path)
+    manifest["env_overrides"].update(
+        {
+            "KORSTOCKSCAN_AI_INPUT_PREFLIGHT_MODE": "baseline_v1",
+            "KORSTOCKSCAN_AI_INPUT_PREFLIGHT_REQUIRED": "true",
+            "KORSTOCKSCAN_AI_INPUT_PREFLIGHT_ARTIFACT_DATE": "2026-07-24",
+        }
+    )
+    report = promotion.evaluate_promotion(
+        target_date="2026-07-27",
+        validation=_validation(),
+        golden_validation=_golden_validation(),
+        review=_review(),
+        runtime_manifest=manifest,
+        runtime_verify={"status": "pass", "passed": True},
+        now=TEST_NOW,
+    )
+
+    rollback = report["rollback_env_overrides"]
+    assert rollback["KORSTOCKSCAN_AI_INPUT_PREFLIGHT_MODE"] == "baseline_v1"
+    assert rollback["KORSTOCKSCAN_AI_INPUT_PREFLIGHT_REQUIRED"] == "true"
+    assert rollback["KORSTOCKSCAN_AI_INPUT_PREFLIGHT_ARTIFACT_DATE"] == "2026-07-24"
+    assert rollback["KORSTOCKSCAN_MULTI_TIMEFRAME_AI_CONTEXT_ENABLED"] == "false"
+
+
+def test_promotion_rollback_preserves_boolean_false_preflight_required():
+    rollback = promotion.context_only_rollback_env(
+        "2026-07-27",
+        {"KORSTOCKSCAN_AI_INPUT_PREFLIGHT_REQUIRED": False},
+    )
+
+    assert rollback["KORSTOCKSCAN_AI_INPUT_PREFLIGHT_REQUIRED"] == "false"
 
 
 def test_apply_transaction_rejects_outside_target_premarket(tmp_path):

@@ -62,6 +62,7 @@ from src.engine.scalping.ai_market_snapshot import (  # noqa: E402
 )
 from src.engine.scalping.ai_decision_trace import (  # noqa: E402
     capture_ai_request,
+    capture_canonical_context_candidate,
     record_ai_decision_trace,
 )
 from src.engine.scalping.entry_candle_context import (
@@ -1245,9 +1246,16 @@ class GPTSniperEngine:
             }
         )
 
-    def _entry_candle_model_payload(self, candle_context):
+    def _entry_candle_model_payload(
+        self,
+        candle_context,
+        *,
+        validation_only: bool = False,
+    ):
         context = candle_context if isinstance(candle_context, dict) else {}
-        if not context or not bool(context.get("enabled", False)):
+        if not context or (
+            not bool(context.get("enabled", False)) and not validation_only
+        ):
             return None
         payload = {
             "schema": context.get("schema"),
@@ -1282,12 +1290,57 @@ class GPTSniperEngine:
             "risk_flags": context.get("risk_flags", []),
             "source_quality": context.get("source_quality", {}),
         }
+        if validation_only:
+            payload["multi_timeframe_ai_input_enabled"] = True
         if payload["multi_timeframe_ai_input_enabled"]:
             payload["input_bundle_version"] = context.get("input_bundle_version")
             payload["multi_timeframe_context"] = context.get(
                 "multi_timeframe_context", {}
             )
         return payload
+
+    def _capture_prepromotion_context_candidate(
+        self,
+        *,
+        endpoint_name,
+        symbol,
+        entry_context=None,
+        holding_context=None,
+        call_inputs=None,
+        metadata=None,
+    ):
+        """Capture an exact source candidate without changing the live request."""
+
+        source = (
+            entry_context
+            if isinstance(entry_context, dict)
+            else (holding_context if isinstance(holding_context, dict) else {})
+        )
+        if not source or bool(source.get("enabled", False)):
+            return {}
+        if isinstance(entry_context, dict):
+            model_context = self._entry_candle_model_payload(
+                entry_context,
+                validation_only=True,
+            )
+        else:
+            validation_source = dict(source)
+            candle = (
+                dict(validation_source.get("candle") or {})
+                if isinstance(validation_source.get("candle"), dict)
+                else {}
+            )
+            candle["multi_timeframe_ai_input_enabled"] = True
+            validation_source["candle"] = candle
+            model_context = holding_decision_context_model_payload(validation_source)
+        return capture_canonical_context_candidate(
+            source_context=source,
+            model_context=model_context,
+            endpoint_name=str(endpoint_name or ""),
+            symbol=str(symbol or "-"),
+            call_inputs=dict(call_inputs or {}),
+            metadata=dict(metadata or {}),
+        )
 
     def _attach_entry_candle_inputs(self, payload, candle_context):
         target = payload if isinstance(payload, dict) else {}
@@ -5505,6 +5558,22 @@ class GPTSniperEngine:
             input_contract_fields.update(
                 entry_candle_context_log_fields(candle_context)
             )
+            input_contract_fields.update(
+                self._capture_prepromotion_context_candidate(
+                    endpoint_name="entry_price",
+                    symbol=stock_code,
+                    entry_context=candle_context,
+                    call_inputs={
+                        "stock_name": stock_name,
+                        "stock_code": stock_code,
+                        "ws_data": ws_data,
+                        "recent_ticks": recent_ticks,
+                        "recent_candles": recent_candles,
+                        "price_ctx": price_ctx,
+                    },
+                    metadata=metadata_extra,
+                )
+            )
         entry_price_preflight = ai_input_preflight(candle_context)
         if runtime_preflight_required() and not bool(
             entry_price_preflight.get("allowed", False)
@@ -5826,6 +5895,30 @@ class GPTSniperEngine:
         if isinstance(candle_context, dict) and candle_context:
             input_contract_fields.update(
                 entry_candle_context_log_fields(candle_context)
+            )
+            input_contract_fields.update(
+                self._capture_prepromotion_context_candidate(
+                    endpoint_name="analyze_target",
+                    symbol=(
+                        (candle_context.get("ai_market_snapshot_v1") or {}).get(
+                            "stock_code"
+                        )
+                        if isinstance(candle_context.get("ai_market_snapshot_v1"), dict)
+                        else target_name
+                    ),
+                    entry_context=candle_context,
+                    call_inputs={
+                        "target_name": target_name,
+                        "ws_data": ws_data,
+                        "recent_ticks": recent_ticks,
+                        "recent_candles": recent_candles,
+                        "strategy": strategy,
+                        "program_net_qty": program_net_qty,
+                        "cache_profile": cache_profile,
+                        "prompt_profile": prompt_profile,
+                    },
+                    metadata=metadata_extra,
+                )
             )
 
         def _merge_runtime_fields(payload: dict[str, Any] | None) -> dict[str, Any]:
@@ -7119,6 +7212,23 @@ class GPTSniperEngine:
             "ai_input_build_fallback": "not_built",
             **trace_context_fields,
         }
+        if isinstance(holding_context, dict) and holding_context:
+            input_contract_fields.update(
+                self._capture_prepromotion_context_candidate(
+                    endpoint_name="holding_score",
+                    symbol=stock_code,
+                    holding_context=holding_context,
+                    call_inputs={
+                        "stock_name": stock_name,
+                        "stock_code": stock_code,
+                        "ws_data": ws_data,
+                        "recent_ticks": recent_ticks,
+                        "recent_candles": recent_candles,
+                        "position_ctx": position_ctx,
+                    },
+                    metadata=metadata_extra,
+                )
+            )
         holding_preflight = ai_input_preflight(holding_context)
         if runtime_preflight_required() and not bool(
             holding_preflight.get("allowed", False)
@@ -7699,6 +7809,25 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
             "ai_input_build_fallback": "not_built",
             **trace_context_fields,
         }
+        if isinstance(holding_context, dict) and holding_context:
+            input_contract_fields.update(
+                self._capture_prepromotion_context_candidate(
+                    endpoint_name="holding_flow",
+                    symbol=stock_code,
+                    holding_context=holding_context,
+                    call_inputs={
+                        "stock_name": stock_name,
+                        "stock_code": stock_code,
+                        "ws_data": ws_data,
+                        "recent_ticks": recent_ticks,
+                        "recent_candles": recent_candles,
+                        "position_ctx": position_ctx,
+                        "flow_history": flow_history,
+                        "decision_kind": decision_kind,
+                    },
+                    metadata=metadata_extra,
+                )
+            )
         holding_preflight = ai_input_preflight(holding_context)
         if runtime_preflight_required() and not bool(
             holding_preflight.get("allowed", False)
