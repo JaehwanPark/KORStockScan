@@ -97,6 +97,34 @@
 
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_END -->
 
+## 사용자 지시 실행 체크리스트
+
+- [x] `[ExactV2RuntimeStartupProvenance0728] Exact V2 PREMARKET 기동 provenance·effective holding context 확인` (`Due: 2026-07-28`, `Slot: PREOPEN`, `TimeWindow: 07:55~08:20`, `Track: AIPrompt`)
+  - Source: [Exact V2 작업지시](/home/ubuntu/KORStockScan/docs/code-improvement-workorders/exact_v2_premarket_promotion_work_instruction_2026-07-28.md), [holding_decision_context.py](/home/ubuntu/KORStockScan/src/engine/scalping/holding_decision_context.py), [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh)
+  - 완료 결과: `2026-07-28 07:55:02 KST` PID `712183`, commit `436b98e5`, scheduler `async_v1` 초기화는 확인됐으나 runtime provenance가 `source_dirty=true`다. effective env의 holding cohort keys는 모두 true지만 promotion activation은 `promotion_artifact_required_missing_or_invalid`; 실제 effective context는 KRX/PREMARKET=false, NXT=true다. 이는 PASS가 아닌 bounded NXT fallback이며 `input_preflight_mode=baseline_v1`이다.
+  - 권한 경계: source-dirty PID는 exact_v2 promotion, first-observation, Control/Baseline natural cohort의 runtime acceptance 증거가 아니다. 주문·가격·수량·threshold·provider route·hard safety·bot 상태를 변경하지 않는다.
+
+- [ ] `[ExactV2PremarketPromotionRevalidation0728] clean runtime 이후 Exact V2 binary full-market promotion 재검증` (`Due: 2026-07-28`, `Slot: PREOPEN`, `TimeWindow: 08:20~08:40`, `Track: AIPrompt`)
+  - Source: [Exact V2 작업지시](/home/ubuntu/KORStockScan/docs/code-improvement-workorders/exact_v2_premarket_promotion_work_instruction_2026-07-28.md), [promotion artifact 2026-07-27](/home/ubuntu/KORStockScan/data/runtime/ai_multi_timeframe_context_promotion_2026-07-27.json)
+  - 시작 gate: clean review finding=0, targeted tests/compile/diff=pass, `source_dirty=false` 신규 PID, runtime-env handoff/read-back, rollback/first-observation hook가 모두 확인될 때만 validation-only actual call을 수행한다. 현 PID `712183`은 `blocked_review_or_env`이므로 시작하지 않는다.
+  - 판정 기준: `analyze_target`, `entry_price`, `holding_score`, `holding_flow` 각각에서 completed-bar-only canonical context, exact request/prompt/payload/response hash, provider non-none, route/venue/session/source-quality, 비교 가능 외부 필드 `MISMATCH=0`을 모두 통과해야 한다. PASS만 `promoted_all_market_sessions_full`; 그 외는 blocker artifact와 `runtime_activation=false`로 닫는다.
+  - 금지: dirty runtime을 PASS 증거로 사용, partial/canary promotion, context 강제 활성화, 사후 payload 복원, 주문·가격·수량·threshold·provider/bot/hard-safety 변경을 금지한다.
+
+- [ ] `[ExactV2NaturalSampleControlBaseline0728] promotion PASS 후 자연 Exact V2 표본·60분 Control baseline 전환` (`Due: 2026-07-28`, `Slot: INTRADAY`, `TimeWindow: 08:40~23:00`, `Track: AIPrompt`)
+  - Source: [Exact V2 작업지시](/home/ubuntu/KORStockScan/docs/code-improvement-workorders/exact_v2_premarket_promotion_work_instruction_2026-07-28.md), [ai_decision_trace.py](/home/ubuntu/KORStockScan/src/engine/scalping/ai_decision_trace.py), [ai_decision_quality.py](/home/ubuntu/KORStockScan/src/engine/scalping/ai_decision_quality.py)
+  - 시작 조건: `[ExactV2PremarketPromotionRevalidation0728]`가 `promoted_all_market_sessions_full`일 때만 시작한다. validation-only 호출과 `baseline_v1`, compact, promotion 이전 payload는 Control/Baseline primary cohort에서 제외한다.
+  - 판정 기준: promotion 이후 자연 `exact_completed_bars_captured`, exact_v2 preflight allowed, provider non-none, canonical context/bundle/raw 1분봉/completed bar, venue/session consistency, source-quality pass row만 수집한다. 동일 venue/session 1/3/5/10/20/30/60분 outcome을 연결하고 60분 maturity·stage/venue sample floor 충족 시에만 `control_error_baseline_ready`로 닫는다.
+  - 다음 액션: `control_error_baseline_ready`, `sample_floor_keep_collecting`, `partial_horizons_keep_maturing`, `promotion_failed_no_collection`, `source_quality_blocked` 중 하나로 닫는다.
+
+- [ ] `[LimitDownRotationPreopenActivation0728] 연속 하한가 순환관찰 ON 기동·PID 귀속·무주문 검증` (`Due: 2026-07-28`, `Slot: PREOPEN`, `TimeWindow: 08:00~09:00`, `Track: ScalpingLogic`)
+  - Source: [limit-down PREOPEN 작업지시](/home/ubuntu/KORStockScan/docs/code-improvement-workorders/limit_down_rotation_preopen_activation_work_instruction_2026-07-28.md), [dated runtime override](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/operator_runtime_overrides_2026-07-28.env), [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh)
+  - 시작 gate: target-date handoff `status=pass`, dirty source review-gate finding `0`, relevant targeted test, provider config non-empty, dated override final load를 모두 확인한다. 명시적 operator start 지시 전에는 봇을 기동하지 않는다.
+  - 검증 기준: 신규 PID handoff `status=pass`/`pid_passed=true`, `general1/opening2/limit_down1/rising12`, 실제 WS route/item cap, candidate provenance 또는 valid no-candidate, raw `0B` tick, `LIMIT_DOWN_WATCH`의 Recommendation/ACTIVE_TARGET/BUY/주문 event `0`을 확인한다. 자연 AI/provider audit row가 발생한 경우 `provider=none`은 `0`이어야 하며, 아직 호출이 없으면 `pending_natural_provider_observation`으로 남긴다.
+  - rollback: source-quality block, WS cap 초과, registry leak, ordered tick capture 실패, trade-authority leak이면 이 레인만 OFF·UNREG·graceful restart하고 legacy opening 3을 복원한다. provider·threshold·가격·수량·cap·broker/hard safety는 변경하지 않는다.
+  - 2026-07-28 08:05 KST runtime observation: the already-running PID emitted `candidate_source_exception:TypeError` before any observation registration. The failure was reproduced as a `ka10081` daily-index `NaT` comparison error; no `LIMIT_DOWN_WATCH` Recommendation/ACTIVE_TARGET/BUY/order event was emitted.
+  - 2026-07-28 repair evidence: malformed `ka10081` date rows are now excluded per symbol while an all-invalid daily index remains fail-closed. Official source smoke returned `partial`, with 3 eligible candidates and 1 `ka10081_no_valid_completed_dates` row. The repair is review-gated but is not loaded into the existing PID; retain this item open until a separately explicit supervised restart and Pass 3 runtime verification.
+  - 2026-07-28 08:20 KST supervised graceful restart: reviewed PID `712183` exited through `restart.flag`; the existing `run_bot.sh` supervisor started PID `729936`. PID handoff was `pass` with no missing/mismatched key, limit-down flag=`true`, and the reviewed dirty-source provenance. New runtime loaded the official source as `partial` (3 valid candidates, 1 blocked row), registered `131100` with one WS item, and retained `runtime_effect=false`, `actual_order_submitted=false`, `broker_order_forbidden=true`. At 08:22 KST the candidate remained `WAITING_FIRST_TICK` because no trade tick had arrived; the manager recorded a `first_tick_pending` re-REG/heartbeat. No lane-attributable Recommendation/ACTIVE_TARGET/BUY/order/Telegram event was present. Keep the item open for natural raw-0B capture or the bounded no-tick rotation outcome.
+
 ## Project/Calendar 동기화
 
 문서/checklist를 수정했으면 parser 검증은 실행하고, Project/Calendar 동기화는 사용자가 아래 명령으로 수동 실행한다.
