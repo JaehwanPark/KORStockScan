@@ -50,6 +50,43 @@ def test_scanner_promotion_correlation_fields_preserve_forced_rising_missed_line
     assert fields["rising_missed_one_share_scout"] is True
 
 
+def test_scanner_fast_precheck_never_hydrates_promotion_runtime_context(monkeypatch):
+    hydrated = []
+    stock = {
+        "id": 91,
+        "name": "TEST",
+        "code": "005930",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        # Deliberately mismatch the anchors so the legacy correlation helper
+        # would attempt a persisted-context hydration.
+        "entry_armed_at_epoch": 100.0,
+        "scanner_promotion_emitted_epoch": 1.0,
+        "source_signature": "PRICE_JUMP_START",
+    }
+
+    monkeypatch.setattr(
+        state_handlers,
+        "_load_scanner_promotion_context_events",
+        lambda *args, **kwargs: hydrated.append((args, kwargs)) or {},
+    )
+
+    fields = state_handlers._scanner_fast_precheck_fields(
+        stock,
+        now_ts=101.0,
+        code="005930",
+        ws_data={"curr": 70_000, "last_ws_update_ts": 101.0},
+    )
+
+    assert hydrated == []
+    assert fields["fast_precheck_result"] in {
+        "eligible_for_heavy_entry_eval",
+        "stability_pending",
+        "budget_reallocated",
+    }
+
+
 def test_latency_entry_normal_mode_uses_defensive_limit_price():
     stock = {"name": "TEST", "position_tag": "MIDDLE"}
     entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.reset()

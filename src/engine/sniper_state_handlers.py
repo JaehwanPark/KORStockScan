@@ -9,6 +9,7 @@ import re
 import time
 import math
 import threading
+from contextvars import ContextVar
 from dataclasses import replace as dataclass_replace
 from datetime import (
     date as date_cls,
@@ -282,6 +283,13 @@ from src.engine.scalping.scanner_async_eval import (
     validate_scanner_async_commit,
 )
 from src.engine.scalping.scanner_runtime_scheduler import ScannerGeneration
+
+# The deadline scheduler's first precheck is deliberately WS-only. This
+# context-local guard prevents nested diagnostic helpers from reading persisted
+# promotion context while that deadline is being served.
+_SCANNER_FAST_PRECHECK_HYDRATION_FORBIDDEN: ContextVar[bool] = ContextVar(
+    "scanner_fast_precheck_hydration_forbidden", default=False
+)
 
 KIWOOM_TOKEN = None
 DB = None
@@ -764,6 +772,8 @@ def _load_scanner_promotion_context_events(
 def _hydrate_scanner_promotion_runtime_context(
     stock: dict[str, Any] | None,
 ) -> dict[str, Any]:
+    if _SCANNER_FAST_PRECHECK_HYDRATION_FORBIDDEN.get():
+        return {}
     if not isinstance(stock, dict):
         return {}
     anchor_epoch = _safe_float(stock.get("entry_armed_at_epoch"), 0.0)
@@ -16418,7 +16428,7 @@ def emit_scanner_runtime_queue_lag(
     return True
 
 
-def _scanner_fast_precheck_fields(
+def _scanner_fast_precheck_fields_impl(
     stock,
     *,
     now_ts: float,
@@ -16440,7 +16450,12 @@ def _scanner_fast_precheck_fields(
     market_data_signed_tape_state = (
         str(ws_data.get("market_data_signed_tape_state") or "").strip().lower()
     )
-    scanner_fields = _scanner_promotion_correlation_fields(stock)
+    # Fast precheck is the scheduler's WS-only lane.  Provenance repair may
+    # perform persisted-context I/O, so it belongs to attach/registration, not
+    # to this per-generation deadline path.
+    scanner_fields = _scanner_promotion_correlation_fields(
+        stock, allow_runtime_hydration=False
+    )
     added_time = _safe_float((stock or {}).get("added_time"), 0.0)
     armed_time = _safe_float((stock or {}).get("entry_armed_at_epoch"), 0.0)
     anchor_time = armed_time or added_time
@@ -16927,6 +16942,35 @@ def _scanner_fast_precheck_fields(
     }
 
 
+def _scanner_fast_precheck_fields(
+    stock,
+    *,
+    now_ts: float,
+    code: str | None = None,
+    ws_data=None,
+    queue_rank: int = 0,
+    scanner_queue_rank: int = 0,
+    watching_count: int = 0,
+    scanner_watching_count: int = 0,
+) -> dict[str, Any]:
+    """Build one WS-only precheck without persisted provenance hydration."""
+
+    token = _SCANNER_FAST_PRECHECK_HYDRATION_FORBIDDEN.set(True)
+    try:
+        return _scanner_fast_precheck_fields_impl(
+            stock,
+            now_ts=now_ts,
+            code=code,
+            ws_data=ws_data,
+            queue_rank=queue_rank,
+            scanner_queue_rank=scanner_queue_rank,
+            watching_count=watching_count,
+            scanner_watching_count=scanner_watching_count,
+        )
+    finally:
+        _SCANNER_FAST_PRECHECK_HYDRATION_FORBIDDEN.reset(token)
+
+
 def emit_scanner_fast_precheck(
     stock,
     code,
@@ -17041,7 +17085,9 @@ def emit_scanner_heavy_eval_lag(
     return True
 
 
-def _scanner_promotion_correlation_fields(stock) -> dict[str, Any]:
+def _scanner_promotion_correlation_fields(
+    stock, *, allow_runtime_hydration: bool = True
+) -> dict[str, Any]:
     if not isinstance(stock, dict):
         return {}
     anchor_epoch = _safe_float(stock.get("entry_armed_at_epoch"), 0.0)
@@ -17055,7 +17101,11 @@ def _scanner_promotion_correlation_fields(stock) -> dict[str, Any]:
             and abs(anchor_epoch - promotion_epoch) > 5.0
         )
     )
-    if needs_refresh and str(stock.get("position_tag") or "").upper() == "SCANNER":
+    if (
+        allow_runtime_hydration
+        and needs_refresh
+        and str(stock.get("position_tag") or "").upper() == "SCANNER"
+    ):
         _hydrate_scanner_promotion_runtime_context(stock)
     fields: dict[str, Any] = {}
     for key in (
