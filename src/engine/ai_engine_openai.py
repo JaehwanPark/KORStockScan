@@ -7198,6 +7198,7 @@ class GPTSniperEngine:
         position_ctx,
         metadata_extra=None,
         holding_context=None,
+        forensic_context_candidate=None,
     ):
         started = time.perf_counter()
         trace_context_fields = self._holding_trace_context_fields(
@@ -7212,12 +7213,21 @@ class GPTSniperEngine:
             "ai_input_build_fallback": "not_built",
             **trace_context_fields,
         }
-        if isinstance(holding_context, dict) and holding_context:
+        capture_context = (
+            holding_context
+            if isinstance(holding_context, dict) and holding_context
+            else (
+                forensic_context_candidate
+                if isinstance(forensic_context_candidate, dict)
+                else None
+            )
+        )
+        if isinstance(capture_context, dict) and capture_context:
             input_contract_fields.update(
                 self._capture_prepromotion_context_candidate(
                     endpoint_name="holding_score",
                     symbol=stock_code,
-                    holding_context=holding_context,
+                    holding_context=capture_context,
                     call_inputs={
                         "stock_name": stock_name,
                         "stock_code": stock_code,
@@ -7779,6 +7789,7 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
         decision_kind="intraday_exit",
         metadata_extra=None,
         holding_context=None,
+        forensic_context_candidate=None,
     ):
         started = time.perf_counter()
         trace_context_fields = self._holding_trace_context_fields(
@@ -7809,12 +7820,21 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
             "ai_input_build_fallback": "not_built",
             **trace_context_fields,
         }
-        if isinstance(holding_context, dict) and holding_context:
+        capture_context = (
+            holding_context
+            if isinstance(holding_context, dict) and holding_context
+            else (
+                forensic_context_candidate
+                if isinstance(forensic_context_candidate, dict)
+                else None
+            )
+        )
+        if isinstance(capture_context, dict) and capture_context:
             input_contract_fields.update(
                 self._capture_prepromotion_context_candidate(
                     endpoint_name="holding_flow",
                     symbol=stock_code,
-                    holding_context=holding_context,
+                    holding_context=capture_context,
                     call_inputs={
                         "stock_name": stock_name,
                         "stock_code": stock_code,

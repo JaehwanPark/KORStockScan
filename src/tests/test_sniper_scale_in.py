@@ -17421,6 +17421,7 @@ def test_real_pyramid_score_50_retry_success_allows_dynamic_qty(monkeypatch):
     assert retry_fields["scale_in_ai_authority_input_retry_attempted"] is True
     assert retry_fields["scale_in_ai_authority_input_retry_success"] is True
     assert context_call["now_ts"] == 1_002.0
+    assert context_call["include_disabled_forensics"] is True
     assert "decision_authority" not in retry_fields
     assert (
         retry_fields["holding_context_decision_authority"]

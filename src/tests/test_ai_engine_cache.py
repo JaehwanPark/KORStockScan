@@ -289,6 +289,61 @@ def test_disabled_entry_context_capture_receives_exact_natural_call_inputs(
     assert captured["call_inputs"]["program_net_qty"] == 13579
 
 
+def test_disabled_holding_forensic_candidate_does_not_unblock_live_preflight(
+    monkeypatch,
+):
+    engine = _build_engine()
+    captured = {}
+    ws_data = {"curr": 70050, "best_bid": 70000, "best_ask": 70100}
+    recent_ticks = [{"price": 70050, "volume": 17}]
+    recent_candles = [{"현재가": 70050, "거래량": 1000}]
+    position_ctx = {"buy_price": 69000, "buy_qty": 1}
+    forensic_context = {
+        "schema": "holding_decision_context_v1",
+        "enabled": False,
+        "venue": "KRX",
+        "session": "krx_regular",
+        "candle": {
+            "schema": "entry_candle_context_v1",
+            "input_bundle_version": "scalping_multi_timeframe_context_v1",
+            "bars": [{"t": "14:59", "c": 70050, "forming": False}],
+            "source_quality": {"status": "fresh_consistent", "blockers": []},
+        },
+        "source_quality": {"status": "disabled", "blockers": []},
+    }
+
+    def _capture(**kwargs):
+        captured.update(kwargs)
+        return {"ai_context_candidate_status": "ready_for_explicit_provider_call"}
+
+    monkeypatch.setenv("KORSTOCKSCAN_AI_INPUT_PREFLIGHT_REQUIRED", "true")
+    monkeypatch.setattr(engine, "_capture_prepromotion_context_candidate", _capture)
+    monkeypatch.setattr(
+        engine,
+        "_call_openai_safe",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("provider must remain blocked")
+        ),
+    )
+
+    result = engine.evaluate_scalping_holding_score(
+        "삼성전자",
+        "005930",
+        ws_data,
+        recent_ticks,
+        recent_candles,
+        position_ctx,
+        holding_context=None,
+        forensic_context_candidate=forensic_context,
+    )
+
+    assert result["ai_result_source"] == "input_preflight_blocked"
+    assert result["provider_called"] is False
+    assert captured["holding_context"] is forensic_context
+    assert captured["call_inputs"]["ws_data"] is ws_data
+    assert captured["call_inputs"]["position_ctx"] is position_ctx
+
+
 def test_holding_score_preflight_block_trace_keeps_snapshot_symbol_and_bid(
     monkeypatch,
 ):

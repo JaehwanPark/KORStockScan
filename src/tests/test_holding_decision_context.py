@@ -696,6 +696,59 @@ def test_runtime_fetch_request_code_matches_actual_holding_venue(monkeypatch):
     )
 
 
+def test_disabled_holding_context_builds_only_explicit_forensic_source(monkeypatch):
+    calls = []
+
+    monkeypatch.setattr(
+        state_handlers,
+        "holding_decision_context_enabled",
+        lambda **_kwargs: False,
+    )
+
+    def _build(*_args, **kwargs):
+        calls.append(kwargs)
+        return {
+            "schema": "holding_decision_context_v1",
+            "enabled": True,
+            "venue": "KRX",
+            "session": "krx_regular",
+            "source_quality": {
+                "status": "fresh_consistent",
+                "hold_defer_allowed": True,
+                "blockers": [],
+            },
+        }
+
+    monkeypatch.setattr(state_handlers, "build_holding_decision_context", _build)
+    common = {
+        "stock": {"buy_price": 70000, "buy_qty": 1},
+        "code": "005930",
+        "ws_data": {"curr": 70100},
+        "decision_kind": "holding_score",
+        "now_ts": datetime(2026, 7, 27, 14, 59, tzinfo=KST).timestamp(),
+        "recent_candles": [{"현재가": 70100}],
+        "recent_ticks": [{"price": 70100, "volume": 1}],
+        "position_ctx": {"buy_price": 70000, "buy_qty": 1},
+    }
+
+    assert state_handlers._build_holding_ai_decision_context(**common) is None
+    assert calls == []
+
+    source = state_handlers._build_holding_ai_decision_context(
+        **common,
+        include_disabled_forensics=True,
+    )
+    active, forensic = state_handlers._holding_context_call_views(source)
+
+    assert source["enabled"] is False
+    assert source["forensic_context_only"] is True
+    assert source["source_quality"]["status"] == "disabled"
+    assert source["source_quality"]["hold_defer_allowed"] is False
+    assert active is None
+    assert forensic is source
+    assert calls[0]["include_investor_source"] is False
+
+
 def test_hard_and_protect_exit_candidates_prohibit_holding_context_work(
     monkeypatch,
 ):

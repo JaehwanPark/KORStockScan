@@ -20096,23 +20096,25 @@ def _build_holding_ai_decision_context(
     candle_meta: dict | None = None,
     recent_ticks: list | None = None,
     position_ctx: dict | None = None,
+    include_disabled_forensics: bool = False,
 ) -> dict | None:
-    """Build context only for an explicitly enabled holding stage/cohort."""
+    """Build active context or a disabled, observation-only forensic source."""
 
     ws = ws_data if isinstance(ws_data, dict) else {}
     session = resolve_entry_candle_session(now_ts=now_ts)
     venue = resolve_entry_candle_venue(ws, session=session)
-    if not holding_decision_context_enabled(
+    context_enabled = holding_decision_context_enabled(
         venue=venue,
         session=session,
         decision_kind=decision_kind,
         now_ts=now_ts,
-    ):
+    )
+    if not context_enabled and not include_disabled_forensics:
         return None
     combined = dict(stock or {})
     combined.update(position_ctx or {})
     try:
-        return build_holding_decision_context(
+        context = build_holding_decision_context(
             KIWOOM_TOKEN,
             code,
             ws,
@@ -20126,15 +20128,31 @@ def _build_holding_ai_decision_context(
             recent_candles=recent_candles or [],
             candle_meta=candle_meta or {},
             recent_ticks=recent_ticks or [],
-            include_investor_source=True,
+            include_investor_source=context_enabled,
         )
+        if not context_enabled:
+            context = dict(context or {})
+            quality = (
+                dict(context.get("source_quality") or {})
+                if isinstance(context.get("source_quality"), dict)
+                else {}
+            )
+            blockers = list(quality.get("blockers") or [])
+            if str(quality.get("status") or "") == "fresh_consistent" and not blockers:
+                quality["status"] = "disabled"
+            quality["hold_defer_allowed"] = False
+            context["enabled"] = False
+            context["forensic_context_only"] = True
+            context["source_quality"] = quality
+        return context
     except Exception as exc:
         return {
             "schema": HOLDING_CONTEXT_SCHEMA,
-            "enabled": True,
+            "enabled": context_enabled,
             "decision_kind": decision_kind,
             "venue": venue,
             "session": session,
+            "forensic_context_only": not context_enabled,
             "source_quality": {
                 "status": "blocked",
                 "hold_defer_allowed": False,
@@ -20147,6 +20165,19 @@ def _build_holding_ai_decision_context(
             },
             "observation_contract": HOLDING_CONTEXT_OBSERVATION_CONTRACT,
         }
+
+
+def _holding_context_call_views(
+    context: dict | None,
+) -> tuple[dict | None, dict | None]:
+    """Separate runtime input from disabled forensic candidate input."""
+
+    source = context if isinstance(context, dict) and context else None
+    if source is None:
+        return None, None
+    if bool(source.get("enabled")):
+        return source, None
+    return None, source
 
 
 def _resolve_holding_context_request_code(
@@ -24372,7 +24403,7 @@ def _retry_holding_ai_submit_authority_before_block(
     # those observations against a post-I/O clock, not the loop timestamp from
     # before the calls, or healthy data is mislabeled as future.
     context_now_ts = time.time()
-    holding_context = _build_holding_ai_decision_context(
+    holding_context_source = _build_holding_ai_decision_context(
         stock=stock,
         code=code,
         ws_data=retry_ws_data,
@@ -24382,6 +24413,10 @@ def _retry_holding_ai_submit_authority_before_block(
         candle_meta=recent_candle_meta,
         recent_ticks=recent_ticks,
         position_ctx=holding_score_position_ctx,
+        include_disabled_forensics=True,
+    )
+    holding_context, forensic_context_candidate = _holding_context_call_views(
+        holding_context_source
     )
     if holding_context:
         # These fields are returned to a caller that already owns the scale-in
@@ -24401,27 +24436,22 @@ def _retry_holding_ai_submit_authority_before_block(
             "entry_adm_candidate_id": (stock or {}).get("entry_adm_candidate_id"),
             "source_event_stage": source_event_stage,
         }
-        if holding_context is None:
-            ai_decision = ai_engine.evaluate_scalping_holding_score(
-                (stock or {}).get("name"),
-                code,
-                retry_ws_data,
-                recent_ticks,
-                recent_candles,
-                holding_score_position_ctx,
-                metadata_extra=metadata_extra,
+        holding_call_kwargs = {"metadata_extra": metadata_extra}
+        if holding_context is not None:
+            holding_call_kwargs["holding_context"] = holding_context
+        if forensic_context_candidate is not None:
+            holding_call_kwargs["forensic_context_candidate"] = (
+                forensic_context_candidate
             )
-        else:
-            ai_decision = ai_engine.evaluate_scalping_holding_score(
-                (stock or {}).get("name"),
-                code,
-                retry_ws_data,
-                recent_ticks,
-                recent_candles,
-                holding_score_position_ctx,
-                metadata_extra=metadata_extra,
-                holding_context=holding_context,
-            )
+        ai_decision = ai_engine.evaluate_scalping_holding_score(
+            (stock or {}).get("name"),
+            code,
+            retry_ws_data,
+            recent_ticks,
+            recent_candles,
+            holding_score_position_ctx,
+            **holding_call_kwargs,
+        )
     except Exception as exc:
         fields[f"{field_prefix}_input_retry_reason"] = "holding_ai_error"
         fields[f"{field_prefix}_input_retry_error"] = str(exc)[:180]
@@ -43479,7 +43509,7 @@ def _evaluate_holding_flow_override(
     # provenance continues to update in-place.  Use the post-fetch clock for
     # the exact AI snapshot so fresh data is never classified as future.
     holding_context_now_ts = time.time()
-    holding_context = _build_holding_ai_decision_context(
+    holding_context_source = _build_holding_ai_decision_context(
         stock=stock,
         code=code,
         ws_data=ws_data,
@@ -43489,6 +43519,10 @@ def _evaluate_holding_flow_override(
         candle_meta=recent_candle_meta,
         recent_ticks=recent_ticks,
         position_ctx=position_ctx,
+        include_disabled_forensics=True,
+    )
+    holding_context, forensic_context_candidate = _holding_context_call_views(
+        holding_context_source
     )
     holding_context_log_fields = holding_decision_context_log_fields(holding_context)
     holding_flow_metadata = {
@@ -43511,6 +43545,8 @@ def _evaluate_holding_flow_override(
     }
     if holding_context is not None:
         holding_flow_kwargs["holding_context"] = holding_context
+    if forensic_context_candidate is not None:
+        holding_flow_kwargs["forensic_context_candidate"] = forensic_context_candidate
     flow_result = ai_engine.evaluate_scalping_holding_flow(
         stock.get("name", code),
         code,
@@ -66557,7 +66593,7 @@ def handle_holding_state(
                             **holding_exit_micro_estimator_fields,
                         }
                         holding_context_now_ts = time.time()
-                        holding_context = _build_holding_ai_decision_context(
+                        holding_context_source = _build_holding_ai_decision_context(
                             stock=stock,
                             code=code,
                             ws_data=ws_data,
@@ -66567,6 +66603,10 @@ def handle_holding_state(
                             candle_meta=recent_candle_meta,
                             recent_ticks=recent_ticks,
                             position_ctx=holding_score_position_ctx,
+                            include_disabled_forensics=True,
+                        )
+                        holding_context, forensic_context_candidate = (
+                            _holding_context_call_views(holding_context_source)
                         )
                         if hasattr(ai_engine, "evaluate_scalping_holding_score"):
                             metadata_extra = {
@@ -66585,6 +66625,10 @@ def handle_holding_state(
                             }
                             if holding_context is not None:
                                 holding_call_kwargs["holding_context"] = holding_context
+                            if forensic_context_candidate is not None:
+                                holding_call_kwargs["forensic_context_candidate"] = (
+                                    forensic_context_candidate
+                                )
                             ai_decision = ai_engine.evaluate_scalping_holding_score(
                                 stock["name"],
                                 code,
