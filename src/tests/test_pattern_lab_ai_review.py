@@ -1556,6 +1556,171 @@ def test_pattern_lab_ai_review_keeps_exact_adm_sample_floor_gap_without_contract
     ]
 
 
+def test_pattern_lab_ai_review_resolves_exact_source_maturity_contracts(
+    tmp_path, monkeypatch
+):
+    report_dir = tmp_path / "data" / "report"
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    _write_json(
+        report_dir
+        / "pattern_lab_currentness_audit"
+        / "pattern_lab_currentness_audit_2026-05-15.json",
+        {
+            "status": "pass",
+            "summary": {
+                "consumed_feedback_source_count": 6,
+                "missing_feedback_source_count": 0,
+            },
+            "checks": [],
+        },
+    )
+    _write_json(
+        report_dir
+        / "scalping_pattern_lab_automation"
+        / "scalping_pattern_lab_automation_2026-05-15.json",
+        {
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "source_quality_contracts": {
+                "scalp_entry_adm": {
+                    "contract_id": "scalp_entry_adm_pattern_lab_source_quality",
+                    "source_contract_status": "implemented",
+                    "sample_count": 0,
+                    "sample_floor": 20,
+                    "sample_floor_status": "hold_sample",
+                    "tuning_input_allowed": False,
+                    "blocked_reasons": ["joined_sample_below_sample_floor"],
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                }
+            },
+        },
+    )
+    _write_json(
+        report_dir
+        / "lifecycle_decision_matrix"
+        / "lifecycle_decision_matrix_2026-05-15.json",
+        {
+            "runtime_effect": False,
+            "summary": {
+                "total_rows": 168,
+                "joined_rows": 3,
+                "stage_counts": {"entry": 147, "submit": 17},
+                "complete_flow_count": 0,
+                "join_contract_blocked": True,
+            },
+            "warnings": ["all_stage_policy_entries_below_sample_floor"],
+        },
+    )
+    _write_json(
+        report_dir
+        / "swing_lifecycle_decision_matrix"
+        / "swing_lifecycle_decision_matrix_2026-05-15.json",
+        {
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "summary": {
+                "raw_swing_event_count": 0,
+                "probe_rows": 0,
+                "discovery_rows": 28843,
+                "clean_baseline_discovery_filter_active": True,
+                "clean_baseline_requested_start_date": "2026-04-28",
+                "clean_baseline_effective_start_date": "2026-06-04",
+                "clean_baseline_excluded_pre_start_date": "2026-06-04",
+            },
+            "warnings": [
+                "swing_intraday_live_equiv_probe_missing",
+                "pending_future_quotes",
+                "clean_tuning_baseline_swing_discovery_lookback_filtered",
+            ],
+        },
+    )
+    _write_json(
+        report_dir
+        / "swing_strategy_discovery_ev"
+        / "swing_strategy_discovery_ev_2026-05-15.json",
+        {
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "summary": {
+                "pending_future_quote_count": 6277,
+                "labeled_sample_count": 4041,
+            },
+            "warnings": [
+                "pending_future_quotes",
+                "clean_tuning_baseline_swing_discovery_lookback_filtered",
+            ],
+        },
+    )
+    for label in (
+        "threshold_cycle_ev",
+        "lifecycle_bucket_discovery",
+        "swing_lifecycle_bucket_discovery",
+    ):
+        _write_json(
+            report_dir / label / f"{label}_2026-05-15.json",
+            {
+                "status": "pass",
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+            },
+        )
+    review_ids = [
+        "scalp_entry_adm_sample_floor_gap",
+        "lifecycle_decision_matrix_all_stage_below_sample_floor",
+        "swing_intraday_live_equiv_probe_missing",
+        "swing_strategy_discovery_pending_quotes",
+        "swing_clean_tuning_baseline_lookback_filtered",
+    ]
+    raw_response = {
+        "schema_version": 1,
+        "interpretation": {"review_items": [], "source_feedback_status": "warning"},
+        "audit": {
+            "status": "correction_required",
+            "issues": review_ids,
+            "forbidden_use_violations": [],
+        },
+        "final_conclusions": [
+            {
+                "review_id": review_id,
+                "domain": "swing" if review_id.startswith("swing_") else "scalping",
+                "final_state": "source_quality_gap",
+                "final_decision": "block_runtime_use",
+                "reason": "source maturity requires follow-up",
+            }
+            for review_id in review_ids
+        ],
+    }
+
+    report = mod.build_pattern_lab_ai_review_report(
+        "2026-05-15", provider="openai", ai_raw_response=raw_response
+    )
+
+    assert report["status"] == "pass"
+    assert report["code_improvement_orders"] == []
+    conclusions = report["ai_two_pass_review"]["final_conclusions"]
+    assert {item["review_id"] for item in conclusions} == set(review_ids)
+    assert all(item["final_decision"] == "keep" for item in conclusions)
+    assert all(item["auditor_pass"] is True for item in conclusions)
+    assert all(
+        item["source_context_resolution"]["runtime_effect"] is False
+        for item in conclusions
+    )
+    by_id = {item["review_id"]: item for item in conclusions}
+    assert (
+        by_id["swing_strategy_discovery_pending_quotes"]["source_context_resolution"][
+            "details"
+        ]["pending_future_quote_count"]
+        == 6277
+    )
+    assert (
+        by_id["swing_intraday_live_equiv_probe_missing"]["source_context_resolution"][
+            "details"
+        ]["required_action"]
+        == "keep_observing_until_natural_swing_probe_event"
+    )
+
+
 def test_pattern_lab_ai_review_generic_resolution_ids_exclude_specific_source_gaps():
     assert "ai_review_two_pass_missing" not in mod.GENERIC_FEEDBACK_HANDOFF_REVIEW_IDS
     assert "ai_two_pass_review_missing" not in mod.GENERIC_FEEDBACK_HANDOFF_REVIEW_IDS

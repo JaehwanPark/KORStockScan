@@ -2564,12 +2564,93 @@ def _reviewed_unknown_reason_for_stage_field(
             return False
         if _field_text("tier_reason") != "unknown_venue_fallback":
             return False
-        if _field_text("venue").upper() != "UNKNOWN":
-            return False
+        resolved_venue = _field_text("venue").upper()
+        effective_venue = _field_text("effective_venue").upper()
+        venue_contract = resolved_venue == "UNKNOWN" or (
+            resolved_venue == "PREMARKET_KRX_LIKE"
+            and effective_venue == "PREMARKET_KRX_LIKE"
+        )
         return (
-            _field_text("formula_version") == "entry_type_5stage_cap25_v1"
+            venue_contract
+            and _field_text("formula_version") == "entry_type_5stage_cap25_v1"
             and _field_text("tier") == "1"
             and _field_text("reference_time") not in {"", "-", "missing"}
+        )
+
+    def _is_reviewed_observation_only_venue_not_available() -> bool:
+        if str(key or "") not in {"venue", "effective_venue"}:
+            return False
+        if str(value or "").strip().upper() != "UNKNOWN":
+            return False
+        if not _is_falseish("actual_order_submitted") or not _is_trueish(
+            "broker_order_forbidden"
+        ):
+            return False
+        authority = _field_text("decision_authority")
+        resolution = _field_text("venue_resolution")
+        if stage == "rising_missed_watch_not_rising_skipped":
+            return (
+                authority == "rising_missed_watch_budget_fast_reject"
+                and _field_text("effective_venue") == "NXT"
+                and resolution.startswith(
+                    "rising_missed_initial_gate:session_explicit_conflict:"
+                )
+            )
+        if stage == "scalping_scanner_watch_eviction":
+            return (
+                authority == "real_scalping_scanner_watch_eviction_pool_management_only"
+                and resolution == "scanner_runtime_event:explicit_target_venue_missing"
+            )
+        return False
+
+    def _is_reviewed_rising_missed_ws_route_not_available() -> bool:
+        if str(key or "") not in {
+            "rising_missed_ws_0b_route",
+            "rising_missed_ws_0d_route",
+            "rising_missed_ws_last_route",
+        }:
+            return False
+        if str(value or "").strip().lower() != "unknown":
+            return False
+        return (
+            _field_text("rising_missed_nxt_observation_only").lower()
+            in {"true", "1", "yes"}
+            and _field_text("rising_missed_nxt_metric_role") == "source_quality_gate"
+            and _field_text("rising_missed_nxt_decision_authority")
+            == "observe_only_no_runtime_mutation"
+            and _field_text("rising_missed_effective_venue")
+            in {"KRX", "PREMARKET_KRX_LIKE", "OFF_SESSION"}
+            and _is_falseish("actual_order_submitted")
+            and _is_trueish("broker_order_forbidden")
+        )
+
+    def _is_reviewed_scanner_async_transport_not_available() -> bool:
+        if (
+            stage != "scalping_scanner_async_result_rejected"
+            or str(key or "") != "scanner_async_transport_namespace"
+            or str(value or "").strip().lower() != "unknown"
+        ):
+            return False
+        return (
+            _field_text("decision_authority") == "scanner_async_observation_only_reject"
+            and bool(_field_text("scanner_async_result_status"))
+            and _is_falseish("actual_order_submitted")
+            and _is_trueish("broker_order_forbidden")
+        )
+
+    def _is_reviewed_signed_tape_event_side_not_available() -> bool:
+        if (
+            stage != "scalp_entry_action_decision_snapshot"
+            or str(key or "")
+            != "latency_true_ofi_direct_canary_signed_tape_event_time_latest_side"
+            or str(value or "").strip().upper() != "UNKNOWN"
+        ):
+            return False
+        return (
+            _field_text("decision_authority") == "entry_advisory_prompt_context_only"
+            and bool(_field_text("entry_action_final_block_reason"))
+            and _is_falseish("actual_order_submitted")
+            and _is_trueish("broker_order_forbidden")
         )
 
     def _is_reviewed_nxt_post_block_source_gap() -> bool:
@@ -2625,6 +2706,7 @@ def _reviewed_unknown_reason_for_stage_field(
                 "post_probe_nxt_event_time_speed_unavailable",
                 "post_probe_resolver_unavailable",
                 "post_probe_stale_wait_positive_confirmation_required",
+                "post_probe_wait_positive_confirmation_required",
                 "post_probe_wait_negative_group",
             }
             and _is_falseish("actual_order_submitted")
@@ -2680,7 +2762,10 @@ def _reviewed_unknown_reason_for_stage_field(
             )
         if stage == "scalping_scanner_scheduler_boot_restore_expired":
             return venue_resolution.startswith("scanner_scheduler_boot_")
-        return venue_resolution == "missing_tradable_explicit_venue"
+        return venue_resolution == "missing_tradable_explicit_venue" or (
+            stage == "scalping_scanner_scheduler_generation_rejected"
+            and venue_resolution.startswith("scanner_scheduler_boot_")
+        )
 
     def _is_reviewed_holding_preflight_unknown_provenance() -> bool:
         if stage not in {"ai_holding_review", "scale_in_ai_authority_retry"}:
@@ -2984,6 +3069,14 @@ def _reviewed_unknown_reason_for_stage_field(
         return "reviewed_entry_order_flow_not_available"
     if _is_reviewed_sizing_unknown_venue_fallback():
         return "reviewed_explicit_sizing_unknown_venue_fallback"
+    if _is_reviewed_observation_only_venue_not_available():
+        return "reviewed_observation_only_venue_not_available"
+    if _is_reviewed_rising_missed_ws_route_not_available():
+        return "reviewed_rising_missed_ws_route_not_available"
+    if _is_reviewed_scanner_async_transport_not_available():
+        return "reviewed_scanner_async_transport_not_available"
+    if _is_reviewed_signed_tape_event_side_not_available():
+        return "reviewed_signed_tape_event_side_not_available"
     if _is_reviewed_nxt_post_block_source_gap():
         return "reviewed_nxt_post_block_source_gap_provenance"
     if _is_reviewed_post_probe_direction_source_gap():
@@ -3085,14 +3178,59 @@ def _unknown_scan_values(
     return values
 
 
+def _deduplicate_json_value(
+    value: Any,
+    *,
+    key_cache: dict[str, str],
+    string_cache: dict[str, str],
+) -> Any:
+    """Share repeated JSON strings without changing the decoded value contract."""
+    if isinstance(value, str):
+        cached = string_cache.get(value)
+        if cached is not None:
+            return cached
+        string_cache[value] = value
+        return value
+    if isinstance(value, list):
+        return [
+            _deduplicate_json_value(
+                item,
+                key_cache=key_cache,
+                string_cache=string_cache,
+            )
+            for item in value
+        ]
+    if isinstance(value, dict):
+        deduplicated: dict[str, Any] = {}
+        for key, item in value.items():
+            cached_key = key_cache.get(key)
+            if cached_key is None:
+                key_cache[key] = key
+                cached_key = key
+            deduplicated[cached_key] = _deduplicate_json_value(
+                item,
+                key_cache=key_cache,
+                string_cache=string_cache,
+            )
+        return deduplicated
+    return value
+
+
 def _iter_events(path: Path) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
+    key_cache: dict[str, str] = {}
+    string_cache: dict[str, str] = {}
     path = existing_or_gzip_path(path)
     if not path.exists():
         return rows
     for payload in iter_jsonl(path):
         if payload.get("event_type") not in (None, "", "pipeline_event"):
             continue
+        payload = _deduplicate_json_value(
+            payload,
+            key_cache=key_cache,
+            string_cache=string_cache,
+        )
         fields = payload.get("fields")
         payload["fields"] = fields if isinstance(fields, dict) else {}
         rows.append(payload)
@@ -5112,16 +5250,25 @@ def _exclude_hard_blocking_rows_from_raw(
         for item in exclusions
         if isinstance(item, dict) and str(item.get("line_no") or "").isdigit()
     }
-    kept: list[str] = []
     excluded_payloads: list[dict[str, Any]] = []
     if raw_path.name.endswith(".gz"):
         raw_handle = gzip.open(raw_path, "rt", encoding="utf-8")
     else:
         raw_handle = raw_path.open("r", encoding="utf-8")
-    with raw_handle as fh:
+    tmp_path = raw_path.with_suffix(raw_path.suffix + ".tmp_row_exclusion")
+    if raw_path.name.endswith(".gz"):
+        tmp_handle = gzip.open(
+            tmp_path,
+            "wt",
+            encoding="utf-8",
+            compresslevel=9,
+        )
+    else:
+        tmp_handle = tmp_path.open("w", encoding="utf-8")
+    with raw_handle as fh, tmp_handle as output:
         for line_no, line in enumerate(fh, 1):
             if line_no not in excluded_lines:
-                kept.append(line)
+                output.write(line)
                 continue
             try:
                 payload = json.loads(line)
@@ -5133,12 +5280,6 @@ def _exclude_hard_blocking_rows_from_raw(
         exclusions_by_line,
         target_date=target_date,
     )
-    tmp_path = raw_path.with_suffix(raw_path.suffix + ".tmp_row_exclusion")
-    if raw_path.name.endswith(".gz"):
-        with gzip.open(tmp_path, "wt", encoding="utf-8", compresslevel=9) as fh:
-            fh.write("".join(kept))
-    else:
-        tmp_path.write_text("".join(kept), encoding="utf-8")
     tmp_path.replace(raw_path)
     manifest = {
         "report_type": "raw_row_exclusion",

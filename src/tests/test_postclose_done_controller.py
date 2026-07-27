@@ -395,7 +395,11 @@ def test_postclose_done_controller_reconciles_repaired_failed_status_without_ful
             "status": "fail",
             "predecessor_integrity": {"log_issues": ["postclose_fail_marker_present"]},
             "artifact_status": _passable_artifact_status(),
-            "handoff_warnings": ["active_sim_priority_preopen_handoff_pending"],
+            "handoff_warnings": [
+                "active_sim_priority_preopen_handoff_pending",
+                "lifecycle_bucket_confirmation_windows_not_target",
+                "lifecycle_bucket_discovery_rolling10d_parent_granularity_not_target",
+            ],
             "conversion_kpi": {
                 "status": "warning",
                 "warnings": ["active_or_hypothesis_preopen_handoff_pending"],
@@ -419,7 +423,11 @@ def test_postclose_done_controller_reconciles_repaired_failed_status_without_ful
                         "log_issues": ["postclose_fail_marker_present"]
                     },
                     "artifact_status": _passable_artifact_status(),
-                    "handoff_warnings": ["active_sim_priority_preopen_handoff_pending"],
+                    "handoff_warnings": [
+                        "active_sim_priority_preopen_handoff_pending",
+                        "lifecycle_bucket_confirmation_windows_not_target",
+                        "lifecycle_bucket_discovery_rolling10d_parent_granularity_not_target",
+                    ],
                     "conversion_kpi": {
                         "status": "warning",
                         "warnings": ["active_or_hypothesis_preopen_handoff_pending"],
@@ -443,7 +451,9 @@ def test_postclose_done_controller_reconciles_repaired_failed_status_without_ful
                         "predecessor_integrity": {"log_issues": []},
                         "artifact_status": _passable_artifact_status(),
                         "handoff_warnings": [
-                            "active_sim_priority_preopen_handoff_pending"
+                            "active_sim_priority_preopen_handoff_pending",
+                            "lifecycle_bucket_confirmation_windows_not_target",
+                            "lifecycle_bucket_discovery_rolling10d_parent_granularity_not_target",
                         ],
                         "conversion_kpi": {
                             "status": "warning",

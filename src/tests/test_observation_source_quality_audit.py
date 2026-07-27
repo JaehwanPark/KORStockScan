@@ -8,6 +8,48 @@ import pytest
 from src.engine import observation_source_quality_audit as audit
 
 
+def test_iter_events_deduplicates_repeated_json_strings_without_changing_values(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "pipeline_events_2026-07-27.jsonl"
+    repeated_fields = {
+        "decision_authority": "source_quality_only",
+        "venue_resolution": {
+            "effective_venue": "KRX",
+            "source": "realtime_provenance",
+        },
+    }
+    rows = [
+        {
+            "event_type": "pipeline_event",
+            "stage": "stage_a",
+            "fields": repeated_fields,
+        },
+        {
+            "event_type": "pipeline_event",
+            "stage": "stage_b",
+            "fields": repeated_fields,
+        },
+    ]
+    path.write_text(
+        "\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n",
+        encoding="utf-8",
+    )
+
+    loaded = audit._iter_events(path)
+
+    assert loaded == rows
+    assert (
+        loaded[0]["fields"]["decision_authority"]
+        is loaded[1]["fields"]["decision_authority"]
+    )
+    assert next(iter(loaded[0]["fields"])) is next(iter(loaded[1]["fields"]))
+    assert (
+        loaded[0]["fields"]["venue_resolution"]["source"]
+        is loaded[1]["fields"]["venue_resolution"]["source"]
+    )
+
+
 def _event(stage: str, fields: dict, *, record_id: int = 1) -> dict:
     return {
         "event_type": "pipeline_event",
@@ -1852,6 +1894,23 @@ def test_observation_source_quality_audit_reviews_20260722_explicit_unknown_prov
                 record_id=3,
             ),
             _event(
+                "probe_continuation_deferred",
+                {
+                    "decision_authority": "dynamic_entry_price_resolver_p1_post_probe",
+                    "post_probe_direction_state": "UNKNOWN",
+                    "post_probe_continuation_action": "DEFER",
+                    "post_probe_direction_reason": (
+                        "post_probe_wait_positive_confirmation_required"
+                    ),
+                    "post_probe_direction_group_count": 2,
+                    "post_probe_directional_group_count": 1,
+                    "allowed_runtime_apply": False,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                },
+                record_id=6,
+            ),
+            _event(
                 "scalp_trailing_continuation_recheck",
                 {
                     "quote_recovery_large_sell_state": "unknown",
@@ -1907,6 +1966,155 @@ def test_observation_source_quality_audit_reviews_20260722_explicit_unknown_prov
     )
     assert reviewed["entry_ai_price_canary_applied"]["entry_order_flow_status"] == (
         "reviewed_entry_order_flow_not_available"
+    )
+
+
+def test_observation_source_quality_audit_reviews_legacy_observation_only_unknowns(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-07-27",
+        [
+            _event(
+                "budget_pass",
+                {
+                    "formula_version": "entry_type_5stage_cap25_v1",
+                    "tier": 1,
+                    "tier_reason": "unknown_venue_fallback",
+                    "venue": "PREMARKET_KRX_LIKE",
+                    "effective_venue": "PREMARKET_KRX_LIKE",
+                    "reference_time": "2026-07-27T08:10:00+09:00",
+                },
+                record_id=1,
+            ),
+            _event(
+                "rising_missed_watch_not_rising_skipped",
+                {
+                    "venue": "UNKNOWN",
+                    "effective_venue": "NXT",
+                    "venue_resolution": (
+                        "rising_missed_initial_gate:session_explicit_conflict:"
+                        "consistent_explicit:stock.effective_venue"
+                    ),
+                    "decision_authority": "rising_missed_watch_budget_fast_reject",
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                },
+                record_id=2,
+            ),
+            _event(
+                "scalping_scanner_watch_eviction",
+                {
+                    "venue": "UNKNOWN",
+                    "effective_venue": "UNKNOWN",
+                    "venue_resolution": (
+                        "scanner_runtime_event:explicit_target_venue_missing"
+                    ),
+                    "decision_authority": (
+                        "real_scalping_scanner_watch_eviction_pool_management_only"
+                    ),
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                },
+                record_id=3,
+            ),
+            _event(
+                "scalping_scanner_scheduler_generation_rejected",
+                {
+                    "venue": "UNKNOWN",
+                    "effective_venue": "UNKNOWN",
+                    "venue_resolution": "scanner_scheduler_boot_promotion_ttl_expired",
+                    "decision_authority": (
+                        "scanner_runtime_scheduler_only_no_order_authority"
+                    ),
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                },
+                record_id=4,
+            ),
+            _event(
+                "rising_missed_tp1_counterfactual_submit_safety",
+                {
+                    "rising_missed_ws_0d_route": "unknown",
+                    "rising_missed_effective_venue": "KRX",
+                    "rising_missed_nxt_observation_only": True,
+                    "rising_missed_nxt_metric_role": "source_quality_gate",
+                    "rising_missed_nxt_decision_authority": (
+                        "observe_only_no_runtime_mutation"
+                    ),
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                },
+                record_id=5,
+            ),
+            _event(
+                "scalping_scanner_async_result_rejected",
+                {
+                    "scanner_async_transport_namespace": "unknown",
+                    "scanner_async_result_status": "preparation_deadline_expired",
+                    "decision_authority": "scanner_async_observation_only_reject",
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                },
+                record_id=6,
+            ),
+            _event(
+                "scalp_entry_action_decision_snapshot",
+                {
+                    "latency_true_ofi_direct_canary_signed_tape_event_time_latest_side": (
+                        "UNKNOWN"
+                    ),
+                    "entry_action_final_block_reason": "tick_window_span_sec_ge_60",
+                    "decision_authority": "entry_advisory_prompt_context_only",
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                },
+                record_id=7,
+            ),
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-07-27")
+
+    assert report["unknown_token_findings"] == []
+    reviewed = {
+        item["stage"]: {
+            field["field"]: field["reviewed_reason"] for field in item["fields"]
+        }
+        for item in report["reviewed_unknown_token_findings"]
+    }
+    assert reviewed["budget_pass"]["tier_reason"] == (
+        "reviewed_explicit_sizing_unknown_venue_fallback"
+    )
+    assert reviewed["rising_missed_watch_not_rising_skipped"]["venue"] == (
+        "reviewed_observation_only_venue_not_available"
+    )
+    assert reviewed["scalping_scanner_watch_eviction"]["effective_venue"] == (
+        "reviewed_observation_only_venue_not_available"
+    )
+    assert reviewed["scalping_scanner_scheduler_generation_rejected"]["venue"] == (
+        "reviewed_scanner_venue_fail_closed_provenance"
+    )
+    assert (
+        reviewed["rising_missed_tp1_counterfactual_submit_safety"][
+            "rising_missed_ws_0d_route"
+        ]
+        == "reviewed_rising_missed_ws_route_not_available"
+    )
+    assert (
+        reviewed["scalping_scanner_async_result_rejected"][
+            "scanner_async_transport_namespace"
+        ]
+        == "reviewed_scanner_async_transport_not_available"
+    )
+    assert (
+        reviewed["scalp_entry_action_decision_snapshot"][
+            "latency_true_ofi_direct_canary_signed_tape_event_time_latest_side"
+        ]
+        == "reviewed_signed_tape_event_side_not_available"
     )
 
 

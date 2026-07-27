@@ -853,6 +853,7 @@ def _resolved_source_context_conclusion(
     *,
     status: str,
     contract_id: str,
+    details: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         **item,
@@ -866,8 +867,158 @@ def _resolved_source_context_conclusion(
             "runtime_effect": False,
             "allowed_runtime_apply": False,
             "decision_authority": "pattern_lab_ai_review_source_only",
+            **({"details": details} if details else {}),
         },
     }
+
+
+def _source_maturity_resolution(
+    item: dict[str, Any], context: dict[str, Any]
+) -> tuple[str, str, dict[str, Any]] | None:
+    """Resolve expected source maturity states without hiding contract gaps."""
+
+    if str(item.get("final_state") or "") != "source_quality_gap":
+        return None
+    if str(item.get("final_decision") or "") == "keep":
+        return None
+    review_id = str(item.get("review_id") or "").strip().lower()
+
+    if review_id in {
+        "scalp_entry_adm_sample_floor",
+        "scalp_entry_adm_sample_floor_gap",
+    }:
+        source = _source_summary(context, "scalping_pattern_lab_automation")
+        contracts = (
+            source.get("source_quality_contracts")
+            if isinstance(source.get("source_quality_contracts"), dict)
+            else {}
+        )
+        contract = (
+            contracts.get("scalp_entry_adm")
+            if isinstance(contracts.get("scalp_entry_adm"), dict)
+            else {}
+        )
+        if (
+            source.get("runtime_effect") is False
+            and source.get("allowed_runtime_apply") is False
+            and contract.get("source_contract_status") == "implemented"
+            and contract.get("sample_floor_status") == "hold_sample"
+            and contract.get("tuning_input_allowed") is False
+            and "joined_sample_below_sample_floor"
+            in [str(value) for value in contract.get("blocked_reasons") or []]
+            and contract.get("runtime_effect") is False
+            and contract.get("allowed_runtime_apply") is False
+        ):
+            return (
+                "resolved_by_existing_sample_floor_hold_contract",
+                str(contract.get("contract_id") or "scalp_entry_adm_sample_floor"),
+                {
+                    "sample_count": _safe_int(contract.get("sample_count")),
+                    "sample_floor": _safe_int(contract.get("sample_floor")),
+                    "sample_floor_status": contract.get("sample_floor_status"),
+                },
+            )
+
+    if review_id == "lifecycle_decision_matrix_all_stage_below_sample_floor":
+        source = _source_summary(context, "lifecycle_decision_matrix")
+        summary = _nested_report_summary(source)
+        warnings = {str(value) for value in source.get("warnings") or []}
+        if (
+            source.get("runtime_effect") is False
+            and source.get("allowed_runtime_apply") is not True
+            and "all_stage_policy_entries_below_sample_floor" in warnings
+            and _safe_int(summary.get("total_rows")) > 0
+        ):
+            return (
+                "resolved_as_observed_sample_maturity_hold",
+                "lifecycle_decision_matrix_stage_sample_maturity",
+                {
+                    "total_rows": _safe_int(summary.get("total_rows")),
+                    "joined_rows": _safe_int(summary.get("joined_rows")),
+                    "stage_counts": summary.get("stage_counts") or {},
+                    "complete_flow_count": _safe_int(
+                        summary.get("complete_flow_count")
+                    ),
+                    "join_contract_blocked": bool(summary.get("join_contract_blocked")),
+                },
+            )
+
+    swing_matrix = _source_summary(context, "swing_lifecycle_decision_matrix")
+    swing_summary = _nested_report_summary(swing_matrix)
+    swing_warnings = {str(value) for value in swing_matrix.get("warnings") or []}
+    strategy_source = _source_summary(context, "swing_strategy_discovery_ev")
+    strategy_summary = _nested_report_summary(strategy_source)
+    strategy_warnings = {str(value) for value in strategy_source.get("warnings") or []}
+    swing_source_only = (
+        swing_matrix.get("runtime_effect") is False
+        and swing_matrix.get("allowed_runtime_apply") is not True
+        and strategy_source.get("runtime_effect") is False
+        and strategy_source.get("allowed_runtime_apply") is not True
+    )
+    if (
+        review_id == "swing_intraday_live_equiv_probe_missing"
+        and swing_source_only
+        and "swing_intraday_live_equiv_probe_missing" in swing_warnings
+        and _safe_int(swing_summary.get("raw_swing_event_count")) == 0
+        and _safe_int(swing_summary.get("probe_rows")) == 0
+    ):
+        return (
+            "resolved_as_no_natural_intraday_probe_sample",
+            "swing_intraday_probe_observation_maturity",
+            {
+                "raw_swing_event_count": 0,
+                "probe_rows": 0,
+                "discovery_rows": _safe_int(swing_summary.get("discovery_rows")),
+                "required_action": "keep_observing_until_natural_swing_probe_event",
+            },
+        )
+    if (
+        review_id
+        in {
+            "swing_strategy_discovery_pending_quotes",
+            "swing_strategy_discovery_pending_future_quotes",
+        }
+        and swing_source_only
+        and "pending_future_quotes" in strategy_warnings
+        and _safe_int(strategy_summary.get("pending_future_quote_count")) > 0
+    ):
+        return (
+            "resolved_as_future_label_maturity_hold",
+            "swing_strategy_discovery_pending_quote_maturity",
+            {
+                "pending_future_quote_count": _safe_int(
+                    strategy_summary.get("pending_future_quote_count")
+                ),
+                "labeled_sample_count": _safe_int(
+                    strategy_summary.get("labeled_sample_count")
+                ),
+                "required_action": "regenerate_after_quote_horizon_matures",
+            },
+        )
+    if (
+        review_id == "swing_clean_tuning_baseline_lookback_filtered"
+        and swing_source_only
+        and "clean_tuning_baseline_swing_discovery_lookback_filtered"
+        in swing_warnings | strategy_warnings
+        and swing_summary.get("clean_baseline_discovery_filter_active") is True
+    ):
+        return (
+            "resolved_as_required_clean_baseline_policy",
+            "clean_tuning_baseline_swing_discovery_filter",
+            {
+                "filter_active": True,
+                "requested_start_date": swing_summary.get(
+                    "clean_baseline_requested_start_date"
+                ),
+                "effective_start_date": swing_summary.get(
+                    "clean_baseline_effective_start_date"
+                ),
+                "excluded_pre_start_date": swing_summary.get(
+                    "clean_baseline_excluded_pre_start_date"
+                ),
+            },
+        )
+    return None
 
 
 def _apply_source_contract_resolutions(
@@ -956,6 +1107,19 @@ def _apply_source_contract_resolutions(
                     item,
                     status="resolved_by_current_code_improvement_workorder_self_reference",
                     contract_id="pattern_lab_ai_review_code_improvement_order_pending_source_only",
+                )
+            )
+        elif maturity_resolution := _source_maturity_resolution(item, context):
+            status, contract_id, details = maturity_resolution
+            review_id = str(item.get("review_id") or "unknown")
+            resolved_ids.append(review_id)
+            source_context_resolution_ids.append(review_id)
+            resolved_conclusions.append(
+                _resolved_source_context_conclusion(
+                    item,
+                    status=status,
+                    contract_id=contract_id,
+                    details=details,
                 )
             )
         elif _is_resolved_classified_source_quality_warning_gap(item, context):

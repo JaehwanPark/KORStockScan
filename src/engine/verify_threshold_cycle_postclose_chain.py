@@ -1459,6 +1459,7 @@ def _lifecycle_bucket_windows_status(
     live_ready_count = _safe_int(bridge_summary.get("live_auto_apply_ready_count"))
     promotion_passed = bridge_summary.get("lifecycle_bucket_promotion_contract_passed")
     promotion_authority_open = live_ready_count > 0 or promotion_passed is True
+    live_authority_open = live_ready_count > 0
     for suffix in ("rolling5d", "rolling10d", "mtd"):
         ldm_path = paths[f"lifecycle_decision_matrix_{suffix}"]
         discovery_path = paths[f"lifecycle_bucket_discovery_{suffix}"]
@@ -1509,7 +1510,11 @@ def _lifecycle_bucket_windows_status(
             )
 
     if confirmation_windows and confirmation_target_pass_count == 0:
-        missing.append("lifecycle_bucket_confirmation_windows_not_target")
+        issue = "lifecycle_bucket_confirmation_windows_not_target"
+        if live_authority_open:
+            missing.append(issue)
+        else:
+            warnings.append(issue)
 
     if live_ready_count > 0 and promotion_passed is not True:
         missing.append("runtime_apply_bridge_daily_only_live_authority")
