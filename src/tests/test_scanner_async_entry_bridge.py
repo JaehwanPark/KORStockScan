@@ -250,7 +250,9 @@ def test_opening_rotation_async_commit_avoids_generic_watching_reentry(monkeypat
     monkeypatch.setattr(
         handlers,
         "evaluate_scalp_same_symbol_loss_reentry_guard",
-        lambda *_a, **_k: {"allowed": True},
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            AssertionError("commit must not hydrate re-entry history")
+        ),
     )
     monkeypatch.setattr(handlers, "COOLDOWNS", {})
     monkeypatch.setattr(handlers, "ALERTED_STOCKS", set())

@@ -63909,7 +63909,10 @@ def handle_scanner_async_opening_rotation_commit(
     pos_tag = normalize_position_tag(strategy, stock.get("position_tag"))
 
     # Keep the live-entry safety boundary ahead of the context commit.  The
-    # final submit owner repeats broker/account/order/quantity checks.
+    # final submit owner repeats broker/account/order/quantity checks and owns
+    # the DB-backed same-symbol re-entry guard.  Hydrating that guard here
+    # would make a context-only COMMIT wait on historical-event I/O before it
+    # can perform the mandatory fresh-quote validation.
     if _manual_control_exclusion_blocked(
         stock,
         code,
@@ -63924,11 +63927,6 @@ def handle_scanner_async_opening_rotation_commit(
         return True
     if _safe_float((COOLDOWNS or {}).get(code), 0.0) > float(now_ts):
         return True
-    if not evaluate_scalp_same_symbol_loss_reentry_guard(code, now_ts).get(
-        "allowed", True
-    ):
-        return True
-
     curr_price = _safe_int(ws_data.get("curr"), 0)
     if curr_price <= 0:
         return True
