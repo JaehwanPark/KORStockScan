@@ -97,6 +97,37 @@ def test_async_eval_keeps_worker_snapshots_immutable_and_commits_on_main_guard()
         context.stock_snapshot["nested"]["value"] = 3
 
 
+def test_context_only_preparation_completes_without_ai_dispatch():
+    dispatcher = HotPathAIDispatcher(loaded_key_count=1)
+    coordinator = ScannerAsyncEvalCoordinator(ai_dispatcher=dispatcher)
+    now = time.time()
+    context = ScannerAsyncEvalContext.create(
+        generation=_generation(),
+        cache_key="context-only",
+        submitted_epoch=now,
+        deadline_epoch=now + 1,
+        stock_snapshot={"status": "WATCHING"},
+        ws_snapshot={"curr": 1000},
+        state_version="WATCHING:0:0",
+    )
+    assert coordinator.submit(
+        ScannerAsyncEvalRequest(
+            context=context,
+            prepare=lambda _ctx: {"candles": [1, 2]},
+            evaluate=lambda _ctx, _prepared: pytest.fail("AI must not be dispatched"),
+            requires_ai_dispatch=False,
+        )
+    ).accepted
+
+    result = _wait_for_result(coordinator)
+    coordinator.shutdown()
+
+    assert result.status == "completed"
+    assert list(result.prepared_context["candles"]) == [1, 2]
+    assert result.ai_dispatch_wait_sec == 0.0
+    assert result.ai_response_sec == 0.0
+
+
 def test_async_eval_superseded_result_is_observation_only():
     dispatcher = HotPathAIDispatcher(loaded_key_count=1)
     coordinator = ScannerAsyncEvalCoordinator(ai_dispatcher=dispatcher)

@@ -45405,7 +45405,70 @@ def _opening_rotation_provenance_fields(stock: dict | None) -> dict[str, Any]:
 
 _OPENING_ROTATION_CONTEXT_CACHE: dict[str, dict] = {}
 _OPENING_ROTATION_FRESHNESS_RATE_LOCK = threading.Lock()
+_OPENING_ROTATION_CONTEXT_FETCH_LOCK = threading.Lock()
 _OPENING_ROTATION_FRESHNESS_RATE_EPOCHS: list[float] = []
+
+
+def _opening_rotation_context_fetch_timeout_sec() -> float:
+    """Bound an optional chart refresh so it cannot occupy scanner preparation."""
+
+    return min(
+        3.0,
+        max(
+            0.25,
+            _opening_rotation_float(
+                "OPENING_ROTATION_1PCT_CONTEXT_FETCH_TIMEOUT_SEC", 1.5
+            ),
+        ),
+    )
+
+
+def _fetch_opening_rotation_candles_bounded(code: str) -> tuple[list, str]:
+    """Fetch chart context off the runtime thread with one outstanding call.
+
+    The Kiwoom chart helper has no call-local timeout.  A timed-out request is
+    therefore left as a daemon observation only while its lock remains held;
+    later generations fail closed rather than accumulating chart threads.
+    """
+
+    if not _OPENING_ROTATION_CONTEXT_FETCH_LOCK.acquire(blocking=False):
+        return [], "context_fetch_inflight"
+    results: queue.Queue = queue.Queue(maxsize=1)
+
+    def _worker() -> None:
+        try:
+            results.put(
+                (
+                    kiwoom_utils.get_minute_candles_ka10080(
+                        KIWOOM_TOKEN, code, limit=20
+                    )
+                    or [],
+                    "ok",
+                ),
+                block=False,
+            )
+        except Exception as exc:
+            results.put(([], f"error:{type(exc).__name__}"), block=False)
+        finally:
+            _OPENING_ROTATION_CONTEXT_FETCH_LOCK.release()
+
+    worker = threading.Thread(
+        target=_worker,
+        name=f"opening-rotation-chart-{code}",
+        daemon=True,
+    )
+    try:
+        worker.start()
+    except Exception as exc:
+        _OPENING_ROTATION_CONTEXT_FETCH_LOCK.release()
+        return [], f"context_fetch_start_error:{type(exc).__name__}"
+    try:
+        candles, state = results.get(
+            timeout=_opening_rotation_context_fetch_timeout_sec()
+        )
+    except queue.Empty:
+        return [], "context_fetch_timeout"
+    return list(candles or []), str(state or "unknown")
 
 
 def _opening_rotation_freshness_cache_ttl_sec() -> float:
@@ -45952,18 +46015,17 @@ def _handle_watching_opening_rotation(stock, code, ws_data, runtime, config) -> 
         else:
             previous_state = None
 
-    try:
-        feature_packet = _opening_rotation_feature_packet(
-            stock, code, ws_data, now_ts=now_ts, now_dt=now_dt
-        )
-    except Exception as exc:
-        decision = {
-            "qualified": False,
-            "reason": "feature_context_fetch_failed",
-            "error": str(exc)[:160],
-            "state": stock.get(OPENING_ROTATION_STATE_KEY) or {},
-        }
-    else:
+    async_context = _resolve_scanner_async_opening_rotation_context(
+        stock,
+        code,
+        ws_data,
+        runtime,
+    )
+    async_status = str(async_context.get("status") or "")
+    if async_status in {"dispatched", "pending", "commit_result_missing"}:
+        return True
+    if async_status == "completed":
+        feature_packet = dict(async_context.get("feature_packet") or {})
         decision = evaluate_opening_rotation_entry(
             previous_state=previous_state,
             feature_packet=feature_packet,
@@ -45973,6 +46035,35 @@ def _handle_watching_opening_rotation(stock, code, ws_data, runtime, config) -> 
             now_dt=now_dt,
             config=entry_config,
         )
+    elif async_status in {"commit_rejected", "context_unavailable", "dispatch_rejected"}:
+        decision = {
+            "qualified": False,
+            "reason": f"async_context_{async_status}",
+            "async_context_reason": async_context.get("reason") or "-",
+            "state": stock.get(OPENING_ROTATION_STATE_KEY) or {},
+        }
+    else:
+        try:
+            feature_packet = _opening_rotation_feature_packet(
+                stock, code, ws_data, now_ts=now_ts, now_dt=now_dt
+            )
+        except Exception as exc:
+            decision = {
+                "qualified": False,
+                "reason": "feature_context_fetch_failed",
+                "error": str(exc)[:160],
+                "state": stock.get(OPENING_ROTATION_STATE_KEY) or {},
+            }
+        else:
+            decision = evaluate_opening_rotation_entry(
+                previous_state=previous_state,
+                feature_packet=feature_packet,
+                source_signature=source_signature,
+                day_change_pct=day_change_pct,
+                intraday_high_price=stock.get("intraday_high_price"),
+                now_dt=now_dt,
+                config=entry_config,
+            )
 
     decision_state = decision.get("state") if isinstance(decision, dict) else {}
     if isinstance(decision_state, dict) and decision_state:
@@ -46145,6 +46236,280 @@ def _scanner_async_entry_cache_key(
         f"{float(last_ai_time):.6f}"
     )
     return "watching:" + hashlib.sha256(seed.encode("utf-8")).hexdigest()[:16]
+
+
+def _scanner_async_opening_rotation_cache_key(
+    stock: dict,
+    *,
+    generation: ScannerGeneration,
+) -> str:
+    existing_generation = str(
+        stock.get("_scanner_opening_rotation_async_generation_id") or ""
+    ).strip()
+    existing_key = str(
+        stock.get("_scanner_opening_rotation_async_cache_key") or ""
+    ).strip()
+    if existing_generation == generation.generation_id and existing_key:
+        return existing_key
+    seed = f"{generation.generation_id}|opening_rotation_context"
+    return "opening_rotation:" + hashlib.sha256(seed.encode("utf-8")).hexdigest()[:16]
+
+
+def _scanner_async_opening_rotation_state_version(stock: dict) -> str:
+    """Include the rotation collector state in the async commit fingerprint."""
+
+    payload = {
+        "entry": _scanner_async_entry_state_version(stock),
+        "opening_rotation_state": stock.get(OPENING_ROTATION_STATE_KEY) or {},
+        "intraday_high_price": _safe_int(stock.get("intraday_high_price"), 0),
+    }
+    encoded = json.dumps(payload, sort_keys=True, ensure_ascii=True, default=str)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:20]
+
+
+def _resolve_scanner_async_opening_rotation_context(
+    stock: dict,
+    code: str,
+    ws_data: dict,
+    runtime: dict,
+) -> dict:
+    """Prepare optional rotation REST/chart context without blocking WATCHING.
+
+    The worker receives immutable snapshots only.  Cache and runtime state are
+    applied after the standard generation/freshness/main-thread commit guard.
+    """
+
+    coordinator = runtime.get("scanner_async_eval_coordinator")
+    generation = runtime.get("scanner_async_generation")
+    if not isinstance(coordinator, ScannerAsyncEvalCoordinator) or not isinstance(
+        generation, ScannerGeneration
+    ):
+        return {"status": "not_enabled"}
+
+    cache_key = _scanner_async_opening_rotation_cache_key(
+        stock, generation=generation
+    )
+    state_version = _scanner_async_opening_rotation_state_version(stock)
+    commit_phase = bool(runtime.get("scanner_async_commit_phase"))
+    result = (
+        coordinator.take_completed(
+            generation_id=generation.generation_id,
+            cache_key=cache_key,
+        )
+        if commit_phase
+        else None
+    )
+    if result is not None:
+        now_epoch = time.time()
+        decision = validate_scanner_async_commit(
+            result,
+            current_generation=generation,
+            current_status=stock.get("status") or "",
+            current_venue=stock.get("effective_venue")
+            or stock.get("venue")
+            or "UNKNOWN",
+            current_source_signature=stock.get("source_signature")
+            or stock.get("scanner_source_signature")
+            or "",
+            venue_resolution_valid=bool(
+                str(stock.get("venue_resolution") or "").strip()
+                and not any(
+                    token in str(stock.get("venue_resolution") or "").strip().lower()
+                    for token in ("missing", "unknown", "conflict", "unresolved")
+                )
+            ),
+            current_state_version=_scanner_async_opening_rotation_state_version(stock),
+            quote_fresh=_scanner_async_quote_is_fresh(ws_data, now_ts=now_epoch),
+            position_or_pending_order_present=bool(
+                _safe_int(stock.get("buy_qty"), 0) > 0
+                or _has_open_pending_entry_orders(stock)
+            ),
+            cooldown_active=bool(
+                _safe_float((COOLDOWNS or {}).get(code), 0.0) > now_epoch
+            ),
+            now_epoch=now_epoch,
+        )
+        _log_entry_pipeline(
+            stock,
+            code,
+            "opening_rotation_async_context_commit",
+            **dict(decision.fields),
+            scanner_async_cache_key=cache_key,
+            preparation_wait_sec=round(result.preparation_wait_sec, 6),
+            preparation_service_sec=round(result.preparation_service_sec, 6),
+            opening_rotation_context_fetch_state=(
+                result.prepared_context.get("context_fetch_state") or "-"
+            ),
+        )
+        _mutate_stock_state(
+            stock,
+            pop_fields=[
+                "_scanner_opening_rotation_async_generation_id",
+                "_scanner_opening_rotation_async_cache_key",
+                "_scanner_opening_rotation_async_state_version",
+                "_scanner_opening_rotation_async_submitted_at",
+            ],
+        )
+        if not decision.allowed:
+            return {"status": "commit_rejected", "reason": decision.reason}
+        prepared = thaw_scanner_async_value(result.prepared_context)
+        if not prepared.get("context_ready"):
+            return {
+                "status": "context_unavailable",
+                "reason": prepared.get("context_fetch_state") or "context_missing",
+            }
+        with ENTRY_LOCK:
+            cached = dict(_OPENING_ROTATION_CONTEXT_CACHE.get(code) or {})
+            cached.update(
+                {
+                    "cached_at": now_epoch,
+                    "recent_candles": list(prepared.get("recent_candles") or []),
+                }
+            )
+            _OPENING_ROTATION_CONTEXT_CACHE[code] = cached
+        if prepared.get("opening_rotation_freshness_envelope_rest_attempted"):
+            _mutate_stock_state(
+                stock,
+                set_fields={
+                    "_opening_rotation_freshness_envelope_ws_data": dict(
+                        prepared.get("effective_ws") or {}
+                    ),
+                    "_opening_rotation_freshness_envelope_fields": dict(
+                        prepared.get("freshness_fields") or {}
+                    ),
+                    "_opening_rotation_freshness_envelope_stored_at": now_epoch,
+                },
+            )
+        return {
+            "status": "completed",
+            "feature_packet": dict(prepared.get("feature_packet") or {}),
+        }
+
+    if commit_phase:
+        return {"status": "commit_result_missing"}
+    if coordinator.is_pending(
+        generation_id=generation.generation_id,
+        cache_key=cache_key,
+    ):
+        return {"status": "pending"}
+
+    with ENTRY_LOCK:
+        cached_context = dict(_OPENING_ROTATION_CONTEXT_CACHE.get(code) or {})
+    submitted_epoch = time.time()
+    context = ScannerAsyncEvalContext.create(
+        generation=generation,
+        cache_key=cache_key,
+        submitted_epoch=submitted_epoch,
+        deadline_epoch=submitted_epoch + 5.0,
+        stock_snapshot={**stock, "_opening_rotation_async_cached_context": cached_context},
+        ws_snapshot=ws_data,
+        state_version=state_version,
+    )
+
+    def prepare(async_context: ScannerAsyncEvalContext) -> dict:
+        stock_snapshot = thaw_scanner_async_value(async_context.stock_snapshot)
+        prepared_ws = thaw_scanner_async_value(async_context.ws_snapshot)
+        effective_ws, freshness_fields = _resolve_opening_rotation_freshness_envelope(
+            stock_snapshot,
+            code,
+            prepared_ws,
+            now_ts=time.time(),
+        )
+        cached = dict(stock_snapshot.get("_opening_rotation_async_cached_context") or {})
+        cache_at = _safe_float(cached.get("cached_at"), 0.0)
+        cache_ttl_sec = max(
+            0.5,
+            _opening_rotation_float("OPENING_ROTATION_1PCT_CONTEXT_CACHE_SEC", 2.0),
+        )
+        recent_candles = list(cached.get("recent_candles") or [])
+        fetch_state = "cache_hit"
+        if cache_at <= 0 or (time.time() - cache_at) >= cache_ttl_sec:
+            recent_candles, fetch_state = _fetch_opening_rotation_candles_bounded(code)
+        if fetch_state != "cache_hit" and fetch_state != "ok":
+            return {
+                "context_ready": False,
+                "context_fetch_state": fetch_state,
+                "effective_ws": effective_ws,
+                "freshness_fields": freshness_fields,
+            }
+        packet = extract_scalping_feature_packet(
+            effective_ws,
+            [],
+            recent_candles,
+            now=datetime.fromtimestamp(time.time()),
+        )
+        effective_age_ms = _safe_float(
+            freshness_fields.get("market_data_effective_quote_age_ms"), None
+        )
+        packet.update(freshness_fields)
+        packet.update(
+            {
+                "quote_age_ms": (
+                    round(effective_age_ms, 3)
+                    if effective_age_ms is not None
+                    else "-"
+                ),
+                "quote_age_source": "opening_rotation_freshness_envelope",
+                "quote_stale": not bool(
+                    freshness_fields.get("opening_rotation_freshness_envelope_ready")
+                ),
+            }
+        )
+        return {
+            "context_ready": True,
+            "context_fetch_state": fetch_state,
+            "recent_candles": recent_candles,
+            "effective_ws": effective_ws,
+            "freshness_fields": freshness_fields,
+            "feature_packet": packet,
+            "opening_rotation_freshness_envelope_rest_attempted": bool(
+                freshness_fields.get("opening_rotation_freshness_envelope_rest_attempted")
+            ),
+        }
+
+    submit_decision = coordinator.submit(
+        ScannerAsyncEvalRequest(
+            context=context,
+            prepare=prepare,
+            evaluate=lambda _context, _prepared: {},
+            requires_ai_dispatch=False,
+        )
+    )
+    if not submit_decision.accepted and submit_decision.reason != (
+        "duplicate_generation_cache_key_coalesced"
+    ):
+        return {"status": "dispatch_rejected", "reason": submit_decision.reason}
+    _mutate_stock_state(
+        stock,
+        set_fields={
+            "_scanner_opening_rotation_async_generation_id": generation.generation_id,
+            "_scanner_opening_rotation_async_cache_key": cache_key,
+            "_scanner_opening_rotation_async_state_version": state_version,
+            "_scanner_opening_rotation_async_submitted_at": submitted_epoch,
+        },
+    )
+    _log_entry_pipeline(
+        stock,
+        code,
+        "opening_rotation_async_context_dispatched",
+        scanner_generation_id=generation.generation_id,
+        scanner_async_cache_key=cache_key,
+        scheduler_version="scanner_deadline_scheduler_v1",
+        metric_role="runtime_scheduler_latency",
+        decision_authority="scanner_context_preparation_only",
+        window_policy="per_scanner_generation",
+        sample_floor="one_scanner_generation",
+        primary_decision_metric="preparation_service_sec",
+        source_quality_gate="main_thread_generation_venue_and_quote_revalidation",
+        forbidden_uses=(
+            "standalone_buy,broker_submit,threshold_mutation,provider_route_change,"
+            "order_price_change,quantity_or_cap_change,broker_guard_bypass"
+        ),
+        runtime_effect=False,
+        actual_order_submitted=False,
+        broker_order_forbidden=True,
+    )
+    return {"status": "dispatched"}
 
 
 def _resolve_scanner_async_entry_ai(

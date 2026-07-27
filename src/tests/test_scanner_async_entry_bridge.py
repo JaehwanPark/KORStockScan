@@ -151,3 +151,79 @@ def test_async_entry_bridge_prepares_off_thread_then_commits_on_current_state(
     ]
     assert requested_codes == [expected_request_code]
     assert "_scanner_async_cache_key" not in stock
+
+
+def test_opening_rotation_context_prepares_off_thread_and_commits_once(monkeypatch):
+    monkeypatch.setattr(handlers, "KIWOOM_TOKEN", "token")
+    monkeypatch.setattr(
+        handlers,
+        "_resolve_opening_rotation_freshness_envelope",
+        lambda *_args, **_kwargs: (
+            {"curr": 1001, "last_ws_update_ts": time.time()},
+            {
+                "opening_rotation_freshness_envelope_ready": True,
+                "market_data_effective_quote_age_ms": 100.0,
+                "opening_rotation_freshness_envelope_rest_attempted": False,
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_fetch_opening_rotation_candles_bounded",
+        lambda _code: ([{"close": 1000}], "ok"),
+    )
+    monkeypatch.setattr(
+        handlers,
+        "extract_scalping_feature_packet",
+        lambda *_args, **_kwargs: {"curr": 1001, "quote_stale": False},
+    )
+    monkeypatch.setattr(
+        handlers, "_scanner_async_quote_is_fresh", lambda *_a, **_k: True
+    )
+    monkeypatch.setattr(
+        handlers, "_has_open_pending_entry_orders", lambda _stock: False
+    )
+    monkeypatch.setattr(handlers, "_log_entry_pipeline", lambda *args, **kwargs: None)
+    monkeypatch.setattr(handlers, "COOLDOWNS", {})
+
+    dispatcher = HotPathAIDispatcher(loaded_key_count=1)
+    coordinator = ScannerAsyncEvalCoordinator(ai_dispatcher=dispatcher)
+    generation = _generation("KRX")
+    stock = {
+        "id": 7,
+        "code": "005930",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "scanner_generation_id": generation.generation_id,
+        "scanner_promotion_id": generation.promotion_id,
+        "effective_venue": "KRX",
+        "venue_resolution": "session_clock_explicit_krx",
+        "source_signature": "VALUE_TOP",
+    }
+    ws_data = {"curr": 1001, "last_ws_update_ts": time.time()}
+    runtime = {
+        "scanner_async_eval_coordinator": coordinator,
+        "scanner_async_generation": generation,
+        "scanner_async_commit_phase": False,
+    }
+
+    dispatched = handlers._resolve_scanner_async_opening_rotation_context(
+        stock, "005930", ws_data, runtime
+    )
+    assert dispatched["status"] == "dispatched"
+    assert "_scanner_opening_rotation_async_cache_key" in stock
+
+    deadline = time.time() + 1
+    while coordinator.pending_count() and time.time() < deadline:
+        coordinator.poll()
+        time.sleep(0.005)
+    runtime["scanner_async_commit_phase"] = True
+    committed = handlers._resolve_scanner_async_opening_rotation_context(
+        stock, "005930", ws_data, runtime
+    )
+    coordinator.shutdown()
+
+    assert committed["status"] == "completed"
+    assert committed["feature_packet"]["curr"] == 1001
+    assert "_scanner_opening_rotation_async_cache_key" not in stock

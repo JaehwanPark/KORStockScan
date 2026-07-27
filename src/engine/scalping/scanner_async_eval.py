@@ -104,6 +104,7 @@ class ScannerAsyncEvalRequest:
     evaluate: Callable[
         [ScannerAsyncEvalContext, Mapping[str, Any]], Mapping[str, Any]
     ] = field(repr=False, compare=False)
+    requires_ai_dispatch: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -262,6 +263,17 @@ class ScannerAsyncEvalCoordinator:
                 preparation_completed_epoch=completed,
                 completed_epoch=completed,
                 observation_only=True,
+                prepared_context=prepared,
+            )
+            return
+        if not request.requires_ai_dispatch:
+            self._finish(
+                request,
+                status="completed",
+                preparation_started_epoch=started,
+                preparation_completed_epoch=completed,
+                completed_epoch=completed,
+                observation_only=False,
                 prepared_context=prepared,
             )
             return
