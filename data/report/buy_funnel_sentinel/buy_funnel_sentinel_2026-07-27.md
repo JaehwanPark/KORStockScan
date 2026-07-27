@@ -15,26 +15,26 @@
 
 ## 근거
 
-- as_of: `2026-07-27T14:50:02`
+- as_of: `2026-07-27T15:20:03`
 - baseline_date: `2026-07-24`
-- ai_confirmed unique: `20`
-- budget_pass unique: `34`
+- ai_confirmed unique: `21`
+- budget_pass unique: `35`
 - latency_pass unique: `6`
 - submitted unique: `1`
 - holding_started unique: `1`
-- budget/ai unique: `170.0%` (baseline `173.3`)
-- submitted/ai unique: `5.0%` (baseline `6.7`)
+- budget/ai unique: `166.7%` (baseline `175.0`)
+- submitted/ai unique: `4.8%` (baseline `5.0`)
 - economic bundles: `observed=1, valid=1, probe_only=1, partial_residual=0, full=0`
 - economic submitted/requested: `qty=1/6 (16.7%), notional=198300/1187400 (16.7%)`
 - economic participation by venue: `{'KRX': {'bundle_count': 1, 'probe_only_bundle_count': 1, 'partial_residual_bundle_count': 0, 'full_submitted_bundle_count': 0, 'requested_qty': 6, 'submitted_qty': 1, 'requested_notional_krw': 1187400, 'submitted_notional_krw': 198300, 'submitted_qty_to_requested_qty_pct': 16.7, 'submitted_notional_to_requested_notional_pct': 16.7}}`
 - critical submit thresholds: `submitted/ai < 20.0%` or `submitted/budget <= 10.0%` (floors: ai>=20, budget>=3)
-- top blockers: `latency_block:latency_state_danger=33, entry_ai_price_canary_fallback:parse_or_ai_fail=26, blocked_strength_momentum:below_window_buy_value=12, blocked_ai_score:score_0.0=4, first_ai_wait:-=3`
+- top blockers: `latency_block:latency_state_danger=34, entry_ai_price_canary_fallback:parse_or_ai_fail=26, blocked_strength_momentum:below_window_buy_value=12, blocked_ai_score:score_0.0=4, first_ai_wait:-=3`
 - swing blockers: `-`
 - upstream blockers: `blocked_ai_score:score_0.0=4, first_ai_wait:-=3, blocked_ai_score:ai_score_50_buy_hold_override=3`
 - AI terminal reasons: `ai_terminal:entry_policy_no_buy_score_prior=4, ai_terminal:first_ai_wait_big_bite_not_confirmed=3`
-- latency blockers: `latency_block:latency_state_danger=33, latency_block:tp1_direct_recheck_expired=1`
+- latency blockers: `latency_block:latency_state_danger=34, latency_block:tp1_direct_recheck_expired=1`
 - price guards: `entry_ai_price_canary_fallback:parse_or_ai_fail=26, pre_submit_entry_ai_authority_guard_block:entry_ai_result_stale_or_untrusted=3, pre_submit_entry_ai_authority_guard_block:fresh_ai_drop_real_buy_veto=2`
-- quote refresh: `attempted=26, applied=19, latency_recovered=3, submitted_after_refresh=1`
+- quote refresh: `attempted=27, applied=19, latency_recovered=3, submitted_after_refresh=1`
 - quote refresh downstream: `{'order_bundle_submitted': 1, 'price_guard_or_revalidation': 2}`
 
 ## 금지된 자동변경
@@ -53,6 +53,6 @@
 
 ## Window Summary
 
-- `5m`: ai=0, budget=1, latency=0, submitted=0, top=`entry_ai_price_canary_fallback:parse_or_ai_fail=1`, swing=`-`, upstream=`-`, ai_terminal=`-`
-- `10m`: ai=1, budget=3, latency=0, submitted=0, top=`entry_ai_price_canary_fallback:parse_or_ai_fail=2, latency_block:latency_state_danger=1`, swing=`-`, upstream=`-`, ai_terminal=`-`
-- `30m`: ai=8, budget=11, latency=3, submitted=1, top=`entry_ai_price_canary_fallback:parse_or_ai_fail=8, latency_block:latency_state_danger=7, pre_submit_entry_ai_authority_guard_block:entry_ai_result_stale_or_untrusted=2`, swing=`-`, upstream=`-`, ai_terminal=`-`
+- `5m`: ai=0, budget=0, latency=0, submitted=0, top=`-`, swing=`-`, upstream=`-`, ai_terminal=`-`
+- `10m`: ai=0, budget=0, latency=0, submitted=0, top=`-`, swing=`-`, upstream=`-`, ai_terminal=`-`
+- `30m`: ai=1, budget=1, latency=0, submitted=0, top=`latency_block:latency_state_danger=1`, swing=`-`, upstream=`-`, ai_terminal=`-`
