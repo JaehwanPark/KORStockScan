@@ -230,6 +230,74 @@ def test_opening_rotation_context_prepares_off_thread_and_commits_once(monkeypat
     assert "_scanner_opening_rotation_async_cache_key" not in stock
 
 
+def test_rising_missed_freshness_envelope_prepares_off_thread_then_commits(monkeypatch):
+    """Rising Missed REST work must not run in the scheduler heavy callback."""
+
+    generation = _generation("KRX")
+    coordinator = ScannerAsyncEvalCoordinator(
+        ai_dispatcher=HotPathAIDispatcher(loaded_key_count=1)
+    )
+    stock = {
+        "id": 7,
+        "code": "005930",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "scanner_generation_id": generation.generation_id,
+        "scanner_promotion_id": generation.promotion_id,
+        "effective_venue": "KRX",
+        "venue_resolution": "session_clock_explicit_krx",
+        "source_signature": "VALUE_TOP",
+    }
+    ws_data = {"curr": 1001, "last_ws_update_ts": time.time()}
+    monkeypatch.setattr(
+        handlers,
+        "_rising_missed_quality_guard_pre_envelope",
+        lambda *_args, **_kwargs: (
+            {"curr": 1001, "market_data_freshness_state": "fresh"},
+            {"market_data_effective_quote_age_ms": 10.0},
+        ),
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_merge_scanner_market_data_enrichment_into_ws_data",
+        lambda _stock, data, _runtime: dict(data),
+    )
+    monkeypatch.setattr(
+        handlers, "_scanner_async_quote_is_fresh", lambda *_a, **_k: True
+    )
+    monkeypatch.setattr(
+        handlers, "_has_open_pending_entry_orders", lambda _stock: False
+    )
+    monkeypatch.setattr(handlers, "_log_entry_pipeline", lambda *args, **kwargs: None)
+    monkeypatch.setattr(handlers, "COOLDOWNS", {})
+    runtime = {
+        "scanner_async_eval_coordinator": coordinator,
+        "scanner_async_generation": generation,
+        "scanner_async_commit_phase": False,
+    }
+
+    dispatched = handlers._resolve_scanner_async_rising_missed_context(
+        stock, "005930", ws_data, runtime
+    )
+    assert dispatched["status"] == "dispatched"
+    assert stock["_scanner_async_cache_key"].startswith("rising_missed:")
+
+    deadline = time.time() + 1
+    while coordinator.pending_count() and time.time() < deadline:
+        coordinator.poll()
+        time.sleep(0.005)
+    runtime["scanner_async_commit_phase"] = True
+    committed = handlers._resolve_scanner_async_rising_missed_context(
+        stock, "005930", ws_data, runtime
+    )
+    coordinator.shutdown()
+
+    assert committed["status"] == "completed"
+    assert stock["_rising_missed_tp1_decision_envelope_cache"]["code"] == "005930"
+    assert "_scanner_async_cache_key" not in stock
+
+
 def test_opening_rotation_async_commit_avoids_generic_watching_reentry(monkeypatch):
     generation = _generation("KRX")
     stock = {

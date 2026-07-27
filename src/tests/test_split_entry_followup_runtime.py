@@ -709,6 +709,11 @@ def test_post_probe_wait_uses_submit_timestamp_and_latest_drop_still_vetoes(
     )
     assert wait_result["post_probe_direction_submit_wait_fresh"] is True
     assert wait_result["post_probe_direction_ai_action_age_sec"] == "0.500"
+    assert (
+        wait_result["post_probe_direction_ai_authority"]
+        == "fresh_wait_bounded_confirmation"
+    )
+    assert wait_result["post_probe_hard_veto"] is False
 
     stock.update(
         {
@@ -732,6 +737,7 @@ def test_post_probe_wait_uses_submit_timestamp_and_latest_drop_still_vetoes(
         drop_result["post_probe_direction_ai_context_source"]
         == "latest_stock_ai_drop_veto"
     )
+    assert drop_result["post_probe_direction_ai_authority"] == "fresh_drop_hard_veto"
 
     stock.pop("entry_split_probe_ai_confirmed_at_submit")
     stock["last_watching_ai_confirmed_at"] = 50.0

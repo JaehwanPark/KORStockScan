@@ -34917,7 +34917,9 @@ def test_holding_rest_quote_only_recovery_does_not_inflate_peak(monkeypatch):
     assert peak_guard_logs[-1]["holding_rest_quote_peak_update_applied"] is False
 
 
-def test_post_probe_nxt_requires_event_time_speed_and_honors_fresh_ai_veto(monkeypatch):
+def test_post_probe_nxt_requires_speed_and_distinguishes_wait_from_drop_authority(
+    monkeypatch,
+):
     monkeypatch.setenv(
         "KORSTOCKSCAN_LATENCY_TRUE_OFI_NXT_FAST_TAPE_CONTINUATION_ENABLED", "true"
     )
@@ -35029,6 +35031,11 @@ def test_post_probe_nxt_requires_event_time_speed_and_honors_fresh_ai_veto(monke
         "post_probe_nxt_wait_fast_tape_maintained"
     )
     assert ai_wait_rechecked["post_probe_nxt_wait_fast_tape_bounded_single_leg"] is True
+    assert (
+        ai_wait_rechecked["post_probe_direction_ai_authority"]
+        == "fresh_wait_bounded_confirmation"
+    )
+    assert ai_wait_rechecked["post_probe_hard_veto"] is False
 
     monkeypatch.delenv(
         "KORSTOCKSCAN_LATENCY_TRUE_OFI_NXT_FAST_TAPE_CONTINUATION_ENABLED"
@@ -35116,6 +35123,8 @@ def test_post_probe_nxt_requires_event_time_speed_and_honors_fresh_ai_veto(monke
     assert ai_drop["post_probe_continuation_action"] == "DEFER"
     assert ai_drop["post_probe_direction_reason"] == "post_probe_nxt_fresh_ai_drop"
     assert ai_drop["post_probe_direction_fresh_negative_ai_action"] is True
+    assert ai_drop["post_probe_direction_ai_authority"] == "fresh_drop_hard_veto"
+    assert ai_drop["post_probe_hard_veto"] is True
 
 
 def test_holding_recent_ws_blocks_divergent_rest_quote_recovery(monkeypatch):

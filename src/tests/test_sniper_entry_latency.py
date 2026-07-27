@@ -5266,6 +5266,98 @@ def test_latency_spread_relief_preserves_explicit_ai_wait_even_with_true_ofi_sup
     assert result["latency_spread_relief_explicit_negative_ai_action"] == "WAIT"
 
 
+def test_latency_relief_uses_latest_trusted_buy_over_stale_rising_wait(monkeypatch):
+    monkeypatch.setattr(entry_latency_module.time, "time", lambda: 200.0)
+    provenance = entry_latency_module._latency_relief_signal_provenance(
+        code="123456_latest_buy",
+        signal_strength=0.82,
+        stock={
+            "position_tag": "SCANNER",
+            "rising_missed_entry_ai_action": "WAIT",
+            "prob": 0.70,
+            "last_watching_ai_action": "BUY",
+            "last_watching_ai_score": 82.0,
+            "last_watching_ai_result_source": "live",
+            "last_watching_ai_confirmed_at": 195.0,
+        },
+        ws_data={},
+    )
+
+    assert provenance["latency_spread_relief_explicit_negative_ai_action"] == ""
+    assert provenance["latency_spread_relief_signal_score"] == 82.0
+    assert (
+        provenance["latency_spread_relief_signal_score_source"]
+        == "input_signal_strength"
+    )
+    assert provenance["latency_spread_relief_signal_source_quality_state"] == "fresh"
+    assert provenance["latency_spread_relief_candidate_ai_score"] == 82.0
+    assert (
+        provenance["latency_spread_relief_candidate_ai_score_source"]
+        == "stock.last_watching_ai_score"
+    )
+
+
+def test_latency_relief_latest_trusted_wait_remains_explicit_veto(monkeypatch):
+    monkeypatch.setattr(entry_latency_module.time, "time", lambda: 200.0)
+    provenance = entry_latency_module._latency_relief_signal_provenance(
+        code="123456_latest_wait",
+        signal_strength=0.82,
+        stock={
+            "position_tag": "SCANNER",
+            "rising_missed_entry_ai_action": "BUY",
+            "last_watching_ai_action": "WAIT",
+            "last_watching_ai_score": 58.0,
+            "last_watching_ai_result_source": "prior_valid",
+            "last_watching_ai_confirmed_at": 195.0,
+        },
+        ws_data={},
+    )
+
+    assert provenance["latency_spread_relief_explicit_negative_ai_action"] == "WAIT"
+    assert provenance["latency_spread_relief_signal_score"] == 0.0
+    assert (
+        provenance["latency_spread_relief_signal_source_quality_state"]
+        == "explicit_negative_ai"
+    )
+
+
+def test_latency_signal_strength_prefers_fresh_canonical_ai_and_rejects_stale(
+    monkeypatch,
+):
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_PRE_SUBMIT_AI_AUTHORITY_MAX_PRIOR_AGE_SEC",
+        "30",
+    )
+    stock = {
+        "last_watching_ai_action": "BUY",
+        "last_watching_ai_score": 82.0,
+        "last_watching_ai_result_source": "live",
+        "last_watching_ai_confirmed_at": 195.0,
+        "last_watching_ai_decision_trace_id": "trace-buy-82",
+    }
+
+    resolved, fields = state_handlers._resolve_latency_ai_signal_strength(
+        stock,
+        0.70,
+        now_ts=200.0,
+    )
+
+    assert resolved == 0.82
+    assert fields["latency_ai_signal_authority_source"] == "latest_watching_ai"
+    assert fields["latency_ai_signal_authority_action"] == "BUY"
+    assert fields["latency_ai_signal_authority_decision_trace_id"] == "trace-buy-82"
+
+    stale, stale_fields = state_handlers._resolve_latency_ai_signal_strength(
+        stock,
+        0.70,
+        now_ts=216.0,
+    )
+
+    assert stale == 0.70
+    assert stale_fields["latency_ai_signal_authority_source"] == "legacy_probability"
+    assert stale_fields["latency_ai_signal_authority_action"] == "not_authoritative"
+
+
 def test_latency_spread_relief_true_ofi_provenance_is_forwarded_to_pipeline_events():
     fields = state_handlers._latency_spread_relief_micro_estimator_log_fields(
         {

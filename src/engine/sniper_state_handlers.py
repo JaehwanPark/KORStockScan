@@ -29828,6 +29828,7 @@ def _rising_missed_quality_guard_pre_envelope(
     runtime: dict | None,
     *,
     scanner_envelope_ws_data: dict | None = None,
+    persist_cache: bool = True,
 ) -> tuple[dict, dict[str, Any]]:
     stock = stock if isinstance(stock, dict) else {}
     runtime = runtime if isinstance(runtime, dict) else {}
@@ -29945,7 +29946,10 @@ def _rising_missed_quality_guard_pre_envelope(
     )
     if not reserve_allowed:
         return _use_existing_envelope("rest_budget_deferred")
-    stock["_rising_missed_quality_guard_pre_envelope_last_fetch_at"] = now_ts
+    # The async worker passes a thawed local snapshot with persist_cache=False.
+    # Only main-thread callers are allowed to update live per-target fetch state.
+    if persist_cache:
+        stock["_rising_missed_quality_guard_pre_envelope_last_fetch_at"] = now_ts
     fields["rising_missed_quality_guard_pre_envelope_attempted"] = True
     fields["rising_missed_quality_guard_pre_envelope_rest_attempted"] = True
     rest_orderbook: dict[str, Any] = {}
@@ -30041,7 +30045,7 @@ def _rising_missed_quality_guard_pre_envelope(
         enriched_ws.get("market_data_freshness_state") or "missing"
     )
     enriched_ws.update(market_data_enrichment_log_fields(fields))
-    if rest_orderbook and not signed_tape_fallback_preserved:
+    if persist_cache and rest_orderbook and not signed_tape_fallback_preserved:
         stock["_scanner_market_data_enrichment_fields"] = dict(
             market_data_enrichment_log_fields(fields)
         )
@@ -30716,6 +30720,77 @@ def _entry_ai_submit_authority_fields(
         "forbidden_uses": (
             "score_threshold_mutation,provider_route_change,quantity_cap_release,"
             "broker_guard_bypass,stale_quote_bypass,tuning_auto_apply_authority"
+        ),
+    }
+
+
+def _resolve_latency_ai_signal_strength(
+    stock: dict | None,
+    legacy_signal_strength: float,
+    *,
+    now_ts: float | None = None,
+) -> tuple[float, dict[str, Any]]:
+    """Prefer the latest trusted entry AI score over legacy probability fields."""
+
+    stock = stock if isinstance(stock, dict) else {}
+    observed_at = time.time() if now_ts is None else float(now_ts)
+    action = str(stock.get("last_watching_ai_action") or "").strip().upper()
+    score = _safe_float(stock.get("last_watching_ai_score"), 0.0)
+    result_source = (
+        str(stock.get("last_watching_ai_result_source") or "").strip().lower()
+    )
+    confirmed_at = _safe_float(stock.get("last_watching_ai_confirmed_at"), 0.0)
+    prior_max_age_sec = max(
+        1.0,
+        _safe_float(
+            os.getenv("KORSTOCKSCAN_PRE_SUBMIT_AI_AUTHORITY_MAX_PRIOR_AGE_SEC"),
+            _rule_float("AI_WATCHING_COOLDOWN", 300.0),
+        ),
+    )
+    tight_max_age_sec = max(
+        1.0,
+        _safe_float(
+            os.getenv("KORSTOCKSCAN_FRESH_SPREAD_AI_RECHECK_MAX_AI_AGE_SEC"),
+            15.0,
+        ),
+    )
+    max_age_sec = min(prior_max_age_sec, tight_max_age_sec)
+    age_sec = max(0.0, observed_at - confirmed_at) if confirmed_at > 0.0 else None
+    canonical_fresh = bool(
+        action in {"BUY", "WAIT", "DROP"}
+        and score > 0.0
+        and result_source in {"live", "prior_valid"}
+        and age_sec is not None
+        and age_sec <= max_age_sec
+    )
+    legacy_strength = max(0.0, float(legacy_signal_strength or 0.0))
+    if legacy_strength > 1.0:
+        legacy_strength = legacy_strength / 100.0
+    resolved_strength = max(0.0, min(1.0, legacy_strength))
+    source = "legacy_probability"
+    if canonical_fresh:
+        resolved_strength = max(0.0, min(1.0, score / 100.0))
+        source = "latest_watching_ai"
+    return resolved_strength, {
+        "latency_ai_signal_authority_source": source,
+        "latency_ai_signal_authority_action": (
+            action if canonical_fresh else "not_authoritative"
+        ),
+        "latency_ai_signal_authority_score": (
+            f"{score:.1f}" if canonical_fresh else f"{resolved_strength * 100.0:.1f}"
+        ),
+        "latency_ai_signal_authority_result_source": (
+            result_source if canonical_fresh else "legacy"
+        ),
+        "latency_ai_signal_authority_fresh": canonical_fresh,
+        "latency_ai_signal_authority_age_sec": (
+            f"{age_sec:.3f}" if age_sec is not None else "not_available"
+        ),
+        "latency_ai_signal_authority_max_age_sec": f"{max_age_sec:.1f}",
+        "latency_ai_signal_authority_decision_trace_id": (
+            str(stock.get("last_watching_ai_decision_trace_id") or "")
+            if canonical_fresh
+            else "not_available"
         ),
     }
 
@@ -34143,6 +34218,20 @@ def _post_probe_direction_fields(
         and ai_action_age_sec >= -0.5
         and ai_action_age_sec <= max(0.1, float(max_context_age_sec))
     )
+    if fresh_negative_ai_action and ai_action == "DROP":
+        ai_authority = "fresh_drop_hard_veto"
+    elif fresh_negative_ai_action and ai_action == "WAIT":
+        ai_authority = "fresh_wait_bounded_confirmation"
+    elif (
+        ai_action == "WAIT"
+        and wait_probe_origin
+        and ai_result_source in {"live", "prior_valid"}
+    ):
+        ai_authority = "stale_wait_non_authoritative_two_group_confirmation"
+    elif ai_action in {"DROP", "WAIT"}:
+        ai_authority = "stale_or_unverified_negative_fail_closed"
+    else:
+        ai_authority = "no_negative_ai_veto"
     tick_context_fresh = bool(
         ws_tick_context_fresh
         or feature_tick_context_fresh
@@ -34461,23 +34550,7 @@ def _post_probe_direction_fields(
             else "not_available"
         ),
         "post_probe_direction_fresh_negative_ai_action": fresh_negative_ai_action,
-        "post_probe_direction_ai_authority": (
-            "fresh_negative_veto"
-            if fresh_negative_ai_action
-            else (
-                "stale_wait_non_authoritative_two_group_confirmation"
-                if (
-                    ai_action == "WAIT"
-                    and wait_probe_origin
-                    and ai_result_source in {"live", "prior_valid"}
-                )
-                else (
-                    "stale_or_unverified_negative_fail_closed"
-                    if ai_action in {"DROP", "WAIT"}
-                    else "no_negative_ai_veto"
-                )
-            )
-        ),
+        "post_probe_direction_ai_authority": ai_authority,
         "post_probe_direction_latest_ai_action": latest_ai_action or "-",
         "post_probe_direction_latest_ai_result_source": (
             latest_ai_result_source or "-"
@@ -46041,7 +46114,11 @@ def _handle_watching_opening_rotation(stock, code, ws_data, runtime, config) -> 
             now_dt=now_dt,
             config=entry_config,
         )
-    elif async_status in {"commit_rejected", "context_unavailable", "dispatch_rejected"}:
+    elif async_status in {
+        "commit_rejected",
+        "context_unavailable",
+        "dispatch_rejected",
+    }:
         decision = {
             "qualified": False,
             "reason": f"async_context_{async_status}",
@@ -46273,6 +46350,236 @@ def _scanner_async_opening_rotation_state_version(stock: dict) -> str:
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:20]
 
 
+def _scanner_async_rising_missed_cache_key(
+    stock: dict,
+    *,
+    generation: ScannerGeneration,
+) -> str:
+    """Return a generation-scoped key for Rising Missed REST preparation.
+
+    This intentionally shares the coordinator's normal cache-key transport,
+    but not the generic entry-AI cache namespace.  A Rising Missed candidate
+    must never make the main WATCHING thread wait for its freshness envelope.
+    """
+
+    existing_generation = str(stock.get("_scanner_async_generation_id") or "").strip()
+    existing_key = str(stock.get("_scanner_async_cache_key") or "").strip()
+    if existing_generation == generation.generation_id and existing_key.startswith(
+        "rising_missed:"
+    ):
+        return existing_key
+    seed = f"{generation.generation_id}|rising_missed_freshness_envelope"
+    return "rising_missed:" + hashlib.sha256(seed.encode("utf-8")).hexdigest()[:16]
+
+
+def _resolve_scanner_async_rising_missed_context(
+    stock: dict,
+    code: str,
+    ws_data: dict,
+    runtime: dict,
+) -> dict:
+    """Offload Rising Missed REST freshness preparation, never submission.
+
+    The worker only receives frozen generation snapshots and may consume the
+    shared REST budget.  It cannot mutate the live target, DB, order state, or
+    broker.  The result is accepted only by the usual generation/state/quote
+    commit guard and is then retained as the short-lived TP1 envelope cache.
+    """
+
+    coordinator = runtime.get("scanner_async_eval_coordinator")
+    generation = runtime.get("scanner_async_generation")
+    if not isinstance(coordinator, ScannerAsyncEvalCoordinator) or not isinstance(
+        generation, ScannerGeneration
+    ):
+        return {"status": "not_enabled"}
+
+    cache_key = _scanner_async_rising_missed_cache_key(stock, generation=generation)
+    state_version = _scanner_async_entry_state_version(stock)
+    commit_phase = bool(runtime.get("scanner_async_commit_phase"))
+    result = (
+        coordinator.take_completed(
+            generation_id=generation.generation_id,
+            cache_key=cache_key,
+        )
+        if commit_phase
+        else None
+    )
+    if result is not None:
+        now_epoch = time.time()
+        decision = validate_scanner_async_commit(
+            result,
+            current_generation=generation,
+            current_status=stock.get("status") or "",
+            current_venue=stock.get("effective_venue")
+            or stock.get("venue")
+            or "UNKNOWN",
+            current_source_signature=stock.get("source_signature")
+            or stock.get("scanner_source_signature")
+            or "",
+            venue_resolution_valid=bool(
+                str(stock.get("venue_resolution") or "").strip()
+                and not any(
+                    token in str(stock.get("venue_resolution") or "").strip().lower()
+                    for token in ("missing", "unknown", "conflict", "unresolved")
+                )
+            ),
+            current_state_version=_scanner_async_entry_state_version(stock),
+            quote_fresh=_scanner_async_quote_is_fresh(ws_data, now_ts=now_epoch),
+            position_or_pending_order_present=bool(
+                _safe_int(stock.get("buy_qty"), 0) > 0
+                or _has_open_pending_entry_orders(stock)
+            ),
+            cooldown_active=bool(
+                _safe_float((COOLDOWNS or {}).get(code), 0.0) > now_epoch
+            ),
+            now_epoch=now_epoch,
+        )
+        _log_entry_pipeline(
+            stock,
+            code,
+            "rising_missed_async_freshness_commit",
+            **{
+                **dict(decision.fields),
+                "scanner_async_cache_key": cache_key,
+                "preparation_wait_sec": round(result.preparation_wait_sec, 6),
+                "preparation_service_sec": round(result.preparation_service_sec, 6),
+                "result_to_commit_sec": round(
+                    max(0.0, now_epoch - result.completed_epoch), 6
+                ),
+            },
+        )
+        _mutate_stock_state(
+            stock,
+            pop_fields=[
+                "_scanner_async_generation_id",
+                "_scanner_async_cache_key",
+                "_scanner_async_state_version",
+                "_scanner_async_submitted_at",
+            ],
+        )
+        if not decision.allowed:
+            return {"status": "commit_rejected", "reason": decision.reason}
+        prepared = thaw_scanner_async_value(result.prepared_context)
+        enriched_ws = dict(prepared.get("enriched_ws") or {})
+        envelope_fields = dict(prepared.get("envelope_fields") or {})
+        if not enriched_ws or not envelope_fields:
+            return {"status": "commit_rejected", "reason": "prepared_envelope_missing"}
+        # resolve_rising_missed_decision_input increments all quote ages from
+        # this timestamp; it will re-fetch rather than using a stale worker
+        # result after its normal cache TTL.
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                "_rising_missed_tp1_decision_envelope_cache": {
+                    "code": str(code or ""),
+                    "evaluation_id": f"async:{generation.generation_id}",
+                    "stored_at": float(prepared.get("prepared_at_epoch") or now_epoch),
+                    "enriched_ws": enriched_ws,
+                    "envelope_fields": envelope_fields,
+                },
+                "_scanner_market_data_enrichment_ws_data": enriched_ws,
+                "_scanner_market_data_enrichment_fields": dict(
+                    market_data_enrichment_log_fields(enriched_ws)
+                ),
+                "_scanner_market_data_enrichment_stored_at": float(
+                    prepared.get("prepared_at_epoch") or now_epoch
+                ),
+                "_rising_missed_quality_guard_pre_envelope_last_fetch_at": float(
+                    prepared.get("prepared_at_epoch") or now_epoch
+                ),
+            },
+        )
+        return {"status": "completed"}
+
+    if commit_phase:
+        return {"status": "commit_result_missing"}
+    if coordinator.is_pending(
+        generation_id=generation.generation_id,
+        cache_key=cache_key,
+    ):
+        return {"status": "pending"}
+
+    submitted_epoch = time.time()
+    context = ScannerAsyncEvalContext.create(
+        generation=generation,
+        cache_key=cache_key,
+        submitted_epoch=submitted_epoch,
+        deadline_epoch=submitted_epoch + 5.0,
+        stock_snapshot=stock,
+        ws_snapshot=ws_data,
+        state_version=state_version,
+    )
+
+    def prepare(async_context: ScannerAsyncEvalContext) -> dict:
+        snapshot_stock = thaw_scanner_async_value(async_context.stock_snapshot)
+        snapshot_ws = thaw_scanner_async_value(async_context.ws_snapshot)
+        # persist_cache=False is essential: this is a worker-local snapshot,
+        # not runtime truth.  The main-thread commit above owns all writes.
+        enriched_ws, envelope_fields = _rising_missed_quality_guard_pre_envelope(
+            snapshot_stock,
+            code,
+            snapshot_ws,
+            {"now_ts": time.time()},
+            scanner_envelope_ws_data=_merge_scanner_market_data_enrichment_into_ws_data(
+                snapshot_stock,
+                snapshot_ws,
+                {"now_ts": time.time()},
+            ),
+            persist_cache=False,
+        )
+        return {
+            "enriched_ws": enriched_ws,
+            "envelope_fields": envelope_fields,
+            "prepared_at_epoch": time.time(),
+        }
+
+    submit_decision = coordinator.submit(
+        ScannerAsyncEvalRequest(
+            context=context,
+            prepare=prepare,
+            evaluate=lambda _context, _prepared: {},
+            requires_ai_dispatch=False,
+        )
+    )
+    if submit_decision.accepted:
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                "_scanner_async_generation_id": generation.generation_id,
+                "_scanner_async_cache_key": cache_key,
+                "_scanner_async_state_version": state_version,
+                "_scanner_async_submitted_at": submitted_epoch,
+            },
+        )
+    _log_entry_pipeline(
+        stock,
+        code,
+        "rising_missed_async_freshness_dispatched",
+        metric_role="runtime_scheduler_latency",
+        decision_authority="scanner_async_freshness_preparation_only",
+        window_policy="per_scanner_generation_action_timestamps",
+        sample_floor="one_rising_missed_generation",
+        primary_decision_metric="preparation_service_sec",
+        source_quality_gate="main_thread_generation_venue_quote_revalidation_required",
+        forbidden_uses=(
+            "standalone_buy,broker_submit,threshold_mutation,provider_route_change,"
+            "order_price_change,quantity_or_cap_change,broker_guard_bypass"
+        ),
+        runtime_effect=False,
+        actual_order_submitted=False,
+        broker_order_forbidden=True,
+        scanner_generation_id=generation.generation_id,
+        scanner_async_cache_key=cache_key,
+        scanner_async_dispatch_accepted=submit_decision.accepted,
+        scanner_async_dispatch_reason=submit_decision.reason,
+        scanner_async_deadline_epoch=round(context.deadline_epoch, 6),
+    )
+    return {
+        "status": "dispatched" if submit_decision.accepted else "dispatch_rejected",
+        "reason": submit_decision.reason,
+    }
+
+
 def _resolve_scanner_async_opening_rotation_context(
     stock: dict,
     code: str,
@@ -46292,9 +46599,7 @@ def _resolve_scanner_async_opening_rotation_context(
     ):
         return {"status": "not_enabled"}
 
-    cache_key = _scanner_async_opening_rotation_cache_key(
-        stock, generation=generation
-    )
+    cache_key = _scanner_async_opening_rotation_cache_key(stock, generation=generation)
     state_version = _scanner_async_opening_rotation_state_version(stock)
     commit_phase = bool(runtime.get("scanner_async_commit_phase"))
     result = (
@@ -46407,7 +46712,10 @@ def _resolve_scanner_async_opening_rotation_context(
         cache_key=cache_key,
         submitted_epoch=submitted_epoch,
         deadline_epoch=submitted_epoch + 5.0,
-        stock_snapshot={**stock, "_opening_rotation_async_cached_context": cached_context},
+        stock_snapshot={
+            **stock,
+            "_opening_rotation_async_cached_context": cached_context,
+        },
         ws_snapshot=ws_data,
         state_version=state_version,
     )
@@ -46421,7 +46729,9 @@ def _resolve_scanner_async_opening_rotation_context(
             prepared_ws,
             now_ts=time.time(),
         )
-        cached = dict(stock_snapshot.get("_opening_rotation_async_cached_context") or {})
+        cached = dict(
+            stock_snapshot.get("_opening_rotation_async_cached_context") or {}
+        )
         cache_at = _safe_float(cached.get("cached_at"), 0.0)
         cache_ttl_sec = max(
             0.5,
@@ -46451,9 +46761,7 @@ def _resolve_scanner_async_opening_rotation_context(
         packet.update(
             {
                 "quote_age_ms": (
-                    round(effective_age_ms, 3)
-                    if effective_age_ms is not None
-                    else "-"
+                    round(effective_age_ms, 3) if effective_age_ms is not None else "-"
                 ),
                 "quote_age_source": "opening_rotation_freshness_envelope",
                 "quote_stale": not bool(
@@ -46469,7 +46777,9 @@ def _resolve_scanner_async_opening_rotation_context(
             "freshness_fields": freshness_fields,
             "feature_packet": packet,
             "opening_rotation_freshness_envelope_rest_attempted": bool(
-                freshness_fields.get("opening_rotation_freshness_envelope_rest_attempted")
+                freshness_fields.get(
+                    "opening_rotation_freshness_envelope_rest_attempted"
+                )
             ),
         }
 
@@ -51236,6 +51546,13 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         if opening_rotation_active
         else float(stock.get("rt_ai_prob", stock.get("prob", 0.0)) or 0.0)
     )
+    latency_signal_strength, latency_ai_signal_authority_fields = (
+        _resolve_latency_ai_signal_strength(
+            stock,
+            latency_signal_strength,
+            now_ts=now_ts,
+        )
+    )
     latency_signal_score = latency_signal_strength * 100.0
     latency_false_negative_report_fields = (
         _apply_latency_false_negative_remeasure_report_marker(
@@ -51314,6 +51631,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         signal_strength=latency_signal_strength,
         target_buy_price=final_price if strategy == "SCALPING" else 0,
     )
+    latency_gate.update(latency_ai_signal_authority_fields)
     (
         latency_gate,
         ws_data,
@@ -57257,10 +57575,10 @@ def _maybe_retry_rising_missed_entry_ai_not_evaluated(
     ) and isinstance(async_generation, ScannerGeneration)
     if async_enabled:
         now_ts = _safe_float((runtime or {}).get("now_ts"), time.time())
-        pending_for_generation = (
-            str(stock.get("_scanner_async_generation_id") or "").strip()
-            == async_generation.generation_id
-            and bool(str(stock.get("_scanner_async_cache_key") or "").strip())
+        pending_for_generation = str(
+            stock.get("_scanner_async_generation_id") or ""
+        ).strip() == async_generation.generation_id and bool(
+            str(stock.get("_scanner_async_cache_key") or "").strip()
         )
         if not pending_for_generation:
             if _is_any_simulated_position(stock, (stock or {}).get("strategy")):
@@ -57296,9 +57614,7 @@ def _maybe_retry_rising_missed_entry_ai_not_evaluated(
             runtime,
             trigger_reason="rising_missed_entry_ai_not_evaluated",
             last_ai_time=_safe_float((LAST_AI_CALL_TIMES or {}).get(code), 0.0),
-            current_ai_score=_safe_float(
-                (runtime or {}).get("current_ai_score"), 0.0
-            ),
+            current_ai_score=_safe_float((runtime or {}).get("current_ai_score"), 0.0),
         )
         async_status = str(async_resolution.get("status") or "unknown")
         if async_status in {"dispatched", "pending"}:
@@ -57332,9 +57648,9 @@ def _maybe_retry_rising_missed_entry_ai_not_evaluated(
             )
             action = str(ai_decision.get("action") or "not_evaluated").upper()
             score = _safe_float(ai_decision.get("score"), 0.0)
-            result_source = str(
-                ai_decision.get("ai_result_source") or "live"
-            ).strip().lower()
+            result_source = (
+                str(ai_decision.get("ai_result_source") or "live").strip().lower()
+            )
             source_quality_fields = _build_tick_source_quality_log_fields(ai_decision)
             source_quality_fields["ai_result_source"] = result_source
             _mutate_stock_state(
@@ -57343,7 +57659,9 @@ def _maybe_retry_rising_missed_entry_ai_not_evaluated(
                     "last_watching_ai_action": action,
                     "last_watching_ai_score": float(score),
                     "last_watching_ai_score_raw": float(score),
-                    "last_watching_ai_reason": str(ai_decision.get("reason") or "")[:240],
+                    "last_watching_ai_reason": str(ai_decision.get("reason") or "")[
+                        :240
+                    ],
                     "last_watching_ai_confirmed_at": completed_epoch,
                     "last_watching_ai_result_source": result_source,
                     "last_watching_ai_snapshot_id": (
@@ -57412,9 +57730,7 @@ def _maybe_retry_rising_missed_entry_ai_not_evaluated(
                     "reason"
                 )
                 or "-",
-                "rising_missed_entry_ai_retry_current_price": _safe_int(
-                    curr_price, 0
-                ),
+                "rising_missed_entry_ai_retry_current_price": _safe_int(curr_price, 0),
             }
         )
         return fields
@@ -58451,6 +58767,25 @@ def _maybe_submit_rising_missed_one_share_entry(
             )
             return True
         return False
+    # A qualified Rising Missed candidate needs a REST freshness envelope, but
+    # that preparation must not monopolize the scanner main thread.  Defer it
+    # before the reentry/TP1/submit chain; the COMMIT pass will revalidate the
+    # generation, current quote, cooldown and position state before using it.
+    if decision.allowed:
+        async_context = _resolve_scanner_async_rising_missed_context(
+            stock,
+            code,
+            current_ws_data,
+            runtime,
+        )
+        if async_context.get("status") in {"dispatched", "pending"}:
+            return True
+        if async_context.get("status") in {
+            "commit_rejected",
+            "commit_result_missing",
+            "dispatch_rejected",
+        }:
+            return True
     reentry_guard = evaluate_rising_missed_same_day_reentry_guard(
         code,
         _runtime_action_now_ts(runtime),
@@ -63451,8 +63786,11 @@ def handle_watching_state(
     """
     global LAST_AI_CALL_TIMES
 
-    cooldowns = COOLDOWNS
-    alerted_stocks = ALERTED_STOCKS
+    # Test/offline startup paths can construct WATCHING before the shared
+    # containers are installed.  Treat that as an empty runtime view rather
+    # than throwing before the scheduler can defer its context work.
+    cooldowns = COOLDOWNS if isinstance(COOLDOWNS, dict) else {}
+    alerted_stocks = ALERTED_STOCKS if isinstance(ALERTED_STOCKS, set) else set()
     event_bus = EVENT_BUS
 
     # P1: 메인 루프에서 전달받은 시간값 재사용, 없으면 자체 측정

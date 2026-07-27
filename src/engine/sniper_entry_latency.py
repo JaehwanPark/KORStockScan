@@ -1002,6 +1002,7 @@ def _score_candidate_from_source(
     fields = source if isinstance(source, dict) else {}
     zero_candidate = ""
     for key in (
+        "last_watching_ai_score",
         "rt_ai_prob",
         "prob",
         "ai_prob",
@@ -1031,6 +1032,48 @@ def _latency_explicit_negative_ai_action(
     ws_data: dict[str, Any] | None,
 ) -> str:
     """Return an explicit AI veto; unknown or missing action is not a veto."""
+
+    stock_fields = stock if isinstance(stock, dict) else {}
+    canonical_action = (
+        str(stock_fields.get("last_watching_ai_action") or "").strip().upper()
+    )
+    canonical_result_source = (
+        str(stock_fields.get("last_watching_ai_result_source") or "").strip().lower()
+    )
+    canonical_confirmed_at = _to_float(
+        stock_fields.get("last_watching_ai_confirmed_at"), 0.0
+    )
+    canonical_prior_max_age_sec = max(
+        1.0,
+        _to_float(
+            os.getenv("KORSTOCKSCAN_PRE_SUBMIT_AI_AUTHORITY_MAX_PRIOR_AGE_SEC"),
+            300.0,
+        ),
+    )
+    canonical_tight_max_age_sec = max(
+        1.0,
+        _to_float(
+            os.getenv("KORSTOCKSCAN_FRESH_SPREAD_AI_RECHECK_MAX_AI_AGE_SEC"),
+            15.0,
+        ),
+    )
+    canonical_max_age_sec = min(
+        canonical_prior_max_age_sec,
+        canonical_tight_max_age_sec,
+    )
+    canonical_age_sec = (
+        max(0.0, time.time() - canonical_confirmed_at)
+        if canonical_confirmed_at > 0.0
+        else None
+    )
+    canonical_fresh = bool(
+        canonical_action in {"BUY", "WAIT", "DROP"}
+        and canonical_result_source in {"live", "prior_valid"}
+        and canonical_age_sec is not None
+        and canonical_age_sec <= canonical_max_age_sec
+    )
+    if canonical_fresh:
+        return canonical_action if canonical_action in {"DROP", "WAIT"} else ""
 
     for source in (stock, ws_data):
         fields = source if isinstance(source, dict) else {}
