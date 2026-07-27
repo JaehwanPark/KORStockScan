@@ -2843,7 +2843,14 @@ def _scanner_watch_eviction_decision_from_no_trade(target, ws_data, *, now_ts):
         received_types = sorted(str(item) for item in received if str(item).strip())
     except Exception:
         received_types = []
-    if not received_types:
+    attach_epoch = _safe_float((target or {}).get("scanner_attach_epoch"), 0.0)
+    last_0b_epoch = _scanner_latency_ws_type_epoch(ws_data, "0B")
+    last_history_epoch = _scanner_latest_strength_history_epoch(ws_data)
+    post_attach_trade_evidence = bool(
+        attach_epoch > 0
+        and (last_0b_epoch >= attach_epoch or last_history_epoch >= attach_epoch)
+    )
+    if not received_types and not post_attach_trade_evidence:
         target.pop("_scanner_watch_no_trade_count", None)
         target.pop("_scanner_watch_no_trade_first_observed_epoch", None)
         target.pop("_scanner_watch_no_trade_last_observed_epoch", None)
@@ -2853,15 +2860,16 @@ def _scanner_watch_eviction_decision_from_no_trade(target, ws_data, *, now_ts):
             "eviction_reason": "scanner_no_trade_waiting_realtime_type",
             "ws_recovery_outcome": "not_applicable_ws_recovery_outcome",
         }
-    if "0B" in received_types:
+    if post_attach_trade_evidence or (attach_epoch <= 0 and "0B" in received_types):
         target.pop("_scanner_watch_no_trade_count", None)
         target.pop("_scanner_watch_no_trade_first_observed_epoch", None)
         target.pop("_scanner_watch_no_trade_last_observed_epoch", None)
         return {"should_evict": False, "eviction_attempt_count": 0}
 
-    watch_age_sec = max(
-        0.0, float(now_ts) - _runtime_added_time_for_target(target, now_ts=now_ts)
-    )
+    watch_anchor_epoch = _scanner_evaluation_lifetime_anchor(target, now_ts=now_ts)
+    if attach_epoch > 0 and not post_attach_trade_evidence:
+        watch_anchor_epoch = max(watch_anchor_epoch, attach_epoch)
+    watch_age_sec = max(0.0, float(now_ts) - watch_anchor_epoch)
     grace_sec = _scanner_no_trade_eviction_grace_sec()
     if watch_age_sec < grace_sec:
         target.pop("_scanner_watch_no_trade_count", None)
@@ -2873,6 +2881,12 @@ def _scanner_watch_eviction_decision_from_no_trade(target, ws_data, *, now_ts):
             "eviction_reason": "scanner_no_trade_grace_active",
             "no_trade_watch_age_sec": round(watch_age_sec, 3),
             "no_trade_grace_sec": round(grace_sec, 3),
+            "no_trade_watch_anchor_epoch": f"{watch_anchor_epoch:.3f}",
+            "no_trade_watch_anchor_source": (
+                "scanner_attach_epoch"
+                if attach_epoch > 0 and not post_attach_trade_evidence
+                else "scanner_evaluation_lifetime"
+            ),
             "ws_recovery_outcome": "not_applicable_ws_recovery_outcome",
         }
 
@@ -3735,7 +3749,6 @@ def _scanner_watch_eviction_decision_from_fast_precheck_budget(
             (target or {}).get("scanner_attach_epoch"),
             0.0,
         )
-        required_entry_types = {"0B", "0D"}
         post_attach_received_types = {
             realtime_type
             for realtime_type, observed_epoch in (
@@ -3744,15 +3757,17 @@ def _scanner_watch_eviction_decision_from_fast_precheck_budget(
                     _safe_float(fast_precheck_fields.get("ws_last_0b_epoch"), 0.0),
                 ),
                 (
-                    "0D",
-                    _safe_float(fast_precheck_fields.get("ws_last_0d_epoch"), 0.0),
+                    "strength_history",
+                    _safe_float(
+                        fast_precheck_fields.get("ws_last_strength_history_epoch"),
+                        0.0,
+                    ),
                 ),
             )
             if attach_epoch > 0 and observed_epoch >= attach_epoch
         }
         initial_entry_ws_receipt_pending = bool(
-            attach_epoch > 0
-            and not required_entry_types.issubset(post_attach_received_types)
+            attach_epoch > 0 and not post_attach_received_types
         )
         backoff_until = _safe_float(
             fast_precheck_fields.get("scanner_ws_stale_backoff_until"), 0.0
@@ -3837,7 +3852,7 @@ def _scanner_watch_eviction_decision_from_fast_precheck_budget(
             "ws_backoff_retention_attempt_count": attempt_count,
             "ws_backoff_retention_min_count": min_count,
             "initial_entry_ws_receipt_pending": initial_entry_ws_receipt_pending,
-            "initial_entry_ws_receipt_required_types": "0B|0D",
+            "initial_entry_ws_receipt_required_types": "0B|strength_history",
             "initial_entry_ws_receipt_observed_types": (
                 ",".join(sorted(post_attach_received_types))
                 if post_attach_received_types
@@ -4718,6 +4733,11 @@ def _reset_scanner_runtime_eval_state(target):
         "entry_strength_momentum_recheck_count",
         "entry_strength_momentum_recheck_after_epoch",
         "entry_strength_momentum_recheck_requested_at",
+        "scanner_first_entry_realtime_epoch",
+        "scanner_first_entry_realtime_type",
+        "scanner_first_entry_realtime_latency_ms",
+        "scanner_evaluation_anchor_epoch",
+        "scanner_evaluation_anchor_source",
     ):
         target.pop(key, None)
 
@@ -4744,6 +4764,15 @@ def _runtime_added_time_for_target(target, now_ts=None):
         if armed_ts > 0:
             return armed_ts
     return _safe_float(target.get("added_time"), now_ts) or now_ts
+
+
+def _scanner_evaluation_lifetime_anchor(target, now_ts=None):
+    now_ts = time.time() if now_ts is None else now_ts
+    target = target or {}
+    evaluation_anchor = _safe_float(target.get("scanner_evaluation_anchor_epoch"), 0.0)
+    if evaluation_anchor > 0:
+        return evaluation_anchor
+    return _runtime_added_time_for_target(target, now_ts=now_ts)
 
 
 def _is_scalping_fifo_target(target):
@@ -5768,6 +5797,79 @@ def _scanner_latency_ws_type_epoch(ws_data, type_name):
     return _safe_float(type_ts.get(type_name), 0.0)
 
 
+def _scanner_latest_strength_history_epoch(ws_data):
+    history = (ws_data or {}).get("strength_momentum_history")
+    if not isinstance(history, list):
+        return 0.0
+    for item in reversed(history):
+        if not isinstance(item, dict):
+            continue
+        observed_epoch = _safe_float(
+            item.get("ts") or item.get("timestamp"),
+            0.0,
+        )
+        if observed_epoch > 0:
+            return observed_epoch
+    return 0.0
+
+
+def _scanner_record_first_entry_realtime(target, ws_data, *, now_ts):
+    """Anchor evaluation lifetime to the first real post-attach trade input."""
+
+    if not isinstance(target, dict):
+        return {}
+    attach_epoch = _safe_float(target.get("scanner_attach_epoch"), 0.0)
+    if attach_epoch <= 0:
+        return {
+            "scanner_entry_realtime_state": "attach_epoch_missing",
+            "scanner_evaluation_anchor_source": "promotion_time_fallback",
+        }
+    candidates = []
+    last_0b_epoch = _scanner_latency_ws_type_epoch(ws_data, "0B")
+    if last_0b_epoch >= attach_epoch:
+        candidates.append(("0B", last_0b_epoch))
+    last_history_epoch = _scanner_latest_strength_history_epoch(ws_data)
+    if last_history_epoch >= attach_epoch:
+        candidates.append(("strength_history", last_history_epoch))
+    first_epoch = _safe_float(target.get("scanner_first_entry_realtime_epoch"), 0.0)
+    first_type = str(target.get("scanner_first_entry_realtime_type") or "")
+    if candidates and first_epoch <= 0:
+        first_type, first_epoch = min(candidates, key=lambda item: item[1])
+        target["scanner_first_entry_realtime_epoch"] = first_epoch
+        target["scanner_first_entry_realtime_type"] = first_type
+        target["scanner_first_entry_realtime_latency_ms"] = round(
+            max(0.0, first_epoch - attach_epoch) * 1000.0,
+            3,
+        )
+        target["scanner_evaluation_anchor_epoch"] = first_epoch
+        target["scanner_evaluation_anchor_source"] = "first_post_attach_entry_realtime"
+    if first_epoch > 0:
+        return {
+            "scanner_entry_realtime_state": "received",
+            "scanner_first_entry_realtime_epoch": f"{first_epoch:.6f}",
+            "scanner_first_entry_realtime_type": first_type,
+            "scanner_first_entry_realtime_latency_ms": target.get(
+                "scanner_first_entry_realtime_latency_ms"
+            ),
+            "scanner_evaluation_anchor_epoch": f"{first_epoch:.6f}",
+            "scanner_evaluation_anchor_source": "first_post_attach_entry_realtime",
+        }
+    grace_sec = max(
+        _scanner_no_trade_eviction_grace_sec(),
+        SCANNER_WATCH_EVICTION_STALE_MIN_AGE_SEC,
+    )
+    return {
+        "scanner_entry_realtime_state": "awaiting_first_post_attach_trade_input",
+        "scanner_attach_epoch": f"{attach_epoch:.6f}",
+        "scanner_entry_realtime_grace_deadline_epoch": f"{attach_epoch + grace_sec:.6f}",
+        "scanner_entry_realtime_grace_remaining_sec": round(
+            max(0.0, attach_epoch + grace_sec - float(now_ts)),
+            3,
+        ),
+        "scanner_evaluation_anchor_source": "bounded_attach_grace_pending",
+    }
+
+
 def _scanner_promotion_latency_trace_fields(
     target,
     ws_data,
@@ -5831,6 +5933,27 @@ def _scanner_promotion_latency_trace_fields(
             strategy, target.get("position_tag")
         ),
         "promotion_anchor_epoch": f"{float(anchor_epoch):.3f}",
+        "scanner_attach_epoch": target.get("scanner_attach_epoch")
+        or "not_available_scanner_attach_epoch",
+        "scanner_first_entry_realtime_epoch": target.get(
+            "scanner_first_entry_realtime_epoch"
+        )
+        or "not_available_first_entry_realtime_epoch",
+        "scanner_first_entry_realtime_type": target.get(
+            "scanner_first_entry_realtime_type"
+        )
+        or "not_available_first_entry_realtime_type",
+        "scanner_first_entry_realtime_latency_ms": (
+            target.get("scanner_first_entry_realtime_latency_ms")
+            if target.get("scanner_first_entry_realtime_latency_ms") is not None
+            else "not_available_first_entry_realtime_latency_ms"
+        ),
+        "scanner_evaluation_anchor_epoch": target.get("scanner_evaluation_anchor_epoch")
+        or "not_available_scanner_evaluation_anchor_epoch",
+        "scanner_evaluation_anchor_source": target.get(
+            "scanner_evaluation_anchor_source"
+        )
+        or "promotion_time_fallback",
         "trace_observed_epoch": f"{float(now_ts):.3f}",
         "promotion_to_trace_sec": round(
             max(0.0, float(now_ts) - float(anchor_epoch)), 3
@@ -9638,7 +9761,7 @@ def run_sniper(is_test_mode=False):
 
                 for t in scalp_fifo_targets:
                     if (
-                        now_ts - _runtime_added_time_for_target(t, now_ts=now_ts)
+                        now_ts - _scanner_evaluation_lifetime_anchor(t, now_ts=now_ts)
                         > scalping_watching_ttl_sec
                     ):
                         expired_ids.append(t["id"])
@@ -9909,7 +10032,8 @@ def run_sniper(is_test_mode=False):
                                     )
                                 ),
                                 "scanner_async_transport_namespace": (
-                                    async_transport.get("namespace") or "unknown"
+                                    async_transport.get("namespace")
+                                    or "not_available_target_or_generation_missing"
                                 ),
                             },
                         )
@@ -9942,10 +10066,12 @@ def run_sniper(is_test_mode=False):
                             "scanner_generation_id": async_result.generation_id,
                             "scanner_async_cache_key": async_result.cache_key,
                             "scanner_async_transport_namespace": (
-                                async_transport.get("namespace") or "unknown"
+                                async_transport.get("namespace")
+                                or "not_available_missing_transport_namespace"
                             ),
                             "scanner_async_transport_reason": (
-                                async_transport.get("reason") or "unknown"
+                                async_transport.get("reason")
+                                or "not_available_missing_transport_reason"
                             ),
                         },
                     )
@@ -10099,6 +10225,11 @@ def run_sniper(is_test_mode=False):
                 if throttle > 0 and float(now_value) - last_logged < throttle:
                     return False
                 stock_value["_scanner_fast_precheck_logged_at"] = float(now_value)
+                entry_realtime_fields = _scanner_record_first_entry_realtime(
+                    stock_value,
+                    ws_snapshot,
+                    now_ts=float(now_value),
+                )
                 fields = sniper_state_handlers._scanner_fast_precheck_fields(
                     stock_value,
                     now_ts=float(now_value),
@@ -10109,6 +10240,7 @@ def run_sniper(is_test_mode=False):
                     watching_count=watching_count,
                     scanner_watching_count=scanner_watching_count,
                 )
+                fields.update(entry_realtime_fields)
                 if (
                     fields.get("fast_precheck_result")
                     == "eligible_for_heavy_entry_eval"

@@ -1781,7 +1781,7 @@ def _latency_signed_tape_fields(
         and sell_volume > buy_volume
         and buy_ratio <= max_buy_ratio
     )
-    latest_side = rows[0][0] if rows else "UNKNOWN"
+    latest_side = rows[0][0] if rows else "not_available_no_signed_tape"
     trusted_received_ts = [
         received_at for _side, _volume, received_at in rows if received_at > 0
     ]
@@ -1790,7 +1790,7 @@ def _latency_signed_tape_fields(
     event_time_latest_side = (
         max(rows, key=lambda row: row[2])[0]
         if len(trusted_received_ts) == sample_count and sample_count > 0
-        else "UNKNOWN"
+        else "not_available_received_ts_incomplete"
     )
     tape_window_span_sec = (
         max(0.0, latest_received_at - earliest_received_at)

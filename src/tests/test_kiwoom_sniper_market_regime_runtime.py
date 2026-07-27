@@ -6537,7 +6537,7 @@ def test_scanner_initial_attach_without_0b_or_0d_keeps_existing_stale_lifetime()
     assert expired["ws_backoff_retention_age_sec"] == 91.0
 
 
-def test_scanner_initial_attach_lifetime_contract_waits_for_both_entry_ws_types():
+def test_scanner_initial_attach_lifetime_contract_accepts_post_attach_0b():
     stock = {
         "id": 91,
         "code": "399720",
@@ -6564,21 +6564,50 @@ def test_scanner_initial_attach_lifetime_contract_waits_for_both_entry_ws_types(
         )
     )
 
-    assert retained["initial_entry_ws_receipt_pending"] is True
-    assert retained["should_evict"] is False
-    assert retained["ws_backoff_retention_max_sec"] == 90.0
+    assert retained["initial_entry_ws_receipt_pending"] is False
+    assert retained["initial_entry_ws_receipt_required_types"] == (
+        "0B|strength_history"
+    )
+    assert retained["should_evict"] is True
+    assert retained["ws_backoff_retention_max_sec"] == 30.0
 
-    stock["_scanner_fast_precheck_fields"]["ws_last_0d_epoch"] = "2026.000000"
-    complete = (
-        kiwoom_sniper_v2._scanner_watch_eviction_decision_from_fast_precheck_budget(
-            stock,
-            now_ts=2031.0,
-        )
+
+def test_scanner_first_entry_realtime_anchors_lifetime_to_post_attach_strength():
+    stock = {
+        "id": 92,
+        "code": "399720",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "scanner_attach_epoch": 2000.0,
+        "entry_armed_at_epoch": 1990.0,
+    }
+
+    pending = kiwoom_sniper_v2._scanner_record_first_entry_realtime(
+        stock,
+        {
+            "last_realtime_type_ts": {"0D": 2001.0},
+            "strength_momentum_history": [{"ts": 1999.0}],
+        },
+        now_ts=2002.0,
+    )
+    received = kiwoom_sniper_v2._scanner_record_first_entry_realtime(
+        stock,
+        {
+            "last_realtime_type_ts": {"0D": 2001.0},
+            "strength_momentum_history": [{"ts": 2003.25}],
+        },
+        now_ts=2003.5,
     )
 
-    assert complete["initial_entry_ws_receipt_pending"] is False
-    assert complete["should_evict"] is True
-    assert complete["ws_backoff_retention_max_sec"] == 30.0
+    assert pending["scanner_entry_realtime_state"] == (
+        "awaiting_first_post_attach_trade_input"
+    )
+    assert received["scanner_entry_realtime_state"] == "received"
+    assert received["scanner_first_entry_realtime_type"] == "strength_history"
+    assert received["scanner_first_entry_realtime_latency_ms"] == 3250.0
+    assert kiwoom_sniper_v2._scanner_evaluation_lifetime_anchor(stock) == 2003.25
+    assert kiwoom_sniper_v2._runtime_added_time_for_target(stock) == 1990.0
 
 
 def test_scanner_rising_insufficient_history_evicts_after_buy_window(monkeypatch):
@@ -8442,6 +8471,34 @@ def test_scanner_no_trade_eviction_resets_when_0b_arrives(monkeypatch):
     assert "_scanner_watch_no_trade_count" not in target
     assert "_scanner_watch_no_trade_first_observed_epoch" not in target
     assert "_scanner_watch_no_trade_last_observed_epoch" not in target
+
+
+def test_scanner_no_trade_does_not_accept_pre_attach_0b(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_NO_TRADE_EVICTION_GRACE_SEC", "60")
+    target = {
+        "id": 77,
+        "code": "005930",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "buy_qty": 0,
+        "buy_time": None,
+        "entry_armed_at_epoch": 1000.0,
+        "scanner_attach_epoch": 1050.0,
+    }
+
+    decision = kiwoom_sniper_v2._scanner_watch_eviction_decision_from_no_trade(
+        target,
+        {
+            "received_types": {"0B", "0D"},
+            "last_realtime_type_ts": {"0B": 1049.0, "0D": 1060.0},
+            "last_ws_update_ts": 1060.0,
+        },
+        now_ts=1061.0,
+    )
+
+    assert decision["should_evict"] is False
+    assert decision["eviction_reason"] == "scanner_no_trade_grace_active"
 
 
 def test_scanner_no_trade_eviction_waits_for_realtime_type(monkeypatch):

@@ -2081,18 +2081,79 @@ def _tp1_counterfactual_multi_horizon_by_effective_venue(
     ]
 
 
+def _tp1_label_candidate_kind(row: dict[str, Any]) -> str:
+    fields = _fields(row)
+    if str(row.get("stage") or "") == "rising_missed_tp1_counterfactual_submit_safety":
+        return "counterfactual"
+    if (
+        _boolish(fields.get("rising_missed_tp1_selector_active"))
+        and _boolish(fields.get("rising_missed_tp1_candidate_allowed"))
+        and str(fields.get("rising_missed_tp1_candidate_reason") or "")
+        == "rising_missed_tp1_candidate_pass"
+    ):
+        return "candidate"
+    return ""
+
+
+def _load_tp1_label_event_projection(
+    pipeline_path: Path,
+) -> tuple[list[dict[str, Any]], datetime | None]:
+    """Load only TP1 candidate/price rows instead of the complete pipeline.
+
+    The intraday pipeline can grow to several gigabytes.  Materializing every
+    decoded event made this report consume multiple gigabytes of RSS and could
+    starve the live bot.  The first streaming pass identifies candidate symbols
+    and the global observation watermark.  The second retains only rows that
+    can change a TP1 label: candidates, usable prices, sampler lifecycle rows,
+    or explicit fee/tax evidence.
+    """
+
+    candidate_codes: set[str] = set()
+    observation_watermark: datetime | None = None
+    for row in iter_jsonl(pipeline_path):
+        timestamp = _tp1_label_timestamp(_event_ts(row))
+        if timestamp is not None and (
+            observation_watermark is None or timestamp > observation_watermark
+        ):
+            observation_watermark = timestamp
+        if _tp1_label_candidate_kind(row):
+            code = _event_code(row)
+            if code:
+                candidate_codes.add(code)
+
+    if not candidate_codes:
+        return [], observation_watermark
+
+    projected: list[dict[str, Any]] = []
+    for row in iter_jsonl(pipeline_path):
+        if _event_code(row) not in candidate_codes:
+            continue
+        fields = _fields(row)
+        stage = str(row.get("stage") or "")
+        price, _price_source = _tp1_observation_price(row)
+        fee, tax = _tp1_actual_costs(fields)
+        if (
+            _tp1_label_candidate_kind(row)
+            or (price is not None and price > 0)
+            or stage.startswith("rising_missed_nxt_post_block_")
+            or fee is not None
+            or tax is not None
+        ):
+            projected.append(row)
+    return projected, observation_watermark
+
+
 def _build_tp1_first_hit_labels(
     pipeline_path: Path,
+    *,
+    label_events: list[dict[str, Any]] | None = None,
+    observation_watermark: datetime | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    events = list(iter_jsonl(pipeline_path))
-    observation_watermark = max(
-        (
-            timestamp
-            for row in events
-            if (timestamp := _tp1_label_timestamp(_event_ts(row))) is not None
-        ),
-        default=None,
-    )
+    if label_events is None:
+        events, loaded_watermark = _load_tp1_label_event_projection(pipeline_path)
+        observation_watermark = observation_watermark or loaded_watermark
+    else:
+        events = label_events
     candidates: list[tuple[int, dict[str, Any]]] = []
     for index, row in enumerate(events):
         fields = _fields(row)
@@ -2384,16 +2445,15 @@ def _build_tp1_counterfactual_submit_safety(
 
 def _build_tp1_counterfactual_first_hit_labels(
     pipeline_path: Path,
+    *,
+    label_events: list[dict[str, Any]] | None = None,
+    observation_watermark: datetime | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    events = list(iter_jsonl(pipeline_path))
-    observation_watermark = max(
-        (
-            timestamp
-            for row in events
-            if (timestamp := _tp1_label_timestamp(_event_ts(row))) is not None
-        ),
-        default=None,
-    )
+    if label_events is None:
+        events, loaded_watermark = _load_tp1_label_event_projection(pipeline_path)
+        observation_watermark = observation_watermark or loaded_watermark
+    else:
+        events = label_events
     labels: list[dict[str, Any]] = []
     seen_keys: set[tuple[str, ...]] = set()
     for index, candidate in enumerate(events):
@@ -3124,12 +3184,23 @@ def build_report(
     latency_canary_summary, latency_canary_rows = (
         _build_latency_false_negative_canary_candidates(latency_false_negative_rows)
     )
-    tp1_label_summary, tp1_label_rows = _build_tp1_first_hit_labels(pipeline_path)
+    tp1_label_events, tp1_observation_watermark = _load_tp1_label_event_projection(
+        pipeline_path
+    )
+    tp1_label_summary, tp1_label_rows = _build_tp1_first_hit_labels(
+        pipeline_path,
+        label_events=tp1_label_events,
+        observation_watermark=tp1_observation_watermark,
+    )
     tp1_counterfactual_summary, tp1_counterfactual_rows = (
         _build_tp1_counterfactual_submit_safety(pipeline_path)
     )
     tp1_counterfactual_label_summary, tp1_counterfactual_label_rows = (
-        _build_tp1_counterfactual_first_hit_labels(pipeline_path)
+        _build_tp1_counterfactual_first_hit_labels(
+            pipeline_path,
+            label_events=tp1_label_events,
+            observation_watermark=tp1_observation_watermark,
+        )
     )
     tp1_counterfactual_multi_horizon_summary = (
         _tp1_counterfactual_multi_horizon_summary(tp1_counterfactual_label_rows)

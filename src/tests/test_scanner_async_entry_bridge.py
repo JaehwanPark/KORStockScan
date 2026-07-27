@@ -495,6 +495,89 @@ def test_rising_missed_async_commit_is_handled_when_ai_dispatch_is_pending(
     assert calls[0]["scanner_async_commit_phase"] is True
 
 
+def test_rising_missed_freshness_commit_dispatches_entry_ai_before_submit(
+    monkeypatch,
+):
+    generation = _generation("KRX")
+    coordinator = ScannerAsyncEvalCoordinator(
+        ai_dispatcher=HotPathAIDispatcher(loaded_key_count=1)
+    )
+    logs = []
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RISING_MISSED_ONE_SHARE_ENTRY_ENABLED",
+        "true",
+    )
+    monkeypatch.setattr(
+        handlers,
+        "evaluate_rising_missed_one_share_entry",
+        lambda *args, **kwargs: type(
+            "Decision",
+            (),
+            {"allowed": True, "reason": "allowed", "log_fields": {}},
+        )(),
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_resolve_scanner_async_rising_missed_context",
+        lambda *args, **kwargs: {"status": "completed"},
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_maybe_retry_rising_missed_entry_ai_not_evaluated",
+        lambda *args, **kwargs: {
+            "rising_missed_entry_ai_retry_attempted": True,
+            "rising_missed_entry_ai_retry_success": False,
+            "rising_missed_entry_ai_retry_reason": "async_pending",
+            "rising_missed_entry_ai_retry_async_status": "dispatched",
+        },
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_submit_watching_triggered_entry",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("freshness COMMIT must not submit before entry AI COMMIT")
+        ),
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+    stock = {
+        "id": 7,
+        "code": "005930",
+        "name": "삼성전자",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "rising_missed_buy": True,
+        "price_delta_since_first_seen_pct": 2.0,
+        "scanner_generation_id": generation.generation_id,
+    }
+
+    handled = handlers._maybe_submit_rising_missed_one_share_entry(
+        stock,
+        "005930",
+        {"curr": 70000, "v_pw": 120.0},
+        admin_id=1,
+        runtime={
+            "now_ts": time.time(),
+            "rising_missed_async_final_commit": True,
+            "scanner_async_eval_coordinator": coordinator,
+            "scanner_async_generation": generation,
+        },
+        strategy="SCALPING",
+        pos_tag="SCANNER",
+        curr_price=70000,
+    )
+    coordinator.shutdown()
+
+    assert handled is True
+    assert logs[-1][0] == "rising_missed_async_commit_phase"
+    assert logs[-1][1]["phase"] == "entry_ai_dispatch_pending"
+    assert logs[-1][1]["actual_order_submitted"] is False
+
+
 def test_rising_missed_context_does_not_claim_followup_generic_ai_commit(monkeypatch):
     generation = _generation("KRX")
     coordinator = ScannerAsyncEvalCoordinator(

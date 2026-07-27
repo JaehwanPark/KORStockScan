@@ -23,6 +23,50 @@ def _event(
     }
 
 
+def test_tp1_label_projection_keeps_only_candidate_symbol_and_global_watermark(
+    tmp_path,
+):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-27.jsonl"
+    candidate = _event(
+        1,
+        "000001",
+        "candidate",
+        "rising_missed_one_share_entry",
+        {
+            "rising_missed_tp1_selector_active": True,
+            "rising_missed_tp1_candidate_allowed": True,
+            "rising_missed_tp1_candidate_reason": "rising_missed_tp1_candidate_pass",
+            "current_price_observed": 10000,
+        },
+        emitted_at="2026-07-27T09:00:00+09:00",
+    )
+    candidate_price = _event(
+        1,
+        "000001",
+        "candidate",
+        "holding_observation",
+        {"current_price_observed": 10100},
+        emitted_at="2026-07-27T09:05:00+09:00",
+    )
+    irrelevant = _event(
+        2,
+        "000002",
+        "irrelevant",
+        "large_unrelated_payload",
+        {"current_price_observed": 5000, "blob": "x" * 10000},
+        emitted_at="2026-07-27T10:00:00+09:00",
+    )
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in (candidate, candidate_price, irrelevant)),
+        encoding="utf-8",
+    )
+
+    projected, watermark = mod._load_tp1_label_event_projection(pipeline_path)
+
+    assert [row["stock_code"] for row in projected] == ["000001", "000001"]
+    assert watermark.isoformat() == "2026-07-27T10:00:00+09:00"
+
+
 def test_tp1_first_hit_label_prefers_gross_target_and_requires_actual_costs_for_net(
     tmp_path,
 ):

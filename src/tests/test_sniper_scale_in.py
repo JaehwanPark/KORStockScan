@@ -7224,6 +7224,21 @@ def test_rising_missed_premarket_is_krx_like_without_nxt_runtime_classification(
     assert fields["rising_missed_nxt_micro_state"] == "krx_like_premarket"
 
 
+def test_rising_missed_missing_ws_routes_have_explicit_not_available_provenance():
+    now_dt = datetime(2026, 7, 22, 10, 20, tzinfo=state_handlers._KST)
+    fields = state_handlers._rising_missed_nxt_observation_fields(
+        {},
+        "123472",
+        {},
+        {},
+        now_ts=now_dt.timestamp(),
+    )
+
+    assert fields["rising_missed_ws_0b_route"] == "not_available_no_0b_route"
+    assert fields["rising_missed_ws_0d_route"] == "not_available_no_0d_route"
+    assert fields["rising_missed_ws_last_route"] == "not_available_no_market_route"
+
+
 def test_describe_buy_order_resolution_reports_nxt_market_remap():
     resolution = kiwoom_orders.describe_buy_order_resolution(
         "3",
@@ -39635,6 +39650,161 @@ def test_scalping_discretionary_quote_revalidation_excludes_emergency_exits():
         )
         is False
     )
+
+
+def test_soft_stop_pre_submit_profit_uses_executable_bid_before_mark():
+    executable_profit = state_handlers._soft_stop_pre_submit_profit_rate(
+        buy_price=10_000,
+        mark_price=10_020,
+        executable_sell_price=9_840,
+    )
+    mark_profit = state_handlers.calculate_net_profit_rate(10_000, 10_020)
+
+    assert executable_profit < -1.5
+    assert mark_profit > -1.5
+
+
+def test_handle_holding_state_cancels_soft_stop_when_fresh_quote_recovers(
+    monkeypatch,
+):
+    original_rules = state_handlers.TRADING_RULES
+    try:
+        state_handlers.TRADING_RULES = replace(
+            CONFIG,
+            SCALE_IN_REQUIRE_HISTORY_TABLE=False,
+            SCALP_BAD_ENTRY_REFINED_CANARY_ENABLED=False,
+            SCALP_BAD_ENTRY_REFINED_OBSERVE_ENABLED=False,
+            SCALP_MFE_PROTECT_EXIT_ENABLED=False,
+            SCALP_TRAILING_START_PCT=10.0,
+            SCALP_SAFE_PROFIT=10.0,
+            SCALP_STOP=-1.5,
+            SCALP_HARD_STOP=-2.5,
+            SCALP_SOFT_STOP_MICRO_GRACE_ENABLED=False,
+            SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_ENABLED=False,
+            SCALP_SOFT_STOP_EXPERT_DEFENSE_ENABLED=False,
+            SCALP_SOFT_STOP_DYNAMIC_GRACE_OVERRIDE_ENABLED=False,
+        )
+        state_handlers.COOLDOWNS = {}
+        state_handlers.ALERTED_STOCKS = set()
+        state_handlers.HIGHEST_PRICES = {"123456": 10_030}
+        state_handlers.LAST_AI_CALL_TIMES = {}
+        state_handlers.LAST_LOG_TIMES = {}
+        state_handlers.DB = _DummyDB()
+        state_handlers.KIWOOM_TOKEN = "token"
+        sell_calls = []
+        pipeline_events = []
+        rest_request_codes = []
+
+        def fake_quote_fields(
+            ws_data, *, rest_snapshot=None, side="mark", safety_exit=False, now_ts=None
+        ):
+            if rest_snapshot:
+                return (
+                    {
+                        "quote_consistency_state": "ok",
+                        "quote_consistency_reason": "ws_rest_gap_ok",
+                        "quote_consistency_entry_blocked": False,
+                        "price_source": "ws_rest_mid",
+                    },
+                    10_020,
+                    10_030,
+                    10_010,
+                )
+            return (
+                {
+                    "quote_consistency_state": "single_source",
+                    "quote_consistency_reason": "ws_only_fresh",
+                    "quote_consistency_entry_blocked": False,
+                    "price_source": "ws",
+                },
+                9_820,
+                9_830,
+                9_810,
+            )
+
+        monkeypatch.setattr(
+            state_handlers, "_build_quote_consistency_fields", fake_quote_fields
+        )
+        monkeypatch.setattr(
+            state_handlers,
+            "_fetch_rest_orderbook_snapshot_bounded",
+            lambda code, timeout_ms: (
+                rest_request_codes.append(code)
+                or {"best_bid": 10_010, "best_ask": 10_030},
+                "ok",
+                8.0,
+            ),
+        )
+        monkeypatch.setattr(
+            state_handlers,
+            "resolve_entry_candle_venue",
+            lambda *args, **kwargs: "NXT",
+        )
+        monkeypatch.setattr(
+            state_handlers,
+            "resolve_entry_candle_session",
+            lambda *args, **kwargs: "nxt_aftermarket",
+        )
+        monkeypatch.setattr(
+            state_handlers,
+            "can_consider_scale_in",
+            lambda *args, **kwargs: {"allowed": False, "reason": "test_no_add"},
+        )
+        monkeypatch.setattr(
+            state_handlers.kiwoom_orders,
+            "send_smart_sell_order",
+            lambda **kwargs: sell_calls.append(kwargs)
+            or {"return_code": "0", "ord_no": "S1"},
+        )
+        monkeypatch.setattr(
+            state_handlers,
+            "_log_holding_pipeline",
+            lambda stock, code, stage, **fields: pipeline_events.append(
+                (stage, fields)
+            ),
+        )
+        stock = {
+            "id": 1,
+            "code": "123456",
+            "name": "TEST",
+            "status": "HOLDING",
+            "strategy": "SCALPING",
+            "buy_price": 10_000,
+            "buy_qty": 1,
+            "rt_ai_prob": 0.50,
+            "buy_time": 1_000.0,
+        }
+
+        state_handlers.handle_holding_state(
+            stock=stock,
+            code="123456",
+            ws_data={"curr": 9_820},
+            admin_id=1,
+            market_regime="BULL",
+            now_ts=4_000.0,
+            now_dt=datetime(2026, 7, 23, 13, 10, 0),
+            radar=None,
+            ai_engine=None,
+        )
+    finally:
+        state_handlers.TRADING_RULES = original_rules
+
+    assert sell_calls == []
+    assert stock["status"] == "HOLDING"
+    recovered = [
+        fields
+        for stage, fields in pipeline_events
+        if stage == "soft_stop_pre_submit_price_recovered"
+    ]
+    assert recovered, pipeline_events
+    assert recovered[-1]["initial_signal_profit_rate"].startswith("-")
+    assert float(recovered[-1]["revalidated_profit_rate"]) > -1.5
+    assert recovered[-1]["revalidated_mark_price"] == 10_020
+    assert recovered[-1]["quote_consistency_rest_request_code"] == "123456_NX"
+    assert recovered[-1]["nxt_soft_stop_pre_submit_recheck"] is True
+    assert rest_request_codes == ["123456_NX"]
+    assert recovered[-1]["actual_order_submitted"] is False
+    assert recovered[-1]["broker_order_forbidden"] is True
 
 
 def test_handle_holding_state_defers_trailing_sell_on_executable_recovery(

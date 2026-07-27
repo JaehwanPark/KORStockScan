@@ -289,6 +289,41 @@ def test_capture_marks_canonical_completed_bars_as_exact_candidate(
     assert fields["ai_trace_canonical_context_forming_bar_present"] is True
 
 
+def test_capture_uses_request_metadata_for_venue_when_payload_is_compact(
+    monkeypatch, tmp_path
+):
+    _enable(monkeypatch, tmp_path)
+    fields = trace.capture_ai_request(
+        prompt="prompt",
+        user_input={
+            "input_schema": "entry_screen_hot_v1",
+            "current": {"price": 70000},
+        },
+        endpoint_name="analyze_target",
+        symbol="005930",
+        request_id="compact-with-exact-route",
+        model="gpt-test",
+        schema_name="entry_v1",
+        require_json=True,
+        metadata={
+            "effective_venue": "NXT",
+            "session_bucket": "nxt_aftermarket",
+            "broker_route": "SOR",
+            "market_data_route": "nxt_only",
+            "snapshot_id": "snapshot-nxt-1",
+        },
+    )
+
+    row = _rows(trace._request_path(trace._date_text()))[0]
+    assert fields["ai_trace_effective_venue"] == "NXT"
+    assert row["effective_venue"] == "NXT"
+    assert row["snapshot_id"] == "snapshot-nxt-1"
+    assert row["session_bucket"] == "nxt_aftermarket"
+    assert row["broker_route"] == "SOR"
+    assert row["market_data_route"] == "nxt_only"
+    assert row["canonical_context_capture"]["status"] == "canonical_context_missing"
+
+
 def test_capture_canonical_context_candidate_is_separate_from_ai_request(
     monkeypatch, tmp_path
 ):

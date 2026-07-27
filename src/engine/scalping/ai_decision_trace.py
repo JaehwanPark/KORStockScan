@@ -602,13 +602,19 @@ def _request_context(
         "broker_order_no": _first_value(
             parsed, ("broker_order_no", "order_no", "ord_no")
         ),
-        "snapshot_id": _first_value(parsed, ("snapshot_id",)),
-        "effective_venue": _first_value(parsed, ("effective_venue",)),
+        "snapshot_id": _first_value(parsed, ("snapshot_id",))
+        or metadata.get("snapshot_id"),
+        "effective_venue": _first_value(parsed, ("effective_venue",))
+        or metadata.get("effective_venue"),
         "session_bucket": _first_value(
             parsed, ("session_bucket", "market_session_bucket")
-        ),
-        "broker_route": _first_value(parsed, ("broker_route",)),
-        "market_data_route": _first_value(parsed, ("market_data_route",)),
+        )
+        or metadata.get("session_bucket")
+        or metadata.get("market_session_bucket"),
+        "broker_route": _first_value(parsed, ("broker_route",))
+        or metadata.get("broker_route"),
+        "market_data_route": _first_value(parsed, ("market_data_route",))
+        or metadata.get("market_data_route"),
         "reference_price_type": reference_price_type,
         "reference_price": _safe_number(reference_price_value),
         "best_bid": _safe_number(_first_value(parsed, ("best_bid",))),
@@ -941,6 +947,7 @@ def capture_ai_request(
             "captured_at": now.isoformat(),
             "request_id": trace_id,
             "symbol": context.get("stock_code") or str(symbol or "") or None,
+            "snapshot_id": context.get("snapshot_id"),
             "effective_venue": context.get("effective_venue"),
             "session_bucket": context.get("session_bucket"),
             "broker_route": context.get("broker_route"),
@@ -985,6 +992,7 @@ def capture_ai_request(
             "endpoint": str(endpoint_name or "generic"),
             "model": str(model or "-"),
             "schema_name": str(schema_name or "-"),
+            "snapshot_id": context.get("snapshot_id"),
             "effective_venue": context.get("effective_venue"),
             "session_bucket": context.get("session_bucket"),
             "broker_route": context.get("broker_route"),

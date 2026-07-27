@@ -6260,6 +6260,24 @@ class GPTSniperEngine:
                 and isinstance(candle_context.get("ai_market_snapshot_v1"), dict)
                 else {}
             )
+            if isinstance(candle_context, dict):
+                trace_metadata_extra.update(
+                    {
+                        key: value
+                        for key, value in {
+                            "effective_venue": snapshot.get("effective_venue")
+                            or candle_context.get("venue"),
+                            "session_bucket": snapshot.get("session_bucket")
+                            or candle_context.get("session"),
+                            "broker_route": snapshot.get("broker_route"),
+                            "market_data_route": snapshot.get("market_data_route")
+                            or candle_context.get("ws_route")
+                            or candle_context.get("rest_route"),
+                            "snapshot_id": snapshot.get("snapshot_id"),
+                        }.items()
+                        if value not in (None, "")
+                    }
+                )
             trace_symbol = str(
                 snapshot.get("stock_code")
                 or trace_metadata_extra.get("stock_code")

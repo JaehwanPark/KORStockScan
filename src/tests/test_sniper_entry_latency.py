@@ -4690,6 +4690,14 @@ def test_rest_signed_tape_stale_sell_rows_cannot_block_latency_canary():
     assert fields["latency_true_ofi_direct_canary_signed_tape_sample_count"] == 0
     assert fields["latency_true_ofi_direct_canary_signed_tape_sell_dominated"] is False
     assert (
+        fields["latency_true_ofi_direct_canary_signed_tape_latest_side"]
+        == "not_available_no_signed_tape"
+    )
+    assert (
+        fields["latency_true_ofi_direct_canary_signed_tape_event_time_latest_side"]
+        == "not_available_received_ts_incomplete"
+    )
+    assert (
         fields["latency_true_ofi_direct_canary_signed_tape_rest_stale_or_unknown_count"]
         == 3
     )

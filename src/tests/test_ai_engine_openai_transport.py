@@ -2658,6 +2658,62 @@ def test_analyze_target_watching_uses_hot_prompt_and_input_schema(monkeypatch):
     assert result["ai_input_contract_mode"] == "structured_json"
 
 
+def test_hot_entry_keeps_observe_only_snapshot_out_of_model_but_in_trace_metadata(
+    monkeypatch,
+):
+    engine = _build_engine()
+    captured = {}
+    monkeypatch.setattr(
+        openai_module,
+        "TRADING_RULES",
+        replace(
+            openai_module.TRADING_RULES,
+            OPENAI_ANALYZE_TARGET_HOT_INPUT_ENABLED=True,
+            OPENAI_ENTRY_SCREEN_V2_INPUT_ENABLED=False,
+            OPENAI_SCALPING_COMPACT_INPUT_ENABLED=True,
+        ),
+    )
+
+    def _fake_call(_prompt, user_input, **kwargs):
+        captured["payload"] = json.loads(user_input)
+        captured["metadata"] = kwargs["metadata_extra"]
+        return {"action": "WAIT", "score": 60, "reason": "mixed entry features"}
+
+    monkeypatch.setattr(engine, "_call_openai_safe", _fake_call)
+    candle_context = {
+        "schema": "entry_candle_context_v1",
+        "enabled": False,
+        "venue": "NXT",
+        "session": "nxt_aftermarket",
+        "ws_route": "nxt_only",
+        "ai_market_snapshot_v1": {
+            "schema": "ai_market_snapshot_v1",
+            "snapshot_id": "snapshot-nxt-1",
+            "stock_code": "005930",
+            "effective_venue": "NXT",
+            "session_bucket": "nxt_aftermarket",
+            "broker_route": "SOR",
+            "market_data_route": "nxt_only",
+        },
+    }
+
+    engine.analyze_target(
+        "테스트",
+        _sample_ws_data(),
+        _sample_ticks(),
+        _sample_candles(),
+        strategy="SCALPING",
+        prompt_profile="watching",
+        candle_context=candle_context,
+    )
+
+    assert "entry_candle_context" not in captured["payload"]
+    assert "ai_market_snapshot_v1" not in captured["payload"]
+    assert captured["metadata"]["effective_venue"] == "NXT"
+    assert captured["metadata"]["session_bucket"] == "nxt_aftermarket"
+    assert captured["metadata"]["broker_route"] == "SOR"
+
+
 def test_openai_legacy_market_data_excludes_price_change_heuristic_ticks(monkeypatch):
     engine = _build_engine()
     monkeypatch.setattr(

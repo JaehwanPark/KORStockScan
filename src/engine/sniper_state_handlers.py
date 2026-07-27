@@ -7153,6 +7153,16 @@ def _sell_quote_revalidation_blocked(fields: dict | None) -> bool:
     )
 
 
+def _soft_stop_pre_submit_profit_rate(
+    *,
+    buy_price: float,
+    mark_price: int,
+    executable_sell_price: int,
+) -> float:
+    decision_price = executable_sell_price if executable_sell_price > 0 else mark_price
+    return calculate_net_profit_rate(buy_price, decision_price)
+
+
 def _sell_side_open_time_block_fields(
     *,
     strategy: str | None,
@@ -15970,6 +15980,11 @@ def _ws_realtime_type_freshness_fields(
         "ws_last_0w_age_ms": _age_ms(type_ts.get("0w")),
         "ws_last_0f_age_ms": _age_ms(type_ts.get("0F")),
         "ws_last_strength_history_age_ms": _age_ms(latest_history_ts),
+        "ws_last_strength_history_epoch": (
+            f"{latest_history_ts:.6f}"
+            if latest_history_ts > 0
+            else "not_available_realtime_type_epoch"
+        ),
         "ws_strength_history_count": int(history_count or 0),
     }
 
@@ -56840,8 +56855,8 @@ def _rising_missed_nxt_observation_fields(
     ws_0d_age_ms = _type_age_ms("0D")
     ws_0b_fresh = bool(ws_0b_age_ms is not None and ws_0b_age_ms <= 3000.0)
     ws_0d_fresh = bool(ws_0d_age_ms is not None and ws_0d_age_ms <= 3000.0)
-    ws_0b_route = str(type_routes.get("0B") or "unknown")
-    ws_0d_route = str(type_routes.get("0D") or "unknown")
+    ws_0b_route = str(type_routes.get("0B") or "not_available_no_0b_route")
+    ws_0d_route = str(type_routes.get("0D") or "not_available_no_0d_route")
     route_known = ws_0d_route in {"krx_nxt_integrated", "nxt_only"}
     effective_source = str(
         enriched_ws.get("market_data_effective_price_source") or "none"
@@ -56880,7 +56895,9 @@ def _rising_missed_nxt_observation_fields(
             nxt_eligible if nxt_eligible is not None else "unknown"
         ),
         "rising_missed_nxt_flag_source": nxt_flag_source,
-        "rising_missed_ws_last_route": raw_ws.get("last_ws_market_route") or "unknown",
+        "rising_missed_ws_last_route": (
+            raw_ws.get("last_ws_market_route") or "not_available_no_market_route"
+        ),
         "rising_missed_ws_0b_route": ws_0b_route,
         "rising_missed_ws_0d_route": ws_0d_route,
         "rising_missed_ws_0b_age_ms": (
@@ -59277,6 +59294,85 @@ def _maybe_submit_rising_missed_one_share_entry(
             "dispatch_rejected",
         }:
             return True
+    commit_ai_retry_fields: dict[str, Any] = {}
+    if (
+        decision.allowed
+        and bool(runtime.get("rising_missed_async_final_commit"))
+        and isinstance(
+            runtime.get("scanner_async_eval_coordinator"),
+            ScannerAsyncEvalCoordinator,
+        )
+        and isinstance(runtime.get("scanner_async_generation"), ScannerGeneration)
+    ):
+        # A freshness-envelope COMMIT must not continue into a provider-backed
+        # submit path on the main scheduler lane.  Dispatch (or consume) the
+        # generation-scoped entry-AI request as an explicit second async phase.
+        # The first COMMIT therefore ends after dispatch; a later COMMIT applies
+        # the completed AI result before the existing TP1/submit owners run.
+        commit_ai_retry_fields = _maybe_retry_rising_missed_entry_ai_not_evaluated(
+            stock,
+            code,
+            current_ws_data,
+            runtime,
+            curr_price=curr_price,
+            force_async=True,
+        )
+        commit_ai_retry_reason = str(
+            commit_ai_retry_fields.get("rising_missed_entry_ai_retry_reason")
+            or "unknown"
+        )
+        _log_entry_pipeline(
+            stock,
+            code,
+            "rising_missed_async_commit_phase",
+            phase=(
+                "entry_ai_dispatch_pending"
+                if commit_ai_retry_reason == "async_pending"
+                else (
+                    "entry_ai_result_applied"
+                    if commit_ai_retry_fields.get(
+                        "rising_missed_entry_ai_retry_success"
+                    )
+                    else "entry_ai_result_unusable"
+                )
+            ),
+            metric_role="runtime_scheduler_latency",
+            decision_authority="scanner_async_two_phase_commit_transport_only",
+            window_policy="per_scanner_generation_action_timestamps",
+            sample_floor="one_rising_missed_async_generation",
+            primary_decision_metric="commit_phase",
+            source_quality_gate=(
+                "generation_scoped_freshness_then_entry_ai_commit_required"
+            ),
+            forbidden_uses=(
+                "direct_broker_submit,threshold_mutation,provider_route_change,"
+                "order_price_change,quantity_or_cap_change,broker_guard_bypass"
+            ),
+            runtime_effect=False,
+            actual_order_submitted=False,
+            broker_order_forbidden=True,
+            **commit_ai_retry_fields,
+        )
+        if commit_ai_retry_reason == "async_pending":
+            return True
+        if not commit_ai_retry_fields.get("rising_missed_entry_ai_retry_success"):
+            return True
+        decision = evaluate_rising_missed_one_share_entry(
+            stock,
+            strategy=strategy,
+            position_tag=pos_tag,
+            feature_enabled=feature_enabled,
+            has_open_pending=_has_open_pending_entry_orders(stock),
+            already_holding=_already_holding_entry_position(stock),
+            positive_delta_pct=refreshed_positive_delta_pct,
+            min_delta_pct=_scanner_rising_entry_min_delta_pct(),
+            current_price=curr_price,
+            max_entry_price_krw=_rising_missed_one_share_entry_max_price_krw(),
+            scout_budget_cap_krw=_rising_missed_scout_entry_budget_cap_krw(),
+            current_fluctuation_pct=_current_fluctuation_pct(stock, ws_data, runtime),
+            upper_limit_exclude_enabled=_rising_missed_upper_limit_exclude_enabled(),
+            upper_limit_exclude_pct=_rising_missed_upper_limit_exclude_pct(),
+        )
     reentry_guard = None
     if bool(runtime.get("rising_missed_async_final_commit")):
         reentry_guard = _rising_missed_async_prepared_reentry_guard(stock, runtime)
@@ -59338,7 +59434,9 @@ def _maybe_submit_rising_missed_one_share_entry(
             ),
         )
         return True
-    retry_fields = {"rising_missed_entry_ai_retry_reason": "not_needed"}
+    retry_fields = commit_ai_retry_fields or {
+        "rising_missed_entry_ai_retry_reason": "not_needed"
+    }
     if (
         decision.allowed is False
         and decision.reason == RISING_MISSED_BLOCK_ENTRY_AI_NOT_EVALUATED
@@ -70680,13 +70778,6 @@ def handle_holding_state(
             exit_rule or stock.get("last_exit_rule"),
             sell_reason_type,
         )
-        discretionary_scalp_pre_submit_recheck = (
-            _requires_scalping_discretionary_sell_quote_revalidation(
-                strategy=strategy,
-                exit_rule=exit_rule or stock.get("last_exit_rule"),
-                sell_reason_type=sell_reason_type,
-            )
-        )
         rest_snapshot = {}
         rest_check_state = "not_attempted"
         rest_check_elapsed_ms = 0.0
@@ -70696,10 +70787,37 @@ def handle_holding_state(
             == "scalp_trailing_take_profit"
         )
         trailing_signal_profit_rate = float(profit_rate)
+        soft_stop_signal_profit_rate = float(profit_rate)
+        sell_quote_session = resolve_entry_candle_session(now_ts=now_ts)
+        sell_quote_venue = resolve_entry_candle_venue(
+            ws_data if isinstance(ws_data, dict) else {},
+            session=sell_quote_session,
+        )
+        nxt_soft_stop_pre_submit_recheck = bool(
+            _is_scalp_strategy(strategy)
+            and str(exit_rule or stock.get("last_exit_rule") or "").strip()
+            == "scalp_soft_stop_pct"
+            and str(sell_quote_venue or "").strip().upper() == "NXT"
+            and not sell_safety_exit
+        )
+        discretionary_scalp_pre_submit_recheck = bool(
+            nxt_soft_stop_pre_submit_recheck
+            or _requires_scalping_discretionary_sell_quote_revalidation(
+                strategy=strategy,
+                exit_rule=exit_rule or stock.get("last_exit_rule"),
+                sell_reason_type=sell_reason_type,
+            )
+        )
+        sell_quote_request_code = resolve_entry_candle_request_code(
+            code,
+            venue=sell_quote_venue,
+            session=sell_quote_session,
+            ws_data=ws_data,
+        )
         if sell_safety_exit or discretionary_scalp_pre_submit_recheck:
             rest_snapshot, rest_check_state, rest_check_elapsed_ms = (
                 _fetch_rest_orderbook_snapshot_bounded(
-                    code,
+                    sell_quote_request_code,
                     QuoteConsistencyConfig.from_env().emergency_rest_timeout_ms,
                 )
             )
@@ -70731,6 +70849,12 @@ def handle_holding_state(
                     sell_quote_checked_at, 6
                 ),
                 "quote_consistency_safety_exit": bool(sell_safety_exit),
+                "quote_consistency_effective_venue": sell_quote_venue,
+                "quote_consistency_session_bucket": sell_quote_session,
+                "quote_consistency_rest_request_code": sell_quote_request_code,
+                "nxt_soft_stop_pre_submit_recheck": bool(
+                    nxt_soft_stop_pre_submit_recheck
+                ),
                 "trailing_pre_submit_recheck": bool(trailing_pre_submit_recheck),
                 "scalping_discretionary_pre_submit_recheck": bool(
                     discretionary_scalp_pre_submit_recheck
@@ -70781,6 +70905,70 @@ def handle_holding_state(
             curr_p = int(sell_mark_price)
             profit_rate = calculate_net_profit_rate(buy_p, curr_p)
         sell_order_price = int(sell_order_price or curr_p or 0)
+        if (
+            discretionary_scalp_pre_submit_recheck
+            and str(exit_rule or stock.get("last_exit_rule") or "").strip()
+            == "scalp_soft_stop_pct"
+        ):
+            soft_stop_threshold_pct = _safe_float(
+                locals().get("dynamic_stop_pct"),
+                profit_rate,
+            )
+            soft_stop_revalidated_profit_rate = _soft_stop_pre_submit_profit_rate(
+                buy_price=buy_p,
+                mark_price=curr_p,
+                executable_sell_price=sell_order_price,
+            )
+            if soft_stop_revalidated_profit_rate > soft_stop_threshold_pct:
+                _clear_holding_flow_override_candidate(
+                    stock,
+                    code,
+                    reason="soft_stop_pre_submit_price_recovered",
+                    profit_rate=soft_stop_revalidated_profit_rate,
+                )
+                _mutate_stock_state(
+                    stock,
+                    pop_fields=(
+                        "last_exit_rule",
+                        "last_exit_reason",
+                        "last_exit_decision_source",
+                    ),
+                )
+                _log_holding_pipeline(
+                    stock,
+                    code,
+                    "soft_stop_pre_submit_price_recovered",
+                    exit_rule="scalp_soft_stop_pct",
+                    sell_reason_type=sell_reason_type or "-",
+                    initial_signal_profit_rate=f"{soft_stop_signal_profit_rate:+.2f}",
+                    revalidated_mark_profit_rate=f"{profit_rate:+.2f}",
+                    revalidated_profit_rate=(
+                        f"{soft_stop_revalidated_profit_rate:+.2f}"
+                    ),
+                    soft_stop_threshold_pct=f"{soft_stop_threshold_pct:+.2f}",
+                    revalidated_mark_price=curr_p,
+                    revalidated_executable_sell_price=sell_order_price,
+                    actual_order_submitted=False,
+                    broker_order_forbidden=True,
+                    runtime_effect=True,
+                    metric_role="source_quality_safety_gate",
+                    decision_authority=(
+                        "real_scalping_soft_stop_pre_submit_quote_revalidation"
+                    ),
+                    window_policy="same_position_next_monitor_loop_recheck",
+                    sample_floor="one_fresh_consistent_sell_quote",
+                    primary_decision_metric="revalidated_profit_rate_vs_soft_stop",
+                    source_quality_gate=(
+                        "fresh_same_venue_sell_quote_required_before_soft_stop_submit"
+                    ),
+                    allowed_runtime_apply=False,
+                    forbidden_uses=(
+                        f"{TRADE_QUALITY_RUNTIME_FORBIDDEN_USES}|hard_stop_bypass|"
+                        "protect_stop_bypass|emergency_stop_bypass"
+                    ),
+                    **sell_quote_fields,
+                )
+                return
         if (
             nxt_trailing_bid_guard_fields.get("nxt_trailing_bid_guard_applied")
             and sell_order_price > 0

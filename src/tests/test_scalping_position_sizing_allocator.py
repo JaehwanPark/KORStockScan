@@ -123,6 +123,24 @@ def test_missing_or_unknown_venue_does_not_infer_krx_from_clock(venue):
     assert decision.tier_reason == "unknown_venue_fallback"
 
 
+@pytest.mark.parametrize(
+    ("venue", "reason"),
+    [
+        ("PREMARKET_KRX_LIKE", "krx_like_premarket_conservative_tier1"),
+        ("SOR", "sor_integrated_conservative_tier1"),
+        ("OFF_SESSION", "off_session_conservative_tier1"),
+    ],
+)
+def test_known_non_krx_venue_keeps_tier1_with_explicit_provenance(venue, reason):
+    decision = allocator.resolve_scalping_allocation(
+        _context("2026-07-21T08:30:00", "A,B,C", venue=venue)
+    )
+
+    assert decision.venue == "UNKNOWN"
+    assert (decision.tier, decision.ratio) == (1, pytest.approx(0.10))
+    assert decision.tier_reason == reason
+
+
 def test_max_position_qty_cap_is_derived_from_budget_and_price():
     assert allocator.max_position_qty_cap_from_budget(10_000_000, 100_000, 0.20) == 20
     assert allocator.max_position_qty_cap_from_budget(10_000_000, 100_000, 2.0) == 100

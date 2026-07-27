@@ -226,6 +226,7 @@ def _select_tier(
 ) -> tuple[int, str, int, tuple[str, ...], str, str]:
     resolved_time = _coerce_reference_time(context.reference_time)
     reference_text = resolved_time.isoformat() if resolved_time else "missing"
+    explicit_venue = str(context.effective_venue or "").strip().upper()
     venue = infer_scalping_venue(context.reference_time, context.effective_venue)
     tokens = normalize_source_tokens(context.source_signature)
     source_count = len(tokens)
@@ -234,9 +235,14 @@ def _select_tier(
     if venue == "NXT":
         return 1, "nxt_forced_tier1", source_count, tokens, time_bucket, reference_text
     if venue != "KRX":
+        conservative_reason = {
+            "PREMARKET_KRX_LIKE": "krx_like_premarket_conservative_tier1",
+            "SOR": "sor_integrated_conservative_tier1",
+            "OFF_SESSION": "off_session_conservative_tier1",
+        }.get(explicit_venue, "unknown_venue_fallback")
         return (
             1,
-            "unknown_venue_fallback",
+            conservative_reason,
             source_count,
             tokens,
             time_bucket,
