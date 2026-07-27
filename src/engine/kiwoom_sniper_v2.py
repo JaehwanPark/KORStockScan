@@ -294,11 +294,15 @@ _SCANNER_PROMOTION_PENDING_ATTACH_UNTIL: dict[str, float] = {}
 _SCANNER_PROMOTION_PENDING_ATTACH_LOCK = threading.Lock()
 _SCANNER_PROMOTION_INBOX = ScannerPromotionInbox(max_active=40)
 _SCANNER_SCHEDULER_DEFAULT_VENUES = "KRX,PREMARKET_KRX_LIKE,NXT"
-# Stage-2 is not runtime-selectable until every hot-path endpoint named in the
-# scanner_async_eval_commit_v1 contract is migrated and the full-cycle gate is
-# closed.  Keep this code-owned gate fail-closed; an env toggle must not turn a
-# partially migrated dispatcher into live authority.
-_SCANNER_ASYNC_RUNTIME_ACTIVATION_READY = False
+# ``async_v1`` owns only the SCALPING scanner continuation: immutable market
+# preparation plus the WATCHING analyze-target call, followed by the existing
+# main-thread generation/freshness/order revalidation.  Holding score/flow,
+# entry-price, pre-submit retry, and Swing gatekeeper continue to use their
+# existing owners; they neither receive a dispatcher result nor gain submit
+# authority from this scheduler mode.  Keeping that boundary explicit lets the
+# scanner queue improvement be activated without silently widening async
+# authority to unrelated lifecycle stages.
+_SCANNER_ASYNC_RUNTIME_ACTIVATION_READY = True
 _SCANNER_REST_QUOTE_FALLBACK_DEFER_SEC = 5.0
 _SCANNER_REST_QUOTE_FALLBACK_DYNAMIC_PRESSURE_WINDOW_SEC = 30.0
 _SCANNER_REST_QUOTE_FALLBACK_DYNAMIC_BOOST_TTL_SEC = 45.0
@@ -8895,8 +8899,8 @@ def run_sniper(is_test_mode=False):
         and not _SCANNER_ASYNC_RUNTIME_ACTIVATION_READY
     ):
         log_error(
-            "[SCANNER_ASYNC] async_v1 requested before full hot-path endpoint "
-            "migration and full-cycle acceptance; falling back to deadline_v1"
+            "[SCANNER_ASYNC] async_v1 requested before scanner continuation "
+            "acceptance; falling back to deadline_v1"
         )
         requested_scheduler_mode = "deadline_v1"
     if requested_scheduler_mode != "legacy" and not configured_scheduler_venues:
