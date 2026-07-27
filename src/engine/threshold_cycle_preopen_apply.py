@@ -31,6 +31,9 @@ from src.engine.scalping.scalp_sim_auto_approval_control_tower import (
 from src.engine.scalping.scale_in_split_order_plan import (
     MAX_POLICY_AGE_KRX_TRADING_DAYS,
 )
+from src.engine.scalping.multi_timeframe_context import (
+    PROMOTION_ARTIFACT_REQUIRED_FROM_DATE,
+)
 from src.engine.monitoring import rising_missed_classifier_prior
 from src.engine.scalping import scalp_sim_auto_approval_control_tower
 from src.engine import lifecycle_bucket_discovery
@@ -3989,6 +3992,54 @@ DATED_RUNTIME_OVERRIDE_SPECS: tuple[dict[str, str], ...] = (
     },
 )
 
+LAUNCHER_SAFE_DISABLE_SPECS: tuple[dict[str, str], ...] = (
+    {
+        "enabled_key": "KORSTOCKSCAN_EARLY_VOLATILITY_TP_ENABLED",
+        "active_date_key": "KORSTOCKSCAN_EARLY_VOLATILITY_TP_ACTIVE_DATE",
+    },
+    {
+        "enabled_key": "KORSTOCKSCAN_EARLY_VOLATILITY_TP_PREMARKET_ENABLED",
+        "active_date_key": ("KORSTOCKSCAN_EARLY_VOLATILITY_TP_PREMARKET_ACTIVE_DATE"),
+    },
+    {
+        "enabled_key": "KORSTOCKSCAN_EARLY_VOLATILITY_TP_NXT_ENABLED",
+        "active_date_key": "KORSTOCKSCAN_EARLY_VOLATILITY_TP_NXT_ACTIVE_DATE",
+    },
+    {
+        "enabled_key": "KORSTOCKSCAN_RISING_MISSED_AI_ACTION_GUARD_ENABLED",
+        "active_date_key": "KORSTOCKSCAN_RISING_MISSED_AI_ACTION_GUARD_ACTIVE_DATE",
+    },
+    {
+        "enabled_key": "KORSTOCKSCAN_SCALP_FAST_EXIT_GUARD_ENABLED",
+        "active_date_key": "KORSTOCKSCAN_SCALP_FAST_EXIT_GUARD_ACTIVE_DATE",
+    },
+)
+
+
+def _launcher_pid_expected_env(
+    target_date: str,
+    effective_env: dict[str, str],
+) -> tuple[dict[str, str], list[str]]:
+    expected_env = dict(effective_env)
+    safe_disabled_keys: list[str] = []
+    for spec in LAUNCHER_SAFE_DISABLE_SPECS:
+        enabled_key = spec["enabled_key"]
+        if not _runtime_env_enabled(expected_env.get(enabled_key)):
+            continue
+        active_date_key = spec["active_date_key"]
+        active_date = str(expected_env.get(active_date_key) or "").strip()
+        dependency_key = spec.get("dependency_enabled_key", "")
+        dependency_enabled = (
+            True
+            if not dependency_key
+            else _runtime_env_enabled(expected_env.get(dependency_key))
+        )
+        if active_date == target_date and dependency_enabled:
+            continue
+        expected_env[enabled_key] = "false"
+        safe_disabled_keys.append(enabled_key)
+    return expected_env, sorted(safe_disabled_keys)
+
 
 def _dated_runtime_override_audits(
     target_date: str,
@@ -4033,6 +4084,129 @@ def _dated_runtime_override_audits(
             audit.update(status="pass", reason="active_date_matches_target")
         audits.append(audit)
     return audits
+
+
+def _holding_decision_context_runtime_audit(
+    target_date: str,
+    effective_env: dict[str, str],
+) -> dict[str, Any]:
+    enabled_key = "KORSTOCKSCAN_HOLDING_DECISION_CONTEXT_ENABLED"
+    active_date_key = "KORSTOCKSCAN_HOLDING_DECISION_CONTEXT_ACTIVE_DATE"
+    cohort_keys = (
+        "KORSTOCKSCAN_HOLDING_DECISION_CONTEXT_KRX_ENABLED",
+        "KORSTOCKSCAN_HOLDING_DECISION_CONTEXT_NXT_ENABLED",
+        "KORSTOCKSCAN_HOLDING_DECISION_CONTEXT_PREMARKET_ENABLED",
+    )
+    stage_keys = (
+        "KORSTOCKSCAN_HOLDING_SCORE_CONTEXT_ENABLED",
+        "KORSTOCKSCAN_HOLDING_FLOW_CONTEXT_ENABLED",
+        "KORSTOCKSCAN_OVERNIGHT_CONTEXT_ENABLED",
+    )
+    required_env_keys = [enabled_key, active_date_key, *cohort_keys, *stage_keys]
+    enabled = _runtime_env_enabled(effective_env.get(enabled_key))
+    audit: dict[str, Any] = {
+        "family": "holding_decision_context_v1",
+        "enabled": enabled,
+        "active_date": str(effective_env.get(active_date_key) or "").strip() or None,
+        "required_env_keys": required_env_keys,
+        "status": "disabled",
+        "reason": "runtime_disabled",
+    }
+    if not enabled:
+        return audit
+    missing = [
+        key
+        for key in required_env_keys
+        if str(effective_env.get(key) or "").strip() == ""
+    ]
+    if missing:
+        audit.update(status="fail", reason="required_env_missing", missing=missing)
+        return audit
+    try:
+        target_day = date.fromisoformat(target_date)
+        activation_day = date.fromisoformat(str(audit["active_date"]))
+    except ValueError:
+        audit.update(status="fail", reason="active_date_invalid")
+        return audit
+    if activation_day > target_day:
+        audit.update(status="fail", reason="activation_not_started")
+        return audit
+    enabled_cohorts = [
+        key for key in cohort_keys if _runtime_env_enabled(effective_env.get(key))
+    ]
+    requested_cohorts = [
+        cohort
+        for cohort, key in (
+            ("KRX", "KORSTOCKSCAN_HOLDING_DECISION_CONTEXT_KRX_ENABLED"),
+            ("NXT", "KORSTOCKSCAN_HOLDING_DECISION_CONTEXT_NXT_ENABLED"),
+            (
+                "PREMARKET",
+                "KORSTOCKSCAN_HOLDING_DECISION_CONTEXT_PREMARKET_ENABLED",
+            ),
+        )
+        if _runtime_env_enabled(effective_env.get(key))
+    ]
+    enabled_stages = [
+        key for key in stage_keys if _runtime_env_enabled(effective_env.get(key))
+    ]
+    promotion_authority_required = target_date >= PROMOTION_ARTIFACT_REQUIRED_FROM_DATE
+    effective_cohorts_without_atomic_promotion = (
+        ["NXT"]
+        if promotion_authority_required and "NXT" in requested_cohorts
+        else list(requested_cohorts)
+    )
+    audit.update(
+        requested_cohorts=requested_cohorts,
+        promotion_authority_required=promotion_authority_required,
+        effective_cohorts_without_atomic_promotion=(
+            effective_cohorts_without_atomic_promotion
+        ),
+    )
+    if not enabled_cohorts:
+        audit.update(status="fail", reason="no_enabled_cohort")
+    elif not enabled_stages:
+        audit.update(status="fail", reason="no_enabled_stage")
+    else:
+        audit.update(
+            status="pass",
+            reason=(
+                "activation_start_date_valid_atomic_promotion_required"
+                if promotion_authority_required
+                else "activation_start_date_valid"
+            ),
+            enabled_cohorts=enabled_cohorts,
+            enabled_stages=enabled_stages,
+        )
+    return audit
+
+
+def _persistent_operator_overrides_runtime_audit(
+    effective_env: dict[str, str],
+    operator_overrides: dict[str, str],
+) -> dict[str, Any]:
+    required_env_keys = sorted(operator_overrides)
+    missing = [key for key in required_env_keys if key not in effective_env]
+    return {
+        "family": "persistent_operator_overrides_2026_06_26",
+        "enabled": bool(required_env_keys),
+        "required_env_keys": required_env_keys,
+        "operator_override_key_count": len(required_env_keys),
+        "missing_env_keys": missing,
+        "status": (
+            "pass"
+            if required_env_keys and not missing
+            else ("disabled" if not required_env_keys else "fail")
+        ),
+        "reason": (
+            "persistent_overlay_complete"
+            if required_env_keys and not missing
+            else (
+                "operator_override_file_missing"
+                if not required_env_keys
+                else "persistent_overlay_key_missing"
+            )
+        ),
+    }
 
 
 def _split_runtime_policy_audits(
@@ -4328,9 +4502,17 @@ def verify_runtime_env_handoff(
                     "source": source,
                 }
             )
-    runtime_policy_audits = _split_runtime_policy_audits(
-        target_date, effective_env_overrides
-    )
+    runtime_policy_audits = [
+        *_split_runtime_policy_audits(target_date, effective_env_overrides),
+        _holding_decision_context_runtime_audit(
+            target_date,
+            effective_env_overrides,
+        ),
+        _persistent_operator_overrides_runtime_audit(
+            effective_env_overrides,
+            operator_overrides,
+        ),
+    ]
     for audit in runtime_policy_audits:
         selected_policy_disabled = bool(
             audit.get("status") == "disabled"
@@ -4486,10 +4668,16 @@ def verify_runtime_env_handoff(
                 "policy_reason": "post_probe_resolver_probe_first_dependency_disabled",
             }
         )
+    audited_runtime_families = {
+        str(audit.get("family") or "")
+        for audit in runtime_policy_audits
+        if audit.get("family")
+    }
     unverified_selected_families = sorted(
         family
         for family in selected_families
         if family not in SELECTED_FAMILY_REQUIRED_ENV_KEYS
+        and family not in audited_runtime_families
     )
     missing_families: list[str] = []
     for family in selected_families:
@@ -4510,6 +4698,10 @@ def verify_runtime_env_handoff(
     pid_env: dict[str, str] = {}
     pid_mismatches: list[dict[str, Any]] = []
     pid_missing: list[dict[str, Any]] = []
+    pid_expected_env, launcher_safe_disabled_keys = _launcher_pid_expected_env(
+        target_date,
+        effective_env_overrides,
+    )
     if pid is not None:
         pid_env = _read_pid_environ(pid)
         pid_required_keys: dict[str, list[str]] = {
@@ -4551,9 +4743,21 @@ def verify_runtime_env_handoff(
             keys = pid_required_keys.setdefault("dynamic_entry_price_resolver", [])
             if post_probe_resolver_enabled_key not in keys:
                 keys.append(post_probe_resolver_enabled_key)
+        persistent_family = "persistent_operator_overrides_2026_06_26"
+        persistent_keys = pid_required_keys.get(persistent_family, [])
+        if persistent_keys:
+            specifically_owned_keys = {
+                key
+                for family, keys in pid_required_keys.items()
+                if family != persistent_family
+                for key in keys
+            }
+            pid_required_keys[persistent_family] = [
+                key for key in persistent_keys if key not in specifically_owned_keys
+            ]
         for family, required_keys in pid_required_keys.items():
             for key in required_keys:
-                manifest_value = effective_env_overrides.get(key)
+                manifest_value = pid_expected_env.get(key)
                 pid_value = pid_env.get(key)
                 if manifest_value is None:
                     continue
@@ -4574,12 +4778,16 @@ def verify_runtime_env_handoff(
                             "manifest_value": manifest_value,
                             "pid_value": pid_value,
                             "expected_value_source": (
-                                "dated_operator_runtime_overrides"
-                                if key in dated_operator_overrides
+                                "launcher_safe_disable"
+                                if key in launcher_safe_disabled_keys
                                 else (
-                                    "operator_runtime_overrides"
-                                    if key in operator_overrides
-                                    else "threshold_runtime_env_manifest"
+                                    "dated_operator_runtime_overrides"
+                                    if key in dated_operator_overrides
+                                    else (
+                                        "operator_runtime_overrides"
+                                        if key in operator_overrides
+                                        else "threshold_runtime_env_manifest"
+                                    )
                                 )
                             ),
                         }
@@ -4604,6 +4812,7 @@ def verify_runtime_env_handoff(
         "pid_passed": pid_passed,
         "pid_mismatches": pid_mismatches,
         "pid_missing": pid_missing,
+        "launcher_safe_disabled_keys": launcher_safe_disabled_keys,
         "operator_runtime_override_path": (
             str(operator_override_path) if operator_override_path.exists() else None
         ),

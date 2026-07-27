@@ -8746,6 +8746,49 @@ def test_verify_runtime_env_handoff_pid_uses_operator_runtime_overrides(
     ]
 
 
+def test_verify_runtime_env_handoff_pid_accepts_launcher_safe_disable(
+    tmp_path, monkeypatch
+):
+    runtime_dir = tmp_path / "runtime_env"
+    runtime_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    (runtime_dir / "threshold_runtime_env_2026-07-28.json").write_text(
+        json.dumps(
+            {
+                "target_date": "2026-07-28",
+                "selected_families": ["persistent_operator_overrides_2026_06_26"],
+                "env_overrides": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (runtime_dir / "operator_runtime_overrides.env").write_text(
+        "\n".join(
+            [
+                "export KORSTOCKSCAN_EARLY_VOLATILITY_TP_PREMARKET_ENABLED=true",
+                "export KORSTOCKSCAN_EARLY_VOLATILITY_TP_PREMARKET_ACTIVE_DATE=2026-07-24",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        mod,
+        "_read_pid_environ",
+        lambda _pid: {
+            "KORSTOCKSCAN_EARLY_VOLATILITY_TP_PREMARKET_ENABLED": "false",
+            "KORSTOCKSCAN_EARLY_VOLATILITY_TP_PREMARKET_ACTIVE_DATE": "2026-07-24",
+        },
+    )
+
+    result = mod.verify_runtime_env_handoff("2026-07-28", pid=12345)
+
+    assert result["status"] == "pass"
+    assert result["pid_mismatches"] == []
+    assert result["launcher_safe_disabled_keys"] == [
+        "KORSTOCKSCAN_EARLY_VOLATILITY_TP_PREMARKET_ENABLED"
+    ]
+
+
 def test_verify_runtime_env_handoff_uses_target_date_operator_overlay(
     tmp_path, monkeypatch
 ):
@@ -8789,6 +8832,68 @@ def test_verify_runtime_env_handoff_uses_target_date_operator_overlay(
     assert result["dated_operator_runtime_override_keys"] == [
         "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_ACTIVE_DATE"
     ]
+
+
+def test_verify_runtime_env_handoff_validates_holding_and_persistent_overlays(
+    tmp_path, monkeypatch
+):
+    runtime_dir = tmp_path / "runtime_env"
+    runtime_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    holding_env = {
+        "KORSTOCKSCAN_HOLDING_DECISION_CONTEXT_ENABLED": "true",
+        "KORSTOCKSCAN_HOLDING_DECISION_CONTEXT_ACTIVE_DATE": "2026-07-23",
+        "KORSTOCKSCAN_HOLDING_DECISION_CONTEXT_KRX_ENABLED": "false",
+        "KORSTOCKSCAN_HOLDING_DECISION_CONTEXT_NXT_ENABLED": "true",
+        "KORSTOCKSCAN_HOLDING_DECISION_CONTEXT_PREMARKET_ENABLED": "false",
+        "KORSTOCKSCAN_HOLDING_SCORE_CONTEXT_ENABLED": "true",
+        "KORSTOCKSCAN_HOLDING_FLOW_CONTEXT_ENABLED": "true",
+        "KORSTOCKSCAN_OVERNIGHT_CONTEXT_ENABLED": "false",
+    }
+    persistent_env = {
+        "KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE": "22",
+        "KORSTOCKSCAN_SCALP_SIM_AI_MAX_CALLS_PER_MIN": "4",
+    }
+    manifest_env = {**holding_env, **persistent_env}
+    (runtime_dir / "threshold_runtime_env_2026-07-28.json").write_text(
+        json.dumps(
+            {
+                "target_date": "2026-07-28",
+                "selected_families": [
+                    "holding_decision_context_v1",
+                    "persistent_operator_overrides_2026_06_26",
+                ],
+                "env_overrides": manifest_env,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (runtime_dir / "operator_runtime_overrides.env").write_text(
+        "".join(f"export {key}={value}\n" for key, value in persistent_env.items()),
+        encoding="utf-8",
+    )
+
+    result = mod.verify_runtime_env_handoff("2026-07-28")
+
+    assert result["status"] == "pass"
+    assert result["unverified_selected_family_count"] == 0
+    audits = {audit["family"]: audit for audit in result["runtime_policy_audits"]}
+    assert audits["holding_decision_context_v1"]["status"] == "pass"
+    assert (
+        audits["holding_decision_context_v1"]["reason"]
+        == "activation_start_date_valid_atomic_promotion_required"
+    )
+    assert audits["holding_decision_context_v1"]["requested_cohorts"] == ["NXT"]
+    assert audits["holding_decision_context_v1"][
+        "effective_cohorts_without_atomic_promotion"
+    ] == ["NXT"]
+    assert (
+        audits["persistent_operator_overrides_2026_06_26"][
+            "operator_override_key_count"
+        ]
+        == 2
+    )
+    assert audits["persistent_operator_overrides_2026_06_26"]["status"] == "pass"
 
 
 def test_verify_runtime_env_handoff_rolls_probe_first_into_target_date_overlay(
