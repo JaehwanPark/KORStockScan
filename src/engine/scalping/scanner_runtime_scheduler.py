@@ -699,6 +699,18 @@ class ScannerRuntimeScheduler:
                     decided_epoch=now_value,
                     fields=generation.timing_fields(now_epoch=now_value),
                 )
+            if normalized_lane is ScannerLane.FAST_PRECHECK:
+                # An expired peer cannot be dispatched and must not keep a
+                # freshly re-enqueued initial precheck in an EDF refresh loop.
+                # Its own target will still claim it and emit deadline_expired
+                # before enqueueing a fresh attempt.
+                dispatchable_candidates = [
+                    item
+                    for item in candidates
+                    if now_value <= item.deadline_epoch
+                ]
+                if dispatchable_candidates:
+                    candidates = dispatchable_candidates
             if (
                 normalized_lane is ScannerLane.HEAVY_EVAL
                 and self._blocking_heavy_since_precheck >= 2

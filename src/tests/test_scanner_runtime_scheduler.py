@@ -556,6 +556,83 @@ def test_recurring_precheck_and_recovery_use_extended_non_initial_deadlines():
     assert recovery.item.deadline_epoch == 131.0
 
 
+def test_refreshed_initial_precheck_dispatches_ahead_of_expired_peer():
+    scheduler = ScannerRuntimeScheduler(max_active=16)
+    expired_peer = _register(
+        scheduler,
+        code="000001",
+        promotion_id="PROMO-EXPIRED",
+        attach_epoch=100.0,
+        promotion_epoch=99.0,
+    )
+    refreshed = _register(
+        scheduler,
+        code="000002",
+        promotion_id="PROMO-REFRESHED",
+        attach_epoch=100.0,
+        promotion_epoch=99.0,
+    )
+
+    expired = scheduler.claim(
+        refreshed.item.generation,
+        lane=ScannerLane.FAST_PRECHECK,
+        now_epoch=120.0,
+    )
+    assert expired.action in {"deadline_expired", "not_next"}
+    if expired.action == "not_next":
+        expired = scheduler.claim(
+            expired.item.generation,
+            lane=ScannerLane.FAST_PRECHECK,
+            now_epoch=120.0,
+        )
+    assert expired.action == "deadline_expired"
+
+    refreshed_generation = expired.item.generation
+    fresh_attempt = scheduler.enqueue(
+        refreshed_generation,
+        lane=ScannerLane.FAST_PRECHECK,
+        owner="fresh_recheck_after_deadline",
+        enqueued_epoch=120.0,
+        attempt=2,
+    )
+    dispatched = scheduler.claim(
+        refreshed_generation,
+        lane=ScannerLane.FAST_PRECHECK,
+        now_epoch=120.1,
+    )
+
+    assert fresh_attempt.item.precheck_phase == "initial"
+    assert dispatched.action == "dispatch"
+    assert dispatched.item.generation == refreshed_generation
+
+
+def test_unexpired_initial_peer_still_keeps_edf_priority():
+    scheduler = ScannerRuntimeScheduler(max_active=16)
+    earlier = _register(
+        scheduler,
+        code="000001",
+        promotion_id="PROMO-EARLIER",
+        attach_epoch=100.0,
+        promotion_epoch=99.0,
+    )
+    later = _register(
+        scheduler,
+        code="000002",
+        promotion_id="PROMO-LATER",
+        attach_epoch=101.0,
+        promotion_epoch=100.0,
+    )
+
+    deferred = scheduler.claim(
+        later.item.generation,
+        lane=ScannerLane.FAST_PRECHECK,
+        now_epoch=102.0,
+    )
+
+    assert deferred.action == "not_next"
+    assert deferred.item.generation == earlier.item.generation
+
+
 def test_expired_undispatched_precheck_retry_remains_initial():
     scheduler = ScannerRuntimeScheduler(max_active=16)
     registered = _register(
