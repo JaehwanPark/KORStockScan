@@ -453,6 +453,88 @@ def test_payload_sanitizer_preserves_nonsecret_token_metrics_and_redacts_opaque_
     assert "sk-abcdefghijklmnopqrstuvwxyz" not in serialized
 
 
+def test_payload_sanitizer_preserves_only_approved_runtime_cache_token_paths(
+    monkeypatch, tmp_path
+):
+    _enable(monkeypatch, tmp_path)
+    bucket_token = (
+        "score_70_74|risk_neutral|market_regime_neutral|fresh|"
+        "price_valid|liquidity_normal|not_overbought|midday"
+    )
+    runtime_context = {
+        "entry_adm": {
+            "cache_token": f"entry_adm:v1:{bucket_token}",
+            "entry_adm_bucket_token": bucket_token,
+            "entry_adm_cache_token": f"entry_adm:v1:{bucket_token}",
+        },
+        "holding_exit_matrix": {
+            "cache_token": "baseline:holding_exit_matrix_v1:mid:active:midday",
+        },
+        "lifecycle_ai": {
+            "cache_token": "lifecycle_ai_context:v1:entry:abcdef123456",
+        },
+    }
+
+    fields = trace.capture_ai_request(
+        prompt="prompt",
+        user_input={
+            "stock_code": "005930",
+            "runtime_context": runtime_context,
+        },
+        endpoint_name="analyze_target",
+        symbol="005930",
+        request_id="request-runtime-cache-identifiers",
+        model="gpt-test",
+        schema_name="entry_v1",
+        require_json=True,
+    )
+
+    row = _rows(trace._payload_path(trace._date_text()))[0]
+    assert fields["ai_input_payload_redacted"] is False
+    assert fields["ai_input_payload_replay_exact"] is True
+    assert row["sanitized_user_input"]["runtime_context"] == runtime_context
+
+
+def test_payload_sanitizer_keeps_cache_token_sensitive_outside_approved_paths(
+    monkeypatch, tmp_path
+):
+    _enable(monkeypatch, tmp_path)
+
+    fields = trace.capture_ai_request(
+        prompt="prompt",
+        user_input={
+            "stock_code": "005930",
+            "cache_token": "root-secret",
+            "runtime_context": {
+                "other_component": {"cache_token": "other-secret"},
+                "entry-adm": {"cache_token": "entry_adm:v1:valid-looking"},
+                "entry_adm": {
+                    "cache_token": "entry_adm:access_token=provider-secret",
+                    "access_token": "provider-secret",
+                },
+            },
+        },
+        endpoint_name="analyze_target",
+        symbol="005930",
+        request_id="request-unapproved-cache-token",
+        model="gpt-test",
+        schema_name="entry_v1",
+        require_json=True,
+    )
+
+    row = _rows(trace._payload_path(trace._date_text()))[0]
+    sanitized = row["sanitized_user_input"]
+    assert fields["ai_input_payload_redacted"] is True
+    assert fields["ai_input_payload_replay_exact"] is False
+    assert sanitized["cache_token"] == "[REDACTED]"
+    assert (
+        sanitized["runtime_context"]["other_component"]["cache_token"] == "[REDACTED]"
+    )
+    assert sanitized["runtime_context"]["entry_adm"]["access_token"] == "[REDACTED]"
+    assert sanitized["runtime_context"]["entry_adm"]["cache_token"] == "[REDACTED]"
+    assert sanitized["runtime_context"]["entry-adm"]["cache_token"] == "[REDACTED]"
+
+
 def test_request_ledger_is_not_written_when_payload_store_fails(monkeypatch, tmp_path):
     _enable(monkeypatch, tmp_path)
     original_append = trace._append_jsonl

@@ -83,6 +83,15 @@ _SENSITIVE_KEY_SUFFIXES = (
     "acct_no",
     "acct_number",
 )
+_NON_SECRET_INTERNAL_TOKEN_PATHS = frozenset(
+    {
+        ("runtime_context", "entry_adm", "cache_token"),
+        ("runtime_context", "entry_adm", "entry_adm_bucket_token"),
+        ("runtime_context", "entry_adm", "entry_adm_cache_token"),
+        ("runtime_context", "holding_exit_matrix", "cache_token"),
+        ("runtime_context", "lifecycle_ai", "cache_token"),
+    }
+)
 _AUTH_VALUE = re.compile(r"\b(?:bearer|basic)\s+[^\s,;]+", re.IGNORECASE)
 _EMBEDDED_SECRET_ASSIGNMENT = re.compile(
     r"(?i)\b("
@@ -101,6 +110,8 @@ _PRIVATE_KEY_BLOCK = re.compile(
     r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?" r"-----END [A-Z ]*PRIVATE KEY-----",
     re.DOTALL,
 )
+_ENTRY_ADM_BUCKET_TOKEN = re.compile(r"^[A-Za-z0-9_.:-]+(?:\|[A-Za-z0-9_.:-]+){7}$")
+_INTERNAL_CACHE_TOKEN = re.compile(r"^[A-Za-z0-9_.:|-]{1,1024}$")
 _STAGE_BY_PROMPT_TYPE = {
     "scalping_entry": "entry_screen",
     "scalping_shared": "entry_screen",
@@ -283,17 +294,42 @@ def _sanitize_text(value: str) -> tuple[str, bool]:
     return cleaned, bool(redacted or count > 0)
 
 
-def _is_sensitive_key(key: Any) -> bool:
-    key_text = re.sub(
-        r"(?<=[a-z0-9])(?=[A-Z])",
-        "_",
-        str(key or "").strip(),
-    )
-    normalized = re.sub(
+def _normalized_key(value: Any) -> str:
+    key_text = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", str(value or "").strip())
+    return re.sub(
         r"[^a-z0-9]+",
         "_",
         key_text.lower(),
     ).strip("_")
+
+
+def _is_non_secret_internal_token(
+    path: tuple[str, ...],
+    value: Any,
+) -> bool:
+    if path not in _NON_SECRET_INTERNAL_TOKEN_PATHS or not isinstance(value, str):
+        return False
+    sanitized_value, redacted = _sanitize_text(value)
+    if redacted or sanitized_value != value:
+        return False
+    if path == ("runtime_context", "entry_adm", "entry_adm_bucket_token"):
+        return bool(_ENTRY_ADM_BUCKET_TOKEN.fullmatch(value))
+    if not _INTERNAL_CACHE_TOKEN.fullmatch(value):
+        return False
+    if path in {
+        ("runtime_context", "entry_adm", "cache_token"),
+        ("runtime_context", "entry_adm", "entry_adm_cache_token"),
+    }:
+        return value.startswith("entry_adm:")
+    if path == ("runtime_context", "holding_exit_matrix", "cache_token"):
+        return value.startswith(("excluded:", "baseline:", "candidate:"))
+    if path == ("runtime_context", "lifecycle_ai", "cache_token"):
+        return value.startswith("lifecycle_ai_context:")
+    return False
+
+
+def _is_sensitive_key(key: Any) -> bool:
+    normalized = _normalized_key(key)
     if not normalized:
         return False
     exact_or_suffix = any(
@@ -309,8 +345,16 @@ def _is_sensitive_key(key: Any) -> bool:
     return exact_or_suffix or collapsed_match
 
 
-def _sanitize(value: Any, *, key: str = "") -> tuple[Any, bool]:
-    if _is_sensitive_key(key):
+def _sanitize(
+    value: Any,
+    *,
+    key: str = "",
+    path: tuple[str, ...] = (),
+) -> tuple[Any, bool]:
+    current_path = (*path, str(key)) if key else path
+    if _is_sensitive_key(key) and not _is_non_secret_internal_token(
+        current_path, value
+    ):
         return "[REDACTED]", True
     if isinstance(value, dict):
         cleaned: dict[str, Any] = {}
@@ -324,6 +368,7 @@ def _sanitize(value: Any, *, key: str = "") -> tuple[Any, bool]:
                 safe_value, child_redacted = _sanitize(
                     child_value,
                     key=str(child_key),
+                    path=current_path,
                 )
             cleaned[safe_key] = safe_value
             redacted = redacted or key_redacted or child_redacted
@@ -332,7 +377,10 @@ def _sanitize(value: Any, *, key: str = "") -> tuple[Any, bool]:
         cleaned_list = []
         redacted = False
         for child_value in value:
-            safe_value, child_redacted = _sanitize(child_value, key=key)
+            safe_value, child_redacted = _sanitize(
+                child_value,
+                path=current_path,
+            )
             cleaned_list.append(safe_value)
             redacted = redacted or child_redacted
         return cleaned_list, redacted
