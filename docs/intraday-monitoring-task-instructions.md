@@ -26,6 +26,79 @@
 - `DROP`, 약세, stale/conflict, stop 접촉, TTL 만료가 발생하면 residual을 폐기하고 해당 position cycle의 추가 확대를 금지한다. WAIT 첫 residual leg 이후 나머지 계획 수량은 별도 재확인 없는 자동 제출을 금지한다.
 - residual 체결로 평단·수량이 바뀌면 full-bundle peak를 `max(새 평단, 체결 직후 fresh mark)`로 재기준화한다. 1주 probe 시점의 peak를 확대된 전체 수량의 trailing peak로 재사용하지 않는다.
 
+## Multi-leg Post-Probe 실적 기반 보완 모니터링 작업지시문
+
+`[종료시각]`까지 현재 가동 런타임을 기준으로 `Multi-leg Post-Probe`의 주문 무결성, 정상 승자 확대, 잔량 폐기의 기회비용과 증분 EV를 함께 모니터링한다. 목표는 손실 억제 자체가 아니라 source-quality가 유효한 정상 승자를 안전하게 확대하여 기대값과 순이익을 최대화하는 것이다.
+
+### 시작 기준점과 권한
+
+- 작업 시작 시 PID/start 시각, loaded commit, `source_dirty`, runtime-env handoff와 다음 값을 실제 PID 환경에서 다시 확인한다.
+  - `KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED=true`
+  - `KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ENABLED=true`
+  - `KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ACTIVE_DATE=[작업일]`
+  - `KORSTOCKSCAN_DYNAMIC_ENTRY_PRICE_RESOLVER_POST_PROBE_ENABLED=true`
+  - probe 수량 1주, TTL 3초, 최대 bundle 수, slippage·anchor 설정
+- `2026-07-27 14:54:22 KST`의 확인 기준점은 PID `306350`, commit `4ca6910c`, `source_dirty=false`, runtime-env verify `pass`, broker balance/DB reconciliation 일치, WS 로그인 정상이다. 이는 역사적 기준점일 뿐이므로 작업 시작 시 PID가 다르면 새 provenance로 교체한다.
+- fresh AI 권한 관측값은 `DROP=fresh_drop_hard_veto`, `WAIT=fresh_wait_bounded_confirmation`이어야 한다. `fresh_negative_veto`는 폐기된 모호한 라벨이며 신규 이벤트에 다시 나타나면 관측 계약 회귀로 판정한다.
+- 이 작업은 read-only runtime observation과 source-only attribution이다. 별도 사용자 지시 없이 env, threshold, provider, 주문가격·수량, broker guard, bot 상태를 변경하거나 재기동·주문·취소를 실행하지 않는다.
+
+### 표본 범위와 event 재구성
+
+- clean baseline `2026-06-04T14:29:09+09:00` 이후 실제 SCALPING 신규진입만 사용하고 KRX, NXT, `PREMARKET_KRX_LIKE`를 effective venue/session/broker route별로 분리한다. sim/probe observation-only, counterfactual, real broker 주문·체결을 합치지 않는다.
+- 각 `probe_bundle_id`를 기준으로 다음 순서를 timestamp, record ID, broker order number와 함께 재구성한다.
+
+  `entry_split_order_plan_applied -> order_leg_request -> probe_submitted -> order_leg_sent -> probe_filled -> probe_continuation_deferred|residual_planned -> residual_submitted|residual_blocked -> residual fill/receipt -> position_rebased_after_fill -> order_bundle_submitted -> holding/exit`
+
+- 계획수량, probe 수량, residual planned/submitted/filled/unfilled 수량과 실제 broker BUY 주문번호를 대조한다. `order_bundle_submitted.requested_qty` 같은 계획 metadata를 실제 제출수량으로 오인하지 않고 broker order·receipt·fill을 실주문 source of truth로 사용한다.
+- 각 평가의 BBO/mark, fill price, positive·negative group, AI action/source/age, `post_probe_direction_ai_authority`, direction state/action/reason, confirmation count, source-version signature와 관측시각을 보존한다.
+
+### 실시간 정상작동 판정
+
+- fresh `DROP` 뒤에는 신규·residual BUY broker API 호출이 0회이고 `post_probe_hard_veto=true`, `probe_expand_forbidden=true`여야 한다.
+- fresh `WAIT`은 최초 1주 probe만 허용하며 `post_probe_hard_veto=false`여야 한다. 다음 조건을 모두 만족한 서로 다른 두 시장 관측만 강한 확인으로 센다.
+  - 평가 간격이 250ms 이상이다.
+  - source-version signature가 실제로 변경됐다. 동일·미버전·미래 timestamp 관측을 재사용하지 않는다.
+  - fresh·consistent executable BBO와 `mark >= probe_fill_price`다.
+  - 가격/틱, 호가, trusted signed tape 중 최소 두 독립 그룹이 양수이고 음수 그룹·large-sell 경고가 없다.
+  - 최신 AI가 DROP이 아니고 stop, exit token, cooldown, account/order/quantity/stale guard가 모두 통과한다.
+- WAIT은 첫 강한 확인에서 `confirmation_count=1 + DEFER`, 두 번째 강한 확인에서만 `confirmation_count=2 + ALLOW_NARROW`가 되어야 한다. residual은 계획된 첫 leg 한 건만 정확히 한 번 제출하고 나머지 leg는 별도 재확인 없이는 제출하지 않는다.
+- AI BUY 권한 아래의 micro `NEUTRAL`은 기존 정상 확대 기회를 일률적으로 차단하지 않는다. AI `WAIT`과 micro direction `NEUTRAL`을 같은 blocker로 합산하지 않는다.
+- fresh AI BUY는 기존 `STRONG=ALLOW_NARROW`, 안전한 `NEUTRAL=ALLOW_NORMAL`, `WEAK|UNKNOWN=DEFER`, 회복 뒤 `ALLOW_RECOVERED_WIDE`, `HARD_NEGATIVE=abort` 경로를 유지한다. 정상 BUY residual leg는 계획 범위 안에서 평가하되 WAIT 전용 첫-leg cap을 BUY에 잘못 적용해 정상 승자 확대를 막지 않는다.
+- 가격 owner는 `dynamic_entry_price_resolver_p1`의 `initial -> post_probe -> leg_reprice`로 유지한다. 각 residual leg마다 fresh BBO/source-quality와 P1 가격을 다시 확인하고 `DEFER` 결과에는 executable price나 broker submit이 없어야 하며, 재가격·최종 sizing은 기존 계획수량을 늘리지 않아야 한다.
+- 약세, 음수 그룹, stale/conflict, stop 접촉 또는 3초 TTL 만료 시 residual을 제출하지 않고 `residual_blocked`와 `probe_expand_forbidden=true`를 남긴다. 이후 동일 position cycle에서 자동 확대가 재개되지 않아야 한다.
+- residual 체결 뒤 `peak_basis_qty`, `peak_basis_avg_price`와 full-bundle peak가 새 수량·평단 및 fresh mark 기준으로 갱신됐는지 확인한다.
+- 동일 bundle의 중복 BUY, 계획수량 초과, probe 없는 residual, WAIT residual 2개 이상, DROP 통과, 다른 venue route 주문, exit token 이후 BUY, 부분익절/full-exit과 경합한 초과 BUY·SELL은 즉시 결함이다.
+
+### 정상 승자 확대와 기회비용 판정
+
+- 실시간 주문 무결성 PASS와 전략 효과 PASS를 분리한다. 자연 residual 제출이 0건이면 방어 경로만 확인된 것이며 `normal_winner_expansion_runtime_verified`로 닫지 않는다.
+- probe 체결 후 1·3·5·10분 exact venue/session 가격으로 MFE, MAE, target/adverse first-hit와 최종 수익률을 성숙시킨다. post-probe primary horizon은 10분이며 미성숙 표본은 `open_unresolved`로 유지한다.
+- residual 제출 표본은 실제 residual fill notional과 추가 MFE·MAE, 거래비용·slippage를 사용해 probe-only 대비 증분 손익을 계산한다. partial fill과 full fill을 분리하고 residual 미체결분을 체결된 것으로 보간하지 않는다.
+- residual 폐기 표본은 이후 MFE가 충분했는지와 adverse-first 여부를 함께 계산하여 `correctly_not_expanded_or_reversal`, `probe_residual_missed_upside_candidate`, `pyramid_open_unresolved`를 분리한다. 단기 손실 회피만으로 정상 승자 확대 정책의 성공을 확정하지 않는다.
+- AI BUY, AI WAIT, direction confirmation signature, effective venue/session, blocker reason, entry score, pressure, tick acceleration, micro-VWAP side별로 결과를 분리한다. KRX 결과로 NXT/PREMARKET을 보강하거나 반대로 합치지 않는다.
+- 실현손익은 `COMPLETED + valid profit_rate`만 사용한다. counterfactual·open PnL·simple sum을 real EV와 합산하지 않으며 EV는 `equal_weight_avg_profit_pct`, `notional_weighted_ev_pct`, `source_quality_adjusted_ev_pct` 중 계약된 이름만 사용한다.
+- 당일 한두 건은 runtime integrity와 source-quality 경보에만 사용한다. 정상 승자 확대의 EV 판단은 rolling closed source-quality-valid bundle 20건 이상에서 한다.
+
+### source-quality와 산출물
+
+- 기본 source는 당일 `pipeline_events`, broker receipt/order log, `scalping_pyramid_intraday_feedback`, `observation_source_quality_audit`, `ai_decision_outcomes`와 runtime-env verify다. 산출물의 `generated_at`이 마지막 probe event보다 이르면 stale report로 명시하고 raw event와 혼동하지 않는다.
+- effective venue/session, broker route, BBO·tick·orderbook provenance, source-version signature, probe/residual receipt join이 결손·충돌한 row/window는 `raw_row_exclusion` 또는 `source_quality_blocked`로 제외한다.
+- `micro_vwap_provenance_missing`, residual fill attribution invalid, route conflict 또는 unknown-token warning을 0으로 보간하지 않는다. 결손이 전략 실패인지 자료 결함인지 분리한다.
+- 기존 report contract의 `actual_order_submitted=false`, `broker_order_forbidden=true`, `runtime_effect=false`, `allowed_runtime_apply=false`를 유지한다. source-only 보고서가 실주문 품질 승인이나 장중 threshold mutation 권한을 갖지 않는다.
+
+### 즉시 결함·rollback 판정과 보고
+
+- 다음 중 하나라도 발생하면 `rollback_required` 또는 `code_improvement_required`로 보고하고 해당 bundle의 추가 전략 귀속을 중지한다. 별도 사용자 지시 없이 직접 rollback·재기동하지 않는다.
+  - fresh DROP 뒤 broker BUY, fresh WAIT의 hard-veto 오기록 또는 2회 확인 전 residual
+  - 동일 source version 중복 확인, 250ms 미만 확인, stale/conflict·음수 그룹 통과
+  - residual 중복·계획수량 초과·WAIT 두 번째 residual 자동 제출
+  - probe/residual receipt join 불일치, route 혼합, peak basis 미재기준화
+  - exit token 이후 BUY, partial/full-exit 경합의 중복·초과 주문
+- 최종 보고는 반드시 `판정 -> 근거 -> 다음 액션` 순서로 작성한다.
+  - 판정: `post_probe_runtime_healthy_no_change | normal_winner_expansion_observed | correctly_not_expanded_observed | insufficient_natural_sample_keep_observing | source_quality_gap | code_improvement_required | rollback_required`
+  - 근거: PID/commit/env, venue/session, bundle 수, probe·residual planned/submitted/filled/blocked 수, WAIT/DROP/BUY 권한, 확인 signature, 중복·초과 주문, 10분 MFE/MAE와 성숙 상태, source-quality 제외 수를 함께 제시한다.
+  - 다음 액션: 자연 표본 계속 관찰, 결손 producer 보완안, 코드결함 재현·테스트 범위 또는 명시적 operator 결정 필요사항 중 하나로 한정한다.
+
 ### 조기 지정가 부분익절 runtime 계약
 
 - `scalp_early_volatility_partial_tp`는 `scalp_trailing_take_profit` holding/exit owner 아래에서 최초 부분익절 지정가와 runner 분리를 조정하는 bounded coordinator다. trailing, hard/protect/emergency 수치나 full-exit 권한을 소유하거나 완화하지 않는다.
