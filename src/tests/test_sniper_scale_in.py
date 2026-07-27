@@ -3831,6 +3831,185 @@ def test_rising_missed_retry_rechecks_preflight_blocked_cached_drop(monkeypatch)
     )
 
 
+def test_rising_missed_retry_dispatches_async_without_sync_rest_or_ai(monkeypatch):
+    class AsyncCoordinator:
+        pass
+
+    class AsyncGeneration:
+        generation_id = "SCANGEN-123456-1"
+
+    monkeypatch.setattr(state_handlers, "ScannerAsyncEvalCoordinator", AsyncCoordinator)
+    monkeypatch.setattr(state_handlers, "ScannerGeneration", AsyncGeneration)
+    monkeypatch.setattr(
+        state_handlers,
+        "_resolve_scanner_async_entry_ai",
+        lambda *args, **kwargs: {"status": "dispatched"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_retry_entry_ai_submit_authority_before_block",
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("async scheduler must not make the synchronous retry")
+        ),
+    )
+
+    stock = {"strategy": "SCALPING", "last_watching_ai_action": "not_evaluated"}
+    fields = state_handlers._maybe_retry_rising_missed_entry_ai_not_evaluated(
+        stock,
+        "123456",
+        {"curr": 10000},
+        {
+            "ai_engine": object(),
+            "now_ts": 1000.0,
+            "current_ai_score": 50.0,
+            "scanner_async_eval_coordinator": AsyncCoordinator(),
+            "scanner_async_generation": AsyncGeneration(),
+        },
+        curr_price=10000,
+    )
+
+    assert fields["rising_missed_entry_ai_retry_attempted"] is True
+    assert fields["rising_missed_entry_ai_retry_reason"] == "async_pending"
+    assert fields["rising_missed_entry_ai_retry_async_status"] == "dispatched"
+    assert stock["pre_submit_entry_ai_authority_retry_count"] == 1
+
+
+def test_rising_missed_retry_applies_completed_async_result_without_sync_retry(
+    monkeypatch,
+):
+    class AsyncCoordinator:
+        pass
+
+    class AsyncGeneration:
+        generation_id = "SCANGEN-123456-1"
+
+    entry_logs = []
+    monkeypatch.setattr(state_handlers, "ScannerAsyncEvalCoordinator", AsyncCoordinator)
+    monkeypatch.setattr(state_handlers, "ScannerGeneration", AsyncGeneration)
+    monkeypatch.setattr(
+        state_handlers,
+        "_resolve_scanner_async_entry_ai",
+        lambda *args, **kwargs: {
+            "status": "completed",
+            "completed_epoch": 1001.0,
+            "ai_decision": {
+                "action": "BUY",
+                "score": 72.0,
+                "reason": "fresh continuation",
+                "ai_result_source": "live",
+            },
+        },
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_retry_entry_ai_submit_authority_before_block",
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("completed async result must not make the synchronous retry")
+        ),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: entry_logs.append((stage, fields)),
+    )
+
+    stock = {
+        "strategy": "SCALPING",
+        "last_watching_ai_action": "not_evaluated",
+        "_scanner_async_generation_id": "SCANGEN-123456-1",
+        "_scanner_async_cache_key": "watching:test",
+    }
+    fields = state_handlers._maybe_retry_rising_missed_entry_ai_not_evaluated(
+        stock,
+        "123456",
+        {"curr": 10000},
+        {
+            "ai_engine": object(),
+            "now_ts": 1002.0,
+            "current_ai_score": 50.0,
+            "scanner_async_eval_coordinator": AsyncCoordinator(),
+            "scanner_async_generation": AsyncGeneration(),
+        },
+        curr_price=10000,
+    )
+
+    assert fields["rising_missed_entry_ai_retry_success"] is True
+    assert fields["rising_missed_entry_ai_retry_action"] == "BUY"
+    assert stock["last_watching_ai_action"] == "BUY"
+    assert stock["last_watching_ai_score"] == 72.0
+    assert entry_logs[-1][0] == "rising_missed_entry_ai_async_result_applied"
+
+
+def test_rising_missed_async_pending_does_not_backoff_or_submit(monkeypatch):
+    entry_logs = []
+    monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_ONE_SHARE_ENTRY_ENABLED", "true")
+    monkeypatch.setattr(
+        state_handlers,
+        "evaluate_rising_missed_one_share_entry",
+        lambda *args, **kwargs: SimpleNamespace(
+            allowed=False,
+            reason=BLOCK_ENTRY_AI_NOT_EVALUATED,
+            log_fields={},
+        ),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "evaluate_rising_missed_same_day_reentry_guard",
+        lambda *args, **kwargs: {"allowed": True},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_maybe_retry_rising_missed_entry_ai_not_evaluated",
+        lambda *args, **kwargs: {
+            "rising_missed_entry_ai_retry_attempted": True,
+            "rising_missed_entry_ai_retry_reason": "async_pending",
+            "rising_missed_entry_ai_retry_async_status": "pending",
+        },
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_record_rising_missed_candidate_gate_backoff",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("async pending must not create a candidate backoff")
+        ),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_submit_watching_triggered_entry",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("async pending must not submit an order")
+        ),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: entry_logs.append((stage, fields)),
+    )
+
+    handled = state_handlers._maybe_submit_rising_missed_one_share_entry(
+        {
+            "id": 3,
+            "name": "ASYNC_PENDING",
+            "strategy": "SCALPING",
+            "position_tag": "OPEN_RECLAIM",
+            "rising_missed_buy": True,
+            "price_delta_since_first_seen_pct": 2.0,
+            "last_watching_ai_action": "not_evaluated",
+        },
+        "123456",
+        {"curr": 10000, "v_pw": 100.0},
+        admin_id=1,
+        runtime={"now_ts": 1000.0},
+        strategy="SCALPING",
+        pos_tag="OPEN_RECLAIM",
+        curr_price=10000,
+    )
+
+    assert handled is True
+    assert entry_logs[-1][0] == "rising_missed_entry_ai_async_pending"
+    assert entry_logs[-1][1]["actual_order_submitted"] is False
+
+
 def test_rising_missed_one_share_hook_skips_retry_for_general_non_candidate_not_evaluated(
     monkeypatch,
 ):
