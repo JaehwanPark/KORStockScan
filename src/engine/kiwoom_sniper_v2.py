@@ -8108,6 +8108,110 @@ def _scanner_scheduler_reconcile_active_targets(scheduler, targets, *, now_epoch
     return len(stale_codes)
 
 
+def _restore_scanner_async_commit_transport(target, async_result):
+    """Restore ephemeral worker identity on a rehydrated WATCHING target.
+
+    ACTIVE_TARGETS may be rebuilt from the database between worker dispatch
+    and scheduler COMMIT.  The scheduler generation remains canonical, but
+    private ``_scanner_async_*`` fields are intentionally not persisted.  A
+    completed result must therefore restore its exact transport identity
+    before adapter routing.  Conflicting live transport state is never
+    overwritten; the caller discards that result and schedules a fresh
+    precheck instead.
+    """
+
+    if not isinstance(target, dict) or async_result is None:
+        return {
+            "allowed": False,
+            "reason": "target_or_result_missing",
+            "namespace": "unknown",
+        }
+    generation_id = str(getattr(async_result, "generation_id", "") or "").strip()
+    cache_key = str(getattr(async_result, "cache_key", "") or "").strip()
+    state_version = str(getattr(async_result, "state_version", "") or "").strip()
+    submitted_epoch = _safe_float(
+        getattr(async_result, "submitted_epoch", 0.0),
+        0.0,
+    )
+    if not generation_id or not cache_key or not state_version or submitted_epoch <= 0:
+        return {
+            "allowed": False,
+            "reason": "result_transport_identity_missing",
+            "namespace": "unknown",
+        }
+    canonical_generation_id = str(target.get("scanner_generation_id") or "").strip()
+    if canonical_generation_id != generation_id:
+        return {
+            "allowed": False,
+            "reason": "canonical_generation_transport_conflict",
+            "namespace": "unknown",
+        }
+    if not cache_key.startswith(
+        (
+            "rising_missed:",
+            "watching:",
+            "opening_rotation:",
+        )
+    ):
+        return {
+            "allowed": False,
+            "reason": "async_cache_namespace_unknown",
+            "namespace": "unknown",
+        }
+
+    opening_rotation = cache_key.startswith("opening_rotation:")
+    namespace = "opening_rotation" if opening_rotation else "entry"
+    if opening_rotation:
+        generation_field = "_scanner_opening_rotation_async_generation_id"
+        cache_field = "_scanner_opening_rotation_async_cache_key"
+        state_field = "_scanner_opening_rotation_async_state_version"
+        submitted_field = "_scanner_opening_rotation_async_submitted_at"
+        conflicting_cache_field = "_scanner_async_cache_key"
+    else:
+        generation_field = "_scanner_async_generation_id"
+        cache_field = "_scanner_async_cache_key"
+        state_field = "_scanner_async_state_version"
+        submitted_field = "_scanner_async_submitted_at"
+        conflicting_cache_field = "_scanner_opening_rotation_async_cache_key"
+
+    existing_generation = str(target.get(generation_field) or "").strip()
+    existing_cache_key = str(target.get(cache_field) or "").strip()
+    conflicting_cache_key = str(target.get(conflicting_cache_field) or "").strip()
+    if conflicting_cache_key:
+        return {
+            "allowed": False,
+            "reason": "other_async_namespace_active",
+            "namespace": namespace,
+        }
+    if existing_generation and existing_generation != generation_id:
+        return {
+            "allowed": False,
+            "reason": "async_generation_transport_conflict",
+            "namespace": namespace,
+        }
+    if existing_cache_key and existing_cache_key != cache_key:
+        return {
+            "allowed": False,
+            "reason": "async_cache_transport_conflict",
+            "namespace": namespace,
+        }
+
+    restored = not (existing_generation and existing_cache_key)
+    target.update(
+        {
+            generation_field: generation_id,
+            cache_field: cache_key,
+            state_field: state_version,
+            submitted_field: submitted_epoch,
+        }
+    )
+    return {
+        "allowed": True,
+        "reason": "transport_restored" if restored else "transport_already_present",
+        "namespace": namespace,
+    }
+
+
 def _scanner_scheduler_enqueue_target(
     scheduler,
     target,
@@ -9700,10 +9804,26 @@ def run_sniper(is_test_mode=False):
                         ),
                         None,
                     )
+                    async_transport = {
+                        "allowed": False,
+                        "reason": "result_not_commit_eligible",
+                        "namespace": "unknown",
+                    }
+                    if (
+                        async_target is not None
+                        and async_result.status == "completed"
+                        and not async_result.observation_only
+                    ):
+                        with ENTRY_LOCK:
+                            async_transport = _restore_scanner_async_commit_transport(
+                                async_target,
+                                async_result,
+                            )
                     if (
                         async_target is None
                         or async_result.status != "completed"
                         or async_result.observation_only
+                        or not async_transport.get("allowed")
                     ):
                         async_coordinator.discard_completed(
                             generation_id=async_result.generation_id,
@@ -9783,11 +9903,52 @@ def run_sniper(is_test_mode=False):
                                 "scanner_async_result_reject_reason": (
                                     "target_or_generation_missing"
                                     if async_target is None
-                                    else "result_not_commit_eligible"
+                                    else (
+                                        async_transport.get("reason")
+                                        or "result_not_commit_eligible"
+                                    )
+                                ),
+                                "scanner_async_transport_namespace": (
+                                    async_transport.get("namespace") or "unknown"
                                 ),
                             },
                         )
                         continue
+                    _emit_scanner_scheduler_event(
+                        payload=async_target,
+                        target=async_target,
+                        stage="scalping_scanner_async_transport_ready",
+                        fields={
+                            "metric_role": "runtime_scheduler_latency",
+                            "decision_authority": (
+                                "scanner_async_commit_transport_only"
+                            ),
+                            "window_policy": (
+                                "per_scanner_generation_action_timestamps"
+                            ),
+                            "sample_floor": "one_completed_async_result",
+                            "primary_decision_metric": "result_to_commit_sec",
+                            "source_quality_gate": (
+                                "exact_generation_cache_and_state_version_required"
+                            ),
+                            "forbidden_uses": (
+                                "standalone_buy,broker_submit,threshold_mutation,"
+                                "provider_route_change,order_price_change,"
+                                "quantity_or_cap_change,broker_guard_bypass"
+                            ),
+                            "runtime_effect": False,
+                            "actual_order_submitted": False,
+                            "broker_order_forbidden": True,
+                            "scanner_generation_id": async_result.generation_id,
+                            "scanner_async_cache_key": async_result.cache_key,
+                            "scanner_async_transport_namespace": (
+                                async_transport.get("namespace") or "unknown"
+                            ),
+                            "scanner_async_transport_reason": (
+                                async_transport.get("reason") or "unknown"
+                            ),
+                        },
+                    )
                     commit_decision = _scanner_scheduler_enqueue_target(
                         run_sniper.scanner_runtime_scheduler,
                         async_target,

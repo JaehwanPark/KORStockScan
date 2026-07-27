@@ -80,6 +80,140 @@ def _reset_scanner_hot_override_cache():
         )
 
 
+@pytest.mark.parametrize(
+    ("cache_key", "expected_fields"),
+    [
+        (
+            "rising_missed:abc",
+            (
+                "_scanner_async_generation_id",
+                "_scanner_async_cache_key",
+                "_scanner_async_state_version",
+                "_scanner_async_submitted_at",
+            ),
+        ),
+        (
+            "watching:abc",
+            (
+                "_scanner_async_generation_id",
+                "_scanner_async_cache_key",
+                "_scanner_async_state_version",
+                "_scanner_async_submitted_at",
+            ),
+        ),
+        (
+            "opening_rotation:abc",
+            (
+                "_scanner_opening_rotation_async_generation_id",
+                "_scanner_opening_rotation_async_cache_key",
+                "_scanner_opening_rotation_async_state_version",
+                "_scanner_opening_rotation_async_submitted_at",
+            ),
+        ),
+    ],
+)
+def test_scanner_async_commit_transport_restores_rehydrated_target(
+    cache_key,
+    expected_fields,
+):
+    target = {
+        "status": "WATCHING",
+        "scanner_generation_id": "005930:promotion:r1",
+    }
+    result = SimpleNamespace(
+        generation_id="005930:promotion:r1",
+        cache_key=cache_key,
+        state_version="state-v1",
+        submitted_epoch=123.5,
+    )
+
+    decision = kiwoom_sniper_v2._restore_scanner_async_commit_transport(
+        target,
+        result,
+    )
+
+    assert decision == {
+        "allowed": True,
+        "reason": "transport_restored",
+        "namespace": (
+            "opening_rotation" if cache_key.startswith("opening_rotation:") else "entry"
+        ),
+    }
+    assert [target[field] for field in expected_fields] == [
+        "005930:promotion:r1",
+        cache_key,
+        "state-v1",
+        123.5,
+    ]
+
+
+def test_scanner_async_commit_transport_rejects_conflicting_live_request():
+    target = {
+        "scanner_generation_id": "005930:promotion:r1",
+        "_scanner_async_generation_id": "005930:promotion:r1",
+        "_scanner_async_cache_key": "watching:newer",
+    }
+    result = SimpleNamespace(
+        generation_id="005930:promotion:r1",
+        cache_key="rising_missed:older",
+        state_version="state-v1",
+        submitted_epoch=123.5,
+    )
+
+    decision = kiwoom_sniper_v2._restore_scanner_async_commit_transport(
+        target,
+        result,
+    )
+
+    assert decision == {
+        "allowed": False,
+        "reason": "async_cache_transport_conflict",
+        "namespace": "entry",
+    }
+    assert target["_scanner_async_cache_key"] == "watching:newer"
+
+
+@pytest.mark.parametrize(
+    ("target_generation_id", "cache_key", "reason"),
+    [
+        (
+            "005930:promotion:r2",
+            "watching:abc",
+            "canonical_generation_transport_conflict",
+        ),
+        (
+            "005930:promotion:r1",
+            "unowned:abc",
+            "async_cache_namespace_unknown",
+        ),
+    ],
+)
+def test_scanner_async_commit_transport_rejects_unowned_result(
+    target_generation_id,
+    cache_key,
+    reason,
+):
+    target = {"scanner_generation_id": target_generation_id}
+    result = SimpleNamespace(
+        generation_id="005930:promotion:r1",
+        cache_key=cache_key,
+        state_version="state-v1",
+        submitted_epoch=123.5,
+    )
+
+    decision = kiwoom_sniper_v2._restore_scanner_async_commit_transport(
+        target,
+        result,
+    )
+
+    assert decision == {
+        "allowed": False,
+        "reason": reason,
+        "namespace": "unknown",
+    }
+    assert "_scanner_async_cache_key" not in target
+
+
 def test_scanner_market_data_enrichment_candidate_accepts_rising_source_marker(
     monkeypatch,
 ):
