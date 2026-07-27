@@ -4075,6 +4075,14 @@ def _scanner_is_rising_entry_relief_candidate(target):
     if not _is_scanner_watching_target(target):
         return False
     existing_delta = _scanner_positive_delta_value(target)
+    if str(target.get("scanner_generation_id") or "").strip():
+        # A scheduler generation is an immutable promotion envelope.  Its
+        # precheck must not read a historical promotion record merely to
+        # enrich the rising-relief marker: doing so serializes fresh inbox
+        # attaches behind disk-backed hydration during restart recovery.
+        # Registration is the sole provenance-repair owner; absent current
+        # generation evidence remains fail-closed here.
+        return existing_delta >= _scanner_rising_entry_min_delta_pct()
     sniper_state_handlers._hydrate_scanner_promotion_runtime_context(target)
     hydrated_delta = _scanner_positive_delta_value(target)
     if existing_delta > hydrated_delta and isinstance(target, dict):

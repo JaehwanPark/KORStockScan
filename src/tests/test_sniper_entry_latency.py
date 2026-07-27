@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import src.engine.sniper_entry_latency as entry_latency_module
 import src.engine.sniper_state_handlers as state_handlers
+import src.engine.kiwoom_sniper_v2 as sniper_runtime
 from src.engine.sniper_entry_latency import (
     _best_ask_bid_from_ws,
     _latency_danger_reasons,
@@ -85,6 +86,32 @@ def test_scanner_fast_precheck_never_hydrates_promotion_runtime_context(monkeypa
         "stability_pending",
         "budget_reallocated",
     }
+
+
+def test_scheduler_generation_relief_uses_immutable_payload_without_hydration(
+    monkeypatch,
+):
+    hydrated = []
+    target = {
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "scanner_generation_id": "SCANPROM-005930-current:1",
+        "entry_armed_at_epoch": 100.0,
+        "scanner_promotion_emitted_epoch": 1.0,
+        "price_delta_since_first_seen_pct": "1.2",
+    }
+
+    monkeypatch.setattr(
+        state_handlers,
+        "_hydrate_scanner_promotion_runtime_context",
+        lambda *args, **kwargs: hydrated.append((args, kwargs)) or {},
+    )
+
+    assert sniper_runtime._scanner_is_rising_entry_relief_candidate(target) is True
+    target["price_delta_since_first_seen_pct"] = "0"
+    assert sniper_runtime._scanner_is_rising_entry_relief_candidate(target) is False
+    assert hydrated == []
 
 
 def test_latency_entry_normal_mode_uses_defensive_limit_price():
