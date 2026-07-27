@@ -7519,10 +7519,17 @@ def _register_scanner_scheduler_generation(
         source_signature=payload.get("source_signature")
         or target.get("source_signature")
         or "",
+        # Restart restoration can register hundreds of persisted WATCHING
+        # rows at one timestamp. They are boot backlog, not fresh promotion
+        # attaches, so a shared first-precheck deadline would create false
+        # expiry and compete with live promotions. Preserve generation
+        # provenance here; the target's first runtime encounter owns creation
+        # of its fresh precheck.
+        enqueue_precheck=not boot_restore,
     )
     generation = (
         scheduler.current_generation(target.get("code") or payload.get("code"))
-        if decision.action == "generation_coalesced"
+        if decision.action in {"generation_registered", "generation_coalesced"}
         else (decision.item.generation if decision.item else None)
     )
     if (

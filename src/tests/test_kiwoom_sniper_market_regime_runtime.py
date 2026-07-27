@@ -935,6 +935,68 @@ def test_scheduler_boot_restore_reuses_persisted_same_session_generation(
     assert payload["scanner_scheduler_boot_promotion_age_sec"] == 10.0
 
 
+def test_scheduler_boot_restore_registers_without_shared_deadline_backlog(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        kiwoom_sniper_v2.run_sniper,
+        "scanner_scheduler_mode",
+        "async_v1",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2.run_sniper,
+        "scanner_scheduler_venues",
+        frozenset({"NXT"}),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "_emit_scanner_scheduler_event",
+        lambda **kwargs: None,
+    )
+    target = {
+        "id": 1,
+        "code": "005930",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "effective_venue": "NXT",
+        "scanner_promotion_id": "SCANPROM-005930-190000",
+        "scanner_promotion_emitted_epoch": 190.0,
+        "current_price_observed": 70_000,
+        "source_signature": "PRICE_JUMP_START",
+    }
+    scheduler = kiwoom_sniper_v2.ScannerRuntimeScheduler(max_active=16)
+
+    generation = kiwoom_sniper_v2._register_scanner_scheduler_generation(
+        scheduler,
+        payload={
+            **target,
+            "scanner_scheduler_boot_restore": True,
+            "scanner_scheduler_boot_restore_block_reason": "",
+        },
+        target=target,
+        attach_epoch=200.0,
+    )
+
+    assert generation is not None
+    assert scheduler.current_generation("005930") == generation
+    assert scheduler.snapshot_metrics(now_epoch=200.0)["scheduler_queue_depth"] == 0
+    assert "_scanner_scheduler_lane" not in target
+
+    fresh = kiwoom_sniper_v2._scanner_scheduler_refresh_claim_after_expiry(
+        scheduler,
+        target,
+        previous_decision=None,
+        now_epoch=201.0,
+    )
+
+    assert fresh.action == "dispatch"
+    assert fresh.item.lane is kiwoom_sniper_v2.ScannerLane.FAST_PRECHECK
+    assert fresh.item.precheck_phase == "initial"
+
+
 @pytest.mark.parametrize(
     "persisted_venue,promotion_epoch,expected_reason",
     [
