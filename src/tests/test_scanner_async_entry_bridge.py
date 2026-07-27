@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 import time
 from datetime import datetime
 
@@ -152,6 +153,86 @@ def test_async_entry_bridge_prepares_off_thread_then_commits_on_current_state(
     ]
     assert requested_codes == [expected_request_code]
     assert "_scanner_async_cache_key" not in stock
+
+
+def test_async_entry_bridge_dispatches_from_context_commit_without_sync_ai(
+    monkeypatch,
+):
+    """A freshness COMMIT may enqueue entry AI, but must not execute it inline."""
+
+    monkeypatch.setattr(handlers, "KIWOOM_TOKEN", "token")
+    monkeypatch.setattr(
+        handlers.kiwoom_utils,
+        "get_tick_history_ka10003",
+        lambda *_args, **_kwargs: [{"price": 1000}],
+    )
+    monkeypatch.setattr(
+        handlers,
+        "fetch_entry_candles_with_meta",
+        lambda *args, **kwargs: ([{"close": 1000}], {"source": "test"}),
+    )
+    monkeypatch.setattr(
+        handlers,
+        "build_entry_candle_context",
+        lambda *args, **kwargs: {"schema": "test"},
+    )
+    monkeypatch.setattr(handlers, "_extract_ai_overlap_snapshot", lambda **kwargs: {})
+    monkeypatch.setattr(
+        handlers, "_update_ai_quote_freshness_fields", lambda ws_data: None
+    )
+    monkeypatch.setattr(handlers, "_log_entry_pipeline", lambda *args, **kwargs: None)
+
+    class _CountingAI(_FakeAI):
+        calls = 0
+        thread_ids = []
+
+        def analyze_target(self, *args, **kwargs):
+            self.calls += 1
+            self.thread_ids.append(threading.get_ident())
+            return super().analyze_target(*args, **kwargs)
+
+    ai = _CountingAI()
+    coordinator = ScannerAsyncEvalCoordinator(
+        ai_dispatcher=HotPathAIDispatcher(loaded_key_count=1)
+    )
+    generation = _generation("NXT")
+    stock = {
+        "id": 7,
+        "code": "005930",
+        "name": "삼성전자",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "scanner_generation_id": generation.generation_id,
+        "scanner_promotion_id": generation.promotion_id,
+        "effective_venue": "NXT",
+        "venue_resolution": "session_clock_explicit_nxt",
+        "source_signature": "VALUE_TOP",
+    }
+    runtime = {
+        "scanner_async_eval_coordinator": coordinator,
+        "scanner_async_generation": generation,
+        "scanner_async_commit_phase": True,
+    }
+    try:
+        result = handlers._resolve_scanner_async_entry_ai(
+            stock,
+            "005930",
+            {
+                "curr": 1001,
+                "orderbook": {"ask": 1002, "bid": 1000},
+                "last_ws_update_ts": time.time(),
+            },
+            ai,
+            runtime,
+            trigger_reason="pre_submit_commit",
+            last_ai_time=0,
+            current_ai_score=50,
+        )
+
+        assert result["status"] == "dispatched"
+        assert all(thread_id != threading.get_ident() for thread_id in ai.thread_ids)
+    finally:
+        coordinator.shutdown()
 
 
 def test_opening_rotation_context_prepares_off_thread_and_commits_once(monkeypatch):
@@ -444,6 +525,39 @@ def test_rising_missed_context_does_not_claim_followup_generic_ai_commit(monkeyp
         ) == {"status": "not_applicable"}
     finally:
         coordinator.shutdown()
+
+
+def test_rising_missed_context_does_not_overwrite_pending_entry_ai(monkeypatch):
+    generation = _generation("NXT")
+    coordinator = ScannerAsyncEvalCoordinator(
+        ai_dispatcher=HotPathAIDispatcher(loaded_key_count=1)
+    )
+    stock = {
+        "strategy": "SCALPING",
+        "scanner_generation_id": generation.generation_id,
+        "_scanner_async_generation_id": generation.generation_id,
+        "_scanner_async_cache_key": "watching:entry-ai-pending",
+    }
+    runtime = {
+        "scanner_async_eval_coordinator": coordinator,
+        "scanner_async_generation": generation,
+        "scanner_async_commit_phase": False,
+    }
+    try:
+        result = handlers._resolve_scanner_async_rising_missed_context(
+            stock,
+            "005930",
+            {"curr": 1001, "last_ws_update_ts": time.time()},
+            runtime,
+        )
+    finally:
+        coordinator.shutdown()
+
+    assert result == {
+        "status": "pending_other_async",
+        "reason": "entry_ai_pending_for_generation",
+    }
+    assert stock["_scanner_async_cache_key"] == "watching:entry-ai-pending"
 
 
 def test_opening_rotation_async_commit_avoids_generic_watching_reentry(monkeypatch):

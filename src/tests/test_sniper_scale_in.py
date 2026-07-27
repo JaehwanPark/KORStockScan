@@ -3881,6 +3881,48 @@ def test_rising_missed_retry_dispatches_async_without_sync_rest_or_ai(monkeypatc
     assert stock["pre_submit_entry_ai_authority_retry_count"] == 1
 
 
+def test_rising_missed_forced_async_retry_dispatches_for_existing_wait(monkeypatch):
+    class AsyncCoordinator:
+        pass
+
+    class AsyncGeneration:
+        generation_id = "SCANGEN-123456-1"
+
+    monkeypatch.setattr(state_handlers, "ScannerAsyncEvalCoordinator", AsyncCoordinator)
+    monkeypatch.setattr(state_handlers, "ScannerGeneration", AsyncGeneration)
+    monkeypatch.setattr(
+        state_handlers,
+        "_resolve_scanner_async_entry_ai",
+        lambda *args, **kwargs: {"status": "dispatched"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_retry_entry_ai_submit_authority_before_block",
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("forced async retry must not call the sync provider path")
+        ),
+    )
+
+    stock = {"strategy": "SCALPING", "last_watching_ai_action": "WAIT"}
+    fields = state_handlers._maybe_retry_rising_missed_entry_ai_not_evaluated(
+        stock,
+        "123456",
+        {"curr": 10000},
+        {
+            "ai_engine": object(),
+            "now_ts": 1000.0,
+            "current_ai_score": 50.0,
+            "scanner_async_eval_coordinator": AsyncCoordinator(),
+            "scanner_async_generation": AsyncGeneration(),
+        },
+        curr_price=10000,
+        force_async=True,
+    )
+
+    assert fields["rising_missed_entry_ai_retry_reason"] == "async_pending"
+    assert fields["rising_missed_entry_ai_retry_async_status"] == "dispatched"
+
+
 def test_rising_missed_retry_applies_completed_async_result_without_sync_retry(
     monkeypatch,
 ):

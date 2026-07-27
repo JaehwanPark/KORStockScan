@@ -46670,6 +46670,18 @@ def _resolve_scanner_async_rising_missed_context(
     cache_key = _scanner_async_rising_missed_cache_key(stock, generation=generation)
     state_version = _scanner_async_entry_state_version(stock)
     commit_phase = bool(runtime.get("scanner_async_commit_phase"))
+    existing_generation = str(stock.get("_scanner_async_generation_id") or "").strip()
+    existing_cache_key = str(stock.get("_scanner_async_cache_key") or "").strip()
+    if (
+        not commit_phase
+        and existing_generation == generation.generation_id
+        and existing_cache_key
+        and not existing_cache_key.startswith("rising_missed:")
+    ):
+        return {
+            "status": "pending_other_async",
+            "reason": "entry_ai_pending_for_generation",
+        }
     result = (
         coordinator.take_completed(
             generation_id=generation.generation_id,
@@ -47218,8 +47230,6 @@ def _resolve_scanner_async_entry_ai(
             "completed_epoch": result.completed_epoch,
         }
 
-    if commit_phase:
-        return {"status": "commit_result_missing"}
     if coordinator.is_pending(
         generation_id=generation.generation_id,
         cache_key=cache_key,
@@ -53889,14 +53899,90 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
     if entry_ai_submit_authority.get("blocked") and not entry_ai_submit_authority.get(
         "entry_ai_submit_authority_fresh_drop_veto"
     ):
-        retry_fields = _retry_entry_ai_submit_authority_before_block(
-            stock=stock,
-            code=code,
-            ws_data=ws_data,
-            ai_engine=ai_engine,
-            now_ts=now_ts,
-            current_ai_score=latency_signal_score,
+        async_retry_enabled = bool(
+            runtime.get("rising_missed_async_final_commit")
+            and isinstance(
+                runtime.get("scanner_async_eval_coordinator"),
+                ScannerAsyncEvalCoordinator,
+            )
+            and isinstance(
+                runtime.get("scanner_async_generation"),
+                ScannerGeneration,
+            )
         )
+        if async_retry_enabled:
+            async_retry_fields = _maybe_retry_rising_missed_entry_ai_not_evaluated(
+                stock,
+                code,
+                ws_data,
+                runtime,
+                curr_price=curr_price,
+                force_async=True,
+            )
+            retry_fields = {
+                "pre_submit_entry_ai_authority_retry_attempted": bool(
+                    async_retry_fields.get("rising_missed_entry_ai_retry_attempted")
+                ),
+                "pre_submit_entry_ai_authority_retry_success": bool(
+                    async_retry_fields.get("rising_missed_entry_ai_retry_success")
+                ),
+                "pre_submit_entry_ai_authority_retry_reason": (
+                    async_retry_fields.get("rising_missed_entry_ai_retry_reason")
+                    or "unknown"
+                ),
+                "pre_submit_entry_ai_authority_retry_result_source": (
+                    async_retry_fields.get("rising_missed_entry_ai_retry_result_source")
+                    or "-"
+                ),
+                "pre_submit_entry_ai_authority_retry_score": (
+                    async_retry_fields.get("rising_missed_entry_ai_retry_score")
+                    or "0.0"
+                ),
+                "pre_submit_entry_ai_authority_retry_action": (
+                    async_retry_fields.get("rising_missed_entry_ai_retry_action")
+                    or "not_evaluated"
+                ),
+                "pre_submit_entry_ai_authority_retry_async_status": (
+                    async_retry_fields.get("rising_missed_entry_ai_retry_async_status")
+                    or "-"
+                ),
+            }
+            if (
+                retry_fields["pre_submit_entry_ai_authority_retry_reason"]
+                == "async_pending"
+            ):
+                _log_entry_pipeline(
+                    stock,
+                    code,
+                    "pre_submit_entry_ai_authority_async_pending",
+                    metric_role="runtime_scheduler_latency",
+                    decision_authority="scanner_async_preparation_dispatch_only",
+                    window_policy="per_scanner_generation_action_timestamps",
+                    sample_floor="one_async_scanner_dispatch",
+                    primary_decision_metric="ai_dispatch_wait_sec",
+                    source_quality_gate=(
+                        "canonical_generation_venue_and_snapshot_required"
+                    ),
+                    forbidden_uses=(
+                        "direct_broker_submit,threshold_mutation,"
+                        "provider_route_change,order_price_change,"
+                        "quantity_or_cap_change,broker_guard_bypass"
+                    ),
+                    runtime_effect=False,
+                    actual_order_submitted=False,
+                    broker_order_forbidden=True,
+                    **retry_fields,
+                )
+                return False
+        else:
+            retry_fields = _retry_entry_ai_submit_authority_before_block(
+                stock=stock,
+                code=code,
+                ws_data=ws_data,
+                ai_engine=ai_engine,
+                now_ts=now_ts,
+                current_ai_score=latency_signal_score,
+            )
         retry_submit_fields = dict(submit_revalidation_fields or {})
         retry_latency_gate = dict(latency_gate or {})
         retry_action = retry_fields.get("pre_submit_entry_ai_authority_retry_action")
@@ -57817,6 +57903,7 @@ def _maybe_retry_rising_missed_entry_ai_not_evaluated(
     runtime,
     *,
     curr_price,
+    force_async=False,
 ) -> dict:
     fields = {
         "rising_missed_entry_ai_retry_attempted": False,
@@ -57853,7 +57940,7 @@ def _maybe_retry_rising_missed_entry_ai_not_evaluated(
         fields["rising_missed_entry_ai_retry_cached_result_source"] = (
             cached_result_source
         )
-    if action != "not_evaluated":
+    if action != "not_evaluated" and not bool(force_async):
         return fields
     ai_engine = (runtime or {}).get("ai_engine")
     if ai_engine is None:
@@ -57866,6 +57953,11 @@ def _maybe_retry_rising_missed_entry_ai_not_evaluated(
         async_coordinator, ScannerAsyncEvalCoordinator
     ) and isinstance(async_generation, ScannerGeneration)
     if async_enabled:
+        async_trigger_reason = (
+            "pre_submit_entry_ai_authority_retry"
+            if force_async
+            else "rising_missed_entry_ai_not_evaluated"
+        )
         now_ts = _safe_float((runtime or {}).get("now_ts"), time.time())
         pending_for_generation = str(
             stock.get("_scanner_async_generation_id") or ""
@@ -57904,7 +57996,7 @@ def _maybe_retry_rising_missed_entry_ai_not_evaluated(
             dict(ws_data or {}),
             ai_engine,
             runtime,
-            trigger_reason="rising_missed_entry_ai_not_evaluated",
+            trigger_reason=async_trigger_reason,
             last_ai_time=_safe_float((LAST_AI_CALL_TIMES or {}).get(code), 0.0),
             current_ai_score=_safe_float((runtime or {}).get("current_ai_score"), 0.0),
         )
@@ -57966,7 +58058,7 @@ def _maybe_retry_rising_missed_entry_ai_not_evaluated(
                     ),
                     "last_watching_ai_source_quality_fields": source_quality_fields,
                     "last_watching_ai_call_trigger_reason": (
-                        "rising_missed_entry_ai_not_evaluated_async_v1"
+                        f"{async_trigger_reason}_async_v1"
                     ),
                 },
             )
@@ -57988,6 +58080,9 @@ def _maybe_retry_rising_missed_entry_ai_not_evaluated(
                     ),
                     "rising_missed_entry_ai_retry_action": action,
                     "rising_missed_entry_ai_retry_score": f"{score:.1f}",
+                    "rising_missed_entry_ai_retry_result_source": (
+                        result_source or "-"
+                    ),
                     "rising_missed_entry_ai_retry_current_price": _safe_int(
                         curr_price, 0
                     ),
@@ -59086,7 +59181,11 @@ def _maybe_submit_rising_missed_one_share_entry(
             current_ws_data,
             runtime,
         )
-        if async_context.get("status") in {"dispatched", "pending"}:
+        if async_context.get("status") in {
+            "dispatched",
+            "pending",
+            "pending_other_async",
+        }:
             return True
         if async_context.get("status") in {
             "commit_rejected",
