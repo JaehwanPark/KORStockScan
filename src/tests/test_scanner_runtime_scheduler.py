@@ -361,6 +361,201 @@ def test_initial_precheck_precedes_earlier_recurring_recheck():
     assert retry.fields["precheck_recheck_wait_sec"] == 1.1
 
 
+def test_initial_precheck_is_reserved_ahead_of_recovery_and_heavy_work():
+    scheduler = ScannerRuntimeScheduler(max_active=16)
+    observed = _register(
+        scheduler,
+        code="000001",
+        promotion_id="PROMO-OBSERVED",
+        attach_epoch=100.0,
+        promotion_epoch=99.0,
+    )
+    first = scheduler.next_decision(now_epoch=100.1)
+    scheduler.complete(first.item, completed_epoch=100.2, outcome="pass")
+    scheduler.enqueue(
+        observed.item.generation,
+        lane=ScannerLane.RECOVERY,
+        owner="old_recovery",
+        enqueued_epoch=100.2,
+        deadline_epoch=104.0,
+    )
+    scheduler.enqueue(
+        observed.item.generation,
+        lane=ScannerLane.HEAVY_EVAL,
+        owner="old_heavy",
+        enqueued_epoch=100.3,
+        deadline_epoch=104.5,
+    )
+    newcomer = _register(
+        scheduler,
+        code="000002",
+        promotion_id="PROMO-NEW",
+        attach_epoch=101.0,
+        promotion_epoch=100.5,
+    )
+
+    selected = scheduler.next_decision(now_epoch=101.1)
+
+    assert selected.action == "dispatch"
+    assert selected.item.generation == newcomer.item.generation
+    assert selected.item.lane is ScannerLane.FAST_PRECHECK
+    assert selected.reason == "earliest_deadline_first"
+
+
+def test_claim_noncritical_lane_yields_to_pending_initial_precheck():
+    scheduler = ScannerRuntimeScheduler(max_active=16)
+    observed = _register(
+        scheduler,
+        code="000001",
+        promotion_id="PROMO-OBSERVED",
+        attach_epoch=100.0,
+        promotion_epoch=99.0,
+    )
+    first = scheduler.next_decision(now_epoch=100.1)
+    scheduler.complete(first.item, completed_epoch=100.2, outcome="pass")
+    scheduler.enqueue(
+        observed.item.generation,
+        lane=ScannerLane.RECOVERY,
+        owner="old_recovery",
+        enqueued_epoch=100.2,
+        deadline_epoch=104.0,
+    )
+    newcomer = _register(
+        scheduler,
+        code="000002",
+        promotion_id="PROMO-NEW",
+        attach_epoch=101.0,
+        promotion_epoch=100.5,
+    )
+
+    deferred = scheduler.claim(
+        observed.item.generation,
+        lane=ScannerLane.RECOVERY,
+        now_epoch=101.1,
+    )
+
+    assert deferred.action == "not_next"
+    assert deferred.reason == "initial_fast_precheck_reservation"
+    assert deferred.item.generation == newcomer.item.generation
+
+
+def test_safety_and_commit_remain_ahead_of_initial_precheck_reservation():
+    scheduler = ScannerRuntimeScheduler(max_active=16)
+    critical = _register(
+        scheduler,
+        code="000001",
+        promotion_id="PROMO-CRITICAL",
+        attach_epoch=100.0,
+        promotion_epoch=99.0,
+    )
+    first = scheduler.next_decision(now_epoch=100.1)
+    scheduler.complete(first.item, completed_epoch=100.2, outcome="pass")
+    scheduler.enqueue(
+        critical.item.generation,
+        lane=ScannerLane.COMMIT,
+        owner="completed_async_result",
+        enqueued_epoch=100.2,
+        deadline_epoch=120.0,
+    )
+    scheduler.enqueue(
+        critical.item.generation,
+        lane=ScannerLane.SAFETY,
+        owner="receipt_safety",
+        enqueued_epoch=100.3,
+        deadline_epoch=120.0,
+    )
+    newcomer = _register(
+        scheduler,
+        code="000002",
+        promotion_id="PROMO-NEW",
+        attach_epoch=101.0,
+        promotion_epoch=100.5,
+    )
+
+    safety = scheduler.next_decision(now_epoch=101.1)
+    scheduler.complete(safety.item, completed_epoch=101.2, outcome="safe")
+    commit = scheduler.next_decision(now_epoch=101.3)
+    scheduler.complete(commit.item, completed_epoch=101.4, outcome="committed")
+    initial = scheduler.next_decision(now_epoch=101.5)
+
+    assert safety.item.lane is ScannerLane.SAFETY
+    assert commit.item.lane is ScannerLane.COMMIT
+    assert initial.item.generation == newcomer.item.generation
+    assert initial.item.lane is ScannerLane.FAST_PRECHECK
+
+
+def test_claim_noncritical_lane_yields_to_critical_before_initial_precheck():
+    scheduler = ScannerRuntimeScheduler(max_active=16)
+    critical = _register(
+        scheduler,
+        code="000001",
+        promotion_id="PROMO-CRITICAL",
+        attach_epoch=100.0,
+        promotion_epoch=99.0,
+    )
+    first = scheduler.next_decision(now_epoch=100.1)
+    scheduler.complete(first.item, completed_epoch=100.2, outcome="pass")
+    scheduler.enqueue(
+        critical.item.generation,
+        lane=ScannerLane.RECOVERY,
+        owner="recovery",
+        enqueued_epoch=100.2,
+    )
+    scheduler.enqueue(
+        critical.item.generation,
+        lane=ScannerLane.COMMIT,
+        owner="completed_async_result",
+        enqueued_epoch=100.3,
+        deadline_epoch=120.0,
+    )
+    _register(
+        scheduler,
+        code="000002",
+        promotion_id="PROMO-NEW",
+        attach_epoch=101.0,
+        promotion_epoch=100.5,
+    )
+
+    deferred = scheduler.claim(
+        critical.item.generation,
+        lane=ScannerLane.RECOVERY,
+        now_epoch=101.1,
+    )
+
+    assert deferred.action == "not_next"
+    assert deferred.reason == "critical_lane_reservation"
+    assert deferred.item.lane is ScannerLane.COMMIT
+
+
+def test_recurring_precheck_and_recovery_use_extended_non_initial_deadlines():
+    scheduler = ScannerRuntimeScheduler(max_active=16)
+    registered = _register(
+        scheduler,
+        attach_epoch=100.0,
+        promotion_epoch=99.0,
+    )
+    initial = scheduler.next_decision(now_epoch=100.1)
+    assert initial.item.deadline_epoch == 110.0
+    scheduler.complete(initial.item, completed_epoch=100.2, outcome="pass")
+
+    recurring = scheduler.enqueue(
+        registered.item.generation,
+        lane=ScannerLane.FAST_PRECHECK,
+        owner="recurring",
+        enqueued_epoch=101.0,
+    )
+    recovery = scheduler.enqueue(
+        registered.item.generation,
+        lane=ScannerLane.RECOVERY,
+        owner="recovery",
+        enqueued_epoch=101.0,
+    )
+
+    assert recurring.item.precheck_phase == "recheck"
+    assert recurring.item.deadline_epoch == 131.0
+    assert recovery.item.deadline_epoch == 131.0
+
+
 def test_expired_undispatched_precheck_retry_remains_initial():
     scheduler = ScannerRuntimeScheduler(max_active=16)
     registered = _register(
