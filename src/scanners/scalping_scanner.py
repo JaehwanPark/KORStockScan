@@ -2774,7 +2774,13 @@ def _log_scanner_candidate_event(
     )
 
 
-def _log_scanner_real_source_guard_block(target, source_guard, now_ts):
+def _log_scanner_real_source_guard_block(
+    target,
+    source_guard,
+    now_ts,
+    *,
+    venue_fields=None,
+):
     emit_pipeline_event(
         "ENTRY_PIPELINE",
         str(target.get("Name") or "-"),
@@ -2782,6 +2788,7 @@ def _log_scanner_real_source_guard_block(target, source_guard, now_ts):
         "scalping_scanner_real_source_guard_block",
         fields={
             **_scanner_event_fields(target, {**source_guard, "blocked": True}),
+            **dict(venue_fields or {}),
             "scanner_real_source_guard_applied": True,
             "scanner_real_source_guard_skip_reason": source_guard.get("reason"),
             "scanner_real_source_guard_block_event_emitted": True,
@@ -2883,6 +2890,7 @@ def promote_candidates(
     now_ts=None,
 ):
     now_ts = time.time() if now_ts is None else now_ts
+    candidate_venue_fields = scalping_session_venue_provenance(now_ts)
     new_codes_found = []
     recent_picks = _filter_picks_within_cooldown(
         recent_picks, now_ts, reentry_cooldown_sec
@@ -3015,7 +3023,6 @@ def promote_candidates(
         code = target["Code"]
         if _has_active_non_scanner_scalping_watching_code(db, code):
             continue
-        is_low_rebound_target = _is_low_rebound_target(target)
         is_low_rebound_reserved_priority_target = (
             _is_low_rebound_reserved_priority_target(target)
         )
@@ -3057,9 +3064,17 @@ def promote_candidates(
                 "source_signature": ",".join(_source_signature(target)),
             }
             _log_scanner_candidate_event(
-                "scalping_scanner_candidate_observed", target, source_guard
+                "scalping_scanner_candidate_observed",
+                target,
+                source_guard,
+                venue_fields=candidate_venue_fields,
             )
-            _log_scanner_real_source_guard_block(target, source_guard, now_ts)
+            _log_scanner_real_source_guard_block(
+                target,
+                source_guard,
+                now_ts,
+                venue_fields=candidate_venue_fields,
+            )
             _remember_guard_block(recent_picks, target, now_ts, pre_filter_reason)
             continue
         if not _should_promote_candidate(
@@ -3073,8 +3088,14 @@ def promote_candidates(
                 "scalping_scanner_candidate_observed",
                 target,
                 {**source_guard, "blocked": True},
+                venue_fields=candidate_venue_fields,
             )
-            _log_scanner_real_source_guard_block(target, source_guard, now_ts)
+            _log_scanner_real_source_guard_block(
+                target,
+                source_guard,
+                now_ts,
+                venue_fields=candidate_venue_fields,
+            )
             print(
                 "🧯 [SCALPING 스캐너 guard] "
                 f"{target['Name']}({code}) real WATCHING 승격 차단 "
@@ -3109,9 +3130,17 @@ def promote_candidates(
                 "source_signature": ",".join(_source_signature(target)),
             }
             _log_scanner_candidate_event(
-                "scalping_scanner_candidate_observed", target, source_guard
+                "scalping_scanner_candidate_observed",
+                target,
+                source_guard,
+                venue_fields=candidate_venue_fields,
             )
-            _log_scanner_real_source_guard_block(target, source_guard, now_ts)
+            _log_scanner_real_source_guard_block(
+                target,
+                source_guard,
+                now_ts,
+                venue_fields=candidate_venue_fields,
+            )
             _remember_guard_block(recent_picks, target, now_ts, "invalid_stock_filter")
             continue
 
@@ -3127,8 +3156,14 @@ def promote_candidates(
                 "scalping_scanner_candidate_observed",
                 target,
                 {**source_guard, "blocked": True},
+                venue_fields=candidate_venue_fields,
             )
-            _log_scanner_real_source_guard_block(target, source_guard, now_ts)
+            _log_scanner_real_source_guard_block(
+                target,
+                source_guard,
+                now_ts,
+                venue_fields=candidate_venue_fields,
+            )
             log_error(
                 "[SCANNER_SOURCE_IDENTITY_GUARD] candidate rejected "
                 f"code={code} payload_name={identity_decision.get('scanner_source_identity_payload_name')} "
@@ -3755,6 +3790,7 @@ def _build_low_rebound_rising_missed_targets(
             chase_distance_pct=chase_distance_pct,
             candle_limit=candle_limit,
             selection_reasons=selection_reasons,
+            venue_fields=scalping_session_venue_provenance(),
         )
     return candidates
 
@@ -3768,6 +3804,7 @@ def _log_low_rebound_source_observation(
     chase_distance_pct,
     candle_limit,
     selection_reasons,
+    venue_fields=None,
 ):
     emit_pipeline_event(
         "ENTRY_PIPELINE",
@@ -3775,6 +3812,7 @@ def _log_low_rebound_source_observation(
         "",
         "scalping_scanner_low_rebound_source_observed",
         fields={
+            **dict(venue_fields or {}),
             "metric_role": "funnel_count",
             "decision_authority": "scalping_scanner_source_only_low_rebound_observation",
             "source_quality_gate": "scalping_scanner_low_rebound_source_observation_contract",

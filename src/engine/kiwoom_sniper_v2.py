@@ -5094,6 +5094,7 @@ def _expire_scalping_watch_budget_targets(
             "scalping_scanner_watch_budget_reallocated",
             record_id=target.get("id"),
             fields={
+                **_scanner_runtime_target_venue_fields({}, target=target),
                 "metric_role": "runtime_capacity_provenance",
                 "decision_authority": "scanner_observation_budget_only",
                 "runtime_effect": True,

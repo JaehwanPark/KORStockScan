@@ -3246,6 +3246,16 @@ def test_low_rebound_source_observation_emits_cap_independent_summary(monkeypatc
 
     monkeypatch.setattr(scalping_scanner, "emit_pipeline_event", fake_emit)
     monkeypatch.setattr(kiwoom_utils, "get_minute_candles_ka10080", fake_candles)
+    monkeypatch.setattr(
+        scalping_scanner,
+        "scalping_session_venue_provenance",
+        lambda *_args, **_kwargs: {
+            "venue": "KRX",
+            "effective_venue": "KRX",
+            "venue_resolution": "scanner_session_clock:krx_regular",
+            "market_session_bucket": "krx_regular",
+        },
+    )
 
     rows = scalping_scanner._build_low_rebound_rising_missed_targets(
         "TOKEN",
@@ -3272,6 +3282,9 @@ def test_low_rebound_source_observation_emits_cap_independent_summary(monkeypatc
     assert fields["runtime_effect"] is False
     assert fields["actual_order_submitted"] is False
     assert fields["broker_order_forbidden"] is True
+    assert fields["effective_venue"] == "KRX"
+    assert fields["venue_resolution"] == "scanner_session_clock:krx_regular"
+    assert fields["market_session_bucket"] == "krx_regular"
     assert (
         fields["source_signature"] == scalping_scanner.LOW_REBOUND_RISING_MISSED_SOURCE
     )
@@ -4319,6 +4332,11 @@ def test_real_source_guard_blocks_deteriorating_value_top_only_without_strength(
     assert event["fields"]["scanner_real_source_guard_block_event_emitted"] is True
     assert event["fields"]["actual_order_submitted"] is False
     assert event["fields"]["broker_order_forbidden"] is True
+    assert event["fields"]["effective_venue"] == "KRX"
+    assert event["fields"]["venue_resolution"] == ("scanner_session_clock:krx_regular")
+    assert event["fields"]["market_session_bucket"] == "krx_regular"
+    assert emitted[0]["fields"]["effective_venue"] == "KRX"
+    assert emitted[0]["fields"]["market_session_bucket"] == "krx_regular"
     assert (
         event["fields"]["decision_authority"]
         == "real_scalping_scanner_source_guard_only"
