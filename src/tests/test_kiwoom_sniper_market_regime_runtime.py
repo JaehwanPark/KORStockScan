@@ -6252,6 +6252,88 @@ def test_scanner_rising_stale_ws_gap_priority_expires_after_standard_stale_guard
     assert decision["stale_age_sec"] == 91.0
 
 
+def test_scanner_initial_attach_without_0b_or_0d_keeps_existing_stale_lifetime():
+    stock = {
+        "id": 90,
+        "code": "399720",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "scanner_attach_epoch": 2000.0,
+        "_scanner_fast_precheck_fields": {
+            "fast_precheck_result": "budget_reallocated",
+            "fast_precheck_reason": "scanner_ws_stale_backoff_active",
+            "scanner_ws_stale_backoff_until": 2035.0,
+            "ws_received_types": "",
+        },
+        "_scanner_ws_backoff_watch_retention_first_epoch": 2000.0,
+        "_scanner_ws_backoff_watch_retention_count": 1,
+    }
+
+    retained = (
+        kiwoom_sniper_v2._scanner_watch_eviction_decision_from_fast_precheck_budget(
+            stock,
+            now_ts=2031.0,
+        )
+    )
+    expired = (
+        kiwoom_sniper_v2._scanner_watch_eviction_decision_from_fast_precheck_budget(
+            stock,
+            now_ts=2091.0,
+        )
+    )
+
+    assert retained["should_evict"] is False
+    assert retained["initial_entry_ws_receipt_pending"] is True
+    assert retained["initial_entry_ws_receipt_lifetime_contract_sec"] == 90.0
+    assert expired["should_evict"] is True
+    assert expired["ws_backoff_retention_age_sec"] == 91.0
+
+
+def test_scanner_initial_attach_lifetime_contract_waits_for_both_entry_ws_types():
+    stock = {
+        "id": 91,
+        "code": "399720",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "scanner_attach_epoch": 2000.0,
+        "_scanner_fast_precheck_fields": {
+            "fast_precheck_result": "budget_reallocated",
+            "fast_precheck_reason": "scanner_ws_stale_backoff_active",
+            "scanner_ws_stale_backoff_until": 2035.0,
+            "ws_received_types": "0B,0D",
+            "ws_last_0b_epoch": "2025.000000",
+            "ws_last_0d_epoch": "1999.000000",
+        },
+        "_scanner_ws_backoff_watch_retention_first_epoch": 2000.0,
+        "_scanner_ws_backoff_watch_retention_count": 1,
+    }
+
+    retained = (
+        kiwoom_sniper_v2._scanner_watch_eviction_decision_from_fast_precheck_budget(
+            stock,
+            now_ts=2031.0,
+        )
+    )
+
+    assert retained["initial_entry_ws_receipt_pending"] is True
+    assert retained["should_evict"] is False
+    assert retained["ws_backoff_retention_max_sec"] == 90.0
+
+    stock["_scanner_fast_precheck_fields"]["ws_last_0d_epoch"] = "2026.000000"
+    complete = (
+        kiwoom_sniper_v2._scanner_watch_eviction_decision_from_fast_precheck_budget(
+            stock,
+            now_ts=2031.0,
+        )
+    )
+
+    assert complete["initial_entry_ws_receipt_pending"] is False
+    assert complete["should_evict"] is True
+    assert complete["ws_backoff_retention_max_sec"] == 30.0
+
+
 def test_scanner_rising_insufficient_history_evicts_after_buy_window(monkeypatch):
     monkeypatch.setenv(
         "KORSTOCKSCAN_SCANNER_RISING_WS_GAP_PRIORITY_RECOVERY_ENABLED", "true"

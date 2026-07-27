@@ -3980,6 +3980,8 @@ def test_emit_scanner_watching_runtime_skip_reports_ws_type_freshness(monkeypatc
     assert fields["ws_received_type_count"] == 2
     assert fields["ws_last_0b_age_ms"] == 1000.0
     assert fields["ws_last_0d_age_ms"] == 10000.0
+    assert fields["ws_last_0b_epoch"] == "1099.000000"
+    assert fields["ws_last_0d_epoch"] == "1090.000000"
     assert fields["ws_last_strength_history_age_ms"] == 500.0
     assert fields["ws_strength_history_count"] == 1
 

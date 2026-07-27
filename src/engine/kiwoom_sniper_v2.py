@@ -378,7 +378,7 @@ _SCANNER_FULL_EVAL_PRESSURE_STATE = {
     "relief_streak": 0,
 }
 _SCANNER_WATCH_FULL_EVAL_DEFERRED_STATE = {}
-SCANNER_WATCH_EVICTION_POLICY_VERSION = "scalping_scanner_watch_eviction_v7"
+SCANNER_WATCH_EVICTION_POLICY_VERSION = "scalping_scanner_watch_eviction_v8"
 SCANNER_WATCH_EVICTION_TERMINAL_MIN_COUNT = 2
 SCANNER_WATCH_EVICTION_PREFILTER_HARDGATE_STAGES = {
     "blocked_strength_momentum",
@@ -3398,6 +3398,29 @@ def _scanner_watch_eviction_event_fields(target, *, decision):
         or "not_applicable_ws_backoff_retention_attempt_count",
         "ws_backoff_retention_min_count": decision.get("ws_backoff_retention_min_count")
         or "not_applicable_ws_backoff_retention_min_count",
+        "initial_entry_ws_receipt_pending": bool(
+            decision.get("initial_entry_ws_receipt_pending")
+        ),
+        "initial_entry_ws_receipt_required_types": decision.get(
+            "initial_entry_ws_receipt_required_types"
+        )
+        or "not_applicable_initial_entry_ws_receipt_required_types",
+        "initial_entry_ws_receipt_observed_types": decision.get(
+            "initial_entry_ws_receipt_observed_types"
+        )
+        or "not_applicable_initial_entry_ws_receipt_observed_types",
+        "initial_entry_ws_receipt_reported_types": decision.get(
+            "initial_entry_ws_receipt_reported_types"
+        )
+        or "not_applicable_initial_entry_ws_receipt_reported_types",
+        "initial_entry_ws_receipt_attach_epoch": decision.get(
+            "initial_entry_ws_receipt_attach_epoch"
+        )
+        or "not_applicable_initial_entry_ws_receipt_attach_epoch",
+        "initial_entry_ws_receipt_lifetime_contract_sec": decision.get(
+            "initial_entry_ws_receipt_lifetime_contract_sec"
+        )
+        or "not_applicable_initial_entry_ws_receipt_lifetime_contract_sec",
         "ws_backoff_until": decision.get("ws_backoff_until")
         or "not_applicable_ws_backoff_until",
         "source_quality_detail_route": decision.get("source_quality_detail_route")
@@ -3698,6 +3721,36 @@ def _scanner_watch_eviction_decision_from_fast_precheck_budget(
 
     if fast_precheck_reason == "scanner_ws_stale_backoff_active":
         now_value = float(now_ts)
+        received_types = {
+            item.strip().upper()
+            for item in str(fast_precheck_fields.get("ws_received_types") or "")
+            .replace("|", ",")
+            .split(",")
+            if item.strip()
+        }
+        attach_epoch = _safe_float(
+            (target or {}).get("scanner_attach_epoch"),
+            0.0,
+        )
+        required_entry_types = {"0B", "0D"}
+        post_attach_received_types = {
+            realtime_type
+            for realtime_type, observed_epoch in (
+                (
+                    "0B",
+                    _safe_float(fast_precheck_fields.get("ws_last_0b_epoch"), 0.0),
+                ),
+                (
+                    "0D",
+                    _safe_float(fast_precheck_fields.get("ws_last_0d_epoch"), 0.0),
+                ),
+            )
+            if attach_epoch > 0 and observed_epoch >= attach_epoch
+        }
+        initial_entry_ws_receipt_pending = bool(
+            attach_epoch > 0
+            and not required_entry_types.issubset(post_attach_received_types)
+        )
         backoff_until = _safe_float(
             fast_precheck_fields.get("scanner_ws_stale_backoff_until"), 0.0
         )
@@ -3706,7 +3759,11 @@ def _scanner_watch_eviction_decision_from_fast_precheck_budget(
             0.0,
         )
         if previous_first_epoch <= 0:
-            first_epoch = now_value
+            first_epoch = (
+                min(now_value, attach_epoch)
+                if initial_entry_ws_receipt_pending
+                else now_value
+            )
             attempt_count = 1
         else:
             first_epoch = previous_first_epoch
@@ -3719,10 +3776,17 @@ def _scanner_watch_eviction_decision_from_fast_precheck_budget(
             )
         age_sec = max(0.0, now_value - first_epoch)
         min_sec = _scanner_ws_backoff_watch_retention_min_sec()
-        max_sec = _scanner_ws_backoff_watch_retention_max_sec()
+        configured_max_sec = _scanner_ws_backoff_watch_retention_max_sec()
+        max_sec = (
+            max(configured_max_sec, SCANNER_WATCH_EVICTION_STALE_MIN_AGE_SEC)
+            if initial_entry_ws_receipt_pending
+            else configured_max_sec
+        )
         min_count = _scanner_ws_backoff_watch_retention_min_count()
         should_evict = age_sec >= max_sec or (
-            age_sec >= min_sec and attempt_count >= min_count
+            not initial_entry_ws_receipt_pending
+            and age_sec >= min_sec
+            and attempt_count >= min_count
         )
         target["_scanner_ws_backoff_watch_retention_active"] = not should_evict
         target["_scanner_ws_backoff_watch_retention_first_epoch"] = first_epoch
@@ -3769,6 +3833,26 @@ def _scanner_watch_eviction_decision_from_fast_precheck_budget(
             "ws_backoff_retention_max_sec": round(max_sec, 3),
             "ws_backoff_retention_attempt_count": attempt_count,
             "ws_backoff_retention_min_count": min_count,
+            "initial_entry_ws_receipt_pending": initial_entry_ws_receipt_pending,
+            "initial_entry_ws_receipt_required_types": "0B|0D",
+            "initial_entry_ws_receipt_observed_types": (
+                ",".join(sorted(post_attach_received_types))
+                if post_attach_received_types
+                else "none"
+            ),
+            "initial_entry_ws_receipt_reported_types": (
+                ",".join(sorted(received_types)) if received_types else "none"
+            ),
+            "initial_entry_ws_receipt_attach_epoch": (
+                f"{attach_epoch:.3f}"
+                if attach_epoch > 0
+                else "not_available_scanner_attach_epoch"
+            ),
+            "initial_entry_ws_receipt_lifetime_contract_sec": (
+                round(max_sec, 3)
+                if initial_entry_ws_receipt_pending
+                else "not_applicable_initial_receipt_lifetime"
+            ),
             "ws_backoff_until": (
                 f"{backoff_until:.3f}"
                 if backoff_until > 0
@@ -3859,6 +3943,24 @@ def _maybe_expire_scanner_watch_for_fast_precheck_budget(
                     ),
                     "retention_min_count": decision.get(
                         "ws_backoff_retention_min_count"
+                    ),
+                    "initial_entry_ws_receipt_pending": bool(
+                        decision.get("initial_entry_ws_receipt_pending")
+                    ),
+                    "initial_entry_ws_receipt_required_types": decision.get(
+                        "initial_entry_ws_receipt_required_types"
+                    ),
+                    "initial_entry_ws_receipt_observed_types": decision.get(
+                        "initial_entry_ws_receipt_observed_types"
+                    ),
+                    "initial_entry_ws_receipt_reported_types": decision.get(
+                        "initial_entry_ws_receipt_reported_types"
+                    ),
+                    "initial_entry_ws_receipt_attach_epoch": decision.get(
+                        "initial_entry_ws_receipt_attach_epoch"
+                    ),
+                    "initial_entry_ws_receipt_lifetime_contract_sec": decision.get(
+                        "initial_entry_ws_receipt_lifetime_contract_sec"
                     ),
                     "ws_backoff_until": decision.get("ws_backoff_until"),
                     "fast_precheck_result": decision.get("fast_precheck_result"),
@@ -9543,6 +9645,22 @@ def run_sniper(is_test_mode=False):
                 "scanner_async_eval_coordinator",
                 None,
             )
+
+            def _scanner_async_commit_ready_for_main_thread() -> bool:
+                """Yield between synchronous units when a COMMIT is ready.
+
+                Completed worker output remains inside the coordinator until
+                the next outer-loop drain enqueues its scheduler COMMIT lane.
+                This is deliberately a main-thread-only cooperative yield:
+                it neither applies a result nor changes any trading state.
+                """
+
+                return bool(
+                    _scanner_scheduler_startup_mode() == "async_v1"
+                    and isinstance(async_coordinator, ScannerAsyncEvalCoordinator)
+                    and async_coordinator.has_undrained_result()
+                )
+
             if _scanner_scheduler_startup_mode() == "async_v1" and isinstance(
                 async_coordinator, ScannerAsyncEvalCoordinator
             ):
@@ -10260,9 +10378,16 @@ def run_sniper(is_test_mode=False):
                 nonlocal scanner_heavy_eval_flushed
                 if scanner_heavy_eval_flushed:
                     return
+                # A completed async preparation has a one-second COMMIT
+                # budget.  Do not start another synchronous heavy unit before
+                # the outer loop drains and schedules that commit.
+                if _scanner_async_commit_ready_for_main_thread():
+                    return
                 # Guarantee backlog progress before newly attached watches preempt it.
                 heavy_eval_attempted = False
                 while delayed_scanner_heavy_eval:
+                    if _scanner_async_commit_ready_for_main_thread():
+                        return
                     if heavy_eval_attempted and _admit_runtime_live_attaches():
                         return
                     delayed_scanner_heavy_eval.sort(
@@ -10741,6 +10866,11 @@ def run_sniper(is_test_mode=False):
                 return len(admitted_targets)
 
             while True:
+                # A worker can finish while a prior target was handled.  End
+                # this local pass so the next outer iteration drains it into
+                # ScannerLane.COMMIT before handling unrelated WATCHING work.
+                if _scanner_async_commit_ready_for_main_thread():
+                    break
                 if not runtime_work_queue:
                     _flush_delayed_scanner_heavy_eval()
                     if runtime_work_queue:
@@ -11621,6 +11751,12 @@ def run_sniper(is_test_mode=False):
                                     "ws_backoff_retention_max_sec",
                                     "ws_backoff_retention_attempt_count",
                                     "ws_backoff_retention_min_count",
+                                    "initial_entry_ws_receipt_pending",
+                                    "initial_entry_ws_receipt_required_types",
+                                    "initial_entry_ws_receipt_observed_types",
+                                    "initial_entry_ws_receipt_reported_types",
+                                    "initial_entry_ws_receipt_attach_epoch",
+                                    "initial_entry_ws_receipt_lifetime_contract_sec",
                                     "ws_backoff_until",
                                 ):
                                     if field_name in fast_precheck_budget_decision:

@@ -15862,11 +15862,23 @@ def _ws_realtime_type_freshness_fields(
         if isinstance(last_trade, dict)
         else 0.0
     )
+    last_0b_ts = _safe_float(type_ts.get("0B") or last_trade_ts, 0.0)
+    last_0d_ts = _safe_float(type_ts.get("0D"), 0.0)
     return {
         "ws_received_types": ",".join(received_types) if received_types else "-",
         "ws_received_type_count": len(received_types),
-        "ws_last_0b_age_ms": _age_ms(type_ts.get("0B") or last_trade_ts),
-        "ws_last_0d_age_ms": _age_ms(type_ts.get("0D")),
+        "ws_last_0b_age_ms": _age_ms(last_0b_ts),
+        "ws_last_0d_age_ms": _age_ms(last_0d_ts),
+        "ws_last_0b_epoch": (
+            f"{last_0b_ts:.6f}"
+            if last_0b_ts > 0
+            else "not_available_realtime_type_epoch"
+        ),
+        "ws_last_0d_epoch": (
+            f"{last_0d_ts:.6f}"
+            if last_0d_ts > 0
+            else "not_available_realtime_type_epoch"
+        ),
         "ws_last_0w_age_ms": _age_ms(type_ts.get("0w")),
         "ws_last_0f_age_ms": _age_ms(type_ts.get("0F")),
         "ws_last_strength_history_age_ms": _age_ms(latest_history_ts),

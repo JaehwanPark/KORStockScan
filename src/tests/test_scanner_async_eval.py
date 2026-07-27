@@ -128,6 +128,48 @@ def test_context_only_preparation_completes_without_ai_dispatch():
     assert result.ai_response_sec == 0.0
 
 
+def test_undrained_result_probe_closes_after_scheduler_drain_without_consuming_commit():
+    """A heavy-loop yield must leave the result for the COMMIT owner."""
+
+    dispatcher = HotPathAIDispatcher(loaded_key_count=1)
+    coordinator = ScannerAsyncEvalCoordinator(ai_dispatcher=dispatcher)
+    now = time.time()
+    context = ScannerAsyncEvalContext.create(
+        generation=_generation(),
+        cache_key="commit-ready-probe",
+        submitted_epoch=now,
+        deadline_epoch=now + 1,
+        stock_snapshot={"status": "WATCHING"},
+        ws_snapshot={"curr": 1000},
+        state_version="WATCHING:0:0",
+    )
+    assert coordinator.submit(
+        ScannerAsyncEvalRequest(
+            context=context,
+            prepare=lambda _ctx: {"ready": True},
+            evaluate=lambda _ctx, _prepared: {},
+            requires_ai_dispatch=False,
+        )
+    ).accepted
+
+    deadline = time.time() + 1
+    while not coordinator.has_undrained_result() and time.time() < deadline:
+        time.sleep(0.005)
+    completed = coordinator.drain_completed()
+    assert len(completed) == 1
+    assert coordinator.has_undrained_result() is False
+    assert coordinator.has_completed_result() is True
+    result = coordinator.take_completed(
+        generation_id=context.generation.generation_id,
+        cache_key=context.cache_key,
+    )
+    coordinator.shutdown()
+
+    assert result is not None
+    assert result.status == "completed"
+    assert result.prepared_context["ready"] is True
+
+
 def test_async_eval_superseded_result_is_observation_only():
     dispatcher = HotPathAIDispatcher(loaded_key_count=1)
     coordinator = ScannerAsyncEvalCoordinator(ai_dispatcher=dispatcher)

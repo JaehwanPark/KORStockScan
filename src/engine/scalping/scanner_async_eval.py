@@ -171,6 +171,7 @@ class ScannerAsyncEvalCoordinator:
         self._preparation_timings: dict[str, tuple[float, float]] = {}
         self._completed: SimpleQueue[ScannerAsyncEvalResult] = SimpleQueue()
         self._ready: dict[str, ScannerAsyncEvalResult] = {}
+        self._undrained_request_ids: set[str] = set()
         self._cancelled_generations: set[str] = set()
         self._closed = False
 
@@ -397,6 +398,7 @@ class ScannerAsyncEvalCoordinator:
             self._prepared.pop(context.request_id, None)
             self._preparation_timings.pop(context.request_id, None)
             self._ready[context.request_id] = result
+            self._undrained_request_ids.add(context.request_id)
             while len(self._ready) > _MAX_READY_RESULTS:
                 oldest_request_id = next(iter(self._ready))
                 self._ready.pop(oldest_request_id, None)
@@ -410,9 +412,12 @@ class ScannerAsyncEvalCoordinator:
         max_items = None if limit is None else max(0, int(limit))
         while max_items is None or len(completed) < max_items:
             try:
-                completed.append(self._completed.get_nowait())
+                result = self._completed.get_nowait()
             except Empty:
                 break
+            with self._lock:
+                self._undrained_request_ids.discard(result.request_id)
+            completed.append(result)
         return completed
 
     def take_completed(
@@ -440,6 +445,32 @@ class ScannerAsyncEvalCoordinator:
         )
         with self._lock:
             return request_id in self._requests
+
+    def has_completed_result(self) -> bool:
+        """Report a result retained for main-thread COMMIT consumption.
+
+        This remains true after the outer notification drain and must not be
+        used as a cooperative-yield signal. The caller still needs
+        ``take_completed`` or ``discard_completed`` to close the retained
+        result.
+        """
+
+        self.poll()
+        with self._lock:
+            return bool(self._ready)
+
+    def has_undrained_result(self) -> bool:
+        """Report worker output that the outer main-thread drain has not seen.
+
+        A result remains in ``_ready`` after the drain because the scheduler
+        COMMIT lane still needs to consume it. Using that retained state as a
+        cooperative-yield signal would make the main loop yield before it can
+        execute the COMMIT.
+        """
+
+        self.poll()
+        with self._lock:
+            return bool(self._undrained_request_ids)
 
     def invalidate_generation(self, generation_id: str) -> None:
         normalized = str(generation_id or "").strip()
