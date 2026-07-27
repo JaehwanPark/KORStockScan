@@ -84,11 +84,17 @@ def _clear_scalp_loss_reentry_state(request, monkeypatch, tmp_path):
     monkeypatch.setenv(
         "KORSTOCKSCAN_MANUAL_CONTROL_OPEN_LOSS_EXCLUSION_WINDOW_SEC", "0"
     )
-    if request.node.name not in {
+    pipeline_loader_required = request.node.name in {
         "test_scalp_same_symbol_loss_reentry_guard_hydrates_from_pipeline_events",
         "test_scalp_loss_reentry_event_cache_reads_only_appended_tail",
         "test_scalp_loss_reentry_cooldown_invalidated_by_realized_sell_profit",
-    }:
+    } or request.node.name.startswith(
+        (
+            "test_rising_missed_same_day_reentry",
+            "test_rising_missed_weak_micro_reentry",
+        )
+    )
+    if not pipeline_loader_required:
         monkeypatch.setattr(
             state_handlers,
             "_load_scalp_loss_reentry_cooldown_events",

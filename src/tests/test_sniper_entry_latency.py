@@ -299,6 +299,53 @@ def test_scanner_promotion_loader_prefers_internal_epoch_over_delayed_emit(
     assert loaded["123456"][-1]["promotion_epoch"] == 1784870038.498
 
 
+def test_scanner_promotion_loader_decodes_only_appended_tail(monkeypatch, tmp_path):
+    path = tmp_path / "pipeline_events_2026-07-24.jsonl"
+    first = {
+        "stage": "scalping_scanner_candidate_promoted",
+        "stock_code": "123456",
+        "emitted_at": "2026-07-24T14:14:00+09:00",
+        "fields": {
+            "scanner_promotion_id": "FIRST",
+            "scanner_promotion_emitted_epoch": "1784862655.815",
+        },
+    }
+    path.write_text(json.dumps(first) + "\n", encoding="utf-8")
+    monkeypatch.setattr(
+        state_handlers, "_scanner_promotion_events_path", lambda target_date: path
+    )
+    monkeypatch.setattr(state_handlers, "_SCANNER_PROMOTION_CONTEXT_CACHE", {})
+    state_handlers._load_scanner_promotion_context_events("2026-07-24")
+
+    original_json_loads = json.loads
+    decoded_rows = []
+
+    def tracking_json_loads(payload, *args, **kwargs):
+        decoded_rows.append(payload)
+        return original_json_loads(payload, *args, **kwargs)
+
+    monkeypatch.setattr(state_handlers.json, "loads", tracking_json_loads)
+    second = {
+        "stage": "scalping_scanner_candidate_promoted",
+        "stock_code": "123456",
+        "emitted_at": "2026-07-24T14:15:00+09:00",
+        "fields": {
+            "scanner_promotion_id": "SECOND",
+            "scanner_promotion_emitted_epoch": "1784862715.815",
+        },
+    }
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(second) + "\n")
+
+    loaded = state_handlers._load_scanner_promotion_context_events("2026-07-24")
+
+    assert len(decoded_rows) == 1
+    assert [row["fields"]["scanner_promotion_id"] for row in loaded["123456"]] == [
+        "FIRST",
+        "SECOND",
+    ]
+
+
 def test_scanner_promotion_context_accepts_explicit_zero_strength():
     stock = {
         "scanner_promotion_reason": "price_jump_start_acceleration",

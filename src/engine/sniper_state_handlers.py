@@ -30,7 +30,7 @@ from src.database.models import HoldingAddHistory, RecommendationHistory
 from src.engine import kiwoom_orders, sniper_trade_utils
 from src.utils import kiwoom_utils
 from src.utils.constants import DATA_DIR
-from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
+from src.utils.jsonl_io import existing_or_gzip_path
 from src.utils.logger import log_error, log_info
 from src.utils.pipeline_event_logger import emit_pipeline_event
 from src.engine.sniper_time import (
@@ -635,8 +635,11 @@ _SCANNER_PROMOTION_CONTEXT_FIELDS = (
 _SCANNER_PROMOTION_CONTEXT_CACHE: dict[str, Any] = {
     "date": "",
     "path": "",
+    "device": 0,
+    "inode": 0,
     "mtime_ns": 0,
     "size": 0,
+    "offset": 0,
     "events_by_code": {},
 }
 
@@ -716,8 +719,11 @@ def _load_scanner_promotion_context_events(
             {
                 "date": target_date,
                 "path": str(path),
+                "device": 0,
+                "inode": 0,
                 "mtime_ns": 0,
                 "size": 0,
+                "offset": 0,
                 "events_by_code": {},
             }
         )
@@ -728,11 +734,31 @@ def _load_scanner_promotion_context_events(
         and cache.get("path") == str(path)
         and int(cache.get("mtime_ns") or 0) == int(getattr(stat, "st_mtime_ns", 0) or 0)
         and int(cache.get("size") or 0) == int(getattr(stat, "st_size", 0) or 0)
+        and (
+            path.suffix.lower() == ".gz"
+            or int(cache.get("offset") or 0) >= int(getattr(stat, "st_size", 0) or 0)
+        )
     ):
         return cache.get("events_by_code") or {}
 
-    events_by_code: dict[str, list[dict[str, Any]]] = {}
-    for payload in iter_jsonl(path, errors="ignore"):
+    same_file = (
+        path.suffix.lower() != ".gz"
+        and cache.get("date") == target_date
+        and cache.get("path") == str(path)
+        and int(cache.get("device") or 0) == int(getattr(stat, "st_dev", 0) or 0)
+        and int(cache.get("inode") or 0) == int(getattr(stat, "st_ino", 0) or 0)
+        and 0 <= int(cache.get("offset") or 0) <= int(getattr(stat, "st_size", 0) or 0)
+    )
+    start_offset = int(cache.get("offset") or 0) if same_file else 0
+    events_by_code: dict[str, list[dict[str, Any]]] = (
+        cache.get("events_by_code") or {} if same_file else {}
+    )
+    payloads, next_offset = _read_pipeline_events_for_stages(
+        path,
+        {"scalping_scanner_candidate_promoted"},
+        start_offset=start_offset,
+    )
+    for payload in payloads:
         if str(payload.get("stage") or "") != "scalping_scanner_candidate_promoted":
             continue
         code = str(payload.get("stock_code") or "").strip()[:6]
@@ -758,12 +784,16 @@ def _load_scanner_promotion_context_events(
                 item.get("promotion_epoch") or item.get("emitted_epoch") or 0.0
             )
         )
+    refreshed_stat = path.stat()
     cache.update(
         {
             "date": target_date,
             "path": str(path),
-            "mtime_ns": int(getattr(stat, "st_mtime_ns", 0) or 0),
-            "size": int(getattr(stat, "st_size", 0) or 0),
+            "device": int(getattr(refreshed_stat, "st_dev", 0) or 0),
+            "inode": int(getattr(refreshed_stat, "st_ino", 0) or 0),
+            "mtime_ns": int(getattr(refreshed_stat, "st_mtime_ns", 0) or 0),
+            "size": int(getattr(refreshed_stat, "st_size", 0) or 0),
+            "offset": next_offset,
             "events_by_code": events_by_code,
         }
     )
@@ -915,8 +945,11 @@ _RISING_MISSED_SAME_DAY_REENTRY_RISK: dict[str, dict] = {}
 _RISING_MISSED_REENTRY_RISK_EVENT_CACHE: dict[str, Any] = {
     "date": "",
     "path": "",
+    "device": 0,
+    "inode": 0,
     "mtime_ns": 0,
     "size": 0,
+    "offset": 0,
     "rows_by_code": {},
 }
 _RISING_MISSED_COMPLETED_SCALP_EVENT_CACHE: dict[str, Any] = {
@@ -19102,8 +19135,11 @@ def _load_rising_missed_reentry_risk_events(target_date: str) -> dict[str, list[
             {
                 "date": target_date,
                 "path": str(path),
+                "device": 0,
+                "inode": 0,
                 "mtime_ns": 0,
                 "size": 0,
+                "offset": 0,
                 "rows_by_code": {},
             }
         )
@@ -19114,11 +19150,31 @@ def _load_rising_missed_reentry_risk_events(target_date: str) -> dict[str, list[
         and cache.get("path") == str(path)
         and int(cache.get("mtime_ns") or 0) == int(getattr(stat, "st_mtime_ns", 0) or 0)
         and int(cache.get("size") or 0) == int(getattr(stat, "st_size", 0) or 0)
+        and (
+            path.suffix.lower() == ".gz"
+            or int(cache.get("offset") or 0) >= int(getattr(stat, "st_size", 0) or 0)
+        )
     ):
         return cache.get("rows_by_code") or {}
 
-    rows_by_code: dict[str, list[dict]] = {}
-    for payload in iter_jsonl(path, errors="ignore"):
+    same_file = (
+        path.suffix.lower() != ".gz"
+        and cache.get("date") == target_date
+        and cache.get("path") == str(path)
+        and int(cache.get("device") or 0) == int(getattr(stat, "st_dev", 0) or 0)
+        and int(cache.get("inode") or 0) == int(getattr(stat, "st_ino", 0) or 0)
+        and 0 <= int(cache.get("offset") or 0) <= int(getattr(stat, "st_size", 0) or 0)
+    )
+    start_offset = int(cache.get("offset") or 0) if same_file else 0
+    rows_by_code: dict[str, list[dict]] = (
+        cache.get("rows_by_code") or {} if same_file else {}
+    )
+    payloads, next_offset = _read_pipeline_events_for_stages(
+        path,
+        {"rising_missed_same_day_reentry_risk_marked"},
+        start_offset=start_offset,
+    )
+    for payload in payloads:
         if (
             str(payload.get("stage") or "")
             != "rising_missed_same_day_reentry_risk_marked"
@@ -19158,12 +19214,16 @@ def _load_rising_missed_reentry_risk_events(target_date: str) -> dict[str, list[
         )
     for rows in rows_by_code.values():
         rows.sort(key=lambda row: float(row.get("marked_at") or 0.0))
+    refreshed_stat = path.stat()
     cache.update(
         {
             "date": target_date,
             "path": str(path),
-            "mtime_ns": int(getattr(stat, "st_mtime_ns", 0) or 0),
-            "size": int(getattr(stat, "st_size", 0) or 0),
+            "device": int(getattr(refreshed_stat, "st_dev", 0) or 0),
+            "inode": int(getattr(refreshed_stat, "st_ino", 0) or 0),
+            "mtime_ns": int(getattr(refreshed_stat, "st_mtime_ns", 0) or 0),
+            "size": int(getattr(refreshed_stat, "st_size", 0) or 0),
+            "offset": next_offset,
             "rows_by_code": rows_by_code,
         }
     )
@@ -19204,24 +19264,16 @@ def _reconcile_rising_missed_reentry_risk_with_sell_completed(
     target_date = (
         datetime.fromtimestamp(float(now_ts or time.time())).date().isoformat()
     )
-    path = existing_or_gzip_path(
-        DATA_DIR / "pipeline_events" / f"pipeline_events_{target_date}.jsonl"
-    )
-    if not path.exists():
+    _load_scalp_loss_reentry_cooldown_events(target_date)
+    cache = _SCALP_LOSS_REENTRY_EVENT_CACHE
+    if cache.get("date") != target_date:
         return {"action": "keep", "reason": "pipeline_events_missing"}
 
     latest_completed: dict | None = None
-    for payload in iter_jsonl(path, errors="ignore"):
-        if str(payload.get("stage") or "") != "sell_completed":
-            continue
+    for payload in (cache.get("sell_completed_by_code") or {}).get(norm_code, []):
         fields = (
             payload.get("fields") if isinstance(payload.get("fields"), dict) else {}
         )
-        payload_code = str(
-            payload.get("stock_code") or fields.get("stock_code") or ""
-        ).strip()[:6]
-        if payload_code != norm_code:
-            continue
         completed_at = _parse_iso_epoch(payload.get("emitted_at"))
         if completed_at < marked_at:
             continue
@@ -19446,8 +19498,10 @@ def _load_rising_missed_completed_scalp_events(
     path = existing_or_gzip_path(
         DATA_DIR / "pipeline_events" / f"pipeline_events_{target_date}.jsonl"
     )
+    _load_scalp_loss_reentry_cooldown_events(target_date)
+    source_cache = _SCALP_LOSS_REENTRY_EVENT_CACHE
     cache = _RISING_MISSED_COMPLETED_SCALP_EVENT_CACHE
-    if not path.exists():
+    if not path.exists() or source_cache.get("date") != target_date:
         cache.update(
             {
                 "date": target_date,
@@ -19458,58 +19512,55 @@ def _load_rising_missed_completed_scalp_events(
             }
         )
         return {}
-    stat = path.stat()
     if (
         cache.get("date") == target_date
         and cache.get("path") == str(path)
-        and int(cache.get("mtime_ns") or 0) == int(getattr(stat, "st_mtime_ns", 0) or 0)
-        and int(cache.get("size") or 0) == int(getattr(stat, "st_size", 0) or 0)
+        and int(cache.get("mtime_ns") or 0) == int(source_cache.get("mtime_ns") or 0)
+        and int(cache.get("size") or 0) == int(source_cache.get("size") or 0)
     ):
         return cache.get("rows_by_code") or {}
 
     rows_by_code: dict[str, list[dict]] = {}
-    for payload in iter_jsonl(path, errors="ignore"):
-        if str(payload.get("stage") or "") != "sell_completed":
-            continue
-        fields = (
-            payload.get("fields") if isinstance(payload.get("fields"), dict) else {}
-        )
-        code = str(payload.get("stock_code") or fields.get("stock_code") or "").strip()[
-            :6
-        ]
-        if not code:
-            continue
-        exit_rule = str(fields.get("exit_rule") or "").strip()
-        if not exit_rule.startswith("scalp_"):
-            continue
-        completed_at = _parse_iso_epoch(payload.get("emitted_at"))
-        if completed_at <= 0.0:
-            continue
-        profit_raw = fields.get("profit_rate")
-        if not _field_has_numeric_value(profit_raw):
-            continue
-        rows_by_code.setdefault(code, []).append(
-            {
-                "code": code,
-                "stock_name": payload.get("stock_name")
-                or fields.get("stock_name")
-                or "-",
-                "record_id": payload.get("record_id") or fields.get("record_id") or "-",
-                "completed_at": completed_at,
-                "profit_rate": _safe_float(profit_raw, 0.0),
-                "sell_price": _safe_int(fields.get("sell_price"), 0),
-                "exit_rule": exit_rule,
-                "exit_decision_source": str(fields.get("exit_decision_source") or "-"),
-            }
-        )
+    for code, payloads in (source_cache.get("sell_completed_by_code") or {}).items():
+        for payload in payloads:
+            fields = (
+                payload.get("fields") if isinstance(payload.get("fields"), dict) else {}
+            )
+            exit_rule = str(fields.get("exit_rule") or "").strip()
+            if not exit_rule.startswith("scalp_"):
+                continue
+            completed_at = _parse_iso_epoch(payload.get("emitted_at"))
+            if completed_at <= 0.0:
+                continue
+            profit_raw = fields.get("profit_rate")
+            if not _field_has_numeric_value(profit_raw):
+                continue
+            rows_by_code.setdefault(code, []).append(
+                {
+                    "code": code,
+                    "stock_name": payload.get("stock_name")
+                    or fields.get("stock_name")
+                    or "-",
+                    "record_id": payload.get("record_id")
+                    or fields.get("record_id")
+                    or "-",
+                    "completed_at": completed_at,
+                    "profit_rate": _safe_float(profit_raw, 0.0),
+                    "sell_price": _safe_int(fields.get("sell_price"), 0),
+                    "exit_rule": exit_rule,
+                    "exit_decision_source": str(
+                        fields.get("exit_decision_source") or "-"
+                    ),
+                }
+            )
     for rows in rows_by_code.values():
         rows.sort(key=lambda row: float(row.get("completed_at") or 0.0))
     cache.update(
         {
             "date": target_date,
             "path": str(path),
-            "mtime_ns": int(getattr(stat, "st_mtime_ns", 0) or 0),
-            "size": int(getattr(stat, "st_size") or 0),
+            "mtime_ns": int(source_cache.get("mtime_ns") or 0),
+            "size": int(source_cache.get("size") or 0),
             "rows_by_code": rows_by_code,
         }
     )
