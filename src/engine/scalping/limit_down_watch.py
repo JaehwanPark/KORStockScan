@@ -13,6 +13,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Callable
 
+import pandas as pd
 from sqlalchemy import text
 
 from src.utils import kiwoom_utils
@@ -240,7 +241,22 @@ def build_candidate_source(
         if daily is None or getattr(daily, "empty", True):
             blocked.append({"code": code, "reason": "ka10081_missing"})
             continue
-        eligible = daily[daily.index.date < target_date]
+        # A malformed ka10081 row can leave ``NaT`` in the DataFrame index.
+        # Do not let it abort the whole source load (and hide otherwise valid
+        # candidates); only completed, parseable daily rows may establish the
+        # prior-limit-down close.
+        try:
+            parsed_index = pd.to_datetime(daily.index, errors="coerce")
+            valid_index = parsed_index.notna()
+            normalized_daily = daily.loc[valid_index].copy()
+            normalized_daily.index = parsed_index[valid_index]
+        except (AttributeError, TypeError, ValueError):
+            blocked.append({"code": code, "reason": "ka10081_invalid_date_index"})
+            continue
+        if normalized_daily.empty:
+            blocked.append({"code": code, "reason": "ka10081_no_valid_completed_dates"})
+            continue
+        eligible = normalized_daily[normalized_daily.index.date < target_date]
         if eligible.empty:
             blocked.append({"code": code, "reason": "completed_daily_row_missing"})
             continue

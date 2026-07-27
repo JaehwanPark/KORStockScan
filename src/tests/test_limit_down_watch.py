@@ -228,6 +228,66 @@ def test_candidate_source_stale_completed_date_fails_closed(monkeypatch, tmp_pat
     }
 
 
+def test_candidate_source_ignores_nat_daily_index_rows(monkeypatch, tmp_path):
+    monkeypatch.setattr(limit_down_watch, "CANDIDATE_DIR", tmp_path)
+    daily = pd.DataFrame(
+        {"Close": [0, 4000]},
+        index=pd.DatetimeIndex([pd.NaT, pd.Timestamp("2026-07-24")]),
+    )
+    candidates, artifact = build_candidate_source(
+        "token",
+        object(),
+        target_date=date(2026, 7, 27),
+        fetch_previous=lambda _token: (
+            [
+                {
+                    "Code": "000010",
+                    "Name": "유효일봉",
+                    "ConsecutiveCountRaw": "2",
+                }
+            ],
+            {},
+        ),
+        fetch_daily=lambda _token, _code: daily,
+        db_close_loader=lambda _db, _code, _date: (4000, "유효일봉"),
+        latest_completed_date_loader=lambda _db, _target_date: date(2026, 7, 24),
+    )
+
+    assert [candidate.code for candidate in candidates] == ["000010"]
+    assert artifact["status"] == "pass"
+
+
+def test_candidate_source_blocks_when_daily_index_has_no_valid_date(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(limit_down_watch, "CANDIDATE_DIR", tmp_path)
+    daily = pd.DataFrame({"Close": [0]}, index=pd.DatetimeIndex([pd.NaT]))
+    candidates, artifact = build_candidate_source(
+        "token",
+        object(),
+        target_date=date(2026, 7, 27),
+        fetch_previous=lambda _token: (
+            [
+                {
+                    "Code": "000010",
+                    "Name": "무효일봉",
+                    "ConsecutiveCountRaw": "1",
+                }
+            ],
+            {},
+        ),
+        fetch_daily=lambda _token, _code: daily,
+        db_close_loader=lambda _db, _code, _date: (0, ""),
+        latest_completed_date_loader=lambda _db, _target_date: date(2026, 7, 24),
+    )
+
+    assert candidates == []
+    assert artifact["status"] == "blocked"
+    assert artifact["blocked_rows"] == [
+        {"code": "000010", "reason": "ka10081_no_valid_completed_dates"}
+    ]
+
+
 def test_raw_tick_state_preserves_locked_unlock_relock_order(monkeypatch, tmp_path):
     monkeypatch.setattr(limit_down_watch, "RUNTIME_DIR", tmp_path)
     monkeypatch.setattr(limit_down_watch, "emit_pipeline_event", lambda *a, **k: None)
