@@ -207,3 +207,39 @@ def test_dispatcher_does_not_coalesce_distinct_endpoints_with_same_snapshot_key(
     dispatcher.shutdown()
 
     assert {result.endpoint for result in results} == {"holding_score", "holding_flow"}
+
+
+def test_dispatcher_coalesces_endpoint_aliases_after_canonicalization():
+    dispatcher = HotPathAIDispatcher(loaded_key_count=1)
+    now = time.time()
+    release = threading.Event()
+    first = HotPathAIRequest.create(
+        request_id="position:price-1",
+        generation_id="position-cycle-1",
+        cache_key="snapshot-42",
+        endpoint="entry_price",
+        venue="KRX",
+        submitted_epoch=now,
+        deadline_epoch=now + 1,
+        execute=lambda: (release.wait(0.5), {"action": "USE_REFERENCE"})[1],
+    )
+    alias = HotPathAIRequest.create(
+        request_id="position:price-2",
+        generation_id="position-cycle-1",
+        cache_key="snapshot-42",
+        endpoint=" ENTRY_PRICE ",
+        venue="KRX",
+        submitted_epoch=now,
+        deadline_epoch=now + 1,
+        execute=lambda: {"action": "USE_REFERENCE"},
+    )
+
+    assert dispatcher.submit(first).accepted is True
+    duplicate = dispatcher.submit(alias)
+    release.set()
+    results = _wait_for_results(dispatcher, 1)
+    dispatcher.shutdown()
+
+    assert duplicate.accepted is False
+    assert duplicate.reason == "duplicate_generation_cache_key_coalesced"
+    assert results[0].endpoint == "entry_price"

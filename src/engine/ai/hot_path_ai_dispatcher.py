@@ -70,6 +70,7 @@ class HotPathAIRequest:
         normalized_request_id = str(request_id or "").strip()
         normalized_generation_id = str(generation_id or "").strip()
         normalized_cache_key = str(cache_key or "").strip()
+        normalized_endpoint = str(endpoint or "unknown").strip().lower() or "unknown"
         if (
             not normalized_request_id
             or not normalized_generation_id
@@ -86,7 +87,7 @@ class HotPathAIRequest:
             request_id=normalized_request_id,
             generation_id=normalized_generation_id,
             cache_key=normalized_cache_key,
-            endpoint=str(endpoint or "unknown"),
+            endpoint=normalized_endpoint,
             venue=str(venue or "UNKNOWN").strip().upper(),
             submitted_epoch=submitted,
             deadline_epoch=deadline,
