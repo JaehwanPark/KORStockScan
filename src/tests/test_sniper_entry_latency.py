@@ -398,6 +398,74 @@ def test_fresh_watching_promotion_context_does_not_rescan_event_history(monkeypa
     assert "buy_price" not in stock
 
 
+def test_restored_watching_generation_does_not_rescan_event_history(monkeypatch):
+    def fail_history_load(_target_date):
+        raise AssertionError(
+            "matching restored generation must retain its promotion context"
+        )
+
+    monkeypatch.setattr(
+        state_handlers,
+        "_load_scanner_promotion_context_events",
+        fail_history_load,
+    )
+    stock = {
+        "code": "035420",
+        "status": "WATCHING",
+        "entry_armed_at_epoch": 1_785_145_612.0,
+        "scanner_generation_id": "035420:SCANPROM-035420-1785145065744:r1",
+        "scanner_promotion_id": "SCANPROM-035420-1785145065744",
+        "scanner_promotion_emitted_epoch": "1785145065.744",
+        "scanner_promotion_reason": "price_jump_start_acceleration",
+        "source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+        "current_price_observed": "281500",
+        "price_delta_since_first_seen_pct": "1.25",
+        "comparable_flu_delta_since_first_seen": "1.10",
+        "cntr_str_available": True,
+        "cntr_str": "123.4",
+    }
+
+    hydrated = state_handlers._hydrate_scanner_promotion_runtime_context(stock)
+
+    assert hydrated["scanner_promotion_id"] == stock["scanner_promotion_id"]
+    assert hydrated["current_price_observed"] == "281500"
+
+
+def test_restored_watching_generation_mismatch_still_hydrates_history(monkeypatch):
+    history_calls = []
+
+    def load_history(target_date):
+        history_calls.append(target_date)
+        return {}
+
+    monkeypatch.setattr(
+        state_handlers,
+        "_load_scanner_promotion_context_events",
+        load_history,
+    )
+    stock = {
+        "code": "035420",
+        "date": "2026-07-27",
+        "status": "WATCHING",
+        "entry_armed_at_epoch": 1_785_145_612.0,
+        "scanner_generation_id": "035420:SCANPROM-035420-1785145000000:r1",
+        "scanner_promotion_id": "SCANPROM-035420-1785145065744",
+        "scanner_promotion_emitted_epoch": "1785145065.744",
+        "scanner_promotion_reason": "price_jump_start_acceleration",
+        "source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+        "current_price_observed": "281500",
+        "price_delta_since_first_seen_pct": "1.25",
+        "comparable_flu_delta_since_first_seen": "1.10",
+        "cntr_str_available": True,
+        "cntr_str": "123.4",
+    }
+
+    hydrated = state_handlers._hydrate_scanner_promotion_runtime_context(stock)
+
+    assert hydrated == {}
+    assert history_calls == ["2026-07-27"]
+
+
 def test_early_accel_strong_bundle_pre_recheck_fields_are_contract_values(monkeypatch):
     monkeypatch.setattr(state_handlers, "_rule_bool", lambda key, default=False: False)
     decision = state_handlers._resolve_early_accel_strong_bundle_recheck(

@@ -709,6 +709,16 @@ def _scanner_promotion_price_anchor_present(stock: dict[str, Any] | None) -> boo
     )
 
 
+def _scanner_generation_matches_promotion(stock: dict[str, Any] | None) -> bool:
+    if not isinstance(stock, dict):
+        return False
+    promotion_id = str(stock.get("scanner_promotion_id") or "").strip()
+    generation_id = str(stock.get("scanner_generation_id") or "").strip()
+    if not promotion_id or not generation_id:
+        return False
+    return promotion_id in generation_id.split(":")
+
+
 def _load_scanner_promotion_context_events(
     target_date: str,
 ) -> dict[str, list[dict[str, Any]]]:
@@ -811,18 +821,22 @@ def _hydrate_scanner_promotion_runtime_context(
     existing_promotion_epoch = _safe_float(
         stock.get("scanner_promotion_emitted_epoch"), 0.0
     )
+    generation_matches_promotion = _scanner_generation_matches_promotion(stock)
     if (
         _scanner_promotion_context_present(stock)
         and _scanner_promotion_price_anchor_present(stock)
         and anchor_epoch > 0.0
         and str(stock.get("scanner_promotion_id") or "").strip()
         and existing_promotion_epoch > 0.0
-        and abs(existing_promotion_epoch - anchor_epoch) <= 5.0
+        and (
+            abs(existing_promotion_epoch - anchor_epoch) <= 5.0
+            or generation_matches_promotion
+        )
         and (
             _safe_int(stock.get("buy_price"), 0) > 0
             or (
                 str(stock.get("status") or "").upper() == "WATCHING"
-                and str(stock.get("scanner_generation_id") or "").strip()
+                and generation_matches_promotion
             )
         )
     ):
@@ -830,8 +844,10 @@ def _hydrate_scanner_promotion_runtime_context(
         # immutable promotion envelope is already the canonical context, so
         # requiring ``buy_price`` here caused every WS-only fast precheck to
         # rescan the growing pipeline-event file after the dispatch event
-        # changed its mtime. Restored rows that lack or mismatch the canonical
-        # promotion fields still fall through to historical hydration.
+        # changed its mtime. A boot-restored generation can have a later attach
+        # anchor than its immutable promotion envelope; the exact promotion
+        # token in its generation ID proves that identity without weakening
+        # mismatched restored rows, which still use historical hydration.
         return {key: stock.get(key) for key in _SCANNER_PROMOTION_CONTEXT_FIELDS}
 
     code = str(stock.get("code") or stock.get("stock_code") or "").strip()[:6]
