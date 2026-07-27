@@ -251,18 +251,49 @@ def _walk(value: Any):
 def _payload_contract(payload: dict[str, Any]) -> dict[str, Any]:
     schemas: set[str] = set()
     bundles: set[str] = set()
+    canonical_contexts: list[dict[str, Any]] = []
     for item in _walk(payload.get("sanitized_user_input")):
         if not isinstance(item, dict):
             continue
         schema = str(item.get("schema") or "")
         if schema in {ENTRY_CONTEXT_SCHEMA, HOLDING_CONTEXT_SCHEMA}:
             schemas.add(schema)
+            candle = item.get("candle") if schema == HOLDING_CONTEXT_SCHEMA else item
+            candle = candle if isinstance(candle, dict) else {}
+            bars = candle.get("bars") if isinstance(candle.get("bars"), list) else None
+            candle_bundle = str(candle.get("input_bundle_version") or "")
+            if candle_bundle:
+                bundles.add(candle_bundle)
+            forming_key = (
+                "is_forming" if schema == HOLDING_CONTEXT_SCHEMA else "forming"
+            )
+            canonical_contexts.append(
+                {
+                    "schema": schema,
+                    "input_bundle_version": str(
+                        candle.get("input_bundle_version") or ""
+                    )
+                    or None,
+                    "raw_bar_count": len(bars) if bars is not None else None,
+                    "completed_bar_count": sum(
+                        1
+                        for bar in (bars or [])
+                        if isinstance(bar, dict)
+                        and not bool(bar.get(forming_key, False))
+                    ),
+                    "forming_bar_present": any(
+                        isinstance(bar, dict) and bool(bar.get(forming_key, False))
+                        for bar in (bars or [])
+                    ),
+                }
+            )
         bundle = str(item.get("input_bundle_version") or "")
         if bundle:
             bundles.add(bundle)
     return {
         "context_schemas": sorted(schemas),
         "input_bundle_versions": sorted(bundles),
+        "canonical_contexts": canonical_contexts,
     }
 
 
@@ -338,8 +369,28 @@ def _exact_trace_payload_findings(
     )
     if expected_schema not in contract["context_schemas"]:
         findings.append("context_schema_missing")
-    if INPUT_BUNDLE_VERSION not in contract["input_bundle_versions"]:
+    expected_contexts = [
+        context
+        for context in contract["canonical_contexts"]
+        if context["schema"] == expected_schema
+    ]
+    if not expected_contexts or not any(
+        context["input_bundle_version"] == INPUT_BUNDLE_VERSION
+        for context in expected_contexts
+    ):
         findings.append("input_bundle_missing")
+    contexts_with_raw_bars = [
+        context for context in expected_contexts if context["raw_bar_count"] is not None
+    ]
+    if not contexts_with_raw_bars:
+        findings.append("canonical_bars_missing")
+    elif not any(
+        context["completed_bar_count"] > 0 for context in contexts_with_raw_bars
+    ):
+        findings.append("canonical_completed_bars_missing")
+    capture_status = str(trace.get("canonical_context_capture_status") or "")
+    if capture_status and capture_status != "exact_completed_bars_captured":
+        findings.append(f"canonical_context_capture_{capture_status}")
     return findings
 
 

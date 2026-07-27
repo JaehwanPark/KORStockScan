@@ -119,6 +119,16 @@ _SCALPING_ENDPOINTS = {
     "overnight",
     "realtime_report",
 }
+_ENTRY_CONTEXT_SCHEMA = "entry_candle_context_v1"
+_HOLDING_CONTEXT_SCHEMA = "holding_decision_context_v1"
+_EXPECTED_CONTEXT_SCHEMA_BY_ENDPOINT = {
+    "analyze_target": _ENTRY_CONTEXT_SCHEMA,
+    "entry_price": _ENTRY_CONTEXT_SCHEMA,
+    "realtime_report": _ENTRY_CONTEXT_SCHEMA,
+    "holding_score": _HOLDING_CONTEXT_SCHEMA,
+    "holding_flow": _HOLDING_CONTEXT_SCHEMA,
+    "overnight": _HOLDING_CONTEXT_SCHEMA,
+}
 
 
 def trace_enabled() -> bool:
@@ -501,6 +511,88 @@ def _request_context(
     return context
 
 
+def _canonical_context_capture(
+    user_input: Any,
+    *,
+    endpoint_name: str,
+) -> dict[str, Any]:
+    """Describe, without modifying, the canonical candle context sent to AI.
+
+    This is provenance only.  In particular, a compact forensic request is not
+    retrofitted from a later market snapshot: it remains visible as ineligible
+    for the exact-v2 decision-quality cohort.
+    """
+
+    _, parsed = _parse_user_input(user_input)
+    endpoint = str(endpoint_name or "").strip().lower()
+    expected_schema = _EXPECTED_CONTEXT_SCHEMA_BY_ENDPOINT.get(endpoint)
+    candidates: list[dict[str, Any]] = []
+    for row in _walk(parsed):
+        schema = str(row.get("schema") or "")
+        if schema not in {_ENTRY_CONTEXT_SCHEMA, _HOLDING_CONTEXT_SCHEMA}:
+            continue
+        candle = row.get("candle") if schema == _HOLDING_CONTEXT_SCHEMA else row
+        candle = candle if isinstance(candle, dict) else {}
+        bars = candle.get("bars") if isinstance(candle.get("bars"), list) else None
+        input_bundle_version = str(candle.get("input_bundle_version") or "")
+        if schema == _ENTRY_CONTEXT_SCHEMA:
+            forming_key = "forming"
+        else:
+            forming_key = "is_forming"
+        completed_bar_count = sum(
+            1
+            for bar in (bars or [])
+            if isinstance(bar, dict) and not bool(bar.get(forming_key, False))
+        )
+        candidates.append(
+            {
+                "schema": schema,
+                "input_bundle_version": input_bundle_version or None,
+                "raw_bar_count": len(bars) if bars is not None else None,
+                "completed_bar_count": completed_bar_count,
+                "forming_bar_present": any(
+                    isinstance(bar, dict) and bool(bar.get(forming_key, False))
+                    for bar in (bars or [])
+                ),
+            }
+        )
+
+    matching = [row for row in candidates if row["schema"] == expected_schema]
+    selected = max(
+        matching or candidates,
+        key=lambda row: (row["completed_bar_count"], row["raw_bar_count"] or -1),
+        default=None,
+    )
+    status = "canonical_context_missing"
+    if selected is not None:
+        if expected_schema and selected["schema"] != expected_schema:
+            status = "canonical_context_stage_mismatch"
+        elif not selected["input_bundle_version"]:
+            status = "canonical_input_bundle_missing"
+        elif selected["raw_bar_count"] is None:
+            status = "canonical_bars_missing"
+        elif selected["completed_bar_count"] <= 0:
+            status = "canonical_completed_bars_missing"
+        else:
+            status = "exact_completed_bars_captured"
+    return {
+        "expected_schema": expected_schema,
+        "status": status,
+        "exact_v2_candidate": status == "exact_completed_bars_captured",
+        "schema": selected.get("schema") if selected else None,
+        "input_bundle_version": (
+            selected.get("input_bundle_version") if selected else None
+        ),
+        "raw_bar_count": selected.get("raw_bar_count") if selected else None,
+        "completed_bar_count": (
+            selected.get("completed_bar_count") if selected else None
+        ),
+        "forming_bar_present": (
+            selected.get("forming_bar_present") if selected else None
+        ),
+    }
+
+
 def capture_ai_request(
     *,
     prompt: Any,
@@ -559,6 +651,10 @@ def capture_ai_request(
             metadata_row,
             endpoint_name=endpoint_name,
         )
+        canonical_context = _canonical_context_capture(
+            parsed_input,
+            endpoint_name=endpoint_name,
+        )
         trace_id = str(request_id or "").strip() or f"aidt-{uuid.uuid4().hex}"
         payload_row = {
             "schema": PAYLOAD_SCHEMA,
@@ -584,6 +680,7 @@ def capture_ai_request(
             "redacted": bool(redacted),
             "replay_exact": not redacted,
             "sanitized_user_input": sanitized_input,
+            "canonical_context_capture": canonical_context,
             **STORAGE_SECURITY_CONTRACT,
             **OBSERVATION_CONTRACT,
         }
@@ -617,6 +714,7 @@ def capture_ai_request(
             "prompt_sha256": prompt_sha256,
             "payload_redacted": bool(redacted),
             "prompt_redacted": bool(prompt_redacted),
+            "canonical_context_capture": canonical_context,
             **STORAGE_SECURITY_CONTRACT,
             **OBSERVATION_CONTRACT,
         }
@@ -681,6 +779,20 @@ def capture_ai_request(
             "ai_trace_adverse_price": context.get("adverse_price"),
             "ai_trace_target_pct": context.get("target_pct"),
             "ai_trace_adverse_pct": context.get("adverse_pct"),
+            "ai_trace_canonical_context_capture_status": canonical_context["status"],
+            "ai_trace_canonical_context_schema": canonical_context["schema"],
+            "ai_trace_canonical_context_input_bundle_version": canonical_context[
+                "input_bundle_version"
+            ],
+            "ai_trace_canonical_context_raw_bar_count": canonical_context[
+                "raw_bar_count"
+            ],
+            "ai_trace_canonical_context_completed_bar_count": canonical_context[
+                "completed_bar_count"
+            ],
+            "ai_trace_canonical_context_forming_bar_present": canonical_context[
+                "forming_bar_present"
+            ],
         }
     except Exception as exc:
         log_error(f"[AI_DECISION_TRACE] request capture failed: {exc}")
@@ -934,6 +1046,26 @@ def record_ai_decision_trace(
             "payload_redacted": bool(merged.get("ai_input_payload_redacted", False)),
             "payload_replay_exact": bool(
                 merged.get("ai_input_payload_replay_exact", False)
+            ),
+            "canonical_context_capture_status": _optional(
+                merged, "ai_trace_canonical_context_capture_status"
+            ),
+            "canonical_context_schema": _optional(
+                merged, "ai_trace_canonical_context_schema"
+            ),
+            "canonical_context_input_bundle_version": _optional(
+                merged, "ai_trace_canonical_context_input_bundle_version"
+            ),
+            "canonical_context_raw_bar_count": _safe_number(
+                _optional(merged, "ai_trace_canonical_context_raw_bar_count")
+            ),
+            "canonical_context_completed_bar_count": _safe_number(
+                _optional(merged, "ai_trace_canonical_context_completed_bar_count")
+            ),
+            "canonical_context_forming_bar_present": (
+                bool(merged.get("ai_trace_canonical_context_forming_bar_present"))
+                if "ai_trace_canonical_context_forming_bar_present" in merged
+                else None
             ),
             "provider_called": bool(provider_called),
             "transport": _optional(merged, "openai_transport_mode"),

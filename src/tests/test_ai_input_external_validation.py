@@ -2,6 +2,7 @@ import json
 from datetime import datetime
 
 import pytest
+import requests
 
 from src.engine.scalping import ai_input_external_validation as mod
 
@@ -30,6 +31,159 @@ def test_naver_cumulative_volume_requires_consecutive_minutes():
     assert deltas["15:15"]["delta"] == 20
     assert deltas["15:15"]["comparable"] is True
     assert deltas["15:17"]["comparable"] is False
+
+
+def test_current_trading_day_daily_bar_and_forming_minute_are_not_compared():
+    def live_minute(minute, close, volume):
+        return {
+            "source_timestamp": f"20260727{minute.replace(':', '')}00",
+            "체결시간": f"{minute}:00",
+            "시가": close,
+            "고가": close,
+            "저가": close,
+            "현재가": close,
+            "거래량": volume,
+        }
+
+    result = mod.build_symbol_comparison(
+        symbol="005930",
+        venue="KRX",
+        target_date="2026-07-27",
+        kiwoom_daily={
+            "open": 100,
+            "high": 110,
+            "low": 90,
+            "close": 105,
+            "volume": 1000,
+        },
+        kiwoom_minutes=[
+            live_minute("10:27", 100, 10),
+            live_minute("10:28", 100, 10),
+            live_minute("10:29", 100, 10),
+            live_minute("10:30", 999, 20),
+        ],
+        external_daily={
+            "open": 101,
+            "high": 111,
+            "low": 91,
+            "close": 106,
+            "volume": 1001,
+        },
+        naver_minutes=[
+            {
+                "timestamp": "2026-07-27T10:26:00+09:00",
+                "close": 99,
+                "volume": 100,
+            },
+            {
+                "timestamp": "2026-07-27T10:27:00+09:00",
+                "close": 100,
+                "volume": 110,
+            },
+            {
+                "timestamp": "2026-07-27T10:28:00+09:00",
+                "close": 100,
+                "volume": 120,
+            },
+            {
+                "timestamp": "2026-07-27T10:29:00+09:00",
+                "close": 100,
+                "volume": 130,
+            },
+            {
+                "timestamp": "2026-07-27T10:30:00+09:00",
+                "close": 998,
+                "volume": 150,
+            },
+        ],
+        ai_payload_row=None,
+        source_meta={},
+        as_of=datetime(2026, 7, 27, 10, 30, 30, tzinfo=mod.KST),
+    )
+
+    by_field = {row["field"]: row for row in result["comparison_rows"]}
+    assert all(
+        by_field[f"daily.{field}"]["status"] == "NOT_COMPARABLE"
+        for field in ("open", "high", "low", "close", "volume")
+    )
+    assert all(
+        by_field[f"daily.{field}"]["reason"]
+        == "current_trading_day_daily_bar_not_final"
+        for field in ("open", "high", "low", "close", "volume")
+    )
+    assert by_field["minute.10:27.close"]["status"] == "MATCH"
+    assert by_field["minute.10:27.volume"]["status"] == "MATCH"
+    assert by_field["minute.10:29.close"]["status"] == "NOT_COMPARABLE"
+    assert (
+        by_field["minute.10:29.close"]["reason"]
+        == "naver_minute_publication_lag_window"
+    )
+    assert by_field["minute.10:29.volume"]["status"] == "NOT_COMPARABLE"
+    assert by_field["minute.10:30.close"]["status"] == "NOT_COMPARABLE"
+    assert (
+        by_field["minute.10:30.close"]["reason"]
+        == "forming_minute_excluded_exact_capture_cutoff"
+    )
+    assert by_field["minute.10:30.volume"]["status"] == "NOT_COMPARABLE"
+    assert result["summary"]["mismatch_count"] == 0
+
+
+def test_missing_completed_minute_fails_required_source_quality_gate():
+    def source_row(minute):
+        return {
+            "source_timestamp": f"20260727{minute.replace(':', '')}00",
+            "시가": 100,
+            "고가": 100,
+            "저가": 100,
+            "현재가": 100,
+            "거래량": 10,
+        }
+
+    result = mod.build_symbol_comparison(
+        symbol="100090",
+        venue="KRX",
+        target_date="2026-07-27",
+        kiwoom_daily={},
+        kiwoom_minutes=[source_row("09:00"), source_row("09:02")],
+        external_daily=None,
+        naver_minutes=[],
+        ai_payload_row=None,
+        source_meta={},
+        as_of=datetime(2026, 7, 27, 10, 0, tzinfo=mod.KST),
+    )
+
+    assert result["summary"]["source_quality_gate_status"] == ("source_quality_blocked")
+    assert result["summary"]["required_source_field_match_status"] == "fail"
+
+
+def test_independent_recalculation_excludes_current_forming_minute():
+    rows = [
+        {
+            "source_timestamp": "20260727090000",
+            "시가": 100,
+            "고가": 100,
+            "저가": 100,
+            "현재가": 100,
+            "거래량": 10,
+        },
+        {
+            "source_timestamp": "20260727090100",
+            "시가": 1000,
+            "고가": 1000,
+            "저가": 1000,
+            "현재가": 1000,
+            "거래량": 1000,
+        },
+    ]
+
+    result = mod._independent_api_observation(
+        rows,
+        target_date="2026-07-27",
+        venue="KRX",
+        as_of=datetime(2026, 7, 27, 9, 1, 30, tzinfo=mod.KST),
+    )
+
+    assert result["session_bar_vwap"]["value"] == 100.0
 
 
 def test_opening_call_auction_volume_is_not_compared_as_a_regular_minute():
@@ -250,6 +404,42 @@ def test_krx_open_api_is_not_called_without_auth_key():
     assert metadata["legacy_mdc_endpoint_called"] is False
 
 
+def test_krx_open_api_config_key_alias_is_resolved_without_exposing_value(
+    tmp_path, monkeypatch
+):
+    config_path = tmp_path / "config_prod.json"
+    config_path.write_text(
+        json.dumps({"KRX_OPEN_API_KEY": "config-only-secret"}), encoding="utf-8"
+    )
+    monkeypatch.delenv("KRX_OPEN_API_AUTH_KEY", raising=False)
+    monkeypatch.delenv("KRX_OPEN_API_KEY", raising=False)
+
+    key, source = mod._resolve_krx_open_api_auth_key(config_path=config_path)
+
+    assert key == "config-only-secret"
+    assert source == "config:KRX_OPEN_API_KEY"
+    assert "config-only-secret" not in json.dumps(
+        {
+            "auth_source": source,
+            "auth_configured": bool(key),
+        }
+    )
+
+
+def test_krx_open_api_explicit_empty_key_does_not_fall_back_to_config(tmp_path):
+    config_path = tmp_path / "config_prod.json"
+    config_path.write_text(
+        json.dumps({"KRX_OPEN_API_KEY": "config-only-secret"}), encoding="utf-8"
+    )
+
+    key, source = mod._resolve_krx_open_api_auth_key(
+        auth_key="", config_path=config_path
+    )
+
+    assert key == ""
+    assert source == "explicit_argument"
+
+
 def test_krx_open_api_fetches_both_markets_without_recording_auth():
     calls = []
 
@@ -352,6 +542,31 @@ def test_krx_open_api_rejects_http_200_error_or_wrong_date_payload():
     assert set(metadata["endpoint_errors"]) == {
         "stk_bydd_trd",
         "ksq_bydd_trd",
+    }
+    assert "secret-auth-key" not in json.dumps(metadata)
+
+
+def test_krx_open_api_marks_all_unauthorized_endpoints_explicitly():
+    class Response:
+        status_code = 401
+
+        def raise_for_status(self):
+            error = requests.HTTPError("401 Client Error: Unauthorized")
+            error.response = self
+            raise error
+
+    rows, metadata = mod._fetch_krx_daily(
+        "2026-07-24",
+        auth_key="secret-auth-key",
+        get=lambda *args, **kwargs: Response(),
+    )
+
+    assert rows == {}
+    assert metadata["status"] == "source_unavailable"
+    assert metadata["error"] == "krx_open_api_unauthorized"
+    assert metadata["endpoint_http_statuses"] == {
+        "stk_bydd_trd": 401,
+        "ksq_bydd_trd": 401,
     }
     assert "secret-auth-key" not in json.dumps(metadata)
 

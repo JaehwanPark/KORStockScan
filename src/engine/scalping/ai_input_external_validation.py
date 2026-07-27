@@ -35,8 +35,11 @@ SCHEMA = "ai_input_external_validation_v1"
 STRICT_STATUSES = {"MATCH", "MISMATCH"}
 KRX_OPEN_API_BASE_URL = "https://data-dbg.krx.co.kr/svc/apis/sto"
 KRX_OPEN_API_AUTH_ENV = "KRX_OPEN_API_AUTH_KEY"
+KRX_OPEN_API_CONFIG_KEY = "KRX_OPEN_API_KEY"
+KRX_OPEN_API_CONFIG_PATH = PROJECT_ROOT / "data" / "config_prod.json"
 KRX_OPEN_API_ENDPOINTS = ("stk_bydd_trd", "ksq_bydd_trd")
 NAVER_CHART_URL = "https://fchart.stock.naver.com/sise.nhn"
+NAVER_MINUTE_PUBLICATION_LAG = timedelta(minutes=3)
 
 
 def _sha256_json(value: Any) -> str:
@@ -50,6 +53,36 @@ def _sha256_json(value: Any) -> str:
 def _sanitize_metadata(value: Any) -> Any:
     sanitized, _redacted = sanitize_ai_trace_value(value)
     return sanitized
+
+
+def _resolve_krx_open_api_auth_key(
+    *,
+    auth_key: str | None = None,
+    config_path: Path = KRX_OPEN_API_CONFIG_PATH,
+) -> tuple[str, str]:
+    """Resolve KRX authentication without exposing a credential in artifacts.
+
+    ``auth_key`` is intentionally authoritative even when empty, so tests and
+    callers can explicitly request a no-network fail-closed path.  Production
+    uses the established auth env first, then the user-facing config key.
+    """
+
+    if auth_key is not None:
+        return str(auth_key).strip(), "explicit_argument"
+    for key in (KRX_OPEN_API_AUTH_ENV, KRX_OPEN_API_CONFIG_KEY):
+        value = os.getenv(key, "").strip()
+        if value:
+            return value, f"environment:{key}"
+    try:
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        config = {}
+    if isinstance(config, dict):
+        for key in (KRX_OPEN_API_AUTH_ENV, KRX_OPEN_API_CONFIG_KEY):
+            value = str(config.get(key) or "").strip()
+            if value:
+                return value, f"config:{key}"
+    return "", "not_configured"
 
 
 def _validated_provenance_date(
@@ -261,16 +294,13 @@ def _fetch_krx_daily(
     and never included in returned report metadata.
     """
 
-    resolved_auth_key = (
-        os.getenv(KRX_OPEN_API_AUTH_ENV, "").strip()
-        if auth_key is None
-        else str(auth_key).strip()
-    )
+    resolved_auth_key, auth_source = _resolve_krx_open_api_auth_key(auth_key=auth_key)
     metadata: dict[str, Any] = {
         "source": "KRX_OPEN_API_STOCK_DAILY",
         "base_url": KRX_OPEN_API_BASE_URL,
         "api_ids": list(KRX_OPEN_API_ENDPOINTS),
-        "auth_env": KRX_OPEN_API_AUTH_ENV,
+        "auth_env": f"{KRX_OPEN_API_AUTH_ENV}|{KRX_OPEN_API_CONFIG_KEY}",
+        "auth_source": auth_source,
         "auth_configured": bool(resolved_auth_key),
         "auth_value_recorded": False,
         "legacy_mdc_endpoint_called": False,
@@ -290,6 +320,7 @@ def _fetch_krx_daily(
     output: dict[str, dict[str, Any]] = {}
     payloads: dict[str, Any] = {}
     endpoint_errors: dict[str, str] = {}
+    endpoint_http_statuses: dict[str, int] = {}
     for api_id in KRX_OPEN_API_ENDPOINTS:
         url = f"{KRX_OPEN_API_BASE_URL}/{api_id}"
         try:
@@ -318,6 +349,10 @@ def _fetch_krx_daily(
             payloads[api_id] = payload
         except Exception as exc:
             endpoint_errors[api_id] = f"{type(exc).__name__}:{exc}"
+            response = getattr(exc, "response", None)
+            status_code = getattr(response, "status_code", None)
+            if isinstance(status_code, int):
+                endpoint_http_statuses[api_id] = status_code
             continue
         for row in response_rows:
             symbol = str(row.get("ISU_CD") or "").strip()
@@ -338,8 +373,18 @@ def _fetch_krx_daily(
                 if not endpoint_errors
                 else ("partial" if payloads else "source_unavailable")
             ),
-            "error": ("krx_open_api_endpoint_failure" if endpoint_errors else None),
+            "error": (
+                "krx_open_api_unauthorized"
+                if endpoint_errors
+                and endpoint_http_statuses
+                and len(endpoint_http_statuses) == len(endpoint_errors)
+                and all(
+                    status in {401, 403} for status in endpoint_http_statuses.values()
+                )
+                else ("krx_open_api_endpoint_failure" if endpoint_errors else None)
+            ),
             "endpoint_errors": endpoint_errors,
+            "endpoint_http_statuses": endpoint_http_statuses,
             "response_sha256": _sha256_json(payloads) if payloads else None,
             "row_count": len(output),
         }
@@ -584,6 +629,7 @@ def _independent_api_observation(
     *,
     target_date: str,
     venue: str,
+    as_of: datetime | None = None,
 ) -> dict[str, Any]:
     target = target_date.replace("-", "")
     session_start = "1600" if venue == "NXT" else "0900"
@@ -604,6 +650,12 @@ def _independent_api_observation(
         if any(values[key] is None for key in ("o", "h", "l", "c", "v")):
             continue
         moment = datetime.strptime(stamp[:12], "%Y%m%d%H%M").replace(tzinfo=KST)
+        if (
+            as_of is not None
+            and moment.date() == as_of.date()
+            and moment + timedelta(minutes=1) > as_of
+        ):
+            continue
         normalized.append({"minute": moment, **values})
     normalized.sort(key=lambda item: item["minute"])
     missing = []
@@ -1004,7 +1056,14 @@ def build_symbol_comparison(
     ai_payload_rows: list[dict[str, Any]] | None = None,
     payload_route_minutes: dict[str, list[dict[str, Any]]] | None = None,
     source_meta: dict[str, Any],
+    as_of: datetime | None = None,
 ) -> dict[str, Any]:
+    comparison_as_of = as_of or datetime.now(KST)
+    if comparison_as_of.tzinfo is None:
+        comparison_as_of = comparison_as_of.replace(tzinfo=KST)
+    else:
+        comparison_as_of = comparison_as_of.astimezone(KST)
+    captured_at = comparison_as_of.isoformat()
     session = "aftermarket" if venue == "NXT" else "regular"
     basis = {
         "target_date": target_date,
@@ -1024,6 +1083,7 @@ def build_symbol_comparison(
         venue=venue,
         session=session,
         target_date=target_date,
+        captured_at=captured_at,
         previous_day={},
     )
     external_observation = build_market_context_observation(
@@ -1032,12 +1092,14 @@ def build_symbol_comparison(
         venue=venue,
         session=session,
         target_date=target_date,
+        captured_at=captured_at,
         previous_day={},
     )
     independent_observation = _independent_api_observation(
         kiwoom_minutes,
         target_date=target_date,
         venue=venue,
+        as_of=comparison_as_of,
     )
     rows: list[dict[str, Any]] = []
     daily_source = str(
@@ -1049,7 +1111,12 @@ def build_symbol_comparison(
             ("open", "high", "low", "close", "volume"),
         )
     )
-    comparable_daily = venue == "KRX"
+    target_day = date.fromisoformat(target_date)
+    current_day_daily_final = target_day < comparison_as_of.date() or (
+        target_day == comparison_as_of.date()
+        and comparison_as_of.time() >= datetime.strptime("15:31", "%H:%M").time()
+    )
+    comparable_daily = venue == "KRX" and current_day_daily_final
     for field in ("open", "high", "low", "close", "volume"):
         field_comparable = comparable_daily and field in daily_comparable_fields
         rows.append(
@@ -1065,9 +1132,13 @@ def build_symbol_comparison(
                     ""
                     if field_comparable
                     else (
-                        "naver_daily_volume_snapshot_not_final_krx_basis"
-                        if comparable_daily and field == "volume"
-                        else "nxt_or_integrated_value_not_compared_with_krx_only"
+                        "current_trading_day_daily_bar_not_final"
+                        if venue == "KRX" and not current_day_daily_final
+                        else (
+                            "naver_daily_volume_snapshot_not_final_krx_basis"
+                            if comparable_daily and field == "volume"
+                            else "nxt_or_integrated_value_not_compared_with_krx_only"
+                        )
                     )
                 ),
                 source=daily_source,
@@ -1105,10 +1176,41 @@ def build_symbol_comparison(
         for row in (ai_bars or [])
         if isinstance(row, dict)
     }
+    completed_api_minutes = {
+        str(row.get("t") or "")[:5]
+        for row in observation.get("bars_1m_completed", [])
+        if isinstance(row, dict)
+    }
     for minute in sorted(set(kiwoom_by_time) & set(naver_by_time)):
         api_row = kiwoom_by_time[minute]
         external_row = naver_by_time[minute]
         call_auction = minute == "15:30" and venue == "KRX"
+        completed_minute = minute in completed_api_minutes or call_auction
+        minute_moment = datetime.combine(
+            target_day,
+            datetime.strptime(minute, "%H:%M").time(),
+            tzinfo=KST,
+        )
+        external_minute_stable = (
+            target_day < comparison_as_of.date()
+            or minute_moment + NAVER_MINUTE_PUBLICATION_LAG <= comparison_as_of
+        )
+        minute_comparable = (
+            venue == "KRX"
+            and completed_minute
+            and external_minute_stable
+            and not call_auction
+        )
+        if not completed_minute:
+            minute_reason = "forming_minute_excluded_exact_capture_cutoff"
+        elif call_auction:
+            minute_reason = "krx_closing_call_auction_separate_aggregation"
+        elif not external_minute_stable:
+            minute_reason = "naver_minute_publication_lag_window"
+        elif venue != "KRX":
+            minute_reason = "naver_integrated_or_unknown_venue_basis"
+        else:
+            minute_reason = ""
         rows.append(
             compare_value(
                 field=f"minute.{minute}.close",
@@ -1122,26 +1224,22 @@ def build_symbol_comparison(
                 ),
                 external_value=external_row.get("close"),
                 value_type="integer",
-                comparable=venue == "KRX" and not call_auction,
-                reason=(
-                    "krx_closing_call_auction_separate_aggregation"
-                    if call_auction
-                    else (
-                        ""
-                        if venue == "KRX"
-                        else "naver_integrated_or_unknown_venue_basis"
-                    )
-                ),
+                comparable=minute_comparable,
+                reason=minute_reason,
                 source="NAVER_FCHART_MINUTE",
                 basis={**basis, "minute": minute},
             )
         )
         delta = naver_deltas.get(minute, {})
         opening_call_auction = minute == "09:00" and venue == "KRX"
-        if opening_call_auction:
+        if not completed_minute:
+            volume_reason = "forming_minute_excluded_exact_capture_cutoff"
+        elif opening_call_auction:
             volume_reason = "krx_opening_call_auction_cumulative_basis"
         elif call_auction:
             volume_reason = "krx_closing_call_auction_separate_aggregation"
+        elif not external_minute_stable:
+            volume_reason = "naver_minute_publication_lag_window"
         else:
             volume_reason = str(delta.get("reason") or "")
         rows.append(
@@ -1159,6 +1257,8 @@ def build_symbol_comparison(
                 value_type="integer",
                 comparable=bool(
                     venue == "KRX"
+                    and completed_minute
+                    and external_minute_stable
                     and not opening_call_auction
                     and not call_auction
                     and delta.get("comparable")
@@ -1183,6 +1283,9 @@ def build_symbol_comparison(
         route_minutes=dict(payload_route_minutes or {}),
         target_date=target_date,
     )
+    source_quality_pass = (observation.get("source_quality") or {}).get(
+        "status"
+    ) == "pass"
     return {
         "symbol": symbol,
         "venue": venue,
@@ -1199,7 +1302,12 @@ def build_symbol_comparison(
                 row["status"] == "SOURCE_UNAVAILABLE" for row in rows
             ),
             "required_source_field_match_status": (
-                "pass" if comparable_rows and not mismatches else "fail"
+                "pass"
+                if comparable_rows and not mismatches and source_quality_pass
+                else "fail"
+            ),
+            "source_quality_gate_status": (
+                "pass" if source_quality_pass else "source_quality_blocked"
             ),
         },
         "market_context_observation": observation,
@@ -1260,6 +1368,7 @@ def build_live_report(
     from src.utils import kiwoom_utils
 
     capture_date = _validated_provenance_date(target_date, provenance_date)
+    comparison_as_of = datetime.now(KST)
     token = kiwoom_utils.get_kiwoom_token()
     if not token:
         raise RuntimeError("Kiwoom token unavailable")
@@ -1373,6 +1482,7 @@ def build_live_report(
                         request_provenance.get(symbol, []),
                     ),
                 },
+                as_of=comparison_as_of,
             )
         )
     mismatch_count = sum(item["summary"]["mismatch_count"] for item in results)
@@ -1423,6 +1533,7 @@ def build_live_report(
     return {
         "schema": SCHEMA,
         "generated_at": datetime.now(KST).isoformat(),
+        "comparison_as_of": comparison_as_of.isoformat(),
         "date": target_date,
         "provenance_capture_date": capture_date,
         "provenance_join_policy": (

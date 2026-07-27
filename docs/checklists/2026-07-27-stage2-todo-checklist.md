@@ -126,6 +126,13 @@
   - 금지: 검증 결과를 라이브 AI prompt, threshold, provider route, 주문, bot 재시작 또는 live promotion에 연결하지 않는다. `runtime_effect=false`, `actual_order_submitted=false`를 유지한다.
   - 다음 액션: `external_match_pass`, `source_unavailable_reasoned`, `basis_not_comparable`, `mismatch_investigate_no_runtime_apply`, `provider_or_schema_fail` 중 하나로 닫는다.
 
+- [x] `[AIInputExternalValidationKRX1110Recheck] 사용자 지시에 따라 KRX 11:10 재검증을 10:49~10:51 조기 실행` (`Due: 2026-07-27`, `Slot: INTRADAY`, `TimeWindow: 10:49~10:51`, `Track: ScalpingLogic`)
+  - Source: [ai_input_external_validation.py](/home/ubuntu/KORStockScan/src/engine/scalping/ai_input_external_validation.py), [entry_context_intraday_probe.py](/home/ubuntu/KORStockScan/src/engine/scalping/entry_context_intraday_probe.py), [ai_input_external_validation_2026-07-27.json](/home/ubuntu/KORStockScan/data/report/ai_input_external_validation/ai_input_external_validation_2026-07-27.json)
+  - 판정 기준: `005930`, `096770`, `100090`의 조기 실행 직전 완성분을 캡처해 당일 진행형 일봉과 형성 중 1분봉은 `NOT_COMPARABLE`로 분리하고, 비교 가능한 종가·누적거래량 차분 및 키움 원응답 독립 파생값은 `MISMATCH=0`인지 확인한다. 유효한 자연 발생 endpoint 표본에는 실제 포렌식 호출을 수행해 `provider!=none`, exact request/response hash, 응답 의미계약을 확인한다.
+  - 금지: 유효한 stage/position 문맥이 없는 holding 표본을 합성하지 않으며, 결과를 라이브 AI prompt, threshold, provider route, 주문, bot 재시작 또는 live promotion에 연결하지 않는다. `runtime_effect=false`, `actual_order_submitted=false`를 유지한다.
+  - 실행 결과: 10:48 완성분까지 비교 가능한 키움/네이버 종가·거래량 차분과 키움 원응답 독립 파생값은 `MISMATCH=0`; `005930`, `096770` source-quality PASS, `100090`은 10:15 결측분으로 `source_quality_blocked`. `analyze_target` OpenAI와 `entry_price` Bedrock/OpenAI 실제 호출은 `provider!=none`, request/response hash 및 의미계약을 통과했다.
+  - 다음 액션: fixed symbol exact payload는 자연 호출이 없어 `required_payload_match_status=fail`, `holding_score`/`holding_flow`는 유효한 자연 보유 문맥이 없어 미호출, compact probe 복원행은 원시 bars가 없어 exact 분봉 비교 권한이 없음을 유지한다. `no_valid_natural_endpoint_sample`은 14:30 캡처에서 재확인한다.
+
 - [ ] `[AIInputExternalValidationKRX1430] KRX 14:30 완성분 AI 입력·외부값 동시 캡처` (`Due: 2026-07-27`, `Slot: INTRADAY`, `TimeWindow: 14:30~14:35`, `Track: ScalpingLogic`)
   - Source: [ai_input_external_validation.py](/home/ubuntu/KORStockScan/src/engine/scalping/ai_input_external_validation.py), [entry_context_intraday_probe.py](/home/ubuntu/KORStockScan/src/engine/scalping/entry_context_intraday_probe.py), [ai_input_external_validation_2026-07-27.json](/home/ubuntu/KORStockScan/data/report/ai_input_external_validation/ai_input_external_validation_2026-07-27.json)
   - 판정 기준: `005930`, `096770`, `100090`의 동일 venue/session/수정주가/완성봉을 캡처하고 비교 가능한 필수 필드 `MISMATCH=0`, endpoint 실제 호출 `provider!=none`, 응답 의미계약 통과를 확인한다.

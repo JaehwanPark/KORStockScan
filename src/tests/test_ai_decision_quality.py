@@ -14,6 +14,17 @@ def _payload():
             "entry_candle_context": {
                 "schema": quality.ENTRY_CONTEXT_SCHEMA,
                 "input_bundle_version": quality.INPUT_BUNDLE_VERSION,
+                "bars": [
+                    {
+                        "t": "09:00",
+                        "o": 100,
+                        "h": 101,
+                        "l": 99,
+                        "c": 100,
+                        "v": 10,
+                        "forming": False,
+                    }
+                ],
             }
         },
     }
@@ -96,6 +107,59 @@ def test_control_manifest_rejects_non_exact_preflight_mode():
     )
     assert report["status"] == "control_manifest_gap_fix_required"
     assert report["excluded_counts"]["input_preflight_not_exact_v2"] == 1
+
+
+def test_control_manifest_rejects_canonical_context_without_completed_bars():
+    payload = _payload()
+    payload["sanitized_user_input"]["entry_candle_context"]["bars"] = [
+        {"t": "09:00", "c": 100, "forming": True}
+    ]
+    report = quality.build_control_manifest(
+        target_date="2026-07-27",
+        promotion={
+            "decision": "promoted_all_market_sessions_full",
+            "runtime_activation": True,
+            "transaction_status": "committed",
+            "promoted_at": "2026-07-27T08:30:00+09:00",
+        },
+        traces=[_trace()],
+        payloads=[payload],
+    )
+    assert report["status"] == "control_manifest_gap_fix_required"
+    assert report["excluded_counts"]["canonical_completed_bars_missing"] == 1
+
+
+def test_holding_context_contract_reads_nested_candle_bundle_and_bars():
+    trace = {
+        **_trace(),
+        "decision_stage": "holding",
+        "endpoint": "holding_score",
+    }
+    payload = {
+        "payload_sha256": "payload-1",
+        "replay_exact": True,
+        "sanitized_user_input": {
+            "holding_decision_context": {
+                "schema": quality.HOLDING_CONTEXT_SCHEMA,
+                "candle": {
+                    "input_bundle_version": quality.INPUT_BUNDLE_VERSION,
+                    "bars": [{"minute": "09:00", "close": 100, "is_forming": False}],
+                },
+            }
+        },
+    }
+    report = quality.build_control_manifest(
+        target_date="2026-07-27",
+        promotion={
+            "decision": "promoted_all_market_sessions_full",
+            "runtime_activation": True,
+            "transaction_status": "committed",
+            "promoted_at": "2026-07-27T08:30:00+09:00",
+        },
+        traces=[trace],
+        payloads=[payload],
+    )
+    assert report["status"] == "control_manifest_frozen_collect_exact_samples"
 
 
 def test_mature_outcome_labels_calculates_mfe_mae_first_hit_and_correlation():

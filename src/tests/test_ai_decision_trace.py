@@ -218,6 +218,76 @@ def test_capture_ai_request_prefers_resolved_entry_price_over_earlier_market_val
     assert zero_outcome_row["source_quality_status"] == "pending_future_window"
 
 
+def test_capture_marks_compact_forensic_context_ineligible_without_reconstructing_it(
+    monkeypatch, tmp_path
+):
+    _enable(monkeypatch, tmp_path)
+    fields = trace.capture_ai_request(
+        prompt="prompt",
+        user_input={
+            "stock_code": "005930",
+            "entry_candle_context": {
+                "schema": "entry_candle_context_v1",
+                "input_bundle_version": "scalping_multi_timeframe_context_v1",
+                "bars": [],
+            },
+        },
+        endpoint_name="analyze_target",
+        symbol="005930",
+        request_id="compact-forensic-request",
+        model="gpt-test",
+        schema_name="entry_v1",
+        require_json=True,
+    )
+
+    assert fields["ai_trace_canonical_context_capture_status"] == (
+        "canonical_completed_bars_missing"
+    )
+    payload_row = _rows(trace._payload_path(trace._date_text()))[0]
+    assert payload_row["canonical_context_capture"] == {
+        "expected_schema": "entry_candle_context_v1",
+        "status": "canonical_completed_bars_missing",
+        "exact_v2_candidate": False,
+        "schema": "entry_candle_context_v1",
+        "input_bundle_version": "scalping_multi_timeframe_context_v1",
+        "raw_bar_count": 0,
+        "completed_bar_count": 0,
+        "forming_bar_present": False,
+    }
+
+
+def test_capture_marks_canonical_completed_bars_as_exact_candidate(
+    monkeypatch, tmp_path
+):
+    _enable(monkeypatch, tmp_path)
+    fields = trace.capture_ai_request(
+        prompt="prompt",
+        user_input={
+            "stock_code": "005930",
+            "entry_candle_context": {
+                "schema": "entry_candle_context_v1",
+                "input_bundle_version": "scalping_multi_timeframe_context_v1",
+                "bars": [
+                    {"t": "09:00", "c": 100, "forming": False},
+                    {"t": "09:01", "c": 101, "forming": True},
+                ],
+            },
+        },
+        endpoint_name="analyze_target",
+        symbol="005930",
+        request_id="canonical-request",
+        model="gpt-test",
+        schema_name="entry_v1",
+        require_json=True,
+    )
+
+    assert fields["ai_trace_canonical_context_capture_status"] == (
+        "exact_completed_bars_captured"
+    )
+    assert fields["ai_trace_canonical_context_completed_bar_count"] == 1
+    assert fields["ai_trace_canonical_context_forming_bar_present"] is True
+
+
 def test_capture_holding_request_uses_executable_bid_not_historical_entry_price(
     monkeypatch, tmp_path
 ):
@@ -231,10 +301,15 @@ def test_capture_holding_request_uses_executable_bid_not_historical_entry_price(
             "entry_time_context": {"resolved_order_price": 69_900},
             "position_context": {"current_price": 70_100},
             "holding_decision_context": {
+                "schema": "holding_decision_context_v1",
+                "candle": {
+                    "input_bundle_version": "scalping_multi_timeframe_context_v1",
+                    "bars": [{"minute": "09:00", "close": 70_000, "is_forming": False}],
+                },
                 "microstructure": {
                     "best_bid": 70_000,
                     "best_ask": 70_200,
-                }
+                },
             },
         },
         endpoint_name="holding_score",
@@ -249,6 +324,9 @@ def test_capture_holding_request_uses_executable_bid_not_historical_entry_price(
     assert fields["ai_trace_reference_price_type"] == "executable_bid"
     assert fields["ai_trace_best_bid"] == 70_000
     assert fields["ai_trace_best_ask"] == 70_200
+    assert fields["ai_trace_canonical_context_capture_status"] == (
+        "exact_completed_bars_captured"
+    )
 
 
 def test_capture_ai_request_redacts_sensitive_values(monkeypatch, tmp_path):
