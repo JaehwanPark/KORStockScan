@@ -26,7 +26,10 @@ from src.engine.scalping.watch_budget import (
     RISING_MISSED,
     classify_owner as classify_watch_budget_owner,
     limits as watch_budget_limits,
+    normalize_owner as normalize_watch_budget_owner,
+    policy_version as watch_budget_policy_version,
 )
+from src.engine.scalping.limit_down_watch import LimitDownWatchManager
 from src.engine.scalping.opening_rotation import EntryConfig as OpeningRotationConfig
 from src.engine.sniper_time import (
     SCALPING_BUY_WINDOWS,
@@ -580,6 +583,79 @@ def _active_scanner_watching_count(db):
     except Exception as exc:
         log_error(f"⚠️ [SCALPING 스캐너] active WATCHING 수량 확인 실패: {exc}")
         return 0
+
+
+def _active_scanner_watching_owner_counts(db):
+    counts = {
+        GENERAL_SCALPING: 0,
+        OPENING_ROTATION: 0,
+        RISING_MISSED: 0,
+    }
+    try:
+        with db.get_session() as session:
+            if hasattr(session, "query"):
+                records = (
+                    session.query(RecommendationHistory)
+                    .filter(
+                        RecommendationHistory.rec_date == datetime.now().date(),
+                        RecommendationHistory.status == "WATCHING",
+                        RecommendationHistory.strategy == "SCALPING",
+                        RecommendationHistory.position_tag == "SCANNER",
+                        RecommendationHistory.buy_time.is_(None),
+                        RecommendationHistory.buy_qty == 0,
+                    )
+                    .all()
+                )
+            else:
+                records = list(getattr(session, "records", []))
+        for record in records:
+            if getattr(record, "status", None) != "WATCHING":
+                continue
+            if getattr(record, "strategy", None) != "SCALPING":
+                continue
+            if getattr(record, "position_tag", None) != "SCANNER":
+                continue
+            if getattr(record, "buy_time", None) is not None:
+                continue
+            if int(getattr(record, "buy_qty", 0) or 0) != 0:
+                continue
+            owner = normalize_watch_budget_owner(
+                getattr(record, "scanner_watch_budget_owner", ""),
+                default=RISING_MISSED,
+            )
+            counts[owner] += 1
+    except Exception as exc:
+        log_error(f"⚠️ [SCALPING 스캐너] active WATCHING owner 확인 실패: {exc}")
+    return counts
+
+
+def _active_scalping_codes(db):
+    """Return codes already owned by any active trade/watch lane."""
+    try:
+        with db.get_session() as session:
+            if hasattr(session, "query"):
+                rows = (
+                    session.query(RecommendationHistory.stock_code)
+                    .filter(
+                        RecommendationHistory.rec_date == datetime.now().date(),
+                        RecommendationHistory.status.in_(("WATCHING", "HOLDING")),
+                    )
+                    .all()
+                )
+                return {
+                    str(row[0] if isinstance(row, tuple) else row.stock_code).strip()[
+                        :6
+                    ]
+                    for row in rows
+                }
+            return {
+                str(getattr(record, "stock_code", "") or "").strip()[:6]
+                for record in getattr(session, "records", [])
+                if getattr(record, "status", None) in {"WATCHING", "HOLDING"}
+            }
+    except Exception as exc:
+        log_error(f"⚠️ [SCALPING 스캐너] active scalping 코드 조회 실패: {exc}")
+        return set()
 
 
 def _has_active_non_scanner_scalping_watching_code(db, code):
@@ -2654,7 +2730,7 @@ def _scanner_event_fields(target, source_guard=None):
         "scanner_watch_budget_owner": target.get("ScannerWatchBudgetOwner")
         or source_guard.get("scanner_watch_budget_owner")
         or GENERAL_SCALPING,
-        "scanner_watch_budget_policy": "general1_opening3_rising_residual_v1",
+        "scanner_watch_budget_policy": watch_budget_policy_version(),
         "scanner_watch_budget_owner_source": "scanner_candidate_classification",
         "scanner_block_reason": (
             source_guard.get("reason") if source_guard.get("blocked") else ""
@@ -2891,6 +2967,7 @@ def promote_candidates(
     reentry_cooldown_sec,
     token=None,
     now_ts=None,
+    limit_down_manager=None,
 ):
     now_ts = time.time() if now_ts is None else now_ts
     candidate_venue_fields = scalping_session_venue_provenance(now_ts)
@@ -2945,7 +3022,12 @@ def promote_candidates(
         0, low_rebound_active_floor - active_low_rebound_count
     )
     if low_rebound_candidates_present and low_rebound_floor_shortfall > 0:
-        open_slots = max(0, max_active - active_count)
+        observation_slots = (
+            limit_down_manager.active_slot_count()
+            if limit_down_manager is not None
+            else 0
+        )
+        open_slots = max(0, max_active - active_count - observation_slots)
         replacement_needed = max(0, low_rebound_floor_shortfall - open_slots)
         replacement_needed = min(
             replacement_needed,
@@ -2975,7 +3057,10 @@ def promote_candidates(
                 f"floor={low_rebound_active_floor} active_low_rebound={active_low_rebound_count}"
             )
     max_new_limit = max(0, int(max_new_codes or 0))
-    open_slots = max(0, max_active - active_count)
+    observation_slots = (
+        limit_down_manager.active_slot_count() if limit_down_manager is not None else 0
+    )
+    open_slots = max(0, max_active - active_count - observation_slots)
     replacement_probe_slots = 0
     replacement_probe_mode = False
     if (
@@ -3012,13 +3097,9 @@ def promote_candidates(
     )
     low_rebound_promoted_count = 0
     general_promoted_count = 0
-    owner_promoted_counts = {
-        GENERAL_SCALPING: 0,
-        OPENING_ROTATION: 0,
-        RISING_MISSED: 0,
-    }
+    owner_promoted_counts = _active_scanner_watching_owner_counts(db)
     promotion_policy = watch_budget_limits(
-        max_new_limit,
+        max_active,
         opening_window_active=True,
     )
 
@@ -3056,6 +3137,10 @@ def promote_candidates(
                     0,
                     promotion_policy.opening_protected
                     - owner_promoted_counts[OPENING_ROTATION],
+                )
+                + max(
+                    0,
+                    promotion_policy.limit_down_protected - observation_slots,
                 ),
             )
         pre_filter_reason = _scanner_candidate_pre_filter_reason(target)
@@ -3189,7 +3274,11 @@ def promote_candidates(
             },
         }
 
-        if watch_budget_enabled and owner_promoted_counts[watch_owner] >= owner_limit:
+        if (
+            watch_budget_enabled
+            and not replacement_probe_mode
+            and owner_promoted_counts[watch_owner] >= owner_limit
+        ):
             continue
 
         score = _freshness_score(target)
@@ -3295,6 +3384,11 @@ def promote_candidates(
             },
         )
         event_bus.publish("SCALPING_SCANNER_PROMOTED_TARGET", runtime_target_payload)
+        if limit_down_manager is not None:
+            # Keep the observation-only signal block until the synchronous
+            # normal-target attach handoff has completed.  The release keeps
+            # the existing WS item, so no intermediate REMOVE is emitted.
+            limit_down_manager.relinquish_for_trading(code)
 
         if len(new_codes_found) >= remaining_slots:
             break
@@ -3856,7 +3950,10 @@ def run_scalper_iteration(
     max_new_codes,
     open_top_limit,
     supernova_limit,
+    limit_down_manager=None,
 ):
+    if limit_down_manager is not None:
+        limit_down_manager.reconcile(active_codes=_active_scalping_codes(db))
     realtime_rank_targets = _fetch_scan_source(
         "ka00198 실시간종목조회순위(30초)",
         kiwoom_utils.get_realtime_item_rank_ka00198,
@@ -3974,6 +4071,7 @@ def run_scalper_iteration(
         max_new_codes=max_new_codes,
         reentry_cooldown_sec=reentry_cooldown_sec,
         token=token,
+        limit_down_manager=limit_down_manager,
     )
 
 
@@ -4021,6 +4119,7 @@ def run_scalper(is_test_mode=False):
         return
 
     radar = SniperRadar(token)
+    limit_down_manager = LimitDownWatchManager(token, db, event_bus)
 
     while True:
         now = datetime.now()
@@ -4067,6 +4166,7 @@ def run_scalper(is_test_mode=False):
                 )
                 recent_picks = {}
                 last_outside_reset_key = reset_key
+            limit_down_manager.release(reason="session_ended")
             if time.time() - last_closed_msg_time > 3600:
                 print(
                     "🌙 신규 스캘핑 후보 발굴 시간이 아닙니다. "
@@ -4087,6 +4187,7 @@ def run_scalper(is_test_mode=False):
             max_new_codes=max_new_codes,
             open_top_limit=open_top_limit,
             supernova_limit=supernova_limit,
+            limit_down_manager=limit_down_manager,
         )
 
         time.sleep(scan_interval_sec)

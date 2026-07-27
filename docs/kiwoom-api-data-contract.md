@@ -68,6 +68,32 @@ hard/protect/emergency safety. A newly observed field that is absent from the
 official contract remains raw/source-quality provenance until its semantics
 are confirmed and the local producer-to-consumer contract is reviewed.
 
+### 2026-07-27 ka10017 Previous-Limit-Down Observation Gate
+
+- Retrieved at `2026-07-27T16:01:10+09:00` from upstream commit
+  `1504d45fa145eb11fdd662a08aa9d873eee55849`.
+- Inspected `kiwoom_docs/종목정보.md`,
+  `examples/국내주식/종목정보/get_domestic_upper_lower_limit_stocks.py`, the
+  local `ka10081` parser, and the existing REG/REMOVE implementation.
+- The source-only observer uses `POST /api/dostk/stkinfo`,
+  `api-id=ka10017`, with `mrkt_tp=000`, `updown_tp=7`, `sort_tp=2`,
+  `stk_cnd=10`, `trde_qty_tp=00000`, `crd_cnd=0`, `trde_gold_tp=0`, and
+  `stex_tp=1`. The documented five-character `00000` is canonical. A
+  read-only production smoke confirmed that it and the example's `0000`
+  currently return `return_code=0`; runtime does not silently switch away
+  from the documented value.
+- `updown_pric[*].cnt` is required consecutive-count provenance. Missing,
+  non-numeric, or non-positive values are row-level source-quality blocks.
+  `cnt=1` maps to `single_limit_down`; `cnt>=2` maps to
+  `consecutive_limit_down_2plus`.
+- The response current price is not used as the prior limit-down close. Price
+  band authority requires the latest completed `ka10081` row strictly before
+  the target date to match `daily_stock_quotes` on symbol, date, and close.
+  Missing or conflicting rows fail closed.
+- `ka10001.lst_pric` is the current KRX lower-limit price used only for
+  intraday `LIMIT_LOCKED/UNLOCKED/RELOCKED` observation. It grants no BUY,
+  order, threshold, provider, quantity, cap, broker-guard, or bot authority.
+
 ## 0B Trade Aggressor
 
 - Prefer the 0B event's explicit signed trade volume `15` when it starts with

@@ -19179,6 +19179,90 @@ def _reconcile_rising_missed_reentry_risk_with_sell_completed(
     }
 
 
+def _snapshot_rising_missed_same_day_reentry_guard(
+    code: str, now_ts: float | None = None
+) -> dict:
+    """Read the re-entry guard without mutating runtime state.
+
+    Scanner async preparation may read the in-memory risk row and persisted
+    event history, but it must not hydrate or alter the live risk registry.
+    The resulting snapshot is applied only after the generation/fresh-quote
+    COMMIT guard accepts it on the main thread.
+    """
+
+    enabled = _rising_missed_same_day_reentry_guard_enabled()
+    now_value = float(now_ts or time.time())
+    base = {
+        "guard_family": "rising_missed_same_day_reentry_guard",
+        "enabled": enabled,
+        "allowed": True,
+        "reason": "pass",
+        "risk_remaining_sec": 0,
+        "reentry_action": "none",
+        "watching_budget_priority": "normal",
+    }
+    if not enabled:
+        return {**base, "reason": "disabled"}
+    norm_code = str(code or "").strip()[:6]
+    if not norm_code:
+        return {**base, "reason": "missing_code"}
+
+    row = dict(_RISING_MISSED_SAME_DAY_REENTRY_RISK.get(norm_code) or {})
+    if _safe_float(row.get("expires_at"), 0.0) <= now_value:
+        rows_by_code = _load_rising_missed_reentry_risk_events(
+            datetime.fromtimestamp(now_value).date().isoformat()
+        )
+        active_rows = [
+            dict(item)
+            for item in rows_by_code.get(norm_code, [])
+            if _safe_float(item.get("expires_at"), 0.0) > now_value
+        ]
+        row = active_rows[-1] if active_rows else {}
+    expires_at = _safe_float(row.get("expires_at"), 0.0)
+    if not row or expires_at <= now_value:
+        return base
+
+    reconciliation = _reconcile_rising_missed_reentry_risk_with_sell_completed(
+        norm_code, row, now_value
+    )
+    action = str(reconciliation.get("action") or "keep")
+    if action == "invalidate":
+        return {
+            **base,
+            "reason": reconciliation.get("reason")
+            or "risk_invalidated_by_sell_completed",
+        }
+    if action == "downgrade_low_priority":
+        row.update(
+            {
+                "reentry_action": "low_priority",
+                "reason": "prior_rising_missed_exit_recovered_with_avgdown",
+                "profit_rate": reconciliation.get(
+                    "realized_profit_rate", row.get("profit_rate")
+                ),
+                "exit_rule": reconciliation.get("realized_exit_rule", row.get("exit_rule")),
+            }
+        )
+    reentry_action = str(row.get("reentry_action") or "block")
+    if reentry_action not in {"block", "low_priority"}:
+        reentry_action = "block"
+    return {
+        **base,
+        "allowed": False,
+        "reason": row.get("reason") or f"same_day_reentry_{reentry_action}",
+        "risk_remaining_sec": max(1, int(expires_at - now_value)),
+        "risk_marked_at": _safe_float(row.get("marked_at"), 0.0),
+        "risk_expires_at": expires_at,
+        "last_exit_rule": row.get("exit_rule") or "-",
+        "last_exit_profit_rate": row.get("profit_rate"),
+        "last_exit_avg_down_count": row.get("avg_down_count", 0),
+        "reentry_action": reentry_action,
+        "watching_budget_priority": (
+            "blocked" if reentry_action == "block" else "low"
+        ),
+    }
+
+
 def evaluate_rising_missed_same_day_reentry_guard(
     code: str, now_ts: float | None = None
 ) -> dict:
@@ -46535,11 +46619,26 @@ def _resolve_scanner_async_rising_missed_context(
                 "_rising_missed_quality_guard_pre_envelope_last_fetch_at": float(
                     prepared.get("prepared_at_epoch") or now_epoch
                 ),
+                "_rising_missed_async_reentry_guard_context": {
+                    "generation_id": generation.generation_id,
+                    "prepared_at_epoch": float(
+                        prepared.get("prepared_at_epoch") or now_epoch
+                    ),
+                    "guard": dict(prepared.get("reentry_guard") or {}),
+                },
             },
         )
         return {"status": "completed"}
 
     if commit_phase:
+        # A Rising Missed freshness result may have already committed and a
+        # subsequent async entry-AI result can share the generic cache slot.
+        # That result belongs to the normal async entry resolver below, not a
+        # second freshness-envelope COMMIT.
+        if str(stock.get("_scanner_async_cache_key") or "").strip() and not str(
+            stock.get("_scanner_async_cache_key") or ""
+        ).strip().startswith("rising_missed:"):
+            return {"status": "not_applicable"}
         return {"status": "commit_result_missing"}
     if coordinator.is_pending(
         generation_id=generation.generation_id,
@@ -46578,6 +46677,9 @@ def _resolve_scanner_async_rising_missed_context(
         return {
             "enriched_ws": enriched_ws,
             "envelope_fields": envelope_fields,
+            "reentry_guard": _snapshot_rising_missed_same_day_reentry_guard(
+                code, time.time()
+            ),
             "prepared_at_epoch": time.time(),
         }
 
@@ -58726,6 +58828,22 @@ def _rising_missed_scout_entry_budget_cap_krw() -> int:
     return 0
 
 
+def _rising_missed_async_prepared_reentry_guard(
+    stock: dict,
+    runtime: dict,
+) -> dict | None:
+    """Return only a generation-matched, worker-prepared re-entry decision."""
+
+    generation = runtime.get("scanner_async_generation")
+    prepared = stock.get("_rising_missed_async_reentry_guard_context")
+    if not isinstance(generation, ScannerGeneration) or not isinstance(prepared, dict):
+        return None
+    if str(prepared.get("generation_id") or "") != generation.generation_id:
+        return None
+    guard = prepared.get("guard")
+    return dict(guard) if isinstance(guard, dict) else None
+
+
 def _maybe_submit_rising_missed_one_share_entry(
     stock,
     code,
@@ -58834,10 +58952,32 @@ def _maybe_submit_rising_missed_one_share_entry(
             "dispatch_rejected",
         }:
             return True
-    reentry_guard = evaluate_rising_missed_same_day_reentry_guard(
-        code,
-        _runtime_action_now_ts(runtime),
-    )
+    reentry_guard = None
+    if bool(runtime.get("rising_missed_async_final_commit")):
+        reentry_guard = _rising_missed_async_prepared_reentry_guard(stock, runtime)
+        if reentry_guard is None:
+            _log_entry_pipeline(
+                stock,
+                code,
+                "rising_missed_async_final_commit_blocked",
+                block_reason="prepared_reentry_guard_missing",
+                actual_order_submitted=False,
+                broker_order_forbidden=True,
+                runtime_effect=False,
+                decision_authority="scanner_async_rising_missed_final_commit_guard",
+                metric_role="source_quality_gate",
+                window_policy="per_scanner_generation",
+                sample_floor="one_rising_missed_async_generation",
+                primary_decision_metric="result_to_commit_sec",
+                source_quality_gate="generation_matched_reentry_guard_required",
+                forbidden_uses=TRADE_QUALITY_RUNTIME_FORBIDDEN_USES,
+            )
+            return True
+    if reentry_guard is None:
+        reentry_guard = evaluate_rising_missed_same_day_reentry_guard(
+            code,
+            _runtime_action_now_ts(runtime),
+        )
     if not reentry_guard.get("allowed", True):
         action = str(reentry_guard.get("reentry_action") or "block")
         stage = (
@@ -64391,6 +64531,123 @@ def handle_scanner_async_opening_rotation_commit(
     if runtime["is_trigger"]:
         _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime)
     return True
+
+
+def handle_scanner_async_rising_missed_commit(
+    stock,
+    code,
+    ws_data,
+    admin_id,
+    *,
+    now_ts=None,
+    now_dt=None,
+    ai_engine=None,
+    scanner_async_eval_coordinator=None,
+    scanner_async_generation=None,
+) -> bool:
+    """Commit a Rising Missed async result without generic WATCHING preamble.
+
+    The worker prepares the REST freshness envelope and a read-only re-entry
+    history snapshot.  This adapter deliberately performs only current-state
+    checks before delegating to the established Rising Missed candidate and
+    broker-submit owners.  It neither submits directly nor relaxes their
+    account/order/quantity/broker guards.
+    """
+
+    stock = stock if isinstance(stock, dict) else {}
+    ws_data = ws_data if isinstance(ws_data, dict) else {}
+    generation = scanner_async_generation
+    cache_key = str(stock.get("_scanner_async_cache_key") or "").strip()
+    prepared_reentry = stock.get("_rising_missed_async_reentry_guard_context")
+    generation_matches_prepared_reentry = bool(
+        isinstance(generation, ScannerGeneration)
+        and isinstance(prepared_reentry, dict)
+        and str(prepared_reentry.get("generation_id") or "")
+        == generation.generation_id
+    )
+    owns_rising_result = cache_key.startswith("rising_missed:") or (
+        cache_key.startswith("watching:")
+        and generation_matches_prepared_reentry
+        and _has_rising_missed_watch_source_marker(stock)
+    )
+    if (
+        not owns_rising_result
+        or not isinstance(generation, ScannerGeneration)
+        or str(stock.get("_scanner_async_generation_id") or "")
+        != generation.generation_id
+    ):
+        return False
+
+    now_ts = time.time() if now_ts is None else float(now_ts)
+    now_dt = datetime.now() if now_dt is None else now_dt
+    strategy = normalize_strategy(stock.get("strategy"))
+    if strategy != "SCALPING":
+        return False
+    if str(stock.get("status") or "").upper() != "WATCHING":
+        return True
+    if _manual_control_exclusion_blocked(
+        stock,
+        code,
+        pipeline="entry",
+        stage="manual_control_excluded_symbol_blocked",
+        now_ts=now_ts,
+    ):
+        return True
+    if is_buy_side_paused() or not is_scalping_buy_time_allowed(now_dt.time()):
+        return True
+    alerted_stocks = ALERTED_STOCKS if isinstance(ALERTED_STOCKS, set) else set()
+    cooldowns = COOLDOWNS if isinstance(COOLDOWNS, dict) else {}
+    if code in alerted_stocks:
+        return True
+    if _safe_float(cooldowns.get(code), 0.0) > now_ts:
+        return True
+    if _safe_int(stock.get("buy_qty"), 0) > 0 or _has_open_pending_entry_orders(stock):
+        return True
+    curr_price = _safe_int(ws_data.get("curr"), 0)
+    if curr_price <= 0:
+        return True
+
+    runtime = {
+        "strategy": strategy,
+        "pos_tag": normalize_position_tag(strategy, stock.get("position_tag")),
+        "now_ts": now_ts,
+        "now_dt": now_dt,
+        "curr_price": curr_price,
+        "current_vpw": _safe_float(ws_data.get("v_pw"), 0.0),
+        "fluctuation": _safe_float(
+            ws_data.get("fluctuation", ws_data.get("fluctuation_rate")), 0.0
+        ),
+        "current_ai_score": _safe_float(
+            stock.get("rt_ai_prob", stock.get("prob", 0.5)), 0.5
+        )
+        * 100.0,
+        "liquidity_value": None,
+        "is_trigger": False,
+        "msg": "",
+        "ratio": 0.10,
+        "ai_prob": stock.get("prob", 0.5),
+        "cooldowns": cooldowns,
+        "alerted_stocks": alerted_stocks,
+        "event_bus": EVENT_BUS,
+        "ai_engine": ai_engine,
+        "scout_upgrade_entry": False,
+        "scanner_async_eval_coordinator": scanner_async_eval_coordinator,
+        "scanner_async_generation": generation,
+        "scanner_async_commit_phase": True,
+        "rising_missed_async_final_commit": True,
+    }
+    return bool(
+        _maybe_submit_rising_missed_one_share_entry(
+            stock,
+            code,
+            ws_data,
+            admin_id,
+            runtime,
+            strategy=strategy,
+            pos_tag=runtime["pos_tag"],
+            curr_price=curr_price,
+        )
+    )
 
 
 def _submit_entry_split_probe_residual_locked(

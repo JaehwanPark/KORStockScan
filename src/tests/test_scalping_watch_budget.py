@@ -1,8 +1,10 @@
 from datetime import datetime
 
 from src.engine import kiwoom_sniper_v2
+from src.engine.scalping.limit_down_watch import LIMIT_DOWN_OBSERVATION_REGISTRY
 from src.engine.scalping.watch_budget import (
     GENERAL_SCALPING,
+    LIMIT_DOWN_ROTATION,
     OPENING_ROTATION,
     RISING_MISSED,
     classify_owner,
@@ -52,13 +54,12 @@ def test_watch_budget_classifies_opening_rising_and_general():
         )
         == GENERAL_SCALPING
     )
-
-
 def test_watch_budget_limits_are_general1_opening3_rising12_with_borrow_to15():
     policy = limits(16, opening_window_active=True)
 
     assert policy.general_max == 1
     assert policy.opening_protected == 3
+    assert policy.limit_down_protected == 0
     assert policy.rising_guaranteed == 12
     assert policy.rising_max_with_borrow == 15
     assert (
@@ -78,6 +79,71 @@ def test_watch_budget_limits_are_general1_opening3_rising12_with_borrow_to15():
         )
         == "borrowed_opening_slot"
     )
+
+
+def test_watch_budget_limit_down_enabled_is_general1_opening2_limit1_rising12():
+    policy = limits(16, opening_window_active=True, limit_down_enabled=True)
+    assert policy.general_max == 1
+    assert policy.opening_protected == 2
+    assert policy.limit_down_protected == 1
+    assert policy.rising_guaranteed == 12
+    assert (
+        owner_allowances(
+            {
+                GENERAL_SCALPING: 1,
+                OPENING_ROTATION: 2,
+                LIMIT_DOWN_ROTATION: 1,
+                RISING_MISSED: 12,
+            },
+            total=16,
+            opening_window_active=True,
+            limit_down_enabled=True,
+        )[RISING_MISSED]
+        == 12
+    )
+    assert (
+        owner_allowances(
+            {
+                GENERAL_SCALPING: 1,
+                OPENING_ROTATION: 2,
+                LIMIT_DOWN_ROTATION: 0,
+                RISING_MISSED: 13,
+            },
+            total=16,
+            opening_window_active=True,
+            limit_down_enabled=True,
+        )[RISING_MISSED]
+        == 13
+    )
+
+
+def test_runtime_budget_counts_external_limit_down_observation_slot(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_LIMIT_DOWN_WATCH_ENABLED", "true")
+    monkeypatch.setattr(kiwoom_sniper_v2, "_scalping_fifo_max_active", lambda: 16)
+    now_ts = datetime(2026, 7, 22, 10, 0).timestamp()
+    targets = [_watch_target("G00001", GENERAL_SCALPING, 1.0)]
+    targets.extend(
+        _watch_target(f"O{index:05d}", OPENING_ROTATION, 10.0 + index)
+        for index in range(2)
+    )
+    targets.extend(
+        _watch_target(f"R{index:05d}", RISING_MISSED, 20.0 + index)
+        for index in range(12)
+    )
+    LIMIT_DOWN_OBSERVATION_REGISTRY.activate("900001", lambda *_args: None)
+    try:
+        assert (
+            kiwoom_sniper_v2._scalping_watch_budget_overflow_candidates(targets, now_ts)
+            == []
+        )
+        extra = _watch_target("R99999", RISING_MISSED, 99.0)
+        overflow = kiwoom_sniper_v2._scalping_watch_budget_overflow_candidates(
+            [*targets, extra], now_ts
+        )
+        assert len(overflow) == 1
+        assert overflow[0]["scanner_watch_budget_owner"] == RISING_MISSED
+    finally:
+        LIMIT_DOWN_OBSERVATION_REGISTRY.release("900001")
 
 
 def test_runtime_budget_reclaims_borrowed_rising_slot_for_opening(monkeypatch):

@@ -65,6 +65,7 @@ from src.engine.scalping.rising_missed_selection_prior import (
 )
 from src.engine.scalping.watch_budget import (
     GENERAL_SCALPING,
+    LIMIT_DOWN_ROTATION,
     OPENING_ROTATION,
     RISING_MISSED,
     classify_owner as classify_watch_budget_owner,
@@ -72,7 +73,9 @@ from src.engine.scalping.watch_budget import (
     normalize_owner as normalize_watch_budget_owner,
     owner_allowances as watch_budget_owner_allowances,
     slot_type as watch_budget_slot_type,
+    policy_version as watch_budget_policy_version,
 )
+from src.engine.scalping.limit_down_watch import LIMIT_DOWN_OBSERVATION_REGISTRY
 from src.engine.scalping.market_data_enrichment import build_market_data_enrichment
 from src.engine.scalping.position_sizing_allocator import (
     ScalpingSizingContext,
@@ -4944,7 +4947,14 @@ def _scalping_watch_budget_policy_fields(targets, now_ts):
     total = _scalping_fifo_max_active()
     opening_active = _scalping_watch_budget_opening_window_active(now_ts)
     policy = watch_budget_limits(total, opening_window_active=opening_active)
-    counts = {GENERAL_SCALPING: 0, OPENING_ROTATION: 0, RISING_MISSED: 0}
+    counts = {
+        GENERAL_SCALPING: 0,
+        OPENING_ROTATION: 0,
+        LIMIT_DOWN_ROTATION: (
+            1 if LIMIT_DOWN_OBSERVATION_REGISTRY.active_code() else 0
+        ),
+        RISING_MISSED: 0,
+    }
     for target in targets or []:
         owner = _scalping_watch_budget_owner(target, now_ts=now_ts)
         counts[owner] = counts.get(owner, 0) + 1
@@ -4954,11 +4964,12 @@ def _scalping_watch_budget_policy_fields(targets, now_ts):
         opening_window_active=opening_active,
     )
     return {
-        "scanner_watch_budget_policy": "general1_opening3_rising_residual_v1",
+        "scanner_watch_budget_policy": watch_budget_policy_version(),
         "scanner_watch_budget_total": total,
         "scanner_watch_budget_opening_window_active": opening_active,
         "scanner_watch_budget_general_max": policy.general_max,
         "scanner_watch_budget_opening_protected": policy.opening_protected,
+        "scanner_watch_budget_limit_down_protected": policy.limit_down_protected,
         "scanner_watch_budget_rising_guaranteed": policy.rising_guaranteed,
         "scanner_watch_budget_rising_max_with_borrow": policy.rising_max_with_borrow,
         "scanner_watch_budget_owner_counts": counts,
@@ -4982,7 +4993,12 @@ def _scalping_watch_budget_overflow_candidates(targets, now_ts):
     allowances = fields["scanner_watch_budget_owner_allowances"]
     selected = []
     selected_ids = set()
-    for owner in (GENERAL_SCALPING, OPENING_ROTATION, RISING_MISSED):
+    for owner in (
+        GENERAL_SCALPING,
+        OPENING_ROTATION,
+        LIMIT_DOWN_ROTATION,
+        RISING_MISSED,
+    ):
         owner_targets = [
             target
             for target in candidates
@@ -8406,7 +8422,7 @@ def attach_db_poll_target_if_missing(db_target, targets, now_ts):
             "scanner_watch_budget_owner_source": dt[
                 "scanner_watch_budget_owner_source"
             ],
-            "scanner_watch_budget_policy": "general1_opening3_rising_residual_v1",
+            "scanner_watch_budget_policy": watch_budget_policy_version(),
             **_scanner_runtime_target_venue_fields({}, target=dt),
         }
         identity_ok, identity_fields = _scanner_identity_guard(
@@ -9845,6 +9861,7 @@ def run_sniper(is_test_mode=False):
             deferred_scanner_skip_events = []
             scanner_precheck_seen = False
             scanner_heavy_eval_flushed = False
+            scanner_async_commit_yield_requested = False
             scanner_rest_quote_fallback_loop_limit = (
                 _scanner_rest_quote_fallback_max_per_loop()
             )
@@ -10375,7 +10392,10 @@ def run_sniper(is_test_mode=False):
                     pending_scanner_ws_persistent_repair.clear()
 
             def _flush_delayed_scanner_heavy_eval():
+                nonlocal scanner_async_commit_yield_requested
                 nonlocal scanner_heavy_eval_flushed
+                if scanner_async_commit_yield_requested:
+                    return
                 if scanner_heavy_eval_flushed:
                     return
                 # A completed async preparation has a one-second COMMIT
@@ -10755,6 +10775,22 @@ def run_sniper(is_test_mode=False):
                             now_ts=time.time(),
                             emit_event_fn=_defer_scanner_entry_pipeline_log,
                         )
+                    if (
+                        _scanner_scheduler_startup_mode() == "async_v1"
+                        and str(
+                            delayed_stock.get("_scanner_async_cache_key")
+                            or delayed_stock.get(
+                                "_scanner_opening_rotation_async_cache_key"
+                            )
+                            or ""
+                        ).strip()
+                    ):
+                        # The worker usually completes within a fraction of a
+                        # second.  Yield this local target pass immediately
+                        # instead of starting another synchronous heavy unit;
+                        # the next outer iteration owns COMMIT draining.
+                        scanner_async_commit_yield_requested = True
+                        return
                 if heavy_eval_attempted and _admit_runtime_live_attaches():
                     return
                 scanner_heavy_eval_flushed = True
@@ -10869,10 +10905,15 @@ def run_sniper(is_test_mode=False):
                 # A worker can finish while a prior target was handled.  End
                 # this local pass so the next outer iteration drains it into
                 # ScannerLane.COMMIT before handling unrelated WATCHING work.
-                if _scanner_async_commit_ready_for_main_thread():
+                if (
+                    scanner_async_commit_yield_requested
+                    or _scanner_async_commit_ready_for_main_thread()
+                ):
                     break
                 if not runtime_work_queue:
                     _flush_delayed_scanner_heavy_eval()
+                    if scanner_async_commit_yield_requested:
+                        break
                     if runtime_work_queue:
                         continue
                 _admit_runtime_live_attaches()
@@ -10889,6 +10930,8 @@ def run_sniper(is_test_mode=False):
                     and not _is_scanner_watching_target(stock)
                 ):
                     _flush_delayed_scanner_heavy_eval()
+                    if scanner_async_commit_yield_requested:
+                        break
 
                 if status == "BUY_ORDERED":
                     handle_buy_ordered_state(stock, code)
@@ -11296,6 +11339,20 @@ def run_sniper(is_test_mode=False):
                                                 scheduler_generation
                                             ),
                                         )
+                                    elif sniper_state_handlers.handle_scanner_async_rising_missed_commit(
+                                        stock,
+                                        code,
+                                        ws_data,
+                                        admin_id,
+                                        now_ts=time.time(),
+                                        now_dt=datetime.now(),
+                                        ai_engine=ai_engine,
+                                        scanner_async_eval_coordinator=(
+                                            async_coordinator
+                                        ),
+                                        scanner_async_generation=(scheduler_generation),
+                                    ):
+                                        pass
                                     else:
                                         handle_watching_state(
                                             stock,
@@ -12175,7 +12232,11 @@ def run_sniper(is_test_mode=False):
 
             # ── P0: 루프 계측 로그 (60초마다) ─────────────────────
             _loop_elapsed_ms = (time.time() - now_ts) * 1000
-            _sleep_ms = 1000  # 현재 고정값, 후속 canary에서 변경
+            # An async worker was dispatched during this pass.  Do not add the
+            # normal polling sleep before the next pass drains its COMMIT
+            # result.  The yield flag is scoped to one outer iteration, so
+            # this cannot turn an idle runtime into a busy loop.
+            _sleep_ms = 0 if scanner_async_commit_yield_requested else 1000
             _target_count = len(targets)
             _watching_count = len([t for t in targets if t.get("status") == "WATCHING"])
             _holding_count = len([t for t in targets if t.get("status") == "HOLDING"])
@@ -12205,7 +12266,7 @@ def run_sniper(is_test_mode=False):
                 )
                 _LOOP_METRICS_LAST_LOG_TS = now_ts
 
-            time.sleep(1)
+            time.sleep(_sleep_ms / 1000.0)
 
     except Exception as e:
         log_error(f"🔥 스나이퍼 루프 치명적 에러: {e}\n{traceback.format_exc()}")

@@ -12,6 +12,7 @@ from src.engine.sniper_condition_handlers_big_bite import (
     detect_big_bite_trigger,
     build_tick_data_from_ws,
 )
+from src.engine.scalping.limit_down_watch import is_observation_only_code
 
 
 class SniperRadar:
@@ -35,6 +36,8 @@ class SniperRadar:
         code = payload.get("code")
         ws_data = payload.get("data")
 
+        if is_observation_only_code(code):
+            return
         if not ws_data or ws_data.get("curr", 0) == 0:
             return
 

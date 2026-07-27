@@ -5482,6 +5482,57 @@ def test_run_sniper_processes_one_delayed_heavy_eval_before_live_attach_yield():
     assert attempted_set_idx < handler_idx < flushed_idx
 
 
+def test_async_heavy_eval_dispatch_yields_before_another_runtime_target():
+    source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
+    state_idx = source.index("scanner_async_commit_yield_requested = False")
+    flush_idx = source.index("def _flush_delayed_scanner_heavy_eval", state_idx)
+    flush_gate_idx = source.index("if scanner_async_commit_yield_requested:", flush_idx)
+    handler_idx = source.index("handle_watching_state(", flush_idx)
+    async_key_idx = source.index(
+        'delayed_stock.get("_scanner_async_cache_key")', handler_idx
+    )
+    request_idx = source.index(
+        "scanner_async_commit_yield_requested = True", async_key_idx
+    )
+    return_idx = source.index("return", request_idx)
+    runtime_loop_idx = source.index("while True:", return_idx)
+    loop_gate_idx = source.index(
+        "scanner_async_commit_yield_requested",
+        runtime_loop_idx,
+    )
+    pop_idx = source.index("runtime_work_queue.pop(0)", loop_gate_idx)
+
+    assert state_idx < flush_idx < flush_gate_idx < handler_idx < async_key_idx
+    assert async_key_idx < request_idx < return_idx < runtime_loop_idx
+    assert runtime_loop_idx < loop_gate_idx < pop_idx
+
+
+def test_async_heavy_eval_yield_skips_one_normal_polling_sleep():
+    source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
+    yield_idx = source.index("scanner_async_commit_yield_requested = True")
+    sleep_budget_idx = source.index(
+        "_sleep_ms = 0 if scanner_async_commit_yield_requested else 1000",
+        yield_idx,
+    )
+    sleep_idx = source.index("time.sleep(_sleep_ms / 1000.0)", sleep_budget_idx)
+
+    assert yield_idx < sleep_budget_idx < sleep_idx
+
+
+def test_async_commit_routes_rising_missed_before_generic_watching_handler():
+    source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
+    commit_idx = source.index("if scheduled_lane is ScannerLane.COMMIT:")
+    opening_adapter_idx = source.index(
+        "handle_scanner_async_opening_rotation_commit(", commit_idx
+    )
+    rising_adapter_idx = source.index(
+        "handle_scanner_async_rising_missed_commit(", opening_adapter_idx
+    )
+    generic_handler_idx = source.index("handle_watching_state(", rising_adapter_idx)
+
+    assert commit_idx < opening_adapter_idx < rising_adapter_idx < generic_handler_idx
+
+
 def test_scheduler_ready_heavy_eval_flushes_before_next_promotion_attach():
     source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
     enqueue_idx = source.index(

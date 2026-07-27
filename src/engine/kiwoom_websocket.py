@@ -27,6 +27,7 @@ from src.engine.sniper_time import (
 from src.engine.scalping.micro_estimator_state import (
     DEFAULT_STORE as MICRO_ESTIMATOR_STORE,
 )
+from src.engine.scalping.limit_down_watch import observe_raw_tick
 from src.trading.entry.orderbook_stability_observer import ORDERBOOK_STABILITY_OBSERVER
 
 
@@ -1691,10 +1692,15 @@ class KiwoomWSManager:
             except Exception as e:
                 log_error(f"[WS] state event dispatch failed ({event_type}): {e}")
 
-    def _queue_tick_event(self, code, data):
+    def _queue_tick_event(self, code, data, *, realtime_type="0B"):
         if self._stop_event.is_set():
             return
 
+        if str(realtime_type or "").strip() == "0B":
+            try:
+                observe_raw_tick(code, data, time.time())
+            except Exception as exc:
+                log_error(f"[WS] limit-down raw tick observation failed ({code}): {exc}")
         with self._tick_lock:
             self._pending_tick_events[code] = {"code": code, "data": data}
         self._tick_dispatch_event.set()
@@ -2910,7 +2916,9 @@ class KiwoomWSManager:
 
                             # 💡 파싱 완료 후 구독자들에게 전파
                             self._queue_tick_event(
-                                item_code, self._snapshot_target(target)
+                                item_code,
+                                self._snapshot_target(target),
+                                realtime_type=real_type,
                             )
                 self._flush_deferred_scalp_condition_matches_if_allowed()
 

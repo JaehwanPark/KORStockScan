@@ -1252,7 +1252,13 @@ def get_basic_info_ka10001(token, code):
     raw_mac = data.get("mac", 0)
     marcap = int(raw_mac) if str(raw_mac).strip() != "" else 0
 
-    return {"Name": name, "Marcap": marcap}
+    return {
+        "Name": name,
+        "Marcap": marcap,
+        "BasePrice": _scanner_to_int(data.get("base_pric")),
+        "UpperLimitPrice": _scanner_to_int(data.get("upl_pric")),
+        "LowerLimitPrice": _scanner_to_int(data.get("lst_pric")),
+    }
 
 
 def _empty_kiwoom_source_meta(api_id, requested_limit=None):
@@ -2033,6 +2039,69 @@ def _pred_pre_signal_direction(value):
     if text in {"4", "5", "-", "하한", "하락"}:
         return "negative"
     return "unknown"
+
+
+def get_previous_limit_down_stocks_ka10017(token):
+    """Return the official KRX previous-limit-down list with raw provenance.
+
+    Official reference:
+    Kiwoom-Securities/Kiwoom-REST-API@1504d45fa145eb11fdd662a08aa9d873eee55849
+    ``kiwoom_docs/종목정보.md`` (ka10017).
+    """
+
+    payload = {
+        "mrkt_tp": "000",
+        "updown_tp": "7",
+        "sort_tp": "2",
+        "stk_cnd": "10",
+        "trde_qty_tp": "00000",
+        "crd_cnd": "0",
+        "trde_gold_tp": "0",
+        "stex_tp": "1",
+    }
+    results, source_meta = _fetch_kiwoom_api_continuous_with_meta(
+        url=get_api_url("/api/dostk/stkinfo"),
+        token=token,
+        api_id="ka10017",
+        payload=payload,
+        use_continuous=True,
+        max_pages=10,
+    )
+    rows = []
+    for response in results or []:
+        for item in (response or {}).get("updown_pric", []) or []:
+            if not isinstance(item, dict):
+                continue
+            rows.append(
+                {
+                    "Code": normalize_stock_code(item.get("stk_cd")),
+                    "Name": str(item.get("stk_nm") or "").strip(),
+                    "CurrentPrice": _scanner_to_int(item.get("cur_prc")),
+                    "ChangeRate": _scanner_to_signed_float(item.get("flu_rt")),
+                    "Volume": _scanner_to_int(item.get("trde_qty")),
+                    "PreviousVolume": _scanner_to_int(item.get("pred_trde_qty")),
+                    "SellRemain": _scanner_to_int(item.get("sel_req")),
+                    "BestAsk": _scanner_to_int(item.get("sel_bid")),
+                    "BestBid": _scanner_to_int(item.get("buy_bid")),
+                    "BuyRemain": _scanner_to_int(item.get("buy_req")),
+                    "ConsecutiveCountRaw": str(item.get("cnt") or "").strip(),
+                    "PreSig": str(item.get("pred_pre_sig") or "").strip(),
+                    "Raw": dict(item),
+                }
+            )
+    source_meta = _normalize_kiwoom_source_meta(source_meta, "ka10017")
+    source_meta.update(
+        {
+            "request_payload": payload,
+            "received_count": len(rows),
+            "official_upstream_commit": ("1504d45fa145eb11fdd662a08aa9d873eee55849"),
+            "official_upstream_paths": [
+                "kiwoom_docs/종목정보.md",
+                "examples/국내주식/종목정보/get_domestic_upper_lower_limit_stocks.py",
+            ],
+        }
+    )
+    return rows, source_meta
 
 
 def rank_change_sign_diagnostics(rank_change_sign, rank_change):

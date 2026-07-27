@@ -267,6 +267,11 @@ def test_rising_missed_freshness_envelope_prepares_off_thread_then_commits(monke
         handlers, "_scanner_async_quote_is_fresh", lambda *_a, **_k: True
     )
     monkeypatch.setattr(
+        handlers,
+        "_snapshot_rising_missed_same_day_reentry_guard",
+        lambda *_a, **_k: {"allowed": True, "reason": "pass"},
+    )
+    monkeypatch.setattr(
         handlers, "_has_open_pending_entry_orders", lambda _stock: False
     )
     monkeypatch.setattr(handlers, "_log_entry_pipeline", lambda *args, **kwargs: None)
@@ -295,7 +300,101 @@ def test_rising_missed_freshness_envelope_prepares_off_thread_then_commits(monke
 
     assert committed["status"] == "completed"
     assert stock["_rising_missed_tp1_decision_envelope_cache"]["code"] == "005930"
+    reentry_context = stock["_rising_missed_async_reentry_guard_context"]
+    assert reentry_context["generation_id"] == generation.generation_id
+    assert reentry_context["prepared_at_epoch"] > 0
+    assert reentry_context["guard"] == {"allowed": True, "reason": "pass"}
     assert "_scanner_async_cache_key" not in stock
+
+
+def test_rising_missed_async_final_commit_avoids_generic_reentry_history(monkeypatch):
+    generation = _generation("KRX")
+    stock = {
+        "id": 7,
+        "code": "005930",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "scanner_generation_id": generation.generation_id,
+        "_scanner_async_generation_id": generation.generation_id,
+        "_scanner_async_cache_key": "rising_missed:test",
+        "_rising_missed_async_reentry_guard_context": {
+            "generation_id": generation.generation_id,
+            "prepared_at_epoch": time.time(),
+            "guard": {"allowed": True, "reason": "pass"},
+        },
+    }
+    monkeypatch.setattr(
+        handlers, "_manual_control_exclusion_blocked", lambda *_a, **_k: False
+    )
+    monkeypatch.setattr(handlers, "is_buy_side_paused", lambda: False)
+    monkeypatch.setattr(handlers, "is_scalping_buy_time_allowed", lambda _time: True)
+    monkeypatch.setattr(handlers, "COOLDOWNS", {})
+    monkeypatch.setattr(handlers, "ALERTED_STOCKS", set())
+    monkeypatch.setattr(
+        handlers, "_has_open_pending_entry_orders", lambda _stock: False
+    )
+    monkeypatch.setattr(
+        handlers,
+        "evaluate_rising_missed_same_day_reentry_guard",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            AssertionError("final commit must use worker-prepared reentry context")
+        ),
+    )
+    called = []
+
+    def _rising_submit(_stock, _code, _ws, _admin_id, runtime, **_kwargs):
+        called.append(runtime)
+        return True
+
+    monkeypatch.setattr(
+        handlers, "_maybe_submit_rising_missed_one_share_entry", _rising_submit
+    )
+
+    assert handlers.handle_scanner_async_rising_missed_commit(
+        stock,
+        "005930",
+        {"curr": 1001, "last_ws_update_ts": time.time()},
+        admin_id=1,
+        now_ts=time.time(),
+        now_dt=datetime.now(),
+        scanner_async_generation=generation,
+    )
+    assert len(called) == 1
+    assert called[0]["scanner_async_commit_phase"] is True
+    assert called[0]["rising_missed_async_final_commit"] is True
+
+
+def test_rising_missed_context_does_not_claim_followup_generic_ai_commit(monkeypatch):
+    generation = _generation("KRX")
+    coordinator = ScannerAsyncEvalCoordinator(
+        ai_dispatcher=HotPathAIDispatcher(loaded_key_count=1)
+    )
+    stock = {
+        "id": 7,
+        "code": "005930",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "scanner_generation_id": generation.generation_id,
+        "_scanner_async_generation_id": generation.generation_id,
+        "_scanner_async_cache_key": "watching:entry-ai-result",
+    }
+    monkeypatch.setattr(handlers, "_log_entry_pipeline", lambda *args, **kwargs: None)
+    runtime = {
+        "scanner_async_eval_coordinator": coordinator,
+        "scanner_async_generation": generation,
+        "scanner_async_commit_phase": True,
+    }
+    try:
+        assert handlers._resolve_scanner_async_rising_missed_context(
+            stock,
+            "005930",
+            {"curr": 1001, "last_ws_update_ts": time.time()},
+            runtime,
+        ) == {"status": "not_applicable"}
+    finally:
+        coordinator.shutdown()
 
 
 def test_opening_rotation_async_commit_avoids_generic_watching_reentry(monkeypatch):
