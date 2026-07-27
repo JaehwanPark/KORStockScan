@@ -9805,6 +9805,31 @@ def test_rising_missed_tick_speed_guard_blocks_slow_tick_window(monkeypatch):
     assert decision["broker_order_forbidden"] is True
 
 
+def test_slow_tick_window_skips_entry_price_ai_before_terminal_guard():
+    assert (
+        state_handlers._skip_entry_ai_price_for_tick_speed_guard(
+            {
+                "blocked": True,
+                "rising_missed_tick_window_slow": True,
+                "block_reason": "tick_window_span_sec_ge_60",
+            },
+            opening_rotation_active=False,
+        )
+        is True
+    )
+    assert (
+        state_handlers._skip_entry_ai_price_for_tick_speed_guard(
+            {
+                "blocked": True,
+                "rising_missed_tick_window_slow": False,
+                "block_reason": "tick_acceleration_ratio_lt_1",
+            },
+            opening_rotation_active=False,
+        )
+        is False
+    )
+
+
 def test_rising_missed_tick_speed_guard_blocks_subunit_acceleration(monkeypatch):
     monkeypatch.delenv(
         "KORSTOCKSCAN_RISING_MISSED_TICK_SPEED_ENTRY_GUARD_ENABLED", raising=False

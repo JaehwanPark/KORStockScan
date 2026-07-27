@@ -29709,6 +29709,17 @@ def _evaluate_rising_missed_tick_speed_entry_guard(
     }
 
 
+def _skip_entry_ai_price_for_tick_speed_guard(
+    guard: dict[str, Any] | None, *, opening_rotation_active: bool
+) -> bool:
+    guard = guard if isinstance(guard, dict) else {}
+    return bool(
+        not opening_rotation_active
+        and guard.get("blocked")
+        and guard.get("rising_missed_tick_window_slow")
+    )
+
+
 def _quote_stale_for_rising_missed_scout_quality_guard(
     stock: dict | None,
     ws_data: dict | None,
@@ -52571,8 +52582,31 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         and not _is_swing_live_order_dry_run(strategy)
     )
 
+    pre_price_tick_speed_guard = _evaluate_rising_missed_tick_speed_entry_guard(
+        stock=stock,
+        runtime=runtime,
+        latency_gate=latency_gate,
+        ws_data=ws_data,
+        orderbook_fields=entry_orderbook_micro_fields,
+        microstructure_fields=_microstructure_reaction_log_fields_from_stock(stock),
+        rising_missed_entry_lineage=bool(
+            forced_rising_missed_one_share
+            or _has_rising_missed_entry_lineage(stock, runtime)
+        ),
+    )
+    skip_ai_price_for_slow_tick_window = _skip_entry_ai_price_for_tick_speed_guard(
+        pre_price_tick_speed_guard,
+        opening_rotation_active=opening_rotation_active,
+    )
     ai_price_canary_touched = False
-    if not opening_rotation_active:
+    if skip_ai_price_for_slow_tick_window:
+        _log_entry_pipeline(
+            stock,
+            code,
+            "entry_ai_price_canary_skipped_by_tick_speed_hard_block",
+            **pre_price_tick_speed_guard,
+        )
+    elif not opening_rotation_active:
         planned_orders, ai_price_canary_touched = _apply_entry_ai_price_canary(
             stock=stock,
             code=code,
