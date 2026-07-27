@@ -366,3 +366,40 @@ def test_async_opening_rotation_defers_reentry_hydration_until_submit(monkeypatc
         )
     finally:
         coordinator.shutdown()
+
+
+def test_scanner_entry_events_inherit_registered_canonical_venue(monkeypatch):
+    emitted = []
+    monkeypatch.setattr(
+        handlers, "_remember_scanner_terminal_block", lambda *a, **k: None
+    )
+    monkeypatch.setattr(
+        handlers,
+        "emit_pipeline_event",
+        lambda _pipeline, _name, _code, _stage, **kwargs: emitted.append(kwargs),
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_maybe_register_rising_missed_nxt_downstream_block_sampler",
+        lambda *a, **k: None,
+    )
+    stock = {
+        "id": 7,
+        "name": "삼성전자",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "scanner_promotion_id": "PROMO-KRX",
+        "effective_venue": "KRX",
+        "venue": "KRX",
+        "venue_resolution": "consistent_explicit:payload.effective_venue",
+        "market_session_bucket": "krx_regular",
+    }
+
+    handlers._log_entry_pipeline(stock, "005930", "opening_rotation_1pct_observed")
+
+    assert emitted[-1]["fields"]["effective_venue"] == "KRX"
+    assert emitted[-1]["fields"]["venue"] == "KRX"
+    assert (
+        emitted[-1]["fields"]["venue_resolution"]
+        == "consistent_explicit:payload.effective_venue"
+    )

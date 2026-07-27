@@ -12661,11 +12661,17 @@ def _canonicalize_rising_missed_venue_fields(
 
 def _log_entry_pipeline(stock, code, stage, **fields):
     record_id = stock.get("id") if isinstance(stock, dict) else None
+    scanner_venue_fields = (
+        _scanner_runtime_event_venue_fields(stock)
+        if _is_scanner_watching_runtime_observation_target(stock)
+        else {}
+    )
     merged_fields = _canonicalize_rising_missed_venue_fields(
         {
             **_scanner_promotion_correlation_fields(stock),
             **_rising_missed_tp1_observation_context_log_fields(stock),
             **_scalping_sizing_state_fields(stock),
+            **scanner_venue_fields,
             **fields,
         }
     )

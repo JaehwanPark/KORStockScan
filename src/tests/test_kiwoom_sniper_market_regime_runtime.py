@@ -1164,6 +1164,9 @@ def test_fresh_canonical_generation_releases_boot_restore_isolation(
     assert target["_scanner_scheduler_registration_reason"] == "-"
     assert target["_scanner_scheduler_boot_restore_isolated"] is False
     assert target["scanner_generation_id"] == generation.generation_id
+    assert target["effective_venue"] == "KRX"
+    assert target["venue"] == "KRX"
+    assert target["venue_resolution"] == "consistent_explicit:payload.effective_venue"
 
 
 def test_scheduler_submit_guard_blocks_promotion_arriving_during_heavy_eval(

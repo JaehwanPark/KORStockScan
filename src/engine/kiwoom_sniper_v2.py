@@ -7455,6 +7455,11 @@ def _register_scanner_scheduler_generation(
         )
         return None
     target_updates = {
+        # Scheduler registration is the canonical venue-resolution owner.
+        # Persist that immutable result on the WATCHING target so all later
+        # main-thread observation/commit events retain the same cohort rather
+        # than emitting an unqualified venue after the generation is known.
+        **venue_fields,
         "scanner_generation_id": generation.generation_id,
         "scanner_generation_revision": generation.revision,
         "scanner_attach_epoch": generation.attach_epoch,
