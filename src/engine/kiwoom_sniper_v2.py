@@ -11139,21 +11139,46 @@ def run_sniper(is_test_mode=False):
                                         )
                                         or ""
                                     ).strip()
-                                    handle_watching_state(
-                                        stock,
-                                        code,
-                                        ws_data,
-                                        admin_id,
-                                        now_ts=time.time(),
-                                        now_dt=datetime.now(),
-                                        radar=radar,
-                                        ai_engine=ai_engine,
-                                        scanner_async_eval_coordinator=(
-                                            async_coordinator
-                                        ),
-                                        scanner_async_generation=(scheduler_generation),
-                                        scanner_async_commit_phase=True,
+                                    opening_rotation_context_commit = bool(
+                                        stock.get(
+                                            "_scanner_opening_rotation_async_cache_key"
+                                        )
+                                        and not stock.get("_scanner_async_cache_key")
                                     )
+                                    if opening_rotation_context_commit:
+                                        sniper_state_handlers.handle_scanner_async_opening_rotation_commit(
+                                            stock,
+                                            code,
+                                            ws_data,
+                                            admin_id,
+                                            now_ts=time.time(),
+                                            now_dt=datetime.now(),
+                                            ai_engine=ai_engine,
+                                            scanner_async_eval_coordinator=(
+                                                async_coordinator
+                                            ),
+                                            scanner_async_generation=(
+                                                scheduler_generation
+                                            ),
+                                        )
+                                    else:
+                                        handle_watching_state(
+                                            stock,
+                                            code,
+                                            ws_data,
+                                            admin_id,
+                                            now_ts=time.time(),
+                                            now_dt=datetime.now(),
+                                            radar=radar,
+                                            ai_engine=ai_engine,
+                                            scanner_async_eval_coordinator=(
+                                                async_coordinator
+                                            ),
+                                            scanner_async_generation=(
+                                                scheduler_generation
+                                            ),
+                                            scanner_async_commit_phase=True,
+                                        )
                                 except Exception:
                                     _scanner_scheduler_complete_target(
                                         scheduler,

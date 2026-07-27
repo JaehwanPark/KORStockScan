@@ -63858,6 +63858,118 @@ def handle_watching_state(
         return
 
 
+def handle_scanner_async_opening_rotation_commit(
+    stock,
+    code,
+    ws_data,
+    admin_id,
+    *,
+    now_ts=None,
+    now_dt=None,
+    ai_engine=None,
+    scanner_async_eval_coordinator=None,
+    scanner_async_generation=None,
+) -> bool:
+    """Commit an Opening Rotation context result without re-entering full WATCHING.
+
+    ``COMMIT`` is a scheduler safety lane.  Re-entering the ordinary WATCHING
+    handler here used to run its complete generic preamble before consuming an
+    already completed context result.  That could make the otherwise fresh
+    result stale.  Opening Rotation has a self-contained mechanical owner, so
+    this path retains its normal entry submit owner while avoiding unrelated
+    generic WATCHING/AI preparation work.
+
+    It is intentionally limited to an outstanding Opening Rotation context
+    result.  Generic async entry results still use ``handle_watching_state``.
+    """
+
+    stock = stock if isinstance(stock, dict) else {}
+    ws_data = ws_data if isinstance(ws_data, dict) else {}
+    generation = scanner_async_generation
+    opening_cache_key = str(
+        stock.get("_scanner_opening_rotation_async_cache_key") or ""
+    ).strip()
+    generic_cache_key = str(stock.get("_scanner_async_cache_key") or "").strip()
+    if (
+        not opening_cache_key
+        or generic_cache_key
+        or not isinstance(generation, ScannerGeneration)
+        or str(stock.get("_scanner_opening_rotation_async_generation_id") or "")
+        != generation.generation_id
+    ):
+        return False
+
+    if now_ts is None:
+        now_ts = time.time()
+    if now_dt is None:
+        now_dt = datetime.now()
+    strategy = normalize_strategy(stock.get("strategy"))
+    if strategy != "SCALPING":
+        return False
+    pos_tag = normalize_position_tag(strategy, stock.get("position_tag"))
+
+    # Keep the live-entry safety boundary ahead of the context commit.  The
+    # final submit owner repeats broker/account/order/quantity checks.
+    if _manual_control_exclusion_blocked(
+        stock,
+        code,
+        pipeline="entry",
+        stage="manual_control_excluded_symbol_blocked",
+        now_ts=now_ts,
+    ):
+        return True
+    if is_buy_side_paused() or not is_scalping_buy_time_allowed(now_dt.time()):
+        return True
+    if code in ALERTED_STOCKS:
+        return True
+    if _safe_float((COOLDOWNS or {}).get(code), 0.0) > float(now_ts):
+        return True
+    if not evaluate_scalp_same_symbol_loss_reentry_guard(code, now_ts).get(
+        "allowed", True
+    ):
+        return True
+
+    curr_price = _safe_int(ws_data.get("curr"), 0)
+    if curr_price <= 0:
+        return True
+
+    runtime = {
+        "strategy": strategy,
+        "pos_tag": pos_tag,
+        "now_ts": float(now_ts),
+        "now_dt": now_dt,
+        "curr_price": curr_price,
+        "current_vpw": _safe_float(ws_data.get("v_pw"), 0.0),
+        "fluctuation": _safe_float(
+            ws_data.get("fluctuation", ws_data.get("fluctuation_rate")), 0.0
+        ),
+        "current_ai_score": _safe_float(
+            stock.get("rt_ai_prob", stock.get("prob", 0.5)), 0.5
+        )
+        * 100.0,
+        "liquidity_value": None,
+        "is_trigger": False,
+        "msg": "",
+        "ratio": 0.10,
+        "cooldowns": COOLDOWNS,
+        "alerted_stocks": ALERTED_STOCKS,
+        "event_bus": EVENT_BUS,
+        "ai_engine": ai_engine,
+        "scout_upgrade_entry": False,
+        "scanner_async_eval_coordinator": scanner_async_eval_coordinator,
+        "scanner_async_generation": generation,
+        "scanner_async_commit_phase": True,
+    }
+    config = {
+        "MIN_SCALP_LIQUIDITY": _rule_float("MIN_SCALP_LIQUIDITY", 500_000_000),
+    }
+    if not _handle_watching_opening_rotation(stock, code, ws_data, runtime, config):
+        return True
+    if runtime["is_trigger"]:
+        _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime)
+    return True
+
+
 def _submit_entry_split_probe_residual_locked(
     stock: dict,
     code: str,
