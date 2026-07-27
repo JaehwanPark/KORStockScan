@@ -309,3 +309,60 @@ def test_opening_rotation_async_commit_does_not_claim_generic_result(monkeypatch
         now_dt=datetime.now(),
         scanner_async_generation=generation,
     )
+
+
+def test_async_opening_rotation_defers_reentry_hydration_until_submit(monkeypatch):
+    generation = _generation("KRX")
+    coordinator = ScannerAsyncEvalCoordinator(
+        ai_dispatcher=HotPathAIDispatcher(loaded_key_count=1)
+    )
+    stock = {
+        "id": 7,
+        "code": "005930",
+        "name": "삼성전자",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "source_signature": "VALUE_TOP",
+    }
+    monkeypatch.setattr(
+        handlers, "_observe_entry_cancel_wait_counterfactuals", lambda *a, **k: None
+    )
+    monkeypatch.setattr(handlers, "_log_watching_state_debug", lambda *a, **k: None)
+    monkeypatch.setattr(
+        handlers, "_manual_control_exclusion_blocked", lambda *a, **k: False
+    )
+    monkeypatch.setattr(handlers, "is_buy_side_paused", lambda: False)
+    monkeypatch.setattr(handlers, "is_scalping_buy_time_allowed", lambda _value: True)
+    monkeypatch.setattr(
+        handlers,
+        "_opening_rotation_yields_to_rising_missed_owner",
+        lambda *a, **k: False,
+    )
+    monkeypatch.setattr(
+        handlers, "is_opening_rotation_watch_candidate", lambda **_k: True
+    )
+    monkeypatch.setattr(
+        handlers,
+        "evaluate_scalp_same_symbol_loss_reentry_guard",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            AssertionError("async Opening Rotation must defer historical hydration")
+        ),
+    )
+    monkeypatch.setattr(
+        handlers, "_handle_watching_strategy_branch", lambda *a, **k: False
+    )
+
+    try:
+        handlers.handle_watching_state(
+            stock,
+            "005930",
+            {"curr": 1001, "fluctuation": 1.0},
+            admin_id=1,
+            now_ts=time.time(),
+            now_dt=datetime.now(),
+            scanner_async_eval_coordinator=coordinator,
+            scanner_async_generation=generation,
+        )
+    finally:
+        coordinator.shutdown()

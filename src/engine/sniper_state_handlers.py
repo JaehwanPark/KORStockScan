@@ -63572,8 +63572,41 @@ def handle_watching_state(
             )
             return
 
+    # Opening Rotation context preparation is context-only and its worker has
+    # no order authority.  Hydrating the historical same-symbol guard before
+    # that preparation can block the scheduler's initial heavy lane for
+    # seconds, starving a newly queued promotion.  The final submit owner
+    # still evaluates the same guard (and its bounded rebound exception)
+    # immediately before any broker call.  Restrict this deferral to an
+    # async-enabled Opening Rotation candidate; every other WATCHING path
+    # retains the existing pre-AI guard timing.
+    opening_rotation_async_context_candidate = bool(
+        strategy == "SCALPING"
+        and not scanner_async_commit_phase
+        and isinstance(scanner_async_eval_coordinator, ScannerAsyncEvalCoordinator)
+        and isinstance(scanner_async_generation, ScannerGeneration)
+        and not _opening_rotation_yields_to_rising_missed_owner(
+            stock,
+            {"scout_upgrade_entry": bool(scout_upgrade_entry)},
+        )
+        and (
+            is_opening_rotation_position(pos_tag)
+            or is_opening_rotation_watch_candidate(
+                position_tag=pos_tag,
+                source_signature=stock.get("source_signature")
+                or stock.get("scanner_source_signature"),
+                day_change_pct=_safe_float(
+                    ws_data.get("fluctuation", ws_data.get("fluctuation_rate")),
+                    0.0,
+                ),
+                now_dt=now_dt,
+                config=_opening_rotation_entry_config(),
+            )
+        )
+    )
+
     scalp_reentry_rebound_watch_bypass_allowed = False
-    if strategy == "SCALPING":
+    if strategy == "SCALPING" and not opening_rotation_async_context_candidate:
         scalp_reentry_guard = evaluate_scalp_same_symbol_loss_reentry_guard(
             code, now_ts
         )
