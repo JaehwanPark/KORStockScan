@@ -179,6 +179,30 @@ def _read_cached_kiwoom_token(
     return token
 
 
+def get_cached_kiwoom_token(config=None) -> str | None:
+    """Return a valid shared Kiwoom token without ever issuing a new one.
+
+    This is for read-only auxiliary consumers that must not mutate the shared
+    token lifecycle.  In particular, callers must treat ``None`` as a
+    fail-closed condition instead of falling back to ``get_kiwoom_token()``.
+    """
+    if config is None:
+        target_path = CONFIG_PATH if CONFIG_PATH.exists() else DEV_PATH
+        try:
+            with open(target_path, "r", encoding="utf-8") as file_handle:
+                config = json.load(file_handle)
+        except Exception as exc:
+            log_error(f"❌ [TOKEN CACHE] read-only config load failed: {exc}")
+            return None
+
+    if not isinstance(config, dict):
+        log_error("❌ [TOKEN CACHE] read-only config must be a dict.")
+        return None
+
+    with _kiwoom_token_file_lock():
+        return _read_cached_kiwoom_token(config)
+
+
 def _write_cached_kiwoom_token(
     config: dict, token: str, response_payload: dict, *, now_ts: float | None = None
 ) -> None:

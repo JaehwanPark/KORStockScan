@@ -39,9 +39,11 @@ from src.engine.daily_report_service import (
 )
 from src.web.bucket_tracking_routes import bucket_tracking_bp
 from src.web.bd_fbuy_accum_pre_routes import bd_fbuy_accum_pre_bp
+from src.web.samsung_price_widget_routes import samsung_price_widget_bp
 
 app.register_blueprint(bucket_tracking_bp)
 app.register_blueprint(bd_fbuy_accum_pre_bp)
+app.register_blueprint(samsung_price_widget_bp)
 
 _DEFAULT_DASHBOARD_LOOKBACK_MINUTES = 120
 _TRUTHY_QUERY_VALUES = {"1", "true", "yes", "y"}

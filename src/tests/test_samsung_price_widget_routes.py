@@ -1,0 +1,173 @@
+from __future__ import annotations
+
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+from flask import Flask
+
+from src.web import samsung_price_widget_routes as routes
+
+
+class _FakeResponse:
+    status_code = 200
+    content = b"{}"
+
+    def json(self):
+        return {"return_code": 0, "cur_prc": "+71,200", "low_pric": "70,800"}
+
+
+class _MissingReturnCodeResponse(_FakeResponse):
+    def json(self):
+        return {"cur_prc": "+71,200"}
+
+
+def _client(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SAMSUNG_WIDGET_ACCESS_KEY", "widget-secret")
+    app = Flask(__name__)
+    app.register_blueprint(routes.samsung_price_widget_bp)
+    return app.test_client()
+
+
+def test_samsung_widget_rejects_missing_or_wrong_access_key(monkeypatch):
+    client = _client(monkeypatch)
+
+    assert client.get("/api/widget/samsung-price").status_code == 401
+    assert (
+        client.get(
+            "/api/widget/samsung-price",
+            headers={"X-KORStockScan-Widget-Key": "wrong"},
+        ).status_code
+        == 401
+    )
+
+
+def test_samsung_widget_reads_access_key_from_aws_only_file(monkeypatch, tmp_path):
+    key_path = tmp_path / "widget.key"
+    key_path.write_text("file-only-secret\n", encoding="utf-8")
+    monkeypatch.delenv("KORSTOCKSCAN_SAMSUNG_WIDGET_ACCESS_KEY", raising=False)
+    monkeypatch.setenv("KORSTOCKSCAN_SAMSUNG_WIDGET_ACCESS_KEY_FILE", str(key_path))
+
+    app = Flask(__name__)
+    app.register_blueprint(routes.samsung_price_widget_bp)
+    client = app.test_client()
+
+    response = client.get(
+        "/api/widget/samsung-price",
+        headers={"X-KORStockScan-Widget-Key": "wrong"},
+    )
+
+    assert response.status_code == 401
+    assert routes._widget_access_key() == "file-only-secret"
+
+
+def test_samsung_widget_uses_cached_token_only_and_returns_quote(monkeypatch):
+    client = _client(monkeypatch)
+    captured = {}
+
+    monkeypatch.setattr(
+        routes.kiwoom_utils, "get_cached_kiwoom_token", lambda _: "TOKEN"
+    )
+
+    def fail_if_issued(*args, **kwargs):
+        raise AssertionError("widget endpoint must never issue a Kiwoom token")
+
+    monkeypatch.setattr(routes.kiwoom_utils, "get_kiwoom_token", fail_if_issued)
+    monkeypatch.setattr(
+        routes.kiwoom_utils,
+        "get_api_url",
+        lambda path: f"https://api.example.test{path}",
+    )
+
+    def fake_post(url, *, headers, json, timeout):
+        captured.setdefault("calls", []).append(
+            {"url": url, "headers": headers, "json": json, "timeout": timeout}
+        )
+        response = _FakeResponse()
+        if headers["api-id"] == "ka10080":
+            response.json = lambda: {
+                "return_code": 0,
+                "stk_min_pole_chart_qry": [
+                    {"cntr_tm": "20260728100000", "cur_prc": "70000"},
+                    {"cntr_tm": "20260728100100", "cur_prc": "70500"},
+                    {"cntr_tm": "20260728100200", "cur_prc": "71000"},
+                ],
+            }
+        return response
+
+    monkeypatch.setattr(routes.requests, "post", fake_post)
+
+    response = client.get(
+        "/api/widget/samsung-price",
+        headers={"X-KORStockScan-Widget-Key": "widget-secret"},
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()["current_price"] == 71200
+    assert response.get_json()["day_low_delta"] == 400
+    assert response.get_json()["token_mode"] == "shared_cache_only"
+    assert captured["calls"][0]["url"] == "https://api.example.test/api/dostk/stkinfo"
+    assert captured["calls"][0]["headers"]["api-id"] == "ka10001"
+    assert captured["calls"][0]["headers"]["authorization"] == "Bearer TOKEN"
+    assert captured["calls"][0]["json"] == {"stk_cd": "005930"}
+    assert captured["calls"][0]["timeout"] == 5
+    assert captured["calls"][1]["headers"]["api-id"] == "ka10080"
+    assert captured["calls"][1]["json"] == {
+        "stk_cd": "005930",
+        "tic_scope": "1",
+        "upd_stkpc_tp": "1",
+    }
+
+
+def test_samsung_widget_fails_closed_when_shared_token_is_missing(monkeypatch):
+    client = _client(monkeypatch)
+    monkeypatch.setattr(routes.kiwoom_utils, "get_cached_kiwoom_token", lambda _: None)
+
+    response = client.get(
+        "/api/widget/samsung-price",
+        headers={"X-KORStockScan-Widget-Key": "widget-secret"},
+    )
+
+    assert response.status_code == 503
+    assert response.get_json()["reason"] == "shared_token_unavailable"
+
+
+def test_samsung_widget_requires_kiwoom_return_code(monkeypatch):
+    client = _client(monkeypatch)
+    monkeypatch.setattr(
+        routes.kiwoom_utils, "get_cached_kiwoom_token", lambda _: "TOKEN"
+    )
+    monkeypatch.setattr(
+        routes.requests, "post", lambda *args, **kwargs: _MissingReturnCodeResponse()
+    )
+
+    response = client.get(
+        "/api/widget/samsung-price",
+        headers={"X-KORStockScan-Widget-Key": "widget-secret"},
+    )
+
+    assert response.status_code == 503
+    assert response.get_json()["reason"] == "kiwoom_quote_rejected"
+
+
+def test_minute_chart_and_trend_use_completed_bars_and_exclude_forming_bar():
+    rows = [
+        {"cntr_tm": "20260728100000", "cur_prc": "70000"},
+        {"cntr_tm": "20260728100100", "cur_prc": "70500"},
+        {"cntr_tm": "20260728100200", "cur_prc": "71000"},
+        {"cntr_tm": "20260728100300", "cur_prc": "65000"},
+    ]
+
+    completed = routes._completed_minute_closes(
+        rows,
+        observed_at=datetime(2026, 7, 28, 10, 3, 30, tzinfo=ZoneInfo("Asia/Seoul")),
+        limit=20,
+    )
+    trend, trend_at = routes._classify_minute_trend(completed)
+
+    assert completed == [
+        ("20260728100000", 70000),
+        ("20260728100100", 70500),
+        ("20260728100200", 71000),
+    ]
+    assert trend == "up"
+    assert trend_at == "20260728100200"

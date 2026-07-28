@@ -65,6 +65,19 @@ def test_get_kiwoom_token_reuses_shared_cache(monkeypatch, tmp_path):
     assert len(calls) == 1
 
 
+def test_get_cached_kiwoom_token_never_issues_when_cache_is_missing(
+    monkeypatch, tmp_path
+):
+    _patch_cache_paths(monkeypatch, tmp_path)
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("read-only token helper must not issue a token")
+
+    monkeypatch.setattr(kiwoom_utils, "_request_new_kiwoom_token", fail_if_called)
+
+    assert kiwoom_utils.get_cached_kiwoom_token(_config()) is None
+
+
 def test_get_kiwoom_token_refreshes_expired_cache(monkeypatch, tmp_path):
     _patch_cache_paths(monkeypatch, tmp_path)
     cache_path = tmp_path / "kiwoom_token_cache.json"
