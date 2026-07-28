@@ -9,9 +9,17 @@
 - panic_confirmation_policy: `portfolio stop-loss clusters are evidence; PANIC_DETECTED requires market or microstructure confirmation`
 - report_only: `true`
 - runtime_effect: `report_only_no_mutation`
-- as_of: `2026-07-28T13:46:12`
-- latest_event_at: `2026-07-28T13:46:11`
+- as_of: `2026-07-28T14:18:01`
+- latest_event_at: `2026-07-28T14:18:11`
 - reasons: `live market panic breadth risk_off advisory; recovery watch triggered by active sim/probe or post-sell rebound above sell`
+
+## 입력 자원 계약
+
+- memory_bounded_streaming: `true`
+- scanned_row_count: `293452`
+- retained_exit_event_count: `2828`
+- full_event_list_materialized: `false`
+- out_of_order_event_count: `0`
 
 ## 패닉 지표
 
@@ -47,34 +55,34 @@
 
 ## Microstructure Detector
 
-- evaluated_symbol_count: `1549`
+- evaluated_symbol_count: `1592`
 - risk_off_advisory_count: `0`
 - allow_new_long_false_count: `0`
 - panic_signal_count: `0`
 - recovery_candidate_count: `0`
 - recovery_confirmed_count: `0`
-- missing_orderbook_count: `808`
-- degraded_orderbook_count: `808`
-- max_panic_score: `0.3`
-- max_recovery_score: `0.5`
+- missing_orderbook_count: `848`
+- degraded_orderbook_count: `848`
+- max_panic_score: `0.45`
+- max_recovery_score: `0.3793`
 - micro_cusum_triggered_symbol_count: `0`
 - micro_consensus_pass_symbol_count: `0`
 - micro_cusum_decision_authority: `source_quality_only`
 
 ## Microstructure Market Context
 
-- market_risk_state: `RISK_OFF`
-- market_panic_breadth_as_of: `2026-07-28T13:46:02`
+- market_risk_state: `NEUTRAL`
+- market_panic_breadth_as_of: `2026-07-28T14:18:01`
 - market_panic_breadth_source_quality_status: `ok`
 - market_panic_breadth_risk_off_advisory: `true`
 - market_panic_breadth_single_market_risk_off_advisory: `false`
-- evaluated_symbol_count: `1549`
+- evaluated_symbol_count: `1592`
 - risk_off_advisory_ratio_pct: `0`
 - confirmed_micro_risk_off_advisory: `false`
 - confirmed_risk_off_advisory: `true`
 - portfolio_local_risk_off_only: `false`
 - source_quality_gate: `microstructure risk_off requires market RISK_OFF or broad evaluated-symbol confirmation`
-- reasons: `market_regime_risk_off; market_panic_breadth_risk_off`
+- reasons: `market_panic_breadth_risk_off`
 
 ## 방어 액션
 

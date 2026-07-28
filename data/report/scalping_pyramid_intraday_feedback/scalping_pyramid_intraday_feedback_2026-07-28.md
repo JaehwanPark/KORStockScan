@@ -1,6 +1,6 @@
 # 2026-07-28 Scalping Pyramid Intraday Feedback
 
-- generated_at: 2026-07-28T13:40:01+09:00
+- generated_at: 2026-07-28T14:10:02+09:00
 - decision_authority: source_only_pyramid_intraday_feedback_no_runtime_mutation
 - runtime_effect: false
 - allowed_runtime_apply: false

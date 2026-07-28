@@ -15,20 +15,20 @@
 
 ## 근거
 
-- as_of: `2026-07-28T13:45:02`
+- as_of: `2026-07-28T14:15:02`
 - baseline_date: `2026-07-27`
 - ai_confirmed unique: `1`
 - budget_pass unique: `11`
 - latency_pass unique: `1`
 - submitted unique: `1`
 - holding_started unique: `1`
-- budget/ai unique: `1100.0%` (baseline `176.9`)
+- budget/ai unique: `1100.0%` (baseline `178.6`)
 - submitted/ai unique: `100.0%` (baseline `0.0`)
 - economic bundles: `observed=1, valid=1, probe_only=1, partial_residual=0, full=0`
 - economic submitted/requested: `qty=1/20 (5.0%), notional=15390/306800 (5.0%)`
 - economic participation by venue: `{'KRX': {'bundle_count': 1, 'probe_only_bundle_count': 1, 'partial_residual_bundle_count': 0, 'full_submitted_bundle_count': 0, 'requested_qty': 20, 'submitted_qty': 1, 'requested_notional_krw': 306800, 'submitted_notional_krw': 15390, 'submitted_qty_to_requested_qty_pct': 5.0, 'submitted_notional_to_requested_notional_pct': 5.0}}`
 - critical submit thresholds: `submitted/ai < 20.0%` or `submitted/budget <= 10.0%` (floors: ai>=20, budget>=3)
-- top blockers: `latency_block:latency_state_danger=19, entry_ai_price_canary_fallback:parse_or_ai_fail=5, blocked_zero_qty:-=2`
+- top blockers: `latency_block:latency_state_danger=19, blocked_zero_qty:-=7, entry_ai_price_canary_fallback:parse_or_ai_fail=5`
 - swing blockers: `-`
 - upstream blockers: `-`
 - AI terminal reasons: `-`
@@ -54,5 +54,5 @@
 ## Window Summary
 
 - `5m`: ai=0, budget=0, latency=0, submitted=0, top=`-`, swing=`-`, upstream=`-`, ai_terminal=`-`
-- `10m`: ai=0, budget=0, latency=0, submitted=0, top=`blocked_zero_qty:-=1`, swing=`-`, upstream=`-`, ai_terminal=`-`
-- `30m`: ai=0, budget=0, latency=0, submitted=0, top=`blocked_zero_qty:-=1`, swing=`-`, upstream=`-`, ai_terminal=`-`
+- `10m`: ai=0, budget=0, latency=0, submitted=0, top=`blocked_zero_qty:-=2`, swing=`-`, upstream=`-`, ai_terminal=`-`
+- `30m`: ai=0, budget=0, latency=0, submitted=0, top=`blocked_zero_qty:-=5`, swing=`-`, upstream=`-`, ai_terminal=`-`
