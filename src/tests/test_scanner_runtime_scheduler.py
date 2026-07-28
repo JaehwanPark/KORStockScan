@@ -210,6 +210,52 @@ def test_scheduler_expired_work_is_explicit_and_never_inflight():
     assert scheduler.snapshot_metrics(now_epoch=112.0)["scheduler_in_flight_count"] == 0
 
 
+def test_scheduler_park_discards_hot_work_but_retains_generation_provenance():
+    scheduler = ScannerRuntimeScheduler(max_active=16)
+    registered = _register(scheduler)
+    generation = registered.item.generation
+    initial = scheduler.next_decision(now_epoch=101.1)
+    scheduler.complete(initial.item, completed_epoch=101.2, outcome="pass")
+    heavy = scheduler.enqueue(
+        generation,
+        lane=ScannerLane.HEAVY_EVAL,
+        owner="eligible_precheck_heavy_eval",
+        enqueued_epoch=101.2,
+    )
+    dispatched_heavy = scheduler.next_decision(now_epoch=101.3)
+    assert dispatched_heavy.item == heavy.item
+    assert dispatched_heavy.fields["attach_to_heavy_dispatch_sec"] == 0.3
+
+    parked = scheduler.park(
+        generation,
+        now_epoch=102.0,
+        reason="heavy_eval_completed_generation_warm_parked",
+    )
+
+    assert parked.action == "generation_parked"
+    assert parked.superseded_work_ids
+    assert scheduler.current_generation("000001") == generation
+    assert scheduler.snapshot_metrics(now_epoch=102.0)["scheduler_queue_depth"] == 0
+    assert scheduler.next_decision(now_epoch=102.0) is None
+    late = scheduler.complete(
+        dispatched_heavy.item,
+        completed_epoch=102.1,
+        outcome="late_worker_result",
+    )
+    assert late.action == "parked_result"
+    assert late.fields["result_current_generation"] is False
+
+    recheck = scheduler.enqueue(
+        generation,
+        lane=ScannerLane.FAST_PRECHECK,
+        owner="explicit_bounded_recheck",
+        enqueued_epoch=103.0,
+        recheck_evidence_key="material-evidence-v2",
+    )
+    assert recheck.action == "enqueued"
+    assert scheduler.next_decision(now_epoch=103.1).item == recheck.item
+
+
 def test_same_generation_lane_enqueue_coalesces_latest_deadline():
     scheduler = ScannerRuntimeScheduler(max_active=16)
     registered = _register(scheduler)

@@ -264,6 +264,7 @@ class ScannerRuntimeScheduler:
         self._work_by_id: dict[str, ScannerWorkItem] = {}
         self._heap: list[tuple[float, int, int, int, str]] = []
         self._in_flight: dict[str, ScannerWorkItem] = {}
+        self._retired_work_ids: set[str] = set()
         self._dispatched_epoch_by_work_id: dict[str, float] = {}
         self._first_precheck_dispatched_generation_ids: set[str] = set()
         self._last_fast_recheck_enqueue: dict[str, tuple[float, str]] = {}
@@ -905,8 +906,14 @@ class ScannerRuntimeScheduler:
             dispatched_epoch = self._dispatched_epoch_by_work_id.pop(
                 item.work_id, item.enqueued_epoch
             )
-            current = self.is_current(item.generation)
-            action = "completed" if current else "superseded_result"
+            retired = item.work_id in self._retired_work_ids
+            self._retired_work_ids.discard(item.work_id)
+            current = self.is_current(item.generation) and not retired
+            action = (
+                "completed"
+                if current
+                else ("parked_result" if retired else "superseded_result")
+            )
             fields = self._decision_fields(item, now_epoch=dispatched_epoch)
             fields.update(
                 {
@@ -927,7 +934,11 @@ class ScannerRuntimeScheduler:
                 reason=(
                     "current_generation_completed"
                     if current
-                    else "generation_superseded_while_in_flight"
+                    else (
+                        "generation_parked_while_in_flight"
+                        if retired
+                        else "generation_superseded_while_in_flight"
+                    )
                 ),
                 decided_epoch=now_value,
                 item=item,
@@ -954,6 +965,56 @@ class ScannerRuntimeScheduler:
                         "scanner_generation_id": "not_available_generation",
                     }
                 ),
+            )
+
+    def park(
+        self,
+        generation: ScannerGeneration,
+        *,
+        now_epoch: float,
+        reason: str,
+    ) -> ScannerSchedulerDecision:
+        """Discard hot work while retaining immutable generation provenance."""
+
+        now_value = float(now_epoch)
+        with self._lock:
+            if not self.is_current(generation):
+                return ScannerSchedulerDecision(
+                    action="superseded",
+                    reason="generation_not_current",
+                    decided_epoch=now_value,
+                    fields=generation.timing_fields(now_epoch=now_value),
+                )
+            discarded: list[str] = []
+            for work_id, item in list(self._work_by_id.items()):
+                if item.generation.generation_id == generation.generation_id:
+                    discarded.append(work_id)
+                    self._work_by_id.pop(work_id, None)
+                    self._remove_heap_work_id_locked(work_id)
+            for work_id, item in list(self._in_flight.items()):
+                if item.generation.generation_id == generation.generation_id:
+                    discarded.append(work_id)
+                    self._retired_work_ids.add(work_id)
+                    self._in_flight.pop(work_id, None)
+                    self._dispatched_epoch_by_work_id.pop(work_id, None)
+            fields = generation.timing_fields(now_epoch=now_value)
+            fields.update(
+                {
+                    "scheduler_action": "generation_parked",
+                    "scheduler_reason": str(
+                        reason or "scanner_generation_warm_parked"
+                    ),
+                    "scheduler_queue_depth": len(self._work_by_id),
+                    "scheduler_in_flight_count": len(self._in_flight),
+                }
+            )
+            return ScannerSchedulerDecision(
+                action="generation_parked",
+                reason=str(reason or "scanner_generation_warm_parked"),
+                decided_epoch=now_value,
+                item=None,
+                superseded_work_ids=tuple(discarded),
+                fields=fields,
             )
 
     def snapshot_metrics(self, *, now_epoch: float) -> dict[str, Any]:
@@ -1207,5 +1268,12 @@ class ScannerRuntimeScheduler:
         elif item.lane is ScannerLane.HEAVY_EVAL:
             fields["precheck_to_heavy_dispatch_sec"] = round(
                 max(0.0, now_epoch - item.enqueued_epoch), 6
+            )
+            fields["attach_to_heavy_dispatch_sec"] = round(
+                max(0.0, now_epoch - item.generation.attach_epoch), 6
+            )
+        elif item.lane is ScannerLane.COMMIT:
+            fields["attach_to_commit_dispatch_sec"] = round(
+                max(0.0, now_epoch - item.generation.attach_epoch), 6
             )
         return fields
