@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -436,11 +437,18 @@ def resolve_euphoria_risk_context(
     source_files = {"panic_buying": str(report_path)}
     warnings: list[str] = []
     status = "OK"
-    if not report_path.exists():
+    operator_enabled = os.environ.get(
+        "KORSTOCKSCAN_PANIC_BUYING_REPORT_OPERATOR_OVERRIDE", ""
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    operator_disabled = resolved_date >= date(2026, 7, 28) and not operator_enabled
+    if operator_disabled:
+        status = "OPERATOR_DISABLED"
+        warnings.append("panic_buying_report_operator_disabled")
+    elif not report_path.exists():
         status = "MISSING"
         warnings.append("missing_source_file")
-    payload = _read_payload(report_path)
-    if status != "MISSING" and not payload:
+    payload = {} if operator_disabled else _read_payload(report_path)
+    if status == "OK" and not payload:
         status = "PARSE_ERROR"
         warnings.append("panic_buying_parse_error")
     if status == "OK":
@@ -456,7 +464,9 @@ def resolve_euphoria_risk_context(
         else (0, "context_not_ok", "risk_on_euphoria")
     )
     blockers = _euphoria_source_quality_blockers(payload) if status == "OK" else []
-    source_quality_status = "OK" if not blockers else "BLOCKED"
+    source_quality_status = (
+        "NOT_APPLICABLE" if operator_disabled else "OK" if not blockers else "BLOCKED"
+    )
     if status == "OK" and blockers:
         status = "SOURCE_QUALITY_BLOCKED"
         warnings.extend(blockers)

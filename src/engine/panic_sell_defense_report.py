@@ -19,7 +19,7 @@ from src.engine.panic_sell_state_detector import (
     summarize_microstructure_detector_from_events,
 )
 from src.utils.constants import DATA_DIR
-from src.utils.jsonl_io import read_jsonl
+from src.utils.jsonl_io import iter_jsonl
 
 SCHEMA_VERSION = 1
 REPORT_DIRNAME = "panic_sell_defense"
@@ -224,10 +224,6 @@ def _load_json(path: Path) -> dict[str, Any] | list[Any] | None:
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return None
-
-
-def _load_jsonl(path: Path) -> list[dict[str, Any]]:
-    return read_jsonl(path)
 
 
 def _event_fields(row: dict[str, Any]) -> dict[str, Any]:
@@ -534,6 +530,64 @@ def _summarize_exit_metrics(
             }
         ),
     }
+
+
+def _stream_pipeline_inputs(
+    path: Path, *, as_of: datetime
+) -> tuple[list[dict[str, Any]], dict[str, Any], datetime | None, dict[str, Any]]:
+    retained_exit_events: list[dict[str, Any]] = []
+    latest_dt: datetime | None = None
+    scanned_row_count = 0
+    retained_non_real_provenance_count = 0
+
+    def observed_rows():
+        nonlocal latest_dt
+        nonlocal retained_non_real_provenance_count
+        nonlocal scanned_row_count
+        for row in iter_jsonl(path):
+            scanned_row_count += 1
+            event_dt = _parse_dt(row.get("emitted_at"))
+            if event_dt is not None and (latest_dt is None or event_dt > latest_dt):
+                latest_dt = event_dt
+            is_exit = _is_holding_exit_signal(row)
+            is_non_real_provenance = _safe_str(
+                row.get("pipeline")
+            ) == "HOLDING_PIPELINE" and _is_non_real_observation(row)
+            if is_exit or is_non_real_provenance:
+                retained_exit_events.append(row)
+                if is_non_real_provenance and not is_exit:
+                    retained_non_real_provenance_count += 1
+            yield row
+
+    microstructure_detector = summarize_microstructure_detector_from_events(
+        observed_rows(), as_of=as_of
+    )
+    streaming_contract = {
+        "metric_role": "source_quality_instrumentation",
+        "decision_authority": "source_quality_only",
+        "window_policy": "target_date_pipeline_jsonl_single_pass",
+        "sample_floor": 0,
+        "primary_decision_metric": None,
+        "source_quality_gate": "valid JSON object rows with monotonic per-symbol event time",
+        "forbidden_uses": [
+            "runtime_threshold_apply",
+            "order_submit",
+            "auto_sell",
+            "bot_restart",
+            "provider_route_change",
+        ],
+        "memory_bounded_streaming": True,
+        "scanned_row_count": scanned_row_count,
+        "retained_exit_event_count": len(retained_exit_events),
+        "retained_non_real_provenance_count": retained_non_real_provenance_count,
+        "full_event_list_materialized": False,
+    }
+    return (
+        retained_exit_events,
+        microstructure_detector,
+        latest_dt,
+        streaming_contract,
+    )
 
 
 def _latest_price_from_position(position: dict[str, Any]) -> float | None:
@@ -1405,22 +1459,14 @@ def build_panic_sell_defense_report(
     as_of: datetime | None = None,
     dry_run: bool = False,
 ) -> dict[str, Any]:
-    events = _load_jsonl(_pipeline_events_path(target_date))
-    event_datetimes = [
-        dt
-        for row in events
-        for dt in [_parse_dt(row.get("emitted_at"))]
-        if dt is not None
-    ]
-    latest_dt = max(event_datetimes) if event_datetimes else None
     if as_of is None:
         as_of = datetime.now()
+    events, microstructure_detector, latest_dt, input_streaming = (
+        _stream_pipeline_inputs(_pipeline_events_path(target_date), as_of=as_of)
+    )
     panic_metrics = _summarize_exit_metrics(events, as_of=as_of)
     active_recovery = _summarize_active_recovery()
     post_sell_recovery = _post_sell_recovery_metrics(target_date)
-    microstructure_detector = summarize_microstructure_detector_from_events(
-        events, as_of=as_of
-    )
     source_summary = _load_source_summary(target_date)
     microstructure_market_context = _microstructure_market_context(
         microstructure_detector, source_summary
@@ -1472,6 +1518,7 @@ def build_panic_sell_defense_report(
             panic_state, panic_metrics, active_recovery
         ),
         "source_summary": source_summary,
+        "input_streaming": input_streaming,
         "qna_policy": {
             "panic_detection_threshold": "portfolio stop-loss cluster uses rolling intraday quantile evidence only; PANIC_DETECTED requires market or confirmed microstructure risk-off context",
             "should_delay_stop_loss": "no for hard/protect/emergency; future candidate only for soft/trailing/flow",
@@ -1504,6 +1551,11 @@ def build_markdown(report: dict[str, Any]) -> str:
         if isinstance(report.get("microstructure_market_context"), dict)
         else {}
     )
+    input_streaming = (
+        report.get("input_streaming")
+        if isinstance(report.get("input_streaming"), dict)
+        else {}
+    )
     lines = [
         f"# Panic Sell Defense {report['target_date']}",
         "",
@@ -1519,6 +1571,14 @@ def build_markdown(report: dict[str, Any]) -> str:
         f"- as_of: `{report['as_of']}`",
         f"- latest_event_at: `{report.get('latest_event_at') or '-'}`",
         f"- reasons: `{'; '.join(report.get('panic_state_reasons') or [])}`",
+        "",
+        "## 입력 자원 계약",
+        "",
+        f"- memory_bounded_streaming: `{str(input_streaming.get('memory_bounded_streaming', False)).lower()}`",
+        f"- scanned_row_count: `{input_streaming.get('scanned_row_count', 0)}`",
+        f"- retained_exit_event_count: `{input_streaming.get('retained_exit_event_count', 0)}`",
+        f"- full_event_list_materialized: `{str(input_streaming.get('full_event_list_materialized', True)).lower()}`",
+        f"- out_of_order_event_count: `{(micro.get('streaming_input') or {}).get('out_of_order_event_count', 0)}`",
         "",
         "## 패닉 지표",
         "",

@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
@@ -24,6 +25,7 @@ from src.utils.jsonl_io import read_jsonl
 
 SCHEMA_VERSION = 1
 REPORT_DIRNAME = "panic_buying"
+OPERATOR_OVERRIDE_ENV = "KORSTOCKSCAN_PANIC_BUYING_REPORT_OPERATOR_OVERRIDE"
 TP_RULE_MARKERS = ("take_profit", "trailing", "preset_tp", "익절", "profit")
 HARD_PROTECT_EMERGENCY_RULE_MARKERS = (
     "emergency",
@@ -1107,8 +1109,30 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _operator_override_enabled() -> bool:
+    return os.environ.get(OPERATOR_OVERRIDE_ENV, "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if not _operator_override_enabled():
+        print(
+            json.dumps(
+                {
+                    "status": "disabled_by_operator_policy",
+                    "runtime_effect": False,
+                    "operator_override_required": True,
+                    "operator_override_env": OPERATOR_OVERRIDE_ENV,
+                },
+                ensure_ascii=False,
+            )
+        )
+        return 3
     report = build_panic_buying_report(
         args.target_date,
         as_of=_parse_as_of(args.as_of) if args.as_of else None,

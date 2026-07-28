@@ -573,6 +573,10 @@ def test_postclose_wrapper_refreshes_market_breadth_before_panic_reports():
         'RUN_MARKET_PANIC_BREADTH_REPORT="${THRESHOLD_CYCLE_RUN_MARKET_PANIC_BREADTH_REPORT:-true}"'
         in script
     )
+    assert (
+        'RUN_PANIC_BUYING_REPORT="${THRESHOLD_CYCLE_RUN_PANIC_BUYING_REPORT:-false}"'
+        in script
+    )
     assert breadth_idx < breadth_wait_idx < panic_sell_idx < panic_buy_idx
     assert "market_panic_breadth=$RUN_MARKET_PANIC_BREADTH_REPORT" in script
 
@@ -589,6 +593,8 @@ def test_panic_buying_wrapper_collects_market_breadth_independently():
     )
     assert "market panic breadth collect failed" in script
     assert breadth_idx < report_idx
+    assert "KORSTOCKSCAN_PANIC_BUYING_REPORT_OPERATOR_OVERRIDE" in script
+    assert "[DISABLED] panic buying report is permanently stopped" in script
 
 
 def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_steps():

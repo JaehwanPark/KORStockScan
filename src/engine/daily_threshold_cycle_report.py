@@ -1762,6 +1762,12 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
     sources: dict[str, dict] = {}
     warnings: list[str] = []
     source_paths = _calibration_report_source_paths(target_date)
+    panic_buying_operator_enabled = os.environ.get(
+        "KORSTOCKSCAN_PANIC_BUYING_REPORT_OPERATOR_OVERRIDE", ""
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    panic_buying_disabled = (
+        target_date >= "2026-07-28" and not panic_buying_operator_enabled
+    )
     cleanup_audit = _audit_report_only_cleanup_candidates(target_date, source_paths)
     for candidate in cleanup_audit["cleanup_candidates"]:
         warnings.append(
@@ -1770,14 +1776,28 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
         )
     for name, path in source_paths.items():
         actual_path = _existing_or_gzip_path(path)
-        payload = _read_json_dict(path)
+        payload = (
+            {}
+            if name == "panic_buying" and panic_buying_disabled
+            else _read_json_dict(path)
+        )
         exists = actual_path.exists()
-        if exists and not payload and path.suffix == ".json":
+        if (
+            exists
+            and not payload
+            and path.suffix == ".json"
+            and not (name == "panic_buying" and panic_buying_disabled)
+        ):
             warnings.append(f"{name} 로드 실패 또는 빈 JSON: {actual_path}")
         sources[name] = {
             "path": str(actual_path),
             "exists": exists,
             "loaded": bool(payload),
+            "operating_status": (
+                "operator_disabled_archive_only"
+                if name == "panic_buying" and panic_buying_disabled
+                else "active"
+            ),
             "top_keys": list(payload.keys())[:20] if payload else [],
         }
 
@@ -1790,7 +1810,9 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
     trade_review = _read_json_dict(source_paths["trade_review"])
     holding_exit_sentinel = _read_json_dict(source_paths["holding_exit_sentinel"])
     panic_sell_defense = _read_json_dict(source_paths["panic_sell_defense"])
-    panic_buying = _read_json_dict(source_paths["panic_buying"])
+    panic_buying = (
+        {} if panic_buying_disabled else _read_json_dict(source_paths["panic_buying"])
+    )
     decision_matrix = _read_json_dict(source_paths["holding_exit_decision_matrix"])
     stat_action = _read_json_dict(source_paths["statistical_action_weight"])
     latency_recommendation = _read_json_dict(
@@ -2963,6 +2985,9 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
             "allowed_runtime_apply": False,
         },
         "panic_buying": {
+            "operating_status": (
+                "operator_disabled_archive_only" if panic_buying_disabled else "active"
+            ),
             "panic_buy_state": (
                 panic_buying.get("panic_buy_state")
                 if isinstance(panic_buying, dict)

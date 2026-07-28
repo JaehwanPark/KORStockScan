@@ -1212,15 +1212,20 @@ def orderbook_micro_from_event(row: dict[str, Any]) -> PanicOrderbookMicro | Non
 
 
 def summarize_microstructure_detector_from_events(
-    events: list[dict[str, Any]],
+    events: Iterable[dict[str, Any]],
     *,
     as_of: datetime | None = None,
     config: PanicSellDetectorConfig | None = None,
     max_symbols: int = 20,
 ) -> dict[str, Any]:
     cfg = config or PanicSellDetectorConfig()
-    grouped: dict[str, list[dict[str, Any]]] = {}
+    detectors: dict[str, PanicSellStateDetector] = {}
     names: dict[str, str] = {}
+    latest_signals: dict[str, PanicSignal] = {}
+    latest_timestamps: dict[str, str] = {}
+    last_event_datetimes: dict[str, datetime] = {}
+    candidate_event_count = 0
+    out_of_order_event_count = 0
     for row in events:
         event_ts = _parse_dt(row.get("emitted_at"))
         if as_of is not None and event_ts is not None and event_ts > as_of:
@@ -1228,38 +1233,36 @@ def summarize_microstructure_detector_from_events(
         code = str(row.get("stock_code") or "").strip()[:6]
         if not code:
             continue
-        if candle_from_event(row) is None:
+        candle = candle_from_event(row)
+        if candle is None:
             continue
-        grouped.setdefault(code, []).append(row)
+        candidate_event_count += 1
+        previous_dt = last_event_datetimes.get(code)
+        if previous_dt is not None and candle.ts < previous_dt:
+            out_of_order_event_count += 1
+            continue
+        last_event_datetimes[code] = candle.ts
         names[code] = str(row.get("stock_name") or code)
+        detector = detectors.setdefault(code, PanicSellStateDetector(cfg))
+        latest_signals[code] = detector.update(
+            candle,
+            trade_flow=trade_flow_from_event(row),
+            orderbook_micro=orderbook_micro_from_event(row),
+        )
+        latest_timestamps[code] = candle.ts.isoformat(timespec="seconds")
 
     symbol_signals: list[PanicSymbolSignal] = []
     reason_counter: Counter[str] = Counter()
     state_counter: Counter[str] = Counter()
     missing_orderbook = 0
     degraded_orderbook = 0
-    for code, rows in grouped.items():
-        detector = PanicSellStateDetector(cfg)
-        latest_signal: PanicSignal | None = None
-        latest_ts: str | None = None
-        for row in sorted(rows, key=lambda item: str(item.get("emitted_at") or "")):
-            candle = candle_from_event(row)
-            if candle is None:
-                continue
-            latest_ts = candle.ts.isoformat(timespec="seconds")
-            latest_signal = detector.update(
-                candle,
-                trade_flow=trade_flow_from_event(row),
-                orderbook_micro=orderbook_micro_from_event(row),
-            )
-        if latest_signal is None:
-            continue
+    for code, latest_signal in latest_signals.items():
         symbol_signals.append(
             PanicSymbolSignal(
                 stock_code=code,
                 stock_name=names.get(code, code),
                 signal=latest_signal,
-                latest_event_at=latest_ts,
+                latest_event_at=latest_timestamps.get(code),
             )
         )
         reason_counter.update(latest_signal.reasons)
@@ -1324,6 +1327,13 @@ def summarize_microstructure_detector_from_events(
             ],
         },
         "evaluated_symbol_count": len(symbol_signals),
+        "streaming_input": {
+            "memory_bounded": True,
+            "ordering": "jsonl_append_order_per_symbol",
+            "candidate_event_count": candidate_event_count,
+            "out_of_order_event_count": out_of_order_event_count,
+            "out_of_order_policy": "skip_to_preserve_monotonic_detector_state",
+        },
         "risk_off_advisory_count": risk_off_count,
         "allow_new_long_false_count": allow_false_count,
         "panic_signal_count": sum(

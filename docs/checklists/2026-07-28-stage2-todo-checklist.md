@@ -99,6 +99,17 @@
 
 ## 사용자 지시 실행 체크리스트
 
+- [x] `[PanicSellDefenseMemoryBoundedStreaming0728] panic_sell_defense_report 대용량 JSONL 전량 적재 제거` (`Due: 2026-07-28`, `Slot: INTRADAY`, `TimeWindow: 14:10~14:20`, `Track: RuntimeStability`)
+  - Source: [panic_sell_defense_report.py](/home/ubuntu/KORStockScan/src/engine/panic_sell_defense_report.py), [panic_sell_state_detector.py](/home/ubuntu/KORStockScan/src/engine/panic_sell_state_detector.py), [panic_sell_defense_2026-07-28.json](/home/ubuntu/KORStockScan/data/report/panic_sell_defense/panic_sell_defense_2026-07-28.json)
+  - 판정/구현: `read_jsonl -> list` 전량 적재를 제거하고 1회 streaming에서 exit/non-real provenance만 보존하며 micro detector는 종목별 bounded state로 갱신한다. out-of-order row는 monotonic state 보호를 위해 제외하고 count를 남긴다.
+  - 실제 검증: `14:14:01~14:14:13`, `14:16:02~14:16:13` 자연 cron이 당일 `292,023`행을 처리해 exit/provenance `2,820`행만 보존했고 full event list는 생성하지 않았다. micro 후보 `31,751`, out-of-order `0`, report 상태는 기존과 동일한 `RECOVERY_WATCH`였다. 별도 동일 입력 dry-run은 `10.17초`, 최대 RSS `54,772KB`, major page fault `0`으로 종료했고 main process/resource detector는 PASS를 유지했다.
+  - 금지/rollback: report-only/source-quality 권한을 유지한다. out-of-order 증가, panic state 회귀, heartbeat stale 또는 자원 경고가 재발하면 해당 cron을 중단하고 streaming ordering 계약을 재검토한다.
+
+- [x] `[PanicBuyingReportPermanentOperatorStop0728] panic_buying_report 영구 OFF 및 명시적 운영 override gate 적용` (`Due: 2026-07-28`, `Slot: INTRADAY`, `TimeWindow: 14:00~14:10`, `Track: RuntimeStability`)
+  - Source: [run_panic_buying_intraday.sh](/home/ubuntu/KORStockScan/deploy/run_panic_buying_intraday.sh), [panic_buying_report.py](/home/ubuntu/KORStockScan/src/engine/panic_buying_report.py), [run_threshold_cycle_postclose.sh](/home/ubuntu/KORStockScan/deploy/run_threshold_cycle_postclose.sh), [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)
+  - 판정/구현: `13:59` 실행 중이던 report-only 프로세스를 종료하고 intraday cron을 제거했다. wrapper와 직접 CLI는 `KORSTOCKSCAN_PANIC_BUYING_REPORT_OPERATOR_OVERRIDE=true`가 없으면 실행을 거부하며, postclose 기본값도 false다. cron/artifact detector inventory에서 중지 작업을 제외해 stale 오탐을 막는다.
+  - 재활성화 조건: 사용자의 명시적 운영 지시, 자원 제한 보완, 코드리뷰·targeted validation을 모두 거친 뒤에만 override와 schedule을 복원한다. 기존 산출물은 archive-only이며 주문·threshold·provider·봇 상태 변경 권한이 없다.
+
 - [x] `[ScannerHeavyEvalTickChurnBound0728] 동일 generation heavy-eval 틱 변동 우회 및 scheduler 작업 증폭 보완` (`Due: 2026-07-28`, `Slot: INTRADAY`, `TimeWindow: 13:30~14:10`, `Track: RuntimeStability`)
   - Source: [kiwoom_sniper_v2.py](/home/ubuntu/KORStockScan/src/engine/kiwoom_sniper_v2.py), [test_kiwoom_sniper_market_regime_runtime.py](/home/ubuntu/KORStockScan/src/tests/test_kiwoom_sniper_market_regime_runtime.py), [scanner_runtime_scheduler.py](/home/ubuntu/KORStockScan/src/engine/scalping/scanner_runtime_scheduler.py), [pipeline_events_2026-07-28.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-07-28.jsonl)
   - 판정/구현: 13:00~13:30 KST에 work enqueue `1,899`, claim deferred `818`, deadline expired `295`, heavy-eval lag `259`가 발생했다. 동일 generation의 BBO·strength·누적거래량 변경이 15초 heavy 재시도 제한을 우회하던 경로를 막고, 새 promotion generation은 평가 상태를 초기화해 즉시 평가하며 COMMIT·RECOVERY lane은 기존 우선순위를 유지하도록 보완했다.

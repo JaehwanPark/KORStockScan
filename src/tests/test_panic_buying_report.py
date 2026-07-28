@@ -6,6 +6,33 @@ from src.engine import panic_buying_report as report_mod
 TARGET_DATE = "2026-05-13"
 
 
+def test_cli_is_disabled_without_explicit_operator_override(monkeypatch, capsys):
+    monkeypatch.delenv(report_mod.OPERATOR_OVERRIDE_ENV, raising=False)
+
+    assert report_mod.main(["--date", TARGET_DATE]) == 3
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "disabled_by_operator_policy"
+    assert payload["runtime_effect"] is False
+    assert payload["operator_override_required"] is True
+
+
+def test_cli_operator_override_reaches_report_builder(monkeypatch, capsys):
+    monkeypatch.setenv(report_mod.OPERATOR_OVERRIDE_ENV, "true")
+    monkeypatch.setattr(
+        report_mod,
+        "build_panic_buying_report",
+        lambda *_args, **_kwargs: {
+            "panic_buy_state": "NORMAL",
+            "policy": {"runtime_effect": "report_only_no_mutation"},
+        },
+    )
+    monkeypatch.setattr(report_mod, "save_report_artifacts", lambda _report: {})
+
+    assert report_mod.main(["--date", TARGET_DATE]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "success"
+
+
 def _event(
     hhmmss: str,
     *,

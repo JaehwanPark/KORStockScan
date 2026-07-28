@@ -127,6 +127,64 @@ def _micro_event(
     )
 
 
+def test_pipeline_input_streaming_retains_only_exit_contract_rows(monkeypatch):
+    rows = [
+        _event(
+            "10:00:00",
+            pipeline="ENTRY_PIPELINE",
+            stage="scalping_scanner_scheduler_claim_deferred",
+            record_id=index,
+            fields={"reason": "scheduler_only"},
+        )
+        for index in range(5_000)
+    ]
+    rows.extend(
+        [
+            _micro_event("10:01:00", close=100.0),
+            _micro_event("10:02:00", close=99.5),
+            _event(
+                "10:03:00",
+                fields={
+                    "exit_rule": "scalp_soft_stop_loss",
+                    "profit_rate": "-2.5",
+                    "actual_order_submitted": "true",
+                    "sell_order_no": "S1",
+                },
+            ),
+            _event(
+                "10:04:00",
+                stage="scalp_sim_exit_observed",
+                fields={
+                    "actual_order_submitted": "false",
+                    "broker_order_forbidden": "true",
+                },
+            ),
+        ]
+    )
+    consumed = {"count": 0}
+
+    def iter_once(_path):
+        for row in rows:
+            consumed["count"] += 1
+            yield row
+
+    monkeypatch.setattr(report_mod, "iter_jsonl", iter_once)
+
+    retained, micro, latest_dt, contract = report_mod._stream_pipeline_inputs(
+        report_mod.Path("unused.jsonl"),
+        as_of=datetime.fromisoformat(f"{TARGET_DATE}T10:05:00"),
+    )
+
+    assert consumed["count"] == len(rows)
+    assert len(retained) == 2
+    assert contract["memory_bounded_streaming"] is True
+    assert contract["full_event_list_materialized"] is False
+    assert contract["scanned_row_count"] == len(rows)
+    assert contract["retained_exit_event_count"] == 2
+    assert micro["streaming_input"]["candidate_event_count"] == 2
+    assert latest_dt == datetime.fromisoformat(f"{TARGET_DATE}T10:04:00")
+
+
 def test_normal_state_without_panic_threshold(monkeypatch, tmp_path):
     monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
     _write_events(

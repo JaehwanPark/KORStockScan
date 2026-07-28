@@ -5519,3 +5519,28 @@ def test_enrich_sim_same_eval_via_both_record_id_and_candidate_id_not_duplicated
     assert enriched["post_sell_joined_count"] == 1
     assert enriched["post_sell_join_pending_count"] == 0
     assert enriched["missed_upside"] == 100.0
+
+
+def test_calibration_sources_exclude_operator_disabled_panic_buying(
+    monkeypatch, tmp_path
+):
+    from src.engine import daily_threshold_cycle_report as mod
+
+    monkeypatch.setattr(mod, "REPORT_DIR", tmp_path / "report")
+    monkeypatch.delenv(
+        "KORSTOCKSCAN_PANIC_BUYING_REPORT_OPERATOR_OVERRIDE", raising=False
+    )
+    panic_path = tmp_path / "report" / "panic_buying" / "panic_buying_2026-07-28.json"
+    panic_path.parent.mkdir(parents=True, exist_ok=True)
+    panic_path.write_text(
+        json.dumps({"panic_buy_state": "PANIC_BUY"}), encoding="utf-8"
+    )
+
+    bundle = mod._summarize_calibration_report_sources("2026-07-28")
+
+    assert bundle["sources"]["panic_buying"]["exists"] is True
+    assert bundle["sources"]["panic_buying"]["loaded"] is False
+    assert (
+        bundle["source_metrics"]["panic_buying"]["operating_status"]
+        == "operator_disabled_archive_only"
+    )

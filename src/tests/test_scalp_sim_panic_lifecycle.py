@@ -1,6 +1,6 @@
 import json
 from dataclasses import replace
-from datetime import datetime
+from datetime import date, datetime
 
 import pytest
 
@@ -214,6 +214,22 @@ def test_euphoria_context_maps_modes_and_blocks_bad_source(monkeypatch, tmp_path
         "panic_buy_orderbook_collector_coverage_gap"
         in blocked["source_quality_blockers"]
     )
+
+
+def test_euphoria_context_is_disabled_by_operator_policy(monkeypatch, tmp_path):
+    monkeypatch.setattr(runtime, "PANIC_BUYING_DIR", tmp_path)
+    monkeypatch.delenv(
+        "KORSTOCKSCAN_PANIC_BUYING_REPORT_OPERATOR_OVERRIDE", raising=False
+    )
+
+    result = runtime.resolve_euphoria_risk_context(
+        now=datetime(2026, 7, 28, 14, 0),
+        target_date=date(2026, 7, 28),
+    )
+
+    assert result["euphoria_context_status"] == "OPERATOR_DISABLED"
+    assert result["euphoria_source_quality"] == "NOT_APPLICABLE"
+    assert "panic_buying_report_operator_disabled" in result["warnings"]
 
 
 def test_breadth_only_panic_sell_report_maps_to_level1_watch(monkeypatch, tmp_path):

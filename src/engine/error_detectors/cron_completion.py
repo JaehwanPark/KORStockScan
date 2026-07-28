@@ -97,16 +97,6 @@ CRON_JOB_REGISTRY: list[dict[str, Any]] = [
         "trading_day_only": True,
     },
     {
-        "id": "panic_buying",
-        "log": "logs/run_panic_buying_cron.log",
-        "window_start": (9, 5),
-        "window_end": (15, 30),
-        "mode": "recurring",
-        "interval_min": 5,
-        "critical": False,
-        "trading_day_only": True,
-    },
-    {
         "id": "buy_pause_guard",
         "log": "logs/buy_pause_guard.log",
         "window_start": (9, 30),

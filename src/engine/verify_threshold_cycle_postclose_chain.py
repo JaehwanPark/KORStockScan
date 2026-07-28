@@ -7,6 +7,7 @@ import gzip
 import hashlib
 import json
 import math
+import os
 import re
 from collections import Counter
 from datetime import date, datetime, time as dtime
@@ -564,7 +565,7 @@ def _is_real_primary_sample_book(value: Any) -> bool:
 
 def _artifact_paths(target_date: str) -> dict[str, Path]:
     next_day = _next_krx_trading_day(target_date)
-    return {
+    paths = {
         "market_panic_breadth": REPORT_DIR
         / "market_panic_breadth"
         / f"market_panic_breadth_{target_date}.json",
@@ -707,6 +708,12 @@ def _artifact_paths(target_date: str) -> dict[str, Path]:
         / "checklists"
         / f"{next_day}-stage2-todo-checklist.md",
     }
+    panic_buying_operator_enabled = os.environ.get(
+        "KORSTOCKSCAN_PANIC_BUYING_REPORT_OPERATOR_OVERRIDE", ""
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    if target_date >= "2026-07-28" and not panic_buying_operator_enabled:
+        paths.pop("panic_buying", None)
+    return paths
 
 
 def _clean_baseline_report_residue_status(

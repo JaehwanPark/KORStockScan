@@ -28,9 +28,18 @@ IONICE_LEVEL="${PANIC_BUYING_IONICE_LEVEL:-7}"
 NICE_LEVEL="${PANIC_BUYING_NICE_LEVEL:-12}"
 NICE_COMMAND="${PANIC_BUYING_NICE_COMMAND:-nice}"
 CPU_AFFINITY="${PANIC_BUYING_CPU_AFFINITY:-$(korstockscan_default_cpu_affinity panic)}"
+OPERATOR_OVERRIDE_ENABLED="${KORSTOCKSCAN_PANIC_BUYING_REPORT_OPERATOR_OVERRIDE:-false}"
 
 mkdir -p "$PROJECT_DIR/tmp" "$PROJECT_DIR/logs"
 cd "$PROJECT_DIR"
+
+case "${OPERATOR_OVERRIDE_ENABLED,,}" in
+  1|true|yes|on) ;;
+  *)
+    echo "[DISABLED] panic buying report is permanently stopped; explicit operator override required target_date=${TARGET_DATE}" | tee -a "$LOG_FILE"
+    exit 0
+    ;;
+esac
 
 validate_int() {
   local value="$1"
