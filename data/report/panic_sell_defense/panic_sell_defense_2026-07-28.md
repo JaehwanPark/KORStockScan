@@ -9,15 +9,15 @@
 - panic_confirmation_policy: `portfolio stop-loss clusters are evidence; PANIC_DETECTED requires market or microstructure confirmation`
 - report_only: `true`
 - runtime_effect: `report_only_no_mutation`
-- as_of: `2026-07-28T14:18:01`
-- latest_event_at: `2026-07-28T14:18:11`
+- as_of: `2026-07-28T15:26:02`
+- latest_event_at: `2026-07-28T15:26:11`
 - reasons: `live market panic breadth risk_off advisory; recovery watch triggered by active sim/probe or post-sell rebound above sell`
 
 ## 입력 자원 계약
 
 - memory_bounded_streaming: `true`
-- scanned_row_count: `293452`
-- retained_exit_event_count: `2828`
+- scanned_row_count: `305765`
+- retained_exit_event_count: `2967`
 - full_event_list_materialized: `false`
 - out_of_order_event_count: `0`
 
@@ -45,7 +45,7 @@
 
 ## 회복 지표
 
-- active_positions: `4`
+- active_positions: `3`
 - active_profit_sample: `0`
 - active_avg_unrealized_profit_rate_pct: `-`
 - active_win_rate_pct: `-`
@@ -55,14 +55,14 @@
 
 ## Microstructure Detector
 
-- evaluated_symbol_count: `1592`
+- evaluated_symbol_count: `1607`
 - risk_off_advisory_count: `0`
 - allow_new_long_false_count: `0`
 - panic_signal_count: `0`
 - recovery_candidate_count: `0`
 - recovery_confirmed_count: `0`
-- missing_orderbook_count: `848`
-- degraded_orderbook_count: `848`
+- missing_orderbook_count: `868`
+- degraded_orderbook_count: `868`
 - max_panic_score: `0.45`
 - max_recovery_score: `0.3793`
 - micro_cusum_triggered_symbol_count: `0`
@@ -71,18 +71,18 @@
 
 ## Microstructure Market Context
 
-- market_risk_state: `NEUTRAL`
-- market_panic_breadth_as_of: `2026-07-28T14:18:01`
+- market_risk_state: `RISK_OFF`
+- market_panic_breadth_as_of: `2026-07-28T15:26:01`
 - market_panic_breadth_source_quality_status: `ok`
 - market_panic_breadth_risk_off_advisory: `true`
 - market_panic_breadth_single_market_risk_off_advisory: `false`
-- evaluated_symbol_count: `1592`
+- evaluated_symbol_count: `1607`
 - risk_off_advisory_ratio_pct: `0`
 - confirmed_micro_risk_off_advisory: `false`
 - confirmed_risk_off_advisory: `true`
 - portfolio_local_risk_off_only: `false`
 - source_quality_gate: `microstructure risk_off requires market RISK_OFF or broad evaluated-symbol confirmation`
-- reasons: `market_panic_breadth_risk_off`
+- reasons: `market_regime_risk_off; market_panic_breadth_risk_off`
 
 ## 방어 액션
 
