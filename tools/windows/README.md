@@ -2,12 +2,14 @@
 
 `samsung_price_widget.py` is a small always-on-top Windows widget (190 x 170
 pixels) that shows Samsung Electronics (`005930`) current price, the difference
-from the previous successful 30-second query, today's low-price distance, and
+from the previous successful 10-second query, today's low-price distance, and
 the direction of the three latest completed one-minute closes. It also draws a
 compact 20-minute line chart from completed one-minute closes.
 
-The current-price query and previous-price delta refresh every 30 seconds;
-the trend and chart remain based on completed one-minute candles.
+The current-price query and previous-price delta refresh every 10 seconds;
+the trend and chart remain based on completed one-minute candles. During the
+NXT aftermarket (`15:40~20:00 KST`), the endpoint requests `005930_NX` for
+both the quote and minute chart and the widget status line shows `NXT`.
 
 It calls the KORStockScan AWS endpoint, not Kiwoom directly. The AWS endpoint
 uses only the existing `data/runtime/kiwoom_token_cache.json` shared cache and
@@ -55,7 +57,7 @@ Tkinter is required; the launcher uses `pyw.exe` so no console window is shown.
 
 ## Official Kiwoom reference gate
 
-- Retrieved: `2026-07-28T10:59:32+09:00`
+- Retrieved: `2026-07-28T16:10:00+09:00`
 - Upstream: `Kiwoom-Securities/Kiwoom-REST-API`
   `1504d45fa145eb11fdd662a08aa9d873eee55849`
 - Inspected: `kiwoom_docs/종목정보.md`, `kiwoom_docs/차트.md`,
@@ -66,6 +68,9 @@ Tkinter is required; the launcher uses `pyw.exe` so no console window is shown.
   quote value `cur_prc`.
 
 The endpoint uses `ka10001.low_pric` for today's low and `ka10080` with
-`tic_scope: "1"` for the three completed one-minute closes. The widget endpoint
-deliberately does not implement REST/WebSocket auth, REG/REMOVE, recovery,
-continuation, order, account, or bot lifecycle flows.
+`tic_scope: "1"` for the three completed one-minute closes. Both official
+request contracts accept `005930_NX` for NXT, while KRX uses `005930`; the
+response exposes `market_venue`, `market_session`, and `quote_request_code`
+for display provenance. The widget endpoint deliberately does not implement
+REST/WebSocket auth, REG/REMOVE, recovery, continuation, order, account, or
+bot lifecycle flows.

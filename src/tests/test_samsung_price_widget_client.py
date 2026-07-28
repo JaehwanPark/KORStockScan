@@ -46,6 +46,24 @@ def test_widget_payload_parser_accepts_positive_current_price():
     assert quote.minute_chart[-1] == ("10:01", 70500)
 
 
+def test_widget_payload_parser_preserves_nxt_venue():
+    quote = widget.parse_quote_payload(
+        {
+            "status": "ok",
+            "current_price": 221500,
+            "day_low_delta": 3000,
+            "day_low_delta_pct": 1.37,
+            "minute_trend": "up",
+            "minute_chart": [],
+            "market_venue": "NXT",
+            "market_session": "nxt_aftermarket",
+        }
+    )
+
+    assert quote.market_venue == "NXT"
+    assert quote.market_session == "nxt_aftermarket"
+
+
 @pytest.mark.parametrize(
     "payload",
     [
@@ -72,8 +90,8 @@ def test_widget_requires_https_and_access_key():
     )
 
 
-def test_widget_refreshes_every_30_seconds():
-    assert widget.POLL_INTERVAL_MS == 30_000
+def test_widget_refreshes_every_10_seconds():
+    assert widget.POLL_INTERVAL_MS == 10_000
 
 
 def test_windows_installer_uses_a_resolved_ascii_shortcut_path():

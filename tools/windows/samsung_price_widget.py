@@ -1,4 +1,4 @@
-"""Small Windows widget that shows Samsung Electronics' 30-second price delta.
+"""Small Windows widget that shows Samsung Electronics' 10-second price delta.
 
 The widget only calls the KORStockScan AWS read-only quote endpoint.  It never
 stores a Kiwoom app key, secret key, or bearer token, and it cannot issue a
@@ -18,7 +18,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 APP_NAME = "SamsungPriceWidget"
-POLL_INTERVAL_MS = 30_000
+POLL_INTERVAL_MS = 10_000
 WINDOW_SIZE = "190x170"
 ACCESS_KEY_HEADER = "X-KORStockScan-Widget-Key"
 CHART_WIDTH = 174
@@ -74,6 +74,8 @@ class Quote:
     day_low_delta_pct: float | None
     minute_trend: str
     minute_chart: tuple[tuple[str, int], ...]
+    market_venue: str
+    market_session: str
 
 
 def parse_quote_payload(payload: object) -> Quote:
@@ -99,6 +101,10 @@ def parse_quote_payload(payload: object) -> Quote:
     trend = str(payload.get("minute_trend") or "unavailable")
     if trend not in {"up", "down", "flat", "unavailable"}:
         raise ValueError("invalid_minute_trend")
+    market_venue = str(payload.get("market_venue") or "KRX").strip().upper()
+    if market_venue not in {"KRX", "NXT"}:
+        raise ValueError("invalid_market_venue")
+    market_session = str(payload.get("market_session") or "unknown").strip()
     raw_chart = payload.get("minute_chart", [])
     if not isinstance(raw_chart, list):
         raise ValueError("invalid_minute_chart")
@@ -120,6 +126,8 @@ def parse_quote_payload(payload: object) -> Quote:
         day_low_delta_pct=low_delta_pct,
         minute_trend=trend,
         minute_chart=tuple(minute_chart),
+        market_venue=market_venue,
+        market_session=market_session,
     )
 
 
@@ -146,7 +154,7 @@ class SamsungPriceWidget:
         self.previous_price: int | None = None
         self.inflight = False
 
-        root.title("삼성전자 30초")
+        root.title("삼성전자 10초")
         root.geometry(WINDOW_SIZE)
         root.minsize(190, 170)
         root.maxsize(190, 170)
@@ -158,7 +166,7 @@ class SamsungPriceWidget:
         frame.pack(fill="both", expand=True)
         tk.Label(
             frame,
-            text="삼성전자 005930 · 30초 갱신",
+            text="삼성전자 005930 · 10초 갱신",
             fg="#dfe7f3",
             bg="#1e2430",
             font=("Malgun Gothic", 8, "bold"),
@@ -271,7 +279,10 @@ class SamsungPriceWidget:
             sign = "+" if delta > 0 else ""
             self.delta_label.configure(text=f"직전: {sign}{delta:,}원", fg=color)
         self.status_label.configure(
-            text=f"갱신 {datetime.now().strftime('%H:%M:%S')} · AWS 공유 토큰",
+            text=(
+                f"갱신 {datetime.now().strftime('%H:%M:%S')} · "
+                f"{quote.market_venue} · AWS 공유 토큰"
+            ),
             fg="#8fa2b7",
         )
         self._finish_cycle()

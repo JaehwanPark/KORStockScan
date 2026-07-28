@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hmac
 import os
-from datetime import datetime
+from datetime import datetime, time as datetime_time
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -29,6 +29,8 @@ _SAMSUNG_NAME = "삼성전자"
 _REQUEST_TIMEOUT_SEC = 5
 _MINUTE_TREND_BAR_COUNT = 3
 _MINUTE_CHART_BAR_COUNT = 20
+_NXT_AFTERMARKET_START = datetime_time(hour=15, minute=40)
+_NXT_AFTERMARKET_END = datetime_time(hour=20)
 
 
 def _parse_positive_price(value: object) -> int | None:
@@ -39,6 +41,23 @@ def _parse_positive_price(value: object) -> int | None:
         return abs(int(text))
     except (TypeError, ValueError):
         return None
+
+
+def _now_kst() -> datetime:
+    return datetime.now(ZoneInfo("Asia/Seoul"))
+
+
+def _quote_route_for_observed_at(observed_at: datetime) -> tuple[str, str, str]:
+    """Select the explicit Kiwoom market code for the current display session."""
+    normalized = (
+        observed_at.replace(tzinfo=ZoneInfo("Asia/Seoul"))
+        if observed_at.tzinfo is None
+        else observed_at.astimezone(ZoneInfo("Asia/Seoul"))
+    )
+    clock = normalized.time()
+    if _NXT_AFTERMARKET_START <= clock < _NXT_AFTERMARKET_END:
+        return f"{_SAMSUNG_CODE}_NX", "NXT", "nxt_aftermarket"
+    return _SAMSUNG_CODE, "KRX", "krx_or_closed"
 
 
 def _completed_minute_closes(
@@ -151,11 +170,15 @@ def get_samsung_price():
     if not token:
         return _error_response("shared_token_unavailable", 503)
 
+    observed_at = _now_kst()
+    request_code, market_venue, market_session = _quote_route_for_observed_at(
+        observed_at
+    )
     quote_payload = _kiwoom_post(
         token,
         path="/api/dostk/stkinfo",
         api_id="ka10001",
-        payload={"stk_cd": _SAMSUNG_CODE},
+        payload={"stk_cd": request_code},
     )
     if quote_payload is None:
         return _error_response("kiwoom_quote_rejected", 503)
@@ -175,12 +198,11 @@ def get_samsung_price():
         if day_low_delta is not None and day_low_price > 0
         else None
     )
-    observed_at = datetime.now(ZoneInfo("Asia/Seoul"))
     chart_payload = _kiwoom_post(
         token,
         path="/api/dostk/chart",
         api_id="ka10080",
-        payload={"stk_cd": _SAMSUNG_CODE, "tic_scope": "1", "upd_stkpc_tp": "1"},
+        payload={"stk_cd": request_code, "tic_scope": "1", "upd_stkpc_tp": "1"},
     )
     completed_minute_closes = _completed_minute_closes(
         (chart_payload or {}).get("stk_min_pole_chart_qry"),
@@ -215,7 +237,10 @@ def get_samsung_price():
                 else None
             ),
             "observed_at_kst": observed_at.isoformat(),
-            "source": "kiwoom_ka10001",
+            "market_venue": market_venue,
+            "market_session": market_session,
+            "quote_request_code": request_code,
+            "source": f"kiwoom_ka10001_{market_venue.lower()}",
             "token_mode": "shared_cache_only",
         }
     )
