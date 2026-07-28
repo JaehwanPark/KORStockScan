@@ -66,20 +66,12 @@ def _build_message(
             "trend_max_dates",
             "io_delay_sec_per_stage",
             "snapshot_manifest",
-            "server_comparison_status",
-            "server_comparison_error",
             "status",
             "error",
             "error_kind",
         }
-        and not key.startswith("server_comparison_")
     ]
     trend_max_dates = snapshots.get("trend_max_dates", "-")
-    server_status = (
-        snapshots.get("server_comparison_status")
-        or snapshots.get("server_comparison_error")
-        or "-"
-    )
     error_kind = payload.get("error_kind") or "-"
     error_message = payload.get("error") or "-"
 
@@ -95,7 +87,6 @@ def _build_message(
         f"- kinds: {', '.join(snapshot_kinds) if snapshot_kinds else '-'}",
         f"- trend_max_dates: {trend_max_dates}",
         f"- max_date_basis: {target_date}",
-        f"- server_comparison: {server_status}",
         f"- io_delay_sec_per_stage: {payload.get('io_delay_sec_per_stage') or snapshots.get('io_delay_sec_per_stage', '-')}",
         f"- error_kind: {error_kind}",
         f"- error: {error_message}",

@@ -1420,14 +1420,6 @@ REPORT_ONLY_CLEANUP_AUDIT_REGISTRY: tuple[dict[str, str], ...] = (
         "recommended_action": "keep as dated archive/reference or move out of current report inventory",
     },
     {
-        "id": "server_comparison",
-        "path_template": "server_comparison/server_comparison_{date}.md",
-        "status_when_present": "policy_disabled_reference",
-        "current_owner": "remote_comparison_reference_only",
-        "reason": "remote/server comparison is excluded from Plan Rebase decision inputs unless explicitly enabled",
-        "recommended_action": "keep as policy-disabled reference; do not attach to threshold/source bundle",
-    },
-    {
         "id": "add_blocked_lock",
         "path_template": "monitor_snapshots/add_blocked_lock_{date}.json",
         "status_when_present": "dashboard_only_cleanup_candidate",

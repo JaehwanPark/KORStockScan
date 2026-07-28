@@ -46,7 +46,7 @@ def test_notify_monitor_snapshot_admin_builds_cutoff_message(tmp_path):
     result_file = tmp_path / "snapshot.out"
     result_file.write_text(
         "noise\n"
-        '{"target_date":"2026-04-22","profile":"full","snapshots":{"profile":"full","trend_max_dates":"12","trade_review":"data/report/monitor_snapshots/trade_review_2026-04-22.json","performance_tuning":"data/report/monitor_snapshots/performance_tuning_2026-04-22.json","snapshot_manifest":"data/report/monitor_snapshots/manifests/monitor_snapshot_manifest_2026-04-22_full.json","server_comparison_status":"policy_disabled"}}\n',
+        '{"target_date":"2026-04-22","profile":"full","snapshots":{"profile":"full","trend_max_dates":"12","trade_review":"data/report/monitor_snapshots/trade_review_2026-04-22.json","performance_tuning":"data/report/monitor_snapshots/performance_tuning_2026-04-22.json","snapshot_manifest":"data/report/monitor_snapshots/manifests/monitor_snapshot_manifest_2026-04-22_full.json"}}\n',
         encoding="utf-8",
     )
 
@@ -61,7 +61,7 @@ def test_notify_monitor_snapshot_admin_builds_cutoff_message(tmp_path):
     assert "snapshot_count: 2" in message
     assert "trend_max_dates: 12" in message
     assert "max_date_basis: 2026-04-22" in message
-    assert "server_comparison: policy_disabled" in message
+    assert "server_comparison" not in message
     assert "next_prompt_hint:" in message
 
 
@@ -200,28 +200,15 @@ def test_archive_and_replay_daily_log_slice(tmp_path, monkeypatch):
     ]
 
 
-def test_save_monitor_snapshots_for_date_includes_missed_entry_counterfactual(
+def test_save_monitor_snapshots_for_date_includes_expected_snapshot_sources(
     tmp_path, monkeypatch
 ):
     snapshot_dir = tmp_path / "monitor_snapshots"
     snapshot_dir.mkdir(parents=True, exist_ok=True)
     manifest_dir = snapshot_dir / "manifests"
     manifest_dir.mkdir(parents=True, exist_ok=True)
-    report_dir = tmp_path / "server_comparison"
-    report_dir.mkdir(parents=True, exist_ok=True)
-    docs_dir = tmp_path / "docs"
-    docs_dir.mkdir(parents=True, exist_ok=True)
-    checklist_path = docs_dir / "2026-04-09-stage2-todo-checklist.md"
-    checklist_path.write_text(
-        "### 12:00 스냅샷 기준 1차 실질 해석 (`2026-04-09 12:00 KST` 예정)\n\n"
-        "## 2026-04-09 장후 체크리스트 (15:30~)\n",
-        encoding="utf-8",
-    )
     monkeypatch.setattr(service, "MONITOR_SNAPSHOT_DIR", snapshot_dir)
     monkeypatch.setattr(service, "MONITOR_SNAPSHOT_MANIFEST_DIR", manifest_dir)
-    monkeypatch.setattr(service, "SERVER_COMPARISON_REPORT_DIR", report_dir)
-    monkeypatch.setattr(service, "DOCS_DIR", docs_dir)
-    monkeypatch.setenv("KORSTOCKSCAN_ENABLE_SERVER_COMPARISON", "1")
 
     monkeypatch.setitem(
         sys.modules,
@@ -290,54 +277,6 @@ def test_save_monitor_snapshots_for_date_includes_missed_entry_counterfactual(
             evaluate_buy_pause_guard=lambda *args, **kwargs: {"status": "ok"}
         ),
     )
-    monkeypatch.setitem(
-        sys.modules,
-        "src.engine.server_report_comparison",
-        types.SimpleNamespace(
-            compare_server_reports=lambda **kwargs: {
-                "date": kwargs["target_date"],
-                "remote_base_url": kwargs["remote_base_url"],
-                "since_time": kwargs["since_time"],
-                "generated_at": "2026-04-09 12:00:05",
-                "policy": {"reason": "safe only"},
-                "sections": {
-                    "trade_review": {
-                        "label": "Trade Review",
-                        "status": "ok",
-                        "safe_metric_rows": [
-                            {
-                                "label": "completed_trades",
-                                "local": 1,
-                                "remote": 2,
-                                "delta_remote_minus_local": 1.0,
-                            }
-                        ],
-                    }
-                },
-            },
-            build_snapshot_summary=lambda comparison: {
-                "generated_at": comparison["generated_at"],
-                "sections": [
-                    {
-                        "label": "Trade Review",
-                        "status": "ok",
-                        "differing_metric_count": 1,
-                        "top_diffs": [
-                            {
-                                "label": "completed_trades",
-                                "local": 1,
-                                "remote": 2,
-                                "delta_remote_minus_local": 1.0,
-                            }
-                        ],
-                    }
-                ],
-            },
-            render_markdown_report=lambda comparison: "# mock report\n",
-            render_checklist_append_block=lambda comparison, report_relpath: "### 본서버 vs songstockscan 자동 비교\n\n- 상세 리포트: `data/report/server_comparison/server_comparison_2026-04-09.md`\n",
-        ),
-    )
-
     result = service.save_monitor_snapshots_for_date("2026-04-09")
 
     assert "missed_entry_counterfactual" in result
@@ -345,8 +284,6 @@ def test_save_monitor_snapshots_for_date_includes_missed_entry_counterfactual(
     assert "wait6579_ev_cohort" in result
     assert "add_blocked_lock" not in result
     assert "snapshot_manifest" in result
-    assert "server_comparison_snapshot" in result
-    assert "server_comparison_report" in result
     saved = service.load_monitor_snapshot("missed_entry_counterfactual", "2026-04-09")
     assert saved is not None
     assert saved["meta"]["snapshot_kind"] == "missed_entry_counterfactual"
@@ -361,15 +298,9 @@ def test_save_monitor_snapshots_for_date_includes_missed_entry_counterfactual(
     assert wait6579_saved is not None
     assert wait6579_saved["meta"]["snapshot_kind"] == "wait6579_ev_cohort"
     assert wait6579_saved["meta"]["buy_pause_guard"] == {"status": "ok"}
-    comparison_saved = service.load_monitor_snapshot("server_comparison", "2026-04-09")
-    assert comparison_saved is not None
-    assert comparison_saved["date"] == "2026-04-09"
     manifest_payload = json.loads(
         Path(result["snapshot_manifest"]).read_text(encoding="utf-8")
     )
     assert manifest_payload["target_date"] == "2026-04-09"
     assert "trade_review" in manifest_payload["snapshot_paths"]
     assert "add_blocked_lock" not in manifest_payload["snapshot_paths"]
-    assert (report_dir / "server_comparison_2026-04-09.md").exists()
-    updated_checklist = checklist_path.read_text(encoding="utf-8")
-    assert "본서버 vs songstockscan 자동 비교" in updated_checklist

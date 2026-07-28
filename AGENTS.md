@@ -57,7 +57,7 @@ KORStockScan working rules:
 - The tuning data decision baseline is `2026-06-04T14:29:09+09:00 KST`; pre-baseline raw/report/analytics data is forbidden for current tuning decision inputs and remains archive/audit evidence only.
 - Live changes allow only one canary axis within the same stage. Stage-disjoint concurrent canaries can be reviewed in parallel only when stage, manipulation point, apply timing, cohort tag, and rollback guard are separated, such as entry-bottleneck versus holding/exit axes.
 - New or supplemental alpha tuning axes are treated as `canary-only` without shadow. Operational/support axes explicitly documented as observe/report-only, such as AI transport/schema, statistical action weight, and decision matrix, must not change real order or exit decisions.
-- Remote/server comparison values are excluded from Plan Rebase decision inputs.
+- Remote comparison values are excluded from Plan Rebase decision inputs.
 - Profit/loss uses only `COMPLETED + valid profit_rate`. Exclude `NULL`, incomplete, and fallback-normalized values from PnL criteria.
 - Do not merge `full fill` and `partial fill`.
 - Win rate is a supporting diagnostic; EV primary metric owns expected value and net-profit decisions.

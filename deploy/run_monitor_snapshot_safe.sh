@@ -14,7 +14,6 @@ ALLOW_PREOPEN_WITH_BOT="${ALLOW_PREOPEN_FULL_BUILD_WITH_BOT:-0}"
 PROFILE="${MONITOR_SNAPSHOT_PROFILE:-full}"
 IO_DELAY_SEC="${MONITOR_SNAPSHOT_IO_DELAY_SEC:-0}"
 START_JITTER_SEC="${MONITOR_SNAPSHOT_START_JITTER_SEC:-0}"
-SKIP_SERVER_COMPARISON="${MONITOR_SNAPSHOT_SKIP_SERVER_COMPARISON:-0}"
 NOTIFY_ADMIN=0
 ASYNC_MODE="${MONITOR_SNAPSHOT_ASYNC:-1}"
 ASYNC_WAIT_SEC="${MONITOR_SNAPSHOT_ASYNC_WAIT_SEC:-0}"
@@ -139,10 +138,6 @@ check_recent_success() {
 build_throttled_command() {
   local -n output_cmd="$1"
   output_cmd=(env PYTHONPATH=. MONITOR_SNAPSHOT_FROM_WRAPPER=1 "$VENV_PY" -m src.engine.run_monitor_snapshot --date "$TARGET_DATE" --profile "$PROFILE" --io-delay-sec "$IO_DELAY_SEC" --skip-lock)
-  if [[ "$SKIP_SERVER_COMPARISON" == "1" ]]; then
-    output_cmd+=(--skip-server-comparison)
-  fi
-
   if command -v ionice >/dev/null 2>&1 && [[ "$IONICE_CLASS" -ge 0 ]]; then
     output_cmd=(ionice -c "$IONICE_CLASS" -n "$IONICE_LEVEL" -t "${output_cmd[@]}")
   fi
@@ -197,10 +192,7 @@ snapshot_kinds = [
         "trend_max_dates",
         "io_delay_sec_per_stage",
         "snapshot_manifest",
-        "server_comparison_status",
-        "server_comparison_error",
     }
-    and not key.startswith("server_comparison_")
 ]
 print(
     "[SUMMARY] monitor snapshot complete: "
@@ -257,7 +249,6 @@ payload = {
     "status": "failed",
     "profile": profile,
     "io_delay_sec": 0.0,
-    "skip_server_comparison": False,
     "skip_lock": False,
     "started_at": finished_at,
     "finished_at": finished_at,
@@ -482,7 +473,7 @@ run_snapshot_once() {
       if [[ "$snapshot_skipped" -ne 1 ]]; then
         SNAPSHOT_CMD=()
         build_throttled_command SNAPSHOT_CMD
-        echo "[INFO] run_snapshot_once start attempt=${attempt}/${MAX_RETRIES} date=$TARGET_DATE preopen=$IN_PREOPEN bot_running=$BOT_RUNNING profile=$PROFILE io_delay_sec=$IO_DELAY_SEC skip_server_comparison=$SKIP_SERVER_COMPARISON notify_admin=$NOTIFY_ADMIN lock_wait_sec=$LOCK_WAIT_SEC cooldown_sec=$COOLDOWN_SEC force=$FORCE_SNAPSHOT"
+        echo "[INFO] run_snapshot_once start attempt=${attempt}/${MAX_RETRIES} date=$TARGET_DATE preopen=$IN_PREOPEN bot_running=$BOT_RUNNING profile=$PROFILE io_delay_sec=$IO_DELAY_SEC notify_admin=$NOTIFY_ADMIN lock_wait_sec=$LOCK_WAIT_SEC cooldown_sec=$COOLDOWN_SEC force=$FORCE_SNAPSHOT"
 
         set +e
         timeout "$TIMEOUT_SEC" "${SNAPSHOT_CMD[@]}" > "$attempt_output" 2>&1

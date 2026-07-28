@@ -985,7 +985,6 @@ def _build_load_distribution_evidence(
         "post_sell_rows_read": int(post_sell_rows),
         "pipeline_event_files_read": pipeline_paths,
         "pipeline_event_rows_read": int(pipeline_rows),
-        "server_comparison_excluded": True,
     }
 
 

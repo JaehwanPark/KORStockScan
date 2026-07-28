@@ -762,7 +762,6 @@ def build_quality_report(
 
     lines += ["", "---", "", "## 4. 서버별 파싱 메모", ""]
     lines.append("- 원격 서버 스냅샷은 본 분석에서 local(main) 기준으로 집계됨.")
-    lines.append("- 원격 비교는 server_comparison_*.md 참조.")
 
     report_path = OUTPUT_DIR / "data_quality_report.md"
     report_path.write_text("\n".join(lines), encoding="utf-8")

@@ -153,10 +153,7 @@ def normalize_result_payload(
                     "trend_max_dates",
                     "io_delay_sec_per_stage",
                     "snapshot_manifest",
-                    "server_comparison_status",
-                    "server_comparison_error",
                 }
-                and not str(key).startswith("server_comparison_")
             ]
         ),
         "snapshots": snapshots,

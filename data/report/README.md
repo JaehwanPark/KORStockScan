@@ -29,7 +29,6 @@ ON 가능한 시점은 다음 조건이 모두 닫힌 뒤다.
 
 | 리포트 | 경로 패턴 | 생성 주체 | 주기/트리거 | 상태 |
 |---|---|---|---|---|
-| Server Comparison | `data/report/server_comparison/server_comparison_YYYY-MM-DD.md` | `src.engine.log_archive_service._save_server_comparison_artifacts` | full monitor snapshot에서 server comparison이 enabled일 때 | 정기 경로 존재. 최근 기본 wrapper는 `MONITOR_SNAPSHOT_SKIP_SERVER_COMPARISON=1`이라 자동 생성이 정책상 꺼질 수 있음 |
 | Statistical Action Weight | `data/report/statistical_action_weight/statistical_action_weight_YYYY-MM-DD.md` | `src.engine.daily_threshold_cycle_report` | `deploy/run_threshold_cycle_postclose.sh` 장후 실행 | 2026-04-30, 2026-05-01 생성 확인 |
 | Holding/Exit Decision Matrix | `data/report/holding_exit_decision_matrix/holding_exit_decision_matrix_YYYY-MM-DD.md` | `src.engine.daily_threshold_cycle_report` | `deploy/run_threshold_cycle_postclose.sh` 장후 실행 | 2026-04-30, 2026-05-01 생성 확인 |
 | Threshold Cycle AI Review | `data/report/threshold_cycle_ai_review/threshold_cycle_ai_review_YYYY-MM-DD_{intraday,postclose}.md` | `src.engine.daily_threshold_cycle_report` | threshold-cycle intraday/postclose cron | AI correction proposal + deterministic guard 결과 |
@@ -113,7 +112,7 @@ ON 가능한 시점은 다음 조건이 모두 닫힌 뒤다.
 
 ## 현재 파일 기준 확인 요약
 
-- Markdown 정기 산출물: server comparison, statistical action weight, holding/exit decision matrix, cumulative threshold cycle.
+- Markdown 정기 산출물: statistical action weight, holding/exit decision matrix, cumulative threshold cycle.
 - JSON snapshot 정기 산출물: monitor snapshots 7종, daily report, threshold cycle report.
 - Markdown 누락 최우선 후보: `threshold_cycle`, `performance_tuning`, `trade_review`.
 - OFI bucket runtime calibration은 현재 OFF이며, 2026-05-06 이후 별도 승인 없이는 ON하지 않는다.
@@ -150,7 +149,7 @@ calibration의 source는 `threshold_cycle` compact event만이 아니다. 아래
 
 `sentinel_followup_2026-05-07.md`는 단발 follow-up 기록으로 archive/reference에 남기며, 최신 calibration source bundle에는 포함하지 않는다.
 
-`threshold_cycle`의 `calibration_source_bundle.report_only_cleanup_audit`는 현재 source bundle consumer가 없는 report-only/legacy 산출물을 매 실행마다 관리한다. 대상은 `sentinel_followup`, policy-disabled `server_comparison`, 정기 full snapshot에서 제외된 legacy `add_blocked_lock`, 제거된 `preclose_sell_target`이며, 결과는 source-quality warning/정리 후보로만 쓰고 runtime 변경 권한은 없다.
+`threshold_cycle`의 `calibration_source_bundle.report_only_cleanup_audit`는 현재 source bundle consumer가 없는 report-only/legacy 산출물을 매 실행마다 관리한다. 대상은 `sentinel_followup`, 정기 full snapshot에서 제외된 legacy `add_blocked_lock`, 제거된 `preclose_sell_target`이며, 결과는 source-quality warning/정리 후보로만 쓰고 runtime 변경 권한은 없다.
 
 운영 원칙:
 

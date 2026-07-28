@@ -18,13 +18,10 @@ from src.engine.dashboard_data_repository import (
 LOG_ARCHIVE_DIR = DATA_DIR / "log_archive"
 MONITOR_SNAPSHOT_DIR = DATA_DIR / "report" / "monitor_snapshots"
 MONITOR_SNAPSHOT_MANIFEST_DIR = MONITOR_SNAPSHOT_DIR / "manifests"
-SERVER_COMPARISON_REPORT_DIR = DATA_DIR / "report" / "server_comparison"
-DOCS_DIR = Path(__file__).resolve().parents[2] / "docs"
 
 LOG_ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
 MONITOR_SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
 MONITOR_SNAPSHOT_MANIFEST_DIR.mkdir(parents=True, exist_ok=True)
-SERVER_COMPARISON_REPORT_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _env_float(name: str, default: float = 0.0) -> float:
@@ -41,10 +38,6 @@ def _stage_io_delay_sec(base_delay: float, snapshot_kind: str) -> float:
     delay_map = {
         "performance_tuning": _env_float(
             "MONITOR_SNAPSHOT_PERFORMANCE_TUNING_IO_DELAY_SEC", base_delay
-        ),
-        "server_comparison": _env_float(
-            "MONITOR_SNAPSHOT_SERVER_COMPARISON_IO_DELAY_SEC",
-            base_delay,
         ),
     }
     return delay_map.get(snapshot_kind, base_delay)
@@ -108,101 +101,6 @@ def save_monitor_snapshot_manifest(
         json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     return manifest_path
-
-
-def _relative_to_repo(path: Path) -> str:
-    repo_root = Path(__file__).resolve().parents[2]
-    try:
-        return str(path.relative_to(repo_root))
-    except Exception:
-        return str(path)
-
-
-def _upsert_generated_block(
-    path: Path,
-    *,
-    block_id: str,
-    content: str,
-    insert_before: str | None = None,
-) -> bool:
-    if not path.exists():
-        return False
-
-    start_marker = f"<!-- {block_id}_START -->"
-    end_marker = f"<!-- {block_id}_END -->"
-    block = f"{start_marker}\n{content.rstrip()}\n{end_marker}"
-    original = path.read_text(encoding="utf-8")
-
-    if start_marker in original and end_marker in original:
-        start = original.index(start_marker)
-        end = original.index(end_marker) + len(end_marker)
-        updated = f"{original[:start].rstrip()}\n\n{block}\n{original[end:].lstrip()}"
-    elif insert_before and insert_before in original:
-        updated = original.replace(insert_before, f"{block}\n\n{insert_before}", 1)
-    else:
-        updated = f"{original.rstrip()}\n\n{block}\n"
-
-    path.write_text(updated, encoding="utf-8")
-    return True
-
-
-def _save_server_comparison_artifacts(target_date: str) -> dict[str, str] | None:
-    from src.engine.server_report_comparison import (
-        build_snapshot_summary,
-        compare_server_reports,
-        render_checklist_append_block,
-        render_markdown_report,
-    )
-
-    comparison = compare_server_reports(
-        target_date=target_date,
-        remote_base_url="https://songstockscan.ddns.net",
-        since_time="09:00:00",
-        include_sections=(
-            "trade_review",
-            "performance_tuning",
-            "post_sell_feedback",
-            "entry_pipeline_flow",
-        ),
-    )
-    summary = build_snapshot_summary(comparison)
-    comparison_snapshot_path = save_monitor_snapshot(
-        "server_comparison", target_date, comparison
-    )
-
-    report_path = SERVER_COMPARISON_REPORT_DIR / f"server_comparison_{target_date}.md"
-    report_path.write_text(render_markdown_report(comparison), encoding="utf-8")
-
-    nested_checklist_path = (
-        DOCS_DIR / "checklists" / f"{target_date}-stage2-todo-checklist.md"
-    )
-    legacy_checklist_path = DOCS_DIR / f"{target_date}-stage2-todo-checklist.md"
-    checklist_path = (
-        nested_checklist_path
-        if nested_checklist_path.exists()
-        else legacy_checklist_path
-    )
-    checklist_updated = False
-    if checklist_path.exists():
-        checklist_block = render_checklist_append_block(
-            comparison,
-            report_relpath=_relative_to_repo(report_path),
-        )
-        checklist_updated = _upsert_generated_block(
-            checklist_path,
-            block_id="AUTO_SERVER_COMPARISON",
-            content=checklist_block,
-            insert_before=f"## {target_date} 장후 체크리스트 (15:30~)",
-        )
-
-    return {
-        "server_comparison_snapshot": str(comparison_snapshot_path),
-        "server_comparison_report": str(report_path),
-        "server_comparison_checklist_updated": str(checklist_updated).lower(),
-        "server_comparison_summary_generated_at": str(
-            summary.get("generated_at") or ""
-        ),
-    }
 
 
 def archived_log_path(log_path: Path, target_date: str) -> Path:
@@ -300,7 +198,6 @@ def save_monitor_snapshots_for_date(target_date: str) -> dict[str, str]:
         target_date,
         profile="full",
         io_delay_sec=0.0,
-        include_server_comparison=True,
     )
 
 
@@ -309,7 +206,6 @@ def save_monitor_snapshots_for_date_with_profile(
     *,
     profile: str = "full",
     io_delay_sec: float = 0.0,
-    include_server_comparison: bool | None = None,
 ) -> dict[str, str]:
     from src.engine.buy_pause_guard import evaluate_buy_pause_guard
     from src.engine.holding_exit_observation_report import (
@@ -328,19 +224,6 @@ def save_monitor_snapshots_for_date_with_profile(
     normalized_profile = str(profile or "full").strip().lower()
     if normalized_profile not in {"full", "intraday_light"}:
         raise ValueError(f"Unsupported monitor snapshot profile: {profile}")
-    server_comparison_policy_enabled = os.getenv(
-        "KORSTOCKSCAN_ENABLE_SERVER_COMPARISON", ""
-    ).lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-    if include_server_comparison is None:
-        include_server_comparison = (
-            normalized_profile == "full" and server_comparison_policy_enabled
-        )
-
     sleep_sec = max(0.0, float(io_delay_sec))
     trend_env_name = (
         "MONITOR_SNAPSHOT_INTRADAY_TREND_MAX_DATES"
@@ -424,7 +307,6 @@ def save_monitor_snapshots_for_date_with_profile(
         {
             "default": f"{sleep_sec:.3f}",
             "performance_tuning": f"{_stage_io_delay_sec(sleep_sec, 'performance_tuning'):.3f}",
-            "server_comparison": f"{_stage_io_delay_sec(sleep_sec, 'server_comparison'):.3f}",
         }
     )
     if trend_max_dates is not None:
@@ -456,20 +338,4 @@ def save_monitor_snapshots_for_date_with_profile(
         result["snapshot_manifest"] = str(manifest_path)
         return result
 
-    if not include_server_comparison:
-        if not server_comparison_policy_enabled:
-            result["server_comparison_status"] = "policy_disabled"
-        return _finalize_snapshot_manifest()
-
-    try:
-        comparison_delay = _stage_io_delay_sec(sleep_sec, "server_comparison")
-        if comparison_delay > 0:
-            time.sleep(comparison_delay)
-        server_comparison = _save_server_comparison_artifacts(target_date)
-    except Exception as exc:
-        result["server_comparison_error"] = f"{type(exc).__name__}: {exc}"
-        return _finalize_snapshot_manifest()
-
-    if server_comparison:
-        result.update(server_comparison)
     return _finalize_snapshot_manifest()

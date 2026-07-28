@@ -36,12 +36,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Delay seconds between snapshot stages to reduce read/write burst.",
     )
     parser.add_argument(
-        "--skip-server-comparison",
-        action="store_true",
-        default=os.getenv("MONITOR_SNAPSHOT_SKIP_SERVER_COMPARISON", "0") == "1",
-        help="Skip remote server comparison artifact generation.",
-    )
-    parser.add_argument(
         "--lock-file",
         dest="lock_file",
         default=os.getenv(
@@ -73,10 +67,6 @@ def _validate_wrapper_invocation(target_date: str | None) -> int | None:
                     "deploy/run_monitor_snapshot_safe.sh"
                 ),
                 "profile": os.getenv("MONITOR_SNAPSHOT_PROFILE", "full"),
-                "skip_server_comparison": os.getenv(
-                    "MONITOR_SNAPSHOT_SKIP_SERVER_COMPARISON", "0"
-                )
-                == "1",
                 "skip_lock": True,
                 "started_at": now,
                 "finished_at": now,
@@ -131,7 +121,6 @@ def main() -> int:
             target_date,
             profile=args.profile,
             io_delay_sec=max(0.0, float(args.io_delay_sec)),
-            include_server_comparison=not args.skip_server_comparison,
         )
     except Exception as exc:
         status = "failed"
@@ -149,7 +138,6 @@ def main() -> int:
                 "status": status,
                 "profile": args.profile,
                 "io_delay_sec": max(0.0, float(args.io_delay_sec)),
-                "skip_server_comparison": bool(args.skip_server_comparison),
                 "skip_lock": bool(args.skip_lock),
                 "started_at": started_at_display,
                 "finished_at": finished_at.strftime("%Y-%m-%d %H:%M:%S"),
