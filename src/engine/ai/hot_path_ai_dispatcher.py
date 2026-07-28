@@ -154,9 +154,7 @@ class HotPathAIDispatcher:
             thread_name_prefix="hot_path_ai",
         )
         self._lock = threading.RLock()
-        self._pending: dict[
-            tuple[str, str, str], tuple[HotPathAIRequest, Future]
-        ] = {}
+        self._pending: dict[tuple[str, str, str], tuple[HotPathAIRequest, Future]] = {}
         self._completed: deque[HotPathAIResult] = deque()
         self._closed = False
 
