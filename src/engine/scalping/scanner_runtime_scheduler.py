@@ -218,6 +218,7 @@ class ScannerWorkItem:
     priority: int = 0
     attempt: int = 1
     precheck_phase: str = "not_applicable"
+    recheck_evidence_key: str | None = None
 
     @property
     def work_id(self) -> str:
@@ -251,6 +252,7 @@ class ScannerRuntimeScheduler:
         ScannerLane.HEAVY_EVAL: 15.0,
     }
     _FAST_PRECHECK_RECHECK_DEADLINE_SEC = 30.0
+    _FAST_PRECHECK_RECHECK_MIN_INTERVAL_SEC = 2.0
 
     def __init__(self, *, max_active: int) -> None:
         self.max_active = max(1, int(max_active))
@@ -264,6 +266,7 @@ class ScannerRuntimeScheduler:
         self._in_flight: dict[str, ScannerWorkItem] = {}
         self._dispatched_epoch_by_work_id: dict[str, float] = {}
         self._first_precheck_dispatched_generation_ids: set[str] = set()
+        self._last_fast_recheck_enqueue: dict[str, tuple[float, str]] = {}
         self._blocking_heavy_since_precheck = 0
 
     def current_generation(self, code: str) -> ScannerGeneration | None:
@@ -465,6 +468,7 @@ class ScannerRuntimeScheduler:
         deadline_epoch: float | None = None,
         priority: int = 0,
         attempt: int = 1,
+        recheck_evidence_key: str | None = None,
     ) -> ScannerSchedulerDecision:
         normalized_lane = (
             lane if isinstance(lane, ScannerLane) else ScannerLane(str(lane))
@@ -478,6 +482,73 @@ class ScannerRuntimeScheduler:
                     decided_epoch=now_epoch,
                     fields=generation.timing_fields(now_epoch=now_epoch),
                 )
+            pending_initial = self._pending_initial_precheck_for_generation_locked(
+                generation
+            )
+            if normalized_lane is ScannerLane.FAST_PRECHECK and pending_initial:
+                # Recheck producers can run before the main loop has claimed
+                # the initial work (for example while waiting for the first
+                # 0B/0D snapshot).  Replacing that work changes its phase to
+                # recheck and destroys the attach-to-first-precheck reservation.
+                # Preserve the original immutable deadline instead.
+                fields = self._decision_fields(pending_initial, now_epoch=now_epoch)
+                fields.update(
+                    {
+                        "scanner_scheduler_coalesced": True,
+                        "scanner_scheduler_coalesced_reason": (
+                            "initial_fast_precheck_retained"
+                        ),
+                    }
+                )
+                return ScannerSchedulerDecision(
+                    action="coalesced",
+                    reason="initial_fast_precheck_retained",
+                    decided_epoch=now_epoch,
+                    item=pending_initial,
+                    fields=fields,
+                )
+            evidence_key = (
+                str(recheck_evidence_key)
+                if recheck_evidence_key is not None
+                else None
+            )
+            if (
+                normalized_lane is ScannerLane.FAST_PRECHECK
+                and evidence_key is not None
+            ):
+                previous = self._last_fast_recheck_enqueue.get(
+                    generation.generation_id
+                )
+                if previous is not None:
+                    previous_epoch, previous_evidence_key = previous
+                    elapsed = max(0.0, now_epoch - previous_epoch)
+                    if (
+                        elapsed < self._FAST_PRECHECK_RECHECK_MIN_INTERVAL_SEC
+                        and previous_evidence_key == evidence_key
+                    ):
+                        fields = generation.timing_fields(now_epoch=now_epoch)
+                        fields.update(
+                            {
+                                "scanner_scheduler_lane": (
+                                    ScannerLane.FAST_PRECHECK.value
+                                ),
+                                "scanner_scheduler_coalesced": True,
+                                "scanner_scheduler_coalesced_reason": (
+                                    "same_generation_fast_recheck_min_interval"
+                                ),
+                                "scanner_fast_recheck_min_interval_sec": (
+                                    self._FAST_PRECHECK_RECHECK_MIN_INTERVAL_SEC
+                                ),
+                                "scanner_fast_recheck_elapsed_sec": round(elapsed, 6),
+                                "scanner_fast_recheck_evidence_changed": False,
+                            }
+                        )
+                        return ScannerSchedulerDecision(
+                            action="coalesced",
+                            reason="same_generation_fast_recheck_min_interval",
+                            decided_epoch=now_epoch,
+                            fields=fields,
+                        )
             item = self._enqueue_locked(
                 generation,
                 lane=normalized_lane,
@@ -486,7 +557,17 @@ class ScannerRuntimeScheduler:
                 deadline_epoch=deadline_epoch,
                 priority=priority,
                 attempt=attempt,
+                recheck_evidence_key=evidence_key,
             )
+            if (
+                normalized_lane is ScannerLane.FAST_PRECHECK
+                and item.precheck_phase == "recheck"
+                and evidence_key is not None
+            ):
+                self._last_fast_recheck_enqueue[generation.generation_id] = (
+                    now_epoch,
+                    evidence_key,
+                )
             return ScannerSchedulerDecision(
                 action="enqueued",
                 reason="deadline_lane_enqueued",
@@ -893,6 +974,7 @@ class ScannerRuntimeScheduler:
         deadline_epoch: float | None = None,
         priority: int = 0,
         attempt: int = 1,
+        recheck_evidence_key: str | None = None,
     ) -> ScannerWorkItem:
         precheck_phase = (
             "initial"
@@ -927,6 +1009,7 @@ class ScannerRuntimeScheduler:
             priority=int(priority),
             attempt=max(1, int(attempt)),
             precheck_phase=precheck_phase,
+            recheck_evidence_key=recheck_evidence_key,
         )
         # Coalesce repeated scheduling of the same generation/lane.
         for work_id, current in list(self._work_by_id.items()):
@@ -956,6 +1039,9 @@ class ScannerRuntimeScheduler:
         if current_generation is not None:
             self._first_precheck_dispatched_generation_ids.discard(
                 current_generation.generation_id
+            )
+            self._last_fast_recheck_enqueue.pop(
+                current_generation.generation_id, None
             )
         for work_id, item in list(self._work_by_id.items()):
             if item.generation.code == code:
@@ -1012,6 +1098,19 @@ class ScannerRuntimeScheduler:
             for item in self._pending_prechecks_locked()
             if item.precheck_phase == "initial"
         ]
+
+    def _pending_initial_precheck_for_generation_locked(
+        self, generation: ScannerGeneration
+    ) -> ScannerWorkItem | None:
+        for item in self._work_by_id.values():
+            if (
+                item.generation.generation_id == generation.generation_id
+                and item.lane is ScannerLane.FAST_PRECHECK
+                and item.precheck_phase == "initial"
+                and self.is_current(item.generation)
+            ):
+                return item
+        return None
 
     def _pending_critical_work_locked(
         self,

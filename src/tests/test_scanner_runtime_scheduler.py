@@ -239,6 +239,66 @@ def test_same_generation_lane_enqueue_coalesces_latest_deadline():
     assert decision.item.deadline_epoch == 107.0
 
 
+def test_initial_precheck_is_retained_when_recheck_arrives_before_dispatch():
+    scheduler = ScannerRuntimeScheduler(max_active=16)
+    registered = _register(scheduler, attach_epoch=100.0, promotion_epoch=99.0)
+    generation = registered.item.generation
+
+    retained = scheduler.enqueue(
+        generation,
+        lane=ScannerLane.FAST_PRECHECK,
+        owner="ws_gap_recovery_after_precheck",
+        enqueued_epoch=101.0,
+        recheck_evidence_key="curr=100",
+    )
+
+    assert retained.action == "coalesced"
+    assert retained.reason == "initial_fast_precheck_retained"
+    assert retained.item.precheck_phase == "initial"
+    assert retained.item.deadline_epoch == 110.0
+
+    dispatched = scheduler.next_decision(now_epoch=101.1)
+    assert dispatched.action == "dispatch"
+    assert dispatched.item.precheck_phase == "initial"
+    assert dispatched.fields["attach_to_first_precheck_sec"] == 1.1
+
+
+def test_same_evidence_fast_recheck_is_rate_coalesced_after_initial_dispatch():
+    scheduler = ScannerRuntimeScheduler(max_active=16)
+    registered = _register(scheduler, attach_epoch=100.0, promotion_epoch=99.0)
+    generation = registered.item.generation
+    initial = scheduler.next_decision(now_epoch=100.1)
+    scheduler.complete(initial.item, completed_epoch=100.2, outcome="pass")
+
+    first = scheduler.enqueue(
+        generation,
+        lane=ScannerLane.FAST_PRECHECK,
+        owner="budget_retention_fresh_recheck",
+        enqueued_epoch=101.0,
+        recheck_evidence_key="curr=100|best_bid=99",
+    )
+    repeated = scheduler.enqueue(
+        generation,
+        lane=ScannerLane.FAST_PRECHECK,
+        owner="budget_retention_fresh_recheck",
+        enqueued_epoch=101.5,
+        recheck_evidence_key="curr=100|best_bid=99",
+    )
+    changed = scheduler.enqueue(
+        generation,
+        lane=ScannerLane.FAST_PRECHECK,
+        owner="budget_retention_fresh_recheck",
+        enqueued_epoch=101.6,
+        recheck_evidence_key="curr=101|best_bid=100",
+    )
+
+    assert first.action == "enqueued"
+    assert repeated.action == "coalesced"
+    assert repeated.reason == "same_generation_fast_recheck_min_interval"
+    assert changed.action == "enqueued"
+    assert changed.item.recheck_evidence_key == "curr=101|best_bid=100"
+
+
 def test_claim_path_does_not_accumulate_stale_heap_entries():
     scheduler = ScannerRuntimeScheduler(max_active=16)
     registered = _register(scheduler)

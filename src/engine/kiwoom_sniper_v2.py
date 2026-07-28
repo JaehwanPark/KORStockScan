@@ -6603,9 +6603,7 @@ def _scanner_heavy_eval_evidence_fingerprint(ws_data):
         "bid_qty",
         "ask_qty",
     )
-    return "|".join(
-        f"{key}={str(snapshot.get(key) or '').strip()}" for key in keys
-    )
+    return "|".join(f"{key}={str(snapshot.get(key) or '').strip()}" for key in keys)
 
 
 def _scanner_normalize_ws_snapshot_for_entry_eval(snapshot, *, now_ts):
@@ -8485,6 +8483,7 @@ def _scanner_scheduler_enqueue_target(
     enqueued_epoch,
     deadline_epoch=None,
     attempt=1,
+    recheck_evidence_key=None,
 ):
     generation = _scanner_scheduler_target_generation(scheduler, target)
     if generation is None:
@@ -8496,6 +8495,7 @@ def _scanner_scheduler_enqueue_target(
         enqueued_epoch=float(enqueued_epoch),
         deadline_epoch=deadline_epoch,
         attempt=attempt,
+        recheck_evidence_key=recheck_evidence_key,
     )
     if decision.item is not None:
         with ENTRY_LOCK:
@@ -8520,7 +8520,14 @@ def _scanner_scheduler_enqueue_target(
     return decision
 
 
-def _scanner_scheduler_enqueue_fresh_precheck(scheduler, target, *, now_epoch, owner):
+def _scanner_scheduler_enqueue_fresh_precheck(
+    scheduler,
+    target,
+    *,
+    now_epoch,
+    owner,
+    evidence_snapshot=None,
+):
     if not _is_scanner_watching_target(target):
         if isinstance(scheduler, ScannerRuntimeScheduler):
             scheduler.invalidate(
@@ -8536,6 +8543,14 @@ def _scanner_scheduler_enqueue_fresh_precheck(scheduler, target, *, now_epoch, o
         owner=owner,
         enqueued_epoch=float(now_epoch),
         attempt=(_safe_int((target or {}).get("_scanner_scheduler_attempt"), 0) + 1),
+        # The scheduler uses this value only to coalesce a rapid retry of the
+        # same WATCHING generation.  It has no order, threshold, or freshness
+        # authority; a material price/BBO/strength change represented by the
+        # caller's current WS snapshot bypasses the short retry window through
+        # a different evidence key.
+        recheck_evidence_key=_scanner_heavy_eval_evidence_fingerprint(
+            evidence_snapshot if isinstance(evidence_snapshot, dict) else target
+        ),
     )
 
 
@@ -10227,7 +10242,12 @@ def run_sniper(is_test_mode=False):
                         # attribution anchor.  The scheduler's dispatch
                         # budget begins only once the main thread has
                         # received and enqueued that exact result.
-                        deadline_epoch=commit_enqueued_epoch + 2.0,
+                        # A ready result can be discovered near the end of a
+                        # busy outer loop.  Keep one bounded 5-second window
+                        # so the next main-thread COMMIT claim can consume it;
+                        # the commit guard still requires the generation,
+                        # state, venue, and current quote to remain valid.
+                        deadline_epoch=commit_enqueued_epoch + 5.0,
                     )
                     if commit_decision is None or commit_decision.action != "enqueued":
                         async_coordinator.discard_completed(
@@ -10949,7 +10969,9 @@ def run_sniper(is_test_mode=False):
                             continue
                         scheduler_heavy_item = scheduler_claim.item
                     heavy_eval_attempted = True
-                    delayed_stock["_scanner_last_heavy_eval_attempt_epoch"] = time.time()
+                    delayed_stock["_scanner_last_heavy_eval_attempt_epoch"] = (
+                        time.time()
+                    )
                     delayed_stock["_scanner_last_heavy_eval_evidence_fingerprint"] = (
                         _scanner_heavy_eval_evidence_fingerprint(delayed_ws_data)
                     )
@@ -12360,6 +12382,7 @@ def run_sniper(is_test_mode=False):
                                             stock,
                                             now_epoch=time.time(),
                                             owner=("budget_retention_fresh_recheck"),
+                                            evidence_snapshot=ws_data,
                                         )
                                     continue
                             if queue_lag_fields:
