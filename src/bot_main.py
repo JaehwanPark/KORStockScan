@@ -248,8 +248,17 @@ def generate_monitor_archive_job(target_date: str | None = None):
         return None
 
 
+_SCHEDULER_JOB_LOCK = threading.Lock()
+_SCHEDULER_JOB_THREADS: dict[str, threading.Thread] = {}
+
+
 def run_scheduler_job_async(job_name: str, func, *args, **kwargs):
-    """Run slow scheduled jobs away from the main heartbeat loop."""
+    """Run one named slow job away from the main heartbeat loop.
+
+    A still-running job owns its name until completion. Repeated scheduler
+    ticks therefore reuse the in-flight thread instead of starting duplicate
+    report generation.
+    """
 
     def _runner():
         try:
@@ -258,10 +267,32 @@ def run_scheduler_job_async(job_name: str, func, *args, **kwargs):
             from src.utils.logger import log_error
 
             log_error(f"스케줄러 비동기 작업 실패: {job_name}: {e}")
+        finally:
+            with _SCHEDULER_JOB_LOCK:
+                if _SCHEDULER_JOB_THREADS.get(job_name) is threading.current_thread():
+                    _SCHEDULER_JOB_THREADS.pop(job_name, None)
 
-    thread = threading.Thread(target=_runner, name=f"scheduler:{job_name}", daemon=True)
-    thread.start()
+    with _SCHEDULER_JOB_LOCK:
+        existing = _SCHEDULER_JOB_THREADS.get(job_name)
+        if existing is not None and existing.is_alive():
+            return existing
+        thread = threading.Thread(
+            target=_runner,
+            name=f"scheduler:{job_name}",
+            daemon=True,
+        )
+        _SCHEDULER_JOB_THREADS[job_name] = thread
+        thread.start()
     return thread
+
+
+def dispatch_daily_report_if_due(now: datetime, already_sent: bool) -> bool:
+    """Dispatch the 08:45 report without blocking the main heartbeat loop."""
+
+    if now.hour == 8 and now.minute == 45 and not already_sent:
+        run_scheduler_job_async("daily_report", generate_daily_report_job)
+        return True
+    return already_sent
 
 
 # ==========================================
@@ -402,9 +433,10 @@ if __name__ == "__main__":
                 monitor_archive_sent = False
 
             # [스케줄러 1-0] 아침 리포트 JSON 생성
-            if now.hour == 8 and now.minute == 45 and not daily_report_sent:
-                generate_daily_report_job()
-                daily_report_sent = True
+            daily_report_sent = dispatch_daily_report_if_due(
+                now,
+                daily_report_sent,
+            )
 
             # [스케줄러 1-1] 장 마감 후 모니터 요약/로그 아카이브 저장
             if now.hour == 15 and now.minute == 45 and not monitor_archive_sent:
