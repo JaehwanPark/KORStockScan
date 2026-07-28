@@ -1282,6 +1282,60 @@ def test_send_reg_adds_alternate_route_for_persistent_repair(monkeypatch):
     assert manager.subscribed_codes == {"240810"}
 
 
+def test_required_0b_receipt_is_not_masked_by_first_0d():
+    manager = KiwoomWSManager("test-token")
+    manager.subscribed_codes.add("000001")
+    manager._required_realtime_types_by_code["000001"] = ("0B",)
+    manager._persistent_repair_no_tick_attempts["000001"] = 2
+
+    asyncio.run(
+        manager._handle_message(
+            json.dumps(
+                {
+                    "trnm": "REAL",
+                    "data": [
+                        {
+                            "type": "0D",
+                            "item": "000001",
+                            "values": {"121": "100", "125": "100"},
+                        }
+                    ],
+                }
+            )
+        )
+    )
+
+    row = manager.get_subscription_freshness_snapshot(["000001"])["rows"][0]
+    assert row["required_realtime_types"] == ["0B"]
+    assert row["required_realtime_received"] is False
+    assert row["required_realtime_missing_types"] == ["0B"]
+    assert row["repair_recommended"] is True
+    assert row["repair_reason"] == "subscription_required_realtime_missing"
+    assert "000001" not in manager._persistent_repair_no_tick_attempts
+
+    asyncio.run(
+        manager._handle_message(
+            json.dumps(
+                {
+                    "trnm": "REAL",
+                    "data": [
+                        {
+                            "type": "0B",
+                            "item": "000001",
+                            "values": {"10": "10000", "15": "+1", "228": "101.5"},
+                        }
+                    ],
+                }
+            )
+        )
+    )
+
+    row = manager.get_subscription_freshness_snapshot(["000001"])["rows"][0]
+    assert row["required_realtime_received"] is True
+    assert row["required_realtime_missing_types"] == []
+    assert "000001" not in manager._persistent_repair_no_tick_attempts
+
+
 def test_send_reg_respects_registered_item_budget(monkeypatch):
     manager = KiwoomWSManager("test-token")
     fake_ws = _FakeWS([])
@@ -1398,8 +1452,10 @@ def test_command_ws_reg_recovery_forces_resubscribe(monkeypatch):
     manager = KiwoomWSManager("test-token")
     calls = []
 
-    def fake_execute(codes, *, force=False, source="", repair_cycle=""):
-        calls.append((codes, force, source, repair_cycle))
+    def fake_execute(
+        codes, *, force=False, source="", repair_cycle="", required_realtime_types=None
+    ):
+        calls.append((codes, force, source, repair_cycle, required_realtime_types))
 
     monkeypatch.setattr(manager, "execute_subscribe", fake_execute)
 
@@ -1407,15 +1463,25 @@ def test_command_ws_reg_recovery_forces_resubscribe(monkeypatch):
         {"codes": ["240810"], "source": "scanner_watching_ws_snapshot_recovery"}
     )
 
-    assert calls == [(["240810"], True, "scanner_watching_ws_snapshot_recovery", "")]
+    assert calls == [
+        (
+            ["240810"],
+            True,
+            "scanner_watching_ws_snapshot_recovery",
+            "",
+            ("0B",),
+        )
+    ]
 
 
 def test_command_ws_reg_persistent_repair_passes_repair_cycle(monkeypatch):
     manager = KiwoomWSManager("test-token")
     calls = []
 
-    def fake_execute(codes, *, force=False, source="", repair_cycle=""):
-        calls.append((codes, force, source, repair_cycle))
+    def fake_execute(
+        codes, *, force=False, source="", repair_cycle="", required_realtime_types=None
+    ):
+        calls.append((codes, force, source, repair_cycle, required_realtime_types))
 
     monkeypatch.setattr(manager, "execute_subscribe", fake_execute)
 
@@ -1429,7 +1495,13 @@ def test_command_ws_reg_persistent_repair_passes_repair_cycle(monkeypatch):
     )
 
     assert calls == [
-        (["240810"], True, "scanner_persistent_ws_gap_recovery", "persistent_ws_gap")
+        (
+            ["240810"],
+            True,
+            "scanner_persistent_ws_gap_recovery",
+            "persistent_ws_gap",
+            ("0B",),
+        )
     ]
 
 
@@ -1437,8 +1509,10 @@ def test_command_ws_reg_string_false_force_is_not_truthy(monkeypatch):
     manager = KiwoomWSManager("test-token")
     calls = []
 
-    def fake_execute(codes, *, force=False, source="", repair_cycle=""):
-        calls.append((codes, force, source, repair_cycle))
+    def fake_execute(
+        codes, *, force=False, source="", repair_cycle="", required_realtime_types=None
+    ):
+        calls.append((codes, force, source, repair_cycle, required_realtime_types))
 
     monkeypatch.setattr(manager, "execute_subscribe", fake_execute)
 
@@ -1446,7 +1520,7 @@ def test_command_ws_reg_string_false_force_is_not_truthy(monkeypatch):
         {"codes": ["240810"], "source": "scanner_watch", "force": "false"}
     )
 
-    assert calls == [(["240810"], False, "scanner_watch", "")]
+    assert calls == [(["240810"], False, "scanner_watch", "", ("0B",))]
 
 
 def test_execute_subscribe_string_false_force_does_not_resubscribe(monkeypatch):
@@ -1821,6 +1895,45 @@ def test_persistent_repair_attempts_clear_after_first_realtime(monkeypatch):
     assert manager._persistent_repair_no_tick_attempts.get("000001") is None
     now["value"] = 1001.0
     assert manager._filter_persistent_repair_targets(["000001"]) == (["000001"], [])
+
+
+def test_command_ws_reg_scanner_defaults_to_required_0b(monkeypatch):
+    manager = KiwoomWSManager("test-token")
+    captured = {}
+
+    monkeypatch.setattr(
+        manager,
+        "execute_subscribe",
+        lambda codes, **kwargs: captured.update(codes=list(codes), **kwargs),
+    )
+
+    manager._handle_reg_event(
+        {"codes": ["000001"], "source": "scanner_runtime_target_attach"}
+    )
+
+    assert captured["codes"] == ["000001"]
+    assert captured["required_realtime_types"] == ("0B",)
+
+
+def test_command_ws_reg_preserves_explicit_required_realtime_types(monkeypatch):
+    manager = KiwoomWSManager("test-token")
+    captured = {}
+
+    monkeypatch.setattr(
+        manager,
+        "execute_subscribe",
+        lambda codes, **kwargs: captured.update(codes=list(codes), **kwargs),
+    )
+
+    manager._handle_reg_event(
+        {
+            "codes": ["000001"],
+            "source": "scanner_runtime_target_attach",
+            "required_realtime_types": ["0B", "0D"],
+        }
+    )
+
+    assert captured["required_realtime_types"] == ["0B", "0D"]
 
 
 def test_real_payload_with_exchange_suffix_updates_canonical_snapshot():

@@ -257,6 +257,10 @@ class KiwoomWSManager:
         self._persistent_repair_overflow_codes = OrderedDict()
         self._last_persistent_repair_rebuild_ts = 0.0
         self._registered_items_by_code = {}
+        # Most subscriptions can be considered live after any quote packet.
+        # Scanner entry is stricter: its short-window tape requires a post-REG
+        # 0B receipt, not merely a 0D order-book update.
+        self._required_realtime_types_by_code = {}
         self._top_of_book_cache = {}
         self._last_remove_request_ts = {}
         self._deferred_scalp_condition_matches = OrderedDict()
@@ -860,6 +864,35 @@ class KiwoomWSManager:
             items_by_code[code] = list(seen.keys())
         return items_by_code
 
+    @staticmethod
+    def _normalize_required_realtime_types(required_realtime_types):
+        if isinstance(required_realtime_types, str):
+            required_realtime_types = [required_realtime_types]
+        normalized = []
+        for value in required_realtime_types or ():
+            realtime_type = str(value or "").strip()
+            if realtime_type and realtime_type not in normalized:
+                normalized.append(realtime_type)
+        return tuple(normalized)
+
+    def _required_realtime_types_received_locked(self, code, target=None):
+        required = tuple(self._required_realtime_types_by_code.get(code) or ())
+        if not required:
+            return True
+        target = target if isinstance(target, dict) else self.realtime_data.get(code)
+        target = target if isinstance(target, dict) else {}
+        type_ts = target.get("last_realtime_type_ts")
+        type_ts = type_ts if isinstance(type_ts, dict) else {}
+        return all(
+            self._safe_float(type_ts.get(realtime_type), 0.0) > 0
+            for realtime_type in required
+        )
+
+    def _has_any_realtime_receipt(self, target):
+        type_ts = (target or {}).get("last_realtime_type_ts")
+        type_ts = type_ts if isinstance(type_ts, dict) else {}
+        return any(self._safe_float(value, 0.0) > 0 for value in type_ts.values())
+
     def _apply_registered_item_budget(
         self, normalized_codes, register_items, *, enforce=False
     ):
@@ -1125,6 +1158,17 @@ class KiwoomWSManager:
                     else None
                 )
                 registered_items = tuple(self._registered_items_by_code.get(code) or ())
+                required_realtime_types = tuple(
+                    self._required_realtime_types_by_code.get(code) or ()
+                )
+                required_realtime_received = self._required_realtime_types_received_locked(
+                    code, target
+                )
+                required_realtime_missing_types = [
+                    realtime_type
+                    for realtime_type in required_realtime_types
+                    if self._safe_float(type_ts.get(realtime_type), 0.0) <= 0
+                ]
                 registered_route_counts = self._ws_item_route_counts(registered_items)
                 registered_market_suffixes = [
                     self._ws_item_market_suffix(item) for item in registered_items
@@ -1158,6 +1202,8 @@ class KiwoomWSManager:
                 )
                 if subscribed and freshness_state == "no_tick":
                     repair_reason = "subscription_no_tick"
+                elif subscribed and not required_realtime_received:
+                    repair_reason = "subscription_required_realtime_missing"
                 elif subscribed and freshness_state == "stale":
                     repair_reason = "subscription_stale"
                 else:
@@ -1173,6 +1219,9 @@ class KiwoomWSManager:
                         "received_types": sorted(
                             list(target.get("received_types") or [])
                         ),
+                        "required_realtime_types": list(required_realtime_types),
+                        "required_realtime_received": required_realtime_received,
+                        "required_realtime_missing_types": required_realtime_missing_types,
                         "last_0b_age_sec": last_0b_age_sec,
                         "last_0d_age_sec": realtime_type_age_sec["0D"],
                         "last_0w_age_sec": realtime_type_age_sec["0w"],
@@ -1195,11 +1244,18 @@ class KiwoomWSManager:
                         "route_repair_policy": "remove_then_reg_required_for_route_transition",
                         "total_registered_item_count": registered_item_count,
                         "repair_recommended": subscribed
-                        and freshness_state in {"no_tick", "stale"},
+                        and (
+                            freshness_state in {"no_tick", "stale"}
+                            or not required_realtime_received
+                        ),
                         "repair_reason": repair_reason,
                         "recommended_repair": (
                             "remove_then_reg_backoff"
-                            if subscribed and freshness_state in {"no_tick", "stale"}
+                            if subscribed
+                            and (
+                                freshness_state in {"no_tick", "stale"}
+                                or not required_realtime_received
+                            )
                             else "none"
                         ),
                         "decision_authority": "ws_freshness_source_quality_only",
@@ -1293,9 +1349,19 @@ class KiwoomWSManager:
 
     def _note_persistent_repair_attempt_locked(self, code, now_ts):
         target = self.realtime_data.get(code) or {}
-        if target.get("_first_tick_logged") or self._is_ws_ready(
-            target, require_trade=False
+        required_received = self._required_realtime_types_received_locked(code, target)
+        if required_received and (
+            target.get("_first_tick_logged")
+            or self._is_ws_ready(target, require_trade=False)
         ):
+            self._persistent_repair_no_tick_attempts.pop(code, None)
+            self._persistent_repair_stuck_until_ts.pop(code, None)
+            return
+        # A quote-only receipt proves the websocket is connected but does not
+        # satisfy a scanner's 0B contract.  Let the scanner's bounded
+        # required-realtime recovery own that state instead of incorrectly
+        # entering the generic no-tick cooldown.
+        if self._has_any_realtime_receipt(target):
             self._persistent_repair_no_tick_attempts.pop(code, None)
             self._persistent_repair_stuck_until_ts.pop(code, None)
             return
@@ -3049,6 +3115,7 @@ class KiwoomWSManager:
                         for code in normalized_codes:
                             self._recent_reg_request_ts.pop(code, None)
                             self._registered_items_by_code.pop(code, None)
+                            self._required_realtime_types_by_code.pop(code, None)
                             self._persistent_repair_request_ts.pop(code, None)
                             self._persistent_repair_no_tick_attempts.pop(code, None)
                             self._persistent_repair_stuck_until_ts.pop(code, None)
@@ -3212,6 +3279,7 @@ class KiwoomWSManager:
         source="",
         repair_cycle="",
         remove_before_reg=None,
+        required_realtime_types=None,
     ):
         if not codes:
             return
@@ -3222,6 +3290,15 @@ class KiwoomWSManager:
 
         force = self._flag_enabled(force, default=False)
         normalized_codes = self._normalize_subscribe_codes(codes)
+        required_realtime_types = self._normalize_required_realtime_types(
+            required_realtime_types
+        )
+        if required_realtime_types:
+            with self.lock:
+                for code in normalized_codes:
+                    self._required_realtime_types_by_code[code] = (
+                        required_realtime_types
+                    )
         new_targets = (
             normalized_codes
             if force
@@ -3352,6 +3429,7 @@ class KiwoomWSManager:
                 self._persistent_repair_no_tick_attempts.pop(code, None)
                 self._persistent_repair_stuck_until_ts.pop(code, None)
                 self._persistent_repair_overflow_codes.pop(code, None)
+                self._required_realtime_types_by_code.pop(code, None)
         if self.loop and self.loop.is_running() and not self._stop_event.is_set():
             future = asyncio.run_coroutine_threadsafe(
                 self._send_remove(
@@ -3398,6 +3476,11 @@ class KiwoomWSManager:
             "source": source,
             "repair_cycle": repair_cycle,
         }
+        required_realtime_types = payload.get("required_realtime_types")
+        if required_realtime_types is None and source.startswith("scanner_"):
+            required_realtime_types = ("0B",)
+        if required_realtime_types is not None:
+            kwargs["required_realtime_types"] = required_realtime_types
         if "remove_before_reg" in payload:
             kwargs["remove_before_reg"] = payload.get("remove_before_reg")
         self.execute_subscribe(codes, **kwargs)

@@ -4954,7 +4954,9 @@ def test_scalping_dynamic_watch_cap_disabled_keeps_base(monkeypatch, tmp_path):
     kiwoom_sniper_v2._reset_scalping_dynamic_watch_cap_state()
 
 
-def test_initial_ws_registration_groups_caps_scanner_hot_tier(monkeypatch):
+def test_initial_ws_registration_groups_caps_scanner_hot_tier(monkeypatch, tmp_path):
+    _disable_scanner_operator_runtime_overrides(monkeypatch, tmp_path)
+    kiwoom_sniper_v2._reset_scalping_dynamic_watch_cap_state()
     monkeypatch.setenv("KORSTOCKSCAN_SWING_REAL_WATCHING_ENABLED", "true")
     monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE", "2")
     targets = [
@@ -5013,6 +5015,7 @@ def test_initial_ws_registration_groups_caps_scanner_hot_tier(monkeypatch):
 
     assert priority_codes == ["000001", "000002"]
     assert scanner_codes == ["100002", "100003"]
+    kiwoom_sniper_v2._reset_scalping_dynamic_watch_cap_state()
 
 
 def test_swing_watching_default_off_excludes_ws_and_runtime(monkeypatch):

@@ -2131,6 +2131,14 @@ def _scanner_runtime_target_event_fields(payload, *, outcome, reason, target=Non
         or "not_applicable_scanner_promotion_emitted_epoch",
         "source_signature": payload.get("source_signature")
         or "not_applicable_source_signature",
+        "scanner_required_realtime_types": payload.get(
+            "scanner_required_realtime_types"
+        )
+        or target.get("scanner_required_realtime_types")
+        or "0B",
+        "scanner_required_realtime_contract": (
+            "post_attach_0B_required_for_entry_tape"
+        ),
         "scanner_source_family": payload.get("scanner_source_family") or "",
         "scanner_source_role": payload.get("scanner_source_role") or "",
         "rank_change": payload.get("rank_change", "not_applicable_rank_change"),
@@ -7364,6 +7372,7 @@ def _apply_scalping_scanner_promoted_target(payload, *, mutation_lock=ENTRY_LOCK
                         "scanner_promotion_reason": refresh_promotion_reason,
                         "scanner_promotion_emitted_epoch": refresh_promotion_epoch,
                         "source_signature": refresh_source_signature,
+                        "scanner_required_realtime_types": "0B",
                         **refresh_venue_fields,
                         **refresh_context_updates,
                     }
@@ -7438,6 +7447,7 @@ def _apply_scalping_scanner_promoted_target(payload, *, mutation_lock=ENTRY_LOCK
             )
             or "",
             "source_signature": payload.get("source_signature") or "",
+            "scanner_required_realtime_types": "0B",
             **_scanner_runtime_target_venue_fields(payload),
             **scanner_context_updates,
         }
