@@ -15,8 +15,9 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 
+import json
 import os
-import multiprocessing
+import subprocess
 import time
 import signal
 import threading
@@ -39,7 +40,6 @@ from src.engine.daily_report_service import (
 )
 from src.engine.log_archive_service import (
     archive_target_date_logs,
-    save_monitor_snapshots_for_date,
 )
 from src.engine.strategy_position_performance_report import (
     sync_trade_performance_for_date,
@@ -222,7 +222,7 @@ def generate_monitor_archive_job(target_date: str | None = None):
     resolved_date = _resolve_target_date(target_date)
     try:
         perf_sync = sync_trade_performance_for_date(resolved_date)
-        snapshot_paths = save_monitor_snapshots_for_date(resolved_date)
+        snapshot_paths = run_monitor_snapshot_isolated(resolved_date)
         archived_logs = archive_target_date_logs(
             resolved_date,
             [
@@ -246,6 +246,68 @@ def generate_monitor_archive_job(target_date: str | None = None):
         log_error(f"모니터 스냅샷/로그 아카이브 실패: {e}")
         print(f"⚠️ [시스템] 모니터 스냅샷/로그 아카이브 실패: {e}")
         return None
+
+
+def run_monitor_snapshot_isolated(target_date: str) -> dict[str, str]:
+    """Build the heavy full snapshot in the resource-isolated wrapper process."""
+    wrapper = PROJECT_ROOT / "deploy" / "run_monitor_snapshot_safe.sh"
+    env = os.environ.copy()
+    env.update(
+        {
+            "MONITOR_SNAPSHOT_ASYNC": "0",
+            "MONITOR_SNAPSHOT_FORCE": "1",
+            "MONITOR_SNAPSHOT_PROFILE": "full",
+            "ALLOW_EXISTING_FULL_BUILD_WITH_BOT": "1",
+        }
+    )
+    try:
+        worker_timeout_sec = int(env.get("MONITOR_SNAPSHOT_TIMEOUT_SEC", "1200"))
+    except (TypeError, ValueError):
+        worker_timeout_sec = 1200
+    timeout_sec = max(60, worker_timeout_sec + 60)
+    started_ns = time.time_ns()
+    completed = subprocess.run(
+        [str(wrapper), target_date],
+        cwd=PROJECT_ROOT,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=timeout_sec,
+    )
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout or "").strip()[-1000:]
+        raise RuntimeError(
+            "isolated monitor snapshot failed "
+            f"(exit={completed.returncode}, detail={detail or '-'})"
+        )
+
+    manifest_path = (
+        PROJECT_ROOT
+        / "data"
+        / "report"
+        / "monitor_snapshots"
+        / "manifests"
+        / f"monitor_snapshot_manifest_{target_date}_full.json"
+    )
+    if (
+        not manifest_path.exists()
+        or manifest_path.stat().st_mtime_ns < started_ns - 1_000_000_000
+    ):
+        raise RuntimeError(
+            f"isolated monitor snapshot manifest is not fresh: {manifest_path}"
+        )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if manifest.get("target_date") != target_date or manifest.get("profile") != "full":
+        raise RuntimeError(
+            f"isolated monitor snapshot manifest contract mismatch: {manifest_path}"
+        )
+    snapshot_paths = manifest.get("snapshot_paths")
+    if not isinstance(snapshot_paths, dict) or not snapshot_paths:
+        raise RuntimeError(
+            f"isolated monitor snapshot manifest is invalid: {manifest_path}"
+        )
+    return {str(key): str(value) for key, value in snapshot_paths.items()}
 
 
 _SCHEDULER_JOB_LOCK = threading.Lock()

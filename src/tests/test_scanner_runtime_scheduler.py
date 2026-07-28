@@ -719,6 +719,67 @@ def test_expired_undispatched_precheck_retry_remains_initial():
     assert retry.fields["scanner_scheduler_precheck_phase"] == "initial"
 
 
+def test_expired_requested_recheck_closes_despite_fresh_recurring_peer():
+    scheduler = ScannerRuntimeScheduler(max_active=16)
+    expired = _register(
+        scheduler,
+        code="000001",
+        promotion_id="PROMO-EXPIRED",
+        attach_epoch=100.0,
+        promotion_epoch=99.0,
+    )
+    expired_initial = scheduler.claim(
+        expired.item.generation,
+        lane=ScannerLane.FAST_PRECHECK,
+        now_epoch=100.1,
+    )
+    scheduler.complete(expired_initial.item, completed_epoch=100.2, outcome="pass")
+    expired_recheck = scheduler.enqueue(
+        expired.item.generation,
+        lane=ScannerLane.FAST_PRECHECK,
+        owner="old_recurring_recheck",
+        enqueued_epoch=100.2,
+    )
+
+    fresh = _register(
+        scheduler,
+        code="000002",
+        promotion_id="PROMO-FRESH",
+        attach_epoch=139.0,
+        promotion_epoch=138.5,
+    )
+    fresh_initial = scheduler.claim(
+        fresh.item.generation,
+        lane=ScannerLane.FAST_PRECHECK,
+        now_epoch=139.1,
+    )
+    scheduler.complete(fresh_initial.item, completed_epoch=139.2, outcome="pass")
+    fresh_recheck = scheduler.enqueue(
+        fresh.item.generation,
+        lane=ScannerLane.FAST_PRECHECK,
+        owner="post_heavy_eval_fresh_recheck",
+        enqueued_epoch=139.2,
+    )
+
+    decision = scheduler.claim(
+        expired.item.generation,
+        lane=ScannerLane.FAST_PRECHECK,
+        now_epoch=140.0,
+    )
+
+    assert expired_recheck.item.deadline_epoch < 140.0
+    assert fresh_recheck.item.deadline_epoch > 140.0
+    assert decision.action == "deadline_expired"
+    assert decision.item == expired_recheck.item
+    fresh_decision = scheduler.claim(
+        fresh.item.generation,
+        lane=ScannerLane.FAST_PRECHECK,
+        now_epoch=140.0,
+    )
+    assert fresh_decision.action == "dispatch"
+    assert fresh_decision.item == fresh_recheck.item
+
+
 def test_next_decision_reserves_initial_precheck_over_recurring_recheck():
     scheduler = ScannerRuntimeScheduler(max_active=16)
     observed = _register(
