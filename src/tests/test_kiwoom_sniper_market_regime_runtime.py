@@ -9,6 +9,9 @@ import pytest
 
 from src.engine import kiwoom_sniper_v2
 from src.engine import sniper_market_regime
+from src.engine.ai.hot_path_ai_dispatcher import HotPathAIDispatcher
+from src.engine.scalping.scanner_async_eval import ScannerAsyncEvalCoordinator
+from src.engine.scalping.scanner_runtime_scheduler import ScannerGeneration
 from src.utils.constants import TRADING_RULES
 
 
@@ -2362,6 +2365,8 @@ def test_scalping_scanner_promoted_target_refresh_resets_eval_state(monkeypatch)
     assert existing["cntr_str"] == "145.5"
     for key in (
         "_scanner_last_full_eval_epoch",
+        "_scanner_last_heavy_eval_attempt_epoch",
+        "_scanner_last_heavy_eval_evidence_fingerprint",
         "_scanner_fast_precheck_logged_at",
         "_scanner_runtime_queue_lag_logged_at",
         "_scanner_heavy_eval_lag_logged_at",
@@ -8283,6 +8288,81 @@ def test_scanner_heavy_eval_recheck_fresh_sec_defaults_to_pre_ai_freshness(
 
     monkeypatch.setenv("KORSTOCKSCAN_SCANNER_HEAVY_EVAL_RECHECK_FRESH_SEC", "60")
     assert kiwoom_sniper_v2._scanner_heavy_eval_recheck_fresh_sec() == 20.0
+
+
+def test_scanner_heavy_eval_min_retry_keeps_async_rechecks_at_or_above_deadline(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "_SCANNER_OPERATOR_RUNTIME_OVERRIDE_PATH",
+        tmp_path / "missing_operator_runtime_overrides.env",
+    )
+    _reset_scanner_hot_override_cache()
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_HEAVY_EVAL_RECHECK_FRESH_SEC", "4")
+    assert kiwoom_sniper_v2._scanner_heavy_eval_min_retry_sec() == 15.0
+
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_HEAVY_EVAL_RECHECK_FRESH_SEC", "18")
+    assert kiwoom_sniper_v2._scanner_heavy_eval_min_retry_sec() == 18.0
+
+
+def test_scanner_heavy_eval_evidence_fingerprint_ignores_receipt_timestamp():
+    baseline = kiwoom_sniper_v2._scanner_heavy_eval_evidence_fingerprint(
+        {"curr": 1000, "best_bid": 999, "best_ask": 1001, "last_ws_update_ts": 1}
+    )
+    heartbeat_only = kiwoom_sniper_v2._scanner_heavy_eval_evidence_fingerprint(
+        {"curr": 1000, "best_bid": 999, "best_ask": 1001, "last_ws_update_ts": 2}
+    )
+    changed_bbo = kiwoom_sniper_v2._scanner_heavy_eval_evidence_fingerprint(
+        {"curr": 1000, "best_bid": 1000, "best_ask": 1001, "last_ws_update_ts": 2}
+    )
+
+    assert baseline == heartbeat_only
+    assert baseline != changed_bbo
+
+
+def test_scanner_async_transport_wait_state_never_uses_ready_result_as_heavy_work(
+    monkeypatch,
+):
+    dispatcher = HotPathAIDispatcher(loaded_key_count=1)
+    coordinator = ScannerAsyncEvalCoordinator(ai_dispatcher=dispatcher)
+    try:
+        generation = ScannerGeneration(
+            code="005930",
+            promotion_id="PROMO-1",
+            revision=1,
+            record_id=1,
+            venue="KRX",
+            promotion_epoch=100.0,
+            attach_epoch=101.0,
+            observed_price=1000,
+            source_signature="VALUE_TOP",
+        )
+        cache_key = "watching:ready-result"
+        request_id = f"{generation.generation_id}:{cache_key}"
+        target = {
+            "_scanner_async_generation_id": generation.generation_id,
+            "_scanner_async_cache_key": cache_key,
+        }
+        with coordinator._lock:
+            coordinator._requests[request_id] = object()
+        assert (
+            kiwoom_sniper_v2._scanner_async_transport_wait_state(
+                target, generation, coordinator
+            )
+            == "pending"
+        )
+        with coordinator._lock:
+            coordinator._requests.pop(request_id, None)
+            coordinator._ready[request_id] = object()
+        assert (
+            kiwoom_sniper_v2._scanner_async_transport_wait_state(
+                target, generation, coordinator
+            )
+            == "ready_for_commit"
+        )
+    finally:
+        coordinator.shutdown(wait=True)
 
 
 def test_persistent_ws_gap_uses_dedicated_repair_batch_queue():

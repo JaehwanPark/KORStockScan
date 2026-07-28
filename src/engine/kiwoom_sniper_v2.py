@@ -4712,6 +4712,8 @@ def _reset_scanner_runtime_eval_state(target):
         return
     for key in (
         "_scanner_last_full_eval_epoch",
+        "_scanner_last_heavy_eval_attempt_epoch",
+        "_scanner_last_heavy_eval_evidence_fingerprint",
         "_scanner_fast_precheck_logged_at",
         "_scanner_runtime_queue_lag_logged_at",
         "_scanner_heavy_eval_lag_logged_at",
@@ -6563,6 +6565,49 @@ def _scanner_heavy_eval_recheck_fresh_sec():
     return max(1.0, min(value, 20.0))
 
 
+def _scanner_heavy_eval_min_retry_sec():
+    """Bound recurring heavy work below the scheduler's heavy deadline.
+
+    The WS freshness window controls source validation, not how often an
+    unchanged WATCHING generation may occupy the heavy lane.  Retrying every
+    few seconds created a self-sustaining heavy backlog after async_v1 was
+    enabled.  Initial fast-precheck, recovery, COMMIT, and all safety paths
+    remain independent of this bounded recheck cadence.
+    """
+
+    return max(15.0, _scanner_heavy_eval_recheck_fresh_sec())
+
+
+def _scanner_heavy_eval_evidence_fingerprint(ws_data):
+    """Return a compact value fingerprint for same-generation heavy retries.
+
+    Receipt timestamps and history lengths are intentionally excluded: they
+    would turn ordinary heartbeat updates into a new heavy-evaluation reason.
+    A material current price/BBO/strength/volume change may bypass the retry
+    interval; unchanged source evidence cannot.
+    """
+
+    snapshot = ws_data if isinstance(ws_data, dict) else {}
+    keys = (
+        "curr",
+        "current_price",
+        "best_bid",
+        "best_ask",
+        "bid_price",
+        "ask_price",
+        "cntr_str",
+        "trade_strength",
+        "fluctuation",
+        "volume",
+        "cum_volume",
+        "bid_qty",
+        "ask_qty",
+    )
+    return "|".join(
+        f"{key}={str(snapshot.get(key) or '').strip()}" for key in keys
+    )
+
+
 def _scanner_normalize_ws_snapshot_for_entry_eval(snapshot, *, now_ts):
     normalized = dict(snapshot or {}) if isinstance(snapshot, dict) else {}
     fields = {
@@ -8345,6 +8390,92 @@ def _restore_scanner_async_commit_transport(target, async_result):
     }
 
 
+def _scanner_async_transport_wait_state(target, generation, coordinator):
+    """Return pending/ready only for the target's current async generation.
+
+    This is deliberately a scheduler admission observation.  It neither
+    applies worker output nor relaxes generation, quote, broker, or submit
+    guards.  A ready result is still consumed exclusively through COMMIT.
+    """
+
+    if not isinstance(target, dict) or not isinstance(
+        coordinator, ScannerAsyncEvalCoordinator
+    ):
+        return "not_applicable"
+    generation_id = str(getattr(generation, "generation_id", "") or "").strip()
+    if not generation_id:
+        return "not_applicable"
+    for generation_field, cache_field in (
+        ("_scanner_async_generation_id", "_scanner_async_cache_key"),
+        (
+            "_scanner_opening_rotation_async_generation_id",
+            "_scanner_opening_rotation_async_cache_key",
+        ),
+    ):
+        if str(target.get(generation_field) or "").strip() != generation_id:
+            continue
+        cache_key = str(target.get(cache_field) or "").strip()
+        if not cache_key:
+            continue
+        if coordinator.is_pending(generation_id=generation_id, cache_key=cache_key):
+            return "pending"
+        if coordinator.has_completed(generation_id=generation_id, cache_key=cache_key):
+            return "ready_for_commit"
+    return "not_applicable"
+
+
+def _emit_scanner_heavy_eval_coalesced(
+    target,
+    *,
+    generation,
+    now_epoch,
+    reason,
+    retry_min_sec,
+    last_attempt_epoch=0.0,
+    evidence_changed=False,
+):
+    elapsed = (
+        max(0.0, float(now_epoch) - float(last_attempt_epoch))
+        if float(last_attempt_epoch or 0.0) > 0
+        else "not_available_last_heavy_attempt"
+    )
+    _emit_scanner_scheduler_event(
+        payload=target,
+        target=target,
+        stage="scalping_scanner_scheduler_heavy_eval_coalesced",
+        fields={
+            **generation.timing_fields(now_epoch=float(now_epoch)),
+            "metric_role": "runtime_scheduler_latency",
+            "decision_authority": "scanner_heavy_recheck_coalescing_only",
+            "window_policy": "per_scanner_generation",
+            "sample_floor": "one_same_generation_recheck",
+            "primary_decision_metric": "heavy_eval_coalesced_count",
+            "source_quality_gate": "generation_current_and_async_transport_exact",
+            "forbidden_uses": (
+                "standalone_buy,broker_submit,threshold_mutation,"
+                "provider_route_change,order_price_change,quantity_or_cap_change,"
+                "broker_guard_bypass,stale_quote_bypass,hard_safety_bypass"
+            ),
+            "runtime_effect": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "scanner_scheduler_lane": ScannerLane.HEAVY_EVAL.value,
+            "scanner_heavy_eval_coalesced_reason": str(reason or "unknown"),
+            "heavy_eval_coalesced_count": 1,
+            "scanner_heavy_eval_evidence_changed": bool(evidence_changed),
+            "scanner_heavy_eval_retry_min_sec": round(float(retry_min_sec), 6),
+            "scanner_heavy_eval_last_attempt_epoch": (
+                round(float(last_attempt_epoch), 6)
+                if float(last_attempt_epoch or 0.0) > 0
+                else "not_available_last_heavy_attempt"
+            ),
+            "scanner_heavy_eval_elapsed_since_attempt_sec": (
+                round(float(elapsed), 6) if isinstance(elapsed, float) else elapsed
+            ),
+        },
+    )
+
+
 def _scanner_scheduler_enqueue_target(
     scheduler,
     target,
@@ -10085,13 +10216,18 @@ def run_sniper(is_test_mode=False):
                             ),
                         },
                     )
+                    commit_enqueued_epoch = time.time()
                     commit_decision = _scanner_scheduler_enqueue_target(
                         run_sniper.scanner_runtime_scheduler,
                         async_target,
                         lane=ScannerLane.COMMIT,
                         owner="scanner_async_result_ready",
-                        enqueued_epoch=time.time(),
-                        deadline_epoch=async_result.completed_epoch + 2.0,
+                        enqueued_epoch=commit_enqueued_epoch,
+                        # The worker completion timestamp remains the
+                        # attribution anchor.  The scheduler's dispatch
+                        # budget begins only once the main thread has
+                        # received and enqueued that exact result.
+                        deadline_epoch=commit_enqueued_epoch + 2.0,
                     )
                     if commit_decision is None or commit_decision.action != "enqueued":
                         async_coordinator.discard_completed(
@@ -10813,6 +10949,10 @@ def run_sniper(is_test_mode=False):
                             continue
                         scheduler_heavy_item = scheduler_claim.item
                     heavy_eval_attempted = True
+                    delayed_stock["_scanner_last_heavy_eval_attempt_epoch"] = time.time()
+                    delayed_stock["_scanner_last_heavy_eval_evidence_fingerprint"] = (
+                        _scanner_heavy_eval_evidence_fingerprint(delayed_ws_data)
+                    )
                     eval_ws_data = delayed_ws_data
                     opening_rotation_handoff_allowed = False
                     if _is_scanner_watching_target(delayed_stock):
@@ -12442,6 +12582,60 @@ def run_sniper(is_test_mode=False):
                                 continue
                             continue
                         if scheduler_generation is not None:
+                            async_wait_state = _scanner_async_transport_wait_state(
+                                stock,
+                                scheduler_generation,
+                                getattr(
+                                    run_sniper,
+                                    "scanner_async_eval_coordinator",
+                                    None,
+                                ),
+                            )
+                            heavy_retry_min_sec = _scanner_heavy_eval_min_retry_sec()
+                            last_heavy_attempt_epoch = _safe_float(
+                                stock.get("_scanner_last_heavy_eval_attempt_epoch"),
+                                0.0,
+                            )
+                            current_heavy_evidence = (
+                                _scanner_heavy_eval_evidence_fingerprint(ws_data)
+                            )
+                            previous_heavy_evidence = str(
+                                stock.get(
+                                    "_scanner_last_heavy_eval_evidence_fingerprint"
+                                )
+                                or ""
+                            )
+                            heavy_evidence_changed = bool(
+                                previous_heavy_evidence
+                                and previous_heavy_evidence != current_heavy_evidence
+                            )
+                            if async_wait_state in {"pending", "ready_for_commit"}:
+                                _emit_scanner_heavy_eval_coalesced(
+                                    stock,
+                                    generation=scheduler_generation,
+                                    now_epoch=time.time(),
+                                    reason=f"async_transport_{async_wait_state}",
+                                    retry_min_sec=heavy_retry_min_sec,
+                                    last_attempt_epoch=last_heavy_attempt_epoch,
+                                    evidence_changed=heavy_evidence_changed,
+                                )
+                                continue
+                            if (
+                                last_heavy_attempt_epoch > 0
+                                and time.time() - last_heavy_attempt_epoch
+                                < heavy_retry_min_sec
+                                and not heavy_evidence_changed
+                            ):
+                                _emit_scanner_heavy_eval_coalesced(
+                                    stock,
+                                    generation=scheduler_generation,
+                                    now_epoch=time.time(),
+                                    reason="same_generation_min_retry_window",
+                                    retry_min_sec=heavy_retry_min_sec,
+                                    last_attempt_epoch=last_heavy_attempt_epoch,
+                                    evidence_changed=False,
+                                )
+                                continue
                             heavy_decision = _scanner_scheduler_enqueue_target(
                                 scheduler,
                                 stock,

@@ -417,6 +417,7 @@ SCANNER_SCHEDULER_STAGES = frozenset(
         "scalping_scanner_scheduler_generation_coalesced",
         "scalping_scanner_scheduler_generation_registered",
         "scalping_scanner_scheduler_generation_rejected",
+        "scalping_scanner_scheduler_heavy_eval_coalesced",
         "scalping_scanner_scheduler_inbox_capacity_rejected",
         "scalping_scanner_scheduler_inbox_duplicate_coalesced",
         "scalping_scanner_scheduler_inbox_enqueued",

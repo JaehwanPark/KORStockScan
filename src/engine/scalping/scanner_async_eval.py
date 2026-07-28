@@ -446,6 +446,23 @@ class ScannerAsyncEvalCoordinator:
         with self._lock:
             return request_id in self._requests
 
+    def has_completed(
+        self, *, generation_id: str, cache_key: str
+    ) -> bool:
+        """Return whether a result is retained for this exact transport.
+
+        The main thread is the only consumer of retained output.  Scanner
+        scheduling uses this narrow read-only check to avoid re-dispatching a
+        same-generation heavy evaluation in the small interval before the
+        COMMIT lane claims the result.
+        """
+
+        request_id = (
+            f"{str(generation_id or '').strip()}:{str(cache_key or '').strip()}"
+        )
+        with self._lock:
+            return request_id in self._ready
+
     def has_completed_result(self) -> bool:
         """Report a result retained for main-thread COMMIT consumption.
 

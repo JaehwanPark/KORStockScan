@@ -41,6 +41,47 @@ def _wait_for_result(coordinator, timeout=1.0):
     raise AssertionError("async result did not complete")
 
 
+def test_async_eval_reports_exact_retained_result_before_commit_consumes_it():
+    dispatcher = HotPathAIDispatcher(loaded_key_count=1)
+    coordinator = ScannerAsyncEvalCoordinator(ai_dispatcher=dispatcher)
+    try:
+        now = time.time()
+        generation = _generation()
+        context = ScannerAsyncEvalContext.create(
+            generation=generation,
+            cache_key="ready-before-commit",
+            submitted_epoch=now,
+            deadline_epoch=now + 1,
+            stock_snapshot={"status": "WATCHING"},
+            ws_snapshot={"curr": 1000},
+            state_version="WATCHING:0:0",
+        )
+        assert coordinator.submit(
+            ScannerAsyncEvalRequest(
+                context=context,
+                prepare=lambda _ctx: {"prepared": True},
+                evaluate=lambda _ctx, _prepared: {},
+                requires_ai_dispatch=False,
+            )
+        ).accepted
+
+        _wait_for_result(coordinator)
+        assert coordinator.has_completed(
+            generation_id=generation.generation_id,
+            cache_key="ready-before-commit",
+        )
+        assert coordinator.take_completed(
+            generation_id=generation.generation_id,
+            cache_key="ready-before-commit",
+        ) is not None
+        assert not coordinator.has_completed(
+            generation_id=generation.generation_id,
+            cache_key="ready-before-commit",
+        )
+    finally:
+        coordinator.shutdown(wait=True)
+
+
 def test_async_eval_keeps_worker_snapshots_immutable_and_commits_on_main_guard():
     dispatcher = HotPathAIDispatcher(loaded_key_count=2)
     coordinator = ScannerAsyncEvalCoordinator(ai_dispatcher=dispatcher)
