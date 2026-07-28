@@ -916,6 +916,107 @@ def test_rejected_live_holding_score_keeps_raw_and_effective_provenance(monkeypa
     assert stock["holding_score_effective_usable"] is True
 
 
+def test_live_holding_score_symbol_budget_defer_keeps_prior_score(monkeypatch):
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALE_IN_REQUIRE_HISTORY_TABLE=False,
+        REVERSAL_ADD_ENABLED=False,
+    )
+    state_handlers.COOLDOWNS = {}
+    state_handlers.ALERTED_STOCKS = set()
+    state_handlers.HIGHEST_PRICES = {"123456": 100.2}
+    state_handlers.LAST_AI_CALL_TIMES = {}
+    state_handlers.LAST_LOG_TIMES = {}
+    state_handlers.DB = _DummyDB()
+    now_ts = state_handlers.time.time()
+    pipeline_logs = []
+
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils,
+        "get_tick_history_ka10003",
+        lambda *args, **kwargs: [{"time": "09:01:00", "price": 100, "volume": 1}],
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils,
+        "get_minute_candles_ka10080",
+        lambda *args, **kwargs: [
+            {"현재가": 100, "고가": 101, "저가": 99, "거래량": 1000}
+        ],
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_holding_score_preflight_source_quality",
+        lambda *args, **kwargs: {
+            "blocked": False,
+            "block_reason": "-",
+            "data_quality": "fresh",
+            "source_quality_reason": "feature_packet_fresh",
+        },
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "can_consider_scale_in",
+        lambda *args, **kwargs: {"allowed": False, "reason": "test_block"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: pipeline_logs.append((stage, fields)),
+    )
+
+    class FakeEngine:
+        def evaluate_scalping_holding_score(self, *args, **kwargs):
+            raise AssertionError("symbol budget must skip the provider call")
+
+    for timestamp in (now_ts - 30.0, now_ts - 10.0):
+        state_handlers.DEFAULT_HOT_PATH_AI_SYMBOL_BUDGET.reserve(
+            code="123456",
+            endpoint="holding_score",
+            now_ts=timestamp,
+        )
+    stock = {
+        "id": 91,
+        "code": "123456",
+        "name": "TEST",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "buy_price": 100,
+        "buy_qty": 10,
+        "order_time": now_ts - 120,
+        "last_ai_reviewed_at": now_ts - 999,
+        **_fresh_holding_score_fields(72, now_ts=now_ts - 10),
+    }
+
+    state_handlers.handle_holding_state(
+        stock=stock,
+        code="123456",
+        ws_data={
+            "curr": 100,
+            "orderbook": {
+                "asks": [{"price": 101, "volume": 1000}],
+                "bids": [{"price": 100, "volume": 1000}],
+            },
+        },
+        admin_id=1,
+        market_regime="BULL",
+        radar=object(),
+        ai_engine=FakeEngine(),
+    )
+
+    deferred = [
+        fields
+        for stage, fields in pipeline_logs
+        if stage == "ai_holding_symbol_budget_deferred"
+    ]
+    assert deferred
+    assert deferred[-1]["hot_path_ai_symbol_budget_reason"] == (
+        "endpoint_group_window_cap"
+    )
+    assert stock["holding_score_effective"] == 72
+    assert stock["holding_score_source"] == "prior_valid"
+
+
 def test_holding_score_preflight_stale_tick_skips_live_ai_call(monkeypatch):
     state_handlers.TRADING_RULES = replace(
         CONFIG,
@@ -1542,6 +1643,308 @@ def test_rising_missed_tp1_selector_defers_missing_micro_and_allows_wait_with_ot
         in wait_candidate.log_fields[
             "rising_missed_tp1_counterfactual_submit_safety_risks"
         ]
+    )
+
+
+def test_rising_missed_tp1_wait_recovery_requires_nxt_fast_tape_and_two_confirmations():
+    stock = {
+        "scanner_promotion_id": "scan-wait-confirmation",
+        "source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+        "price_delta_since_first_seen_pct": 1.5,
+    }
+    decision_input = {
+        "rising_missed_tp1_input_ready": True,
+        "rising_missed_tp1_actual_watch_delta_pct": 1.5,
+        "rising_missed_tp1_effective_quote_age_ms": 100.0,
+        "rising_missed_tp1_spread_ratio": 0.001,
+        "rising_missed_tp1_micro_confidence": 0.85,
+        "rising_missed_tp1_true_ofi_ewma": 0.03,
+        "rising_missed_tp1_pressure_ewma": 63.0,
+        "rising_missed_tp1_depth_imbalance_ewma": 0.26,
+        "rising_missed_tp1_top_depth_ratio": 1.49,
+        "rising_missed_tp1_tick_acceleration": 1.67,
+        "rising_missed_tp1_tick_acceleration_fresh": True,
+        "market_data_signed_tape_state": "mixed",
+        "rising_missed_effective_venue": "NXT",
+        "rising_missed_tp1_ws_fast_tape_fresh": False,
+    }
+
+    raw = evaluate_rising_missed_tp1_candidate(
+        stock,
+        decision_input,
+        selector_enabled=True,
+        active_date="2026-07-28",
+        current_date="2026-07-28",
+        current_ai_action="WAIT",
+    )
+    fast_tape_blocked = state_handlers._confirm_rising_missed_tp1_wait_recovery(
+        stock,
+        raw,
+        now_ts=1000.0,
+    )
+
+    assert raw.allowed is True
+    assert fast_tape_blocked.allowed is False
+    assert fast_tape_blocked.deferred is True
+    assert fast_tape_blocked.reason == (
+        "rising_missed_tp1_nxt_fast_tape_confirmation_required"
+    )
+
+    decision_input["rising_missed_tp1_ws_fast_tape_fresh"] = True
+    first = state_handlers._confirm_rising_missed_tp1_wait_recovery(
+        stock,
+        evaluate_rising_missed_tp1_candidate(
+            stock,
+            decision_input,
+            selector_enabled=True,
+            active_date="2026-07-28",
+            current_date="2026-07-28",
+            current_ai_action="WAIT",
+        ),
+        now_ts=1001.0,
+    )
+    second = state_handlers._confirm_rising_missed_tp1_wait_recovery(
+        stock,
+        evaluate_rising_missed_tp1_candidate(
+            stock,
+            decision_input,
+            selector_enabled=True,
+            active_date="2026-07-28",
+            current_date="2026-07-28",
+            current_ai_action="WAIT",
+        ),
+        now_ts=1002.0,
+    )
+
+    assert first.allowed is False
+    assert first.deferred is True
+    assert first.reason == "rising_missed_tp1_wait_confirmation_pending"
+    assert first.log_fields["rising_missed_tp1_wait_confirmation_count"] == 1
+    assert second.allowed is True
+    assert second.deferred is False
+    assert second.log_fields["rising_missed_tp1_wait_confirmation_count"] == 2
+    assert second.log_fields["rising_missed_tp1_wait_confirmation_state"] == "confirmed"
+
+
+def test_rising_missed_tp1_drop_resets_wait_confirmation_chain():
+    stock = {
+        "scanner_promotion_id": "scan-drop-reset",
+        "source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+        "price_delta_since_first_seen_pct": 1.5,
+        "rising_missed_tp1_wait_confirmation_count": 1,
+        "rising_missed_tp1_wait_confirmation_at": 999.0,
+        "rising_missed_tp1_wait_confirmation_promotion_id": "scan-drop-reset",
+    }
+    decision_input = {
+        "rising_missed_tp1_input_ready": True,
+        "rising_missed_tp1_actual_watch_delta_pct": 1.5,
+        "rising_missed_tp1_effective_quote_age_ms": 100.0,
+        "rising_missed_tp1_spread_ratio": 0.001,
+        "rising_missed_tp1_micro_confidence": 0.85,
+        "rising_missed_tp1_true_ofi_ewma": 0.03,
+        "rising_missed_tp1_pressure_ewma": 63.0,
+        "rising_missed_tp1_depth_imbalance_ewma": 0.26,
+        "rising_missed_tp1_top_depth_ratio": 1.49,
+        "rising_missed_tp1_tick_acceleration": 1.67,
+        "rising_missed_tp1_tick_acceleration_fresh": True,
+        "market_data_signed_tape_state": "mixed",
+        "rising_missed_effective_venue": "NXT",
+        "rising_missed_tp1_ws_fast_tape_fresh": True,
+    }
+    dropped = state_handlers._confirm_rising_missed_tp1_wait_recovery(
+        stock,
+        evaluate_rising_missed_tp1_candidate(
+            stock,
+            decision_input,
+            selector_enabled=True,
+            active_date="2026-07-28",
+            current_date="2026-07-28",
+            current_ai_action="DROP",
+        ),
+        now_ts=1000.0,
+    )
+    recovered_once = state_handlers._confirm_rising_missed_tp1_wait_recovery(
+        stock,
+        evaluate_rising_missed_tp1_candidate(
+            stock,
+            decision_input,
+            selector_enabled=True,
+            active_date="2026-07-28",
+            current_date="2026-07-28",
+            current_ai_action="WAIT",
+        ),
+        now_ts=1001.0,
+    )
+
+    assert dropped.allowed is False
+    assert stock["rising_missed_tp1_last_negative_action"] == "DROP"
+    assert recovered_once.allowed is False
+    assert recovered_once.deferred is True
+    assert recovered_once.log_fields["rising_missed_tp1_wait_confirmation_count"] == 1
+    assert (
+        recovered_once.log_fields[
+            "rising_missed_tp1_wait_confirmation_recent_negative_age_sec"
+        ]
+        == 1.0
+    )
+
+
+def test_rising_missed_tp1_wait_confirmation_requires_promotion_identity():
+    stock = {
+        "code": "087010",
+        "source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+        "price_delta_since_first_seen_pct": 1.5,
+        "rising_missed_effective_venue": "NXT",
+    }
+    decision = evaluate_rising_missed_tp1_candidate(
+        stock,
+        {
+            "rising_missed_tp1_input_ready": True,
+            "rising_missed_tp1_actual_watch_delta_pct": 1.5,
+            "rising_missed_tp1_effective_quote_age_ms": 100.0,
+            "rising_missed_tp1_spread_ratio": 0.001,
+            "rising_missed_tp1_micro_confidence": 0.85,
+            "rising_missed_tp1_true_ofi_ewma": 0.03,
+            "rising_missed_tp1_pressure_ewma": 63.0,
+            "rising_missed_tp1_depth_imbalance_ewma": 0.26,
+            "rising_missed_tp1_top_depth_ratio": 1.49,
+            "rising_missed_tp1_tick_acceleration": 1.67,
+            "rising_missed_tp1_tick_acceleration_fresh": True,
+            "market_data_signed_tape_state": "mixed",
+            "rising_missed_effective_venue": "NXT",
+            "rising_missed_tp1_ws_fast_tape_fresh": True,
+        },
+        selector_enabled=True,
+        active_date="2026-07-28",
+        current_date="2026-07-28",
+        current_ai_action="WAIT",
+    )
+
+    result = state_handlers._confirm_rising_missed_tp1_wait_recovery(
+        stock,
+        decision,
+        now_ts=1000.0,
+    )
+
+    assert result.allowed is False
+    assert result.deferred is True
+    assert result.reason == "rising_missed_tp1_wait_confirmation_identity_missing"
+    assert stock["rising_missed_tp1_wait_confirmation_count"] == 0
+    assert (
+        result.log_fields["rising_missed_tp1_wait_confirmation_state"]
+        == "identity_missing"
+    )
+
+
+def test_rising_missed_tp1_source_gap_resets_wait_confirmation_chain():
+    stock = {
+        "scanner_promotion_id": "scan-source-gap-reset",
+        "source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+        "price_delta_since_first_seen_pct": 1.5,
+        "rising_missed_tp1_wait_confirmation_count": 1,
+        "rising_missed_tp1_wait_confirmation_at": 999.0,
+        "rising_missed_tp1_wait_confirmation_promotion_id": "scan-source-gap-reset",
+    }
+    decision_input = {
+        "rising_missed_tp1_input_ready": False,
+        "rising_missed_tp1_input_reason": "tp1_freshness_envelope_unavailable",
+        "rising_missed_tp1_actual_watch_delta_pct": 1.5,
+        "rising_missed_tp1_effective_quote_age_ms": 3500.0,
+        "rising_missed_tp1_spread_ratio": 0.001,
+        "rising_missed_tp1_micro_confidence": 0.85,
+        "rising_missed_tp1_true_ofi_ewma": 0.03,
+        "rising_missed_tp1_pressure_ewma": 63.0,
+        "rising_missed_tp1_depth_imbalance_ewma": 0.26,
+        "rising_missed_tp1_top_depth_ratio": 1.49,
+        "rising_missed_tp1_tick_acceleration": 1.67,
+        "rising_missed_tp1_tick_acceleration_fresh": True,
+        "market_data_signed_tape_state": "mixed",
+        "rising_missed_effective_venue": "NXT",
+        "rising_missed_tp1_ws_fast_tape_fresh": True,
+    }
+
+    source_gap = state_handlers._confirm_rising_missed_tp1_wait_recovery(
+        stock,
+        evaluate_rising_missed_tp1_candidate(
+            stock,
+            decision_input,
+            selector_enabled=True,
+            active_date="2026-07-28",
+            current_date="2026-07-28",
+            current_ai_action="WAIT",
+        ),
+        now_ts=1000.0,
+    )
+    decision_input.update(
+        {
+            "rising_missed_tp1_input_ready": True,
+            "rising_missed_tp1_effective_quote_age_ms": 100.0,
+        }
+    )
+    recovered_once = state_handlers._confirm_rising_missed_tp1_wait_recovery(
+        stock,
+        evaluate_rising_missed_tp1_candidate(
+            stock,
+            decision_input,
+            selector_enabled=True,
+            active_date="2026-07-28",
+            current_date="2026-07-28",
+            current_ai_action="WAIT",
+        ),
+        now_ts=1001.0,
+    )
+
+    assert source_gap.allowed is False
+    assert (
+        source_gap.log_fields["rising_missed_tp1_wait_confirmation_state"]
+        == "intervening_evaluation_reset"
+    )
+    assert recovered_once.allowed is False
+    assert recovered_once.deferred is True
+    assert recovered_once.log_fields["rising_missed_tp1_wait_confirmation_count"] == 1
+
+
+def test_rising_missed_tp1_wait_persistent_confirmation_is_nxt_only():
+    stock = {
+        "scanner_promotion_id": "scan-krx-wait",
+        "source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+        "price_delta_since_first_seen_pct": 1.5,
+    }
+    decision = evaluate_rising_missed_tp1_candidate(
+        stock,
+        {
+            "rising_missed_tp1_input_ready": True,
+            "rising_missed_tp1_actual_watch_delta_pct": 1.5,
+            "rising_missed_tp1_effective_quote_age_ms": 100.0,
+            "rising_missed_tp1_spread_ratio": 0.001,
+            "rising_missed_tp1_micro_confidence": 0.85,
+            "rising_missed_tp1_true_ofi_ewma": 0.03,
+            "rising_missed_tp1_pressure_ewma": 63.0,
+            "rising_missed_tp1_depth_imbalance_ewma": 0.26,
+            "rising_missed_tp1_top_depth_ratio": 1.49,
+            "rising_missed_tp1_tick_acceleration": 1.67,
+            "rising_missed_tp1_tick_acceleration_fresh": True,
+            "market_data_signed_tape_state": "mixed",
+            "rising_missed_effective_venue": "KRX",
+            "rising_missed_tp1_ws_fast_tape_fresh": False,
+        },
+        selector_enabled=True,
+        active_date="2026-07-28",
+        current_date="2026-07-28",
+        current_ai_action="WAIT",
+    )
+
+    result = state_handlers._confirm_rising_missed_tp1_wait_recovery(
+        stock,
+        decision,
+        now_ts=1000.0,
+    )
+
+    assert decision.allowed is True
+    assert result.allowed is True
+    assert result.deferred is False
+    assert (
+        result.log_fields["rising_missed_tp1_wait_confirmation_state"] == "not_required"
     )
 
 
@@ -4075,6 +4478,213 @@ def test_rising_missed_forced_async_retry_dispatches_for_existing_wait(monkeypat
     assert fields["rising_missed_entry_ai_retry_async_status"] == "dispatched"
 
 
+def test_rising_missed_forced_async_retry_reuses_recent_same_generation_wait(
+    monkeypatch,
+):
+    class AsyncCoordinator:
+        pass
+
+    class AsyncGeneration:
+        generation_id = "SCANGEN-123456-1"
+
+    monkeypatch.setattr(state_handlers, "ScannerAsyncEvalCoordinator", AsyncCoordinator)
+    monkeypatch.setattr(state_handlers, "ScannerGeneration", AsyncGeneration)
+    monkeypatch.setattr(
+        state_handlers,
+        "_resolve_scanner_async_entry_ai",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("recent same-generation decision must be reused")
+        ),
+    )
+    stock = {
+        "strategy": "SCALPING",
+        "last_watching_ai_action": "WAIT",
+        "last_watching_ai_score": 63.0,
+        "last_watching_ai_result_source": "live",
+        "last_watching_ai_generation_id": "SCANGEN-123456-1",
+        "last_watching_ai_confirmed_at": 990.0,
+        "last_watching_ai_decision_price": 10_000,
+        "last_watching_ai_state_signature": (
+            state_handlers._build_watching_refresh_signature({"curr": 10_020})
+        ),
+    }
+
+    fields = state_handlers._maybe_retry_rising_missed_entry_ai_not_evaluated(
+        stock,
+        "123456",
+        {"curr": 10_020},
+        {
+            "ai_engine": object(),
+            "now_ts": 1_000.0,
+            "current_ai_score": 63.0,
+            "scanner_async_eval_coordinator": AsyncCoordinator(),
+            "scanner_async_generation": AsyncGeneration(),
+        },
+        curr_price=10_020,
+        force_async=True,
+    )
+
+    assert fields["rising_missed_entry_ai_retry_success"] is True
+    assert fields["rising_missed_entry_ai_retry_reason"] == (
+        "recent_valid_decision_reused"
+    )
+    assert fields["rising_missed_entry_ai_retry_async_status"] == "reused"
+
+
+def test_rising_missed_forced_async_retry_reevaluates_material_price_move(
+    monkeypatch,
+):
+    class AsyncCoordinator:
+        pass
+
+    class AsyncGeneration:
+        generation_id = "SCANGEN-123456-1"
+
+    calls = []
+    monkeypatch.setattr(state_handlers, "ScannerAsyncEvalCoordinator", AsyncCoordinator)
+    monkeypatch.setattr(state_handlers, "ScannerGeneration", AsyncGeneration)
+    monkeypatch.setattr(
+        state_handlers,
+        "_resolve_scanner_async_entry_ai",
+        lambda *args, **kwargs: calls.append((args, kwargs))
+        or {"status": "dispatched"},
+    )
+    stock = {
+        "strategy": "SCALPING",
+        "last_watching_ai_action": "WAIT",
+        "last_watching_ai_score": 63.0,
+        "last_watching_ai_result_source": "live",
+        "last_watching_ai_generation_id": "SCANGEN-123456-1",
+        "last_watching_ai_confirmed_at": 990.0,
+        "last_watching_ai_decision_price": 10_000,
+        "last_watching_ai_state_signature": (
+            state_handlers._build_watching_refresh_signature({"curr": 10_040})
+        ),
+    }
+
+    fields = state_handlers._maybe_retry_rising_missed_entry_ai_not_evaluated(
+        stock,
+        "123456",
+        {"curr": 10_040},
+        {
+            "ai_engine": object(),
+            "now_ts": 1_000.0,
+            "current_ai_score": 63.0,
+            "scanner_async_eval_coordinator": AsyncCoordinator(),
+            "scanner_async_generation": AsyncGeneration(),
+        },
+        curr_price=10_040,
+        force_async=True,
+    )
+
+    assert len(calls) == 1
+    assert fields["rising_missed_entry_ai_retry_reason"] == "async_pending"
+
+
+def test_rising_missed_forced_async_retry_reevaluates_micro_state_change(
+    monkeypatch,
+):
+    class AsyncCoordinator:
+        pass
+
+    class AsyncGeneration:
+        generation_id = "SCANGEN-123456-1"
+
+    calls = []
+    monkeypatch.setattr(state_handlers, "ScannerAsyncEvalCoordinator", AsyncCoordinator)
+    monkeypatch.setattr(state_handlers, "ScannerGeneration", AsyncGeneration)
+    monkeypatch.setattr(
+        state_handlers,
+        "_resolve_scanner_async_entry_ai",
+        lambda *args, **kwargs: calls.append((args, kwargs))
+        or {"status": "dispatched"},
+    )
+    prior_ws = {
+        "curr": 10_000,
+        "buy_ratio": 45.0,
+        "tick_acceleration_ratio": 0.8,
+    }
+    current_ws = {
+        "curr": 10_010,
+        "buy_ratio": 62.0,
+        "tick_acceleration_ratio": 1.4,
+    }
+    stock = {
+        "strategy": "SCALPING",
+        "last_watching_ai_action": "WAIT",
+        "last_watching_ai_score": 63.0,
+        "last_watching_ai_result_source": "live",
+        "last_watching_ai_generation_id": "SCANGEN-123456-1",
+        "last_watching_ai_confirmed_at": 990.0,
+        "last_watching_ai_decision_price": 10_000,
+        "last_watching_ai_state_signature": (
+            state_handlers._build_watching_refresh_signature(prior_ws)
+        ),
+    }
+
+    fields = state_handlers._maybe_retry_rising_missed_entry_ai_not_evaluated(
+        stock,
+        "123456",
+        current_ws,
+        {
+            "ai_engine": object(),
+            "now_ts": 1_000.0,
+            "current_ai_score": 63.0,
+            "scanner_async_eval_coordinator": AsyncCoordinator(),
+            "scanner_async_generation": AsyncGeneration(),
+        },
+        curr_price=10_010,
+        force_async=True,
+    )
+
+    assert len(calls) == 1
+    assert fields["rising_missed_entry_ai_retry_reason"] == "async_pending"
+
+
+def test_rising_missed_async_retry_defers_when_symbol_entry_budget_is_full(
+    monkeypatch,
+):
+    class AsyncCoordinator:
+        pass
+
+    class AsyncGeneration:
+        generation_id = "SCANGEN-123456-1"
+
+    monkeypatch.setattr(state_handlers, "ScannerAsyncEvalCoordinator", AsyncCoordinator)
+    monkeypatch.setattr(state_handlers, "ScannerGeneration", AsyncGeneration)
+    monkeypatch.setattr(
+        state_handlers,
+        "_resolve_scanner_async_entry_ai",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("budget-deferred call must not reach dispatcher")
+        ),
+    )
+    for timestamp in (900.0, 920.0):
+        state_handlers.DEFAULT_HOT_PATH_AI_SYMBOL_BUDGET.reserve(
+            code="123456",
+            endpoint="scanner_entry",
+            now_ts=timestamp,
+        )
+
+    fields = state_handlers._maybe_retry_rising_missed_entry_ai_not_evaluated(
+        {"strategy": "SCALPING", "last_watching_ai_action": "not_evaluated"},
+        "123456",
+        {"curr": 10_000},
+        {
+            "ai_engine": object(),
+            "now_ts": 950.0,
+            "current_ai_score": 50.0,
+            "scanner_async_eval_coordinator": AsyncCoordinator(),
+            "scanner_async_generation": AsyncGeneration(),
+        },
+        curr_price=10_000,
+    )
+
+    assert fields["rising_missed_entry_ai_retry_attempted"] is False
+    assert fields["rising_missed_entry_ai_retry_reason"] == "symbol_budget_deferred"
+    assert fields["hot_path_ai_symbol_budget_reason"] == ("endpoint_group_window_cap")
+
+
 def test_rising_missed_retry_applies_completed_async_result_without_sync_retry(
     monkeypatch,
 ):
@@ -4138,6 +4748,8 @@ def test_rising_missed_retry_applies_completed_async_result_without_sync_retry(
     assert fields["rising_missed_entry_ai_retry_action"] == "BUY"
     assert stock["last_watching_ai_action"] == "BUY"
     assert stock["last_watching_ai_score"] == 72.0
+    assert stock["last_watching_ai_generation_id"] == "SCANGEN-123456-1"
+    assert stock["last_watching_ai_decision_price"] == 10000
     assert entry_logs[-1][0] == "rising_missed_entry_ai_async_result_applied"
 
 
@@ -17737,6 +18349,42 @@ def test_holding_ai_submit_authority_retry_fails_closed_when_engine_missing(
     )
 
 
+def test_holding_ai_submit_authority_retry_shares_holding_symbol_budget(
+    monkeypatch,
+):
+    monkeypatch.setattr(state_handlers, "KIWOOM_TOKEN", "TOKEN")
+    for timestamp in (900.0, 930.0):
+        state_handlers.DEFAULT_HOT_PATH_AI_SYMBOL_BUDGET.reserve(
+            code="200710",
+            endpoint="holding_score",
+            now_ts=timestamp,
+        )
+
+    class FakeEngine:
+        def evaluate_scalping_holding_score(self, *args, **kwargs):
+            raise AssertionError("shared holding budget must defer scale-in retry")
+
+    retry_fields = state_handlers._retry_holding_ai_submit_authority_before_block(
+        stock={"name": "TEST", "strategy": "SCALPING"},
+        code="200710",
+        ws_data={"curr": 30_650, "best_bid": 30_600, "best_ask": 30_800},
+        ai_engine=FakeEngine(),
+        now_ts=950.0,
+        current_ai_score=50,
+        source_event_stage="scale_in_submit_authority_retry",
+        field_prefix="scale_in_ai_authority",
+    )
+
+    assert retry_fields["scale_in_ai_authority_input_retry_attempted"] is False
+    assert retry_fields["scale_in_ai_authority_input_retry_reason"] == (
+        "symbol_budget_deferred"
+    )
+    assert (
+        retry_fields["scale_in_ai_authority_hot_path_ai_symbol_budget_endpoint_group"]
+        == "holding_score"
+    )
+
+
 def test_dynamic_scale_in_qty_blocks_real_pyramid_holding_score_sentinel_mismatch(
     monkeypatch,
 ):
@@ -20766,27 +21414,36 @@ def test_send_sell_order_market_safety_reason_passes_sell_time_block(monkeypatch
 
 
 def test_sell_time_block_all_scope_cannot_block_trailing_loss(monkeypatch):
-    monkeypatch.setattr(
-        state_handlers.kiwoom_orders,
-        "get_sell_side_open_time_block_fields",
-        lambda **kwargs: {
+    captured = {}
+
+    def fake_open_time_fields(**kwargs):
+        captured.update(kwargs)
+        return {
             "runtime_family": "sell_side_open_time_block_runtime",
             "policy_version": "sell_side_open_time_block_v1",
             "sell_time_block_checked": True,
             "sell_time_block_applied": True,
             "sell_time_block_scope": "all",
             "sell_time_block_passthrough_reason": "-",
-        },
+        }
+
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "get_sell_side_open_time_block_fields",
+        fake_open_time_fields,
     )
+    evaluation_time = datetime(2026, 7, 28, 9, 30, tzinfo=state_handlers._KST)
 
     fields = state_handlers._sell_side_open_time_block_fields(
         strategy="SCALPING",
         sell_reason_type="LOSS",
         exit_rule="scalp_trailing_take_profit",
+        now=evaluation_time,
     )
 
     assert fields["sell_time_block_applied"] is False
     assert fields["sell_time_block_passthrough_reason"] == "safety_exit_passthrough"
+    assert captured["now"] is evaluation_time
 
 
 def test_send_sell_order_market_remaps_pre0830_sor_market_sell(monkeypatch):
@@ -34393,6 +35050,8 @@ def test_bad_entry_refined_canary_skips_recovered_peak(monkeypatch):
 
 
 def test_scalp_soft_stop_micro_grace_expires_to_soft_stop(monkeypatch):
+    evaluation_time = datetime(2026, 7, 28, 10, 0, tzinfo=state_handlers._KST)
+    evaluation_ts = evaluation_time.timestamp()
     state_handlers.TRADING_RULES = replace(
         CONFIG,
         SCALE_IN_REQUIRE_HISTORY_TABLE=False,
@@ -34435,7 +35094,7 @@ def test_scalp_soft_stop_micro_grace_expires_to_soft_stop(monkeypatch):
         "buy_price": 10000,
         "buy_qty": 10,
         "rt_ai_prob": 0.50,
-        "soft_stop_micro_grace_started_at": state_handlers.time.time() - 21,
+        "soft_stop_micro_grace_started_at": evaluation_ts - 21,
     }
 
     state_handlers.handle_holding_state(
@@ -34447,6 +35106,8 @@ def test_scalp_soft_stop_micro_grace_expires_to_soft_stop(monkeypatch):
         },
         admin_id=1,
         market_regime="BULL",
+        now_ts=evaluation_ts,
+        now_dt=evaluation_time,
         radar=None,
         ai_engine=None,
     )
@@ -36341,6 +37002,10 @@ def _install_soft_stop_expert_test_doubles(monkeypatch):
             return value
 
     monkeypatch.setattr(state_handlers, "datetime", FixedDateTime)
+    fixed_now_ts = FixedDateTime(
+        2026, 5, 4, 15, 0, 0, tzinfo=state_handlers._KST
+    ).timestamp()
+    monkeypatch.setattr(state_handlers.time, "time", lambda: fixed_now_ts)
 
     pipeline_logs = []
     exit_calls = []

@@ -57,6 +57,47 @@
   - 금지: hard contract gap 또는 unknown-token warning을 답변에만 남기지 않는다. 결손 row/window는 튜닝 입력 제외 또는 workorder handoff 대상으로 고정하고, broker/order/provider/cap/bot/threshold 변경 근거로 사용하지 않는다.
   - 다음 액션: `source_quality_clean_intraday`, `defective_rows_excluded`, `hard_block_requires_producer_fix`, `unknown_warning_workorder_required`, `audit_missing_or_stale` 중 하나로 닫는다. hard gap/unknown warning이 있으면 장후 `PostcloseSourceQualityGateReview`와 `CodeImprovementWorkorderReview`에서 누락 없이 재확인한다.
 
+- [x] `[MonitorArchiveIsolation0728] 15:45 full snapshot 메인 heartbeat 자원 격리` (`Due: 2026-07-28`, `Slot: INTRADAY`, `TimeWindow: 15:45~16:00`, `Track: RuntimeStability`)
+  - Source: [bot_main.py](/home/ubuntu/KORStockScan/src/bot_main.py), [run_monitor_snapshot_safe.sh](/home/ubuntu/KORStockScan/deploy/run_monitor_snapshot_safe.sh), [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)
+  - 판정: 15:45 direct in-process full snapshot이 15:45~15:53 main heartbeat를 굶기고 parent RSS를 확대했다. KRX 거래 종료 공백이므로 해당 stale 자체를 missed EV로 합산하지 않지만, 16:00 NXT 재개 준비와 같은 PID의 source-quality를 오염시킬 수 있어 결함으로 닫았다.
+  - 반영: named async dedupe는 유지하고 heavy snapshot만 기존 safe wrapper의 synchronous worker subprocess로 넘긴다. wrapper exit, fresh full manifest, target date/profile 계약이 모두 확인된 뒤에만 performance/log archive job을 성공으로 닫는다.
+  - 검증/rollback: scheduler·heartbeat·dedupe·wrapper failure/stale manifest 테스트, Black, compile, `git diff --check`, checklist parser를 통과해야 한다. wrapper 실패 또는 다음 자연 15:45 표본에서 heartbeat/resource 회귀가 발생하면 이전 direct path로 돌아가지 않고 isolated worker 계약을 재검토한다.
+
+- [x] `[ScannerExpiredRecheckFairness0728] NXT recurring recheck 만료 전환 기아 보완` (`Due: 2026-07-28`, `Slot: INTRADAY`, `TimeWindow: 16:20~16:40`, `Track: ScalpingLogic`)
+  - Source: [scanner_runtime_scheduler.py](/home/ubuntu/KORStockScan/src/engine/scalping/scanner_runtime_scheduler.py), [test_scanner_runtime_scheduler.py](/home/ubuntu/KORStockScan/src/tests/test_scanner_runtime_scheduler.py), [pipeline_events_2026-07-28.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-07-28.jsonl)
+  - 판정: 이미 최초 평가를 마친 한 generation의 `post_heavy_eval_fresh_recheck`가 계속 새 deadline을 얻으면 다른 generation의 만료된 recheck가 dispatchable peer 필터에서 제외되어 자기 `deadline_expired` 전환도 닫지 못했다. 이는 threshold가 아니라 평가 공정성 결함이며, 현금 0원·broker quantity guard와 분리한다.
+  - 반영: FAST_PRECHECK claim 시 요청 generation 자신의 만료 work만 먼저 `deadline_expired`로 닫을 수 있게 한다. 시장 평가, BUY, 주문 수량, provider, threshold 권한은 추가하지 않으며 critical lane과 아직 유효한 initial precheck 예약은 유지한다.
+  - 검증/rollback: 실적 형태의 expired-requester/fresh-recurring-peer 회귀 테스트와 전체 scheduler targeted test, Black, compile, `git diff --check`, checklist parser를 통과해야 한다. 다음 PID에서 claim wait가 줄지 않거나 initial/critical 예약 회귀가 생기면 해당 fairness 분기만 되돌리고 중앙 `next_decision` 소비 경로를 별도 검토한다.
+
+- [ ] `[ScannerExpiredRecheckFairnessRuntimeObserve0729] 보완된 recheck 공정성 다음 PID 자연 표본 확인` (`Due: 2026-07-29`, `Slot: INTRADAY`, `TimeWindow: 16:00~16:20`, `Track: ScalpingLogic`)
+  - Source: [scanner_runtime_scheduler.py](/home/ubuntu/KORStockScan/src/engine/scalping/scanner_runtime_scheduler.py), [pipeline_events_2026-07-28.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-07-28.jsonl)
+  - 판정 기준: 새 PID가 보완 commit을 반영한 상태에서 `post_heavy_eval_fresh_recheck` peer가 있어도 만료된 요청 generation이 `deadline_expired -> fresh enqueue`로 닫히며, initial precheck와 critical lane 예약이 유지되는지 확인한다.
+  - 금지: 검증을 위해 provider, threshold, 주문가·수량, broker/account/order/cooldown guard를 변경하거나 실제 BUY를 강제하지 않는다.
+  - 다음 액션: `runtime_fairness_confirmed`, `no_natural_expired_peer_sample`, `claim_starvation_regressed`, `initial_or_critical_reservation_regressed`, `implementation_not_reflected_in_pid` 중 하나로 닫는다.
+
+- [x] `[HotPathAISymbolBudget0728] 동일 종목 live AI 호출 폭주와 판단 재사용 계약 보완` (`Due: 2026-07-28`, `Slot: INTRADAY`, `TimeWindow: 17:10~17:35`, `Track: RuntimeStability`)
+  - Source: [hot_path_ai_symbol_budget.py](/home/ubuntu/KORStockScan/src/engine/ai/hot_path_ai_symbol_budget.py), [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py), [observation_source_quality_audit.py](/home/ubuntu/KORStockScan/src/engine/observation_source_quality_audit.py)
+  - 판정/반영: scanner/rising-missed entry와 holding/scale-in holding-score가 같은 종목에서 서로 독립적으로 provider를 반복 호출하던 경로를 process-local 60초 rolling budget으로 묶었다. 기본값은 종목 전체 4회, entry·holding 각 group 2회이며 기존 endpoint 최소 간격을 함께 적용한다. 동일 scanner generation의 fresh·trusted 판단은 상태축과 가격이 유의미하게 변하지 않은 경우에만 제한 재사용하고, budget defer는 prior score를 usable AI 권한으로 승격하지 않는다.
+  - 권한/rollback: 이 guard는 AI 호출 cadence에만 runtime effect가 있고 threshold, provider route, 주문가·수량, broker/account/order/cooldown, hard/protect/emergency 권한이 없다. provider 호출 누락으로 deterministic safety exit가 지연되거나 새 generation의 첫 평가가 막히거나 종목별 service share가 과도하게 축소되면 이 cadence 변경만 되돌린다.
+
+- [ ] `[HotPathAISymbolBudgetRuntimeObserve0729] 동일 종목 AI cadence·service share 다음 PID 자연 귀속` (`Due: 2026-07-29`, `Slot: INTRADAY`, `TimeWindow: 09:05~16:30`, `Track: RuntimeStability`)
+  - Source: [hot_path_ai_symbol_budget.py](/home/ubuntu/KORStockScan/src/engine/ai/hot_path_ai_symbol_budget.py), [pipeline_events_2026-07-28.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-07-28.jsonl)
+  - 판정 기준: 새 PID에서 동일 종목 entry/holding group과 전체 cap, 최소 간격, recent-valid reuse가 provenance로 남고, budget defer가 stale 판단을 usable authority로 만들지 않으며 deterministic exit·새 scanner generation 평가를 지연시키지 않는지 확인한다.
+  - 금지: 자연 표본 확보를 위해 provider, threshold, 주문가·수량, broker/account/order/cooldown/hard safety를 변경하거나 AI 호출을 강제하지 않는다.
+  - 다음 액션: `cadence_guard_healthy`, `no_natural_multi_endpoint_sample`, `service_share_overthrottled`, `stale_reuse_authority_leak`, `deterministic_exit_delayed`, `implementation_not_reflected_in_pid` 중 하나로 닫는다.
+
+- [x] `[RisingMissedWaitPersistentDirectionGuard0728] NXT WAIT 단일 TP1 통과·stale initial reprice 결함 보완` (`Due: 2026-07-28`, `Slot: INTRADAY`, `TimeWindow: 16:40~17:10`, `Track: ScalpingLogic`)
+  - Source: [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py), [test_sniper_scale_in.py](/home/ubuntu/KORStockScan/src/tests/test_sniper_scale_in.py), [test_entry_reprice_after_submit.py](/home/ubuntu/KORStockScan/src/tests/test_entry_reprice_after_submit.py), [pipeline_events_2026-07-28.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-07-28.jsonl)
+  - 판정/구현: 펩트론 `087010`은 `16:42:26 DROP` 뒤 `16:42:57 WAIT + bid imbalance 없음 + NXT fast-tape fresh=false` 단일 TP1 평가가 통과했고, `16:43:14`에는 16초 이상 지난 TP1 문맥으로 initial 주문가를 상향 재제출한 뒤 20분 counterfactual이 `adverse_stop_first`로 끝났다. WAIT/no-bid 후보는 같은 promotion의 fresh NXT fast-tape와 0.25~20초 간격 2회 연속 확인을 요구하고, source gap·명시적 AI negative·promotion identity 결손은 체인을 초기화하거나 fail-closed한다. rising-missed initial reprice는 5초 이내의 허용된 TP1 방향 문맥만 사용하며 probe residual의 기존 post-probe P1 owner는 변경하지 않는다.
+  - 실적 replay/검증: 당일 NXT 실주문 통과 표본 중 동일 `WAIT + no bid imbalance`는 2건이며 둘 다 fast-tape fresh=false였다. 펩트론은 실현 `-3.71%`, LIG디펜스앤에어로스페이스는 20분 `no_hit`이므로 새 gate가 당일 확인된 target-first 기회를 제거한 증거는 없다. 관련 reprice/TP1 회귀, Black, compile, `git diff --check`, checklist parser와 review gate를 통과해야 하며 현재 PID에는 미반영이다.
+  - 최종 review gate: 1차 리뷰에서 promotion identity 결손 체인 결합, 중간 source-gap 뒤 count 잔존, NXT 근거의 KRX 공통경로 과확장을 찾아 모두 보완했다. 이어 holding replay의 `now_dt`와 freshness/session guard의 wall clock이 갈라지던 결함 및 테스트 간 datetime/runtime-rule 누수를 정리했다. NXT WAIT/TP1, entry reprice, 기존 KRX 경계와 확대 state-handler suite `920`건이 모두 통과했고 Black·compile·`git diff --check`·checklist parser도 통과하므로 재기동 gate를 연다.
+
+- [ ] `[RisingMissedWaitPersistentDirectionRuntimeObserve0729] WAIT 지속확인·initial reprice guard 다음 PID 자연 귀속` (`Due: 2026-07-29`, `Slot: INTRADAY`, `TimeWindow: 16:00~17:10`, `Track: ScalpingLogic`)
+  - Source: [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py), [pipeline_events_2026-07-28.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-07-28.jsonl)
+  - 판정 기준: 새 PID에서 NXT `WAIT + wait_without_bid_imbalance` 후보가 fast-tape 결손 시 defer되고, 같은 promotion의 fresh 연속확인 2회가 있을 때만 TP1을 통과하며, 중간 source gap/AI negative/identity 결손은 count를 초기화하는지 확인한다. 통과 뒤 5초가 지난 initial reprice는 broker cancel/resubmit 없이 차단되고 probe residual은 기존 post-probe P1 계약을 유지해야 한다.
+  - 금지: 자연 표본 확보를 위해 BUY를 강제하거나 provider, threshold, 주문가·수량, broker/account/order/cooldown/hard safety를 변경하지 않는다.
+  - 다음 액션: `persistent_confirmation_and_reprice_guard_confirmed`, `no_natural_wait_no_bid_sample`, `confirmation_chain_not_persistent`, `initial_reprice_guard_regressed`, `probe_residual_owner_regressed`, `implementation_not_reflected_in_pid` 중 하나로 닫는다.
+
 ## 장후 체크리스트 (20:05~21:55)
 
 - [ ] `[PostcloseSourceQualityGateReview0728] 장후 source-quality gate 결과 및 튜닝 입력 허용/제외 확인` (`Due: 2026-07-28`, `Slot: POSTCLOSE`, `TimeWindow: 16:25~16:35`, `Track: RuntimeStability`)
@@ -119,8 +160,9 @@
 - [ ] `[SamsungPriceWidgetWindowsInstall0728] AWS 공유토큰 전용 삼성전자 1분 가격 위젯 Windows 설치·1분 차이값 확인` (`Due: 2026-07-28`, `Slot: INTRADAY`, `TimeWindow: 10:30~15:20`, `Track: RuntimeStability`)
   - Source: [samsung_price_widget_routes.py](/home/ubuntu/KORStockScan/src/web/samsung_price_widget_routes.py), [Windows 설치 안내](/home/ubuntu/KORStockScan/tools/windows/README.md), [Gunicorn widget drop-in](/home/ubuntu/KORStockScan/deploy/systemd/korstockscan-gunicorn-widget.conf)
   - 실행 결과 (`2026-07-28 10:28 KST`): `https://korstockscan.ddns.net/api/widget/samsung-price`는 무인증 `401`, AWS key 인증 `200`을 확인했다. 응답은 `source=kiwoom_ka10001`, `token_mode=shared_cache_only`, `current_price=230000`이며 Kiwoom token cache 재사용 로그만 남겼다. AWS key는 `/etc/korstockscan/samsung-price-widget.key` (`root:www-data 640`, 상위 디렉터리 `root:www-data 750`)에만 있고 repository/Windows에는 Kiwoom appkey·secret·bearer token을 저장하지 않는다.
+  - 코드 보완 (`2026-07-28 16:10 KST`): Windows 조회 주기를 10초로 조정하고 NXT 애프터마켓에는 `ka10001`·`ka10080` 모두 공식 거래소별 코드 `005930_NX`를 사용한다. 응답에는 `market_venue`, `market_session`, `quote_request_code`를 남긴다. 공식 Kiwoom upstream `1504d45fa145eb11fdd662a08aa9d873eee55849`의 `kiwoom_docs/종목정보.md`, `kiwoom_docs/차트.md`, SDK spec을 재검증했다.
   - 금지: widget endpoint가 token 발급/refresh/revoke, 주문·계좌·bot control 또는 `restart.sh`를 호출하거나, Windows에 Kiwoom credential을 배포하는 것을 금지한다.
-  - 다음 액션: Windows PC에 `tools/windows`를 복사하고, AWS key는 승인된 비밀 전달 경로로만 전달한 뒤 `Install-SamsungPriceWidget.ps1`을 실행한다. 60초 뒤 현재가·직전 성공 조회가 차이값이 갱신되는지 확인한다.
+  - 다음 액션: Windows PC에 `tools/windows`를 복사하고, AWS key는 승인된 비밀 전달 경로로만 전달한 뒤 `Install-SamsungPriceWidget.ps1`을 실행한다. 20초 뒤 현재가·직전 성공 조회 차이와 KRX/NXT venue 표시가 갱신되는지 확인한다.
 
 - [ ] `[UnexpectedBotRestartTrace0728] 10:28 KST bot 재기동 원인과 widget/token 비인과성 확인` (`Due: 2026-07-28`, `Slot: INTRADAY`, `TimeWindow: 10:30~15:20`, `Track: RuntimeStability`)
   - Source: [bot_history.log](/home/ubuntu/KORStockScan/logs/bot_history.log), [kiwoom_utils_info.log](/home/ubuntu/KORStockScan/logs/kiwoom_utils_info.log), [kiwoom_sniper_v2_info.log](/home/ubuntu/KORStockScan/logs/kiwoom_sniper_v2_info.log)

@@ -129,6 +129,7 @@ from src.engine.scalping.rising_missed_one_share_entry import (
     FORCED_ENTRY_REASON as RISING_MISSED_FORCED_ENTRY_REASON,
     MAX_ONE_SHARE_ENTRY_PRICE_KRW as RISING_MISSED_MAX_ONE_SHARE_ENTRY_PRICE_KRW,
     RISING_MISSED_CLASS_RAW,
+    RisingMissedTP1CandidateDecision,
     TP1_SELECTOR_BLOCK_HARD_NEGATIVE,
     RISING_MISSED_CLASS_NOT_RISING,
     evaluate_rising_missed_normal_buy_bridge,
@@ -291,6 +292,9 @@ from src.engine.scalping.scanner_async_eval import (
     validate_scanner_async_commit,
 )
 from src.engine.scalping.scanner_runtime_scheduler import ScannerGeneration
+from src.engine.ai.hot_path_ai_symbol_budget import (
+    DEFAULT_HOT_PATH_AI_SYMBOL_BUDGET,
+)
 
 # The deadline scheduler's first precheck is deliberately WS-only. This
 # context-local guard prevents nested diagnostic helpers from reading persisted
@@ -7175,8 +7179,10 @@ def _sell_side_open_time_block_fields(
     strategy: str | None,
     sell_reason_type: str | None,
     exit_rule: str | None,
+    now: datetime | None = None,
 ) -> dict:
     fields = kiwoom_orders.get_sell_side_open_time_block_fields(
+        now=now,
         reason_type=sell_reason_type,
         strategy=strategy,
     )
@@ -13485,6 +13491,10 @@ _RISING_MISSED_SIGNED_TAPE_PRESERVED_KEYS: set[str] = set()
 _RISING_MISSED_TP1_SUBMIT_CONTEXT_CACHE: dict[str, dict[str, Any]] = {}
 _RISING_MISSED_TP1_SUBMIT_CONTEXT_CACHE_LOCK = threading.RLock()
 _RISING_MISSED_TP1_OBSERVATION_CONTEXT_MAX_AGE_SEC = 20.0 * 60.0
+_RISING_MISSED_TP1_WAIT_CONFIRMATION_MIN_INTERVAL_SEC = 0.25
+_RISING_MISSED_TP1_WAIT_CONFIRMATION_MAX_INTERVAL_SEC = 20.0
+_RISING_MISSED_TP1_WAIT_CONFIRMATION_REQUIRED_COUNT = 2
+_RISING_MISSED_TP1_REPRICE_CONTEXT_MAX_AGE_SEC = 5.0
 _RISING_MISSED_NXT_POST_BLOCK_SAMPLERS: dict[str, dict[str, Any]] = {}
 _RISING_MISSED_NXT_POST_BLOCK_SAMPLER_LOCK = threading.RLock()
 _RISING_MISSED_NXT_POST_BLOCK_SAMPLERS_RESTORED = False
@@ -23640,6 +23650,7 @@ def _dispatch_scalp_preset_exit(
         strategy=strategy,
         sell_reason_type=sell_reason_type,
         exit_rule=exit_rule,
+        now=datetime.fromtimestamp(float(now_ts), tz=_KST),
     )
     if bool(sell_time_block_fields.get("sell_time_block_applied")):
         _log_holding_pipeline(
@@ -25089,6 +25100,30 @@ def _retry_holding_ai_submit_authority_before_block(
         fields[f"{field_prefix}_after_retry_block_reason"] = "retry_interval_active"
         return fields
 
+    symbol_budget_min_interval_sec = max(
+        min_interval_sec,
+        _safe_float(
+            os.getenv(
+                "KORSTOCKSCAN_SCALE_IN_HOLDING_AI_MIN_INTERVAL_SEC",
+                45.0,
+            ),
+            45.0,
+        ),
+    )
+    symbol_budget = DEFAULT_HOT_PATH_AI_SYMBOL_BUDGET.inspect(
+        code=code,
+        endpoint="scale_in_holding_score",
+        now_ts=now_ts,
+        min_interval_sec=symbol_budget_min_interval_sec,
+    )
+    fields.update(
+        symbol_budget.log_fields(prefix=f"{field_prefix}_hot_path_ai_symbol_budget")
+    )
+    if not symbol_budget.allowed:
+        fields[f"{field_prefix}_input_retry_reason"] = "symbol_budget_deferred"
+        fields[f"{field_prefix}_after_retry_block_reason"] = "symbol_budget_deferred"
+        return fields
+
     fields[f"{field_prefix}_input_retry_attempted"] = True
     _mutate_stock_state(
         stock,
@@ -25160,6 +25195,20 @@ def _retry_holding_ai_submit_authority_before_block(
         fields[f"{field_prefix}_source_quality_state"] = "missing"
         fields[f"{field_prefix}_missing_fields"] = ",".join(missing_fields)
         fields[f"{field_prefix}_after_retry_block_reason"] = "input_context_missing"
+        return fields
+
+    symbol_budget = DEFAULT_HOT_PATH_AI_SYMBOL_BUDGET.reserve(
+        code=code,
+        endpoint="scale_in_holding_score",
+        now_ts=time.time(),
+        min_interval_sec=symbol_budget_min_interval_sec,
+    )
+    fields.update(
+        symbol_budget.log_fields(prefix=f"{field_prefix}_hot_path_ai_symbol_budget")
+    )
+    if not symbol_budget.allowed:
+        fields[f"{field_prefix}_input_retry_reason"] = "symbol_budget_deferred"
+        fields[f"{field_prefix}_after_retry_block_reason"] = "symbol_budget_deferred"
         return fields
 
     holding_score_position_ctx = {
@@ -57641,6 +57690,320 @@ def _rising_missed_tp1_submit_context_cache_key(
     )
 
 
+def _confirm_rising_missed_tp1_wait_recovery(
+    stock: dict | None,
+    tp1_decision: RisingMissedTP1CandidateDecision,
+    *,
+    now_ts: float,
+) -> RisingMissedTP1CandidateDecision:
+    """Require persistent market confirmation before WAIT may become real authority."""
+
+    stock = stock if isinstance(stock, dict) else {}
+    fields = dict(tp1_decision.log_fields or {})
+    ai_action = str(fields.get("rising_missed_tp1_ai_action") or "").strip().upper()
+    promotion_id = str(stock.get("scanner_promotion_id") or "").strip()
+    prior_promotion_id = str(
+        stock.get("rising_missed_tp1_wait_confirmation_promotion_id") or ""
+    ).strip()
+    prior_count = _safe_int(stock.get("rising_missed_tp1_wait_confirmation_count"), 0)
+    prior_at = _safe_float(stock.get("rising_missed_tp1_wait_confirmation_at"), 0.0)
+    last_negative_at = _safe_float(stock.get("rising_missed_tp1_last_negative_at"), 0.0)
+    negative_action = ai_action in {
+        "DROP",
+        "NOT_EVALUATED",
+        "FAIL_CLOSED",
+        "UNAVAILABLE",
+    }
+    if negative_action:
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                "rising_missed_tp1_last_negative_at": float(now_ts),
+                "rising_missed_tp1_last_negative_action": ai_action,
+                "rising_missed_tp1_wait_confirmation_count": 0,
+                "rising_missed_tp1_wait_confirmation_at": 0.0,
+                "rising_missed_tp1_wait_confirmation_promotion_id": promotion_id,
+            },
+        )
+        fields.update(
+            {
+                "rising_missed_tp1_wait_confirmation_required": False,
+                "rising_missed_tp1_wait_confirmation_count": 0,
+                "rising_missed_tp1_wait_confirmation_state": "negative_reset",
+            }
+        )
+        return RisingMissedTP1CandidateDecision(
+            allowed=tp1_decision.allowed,
+            deferred=tp1_decision.deferred,
+            reason=tp1_decision.reason,
+            lane=tp1_decision.lane,
+            log_fields=fields,
+        )
+
+    risks = {
+        item.strip()
+        for item in str(
+            fields.get("rising_missed_tp1_counterfactual_submit_safety_risks") or ""
+        ).split(",")
+        if item.strip() and item.strip() != "-"
+    }
+    effective_venue = (
+        str(
+            fields.get("rising_missed_effective_venue")
+            or fields.get("effective_venue")
+            or ""
+        )
+        .strip()
+        .upper()
+    )
+    confirmation_required = bool(
+        tp1_decision.allowed
+        and effective_venue == "NXT"
+        and ai_action in {"", "-", "WAIT", "MISSING", "NONE", "NULL"}
+        and "wait_without_bid_imbalance" in risks
+    )
+    if not confirmation_required:
+        _mutate_stock_state(
+            stock,
+            pop_fields=[
+                "rising_missed_tp1_wait_confirmation_count",
+                "rising_missed_tp1_wait_confirmation_at",
+                "rising_missed_tp1_wait_confirmation_promotion_id",
+            ],
+        )
+        fields.update(
+            {
+                "rising_missed_tp1_wait_confirmation_required": False,
+                "rising_missed_tp1_wait_confirmation_count": 0,
+                "rising_missed_tp1_wait_confirmation_state": (
+                    "intervening_evaluation_reset"
+                    if prior_count > 0
+                    else "not_required"
+                ),
+            }
+        )
+        return RisingMissedTP1CandidateDecision(
+            allowed=tp1_decision.allowed,
+            deferred=tp1_decision.deferred,
+            reason=tp1_decision.reason,
+            lane=tp1_decision.lane,
+            log_fields=fields,
+        )
+
+    fast_tape_fresh = _truthy_field(fields.get("rising_missed_tp1_ws_fast_tape_fresh"))
+    recent_negative_age_sec = (
+        max(0.0, float(now_ts) - last_negative_at) if last_negative_at > 0.0 else None
+    )
+    base_confirmation_fields = {
+        "rising_missed_tp1_wait_confirmation_required": True,
+        "rising_missed_tp1_wait_confirmation_required_count": (
+            _RISING_MISSED_TP1_WAIT_CONFIRMATION_REQUIRED_COUNT
+        ),
+        "rising_missed_tp1_wait_confirmation_min_interval_sec": (
+            _RISING_MISSED_TP1_WAIT_CONFIRMATION_MIN_INTERVAL_SEC
+        ),
+        "rising_missed_tp1_wait_confirmation_max_interval_sec": (
+            _RISING_MISSED_TP1_WAIT_CONFIRMATION_MAX_INTERVAL_SEC
+        ),
+        "rising_missed_tp1_wait_confirmation_recent_negative_age_sec": (
+            round(recent_negative_age_sec, 6)
+            if recent_negative_age_sec is not None
+            else "-"
+        ),
+        "rising_missed_tp1_wait_confirmation_nxt_fast_tape_fresh": fast_tape_fresh,
+        "rising_missed_tp1_wait_confirmation_decision_authority": (
+            "rising_missed_tp1_persistent_direction_revalidation"
+        ),
+    }
+    if not promotion_id:
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                "rising_missed_tp1_wait_confirmation_count": 0,
+                "rising_missed_tp1_wait_confirmation_at": 0.0,
+                "rising_missed_tp1_wait_confirmation_promotion_id": "",
+            },
+        )
+        fields.update(
+            {
+                **base_confirmation_fields,
+                "rising_missed_tp1_wait_confirmation_count": 0,
+                "rising_missed_tp1_wait_confirmation_state": "identity_missing",
+            }
+        )
+        return RisingMissedTP1CandidateDecision(
+            allowed=False,
+            deferred=True,
+            reason="rising_missed_tp1_wait_confirmation_identity_missing",
+            lane=tp1_decision.lane,
+            log_fields={
+                **fields,
+                "rising_missed_tp1_candidate_allowed": False,
+                "rising_missed_tp1_candidate_deferred": True,
+                "rising_missed_tp1_candidate_reason": (
+                    "rising_missed_tp1_wait_confirmation_identity_missing"
+                ),
+            },
+        )
+    if not fast_tape_fresh:
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                "rising_missed_tp1_wait_confirmation_count": 0,
+                "rising_missed_tp1_wait_confirmation_at": 0.0,
+                "rising_missed_tp1_wait_confirmation_promotion_id": promotion_id,
+            },
+        )
+        fields.update(
+            {
+                **base_confirmation_fields,
+                "rising_missed_tp1_wait_confirmation_count": 0,
+                "rising_missed_tp1_wait_confirmation_state": (
+                    "nxt_fast_tape_confirmation_required"
+                ),
+            }
+        )
+        return RisingMissedTP1CandidateDecision(
+            allowed=False,
+            deferred=True,
+            reason="rising_missed_tp1_nxt_fast_tape_confirmation_required",
+            lane=tp1_decision.lane,
+            log_fields={
+                **fields,
+                "rising_missed_tp1_candidate_allowed": False,
+                "rising_missed_tp1_candidate_deferred": True,
+                "rising_missed_tp1_candidate_reason": (
+                    "rising_missed_tp1_nxt_fast_tape_confirmation_required"
+                ),
+            },
+        )
+
+    elapsed_since_confirmation = (
+        max(0.0, float(now_ts) - prior_at) if prior_at > 0.0 else None
+    )
+    same_chain = bool(
+        prior_count > 0
+        and prior_promotion_id == promotion_id
+        and elapsed_since_confirmation is not None
+        and _RISING_MISSED_TP1_WAIT_CONFIRMATION_MIN_INTERVAL_SEC
+        <= elapsed_since_confirmation
+        <= _RISING_MISSED_TP1_WAIT_CONFIRMATION_MAX_INTERVAL_SEC
+    )
+    confirmation_count = prior_count + 1 if same_chain else 1
+    _mutate_stock_state(
+        stock,
+        set_fields={
+            "rising_missed_tp1_wait_confirmation_count": confirmation_count,
+            "rising_missed_tp1_wait_confirmation_at": float(now_ts),
+            "rising_missed_tp1_wait_confirmation_promotion_id": promotion_id,
+        },
+    )
+    confirmed = (
+        confirmation_count >= _RISING_MISSED_TP1_WAIT_CONFIRMATION_REQUIRED_COUNT
+    )
+    fields.update(
+        {
+            **base_confirmation_fields,
+            "rising_missed_tp1_wait_confirmation_count": confirmation_count,
+            "rising_missed_tp1_wait_confirmation_elapsed_sec": (
+                round(elapsed_since_confirmation, 6)
+                if elapsed_since_confirmation is not None
+                else "-"
+            ),
+            "rising_missed_tp1_wait_confirmation_state": (
+                "confirmed" if confirmed else "confirmation_pending"
+            ),
+        }
+    )
+    if confirmed:
+        return RisingMissedTP1CandidateDecision(
+            allowed=True,
+            deferred=False,
+            reason=tp1_decision.reason,
+            lane=tp1_decision.lane,
+            log_fields=fields,
+        )
+    return RisingMissedTP1CandidateDecision(
+        allowed=False,
+        deferred=True,
+        reason="rising_missed_tp1_wait_confirmation_pending",
+        lane=tp1_decision.lane,
+        log_fields={
+            **fields,
+            "rising_missed_tp1_candidate_allowed": False,
+            "rising_missed_tp1_candidate_deferred": True,
+            "rising_missed_tp1_candidate_reason": (
+                "rising_missed_tp1_wait_confirmation_pending"
+            ),
+        },
+    )
+
+
+def _rising_missed_initial_reprice_direction_guard(
+    stock: dict | None,
+    *,
+    now_ts: float,
+) -> dict[str, Any]:
+    stock = stock if isinstance(stock, dict) else {}
+    effective_venue = (
+        str(
+            stock.get("rising_missed_effective_venue")
+            or stock.get(
+                "rising_missed_tp1_submit_context_rising_missed_effective_venue"
+            )
+            or stock.get("effective_venue")
+            or ""
+        )
+        .strip()
+        .upper()
+    )
+    applicable = bool(
+        _truthy_field(stock.get("rising_missed_one_share_entry_forced"))
+        and _truthy_field(stock.get("rising_missed_one_share_scout"))
+        and effective_venue == "NXT"
+    )
+    context_at = _safe_float(stock.get("rising_missed_tp1_submit_context_at"), 0.0)
+    context_age_sec = max(0.0, float(now_ts) - context_at) if context_at > 0.0 else None
+    context_allowed = _truthy_field(
+        stock.get("rising_missed_tp1_submit_context_candidate_allowed")
+    )
+    allowed = bool(
+        not applicable
+        or (
+            context_allowed
+            and context_age_sec is not None
+            and context_age_sec <= _RISING_MISSED_TP1_REPRICE_CONTEXT_MAX_AGE_SEC
+        )
+    )
+    reason = "not_applicable"
+    if applicable:
+        reason = (
+            "fresh_tp1_direction_context"
+            if allowed
+            else "rising_missed_reprice_direction_context_stale"
+        )
+    return {
+        "rising_missed_initial_reprice_direction_guard_applicable": applicable,
+        "rising_missed_initial_reprice_direction_guard_effective_venue": (
+            effective_venue or "UNKNOWN"
+        ),
+        "rising_missed_initial_reprice_direction_guard_allowed": allowed,
+        "rising_missed_initial_reprice_direction_guard_reason": reason,
+        "rising_missed_initial_reprice_direction_context_age_sec": (
+            round(context_age_sec, 6) if context_age_sec is not None else "-"
+        ),
+        "rising_missed_initial_reprice_direction_context_max_age_sec": (
+            _RISING_MISSED_TP1_REPRICE_CONTEXT_MAX_AGE_SEC
+        ),
+        "rising_missed_initial_reprice_direction_context_candidate_allowed": (
+            context_allowed
+        ),
+        "rising_missed_initial_reprice_direction_guard_decision_authority": (
+            "existing_tp1_owner_revalidation_before_reprice"
+        ),
+    }
+
+
 def _remember_rising_missed_tp1_submit_context(
     stock: dict | None, fields: dict[str, Any], *, code: str | None = None
 ) -> None:
@@ -58549,6 +58912,11 @@ def _evaluate_rising_missed_normal_buy_bridge(
                 )
             ).strip(),
         )
+        tp1_decision = _confirm_rising_missed_tp1_wait_recovery(
+            stock,
+            tp1_decision,
+            now_ts=_runtime_action_now_ts(runtime),
+        )
         _log_rising_missed_tp1_counterfactual_submit_safety(
             stock,
             code,
@@ -58619,6 +58987,117 @@ def _rising_missed_forced_scout_qty(stock: dict | None, runtime: dict | None) ->
     return 1
 
 
+def _recent_scanner_entry_ai_reuse_fields(
+    stock: dict,
+    *,
+    generation: ScannerGeneration,
+    ws_data: dict,
+    curr_price: int,
+    now_ts: float,
+) -> dict | None:
+    """Reuse a trusted decision only within the same scanner generation.
+
+    A new generation, an untrusted result, or a material price move always
+    returns ``None`` so the normal async preparation path can run.
+    """
+
+    source = str(stock.get("last_watching_ai_result_source") or "").strip().lower()
+    action = str(stock.get("last_watching_ai_action") or "").strip().upper()
+    stored_generation = str(stock.get("last_watching_ai_generation_id") or "").strip()
+    confirmed_at = _safe_float(stock.get("last_watching_ai_confirmed_at"), 0.0)
+    decision_price = _safe_int(stock.get("last_watching_ai_decision_price"), 0)
+    if (
+        source not in {"live", "prior_valid"}
+        or action not in {"BUY", "WAIT", "DROP"}
+        or stored_generation != generation.generation_id
+        or confirmed_at <= 0
+        or decision_price <= 0
+        or curr_price <= 0
+    ):
+        return None
+
+    previous_signature = stock.get("last_watching_ai_state_signature")
+    if not isinstance(previous_signature, dict):
+        return None
+    current_signature = _build_watching_refresh_signature(ws_data)
+    previous_axes = set(previous_signature.get("available_axes") or ())
+    current_axes = set(current_signature.get("available_axes") or ())
+    comparable_axes = previous_axes & current_axes
+    if not comparable_axes:
+        return None
+    material_state_changes = []
+    for key in (
+        "micro_vwap_side",
+        "ma5_side",
+        "tick_acceleration_regime",
+        "top3_depth_regime",
+        "quote_freshness",
+        "large_sell_print_detected",
+    ):
+        if key in comparable_axes and previous_signature.get(
+            key
+        ) != current_signature.get(key):
+            material_state_changes.append(key)
+    if "buy_pressure_10t" in comparable_axes:
+        pressure_delta = abs(
+            _safe_float(current_signature.get("buy_pressure_10t"), 0.0)
+            - _safe_float(previous_signature.get("buy_pressure_10t"), 0.0)
+        )
+        if pressure_delta >= max(
+            0.0,
+            _rule_float("AI_WATCHING_STATE_CHANGE_BUY_PRESSURE_DELTA", 10.0),
+        ):
+            material_state_changes.append("buy_pressure_10t")
+    if material_state_changes:
+        return None
+
+    age_sec = max(0.0, float(now_ts) - confirmed_at)
+    reuse_ttl_sec = max(
+        0.0,
+        _safe_float(
+            os.getenv("KORSTOCKSCAN_SCANNER_ENTRY_AI_VALID_REUSE_SEC"),
+            45.0,
+        ),
+    )
+    price_gap_pct = (
+        abs(float(curr_price) - float(decision_price)) / float(decision_price) * 100.0
+    )
+    material_move_pct = (
+        0.20
+        if action == "BUY"
+        else max(
+            0.0,
+            _safe_float(
+                os.getenv("KORSTOCKSCAN_SCANNER_ENTRY_AI_REEVAL_PRICE_MOVE_PCT"),
+                0.35,
+            ),
+        )
+    )
+    if age_sec > reuse_ttl_sec or price_gap_pct >= material_move_pct:
+        return None
+
+    score = _safe_float(stock.get("last_watching_ai_score"), 0.0)
+    return {
+        "rising_missed_entry_ai_retry_attempted": False,
+        "rising_missed_entry_ai_retry_success": bool(score > 0),
+        "rising_missed_entry_ai_retry_reason": "recent_valid_decision_reused",
+        "rising_missed_entry_ai_retry_action": action,
+        "rising_missed_entry_ai_retry_score": f"{score:.1f}",
+        "rising_missed_entry_ai_retry_result_source": source,
+        "rising_missed_entry_ai_retry_current_price": int(curr_price),
+        "rising_missed_entry_ai_retry_decision_price": int(decision_price),
+        "rising_missed_entry_ai_retry_reuse_age_sec": f"{age_sec:.3f}",
+        "rising_missed_entry_ai_retry_reuse_ttl_sec": f"{reuse_ttl_sec:.3f}",
+        "rising_missed_entry_ai_retry_price_gap_pct": f"{price_gap_pct:.4f}",
+        "rising_missed_entry_ai_retry_material_move_pct": (f"{material_move_pct:.4f}"),
+        "rising_missed_entry_ai_retry_state_signature_reused": True,
+        "rising_missed_entry_ai_retry_comparable_axes": ",".join(
+            sorted(comparable_axes)
+        ),
+        "rising_missed_entry_ai_retry_async_status": "reused",
+    }
+
+
 def _maybe_retry_rising_missed_entry_ai_not_evaluated(
     stock,
     code,
@@ -58687,22 +59166,33 @@ def _maybe_retry_rising_missed_entry_ai_not_evaluated(
         ).strip() == async_generation.generation_id and bool(
             str(stock.get("_scanner_async_cache_key") or "").strip()
         )
+        min_interval_sec = max(
+            0.0,
+            _safe_float(
+                os.getenv(
+                    "KORSTOCKSCAN_PRE_SUBMIT_ENTRY_AI_AUTHORITY_RETRY_MIN_INTERVAL_SEC"
+                ),
+                10.0,
+            ),
+        )
         if not pending_for_generation:
+            if force_async:
+                reuse_fields = _recent_scanner_entry_ai_reuse_fields(
+                    stock,
+                    generation=async_generation,
+                    ws_data=dict(ws_data or {}),
+                    curr_price=_safe_int(curr_price, 0),
+                    now_ts=now_ts,
+                )
+                if reuse_fields is not None:
+                    fields.update(reuse_fields)
+                    return fields
             if _is_any_simulated_position(stock, (stock or {}).get("strategy")):
                 fields["rising_missed_entry_ai_retry_reason"] = "sim_position"
                 return fields
             if not _rule_bool("PRE_SUBMIT_ENTRY_AI_AUTHORITY_RETRY_ENABLED", True):
                 fields["rising_missed_entry_ai_retry_reason"] = "disabled"
                 return fields
-            min_interval_sec = max(
-                0.0,
-                _safe_float(
-                    os.getenv(
-                        "KORSTOCKSCAN_PRE_SUBMIT_ENTRY_AI_AUTHORITY_RETRY_MIN_INTERVAL_SEC"
-                    ),
-                    10.0,
-                ),
-            )
             last_retry_at = _safe_float(
                 stock.get("pre_submit_entry_ai_authority_retry_at"), 0.0
             )
@@ -58710,6 +59200,27 @@ def _maybe_retry_rising_missed_entry_ai_not_evaluated(
                 fields["rising_missed_entry_ai_retry_reason"] = "retry_interval_active"
                 fields["rising_missed_entry_ai_retry_age_sec"] = (
                     f"{max(0.0, now_ts - last_retry_at):.3f}"
+                )
+                return fields
+            symbol_budget = DEFAULT_HOT_PATH_AI_SYMBOL_BUDGET.inspect(
+                code=code,
+                endpoint="scanner_entry",
+                now_ts=now_ts,
+                min_interval_sec=min_interval_sec,
+            )
+            fields.update(symbol_budget.log_fields())
+            if not symbol_budget.allowed:
+                fields.update(
+                    {
+                        "rising_missed_entry_ai_retry_attempted": False,
+                        "rising_missed_entry_ai_retry_reason": (
+                            "symbol_budget_deferred"
+                        ),
+                        "rising_missed_entry_ai_retry_async_status": "deferred",
+                        "rising_missed_entry_ai_retry_current_price": _safe_int(
+                            curr_price, 0
+                        ),
+                    }
                 )
                 return fields
 
@@ -58726,6 +59237,13 @@ def _maybe_retry_rising_missed_entry_ai_not_evaluated(
         async_status = str(async_resolution.get("status") or "unknown")
         if async_status in {"dispatched", "pending"}:
             if async_status == "dispatched":
+                symbol_budget = DEFAULT_HOT_PATH_AI_SYMBOL_BUDGET.reserve(
+                    code=code,
+                    endpoint="scanner_entry",
+                    now_ts=now_ts,
+                    min_interval_sec=min_interval_sec,
+                )
+                fields.update(symbol_budget.log_fields())
                 _mutate_stock_state(
                     stock,
                     set_fields={
@@ -58750,6 +59268,10 @@ def _maybe_retry_rising_missed_entry_ai_not_evaluated(
             return fields
         if async_status == "completed":
             ai_decision = dict(async_resolution.get("ai_decision") or {})
+            prepared_context = dict(async_resolution.get("prepared_context") or {})
+            prepared_ws = dict(
+                thaw_scanner_async_value(prepared_context.get("ws_data") or {})
+            )
             completed_epoch = _safe_float(
                 async_resolution.get("completed_epoch"), time.time()
             )
@@ -58771,6 +59293,11 @@ def _maybe_retry_rising_missed_entry_ai_not_evaluated(
                     ],
                     "last_watching_ai_confirmed_at": completed_epoch,
                     "last_watching_ai_result_source": result_source,
+                    "last_watching_ai_generation_id": (async_generation.generation_id),
+                    "last_watching_ai_decision_price": _safe_int(curr_price, 0),
+                    "last_watching_ai_state_signature": (
+                        _build_watching_refresh_signature(prepared_ws)
+                    ),
                     "last_watching_ai_snapshot_id": (
                         ai_decision.get("ai_decision_snapshot_id")
                         or ai_decision.get("ai_input_snapshot_id")
@@ -60186,6 +60713,11 @@ def _maybe_submit_rising_missed_one_share_entry(
                 "",
             )
         ).strip(),
+    )
+    tp1_decision = _confirm_rising_missed_tp1_wait_recovery(
+        stock,
+        tp1_decision,
+        now_ts=_runtime_action_now_ts(runtime),
     )
     _record_rising_missed_adverse_micro_reentry_candidate(
         code,
@@ -63356,6 +63888,45 @@ def _maybe_reprice_pending_entry_order(stock, code, strategy, *, timeout_sec=Non
             simulated_order=bool(order.get("simulated_order")),
             **config,
         )
+        rising_missed_reprice_direction_fields = (
+            _rising_missed_initial_reprice_direction_guard(
+                stock,
+                now_ts=now_ts,
+            )
+        )
+        if bool(
+            rising_missed_reprice_direction_fields.get(
+                "rising_missed_initial_reprice_direction_guard_applicable"
+            )
+        ) and not bool(
+            rising_missed_reprice_direction_fields.get(
+                "rising_missed_initial_reprice_direction_guard_allowed"
+            )
+        ):
+            decision = EntryRepriceDecision(
+                False,
+                str(
+                    rising_missed_reprice_direction_fields.get(
+                        "rising_missed_initial_reprice_direction_guard_reason"
+                    )
+                    or "rising_missed_reprice_direction_context_stale"
+                ),
+                0,
+                {
+                    **decision.fields,
+                    **rising_missed_reprice_direction_fields,
+                },
+            )
+        else:
+            decision = EntryRepriceDecision(
+                decision.allowed,
+                decision.reason,
+                decision.target_price,
+                {
+                    **decision.fields,
+                    **rising_missed_reprice_direction_fields,
+                },
+            )
     evaluated_fields = {
         **decision.as_log_fields(),
         **quote_refresh_fields,
@@ -66800,11 +67371,21 @@ def handle_holding_state(
     """
     global LAST_AI_CALL_TIMES
 
-    # P1: 메인 루프에서 전달받은 시간값 재사용
-    if now_ts is None:
-        now_ts = time.time()
-    if now_dt is None:
+    # Keep every downstream session/freshness guard on one evaluation clock.
+    # Replay and tests may supply only ``now_dt``; mixing that timestamp with
+    # the wall clock can select a different venue and incorrectly block an
+    # otherwise valid SELL.
+    if now_ts is None and now_dt is None:
         now_dt = datetime.now()
+    if now_ts is None:
+        normalized_now_dt = (
+            now_dt.replace(tzinfo=_KST)
+            if now_dt.tzinfo is None
+            else now_dt.astimezone(_KST)
+        )
+        now_ts = normalized_now_dt.timestamp()
+    if now_dt is None:
+        now_dt = datetime.fromtimestamp(float(now_ts), tz=_KST)
     now_t = now_dt.time()
 
     _maybe_release_auto_manual_control_at_average_price(
@@ -67978,7 +68559,51 @@ def handle_holding_state(
                         holding_context, forensic_context_candidate = (
                             _holding_context_call_views(holding_context_source)
                         )
-                        if hasattr(ai_engine, "evaluate_scalping_holding_score"):
+                        live_symbol_budget = None
+                        if not sim_ai_budget_gate.get("target") and hasattr(
+                            ai_engine, "evaluate_scalping_holding_score"
+                        ):
+                            live_symbol_budget = (
+                                DEFAULT_HOT_PATH_AI_SYMBOL_BUDGET.reserve(
+                                    code=code,
+                                    endpoint="holding_score",
+                                    now_ts=time.time(),
+                                    min_interval_sec=float(dynamic_min_cd),
+                                )
+                            )
+                            if not live_symbol_budget.allowed:
+                                ai_call_skipped_reason = "symbol_budget_deferred"
+                                _log_holding_pipeline(
+                                    stock,
+                                    code,
+                                    "ai_holding_symbol_budget_deferred",
+                                    metric_role="ops_volume_diagnostic",
+                                    decision_authority="ai_call_cadence_only",
+                                    window_policy=(
+                                        "rolling_process_local_per_symbol_all_live_ai_endpoints"
+                                    ),
+                                    sample_floor="one_live_holding_ai_call_attempt",
+                                    primary_decision_metric=(
+                                        "per_symbol_ai_call_count_and_service_share"
+                                    ),
+                                    source_quality_gate=(
+                                        "canonical_stock_code_and_fresh_holding_preflight"
+                                    ),
+                                    forbidden_uses=(
+                                        "standalone_buy_or_exit_decision,"
+                                        "threshold_mutation,"
+                                        "provider_route_change,order_price_change,"
+                                        "quantity_or_cap_change,broker_guard_bypass"
+                                    ),
+                                    runtime_effect=True,
+                                    allowed_runtime_apply=False,
+                                    actual_order_submitted=False,
+                                    broker_order_forbidden=True,
+                                    **live_symbol_budget.log_fields(),
+                                )
+                        if hasattr(ai_engine, "evaluate_scalping_holding_score") and (
+                            live_symbol_budget is None or live_symbol_budget.allowed
+                        ):
                             metadata_extra = {
                                 "record_id": stock.get("id"),
                                 "sim_record_id": stock.get("sim_record_id"),
@@ -68008,6 +68633,20 @@ def handle_holding_state(
                                 holding_score_position_ctx,
                                 **holding_call_kwargs,
                             )
+                        elif (
+                            live_symbol_budget is not None
+                            and not live_symbol_budget.allowed
+                        ):
+                            ai_decision = {
+                                "action": "HOLD",
+                                "score": current_ai_score,
+                                "reason": "symbol_budget_deferred",
+                                "holding_score_data_quality": "insufficient",
+                                "holding_score_source": "symbol_budget_deferred",
+                                "holding_score_effective_usable": False,
+                                "ai_result_source": "symbol_budget_deferred",
+                                "ai_fallback_score_50": True,
+                            }
                         else:
                             ai_decision = {
                                 "action": "HOLD",
@@ -71373,6 +72012,7 @@ def handle_holding_state(
             strategy=strategy,
             sell_reason_type=sell_reason_type,
             exit_rule=exit_rule or stock.get("last_exit_rule"),
+            now=now_dt,
         )
         if bool(sell_time_block_fields.get("sell_time_block_applied")):
             _log_holding_pipeline(

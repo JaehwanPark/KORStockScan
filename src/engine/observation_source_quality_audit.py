@@ -1412,6 +1412,34 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
         decision_authority="holding_flow_override_safety_exit_guard",
         forbidden_uses="EV/rolling/MTD/cumulative_tuning/live_auto_promotion/runtime_apply_bridge/threshold_mutation/provider_change/order_price_change/quantity_cap_change/broker_guard_bypass",
     ),
+    "ai_holding_symbol_budget_deferred": StageContract(
+        required_fields=(
+            "metric_role",
+            "decision_authority",
+            "window_policy",
+            "sample_floor",
+            "primary_decision_metric",
+            "source_quality_gate",
+            "runtime_effect",
+            "allowed_runtime_apply",
+            "actual_order_submitted",
+            "broker_order_forbidden",
+            "forbidden_uses",
+            "hot_path_ai_symbol_budget_version",
+            "hot_path_ai_symbol_budget_reason",
+            "hot_path_ai_symbol_budget_endpoint_group",
+            "hot_path_ai_symbol_budget_total_count",
+            "hot_path_ai_symbol_budget_total_cap",
+            "hot_path_ai_symbol_budget_group_count",
+            "hot_path_ai_symbol_budget_group_cap",
+        ),
+        decision_authority="ai_call_cadence_only",
+        forbidden_uses=(
+            "standalone_buy_or_exit_decision,threshold_mutation,"
+            "provider_route_change,order_price_change,quantity_or_cap_change,"
+            "broker_guard_bypass"
+        ),
+    ),
     "scalp_trailing_continuation_recheck": StageContract(
         required_fields=(
             "metric_role",

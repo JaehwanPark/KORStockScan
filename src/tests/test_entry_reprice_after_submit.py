@@ -307,6 +307,111 @@ def test_pending_order_reprices_once(monkeypatch):
     assert "entry_reprice_resubmit_submitted" in [stage for stage, _ in events]
 
 
+def test_rising_missed_initial_reprice_blocks_stale_tp1_direction_context(
+    monkeypatch,
+):
+    import src.engine.sniper_state_handlers as handlers
+
+    now = 1000.0
+    stock = {
+        "id": 24887,
+        "name": "펩트론",
+        "strategy": "SCALPING",
+        "rising_missed_entry_lineage": True,
+        "rising_missed_one_share_entry_forced": True,
+        "rising_missed_one_share_scout": True,
+        "rising_missed_effective_venue": "NXT",
+        "rising_missed_tp1_submit_context_at": now - 16.0,
+        "rising_missed_tp1_submit_context_candidate_allowed": True,
+        "order_time": now - 16.0,
+        "pending_entry_orders": [
+            {
+                **_base_order(
+                    sent_at=now - 16.0,
+                    ord_no="0059188",
+                    qty=1,
+                    price=146200,
+                    mark_price_at_submit=146350,
+                    ai_score=58.0,
+                    buy_pressure_10t=59.82,
+                ),
+                "tag": "normal",
+                "tif": "DAY",
+                "dmst_stex_tp": "NXT",
+            }
+        ],
+    }
+    events = []
+    monkeypatch.setattr(handlers.time, "time", lambda: now)
+    monkeypatch.setattr(
+        handlers.ORDERBOOK_STABILITY_OBSERVER,
+        "snapshot",
+        lambda code, now=None: {
+            "best_bid": 146300,
+            "best_ask": 146400,
+            "last_trade_price": 146350,
+            "observer_healthy": True,
+            "unstable_quote_observed": False,
+            "observer_last_quote_age_ms": 0.2,
+            "orderbook_micro": {"micro_state": "neutral"},
+        },
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: events.append((stage, fields)),
+    )
+    monkeypatch.setattr(
+        handlers.kiwoom_orders,
+        "send_cancel_order",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError),
+    )
+    monkeypatch.setattr(
+        handlers.kiwoom_orders,
+        "send_buy_order",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError),
+    )
+
+    result = handlers._maybe_reprice_pending_entry_order(
+        stock, "087010", "SCALPING", timeout_sec=60
+    )
+
+    assert result == "blocked"
+    assert (
+        stock["entry_reprice_block_reason"]
+        == "rising_missed_reprice_direction_context_stale"
+    )
+    blocked = [
+        fields
+        for stage, fields in events
+        if stage == "entry_reprice_after_submit_blocked"
+    ][-1]
+    assert blocked["rising_missed_initial_reprice_direction_guard_applicable"] is True
+    assert blocked["rising_missed_initial_reprice_direction_guard_allowed"] is False
+    assert blocked["rising_missed_initial_reprice_direction_context_age_sec"] == 16.0
+
+
+def test_rising_missed_initial_reprice_direction_guard_is_nxt_only():
+    import src.engine.sniper_state_handlers as handlers
+
+    result = handlers._rising_missed_initial_reprice_direction_guard(
+        {
+            "rising_missed_one_share_entry_forced": True,
+            "rising_missed_one_share_scout": True,
+            "rising_missed_effective_venue": "KRX",
+            "rising_missed_tp1_submit_context_at": 900.0,
+            "rising_missed_tp1_submit_context_candidate_allowed": True,
+        },
+        now_ts=1000.0,
+    )
+
+    assert result["rising_missed_initial_reprice_direction_guard_applicable"] is False
+    assert result["rising_missed_initial_reprice_direction_guard_allowed"] is True
+    assert (
+        result["rising_missed_initial_reprice_direction_guard_effective_venue"] == "KRX"
+    )
+
+
 def test_pending_order_before_eval_window_does_not_call_broker(monkeypatch):
     import src.engine.sniper_state_handlers as handlers
 
