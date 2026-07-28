@@ -382,6 +382,55 @@ def test_capture_canonical_context_candidate_is_separate_from_ai_request(
     assert not trace._payload_path(trace._date_text()).exists()
 
 
+def test_trace_distinguishes_promotion_gated_candidate_from_applied_payload(
+    monkeypatch, tmp_path
+):
+    _enable(monkeypatch, tmp_path)
+    fields = trace.record_ai_decision_trace(
+        {
+            "action": "WAIT",
+            "provider_called": True,
+            "provider": "openai",
+            "ai_trace_canonical_context_capture_status": "canonical_context_missing",
+            "ai_context_candidate_status": "ready_for_explicit_provider_call",
+            "ai_context_candidate_schema": "entry_candle_context_v1",
+        },
+        prompt_type="scalping_entry",
+        prompt_version="entry_v1",
+        result_source="live",
+    )
+
+    row = _rows(trace._trace_path(trace._date_text()))[0]
+    assert fields["ai_decision_trace_id"] == row["decision_trace_id"]
+    assert row["canonical_context_capture_status"] == "canonical_context_missing"
+    assert row["canonical_context_candidate_status"] == (
+        "ready_for_explicit_provider_call"
+    )
+    assert row["canonical_context_candidate_schema"] == "entry_candle_context_v1"
+    assert row["canonical_context_application_state"] == (
+        "promotion_gated_forensic_exact_available"
+    )
+
+
+def test_trace_marks_exact_canonical_payload_as_applied(monkeypatch, tmp_path):
+    _enable(monkeypatch, tmp_path)
+    trace.record_ai_decision_trace(
+        {
+            "action": "WAIT",
+            "provider_called": True,
+            "provider": "openai",
+            "ai_trace_canonical_context_capture_status": "exact_completed_bars_captured",
+            "ai_context_candidate_status": "ready_for_explicit_provider_call",
+        },
+        prompt_type="scalping_entry",
+        prompt_version="entry_v1",
+        result_source="live",
+    )
+
+    row = _rows(trace._trace_path(trace._date_text()))[0]
+    assert row["canonical_context_application_state"] == "applied_exact"
+
+
 def test_capture_canonical_context_candidate_rejects_redacted_source(
     monkeypatch, tmp_path
 ):

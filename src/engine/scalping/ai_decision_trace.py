@@ -711,6 +711,33 @@ def _canonical_context_capture(
     }
 
 
+def _canonical_context_application_state(merged: dict[str, Any]) -> str:
+    """Classify actual-payload use separately from a forensic candidate.
+
+    A disabled promotion can legitimately preserve an exact context candidate
+    while omitting it from the live provider payload.  Treating that state as
+    a failed payload application hides the promotion boundary; treating it as
+    applied would be worse.  Keep the two facts explicit in every decision
+    trace so coverage reports can use the appropriate denominator.
+    """
+
+    capture_status = str(
+        _optional(merged, "ai_trace_canonical_context_capture_status") or ""
+    ).strip()
+    candidate_status = str(
+        _optional(merged, "ai_context_candidate_status") or ""
+    ).strip()
+    if capture_status == "exact_completed_bars_captured":
+        return "applied_exact"
+    if candidate_status == "ready_for_explicit_provider_call":
+        return "promotion_gated_forensic_exact_available"
+    if candidate_status == "source_candidate_ineligible":
+        return "forensic_candidate_ineligible"
+    if capture_status:
+        return "no_exact_payload_or_candidate"
+    return "legacy_or_uninstrumented"
+
+
 def capture_canonical_context_candidate(
     *,
     source_context: dict[str, Any] | None,
@@ -1354,6 +1381,15 @@ def record_ai_decision_trace(
                 bool(merged.get("ai_trace_canonical_context_forming_bar_present"))
                 if "ai_trace_canonical_context_forming_bar_present" in merged
                 else None
+            ),
+            "canonical_context_candidate_status": _optional(
+                merged, "ai_context_candidate_status"
+            ),
+            "canonical_context_candidate_schema": _optional(
+                merged, "ai_context_candidate_schema"
+            ),
+            "canonical_context_application_state": _canonical_context_application_state(
+                merged
             ),
             "provider_called": bool(provider_called),
             "transport": _optional(merged, "openai_transport_mode"),

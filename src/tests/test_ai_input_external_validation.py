@@ -809,6 +809,27 @@ def test_naver_daily_fallback_volume_is_not_strictly_compared():
     assert volume["reason"] == "naver_daily_volume_snapshot_not_final_krx_basis"
 
 
+def test_krx_daily_empty_outblock_is_non_blocking_intraday_observation():
+    observation = mod._krx_daily_verification_observation(
+        {
+            "status": "source_unavailable",
+            "error": "krx_open_api_endpoint_failure",
+        }
+    )
+
+    assert observation == {
+        "source": "KRX_OPEN_API_STOCK_DAILY",
+        "availability_status": "source_unavailable",
+        "error": "krx_open_api_endpoint_failure",
+        "verification_role": "non_blocking_external_daily_observation",
+        "required_source_match_gate": False,
+        "runtime_promotion_gate": False,
+        "reason": (
+            "krx_open_api_daily_response_not_a_completed_intraday_validation_basis"
+        ),
+    }
+
+
 def test_live_report_uses_explicit_market_request_code_for_krx_and_nxt(
     monkeypatch,
 ):
@@ -890,6 +911,16 @@ def test_live_report_uses_explicit_market_request_code_for_krx_and_nxt(
     assert request_dates == ["2026-07-26"]
     assert report["date"] == "2026-07-24"
     assert report["provenance_capture_date"] == "2026-07-26"
+    assert (
+        report["external_source_policy"][
+            "krx_open_api_daily_required_source_match_gate"
+        ]
+        is False
+    )
+    assert (
+        report["external_source_policy"]["krx_open_api_daily_runtime_promotion_gate"]
+        is False
+    )
     assert (
         report["provenance_join_policy"]
         == "explicit_forensic_replay_market_date_to_capture_date"

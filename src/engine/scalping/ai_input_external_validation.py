@@ -392,6 +392,37 @@ def _fetch_krx_daily(
     return output, metadata
 
 
+def _krx_daily_verification_observation(
+    metadata: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Describe KRX daily API availability without making it an intraday gate.
+
+    The approved KRX Open API daily services currently return an empty outblock
+    for this workflow.  Preserve that external defect as operational
+    provenance, but it is neither a completed intraday bar nor a reliable
+    external equality source for the AI-context contract.  Keep the evidence
+    visible while ensuring it cannot turn an otherwise valid minute/payload
+    comparison into a verification failure.
+    """
+
+    fields = metadata if isinstance(metadata, dict) else {}
+    status = str(fields.get("status") or "source_unavailable").strip()
+    error = str(fields.get("error") or "").strip() or None
+    return {
+        "source": "KRX_OPEN_API_STOCK_DAILY",
+        "availability_status": status,
+        "error": error,
+        "verification_role": "non_blocking_external_daily_observation",
+        "required_source_match_gate": False,
+        "runtime_promotion_gate": False,
+        "reason": (
+            "krx_open_api_daily_response_not_a_completed_intraday_validation_basis"
+            if status != "pass"
+            else "available_non_blocking_external_daily_observation"
+        ),
+    }
+
+
 def _find_nested(value: Any, key: str) -> Any:
     if isinstance(value, dict):
         if key in value:
@@ -1382,6 +1413,7 @@ def build_live_report(
     except Exception as exc:
         krx_daily, krx_meta = {}, {}
         krx_error = f"{type(exc).__name__}:{exc}"
+    krx_daily_observation = _krx_daily_verification_observation(krx_meta)
     results = []
     minute_route_cache: dict[str, tuple[list[dict[str, Any]], dict[str, Any]]] = {}
 
@@ -1470,6 +1502,7 @@ def build_live_report(
                     "kiwoom": minute_meta,
                     "krx": krx_meta,
                     "krx_error": krx_error,
+                    "krx_daily_verification_observation": krx_daily_observation,
                     "naver": naver_meta,
                     "naver_daily": naver_daily_meta,
                     "daily_external_source": daily_source,
@@ -1518,7 +1551,9 @@ def build_live_report(
             == "none"
         ):
             provider_none.append(item["symbol"])
-    krx_required_failed = any(
+    # This is the KRX *intraday source/payload* gate.  It deliberately does
+    # not consume the KRX daily Open API observation above.
+    krx_intraday_required_failed = any(
         item["venue"] == "KRX"
         and item["summary"]["required_source_field_match_status"] != "pass"
         for item in results
@@ -1547,7 +1582,7 @@ def build_live_report(
             and payload_mismatch_count == 0
             and payload_source_unavailable_count == 0
             and not provider_none
-            and not krx_required_failed
+            and not krx_intraday_required_failed
             and not payload_required_failed
             else "fail"
         ),
@@ -1557,11 +1592,17 @@ def build_live_report(
             "payload_mismatch_count": payload_mismatch_count,
             "payload_source_unavailable_count": (payload_source_unavailable_count),
             "provider_none_count": len(provider_none),
+            "krx_daily_non_blocking_unavailable": (
+                krx_daily_observation["availability_status"] != "pass"
+            ),
         },
         "results": results,
         "external_source_policy": {
-            "daily_stock_primary": "KRX_OPEN_API_STOCK_DAILY_AUTH_KEY",
-            "daily_stock_fallback": "NAVER_FCHART_DAILY_OHLC_ONLY",
+            "daily_stock_preferred_when_available": "KRX_OPEN_API_STOCK_DAILY_AUTH_KEY",
+            "daily_stock_intraday_verification": "NAVER_FCHART_DAILY_OHLC_ONLY",
+            "krx_open_api_daily_unavailable": "non_blocking_external_daily_observation",
+            "krx_open_api_daily_required_source_match_gate": False,
+            "krx_open_api_daily_runtime_promotion_gate": False,
             "legacy_krx_mdc_web_json": "disabled_logout_session_dependency",
             "minute_close_volume_secondary": "NAVER_FCHART",
             "nxt_integrated_not_equal_to_krx": True,
@@ -1587,6 +1628,10 @@ def _write_report(report: dict[str, Any]) -> tuple[Path, Path]:
         (
             "- Exact payload mismatch: "
             f"`{report['summary'].get('payload_mismatch_count', 0)}`"
+        ),
+        (
+            "- KRX daily Open API unavailable (non-blocking): "
+            f"`{str(report['summary'].get('krx_daily_non_blocking_unavailable', False)).lower()}`"
         ),
         f"- Runtime effect: `{str(report['runtime_effect']).lower()}`",
         "",
