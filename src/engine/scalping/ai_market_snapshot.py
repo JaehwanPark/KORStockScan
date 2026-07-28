@@ -463,6 +463,132 @@ def preferred_ws_route(
     return suffix, route
 
 
+def _route_partitioned_ws_view(
+    ws_data: dict[str, Any],
+    candle_context: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Select one exact 0B/0D route without mixing concurrent subscriptions.
+
+    Kiwoom treats the base, ``_NX``, and ``_AL`` item values as distinct
+    exchange routes.  The canonical snapshot keeps the latest observation per
+    realtime type for compatibility, so concurrent KRX/SOR subscriptions can
+    otherwise leave 0B and 0D on different routes.  Use the route selected by
+    the candle owner when both route-owned realtime rows are available.
+    """
+
+    ws = ws_data if isinstance(ws_data, dict) else {}
+    candle = candle_context if isinstance(candle_context, dict) else {}
+    quality = (
+        candle.get("source_quality")
+        if isinstance(candle.get("source_quality"), dict)
+        else {}
+    )
+    suffix = str(
+        quality.get("route_partition_selected_suffix") or candle.get("ws_suffix") or ""
+    ).upper()
+    route = str(
+        quality.get("route_partition_selected_route") or candle.get("ws_route") or ""
+    ).lower()
+    if not route:
+        return ws, {
+            "used": False,
+            "reason": "candle_route_missing",
+            "selected_key": None,
+        }
+    route_key = f"{suffix or 'KRX'}|{route}"
+    partitions = ws.get("realtime_type_snapshots_by_route")
+    if not isinstance(partitions, dict):
+        return ws, {
+            "used": False,
+            "reason": "route_snapshots_unavailable",
+            "selected_key": route_key,
+        }
+    selected = partitions.get(route_key)
+    if not isinstance(selected, dict):
+        return ws, {
+            "used": False,
+            "reason": "candle_route_snapshot_missing",
+            "selected_key": route_key,
+        }
+    rows = {
+        realtime_type: selected.get(realtime_type) for realtime_type in _MARKET_TYPES
+    }
+    if any(not isinstance(row, dict) for row in rows.values()):
+        return ws, {
+            "used": False,
+            "reason": "candle_route_realtime_type_incomplete",
+            "selected_key": route_key,
+        }
+
+    view = dict(ws)
+    field_map = {
+        "last_realtime_type_ts": "observed_epoch",
+        "last_realtime_type_item": "item",
+        "last_realtime_type_market_suffix": "market_suffix",
+        "last_realtime_type_market_route": "market_route",
+        "last_realtime_type_effective_venue": "effective_venue",
+    }
+    for target_field, row_field in field_map.items():
+        values = dict(_mapping(ws, target_field))
+        for realtime_type, row in rows.items():
+            values[realtime_type] = row.get(row_field)
+        view[target_field] = values
+
+    # Never retain quote fields from the canonical latest snapshot once a
+    # candle-owned route partition has been selected.  Those fields can be
+    # from the other concurrent subscription; absent selected-route values
+    # must reach the preflight as absent and fail closed.
+    view["curr"] = 0
+    view["orderbook"] = {}
+    view["best_bid"] = 0
+    view["best_ask"] = 0
+
+    excluded_optional_sources: list[str] = []
+    program_suffix = str(
+        _mapping(view, "last_realtime_type_market_suffix").get("0w") or ""
+    ).upper()
+    program_route = str(
+        _mapping(view, "last_realtime_type_market_route").get("0w") or ""
+    ).lower()
+    if (program_suffix or program_route) and (
+        program_suffix != suffix or program_route != route
+    ):
+        for target_field in field_map:
+            values = dict(_mapping(view, target_field))
+            values.pop("0w", None)
+            view[target_field] = values
+        received_types = {
+            str(value or "").strip() for value in (view.get("received_types") or [])
+        }
+        received_types.discard("0w")
+        view["received_types"] = received_types
+        view["last_prog_update_ts"] = 0.0
+        excluded_optional_sources.append("program_route_mismatch")
+
+    tape_row = rows["0B"]
+    quote_row = rows["0D"]
+    current_price = _safe_float(tape_row.get("current_price"))
+    if current_price is not None and current_price > 0:
+        view["curr"] = current_price
+    orderbook = quote_row.get("orderbook")
+    if isinstance(orderbook, dict):
+        view["orderbook"] = orderbook
+        bids = orderbook.get("bids") if isinstance(orderbook.get("bids"), list) else []
+        asks = orderbook.get("asks") if isinstance(orderbook.get("asks"), list) else []
+        if bids and isinstance(bids[0], dict):
+            view["best_bid"] = bids[0].get("price")
+        if asks and isinstance(asks[0], dict):
+            view["best_ask"] = asks[0].get("price")
+    view["last_ws_market_suffix"] = suffix
+    view["last_ws_market_route"] = route
+    return view, {
+        "used": True,
+        "reason": "candle_route_exact_0b_0d_partition",
+        "selected_key": route_key,
+        "excluded_optional_sources": excluded_optional_sources,
+    }
+
+
 def _broker_route_matches_cohort(
     *,
     broker_route: str,
@@ -827,8 +953,9 @@ def build_ai_market_snapshot(
     now_ts: float | None = None,
     require_position_reconciliation: bool = False,
 ) -> dict[str, Any]:
-    ws = ws_data if isinstance(ws_data, dict) else {}
     candle_ctx = candle_context if isinstance(candle_context, dict) else {}
+    raw_ws = ws_data if isinstance(ws_data, dict) else {}
+    ws, route_partition = _route_partitioned_ws_view(raw_ws, candle_ctx)
     now_epoch = float(now_ts if now_ts is not None else time.time())
     normalized_venue, venue_resolution = _normalize_venue_cohort(
         venue=effective_venue,
@@ -1251,6 +1378,7 @@ def build_ai_market_snapshot(
         "venue_attribution_allowed": venue_attribution_allowed,
         "venue_attribution_reason": venue_attribution_reason,
         "session_bucket": session_bucket,
+        "route_partition": route_partition,
         "provenance": provenance,
     }
     digest = hashlib.sha256(
@@ -1278,6 +1406,7 @@ def build_ai_market_snapshot(
         "venue_attribution_allowed": venue_attribution_allowed,
         "venue_attribution_reason": venue_attribution_reason,
         "session_bucket": session_bucket,
+        "route_partition": route_partition,
         "required_sources": required_sources,
         "realtime_type_provenance": provenance,
         "sources": sources,
@@ -1344,6 +1473,15 @@ def ai_market_snapshot_log_fields(
         "ai_market_snapshot_venue_resolution": snapshot.get("venue_resolution"),
         "ai_market_snapshot_broker_route": snapshot.get("broker_route"),
         "ai_market_snapshot_market_data_route": snapshot.get("market_data_route"),
+        "ai_market_snapshot_route_partition_used": bool(
+            (snapshot.get("route_partition") or {}).get("used", False)
+        ),
+        "ai_market_snapshot_route_partition_reason": (
+            (snapshot.get("route_partition") or {}).get("reason")
+        ),
+        "ai_market_snapshot_route_partition_selected_key": (
+            (snapshot.get("route_partition") or {}).get("selected_key")
+        ),
         "ai_market_snapshot_underlying_event_venue": snapshot.get(
             "underlying_event_venue"
         ),

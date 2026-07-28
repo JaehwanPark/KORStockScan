@@ -160,6 +160,19 @@ def _decision_stage_current_price_unusable(row: dict[str, Any], source: str) -> 
 def _tp1_observation_price(row: dict[str, Any]) -> tuple[float | None, str]:
     fields = _fields(row)
     stage = str(row.get("stage") or "")
+    if stage == "holding_rest_quote_divergence_blocked":
+        # The holding runtime explicitly rejected this REST value because it
+        # conflicted with a recent WS quote. It is diagnostic provenance, not
+        # an executable/observable market price for TP1 MFE/MAE labels.
+        return None, "rejected_rest_quote_divergence"
+    if stage == "holding_rest_quote_venue_blocked":
+        return None, "rejected_rest_quote_venue"
+    if stage == "holding_ws_freshness_recovered" and not _boolish(
+        fields.get("holding_rest_quote_route_consistent")
+    ):
+        # Historical recovery rows without an exact venue-qualified REST
+        # request cannot support tuning labels.
+        return None, "rest_quote_recovery_venue_unproven"
     is_tp1_evaluation = stage in {
         "rising_missed_one_share_entry",
         "rising_missed_normal_buy_bridge_unlocked",
@@ -3098,6 +3111,116 @@ def _build_nxt_session_observation(
     )
 
 
+def _build_adverse_micro_recovery_observation(
+    pipeline_path: Path,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Keep KRX adverse-micro recovery checkpoints separate from NXT sampling."""
+
+    stage_counts: Counter[str] = Counter()
+    checkpoint_counts: Counter[str] = Counter()
+    source_quality_counts: Counter[str] = Counter()
+    outcome_counts: Counter[str] = Counter()
+    rows: list[dict[str, Any]] = []
+    registered_observation_ids: set[str] = set()
+    for event in iter_jsonl(pipeline_path):
+        stage = str(event.get("stage") or "")
+        if not stage.startswith("rising_missed_adverse_micro_recovery_"):
+            continue
+        fields = _fields(event)
+        if str(fields.get("effective_venue") or "").upper() != "KRX":
+            continue
+        observation_id = str(
+            fields.get("rising_missed_adverse_micro_recovery_observation_id") or ""
+        )
+        stage_counts[stage] += 1
+        source_reason = str(
+            fields.get("rising_missed_adverse_micro_recovery_source_reason") or "-"
+        )
+        if stage.endswith("checkpoint"):
+            source_quality_counts[source_reason] += 1
+            checkpoint = str(
+                fields.get("rising_missed_adverse_micro_recovery_checkpoint_sec")
+                or "unknown"
+            )
+            checkpoint_counts[checkpoint] += 1
+        if stage.endswith("registered") and observation_id:
+            registered_observation_ids.add(observation_id)
+        if stage.endswith("completed"):
+            outcome = str(
+                fields.get("rising_missed_adverse_micro_recovery_outcome") or "unknown"
+            )
+            outcome_counts[outcome] += 1
+        rows.append(
+            {
+                "ts": _event_ts(event),
+                "stock_code": _event_code(event),
+                "stock_name": _event_name(event),
+                "observation_id": observation_id or "-",
+                "source_tp1_evaluation_id": fields.get(
+                    "rising_missed_adverse_micro_recovery_source_tp1_evaluation_id",
+                    "-",
+                ),
+                "stage": stage,
+                "checkpoint_sec": fields.get(
+                    "rising_missed_adverse_micro_recovery_checkpoint_sec", "-"
+                ),
+                "price_fresh": _boolish(
+                    fields.get("rising_missed_adverse_micro_recovery_price_fresh")
+                ),
+                "move_pct": _safe_float(
+                    fields.get("rising_missed_adverse_micro_recovery_move_pct")
+                ),
+                "max_move_pct": _safe_float(
+                    fields.get("rising_missed_adverse_micro_recovery_max_move_pct")
+                ),
+                "min_move_pct": _safe_float(
+                    fields.get("rising_missed_adverse_micro_recovery_min_move_pct")
+                ),
+                "next_scanner_loop_rechecked": _boolish(
+                    fields.get(
+                        "rising_missed_adverse_micro_recovery_next_scanner_loop_rechecked"
+                    )
+                ),
+                "reentry_candidate_allowed": _boolish(
+                    fields.get(
+                        "rising_missed_adverse_micro_recovery_reentry_candidate_allowed"
+                    )
+                ),
+                "recovery_observed": _boolish(
+                    fields.get("rising_missed_adverse_micro_recovery_detected")
+                ),
+                "source_reason": source_reason,
+                "raw_0b_route": fields.get(
+                    "rising_missed_adverse_micro_recovery_ws_0b_raw_route", "-"
+                ),
+                "outcome": fields.get(
+                    "rising_missed_adverse_micro_recovery_outcome", "-"
+                ),
+            }
+        )
+    return {
+        "rising_missed_adverse_micro_recovery_observation_count": len(
+            registered_observation_ids
+        ),
+        "rising_missed_adverse_micro_recovery_stage_counts": [
+            {"stage": stage, "count": count}
+            for stage, count in stage_counts.most_common()
+        ],
+        "rising_missed_adverse_micro_recovery_checkpoint_counts": [
+            {"checkpoint_sec": checkpoint, "count": count}
+            for checkpoint, count in sorted(checkpoint_counts.items())
+        ],
+        "rising_missed_adverse_micro_recovery_source_quality_counts": [
+            {"source_reason": reason, "count": count}
+            for reason, count in source_quality_counts.most_common()
+        ],
+        "rising_missed_adverse_micro_recovery_outcome_counts": [
+            {"outcome": outcome, "count": count}
+            for outcome, count in outcome_counts.most_common()
+        ],
+    }, rows
+
+
 def build_report(
     target_date: str,
     *,
@@ -3216,6 +3339,9 @@ def build_report(
         nxt_order_rows,
         nxt_post_block_sampler_rows,
     ) = _build_nxt_session_observation(pipeline_path)
+    adverse_micro_recovery_summary, adverse_micro_recovery_rows = (
+        _build_adverse_micro_recovery_observation(pipeline_path)
+    )
     if first_touch_source_quality_counts["first_touch_ai_provenance_missing_count"]:
         source_quality_status = "first_touch_ai_provenance_missing"
     if first_touch_source_quality_counts["first_touch_ai_provenance_unusable_count"]:
@@ -3438,6 +3564,17 @@ def build_report(
                 ),
                 "forbidden_uses": FORBIDDEN_USES,
             },
+            "rising_missed_adverse_micro_recovery": {
+                "metric_role": "source_quality_gate",
+                "decision_authority": "observe_only_adverse_micro_recovery",
+                "window_policy": "krx_tp1_hard_negative_15s_30s_60s",
+                "sample_floor": "1_fresh_ws_0b_checkpoint",
+                "primary_decision_metric": "post_block_recovery_move_pct",
+                "source_quality_gate": (
+                    "canonical_krx_registration_and_absolute_ws_0b_timestamp"
+                ),
+                "forbidden_uses": FORBIDDEN_USES,
+            },
         },
         "source_paths": {"pipeline_events": str(resolved_pipeline_path)},
         "source_quality": {
@@ -3519,6 +3656,7 @@ def build_report(
                 tp1_counterfactual_multi_horizon_by_effective_venue
             ),
             **nxt_session_summary,
+            **adverse_micro_recovery_summary,
             "code_improvement_order_count": len(code_improvement_orders),
         },
         "records": rows[:100],
@@ -3542,6 +3680,7 @@ def build_report(
         "rising_missed_nxt_post_block_price_sampler_rows": nxt_post_block_sampler_rows[
             -200:
         ],
+        "rising_missed_adverse_micro_recovery_rows": adverse_micro_recovery_rows[-200:],
         "code_improvement_orders": code_improvement_orders,
     }
 
@@ -3678,6 +3817,12 @@ def write_outputs(
         f"{summary.get('rising_missed_nxt_post_block_sampler_completed_count')}",
         f"- rising_missed_nxt_post_block_sampler_outcome_counts: "
         f"{summary.get('rising_missed_nxt_post_block_sampler_outcome_counts')}",
+        f"- rising_missed_adverse_micro_recovery_observation_count: "
+        f"{summary.get('rising_missed_adverse_micro_recovery_observation_count')}",
+        f"- rising_missed_adverse_micro_recovery_checkpoint_counts: "
+        f"{summary.get('rising_missed_adverse_micro_recovery_checkpoint_counts')}",
+        f"- rising_missed_adverse_micro_recovery_outcome_counts: "
+        f"{summary.get('rising_missed_adverse_micro_recovery_outcome_counts')}",
         f"- code_improvement_order_count: {summary.get('code_improvement_order_count')}",
         "",
     ]
@@ -3722,6 +3867,20 @@ def write_outputs(
                 "mfe_after_block_pct={mfe_after_block_pct} "
                 "mae_after_block_pct={mae_after_block_pct} outcome={outcome_label} "
                 "quality={source_quality_state}".format(**item)
+            )
+        lines.append("")
+    if report.get("rising_missed_adverse_micro_recovery_rows"):
+        lines.extend(["## KRX Adverse-micro Recovery Observation", ""])
+        for item in report.get("rising_missed_adverse_micro_recovery_rows") or []:
+            lines.append(
+                "- ts={ts} code={stock_code} tp1_evaluation={source_tp1_evaluation_id} "
+                "stage={stage} checkpoint={checkpoint_sec} "
+                "fresh={price_fresh} move_pct={move_pct} max={max_move_pct} "
+                "min={min_move_pct} next_loop={next_scanner_loop_rechecked} "
+                "reentry_allowed={reentry_candidate_allowed} recovered={recovery_observed} "
+                "source={source_reason} raw_0B_route={raw_0b_route} outcome={outcome}".format(
+                    **item
+                )
             )
         lines.append("")
     if report.get("rising_missed_submit_lineage_rows"):

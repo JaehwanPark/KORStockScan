@@ -427,8 +427,9 @@ def test_probe_fill_callback_uses_fresh_ws_and_submits_immediately(monkeypatch):
 
 
 @pytest.mark.parametrize("rising_missed", [False, True])
+@pytest.mark.parametrize("fill_receipt_delay_sec", [0.2, 4.1])
 def test_probe_residual_submits_once_after_fresh_fill_revalidation(
-    monkeypatch, tmp_path, rising_missed
+    monkeypatch, tmp_path, rising_missed, fill_receipt_delay_sec
 ):
     now_ts = 1_774_150_400.0
     sent = []
@@ -519,7 +520,7 @@ def test_probe_residual_submits_once_after_fresh_fill_revalidation(
         "entry_split_probe_submit_best_ask": 10000,
         "entry_split_probe_timeout_sec": 3,
         "entry_split_probe_max_slippage_bps": 50,
-        "entry_split_probe_submitted_at": now_ts - 0.2,
+        "entry_split_probe_submitted_at": now_ts - fill_receipt_delay_sec,
         "entry_split_probe_filled_at": now_ts - 0.1,
         "entry_split_probe_fill_price": 10010,
         "entry_split_probe_continuation": {
@@ -565,6 +566,20 @@ def test_probe_residual_submits_once_after_fresh_fill_revalidation(
     assert sum(qty for _, qty, _ in sent) + stock["buy_qty"] == 10
     assert [stage for stage, _ in events].count("residual_planned") == 1
     assert [stage for stage, _ in events].count("residual_submitted") == 2
+    late_receipt_events = [
+        fields
+        for stage, fields in events
+        if stage == "probe_fill_receipt_late_revalidation"
+    ]
+    if fill_receipt_delay_sec > 3:
+        assert len(late_receipt_events) == 1
+        assert late_receipt_events[0]["probe_bundle_id"] == "123456-probe-test"
+        assert late_receipt_events[0]["fill_receipt_delay_sec"] == pytest.approx(4.0)
+        assert late_receipt_events[0]["probe_timeout_sec"] == 3
+        assert late_receipt_events[0]["actual_order_submitted"] is False
+        assert late_receipt_events[0]["broker_order_forbidden"] is True
+    else:
+        assert late_receipt_events == []
 
     submitted_again = state_handlers._maybe_submit_entry_split_probe_residual(
         stock,

@@ -694,6 +694,9 @@ def test_tp1_first_hit_label_does_not_reuse_propagated_effective_anchor(tmp_path
                 "rising_missed_tp1_evaluation_id": "nxt-anchor-eval",
                 "rising_missed_tp1_effective_price": 10_000,
                 "holding_ws_recovered_curr": 10_160,
+                "holding_rest_quote_request_code": "000707_NX",
+                "holding_rest_quote_effective_venue": "NXT",
+                "holding_rest_quote_route_consistent": True,
             },
             emitted_at="2026-07-15T18:25:30+09:00",
             pipeline="HOLDING_PIPELINE",
@@ -711,6 +714,158 @@ def test_tp1_first_hit_label_does_not_reuse_propagated_effective_anchor(tmp_path
     assert label["entry_price"] == 10_000.0
     assert label["gross_first_hit_label"] == "gross_target_first"
     assert label["first_hit_move_pct"] == 1.6
+
+
+def test_tp1_first_hit_ignores_unproven_holding_rest_recovery(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-15.jsonl"
+    rows = [
+        _event(
+            707,
+            "000707",
+            "unproven-rest",
+            "rising_missed_one_share_entry",
+            {
+                "rising_missed_tp1_evaluation_id": "unproven-rest-eval",
+                "rising_missed_tp1_selector_active": True,
+                "rising_missed_tp1_candidate_allowed": True,
+                "rising_missed_tp1_candidate_reason": (
+                    "rising_missed_tp1_candidate_pass"
+                ),
+                "rising_missed_tp1_effective_price": 10_000,
+            },
+            emitted_at="2026-07-15T08:18:00+09:00",
+        ),
+        _event(
+            707,
+            "000707",
+            "unproven-rest",
+            "holding_ws_freshness_recovered",
+            {
+                "holding_ws_recovered_curr": 9_400,
+                "holding_ws_recovery_outcome": "rest_quote_applied",
+            },
+            emitted_at="2026-07-15T08:18:30+09:00",
+            pipeline="HOLDING_PIPELINE",
+        ),
+        _event(
+            707,
+            "000707",
+            "unproven-rest",
+            "holding_snapshot",
+            {"current_price": 10_050},
+            emitted_at="2026-07-15T08:18:40+09:00",
+            pipeline="HOLDING_PIPELINE",
+        ),
+        _event(
+            707,
+            "000707",
+            "unproven-rest",
+            "holding_snapshot",
+            {"current_price": 10_040},
+            emitted_at="2026-07-15T08:18:50+09:00",
+            pipeline="HOLDING_PIPELINE",
+        ),
+        _event(
+            999,
+            "999999",
+            "watermark",
+            "unrelated",
+            {},
+            emitted_at="2026-07-15T08:39:00+09:00",
+        ),
+    ]
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows),
+        encoding="utf-8",
+    )
+
+    report = mod.build_report(
+        "2026-07-15",
+        pipeline_path=pipeline_path,
+        generated_at="fixed",
+    )
+
+    label = report["rising_missed_tp1_first_hit_label_rows"][0]
+    assert label["gross_first_hit_label"] == "no_hit_within_20m"
+    assert label["min_move_pct_within_20m"] == 0.4
+
+
+def test_tp1_first_hit_ignores_rejected_holding_rest_divergence(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-15.jsonl"
+    rows = [
+        _event(
+            708,
+            "000708",
+            "rest-divergence",
+            "rising_missed_one_share_entry",
+            {
+                "rising_missed_tp1_evaluation_id": "rest-divergence-eval",
+                "rising_missed_tp1_selector_active": True,
+                "rising_missed_tp1_candidate_allowed": True,
+                "rising_missed_tp1_candidate_reason": (
+                    "rising_missed_tp1_candidate_pass"
+                ),
+                "rising_missed_tp1_effective_price": 10_000,
+            },
+            emitted_at="2026-07-15T08:18:00+09:00",
+        ),
+        _event(
+            708,
+            "000708",
+            "rest-divergence",
+            "holding_rest_quote_divergence_blocked",
+            {
+                "holding_ws_recovered_curr": 9_400,
+                "holding_ws_curr_price": 9_980,
+                "holding_rest_quote_divergence_pct": 5.8,
+                "holding_ws_recovery_outcome": "rest_quote_divergence_blocked",
+            },
+            emitted_at="2026-07-15T08:18:30+09:00",
+            pipeline="HOLDING_PIPELINE",
+        ),
+        _event(
+            708,
+            "000708",
+            "rest-divergence",
+            "holding_snapshot",
+            {"current_price": 10_050},
+            emitted_at="2026-07-15T08:18:40+09:00",
+            pipeline="HOLDING_PIPELINE",
+        ),
+        _event(
+            708,
+            "000708",
+            "rest-divergence",
+            "holding_snapshot",
+            {"current_price": 10_040},
+            emitted_at="2026-07-15T08:18:50+09:00",
+            pipeline="HOLDING_PIPELINE",
+        ),
+        _event(
+            999,
+            "999999",
+            "watermark",
+            "unrelated",
+            {},
+            emitted_at="2026-07-15T08:39:00+09:00",
+        ),
+    ]
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows),
+        encoding="utf-8",
+    )
+
+    report = mod.build_report(
+        "2026-07-15",
+        pipeline_path=pipeline_path,
+        generated_at="fixed",
+    )
+
+    label = report["rising_missed_tp1_first_hit_label_rows"][0]
+    assert label["gross_first_hit_label"] == "no_hit_within_20m"
+    assert label["first_hit_ts"] is None
+    assert label["max_move_pct_within_20m"] == 0.5
+    assert label["min_move_pct_within_20m"] == 0.4
 
 
 def test_tp1_labels_prefer_effective_candidate_and_fresh_submit_mark_over_stale_scanner_price(

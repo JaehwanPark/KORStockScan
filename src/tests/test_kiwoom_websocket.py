@@ -1976,6 +1976,72 @@ def test_real_payload_with_exchange_suffix_updates_canonical_snapshot():
         manager.realtime_data["039490"]["last_realtime_type_effective_venue"]["0B"]
         == ""
     )
+    route_snapshot = manager.realtime_data["039490"][
+        "realtime_type_snapshots_by_route"
+    ]["_AL|krx_nxt_integrated"]["0B"]
+    assert route_snapshot["item"] == "039490_AL"
+    assert route_snapshot["current_price"] == 10000
+    assert route_snapshot["effective_venue"] == ""
+
+
+def test_realtime_snapshots_preserve_plain_and_integrated_routes_independently():
+    manager = KiwoomWSManager("test-token")
+    manager.subscribed_codes.add("039490")
+
+    asyncio.run(
+        manager._handle_message(
+            json.dumps(
+                {
+                    "trnm": "REAL",
+                    "data": [
+                        {
+                            "type": "0B",
+                            "item": "039490_AL",
+                            "values": {"10": "10000", "15": "+1"},
+                        },
+                        {
+                            "type": "0D",
+                            "item": "039490_AL",
+                            "values": {
+                                "41": "10010",
+                                "61": "100",
+                                "51": "10000",
+                                "71": "200",
+                            },
+                        },
+                        {
+                            "type": "0B",
+                            "item": "039490",
+                            "values": {"10": "9990", "15": "-1"},
+                        },
+                        {
+                            "type": "0D",
+                            "item": "039490",
+                            "values": {
+                                "41": "10000",
+                                "61": "150",
+                                "51": "9990",
+                                "71": "250",
+                            },
+                        },
+                    ],
+                }
+            )
+        )
+    )
+
+    snapshots = manager.realtime_data["039490"]["realtime_type_snapshots_by_route"]
+    assert set(snapshots) == {
+        "_AL|krx_nxt_integrated",
+        "KRX|krx_regular",
+    }
+    assert snapshots["_AL|krx_nxt_integrated"]["0B"]["current_price"] == 10000
+    assert (
+        snapshots["_AL|krx_nxt_integrated"]["0D"]["orderbook"]["asks"][0]["price"]
+        == 10010
+    )
+    assert snapshots["KRX|krx_regular"]["0B"]["current_price"] == 9990
+    assert snapshots["KRX|krx_regular"]["0D"]["orderbook"]["bids"][0]["price"] == 9990
 
 
 def test_ws_item_effective_venue_does_not_invent_integrated_underlying_venue():

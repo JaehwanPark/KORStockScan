@@ -104,6 +104,138 @@ def test_krx_snapshot_uses_exact_per_type_provenance():
     )
 
 
+def test_krx_snapshot_selects_candle_route_partition_without_mixing_0b_0d():
+    now = datetime(2026, 7, 23, 10, 0, tzinfo=KST).timestamp()
+    ws = _ws(now)
+    ws["curr"] = 9900
+    ws["last_realtime_type_item"] = {
+        "0B": "005930",
+        "0D": "005930_AL",
+    }
+    ws["last_realtime_type_market_suffix"] = {"0B": "", "0D": "_AL"}
+    ws["last_realtime_type_market_route"] = {
+        "0B": "krx_only",
+        "0D": "krx_nxt_integrated",
+        "0w": "krx_only",
+    }
+    ws["last_realtime_type_market_suffix"]["0w"] = ""
+    ws["last_realtime_type_ts"]["0w"] = now - 0.3
+    ws["received_types"] = {"0B", "0D", "0w"}
+    ws["last_prog_update_ts"] = now - 0.3
+    ws["prog_net_qty"] = 123
+    ws["realtime_type_snapshots_by_route"] = {
+        "_AL|krx_nxt_integrated": {
+            "0B": {
+                "observed_epoch": now - 0.1,
+                "item": "005930_AL",
+                "market_suffix": "_AL",
+                "market_route": "krx_nxt_integrated",
+                "effective_venue": "",
+                "current_price": 10100,
+            },
+            "0D": {
+                "observed_epoch": now - 0.2,
+                "item": "005930_AL",
+                "market_suffix": "_AL",
+                "market_route": "krx_nxt_integrated",
+                "effective_venue": "",
+                "orderbook": {
+                    "asks": [{"price": 10100, "volume": 100}],
+                    "bids": [{"price": 10090, "volume": 200}],
+                },
+            },
+        }
+    }
+    candle = _candle(
+        rest_route="_AL",
+        ws_route="krx_nxt_integrated",
+        request_code="005930_AL",
+    )
+    candle["ws_suffix"] = "_AL"
+
+    snapshot = mod.build_ai_market_snapshot(
+        stock_code="005930",
+        decision_stage="entry_screen",
+        ws_data=ws,
+        effective_venue="KRX",
+        session_bucket="krx_regular",
+        broker_route="SOR",
+        candle_context=candle,
+        now_ts=now,
+    )
+
+    assert snapshot["route_partition"] == {
+        "used": True,
+        "reason": "candle_route_exact_0b_0d_partition",
+        "selected_key": "_AL|krx_nxt_integrated",
+        "excluded_optional_sources": ["program_route_mismatch"],
+    }
+    assert snapshot["realtime_type_provenance"]["0B"]["item"] == "005930_AL"
+    assert snapshot["sources"]["current_price"]["value"] == 10100
+    assert snapshot["sources"]["bbo"]["value"] == {
+        "best_bid": 10090,
+        "best_ask": 10100,
+    }
+    assert snapshot["integrated_sor_route_proven"] is True
+    assert snapshot["ai_input_preflight_v1"]["source_allowed"] is True
+    assert snapshot["sources"]["program"]["value"] is None
+    assert snapshot["sources"]["program"]["missing_reason"] == "program_source_missing"
+    assert (
+        "realtime_type_route_conflict"
+        not in snapshot["ai_input_preflight_v1"]["source_blockers"]
+    )
+
+
+def test_route_partition_never_reuses_other_route_price_or_bbo_when_missing():
+    now = datetime(2026, 7, 23, 10, 0, tzinfo=KST).timestamp()
+    ws = _ws(now)
+    ws.update(
+        {
+            "curr": 9990,
+            "best_bid": 9980,
+            "best_ask": 9990,
+            "orderbook": {
+                "asks": [{"price": 9990, "volume": 100}],
+                "bids": [{"price": 9980, "volume": 100}],
+            },
+            "realtime_type_snapshots_by_route": {
+                "_AL|krx_nxt_integrated": {
+                    "0B": {
+                        "observed_epoch": now - 0.1,
+                        "item": "005930_AL",
+                        "market_suffix": "_AL",
+                        "market_route": "krx_nxt_integrated",
+                        "effective_venue": "",
+                        "current_price": 0,
+                    },
+                    "0D": {
+                        "observed_epoch": now - 0.1,
+                        "item": "005930_AL",
+                        "market_suffix": "_AL",
+                        "market_route": "krx_nxt_integrated",
+                        "effective_venue": "",
+                        "orderbook": {},
+                    },
+                }
+            },
+        }
+    )
+    candle = _candle(
+        rest_route="_AL",
+        ws_route="krx_nxt_integrated",
+        request_code="005930_AL",
+    )
+    candle["ws_suffix"] = "_AL"
+
+    selected, partition = mod._route_partitioned_ws_view(ws, candle)
+
+    assert partition["used"] is True
+    assert selected["curr"] == 0
+    assert selected["best_bid"] == 0
+    assert selected["best_ask"] == 0
+    assert selected["orderbook"] == {}
+
+
 def test_program_source_uses_ws_0w_canonical_fields_and_timestamp():
     now = datetime(2026, 7, 23, 10, 0, tzinfo=KST).timestamp()
     ws = _ws(now)

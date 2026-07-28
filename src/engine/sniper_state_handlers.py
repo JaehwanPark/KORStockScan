@@ -129,11 +129,18 @@ from src.engine.scalping.rising_missed_one_share_entry import (
     FORCED_ENTRY_REASON as RISING_MISSED_FORCED_ENTRY_REASON,
     MAX_ONE_SHARE_ENTRY_PRICE_KRW as RISING_MISSED_MAX_ONE_SHARE_ENTRY_PRICE_KRW,
     RISING_MISSED_CLASS_RAW,
+    TP1_SELECTOR_BLOCK_HARD_NEGATIVE,
     RISING_MISSED_CLASS_NOT_RISING,
     evaluate_rising_missed_normal_buy_bridge,
     evaluate_rising_missed_one_share_entry,
     evaluate_rising_missed_tp1_candidate,
     is_forced_rising_missed_one_share_entry,
+)
+from src.engine.scalping.adverse_micro_recovery_observer import (
+    consume_due_checkpoints as consume_adverse_micro_recovery_checkpoints,
+    create_observation as create_adverse_micro_recovery_observation,
+    record_next_scanner_loop as record_adverse_micro_next_scanner_loop,
+    record_reentry_candidate_decision as record_adverse_micro_reentry_decision,
 )
 from src.engine.scalping.position_sizing_allocator import (
     FORMULA_VERSION as SCALPING_SIZING_FORMULA_VERSION,
@@ -13458,6 +13465,11 @@ def _log_rising_missed_tp1_counterfactual_submit_safety(
         str(code or ""),
         projection_fields,
     )
+    _register_rising_missed_adverse_micro_recovery_observation(
+        stock if isinstance(stock, dict) else {},
+        str(code or ""),
+        projection_fields,
+    )
 
 
 RISING_MISSED_SUBMIT_SAFETY_BACKOFF_SOURCE = "submit_safety_feedback"
@@ -13478,6 +13490,9 @@ _RISING_MISSED_NXT_POST_BLOCK_SAMPLER_LOCK = threading.RLock()
 _RISING_MISSED_NXT_POST_BLOCK_SAMPLERS_RESTORED = False
 _RISING_MISSED_NXT_POST_BLOCK_REST_RATE_LOCK = threading.Lock()
 _RISING_MISSED_NXT_POST_BLOCK_REST_RATE_EPOCHS: list[float] = []
+_RISING_MISSED_ADVERSE_MICRO_RECOVERY_OBSERVATIONS: dict[str, dict[str, Any]] = {}
+_RISING_MISSED_ADVERSE_MICRO_RECOVERY_OBSERVATION_LOCK = threading.RLock()
+_RISING_MISSED_ADVERSE_MICRO_RECOVERY_MAX_ACTIVE = 24
 
 _RISING_MISSED_NXT_DOWNSTREAM_BLOCK_STAGES = frozenset(
     {
@@ -13596,6 +13611,328 @@ def _rising_missed_nxt_post_block_sampler_enabled(
     observed_ts = time.time() if now_ts is None else float(now_ts)
     current_date = datetime.fromtimestamp(observed_ts, tz=_KST).strftime("%Y-%m-%d")
     return active_date == current_date
+
+
+def _rising_missed_adverse_micro_recovery_contract_fields() -> dict[str, Any]:
+    return {
+        "metric_role": "source_quality_gate",
+        "decision_authority": "observe_only_adverse_micro_recovery",
+        "window_policy": "krx_tp1_hard_negative_15s_30s_60s",
+        "sample_floor": "one_fresh_ws_0b_checkpoint",
+        "primary_decision_metric": "post_block_recovery_move_pct",
+        "source_quality_gate": (
+            "canonical_krx_registration_and_absolute_ws_0b_timestamp"
+        ),
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "allowed_runtime_apply": False,
+        "forbidden_uses": (
+            "standalone_buy,broker_submit,threshold_mutation,provider_route_change,"
+            "order_price_change,quantity_or_cap_change,broker_guard_bypass,"
+            "stale_quote_bypass,hard_safety_bypass,real_execution_quality_approval"
+        ),
+    }
+
+
+def _emit_rising_missed_adverse_micro_recovery_event(
+    observation: dict[str, Any], stage: str, **fields: Any
+) -> None:
+    _log_entry_pipeline(
+        {},
+        str(observation.get("stock_code") or ""),
+        stage,
+        **{
+            **_rising_missed_adverse_micro_recovery_contract_fields(),
+            "rising_missed_adverse_micro_recovery_observation_id": (
+                observation.get("observation_id") or "-"
+            ),
+            "rising_missed_adverse_micro_recovery_reference_price": int(
+                _safe_float(observation.get("reference_price"), 0.0)
+            ),
+            "effective_venue": observation.get("effective_venue") or "-",
+            "rising_missed_adverse_micro_recovery_source_block_reason": (
+                observation.get("source_block_reason") or "-"
+            ),
+            "rising_missed_adverse_micro_recovery_source_tp1_evaluation_id": (
+                observation.get("source_tp1_evaluation_id") or "-"
+            ),
+            **fields,
+        },
+    )
+
+
+def _register_rising_missed_adverse_micro_recovery_observation(
+    stock: dict | None,
+    code: str | None,
+    decision_fields: dict[str, Any] | None,
+    *,
+    now_ts: float | None = None,
+) -> bool:
+    """Observe KRX hard-negative TP1 blocks without reopening their submit path."""
+
+    fields = decision_fields if isinstance(decision_fields, dict) else {}
+    if str(fields.get("selector_reason") or "") != TP1_SELECTOR_BLOCK_HARD_NEGATIVE:
+        return False
+    stock = stock if isinstance(stock, dict) else {}
+    effective_venue = (
+        str(
+            fields.get("rising_missed_effective_venue")
+            or fields.get("effective_venue")
+            or stock.get("effective_venue")
+            or stock.get("venue")
+            or ""
+        )
+        .strip()
+        .upper()
+    )
+    if effective_venue != "KRX":
+        return False
+    reference_price = _safe_float(
+        fields.get("rising_missed_tp1_effective_price")
+        or fields.get("current_price")
+        or stock.get("current_price"),
+        0.0,
+    )
+    stock_code = str(
+        code or stock.get("code") or stock.get("stock_code") or ""
+    ).strip()[:6]
+    if not stock_code or reference_price <= 0:
+        return False
+    observed_ts = time.time() if now_ts is None else float(now_ts)
+    observation = create_adverse_micro_recovery_observation(
+        observation_id=f"{stock_code}:{int(observed_ts * 1000)}:{uuid4().hex[:8]}",
+        stock_code=stock_code,
+        reference_price=reference_price,
+        registered_at=observed_ts,
+        effective_venue=effective_venue,
+        source_block_reason=TP1_SELECTOR_BLOCK_HARD_NEGATIVE,
+    )
+    # Preserve the exact TP1 evaluation lineage.  Inferring it from code and
+    # timestamp would let a later promotion masquerade as the blocked one.
+    observation["source_tp1_evaluation_id"] = str(
+        fields.get("rising_missed_tp1_evaluation_id") or "-"
+    )
+    with _RISING_MISSED_ADVERSE_MICRO_RECOVERY_OBSERVATION_LOCK:
+        # The hard-negative selector is re-evaluated frequently while a
+        # symbol stays in WATCHING.  Keep one active 15/30/60-second horizon
+        # per symbol/reason, rather than filling the observation cap with
+        # duplicate scheduler passes.
+        if any(
+            existing.get("stock_code") == stock_code
+            and existing.get("source_block_reason")
+            == TP1_SELECTOR_BLOCK_HARD_NEGATIVE
+            for existing in _RISING_MISSED_ADVERSE_MICRO_RECOVERY_OBSERVATIONS.values()
+        ):
+            return True
+        if (
+            len(_RISING_MISSED_ADVERSE_MICRO_RECOVERY_OBSERVATIONS)
+            >= _RISING_MISSED_ADVERSE_MICRO_RECOVERY_MAX_ACTIVE
+        ):
+            _emit_rising_missed_adverse_micro_recovery_event(
+                observation,
+                "rising_missed_adverse_micro_recovery_registration_skipped",
+                rising_missed_adverse_micro_recovery_registration_state="skipped",
+                rising_missed_adverse_micro_recovery_registration_reason="max_active_reached",
+            )
+            return False
+        _RISING_MISSED_ADVERSE_MICRO_RECOVERY_OBSERVATIONS[
+            observation["observation_id"]
+        ] = observation
+    _emit_rising_missed_adverse_micro_recovery_event(
+        observation,
+        "rising_missed_adverse_micro_recovery_registered",
+        rising_missed_adverse_micro_recovery_registration_state="registered",
+        rising_missed_adverse_micro_recovery_registration_reason="krx_tp1_hard_negative",
+        rising_missed_adverse_micro_recovery_checkpoints_sec="15,30,60",
+    )
+    return True
+
+
+def _record_rising_missed_adverse_micro_next_scanner_loop(
+    code: str | None, *, now_ts: float
+) -> None:
+    stock_code = str(code or "").strip()[:6]
+    if not stock_code:
+        return
+    with _RISING_MISSED_ADVERSE_MICRO_RECOVERY_OBSERVATION_LOCK:
+        for observation in _RISING_MISSED_ADVERSE_MICRO_RECOVERY_OBSERVATIONS.values():
+            if observation.get("stock_code") == stock_code:
+                record_adverse_micro_next_scanner_loop(observation, now_ts=now_ts)
+
+
+def _record_rising_missed_adverse_micro_reentry_candidate(
+    code: str | None, *, allowed: bool, now_ts: float
+) -> None:
+    stock_code = str(code or "").strip()[:6]
+    if not stock_code:
+        return
+    with _RISING_MISSED_ADVERSE_MICRO_RECOVERY_OBSERVATION_LOCK:
+        for observation in _RISING_MISSED_ADVERSE_MICRO_RECOVERY_OBSERVATIONS.values():
+            if observation.get("stock_code") == stock_code:
+                record_adverse_micro_reentry_decision(
+                    observation, allowed=bool(allowed), now_ts=now_ts
+                )
+
+
+def observe_rising_missed_adverse_micro_recovery_observations(
+    *, now_ts: float | None = None
+) -> dict[str, int]:
+    """Emit due 15/30/60-second KRX recovery observations from fresh WS 0B only."""
+
+    observed_ts = time.time() if now_ts is None else float(now_ts)
+    with _RISING_MISSED_ADVERSE_MICRO_RECOVERY_OBSERVATION_LOCK:
+        observations = [
+            dict(item)
+            for item in _RISING_MISSED_ADVERSE_MICRO_RECOVERY_OBSERVATIONS.values()
+        ]
+    stats = {"active": len(observations), "fresh": 0, "source_gap": 0, "completed": 0}
+    snapshot_cache: dict[str, dict[str, Any]] = {}
+    for snapshot_observation in observations:
+        observation_id = str(snapshot_observation.get("observation_id") or "")
+        stock_code = str(snapshot_observation.get("stock_code") or "")
+        if stock_code not in snapshot_cache:
+            snapshot: dict[str, Any] = {}
+            if WS_MANAGER is not None:
+                try:
+                    raw_snapshot = WS_MANAGER.get_latest_data(stock_code)
+                    snapshot = raw_snapshot if isinstance(raw_snapshot, dict) else {}
+                except Exception:
+                    snapshot = {}
+            snapshot_cache[stock_code] = snapshot
+        snapshot = snapshot_cache[stock_code]
+        type_ts = snapshot.get("last_realtime_type_ts")
+        type_ts = type_ts if isinstance(type_ts, dict) else {}
+        type_items = snapshot.get("last_realtime_type_item")
+        type_items = type_items if isinstance(type_items, dict) else {}
+        type_venues = snapshot.get("last_realtime_type_effective_venue")
+        type_venues = type_venues if isinstance(type_venues, dict) else {}
+        received_at = _safe_float(type_ts.get("0B"), 0.0)
+        age_ms = (
+            max(0.0, (observed_ts - received_at) * 1000.0) if received_at > 0 else None
+        )
+        price = _safe_float(snapshot.get("curr"), 0.0)
+        price_fresh = bool(price > 0 and age_ms is not None and age_ms <= 3000.0)
+        routes = snapshot.get("last_realtime_type_market_route")
+        routes = routes if isinstance(routes, dict) else {}
+        raw_route = str(routes.get("0B") or "unknown")
+        raw_item = str(type_items.get("0B") or "").strip().upper()
+        raw_item_code = raw_item.split("_", 1)[0][-6:]
+        raw_venue = str(type_venues.get("0B") or "").strip().upper()
+        canonical_krx_0b = bool(
+            raw_venue == "KRX"
+            and raw_route == "krx_regular"
+            and raw_item_code == stock_code
+        )
+        if price <= 0:
+            source_reason = "price_missing"
+        elif received_at <= 0:
+            source_reason = "absolute_0b_receive_ts_missing"
+        elif not canonical_krx_0b:
+            source_reason = "canonical_krx_0b_provenance_missing"
+        elif not price_fresh:
+            source_reason = "ws_0b_stale"
+        else:
+            source_reason = "fresh_absolute_ws_0b"
+        price_fresh = bool(price_fresh and canonical_krx_0b)
+        with _RISING_MISSED_ADVERSE_MICRO_RECOVERY_OBSERVATION_LOCK:
+            observation = _RISING_MISSED_ADVERSE_MICRO_RECOVERY_OBSERVATIONS.get(
+                observation_id
+            )
+            if observation is None:
+                continue
+            samples, completed = consume_adverse_micro_recovery_checkpoints(
+                observation,
+                now_ts=observed_ts,
+                price=price if price > 0 else None,
+                price_fresh=price_fresh,
+                price_source="trusted_ws_0b" if price_fresh else "unavailable",
+                source_reason=source_reason,
+            )
+            emitted_observation = dict(observation)
+            if completed:
+                _RISING_MISSED_ADVERSE_MICRO_RECOVERY_OBSERVATIONS.pop(
+                    observation_id, None
+                )
+        for sample in samples:
+            _emit_rising_missed_adverse_micro_recovery_event(
+                emitted_observation,
+                "rising_missed_adverse_micro_recovery_checkpoint",
+                rising_missed_adverse_micro_recovery_checkpoint_sec=sample[
+                    "checkpoint_sec"
+                ],
+                rising_missed_adverse_micro_recovery_elapsed_sec=round(
+                    sample["elapsed_sec"], 3
+                ),
+                rising_missed_adverse_micro_recovery_price_fresh=sample["price_fresh"],
+                current_price_observed=sample["current_price"] or "-",
+                rising_missed_adverse_micro_recovery_move_pct=(
+                    round(sample["move_pct"], 6)
+                    if sample["move_pct"] is not None
+                    else "-"
+                ),
+                rising_missed_adverse_micro_recovery_price_source=sample[
+                    "price_source"
+                ],
+                rising_missed_adverse_micro_recovery_source_reason=sample[
+                    "source_reason"
+                ],
+                rising_missed_adverse_micro_recovery_ws_0b_age_ms=(
+                    round(age_ms, 3) if age_ms is not None else "-"
+                ),
+                rising_missed_adverse_micro_recovery_ws_0b_raw_route=raw_route,
+                rising_missed_adverse_micro_recovery_next_scanner_loop_rechecked=sample[
+                    "next_scanner_loop_rechecked"
+                ],
+                rising_missed_adverse_micro_recovery_next_scanner_loop_recheck_count=sample[
+                    "next_scanner_loop_recheck_count"
+                ],
+                rising_missed_adverse_micro_recovery_reentry_candidate_allowed=sample[
+                    "reentry_candidate_allowed"
+                ],
+                rising_missed_adverse_micro_recovery_reentry_candidate_allowed_at=(
+                    sample["reentry_candidate_allowed_at"] or "-"
+                ),
+                rising_missed_adverse_micro_recovery_detected=sample[
+                    "recovery_observed"
+                ],
+                rising_missed_adverse_micro_recovery_first_at=sample[
+                    "recovery_first_at"
+                ]
+                or "-",
+                rising_missed_adverse_micro_recovery_max_move_pct=(
+                    round(sample["max_move_pct"], 6)
+                    if sample["max_move_pct"] is not None
+                    else "-"
+                ),
+                rising_missed_adverse_micro_recovery_min_move_pct=(
+                    round(sample["min_move_pct"], 6)
+                    if sample["min_move_pct"] is not None
+                    else "-"
+                ),
+            )
+            stats["fresh" if sample["price_fresh"] else "source_gap"] += 1
+        if completed:
+            _emit_rising_missed_adverse_micro_recovery_event(
+                emitted_observation,
+                "rising_missed_adverse_micro_recovery_completed",
+                rising_missed_adverse_micro_recovery_completion_state="completed",
+                rising_missed_adverse_micro_recovery_outcome=(
+                    "recovery_observed"
+                    if emitted_observation.get("recovery_observed")
+                    else "no_recovery_within_60s"
+                ),
+                rising_missed_adverse_micro_recovery_next_scanner_loop_rechecked=bool(
+                    emitted_observation.get("next_scanner_loop_rechecked")
+                ),
+                rising_missed_adverse_micro_recovery_reentry_candidate_allowed=bool(
+                    emitted_observation.get("reentry_candidate_allowed")
+                ),
+            )
+            stats["completed"] += 1
+    with _RISING_MISSED_ADVERSE_MICRO_RECOVERY_OBSERVATION_LOCK:
+        stats["active"] = len(_RISING_MISSED_ADVERSE_MICRO_RECOVERY_OBSERVATIONS)
+    return stats
 
 
 def _rising_missed_nxt_post_block_sampler_horizon_sec() -> float:
@@ -16063,6 +16400,82 @@ def _scanner_fast_precheck_observed_fields(fast_precheck_fields) -> dict[str, An
     return observed
 
 
+def _scanner_stale_backoff_observation_fields(
+    stock: dict | None,
+    ws_data: dict | None,
+    *,
+    fast_precheck_reason: str,
+) -> dict[str, Any]:
+    """Expose stale/backoff source dimensions without changing its guard."""
+
+    stock = stock if isinstance(stock, dict) else {}
+    ws_data = ws_data if isinstance(ws_data, dict) else {}
+    venue_fields = _scanner_runtime_event_venue_fields(stock)
+    routes = ws_data.get("last_realtime_type_market_route")
+    routes = routes if isinstance(routes, dict) else {}
+    effective_venue = str(
+        venue_fields.get("effective_venue")
+        or stock.get("effective_venue")
+        or stock.get("venue")
+        or "UNKNOWN"
+    ).upper()
+    raw_0b_route = str(routes.get("0B") or "unknown")
+    raw_0d_route = str(routes.get("0D") or "unknown")
+    integrated_route_seen = bool(
+        raw_0b_route == "krx_nxt_integrated" or raw_0d_route == "krx_nxt_integrated"
+    )
+    return {
+        "scanner_stale_backoff_observation_version": "v1",
+        "scanner_stale_backoff_observation_metric_role": "source_quality_gate",
+        "scanner_stale_backoff_observation_decision_authority": (
+            "observe_only_source_freshness_attribution"
+        ),
+        "scanner_stale_backoff_observation_window_policy": (
+            "per_fast_precheck_snapshot"
+        ),
+        "scanner_stale_backoff_observation_sample_floor": "one_fast_precheck",
+        "scanner_stale_backoff_observation_primary_decision_metric": (
+            "stale_backoff_reason_and_recovery_outcome"
+        ),
+        "scanner_stale_backoff_observation_source_quality_gate": (
+            "canonical_venue_and_absolute_ws_type_timestamps"
+        ),
+        "scanner_stale_backoff_observation_forbidden_uses": (
+            "threshold_mutation,provider_route_change,order_price_change,"
+            "quantity_or_cap_change,broker_guard_bypass,stale_quote_bypass,"
+            "hard_safety_bypass"
+        ),
+        "scanner_stale_backoff_observed": str(fast_precheck_reason)
+        in {"scanner_ws_stale_backoff_active", "stale_ws_snapshot"},
+        "scanner_stale_backoff_canonical_effective_venue": effective_venue,
+        "scanner_stale_backoff_venue_resolution": venue_fields.get(
+            "venue_resolution", "not_available"
+        ),
+        "scanner_stale_backoff_raw_0b_route": raw_0b_route,
+        "scanner_stale_backoff_raw_0d_route": raw_0d_route,
+        "scanner_stale_backoff_raw_integrated_route_seen": integrated_route_seen,
+        "scanner_stale_backoff_venue_provenance_blocked": False,
+        "scanner_stale_backoff_rest_recovery_source": (
+            ws_data.get("ws_snapshot_recovery_source") or "not_applied"
+        ),
+        "scanner_stale_backoff_market_data_freshness_state": (
+            ws_data.get("market_data_freshness_state") or "not_available"
+        ),
+        "scanner_stale_backoff_signed_tape_state": (
+            ws_data.get("market_data_signed_tape_state") or "not_available"
+        ),
+        "scanner_stale_backoff_signed_tape_sample_count": _safe_int(
+            ws_data.get("market_data_signed_tape_sample_count"), 0
+        ),
+        "scanner_stale_backoff_effective_price_source": (
+            ws_data.get("market_data_effective_price_source") or "not_available"
+        ),
+        "scanner_stale_backoff_ws_rest_gap_bps": (
+            ws_data.get("market_data_ws_rest_gap_bps") or "not_available"
+        ),
+    }
+
+
 def _opening_rotation_upstream_scope_fields(
     stock: dict | None,
     ws_data: dict | None,
@@ -17058,6 +17471,11 @@ def _scanner_fast_precheck_fields_impl(
         # decision for standalone callers.  Keep that evidence, but make the
         # decision computed above authoritative after all evidence merges.
         **_rising_missed_scanner_filter_fields(action=scanner_filter_action),
+        **_scanner_stale_backoff_observation_fields(
+            stock,
+            ws_data,
+            fast_precheck_reason=reason,
+        ),
         "fast_precheck_result": result,
         "fast_precheck_reason": reason,
     }
@@ -36570,16 +36988,27 @@ def _parse_rest_quote_price(value):
         return 0
 
 
-def _fetch_holding_rest_quote_snapshot(code, now_ts):
+def _fetch_holding_rest_quote_snapshot(code, now_ts, *, ws_data=None):
     if not KIWOOM_TOKEN:
         return {}
+    session = resolve_entry_candle_session(now_ts=now_ts)
+    venue = resolve_entry_candle_venue(
+        ws_data if isinstance(ws_data, dict) else {},
+        session=session,
+    )
+    request_code = resolve_entry_candle_request_code(
+        code,
+        venue=venue,
+        session=session,
+        ws_data=ws_data if isinstance(ws_data, dict) else {},
+    )
     try:
         url = kiwoom_utils.get_api_url("/api/dostk/stkinfo")
         rows = kiwoom_utils.fetch_kiwoom_api_continuous(
             url,
             KIWOOM_TOKEN,
             "ka10001",
-            {"stk_cd": code},
+            {"stk_cd": request_code},
             max_retries=1,
             use_continuous=False,
         )
@@ -36605,6 +37034,13 @@ def _fetch_holding_rest_quote_snapshot(code, now_ts):
         "ws_snapshot_recovery_source": "holding_ka10001_rest_quote_fallback",
         "ws_snapshot_recovery_epoch": float(now_ts),
         "ws_snapshot_recovery_runtime_effect": True,
+        "holding_rest_quote_request_code": request_code,
+        "holding_rest_quote_effective_venue": venue,
+        "holding_rest_quote_session_bucket": session,
+        "holding_rest_quote_route_consistent": True,
+        "holding_rest_quote_contract_source": (
+            "official_ka10001_venue_qualified_request"
+        ),
     }
 
 
@@ -36865,8 +37301,46 @@ def _holding_ws_freshness_recover_or_block(stock, code, ws_data, *, now_ts):
     )
     if rest_due:
         state["last_rest_quote_ts"] = float(now_ts)
-        fallback = _fetch_holding_rest_quote_snapshot(code, now_ts)
+        fallback = _fetch_holding_rest_quote_snapshot(
+            code,
+            now_ts,
+            ws_data=ws_data,
+        )
         if fallback:
+            fallback_provenance = {
+                key: fallback.get(key)
+                for key in (
+                    "holding_rest_quote_request_code",
+                    "holding_rest_quote_effective_venue",
+                    "holding_rest_quote_session_bucket",
+                    "holding_rest_quote_route_consistent",
+                    "holding_rest_quote_contract_source",
+                )
+            }
+            fields.update(fallback_provenance)
+            if not _boolish_true(fallback.get("holding_rest_quote_route_consistent")):
+                fields.update(
+                    {
+                        "holding_ws_recovery_action": "rest_quote_venue_blocked",
+                        "holding_ws_recovery_outcome": "rest_quote_venue_blocked",
+                    }
+                )
+                _maybe_publish_holding_ws_repair(
+                    state,
+                    code,
+                    fields,
+                    now_ts=now_ts,
+                )
+                if isinstance(stock, dict):
+                    stock.pop("holding_rest_quote_only_recovery", None)
+                    stock.pop("holding_rest_quote_only_recovered_at", None)
+                _log_holding_pipeline(
+                    stock,
+                    code,
+                    "holding_rest_quote_venue_blocked",
+                    **fields,
+                )
+                return ws_data, True, fields
             fallback_curr = _safe_int(fallback.get("curr"), 0)
             divergence_max_pct = max(
                 0.0,
@@ -40270,6 +40744,25 @@ def _microstructure_reaction_log_fields_from_stock(stock: dict | None) -> dict:
         return {}
     fields = stock.get("last_watching_ai_source_quality_fields")
     fields = fields if isinstance(fields, dict) else {}
+    max_age_sec = max(
+        1.0,
+        _safe_float(
+            os.getenv("KORSTOCKSCAN_PRE_SUBMIT_MICRO_FEATURE_PROBE_MAX_AGE_SEC"),
+            _rule_float("AI_WATCHING_COOLDOWN", 300.0),
+        ),
+    )
+    source_quality_at = _safe_float(
+        stock.get("last_watching_ai_confirmed_at"),
+        0.0,
+    )
+    source_quality_age_sec = (
+        max(0.0, time.time() - source_quality_at) if source_quality_at > 0 else None
+    )
+    source_quality_fresh = bool(
+        fields
+        and source_quality_age_sec is not None
+        and source_quality_age_sec <= max_age_sec
+    )
     out = {
         key: fields.get(key)
         for key in MICROSTRUCTURE_REACTION_CONTEXT_KEYS
@@ -40290,16 +40783,24 @@ def _microstructure_reaction_log_fields_from_stock(stock: dict | None) -> dict:
     ):
         if key in fields and key not in out:
             out[key] = fields.get(key)
+    if source_quality_fresh:
+        for key in (
+            "buy_pressure_10t",
+            "net_aggressive_delta_10t",
+            "order_flow_pressure_source",
+        ):
+            if key in fields and key not in out:
+                out[key] = fields.get(key)
+    out["pre_submit_micro_source_quality_reused"] = source_quality_fresh
+    out["pre_submit_micro_source_quality_age_sec"] = (
+        f"{source_quality_age_sec:.3f}"
+        if source_quality_age_sec is not None
+        else "not_available"
+    )
+    out["pre_submit_micro_source_quality_max_age_sec"] = f"{max_age_sec:.1f}"
     feature_probe = stock.get("last_watching_ai_feature_probe")
     feature_probe = feature_probe if isinstance(feature_probe, dict) else {}
     feature_probe_at = _safe_float(stock.get("last_watching_ai_feature_probe_at"), 0.0)
-    max_age_sec = max(
-        1.0,
-        _safe_float(
-            os.getenv("KORSTOCKSCAN_PRE_SUBMIT_MICRO_FEATURE_PROBE_MAX_AGE_SEC"),
-            _rule_float("AI_WATCHING_COOLDOWN", 300.0),
-        ),
-    )
     feature_age_sec = (
         max(0.0, time.time() - feature_probe_at) if feature_probe_at > 0 else None
     )
@@ -59235,6 +59736,11 @@ def _maybe_submit_rising_missed_one_share_entry(
     feature_enabled = _rising_missed_one_share_entry_enabled()
     if not feature_enabled:
         return False
+    adverse_micro_observed_ts = _runtime_action_now_ts(runtime)
+    _record_rising_missed_adverse_micro_next_scanner_loop(
+        code,
+        now_ts=adverse_micro_observed_ts,
+    )
     current_ws_data = dict(ws_data or {})
     ws_data = _merge_scanner_market_data_enrichment_into_ws_data(
         stock, ws_data, runtime
@@ -59598,6 +60104,11 @@ def _maybe_submit_rising_missed_one_share_entry(
                 "",
             )
         ).strip(),
+    )
+    _record_rising_missed_adverse_micro_reentry_candidate(
+        code,
+        allowed=bool(tp1_decision.allowed),
+        now_ts=adverse_micro_observed_ts,
     )
     _log_rising_missed_tp1_counterfactual_submit_safety(
         stock,
@@ -65155,11 +65666,52 @@ def _submit_entry_split_probe_residual_locked(
             stock, code, "probe_runtime_quantity_invariant", preserve_position=True
         )
         return False
-    if submitted_at <= 0 or filled_at <= 0 or filled_at - submitted_at > timeout_sec:
+    if submitted_at <= 0 or filled_at <= 0:
         _abort_entry_split_probe_residual(
-            stock, code, "probe_fill_after_timeout", preserve_position=True
+            stock, code, "probe_fill_timestamp_missing", preserve_position=True
         )
         return False
+    fill_receipt_delay_sec = max(0.0, filled_at - submitted_at)
+    if fill_receipt_delay_sec > timeout_sec and phase == "probe_filled":
+        # Probe-first always submits the first share as a market order.  The
+        # local fill timestamp is when the broker receipt reached us, not the
+        # exchange execution timestamp.  A delayed receipt must therefore not
+        # become directional authority that discards the residual.  Start the
+        # existing bounded post-probe revalidation from the observed fill and
+        # keep every fresh-quote, direction, P1, account, and broker guard.
+        _log_entry_pipeline(
+            stock,
+            code,
+            "probe_fill_receipt_late_revalidation",
+            probe_bundle_id=bundle_id or "-",
+            fill_receipt_delay_sec=round(fill_receipt_delay_sec, 6),
+            probe_timeout_sec=timeout_sec,
+            metric_role="execution_quality_real_only",
+            decision_authority=(
+                "broker_receipt_latency_observation_then_existing_post_probe_revalidation"
+            ),
+            window_policy="fresh_post_probe_revalidation_from_observed_fill_receipt",
+            sample_floor="one_market_probe_fill_receipt",
+            primary_decision_metric="fill_receipt_delay_sec",
+            source_quality_gate=(
+                "market_probe_order_and_bound_fill_receipt_before_residual_revalidation"
+            ),
+            forbidden_uses=(
+                "standalone_residual_submit|direction_bypass|stale_or_conflict_bypass|"
+                "quantity_increase|account_or_broker_guard_bypass|hard_stop_bypass"
+            ),
+            actual_order_submitted=False,
+            broker_order_forbidden=True,
+            runtime_effect=True,
+        )
+        if bundle_id:
+            update_probe_runtime_bundle(
+                bundle_id,
+                phase=phase,
+                probe_fill_receipt_late=True,
+                probe_fill_receipt_delay_sec=round(fill_receipt_delay_sec, 6),
+                probe_fill_receipt_revalidation_started_at=now_ts,
+            )
     if now_ts - filled_at > timeout_sec:
         _abort_entry_split_probe_residual(
             stock,
@@ -69068,6 +69620,11 @@ def handle_holding_state(
                     code,
                     "soft_stop_whipsaw_confirmation",
                     profit_rate=f"{profit_rate:+.2f}",
+                    peak_profit=f"{peak_profit:+.2f}",
+                    current_ai_score=f"{current_ai_score:.0f}",
+                    holding_score_usable=bool(
+                        holding_score_exit_role_ctx.get("usable_for_negative_exit")
+                    ),
                     soft_stop_pct=f"{dynamic_stop_pct:+.2f}",
                     emergency_pct=f"{soft_stop_emergency_pct:+.2f}",
                     elapsed_sec=soft_stop_grace_elapsed_sec,
@@ -69111,6 +69668,11 @@ def handle_holding_state(
                     code,
                     "soft_stop_whipsaw_confirmation_expired",
                     profit_rate=f"{profit_rate:+.2f}",
+                    peak_profit=f"{peak_profit:+.2f}",
+                    current_ai_score=f"{current_ai_score:.0f}",
+                    holding_score_usable=bool(
+                        holding_score_exit_role_ctx.get("usable_for_negative_exit")
+                    ),
                     soft_stop_pct=f"{dynamic_stop_pct:+.2f}",
                     confirmation_elapsed_sec=int(
                         whipsaw_decision.get("elapsed_sec", 0) or 0

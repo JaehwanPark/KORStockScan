@@ -2500,6 +2500,88 @@ def test_real_weak_ai_micro_entry_block_does_not_block_untrusted_buy_pressure():
     assert decision["weak_ai_micro_entry_block_weak_micro"] is True
 
 
+def test_real_weak_ai_micro_entry_block_uses_trusted_watching_pressure(monkeypatch):
+    monkeypatch.setattr(state_handlers.time, "time", lambda: 1_000.0)
+    stock = {
+        "last_watching_ai_action": "WAIT",
+        "last_watching_ai_score": 60.0,
+        "last_watching_ai_confirmed_at": 999.0,
+        "last_watching_ai_source_quality_fields": {
+            "buy_pressure_10t": 79.67,
+            "net_aggressive_delta_10t": 1830,
+            "order_flow_pressure_source": "trusted_aggressor",
+            "tick_aggressor_pressure_usable": True,
+            "tick_aggressor_trusted_count": 10,
+            "tick_context_quality": "fresh_computed",
+            "tick_context_stale": False,
+        },
+    }
+
+    microstructure_fields = (
+        state_handlers._microstructure_reaction_log_fields_from_stock(stock)
+    )
+    decision = state_handlers._evaluate_real_weak_ai_micro_entry_block(
+        strategy="SCALPING",
+        stock=stock,
+        latency_gate={"allowed": True, "decision": "ALLOW_NORMAL"},
+        latency_signal_score=60.0,
+        orderbook_fields={
+            "orderbook_micro_state": "neutral",
+            "orderbook_micro_ofi_norm": 10.463891,
+            "orderbook_micro_qi": 0.028818,
+        },
+        microstructure_fields=microstructure_fields,
+    )
+
+    assert microstructure_fields["buy_pressure_10t"] == 79.67
+    assert microstructure_fields["tick_aggressor_pressure_usable"] is True
+    assert decision["blocked"] is False
+    assert decision["reason"] == "weak_context_not_confirmed"
+    assert decision["weak_ai_micro_entry_block_buy_pressure_10t"] == "79.67"
+    assert decision["weak_ai_micro_entry_block_buy_pressure_usable"] is True
+    assert decision["weak_ai_micro_entry_block_source_quality_state"] == "fresh"
+
+
+def test_real_weak_ai_micro_entry_block_rejects_stale_watching_pressure(monkeypatch):
+    monkeypatch.setattr(state_handlers.time, "time", lambda: 1_000.0)
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_PRE_SUBMIT_MICRO_FEATURE_PROBE_MAX_AGE_SEC",
+        "90",
+    )
+    stock = {
+        "last_watching_ai_action": "WAIT",
+        "last_watching_ai_score": 60.0,
+        "last_watching_ai_confirmed_at": 800.0,
+        "last_watching_ai_source_quality_fields": {
+            "buy_pressure_10t": 79.67,
+            "tick_aggressor_pressure_usable": True,
+            "tick_aggressor_trusted_count": 10,
+        },
+    }
+
+    microstructure_fields = (
+        state_handlers._microstructure_reaction_log_fields_from_stock(stock)
+    )
+    decision = state_handlers._evaluate_real_weak_ai_micro_entry_block(
+        strategy="SCALPING",
+        stock=stock,
+        latency_gate={"allowed": True, "decision": "ALLOW_NORMAL"},
+        latency_signal_score=60.0,
+        orderbook_fields={
+            "orderbook_micro_state": "neutral",
+            "orderbook_micro_ofi_norm": 10.463891,
+            "orderbook_micro_qi": 0.028818,
+        },
+        microstructure_fields=microstructure_fields,
+    )
+
+    assert microstructure_fields["pre_submit_micro_source_quality_reused"] is False
+    assert "buy_pressure_10t" not in microstructure_fields
+    assert decision["blocked"] is True
+    assert decision["block_reason"] == "source_quality_unknown"
+    assert decision["weak_ai_micro_entry_block_missing_fields"] == "buy_pressure_10t"
+
+
 def test_real_weak_ai_micro_entry_block_blocks_missing_micro_source_quality():
     decision = state_handlers._evaluate_real_weak_ai_micro_entry_block(
         strategy="SCALPING",
@@ -35057,6 +35139,76 @@ def test_holding_stale_ws_rest_quote_recovery_allows_exit_evaluation(monkeypatch
     ]
     assert dynamic_logs
     assert exit_calls
+
+
+def test_holding_rest_quote_recovery_uses_venue_qualified_premarket_code(
+    monkeypatch,
+):
+    requested_payloads = []
+    monkeypatch.setattr(state_handlers, "KIWOOM_TOKEN", "token")
+    monkeypatch.setattr(
+        state_handlers,
+        "resolve_entry_candle_session",
+        lambda **kwargs: "premarket_krx_like",
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "resolve_entry_candle_venue",
+        lambda *args, **kwargs: "PREMARKET_KRX_LIKE",
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils,
+        "get_api_url",
+        lambda path: f"https://example.test{path}",
+    )
+
+    def _fetch(*args, **kwargs):
+        requested_payloads.append(args[3])
+        return [{"cur_prc": "9,810"}]
+
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils,
+        "fetch_kiwoom_api_continuous",
+        _fetch,
+    )
+
+    snapshot = state_handlers._fetch_holding_rest_quote_snapshot(
+        "123456",
+        1_000.0,
+        ws_data={},
+    )
+
+    assert requested_payloads == [{"stk_cd": "123456_NX"}]
+    assert snapshot["holding_rest_quote_request_code"] == "123456_NX"
+    assert snapshot["holding_rest_quote_effective_venue"] == "PREMARKET_KRX_LIKE"
+    assert snapshot["holding_rest_quote_route_consistent"] is True
+
+
+def test_holding_rest_quote_recovery_fails_closed_on_unproven_venue(monkeypatch):
+    monkeypatch.setattr(state_handlers, "KIWOOM_TOKEN", "token")
+    monkeypatch.setattr(
+        state_handlers,
+        "_fetch_holding_rest_quote_snapshot",
+        lambda *args, **kwargs: {
+            "curr": 9_810,
+            "holding_rest_quote_request_code": "123456",
+            "holding_rest_quote_effective_venue": "UNKNOWN",
+            "holding_rest_quote_route_consistent": False,
+        },
+    )
+    stock = _dynamic_soft_stop_stock()
+
+    recovered, blocked, fields = state_handlers._holding_ws_freshness_recover_or_block(
+        stock,
+        "123456",
+        {"curr": 0},
+        now_ts=1_000.0,
+    )
+
+    assert blocked is True
+    assert recovered["curr"] == 0
+    assert fields["holding_ws_recovery_outcome"] == "rest_quote_venue_blocked"
+    assert stock.get("holding_rest_quote_only_recovery") is None
 
 
 def test_holding_rest_quote_only_recovery_does_not_inflate_peak(monkeypatch):

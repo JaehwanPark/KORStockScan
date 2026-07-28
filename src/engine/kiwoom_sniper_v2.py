@@ -12749,6 +12749,7 @@ def run_sniper(is_test_mode=False):
             _flush_deferred_scanner_pipeline_events()
             _flush_deferred_scanner_skip_events()
             sniper_state_handlers.observe_rising_missed_nxt_post_block_samplers()
+            sniper_state_handlers.observe_rising_missed_adverse_micro_recovery_observations()
 
             targets[:] = [
                 t for t in targets if t.get("status") not in ["COMPLETED", "EXPIRED"]

@@ -1161,8 +1161,8 @@ class KiwoomWSManager:
                 required_realtime_types = tuple(
                     self._required_realtime_types_by_code.get(code) or ()
                 )
-                required_realtime_received = self._required_realtime_types_received_locked(
-                    code, target
+                required_realtime_received = (
+                    self._required_realtime_types_received_locked(code, target)
                 )
                 required_realtime_missing_types = [
                     realtime_type
@@ -1537,6 +1537,7 @@ class KiwoomWSManager:
                 "last_realtime_type_market_suffix": {},
                 "last_realtime_type_market_route": {},
                 "last_realtime_type_effective_venue": {},
+                "realtime_type_snapshots_by_route": {},
                 "received_types": set(),
                 "last_ws_update_ts": 0.0,
                 "last_realtime_type_ts": {},
@@ -1766,7 +1767,9 @@ class KiwoomWSManager:
             try:
                 observe_raw_tick(code, data, time.time())
             except Exception as exc:
-                log_error(f"[WS] limit-down raw tick observation failed ({code}): {exc}")
+                log_error(
+                    f"[WS] limit-down raw tick observation failed ({code}): {exc}"
+                )
         with self._tick_lock:
             self._pending_tick_events[code] = {"code": code, "data": data}
         self._tick_dispatch_event.set()
@@ -2962,6 +2965,56 @@ class KiwoomWSManager:
                                 type_venues[real_type] = self._ws_item_effective_venue(
                                     raw_item_code
                                 )
+                            route_snapshots = target.setdefault(
+                                "realtime_type_snapshots_by_route", {}
+                            )
+                            if isinstance(route_snapshots, dict):
+                                route_key = (
+                                    f"{market_suffix or 'KRX'}"
+                                    f"|{market_route or 'unknown'}"
+                                )
+                                route_snapshot = route_snapshots.setdefault(
+                                    route_key, {}
+                                )
+                                if isinstance(route_snapshot, dict):
+                                    realtime_snapshot = {
+                                        "realtime_type": real_type,
+                                        "observed_epoch": now_update_ts,
+                                        "item": str(raw_item_code or ""),
+                                        "market_suffix": market_suffix,
+                                        "market_route": market_route,
+                                        "effective_venue": (
+                                            self._ws_item_effective_venue(raw_item_code)
+                                        ),
+                                    }
+                                    if real_type == "0B":
+                                        realtime_snapshot["current_price"] = safe_int(
+                                            target.get("curr")
+                                        )
+                                    elif real_type == "0D":
+                                        current_orderbook = target.get("orderbook")
+                                        current_orderbook = (
+                                            current_orderbook
+                                            if isinstance(current_orderbook, dict)
+                                            else {}
+                                        )
+                                        current_asks = current_orderbook.get("asks")
+                                        current_bids = current_orderbook.get("bids")
+                                        current_asks = (
+                                            current_asks
+                                            if isinstance(current_asks, list)
+                                            else []
+                                        )
+                                        current_bids = (
+                                            current_bids
+                                            if isinstance(current_bids, list)
+                                            else []
+                                        )
+                                        realtime_snapshot["orderbook"] = {
+                                            "asks": copy.deepcopy(current_asks[:1]),
+                                            "bids": copy.deepcopy(current_bids[:1]),
+                                        }
+                                    route_snapshot[real_type] = realtime_snapshot
                             target["time"] = datetime.now().strftime("%H:%M:%S")
 
                             if not target.get(

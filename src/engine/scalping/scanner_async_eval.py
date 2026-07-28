@@ -196,6 +196,13 @@ class ScannerAsyncEvalCoordinator:
                     request_id=request_id,
                     pending_count=len(self._requests),
                 )
+            if request_id in self._ready:
+                return ScannerAsyncSubmitDecision(
+                    accepted=False,
+                    reason="completed_result_pending_commit",
+                    request_id=request_id,
+                    pending_count=len(self._requests),
+                )
             self._requests[request_id] = request
             future = self._preparation_executor.submit(self._prepare, request)
             self._preparation_futures[request_id] = future
@@ -446,9 +453,7 @@ class ScannerAsyncEvalCoordinator:
         with self._lock:
             return request_id in self._requests
 
-    def has_completed(
-        self, *, generation_id: str, cache_key: str
-    ) -> bool:
+    def has_completed(self, *, generation_id: str, cache_key: str) -> bool:
         """Return whether a result is retained for this exact transport.
 
         The main thread is the only consumer of retained output.  Scanner

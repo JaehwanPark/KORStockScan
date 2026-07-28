@@ -70,14 +70,61 @@ def test_async_eval_reports_exact_retained_result_before_commit_consumes_it():
             generation_id=generation.generation_id,
             cache_key="ready-before-commit",
         )
-        assert coordinator.take_completed(
-            generation_id=generation.generation_id,
-            cache_key="ready-before-commit",
-        ) is not None
+        assert (
+            coordinator.take_completed(
+                generation_id=generation.generation_id,
+                cache_key="ready-before-commit",
+            )
+            is not None
+        )
         assert not coordinator.has_completed(
             generation_id=generation.generation_id,
             cache_key="ready-before-commit",
         )
+    finally:
+        coordinator.shutdown(wait=True)
+
+
+def test_async_eval_does_not_overwrite_completed_result_pending_commit():
+    dispatcher = HotPathAIDispatcher(loaded_key_count=1)
+    coordinator = ScannerAsyncEvalCoordinator(ai_dispatcher=dispatcher)
+    try:
+        now = time.time()
+        generation = _generation()
+        context = ScannerAsyncEvalContext.create(
+            generation=generation,
+            cache_key="retain-first-result",
+            submitted_epoch=now,
+            deadline_epoch=now + 1,
+            stock_snapshot={"status": "WATCHING"},
+            ws_snapshot={"curr": 1000},
+            state_version="WATCHING:0:0",
+        )
+        first = ScannerAsyncEvalRequest(
+            context=context,
+            prepare=lambda _ctx: {"sequence": 1},
+            evaluate=lambda _ctx, _prepared: {"action": "BUY", "score": 72},
+        )
+        assert coordinator.submit(first).accepted
+        _wait_for_result(coordinator)
+
+        duplicate = ScannerAsyncEvalRequest(
+            context=context,
+            prepare=lambda _ctx: {"sequence": 2},
+            evaluate=lambda _ctx, _prepared: {"action": "DROP", "score": 0},
+        )
+        duplicate_decision = coordinator.submit(duplicate)
+        retained = coordinator.take_completed(
+            generation_id=generation.generation_id,
+            cache_key=context.cache_key,
+        )
+
+        assert duplicate_decision.accepted is False
+        assert duplicate_decision.reason == "completed_result_pending_commit"
+        assert retained is not None
+        assert retained.prepared_context["sequence"] == 1
+        assert retained.ai_payload["action"] == "BUY"
+        assert retained.ai_payload["score"] == 72
     finally:
         coordinator.shutdown(wait=True)
 
