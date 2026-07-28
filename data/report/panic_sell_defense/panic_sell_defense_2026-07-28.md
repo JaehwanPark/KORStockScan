@@ -9,15 +9,15 @@
 - panic_confirmation_policy: `portfolio stop-loss clusters are evidence; PANIC_DETECTED requires market or microstructure confirmation`
 - report_only: `true`
 - runtime_effect: `report_only_no_mutation`
-- as_of: `2026-07-28T15:26:02`
-- latest_event_at: `2026-07-28T15:26:11`
+- as_of: `2026-07-28T15:28:02`
+- latest_event_at: `2026-07-28T15:28:07`
 - reasons: `live market panic breadth risk_off advisory; recovery watch triggered by active sim/probe or post-sell rebound above sell`
 
 ## 입력 자원 계약
 
 - memory_bounded_streaming: `true`
-- scanned_row_count: `305765`
-- retained_exit_event_count: `2967`
+- scanned_row_count: `305815`
+- retained_exit_event_count: `2971`
 - full_event_list_materialized: `false`
 - out_of_order_event_count: `0`
 
@@ -72,7 +72,7 @@
 ## Microstructure Market Context
 
 - market_risk_state: `RISK_OFF`
-- market_panic_breadth_as_of: `2026-07-28T15:26:01`
+- market_panic_breadth_as_of: `2026-07-28T15:28:01`
 - market_panic_breadth_source_quality_status: `ok`
 - market_panic_breadth_risk_off_advisory: `true`
 - market_panic_breadth_single_market_risk_off_advisory: `false`
