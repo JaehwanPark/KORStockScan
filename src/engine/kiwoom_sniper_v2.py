@@ -4460,6 +4460,27 @@ def _scanner_rising_recheck_pending(target, now_ts=None):
     return after_epoch <= float(now_ts)
 
 
+def _scanner_generation_explicit_recheck_armed(target):
+    """Return only existing bounded recheck contracts, never ordinary ticks."""
+
+    target = target or {}
+    if bool(target.get("entry_strength_momentum_recheck_pending")):
+        return True
+    return any(
+        _safe_float(target.get(key), 0.0) > 0.0
+        for key in (
+            "_scanner_rising_cooldown_recheck_after_epoch",
+            "_scanner_rising_cutoff_recheck_after_epoch",
+            "_scanner_rising_freshness_envelope_recheck_until_epoch",
+            "_scanner_rising_latency_direct_recheck_after_epoch",
+            "_scanner_rising_reversal_up_volatile_recheck_until_epoch",
+            "_scanner_rising_reversal_up_watch_recheck_until_epoch",
+            "_scanner_rising_ws_gap_priority_recheck_after_epoch",
+            "_scanner_rising_terminal_hardgate_recheck_after_epoch",
+        )
+    )
+
+
 def _scanner_rising_entry_relief_fields(target, *, reason, budget_source="standard"):
     delta = _scanner_positive_delta_value(target)
     eligible = _scanner_is_rising_entry_relief_candidate(target)
@@ -4715,6 +4736,10 @@ def _reset_scanner_runtime_eval_state(target):
         "_scanner_last_heavy_eval_attempt_epoch",
         "_scanner_last_heavy_eval_evidence_fingerprint",
         "_scanner_heavy_eval_retry_after_epoch",
+        "_scanner_scheduler_warm_parked",
+        "_scanner_scheduler_warm_generation_id",
+        "_scanner_scheduler_warm_since_epoch",
+        "_scanner_scheduler_warm_reason",
         "_scanner_fast_precheck_logged_at",
         "_scanner_runtime_queue_lag_logged_at",
         "_scanner_heavy_eval_lag_logged_at",
@@ -5108,9 +5133,28 @@ def _scalping_attach_capacity_allows(new_target, now_ts):
     allowed, replacements, _fields = _scalping_attach_capacity_decision(
         new_target, now_ts
     )
-    if replacements and not _scalping_attach_replace_enabled():
+    if replacements and not _scalping_attach_replacements_allowed(replacements):
         return False
     return allowed
+
+
+def _scalping_attach_replacements_allowed(replacements):
+    """Allow fresh promotions to reclaim only explicitly parked warm slots.
+
+    This changes observation capacity only. Normal active-watch replacement
+    remains controlled by the existing startup setting and no entry, order,
+    quantity, or broker guard gains authority here.
+    """
+
+    replacements = list(replacements or [])
+    if not replacements:
+        return True
+    if _scalping_attach_replace_enabled():
+        return True
+    return all(
+        bool((target or {}).get("_scanner_scheduler_warm_parked"))
+        for target in replacements
+    )
 
 
 def _update_scalping_dynamic_watch_cap(
@@ -5197,6 +5241,18 @@ def _scalping_fifo_overflow_candidates(scalp_fifo_targets, now_ts):
     def _overflow_rank(target):
         if not _is_scanner_watching_target(target):
             return (0, _runtime_added_time_for_target(target, now_ts=now_ts))
+        if bool((target or {}).get("_scanner_scheduler_warm_parked")):
+            # A completed or expired generation deliberately ceded its hot
+            # evaluation slot. Keep it subscribed while capacity is spare,
+            # but never let it displace a fresh promotion.
+            return (
+                0,
+                _safe_float(
+                    (target or {}).get("_scanner_scheduler_warm_since_epoch"),
+                    0.0,
+                ),
+                _runtime_added_time_for_target(target, now_ts=now_ts),
+            )
         armed_epoch = _runtime_added_time_for_target(target, now_ts=now_ts)
         last_full_eval = _scanner_last_full_eval_epoch(target)
         under_10000_priority = _under_10000_runtime_priority_rank(target)
@@ -5734,6 +5790,8 @@ def _scanner_scheduler_pre_recovery_block_reason(target, *, scheduler):
         return "scanner_scheduler_canonical_venue_missing_fail_closed"
     if not _scanner_scheduler_enabled_for_venue(venue):
         return ""
+    if bool(target.get("_scanner_scheduler_warm_parked")):
+        return "scanner_scheduler_generation_warm_parked"
     if _scanner_scheduler_target_generation(scheduler, target) is None:
         return "scanner_scheduler_generation_unavailable_fail_closed"
     return ""
@@ -6596,11 +6654,17 @@ def _scanner_heavy_eval_retry_due(target, *, now_epoch):
         target.get("_scanner_last_heavy_eval_attempt_epoch"),
         0.0,
     )
+    configured_retry_after = _safe_float(
+        target.get("_scanner_heavy_eval_retry_after_epoch"),
+        0.0,
+    )
+    if configured_retry_after > float(now_epoch):
+        return False, configured_retry_after
     if last_attempt_epoch <= 0:
         target.pop("_scanner_heavy_eval_retry_after_epoch", None)
         return True, 0.0
     retry_after_epoch = max(
-        _safe_float(target.get("_scanner_heavy_eval_retry_after_epoch"), 0.0),
+        configured_retry_after,
         last_attempt_epoch + _scanner_heavy_eval_min_retry_sec(),
     )
     if float(now_epoch) >= retry_after_epoch:
@@ -7541,7 +7605,7 @@ def _apply_scalping_scanner_promoted_target(payload, *, mutation_lock=ENTRY_LOCK
             }
         )
         payload_for_log = {**payload_for_log, **budget_fields}
-        if replacements and not _scalping_attach_replace_enabled():
+        if replacements and not _scalping_attach_replacements_allowed(replacements):
             allowed = False
         if not allowed:
             _log_scanner_runtime_target_attach(
@@ -8571,7 +8635,7 @@ def _scanner_scheduler_enqueue_fresh_precheck(
                 reason="target_not_watching_before_fresh_recheck",
             )
         return None
-    return _scanner_scheduler_enqueue_target(
+    decision = _scanner_scheduler_enqueue_target(
         scheduler,
         target,
         lane=ScannerLane.FAST_PRECHECK,
@@ -8586,6 +8650,155 @@ def _scanner_scheduler_enqueue_fresh_precheck(
         recheck_evidence_key=_scanner_heavy_eval_evidence_fingerprint(
             evidence_snapshot if isinstance(evidence_snapshot, dict) else target
         ),
+    )
+    if decision is not None and decision.item is not None:
+        with ENTRY_LOCK:
+            for key in (
+                "_scanner_scheduler_warm_parked",
+                "_scanner_scheduler_warm_generation_id",
+                "_scanner_scheduler_warm_since_epoch",
+                "_scanner_scheduler_warm_reason",
+            ):
+                target.pop(key, None)
+    return decision
+
+
+def _scanner_scheduler_park_target_generation(
+    scheduler,
+    target,
+    *,
+    now_epoch,
+    reason,
+    expected_generation=None,
+):
+    """Move one completed/stale generation from hot evaluation to warm watch.
+
+    Parking invalidates queued and in-flight work for the exact generation so
+    late worker results cannot reach COMMIT. The WATCHING target and its WS
+    subscription remain intact; only a new promotion or an explicit bounded
+    recheck may create fresh scheduler work.
+    """
+
+    if not isinstance(scheduler, ScannerRuntimeScheduler):
+        return False
+    if not _is_scanner_watching_target(target):
+        return False
+    current = scheduler.current_generation((target or {}).get("code"))
+    expected_id = str(
+        getattr(expected_generation, "generation_id", "")
+        or (target or {}).get("scanner_generation_id")
+        or ""
+    ).strip()
+    if (
+        current is None
+        or not expected_id
+        or current.generation_id != expected_id
+    ):
+        return False
+
+    async_coordinator = getattr(
+        run_sniper,
+        "scanner_async_eval_coordinator",
+        None,
+    )
+    if isinstance(async_coordinator, ScannerAsyncEvalCoordinator):
+        async_coordinator.invalidate_generation(current.generation_id)
+    decision = scheduler.park(
+        current,
+        now_epoch=float(now_epoch),
+        reason=str(reason or "scanner_generation_warm_parked"),
+    )
+    if decision.action != "generation_parked":
+        return False
+    with ENTRY_LOCK:
+        for key in (
+            "_scanner_scheduler_lane",
+            "_scanner_scheduler_deadline_epoch",
+            "_scanner_scheduler_work_id",
+            "_scanner_scheduler_attempt",
+            "_scanner_async_generation_id",
+            "_scanner_async_cache_key",
+            "_scanner_async_state_version",
+            "_scanner_async_submitted_at",
+            "_scanner_opening_rotation_async_generation_id",
+            "_scanner_opening_rotation_async_cache_key",
+            "_scanner_opening_rotation_async_state_version",
+            "_scanner_opening_rotation_async_submitted_at",
+        ):
+            target.pop(key, None)
+        target.update(
+            {
+                "_scanner_scheduler_warm_parked": True,
+                "_scanner_scheduler_warm_generation_id": current.generation_id,
+                "_scanner_scheduler_warm_since_epoch": float(now_epoch),
+                "_scanner_scheduler_warm_reason": str(
+                    reason or "scanner_generation_warm_parked"
+                ),
+            }
+        )
+    _emit_scanner_scheduler_event(
+        payload=target,
+        target=target,
+        stage="scalping_scanner_scheduler_work_completed",
+        fields={
+            **current.timing_fields(now_epoch=float(now_epoch)),
+            "metric_role": "runtime_scheduler_capacity",
+            "decision_authority": (
+                "scanner_runtime_scheduler_only_no_order_authority"
+            ),
+            "window_policy": "per_scanner_generation",
+            "sample_floor": "one_generation_terminal_or_expired_transition",
+            "primary_decision_metric": "scanner_generation_hot_dwell_sec",
+            "source_quality_gate": "exact_current_generation",
+            "forbidden_uses": (
+                "standalone_buy,broker_submit,threshold_mutation,"
+                "provider_route_change,order_price_change,quantity_or_cap_change,"
+                "broker_guard_bypass,stale_quote_bypass,hard_safety_bypass"
+            ),
+            "runtime_effect": True,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "scheduler_action": "generation_parked",
+            "scheduler_reason": str(reason or "scanner_generation_warm_parked"),
+            "scanner_generation_hot_dwell_sec": round(
+                max(0.0, float(now_epoch) - current.attach_epoch),
+                6,
+            ),
+            "scanner_generation_warm_watch_retained": True,
+            "scheduler_superseded_work_ids": (
+                ",".join(decision.superseded_work_ids) or "-"
+            ),
+        },
+    )
+    return True
+
+
+def _scanner_scheduler_continue_bounded_recheck_or_park(
+    scheduler,
+    target,
+    *,
+    now_epoch,
+    park_reason,
+    expected_generation=None,
+    evidence_snapshot=None,
+):
+    """Preserve explicit strategy rechecks; otherwise release the hot slot."""
+
+    if _scanner_generation_explicit_recheck_armed(target):
+        decision = _scanner_scheduler_enqueue_fresh_precheck(
+            scheduler,
+            target,
+            now_epoch=float(now_epoch),
+            owner="explicit_bounded_recheck_continuation",
+            evidence_snapshot=evidence_snapshot,
+        )
+        return bool(decision is not None and decision.item is not None)
+    return _scanner_scheduler_park_target_generation(
+        scheduler,
+        target,
+        now_epoch=float(now_epoch),
+        reason=park_reason,
+        expected_generation=expected_generation,
     )
 
 
@@ -8669,16 +8882,31 @@ def _scanner_scheduler_refresh_claim_after_expiry(
     previous_decision,
     now_epoch,
 ):
-    """Replace expired work and claim the fresh precheck in one encounter.
+    """Rebuild missing boot work once; park genuinely expired generations.
 
-    Deferring the claim to the next outer loop makes a 10-second replacement
-    expire again when many scanner watches are active.  The expired decision
-    remains observable, while this fresh claim still runs through the normal
-    generation and EDF checks before any evaluation can continue.
+    An elapsed deadline means the generation is no longer fresh enough to own
+    another hot evaluation automatically. Re-enqueuing it immediately caused
+    the same WATCHING symbols to consume the queue indefinitely. A missing
+    lane can still be reconstructed for boot/runtime hydration.
     """
 
     previous_item = getattr(previous_decision, "item", None)
     previous_action = str(getattr(previous_decision, "action", "") or "")
+    if previous_action == "deadline_expired":
+        _scanner_scheduler_park_target_generation(
+            scheduler,
+            target,
+            now_epoch=float(now_epoch),
+            reason="deadline_expired_generation_warm_parked",
+            expected_generation=(
+                getattr(previous_item, "generation", None)
+                if previous_item is not None
+                else None
+            ),
+        )
+        return None
+    if bool((target or {}).get("_scanner_scheduler_warm_parked")):
+        return None
     retry_attempt = (
         _safe_int(
             (
@@ -8694,11 +8922,7 @@ def _scanner_scheduler_refresh_claim_after_expiry(
         scheduler,
         target,
         lane=ScannerLane.FAST_PRECHECK,
-        owner=(
-            "fresh_recheck_after_deadline"
-            if previous_action == "deadline_expired"
-            else "fresh_precheck_after_missing_work"
-        ),
+        owner="fresh_precheck_after_missing_work",
         enqueued_epoch=float(now_epoch),
         attempt=retry_attempt,
     )
@@ -8735,7 +8959,7 @@ def _scanner_scheduler_complete_target(
         target=target,
         stage=(
             "scalping_scanner_scheduler_result_superseded"
-            if decision.action == "superseded_result"
+            if decision.action in {"superseded_result", "parked_result"}
             else "scalping_scanner_scheduler_work_completed"
         ),
         fields={
@@ -8896,7 +9120,7 @@ def attach_db_poll_target_if_missing(db_target, targets, now_ts):
                 }
             }
         )
-        if replacements and not _scalping_attach_replace_enabled():
+        if replacements and not _scalping_attach_replacements_allowed(replacements):
             allowed = False
         if not allowed:
             _expire_scalping_watch_budget_targets(
@@ -10175,11 +10399,11 @@ def run_sniper(is_test_mode=False):
                                         "_scanner_opening_rotation_async_submitted_at",
                                     ):
                                         async_target.pop(async_key, None)
-                            _scanner_scheduler_enqueue_fresh_precheck(
+                            _scanner_scheduler_park_target_generation(
                                 run_sniper.scanner_runtime_scheduler,
                                 async_target,
                                 now_epoch=time.time(),
-                                owner="async_result_rejected_fresh_recheck",
+                                reason="async_result_rejected_generation_warm_parked",
                             )
                         _emit_scanner_scheduler_event(
                             payload={
@@ -10319,11 +10543,13 @@ def run_sniper(is_test_mode=False):
                                     "_scanner_opening_rotation_async_submitted_at",
                                 ):
                                     async_target.pop(async_key, None)
-                        _scanner_scheduler_enqueue_fresh_precheck(
+                        _scanner_scheduler_park_target_generation(
                             run_sniper.scanner_runtime_scheduler,
                             async_target,
                             now_epoch=time.time(),
-                            owner="async_commit_enqueue_rejected_fresh_recheck",
+                            reason=(
+                                "async_commit_enqueue_rejected_generation_warm_parked"
+                            ),
                         )
             queue_context = _runtime_queue_context(targets, now_ts=now_ts)
             active_scanner_watch_codes = {
@@ -10984,15 +11210,22 @@ def run_sniper(is_test_mode=False):
                                 )
                             )
                             return
-                        if scheduler_claim.action in {
-                            "missing",
-                            "deadline_expired",
-                        }:
+                        if scheduler_claim.action == "deadline_expired":
+                            _scanner_scheduler_park_target_generation(
+                                scheduler,
+                                delayed_stock,
+                                now_epoch=time.time(),
+                                reason="heavy_eval_deadline_generation_warm_parked",
+                                expected_generation=scheduler_claim.item.generation,
+                            )
+                            scanner_heavy_eval_flushed = False
+                            return
+                        if scheduler_claim.action == "missing":
                             _scanner_scheduler_enqueue_fresh_precheck(
                                 scheduler,
                                 delayed_stock,
                                 now_epoch=time.time(),
-                                owner="heavy_eval_deadline_fresh_recheck",
+                                owner="heavy_eval_missing_fresh_precheck",
                             )
                             _runtime_requeue_expired_heavy_target(
                                 runtime_work_queue,
@@ -11160,12 +11393,16 @@ def run_sniper(is_test_mode=False):
                                         completed_epoch=time.time(),
                                         outcome=("heavy_eval_stale_snapshot_recheck"),
                                     )
-                                    _scanner_scheduler_enqueue_fresh_precheck(
+                                    _scanner_scheduler_park_target_generation(
                                         scheduler,
                                         delayed_stock,
                                         now_epoch=time.time(),
-                                        owner=(
-                                            "heavy_eval_stale_snapshot_fresh_recheck"
+                                        reason=(
+                                            "heavy_eval_stale_snapshot_generation_"
+                                            "warm_parked"
+                                        ),
+                                        expected_generation=(
+                                            scheduler_heavy_item.generation
                                         ),
                                     )
                                 continue
@@ -11267,11 +11504,19 @@ def run_sniper(is_test_mode=False):
                                 ).strip()
                             )
                         ):
-                            _scanner_scheduler_enqueue_fresh_precheck(
+                            _scanner_scheduler_continue_bounded_recheck_or_park(
                                 scheduler,
                                 delayed_stock,
                                 now_epoch=time.time(),
-                                owner="post_heavy_eval_fresh_recheck",
+                                park_reason=(
+                                    "heavy_eval_completed_generation_warm_parked"
+                                ),
+                                expected_generation=(
+                                    scheduler_heavy_item.generation
+                                    if scheduler_heavy_item is not None
+                                    else None
+                                ),
+                                evidence_snapshot=delayed_ws_data,
                             )
                     if _is_scanner_watching_target(delayed_stock):
                         delayed_stock["_scanner_last_full_eval_epoch"] = time.time()
@@ -11822,12 +12067,16 @@ def run_sniper(is_test_mode=False):
                                         completed_epoch=time.time(),
                                         outcome="async_coordinator_missing",
                                     )
-                                    _scanner_scheduler_enqueue_fresh_precheck(
+                                    _scanner_scheduler_park_target_generation(
                                         scheduler,
                                         stock,
                                         now_epoch=time.time(),
-                                        owner=(
-                                            "async_commit_coordinator_missing_recheck"
+                                        reason=(
+                                            "async_commit_coordinator_missing_"
+                                            "generation_warm_parked"
+                                        ),
+                                        expected_generation=(
+                                            scheduler_claim.item.generation
                                         ),
                                     )
                                     continue
@@ -11980,11 +12229,17 @@ def run_sniper(is_test_mode=False):
                                     ),
                                 )
                                 if _is_scanner_watching_target(stock):
-                                    _scanner_scheduler_enqueue_fresh_precheck(
+                                    _scanner_scheduler_continue_bounded_recheck_or_park(
                                         scheduler,
                                         stock,
                                         now_epoch=time.time(),
-                                        owner="post_async_commit_fresh_recheck",
+                                        park_reason=(
+                                            "async_commit_completed_generation_"
+                                            "warm_parked"
+                                        ),
+                                        expected_generation=(
+                                            scheduler_claim.item.generation
+                                        ),
                                     )
                                 continue
                             if scheduled_lane is ScannerLane.RECOVERY:
@@ -12456,11 +12711,15 @@ def run_sniper(is_test_mode=False):
                                 ):
                                     continue
                             if scheduler_generation is not None:
-                                _scanner_scheduler_enqueue_fresh_precheck(
+                                _scanner_scheduler_continue_bounded_recheck_or_park(
                                     scheduler,
                                     stock,
                                     now_epoch=time.time(),
-                                    owner="precheck_not_eligible_fresh_recheck",
+                                    park_reason=(
+                                        "precheck_not_eligible_generation_warm_parked"
+                                    ),
+                                    expected_generation=scheduler_generation,
+                                    evidence_snapshot=ws_data,
                                 )
                             continue
                         if queue_lag_fields:
