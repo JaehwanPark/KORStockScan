@@ -2284,6 +2284,9 @@ def test_scalping_scanner_promoted_target_refresh_resets_eval_state(monkeypatch)
         "entry_armed_at_epoch": 1000.0,
         "added_time": 1000.0,
         "_scanner_last_full_eval_epoch": 1500.0,
+        "_scanner_last_heavy_eval_attempt_epoch": 1500.0,
+        "_scanner_last_heavy_eval_evidence_fingerprint": "old-generation-bbo",
+        "_scanner_heavy_eval_retry_after_epoch": 1515.0,
         "_scanner_fast_precheck_logged_at": 1500.0,
         "_scanner_runtime_queue_lag_logged_at": 1500.0,
         "_scanner_heavy_eval_lag_logged_at": 1500.0,
@@ -2367,6 +2370,7 @@ def test_scalping_scanner_promoted_target_refresh_resets_eval_state(monkeypatch)
         "_scanner_last_full_eval_epoch",
         "_scanner_last_heavy_eval_attempt_epoch",
         "_scanner_last_heavy_eval_evidence_fingerprint",
+        "_scanner_heavy_eval_retry_after_epoch",
         "_scanner_fast_precheck_logged_at",
         "_scanner_runtime_queue_lag_logged_at",
         "_scanner_heavy_eval_lag_logged_at",
@@ -8304,6 +8308,46 @@ def test_scanner_heavy_eval_min_retry_keeps_async_rechecks_at_or_above_deadline(
 
     monkeypatch.setenv("KORSTOCKSCAN_SCANNER_HEAVY_EVAL_RECHECK_FRESH_SEC", "18")
     assert kiwoom_sniper_v2._scanner_heavy_eval_min_retry_sec() == 18.0
+
+
+def test_scanner_heavy_eval_retry_due_does_not_allow_same_generation_tick_churn(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "_SCANNER_OPERATOR_RUNTIME_OVERRIDE_PATH",
+        tmp_path / "missing_operator_runtime_overrides.env",
+    )
+    _reset_scanner_hot_override_cache()
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_HEAVY_EVAL_RECHECK_FRESH_SEC", "4")
+    target = {
+        "_scanner_last_heavy_eval_attempt_epoch": 100.0,
+        "_scanner_last_heavy_eval_evidence_fingerprint": "old-bbo",
+    }
+
+    due, retry_after = kiwoom_sniper_v2._scanner_heavy_eval_retry_due(
+        target,
+        now_epoch=105.0,
+    )
+    target["_scanner_last_heavy_eval_evidence_fingerprint"] = "new-bbo"
+    still_due, same_retry_after = kiwoom_sniper_v2._scanner_heavy_eval_retry_due(
+        target,
+        now_epoch=106.0,
+    )
+
+    assert due is False
+    assert still_due is False
+    assert retry_after == 115.0
+    assert same_retry_after == 115.0
+    assert target["_scanner_heavy_eval_retry_after_epoch"] == 115.0
+
+    released, released_after = kiwoom_sniper_v2._scanner_heavy_eval_retry_due(
+        target,
+        now_epoch=115.0,
+    )
+    assert released is True
+    assert released_after == 115.0
+    assert "_scanner_heavy_eval_retry_after_epoch" not in target
 
 
 def test_scanner_heavy_eval_evidence_fingerprint_ignores_receipt_timestamp():

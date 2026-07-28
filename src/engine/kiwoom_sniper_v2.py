@@ -4714,6 +4714,7 @@ def _reset_scanner_runtime_eval_state(target):
         "_scanner_last_full_eval_epoch",
         "_scanner_last_heavy_eval_attempt_epoch",
         "_scanner_last_heavy_eval_evidence_fingerprint",
+        "_scanner_heavy_eval_retry_after_epoch",
         "_scanner_fast_precheck_logged_at",
         "_scanner_runtime_queue_lag_logged_at",
         "_scanner_heavy_eval_lag_logged_at",
@@ -6578,13 +6579,45 @@ def _scanner_heavy_eval_min_retry_sec():
     return max(15.0, _scanner_heavy_eval_recheck_fresh_sec())
 
 
+def _scanner_heavy_eval_retry_due(target, *, now_epoch):
+    """Gate recurring heavy work by generation, not by ordinary tick churn.
+
+    A fresh scanner promotion resets the runtime evaluation state, so its new
+    generation remains immediately eligible.  Within one generation, however,
+    current price, BBO, strength, and cumulative volume can change on every
+    receipt.  Treating each such change as retry authority defeats the bounded
+    cadence and can starve newly attached symbols before their first heavy
+    evaluation.  COMMIT and RECOVERY lanes do not call this helper.
+    """
+
+    if not isinstance(target, dict):
+        return True, 0.0
+    last_attempt_epoch = _safe_float(
+        target.get("_scanner_last_heavy_eval_attempt_epoch"),
+        0.0,
+    )
+    if last_attempt_epoch <= 0:
+        target.pop("_scanner_heavy_eval_retry_after_epoch", None)
+        return True, 0.0
+    retry_after_epoch = max(
+        _safe_float(target.get("_scanner_heavy_eval_retry_after_epoch"), 0.0),
+        last_attempt_epoch + _scanner_heavy_eval_min_retry_sec(),
+    )
+    if float(now_epoch) >= retry_after_epoch:
+        target.pop("_scanner_heavy_eval_retry_after_epoch", None)
+        return True, retry_after_epoch
+    target["_scanner_heavy_eval_retry_after_epoch"] = retry_after_epoch
+    return False, retry_after_epoch
+
+
 def _scanner_heavy_eval_evidence_fingerprint(ws_data):
     """Return a compact value fingerprint for same-generation heavy retries.
 
     Receipt timestamps and history lengths are intentionally excluded: they
     would turn ordinary heartbeat updates into a new heavy-evaluation reason.
-    A material current price/BBO/strength/volume change may bypass the retry
-    interval; unchanged source evidence cannot.
+    The fingerprint is observation provenance only.  Ordinary same-generation
+    market changes cannot bypass the bounded retry cadence; a new promotion
+    creates a new generation and resets the cadence.
     """
 
     snapshot = ws_data if isinstance(ws_data, dict) else {}
@@ -11652,6 +11685,21 @@ def run_sniper(is_test_mode=False):
                                 scheduled_lane = ScannerLane(scheduled_lane_value)
                             except ValueError:
                                 scheduled_lane = ScannerLane.FAST_PRECHECK
+                            if scheduled_lane is ScannerLane.FAST_PRECHECK:
+                                heavy_retry_due, _heavy_retry_after_epoch = (
+                                    _scanner_heavy_eval_retry_due(
+                                        stock,
+                                        now_epoch=heavy_queue_enter_epoch,
+                                    )
+                                )
+                                if not heavy_retry_due:
+                                    # The current generation already consumed a
+                                    # heavy unit. Leave any queued fresh
+                                    # precheck untouched and avoid rebuilding
+                                    # missing work until the bounded retry time.
+                                    # COMMIT/RECOVERY and a newly promoted
+                                    # generation bypass this branch.
+                                    continue
                             if scheduled_lane is ScannerLane.HEAVY_EVAL:
                                 delayed_scanner_heavy_eval.append(
                                     (
@@ -12643,20 +12691,31 @@ def run_sniper(is_test_mode=False):
                                     evidence_changed=heavy_evidence_changed,
                                 )
                                 continue
-                            if (
-                                last_heavy_attempt_epoch > 0
-                                and time.time() - last_heavy_attempt_epoch
-                                < heavy_retry_min_sec
-                                and not heavy_evidence_changed
-                            ):
+                            heavy_retry_due, heavy_retry_after_epoch = (
+                                _scanner_heavy_eval_retry_due(
+                                    stock,
+                                    now_epoch=time.time(),
+                                )
+                            )
+                            if not heavy_retry_due:
                                 _emit_scanner_heavy_eval_coalesced(
                                     stock,
                                     generation=scheduler_generation,
                                     now_epoch=time.time(),
-                                    reason="same_generation_min_retry_window",
+                                    reason=(
+                                        "same_generation_min_retry_window"
+                                        if not heavy_evidence_changed
+                                        else (
+                                            "same_generation_tick_churn_does_not_"
+                                            "bypass_min_retry"
+                                        )
+                                    ),
                                     retry_min_sec=heavy_retry_min_sec,
                                     last_attempt_epoch=last_heavy_attempt_epoch,
-                                    evidence_changed=False,
+                                    evidence_changed=heavy_evidence_changed,
+                                )
+                                stock["_scanner_heavy_eval_retry_after_epoch"] = (
+                                    heavy_retry_after_epoch
                                 )
                                 continue
                             heavy_decision = _scanner_scheduler_enqueue_target(

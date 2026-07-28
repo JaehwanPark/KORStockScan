@@ -99,6 +99,12 @@
 
 ## 사용자 지시 실행 체크리스트
 
+- [x] `[ScannerHeavyEvalTickChurnBound0728] 동일 generation heavy-eval 틱 변동 우회 및 scheduler 작업 증폭 보완` (`Due: 2026-07-28`, `Slot: INTRADAY`, `TimeWindow: 13:30~14:10`, `Track: RuntimeStability`)
+  - Source: [kiwoom_sniper_v2.py](/home/ubuntu/KORStockScan/src/engine/kiwoom_sniper_v2.py), [test_kiwoom_sniper_market_regime_runtime.py](/home/ubuntu/KORStockScan/src/tests/test_kiwoom_sniper_market_regime_runtime.py), [scanner_runtime_scheduler.py](/home/ubuntu/KORStockScan/src/engine/scalping/scanner_runtime_scheduler.py), [pipeline_events_2026-07-28.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-07-28.jsonl)
+  - 판정/구현: 13:00~13:30 KST에 work enqueue `1,899`, claim deferred `818`, deadline expired `295`, heavy-eval lag `259`가 발생했다. 동일 generation의 BBO·strength·누적거래량 변경이 15초 heavy 재시도 제한을 우회하던 경로를 막고, 새 promotion generation은 평가 상태를 초기화해 즉시 평가하며 COMMIT·RECOVERY lane은 기존 우선순위를 유지하도록 보완했다.
+  - 검증: scheduler/runtime targeted pytest `344 passed`, candle/AI/state-handler targeted pytest `260 passed`, Black·compile·`git diff --check` 통과. 현재 PID에는 미반영이며 별도 승인된 graceful restart 이후 generation별 enqueue/deadline-expired와 attach-to-first-heavy 지연을 재귀속한다.
+  - 금지/rollback: 매매 threshold, provider, 주문·가격·수량, broker/account/order guard는 변경하지 않는다. 신규 generation 첫 heavy 평가 또는 COMMIT/RECOVERY cadence가 지연되면 이 코드 변경을 되돌린 뒤 review gate를 다시 통과한다.
+
 - [ ] `[SamsungPriceWidgetWindowsInstall0728] AWS 공유토큰 전용 삼성전자 1분 가격 위젯 Windows 설치·1분 차이값 확인` (`Due: 2026-07-28`, `Slot: INTRADAY`, `TimeWindow: 10:30~15:20`, `Track: RuntimeStability`)
   - Source: [samsung_price_widget_routes.py](/home/ubuntu/KORStockScan/src/web/samsung_price_widget_routes.py), [Windows 설치 안내](/home/ubuntu/KORStockScan/tools/windows/README.md), [Gunicorn widget drop-in](/home/ubuntu/KORStockScan/deploy/systemd/korstockscan-gunicorn-widget.conf)
   - 실행 결과 (`2026-07-28 10:28 KST`): `https://korstockscan.ddns.net/api/widget/samsung-price`는 무인증 `401`, AWS key 인증 `200`을 확인했다. 응답은 `source=kiwoom_ka10001`, `token_mode=shared_cache_only`, `current_price=230000`이며 Kiwoom token cache 재사용 로그만 남겼다. AWS key는 `/etc/korstockscan/samsung-price-widget.key` (`root:www-data 640`, 상위 디렉터리 `root:www-data 750`)에만 있고 repository/Windows에는 Kiwoom appkey·secret·bearer token을 저장하지 않는다.
