@@ -8365,6 +8365,40 @@ def test_scanner_heavy_eval_evidence_fingerprint_ignores_receipt_timestamp():
     assert baseline != changed_bbo
 
 
+def test_scanner_heavy_eval_coalesced_emits_scheduler_contract(monkeypatch):
+    emitted = []
+    generation = ScannerGeneration(
+        code="005930",
+        promotion_id="PROMO-1",
+        revision=1,
+        record_id=1,
+        venue="KRX",
+        promotion_epoch=100.0,
+        attach_epoch=101.0,
+        observed_price=1000,
+        source_signature="VALUE_TOP",
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "_emit_scanner_scheduler_event",
+        lambda **kwargs: emitted.append(kwargs),
+    )
+
+    kiwoom_sniper_v2._emit_scanner_heavy_eval_coalesced(
+        {"code": "005930", "name": "삼성전자"},
+        generation=generation,
+        now_epoch=105.0,
+        reason="async_transport_pending",
+        retry_min_sec=15.0,
+        last_attempt_epoch=103.0,
+    )
+
+    fields = emitted[-1]["fields"]
+    assert fields["scheduler_action"] == "coalesced"
+    assert fields["scheduler_reason"] == "async_transport_pending"
+    assert fields["scanner_heavy_eval_coalesced_reason"] == fields["scheduler_reason"]
+
+
 def test_scanner_async_transport_wait_state_never_uses_ready_result_as_heavy_work(
     monkeypatch,
 ):

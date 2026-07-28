@@ -8491,6 +8491,8 @@ def _emit_scanner_heavy_eval_coalesced(
             "actual_order_submitted": False,
             "broker_order_forbidden": True,
             "scanner_scheduler_lane": ScannerLane.HEAVY_EVAL.value,
+            "scheduler_action": "coalesced",
+            "scheduler_reason": str(reason or "unknown"),
             "scanner_heavy_eval_coalesced_reason": str(reason or "unknown"),
             "heavy_eval_coalesced_count": 1,
             "scanner_heavy_eval_evidence_changed": bool(evidence_changed),

@@ -13492,6 +13492,10 @@ _RISING_MISSED_NXT_POST_BLOCK_REST_RATE_LOCK = threading.Lock()
 _RISING_MISSED_NXT_POST_BLOCK_REST_RATE_EPOCHS: list[float] = []
 _RISING_MISSED_ADVERSE_MICRO_RECOVERY_OBSERVATIONS: dict[str, dict[str, Any]] = {}
 _RISING_MISSED_ADVERSE_MICRO_RECOVERY_OBSERVATION_LOCK = threading.RLock()
+_RISING_MISSED_ADVERSE_MICRO_RECOVERY_UPDATE_QUEUE: queue.Queue = queue.Queue(
+    maxsize=1024
+)
+_RISING_MISSED_ADVERSE_MICRO_RECOVERY_UPDATE_DROPPED = 0
 _RISING_MISSED_ADVERSE_MICRO_RECOVERY_MAX_ACTIVE = 24
 
 _RISING_MISSED_NXT_DOWNSTREAM_BLOCK_STAGES = frozenset(
@@ -13751,27 +13755,78 @@ def _register_rising_missed_adverse_micro_recovery_observation(
 def _record_rising_missed_adverse_micro_next_scanner_loop(
     code: str | None, *, now_ts: float
 ) -> None:
+    global _RISING_MISSED_ADVERSE_MICRO_RECOVERY_UPDATE_DROPPED
+
     stock_code = str(code or "").strip()[:6]
     if not stock_code:
         return
-    with _RISING_MISSED_ADVERSE_MICRO_RECOVERY_OBSERVATION_LOCK:
-        for observation in _RISING_MISSED_ADVERSE_MICRO_RECOVERY_OBSERVATIONS.values():
-            if observation.get("stock_code") == stock_code:
-                record_adverse_micro_next_scanner_loop(observation, now_ts=now_ts)
+    try:
+        _RISING_MISSED_ADVERSE_MICRO_RECOVERY_UPDATE_QUEUE.put_nowait(
+            ("next_scanner_loop", stock_code, False, float(now_ts))
+        )
+    except queue.Full:
+        _RISING_MISSED_ADVERSE_MICRO_RECOVERY_UPDATE_DROPPED += 1
 
 
 def _record_rising_missed_adverse_micro_reentry_candidate(
     code: str | None, *, allowed: bool, now_ts: float
 ) -> None:
+    global _RISING_MISSED_ADVERSE_MICRO_RECOVERY_UPDATE_DROPPED
+
     stock_code = str(code or "").strip()[:6]
     if not stock_code:
         return
+    try:
+        _RISING_MISSED_ADVERSE_MICRO_RECOVERY_UPDATE_QUEUE.put_nowait(
+            ("reentry_candidate", stock_code, bool(allowed), float(now_ts))
+        )
+    except queue.Full:
+        _RISING_MISSED_ADVERSE_MICRO_RECOVERY_UPDATE_DROPPED += 1
+
+
+def _drain_rising_missed_adverse_micro_hot_path_updates() -> dict[str, int]:
+    global _RISING_MISSED_ADVERSE_MICRO_RECOVERY_UPDATE_DROPPED
+
+    updates: list[tuple[str, str, bool, float]] = []
+    while True:
+        try:
+            updates.append(
+                _RISING_MISSED_ADVERSE_MICRO_RECOVERY_UPDATE_QUEUE.get_nowait()
+            )
+        except queue.Empty:
+            break
+    applied = 0
+    orphaned = 0
     with _RISING_MISSED_ADVERSE_MICRO_RECOVERY_OBSERVATION_LOCK:
-        for observation in _RISING_MISSED_ADVERSE_MICRO_RECOVERY_OBSERVATIONS.values():
-            if observation.get("stock_code") == stock_code:
-                record_adverse_micro_reentry_decision(
-                    observation, allowed=bool(allowed), now_ts=now_ts
-                )
+        for action, stock_code, allowed, update_ts in updates:
+            matched = False
+            for (
+                observation
+            ) in _RISING_MISSED_ADVERSE_MICRO_RECOVERY_OBSERVATIONS.values():
+                if observation.get("stock_code") != stock_code:
+                    continue
+                matched = True
+                if action == "next_scanner_loop":
+                    record_adverse_micro_next_scanner_loop(
+                        observation, now_ts=update_ts
+                    )
+                elif action == "reentry_candidate":
+                    record_adverse_micro_reentry_decision(
+                        observation,
+                        allowed=allowed,
+                        now_ts=update_ts,
+                    )
+                applied += 1
+            if not matched:
+                orphaned += 1
+        dropped = int(_RISING_MISSED_ADVERSE_MICRO_RECOVERY_UPDATE_DROPPED)
+        _RISING_MISSED_ADVERSE_MICRO_RECOVERY_UPDATE_DROPPED = 0
+    return {
+        "queued": len(updates),
+        "applied": applied,
+        "orphaned": orphaned,
+        "dropped": dropped,
+    }
 
 
 def observe_rising_missed_adverse_micro_recovery_observations(
@@ -13780,12 +13835,19 @@ def observe_rising_missed_adverse_micro_recovery_observations(
     """Emit due 15/30/60-second KRX recovery observations from fresh WS 0B only."""
 
     observed_ts = time.time() if now_ts is None else float(now_ts)
+    update_stats = _drain_rising_missed_adverse_micro_hot_path_updates()
     with _RISING_MISSED_ADVERSE_MICRO_RECOVERY_OBSERVATION_LOCK:
         observations = [
             dict(item)
             for item in _RISING_MISSED_ADVERSE_MICRO_RECOVERY_OBSERVATIONS.values()
         ]
-    stats = {"active": len(observations), "fresh": 0, "source_gap": 0, "completed": 0}
+    stats = {
+        "active": len(observations),
+        "fresh": 0,
+        "source_gap": 0,
+        "completed": 0,
+        **{f"hot_path_update_{key}": value for key, value in update_stats.items()},
+    }
     snapshot_cache: dict[str, dict[str, Any]] = {}
     for snapshot_observation in observations:
         observation_id = str(snapshot_observation.get("observation_id") or "")
