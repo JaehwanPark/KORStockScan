@@ -119,6 +119,13 @@ FAIL이면 `runtime_activation=false`를 유지한다. partial rollout, canary, 
 - 이 작업지시만으로 bot restart를 실행하지 않는다.
 - PASS 뒤 cross-venue 오염, forming bar 혼입, source-quality conflict, provider none, semantic/schema reject, exact hash 누락, runtime hook 예외 또는 기존 safety 우선순위 변화가 확인되면 신규 context surfaces만 기존 rollback mapping으로 원자적으로 비활성화한다.
 
+### 2.4 Operator-directed full promotion override (`2026-07-29`)
+
+- 사용자가 명시적으로 validation gate 우회를 지시한 경우에만 `operator-directed-apply`를 사용할 수 있다. 이 경로는 `operator_directed_full_promotion` mode, dated authorization ID, operator reason, 그리고 원래 validation/review finding 전체를 promotion artifact에 보존한다. 이를 일반 validation PASS로 표시하지 않는다.
+- override는 runtime manifest/verify와 PREMARKET transaction window를 계속 요구하며, 전체 symbol·session·endpoint에만 적용된다. partial rollout은 허용하지 않는다.
+- runtime preflight artifact readiness만 override marker로 대체한다. 각 호출의 fresh source, venue/session consistency, completed-bar, source-quality, broker/hard-safety guard는 그대로 fail-closed다.
+- marker는 target date에만 유효하며 다음 거래일로 자동 이월되지 않는다. marker만으로 baseline PID를 활성화하지 않으며, 적용 PID가 전체 Exact V2 runtime env를 read-back한 경우에만 활성화한다. 적용 PID 반영은 별도 승인된 graceful restart와 runtime env read-back이 필요하다.
+
 ## 3. Promotion 후 natural Exact V2 표본 수집
 
 - PASS timestamp 이후 자연 발생한 `analyze_target`, `entry_price`, `holding_score`, `holding_flow` 호출만 primary 수집 대상으로 삼는다.

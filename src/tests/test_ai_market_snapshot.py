@@ -1392,6 +1392,30 @@ def test_ready_artifact_requires_a_new_process_handoff(tmp_path, monkeypatch):
     assert active["status"] == "ready"
 
 
+def test_operator_directed_promotion_can_open_exact_v2_preflight_only(
+    monkeypatch,
+):
+    monkeypatch.setenv("KORSTOCKSCAN_AI_INPUT_PREFLIGHT_MODE", "exact_v2")
+    monkeypatch.setenv("KORSTOCKSCAN_AI_INPUT_PREFLIGHT_ARTIFACT_DATE", "2026-07-29")
+    monkeypatch.setattr(
+        mod,
+        "promotion_activation_state",
+        lambda captured_at: {
+            "active": True,
+            "target_date": "2026-07-29",
+            "promotion_mode": "operator_directed_full_promotion",
+            "promotion_artifact": "/tmp/operator-directed-promotion.json",
+            "promotion_sha256": "promotion-hash",
+        },
+    )
+
+    status = mod.runtime_preflight_artifact_status(now_ts=1785285000.0)
+
+    assert status["ready"] is True
+    assert status["status"] == "ready_operator_directed_exact_v2"
+    assert status["validation_gate_bypassed"] is True
+
+
 def _baseline_payload():
     return {
         "schema": "ai_input_quality_baseline_v1",

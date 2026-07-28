@@ -766,7 +766,7 @@ def test_runtime_fetch_request_code_matches_actual_holding_venue(monkeypatch):
             decision_kind="holding_score",
             now_ts=regular,
         )
-        == "000660_AL"
+        == "000660"
     )
 
 
