@@ -2,9 +2,12 @@
 
 `samsung_price_widget.py` is a small always-on-top Windows widget (190 x 170
 pixels) that shows Samsung Electronics (`005930`) current price, the difference
-from the previous successful one-minute query, today's low-price distance, and
+from the previous successful 30-second query, today's low-price distance, and
 the direction of the three latest completed one-minute closes. It also draws a
 compact 20-minute line chart from completed one-minute closes.
+
+The current-price query and previous-price delta refresh every 30 seconds;
+the trend and chart remain based on completed one-minute candles.
 
 It calls the KORStockScan AWS endpoint, not Kiwoom directly. The AWS endpoint
 uses only the existing `data/runtime/kiwoom_token_cache.json` shared cache and

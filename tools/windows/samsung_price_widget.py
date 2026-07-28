@@ -1,4 +1,4 @@
-"""Small Windows widget that shows Samsung Electronics' one-minute price delta.
+"""Small Windows widget that shows Samsung Electronics' 30-second price delta.
 
 The widget only calls the KORStockScan AWS read-only quote endpoint.  It never
 stores a Kiwoom app key, secret key, or bearer token, and it cannot issue a
@@ -18,7 +18,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 APP_NAME = "SamsungPriceWidget"
-POLL_INTERVAL_MS = 60_000
+POLL_INTERVAL_MS = 30_000
 WINDOW_SIZE = "190x170"
 ACCESS_KEY_HEADER = "X-KORStockScan-Widget-Key"
 CHART_WIDTH = 174
@@ -146,7 +146,7 @@ class SamsungPriceWidget:
         self.previous_price: int | None = None
         self.inflight = False
 
-        root.title("삼성전자 1분")
+        root.title("삼성전자 30초")
         root.geometry(WINDOW_SIZE)
         root.minsize(190, 170)
         root.maxsize(190, 170)
@@ -158,7 +158,7 @@ class SamsungPriceWidget:
         frame.pack(fill="both", expand=True)
         tk.Label(
             frame,
-            text="삼성전자 005930 · 1분",
+            text="삼성전자 005930 · 30초 갱신",
             fg="#dfe7f3",
             bg="#1e2430",
             font=("Malgun Gothic", 8, "bold"),

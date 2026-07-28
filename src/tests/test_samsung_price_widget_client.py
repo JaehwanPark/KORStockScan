@@ -72,6 +72,10 @@ def test_widget_requires_https_and_access_key():
     )
 
 
+def test_widget_refreshes_every_30_seconds():
+    assert widget.POLL_INTERVAL_MS == 30_000
+
+
 def test_windows_installer_uses_a_resolved_ascii_shortcut_path():
     installer = _INSTALLER_PATH.read_text(encoding="utf-8")
 

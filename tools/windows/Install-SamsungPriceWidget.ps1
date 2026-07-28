@@ -44,7 +44,7 @@ $shortcut = $shell.CreateShortcut([string]$shortcutPath)
 $shortcut.TargetPath = $pythonw
 $shortcut.Arguments = ('"{0}"' -f (Join-Path $scriptDir 'samsung_price_widget.py'))
 $shortcut.WorkingDirectory = $scriptDir
-$shortcut.Description = '삼성전자 현재가와 직전 1분 가격 차이'
+$shortcut.Description = '삼성전자 현재가와 직전 30초 가격 차이'
 $shortcut.Save()
 
 Write-Host "바탕화면 바로가기를 만들었습니다: $shortcutPath"
