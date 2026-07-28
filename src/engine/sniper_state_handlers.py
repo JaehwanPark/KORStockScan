@@ -13720,8 +13720,7 @@ def _register_rising_missed_adverse_micro_recovery_observation(
         # duplicate scheduler passes.
         if any(
             existing.get("stock_code") == stock_code
-            and existing.get("source_block_reason")
-            == TP1_SELECTOR_BLOCK_HARD_NEGATIVE
+            and existing.get("source_block_reason") == TP1_SELECTOR_BLOCK_HARD_NEGATIVE
             for existing in _RISING_MISSED_ADVERSE_MICRO_RECOVERY_OBSERVATIONS.values()
         ):
             return True
@@ -40368,6 +40367,12 @@ def _build_ai_ops_log_fields(
         "entry_candle_risk_flags",
         "entry_candle_source_quality_status",
         "entry_candle_source_quality_blockers",
+        "entry_candle_decision_window_quality_status",
+        "entry_candle_decision_window_quality_blockers",
+        "entry_candle_decision_window_missing_bar_count",
+        "entry_candle_session_integrity_status",
+        "entry_candle_session_integrity_blockers",
+        "entry_candle_session_integrity_missing_bar_count",
         "entry_candle_hybrid_guard_result",
         "entry_candle_latest_bar_age_sec",
         "metric_role",
@@ -40379,7 +40384,8 @@ def _build_ai_ops_log_fields(
         "forbidden_uses",
     ):
         if field_name in payload:
-            out[field_name] = str(payload.get(field_name, "-") or "-")
+            value = payload.get(field_name, "-")
+            out[field_name] = str(value if value is not None else "-")
     for field_name, value in payload.items():
         if str(field_name).startswith("holding_context_"):
             out[field_name] = value
@@ -40698,10 +40704,17 @@ def _build_ai_ops_log_fields(
         "entry_candle_regime",
         "entry_candle_alignment",
         "entry_candle_source_quality_status",
+        "entry_candle_decision_window_quality_status",
+        "entry_candle_decision_window_quality_blockers",
+        "entry_candle_decision_window_missing_bar_count",
+        "entry_candle_session_integrity_status",
+        "entry_candle_session_integrity_blockers",
+        "entry_candle_session_integrity_missing_bar_count",
         "entry_candle_hybrid_guard_result",
     ):
         if field_name in payload:
-            out[field_name] = str(payload.get(field_name, "-") or "-")
+            value = payload.get(field_name, "-")
+            out[field_name] = str(value if value is not None else "-")
     for field_name in (
         "tick_context_stale",
         "quote_stale",
@@ -40972,10 +40985,17 @@ def _build_tick_source_quality_log_fields(feature_probe):
         "entry_candle_regime",
         "entry_candle_alignment",
         "entry_candle_source_quality_status",
+        "entry_candle_decision_window_quality_status",
+        "entry_candle_decision_window_quality_blockers",
+        "entry_candle_decision_window_missing_bar_count",
+        "entry_candle_session_integrity_status",
+        "entry_candle_session_integrity_blockers",
+        "entry_candle_session_integrity_missing_bar_count",
         "entry_candle_hybrid_guard_result",
     ):
         if field_name in payload:
-            out[field_name] = str(payload.get(field_name, "-") or "-")
+            value = payload.get(field_name, "-")
+            out[field_name] = str(value if value is not None else "-")
     for field_name in (
         "tick_context_stale",
         "quote_stale",

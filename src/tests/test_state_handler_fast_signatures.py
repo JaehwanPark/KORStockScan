@@ -6249,6 +6249,10 @@ def test_score65_74_recovery_probe_log_fields_preserve_micro_vwap_provenance():
             "entry_candle_venue": "KRX",
             "entry_candle_route_equivalence_proven": True,
             "entry_candle_source_quality_status": "fresh_consistent",
+            "entry_candle_decision_window_quality_status": "fresh_consistent",
+            "entry_candle_decision_window_missing_bar_count": 0,
+            "entry_candle_session_integrity_status": "blocked",
+            "entry_candle_session_integrity_missing_bar_count": 30,
             "entry_candle_hybrid_guard_result": "preserve_neutral_or_supportive",
         }
     )
@@ -6263,6 +6267,10 @@ def test_score65_74_recovery_probe_log_fields_preserve_micro_vwap_provenance():
     assert fields["entry_candle_venue"] == "KRX"
     assert fields["entry_candle_route_equivalence_proven"] is True
     assert fields["entry_candle_source_quality_status"] == "fresh_consistent"
+    assert fields["entry_candle_decision_window_quality_status"] == "fresh_consistent"
+    assert fields["entry_candle_decision_window_missing_bar_count"] == "0"
+    assert fields["entry_candle_session_integrity_status"] == "blocked"
+    assert fields["entry_candle_session_integrity_missing_bar_count"] == "30"
     assert (
         fields["entry_candle_hybrid_guard_result"] == "preserve_neutral_or_supportive"
     )

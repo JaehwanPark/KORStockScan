@@ -342,6 +342,41 @@ def test_builder_marks_two_or_more_missing_bars_as_source_quality_block(monkeypa
     assert context["source_quality"]["missing_bar_count"] >= 2
     assert context["source_quality"]["max_consecutive_missing_bar_count"] >= 2
     assert "consecutive_bar_gap" in context["risk_flags"]
+    assert context["source_quality"]["status"] == "blocked"
+    assert context["source_quality"]["decision_window"]["status"] == "blocked"
+
+
+def test_builder_keeps_old_session_gap_out_of_current_ai_preflight_window(monkeypatch):
+    """A historic hole invalidates session features, not a fresh 60m decision."""
+
+    _enable(monkeypatch)
+    bars = _candles(214)
+    # 10:14 through 10:43; this mirrors the common ka10080 gap observed
+    # intraday while the 11:33--12:32 decision horizon is complete.
+    del bars[74:104]
+    context = build_entry_candle_context(
+        "token",
+        "006340",
+        _ws(),
+        venue="KRX",
+        session="krx_regular",
+        now_ts=datetime(2026, 7, 23, 12, 33, 30, tzinfo=KST),
+        recent_candles=bars,
+        source_meta={"api_id": "ka10080", "received_count": len(bars)},
+    )
+
+    quality = context["source_quality"]
+    assert quality["status"] == "fresh_consistent"
+    assert quality["blockers"] == []
+    assert quality["decision_window"]["status"] == "fresh_consistent"
+    assert quality["decision_window"]["missing_bar_count"] == 0
+    assert quality["session_integrity"]["status"] == "blocked"
+    assert quality["session_integrity"]["missing_bar_count"] == 30
+    assert "consecutive_bar_gap" in context["risk_flags"]
+    assert context["multi_timeframe_context"]["source_quality"]["status"] == (
+        "source_quality_blocked"
+    )
+    assert context["multi_timeframe_context"]["session_bar_vwap"]["value"] is None
 
 
 def test_builder_does_not_treat_separate_single_gaps_as_consecutive(monkeypatch):

@@ -37,13 +37,17 @@ ADVERSE_REGIMES = {
     "downtrend_bounce",
 }
 TRUSTED_TICK_VOLUME_SOURCES = {"15_abs", "13_delta"}
+# The decision payload exposes 1/3/5/10/20/60-minute structure.  A gap outside
+# this completed-bar horizon must not suppress an otherwise exact, fresh entry
+# call, but session-wide features that cross the gap remain unavailable.
+DECISION_CONTINUITY_HORIZON_MINUTES = 60
 OBSERVATION_CONTRACT = {
     "metric_role": "entry_context_feature_bundle",
     "decision_authority": "bounded_entry_confirmation",
     "window_policy": "current_session_3m_5m_10m_20m",
     "sample_floor": "session_aware_0_2_opening_3_9_short_10_plus_full",
     "primary_decision_metric": "source_quality_adjusted_ev_pct",
-    "source_quality_gate": "fresh_venue_consistent_session_bars",
+    "source_quality_gate": "fresh_venue_consistent_completed_decision_window",
     "forbidden_uses": [
         "standalone_buy_authority",
         "order_price_or_quantity_decision",
@@ -77,6 +81,21 @@ def _cohort(venue: str, session: str) -> str:
     if "NXT" in venue_upper or session_lower.startswith("nxt_"):
         return "NXT"
     return "KRX"
+
+
+def _bar_gap_stats(bars: list[dict[str, Any]]) -> tuple[int, int]:
+    """Return total and largest missing-minute gaps in an ordered bar window."""
+
+    missing_bar_count = 0
+    max_consecutive_missing_bar_count = 0
+    for left, right in zip(bars, bars[1:]):
+        gap = int((right["dt"] - left["dt"]).total_seconds() // 60) - 1
+        if gap > 0:
+            missing_bar_count += gap
+            max_consecutive_missing_bar_count = max(
+                max_consecutive_missing_bar_count, gap
+            )
+    return missing_bar_count, max_consecutive_missing_bar_count
 
 
 def entry_candle_context_enabled(
@@ -848,15 +867,15 @@ def build_session_candle_source(
     # The forming-bar overlay is an additional live observation. Keep the
     # consumer-visible source window bounded after that overlay as well.
     current_session = current_session[-source_limit:]
-    missing_bar_count = 0
-    max_consecutive_missing_bar_count = 0
-    for left, right in zip(current_session, current_session[1:]):
-        gap = int((right["dt"] - left["dt"]).total_seconds() // 60) - 1
-        if gap > 0:
-            missing_bar_count += gap
-            max_consecutive_missing_bar_count = max(
-                max_consecutive_missing_bar_count, gap
-            )
+    missing_bar_count, max_consecutive_missing_bar_count = _bar_gap_stats(
+        current_session
+    )
+    completed_session = [bar for bar in current_session if not bar.get("forming")]
+    decision_window = completed_session[-(DECISION_CONTINUITY_HORIZON_MINUTES + 1) :]
+    (
+        decision_missing_bar_count,
+        decision_max_consecutive_missing_bar_count,
+    ) = _bar_gap_stats(decision_window)
     latest = current_session[-1] if current_session else None
     latest_age_sec = max(0.0, (now - latest["dt"]).total_seconds()) if latest else None
     venue_conflict = bool(
@@ -904,13 +923,21 @@ def build_session_candle_source(
         quality_blockers.append("duplicate_bar")
     if duplicate_price_conflict:
         quality_blockers.append("duplicate_price_conflict")
+    decision_window_blockers = []
+    if decision_max_consecutive_missing_bar_count >= 2:
+        decision_window_blockers.append("consecutive_bar_gap")
+    session_integrity_blockers = []
     if max_consecutive_missing_bar_count >= 2:
-        quality_blockers.append("consecutive_bar_gap")
+        session_integrity_blockers.append("consecutive_bar_gap")
     if not current_session:
         quality_blockers.append("no_current_session_bars")
     if latest_age_sec is not None and latest_age_sec > 180:
         quality_blockers.append("stale_latest_bar")
+    quality_blockers.extend(decision_window_blockers)
     quality_status = "blocked" if quality_blockers else "fresh_consistent"
+    session_integrity_status = (
+        "blocked" if session_integrity_blockers else "fresh_consistent"
+    )
     structure = _structure(current_session)
     completed_count = sum(not bar.get("forming") for bar in current_session)
     sample_mode = (
@@ -984,12 +1011,43 @@ def build_session_candle_source(
         "structure": structure,
         "regime": structure["regime"],
         "alignment": structure["alignment"],
-        "risk_flags": sorted(set(quality_blockers)),
+        # Retain the full-session warning for the model/audit trail.  The
+        # preflight status above is deliberately based on the completed
+        # decision horizon so an old data hole cannot suppress every later
+        # entry call.  Derived session-wide fields independently retain their
+        # own source_quality_blocked status in the multi-timeframe bundle.
+        "risk_flags": sorted(set(quality_blockers + session_integrity_blockers)),
         "source_quality": {
             "status": quality_status,
             "blockers": quality_blockers,
             "missing_bar_count": missing_bar_count,
             "max_consecutive_missing_bar_count": max_consecutive_missing_bar_count,
+            "decision_window": {
+                "status": (
+                    "blocked" if decision_window_blockers else "fresh_consistent"
+                ),
+                "horizon_minutes": DECISION_CONTINUITY_HORIZON_MINUTES,
+                "completed_bar_count": len(decision_window),
+                "start_timestamp": (
+                    decision_window[0]["dt"].isoformat() if decision_window else None
+                ),
+                "end_timestamp": (
+                    decision_window[-1]["dt"].isoformat() if decision_window else None
+                ),
+                "missing_bar_count": decision_missing_bar_count,
+                "max_consecutive_missing_bar_count": (
+                    decision_max_consecutive_missing_bar_count
+                ),
+                "blockers": decision_window_blockers,
+            },
+            "session_integrity": {
+                "status": session_integrity_status,
+                "blockers": session_integrity_blockers,
+                "missing_bar_count": missing_bar_count,
+                "max_consecutive_missing_bar_count": (
+                    max_consecutive_missing_bar_count
+                ),
+            },
             "duplicate_count": duplicate_count,
             "duplicate_price_conflict": duplicate_price_conflict,
             "time_monotonic": not time_reversal,
@@ -1257,6 +1315,16 @@ def entry_candle_context_log_fields(
         if isinstance(context.get("source_quality"), dict)
         else {}
     )
+    decision_window = (
+        source.get("decision_window")
+        if isinstance(source.get("decision_window"), dict)
+        else {}
+    )
+    session_integrity = (
+        source.get("session_integrity")
+        if isinstance(source.get("session_integrity"), dict)
+        else {}
+    )
     timing = context.get("timing") if isinstance(context.get("timing"), dict) else {}
     guard = (
         guard_result
@@ -1295,6 +1363,20 @@ def entry_candle_context_log_fields(
         "entry_candle_risk_flags": context.get("risk_flags", []),
         "entry_candle_source_quality_status": source.get("status"),
         "entry_candle_source_quality_blockers": source.get("blockers", []),
+        "entry_candle_decision_window_quality_status": decision_window.get("status"),
+        "entry_candle_decision_window_quality_blockers": decision_window.get(
+            "blockers", []
+        ),
+        "entry_candle_decision_window_missing_bar_count": decision_window.get(
+            "missing_bar_count", 0
+        ),
+        "entry_candle_session_integrity_status": session_integrity.get("status"),
+        "entry_candle_session_integrity_blockers": session_integrity.get(
+            "blockers", []
+        ),
+        "entry_candle_session_integrity_missing_bar_count": session_integrity.get(
+            "missing_bar_count", 0
+        ),
         "entry_candle_hybrid_guard_result": guard.get("result"),
         "entry_candle_context_fetch_ms": timing.get("fetch_ms", 0),
         "entry_candle_context_build_ms": timing.get("build_ms", 0),

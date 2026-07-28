@@ -104,6 +104,40 @@ def test_krx_snapshot_uses_exact_per_type_provenance():
     )
 
 
+def test_historical_session_gap_does_not_block_fresh_decision_window():
+    now = datetime(2026, 7, 23, 10, 0, tzinfo=KST).timestamp()
+    candle = _candle()
+    candle["source_quality"].update(
+        {
+            "decision_window": {
+                "status": "fresh_consistent",
+                "horizon_minutes": 60,
+                "missing_bar_count": 0,
+                "blockers": [],
+            },
+            "session_integrity": {
+                "status": "blocked",
+                "missing_bar_count": 30,
+                "blockers": ["consecutive_bar_gap"],
+            },
+        }
+    )
+
+    snapshot = mod.build_ai_market_snapshot(
+        stock_code="005930",
+        decision_stage="entry_screen",
+        ws_data=_ws(now),
+        effective_venue="KRX",
+        session_bucket="krx_regular",
+        candle_context=candle,
+        now_ts=now,
+    )
+
+    preflight = snapshot["ai_input_preflight_v1"]
+    assert preflight["source_allowed"] is True
+    assert "candle_source_quality" not in preflight["source_blockers"]
+
+
 def test_krx_snapshot_selects_candle_route_partition_without_mixing_0b_0d():
     now = datetime(2026, 7, 23, 10, 0, tzinfo=KST).timestamp()
     ws = _ws(now)
