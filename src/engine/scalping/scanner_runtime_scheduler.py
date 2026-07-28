@@ -508,17 +508,13 @@ class ScannerRuntimeScheduler:
                     fields=fields,
                 )
             evidence_key = (
-                str(recheck_evidence_key)
-                if recheck_evidence_key is not None
-                else None
+                str(recheck_evidence_key) if recheck_evidence_key is not None else None
             )
             if (
                 normalized_lane is ScannerLane.FAST_PRECHECK
                 and evidence_key is not None
             ):
-                previous = self._last_fast_recheck_enqueue.get(
-                    generation.generation_id
-                )
+                previous = self._last_fast_recheck_enqueue.get(generation.generation_id)
                 if previous is not None:
                     previous_epoch, previous_evidence_key = previous
                     elapsed = max(0.0, now_epoch - previous_epoch)
@@ -786,9 +782,7 @@ class ScannerRuntimeScheduler:
                 # Its own target will still claim it and emit deadline_expired
                 # before enqueueing a fresh attempt.
                 dispatchable_candidates = [
-                    item
-                    for item in candidates
-                    if now_value <= item.deadline_epoch
+                    item for item in candidates if now_value <= item.deadline_epoch
                 ]
                 if dispatchable_candidates:
                     candidates = dispatchable_candidates
@@ -983,17 +977,10 @@ class ScannerRuntimeScheduler:
                 and generation.generation_id
                 not in self._first_precheck_dispatched_generation_ids
             )
-            else (
-                "recheck"
-                if lane is ScannerLane.FAST_PRECHECK
-                else "not_applicable"
-            )
+            else ("recheck" if lane is ScannerLane.FAST_PRECHECK else "not_applicable")
         )
         default_deadline_sec = self._DEFAULT_DEADLINE_SEC[lane]
-        if (
-            lane is ScannerLane.FAST_PRECHECK
-            and precheck_phase == "recheck"
-        ):
+        if lane is ScannerLane.FAST_PRECHECK and precheck_phase == "recheck":
             default_deadline_sec = self._FAST_PRECHECK_RECHECK_DEADLINE_SEC
         deadline = (
             float(deadline_epoch)
@@ -1040,9 +1027,7 @@ class ScannerRuntimeScheduler:
             self._first_precheck_dispatched_generation_ids.discard(
                 current_generation.generation_id
             )
-            self._last_fast_recheck_enqueue.pop(
-                current_generation.generation_id, None
-            )
+            self._last_fast_recheck_enqueue.pop(current_generation.generation_id, None)
         for work_id, item in list(self._work_by_id.items()):
             if item.generation.code == code:
                 superseded.append(work_id)
@@ -1123,8 +1108,7 @@ class ScannerRuntimeScheduler:
         return [
             item
             for item in self._work_by_id.values()
-            if item.lane in critical_lanes
-            and self.is_current(item.generation)
+            if item.lane in critical_lanes and self.is_current(item.generation)
         ]
 
     def _remove_heap_work_id_locked(self, work_id: str) -> None:

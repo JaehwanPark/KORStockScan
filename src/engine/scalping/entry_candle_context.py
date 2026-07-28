@@ -47,7 +47,9 @@ OBSERVATION_CONTRACT = {
     "window_policy": "current_session_3m_5m_10m_20m",
     "sample_floor": "session_aware_0_2_opening_3_9_short_10_plus_full",
     "primary_decision_metric": "source_quality_adjusted_ev_pct",
-    "source_quality_gate": "fresh_venue_consistent_completed_decision_window",
+    "source_quality_gate": (
+        "fresh_venue_consistent_observed_bars_with_field_level_sparse_minute_exclusion"
+    ),
     "forbidden_uses": [
         "standalone_buy_authority",
         "order_price_or_quantity_decision",
@@ -204,9 +206,11 @@ def resolve_entry_candle_request_code(
     if venue_upper in {"SOR", "INTEGRATED", "KRX_NXT_INTEGRATED"}:
         return f"{base}_AL"
     if venue_upper == "KRX":
-        ws_suffix, ws_route = _ws_route(ws_data if isinstance(ws_data, dict) else {})
-        if ws_suffix == "_AL" and ws_route == "krx_nxt_integrated":
-            return f"{base}_AL"
+        # A KRX decision must fetch the KRX-specific REST series even when a
+        # shared websocket snapshot last observed an integrated (_AL) event.
+        # The later route-consistency check still blocks an unproven mixed
+        # event; following it here would silently turn a KRX series into SOR.
+        return base
     return base
 
 
@@ -478,17 +482,40 @@ def _tick_dt(tick: dict[str, Any], now: datetime) -> datetime | None:
     return None
 
 
+def _contiguous_tail(
+    bars: list[dict[str, Any]], required: int
+) -> list[dict[str, Any]] | None:
+    """Return a tail only when it represents consecutive observed minutes.
+
+    ka10080 returns observed chart rows but its contract does not specify a
+    zero-volume row for every clock minute.  Preserve the raw sparse series
+    instead of inferring no-trade minutes or inventing flat OHLCV bars; decline
+    only derivatives whose names promise a wall-clock minute window when the
+    required timestamps are not contiguous.
+    """
+
+    usable = bars[-required:]
+    if len(usable) < required:
+        return None
+    if any(
+        (right["dt"] - left["dt"]).total_seconds() != 60
+        for left, right in zip(usable, usable[1:])
+    ):
+        return None
+    return usable
+
+
 def _return_pct(bars: list[dict[str, Any]], minutes: int) -> float | None:
-    usable = bars[-(minutes + 1) :]
-    if len(usable) < minutes + 1 or usable[0]["c"] <= 0:
+    usable = _contiguous_tail(bars, minutes + 1)
+    if usable is None or usable[0]["c"] <= 0:
         return None
     return round((usable[-1]["c"] / usable[0]["c"] - 1.0) * 100.0, 4)
 
 
 def _slope_pct(bars: list[dict[str, Any]], minutes: int) -> float | None:
     required = max(2, minutes)
-    usable = bars[-required:]
-    if len(usable) < required:
+    usable = _contiguous_tail(bars, required)
+    if usable is None:
         return None
     first = usable[0]["c"]
     if first <= 0:
@@ -505,8 +532,8 @@ def _slope_pct(bars: list[dict[str, Any]], minutes: int) -> float | None:
 
 def _range_pct(bars: list[dict[str, Any]], minutes: int) -> float | None:
     required = max(1, minutes)
-    usable = bars[-required:]
-    if len(usable) < required:
+    usable = _contiguous_tail(bars, required)
+    if usable is None:
         return None
     highs = [bar["h"] for bar in usable if bar["h"] > 0]
     lows = [bar["l"] for bar in usable if bar["l"] > 0]
@@ -538,18 +565,26 @@ def _structure(bars: list[dict[str, Any]]) -> dict[str, Any]:
     returns = {str(window): _return_pct(active, window) for window in windows}
     slopes = {str(window): _slope_pct(active, window) for window in windows}
     ranges = {str(window): _range_pct(active, window) for window in windows}
-    window_source_bar_counts = {
-        str(window): {
+    window_source_bar_counts = {}
+    for window in windows:
+        return_required = window + 1
+        slope_required = max(2, window)
+        range_required = max(1, window)
+        return_tail = _contiguous_tail(active, return_required)
+        slope_tail = _contiguous_tail(active, slope_required)
+        range_tail = _contiguous_tail(active, range_required)
+        window_source_bar_counts[str(window)] = {
             "available_completed_bars": len(active),
-            "return_required_bars": window + 1,
-            "slope_required_bars": max(2, window),
-            "range_required_bars": max(1, window),
-            "return_complete": len(active) >= window + 1,
-            "slope_complete": len(active) >= max(2, window),
-            "range_complete": len(active) >= max(1, window),
+            "return_required_bars": return_required,
+            "slope_required_bars": slope_required,
+            "range_required_bars": range_required,
+            "return_complete": return_tail is not None,
+            "slope_complete": slope_tail is not None,
+            "range_complete": range_tail is not None,
+            "return_time_contiguous": return_tail is not None,
+            "slope_time_contiguous": slope_tail is not None,
+            "range_time_contiguous": range_tail is not None,
         }
-        for window in windows
-    }
     prior = active[:-1]
     prior_high = max((bar["h"] for bar in prior[-10:]), default=0)
     long_slope = slopes["20"] if slopes["20"] is not None else slopes["10"]
@@ -923,11 +958,21 @@ def build_session_candle_source(
         quality_blockers.append("duplicate_bar")
     if duplicate_price_conflict:
         quality_blockers.append("duplicate_price_conflict")
+    source_api_id = str((source_meta or {}).get("api_id") or "").lower()
+    ka10080_observed_bars = source_api_id == "ka10080"
     decision_window_blockers = []
-    if decision_max_consecutive_missing_bar_count >= 2:
-        decision_window_blockers.append("consecutive_bar_gap")
     session_integrity_blockers = []
-    if max_consecutive_missing_bar_count >= 2:
+    decision_window_sparse_observed_minutes = (
+        decision_missing_bar_count > 0 and ka10080_observed_bars
+    )
+    session_sparse_observed_minutes = missing_bar_count > 0 and ka10080_observed_bars
+    # The official ka10080 contract defines observed chart rows, but does not
+    # specify a zero-volume row for every clock minute.  Do not turn a sparse
+    # response into fabricated candles or an automatic provider preflight
+    # failure. Unknown/non-ka10080 sources retain the conservative block.
+    if decision_max_consecutive_missing_bar_count >= 2 and not ka10080_observed_bars:
+        decision_window_blockers.append("consecutive_bar_gap")
+    if max_consecutive_missing_bar_count >= 2 and not ka10080_observed_bars:
         session_integrity_blockers.append("consecutive_bar_gap")
     if not current_session:
         quality_blockers.append("no_current_session_bars")
@@ -936,7 +981,13 @@ def build_session_candle_source(
     quality_blockers.extend(decision_window_blockers)
     quality_status = "blocked" if quality_blockers else "fresh_consistent"
     session_integrity_status = (
-        "blocked" if session_integrity_blockers else "fresh_consistent"
+        "blocked"
+        if session_integrity_blockers
+        else (
+            "sparse_observed_minutes"
+            if session_sparse_observed_minutes
+            else "fresh_consistent"
+        )
     )
     structure = _structure(current_session)
     completed_count = sum(not bar.get("forming") for bar in current_session)
@@ -1016,7 +1067,17 @@ def build_session_candle_source(
         # decision horizon so an old data hole cannot suppress every later
         # entry call.  Derived session-wide fields independently retain their
         # own source_quality_blocked status in the multi-timeframe bundle.
-        "risk_flags": sorted(set(quality_blockers + session_integrity_blockers)),
+        "risk_flags": sorted(
+            set(
+                quality_blockers
+                + session_integrity_blockers
+                + (
+                    ["sparse_observed_minutes"]
+                    if session_sparse_observed_minutes
+                    else []
+                )
+            )
+        ),
         "source_quality": {
             "status": quality_status,
             "blockers": quality_blockers,
@@ -1024,7 +1085,13 @@ def build_session_candle_source(
             "max_consecutive_missing_bar_count": max_consecutive_missing_bar_count,
             "decision_window": {
                 "status": (
-                    "blocked" if decision_window_blockers else "fresh_consistent"
+                    "blocked"
+                    if decision_window_blockers
+                    else (
+                        "sparse_observed_minutes"
+                        if decision_window_sparse_observed_minutes
+                        else "fresh_consistent"
+                    )
                 ),
                 "horizon_minutes": DECISION_CONTINUITY_HORIZON_MINUTES,
                 "completed_bar_count": len(decision_window),
@@ -1039,6 +1106,9 @@ def build_session_candle_source(
                     decision_max_consecutive_missing_bar_count
                 ),
                 "blockers": decision_window_blockers,
+                "sparse_observed_minutes": decision_window_sparse_observed_minutes,
+                "provider_call_allowed": not decision_window_blockers,
+                "minute_bar_policy": "ka10080_observed_rows_no_synthetic_fill",
             },
             "session_integrity": {
                 "status": session_integrity_status,
@@ -1047,6 +1117,8 @@ def build_session_candle_source(
                 "max_consecutive_missing_bar_count": (
                     max_consecutive_missing_bar_count
                 ),
+                "sparse_observed_minutes": session_sparse_observed_minutes,
+                "minute_bar_policy": "ka10080_observed_rows_no_synthetic_fill",
             },
             "duplicate_count": duplicate_count,
             "duplicate_price_conflict": duplicate_price_conflict,

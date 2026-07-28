@@ -324,6 +324,7 @@ def test_builder_excludes_untrusted_tick_volume_from_forming_bar(monkeypatch):
 
 
 def test_builder_marks_two_or_more_missing_bars_as_source_quality_block(monkeypatch):
+    """An unclassified source gap remains fail-closed."""
     _enable(monkeypatch)
     bars = _candles(5)
     bars.pop(2)
@@ -344,6 +345,38 @@ def test_builder_marks_two_or_more_missing_bars_as_source_quality_block(monkeypa
     assert "consecutive_bar_gap" in context["risk_flags"]
     assert context["source_quality"]["status"] == "blocked"
     assert context["source_quality"]["decision_window"]["status"] == "blocked"
+
+
+def test_builder_keeps_sparse_ka10080_observations_but_excludes_bad_time_windows(
+    monkeypatch,
+):
+    """Observed ka10080 gaps must not fabricate bars or preflight-block AI."""
+
+    _enable(monkeypatch)
+    bars = _candles(8)
+    del bars[3:5]
+    context = build_entry_candle_context(
+        "token",
+        "012210",
+        _ws(),
+        venue="KRX",
+        session="krx_regular",
+        now_ts=datetime(2026, 7, 23, 9, 8, 20, tzinfo=KST),
+        recent_candles=bars,
+        source_meta={"api_id": "ka10080", "received_count": len(bars)},
+    )
+
+    quality = context["source_quality"]
+    assert quality["status"] == "fresh_consistent"
+    assert quality["blockers"] == []
+    assert quality["decision_window"]["status"] == "sparse_observed_minutes"
+    assert quality["decision_window"]["provider_call_allowed"] is True
+    assert "sparse_observed_minutes" in context["risk_flags"]
+    assert context["structure"]["returns_pct"]["3"] is None
+    assert (
+        context["structure"]["window_source_bar_counts"]["3"]["return_time_contiguous"]
+        is False
+    )
 
 
 def test_builder_keeps_old_session_gap_out_of_current_ai_preflight_window(monkeypatch):
@@ -370,9 +403,9 @@ def test_builder_keeps_old_session_gap_out_of_current_ai_preflight_window(monkey
     assert quality["blockers"] == []
     assert quality["decision_window"]["status"] == "fresh_consistent"
     assert quality["decision_window"]["missing_bar_count"] == 0
-    assert quality["session_integrity"]["status"] == "blocked"
+    assert quality["session_integrity"]["status"] == "sparse_observed_minutes"
     assert quality["session_integrity"]["missing_bar_count"] == 30
-    assert "consecutive_bar_gap" in context["risk_flags"]
+    assert "sparse_observed_minutes" in context["risk_flags"]
     assert context["multi_timeframe_context"]["source_quality"]["status"] == (
         "source_quality_blocked"
     )
@@ -443,6 +476,18 @@ def test_venue_request_code_contract_and_dated_activation(monkeypatch):
     assert (
         resolve_entry_candle_request_code(
             "000660_NX", venue="KRX", session="krx_regular"
+        )
+        == "000660"
+    )
+    assert (
+        resolve_entry_candle_request_code(
+            "000660",
+            venue="KRX",
+            session="krx_regular",
+            ws_data={
+                "market_suffix": "_AL",
+                "market_route": "krx_nxt_integrated",
+            },
         )
         == "000660"
     )
@@ -629,7 +674,7 @@ def test_actual_ws_route_keys_select_nxt_and_premarket_al_requires_proof(monkeyp
     assert "premarket_al_proof_missing" in premarket["risk_flags"]
 
 
-def test_krx_sor_order_route_stays_krx_cohort_with_integrated_market_data(
+def test_krx_regular_rejects_integrated_market_data_without_event_proof(
     monkeypatch,
 ):
     _enable(monkeypatch)
@@ -650,10 +695,11 @@ def test_krx_sor_order_route_stays_krx_cohort_with_integrated_market_data(
     )
 
     assert context["venue"] == "KRX"
-    assert context["request_code"] == "000660_AL"
-    assert context["rest_route"] == "_AL"
+    assert context["request_code"] == "000660"
+    assert context["rest_route"] == "KRX"
     assert context["ws_route"] == "krx_nxt_integrated"
-    assert context["source_quality"]["status"] == "fresh_consistent"
+    assert context["source_quality"]["status"] == "blocked"
+    assert "venue_conflict" in context["source_quality"]["blockers"]
     snapshot = context["ai_market_snapshot_v1"]
     assert snapshot["effective_venue"] == "KRX"
     assert snapshot["broker_route"] == "SOR"

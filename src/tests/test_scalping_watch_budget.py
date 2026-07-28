@@ -54,6 +54,8 @@ def test_watch_budget_classifies_opening_rising_and_general():
         )
         == GENERAL_SCALPING
     )
+
+
 def test_watch_budget_limits_are_general1_opening3_rising12_with_borrow_to15():
     policy = limits(16, opening_window_active=True)
 

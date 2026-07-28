@@ -177,6 +177,53 @@ def test_krx_hard_negative_observer_deduplicates_active_symbol_horizon(monkeypat
     ) == 1
 
 
+def test_adverse_micro_hot_path_updates_are_deferred_without_attribution_loss(
+    monkeypatch,
+):
+    update_queue = state_handlers.queue.Queue(maxsize=4)
+    monkeypatch.setattr(
+        state_handlers,
+        "_RISING_MISSED_ADVERSE_MICRO_RECOVERY_UPDATE_QUEUE",
+        update_queue,
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_RISING_MISSED_ADVERSE_MICRO_RECOVERY_UPDATE_DROPPED",
+        0,
+    )
+    observation = create_observation(
+        observation_id="deferred-update",
+        stock_code="005930",
+        reference_price=10000,
+        registered_at=1000.0,
+        effective_venue="KRX",
+        source_block_reason="rising_missed_tp1_hard_negative_evidence",
+    )
+    with state_handlers._RISING_MISSED_ADVERSE_MICRO_RECOVERY_OBSERVATION_LOCK:
+        state_handlers._RISING_MISSED_ADVERSE_MICRO_RECOVERY_OBSERVATIONS.clear()
+        state_handlers._RISING_MISSED_ADVERSE_MICRO_RECOVERY_OBSERVATIONS[
+            "deferred-update"
+        ] = observation
+
+    state_handlers._record_rising_missed_adverse_micro_next_scanner_loop(
+        "005930",
+        now_ts=1001.0,
+    )
+    state_handlers._record_rising_missed_adverse_micro_reentry_candidate(
+        "005930",
+        allowed=True,
+        now_ts=1001.0,
+    )
+    assert observation["next_scanner_loop_rechecked"] is False
+    assert observation["reentry_candidate_allowed"] is False
+
+    stats = state_handlers._drain_rising_missed_adverse_micro_hot_path_updates()
+
+    assert stats == {"queued": 2, "applied": 2, "orphaned": 0, "dropped": 0}
+    assert observation["next_scanner_loop_rechecked"] is True
+    assert observation["reentry_candidate_allowed"] is True
+
+
 def test_krx_hard_negative_observer_rejects_integrated_or_unproven_0b(monkeypatch):
     events = []
     monkeypatch.setattr(
