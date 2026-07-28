@@ -8365,6 +8365,21 @@ def test_scanner_async_transport_wait_state_never_uses_ready_result_as_heavy_wor
         coordinator.shutdown(wait=True)
 
 
+def test_scanner_async_commit_window_covers_one_busy_outer_loop():
+    source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
+    enqueue_idx = source.index('owner="scanner_async_result_ready"')
+    deadline_idx = source.index(
+        "deadline_epoch=commit_enqueued_epoch + 5.0",
+        enqueue_idx,
+    )
+    quote_guard_idx = source.index(
+        "scanner_async_commit_phase",
+        deadline_idx,
+    )
+
+    assert enqueue_idx < deadline_idx < quote_guard_idx
+
+
 def test_persistent_ws_gap_uses_dedicated_repair_batch_queue():
     source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
     queue_def_idx = source.index("pending_scanner_ws_persistent_repair")
