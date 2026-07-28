@@ -18,6 +18,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from src.utils import kiwoom_utils
+from src.engine.scalping.multi_timeframe_context import promotion_activation_state
 
 SCHEMA = "ai_market_snapshot_v1"
 PREFLIGHT_SCHEMA = "ai_input_preflight_v1"
@@ -1627,6 +1628,27 @@ def runtime_preflight_artifact_status(
             .date()
             .isoformat()
         )
+    if mode == "exact_v2":
+        now_value = float(now_ts if now_ts is not None else time.time())
+        activation = promotion_activation_state(
+            datetime.fromtimestamp(now_value, tz=KST)
+        )
+        if (
+            activation.get("active") is True
+            and activation.get("promotion_mode") == "operator_directed_full_promotion"
+            and activation.get("target_date") == target_date
+        ):
+            return {
+                "ready": True,
+                "status": "ready_operator_directed_exact_v2",
+                "mode": mode,
+                "target_date": target_date,
+                "artifact": activation.get("promotion_artifact"),
+                "promotion_sha256": activation.get("promotion_sha256"),
+                "promotion_mode": activation.get("promotion_mode"),
+                "validation_gate_bypassed": True,
+                "not_ready_rows": [],
+            }
     if mode == "baseline_v1":
         path = _BASELINE_REPORT_DIR / f"ai_input_quality_baseline_{target_date}.json"
     else:

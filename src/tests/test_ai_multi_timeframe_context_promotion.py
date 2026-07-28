@@ -147,6 +147,11 @@ def _runtime_manifest(tmp_path):
     }
 
 
+def _load_full_market_runtime_env(monkeypatch, target_date):
+    for name, value in promotion.full_market_env(target_date).items():
+        monkeypatch.setenv(name, value)
+
+
 def test_evaluate_promotion_is_binary_full_market(tmp_path):
     report = promotion.evaluate_promotion(
         target_date="2026-07-27",
@@ -189,6 +194,53 @@ def test_evaluate_promotion_fails_closed_on_provider_none(tmp_path):
     assert report["status"] == "fail"
     assert report["decision"] == "blocked_provider_or_schema"
     assert report["env_overrides"] == {}
+
+
+def test_operator_directed_promotion_bypasses_only_validation_and_review(tmp_path):
+    report = promotion.evaluate_promotion(
+        target_date="2026-07-27",
+        validation={},
+        golden_validation={},
+        review={},
+        runtime_manifest=_runtime_manifest(tmp_path),
+        runtime_verify={"status": "pass", "passed": True},
+        operator_directed=True,
+        operator_authorization_id=promotion.operator_directed_authority_id(
+            "2026-07-27"
+        ),
+        operator_reason="Explicit operator-directed full-market Exact V2 activation.",
+        now=TEST_NOW,
+    )
+
+    assert report["status"] == "pass"
+    assert report["decision"] == "promoted_all_market_sessions_full"
+    assert report["promotion_mode"] == promotion.OPERATOR_DIRECTED_PROMOTION_MODE
+    assert report["validation_gate"]["bypassed"] is True
+    assert report["validation_gate"]["bypassed_findings"]
+    assert report["env_overrides"] == promotion.full_market_env("2026-07-27")
+
+
+def test_operator_directed_promotion_requires_explicit_authority_and_reason(tmp_path):
+    report = promotion.evaluate_promotion(
+        target_date="2026-07-27",
+        validation={},
+        golden_validation={},
+        review={},
+        runtime_manifest=_runtime_manifest(tmp_path),
+        runtime_verify={"status": "pass", "passed": True},
+        operator_directed=True,
+        operator_authorization_id=promotion.operator_directed_authority_id(
+            "2026-07-28"
+        ),
+        operator_reason="",
+        now=TEST_NOW,
+    )
+
+    assert report["status"] == "fail"
+    assert report["decision"] == "blocked_review_or_env"
+    assert report["env_overrides"] == {}
+    assert "operator_directed_authorization_missing_or_invalid" in report["findings"]
+    assert "operator_directed_reason_missing" in report["findings"]
 
 
 def test_evaluate_promotion_requires_actual_exact_calls_for_each_core_endpoint(
@@ -463,6 +515,55 @@ def test_runtime_hook_trusts_only_committed_hash_matched_artifact(
         env_path.read_text(encoding="utf-8") + "# tampered\n", encoding="utf-8"
     )
     assert multi_timeframe_context.full_market_promotion_active(now) is False
+
+
+def test_runtime_hook_accepts_only_a_committed_operator_directed_artifact(
+    tmp_path, monkeypatch
+):
+    runtime_dir = tmp_path / "runtime_env"
+    runtime_dir.mkdir()
+    promotion_dir = tmp_path / "runtime"
+    monkeypatch.setattr(promotion, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(promotion, "PROMOTION_DIR", promotion_dir)
+    manifest = _runtime_manifest(runtime_dir)
+    report = promotion.evaluate_promotion(
+        target_date="2026-07-27",
+        validation={},
+        golden_validation={},
+        review={},
+        runtime_manifest=manifest,
+        runtime_verify={"status": "pass", "passed": True},
+        operator_directed=True,
+        operator_authorization_id=promotion.operator_directed_authority_id(
+            "2026-07-27"
+        ),
+        operator_reason="Explicit operator-directed full-market Exact V2 activation.",
+        now=TEST_NOW,
+    )
+    promotion.apply_promotion_transaction(report, manifest, now=TEST_NOW)
+    monkeypatch.setattr(multi_timeframe_context, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(multi_timeframe_context, "PROMOTION_DIR", promotion_dir)
+    multi_timeframe_context._PROMOTION_CACHE.clear()
+    multi_timeframe_context._ACTIVATION_CACHE.clear()
+
+    state = multi_timeframe_context.promotion_activation_state(TEST_NOW)
+
+    assert state["active"] is False
+    assert state["activation_source"] == "operator_directed_runtime_env_not_loaded"
+    assert "KORSTOCKSCAN_AI_INPUT_PREFLIGHT_MODE" in state["missing_runtime_env"]
+
+    _load_full_market_runtime_env(monkeypatch, "2026-07-27")
+    state = multi_timeframe_context.promotion_activation_state(TEST_NOW)
+
+    assert state["active"] is True
+    assert state["promotion_mode"] == promotion.OPERATOR_DIRECTED_PROMOTION_MODE
+    assert state["runtime_env_readback"] == "complete_exact_v2"
+    assert (
+        multi_timeframe_context.full_market_promotion_active(
+            datetime(2026, 7, 28, 8, 30, tzinfo=KST)
+        )
+        is False
+    )
 
 
 def _payload(endpoint, schema, venue="KRX"):

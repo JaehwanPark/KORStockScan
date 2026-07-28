@@ -28,6 +28,12 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 SCHEMA = "ai_multi_timeframe_context_promotion_v1"
 OBSERVATION_SCHEMA = "ai_multi_timeframe_context_first_observation_v1"
 AUTHORITY_ID = "operator_full_market_context_promotion_2026-07-27"
+VALIDATED_PROMOTION_MODE = "validated_premarket_full_promotion"
+OPERATOR_DIRECTED_PROMOTION_MODE = "operator_directed_full_promotion"
+# This is intentionally a narrow, dated operator authority.  It is accepted
+# only by the dedicated CLI mode below and is persisted with every bypassed
+# validation finding; it is never inferred from a generic environment flag.
+OPERATOR_DIRECTED_AUTHORITY_PREFIX = "operator_directed_full_promotion_"
 FAMILY = "scalping_multi_timeframe_context_v1"
 PROMOTION_DIR = DATA_DIR / "runtime"
 RUNTIME_ENV_DIR = DATA_DIR / "threshold_cycle" / "runtime_env"
@@ -443,6 +449,25 @@ def _review_findings(review: dict[str, Any], target_date: str) -> list[str]:
     return findings
 
 
+def operator_directed_authority_id(target_date: str) -> str:
+    return f"{OPERATOR_DIRECTED_AUTHORITY_PREFIX}{target_date}"
+
+
+def _operator_directed_findings(
+    authorization_id: str | None,
+    reason: str | None,
+    target_date: str,
+) -> list[str]:
+    """Validate the explicit, auditable operator override envelope only."""
+
+    findings: list[str] = []
+    if authorization_id != operator_directed_authority_id(target_date):
+        findings.append("operator_directed_authorization_missing_or_invalid")
+    if not str(reason or "").strip():
+        findings.append("operator_directed_reason_missing")
+    return findings
+
+
 def _promotion_window_status(target_date: str, now: datetime) -> str:
     current = now.astimezone(KST)
     try:
@@ -469,15 +494,25 @@ def evaluate_promotion(
     runtime_verify: dict[str, Any],
     premarket_symbols: Iterable[str] = DEFAULT_PREMARKET_SYMBOLS,
     krx_golden_symbols: Iterable[str] = DEFAULT_KRX_GOLDEN_SYMBOLS,
+    operator_directed: bool = False,
+    operator_authorization_id: str | None = None,
+    operator_reason: str | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     evaluated_at = now or datetime.now(KST)
     window_status = _promotion_window_status(target_date, evaluated_at)
-    findings = [
+    validation_findings = [
         *_premarket_validation_findings(validation, target_date, premarket_symbols),
         *_krx_golden_findings(golden_validation, golden_date, krx_golden_symbols),
         *_review_findings(review, target_date),
     ]
+    findings = (
+        _operator_directed_findings(
+            operator_authorization_id, operator_reason, target_date
+        )
+        if operator_directed
+        else list(validation_findings)
+    )
     if window_status != "pass":
         findings.append(window_status)
     if str(runtime_manifest.get("target_date") or "") != target_date:
@@ -502,6 +537,12 @@ def evaluate_promotion(
         decision = "promoted_all_market_sessions_full"
     generated_at = evaluated_at.astimezone(KST).isoformat()
     env = full_market_env(target_date) if not findings else {}
+    promotion_mode = (
+        OPERATOR_DIRECTED_PROMOTION_MODE
+        if operator_directed
+        else VALIDATED_PROMOTION_MODE
+    )
+    authorization_id = operator_authorization_id if operator_directed else AUTHORITY_ID
     return {
         "schema": SCHEMA,
         "target_date": target_date,
@@ -511,7 +552,20 @@ def evaluate_promotion(
         "status": "pass" if not findings else "fail",
         "decision": decision,
         "runtime_activation": not findings,
-        "operator_authorization_id": AUTHORITY_ID,
+        "operator_authorization_id": authorization_id,
+        "promotion_mode": promotion_mode,
+        "validation_gate": {
+            "mode": (
+                "operator_directed_bypass"
+                if operator_directed
+                else "validated_premarket"
+            ),
+            "bypassed": operator_directed,
+            "operator_reason": (
+                str(operator_reason).strip() if operator_directed else None
+            ),
+            "bypassed_findings": validation_findings if operator_directed else [],
+        },
         "input_preflight_mode": "exact_v2",
         "entry_context_schema": "entry_candle_context_v1",
         "holding_context_schema": "holding_decision_context_v1",
@@ -1001,11 +1055,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--date", required=True)
     parser.add_argument(
         "--mode",
-        choices=("evaluate", "apply", "observe", "rollback"),
+        choices=(
+            "evaluate",
+            "apply",
+            "operator-directed-evaluate",
+            "operator-directed-apply",
+            "observe",
+            "rollback",
+        ),
         default="evaluate",
     )
     parser.add_argument("--review-artifact")
     parser.add_argument("--runtime-verify")
+    parser.add_argument("--operator-authorization-id")
+    parser.add_argument("--operator-reason")
     parser.add_argument("--golden-validation-date", default=DEFAULT_KRX_GOLDEN_DATE)
     parser.add_argument(
         "--premarket-symbols",
@@ -1050,8 +1113,14 @@ def main(argv: list[str] | None = None) -> int:
         krx_golden_symbols=[
             item.strip() for item in args.krx_golden_symbols.split(",") if item.strip()
         ],
+        operator_directed=args.mode.startswith("operator-directed-"),
+        operator_authorization_id=args.operator_authorization_id,
+        operator_reason=args.operator_reason,
     )
-    if args.mode == "apply" and report.get("status") == "pass":
+    if (
+        args.mode in {"apply", "operator-directed-apply"}
+        and report.get("status") == "pass"
+    ):
         report = apply_promotion_transaction(report, manifest)
     elif args.write:
         _atomic_write_json(promotion_path(args.date), report)

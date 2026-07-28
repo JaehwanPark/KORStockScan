@@ -29,6 +29,8 @@ PROMOTION_DIR = REPO_ROOT / "data" / "runtime"
 RUNTIME_ENV_DIR = REPO_ROOT / "data" / "threshold_cycle" / "runtime_env"
 PROMOTION_SCHEMA = "ai_multi_timeframe_context_promotion_v1"
 PROMOTION_AUTHORITY_ID = "operator_full_market_context_promotion_2026-07-27"
+OPERATOR_DIRECTED_PROMOTION_MODE = "operator_directed_full_promotion"
+OPERATOR_DIRECTED_AUTHORITY_PREFIX = "operator_directed_full_promotion_"
 PROMOTION_ARTIFACT_REQUIRED_FROM_DATE = "2026-07-27"
 
 INPUT_CONTRACT = {
@@ -61,9 +63,46 @@ _PREVIOUS_DAY_CACHE_TTL_SEC = 21_600.0
 _PROMOTION_CACHE_LOCK = threading.Lock()
 _PROMOTION_CACHE: dict[str, tuple[int, int, dict[str, Any]]] = {}
 _ACTIVATION_CACHE_LOCK = threading.Lock()
-_ACTIVATION_CACHE: dict[
-    str, tuple[tuple[tuple[int, int] | None, ...], dict[str, Any]]
-] = {}
+_ACTIVATION_CACHE: dict[str, tuple[tuple[Any, ...], dict[str, Any]]] = {}
+
+
+def _operator_directed_exact_v2_env_readback(
+    target_date: str,
+) -> tuple[bool, tuple[str, ...]]:
+    """Return whether this PID actually loaded the complete direct-promotion env.
+
+    An operator-directed marker is an authorization artifact, not a mechanism for
+    changing an already-running process environment.  Requiring this readback
+    prevents a baseline process from picking up only the marker and then mixing
+    baseline preflight with Exact V2 context.
+    """
+
+    required = {
+        "KORSTOCKSCAN_AI_INPUT_PREFLIGHT_MODE": "exact_v2",
+        "KORSTOCKSCAN_AI_INPUT_PREFLIGHT_REQUIRED": "true",
+        "KORSTOCKSCAN_AI_INPUT_PREFLIGHT_ARTIFACT_DATE": target_date,
+        "KORSTOCKSCAN_MULTI_TIMEFRAME_AI_CONTEXT_ENABLED": "true",
+        "KORSTOCKSCAN_MULTI_TIMEFRAME_AI_CONTEXT_ACTIVE_DATE": target_date,
+        "KORSTOCKSCAN_ENTRY_CANDLE_CONTEXT_ENABLED": "true",
+        "KORSTOCKSCAN_ENTRY_CANDLE_CONTEXT_ACTIVE_DATE": target_date,
+        "KORSTOCKSCAN_ENTRY_CANDLE_CONTEXT_PREMARKET_ENABLED": "true",
+        "KORSTOCKSCAN_ENTRY_CANDLE_CONTEXT_KRX_ENABLED": "true",
+        "KORSTOCKSCAN_ENTRY_CANDLE_CONTEXT_NXT_ENABLED": "true",
+        "KORSTOCKSCAN_HOLDING_DECISION_CONTEXT_ENABLED": "true",
+        "KORSTOCKSCAN_HOLDING_DECISION_CONTEXT_ACTIVE_DATE": target_date,
+        "KORSTOCKSCAN_HOLDING_DECISION_CONTEXT_PREMARKET_ENABLED": "true",
+        "KORSTOCKSCAN_HOLDING_DECISION_CONTEXT_KRX_ENABLED": "true",
+        "KORSTOCKSCAN_HOLDING_DECISION_CONTEXT_NXT_ENABLED": "true",
+        "KORSTOCKSCAN_HOLDING_SCORE_CONTEXT_ENABLED": "true",
+        "KORSTOCKSCAN_HOLDING_FLOW_CONTEXT_ENABLED": "true",
+        "KORSTOCKSCAN_OVERNIGHT_CONTEXT_ENABLED": "true",
+    }
+    missing = tuple(
+        name
+        for name, expected in required.items()
+        if str(os.getenv(name, "")).strip().lower() != expected.lower()
+    )
+    return not missing, missing
 
 
 def _file_sha256(path: Path) -> str:
@@ -182,12 +221,27 @@ def promotion_activation_state(captured_at: datetime) -> dict[str, Any]:
             "promotion_artifact_required": False,
         }
     promotion_target_date, artifact = _latest_promotion_artifact(target_date)
+    promotion_mode = str(artifact.get("promotion_mode") or "")
+    validated_authority = (
+        promotion_mode in {"", "validated_premarket_full_promotion"}
+        and artifact.get("operator_authorization_id") == PROMOTION_AUTHORITY_ID
+    )
+    operator_directed_authority = (
+        promotion_mode == OPERATOR_DIRECTED_PROMOTION_MODE
+        and promotion_target_date == target_date
+        and artifact.get("operator_authorization_id")
+        == f"{OPERATOR_DIRECTED_AUTHORITY_PREFIX}{target_date}"
+        and isinstance(artifact.get("validation_gate"), dict)
+        and artifact["validation_gate"].get("mode") == "operator_directed_bypass"
+        and artifact["validation_gate"].get("bypassed") is True
+        and bool(str(artifact["validation_gate"].get("operator_reason") or "").strip())
+    )
     if (
         artifact.get("schema") != PROMOTION_SCHEMA
         or artifact.get("decision") != "promoted_all_market_sessions_full"
         or artifact.get("runtime_activation") is not True
         or artifact.get("transaction_status") != "committed"
-        or artifact.get("operator_authorization_id") != PROMOTION_AUTHORITY_ID
+        or not (validated_authority or operator_directed_authority)
         or str(artifact.get("target_date") or "") != promotion_target_date
     ):
         return {
@@ -222,6 +276,12 @@ def promotion_activation_state(captured_at: datetime) -> dict[str, Any]:
         }
     signature = tuple(
         _file_signature(path) for path in (artifact_path, env_path, manifest_path)
+    ) + (
+        (
+            _operator_directed_exact_v2_env_readback(target_date)
+            if operator_directed_authority
+            else (True, ())
+        ),
     )
     with _ACTIVATION_CACHE_LOCK:
         cached = _ACTIVATION_CACHE.get(target_date)
@@ -242,6 +302,34 @@ def promotion_activation_state(captured_at: datetime) -> dict[str, Any]:
             "promotion_target_date": promotion_target_date,
             "promotion_artifact_required": promotion_artifact_required,
         }
+    elif operator_directed_authority:
+        runtime_env_loaded, missing_env = _operator_directed_exact_v2_env_readback(
+            target_date
+        )
+        if not runtime_env_loaded:
+            state = {
+                "active": False,
+                "activation_source": "operator_directed_runtime_env_not_loaded",
+                "target_date": target_date,
+                "promotion_artifact": str(artifact_path),
+                "promotion_target_date": promotion_target_date,
+                "promotion_artifact_required": promotion_artifact_required,
+                "promotion_mode": promotion_mode,
+                "missing_runtime_env": list(missing_env),
+            }
+        else:
+            state = {
+                "active": True,
+                "activation_source": "atomic_promotion_artifact",
+                "target_date": target_date,
+                "promotion_artifact": str(artifact_path),
+                "promotion_target_date": promotion_target_date,
+                "promotion_artifact_required": promotion_artifact_required,
+                "promotion_sha256": _file_sha256(artifact_path),
+                "promoted_at": artifact.get("promoted_at"),
+                "promotion_mode": promotion_mode,
+                "runtime_env_readback": "complete_exact_v2",
+            }
     else:
         state = {
             "active": True,
@@ -252,6 +340,7 @@ def promotion_activation_state(captured_at: datetime) -> dict[str, Any]:
             "promotion_artifact_required": promotion_artifact_required,
             "promotion_sha256": _file_sha256(artifact_path),
             "promoted_at": artifact.get("promoted_at"),
+            "promotion_mode": promotion_mode or "validated_premarket_full_promotion",
         }
     with _ACTIVATION_CACHE_LOCK:
         _ACTIVATION_CACHE[target_date] = (signature, state)
