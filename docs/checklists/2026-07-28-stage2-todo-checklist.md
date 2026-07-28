@@ -67,11 +67,12 @@
   - Source: [scanner_runtime_scheduler.py](/home/ubuntu/KORStockScan/src/engine/scalping/scanner_runtime_scheduler.py), [test_scanner_runtime_scheduler.py](/home/ubuntu/KORStockScan/src/tests/test_scanner_runtime_scheduler.py), [pipeline_events_2026-07-28.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-07-28.jsonl)
   - 판정: 이미 최초 평가를 마친 한 generation의 `post_heavy_eval_fresh_recheck`가 계속 새 deadline을 얻으면 다른 generation의 만료된 recheck가 dispatchable peer 필터에서 제외되어 자기 `deadline_expired` 전환도 닫지 못했다. 이는 threshold가 아니라 평가 공정성 결함이며, 현금 0원·broker quantity guard와 분리한다.
   - 반영: FAST_PRECHECK claim 시 요청 generation 자신의 만료 work만 먼저 `deadline_expired`로 닫을 수 있게 한다. 시장 평가, BUY, 주문 수량, provider, threshold 권한은 추가하지 않으며 critical lane과 아직 유효한 initial precheck 예약은 유지한다.
+  - 자연 표본 보완: `17:33` PID `1115206`에서 요청 generation의 work가 이미 완료되어 자기 lane item이 없는데 fresh peer가 남아 있으면 generation-scoped `claim()`이 `missing` 대신 peer 기준 `not_next`를 반환하는 두 번째 기아 원인이 확인됐다. 재기동 후 약 7분 동안 `claim_deferred=2459`건과 350초 이상 wait가 누적됐으며, 요청 generation 후보가 없으면 즉시 `missing -> 기존 bounded fresh precheck rebuild`로 닫도록 보완했다. 이 변경도 평가 순서만 소유하고 BUY·provider·threshold·주문 권한은 갖지 않는다.
   - 검증/rollback: 실적 형태의 expired-requester/fresh-recurring-peer 회귀 테스트와 전체 scheduler targeted test, Black, compile, `git diff --check`, checklist parser를 통과해야 한다. 다음 PID에서 claim wait가 줄지 않거나 initial/critical 예약 회귀가 생기면 해당 fairness 분기만 되돌리고 중앙 `next_decision` 소비 경로를 별도 검토한다.
 
 - [ ] `[ScannerExpiredRecheckFairnessRuntimeObserve0729] 보완된 recheck 공정성 다음 PID 자연 표본 확인` (`Due: 2026-07-29`, `Slot: INTRADAY`, `TimeWindow: 16:00~16:20`, `Track: ScalpingLogic`)
   - Source: [scanner_runtime_scheduler.py](/home/ubuntu/KORStockScan/src/engine/scalping/scanner_runtime_scheduler.py), [pipeline_events_2026-07-28.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-07-28.jsonl)
-  - 판정 기준: 새 PID가 보완 commit을 반영한 상태에서 `post_heavy_eval_fresh_recheck` peer가 있어도 만료된 요청 generation이 `deadline_expired -> fresh enqueue`로 닫히며, initial precheck와 critical lane 예약이 유지되는지 확인한다.
+  - 판정 기준: 새 PID가 보완 commit을 반영한 상태에서 `post_heavy_eval_fresh_recheck` peer가 있어도 만료된 요청 generation이 `deadline_expired -> fresh enqueue`로 닫히고, 자기 lane item이 이미 없는 요청 generation은 peer 기준 `not_next` 반복 없이 `missing -> fresh enqueue`로 닫히며, initial precheck와 critical lane 예약이 유지되는지 확인한다.
   - 금지: 검증을 위해 provider, threshold, 주문가·수량, broker/account/order/cooldown guard를 변경하거나 실제 BUY를 강제하지 않는다.
   - 다음 액션: `runtime_fairness_confirmed`, `no_natural_expired_peer_sample`, `claim_starvation_regressed`, `initial_or_critical_reservation_regressed`, `implementation_not_reflected_in_pid` 중 하나로 닫는다.
 

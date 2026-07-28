@@ -1122,10 +1122,36 @@ def test_scheduler_boot_restore_registers_without_shared_deadline_backlog(
     assert scheduler.snapshot_metrics(now_epoch=200.0)["scheduler_queue_depth"] == 0
     assert "_scanner_scheduler_lane" not in target
 
+    peer = scheduler.register_generation(
+        code="000001",
+        promotion_id="PROMO-PEER",
+        record_id=2,
+        venue="NXT",
+        promotion_epoch=200.4,
+        attach_epoch=200.5,
+        observed_price=10_000,
+        source_signature="VALUE_TOP",
+    )
+    missing = kiwoom_sniper_v2._scanner_scheduler_claim_target(
+        scheduler,
+        target,
+        lane=kiwoom_sniper_v2.ScannerLane.FAST_PRECHECK,
+        now_epoch=201.0,
+    )
+
+    assert peer.item is not None
+    assert missing.action == "missing"
+    assert missing.reason == "generation_lane_not_enqueued"
+    scheduler.invalidate(
+        "000001",
+        now_epoch=201.0,
+        reason="test_peer_completed_before_refresh",
+    )
+
     fresh = kiwoom_sniper_v2._scanner_scheduler_refresh_claim_after_expiry(
         scheduler,
         target,
-        previous_decision=None,
+        previous_decision=missing,
         now_epoch=201.0,
     )
 

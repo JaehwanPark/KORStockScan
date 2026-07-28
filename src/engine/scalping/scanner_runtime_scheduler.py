@@ -776,14 +776,28 @@ class ScannerRuntimeScheduler:
                     decided_epoch=now_value,
                     fields=generation.timing_fields(now_epoch=now_value),
                 )
+            requested_candidates = [
+                item
+                for item in candidates
+                if item.generation.generation_id == generation.generation_id
+            ]
+            if not requested_candidates:
+                # ``claim`` is generation-scoped.  Once the requester's work
+                # has already completed or expired, a pending peer must not
+                # turn that missing state into ``not_next`` indefinitely.
+                # Returning ``missing`` lets the caller rebuild one bounded
+                # fresh precheck through the existing refresh path.
+                return ScannerSchedulerDecision(
+                    action="missing",
+                    reason="generation_lane_not_enqueued",
+                    decided_epoch=now_value,
+                    fields=generation.timing_fields(now_epoch=now_value),
+                )
             if normalized_lane is ScannerLane.FAST_PRECHECK:
                 expired_requested = [
                     item
-                    for item in candidates
-                    if (
-                        item.generation.generation_id == generation.generation_id
-                        and now_value > item.deadline_epoch
-                    )
+                    for item in requested_candidates
+                    if (now_value > item.deadline_epoch)
                 ]
                 if expired_requested:
                     # A recurring peer can keep receiving a fresh deadline

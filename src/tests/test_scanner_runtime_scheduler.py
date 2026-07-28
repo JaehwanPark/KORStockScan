@@ -618,7 +618,7 @@ def test_recurring_precheck_and_recovery_use_extended_non_initial_deadlines():
 
 def test_refreshed_initial_precheck_dispatches_ahead_of_expired_peer():
     scheduler = ScannerRuntimeScheduler(max_active=16)
-    expired_peer = _register(
+    _register(
         scheduler,
         code="000001",
         promotion_id="PROMO-EXPIRED",
@@ -778,6 +778,45 @@ def test_expired_requested_recheck_closes_despite_fresh_recurring_peer():
     )
     assert fresh_decision.action == "dispatch"
     assert fresh_decision.item == fresh_recheck.item
+
+
+def test_completed_requester_reports_missing_instead_of_yielding_to_fresh_peer():
+    scheduler = ScannerRuntimeScheduler(max_active=16)
+    requester = _register(
+        scheduler,
+        code="000001",
+        promotion_id="PROMO-COMPLETED",
+        attach_epoch=100.0,
+        promotion_epoch=99.0,
+    )
+    requester_work = scheduler.claim(
+        requester.item.generation,
+        lane=ScannerLane.FAST_PRECHECK,
+        now_epoch=100.1,
+    )
+    scheduler.complete(
+        requester_work.item,
+        completed_epoch=100.2,
+        outcome="pass",
+    )
+
+    peer = _register(
+        scheduler,
+        code="000002",
+        promotion_id="PROMO-PEER",
+        attach_epoch=100.3,
+        promotion_epoch=100.2,
+    )
+    decision = scheduler.claim(
+        requester.item.generation,
+        lane=ScannerLane.FAST_PRECHECK,
+        now_epoch=100.4,
+    )
+
+    assert peer.item.deadline_epoch > 100.4
+    assert decision.action == "missing"
+    assert decision.reason == "generation_lane_not_enqueued"
+    assert decision.item is None
 
 
 def test_next_decision_reserves_initial_precheck_over_recurring_recheck():
