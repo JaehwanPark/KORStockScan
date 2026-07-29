@@ -509,6 +509,38 @@ class ScannerAsyncEvalCoordinator:
                 for request_id in stale_ready_ids:
                     self._ready.pop(request_id, None)
 
+    def reactivate_generation(self, generation_id: str) -> bool:
+        """Release a fully quiesced generation for one scheduler-owned retry.
+
+        The scheduler may deliberately reuse immutable generation provenance
+        for a bounded fresh-market recheck.  Never release cancellation while
+        an old preparation/AI request or retained result still exists.
+        """
+
+        normalized = str(generation_id or "").strip()
+        if not normalized:
+            return False
+        with self._lock:
+            if any(
+                request.context.generation.generation_id == normalized
+                for request in self._requests.values()
+            ):
+                return False
+            if any(
+                result.generation_id == normalized for result in self._ready.values()
+            ):
+                return False
+            request_prefix = f"{normalized}:"
+            if any(
+                request_id.startswith(request_prefix)
+                for request_id in self._undrained_request_ids
+            ):
+                return False
+            if normalized not in self._cancelled_generations:
+                return True
+            self._cancelled_generations.discard(normalized)
+            return True
+
     def pending_count(self) -> int:
         with self._lock:
             return len(self._requests)

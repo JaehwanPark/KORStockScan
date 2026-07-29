@@ -8656,6 +8656,15 @@ def test_scanner_async_deadline_park_reactivates_once_on_new_fresh_trade(
     monkeypatch,
 ):
     scheduler = kiwoom_sniper_v2.ScannerRuntimeScheduler(max_active=16)
+    coordinator = ScannerAsyncEvalCoordinator(
+        ai_dispatcher=HotPathAIDispatcher(loaded_key_count=1)
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2.run_sniper,
+        "scanner_async_eval_coordinator",
+        coordinator,
+        raising=False,
+    )
     registered = scheduler.register_generation(
         code="000001",
         promotion_id="PROMO-1",
@@ -8738,12 +8747,22 @@ def test_scanner_async_deadline_park_reactivates_once_on_new_fresh_trade(
         )
         is False
     )
+    coordinator.shutdown()
 
 
 def test_scanner_completed_park_reactivates_once_on_existing_rising_threshold_cross(
     monkeypatch,
 ):
     scheduler = kiwoom_sniper_v2.ScannerRuntimeScheduler(max_active=16)
+    coordinator = ScannerAsyncEvalCoordinator(
+        ai_dispatcher=HotPathAIDispatcher(loaded_key_count=1)
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2.run_sniper,
+        "scanner_async_eval_coordinator",
+        coordinator,
+        raising=False,
+    )
     registered = scheduler.register_generation(
         code="000001",
         promotion_id="PROMO-1",
@@ -8832,6 +8851,7 @@ def test_scanner_completed_park_reactivates_once_on_existing_rising_threshold_cr
         )
         is False
     )
+    coordinator.shutdown()
 
 
 def test_scanner_warm_slot_can_be_reclaimed_without_general_attach_replacement(

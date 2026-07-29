@@ -287,6 +287,70 @@ def test_async_eval_superseded_result_is_observation_only():
     assert result.observation_only is True
 
 
+def test_cancelled_generation_can_reactivate_only_after_transport_is_quiesced():
+    dispatcher = HotPathAIDispatcher(loaded_key_count=1)
+    coordinator = ScannerAsyncEvalCoordinator(ai_dispatcher=dispatcher)
+    generation = _generation()
+    now = time.time()
+    release = threading.Event()
+    pending_context = ScannerAsyncEvalContext.create(
+        generation=generation,
+        cache_key="pending",
+        submitted_epoch=now,
+        deadline_epoch=now + 2,
+        stock_snapshot={"status": "WATCHING"},
+        ws_snapshot={"curr": 1000},
+        state_version="WATCHING:pending",
+    )
+    assert coordinator.submit(
+        ScannerAsyncEvalRequest(
+            context=pending_context,
+            prepare=lambda ctx: (release.wait(0.5) and {"ready": True}) or {},
+            evaluate=lambda ctx, prepared: {"action": "WAIT"},
+        )
+    ).accepted
+    coordinator.invalidate_generation(generation.generation_id)
+    assert coordinator.reactivate_generation(generation.generation_id) is False
+
+    release.set()
+    first = _wait_for_result(coordinator)
+    assert first.status in {"superseded_before_ai", "superseded_result"}
+    coordinator.discard_completed(
+        generation_id=generation.generation_id,
+        cache_key=pending_context.cache_key,
+    )
+    orphan_request_id = f"{generation.generation_id}:undrained"
+    with coordinator._lock:
+        coordinator._undrained_request_ids.add(orphan_request_id)
+    assert coordinator.reactivate_generation(generation.generation_id) is False
+    with coordinator._lock:
+        coordinator._undrained_request_ids.discard(orphan_request_id)
+    assert coordinator.reactivate_generation(generation.generation_id) is True
+
+    retry_now = time.time()
+    retry_context = ScannerAsyncEvalContext.create(
+        generation=generation,
+        cache_key="retry",
+        submitted_epoch=retry_now,
+        deadline_epoch=retry_now + 2,
+        stock_snapshot={"status": "WATCHING"},
+        ws_snapshot={"curr": 1010},
+        state_version="WATCHING:retry",
+    )
+    assert coordinator.submit(
+        ScannerAsyncEvalRequest(
+            context=retry_context,
+            prepare=lambda ctx: {"ready": True},
+            evaluate=lambda ctx, prepared: {"action": "BUY"},
+        )
+    ).accepted
+    retry = _wait_for_result(coordinator)
+    coordinator.shutdown()
+
+    assert retry.status == "completed"
+    assert retry.observation_only is False
+
+
 def test_coordinator_can_release_without_closing_shared_dispatcher():
     dispatcher = HotPathAIDispatcher(loaded_key_count=1)
     coordinator = ScannerAsyncEvalCoordinator(
