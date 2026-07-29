@@ -681,6 +681,44 @@ def _active_holding_position(position: dict[str, Any]) -> bool:
     return bool(quantity is not None and quantity > 0 and avg_price and avg_price > 0)
 
 
+def enrich_position_with_broker_account_snapshot(
+    *,
+    stock_code: str,
+    effective_venue: str,
+    session_bucket: str,
+    position: dict[str, Any] | None,
+    now_ts: float,
+) -> dict[str, Any]:
+    """Merge only positively confirmed shared broker facts into a holding.
+
+    A shared verified-absent row is useful before entry but is never allowed to
+    erase an active in-memory holding.  Explicit caller fields remain
+    authoritative and overwrite the shared observation.
+    """
+
+    explicit = dict(position) if isinstance(position, dict) else {}
+    shared = _broker_account_context(
+        stock_code=stock_code,
+        effective_venue=effective_venue,
+        session_bucket=session_bucket,
+        now_ts=now_ts,
+    )
+    explicit_status = str(explicit.get("status") or "").strip().upper()
+    explicit_active = _active_holding_position(explicit) or explicit_status in {
+        "HOLDING",
+        "SELL_ORDERED",
+    }
+    shared_positive_holding = bool(
+        shared.get("broker_position_verification") == "present"
+        and (_safe_float(shared.get("broker_holding_qty")) or 0) > 0
+    )
+    if explicit_active and not shared_positive_holding:
+        return explicit
+    merged = dict(shared)
+    merged.update(explicit)
+    return merged
+
+
 def _integrated_sor_execution_view_proof(
     *,
     stock_code: str,
@@ -962,32 +1000,21 @@ def build_ai_market_snapshot(
         venue=effective_venue,
         session=session_bucket,
     )
-    shared_broker_ctx = _broker_account_context(
-        stock_code=stock_code,
-        effective_venue=normalized_venue,
-        session_bucket=session_bucket,
-        now_ts=now_epoch,
-    )
     explicit_position_ctx = position if isinstance(position, dict) else {}
     stage_value = str(decision_stage or "").strip().lower()
-    position_stage = any(
-        token in stage_value
-        for token in ("holding", "exit", "overnight", "scale_in", "scale-in")
-    )
     explicit_position_status = (
         str(explicit_position_ctx.get("status") or "").strip().upper()
     )
     explicit_position_is_active = _active_holding_position(
         explicit_position_ctx
     ) or explicit_position_status in {"HOLDING", "SELL_ORDERED"}
-    # An account snapshot captured before a fresh fill may legitimately say
-    # zero.  It is safe for a pre-entry context, but must never be promoted to
-    # exact holding reconciliation merely because the process-wide snapshot is
-    # still inside its TTL.  Holding/exit callers must carry their explicit
-    # broker reconciliation; otherwise the broker sources stay missing.
-    allow_shared_broker_fallback = not (position_stage and explicit_position_is_active)
-    position_ctx = dict(shared_broker_ctx) if allow_shared_broker_fallback else {}
-    position_ctx.update(explicit_position_ctx)
+    position_ctx = enrich_position_with_broker_account_snapshot(
+        stock_code=stock_code,
+        effective_venue=normalized_venue,
+        session_bucket=session_bucket,
+        position=explicit_position_ctx,
+        now_ts=now_epoch,
+    )
     provenance = realtime_type_provenance(ws, now_ts=now_epoch)
     suffix, route = preferred_ws_route(ws, now_ts=now_epoch)
     market_data_route = _market_data_route(suffix=suffix, route=route)
@@ -1045,6 +1072,16 @@ def build_ai_market_snapshot(
         ),
         None,
     )
+    memory_qty = next(
+        (
+            explicit_position_ctx.get(key)
+            for key in ("remaining_qty", "buy_qty", "qty")
+            if explicit_position_ctx.get(key) not in (None, "")
+        ),
+        None,
+    )
+    broker_qty_value = _safe_float(broker_qty)
+    memory_qty_value = _safe_float(memory_qty)
     open_orders = (
         {
             "open_buy_qty": position_ctx.get("open_buy_qty"),
@@ -1281,6 +1318,14 @@ def build_ai_market_snapshot(
     )
     if require_position_reconciliation and not position_reconciled:
         blockers.append("broker_position_or_open_orders_unreconciled")
+    if (
+        require_position_reconciliation
+        and explicit_position_is_active
+        and broker_qty_value is not None
+        and memory_qty_value is not None
+        and broker_qty_value != memory_qty_value
+    ):
+        blockers.append("broker_position_quantity_mismatch")
     if require_position_reconciliation and not broker_route_matches:
         blockers.append("broker_route_venue_mismatch_or_missing")
     observed_epochs = [

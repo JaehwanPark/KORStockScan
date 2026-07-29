@@ -87,6 +87,48 @@ def test_holding_snapshot_collects_null_aware_investor_source(monkeypatch):
     assert investor["value"]["source_data_date"] == "2026-07-23"
 
 
+def test_holding_context_recovers_shared_positive_broker_reconciliation(monkeypatch):
+    _enable(monkeypatch)
+    now = datetime(2026, 7, 23, 10, 0, 30, tzinfo=KST)
+    stock = _stock()
+    stock.pop("broker_holding_qty")
+    stock.pop("broker_snapshot_age_sec")
+    stock["entry_execution_broker_route"] = "SOR"
+    snapshot_module.publish_broker_account_snapshot(
+        inventory=[{"code": "322000", "qty": 20}],
+        successful_exchanges={"KRX"},
+        open_orders=[],
+        open_orders_request_succeeded=True,
+        captured_at=now.timestamp() - 1,
+    )
+    try:
+        context = build_holding_decision_context(
+            None,
+            "322000",
+            _ws(now),
+            stock,
+            "KRX",
+            "krx_regular",
+            "holding_flow",
+            now_ts=now,
+            recent_candles=_candles(
+                60,
+                start=datetime(2026, 7, 23, 9, 0, tzinfo=KST),
+            ),
+        )
+    finally:
+        snapshot_module._clear_broker_account_snapshot_for_tests()
+
+    assert context["position_lifecycle"]["broker_qty"] == 20
+    assert context["order_reconciliation"]["open_buy_qty"] == 0
+    assert context["order_reconciliation"]["open_sell_qty"] == 0
+    assert context["source_quality"]["position_reconciled"] is True
+    snapshot = context["ai_market_snapshot_v1"]
+    assert snapshot["sources"]["broker_position"]["verification"] == "present"
+    assert snapshot["sources"]["open_orders"]["verification"] == "verified_zero"
+    assert snapshot["ai_input_preflight_v1"]["position_reconciled"] is True
+
+
 def _candles(
     count: int,
     *,

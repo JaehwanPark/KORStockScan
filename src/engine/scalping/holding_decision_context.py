@@ -22,6 +22,7 @@ from src.engine.scalping.ai_market_snapshot import (
     ai_market_snapshot_log_fields,
     build_ai_market_snapshot,
     enrich_investor_source,
+    enrich_position_with_broker_account_snapshot,
     runtime_preflight_required,
 )
 from src.engine.scalping.entry_candle_context import (
@@ -640,7 +641,13 @@ def build_holding_decision_context(
     now = _now_kst(now_ts)
     now_epoch = now.timestamp()
     ws = ws_data if isinstance(ws_data, dict) else {}
-    position = stock if isinstance(stock, dict) else {}
+    position = enrich_position_with_broker_account_snapshot(
+        stock_code=code,
+        effective_venue=str(venue or ""),
+        session_bucket=str(session or ""),
+        position=stock,
+        now_ts=now_epoch,
+    )
     (
         execution_broker_route,
         execution_broker_route_source,
