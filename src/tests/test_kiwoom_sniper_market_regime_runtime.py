@@ -8530,6 +8530,15 @@ def test_scanner_cold_warm_park_reactivates_on_first_post_attach_trade(
     monkeypatch,
 ):
     scheduler = kiwoom_sniper_v2.ScannerRuntimeScheduler(max_active=16)
+    coordinator = ScannerAsyncEvalCoordinator(
+        ai_dispatcher=HotPathAIDispatcher(loaded_key_count=1)
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2.run_sniper,
+        "scanner_async_eval_coordinator",
+        coordinator,
+        raising=False,
+    )
     registered = scheduler.register_generation(
         code="000001",
         promotion_id="PROMO-1",
@@ -8592,6 +8601,7 @@ def test_scanner_cold_warm_park_reactivates_on_first_post_attach_trade(
     next_item = scheduler.next_decision(now_epoch=101.1)
     assert next_item.item.owner == "first_fresh_ws_after_cold_warm_park"
     assert emitted[-1]["stage"] == ("scalping_scanner_scheduler_warm_park_reactivated")
+    coordinator.shutdown()
 
 
 def test_scanner_warm_park_does_not_reactivate_non_cold_terminal_generation(

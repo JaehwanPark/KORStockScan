@@ -8719,6 +8719,14 @@ def _scanner_scheduler_reactivate_cold_park_on_fresh_ws(
         == reactivation_key
     ):
         return False
+    async_coordinator = getattr(run_sniper, "scanner_async_eval_coordinator", None)
+    async_generation_reactivated = False
+    if isinstance(async_coordinator, ScannerAsyncEvalCoordinator):
+        async_generation_reactivated = async_coordinator.reactivate_generation(
+            generation_id
+        )
+        if not async_generation_reactivated:
+            return False
     decision = _scanner_scheduler_enqueue_fresh_precheck(
         scheduler,
         target,
@@ -8727,6 +8735,8 @@ def _scanner_scheduler_reactivate_cold_park_on_fresh_ws(
         evidence_snapshot=ws_data,
     )
     if decision is None or decision.item is None:
+        if async_generation_reactivated:
+            async_coordinator.invalidate_generation(generation_id)
         return False
     with ENTRY_LOCK:
         target["_scanner_cold_park_reactivation_key"] = reactivation_key
