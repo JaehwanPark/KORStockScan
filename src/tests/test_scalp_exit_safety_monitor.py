@@ -737,6 +737,10 @@ def test_fast_exit_uses_trailing_continuation_owner_before_claim(monkeypatch):
     )
     assert len(continuation_calls) == 1
     assert continuation_calls[0]["recheck_invoker"] == "fast_exit_monitor"
+    envelope = continuation_calls[0]["decision_quote_envelope"]
+    assert envelope["exit_quote_envelope_id"]
+    assert envelope["exit_quote_envelope_base_best_bid"] == 9_800
+    assert envelope["exit_quote_envelope_base_mark_price"] == 9_800
     assert stock.get("exit_token") in (None, "")
     assert stock.get("exit_requested") is not True
 
@@ -770,6 +774,164 @@ def test_fast_exit_uses_trailing_continuation_owner_before_claim(monkeypatch):
     )
     assert len(continuation_calls) == 1
     assert len(dispatches) == 1
+
+
+@pytest.mark.parametrize(
+    ("reuse_allowed", "expected_triggered", "expected_decision_price"),
+    (
+        (True, True, 9_790),
+        (False, False, None),
+    ),
+)
+def test_fast_exit_reuses_or_blocks_continuation_recheck_quote_envelope(
+    monkeypatch,
+    reuse_allowed,
+    expected_triggered,
+    expected_decision_price,
+):
+    now_ts = 1_784_778_400.0
+    active_date = datetime.fromtimestamp(now_ts, tz=handlers._KST).date().isoformat()
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_FAST_EXIT_GUARD_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_FAST_EXIT_GUARD_ACTIVE_DATE", active_date)
+    monkeypatch.setattr(
+        handlers,
+        "_build_quote_consistency_fields",
+        lambda *args, **kwargs: (
+            {"quote_consistency_state": "consistent", "quote_consistency_reason": "ok"},
+            9_800,
+            9_801,
+            9_800,
+        ),
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_fast_exit_execution_route_fields",
+        lambda *args, **kwargs: {
+            "fast_exit_broker_route": "SOR",
+            "fast_exit_execution_cohort": "KRX",
+            "fast_exit_route_source_quality_blocked": False,
+            "fast_exit_broker_route_blocked": False,
+        },
+    )
+    monkeypatch.setattr(
+        handlers,
+        "calculate_net_profit_rate",
+        lambda buy_price, price: ((float(price) - float(buy_price)) / float(buy_price))
+        * 100.0,
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_rule_float",
+        lambda name, default=0.0: {
+            "SCALP_TRAILING_START_PCT": 0.6,
+            "SCALP_TRAILING_LIMIT_WEAK": 0.4,
+            "SCALP_TRAILING_LIMIT_STRONG": 0.8,
+        }.get(name, default),
+    )
+    monkeypatch.setattr(handlers, "_has_active_sell_order_pending", lambda stock: False)
+    monkeypatch.setattr(handlers, "_is_any_simulated_position", lambda *args: False)
+    monkeypatch.setattr(
+        handlers,
+        "_holding_score_runtime_context",
+        lambda *args, **kwargs: {"usable_for_negative_exit": False},
+    )
+    monkeypatch.setattr(handlers, "_holding_score_role_log_fields", lambda context: {})
+    monkeypatch.setattr(
+        handlers, "_scalping_micro_estimator_log_fields", lambda **_kwargs: {}
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_evaluate_scalp_trailing_loss_conversion_recheck",
+        lambda **_kwargs: False,
+    )
+
+    def continuation_recheck(**kwargs):
+        envelope = kwargs["decision_quote_envelope"]
+        envelope.update(
+            {
+                "exit_quote_envelope_recheck_attempted": True,
+                "exit_quote_envelope_recheck_rest_state": "ok",
+                "exit_quote_envelope_recheck_rest_elapsed_ms": 12.0,
+                "exit_quote_envelope_recheck_reuse_allowed": reuse_allowed,
+                "exit_quote_envelope_recheck_block_reason": (
+                    "-" if reuse_allowed else "recheck_quote_conflicted"
+                ),
+                "exit_quote_envelope_recheck_mark_price": 9_795,
+                "exit_quote_envelope_recheck_best_ask": 9_800,
+                "exit_quote_envelope_recheck_best_bid": 9_790,
+                "exit_quote_envelope_recheck_rest_snapshot": {
+                    "best_bid": 9_790,
+                    "best_ask": 9_800,
+                    "rest_received_ts": now_ts,
+                },
+                "exit_quote_envelope_recheck_quote_fields": {
+                    "quote_consistency_state": (
+                        "consistent" if reuse_allowed else "diverged"
+                    ),
+                    "quote_consistency_reason": (
+                        "ok" if reuse_allowed else "quote_diverged"
+                    ),
+                },
+            }
+        )
+        return False
+
+    monkeypatch.setattr(
+        handlers,
+        "_evaluate_scalp_trailing_continuation_recheck",
+        continuation_recheck,
+    )
+    logs = []
+    monkeypatch.setattr(
+        handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+    dispatches = []
+    monkeypatch.setattr(
+        handlers,
+        "_dispatch_scalp_preset_exit",
+        lambda **kwargs: dispatches.append(kwargs),
+    )
+    handlers.HIGHEST_PRICES = {"123456": 10_077}
+    stock = {
+        "name": "quote-envelope",
+        "code": "123456",
+        "strategy": "SCALPING",
+        "status": "HOLDING",
+        "buy_price": 10_000,
+        "buy_qty": 1,
+    }
+
+    triggered = handlers.evaluate_and_dispatch_fast_scalp_exit(
+        stock,
+        "123456",
+        {"curr": 9_800},
+        now_ts=now_ts,
+    )
+
+    assert triggered is expected_triggered
+    if reuse_allowed:
+        assert len(dispatches) == 1
+        assert (
+            dispatches[0]["ws_data"]["executable_sell_price"]
+            == expected_decision_price
+        )
+        claim = next(
+            fields for stage, fields in logs if stage == "scalp_fast_exit_claimed"
+        )
+        assert claim["decision_price"] == expected_decision_price
+        assert claim["exit_quote_envelope_recheck_reuse_allowed"] is True
+    else:
+        assert dispatches == []
+        assert not stock.get("exit_token")
+        blocked = next(
+            fields
+            for stage, fields in logs
+            if stage == "scalp_fast_exit_quote_envelope_blocked"
+        )
+        assert blocked["block_reason"] == "recheck_quote_conflicted"
+        assert blocked["exit_quote_envelope_recheck_reuse_allowed"] is False
 
 
 def test_fast_exit_retries_cancel_with_same_token_before_single_sell(monkeypatch):

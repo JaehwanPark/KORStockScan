@@ -18429,6 +18429,20 @@ def _real_sell_submission_contract_fields() -> dict[str, Any]:
     }
 
 
+def _exit_quote_envelope_log_fields(envelope: dict | None) -> dict[str, Any]:
+    if not isinstance(envelope, dict):
+        return {}
+    internal_fields = {
+        "exit_quote_envelope_recheck_rest_snapshot",
+        "exit_quote_envelope_recheck_quote_fields",
+    }
+    return {
+        key: value
+        for key, value in envelope.items()
+        if key not in internal_fields and key.startswith("exit_quote_envelope_")
+    }
+
+
 def _log_scale_in_counterfactual_started(
     *,
     stock: dict,
@@ -24466,6 +24480,21 @@ def evaluate_and_dispatch_fast_scalp_exit(
             consumer_stage="scalp_fast_exit_monitor",
             tier="hot",
         )
+        exit_quote_envelope = {
+            "exit_quote_envelope_id": uuid4().hex,
+            "exit_quote_envelope_observed_at": float(observed_at),
+            "exit_quote_envelope_base_mark_price": _safe_int(mark_price, 0),
+            "exit_quote_envelope_base_best_ask": _safe_int(
+                executable_buy_price, 0
+            ),
+            "exit_quote_envelope_base_best_bid": int(decision_price),
+            "exit_quote_envelope_base_quote_state": quote_state or "-",
+            "exit_quote_envelope_base_quote_reason": quote_reason or "-",
+            "exit_quote_envelope_base_rest_state": rest_state,
+            "exit_quote_envelope_base_rest_elapsed_ms": round(rest_elapsed_ms, 3),
+            "exit_quote_envelope_recheck_attempted": False,
+            "exit_quote_envelope_recheck_reuse_allowed": False,
+        }
         loss_conversion_deferred = _evaluate_scalp_trailing_loss_conversion_recheck(
             stock=stock,
             code=code,
@@ -24491,9 +24520,155 @@ def evaluate_and_dispatch_fast_scalp_exit(
                 now_ts=observed_at,
                 emit_deferred_log=False,
                 recheck_invoker="fast_exit_monitor",
+                decision_quote_envelope=exit_quote_envelope,
             )
         if loss_conversion_deferred or continuation_deferred:
             return False
+        if exit_quote_envelope.get("exit_quote_envelope_recheck_attempted"):
+            recheck_state = str(
+                exit_quote_envelope.get("exit_quote_envelope_recheck_rest_state")
+                or ""
+            ).lower()
+            recheck_reuse_allowed = bool(
+                exit_quote_envelope.get(
+                    "exit_quote_envelope_recheck_reuse_allowed"
+                )
+            )
+            if recheck_state == "ok" and not recheck_reuse_allowed:
+                _log_holding_pipeline(
+                    stock,
+                    code,
+                    "scalp_fast_exit_quote_envelope_blocked",
+                    block_reason=(
+                        exit_quote_envelope.get(
+                            "exit_quote_envelope_recheck_block_reason"
+                        )
+                        or "recheck_quote_not_reusable"
+                    ),
+                    metric_role="source_quality_gate",
+                    decision_authority="real_scalping_fast_exit_guard",
+                    window_policy="same_trailing_candidate_frozen_quote_envelope",
+                    sample_floor="not_applicable_runtime_guard",
+                    primary_decision_metric="quote_envelope_reuse_allowed",
+                    source_quality_gate=(
+                        "fresh_conflict_free_recheck_quote_matches_exit_envelope"
+                    ),
+                    forbidden_uses=(
+                        "hard_stop_delay|protect_stop_delay|emergency_stop_delay|"
+                        "threshold_mutation|provider_route_change|broker_guard_bypass"
+                    ),
+                    actual_order_submitted=False,
+                    broker_order_forbidden=True,
+                    runtime_effect=True,
+                    **_exit_quote_envelope_log_fields(exit_quote_envelope),
+                )
+                return False
+            if recheck_reuse_allowed:
+                recheck_quote_fields = exit_quote_envelope.get(
+                    "exit_quote_envelope_recheck_quote_fields"
+                )
+                recheck_rest_snapshot = exit_quote_envelope.get(
+                    "exit_quote_envelope_recheck_rest_snapshot"
+                )
+                quote_fields = (
+                    dict(recheck_quote_fields)
+                    if isinstance(recheck_quote_fields, dict)
+                    else quote_fields
+                )
+                rest_snapshot = (
+                    dict(recheck_rest_snapshot)
+                    if isinstance(recheck_rest_snapshot, dict)
+                    else rest_snapshot
+                )
+                mark_price = _safe_int(
+                    exit_quote_envelope.get(
+                        "exit_quote_envelope_recheck_mark_price"
+                    ),
+                    mark_price,
+                )
+                executable_buy_price = _safe_int(
+                    exit_quote_envelope.get(
+                        "exit_quote_envelope_recheck_best_ask"
+                    ),
+                    executable_buy_price,
+                )
+                executable_sell_price = _safe_int(
+                    exit_quote_envelope.get(
+                        "exit_quote_envelope_recheck_best_bid"
+                    ),
+                    executable_sell_price,
+                )
+                decision_price = int(executable_sell_price)
+                rest_state = str(
+                    exit_quote_envelope.get(
+                        "exit_quote_envelope_recheck_rest_state"
+                    )
+                    or rest_state
+                )
+                rest_elapsed_ms = _safe_float(
+                    exit_quote_envelope.get(
+                        "exit_quote_envelope_recheck_rest_elapsed_ms"
+                    ),
+                    rest_elapsed_ms,
+                )
+                quote_state = str(
+                    quote_fields.get("quote_consistency_state") or ""
+                ).lower()
+                quote_reason = str(
+                    quote_fields.get("quote_consistency_reason") or ""
+                ).lower()
+                route_fields = _fast_exit_execution_route_fields(
+                    stock,
+                    code,
+                    ws_data,
+                    rest_snapshot=rest_snapshot,
+                    now_ts=observed_at,
+                )
+                if route_fields.get("fast_exit_route_source_quality_blocked"):
+                    return False
+                profit_rate = calculate_net_profit_rate(buy_price, decision_price)
+                peak_profit = calculate_net_profit_rate(buy_price, peak_price)
+                trailing_worsen = peak_profit - profit_rate
+                trailing_drawdown_pct = (
+                    (
+                        (float(peak_price) - float(decision_price))
+                        / float(peak_price)
+                    )
+                    * 100.0
+                    if peak_price > 0
+                    else 0.0
+                )
+                if not (
+                    peak_profit >= trailing_start_pct
+                    and trailing_drawdown_pct + 1e-9 >= trailing_limit
+                ):
+                    _log_holding_pipeline(
+                        stock,
+                        code,
+                        "scalp_fast_exit_quote_envelope_trigger_cleared",
+                        metric_role="source_quality_gate",
+                        decision_authority="real_scalping_fast_exit_guard",
+                        window_policy=(
+                            "same_trailing_candidate_frozen_quote_envelope"
+                        ),
+                        sample_floor="not_applicable_runtime_guard",
+                        primary_decision_metric="trailing_trigger_revalidated",
+                        source_quality_gate=(
+                            "recheck_quote_reused_for_final_exit_decision"
+                        ),
+                        forbidden_uses=(
+                            "hard_stop_delay|protect_stop_delay|"
+                            "emergency_stop_delay|threshold_mutation|"
+                            "broker_guard_bypass"
+                        ),
+                        actual_order_submitted=False,
+                        broker_order_forbidden=True,
+                        runtime_effect=True,
+                        **_exit_quote_envelope_log_fields(exit_quote_envelope),
+                    )
+                    return False
+    else:
+        exit_quote_envelope = {}
 
     exit_token = existing_exit_token or uuid4().hex
     with ENTRY_LOCK:
@@ -24564,6 +24739,7 @@ def evaluate_and_dispatch_fast_scalp_exit(
             trailing_limit=f"{trailing_limit:.2f}",
             rest_check_state=rest_state,
             rest_check_elapsed_ms=round(rest_elapsed_ms, 3),
+            **_exit_quote_envelope_log_fields(exit_quote_envelope),
             metric_role="safety_veto",
             decision_authority="real_scalping_fast_exit_guard",
             window_policy="same_position_first_threshold_cross",
@@ -35911,6 +36087,7 @@ def _abort_entry_split_probe_residual(
         "post_probe_wait_mixed_or_neutral",
         "post_probe_wait_positive_confirmation_required",
         "post_probe_stale_wait_positive_confirmation_required",
+        "post_probe_nxt_wait_fast_tape_required",
     }
     directional_soft_abort = bool(
         reason == "residual_revalidation_timeout"
@@ -43749,6 +43926,7 @@ def _evaluate_scalp_trailing_continuation_recheck(
     now_ts: float,
     emit_deferred_log: bool = True,
     recheck_invoker: str = "holding_flow",
+    decision_quote_envelope: dict | None = None,
 ) -> bool:
     """Defer only a shallow profitable trailing exit while fresh WS support persists."""
     config = _scalp_trailing_continuation_recheck_config(now_ts)
@@ -43880,7 +44058,12 @@ def _evaluate_scalp_trailing_continuation_recheck(
             )
         ):
             rest_snapshot["rest_received_ts"] = time.time()
-        quote_fields, _, _, executable_sell_price = _build_quote_consistency_fields(
+        (
+            quote_fields,
+            recheck_mark_price,
+            recheck_best_ask,
+            executable_sell_price,
+        ) = _build_quote_consistency_fields(
             ws_data,
             rest_snapshot=rest_snapshot,
             side="sell",
@@ -43918,6 +44101,49 @@ def _evaluate_scalp_trailing_continuation_recheck(
             and executable_sell_price > 0
             and rest_spread_bps <= config["quote_recovery_max_spread_bps"]
         )
+        if isinstance(decision_quote_envelope, dict):
+            if quote_conflicted:
+                envelope_block_reason = "recheck_quote_conflicted"
+            elif rest_state == "ok" and not quote_recovery_eligible:
+                envelope_block_reason = "recheck_quote_not_reusable"
+            elif rest_state != "ok":
+                envelope_block_reason = f"recheck_rest_{rest_state or 'unknown'}"
+            else:
+                envelope_block_reason = "-"
+            decision_quote_envelope.update(
+                {
+                    "exit_quote_envelope_recheck_attempted": True,
+                    "exit_quote_envelope_recheck_rest_state": rest_state,
+                    "exit_quote_envelope_recheck_rest_elapsed_ms": round(
+                        rest_elapsed_ms, 3
+                    ),
+                    "exit_quote_envelope_recheck_quote_age_ms": (
+                        round(rest_age_ms, 3)
+                        if rest_age_ms != float("inf")
+                        else "-"
+                    ),
+                    "exit_quote_envelope_recheck_quote_conflicted": (
+                        quote_conflicted
+                    ),
+                    "exit_quote_envelope_recheck_mark_price": _safe_int(
+                        recheck_mark_price, 0
+                    ),
+                    "exit_quote_envelope_recheck_best_bid": _safe_int(
+                        executable_sell_price, rest_best_bid
+                    ),
+                    "exit_quote_envelope_recheck_best_ask": _safe_int(
+                        recheck_best_ask, rest_best_ask
+                    ),
+                    "exit_quote_envelope_recheck_reuse_allowed": (
+                        quote_recovery_eligible
+                    ),
+                    "exit_quote_envelope_recheck_block_reason": (
+                        envelope_block_reason
+                    ),
+                    "exit_quote_envelope_recheck_rest_snapshot": rest_snapshot,
+                    "exit_quote_envelope_recheck_quote_fields": quote_fields,
+                }
+            )
         quote_recovery_fields.update(
             {
                 "quote_recovery_eligible": quote_recovery_eligible,
@@ -43990,6 +44216,7 @@ def _evaluate_scalp_trailing_continuation_recheck(
         "micro_source_state": micro_source_state or "missing",
         "micro_source_trusted_ws": bool(micro_source_trusted_ws),
         "composite_micro_supported": bool(micro_supported),
+        **_exit_quote_envelope_log_fields(decision_quote_envelope),
         **quote_recovery_fields,
         **micro_support_fields,
         **micro_fields,

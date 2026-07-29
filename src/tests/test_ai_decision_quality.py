@@ -395,6 +395,7 @@ def test_kiwoom_completed_minute_loader_excludes_forming_and_wrong_session_bars(
                 },
                 {
                     "source_timestamp": "20260727090100",
+                    "시가": 100,
                     "현재가": 101,
                     "고가": 103,
                     "저가": 98,
@@ -421,6 +422,7 @@ def test_kiwoom_completed_minute_loader_excludes_forming_and_wrong_session_bars(
     assert calls == [("005930", "005930")]
     assert [row["timestamp"] for row in prices] == ["2026-07-27T09:01:00+09:00"]
     assert prices[0]["source_quality"] == "pass_completed_ka10080_bar"
+    assert prices[0]["open"] == 100
     assert prices[0]["high"] == 103
     assert prices[0]["low"] == 98
     assert provenance[0]["source_quality_status"] == "pass_target_window_available"
@@ -678,6 +680,10 @@ def test_candidate_contract_requires_structured_reasons():
             "tape": "supportive",
             "risk": "low",
             "uncertainty": "low",
+            "setup": "continuation",
+            "positive_edge": "strong",
+            "adverse_risk": "low",
+            "trigger": "confirmed",
         },
     }
     assert quality.validate_candidate_response(response, stage="entry") == []
@@ -701,6 +707,173 @@ def test_candidate_contract_requires_structured_reasons():
     assert quality.validate_candidate_response(duplicate, stage="entry") == [
         "reason_codes_invalid"
     ]
+    no_edge_wait = {
+        **response,
+        "edge_state": "NO_EDGE",
+        "action": "WAIT",
+        "expected_upside_pct": 0.3,
+        "expected_downside_pct": -0.4,
+        "evidence": {
+            **response["evidence"],
+            "setup": "no_setup",
+            "positive_edge": "none",
+            "adverse_risk": "moderate",
+            "trigger": "not_applicable",
+        },
+    }
+    assert quality.validate_candidate_response(no_edge_wait, stage="entry") == [
+        "entry_no_edge_requires_drop"
+    ]
+    unsafe_buy = {
+        **response,
+        "expected_upside_pct": 0.4,
+        "expected_downside_pct": -0.5,
+        "evidence": {
+            **response["evidence"],
+            "adverse_risk": "blocking",
+            "trigger": "recovery_required",
+        },
+    }
+    assert quality.validate_candidate_response(unsafe_buy, stage="entry") == [
+        "entry_buy_requires_confirmed_trigger",
+        "entry_buy_adverse_risk_too_high",
+        "entry_buy_reward_risk_below_floor",
+    ]
+    unfavorable_edge_drop = {
+        **response,
+        "action": "DROP",
+        "expected_upside_pct": 0.4,
+        "expected_downside_pct": -0.5,
+        "evidence": {
+            **response["evidence"],
+            "adverse_risk": "high",
+        },
+    }
+    assert (
+        quality.validate_candidate_response(unfavorable_edge_drop, stage="entry") == []
+    )
+    prompt = quality.decision_quality_v2_system_prompt("entry")
+    assert "Do not erase either ledger by averaging them together." in prompt
+    assert "NO_EDGE" in prompt
+    assert "WAIT is invalid." in prompt
+
+
+def test_entry_candidate_contract_separates_structural_edge_and_adverse_risk():
+    exact_payload = {
+        "current": {"fluctuation_pct": 8.0},
+        "features": {
+            "curr_vs_micro_vwap_bp": -20,
+            "curr_vs_ma5_bp": -10,
+            "entry_order_flow_status": "adverse",
+        },
+        "entry_candle_context": {
+            "structure": {
+                "returns_pct": {
+                    "1": 0.2,
+                    "3": 0.5,
+                    "5": 0.8,
+                    "10": 1.2,
+                    "20": 2.0,
+                    "60": 3.0,
+                },
+                "slopes_pct_per_bar": {
+                    "5": 0.1,
+                    "10": 0.2,
+                    "20": 0.2,
+                    "60": 0.1,
+                },
+                "regime": "range",
+                "alignment": "neutral",
+            }
+        },
+    }
+    recovery_response = {
+        "edge_state": "EDGE",
+        "action": "WAIT",
+        "expected_upside_pct": 1.4,
+        "expected_downside_pct": -0.8,
+        "confidence": 68,
+        "reason_codes": [
+            "edge_positive",
+            "pullback_recovery_candidate",
+            "recovery_trigger_required",
+        ],
+        "evidence": {
+            "trend": "supportive",
+            "liquidity": "mixed",
+            "tape": "adverse",
+            "risk": "medium",
+            "uncertainty": "medium",
+            "setup": "pullback_recovery",
+            "positive_edge": "moderate",
+            "adverse_risk": "high",
+            "trigger": "recovery_required",
+        },
+    }
+    assert (
+        quality.validate_candidate_response(
+            recovery_response,
+            stage="entry",
+            exact_payload=exact_payload,
+        )
+        == []
+    )
+
+    misclassified = {
+        **recovery_response,
+        "edge_state": "NO_EDGE",
+        "action": "DROP",
+        "reason_codes": ["edge_absent"],
+        "evidence": {
+            **recovery_response["evidence"],
+            "setup": "no_setup",
+            "positive_edge": "none",
+            "trigger": "not_applicable",
+        },
+    }
+    errors = quality.validate_candidate_response(
+        misclassified,
+        stage="entry",
+        exact_payload=exact_payload,
+    )
+    assert "entry_structural_edge_floor_misclassified" in errors
+    assert "entry_orderly_pullback_recovery_misclassified" in errors
+
+    overextended_payload = {
+        **exact_payload,
+        "current": {"fluctuation_pct": 20.0},
+        "features": {
+            **exact_payload["features"],
+            "curr_vs_micro_vwap_bp": 120,
+            "curr_vs_ma5_bp": 100,
+        },
+    }
+    blocked_response = {
+        **recovery_response,
+        "action": "DROP",
+        "expected_upside_pct": 0.6,
+        "expected_downside_pct": -1.0,
+        "reason_codes": [
+            "edge_positive",
+            "overextension_chase_risk",
+            "risk_reward_unfavorable",
+            "recovery_trigger_failed",
+        ],
+        "evidence": {
+            **recovery_response["evidence"],
+            "setup": "continuation",
+            "adverse_risk": "blocking",
+            "trigger": "failed",
+        },
+    }
+    assert (
+        quality.validate_candidate_response(
+            blocked_response,
+            stage="entry",
+            exact_payload=overextended_payload,
+        )
+        == []
+    )
 
 
 def test_paired_replay_uses_same_exact_payload_and_has_no_runtime_authority():
@@ -738,9 +911,13 @@ def test_paired_replay_uses_same_exact_payload_and_has_no_runtime_authority():
     assert len(requests) == 1
     assert requests[0]["payload_sha256"] == "payload-1"
     assert requests[0]["runtime_effect"] is False
+    assert requests[0]["candidate"]["prompt_version"] == (
+        f"{quality.DECISION_QUALITY_V2_PROMPT_VERSION}_entry"
+    )
+    assert requests[0]["candidate"]["contract_sha256"]
     response = {
         "edge_state": "NO_EDGE",
-        "action": "WAIT",
+        "action": "DROP",
         "expected_upside_pct": 0.3,
         "expected_downside_pct": -0.4,
         "confidence": 60,
@@ -751,6 +928,10 @@ def test_paired_replay_uses_same_exact_payload_and_has_no_runtime_authority():
             "tape": "mixed",
             "risk": "medium",
             "uncertainty": "medium",
+            "setup": "no_setup",
+            "positive_edge": "none",
+            "adverse_risk": "moderate",
+            "trigger": "not_applicable",
         },
     }
     results = quality.run_paired_replay(
@@ -760,6 +941,9 @@ def test_paired_replay_uses_same_exact_payload_and_has_no_runtime_authority():
     )
     assert results[0]["same_payload_confirmed"] is True
     assert results[0]["status"] == "pass"
+    assert results[0]["candidate_contract_sha256"] == (
+        requests[0]["candidate"]["contract_sha256"]
+    )
     report = quality.build_paired_replay_report(
         target_date="2026-07-27",
         requests=requests,
@@ -824,6 +1008,139 @@ def test_paired_report_excludes_schema_rejected_candidate_from_ev():
     assert report["status"] == "candidate_rejected_no_runtime_apply"
     assert report["paired_comparable_count"] == 0
     assert report["candidate_source_quality_adjusted_ev_pct"] is None
+
+
+def test_recovery_trigger_report_values_edge_wait_as_retained_observation():
+    decision_ts = datetime(2026, 7, 29, 9, 0, 30, tzinfo=KST)
+    price_rows = []
+    for minute in range(1, 13):
+        close = 100.5 if minute == 1 else (101.2 if minute == 2 else 103.0)
+        price_rows.append(
+            {
+                "timestamp": datetime(
+                    2026,
+                    7,
+                    29,
+                    9,
+                    minute,
+                    tzinfo=KST,
+                ).isoformat(),
+                "stock_code": "005930",
+                "price": close,
+                "open": 101.5 if minute == 3 else close,
+                "close": close,
+                "high": close + 0.2,
+                "low": close - 0.2,
+                "effective_venue": "KRX",
+                "session_bucket": "KRX_REGULAR",
+                "source_quality": "pass_completed_ka10080_bar",
+            }
+        )
+    paired_report = {
+        "requests": [
+            {
+                "decision_trace_id": "trace-recovery",
+                "stock_code": "005930",
+                "payload_sha256": "payload-recovery",
+            }
+        ],
+        "results": [
+            {
+                "status": "pass",
+                "decision_trace_id": "trace-recovery",
+                "paired_replay_id": "pair-recovery",
+                "payload_sha256": "payload-recovery",
+                "control_response": {"action": "DROP"},
+                "candidate_response": {
+                    "edge_state": "EDGE",
+                    "action": "WAIT",
+                    "evidence": {
+                        "setup": "pullback_recovery",
+                        "adverse_risk": "moderate",
+                        "trigger": "recovery_required",
+                    },
+                },
+            }
+        ],
+    }
+    labels = [
+        {
+            "decision_trace_id": "trace-recovery",
+            "decision_ts": decision_ts.isoformat(),
+            "stock_code": "005930",
+            "effective_venue": "KRX",
+            "session_bucket": "KRX_REGULAR",
+            "source_quality_status": "pass",
+            "primary_cohort_eligible": True,
+            "decision_stage": "entry",
+            "horizon_metrics": {
+                "10m": {
+                    "end_return_pct": 2.0,
+                    "mfe_pct": 3.0,
+                    "mae_pct": -0.5,
+                }
+            },
+        }
+    ]
+    payloads = [
+        {
+            "payload_sha256": "payload-recovery",
+            "endpoint": "analyze_target",
+            "sanitized_user_input": {
+                "current": {"price": 100},
+                "features": {
+                    "curr_vs_micro_vwap_bp": -100,
+                    "curr_vs_ma5_bp": -50,
+                },
+                "entry_candle_context": {
+                    "bars": [
+                        {"c": 99, "l": 98, "forming": False},
+                        {"c": 99.5, "l": 98.5, "forming": False},
+                        {"c": 100, "l": 99, "forming": False},
+                    ]
+                },
+            },
+        }
+    ]
+    report = quality.build_recovery_trigger_report(
+        target_date="2026-07-29",
+        paired_report=paired_report,
+        labels=labels,
+        payloads=payloads,
+        price_rows=price_rows,
+    )
+
+    assert report["status"] == "sample_floor_keep_collecting"
+    assert report["eligible_row_count"] == 1
+    assert report["recovery_trigger_count"] == 1
+    assert report["control_drop_recovery_count"] == 1
+    assert report["missed_upside_reduction_count"] == 1
+    row = report["rows"][0]
+    assert row["first_event"] == "recovery"
+    assert row["recovery_trigger_at"] == "2026-07-29T09:02:00+09:00"
+    assert row["recovery_entry_at"] == "2026-07-29T09:03:00+09:00"
+    assert row["recovery_entry_price"] == 101.5
+    assert row["candidate_conditional_decision_value_pct"] > 0
+    assert row["counterfactual_only"] is True
+    assert report["runtime_effect"] is False
+    assert report["allowed_runtime_apply"] is False
+
+    missing_next_open_rows = [dict(price_row) for price_row in price_rows]
+    missing_next_open_rows[2]["open"] = None
+    missing_next_open_report = quality.build_recovery_trigger_report(
+        target_date="2026-07-29",
+        paired_report=paired_report,
+        labels=labels,
+        payloads=payloads,
+        price_rows=missing_next_open_rows,
+    )
+
+    assert missing_next_open_report["rows"][0]["recovery_entry_at"] is None
+    assert (
+        missing_next_open_report["rows"][0]["candidate_conditional_decision_value_pct"]
+        is None
+    )
+    assert missing_next_open_report["comparable_row_count"] == 0
 
 
 def test_prepare_paired_replay_marks_stage_floor_without_cherry_picking():
@@ -902,7 +1219,7 @@ def test_paired_replay_retries_schema_once_and_report_omits_exact_payload():
         {"action": "WAIT"},
         {
             "edge_state": "NO_EDGE",
-            "action": "WAIT",
+            "action": "DROP",
             "expected_upside_pct": 0.2,
             "expected_downside_pct": -0.4,
             "confidence": 55,
@@ -913,6 +1230,10 @@ def test_paired_replay_retries_schema_once_and_report_omits_exact_payload():
                 "tape": "mixed",
                 "risk": "medium",
                 "uncertainty": "medium",
+                "setup": "no_setup",
+                "positive_edge": "none",
+                "adverse_risk": "moderate",
+                "trigger": "not_applicable",
             },
         },
     ]
@@ -989,3 +1310,7 @@ def test_openai_candidate_parse_gap_is_retryable_and_secret_free(monkeypatch):
     assert "test-secret" not in str(envelope)
     assert captured["store"] is False
     assert captured["input"] == '{"value":1}'
+    output_schema = captured["text"]["format"]["schema"]
+    assert output_schema["properties"]["expected_upside_pct"]["minimum"] == 0
+    assert output_schema["properties"]["expected_downside_pct"]["maximum"] == 0
+    assert captured["metadata"]["candidate_contract_sha256"]

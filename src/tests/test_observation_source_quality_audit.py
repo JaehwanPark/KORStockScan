@@ -249,6 +249,25 @@ def test_scalp_trailing_continuation_recheck_contract_passes(monkeypatch, tmp_pa
     )
 
 
+def test_fast_exit_quote_envelope_stages_have_source_quality_contracts():
+    stages = {
+        "scalp_fast_exit_quote_envelope_blocked",
+        "scalp_fast_exit_quote_envelope_trigger_cleared",
+    }
+
+    assert stages.issubset(audit.STAGE_CONTRACTS)
+    assert all(
+        audit.STAGE_CONTRACTS[stage].decision_authority
+        == "real_scalping_fast_exit_guard"
+        for stage in stages
+    )
+    assert all(
+        "exit_quote_envelope_id"
+        in audit.STAGE_CONTRACTS[stage].required_fields
+        for stage in stages
+    )
+
+
 def test_protect_trailing_smooth_hold_contract_passes(monkeypatch, tmp_path):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     _write_events(

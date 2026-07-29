@@ -1374,6 +1374,243 @@ def test_watch_cycle_ledger_later_submit_prevents_false_missed_winner():
     assert row["actionable_missed_winner"] is False
 
 
+def test_watch_cycle_ledger_labels_prepromotion_source_guard_outcomes_by_symbol():
+    target_date = "2026-07-29"
+
+    def _event(
+        emitted_at: str,
+        code: str,
+        price: int,
+        *,
+        stage: str = "market_price_observation",
+        guard_reason: str = "",
+    ):
+        fields = {
+            "current_price_observed": str(price),
+            "rising_missed_effective_venue": "NXT",
+            "rising_missed_market_session_bucket": "nxt_regular",
+        }
+        if guard_reason:
+            fields.update(
+                {
+                    "guard_blocked_at_ts": str(
+                        report_mod._parse_event_dt(emitted_at).timestamp()
+                    ),
+                    "scanner_real_source_guard_skip_reason": guard_reason,
+                    "cntr_str_available": "false",
+                    "zero_context_cntr_str_state": "missing_defaulted_zero",
+                }
+            )
+        return report_mod.EntryEvent(
+            emitted_at=emitted_at,
+            signal_date=target_date,
+            name=f"종목-{code}",
+            code=code,
+            stage=stage,
+            record_id="",
+            fields=fields,
+        )
+
+    events = [
+        _event(
+            "2026-07-29T10:00:00",
+            "111111",
+            10_000,
+            stage="scalping_scanner_real_source_guard_block",
+            guard_reason="non_positive_rising_start",
+        ),
+        _event("2026-07-29T10:01:00", "111111", 10_060),
+        _event("2026-07-29T10:10:00", "111111", 9_900),
+        _event("2026-07-29T10:20:00", "111111", 10_100),
+        _event(
+            "2026-07-29T11:00:00",
+            "222222",
+            20_000,
+            stage="scalping_scanner_real_source_guard_block",
+            guard_reason="non_positive_rising_start",
+        ),
+        _event("2026-07-29T11:01:00", "222222", 19_800),
+        _event("2026-07-29T11:10:00", "222222", 20_200),
+        _event("2026-07-29T11:20:00", "222222", 19_900),
+    ]
+
+    ledger = report_mod._build_watch_cycle_participation_ledger(target_date, events, [])
+
+    assert ledger["schema_version"] == 2
+    assert ledger["summary"]["unique_watch_cycle_count"] == 2
+    assert ledger["summary"]["scanner_source_guard_block_cycle_count"] == 2
+    assert ledger["summary"]["scanner_source_guard_cntr_str_missing_cycle_count"] == 2
+    assert (
+        ledger["summary"]["scanner_source_guard_cntr_str_missing_unique_stock_count"]
+        == 2
+    )
+    assert ledger["summary"]["scanner_source_guard_outcome_counts"] == {
+        "appropriate_loss_block": 1,
+        "missed_upside": 1,
+    }
+    rows = {row["stock_code"]: row for row in ledger["rows"]}
+    assert rows["111111"]["single_terminal_blocker_class"] == "source_quality_guard"
+    assert rows["111111"]["reference_price_source"] == (
+        "scanner_source_guard_block_price"
+    )
+    assert rows["111111"]["primary_source_quality_state"] == "pass"
+    assert rows["111111"]["scanner_source_guard_outcome_label"] == "missed_upside"
+    assert rows["111111"]["actionable_missed_winner"] is False
+    assert rows["222222"]["scanner_source_guard_outcome_label"] == (
+        "appropriate_loss_block"
+    )
+    symbol_rows = {
+        row["stock_code"]: row for row in ledger["scanner_source_guard_symbol_outcomes"]
+    }
+    assert symbol_rows["111111"]["outcome_label"] == "missed_upside"
+    assert symbol_rows["111111"]["max_20m_mfe_pct"] == 1.0
+    assert symbol_rows["111111"]["min_20m_mae_pct"] == -1.0
+    assert symbol_rows["222222"]["outcome_label"] == "appropriate_loss_block"
+    assert symbol_rows["222222"]["runtime_effect"] is False
+
+
+def test_prepromotion_source_guard_outcome_does_not_mix_krx_and_nxt_prices():
+    target_date = "2026-07-29"
+    events = [
+        report_mod.EntryEvent(
+            emitted_at="2026-07-29T10:00:00",
+            signal_date=target_date,
+            name="거래소분리",
+            code="333333",
+            stage="scalping_scanner_real_source_guard_block",
+            record_id="",
+            fields={
+                "current_price_observed": "10000",
+                "rising_missed_effective_venue": "NXT",
+                "rising_missed_market_session_bucket": "nxt_regular",
+                "scanner_real_source_guard_skip_reason": "non_positive_rising_start",
+            },
+        ),
+        *[
+            report_mod.EntryEvent(
+                emitted_at=emitted_at,
+                signal_date=target_date,
+                name="거래소분리",
+                code="333333",
+                stage="market_price_observation",
+                record_id="",
+                fields={
+                    "current_price_observed": str(price),
+                    "rising_missed_effective_venue": "KRX",
+                    "rising_missed_market_session_bucket": "krx_regular",
+                },
+            )
+            for emitted_at, price in (
+                ("2026-07-29T10:01:00", 10_100),
+                ("2026-07-29T10:10:00", 10_200),
+                ("2026-07-29T10:20:00", 10_300),
+            )
+        ],
+    ]
+
+    ledger = report_mod._build_watch_cycle_participation_ledger(target_date, events, [])
+
+    row = ledger["rows"][0]
+    assert row["effective_venue"] == "NXT"
+    assert row["primary_source_quality_state"].startswith("source_gap")
+    assert row["scanner_source_guard_outcome_label"] == "pending_or_source_gap"
+    assert ledger["summary"]["scanner_source_guard_outcome_counts"] == {
+        "pending_or_source_gap": 1
+    }
+
+
+def test_prepromotion_source_guard_conflicting_event_venue_is_source_gap():
+    target_date = "2026-07-29"
+    events = [
+        report_mod.EntryEvent(
+            emitted_at="2026-07-29T10:00:00",
+            signal_date=target_date,
+            name="거래소충돌",
+            code="333334",
+            stage="scalping_scanner_real_source_guard_block",
+            record_id="",
+            fields={
+                "current_price_observed": "10000",
+                "rising_missed_effective_venue": "NXT",
+                "effective_venue": "KRX",
+                "rising_missed_market_session_bucket": "nxt_regular",
+                "scanner_real_source_guard_skip_reason": "non_positive_rising_start",
+            },
+        ),
+        report_mod.EntryEvent(
+            emitted_at="2026-07-29T10:10:00",
+            signal_date=target_date,
+            name="거래소충돌",
+            code="333334",
+            stage="market_price_observation",
+            record_id="",
+            fields={
+                "current_price_observed": "10200",
+                "rising_missed_effective_venue": "NXT",
+                "rising_missed_market_session_bucket": "nxt_regular",
+            },
+        ),
+    ]
+
+    ledger = report_mod._build_watch_cycle_participation_ledger(target_date, events, [])
+
+    row = ledger["rows"][0]
+    assert row["effective_venue"] == "UNKNOWN"
+    assert row["primary_source_quality_state"].startswith("source_gap")
+    assert row["scanner_source_guard_outcome_label"] == "pending_or_source_gap"
+    assert row["actionable_missed_winner"] is False
+
+
+def test_prepromotion_invalid_stock_filter_is_not_labeled_missed_upside():
+    target_date = "2026-07-29"
+    events = [
+        report_mod.EntryEvent(
+            emitted_at="2026-07-29T10:00:00",
+            signal_date=target_date,
+            name="제외대상",
+            code="444444",
+            stage="scalping_scanner_real_source_guard_block",
+            record_id="",
+            fields={
+                "current_price_observed": "10000",
+                "effective_venue": "KRX",
+                "market_session_bucket": "krx_regular",
+                "scanner_real_source_guard_skip_reason": "invalid_stock_filter",
+            },
+        ),
+        *[
+            report_mod.EntryEvent(
+                emitted_at=emitted_at,
+                signal_date=target_date,
+                name="제외대상",
+                code="444444",
+                stage="market_price_observation",
+                record_id="",
+                fields={
+                    "current_price_observed": str(price),
+                    "effective_venue": "KRX",
+                    "market_session_bucket": "krx_regular",
+                },
+            )
+            for emitted_at, price in (
+                ("2026-07-29T10:01:00", 10_100),
+                ("2026-07-29T10:10:00", 10_200),
+                ("2026-07-29T10:20:00", 10_300),
+            )
+        ],
+    ]
+
+    ledger = report_mod._build_watch_cycle_participation_ledger(target_date, events, [])
+
+    row = ledger["rows"][0]
+    assert row["opportunity_label"] == "gross_target_first"
+    assert row["scanner_source_guard_non_actionable_universe_block"] is True
+    assert row["scanner_source_guard_outcome_label"] == (
+        "non_actionable_universe_block"
+    )
+    assert row["actionable_missed_winner"] is False
+
+
 def test_watch_cycle_ledger_excludes_drop_and_conflicting_venue_from_actionable_ev():
     target_date = "2026-07-23"
     events = [

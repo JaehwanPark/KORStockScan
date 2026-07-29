@@ -18,13 +18,14 @@ from src.utils.constants import DATA_DIR, TRADING_RULES
 from src.utils.jsonl_io import read_jsonl
 from src.utils.logger import log_error
 
-MISSED_ENTRY_COUNTERFACTUAL_SCHEMA_VERSION = 5
+MISSED_ENTRY_COUNTERFACTUAL_SCHEMA_VERSION = 6
 _EXPLICIT_TRADABLE_VENUES = {"KRX", "NXT", "PREMARKET_KRX_LIKE"}
 _WATCH_CYCLE_HORIZONS_MIN = (1, 3, 5, 10, 20, 30, 60)
 _WATCH_CYCLE_ESTIMATED_ROUND_TRIP_COST_PCT = 0.23
 _SCANNER_PROMOTED_STAGE = "scalping_scanner_candidate_promoted"
 _SCANNER_ATTACH_STAGE = "scalping_scanner_runtime_target_attach"
 _SCANNER_EVICTION_STAGE = "scalping_scanner_watch_eviction"
+_SCANNER_REAL_SOURCE_GUARD_BLOCK_STAGE = "scalping_scanner_real_source_guard_block"
 _ENTRY_ARMED_STAGES = {"entry_armed", "entry_armed_resume"}
 _INFERRED_BUY_INTENT_STAGES = _ENTRY_ARMED_STAGES | {
     "score65_74_recovery_probe_entry_unlocked"
@@ -106,6 +107,17 @@ def _safe_float(value, default: float = 0.0) -> float:
         return float(value)
     except Exception:
         return default
+
+
+def _safe_bool(value, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    normalized = str(value or "").strip().lower()
+    if normalized in {"1", "true", "yes", "y", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "n", "off", "", "none", "null"}:
+        return False
+    return default
 
 
 def _minute_candle_meta(
@@ -1020,6 +1032,15 @@ def _event_market_observed_price(event: EntryEvent) -> float:
     return 0.0
 
 
+def _event_explicit_venue(event: EntryEvent) -> str:
+    venues: set[str] = set()
+    for key in ("rising_missed_effective_venue", "effective_venue", "venue"):
+        venue = str(event.fields.get(key) or "").strip().upper()
+        if venue in _EXPLICIT_TRADABLE_VENUES:
+            venues.add(venue)
+    return next(iter(venues)) if len(venues) == 1 else ""
+
+
 def _watch_cycle_terminal_priority(stage: str) -> int:
     normalized = str(stage or "").strip()
     if normalized == "order_bundle_submitted":
@@ -1306,6 +1327,49 @@ def _build_watch_cycle_participation_ledger(
         cycle["promotion_ids"].add(promotion_id)
         _append_event(cycle, promotion_event)
 
+    source_guard_cycle_ids: set[str] = set()
+    for event_index, event in enumerate(events):
+        if event.stage != _SCANNER_REAL_SOURCE_GUARD_BLOCK_STAGE:
+            continue
+        fields = event.fields
+        linked_runtime_record_id = (
+            _clean_cycle_identity(event.record_id)
+            or _clean_cycle_identity(fields.get("runtime_record_id"))
+            or _clean_cycle_identity(fields.get("existing_runtime_record_id"))
+        )
+        linked_promotion_id = _clean_cycle_identity(fields.get("scanner_promotion_id"))
+        if (
+            linked_runtime_record_id in runtime_cycle_by_id
+            or linked_promotion_id in promotion_cycle
+        ):
+            continue
+        guard_blocked_at = _safe_float(fields.get("guard_blocked_at_ts"), 0.0)
+        event_dt = _parse_event_dt(event.emitted_at)
+        anchor_millis = int(
+            round(
+                (
+                    guard_blocked_at
+                    if guard_blocked_at > 0
+                    else event_dt.timestamp() if event_dt is not None else event_index
+                )
+                * 1000.0
+            )
+        )
+        base_cycle_id = f"{target_date}:SOURCE_GUARD:{event.code}:{anchor_millis}"
+        cycle_id = base_cycle_id
+        duplicate_index = 1
+        while cycle_id in source_guard_cycle_ids:
+            duplicate_index += 1
+            cycle_id = f"{base_cycle_id}:{duplicate_index}"
+        source_guard_cycle_ids.add(cycle_id)
+        cycle = _new_cycle(
+            cycle_id,
+            stock_code=event.code,
+            stock_name=event.name,
+            cycle_type="scanner_source_guard_block",
+        )
+        _append_event(cycle, event)
+
     for event in events:
         promotion_id = _clean_cycle_identity(event.fields.get("scanner_promotion_id"))
         runtime_record_id = (
@@ -1349,13 +1413,23 @@ def _build_watch_cycle_participation_ledger(
             _append_event(cycle, event)
 
     price_points_by_stock: dict[str, list[tuple[datetime, float]]] = defaultdict(list)
+    price_points_by_stock_venue: dict[tuple[str, str], list[tuple[datetime, float]]] = (
+        defaultdict(list)
+    )
     for event in events:
         observed_at = _parse_event_dt(event.emitted_at)
         observed_price = _event_market_observed_price(event)
         if observed_at is None or observed_price <= 0:
             continue
         price_points_by_stock[event.code].append((observed_at, observed_price))
+        explicit_venue = _event_explicit_venue(event)
+        if explicit_venue:
+            price_points_by_stock_venue[(event.code, explicit_venue)].append(
+                (observed_at, observed_price)
+            )
     for points in price_points_by_stock.values():
+        points.sort(key=lambda item: item[0])
+    for points in price_points_by_stock_venue.values():
         points.sort(key=lambda item: item[0])
 
     ledger_rows: list[dict] = []
@@ -1429,6 +1503,8 @@ def _build_watch_cycle_participation_ledger(
                 or event.fields.get("runtime_target_attach_reason")
                 or event.fields.get("terminal_reason")
                 or event.fields.get("eviction_reason")
+                or event.fields.get("scanner_real_source_guard_skip_reason")
+                or event.fields.get("scanner_block_reason")
                 or event.fields.get("chosen_action")
                 or ""
             )
@@ -1461,6 +1537,7 @@ def _build_watch_cycle_participation_ledger(
         if submitted:
             terminal_source_stage = "order_bundle_submitted"
 
+        reference_event: EntryEvent | None = None
         reference_evaluation = next(
             (
                 item
@@ -1499,6 +1576,11 @@ def _build_watch_cycle_participation_ledger(
                 else 0.0
             )
             reference_source = "scanner_watch_or_promotion_price"
+            if (
+                reference_event is not None
+                and reference_event.stage == _SCANNER_REAL_SOURCE_GUARD_BLOCK_STAGE
+            ):
+                reference_source = "scanner_source_guard_block_price"
 
         horizon_metrics: dict[str, dict] = {}
         if reference_evaluation is not None:
@@ -1510,7 +1592,16 @@ def _build_watch_cycle_participation_ledger(
                     if isinstance(value, dict)
                 }
         if reference_dt is not None:
-            price_points = price_points_by_stock.get(cycle["stock_code"], [])
+            if (
+                cycle["cycle_type"] == "scanner_source_guard_block"
+                and reference_event is not None
+            ):
+                reference_event_venue = _event_explicit_venue(reference_event)
+                price_points = price_points_by_stock_venue.get(
+                    (cycle["stock_code"], reference_event_venue), []
+                )
+            else:
+                price_points = price_points_by_stock.get(cycle["stock_code"], [])
             for horizon_min in _WATCH_CYCLE_HORIZONS_MIN:
                 key = str(horizon_min)
                 if key in horizon_metrics:
@@ -1650,6 +1741,49 @@ def _build_watch_cycle_participation_ledger(
         else:
             opportunity_label = "no_hit_within_20m"
 
+        source_guard_events = [
+            event
+            for event in cycle_events
+            if event.stage == _SCANNER_REAL_SOURCE_GUARD_BLOCK_STAGE
+        ]
+        source_guard_block_reasons = sorted(
+            {
+                str(
+                    event.fields.get("scanner_real_source_guard_skip_reason")
+                    or event.fields.get("scanner_block_reason")
+                    or "unknown_source_guard_reason"
+                )
+                for event in source_guard_events
+            }
+        )
+        cntr_str_missing = any(
+            (
+                not _safe_bool(
+                    event.fields.get("current_cntr_str_available")
+                    if event.fields.get("current_cntr_str_available") is not None
+                    else event.fields.get("cntr_str_available")
+                )
+                and str(event.fields.get("zero_context_cntr_str_state") or "").strip()
+                == "missing_defaulted_zero"
+            )
+            for event in source_guard_events
+        )
+        non_actionable_universe_block = (
+            "invalid_stock_filter" in source_guard_block_reasons
+        )
+        if not source_guard_events:
+            source_guard_outcome_label = "not_applicable"
+        elif non_actionable_universe_block:
+            source_guard_outcome_label = "non_actionable_universe_block"
+        elif primary_source_quality != "pass":
+            source_guard_outcome_label = "pending_or_source_gap"
+        elif opportunity_label == "gross_target_first":
+            source_guard_outcome_label = "missed_upside"
+        elif opportunity_label == "adverse_stop_first":
+            source_guard_outcome_label = "appropriate_loss_block"
+        else:
+            source_guard_outcome_label = "neutral_no_boundary_hit"
+
         actionable_missed_winner = bool(
             not submitted
             and opportunity_label == "gross_target_first"
@@ -1691,6 +1825,13 @@ def _build_watch_cycle_participation_ledger(
                 "primary_horizon_min": 20,
                 "primary_source_quality_state": primary_source_quality,
                 "opportunity_label": opportunity_label,
+                "scanner_source_guard_block_observed": bool(source_guard_events),
+                "scanner_source_guard_block_reasons": source_guard_block_reasons,
+                "scanner_source_guard_cntr_str_missing": bool(cntr_str_missing),
+                "scanner_source_guard_non_actionable_universe_block": bool(
+                    non_actionable_universe_block
+                ),
+                "scanner_source_guard_outcome_label": source_guard_outcome_label,
                 "estimated_round_trip_cost_pct": (
                     _WATCH_CYCLE_ESTIMATED_ROUND_TRIP_COST_PCT
                 ),
@@ -1748,13 +1889,74 @@ def _build_watch_cycle_participation_ledger(
     source_quality_counts = Counter(
         str(row["primary_source_quality_state"]) for row in ledger_rows
     )
+    source_guard_symbol_rows: list[dict] = []
+    source_guard_rows_by_code: dict[str, list[dict]] = defaultdict(list)
+    for row in ledger_rows:
+        if row["scanner_source_guard_block_observed"]:
+            source_guard_rows_by_code[str(row["stock_code"])].append(row)
+    for stock_code, symbol_rows in sorted(source_guard_rows_by_code.items()):
+        label_counts = Counter(
+            str(row["scanner_source_guard_outcome_label"]) for row in symbol_rows
+        )
+        observed_labels = {label for label, count in label_counts.items() if count > 0}
+        if len(observed_labels) == 1:
+            symbol_outcome_label = next(iter(observed_labels))
+        elif len(observed_labels) > 1:
+            symbol_outcome_label = "mixed_outcomes"
+        else:
+            symbol_outcome_label = "pending_or_source_gap"
+        complete_metrics = [
+            row["forward_horizon_metrics"].get("20", {})
+            for row in symbol_rows
+            if row["primary_source_quality_state"] == "pass"
+        ]
+        source_guard_symbol_rows.append(
+            {
+                "stock_code": stock_code,
+                "stock_name": str(symbol_rows[-1]["stock_name"]),
+                "cycle_count": len(symbol_rows),
+                "cntr_str_missing_cycle_count": sum(
+                    1
+                    for row in symbol_rows
+                    if row["scanner_source_guard_cntr_str_missing"]
+                ),
+                "outcome_label": symbol_outcome_label,
+                "outcome_label_counts": dict(sorted(label_counts.items())),
+                "complete_20m_cycle_count": len(complete_metrics),
+                "max_20m_mfe_pct": (
+                    round(
+                        max(
+                            _safe_float(metrics.get("mfe_pct"), 0.0)
+                            for metrics in complete_metrics
+                        ),
+                        3,
+                    )
+                    if complete_metrics
+                    else None
+                ),
+                "min_20m_mae_pct": (
+                    round(
+                        min(
+                            _safe_float(metrics.get("mae_pct"), 0.0)
+                            for metrics in complete_metrics
+                        ),
+                        3,
+                    )
+                    if complete_metrics
+                    else None
+                ),
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+            }
+        )
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "contract": {
             "metric_role": "counterfactual_opportunity_attribution",
             "decision_authority": "watch_cycle_source_only_no_runtime_apply",
             "window_policy": (
-                "unique_scanner_runtime_watch_or_unattached_promotion_cycle_"
+                "unique_scanner_runtime_watch_unattached_promotion_or_"
+                "prepromotion_source_guard_block_cycle_"
                 "with_1_3_5_10_20_30_60m_forward_observation"
             ),
             "sample_floor": "rolling_closed_source_quality_valid_cycles_ge_20",
@@ -1786,6 +1988,30 @@ def _build_watch_cycle_participation_ledger(
                 1
                 for row in ledger_rows
                 if row["cycle_type"] == "promotion_not_attached"
+            ),
+            "scanner_source_guard_block_cycle_count": sum(
+                1
+                for row in ledger_rows
+                if row["cycle_type"] == "scanner_source_guard_block"
+            ),
+            "scanner_source_guard_cntr_str_missing_cycle_count": sum(
+                1 for row in ledger_rows if row["scanner_source_guard_cntr_str_missing"]
+            ),
+            "scanner_source_guard_cntr_str_missing_unique_stock_count": len(
+                {
+                    str(row["stock_code"])
+                    for row in ledger_rows
+                    if row["scanner_source_guard_cntr_str_missing"]
+                }
+            ),
+            "scanner_source_guard_outcome_counts": dict(
+                sorted(
+                    Counter(
+                        str(row["scanner_source_guard_outcome_label"])
+                        for row in ledger_rows
+                        if row["scanner_source_guard_block_observed"]
+                    ).items()
+                )
             ),
             "submitted_cycle_count": len(ledger_rows) - len(unsubmitted_rows),
             "unsubmitted_cycle_count": len(unsubmitted_rows),
@@ -1822,6 +2048,7 @@ def _build_watch_cycle_participation_ledger(
             "effective_venue_counts": dict(venue_counts),
             "primary_source_quality_counts": dict(source_quality_counts),
         },
+        "scanner_source_guard_symbol_outcomes": source_guard_symbol_rows,
         "rows": ledger_rows,
     }
 

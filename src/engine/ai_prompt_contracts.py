@@ -605,11 +605,13 @@ Return JSON only:
 
 # Offline-only Prompt V2 candidates. These prompts are never selected by the
 # live engine directly; decision-quality paired replay owns their evaluation.
+DECISION_QUALITY_V2_PROMPT_VERSION = "decision_quality_v2_4"
+
 DECISION_QUALITY_V2_RESPONSE_SCHEMA = {
     "edge_state": "EDGE|NO_EDGE|INSUFFICIENT_DATA",
     "action": "stage_specific_action",
-    "expected_upside_pct": "number_or_null",
-    "expected_downside_pct": "number_or_null",
+    "expected_upside_pct": "nonnegative_number_or_null",
+    "expected_downside_pct": "nonpositive_number_or_null",
     "confidence": "integer_0_100",
     "reason_codes": ["canonical_ascii_reason_code"],
     "evidence": {
@@ -618,6 +620,13 @@ DECISION_QUALITY_V2_RESPONSE_SCHEMA = {
         "tape": "supportive|mixed|adverse|insufficient",
         "risk": "low|medium|high|insufficient",
         "uncertainty": "low|medium|high",
+        "setup": (
+            "continuation|pullback_recovery|reversal|no_setup|"
+            "not_applicable|insufficient"
+        ),
+        "positive_edge": "strong|moderate|weak|none|insufficient",
+        "adverse_risk": "low|moderate|high|blocking|insufficient",
+        "trigger": ("confirmed|recovery_required|failed|not_applicable|insufficient"),
     },
 }
 
@@ -633,11 +642,23 @@ DECISION_QUALITY_V2_REASON_CODES = (
     "insufficient_core_data",
     "liquidity_adverse",
     "liquidity_supportive",
+    "micro_pullback_adverse",
     "no_positive_edge",
     "optional_source_missing",
+    "overextension_chase_risk",
+    "pullback_recovery_candidate",
     "quote_missing",
+    "recovery_trigger_confirmed",
+    "recovery_trigger_failed",
+    "recovery_trigger_required",
+    "reversal_candidate",
+    "risk_reward_favorable",
+    "risk_reward_unfavorable",
+    "setup_invalidated",
     "source_conflict",
     "source_stale",
+    "structural_edge_without_trigger",
+    "structural_trend_supportive",
     "tape_adverse",
     "tape_missing",
     "tape_supportive",
@@ -649,8 +670,10 @@ DECISION_QUALITY_V2_REASON_CODES = (
 
 _DECISION_QUALITY_V2_STAGE_RULES = {
     "entry": (
-        "Compare immediate upside edge with adverse-first risk. "
-        "Return BUY, WAIT, or DROP."
+        "Independently classify structural positive edge, tactical adverse-first "
+        "risk, and the immediate entry trigger. Preserve a valid structural edge "
+        "when current tape is adverse, but do not call the trigger confirmed merely "
+        "because higher-timeframe returns are positive. Return BUY, WAIT, or DROP."
     ),
     "entry_price": (
         "Separate instrument attractiveness from submit fillability. "
@@ -717,6 +740,50 @@ _DECISION_QUALITY_V2_STAGE_INPUT_RULES = {
     ),
 }
 
+_DECISION_QUALITY_V2_ENTRY_DECISION_RULES = """
+Entry edge/risk separation:
+1. Build a structural edge ledger first. Prefer
+   entry_candle_context.structure.returns_pct and slopes_pct_per_bar plus the true
+   completed 3m/5m/15m aggregates. Treat positive returns in at least three of the
+   5/10/20/60-minute windows, with positive slopes in at least two of those
+   windows, as at least moderate structural edge. Treat positive 10/20/60-minute
+   returns and slopes with stable/rising completed-bar lows as strong structural
+   edge. These floors are mandatory response-contract rules: when a floor is met,
+   edge_state must be EDGE and positive_edge must be moderate or strong. Current
+   tape cannot downgrade these facts to positive_edge=none.
+2. Build a tactical adverse-risk ledger independently from the latest completed
+   1-minute move, micro-VWAP and MA5 displacement, signed tape, execution strength,
+   spread/depth, distance from the day high, daily run-up, and failed-breakout or
+   chase conditions. Do not erase either ledger by averaging them together.
+3. Adverse tape during an orderly pullback may coexist with a continuation or
+   pullback-recovery edge. In that case use trigger=recovery_required until a fresh
+   completed-bar or trusted-tape recovery is actually present.
+4. A daily run-up of at least 15 percent combined with price at least 80 bp above
+   both micro-VWAP and MA5 and non-supportive tape is blocking overextension/chase
+   risk, even when the structural ledger is strong. Preserve edge_state=EDGE but
+   use DROP with trigger=failed and adverse_risk=blocking.
+5. When structural edge is moderate/strong, price is below micro-VWAP or MA5, and
+   tape is adverse or mixed, classify pullback_recovery with
+   trigger=recovery_required unless the completed structure is already invalidated.
+   Do not relabel this combination NO_EDGE solely because immediate tape is weak.
+6. Set trigger=confirmed only when fresh trusted tape/order flow is supportive and
+   a latest completed 1m or 3m recovery agrees. Set trigger=failed when adverse tape
+   aligns with a failed-breakout/adverse structure or blocking chase risk.
+7. BUY requires edge_state=EDGE, positive_edge=moderate or strong,
+   trigger=confirmed, adverse_risk=low or moderate, and
+   a strictly negative expected_downside_pct with
+   expected_upside_pct / abs(expected_downside_pct) >= 1.25.
+8. WAIT is not the default for sufficient data. Use WAIT only for
+   (a) EDGE with trigger=recovery_required and non-blocking adverse risk, or
+   (b) INSUFFICIENT_DATA. State the missing recovery condition with canonical
+   reason codes.
+9. Use DROP for NO_EDGE. Also use DROP when a structural edge exists but the setup
+   is invalidated, trigger=failed, adverse_risk=blocking, or a confirmed-trigger
+   setup has reward/risk below 1.25. An intact pullback edge with
+   trigger=recovery_required may remain WAIT while awaiting recovery. NO_EDGE with
+   WAIT is invalid.
+""".strip()
+
 
 def decision_quality_v2_system_prompt(stage: str) -> str:
     """Return an English ASCII offline paired-replay prompt for one stage."""
@@ -727,6 +794,9 @@ def decision_quality_v2_system_prompt(stage: str) -> str:
     if stage_rule is None or stage_input_rule is None:
         raise ValueError(f"unsupported decision-quality stage: {stage}")
     reason_codes = ", ".join(DECISION_QUALITY_V2_REASON_CODES)
+    entry_decision_rules = (
+        _DECISION_QUALITY_V2_ENTRY_DECISION_RULES if normalized == "entry" else ""
+    )
     return f"""
 You are an offline Korean-stock scalping decision-quality evaluator.
 You have no live order, threshold, provider, model-routing, quantity, or safety authority.
@@ -738,6 +808,8 @@ Stage objective:
 Stage input contract:
 {stage_input_rule}
 
+{entry_decision_rules}
+
 Rules:
 1. Distinguish completed bars from forming bars.
 2. Require timestamp and venue/session consistency across price, BBO, tape, and context.
@@ -745,14 +817,18 @@ Rules:
 4. Use INSUFFICIENT_DATA when a required source is missing, stale, or conflicted.
 5. Do not derive BUY, ADD, HOLD, TRIM, or EXIT from one score alone.
 6. Return expected upside and expected downside together. Upside is zero or
-   positive; downside is zero or negative.
+   positive; downside is zero or negative. For EDGE or NO_EDGE both values must be
+   JSON numbers and must never be null. Only INSUFFICIENT_DATA uses null values.
 7. When core data is sufficient, estimate bounded upside/downside from completed-bar
    ranges, VWAP position, quote/liquidity, and tape aggregates. Do not require a
    precomputed target field. EDGE and NO_EDGE require both numeric estimates;
    INSUFFICIENT_DATA returns null for both.
-8. Return only these canonical reason codes: {reason_codes}.
-9. Return structured evidence.
-10. Never repeat input arrays, secrets, credentials, or authorization headers.
+8. Keep positive_edge and adverse_risk independent. A high adverse risk does not
+   prove that structural edge is absent, and structural edge does not prove that
+   the immediate trigger is safe.
+9. Return only these canonical reason codes: {reason_codes}.
+10. Return structured evidence.
+11. Never repeat input arrays, secrets, credentials, or authorization headers.
 
 Return JSON only with this contract:
 {{
@@ -767,7 +843,13 @@ Return JSON only with this contract:
     "liquidity": "supportive" | "mixed" | "adverse" | "insufficient",
     "tape": "supportive" | "mixed" | "adverse" | "insufficient",
     "risk": "low" | "medium" | "high" | "insufficient",
-    "uncertainty": "low" | "medium" | "high"
+    "uncertainty": "low" | "medium" | "high",
+    "setup": "continuation" | "pullback_recovery" | "reversal" |
+      "no_setup" | "not_applicable" | "insufficient",
+    "positive_edge": "strong" | "moderate" | "weak" | "none" | "insufficient",
+    "adverse_risk": "low" | "moderate" | "high" | "blocking" | "insufficient",
+    "trigger": "confirmed" | "recovery_required" | "failed" |
+      "not_applicable" | "insufficient"
   }}
 }}
 """.strip()

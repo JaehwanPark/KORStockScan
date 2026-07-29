@@ -1494,6 +1494,30 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
         decision_authority="operator_runtime_override_scalp_trailing_continuation_recheck",
         forbidden_uses="hard_stop_bypass/protect_stop_bypass/emergency_stop_bypass/stale_ws_bypass/broker_guard_bypass/provider_route_change/quantity_or_cap_change/second_extension",
     ),
+    "scalp_fast_exit_quote_envelope_blocked": StageContract(
+        required_fields=(
+            *REAL_EXECUTION_DIAGNOSTIC_FIELDS,
+            "block_reason",
+            "exit_quote_envelope_id",
+            "exit_quote_envelope_recheck_attempted",
+            "exit_quote_envelope_recheck_rest_state",
+            "exit_quote_envelope_recheck_reuse_allowed",
+        ),
+        decision_authority="real_scalping_fast_exit_guard",
+        forbidden_uses="hard_stop_delay/protect_stop_delay/emergency_stop_delay/threshold_mutation/provider_route_change/broker_guard_bypass",
+    ),
+    "scalp_fast_exit_quote_envelope_trigger_cleared": StageContract(
+        required_fields=(
+            *REAL_EXECUTION_DIAGNOSTIC_FIELDS,
+            "exit_quote_envelope_id",
+            "exit_quote_envelope_recheck_attempted",
+            "exit_quote_envelope_recheck_rest_state",
+            "exit_quote_envelope_recheck_reuse_allowed",
+            "exit_quote_envelope_recheck_best_bid",
+        ),
+        decision_authority="real_scalping_fast_exit_guard",
+        forbidden_uses="hard_stop_delay/protect_stop_delay/emergency_stop_delay/threshold_mutation/provider_route_change/broker_guard_bypass",
+    ),
     "protect_trailing_smooth_hold": StageContract(
         required_fields=(
             "metric_role",

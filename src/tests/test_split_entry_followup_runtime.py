@@ -1609,6 +1609,69 @@ def test_probe_residual_timeout_keeps_one_share_and_releases_pyramid_recheck(
     assert scale_in.get("reason") != "entry_split_probe_scale_in_forbidden"
 
 
+def test_nxt_fast_tape_timeout_closes_residual_but_releases_scale_in_recheck(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(
+        split_plan,
+        "PROBE_RUNTIME_STATE_PATH",
+        tmp_path / "entry_split_probe_runtime_state.json",
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_rising_missed_ai_action_guard_active",
+        lambda **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        state_handlers, "_log_entry_pipeline", lambda *_args, **_kwargs: None
+    )
+    stock = {
+        "code": "073240",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_qty": 1,
+        "entry_filled_qty": 1,
+        "entry_split_probe_bundle_id": "073240-probe-nxt-fast-tape",
+        "entry_split_probe_requested_qty": 21,
+        "entry_split_probe_direction_reason": (
+            "post_probe_nxt_wait_fast_tape_required"
+        ),
+        "rising_missed_one_share_scout": True,
+        "rising_missed_effective_venue": "NXT",
+        "rising_missed_market_session_bucket": "nxt_entry_window",
+    }
+
+    state_handlers._abort_entry_split_probe_residual(
+        stock,
+        "073240",
+        "residual_revalidation_timeout",
+        preserve_position=True,
+        now_ts=100.0,
+    )
+
+    assert stock["entry_split_probe_phase"] == "aborted"
+    assert stock["buy_qty"] == 1
+    assert stock["probe_expand_forbidden"] is True
+    assert stock["entry_split_probe_residual_expand_forbidden"] is True
+    assert stock["entry_split_probe_scale_in_forbidden"] is False
+    assert stock["entry_split_probe_scale_in_recheck_allowed"] is True
+    assert (
+        stock["entry_split_probe_scale_in_recheck_origin"]
+        == "normal_winner_recovery"
+    )
+    scale_in = state_handlers.can_consider_scale_in(
+        stock,
+        "073240",
+        {"curr": 6040},
+        "SCALPING",
+        "NORMAL",
+    )
+    assert scale_in.get("reason") not in {
+        "probe_expand_forbidden",
+        "entry_split_probe_scale_in_forbidden",
+    }
+
+
 def test_probe_residual_source_quality_timeout_releases_guarded_scale_in_recheck(
     monkeypatch,
 ):

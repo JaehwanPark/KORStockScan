@@ -23,6 +23,7 @@ from typing import Any, Callable, Iterable
 from zoneinfo import ZoneInfo
 
 from src.engine.ai_prompt_contracts import (
+    DECISION_QUALITY_V2_PROMPT_VERSION,
     DECISION_QUALITY_V2_RESPONSE_SCHEMA,
     DECISION_QUALITY_V2_REASON_CODES,
     decision_quality_v2_system_prompt,
@@ -36,6 +37,7 @@ LABEL_REPORT_SCHEMA = "ai_decision_outcome_labels_v1"
 BASELINE_SCHEMA = "ai_decision_quality_baseline_v1"
 PAIRED_SCHEMA = "ai_prompt_paired_replay_v1"
 SCORE_CORRELATION_SCHEMA = "ai_score_outcome_correlation_v1"
+RECOVERY_TRIGGER_SCHEMA = "ai_prompt_recovery_trigger_labels_v1"
 INPUT_BUNDLE_VERSION = "scalping_multi_timeframe_context_v1"
 ENTRY_CONTEXT_SCHEMA = "entry_candle_context_v1"
 HOLDING_CONTEXT_SCHEMA = "holding_decision_context_v1"
@@ -61,8 +63,13 @@ LABEL_REPORT_DIR = DATA_DIR / "report" / "ai_decision_outcome_labels"
 BASELINE_REPORT_DIR = DATA_DIR / "report" / "ai_decision_quality_baseline"
 PAIRED_REPORT_DIR = DATA_DIR / "report" / "ai_prompt_paired_replay"
 SCORE_CORRELATION_REPORT_DIR = DATA_DIR / "report" / "ai_score_outcome_correlation"
+RECOVERY_TRIGGER_REPORT_DIR = DATA_DIR / "report" / "ai_prompt_recovery_trigger"
 PAIRED_REPLAY_MIN_ROWS = 30
 PAIRED_REPLAY_MIN_SYMBOLS = 10
+RECOVERY_TRIGGER_MIN_ROWS = 15
+RECOVERY_TRIGGER_MIN_SYMBOLS = 10
+RECOVERY_TRIGGER_WINDOW_MIN = 5
+RECOVERY_OUTCOME_HORIZONS_MIN = (1, 3, 5, 10)
 
 OFFLINE_CONTRACT = {
     "metric_role": "ai_decision_quality_observation",
@@ -85,6 +92,32 @@ OFFLINE_CONTRACT = {
     ],
 }
 
+RECOVERY_TRIGGER_CONTRACT = {
+    "metric_role": "ai_decision_quality_recovery_observation",
+    "decision_authority": "offline_counterfactual_recovery_attribution_only",
+    "window_policy": (
+        "exact_snapshot_same_venue_session_completed_bar_recovery_then_forward"
+    ),
+    "sample_floor": {
+        "decision_rows": RECOVERY_TRIGGER_MIN_ROWS,
+        "unique_symbols": RECOVERY_TRIGGER_MIN_SYMBOLS,
+    },
+    "primary_decision_metric": "source_quality_adjusted_ev_pct",
+    "source_quality_gate": ("exact_payload_fresh_same_route_completed_recovery_window"),
+    "runtime_effect": False,
+    "allowed_runtime_apply": False,
+    "actual_order_submitted": False,
+    "broker_order_forbidden": True,
+    "forbidden_uses": [
+        "standalone_live_prompt_promotion",
+        "synthetic_order_or_fill_claim",
+        "counterfactual_realized_pnl_merge",
+        "provider_model_threshold_price_quantity_or_cap_change",
+        "broker_or_safety_guard_bypass",
+        "bot_restart",
+    ],
+}
+
 STAGE_ALIASES = {
     "analyze_target": "entry",
     "gatekeeper": "entry",
@@ -99,7 +132,17 @@ STAGE_ALIASES = {
     "overnight": "overnight",
 }
 
-REASON_EVIDENCE_KEYS = ("trend", "liquidity", "tape", "risk", "uncertainty")
+REASON_EVIDENCE_KEYS = (
+    "trend",
+    "liquidity",
+    "tape",
+    "risk",
+    "uncertainty",
+    "setup",
+    "positive_edge",
+    "adverse_risk",
+    "trigger",
+)
 STAGE_ACTIONS = {
     "entry": {"BUY", "WAIT", "DROP"},
     "entry_price": {"USE_DEFENSIVE", "USE_REFERENCE", "IMPROVE_LIMIT", "SKIP"},
@@ -137,7 +180,33 @@ EVIDENCE_VALUES = {
     "tape": {"supportive", "mixed", "adverse", "insufficient"},
     "risk": {"low", "medium", "high", "insufficient"},
     "uncertainty": {"low", "medium", "high"},
+    "setup": {
+        "continuation",
+        "pullback_recovery",
+        "reversal",
+        "no_setup",
+        "not_applicable",
+        "insufficient",
+    },
+    "positive_edge": {"strong", "moderate", "weak", "none", "insufficient"},
+    "adverse_risk": {"low", "moderate", "high", "blocking", "insufficient"},
+    "trigger": {
+        "confirmed",
+        "recovery_required",
+        "failed",
+        "not_applicable",
+        "insufficient",
+    },
 }
+MUTUALLY_EXCLUSIVE_REASON_CODE_GROUPS = (
+    {"edge_positive", "edge_absent", "no_positive_edge"},
+    {"risk_reward_favorable", "risk_reward_unfavorable"},
+    {
+        "recovery_trigger_confirmed",
+        "recovery_trigger_required",
+        "recovery_trigger_failed",
+    },
+)
 
 
 def control_path(target_date: str) -> Path:
@@ -160,6 +229,12 @@ def score_correlation_path(target_date: str) -> Path:
     return (
         SCORE_CORRELATION_REPORT_DIR
         / f"ai_score_outcome_correlation_{target_date}.json"
+    )
+
+
+def recovery_trigger_path(target_date: str) -> Path:
+    return (
+        RECOVERY_TRIGGER_REPORT_DIR / f"ai_prompt_recovery_trigger_{target_date}.json"
     )
 
 
@@ -830,6 +905,7 @@ def load_kiwoom_completed_minute_price_rows(
                 .isoformat()
             )
             price = _number(candle.get("현재가"))
+            open_price = _number(candle.get("시가"))
             high = _number(candle.get("고가"))
             low = _number(candle.get("저가"))
             if (
@@ -845,6 +921,11 @@ def load_kiwoom_completed_minute_price_rows(
                     "timestamp": timestamp.isoformat(),
                     "stock_code": code,
                     "price": price,
+                    "open": (
+                        open_price
+                        if open_price is not None and open_price > 0
+                        else None
+                    ),
                     "high": high if high is not None and high > 0 else price,
                     "low": low if low is not None and low > 0 else price,
                     "close": price,
@@ -1556,7 +1637,76 @@ def build_score_outcome_correlation_report(
     }
 
 
-def validate_candidate_response(response: dict[str, Any], *, stage: str) -> list[str]:
+def _window_value(values: Any, horizon: int) -> float | None:
+    if not isinstance(values, dict):
+        return None
+    return _number(values.get(str(horizon), values.get(horizon)))
+
+
+def _entry_contract_facts(exact_payload: Any) -> dict[str, bool]:
+    payload = exact_payload if isinstance(exact_payload, dict) else {}
+    context = payload.get("entry_candle_context")
+    context = context if isinstance(context, dict) else {}
+    structure = context.get("structure")
+    structure = structure if isinstance(structure, dict) else {}
+    returns = structure.get("returns_pct")
+    slopes = structure.get("slopes_pct_per_bar")
+    structural_horizons = (5, 10, 20, 60)
+    positive_return_count = sum(
+        (_window_value(returns, horizon) or 0) > 0 for horizon in structural_horizons
+    )
+    positive_slope_count = sum(
+        (_window_value(slopes, horizon) or 0) > 0 for horizon in structural_horizons
+    )
+    structural_edge_floor = positive_return_count >= 3 and positive_slope_count >= 2
+    features = payload.get("features")
+    features = features if isinstance(features, dict) else {}
+    current = payload.get("current")
+    current = current if isinstance(current, dict) else {}
+    daily_runup = _number(current.get("fluctuation_pct"))
+    micro_vwap_bp = _number(features.get("curr_vs_micro_vwap_bp"))
+    ma5_bp = _number(features.get("curr_vs_ma5_bp"))
+    tape_status = str(features.get("entry_order_flow_status") or "").lower()
+    blocking_overextension = bool(
+        structural_edge_floor
+        and daily_runup is not None
+        and daily_runup >= 15
+        and micro_vwap_bp is not None
+        and micro_vwap_bp >= 80
+        and ma5_bp is not None
+        and ma5_bp >= 80
+        and tape_status != "supportive"
+    )
+    regime = str(structure.get("regime") or "").lower()
+    alignment = str(structure.get("alignment") or "").lower()
+    latest_recovery = (_window_value(returns, 1) or 0) > 0 or (
+        _window_value(returns, 3) or 0
+    ) > 0
+    orderly_pullback_recovery = bool(
+        structural_edge_floor
+        and not blocking_overextension
+        and micro_vwap_bp is not None
+        and micro_vwap_bp < 0
+        and ma5_bp is not None
+        and ma5_bp < 0
+        and tape_status in {"adverse", "mixed", "neutral", "unknown"}
+        and latest_recovery
+        and regime not in {"failed_breakout", "breakdown"}
+        and alignment != "adverse"
+    )
+    return {
+        "structural_edge_floor": structural_edge_floor,
+        "blocking_overextension": blocking_overextension,
+        "orderly_pullback_recovery": orderly_pullback_recovery,
+    }
+
+
+def validate_candidate_response(
+    response: dict[str, Any],
+    *,
+    stage: str,
+    exact_payload: Any = None,
+) -> list[str]:
     errors: list[str] = []
     normalized_stage = str(stage or "").strip().lower()
     if response.get("edge_state") not in {
@@ -1613,6 +1763,11 @@ def validate_candidate_response(response: dict[str, Any], *, stage: str) -> list
         )
     ):
         errors.append("reason_codes_invalid")
+    elif any(
+        len(set(map(str, codes)) & group) > 1
+        for group in MUTUALLY_EXCLUSIVE_REASON_CODE_GROUPS
+    ):
+        errors.append("reason_codes_conflict")
     evidence = response.get("evidence")
     if not isinstance(evidence, dict):
         errors.append("evidence_missing")
@@ -1623,6 +1778,80 @@ def validate_candidate_response(response: dict[str, Any], *, stage: str) -> list
                 errors.append(f"evidence_{key}_missing")
             elif value not in EVIDENCE_VALUES[key]:
                 errors.append(f"evidence_{key}_invalid")
+        if normalized_stage == "entry":
+            positive_edge = str(evidence.get("positive_edge") or "").lower()
+            adverse_risk = str(evidence.get("adverse_risk") or "").lower()
+            trigger = str(evidence.get("trigger") or "").lower()
+            setup = str(evidence.get("setup") or "").lower()
+            if edge_state == "INSUFFICIENT_DATA":
+                if action != "WAIT":
+                    errors.append("entry_insufficient_requires_wait")
+                if (
+                    positive_edge != "insufficient"
+                    or adverse_risk != "insufficient"
+                    or trigger != "insufficient"
+                    or setup != "insufficient"
+                ):
+                    errors.append("entry_insufficient_evidence_invalid")
+            elif edge_state == "NO_EDGE":
+                if action != "DROP":
+                    errors.append("entry_no_edge_requires_drop")
+                if positive_edge not in {"none", "weak"}:
+                    errors.append("entry_no_edge_strength_invalid")
+                if setup not in {"no_setup", "not_applicable"}:
+                    errors.append("entry_no_edge_setup_invalid")
+            elif edge_state == "EDGE":
+                if positive_edge not in {"moderate", "strong"}:
+                    errors.append("entry_edge_strength_invalid")
+                if action == "BUY":
+                    if trigger != "confirmed":
+                        errors.append("entry_buy_requires_confirmed_trigger")
+                    if adverse_risk not in {"low", "moderate"}:
+                        errors.append("entry_buy_adverse_risk_too_high")
+                    if (
+                        upside is not None
+                        and downside is not None
+                        and (downside >= 0 or upside / abs(downside) < 1.25)
+                    ):
+                        errors.append("entry_buy_reward_risk_below_floor")
+                elif action == "WAIT":
+                    if trigger != "recovery_required":
+                        errors.append("entry_wait_requires_recovery_trigger")
+                    if adverse_risk in {"blocking", "insufficient"}:
+                        errors.append("entry_wait_adverse_risk_invalid")
+                elif action == "DROP":
+                    reward_risk_unfavorable = (
+                        upside is not None
+                        and downside is not None
+                        and downside < 0
+                        and upside / abs(downside) < 1.25
+                    )
+                    if not (
+                        trigger == "failed"
+                        or adverse_risk == "blocking"
+                        or reward_risk_unfavorable
+                    ):
+                        errors.append(
+                            "entry_edge_drop_requires_failed_blocking_or_unfavorable"
+                        )
+            contract_facts = _entry_contract_facts(exact_payload)
+            if contract_facts["structural_edge_floor"]:
+                if edge_state != "EDGE" or positive_edge not in {
+                    "moderate",
+                    "strong",
+                }:
+                    errors.append("entry_structural_edge_floor_misclassified")
+            if contract_facts["blocking_overextension"]:
+                if adverse_risk != "blocking" or action != "DROP":
+                    errors.append("entry_blocking_overextension_misclassified")
+            if contract_facts["orderly_pullback_recovery"]:
+                if (
+                    setup != "pullback_recovery"
+                    or trigger != "recovery_required"
+                    or action != "WAIT"
+                    or adverse_risk in {"blocking", "insufficient"}
+                ):
+                    errors.append("entry_orderly_pullback_recovery_misclassified")
     if normalized_stage not in STAGE_ACTIONS:
         errors.append("stage_unsupported")
     return errors
@@ -1655,8 +1884,14 @@ def _prompt_v2_openai_schema(stage: str) -> dict[str, Any]:
                 "enum": ["EDGE", "NO_EDGE", "INSUFFICIENT_DATA"],
             },
             "action": {"type": "string", "enum": actions},
-            "expected_upside_pct": {"type": ["number", "null"]},
-            "expected_downside_pct": {"type": ["number", "null"]},
+            "expected_upside_pct": {
+                "type": ["number", "null"],
+                "minimum": 0,
+            },
+            "expected_downside_pct": {
+                "type": ["number", "null"],
+                "maximum": 0,
+            },
             "confidence": {"type": "integer", "minimum": 0, "maximum": 100},
             "reason_codes": {
                 "type": "array",
@@ -1675,6 +1910,16 @@ def _prompt_v2_openai_schema(stage: str) -> dict[str, Any]:
             },
         },
     }
+
+
+def _candidate_contract_sha256(candidate: dict[str, Any]) -> str:
+    return _sha256(
+        {
+            "prompt_version": candidate.get("prompt_version"),
+            "system_prompt_sha256": candidate.get("system_prompt_sha256"),
+            "response_schema_sha256": candidate.get("response_schema_sha256"),
+        }
+    )
 
 
 def _openai_output_text(response: Any) -> str:
@@ -1782,6 +2027,37 @@ def execute_openai_prompt_v2_candidate(
             correction_rules.append(
                 "INSUFFICIENT_DATA requires null upside and downside"
             )
+        if any(error.startswith("entry_") for error in correction_errors):
+            correction_rules.append(
+                "For entry: NO_EDGE requires DROP; INSUFFICIENT_DATA requires WAIT "
+                "with all four edge/risk evidence fields set to insufficient; EDGE "
+                "BUY requires a confirmed trigger, low/moderate adverse risk, and "
+                "reward/risk >= 1.25; EDGE WAIT requires recovery_required and "
+                "non-blocking risk; EDGE DROP requires failed trigger, blocking "
+                "risk, or reward/risk below 1.25"
+            )
+        if "entry_structural_edge_floor_misclassified" in correction_errors:
+            correction_rules.append(
+                "The exact completed-bar returns/slopes meet the mandatory "
+                "structural edge floor; return EDGE with moderate/strong "
+                "positive_edge while assessing adverse risk separately"
+            )
+        if "entry_blocking_overextension_misclassified" in correction_errors:
+            correction_rules.append(
+                "The exact payload meets the blocking overextension contract; "
+                "preserve EDGE but return DROP with blocking adverse risk"
+            )
+        if "entry_orderly_pullback_recovery_misclassified" in correction_errors:
+            correction_rules.append(
+                "The exact payload meets the orderly pullback-recovery contract; "
+                "return EDGE/WAIT with pullback_recovery, recovery_required, and "
+                "non-blocking adverse risk"
+            )
+        if "reason_codes_conflict" in correction_errors:
+            correction_rules.append(
+                "Do not combine mutually exclusive edge, reward/risk, or recovery "
+                "trigger reason codes"
+            )
         instructions += (
             "\nCorrection retry: the prior response violated these contract fields: "
             + ",".join(correction_errors)
@@ -1798,7 +2074,7 @@ def execute_openai_prompt_v2_candidate(
         text={
             "format": {
                 "type": "json_schema",
-                "name": f"decision_quality_v2_{stage}",
+                "name": f"{DECISION_QUALITY_V2_PROMPT_VERSION}_{stage}",
                 "strict": True,
                 "schema": _prompt_v2_openai_schema(stage),
             },
@@ -1808,6 +2084,13 @@ def execute_openai_prompt_v2_candidate(
         metadata={
             "paired_replay_id": pair_id,
             "decision_stage": stage,
+            "candidate_prompt_version": str(
+                candidate.get("prompt_version") or DECISION_QUALITY_V2_PROMPT_VERSION
+            ),
+            "candidate_contract_sha256": str(
+                candidate.get("contract_sha256")
+                or _candidate_contract_sha256(candidate)
+            ),
             "runtime_effect": "false",
         },
         timeout=max(1.0, float(timeout_sec)),
@@ -1919,6 +2202,19 @@ def prepare_paired_replay_requests(
             for trace_key, control_key in signature_fields
         ):
             continue
+        candidate_prompt = decision_quality_v2_system_prompt(stage)
+        candidate = {
+            "prompt_version": f"{DECISION_QUALITY_V2_PROMPT_VERSION}_{stage}",
+            "system_prompt": candidate_prompt,
+            "system_prompt_sha256": _sha256(candidate_prompt),
+            "response_schema": DECISION_QUALITY_V2_RESPONSE_SCHEMA,
+            "response_schema_sha256": _sha256(DECISION_QUALITY_V2_RESPONSE_SCHEMA),
+            "provider": trace.get("provider_actual"),
+            "model": trace.get("model"),
+            "temperature": trace.get("request_temperature"),
+            "reasoning_effort": trace.get("request_reasoning_effort"),
+        }
+        candidate["contract_sha256"] = _candidate_contract_sha256(candidate)
         requests.append(
             {
                 "paired_replay_id": f"pair-{_sha256((trace_id, trace.get('payload_sha256')))[:24]}",
@@ -1940,18 +2236,7 @@ def prepare_paired_replay_requests(
                     "captured_score": trace.get("score"),
                     "captured_reason": trace.get("reason"),
                 },
-                "candidate": {
-                    "prompt_version": f"decision_quality_v2_{stage}",
-                    "system_prompt": decision_quality_v2_system_prompt(stage),
-                    "system_prompt_sha256": _sha256(
-                        decision_quality_v2_system_prompt(stage)
-                    ),
-                    "response_schema": DECISION_QUALITY_V2_RESPONSE_SCHEMA,
-                    "provider": trace.get("provider_actual"),
-                    "model": trace.get("model"),
-                    "temperature": trace.get("request_temperature"),
-                    "reasoning_effort": trace.get("request_reasoning_effort"),
-                },
+                "candidate": candidate,
                 "outcome_join_key": label.get("label_id"),
                 **OFFLINE_CONTRACT,
             }
@@ -2013,7 +2298,9 @@ def run_paired_replay(
                 envelope = candidate_runner(attempt_request)
                 candidate_response, provider_provenance = _candidate_envelope(envelope)
                 candidate_errors = validate_candidate_response(
-                    candidate_response, stage=str(request["stage"])
+                    candidate_response,
+                    stage=str(request["stage"]),
+                    exact_payload=request.get("exact_payload"),
                 )
                 candidate_attempts.append(
                     {
@@ -2064,6 +2351,12 @@ def run_paired_replay(
                 "payload_sha256": request["payload_sha256"],
                 "candidate_prompt_sha256": (request.get("candidate") or {}).get(
                     "system_prompt_sha256"
+                ),
+                "candidate_response_schema_sha256": (
+                    request.get("candidate") or {}
+                ).get("response_schema_sha256"),
+                "candidate_contract_sha256": _candidate_contract_sha256(
+                    request.get("candidate") or {}
                 ),
                 "same_payload_confirmed": True,
                 "control_response": control_response,
@@ -2354,6 +2647,451 @@ def build_paired_replay_report(
     }
 
 
+def _snapshot_recovery_levels(
+    exact_payload: dict[str, Any],
+) -> dict[str, float | None]:
+    current = exact_payload.get("current")
+    current = current if isinstance(current, dict) else {}
+    features = exact_payload.get("features")
+    features = features if isinstance(features, dict) else {}
+    context = exact_payload.get("entry_candle_context")
+    context = context if isinstance(context, dict) else {}
+    reference_price = _number(current.get("price"))
+
+    def level_from_bp(value: Any) -> float | None:
+        basis_points = _number(value)
+        if reference_price is None or reference_price <= 0 or basis_points is None:
+            return None
+        denominator = 1.0 + (basis_points / 10000.0)
+        return reference_price / denominator if denominator > 0 else None
+
+    completed_bars = [
+        row
+        for row in context.get("bars") or []
+        if isinstance(row, dict) and not bool(row.get("forming", False))
+    ]
+    last_completed_close = (
+        _number(completed_bars[-1].get("c")) if completed_bars else None
+    )
+    recent_lows = [
+        value
+        for value in (_number(row.get("l")) for row in completed_bars[-3:])
+        if value is not None and value > 0
+    ]
+    micro_vwap = level_from_bp(features.get("curr_vs_micro_vwap_bp"))
+    ma5 = level_from_bp(features.get("curr_vs_ma5_bp"))
+    reclaim_candidates = [
+        value
+        for value in (micro_vwap, ma5, last_completed_close)
+        if value is not None and value > 0
+    ]
+    return {
+        "reference_price": reference_price,
+        "micro_vwap_level": micro_vwap,
+        "ma5_level": ma5,
+        "last_completed_close": last_completed_close,
+        "recent_completed_low": min(recent_lows) if recent_lows else None,
+        "reclaim_level": max(reclaim_candidates) if reclaim_candidates else None,
+    }
+
+
+def _indexed_completed_price_rows(
+    price_rows: list[dict[str, Any]],
+) -> dict[str, list[dict[str, Any]]]:
+    rows_by_code: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in price_rows:
+        timestamp = _parse_ts(row.get("timestamp"))
+        code = _normalize_stock_code(row.get("stock_code"))
+        open_price = _number(row.get("open"))
+        close = _number(row.get("close"))
+        high = _number(row.get("high"))
+        low = _number(row.get("low"))
+        if (
+            timestamp is None
+            or not code
+            or close is None
+            or close <= 0
+            or not _price_source_usable(row)
+        ):
+            continue
+        rows_by_code[code].append(
+            {
+                **row,
+                "_timestamp": timestamp,
+                "_open": (
+                    open_price if open_price is not None and open_price > 0 else None
+                ),
+                "_close": close,
+                "_high": high if high is not None and high > 0 else close,
+                "_low": low if low is not None and low > 0 else close,
+            }
+        )
+    for rows in rows_by_code.values():
+        rows.sort(key=lambda item: item["_timestamp"])
+    return rows_by_code
+
+
+def _forward_metrics_after_recovery(
+    *,
+    route_rows: list[dict[str, Any]],
+    entry_row: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    entry_at = entry_row["_timestamp"]
+    entry_price = entry_row["_open"]
+    metrics: dict[str, dict[str, Any]] = {}
+    for horizon in RECOVERY_OUTCOME_HORIZONS_MIN:
+        horizon_end = entry_at + timedelta(minutes=horizon)
+        expected_last_bar_at = horizon_end - timedelta(minutes=1)
+        window = [
+            row for row in route_rows if entry_at <= row["_timestamp"] < horizon_end
+        ]
+        if (
+            not window
+            or (expected_last_bar_at - window[-1]["_timestamp"]).total_seconds()
+            > HORIZON_END_MAX_LAG_SEC
+        ):
+            continue
+        metrics[f"{horizon}m"] = {
+            "sample_count": len(window),
+            "mfe_pct": max(
+                round(((row["_high"] / entry_price) - 1.0) * 100.0, 10)
+                for row in window
+            ),
+            "mae_pct": min(
+                round(((row["_low"] / entry_price) - 1.0) * 100.0, 10) for row in window
+            ),
+            "end_return_pct": round(
+                ((window[-1]["_close"] / entry_price) - 1.0) * 100.0,
+                10,
+            ),
+            "counterfactual_only": True,
+            "window_basis": "next_bar_open_after_recovery_same_route",
+            "window_end": horizon_end.isoformat(),
+        }
+    return metrics
+
+
+def build_recovery_trigger_report(
+    *,
+    target_date: str,
+    paired_report: dict[str, Any],
+    labels: list[dict[str, Any]],
+    payloads: list[dict[str, Any]],
+    price_rows: list[dict[str, Any]],
+    price_source_provenance: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Value EDGE+WAIT as retained observation, never as an immediate fill."""
+
+    label_by_trace = {
+        str(row.get("decision_trace_id") or ""): row
+        for row in labels
+        if row.get("source_quality_status") == "pass"
+        and row.get("primary_cohort_eligible") is True
+    }
+    request_by_trace = {
+        str(row.get("decision_trace_id") or ""): row
+        for row in paired_report.get("requests") or []
+        if isinstance(row, dict)
+    }
+    payload_by_key, payload_by_unique_hash = _payload_indexes(payloads)
+    rows_by_code = _indexed_completed_price_rows(price_rows)
+    rows: list[dict[str, Any]] = []
+    exclusions: list[dict[str, Any]] = []
+    for result in paired_report.get("results") or []:
+        if not isinstance(result, dict) or result.get("status") != "pass":
+            continue
+        candidate = result.get("candidate_response")
+        candidate = candidate if isinstance(candidate, dict) else {}
+        evidence = candidate.get("evidence")
+        evidence = evidence if isinstance(evidence, dict) else {}
+        if not (
+            candidate.get("edge_state") == "EDGE"
+            and candidate.get("action") == "WAIT"
+            and evidence.get("trigger") == "recovery_required"
+        ):
+            continue
+        trace_id = str(result.get("decision_trace_id") or "")
+        request = request_by_trace.get(trace_id) or {}
+        label = label_by_trace.get(trace_id)
+        payload_hash = str(result.get("payload_sha256") or "")
+        payload_row = payload_by_unique_hash.get(payload_hash)
+        if payload_row is None:
+            payload_row = payload_by_key.get((payload_hash, "analyze_target"))
+        exact_payload = (
+            payload_row.get("sanitized_user_input")
+            if isinstance(payload_row, dict)
+            else None
+        )
+        if not isinstance(label, dict) or not isinstance(exact_payload, dict):
+            exclusions.append(
+                {
+                    "decision_trace_id": trace_id,
+                    "reason": (
+                        "mature_exact_label_missing"
+                        if not isinstance(label, dict)
+                        else "exact_payload_missing"
+                    ),
+                }
+            )
+            continue
+        code = _normalize_stock_code(
+            label.get("stock_code") or request.get("stock_code")
+        )
+        decision_ts = _parse_ts(label.get("decision_ts"))
+        levels = _snapshot_recovery_levels(exact_payload)
+        if (
+            not code
+            or decision_ts is None
+            or levels["reclaim_level"] is None
+            or levels["recent_completed_low"] is None
+        ):
+            exclusions.append(
+                {
+                    "decision_trace_id": trace_id,
+                    "reason": "recovery_level_contract_missing",
+                }
+            )
+            continue
+        recovery_window_end = decision_ts + timedelta(
+            minutes=RECOVERY_TRIGGER_WINDOW_MIN
+        )
+        route_rows = [
+            row
+            for row in rows_by_code.get(code, [])
+            if decision_ts < row["_timestamp"] and _same_route(label, row)
+        ]
+        recovery_window = [
+            row for row in route_rows if row["_timestamp"] <= recovery_window_end
+        ]
+        window_complete = (
+            bool(recovery_window)
+            and (
+                recovery_window_end - recovery_window[-1]["_timestamp"]
+            ).total_seconds()
+            <= HORIZON_END_MAX_LAG_SEC
+        )
+        previous_close = (
+            levels["last_completed_close"]
+            or levels["reference_price"]
+            or levels["reclaim_level"]
+        )
+        trigger_row = None
+        adverse_row = None
+        for row in recovery_window:
+            if (
+                trigger_row is None
+                and row["_close"] >= levels["reclaim_level"]
+                and row["_close"] > previous_close
+            ):
+                trigger_row = row
+            if adverse_row is None and row["_low"] < levels["recent_completed_low"]:
+                adverse_row = row
+            previous_close = row["_close"]
+        trigger_at = trigger_row["_timestamp"] if trigger_row else None
+        adverse_at = adverse_row["_timestamp"] if adverse_row else None
+        if trigger_at and adverse_at and trigger_at == adverse_at:
+            first_event = "ambiguous_same_bar"
+        elif trigger_at and (adverse_at is None or trigger_at < adverse_at):
+            first_event = "recovery"
+        elif adverse_at:
+            first_event = "adverse"
+        else:
+            first_event = "none"
+        recovery_eligible = first_event == "recovery"
+        recovery_entry_row = None
+        if recovery_eligible:
+            next_route_row = next(
+                (
+                    row
+                    for row in route_rows
+                    if trigger_at and row["_timestamp"] > trigger_at
+                ),
+                None,
+            )
+            if (
+                next_route_row is not None
+                and next_route_row.get("_open") is not None
+                and (next_route_row["_timestamp"] - trigger_at).total_seconds()
+                <= HORIZON_END_MAX_LAG_SEC
+            ):
+                recovery_entry_row = next_route_row
+        forward_metrics = (
+            _forward_metrics_after_recovery(
+                route_rows=route_rows,
+                entry_row=recovery_entry_row,
+            )
+            if recovery_entry_row is not None
+            else {}
+        )
+        primary_recovery_metric = forward_metrics.get("10m")
+        decision_value = (
+            _number(primary_recovery_metric.get("end_return_pct"))
+            if isinstance(primary_recovery_metric, dict)
+            else (0.0 if window_complete and not recovery_eligible else None)
+        )
+        control_action = str(
+            (result.get("control_response") or {}).get("action") or ""
+        ).upper()
+        primary_control_metric = _primary_metric(label) or {}
+        control_value = _decision_value(
+            control_action,
+            _number(primary_control_metric.get("end_return_pct")),
+        )
+        rows.append(
+            {
+                "decision_trace_id": trace_id,
+                "paired_replay_id": result.get("paired_replay_id"),
+                "payload_sha256": payload_hash,
+                "stock_code": code,
+                "effective_venue": label.get("effective_venue"),
+                "session_bucket": label.get("session_bucket"),
+                "decision_ts": decision_ts.isoformat(),
+                "control_action": control_action,
+                "candidate_action": "WAIT",
+                "candidate_edge_state": "EDGE",
+                "candidate_setup": evidence.get("setup"),
+                "candidate_adverse_risk": evidence.get("adverse_risk"),
+                "recovery_levels": {
+                    key: (
+                        round(value, 10) if isinstance(value, (int, float)) else value
+                    )
+                    for key, value in levels.items()
+                },
+                "recovery_window_min": RECOVERY_TRIGGER_WINDOW_MIN,
+                "recovery_window_complete": window_complete,
+                "recovery_trigger_at": (trigger_at.isoformat() if trigger_at else None),
+                "adverse_breach_at": (adverse_at.isoformat() if adverse_at else None),
+                "first_event": first_event,
+                "recovery_entry_price": (
+                    recovery_entry_row["_open"] if recovery_entry_row else None
+                ),
+                "recovery_entry_at": (
+                    recovery_entry_row["_timestamp"].isoformat()
+                    if recovery_entry_row
+                    else None
+                ),
+                "recovery_trigger_close": (
+                    trigger_row["_close"] if recovery_eligible and trigger_row else None
+                ),
+                "recovery_entry_move_from_snapshot_pct": (
+                    round(
+                        (
+                            (recovery_entry_row["_open"] / levels["reference_price"])
+                            - 1.0
+                        )
+                        * 100.0,
+                        10,
+                    )
+                    if recovery_entry_row and levels["reference_price"]
+                    else None
+                ),
+                "forward_metrics": forward_metrics,
+                "control_decision_value_pct": control_value,
+                "candidate_conditional_decision_value_pct": decision_value,
+                "conditional_delta_pct": (
+                    decision_value - control_value
+                    if decision_value is not None and control_value is not None
+                    else None
+                ),
+                "counterfactual_only": True,
+            }
+        )
+    symbol_count = len(
+        {str(row.get("stock_code") or "") for row in rows if row.get("stock_code")}
+    )
+    sample_floor_pass = (
+        len(rows) >= RECOVERY_TRIGGER_MIN_ROWS
+        and symbol_count >= RECOVERY_TRIGGER_MIN_SYMBOLS
+    )
+    comparable = [
+        row
+        for row in rows
+        if row.get("control_decision_value_pct") is not None
+        and row.get("candidate_conditional_decision_value_pct") is not None
+    ]
+    control_ev = (
+        fmean(row["control_decision_value_pct"] for row in comparable)
+        if comparable
+        else None
+    )
+    candidate_ev = (
+        fmean(row["candidate_conditional_decision_value_pct"] for row in comparable)
+        if comparable
+        else None
+    )
+    ev_delta = (
+        candidate_ev - control_ev
+        if candidate_ev is not None and control_ev is not None
+        else None
+    )
+    missed_upside_reduction_count = sum(
+        row["control_action"] in NO_EXPOSURE_ACTIONS
+        and row["candidate_conditional_decision_value_pct"] > 0
+        for row in comparable
+    )
+    control_negative_exposure_count = sum(
+        row["control_decision_value_pct"] < 0 for row in comparable
+    )
+    candidate_negative_exposure_count = sum(
+        row["candidate_conditional_decision_value_pct"] < 0 for row in comparable
+    )
+    quality_checks = {
+        "sample_floor_pass": sample_floor_pass,
+        "all_rows_comparable": bool(rows) and len(comparable) == len(rows),
+        "source_quality_adjusted_ev_improved": ev_delta is not None and ev_delta > 0,
+        "candidate_ev_positive": candidate_ev is not None and candidate_ev > 0,
+        "missed_upside_reduced": missed_upside_reduction_count > 0,
+        "negative_exposure_not_increased": (
+            candidate_negative_exposure_count <= control_negative_exposure_count
+        ),
+    }
+    quality_gate_pass = all(quality_checks.values())
+    status = (
+        "sample_floor_keep_collecting"
+        if not sample_floor_pass
+        else (
+            "recovery_counterfactual_quality_pass_offline_only"
+            if quality_gate_pass
+            else "recovery_counterfactual_quality_rejected"
+        )
+    )
+    return {
+        "schema": RECOVERY_TRIGGER_SCHEMA,
+        "target_date": target_date,
+        "generated_at": datetime.now(KST).isoformat(),
+        "status": status,
+        "eligible_row_count": len(rows),
+        "eligible_symbol_count": symbol_count,
+        "excluded_row_count": len(exclusions),
+        "comparable_row_count": len(comparable),
+        "sample_floor_pass": sample_floor_pass,
+        "recovery_trigger_count": sum(
+            row.get("first_event") == "recovery" for row in rows
+        ),
+        "adverse_first_count": sum(row.get("first_event") == "adverse" for row in rows),
+        "ambiguous_same_bar_count": sum(
+            row.get("first_event") == "ambiguous_same_bar" for row in rows
+        ),
+        "no_event_count": sum(row.get("first_event") == "none" for row in rows),
+        "control_drop_recovery_count": sum(
+            row.get("control_action") == "DROP" and row.get("first_event") == "recovery"
+            for row in rows
+        ),
+        "control_source_quality_adjusted_ev_pct": control_ev,
+        "candidate_source_quality_adjusted_ev_pct": candidate_ev,
+        "source_quality_adjusted_ev_delta_pct": ev_delta,
+        "missed_upside_reduction_count": missed_upside_reduction_count,
+        "control_negative_exposure_count": control_negative_exposure_count,
+        "candidate_negative_exposure_count": candidate_negative_exposure_count,
+        "quality_gate_pass": quality_gate_pass,
+        "quality_checks": quality_checks,
+        "price_source_provenance": list(price_source_provenance or []),
+        "rows": rows,
+        "exclusions": exclusions,
+        **RECOVERY_TRIGGER_CONTRACT,
+    }
+
+
 def _default_sources(
     target_date: str, *, include_pipeline: bool = True
 ) -> dict[str, list[dict[str, Any]]]:
@@ -2383,7 +3121,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--date", required=True)
     parser.add_argument(
         "--mode",
-        choices=("control", "mature", "baseline", "paired", "correlation"),
+        choices=(
+            "control",
+            "mature",
+            "baseline",
+            "paired",
+            "correlation",
+            "recovery",
+        ),
         required=True,
     )
     parser.add_argument("--as-of")
@@ -2506,6 +3251,17 @@ def main(argv: list[str] | None = None) -> int:
             )
             report["outcome_price_source"] = args.outcome_price_source
             path = score_correlation_path(args.date)
+        elif args.mode == "recovery":
+            report = build_recovery_trigger_report(
+                target_date=args.date,
+                paired_report=_load_json(paired_path(args.date)),
+                labels=labels,
+                payloads=sources["payloads"],
+                price_rows=prices,
+                price_source_provenance=price_source_provenance,
+            )
+            report["outcome_price_source"] = args.outcome_price_source
+            path = recovery_trigger_path(args.date)
         else:
             prepared_requests = prepare_paired_replay_requests(
                 control_manifest=_load_json(control_path(args.date)),
@@ -2542,6 +3298,13 @@ def main(argv: list[str] | None = None) -> int:
                         )
                         or {}
                     ).get("system_prompt_sha256")
+                    and row.get("candidate_contract_sha256")
+                    == (
+                        request_by_pair[str(row.get("paired_replay_id") or "")].get(
+                            "candidate"
+                        )
+                        or {}
+                    ).get("contract_sha256")
                     and not validate_candidate_response(
                         dict(row.get("candidate_response") or {}),
                         stage=str(
@@ -2550,6 +3313,9 @@ def main(argv: list[str] | None = None) -> int:
                             )
                             or ""
                         ),
+                        exact_payload=request_by_pair[
+                            str(row.get("paired_replay_id") or "")
+                        ].get("exact_payload"),
                     )
                 ]
                 completed_pair_ids = {

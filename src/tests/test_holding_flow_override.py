@@ -1477,6 +1477,7 @@ def test_trailing_continuation_recheck_uses_bounded_rest_quote_recovery(
         2026, 7, 15, 10, 0, tzinfo=timezone(timedelta(hours=9))
     ).timestamp()
     stock = _stock()
+    decision_quote_envelope = {"exit_quote_envelope_id": "env-quote-recovery"}
 
     deferred = handlers._evaluate_scalp_trailing_continuation_recheck(
         stock=stock,
@@ -1491,6 +1492,7 @@ def test_trailing_continuation_recheck_uses_bounded_rest_quote_recovery(
         trailing_peak_worsen=0.56,
         current_ai_score=72,
         now_ts=now_ts,
+        decision_quote_envelope=decision_quote_envelope,
     )
 
     assert deferred is True
@@ -1506,6 +1508,16 @@ def test_trailing_continuation_recheck_uses_bounded_rest_quote_recovery(
     assert event["quote_recovery_best_bid"] == 10_590
     assert event["quote_recovery_spread_bps"] == "9.443"
     assert event["quote_recovery_large_sell_state"] == "unknown"
+    assert decision_quote_envelope["exit_quote_envelope_recheck_attempted"] is True
+    assert (
+        decision_quote_envelope["exit_quote_envelope_recheck_reuse_allowed"] is True
+    )
+    assert (
+        decision_quote_envelope["exit_quote_envelope_recheck_best_bid"] == 10_590
+    )
+    assert (
+        decision_quote_envelope["exit_quote_envelope_recheck_rest_state"] == "ok"
+    )
 
     expired = handlers._evaluate_scalp_trailing_continuation_recheck(
         stock=stock,
@@ -1555,6 +1567,7 @@ def test_trailing_continuation_recheck_quote_recovery_fails_open(
     now_ts = datetime(
         2026, 7, 15, 10, 0, tzinfo=timezone(timedelta(hours=9))
     ).timestamp()
+    decision_quote_envelope = {"exit_quote_envelope_id": "env-timeout"}
 
     deferred = handlers._evaluate_scalp_trailing_continuation_recheck(
         stock=_stock(),
@@ -1569,10 +1582,22 @@ def test_trailing_continuation_recheck_quote_recovery_fails_open(
         trailing_peak_worsen=0.56,
         current_ai_score=72,
         now_ts=now_ts,
+        decision_quote_envelope=decision_quote_envelope,
     )
 
     assert deferred is False
     assert not any(stage == "scalp_trailing_continuation_recheck" for stage, _ in logs)
+    assert decision_quote_envelope["exit_quote_envelope_recheck_attempted"] is True
+    assert (
+        decision_quote_envelope["exit_quote_envelope_recheck_reuse_allowed"] is False
+    )
+    assert (
+        decision_quote_envelope["exit_quote_envelope_recheck_rest_state"] == "timeout"
+    )
+    assert (
+        decision_quote_envelope["exit_quote_envelope_recheck_block_reason"]
+        == "recheck_rest_timeout"
+    )
 
 
 def test_trailing_continuation_recheck_quote_recovery_rejects_quote_conflict(
