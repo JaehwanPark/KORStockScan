@@ -4804,6 +4804,94 @@ def test_rising_missed_retry_applies_completed_async_result_without_sync_retry(
     assert entry_logs[-1][0] == "rising_missed_entry_ai_async_result_applied"
 
 
+def test_rising_missed_async_preflight_block_propagates_exact_blockers(
+    monkeypatch,
+):
+    class AsyncCoordinator:
+        pass
+
+    class AsyncGeneration:
+        generation_id = "SCANGEN-123456-1"
+
+    entry_logs = []
+    monkeypatch.setattr(state_handlers, "ScannerAsyncEvalCoordinator", AsyncCoordinator)
+    monkeypatch.setattr(state_handlers, "ScannerGeneration", AsyncGeneration)
+    monkeypatch.setattr(
+        state_handlers,
+        "_resolve_scanner_async_entry_ai",
+        lambda *args, **kwargs: {
+            "status": "completed",
+            "completed_epoch": 1001.0,
+            "ai_decision": {
+                "action": "DROP",
+                "score": 0.0,
+                "reason": "ai_input_preflight_blocked",
+                "ai_result_source": "input_preflight_blocked",
+                "ai_market_snapshot_id": "aims-test",
+                "ai_market_snapshot_effective_venue": "KRX",
+                "ai_market_snapshot_market_data_route": "krx_nxt_integrated",
+                "ai_market_snapshot_underlying_event_venue": None,
+                "ai_input_preflight_status": "blocked",
+                "ai_input_preflight_allowed": False,
+                "ai_input_preflight_source_allowed": False,
+                "ai_input_preflight_venue_consistent": False,
+                "ai_input_preflight_blockers": [
+                    "current_price_stale",
+                    "krx_integrated_event_venue_unproven",
+                    "tape_stale",
+                ],
+                "ai_input_preflight_missing_sources": [],
+                "ai_input_preflight_max_source_skew_ms": 1893.281,
+            },
+        },
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: entry_logs.append((stage, fields)),
+    )
+
+    stock = {
+        "strategy": "SCALPING",
+        "last_watching_ai_action": "not_evaluated",
+        "_scanner_async_generation_id": "SCANGEN-123456-1",
+        "_scanner_async_cache_key": "watching:test",
+    }
+    fields = state_handlers._maybe_retry_rising_missed_entry_ai_not_evaluated(
+        stock,
+        "123456",
+        {"curr": 10000},
+        {
+            "ai_engine": object(),
+            "now_ts": 1002.0,
+            "current_ai_score": 50.0,
+            "scanner_async_eval_coordinator": AsyncCoordinator(),
+            "scanner_async_generation": AsyncGeneration(),
+        },
+        curr_price=10000,
+    )
+
+    assert fields["rising_missed_entry_ai_retry_success"] is False
+    assert fields["rising_missed_entry_ai_retry_reason"] == "ai_score_unavailable"
+    assert fields["ai_market_snapshot_id"] == "aims-test"
+    assert fields["ai_input_preflight_status"] == "blocked"
+    assert fields["ai_input_preflight_allowed"] is False
+    assert fields["ai_input_preflight_venue_consistent"] is False
+    assert fields["ai_input_preflight_blockers"] == (
+        "current_price_stale,krx_integrated_event_venue_unproven,tape_stale"
+    )
+    assert fields["ai_input_preflight_missing_sources"] == ""
+    assert fields["ai_input_preflight_max_source_skew_ms"] == "1893.281"
+    assert "tick_source_quality_fields_sent" not in fields
+    assert entry_logs[-1][1]["ai_input_preflight_blockers"] == (
+        "current_price_stale,krx_integrated_event_venue_unproven,tape_stale"
+    )
+    assert (
+        stock["last_watching_ai_source_quality_fields"]["ai_input_preflight_blockers"]
+        == "current_price_stale,krx_integrated_event_venue_unproven,tape_stale"
+    )
+
+
 def test_rising_missed_async_pending_does_not_backoff_or_submit(monkeypatch):
     entry_logs = []
     monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_ONE_SHARE_ENTRY_ENABLED", "true")

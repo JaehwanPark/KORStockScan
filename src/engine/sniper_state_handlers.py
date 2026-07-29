@@ -41370,6 +41370,58 @@ def _ensure_ai_source_quality_fields(
     return out
 
 
+def _copy_ai_preflight_log_fields(payload: dict, out: dict) -> None:
+    for field_name in (
+        "ai_market_snapshot_id",
+        "ai_market_snapshot_effective_venue",
+        "ai_market_snapshot_market_data_route",
+        "ai_market_snapshot_underlying_event_venue",
+        "ai_input_preflight_status",
+    ):
+        if field_name in payload:
+            value = payload.get(field_name)
+            out[field_name] = str(value if value is not None else "-")
+    for field_name in (
+        "ai_input_preflight_allowed",
+        "ai_input_preflight_source_allowed",
+        "ai_input_preflight_venue_consistent",
+    ):
+        if field_name not in payload:
+            continue
+        raw_value = payload.get(field_name)
+        if isinstance(raw_value, bool):
+            out[field_name] = raw_value
+        else:
+            text_value = str(raw_value or "unknown").strip().lower()
+            out[field_name] = (
+                text_value in {"1", "true", "yes", "y"}
+                if text_value not in {"unknown", "-", "none", ""}
+                else "unknown"
+            )
+    for field_name in (
+        "ai_input_preflight_blockers",
+        "ai_input_preflight_missing_sources",
+    ):
+        if field_name not in payload:
+            continue
+        raw_value = payload.get(field_name)
+        if isinstance(raw_value, (list, tuple, set)):
+            values = (
+                sorted(raw_value, key=str) if isinstance(raw_value, set) else raw_value
+            )
+            out[field_name] = ",".join(
+                str(value).strip() for value in values if str(value).strip()
+            )
+        else:
+            out[field_name] = str(raw_value or "").strip()
+    if "ai_input_preflight_max_source_skew_ms" in payload:
+        raw_value = payload.get("ai_input_preflight_max_source_skew_ms")
+        try:
+            out["ai_input_preflight_max_source_skew_ms"] = f"{float(raw_value):.3f}"
+        except (TypeError, ValueError):
+            out["ai_input_preflight_max_source_skew_ms"] = str(raw_value or "-")
+
+
 def _build_tick_source_quality_log_fields(feature_probe):
     payload = feature_probe or {}
     out = {}
@@ -41490,7 +41542,9 @@ def _build_tick_source_quality_log_fields(feature_probe):
                 out[field_name] = f"{float(raw_value):.3f}"
             except Exception:
                 out[field_name] = str(raw_value or "-")
-    if out:
+    tick_source_quality_fields_sent = bool(out)
+    _copy_ai_preflight_log_fields(payload, out)
+    if tick_source_quality_fields_sent:
         out["tick_source_quality_fields_sent"] = True
     return out
 
@@ -59809,6 +59863,7 @@ def _maybe_retry_rising_missed_entry_ai_not_evaluated(
                     "rising_missed_entry_ai_retry_async_status": async_status,
                 }
             )
+            fields.update(source_quality_fields)
             _log_entry_pipeline(
                 stock,
                 code,
