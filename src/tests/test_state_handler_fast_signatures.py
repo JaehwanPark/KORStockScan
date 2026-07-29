@@ -5041,6 +5041,89 @@ def test_scanner_fast_precheck_blocks_rest_quote_below_promotion_anchor(monkeypa
     assert "_scanner_heavy_queue_enter_epoch" not in stock
 
 
+def test_scanner_fast_precheck_blocks_fresh_ws_promotion_price_conflict():
+    stock = {
+        "id": 852,
+        "name": "PROMOTION_PRICE_CONFLICT",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "entry_armed_at_epoch": 1000.0,
+        "scanner_generation_id": "GEN-475040-1",
+        "scanner_generation_observed_price": "2965",
+        "current_price_observed": "2655",
+        "price_delta_since_first_seen_pct": "3.10",
+    }
+
+    fields = handlers._scanner_fast_precheck_fields(
+        stock,
+        now_ts=1001.0,
+        ws_data={
+            "curr": 2655,
+            "last_ws_update_ts": 1000.95,
+            "last_realtime_type_ts": {"0B": 1000.95},
+        },
+    )
+
+    assert fields["fast_precheck_result"] == "source_quality_blocked"
+    assert (
+        fields["fast_precheck_reason"]
+        == "scanner_promotion_price_conflicts_with_fresh_ws"
+    )
+    assert fields["scanner_promotion_price_consistency_state"] == "conflicted"
+    assert fields["scanner_promotion_price"] == 2965
+    assert (
+        fields["scanner_promotion_price_source"] == "scanner_generation_observed_price"
+    )
+    assert fields["scanner_promotion_price_ws_curr"] == 2655
+    assert fields["scanner_promotion_price_gap_pct"] > 10.0
+    assert fields["scanner_promotion_price_broker_order_forbidden"] is True
+    assert fields["heavy_queue_enter_epoch"] == "not_queued"
+
+
+def test_scanner_promotion_price_validation_does_not_block_later_normal_move():
+    stock = {
+        "id": 853,
+        "name": "PROMOTION_PRICE_VALIDATED",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "entry_armed_at_epoch": 1000.0,
+        "scanner_generation_id": "GEN-000853-1",
+        "scanner_generation_observed_price": "10000",
+        "current_price_observed": "10000",
+        "price_delta_since_first_seen_pct": "0.10",
+    }
+
+    initial = handlers._scanner_fast_precheck_fields(
+        stock,
+        now_ts=1001.0,
+        ws_data={
+            "curr": 10010,
+            "last_ws_update_ts": 1000.95,
+            "last_realtime_type_ts": {"0B": 1000.95},
+        },
+    )
+    moved = handlers._scanner_promotion_price_consistency_fields(
+        stock,
+        {
+            "curr": 10200,
+            "last_ws_update_ts": 1099.95,
+            "last_realtime_type_ts": {"0B": 1099.95},
+        },
+        now_ts=1100.0,
+    )
+
+    assert initial["scanner_promotion_price_consistency_state"] == "consistent"
+    assert stock["_scanner_promotion_price_validated_generation_id"] == ("GEN-000853-1")
+    assert moved["scanner_promotion_price_gap_pct"] == 2.0
+    assert moved["scanner_promotion_price_conflict"] is False
+    assert (
+        moved["scanner_promotion_price_consistency_reason"]
+        == "scanner_promotion_price_initial_validation_reused"
+    )
+
+
 def test_scanner_fast_precheck_allows_configured_high_delta_stale_ws_relief(
     monkeypatch,
 ):

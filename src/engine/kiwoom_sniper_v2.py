@@ -7985,6 +7985,7 @@ def _register_scanner_scheduler_generation(
         **venue_fields,
         "scanner_generation_id": generation.generation_id,
         "scanner_generation_revision": generation.revision,
+        "scanner_generation_observed_price": generation.observed_price,
         "scanner_attach_epoch": generation.attach_epoch,
         "scanner_scheduler_mode": _scanner_scheduler_startup_mode(),
         "scanner_scheduler_version": SCANNER_DEADLINE_SCHEDULER_VERSION,
@@ -8347,28 +8348,33 @@ def _drain_scanner_promotion_inbox(scheduler, *, max_items):
 
 
 def _scanner_scheduler_attach_must_yield_to_runtime_work(work_queue):
-    """Do not attach a promotion ahead of order safety or ready precheck work.
+    """Do not attach a promotion ahead of order safety or the next ready work.
 
     Applying a promotion may synchronously register WS subscriptions.  Draining
     another envelope while an already attached generation is waiting for its
     first precheck recreates scanner starvation even when each drain is bounded
-    to one item.  The same blocking attach must not precede receipt/fill work.
+    to one item.  Conversely, scanning the whole queue for any later precheck
+    starves the promotion inbox until every existing watch has run.  Preserve
+    global order safety, but reserve only the queue head's COMMIT/precheck
+    before admitting one new promotion between runtime work units.
     """
 
     for target in work_queue or ():
         status = str((target or {}).get("status") or "").upper()
         if status in {"BUY_ORDERED", "SELL_ORDERED"}:
             return True
-        if not _is_scanner_watching_target(target):
-            continue
-        if not str((target or {}).get("scanner_generation_id") or "").strip():
-            continue
-        lane = str((target or {}).get("_scanner_scheduler_lane") or "").strip()
-        if lane in {
-            ScannerLane.COMMIT.value,
-            ScannerLane.FAST_PRECHECK.value,
-        }:
-            return True
+
+    queue_head = next(iter(work_queue or ()), None)
+    if not _is_scanner_watching_target(queue_head):
+        return False
+    if not str((queue_head or {}).get("scanner_generation_id") or "").strip():
+        return False
+    lane = str((queue_head or {}).get("_scanner_scheduler_lane") or "").strip()
+    if lane in {
+        ScannerLane.COMMIT.value,
+        ScannerLane.FAST_PRECHECK.value,
+    }:
+        return True
     return False
 
 
@@ -11141,10 +11147,16 @@ def run_sniper(is_test_mode=False):
             # 상태 라우팅
             # ✅ 주문대기 상태는 ws_data 없이도 먼저 처리
             # =====================================================
+            attach_guard_queue = _runtime_iteration_targets(
+                targets,
+                now_ts=time.time(),
+            )
             if _scanner_scheduler_startup_mode() in {
                 "deadline_v1",
                 "async_v1",
-            } and not _scanner_scheduler_attach_must_yield_to_runtime_work(targets):
+            } and not _scanner_scheduler_attach_must_yield_to_runtime_work(
+                attach_guard_queue
+            ):
                 _drain_scanner_promotion_inbox(
                     run_sniper.scanner_runtime_scheduler,
                     max_items=1,

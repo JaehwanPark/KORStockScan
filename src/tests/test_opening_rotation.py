@@ -416,6 +416,102 @@ def test_pullback_wait_exposes_downstream_gate_preview_without_bypass():
     )
 
 
+def test_runtime_blocks_opening_rotation_before_async_on_promotion_price_conflict(
+    monkeypatch,
+):
+    now_dt = datetime(2026, 7, 29, 13, 36, 59)
+    stock = {
+        "id": 475040,
+        "name": "스트라드비전",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "source_signature": "PRICE_JUMP_START",
+        "scanner_promotion_id": "SCANPROM-475040-1785299818452",
+        "scanner_generation_id": "GEN-475040-1",
+        "scanner_generation_observed_price": 2965,
+        "current_price": 2575,
+        "current_price_observed": 2575,
+        "opening_rotation_1pct_state": {"peak_price": 2965},
+    }
+    runtime = {
+        "pos_tag": "SCANNER",
+        "now_ts": now_dt.timestamp(),
+        "now_dt": now_dt,
+        "fluctuation": 3.0,
+        "curr_price": 2575,
+        "is_trigger": False,
+    }
+    emitted = []
+    monkeypatch.setattr(
+        handlers,
+        "_resolve_scanner_async_opening_rotation_context",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("conflicted price sources must block before async dispatch")
+        ),
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_log_entry_pipeline",
+        lambda *args, **kwargs: emitted.append((args, kwargs)),
+    )
+
+    handled = handlers._handle_watching_opening_rotation(
+        stock,
+        "475040",
+        {
+            "curr": 2655,
+            "fluctuation": 3.0,
+            "last_ws_update_ts": now_dt.timestamp() - 0.055,
+            "last_realtime_type_ts": {"0B": now_dt.timestamp() - 0.055},
+        },
+        runtime,
+        {"MIN_SCALP_LIQUIDITY": 500_000_000},
+    )
+
+    assert handled is True
+    assert runtime["is_trigger"] is False
+    assert "opening_rotation_1pct_state" not in stock
+    blocked = next(
+        fields
+        for args, fields in emitted
+        if args[2] == "opening_rotation_1pct_source_quality_blocked"
+    )
+    assert blocked["reason"] == "scanner_promotion_price_conflicts_with_fresh_ws"
+    assert blocked["scanner_promotion_price"] == 2965
+    assert blocked["scanner_promotion_price_source"] == (
+        "scanner_generation_observed_price"
+    )
+    assert blocked["scanner_promotion_price_ws_curr"] == 2655
+    assert blocked["scanner_promotion_price_gap_pct"] > 10.0
+    assert blocked["allowed_runtime_apply"] is False
+    assert blocked["actual_order_submitted"] is False
+    assert blocked["broker_order_forbidden"] is True
+
+    handled_again = handlers._handle_watching_opening_rotation(
+        stock,
+        "475040",
+        {
+            "curr": 2655,
+            "fluctuation": 3.0,
+            "last_ws_update_ts": now_dt.timestamp(),
+            "last_realtime_type_ts": {"0B": now_dt.timestamp()},
+        },
+        runtime,
+        {"MIN_SCALP_LIQUIDITY": 500_000_000},
+    )
+
+    assert handled_again is True
+    assert (
+        sum(
+            1
+            for args, _fields in emitted
+            if args[2] == "opening_rotation_1pct_source_quality_blocked"
+        )
+        == 1
+    )
+
+
 def test_fresh_quote_without_trusted_tape_preserves_pullback_for_repromotion():
     source_gap_packet = _packet(10_000)
     source_gap_packet.update(

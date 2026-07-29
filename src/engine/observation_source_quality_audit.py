@@ -1101,6 +1101,28 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
         ),
         decision_authority="real_scalping_scanner_fast_precheck_observation_only",
     ),
+    "opening_rotation_1pct_source_quality_blocked": StageContract(
+        required_fields=(
+            *REAL_EXECUTION_DIAGNOSTIC_FIELDS,
+            "reason",
+            "position_tag_candidate",
+            "opening_rotation_window_version",
+            "opening_rotation_decision_time_bucket",
+            "scanner_promotion_price_consistency_state",
+            "scanner_promotion_price_consistency_reason",
+            "scanner_promotion_price_conflict",
+            "scanner_promotion_price",
+            "scanner_promotion_price_source",
+            "scanner_promotion_price_lineage_id",
+            "scanner_promotion_price_initial_validation_reused",
+            "scanner_promotion_price_ws_curr",
+            "scanner_promotion_price_gap_pct",
+            "scanner_promotion_price_gap_max_pct",
+            "scanner_promotion_price_ws_fresh",
+            "allowed_runtime_apply",
+        ),
+        decision_authority="operator_requested_real_opening_rotation_1pct",
+    ),
     "scalping_scanner_heavy_eval_lag": StageContract(
         required_fields=(
             *REAL_EXECUTION_DIAGNOSTIC_FIELDS,

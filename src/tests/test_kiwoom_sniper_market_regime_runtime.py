@@ -1149,6 +1149,7 @@ def test_scheduler_boot_restore_registers_without_shared_deadline_backlog(
 
     assert generation is not None
     assert scheduler.current_generation("005930") == generation
+    assert target["scanner_generation_observed_price"] == 70_000
     assert scheduler.snapshot_metrics(now_epoch=200.0)["scheduler_queue_depth"] == 0
     assert "_scanner_scheduler_lane" not in target
 
@@ -3120,12 +3121,48 @@ def test_deadline_scheduler_attach_yields_to_order_safety_work(status):
     )
 
 
+def test_deadline_scheduler_attach_does_not_starve_behind_later_precheck():
+    ordinary_head = {
+        "id": "holding-head",
+        "code": "000003",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+    }
+    later_precheck = {
+        "id": "later-precheck",
+        "code": "000004",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "scanner_generation_id": "GEN-000004-1",
+        "_scanner_scheduler_lane": "fast_precheck",
+    }
+
+    assert (
+        kiwoom_sniper_v2._scanner_scheduler_attach_must_yield_to_runtime_work(
+            [ordinary_head, later_precheck]
+        )
+        is False
+    )
+    assert (
+        kiwoom_sniper_v2._scanner_scheduler_attach_must_yield_to_runtime_work(
+            [later_precheck, ordinary_head]
+        )
+        is True
+    )
+
+
 def test_deadline_scheduler_runtime_drains_one_attach_between_prechecks():
     source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
 
     assert source.count("_drain_scanner_promotion_inbox(") == 2
     assert source.count("max_items=1") >= 2
-    assert "_scanner_scheduler_attach_must_yield_to_runtime_work(targets)" in source
+    assert "attach_guard_queue = _runtime_iteration_targets(" in source
+    assert (
+        "_scanner_scheduler_attach_must_yield_to_runtime_work(\n"
+        "                attach_guard_queue\n"
+        "            )" in source
+    )
     assert (
         "_scanner_scheduler_attach_must_yield_to_runtime_work(\n"
         "                    runtime_work_queue\n"

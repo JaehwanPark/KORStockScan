@@ -17039,6 +17039,145 @@ def emit_scanner_runtime_queue_lag(
     return True
 
 
+def _scanner_promotion_price_consistency_fields(
+    stock: dict | None,
+    ws_data: dict | None,
+    *,
+    now_ts: float,
+) -> dict[str, Any]:
+    """Fail closed when fresh WS and promotion lineage carry different prices."""
+
+    stock = stock if isinstance(stock, dict) else {}
+    ws_data = ws_data if isinstance(ws_data, dict) else {}
+    generation_id = str(stock.get("scanner_generation_id") or "").strip()
+    generation_price = _safe_int(stock.get("scanner_generation_observed_price"), 0)
+    has_generation_lineage = bool(generation_id and generation_price > 0)
+    promotion_price = (
+        generation_price
+        if has_generation_lineage
+        else _safe_int(stock.get("current_price_observed"), 0)
+    )
+    promotion_price_source = (
+        "scanner_generation_observed_price"
+        if has_generation_lineage
+        else "current_price_observed"
+    )
+    validated_generation_id = str(
+        stock.get("_scanner_promotion_price_validated_generation_id") or ""
+    ).strip()
+    initial_validation_reused = bool(
+        has_generation_lineage and validated_generation_id == generation_id
+    )
+    ws_price = _safe_int(ws_data.get("curr"), 0)
+    quote_age_sec = _get_ws_snapshot_age_sec(ws_data)
+    max_age_sec = _rule_float("SCALP_PRE_AI_MAX_WS_AGE_SEC", 3.0)
+    realtime_type_ts = ws_data.get("last_realtime_type_ts")
+    realtime_type_ts = realtime_type_ts if isinstance(realtime_type_ts, dict) else {}
+    last_0b_ts = _safe_float(realtime_type_ts.get("0B"), 0.0)
+    last_0b_age_sec = max(0.0, float(now_ts) - last_0b_ts) if last_0b_ts > 0 else None
+    recovery_source = str(ws_data.get("ws_snapshot_recovery_source") or "").strip()
+    rest_proxy = recovery_source in {
+        "ka10001_rest_quote_fallback",
+        "ka10004_rest_orderbook",
+    }
+    fresh_ws = bool(
+        ws_price > 0
+        and not rest_proxy
+        and (
+            (quote_age_sec is not None and quote_age_sec <= max_age_sec)
+            or (last_0b_age_sec is not None and last_0b_age_sec <= max_age_sec)
+        )
+    )
+    gap_pct = (
+        abs(float(ws_price) - float(promotion_price)) / float(promotion_price) * 100.0
+        if promotion_price > 0 and ws_price > 0
+        else None
+    )
+    max_gap_pct = _scanner_rest_quote_recovery_anchor_gap_max_pct()
+    conflict = bool(
+        not initial_validation_reused
+        and has_generation_lineage
+        and fresh_ws
+        and promotion_price > 0
+        and gap_pct is not None
+        and gap_pct > max_gap_pct
+    )
+    if conflict:
+        state = "conflicted"
+        reason = "scanner_promotion_price_conflicts_with_fresh_ws"
+    elif initial_validation_reused:
+        state = "consistent"
+        reason = "scanner_promotion_price_initial_validation_reused"
+    elif not has_generation_lineage:
+        state = "not_evaluated"
+        reason = "scanner_generation_price_lineage_unavailable"
+    elif not fresh_ws:
+        state = "not_evaluated"
+        reason = "fresh_ws_price_unavailable"
+    elif promotion_price <= 0:
+        state = "not_evaluated"
+        reason = "scanner_promotion_price_unavailable"
+    else:
+        state = "consistent"
+        reason = "scanner_promotion_price_within_existing_anchor_guard"
+    return {
+        "scanner_promotion_price_consistency_state": state,
+        "scanner_promotion_price_consistency_reason": reason,
+        "scanner_promotion_price_conflict": conflict,
+        "scanner_promotion_price": (
+            promotion_price
+            if promotion_price > 0
+            else "not_available_scanner_promotion_price"
+        ),
+        "scanner_promotion_price_source": promotion_price_source,
+        "scanner_promotion_price_lineage_id": (
+            generation_id if generation_id else "not_available_scanner_generation_id"
+        ),
+        "scanner_promotion_price_initial_validation_reused": (
+            initial_validation_reused
+        ),
+        "scanner_promotion_price_ws_curr": (
+            ws_price if ws_price > 0 else "not_available_ws_curr"
+        ),
+        "scanner_promotion_price_gap_pct": (
+            round(gap_pct, 6) if gap_pct is not None else "not_available_price_gap_pct"
+        ),
+        "scanner_promotion_price_gap_max_pct": round(max_gap_pct, 6),
+        "scanner_promotion_price_ws_fresh": fresh_ws,
+        "scanner_promotion_price_ws_recovery_source": recovery_source or "direct_ws",
+        "scanner_promotion_price_ws_age_ms": (
+            round(quote_age_sec * 1000.0, 3)
+            if quote_age_sec is not None
+            else "not_available_ws_age_ms"
+        ),
+        "scanner_promotion_price_ws_last_0b_age_ms": (
+            round(last_0b_age_sec * 1000.0, 3)
+            if last_0b_age_sec is not None
+            else "not_available_ws_last_0b_age_ms"
+        ),
+        "scanner_promotion_price_metric_role": "source_quality_gate",
+        "scanner_promotion_price_decision_authority": (
+            "promotion_ws_consistency_only_no_standalone_buy"
+        ),
+        "scanner_promotion_price_window_policy": "per_scanner_generation_fresh_ws",
+        "scanner_promotion_price_sample_floor": "one_promotion_and_fresh_ws_pair",
+        "scanner_promotion_price_primary_decision_metric": (
+            "scanner_promotion_price_gap_pct"
+        ),
+        "scanner_promotion_price_source_quality_gate": (
+            "fresh_ws_and_promotion_price_within_existing_anchor_gap"
+        ),
+        "scanner_promotion_price_runtime_effect": conflict,
+        "scanner_promotion_price_actual_order_submitted": False,
+        "scanner_promotion_price_broker_order_forbidden": True,
+        "scanner_promotion_price_forbidden_uses": (
+            "standalone_buy,threshold_mutation,provider_route_change,"
+            "order_price_change,quantity_or_cap_change,broker_guard_bypass,"
+            "stale_quote_bypass,hard_safety_bypass"
+        ),
+    }
+
+
 def _scanner_fast_precheck_fields_impl(
     stock,
     *,
@@ -17095,6 +17234,14 @@ def _scanner_fast_precheck_fields_impl(
     fresh_realtime_evidence = (
         last_0b_age_sec is not None and last_0b_age_sec <= max_age_sec
     ) or (latest_history_age_sec is not None and latest_history_age_sec <= max_age_sec)
+    promotion_price_fields = _scanner_promotion_price_consistency_fields(
+        stock,
+        ws_data,
+        now_ts=float(now_ts),
+    )
+    promotion_price_conflict = bool(
+        promotion_price_fields.get("scanner_promotion_price_conflict")
+    )
     subscription_recheck_age_sec = _safe_float(
         ws_data.get("scanner_subscription_recheck_age_sec"),
         999999.0,
@@ -17321,6 +17468,9 @@ def _scanner_fast_precheck_fields_impl(
     elif curr <= 0:
         result = "source_quality_blocked"
         reason = "missing_or_zero_curr"
+    elif promotion_price_conflict:
+        result = "source_quality_blocked"
+        reason = "scanner_promotion_price_conflicts_with_fresh_ws"
     elif candidate_gate_backoff_fields:
         result = "budget_reallocated"
         reason = "candidate_gate_backoff_active"
@@ -17403,6 +17553,7 @@ def _scanner_fast_precheck_fields_impl(
     return {
         **_scanner_runtime_event_venue_fields(stock),
         **market_data_fields,
+        **promotion_price_fields,
         "scanner_promotion_id": scanner_fields.get("scanner_promotion_id")
         or "not_applicable_scanner_promotion_id",
         "scanner_promotion_emitted_epoch": scanner_fields.get(
@@ -17573,7 +17724,7 @@ def _scanner_fast_precheck_fields(
 
     token = _SCANNER_FAST_PRECHECK_HYDRATION_FORBIDDEN.set(True)
     try:
-        return _scanner_fast_precheck_fields_impl(
+        fields = _scanner_fast_precheck_fields_impl(
             stock,
             now_ts=now_ts,
             code=code,
@@ -17583,6 +17734,20 @@ def _scanner_fast_precheck_fields(
             watching_count=watching_count,
             scanner_watching_count=scanner_watching_count,
         )
+        if (
+            isinstance(stock, dict)
+            and fields.get("scanner_promotion_price_consistency_state") == "consistent"
+            and not fields.get(
+                "scanner_promotion_price_initial_validation_reused", False
+            )
+        ):
+            generation_id = str(stock.get("scanner_generation_id") or "").strip()
+            if generation_id:
+                stock["_scanner_promotion_price_validated_generation_id"] = (
+                    generation_id
+                )
+                stock["_scanner_promotion_price_validated_at"] = float(now_ts)
+        return fields
     finally:
         _SCANNER_FAST_PRECHECK_HYDRATION_FORBIDDEN.reset(token)
 
@@ -47265,6 +47430,52 @@ def _handle_watching_opening_rotation(stock, code, ws_data, runtime, config) -> 
             with ENTRY_LOCK:
                 _OPENING_ROTATION_CONTEXT_CACHE.pop(code, None)
         return bool(direct_position)
+
+    promotion_price_fields = _scanner_promotion_price_consistency_fields(
+        stock,
+        ws_data,
+        now_ts=float(now_ts),
+    )
+    if promotion_price_fields.get("scanner_promotion_price_conflict"):
+        block_reason = "scanner_promotion_price_conflicts_with_fresh_ws"
+        previous_reason = str(stock.get("opening_rotation_1pct_last_reason") or "")
+        previous_log_at = _safe_float(
+            stock.get("opening_rotation_1pct_last_log_at"), 0.0
+        )
+        should_log = bool(
+            block_reason != previous_reason or (now_ts - previous_log_at) >= 10.0
+        )
+        with ENTRY_LOCK:
+            _OPENING_ROTATION_CONTEXT_CACHE.pop(code, None)
+        _mutate_stock_state(
+            stock,
+            pop_fields=[OPENING_ROTATION_STATE_KEY],
+            set_fields={
+                "opening_rotation_1pct_last_reason": block_reason,
+                "opening_rotation_1pct_last_log_at": (
+                    now_ts if should_log else previous_log_at
+                ),
+                "opening_rotation_window_version": window_version,
+                "opening_rotation_decision_time_bucket": decision_time_bucket,
+            },
+        )
+        if should_log:
+            blocked_contract_fields = _opening_rotation_contract_fields(
+                runtime_effect=False
+            )
+            blocked_contract_fields["allowed_runtime_apply"] = False
+            _log_entry_pipeline(
+                stock,
+                code,
+                "opening_rotation_1pct_source_quality_blocked",
+                reason=block_reason,
+                position_tag_candidate=OPENING_ROTATION_POSITION_TAG,
+                opening_rotation_window_version=window_version,
+                opening_rotation_decision_time_bucket=decision_time_bucket,
+                **promotion_price_fields,
+                **blocked_contract_fields,
+            )
+        return True
 
     state_source = "empty"
     state_restored_across_promotion = False

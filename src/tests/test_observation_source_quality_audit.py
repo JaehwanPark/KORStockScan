@@ -131,6 +131,30 @@ def test_low_profit_stagnation_confirmation_has_source_quality_contract():
     }.issubset(contract.required_fields)
 
 
+def test_opening_rotation_price_conflict_has_fail_closed_source_quality_contract():
+    contract = audit.STAGE_CONTRACTS["opening_rotation_1pct_source_quality_blocked"]
+
+    assert (
+        contract.decision_authority == "operator_requested_real_opening_rotation_1pct"
+    )
+    assert {
+        "scanner_promotion_price_consistency_state",
+        "scanner_promotion_price_consistency_reason",
+        "scanner_promotion_price_conflict",
+        "scanner_promotion_price",
+        "scanner_promotion_price_source",
+        "scanner_promotion_price_lineage_id",
+        "scanner_promotion_price_initial_validation_reused",
+        "scanner_promotion_price_ws_curr",
+        "scanner_promotion_price_gap_pct",
+        "scanner_promotion_price_gap_max_pct",
+        "scanner_promotion_price_ws_fresh",
+        "allowed_runtime_apply",
+        "actual_order_submitted",
+        "broker_order_forbidden",
+    }.issubset(contract.required_fields)
+
+
 def test_low_profit_stagnation_confirmation_contract_passes(monkeypatch, tmp_path):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     _write_events(
