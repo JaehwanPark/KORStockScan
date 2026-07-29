@@ -27,6 +27,7 @@ def _feedback(
     source_quality="pass",
     one_share_rows=None,
     normal_winner_expansion_rows=None,
+    post_probe_real_outcome_contract=False,
 ):
     payload = {
         "report_type": "scalping_pyramid_intraday_feedback",
@@ -38,6 +39,10 @@ def _feedback(
         payload["one_share_pyramid_opportunity_rows"] = one_share_rows
     if normal_winner_expansion_rows is not None:
         payload["normal_winner_expansion_rows"] = normal_winner_expansion_rows
+    if post_probe_real_outcome_contract:
+        payload["post_probe_real_outcome_metric_contract"] = {
+            "metric_role": "multi_leg_post_probe_real_outcome_attribution"
+        }
     path.write_text(json.dumps(payload), encoding="utf-8")
     return path
 
@@ -334,6 +339,79 @@ def test_pyramid_quality_calibration_rejects_normal_winner_authority_leak(
     assert observation["sample_count"] == 0
     assert observation["provenance_rejected_count"] == 1
     assert observation["allowed_runtime_apply"] is False
+
+
+def test_pyramid_quality_calibration_consumes_post_probe_real_outcomes_source_only(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(mod, "INPUT_REPORT_DIR", tmp_path / "input")
+    mod.INPUT_REPORT_DIR.mkdir(parents=True)
+    post_probe_rows = []
+    for index in range(20):
+        winner = index < 12
+        profit_pct = 0.4 if winner else -0.2
+        post_probe_rows.append(
+            {
+                **_row(
+                    index,
+                    "pyramid_correctly_blocked",
+                    final_profit_rate=profit_pct,
+                ),
+                "post_probe_real_outcome_label": (
+                    "profitable_zero_fill_confirmation_ready"
+                    if winner
+                    else "loss_or_flat_zero_fill_confirmation_ready"
+                ),
+                "post_probe_real_outcome_source_quality_valid": True,
+                "post_probe_real_outcome_profit_pct": profit_pct,
+                "post_probe_real_confirmation_ready": True,
+                "post_probe_counterfactual_source_quality_valid": True,
+                "post_probe_probe_actual_order_submitted": True,
+                "post_probe_residual_actual_order_submitted": False,
+                "post_probe_counterfactual_first_leg_notional_krw": 100_000,
+                "effective_venue": "NXT",
+                "venue_source_quality_valid": True,
+                "market_session_bucket": "nxt",
+                "allowed_runtime_apply": False,
+                "decision_authority": (
+                    "source_only_one_share_pyramid_opportunity_backtest_"
+                    "no_runtime_mutation"
+                ),
+            }
+        )
+    path = _feedback(
+        mod.INPUT_REPORT_DIR / "scalping_pyramid_intraday_feedback_2026-07-29.json",
+        [],
+        one_share_rows=post_probe_rows,
+        post_probe_real_outcome_contract=True,
+    )
+
+    report = mod.build_report("2026-07-29", input_paths=[path], generated_at="fixed")
+    observation = report["post_probe_real_outcome_observation"]
+
+    assert observation["state"] == "positive_ev_profile_candidate"
+    assert observation["closed_real_outcome_count"] == 20
+    assert observation["confirmation_ready_count"] == 20
+    assert observation["confirmation_ready_winner_count"] == 12
+    assert observation["confirmation_ready_loss_or_flat_count"] == 8
+    assert observation["diagnostic_win_rate"] == 0.6
+    assert observation["notional_weighted_ev_pct"] == 0.16
+    assert observation["sample_floor_met"] is True
+    assert observation["by_effective_venue"][0]["effective_venue"] == "NXT"
+    assert observation["runtime_effect"] is False
+    assert observation["allowed_runtime_apply"] is False
+    assert (
+        observation["decision_authority"]
+        == "rolling_source_only_post_probe_real_outcome_no_runtime_mutation"
+    )
+    output_json = tmp_path / "post_probe_calibration.json"
+    output_md = tmp_path / "post_probe_calibration.md"
+    mod.write_outputs(report, output_json=output_json, output_md=output_md)
+    markdown = output_md.read_text(encoding="utf-8")
+    assert "- post_probe_confirmation_ready_winner_count: 12" in markdown
+    assert (
+        "- post_probe_confirmation_ready_notional_weighted_ev_pct: 0.1600" in markdown
+    )
 
 
 def test_pyramid_quality_calibration_profit_grid_sets_one_step_min_profit(

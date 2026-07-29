@@ -170,7 +170,17 @@ def _is_one_share_event(row: dict[str, Any]) -> bool:
 
 
 def _is_one_share_plan_event(row: dict[str, Any]) -> bool:
-    return str(row.get("stage") or "") == "rising_missed_one_share_entry"
+    stage = str(row.get("stage") or "")
+    if stage == "rising_missed_one_share_entry":
+        return True
+    if stage != "entry_split_order_plan_applied":
+        return False
+    fields = _fields(row)
+    return bool(
+        _boolish(fields.get("rising_missed_one_share_scout"))
+        and _boolish(fields.get("entry_split_order_probe_first_applied"))
+        and int(_safe_float(fields.get("effective_qty"), 0.0) or 0) > 1
+    )
 
 
 def _one_share_record(row: dict[str, Any]) -> dict[str, Any]:
@@ -190,12 +200,490 @@ def _one_share_record(row: dict[str, Any]) -> dict[str, Any]:
         "forced_entry_qty": max(
             1, int(_safe_float(fields.get("forced_entry_qty"), 1.0) or 1.0)
         ),
+        "entry_split_order_probe_qty": int(
+            _safe_float(fields.get("entry_split_order_probe_qty"), 0.0) or 0
+        ),
+        "entry_split_order_leg_count": int(
+            _safe_float(fields.get("entry_split_order_leg_count"), 0.0) or 0
+        ),
+        "entry_split_order_qty_weight_min": _safe_float(
+            fields.get("entry_split_order_qty_weight_min")
+        ),
+        "entry_split_order_policy_version": fields.get(
+            "entry_split_order_policy_version"
+        ),
+        "entry_split_order_variant_id": fields.get("entry_split_order_variant_id"),
         "scale_in_arm": "PYRAMID",
         "scale_in_blocker_reason": "one_share_pyramid_no_opportunity_seen",
         "scale_in_blocker_namespace": "ONE_SHARE_PYRAMID_BACKTEST",
     }
     _update_venue_provenance(item, row)
     return item
+
+
+_REAL_ENTRY_LIFECYCLE_STAGES = {
+    "order_bundle_submitted",
+    "probe_submitted",
+    "holding_started",
+    "entry_order_cancel_confirmed",
+    "sell_completed",
+}
+
+
+def _real_entry_lifecycle_record(
+    row: dict[str, Any],
+) -> dict[str, Any]:
+    fields = _fields(row)
+    item = {
+        "record_id": str(row.get("record_id") or fields.get("record_id") or "").strip(),
+        "stock_code": row.get("stock_code") or fields.get("stock_code"),
+        "stock_name": row.get("stock_name") or fields.get("stock_name"),
+        "strategy": fields.get("strategy") or "SCALPING",
+        "first_observed_ts": row.get("emitted_at"),
+        "actual_entry_order_submitted": False,
+        "entry_submit_order_nos": [],
+        "planned_qty": 0,
+        "broker_submitted_qty": 0,
+        "filled_qty": 0,
+        "canceled_unfilled_qty": 0,
+        "probe_first_entry": False,
+    }
+    _update_venue_provenance(item, row)
+    return item
+
+
+def _earlier_event_time(current: Any, candidate: Any) -> Any:
+    current_epoch = _event_epoch(current)
+    candidate_epoch = _event_epoch(candidate)
+    if candidate_epoch is None:
+        return current
+    if current_epoch is None or candidate_epoch < current_epoch:
+        return candidate
+    return current
+
+
+def _later_event_time(current: Any, candidate: Any) -> Any:
+    current_epoch = _event_epoch(current)
+    candidate_epoch = _event_epoch(candidate)
+    if candidate_epoch is None:
+        return current
+    if current_epoch is None or candidate_epoch > current_epoch:
+        return candidate
+    return current
+
+
+def _update_real_entry_lifecycle(item: dict[str, Any], row: dict[str, Any]) -> None:
+    stage = str(row.get("stage") or "")
+    if stage not in _REAL_ENTRY_LIFECYCLE_STAGES:
+        return
+    fields = _fields(row)
+    _update_venue_provenance(item, row)
+    item["first_observed_ts"] = _earlier_event_time(
+        item.get("first_observed_ts"), row.get("emitted_at")
+    )
+    item["latest_observed_ts"] = _later_event_time(
+        item.get("latest_observed_ts"), row.get("emitted_at")
+    )
+
+    if stage in {"order_bundle_submitted", "probe_submitted"}:
+        if not _boolish(fields.get("actual_order_submitted")):
+            return
+        item["actual_entry_order_submitted"] = True
+        item["entry_submitted_at"] = _earlier_event_time(
+            item.get("entry_submitted_at"), row.get("emitted_at")
+        )
+        order_no = str(
+            fields.get("broker_order_no")
+            or fields.get("order_no")
+            or fields.get("ord_no")
+            or ""
+        ).strip()
+        order_nos = item.setdefault("entry_submit_order_nos", [])
+        if order_no and order_no not in order_nos:
+            order_nos.append(order_no)
+        planned_qty = int(
+            _safe_float(
+                fields.get("requested_qty")
+                or fields.get("forced_entry_qty")
+                or fields.get("effective_qty"),
+                0.0,
+            )
+            or 0
+        )
+        item["planned_qty"] = max(int(item.get("planned_qty") or 0), planned_qty)
+        if stage == "probe_submitted":
+            item["probe_first_entry"] = True
+            submitted_qty = int(_safe_float(fields.get("qty"), 0.0) or 0)
+        else:
+            submitted_qty = int(
+                _safe_float(
+                    fields.get("requested_qty") or fields.get("effective_qty"), 0.0
+                )
+                or 0
+            )
+        if stage == "probe_submitted" or not item.get("probe_first_entry"):
+            if stage == "probe_submitted" and submitted_qty > 0:
+                item["broker_submitted_qty"] = submitted_qty
+            else:
+                item["broker_submitted_qty"] = max(
+                    int(item.get("broker_submitted_qty") or 0),
+                    submitted_qty,
+                )
+        submitted_price = _safe_float(
+            fields.get("order_price") or fields.get("submitted_order_price"), None
+        )
+        if submitted_price is not None:
+            item["submitted_price"] = submitted_price
+        item["broker_route"] = fields.get("broker_route") or item.get("broker_route")
+        return
+
+    if stage == "holding_started":
+        fill_qty = int(
+            _safe_float(
+                fields.get("buy_qty")
+                or fields.get("fill_qty")
+                or fields.get("executed_qty"),
+                0.0,
+            )
+            or 0
+        )
+        if fill_qty <= 0:
+            return
+        item["filled_qty"] = max(int(item.get("filled_qty") or 0), fill_qty)
+        item["first_fill_at"] = _earlier_event_time(
+            item.get("first_fill_at"), row.get("emitted_at")
+        )
+        fill_price = _safe_float(
+            fields.get("buy_price")
+            or fields.get("avg_fill_price")
+            or fields.get("fill_price"),
+            None,
+        )
+        if fill_price is not None:
+            item["average_fill_price"] = fill_price
+        return
+
+    if stage == "entry_order_cancel_confirmed":
+        item["entry_cancel_confirmed_at"] = _later_event_time(
+            item.get("entry_cancel_confirmed_at"), row.get("emitted_at")
+        )
+        item["canceled_unfilled_qty"] = max(
+            int(item.get("canceled_unfilled_qty") or 0),
+            int(
+                _safe_float(
+                    fields.get("unfilled_qty")
+                    or fields.get("remaining_qty")
+                    or fields.get("qty"),
+                    0.0,
+                )
+                or 0
+            ),
+        )
+        confirmed_filled_qty = int(
+            _safe_float(fields.get("filled_qty") or fields.get("executed_qty"), 0.0)
+            or 0
+        )
+        if confirmed_filled_qty > 0:
+            item["filled_qty"] = max(
+                int(item.get("filled_qty") or 0), confirmed_filled_qty
+            )
+        return
+
+    if stage == "sell_completed":
+        final_profit = _safe_float(fields.get("profit_rate"), None)
+        if final_profit is None:
+            return
+        item["sell_completed_at"] = _later_event_time(
+            item.get("sell_completed_at"), row.get("emitted_at")
+        )
+        item["final_profit_rate"] = final_profit
+        realized_pnl = _safe_float(fields.get("realized_pnl_krw"), None)
+        if realized_pnl is not None:
+            item["realized_pnl_krw"] = int(round(realized_pnl))
+        sell_price = _safe_float(fields.get("sell_price"), None)
+        if sell_price is not None:
+            item["sell_price"] = sell_price
+
+
+def _canonical_expansion_outcome_label(item: dict[str, Any]) -> str:
+    post_probe_label = str(item.get("post_probe_real_outcome_label") or "")
+    post_probe_mapping = {
+        "profitable_zero_fill_confirmation_ready": (
+            "expansion_missed_upside_confirmation_ready"
+        ),
+        "profitable_zero_fill_no_confirmation": (
+            "expansion_correctly_not_expanded_no_confirmation"
+        ),
+        "loss_or_flat_zero_fill_confirmation_ready": (
+            "expansion_confirmation_false_positive_loss_or_flat"
+        ),
+        "loss_or_flat_zero_fill_no_confirmation": ("expansion_correctly_not_expanded"),
+        "source_quality_blocked": "expansion_source_quality_blocked",
+        "open_unresolved": "expansion_open_unresolved",
+        "not_zero_fill": "expansion_not_applicable_residual_filled",
+    }
+    if post_probe_label in post_probe_mapping:
+        return post_probe_mapping[post_probe_label]
+    legacy_label = str(item.get("legacy_pyramid_feedback_label") or "")
+    return {
+        "pyramid_would_have_helped": "expansion_missed_upside_threshold_crossed",
+        "pyramid_correctly_blocked": "expansion_correctly_not_expanded",
+        "pyramid_overheat_or_reversal_risk": (
+            "expansion_correctly_not_expanded_reversal_risk"
+        ),
+        "pyramid_open_unresolved": "expansion_open_unresolved",
+    }.get(legacy_label, "expansion_not_observed")
+
+
+def _finalize_real_entry_lifecycle(
+    item: dict[str, Any], one_share_item: dict[str, Any] | None
+) -> None:
+    filled_qty = max(0, int(item.get("filled_qty") or 0))
+    final_profit = _safe_float(item.get("final_profit_rate"), None)
+    if final_profit is not None and item.get("sell_completed_at"):
+        state = "closed"
+    elif filled_qty > 0:
+        state = "holding"
+    elif item.get("entry_cancel_confirmed_at"):
+        state = "canceled_unfilled"
+    else:
+        state = "pending_entry"
+    item["lifecycle_state"] = state
+    item["closed_outcome_label"] = (
+        "winner"
+        if state == "closed" and final_profit is not None and final_profit > 0
+        else (
+            "loss"
+            if state == "closed" and final_profit is not None and final_profit < 0
+            else (
+                "flat"
+                if state == "closed" and final_profit is not None
+                else "not_closed"
+            )
+        )
+    )
+    item["venue_source_quality_valid"] = bool(
+        item.get("venue_source_quality_valid")
+        and str(item.get("effective_venue") or "")
+        in {"KRX", "NXT", "PREMARKET_KRX_LIKE"}
+    )
+    planned_qty = max(0, int(item.get("planned_qty") or 0))
+    item["single_share_plan"] = bool(
+        planned_qty == 1 and not item.get("probe_first_entry")
+    )
+    item["single_share_plan_closed_winner"] = bool(
+        item["single_share_plan"]
+        and state == "closed"
+        and final_profit is not None
+        and final_profit > 0
+    )
+    if isinstance(one_share_item, dict):
+        for key in (
+            "probe_bundle_id",
+            "probe_fill_qty",
+            "residual_expected_qty",
+            "residual_submitted_qty",
+            "residual_filled_qty",
+            "residual_unfilled_qty",
+            "residual_zero_fill",
+            "post_probe_real_outcome_label",
+            "post_probe_real_confirmation_ready",
+            "canonical_expansion_outcome_label",
+        ):
+            if key in one_share_item:
+                item[key] = one_share_item.get(key)
+        probe_fill_qty = max(0, int(one_share_item.get("probe_fill_qty") or 0))
+        residual_submitted_qty = max(
+            0, int(one_share_item.get("residual_submitted_qty") or 0)
+        )
+        if item.get("probe_first_entry") and probe_fill_qty > 0:
+            item["broker_submitted_qty"] = max(
+                int(item.get("broker_submitted_qty") or 0),
+                probe_fill_qty + residual_submitted_qty,
+            )
+        residual_filled_qty = one_share_item.get("residual_filled_qty")
+        if residual_filled_qty is not None and probe_fill_qty > 0:
+            item["filled_qty"] = max(
+                filled_qty,
+                probe_fill_qty + max(0, int(residual_filled_qty)),
+            )
+    item["runtime_effect"] = False
+    item["allowed_runtime_apply"] = False
+    item["actual_order_submitted"] = bool(item.get("actual_entry_order_submitted"))
+    item["broker_order_forbidden"] = False
+    item["decision_authority"] = (
+        "source_only_same_day_real_entry_lifecycle_reconciliation"
+    )
+    item["forbidden_uses"] = FORBIDDEN_USES
+
+
+def _real_entry_lifecycle_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    closed = [
+        item
+        for item in rows
+        if item.get("lifecycle_state") == "closed"
+        and _safe_float(item.get("final_profit_rate"), None) is not None
+    ]
+
+    def _dimension_metrics(
+        dimension: str, dimension_rows: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for item in dimension_rows:
+            value = str(item.get(dimension) or "UNKNOWN").strip() or "UNKNOWN"
+            grouped[value].append(item)
+        metrics = []
+        for value, bucket_rows in sorted(grouped.items()):
+            bucket_closed = [
+                item
+                for item in bucket_rows
+                if item.get("lifecycle_state") == "closed"
+                and _safe_float(item.get("final_profit_rate"), None) is not None
+            ]
+            profit_values = [
+                float(_safe_float(item.get("final_profit_rate"), 0.0) or 0.0)
+                for item in bucket_closed
+            ]
+            pnl_values = [
+                int(item["realized_pnl_krw"])
+                for item in bucket_closed
+                if item.get("realized_pnl_krw") is not None
+            ]
+            metrics.append(
+                {
+                    dimension: value,
+                    "submitted_cycle_count": len(bucket_rows),
+                    "filled_cycle_count": sum(
+                        1
+                        for item in bucket_rows
+                        if int(item.get("filled_qty") or 0) > 0
+                    ),
+                    "canceled_unfilled_cycle_count": sum(
+                        1
+                        for item in bucket_rows
+                        if item.get("lifecycle_state") == "canceled_unfilled"
+                    ),
+                    "closed_cycle_count": len(bucket_closed),
+                    "holding_cycle_count": sum(
+                        1
+                        for item in bucket_rows
+                        if item.get("lifecycle_state") == "holding"
+                    ),
+                    "winner_count": sum(
+                        1 for item in bucket_closed if item["final_profit_rate"] > 0
+                    ),
+                    "loss_count": sum(
+                        1 for item in bucket_closed if item["final_profit_rate"] < 0
+                    ),
+                    "flat_count": sum(
+                        1 for item in bucket_closed if item["final_profit_rate"] == 0
+                    ),
+                    "diagnostic_win_rate": (
+                        round(
+                            sum(
+                                1
+                                for item in bucket_closed
+                                if item["final_profit_rate"] > 0
+                            )
+                            / len(bucket_closed),
+                            4,
+                        )
+                        if bucket_closed
+                        else 0.0
+                    ),
+                    "equal_weight_avg_profit_pct": (
+                        round(sum(profit_values) / len(profit_values), 4)
+                        if profit_values
+                        else 0.0
+                    ),
+                    "realized_pnl_krw_known_sum": sum(pnl_values),
+                    "realized_pnl_krw_known_count": len(pnl_values),
+                    "single_share_plan_closed_winner_count": sum(
+                        1
+                        for item in bucket_rows
+                        if item.get("single_share_plan_closed_winner")
+                    ),
+                    "multi_leg_probe_cycle_count": sum(
+                        1 for item in bucket_rows if item.get("probe_first_entry")
+                    ),
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                }
+            )
+        return metrics
+
+    venue_valid_rows = [
+        item for item in rows if item.get("venue_source_quality_valid") is True
+    ]
+    profit_values = [
+        float(_safe_float(item.get("final_profit_rate"), 0.0) or 0.0) for item in closed
+    ]
+    pnl_values = [
+        int(item["realized_pnl_krw"])
+        for item in closed
+        if item.get("realized_pnl_krw") is not None
+    ]
+    realized_pnl_missing_count = len(closed) - len(pnl_values)
+    return {
+        "submitted_cycle_count": len(rows),
+        "filled_cycle_count": sum(
+            1 for item in rows if int(item.get("filled_qty") or 0) > 0
+        ),
+        "canceled_unfilled_cycle_count": sum(
+            1 for item in rows if item.get("lifecycle_state") == "canceled_unfilled"
+        ),
+        "closed_cycle_count": len(closed),
+        "holding_cycle_count": sum(
+            1 for item in rows if item.get("lifecycle_state") == "holding"
+        ),
+        "pending_entry_cycle_count": sum(
+            1 for item in rows if item.get("lifecycle_state") == "pending_entry"
+        ),
+        "winner_count": sum(1 for item in closed if item["final_profit_rate"] > 0),
+        "loss_count": sum(1 for item in closed if item["final_profit_rate"] < 0),
+        "flat_count": sum(1 for item in closed if item["final_profit_rate"] == 0),
+        "diagnostic_win_rate": (
+            round(
+                sum(1 for item in closed if item["final_profit_rate"] > 0)
+                / len(closed),
+                4,
+            )
+            if closed
+            else 0.0
+        ),
+        "equal_weight_avg_profit_pct": (
+            round(sum(profit_values) / len(profit_values), 4) if profit_values else 0.0
+        ),
+        "realized_pnl_krw_known_sum": sum(pnl_values),
+        "realized_pnl_krw_known_count": len(pnl_values),
+        "realized_pnl_krw_missing_count": realized_pnl_missing_count,
+        "realized_pnl_source_quality_state": (
+            "complete"
+            if closed and realized_pnl_missing_count == 0
+            else (
+                "partial_missing_realized_pnl"
+                if closed
+                else "not_applicable_no_closed_cycle"
+            )
+        ),
+        "single_share_plan_closed_winner_count": sum(
+            1 for item in rows if item.get("single_share_plan_closed_winner")
+        ),
+        "multi_leg_probe_cycle_count": sum(
+            1 for item in rows if item.get("probe_first_entry")
+        ),
+        "multi_leg_zero_residual_fill_count": sum(
+            1
+            for item in rows
+            if item.get("probe_first_entry") and item.get("residual_zero_fill") is True
+        ),
+        "venue_source_quality_valid_count": len(venue_valid_rows),
+        "venue_source_quality_invalid_count": len(rows) - len(venue_valid_rows),
+        "by_effective_venue": _dimension_metrics("effective_venue", venue_valid_rows),
+        "by_market_session_bucket": _dimension_metrics(
+            "market_session_bucket", venue_valid_rows
+        ),
+    }
 
 
 def _pyramid_blocked_record(row: dict[str, Any]) -> dict[str, Any] | None:
@@ -509,6 +997,39 @@ def _update_probe_residual_observation(
         item["probe_direction_latest_negative_groups"] = (
             ",".join(sorted(negative_groups)) or "-"
         )
+        mark_price = _safe_float(fields.get("post_probe_direction_mark_price"), None)
+        probe_fill_price = _safe_float(
+            fields.get("post_probe_direction_probe_fill_price"), None
+        )
+        ai_action = (
+            str(fields.get("post_probe_direction_ai_action") or "").strip().upper()
+        )
+        evidence_signature = str(
+            fields.get("post_probe_confirmation_source_version_signature")
+            or fields.get("post_probe_confirmation_evidence_signature")
+            or ""
+        ).strip()
+        counterfactual_confirmation = bool(
+            mark_price is not None
+            and probe_fill_price is not None
+            and mark_price >= probe_fill_price > 0
+            and len(positive_groups) >= 2
+            and not negative_groups
+            and ai_action in {"BUY", "WAIT"}
+            and not _boolish(fields.get("post_probe_hard_veto"))
+            and _boolish(fields.get("post_probe_confirmation_evidence_version_proven"))
+            and evidence_signature
+            and _boolish(fields.get("post_probe_direction_tick_context_fresh"))
+        )
+        observed_epoch = _event_epoch(row.get("emitted_at"))
+        item.setdefault("post_probe_real_confirmation_observations", []).append(
+            {
+                "observed_at": row.get("emitted_at"),
+                "observed_epoch": observed_epoch,
+                "eligible": counterfactual_confirmation,
+                "evidence_signature": evidence_signature,
+            }
+        )
         reason_counts = item.setdefault("probe_direction_reason_counts", {})
         if reason:
             reason_counts[reason] = int(reason_counts.get(reason) or 0) + 1
@@ -538,6 +1059,7 @@ def _update_probe_residual_observation(
         probe_fill_qty = max(1, int(_safe_float(fields.get("fill_qty"), 1.0) or 1.0))
         item["probe_fill_qty"] = probe_fill_qty
         item["probe_fill_price"] = _safe_float(fields.get("fill_price"))
+        item["probe_filled_at"] = row.get("emitted_at")
     elif stage == "residual_submitted":
         order_no = str(fields.get("order_no") or "").strip()
         submitted_orders = item.setdefault("residual_submitted_order_nos", [])
@@ -588,11 +1110,13 @@ def _update_probe_residual_observation(
             item["probe_bundle_terminal_filled_qty"] = int(
                 item.get("probe_fill_qty") or 1
             )
+            item["probe_bundle_terminal_at"] = row.get("emitted_at")
     elif stage in {"residual_partial_complete", "bundle_completed"}:
         filled_qty = int(_safe_float(fields.get("filled_qty"), 0.0) or 0.0)
         if filled_qty > 0:
             item["probe_bundle_terminal_seen"] = True
             item["probe_bundle_terminal_filled_qty"] = filled_qty
+            item["probe_bundle_terminal_at"] = row.get("emitted_at")
 
 
 def _finalize_probe_residual_observation(item: dict[str, Any]) -> None:
@@ -663,10 +1187,176 @@ def _finalize_probe_residual_observation(item: dict[str, Any]) -> None:
         )
         or _pyramid_min_profit_pct()
     )
-    item["residual_missed_upside_candidate"] = bool(
+    item["residual_pyramid_threshold_missed_upside_candidate"] = bool(
         item.get("residual_zero_fill") is True
         and max_profit_seen is not None
         and max_profit_seen >= min_profit_pct
+    )
+
+
+def _probe_first_residual_leg_qty(item: dict[str, Any]) -> int | None:
+    residual_qty = max(0, int(item.get("residual_unfilled_qty") or 0))
+    total_leg_count = max(0, int(item.get("entry_split_order_leg_count") or 0))
+    first_weight = _safe_float(item.get("entry_split_order_qty_weight_min"), None)
+    if residual_qty <= 0 or total_leg_count <= 1 or first_weight is None:
+        return None
+    residual_leg_count = min(total_leg_count - 1, residual_qty)
+    if residual_leg_count <= 1:
+        return residual_qty
+    return max(
+        1,
+        min(
+            residual_qty - (residual_leg_count - 1),
+            int(round(residual_qty * first_weight)),
+        ),
+    )
+
+
+def _finalize_post_probe_real_confirmation(item: dict[str, Any]) -> None:
+    observations = [
+        observation
+        for observation in item.get("post_probe_real_confirmation_observations") or []
+        if isinstance(observation, dict)
+        and _safe_float(observation.get("observed_epoch"), None) is not None
+    ]
+    observations.sort(
+        key=lambda observation: float(observation.get("observed_epoch") or 0.0)
+    )
+    probe_filled_epoch = _event_epoch(item.get("probe_filled_at"))
+    terminal_epoch = _event_epoch(item.get("probe_bundle_terminal_at"))
+    confirmation_count = 0
+    max_count = 0
+    last_accepted_epoch: float | None = None
+    last_signature = ""
+    ready_at = None
+    ready_signature = None
+    excluded_count = 0
+    for observation in observations:
+        observed_epoch = float(observation["observed_epoch"])
+        if (probe_filled_epoch is not None and observed_epoch < probe_filled_epoch) or (
+            terminal_epoch is not None and observed_epoch > terminal_epoch
+        ):
+            excluded_count += 1
+            continue
+        if not bool(observation.get("eligible")):
+            confirmation_count = 0
+            last_accepted_epoch = None
+            last_signature = ""
+            continue
+        evidence_signature = str(observation.get("evidence_signature") or "").strip()
+        if confirmation_count <= 0:
+            confirmation_count = 1
+            last_accepted_epoch = observed_epoch
+            last_signature = evidence_signature
+        elif (
+            last_accepted_epoch is not None
+            and observed_epoch - last_accepted_epoch >= 0.25
+            and evidence_signature
+            and evidence_signature != last_signature
+        ):
+            confirmation_count += 1
+            last_accepted_epoch = observed_epoch
+            last_signature = evidence_signature
+        max_count = max(max_count, confirmation_count)
+        if confirmation_count >= 2 and ready_at is None:
+            ready_at = observation.get("observed_at")
+            ready_signature = evidence_signature
+    item["post_probe_real_confirmation_max_count"] = max_count
+    item["post_probe_real_confirmation_ready_at"] = ready_at
+    item["post_probe_real_confirmation_ready_signature"] = ready_signature
+    item["post_probe_real_confirmation_excluded_observation_count"] = excluded_count
+    item.pop("post_probe_real_confirmation_observations", None)
+
+
+def _finalize_probe_residual_real_outcome(item: dict[str, Any]) -> None:
+    if not item.get("probe_residual_observation_seen"):
+        return
+    _finalize_post_probe_real_confirmation(item)
+    final_profit = _safe_float(item.get("final_profit_rate"), None)
+    confirmation_ready = bool(
+        int(item.get("post_probe_real_confirmation_max_count") or 0) >= 2
+    )
+    item["post_probe_real_confirmation_ready"] = confirmation_ready
+    item["post_probe_real_confirmation_required_count"] = 2
+    item["post_probe_real_confirmation_min_spacing_ms"] = 250
+    item["post_probe_real_outcome_profit_pct"] = final_profit
+    item["post_probe_probe_actual_order_submitted"] = bool(
+        int(item.get("probe_fill_qty") or 0) > 0
+    )
+    item["post_probe_residual_actual_order_submitted"] = bool(
+        int(item.get("residual_submitted_qty") or 0) > 0
+    )
+
+    source_quality_reasons: list[str] = []
+    if item.get("residual_fill_attribution_valid") is not True:
+        source_quality_reasons.append(
+            "residual_fill_attribution:"
+            + str(item.get("residual_fill_attribution_state") or "unknown")
+        )
+    if item.get("venue_source_quality_valid") is not True:
+        source_quality_reasons.append(
+            "effective_venue:"
+            + str(item.get("effective_venue_resolution") or "missing")
+        )
+    if final_profit is None:
+        source_quality_reasons.append("real_sell_completed_profit_missing")
+    if item.get("pyramid_submit_seen"):
+        source_quality_reasons.append("later_pyramid_submit_contaminates_probe_outcome")
+    item["post_probe_real_outcome_source_quality_reasons"] = source_quality_reasons
+    item["post_probe_real_outcome_source_quality_valid"] = not source_quality_reasons
+
+    if item.get("residual_fill_attribution_state") == "open_unresolved":
+        label = "open_unresolved"
+    elif source_quality_reasons:
+        label = "source_quality_blocked"
+    elif item.get("residual_zero_fill") is not True:
+        label = "not_zero_fill"
+    elif final_profit is not None and final_profit > 0:
+        label = (
+            "profitable_zero_fill_confirmation_ready"
+            if confirmation_ready
+            else "profitable_zero_fill_no_confirmation"
+        )
+    else:
+        label = (
+            "loss_or_flat_zero_fill_confirmation_ready"
+            if confirmation_ready
+            else "loss_or_flat_zero_fill_no_confirmation"
+        )
+    item["post_probe_real_outcome_label"] = label
+    item["residual_missed_upside_candidate"] = bool(
+        label == "profitable_zero_fill_confirmation_ready"
+    )
+
+    first_leg_qty = _probe_first_residual_leg_qty(item)
+    probe_fill_price = _safe_float(item.get("probe_fill_price"), None)
+    item["post_probe_counterfactual_first_leg_qty"] = first_leg_qty
+    item["post_probe_counterfactual_price_source"] = (
+        "probe_fill_price_proxy" if probe_fill_price is not None else "unavailable"
+    )
+    first_leg_notional = (
+        int(round(first_leg_qty * probe_fill_price))
+        if first_leg_qty is not None and probe_fill_price is not None
+        else 0
+    )
+    item["post_probe_counterfactual_first_leg_notional_krw"] = first_leg_notional
+    counterfactual_source_quality_reasons = []
+    if not item["post_probe_real_outcome_source_quality_valid"]:
+        counterfactual_source_quality_reasons.extend(source_quality_reasons)
+    if first_leg_qty is None:
+        counterfactual_source_quality_reasons.append("first_residual_leg_plan_missing")
+    if probe_fill_price is None:
+        counterfactual_source_quality_reasons.append("probe_fill_price_missing")
+    item["post_probe_counterfactual_source_quality_reasons"] = (
+        counterfactual_source_quality_reasons
+    )
+    item[
+        "post_probe_counterfactual_source_quality_valid"
+    ] = not counterfactual_source_quality_reasons
+    item["post_probe_counterfactual_first_leg_profit_proxy_krw"] = (
+        round(first_leg_notional * final_profit / 100.0, 2)
+        if first_leg_notional > 0 and final_profit is not None
+        else None
     )
 
 
@@ -1122,6 +1812,57 @@ def _one_share_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         for item in rows
         if item.get("pyramid_feedback_label") == "pyramid_would_have_helped"
     ]
+    post_probe_closed = [
+        item
+        for item in rows
+        if str(item.get("post_probe_real_outcome_label") or "")
+        in {
+            "profitable_zero_fill_confirmation_ready",
+            "profitable_zero_fill_no_confirmation",
+            "loss_or_flat_zero_fill_confirmation_ready",
+            "loss_or_flat_zero_fill_no_confirmation",
+        }
+    ]
+    post_probe_confirmation_ready = [
+        item
+        for item in post_probe_closed
+        if bool(item.get("post_probe_real_confirmation_ready"))
+    ]
+    post_probe_counterfactual_ev_eligible = [
+        item
+        for item in post_probe_confirmation_ready
+        if bool(item.get("post_probe_counterfactual_source_quality_valid"))
+    ]
+    post_probe_profit_values = [
+        float(item["post_probe_real_outcome_profit_pct"])
+        for item in post_probe_counterfactual_ev_eligible
+        if item.get("post_probe_real_outcome_profit_pct") is not None
+    ]
+    post_probe_weighted_values = [
+        (
+            float(item["post_probe_real_outcome_profit_pct"]),
+            int(item.get("post_probe_counterfactual_first_leg_notional_krw") or 0),
+        )
+        for item in post_probe_counterfactual_ev_eligible
+        if item.get("post_probe_real_outcome_profit_pct") is not None
+        and int(item.get("post_probe_counterfactual_first_leg_notional_krw") or 0) > 0
+    ]
+    post_probe_profit_proxies = [
+        float(item["post_probe_counterfactual_first_leg_profit_proxy_krw"])
+        for item in post_probe_counterfactual_ev_eligible
+        if item.get("post_probe_counterfactual_first_leg_profit_proxy_krw") is not None
+    ]
+    post_probe_winner_count = sum(
+        1
+        for item in post_probe_closed
+        if str(item.get("post_probe_real_outcome_label") or "").startswith(
+            "profitable_zero_fill"
+        )
+    )
+    canonical_label_counts = Counter(
+        str(item.get("canonical_expansion_outcome_label") or "expansion_not_observed")
+        for item in rows
+    )
     return {
         "one_share_event_count": len(rows),
         "one_share_closed_count": len(closed),
@@ -1141,6 +1882,71 @@ def _one_share_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         ),
         "probe_residual_missed_upside_candidate_count": sum(
             1 for item in rows if item.get("residual_missed_upside_candidate")
+        ),
+        "probe_residual_pyramid_threshold_missed_upside_candidate_count": sum(
+            1
+            for item in rows
+            if item.get("residual_pyramid_threshold_missed_upside_candidate")
+        ),
+        "probe_residual_real_outcome_closed_count": len(post_probe_closed),
+        "probe_residual_realized_winner_zero_fill_count": post_probe_winner_count,
+        "probe_residual_realized_loss_or_flat_zero_fill_count": (
+            len(post_probe_closed) - post_probe_winner_count
+        ),
+        "probe_residual_realized_winner_confirmation_ready_count": sum(
+            1
+            for item in post_probe_closed
+            if item.get("post_probe_real_outcome_label")
+            == "profitable_zero_fill_confirmation_ready"
+        ),
+        "probe_residual_realized_loss_or_flat_confirmation_ready_count": sum(
+            1
+            for item in post_probe_closed
+            if item.get("post_probe_real_outcome_label")
+            == "loss_or_flat_zero_fill_confirmation_ready"
+        ),
+        "canonical_expansion_missed_upside_count": canonical_label_counts.get(
+            "expansion_missed_upside_confirmation_ready", 0
+        )
+        + canonical_label_counts.get("expansion_missed_upside_threshold_crossed", 0),
+        "post_probe_legacy_label_conflict_count": sum(
+            1 for item in rows if item.get("post_probe_legacy_label_conflict")
+        ),
+        "post_probe_confirmation_false_positive_loss_or_flat_count": (
+            canonical_label_counts.get(
+                "expansion_confirmation_false_positive_loss_or_flat", 0
+            )
+        ),
+        "probe_residual_confirmation_ready_counterfactual_ev_eligible_count": len(
+            post_probe_counterfactual_ev_eligible
+        ),
+        "probe_residual_confirmation_ready_counterfactual_source_blocked_count": (
+            len(post_probe_confirmation_ready)
+            - len(post_probe_counterfactual_ev_eligible)
+        ),
+        "probe_residual_real_outcome_source_quality_blocked_count": sum(
+            1
+            for item in rows
+            if item.get("post_probe_real_outcome_label") == "source_quality_blocked"
+        ),
+        "probe_residual_real_outcome_diagnostic_win_rate": (
+            post_probe_winner_count / len(post_probe_closed)
+            if post_probe_closed
+            else 0.0
+        ),
+        "probe_residual_confirmation_ready_equal_weight_avg_profit_pct": (
+            sum(post_probe_profit_values) / len(post_probe_profit_values)
+            if post_probe_profit_values
+            else 0.0
+        ),
+        "probe_residual_confirmation_ready_notional_weighted_ev_pct": (
+            sum(value * notional for value, notional in post_probe_weighted_values)
+            / sum(notional for _, notional in post_probe_weighted_values)
+            if post_probe_weighted_values
+            else 0.0
+        ),
+        "probe_residual_confirmation_ready_simple_sum_profit_proxy_krw": round(
+            sum(post_probe_profit_proxies), 2
         ),
         "probe_residual_pyramid_evaluation_seen_count": sum(
             1 for item in rows if item.get("pyramid_evaluation_seen")
@@ -1163,6 +1969,14 @@ def _one_share_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
             {"pyramid_feedback_label": key, "count": value}
             for key, value in label_counts.most_common()
         ],
+        "one_share_pyramid_label_semantics": "legacy_profit_threshold_crossing_only",
+        "canonical_expansion_label_counts": [
+            {"canonical_expansion_outcome_label": key, "count": value}
+            for key, value in canonical_label_counts.most_common()
+        ],
+        "canonical_expansion_label_semantics": (
+            "post_probe_real_confirmation_precedence_then_legacy_threshold"
+        ),
     }
 
 
@@ -1481,12 +2295,18 @@ def build_report(
     candidates: dict[str, dict[str, Any]] = {}
     one_share_records: dict[str, dict[str, Any]] = {}
     one_share_plans: dict[str, dict[str, Any]] = {}
+    real_entry_lifecycle_records: dict[str, dict[str, Any]] = {}
 
     for row in iter_jsonl(pipeline_path):
         fields = _fields(row)
         key = _record_key(row, fields)
         if not key:
             continue
+        if str(row.get("stage") or "") in _REAL_ENTRY_LIFECYCLE_STAGES:
+            lifecycle_item = real_entry_lifecycle_records.setdefault(
+                key, _real_entry_lifecycle_record(row)
+            )
+            _update_real_entry_lifecycle(lifecycle_item, row)
         if _is_one_share_plan_event(row):
             one_share_plans[key] = _one_share_record(row)
         if _is_one_share_event(row):
@@ -1506,6 +2326,11 @@ def build_report(
                 "effective_venue_resolution",
                 "venue_source_quality_valid",
                 "market_session_bucket",
+                "entry_split_order_probe_qty",
+                "entry_split_order_leg_count",
+                "entry_split_order_qty_weight_min",
+                "entry_split_order_policy_version",
+                "entry_split_order_variant_id",
             ):
                 if planned.get(plan_key) not in (None, ""):
                     one_share[plan_key] = planned[plan_key]
@@ -1605,10 +2430,28 @@ def build_report(
     )
 
     one_share_rows = []
-    for item in one_share_records.values():
+    for key, item in one_share_records.items():
         _finalize_probe_residual_observation(item)
+        _finalize_probe_residual_real_outcome(item)
         _finalize_normal_winner_expansion(item)
-        item["pyramid_feedback_label"] = _feedback_label(item)
+        legacy_feedback_label = _feedback_label(item)
+        item["pyramid_feedback_label"] = legacy_feedback_label
+        item["legacy_pyramid_feedback_label"] = legacy_feedback_label
+        item["canonical_expansion_outcome_label"] = _canonical_expansion_outcome_label(
+            item
+        )
+        item["post_probe_legacy_label_conflict"] = bool(
+            item["canonical_expansion_outcome_label"]
+            == "expansion_missed_upside_confirmation_ready"
+            and legacy_feedback_label != "pyramid_would_have_helped"
+        )
+        item["canonical_expansion_missed_upside_candidate"] = bool(
+            item["canonical_expansion_outcome_label"]
+            in {
+                "expansion_missed_upside_confirmation_ready",
+                "expansion_missed_upside_threshold_crossed",
+            }
+        )
         item["actual_order_submitted"] = bool(item.get("pyramid_submit_seen"))
         item["broker_order_forbidden"] = not bool(item.get("pyramid_submit_seen"))
         item["runtime_effect"] = False
@@ -1627,6 +2470,18 @@ def build_report(
             str(item.get("record_id") or ""),
         )
     )
+    real_entry_lifecycle_rows = []
+    for key, item in real_entry_lifecycle_records.items():
+        if not item.get("actual_entry_order_submitted"):
+            continue
+        _finalize_real_entry_lifecycle(item, one_share_records.get(key))
+        real_entry_lifecycle_rows.append(item)
+    real_entry_lifecycle_rows.sort(
+        key=lambda item: (
+            str(item.get("entry_submitted_at") or item.get("first_observed_ts") or ""),
+            str(item.get("record_id") or ""),
+        )
+    )
 
     label_counts = Counter(
         str(item.get("pyramid_feedback_label") or "unknown") for item in rows
@@ -1634,6 +2489,9 @@ def build_report(
     blocker_metrics = _aggregate_by_blocker(rows)
     one_share_opportunity_summary = _one_share_summary(one_share_rows)
     normal_winner_expansion_summary = _normal_winner_expansion_summary(one_share_rows)
+    real_entry_lifecycle_summary = _real_entry_lifecycle_summary(
+        real_entry_lifecycle_rows
+    )
     pressure_provenance_missing_count = _pressure_provenance_missing_count(
         rows + one_share_rows
     )
@@ -1665,7 +2523,7 @@ def build_report(
     if micro_vwap_provenance_unusable_count:
         source_quality_status = "micro_vwap_provenance_unusable"
     return {
-        "schema_version": 3,
+        "schema_version": 4,
         "report_type": REPORT_TYPE,
         "target_date": target_date,
         "generated_at": generated_at,
@@ -1697,6 +2555,25 @@ def build_report(
             ),
             "forbidden_uses": FORBIDDEN_USES,
         },
+        "post_probe_real_outcome_metric_contract": {
+            "metric_role": "multi_leg_post_probe_real_outcome_attribution",
+            "decision_authority": (
+                "source_only_post_probe_real_outcome_no_runtime_mutation"
+            ),
+            "window_policy": (
+                "same_day_probe_fill_to_terminal_sell_with_250ms_two_evaluation_"
+                "confirmation_reconstruction"
+            ),
+            "sample_floor": "rolling_closed_source_quality_valid_zero_fill_rows_ge_20",
+            "primary_decision_metric": (
+                "probe_residual_confirmation_ready_notional_weighted_ev_pct"
+            ),
+            "source_quality_gate": (
+                "exact_probe_bundle_terminal_fill_real_sell_profit_explicit_venue_"
+                "and_version_proven_post_probe_evidence"
+            ),
+            "forbidden_uses": FORBIDDEN_USES,
+        },
         "normal_winner_expansion_metric_contract": {
             "metric_role": "bounded_tunable_scale_in_counterfactual",
             "decision_authority": (
@@ -1712,6 +2589,24 @@ def build_report(
                 "pressure_and_micro_vwap_feature_provenance_then_post_candidate_"
                 "holding_and_sell; candidate_at_must_not_be_after_final_ts; "
                 "explicit_conflict_free_venue_required_for_venue_split"
+            ),
+            "forbidden_uses": FORBIDDEN_USES,
+        },
+        "whole_day_real_entry_lifecycle_metric_contract": {
+            "metric_role": "same_day_real_entry_lifecycle_reconciliation",
+            "decision_authority": (
+                "source_only_same_day_real_entry_lifecycle_reconciliation"
+            ),
+            "window_policy": (
+                "target_date_premarket_krx_nxt_submit_fill_cancel_sell_events"
+            ),
+            "sample_floor": "1_actual_order_submitted_entry_cycle",
+            "primary_decision_metric": (
+                "realized_pnl_krw_known_sum_with_equal_weight_avg_profit_pct"
+            ),
+            "source_quality_gate": (
+                "record_joined_actual_order_submit_fill_cancel_sell_with_explicit_"
+                "effective_venue_and_non_null_sell_profit_for_closed_cycles"
             ),
             "forbidden_uses": FORBIDDEN_USES,
         },
@@ -1773,10 +2668,12 @@ def build_report(
             ],
             **one_share_opportunity_summary,
             "normal_winner_expansion": normal_winner_expansion_summary,
+            "whole_day_real_entry_lifecycle": real_entry_lifecycle_summary,
         },
         "blocker_metrics": blocker_metrics,
         "pyramid_feedback_rows": rows[:300],
         "one_share_pyramid_opportunity_rows": one_share_rows,
+        "whole_day_real_entry_lifecycle_rows": real_entry_lifecycle_rows,
         "normal_winner_expansion_rows": [
             {
                 key: item.get(key)
@@ -1864,8 +2761,21 @@ def write_outputs(
         f"- probe_residual_zero_fill_count: {summary.get('probe_residual_zero_fill_count')}",
         f"- probe_residual_soft_abort_count: {summary.get('probe_residual_soft_abort_count')}",
         f"- probe_residual_missed_upside_candidate_count: {summary.get('probe_residual_missed_upside_candidate_count')}",
+        f"- probe_residual_pyramid_threshold_missed_upside_candidate_count: {summary.get('probe_residual_pyramid_threshold_missed_upside_candidate_count')}",
+        f"- probe_residual_real_outcome_closed_count: {summary.get('probe_residual_real_outcome_closed_count')}",
+        f"- probe_residual_realized_winner_zero_fill_count: {summary.get('probe_residual_realized_winner_zero_fill_count')}",
+        f"- probe_residual_realized_loss_or_flat_zero_fill_count: {summary.get('probe_residual_realized_loss_or_flat_zero_fill_count')}",
+        f"- probe_residual_realized_winner_confirmation_ready_count: {summary.get('probe_residual_realized_winner_confirmation_ready_count')}",
+        f"- probe_residual_realized_loss_or_flat_confirmation_ready_count: {summary.get('probe_residual_realized_loss_or_flat_confirmation_ready_count')}",
+        f"- canonical_expansion_missed_upside_count: {summary.get('canonical_expansion_missed_upside_count')}",
+        f"- post_probe_legacy_label_conflict_count: {summary.get('post_probe_legacy_label_conflict_count')}",
+        f"- post_probe_confirmation_false_positive_loss_or_flat_count: {summary.get('post_probe_confirmation_false_positive_loss_or_flat_count')}",
+        f"- probe_residual_confirmation_ready_equal_weight_avg_profit_pct: {_safe_float(summary.get('probe_residual_confirmation_ready_equal_weight_avg_profit_pct'), 0.0):.4f}",
+        f"- probe_residual_confirmation_ready_notional_weighted_ev_pct: {_safe_float(summary.get('probe_residual_confirmation_ready_notional_weighted_ev_pct'), 0.0):.4f}",
+        f"- probe_residual_confirmation_ready_simple_sum_profit_proxy_krw: {_safe_float(summary.get('probe_residual_confirmation_ready_simple_sum_profit_proxy_krw'), 0.0):.2f}",
         f"- probe_residual_pyramid_evaluation_seen_count: {summary.get('probe_residual_pyramid_evaluation_seen_count')}",
         f"- normal_winner_expansion: {json.dumps(summary.get('normal_winner_expansion') or {}, ensure_ascii=False, sort_keys=True)}",
+        f"- whole_day_real_entry_lifecycle: {json.dumps(summary.get('whole_day_real_entry_lifecycle') or {}, ensure_ascii=False, sort_keys=True)}",
         f"- pyramid_min_profit_pct: {(report.get('pyramid_threshold_provenance') or {}).get('selected_min_profit_pct')}",
         f"- pyramid_threshold_source: {(report.get('pyramid_threshold_provenance') or {}).get('selection_source')}",
         "",
@@ -1893,12 +2803,20 @@ def write_outputs(
     for item in report.get("one_share_pyramid_opportunity_rows") or []:
         lines.append(
             "- record_id={record_id} code={stock_code} name={stock_name} label={pyramid_feedback_label} "
+            "canonical={canonical_expansion_outcome_label} "
             "opportunity_seen={pyramid_opportunity_seen} opportunity_profit={pyramid_opportunity_profit_rate} "
             "max_profit={max_profit_seen} opportunity_cost={pyramid_opportunity_cost_pct} "
             "final={final_profit_rate} residual_zero_fill={residual_zero_fill} "
-            "residual_soft_abort={residual_soft_abort} residual_missed_candidate={residual_missed_upside_candidate}".format(
+            "residual_soft_abort={residual_soft_abort} residual_missed_candidate={residual_missed_upside_candidate} "
+            "post_probe_real_outcome={post_probe_real_outcome_label} "
+            "confirmation_ready={post_probe_real_confirmation_ready} "
+            "first_leg_qty={post_probe_counterfactual_first_leg_qty} "
+            "first_leg_profit_proxy_krw={post_probe_counterfactual_first_leg_profit_proxy_krw}".format(
                 **{
                     **item,
+                    "canonical_expansion_outcome_label": item.get(
+                        "canonical_expansion_outcome_label"
+                    ),
                     "pyramid_opportunity_seen": bool(
                         item.get("pyramid_opportunity_seen")
                     ),
@@ -1911,6 +2829,38 @@ def write_outputs(
                     "residual_soft_abort": bool(item.get("residual_soft_abort")),
                     "residual_missed_upside_candidate": bool(
                         item.get("residual_missed_upside_candidate")
+                    ),
+                    "post_probe_real_outcome_label": item.get(
+                        "post_probe_real_outcome_label"
+                    ),
+                    "post_probe_real_confirmation_ready": bool(
+                        item.get("post_probe_real_confirmation_ready")
+                    ),
+                    "post_probe_counterfactual_first_leg_qty": item.get(
+                        "post_probe_counterfactual_first_leg_qty"
+                    ),
+                    "post_probe_counterfactual_first_leg_profit_proxy_krw": item.get(
+                        "post_probe_counterfactual_first_leg_profit_proxy_krw"
+                    ),
+                }
+            )
+        )
+    lines.extend(["", "## Whole-Day Real Entry Lifecycle Rows", ""])
+    for item in report.get("whole_day_real_entry_lifecycle_rows") or []:
+        lines.append(
+            "- record_id={record_id} code={stock_code} name={stock_name} "
+            "venue={effective_venue} session={market_session_bucket} "
+            "state={lifecycle_state} planned_qty={planned_qty} "
+            "submitted_qty={broker_submitted_qty} filled_qty={filled_qty} "
+            "final={final_profit_rate} realized_pnl_krw={realized_pnl_krw} "
+            "canonical={canonical_expansion_outcome_label}".format(
+                **{
+                    **item,
+                    "market_session_bucket": item.get("market_session_bucket"),
+                    "final_profit_rate": item.get("final_profit_rate"),
+                    "realized_pnl_krw": item.get("realized_pnl_krw"),
+                    "canonical_expansion_outcome_label": item.get(
+                        "canonical_expansion_outcome_label"
                     ),
                 }
             )

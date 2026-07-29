@@ -26,6 +26,12 @@ NORMAL_WINNER_EXPANSION_CLOSED_LABELS = {
     "transient_extension_exit_timing_needed",
     "correctly_not_expanded_or_reversal",
 }
+POST_PROBE_REAL_OUTCOME_CLOSED_LABELS = {
+    "profitable_zero_fill_confirmation_ready",
+    "profitable_zero_fill_no_confirmation",
+    "loss_or_flat_zero_fill_confirmation_ready",
+    "loss_or_flat_zero_fill_no_confirmation",
+}
 FORBIDDEN_USES = [
     "intraday_threshold_mutation",
     "intraday_runtime_apply",
@@ -326,6 +332,188 @@ def _normal_winner_expansion_observation(
     }
 
 
+def _post_probe_real_outcome_observation(
+    reports: list[dict[str, Any]],
+) -> dict[str, Any]:
+    rows: list[dict[str, Any]] = []
+    section_present = False
+    provenance_rejected_count = 0
+    source_quality_rejected_count = 0
+    for report in reports:
+        if not isinstance(report.get("post_probe_real_outcome_metric_contract"), dict):
+            continue
+        source_rows = report.get("one_share_pyramid_opportunity_rows")
+        if not isinstance(source_rows, list):
+            continue
+        section_present = True
+        for row in source_rows:
+            if not isinstance(row, dict):
+                continue
+            if (
+                str(row.get("post_probe_real_outcome_label") or "")
+                not in POST_PROBE_REAL_OUTCOME_CLOSED_LABELS
+            ):
+                continue
+            if not _boolish(row.get("post_probe_real_outcome_source_quality_valid")):
+                source_quality_rejected_count += 1
+                continue
+            provenance_valid = bool(
+                row.get("runtime_effect") is False
+                and row.get("allowed_runtime_apply") is False
+                and str(row.get("decision_authority") or "").startswith("source_only_")
+                and isinstance(row.get("forbidden_uses"), list)
+                and _boolish(row.get("post_probe_probe_actual_order_submitted"))
+            )
+            if not provenance_valid:
+                provenance_rejected_count += 1
+                continue
+            rows.append(row)
+
+    confirmation_ready_rows = [
+        row
+        for row in rows
+        if _boolish(row.get("post_probe_real_confirmation_ready"))
+        and _boolish(row.get("post_probe_counterfactual_source_quality_valid"))
+    ]
+    confirmation_ready_source_blocked_count = sum(
+        1
+        for row in rows
+        if _boolish(row.get("post_probe_real_confirmation_ready"))
+        and not _boolish(row.get("post_probe_counterfactual_source_quality_valid"))
+    )
+    weighted = [
+        (
+            _safe_float(row.get("post_probe_real_outcome_profit_pct"), 0.0),
+            int(row.get("post_probe_counterfactual_first_leg_notional_krw") or 0),
+        )
+        for row in confirmation_ready_rows
+        if int(row.get("post_probe_counterfactual_first_leg_notional_krw") or 0) > 0
+    ]
+    winner_count = sum(
+        1
+        for row in rows
+        if str(row.get("post_probe_real_outcome_label") or "").startswith(
+            "profitable_zero_fill"
+        )
+    )
+    ready_winner_count = sum(
+        1
+        for row in confirmation_ready_rows
+        if row.get("post_probe_real_outcome_label")
+        == "profitable_zero_fill_confirmation_ready"
+    )
+    ready_loss_count = sum(
+        1
+        for row in confirmation_ready_rows
+        if row.get("post_probe_real_outcome_label")
+        == "loss_or_flat_zero_fill_confirmation_ready"
+    )
+    sample_floor_met = len(confirmation_ready_rows) >= 20
+    notional_weighted_ev_pct = (
+        round(
+            sum(value * notional for value, notional in weighted)
+            / sum(notional for _, notional in weighted),
+            4,
+        )
+        if weighted
+        else 0.0
+    )
+    if not section_present:
+        state = "not_available"
+    elif not sample_floor_met:
+        state = "hold_sample"
+    elif notional_weighted_ev_pct > 0:
+        state = "positive_ev_profile_candidate"
+    else:
+        state = "non_positive_ev_hold"
+
+    def _dimension_rollup(dimension: str) -> list[dict[str, Any]]:
+        grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for row in confirmation_ready_rows:
+            if dimension == "effective_venue" and not _boolish(
+                row.get("venue_source_quality_valid")
+            ):
+                continue
+            value = str(row.get(dimension) or "UNKNOWN").strip() or "UNKNOWN"
+            grouped[value].append(row)
+        result = []
+        for value, bucket_rows in sorted(grouped.items()):
+            bucket_weighted = [
+                (
+                    _safe_float(row.get("post_probe_real_outcome_profit_pct"), 0.0),
+                    int(
+                        row.get("post_probe_counterfactual_first_leg_notional_krw") or 0
+                    ),
+                )
+                for row in bucket_rows
+                if int(row.get("post_probe_counterfactual_first_leg_notional_krw") or 0)
+                > 0
+            ]
+            result.append(
+                {
+                    dimension: value,
+                    "sample_count": len(bucket_rows),
+                    "sample_floor": 20,
+                    "sample_floor_met": len(bucket_rows) >= 20,
+                    "notional_weighted_ev_pct": (
+                        round(
+                            sum(
+                                outcome * notional
+                                for outcome, notional in bucket_weighted
+                            )
+                            / sum(notional for _, notional in bucket_weighted),
+                            4,
+                        )
+                        if bucket_weighted
+                        else 0.0
+                    ),
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                }
+            )
+        return result
+
+    return {
+        "state": state,
+        "section_present": section_present,
+        "closed_real_outcome_count": len(rows),
+        "confirmation_ready_count": len(confirmation_ready_rows),
+        "confirmation_ready_counterfactual_source_blocked_count": (
+            confirmation_ready_source_blocked_count
+        ),
+        "sample_floor": 20,
+        "sample_floor_met": sample_floor_met,
+        "provenance_rejected_count": provenance_rejected_count,
+        "source_quality_rejected_count": source_quality_rejected_count,
+        "realized_winner_zero_fill_count": winner_count,
+        "realized_loss_or_flat_zero_fill_count": len(rows) - winner_count,
+        "confirmation_ready_winner_count": ready_winner_count,
+        "confirmation_ready_loss_or_flat_count": ready_loss_count,
+        "diagnostic_win_rate": (round(winner_count / len(rows), 4) if rows else 0.0),
+        "notional_weighted_ev_pct": notional_weighted_ev_pct,
+        "by_effective_venue": _dimension_rollup("effective_venue"),
+        "by_market_session_bucket": _dimension_rollup("market_session_bucket"),
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "metric_role": "multi_leg_post_probe_real_outcome_attribution",
+        "decision_authority": (
+            "rolling_source_only_post_probe_real_outcome_no_runtime_mutation"
+        ),
+        "window_policy": (
+            "rolling_clean_baseline_closed_zero_fill_probe_to_terminal_sell"
+        ),
+        "sample_floor_policy": (
+            "rolling_confirmation_ready_source_quality_valid_rows_ge_20"
+        ),
+        "primary_decision_metric": "notional_weighted_ev_pct",
+        "source_quality_gate": (
+            "exact_probe_terminal_fill_real_sell_profit_explicit_venue_and_"
+            "version_proven_post_probe_evidence"
+        ),
+        "forbidden_uses": FORBIDDEN_USES,
+    }
+
+
 def _provenance_present(rows: list[dict[str, Any]]) -> bool:
     return bool(rows) and all(
         "actual_order_submitted" in row
@@ -572,6 +760,7 @@ def _calibration_candidate(
 ) -> dict[str, Any]:
     one_share_rows, one_share_source_present = _closed_one_share_pyramid_rows(reports)
     normal_winner_expansion = _normal_winner_expansion_observation(reports)
+    post_probe_real_outcome = _post_probe_real_outcome_observation(reports)
     rows = one_share_rows if one_share_source_present else _closed_pyramid_rows(reports)
     calibration_source_scope = (
         "one_share_event_opportunity"
@@ -675,6 +864,7 @@ def _calibration_candidate(
             "recommended_action": state,
             "recommended_action_reason": reason,
             "normal_winner_expansion_observation": normal_winner_expansion,
+            "post_probe_real_outcome_observation": post_probe_real_outcome,
         },
         "source_reports": [str(path) for path in source_paths],
         "runtime_effect": False,
@@ -726,6 +916,9 @@ def build_report(
         "normal_winner_expansion_observation": (
             candidate["source_metrics"]["normal_winner_expansion_observation"]
         ),
+        "post_probe_real_outcome_observation": (
+            candidate["source_metrics"]["post_probe_real_outcome_observation"]
+        ),
         "source_quality": {
             "status": (
                 "pass"
@@ -765,6 +958,11 @@ def write_outputs(
         if isinstance(grid_decision.get("selected_row"), dict)
         else {}
     )
+    post_probe_observation = (
+        report.get("post_probe_real_outcome_observation")
+        if isinstance(report.get("post_probe_real_outcome_observation"), dict)
+        else {}
+    )
     lines = [
         f"# {report.get('target_date')} Scalping Pyramid Quality Calibration",
         "",
@@ -796,6 +994,17 @@ def write_outputs(
         f"{_safe_float(selected_grid_row.get('avg_incremental_exit_profit_pct')):.2f}",
         f"- source_quality_pass: {metrics.get('source_quality_pass')}",
         f"- provenance_present: {metrics.get('provenance_present')}",
+        f"- post_probe_real_outcome_state: {post_probe_observation.get('state')}",
+        "- post_probe_real_outcome_closed_count: "
+        f"{post_probe_observation.get('closed_real_outcome_count')}",
+        "- post_probe_confirmation_ready_count: "
+        f"{post_probe_observation.get('confirmation_ready_count')}",
+        "- post_probe_confirmation_ready_winner_count: "
+        f"{post_probe_observation.get('confirmation_ready_winner_count')}",
+        "- post_probe_confirmation_ready_loss_or_flat_count: "
+        f"{post_probe_observation.get('confirmation_ready_loss_or_flat_count')}",
+        "- post_probe_confirmation_ready_notional_weighted_ev_pct: "
+        f"{_safe_float(post_probe_observation.get('notional_weighted_ev_pct')):.4f}",
     ]
     output_md.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
 

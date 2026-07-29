@@ -439,7 +439,7 @@ def test_normal_winner_expansion_tracks_post_candidate_incremental_ev_and_probe_
     summary = report["summary"]["normal_winner_expansion"]
     item = report["normal_winner_expansion_rows"][0]
 
-    assert report["schema_version"] == 3
+    assert report["schema_version"] == 4
     assert summary["candidate_count"] == 1
     assert summary["source_quality_valid_candidate_count"] == 1
     assert summary["realized_incremental_winner_count"] == 1
@@ -832,11 +832,529 @@ def test_probe_residual_soft_abort_and_pyramid_recheck_provenance(tmp_path):
     assert item["residual_soft_abort"] is True
     assert item["residual_scale_in_recheck_allowed"] is True
     assert item["pyramid_evaluation_seen"] is True
-    assert item["residual_missed_upside_candidate"] is True
+    assert item["residual_missed_upside_candidate"] is False
+    assert item["residual_pyramid_threshold_missed_upside_candidate"] is True
     assert report["summary"]["probe_residual_zero_fill_count"] == 1
     assert report["summary"]["probe_residual_soft_abort_count"] == 1
-    assert report["summary"]["probe_residual_missed_upside_candidate_count"] == 1
+    assert report["summary"]["probe_residual_missed_upside_candidate_count"] == 0
+    assert (
+        report["summary"][
+            "probe_residual_pyramid_threshold_missed_upside_candidate_count"
+        ]
+        == 1
+    )
     assert report["summary"]["probe_residual_pyramid_evaluation_seen_count"] == 1
+
+
+def test_post_probe_real_outcome_separates_profitable_and_loss_zero_fill_rows(
+    tmp_path,
+):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-29.jsonl"
+    rows = []
+    outcomes = [
+        (701, "270660", "loss-a", 7, 12770, -3.67),
+        (702, "475040", "loss-b", 43, 2990, -0.23),
+        (703, "073240", "winner", 21, 6040, 0.27),
+    ]
+    for record_id, code, name, requested_qty, fill_price, final_profit in outcomes:
+        rows.extend(
+            [
+                _event(
+                    record_id,
+                    code,
+                    name,
+                    "entry_split_order_plan_applied",
+                    {
+                        "rising_missed_one_share_scout": True,
+                        "entry_split_order_probe_first_applied": True,
+                        "effective_qty": requested_qty,
+                        "forced_entry_qty": requested_qty,
+                        "entry_split_order_probe_qty": 1,
+                        "entry_split_order_leg_count": 4,
+                        "entry_split_order_qty_weight_min": 0.4,
+                        "entry_split_order_policy_version": "fixture-v1",
+                        "entry_split_order_variant_id": "fixture-40-30-30",
+                        "effective_venue": "NXT",
+                        "market_session_bucket": "nxt",
+                    },
+                    emitted_at=f"2026-07-29T16:35:{record_id - 660}.000000+09:00",
+                    pipeline="ENTRY_PIPELINE",
+                ),
+                _event(
+                    record_id,
+                    code,
+                    name,
+                    "probe_filled",
+                    {
+                        "probe_bundle_id": f"bundle-{record_id}",
+                        "fill_qty": 1,
+                        "fill_price": fill_price,
+                        "effective_venue": "NXT",
+                        "market_session_bucket": "nxt",
+                    },
+                    emitted_at=f"2026-07-29T16:35:{record_id - 660}.100000+09:00",
+                    pipeline="ENTRY_PIPELINE",
+                ),
+            ]
+        )
+        if final_profit > 0:
+            for suffix, signature in (("200000", "source-a"), ("500000", "source-b")):
+                rows.append(
+                    _event(
+                        record_id,
+                        code,
+                        name,
+                        "probe_continuation_deferred",
+                        {
+                            "probe_bundle_id": f"bundle-{record_id}",
+                            "post_probe_direction_state": "UNKNOWN",
+                            "post_probe_continuation_action": "DEFER",
+                            "post_probe_direction_reason": (
+                                "post_probe_nxt_wait_fast_tape_required"
+                            ),
+                            "post_probe_direction_positive_groups": (
+                                "orderbook,signed_pressure"
+                            ),
+                            "post_probe_direction_negative_groups": "-",
+                            "post_probe_direction_mark_price": fill_price,
+                            "post_probe_direction_probe_fill_price": fill_price,
+                            "post_probe_direction_ai_action": "WAIT",
+                            "post_probe_hard_veto": False,
+                            "post_probe_confirmation_evidence_version_proven": True,
+                            "post_probe_confirmation_source_version_signature": (
+                                signature
+                            ),
+                            "post_probe_direction_tick_context_fresh": True,
+                        },
+                        emitted_at=(
+                            f"2026-07-29T16:35:{record_id - 660}.{suffix}+09:00"
+                        ),
+                        pipeline="ENTRY_PIPELINE",
+                    )
+                )
+        rows.extend(
+            [
+                _event(
+                    record_id,
+                    code,
+                    name,
+                    "residual_blocked",
+                    {
+                        "probe_bundle_id": f"bundle-{record_id}",
+                        "reason": "residual_revalidation_timeout",
+                        "entry_split_probe_scale_in_recheck_allowed": False,
+                    },
+                    emitted_at=f"2026-07-29T16:35:{record_id - 660}.900000+09:00",
+                    pipeline="ENTRY_PIPELINE",
+                ),
+                _event(
+                    record_id,
+                    code,
+                    name,
+                    "sell_completed",
+                    {
+                        "profit_rate": final_profit,
+                        "peak_profit": 0.76 if final_profit > 0 else final_profit,
+                    },
+                    emitted_at=f"2026-07-29T16:37:{record_id - 660}.000000+09:00",
+                ),
+            ]
+        )
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8"
+    )
+
+    report = mod.build_report(
+        "2026-07-29", pipeline_path=pipeline_path, generated_at="fixed"
+    )
+    by_code = {
+        item["stock_code"]: item
+        for item in report["one_share_pyramid_opportunity_rows"]
+    }
+    winner = by_code["073240"]
+
+    assert report["schema_version"] == 4
+    assert (
+        winner["post_probe_real_outcome_label"]
+        == "profitable_zero_fill_confirmation_ready"
+    )
+    assert winner["post_probe_real_confirmation_max_count"] == 2
+    assert winner["post_probe_real_confirmation_ready"] is True
+    assert winner["post_probe_counterfactual_first_leg_qty"] == 8
+    assert winner["post_probe_counterfactual_first_leg_notional_krw"] == 48_320
+    assert winner["post_probe_counterfactual_first_leg_profit_proxy_krw"] == 130.46
+    assert winner["residual_missed_upside_candidate"] is True
+    assert (
+        winner["canonical_expansion_outcome_label"]
+        == "expansion_missed_upside_confirmation_ready"
+    )
+    assert winner["post_probe_legacy_label_conflict"] is True
+    assert winner["residual_pyramid_threshold_missed_upside_candidate"] is False
+    assert (
+        by_code["270660"]["post_probe_real_outcome_label"]
+        == "loss_or_flat_zero_fill_no_confirmation"
+    )
+    assert (
+        by_code["475040"]["post_probe_real_outcome_label"]
+        == "loss_or_flat_zero_fill_no_confirmation"
+    )
+
+    summary = report["summary"]
+    assert summary["probe_residual_real_outcome_closed_count"] == 3
+    assert summary["probe_residual_realized_winner_zero_fill_count"] == 1
+    assert summary["probe_residual_realized_loss_or_flat_zero_fill_count"] == 2
+    assert summary["probe_residual_realized_winner_confirmation_ready_count"] == 1
+    assert summary["probe_residual_realized_loss_or_flat_confirmation_ready_count"] == 0
+    assert summary["probe_residual_missed_upside_candidate_count"] == 1
+    assert summary["canonical_expansion_missed_upside_count"] == 1
+    assert summary["post_probe_legacy_label_conflict_count"] == 1
+    assert summary["post_probe_confirmation_false_positive_loss_or_flat_count"] == 0
+    assert (
+        summary["probe_residual_pyramid_threshold_missed_upside_candidate_count"] == 0
+    )
+    assert summary["probe_residual_confirmation_ready_notional_weighted_ev_pct"] == 0.27
+    assert (
+        summary["probe_residual_confirmation_ready_simple_sum_profit_proxy_krw"]
+        == 130.46
+    )
+    contract = report["post_probe_real_outcome_metric_contract"]
+    assert contract["metric_role"] == "multi_leg_post_probe_real_outcome_attribution"
+    assert contract["decision_authority"].startswith("source_only_")
+    assert "bot_restart" in contract["forbidden_uses"]
+
+
+def test_whole_day_real_entry_lifecycle_reconciles_all_venues_and_entry_states(
+    tmp_path,
+):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-29.jsonl"
+    rows = [
+        _event(
+            801,
+            "801801",
+            "premarket-winner",
+            "order_bundle_submitted",
+            {
+                "actual_order_submitted": True,
+                "requested_qty": 1,
+                "order_no": "P801",
+                "order_price": 10000,
+                "effective_venue": "PREMARKET_KRX_LIKE",
+                "market_session_bucket": "krx_like_premarket",
+            },
+            emitted_at="2026-07-29T08:10:00+09:00",
+            pipeline="ENTRY_PIPELINE",
+        ),
+        _event(
+            801,
+            "801801",
+            "premarket-winner",
+            "holding_started",
+            {
+                "actual_order_submitted": True,
+                "buy_qty": 1,
+                "buy_price": 10000,
+                "effective_venue": "PREMARKET_KRX_LIKE",
+                "market_session_bucket": "krx_like_premarket",
+            },
+            emitted_at="2026-07-29T08:10:01+09:00",
+        ),
+        _event(
+            801,
+            "801801",
+            "premarket-winner",
+            "sell_completed",
+            {
+                "profit_rate": 0.4,
+                "realized_pnl_krw": 40,
+                "sell_price": 10050,
+            },
+            emitted_at="2026-07-29T08:12:00+09:00",
+        ),
+        _event(
+            802,
+            "802802",
+            "premarket-cancel",
+            "order_bundle_submitted",
+            {
+                "actual_order_submitted": True,
+                "requested_qty": 1,
+                "order_no": "P802",
+                "order_price": 20000,
+                "effective_venue": "PREMARKET_KRX_LIKE",
+                "market_session_bucket": "krx_like_premarket",
+            },
+            emitted_at="2026-07-29T08:20:00+09:00",
+            pipeline="ENTRY_PIPELINE",
+        ),
+        _event(
+            802,
+            "802802",
+            "premarket-cancel",
+            "entry_order_cancel_confirmed",
+            {
+                "filled_qty": 0,
+                "unfilled_qty": 1,
+                "effective_venue": "PREMARKET_KRX_LIKE",
+                "market_session_bucket": "krx_like_premarket",
+            },
+            emitted_at="2026-07-29T08:21:30+09:00",
+            pipeline="ENTRY_PIPELINE",
+        ),
+        _event(
+            803,
+            "803803",
+            "krx-loss",
+            "probe_submitted",
+            {
+                "actual_order_submitted": True,
+                "forced_entry_qty": 5,
+                "qty": 1,
+                "order_no": "K803",
+                "effective_venue": "KRX",
+                "market_session_bucket": "krx_regular",
+            },
+            emitted_at="2026-07-29T10:00:00+09:00",
+            pipeline="ENTRY_PIPELINE",
+        ),
+        _event(
+            803,
+            "803803",
+            "krx-loss",
+            "holding_started",
+            {
+                "actual_order_submitted": True,
+                "buy_qty": 1,
+                "buy_price": 3000,
+                "effective_venue": "KRX",
+                "market_session_bucket": "krx_regular",
+            },
+            emitted_at="2026-07-29T10:00:01+09:00",
+        ),
+        _event(
+            803,
+            "803803",
+            "krx-loss",
+            "sell_completed",
+            {"profit_rate": -0.2, "realized_pnl_krw": -6, "sell_price": 3000},
+            emitted_at="2026-07-29T10:01:00+09:00",
+        ),
+        _event(
+            804,
+            "804804",
+            "nxt-open",
+            "probe_submitted",
+            {
+                "actual_order_submitted": True,
+                "forced_entry_qty": 2,
+                "qty": 1,
+                "order_no": "N804",
+                "probe_bundle_id": "bundle-804",
+                "effective_venue": "NXT",
+                "market_session_bucket": "nxt",
+            },
+            emitted_at="2026-07-29T17:00:00+09:00",
+            pipeline="ENTRY_PIPELINE",
+        ),
+        _event(
+            804,
+            "804804",
+            "nxt-open",
+            "probe_filled",
+            {
+                "probe_bundle_id": "bundle-804",
+                "forced_entry_qty": 2,
+                "fill_qty": 1,
+                "fill_price": 60000,
+                "effective_venue": "NXT",
+                "market_session_bucket": "nxt",
+            },
+            emitted_at="2026-07-29T17:00:00.500000+09:00",
+            pipeline="ENTRY_PIPELINE",
+        ),
+        _event(
+            804,
+            "804804",
+            "nxt-open",
+            "holding_started",
+            {
+                "actual_order_submitted": True,
+                "buy_qty": 1,
+                "buy_price": 60000,
+                "effective_venue": "NXT",
+                "market_session_bucket": "nxt",
+            },
+            emitted_at="2026-07-29T17:00:01+09:00",
+        ),
+        _event(
+            804,
+            "804804",
+            "nxt-open",
+            "residual_submitted",
+            {
+                "probe_bundle_id": "bundle-804",
+                "forced_entry_qty": 2,
+                "qty": 1,
+                "order_no": "N804-R1",
+                "price": 60000,
+                "effective_venue": "NXT",
+                "market_session_bucket": "nxt",
+            },
+            emitted_at="2026-07-29T17:00:01.250000+09:00",
+            pipeline="ENTRY_PIPELINE",
+        ),
+    ]
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8"
+    )
+
+    report = mod.build_report(
+        "2026-07-29", pipeline_path=pipeline_path, generated_at="fixed"
+    )
+    summary = report["summary"]["whole_day_real_entry_lifecycle"]
+    lifecycle_rows = {
+        item["stock_code"]: item
+        for item in report["whole_day_real_entry_lifecycle_rows"]
+    }
+
+    assert summary["submitted_cycle_count"] == 4
+    assert summary["filled_cycle_count"] == 3
+    assert summary["canceled_unfilled_cycle_count"] == 1
+    assert summary["closed_cycle_count"] == 2
+    assert summary["holding_cycle_count"] == 1
+    assert summary["winner_count"] == 1
+    assert summary["loss_count"] == 1
+    assert summary["realized_pnl_krw_known_sum"] == 34
+    assert summary["realized_pnl_source_quality_state"] == "complete"
+    assert summary["single_share_plan_closed_winner_count"] == 1
+    assert summary["multi_leg_probe_cycle_count"] == 2
+    assert {item["effective_venue"] for item in summary["by_effective_venue"]} == {
+        "KRX",
+        "NXT",
+        "PREMARKET_KRX_LIKE",
+    }
+    assert lifecycle_rows["803803"]["planned_qty"] == 5
+    assert lifecycle_rows["803803"]["broker_submitted_qty"] == 1
+    assert lifecycle_rows["804804"]["broker_submitted_qty"] == 2
+    assert lifecycle_rows["804804"]["filled_qty"] == 1
+    assert lifecycle_rows["804804"]["lifecycle_state"] == "holding"
+    assert report["whole_day_real_entry_lifecycle_metric_contract"][
+        "decision_authority"
+    ].startswith("source_only_")
+    assert report["whole_day_real_entry_lifecycle_rows"][0]["runtime_effect"] is False
+
+    output_json = tmp_path / "feedback.json"
+    output_md = tmp_path / "feedback.md"
+    mod.write_outputs(report, output_json=output_json, output_md=output_md)
+    markdown = output_md.read_text(encoding="utf-8")
+    assert "- canonical_expansion_missed_upside_count: 0" in markdown
+    assert "## Whole-Day Real Entry Lifecycle Rows" in markdown
+    assert "venue=PREMARKET_KRX_LIKE" in markdown
+    assert "state=holding" in markdown
+
+
+def test_post_probe_confirmation_reconstructs_event_time_and_excludes_after_terminal(
+    tmp_path,
+):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-29.jsonl"
+
+    def direction_event(emitted_at, signature):
+        return _event(
+            704,
+            "704704",
+            "event-order",
+            "probe_continuation_deferred",
+            {
+                "probe_bundle_id": "bundle-704",
+                "post_probe_direction_state": "UNKNOWN",
+                "post_probe_continuation_action": "DEFER",
+                "post_probe_direction_positive_groups": "orderbook,signed_pressure",
+                "post_probe_direction_negative_groups": "-",
+                "post_probe_direction_mark_price": 10000,
+                "post_probe_direction_probe_fill_price": 10000,
+                "post_probe_direction_ai_action": "WAIT",
+                "post_probe_hard_veto": False,
+                "post_probe_confirmation_evidence_version_proven": True,
+                "post_probe_confirmation_source_version_signature": signature,
+                "post_probe_direction_tick_context_fresh": True,
+            },
+            emitted_at=emitted_at,
+            pipeline="ENTRY_PIPELINE",
+        )
+
+    rows = [
+        _event(
+            704,
+            "704704",
+            "event-order",
+            "entry_split_order_plan_applied",
+            {
+                "rising_missed_one_share_scout": True,
+                "entry_split_order_probe_first_applied": True,
+                "effective_qty": 11,
+                "forced_entry_qty": 11,
+                "entry_split_order_probe_qty": 1,
+                "entry_split_order_leg_count": 4,
+                "entry_split_order_qty_weight_min": 0.4,
+                "effective_venue": "KRX",
+            },
+            emitted_at="2026-07-29T10:00:00.000000+09:00",
+            pipeline="ENTRY_PIPELINE",
+        ),
+        _event(
+            704,
+            "704704",
+            "event-order",
+            "probe_filled",
+            {
+                "probe_bundle_id": "bundle-704",
+                "fill_qty": 1,
+                "fill_price": 10000,
+                "effective_venue": "KRX",
+            },
+            emitted_at="2026-07-29T10:00:00.100000+09:00",
+            pipeline="ENTRY_PIPELINE",
+        ),
+        _event(
+            704,
+            "704704",
+            "event-order",
+            "residual_blocked",
+            {
+                "probe_bundle_id": "bundle-704",
+                "reason": "residual_revalidation_timeout",
+                "entry_split_probe_scale_in_recheck_allowed": False,
+            },
+            emitted_at="2026-07-29T10:00:03.000000+09:00",
+            pipeline="ENTRY_PIPELINE",
+        ),
+        # Independent writers may append earlier event-time rows after terminal rows.
+        direction_event("2026-07-29T10:00:00.500000+09:00", "source-a"),
+        direction_event("2026-07-29T10:00:00.800000+09:00", "source-b"),
+        direction_event("2026-07-29T10:00:03.100000+09:00", "after-terminal"),
+        _event(
+            704,
+            "704704",
+            "event-order",
+            "sell_completed",
+            {"profit_rate": 0.2},
+            emitted_at="2026-07-29T10:01:00.000000+09:00",
+        ),
+    ]
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8"
+    )
+
+    report = mod.build_report(
+        "2026-07-29", pipeline_path=pipeline_path, generated_at="fixed"
+    )
+    item = report["one_share_pyramid_opportunity_rows"][0]
+
+    assert item["post_probe_real_confirmation_max_count"] == 2
+    assert item["post_probe_real_confirmation_ready"] is True
+    assert item["post_probe_real_confirmation_excluded_observation_count"] == 1
+    assert item["post_probe_real_outcome_label"] == (
+        "profitable_zero_fill_confirmation_ready"
+    )
 
 
 def test_partial_submitted_direction_defer_is_not_soft_abort():
