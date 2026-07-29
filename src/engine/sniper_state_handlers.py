@@ -17240,6 +17240,15 @@ def _scanner_fast_precheck_fields_impl(
     latest_history_age_sec = None
     if latest_history_ts > 0:
         latest_history_age_sec = max(0.0, float(now_ts) - latest_history_ts)
+    scanner_attach_epoch = _safe_float(
+        (stock or {}).get("scanner_attach_epoch"),
+        0.0,
+    )
+    post_attach_entry_realtime = bool(
+        scanner_attach_epoch <= 0.0
+        or last_0b_ts >= scanner_attach_epoch
+        or latest_history_ts >= scanner_attach_epoch
+    )
     fresh_realtime_evidence = (
         last_0b_age_sec is not None and last_0b_age_sec <= max_age_sec
     ) or (latest_history_age_sec is not None and latest_history_age_sec <= max_age_sec)
@@ -17477,6 +17486,9 @@ def _scanner_fast_precheck_fields_impl(
     elif curr <= 0:
         result = "source_quality_blocked"
         reason = "missing_or_zero_curr"
+    elif not post_attach_entry_realtime:
+        result = "source_quality_blocked"
+        reason = "awaiting_first_post_attach_trade_input"
     elif promotion_price_conflict:
         result = "source_quality_blocked"
         reason = "scanner_promotion_price_conflicts_with_fresh_ws"
@@ -17664,6 +17676,18 @@ def _scanner_fast_precheck_fields_impl(
             else "not_applicable"
         ),
         "fast_precheck_seen_epoch": f"{float(now_ts):.3f}",
+        "scanner_attach_epoch": (
+            f"{scanner_attach_epoch:.6f}"
+            if scanner_attach_epoch > 0.0
+            else "not_available_scanner_attach_epoch"
+        ),
+        "fast_precheck_post_attach_entry_realtime": post_attach_entry_realtime,
+        "fast_precheck_post_attach_last_0b": bool(
+            scanner_attach_epoch > 0.0 and last_0b_ts >= scanner_attach_epoch
+        ),
+        "fast_precheck_post_attach_strength_history": bool(
+            scanner_attach_epoch > 0.0 and latest_history_ts >= scanner_attach_epoch
+        ),
         "fast_precheck_lag_sec": (
             round(max(0.0, float(now_ts) - anchor_time), 3) if anchor_time > 0 else 0.0
         ),

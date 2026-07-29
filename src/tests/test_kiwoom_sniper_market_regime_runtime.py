@@ -8594,8 +8594,16 @@ def test_scanner_explicit_bounded_recheck_continues_without_warm_parking(
     assert scheduler.snapshot_metrics(now_epoch=101.0)["scheduler_queue_depth"] == 1
 
 
+@pytest.mark.parametrize(
+    "fast_precheck_reason",
+    [
+        "missing_or_zero_curr",
+        "awaiting_first_post_attach_trade_input",
+    ],
+)
 def test_scanner_cold_warm_park_reactivates_on_first_post_attach_trade(
     monkeypatch,
+    fast_precheck_reason,
 ):
     scheduler = kiwoom_sniper_v2.ScannerRuntimeScheduler(max_active=16)
     coordinator = ScannerAsyncEvalCoordinator(
@@ -8632,7 +8640,7 @@ def test_scanner_cold_warm_park_reactivates_on_first_post_attach_trade(
         "scanner_attach_epoch": 100.0,
         "scanner_generation_id": registered.item.generation.generation_id,
         "_scanner_fast_precheck_fields": {
-            "fast_precheck_reason": "missing_or_zero_curr",
+            "fast_precheck_reason": fast_precheck_reason,
         },
     }
     emitted = []
@@ -9160,8 +9168,16 @@ def test_scanner_completed_park_reactivates_once_on_existing_rising_threshold_cr
     coordinator.shutdown()
 
 
+@pytest.mark.parametrize(
+    "park_reason",
+    [
+        "heavy_eval_completed_generation_warm_parked",
+        "async_commit_completed_generation_warm_parked",
+    ],
+)
 def test_scanner_ai_contention_park_reactivates_once_on_new_fresh_trade(
     monkeypatch,
+    park_reason,
 ):
     scheduler = kiwoom_sniper_v2.ScannerRuntimeScheduler(max_active=16)
     coordinator = ScannerAsyncEvalCoordinator(
@@ -9206,7 +9222,7 @@ def test_scanner_ai_contention_park_reactivates_once_on_new_fresh_trade(
         scheduler,
         target,
         now_epoch=101.0,
-        reason="heavy_eval_completed_generation_warm_parked",
+        reason=park_reason,
         expected_generation=registered.item.generation,
     )
 
@@ -9243,6 +9259,7 @@ def test_scanner_ai_contention_park_reactivates_once_on_new_fresh_trade(
     assert emitted[-1]["fields"]["scheduler_action"] == (
         "ai_contention_warm_park_reactivated"
     )
+    assert emitted[-1]["fields"]["scanner_ai_contention_park_reason"] == park_reason
 
     scheduler.next_decision(now_epoch=101.3)
     assert (

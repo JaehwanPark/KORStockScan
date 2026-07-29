@@ -104,6 +104,61 @@ def test_krx_snapshot_uses_exact_per_type_provenance():
     )
 
 
+def test_program_source_uses_event_driven_freshness_and_explicit_wait_reason():
+    now = datetime(2026, 7, 23, 10, 0, tzinfo=KST).timestamp()
+    waiting_ws = _ws(now)
+    waiting_ws["program_subscription_requested_at"] = now - 5
+    waiting = mod.build_ai_market_snapshot(
+        stock_code="005930",
+        decision_stage="entry_screen",
+        ws_data=waiting_ws,
+        effective_venue="KRX",
+        session_bucket="krx_regular",
+        candle_context=_candle(),
+        now_ts=now,
+    )
+
+    observed_ws = _ws(now)
+    observed_ws["received_types"] = {"0B", "0D", "0w"}
+    observed_ws["last_realtime_type_ts"]["0w"] = now - 30
+    observed_ws["last_realtime_type_market_suffix"]["0w"] = ""
+    observed_ws["last_realtime_type_market_route"]["0w"] = "krx_only"
+    observed_ws["prog_net_qty"] = 0
+    observed = mod.build_ai_market_snapshot(
+        stock_code="005930",
+        decision_stage="entry_screen",
+        ws_data=observed_ws,
+        effective_venue="KRX",
+        session_bucket="krx_regular",
+        candle_context=_candle(),
+        now_ts=now,
+    )
+    stale_ws = dict(observed_ws)
+    stale_ws["last_realtime_type_ts"] = dict(observed_ws["last_realtime_type_ts"])
+    stale_ws["last_realtime_type_ts"]["0w"] = now - 61
+    stale = mod.build_ai_market_snapshot(
+        stock_code="005930",
+        decision_stage="entry_screen",
+        ws_data=stale_ws,
+        effective_venue="KRX",
+        session_bucket="krx_regular",
+        candle_context=_candle(),
+        now_ts=now,
+    )
+
+    assert waiting["sources"]["program"]["value"] is None
+    assert waiting["sources"]["program"]["missing_reason"] == (
+        "program_0w_awaiting_first_observation"
+    )
+    assert observed["sources"]["program"]["quality"] == "fresh"
+    assert observed["sources"]["program"]["freshness_limit_ms"] == 60_000.0
+    assert observed["sources"]["program"]["value"]["net_qty"] == 0
+    assert stale["sources"]["program"]["value"] is None
+    assert stale["sources"]["program"]["missing_reason"] == "program_source_stale"
+    assert "program" in stale["ai_input_preflight_v1"]["missing_sources"]
+    assert stale["ai_input_preflight_v1"]["status"] == "partial"
+
+
 def test_historical_session_gap_does_not_block_fresh_decision_window():
     now = datetime(2026, 7, 23, 10, 0, tzinfo=KST).timestamp()
     candle = _candle()

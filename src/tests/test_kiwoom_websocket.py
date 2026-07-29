@@ -1244,6 +1244,43 @@ def test_send_reg_subscribes_foreign_broker_and_program_types():
     reg_types = [entry["type"][0] for entry in payload["data"]]
     assert "0F" in reg_types
     assert "0w" in reg_types
+    target = manager.get_latest_data("005930")
+    assert target["program_subscription_requested_at"] > 0
+    assert target["program_missing_reason"] == ("program_0w_awaiting_first_observation")
+
+
+def test_program_first_observation_closes_missing_provenance(monkeypatch):
+    manager = KiwoomWSManager("test-token")
+    manager.subscribed_codes.add("005930")
+    target = manager._ensure_target_defaults("005930")
+    target["program_subscription_requested_at"] = 1000.0
+    target["program_missing_reason"] = "program_0w_awaiting_first_observation"
+    monkeypatch.setattr(kiwoom_websocket.time, "time", lambda: 1001.25)
+    monkeypatch.setattr(manager, "_maybe_write_dashboard_snapshot", lambda: None)
+
+    asyncio.run(
+        manager._handle_message(
+            json.dumps(
+                {
+                    "trnm": "REAL",
+                    "data": [
+                        {
+                            "type": "0w",
+                            "item": "005930",
+                            "values": {"206": "120", "210": "0"},
+                        }
+                    ],
+                }
+            )
+        )
+    )
+
+    snapshot = manager.get_latest_data("005930")
+    assert snapshot["program_first_observed_at"] == 1001.25
+    assert snapshot["program_first_observed_latency_ms"] == 1250.0
+    assert "program_missing_reason" not in snapshot
+    assert snapshot["prog_buy_qty"] == 120
+    assert snapshot["prog_net_qty"] == 0
 
 
 def test_send_reg_uses_exchange_aware_items_for_nxt(monkeypatch):

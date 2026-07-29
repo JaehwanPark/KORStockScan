@@ -44,6 +44,11 @@ OBSERVATION_CONTRACT = {
 
 _MARKET_TYPES = ("0B", "0D")
 _FRESH_MS = 3000.0
+# 0w is an event-driven program-flow source and can legitimately update less
+# often than trade/quote realtime types.  Keep a distinct bounded TTL so a
+# valid observed zero or unchanged program flow is not mislabeled stale merely
+# because no new 0w event arrived within the 0B/0D three-second window.
+_PROGRAM_FRESH_MS = 60_000.0
 # A one-minute candle is observed from its bar-open timestamp.  Reusing the
 # sub-second WS TTL would incorrectly mark a healthy forming bar stale for most
 # of its lifetime.  Keep one full interval plus a bounded 30-second delivery
@@ -1133,6 +1138,38 @@ def build_ai_market_snapshot(
         if program_epoch is not None
         else route
     )
+    program_freshness_limit_ms = max(
+        _FRESH_MS,
+        min(
+            _safe_float(ws.get("program_freshness_limit_ms")) or _PROGRAM_FRESH_MS,
+            300_000.0,
+        ),
+    )
+    program_age_ms = (
+        max(0.0, (now_epoch - program_epoch) * 1000.0)
+        if program_epoch is not None
+        else None
+    )
+    program_stale = bool(
+        program_age_ms is not None and program_age_ms > program_freshness_limit_ms
+    )
+    program_missing_reason = str(
+        "program_source_stale"
+        if program_stale
+        else (
+            ws.get("program_missing_reason")
+            or (
+                "program_0w_awaiting_first_observation"
+                if _epoch(ws.get("program_subscription_requested_at")) is not None
+                else "program_source_missing"
+            )
+        )
+    )
+    if program_stale:
+        # Optional source data must still obey the null-aware contract.  Do not
+        # leave a stale numeric program value in the AI payload merely because
+        # it is not a provider-call blocker.
+        program_value = None
     investor_freshness_limit_ms = (
         _safe_float(ws.get("investor_freshness_limit_ms")) or 60_000.0
     )
@@ -1200,9 +1237,8 @@ def build_ai_market_snapshot(
             now_epoch=now_epoch,
             market_suffix=program_suffix,
             market_route=program_route,
-            missing_reason=str(
-                ws.get("program_missing_reason") or "program_source_missing"
-            ),
+            missing_reason=program_missing_reason,
+            freshness_limit_ms=program_freshness_limit_ms,
         ),
         "investor": _source_row(
             value=ws.get("investor_context") or None,

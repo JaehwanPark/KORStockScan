@@ -1545,6 +1545,11 @@ class KiwoomWSManager:
                 "last_ws_update_ts": 0.0,
                 "last_realtime_type_ts": {},
                 "last_prog_update_ts": 0.0,
+                "program_subscription_requested_at": 0.0,
+                "program_first_observed_at": 0.0,
+                "program_first_observed_latency_ms": None,
+                "program_missing_reason": "program_0w_not_registered_or_observed",
+                "program_freshness_limit_ms": 60_000.0,
                 "last_foreign_broker_update_ts": 0.0,
                 "program_history": deque(maxlen=120),
                 "strength_momentum_history": deque(maxlen=history_maxlen),
@@ -2883,6 +2888,35 @@ class KiwoomWSManager:
 
                             # '0w' 프로그램 매매 데이터 파싱
                             if real_type == "0w":
+                                program_observed_at = time.time()
+                                program_requested_at = self._safe_float(
+                                    target.get("program_subscription_requested_at"),
+                                    0.0,
+                                )
+                                if (
+                                    self._safe_float(
+                                        target.get("program_first_observed_at"),
+                                        0.0,
+                                    )
+                                    <= 0.0
+                                ):
+                                    target["program_first_observed_at"] = (
+                                        program_observed_at
+                                    )
+                                    target["program_first_observed_latency_ms"] = (
+                                        round(
+                                            max(
+                                                0.0,
+                                                program_observed_at
+                                                - program_requested_at,
+                                            )
+                                            * 1000.0,
+                                            3,
+                                        )
+                                        if program_requested_at > 0.0
+                                        else None
+                                    )
+                                target.pop("program_missing_reason", None)
                                 if "202" in values:
                                     target["prog_sell_qty"] = self._safe_signed_int(
                                         values["202"]
@@ -2925,7 +2959,7 @@ class KiwoomWSManager:
                                         "delta_amt": target["prog_delta_amt"],
                                     }
                                 )
-                                target["last_prog_update_ts"] = time.time()
+                                target["last_prog_update_ts"] = program_observed_at
 
                             # '0F' 주식당일거래원: 외국계 거래원 추정 수급
                             if real_type == "0F":
@@ -3322,12 +3356,19 @@ class KiwoomWSManager:
                         ],
                     }
                     await self.websocket.send(json.dumps(reg_packet))
+                    reg_sent_at = time.time()
                     with self.lock:
                         self.subscribed_codes.update(batch_codes)
                         for code in batch_codes:
                             self._registered_items_by_code[code] = tuple(
                                 register_items_by_code.get(code) or ()
                             )
+                            target = self._ensure_target_defaults(code)
+                            target["program_subscription_requested_at"] = reg_sent_at
+                            if "0w" not in (target.get("received_types") or set()):
+                                target["program_missing_reason"] = (
+                                    "program_0w_awaiting_first_observation"
+                                )
                     print(
                         "📡 [WS] 종목 등록 패킷 전송 완료(실수신 대기): "
                         f"grp_no=1 refresh=1 batch={batch_index}/{total_batches} "

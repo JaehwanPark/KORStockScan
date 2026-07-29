@@ -89,6 +89,50 @@ def test_scanner_fast_precheck_never_hydrates_promotion_runtime_context(monkeypa
     }
 
 
+def test_scanner_fast_precheck_requires_post_attach_trade_input():
+    stock = {
+        "id": 92,
+        "name": "POST_ATTACH_SOURCE",
+        "code": "005930",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "entry_armed_at_epoch": 100.0,
+        "scanner_attach_epoch": 101.0,
+        "source_signature": "PRICE_JUMP_START",
+    }
+
+    before = state_handlers._scanner_fast_precheck_fields(
+        stock,
+        now_ts=102.0,
+        code="005930",
+        ws_data={
+            "curr": 70_000,
+            "last_ws_update_ts": 101.9,
+            "last_realtime_type_ts": {"0B": 100.9, "0D": 101.9},
+            "strength_momentum_history": [{"ts": 100.8}],
+        },
+    )
+    after = state_handlers._scanner_fast_precheck_fields(
+        stock,
+        now_ts=102.2,
+        code="005930",
+        ws_data={
+            "curr": 70_100,
+            "last_ws_update_ts": 102.1,
+            "last_realtime_type_ts": {"0B": 102.1, "0D": 102.0},
+            "strength_momentum_history": [{"ts": 102.1}],
+        },
+    )
+
+    assert before["fast_precheck_result"] == "source_quality_blocked"
+    assert before["fast_precheck_reason"] == ("awaiting_first_post_attach_trade_input")
+    assert before["fast_precheck_post_attach_entry_realtime"] is False
+    assert before["heavy_queue_enter_epoch"] == "not_queued"
+    assert after["fast_precheck_post_attach_entry_realtime"] is True
+    assert after["fast_precheck_reason"] != "awaiting_first_post_attach_trade_input"
+
+
 def test_scheduler_generation_relief_uses_immutable_payload_without_hydration(
     monkeypatch,
 ):

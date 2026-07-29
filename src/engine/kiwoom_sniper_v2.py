@@ -8848,7 +8848,10 @@ def _scanner_scheduler_reactivate_cold_park_on_fresh_ws(
         or (target or {}).get("_scanner_fast_precheck_reason")
         or ""
     )
-    if fast_reason != "missing_or_zero_curr":
+    if fast_reason not in {
+        "missing_or_zero_curr",
+        "awaiting_first_post_attach_trade_input",
+    }:
         return False
     current_price = _safe_int((ws_data or {}).get("curr"), 0)
     if current_price <= 0:
@@ -9431,10 +9434,11 @@ def _scanner_scheduler_reactivate_ai_contention_park_on_fresh_ws(
         return False
     if not bool((target or {}).get("_scanner_scheduler_warm_parked")):
         return False
-    if (
-        str((target or {}).get("_scanner_scheduler_warm_reason") or "")
-        != "heavy_eval_completed_generation_warm_parked"
-    ):
+    warm_reason = str((target or {}).get("_scanner_scheduler_warm_reason") or "")
+    if warm_reason not in {
+        "heavy_eval_completed_generation_warm_parked",
+        "async_commit_completed_generation_warm_parked",
+    }:
         return False
     if str((target or {}).get("last_watching_ai_result_source") or "") != (
         "lock_contention"
@@ -9512,6 +9516,7 @@ def _scanner_scheduler_reactivate_ai_contention_park_on_fresh_ws(
             "broker_order_forbidden": True,
             "scheduler_action": "ai_contention_warm_park_reactivated",
             "scheduler_reason": "fresh_0B_after_entry_ai_lock_contention",
+            "scanner_ai_contention_park_reason": warm_reason,
             "scanner_generation_id": generation_id,
             "scanner_ai_contention_freshness_source": freshness_source,
             "scanner_ai_contention_last_0b_epoch": f"{last_0b_epoch:.6f}",
