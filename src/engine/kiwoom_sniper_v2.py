@@ -12331,18 +12331,38 @@ def run_sniper(is_test_mode=False):
                                     ),
                                 )
                                 if _is_scanner_watching_target(stock):
-                                    _scanner_scheduler_continue_bounded_recheck_or_park(
-                                        scheduler,
-                                        stock,
-                                        now_epoch=time.time(),
-                                        park_reason=(
-                                            "async_commit_completed_generation_"
-                                            "warm_parked"
-                                        ),
-                                        expected_generation=(
-                                            scheduler_claim.item.generation
-                                        ),
+                                    followup_async_wait_state = (
+                                        _scanner_async_transport_wait_state(
+                                            stock,
+                                            scheduler_claim.item.generation,
+                                            async_coordinator,
+                                        )
                                     )
+                                    if followup_async_wait_state in {
+                                        "pending",
+                                        "ready_for_commit",
+                                    }:
+                                        # A freshness/context COMMIT can
+                                        # dispatch entry AI for the same
+                                        # generation. Keep that generation
+                                        # current until the follow-up result
+                                        # reaches its own COMMIT; parking here
+                                        # would cancel it as
+                                        # superseded_before_ai.
+                                        scanner_async_commit_yield_requested = True
+                                    else:
+                                        _scanner_scheduler_continue_bounded_recheck_or_park(
+                                            scheduler,
+                                            stock,
+                                            now_epoch=time.time(),
+                                            park_reason=(
+                                                "async_commit_completed_generation_"
+                                                "warm_parked"
+                                            ),
+                                            expected_generation=(
+                                                scheduler_claim.item.generation
+                                            ),
+                                        )
                                 continue
                             if scheduled_lane is ScannerLane.RECOVERY:
                                 scheduler_recovery_item = scheduler_claim.item

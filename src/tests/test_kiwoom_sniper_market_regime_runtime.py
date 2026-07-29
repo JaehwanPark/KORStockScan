@@ -5764,6 +5764,40 @@ def test_async_commit_routes_rising_missed_before_generic_watching_handler():
     assert commit_idx < opening_adapter_idx < rising_adapter_idx < generic_handler_idx
 
 
+def test_async_commit_preserves_same_generation_followup_before_warm_parking():
+    source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
+    commit_idx = source.index("if scheduled_lane is ScannerLane.COMMIT:")
+    followup_wait_idx = source.index(
+        "followup_async_wait_state = (",
+        commit_idx,
+    )
+    claimed_generation_idx = source.index(
+        "scheduler_claim.item.generation",
+        followup_wait_idx,
+    )
+    pending_gate_idx = source.index(
+        "followup_async_wait_state in {",
+        followup_wait_idx,
+    )
+    yield_idx = source.index(
+        "scanner_async_commit_yield_requested = True",
+        pending_gate_idx,
+    )
+    park_idx = source.index(
+        "_scanner_scheduler_continue_bounded_recheck_or_park(",
+        yield_idx,
+    )
+
+    assert (
+        commit_idx
+        < followup_wait_idx
+        < claimed_generation_idx
+        < pending_gate_idx
+        < yield_idx
+        < park_idx
+    )
+
+
 def test_scheduler_ready_heavy_eval_flushes_before_next_promotion_attach():
     source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
     enqueue_idx = source.index(
