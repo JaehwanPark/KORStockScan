@@ -8491,6 +8491,32 @@ def _restore_scanner_async_commit_transport(target, async_result):
     }
 
 
+def _arm_scanner_async_rejected_result_recheck(target, async_result, *, now_epoch):
+    """Arm a no-submit fresh-snapshot retry before scheduler discard."""
+
+    status = str(getattr(async_result, "status", "") or "").strip()
+    cache_key = str(getattr(async_result, "cache_key", "") or "").strip()
+    if (
+        not isinstance(target, dict)
+        or status != "expired_after_response"
+        or not cache_key.startswith("watching:")
+    ):
+        return {}
+    ai_payload = getattr(async_result, "ai_payload", None)
+    ai_payload = ai_payload if isinstance(ai_payload, dict) else {}
+    snapshot_id = str(
+        ai_payload.get("ai_decision_snapshot_id")
+        or ai_payload.get("ai_input_snapshot_id")
+        or ai_payload.get("ai_market_snapshot_id")
+        or "-"
+    )
+    return sniper_state_handlers._arm_scanner_async_expired_response_recheck(
+        target,
+        now_ts=float(now_epoch),
+        expired_snapshot_id=snapshot_id,
+    )
+
+
 def _scanner_async_transport_wait_state(target, generation, coordinator):
     """Return pending/ready only for the target's current async generation.
 
@@ -10806,12 +10832,20 @@ def run_sniper(is_test_mode=False):
                         or async_result.observation_only
                         or not async_transport.get("allowed")
                     ):
+                        async_recheck_fields = {}
                         async_coordinator.discard_completed(
                             generation_id=async_result.generation_id,
                             cache_key=async_result.cache_key,
                         )
                         if async_target is not None:
                             with ENTRY_LOCK:
+                                async_recheck_fields = (
+                                    _arm_scanner_async_rejected_result_recheck(
+                                        async_target,
+                                        async_result,
+                                        now_epoch=time.time(),
+                                    )
+                                )
                                 if (
                                     str(
                                         async_target.get("_scanner_async_cache_key")
@@ -10899,6 +10933,7 @@ def run_sniper(is_test_mode=False):
                                     async_transport.get("namespace")
                                     or "not_available_target_or_generation_missing"
                                 ),
+                                **async_recheck_fields,
                             },
                         )
                         continue

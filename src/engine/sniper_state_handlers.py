@@ -29046,9 +29046,7 @@ def _arm_scanner_async_expired_response_recheck(
             "_scanner_rising_recheck_reason": (
                 "expired_ai_fresh_snapshot_recheck_pending"
             ),
-            "_scanner_full_eval_budget_source": (
-                "expired_ai_fresh_snapshot_recheck"
-            ),
+            "_scanner_full_eval_budget_source": ("expired_ai_fresh_snapshot_recheck"),
         },
     )
     return {
@@ -47627,12 +47625,26 @@ def _resolve_scanner_async_rising_missed_context(
             ),
             now_epoch=now_epoch,
         )
+        freshness_recheck_fields = {}
+        if not decision.allowed and decision.reason == "quote_stale_or_missing":
+            freshness_recheck_fields = _rising_missed_freshness_envelope_recheck_prefixed_fields(
+                _apply_rising_missed_freshness_envelope_recheck(
+                    stock,
+                    code,
+                    {
+                        "rising_missed_scout_quality_guard_stale_ai_provenance_gap_blocked": True,
+                        "block_reason": decision.reason,
+                    },
+                    now_ts=now_epoch,
+                )
+            )
         _log_entry_pipeline(
             stock,
             code,
             "rising_missed_async_freshness_commit",
             **{
                 **dict(decision.fields),
+                **freshness_recheck_fields,
                 "scanner_async_cache_key": cache_key,
                 "preparation_wait_sec": round(result.preparation_wait_sec, 6),
                 "preparation_service_sec": round(result.preparation_service_sec, 6),
@@ -60031,9 +60043,7 @@ def resolve_rising_missed_decision_input(
             raw_ws,
             now_ts=now_ts,
         )
-        cached_state = str(
-            enriched_ws.get("market_data_freshness_state") or ""
-        ).lower()
+        cached_state = str(enriched_ws.get("market_data_freshness_state") or "").lower()
         cached_age_ms = _safe_float(
             enriched_ws.get("market_data_effective_quote_age_ms"),
             None,
@@ -60045,9 +60055,7 @@ def resolve_rising_missed_decision_input(
         live_ws_reselected = bool(
             cached_state != "conflicted"
             and _rising_missed_market_data_envelope_is_fresh(live_ws)
-            and str(
-                live_ws.get("market_data_effective_price_source") or ""
-            ).lower()
+            and str(live_ws.get("market_data_effective_price_source") or "").lower()
             == "ws"
             and live_age_ms is not None
             and (cached_age_ms is None or live_age_ms < cached_age_ms)
@@ -60055,13 +60063,17 @@ def resolve_rising_missed_decision_input(
         if live_ws_reselected:
             enriched_ws.update(live_ws)
             envelope_fields.update(live_fields)
-            if str(enriched_ws.get("quote_refresh_source") or "").lower().startswith(
-                "ka10004"
+            if (
+                str(enriched_ws.get("quote_refresh_source") or "")
+                .lower()
+                .startswith("ka10004")
             ):
                 enriched_ws.pop("quote_refresh_source", None)
-            if str(
-                enriched_ws.get("ws_snapshot_recovery_source") or ""
-            ).lower().startswith("ka10004"):
+            if (
+                str(enriched_ws.get("ws_snapshot_recovery_source") or "")
+                .lower()
+                .startswith("ka10004")
+            ):
                 enriched_ws.pop("ws_snapshot_recovery_source", None)
             enriched_ws["quote_age_ms"] = live_age_ms
             enriched_ws["quote_stale"] = False
@@ -60082,9 +60094,7 @@ def resolve_rising_missed_decision_input(
                     )
                 ),
                 "rising_missed_tp1_resolver_cache_prior_effective_age_ms": (
-                    round(cached_age_ms, 3)
-                    if cached_age_ms is not None
-                    else "-"
+                    round(cached_age_ms, 3) if cached_age_ms is not None else "-"
                 ),
                 "rising_missed_tp1_resolver_cache_live_ws_age_ms": (
                     round(live_age_ms, 3) if live_age_ms is not None else "-"

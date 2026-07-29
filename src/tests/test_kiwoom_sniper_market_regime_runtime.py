@@ -217,6 +217,36 @@ def test_scanner_async_commit_transport_rejects_unowned_result(
     assert "_scanner_async_cache_key" not in target
 
 
+def test_expired_scanner_ai_result_arms_recheck_before_scheduler_discard():
+    target = {"scanner_generation_id": "005930:promotion:r1"}
+    result = SimpleNamespace(
+        status="expired_after_response",
+        cache_key="watching:expired",
+        ai_payload={
+            "ai_decision_snapshot_id": "aims-expired-scheduler",
+        },
+    )
+
+    fields = kiwoom_sniper_v2._arm_scanner_async_rejected_result_recheck(
+        target,
+        result,
+        now_epoch=1000.0,
+    )
+
+    assert fields["scanner_async_expired_response_recheck_armed"] is True
+    assert target["_scanner_async_expired_response_recheck_until_epoch"] == 1015.0
+    assert (
+        target["_scanner_async_expired_parent_snapshot_id"] == "aims-expired-scheduler"
+    )
+    assert fields["scanner_async_expired_response_recheck_runtime_effect"] is False
+    assert (
+        fields["scanner_async_expired_response_recheck_actual_order_submitted"] is False
+    )
+    assert (
+        fields["scanner_async_expired_response_recheck_broker_order_forbidden"] is True
+    )
+
+
 def test_scanner_market_data_enrichment_candidate_accepts_rising_source_marker(
     monkeypatch,
 ):
