@@ -8179,9 +8179,7 @@ def test_rising_missed_nxt_context_propagates_only_while_submit_context_is_fresh
 
     assert fresh["rising_missed_tp1_evaluation_id"] == "nxt-context-eval"
     assert fresh["rising_missed_tp1_ai_snapshot_id"] == "aims-nxt-context"
-    assert (
-        fresh["rising_missed_tp1_ai_decision_trace_id"] == "aidt-nxt-context"
-    )
+    assert fresh["rising_missed_tp1_ai_decision_trace_id"] == "aidt-nxt-context"
     assert fresh["rising_missed_market_session_bucket"] == "nxt_entry_window"
     assert fresh["rising_missed_nxt_micro_state"] == "fresh_trade_quiet"
     assert fresh["rising_missed_nxt_micro_state_role"] == (
@@ -44992,6 +44990,181 @@ def test_scalp_trailing_loss_conversion_recheck_is_one_shot_and_rest_bounded(
         "ttl_expired",
     ]
     assert "scalp_trailing_loss_conversion_recheck_started_at" not in stock
+
+
+def test_scalp_trailing_loss_conversion_recheck_keeps_armed_ttl_on_worsen(
+    monkeypatch,
+):
+    now_ts = 1_783_471_000.0
+    active_date = (
+        datetime.fromtimestamp(now_ts, tz=state_handlers._KST).date().isoformat()
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_TRAILING_LOSS_CONVERSION_RECHECK_ENABLED", "true"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_TRAILING_LOSS_CONVERSION_RECHECK_ACTIVE_DATE",
+        active_date,
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_TRAILING_LOSS_CONVERSION_RECHECK_TTL_SEC", "15"
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_fetch_rest_orderbook_snapshot_bounded",
+        lambda code, timeout_ms: (
+            {"best_bid": 2_990, "best_ask": 3_000},
+            "ok",
+            12.0,
+        ),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_build_quote_consistency_fields",
+        lambda *args, **kwargs: (
+            {
+                "quote_consistency_state": "single_source",
+                "quote_consistency_rest_age_ms": 12.0,
+                "price_source": "rest_mid",
+            },
+            2_995,
+            3_000,
+            2_990,
+        ),
+    )
+    logs = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+    stock = {"strategy": "SCALPING"}
+
+    assert state_handlers._evaluate_scalp_trailing_loss_conversion_recheck(
+        stock=stock,
+        code="475040",
+        ws_data={"curr": 2_995},
+        profit_rate=-0.06,
+        peak_profit=0.94,
+        trailing_peak_worsen=1.00,
+        now_ts=now_ts,
+    )
+    assert state_handlers._evaluate_scalp_trailing_loss_conversion_recheck(
+        stock=stock,
+        code="475040",
+        ws_data={"curr": 2_995},
+        profit_rate=-0.23,
+        peak_profit=0.94,
+        trailing_peak_worsen=1.17,
+        now_ts=now_ts + 5.0,
+    )
+    assert (
+        state_handlers._evaluate_scalp_trailing_loss_conversion_recheck(
+            stock=stock,
+            code="475040",
+            ws_data={"curr": 2_995},
+            profit_rate=-0.23,
+            peak_profit=0.94,
+            trailing_peak_worsen=1.17,
+            now_ts=now_ts + 16.0,
+        )
+        is False
+    )
+    assert [fields["recheck_state"] for _, fields in logs] == [
+        "armed",
+        "deferred",
+        "ttl_expired",
+    ]
+
+
+def test_scalp_trailing_loss_conversion_recheck_keeps_armed_ttl_on_rest_gap(
+    monkeypatch,
+):
+    now_ts = 1_783_471_000.0
+    active_date = (
+        datetime.fromtimestamp(now_ts, tz=state_handlers._KST).date().isoformat()
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_TRAILING_LOSS_CONVERSION_RECHECK_ENABLED", "true"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_TRAILING_LOSS_CONVERSION_RECHECK_ACTIVE_DATE",
+        active_date,
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_TRAILING_LOSS_CONVERSION_RECHECK_TTL_SEC", "15"
+    )
+    rest_results = iter(
+        [
+            ({"best_bid": 2_990, "best_ask": 3_000}, "ok", 12.0),
+            ({}, "timeout", 300.0),
+        ]
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_fetch_rest_orderbook_snapshot_bounded",
+        lambda code, timeout_ms: next(rest_results),
+    )
+
+    def quote_fields(*args, rest_snapshot=None, **kwargs):
+        if rest_snapshot:
+            return (
+                {
+                    "quote_consistency_state": "single_source",
+                    "quote_consistency_rest_age_ms": 12.0,
+                    "price_source": "rest_mid",
+                },
+                2_995,
+                3_000,
+                2_990,
+            )
+        return (
+            {
+                "quote_consistency_state": "single_source",
+                "quote_consistency_rest_age_ms": None,
+                "price_source": "ws",
+            },
+            2_995,
+            3_000,
+            2_990,
+        )
+
+    monkeypatch.setattr(
+        state_handlers,
+        "_build_quote_consistency_fields",
+        quote_fields,
+    )
+    logs = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+    stock = {"strategy": "SCALPING"}
+
+    assert state_handlers._evaluate_scalp_trailing_loss_conversion_recheck(
+        stock=stock,
+        code="475040",
+        ws_data={"curr": 2_995},
+        profit_rate=-0.06,
+        peak_profit=0.94,
+        trailing_peak_worsen=1.00,
+        now_ts=now_ts,
+    )
+    assert state_handlers._evaluate_scalp_trailing_loss_conversion_recheck(
+        stock=stock,
+        code="475040",
+        ws_data={"curr": 2_995},
+        profit_rate=-0.23,
+        peak_profit=0.94,
+        trailing_peak_worsen=1.17,
+        now_ts=now_ts + 5.0,
+    )
+    assert stock["scalp_trailing_loss_conversion_recheck_started_at"] == now_ts
+    assert [fields["recheck_state"] for _, fields in logs] == [
+        "armed",
+        "deferred_rest_quote_unavailable",
+    ]
 
 
 def test_scalp_trailing_loss_conversion_recheck_fails_open_without_fresh_rest(

@@ -24084,11 +24084,15 @@ def evaluate_and_dispatch_fast_scalp_exit(
         )
         wide_config = _scalp_trailing_loss_conversion_recheck_config(observed_at)
         max_spread_bps = float(wide_config["max_spread_bps"])
-        wide_loss_conversion = bool(
-            profit_rate < 0.0 <= mark_profit_rate
-            and max(spread_bps, mark_to_bid_gap_bps) > max_spread_bps
+        confirmation_spread_bps = min(
+            max_spread_bps,
+            float(QuoteConsistencyConfig.from_env().warn_gap_bps),
         )
-        if wide_loss_conversion:
+        wide_trailing_quote = bool(
+            (math.isfinite(spread_bps) and spread_bps > confirmation_spread_bps)
+            or mark_to_bid_gap_bps > confirmation_spread_bps
+        )
+        if wide_trailing_quote:
             wide_rest, wide_rest_state, wide_rest_elapsed_ms = (
                 _fetch_rest_orderbook_snapshot_bounded(
                     code,
@@ -24172,6 +24176,7 @@ def evaluate_and_dispatch_fast_scalp_exit(
                     f"{spread_bps:.3f}" if math.isfinite(spread_bps) else "-"
                 ),
                 ws_mark_to_bid_gap_bps=f"{mark_to_bid_gap_bps:.3f}",
+                confirmation_spread_bps=f"{confirmation_spread_bps:.3f}",
                 max_spread_bps=f"{max_spread_bps:.3f}",
                 rest_fetch_state=wide_rest_state,
                 rest_fetch_elapsed_ms=f"{wide_rest_elapsed_ms:.3f}",
@@ -43247,12 +43252,24 @@ def _evaluate_scalp_trailing_loss_conversion_recheck(
         feature_context_usable
         and _truthy_field(features.get("large_sell_print_detected"))
     )
-    band_eligible = bool(
+    initial_band_eligible = bool(
         config["min_peak_pct"] <= float(peak_profit) <= config["max_peak_pct"]
         and config["min_profit_pct"] <= float(profit_rate) < config["max_profit_pct"]
         and float(trailing_peak_worsen) <= config["max_worsen_pct"]
         and not explicit_large_sell
     )
+    # Once a bounded shallow-loss recheck is armed, keep its promised TTL while
+    # the executable loss remains inside the configured band.  A transient
+    # peak-to-bid widening must not silently cancel the same recheck that was
+    # introduced to absorb one-quote loss conversion noise.  Hard/protect/
+    # emergency stops are resolved before this trailing-only helper.
+    active_ttl_band_eligible = bool(
+        started_at > 0
+        and config["min_peak_pct"] <= float(peak_profit) <= config["max_peak_pct"]
+        and config["min_profit_pct"] <= float(profit_rate) < config["max_profit_pct"]
+        and not explicit_large_sell
+    )
+    band_eligible = bool(initial_band_eligible or active_ttl_band_eligible)
     if not band_eligible:
         if started_at > 0:
             _clear_scalp_trailing_loss_conversion_recheck(stock)
@@ -43362,7 +43379,14 @@ def _evaluate_scalp_trailing_loss_conversion_recheck(
     }
     if not rest_quote_fresh:
         if started_at > 0:
-            _clear_scalp_trailing_loss_conversion_recheck(stock)
+            _log_holding_pipeline(
+                stock,
+                code,
+                "scalp_trailing_loss_conversion_recheck",
+                recheck_state="deferred_rest_quote_unavailable",
+                **state_fields,
+            )
+            return True
         _log_holding_pipeline(
             stock,
             code,
