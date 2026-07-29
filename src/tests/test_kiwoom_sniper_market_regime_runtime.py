@@ -8634,6 +8634,118 @@ def test_scanner_cold_warm_park_reactivates_on_first_post_attach_trade(
     coordinator.shutdown()
 
 
+def test_scanner_opening_rotation_tick_source_gap_rechecks_once_on_new_0b(
+    monkeypatch,
+):
+    scheduler = kiwoom_sniper_v2.ScannerRuntimeScheduler(max_active=16)
+    coordinator = ScannerAsyncEvalCoordinator(
+        ai_dispatcher=HotPathAIDispatcher(loaded_key_count=1)
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2.run_sniper,
+        "scanner_async_eval_coordinator",
+        coordinator,
+        raising=False,
+    )
+    registered = scheduler.register_generation(
+        code="000001",
+        promotion_id="PROMO-OPENING",
+        record_id=1,
+        venue="KRX",
+        promotion_epoch=99.0,
+        attach_epoch=100.0,
+        observed_price=10_000,
+        source_signature="PRICE_JUMP_START",
+    )
+    first = scheduler.next_decision(now_epoch=100.1)
+    scheduler.complete(first.item, completed_epoch=100.2, outcome="WATCHING")
+    target = {
+        "id": 1,
+        "code": "000001",
+        "name": "TEST",
+        "strategy": "SCALPING",
+        "status": "WATCHING",
+        "position_tag": "SCANNER",
+        "effective_venue": "KRX",
+        "scanner_attach_epoch": 100.0,
+        "scanner_generation_id": registered.item.generation.generation_id,
+        "opening_rotation_1pct_last_reason": "trusted_tick_context_unavailable",
+    }
+    emitted = []
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "_emit_scanner_scheduler_event",
+        lambda **kwargs: emitted.append(kwargs),
+    )
+    assert kiwoom_sniper_v2._scanner_scheduler_park_target_generation(
+        scheduler,
+        target,
+        now_epoch=100.3,
+        reason="async_commit_completed_generation_warm_parked",
+        expected_generation=registered.item.generation,
+    )
+
+    assert (
+        kiwoom_sniper_v2._scanner_scheduler_reactivate_opening_rotation_source_gap_on_fresh_ws(
+            scheduler,
+            target,
+            {
+                "curr": 10_080,
+                "last_realtime_type_ts": {"0B": 100.4},
+            },
+            now_epoch=105.0,
+        )
+        is False
+    )
+    assert (
+        kiwoom_sniper_v2._scanner_scheduler_reactivate_opening_rotation_source_gap_on_fresh_ws(
+            scheduler,
+            target,
+            {
+                "curr": 10_120,
+                "last_realtime_type_ts": {"0B": 105.1},
+            },
+            now_epoch=105.2,
+        )
+        is True
+    )
+    assert "_scanner_scheduler_warm_parked" not in target
+    assert target["_scanner_opening_rotation_source_gap_reactivation_count"] == 1
+    next_item = scheduler.next_decision(now_epoch=105.2)
+    assert next_item.item.owner == "opening_rotation_source_gap_fresh_0b_recheck"
+    assert emitted[-1]["stage"] == ("scalping_scanner_scheduler_warm_park_reactivated")
+    assert emitted[-1]["fields"]["actual_order_submitted"] is False
+    assert emitted[-1]["fields"]["broker_order_forbidden"] is True
+
+    target.update(
+        {
+            "_scanner_scheduler_warm_parked": True,
+            "_scanner_scheduler_warm_reason": (
+                "async_commit_completed_generation_warm_parked"
+            ),
+            "_scanner_scheduler_warm_since_epoch": 105.3,
+        }
+    )
+    assert (
+        kiwoom_sniper_v2._scanner_scheduler_reactivate_opening_rotation_source_gap_on_fresh_ws(
+            scheduler,
+            target,
+            {
+                "curr": 10_130,
+                "last_realtime_type_ts": {"0B": 106.0},
+            },
+            now_epoch=106.1,
+        )
+        is False
+    )
+    kiwoom_sniper_v2._reset_scanner_runtime_eval_state(target)
+    assert "_scanner_opening_rotation_source_gap_reactivation_key" not in target
+    assert "_scanner_opening_rotation_source_gap_reactivation_count" not in target
+    assert "scanner_opening_rotation_source_gap_fresh_price" not in target
+    assert "scanner_opening_rotation_source_gap_fresh_0b_epoch" not in target
+    coordinator.shutdown()
+
+
 def test_scanner_warm_park_does_not_reactivate_non_cold_terminal_generation(
     monkeypatch,
 ):

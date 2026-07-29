@@ -4744,6 +4744,10 @@ def _reset_scanner_runtime_eval_state(target):
         "_scanner_deadline_park_reactivation_key",
         "_scanner_rising_cross_park_reactivation_key",
         "_scanner_ai_contention_park_reactivation_key",
+        "_scanner_opening_rotation_source_gap_reactivation_key",
+        "_scanner_opening_rotation_source_gap_reactivation_count",
+        "scanner_opening_rotation_source_gap_fresh_price",
+        "scanner_opening_rotation_source_gap_fresh_0b_epoch",
         "_scanner_fast_precheck_logged_at",
         "_scanner_runtime_queue_lag_logged_at",
         "_scanner_heavy_eval_lag_logged_at",
@@ -8803,6 +8807,151 @@ def _scanner_scheduler_reactivate_cold_park_on_fresh_ws(
     return True
 
 
+def _scanner_scheduler_reactivate_opening_rotation_source_gap_on_fresh_ws(
+    scheduler,
+    target,
+    ws_data,
+    *,
+    now_epoch,
+):
+    """Re-evaluate one opening-rotation source gap on the next post-park trade.
+
+    A completed opening-rotation context can still be non-decisive when the
+    trusted tick packet was unavailable.  Parking that generation permanently
+    discards a later fresh 0B even though the WATCHING subscription remains
+    alive.  Permit one same-generation FAST_PRECHECK only after a genuinely
+    newer post-park trade.  The recheck has no order authority and cannot loop
+    on every tick.
+    """
+
+    if not isinstance(scheduler, ScannerRuntimeScheduler):
+        return False
+    if not _is_scanner_watching_target(target):
+        return False
+    if not bool((target or {}).get("_scanner_scheduler_warm_parked")):
+        return False
+    if (
+        str((target or {}).get("_scanner_scheduler_warm_reason") or "")
+        != "async_commit_completed_generation_warm_parked"
+    ):
+        return False
+    if (
+        str((target or {}).get("opening_rotation_1pct_last_reason") or "")
+        != "trusted_tick_context_unavailable"
+    ):
+        return False
+    if (
+        _safe_int(
+            (target or {}).get(
+                "_scanner_opening_rotation_source_gap_reactivation_count"
+            ),
+            0,
+        )
+        >= 1
+    ):
+        return False
+
+    generation_id = str((target or {}).get("scanner_generation_id") or "").strip()
+    warm_since_epoch = _safe_float(
+        (target or {}).get("_scanner_scheduler_warm_since_epoch"),
+        0.0,
+    )
+    ws_snapshot = ws_data if isinstance(ws_data, dict) else {}
+    fresh, freshness_source = _scanner_ws_snapshot_entry_realtime_fresh(
+        ws_snapshot,
+        now_ts=float(now_epoch),
+        fresh_sec=_scanner_heavy_eval_recheck_fresh_sec(),
+    )
+    last_0b_epoch = _scanner_latency_ws_type_epoch(ws_snapshot, "0B")
+    current_price = _safe_int(ws_snapshot.get("curr"), 0)
+    if (
+        not generation_id
+        or not fresh
+        or warm_since_epoch <= 0.0
+        or last_0b_epoch <= warm_since_epoch
+        or current_price <= 0
+    ):
+        return False
+
+    reactivation_key = f"{generation_id}:{last_0b_epoch:.6f}"
+    if (
+        str(
+            (target or {}).get("_scanner_opening_rotation_source_gap_reactivation_key")
+            or ""
+        )
+        == reactivation_key
+    ):
+        return False
+
+    async_coordinator = getattr(run_sniper, "scanner_async_eval_coordinator", None)
+    async_generation_reactivated = False
+    if isinstance(async_coordinator, ScannerAsyncEvalCoordinator):
+        async_generation_reactivated = async_coordinator.reactivate_generation(
+            generation_id
+        )
+        if not async_generation_reactivated:
+            return False
+    decision = _scanner_scheduler_enqueue_fresh_precheck(
+        scheduler,
+        target,
+        now_epoch=float(now_epoch),
+        owner="opening_rotation_source_gap_fresh_0b_recheck",
+        evidence_snapshot=ws_data,
+    )
+    if decision is None or decision.item is None:
+        if async_generation_reactivated:
+            async_coordinator.invalidate_generation(generation_id)
+        return False
+
+    with ENTRY_LOCK:
+        target["_scanner_opening_rotation_source_gap_reactivation_key"] = (
+            reactivation_key
+        )
+        target["_scanner_opening_rotation_source_gap_reactivation_count"] = 1
+        target["scanner_opening_rotation_source_gap_fresh_price"] = current_price
+        target["scanner_opening_rotation_source_gap_fresh_0b_epoch"] = last_0b_epoch
+    _emit_scanner_scheduler_event(
+        payload=target,
+        target=target,
+        stage="scalping_scanner_scheduler_warm_park_reactivated",
+        fields={
+            "metric_role": "source_readiness",
+            "decision_authority": ("scanner_scheduler_recheck_only_no_order_authority"),
+            "window_policy": "one_post_park_0b_per_opening_rotation_generation",
+            "sample_floor": "one_opening_rotation_tick_source_gap",
+            "primary_decision_metric": (
+                "opening_rotation_source_gap_to_fresh_recheck_sec"
+            ),
+            "source_quality_gate": (
+                "trusted_tick_context_unavailable_then_new_post_park_0B"
+            ),
+            "forbidden_uses": (
+                "standalone_buy,broker_submit,threshold_mutation,"
+                "provider_route_change,order_price_change,quantity_or_cap_change,"
+                "broker_guard_bypass,stale_quote_bypass,hard_safety_bypass"
+            ),
+            "runtime_effect": True,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "scheduler_action": ("opening_rotation_source_gap_warm_park_reactivated"),
+            "scheduler_reason": (
+                "first_fresh_0B_after_trusted_tick_context_unavailable"
+            ),
+            "scanner_opening_rotation_source_gap_fresh_price": current_price,
+            "scanner_opening_rotation_source_gap_fresh_0b_epoch": (
+                f"{last_0b_epoch:.6f}"
+            ),
+            "scanner_opening_rotation_source_gap_freshness_source": (freshness_source),
+            "opening_rotation_source_gap_to_fresh_recheck_sec": round(
+                max(0.0, last_0b_epoch - warm_since_epoch),
+                6,
+            ),
+            "opening_rotation_source_gap_reactivation_count": 1,
+        },
+    )
+    return True
+
+
 def _scanner_scheduler_reactivate_deadline_park_on_fresh_ws(
     scheduler,
     target,
@@ -12199,6 +12348,12 @@ def run_sniper(is_test_mode=False):
                     None,
                 )
                 _scanner_scheduler_reactivate_cold_park_on_fresh_ws(
+                    scheduler,
+                    stock,
+                    ws_data,
+                    now_epoch=time.time(),
+                )
+                _scanner_scheduler_reactivate_opening_rotation_source_gap_on_fresh_ws(
                     scheduler,
                     stock,
                     ws_data,
