@@ -4743,6 +4743,7 @@ def _reset_scanner_runtime_eval_state(target):
         "_scanner_cold_park_reactivation_key",
         "_scanner_deadline_park_reactivation_key",
         "_scanner_rising_cross_park_reactivation_key",
+        "_scanner_ai_contention_park_reactivation_key",
         "_scanner_fast_precheck_logged_at",
         "_scanner_runtime_queue_lag_logged_at",
         "_scanner_heavy_eval_lag_logged_at",
@@ -8992,6 +8993,114 @@ def _scanner_scheduler_reactivate_rising_cross_park_on_fresh_ws(
     return True
 
 
+def _scanner_scheduler_reactivate_ai_contention_park_on_fresh_ws(
+    scheduler,
+    target,
+    ws_data,
+    *,
+    now_epoch,
+):
+    """Retry one completed generation whose entry-AI call lost lock contention."""
+
+    if not isinstance(scheduler, ScannerRuntimeScheduler):
+        return False
+    if not _is_scanner_watching_target(target):
+        return False
+    if not bool((target or {}).get("_scanner_scheduler_warm_parked")):
+        return False
+    if (
+        str((target or {}).get("_scanner_scheduler_warm_reason") or "")
+        != "heavy_eval_completed_generation_warm_parked"
+    ):
+        return False
+    if str((target or {}).get("last_watching_ai_result_source") or "") != (
+        "lock_contention"
+    ):
+        return False
+
+    generation = scheduler.current_generation((target or {}).get("code"))
+    generation_id = str(getattr(generation, "generation_id", "") or "").strip()
+    if not generation_id or (
+        str((target or {}).get("_scanner_ai_contention_park_reactivation_key") or "")
+        == generation_id
+    ):
+        return False
+
+    ws_snapshot = ws_data if isinstance(ws_data, dict) else {}
+    fresh, freshness_source = _scanner_ws_snapshot_entry_realtime_fresh(
+        ws_snapshot,
+        now_ts=float(now_epoch),
+        fresh_sec=_scanner_heavy_eval_recheck_fresh_sec(),
+    )
+    if not fresh:
+        return False
+    type_ts = ws_snapshot.get("last_realtime_type_ts")
+    last_0b_epoch = (
+        _safe_float(type_ts.get("0B"), 0.0) if isinstance(type_ts, dict) else 0.0
+    )
+    warm_since_epoch = _safe_float(
+        (target or {}).get("_scanner_scheduler_warm_since_epoch"),
+        0.0,
+    )
+    if last_0b_epoch <= warm_since_epoch:
+        return False
+
+    async_coordinator = getattr(run_sniper, "scanner_async_eval_coordinator", None)
+    async_generation_reactivated = False
+    if isinstance(async_coordinator, ScannerAsyncEvalCoordinator):
+        async_generation_reactivated = async_coordinator.reactivate_generation(
+            generation_id
+        )
+        if not async_generation_reactivated:
+            return False
+    decision = _scanner_scheduler_enqueue_fresh_precheck(
+        scheduler,
+        target,
+        now_epoch=float(now_epoch),
+        owner="fresh_ws_after_entry_ai_lock_contention",
+        evidence_snapshot=ws_snapshot,
+    )
+    if decision is None or decision.item is None:
+        if async_generation_reactivated:
+            async_coordinator.invalidate_generation(generation_id)
+        return False
+    with ENTRY_LOCK:
+        target["_scanner_ai_contention_park_reactivation_key"] = generation_id
+    _emit_scanner_scheduler_event(
+        payload=target,
+        target=target,
+        stage="scalping_scanner_scheduler_warm_park_reactivated",
+        fields={
+            "metric_role": "runtime_scheduler_recovery",
+            "decision_authority": ("scanner_scheduler_recheck_only_no_order_authority"),
+            "window_policy": "same_generation_single_entry_ai_contention_recovery",
+            "sample_floor": "one_entry_ai_lock_contention",
+            "primary_decision_metric": "ai_contention_park_to_fresh_recheck_sec",
+            "source_quality_gate": (
+                "current_generation_fresh_post_contention_0B_required"
+            ),
+            "forbidden_uses": (
+                "standalone_buy,broker_submit,threshold_mutation,"
+                "provider_route_change,order_price_change,quantity_or_cap_change,"
+                "broker_guard_bypass,stale_quote_bypass,hard_safety_bypass"
+            ),
+            "runtime_effect": True,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "scheduler_action": "ai_contention_warm_park_reactivated",
+            "scheduler_reason": "fresh_0B_after_entry_ai_lock_contention",
+            "scanner_generation_id": generation_id,
+            "scanner_ai_contention_freshness_source": freshness_source,
+            "scanner_ai_contention_last_0b_epoch": f"{last_0b_epoch:.6f}",
+            "ai_contention_park_to_fresh_recheck_sec": round(
+                max(0.0, float(now_epoch) - warm_since_epoch),
+                6,
+            ),
+        },
+    )
+    return True
+
+
 def _scanner_scheduler_park_target_generation(
     scheduler,
     target,
@@ -12051,6 +12160,12 @@ def run_sniper(is_test_mode=False):
                     now_epoch=time.time(),
                 )
                 _scanner_scheduler_reactivate_deadline_park_on_fresh_ws(
+                    scheduler,
+                    stock,
+                    ws_data,
+                    now_epoch=time.time(),
+                )
+                _scanner_scheduler_reactivate_ai_contention_park_on_fresh_ws(
                     scheduler,
                     stock,
                     ws_data,
