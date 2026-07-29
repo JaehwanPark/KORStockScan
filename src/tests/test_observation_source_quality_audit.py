@@ -262,8 +262,7 @@ def test_fast_exit_quote_envelope_stages_have_source_quality_contracts():
         for stage in stages
     )
     assert all(
-        "exit_quote_envelope_id"
-        in audit.STAGE_CONTRACTS[stage].required_fields
+        "exit_quote_envelope_id" in audit.STAGE_CONTRACTS[stage].required_fields
         for stage in stages
     )
 
@@ -1885,6 +1884,158 @@ def test_observation_source_quality_audit_reviews_20260713_unknown_provenance_ga
             "reviewed_reason"
         ]
         == "reviewed_shallow_stale_flag_not_available"
+    )
+
+
+def test_observation_source_quality_audit_reviews_20260729_explicit_unknown_provenance(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    entry_context = {
+        "entry_order_flow_status": "unknown",
+        "entry_context_quality": "partial",
+        "entry_context_missing_features": "order_flow_pressure",
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    _write_events(
+        tmp_path,
+        "2026-07-29",
+        [
+            _event(
+                "rising_missed_async_commit_phase",
+                {
+                    **entry_context,
+                    "decision_authority": "scanner_async_two_phase_commit_transport_only",
+                    "runtime_effect": False,
+                },
+                record_id=1,
+            ),
+            _event(
+                "rising_missed_tp1_candidate_deferred",
+                {
+                    **entry_context,
+                    "decision_authority": (
+                        "operator_runtime_override_rising_missed_tp1_candidate_selector"
+                    ),
+                    "runtime_effect": True,
+                },
+                record_id=2,
+            ),
+            _event(
+                "reversal_add_blocked_reason",
+                {
+                    "shallow_tick_context_stale": "unknown",
+                    "tick_latest_age_ms": "-",
+                    "tick_context_quality": "-",
+                    "shallow_quote_stale": "unknown",
+                    "quote_age_ms": "-",
+                    "quote_age_source": "missing",
+                    "decision_authority": "scale_in_attribution_source_only",
+                    "runtime_effect": False,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                },
+                record_id=3,
+            ),
+            _event(
+                "probe_continuation_deferred",
+                {
+                    "post_probe_direction_state": "UNKNOWN",
+                    "post_probe_direction_reason": (
+                        "post_probe_nxt_wait_fast_tape_required"
+                    ),
+                    "post_probe_continuation_action": "DEFER",
+                    "decision_authority": (
+                        "dynamic_entry_price_resolver_p1_post_probe"
+                    ),
+                    "allowed_runtime_apply": False,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                },
+                record_id=4,
+            ),
+            _event(
+                "scalping_scanner_ws_prewarm_selected",
+                {
+                    "venue": "UNKNOWN",
+                    "effective_venue": "UNKNOWN",
+                    "venue_resolution": (
+                        "scanner_session_clock:outside_supported_session"
+                    ),
+                    "market_session_bucket": "outside_supported_session",
+                    "decision_authority": (
+                        "scanner_ws_prewarm_observation_only_no_entry_authority"
+                    ),
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                },
+                record_id=5,
+            ),
+            _event(
+                "scalp_sim_euphoria_context_noop",
+                {
+                    "euphoria_epoch_id": "2026-07-29|NORMAL|NORMAL|E0|unknown",
+                    "risk_regime_epoch_id": ("2026-07-29|NORMAL|NORMAL|E0|unknown"),
+                    "decision_authority": "sim_observation_only",
+                    "euphoria_context_status": "OPERATOR_DISABLED",
+                    "risk_regime_context_status": "OPERATOR_DISABLED",
+                    "euphoria_source_quality": "NOT_APPLICABLE",
+                    "source_quality_gate_scope": "sim_context_only",
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "exclude_from_live_approval": True,
+                },
+                record_id=6,
+            ),
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-07-29")
+
+    assert report["summary"]["unknown_token_stage_count"] == 0
+    reviewed = {
+        item["stage"]: {
+            field["field"]: field["reviewed_reason"] for field in item["fields"]
+        }
+        for item in report["reviewed_unknown_token_findings"]
+    }
+    assert (
+        reviewed["rising_missed_async_commit_phase"]["entry_order_flow_status"]
+        == "reviewed_entry_order_flow_not_available"
+    )
+    assert (
+        reviewed["rising_missed_tp1_candidate_deferred"]["entry_order_flow_status"]
+        == "reviewed_entry_order_flow_not_available"
+    )
+    assert (
+        reviewed["reversal_add_blocked_reason"]["shallow_tick_context_stale"]
+        == "reviewed_shallow_stale_flag_not_available"
+    )
+    assert (
+        reviewed["reversal_add_blocked_reason"]["shallow_quote_stale"]
+        == "reviewed_shallow_stale_flag_not_available"
+    )
+    assert (
+        reviewed["probe_continuation_deferred"]["post_probe_direction_state"]
+        == "reviewed_post_probe_direction_source_gap"
+    )
+    assert (
+        reviewed["scalping_scanner_ws_prewarm_selected"]["venue"]
+        == "reviewed_scanner_venue_fail_closed_provenance"
+    )
+    assert (
+        reviewed["scalping_scanner_ws_prewarm_selected"]["effective_venue"]
+        == "reviewed_scanner_venue_fail_closed_provenance"
+    )
+    assert (
+        reviewed["scalp_sim_euphoria_context_noop"]["euphoria_epoch_id"]
+        == "reviewed_disabled_euphoria_epoch_suffix_not_source_unknown"
+    )
+    assert (
+        reviewed["scalp_sim_euphoria_context_noop"]["risk_regime_epoch_id"]
+        == "reviewed_disabled_euphoria_epoch_suffix_not_source_unknown"
     )
 
 

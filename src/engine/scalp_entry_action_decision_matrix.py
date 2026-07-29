@@ -435,6 +435,7 @@ SCORE_SOURCE_FIELDS = (
     "ai_score_raw",
     "entry_score",
     "score",
+    "scalp_sim_candidate_window_original_score",
     "swing_entry_recovery_gate_score",
 )
 
@@ -794,9 +795,7 @@ def _base_row(event: dict[str, Any]) -> dict[str, Any]:
         "source_stage": source_stage,
         "event_time": _nonempty(event.get("emitted_at")),
         "source_path": event.get("_source_path"),
-        "ai_score": _safe_float(
-            fields.get("ai_score") or fields.get("ai_score_after_bonus"), None
-        ),
+        "ai_score": _safe_float(raw_score_value, None),
         "score_source_value": _safe_float(raw_score_value, None),
         "ai_action": _nonempty(fields.get("action") or fields.get("ai_action")),
         "chosen_action": action,

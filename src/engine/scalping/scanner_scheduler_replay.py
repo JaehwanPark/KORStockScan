@@ -22,6 +22,7 @@ VALID_ATTACH_OUTCOMES = frozenset({"attached", "refreshed", "db_poll_attached"})
 ATTACH_STAGE = "scalping_scanner_runtime_target_attach"
 PRECHECK_STAGE = "scalping_scanner_fast_precheck"
 SCHEDULER_DISPATCH_STAGE = "scalping_scanner_scheduler_work_dispatched"
+HEAVY_EVAL_STAGE = "scalping_scanner_heavy_eval_lag"
 DEFAULT_BASELINE = datetime.fromisoformat("2026-06-04T14:29:09+09:00")
 
 
@@ -41,6 +42,25 @@ class ScannerReplaySample:
     @property
     def attach_to_first_precheck_sec(self) -> float:
         return max(0.0, self.first_precheck_epoch - self.attach_epoch)
+
+
+@dataclass(frozen=True, slots=True)
+class ScannerSourceReadySample:
+    code: str
+    promotion_id: str
+    venue: str
+    attach_epoch: float
+    first_entry_realtime_epoch: float
+    first_heavy_eval_epoch: float
+    first_entry_realtime_type: str
+
+    @property
+    def attach_to_first_entry_realtime_sec(self) -> float:
+        return max(0.0, self.first_entry_realtime_epoch - self.attach_epoch)
+
+    @property
+    def first_entry_realtime_to_heavy_eval_sec(self) -> float:
+        return max(0.0, self.first_heavy_eval_epoch - self.first_entry_realtime_epoch)
 
 
 def _event_epoch(event: dict[str, Any]) -> float | None:
@@ -146,6 +166,9 @@ def replay_scanner_events(
     baseline_epoch: float = DEFAULT_BASELINE.timestamp(),
 ) -> dict[str, Any]:
     pending: dict[tuple[str, str], dict[str, Any]] = {}
+    canonical_attaches: dict[tuple[str, str], dict[str, Any]] = {}
+    active_generation_by_code: dict[str, tuple[str, str]] = {}
+    superseded_at: dict[tuple[str, str], float] = {}
     sampled_keys: set[tuple[str, str]] = set()
     samples: list[ScannerReplaySample] = []
     exclusions: dict[str, int] = {}
@@ -170,12 +193,18 @@ def replay_scanner_events(
             # A newer canonical attach supersedes every older generation for
             # the same symbol, even if no precheck was observed.
             code = attach["code"]
+            key = (code, attach["promotion_id"])
+            active_key = active_generation_by_code.get(code)
+            if active_key is not None and active_key != key:
+                superseded_at[active_key] = attach["attach_epoch"]
+            active_generation_by_code[code] = key
             for key in [key for key in pending if key[0] == code]:
                 pending.pop(key, None)
                 exclusions["superseded_before_precheck"] = (
                     exclusions.get("superseded_before_precheck", 0) + 1
                 )
             pending[(code, attach["promotion_id"])] = attach
+            canonical_attaches.setdefault((code, attach["promotion_id"]), attach)
             continue
         if stage == SCHEDULER_DISPATCH_STAGE:
             dispatch, reason = _canonical_initial_precheck_dispatch(event)
@@ -265,7 +294,133 @@ def replay_scanner_events(
         exclusions["attach_without_precheck"] = exclusions.get(
             "attach_without_precheck", 0
         ) + len(pending)
-    return _summarize(samples, exclusions=exclusions)
+    source_ready_samples, source_ready_exclusions = _source_ready_handoffs(
+        ordered,
+        canonical_attaches=canonical_attaches,
+        superseded_at=superseded_at,
+    )
+    return _summarize(
+        samples,
+        exclusions=exclusions,
+        source_ready_samples=source_ready_samples,
+        source_ready_exclusions=source_ready_exclusions,
+    )
+
+
+def _source_ready_handoffs(
+    ordered_events: Iterable[tuple[float, dict[str, Any]]],
+    *,
+    canonical_attaches: dict[tuple[str, str], dict[str, Any]],
+    superseded_at: dict[tuple[str, str], float],
+) -> tuple[list[ScannerSourceReadySample], dict[str, int]]:
+    ready_by_key: dict[tuple[str, str], dict[str, Any]] = {}
+    heavy_by_key: dict[tuple[str, str], list[float]] = {}
+    exclusions: dict[str, int] = {}
+
+    for event_epoch, event in ordered_events:
+        stage = str(event.get("stage") or "")
+        if stage not in {PRECHECK_STAGE, HEAVY_EVAL_STAGE}:
+            continue
+        fields = event.get("fields")
+        if not isinstance(fields, dict):
+            exclusions[f"{stage}_fields_missing"] = (
+                exclusions.get(f"{stage}_fields_missing", 0) + 1
+            )
+            continue
+        code = str(event.get("stock_code") or "").strip()[:6]
+        promotion_id = str(fields.get("scanner_promotion_id") or "").strip()
+        key = (code, promotion_id)
+        attach = canonical_attaches.get(key)
+        if attach is None:
+            exclusions[f"{stage}_without_canonical_attach"] = (
+                exclusions.get(f"{stage}_without_canonical_attach", 0) + 1
+            )
+            continue
+        generation_end_epoch = superseded_at.get(key)
+        if generation_end_epoch is not None and event_epoch >= generation_end_epoch:
+            exclusions[f"{stage}_superseded_generation"] = (
+                exclusions.get(f"{stage}_superseded_generation", 0) + 1
+            )
+            continue
+        venue = str(fields.get("effective_venue") or "").strip().upper()
+        if venue and venue not in {attach["venue"], "UNKNOWN"}:
+            exclusions[f"{stage}_venue_conflict"] = (
+                exclusions.get(f"{stage}_venue_conflict", 0) + 1
+            )
+            continue
+
+        if stage == HEAVY_EVAL_STAGE:
+            heavy_epoch = _float_or_none(fields.get("heavy_eval_started_epoch"))
+            if heavy_epoch is None:
+                heavy_epoch = event_epoch
+            if heavy_epoch >= attach["attach_epoch"]:
+                heavy_by_key.setdefault(key, []).append(heavy_epoch)
+            else:
+                exclusions["heavy_eval_before_attach"] = (
+                    exclusions.get("heavy_eval_before_attach", 0) + 1
+                )
+            continue
+
+        if str(fields.get("scanner_entry_realtime_state") or "").strip() != "received":
+            continue
+        realtime_epoch = _float_or_none(
+            fields.get("scanner_first_entry_realtime_epoch")
+        )
+        realtime_type = str(
+            fields.get("scanner_first_entry_realtime_type") or ""
+        ).strip()
+        if realtime_epoch is None or not realtime_type:
+            exclusions["source_ready_timestamp_or_type_missing"] = (
+                exclusions.get("source_ready_timestamp_or_type_missing", 0) + 1
+            )
+            continue
+        if realtime_epoch < attach["attach_epoch"]:
+            exclusions["source_ready_before_attach"] = (
+                exclusions.get("source_ready_before_attach", 0) + 1
+            )
+            continue
+        if generation_end_epoch is not None and realtime_epoch >= generation_end_epoch:
+            exclusions["source_ready_superseded_generation"] = (
+                exclusions.get("source_ready_superseded_generation", 0) + 1
+            )
+            continue
+        existing = ready_by_key.get(key)
+        if existing is None or realtime_epoch < existing["realtime_epoch"]:
+            ready_by_key[key] = {
+                "attach": attach,
+                "realtime_epoch": realtime_epoch,
+                "realtime_type": realtime_type,
+            }
+
+    samples: list[ScannerSourceReadySample] = []
+    for key, ready in ready_by_key.items():
+        heavy_epochs = [
+            value
+            for value in heavy_by_key.get(key, [])
+            if value >= ready["realtime_epoch"]
+            and (key not in superseded_at or value < superseded_at[key])
+        ]
+        if not heavy_epochs:
+            reason = (
+                "source_ready_superseded_before_heavy_eval"
+                if key in superseded_at
+                else "source_ready_without_heavy_eval"
+            )
+            exclusions[reason] = exclusions.get(reason, 0) + 1
+            continue
+        attach = ready["attach"]
+        samples.append(
+            ScannerSourceReadySample(
+                code=attach["code"],
+                promotion_id=attach["promotion_id"],
+                venue=attach["venue"],
+                attach_epoch=attach["attach_epoch"],
+                first_entry_realtime_epoch=ready["realtime_epoch"],
+                first_heavy_eval_epoch=min(heavy_epochs),
+                first_entry_realtime_type=ready["realtime_type"],
+            )
+        )
+    return samples, exclusions
 
 
 def _percentile(values: list[float], percentile: float) -> float | None:
@@ -282,9 +437,14 @@ def _percentile(values: list[float], percentile: float) -> float | None:
 
 
 def _summarize(
-    samples: Iterable[ScannerReplaySample], *, exclusions: dict[str, int]
+    samples: Iterable[ScannerReplaySample],
+    *,
+    exclusions: dict[str, int],
+    source_ready_samples: Iterable[ScannerSourceReadySample] = (),
+    source_ready_exclusions: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     sample_list = list(samples)
+    source_ready_sample_list = list(source_ready_samples)
     by_venue: dict[str, dict[str, Any]] = {}
     for venue in sorted(VALID_VENUES):
         venue_samples = [sample for sample in sample_list if sample.venue == venue]
@@ -310,6 +470,51 @@ def _summarize(
                 p95 is not None and maximum is not None and p95 <= 7 and maximum <= 10
             ),
         }
+    source_ready_by_venue: dict[str, dict[str, Any]] = {}
+    for venue in sorted(VALID_VENUES):
+        venue_samples = [
+            sample for sample in source_ready_sample_list if sample.venue == venue
+        ]
+        source_lags = [
+            sample.attach_to_first_entry_realtime_sec for sample in venue_samples
+        ]
+        handoff_lags = [
+            sample.first_entry_realtime_to_heavy_eval_sec for sample in venue_samples
+        ]
+        source_ready_by_venue[venue] = {
+            "valid_generation_count": len(venue_samples),
+            "first_entry_realtime_type_counts": dict(
+                sorted(
+                    {
+                        source_type: sum(
+                            sample.first_entry_realtime_type == source_type
+                            for sample in venue_samples
+                        )
+                        for source_type in {
+                            sample.first_entry_realtime_type for sample in venue_samples
+                        }
+                    }.items()
+                )
+            ),
+            "attach_to_first_entry_realtime_p50_sec": (
+                round(_percentile(source_lags, 0.50), 6) if source_lags else None
+            ),
+            "attach_to_first_entry_realtime_p95_sec": (
+                round(_percentile(source_lags, 0.95), 6) if source_lags else None
+            ),
+            "attach_to_first_entry_realtime_max_sec": (
+                round(max(source_lags), 6) if source_lags else None
+            ),
+            "first_entry_realtime_to_heavy_eval_p50_sec": (
+                round(_percentile(handoff_lags, 0.50), 6) if handoff_lags else None
+            ),
+            "first_entry_realtime_to_heavy_eval_p95_sec": (
+                round(_percentile(handoff_lags, 0.95), 6) if handoff_lags else None
+            ),
+            "first_entry_realtime_to_heavy_eval_max_sec": (
+                round(max(handoff_lags), 6) if handoff_lags else None
+            ),
+        }
     return {
         "schema_version": 1,
         "replay_contract": "scanner_deadline_scheduler_historical_baseline_v1",
@@ -319,6 +524,39 @@ def _summarize(
         "excluded_count": sum(exclusions.values()),
         "exclusions": dict(sorted(exclusions.items())),
         "venues": by_venue,
+        "source_ready_handoff": {
+            "metric_role": "source_quality_gate",
+            "decision_authority": "diagnostic_replay_only_no_runtime_activation",
+            "window_policy": "canonical_generation_attach_to_first_entry_realtime_to_heavy_eval",
+            "sample_floor": "one_canonical_generation_with_source_ready_and_heavy_eval",
+            "primary_decision_metric": "first_entry_realtime_to_heavy_eval_p95_sec",
+            "source_quality_gate": (
+                "canonical_attach_explicit_venue_absolute_first_entry_realtime_and_heavy_eval"
+            ),
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "forbidden_uses": (
+                "standalone_buy|threshold_mutation|provider_route_change|"
+                "order_price_or_quantity_change|broker_guard_bypass|"
+                "stale_quote_bypass|hard_safety_bypass|bot_restart"
+            ),
+            "valid_generation_count": len(source_ready_sample_list),
+            "excluded_count": sum((source_ready_exclusions or {}).values()),
+            "exclusions": dict(sorted((source_ready_exclusions or {}).items())),
+            "venues": source_ready_by_venue,
+            "samples": [
+                {
+                    **asdict(sample),
+                    "attach_to_first_entry_realtime_sec": round(
+                        sample.attach_to_first_entry_realtime_sec, 6
+                    ),
+                    "first_entry_realtime_to_heavy_eval_sec": round(
+                        sample.first_entry_realtime_to_heavy_eval_sec, 6
+                    ),
+                }
+                for sample in source_ready_sample_list
+            ],
+        },
         "samples": [asdict(sample) for sample in sample_list],
     }
 
@@ -351,6 +589,9 @@ def main() -> int:
     result = replay_scanner_events(load_jsonl_events(paths))
     if not args.include_samples:
         result.pop("samples", None)
+        source_ready_handoff = result.get("source_ready_handoff")
+        if isinstance(source_ready_handoff, dict):
+            source_ready_handoff.pop("samples", None)
     print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
     return 0
 

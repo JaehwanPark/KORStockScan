@@ -2284,6 +2284,85 @@ def test_ai_correction_input_context_is_compact_and_hash_referenced():
     assert report_mod._json_sha256(context) == report_mod._json_sha256(rerun_context)
 
 
+def test_avg_down_direct_calibration_is_merged_into_ai_review_inventory(tmp_path):
+    source_path = tmp_path / "scalping_avg_down_recovery_calibration_2026-07-29.json"
+    source_path.write_text(
+        json.dumps(
+            {
+                "target_date": "2026-07-29",
+                "calibration_candidates": [
+                    {
+                        "family": "scalping_avg_down_recovery_quality_gate",
+                        "stage": "scale_in",
+                        "priority": 37,
+                        "calibration_state": "hold_no_edge",
+                        "calibration_reason": "post_add_final_ev_not_positive",
+                        "allowed_runtime_apply": False,
+                        "current_values": {"shallow_max_per_position": 2},
+                        "recommended_values": {"shallow_max_per_position": 2},
+                        "source_metrics": {
+                            "decision_guards": {"final_ev_edge_ok": False}
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    report = {
+        "date": "2026-07-29",
+        "calibration_candidates": [],
+        "calibration_source_bundle": {},
+    }
+
+    report_mod.merge_scalping_avg_down_recovery_calibration_candidate(
+        report, "2026-07-29", source_path=source_path
+    )
+    context = report_mod._build_ai_correction_input_context(report)
+    ai_report = report_mod.build_threshold_cycle_ai_correction_report(
+        report,
+        ai_raw_response=json.dumps(
+            {
+                "schema_version": 1,
+                "corrections": [
+                    {
+                        "family": "scalping_avg_down_recovery_quality_gate",
+                        "anomaly_type": "normal_drift",
+                        "ai_review_state": "agree",
+                        "correction_proposal": {
+                            "proposed_state": "hold",
+                            "proposed_value": None,
+                            "anomaly_route": "normal_drift",
+                            "sample_window": "cumulative",
+                        },
+                        "correction_reason": "Negative final EV keeps the gate closed.",
+                        "required_evidence": ["rolling post-add EV"],
+                        "risk_flags": ["downside exceeds MFE"],
+                    }
+                ],
+            }
+        ),
+        ai_provider_status={"provider": "openai", "status": "success"},
+        ai_input_context=context,
+    )
+
+    assert (
+        report["supplemental_calibration_sources"][
+            "scalping_avg_down_recovery_calibration"
+        ]["merged_candidate_count"]
+        == 1
+    )
+    candidate = context["calibration_candidates"][0]
+    assert candidate["family"] == "scalping_avg_down_recovery_quality_gate"
+    assert candidate["current_values"]["shallow_max_per_position"] == 2
+    assert candidate["recommended_values"]["shallow_max_per_position"] == 2
+    assert ai_report["candidate_count"] == 1
+    assert ai_report["items"][0]["family"] == (
+        "scalping_avg_down_recovery_quality_gate"
+    )
+    assert ai_report["items"][0]["ai_review_state"] == "agree"
+
+
 def test_reuse_ai_review_requires_matching_input_hash(tmp_path):
     input_hash = "abc123"
     path = tmp_path / "threshold_cycle_ai_review_2026-05-20_postclose.json"

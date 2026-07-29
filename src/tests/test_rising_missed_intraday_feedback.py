@@ -418,6 +418,26 @@ def test_nxt_post_block_sampler_recovers_counterfactual_first_hit_label(tmp_path
     assert summary["rising_missed_nxt_post_block_sampler_outcome_counts"] == [
         {"outcome_label": "gross_target_first", "count": 1}
     ]
+    blocker_outcome = summary[
+        "rising_missed_nxt_post_block_blocker_outcome_attribution"
+    ][0]
+    assert blocker_outcome["source_block_stage"] == "residual_blocked"
+    assert (
+        blocker_outcome["source_block_reason"]
+        == "broker_rejected_after_first_residual_leg"
+    )
+    assert blocker_outcome["completed_sample_count"] == 1
+    assert blocker_outcome["gross_target_first_rate_pct"] == 100.0
+    assert blocker_outcome["equal_weight_avg_mfe_after_block_pct"] == 1.8
+    assert blocker_outcome["equal_weight_avg_mae_after_block_pct"] == -0.2
+    assert blocker_outcome["sample_floor_met"] is False
+    assert blocker_outcome["runtime_effect"] is False
+    assert (
+        report["metric_contracts"][
+            "rising_missed_nxt_post_block_blocker_outcome_attribution"
+        ]["decision_authority"]
+        == "source_only_no_runtime_mutation"
+    )
     assert summary["rising_missed_nxt_post_block_source_block_stage_counts"] == [
         {"source_block_stage": "residual_blocked", "count": 1}
     ]

@@ -1,0 +1,51 @@
+# Microstructure Reaction Context - 2026-07-29
+
+- runtime_effect: `False`
+- decision_authority: `entry_confidence_modifier_source_only`
+- forbidden_uses: `['standalone_buy', 'broker_guard_bypass', 'threshold_mutation', 'provider_route_change', 'bot_restart', 'cap_release']`
+
+## Summary
+- available: `True`
+- row_count: `1379`
+- ok/missing_or_unusable: `446` / `933`
+- real_submitted_count: `20`
+- status_counts: `{'missing': 675, 'not_evaluated': 18, 'ok': 446, 'source_quality_partial': 23, 'stale': 217}`
+- entry_reaction_quality_counts: `{'-': 675, 'favorable_reaction': 6, 'mixed_reaction': 132, 'neutral_unusable': 258, 'risk_context_only': 145, 'weak_reaction': 163}`
+- source_quality_counts: `{'-': 675, 'ai_score_50_buy_hold_override_no_tick_audit': 2, 'fresh_short_window': 446, 'pre_ai_liquidity_gate': 9, 'stale_tick_or_quote': 217, 'tick_aggressor_pressure_unusable': 23, 'watching_ai_cooldown_active': 7}`
+- stage_counts: `{'ai_confirmed': 16, 'ai_confirmed_terminal_no_budget': 23, 'ai_cooldown_blocked': 7, 'ai_holding_review': 74, 'blocked_ai_score': 11, 'blocked_liquidity': 9, 'latency_block': 14, 'latency_pass': 11, 'opening_rotation_1pct_observed': 70, 'order_bundle_submitted': 10, 'real_weak_ai_micro_entry_block': 3, 'rising_missed_async_commit_phase': 122, 'rising_missed_entry_ai_async_result_applied': 169, 'rising_missed_one_share_entry': 44, 'rising_missed_one_share_entry_blocked': 157, 'rising_missed_scout_quality_guard_blocked': 2, 'rising_missed_tick_absolute_throughput_relief_applied': 1, 'rising_missed_tick_speed_entry_block': 8, 'rising_missed_tp1_candidate_blocked': 123, 'rising_missed_tp1_candidate_deferred': 150, 'rising_missed_tp1_counterfactual_submit_safety': 273, 'scalp_entry_action_decision_snapshot': 82}`
+- v_pw_source_counts: `{'missing': 25, 'not_applicable': 1230, 'ws_0b_latest_strength': 124}`
+- v_pw_rest_fallback_rate_pct: `0.0`
+- v_pw_runtime_support_unusable_count: `1379`
+- ka10046_rest_fallback_quote_freshness_counts: `{}`
+- ka10046_strength_runtime_effect_true_count: `0`
+- ka10046_strength_missing_received_ts_count: `0`
+- ka10046_0b_strength_diff: avg=`0.0` max=`0.0` divergence20=`0` / `0` (`0.0`%)
+- market_data_signed_tape_state_counts: `{'buy_dominated': 62, 'insufficient': 88, 'missing': 752, 'mixed': 28, 'sell_dominated': 54, 'stale': 395}`
+- market_data_signed_tape_sample_count_total: `812`
+- market_data_rest_signed_tape_pressure_usable_true_count: `0`
+- rest_signed_trade_ticks_row_count: `0`
+- rest_signed_trade_ticks_source_counts: `{}`
+- latency_true_ofi_direct_canary_signed_tape: sample_total=`412` net_buy_volume_sum=`2245` sell_dominated=`15` latest_single_sell_dominated=`27`
+- latency_true_ofi_direct_canary_signed_tape_latest_side_counts: `{'BUY': 57, 'SELL': 27, 'missing': 1295}`
+- latency_true_ofi_direct_canary_tape_block_reason_counts: `{'missing': 1295, 'signed_tape_sell_dominated': 15, 'tape_support_ok_missing_pressure': 69}`
+- tick_aggressor_source_counts: `{'kiwoom_0b_signed_trade_volume': 553, 'missing_aggressor_side': 26, 'orderbook_touch': 1, 'price_change_heuristic': 14}`
+- tick_trade_value_source_counts: `{'1313': 179}`
+- tick_trade_value_1313_missing_rate_pct: `0.0`
+- trade_volume_source_counts: `{'15_abs': 179}`
+- trade_volume_1030_1031_vs_15_mismatch: `179` / `179` (`100.0`%)
+- kiwoom_0b_latest_stock_count: `75`
+- kiwoom_0b_trade_value_source_counts: `{'1313': 268}`
+- kiwoom_0b_1313_missing_rate_pct: `0.0`
+- kiwoom_0b_trade_volume_source_counts: `{'15_abs': 268}`
+- kiwoom_0b_1030_1031_vs_15_mismatch: `268` / `268` (`100.0`%)
+- ka10003_buy_dominance_observation_source_counts: `{}`
+- ka10003_buy_dominance_observation_trade_value_source_counts: `{}`
+- ka10003_buy_dominance_observation_inside_spread_count: `0`
+- ka10003_buy_dominance_observation_split_vs_15_mismatch: `0` / `0` (`0.0`%)
+- avg_ask_sweep_score: `44.319`
+- avg_post_sweep_hold_score: `50.451`
+- avg_bid_replenishment_score: `60.37`
+- max_vi_proximity_risk: `20`
+- warnings: `[]`
+- code_improvement_order_count: `0`
+- top_code_improvement_orders: `[]`

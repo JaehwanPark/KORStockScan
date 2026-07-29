@@ -1,2 +1,3 @@
 950160 # auto_open_loss KRX_OPEN profit=-29.72% stop=-5.00%
 005930 # manual_operator samsung_electronics
+123456 # auto_open_loss KRX_OPEN profit=-0.13% stop=+0.00%

@@ -91,8 +91,9 @@ def test_scalping_avg_down_recovery_calibration_builds_post_add_candidate(
     report = mod.build_report("2026-07-10", generated_at="2026-07-10T20:10:00+09:00")
     candidate = report["calibration_candidates"][0]
 
-    assert candidate["calibration_state"] == "adjust_up"
-    assert candidate["allowed_runtime_apply"] is True
+    assert candidate["calibration_state"] == "hold_no_change"
+    assert candidate["calibration_reason"] == "recommended_values_unchanged"
+    assert candidate["allowed_runtime_apply"] is False
     assert (
         candidate["metric_contract"]["window_policy"]
         == "rolling_clean_baseline_pipeline_events"
@@ -106,12 +107,17 @@ def test_scalping_avg_down_recovery_calibration_builds_post_add_candidate(
     assert candidate["source_metrics"]["daily_shallow_primary"]["sample_count"] == 10
     assert candidate["source_metrics"]["daily_deep_primary"]["sample_count"] == 5
     assert report["source_quality"]["clean_baseline_date"] == "2026-06-04"
-    assert (
-        "SHALLOW_VOLATILITY_AVG_DOWN_MAX_PER_POSITION" in candidate["target_env_keys"]
-    )
-    assert "DEEP_RECOVERY_AVG_DOWN_PNL_MIN" in candidate["target_env_keys"]
+    assert candidate["target_env_keys"] == []
     assert candidate["recommended_values"]["shallow_max_per_position"] == 2
     assert candidate["recommended_values"]["deep_pnl_min"] == -4.0
+    assert candidate["source_metrics"]["decision_guards"] == {
+        "target_hit_edge_ok": True,
+        "final_ev_edge_ok": True,
+        "downside_edge_ok": True,
+        "recommended_values_changed": False,
+        "minimum_mfe_to_adverse_ratio": 1.0,
+        "minimum_equal_weight_avg_profit_pct": 0.0,
+    }
 
 
 def test_scalping_avg_down_recovery_calibration_uses_rolling_window_for_apply(
@@ -136,13 +142,72 @@ def test_scalping_avg_down_recovery_calibration_uses_rolling_window_for_apply(
     report = mod.build_report("2026-07-10", generated_at="2026-07-10T20:10:00+09:00")
     candidate = report["calibration_candidates"][0]
 
-    assert candidate["calibration_state"] == "adjust_up"
-    assert candidate["allowed_runtime_apply"] is True
+    assert candidate["calibration_state"] == "hold_no_change"
+    assert candidate["allowed_runtime_apply"] is False
     assert candidate["source_metrics"]["rolling_shallow_primary"]["sample_count"] == 10
     assert candidate["source_metrics"]["rolling_deep_primary"]["sample_count"] == 5
     assert candidate["source_metrics"]["daily_shallow_primary"]["sample_count"] == 5
     assert candidate["source_metrics"]["daily_deep_primary"]["sample_count"] == 2
     assert candidate["source_event_dates"] == ["2026-07-09", "2026-07-10"]
+
+
+def test_scalping_avg_down_recovery_calibration_requires_positive_final_ev(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(mod, "DATA_DIR", tmp_path)
+    events_dir = tmp_path / "pipeline_events"
+    events_dir.mkdir(parents=True)
+    events_path = events_dir / "pipeline_events_2026-07-10.jsonl"
+    _write_good_samples(events_path, "2026-07-10", shallow_count=10, deep_count=5)
+    for idx in range(10):
+        _write_event(
+            events_path,
+            stage="scalp_sim_holding_mark",
+            emitted_at=f"2026-07-10T{(9 * 60 + idx + 20) // 60:02d}:{(9 * 60 + idx + 20) % 60:02d}:00+09:00",
+            sim_record_id=f"2026-07-10-sim-{idx}",
+            profit_rate=-1.00,
+        )
+    for idx in range(5):
+        _write_event(
+            events_path,
+            stage="holding_mark",
+            emitted_at=f"2026-07-10T{(10 * 60 + idx + 20) // 60:02d}:{(10 * 60 + idx + 20) % 60:02d}:00+09:00",
+            record_id=f"2026-07-10-real-{idx}",
+            profit_rate=-1.00,
+        )
+
+    report = mod.build_report("2026-07-10")
+    candidate = report["calibration_candidates"][0]
+
+    assert candidate["calibration_state"] == "hold_no_edge"
+    assert candidate["calibration_reason"] == "post_add_final_ev_not_positive"
+    assert candidate["allowed_runtime_apply"] is False
+    assert candidate["source_metrics"]["decision_guards"]["target_hit_edge_ok"] is True
+    assert candidate["source_metrics"]["decision_guards"]["final_ev_edge_ok"] is False
+
+
+def test_scalping_avg_down_recovery_calibration_adjusts_only_changed_values(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(mod, "DATA_DIR", tmp_path)
+    events_dir = tmp_path / "pipeline_events"
+    events_dir.mkdir(parents=True)
+    events_path = events_dir / "pipeline_events_2026-07-10.jsonl"
+    _write_good_samples(events_path, "2026-07-10", shallow_count=10, deep_count=5)
+    current = mod._current_values()
+    current["shallow_max_per_position"] = 1
+    monkeypatch.setattr(mod, "_current_values", lambda: current)
+
+    report = mod.build_report("2026-07-10")
+    candidate = report["calibration_candidates"][0]
+
+    assert candidate["calibration_state"] == "adjust_up"
+    assert candidate["calibration_reason"] == "post_add_ev_downside_edge_ok"
+    assert candidate["allowed_runtime_apply"] is True
+    assert candidate["recommended_values_changed"] is True
+    assert (
+        "SHALLOW_VOLATILITY_AVG_DOWN_MAX_PER_POSITION" in candidate["target_env_keys"]
+    )
 
 
 def test_scalping_avg_down_recovery_calibration_blocks_missing_source(

@@ -560,6 +560,36 @@ def test_scalp_entry_adm_normalizes_submitted_snapshot_action():
     )
 
 
+def test_scalp_entry_adm_preserves_sim_candidate_original_score_on_price_skip():
+    row = mod._base_row(
+        {
+            "stage": "scalp_sim_entry_ai_price_skip_order",
+            "stock_code": "005930",
+            "emitted_at": "2026-07-29T09:10:00",
+            "fields": {
+                "scalp_sim_candidate_window_original_score": "56.0",
+                "scalp_sim_candidate_window_original_action": "BUY",
+                "ai_entry_price_canary_action": "SKIP",
+                "ai_entry_price_canary_reason": "ai_input_preflight_blocked",
+            },
+        }
+    )
+
+    assert row["ai_score"] == 56.0
+    assert row["score_source_value"] == 56.0
+    assert row["score_bucket"] == "score50_64"
+    assert row["chosen_action"] == "SKIP_PRE_SUBMIT_SAFETY"
+    assert (
+        mod._score_source(
+            {
+                "ai_score": "70",
+                "scalp_sim_candidate_window_original_score": "56",
+            }
+        )
+        == "70"
+    )
+
+
 def test_scalp_entry_adm_ai_confirmed_uses_score_as_prior_not_hard_gate(monkeypatch):
     monkeypatch.setattr(
         entry_gate_mod,
