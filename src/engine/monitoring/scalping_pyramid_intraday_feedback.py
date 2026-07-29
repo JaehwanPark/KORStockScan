@@ -1350,9 +1350,9 @@ def _finalize_probe_residual_real_outcome(item: dict[str, Any]) -> None:
     item["post_probe_counterfactual_source_quality_reasons"] = (
         counterfactual_source_quality_reasons
     )
-    item[
-        "post_probe_counterfactual_source_quality_valid"
-    ] = not counterfactual_source_quality_reasons
+    item["post_probe_counterfactual_source_quality_valid"] = (
+        not counterfactual_source_quality_reasons
+    )
     item["post_probe_counterfactual_first_leg_profit_proxy_krw"] = (
         round(first_leg_notional * final_profit / 100.0, 2)
         if first_leg_notional > 0 and final_profit is not None
