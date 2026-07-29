@@ -915,12 +915,8 @@ def build_holding_decision_context(
             "route": execution_broker_route,
             "source": execution_broker_route_source,
             "authority": execution_broker_route_authority,
-            "actual_order_submitted": _boolish(
-                position.get("actual_order_submitted")
-            ),
-            "broker_order_forbidden": _boolish(
-                position.get("broker_order_forbidden")
-            ),
+            "actual_order_submitted": _boolish(position.get("actual_order_submitted")),
+            "broker_order_forbidden": _boolish(position.get("broker_order_forbidden")),
         },
         # Observation-only exact copy. The model payload intentionally omits this
         # field because holding prompts already receive position.entry_time_context.
