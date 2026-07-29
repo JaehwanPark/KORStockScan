@@ -2008,6 +2008,17 @@ def test_conversion_lane_marks_mixed_sample_floor_windows(monkeypatch, tmp_path)
         in markdown
     )
 
+    scalp_only = lane.build_conversion_lane(target, include_swing=False)
+
+    assert scalp_only["strategy_scope"] == "scalp_only"
+    assert scalp_only["swing_sources_enabled"] is False
+    assert scalp_only["summary"]["conversion_candidate_count"] == 1
+    assert scalp_only["summary"]["swing_conversion_candidate_count"] == 0
+    assert (
+        scalp_only["summary"]["positive_ev_sample_floor_window_policy"]
+        == "scalp_daily_window"
+    )
+
 
 def test_key_lineage_marks_mixed_sample_floor_windows(monkeypatch, tmp_path):
     _patch_dirs(monkeypatch, tmp_path)

@@ -320,11 +320,9 @@ def test_postclose_wrapper_duplicate_refresh_skip_contract_is_static():
     assert 'run_threshold_cycle_ev_and_wait "pre_workorder"' in script
     assert "code_improvement_workorder_${TARGET_DATE}.json" in script
     assert "pattern_lab_propagation_audit_${TARGET_DATE}.json" in script
-    assert (
-        'verify_threshold_cycle_postclose_chain --date "$TARGET_DATE" --allow-pending-done-marker'
-        in script
-    )
-    assert 'verify_threshold_cycle_postclose_chain --date "$TARGET_DATE"' in script
+    assert "src.engine.verify_threshold_cycle_postclose_chain" in script
+    assert "--allow-pending-done-marker" in script
+    assert '"${VERIFY_DISABLED_STAGE_ARGS[@]}"' in script
 
 
 def test_automation_trigger_decision_cache_survives_command_substitution(tmp_path):

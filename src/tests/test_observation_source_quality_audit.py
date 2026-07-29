@@ -6749,3 +6749,106 @@ def test_observation_source_quality_backfill_writes_json_and_markdown(
     assert "Raw SIM rows and fill/outcome labels are preserved" in md_path.read_text(
         encoding="utf-8"
     )
+
+
+def test_observation_source_quality_reviews_explicit_unavailable_route_provenance(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    observation_only = {
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    _write_events(
+        tmp_path,
+        "2026-07-28",
+        [
+            _event(
+                "scalping_scanner_fast_precheck",
+                {
+                    **observation_only,
+                    "decision_authority": (
+                        "real_scalping_scanner_fast_precheck_observation_only"
+                    ),
+                    "source_quality_gate": ("scalping_scanner_fast_precheck_contract"),
+                    "ws_received_types": "0D,0F",
+                    "ws_last_0b_age_ms": "not_available_realtime_type_age_ms",
+                    "scanner_stale_backoff_raw_0b_route": "unknown",
+                },
+                record_id=1,
+            ),
+            _event(
+                "rising_missed_one_share_entry_blocked",
+                {
+                    **observation_only,
+                    "venue": "UNKNOWN",
+                    "effective_venue": "NXT",
+                    "venue_resolution": (
+                        "rising_missed_initial_gate:session_explicit_conflict:"
+                        "payload.venue=KRX,target.effective_venue=NXT"
+                    ),
+                    "block_reason": "entry_ai_action_not_evaluated",
+                },
+                record_id=2,
+            ),
+            _event(
+                "rising_missed_adverse_micro_recovery_checkpoint",
+                {
+                    **observation_only,
+                    "rising_missed_adverse_micro_recovery_price_fresh": False,
+                    "rising_missed_adverse_micro_recovery_price_source": "unavailable",
+                    "rising_missed_adverse_micro_recovery_source_reason": (
+                        "price_missing"
+                    ),
+                    "rising_missed_adverse_micro_recovery_ws_0b_raw_route": "unknown",
+                },
+                record_id=3,
+            ),
+            _event(
+                "ai_holding_review",
+                {
+                    "holding_context_entry_time_context": (
+                        "{'entry_order_flow_status': 'unknown'}"
+                    ),
+                    "holding_context_ai_market_snapshot": (
+                        "{'market_data_route': 'unknown', "
+                        "'ai_input_preflight_v1': {'status': 'blocked'}}"
+                    ),
+                    "holding_context_ws_route": "unknown",
+                    "holding_context_source_quality_status": "disabled",
+                    "holding_context_enabled": False,
+                    "holding_context_blockers": "[]",
+                    "ai_result_source": "input_preflight_blocked",
+                },
+                record_id=4,
+            ),
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-07-28")
+
+    assert report["unknown_token_findings"] == []
+    reviewed = {
+        item["stage"]: {
+            field["field"]: field["reviewed_reason"] for field in item["fields"]
+        }
+        for item in report["reviewed_unknown_token_findings"]
+    }
+    assert (
+        reviewed["scalping_scanner_fast_precheck"]["scanner_stale_backoff_raw_0b_route"]
+        == "reviewed_scanner_stale_backoff_route_not_available"
+    )
+    assert reviewed["rising_missed_one_share_entry_blocked"]["venue"] == (
+        "reviewed_observation_only_venue_not_available"
+    )
+    assert (
+        reviewed["rising_missed_adverse_micro_recovery_checkpoint"][
+            "rising_missed_adverse_micro_recovery_ws_0b_raw_route"
+        ]
+        == "reviewed_adverse_micro_recovery_route_not_available"
+    )
+    assert reviewed["ai_holding_review"]["holding_context_ws_route"] == (
+        "reviewed_holding_input_preflight_blocked_provenance"
+    )

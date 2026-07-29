@@ -4,6 +4,8 @@ import os
 from datetime import datetime
 from pathlib import Path
 
+import pytest
+
 from src.engine import verify_threshold_cycle_postclose_chain as mod
 
 
@@ -4896,7 +4898,7 @@ def test_build_threshold_cycle_postclose_verification_warns_on_recovery_profile(
         "\n".join(
             [
                 "[START] threshold-cycle postclose target_date=2026-05-12 started_at=2026-05-12T21:00:00+0900",
-                "[DONE] threshold-cycle postclose target_date=2026-05-12 swing_lifecycle=false pattern_labs=false deepseek_swing_lab=false pattern_lab_currentness_audit=false pattern_lab_propagation_audit=false scalp_entry_adm=true lifecycle_decision_matrix=false code_improvement_workorder=true daily_ev=true runtime_approval_summary=true next_stage2_checklist=true finished_at=2026-05-12T21:30:00+0900",
+                "[DONE] threshold-cycle postclose target_date=2026-05-12 swing_lifecycle=false pattern_labs=false deepseek_swing_lab=false pattern_lab_currentness_audit=false pattern_lab_propagation_audit=false ai_watching_score_smoothing_diagnostic=false scalp_entry_adm=true lifecycle_decision_matrix=false code_improvement_workorder=true daily_ev=true runtime_approval_summary=true next_stage2_checklist=true finished_at=2026-05-12T21:30:00+0900",
             ]
         ),
         encoding="utf-8",
@@ -4991,6 +4993,48 @@ def test_build_threshold_cycle_postclose_verification_warns_on_recovery_profile(
         "pattern_lab_propagation_audit",
         "lifecycle_decision_matrix",
     ]
+    assert (
+        "ai_watching_score_smoothing_diagnostic"
+        not in report["missing_required_artifacts"]
+    )
+
+    log_path.write_text(
+        "[START] threshold-cycle postclose target_date=2026-05-12 "
+        "started_at=2026-05-12T21:00:00+0900\n",
+        encoding="utf-8",
+    )
+    pending_report = mod.build_threshold_cycle_postclose_verification(
+        "2026-05-12",
+        require_done_marker=False,
+        disabled_stages={
+            "swing_lifecycle",
+            "swing_strategy_discovery",
+            "swing_lifecycle_matrix",
+            "swing_lifecycle_bucket_discovery",
+            "deepseek_swing_lab",
+        },
+    )
+    assert set(pending_report["execution_profile"]["disabled_stage_flags"]) == {
+        "swing_lifecycle",
+        "swing_strategy_discovery",
+        "swing_lifecycle_matrix",
+        "swing_lifecycle_bucket_discovery",
+        "deepseek_swing_lab",
+    }
+    assert "swing_lifecycle_audit" not in pending_report["missing_required_artifacts"]
+    assert (
+        "swing_lifecycle_handoff_missing"
+        not in pending_report["predecessor_integrity"]["log_issues"]
+    )
+
+
+def test_explicit_disabled_stage_rejects_non_swing_verifier_bypass():
+    with pytest.raises(ValueError, match="runtime_approval_summary"):
+        mod.build_threshold_cycle_postclose_verification(
+            "2026-05-12",
+            require_done_marker=False,
+            disabled_stages={"runtime_approval_summary"},
+        )
 
 
 def test_build_threshold_cycle_postclose_verification_fails_on_unavailable_ai_correction(

@@ -1339,14 +1339,6 @@ def periodic_account_sync():
                 if code not in real_codes:
                     if exchange in successful_exchanges:
                         prior_record_status = str(record.status or "").upper()
-                        print(
-                            f"⚠️ [정기 동기화] {record.stock_name}({code}) 잔고 없음. 매도 영수증 누락으로 판단하여 COMPLETED 강제 전환."
-                        )
-                        record.status = "COMPLETED"
-                        record.sell_time = None
-                        pending_manual_control_removals.append(
-                            (code, "periodic_sync_completed_no_broker_holding")
-                        )
 
                         with STATE_LOCK:
                             target_stock = next(
@@ -1399,26 +1391,56 @@ def periodic_account_sync():
                         # execution row proves fill price and realized PnL;
                         # an intended target price never does.
                         if exact_execution:
-                            record.sell_price = _to_int(
+                            reconciled_sell_price = _to_int(
                                 exact_execution.get("unit_price")
                             )
-                            record.profit_rate = calculate_net_profit_rate(
+                            reconciled_profit_rate = calculate_net_profit_rate(
                                 record.buy_price,
-                                record.sell_price,
+                                reconciled_sell_price,
                             )
                             realized_pnl_krw = calculate_net_realized_pnl(
                                 record.buy_price,
-                                record.sell_price,
+                                reconciled_sell_price,
                                 getattr(record, "buy_qty", 0),
                             )
                             reconciliation_state = "broker_execution_snapshot_recovered"
                         else:
-                            record.sell_price = None
-                            record.profit_rate = None
+                            reconciled_sell_price = None
+                            reconciled_profit_rate = None
                             realized_pnl_krw = None
                             reconciliation_state = (
                                 "broker_holding_absent_fill_receipt_missing"
                             )
+
+                        # A broker sell receipt can complete this row while the
+                        # relatively slow account snapshot is being fetched.
+                        # Refresh under a row lock immediately before mutation
+                        # so a stale HOLDING snapshot can never overwrite a
+                        # newer confirmed sell price/profit.  Commit promptly
+                        # to avoid holding the receipt path behind this lock.
+                        session.refresh(record, with_for_update=True)
+                        refreshed_status = str(record.status or "").upper()
+                        if refreshed_status not in {"HOLDING", "SELL_ORDERED"}:
+                            log_info(
+                                "ℹ️ [정기 동기화] "
+                                f"{record.stock_name}({code}) stale active snapshot "
+                                f"skip: status={refreshed_status or '-'}"
+                            )
+                            session.commit()
+                            continue
+
+                        print(
+                            f"⚠️ [정기 동기화] {record.stock_name}({code}) 잔고 없음. 매도 영수증 누락으로 판단하여 COMPLETED 강제 전환."
+                        )
+                        record.status = "COMPLETED"
+                        record.sell_time = None
+                        record.sell_price = reconciled_sell_price
+                        record.profit_rate = reconciled_profit_rate
+                        session.flush()
+                        session.commit()
+                        pending_manual_control_removals.append(
+                            (code, "periodic_sync_completed_no_broker_holding")
+                        )
 
                         with STATE_LOCK:
                             if target_stock:
@@ -1439,8 +1461,8 @@ def periodic_account_sync():
                                 if exact_execution:
                                     target_stock.update(
                                         {
-                                            "sell_price": record.sell_price,
-                                            "profit_rate": record.profit_rate,
+                                            "sell_price": reconciled_sell_price,
+                                            "profit_rate": reconciled_profit_rate,
                                         }
                                     )
 
@@ -1510,10 +1532,14 @@ def periodic_account_sync():
                                         1 if exact_execution else 0
                                     ),
                                     "sell_price": (
-                                        record.sell_price if exact_execution else "-"
+                                        reconciled_sell_price
+                                        if exact_execution
+                                        else "-"
                                     ),
                                     "profit_rate": (
-                                        record.profit_rate if exact_execution else "-"
+                                        reconciled_profit_rate
+                                        if exact_execution
+                                        else "-"
                                     ),
                                     "realized_pnl_krw": (
                                         realized_pnl_krw if exact_execution else "-"

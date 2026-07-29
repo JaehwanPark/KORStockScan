@@ -460,9 +460,13 @@ def _manifest_covers_target(path: Path, target_date: str) -> bool:
     return any(str(value or "").strip()[:10] == target_date for value in candidates)
 
 
-def build_pattern_lab_currentness_audit(target_date: str) -> dict[str, Any]:
+def build_pattern_lab_currentness_audit(
+    target_date: str, *, include_swing: bool = True
+) -> dict[str, Any]:
     target_date = str(target_date).strip()
     paths = _lab_paths()
+    if not include_swing:
+        paths.pop("deepseek_swing", None)
     checks: list[dict[str, Any]] = []
 
     for lab_name, lab in paths.items():
@@ -577,29 +581,30 @@ def build_pattern_lab_currentness_audit(target_date: str) -> dict[str, Any]:
         )
     )
 
-    deepseek_quality_path = paths["deepseek_swing"]["data_quality"]
-    deepseek_quality = _load_json(deepseek_quality_path)
-    deepseek_provenance = (
-        deepseek_quality.get("sim_probe_provenance")
-        if isinstance(deepseek_quality.get("sim_probe_provenance"), dict)
-        else {}
-    )
-    checks.append(
-        _check(
-            check_id="deepseek_sim_probe_provenance",
-            ok=bool(deepseek_provenance),
-            finding="DeepSeek swing sim/probe/dry-run outputs must include actual_order_submitted/broker_order_forbidden/decision_authority provenance.",
-            source_paths=[deepseek_quality_path],
-            severity="source_quality_blocker",
-            order_title="Add DeepSeek swing sim/probe provenance",
-            files_likely_touched=[
-                "analysis/deepseek_swing_pattern_lab/prepare_dataset.py"
-            ],
-            acceptance_tests=[
-                "PYTHONPATH=. .venv/bin/pytest -q src/tests/test_deepseek_swing_pattern_lab.py"
-            ],
+    if include_swing:
+        deepseek_quality_path = paths["deepseek_swing"]["data_quality"]
+        deepseek_quality = _load_json(deepseek_quality_path)
+        deepseek_provenance = (
+            deepseek_quality.get("sim_probe_provenance")
+            if isinstance(deepseek_quality.get("sim_probe_provenance"), dict)
+            else {}
         )
-    )
+        checks.append(
+            _check(
+                check_id="deepseek_sim_probe_provenance",
+                ok=bool(deepseek_provenance),
+                finding="DeepSeek swing sim/probe/dry-run outputs must include actual_order_submitted/broker_order_forbidden/decision_authority provenance.",
+                source_paths=[deepseek_quality_path],
+                severity="source_quality_blocker",
+                order_title="Add DeepSeek swing sim/probe provenance",
+                files_likely_touched=[
+                    "analysis/deepseek_swing_pattern_lab/prepare_dataset.py"
+                ],
+                acceptance_tests=[
+                    "PYTHONPATH=. .venv/bin/pytest -q src/tests/test_deepseek_swing_pattern_lab.py"
+                ],
+            )
+        )
 
     scalping_lab_dirs = [paths["claude_scalping"]["lab_dir"]]
     feedback_sources = {
@@ -608,12 +613,13 @@ def build_pattern_lab_currentness_audit(target_date: str) -> dict[str, Any]:
             domain="scalping",
             source_paths=scalping_lab_dirs,
         ),
-        "swing": _feedback_source_status(
+    }
+    if include_swing:
+        feedback_sources["swing"] = _feedback_source_status(
             target_date=target_date,
             domain="swing",
             source_paths=[paths["deepseek_swing"]["lab_dir"]],
-        ),
-    }
+        )
     checks.append(
         _check(
             check_id="scalping_ldm_threshold_reentry_sources",
@@ -638,32 +644,33 @@ def build_pattern_lab_currentness_audit(target_date: str) -> dict[str, Any]:
         )
     )
 
-    checks.append(
-        _check(
-            check_id="swing_ldm_threshold_reentry_sources",
-            ok=_source_mentions_all(
-                [paths["deepseek_swing"]["lab_dir"]], SWING_REENTRY_TERMS
+    if include_swing:
+        checks.append(
+            _check(
+                check_id="swing_ldm_threshold_reentry_sources",
+                ok=_source_mentions_all(
+                    [paths["deepseek_swing"]["lab_dir"]], SWING_REENTRY_TERMS
+                )
+                and not feedback_sources["swing"]["missing_feedback_sources"],
+                finding=(
+                    "DeepSeek swing pattern lab must consume threshold_cycle_ev, swing_lifecycle_decision_matrix, "
+                    "swing_lifecycle_bucket_discovery, and swing_strategy_discovery_ev as re-entry sources."
+                ),
+                source_paths=[paths["deepseek_swing"]["lab_dir"]],
+                severity="automation_handoff_gap",
+                order_title="Feed Swing LDM/discovery feedback into DeepSeek swing pattern lab",
+                files_likely_touched=[
+                    "analysis/deepseek_swing_pattern_lab/prepare_dataset.py",
+                    "analysis/deepseek_swing_pattern_lab/build_deepseek_payload.py",
+                    "analysis/deepseek_swing_pattern_lab/prompts/prompt_swing_lifecycle_patterns.md",
+                    "src/engine/pattern_lab_currentness_audit.py",
+                ],
+                acceptance_tests=[
+                    "PYTHONPATH=. .venv/bin/pytest -q src/tests/test_deepseek_swing_pattern_lab.py src/tests/test_pattern_lab_currentness_audit.py",
+                    "DeepSeek payload summary/cases expose Swing LDM bucket/discovery and threshold EV feedback context with runtime_effect=false",
+                ],
             )
-            and not feedback_sources["swing"]["missing_feedback_sources"],
-            finding=(
-                "DeepSeek swing pattern lab must consume threshold_cycle_ev, swing_lifecycle_decision_matrix, "
-                "swing_lifecycle_bucket_discovery, and swing_strategy_discovery_ev as re-entry sources."
-            ),
-            source_paths=[paths["deepseek_swing"]["lab_dir"]],
-            severity="automation_handoff_gap",
-            order_title="Feed Swing LDM/discovery feedback into DeepSeek swing pattern lab",
-            files_likely_touched=[
-                "analysis/deepseek_swing_pattern_lab/prepare_dataset.py",
-                "analysis/deepseek_swing_pattern_lab/build_deepseek_payload.py",
-                "analysis/deepseek_swing_pattern_lab/prompts/prompt_swing_lifecycle_patterns.md",
-                "src/engine/pattern_lab_currentness_audit.py",
-            ],
-            acceptance_tests=[
-                "PYTHONPATH=. .venv/bin/pytest -q src/tests/test_deepseek_swing_pattern_lab.py src/tests/test_pattern_lab_currentness_audit.py",
-                "DeepSeek payload summary/cases expose Swing LDM bucket/discovery and threshold EV feedback context with runtime_effect=false",
-            ],
         )
-    )
 
     checks.append(
         _check(
@@ -677,7 +684,11 @@ def build_pattern_lab_currentness_audit(target_date: str) -> dict[str, Any]:
             source_paths=[
                 PROJECT_ROOT / "src" / "engine",
                 PROJECT_ROOT / "analysis" / "claude_scalping_pattern_lab",
-                PROJECT_ROOT / "analysis" / "deepseek_swing_pattern_lab",
+                *(
+                    [PROJECT_ROOT / "analysis" / "deepseek_swing_pattern_lab"]
+                    if include_swing
+                    else []
+                ),
             ],
             severity="ai_review_gap",
             order_title="Add source-only Pattern Lab AI reviewer",
@@ -718,6 +729,8 @@ def build_pattern_lab_currentness_audit(target_date: str) -> dict[str, Any]:
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "status": status,
         "runtime_effect": False,
+        "strategy_scope": "scalp_and_swing" if include_swing else "scalp_only",
+        "swing_sources_enabled": include_swing,
         "decision_authority": "source_quality_only",
         "forbidden_uses": FORBIDDEN_USES,
         "summary": {
@@ -784,8 +797,11 @@ def render_markdown(report: dict[str, Any]) -> str:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--date", required=True)
+    parser.add_argument("--exclude-swing", action="store_true")
     args = parser.parse_args(argv)
-    report = build_pattern_lab_currentness_audit(args.date)
+    report = build_pattern_lab_currentness_audit(
+        args.date, include_swing=not args.exclude_swing
+    )
     json_path, md_path = report_paths(args.date)
     print(
         f"pattern_lab_currentness_audit status={report['status']} json={json_path} md={md_path}"

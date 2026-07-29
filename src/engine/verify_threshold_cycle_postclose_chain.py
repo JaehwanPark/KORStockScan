@@ -36,6 +36,13 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 LOG_PATH = PROJECT_ROOT / "logs" / "threshold_cycle_postclose_cron.log"
 ANALYTICS_DIR = PROJECT_ROOT / "data" / "analytics"
 VERIFY_DIR = REPORT_DIR / "threshold_cycle_postclose_verification"
+EXPLICIT_DISABLED_STAGE_ALLOWLIST = {
+    "swing_lifecycle",
+    "swing_strategy_discovery",
+    "swing_lifecycle_matrix",
+    "swing_lifecycle_bucket_discovery",
+    "deepseek_swing_lab",
+}
 ACTIVE_SIM_PRIORITY_OBSERVABLE_PREFIX_KEYS = {
     "entry_score_parent",
     "entry_source_parent",
@@ -4554,8 +4561,21 @@ def build_threshold_cycle_postclose_verification(
     target_date: str,
     *,
     require_done_marker: bool = True,
+    disabled_stages: set[str] | None = None,
 ) -> dict[str, Any]:
     target_date = str(target_date).strip()
+    requested_disabled_stages = {
+        str(stage).strip() for stage in (disabled_stages or set()) if str(stage).strip()
+    }
+    unsupported_disabled_stages = (
+        requested_disabled_stages - EXPLICIT_DISABLED_STAGE_ALLOWLIST
+    )
+    if unsupported_disabled_stages:
+        raise ValueError(
+            "unsupported explicit disabled stages: "
+            + ",".join(sorted(unsupported_disabled_stages))
+        )
+    explicit_execution_flags = {stage: False for stage in requested_disabled_stages}
     log_lines = _read_lines(LOG_PATH)
     run_lines, start_line = _latest_run_lines(log_lines, target_date)
 
@@ -4882,15 +4902,39 @@ def build_threshold_cycle_postclose_verification(
             for item in (lifecycle_bucket_windows.get("warnings") or [])
             if str(item)
         )
-    swing_lifecycle_handoff = _swing_lifecycle_handoff_status(
-        swing_ldm_report,
-        swing_bucket_discovery_report,
-        ev_report,
-        runtime_summary,
-        workorder,
+    preliminary_execution_flags = _parse_bool_flags(done_line or "")
+    preliminary_execution_flags.update(explicit_execution_flags)
+    disabled_stage_flags = {
+        stage
+        for stage, enabled in preliminary_execution_flags.items()
+        if enabled is False
+    }
+    swing_handoff_disabled = {
+        "swing_lifecycle",
+        "swing_lifecycle_matrix",
+        "swing_lifecycle_bucket_discovery",
+    }.issubset(disabled_stage_flags)
+    swing_lifecycle_handoff = (
+        {
+            "status": "disabled",
+            "warnings": [],
+            "reason": "swing_postclose_operator_policy",
+        }
+        if swing_handoff_disabled
+        else _swing_lifecycle_handoff_status(
+            swing_ldm_report,
+            swing_bucket_discovery_report,
+            ev_report,
+            runtime_summary,
+            workorder,
+        )
     )
-    provider_mismatch_warning = _swing_lifecycle_provider_mismatch_warning(
-        done_line, swing_bucket_discovery_report
+    provider_mismatch_warning = (
+        None
+        if swing_handoff_disabled
+        else _swing_lifecycle_provider_mismatch_warning(
+            done_line, swing_bucket_discovery_report
+        )
     )
     if provider_mismatch_warning:
         warnings = list(swing_lifecycle_handoff.get("warnings") or [])
@@ -4918,7 +4962,6 @@ def build_threshold_cycle_postclose_verification(
         producer_gap_discovery,
         workorder,
     )
-    preliminary_execution_flags = _parse_bool_flags(done_line or "")
     if (
         preliminary_execution_flags.get("stage_hook_workorder_discovery") is True
         and stage_hook_handoff.get("status") == "fail"
@@ -5128,6 +5171,7 @@ def build_threshold_cycle_postclose_verification(
     }
     marker_reconciliation_done = recovery_action == "marker_reconciliation"
     execution_flags = _parse_bool_flags(done_line or "")
+    execution_flags.update(explicit_execution_flags)
     required_execution_flags = (
         "swing_lifecycle",
         "pattern_labs",
@@ -5324,6 +5368,7 @@ def build_threshold_cycle_postclose_verification(
             if "lifecycle_decision_matrix" in disabled_stage_flags
             else ""
         ),
+        ("swing_lifecycle_audit" if "swing_lifecycle" in disabled_stage_flags else ""),
         (
             "swing_strategy_discovery_sim"
             if "swing_strategy_discovery" in disabled_stage_flags
@@ -5397,19 +5442,19 @@ def build_threshold_cycle_postclose_verification(
         disabled_artifact_labels.add("swing_lifecycle_decision_matrix")
     if "swing_lifecycle_bucket_discovery" not in execution_flags:
         disabled_artifact_labels.add("swing_lifecycle_bucket_discovery")
-    if "pattern_lab_ai_review" not in execution_flags:
+    if execution_flags.get("pattern_lab_ai_review") is not True:
         disabled_artifact_labels.add("pattern_lab_ai_review")
-    if "ai_watching_score_smoothing_diagnostic" not in execution_flags:
+    if execution_flags.get("ai_watching_score_smoothing_diagnostic") is not True:
         disabled_artifact_labels.add("ai_watching_score_smoothing_diagnostic")
-    if "time_window_regime_counterfactual" not in execution_flags:
+    if execution_flags.get("time_window_regime_counterfactual") is not True:
         disabled_artifact_labels.add("time_window_regime_counterfactual")
-    if "producer_gap_discovery" not in execution_flags:
+    if execution_flags.get("producer_gap_discovery") is not True:
         disabled_artifact_labels.add("producer_gap_discovery")
-    if "one_share_threshold_opportunity" not in execution_flags:
+    if execution_flags.get("one_share_threshold_opportunity") is not True:
         disabled_artifact_labels.add("one_share_threshold_opportunity")
-    if "stage_hook_workorder_discovery" not in execution_flags:
+    if execution_flags.get("stage_hook_workorder_discovery") is not True:
         disabled_artifact_labels.add("stage_hook_workorder_discovery")
-    if "stage_hook_runtime_scaffold" not in execution_flags:
+    if execution_flags.get("stage_hook_runtime_scaffold") is not True:
         disabled_artifact_labels.add("stage_hook_runtime_scaffold")
     disabled_artifact_labels.discard("")
     missing_required_artifacts = [
@@ -6655,11 +6700,22 @@ def main() -> None:
             "but the wrapper has not emitted its final DONE marker yet."
         ),
     )
+    parser.add_argument(
+        "--disabled-stage",
+        action="append",
+        default=[],
+        choices=sorted(EXPLICIT_DISABLED_STAGE_ALLOWLIST),
+        help=(
+            "Declare an intentionally disabled wrapper stage during pending-marker "
+            "verification. May be supplied more than once."
+        ),
+    )
     args = parser.parse_args()
 
     report = build_threshold_cycle_postclose_verification(
         args.date,
         require_done_marker=not args.allow_pending_done_marker,
+        disabled_stages=set(args.disabled_stage),
     )
     VERIFY_DIR.mkdir(parents=True, exist_ok=True)
     json_path, md_path = verification_report_paths(args.date)

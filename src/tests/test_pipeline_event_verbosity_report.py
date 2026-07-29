@@ -80,6 +80,32 @@ def test_pipeline_event_verbosity_report_detects_missing_shadow(monkeypatch, tmp
     assert report["policy"]["runtime_effect"] is False
 
 
+def test_pipeline_event_verbosity_report_does_not_require_shadow_without_eligible_events(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    _write_raw(
+        tmp_path,
+        "2026-05-06",
+        [
+            _event(
+                "2026-05-06",
+                "10:00:00",
+                "unrelated_low_volume_stage",
+                record_id=1,
+            )
+        ],
+    )
+
+    report = report_mod.build_pipeline_event_verbosity_report("2026-05-06")
+
+    assert report["state"] == "v2_shadow_no_eligible_events"
+    assert report["recommended_workorder_state"] == "observe_no_eligible_events"
+    assert report["parity"]["ok"] is True
+    assert report["parity"]["no_eligible_events"] is True
+    assert report["producer_summary"]["exists"] is False
+
+
 def test_pipeline_event_verbosity_report_parity_pass(monkeypatch, tmp_path):
     monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
     rows = [

@@ -1097,3 +1097,105 @@ def test_invalid_probe_fill_attribution_is_excluded_from_expansion_ev(tmp_path):
         == 1
     )
     assert report["summary"]["normal_winner_expansion"]["closed_candidate_count"] == 0
+
+
+def test_post_sell_pyramid_candidate_is_temporal_source_quality_blocked(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-28.jsonl"
+    rows = [
+        _event(
+            608,
+            "285800",
+            "temporal",
+            "rising_missed_one_share_entry",
+            {
+                "actual_order_submitted": True,
+                "forced_entry_qty": 9,
+                "rising_missed_effective_venue": "NXT",
+                "rising_missed_market_session_bucket": "nxt_entry_window",
+            },
+            emitted_at="2026-07-28T19:38:40+09:00",
+            pipeline="ENTRY_PIPELINE",
+        ),
+        _event(
+            608,
+            "285800",
+            "temporal",
+            "probe_filled",
+            {
+                "probe_bundle_id": "bundle-608",
+                "fill_qty": 1,
+                "fill_price": 14080,
+                "effective_venue": "NXT",
+                "market_session_bucket": "nxt_entry_window",
+            },
+            emitted_at="2026-07-28T19:38:41+09:00",
+            pipeline="ENTRY_PIPELINE",
+        ),
+        _event(
+            608,
+            "285800",
+            "temporal",
+            "residual_blocked",
+            {
+                "probe_bundle_id": "bundle-608",
+                "reason": "residual_revalidation_timeout",
+                "forced_entry_qty": 9,
+            },
+            emitted_at="2026-07-28T19:38:44+09:00",
+            pipeline="ENTRY_PIPELINE",
+        ),
+        _event(
+            608,
+            "285800",
+            "temporal",
+            "sell_completed",
+            {"profit_rate": "+0.62", "peak_profit": "+1.20"},
+            emitted_at="2026-07-28T19:38:49+09:00",
+        ),
+        _event(
+            608,
+            "285800",
+            "temporal",
+            "pyramid_blocked_reason",
+            {
+                "scale_in_arm": "PYRAMID",
+                "scale_in_blocker_reason": "probe_expand_forbidden",
+                "profit_rate": "+1.05",
+                "current_ai_score": 70,
+                "buy_pressure_10t": 80,
+                "tick_aggressor_trusted_count": 10,
+                "tick_aggressor_pressure_usable": True,
+                "tick_acceleration_ratio": 1.2,
+                "curr_vs_micro_vwap_bp": 10,
+                "micro_vwap_available": True,
+                "minute_candle_window_fresh": True,
+            },
+            emitted_at="2026-07-28T19:39:33+09:00",
+        ),
+    ]
+    # Independent writers may flush in a different order than event time.
+    rows[-2], rows[-1] = rows[-1], rows[-2]
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8"
+    )
+
+    report = mod.build_report(
+        "2026-07-28", pipeline_path=pipeline_path, generated_at="fixed"
+    )
+    item = report["normal_winner_expansion_rows"][0]
+    summary = report["summary"]["normal_winner_expansion"]
+
+    assert report["pyramid_feedback_rows"] == []
+    assert item["normal_winner_expansion_temporal_inversion"] is True
+    assert item["normal_winner_expansion_candidate_at"] is None
+    assert item["final_profit_rate"] == 0.62
+    assert item["normal_winner_expansion_label"] == "source_quality_blocked"
+    assert (
+        "temporal_inversion:candidate_after_final_ts"
+        in item["normal_winner_expansion_source_quality_reasons"]
+    )
+    assert summary["temporal_inversion_candidate_count"] == 1
+    assert summary["source_quality_valid_candidate_count"] == 0
+    assert summary["closed_candidate_count"] == 0
+    assert report["source_quality"]["status"] == "pass"
+    assert report["source_quality"]["temporal_inversion_candidate_count"] == 1

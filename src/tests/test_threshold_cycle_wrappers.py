@@ -60,6 +60,7 @@ def test_threshold_cycle_cron_installs_scalp_sim_overnight_preclose_once():
     assert "10 15 * * 1-5" in script
     assert "deploy/run_scalp_sim_overnight_preclose.sh" in script
     assert "!/SCALP_SIM_OVERNIGHT_PRECLOSE/" in script
+    assert "THRESHOLD_CYCLE_RUN_SWING_POSTCLOSE=false" in script
 
 
 def test_postclose_done_controller_wrapper_runs_controller_and_skips_codex_runner_by_default():
@@ -120,7 +121,7 @@ def test_postclose_done_controller_cron_installs_2010_once():
     assert "deploy/run_postclose_done_controller.sh" in script
 
 
-def test_postclose_wrapper_runs_swing_daily_simulation_before_lifecycle_audit():
+def test_postclose_wrapper_keeps_swing_postclose_off_until_operator_override():
     script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
 
     simulation_idx = script.index(
@@ -158,6 +159,9 @@ def test_postclose_wrapper_runs_swing_daily_simulation_before_lifecycle_audit():
         in script
     )
     assert (
+        'RUN_SWING_POSTCLOSE="${THRESHOLD_CYCLE_RUN_SWING_POSTCLOSE:-false}"' in script
+    )
+    assert (
         'RUN_SWING_STRATEGY_DISCOVERY="${THRESHOLD_CYCLE_RUN_SWING_STRATEGY_DISCOVERY:-true}"'
         in script
     )
@@ -169,6 +173,35 @@ def test_postclose_wrapper_runs_swing_daily_simulation_before_lifecycle_audit():
         'RUN_SWING_LIFECYCLE_BUCKET_DISCOVERY="${THRESHOLD_CYCLE_RUN_SWING_LIFECYCLE_BUCKET_DISCOVERY:-$RUN_SWING_LIFECYCLE_MATRIX}"'
         in script
     )
+    assert "RUN_SWING_LIFECYCLE_AUDIT=false" in script
+    assert "RUN_SWING_STRATEGY_DISCOVERY=false" in script
+    assert "RUN_SWING_LIFECYCLE_MATRIX=false" in script
+    assert "RUN_SWING_LIFECYCLE_BUCKET_DISCOVERY=false" in script
+    assert "RUN_DEEPSEEK_SWING_LAB=false" in script
+    assert "RUN_SWING_PATTERN_LAB_AUTOMATION=false" in script
+    assert "--disabled-stage swing_lifecycle" in script
+    assert "--disabled-stage swing_strategy_discovery" in script
+    assert "--disabled-stage swing_lifecycle_matrix" in script
+    assert "--disabled-stage swing_lifecycle_bucket_discovery" in script
+
+
+def test_swing_postclose_cron_installers_require_explicit_operator_override():
+    dry_run_installer = Path("deploy/install_swing_live_dry_run_cron.sh").read_text(
+        encoding="utf-8"
+    )
+    retrain_installer = Path("deploy/install_swing_model_retrain_cron.sh").read_text(
+        encoding="utf-8"
+    )
+
+    for script in (dry_run_installer, retrain_installer):
+        assert (
+            'OPERATOR_OVERRIDE="${KORSTOCKSCAN_SWING_POSTCLOSE_OPERATOR_OVERRIDE:-false}"'
+            in script
+        )
+        assert (
+            '[[ "$OPERATOR_OVERRIDE" == "true" || "$OPERATOR_OVERRIDE" == "1" ]]'
+            in script
+        )
 
 
 def test_swing_ldm_rolling_backfill_waits_for_postclose_and_skips_holidays():
@@ -327,6 +360,7 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     runtime_summary_idx = script.index("src.engine.runtime_approval_summary")
     runtime_gap_idx = script.index("src.engine.runtime_apply_gap_audit")
     conversion_lane_idx = script.index("src.engine.automation.conversion_lane")
+    assert "CONVERSION_LANE_SWING_ARGS+=(--exclude-swing)" in script
     rising_missed_prior_idx = script.index(
         "src.engine.monitoring.rising_missed_classifier_prior"
     )
@@ -335,10 +369,10 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     )
     next_checklist_idx = script.rindex("src.engine.build_next_stage2_checklist")
     pending_verify_idx = script.index(
-        'src.engine.verify_threshold_cycle_postclose_chain --date "$TARGET_DATE" --allow-pending-done-marker'
+        "src.engine.verify_threshold_cycle_postclose_chain"
     )
     final_verify_idx = script.index(
-        'src.engine.verify_threshold_cycle_postclose_chain --date "$TARGET_DATE"',
+        "src.engine.verify_threshold_cycle_postclose_chain",
         pending_verify_idx + 1,
     )
     tuning_control_idx = script.index(
