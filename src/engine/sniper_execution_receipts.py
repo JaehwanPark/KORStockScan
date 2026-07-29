@@ -171,8 +171,20 @@ def _probe_observation_contract_fields(stock: dict[str, Any]) -> dict[str, Any]:
                 stock.get("probe_confirmation_last_state") or "UNKNOWN"
             ),
             "probe_expand_forbidden": bool(stock.get("probe_expand_forbidden", False)),
+            "entry_split_probe_residual_expand_forbidden": bool(
+                stock.get(
+                    "entry_split_probe_residual_expand_forbidden",
+                    stock.get("probe_expand_forbidden", False),
+                )
+            ),
             "entry_split_probe_scale_in_forbidden": bool(
                 stock.get("entry_split_probe_scale_in_forbidden", False)
+            ),
+            "entry_split_probe_scale_in_recheck_allowed": bool(
+                stock.get("entry_split_probe_scale_in_recheck_allowed", False)
+            ),
+            "entry_split_probe_scale_in_recheck_origin": (
+                stock.get("entry_split_probe_scale_in_recheck_origin") or "-"
             ),
         }
     )
@@ -421,6 +433,7 @@ _SELL_REVIVE_RESET_KEYS = (
     "entry_split_probe_scale_in_forbidden",
     "entry_split_probe_soft_abort",
     "entry_split_probe_scale_in_recheck_allowed",
+    "entry_split_probe_scale_in_recheck_origin",
     "entry_split_probe_scale_in_recheck_reason",
     "entry_split_probe_source_quality_recheck_released",
     "entry_split_probe_source_quality_recheck_released_at",
@@ -434,6 +447,7 @@ _SELL_REVIVE_RESET_KEYS = (
     "probe_confirmation_last_state",
     "probe_confirmation_last_signature",
     "probe_expand_forbidden",
+    "entry_split_probe_residual_expand_forbidden",
     "peak_rebaseline_pending",
     "peak_basis_qty",
     "peak_basis_avg_price",
@@ -505,6 +519,7 @@ _SELL_COMPLETE_RESET_KEYS = (
     "entry_split_probe_scale_in_forbidden",
     "entry_split_probe_soft_abort",
     "entry_split_probe_scale_in_recheck_allowed",
+    "entry_split_probe_scale_in_recheck_origin",
     "entry_split_probe_scale_in_recheck_reason",
     "entry_split_probe_source_quality_recheck_released",
     "entry_split_probe_source_quality_recheck_released_at",
@@ -518,6 +533,7 @@ _SELL_COMPLETE_RESET_KEYS = (
     "probe_confirmation_last_state",
     "probe_confirmation_last_signature",
     "probe_expand_forbidden",
+    "entry_split_probe_residual_expand_forbidden",
     "peak_rebaseline_pending",
     "peak_basis_qty",
     "peak_basis_avg_price",

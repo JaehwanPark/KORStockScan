@@ -51,6 +51,29 @@ def _optional_boolish(value: Any) -> bool | None:
     return _boolish(value)
 
 
+def _event_epoch(value: Any) -> float | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=KST)
+    return parsed.timestamp()
+
+
+def _event_after_final(item: dict[str, Any], row: dict[str, Any]) -> bool:
+    final_epoch = _event_epoch(item.get("final_ts"))
+    event_epoch = _event_epoch(row.get("emitted_at"))
+    return bool(
+        final_epoch is not None
+        and event_epoch is not None
+        and event_epoch > final_epoch
+    )
+
+
 def _pyramid_min_profit_pct() -> float:
     return float(getattr(TRADING_RULES, "SCALPING_PYRAMID_MIN_PROFIT_PCT", 1.5) or 1.5)
 
@@ -728,10 +751,35 @@ def _incremental_return_pct(
 
 def _update_normal_winner_expansion_candidate(
     item: dict[str, Any], blocked: dict[str, Any], row: dict[str, Any]
-) -> None:
+) -> bool:
     profit_rate = _safe_float(blocked.get("profit_rate"), None)
     if profit_rate is None or profit_rate <= 0:
-        return
+        return True
+    if _event_after_final(item, row):
+        reason = "temporal_inversion:candidate_after_final_ts"
+        candidate = {
+            "observed_at": row.get("emitted_at"),
+            "profit_rate": profit_rate,
+            "scale_in_blocker_reason": blocked.get("scale_in_blocker_reason"),
+            "source_quality_valid": False,
+            "source_quality_reason": reason,
+            "final_ts": item.get("final_ts"),
+        }
+        item.setdefault("normal_winner_expansion_candidates", []).append(candidate)
+        item["normal_winner_expansion_candidate_count"] = len(
+            item["normal_winner_expansion_candidates"]
+        )
+        item["normal_winner_expansion_candidate_seen"] = True
+        item["normal_winner_expansion_temporal_inversion"] = True
+        item["normal_winner_expansion_temporal_inversion_candidate_at"] = row.get(
+            "emitted_at"
+        )
+        item["normal_winner_expansion_source_quality_valid"] = False
+        reasons = list(item.get("normal_winner_expansion_source_quality_reasons") or [])
+        if reason not in reasons:
+            reasons.append(reason)
+        item["normal_winner_expansion_source_quality_reasons"] = reasons
+        return False
     source_quality_valid = bool(
         not _pressure_provenance_missing(blocked)
         and not _pressure_provenance_unusable(blocked)
@@ -771,16 +819,41 @@ def _update_normal_winner_expansion_candidate(
     item["normal_winner_expansion_source_quality_valid"] = source_quality_valid
     item["normal_winner_expansion_post_candidate_max_profit_pct"] = profit_rate
     item["normal_winner_expansion_post_candidate_min_profit_pct"] = profit_rate
+    return True
 
 
 def _finalize_normal_winner_expansion(item: dict[str, Any]) -> None:
     if not item.get("normal_winner_expansion_candidate_seen"):
         item["normal_winner_expansion_label"] = "not_observed"
         return
+    candidate_at = item.get("normal_winner_expansion_candidate_at")
+    if (
+        candidate_at
+        and _event_epoch(candidate_at) is not None
+        and _event_epoch(item.get("final_ts")) is not None
+        and _event_epoch(candidate_at) > _event_epoch(item.get("final_ts"))
+    ):
+        reason = "temporal_inversion:candidate_after_final_ts"
+        item["normal_winner_expansion_temporal_inversion"] = True
+        item["normal_winner_expansion_temporal_inversion_candidate_at"] = candidate_at
+        item["normal_winner_expansion_source_quality_valid"] = False
+        for key in (
+            "normal_winner_expansion_candidate_at",
+            "normal_winner_expansion_entry_profit_pct",
+            "normal_winner_expansion_post_candidate_max_profit_pct",
+            "normal_winner_expansion_post_candidate_min_profit_pct",
+        ):
+            item.pop(key, None)
+        reasons = list(item.get("normal_winner_expansion_source_quality_reasons") or [])
+        if reason not in reasons:
+            reasons.append(reason)
+        item["normal_winner_expansion_source_quality_reasons"] = reasons
     base_source_quality_valid = bool(
         item.get("normal_winner_expansion_source_quality_valid")
     )
-    source_quality_reasons = []
+    source_quality_reasons = list(
+        item.get("normal_winner_expansion_source_quality_reasons") or []
+    )
     if item.get("residual_fill_attribution_valid") is not True:
         source_quality_reasons.append(
             f"residual_fill_attribution:{item.get('residual_fill_attribution_state') or 'unknown'}"
@@ -792,7 +865,9 @@ def _finalize_normal_winner_expansion(item: dict[str, Any]) -> None:
     item["normal_winner_expansion_source_quality_valid"] = bool(
         base_source_quality_valid and not source_quality_reasons
     )
-    item["normal_winner_expansion_source_quality_reasons"] = source_quality_reasons
+    item["normal_winner_expansion_source_quality_reasons"] = list(
+        dict.fromkeys(source_quality_reasons)
+    )
     entry_profit = _safe_float(
         item.get("normal_winner_expansion_entry_profit_pct"), None
     )
@@ -1327,6 +1402,11 @@ def _normal_winner_expansion_summary(rows: list[dict[str, Any]]) -> dict[str, An
     ]
     return {
         "candidate_count": len(candidates),
+        "temporal_inversion_candidate_count": sum(
+            1
+            for item in candidates
+            if bool(item.get("normal_winner_expansion_temporal_inversion"))
+        ),
         "source_quality_valid_candidate_count": len(valid),
         "source_quality_blocked_candidate_count": len(candidates) - len(valid),
         "closed_candidate_count": len(closed),
@@ -1438,12 +1518,15 @@ def build_report(
             _update_probe_residual_observation(one_share_records[key], row)
         blocked = _pyramid_blocked_record(row)
         if blocked:
-            item = candidates.setdefault(key, blocked)
-            item.update({k: v for k, v in blocked.items() if v not in (None, "")})
+            accepted_for_lifecycle = True
             if key in one_share_records:
-                _update_normal_winner_expansion_candidate(
+                accepted_for_lifecycle = _update_normal_winner_expansion_candidate(
                     one_share_records[key], blocked, row
                 )
+            if accepted_for_lifecycle:
+                item = candidates.setdefault(key, blocked)
+                item.update({k: v for k, v in blocked.items() if v not in (None, "")})
+            if key in one_share_records and accepted_for_lifecycle:
                 one_share_records[key].update(
                     {k: v for k, v in blocked.items() if v not in (None, "")}
                 )
@@ -1463,7 +1546,7 @@ def build_report(
             if stage == "sell_completed":
                 _update_snapshot(candidates[key], row)
                 _update_sell(candidates[key], row)
-            elif (
+            elif not _event_after_final(candidates[key], row) and (
                 stage
                 in {"stat_action_decision_snapshot", "bad_entry_refined_candidate"}
                 or "profit_rate" in fields
@@ -1476,7 +1559,7 @@ def build_report(
             if stage == "sell_completed":
                 _update_snapshot(one_share_records[key], row)
                 _update_sell(one_share_records[key], row)
-            elif (
+            elif not _event_after_final(one_share_records[key], row) and (
                 stage
                 in {"stat_action_decision_snapshot", "bad_entry_refined_candidate"}
                 or "profit_rate" in fields
@@ -1484,6 +1567,18 @@ def build_report(
                 _update_snapshot(one_share_records[key], row)
             if "submit" in stage or "receipt" in stage or "submitted" in stage:
                 _update_submit(one_share_records[key], row)
+
+    # JSONL writes from independent workers can be physically out of timestamp
+    # order. A pyramid event whose own event time is after the terminal sell is
+    # not a lifecycle candidate even when it appeared earlier in the file.
+    for key, item in list(candidates.items()):
+        lifecycle = one_share_records.get(key) or item
+        if _event_epoch(item.get("first_observed_ts")) is not None and (
+            _event_epoch(lifecycle.get("final_ts")) is not None
+            and _event_epoch(item.get("first_observed_ts"))
+            > _event_epoch(lifecycle.get("final_ts"))
+        ):
+            candidates.pop(key, None)
 
     pyramid_threshold_provenance = _apply_daily_pyramid_threshold_provenance(
         one_share_records,
@@ -1556,6 +1651,11 @@ def build_report(
         for item in one_share_rows
         if item.get("residual_fill_attribution_valid") is False
     )
+    temporal_inversion_candidate_count = sum(
+        1
+        for item in one_share_rows
+        if bool(item.get("normal_winner_expansion_temporal_inversion"))
+    )
     if pressure_provenance_missing_count:
         source_quality_status = "pressure_provenance_missing"
     if pressure_provenance_unusable_count:
@@ -1610,7 +1710,8 @@ def build_report(
             "source_quality_gate": (
                 "one_share_record_join_positive_pyramid_evaluation_with_optional_"
                 "pressure_and_micro_vwap_feature_provenance_then_post_candidate_"
-                "holding_and_sell; explicit_conflict_free_venue_required_for_venue_split"
+                "holding_and_sell; candidate_at_must_not_be_after_final_ts; "
+                "explicit_conflict_free_venue_required_for_venue_split"
             ),
             "forbidden_uses": FORBIDDEN_USES,
         },
@@ -1637,6 +1738,7 @@ def build_report(
             "residual_fill_attribution_invalid_count": (
                 residual_fill_attribution_invalid_count
             ),
+            "temporal_inversion_candidate_count": temporal_inversion_candidate_count,
         },
         "summary": {
             "pyramid_feedback_row_count": len(rows),
@@ -1647,6 +1749,7 @@ def build_report(
             "residual_fill_attribution_invalid_count": (
                 residual_fill_attribution_invalid_count
             ),
+            "temporal_inversion_candidate_count": temporal_inversion_candidate_count,
             "closed_pyramid_row_count": sum(
                 1
                 for item in rows
@@ -1693,6 +1796,9 @@ def build_report(
                     "normal_winner_expansion_tick_acceleration_ratio",
                     "normal_winner_expansion_curr_vs_micro_vwap_bp",
                     "normal_winner_expansion_source_quality_valid",
+                    "normal_winner_expansion_source_quality_reasons",
+                    "normal_winner_expansion_temporal_inversion",
+                    "normal_winner_expansion_temporal_inversion_candidate_at",
                     "normal_winner_expansion_assumed_trade_cost_pct",
                     "normal_winner_expansion_candidate_notional_krw",
                     "normal_winner_expansion_gross_incremental_mfe_pct",

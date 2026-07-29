@@ -125,6 +125,12 @@ class _SyncSession:
             if getattr(record, "id", None) is None:
                 record.id = 9000 + idx
 
+    def refresh(self, record, *, with_for_update=False):
+        return None
+
+    def commit(self):
+        return None
+
 
 class _SyncDB:
     def __init__(self, active_records, pending_records=None, history_records=None):
@@ -596,6 +602,69 @@ def test_periodic_account_sync_does_not_invent_pnl_for_missing_sell_receipt(
             "reason": "periodic_sync_completed_no_broker_holding",
         }
     ]
+
+
+def test_periodic_account_sync_does_not_overwrite_concurrent_sell_receipt(
+    monkeypatch,
+):
+    record = type(
+        "Record",
+        (),
+        {
+            "stock_code": "123456",
+            "stock_name": "TEST",
+            "status": "HOLDING",
+            "buy_price": 100000.0,
+            "buy_qty": 1,
+            "sell_price": None,
+            "sell_time": None,
+            "profit_rate": None,
+            "scale_in_locked": False,
+        },
+    )()
+
+    sniper_sync.KIWOOM_TOKEN = "token"
+    db = _SyncDB([record], [])
+    sniper_sync.DB = db
+    sniper_sync.ACTIVE_TARGETS = [{"code": "123456", "status": "HOLDING"}]
+    sniper_sync.HIGHEST_PRICES = {"123456": 101000}
+    sniper_sync.STATE_LOCK = _DummyLock()
+    monkeypatch.setattr(
+        sniper_sync.kiwoom_utils,
+        "get_account_balance_kt00005",
+        lambda token: ([], {"KRX"}),
+    )
+    monkeypatch.setattr(
+        sniper_sync.kiwoom_utils,
+        "get_account_execution_snapshot_kt00008",
+        lambda token: [],
+    )
+
+    refresh_calls = []
+
+    def complete_during_refresh(current, *, with_for_update=False):
+        refresh_calls.append(with_for_update)
+        current.status = "COMPLETED"
+        current.sell_price = 101000
+        current.sell_time = datetime(2026, 7, 28, 19, 38, 49)
+        current.profit_rate = 0.76
+
+    db._session.refresh = complete_during_refresh
+    emitted = []
+    monkeypatch.setattr(
+        sniper_sync,
+        "emit_pipeline_event",
+        lambda *args, **kwargs: emitted.append((args, kwargs)),
+    )
+
+    sniper_sync.periodic_account_sync()
+
+    assert refresh_calls == [True]
+    assert record.status == "COMPLETED"
+    assert record.sell_price == 101000
+    assert record.sell_time == datetime(2026, 7, 28, 19, 38, 49)
+    assert record.profit_rate == 0.76
+    assert emitted == []
 
 
 def test_periodic_account_sync_quarantines_prebaseline_scalping_ghost(
@@ -1507,6 +1576,21 @@ def test_holding_state_uses_net_profit_rate_for_sell_decision(monkeypatch):
         "send_smart_sell_order",
         lambda **kwargs: sell_calls.append(kwargs)
         or {"return_code": "0", "ord_no": "S1"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_sell_side_open_time_block_fields",
+        lambda **kwargs: {"sell_time_block_applied": False},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_manual_control_exclusion_blocked",
+        lambda *args, **kwargs: False,
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_maybe_auto_exclude_open_loss_holding",
+        lambda *args, **kwargs: False,
     )
 
     stock = {

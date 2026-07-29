@@ -243,6 +243,46 @@ def test_operator_directed_promotion_requires_explicit_authority_and_reason(tmp_
     assert "operator_directed_reason_missing" in report["findings"]
 
 
+def test_operator_directed_promotion_can_use_the_remaining_apply_window(tmp_path):
+    report = promotion.evaluate_promotion(
+        target_date="2026-07-27",
+        validation={},
+        golden_validation={},
+        review={},
+        runtime_manifest=_runtime_manifest(tmp_path),
+        runtime_verify={"status": "pass", "passed": True},
+        operator_directed=True,
+        operator_authorization_id=promotion.operator_directed_authority_id(
+            "2026-07-27"
+        ),
+        operator_reason="Explicit operator-directed full-market Exact V2 activation.",
+        now=datetime(2026, 7, 27, 8, 55, tzinfo=KST),
+    )
+
+    assert report["status"] == "pass"
+    assert report["promotion_window_status"] == "pass"
+
+
+def test_operator_directed_promotion_closes_at_market_open(tmp_path):
+    report = promotion.evaluate_promotion(
+        target_date="2026-07-27",
+        validation={},
+        golden_validation={},
+        review={},
+        runtime_manifest=_runtime_manifest(tmp_path),
+        runtime_verify={"status": "pass", "passed": True},
+        operator_directed=True,
+        operator_authorization_id=promotion.operator_directed_authority_id(
+            "2026-07-27"
+        ),
+        operator_reason="Explicit operator-directed full-market Exact V2 activation.",
+        now=datetime(2026, 7, 27, 9, 0, tzinfo=KST),
+    )
+
+    assert report["status"] == "fail"
+    assert report["promotion_window_status"] == "premarket_validation_window_closed"
+
+
 def test_evaluate_promotion_requires_actual_exact_calls_for_each_core_endpoint(
     tmp_path,
 ):

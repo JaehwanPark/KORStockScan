@@ -4053,6 +4053,57 @@ def test_nxt_wait_probe_timeout_keeps_fast_tape_fail_closed(monkeypatch):
     assert stock["probe_expand_forbidden"] is True
 
 
+def test_nxt_rising_missed_wait_timeout_keeps_residual_terminal_but_reopens_scale_in(
+    monkeypatch,
+):
+    now_ts = 1_784_778_400.0
+    monkeypatch.setattr(
+        state_handlers,
+        "_rising_missed_ai_action_guard_active",
+        lambda **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        state_handlers, "_log_entry_pipeline", lambda *args, **kwargs: None
+    )
+    stock = {
+        "status": "HOLDING",
+        "entry_filled_qty": 1,
+        "entry_split_probe_requested_qty": 20,
+        "entry_split_probe_direction_reason": "post_probe_wait_negative_group",
+        "rising_missed_effective_venue": "NXT",
+        "rising_missed_market_session_bucket": "nxt_entry_window",
+        "rising_missed_one_share_scout": True,
+    }
+
+    state_handlers._abort_entry_split_probe_residual(
+        stock,
+        "123456",
+        "residual_revalidation_timeout",
+        preserve_position=True,
+        now_ts=now_ts,
+    )
+
+    assert stock["entry_split_probe_soft_abort"] is False
+    assert stock["probe_expand_forbidden"] is True
+    assert stock["entry_split_probe_residual_expand_forbidden"] is True
+    assert stock["entry_split_probe_scale_in_forbidden"] is False
+    assert stock["entry_split_probe_scale_in_recheck_allowed"] is True
+    assert (
+        stock["entry_split_probe_scale_in_recheck_origin"] == "normal_winner_recovery"
+    )
+    decision = state_handlers.can_consider_scale_in(
+        stock,
+        "123456",
+        {"curr": 10000},
+        "SCALPING",
+        "NORMAL",
+    )
+    assert decision.get("reason") not in {
+        "probe_expand_forbidden",
+        "entry_split_probe_scale_in_forbidden",
+    }
+
+
 def test_pre_submit_entry_ai_authority_retry_refreshes_missing_ai(monkeypatch):
     now_ts = 1_783_471_000.0
     response_completed_at = now_ts + 86.0
@@ -15748,7 +15799,6 @@ def test_flush_deferred_add_completion_notice_uses_final_bundle_state(monkeypatc
 
 def test_execute_scale_in_order_failure_no_pending(monkeypatch):
     state_handlers.KIWOOM_TOKEN = "test"
-    received_ts = time.time()
 
     monkeypatch.setattr(
         state_handlers,
@@ -15782,6 +15832,61 @@ def test_execute_scale_in_order_failure_no_pending(monkeypatch):
 
     assert stock.get("pending_add_order") is None
     assert stock.get("pending_add_type") is None
+
+
+def test_scale_in_exit_authority_blocks_gate_ai_and_broker(monkeypatch):
+    stock = {
+        "name": "EXITED",
+        "strategy": "SCALPING",
+        "status": "COMPLETED",
+        "buy_qty": 1,
+    }
+    broker_calls = []
+    pipeline_logs = []
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_buy_order",
+        lambda *args, **kwargs: broker_calls.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: pipeline_logs.append((stage, fields)),
+    )
+
+    gate = state_handlers.can_consider_scale_in(
+        stock,
+        "123456",
+        {"curr": 10000},
+        "SCALPING",
+        "NORMAL",
+    )
+    signal = state_handlers._evaluate_scale_in_signal(
+        stock=stock,
+        code="123456",
+        strategy="SCALPING",
+        market_regime="NORMAL",
+        profit_rate=1.0,
+        peak_profit=1.0,
+        curr_price=10000,
+        ws_data={"curr": 10000},
+        ai_engine=object(),
+    )
+    result = state_handlers.execute_scale_in_order(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 10000},
+        action={"add_type": "PYRAMID"},
+        admin_id=1,
+    )
+
+    assert gate == {"allowed": False, "reason": "position_status_completed"}
+    assert signal is None
+    assert result is None
+    assert broker_calls == []
+    assert pipeline_logs[-1][0] == "scale_in_exit_authority_blocked"
+    assert pipeline_logs[-1][1]["scale_in_block_phase"] == "execute_start"
+    assert pipeline_logs[-1][1]["actual_order_submitted"] is False
 
 
 def test_execute_scale_in_order_partial_split_submit_keeps_pending(monkeypatch):
@@ -31113,6 +31218,7 @@ def test_holding_sell_still_works_when_paused(monkeypatch):
         "DummyDB",
         (),
         {
+            "get_latest_is_nxt": lambda self, code: False,
             "get_session": lambda self: type(
                 "Ctx",
                 (),
@@ -31139,7 +31245,7 @@ def test_holding_sell_still_works_when_paused(monkeypatch):
                     )(),
                     "__exit__": lambda *args: None,
                 },
-            )()
+            )(),
         },
     )()
 
@@ -31156,6 +31262,11 @@ def test_holding_sell_still_works_when_paused(monkeypatch):
         "can_consider_scale_in",
         lambda *args, **kwargs: called.__setitem__("gate", True)
         or {"allowed": False, "reason": "buy_side_paused"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_holding_ws_freshness_recover_or_block",
+        lambda stock, code, ws_data, *, now_ts: (ws_data, False, {}),
     )
 
     stock = {
@@ -31174,6 +31285,8 @@ def test_holding_sell_still_works_when_paused(monkeypatch):
         ws_data={"curr": 90},
         admin_id=1,
         market_regime="BULL",
+        now_ts=1_785_200_400.0,
+        now_dt=datetime(2026, 7, 28, 10, 0, 0),
         radar=None,
         ai_engine=None,
     )

@@ -34459,8 +34459,20 @@ def _entry_split_probe_observation_contract_fields(
                 stock.get("probe_confirmation_last_state") or "UNKNOWN"
             ),
             "probe_expand_forbidden": bool(stock.get("probe_expand_forbidden", False)),
+            "entry_split_probe_residual_expand_forbidden": bool(
+                stock.get(
+                    "entry_split_probe_residual_expand_forbidden",
+                    stock.get("probe_expand_forbidden", False),
+                )
+            ),
             "entry_split_probe_scale_in_forbidden": bool(
                 stock.get("entry_split_probe_scale_in_forbidden", False)
+            ),
+            "entry_split_probe_scale_in_recheck_allowed": bool(
+                stock.get("entry_split_probe_scale_in_recheck_allowed", False)
+            ),
+            "entry_split_probe_scale_in_recheck_origin": (
+                stock.get("entry_split_probe_scale_in_recheck_origin") or "-"
             ),
         }
     )
@@ -34529,6 +34541,7 @@ _ENTRY_SPLIT_PROBE_RUNTIME_KEYS = (
     "entry_split_probe_reward_target_price",
     "entry_split_probe_soft_abort",
     "entry_split_probe_scale_in_recheck_allowed",
+    "entry_split_probe_scale_in_recheck_origin",
     "entry_split_probe_scale_in_recheck_reason",
     "entry_split_probe_source_quality_recheck_released",
     "entry_split_probe_source_quality_recheck_released_at",
@@ -34544,6 +34557,7 @@ _ENTRY_SPLIT_PROBE_RUNTIME_KEYS = (
     "probe_confirmation_last_state",
     "probe_confirmation_last_signature",
     "probe_expand_forbidden",
+    "entry_split_probe_residual_expand_forbidden",
 )
 
 # Residual submission can be reached by both the fill callback worker and the
@@ -35640,6 +35654,15 @@ def _abort_entry_split_probe_residual(
             )
         )
     )
+    rising_missed_normal_winner_recheck = bool(
+        preserve_position
+        and reason == "residual_revalidation_timeout"
+        and last_direction_reason in wait_direction_timeout_reasons
+        and (
+            stock.get("rising_missed_one_share_scout")
+            or stock.get("rising_missed_entry_lineage")
+        )
+    )
     soft_abort = bool(
         preserve_position
         and (
@@ -35655,20 +35678,32 @@ def _abort_entry_split_probe_residual(
             or directional_soft_abort
         )
     )
+    scale_in_recheck_allowed = bool(soft_abort or rising_missed_normal_winner_recheck)
+    residual_expand_forbidden = bool(
+        preserve_position and action_guard_active and not soft_abort
+    )
     set_fields = {
         "entry_split_probe_phase": "aborted",
         "entry_split_probe_abort_reason": reason,
         "entry_split_probe_scale_in_forbidden": bool(
-            preserve_position and not soft_abort
+            preserve_position and not scale_in_recheck_allowed
         ),
-        "probe_expand_forbidden": bool(
-            preserve_position and action_guard_active and not soft_abort
-        ),
+        # This flag remains terminal for the original residual bundle. A later
+        # scale-in is owned by the ordinary scale-in path and must pass all of
+        # its fresh quote, microstructure, AI, account, quantity, and cooldown
+        # guards independently.
+        "probe_expand_forbidden": residual_expand_forbidden,
+        "entry_split_probe_residual_expand_forbidden": residual_expand_forbidden,
         "entry_split_probe_soft_abort": soft_abort,
-        "entry_split_probe_scale_in_recheck_allowed": soft_abort,
+        "entry_split_probe_scale_in_recheck_allowed": scale_in_recheck_allowed,
+        "entry_split_probe_scale_in_recheck_origin": (
+            "normal_winner_recovery"
+            if rising_missed_normal_winner_recheck
+            else "source_quality_or_non_nxt_direction_recovery" if soft_abort else "-"
+        ),
         "entry_split_probe_scale_in_recheck_reason": (
             (f"{reason}:source_quality_recovery" if source_quality_timeout else reason)
-            if soft_abort
+            if scale_in_recheck_allowed
             else "hard_or_non_directional_abort"
         ),
         "entry_split_probe_source_quality_recheck_released": source_quality_timeout,
@@ -35728,7 +35763,10 @@ def _abort_entry_split_probe_residual(
             reason=reason,
             filled_qty=filled_qty,
             soft_abort=soft_abort,
-            scale_in_recheck_allowed=soft_abort,
+            scale_in_recheck_allowed=scale_in_recheck_allowed,
+            scale_in_recheck_origin=set_fields[
+                "entry_split_probe_scale_in_recheck_origin"
+            ],
             scale_in_recheck_reason=set_fields[
                 "entry_split_probe_scale_in_recheck_reason"
             ],
@@ -35746,6 +35784,9 @@ def _abort_entry_split_probe_residual(
                 "entry_split_probe_scale_in_forbidden"
             ],
             probe_expand_forbidden=set_fields["probe_expand_forbidden"],
+            entry_split_probe_residual_expand_forbidden=set_fields[
+                "entry_split_probe_residual_expand_forbidden"
+            ],
             probe_confirmation_count=max(
                 0, _safe_int(stock.get("probe_confirmation_count"), 0)
             ),
@@ -35775,10 +35816,9 @@ def _abort_entry_split_probe_residual(
         broker_order_forbidden=True,
         runtime_effect=True,
         entry_split_probe_soft_abort=soft_abort,
-        entry_split_probe_scale_in_recheck_allowed=soft_abort,
         entry_split_probe_scale_in_recheck_reason=(
             (f"{reason}:source_quality_recovery" if source_quality_timeout else reason)
-            if soft_abort
+            if scale_in_recheck_allowed
             else "hard_or_non_directional_abort"
         ),
         entry_split_probe_source_quality_recheck_released=source_quality_timeout,
@@ -35800,6 +35840,59 @@ def _entry_split_probe_exit_authority_active(stock: dict) -> bool:
         or stock.get("exit_token")
         or stock.get("exit_requested")
         or str(stock.get("status") or "").strip().upper() == "SELL_ORDERED"
+    )
+
+
+def _scale_in_exit_authority_block_reason(stock: dict | None) -> str:
+    """Return the exit/lifecycle state that forbids any new scale-in work."""
+
+    if not isinstance(stock, dict):
+        return "invalid_position_state"
+    status = str(stock.get("status") or "").strip().upper()
+    if status in {"SELL_ORDERED", "COMPLETED", "SOLD", "CLOSED"}:
+        return f"position_status_{status.lower()}"
+    if stock.get("exit_token") or stock.get("fast_exit_token"):
+        return "exit_token_active"
+    if stock.get("exit_requested"):
+        return "exit_requested"
+    if stock.get("sell_odno") or stock.get("sell_order_time"):
+        return "sell_order_active"
+    if _has_active_sell_order_pending(stock):
+        return "pending_sell_order_active"
+    return ""
+
+
+def _log_scale_in_exit_authority_block(
+    stock: dict,
+    code: str,
+    *,
+    reason: str,
+    phase: str,
+    submitted_leg_count: int = 0,
+    submitted_qty: int = 0,
+) -> None:
+    _log_holding_pipeline(
+        stock,
+        code,
+        "scale_in_exit_authority_blocked",
+        reason=reason,
+        scale_in_block_phase=phase,
+        submitted_leg_count=max(0, _safe_int(submitted_leg_count, 0)),
+        submitted_qty=max(0, _safe_int(submitted_qty, 0)),
+        metric_role="hard_safety",
+        decision_authority="exit_token_and_position_lifecycle_precedence",
+        window_policy="same_position_cycle_until_broker_zero_qty_reconciled",
+        sample_floor="not_applicable_safety_veto",
+        primary_decision_metric="exit_authority_active",
+        source_quality_gate="in_memory_exit_token_order_and_position_status",
+        runtime_effect=True,
+        allowed_runtime_apply=False,
+        actual_order_submitted=bool(submitted_leg_count),
+        broker_order_forbidden=True,
+        forbidden_uses=(
+            "exit_token_bypass|sell_order_bypass|completed_position_reopen|"
+            "broker_guard_bypass|quantity_guard_bypass"
+        ),
     )
 
 
@@ -73270,13 +73363,26 @@ def can_consider_scale_in(
     """추가매수 공통 게이트: 조건을 만족하는 경우에만 True."""
     _ = (code, ws_data)
 
+    exit_authority_reason = _scale_in_exit_authority_block_reason(stock)
+    if exit_authority_reason:
+        return {"allowed": False, "reason": exit_authority_reason}
+
     if str(stock.get("early_volatility_tp_state") or "").upper() == (
         "FAILED_RECONCILIATION"
     ):
         return {"allowed": False, "reason": "early_tp_reconciliation_failed"}
 
+    scale_in_recheck_allowed = bool(
+        stock.get("entry_split_probe_scale_in_recheck_allowed")
+    )
+    residual_expand_forbidden = bool(
+        stock.get("entry_split_probe_residual_expand_forbidden")
+    )
     if (
-        stock.get("probe_expand_forbidden")
+        (
+            stock.get("probe_expand_forbidden")
+            and not (scale_in_recheck_allowed and residual_expand_forbidden)
+        )
         or stock.get("entry_split_probe_scale_in_forbidden")
         or str(stock.get("entry_split_probe_phase") or "")
         in {
@@ -74109,6 +74215,9 @@ def _evaluate_scale_in_signal(
     """전략별 추가매수 시그널 평가."""
     now_ts = time.time() if now_ts is None else float(now_ts)
 
+    if _scale_in_exit_authority_block_reason(stock):
+        return None
+
     raw_strategy = (strategy or "").upper()
     if raw_strategy == "SCALPING":
         if shallow_recheck_only and _is_any_simulated_position(stock, raw_strategy):
@@ -74185,6 +74294,8 @@ def _evaluate_scale_in_signal(
                 f"[SCALEIN_STATE] highest_prices 비교 실패 ({code}, curr_price={curr_price}): {exc}"
             )
 
+        if _scale_in_exit_authority_block_reason(stock):
+            return None
         ws_data, feature_refresh_fields = _refresh_scale_in_reversal_features_if_needed(
             stock=stock,
             code=code,
@@ -74221,6 +74332,11 @@ def _evaluate_scale_in_signal(
                 **feature_refresh_fields,
                 **scale_in_micro_estimator_fields,
             )
+
+        # The exit token can be claimed while bounded feature recovery is in
+        # flight. Never start holding-score retry/AI work after that claim.
+        if _scale_in_exit_authority_block_reason(stock):
+            return None
 
         if shallow_recheck_only:
             # REST/feature recovery can consume several seconds. Recheck TTL
@@ -74562,6 +74678,16 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
     - 성공 시 HOLDING 유지 + pending add 메타 저장
     - 실패 시 pending 메타 저장하지 않음
     """
+    exit_authority_reason = _scale_in_exit_authority_block_reason(stock)
+    if exit_authority_reason:
+        _log_scale_in_exit_authority_block(
+            stock,
+            code,
+            reason=exit_authority_reason,
+            phase="execute_start",
+        )
+        return None
+
     if not admin_id and not _is_any_simulated_position(stock, stock.get("strategy")):
         log_error(f"⚠️ [추가매수보류] {stock.get('name')}: 관리자 ID가 없습니다.")
         log_info(f"[ADD_BLOCKED] {stock.get('name')}({code}) reason=no_admin")
@@ -75102,6 +75228,15 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
         return None
 
     _clear_scale_in_submit_block(stock)
+    exit_authority_reason = _scale_in_exit_authority_block_reason(stock)
+    if exit_authority_reason:
+        _log_scale_in_exit_authority_block(
+            stock,
+            code,
+            reason=exit_authority_reason,
+            phase="before_account_budget",
+        )
+        return None
     deposit = (
         _sim_virtual_budget_krw()
         if simulated_position
@@ -76068,6 +76203,15 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
         total_leg_count = len(scale_in_split_orders)
         if planned_submit_qty <= 0:
             return None
+    exit_authority_reason = _scale_in_exit_authority_block_reason(stock)
+    if exit_authority_reason:
+        _log_scale_in_exit_authority_block(
+            stock,
+            code,
+            reason=exit_authority_reason,
+            phase="before_pending_registration",
+        )
+        return None
     pending_registered_at = time.time()
     _mutate_stock_state(
         stock,
@@ -76099,6 +76243,22 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
         scale_in_route_plan.get("broker_route_resolution") or ""
     ).strip()
     for leg_index, leg_order in enumerate(scale_in_split_orders, start=1):
+        exit_authority_reason = _scale_in_exit_authority_block_reason(stock)
+        if exit_authority_reason:
+            _log_scale_in_exit_authority_block(
+                stock,
+                code,
+                reason=exit_authority_reason,
+                phase=f"before_broker_leg_{leg_index}",
+                submitted_leg_count=len(submitted_results),
+                submitted_qty=submitted_qty,
+            )
+            if not submitted_results:
+                _clear_pending_add_meta(
+                    stock, reason="exit_authority_before_first_scale_in_leg"
+                )
+                return None
+            return last_res
         leg_qty = int(leg_order.get("qty", 0) or 0)
         leg_price = int(leg_order.get("price", final_price) or 0)
         leg_order_type_code = str(leg_order.get("order_type_code") or order_type_code)

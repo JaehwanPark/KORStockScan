@@ -468,7 +468,12 @@ def _operator_directed_findings(
     return findings
 
 
-def _promotion_window_status(target_date: str, now: datetime) -> str:
+def _promotion_window_status(
+    target_date: str,
+    now: datetime,
+    *,
+    operator_directed: bool = False,
+) -> str:
     current = now.astimezone(KST)
     try:
         target = current.date().fromisoformat(target_date)
@@ -478,7 +483,8 @@ def _promotion_window_status(target_date: str, now: datetime) -> str:
         current.date() == target and current.time() < PREMARKET_REVIEW_START
     ):
         return "not_yet_due"
-    if current.date() > target or current.time() > PREMARKET_REVIEW_END:
+    window_end = PREMARKET_APPLY_END if operator_directed else PREMARKET_REVIEW_END
+    if current.date() > target or current.time() >= window_end:
         return "premarket_validation_window_closed"
     return "pass"
 
@@ -500,7 +506,11 @@ def evaluate_promotion(
     now: datetime | None = None,
 ) -> dict[str, Any]:
     evaluated_at = now or datetime.now(KST)
-    window_status = _promotion_window_status(target_date, evaluated_at)
+    window_status = _promotion_window_status(
+        target_date,
+        evaluated_at,
+        operator_directed=operator_directed,
+    )
     validation_findings = [
         *_premarket_validation_findings(validation, target_date, premarket_symbols),
         *_krx_golden_findings(golden_validation, golden_date, krx_golden_symbols),
