@@ -352,6 +352,240 @@ def test_mature_outcome_rejects_uncontracted_price_source():
     assert labels[0]["source_quality_status"] == "source_quality_blocked"
 
 
+def test_kiwoom_completed_minute_loader_excludes_forming_and_wrong_session_bars():
+    calls = []
+
+    def fetcher(stock_code, request_code):
+        calls.append((stock_code, request_code))
+        return (
+            [
+                {
+                    "source_timestamp": "20260727085900",
+                    "현재가": 99,
+                },
+                {
+                    "source_timestamp": "20260727090100",
+                    "현재가": 101,
+                    "고가": 103,
+                    "저가": 98,
+                },
+                {
+                    "source_timestamp": "20260727090300",
+                    "현재가": 103,
+                },
+            ],
+            {
+                "api_id": "ka10080",
+                "received_count": 3,
+                "cont_yn_seen": True,
+            },
+        )
+
+    prices, provenance = quality.load_kiwoom_completed_minute_price_rows(
+        target_date="2026-07-27",
+        labels=[_pending()],
+        as_of=datetime(2026, 7, 27, 9, 3, 20, tzinfo=KST),
+        fetcher=fetcher,
+    )
+
+    assert calls == [("005930", "005930")]
+    assert [row["timestamp"] for row in prices] == ["2026-07-27T09:01:00+09:00"]
+    assert prices[0]["source_quality"] == "pass_completed_ka10080_bar"
+    assert prices[0]["high"] == 103
+    assert prices[0]["low"] == 98
+    assert provenance[0]["source_quality_status"] == "pass_target_window_available"
+    assert provenance[0]["target_completed_bar_count"] == 1
+
+
+def test_mature_outcome_uses_bar_high_low_and_marks_same_bar_first_hit_ambiguous():
+    labels = quality.mature_outcome_labels(
+        pending_labels=[_pending()],
+        price_rows=[
+            {
+                "timestamp": "2026-07-27T09:01:00+09:00",
+                "stock_code": "005930",
+                "price": 100,
+                "high": 102,
+                "low": 98,
+                "close": 100,
+                "effective_venue": "KRX",
+                "session_bucket": "KRX_REGULAR",
+                "source_quality": "pass_completed_ka10080_bar",
+            }
+        ],
+        lifecycle_rows=[],
+        as_of=datetime(2026, 7, 27, 9, 2, tzinfo=KST),
+    )
+
+    metric = labels[0]["horizon_metrics"]["1m"]
+    assert metric["mfe_pct"] == 2
+    assert metric["mae_pct"] == -2
+    assert metric["end_return_pct"] == 0
+    assert metric["first_hit"] == "ambiguous_same_bar"
+
+
+def test_kiwoom_completed_minute_loader_preserves_nxt_request_suffix():
+    pending = {
+        **_pending(),
+        "effective_venue": "NXT",
+        "session_bucket": "NXT_AFTERMARKET",
+    }
+    calls = []
+
+    def fetcher(stock_code, request_code):
+        calls.append((stock_code, request_code))
+        return (
+            [{"source_timestamp": "20260727160100", "현재가": 101}],
+            {"api_id": "ka10080", "received_count": 1},
+        )
+
+    prices, _provenance = quality.load_kiwoom_completed_minute_price_rows(
+        target_date="2026-07-27",
+        labels=[pending],
+        as_of=datetime(2026, 7, 27, 16, 3, tzinfo=KST),
+        fetcher=fetcher,
+    )
+
+    assert calls == [("005930", "005930_NX")]
+    assert prices[0]["effective_venue"] == "NXT"
+    assert prices[0]["session_bucket"] == "NXT_AFTERMARKET"
+
+
+def test_kiwoom_completed_minute_loader_preserves_sor_request_suffix():
+    pending = {
+        **_pending(),
+        "effective_venue": "SOR",
+        "session_bucket": "KRX_REGULAR",
+    }
+    calls = []
+
+    def fetcher(stock_code, request_code):
+        calls.append((stock_code, request_code))
+        return (
+            [{"source_timestamp": "20260727090100", "현재가": 101}],
+            {"api_id": "ka10080", "received_count": 1},
+        )
+
+    prices, _provenance = quality.load_kiwoom_completed_minute_price_rows(
+        target_date="2026-07-27",
+        labels=[pending],
+        as_of=datetime(2026, 7, 27, 9, 3, tzinfo=KST),
+        fetcher=fetcher,
+    )
+
+    assert calls == [("005930", "005930_AL")]
+    assert prices[0]["effective_venue"] == "SOR"
+
+
+def test_kiwoom_completed_minute_loader_accepts_nxt_overlap_session():
+    pending = {
+        **_pending(),
+        "effective_venue": "NXT",
+        "session_bucket": "NXT_REGULAR_OVERLAP",
+    }
+
+    def fetcher(_stock_code, _request_code):
+        return (
+            [{"source_timestamp": "20260727120100", "현재가": 101}],
+            {"api_id": "ka10080", "received_count": 1},
+        )
+
+    prices, _provenance = quality.load_kiwoom_completed_minute_price_rows(
+        target_date="2026-07-27",
+        labels=[pending],
+        as_of=datetime(2026, 7, 27, 12, 3, tzinfo=KST),
+        fetcher=fetcher,
+    )
+
+    assert prices[0]["session_bucket"] == "NXT_REGULAR_OVERLAP"
+
+
+def test_kiwoom_completed_minute_loader_blocks_ambiguous_or_conflicting_route():
+    calls = []
+
+    def fetcher(stock_code, request_code):
+        calls.append((stock_code, request_code))
+        return [], {}
+
+    prices, provenance = quality.load_kiwoom_completed_minute_price_rows(
+        target_date="2026-07-27",
+        labels=[
+            {
+                **_pending(),
+                "effective_venue": "PREMARKET_KRX_LIKE",
+                "session_bucket": "PREMARKET_KRX_LIKE",
+            },
+            {
+                **_pending(),
+                "effective_venue": "KRX",
+                "session_bucket": "NXT_AFTERMARKET",
+            },
+        ],
+        as_of=datetime(2026, 7, 27, 16, 3, tzinfo=KST),
+        fetcher=fetcher,
+    )
+
+    assert prices == []
+    assert calls == []
+    assert {row["fetch_error"] for row in provenance} == {
+        "unsupported_effective_venue",
+        "venue_session_conflict",
+    }
+    assert all(
+        row["source_quality_status"] == "source_quality_blocked" for row in provenance
+    )
+
+
+def test_score_outcome_correlation_report_uses_spearman_primary_and_sample_floor():
+    labels = []
+    for index in range(30):
+        score = float(index)
+        labels.append(
+            {
+                **_pending(),
+                "decision_trace_id": f"trace-{index}",
+                "stock_code": f"{index % 10:06d}",
+                "score": score,
+                "label_status": "partial",
+                "source_quality_status": "pass",
+                "primary_cohort_eligible": True,
+                "horizon_metrics": {
+                    "10m": {
+                        "mfe_pct": score,
+                        "mae_pct": score - 29.0,
+                    }
+                },
+            }
+        )
+
+    report = quality.build_score_outcome_correlation_report(
+        target_date="2026-07-27",
+        labels=labels,
+    )
+
+    assert report["status"] == "exploratory_score_outcome_correlation_available"
+    bucket = report["buckets"][0]
+    assert bucket["sample_floor_pass"] is True
+    assert bucket["score_vs_mfe_pct"]["spearman"] == 1.0
+    assert bucket["score_vs_mae_pct"]["spearman"] == 1.0
+    assert bucket["score_vs_adverse_magnitude_pct"]["spearman"] == -1.0
+    assert bucket["interpretation_contract"]["pearson_role"] == "diagnostic_only"
+
+
+def test_default_sources_skips_large_pipeline_load_when_not_requested(monkeypatch):
+    loaded_paths = []
+
+    def fake_load(path):
+        loaded_paths.append(path)
+        return []
+
+    monkeypatch.setattr(quality, "_load_jsonl", fake_load)
+    sources = quality._default_sources("2026-07-27", include_pipeline=False)
+
+    assert sources["pipeline"] == []
+    assert all(path.parent != quality.PIPELINE_DIR for path in loaded_paths)
+
+
 def test_overnight_outcome_uses_next_day_first_session_window():
     pending = {
         **_pending("HOLD_OVERNIGHT"),

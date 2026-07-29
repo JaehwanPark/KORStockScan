@@ -3536,6 +3536,7 @@ def get_minute_candles_ka10080_with_meta(
     limit=10,
     *,
     explicit_request_code=False,
+    base_dt=None,
 ):
     """
     [REST API] ka10080: 주식분봉차트조회
@@ -3547,19 +3548,20 @@ def get_minute_candles_ka10080_with_meta(
         req_code = f"{normalized_code}{explicit_suffix}"
     else:
         req_code = get_effective_kiwoom_code(code)
-    cache_key = (str(req_code), int(limit))
+    request_base_dt = str(base_dt or datetime.now().strftime("%Y%m%d")).strip()
+    if len(request_base_dt) != 8 or not request_base_dt.isdigit():
+        raise ValueError("base_dt must use YYYYMMDD")
+    cache_key = (str(req_code), int(limit), request_base_dt)
     cached = _cache_get("ka10080_minutes_with_meta", cache_key)
     if cached is not None:
         return cached
 
     url = get_api_url("/api/dostk/chart")
-    base_dt = datetime.now().strftime("%Y%m%d")
-
     payload = {
         "stk_cd": str(req_code),
         "tic_scope": "1",  # 1분봉
         "upd_stkpc_tp": "1",  # 수정주가 반영
-        "base_dt": base_dt,  # 당일 기준
+        "base_dt": request_base_dt,
     }
 
     page_size = 900
@@ -3585,6 +3587,7 @@ def get_minute_candles_ka10080_with_meta(
             "requested_limit": int(limit or 0),
             "request_code": str(req_code),
             "explicit_request_code": bool(explicit_request_code),
+            "request_base_dt": request_base_dt,
             "received_count": len(all_candles),
             "sort_direction_detected": _detect_sort_direction(all_candles, "cntr_tm"),
             "latest_source_timestamp": max(

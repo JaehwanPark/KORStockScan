@@ -32,6 +32,7 @@ CONTROL_SCHEMA = "ai_decision_quality_control_v1"
 LABEL_REPORT_SCHEMA = "ai_decision_outcome_labels_v1"
 BASELINE_SCHEMA = "ai_decision_quality_baseline_v1"
 PAIRED_SCHEMA = "ai_prompt_paired_replay_v1"
+SCORE_CORRELATION_SCHEMA = "ai_score_outcome_correlation_v1"
 INPUT_BUNDLE_VERSION = "scalping_multi_timeframe_context_v1"
 ENTRY_CONTEXT_SCHEMA = "entry_candle_context_v1"
 HOLDING_CONTEXT_SCHEMA = "holding_decision_context_v1"
@@ -56,6 +57,7 @@ RUNTIME_DIR = DATA_DIR / "runtime"
 LABEL_REPORT_DIR = DATA_DIR / "report" / "ai_decision_outcome_labels"
 BASELINE_REPORT_DIR = DATA_DIR / "report" / "ai_decision_quality_baseline"
 PAIRED_REPORT_DIR = DATA_DIR / "report" / "ai_prompt_paired_replay"
+SCORE_CORRELATION_REPORT_DIR = DATA_DIR / "report" / "ai_score_outcome_correlation"
 
 OFFLINE_CONTRACT = {
     "metric_role": "ai_decision_quality_observation",
@@ -147,6 +149,13 @@ def baseline_path(target_date: str) -> Path:
 
 def paired_path(target_date: str) -> Path:
     return PAIRED_REPORT_DIR / f"ai_prompt_paired_replay_{target_date}.json"
+
+
+def score_correlation_path(target_date: str) -> Path:
+    return (
+        SCORE_CORRELATION_REPORT_DIR
+        / f"ai_score_outcome_correlation_{target_date}.json"
+    )
 
 
 def _canonical_bytes(value: Any) -> bytes:
@@ -640,6 +649,189 @@ def load_pipeline_price_and_lifecycle_rows(
     return prices, lifecycle
 
 
+def _request_code_for_venue(stock_code: Any, effective_venue: Any) -> str | None:
+    code = _normalize_stock_code(stock_code)
+    venue = _venue(effective_venue)
+    if venue == "NXT":
+        return f"{code}_NX"
+    if venue == "SOR":
+        return f"{code}_AL"
+    if venue == "KRX":
+        return code
+    return None
+
+
+def _venue_session_consistent(effective_venue: Any, session_bucket: Any) -> bool:
+    venue = _venue(effective_venue)
+    session = _session(session_bucket)
+    allowed_sessions = {
+        "KRX": {"KRX_REGULAR"},
+        "SOR": {"KRX_REGULAR"},
+        "NXT": {
+            "NXT_PREMARKET",
+            "PREMARKET_KRX_LIKE",
+            "NXT_REGULAR_OVERLAP",
+            "NXT_AFTERMARKET",
+        },
+    }
+    return session in allowed_sessions.get(venue, set())
+
+
+def _timestamp_in_session(timestamp: datetime, session_bucket: Any) -> bool:
+    minute = timestamp.hour * 60 + timestamp.minute
+    session = _session(session_bucket)
+    if session in {"PREMARKET_KRX_LIKE", "NXT_PREMARKET"}:
+        return 8 * 60 <= minute < 9 * 60
+    if session == "KRX_REGULAR":
+        return 9 * 60 <= minute <= 15 * 60 + 30
+    if session == "NXT_REGULAR_OVERLAP":
+        return 9 * 60 <= minute <= 15 * 60 + 30
+    if session == "NXT_AFTERMARKET":
+        return 15 * 60 + 30 < minute <= 20 * 60
+    return False
+
+
+def load_kiwoom_completed_minute_price_rows(
+    *,
+    target_date: str,
+    labels: Iterable[dict[str, Any]],
+    as_of: datetime,
+    fetcher: Callable[[str, str], tuple[list[dict[str, Any]], dict[str, Any]]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Load completed ka10080 bars for exact label routes.
+
+    ``fetcher`` receives ``(stock_code, request_code)`` so the CLI can use a
+    cached read-only token while tests remain network-independent.  Chart bars
+    are an offline outcome source only; they never provide runtime quote
+    freshness or order authority.
+    """
+
+    routes = sorted(
+        {
+            (
+                _normalize_stock_code(row.get("stock_code")),
+                _venue(row.get("effective_venue")),
+                _session(row.get("session_bucket")),
+            )
+            for row in labels
+            if _normalize_stock_code(row.get("stock_code"))
+            and _venue(row.get("effective_venue"))
+            and _session(row.get("session_bucket"))
+        }
+    )
+    target_compact = target_date.replace("-", "")
+    current_minute = as_of.replace(second=0, microsecond=0)
+    prices: list[dict[str, Any]] = []
+    provenance: list[dict[str, Any]] = []
+    fetch_cache: dict[tuple[str, str], tuple[list[dict[str, Any]], dict[str, Any]]] = {}
+    for code, venue, session in routes:
+        request_code = _request_code_for_venue(code, venue)
+        if request_code is None or not _venue_session_consistent(venue, session):
+            provenance.append(
+                {
+                    "stock_code": code,
+                    "effective_venue": venue,
+                    "session_bucket": session,
+                    "request_code": request_code,
+                    "api_id": "ka10080",
+                    "received_count": None,
+                    "target_completed_bar_count": 0,
+                    "coverage_start": None,
+                    "coverage_end": None,
+                    "continuation_observed": False,
+                    "continuation_page_limit_reached": False,
+                    "fetch_error": (
+                        "unsupported_effective_venue"
+                        if request_code is None
+                        else "venue_session_conflict"
+                    ),
+                    "source_quality_status": "source_quality_blocked",
+                }
+            )
+            continue
+        fetch_key = (code, request_code)
+        if fetch_key not in fetch_cache:
+            try:
+                fetch_cache[fetch_key] = fetcher(code, request_code)
+            except Exception as exc:
+                fetch_cache[fetch_key] = (
+                    [],
+                    {
+                        "fetch_error": type(exc).__name__,
+                    },
+                )
+        candles, source_meta = fetch_cache[fetch_key]
+        source_meta = source_meta if isinstance(source_meta, dict) else {}
+        route_prices: list[dict[str, Any]] = []
+        for candle in candles or []:
+            source_timestamp = str(candle.get("source_timestamp") or "").strip()
+            if (
+                len(source_timestamp) < 14
+                or not source_timestamp[:14].isdigit()
+                or not source_timestamp.startswith(target_compact)
+            ):
+                continue
+            timestamp = _parse_ts(
+                datetime.strptime(source_timestamp[:14], "%Y%m%d%H%M%S")
+                .replace(tzinfo=KST)
+                .isoformat()
+            )
+            price = _number(candle.get("현재가"))
+            high = _number(candle.get("고가"))
+            low = _number(candle.get("저가"))
+            if (
+                timestamp is None
+                or price is None
+                or price <= 0
+                or timestamp.replace(second=0, microsecond=0) >= current_minute
+                or not _timestamp_in_session(timestamp, session)
+            ):
+                continue
+            route_prices.append(
+                {
+                    "timestamp": timestamp.isoformat(),
+                    "stock_code": code,
+                    "price": price,
+                    "high": high if high is not None and high > 0 else price,
+                    "low": low if low is not None and low > 0 else price,
+                    "close": price,
+                    "effective_venue": venue,
+                    "session_bucket": session,
+                    "source_quality": "pass_completed_ka10080_bar",
+                    "source_api_id": "ka10080",
+                    "source_request_code": request_code,
+                    "source_time_basis": "ka10080_cntr_tm_bar_timestamp",
+                    "completed_bar_only": True,
+                }
+            )
+        prices.extend(route_prices)
+        timestamps = [row["timestamp"] for row in route_prices]
+        provenance.append(
+            {
+                "stock_code": code,
+                "effective_venue": venue,
+                "session_bucket": session,
+                "request_code": request_code,
+                "api_id": source_meta.get("api_id") or "ka10080",
+                "received_count": source_meta.get("received_count"),
+                "target_completed_bar_count": len(route_prices),
+                "coverage_start": min(timestamps) if timestamps else None,
+                "coverage_end": max(timestamps) if timestamps else None,
+                "continuation_observed": bool(source_meta.get("cont_yn_seen")),
+                "continuation_page_limit_reached": bool(
+                    source_meta.get("continuous_page_limit_reached")
+                ),
+                "fetch_error": source_meta.get("fetch_error"),
+                "source_quality_status": (
+                    "pass_target_window_available"
+                    if route_prices
+                    else "source_quality_blocked"
+                ),
+            }
+        )
+    return prices, provenance
+
+
 def _venue(value: Any) -> str:
     text = str(value or "").strip().upper()
     if text in {"PREMARKET", "PREMARKET_KRX_LIKE"}:
@@ -770,10 +962,20 @@ def mature_outcome_labels(
     for row in price_rows:
         timestamp = _parse_ts(row.get("timestamp"))
         price = _number(row.get("price"))
+        high = _number(row.get("high"))
+        low = _number(row.get("low"))
+        close = _number(row.get("close"))
         code = _normalize_stock_code(row.get("stock_code"))
         if timestamp and price and price > 0 and code:
             prices_by_code[code].append(
-                {**row, "_timestamp": timestamp, "_price": price}
+                {
+                    **row,
+                    "_timestamp": timestamp,
+                    "_price": price,
+                    "_high": high if high is not None and high > 0 else price,
+                    "_low": low if low is not None and low > 0 else price,
+                    "_close": close if close is not None and close > 0 else price,
+                }
             )
     for rows in prices_by_code.values():
         rows.sort(key=lambda row: row["_timestamp"])
@@ -847,16 +1049,20 @@ def mature_outcome_labels(
             ).total_seconds() > HORIZON_END_MAX_LAG_SEC:
                 pending_horizons.append(horizon)
                 continue
-            returns = [
-                round(((row["_price"] / reference) - 1.0) * 100.0, 10) for row in window
+            high_returns = [
+                round(((row["_high"] / reference) - 1.0) * 100.0, 10) for row in window
             ]
+            low_returns = [
+                round(((row["_low"] / reference) - 1.0) * 100.0, 10) for row in window
+            ]
+            end_return = round(((window[-1]["_close"] / reference) - 1.0) * 100.0, 10)
             target_price = _number(pending.get("target_price"))
             adverse_price = _number(pending.get("adverse_price"))
             target_hit = next(
                 (
                     row["_timestamp"].isoformat()
                     for row in window
-                    if target_price is not None and row["_price"] >= target_price
+                    if target_price is not None and row["_high"] >= target_price
                 ),
                 None,
             )
@@ -864,20 +1070,24 @@ def mature_outcome_labels(
                 (
                     row["_timestamp"].isoformat()
                     for row in window
-                    if adverse_price is not None and row["_price"] <= adverse_price
+                    if adverse_price is not None and row["_low"] <= adverse_price
                 ),
                 None,
             )
             first_hit = (
-                "target"
-                if target_hit and (not adverse_hit or target_hit <= adverse_hit)
-                else ("adverse" if adverse_hit else "neither")
+                "ambiguous_same_bar"
+                if target_hit and adverse_hit and target_hit == adverse_hit
+                else (
+                    "target"
+                    if target_hit and (not adverse_hit or target_hit < adverse_hit)
+                    else ("adverse" if adverse_hit else "neither")
+                )
             )
             horizon_metrics[f"{horizon}m"] = {
                 "sample_count": len(window),
-                "mfe_pct": max(returns),
-                "mae_pct": min(returns),
-                "end_return_pct": returns[-1],
+                "mfe_pct": max(high_returns),
+                "mae_pct": min(low_returns),
+                "end_return_pct": end_return,
                 "target_hit_at": target_hit,
                 "adverse_hit_at": adverse_hit,
                 "first_hit": first_hit,
@@ -1131,6 +1341,163 @@ def build_quality_baseline(
         "taxonomy_counts": dict(taxonomy_counts),
         "buckets": bucket_rows,
         "rows": enriched,
+        **OFFLINE_CONTRACT,
+    }
+
+
+def _average_ranks(values: list[float]) -> list[float]:
+    order = sorted(range(len(values)), key=values.__getitem__)
+    ranks = [0.0] * len(values)
+    index = 0
+    while index < len(order):
+        end = index + 1
+        while end < len(order) and values[order[end]] == values[order[index]]:
+            end += 1
+        average_rank = (index + 1 + end) / 2.0
+        for position in range(index, end):
+            ranks[order[position]] = average_rank
+        index = end
+    return ranks
+
+
+def _pearson(values_x: list[float], values_y: list[float]) -> float | None:
+    if len(values_x) != len(values_y) or len(values_x) < 2:
+        return None
+    mean_x = fmean(values_x)
+    mean_y = fmean(values_y)
+    variance_x = sum((value - mean_x) ** 2 for value in values_x)
+    variance_y = sum((value - mean_y) ** 2 for value in values_y)
+    if variance_x <= 0 or variance_y <= 0:
+        return None
+    covariance = sum(
+        (value_x - mean_x) * (value_y - mean_y)
+        for value_x, value_y in zip(values_x, values_y)
+    )
+    return covariance / math.sqrt(variance_x * variance_y)
+
+
+def _correlation_pair(
+    values_x: list[float], values_y: list[float]
+) -> dict[str, float | None]:
+    return {
+        "spearman": _pearson(_average_ranks(values_x), _average_ranks(values_y)),
+        "pearson": _pearson(values_x, values_y),
+    }
+
+
+def build_score_outcome_correlation_report(
+    *,
+    target_date: str,
+    labels: Iterable[dict[str, Any]],
+    price_source_provenance: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Measure exact-v2 AI score association with forward MFE and MAE."""
+
+    grouped: dict[tuple[str, str, str, str], list[dict[str, Any]]] = defaultdict(list)
+    eligible_label_count = 0
+    for row in labels:
+        if (
+            row.get("primary_cohort_eligible") is not True
+            or row.get("source_quality_status") != "pass"
+        ):
+            continue
+        score = _number(row.get("score"))
+        metrics = row.get("horizon_metrics")
+        if score is None or not isinstance(metrics, dict):
+            continue
+        eligible_label_count += 1
+        for horizon in HORIZONS_MIN:
+            metric = metrics.get(f"{horizon}m")
+            if not isinstance(metric, dict):
+                continue
+            mfe = _number(metric.get("mfe_pct"))
+            mae = _number(metric.get("mae_pct"))
+            if mfe is None or mae is None:
+                continue
+            grouped[
+                (
+                    _stage(row.get("decision_stage")),
+                    _venue(row.get("effective_venue")),
+                    _session(row.get("session_bucket")),
+                    f"{horizon}m",
+                )
+            ].append(
+                {
+                    "stock_code": _normalize_stock_code(row.get("stock_code")),
+                    "score": score,
+                    "mfe_pct": mfe,
+                    "mae_pct": mae,
+                }
+            )
+    buckets: list[dict[str, Any]] = []
+    ready_bucket_count = 0
+    grouped_items = sorted(
+        grouped.items(),
+        key=lambda item: (
+            item[0][0],
+            item[0][1],
+            item[0][2],
+            int(item[0][3].removesuffix("m")),
+        ),
+    )
+    for (stage, venue, session, horizon), rows in grouped_items:
+        scores = [row["score"] for row in rows]
+        mfe_values = [row["mfe_pct"] for row in rows]
+        mae_values = [row["mae_pct"] for row in rows]
+        adverse_magnitudes = [abs(min(0.0, value)) for value in mae_values]
+        symbol_count = len({row["stock_code"] for row in rows})
+        sample_floor_pass = len(rows) >= 30 and symbol_count >= 10
+        if sample_floor_pass:
+            ready_bucket_count += 1
+        buckets.append(
+            {
+                "decision_stage": stage,
+                "effective_venue": venue,
+                "session_bucket": session,
+                "horizon": horizon,
+                "sample_count": len(rows),
+                "symbol_count": symbol_count,
+                "distinct_score_count": len(set(scores)),
+                "sample_floor_pass": sample_floor_pass,
+                "inference_status": (
+                    "exploratory_repeated_symbol_calls"
+                    if sample_floor_pass
+                    else "sample_floor_keep_collecting"
+                ),
+                "score_vs_mfe_pct": _correlation_pair(scores, mfe_values),
+                "score_vs_mae_pct": _correlation_pair(scores, mae_values),
+                "score_vs_adverse_magnitude_pct": _correlation_pair(
+                    scores, adverse_magnitudes
+                ),
+                "interpretation_contract": {
+                    "mfe_preferred_direction": "positive",
+                    "mae_pct_preferred_direction": "positive_toward_zero",
+                    "adverse_magnitude_preferred_direction": "negative",
+                    "primary_coefficient": "spearman",
+                    "pearson_role": "diagnostic_only",
+                },
+            }
+        )
+    return {
+        "schema": SCORE_CORRELATION_SCHEMA,
+        "target_date": target_date,
+        "generated_at": datetime.now(KST).isoformat(),
+        "status": (
+            "exploratory_score_outcome_correlation_available"
+            if ready_bucket_count
+            else "sample_floor_keep_collecting"
+        ),
+        "eligible_label_count": eligible_label_count,
+        "bucket_count": len(buckets),
+        "sample_floor_ready_bucket_count": ready_bucket_count,
+        "sample_floor": {
+            "decision_rows": 30,
+            "unique_symbols": 10,
+            "significance_authority": False,
+            "reason": "same_symbol_repeated_calls_are_not_independent",
+        },
+        "price_source_provenance": list(price_source_provenance or []),
+        "buckets": buckets,
         **OFFLINE_CONTRACT,
     }
 
@@ -1470,17 +1837,20 @@ def build_paired_replay_report(
     }
 
 
-def _default_sources(target_date: str) -> dict[str, list[dict[str, Any]]]:
+def _default_sources(
+    target_date: str, *, include_pipeline: bool = True
+) -> dict[str, list[dict[str, Any]]]:
     traces = _load_jsonl(TRACE_DIR / f"ai_decision_trace_{target_date}.jsonl")
     payloads = _load_jsonl(PAYLOAD_DIR / f"ai_decision_payloads_{target_date}.jsonl")
     pending = _load_jsonl(OUTCOME_DIR / f"ai_decision_outcomes_{target_date}.jsonl")
-    target = datetime.strptime(target_date, "%Y-%m-%d").date()
     pipeline = []
-    for offset in range(PIPELINE_FORWARD_DAYS + 1):
-        source_date = (target + timedelta(days=offset)).isoformat()
-        pipeline.extend(
-            _load_jsonl(PIPELINE_DIR / f"pipeline_events_{source_date}.jsonl")
-        )
+    if include_pipeline:
+        target = datetime.strptime(target_date, "%Y-%m-%d").date()
+        for offset in range(PIPELINE_FORWARD_DAYS + 1):
+            source_date = (target + timedelta(days=offset)).isoformat()
+            pipeline.extend(
+                _load_jsonl(PIPELINE_DIR / f"pipeline_events_{source_date}.jsonl")
+            )
     return {
         "traces": traces,
         "payloads": payloads,
@@ -1496,13 +1866,27 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--date", required=True)
     parser.add_argument(
         "--mode",
-        choices=("control", "mature", "baseline", "paired"),
+        choices=("control", "mature", "baseline", "paired", "correlation"),
         required=True,
     )
     parser.add_argument("--as-of")
+    parser.add_argument(
+        "--outcome-price-source",
+        choices=("pipeline", "kiwoom_completed_1m"),
+        default="pipeline",
+        help=(
+            "Offline forward-price source. kiwoom_completed_1m reuses only "
+            "the valid shared token and never issues a new token."
+        ),
+    )
     parser.add_argument("--write", action="store_true")
     args = parser.parse_args(argv)
-    sources = _default_sources(args.date)
+    sources = _default_sources(
+        args.date,
+        include_pipeline=(
+            args.mode != "control" and args.outcome_price_source == "pipeline"
+        ),
+    )
     promotion = _load_json(
         RUNTIME_DIR / f"ai_multi_timeframe_context_promotion_{args.date}.json"
     )
@@ -1515,8 +1899,44 @@ def main(argv: list[str] | None = None) -> int:
         )
         path = control_path(args.date)
     else:
-        prices, lifecycle = load_pipeline_price_and_lifecycle_rows(sources["pipeline"])
         as_of = _parse_ts(args.as_of) or datetime.now(KST)
+        prices, lifecycle = load_pipeline_price_and_lifecycle_rows(sources["pipeline"])
+        price_source_provenance: list[dict[str, Any]] = []
+        if args.outcome_price_source == "kiwoom_completed_1m":
+            from src.utils import kiwoom_utils
+
+            token = kiwoom_utils.get_cached_kiwoom_token()
+            source_route_labels = annotate_primary_cohort_eligibility(
+                labels=sources["pending"],
+                traces=sources["traces"],
+                payloads=sources["payloads"],
+                promotion=promotion,
+            )
+            source_route_labels = [
+                row
+                for row in source_route_labels
+                if row.get("primary_cohort_eligible") is True
+            ]
+
+            def fetch_kiwoom_completed(
+                _stock_code: str, request_code: str
+            ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+                if not token:
+                    return [], {"fetch_error": "cached_token_unavailable"}
+                return kiwoom_utils.get_minute_candles_ka10080_with_meta(
+                    token,
+                    request_code,
+                    limit=500,
+                    explicit_request_code=True,
+                    base_dt=args.date.replace("-", ""),
+                )
+
+            prices, price_source_provenance = load_kiwoom_completed_minute_price_rows(
+                target_date=args.date,
+                labels=source_route_labels,
+                as_of=as_of,
+                fetcher=fetch_kiwoom_completed,
+            )
         labels = mature_outcome_labels(
             pending_labels=sources["pending"],
             price_rows=prices,
@@ -1539,6 +1959,8 @@ def main(argv: list[str] | None = None) -> int:
                 else "partial_horizons_keep_maturing"
             ),
             "summary": dict(Counter(row["label_status"] for row in labels)),
+            "outcome_price_source": args.outcome_price_source,
+            "price_source_provenance": price_source_provenance,
             "labels": labels,
             **OFFLINE_CONTRACT,
         }
@@ -1547,7 +1969,17 @@ def main(argv: list[str] | None = None) -> int:
             path = label_report_path(args.date)
         elif args.mode == "baseline":
             report = build_quality_baseline(target_date=args.date, labels=labels)
+            report["outcome_price_source"] = args.outcome_price_source
+            report["price_source_provenance"] = price_source_provenance
             path = baseline_path(args.date)
+        elif args.mode == "correlation":
+            report = build_score_outcome_correlation_report(
+                target_date=args.date,
+                labels=labels,
+                price_source_provenance=price_source_provenance,
+            )
+            report["outcome_price_source"] = args.outcome_price_source
+            path = score_correlation_path(args.date)
         else:
             requests = prepare_paired_replay_requests(
                 control_manifest=_load_json(control_path(args.date)),

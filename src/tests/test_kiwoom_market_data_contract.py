@@ -166,6 +166,31 @@ def test_ka10080_explicit_request_code_does_not_apply_db_integrated_route(
     assert meta["explicit_request_code"] is True
 
 
+def test_ka10080_uses_explicit_historical_base_date(monkeypatch):
+    _clear_market_data_cache()
+    monkeypatch.setattr(
+        kiwoom_utils, "get_api_url", lambda path: f"https://example.test{path}"
+    )
+    calls = []
+
+    def fake_fetch(**kwargs):
+        calls.append(kwargs)
+        return ([], {"api_id": "ka10080"})
+
+    monkeypatch.setattr(kiwoom_utils, "fetch_kiwoom_api_continuous", fake_fetch)
+
+    _candles, meta = kiwoom_utils.get_minute_candles_ka10080_with_meta(
+        "token",
+        "005930",
+        limit=1,
+        explicit_request_code=True,
+        base_dt="20260727",
+    )
+
+    assert calls[0]["payload"]["base_dt"] == "20260727"
+    assert meta["request_base_dt"] == "20260727"
+
+
 def test_ka20005_index_minutes_preserve_raw_x100_price_basis(monkeypatch):
     _clear_market_data_cache()
     monkeypatch.setattr(
