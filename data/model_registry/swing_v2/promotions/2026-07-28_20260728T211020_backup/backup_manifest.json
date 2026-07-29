@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "existing_files": [
+    "hybrid_xgb_v2.pkl",
+    "hybrid_lgbm_v2.pkl",
+    "bull_xgb_v2.pkl",
+    "bull_lgbm_v2.pkl",
+    "stacking_meta_v2.pkl"
+  ]
+}
