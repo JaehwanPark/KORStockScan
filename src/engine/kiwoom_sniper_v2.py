@@ -6462,6 +6462,118 @@ def _discard_pre_revive_scanner_snapshot(stock, ws_data, *, now_ts: float):
     }
 
 
+def _scanner_scheduler_register_revived_watch_on_fresh_ws(
+    scheduler,
+    target,
+    ws_data,
+    *,
+    revive_quote_barrier_fields,
+    now_epoch,
+):
+    """Start a new scanner generation only after the revived watcher sees 0B.
+
+    A completed scalp reuses the in-memory target as a WATCHING row.  The old
+    scheduler generation is already terminal, so retaining its promotion
+    envelope leaves the revived row permanently fail-closed.  Treat the first
+    accepted post-sell WS quote as a new observation anchor; all candidate,
+    AI, submit, sizing, and cooldown owners remain downstream.
+    """
+
+    if not isinstance(scheduler, ScannerRuntimeScheduler):
+        return None
+    if not _is_scanner_watching_target(target):
+        return None
+    barrier_fields = (
+        revive_quote_barrier_fields
+        if isinstance(revive_quote_barrier_fields, dict)
+        else {}
+    )
+    if (
+        str(barrier_fields.get("scalp_revive_quote_barrier_state") or "")
+        != "fresh_ws_after_revive"
+    ):
+        return None
+    ws_snapshot = ws_data if isinstance(ws_data, dict) else {}
+    current_price = _safe_int(ws_snapshot.get("curr"), 0)
+    received_epoch = _scanner_snapshot_receive_ts(ws_snapshot)
+    revive_epoch = _safe_float(
+        barrier_fields.get("scalp_revive_quote_barrier_min_ts"),
+        0.0,
+    )
+    if (
+        current_price <= 0
+        or received_epoch <= 0.0
+        or revive_epoch <= 0.0
+        or received_epoch <= revive_epoch
+    ):
+        return None
+
+    code = str((target or {}).get("code") or "").strip()[:6]
+    record_id = _safe_int((target or {}).get("id"), 0)
+    if not code or record_id <= 0:
+        return None
+    venue_fields = _scanner_runtime_target_venue_fields(target, target=target)
+    if venue_fields.get("effective_venue") not in {
+        "KRX",
+        "PREMARKET_KRX_LIKE",
+        "NXT",
+    }:
+        return None
+
+    promotion_id = f"SCALPREVIVE-{code}-{record_id}-{int(received_epoch * 1000)}"
+    with ENTRY_LOCK:
+        _reset_scanner_runtime_eval_state(target)
+        for key in list(target):
+            if key.startswith("last_watching_ai_") or key.startswith("rising_missed_"):
+                target.pop(key, None)
+        for key in (
+            "scanner_generation_id",
+            "scanner_generation_revision",
+            "scanner_attach_epoch",
+            "_scanner_scheduler_lane",
+            "_scanner_scheduler_deadline_epoch",
+            "_scanner_scheduler_work_id",
+            "entry_ai_action",
+            "ai_action",
+            "last_ai_action",
+            "current_ai_action",
+            "forced_entry_reason",
+            "forced_entry_qty",
+        ):
+            target.pop(key, None)
+        target.update(
+            {
+                "scanner_promotion_id": promotion_id,
+                "scanner_promotion_emitted_epoch": received_epoch,
+                "scanner_promotion_reason": "post_sell_revive_fresh_ws",
+                "source_signature": "POST_SELL_REVIVE,FRESH_0B",
+                "current_price": current_price,
+                "current_price_observed": current_price,
+                "price_delta_since_first_seen_pct": 0.0,
+                "entry_armed_at_epoch": received_epoch,
+            }
+        )
+        promotion_payload = {
+            **target,
+            **venue_fields,
+            "record_id": record_id,
+        }
+    generation = _register_scanner_scheduler_generation(
+        scheduler,
+        payload=promotion_payload,
+        target=target,
+        attach_epoch=float(now_epoch),
+    )
+    if generation is None:
+        # The quote was valid, but a transient scheduler-capacity or
+        # registration guard can still reject the attach. Keep the post-sell
+        # barrier armed so the watcher cannot fall into an unowned legacy
+        # evaluation path and can retry after scheduler reconciliation.
+        with ENTRY_LOCK:
+            target["_scalp_revive_min_quote_ts"] = revive_epoch
+    return generation
+
+
 def _scanner_boolish_true(value):
     if isinstance(value, bool):
         return value
@@ -12465,6 +12577,13 @@ def run_sniper(is_test_mode=False):
                     run_sniper,
                     "scanner_runtime_scheduler",
                     None,
+                )
+                _scanner_scheduler_register_revived_watch_on_fresh_ws(
+                    scheduler,
+                    stock,
+                    ws_data,
+                    revive_quote_barrier_fields=revive_quote_barrier_fields,
+                    now_epoch=time.time(),
                 )
                 _scanner_scheduler_reactivate_cold_park_on_fresh_ws(
                     scheduler,

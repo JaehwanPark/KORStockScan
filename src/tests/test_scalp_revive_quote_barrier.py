@@ -70,3 +70,189 @@ def test_revive_barrier_allows_current_rest_price_without_promoting_or_clearing_
     )
     assert fields["scalp_revive_quote_barrier_ws_pending"] is True
     assert stock["_scalp_revive_min_quote_ts"] == 1000.0
+
+
+def test_revived_watch_registers_new_generation_from_first_fresh_ws(monkeypatch):
+    monkeypatch.setattr(
+        sniper.run_sniper,
+        "scanner_scheduler_mode",
+        "async_v1",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        sniper.run_sniper,
+        "scanner_scheduler_venues",
+        frozenset({"KRX"}),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        sniper,
+        "_emit_scanner_scheduler_event",
+        lambda **kwargs: None,
+    )
+    scheduler = sniper.ScannerRuntimeScheduler(max_active=16)
+    old = scheduler.register_generation(
+        code="002990",
+        promotion_id="PROMO-OLD",
+        record_id=7,
+        venue="KRX",
+        promotion_epoch=990.0,
+        attach_epoch=991.0,
+        observed_price=12_800,
+        source_signature="VALUE_TOP",
+    )
+    stock = {
+        "id": 8,
+        "code": "002990",
+        "name": "TEST",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "effective_venue": "KRX",
+        "venue": "KRX",
+        "scanner_generation_id": old.item.generation.generation_id,
+        "scanner_promotion_id": "PROMO-OLD",
+        "scanner_promotion_emitted_epoch": 990.0,
+        "price_delta_since_first_seen_pct": 3.5,
+        "last_watching_ai_action": "WAIT",
+        "last_watching_ai_score": 57.0,
+        "rising_missed_one_share_entry_forced": True,
+        "forced_entry_reason": "rising_missed_one_share_entry",
+        "forced_entry_qty": 43,
+    }
+    ws_data = {
+        "curr": 13_950,
+        "last_ws_update_ts": 1000.1,
+        "last_realtime_type_ts": {"0B": 1000.1},
+    }
+
+    generation = sniper._scanner_scheduler_register_revived_watch_on_fresh_ws(
+        scheduler,
+        stock,
+        ws_data,
+        revive_quote_barrier_fields={
+            "scalp_revive_quote_barrier_state": "fresh_ws_after_revive",
+            "scalp_revive_quote_barrier_min_ts": 1000.0,
+            "scalp_revive_quote_barrier_received_ts": 1000.1,
+        },
+        now_epoch=1000.2,
+    )
+
+    assert generation is not None
+    assert stock["scanner_generation_id"] != old.item.generation.generation_id
+    assert stock["scanner_promotion_id"].startswith("SCALPREVIVE-002990-8-")
+    assert stock["scanner_promotion_reason"] == "post_sell_revive_fresh_ws"
+    assert stock["current_price_observed"] == 13_950
+    assert stock["price_delta_since_first_seen_pct"] == 0.0
+    assert "last_watching_ai_action" not in stock
+    assert "last_watching_ai_score" not in stock
+    assert "rising_missed_one_share_entry_forced" not in stock
+    assert "forced_entry_reason" not in stock
+    assert "forced_entry_qty" not in stock
+    assert (
+        sniper._scanner_scheduler_pre_recovery_block_reason(
+            stock,
+            scheduler=scheduler,
+        )
+        == ""
+    )
+
+
+def test_revived_watch_does_not_register_from_rest_only_recovery(monkeypatch):
+    monkeypatch.setattr(
+        sniper.run_sniper,
+        "scanner_scheduler_mode",
+        "async_v1",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        sniper.run_sniper,
+        "scanner_scheduler_venues",
+        frozenset({"KRX"}),
+        raising=False,
+    )
+    scheduler = sniper.ScannerRuntimeScheduler(max_active=16)
+    stock = {
+        "id": 8,
+        "code": "002990",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "effective_venue": "KRX",
+    }
+
+    generation = sniper._scanner_scheduler_register_revived_watch_on_fresh_ws(
+        scheduler,
+        stock,
+        {
+            "curr": 13_950,
+            "ws_snapshot_recovery_source": "ka10001_rest_quote_fallback",
+            "ws_snapshot_recovery_epoch": 1000.1,
+        },
+        revive_quote_barrier_fields={
+            "scalp_revive_quote_barrier_state": ("fresh_rest_after_revive_ws_pending"),
+            "scalp_revive_quote_barrier_min_ts": 1000.0,
+        },
+        now_epoch=1000.2,
+    )
+
+    assert generation is None
+    assert scheduler.current_generation("002990") is None
+
+
+def test_revived_watch_rearms_quote_barrier_when_scheduler_attach_is_rejected(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        sniper.run_sniper,
+        "scanner_scheduler_mode",
+        "async_v1",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        sniper.run_sniper,
+        "scanner_scheduler_venues",
+        frozenset({"KRX"}),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        sniper,
+        "_emit_scanner_scheduler_event",
+        lambda **kwargs: None,
+    )
+    scheduler = sniper.ScannerRuntimeScheduler(max_active=1)
+    scheduler.register_generation(
+        code="111111",
+        promotion_id="PROMO-CAPACITY",
+        record_id=1,
+        venue="KRX",
+        promotion_epoch=990.0,
+        attach_epoch=991.0,
+        observed_price=10_000,
+        source_signature="VALUE_TOP",
+    )
+    stock = {
+        "id": 8,
+        "code": "002990",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "effective_venue": "KRX",
+        "venue": "KRX",
+    }
+
+    generation = sniper._scanner_scheduler_register_revived_watch_on_fresh_ws(
+        scheduler,
+        stock,
+        {"curr": 13_950, "last_ws_update_ts": 1000.1},
+        revive_quote_barrier_fields={
+            "scalp_revive_quote_barrier_state": "fresh_ws_after_revive",
+            "scalp_revive_quote_barrier_min_ts": 1000.0,
+            "scalp_revive_quote_barrier_received_ts": 1000.1,
+        },
+        now_epoch=1000.2,
+    )
+
+    assert generation is None
+    assert stock["_scalp_revive_min_quote_ts"] == 1000.0
+    assert scheduler.current_generation("002990") is None
