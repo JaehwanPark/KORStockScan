@@ -56,6 +56,93 @@ def test_resolve_scan_interval_matches_intraday_schedule():
     assert scalping_scanner._resolve_scan_interval_sec(time(15, 0)) == 60
 
 
+def test_scanner_sleep_targets_prewarm_boundary_instead_of_coarse_minute():
+    assert (
+        scalping_scanner._seconds_until_next_scalping_prewarm(
+            datetime(2026, 7, 29, 8, 59, 59)
+        )
+        == 1.0
+    )
+    assert (
+        scalping_scanner._seconds_until_next_scalping_prewarm(
+            datetime(2026, 7, 29, 15, 56, 59)
+        )
+        == 1.0
+    )
+
+
+def test_ranked_prewarm_registers_ws_without_promotion_or_order_authority(
+    monkeypatch,
+):
+    emitted = []
+    event_bus = _EventBus()
+    monkeypatch.setattr(kiwoom_utils, "is_valid_stock", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        scalping_scanner,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, *, fields=None, **kwargs: emitted.append(
+            {"code": code, "stage": stage, "fields": fields or {}}
+        ),
+    )
+
+    codes = scalping_scanner._publish_ranked_prewarm_candidates(
+        event_bus,
+        [
+            {
+                "Code": "005930",
+                "Name": "삼성전자",
+                "Price": 100_000,
+                "Source": "VALUE_TOP",
+            },
+            {
+                "Code": "000660",
+                "Name": "SK하이닉스",
+                "Price": 200_000,
+                "Source": "PRICE_JUMP_START",
+            },
+        ],
+        max_codes=1,
+        now_ts=datetime(2026, 7, 29, 9, 0, tzinfo=timezone.utc).timestamp(),
+    )
+
+    assert codes == ["005930"]
+    reg = _event_payloads(event_bus, "COMMAND_WS_REG")
+    assert reg == [
+        {
+            "codes": ["005930"],
+            "source": "scanner_scalping_buy_window_prewarm",
+            "required_realtime_types": ("0B",),
+            "runtime_effect": True,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+        }
+    ]
+    assert _event_payloads(event_bus, "SCALPING_SCANNER_PROMOTED_TARGET") == []
+    assert emitted[0]["stage"] == "scalping_scanner_ws_prewarm_selected"
+    assert emitted[0]["fields"]["decision_authority"].endswith("no_entry_authority")
+    assert emitted[0]["fields"]["broker_order_forbidden"] is True
+
+
+def test_prewarm_release_only_unsubscribes_codes_without_runtime_owner():
+    event_bus = _EventBus()
+
+    released = scalping_scanner._release_unused_prewarm_codes(
+        event_bus,
+        ["005930", "000660", "035420"],
+        active_codes={"005930"},
+        protected_codes={"000660"},
+    )
+
+    assert released == ["035420"]
+    assert _event_payloads(event_bus, "COMMAND_WS_UNREG") == [
+        {
+            "codes": ["035420"],
+            "source": "scalping_scanner_buy_window_prewarm_release",
+            "reason": "first_active_scan_not_owned",
+        }
+    ]
+
+
 def test_watch_budget_opening_config_accepts_minute_precision_env(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_OPENING_ROTATION_1PCT_OBSERVE_START", "08:50")
     monkeypatch.setenv("KORSTOCKSCAN_OPENING_ROTATION_1PCT_ENTRY_END", "14:55")

@@ -4740,6 +4740,7 @@ def _reset_scanner_runtime_eval_state(target):
         "_scanner_scheduler_warm_generation_id",
         "_scanner_scheduler_warm_since_epoch",
         "_scanner_scheduler_warm_reason",
+        "_scanner_cold_park_reactivation_key",
         "_scanner_fast_precheck_logged_at",
         "_scanner_runtime_queue_lag_logged_at",
         "_scanner_heavy_eval_lag_logged_at",
@@ -4774,6 +4775,8 @@ def _reset_scanner_runtime_eval_state(target):
         "scanner_first_entry_realtime_latency_ms",
         "scanner_evaluation_anchor_epoch",
         "scanner_evaluation_anchor_source",
+        "scanner_warm_first_fresh_price",
+        "scanner_warm_first_fresh_epoch",
     ):
         target.pop(key, None)
 
@@ -8663,6 +8666,104 @@ def _scanner_scheduler_enqueue_fresh_precheck(
     return decision
 
 
+def _scanner_scheduler_reactivate_cold_park_on_fresh_ws(
+    scheduler,
+    target,
+    ws_data,
+    *,
+    now_epoch,
+):
+    """Resume only an initial cold-source park when its first fresh trade arrives."""
+
+    if not isinstance(scheduler, ScannerRuntimeScheduler):
+        return False
+    if not _is_scanner_watching_target(target):
+        return False
+    if not bool((target or {}).get("_scanner_scheduler_warm_parked")):
+        return False
+    if (
+        str((target or {}).get("_scanner_scheduler_warm_reason") or "")
+        != "precheck_not_eligible_generation_warm_parked"
+    ):
+        return False
+    fast_fields = (target or {}).get("_scanner_fast_precheck_fields")
+    fast_fields = fast_fields if isinstance(fast_fields, dict) else {}
+    fast_reason = str(
+        fast_fields.get("fast_precheck_reason")
+        or (target or {}).get("_scanner_fast_precheck_reason")
+        or ""
+    )
+    if fast_reason != "missing_or_zero_curr":
+        return False
+    current_price = _safe_int((ws_data or {}).get("curr"), 0)
+    if current_price <= 0:
+        return False
+    realtime_fields = _scanner_record_first_entry_realtime(
+        target,
+        ws_data,
+        now_ts=float(now_epoch),
+    )
+    if realtime_fields.get("scanner_entry_realtime_state") != "received":
+        return False
+    generation_id = str((target or {}).get("scanner_generation_id") or "").strip()
+    first_realtime_epoch = _safe_float(
+        (target or {}).get("scanner_first_entry_realtime_epoch"),
+        0.0,
+    )
+    reactivation_key = f"{generation_id}:{first_realtime_epoch:.6f}"
+    if (
+        str((target or {}).get("_scanner_cold_park_reactivation_key") or "")
+        == reactivation_key
+    ):
+        return False
+    decision = _scanner_scheduler_enqueue_fresh_precheck(
+        scheduler,
+        target,
+        now_epoch=float(now_epoch),
+        owner="first_fresh_ws_after_cold_warm_park",
+        evidence_snapshot=ws_data,
+    )
+    if decision is None or decision.item is None:
+        return False
+    with ENTRY_LOCK:
+        target["_scanner_cold_park_reactivation_key"] = reactivation_key
+        target["scanner_warm_first_fresh_price"] = current_price
+        target["scanner_warm_first_fresh_epoch"] = first_realtime_epoch
+    _emit_scanner_scheduler_event(
+        payload=target,
+        target=target,
+        stage="scalping_scanner_scheduler_warm_park_reactivated",
+        fields={
+            "metric_role": "source_readiness",
+            "decision_authority": ("scanner_scheduler_recheck_only_no_order_authority"),
+            "window_policy": "same_generation_first_post_attach_trade",
+            "sample_floor": "one_cold_parked_generation",
+            "primary_decision_metric": "first_fresh_ws_to_recheck_sec",
+            "source_quality_gate": (
+                "current_generation_missing_or_zero_curr_then_fresh_post_attach_0B"
+            ),
+            "forbidden_uses": (
+                "standalone_buy,broker_submit,threshold_mutation,"
+                "provider_route_change,order_price_change,quantity_or_cap_change,"
+                "broker_guard_bypass,stale_quote_bypass,hard_safety_bypass"
+            ),
+            "runtime_effect": True,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "scheduler_action": "cold_warm_park_reactivated",
+            "scheduler_reason": "first_fresh_ws_after_missing_or_zero_curr",
+            "scanner_warm_first_fresh_price": current_price,
+            "scanner_warm_first_fresh_epoch": f"{first_realtime_epoch:.6f}",
+            "first_fresh_ws_to_recheck_sec": round(
+                max(0.0, float(now_epoch) - first_realtime_epoch),
+                6,
+            ),
+            **realtime_fields,
+        },
+    )
+    return True
+
+
 def _scanner_scheduler_park_target_generation(
     scheduler,
     target,
@@ -8675,8 +8776,9 @@ def _scanner_scheduler_park_target_generation(
 
     Parking invalidates queued and in-flight work for the exact generation so
     late worker results cannot reach COMMIT. The WATCHING target and its WS
-    subscription remain intact; only a new promotion or an explicit bounded
-    recheck may create fresh scheduler work.
+    subscription remain intact. A new promotion, an explicit bounded recheck,
+    or the first post-attach trade after an initial ``missing_or_zero_curr``
+    precheck may create fresh scheduler work.
     """
 
     if not isinstance(scheduler, ScannerRuntimeScheduler):
@@ -8689,11 +8791,7 @@ def _scanner_scheduler_park_target_generation(
         or (target or {}).get("scanner_generation_id")
         or ""
     ).strip()
-    if (
-        current is None
-        or not expected_id
-        or current.generation_id != expected_id
-    ):
+    if current is None or not expected_id or current.generation_id != expected_id:
         return False
 
     async_coordinator = getattr(
@@ -8743,9 +8841,7 @@ def _scanner_scheduler_park_target_generation(
         fields={
             **current.timing_fields(now_epoch=float(now_epoch)),
             "metric_role": "runtime_scheduler_capacity",
-            "decision_authority": (
-                "scanner_runtime_scheduler_only_no_order_authority"
-            ),
+            "decision_authority": ("scanner_runtime_scheduler_only_no_order_authority"),
             "window_policy": "per_scanner_generation",
             "sample_floor": "one_generation_terminal_or_expired_transition",
             "primary_decision_metric": "scanner_generation_hot_dwell_sec",
@@ -11713,6 +11809,12 @@ def run_sniper(is_test_mode=False):
                     run_sniper,
                     "scanner_runtime_scheduler",
                     None,
+                )
+                _scanner_scheduler_reactivate_cold_park_on_fresh_ws(
+                    scheduler,
+                    stock,
+                    ws_data,
+                    now_epoch=time.time(),
                 )
                 scanner_pre_recovery_block_reason = (
                     _scanner_scheduler_pre_recovery_block_reason(

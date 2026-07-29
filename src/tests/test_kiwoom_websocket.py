@@ -995,6 +995,44 @@ def test_scalp_condition_deferred_insert_flushes_when_buy_window_opens(monkeypat
     assert manager._deferred_scalp_condition_matches == {}
 
 
+def test_scalp_condition_defer_prewarm_registers_ws_once_without_entry_authority(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        kiwoom_websocket,
+        "is_scalping_prewarm_time_allowed",
+        lambda now=None: True,
+    )
+    manager = KiwoomWSManager("test-token")
+    calls = []
+    monkeypatch.setattr(
+        manager,
+        "execute_subscribe",
+        lambda codes, **kwargs: calls.append((list(codes), kwargs)),
+    )
+    payload = {
+        "code": "005930",
+        "condition_name": "scalp_candid_normal_01",
+    }
+
+    manager._defer_scalp_condition_match(payload)
+    manager._defer_scalp_condition_match(payload)
+
+    assert calls == [
+        (
+            ["005930"],
+            {
+                "force": False,
+                "source": "scanner_condition_buy_window_prewarm",
+                "repair_cycle": "",
+                "required_realtime_types": ("0B",),
+            },
+        )
+    ]
+    assert list(manager._scalp_condition_prewarm_codes) == ["005930"]
+    assert len(manager._deferred_scalp_condition_matches) == 1
+
+
 def test_scalp_condition_unmatched_drops_deferred_insert(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_WS_CONDITION_SEARCH_ENABLED", "true")
     buy_window_open = {"value": False}

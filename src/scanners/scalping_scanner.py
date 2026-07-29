@@ -35,6 +35,7 @@ from src.engine.sniper_time import (
     SCALPING_BUY_WINDOWS,
     describe_scalping_buy_windows,
     is_scalping_buy_time_allowed,
+    scalping_prewarm_window,
     scalping_session_venue_provenance,
 )
 from src.utils.constants import TRADING_RULES
@@ -141,6 +142,23 @@ def _active_scalping_buy_window(now_dt):
     return None
 
 
+def _active_scalping_prewarm_window(now_dt):
+    return scalping_prewarm_window(now_dt)
+
+
+def _seconds_until_next_scalping_prewarm(now_dt, *, lead_sec=180):
+    candidates = []
+    for day_offset in (0, 1):
+        target_date = now_dt.date() + timedelta(days=day_offset)
+        for start, _end in SCALPING_BUY_WINDOWS:
+            prewarm_start = datetime.combine(target_date, start) - timedelta(
+                seconds=max(0, int(lead_sec))
+            )
+            if prewarm_start > now_dt:
+                candidates.append((prewarm_start - now_dt).total_seconds())
+    return min(candidates) if candidates else 60.0
+
+
 def _window_start_epoch(now_dt, start):
     start_dt = datetime.combine(now_dt.date(), start)
     if start > now_dt.time():
@@ -155,6 +173,104 @@ def _scalping_watching_max_active():
     except (TypeError, ValueError):
         value = 16
     return max(1, min(value, 80))
+
+
+def _publish_ranked_prewarm_candidates(
+    event_bus,
+    ranked_targets,
+    *,
+    max_codes,
+    now_ts=None,
+):
+    now_ts = time.time() if now_ts is None else float(now_ts)
+    prewarm_codes = []
+    venue_fields = scalping_session_venue_provenance(now_ts)
+    for target in ranked_targets:
+        code = str(target.get("Code") or "").replace("A", "").strip()[:6]
+        name = str(target.get("Name") or "").strip()
+        price = _safe_positive_int(target.get("Price"))
+        if (
+            not code
+            or code in prewarm_codes
+            or not kiwoom_utils.is_valid_stock(code, name, price)
+        ):
+            continue
+        prewarm_codes.append(code)
+        emit_pipeline_event(
+            "ENTRY_PIPELINE",
+            name or "-",
+            code,
+            "scalping_scanner_ws_prewarm_selected",
+            fields={
+                **venue_fields,
+                "metric_role": "source_readiness",
+                "decision_authority": (
+                    "scanner_ws_prewarm_observation_only_no_entry_authority"
+                ),
+                "window_policy": "three_minutes_before_each_scalping_buy_window",
+                "sample_floor": "one_prewarm_candidate",
+                "primary_decision_metric": "first_trade_ready_at_buy_window_open",
+                "source_quality_gate": "valid_ranked_candidate_with_positive_price",
+                "forbidden_uses": (
+                    "standalone_buy,broker_submit,threshold_mutation,"
+                    "provider_route_change,order_price_change,quantity_or_cap_change,"
+                    "broker_guard_bypass,stale_quote_bypass,hard_safety_bypass"
+                ),
+                "runtime_effect": True,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "prewarm_source_signature": _source_signature(target),
+                "prewarm_observed_price": price,
+            },
+        )
+        if len(prewarm_codes) >= max(1, int(max_codes or 1)):
+            break
+    if prewarm_codes:
+        event_bus.publish(
+            "COMMAND_WS_REG",
+            {
+                "codes": prewarm_codes,
+                "source": "scanner_scalping_buy_window_prewarm",
+                "required_realtime_types": ("0B",),
+                "runtime_effect": True,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+            },
+        )
+    return prewarm_codes
+
+
+def _release_unused_prewarm_codes(
+    event_bus,
+    prewarm_codes,
+    *,
+    active_codes,
+    protected_codes=None,
+):
+    active = {
+        str(code or "").replace("A", "").strip()[:6] for code in (active_codes or ())
+    }
+    protected = {
+        str(code or "").replace("A", "").strip()[:6] for code in (protected_codes or ())
+    }
+    release_codes = sorted(
+        {
+            str(code or "").replace("A", "").strip()[:6]
+            for code in (prewarm_codes or ())
+            if str(code or "").replace("A", "").strip()[:6]
+            and str(code or "").replace("A", "").strip()[:6] not in active | protected
+        }
+    )
+    if release_codes:
+        event_bus.publish(
+            "COMMAND_WS_UNREG",
+            {
+                "codes": release_codes,
+                "source": "scalping_scanner_buy_window_prewarm_release",
+                "reason": "first_active_scan_not_owned",
+            },
+        )
+    return release_codes
 
 
 def _scanner_watch_budget_reallocation_enabled():
@@ -3973,8 +4089,9 @@ def run_scalper_iteration(
     open_top_limit,
     supernova_limit,
     limit_down_manager=None,
+    prewarm_only=False,
 ):
-    if limit_down_manager is not None:
+    if limit_down_manager is not None and not prewarm_only:
         limit_down_manager.reconcile(active_codes=_active_scalping_codes(db))
     realtime_rank_targets = _fetch_scan_source(
         "ka00198 실시간종목조회순위(30초)",
@@ -4069,7 +4186,7 @@ def run_scalper_iteration(
         price_jump_targets=price_jump_targets,
         high_proximity_targets=high_proximity_targets,
         new_high_targets=new_high_targets,
-        emit_observation=True,
+        emit_observation=not prewarm_only,
     )
 
     candidate_pool = build_candidate_pool(
@@ -4085,6 +4202,13 @@ def run_scalper_iteration(
         low_rebound_targets=low_rebound_targets,
     )
     ranked_targets = rank_candidates(candidate_pool)
+    if prewarm_only:
+        prewarm_codes = _publish_ranked_prewarm_candidates(
+            event_bus,
+            ranked_targets,
+            max_codes=max_new_codes,
+        )
+        return prewarm_codes, recent_picks
     return promote_candidates(
         db,
         event_bus,
@@ -4125,6 +4249,8 @@ def run_scalper(is_test_mode=False):
     recent_picks = {}
     last_closed_msg_time = 0  # 💡 장 마감 도배 방지용 타이머 추가
     last_active_window_key = None
+    last_prewarm_window_key = None
+    prewarm_codes_by_window = {}
     last_outside_reset_key = None
     reentry_cooldown_sec = 25 * 60
     max_new_codes = 12
@@ -4153,6 +4279,7 @@ def run_scalper(is_test_mode=False):
         _sc_whb("scalping_scanner")
 
         active_window = _active_scalping_buy_window(now)
+        prewarm_window = _active_scalping_prewarm_window(now)
         if active_window:
             window_index, window_start, _window_end = active_window
             window_key = (now.date().isoformat(), window_index)
@@ -4167,6 +4294,40 @@ def run_scalper(is_test_mode=False):
                 recent_picks = {}
                 last_active_window_key = window_key
                 last_outside_reset_key = None
+                last_prewarm_window_key = None
+
+        if not is_test_mode and active_window is None and prewarm_window is not None:
+            prewarm_key = (
+                now.date().isoformat(),
+                int(prewarm_window["window_index"]),
+            )
+            if prewarm_key != last_prewarm_window_key:
+                prewarm_codes, _ = run_scalper_iteration(
+                    token=token,
+                    radar=radar,
+                    db=db,
+                    event_bus=event_bus,
+                    recent_picks=recent_picks,
+                    reentry_cooldown_sec=reentry_cooldown_sec,
+                    max_new_codes=_scalping_watching_max_active(),
+                    open_top_limit=open_top_limit,
+                    supernova_limit=supernova_limit,
+                    limit_down_manager=None,
+                    prewarm_only=True,
+                )
+                prewarm_codes_by_window[prewarm_key] = tuple(prewarm_codes)
+                last_prewarm_window_key = prewarm_key
+                log_info(
+                    "[SCALPING_SCANNER_PREWARM] "
+                    f"window={prewarm_window['window_start'].isoformat()} "
+                    f"codes={','.join(prewarm_codes) or '-'}"
+                )
+            seconds_to_open = max(
+                0.0,
+                prewarm_window["window_start"].timestamp() - time.time(),
+            )
+            time.sleep(max(0.25, min(2.0, seconds_to_open or 0.25)))
+            continue
 
         # 신규 후보 발굴은 실제 scalping BUY window와 동일하게 맞춘다.
         # 보유/청산 감시와 downstream hard/broker/order guards는 별도 유지한다.
@@ -4195,11 +4356,16 @@ def run_scalper(is_test_mode=False):
                     f"(buy_windows={describe_scalping_buy_windows()}) 보유/청산 감시는 계속됩니다."
                 )
                 last_closed_msg_time = time.time()
-            time.sleep(60)
+            time.sleep(
+                max(
+                    0.25,
+                    min(60.0, _seconds_until_next_scalping_prewarm(now)),
+                )
+            )
             continue
 
         scan_interval_sec = _resolve_scan_interval_sec(now_time)
-        _, recent_picks = run_scalper_iteration(
+        promoted_codes, recent_picks = run_scalper_iteration(
             token=token,
             radar=radar,
             db=db,
@@ -4211,6 +4377,26 @@ def run_scalper(is_test_mode=False):
             supernova_limit=supernova_limit,
             limit_down_manager=limit_down_manager,
         )
+        if active_window:
+            active_key = (now.date().isoformat(), int(active_window[0]))
+            prewarm_codes = prewarm_codes_by_window.pop(active_key, ())
+            if prewarm_codes:
+                limit_down_code = (
+                    str(getattr(limit_down_manager.active, "code", "") or "")
+                    if limit_down_manager.active is not None
+                    else ""
+                )
+                released_codes = _release_unused_prewarm_codes(
+                    event_bus,
+                    prewarm_codes,
+                    active_codes=_active_scalping_codes(db),
+                    protected_codes=([limit_down_code] if limit_down_code else []),
+                )
+                log_info(
+                    "[SCALPING_SCANNER_PREWARM_RELEASE] "
+                    f"window={active_key[1]} promoted={','.join(promoted_codes) or '-'} "
+                    f"released={','.join(released_codes) or '-'}"
+                )
 
         time.sleep(scan_interval_sec)
 

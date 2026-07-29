@@ -21,6 +21,7 @@ from src.engine.bd_fbuy_accum_pre_scanner import write_ws_snapshot
 from src.engine.monitoring.market_halt_windows import append_market_session_event
 from src.engine.sniper_time import (
     describe_scalping_buy_windows,
+    is_scalping_prewarm_time_allowed,
     is_scalping_buy_time_allowed,
     scalping_buy_time_block_reason,
 )
@@ -52,6 +53,7 @@ def _load_system_config():
 
 
 WS_CONDITION_SEARCH_ENABLED_ENV = "KORSTOCKSCAN_WS_CONDITION_SEARCH_ENABLED"
+SCALP_CONDITION_PREWARM_MAX_CODES = 16
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SCALP_CONDITION_KEYWORDS = (
     "scalp_candid_aggressive_01",
@@ -264,6 +266,7 @@ class KiwoomWSManager:
         self._top_of_book_cache = {}
         self._last_remove_request_ts = {}
         self._deferred_scalp_condition_matches = OrderedDict()
+        self._scalp_condition_prewarm_codes = OrderedDict()
 
         # 전역 EventBus 인스턴스 획득 및 외부 명령 수신기 장착
         self.event_bus = EventBus()
@@ -1718,6 +1721,24 @@ class KiwoomWSManager:
         self._deferred_scalp_condition_matches[key] = deferred_payload
         while len(self._deferred_scalp_condition_matches) > 300:
             self._deferred_scalp_condition_matches.popitem(last=False)
+        if (
+            is_scalping_prewarm_time_allowed()
+            and code not in self._scalp_condition_prewarm_codes
+            and len(self._scalp_condition_prewarm_codes)
+            < SCALP_CONDITION_PREWARM_MAX_CODES
+        ):
+            self._scalp_condition_prewarm_codes[code] = time.time()
+            self.event_bus.publish(
+                "COMMAND_WS_REG",
+                {
+                    "codes": [code],
+                    "source": "scanner_condition_buy_window_prewarm",
+                    "required_realtime_types": ("0B",),
+                    "runtime_effect": True,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                },
+            )
         print(
             "[WS_CONDITION_BUY_WINDOW_DEFERRED] 스캘핑 조건검색 편입 보류 "
             f"condition={condition_name} code={code} "
@@ -1732,6 +1753,7 @@ class KiwoomWSManager:
         self._deferred_scalp_condition_matches.pop(
             (normalized_name, normalized_code), None
         )
+        self._scalp_condition_prewarm_codes.pop(normalized_code, None)
 
     def _flush_deferred_scalp_condition_matches_if_allowed(self):
         if not self._deferred_scalp_condition_matches:
@@ -1740,6 +1762,7 @@ class KiwoomWSManager:
             return
         payloads = list(self._deferred_scalp_condition_matches.values())
         self._deferred_scalp_condition_matches.clear()
+        self._scalp_condition_prewarm_codes.clear()
         for payload in payloads:
             self._enqueue_state_event("CONDITION_MATCHED", payload)
         print(

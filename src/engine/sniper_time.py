@@ -4,7 +4,8 @@ from datetime import datetime, time as dt_time, timedelta, timezone
 
 from src.utils.constants import TRADING_RULES
 
-DEFAULT_SCALPING_BUY_WINDOWS = "08:01:00-08:40:00,09:01:00-15:00:00,16:00:00-19:45:00"
+DEFAULT_SCALPING_BUY_WINDOWS = "08:03:00-08:40:00,09:03:00-15:20:00,16:00:00-19:45:00"
+DEFAULT_SCALPING_PREWARM_LEAD_SEC = 180
 KST = timezone(timedelta(hours=9))
 
 
@@ -52,7 +53,7 @@ def _rule_time_windows(rule_name, default_value):
                 return tuple(windows)
         except Exception:
             continue
-    return ((_parse_time_value("09:01:00"), _parse_time_value("15:00:00")),)
+    return ((_parse_time_value("09:03:00"), _parse_time_value("15:20:00")),)
 
 
 def _coerce_time(value):
@@ -76,6 +77,68 @@ def is_scalping_buy_time_allowed(now_value=None):
     now_t = _coerce_time(now_value)
     return any(
         _in_time_window(now_t, start, end) for start, end in SCALPING_BUY_WINDOWS
+    )
+
+
+def scalping_prewarm_window(now_value=None, *, lead_sec=None, windows=None):
+    """Return the upcoming BUY window while its bounded prewarm interval is open."""
+
+    now_dt = now_value
+    if now_dt is None:
+        now_dt = datetime.now(tz=KST)
+    elif isinstance(now_dt, (int, float)):
+        now_dt = datetime.fromtimestamp(float(now_dt), tz=KST)
+    elif isinstance(now_dt, dt_time):
+        now_dt = datetime.combine(datetime.now(tz=KST).date(), now_dt, tzinfo=KST)
+    elif isinstance(now_dt, datetime) and now_dt.tzinfo is None:
+        now_dt = now_dt.replace(tzinfo=KST)
+    elif isinstance(now_dt, datetime):
+        now_dt = now_dt.astimezone(KST)
+    else:
+        now_dt = datetime.combine(
+            datetime.now(tz=KST).date(),
+            _coerce_time(now_dt),
+            tzinfo=KST,
+        )
+
+    if lead_sec is None:
+        try:
+            lead_sec = int(
+                getattr(
+                    TRADING_RULES,
+                    "SCALPING_PREWARM_LEAD_SEC",
+                    DEFAULT_SCALPING_PREWARM_LEAD_SEC,
+                )
+            )
+        except (TypeError, ValueError):
+            lead_sec = DEFAULT_SCALPING_PREWARM_LEAD_SEC
+    lead_sec = max(0, min(int(lead_sec), 15 * 60))
+    active_windows = windows if windows is not None else SCALPING_BUY_WINDOWS
+    for index, (start, end) in enumerate(active_windows):
+        start_dt = datetime.combine(now_dt.date(), start, tzinfo=KST)
+        end_dt = datetime.combine(now_dt.date(), end, tzinfo=KST)
+        if end < start:
+            end_dt += timedelta(days=1)
+        prewarm_start = start_dt - timedelta(seconds=lead_sec)
+        if prewarm_start <= now_dt < start_dt:
+            return {
+                "window_index": index,
+                "window_start": start_dt,
+                "window_end": end_dt,
+                "prewarm_start": prewarm_start,
+                "lead_sec": lead_sec,
+            }
+    return None
+
+
+def is_scalping_prewarm_time_allowed(now_value=None, *, lead_sec=None, windows=None):
+    return (
+        scalping_prewarm_window(
+            now_value,
+            lead_sec=lead_sec,
+            windows=windows,
+        )
+        is not None
     )
 
 
@@ -123,7 +186,7 @@ def scalping_session_venue_provenance(now_value=None):
 
 TIME_07_00 = _rule_time("PREMARKET_START_TIME", "07:00:00")
 TIME_09_00 = _rule_time("MARKET_OPEN_TIME", "09:00:00")
-TIME_09_03 = _rule_time("SCALPING_EARLIEST_BUY_TIME", "09:01:00")
+TIME_09_03 = _rule_time("SCALPING_EARLIEST_BUY_TIME", "09:03:00")
 TIME_09_05 = _rule_time("SWING_EARLIEST_BUY_TIME", "09:05:00")
 TIME_09_10 = _rule_time("MORNING_BATCH_END_TIME", "09:10:00")
 TIME_10_30 = _rule_time("MORNING_SCALPING_END_TIME", "10:30:00")
