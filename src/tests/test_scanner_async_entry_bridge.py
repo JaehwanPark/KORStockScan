@@ -7,7 +7,10 @@ from datetime import datetime
 import pytest
 
 from src.engine.ai.hot_path_ai_dispatcher import HotPathAIDispatcher
-from src.engine.scalping.scanner_async_eval import ScannerAsyncEvalCoordinator
+from src.engine.scalping.scanner_async_eval import (
+    ScannerAsyncEvalCoordinator,
+    ScannerAsyncEvalResult,
+)
 from src.engine.scalping.scanner_runtime_scheduler import ScannerGeneration
 from src.engine import sniper_state_handlers as handlers
 
@@ -28,6 +31,138 @@ def _generation(venue="KRX"):
         attach_epoch=time.time() - 0.5,
         observed_price=1000,
         source_signature="VALUE_TOP",
+    )
+
+
+def test_expired_ai_response_arms_fresh_snapshot_recheck(monkeypatch):
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCANNER_ASYNC_EXPIRED_RESPONSE_RECHECK_TTL_SEC",
+        "15",
+    )
+    stock = {}
+
+    fields = handlers._arm_scanner_async_expired_response_recheck(
+        stock,
+        now_ts=1000.0,
+        expired_snapshot_id="aims-expired-1",
+    )
+
+    assert fields["scanner_async_expired_response_recheck_armed"] is True
+    assert (
+        stock["_scanner_async_expired_response_recheck_until_epoch"] == 1015.0
+    )
+    assert stock["_scanner_async_expired_parent_snapshot_id"] == "aims-expired-1"
+    assert (
+        handlers._scanner_active_rising_recheck_reason(stock, now_ts=1001.0)
+        == "expired_ai_fresh_snapshot_recheck_pending"
+    )
+    assert (
+        handlers._scanner_active_full_eval_budget_source(stock, now_ts=1001.0)
+        == "expired_ai_fresh_snapshot_recheck"
+    )
+    assert fields["scanner_async_expired_response_recheck_runtime_effect"] is False
+    assert (
+        fields["scanner_async_expired_response_recheck_actual_order_submitted"]
+        is False
+    )
+    assert fields["scanner_async_expired_response_recheck_broker_order_forbidden"] is True
+
+
+def test_async_entry_expired_result_is_discarded_and_schedules_fresh_recheck(
+    monkeypatch,
+):
+    generation = _generation("KRX")
+    coordinator = ScannerAsyncEvalCoordinator(
+        ai_dispatcher=HotPathAIDispatcher(loaded_key_count=1)
+    )
+    cache_key = "watching:expired-result"
+    stock = {
+        "id": 7,
+        "code": "005930",
+        "name": "삼성전자",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "scanner_generation_id": generation.generation_id,
+        "scanner_promotion_id": generation.promotion_id,
+        "effective_venue": "KRX",
+        "venue_resolution": "session_clock_explicit_krx",
+        "source_signature": "VALUE_TOP",
+        "_scanner_async_generation_id": generation.generation_id,
+        "_scanner_async_cache_key": cache_key,
+    }
+    state_version = handlers._scanner_async_entry_state_version(stock)
+    now = time.time()
+    result = ScannerAsyncEvalResult(
+        request_id=f"{generation.generation_id}:{cache_key}",
+        generation_id=generation.generation_id,
+        code="005930",
+        venue="KRX",
+        cache_key=cache_key,
+        state_version=state_version,
+        status="expired_after_response",
+        submitted_epoch=now - 6.0,
+        preparation_started_epoch=now - 6.0,
+        preparation_completed_epoch=now - 5.5,
+        ai_started_epoch=now - 5.5,
+        completed_epoch=now - 0.1,
+        preparation_wait_sec=0.0,
+        preparation_service_sec=0.5,
+        ai_dispatch_wait_sec=0.0,
+        ai_response_sec=5.4,
+        observation_only=True,
+        ai_payload={
+            "action": "BUY",
+            "score": 80,
+            "ai_decision_snapshot_id": "aims-expired-integration",
+            "ai_decision_trace_id": "aidt-expired-integration",
+        },
+    )
+    with coordinator._lock:
+        coordinator._ready[result.request_id] = result
+    logs = []
+    monkeypatch.setattr(
+        handlers,
+        "_log_entry_pipeline",
+        lambda _stock, _code, event, **fields: logs.append((event, fields)),
+    )
+    monkeypatch.setattr(handlers, "_has_open_pending_entry_orders", lambda stock: False)
+    monkeypatch.setattr(handlers, "COOLDOWNS", {})
+    runtime = {
+        "scanner_async_eval_coordinator": coordinator,
+        "scanner_async_generation": generation,
+        "scanner_async_commit_phase": True,
+    }
+    try:
+        resolved = handlers._resolve_scanner_async_entry_ai(
+            stock,
+            "005930",
+            {
+                "curr": 1001,
+                "orderbook": {"ask": 1002, "bid": 1000},
+                "last_ws_update_ts": time.time(),
+            },
+            _FakeAI(),
+            runtime,
+            trigger_reason="expired_result_recheck",
+            last_ai_time=0,
+            current_ai_score=50,
+        )
+    finally:
+        coordinator.shutdown()
+
+    assert resolved == {
+        "status": "commit_rejected",
+        "reason": "result_not_commit_eligible",
+    }
+    assert (
+        stock["_scanner_async_expired_parent_snapshot_id"]
+        == "aims-expired-integration"
+    )
+    assert "_scanner_async_cache_key" not in stock
+    assert logs[-1][0] == "scanner_async_result_commit"
+    assert logs[-1][1]["scanner_async_expired_response_recheck_armed"] is True
+    assert logs[-1][1]["scanner_async_ai_decision_trace_id"] == (
+        "aidt-expired-integration"
     )
 
 

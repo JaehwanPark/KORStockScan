@@ -13226,6 +13226,10 @@ def _scanner_active_rising_recheck_reason(
             "freshness_envelope_recheck_pending",
         ),
         (
+            "_scanner_async_expired_response_recheck_until_epoch",
+            "expired_ai_fresh_snapshot_recheck_pending",
+        ),
+        (
             "_scanner_rising_latency_direct_recheck_after_epoch",
             "latency_direct_recheck_pending",
         ),
@@ -13265,6 +13269,8 @@ def _scanner_active_full_eval_budget_source(
         return "not_applicable_cutoff"
     if reason == "freshness_envelope_recheck_pending":
         return "freshness_envelope_recheck"
+    if reason == "expired_ai_fresh_snapshot_recheck_pending":
+        return "expired_ai_fresh_snapshot_recheck"
     if reason == "latency_direct_recheck_pending":
         return "latency_direct_recheck"
     if reason == "reversal_up_volatile_recheck_pending":
@@ -28999,6 +29005,67 @@ def _rising_missed_freshness_envelope_recheck_ttl_sec() -> float:
             "KORSTOCKSCAN_RISING_MISSED_FRESHNESS_ENVELOPE_RECHECK_TTL_SEC", 12.0
         ),
     )
+
+
+def _scanner_async_expired_response_recheck_ttl_sec() -> float:
+    return max(
+        10.0,
+        min(
+            _env_float(
+                "KORSTOCKSCAN_SCANNER_ASYNC_EXPIRED_RESPONSE_RECHECK_TTL_SEC",
+                15.0,
+            ),
+            30.0,
+        ),
+    )
+
+
+def _arm_scanner_async_expired_response_recheck(
+    stock: dict | None,
+    *,
+    now_ts: float,
+    expired_snapshot_id: str | None,
+) -> dict[str, Any]:
+    stock = stock if isinstance(stock, dict) else {}
+    ttl_sec = _scanner_async_expired_response_recheck_ttl_sec()
+    existing_until = _safe_float(
+        stock.get("_scanner_async_expired_response_recheck_until_epoch"),
+        0.0,
+    )
+    recheck_until = max(existing_until, float(now_ts) + ttl_sec)
+    parent_snapshot_id = (
+        str(expired_snapshot_id or "").strip()
+        or str(stock.get("_scanner_async_expired_parent_snapshot_id") or "").strip()
+        or "-"
+    )
+    _mutate_stock_state(
+        stock,
+        set_fields={
+            "_scanner_async_expired_response_recheck_until_epoch": recheck_until,
+            "_scanner_async_expired_parent_snapshot_id": parent_snapshot_id,
+            "_scanner_rising_recheck_reason": (
+                "expired_ai_fresh_snapshot_recheck_pending"
+            ),
+            "_scanner_full_eval_budget_source": (
+                "expired_ai_fresh_snapshot_recheck"
+            ),
+        },
+    )
+    return {
+        "scanner_async_expired_response_recheck_armed": True,
+        "scanner_async_expired_response_recheck_reason": (
+            "expired_ai_fresh_snapshot_recheck_pending"
+        ),
+        "scanner_async_expired_response_recheck_ttl_sec": round(ttl_sec, 3),
+        "scanner_async_expired_response_recheck_until_epoch": round(
+            recheck_until,
+            6,
+        ),
+        "scanner_async_expired_response_parent_snapshot_id": parent_snapshot_id,
+        "scanner_async_expired_response_recheck_runtime_effect": False,
+        "scanner_async_expired_response_recheck_actual_order_submitted": False,
+        "scanner_async_expired_response_recheck_broker_order_forbidden": True,
+    }
 
 
 def _apply_rising_missed_freshness_envelope_recheck(
@@ -48041,6 +48108,21 @@ def _resolve_scanner_async_entry_ai(
             ),
             now_epoch=now_epoch,
         )
+        result_snapshot_id = str(
+            result.ai_payload.get("ai_decision_snapshot_id")
+            or result.ai_payload.get("ai_input_snapshot_id")
+            or result.ai_payload.get("ai_market_snapshot_id")
+            or "-"
+        )
+        expired_recheck_fields = (
+            _arm_scanner_async_expired_response_recheck(
+                stock,
+                now_ts=now_epoch,
+                expired_snapshot_id=result_snapshot_id,
+            )
+            if result.status == "expired_after_response"
+            else {}
+        )
         _log_entry_pipeline(
             stock,
             code,
@@ -48051,6 +48133,19 @@ def _resolve_scanner_async_entry_ai(
             preparation_service_sec=round(result.preparation_service_sec, 6),
             ai_dispatch_wait_sec=round(result.ai_dispatch_wait_sec, 6),
             ai_response_sec=round(result.ai_response_sec, 6),
+            scanner_async_ai_snapshot_id=result_snapshot_id,
+            scanner_async_ai_decision_trace_id=(
+                result.ai_payload.get("ai_decision_trace_id") or "-"
+            ),
+            scanner_async_recheck_parent_snapshot_id=(
+                stock.get("_scanner_async_expired_parent_snapshot_id") or "-"
+            ),
+            **expired_recheck_fields,
+        )
+        completed_after_expired_recheck = bool(
+            result.status == "completed"
+            and decision.allowed
+            and stock.get("_scanner_async_expired_parent_snapshot_id")
         )
         _mutate_stock_state(
             stock,
@@ -48059,6 +48154,14 @@ def _resolve_scanner_async_entry_ai(
                 "_scanner_async_cache_key",
                 "_scanner_async_state_version",
                 "_scanner_async_submitted_at",
+                *(
+                    [
+                        "_scanner_async_expired_response_recheck_until_epoch",
+                        "_scanner_async_expired_parent_snapshot_id",
+                    ]
+                    if completed_after_expired_recheck
+                    else []
+                ),
             ],
         )
         if not decision.allowed:
@@ -48236,6 +48339,9 @@ def _resolve_scanner_async_entry_ai(
         scanner_async_dispatch_accepted=submit_decision.accepted,
         scanner_async_dispatch_reason=submit_decision.reason,
         scanner_async_deadline_epoch=round(context.deadline_epoch, 6),
+        scanner_async_recheck_parent_snapshot_id=(
+            stock.get("_scanner_async_expired_parent_snapshot_id") or "-"
+        ),
     )
     return {
         "status": "dispatched" if submit_decision.accepted else "dispatch_rejected",
@@ -58139,6 +58245,12 @@ def _rising_missed_tp1_submit_context_fields(
         "rising_missed_tp1_submit_context_evaluation_id": (
             log_fields.get("rising_missed_tp1_evaluation_id") or "-"
         ),
+        "rising_missed_tp1_submit_context_ai_snapshot_id": (
+            log_fields.get("rising_missed_tp1_ai_snapshot_id") or "-"
+        ),
+        "rising_missed_tp1_submit_context_ai_decision_trace_id": (
+            log_fields.get("rising_missed_tp1_ai_decision_trace_id") or "-"
+        ),
         "rising_missed_tp1_submit_context_candidate_allowed": True,
         "rising_missed_tp1_submit_context_selector_active": _truthy_field(
             log_fields.get("rising_missed_tp1_selector_active")
@@ -58269,6 +58381,14 @@ def _rising_missed_tp1_observation_context_log_fields(
         return {}
     fields = {
         "rising_missed_tp1_evaluation_id": evaluation_id,
+        "rising_missed_tp1_ai_snapshot_id": context.get(
+            "rising_missed_tp1_submit_context_ai_snapshot_id",
+            "-",
+        ),
+        "rising_missed_tp1_ai_decision_trace_id": context.get(
+            "rising_missed_tp1_submit_context_ai_decision_trace_id",
+            "-",
+        ),
         "rising_missed_tp1_submit_context_candidate_allowed": _truthy_field(
             context.get("rising_missed_tp1_submit_context_candidate_allowed")
         ),
@@ -59907,6 +60027,71 @@ def resolve_rising_missed_decision_input(
         envelope_fields["rising_missed_tp1_resolver_envelope_cache_age_sec"] = (
             f"{cache_age_sec:.3f}"
         )
+        live_ws, live_fields = _normalize_rising_missed_quality_guard_ws_envelope(
+            raw_ws,
+            now_ts=now_ts,
+        )
+        cached_state = str(
+            enriched_ws.get("market_data_freshness_state") or ""
+        ).lower()
+        cached_age_ms = _safe_float(
+            enriched_ws.get("market_data_effective_quote_age_ms"),
+            None,
+        )
+        live_age_ms = _safe_float(
+            live_ws.get("market_data_effective_quote_age_ms"),
+            None,
+        )
+        live_ws_reselected = bool(
+            cached_state != "conflicted"
+            and _rising_missed_market_data_envelope_is_fresh(live_ws)
+            and str(
+                live_ws.get("market_data_effective_price_source") or ""
+            ).lower()
+            == "ws"
+            and live_age_ms is not None
+            and (cached_age_ms is None or live_age_ms < cached_age_ms)
+        )
+        if live_ws_reselected:
+            enriched_ws.update(live_ws)
+            envelope_fields.update(live_fields)
+            if str(enriched_ws.get("quote_refresh_source") or "").lower().startswith(
+                "ka10004"
+            ):
+                enriched_ws.pop("quote_refresh_source", None)
+            if str(
+                enriched_ws.get("ws_snapshot_recovery_source") or ""
+            ).lower().startswith("ka10004"):
+                enriched_ws.pop("ws_snapshot_recovery_source", None)
+            enriched_ws["quote_age_ms"] = live_age_ms
+            enriched_ws["quote_stale"] = False
+            enriched_ws["stale_quote"] = False
+        cached_enriched_ws = cached.get("enriched_ws")
+        cached_enriched_ws = (
+            cached_enriched_ws if isinstance(cached_enriched_ws, dict) else {}
+        )
+        envelope_fields.update(
+            {
+                "rising_missed_tp1_resolver_cache_live_ws_reselected": (
+                    live_ws_reselected
+                ),
+                "rising_missed_tp1_resolver_cache_prior_effective_source": (
+                    cached_enriched_ws.get(
+                        "market_data_effective_price_source",
+                        "none",
+                    )
+                ),
+                "rising_missed_tp1_resolver_cache_prior_effective_age_ms": (
+                    round(cached_age_ms, 3)
+                    if cached_age_ms is not None
+                    else "-"
+                ),
+                "rising_missed_tp1_resolver_cache_live_ws_age_ms": (
+                    round(live_age_ms, 3) if live_age_ms is not None else "-"
+                ),
+            }
+        )
+        enriched_ws.update(market_data_enrichment_log_fields(envelope_fields))
     else:
         evaluation_id = uuid4().hex
         scanner_envelope = _merge_scanner_market_data_enrichment_into_ws_data(
@@ -60741,6 +60926,16 @@ def _maybe_submit_rising_missed_one_share_entry(
     decision_log_fields = dict(decision.log_fields or {})
     decision_log_fields.update(market_data_enrichment_log_fields(ws_data))
     decision_log_fields.update(watch_delta_refresh_fields)
+    decision_log_fields.update(
+        {
+            "rising_missed_tp1_ai_snapshot_id": (
+                stock.get("last_watching_ai_snapshot_id") or "-"
+            ),
+            "rising_missed_tp1_ai_decision_trace_id": (
+                stock.get("last_watching_ai_decision_trace_id") or "-"
+            ),
+        }
+    )
     if retry_fields.get("rising_missed_entry_ai_retry_reason") != "not_needed":
         decision_log_fields.update(retry_fields)
     if (

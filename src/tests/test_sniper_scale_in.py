@@ -8149,6 +8149,8 @@ def test_rising_missed_nxt_context_propagates_only_while_submit_context_is_fresh
     decision_fields = {
         "rising_missed_tp1_candidate_allowed": True,
         "rising_missed_tp1_evaluation_id": "nxt-context-eval",
+        "rising_missed_tp1_ai_snapshot_id": "aims-nxt-context",
+        "rising_missed_tp1_ai_decision_trace_id": "aidt-nxt-context",
         "rising_missed_tp1_low_rebound_pct": 2.68,
         "rising_missed_tp1_micro_confidence": 0.85,
         "rising_missed_tp1_true_ofi_ewma": 0.017,
@@ -8176,6 +8178,10 @@ def test_rising_missed_nxt_context_propagates_only_while_submit_context_is_fresh
     fresh = state_handlers._rising_missed_tp1_observation_context_log_fields(stock)
 
     assert fresh["rising_missed_tp1_evaluation_id"] == "nxt-context-eval"
+    assert fresh["rising_missed_tp1_ai_snapshot_id"] == "aims-nxt-context"
+    assert (
+        fresh["rising_missed_tp1_ai_decision_trace_id"] == "aidt-nxt-context"
+    )
     assert fresh["rising_missed_market_session_bucket"] == "nxt_entry_window"
     assert fresh["rising_missed_nxt_micro_state"] == "fresh_trade_quiet"
     assert fresh["rising_missed_nxt_micro_state_role"] == (
@@ -8463,6 +8469,56 @@ def test_rising_missed_decision_input_consumes_scanner_cache_when_rest_budget_ex
         "scanner_market_data_enrichment_cache"
     )
     assert fields["rising_missed_tp1_input_reason"] == "tp1_micro_ws_unavailable"
+
+
+def test_rising_missed_decision_cache_reselects_fresher_live_ws_quote():
+    stock = {
+        "_rising_missed_tp1_decision_envelope_cache": {
+            "code": "123468",
+            "evaluation_id": "cached-rest-envelope",
+            "stored_at": 1000.0,
+            "enriched_ws": {
+                "curr": 10000,
+                "best_bid": 9990,
+                "best_ask": 10010,
+                "market_data_freshness_state": "rest_enriched",
+                "market_data_orderbook_state": "rest_enriched",
+                "market_data_effective_quote_age_ms": 80.0,
+                "market_data_rest_quote_age_ms": 80.0,
+                "market_data_effective_price_source": "ka10004_rest_orderbook",
+                "market_data_effective_age_basis": (
+                    "absolute_timestamp:rest_received_ts"
+                ),
+            },
+            "envelope_fields": {
+                "rising_missed_quality_guard_pre_envelope_result": (
+                    "simultaneous_rest_selected_fresher"
+                ),
+            },
+        }
+    }
+
+    resolved, fields = state_handlers.resolve_rising_missed_decision_input(
+        stock,
+        "123468",
+        {
+            "curr": 10100,
+            "best_bid": 10090,
+            "best_ask": 10110,
+            "last_ws_update_ts": 1003.45,
+        },
+        {"now_ts": 1003.5},
+    )
+
+    assert resolved["curr"] == 10100
+    assert resolved["market_data_effective_price_source"] == "ws"
+    assert fields["market_data_effective_quote_age_ms"] == 50.0
+    assert fields["rising_missed_tp1_resolver_cache_live_ws_reselected"] is True
+    assert (
+        fields["rising_missed_tp1_resolver_cache_prior_effective_source"]
+        == "ka10004_rest_orderbook"
+    )
+    assert fields["rising_missed_tp1_resolver_cache_prior_effective_age_ms"] == 3580.0
 
 
 def test_rising_missed_tp1_selector_block_prevents_submit(monkeypatch):
