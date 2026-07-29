@@ -596,6 +596,15 @@ def build_holding_decision_context(
     now_epoch = now.timestamp()
     ws = ws_data if isinstance(ws_data, dict) else {}
     position = stock if isinstance(stock, dict) else {}
+    execution_broker_route = (
+        position.get("entry_execution_broker_route")
+        or position.get("broker_route")
+        or position.get("last_fill_broker_route")
+        or position.get("early_volatility_tp_broker_route")
+        or position.get("entry_order_exchange")
+        or position.get("exchange")
+        or position.get("market_route")
+    )
     candle_ws = dict(ws)
     for key in (
         "market_type",
@@ -630,6 +639,7 @@ def build_holding_decision_context(
         now_ts=now,
         recent_candles=recent_candles,
         source_meta=candle_meta,
+        broker_route=str(execution_broker_route or ""),
     )
     enabled = holding_decision_context_enabled(
         venue=str(candle.get("venue") or ""),
@@ -1081,15 +1091,7 @@ def build_holding_decision_context(
         ws_data=snapshot_ws,
         effective_venue=str(candle.get("venue") or ""),
         session_bucket=str(candle.get("session") or ""),
-        broker_route=(
-            position.get("entry_execution_broker_route")
-            or position.get("broker_route")
-            or position.get("last_fill_broker_route")
-            or position.get("early_volatility_tp_broker_route")
-            or position.get("entry_order_exchange")
-            or position.get("exchange")
-            or position.get("market_route")
-        ),
+        broker_route=execution_broker_route,
         candle_context=candle,
         position=position,
         now_ts=now_epoch,

@@ -1140,6 +1140,14 @@ def test_run_bot_waits_for_threshold_runtime_env_before_launching_bot():
     assert script.index('. "$DATED_OPERATOR_RUNTIME_OVERRIDES"') < script.index(
         'disable_expired_dated_runtime_overrides "$RUNTIME_TARGET_DATE"'
     )
+    assert "apply_authoritative_ai_context_promotion" in script
+    assert "--mode runtime-env-exports" in script
+    assert script.index(
+        'apply_authoritative_ai_context_promotion "$RUNTIME_TARGET_DATE"'
+    ) > script.index('disable_expired_dated_runtime_overrides "$RUNTIME_TARGET_DATE"')
+    assert script.index(
+        'apply_authoritative_ai_context_promotion "$RUNTIME_TARGET_DATE"'
+    ) < script.index('verify_threshold_runtime_env_handoff "$RUNTIME_TARGET_DATE"')
     assert "disable_expired_dated_runtime_overrides" in script
     assert "reset_runtime_policy_env_before_handoff" in script
     assert script.index("reset_runtime_policy_env_before_handoff") < script.index(

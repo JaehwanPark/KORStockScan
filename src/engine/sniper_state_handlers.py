@@ -48100,6 +48100,7 @@ def _resolve_scanner_async_entry_ai(
                 None,
             ),
             ws_data=prepared_ws,
+            broker_route=kiwoom_orders.resolve_order_dmst_stex_tp(),
         )
         recent_ticks = kiwoom_utils.get_tick_history_ka10003(
             KIWOOM_TOKEN,

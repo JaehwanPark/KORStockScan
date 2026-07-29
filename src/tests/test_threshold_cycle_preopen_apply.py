@@ -8834,6 +8834,63 @@ def test_verify_runtime_env_handoff_uses_target_date_operator_overlay(
     ]
 
 
+def test_verify_runtime_env_handoff_committed_context_promotion_owns_pid_values(
+    tmp_path, monkeypatch
+):
+    runtime_dir = tmp_path / "runtime_env"
+    runtime_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    exact_env = {
+        "KORSTOCKSCAN_AI_INPUT_PREFLIGHT_MODE": "exact_v2",
+        "KORSTOCKSCAN_MULTI_TIMEFRAME_AI_CONTEXT_ENABLED": "true",
+    }
+    manifest_path = runtime_dir / "threshold_runtime_env_2026-07-29.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "target_date": "2026-07-29",
+                "selected_families": [],
+                "env_overrides": exact_env,
+                "ai_multi_timeframe_context_promotion": str(
+                    tmp_path / "promotion.json"
+                ),
+            }
+        ),
+        encoding="utf-8",
+    )
+    (runtime_dir / "operator_runtime_overrides_2026-07-29.env").write_text(
+        "export KORSTOCKSCAN_AI_INPUT_PREFLIGHT_MODE=baseline_v1\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        mod,
+        "authoritative_ai_context_runtime_env",
+        lambda *_args, **_kwargs: dict(exact_env),
+    )
+    monkeypatch.setattr(
+        mod,
+        "_read_pid_environ",
+        lambda _pid: {
+            "KORSTOCKSCAN_AI_INPUT_PREFLIGHT_MODE": "baseline_v1",
+            "KORSTOCKSCAN_MULTI_TIMEFRAME_AI_CONTEXT_ENABLED": "true",
+        },
+    )
+
+    result = mod.verify_runtime_env_handoff("2026-07-29", pid=12345)
+
+    assert result["status"] == "fail"
+    assert result["pid_mismatches"] == [
+        {
+            "family": "ai_multi_timeframe_context_promotion",
+            "env_key": "KORSTOCKSCAN_AI_INPUT_PREFLIGHT_MODE",
+            "manifest_value": "exact_v2",
+            "pid_value": "baseline_v1",
+            "expected_value_source": "ai_multi_timeframe_context_promotion",
+        }
+    ]
+    assert result["authoritative_ai_context_runtime_env_keys"] == sorted(exact_env)
+
+
 def test_verify_runtime_env_handoff_validates_holding_and_persistent_overlays(
     tmp_path, monkeypatch
 ):

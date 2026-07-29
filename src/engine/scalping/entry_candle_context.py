@@ -194,6 +194,7 @@ def resolve_entry_candle_request_code(
     venue: str,
     session: str,
     ws_data: dict[str, Any] | None = None,
+    broker_route: str | None = None,
 ) -> str:
     base, explicit_suffix = _split_code(code)
     venue_upper = str(venue or "").upper()
@@ -206,10 +207,15 @@ def resolve_entry_candle_request_code(
     if venue_upper in {"SOR", "INTEGRATED", "KRX_NXT_INTEGRATED"}:
         return f"{base}_AL"
     if venue_upper == "KRX":
-        # A KRX decision must fetch the KRX-specific REST series even when a
-        # shared websocket snapshot last observed an integrated (_AL) event.
-        # The later route-consistency check still blocks an unproven mixed
-        # event; following it here would silently turn a KRX series into SOR.
+        # A regular-session SOR order consumes the integrated executable view.
+        # Kiwoom's ka10080 contract identifies that series with ``_AL``.  This
+        # does not claim an underlying event venue; the snapshot keeps event
+        # venue attribution disabled for this execution-only view.
+        if (
+            str(session or "").strip().lower() == "krx_regular"
+            and str(broker_route or "").strip().upper() == "SOR"
+        ):
+            return f"{base}_AL"
         return base
     return base
 
@@ -223,6 +229,7 @@ def fetch_entry_candles_with_meta(
     session: str | None = None,
     limit: int = 40,
     now_ts: Any = None,
+    broker_route: str | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Fetch entry candles from the route owned by the effective venue/session."""
 
@@ -232,11 +239,15 @@ def fetch_entry_candles_with_meta(
     venue_value = resolve_entry_candle_venue(ws, venue, session_value)
     if venue_value == "NXT" and session_value == "krx_regular":
         session_value = "nxt_regular_overlap"
+    planned_broker_route = str(
+        broker_route or resolve_order_dmst_stex_tp(now=now)
+    ).upper()
     request_code = resolve_entry_candle_request_code(
         code,
         venue=venue_value,
         session=session_value,
         ws_data=ws,
+        broker_route=planned_broker_route,
     )
     from src.utils import kiwoom_utils
 
@@ -254,6 +265,7 @@ def fetch_entry_candles_with_meta(
             "entry_candle_request_code": request_code,
             "entry_candle_request_venue": venue_value,
             "entry_candle_request_session": session_value,
+            "entry_candle_request_broker_route": planned_broker_route,
             "multi_timeframe_auxiliary_fetch": True,
         }
     )
@@ -717,6 +729,7 @@ def build_session_candle_source(
     *,
     recent_candles: list[dict[str, Any]] | None = None,
     source_meta: dict[str, Any] | None = None,
+    broker_route: str | None = None,
 ) -> dict[str, Any]:
     """Build a neutral venue/session candle bundle for bounded consumers."""
 
@@ -728,7 +741,11 @@ def build_session_candle_source(
     if venue_value == "NXT" and session_value == "krx_regular":
         session_value = "nxt_regular_overlap"
     request_code = resolve_entry_candle_request_code(
-        code, venue=venue_value, session=session_value, ws_data=ws
+        code,
+        venue=venue_value,
+        session=session_value,
+        ws_data=ws,
+        broker_route=broker_route,
     )
     _, request_suffix = _split_code(request_code)
     ws_suffix, ws_route = _ws_route(ws, now_ts=now.timestamp())
@@ -758,6 +775,7 @@ def build_session_candle_source(
                 session=session_value,
                 limit=source_limit,
                 now_ts=now,
+                broker_route=broker_route,
             )
         except Exception as exc:
             recent_candles, source_meta = [], {}
@@ -1154,6 +1172,7 @@ def build_session_candle_source(
                     "entry_candle_request_code",
                     "entry_candle_request_venue",
                     "entry_candle_request_session",
+                    "entry_candle_request_broker_route",
                 }
             },
         },
@@ -1178,6 +1197,10 @@ def build_entry_candle_context(
 ) -> dict[str, Any]:
     """Build the entry-owned view over the neutral candle source."""
 
+    now_kst = _now_kst(now_ts)
+    planned_broker_route = str(
+        broker_route or resolve_order_dmst_stex_tp(now=now_kst)
+    ).upper()
     context = build_session_candle_source(
         token,
         code,
@@ -1189,6 +1212,7 @@ def build_entry_candle_context(
         now_ts=now_ts,
         recent_candles=recent_candles,
         source_meta=source_meta,
+        broker_route=planned_broker_route,
     )
     context.update(
         {
@@ -1201,10 +1225,6 @@ def build_entry_candle_context(
             "observation_contract": OBSERVATION_CONTRACT,
         }
     )
-    now_kst = _now_kst(now_ts)
-    planned_broker_route = str(
-        broker_route or resolve_order_dmst_stex_tp(now=now_kst)
-    ).upper()
     snapshot_ws_data = dict(ws_data or {})
     if include_investor_source:
         snapshot_ws_data = enrich_investor_source(

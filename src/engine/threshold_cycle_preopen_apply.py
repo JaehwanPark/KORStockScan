@@ -41,6 +41,9 @@ from src.engine.automation.source_quality_hard_gate import (
     load_source_quality_preflight,
     source_quality_preflight_blocked,
 )
+from src.engine.automation.ai_multi_timeframe_context_promotion import (
+    authoritative_runtime_env as authoritative_ai_context_runtime_env,
+)
 from src.engine.lifecycle_bucket_discovery import (
     bucket_catalog_path,
     discovery_report_path,
@@ -4477,6 +4480,29 @@ def verify_runtime_env_handoff(
     effective_env_overrides.update(operator_overrides)
     effective_env_overrides.update(dated_operator_overrides)
     findings: list[dict[str, Any]] = []
+    authoritative_context_env: dict[str, str] = {}
+    promotion_artifact_value = str(
+        manifest.get("ai_multi_timeframe_context_promotion") or ""
+    ).strip()
+    if promotion_artifact_value:
+        try:
+            authoritative_context_env = authoritative_ai_context_runtime_env(
+                target_date,
+                artifact_file=Path(promotion_artifact_value),
+                manifest_file=manifest_path,
+                env_file=runtime_env_path(target_date),
+            )
+        except ValueError as exc:
+            findings.append(
+                {
+                    "family": "ai_multi_timeframe_context_promotion",
+                    "missing_env_keys": [],
+                    "severity": "runtime_policy_unusable",
+                    "detail": str(exc),
+                    "policy_reason": "committed_promotion_runtime_env_invalid",
+                }
+            )
+    effective_env_overrides.update(authoritative_context_env)
     for family in retired_selected_families:
         findings.append(
             {
@@ -4743,6 +4769,10 @@ def verify_runtime_env_handoff(
             keys = pid_required_keys.setdefault("dynamic_entry_price_resolver", [])
             if post_probe_resolver_enabled_key not in keys:
                 keys.append(post_probe_resolver_enabled_key)
+        if authoritative_context_env:
+            pid_required_keys["ai_multi_timeframe_context_promotion"] = sorted(
+                authoritative_context_env
+            )
         persistent_family = "persistent_operator_overrides_2026_06_26"
         persistent_keys = pid_required_keys.get(persistent_family, [])
         if persistent_keys:
@@ -4781,12 +4811,16 @@ def verify_runtime_env_handoff(
                                 "launcher_safe_disable"
                                 if key in launcher_safe_disabled_keys
                                 else (
-                                    "dated_operator_runtime_overrides"
-                                    if key in dated_operator_overrides
+                                    "ai_multi_timeframe_context_promotion"
+                                    if key in authoritative_context_env
                                     else (
-                                        "operator_runtime_overrides"
-                                        if key in operator_overrides
-                                        else "threshold_runtime_env_manifest"
+                                        "dated_operator_runtime_overrides"
+                                        if key in dated_operator_overrides
+                                        else (
+                                            "operator_runtime_overrides"
+                                            if key in operator_overrides
+                                            else "threshold_runtime_env_manifest"
+                                        )
                                     )
                                 )
                             ),
@@ -4823,6 +4857,9 @@ def verify_runtime_env_handoff(
             else None
         ),
         "dated_operator_runtime_override_keys": sorted(dated_operator_overrides),
+        "authoritative_ai_context_runtime_env_keys": sorted(
+            authoritative_context_env
+        ),
         "runtime_policy_audits": runtime_policy_audits,
         "runtime_policy_fail_count": sum(
             audit.get("status") == "fail" for audit in runtime_policy_audits

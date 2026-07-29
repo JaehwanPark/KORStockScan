@@ -149,6 +149,76 @@ def runtime_env_path(target_date: str) -> Path:
     return RUNTIME_ENV_DIR / f"threshold_runtime_env_{target_date}.env"
 
 
+def authoritative_runtime_env(
+    target_date: str,
+    *,
+    artifact_file: Path | None = None,
+    manifest_file: Path | None = None,
+    env_file: Path | None = None,
+) -> dict[str, str]:
+    """Return the committed promotion overlay after verifying its commit files.
+
+    A missing artifact means that no context promotion owns the launcher
+    environment for the date.  Once an artifact exists, however, it must be a
+    complete and hash-consistent commit; silently ignoring a broken marker
+    would let a later generic operator override downgrade Exact V2.
+    """
+
+    artifact_file = artifact_file or promotion_path(target_date)
+    if not artifact_file.exists():
+        return {}
+    artifact = _load_json(artifact_file)
+    if (
+        artifact.get("transaction_status") == "rolled_back"
+        and artifact.get("decision") == "rolled_back_context_only"
+        and artifact.get("runtime_activation") is False
+    ):
+        return {}
+    if (
+        str(artifact.get("target_date") or "") != target_date
+        or artifact.get("decision") != "promoted_all_market_sessions_full"
+        or artifact.get("runtime_activation") is not True
+        or artifact.get("transaction_status") != "committed"
+    ):
+        raise ValueError("promotion artifact is not an active committed promotion")
+    manifest_file = manifest_file or runtime_manifest_path(target_date)
+    env_file = env_file or runtime_env_path(target_date)
+    if not manifest_file.exists() or not env_file.exists():
+        raise ValueError("promotion runtime commit files are missing")
+    manifest_bytes = manifest_file.read_bytes()
+    env_bytes = env_file.read_bytes()
+    if str(artifact.get("runtime_manifest_sha256") or "") != _sha256(manifest_bytes):
+        raise ValueError("promotion runtime manifest hash mismatch")
+    if str(artifact.get("runtime_env_sha256") or "") != _sha256(env_bytes):
+        raise ValueError("promotion runtime env hash mismatch")
+    manifest = _load_json(manifest_file)
+    manifest_env = manifest.get("env_overrides")
+    if not isinstance(manifest_env, dict):
+        raise ValueError("promotion runtime manifest env is missing")
+    artifact_env = artifact.get("env_overrides")
+    if not isinstance(artifact_env, dict):
+        raise ValueError("promotion artifact env is missing")
+    expected = full_market_env(target_date)
+    mismatches = [
+        key
+        for key, value in expected.items()
+        if str(manifest_env.get(key) or "") != value
+        or str(artifact_env.get(key) or "") != value
+    ]
+    if mismatches:
+        raise ValueError(
+            "promotion exact runtime env mismatch:" + ",".join(sorted(mismatches))
+        )
+    return expected
+
+
+def authoritative_runtime_env_exports(target_date: str) -> str:
+    return "\n".join(
+        f"export {key}={shlex.quote(value)}"
+        for key, value in sorted(authoritative_runtime_env(target_date).items())
+    )
+
+
 def validation_path(target_date: str) -> Path:
     return VALIDATION_DIR / f"ai_input_external_validation_{target_date}.json"
 
@@ -483,8 +553,11 @@ def _promotion_window_status(
         current.date() == target and current.time() < PREMARKET_REVIEW_START
     ):
         return "not_yet_due"
-    window_end = PREMARKET_APPLY_END if operator_directed else PREMARKET_REVIEW_END
-    if current.date() > target or current.time() >= window_end:
+    if current.date() > target:
+        return "premarket_validation_window_closed"
+    if operator_directed and current.time() >= PREMARKET_APPLY_END:
+        return "premarket_validation_window_closed"
+    if not operator_directed and current.time() > PREMARKET_REVIEW_END:
         return "premarket_validation_window_closed"
     return "pass"
 
@@ -1070,6 +1143,7 @@ def main(argv: list[str] | None = None) -> int:
             "apply",
             "operator-directed-evaluate",
             "operator-directed-apply",
+            "runtime-env-exports",
             "observe",
             "rollback",
         ),
@@ -1090,6 +1164,15 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--write", action="store_true")
     args = parser.parse_args(argv)
+    if args.mode == "runtime-env-exports":
+        try:
+            exports = authoritative_runtime_env_exports(args.date)
+        except ValueError as exc:
+            print(f"promotion_runtime_env_invalid:{exc}")
+            return 1
+        if exports:
+            print(exports)
+        return 0
     if args.mode in {"observe", "rollback"}:
         report = write_first_observation_report(args.date)
         if args.mode == "rollback" and report.get("rollback_required") is True:

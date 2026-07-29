@@ -263,6 +263,21 @@ def test_operator_directed_promotion_can_use_the_remaining_apply_window(tmp_path
     assert report["promotion_window_status"] == "pass"
 
 
+def test_validated_promotion_keeps_the_existing_review_end_boundary(tmp_path):
+    report = promotion.evaluate_promotion(
+        target_date="2026-07-27",
+        validation=_validation(),
+        golden_validation=_golden_validation(),
+        review=_review(),
+        runtime_manifest=_runtime_manifest(tmp_path),
+        runtime_verify={"status": "pass", "passed": True},
+        now=datetime(2026, 7, 27, 8, 40, tzinfo=KST),
+    )
+
+    assert report["status"] == "pass"
+    assert report["promotion_window_status"] == "pass"
+
+
 def test_operator_directed_promotion_closes_at_market_open(tmp_path):
     report = promotion.evaluate_promotion(
         target_date="2026-07-27",
@@ -444,6 +459,83 @@ def test_apply_transaction_preserves_env_and_writes_commit_marker_last(
     )
     assert committed["transaction_status"] == "committed"
     assert promotion.promotion_path("2026-07-27").exists()
+
+
+def test_committed_promotion_exports_authoritative_exact_v2_env(
+    tmp_path, monkeypatch
+):
+    runtime_dir = tmp_path / "runtime_env"
+    runtime_dir.mkdir()
+    promotion_dir = tmp_path / "runtime"
+    monkeypatch.setattr(promotion, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(promotion, "PROMOTION_DIR", promotion_dir)
+    manifest = _runtime_manifest(runtime_dir)
+    report = promotion.evaluate_promotion(
+        target_date="2026-07-27",
+        validation=_validation(),
+        golden_validation=_golden_validation(),
+        review=_review(),
+        runtime_manifest=manifest,
+        runtime_verify={"status": "pass", "passed": True},
+        now=TEST_NOW,
+    )
+    promotion.apply_promotion_transaction(report, manifest, now=TEST_NOW)
+
+    authoritative = promotion.authoritative_runtime_env("2026-07-27")
+
+    assert authoritative == promotion.full_market_env("2026-07-27")
+    assert "KORSTOCKSCAN_AI_INPUT_PREFLIGHT_MODE=exact_v2" in (
+        promotion.authoritative_runtime_env_exports("2026-07-27")
+    )
+
+
+def test_authoritative_runtime_env_rejects_tampered_commit_file(
+    tmp_path, monkeypatch
+):
+    runtime_dir = tmp_path / "runtime_env"
+    runtime_dir.mkdir()
+    promotion_dir = tmp_path / "runtime"
+    monkeypatch.setattr(promotion, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(promotion, "PROMOTION_DIR", promotion_dir)
+    manifest = _runtime_manifest(runtime_dir)
+    report = promotion.evaluate_promotion(
+        target_date="2026-07-27",
+        validation=_validation(),
+        golden_validation=_golden_validation(),
+        review=_review(),
+        runtime_manifest=manifest,
+        runtime_verify={"status": "pass", "passed": True},
+        now=TEST_NOW,
+    )
+    promotion.apply_promotion_transaction(report, manifest, now=TEST_NOW)
+    promotion.runtime_env_path("2026-07-27").write_text(
+        "export KORSTOCKSCAN_AI_INPUT_PREFLIGHT_MODE=baseline_v1\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="runtime env hash mismatch"):
+        promotion.authoritative_runtime_env("2026-07-27")
+
+
+def test_authoritative_runtime_env_does_not_reactivate_rolled_back_context(
+    tmp_path, monkeypatch
+):
+    promotion_dir = tmp_path / "runtime"
+    promotion_dir.mkdir()
+    monkeypatch.setattr(promotion, "PROMOTION_DIR", promotion_dir)
+    promotion.promotion_path("2026-07-27").write_text(
+        json.dumps(
+            {
+                "target_date": "2026-07-27",
+                "decision": "rolled_back_context_only",
+                "runtime_activation": False,
+                "transaction_status": "rolled_back",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert promotion.authoritative_runtime_env("2026-07-27") == {}
 
 
 def test_promotion_rollback_restores_previous_preflight_contract(tmp_path):

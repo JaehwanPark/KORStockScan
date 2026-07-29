@@ -130,6 +130,25 @@ verify_threshold_runtime_env_handoff() {
     echo "✅ threshold runtime env handoff 검증 통과: target_date=$target_date"
 }
 
+apply_authoritative_ai_context_promotion() {
+    local target_date="$1"
+    local promotion_exports
+    if ! promotion_exports="$(
+        PYTHONPATH=.. ../.venv/bin/python \
+            -m src.engine.automation.ai_multi_timeframe_context_promotion \
+            --date "$target_date" --mode runtime-env-exports
+    )"; then
+        echo "❌ committed AI context promotion env 검증 실패: target_date=$target_date"
+        printf '%s\n' "$promotion_exports"
+        return 1
+    fi
+    if [ -z "$promotion_exports" ]; then
+        return 0
+    fi
+    eval "$promotion_exports"
+    echo "📌 committed AI context promotion env 최종 적용: target_date=$target_date"
+}
+
 export_runtime_source_provenance() {
     local commit source_dirty source_status
     commit="$(git -C "$PROJECT_DIR" rev-parse --verify HEAD 2>/dev/null || true)"
@@ -282,6 +301,7 @@ while true; do
         set +a
     fi
     disable_expired_dated_runtime_overrides "$RUNTIME_TARGET_DATE"
+    apply_authoritative_ai_context_promotion "$RUNTIME_TARGET_DATE" || exit 1
     verify_threshold_runtime_env_handoff "$RUNTIME_TARGET_DATE" || exit 1
     export_runtime_source_provenance
 

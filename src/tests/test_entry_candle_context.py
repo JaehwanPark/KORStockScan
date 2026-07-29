@@ -307,6 +307,7 @@ def test_builder_excludes_untrusted_tick_volume_from_forming_bar(monkeypatch):
         now_ts=now,
         recent_candles=_candles(21),
         source_meta={},
+        broker_route="KRX",
     )
 
     assert context["bars"][-1]["v"] == 120
@@ -493,6 +494,15 @@ def test_venue_request_code_contract_and_dated_activation(monkeypatch):
     )
     assert (
         resolve_entry_candle_request_code(
+            "000660",
+            venue="KRX",
+            session="krx_regular",
+            broker_route="SOR",
+        )
+        == "000660_AL"
+    )
+    assert (
+        resolve_entry_candle_request_code(
             "000660", venue="NXT", session="nxt_aftermarket"
         )
         == "000660_NX"
@@ -674,7 +684,7 @@ def test_actual_ws_route_keys_select_nxt_and_premarket_al_requires_proof(monkeyp
     assert "premarket_al_proof_missing" in premarket["risk_flags"]
 
 
-def test_krx_regular_rejects_integrated_market_data_without_event_proof(
+def test_krx_regular_accepts_sor_integrated_execution_view_without_event_attribution(
     monkeypatch,
 ):
     _enable(monkeypatch)
@@ -695,16 +705,17 @@ def test_krx_regular_rejects_integrated_market_data_without_event_proof(
     )
 
     assert context["venue"] == "KRX"
-    assert context["request_code"] == "000660"
-    assert context["rest_route"] == "KRX"
+    assert context["request_code"] == "000660_AL"
+    assert context["rest_route"] == "_AL"
     assert context["ws_route"] == "krx_nxt_integrated"
-    assert context["source_quality"]["status"] == "blocked"
-    assert "venue_conflict" in context["source_quality"]["blockers"]
+    assert context["source_quality"]["status"] == "fresh_consistent"
+    assert "venue_conflict" not in context["source_quality"]["blockers"]
     snapshot = context["ai_market_snapshot_v1"]
     assert snapshot["effective_venue"] == "KRX"
     assert snapshot["broker_route"] == "SOR"
     assert snapshot["market_data_route"] == "krx_nxt_integrated"
     assert snapshot["underlying_event_venue"] is None
+    assert snapshot["venue_attribution_allowed"] is False
 
 
 def test_nxt_aftermarket_accepts_integrated_ws_only_with_closed_session_proof(
