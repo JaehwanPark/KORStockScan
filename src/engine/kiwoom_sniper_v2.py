@@ -4741,6 +4741,8 @@ def _reset_scanner_runtime_eval_state(target):
         "_scanner_scheduler_warm_since_epoch",
         "_scanner_scheduler_warm_reason",
         "_scanner_cold_park_reactivation_key",
+        "_scanner_deadline_park_reactivation_key",
+        "_scanner_rising_cross_park_reactivation_key",
         "_scanner_fast_precheck_logged_at",
         "_scanner_runtime_queue_lag_logged_at",
         "_scanner_heavy_eval_lag_logged_at",
@@ -8764,6 +8766,212 @@ def _scanner_scheduler_reactivate_cold_park_on_fresh_ws(
     return True
 
 
+def _scanner_scheduler_reactivate_deadline_park_on_fresh_ws(
+    scheduler,
+    target,
+    ws_data,
+    *,
+    now_epoch,
+):
+    """Retry one async-preparation timeout after a new, fresh trade arrives.
+
+    A preparation timeout has produced no strategy decision, so treating it as
+    a normally completed terminal generation can strand a rising WATCHING
+    symbol indefinitely.  Recovery remains bounded to one retry for the exact
+    generation and still returns through FAST_PRECHECK; it has no direct order
+    authority.
+    """
+
+    if not isinstance(scheduler, ScannerRuntimeScheduler):
+        return False
+    if not _is_scanner_watching_target(target):
+        return False
+    if not bool((target or {}).get("_scanner_scheduler_warm_parked")):
+        return False
+    if (
+        str((target or {}).get("_scanner_scheduler_warm_reason") or "")
+        != "async_preparation_deadline_expired_generation_warm_parked"
+    ):
+        return False
+
+    generation_id = str((target or {}).get("scanner_generation_id") or "").strip()
+    if not generation_id:
+        return False
+    if (
+        str((target or {}).get("_scanner_deadline_park_reactivation_key") or "")
+        == generation_id
+    ):
+        return False
+
+    ws_snapshot = ws_data if isinstance(ws_data, dict) else {}
+    fresh, freshness_source = _scanner_ws_snapshot_entry_realtime_fresh(
+        ws_snapshot,
+        now_ts=float(now_epoch),
+        fresh_sec=_scanner_heavy_eval_recheck_fresh_sec(),
+    )
+    if not fresh:
+        return False
+    type_ts = ws_snapshot.get("last_realtime_type_ts")
+    last_0b_epoch = (
+        _safe_float(type_ts.get("0B"), 0.0) if isinstance(type_ts, dict) else 0.0
+    )
+    warm_since_epoch = _safe_float(
+        (target or {}).get("_scanner_scheduler_warm_since_epoch"),
+        0.0,
+    )
+    if last_0b_epoch <= warm_since_epoch:
+        return False
+
+    decision = _scanner_scheduler_enqueue_fresh_precheck(
+        scheduler,
+        target,
+        now_epoch=float(now_epoch),
+        owner="fresh_ws_after_async_preparation_deadline",
+        evidence_snapshot=ws_snapshot,
+    )
+    if decision is None or decision.item is None:
+        return False
+    with ENTRY_LOCK:
+        target["_scanner_deadline_park_reactivation_key"] = generation_id
+    _emit_scanner_scheduler_event(
+        payload=target,
+        target=target,
+        stage="scalping_scanner_scheduler_warm_park_reactivated",
+        fields={
+            "metric_role": "runtime_scheduler_recovery",
+            "decision_authority": ("scanner_scheduler_recheck_only_no_order_authority"),
+            "window_policy": "same_generation_single_deadline_recovery",
+            "sample_floor": "one_async_preparation_deadline",
+            "primary_decision_metric": "deadline_park_to_fresh_recheck_sec",
+            "source_quality_gate": (
+                "current_generation_fresh_post_deadline_0B_required"
+            ),
+            "forbidden_uses": (
+                "standalone_buy,broker_submit,threshold_mutation,"
+                "provider_route_change,order_price_change,quantity_or_cap_change,"
+                "broker_guard_bypass,stale_quote_bypass,hard_safety_bypass"
+            ),
+            "runtime_effect": True,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "scheduler_action": "deadline_warm_park_reactivated",
+            "scheduler_reason": "fresh_0B_after_async_preparation_deadline",
+            "scanner_generation_id": generation_id,
+            "scanner_deadline_recovery_freshness_source": freshness_source,
+            "scanner_deadline_recovery_last_0b_epoch": f"{last_0b_epoch:.6f}",
+            "deadline_park_to_fresh_recheck_sec": round(
+                max(0.0, float(now_epoch) - warm_since_epoch),
+                6,
+            ),
+        },
+    )
+    return True
+
+
+def _scanner_scheduler_reactivate_rising_cross_park_on_fresh_ws(
+    scheduler,
+    target,
+    ws_data,
+    *,
+    now_epoch,
+):
+    """Recheck once when a parked WATCHING generation crosses rising eligibility."""
+
+    if not isinstance(scheduler, ScannerRuntimeScheduler):
+        return False
+    if not _is_scanner_watching_target(target):
+        return False
+    if not bool((target or {}).get("_scanner_scheduler_warm_parked")):
+        return False
+    if (
+        str((target or {}).get("_scanner_scheduler_warm_reason") or "")
+        != "heavy_eval_completed_generation_warm_parked"
+    ):
+        return False
+
+    generation = scheduler.current_generation((target or {}).get("code"))
+    generation_id = str(getattr(generation, "generation_id", "") or "").strip()
+    if not generation_id or (
+        str((target or {}).get("_scanner_rising_cross_park_reactivation_key") or "")
+        == generation_id
+    ):
+        return False
+
+    ws_snapshot = ws_data if isinstance(ws_data, dict) else {}
+    fresh, freshness_source = _scanner_ws_snapshot_entry_realtime_fresh(
+        ws_snapshot,
+        now_ts=float(now_epoch),
+        fresh_sec=_scanner_heavy_eval_recheck_fresh_sec(),
+    )
+    if not fresh:
+        return False
+    type_ts = ws_snapshot.get("last_realtime_type_ts")
+    last_0b_epoch = (
+        _safe_float(type_ts.get("0B"), 0.0) if isinstance(type_ts, dict) else 0.0
+    )
+    warm_since_epoch = _safe_float(
+        (target or {}).get("_scanner_scheduler_warm_since_epoch"),
+        0.0,
+    )
+    if last_0b_epoch <= warm_since_epoch:
+        return False
+
+    threshold_pct = _scanner_rising_entry_min_delta_pct()
+    prior_delta_pct = _scanner_positive_delta_value(target)
+    anchor_price = _safe_float(getattr(generation, "observed_price", 0.0), 0.0)
+    current_price = _safe_float(ws_snapshot.get("curr"), 0.0)
+    if anchor_price <= 0 or current_price <= 0:
+        return False
+    current_delta_pct = ((current_price - anchor_price) / anchor_price) * 100.0
+    if prior_delta_pct >= threshold_pct or current_delta_pct < threshold_pct:
+        return False
+
+    decision = _scanner_scheduler_enqueue_fresh_precheck(
+        scheduler,
+        target,
+        now_epoch=float(now_epoch),
+        owner="fresh_ws_after_rising_threshold_cross",
+        evidence_snapshot=ws_snapshot,
+    )
+    if decision is None or decision.item is None:
+        return False
+    with ENTRY_LOCK:
+        target["_scanner_rising_cross_park_reactivation_key"] = generation_id
+    _emit_scanner_scheduler_event(
+        payload=target,
+        target=target,
+        stage="scalping_scanner_scheduler_warm_park_reactivated",
+        fields={
+            "metric_role": "runtime_scheduler_recovery",
+            "decision_authority": ("scanner_scheduler_recheck_only_no_order_authority"),
+            "window_policy": "same_generation_single_rising_threshold_cross",
+            "sample_floor": "one_completed_watching_generation",
+            "primary_decision_metric": "parked_generation_rising_cross_recheck",
+            "source_quality_gate": (
+                "current_generation_fresh_post_park_0B_and_existing_threshold_cross"
+            ),
+            "forbidden_uses": (
+                "standalone_buy,broker_submit,threshold_mutation,"
+                "provider_route_change,order_price_change,quantity_or_cap_change,"
+                "broker_guard_bypass,stale_quote_bypass,hard_safety_bypass"
+            ),
+            "runtime_effect": True,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "scheduler_action": "rising_cross_warm_park_reactivated",
+            "scheduler_reason": "fresh_0B_crossed_existing_rising_threshold",
+            "scanner_generation_id": generation_id,
+            "scanner_rising_cross_freshness_source": freshness_source,
+            "scanner_rising_cross_anchor_price": round(anchor_price, 4),
+            "scanner_rising_cross_current_price": round(current_price, 4),
+            "scanner_rising_cross_prior_delta_pct": round(prior_delta_pct, 4),
+            "scanner_rising_cross_current_delta_pct": round(current_delta_pct, 4),
+            "scanner_rising_cross_threshold_pct": round(threshold_pct, 4),
+        },
+    )
+    return True
+
+
 def _scanner_scheduler_park_target_generation(
     scheduler,
     target,
@@ -10495,11 +10703,17 @@ def run_sniper(is_test_mode=False):
                                         "_scanner_opening_rotation_async_submitted_at",
                                     ):
                                         async_target.pop(async_key, None)
+                            async_park_reason = (
+                                "async_preparation_deadline_expired_"
+                                "generation_warm_parked"
+                                if async_result.status == "preparation_deadline_expired"
+                                else "async_result_rejected_generation_warm_parked"
+                            )
                             _scanner_scheduler_park_target_generation(
                                 run_sniper.scanner_runtime_scheduler,
                                 async_target,
                                 now_epoch=time.time(),
-                                reason="async_result_rejected_generation_warm_parked",
+                                reason=async_park_reason,
                             )
                         _emit_scanner_scheduler_event(
                             payload={
@@ -11811,6 +12025,18 @@ def run_sniper(is_test_mode=False):
                     None,
                 )
                 _scanner_scheduler_reactivate_cold_park_on_fresh_ws(
+                    scheduler,
+                    stock,
+                    ws_data,
+                    now_epoch=time.time(),
+                )
+                _scanner_scheduler_reactivate_deadline_park_on_fresh_ws(
+                    scheduler,
+                    stock,
+                    ws_data,
+                    now_epoch=time.time(),
+                )
+                _scanner_scheduler_reactivate_rising_cross_park_on_fresh_ws(
                     scheduler,
                     stock,
                     ws_data,

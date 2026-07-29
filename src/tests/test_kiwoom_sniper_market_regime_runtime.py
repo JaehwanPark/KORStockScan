@@ -8652,6 +8652,188 @@ def test_scanner_warm_park_does_not_reactivate_non_cold_terminal_generation(
     assert scheduler.snapshot_metrics(now_epoch=101.1)["scheduler_queue_depth"] == 0
 
 
+def test_scanner_async_deadline_park_reactivates_once_on_new_fresh_trade(
+    monkeypatch,
+):
+    scheduler = kiwoom_sniper_v2.ScannerRuntimeScheduler(max_active=16)
+    registered = scheduler.register_generation(
+        code="000001",
+        promotion_id="PROMO-1",
+        record_id=1,
+        venue="KRX",
+        promotion_epoch=99.0,
+        attach_epoch=100.0,
+        observed_price=10_000,
+        source_signature="VALUE_TOP",
+    )
+    first = scheduler.next_decision(now_epoch=100.1)
+    scheduler.complete(first.item, completed_epoch=100.2, outcome="pass")
+    target = {
+        "id": 1,
+        "code": "000001",
+        "name": "TEST",
+        "strategy": "SCALPING",
+        "status": "WATCHING",
+        "position_tag": "SCANNER",
+        "effective_venue": "KRX",
+        "scanner_generation_id": registered.item.generation.generation_id,
+    }
+    emitted = []
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "_emit_scanner_scheduler_event",
+        lambda **kwargs: emitted.append(kwargs),
+    )
+    assert kiwoom_sniper_v2._scanner_scheduler_park_target_generation(
+        scheduler,
+        target,
+        now_epoch=101.0,
+        reason="async_preparation_deadline_expired_generation_warm_parked",
+        expected_generation=registered.item.generation,
+    )
+
+    stale_before_park = {
+        "curr": 10_050,
+        "received_types": ["0B"],
+        "last_realtime_type_ts": {"0B": 100.9},
+    }
+    assert (
+        kiwoom_sniper_v2._scanner_scheduler_reactivate_deadline_park_on_fresh_ws(
+            scheduler,
+            target,
+            stale_before_park,
+            now_epoch=101.1,
+        )
+        is False
+    )
+
+    fresh_after_park = {
+        "curr": 10_100,
+        "received_types": ["0B"],
+        "last_realtime_type_ts": {"0B": 101.2},
+    }
+    assert kiwoom_sniper_v2._scanner_scheduler_reactivate_deadline_park_on_fresh_ws(
+        scheduler,
+        target,
+        fresh_after_park,
+        now_epoch=101.3,
+    )
+    assert target["_scanner_deadline_park_reactivation_key"] == (
+        registered.item.generation.generation_id
+    )
+    assert scheduler.snapshot_metrics(now_epoch=101.3)["scheduler_queue_depth"] == 1
+    assert emitted[-1]["stage"] == ("scalping_scanner_scheduler_warm_park_reactivated")
+
+    scheduler.next_decision(now_epoch=101.3)
+    assert (
+        kiwoom_sniper_v2._scanner_scheduler_reactivate_deadline_park_on_fresh_ws(
+            scheduler,
+            target,
+            {
+                "curr": 10_150,
+                "received_types": ["0B"],
+                "last_realtime_type_ts": {"0B": 101.4},
+            },
+            now_epoch=101.5,
+        )
+        is False
+    )
+
+
+def test_scanner_completed_park_reactivates_once_on_existing_rising_threshold_cross(
+    monkeypatch,
+):
+    scheduler = kiwoom_sniper_v2.ScannerRuntimeScheduler(max_active=16)
+    registered = scheduler.register_generation(
+        code="000001",
+        promotion_id="PROMO-1",
+        record_id=1,
+        venue="KRX",
+        promotion_epoch=99.0,
+        attach_epoch=100.0,
+        observed_price=10_000,
+        source_signature="PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+    )
+    first = scheduler.next_decision(now_epoch=100.1)
+    scheduler.complete(first.item, completed_epoch=100.2, outcome="pass")
+    target = {
+        "id": 1,
+        "code": "000001",
+        "name": "TEST",
+        "strategy": "SCALPING",
+        "status": "WATCHING",
+        "position_tag": "SCANNER",
+        "effective_venue": "KRX",
+        "scanner_generation_id": registered.item.generation.generation_id,
+        "price_delta_since_first_seen_pct": "0.72",
+    }
+    emitted = []
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "_emit_scanner_scheduler_event",
+        lambda **kwargs: emitted.append(kwargs),
+    )
+    assert kiwoom_sniper_v2._scanner_scheduler_park_target_generation(
+        scheduler,
+        target,
+        now_epoch=101.0,
+        reason="heavy_eval_completed_generation_warm_parked",
+        expected_generation=registered.item.generation,
+    )
+
+    below_threshold = {
+        "curr": 10_090,
+        "received_types": ["0B"],
+        "last_realtime_type_ts": {"0B": 101.1},
+    }
+    assert (
+        kiwoom_sniper_v2._scanner_scheduler_reactivate_rising_cross_park_on_fresh_ws(
+            scheduler,
+            target,
+            below_threshold,
+            now_epoch=101.2,
+        )
+        is False
+    )
+
+    crossed = {
+        "curr": 10_120,
+        "received_types": ["0B"],
+        "last_realtime_type_ts": {"0B": 101.3},
+    }
+    assert (
+        kiwoom_sniper_v2._scanner_scheduler_reactivate_rising_cross_park_on_fresh_ws(
+            scheduler,
+            target,
+            crossed,
+            now_epoch=101.4,
+        )
+        is True
+    )
+    assert target["_scanner_rising_cross_park_reactivation_key"] == (
+        registered.item.generation.generation_id
+    )
+    assert scheduler.snapshot_metrics(now_epoch=101.4)["scheduler_queue_depth"] == 1
+    assert emitted[-1]["fields"]["scheduler_action"] == (
+        "rising_cross_warm_park_reactivated"
+    )
+
+    scheduler.next_decision(now_epoch=101.4)
+    assert (
+        kiwoom_sniper_v2._scanner_scheduler_reactivate_rising_cross_park_on_fresh_ws(
+            scheduler,
+            target,
+            {
+                "curr": 10_200,
+                "received_types": ["0B"],
+                "last_realtime_type_ts": {"0B": 101.5},
+            },
+            now_epoch=101.6,
+        )
+        is False
+    )
+
+
 def test_scanner_warm_slot_can_be_reclaimed_without_general_attach_replacement(
     monkeypatch,
 ):
