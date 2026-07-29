@@ -29,6 +29,7 @@ from src.utils.constants import (
 _MARKET_DATA_CACHE = {}
 _MARKET_DATA_CACHE_LOCK = threading.RLock()
 _KIWOOM_TOKEN_PROCESS_LOCK = threading.RLock()
+_SCANNER_CODE_NAMESPACE_BLOCK_LOGGED = set()
 KIWOOM_CONNECT_TIMEOUT_SEC = float(os.getenv("KIWOOM_CONNECT_TIMEOUT_SEC", "5"))
 KIWOOM_READ_TIMEOUT_SEC = float(os.getenv("KIWOOM_READ_TIMEOUT_SEC", "20"))
 KIWOOM_TOKEN_CACHE_DEFAULT_TTL_SEC = int(
@@ -412,13 +413,64 @@ def _split_kiwoom_market_suffix(code: str) -> tuple[str, str]:
     return raw, ""
 
 
+def kiwoom_stock_code_identity(code: str) -> dict:
+    """Return a lossless Kiwoom instrument-code identity.
+
+    Kiwoom documents ``stk_cd`` as a string and uses ``_AL``/``_NX`` as
+    venue suffixes.  Embedded letters in the base code therefore belong to
+    the instrument namespace and must never be discarded.  Only the
+    documented account-style ``A`` prefix on an otherwise six-digit equity
+    code is removable.
+    """
+
+    raw_value = str(code or "").strip().upper().replace(".0", "")
+    raw_base, market_suffix = _split_kiwoom_market_suffix(raw_value)
+    if len(raw_base) == 7 and raw_base.startswith("A") and raw_base[1:].isdigit():
+        canonical_code = raw_base[1:]
+    elif raw_base.isdigit() and len(raw_base) <= 6:
+        canonical_code = raw_base[-6:].zfill(6)
+    else:
+        canonical_code = raw_base
+    return {
+        "raw_instrument_code": raw_value,
+        "raw_base_code": raw_base,
+        "market_suffix": market_suffix,
+        "canonical_code": canonical_code,
+        "is_equity_code": len(canonical_code) == 6 and canonical_code.isdigit(),
+        "code_namespace": (
+            "numeric_equity"
+            if len(canonical_code) == 6 and canonical_code.isdigit()
+            else "non_equity_or_ambiguous"
+        ),
+    }
+
+
 def normalize_stock_code(code: str) -> str:
-    """종목코드를 6자리 기준으로 정규화합니다. (_AL/_NX, A-prefix 허용)"""
-    raw, _suffix = _split_kiwoom_market_suffix(code)
-    if raw.startswith("A") and len(raw) >= 7:
-        raw = raw[1:]
-    digits = "".join(ch for ch in raw if ch.isdigit())
-    return digits[-6:].zfill(6) if digits else raw
+    """Normalize a Kiwoom code without collapsing instrument namespaces."""
+
+    return str(kiwoom_stock_code_identity(code)["canonical_code"])
+
+
+def _scanner_equity_code_fields(code: str, api_id: str) -> dict | None:
+    identity = kiwoom_stock_code_identity(code)
+    if identity["is_equity_code"]:
+        return {
+            "Code": identity["canonical_code"],
+            "RawInstrumentCode": identity["raw_instrument_code"],
+        }
+    rejection_key = (str(api_id or ""), str(identity["raw_instrument_code"]))
+    if rejection_key not in _SCANNER_CODE_NAMESPACE_BLOCK_LOGGED:
+        if len(_SCANNER_CODE_NAMESPACE_BLOCK_LOGGED) >= 2048:
+            _SCANNER_CODE_NAMESPACE_BLOCK_LOGGED.clear()
+        _SCANNER_CODE_NAMESPACE_BLOCK_LOGGED.add(rejection_key)
+        log_info(
+            "[KIWOOM_SCANNER_CODE_NAMESPACE_BLOCK] "
+            f"api_id={api_id or '-'} "
+            f"raw_code={identity['raw_instrument_code'] or '-'} "
+            f"base_code={identity['raw_base_code'] or '-'} "
+            "reason=non_numeric_equity_namespace"
+        )
+    return None
 
 
 def get_effective_kiwoom_code(code: str, db=None, is_nxt=None) -> str:
@@ -2096,9 +2148,12 @@ def get_previous_limit_down_stocks_ka10017(token):
         for item in (response or {}).get("updown_pric", []) or []:
             if not isinstance(item, dict):
                 continue
+            code_fields = _scanner_equity_code_fields(item.get("stk_cd"), "ka10017")
+            if not code_fields:
+                continue
             rows.append(
                 {
-                    "Code": normalize_stock_code(item.get("stk_cd")),
+                    **code_fields,
                     "Name": str(item.get("stk_nm") or "").strip(),
                     "CurrentPrice": _scanner_to_int(item.get("cur_prc")),
                     "ChangeRate": _scanner_to_signed_float(item.get("flu_rt")),
@@ -2180,8 +2235,10 @@ def get_realtime_item_rank_ka00198(token, qry_tp="5", limit=60):
     cleaned_list = []
     items = _extract_rank_items(results, ("item_inq_rank", "data"))
     for item in items[:limit]:
-        code = normalize_stock_code(item.get("stk_cd", item.get("code", "")))
-        if not code:
+        code_fields = _scanner_equity_code_fields(
+            item.get("stk_cd", item.get("code", "")), "ka00198"
+        )
+        if not code_fields:
             continue
         base_change = _scanner_to_signed_float(
             item.get("base_comp_chgr", item.get("flu_rt"))
@@ -2192,7 +2249,7 @@ def get_realtime_item_rank_ka00198(token, qry_tp="5", limit=60):
         sign_diagnostics = rank_change_sign_diagnostics(rank_change_sign, rank_change)
         cleaned_list.append(
             {
-                "Code": code,
+                **code_fields,
                 "Name": item.get("stk_nm", item.get("name", "")),
                 "Price": _scanner_to_int(
                     item.get("past_curr_prc", item.get("cur_prc", item.get("price")))
@@ -2248,12 +2305,14 @@ def get_price_jump_ka10019(token, mrkt_tp="000", minutes=3, limit=60, trde_qty_t
     cleaned_list = []
     items = _extract_rank_items(results, ("pric_jmpflu", "data"))
     for item in items[:limit]:
-        code = normalize_stock_code(item.get("stk_cd", item.get("code", "")))
-        if not code:
+        code_fields = _scanner_equity_code_fields(
+            item.get("stk_cd", item.get("code", "")), "ka10019"
+        )
+        if not code_fields:
             continue
         cleaned_list.append(
             {
-                "Code": code,
+                **code_fields,
                 "Name": item.get("stk_nm", item.get("name", "")),
                 "Price": _scanner_to_int(item.get("cur_prc", item.get("price"))),
                 "FluRate": _scanner_to_signed_float(
@@ -2304,8 +2363,10 @@ def get_high_price_proximity_ka10018(
     cleaned_list = []
     items = _extract_rank_items(results, ("high_low_pric_alacc", "data"))
     for item in items[:limit]:
-        code = normalize_stock_code(item.get("stk_cd", item.get("code", "")))
-        if not code:
+        code_fields = _scanner_equity_code_fields(
+            item.get("stk_cd", item.get("code", "")), "ka10018"
+        )
+        if not code_fields:
             continue
         current_price = _scanner_to_int(item.get("cur_prc", item.get("price")))
         today_high = _scanner_to_int(item.get("tdy_high_pric"))
@@ -2314,7 +2375,7 @@ def get_high_price_proximity_ka10018(
             distance_pct = round(((current_price - today_high) / today_high) * 100.0, 4)
         cleaned_list.append(
             {
-                "Code": code,
+                **code_fields,
                 "Name": item.get("stk_nm", item.get("name", "")),
                 "Price": current_price,
                 "FluRate": _scanner_to_signed_float(
@@ -2371,12 +2432,14 @@ def get_new_high_ka10016(
     cleaned_list = []
     items = _extract_rank_items(results, ("ntl_pric", "data"))
     for item in items[:limit]:
-        code = normalize_stock_code(item.get("stk_cd", item.get("code", "")))
-        if not code:
+        code_fields = _scanner_equity_code_fields(
+            item.get("stk_cd", item.get("code", "")), "ka10016"
+        )
+        if not code_fields:
             continue
         cleaned_list.append(
             {
-                "Code": code,
+                **code_fields,
                 "Name": item.get("stk_nm", item.get("name", "")),
                 "Price": _scanner_to_int(item.get("cur_prc", item.get("price"))),
                 "FluRate": _scanner_to_signed_float(
@@ -2435,12 +2498,14 @@ def get_value_top_ka10032(token, mrkt_tp="000", limit=60):
         ),
     )
     for item in items[:limit]:
-        code = normalize_stock_code(item.get("stk_cd", item.get("code", "")))
-        if not code:
+        code_fields = _scanner_equity_code_fields(
+            item.get("stk_cd", item.get("code", "")), "ka10032"
+        )
+        if not code_fields:
             continue
         cleaned_list.append(
             {
-                "Code": code,
+                **code_fields,
                 "Name": item.get("stk_nm", item.get("name", "")),
                 "Price": _scanner_to_int(item.get("cur_prc", item.get("price"))),
                 "FluRate": _scanner_to_signed_float(
@@ -2597,12 +2662,14 @@ def get_bid_balance_surge_ka10021(
     cleaned_list = []
     items = _extract_rank_items(results, ("bid_req_sdnin", "req_vol_sdnin", "data"))
     for item in items[:limit]:
-        code = normalize_stock_code(item.get("stk_cd", item.get("code", "")))
-        if not code:
+        code_fields = _scanner_equity_code_fields(
+            item.get("stk_cd", item.get("code", "")), "ka10021"
+        )
+        if not code_fields:
             continue
         cleaned_list.append(
             {
-                "Code": code,
+                **code_fields,
                 "Name": item.get("stk_nm", item.get("name", "")),
                 "Price": _scanner_to_int(item.get("cur_prc", item.get("price"))),
                 "FluRate": _scanner_to_signed_float(item.get("flu_rt")),
@@ -2664,8 +2731,10 @@ def get_vi_triggered_ka10054(token, mrkt_tp="000", limit=60):
         ),
     )
     for item in items[:limit]:
-        code = normalize_stock_code(item.get("stk_cd", item.get("code", "")))
-        if not code:
+        code_fields = _scanner_equity_code_fields(
+            item.get("stk_cd", item.get("code", "")), "ka10054"
+        )
+        if not code_fields:
             continue
         vi_open_flu_rate = _scanner_to_signed_float(item.get("open_pric_pre_flu_rt"))
         vi_dynamic_disparity_rate = _scanner_to_signed_float(item.get("dynm_dispty_rt"))
@@ -2683,7 +2752,7 @@ def get_vi_triggered_ka10054(token, mrkt_tp="000", limit=60):
             vi_flu_metric = "vi_static_disparity_rate"
         cleaned_list.append(
             {
-                "Code": code,
+                **code_fields,
                 "Name": item.get("stk_nm", item.get("name", "")),
                 "Price": _scanner_to_int(item.get("motn_pric", item.get("cur_prc"))),
                 "FluRate": vi_flu_rate,
@@ -2740,6 +2809,9 @@ def scan_volume_spike_ka10023(token, mrkt_tp="000", trde_qty_tp=None, pric_tp=No
         data = results[0].get("trde_qty_sdnin", [])
 
         for item in data:
+            code_fields = _scanner_equity_code_fields(item.get("stk_cd"), "ka10023")
+            if not code_fields:
+                continue
             # 💡 가격 추출 (사용자 제안 반영)
             curr_price = _scanner_to_int(item.get("cur_prc"))
             flu_rate = _scanner_to_signed_float(item.get("flu_rt"))
@@ -2747,7 +2819,7 @@ def scan_volume_spike_ka10023(token, mrkt_tp="000", trde_qty_tp=None, pric_tp=No
             candidates.append(
                 {
                     "code": item.get("stk_cd", ""),
-                    "Code": normalize_stock_code(item.get("stk_cd", "")),
+                    **code_fields,
                     "name": item.get("stk_nm", ""),
                     "Name": item.get("stk_nm", ""),
                     "spike_rate": _scanner_to_signed_float(item.get("sdnin_rt")),

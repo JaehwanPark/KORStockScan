@@ -1693,6 +1693,112 @@ def test_volume_surge_rank_annotation_controls_under_10000_relief(monkeypatch):
     assert scalping_scanner._under_10000_runtime_priority_rank(pool["000003"]) == 0
 
 
+def test_candidate_pool_blocks_alphanumeric_instrument_before_equity_merge():
+    pool = scalping_scanner.build_candidate_pool(
+        volume_surge_targets=[
+            {
+                "code": "0182R0_AL",
+                "Code": kiwoom_utils.normalize_stock_code("0182R0_AL"),
+                "Name": "1Q K반도체TOP2+",
+                "Price": 9165,
+                "FluRate": 0.54,
+            }
+        ],
+        value_targets=[
+            {
+                "Code": "001820",
+                "Name": "삼화콘덴서",
+                "Price": 68400,
+                "FluRate": 1.2,
+            }
+        ],
+    )
+
+    assert set(pool) == {"001820"}
+    assert pool["001820"]["Name"] == "삼화콘덴서"
+    assert pool["001820"]["RawInstrumentCode"] == "001820"
+    assert pool["001820"]["CodeNamespace"] == "numeric_equity"
+
+
+def test_volume_surge_parser_blocks_alphanumeric_instrument_namespace(monkeypatch):
+    monkeypatch.setattr(
+        kiwoom_utils,
+        "fetch_kiwoom_api_continuous",
+        lambda **_kwargs: [
+            {
+                "trde_qty_sdnin": [
+                    {
+                        "stk_cd": "0182R0_AL",
+                        "stk_nm": "1Q K반도체TOP2+",
+                        "cur_prc": "9165",
+                        "flu_rt": "0.54",
+                    },
+                    {
+                        "stk_cd": "001820_AL",
+                        "stk_nm": "삼화콘덴서",
+                        "cur_prc": "68400",
+                        "flu_rt": "1.2",
+                    },
+                ]
+            }
+        ],
+    )
+
+    rows = kiwoom_utils.scan_volume_spike_ka10023("TOKEN")
+
+    assert [row["Code"] for row in rows] == ["001820"]
+    assert rows[0]["RawInstrumentCode"] == "001820_AL"
+
+
+def test_candidate_pool_preserves_numeric_equity_venue_suffix_provenance():
+    pool = scalping_scanner.build_candidate_pool(
+        value_targets=[
+            {
+                "Code": "005930_AL",
+                "Name": "삼성전자",
+                "Price": 72000,
+                "FluRate": 1.0,
+            }
+        ]
+    )
+
+    assert set(pool) == {"005930"}
+    assert pool["005930"]["RawInstrumentCode"] == "005930_AL"
+    assert pool["005930"]["MarketSuffix"] == "_AL"
+
+
+def test_scanner_identity_guard_blocks_ascii_name_mismatch():
+    db = _DB()
+    db.get_latest_stock_name = lambda _code: "ABC Holdings"
+
+    decision = scalping_scanner._scanner_candidate_identity_decision(
+        db,
+        {
+            "Code": "005930",
+            "RawInstrumentCode": "005930_AL",
+            "Name": "XYZ Holdings",
+        },
+    )
+
+    assert decision["blocked"] is True
+    assert decision["reason"] == "scanner_identity_name_mismatch"
+    assert decision["scanner_source_identity_raw_code"] == "005930_AL"
+
+
+def test_scanner_identity_guard_blocks_non_equity_namespace_without_db_lookup():
+    decision = scalping_scanner._scanner_candidate_identity_decision(
+        _DB(),
+        {
+            "Code": "0182R0",
+            "RawInstrumentCode": "0182R0_AL",
+            "Name": "1Q K반도체TOP2+",
+        },
+    )
+
+    assert decision["blocked"] is True
+    assert decision["reason"] == "scanner_non_equity_code_namespace"
+
+
 def test_breakout_confirmation_sources_do_not_relieve_under_10000_without_volume_rank(
     monkeypatch,
 ):
@@ -2825,6 +2931,7 @@ def test_ka00198_realtime_rank_start_is_normalized(monkeypatch):
     assert rows == [
         {
             "Code": "005930",
+            "RawInstrumentCode": "005930",
             "Name": "삼성전자",
             "Price": 72000,
             "FluRate": 1.25,
@@ -3820,6 +3927,7 @@ def test_ka10018_high_price_proximity_is_normalized(monkeypatch):
     assert rows == [
         {
             "Code": "000001",
+            "RawInstrumentCode": "A000001",
             "Name": "HIGH",
             "Price": 9900,
             "FluRate": 1.23,
@@ -3868,6 +3976,7 @@ def test_ka10016_new_high_is_normalized(monkeypatch):
     assert rows == [
         {
             "Code": "000002",
+            "RawInstrumentCode": "000002",
             "Name": "NEW",
             "Price": 12000,
             "FluRate": 2.34,

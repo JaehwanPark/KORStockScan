@@ -61,6 +61,7 @@ SCANNER_UNDER_10000_PRIORITY_PRICE_CEILING = 10000
 SCANNER_UNDER_10000_VOLUME_SURGE_RANK_PCT_DEFAULT = 0.40
 SCANNER_UNDER_10000_VOLUME_SURGE_RANK_MIN_COUNT_DEFAULT = 10
 SCANNER_SOURCE_IDENTITY_QUARANTINE_SEC_DEFAULT = 300
+_SCANNER_REJECTED_CODE_IDENTITIES = set()
 PRIMARY_RISING_START_SOURCES = {
     "REALTIME_RANK_START",
     "PRICE_JUMP_START",
@@ -1720,9 +1721,30 @@ def _merge_best_rank_metadata(current, raw_target, prefix):
 
 
 def _merge_candidate(candidate_pool, raw_target, source):
-    code = kiwoom_utils.normalize_stock_code(
-        raw_target.get("Code", raw_target.get("code", ""))
+    raw_code = (
+        raw_target.get("RawInstrumentCode")
+        or raw_target.get("code")
+        or raw_target.get("Code", "")
     )
+    code_identity = kiwoom_utils.kiwoom_stock_code_identity(raw_code)
+    code = str(code_identity["canonical_code"])
+    if not code_identity["is_equity_code"]:
+        rejection_key = (
+            str(code_identity["raw_instrument_code"]),
+            str(source or ""),
+        )
+        if rejection_key not in _SCANNER_REJECTED_CODE_IDENTITIES:
+            if len(_SCANNER_REJECTED_CODE_IDENTITIES) >= 2048:
+                _SCANNER_REJECTED_CODE_IDENTITIES.clear()
+            _SCANNER_REJECTED_CODE_IDENTITIES.add(rejection_key)
+            log_info(
+                "[SCANNER_CODE_NAMESPACE_BLOCK] "
+                f"raw_code={code_identity['raw_instrument_code'] or '-'} "
+                f"base_code={code_identity['raw_base_code'] or '-'} "
+                f"canonical_code={code or '-'} source={source or '-'} "
+                "reason=non_numeric_equity_namespace"
+            )
+        return
     if not code:
         return
 
@@ -1731,6 +1753,9 @@ def _merge_candidate(candidate_pool, raw_target, source):
         code,
         {
             "Code": code,
+            "RawInstrumentCode": str(code_identity["raw_instrument_code"]),
+            "MarketSuffix": str(code_identity["market_suffix"]),
+            "CodeNamespace": str(code_identity["code_namespace"]),
             "Name": name,
             "FluRate": 0.0,
             "LegacyMaxFluRate": 0.0,
@@ -2199,14 +2224,30 @@ def _scanner_anchor_reset_context(target, previous):
 
 
 def _scanner_candidate_identity_decision(db, target):
-    code = str((target or {}).get("Code") or "").strip()[:6]
+    code_identity = kiwoom_utils.kiwoom_stock_code_identity(
+        (target or {}).get("RawInstrumentCode") or (target or {}).get("Code")
+    )
+    code = str(code_identity["canonical_code"])
     payload_name = str((target or {}).get("Name") or "").strip()
     fields = {
         "scanner_source_identity_guard_applied": False,
         "scanner_source_identity_guard_reason": "authoritative_name_unavailable",
         "scanner_source_identity_payload_name": payload_name or "-",
         "scanner_source_identity_authoritative_name": "-",
+        "scanner_source_identity_raw_code": (
+            code_identity["raw_instrument_code"] or "-"
+        ),
+        "scanner_source_identity_code_namespace": code_identity["code_namespace"],
     }
+    if not code_identity["is_equity_code"]:
+        fields["scanner_source_identity_guard_reason"] = (
+            "scanner_non_equity_code_namespace"
+        )
+        return {
+            "blocked": True,
+            "reason": "scanner_non_equity_code_namespace",
+            **fields,
+        }
     getter = getattr(db, "get_latest_stock_name", None)
     if not callable(getter) or not code:
         return {"blocked": False, "reason": "authoritative_name_unavailable", **fields}
@@ -2232,7 +2273,6 @@ def _scanner_candidate_identity_decision(db, target):
     authoritative_name_norm = _scanner_identity_name(authoritative_name)
     if (
         payload_name
-        and not payload_name.isascii()
         and payload_name_norm
         and authoritative_name_norm
         and payload_name_norm != authoritative_name_norm

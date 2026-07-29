@@ -78,3 +78,23 @@ def test_effective_kiwoom_code_preserves_explicit_market_suffix():
     assert (
         kiwoom_utils.get_effective_kiwoom_code("005930_AL", is_nxt=False) == "005930_AL"
     )
+
+
+def test_normalize_stock_code_does_not_collapse_alphanumeric_instrument_namespace():
+    identity = kiwoom_utils.kiwoom_stock_code_identity("0182R0_AL")
+
+    assert kiwoom_utils.normalize_stock_code("0182R0_AL") == "0182R0"
+    assert identity == {
+        "raw_instrument_code": "0182R0_AL",
+        "raw_base_code": "0182R0",
+        "market_suffix": "_AL",
+        "canonical_code": "0182R0",
+        "is_equity_code": False,
+        "code_namespace": "non_equity_or_ambiguous",
+    }
+    assert kiwoom_utils.normalize_stock_code("A005930") == "005930"
+    assert kiwoom_utils.normalize_stock_code("005930_AL") == "005930"
+    assert kiwoom_utils.normalize_stock_code("1001820_AL") == "1001820"
+    assert (
+        kiwoom_utils.kiwoom_stock_code_identity("1001820_AL")["is_equity_code"] is False
+    )
