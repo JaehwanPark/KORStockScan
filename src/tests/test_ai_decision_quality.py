@@ -754,6 +754,8 @@ def test_candidate_contract_requires_structured_reasons():
     )
     prompt = quality.decision_quality_v2_system_prompt("entry")
     assert "Do not erase either ledger by averaging them together." in prompt
+    assert "trusted supportive tape" in prompt
+    assert "Ask-heavy depth" in prompt
     assert "NO_EDGE" in prompt
     assert "WAIT is invalid." in prompt
 
@@ -875,6 +877,72 @@ def test_entry_candidate_contract_separates_structural_edge_and_adverse_risk():
         == []
     )
 
+    trusted_supportive_payload = {
+        **exact_payload,
+        "features": {
+            **exact_payload["features"],
+            "curr_vs_micro_vwap_bp": 15,
+            "curr_vs_ma5_bp": 10,
+            "entry_order_flow_status": "supportive",
+            "order_flow_pressure_source": "trusted_aggressor",
+            "entry_momentum_status": "accelerating",
+            "buy_pressure_10t": 90,
+            "net_aggressive_delta_10t": 25,
+            "tick_aggressor_pressure_usable": True,
+            "tick_aggressor_trusted_count": 10,
+            "quote_fresh_for_entry": True,
+            "tick_context_stale": False,
+            "large_sell_print_detected": False,
+        },
+    }
+    confirmed_response = {
+        **recovery_response,
+        "action": "BUY",
+        "expected_upside_pct": 1.5,
+        "expected_downside_pct": -0.8,
+        "reason_codes": [
+            "edge_positive",
+            "tape_supportive",
+            "recovery_trigger_confirmed",
+            "risk_reward_favorable",
+        ],
+        "evidence": {
+            **recovery_response["evidence"],
+            "tape": "supportive",
+            "adverse_risk": "moderate",
+            "trigger": "confirmed",
+        },
+    }
+    assert (
+        quality.validate_candidate_response(
+            confirmed_response,
+            stage="entry",
+            exact_payload=trusted_supportive_payload,
+        )
+        == []
+    )
+    trusted_tape_misclassified = {
+        **confirmed_response,
+        "action": "WAIT",
+        "reason_codes": [
+            "edge_positive",
+            "tape_adverse",
+            "recovery_trigger_required",
+        ],
+        "evidence": {
+            **confirmed_response["evidence"],
+            "tape": "adverse",
+            "trigger": "recovery_required",
+        },
+    }
+    assert "entry_trusted_supportive_trigger_misclassified" in (
+        quality.validate_candidate_response(
+            trusted_tape_misclassified,
+            stage="entry",
+            exact_payload=trusted_supportive_payload,
+        )
+    )
+
 
 def test_paired_replay_uses_same_exact_payload_and_has_no_runtime_authority():
     control_manifest = quality.build_control_manifest(
@@ -953,6 +1021,8 @@ def test_paired_replay_uses_same_exact_payload_and_has_no_runtime_authority():
     assert report["control_source_quality_adjusted_ev_pct"] == 0
     assert report["candidate_source_quality_adjusted_ev_pct"] == 0
     assert report["paired_comparable_count"] == 1
+    assert report["candidate_exposure_decision_count"] == 0
+    assert report["candidate_exposure_sample_floor"]["pass"] is False
     assert report["status"] == "paired_replay_complete_candidate_quality_rejected"
     assert report["candidate_quality_gate_pass"] is False
     assert report["buckets"] == [
@@ -968,7 +1038,158 @@ def test_paired_replay_uses_same_exact_payload_and_has_no_runtime_authority():
             "new_missed_upside_count": 0,
             "control_adverse_first_exposure_count": 0,
             "adverse_first_candidate_exposure_count": 0,
+            "candidate_exposure_decision_count": 0,
+            "candidate_exposure_unique_symbol_count": 0,
+            "candidate_exposure_sample_floor_pass": False,
+            "candidate_dominant_action_ratio": 1.0,
+            "candidate_quality_checks": {
+                "source_quality_adjusted_ev_improved": False,
+                "candidate_ev_positive": False,
+                "missed_upside_reduced": False,
+                "new_missed_upside_not_increased": True,
+                "adverse_first_exposure_not_increased": True,
+                "candidate_action_not_collapsed": False,
+                "candidate_exposure_sample_floor_pass": False,
+            },
+            "candidate_quality_gate_pass": False,
+            "candidate_error_taxonomy_counts": {},
         }
+    ]
+
+
+def test_paired_report_requires_diverse_candidate_exposure_sample():
+    requests = []
+    results = []
+    labels = []
+    for index in range(10):
+        trace_id = f"candidate-exposure-{index}"
+        stock_code = f"{index % 3 + 1:06d}"
+        requests.append(
+            {
+                "decision_trace_id": trace_id,
+                "paired_replay_id": f"pair-{index}",
+                "stock_code": stock_code,
+            }
+        )
+        results.append(
+            {
+                "decision_trace_id": trace_id,
+                "paired_replay_id": f"pair-{index}",
+                "stage": "entry",
+                "effective_venue": "KRX",
+                "session_bucket": "KRX_REGULAR",
+                "status": "pass",
+                "same_payload_confirmed": True,
+                "control_response": {"action": "DROP"},
+                "candidate_response": {"action": "BUY", "edge_state": "EDGE"},
+            }
+        )
+        labels.append(
+            {
+                "decision_trace_id": trace_id,
+                "source_quality_status": "pass",
+                "decision_stage": "entry",
+                "horizon_metrics": {
+                    "10m": {
+                        "end_return_pct": 0.5,
+                        "mfe_pct": 0.8,
+                        "mae_pct": -0.2,
+                        "first_hit": "neither",
+                    }
+                },
+            }
+        )
+
+    report = quality.build_paired_replay_report(
+        target_date="2026-07-29",
+        requests=requests,
+        results=results,
+        labels=labels,
+    )
+
+    assert report["candidate_exposure_decision_count"] == 10
+    assert report["candidate_exposure_unique_symbol_count"] == 3
+    assert report["candidate_exposure_sample_floor"]["pass"] is True
+    assert (
+        report["candidate_quality_checks"]["candidate_exposure_sample_floor_pass"]
+        is True
+    )
+
+    split_venue_report = quality.build_paired_replay_report(
+        target_date="2026-07-29",
+        requests=requests
+        + [
+            {
+                "decision_trace_id": "nxt-no-exposure",
+                "paired_replay_id": "nxt-pair",
+                "stock_code": "005930",
+            }
+        ],
+        results=results
+        + [
+            {
+                "decision_trace_id": "nxt-no-exposure",
+                "paired_replay_id": "nxt-pair",
+                "stage": "entry",
+                "effective_venue": "NXT",
+                "session_bucket": "NXT_AFTERMARKET",
+                "status": "pass",
+                "same_payload_confirmed": True,
+                "control_response": {"action": "WAIT"},
+                "candidate_response": {"action": "WAIT", "edge_state": "EDGE"},
+            }
+        ],
+        labels=labels
+        + [
+            {
+                "decision_trace_id": "nxt-no-exposure",
+                "source_quality_status": "pass",
+                "decision_stage": "entry",
+                "horizon_metrics": {
+                    "10m": {
+                        "end_return_pct": 0.2,
+                        "mfe_pct": 0.4,
+                        "mae_pct": -0.1,
+                        "first_hit": "neither",
+                    }
+                },
+            }
+        ],
+    )
+    assert (
+        split_venue_report["candidate_quality_checks"][
+            "candidate_exposure_sample_floor_pass"
+        ]
+        is False
+    )
+
+    false_wait_results = [dict(row) for row in results]
+    false_wait_results[0] = {
+        **false_wait_results[0],
+        "candidate_response": {"action": "WAIT", "edge_state": "EDGE"},
+    }
+    false_wait_labels = [dict(row) for row in labels]
+    false_wait_labels[0] = {
+        **false_wait_labels[0],
+        "horizon_metrics": {
+            "10m": {
+                "end_return_pct": 0.4,
+                "mfe_pct": 1.2,
+                "mae_pct": -0.2,
+                "first_hit": "neither",
+            }
+        },
+    }
+    false_wait_report = quality.build_paired_replay_report(
+        target_date="2026-07-29",
+        requests=requests,
+        results=false_wait_results,
+        labels=false_wait_labels,
+    )
+
+    assert false_wait_report["candidate_error_taxonomy_counts"] == {"false_wait": 1}
+    assert false_wait_report["paired_comparisons"][0]["candidate_error_taxonomy"] == [
+        "false_wait"
     ]
 
 
@@ -1259,6 +1480,65 @@ def test_paired_replay_retries_schema_once_and_report_omits_exact_payload():
     assert len(results[0]["candidate_attempts"]) == 2
     assert "exact_payload" not in report["requests"][0]
     assert report["candidate_provider_none_count"] == 0
+
+
+def test_paired_replay_allows_bounded_third_semantic_correction():
+    request = {
+        "paired_replay_id": "pair-three-attempts",
+        "decision_trace_id": "trace-three-attempts",
+        "stage": "entry",
+        "effective_venue": "KRX",
+        "session_bucket": "KRX_REGULAR",
+        "payload_sha256": "payload-three-attempts",
+        "exact_payload": {"secret_free_exact": True},
+        "candidate": {"system_prompt_sha256": "candidate-prompt-three"},
+        **quality.OFFLINE_CONTRACT,
+    }
+    valid_response = {
+        "edge_state": "NO_EDGE",
+        "action": "DROP",
+        "expected_upside_pct": 0.2,
+        "expected_downside_pct": -0.4,
+        "confidence": 55,
+        "reason_codes": ["no_positive_edge"],
+        "evidence": {
+            "trend": "mixed",
+            "liquidity": "supportive",
+            "tape": "mixed",
+            "risk": "medium",
+            "uncertainty": "medium",
+            "setup": "no_setup",
+            "positive_edge": "none",
+            "adverse_risk": "moderate",
+            "trigger": "not_applicable",
+        },
+    }
+    responses = [
+        {**valid_response, "action": "WAIT"},
+        {
+            **valid_response,
+            "edge_state": "EDGE",
+            "evidence": {
+                **valid_response["evidence"],
+                "setup": "continuation",
+            },
+        },
+        valid_response,
+    ]
+
+    def candidate_runner(attempt_request):
+        if len(responses) < 3:
+            assert attempt_request["candidate_schema_correction_errors"]
+        return responses.pop(0)
+
+    results = quality.run_paired_replay(
+        [request],
+        control_runner=lambda _request: {"action": "DROP"},
+        candidate_runner=candidate_runner,
+    )
+
+    assert results[0]["status"] == "pass"
+    assert len(results[0]["candidate_attempts"]) == 3
 
 
 def test_openai_candidate_parse_gap_is_retryable_and_secret_free(monkeypatch):

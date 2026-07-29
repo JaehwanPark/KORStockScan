@@ -66,6 +66,9 @@ SCORE_CORRELATION_REPORT_DIR = DATA_DIR / "report" / "ai_score_outcome_correlati
 RECOVERY_TRIGGER_REPORT_DIR = DATA_DIR / "report" / "ai_prompt_recovery_trigger"
 PAIRED_REPLAY_MIN_ROWS = 30
 PAIRED_REPLAY_MIN_SYMBOLS = 10
+PAIRED_CANDIDATE_EXPOSURE_MIN_ROWS = 10
+PAIRED_CANDIDATE_EXPOSURE_MIN_SYMBOLS = 3
+CANDIDATE_SCHEMA_MAX_ATTEMPTS = 4
 RECOVERY_TRIGGER_MIN_ROWS = 15
 RECOVERY_TRIGGER_MIN_SYMBOLS = 10
 RECOVERY_TRIGGER_WINDOW_MIN = 5
@@ -1667,6 +1670,15 @@ def _entry_contract_facts(exact_payload: Any) -> dict[str, bool]:
     micro_vwap_bp = _number(features.get("curr_vs_micro_vwap_bp"))
     ma5_bp = _number(features.get("curr_vs_ma5_bp"))
     tape_status = str(features.get("entry_order_flow_status") or "").lower()
+    tape_source = str(features.get("order_flow_pressure_source") or "").lower()
+    momentum_status = str(features.get("entry_momentum_status") or "").lower()
+    buy_pressure = _number(features.get("buy_pressure_10t"))
+    net_aggressive_delta = _number(features.get("net_aggressive_delta_10t"))
+    trusted_tick_count = _number(features.get("tick_aggressor_trusted_count"))
+    trusted_tape_usable = features.get("tick_aggressor_pressure_usable") is True
+    quote_fresh = features.get("quote_fresh_for_entry") is True
+    tick_fresh = features.get("tick_context_stale") is False
+    large_sell_print_absent = features.get("large_sell_print_detected") is False
     blocking_overextension = bool(
         structural_edge_floor
         and daily_runup is not None
@@ -1682,6 +1694,24 @@ def _entry_contract_facts(exact_payload: Any) -> dict[str, bool]:
     latest_recovery = (_window_value(returns, 1) or 0) > 0 or (
         _window_value(returns, 3) or 0
     ) > 0
+    trusted_supportive_trigger = bool(
+        structural_edge_floor
+        and not blocking_overextension
+        and latest_recovery
+        and tape_status == "supportive"
+        and tape_source == "trusted_aggressor"
+        and momentum_status == "accelerating"
+        and buy_pressure is not None
+        and buy_pressure >= 60
+        and net_aggressive_delta is not None
+        and net_aggressive_delta > 0
+        and trusted_tape_usable
+        and trusted_tick_count is not None
+        and trusted_tick_count >= 5
+        and quote_fresh
+        and tick_fresh
+        and large_sell_print_absent
+    )
     orderly_pullback_recovery = bool(
         structural_edge_floor
         and not blocking_overextension
@@ -1698,6 +1728,7 @@ def _entry_contract_facts(exact_payload: Any) -> dict[str, bool]:
         "structural_edge_floor": structural_edge_floor,
         "blocking_overextension": blocking_overextension,
         "orderly_pullback_recovery": orderly_pullback_recovery,
+        "trusted_supportive_trigger": trusted_supportive_trigger,
     }
 
 
@@ -1852,6 +1883,15 @@ def validate_candidate_response(
                     or adverse_risk in {"blocking", "insufficient"}
                 ):
                     errors.append("entry_orderly_pullback_recovery_misclassified")
+            if contract_facts["trusted_supportive_trigger"]:
+                if (
+                    edge_state != "EDGE"
+                    or positive_edge not in {"moderate", "strong"}
+                    or str(evidence.get("tape") or "").lower() != "supportive"
+                    or trigger != "confirmed"
+                    or action == "WAIT"
+                ):
+                    errors.append("entry_trusted_supportive_trigger_misclassified")
     if normalized_stage not in STAGE_ACTIONS:
         errors.append("stage_unsupported")
     return errors
@@ -2017,7 +2057,8 @@ def execute_openai_prompt_v2_candidate(
         if "expected_edge_values_required" in correction_errors:
             correction_rules.append(
                 "EDGE or NO_EDGE requires numeric expected_upside_pct and "
-                "expected_downside_pct; do not return null"
+                "expected_downside_pct; do not return null. For BUY, downside "
+                "must be strictly negative"
             )
         if "expected_upside_pct_negative" in correction_errors:
             correction_rules.append("expected_upside_pct must be zero or positive")
@@ -2036,6 +2077,50 @@ def execute_openai_prompt_v2_candidate(
                 "non-blocking risk; EDGE DROP requires failed trigger, blocking "
                 "risk, or reward/risk below 1.25"
             )
+        if "entry_no_edge_requires_drop" in correction_errors:
+            correction_rules.append(
+                "Set action=DROP for NO_EDGE, with positive_edge none/weak and "
+                "setup no_setup/not_applicable; do not retain WAIT"
+            )
+        if "entry_edge_strength_invalid" in correction_errors:
+            correction_rules.append(
+                "EDGE requires positive_edge=moderate or strong; otherwise use "
+                "NO_EDGE/DROP only when the structural edge floor is not met"
+            )
+        if "entry_wait_adverse_risk_invalid" in correction_errors:
+            correction_rules.append(
+                "WAIT cannot carry blocking or insufficient adverse risk. If risk "
+                "is blocking, return EDGE/DROP with a failed or confirmed trigger "
+                "and numeric unfavorable reward/risk as appropriate"
+            )
+        if "entry_buy_adverse_risk_too_high" in correction_errors:
+            correction_rules.append(
+                "BUY cannot carry high or blocking adverse risk. Preserve the "
+                "observed risk: use DROP with blocking risk or unfavorable numeric "
+                "reward/risk, or WAIT only when the trigger is recovery_required "
+                "and risk is non-blocking"
+            )
+        if "entry_buy_reward_risk_below_floor" in correction_errors:
+            correction_rules.append(
+                "Do not retain BUY when expected_upside_pct divided by the absolute "
+                "strictly negative expected_downside_pct is below 1.25. Use DROP "
+                "with risk_reward_unfavorable, or return a supported non-BUY state"
+            )
+        if (
+            "entry_edge_drop_requires_failed_blocking_or_unfavorable"
+            in correction_errors
+        ):
+            correction_rules.append(
+                "EDGE/DROP requires trigger=failed, adverse_risk=blocking, or "
+                "numeric reward/risk below 1.25. If none applies, use BUY for a "
+                "confirmed low/moderate-risk trigger or WAIT for a "
+                "recovery_required non-blocking trigger"
+            )
+        if "entry_no_edge_setup_invalid" in correction_errors:
+            correction_rules.append(
+                "NO_EDGE requires setup=no_setup or not_applicable; do not use "
+                "continuation, pullback_recovery, or reversal"
+            )
         if "entry_structural_edge_floor_misclassified" in correction_errors:
             correction_rules.append(
                 "The exact completed-bar returns/slopes meet the mandatory "
@@ -2053,10 +2138,22 @@ def execute_openai_prompt_v2_candidate(
                 "return EDGE/WAIT with pullback_recovery, recovery_required, and "
                 "non-blocking adverse risk"
             )
+        if "entry_trusted_supportive_trigger_misclassified" in correction_errors:
+            correction_rules.append(
+                "The exact payload has trusted supportive aggressor tape plus a "
+                "completed 1m/3m recovery and structural edge. Return EDGE with "
+                "moderate/strong positive_edge, tape=supportive, and "
+                "trigger=confirmed. WAIT is prohibited for this contract. Keep "
+                "ask-heavy depth or a wide spread in liquidity/adverse_risk. "
+                "Return BUY when adverse_risk is low/moderate and numeric "
+                "reward/risk is at least 1.25; otherwise return DROP with "
+                "blocking risk or numeric unfavorable reward/risk"
+            )
         if "reason_codes_conflict" in correction_errors:
             correction_rules.append(
-                "Do not combine mutually exclusive edge, reward/risk, or recovery "
-                "trigger reason codes"
+                "Use at most one of edge_positive/edge_absent/no_positive_edge, at "
+                "most one of risk_reward_favorable/risk_reward_unfavorable, and at "
+                "most one recovery trigger code"
             )
         instructions += (
             "\nCorrection retry: the prior response violated these contract fields: "
@@ -2288,7 +2385,7 @@ def run_paired_replay(
         candidate_response: dict[str, Any] = {}
         candidate_errors: list[str] = []
         provider_failed = False
-        for attempt_number in (1, 2):
+        for attempt_number in range(1, CANDIDATE_SCHEMA_MAX_ATTEMPTS + 1):
             attempt_request = dict(request)
             if candidate_errors:
                 attempt_request["candidate_schema_correction_errors"] = list(
@@ -2421,6 +2518,11 @@ def build_paired_replay_report(
         for row in labels or []
         if row.get("source_quality_status") == "pass"
     }
+    request_by_trace = {
+        str(row.get("decision_trace_id") or ""): row
+        for row in requests
+        if isinstance(row, dict)
+    }
     comparable_rows: list[dict[str, Any]] = []
     for result in results:
         if (
@@ -2445,9 +2547,24 @@ def build_paired_replay_report(
         candidate_value = _decision_value(candidate_action, outcome)
         if control_value is None or candidate_value is None:
             continue
+        trace_id = str(result.get("decision_trace_id") or "")
+        request = request_by_trace.get(trace_id) or {}
+        mfe = _number(preferred.get("mfe_pct"))
+        mae = _number(preferred.get("mae_pct"))
+        first_hit = str(preferred.get("first_hit") or "")
+        candidate_errors: list[str] = []
+        if candidate_action == "DROP" and mfe is not None and mfe >= 1.0:
+            candidate_errors.append("false_drop")
+        if candidate_action == "WAIT" and mfe is not None and mfe >= 1.0:
+            candidate_errors.append("false_wait")
+        if candidate_action == "BUY" and (
+            first_hit == "adverse" or (mae is not None and mae <= -1.0)
+        ):
+            candidate_errors.append("false_buy")
         comparable_rows.append(
             {
-                "decision_trace_id": result.get("decision_trace_id"),
+                "decision_trace_id": trace_id,
+                "stock_code": request.get("stock_code"),
                 "stage": result.get("stage"),
                 "effective_venue": result.get("effective_venue"),
                 "session_bucket": result.get("session_bucket"),
@@ -2463,7 +2580,10 @@ def build_paired_replay_report(
                 "candidate_missed_upside": (
                     candidate_action in NO_EXPOSURE_ACTIONS and outcome > 0
                 ),
-                "first_hit": preferred.get("first_hit"),
+                "outcome_mfe_pct": mfe,
+                "outcome_mae_pct": mae,
+                "first_hit": first_hit,
+                "candidate_error_taxonomy": candidate_errors,
             }
         )
     rejected = sum(row.get("status") != "pass" for row in results)
@@ -2489,38 +2609,80 @@ def build_paired_replay_report(
             )
         ].append(row)
     for (stage, venue, session), rows in sorted(grouped.items()):
+        bucket_control_ev = fmean(row["control_decision_value_pct"] for row in rows)
+        bucket_candidate_ev = fmean(row["candidate_decision_value_pct"] for row in rows)
+        bucket_ev_delta = fmean(row["delta_pct"] for row in rows)
+        bucket_missed_upside_reduction = sum(
+            row["control_missed_upside"] and not row["candidate_missed_upside"]
+            for row in rows
+        )
+        bucket_new_missed_upside = sum(
+            not row["control_missed_upside"] and row["candidate_missed_upside"]
+            for row in rows
+        )
+        bucket_control_adverse_exposure = sum(
+            row["first_hit"] == "adverse" and row["control_action"] in EXPOSURE_ACTIONS
+            for row in rows
+        )
+        bucket_candidate_adverse_exposure = sum(
+            row["first_hit"] == "adverse"
+            and row["candidate_action"] in EXPOSURE_ACTIONS
+            for row in rows
+        )
+        bucket_exposure_rows = [
+            row for row in rows if row["candidate_action"] in EXPOSURE_ACTIONS
+        ]
+        bucket_exposure_symbols = {
+            str(row.get("stock_code") or "")
+            for row in bucket_exposure_rows
+            if row.get("stock_code")
+        }
+        bucket_exposure_floor_pass = (
+            len(bucket_exposure_rows) >= PAIRED_CANDIDATE_EXPOSURE_MIN_ROWS
+            and len(bucket_exposure_symbols) >= PAIRED_CANDIDATE_EXPOSURE_MIN_SYMBOLS
+        )
+        bucket_action_counter = Counter(row["candidate_action"] for row in rows)
+        bucket_dominant_action_ratio = max(bucket_action_counter.values()) / len(rows)
+        bucket_quality_checks = {
+            "source_quality_adjusted_ev_improved": bucket_ev_delta > 0,
+            "candidate_ev_positive": bucket_candidate_ev > 0,
+            "missed_upside_reduced": bucket_missed_upside_reduction > 0,
+            "new_missed_upside_not_increased": bucket_new_missed_upside == 0,
+            "adverse_first_exposure_not_increased": (
+                bucket_candidate_adverse_exposure <= bucket_control_adverse_exposure
+            ),
+            "candidate_action_not_collapsed": bucket_dominant_action_ratio <= 0.90,
+            "candidate_exposure_sample_floor_pass": bucket_exposure_floor_pass,
+        }
         buckets.append(
             {
                 "stage": stage,
                 "effective_venue": venue,
                 "session_bucket": session,
                 "sample_count": len(rows),
-                "control_source_quality_adjusted_ev_pct": fmean(
-                    row["control_decision_value_pct"] for row in rows
+                "control_source_quality_adjusted_ev_pct": bucket_control_ev,
+                "candidate_source_quality_adjusted_ev_pct": bucket_candidate_ev,
+                "source_quality_adjusted_ev_delta_pct": bucket_ev_delta,
+                "missed_upside_reduction_count": bucket_missed_upside_reduction,
+                "new_missed_upside_count": bucket_new_missed_upside,
+                "control_adverse_first_exposure_count": (
+                    bucket_control_adverse_exposure
                 ),
-                "candidate_source_quality_adjusted_ev_pct": fmean(
-                    row["candidate_decision_value_pct"] for row in rows
+                "adverse_first_candidate_exposure_count": (
+                    bucket_candidate_adverse_exposure
                 ),
-                "source_quality_adjusted_ev_delta_pct": fmean(
-                    row["delta_pct"] for row in rows
-                ),
-                "missed_upside_reduction_count": sum(
-                    row["control_missed_upside"] and not row["candidate_missed_upside"]
-                    for row in rows
-                ),
-                "new_missed_upside_count": sum(
-                    not row["control_missed_upside"] and row["candidate_missed_upside"]
-                    for row in rows
-                ),
-                "control_adverse_first_exposure_count": sum(
-                    row["first_hit"] == "adverse"
-                    and row["control_action"] in EXPOSURE_ACTIONS
-                    for row in rows
-                ),
-                "adverse_first_candidate_exposure_count": sum(
-                    row["first_hit"] == "adverse"
-                    and row["candidate_action"] in EXPOSURE_ACTIONS
-                    for row in rows
+                "candidate_exposure_decision_count": len(bucket_exposure_rows),
+                "candidate_exposure_unique_symbol_count": len(bucket_exposure_symbols),
+                "candidate_exposure_sample_floor_pass": (bucket_exposure_floor_pass),
+                "candidate_dominant_action_ratio": (bucket_dominant_action_ratio),
+                "candidate_quality_checks": bucket_quality_checks,
+                "candidate_quality_gate_pass": all(bucket_quality_checks.values()),
+                "candidate_error_taxonomy_counts": dict(
+                    Counter(
+                        error
+                        for row in rows
+                        for error in row["candidate_error_taxonomy"]
+                    )
                 ),
             }
         )
@@ -2553,12 +2715,31 @@ def build_paired_replay_report(
         row["first_hit"] == "adverse" and row["candidate_action"] in EXPOSURE_ACTIONS
         for row in comparable_rows
     )
+    candidate_exposure_rows = [
+        row for row in comparable_rows if row["candidate_action"] in EXPOSURE_ACTIONS
+    ]
+    candidate_exposure_symbol_count = len(
+        {
+            str(row.get("stock_code") or "")
+            for row in candidate_exposure_rows
+            if row.get("stock_code")
+        }
+    )
+    candidate_exposure_sample_floor_pass = (
+        len(candidate_exposure_rows) >= PAIRED_CANDIDATE_EXPOSURE_MIN_ROWS
+        and candidate_exposure_symbol_count >= PAIRED_CANDIDATE_EXPOSURE_MIN_SYMBOLS
+        and bool(buckets)
+        and all(row["candidate_exposure_sample_floor_pass"] for row in buckets)
+    )
+    valid_results = [row for row in results if row.get("status") == "pass"]
     candidate_action_counter = Counter(
         str((row.get("candidate_response") or {}).get("action") or "UNKNOWN")
-        for row in results
+        for row in valid_results
     )
     dominant_candidate_action_ratio = (
-        max(candidate_action_counter.values()) / len(results) if results else None
+        max(candidate_action_counter.values()) / len(valid_results)
+        if valid_results
+        else None
     )
     quality_checks = {
         "all_pairs_comparable": bool(requests)
@@ -2575,6 +2756,9 @@ def build_paired_replay_report(
             dominant_candidate_action_ratio is not None
             and dominant_candidate_action_ratio <= 0.90
         ),
+        "candidate_exposure_sample_floor_pass": (candidate_exposure_sample_floor_pass),
+        "all_stage_venue_buckets_quality_pass": bool(buckets)
+        and all(row["candidate_quality_gate_pass"] for row in buckets),
     }
     quality_gate_pass = all(quality_checks.values())
     if rejected or (results and missing_result_count):
@@ -2615,13 +2799,27 @@ def build_paired_replay_report(
         "adverse_first_candidate_exposure_count": (
             candidate_adverse_first_exposure_count
         ),
+        "candidate_exposure_decision_count": len(candidate_exposure_rows),
+        "candidate_exposure_unique_symbol_count": candidate_exposure_symbol_count,
+        "candidate_exposure_sample_floor": {
+            "decision_rows": PAIRED_CANDIDATE_EXPOSURE_MIN_ROWS,
+            "unique_symbols": PAIRED_CANDIDATE_EXPOSURE_MIN_SYMBOLS,
+            "pass": candidate_exposure_sample_floor_pass,
+        },
+        "candidate_error_taxonomy_counts": dict(
+            Counter(
+                error
+                for row in comparable_rows
+                for error in row["candidate_error_taxonomy"]
+            )
+        ),
         "candidate_dominant_action_ratio": dominant_candidate_action_ratio,
         "candidate_quality_gate_pass": quality_gate_pass,
         "candidate_quality_checks": quality_checks,
         "control_action_counts": dict(
             Counter(
                 str((row.get("control_response") or {}).get("action") or "UNKNOWN")
-                for row in results
+                for row in valid_results
             )
         ),
         "candidate_action_counts": dict(candidate_action_counter),
@@ -2630,7 +2828,7 @@ def build_paired_replay_report(
                 str(
                     (row.get("candidate_response") or {}).get("edge_state") or "UNKNOWN"
                 )
-                for row in results
+                for row in valid_results
             )
         ),
         "candidate_provider_attempt_count": len(provider_attempts),

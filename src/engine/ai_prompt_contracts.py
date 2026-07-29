@@ -605,7 +605,7 @@ Return JSON only:
 
 # Offline-only Prompt V2 candidates. These prompts are never selected by the
 # live engine directly; decision-quality paired replay owns their evaluation.
-DECISION_QUALITY_V2_PROMPT_VERSION = "decision_quality_v2_4"
+DECISION_QUALITY_V2_PROMPT_VERSION = "decision_quality_v2_5"
 
 DECISION_QUALITY_V2_RESPONSE_SCHEMA = {
     "edge_state": "EDGE|NO_EDGE|INSUFFICIENT_DATA",
@@ -769,15 +769,27 @@ Entry edge/risk separation:
 6. Set trigger=confirmed only when fresh trusted tape/order flow is supportive and
    a latest completed 1m or 3m recovery agrees. Set trigger=failed when adverse tape
    aligns with a failed-breakout/adverse structure or blocking chase risk.
-7. BUY requires edge_state=EDGE, positive_edge=moderate or strong,
+7. Keep tape and liquidity evidence separate. When
+   entry_order_flow_status=supportive is backed by
+   order_flow_pressure_source=trusted_aggressor, usable trusted aggressor ticks,
+   buy_pressure_10t of at least 60, at least five trusted aggressor ticks,
+   positive net_aggressive_delta_10t, and an explicit false
+   large_sell_print_detected value, classify tape as supportive. Ask-heavy depth,
+   thin fillability, or a wide spread belongs in the liquidity and adverse-risk
+   ledgers and must not relabel trusted supportive tape as adverse. When this
+   trusted tape agrees with a positive latest completed 1m or 3m return and the
+   structural edge floor, trigger must be confirmed. A confirmed trigger is not an
+   automatic BUY: use DROP when liquidity/risk is blocking or reward/risk is
+   unfavorable.
+8. BUY requires edge_state=EDGE, positive_edge=moderate or strong,
    trigger=confirmed, adverse_risk=low or moderate, and
    a strictly negative expected_downside_pct with
    expected_upside_pct / abs(expected_downside_pct) >= 1.25.
-8. WAIT is not the default for sufficient data. Use WAIT only for
+9. WAIT is not the default for sufficient data. Use WAIT only for
    (a) EDGE with trigger=recovery_required and non-blocking adverse risk, or
    (b) INSUFFICIENT_DATA. State the missing recovery condition with canonical
    reason codes.
-9. Use DROP for NO_EDGE. Also use DROP when a structural edge exists but the setup
+10. Use DROP for NO_EDGE. Also use DROP when a structural edge exists but the setup
    is invalidated, trigger=failed, adverse_risk=blocking, or a confirmed-trigger
    setup has reward/risk below 1.25. An intact pullback edge with
    trigger=recovery_required may remain WAIT while awaiting recovery. NO_EDGE with
