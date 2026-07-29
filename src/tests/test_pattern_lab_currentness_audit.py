@@ -138,6 +138,34 @@ def test_currentness_audit_passes_when_contracts_and_guards_exist(
     ).exists()
 
 
+def test_currentness_audit_excludes_disabled_swing_sources(tmp_path, monkeypatch):
+    project_root = tmp_path
+    report_dir = project_root / "data" / "report"
+    target_date = "2026-05-15"
+    _seed_labs(project_root, target_date)
+    _write_json(
+        project_root
+        / "analysis"
+        / "deepseek_swing_pattern_lab"
+        / "outputs"
+        / "run_manifest.json",
+        {"run_at": "2026-05-14", "history_coverage_end": "2026-05-14"},
+    )
+
+    monkeypatch.setattr(mod, "PROJECT_ROOT", project_root)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+
+    report = mod.build_pattern_lab_currentness_audit(target_date, include_swing=False)
+
+    assert report["strategy_scope"] == "scalp_only"
+    assert report["swing_sources_enabled"] is False
+    assert not any(
+        "swing" in check["check_id"] or "deepseek" in check["check_id"]
+        for check in report["checks"]
+    )
+    assert "swing" not in report["feedback_sources"]
+
+
 def test_currentness_audit_emits_runtime_false_orders_for_gaps(tmp_path, monkeypatch):
     project_root = tmp_path
     report_dir = project_root / "data" / "report"

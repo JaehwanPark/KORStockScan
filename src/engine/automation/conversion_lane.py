@@ -705,7 +705,36 @@ def _swing_proxy_candidates(target_date: str) -> list[dict[str, Any]]:
     return candidates
 
 
-def build_conversion_lane(target_date: str) -> dict[str, Any]:
+def _is_swing_scoped(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    scope = (
+        str(
+            value.get("strategy_scope")
+            or value.get("strategy")
+            or value.get("source_strategy")
+            or ""
+        )
+        .strip()
+        .lower()
+    )
+    if scope == "swing":
+        return True
+    return "swing" in " ".join(
+        str(value.get(key) or "").lower()
+        for key in (
+            "candidate_id",
+            "source_key_id",
+            "source_artifact",
+            "source_report_type",
+            "pipeline",
+        )
+    )
+
+
+def build_conversion_lane(
+    target_date: str, *, include_swing: bool = True
+) -> dict[str, Any]:
     key_json_path, _ = key_lineage_paths(target_date)
     key_ledger = _load_json(key_json_path)
     if not key_ledger:
@@ -716,11 +745,15 @@ def build_conversion_lane(target_date: str) -> dict[str, Any]:
         / "lifecycle_bucket_discovery"
         / f"lifecycle_bucket_discovery_{target_date}.json"
     )
-    swing_lifecycle = _load_json(
-        DATA_DIR
-        / "report"
-        / "swing_lifecycle_bucket_discovery"
-        / f"swing_lifecycle_bucket_discovery_{target_date}.json"
+    swing_lifecycle = (
+        _load_json(
+            DATA_DIR
+            / "report"
+            / "swing_lifecycle_bucket_discovery"
+            / f"swing_lifecycle_bucket_discovery_{target_date}.json"
+        )
+        if include_swing
+        else {}
     )
     runtime_gap = _load_json(
         DATA_DIR
@@ -736,7 +769,8 @@ def build_conversion_lane(target_date: str) -> dict[str, Any]:
     )
 
     candidates = _candidates_from_lifecycle(lifecycle, "scalp")
-    candidates.extend(_candidates_from_lifecycle(swing_lifecycle, "swing"))
+    if include_swing:
+        candidates.extend(_candidates_from_lifecycle(swing_lifecycle, "swing"))
     seen = {item["candidate_id"] for item in candidates}
     seen_source_keys = {
         str(item.get("source_key_id") or "")
@@ -752,6 +786,8 @@ def build_conversion_lane(target_date: str) -> dict[str, Any]:
         if not isinstance(row, dict):
             continue
         candidate = _candidate_from_runtime_gap(row)
+        if not include_swing and _is_swing_scoped(candidate):
+            continue
         if candidate["candidate_id"] in seen:
             continue
         if candidate.get("primary_ev") is not None or candidate.get("next_blocker") in {
@@ -760,12 +796,15 @@ def build_conversion_lane(target_date: str) -> dict[str, Any]:
         }:
             candidates.append(candidate)
             seen.add(candidate["candidate_id"])
-    for candidate in _swing_proxy_candidates(target_date):
-        if candidate["candidate_id"] not in seen:
-            candidates.append(candidate)
-            seen.add(candidate["candidate_id"])
+    if include_swing:
+        for candidate in _swing_proxy_candidates(target_date):
+            if candidate["candidate_id"] not in seen:
+                candidates.append(candidate)
+                seen.add(candidate["candidate_id"])
     for row in key_ledger.get("lineage_rows") or []:
         if not isinstance(row, dict):
+            continue
+        if not include_swing and _is_swing_scoped(row):
             continue
         candidate = _candidate_from_matched_bucket_lineage(row)
         if not candidate or candidate["candidate_id"] in seen:
@@ -794,6 +833,8 @@ def build_conversion_lane(target_date: str) -> dict[str, Any]:
             )
     for item in key_ledger.get("lineage_blockers") or []:
         if not isinstance(item, dict):
+            continue
+        if not include_swing and _is_swing_scoped(item):
             continue
         blockers.append(
             _conversion_blocker(
@@ -850,6 +891,7 @@ def build_conversion_lane(target_date: str) -> dict[str, Any]:
         }
         for row in key_ledger.get("lineage_rows") or []
         if isinstance(row, dict)
+        and (include_swing or not _is_swing_scoped(row))
         and str(row.get("source_key_type") or "")
         in {"active_seed", "active_arm", "hypothesis"}
         and str(row.get("conversion_state") or "") != "matched"
@@ -1199,12 +1241,18 @@ def build_conversion_lane(target_date: str) -> dict[str, Any]:
         "runtime_effect": False,
         "allowed_runtime_apply": False,
         "decision_authority": "conversion_lane_observation_only_no_real_order_authority",
+        "strategy_scope": "scalp_and_swing" if include_swing else "scalp_only",
+        "swing_sources_enabled": include_swing,
         "summary": summary,
         "conversion_candidates": candidates[:500],
         "real_conversion_queue": real_queue[:100],
         "conversion_blocker_rank": blockers[:200],
         "sim_priority_only": sim_priority_only[:200],
-        "handoff_continuity": _lineage_handoff_rows(key_ledger)[:500],
+        "handoff_continuity": [
+            row
+            for row in _lineage_handoff_rows(key_ledger)
+            if include_swing or not _is_swing_scoped(row)
+        ][:500],
     }
 
 
@@ -1319,8 +1367,13 @@ def write_conversion_lane(report: dict[str, Any]) -> tuple[Path, Path]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Build conversion lane")
     parser.add_argument("--date", default=date.today().isoformat())
+    parser.add_argument(
+        "--exclude-swing",
+        action="store_true",
+        help="Exclude disabled Swing postclose sources from this common consumer.",
+    )
     args = parser.parse_args(argv)
-    report = build_conversion_lane(args.date)
+    report = build_conversion_lane(args.date, include_swing=not args.exclude_swing)
     json_path, md_path = write_conversion_lane(report)
     print(
         json.dumps(

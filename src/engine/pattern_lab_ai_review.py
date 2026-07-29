@@ -105,8 +105,8 @@ def _source_rel(path: Path) -> str:
         return str(path)
 
 
-def _source_paths(target_date: str) -> dict[str, Path]:
-    return {
+def _source_paths(target_date: str, *, include_swing: bool = True) -> dict[str, Path]:
+    paths = {
         "scalping_pattern_lab_automation": REPORT_DIR
         / "scalping_pattern_lab_automation"
         / f"scalping_pattern_lab_automation_{target_date}.json",
@@ -141,6 +141,15 @@ def _source_paths(target_date: str) -> dict[str, Path]:
         / "pattern_lab_propagation_audit"
         / f"pattern_lab_propagation_audit_{target_date}.json",
     }
+    if not include_swing:
+        for label in (
+            "swing_pattern_lab_automation",
+            "swing_lifecycle_decision_matrix",
+            "swing_lifecycle_bucket_discovery",
+            "swing_strategy_discovery_ev",
+        ):
+            paths.pop(label, None)
+    return paths
 
 
 def _top_list(value: Any, limit: int = 5) -> list[Any]:
@@ -203,6 +212,7 @@ def _feedback_handoff_summary(payloads: dict[str, dict[str, Any]]) -> dict[str, 
         "swing_lifecycle_bucket_discovery",
         "swing_strategy_discovery_ev",
     ]
+    feedback_labels = [label for label in feedback_labels if label in payloads]
     auxiliary_feedback_labels = [
         "code_improvement_workorder",
         "pattern_lab_propagation_audit",
@@ -1544,8 +1554,10 @@ def _normalize_audit_resolution_fields(payload: dict[str, Any]) -> dict[str, Any
     }
 
 
-def _build_input_context(target_date: str) -> dict[str, Any]:
-    paths = _source_paths(target_date)
+def _build_input_context(
+    target_date: str, *, include_swing: bool = True
+) -> dict[str, Any]:
+    paths = _source_paths(target_date, include_swing=include_swing)
     payloads = {label: _load_json(path) for label, path in paths.items()}
     currentness = payloads["pattern_lab_currentness_audit"]
     currentness_checks = [
@@ -1584,6 +1596,8 @@ def _build_input_context(target_date: str) -> dict[str, Any]:
         "runtime_effect": False,
         "allowed_runtime_apply": False,
         "forbidden_uses": FORBIDDEN_USES,
+        "strategy_scope": "scalp_and_swing" if include_swing else "scalp_only",
+        "swing_sources_enabled": include_swing,
         "sources": sources,
         "feedback_handoff_summary": _feedback_handoff_summary(payloads),
         "currentness_checks": currentness_checks,
@@ -2332,6 +2346,7 @@ def build_pattern_lab_ai_review_report(
     *,
     provider: str | None = None,
     ai_raw_response: Any | None = None,
+    include_swing: bool = True,
 ) -> dict[str, Any]:
     target_date = str(target_date).strip()
     resolved_provider = (
@@ -2347,7 +2362,7 @@ def build_pattern_lab_ai_review_report(
         .lower()
         or "none"
     )
-    context = _build_input_context(target_date)
+    context = _build_input_context(target_date, include_swing=include_swing)
     primary_config = _ai_review_config()
     provider_status: dict[str, Any] = {
         "provider": resolved_provider,
@@ -2441,6 +2456,62 @@ def build_pattern_lab_ai_review_report(
         for item in conclusions
         if isinstance(item, dict)
     ]
+    if not include_swing:
+        context_sources = (
+            context.get("sources") if isinstance(context.get("sources"), dict) else {}
+        )
+        currentness_source = (
+            context_sources.get("pattern_lab_currentness_audit")
+            if isinstance(context_sources.get("pattern_lab_currentness_audit"), dict)
+            else {}
+        )
+        currentness_summary = (
+            currentness_source.get("summary")
+            if isinstance(currentness_source.get("summary"), dict)
+            else {}
+        )
+
+        def _resolved_after_swing_exclusion(item: dict[str, Any]) -> bool:
+            review_id = str(item.get("review_id") or "")
+            if review_id == "code_improvement_workorder":
+                source = context_sources.get(review_id)
+                return isinstance(source, dict) and bool(source.get("exists"))
+            if review_id == "pattern_lab_currentness_audit":
+                return (
+                    currentness_summary.get("status") == "pass"
+                    and _safe_int(
+                        (currentness_summary.get("summary") or {}).get("fail_count")
+                        if isinstance(currentness_summary.get("summary"), dict)
+                        else 0
+                    )
+                    == 0
+                )
+            return False
+
+        conclusions = [
+            item
+            for item in conclusions
+            if not _resolved_after_swing_exclusion(item)
+            and "swing"
+            not in " ".join(
+                [
+                    *(
+                        str(item.get(key) or "").lower()
+                        for key in (
+                            "review_id",
+                            "domain",
+                            "title",
+                            "source_report_type",
+                            "reason",
+                        )
+                    ),
+                    *(
+                        str(value).lower()
+                        for value in (item.get("required_followup") or [])
+                    ),
+                ]
+            )
+        ]
     ai_payload["final_conclusions"] = conclusions
     ai_payload = _normalize_audit_resolution_fields(ai_payload)
     orders = [
@@ -2489,13 +2560,15 @@ def build_pattern_lab_ai_review_report(
         if orders or not ai_status_ok or audit.get("status") != "pass"
         else "pass"
     )
-    source_paths = _source_paths(target_date)
+    source_paths = _source_paths(target_date, include_swing=include_swing)
     report = {
         "schema_version": REPORT_SCHEMA_VERSION,
         "date": target_date,
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "report_type": REPORT_TYPE,
         "runtime_effect": False,
+        "strategy_scope": "scalp_and_swing" if include_swing else "scalp_only",
+        "swing_sources_enabled": include_swing,
         "allowed_runtime_apply": False,
         "runtime_mutation_allowed": False,
         "decision_authority": "pattern_lab_ai_review_source_only",
@@ -2569,6 +2642,8 @@ def build_pattern_lab_ai_review_report(
 
 def refresh_pattern_lab_ai_review_source_provenance(
     target_date: str,
+    *,
+    include_swing: bool = True,
 ) -> dict[str, Any]:
     """Reconcile late-bound sources without issuing a second provider call."""
 
@@ -2603,6 +2678,7 @@ def refresh_pattern_lab_ai_review_source_provenance(
         target_date,
         provider=provider,
         ai_raw_response=raw_response,
+        include_swing=include_swing,
     )
     refreshed_at = datetime.now().astimezone().isoformat(timespec="seconds")
     refresh_provenance = {
@@ -2725,11 +2801,18 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Reuse the existing parsed provider response and reconcile late-bound sources.",
     )
+    parser.add_argument("--exclude-swing", action="store_true")
     args = parser.parse_args(argv)
     report = (
-        refresh_pattern_lab_ai_review_source_provenance(args.date)
+        refresh_pattern_lab_ai_review_source_provenance(
+            args.date, include_swing=not args.exclude_swing
+        )
         if args.refresh_source_provenance
-        else build_pattern_lab_ai_review_report(args.date, provider=args.provider)
+        else build_pattern_lab_ai_review_report(
+            args.date,
+            provider=args.provider,
+            include_swing=not args.exclude_swing,
+        )
     )
     json_path, md_path = report_paths(args.date)
     print(

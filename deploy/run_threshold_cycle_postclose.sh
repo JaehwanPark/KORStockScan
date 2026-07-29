@@ -38,17 +38,34 @@ AI_CORRECTION_RETRY_DELAY_SEC="${THRESHOLD_CYCLE_AI_CORRECTION_RETRY_DELAY_SEC:-
 AI_CORRECTION_REUSE_IF_VALID="${THRESHOLD_CYCLE_REUSE_AI_REVIEW_IF_VALID:-true}"
 RUN_PATTERN_LABS="${THRESHOLD_CYCLE_RUN_PATTERN_LABS:-true}"
 PATTERN_LAB_START_DATE="${PATTERN_LAB_ANALYSIS_START_DATE:-${KORSTOCKSCAN_CLEAN_TUNING_BASELINE_DATE:-2026-06-04}}"
-RUN_SWING_LIFECYCLE_AUDIT="${THRESHOLD_CYCLE_RUN_SWING_LIFECYCLE_AUDIT:-true}"
-RUN_SWING_STRATEGY_DISCOVERY="${THRESHOLD_CYCLE_RUN_SWING_STRATEGY_DISCOVERY:-true}"
-RUN_SWING_LIFECYCLE_MATRIX="${THRESHOLD_CYCLE_RUN_SWING_LIFECYCLE_MATRIX:-$RUN_SWING_STRATEGY_DISCOVERY}"
-RUN_SWING_LIFECYCLE_BUCKET_DISCOVERY="${THRESHOLD_CYCLE_RUN_SWING_LIFECYCLE_BUCKET_DISCOVERY:-$RUN_SWING_LIFECYCLE_MATRIX}"
+RUN_SWING_POSTCLOSE="${THRESHOLD_CYCLE_RUN_SWING_POSTCLOSE:-false}"
+if [[ "$RUN_SWING_POSTCLOSE" == "true" || "$RUN_SWING_POSTCLOSE" == "1" ]]; then
+  RUN_SWING_LIFECYCLE_AUDIT="${THRESHOLD_CYCLE_RUN_SWING_LIFECYCLE_AUDIT:-true}"
+  RUN_SWING_STRATEGY_DISCOVERY="${THRESHOLD_CYCLE_RUN_SWING_STRATEGY_DISCOVERY:-true}"
+  RUN_SWING_LIFECYCLE_MATRIX="${THRESHOLD_CYCLE_RUN_SWING_LIFECYCLE_MATRIX:-$RUN_SWING_STRATEGY_DISCOVERY}"
+  RUN_SWING_LIFECYCLE_BUCKET_DISCOVERY="${THRESHOLD_CYCLE_RUN_SWING_LIFECYCLE_BUCKET_DISCOVERY:-$RUN_SWING_LIFECYCLE_MATRIX}"
+  RUN_DEEPSEEK_SWING_LAB="${THRESHOLD_CYCLE_RUN_DEEPSEEK_SWING_LAB:-true}"
+  RUN_SWING_PATTERN_LAB_AUTOMATION="${THRESHOLD_CYCLE_RUN_SWING_PATTERN_LAB_AUTOMATION:-true}"
+else
+  RUN_SWING_LIFECYCLE_AUDIT=false
+  RUN_SWING_STRATEGY_DISCOVERY=false
+  RUN_SWING_LIFECYCLE_MATRIX=false
+  RUN_SWING_LIFECYCLE_BUCKET_DISCOVERY=false
+  RUN_DEEPSEEK_SWING_LAB=false
+  RUN_SWING_PATTERN_LAB_AUTOMATION=false
+fi
+WORKORDER_SWING_ARGS=()
+PATTERN_LAB_SWING_ARGS=()
+if [[ "$RUN_SWING_POSTCLOSE" != "true" && "$RUN_SWING_POSTCLOSE" != "1" ]]; then
+  WORKORDER_SWING_ARGS+=(--exclude-swing)
+  PATTERN_LAB_SWING_ARGS+=(--exclude-swing)
+fi
 SWING_THRESHOLD_AI_REVIEW_PROVIDER="${SWING_THRESHOLD_AI_REVIEW_PROVIDER:-openai}"
 # Postclose standard path defaults Swing lifecycle bucket discovery Tier2 review to OpenAI.
 # Direct module execution still defaults to provider=none unless this wrapper/env passes a provider.
 SWING_LIFECYCLE_BUCKET_DISCOVERY_AI_PROVIDER="${KORSTOCKSCAN_SWING_LIFECYCLE_BUCKET_DISCOVERY_AI_PROVIDER:-$SWING_THRESHOLD_AI_REVIEW_PROVIDER}"
 BUILD_CODE_IMPROVEMENT_WORKORDER="${THRESHOLD_CYCLE_BUILD_CODE_IMPROVEMENT_WORKORDER:-true}"
 CODE_IMPROVEMENT_WORKORDER_MAX_ORDERS="${CODE_IMPROVEMENT_WORKORDER_MAX_ORDERS:-12}"
-RUN_DEEPSEEK_SWING_LAB="${THRESHOLD_CYCLE_RUN_DEEPSEEK_SWING_LAB:-true}"
 RUN_PANIC_SELL_DEFENSE_REPORT="${THRESHOLD_CYCLE_RUN_PANIC_SELL_DEFENSE_REPORT:-true}"
 RUN_PANIC_BUYING_REPORT="${THRESHOLD_CYCLE_RUN_PANIC_BUYING_REPORT:-false}"
 RUN_MARKET_PANIC_BREADTH_REPORT="${THRESHOLD_CYCLE_RUN_MARKET_PANIC_BREADTH_REPORT:-true}"
@@ -1365,13 +1382,17 @@ wait_for_report_artifact \
   "$PROJECT_DIR/data/report/scalping_pattern_lab_automation/scalping_pattern_lab_automation_${TARGET_DATE}.json" \
   "$PROJECT_DIR/data/report/scalping_pattern_lab_automation/scalping_pattern_lab_automation_${TARGET_DATE}.md" \
   "scalping_pattern_lab_automation"
-wait_for_postclose_resources "swing_pattern_lab_automation"
-run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.swing_pattern_lab_automation --date "$TARGET_DATE" || \
-  echo "[threshold-cycle] swing pattern lab automation failed (non-fatal)" >&2
-wait_for_report_artifact \
-  "$PROJECT_DIR/data/report/swing_pattern_lab_automation/swing_pattern_lab_automation_${TARGET_DATE}.json" \
-  "$PROJECT_DIR/data/report/swing_pattern_lab_automation/swing_pattern_lab_automation_${TARGET_DATE}.md" \
-  "swing_pattern_lab_automation"
+if [ "$RUN_SWING_PATTERN_LAB_AUTOMATION" = "true" ] || [ "$RUN_SWING_PATTERN_LAB_AUTOMATION" = "1" ]; then
+  wait_for_postclose_resources "swing_pattern_lab_automation"
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.swing_pattern_lab_automation --date "$TARGET_DATE" || \
+    echo "[threshold-cycle] swing pattern lab automation failed (non-fatal)" >&2
+  wait_for_report_artifact \
+    "$PROJECT_DIR/data/report/swing_pattern_lab_automation/swing_pattern_lab_automation_${TARGET_DATE}.json" \
+    "$PROJECT_DIR/data/report/swing_pattern_lab_automation/swing_pattern_lab_automation_${TARGET_DATE}.md" \
+    "swing_pattern_lab_automation"
+else
+  echo "[threshold-cycle] swing pattern lab automation skipped by swing postclose operator policy"
+fi
 if [ "$RUN_PATTERN_LAB_CURRENTNESS_AUDIT" = "true" ] || [ "$RUN_PATTERN_LAB_CURRENTNESS_AUDIT" = "1" ]; then
   if [ "$(automation_trigger_decision "pattern_lab_currentness_audit")" = "skip" ]; then
     skip_triggered_step "pattern_lab_currentness_audit" "fresh_outputs_no_trigger"
@@ -1381,7 +1402,8 @@ if [ "$RUN_PATTERN_LAB_CURRENTNESS_AUDIT" = "true" ] || [ "$RUN_PATTERN_LAB_CURR
       "pattern_lab_currentness_audit"
   else
     wait_for_postclose_resources "pattern_lab_currentness_audit"
-    run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.pattern_lab_currentness_audit --date "$TARGET_DATE"
+    run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.pattern_lab_currentness_audit \
+      --date "$TARGET_DATE" "${PATTERN_LAB_SWING_ARGS[@]}"
     wait_for_report_artifact \
       "$PROJECT_DIR/data/report/pattern_lab_currentness_audit/pattern_lab_currentness_audit_${TARGET_DATE}.json" \
       "$PROJECT_DIR/data/report/pattern_lab_currentness_audit/pattern_lab_currentness_audit_${TARGET_DATE}.md" \
@@ -1399,7 +1421,8 @@ if [ "$RUN_PATTERN_LAB_AI_REVIEW" = "true" ] || [ "$RUN_PATTERN_LAB_AI_REVIEW" =
     wait_for_postclose_resources "pattern_lab_ai_review"
     run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.pattern_lab_ai_review \
       --date "$TARGET_DATE" \
-      --provider "$PATTERN_LAB_AI_REVIEW_PROVIDER"
+      --provider "$PATTERN_LAB_AI_REVIEW_PROVIDER" \
+      "${PATTERN_LAB_SWING_ARGS[@]}"
     wait_for_report_artifact \
       "$PROJECT_DIR/data/report/pattern_lab_ai_review/pattern_lab_ai_review_${TARGET_DATE}.json" \
       "$PROJECT_DIR/data/report/pattern_lab_ai_review/pattern_lab_ai_review_${TARGET_DATE}.md" \
@@ -1566,7 +1589,8 @@ if [ "$BUILD_CODE_IMPROVEMENT_WORKORDER" = "true" ] || [ "$BUILD_CODE_IMPROVEMEN
     wait_for_postclose_resources "code_improvement_workorder"
     run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.build_code_improvement_workorder \
       --date "$TARGET_DATE" \
-      --max-orders "$CODE_IMPROVEMENT_WORKORDER_MAX_ORDERS"
+      --max-orders "$CODE_IMPROVEMENT_WORKORDER_MAX_ORDERS" \
+      "${WORKORDER_SWING_ARGS[@]}"
     wait_for_report_artifact \
       "$PROJECT_DIR/data/report/code_improvement_workorder/code_improvement_workorder_${TARGET_DATE}.json" \
       "$PROJECT_DIR/docs/code-improvement-workorders/code_improvement_workorder_${TARGET_DATE}.md" \
@@ -1585,7 +1609,8 @@ if [ "$RUN_PATTERN_LAB_PROPAGATION_AUDIT" = "true" ] || [ "$RUN_PATTERN_LAB_PROP
       "pattern_lab_propagation_audit"
   else
     wait_for_postclose_resources "pattern_lab_propagation_audit"
-    run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.pattern_lab_propagation_audit --date "$TARGET_DATE"
+    run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.pattern_lab_propagation_audit \
+      --date "$TARGET_DATE" "${PATTERN_LAB_SWING_ARGS[@]}"
     wait_for_report_artifact \
       "$PROJECT_DIR/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_${TARGET_DATE}.json" \
       "$PROJECT_DIR/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_${TARGET_DATE}.md" \
@@ -1595,7 +1620,8 @@ if [ "$RUN_PATTERN_LAB_PROPAGATION_AUDIT" = "true" ] || [ "$RUN_PATTERN_LAB_PROP
     wait_for_postclose_resources "pattern_lab_ai_review_source_provenance_refresh"
     run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.pattern_lab_ai_review \
       --date "$TARGET_DATE" \
-      --refresh-source-provenance
+      --refresh-source-provenance \
+      "${PATTERN_LAB_SWING_ARGS[@]}"
     wait_for_report_artifact \
       "$PROJECT_DIR/data/report/pattern_lab_ai_review/pattern_lab_ai_review_${TARGET_DATE}.json" \
       "$PROJECT_DIR/data/report/pattern_lab_ai_review/pattern_lab_ai_review_${TARGET_DATE}.md" \
@@ -1634,7 +1660,12 @@ wait_for_report_artifact \
   "$PROJECT_DIR/data/report/key_lineage_ledger/key_lineage_ledger_${TARGET_DATE}.md" \
   "key_lineage_ledger"
 wait_for_postclose_resources "conversion_lane"
-run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.automation.conversion_lane --date "$TARGET_DATE"
+CONVERSION_LANE_SWING_ARGS=()
+if [[ "$RUN_SWING_POSTCLOSE" != "true" && "$RUN_SWING_POSTCLOSE" != "1" ]]; then
+  CONVERSION_LANE_SWING_ARGS+=(--exclude-swing)
+fi
+run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.automation.conversion_lane \
+  --date "$TARGET_DATE" "${CONVERSION_LANE_SWING_ARGS[@]}"
 wait_for_report_artifact \
   "$PROJECT_DIR/data/report/conversion_lane/conversion_lane_${TARGET_DATE}.json" \
   "$PROJECT_DIR/data/report/conversion_lane/conversion_lane_${TARGET_DATE}.md" \
@@ -1669,7 +1700,8 @@ if [ "$BUILD_CODE_IMPROVEMENT_WORKORDER" = "true" ] || [ "$BUILD_CODE_IMPROVEMEN
   wait_for_postclose_resources "code_improvement_workorder_post_conversion_lane"
   run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.build_code_improvement_workorder \
     --date "$TARGET_DATE" \
-    --max-orders "$CODE_IMPROVEMENT_WORKORDER_MAX_ORDERS"
+    --max-orders "$CODE_IMPROVEMENT_WORKORDER_MAX_ORDERS" \
+    "${WORKORDER_SWING_ARGS[@]}"
   wait_for_report_artifact \
     "$PROJECT_DIR/data/report/code_improvement_workorder/code_improvement_workorder_${TARGET_DATE}.json" \
     "$PROJECT_DIR/docs/code-improvement-workorders/code_improvement_workorder_${TARGET_DATE}.md" \
@@ -1697,7 +1729,26 @@ else
   echo "[threshold-cycle] quote consistency report skipped by env"
 fi
 wait_for_postclose_resources "verify_threshold_cycle_postclose_chain"
-run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.verify_threshold_cycle_postclose_chain --date "$TARGET_DATE" --allow-pending-done-marker
+VERIFY_DISABLED_STAGE_ARGS=()
+if [[ "$RUN_SWING_LIFECYCLE_AUDIT" != "true" && "$RUN_SWING_LIFECYCLE_AUDIT" != "1" ]]; then
+  VERIFY_DISABLED_STAGE_ARGS+=(--disabled-stage swing_lifecycle)
+fi
+if [[ "$RUN_SWING_STRATEGY_DISCOVERY" != "true" && "$RUN_SWING_STRATEGY_DISCOVERY" != "1" ]]; then
+  VERIFY_DISABLED_STAGE_ARGS+=(--disabled-stage swing_strategy_discovery)
+fi
+if [[ "$RUN_SWING_LIFECYCLE_MATRIX" != "true" && "$RUN_SWING_LIFECYCLE_MATRIX" != "1" ]]; then
+  VERIFY_DISABLED_STAGE_ARGS+=(--disabled-stage swing_lifecycle_matrix)
+fi
+if [[ "$RUN_SWING_LIFECYCLE_BUCKET_DISCOVERY" != "true" && "$RUN_SWING_LIFECYCLE_BUCKET_DISCOVERY" != "1" ]]; then
+  VERIFY_DISABLED_STAGE_ARGS+=(--disabled-stage swing_lifecycle_bucket_discovery)
+fi
+if [[ "$RUN_DEEPSEEK_SWING_LAB" != "true" && "$RUN_DEEPSEEK_SWING_LAB" != "1" ]]; then
+  VERIFY_DISABLED_STAGE_ARGS+=(--disabled-stage deepseek_swing_lab)
+fi
+run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.verify_threshold_cycle_postclose_chain \
+  --date "$TARGET_DATE" \
+  --allow-pending-done-marker \
+  "${VERIFY_DISABLED_STAGE_ARGS[@]}"
 wait_for_report_artifact \
   "$PROJECT_DIR/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_${TARGET_DATE}.json" \
   "$PROJECT_DIR/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_${TARGET_DATE}.md" \
@@ -1716,7 +1767,9 @@ finished_at="$(TZ=Asia/Seoul date +%FT%T%z)"
 write_postclose_status succeeded completed 0 1
 emit_postclose_marker "[DONE] threshold-cycle postclose target_date=$TARGET_DATE ai_correction_provider=$AI_CORRECTION_PROVIDER panic_sell_defense=$RUN_PANIC_SELL_DEFENSE_REPORT panic_buying=$RUN_PANIC_BUYING_REPORT market_panic_breadth=$RUN_MARKET_PANIC_BREADTH_REPORT scalp_sim_ai_deferred_review=$RUN_SCALP_SIM_AI_DEFERRED_REVIEW pipeline_event_verbosity=$RUN_PIPELINE_EVENT_VERBOSITY_REPORT quote_consistency_report=$RUN_QUOTE_CONSISTENCY_REPORT intraday_ws_freshness_monitor=$RUN_INTRADAY_WS_FRESHNESS_MONITOR observation_source_quality_audit=$RUN_OBSERVATION_SOURCE_QUALITY_AUDIT ai_watching_score_smoothing_diagnostic=$RUN_AI_WATCHING_SCORE_SMOOTHING_DIAGNOSTIC codebase_performance_workorder=$RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT pattern_lab_currentness_audit=$RUN_PATTERN_LAB_CURRENTNESS_AUDIT pattern_lab_ai_review=$RUN_PATTERN_LAB_AI_REVIEW time_window_regime_counterfactual=$RUN_TIME_WINDOW_REGIME_COUNTERFACTUAL producer_gap_discovery=$RUN_PRODUCER_GAP_DISCOVERY stage_hook_workorder_discovery=$RUN_STAGE_HOOK_WORKORDER_DISCOVERY stage_hook_runtime_scaffold=$RUN_STAGE_HOOK_RUNTIME_SCAFFOLD pattern_lab_propagation_audit=$RUN_PATTERN_LAB_PROPAGATION_AUDIT scalp_sim_overnight=$RUN_SCALP_SIM_OVERNIGHT_REPORT scalp_entry_adm=$RUN_SCALP_ENTRY_ADM entry_split_order_plan=$RUN_ENTRY_SPLIT_ORDER_PLAN scale_in_split_order_plan=$RUN_SCALE_IN_SPLIT_ORDER_PLAN entry_ai_gate_backtest=$RUN_ENTRY_AI_GATE_BACKTEST tight_stop_entry_companion_report=$RUN_TIGHT_STOP_ENTRY_COMPANION_REPORT ai_score_optimization_backtest=$RUN_AI_SCORE_OPTIMIZATION_BACKTEST rising_missed_intraday_feedback_postclose=$RUN_RISING_MISSED_INTRADAY_FEEDBACK_POSTCLOSE rising_missed_scout_workorder=$RUN_RISING_MISSED_SCOUT_WORKORDER rising_missed_normal_buy_bridge_candidate_discovery=$RUN_RISING_MISSED_NORMAL_BUY_BRIDGE_CANDIDATE_DISCOVERY rising_missed_first_touch_calibration=$RUN_RISING_MISSED_FIRST_TOUCH_CALIBRATION scalping_pyramid_intraday_feedback_postclose=$RUN_SCALPING_PYRAMID_INTRADAY_FEEDBACK_POSTCLOSE scalping_pyramid_quality_calibration=$RUN_SCALPING_PYRAMID_QUALITY_CALIBRATION scalping_avg_down_recovery_calibration=$RUN_SCALPING_AVG_DOWN_RECOVERY_CALIBRATION rising_missed_classifier_prior=$RUN_RISING_MISSED_CLASSIFIER_PRIOR one_share_threshold_opportunity=$RUN_ONE_SHARE_THRESHOLD_OPPORTUNITY one_share_threshold_opportunity_ai_provider=$ONE_SHARE_THRESHOLD_OPPORTUNITY_AI_PROVIDER institutional_flow_context=$RUN_INSTITUTIONAL_FLOW_CONTEXT microstructure_reaction_context=$RUN_MICROSTRUCTURE_REACTION_CONTEXT lifecycle_decision_matrix=$RUN_LIFECYCLE_DECISION_MATRIX lifecycle_ai_context=$RUN_LIFECYCLE_AI_CONTEXT ldm_hypothesis_parent_refinement=$RUN_LDM_HYPOTHESIS_PARENT_REFINEMENT lifecycle_bucket_discovery=$RUN_LIFECYCLE_BUCKET_DISCOVERY lifecycle_bucket_windows=$RUN_LIFECYCLE_BUCKET_WINDOWS lifecycle_bucket_window_list=$LIFECYCLE_BUCKET_WINDOWS lifecycle_bucket_promotion_window=$LIFECYCLE_BUCKET_PROMOTION_WINDOW force_lifecycle_bucket_windows=$FORCE_LIFECYCLE_BUCKET_WINDOWS force_deep_audits=$FORCE_DEEP_AUDITS force_workorder_branch=$FORCE_WORKORDER_BRANCH runtime_apply_bridge=$RUN_RUNTIME_APPLY_BRIDGE scalp_sim_auto_approval_control_tower=$RUN_SCALP_SIM_AUTO_APPROVAL_CONTROL_TOWER latency_classifier_recommendation=$RUN_LATENCY_CLASSIFIER_RECOMMENDATION tuning_performance_control_tower=$RUN_TUNING_PERFORMANCE_CONTROL_TOWER swing_lifecycle=$RUN_SWING_LIFECYCLE_AUDIT swing_strategy_discovery=$RUN_SWING_STRATEGY_DISCOVERY swing_lifecycle_matrix=$RUN_SWING_LIFECYCLE_MATRIX swing_lifecycle_bucket_discovery=$RUN_SWING_LIFECYCLE_BUCKET_DISCOVERY swing_ai_review_provider=$SWING_THRESHOLD_AI_REVIEW_PROVIDER swing_lifecycle_bucket_discovery_ai_provider=$SWING_LIFECYCLE_BUCKET_DISCOVERY_AI_PROVIDER pattern_lab_ai_review_provider=$PATTERN_LAB_AI_REVIEW_PROVIDER producer_gap_discovery_ai_provider=$PRODUCER_GAP_DISCOVERY_AI_PROVIDER stage_hook_workorder_discovery_ai_provider=$STAGE_HOOK_WORKORDER_DISCOVERY_AI_PROVIDER pattern_labs=$RUN_PATTERN_LABS deepseek_swing_lab=$RUN_DEEPSEEK_SWING_LAB code_improvement_workorder=$BUILD_CODE_IMPROVEMENT_WORKORDER daily_ev=true runtime_approval_summary=true runtime_apply_gap_audit=true key_lineage_ledger=true conversion_lane=true next_stage2_checklist=true finished_at=$finished_at"
 wait_for_postclose_resources "verify_threshold_cycle_postclose_chain_final"
-run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.verify_threshold_cycle_postclose_chain --date "$TARGET_DATE"
+run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.verify_threshold_cycle_postclose_chain \
+  --date "$TARGET_DATE" \
+  "${VERIFY_DISABLED_STAGE_ARGS[@]}"
 wait_for_report_artifact \
   "$PROJECT_DIR/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_${TARGET_DATE}.json" \
   "$PROJECT_DIR/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_${TARGET_DATE}.md" \

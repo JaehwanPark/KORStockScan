@@ -7961,3 +7961,18 @@ def test_source_quality_contract_gap_creates_workorder():
     orders = mod._sim_fill_and_match_report_contract_orders(ev_report, sq_report)
     gap_ids = [o["order_id"] for o in orders]
     assert "order_source_quality_report_contract_status_gap" in gap_ids
+
+
+def test_workorder_swing_scope_classifier_is_explicit():
+    assert mod._is_swing_scoped_order(
+        {
+            "order_id": "order_swing_lifecycle_gap",
+            "source_report_type": "swing_lifecycle_bucket_discovery",
+        }
+    )
+    assert not mod._is_swing_scoped_order(
+        {
+            "order_id": "order_scalp_lifecycle_gap",
+            "source_report_type": "lifecycle_bucket_discovery",
+        }
+    )

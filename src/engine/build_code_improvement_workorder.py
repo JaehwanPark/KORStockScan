@@ -7440,8 +7440,34 @@ def _swing_lifecycle_bucket_discovery_followup_orders(
     return orders
 
 
+def _is_swing_scoped_order(order: dict[str, Any]) -> bool:
+    scope = (
+        str(
+            order.get("strategy_scope")
+            or order.get("domain")
+            or order.get("strategy")
+            or ""
+        )
+        .strip()
+        .lower()
+    )
+    if scope == "swing":
+        return True
+    return "swing" in " ".join(
+        str(order.get(key) or "").lower()
+        for key in (
+            "order_id",
+            "title",
+            "source_report_type",
+            "target_subsystem",
+            "mapped_family",
+            "threshold_family",
+        )
+    )
+
+
 def build_code_improvement_workorder(
-    target_date: str, *, max_orders: int = 12
+    target_date: str, *, max_orders: int = 12, include_swing: bool = True
 ) -> dict[str, Any]:
     target_date = str(target_date).strip()
     isolated_source_mode = _workorder_isolated_source_mode()
@@ -7452,29 +7478,47 @@ def build_code_improvement_workorder(
         source_path, isolated_source_mode=isolated_source_mode
     )
     swing_source_path = swing_automation_report_path(target_date)
-    swing_automation = _load_source_json(
-        swing_source_path, isolated_source_mode=isolated_source_mode
+    swing_automation = (
+        _load_source_json(swing_source_path, isolated_source_mode=isolated_source_mode)
+        if include_swing
+        else {}
     )
     swing_lab_source_path = swing_pattern_lab_automation_report_path(target_date)
-    swing_lab_automation = _load_source_json(
-        swing_lab_source_path, isolated_source_mode=isolated_source_mode
+    swing_lab_automation = (
+        _load_source_json(
+            swing_lab_source_path, isolated_source_mode=isolated_source_mode
+        )
+        if include_swing
+        else {}
     )
     swing_discovery_source_path = swing_strategy_discovery_ev_report_path(target_date)
-    swing_discovery_ev = _load_source_json(
-        swing_discovery_source_path, isolated_source_mode=isolated_source_mode
+    swing_discovery_ev = (
+        _load_source_json(
+            swing_discovery_source_path, isolated_source_mode=isolated_source_mode
+        )
+        if include_swing
+        else {}
     )
     swing_lifecycle_matrix_path = swing_lifecycle_decision_matrix_report_path(
         target_date
     )
-    swing_lifecycle_matrix = _load_source_json(
-        swing_lifecycle_matrix_path, isolated_source_mode=isolated_source_mode
+    swing_lifecycle_matrix = (
+        _load_source_json(
+            swing_lifecycle_matrix_path, isolated_source_mode=isolated_source_mode
+        )
+        if include_swing
+        else {}
     )
     swing_lifecycle_bucket_discovery_path = (
         swing_lifecycle_bucket_discovery_report_path(target_date)
     )
-    swing_lifecycle_bucket_discovery = _load_source_json(
-        swing_lifecycle_bucket_discovery_path,
-        isolated_source_mode=isolated_source_mode,
+    swing_lifecycle_bucket_discovery = (
+        _load_source_json(
+            swing_lifecycle_bucket_discovery_path,
+            isolated_source_mode=isolated_source_mode,
+        )
+        if include_swing
+        else {}
     )
     ev_path = threshold_ev_report_path(target_date)
     ev_report = _load_source_json(ev_path, isolated_source_mode=isolated_source_mode)
@@ -7626,6 +7670,15 @@ def build_code_improvement_workorder(
         "one_share_threshold_opportunity": one_share_threshold_opportunity_path,
         "microstructure_reaction_context": microstructure_reaction_context_path,
     }
+    if not include_swing:
+        for label in (
+            "swing_improvement_automation",
+            "swing_pattern_lab_automation",
+            "swing_strategy_discovery_ev",
+            "swing_lifecycle_decision_matrix",
+            "swing_lifecycle_bucket_discovery",
+        ):
+            candidate_source_paths.pop(label, None)
     source_paths = {
         label: path
         for label, path in candidate_source_paths.items()
@@ -7670,7 +7723,7 @@ def build_code_improvement_workorder(
         lifecycle_source_path, isolated_source_mode=isolated_source_mode
     ):
         source_paths["lifecycle_decision_matrix"] = lifecycle_source_path
-    if ev_sources.get("swing_lifecycle_decision_matrix"):
+    if include_swing and ev_sources.get("swing_lifecycle_decision_matrix"):
         swing_lifecycle_matrix_path = Path(
             str(ev_sources.get("swing_lifecycle_decision_matrix"))
         )
@@ -7682,11 +7735,11 @@ def build_code_improvement_workorder(
             )
         else:
             swing_lifecycle_matrix = _load_json(swing_lifecycle_matrix_path)
-    if _source_path_enabled(
+    if include_swing and _source_path_enabled(
         swing_lifecycle_matrix_path, isolated_source_mode=isolated_source_mode
     ):
         source_paths["swing_lifecycle_decision_matrix"] = swing_lifecycle_matrix_path
-    if ev_sources.get("swing_lifecycle_bucket_discovery"):
+    if include_swing and ev_sources.get("swing_lifecycle_bucket_discovery"):
         swing_lifecycle_bucket_discovery_path = Path(
             str(ev_sources.get("swing_lifecycle_bucket_discovery"))
         )
@@ -7701,7 +7754,7 @@ def build_code_improvement_workorder(
             swing_lifecycle_bucket_discovery = _load_json(
                 swing_lifecycle_bucket_discovery_path
             )
-    if _source_path_enabled(
+    if include_swing and _source_path_enabled(
         swing_lifecycle_bucket_discovery_path, isolated_source_mode=isolated_source_mode
     ):
         source_paths["swing_lifecycle_bucket_discovery"] = (
@@ -7933,6 +7986,8 @@ def build_code_improvement_workorder(
         *lifecycle_bucket_discovery_orders,
         *threshold_ev_orders,
     ]
+    if not include_swing:
+        orders = [order for order in orders if not _is_swing_scoped_order(order)]
     if conversion_rank:
         orders = [
             _annotate_order_conversion_fields(order, conversion_rank)
@@ -8321,6 +8376,8 @@ def build_code_improvement_workorder(
         "generation_id": f"{target_date}-{source_fingerprint['generation_id']}",
         "source_hash": source_fingerprint["source_hash"],
         "purpose": "codex_code_improvement_workorder_from_postclose_automation",
+        "strategy_scope": "scalp_and_swing" if include_swing else "scalp_only",
+        "swing_sources_enabled": include_swing,
         "source": {
             "pattern_lab_automation": source_ref("pattern_lab_automation"),
             "swing_improvement_automation": source_ref("swing_improvement_automation"),
@@ -9036,9 +9093,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--date", dest="target_date", default=date.today().isoformat())
     parser.add_argument("--max-orders", type=int, default=12)
+    parser.add_argument("--exclude-swing", action="store_true")
     args = parser.parse_args(argv)
     report = build_code_improvement_workorder(
-        args.target_date, max_orders=args.max_orders
+        args.target_date,
+        max_orders=args.max_orders,
+        include_swing=not args.exclude_swing,
     )
     print(json.dumps(report, ensure_ascii=False))
     return 0

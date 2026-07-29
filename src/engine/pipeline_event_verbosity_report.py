@@ -204,17 +204,24 @@ def build_pipeline_event_verbosity_report(target_date: str) -> dict[str, Any]:
         and producer_updated_at
         and latest_pipeline_event_at > producer_updated_at
     )
+    no_eligible_events = raw_total == 0
     parity_ok = bool(
-        producer_exists
-        and not stage_diff
-        and not blocker_diff
-        and raw_total == producer_total
+        no_eligible_events
+        or (
+            producer_exists
+            and not stage_diff
+            and not blocker_diff
+            and raw_total == producer_total
+        )
     )
     previous_pass_count = _previous_parity_pass_count(target_date)
     suppress_candidate = bool(parity_ok and previous_pass_count >= 1)
     if not raw_path.exists():
         state = "blocked"
         recommended = "raw_missing"
+    elif no_eligible_events:
+        state = "v2_shadow_no_eligible_events"
+        recommended = "observe_no_eligible_events"
     elif not producer_exists or not manifest_exists:
         state = "v2_shadow_missing"
         recommended = "open_shadow_order"
@@ -284,6 +291,7 @@ def build_pipeline_event_verbosity_report(target_date: str) -> dict[str, Any]:
             "previous_parity_pass_count": previous_pass_count,
             "suppress_eligibility": suppress_candidate,
             "producer_pending_flush": producer_pending_flush,
+            "no_eligible_events": no_eligible_events,
             "producer_updated_at": producer_updated_at or None,
             "latest_pipeline_event_at": latest_pipeline_event_at or None,
         },

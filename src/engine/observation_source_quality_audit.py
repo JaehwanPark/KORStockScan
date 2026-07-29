@@ -2630,7 +2630,65 @@ def _reviewed_unknown_reason_for_stage_field(
                 authority == "real_scalping_scanner_watch_eviction_pool_management_only"
                 and resolution == "scanner_runtime_event:explicit_target_venue_missing"
             )
+        if stage == "rising_missed_one_share_entry_blocked":
+            return (
+                _field_text("effective_venue") == "NXT"
+                and resolution.startswith(
+                    "rising_missed_initial_gate:session_explicit_conflict:"
+                )
+                and _field_text("block_reason") == "entry_ai_action_not_evaluated"
+                and _is_falseish("runtime_effect")
+            )
         return False
+
+    def _is_reviewed_scanner_stale_backoff_route_not_available() -> bool:
+        field = str(key or "")
+        if stage != "scalping_scanner_fast_precheck" or field not in {
+            "scanner_stale_backoff_raw_0b_route",
+            "scanner_stale_backoff_raw_0d_route",
+        }:
+            return False
+        if str(value or "").strip().lower() != "unknown":
+            return False
+        realtime_type = "0B" if "_0b_" in field else "0D"
+        received_types = {
+            token.strip().upper()
+            for token in _field_text("ws_received_types").split(",")
+            if token.strip() not in {"", "-"}
+        }
+        age_field = (
+            "ws_last_0b_age_ms" if realtime_type == "0B" else "ws_last_0d_age_ms"
+        )
+        return (
+            _field_text("decision_authority")
+            == "real_scalping_scanner_fast_precheck_observation_only"
+            and _field_text("source_quality_gate")
+            == "scalping_scanner_fast_precheck_contract"
+            and realtime_type not in received_types
+            and _field_text(age_field)
+            in {"", "-", "not_available_realtime_type_age_ms"}
+            and _is_falseish("actual_order_submitted")
+            and _is_trueish("broker_order_forbidden")
+        )
+
+    def _is_reviewed_adverse_micro_recovery_route_not_available() -> bool:
+        if (
+            stage != "rising_missed_adverse_micro_recovery_checkpoint"
+            or str(key or "") != "rising_missed_adverse_micro_recovery_ws_0b_raw_route"
+            or str(value or "").strip().lower() != "unknown"
+        ):
+            return False
+        return (
+            _field_text("rising_missed_adverse_micro_recovery_price_fresh").lower()
+            in {"false", "0", "no"}
+            and _field_text("rising_missed_adverse_micro_recovery_price_source")
+            in {"", "-", "unavailable", "not_available"}
+            and _field_text("rising_missed_adverse_micro_recovery_source_reason")
+            in {"price_missing", "source_missing"}
+            and _is_falseish("runtime_effect")
+            and _is_falseish("actual_order_submitted")
+            and _is_trueish("broker_order_forbidden")
+        )
 
     def _is_reviewed_rising_missed_ws_route_not_available() -> bool:
         if str(key or "") not in {
@@ -2809,15 +2867,21 @@ def _reviewed_unknown_reason_for_stage_field(
             "holding_context_tape_route_partition_expected_key",
         }:
             return False
-        return (
-            _field_text("holding_context_source_quality_status") == "blocked"
-            and bool(_field_text("holding_context_blockers"))
-            and (
-                _field_text("ai_result_source") == "input_preflight_blocked"
-                or _field_text("scale_in_ai_authority_input_retry_result_source")
-                == "input_preflight_blocked"
-            )
+        result_blocked = (
+            _field_text("ai_result_source") == "input_preflight_blocked"
+            or _field_text("scale_in_ai_authority_input_retry_result_source")
+            == "input_preflight_blocked"
         )
+        explicit_blocked = _field_text(
+            "holding_context_source_quality_status"
+        ) == "blocked" and bool(_field_text("holding_context_blockers"))
+        disabled_with_embedded_block = (
+            _field_text("holding_context_source_quality_status") == "disabled"
+            and _is_falseish("holding_context_enabled")
+            and "'status': 'blocked'"
+            in _field_text("holding_context_ai_market_snapshot")
+        )
+        return result_blocked and (explicit_blocked or disabled_with_embedded_block)
 
     def _is_reviewed_canonical_unknown_flow_state() -> bool:
         return (
@@ -3100,6 +3164,10 @@ def _reviewed_unknown_reason_for_stage_field(
         return "reviewed_explicit_sizing_unknown_venue_fallback"
     if _is_reviewed_observation_only_venue_not_available():
         return "reviewed_observation_only_venue_not_available"
+    if _is_reviewed_scanner_stale_backoff_route_not_available():
+        return "reviewed_scanner_stale_backoff_route_not_available"
+    if _is_reviewed_adverse_micro_recovery_route_not_available():
+        return "reviewed_adverse_micro_recovery_route_not_available"
     if _is_reviewed_rising_missed_ws_route_not_available():
         return "reviewed_rising_missed_ws_route_not_available"
     if _is_reviewed_scanner_async_transport_not_available():
@@ -3200,6 +3268,14 @@ def _unknown_scan_values(
     row: dict[str, Any], normalized: dict[str, Any]
 ) -> dict[str, Any]:
     values = dict(normalized)
+    # These structured payloads have dedicated flattened provenance/preflight
+    # fields. Treating an inner canonical "unknown" token as the value of the
+    # entire object creates a false source-quality finding.
+    for field in (
+        "holding_context_entry_time_context",
+        "holding_context_ai_market_snapshot",
+    ):
+        values.pop(field, None)
     for key in ("stage", "pipeline", "stock_code", "stock_name", "event_type"):
         value = row.get(key)
         if _unknown_token_present(value):

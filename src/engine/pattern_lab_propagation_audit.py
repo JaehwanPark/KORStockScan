@@ -174,7 +174,9 @@ def _runtime_effect_violations(*reports: dict[str, Any]) -> list[str]:
     return violations
 
 
-def build_pattern_lab_propagation_audit(target_date: str) -> dict[str, Any]:
+def build_pattern_lab_propagation_audit(
+    target_date: str, *, include_swing: bool = True
+) -> dict[str, Any]:
     target_date = str(target_date).strip()
     scalping_path, _ = scalping_automation_report_paths(target_date)
     swing_path, _ = swing_pattern_lab_automation_report_paths(target_date)
@@ -184,7 +186,7 @@ def build_pattern_lab_propagation_audit(target_date: str) -> dict[str, Any]:
     runtime_path, _ = runtime_summary_paths(target_date)
 
     scalping = _load_json(scalping_path)
-    swing = _load_json(swing_path)
+    swing = _load_json(swing_path) if include_swing else {}
     currentness = _load_json(currentness_path)
     workorder = _load_json(workorder_path)
     ev_report = _load_json(ev_path)
@@ -204,9 +206,6 @@ def build_pattern_lab_propagation_audit(target_date: str) -> dict[str, Any]:
     )
     claude_status, claude_finding = _automation_fresh(
         scalping, target_date, "claude_fresh"
-    )
-    swing_status, swing_finding = _automation_fresh(
-        swing, target_date, "deepseek_lab_available"
     )
     checks.append(
         _check(
@@ -234,19 +233,23 @@ def build_pattern_lab_propagation_audit(target_date: str) -> dict[str, Any]:
             source_paths=[scalping_path],
         )
     )
-    checks.append(
-        _check(
-            "deepseek_swing_automation_fresh",
-            status=swing_status,
-            severity=(
-                "source_quality_blocker"
-                if swing_status == "fail"
-                else "warning" if swing_status == "warning" else "info"
-            ),
-            finding=swing_finding,
-            source_paths=[swing_path],
+    if include_swing:
+        swing_status, swing_finding = _automation_fresh(
+            swing, target_date, "deepseek_lab_available"
         )
-    )
+        checks.append(
+            _check(
+                "deepseek_swing_automation_fresh",
+                status=swing_status,
+                severity=(
+                    "source_quality_blocker"
+                    if swing_status == "fail"
+                    else "warning" if swing_status == "warning" else "info"
+                ),
+                finding=swing_finding,
+                source_paths=[swing_path],
+            )
+        )
 
     currentness_ok = (
         bool(currentness)
@@ -465,36 +468,37 @@ def build_pattern_lab_propagation_audit(target_date: str) -> dict[str, Any]:
         )
     )
 
-    deepseek_quality_path = (
-        PROJECT_ROOT
-        / "analysis"
-        / "deepseek_swing_pattern_lab"
-        / "outputs"
-        / "data_quality_report.json"
-    )
-    deepseek_quality = _load_json(deepseek_quality_path)
-    sim_probe_ok = bool(deepseek_quality.get("sim_probe_provenance"))
-    checks.append(
-        _check(
-            "deepseek_sim_probe_provenance_propagated",
-            status="pass" if sim_probe_ok else "fail",
-            severity="info" if sim_probe_ok else "source_quality_blocker",
-            finding="DeepSeek sim/probe provenance must be present before downstream propagation can be trusted.",
-            source_paths=[deepseek_quality_path, swing_path],
-            recommended_order=(
-                None
-                if sim_probe_ok
-                else _order(
-                    "deepseek_sim_probe_provenance_propagated",
-                    "Propagate DeepSeek sim/probe provenance",
-                    [swing_path],
-                )
-            ),
+    if include_swing:
+        deepseek_quality_path = (
+            PROJECT_ROOT
+            / "analysis"
+            / "deepseek_swing_pattern_lab"
+            / "outputs"
+            / "data_quality_report.json"
         )
-    )
+        deepseek_quality = _load_json(deepseek_quality_path)
+        sim_probe_ok = bool(deepseek_quality.get("sim_probe_provenance"))
+        checks.append(
+            _check(
+                "deepseek_sim_probe_provenance_propagated",
+                status="pass" if sim_probe_ok else "fail",
+                severity="info" if sim_probe_ok else "source_quality_blocker",
+                finding="DeepSeek sim/probe provenance must be present before downstream propagation can be trusted.",
+                source_paths=[deepseek_quality_path, swing_path],
+                recommended_order=(
+                    None
+                    if sim_probe_ok
+                    else _order(
+                        "deepseek_sim_probe_provenance_propagated",
+                        "Propagate DeepSeek sim/probe provenance",
+                        [swing_path],
+                    )
+                ),
+            )
+        )
 
     runtime_violations = _runtime_effect_violations(
-        currentness, scalping, swing, workorder
+        currentness, scalping, *([swing] if include_swing else []), workorder
     )
     checks.append(
         _check(
@@ -535,6 +539,8 @@ def build_pattern_lab_propagation_audit(target_date: str) -> dict[str, Any]:
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "status": status,
         "runtime_effect": False,
+        "strategy_scope": "scalp_and_swing" if include_swing else "scalp_only",
+        "swing_sources_enabled": include_swing,
         "decision_authority": "source_quality_only",
         "forbidden_uses": FORBIDDEN_USES,
         "summary": {
@@ -596,8 +602,11 @@ def render_markdown(report: dict[str, Any]) -> str:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--date", required=True)
+    parser.add_argument("--exclude-swing", action="store_true")
     args = parser.parse_args(argv)
-    report = build_pattern_lab_propagation_audit(args.date)
+    report = build_pattern_lab_propagation_audit(
+        args.date, include_swing=not args.exclude_swing
+    )
     json_path, md_path = report_paths(args.date)
     print(
         f"pattern_lab_propagation_audit status={report['status']} json={json_path} md={md_path}"
