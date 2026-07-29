@@ -2689,6 +2689,97 @@ def _build_tp1_counterfactual_first_hit_labels(
     }, labels
 
 
+def _aggregate_nxt_post_block_outcomes(
+    sampler_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for item in sampler_rows:
+        if item.get("stage") != "rising_missed_nxt_post_block_price_sampler_completed":
+            continue
+        if item.get("source_quality_state") != "pass":
+            continue
+        stage = str(item.get("source_block_stage") or "missing").strip()
+        reason = str(item.get("source_block_reason") or "missing").strip()
+        grouped.setdefault((stage, reason), []).append(item)
+
+    rows: list[dict[str, Any]] = []
+    for (stage, reason), items in grouped.items():
+        outcomes = Counter(
+            str(item.get("outcome_label") or "unknown") for item in items
+        )
+        mfe_values = [
+            float(value)
+            for item in items
+            for value in [item.get("mfe_after_block_pct")]
+            if value is not None
+        ]
+        mae_values = [
+            float(value)
+            for item in items
+            for value in [item.get("mae_after_block_pct")]
+            if value is not None
+        ]
+        sample_count = len(items)
+        target_count = outcomes.get("gross_target_first", 0)
+        adverse_count = outcomes.get("adverse_stop_first", 0)
+        rows.append(
+            {
+                "source_block_stage": stage,
+                "source_block_reason": reason,
+                "completed_sample_count": sample_count,
+                "unique_symbol_count": len(
+                    {
+                        str(item.get("stock_code") or "")
+                        for item in items
+                        if str(item.get("stock_code") or "")
+                    }
+                ),
+                "gross_target_first_count": target_count,
+                "adverse_stop_first_count": adverse_count,
+                "no_hit_within_20m_count": outcomes.get("no_hit_within_20m", 0),
+                "gross_target_first_rate_pct": round(
+                    target_count * 100.0 / sample_count, 6
+                ),
+                "adverse_stop_first_rate_pct": round(
+                    adverse_count * 100.0 / sample_count, 6
+                ),
+                "equal_weight_avg_mfe_after_block_pct": (
+                    round(sum(mfe_values) / len(mfe_values), 6) if mfe_values else None
+                ),
+                "equal_weight_avg_mae_after_block_pct": (
+                    round(sum(mae_values) / len(mae_values), 6) if mae_values else None
+                ),
+                "max_mfe_after_block_pct": max(mfe_values) if mfe_values else None,
+                "min_mae_after_block_pct": min(mae_values) if mae_values else None,
+                "metric_role": "source_quality_gated_blocker_outcome_attribution",
+                "decision_authority": "source_only_no_runtime_mutation",
+                "window_policy": "same_day_nxt_completed_20m_post_block_sampler",
+                "sample_floor": (
+                    "10_source_quality_pass_completed_samplers_per_blocker"
+                ),
+                "sample_floor_met": sample_count >= 10,
+                "primary_decision_metric": (
+                    "gross_target_first_rate_pct_and_adverse_stop_first_rate_pct"
+                ),
+                "source_quality_gate": (
+                    "completed_sampler_source_quality_pass_and_explicit_nxt_venue"
+                ),
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "forbidden_uses": FORBIDDEN_USES,
+            }
+        )
+    return sorted(
+        rows,
+        key=lambda item: (
+            -int(item["gross_target_first_count"]),
+            -float(item["max_mfe_after_block_pct"] or 0.0),
+            str(item["source_block_stage"]),
+            str(item["source_block_reason"]),
+        ),
+    )
+
+
 def _build_nxt_session_observation(
     pipeline_path: Path,
 ) -> tuple[
@@ -2987,6 +3078,7 @@ def _build_nxt_session_observation(
                     "forbidden_uses": FORBIDDEN_USES,
                 }
             )
+    blocker_outcome_rows = _aggregate_nxt_post_block_outcomes(sampler_rows)
     return (
         {
             "rising_missed_nxt_evaluation_count": len(evaluation_rows),
@@ -3104,6 +3196,9 @@ def _build_nxt_session_observation(
                 {"outcome_label": key, "count": value}
                 for key, value in sampler_outcome_counts.most_common()
             ],
+            "rising_missed_nxt_post_block_blocker_outcome_attribution": (
+                blocker_outcome_rows
+            ),
         },
         evaluation_rows,
         order_rows,
@@ -3564,6 +3659,19 @@ def build_report(
                 ),
                 "forbidden_uses": FORBIDDEN_USES,
             },
+            "rising_missed_nxt_post_block_blocker_outcome_attribution": {
+                "metric_role": "source_quality_gated_blocker_outcome_attribution",
+                "decision_authority": "source_only_no_runtime_mutation",
+                "window_policy": "same_day_nxt_completed_20m_post_block_sampler",
+                "sample_floor": "10_source_quality_pass_completed_samplers_per_blocker",
+                "primary_decision_metric": (
+                    "gross_target_first_rate_pct_and_adverse_stop_first_rate_pct"
+                ),
+                "source_quality_gate": (
+                    "completed_sampler_source_quality_pass_and_explicit_nxt_venue"
+                ),
+                "forbidden_uses": FORBIDDEN_USES,
+            },
             "rising_missed_adverse_micro_recovery": {
                 "metric_role": "source_quality_gate",
                 "decision_authority": "observe_only_adverse_micro_recovery",
@@ -3817,6 +3925,8 @@ def write_outputs(
         f"{summary.get('rising_missed_nxt_post_block_sampler_completed_count')}",
         f"- rising_missed_nxt_post_block_sampler_outcome_counts: "
         f"{summary.get('rising_missed_nxt_post_block_sampler_outcome_counts')}",
+        f"- rising_missed_nxt_post_block_blocker_outcome_attribution: "
+        f"{summary.get('rising_missed_nxt_post_block_blocker_outcome_attribution')}",
         f"- rising_missed_adverse_micro_recovery_observation_count: "
         f"{summary.get('rising_missed_adverse_micro_recovery_observation_count')}",
         f"- rising_missed_adverse_micro_recovery_checkpoint_counts: "

@@ -41,6 +41,9 @@ LIFECYCLE_DECISION_MATRIX_DIR = REPORT_DIR / "lifecycle_decision_matrix"
 CUMULATIVE_THRESHOLD_REPORT_DIR = REPORT_DIR / "threshold_cycle_cumulative"
 THRESHOLD_CALIBRATION_REPORT_DIR = REPORT_DIR / "threshold_cycle_calibration"
 THRESHOLD_AI_REVIEW_DIR = REPORT_DIR / "threshold_cycle_ai_review"
+SCALPING_AVG_DOWN_RECOVERY_CALIBRATION_DIR = (
+    REPORT_DIR / "scalping_avg_down_recovery_calibration"
+)
 ENTRY_SPLIT_ORDER_PLAN_DIR = REPORT_DIR / "entry_split_order_plan"
 SCALE_IN_SPLIT_ORDER_PLAN_DIR = REPORT_DIR / "scale_in_split_order_plan"
 POST_SELL_DIR = DATA_DIR / "post_sell"
@@ -224,7 +227,7 @@ AI_CORRECTION_FORBIDDEN_FIELDS = {
 }
 AI_CORRECTION_CONTEXT_TOTAL_CHAR_LIMIT = 120_000
 AI_CORRECTION_CONTEXT_SECTION_LIMITS = {
-    "calibration_candidates": 36_000,
+    "calibration_candidates": 48_000,
     "calibration_source_bundle": 16_000,
     "trade_lifecycle_attribution": 14_000,
     "threshold_cycle_cumulative": 42_000,
@@ -12592,30 +12595,49 @@ def _build_ai_correction_input_context(
     for candidate in candidates if isinstance(candidates, list) else []:
         if not isinstance(candidate, dict):
             continue
-        candidate_context.append(
-            {
-                "family": candidate.get("family"),
-                "threshold_version": candidate.get("threshold_version"),
-                "current_value": candidate.get("current_value"),
-                "recommended_value": candidate.get("recommended_value"),
-                "calibration_state": candidate.get("calibration_state"),
-                "calibration_reason": candidate.get("calibration_reason"),
-                "sample_count": candidate.get("sample_count"),
-                "source_sample_count": candidate.get("source_sample_count"),
-                "sample_floor": candidate.get("sample_floor"),
-                "sample_window": candidate.get("sample_window"),
-                "window_policy": candidate.get("window_policy"),
-                "bounds": candidate.get("bounds"),
-                "max_step_per_day": candidate.get("max_step_per_day"),
-                "safety_revert_required": candidate.get("safety_revert_required"),
-                "source_metrics_summary": _candidate_source_metrics_summary(
-                    candidate.get("source_metrics")
-                ),
-                "source_metrics_full_hash": _json_sha256(
-                    candidate.get("source_metrics") or {}
-                ),
-            }
-        )
+        candidate_item = {
+            "family": candidate.get("family"),
+            "threshold_version": candidate.get("threshold_version"),
+            "current_value": candidate.get("current_value"),
+            "recommended_value": candidate.get("recommended_value"),
+            "calibration_state": candidate.get("calibration_state"),
+            "calibration_reason": candidate.get("calibration_reason"),
+            "sample_count": candidate.get("sample_count"),
+            "source_sample_count": candidate.get("source_sample_count"),
+            "sample_floor": candidate.get("sample_floor"),
+            "sample_window": candidate.get("sample_window"),
+            "window_policy": candidate.get("window_policy"),
+            "bounds": candidate.get("bounds"),
+            "max_step_per_day": candidate.get("max_step_per_day"),
+            "safety_revert_required": candidate.get("safety_revert_required"),
+            "source_metrics_summary": _candidate_source_metrics_summary(
+                candidate.get("source_metrics")
+            ),
+            "source_metrics_full_hash": _json_sha256(
+                candidate.get("source_metrics") or {}
+            ),
+        }
+        if (
+            candidate.get("current_value") is None
+            and candidate.get("recommended_value") is None
+        ):
+            candidate_item.update(
+                {
+                    "current_values": _compact_json_value(
+                        candidate.get("current_values") or {},
+                        max_chars=3_000,
+                        max_dict_keys=40,
+                        max_list_items=6,
+                    ),
+                    "recommended_values": _compact_json_value(
+                        candidate.get("recommended_values") or {},
+                        max_chars=3_000,
+                        max_dict_keys=40,
+                        max_list_items=6,
+                    ),
+                }
+            )
+        candidate_context.append(candidate_item)
     candidate_families = {
         str(candidate.get("family") or "")
         for candidate in candidates
@@ -12943,6 +12965,7 @@ def _build_ai_correction_prompt(input_context: dict) -> str:
         "Your authority is proposal-only. You must not command env, code, runtime, restart, "
         "or intraday threshold mutation.\n"
         "The deterministic calibration guard remains the final source of truth.\n\n"
+        "Return exactly one correction object for every family listed in calibration_candidates.\n"
         "Allowed proposals:\n"
         "- proposed_state: adjust_up|adjust_down|hold|hold_sample|freeze\n"
         "- proposed_value: a candidate value that will be validated against family bounds and max_step_per_day\n"
@@ -12990,6 +13013,7 @@ def _build_openai_ai_correction_instructions(run_phase: str) -> str:
         "Your authority is proposal-only. You must not command env, code, runtime, restart, or intraday threshold mutation.\n"
         "The deterministic calibration guard remains the final source of truth.\n\n"
         "Control rules:\n"
+        "- Return exactly one correction object for every family listed in calibration_candidates.\n"
         "- Propose only adjust_up, adjust_down, hold, hold_sample, or freeze.\n"
         "- Propose threshold values only as candidates; guard will clamp/reject by family bounds and max_step_per_day.\n"
         "- Route anomalies only as threshold_candidate, incident, instrumentation_gap, or normal_drift.\n"
@@ -14887,6 +14911,97 @@ def build_daily_threshold_cycle_report(
     return report
 
 
+def merge_scalping_avg_down_recovery_calibration_candidate(
+    report: dict[str, Any],
+    target_date: str,
+    *,
+    source_path: Path | None = None,
+) -> dict[str, Any]:
+    """Merge the direct AVG_DOWN candidate before threshold AI review."""
+
+    path = source_path or (
+        SCALPING_AVG_DOWN_RECOVERY_CALIBRATION_DIR
+        / f"scalping_avg_down_recovery_calibration_{target_date}.json"
+    )
+    source_status: dict[str, Any] = {
+        "report_type": "scalping_avg_down_recovery_calibration",
+        "path": str(path),
+        "status": "missing_report",
+        "candidate_count": 0,
+        "merged_candidate_count": 0,
+    }
+    supplemental_sources = report.setdefault("supplemental_calibration_sources", {})
+    if not path.exists():
+        supplemental_sources["scalping_avg_down_recovery_calibration"] = source_status
+        return report
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        source_status.update({"status": "invalid_report", "error": str(exc)})
+        supplemental_sources["scalping_avg_down_recovery_calibration"] = source_status
+        return report
+    if not isinstance(payload, dict) or str(payload.get("target_date") or "") != str(
+        target_date
+    ):
+        source_status["status"] = "target_date_mismatch"
+        supplemental_sources["scalping_avg_down_recovery_calibration"] = source_status
+        return report
+    raw_candidates = payload.get("calibration_candidates")
+    candidates = (
+        [item for item in raw_candidates if isinstance(item, dict)]
+        if isinstance(raw_candidates, list)
+        else []
+    )
+    eligible_candidates = [
+        candidate
+        for candidate in candidates
+        if str(candidate.get("family") or "")
+        == "scalping_avg_down_recovery_quality_gate"
+    ]
+    source_status["candidate_count"] = len(eligible_candidates)
+    report_candidates = report.setdefault("calibration_candidates", [])
+    if not isinstance(report_candidates, list):
+        report_candidates = []
+        report["calibration_candidates"] = report_candidates
+    existing_families = {
+        str(item.get("family") or "")
+        for item in report_candidates
+        if isinstance(item, dict)
+    }
+    merged_count = 0
+    for candidate in eligible_candidates:
+        family = str(candidate.get("family") or "")
+        if family != "scalping_avg_down_recovery_quality_gate":
+            continue
+        if family in existing_families:
+            continue
+        normalized = dict(candidate)
+        source_reports = (
+            dict(normalized.get("source_reports"))
+            if isinstance(normalized.get("source_reports"), dict)
+            else {}
+        )
+        source_reports["scalping_avg_down_recovery_calibration"] = str(path)
+        normalized["source_reports"] = source_reports
+        report_candidates.append(normalized)
+        existing_families.add(family)
+        merged_count += 1
+    source_status.update(
+        {
+            "status": "loaded",
+            "merged_candidate_count": merged_count,
+            "already_present_count": max(0, len(eligible_candidates) - merged_count),
+        }
+    )
+    supplemental_sources["scalping_avg_down_recovery_calibration"] = source_status
+    report["post_apply_attribution"] = _build_post_apply_attribution(report_candidates)
+    report["safety_guard_pack"] = _build_safety_guard_pack(report_candidates)
+    report["calibration_trigger_pack"] = _build_calibration_trigger_pack(
+        report_candidates
+    )
+    return report
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Build daily threshold cycle report.")
     parser.add_argument(
@@ -14937,6 +15052,7 @@ def main(argv: list[str] | None = None) -> int:
         skip_completed_rows=args.skip_db,
         calibration_run_phase=args.calibration_run_phase,
     )
+    merge_scalping_avg_down_recovery_calibration_candidate(report, args.target_date)
     cumulative_report = build_cumulative_threshold_cycle_report(
         args.target_date,
         report_source_loader=_summarize_holding_exit_report_sources,

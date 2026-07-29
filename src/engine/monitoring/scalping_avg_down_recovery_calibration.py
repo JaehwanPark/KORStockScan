@@ -247,17 +247,25 @@ def _row_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "hit03_rate": 0.0,
             "avg_mfe_30m_pct": 0.0,
             "avg_mae_30m_pct": 0.0,
+            "avg_final_30m_pct": 0.0,
+            "equal_weight_avg_profit_pct": 0.0,
+            "mfe_to_adverse_ratio": 0.0,
         }
+    avg_mfe = sum(float(row.get("mfe_30m_pct") or 0.0) for row in rows) / len(rows)
+    avg_mae = sum(float(row.get("mae_30m_pct") or 0.0) for row in rows) / len(rows)
+    avg_final = sum(float(row.get("final_30m_pct") or 0.0) for row in rows) / len(rows)
+    adverse_magnitude = abs(min(0.0, avg_mae))
     return {
         "sample_count": len(rows),
         "hit0_rate": sum(1 for row in rows if row.get("hit0")) / len(rows),
         "hit03_rate": sum(1 for row in rows if row.get("hit03")) / len(rows),
-        "avg_mfe_30m_pct": sum(float(row.get("mfe_30m_pct") or 0.0) for row in rows)
-        / len(rows),
-        "avg_mae_30m_pct": sum(float(row.get("mae_30m_pct") or 0.0) for row in rows)
-        / len(rows),
-        "avg_final_30m_pct": sum(float(row.get("final_30m_pct") or 0.0) for row in rows)
-        / len(rows),
+        "avg_mfe_30m_pct": avg_mfe,
+        "avg_mae_30m_pct": avg_mae,
+        "avg_final_30m_pct": avg_final,
+        "equal_weight_avg_profit_pct": avg_final,
+        "mfe_to_adverse_ratio": (
+            round(avg_mfe / adverse_magnitude, 6) if adverse_magnitude > 0.0 else None
+        ),
     }
 
 
@@ -349,8 +357,8 @@ def _build_rows(paths: list[Path]) -> tuple[list[dict[str, Any]], list[dict[str,
         p0 = row["profit_rate"]
         future = [
             post_add(p, p0)
-            for t, p in sim_series.get(row["id"], [])
-            if row["time"] <= t <= row["time"] + timedelta(minutes=30)
+            for t, p in sorted(sim_series.get(row["id"], []), key=lambda item: item[0])
+            if row["time"] < t <= row["time"] + timedelta(minutes=30)
         ]
         if not future:
             continue
@@ -370,8 +378,8 @@ def _build_rows(paths: list[Path]) -> tuple[list[dict[str, Any]], list[dict[str,
     for row in real_candidates:
         future = [
             p
-            for t, p in real_series.get(row["id"], [])
-            if row["time"] <= t <= row["time"] + timedelta(minutes=30)
+            for t, p in sorted(real_series.get(row["id"], []), key=lambda item: item[0])
+            if row["time"] < t <= row["time"] + timedelta(minutes=30)
         ]
         if not future:
             continue
@@ -466,32 +474,53 @@ def build_report(
     sample_floor_met = (
         shallow_metrics["sample_count"] >= 10 and deep_metrics["sample_count"] >= 5
     )
-    edge_ok = (
+    target_hit_edge_ok = (
         shallow_metrics["hit03_rate"] >= 0.25 and deep_metrics["hit03_rate"] >= 0.50
     )
+    final_ev_edge_ok = (
+        shallow_metrics["equal_weight_avg_profit_pct"] > 0.0
+        and deep_metrics["equal_weight_avg_profit_pct"] > 0.0
+    )
+    downside_edge_ok = all(
+        metrics["avg_mae_30m_pct"] >= 0.0
+        or float(metrics["mfe_to_adverse_ratio"] or 0.0) >= 1.0
+        for metrics in (shallow_metrics, deep_metrics)
+    )
+    edge_ok = target_hit_edge_ok and final_ev_edge_ok and downside_edge_ok
+    values_changed = current != recommended
     source_available = bool(window_paths)
-    state = (
-        "adjust_up"
-        if source_available and sample_floor_met and edge_ok
-        else "hold_sample"
-    )
+    if not source_available or not sample_floor_met:
+        state = "hold_sample"
+    elif not edge_ok:
+        state = "hold_no_edge"
+    elif not values_changed:
+        state = "hold_no_change"
+    else:
+        state = "adjust_up"
     source_quality_gate = "pass" if source_available else "source_quality_blocked"
-    calibration_reason = (
-        "post_add_mfe_mae_edge_ok"
-        if state == "adjust_up"
-        else (
-            "source_pipeline_events_missing"
-            if not source_available
-            else "sample_or_edge_floor_not_met"
-        )
-    )
+    if not source_available:
+        calibration_reason = "source_pipeline_events_missing"
+    elif not sample_floor_met:
+        calibration_reason = "rolling_sample_floor_not_met"
+    elif not target_hit_edge_ok:
+        calibration_reason = "post_add_target_hit_edge_not_met"
+    elif not final_ev_edge_ok:
+        calibration_reason = "post_add_final_ev_not_positive"
+    elif not downside_edge_ok:
+        calibration_reason = "post_add_mfe_mae_downside_edge_not_met"
+    elif not values_changed:
+        calibration_reason = "recommended_values_unchanged"
+    else:
+        calibration_reason = "post_add_ev_downside_edge_ok"
     metric_contract = {
         "metric_role": "bounded_tunable_recovery_quality_gate",
         "decision_authority": "postclose_calibration_candidate_preopen_only",
         "window_policy": "rolling_clean_baseline_pipeline_events",
         "clean_baseline_date": CLEAN_BASELINE_DATE,
         "sample_floor": "rolling_shallow_primary>=10 and rolling_deep_primary>=5",
-        "primary_decision_metric": "rolling_post_add_mfe_mae_hit03_edge",
+        "primary_decision_metric": (
+            "rolling_post_add_equal_weight_avg_profit_pct_with_mfe_mae_and_hit03_guard"
+        ),
         "source_quality_gate": "pipeline_events_present_and_preopen_source_quality_preflight",
         "forbidden_uses": FORBIDDEN_USES,
     }
@@ -507,6 +536,7 @@ def build_report(
         "sample_floor": "rolling_shallow_primary>=10 and rolling_deep_primary>=5",
         "sample_floor_passed": bool(sample_floor_met),
         "allowed_runtime_apply": state == "adjust_up",
+        "recommended_values_changed": values_changed,
         "safety_revert_required": False,
         "source_quality_gate": source_quality_gate,
         "current_values": current,
@@ -527,6 +557,14 @@ def build_report(
             "deep_raw_real_avg_down_count": len(deep_rows),
             "daily_shallow_raw_submit_pass_avg_down_count": len(daily_shallow_rows),
             "daily_deep_raw_real_avg_down_count": len(daily_deep_rows),
+            "decision_guards": {
+                "target_hit_edge_ok": target_hit_edge_ok,
+                "final_ev_edge_ok": final_ev_edge_ok,
+                "downside_edge_ok": downside_edge_ok,
+                "recommended_values_changed": values_changed,
+                "minimum_mfe_to_adverse_ratio": 1.0,
+                "minimum_equal_weight_avg_profit_pct": 0.0,
+            },
         },
         "runtime_effect": False,
         "actual_order_submitted": False,

@@ -208,3 +208,99 @@ def test_replay_rejects_precheck_venue_conflict():
 
     assert replay["valid_generation_count"] == 0
     assert replay["exclusions"]["precheck_venue_conflict"] == 1
+
+
+def test_replay_separates_attach_source_ready_and_heavy_eval_handoff():
+    promotion_epoch = datetime(2026, 7, 24, 9, 0, 0, tzinfo=KST).timestamp()
+    realtime_epoch = promotion_epoch + 1.2
+    heavy_eval_epoch = promotion_epoch + 8.2
+    events = [
+        _event(
+            "scalping_scanner_runtime_target_attach",
+            "2026-07-24T09:00:00.200000",
+            runtime_target_attach_outcome="attached",
+            scanner_promotion_id="PROMO-SOURCE-READY",
+            scanner_promotion_emitted_epoch=promotion_epoch,
+            effective_venue="NXT",
+            venue_resolution="consistent_explicit:payload.effective_venue",
+        ),
+        _event(
+            "scalping_scanner_fast_precheck",
+            "2026-07-24T09:00:08",
+            scanner_promotion_id="PROMO-SOURCE-READY",
+            effective_venue="NXT",
+            scanner_entry_realtime_state="received",
+            scanner_first_entry_realtime_epoch=realtime_epoch,
+            scanner_first_entry_realtime_type="strength_history",
+        ),
+        _event(
+            "scalping_scanner_heavy_eval_lag",
+            "2026-07-24T09:00:08.200000",
+            scanner_promotion_id="PROMO-SOURCE-READY",
+            effective_venue="NXT",
+            heavy_eval_started_epoch=heavy_eval_epoch,
+        ),
+    ]
+
+    replay = replay_scanner_events(events)
+    source_ready = replay["source_ready_handoff"]
+    nxt = source_ready["venues"]["NXT"]
+
+    assert source_ready["runtime_effect"] is False
+    assert source_ready["valid_generation_count"] == 1
+    assert nxt["attach_to_first_entry_realtime_p95_sec"] == 1.0
+    assert nxt["first_entry_realtime_to_heavy_eval_p95_sec"] == 7.0
+    assert nxt["first_entry_realtime_to_heavy_eval_max_sec"] == 7.0
+    assert source_ready["samples"][0]["attach_to_first_entry_realtime_sec"] == 1.0
+    assert source_ready["samples"][0]["first_entry_realtime_to_heavy_eval_sec"] == 7.0
+
+
+def test_source_ready_handoff_excludes_superseded_generation():
+    promotion_epoch = datetime(2026, 7, 24, 9, 0, 0, tzinfo=KST).timestamp()
+    events = [
+        _event(
+            "scalping_scanner_runtime_target_attach",
+            "2026-07-24T09:00:00.200000",
+            runtime_target_attach_outcome="attached",
+            scanner_promotion_id="PROMO-OLD",
+            scanner_promotion_emitted_epoch=promotion_epoch,
+            effective_venue="NXT",
+            venue_resolution="consistent_explicit:payload.effective_venue",
+        ),
+        _event(
+            "scalping_scanner_fast_precheck",
+            "2026-07-24T09:00:00.800000",
+            scanner_promotion_id="PROMO-OLD",
+            effective_venue="NXT",
+            scanner_entry_realtime_state="received",
+            scanner_first_entry_realtime_epoch=promotion_epoch + 0.7,
+            scanner_first_entry_realtime_type="strength_history",
+        ),
+        _event(
+            "scalping_scanner_runtime_target_attach",
+            "2026-07-24T09:00:01",
+            runtime_target_attach_outcome="attached",
+            scanner_promotion_id="PROMO-NEW",
+            scanner_promotion_emitted_epoch=promotion_epoch + 0.9,
+            effective_venue="NXT",
+            venue_resolution="consistent_explicit:payload.effective_venue",
+        ),
+        _event(
+            "scalping_scanner_heavy_eval_lag",
+            "2026-07-24T09:00:01.200000",
+            scanner_promotion_id="PROMO-OLD",
+            effective_venue="NXT",
+            heavy_eval_started_epoch=promotion_epoch + 1.2,
+        ),
+    ]
+
+    source_ready = replay_scanner_events(events)["source_ready_handoff"]
+
+    assert source_ready["valid_generation_count"] == 0
+    assert (
+        source_ready["exclusions"][
+            "scalping_scanner_heavy_eval_lag_superseded_generation"
+        ]
+        == 1
+    )
+    assert source_ready["exclusions"]["source_ready_superseded_before_heavy_eval"] == 1

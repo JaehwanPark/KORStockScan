@@ -2616,6 +2616,11 @@ def _reviewed_unknown_reason_for_stage_field(
             "entry_ai_price_canary_fallback",
             "order_bundle_submitted",
             "pre_submit_entry_ai_authority_guard_block",
+            "rising_missed_async_commit_phase",
+            "rising_missed_entry_ai_async_result_applied",
+            "rising_missed_one_share_entry",
+            "rising_missed_tp1_candidate_blocked",
+            "rising_missed_tp1_candidate_deferred",
             "rising_missed_tick_absolute_throughput_relief_applied",
             "rising_missed_tick_speed_entry_block",
             "scalp_entry_action_decision_snapshot",
@@ -2838,6 +2843,7 @@ def _reviewed_unknown_reason_for_stage_field(
                 "post_probe_nxt_ai_veto_not_fresh",
                 "post_probe_nxt_ai_veto_source_unverified",
                 "post_probe_nxt_event_time_speed_unavailable",
+                "post_probe_nxt_wait_fast_tape_required",
                 "post_probe_resolver_unavailable",
                 "post_probe_stale_wait_positive_confirmation_required",
                 "post_probe_wait_positive_confirmation_required",
@@ -2874,6 +2880,14 @@ def _reviewed_unknown_reason_for_stage_field(
                 _field_text("decision_authority")
                 == "real_scalping_scanner_runtime_watchlist_handoff_only"
                 and venue_resolution == "missing_tradable_explicit_venue"
+            )
+        if stage == "scalping_scanner_ws_prewarm_selected":
+            return (
+                _field_text("decision_authority")
+                == "scanner_ws_prewarm_observation_only_no_entry_authority"
+                and venue_resolution
+                == "scanner_session_clock:outside_supported_session"
+                and _field_text("market_session_bucket") == "outside_supported_session"
             )
         if stage not in {
             "scalping_scanner_scheduler_boot_restore_expired",
@@ -3042,7 +3056,11 @@ def _reviewed_unknown_reason_for_stage_field(
         return False
 
     def _is_reviewed_shallow_stale_not_available() -> bool:
-        if stage not in {"loss_fallback_probe", "stat_action_decision_snapshot"}:
+        if stage not in {
+            "loss_fallback_probe",
+            "reversal_add_blocked_reason",
+            "stat_action_decision_snapshot",
+        }:
             return False
         if str(key or "") not in {"shallow_tick_context_stale", "shallow_quote_stale"}:
             return False
@@ -3055,6 +3073,27 @@ def _reviewed_unknown_reason_for_stage_field(
         return _field_text("quote_age_ms") in {"", "-"} or _field_text(
             "quote_age_source"
         ) in {"", "-", "missing", "not_available_quote_age"}
+
+    def _is_reviewed_disabled_euphoria_epoch_suffix() -> bool:
+        if stage != "scalp_sim_euphoria_context_noop":
+            return False
+        if str(key or "") not in {
+            "euphoria_epoch_id",
+            "risk_regime_epoch_id",
+        }:
+            return False
+        if not str(value or "").strip().lower().endswith("|unknown"):
+            return False
+        return (
+            _field_text("decision_authority") == "sim_observation_only"
+            and _field_text("euphoria_context_status") == "OPERATOR_DISABLED"
+            and _field_text("risk_regime_context_status") == "OPERATOR_DISABLED"
+            and _field_text("euphoria_source_quality") == "NOT_APPLICABLE"
+            and _field_text("source_quality_gate_scope") == "sim_context_only"
+            and _is_falseish("actual_order_submitted")
+            and _is_trueish("broker_order_forbidden")
+            and _is_trueish("exclude_from_live_approval")
+        )
 
     def _is_reviewed_first_touch_quote_stale_not_available() -> bool:
         if stage != "stop_line_touch_first_touch_avgdown_decision_blocked":
@@ -3241,6 +3280,8 @@ def _reviewed_unknown_reason_for_stage_field(
         return "reviewed_legacy_fast_exit_route_provenance"
     if _is_reviewed_shallow_stale_not_available():
         return "reviewed_shallow_stale_flag_not_available"
+    if _is_reviewed_disabled_euphoria_epoch_suffix():
+        return "reviewed_disabled_euphoria_epoch_suffix_not_source_unknown"
     if _is_reviewed_first_touch_quote_stale_not_available():
         return "reviewed_first_touch_quote_stale_not_available"
     if _is_reviewed_rising_missed_submit_safety_backoff_source_quality():

@@ -8,12 +8,12 @@ import json
 import math
 import statistics
 from collections import Counter, defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable
 
-from src.utils.jsonl_io import existing_or_gzip_path, read_jsonl
+from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
 
 POLICY_VERSION = "watching_score_smoothing_v1"
 VALID_MODES = frozenset({"off", "report_only", "applied"})
@@ -286,6 +286,14 @@ def _session_artifact_paths(target_date: str, data_root: Path) -> dict[str, Path
     }
 
 
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _auto_guard_evidence(target_date: str, *, data_root: Path) -> dict[str, Any]:
     try:
         end_date = date.fromisoformat(target_date)
@@ -317,7 +325,7 @@ def _auto_guard_evidence(target_date: str, *, data_root: Path) -> dict[str, Any]
                     "path": str(path),
                     "target_date": session_date,
                     "role": role,
-                    "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                    "sha256": _sha256_file(path),
                 }
             )
     session_dates.sort()
@@ -329,14 +337,6 @@ def _auto_guard_evidence(target_date: str, *, data_root: Path) -> dict[str, Any]
         "automation_chain_owner": True,
         "operator_action_required": False,
     }
-
-
-def _load_events(path: Path) -> list[dict[str, Any]]:
-    rows = []
-    for row in read_jsonl(path):
-        if row.get("stage") in {"ai_confirmed", "ai_watching_score_projection"}:
-            rows.append(row)
-    return rows
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -352,9 +352,7 @@ def _load_json(path: Path) -> dict[str, Any]:
 def _artifact_check(
     path: Path, *, target_date: str = "", role: str = "", expected_sha256: str = ""
 ) -> dict[str, Any]:
-    actual_sha256 = (
-        hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else ""
-    )
+    actual_sha256 = _sha256_file(path) if path.is_file() else ""
     expected = str(expected_sha256 or "").strip().lower()
     return {
         "path": str(path),
@@ -453,6 +451,111 @@ def _sharp_drop_delay_p95_sec(rows: list[dict[str, Any]]) -> float | None:
     delays.sort()
     percentile_index = max(0, math.ceil(len(delays) * 0.95) - 1)
     return delays[percentile_index]
+
+
+@dataclass
+class _OnlineSymbolSequence:
+    count: int = 0
+    previous_raw: float | None = None
+    previous_raw_action: str | None = None
+    previous_projected_action: str | None = None
+    pending_sharp_drop_times: list[datetime] = field(default_factory=list)
+
+
+@dataclass
+class _OnlinePrimaryMetrics:
+    valid_count: int = 0
+    raw_mean: float = 0.0
+    raw_m2: float = 0.0
+    projected_mean: float = 0.0
+    projected_m2: float = 0.0
+    raw_flips: int = 0
+    projected_flips: int = 0
+    sharp_drop_delays: list[float] = field(default_factory=list)
+    symbols: dict[tuple[str, str], _OnlineSymbolSequence] = field(default_factory=dict)
+    symbol_counts: Counter[str] = field(default_factory=Counter)
+    valid_sessions: set[str] = field(default_factory=set)
+
+    def observe(
+        self,
+        *,
+        session_date: str,
+        symbol: str,
+        emitted_at: Any,
+        raw_score: Any,
+        projected_score: Any,
+    ) -> None:
+        raw = _float(raw_score)
+        projected = _float(projected_score)
+        self.valid_count += 1
+        raw_delta = raw - self.raw_mean
+        self.raw_mean += raw_delta / self.valid_count
+        self.raw_m2 += raw_delta * (raw - self.raw_mean)
+        projected_delta = projected - self.projected_mean
+        self.projected_mean += projected_delta / self.valid_count
+        self.projected_m2 += projected_delta * (projected - self.projected_mean)
+        self.valid_sessions.add(session_date)
+        self.symbol_counts[symbol] += 1
+
+        key = (session_date, symbol)
+        state = self.symbols.setdefault(key, _OnlineSymbolSequence())
+        raw_action = _score_to_action(raw)
+        projected_action = _score_to_action(projected)
+        if state.previous_raw_action is not None:
+            self.raw_flips += int(state.previous_raw_action != raw_action)
+        if state.previous_projected_action is not None:
+            self.projected_flips += int(
+                state.previous_projected_action != projected_action
+            )
+
+        current_time = _parse_emitted_at(emitted_at)
+        if (
+            current_time is not None
+            and projected < BUY_THRESHOLD
+            and state.pending_sharp_drop_times
+        ):
+            self.sharp_drop_delays.extend(
+                max(0.0, (current_time - pending).total_seconds())
+                for pending in state.pending_sharp_drop_times
+            )
+            state.pending_sharp_drop_times.clear()
+        if (
+            state.previous_raw is not None
+            and state.previous_raw >= BUY_THRESHOLD
+            and raw <= state.previous_raw - SHARP_DROP_POINTS
+            and current_time is not None
+        ):
+            if projected < BUY_THRESHOLD:
+                self.sharp_drop_delays.append(0.0)
+            else:
+                state.pending_sharp_drop_times.append(current_time)
+
+        state.count += 1
+        state.previous_raw = raw
+        state.previous_raw_action = raw_action
+        state.previous_projected_action = projected_action
+
+    def raw_stddev(self) -> float | None:
+        if self.valid_count < 2:
+            return None
+        return math.sqrt(max(0.0, self.raw_m2 / self.valid_count))
+
+    def projected_stddev(self) -> float | None:
+        if self.valid_count < 2:
+            return None
+        return math.sqrt(max(0.0, self.projected_m2 / self.valid_count))
+
+    def flip_reduction_pct(self) -> float | None:
+        if self.raw_flips <= 0:
+            return None
+        return (self.raw_flips - self.projected_flips) / self.raw_flips * 100.0
+
+    def sharp_drop_delay_p95_sec(self) -> float | None:
+        if not self.sharp_drop_delays:
+            return None
+        self.sharp_drop_delays.sort()
+        percentile_index = max(0, math.ceil(len(self.sharp_drop_delays) * 0.95) - 1)
+        return self.sharp_drop_delays[percentile_index]
 
 
 def _parse_fallback_lock_contention_degradation_status(
@@ -715,58 +818,77 @@ def build_diagnostic_artifact(
     pipeline_input_integrity_passed = bool(input_artifact_checks) and all(
         item["exists"] and item["sha256"] for item in input_artifact_checks
     )
-    events = []
-    for session_date, source_path in zip(selected_dates, source_paths, strict=False):
-        for event in _load_events(source_path):
-            event = dict(event)
-            event["_diagnostic_session_date"] = session_date
-            events.append(event)
-    rows = []
-    by_symbol: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    observed_count = 0
+    regular_observed_count = 0
+    projection_observed_count = 0
+    stale_invalid_applied_count = 0
     exclusion_counts: Counter[str] = Counter()
-    for event in events:
-        fields = event.get("fields") if isinstance(event.get("fields"), dict) else {}
-        if "ai_score_policy_version" not in fields:
-            continue
-        symbol = str(event.get("stock_code") or "-")
-        row = {
-            "symbol": symbol,
-            "emitted_at": event.get("emitted_at"),
-            "event_stage": event.get("stage"),
-            "session_date": event.get("_diagnostic_session_date") or target_date,
-            **fields,
-        }
-        rows.append(row)
-        by_symbol[symbol].append(row)
-        reason = str(fields.get("ai_score_excluded_reason") or "-")
-        if reason != "-":
-            exclusion_counts[reason] += 1
+    projection_exclusion_counts: Counter[str] = Counter()
+    regular_seen_by_session: dict[str, bool] = {}
+    for session_date, source_path in zip(selected_dates, source_paths, strict=False):
+        for event in iter_jsonl(source_path):
+            event_stage = event.get("stage")
+            if event_stage not in {"ai_confirmed", "ai_watching_score_projection"}:
+                continue
+            fields = (
+                event.get("fields") if isinstance(event.get("fields"), dict) else {}
+            )
+            if "ai_score_policy_version" not in fields:
+                continue
+            observed_count += 1
+            reason = str(fields.get("ai_score_excluded_reason") or "-")
+            if reason != "-":
+                exclusion_counts[reason] += 1
+            if (
+                str(fields.get("ai_score_smoothing_mode") or "off") == "applied"
+                and reason != "-"
+            ):
+                stale_invalid_applied_count += 1
+            if event_stage == "ai_confirmed":
+                regular_observed_count += 1
+                regular_seen_by_session[session_date] = True
+            else:
+                projection_observed_count += 1
+                if reason != "-":
+                    projection_exclusion_counts[reason] += 1
 
-    regular_rows = [row for row in rows if row.get("event_stage") == "ai_confirmed"]
-    projection_rows = [
-        row for row in rows if row.get("event_stage") == "ai_watching_score_projection"
-    ]
-    regular_rows_by_session: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    projection_rows_by_session: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for row in regular_rows:
-        regular_rows_by_session[str(row.get("session_date") or target_date)].append(row)
-    for row in projection_rows:
-        projection_rows_by_session[str(row.get("session_date") or target_date)].append(
-            row
+    primary_observation_stages_by_session = {
+        session_date: (
+            "ai_confirmed"
+            if regular_seen_by_session.get(session_date)
+            else "ai_watching_score_projection"
         )
-    primary_observation_rows: list[dict[str, Any]] = []
-    primary_observation_stages_by_session: dict[str, str] = {}
-    for session_date in selected_dates:
-        session_regular_rows = regular_rows_by_session.get(session_date, [])
-        if session_regular_rows:
-            primary_observation_rows.extend(session_regular_rows)
-            primary_observation_stages_by_session[session_date] = "ai_confirmed"
-            continue
-        session_projection_rows = projection_rows_by_session.get(session_date, [])
-        primary_observation_rows.extend(session_projection_rows)
-        primary_observation_stages_by_session[session_date] = (
-            "ai_watching_score_projection" if session_projection_rows else "none"
-        )
+        for session_date in selected_dates
+    }
+    primary_observation_count = 0
+    primary_exclusion_counts: Counter[str] = Counter()
+    online_metrics = _OnlinePrimaryMetrics()
+    for session_date, source_path in zip(selected_dates, source_paths, strict=False):
+        primary_stage = primary_observation_stages_by_session[session_date]
+        session_primary_count = 0
+        for event in iter_jsonl(source_path):
+            if event.get("stage") != primary_stage:
+                continue
+            fields = (
+                event.get("fields") if isinstance(event.get("fields"), dict) else {}
+            )
+            if "ai_score_policy_version" not in fields:
+                continue
+            session_primary_count += 1
+            primary_observation_count += 1
+            reason = str(fields.get("ai_score_excluded_reason") or "-")
+            if reason != "-":
+                primary_exclusion_counts[reason] += 1
+                continue
+            online_metrics.observe(
+                session_date=session_date,
+                symbol=str(event.get("stock_code") or "-"),
+                emitted_at=event.get("emitted_at"),
+                raw_score=fields.get("ai_score_raw"),
+                projected_score=fields.get("ai_score_projected"),
+            )
+        if session_primary_count == 0:
+            primary_observation_stages_by_session[session_date] = "none"
     observed_primary_stages = {
         stage
         for stage in primary_observation_stages_by_session.values()
@@ -777,43 +899,19 @@ def build_diagnostic_artifact(
         if len(observed_primary_stages) == 1
         else "mixed_by_session" if observed_primary_stages else "none"
     )
-    valid_rows = [
-        row
-        for row in primary_observation_rows
-        if str(row.get("ai_score_excluded_reason") or "-") == "-"
-    ]
-    raw_scores = [_float(row.get("ai_score_raw")) for row in valid_rows]
-    projected_scores = [_float(row.get("ai_score_projected")) for row in valid_rows]
-    projection_by_symbol: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for row in projection_rows:
-        projection_by_symbol[row["symbol"]].append(row)
-    valid_projection_by_symbol: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for row in valid_rows:
-        valid_projection_by_symbol[row["symbol"]].append(row)
+    valid_response_count = online_metrics.valid_count
+    unique_symbol_count = len(online_metrics.symbol_counts)
     sequence_count = sum(
-        1 for items in valid_projection_by_symbol.values() if len(items) >= 3
+        1 for count in online_metrics.symbol_counts.values() if count >= 3
     )
-    raw_stddev = statistics.pstdev(raw_scores) if len(raw_scores) >= 2 else None
-    projected_stddev = (
-        statistics.pstdev(projected_scores) if len(projected_scores) >= 2 else None
-    )
+    raw_stddev = online_metrics.raw_stddev()
+    projected_stddev = online_metrics.projected_stddev()
     stddev_reduction_pct = (
         (raw_stddev - projected_stddev) / raw_stddev * 100.0
         if raw_stddev not in (None, 0.0) and projected_stddev is not None
         else None
     )
-    primary_exclusion_counts = Counter(
-        str(row.get("ai_score_excluded_reason"))
-        for row in primary_observation_rows
-        if str(row.get("ai_score_excluded_reason") or "-") != "-"
-    )
-    projection_exclusion_counts = Counter(
-        str(row.get("ai_score_excluded_reason"))
-        for row in projection_rows
-        if str(row.get("ai_score_excluded_reason") or "-") != "-"
-    )
     contention_count = primary_exclusion_counts.get("lock_contention", 0)
-    primary_observation_count = len(primary_observation_rows)
     contention_rate = (
         contention_count / primary_observation_count * 100.0
         if primary_observation_count
@@ -843,20 +941,9 @@ def build_diagnostic_artifact(
         if primary_observation_count
         else None
     )
-    stale_invalid_applied_count = sum(
-        1
-        for row in rows
-        if str(row.get("ai_score_smoothing_mode") or "off") == "applied"
-        and str(row.get("ai_score_excluded_reason") or "-") != "-"
-    )
-    projection_session_count = len({row["session_date"] for row in valid_rows})
-    valid_row_sequences = [
-        row
-        for row in valid_rows
-        if row.get("event_stage") in {"ai_confirmed", "ai_watching_score_projection"}
-    ]
-    buy_wait_flip_rate_reduction_pct = _buy_wait_flip_reduction_pct(valid_row_sequences)
-    sharp_drop_delay_p95_sec = _sharp_drop_delay_p95_sec(valid_row_sequences)
+    projection_session_count = len(online_metrics.valid_sessions)
+    buy_wait_flip_rate_reduction_pct = online_metrics.flip_reduction_pct()
+    sharp_drop_delay_p95_sec = online_metrics.sharp_drop_delay_p95_sec()
     parse_fallback_lock_contention_degradation = (
         _parse_fallback_lock_contention_degradation_status(
             fallback_or_lock_contention_rate=fallback_or_lock_contention_rate,
@@ -880,13 +967,13 @@ def build_diagnostic_artifact(
         },
         "valid_response_count": {
             "required": 300,
-            "observed": len(valid_rows),
-            "status": "pass" if len(valid_rows) >= 300 else "pending",
+            "observed": valid_response_count,
+            "status": "pass" if valid_response_count >= 300 else "pending",
         },
         "unique_symbol_count": {
             "required": 20,
-            "observed": len(valid_projection_by_symbol),
-            "status": "pass" if len(valid_projection_by_symbol) >= 20 else "pending",
+            "observed": unique_symbol_count,
+            "status": "pass" if unique_symbol_count >= 20 else "pending",
         },
         "sequence_3plus_count": {
             "required": 50,
@@ -1084,16 +1171,16 @@ def build_diagnostic_artifact(
         "guard_evidence_artifact_checks": artifact_checks,
         "input_artifact_checks": input_artifact_checks,
         "metrics": {
-            "observed_count": len(rows),
+            "observed_count": observed_count,
             "primary_observation_stage": primary_observation_stage,
             "primary_observation_stages_by_session": primary_observation_stages_by_session,
             "primary_observation_count": primary_observation_count,
             "normal_session_count": projection_session_count,
-            "regular_observed_count": len(regular_rows),
-            "projection_observed_count": len(projection_rows),
-            "early_projection_observed_count": len(projection_rows),
-            "valid_response_count": len(valid_rows),
-            "unique_symbol_count": len(valid_projection_by_symbol),
+            "regular_observed_count": regular_observed_count,
+            "projection_observed_count": projection_observed_count,
+            "early_projection_observed_count": projection_observed_count,
+            "valid_response_count": valid_response_count,
+            "unique_symbol_count": unique_symbol_count,
             "sequence_3plus_count": sequence_count,
             "raw_score_stddev": (
                 round(raw_stddev, 4) if raw_stddev is not None else None
