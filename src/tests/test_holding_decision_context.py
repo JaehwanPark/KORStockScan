@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
+import pytest
+
 from src.engine import sniper_state_handlers as state_handlers
 from src.engine.scalping import ai_market_snapshot as snapshot_module
 from src.engine.scalping import holding_decision_context as holding_context_module
@@ -386,6 +388,91 @@ def test_nxt_route_and_conflicting_ws_route_are_kept_separate(monkeypatch):
     assert conflict["source_quality"]["hold_defer_allowed"] is False
     assert "candle_source_quality" in conflict["source_quality"]["blockers"]
     assert "venue_conflict" in conflict["candle"]["risk_flags"]
+
+
+@pytest.mark.parametrize("decision_kind", ["holding_score", "holding_flow"])
+def test_krx_sim_holding_uses_session_execution_view_without_fake_fill_route(
+    monkeypatch,
+    decision_kind,
+):
+    _enable(monkeypatch)
+    now = datetime(2026, 7, 23, 10, 0, 30, tzinfo=KST)
+    bars = _candles(60, start=datetime(2026, 7, 23, 9, 0, tzinfo=KST))
+    stock = {
+        **_stock(),
+        "simulation_book": "scalp_ai_buy_all",
+        "simulated_order": True,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+
+    context = build_holding_decision_context(
+        None,
+        "000660",
+        _ws(now, suffix="_AL", route="krx_nxt_integrated"),
+        stock,
+        "KRX",
+        "krx_regular",
+        decision_kind,
+        now_ts=now,
+        recent_candles=bars,
+        candle_meta={"api_id": "ka10080", "received_count": 60},
+    )
+
+    assert context["request_code"] == "000660_AL"
+    assert context["rest_route"] == "_AL"
+    assert context["ws_route"] == "krx_nxt_integrated"
+    assert context["source_quality"]["hold_defer_allowed"] is True
+    assert "venue_conflict" not in context["candle"]["risk_flags"]
+    assert context["broker_route_provenance"] == {
+        "route": "SOR",
+        "source": "current_session_default_for_simulation",
+        "authority": "simulated_execution_view_only",
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    assert context["ai_market_snapshot_v1"]["broker_route"] == "SOR"
+    preflight = context["ai_market_snapshot_v1"]["ai_input_preflight_v1"]
+    assert preflight["broker_route_matches_venue"] is True
+    assert "candle_source_quality" not in preflight["blockers"]
+    assert "krx_integrated_event_venue_unproven" not in preflight["blockers"]
+    log_fields = holding_decision_context_log_fields(context)
+    assert log_fields["holding_context_broker_route"] == "SOR"
+    assert (
+        log_fields["holding_context_broker_route_authority"]
+        == "simulated_execution_view_only"
+    )
+
+
+def test_krx_real_holding_does_not_infer_missing_broker_route(monkeypatch):
+    _enable(monkeypatch)
+    now = datetime(2026, 7, 23, 10, 0, 30, tzinfo=KST)
+
+    context = build_holding_decision_context(
+        None,
+        "000660",
+        _ws(now, suffix="_AL", route="krx_nxt_integrated"),
+        _stock(),
+        "KRX",
+        "krx_regular",
+        "holding_score",
+        now_ts=now,
+        recent_candles=_candles(
+            60,
+            start=datetime(2026, 7, 23, 9, 0, tzinfo=KST),
+        ),
+        candle_meta={"api_id": "ka10080", "received_count": 60},
+    )
+
+    assert context["request_code"] == "000660"
+    assert "venue_conflict" in context["candle"]["risk_flags"]
+    assert context["source_quality"]["hold_defer_allowed"] is False
+    assert context["broker_route_provenance"]["route"] is None
+    assert (
+        context["broker_route_provenance"]["authority"]
+        == "broker_execution_provenance_required"
+    )
+    assert context["ai_market_snapshot_v1"]["broker_route"] is None
 
 
 def test_premarket_uses_nxt_route_and_al_requires_equivalence_proof(monkeypatch):

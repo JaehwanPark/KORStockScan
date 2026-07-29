@@ -16,6 +16,7 @@ from datetime import datetime, time as dt_time
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from src.engine.kiwoom_orders import resolve_order_dmst_stex_tp
 from src.engine.scalping.ai_market_snapshot import (
     ai_input_preflight,
     ai_market_snapshot_log_fields,
@@ -573,6 +574,50 @@ def count_holding_context_changes(
     return len(unique), unique
 
 
+def _boolish(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _holding_execution_route(
+    position: dict[str, Any],
+    *,
+    now: datetime,
+) -> tuple[str | None, str, str]:
+    """Resolve market-data execution view without inventing real fills."""
+
+    simulated = bool(
+        str(position.get("simulation_book") or "").strip()
+        or _boolish(position.get("simulated_order"))
+    )
+    simulation_only = bool(
+        simulated
+        and not _boolish(position.get("actual_order_submitted"))
+        and _boolish(position.get("broker_order_forbidden"))
+    )
+    if simulation_only:
+        return (
+            resolve_order_dmst_stex_tp(now=now),
+            "current_session_default_for_simulation",
+            "simulated_execution_view_only",
+        )
+
+    for key in (
+        "entry_execution_broker_route",
+        "broker_route",
+        "last_fill_broker_route",
+        "early_volatility_tp_broker_route",
+        "entry_order_exchange",
+        "exchange",
+        "market_route",
+    ):
+        value = str(position.get(key) or "").strip().upper()
+        if value:
+            return value, key, "broker_execution_provenance"
+    return None, "missing", "broker_execution_provenance_required"
+
+
 def build_holding_decision_context(
     token: str | None,
     code: str,
@@ -596,14 +641,13 @@ def build_holding_decision_context(
     now_epoch = now.timestamp()
     ws = ws_data if isinstance(ws_data, dict) else {}
     position = stock if isinstance(stock, dict) else {}
-    execution_broker_route = (
-        position.get("entry_execution_broker_route")
-        or position.get("broker_route")
-        or position.get("last_fill_broker_route")
-        or position.get("early_volatility_tp_broker_route")
-        or position.get("entry_order_exchange")
-        or position.get("exchange")
-        or position.get("market_route")
+    (
+        execution_broker_route,
+        execution_broker_route_source,
+        execution_broker_route_authority,
+    ) = _holding_execution_route(
+        position,
+        now=now,
     )
     candle_ws = dict(ws)
     for key in (
@@ -860,6 +904,17 @@ def build_holding_decision_context(
         "rest_route": candle.get("rest_route"),
         "ws_route": candle.get("ws_route"),
         "request_code": candle.get("request_code"),
+        "broker_route_provenance": {
+            "route": execution_broker_route,
+            "source": execution_broker_route_source,
+            "authority": execution_broker_route_authority,
+            "actual_order_submitted": _boolish(
+                position.get("actual_order_submitted")
+            ),
+            "broker_order_forbidden": _boolish(
+                position.get("broker_order_forbidden")
+            ),
+        },
         # Observation-only exact copy. The model payload intentionally omits this
         # field because holding prompts already receive position.entry_time_context.
         "entry_time_context_provenance": {
@@ -1372,6 +1427,11 @@ def holding_decision_context_log_fields(
         if isinstance(context.get("entry_time_context_provenance"), dict)
         else {}
     )
+    broker_route = (
+        context.get("broker_route_provenance")
+        if isinstance(context.get("broker_route_provenance"), dict)
+        else {}
+    )
     contract_fields = {
         f"{observation_contract_prefix}{key}": value
         for key, value in OBSERVATION_CONTRACT.items()
@@ -1384,6 +1444,15 @@ def holding_decision_context_log_fields(
         "holding_context_session": context.get("session"),
         "holding_context_rest_route": context.get("rest_route"),
         "holding_context_ws_route": context.get("ws_route"),
+        "holding_context_broker_route": broker_route.get("route"),
+        "holding_context_broker_route_source": broker_route.get("source"),
+        "holding_context_broker_route_authority": broker_route.get("authority"),
+        "holding_context_broker_route_actual_order_submitted": broker_route.get(
+            "actual_order_submitted"
+        ),
+        "holding_context_broker_route_broker_order_forbidden": broker_route.get(
+            "broker_order_forbidden"
+        ),
         "holding_context_entry_time_context_status": entry_time.get("status"),
         "holding_context_entry_time_context_source": entry_time.get("source"),
         "holding_context_entry_time_context_sha256": entry_time.get("sha256"),

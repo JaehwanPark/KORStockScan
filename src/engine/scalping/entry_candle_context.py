@@ -207,13 +207,16 @@ def resolve_entry_candle_request_code(
     if venue_upper in {"SOR", "INTEGRATED", "KRX_NXT_INTEGRATED"}:
         return f"{base}_AL"
     if venue_upper == "KRX":
-        # A regular-session SOR order consumes the integrated executable view.
-        # Kiwoom's ka10080 contract identifies that series with ``_AL``.  This
-        # does not claim an underlying event venue; the snapshot keeps event
-        # venue attribution disabled for this execution-only view.
+        # The planned order route must not silently change the candle venue:
+        # Kiwoom defines the base code as KRX and ``_AL`` as SOR.  Use the SOR
+        # series only when both the order plan and the observed market-data
+        # route identify the integrated execution view.
+        ws_suffix, ws_route = _ws_route(ws_data or {})
         if (
             str(session or "").strip().lower() == "krx_regular"
             and str(broker_route or "").strip().upper() == "SOR"
+            and ws_suffix == "_AL"
+            and ws_route == "krx_nxt_integrated"
         ):
             return f"{base}_AL"
         return base

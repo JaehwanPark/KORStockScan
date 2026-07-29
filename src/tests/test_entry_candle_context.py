@@ -499,6 +499,19 @@ def test_venue_request_code_contract_and_dated_activation(monkeypatch):
             session="krx_regular",
             broker_route="SOR",
         )
+        == "000660"
+    )
+    assert (
+        resolve_entry_candle_request_code(
+            "000660",
+            venue="KRX",
+            session="krx_regular",
+            ws_data={
+                "market_suffix": "_AL",
+                "market_route": "krx_nxt_integrated",
+            },
+            broker_route="SOR",
+        )
         == "000660_AL"
     )
     assert (
@@ -716,6 +729,35 @@ def test_krx_regular_accepts_sor_integrated_execution_view_without_event_attribu
     assert snapshot["market_data_route"] == "krx_nxt_integrated"
     assert snapshot["underlying_event_venue"] is None
     assert snapshot["venue_attribution_allowed"] is False
+
+
+def test_krx_regular_keeps_krx_candles_when_only_order_route_is_sor(monkeypatch):
+    _enable(monkeypatch)
+    ws = _ws(10000)
+    ws["market_suffix"] = ""
+    ws["market_route"] = "krx_regular"
+
+    context = build_entry_candle_context(
+        "token",
+        "000660",
+        ws,
+        venue="KRX",
+        session="krx_regular",
+        now_ts=datetime(2026, 7, 23, 10, 0, tzinfo=KST),
+        recent_candles=_candles(20, start_minute=40),
+        source_meta={},
+        broker_route="SOR",
+    )
+
+    assert context["request_code"] == "000660"
+    assert context["rest_route"] == "KRX"
+    assert context["ws_route"] == "krx_regular"
+    assert context["source_quality"]["status"] == "fresh_consistent"
+    assert "venue_conflict" not in context["source_quality"]["blockers"]
+    snapshot = context["ai_market_snapshot_v1"]
+    assert snapshot["effective_venue"] == "KRX"
+    assert snapshot["broker_route"] == "SOR"
+    assert snapshot["market_data_route"] == "krx_only"
 
 
 def test_nxt_aftermarket_accepts_integrated_ws_only_with_closed_session_proof(
