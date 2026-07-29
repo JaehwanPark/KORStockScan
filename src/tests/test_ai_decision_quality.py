@@ -1,4 +1,6 @@
+import sys
 from datetime import datetime
+from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 from src.engine.scalping import ai_decision_quality as quality
@@ -127,6 +129,34 @@ def test_control_manifest_rejects_canonical_context_without_completed_bars():
     )
     assert report["status"] == "control_manifest_gap_fix_required"
     assert report["excluded_counts"]["canonical_completed_bars_missing"] == 1
+
+
+def test_control_manifest_rejects_explicit_sparse_canonical_decision_window():
+    payload = _payload()
+    payload["sanitized_user_input"]["entry_candle_context"]["source_quality"] = {
+        "decision_window": {
+            "status": "sparse_observed_minutes",
+            "provider_call_allowed": True,
+            "missing_bar_count": 2,
+        }
+    }
+    report = quality.build_control_manifest(
+        target_date="2026-07-27",
+        promotion={
+            "decision": "promoted_all_market_sessions_full",
+            "runtime_activation": True,
+            "transaction_status": "committed",
+            "promoted_at": "2026-07-27T08:30:00+09:00",
+        },
+        traces=[_trace()],
+        payloads=[payload],
+    )
+
+    assert report["status"] == "control_manifest_gap_fix_required"
+    assert (
+        report["excluded_counts"]["canonical_decision_window_source_quality_blocked"]
+        == 1
+    )
 
 
 def test_holding_context_contract_reads_nested_candle_bundle_and_bars():
@@ -657,7 +687,19 @@ def test_candidate_contract_requires_structured_reasons():
     invalid.pop("expected_downside_pct")
     assert quality.validate_candidate_response(invalid, stage="entry") == [
         "expected_downside_pct_missing",
+        "expected_edge_values_required",
         "reason_codes_invalid",
+    ]
+    unsupported = {**response, "reason_codes": ["invented_ascii_reason"]}
+    assert quality.validate_candidate_response(unsupported, stage="entry") == [
+        "reason_codes_invalid"
+    ]
+    duplicate = {
+        **response,
+        "reason_codes": ["trend_tape_aligned", "trend_tape_aligned"],
+    }
+    assert quality.validate_candidate_response(duplicate, stage="entry") == [
+        "reason_codes_invalid"
     ]
 
 
@@ -727,6 +769,8 @@ def test_paired_replay_uses_same_exact_payload_and_has_no_runtime_authority():
     assert report["control_source_quality_adjusted_ev_pct"] == 0
     assert report["candidate_source_quality_adjusted_ev_pct"] == 0
     assert report["paired_comparable_count"] == 1
+    assert report["status"] == "paired_replay_complete_candidate_quality_rejected"
+    assert report["candidate_quality_gate_pass"] is False
     assert report["buckets"] == [
         {
             "stage": "entry",
@@ -737,6 +781,8 @@ def test_paired_replay_uses_same_exact_payload_and_has_no_runtime_authority():
             "candidate_source_quality_adjusted_ev_pct": 0,
             "source_quality_adjusted_ev_delta_pct": 0,
             "missed_upside_reduction_count": 0,
+            "new_missed_upside_count": 0,
+            "control_adverse_first_exposure_count": 0,
             "adverse_first_candidate_exposure_count": 0,
         }
     ]
@@ -778,3 +824,168 @@ def test_paired_report_excludes_schema_rejected_candidate_from_ev():
     assert report["status"] == "candidate_rejected_no_runtime_apply"
     assert report["paired_comparable_count"] == 0
     assert report["candidate_source_quality_adjusted_ev_pct"] is None
+
+
+def test_prepare_paired_replay_marks_stage_floor_without_cherry_picking():
+    traces = []
+    payloads = []
+    labels = []
+    for index in range(30):
+        trace_id = f"trace-{index}"
+        payload_hash = f"payload-{index}"
+        stock_code = f"{index % 10 + 1:06d}"
+        traces.append(
+            {
+                **_trace(),
+                "decision_trace_id": trace_id,
+                "payload_sha256": payload_hash,
+            }
+        )
+        payloads.append(
+            {
+                **_payload(),
+                "payload_sha256": payload_hash,
+                "endpoint": "analyze_target",
+            }
+        )
+        labels.append(
+            {
+                **_pending(),
+                "decision_trace_id": trace_id,
+                "label_id": f"{trace_id}:v1",
+                "stock_code": stock_code,
+                "label_status": "mature",
+                "source_quality_status": "pass",
+                "primary_cohort_eligible": True,
+                "horizon_metrics": {
+                    "10m": {"end_return_pct": 1.0, "first_hit": "target"}
+                },
+            }
+        )
+    control = quality.build_control_manifest(
+        target_date="2026-07-27",
+        promotion={
+            "decision": "promoted_all_market_sessions_full",
+            "runtime_activation": True,
+            "transaction_status": "committed",
+            "promoted_at": "2026-07-27T08:30:00+09:00",
+        },
+        traces=traces,
+        payloads=payloads,
+    )
+
+    requests = quality.prepare_paired_replay_requests(
+        control_manifest=control,
+        traces=traces,
+        payloads=payloads,
+        labels=labels,
+    )
+
+    assert len(requests) == 30
+    assert all(request["sample_floor"]["pass"] is True for request in requests)
+    assert requests[0]["sample_floor"]["unique_symbols"] == 10
+
+
+def test_paired_replay_retries_schema_once_and_report_omits_exact_payload():
+    request = {
+        "paired_replay_id": "pair-1",
+        "decision_trace_id": "trace-1",
+        "stage": "entry",
+        "effective_venue": "KRX",
+        "session_bucket": "KRX_REGULAR",
+        "payload_sha256": "payload-1",
+        "exact_payload": {"secret_free_exact": True},
+        "candidate": {"system_prompt_sha256": "candidate-prompt-1"},
+        **quality.OFFLINE_CONTRACT,
+    }
+    responses = [
+        {"action": "WAIT"},
+        {
+            "edge_state": "NO_EDGE",
+            "action": "WAIT",
+            "expected_upside_pct": 0.2,
+            "expected_downside_pct": -0.4,
+            "confidence": 55,
+            "reason_codes": ["no_positive_edge"],
+            "evidence": {
+                "trend": "mixed",
+                "liquidity": "supportive",
+                "tape": "mixed",
+                "risk": "medium",
+                "uncertainty": "medium",
+            },
+        },
+    ]
+
+    def candidate_runner(attempt_request):
+        if len(responses) == 1:
+            assert attempt_request["candidate_schema_correction_errors"]
+        return responses.pop(0)
+
+    results = quality.run_paired_replay(
+        [request],
+        control_runner=lambda _request: {"action": "DROP"},
+        candidate_runner=candidate_runner,
+    )
+    report = quality.build_paired_replay_report(
+        target_date="2026-07-27",
+        requests=[request],
+        results=results,
+        labels=[],
+    )
+
+    assert results[0]["status"] == "pass"
+    assert len(results[0]["candidate_attempts"]) == 2
+    assert "exact_payload" not in report["requests"][0]
+    assert report["candidate_provider_none_count"] == 0
+
+
+def test_openai_candidate_parse_gap_is_retryable_and_secret_free(monkeypatch):
+    captured = {}
+
+    class FakeResponses:
+        def create(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(
+                id="resp-test",
+                output_text="not-json",
+                usage=SimpleNamespace(
+                    input_tokens=12,
+                    output_tokens=3,
+                    total_tokens=15,
+                ),
+            )
+
+    class FakeOpenAI:
+        def __init__(self, *, api_key, max_retries):
+            assert api_key == "test-secret"
+            assert max_retries == 0
+            self.responses = FakeResponses()
+
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
+    request = {
+        "paired_replay_id": "pair-1",
+        "stage": "entry",
+        "exact_payload": {"value": 1},
+        "control": {"provider": "openai", "model": "gpt-test"},
+        "candidate": {
+            "provider": "openai",
+            "model": "gpt-test",
+            "system_prompt": "Return JSON.",
+        },
+        **quality.OFFLINE_CONTRACT,
+    }
+
+    envelope = quality.execute_openai_prompt_v2_candidate(
+        request,
+        api_keys=["test-secret"],
+    )
+
+    assert envelope["candidate_response"] == {}
+    assert envelope["provider_provenance"]["parse_error"] == (
+        "candidate_response_json_invalid"
+    )
+    assert envelope["provider_provenance"]["response_id"] == "resp-test"
+    assert "test-secret" not in str(envelope)
+    assert captured["store"] is False
+    assert captured["input"] == '{"value":1}'

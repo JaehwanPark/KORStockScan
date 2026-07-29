@@ -59,6 +59,13 @@
 
 ## 장후 체크리스트 (20:05~21:55)
 
+- [ ] `[AIDecisionQualityPromptV2Followup0729] exact_v2 Prompt V2 paired replay 품질보완 및 stage 표본 재확인` (`Due: 2026-07-29`, `Slot: POSTCLOSE`, `TimeWindow: 16:35~17:00`, `Track: ScalpingLogic`)
+  - Source: [ai_prompt_paired_replay_2026-07-29.json](/home/ubuntu/KORStockScan/data/report/ai_prompt_paired_replay/ai_prompt_paired_replay_2026-07-29.json), [ai_decision_quality_baseline_2026-07-29.json](/home/ubuntu/KORStockScan/data/report/ai_decision_quality_baseline/ai_decision_quality_baseline_2026-07-29.json), [ai_decision_quality.py](/home/ubuntu/KORStockScan/src/engine/scalping/ai_decision_quality.py)
+  - 판정 기준: KRX entry fresh exact_v2 `49`건·`17`종목 replay의 provider/schema/missing result 0건을 유지하고, Candidate `WAIT 48/49`, dominant action ratio `0.9796`, missed-upside reduction `0`, candidate source-quality-adjusted EV `-0.0188%`의 원인을 입력결손과 prompt 판단계약으로 분리한다. 동일 eligible cohort 전체에서 action collapse 해소, missed-upside 감소, candidate EV 양수, adverse-first 비증가를 모두 통과한 후보만 다음 offline 비교 대상으로 인정한다.
+  - 표본 보류: `entry_price 3건/3종목`, `holding 2건/1종목`은 `sample_floor_keep_collecting`으로 유지하고 인위 호출·과거 payload 승격·합성 문맥으로 채우지 않는다.
+  - 금지: Candidate runtime 승격, live prompt 변경, provider/model/threshold/가격/수량/주문/bot 변경을 수행하지 않는다.
+  - 다음 액션: `prompt_candidate_quality_pass_offline_only`, `prompt_candidate_quality_rejected_refine`, `sample_floor_keep_collecting`, `source_quality_exclusion_gap_fix_required` 중 하나로 닫는다.
+
 - [ ] `[PostcloseSourceQualityGateReview0729] 장후 source-quality gate 결과 및 튜닝 입력 허용/제외 확인` (`Due: 2026-07-29`, `Slot: POSTCLOSE`, `TimeWindow: 16:25~16:35`, `Track: RuntimeStability`)
   - Source: [observation_source_quality_audit_2026-07-29.json](/home/ubuntu/KORStockScan/data/report/observation_source_quality_audit/observation_source_quality_audit_2026-07-29.json), [threshold_cycle_ev_2026-07-29.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-07-29.json), [code_improvement_workorder_2026-07-29.json](/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-07-29.json), [threshold_cycle_postclose_verification_2026-07-29.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_2026-07-29.json)
   - 판정 기준: postclose EV/report 소비 전후 `observation_source_quality_audit`의 hard block, row exclusion, clean baseline, unknown-token review warning을 확인한다. `hard_blocking_contract_gap_count>0`이면 결손 row/window 제외 또는 `source_quality_blocked` 산출 여부를 확인하고, `unknown_token_stage_count>0`이면 source-quality producer-fix workorder가 생성됐는지 확인한다.

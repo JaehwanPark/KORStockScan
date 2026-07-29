@@ -621,6 +621,32 @@ DECISION_QUALITY_V2_RESPONSE_SCHEMA = {
     },
 }
 
+DECISION_QUALITY_V2_REASON_CODES = (
+    "adverse_risk_high",
+    "broker_state_missing",
+    "completed_bars_missing",
+    "continuation_supported",
+    "edge_absent",
+    "edge_positive",
+    "fillability_adverse",
+    "forming_bar_ignored",
+    "insufficient_core_data",
+    "liquidity_adverse",
+    "liquidity_supportive",
+    "no_positive_edge",
+    "optional_source_missing",
+    "quote_missing",
+    "source_conflict",
+    "source_stale",
+    "tape_adverse",
+    "tape_missing",
+    "tape_supportive",
+    "trend_adverse",
+    "trend_supportive",
+    "trend_tape_aligned",
+    "venue_session_mismatch",
+)
+
 _DECISION_QUALITY_V2_STAGE_RULES = {
     "entry": (
         "Compare immediate upside edge with adverse-first risk. "
@@ -652,14 +678,55 @@ _DECISION_QUALITY_V2_STAGE_RULES = {
     ),
 }
 
+_DECISION_QUALITY_V2_STAGE_INPUT_RULES = {
+    "entry": (
+        "Required core data is a fresh current/quote view, at least one completed "
+        "canonical bar, and usable quantitative trend/liquidity/tape aggregates. "
+        "Raw trade arrays, broker position/open orders, program flow, news, and "
+        "precomputed price targets are optional. Aggregated tick/tape features count "
+        "as tape evidence. Ignore a forming bar when completed bars exist. During "
+        "KRX_REGULAR, do not require NXT route-equivalence proof; policy metadata "
+        "whose required_session names PREMARKET or NXT is not a KRX blocker. Use "
+        "INSUFFICIENT_DATA only for an explicit current decision-window source "
+        "blocker, missing completed bars/current quote, or venue/session conflict."
+    ),
+    "entry_price": (
+        "Required core data is a fresh quote/BBO and valid candidate prices. "
+        "Broker position, program flow, raw tape arrays, and NXT route-equivalence "
+        "proof during KRX_REGULAR are optional."
+    ),
+    "post_probe": (
+        "Require a fresh probe snapshot and current quote. Historical optional "
+        "sources do not block a freshness decision."
+    ),
+    "scale_in": (
+        "Require current position, reconciled broker quantity, fresh quote, and "
+        "completed context. Optional program/news sources do not block."
+    ),
+    "holding": (
+        "Require current position, reconciled broker quantity, fresh quote, and "
+        "completed context. Ignore a forming bar when completed bars exist."
+    ),
+    "exit": (
+        "Require current position, reconciled broker quantity, fresh quote, and "
+        "completed context. Optional program/news sources do not block."
+    ),
+    "overnight": (
+        "Require reconciled broker state and next-session carry context. Intraday "
+        "forming bars alone do not decide carry."
+    ),
+}
+
 
 def decision_quality_v2_system_prompt(stage: str) -> str:
     """Return an English ASCII offline paired-replay prompt for one stage."""
 
     normalized = str(stage or "").strip().lower()
     stage_rule = _DECISION_QUALITY_V2_STAGE_RULES.get(normalized)
-    if stage_rule is None:
+    stage_input_rule = _DECISION_QUALITY_V2_STAGE_INPUT_RULES.get(normalized)
+    if stage_rule is None or stage_input_rule is None:
         raise ValueError(f"unsupported decision-quality stage: {stage}")
+    reason_codes = ", ".join(DECISION_QUALITY_V2_REASON_CODES)
     return f"""
 You are an offline Korean-stock scalping decision-quality evaluator.
 You have no live order, threshold, provider, model-routing, quantity, or safety authority.
@@ -668,15 +735,24 @@ Use only the exact captured payload. Do not infer missing data.
 Stage objective:
 {stage_rule}
 
+Stage input contract:
+{stage_input_rule}
+
 Rules:
 1. Distinguish completed bars from forming bars.
 2. Require timestamp and venue/session consistency across price, BBO, tape, and context.
 3. Use NO_EDGE when data is sufficient but expected edge is absent.
 4. Use INSUFFICIENT_DATA when a required source is missing, stale, or conflicted.
 5. Do not derive BUY, ADD, HOLD, TRIM, or EXIT from one score alone.
-6. Return expected upside and expected downside together.
-7. Return canonical English ASCII reason codes and structured evidence.
-8. Never repeat input arrays, secrets, credentials, or authorization headers.
+6. Return expected upside and expected downside together. Upside is zero or
+   positive; downside is zero or negative.
+7. When core data is sufficient, estimate bounded upside/downside from completed-bar
+   ranges, VWAP position, quote/liquidity, and tape aggregates. Do not require a
+   precomputed target field. EDGE and NO_EDGE require both numeric estimates;
+   INSUFFICIENT_DATA returns null for both.
+8. Return only these canonical reason codes: {reason_codes}.
+9. Return structured evidence.
+10. Never repeat input arrays, secrets, credentials, or authorization headers.
 
 Return JSON only with this contract:
 {{

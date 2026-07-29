@@ -13,7 +13,9 @@ import json
 import math
 import re
 import tempfile
+import time
 from collections import Counter, defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from pathlib import Path
 from statistics import fmean
@@ -22,9 +24,10 @@ from zoneinfo import ZoneInfo
 
 from src.engine.ai_prompt_contracts import (
     DECISION_QUALITY_V2_RESPONSE_SCHEMA,
+    DECISION_QUALITY_V2_REASON_CODES,
     decision_quality_v2_system_prompt,
 )
-from src.utils.constants import DATA_DIR
+from src.utils.constants import CONFIG_PATH, DATA_DIR, DEV_PATH
 from src.utils.jsonl_io import open_text_auto
 
 KST = ZoneInfo("Asia/Seoul")
@@ -58,6 +61,8 @@ LABEL_REPORT_DIR = DATA_DIR / "report" / "ai_decision_outcome_labels"
 BASELINE_REPORT_DIR = DATA_DIR / "report" / "ai_decision_quality_baseline"
 PAIRED_REPORT_DIR = DATA_DIR / "report" / "ai_prompt_paired_replay"
 SCORE_CORRELATION_REPORT_DIR = DATA_DIR / "report" / "ai_score_outcome_correlation"
+PAIRED_REPLAY_MIN_ROWS = 30
+PAIRED_REPLAY_MIN_SYMBOLS = 10
 
 OFFLINE_CONTRACT = {
     "metric_role": "ai_decision_quality_observation",
@@ -186,6 +191,23 @@ def _atomic_write_json(path: Path, value: dict[str, Any]) -> None:
         Path(tmp_name).unlink(missing_ok=True)
 
 
+def _offline_openai_api_keys() -> list[str]:
+    """Load configured OpenAI keys without exposing names or values."""
+
+    target_path = CONFIG_PATH if CONFIG_PATH.exists() else DEV_PATH
+    try:
+        payload = json.loads(target_path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    if not isinstance(payload, dict):
+        return []
+    return [
+        str(value)
+        for name, value in sorted(payload.items())
+        if str(name).startswith("OPENAI_API_KEY") and value not in (None, "", "-")
+    ]
+
+
 def _load_json(path: Path) -> dict[str, Any]:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
@@ -276,6 +298,16 @@ def _payload_contract(payload: dict[str, Any]) -> dict[str, Any]:
             forming_key = (
                 "is_forming" if schema == HOLDING_CONTEXT_SCHEMA else "forming"
             )
+            source_quality = (
+                candle.get("source_quality")
+                if isinstance(candle.get("source_quality"), dict)
+                else {}
+            )
+            decision_window = (
+                source_quality.get("decision_window")
+                if isinstance(source_quality.get("decision_window"), dict)
+                else {}
+            )
             canonical_contexts.append(
                 {
                     "schema": schema,
@@ -293,6 +325,15 @@ def _payload_contract(payload: dict[str, Any]) -> dict[str, Any]:
                     "forming_bar_present": any(
                         isinstance(bar, dict) and bool(bar.get(forming_key, False))
                         for bar in (bars or [])
+                    ),
+                    "decision_window_status": (
+                        str(decision_window.get("status") or "") or None
+                    ),
+                    "decision_window_provider_call_allowed": decision_window.get(
+                        "provider_call_allowed"
+                    ),
+                    "decision_window_missing_bar_count": decision_window.get(
+                        "missing_bar_count"
                     ),
                 }
             )
@@ -397,6 +438,18 @@ def _exact_trace_payload_findings(
         context["completed_bar_count"] > 0 for context in contexts_with_raw_bars
     ):
         findings.append("canonical_completed_bars_missing")
+    contexts_with_decision_quality = [
+        context
+        for context in expected_contexts
+        if context.get("decision_window_status") is not None
+    ]
+    if contexts_with_decision_quality and not any(
+        context.get("decision_window_status") == "fresh_consistent"
+        and context.get("decision_window_provider_call_allowed") is True
+        and (_number(context.get("decision_window_missing_bar_count")) or 0) == 0
+        for context in contexts_with_decision_quality
+    ):
+        findings.append("canonical_decision_window_source_quality_blocked")
     capture_status = str(trace.get("canonical_context_capture_status") or "")
     if capture_status and capture_status != "exact_completed_bars_captured":
         findings.append(f"canonical_context_capture_{capture_status}")
@@ -926,8 +979,9 @@ def _correlation(
         if identifiers and identifiers.intersection(values):
             matched.append(row)
     matched.sort(
-        key=lambda row: _parse_ts(row.get("timestamp"))
-        or datetime.min.replace(tzinfo=KST)
+        key=lambda row: (
+            _parse_ts(row.get("timestamp")) or datetime.min.replace(tzinfo=KST)
+        )
     )
     realized = [
         row["realized_profit_pct"]
@@ -1516,11 +1570,34 @@ def validate_candidate_response(response: dict[str, Any], *, stage: str) -> list
         errors.append("action_missing")
     elif action not in STAGE_ACTIONS.get(normalized_stage, set()):
         errors.append("action_invalid_for_stage")
+    expected_values: dict[str, float | None] = {}
     for field in ("expected_upside_pct", "expected_downside_pct"):
         if field not in response:
             errors.append(f"{field}_missing")
-        elif response.get(field) is not None and _number(response.get(field)) is None:
-            errors.append(f"{field}_invalid")
+            expected_values[field] = None
+        elif response.get(field) is None:
+            expected_values[field] = None
+        else:
+            expected_values[field] = _number(response.get(field))
+            if expected_values[field] is None:
+                errors.append(f"{field}_invalid")
+    edge_state = str(response.get("edge_state") or "")
+    if edge_state in {"EDGE", "NO_EDGE"} and any(
+        expected_values.get(field) is None
+        for field in ("expected_upside_pct", "expected_downside_pct")
+    ):
+        errors.append("expected_edge_values_required")
+    if edge_state == "INSUFFICIENT_DATA" and any(
+        response.get(field) is not None
+        for field in ("expected_upside_pct", "expected_downside_pct")
+    ):
+        errors.append("insufficient_data_expected_values_must_be_null")
+    upside = expected_values.get("expected_upside_pct")
+    downside = expected_values.get("expected_downside_pct")
+    if upside is not None and upside < 0:
+        errors.append("expected_upside_pct_negative")
+    if downside is not None and downside > 0:
+        errors.append("expected_downside_pct_positive")
     confidence = _number(response.get("confidence"))
     if confidence is None or not 0 <= confidence <= 100:
         errors.append("confidence_invalid")
@@ -1528,7 +1605,12 @@ def validate_candidate_response(response: dict[str, Any], *, stage: str) -> list
     if (
         not isinstance(codes, list)
         or not codes
-        or any(not REASON_CODE_PATTERN.fullmatch(str(code)) for code in codes)
+        or len(codes) != len(set(map(str, codes)))
+        or any(
+            not REASON_CODE_PATTERN.fullmatch(str(code))
+            or str(code) not in DECISION_QUALITY_V2_REASON_CODES
+            for code in codes
+        )
     ):
         errors.append("reason_codes_invalid")
     evidence = response.get("evidence")
@@ -1544,6 +1626,234 @@ def validate_candidate_response(response: dict[str, Any], *, stage: str) -> list
     if normalized_stage not in STAGE_ACTIONS:
         errors.append("stage_unsupported")
     return errors
+
+
+def _prompt_v2_openai_schema(stage: str) -> dict[str, Any]:
+    normalized_stage = str(stage or "").strip().lower()
+    actions = sorted(STAGE_ACTIONS.get(normalized_stage, set()))
+    if not actions:
+        raise ValueError(f"unsupported decision-quality stage: {stage}")
+    evidence_properties = {
+        key: {"type": "string", "enum": sorted(values)}
+        for key, values in EVIDENCE_VALUES.items()
+    }
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": [
+            "edge_state",
+            "action",
+            "expected_upside_pct",
+            "expected_downside_pct",
+            "confidence",
+            "reason_codes",
+            "evidence",
+        ],
+        "properties": {
+            "edge_state": {
+                "type": "string",
+                "enum": ["EDGE", "NO_EDGE", "INSUFFICIENT_DATA"],
+            },
+            "action": {"type": "string", "enum": actions},
+            "expected_upside_pct": {"type": ["number", "null"]},
+            "expected_downside_pct": {"type": ["number", "null"]},
+            "confidence": {"type": "integer", "minimum": 0, "maximum": 100},
+            "reason_codes": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 8,
+                "items": {
+                    "type": "string",
+                    "enum": list(DECISION_QUALITY_V2_REASON_CODES),
+                },
+            },
+            "evidence": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": list(REASON_EVIDENCE_KEYS),
+                "properties": evidence_properties,
+            },
+        },
+    }
+
+
+def _openai_output_text(response: Any) -> str:
+    direct = getattr(response, "output_text", None)
+    if direct not in (None, ""):
+        return str(direct)
+    if isinstance(response, dict):
+        direct = response.get("output_text")
+        if direct not in (None, ""):
+            return str(direct)
+    output = getattr(response, "output", None)
+    if output is None and isinstance(response, dict):
+        output = response.get("output")
+    parts: list[str] = []
+    for item in output or []:
+        content = getattr(item, "content", None)
+        if content is None and isinstance(item, dict):
+            content = item.get("content")
+        for block in content or []:
+            text_value = getattr(block, "text", None)
+            if text_value is None and isinstance(block, dict):
+                text_value = block.get("text")
+            if text_value not in (None, ""):
+                parts.append(str(text_value))
+    return "\n".join(parts)
+
+
+def _usage_value(value: Any, field: str) -> int | None:
+    usage = getattr(value, "usage", None)
+    if usage is None and isinstance(value, dict):
+        usage = value.get("usage")
+    raw = getattr(usage, field, None)
+    if raw is None and isinstance(usage, dict):
+        raw = usage.get(field)
+    try:
+        return int(raw) if raw is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def execute_openai_prompt_v2_candidate(
+    request: dict[str, Any],
+    *,
+    api_keys: list[str] | None = None,
+    timeout_sec: float = 45.0,
+) -> dict[str, Any]:
+    """Run one exact-payload Prompt V2 candidate with no runtime authority."""
+
+    if any(
+        (
+            request.get("runtime_effect") is not False,
+            request.get("allowed_runtime_apply") is not False,
+            request.get("actual_order_submitted") is not False,
+            request.get("broker_order_forbidden") is not True,
+        )
+    ):
+        raise ValueError("offline_authority_contract_invalid")
+    control = request.get("control") or {}
+    candidate = request.get("candidate") or {}
+    provider = str(candidate.get("provider") or "").strip().lower()
+    model = str(candidate.get("model") or "").strip()
+    if (
+        provider != "openai"
+        or provider != str(control.get("provider") or "").strip().lower()
+        or model != str(control.get("model") or "").strip()
+    ):
+        raise ValueError("provider_or_model_control_mismatch")
+    keys = list(api_keys or _offline_openai_api_keys())
+    if not keys:
+        raise RuntimeError("openai_api_key_unavailable")
+    try:
+        from openai import OpenAI
+    except Exception as exc:
+        raise RuntimeError("openai_sdk_unavailable") from exc
+
+    pair_id = str(request.get("paired_replay_id") or "")
+    key_index = int(hashlib.sha256(pair_id.encode("utf-8")).hexdigest(), 16) % len(keys)
+    exact_payload = request.get("exact_payload")
+    user_input = (
+        exact_payload
+        if isinstance(exact_payload, str)
+        else _canonical_bytes(exact_payload).decode("utf-8")
+    )
+    if not user_input:
+        raise ValueError("exact_payload_missing")
+    stage = str(request.get("stage") or "")
+    instructions = str(candidate.get("system_prompt") or "")
+    correction_errors = [
+        str(value)
+        for value in request.get("candidate_schema_correction_errors") or []
+        if value
+    ]
+    if correction_errors:
+        correction_rules = []
+        if "expected_edge_values_required" in correction_errors:
+            correction_rules.append(
+                "EDGE or NO_EDGE requires numeric expected_upside_pct and "
+                "expected_downside_pct; do not return null"
+            )
+        if "expected_upside_pct_negative" in correction_errors:
+            correction_rules.append("expected_upside_pct must be zero or positive")
+        if "expected_downside_pct_positive" in correction_errors:
+            correction_rules.append("expected_downside_pct must be zero or negative")
+        if "insufficient_data_expected_values_must_be_null" in correction_errors:
+            correction_rules.append(
+                "INSUFFICIENT_DATA requires null upside and downside"
+            )
+        instructions += (
+            "\nCorrection retry: the prior response violated these contract fields: "
+            + ",".join(correction_errors)
+            + ". "
+            + "; ".join(correction_rules)
+            + ". Return one corrected JSON object only."
+        )
+    started = time.perf_counter()
+    client = OpenAI(api_key=keys[key_index], max_retries=0)
+    response = client.responses.create(
+        model=model,
+        instructions=instructions,
+        input=user_input,
+        text={
+            "format": {
+                "type": "json_schema",
+                "name": f"decision_quality_v2_{stage}",
+                "strict": True,
+                "schema": _prompt_v2_openai_schema(stage),
+            },
+            "verbosity": "low",
+        },
+        store=False,
+        metadata={
+            "paired_replay_id": pair_id,
+            "decision_stage": stage,
+            "runtime_effect": "false",
+        },
+        timeout=max(1.0, float(timeout_sec)),
+    )
+    raw_text = _openai_output_text(response)
+    parse_error = ""
+    try:
+        payload = json.loads(raw_text)
+    except Exception:
+        payload = {}
+        parse_error = "candidate_response_json_invalid"
+    if not isinstance(payload, dict):
+        payload = {}
+        parse_error = "candidate_response_not_object"
+    response_id = getattr(response, "id", None)
+    if response_id is None and isinstance(response, dict):
+        response_id = response.get("id")
+    return {
+        "candidate_response": payload,
+        "provider_provenance": {
+            "provider": "openai",
+            "model": model,
+            "transport": "openai_responses_http_offline",
+            "response_id": str(response_id or "") or None,
+            "response_sha256": hashlib.sha256(raw_text.encode("utf-8")).hexdigest(),
+            "latency_ms": int((time.perf_counter() - started) * 1000),
+            "input_tokens": _usage_value(response, "input_tokens"),
+            "output_tokens": _usage_value(response, "output_tokens"),
+            "total_tokens": _usage_value(response, "total_tokens"),
+            "provider_none": False,
+            "store": False,
+            "failback_chain": [],
+            "parse_error": parse_error or None,
+        },
+    }
+
+
+def _candidate_envelope(
+    value: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    if isinstance(value.get("candidate_response"), dict):
+        return (
+            dict(value["candidate_response"]),
+            dict(value.get("provider_provenance") or {}),
+        )
+    return dict(value), {}
 
 
 def prepare_paired_replay_requests(
@@ -1614,6 +1924,7 @@ def prepare_paired_replay_requests(
                 "paired_replay_id": f"pair-{_sha256((trace_id, trace.get('payload_sha256')))[:24]}",
                 "decision_trace_id": trace_id,
                 "stage": stage,
+                "stock_code": label.get("stock_code"),
                 "effective_venue": trace.get("effective_venue"),
                 "session_bucket": trace.get("session_bucket"),
                 "payload_sha256": trace.get("payload_sha256"),
@@ -1626,6 +1937,8 @@ def prepare_paired_replay_requests(
                     "temperature": control.get("request_temperature"),
                     "reasoning_effort": control.get("request_reasoning_effort"),
                     "captured_action": trace.get("action"),
+                    "captured_score": trace.get("score"),
+                    "captured_reason": trace.get("reason"),
                 },
                 "candidate": {
                     "prompt_version": f"decision_quality_v2_{stage}",
@@ -1643,6 +1956,35 @@ def prepare_paired_replay_requests(
                 **OFFLINE_CONTRACT,
             }
         )
+    grouped: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
+    for request in requests:
+        grouped[
+            (
+                str(request.get("stage") or "unknown"),
+                str(request.get("effective_venue") or "UNKNOWN"),
+                str(request.get("session_bucket") or "UNKNOWN"),
+            )
+        ].append(request)
+    for rows in grouped.values():
+        symbol_count = len(
+            {
+                _normalize_stock_code(row.get("stock_code"))
+                for row in rows
+                if _normalize_stock_code(row.get("stock_code"))
+            }
+        )
+        sample_floor_pass = (
+            len(rows) >= PAIRED_REPLAY_MIN_ROWS
+            and symbol_count >= PAIRED_REPLAY_MIN_SYMBOLS
+        )
+        for row in rows:
+            row["sample_floor"] = {
+                "decision_rows": len(rows),
+                "unique_symbols": symbol_count,
+                "required_decision_rows": PAIRED_REPLAY_MIN_ROWS,
+                "required_unique_symbols": PAIRED_REPLAY_MIN_SYMBOLS,
+                "pass": sample_floor_pass,
+            }
     return requests
 
 
@@ -1657,10 +1999,61 @@ def run_paired_replay(
     results = []
     for request in requests:
         control_response = control_runner(request)
-        candidate_response = candidate_runner(request)
-        candidate_errors = validate_candidate_response(
-            candidate_response, stage=str(request["stage"])
-        )
+        candidate_attempts: list[dict[str, Any]] = []
+        candidate_response: dict[str, Any] = {}
+        candidate_errors: list[str] = []
+        provider_failed = False
+        for attempt_number in (1, 2):
+            attempt_request = dict(request)
+            if candidate_errors:
+                attempt_request["candidate_schema_correction_errors"] = list(
+                    candidate_errors
+                )
+            try:
+                envelope = candidate_runner(attempt_request)
+                candidate_response, provider_provenance = _candidate_envelope(envelope)
+                candidate_errors = validate_candidate_response(
+                    candidate_response, stage=str(request["stage"])
+                )
+                candidate_attempts.append(
+                    {
+                        "attempt_number": attempt_number,
+                        "status": (
+                            "pass" if not candidate_errors else "schema_rejected"
+                        ),
+                        "schema_errors": list(candidate_errors),
+                        "provider_provenance": provider_provenance,
+                    }
+                )
+            except Exception as exc:
+                provider_failed = True
+                candidate_errors = ["candidate_provider_call_failed"]
+                candidate_attempts.append(
+                    {
+                        "attempt_number": attempt_number,
+                        "status": "provider_failed",
+                        "schema_errors": list(candidate_errors),
+                        "provider_provenance": {
+                            "provider": str(
+                                (request.get("candidate") or {}).get("provider")
+                                or "none"
+                            ),
+                            "model": (request.get("candidate") or {}).get("model"),
+                            "provider_none": (
+                                str(
+                                    (request.get("candidate") or {}).get("provider")
+                                    or "none"
+                                ).lower()
+                                == "none"
+                            ),
+                            "error_type": type(exc).__name__,
+                            "error_code": "candidate_provider_call_failed",
+                        },
+                    }
+                )
+                break
+            if not candidate_errors:
+                break
         results.append(
             {
                 "paired_replay_id": request["paired_replay_id"],
@@ -1669,14 +2062,56 @@ def run_paired_replay(
                 "effective_venue": request.get("effective_venue"),
                 "session_bucket": request.get("session_bucket"),
                 "payload_sha256": request["payload_sha256"],
+                "candidate_prompt_sha256": (request.get("candidate") or {}).get(
+                    "system_prompt_sha256"
+                ),
                 "same_payload_confirmed": True,
                 "control_response": control_response,
                 "candidate_response": candidate_response,
                 "candidate_schema_errors": candidate_errors,
-                "status": "pass" if not candidate_errors else "schema_rejected",
+                "candidate_attempts": candidate_attempts,
+                "status": (
+                    "provider_failed"
+                    if provider_failed
+                    else ("pass" if not candidate_errors else "schema_rejected")
+                ),
                 **OFFLINE_CONTRACT,
             }
         )
+    return results
+
+
+def run_paired_replay_parallel(
+    requests: list[dict[str, Any]],
+    *,
+    control_runner: Callable[[dict[str, Any]], dict[str, Any]],
+    candidate_runner: Callable[[dict[str, Any]], dict[str, Any]],
+    max_workers: int = 4,
+) -> list[dict[str, Any]]:
+    if not requests:
+        return []
+    indexed: dict[str, int] = {
+        str(request.get("paired_replay_id") or ""): index
+        for index, request in enumerate(requests)
+    }
+    results: list[dict[str, Any]] = []
+    with ThreadPoolExecutor(max_workers=max(1, min(int(max_workers), 8))) as executor:
+        futures = {
+            executor.submit(
+                run_paired_replay,
+                [request],
+                control_runner=control_runner,
+                candidate_runner=candidate_runner,
+            ): request
+            for request in requests
+        }
+        for future in as_completed(futures):
+            results.extend(future.result())
+    results.sort(
+        key=lambda row: indexed.get(
+            str(row.get("paired_replay_id") or ""), len(indexed)
+        )
+    )
     return results
 
 
@@ -1739,6 +2174,8 @@ def build_paired_replay_report(
             }
         )
     rejected = sum(row.get("status") != "pass" for row in results)
+    schema_rejected = sum(row.get("status") == "schema_rejected" for row in results)
+    provider_failed = sum(row.get("status") == "provider_failed" for row in results)
     completed_pair_ids = {
         str(row.get("paired_replay_id") or "")
         for row in results
@@ -1778,6 +2215,15 @@ def build_paired_replay_report(
                     row["control_missed_upside"] and not row["candidate_missed_upside"]
                     for row in rows
                 ),
+                "new_missed_upside_count": sum(
+                    not row["control_missed_upside"] and row["candidate_missed_upside"]
+                    for row in rows
+                ),
+                "control_adverse_first_exposure_count": sum(
+                    row["first_hit"] == "adverse"
+                    and row["control_action"] in EXPOSURE_ACTIONS
+                    for row in rows
+                ),
                 "adverse_first_candidate_exposure_count": sum(
                     row["first_hit"] == "adverse"
                     and row["candidate_action"] in EXPOSURE_ACTIONS
@@ -1785,15 +2231,77 @@ def build_paired_replay_report(
                 ),
             }
         )
-    status = (
-        "candidate_rejected_no_runtime_apply"
-        if rejected or (results and missing_result_count)
-        else (
-            "paired_replay_ready_build_stage_candidate"
-            if requests
-            else "sample_floor_keep_collecting"
-        )
+    control_ev = (
+        fmean(row["control_decision_value_pct"] for row in comparable_rows)
+        if comparable_rows
+        else None
     )
+    candidate_ev = (
+        fmean(row["candidate_decision_value_pct"] for row in comparable_rows)
+        if comparable_rows
+        else None
+    )
+    ev_delta = (
+        fmean(row["delta_pct"] for row in comparable_rows) if comparable_rows else None
+    )
+    missed_upside_reduction_count = sum(
+        row["control_missed_upside"] and not row["candidate_missed_upside"]
+        for row in comparable_rows
+    )
+    new_missed_upside_count = sum(
+        not row["control_missed_upside"] and row["candidate_missed_upside"]
+        for row in comparable_rows
+    )
+    control_adverse_first_exposure_count = sum(
+        row["first_hit"] == "adverse" and row["control_action"] in EXPOSURE_ACTIONS
+        for row in comparable_rows
+    )
+    candidate_adverse_first_exposure_count = sum(
+        row["first_hit"] == "adverse" and row["candidate_action"] in EXPOSURE_ACTIONS
+        for row in comparable_rows
+    )
+    candidate_action_counter = Counter(
+        str((row.get("candidate_response") or {}).get("action") or "UNKNOWN")
+        for row in results
+    )
+    dominant_candidate_action_ratio = (
+        max(candidate_action_counter.values()) / len(results) if results else None
+    )
+    quality_checks = {
+        "all_pairs_comparable": bool(requests)
+        and len(comparable_rows) == len(requests),
+        "source_quality_adjusted_ev_improved": ev_delta is not None and ev_delta > 0,
+        "candidate_ev_positive": candidate_ev is not None and candidate_ev > 0,
+        "missed_upside_reduced": missed_upside_reduction_count > 0,
+        "new_missed_upside_not_increased": new_missed_upside_count == 0,
+        "adverse_first_exposure_not_increased": (
+            candidate_adverse_first_exposure_count
+            <= control_adverse_first_exposure_count
+        ),
+        "candidate_action_not_collapsed": (
+            dominant_candidate_action_ratio is not None
+            and dominant_candidate_action_ratio <= 0.90
+        ),
+    }
+    quality_gate_pass = all(quality_checks.values())
+    if rejected or (results and missing_result_count):
+        status = "candidate_rejected_no_runtime_apply"
+    elif not requests:
+        status = "sample_floor_keep_collecting"
+    elif quality_gate_pass:
+        status = "paired_replay_complete_candidate_quality_pass_offline_only"
+    else:
+        status = "paired_replay_complete_candidate_quality_rejected"
+    report_requests = [
+        {key: value for key, value in request.items() if key not in {"exact_payload"}}
+        for request in requests
+    ]
+    provider_attempts = [
+        attempt
+        for result in results
+        for attempt in result.get("candidate_attempts") or []
+        if isinstance(attempt, dict)
+    ]
     return {
         "schema": PAIRED_SCHEMA,
         "target_date": target_date,
@@ -1801,37 +2309,46 @@ def build_paired_replay_report(
         "status": status,
         "request_count": len(requests),
         "result_count": len(results),
-        "schema_rejected_count": rejected,
+        "schema_rejected_count": schema_rejected,
+        "provider_failed_count": provider_failed,
         "missing_result_count": missing_result_count,
         "paired_comparable_count": len(comparable_rows),
-        "control_source_quality_adjusted_ev_pct": (
-            fmean(row["control_decision_value_pct"] for row in comparable_rows)
-            if comparable_rows
-            else None
+        "control_source_quality_adjusted_ev_pct": control_ev,
+        "candidate_source_quality_adjusted_ev_pct": candidate_ev,
+        "source_quality_adjusted_ev_delta_pct": ev_delta,
+        "missed_upside_reduction_count": missed_upside_reduction_count,
+        "new_missed_upside_count": new_missed_upside_count,
+        "control_adverse_first_exposure_count": (control_adverse_first_exposure_count),
+        "adverse_first_candidate_exposure_count": (
+            candidate_adverse_first_exposure_count
         ),
-        "candidate_source_quality_adjusted_ev_pct": (
-            fmean(row["candidate_decision_value_pct"] for row in comparable_rows)
-            if comparable_rows
-            else None
+        "candidate_dominant_action_ratio": dominant_candidate_action_ratio,
+        "candidate_quality_gate_pass": quality_gate_pass,
+        "candidate_quality_checks": quality_checks,
+        "control_action_counts": dict(
+            Counter(
+                str((row.get("control_response") or {}).get("action") or "UNKNOWN")
+                for row in results
+            )
         ),
-        "source_quality_adjusted_ev_delta_pct": (
-            fmean(row["delta_pct"] for row in comparable_rows)
-            if comparable_rows
-            else None
+        "candidate_action_counts": dict(candidate_action_counter),
+        "candidate_edge_state_counts": dict(
+            Counter(
+                str(
+                    (row.get("candidate_response") or {}).get("edge_state") or "UNKNOWN"
+                )
+                for row in results
+            )
         ),
-        "missed_upside_reduction_count": sum(
-            row["control_missed_upside"] and not row["candidate_missed_upside"]
-            for row in comparable_rows
-        ),
-        "adverse_first_candidate_exposure_count": sum(
-            row["first_hit"] == "adverse"
-            and row["candidate_action"] in EXPOSURE_ACTIONS
-            for row in comparable_rows
+        "candidate_provider_attempt_count": len(provider_attempts),
+        "candidate_provider_none_count": sum(
+            (attempt.get("provider_provenance") or {}).get("provider_none") is True
+            for attempt in provider_attempts
         ),
         "net_profit_status": "not_available_without_notional_and_fill_join",
         "buckets": buckets,
         "paired_comparisons": comparable_rows,
-        "requests": requests,
+        "requests": report_requests,
         "results": results,
         **OFFLINE_CONTRACT,
     }
@@ -1879,8 +2396,17 @@ def main(argv: list[str] | None = None) -> int:
             "the valid shared token and never issues a new token."
         ),
     )
+    parser.add_argument(
+        "--execute-candidate",
+        action="store_true",
+        help="Execute sample-floor-ready Prompt V2 candidates offline.",
+    )
+    parser.add_argument("--candidate-timeout-sec", type=float, default=45.0)
+    parser.add_argument("--candidate-workers", type=int, default=4)
     parser.add_argument("--write", action="store_true")
     args = parser.parse_args(argv)
+    if args.execute_candidate and (args.mode != "paired" or not args.write):
+        parser.error("--execute-candidate requires --mode paired --write")
     sources = _default_sources(
         args.date,
         include_pipeline=(
@@ -1981,15 +2507,122 @@ def main(argv: list[str] | None = None) -> int:
             report["outcome_price_source"] = args.outcome_price_source
             path = score_correlation_path(args.date)
         else:
-            requests = prepare_paired_replay_requests(
+            prepared_requests = prepare_paired_replay_requests(
                 control_manifest=_load_json(control_path(args.date)),
                 traces=sources["traces"],
                 payloads=sources["payloads"],
                 labels=labels,
             )
+            requests = [
+                request
+                for request in prepared_requests
+                if (request.get("sample_floor") or {}).get("pass") is True
+            ]
+            results: list[dict[str, Any]] = []
+            if args.execute_candidate and requests:
+                existing_report = _load_json(paired_path(args.date))
+                request_by_pair = {
+                    str(request.get("paired_replay_id") or ""): request
+                    for request in requests
+                }
+                existing_results = [
+                    row
+                    for row in existing_report.get("results") or []
+                    if isinstance(row, dict)
+                    and row.get("status") == "pass"
+                    and str(row.get("paired_replay_id") or "") in request_by_pair
+                    and row.get("payload_sha256")
+                    == request_by_pair[str(row.get("paired_replay_id") or "")].get(
+                        "payload_sha256"
+                    )
+                    and row.get("candidate_prompt_sha256")
+                    == (
+                        request_by_pair[str(row.get("paired_replay_id") or "")].get(
+                            "candidate"
+                        )
+                        or {}
+                    ).get("system_prompt_sha256")
+                    and not validate_candidate_response(
+                        dict(row.get("candidate_response") or {}),
+                        stage=str(
+                            request_by_pair[str(row.get("paired_replay_id") or "")].get(
+                                "stage"
+                            )
+                            or ""
+                        ),
+                    )
+                ]
+                completed_pair_ids = {
+                    str(row.get("paired_replay_id") or "") for row in existing_results
+                }
+                pending_requests = [
+                    request
+                    for request in requests
+                    if str(request.get("paired_replay_id") or "")
+                    not in completed_pair_ids
+                ]
+                api_keys = _offline_openai_api_keys()
+
+                def captured_control(request: dict[str, Any]) -> dict[str, Any]:
+                    control = request.get("control") or {}
+                    return {
+                        "action": control.get("captured_action"),
+                        "score": control.get("captured_score"),
+                        "reason": control.get("captured_reason"),
+                        "result_source": "captured_natural_control",
+                    }
+
+                def candidate_runner(request: dict[str, Any]) -> dict[str, Any]:
+                    return execute_openai_prompt_v2_candidate(
+                        request,
+                        api_keys=api_keys,
+                        timeout_sec=args.candidate_timeout_sec,
+                    )
+
+                results = existing_results + run_paired_replay_parallel(
+                    pending_requests,
+                    control_runner=captured_control,
+                    candidate_runner=candidate_runner,
+                    max_workers=args.candidate_workers,
+                )
+                result_order = {
+                    str(request.get("paired_replay_id") or ""): index
+                    for index, request in enumerate(requests)
+                }
+                results.sort(
+                    key=lambda row: result_order.get(
+                        str(row.get("paired_replay_id") or ""), len(result_order)
+                    )
+                )
             report = build_paired_replay_report(
-                target_date=args.date, requests=requests, labels=labels
+                target_date=args.date,
+                requests=requests,
+                results=results,
+                labels=labels,
             )
+            floor_groups: dict[tuple[str, str, str], dict[str, Any]] = {}
+            for request in prepared_requests:
+                key = (
+                    str(request.get("stage") or "unknown"),
+                    str(request.get("effective_venue") or "UNKNOWN"),
+                    str(request.get("session_bucket") or "UNKNOWN"),
+                )
+                floor_groups[key] = dict(request.get("sample_floor") or {})
+            report["prepared_request_count"] = len(prepared_requests)
+            report["sample_floor_excluded_request_count"] = len(
+                prepared_requests
+            ) - len(requests)
+            report["sample_floor_buckets"] = [
+                {
+                    "stage": key[0],
+                    "effective_venue": key[1],
+                    "session_bucket": key[2],
+                    **value,
+                }
+                for key, value in sorted(floor_groups.items())
+            ]
+            report["outcome_price_source"] = args.outcome_price_source
+            report["price_source_provenance"] = price_source_provenance
             path = paired_path(args.date)
     if args.write:
         _atomic_write_json(path, report)
