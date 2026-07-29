@@ -7986,6 +7986,7 @@ def _register_scanner_scheduler_generation(
         "scanner_generation_id": generation.generation_id,
         "scanner_generation_revision": generation.revision,
         "scanner_generation_observed_price": generation.observed_price,
+        "scanner_generation_boot_restore": boot_restore,
         "scanner_attach_epoch": generation.attach_epoch,
         "scanner_scheduler_mode": _scanner_scheduler_startup_mode(),
         "scanner_scheduler_version": SCANNER_DEADLINE_SCHEDULER_VERSION,

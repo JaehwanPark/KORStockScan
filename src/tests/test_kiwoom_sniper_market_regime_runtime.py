@@ -1150,6 +1150,7 @@ def test_scheduler_boot_restore_registers_without_shared_deadline_backlog(
     assert generation is not None
     assert scheduler.current_generation("005930") == generation
     assert target["scanner_generation_observed_price"] == 70_000
+    assert target["scanner_generation_boot_restore"] is True
     assert scheduler.snapshot_metrics(now_epoch=200.0)["scheduler_queue_depth"] == 0
     assert "_scanner_scheduler_lane" not in target
 

@@ -5124,6 +5124,32 @@ def test_scanner_promotion_price_validation_does_not_block_later_normal_move():
     )
 
 
+def test_scanner_promotion_price_consistency_ignores_boot_restore_price_move():
+    fields = handlers._scanner_promotion_price_consistency_fields(
+        {
+            "scanner_generation_id": "GEN-BOOT-1",
+            "scanner_generation_observed_price": 1874,
+            "scanner_generation_boot_restore": True,
+            "current_price_observed": 1874,
+        },
+        {
+            "curr": 1734,
+            "last_ws_update_ts": 1000.95,
+            "last_realtime_type_ts": {"0B": 1000.95},
+        },
+        now_ts=1001.0,
+    )
+
+    assert fields["scanner_promotion_price_gap_pct"] > 7.0
+    assert fields["scanner_promotion_price_conflict"] is False
+    assert fields["scanner_promotion_price_consistency_state"] == "not_evaluated"
+    assert (
+        fields["scanner_promotion_price_consistency_reason"]
+        == "boot_restore_generation_price_not_initial_attach_evidence"
+    )
+    assert fields["scanner_promotion_price_boot_restore"] is True
+
+
 def test_scanner_fast_precheck_allows_configured_high_delta_stale_ws_relief(
     monkeypatch,
 ):

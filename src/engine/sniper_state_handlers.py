@@ -17051,7 +17051,12 @@ def _scanner_promotion_price_consistency_fields(
     ws_data = ws_data if isinstance(ws_data, dict) else {}
     generation_id = str(stock.get("scanner_generation_id") or "").strip()
     generation_price = _safe_int(stock.get("scanner_generation_observed_price"), 0)
-    has_generation_lineage = bool(generation_id and generation_price > 0)
+    generation_boot_restore = _boolish_true(
+        stock.get("scanner_generation_boot_restore")
+    )
+    has_generation_lineage = bool(
+        generation_id and generation_price > 0 and not generation_boot_restore
+    )
     promotion_price = (
         generation_price
         if has_generation_lineage
@@ -17108,6 +17113,9 @@ def _scanner_promotion_price_consistency_fields(
     elif initial_validation_reused:
         state = "consistent"
         reason = "scanner_promotion_price_initial_validation_reused"
+    elif generation_boot_restore:
+        state = "not_evaluated"
+        reason = "boot_restore_generation_price_not_initial_attach_evidence"
     elif not has_generation_lineage:
         state = "not_evaluated"
         reason = "scanner_generation_price_lineage_unavailable"
@@ -17136,6 +17144,7 @@ def _scanner_promotion_price_consistency_fields(
         "scanner_promotion_price_initial_validation_reused": (
             initial_validation_reused
         ),
+        "scanner_promotion_price_boot_restore": generation_boot_restore,
         "scanner_promotion_price_ws_curr": (
             ws_price if ws_price > 0 else "not_available_ws_curr"
         ),

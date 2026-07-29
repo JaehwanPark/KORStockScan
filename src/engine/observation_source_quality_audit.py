@@ -1115,6 +1115,7 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
             "scanner_promotion_price_source",
             "scanner_promotion_price_lineage_id",
             "scanner_promotion_price_initial_validation_reused",
+            "scanner_promotion_price_boot_restore",
             "scanner_promotion_price_ws_curr",
             "scanner_promotion_price_gap_pct",
             "scanner_promotion_price_gap_max_pct",
