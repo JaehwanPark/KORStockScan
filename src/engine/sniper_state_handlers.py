@@ -60267,6 +60267,27 @@ def _maybe_retry_rising_missed_entry_ai_not_evaluated(
             result_source = (
                 str(ai_decision.get("ai_result_source") or "live").strip().lower()
             )
+            provider_called = _boolish_true(ai_decision.get("provider_called"))
+            budget_refund_eligible = bool(
+                not provider_called
+                and result_source
+                in {
+                    "input_preflight_blocked",
+                    "fail_closed_before_provider",
+                }
+            )
+            budget_reserved_at = _safe_float(
+                stock.get("pre_submit_entry_ai_authority_retry_at"),
+                0.0,
+            )
+            budget_refunded = bool(
+                budget_refund_eligible
+                and DEFAULT_HOT_PATH_AI_SYMBOL_BUDGET.release(
+                    code=code,
+                    endpoint="scanner_entry",
+                    reserved_at=budget_reserved_at,
+                )
+            )
             source_quality_fields = _build_tick_source_quality_log_fields(ai_decision)
             source_quality_fields["ai_result_source"] = result_source
             _mutate_stock_state(
@@ -60324,6 +60345,19 @@ def _maybe_retry_rising_missed_entry_ai_not_evaluated(
                         curr_price, 0
                     ),
                     "rising_missed_entry_ai_retry_async_status": async_status,
+                    "rising_missed_entry_ai_budget_refund_eligible": (
+                        budget_refund_eligible
+                    ),
+                    "rising_missed_entry_ai_budget_refunded": budget_refunded,
+                    "rising_missed_entry_ai_budget_refund_reason": (
+                        "provider_not_called_source_quality_preflight"
+                        if budget_refunded
+                        else (
+                            "reservation_not_found"
+                            if budget_refund_eligible
+                            else "provider_called_or_result_not_eligible"
+                        )
+                    ),
                 }
             )
             fields.update(source_quality_fields)

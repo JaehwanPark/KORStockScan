@@ -229,6 +229,42 @@ class HotPathAISymbolBudget:
             reserve=True,
         )
 
+    def release(
+        self,
+        *,
+        code: str,
+        endpoint: str,
+        reserved_at: float,
+    ) -> bool:
+        """Release one exact reservation that never reached a provider.
+
+        Callers must retain the timestamp returned to their own dispatch state.
+        This narrow exact-match API prevents a failed source-quality preflight
+        from consuming provider-call cadence while avoiding refunds for another
+        concurrent request in the same endpoint group.
+        """
+
+        canonical_code = str(code or "").strip()
+        group = endpoint_group(endpoint)
+        try:
+            target_ts = float(reserved_at)
+        except (TypeError, ValueError):
+            return False
+        if not canonical_code or target_ts <= 0.0:
+            return False
+        with self._lock:
+            events = self._events.get(canonical_code)
+            if not events:
+                return False
+            for index in range(len(events) - 1, -1, -1):
+                event_ts, event_group = events[index]
+                if event_group == group and abs(event_ts - target_ts) <= 1e-6:
+                    del events[index]
+                    if not events:
+                        self._events.pop(canonical_code, None)
+                    return True
+        return False
+
     def reset(self) -> None:
         with self._lock:
             self._events.clear()

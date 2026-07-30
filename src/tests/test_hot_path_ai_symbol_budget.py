@@ -79,6 +79,48 @@ def test_inspect_does_not_retain_empty_symbol_state():
     assert "005930" not in budget._events
 
 
+def test_release_refunds_only_the_exact_endpoint_group_reservation():
+    budget = HotPathAISymbolBudget(window_sec=60, total_cap=4, group_cap=2)
+    assert budget.reserve(code="198440", endpoint="scanner_entry", now_ts=100.0).allowed
+    assert budget.reserve(code="198440", endpoint="scanner_entry", now_ts=110.0).allowed
+
+    assert budget.release(
+        code="198440",
+        endpoint="scanner_entry",
+        reserved_at=100.0,
+    )
+    assert not budget.release(
+        code="198440",
+        endpoint="scanner_entry",
+        reserved_at=100.0,
+    )
+    assert budget.reserve(code="198440", endpoint="scanner_entry", now_ts=120.0).allowed
+
+
+def test_release_rejects_invalid_or_mismatched_reservations_without_mutation():
+    budget = HotPathAISymbolBudget(window_sec=60, total_cap=4, group_cap=2)
+    assert budget.reserve(code="198440", endpoint="scanner_entry", now_ts=100.0).allowed
+
+    assert not budget.release(
+        code="198440",
+        endpoint="holding_score",
+        reserved_at=100.0,
+    )
+    assert not budget.release(
+        code="198440",
+        endpoint="scanner_entry",
+        reserved_at="not-a-timestamp",
+    )
+    assert (
+        budget.inspect(
+            code="198440",
+            endpoint="scanner_entry",
+            now_ts=101.0,
+        ).group_count
+        == 1
+    )
+
+
 def test_symbol_budget_log_contract_declares_bounded_cadence_effect():
     budget = HotPathAISymbolBudget(window_sec=60, total_cap=4, group_cap=2)
     fields = budget.inspect(

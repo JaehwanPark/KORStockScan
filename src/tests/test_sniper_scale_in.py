@@ -4759,6 +4759,7 @@ def test_rising_missed_retry_applies_completed_async_result_without_sync_retry(
                 "score": 72.0,
                 "reason": "fresh continuation",
                 "ai_result_source": "live",
+                "provider_called": True,
             },
         },
     )
@@ -4778,9 +4779,15 @@ def test_rising_missed_retry_applies_completed_async_result_without_sync_retry(
     stock = {
         "strategy": "SCALPING",
         "last_watching_ai_action": "not_evaluated",
+        "pre_submit_entry_ai_authority_retry_at": 1000.0,
         "_scanner_async_generation_id": "SCANGEN-123456-1",
         "_scanner_async_cache_key": "watching:test",
     }
+    state_handlers.DEFAULT_HOT_PATH_AI_SYMBOL_BUDGET.reserve(
+        code="123456",
+        endpoint="scanner_entry",
+        now_ts=1000.0,
+    )
     fields = state_handlers._maybe_retry_rising_missed_entry_ai_not_evaluated(
         stock,
         "123456",
@@ -4801,6 +4808,16 @@ def test_rising_missed_retry_applies_completed_async_result_without_sync_retry(
     assert stock["last_watching_ai_score"] == 72.0
     assert stock["last_watching_ai_generation_id"] == "SCANGEN-123456-1"
     assert stock["last_watching_ai_decision_price"] == 10000
+    assert fields["rising_missed_entry_ai_budget_refund_eligible"] is False
+    assert fields["rising_missed_entry_ai_budget_refunded"] is False
+    assert (
+        state_handlers.DEFAULT_HOT_PATH_AI_SYMBOL_BUDGET.inspect(
+            code="123456",
+            endpoint="scanner_entry",
+            now_ts=1002.0,
+        ).group_count
+        == 1
+    )
     assert entry_logs[-1][0] == "rising_missed_entry_ai_async_result_applied"
 
 
@@ -4827,6 +4844,7 @@ def test_rising_missed_async_preflight_block_propagates_exact_blockers(
                 "score": 0.0,
                 "reason": "ai_input_preflight_blocked",
                 "ai_result_source": "input_preflight_blocked",
+                "provider_called": False,
                 "ai_market_snapshot_id": "aims-test",
                 "ai_market_snapshot_effective_venue": "KRX",
                 "ai_market_snapshot_market_data_route": "krx_nxt_integrated",
@@ -4854,9 +4872,15 @@ def test_rising_missed_async_preflight_block_propagates_exact_blockers(
     stock = {
         "strategy": "SCALPING",
         "last_watching_ai_action": "not_evaluated",
+        "pre_submit_entry_ai_authority_retry_at": 1000.0,
         "_scanner_async_generation_id": "SCANGEN-123456-1",
         "_scanner_async_cache_key": "watching:test",
     }
+    state_handlers.DEFAULT_HOT_PATH_AI_SYMBOL_BUDGET.reserve(
+        code="123456",
+        endpoint="scanner_entry",
+        now_ts=1000.0,
+    )
     fields = state_handlers._maybe_retry_rising_missed_entry_ai_not_evaluated(
         stock,
         "123456",
@@ -4873,6 +4897,20 @@ def test_rising_missed_async_preflight_block_propagates_exact_blockers(
 
     assert fields["rising_missed_entry_ai_retry_success"] is False
     assert fields["rising_missed_entry_ai_retry_reason"] == "ai_score_unavailable"
+    assert fields["rising_missed_entry_ai_budget_refund_eligible"] is True
+    assert fields["rising_missed_entry_ai_budget_refunded"] is True
+    assert (
+        fields["rising_missed_entry_ai_budget_refund_reason"]
+        == "provider_not_called_source_quality_preflight"
+    )
+    assert (
+        state_handlers.DEFAULT_HOT_PATH_AI_SYMBOL_BUDGET.inspect(
+            code="123456",
+            endpoint="scanner_entry",
+            now_ts=1002.0,
+        ).group_count
+        == 0
+    )
     assert fields["ai_market_snapshot_id"] == "aims-test"
     assert fields["ai_input_preflight_status"] == "blocked"
     assert fields["ai_input_preflight_allowed"] is False
