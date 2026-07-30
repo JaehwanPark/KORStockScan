@@ -46327,6 +46327,27 @@ def _score65_74_recovery_probe_decision(
             "evaluated": False,
             "score65_74_recovery_probe_skip_reason": "disabled",
         }
+    decision_contract_status = (
+        str((ai_decision or {}).get("decision_quality_contract_status") or "")
+        .strip()
+        .lower()
+    )
+    decision_reason = str((ai_decision or {}).get("reason") or "").strip().lower()
+    decision_score_semantics = (
+        str((ai_decision or {}).get("decision_quality_score_semantics") or "")
+        .strip()
+        .lower()
+    )
+    if (
+        decision_contract_status == "semantic_rejected"
+        or decision_reason == "decision_quality_v2_7_semantic_rejected"
+        or decision_score_semantics == "fail_closed_not_model_quality_score"
+    ):
+        return {
+            "allowed": False,
+            "evaluated": False,
+            "score65_74_recovery_probe_skip_reason": "ai_semantic_contract_rejected",
+        }
     if bool((ai_decision or {}).get("ai_fallback_score_50", False)):
         return {
             "allowed": False,

@@ -831,6 +831,52 @@ def test_candidate_contract_requires_structured_reasons():
     assert "WAIT is invalid." in prompt
 
 
+def test_entry_candidate_rejects_trigger_reason_evidence_conflict():
+    response = {
+        "edge_state": "EDGE",
+        "action": "DROP",
+        "expected_upside_pct": 0.9,
+        "expected_downside_pct": -1.0,
+        "confidence": 78,
+        "reason_codes": [
+            "recovery_trigger_confirmed",
+            "risk_reward_unfavorable",
+            "structural_edge_without_trigger",
+        ],
+        "evidence": {
+            "trend": "supportive",
+            "liquidity": "adverse",
+            "tape": "supportive",
+            "risk": "high",
+            "uncertainty": "medium",
+            "setup": "continuation",
+            "positive_edge": "moderate",
+            "adverse_risk": "blocking",
+            "trigger": "confirmed",
+        },
+    }
+
+    assert quality.validate_candidate_response(response, stage="entry") == [
+        "entry_trigger_reason_evidence_conflict"
+    ]
+    for reason_code, contradictory_trigger in (
+        ("recovery_trigger_confirmed", "failed"),
+        ("recovery_trigger_required", "confirmed"),
+        ("recovery_trigger_failed", "confirmed"),
+    ):
+        contradictory = {
+            **response,
+            "reason_codes": [reason_code, "risk_reward_unfavorable"],
+            "evidence": {
+                **response["evidence"],
+                "trigger": contradictory_trigger,
+            },
+        }
+        assert quality.validate_candidate_response(contradictory, stage="entry") == [
+            "entry_trigger_reason_evidence_conflict"
+        ]
+
+
 def test_entry_candidate_contract_separates_structural_edge_and_adverse_risk():
     exact_payload = {
         "current": {"fluctuation_pct": 8.0},

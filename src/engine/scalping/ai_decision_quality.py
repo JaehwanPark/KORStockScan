@@ -2131,6 +2131,19 @@ def validate_candidate_response(
             adverse_risk = str(evidence.get("adverse_risk") or "").lower()
             trigger = str(evidence.get("trigger") or "").lower()
             setup = str(evidence.get("setup") or "").lower()
+            trigger_reason_requirements = {
+                "recovery_trigger_confirmed": "confirmed",
+                "recovery_trigger_required": "recovery_required",
+                "recovery_trigger_failed": "failed",
+            }
+            if any(
+                reason_code in reason_code_set and trigger != required_trigger
+                for reason_code, required_trigger in trigger_reason_requirements.items()
+            ) or (
+                "structural_edge_without_trigger" in reason_code_set
+                and trigger == "confirmed"
+            ):
+                errors.append("entry_trigger_reason_evidence_conflict")
             if edge_state == "INSUFFICIENT_DATA":
                 if action != "WAIT":
                     errors.append("entry_insufficient_requires_wait")

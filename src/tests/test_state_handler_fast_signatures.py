@@ -5638,6 +5638,42 @@ def test_should_run_score65_74_recovery_probe_uses_score_band_as_prior(monkeypat
     )
 
 
+def test_score65_74_recovery_probe_cannot_reopen_semantic_rejection(monkeypatch):
+    rules = replace(
+        TRADING_RULES,
+        AI_SCORE65_74_RECOVERY_PROBE_ENABLED=True,
+    )
+    monkeypatch.setattr("src.engine.sniper_state_handlers.TRADING_RULES", rules)
+    feature_probe = _trusted_pressure(
+        {
+            "buy_pressure": 91.0,
+            "tick_accel": 1.6,
+            "micro_vwap_bp": 45.0,
+            "large_sell_print": False,
+        }
+    )
+    decision = _score65_74_recovery_probe_decision(
+        {
+            "action": "DROP",
+            "reason": "decision_quality_v2_7_semantic_rejected",
+            "decision_quality_contract_status": "semantic_rejected",
+            "decision_quality_score_semantics": "fail_closed_not_model_quality_score",
+        },
+        0,
+        {"latency_state": "OK"},
+        [],
+        [],
+        None,
+        feature_probe=feature_probe,
+    )
+
+    assert decision == {
+        "allowed": False,
+        "evaluated": False,
+        "score65_74_recovery_probe_skip_reason": "ai_semantic_contract_rejected",
+    }
+
+
 def test_score65_74_recovery_probe_enforces_micro_context_hard_gate(monkeypatch):
     rules = replace(
         TRADING_RULES,
