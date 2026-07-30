@@ -17263,6 +17263,16 @@ def _scanner_fast_precheck_fields_impl(
         ws_data,
         now_ts=float(now_ts),
     )
+    fast_precheck_attach_anchor_price = _safe_int(
+        promotion_price_fields.get("scanner_promotion_price"), 0
+    )
+    fast_precheck_current_vs_attach_delta_pct = (
+        (float(curr) - float(fast_precheck_attach_anchor_price))
+        / float(fast_precheck_attach_anchor_price)
+        * 100.0
+        if fast_precheck_attach_anchor_price > 0 and curr > 0
+        else None
+    )
     promotion_price_conflict = bool(
         promotion_price_fields.get("scanner_promotion_price_conflict")
     )
@@ -17616,6 +17626,51 @@ def _scanner_fast_precheck_fields_impl(
             else "not_applicable_rest_quote_relief_min_delta_pct"
         ),
         "fast_precheck_positive_delta_pct": round(scanner_positive_delta_pct, 4),
+        "fast_precheck_attach_anchor_price": (
+            fast_precheck_attach_anchor_price
+            if fast_precheck_attach_anchor_price > 0
+            else "not_available_attach_anchor_price"
+        ),
+        "fast_precheck_attach_anchor_source": (
+            promotion_price_fields.get("scanner_promotion_price_source")
+            or "not_available_attach_anchor_source"
+        ),
+        "fast_precheck_current_ws_price": (
+            curr if curr > 0 else "not_available_current_ws_price"
+        ),
+        "fast_precheck_current_price_source": (
+            "ws_data.curr" if curr > 0 else "not_available_current_price_source"
+        ),
+        "fast_precheck_current_vs_attach_delta_pct": (
+            round(fast_precheck_current_vs_attach_delta_pct, 6)
+            if fast_precheck_current_vs_attach_delta_pct is not None
+            else "not_available_current_vs_attach_delta_pct"
+        ),
+        "fast_precheck_attach_current_metric_role": ("price_provenance_observation"),
+        "fast_precheck_attach_current_decision_authority": (
+            "report_provenance_only_no_standalone_buy"
+        ),
+        "fast_precheck_attach_current_window_policy": (
+            "same_scanner_generation_latest_fast_precheck"
+        ),
+        "fast_precheck_attach_current_sample_floor": (
+            "not_applicable_price_provenance"
+        ),
+        "fast_precheck_attach_current_primary_decision_metric": (
+            "fast_precheck_current_vs_attach_delta_pct"
+        ),
+        "fast_precheck_attach_current_source_quality_gate": (
+            "positive_attach_anchor_and_current_ws_price"
+        ),
+        "fast_precheck_attach_current_runtime_effect": False,
+        "fast_precheck_attach_current_allowed_runtime_apply": False,
+        "fast_precheck_attach_current_actual_order_submitted": False,
+        "fast_precheck_attach_current_broker_order_forbidden": True,
+        "fast_precheck_attach_current_forbidden_uses": (
+            "standalone_buy,threshold_mutation,provider_route_change,"
+            "order_price_change,quantity_or_cap_change,broker_guard_bypass,"
+            "stale_quote_bypass,hard_safety_bypass"
+        ),
         "fast_precheck_rest_supplement_status": rest_supplement_status,
         "fast_precheck_rest_supplement_block_reason": rest_supplement_block_reason,
         "fast_precheck_rest_quote_anchor_price": (
@@ -47151,6 +47206,121 @@ def _opening_rotation_contract_fields(*, runtime_effect: bool) -> dict:
     }
 
 
+def _opening_rotation_no_pullback_continuation_fields(
+    stock: dict | None,
+    *,
+    reason: str,
+    promotion_price_fields: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Record a source-only continuation opportunity after no pullback.
+
+    OPENING rotation remains the live entry owner.  These fields only make the
+    otherwise hidden counterfactual measurable; they cannot route to AI,
+    submit, sizing, or broker authority.
+    """
+
+    stock = stock if isinstance(stock, dict) else {}
+    promotion_price_fields = (
+        promotion_price_fields if isinstance(promotion_price_fields, dict) else {}
+    )
+    venue_fields = _scanner_runtime_event_venue_fields(stock)
+    anchor_price = _safe_int(promotion_price_fields.get("scanner_promotion_price"), 0)
+    current_ws_price = _safe_int(
+        promotion_price_fields.get("scanner_promotion_price_ws_curr"), 0
+    )
+    current_vs_anchor_delta_pct = (
+        (float(current_ws_price) - float(anchor_price)) / float(anchor_price) * 100.0
+        if anchor_price > 0 and current_ws_price > 0
+        else None
+    )
+    rising_threshold_pct = _scanner_rising_entry_min_delta_pct()
+    source_quality_passed = bool(
+        venue_fields.get("effective_venue") in {"KRX", "NXT", "PREMARKET_KRX_LIKE"}
+        and promotion_price_fields.get("scanner_promotion_price_ws_fresh")
+        and not promotion_price_fields.get("scanner_promotion_price_conflict")
+        and anchor_price > 0
+        and current_ws_price > 0
+    )
+    candidate = bool(
+        reason == "pullback_not_observed"
+        and source_quality_passed
+        and current_vs_anchor_delta_pct is not None
+        and current_vs_anchor_delta_pct >= rising_threshold_pct
+    )
+    generation_id = str(stock.get("scanner_generation_id") or "").strip()
+    effective_venue = str(venue_fields.get("effective_venue") or "UNKNOWN")
+    candidate_id = (
+        f"{generation_id}:{effective_venue}:"
+        "opening_rotation_no_pullback_continuation"
+        if generation_id
+        else "not_available_scanner_generation_id"
+    )
+    if reason != "pullback_not_observed":
+        candidate_reason = "not_applicable_opening_rotation_reason"
+    elif not source_quality_passed:
+        candidate_reason = "source_quality_gate_not_passed"
+    elif candidate:
+        candidate_reason = "fresh_ws_rising_threshold_crossed_without_pullback"
+    else:
+        candidate_reason = "current_vs_anchor_delta_below_existing_rising_threshold"
+    return {
+        "opening_rotation_no_pullback_continuation_candidate": candidate,
+        "opening_rotation_no_pullback_continuation_reason": candidate_reason,
+        "opening_rotation_no_pullback_continuation_candidate_id": candidate_id,
+        "opening_rotation_no_pullback_continuation_anchor_price": (
+            anchor_price if anchor_price > 0 else "not_available_attach_anchor_price"
+        ),
+        "opening_rotation_no_pullback_continuation_anchor_source": (
+            promotion_price_fields.get("scanner_promotion_price_source")
+            or "not_available_attach_anchor_source"
+        ),
+        "opening_rotation_no_pullback_continuation_current_ws_price": (
+            current_ws_price
+            if current_ws_price > 0
+            else "not_available_current_ws_price"
+        ),
+        "opening_rotation_no_pullback_continuation_current_vs_anchor_delta_pct": (
+            round(current_vs_anchor_delta_pct, 6)
+            if current_vs_anchor_delta_pct is not None
+            else "not_available_current_vs_anchor_delta_pct"
+        ),
+        "opening_rotation_no_pullback_continuation_rising_threshold_pct": round(
+            rising_threshold_pct, 6
+        ),
+        "opening_rotation_no_pullback_continuation_effective_venue": (effective_venue),
+        "opening_rotation_no_pullback_continuation_source_quality_passed": (
+            source_quality_passed
+        ),
+        "opening_rotation_no_pullback_continuation_metric_role": (
+            "counterfactual_entry_opportunity_observation"
+        ),
+        "opening_rotation_no_pullback_continuation_decision_authority": (
+            "source_only_no_entry_owner_or_submit_authority"
+        ),
+        "opening_rotation_no_pullback_continuation_window_policy": (
+            "same_scanner_generation_no_pullback_observation"
+        ),
+        "opening_rotation_no_pullback_continuation_sample_floor": (
+            "20_clean_post_baseline_candidates_per_venue"
+        ),
+        "opening_rotation_no_pullback_continuation_primary_decision_metric": (
+            "source_quality_adjusted_ev_pct"
+        ),
+        "opening_rotation_no_pullback_continuation_source_quality_gate": (
+            "explicit_venue_fresh_ws_positive_anchor_and_current_no_price_conflict"
+        ),
+        "opening_rotation_no_pullback_continuation_runtime_effect": False,
+        "opening_rotation_no_pullback_continuation_allowed_runtime_apply": False,
+        "opening_rotation_no_pullback_continuation_actual_order_submitted": False,
+        "opening_rotation_no_pullback_continuation_broker_order_forbidden": True,
+        "opening_rotation_no_pullback_continuation_forbidden_uses": (
+            "standalone_buy,entry_owner_change,threshold_mutation,provider_change,"
+            "order_price_change,quantity_or_cap_change,broker_guard_bypass,"
+            "stale_quote_bypass,hard_safety_bypass,live_runtime_approval"
+        ),
+    }
+
+
 def _opening_rotation_provenance_fields(stock: dict | None) -> dict[str, Any]:
     stock = stock if isinstance(stock, dict) else {}
     if not (
@@ -47921,6 +48091,20 @@ def _handle_watching_opening_rotation(stock, code, ws_data, runtime, config) -> 
         },
     )
     if should_log:
+        no_pullback_continuation_fields = (
+            _opening_rotation_no_pullback_continuation_fields(
+                stock,
+                reason=reason,
+                promotion_price_fields=promotion_price_fields,
+            )
+        )
+        event_contract_fields = _opening_rotation_contract_fields(
+            runtime_effect=bool(decision.get("qualified"))
+        )
+        if no_pullback_continuation_fields.get(
+            "opening_rotation_no_pullback_continuation_candidate"
+        ):
+            event_contract_fields["allowed_runtime_apply"] = False
         _log_entry_pipeline(
             stock,
             code,
@@ -47956,9 +48140,9 @@ def _handle_watching_opening_rotation(stock, code, ws_data, runtime, config) -> 
                     "ai_score_decision_authority",
                 }
             },
-            **_opening_rotation_contract_fields(
-                runtime_effect=bool(decision.get("qualified"))
-            ),
+            **promotion_price_fields,
+            **no_pullback_continuation_fields,
+            **event_contract_fields,
         )
     if not decision.get("qualified"):
         return True

@@ -5115,6 +5115,17 @@ def test_scanner_promotion_price_validation_does_not_block_later_normal_move():
     )
 
     assert initial["scanner_promotion_price_consistency_state"] == "consistent"
+    assert initial["fast_precheck_attach_anchor_price"] == 10000
+    assert (
+        initial["fast_precheck_attach_anchor_source"]
+        == "scanner_generation_observed_price"
+    )
+    assert initial["fast_precheck_current_ws_price"] == 10010
+    assert initial["fast_precheck_current_price_source"] == "ws_data.curr"
+    assert initial["fast_precheck_current_vs_attach_delta_pct"] == 0.1
+    assert initial["fast_precheck_attach_current_runtime_effect"] is False
+    assert initial["fast_precheck_attach_current_allowed_runtime_apply"] is False
+    assert initial["fast_precheck_attach_current_broker_order_forbidden"] is True
     assert stock["_scanner_promotion_price_validated_generation_id"] == ("GEN-000853-1")
     assert moved["scanner_promotion_price_gap_pct"] == 2.0
     assert moved["scanner_promotion_price_conflict"] is False

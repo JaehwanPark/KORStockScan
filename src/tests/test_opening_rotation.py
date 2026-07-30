@@ -416,6 +416,140 @@ def test_pullback_wait_exposes_downstream_gate_preview_without_bypass():
     )
 
 
+def test_no_pullback_continuation_is_source_only_and_venue_scoped(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_RISING_FULL_EVAL_MIN_DELTA_PCT", "1.0")
+    fields = handlers._opening_rotation_no_pullback_continuation_fields(
+        {
+            "scanner_generation_id": "GEN-058610-1",
+            "effective_venue": "KRX",
+            "venue": "KRX",
+            "market_session_bucket": "krx_regular",
+        },
+        reason="pullback_not_observed",
+        promotion_price_fields={
+            "scanner_promotion_price": 83_300,
+            "scanner_promotion_price_source": "scanner_generation_observed_price",
+            "scanner_promotion_price_ws_curr": 84_600,
+            "scanner_promotion_price_ws_fresh": True,
+            "scanner_promotion_price_conflict": False,
+        },
+    )
+
+    assert fields["opening_rotation_no_pullback_continuation_candidate"] is True
+    assert fields[
+        "opening_rotation_no_pullback_continuation_current_vs_anchor_delta_pct"
+    ] == pytest.approx(1.560624, abs=0.000001)
+    assert fields["opening_rotation_no_pullback_continuation_effective_venue"] == "KRX"
+    assert fields["opening_rotation_no_pullback_continuation_runtime_effect"] is False
+    assert (
+        fields["opening_rotation_no_pullback_continuation_allowed_runtime_apply"]
+        is False
+    )
+    assert (
+        fields["opening_rotation_no_pullback_continuation_actual_order_submitted"]
+        is False
+    )
+    assert (
+        fields["opening_rotation_no_pullback_continuation_broker_order_forbidden"]
+        is True
+    )
+
+    missing_venue = handlers._opening_rotation_no_pullback_continuation_fields(
+        {"scanner_generation_id": "GEN-058610-1"},
+        reason="pullback_not_observed",
+        promotion_price_fields={
+            "scanner_promotion_price": 83_300,
+            "scanner_promotion_price_ws_curr": 84_600,
+            "scanner_promotion_price_ws_fresh": True,
+            "scanner_promotion_price_conflict": False,
+        },
+    )
+    assert missing_venue["opening_rotation_no_pullback_continuation_candidate"] is False
+    assert (
+        missing_venue["opening_rotation_no_pullback_continuation_reason"]
+        == "source_quality_gate_not_passed"
+    )
+
+
+def test_runtime_observed_event_carries_no_pullback_continuation_provenance(
+    monkeypatch,
+):
+    now_dt = datetime(2026, 7, 30, 10, 4, 33)
+    stock = {
+        "id": 58610,
+        "name": "에스피지",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "source_signature": "PRICE_JUMP_START",
+        "scanner_promotion_id": "SCANPROM-058610-1",
+        "scanner_generation_id": "GEN-058610-1",
+        "scanner_generation_observed_price": 83_300,
+        "current_price_observed": 83_300,
+        "_scanner_promotion_price_validated_generation_id": "GEN-058610-1",
+        "effective_venue": "KRX",
+        "venue": "KRX",
+        "market_session_bucket": "krx_regular",
+        "intraday_high_price": 86_000,
+    }
+    runtime = {
+        "pos_tag": "SCANNER",
+        "now_ts": now_dt.timestamp(),
+        "now_dt": now_dt,
+        "fluctuation": 3.0,
+        "curr_price": 84_600,
+        "is_trigger": False,
+    }
+    emitted = []
+    monkeypatch.setattr(
+        handlers,
+        "_resolve_scanner_async_opening_rotation_context",
+        lambda *args, **kwargs: {
+            "status": "completed",
+            "feature_packet": _packet(84_600),
+        },
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_log_entry_pipeline",
+        lambda *args, **kwargs: emitted.append((args, kwargs)),
+    )
+
+    handled = handlers._handle_watching_opening_rotation(
+        stock,
+        "058610",
+        {
+            "curr": 84_600,
+            "fluctuation": 3.0,
+            "last_ws_update_ts": now_dt.timestamp() - 0.05,
+            "last_realtime_type_ts": {"0B": now_dt.timestamp() - 0.05},
+        },
+        runtime,
+        {"MIN_SCALP_LIQUIDITY": 500_000_000},
+    )
+
+    assert handled is True
+    assert runtime["is_trigger"] is False
+    observed = next(
+        fields
+        for args, fields in emitted
+        if args[2] == "opening_rotation_1pct_observed"
+    )
+    assert observed["reason"] == "pullback_not_observed"
+    assert observed["scanner_promotion_price"] == 83_300
+    assert observed["scanner_promotion_price_ws_curr"] == 84_600
+    assert observed["opening_rotation_no_pullback_continuation_candidate"] is True
+    assert (
+        observed["opening_rotation_no_pullback_continuation_candidate_id"]
+        == "GEN-058610-1:KRX:opening_rotation_no_pullback_continuation"
+    )
+    assert observed["runtime_effect"] is False
+    assert observed["allowed_runtime_apply"] is False
+    assert observed["actual_order_submitted"] is False
+    assert observed["broker_order_forbidden"] is True
+    assert stock.get("rising_missed_buy") is None
+
+
 def test_runtime_blocks_opening_rotation_before_async_on_promotion_price_conflict(
     monkeypatch,
 ):
