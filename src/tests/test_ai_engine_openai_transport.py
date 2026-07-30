@@ -3094,6 +3094,294 @@ def test_decision_quality_v2_7_repairs_non_buy_exact_ledger_classification():
     assert result["decision_quality_model_evidence"]["positive_edge"] == "none"
 
 
+def test_decision_quality_v2_7_repairs_known_tape_trigger_reason_alias():
+    engine = _build_engine()
+    result = engine._normalize_decision_quality_entry_result(
+        {
+            "edge_state": "NO_EDGE",
+            "action": "DROP",
+            "expected_upside_pct": 0.4,
+            "expected_downside_pct": -1.0,
+            "confidence": 70,
+            "reason_codes": [
+                "edge_absent",
+                "tape_sample_insufficient",
+                "trigger_state_insufficient_tape_confirmation",
+            ],
+            "evidence": {
+                "trend": "mixed",
+                "liquidity": "mixed",
+                "tape": "insufficient",
+                "risk": "high",
+                "uncertainty": "high",
+                "setup": "no_setup",
+                "positive_edge": "none",
+                "adverse_risk": "high",
+                "trigger": "insufficient",
+            },
+        },
+        exact_payload={
+            "features": {
+                "tick_aggressor_trusted_count": 0,
+                "tick_context_quality": "fresh_computed",
+            }
+        },
+    )
+
+    assert result["action"] == "DROP"
+    assert result["decision_quality_contract_status"] == "pass"
+    assert result["decision_quality_contract_repair_applied"] is True
+    assert result["decision_quality_contract_repair_codes"] == [
+        "non_buy_invalid_reason_codes_removed"
+    ]
+    assert result["decision_quality_contract_invalid_reason_codes"] == [
+        "trigger_state_insufficient_tape_confirmation"
+    ]
+    assert result["reason_codes"] == ["edge_absent", "tape_sample_insufficient"]
+
+
+def test_decision_quality_v2_7_repairs_blocking_risk_enum_without_buy_authority():
+    engine = _build_engine()
+    result = engine._normalize_decision_quality_entry_result(
+        {
+            "edge_state": "NO_EDGE",
+            "action": "DROP",
+            "expected_upside_pct": 0.4,
+            "expected_downside_pct": -1.0,
+            "confidence": 72,
+            "reason_codes": ["edge_absent", "adverse_risk_high"],
+            "evidence": {
+                "trend": "adverse",
+                "liquidity": "adverse",
+                "tape": "adverse",
+                "risk": "blocking",
+                "uncertainty": "medium",
+                "setup": "no_setup",
+                "positive_edge": "none",
+                "adverse_risk": "blocking",
+                "trigger": "failed",
+            },
+        },
+        exact_payload={
+            "features": {
+                "tick_aggressor_trusted_count": 0,
+                "tick_context_quality": "fresh_computed",
+            }
+        },
+    )
+
+    assert result["action"] == "DROP"
+    assert result["evidence"]["risk"] == "high"
+    assert result["decision_quality_contract_status"] == "pass"
+    assert result["decision_quality_contract_repair_codes"] == [
+        "non_buy_blocking_risk_enum_aligned"
+    ]
+
+
+def test_decision_quality_v2_7_keeps_blocking_wait_observation_only():
+    engine = _build_engine()
+    result = engine._normalize_decision_quality_entry_result(
+        {
+            "edge_state": "EDGE",
+            "action": "WAIT",
+            "expected_upside_pct": 0.8,
+            "expected_downside_pct": -0.8,
+            "confidence": 75,
+            "reason_codes": [
+                "edge_positive",
+                "recovery_trigger_required",
+                "ask_wall_adverse",
+            ],
+            "evidence": {
+                "trend": "supportive",
+                "liquidity": "adverse",
+                "tape": "mixed",
+                "risk": "high",
+                "uncertainty": "medium",
+                "setup": "pullback_recovery",
+                "positive_edge": "moderate",
+                "adverse_risk": "blocking",
+                "trigger": "recovery_required",
+            },
+        },
+        exact_payload={
+            "features": {
+                "tick_aggressor_trusted_count": 0,
+                "tick_context_quality": "fresh_computed",
+            }
+        },
+        prompt_version=DECISION_QUALITY_V2_7_PROBE_PROMPT_VERSION,
+    )
+
+    assert result["action"] == "WAIT"
+    assert result["score"] == 68
+    assert result["evidence"]["adverse_risk"] == "blocking"
+    assert result["entry_probe_intent"] is False
+    assert result["entry_probe_intent_status"] == "not_eligible"
+    assert result["decision_quality_contract_status"] == "pass"
+    assert result["decision_quality_contract_repair_applied"] is False
+
+
+def test_decision_quality_v2_7_repairs_no_edge_trigger_reason_conflict_only():
+    engine = _build_engine()
+    result = engine._normalize_decision_quality_entry_result(
+        {
+            "edge_state": "NO_EDGE",
+            "action": "DROP",
+            "expected_upside_pct": 0.6,
+            "expected_downside_pct": -1.8,
+            "confidence": 78,
+            "reason_codes": [
+                "edge_absent",
+                "distribution_adverse",
+                "volume_confirmation_missing",
+                "liquidity_adverse",
+                "tape_sample_insufficient",
+                "recovery_trigger_required",
+            ],
+            "evidence": {
+                "trend": "adverse",
+                "liquidity": "adverse",
+                "tape": "mixed",
+                "risk": "high",
+                "uncertainty": "medium",
+                "setup": "no_setup",
+                "positive_edge": "none",
+                "adverse_risk": "high",
+                "trigger": "insufficient",
+            },
+        },
+        exact_payload={},
+        prompt_version=DECISION_QUALITY_V2_7_PROBE_PROMPT_VERSION,
+    )
+
+    assert result["action"] == "DROP"
+    assert result["decision_quality_contract_status"] == "pass"
+    assert result["entry_probe_intent"] is False
+    assert result["reason_codes"] == [
+        "edge_absent",
+        "distribution_adverse",
+        "volume_confirmation_missing",
+        "liquidity_adverse",
+        "tape_sample_insufficient",
+    ]
+    assert result["decision_quality_contract_repair_codes"] == [
+        "non_buy_conflicting_trigger_reason_removed"
+    ]
+    assert result["decision_quality_model_reason_codes"][-1] == (
+        "recovery_trigger_required"
+    )
+
+
+def test_decision_quality_v2_7_repairs_non_buy_neutral_tape_enum_only():
+    engine = _build_engine()
+    result = engine._normalize_decision_quality_entry_result(
+        {
+            "edge_state": "NO_EDGE",
+            "action": "DROP",
+            "expected_upside_pct": 0.2,
+            "expected_downside_pct": -1.0,
+            "confidence": 78,
+            "reason_codes": [
+                "edge_absent",
+                "distribution_adverse",
+                "liquidity_adverse",
+                "tape_adverse",
+            ],
+            "evidence": {
+                "trend": "adverse",
+                "liquidity": "adverse",
+                "tape": "neutral",
+                "risk": "high",
+                "uncertainty": "medium",
+                "setup": "no_setup",
+                "positive_edge": "none",
+                "adverse_risk": "high",
+                "trigger": "not_applicable",
+            },
+        },
+        exact_payload={},
+        prompt_version=DECISION_QUALITY_V2_7_PROBE_PROMPT_VERSION,
+    )
+
+    assert result["action"] == "DROP"
+    assert result["decision_quality_contract_status"] == "pass"
+    assert result["entry_probe_intent"] is False
+    assert result["evidence"]["tape"] == "adverse"
+    assert result["decision_quality_contract_repair_codes"] == [
+        "non_buy_neutral_tape_enum_aligned"
+    ]
+    assert result["decision_quality_model_evidence"]["tape"] == "neutral"
+
+
+def test_decision_quality_v2_7_repairs_no_edge_setup_without_structural_floor():
+    engine = _build_engine()
+    result = engine._normalize_decision_quality_entry_result(
+        {
+            "edge_state": "NO_EDGE",
+            "action": "DROP",
+            "expected_upside_pct": 0.5,
+            "expected_downside_pct": -0.8,
+            "confidence": 70,
+            "reason_codes": ["edge_absent", "recovery_trigger_required"],
+            "evidence": {
+                "trend": "mixed",
+                "liquidity": "mixed",
+                "tape": "mixed",
+                "risk": "medium",
+                "uncertainty": "medium",
+                "setup": "pullback_recovery",
+                "positive_edge": "none",
+                "adverse_risk": "moderate",
+                "trigger": "recovery_required",
+            },
+        },
+        exact_payload={},
+        prompt_version=DECISION_QUALITY_V2_7_PROBE_PROMPT_VERSION,
+    )
+
+    assert result["action"] == "DROP"
+    assert result["evidence"]["setup"] == "no_setup"
+    assert result["decision_quality_contract_status"] == "pass"
+    assert result["decision_quality_contract_repair_codes"] == [
+        "non_buy_no_edge_setup_aligned"
+    ]
+    assert result["decision_quality_model_evidence"]["setup"] == "pullback_recovery"
+
+
+def test_decision_quality_v2_7_does_not_repair_invalid_buy_neutral_tape():
+    engine = _build_engine()
+    result = engine._normalize_decision_quality_entry_result(
+        {
+            "edge_state": "EDGE",
+            "action": "BUY",
+            "expected_upside_pct": 1.5,
+            "expected_downside_pct": -0.5,
+            "confidence": 80,
+            "reason_codes": ["edge_positive", "continuation_supported"],
+            "evidence": {
+                "trend": "supportive",
+                "liquidity": "supportive",
+                "tape": "neutral",
+                "risk": "low",
+                "uncertainty": "low",
+                "setup": "continuation",
+                "positive_edge": "strong",
+                "adverse_risk": "low",
+                "trigger": "confirmed",
+            },
+        },
+        exact_payload={},
+        prompt_version=DECISION_QUALITY_V2_7_PROBE_PROMPT_VERSION,
+    )
+
+    assert result["action"] == "DROP"
+    assert result["score"] == 0
+    assert result["decision_quality_contract_status"] == "semantic_rejected"
+    assert result["decision_quality_contract_repair_applied"] is False
+    assert "evidence_tape_invalid" in result["decision_quality_contract_errors"]
+
+
 def test_decision_quality_v2_7_never_repairs_invalid_buy_reason_codes():
     engine = _build_engine()
     result = engine._normalize_decision_quality_entry_result(

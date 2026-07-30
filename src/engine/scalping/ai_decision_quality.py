@@ -1030,6 +1030,10 @@ def load_pipeline_price_and_lifecycle_rows(
                 }
             )
         lifecycle_identifiers = {
+            "decision_trace_id": fields.get("ai_decision_trace_id"),
+            "entry_price_decision_trace_id": fields.get(
+                "entry_price_ai_decision_trace_id"
+            ),
             "record_id": row.get("record_id") or fields.get("record_id"),
             "recommendation_id": fields.get("recommendation_id"),
             "probe_bundle_id": fields.get("probe_bundle_id"),
@@ -1310,9 +1314,12 @@ def _correlation(
 ) -> dict[str, Any]:
     label_code = _normalize_stock_code(label.get("stock_code"))
     decision_ts = _parse_ts(label.get("decision_ts"))
+    label_stage = _stage(label.get("decision_stage"))
+    label_trace_id = str(label.get("decision_trace_id") or "").strip()
     identifiers = {
         str(label.get(key))
         for key in (
+            "decision_trace_id",
             "record_id",
             "recommendation_id",
             "probe_bundle_id",
@@ -1329,6 +1336,16 @@ def _correlation(
             continue
         if decision_ts is None or row_ts is None or row_ts < decision_ts:
             continue
+        row_trace_id = str(
+            (
+                row.get("entry_price_decision_trace_id")
+                if label_stage == "entry_price"
+                else row.get("decision_trace_id")
+            )
+            or ""
+        ).strip()
+        if label_trace_id and row_trace_id and label_trace_id != row_trace_id:
+            continue
         values = {
             str(row.get(key))
             for key in (
@@ -1340,6 +1357,8 @@ def _correlation(
             )
             if row.get(key) not in (None, "", "-")
         }
+        if row_trace_id:
+            values.add(row_trace_id)
         if identifiers and identifiers.intersection(values):
             matched.append(row)
     matched.sort(
@@ -2881,7 +2900,7 @@ def validate_candidate_response(
                 elif action == "WAIT":
                     if trigger != "recovery_required":
                         errors.append("entry_wait_requires_recovery_trigger")
-                    if adverse_risk in {"blocking", "insufficient"}:
+                    if adverse_risk == "insufficient":
                         errors.append("entry_wait_adverse_risk_invalid")
                 elif action == "DROP":
                     reward_risk_unfavorable = (
@@ -3502,9 +3521,10 @@ def execute_openai_prompt_v2_candidate(
             )
         if "entry_wait_adverse_risk_invalid" in correction_errors:
             correction_rules.append(
-                "WAIT cannot carry blocking or insufficient adverse risk. If risk "
-                "is blocking, return EDGE/DROP with a failed or confirmed trigger "
-                "and numeric unfavorable reward/risk as appropriate"
+                "WAIT cannot carry insufficient adverse risk. Blocking current-entry "
+                "risk may remain EDGE/WAIT only with trigger=recovery_required; it "
+                "is observation-only and must not imply probe or submit authority. "
+                "Use DROP when the setup failed or structure was invalidated"
             )
         if "entry_buy_adverse_risk_too_high" in correction_errors:
             correction_rules.append(

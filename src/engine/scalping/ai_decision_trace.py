@@ -1591,6 +1591,28 @@ def record_ai_decision_trace(
                 )
                 else []
             ),
+            "entry_probe_intent": (
+                bool(merged.get("entry_probe_intent"))
+                if "entry_probe_intent" in merged
+                else None
+            ),
+            "entry_probe_intent_status": _optional(merged, "entry_probe_intent_status"),
+            "entry_probe_intent_prompt_version": _optional(
+                merged, "entry_probe_intent_prompt_version"
+            ),
+            "entry_probe_intent_authority": _optional(
+                merged, "entry_probe_intent_authority"
+            ),
+            "entry_probe_intent_submit_guard_required": (
+                bool(merged.get("entry_probe_intent_submit_guard_required"))
+                if "entry_probe_intent_submit_guard_required" in merged
+                else None
+            ),
+            "entry_probe_intent_actual_order_submitted": (
+                bool(merged.get("entry_probe_intent_actual_order_submitted"))
+                if "entry_probe_intent_actual_order_submitted" in merged
+                else None
+            ),
             "action": _optional(
                 merged, "action_v2", "action", "action_key", "action_label"
             ),
@@ -1679,6 +1701,18 @@ def record_ai_decision_trace(
             "score": trace_row["score"],
             "confidence": trace_row["confidence"],
             "reason_codes": trace_row["reason_codes"],
+            "entry_probe_intent": trace_row["entry_probe_intent"],
+            "entry_probe_intent_status": trace_row["entry_probe_intent_status"],
+            "entry_probe_intent_prompt_version": trace_row[
+                "entry_probe_intent_prompt_version"
+            ],
+            "entry_probe_intent_authority": trace_row["entry_probe_intent_authority"],
+            "entry_probe_intent_submit_guard_required": trace_row[
+                "entry_probe_intent_submit_guard_required"
+            ],
+            "entry_probe_intent_actual_order_submitted": trace_row[
+                "entry_probe_intent_actual_order_submitted"
+            ],
             "result_source": trace_row["result_source"],
             "input_preflight_mode": trace_row["input_preflight_mode"],
             "reference_price_type": trace_row["reference_price_type"],

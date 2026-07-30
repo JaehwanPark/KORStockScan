@@ -1212,6 +1212,44 @@ def test_decision_quality_contract_rejection_is_preserved_in_trace(
     }
 
 
+def test_entry_probe_intent_is_preserved_in_trace_and_pending_label(
+    monkeypatch, tmp_path
+):
+    _enable(monkeypatch, tmp_path)
+
+    trace.record_ai_decision_trace(
+        {
+            "ai_decision_trace_id": "entry-probe-intent-1",
+            "action": "WAIT",
+            "score": 65,
+            "provider_called": True,
+            "provider": "openai",
+            "entry_probe_intent": True,
+            "entry_probe_intent_status": "eligible_wait_probe",
+            "entry_probe_intent_prompt_version": "decision_quality_v2_7_probe_v1",
+            "entry_probe_intent_authority": (
+                "candidate_only_existing_submit_guard_required"
+            ),
+            "entry_probe_intent_submit_guard_required": True,
+            "entry_probe_intent_actual_order_submitted": False,
+        },
+        prompt_type="scalping_entry",
+        prompt_version="decision_quality_v2_7_probe_v1",
+        result_source="live",
+        provider_called=True,
+    )
+
+    trace_row = _rows(trace._trace_path(trace._date_text()))[0]
+    pending_row = _rows(trace._outcome_path(trace._date_text()))[0]
+    assert trace_row["entry_probe_intent"] is True
+    assert trace_row["entry_probe_intent_status"] == "eligible_wait_probe"
+    assert trace_row["entry_probe_intent_submit_guard_required"] is True
+    assert trace_row["entry_probe_intent_actual_order_submitted"] is False
+    assert pending_row["entry_probe_intent"] is True
+    assert pending_row["entry_probe_intent_status"] == "eligible_wait_probe"
+    assert pending_row["entry_probe_intent_actual_order_submitted"] is False
+
+
 def test_decision_quality_non_buy_repair_provenance_is_preserved_in_trace(
     monkeypatch, tmp_path
 ):

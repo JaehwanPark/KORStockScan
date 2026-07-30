@@ -23944,6 +23944,42 @@ def test_score65_74_recovery_probe_bypasses_first_ai_big_bite_wait(monkeypatch):
     assert sent_orders
 
 
+def test_score65_74_recovery_probe_blocks_observation_only_blocking_wait(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        state_handlers,
+        "TRADING_RULES",
+        replace(CONFIG, AI_SCORE65_74_RECOVERY_PROBE_ENABLED=True),
+    )
+
+    result = state_handlers._score65_74_recovery_probe_decision(
+        {
+            "action": "WAIT",
+            "score": 68,
+            "reason": "edge_positive,recovery_trigger_required,ask_wall_adverse",
+            "decision_quality_contract_status": "pass",
+            "evidence": {
+                "setup": "pullback_recovery",
+                "positive_edge": "moderate",
+                "adverse_risk": "blocking",
+                "trigger": "recovery_required",
+            },
+        },
+        68,
+        {},
+        [],
+        [],
+        None,
+    )
+
+    assert result["allowed"] is False
+    assert result["evaluated"] is True
+    assert result["score65_74_recovery_probe_skip_reason"] == (
+        "ai_blocking_adverse_risk_observation_only"
+    )
+
+
 def test_watching_state_blocks_deep_below_bid_pre_submit_price(monkeypatch):
     from src.utils.constants import TRADING_RULES as CONFIG
 
@@ -26243,6 +26279,12 @@ def test_entry_ai_price_canary_improves_live_order_price(monkeypatch):
                 "openai_ws_http_fallback": False,
                 "openai_endpoint_name": "entry_price",
                 "openai_ws_roundtrip_ms": 1200,
+                "ai_decision_trace_id": "entry-price-trace-1",
+                "ai_input_snapshot_id": "entry-price-snapshot-1",
+                "ai_input_payload_sha256": "a" * 64,
+                "ai_prompt_sha256": "b" * 64,
+                "ai_prompt_version": "entry_price_v1",
+                "ai_result_source": "live",
             }
 
     latency_gate = {
@@ -26283,6 +26325,17 @@ def test_entry_ai_price_canary_improves_live_order_price(monkeypatch):
     assert latency_gate["price_resolution_reason"] == "ai_tier2_improve_limit"
     assert latency_gate["openai_endpoint_name"] == "entry_price"
     assert latency_gate["openai_transport_mode"] == "responses_ws"
+    assert latency_gate["entry_price_ai_decision_trace_id"] == "entry-price-trace-1"
+    assert stock["entry_price_ai_decision_trace_id"] == "entry-price-trace-1"
+    submit_fields = state_handlers._build_entry_submit_revalidation_fields(
+        {"last_ws_update_ts": state_handlers.time.time()},
+        latency_gate,
+    )
+    assert submit_fields["entry_price_ai_decision_trace_id"] == "entry-price-trace-1"
+    order_fields = state_handlers._split_order_meta_fields(
+        {**planned_orders[0], **submit_fields}
+    )
+    assert order_fields["entry_price_ai_decision_trace_id"] == "entry-price-trace-1"
     assert stock["entry_timeout_sec_override"] == 45
     assert captured_metadata["record_id"] == 123
     assert captured_metadata["sim_record_id"] is None
@@ -27833,6 +27886,8 @@ def test_pending_entry_cancel_logs_receipt_provenance(monkeypatch):
                 "best_bid_at_submit": 92000,
                 "best_ask_at_submit": 92100,
                 "price_below_bid_bps": 11,
+                "entry_price_ai_decision_trace_id": "entry-price-trace-1",
+                "entry_price_ai_snapshot_id": "entry-price-snapshot-1",
             }
         ],
     }
@@ -27850,6 +27905,14 @@ def test_pending_entry_cancel_logs_receipt_provenance(monkeypatch):
     assert stages["entry_order_cancel_requested"]["dmst_stex_tp"] == "SOR"
     assert stages["entry_order_cancel_confirmed"]["cancel_ord_no"] == "C1"
     assert stages["entry_order_cancel_confirmed"]["submitted_price"] == 91900
+    assert (
+        stages["entry_order_cancel_requested"]["entry_price_ai_decision_trace_id"]
+        == "entry-price-trace-1"
+    )
+    assert (
+        stages["entry_order_cancel_confirmed"]["entry_price_ai_snapshot_id"]
+        == "entry-price-snapshot-1"
+    )
     assert cancel_calls[-1]["dmst_stex_tp"] == "SOR"
 
 

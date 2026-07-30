@@ -768,23 +768,27 @@ Entry edge/risk separation:
    price_volume_divergence. Use NO_EDGE/DROP with distribution_adverse and
    volume_confirmation_missing. A tiny positive tape sample cannot reverse this
    completed-bar conclusion.
-9. Treat liquidity as high or blocking adverse risk when spread_bp >= 50 and
-   top1 ask notional is at least five times top1 bid notional. Add ask_wall_adverse.
-   This combination cannot support BUY and reinforces DROP when the completed-bar
-   distribution is also adverse.
+9. Treat liquidity as high current-entry risk when spread_bp >= 50 and top1 ask
+   notional is at least five times top1 bid notional. Add ask_wall_adverse. This
+   combination cannot support BUY. It becomes blocking adverse risk, but not a
+   standalone reason to discard an intact structural edge: use WAIT with
+   trigger=recovery_required while the setup remains intact, and use DROP when
+   completed-bar distribution is adverse, the setup is invalidated, or the
+   trigger has failed.
 10. BUY requires edge_state=EDGE, positive_edge=moderate or strong,
    trigger=confirmed, adverse_risk=low or moderate, and
    a strictly negative expected_downside_pct with
    expected_upside_pct / abs(expected_downside_pct) >= 1.25.
 11. WAIT is not the default for sufficient data. Use WAIT only for
-   (a) EDGE with trigger=recovery_required and non-blocking adverse risk, or
-   (b) INSUFFICIENT_DATA. State the missing recovery condition with canonical
-   reason codes.
+   (a) EDGE with trigger=recovery_required, including blocking current-entry risk
+   when the structural setup remains intact, or (b) INSUFFICIENT_DATA. State the
+   missing recovery condition with canonical reason codes. Blocking WAIT means
+   observation only and cannot create probe or submit authority.
 12. Use DROP for NO_EDGE. Also use DROP when a structural edge exists but the setup
-   is invalidated, trigger=failed, adverse_risk=blocking, or a confirmed-trigger
-   setup has reward/risk below 1.25. An intact pullback edge with
-   trigger=recovery_required may remain WAIT while awaiting recovery. NO_EDGE with
-   WAIT is invalid.
+   is invalidated, trigger=failed, or a confirmed-trigger setup has reward/risk
+   below 1.25. Blocking current-entry risk alone does not erase an intact edge;
+   an intact pullback edge with trigger=recovery_required remains WAIT while
+   awaiting recovery. NO_EDGE with WAIT is invalid.
 """.strip()
 
 DECISION_QUALITY_HOLDING_V2_3_PROMPT_VERSION = "decision_quality_holding_v2_3"
@@ -982,13 +986,14 @@ Bounded early-probe decision rules:
    response contract. This prompt does not relax the BUY semantic floor.
 2. When structural edge is moderate or strong, the setup is continuation,
    pullback_recovery, or reversal, and the immediate trigger still needs recovery,
-   use EDGE/WAIT with non-blocking adverse risk. This WAIT is an upstream
-   one-share probe intent; it is not permission to submit an order.
+   use EDGE/WAIT. A WAIT with low/moderate/high adverse risk is an upstream
+   one-share probe intent candidate, not permission to submit an order. A WAIT
+   with blocking adverse risk is observation-only and has no probe intent.
 3. Do not use DROP solely because confirmation is incomplete, adverse-first risk
    is bounded, or a fresh observable spread is wide. Record a wide spread as
-   adverse liquidity and high risk. Use DROP when the risk is blocking, the setup
-   failed, the completed structure is invalidated, or the reward/risk is
-   unfavorable.
+   adverse liquidity and high or blocking current-entry risk. Use DROP when the
+   setup failed, completed structure is invalidated, trigger failed, or confirmed
+   setup reward/risk is unfavorable.
 4. Use NO_EDGE/DROP when sufficient exact data shows no positive edge. Use
    INSUFFICIENT_DATA/WAIT when a required source is missing, stale, conflicted, or
    venue/session inconsistent. Neither result creates a probe intent.

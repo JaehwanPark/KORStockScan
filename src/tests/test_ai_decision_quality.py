@@ -802,6 +802,60 @@ def test_kiwoom_completed_minute_loader_accepts_nxt_overlap_session():
     assert prices[0]["session_bucket"] == "NXT_REGULAR_OVERLAP"
 
 
+def test_pipeline_lifecycle_preserves_entry_price_trace_for_order_correlation():
+    _prices, lifecycle = quality.load_pipeline_price_and_lifecycle_rows(
+        [
+            {
+                "emitted_at": "2026-07-27T09:00:03+09:00",
+                "stock_code": "005930",
+                "record_id": "record-other",
+                "stage": "order_bundle_submitted",
+                "fields": {
+                    "entry_price_ai_decision_trace_id": "entry-price-trace-1",
+                    "broker_order_no": "1234567",
+                    "actual_order_submitted": True,
+                },
+            }
+        ]
+    )
+
+    assert lifecycle[0]["decision_trace_id"] is None
+    assert lifecycle[0]["entry_price_decision_trace_id"] == "entry-price-trace-1"
+    correlation = quality._correlation(
+        {
+            **_pending(),
+            "decision_trace_id": "entry-price-trace-1",
+            "decision_stage": "entry_price",
+            "record_id": "record-1",
+        },
+        lifecycle,
+    )
+    assert correlation["status"] == "exact_matched"
+    assert correlation["actual_order_submitted"] is True
+    mismatch = quality._correlation(
+        {
+            **_pending(),
+            "decision_trace_id": "entry-price-trace-other",
+            "decision_stage": "entry_price",
+            "record_id": "record-other",
+        },
+        lifecycle,
+    )
+    assert mismatch["status"] == "open_unresolved"
+    assert mismatch["actual_order_submitted"] is None
+    entry_parent = quality._correlation(
+        {
+            **_pending(),
+            "decision_trace_id": "entry-trace-parent",
+            "decision_stage": "entry",
+            "record_id": "record-other",
+        },
+        lifecycle,
+    )
+    assert entry_parent["status"] == "exact_matched"
+    assert entry_parent["actual_order_submitted"] is True
+
+
 def test_kiwoom_completed_minute_loader_blocks_ambiguous_or_conflicting_route():
     calls = []
 

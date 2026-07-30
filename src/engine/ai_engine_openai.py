@@ -1798,13 +1798,13 @@ class GPTSniperEngine:
             valid_reason_code_set = set(valid_reason_codes)
             redundant_trigger_reason_requirements = {
                 "trigger=insufficient_tape_confirmation": (
-                    "insufficient",
+                    {"insufficient"},
                     {
                         "tape_sample_insufficient",
                     },
                 ),
                 "trigger=insufficient": (
-                    "insufficient",
+                    {"insufficient"},
                     {
                         "insufficient_core_data",
                         "tape_missing",
@@ -1812,7 +1812,7 @@ class GPTSniperEngine:
                     },
                 ),
                 "trigger=confirmed": (
-                    "confirmed",
+                    {"confirmed"},
                     {
                         "continuation_supported",
                         "recovery_trigger_confirmed",
@@ -1820,18 +1820,24 @@ class GPTSniperEngine:
                     },
                 ),
                 "trigger=recovery_required": (
-                    "recovery_required",
+                    {"recovery_required"},
                     {
                         "recovery_trigger_required",
                     },
                 ),
                 "trigger=failed": (
-                    "failed",
+                    {"failed"},
                     {
                         "distribution_adverse",
                         "recovery_trigger_failed",
                         "setup_invalidated",
                         "tape_adverse",
+                    },
+                ),
+                "trigger_state_insufficient_tape_confirmation": (
+                    {"insufficient", "recovery_required"},
+                    {
+                        "tape_sample_insufficient",
                     },
                 ),
             }
@@ -1842,7 +1848,7 @@ class GPTSniperEngine:
                     )
                 )
                 is not None
-                and evidence_trigger == requirement[0]
+                and evidence_trigger in requirement[0]
                 and bool(valid_reason_code_set & requirement[1])
                 for code in invalid_reason_codes
             )
@@ -1854,6 +1860,72 @@ class GPTSniperEngine:
                 repaired["reason_codes"] = valid_reason_codes
                 repair_codes.append("non_buy_invalid_reason_codes_removed")
 
+            evidence = (
+                dict(repaired.get("evidence") or {})
+                if isinstance(repaired.get("evidence"), dict)
+                else {}
+            )
+            if (
+                "entry_trigger_reason_evidence_conflict" in contract_errors
+                and str(repaired.get("action") or "").strip().upper() == "DROP"
+                and str(repaired.get("edge_state") or "").strip().upper() == "NO_EDGE"
+            ):
+                trigger = str(evidence.get("trigger") or "").strip().lower()
+                trigger_reason_requirements = {
+                    "recovery_trigger_confirmed": "confirmed",
+                    "recovery_trigger_required": "recovery_required",
+                    "recovery_trigger_failed": "failed",
+                }
+                aligned_reason_codes = [
+                    code
+                    for code in repaired.get("reason_codes") or []
+                    if trigger_reason_requirements.get(str(code), trigger) == trigger
+                ]
+                if aligned_reason_codes != repaired.get("reason_codes"):
+                    repaired["reason_codes"] = aligned_reason_codes
+                    repair_codes.append("non_buy_conflicting_trigger_reason_removed")
+            if (
+                "evidence_tape_invalid" in contract_errors
+                and str(repaired.get("action") or "").strip().upper()
+                in {"WAIT", "DROP"}
+                and str(evidence.get("tape") or "").strip().lower() == "neutral"
+            ):
+                reason_code_set = {
+                    str(code) for code in repaired.get("reason_codes") or []
+                }
+                evidence["tape"] = (
+                    "adverse"
+                    if "tape_adverse" in reason_code_set
+                    else (
+                        "supportive"
+                        if "tape_supportive" in reason_code_set
+                        else "mixed"
+                    )
+                )
+                repaired["evidence"] = evidence
+                repair_codes.append("non_buy_neutral_tape_enum_aligned")
+            adverse_risk = str(evidence.get("adverse_risk") or "").strip().lower()
+            if (
+                "evidence_risk_invalid" in contract_errors
+                and str(repaired.get("action") or "").strip().upper()
+                in {"WAIT", "DROP"}
+                and str(evidence.get("risk") or "").strip().lower() == "blocking"
+                and adverse_risk == "blocking"
+            ):
+                evidence["risk"] = "high"
+                repaired["evidence"] = evidence
+                repair_codes.append("non_buy_blocking_risk_enum_aligned")
+            if (
+                "entry_no_edge_setup_invalid" in contract_errors
+                and "entry_structural_edge_floor_misclassified" not in contract_errors
+                and str(repaired.get("action") or "").strip().upper() == "DROP"
+                and str(repaired.get("edge_state") or "").strip().upper() == "NO_EDGE"
+                and str(evidence.get("positive_edge") or "").strip().lower()
+                in {"none", "weak"}
+            ):
+                evidence["setup"] = "no_setup"
+                repaired["evidence"] = evidence
+                repair_codes.append("non_buy_no_edge_setup_aligned")
             interim_errors = validate_candidate_response(
                 repaired,
                 stage="entry",

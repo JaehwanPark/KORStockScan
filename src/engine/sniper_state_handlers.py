@@ -34710,6 +34710,29 @@ def _recompute_entry_plan_from_observed_mark_gap(
     return adjusted_orders, fresh_current, fresh_bid, fresh_ask, fields
 
 
+def _entry_price_ai_trace_fields(source: dict | None) -> dict:
+    """Keep the price-decision provenance attached to the order lifetime."""
+
+    source = source if isinstance(source, dict) else {}
+    aliases = {
+        "entry_price_ai_decision_trace_id": "ai_decision_trace_id",
+        "entry_price_ai_snapshot_id": "ai_input_snapshot_id",
+        "entry_price_ai_market_snapshot_id": "ai_market_snapshot_id",
+        "entry_price_ai_payload_sha256": "ai_input_payload_sha256",
+        "entry_price_ai_prompt_sha256": "ai_prompt_sha256",
+        "entry_price_ai_prompt_version": "ai_prompt_version",
+        "entry_price_ai_result_source": "ai_result_source",
+    }
+    fields = {}
+    for target, fallback in aliases.items():
+        value = source.get(target)
+        if value in (None, "", "-"):
+            value = source.get(fallback)
+        if value not in (None, "", "-"):
+            fields[target] = value
+    return fields
+
+
 def _build_entry_submit_revalidation_fields(ws_data, latency_gate, *, now_ts=None):
     now_ts = float(now_ts or time.time())
     decision_ts = _safe_float(
@@ -34808,6 +34831,7 @@ def _build_entry_submit_revalidation_fields(ws_data, latency_gate, *, now_ts=Non
         "entry_passive_probe_reason": str(
             (latency_gate or {}).get("entry_passive_probe_reason") or ""
         ),
+        **_entry_price_ai_trace_fields(latency_gate),
     }
     if not latency_has_quote_fields:
         _merge_quote_consistency_fields(fields, quote_fields)
@@ -35214,6 +35238,7 @@ def _split_order_meta_fields(order: dict | None) -> dict:
         "entry_split_order_probe_continuation": src.get(
             "entry_split_order_probe_continuation"
         ),
+        **_entry_price_ai_trace_fields(src),
     }
 
 
@@ -37036,6 +37061,7 @@ def _compute_and_emit_entry_cancel_wait_attribution(
             "wait_profile": wait_profile,
             "runtime_family": ENTRY_CANCEL_WAIT_RUNTIME_FAMILY,
             "policy_version": ENTRY_CANCEL_WAIT_POLICY_VERSION,
+            **_entry_price_ai_trace_fields(gate),
         }
     )
     _log_entry_pipeline(stock, code, "entry_cancel_wait_attribution", **wait_log_fields)
@@ -37625,6 +37651,10 @@ def _apply_entry_ai_price_canary(
         **_build_ai_ops_log_fields(result),
         **entry_price_input_audit,
     }
+    entry_price_ai_trace_fields = _entry_price_ai_trace_fields(openai_transport_fields)
+    latency_gate.update(entry_price_ai_trace_fields)
+    if entry_price_ai_trace_fields:
+        _mutate_stock_state(stock, set_fields=entry_price_ai_trace_fields)
     openai_transport_fields["entry_price_input_schema"] = str(
         (result or {}).get("ai_input_schema")
         or openai_transport_fields.get("entry_price_input_schema")
@@ -46579,6 +46609,19 @@ def _score65_74_recovery_probe_decision(
             "allowed": False,
             "evaluated": False,
             "score65_74_recovery_probe_skip_reason": "fallback_score_50",
+        }
+    decision_evidence = (
+        (ai_decision or {}).get("evidence")
+        if isinstance((ai_decision or {}).get("evidence"), dict)
+        else {}
+    )
+    if str(decision_evidence.get("adverse_risk") or "").strip().lower() == "blocking":
+        return {
+            "allowed": False,
+            "evaluated": True,
+            "score65_74_recovery_probe_skip_reason": (
+                "ai_blocking_adverse_risk_observation_only"
+            ),
         }
     if str((ai_decision or {}).get("action", "WAIT") or "WAIT").upper() == "BUY":
         return {
@@ -57915,6 +57958,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 "quote_age_at_submit_ms": submit_revalidation_fields.get(
                     "quote_age_at_submit_ms"
                 ),
+                **_entry_price_ai_trace_fields(submit_revalidation_fields),
                 **(
                     {
                         "ai_score": 0.0,
@@ -58060,6 +58104,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             **split_leg_meta_fields,
             **_merge_entry_pipeline_field_groups(
                 real_pre_submit_guard_fields,
+                _entry_price_ai_trace_fields(submit_revalidation_fields),
             ),
         )
 
