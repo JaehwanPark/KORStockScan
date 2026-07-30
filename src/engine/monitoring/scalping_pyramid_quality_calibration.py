@@ -16,6 +16,8 @@ REPORT_TYPE = "scalping_pyramid_quality_calibration"
 INPUT_REPORT_DIR = DATA_DIR / "report" / "scalping_pyramid_intraday_feedback"
 OUTPUT_REPORT_DIR = DATA_DIR / "report" / REPORT_TYPE
 CLEAN_BASELINE_DATE = "2026-06-04"
+CUMULATIVE_LEARNING_SAMPLE_FLOOR = 1
+POST_PROBE_RUNTIME_PROMOTION_SAMPLE_FLOOR = 20
 CLOSED_LABELS = {
     "pyramid_would_have_helped",
     "pyramid_correctly_blocked",
@@ -408,7 +410,11 @@ def _post_probe_real_outcome_observation(
         if row.get("post_probe_real_outcome_label")
         == "loss_or_flat_zero_fill_confirmation_ready"
     )
-    sample_floor_met = len(confirmation_ready_rows) >= 20
+    learning_sample_count = len(confirmation_ready_rows)
+    learning_updated = learning_sample_count >= CUMULATIVE_LEARNING_SAMPLE_FLOOR
+    sample_floor_met = (
+        learning_sample_count >= POST_PROBE_RUNTIME_PROMOTION_SAMPLE_FLOOR
+    )
     notional_weighted_ev_pct = (
         round(
             sum(value * notional for value, notional in weighted)
@@ -478,10 +484,23 @@ def _post_probe_real_outcome_observation(
         "section_present": section_present,
         "closed_real_outcome_count": len(rows),
         "confirmation_ready_count": len(confirmation_ready_rows),
+        "cumulative_judgment_quality": {
+            "learning_sample_floor": CUMULATIVE_LEARNING_SAMPLE_FLOOR,
+            "learning_sample_count": learning_sample_count,
+            "learning_updated": learning_updated,
+            "learning_update_policy": (
+                "one_mature_post_probe_outcome_updates_cumulative_judgment_quality"
+            ),
+            "notional_weighted_ev_pct": notional_weighted_ev_pct,
+            "runtime_promotion_sample_floor": (
+                POST_PROBE_RUNTIME_PROMOTION_SAMPLE_FLOOR
+            ),
+            "learning_floor_grants_runtime_promotion": False,
+        },
         "confirmation_ready_counterfactual_source_blocked_count": (
             confirmation_ready_source_blocked_count
         ),
-        "sample_floor": 20,
+        "sample_floor": POST_PROBE_RUNTIME_PROMOTION_SAMPLE_FLOOR,
         "sample_floor_met": sample_floor_met,
         "provenance_rejected_count": provenance_rejected_count,
         "source_quality_rejected_count": source_quality_rejected_count,
@@ -509,6 +528,99 @@ def _post_probe_real_outcome_observation(
         "source_quality_gate": (
             "exact_probe_terminal_fill_real_sell_profit_explicit_venue_and_"
             "version_proven_post_probe_evidence"
+        ),
+        "forbidden_uses": FORBIDDEN_USES,
+    }
+
+
+def _post_probe_reprice_observation(reports: list[dict[str, Any]]) -> dict[str, Any]:
+    rows: list[dict[str, Any]] = []
+    for report in reports:
+        source_rows = report.get("one_share_pyramid_opportunity_rows")
+        if not isinstance(source_rows, list):
+            continue
+        for row in source_rows:
+            if not isinstance(row, dict):
+                continue
+            if not _boolish(row.get("post_probe_reprice_observed")):
+                continue
+            if not _boolish(row.get("post_probe_reprice_outcome_source_quality_valid")):
+                continue
+            if row.get("post_probe_real_outcome_profit_pct") is None:
+                continue
+            rows.append(row)
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        profiles = row.get("post_probe_reprice_profiles") or ["unknown"]
+        profile = "+".join(str(value) for value in profiles) or "unknown"
+        grouped[profile].append(row)
+    profile_quality = []
+    for profile, profile_rows in sorted(grouped.items()):
+        profits = [
+            _safe_float(row.get("post_probe_real_outcome_profit_pct"), 0.0)
+            for row in profile_rows
+        ]
+        improvement = [
+            _safe_float(row.get("post_probe_reprice_avg_passive_improvement_bps"), 0.0)
+            for row in profile_rows
+            if row.get("post_probe_reprice_avg_passive_improvement_bps") is not None
+        ]
+        profile_quality.append(
+            {
+                "reprice_profile": profile,
+                "sample_count": len(profile_rows),
+                "equal_weight_avg_profit_pct": round(sum(profits) / len(profits), 4),
+                "avg_passive_improvement_bps": (
+                    round(sum(improvement) / len(improvement), 4)
+                    if improvement
+                    else None
+                ),
+            }
+        )
+    learning_sample_count = len(rows)
+    equal_weight_avg_profit_pct = (
+        round(
+            sum(
+                _safe_float(row.get("post_probe_real_outcome_profit_pct"), 0.0)
+                for row in rows
+            )
+            / learning_sample_count,
+            4,
+        )
+        if learning_sample_count
+        else None
+    )
+    return {
+        "state": (
+            "cumulative_judgment_updated"
+            if learning_sample_count >= CUMULATIVE_LEARNING_SAMPLE_FLOOR
+            else "hold_sample"
+        ),
+        "learning_sample_floor": CUMULATIVE_LEARNING_SAMPLE_FLOOR,
+        "learning_sample_count": learning_sample_count,
+        "learning_updated": (learning_sample_count >= CUMULATIVE_LEARNING_SAMPLE_FLOOR),
+        "learning_update_policy": (
+            "one_mature_leg_reprice_outcome_updates_cumulative_judgment_quality"
+        ),
+        "equal_weight_avg_profit_pct": equal_weight_avg_profit_pct,
+        "profile_quality": profile_quality,
+        "runtime_promotion_sample_floor": POST_PROBE_RUNTIME_PROMOTION_SAMPLE_FLOOR,
+        "learning_floor_grants_runtime_promotion": False,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "metric_role": "execution_quality_real_only",
+        "decision_authority": "postclose_reprice_quality_observation_only",
+        "window_policy": (
+            "clean_baseline_cumulative_closed_real_post_probe_reprice_outcomes"
+        ),
+        "sample_floor": {
+            "cumulative_learning": CUMULATIVE_LEARNING_SAMPLE_FLOOR,
+            "runtime_promotion_real": POST_PROBE_RUNTIME_PROMOTION_SAMPLE_FLOOR,
+        },
+        "primary_decision_metric": "equal_weight_avg_profit_pct",
+        "source_quality_gate": (
+            "complete_post_probe_resolver_profile_action_previous_resolved_price_"
+            "and_valid_real_terminal_outcome"
         ),
         "forbidden_uses": FORBIDDEN_USES,
     }
@@ -761,6 +873,7 @@ def _calibration_candidate(
     one_share_rows, one_share_source_present = _closed_one_share_pyramid_rows(reports)
     normal_winner_expansion = _normal_winner_expansion_observation(reports)
     post_probe_real_outcome = _post_probe_real_outcome_observation(reports)
+    post_probe_reprice = _post_probe_reprice_observation(reports)
     rows = one_share_rows if one_share_source_present else _closed_pyramid_rows(reports)
     calibration_source_scope = (
         "one_share_event_opportunity"
@@ -865,6 +978,7 @@ def _calibration_candidate(
             "recommended_action_reason": reason,
             "normal_winner_expansion_observation": normal_winner_expansion,
             "post_probe_real_outcome_observation": post_probe_real_outcome,
+            "post_probe_reprice_observation": post_probe_reprice,
         },
         "source_reports": [str(path) for path in source_paths],
         "runtime_effect": False,
@@ -918,6 +1032,9 @@ def build_report(
         ),
         "post_probe_real_outcome_observation": (
             candidate["source_metrics"]["post_probe_real_outcome_observation"]
+        ),
+        "post_probe_reprice_observation": (
+            candidate["source_metrics"]["post_probe_reprice_observation"]
         ),
         "source_quality": {
             "status": (

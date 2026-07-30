@@ -3690,6 +3690,12 @@ def test_position_sizing_dynamic_formula_generates_candidate_grid():
     assert family["current"]["runtime_reflected"] is True
     assert family["implementation_status"] == "runtime_reflected_observed"
     assert family["sample"]["runtime_reflected_event_count"] == 35
+    assert family["cumulative_judgment_quality"]["learning_sample_floor"] == 1
+    assert family["cumulative_judgment_quality"]["learning_updated"] is True
+    assert (
+        family["cumulative_judgment_quality"]["learning_floor_grants_runtime_promotion"]
+        is False
+    )
     candidate_grid = family["candidate_grid"]
     assert isinstance(candidate_grid, list)
     assert len(candidate_grid) == 2

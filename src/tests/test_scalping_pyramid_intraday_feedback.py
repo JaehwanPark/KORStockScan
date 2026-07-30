@@ -1418,6 +1418,10 @@ def test_probe_residual_fill_uses_exact_bundle_terminal_not_later_buy_qty(tmp_pa
                 "order_no": "R605",
                 "qty": 79,
                 "price": 14050,
+                "entry_price_resolver_offset_profile": "normal",
+                "entry_price_resolver_action": "passive_reprice",
+                "entry_price_resolver_previous_price": 14100,
+                "entry_price_resolver_resolved_price": 14050,
             },
             pipeline="ENTRY_PIPELINE",
         ),
@@ -1456,6 +1460,14 @@ def test_probe_residual_fill_uses_exact_bundle_terminal_not_later_buy_qty(tmp_pa
     assert item["residual_fill_attribution_state"] == "full_fill"
     assert item["effective_venue"] == "KRX"
     assert item["market_session_bucket"] == "krx_regular"
+    assert item["post_probe_reprice_observed"] is True
+    assert item["post_probe_reprice_provenance_complete"] is True
+    assert item["post_probe_reprice_provenance_rejected_leg_count"] == 0
+    assert item["post_probe_reprice_outcome_source_quality_valid"] is False
+    assert item["post_probe_reprice_outcome_source_quality_reasons"] == [
+        "real_sell_completed_profit_missing"
+    ]
+    assert item["post_probe_reprice_avg_passive_improvement_bps"] == 35.461
 
 
 def test_probe_residual_without_terminal_receipt_is_open_unresolved(tmp_path):

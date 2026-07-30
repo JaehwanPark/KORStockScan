@@ -6055,6 +6055,28 @@ def _build_position_sizing_dynamic_formula_family(
         else:
             metrics["source_quality_blocked"] = False
         candidate_grid.append(metrics)
+    cumulative_learning_sample_count = max(
+        [
+            _safe_int(item.get("real_sample_count"), 0) or 0
+            for item in candidate_grid
+            if isinstance(item, dict)
+        ]
+        or [0]
+    )
+    cumulative_learning_updated = cumulative_learning_sample_count >= 1
+    cumulative_learning_candidates = [
+        {
+            "formula_candidate_id": item.get("formula_candidate_id"),
+            "real_sample_count": item.get("real_sample_count"),
+            "notional_weighted_ev_pct": item.get("notional_weighted_ev_pct"),
+            "source_quality_adjusted_ev_pct": item.get(
+                "source_quality_adjusted_ev_pct"
+            ),
+        }
+        for item in candidate_grid
+        if isinstance(item, dict)
+        and (_safe_int(item.get("real_sample_count"), 0) or 0) >= 1
+    ]
 
     current = {
         "formula_version": SCALPING_SIZING_FORMULA_VERSION,
@@ -6065,6 +6087,17 @@ def _build_position_sizing_dynamic_formula_family(
         ),
         "implementation_status": implementation_status,
         "runtime_reflected": runtime_reflected,
+        "cumulative_judgment_quality": {
+            "learning_sample_floor": 1,
+            "learning_sample_count": cumulative_learning_sample_count,
+            "learning_updated": cumulative_learning_updated,
+            "learning_update_policy": (
+                "one_mature_sizing_outcome_updates_cumulative_judgment_quality"
+            ),
+            "candidate_quality": cumulative_learning_candidates,
+            "runtime_promotion_sample_floor": 30,
+            "learning_floor_grants_runtime_promotion": False,
+        },
         "runtime_apply_allowed": False,
     }
     recommended = {
@@ -6110,6 +6143,7 @@ def _build_position_sizing_dynamic_formula_family(
         "apply_ready": sample_ready,
         "implementation_status": implementation_status,
         "runtime_reflected": runtime_reflected,
+        "cumulative_judgment_quality": current["cumulative_judgment_quality"],
         "current": current,
         "recommended": recommended,
         "candidate_grid": candidate_grid,
@@ -6117,8 +6151,13 @@ def _build_position_sizing_dynamic_formula_family(
         "metric_contract": {
             "metric_role": "primary_ev",
             "decision_authority": "postclose_formula_comparison_only_no_runtime_mutation",
-            "window_policy": "rolling_10d_with_real_denominator",
-            "sample_floor": 30,
+            "window_policy": (
+                "caller_window_clean_baseline_cumulative_with_daily_diagnostic"
+            ),
+            "sample_floor": {
+                "cumulative_learning": 1,
+                "runtime_promotion_real": 30,
+            },
             "primary_decision_metric": [
                 "notional_weighted_ev_pct",
                 "source_quality_adjusted_ev_pct",
@@ -14369,6 +14408,11 @@ def _threshold_snapshot_from_families(
                 if "runtime_reflected" in family
                 else {}
             ),
+            **(
+                {"cumulative_judgment_quality": family["cumulative_judgment_quality"]}
+                if "cumulative_judgment_quality" in family
+                else {}
+            ),
         }
         if report_only:
             payload["daily_family_apply_mode"] = family.get("apply_mode")
@@ -14830,6 +14874,11 @@ def build_daily_threshold_cycle_report(
             **(
                 {"runtime_reflected": family["runtime_reflected"]}
                 if "runtime_reflected" in family
+                else {}
+            ),
+            **(
+                {"cumulative_judgment_quality": family["cumulative_judgment_quality"]}
+                if "cumulative_judgment_quality" in family
                 else {}
             ),
         }

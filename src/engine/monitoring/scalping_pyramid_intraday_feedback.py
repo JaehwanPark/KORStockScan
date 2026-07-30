@@ -1079,6 +1079,32 @@ def _update_probe_residual_observation(
             price = int(_safe_float(fields.get("price"), 0.0) or 0.0)
             if price > 0:
                 item.setdefault("residual_submitted_prices", []).append(price)
+                item.setdefault("post_probe_reprice_observations", []).append(
+                    {
+                        "order_no": order_no,
+                        "profile": str(
+                            fields.get("entry_price_resolver_offset_profile")
+                            or "unknown"
+                        ),
+                        "action": str(
+                            fields.get("entry_price_resolver_action") or "unknown"
+                        ),
+                        "previous_price": int(
+                            _safe_float(
+                                fields.get("entry_price_resolver_previous_price"),
+                                0.0,
+                            )
+                            or 0
+                        ),
+                        "resolved_price": int(
+                            _safe_float(
+                                fields.get("entry_price_resolver_resolved_price"),
+                                price,
+                            )
+                            or price
+                        ),
+                    }
+                )
         item["residual_submitted_leg_count"] = len(submitted_orders)
         item["residual_fill_attribution_state"] = "open_unresolved"
     elif stage == "residual_blocked":
@@ -1286,6 +1312,50 @@ def _finalize_probe_residual_real_outcome(item: dict[str, Any]) -> None:
     item["post_probe_residual_actual_order_submitted"] = bool(
         int(item.get("residual_submitted_qty") or 0) > 0
     )
+    reprice_candidates = [
+        row
+        for row in item.get("post_probe_reprice_observations") or []
+        if isinstance(row, dict)
+    ]
+    reprice_observations = [
+        row
+        for row in reprice_candidates
+        if str(row.get("profile") or "").strip().lower()
+        not in {"", "unknown", "none", "not_available"}
+        and str(row.get("action") or "").strip().lower()
+        not in {"", "unknown", "none", "not_available"}
+        and int(row.get("previous_price") or 0) > 0
+        and int(row.get("resolved_price") or 0) > 0
+    ]
+    reprice_rejected_count = len(reprice_candidates) - len(reprice_observations)
+    reprice_profiles = sorted(
+        {str(row.get("profile") or "unknown") for row in reprice_observations}
+    )
+    reprice_improvement_bps = [
+        round(
+            (
+                (int(row.get("previous_price") or 0) - int(row["resolved_price"]))
+                / int(row.get("previous_price") or 1)
+            )
+            * 10000.0,
+            4,
+        )
+        for row in reprice_observations
+        if int(row.get("previous_price") or 0) > 0
+    ]
+    item["post_probe_reprice_observed"] = bool(reprice_observations)
+    item["post_probe_reprice_candidate_leg_count"] = len(reprice_candidates)
+    item["post_probe_reprice_profiles"] = reprice_profiles
+    item["post_probe_reprice_leg_count"] = len(reprice_observations)
+    item["post_probe_reprice_provenance_rejected_leg_count"] = reprice_rejected_count
+    item["post_probe_reprice_provenance_complete"] = bool(
+        reprice_candidates and reprice_rejected_count == 0
+    )
+    item["post_probe_reprice_avg_passive_improvement_bps"] = (
+        round(sum(reprice_improvement_bps) / len(reprice_improvement_bps), 4)
+        if reprice_improvement_bps
+        else None
+    )
 
     source_quality_reasons: list[str] = []
     if item.get("residual_fill_attribution_valid") is not True:
@@ -1304,6 +1374,21 @@ def _finalize_probe_residual_real_outcome(item: dict[str, Any]) -> None:
         source_quality_reasons.append("later_pyramid_submit_contaminates_probe_outcome")
     item["post_probe_real_outcome_source_quality_reasons"] = source_quality_reasons
     item["post_probe_real_outcome_source_quality_valid"] = not source_quality_reasons
+    reprice_source_quality_reasons = list(source_quality_reasons)
+    if reprice_candidates and reprice_rejected_count:
+        reprice_source_quality_reasons.append(
+            "post_probe_reprice_provenance_incomplete"
+        )
+    if not reprice_candidates:
+        reprice_source_quality_reasons.append("post_probe_reprice_observation_missing")
+    item["post_probe_reprice_outcome_source_quality_reasons"] = (
+        reprice_source_quality_reasons
+    )
+    item["post_probe_reprice_outcome_source_quality_valid"] = bool(
+        item.get("post_probe_reprice_observed")
+        and item.get("post_probe_reprice_provenance_complete")
+        and not reprice_source_quality_reasons
+    )
 
     if item.get("residual_fill_attribution_state") == "open_unresolved":
         label = "open_unresolved"

@@ -369,6 +369,10 @@ def test_pyramid_quality_calibration_consumes_post_probe_real_outcomes_source_on
                 "post_probe_probe_actual_order_submitted": True,
                 "post_probe_residual_actual_order_submitted": False,
                 "post_probe_counterfactual_first_leg_notional_krw": 100_000,
+                "post_probe_reprice_observed": True,
+                "post_probe_reprice_outcome_source_quality_valid": True,
+                "post_probe_reprice_profiles": ["normal"],
+                "post_probe_reprice_avg_passive_improvement_bps": 30.0,
                 "effective_venue": "NXT",
                 "venue_source_quality_valid": True,
                 "market_session_bucket": "nxt",
@@ -397,7 +401,38 @@ def test_pyramid_quality_calibration_consumes_post_probe_real_outcomes_source_on
     assert observation["diagnostic_win_rate"] == 0.6
     assert observation["notional_weighted_ev_pct"] == 0.16
     assert observation["sample_floor_met"] is True
+    assert observation["cumulative_judgment_quality"] == {
+        "learning_sample_floor": 1,
+        "learning_sample_count": 20,
+        "learning_updated": True,
+        "learning_update_policy": (
+            "one_mature_post_probe_outcome_updates_cumulative_judgment_quality"
+        ),
+        "notional_weighted_ev_pct": 0.16,
+        "runtime_promotion_sample_floor": 20,
+        "learning_floor_grants_runtime_promotion": False,
+    }
     assert observation["by_effective_venue"][0]["effective_venue"] == "NXT"
+    reprice = report["post_probe_reprice_observation"]
+    assert reprice["learning_updated"] is True
+    assert reprice["learning_sample_count"] == 20
+    assert reprice["equal_weight_avg_profit_pct"] == 0.16
+    assert reprice["profile_quality"][0] == {
+        "reprice_profile": "normal",
+        "sample_count": 20,
+        "equal_weight_avg_profit_pct": 0.16,
+        "avg_passive_improvement_bps": 30.0,
+    }
+    assert reprice["metric_role"] == "execution_quality_real_only"
+    assert reprice["window_policy"] == (
+        "clean_baseline_cumulative_closed_real_post_probe_reprice_outcomes"
+    )
+    assert reprice["sample_floor"] == {
+        "cumulative_learning": 1,
+        "runtime_promotion_real": 20,
+    }
+    assert reprice["primary_decision_metric"] == "equal_weight_avg_profit_pct"
+    assert "complete_post_probe_resolver" in reprice["source_quality_gate"]
     assert observation["runtime_effect"] is False
     assert observation["allowed_runtime_apply"] is False
     assert (
