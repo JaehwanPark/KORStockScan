@@ -275,12 +275,19 @@ def test_async_entry_expired_result_is_discarded_and_schedules_fresh_recheck(
 
 
 @pytest.mark.parametrize(
-    ("venue", "ws_suffix", "ws_route", "expected_request_code"),
     (
-        ("KRX", "", "", "005930"),
-        ("KRX", "_AL", "krx_nxt_integrated", "005930_AL"),
-        ("PREMARKET_KRX_LIKE", "", "", "005930_NX"),
-        ("NXT", "", "", "005930_NX"),
+        "venue",
+        "ws_suffix",
+        "ws_route",
+        "broker_route",
+        "expected_request_code",
+    ),
+    (
+        ("KRX", "", "", "KRX", "005930"),
+        ("KRX", "_AL", "krx_nxt_integrated", "SOR", "005930_AL"),
+        ("KRX", "_AL", "krx_nxt_integrated", "KRX", "005930"),
+        ("PREMARKET_KRX_LIKE", "", "", "KRX", "005930_NX"),
+        ("NXT", "", "", "KRX", "005930_NX"),
     ),
 )
 def test_async_entry_bridge_prepares_off_thread_then_commits_on_current_state(
@@ -288,9 +295,20 @@ def test_async_entry_bridge_prepares_off_thread_then_commits_on_current_state(
     venue,
     ws_suffix,
     ws_route,
+    broker_route,
     expected_request_code,
 ):
     monkeypatch.setattr(handlers, "KIWOOM_TOKEN", "token")
+    monkeypatch.setattr(
+        handlers.kiwoom_orders,
+        "resolve_order_dmst_stex_tp",
+        lambda: broker_route,
+    )
+    monkeypatch.setattr(
+        handlers,
+        "resolve_entry_candle_session",
+        lambda *args, **kwargs: "krx_regular",
+    )
     requested_codes = []
     monkeypatch.setattr(
         handlers.kiwoom_utils,
