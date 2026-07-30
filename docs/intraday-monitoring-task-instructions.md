@@ -38,6 +38,8 @@ Entry AI는 직접 주문 권한, broker safety 대체물, 무손실 보증기�
 ## 2. 시작 시 확인
 
 - 현재 PID, 시작 시각, commit, runtime env와 당일 ON/OFF runtime 목록
+- dated runtime 자동연장 policy version, target date, active key 목록·개수와
+  당일 operator override의 명시적 OFF 목록
 - 현재 PID에 반영된 entry prompt version, exact input bundle version, canonical context schema와 operator/runtime override provenance
 - 실제 provider와 failback 상태, timeout·parse 실패·`provider=none` 여부
 - WS/REST 연결과 가격·호가·체결·분봉 데이터의 freshness
@@ -121,6 +123,47 @@ AI 결과는 단순 `WAIT/DROP` 개수로 평가하지 않는다. 각 exact payl
 
 기존 runtime의 이름이나 로그 존재만으로 정상 판정하지 않는다.
 
+자동연장된 dated runtime은
+`KORSTOCKSCAN_DATED_RUNTIME_AUTO_RENEW_ACTIVE_KEYS`를 당일 검증 모집단으로
+사용한다. 각 key는 family와 실제 소비 stage에 연결하고 다음을 확인한다.
+
+- `enabled=true`, `active_date=당일`, dependency ON, policy file/version 유효 여부
+- 현재 PID env와 launcher provenance에 같은 key가 반영됐는지
+- eligible 자연 표본 수, 실제 평가·pass·block·defer·recheck·submit·exit 수
+- 미호출이 자연 표본 부재인지, hook·입력·venue·dependency 결함인지
+- Control 대비 적용 후 1·3·5·10·20·30·60분 MFE/MAE, target/adverse first-hit
+- 실주문 runtime은 체결·실현손익·수수료·슬리피지를 포함한
+  `source_quality_adjusted_ev_pct`와 순이익
+- source-only runtime은 관측 coverage와 downstream attribution 완결률
+- 과차단, 과제출, 익절 지연, 조기청산, 손실 확대와 같은 수익훼손 여부
+
+family별 판정 단위는 다음과 같다.
+
+- Rising Missed TP1/relief: selector 최초 판정, source-gap 사용 여부, 이후
+  target/adverse first-hit과 submit 귀속
+- latency true-OFI 계열: 원래 latency block 후보와 canary pass/recheck 후보의
+  fresh quote·spread·OFI·signed tape 및 체결 결과
+- NXT post-block sampler/REST fallback: 주문효과와 분리된 counterfactual
+  관측 coverage, REST budget defer, venue provenance
+- NXT runner/reprice/context refresh: partial TP·runner 잔량, partial-fill
+  재가격, fresh NXT BBO와 broker reconciliation
+- shallow source-gap recheck: 원래 avg-down block과 재검사 후 추가 MFE/MAE
+- trailing continuation/loss-conversion/NXT bid guard: 유예 전후 실현손익과
+  post-sell MFE를 분리하고 조기청산 방지와 손실지연을 동시에 평가
+- early-volatility TP: KRX, `PREMARKET_KRX_LIKE`, NXT별 policy version,
+  broker route, 부분익절·runner·중복 주문 여부
+- Rising Missed AI action guard: fresh `BUY/WAIT/DROP`, probe intent,
+  observation-only, residual 확대 차단의 정확성
+- scalp fast-exit guard: safety exit 감지부터 broker 전송·체결까지 latency,
+  중복 매도·route/source-quality block과 손실 확대 방지
+
+자동연장은 효용성 승인으로 간주하지 않는다. 표본이 발생한 runtime은
+`효과 확인 | 중립 | 수익훼손 | source-quality 결함`으로 판정하고,
+표본이 없는 runtime은 `자연 표본 없음`과 `호출 결함`을 반드시 분리한다.
+수익훼손 또는 safety/provenance 결함이면 해당 key의
+`ENABLED=false`를 명시적 rollback으로 기록하고 다른 family의 동시 변경
+근거로 사용하지 않는다.
+
 ### AI
 
 AI는 세 층으로 점검한다.
@@ -184,6 +227,7 @@ AI는 세 층으로 점검한다.
 - probe/multi-leg/scale-in 결과
 - 매도 및 post-sell 결과
 - runtime별 정상·결함·표본부족 상태
+- 자동연장 runtime별 active-date/dependency/policy 검증과 실제 효용성 판정
 - AI 호출·입력·판단 품질
 - entry AI의 조기 edge 포착, adverse-risk 분리, probe handoff 및 downstream submit 결과
 - Control 대비 Candidate의 missed-upside, adverse-first, `source_quality_adjusted_ev_pct`, 순이익 변화

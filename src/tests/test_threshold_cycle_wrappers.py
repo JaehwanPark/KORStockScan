@@ -1184,8 +1184,15 @@ def test_run_bot_waits_for_threshold_runtime_env_before_launching_bot():
     assert "KORSTOCKSCAN_OPENAI_PRIMARY_BEDROCK_FALLBACK_FAMILY=lite_v2" in script
     assert "KORSTOCKSCAN_BEDROCK_NOVA_LITE_ROUTE_MODE=off" in script
     assert script.index('. "$DATED_OPERATOR_RUNTIME_OVERRIDES"') < script.index(
-        'disable_expired_dated_runtime_overrides "$RUNTIME_TARGET_DATE"'
+        'renew_enabled_dated_runtime_overrides "$RUNTIME_TARGET_DATE"'
     )
+    assert script.index(
+        'renew_enabled_dated_runtime_overrides "$RUNTIME_TARGET_DATE"'
+    ) < script.index('disable_expired_dated_runtime_overrides "$RUNTIME_TARGET_DATE"')
+    assert script.index(
+        'disable_expired_dated_runtime_overrides "$RUNTIME_TARGET_DATE"'
+    ) < script.index('record_enabled_dated_runtime_provenance "$RUNTIME_TARGET_DATE"')
+    assert "renew_enabled_dated_runtime_overrides" in script
     assert "apply_authoritative_ai_context_promotion" in script
     assert "--mode runtime-env-exports" in script
     assert script.index(
@@ -1270,6 +1277,39 @@ def test_run_bot_waits_for_threshold_runtime_env_before_launching_bot():
     assert script.index(
         'BOT_CPU_AFFINITY="${KORSTOCKSCAN_BOT_CPU_AFFINITY:-$DEFAULT_BOT_CPU_AFFINITY}"'
     ) > script.index('. "$OPERATOR_RUNTIME_OVERRIDES"')
+
+
+def test_run_bot_auto_renews_enabled_allowlist_but_preserves_explicit_off():
+    script = Path("src/run_bot.sh").read_text(encoding="utf-8")
+    function_block = script[
+        script.index("korstockscan_env_true()") : script.index(
+            "disable_expired_dated_runtime_overrides()"
+        )
+    ]
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            function_block + """
+export KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ENABLED=true
+export KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE=2026-07-30
+export KORSTOCKSCAN_EARLY_VOLATILITY_TP_ENABLED=false
+export KORSTOCKSCAN_EARLY_VOLATILITY_TP_ACTIVE_DATE=2026-07-30
+renew_enabled_dated_runtime_overrides 2026-07-31 >/dev/null
+record_enabled_dated_runtime_provenance 2026-07-31 >/dev/null
+printf '%s|%s|%s|%s\\n' \
+  "$KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE" \
+  "$KORSTOCKSCAN_EARLY_VOLATILITY_TP_ENABLED" \
+  "$KORSTOCKSCAN_EARLY_VOLATILITY_TP_ACTIVE_DATE" \
+  "$KORSTOCKSCAN_DATED_RUNTIME_AUTO_RENEW_ACTIVE_COUNT"
+""",
+        ],
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    assert result.stdout.strip() == "2026-07-31|false|2026-07-30|1"
 
 
 def test_preopen_wrapper_uses_lock_to_avoid_duplicate_bootstrap_run():

@@ -22,6 +22,12 @@
   - 금지: ka10027 포함만으로 BUY를 확정하거나 threshold/provider/order/quantity/broker guard/bot cap을 변경하지 않는다. 보유·매수·비-SCANNER WATCHING은 6석 재배치 대상으로 삼지 않고, `same_day_*_retrospective`는 비인과 진단으로만 사용한다.
   - 다음 액션: `six_slot_allocation_observed`, `eligible_source_under_six_borrow_retained`, `source_unavailable_no_eviction`, `scanner_discovery_gap`, `scanner_heavy_eval_gap`, `entry_ai_preflight_or_transport_block`, `post_ai_or_submit_gap` 중 하나로 종목·venue별 귀속을 닫는다.
 
+- [ ] `[DatedRuntimeAutoRenewUtilityObserve0731] 자동연장 dated runtime 실제 호출·EV·순이익 효용성 검증` (`Due: 2026-07-31`, `Slot: INTRADAY`, `TimeWindow: 08:00~20:00`, `Track: RuntimeStability`)
+  - Source: [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh), [operator_runtime_overrides_2026-07-31.env](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/operator_runtime_overrides_2026-07-31.env), [intraday-monitoring-task-instructions.md](/home/ubuntu/KORStockScan/docs/intraday-monitoring-task-instructions.md)
+  - 판정 기준: 현재 PID env의 `KORSTOCKSCAN_DATED_RUNTIME_AUTO_RENEW_POLICY_VERSION=dated_runtime_auto_renew_v1`, target date, active key 목록·개수를 launcher log 및 당일 override와 대조한다. 각 active key를 실제 소비 family/stage에 연결해 eligible 표본, 호출·pass·block·defer·recheck·submit·exit 수, source quality, 1·3·5·10·20·30·60분 MFE/MAE, target/adverse first-hit, 실현손익·슬리피지·수수료와 `source_quality_adjusted_ev_pct`를 KRX/`PREMARKET_KRX_LIKE`/NXT별로 평가한다. source-only sampler는 주문효과와 분리해 coverage와 downstream attribution을 본다.
+  - 금지: `enabled=true` 또는 로그 존재만으로 효용성을 확정하지 않는다. 자동연장을 threshold/provider/order/quantity/cap/broker/hard-safety 변경 권한으로 사용하지 않고, 서로 다른 family의 실현손익과 counterfactual을 합산하지 않는다.
+  - 다음 액션: 각 runtime을 `effect_confirmed`, `neutral`, `natural_sample_missing`, `hook_or_input_defect`, `profit_harm_explicit_off_rollback`, `safety_or_provenance_explicit_off_rollback` 중 하나로 닫는다.
+
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_START -->
 ## 자동 생성 체크리스트 (`2026-07-30` postclose -> `2026-07-31`)
 
