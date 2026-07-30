@@ -61,13 +61,28 @@ def _payload(endpoint="holding_score"):
     holding = endpoint == "holding_score"
     context = (
         {
+            "position_context": {"buy_qty": 1, "buy_price": 100},
             "holding_decision_context": {
                 "schema": "holding_decision_context_v1",
+                "execution_pnl": {
+                    "remaining_qty": 1,
+                    "average_entry_price": 100,
+                    "executable_sell_price": 100,
+                },
+                "source_quality": {
+                    "status": "fresh_consistent",
+                    "candle_status": "fresh_consistent",
+                    "bbo_fresh": True,
+                    "position_valid": True,
+                    "order_consistent": True,
+                    "position_reconciled": False,
+                },
                 "candle": {
                     "input_bundle_version": "scalping_multi_timeframe_context_v1",
+                    "completed_bar_count": 1,
                     "bars": [{"minute": "11:59", "close": 100, "is_forming": False}],
                 },
-            }
+            },
         }
         if holding
         else {
@@ -100,6 +115,14 @@ def test_prepare_stage_requests_freezes_exact_holding_without_outcome():
     assert len(requests) == 1
     assert requests[0]["runtime_effect"] is False
     assert requests[0]["control"]["captured_action"] == "HOLD"
+    assert requests[0]["candidate"]["prompt_version"] == "decision_quality_holding_v2_3"
+    assert (
+        "position_reconciled=false alone is uncertainty"
+        in requests[0]["candidate"]["system_prompt"]
+    )
+    assert requests[0]["candidate_input"]["holding_exact_contract_facts_v1"][
+        "fresh_consistent_core"
+    ]
     assert summary["strict_eligible_count"] == 1
 
 
@@ -177,6 +200,7 @@ def test_report_marks_action_collapse_before_outcome_comparison():
             "paired_replay_id": f"pair-{index}",
             "stock_code": f"{index % 4:06d}",
             "control": {},
+            "candidate_input": {"exact_payload": {"secret_marker": "do-not-store"}},
         }
         for index in range(30)
     ]
@@ -203,3 +227,5 @@ def test_report_marks_action_collapse_before_outcome_comparison():
     assert report["status"] == "coverage_replay_complete_candidate_action_collapsed"
     assert report["candidate_action_not_collapsed"] is False
     assert report["coverage_sample_floor"]["pass"] is False
+    assert "candidate_input" not in report["requests"][0]
+    assert "do-not-store" not in str(report)

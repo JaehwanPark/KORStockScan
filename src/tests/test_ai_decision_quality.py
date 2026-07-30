@@ -831,6 +831,88 @@ def test_candidate_contract_requires_structured_reasons():
     assert "WAIT is invalid." in prompt
 
 
+def test_holding_candidate_rejects_false_missing_core_and_one_share_trim():
+    payload = {
+        "position_context": {"buy_qty": 1, "buy_price": 100},
+        "holding_decision_context": {
+            "execution_pnl": {
+                "remaining_qty": 1,
+                "average_entry_price": 100,
+                "executable_sell_price": 99,
+            },
+            "position_lifecycle": {"memory_qty": 1},
+            "source_quality": {
+                "status": "fresh_consistent",
+                "candle_status": "fresh_consistent",
+                "bbo_fresh": True,
+                "position_valid": True,
+                "order_consistent": True,
+                "position_reconciled": False,
+            },
+            "candle": {
+                "completed_bar_count": 2,
+                "bars": [{"minute": "09:00", "close": 100, "is_forming": False}],
+            },
+        },
+    }
+    response = {
+        "edge_state": "INSUFFICIENT_DATA",
+        "action": "HOLD",
+        "expected_upside_pct": None,
+        "expected_downside_pct": None,
+        "confidence": 40,
+        "reason_codes": [
+            "broker_state_missing",
+            "completed_bars_missing",
+            "source_stale",
+            "insufficient_core_data",
+        ],
+        "evidence": {
+            "trend": "insufficient",
+            "liquidity": "insufficient",
+            "tape": "insufficient",
+            "risk": "insufficient",
+            "uncertainty": "high",
+            "setup": "insufficient",
+            "positive_edge": "insufficient",
+            "adverse_risk": "insufficient",
+            "trigger": "insufficient",
+        },
+    }
+
+    assert quality.validate_candidate_response(
+        response, stage="holding", exact_payload=payload
+    ) == [
+        "holding_broker_state_missing_misclassified",
+        "holding_completed_bars_missing_misclassified",
+        "holding_sufficient_core_misclassified",
+        "holding_source_quality_misclassified",
+    ]
+
+    trim = {
+        **response,
+        "edge_state": "NO_EDGE",
+        "action": "TRIM",
+        "expected_upside_pct": 0.2,
+        "expected_downside_pct": -0.5,
+        "reason_codes": ["edge_absent"],
+        "evidence": {
+            **response["evidence"],
+            "trend": "adverse",
+            "liquidity": "mixed",
+            "tape": "adverse",
+            "risk": "high",
+            "setup": "no_setup",
+            "positive_edge": "none",
+            "adverse_risk": "high",
+            "trigger": "failed",
+        },
+    }
+    assert quality.validate_candidate_response(
+        trim, stage="holding", exact_payload=payload
+    ) == ["holding_trim_requires_multiple_shares"]
+
+
 def test_entry_candidate_rejects_trigger_reason_evidence_conflict():
     response = {
         "edge_state": "EDGE",

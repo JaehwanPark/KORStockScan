@@ -74,6 +74,7 @@ PAIRED_REPLAY_MIN_SYMBOLS = 10
 PAIRED_CANDIDATE_EXPOSURE_MIN_ROWS = 10
 PAIRED_CANDIDATE_EXPOSURE_MIN_SYMBOLS = 3
 CANDIDATE_SCHEMA_MAX_ATTEMPTS = 4
+HOLDING_SEMANTIC_VALIDATOR_VERSION = "holding_exact_semantic_gate_v1"
 RECOVERY_TRIGGER_MIN_ROWS = 15
 RECOVERY_TRIGGER_MIN_SYMBOLS = 10
 RECOVERY_TRIGGER_WINDOW_MIN = 5
@@ -2048,6 +2049,86 @@ def build_exact_payload_analysis_v1(
     return analysis
 
 
+def _holding_contract_facts(exact_payload: Any) -> dict[str, Any]:
+    holding = (
+        exact_payload.get("holding_decision_context")
+        if isinstance(exact_payload, dict)
+        else {}
+    )
+    holding = holding if isinstance(holding, dict) else {}
+    position = (
+        exact_payload.get("position_context") if isinstance(exact_payload, dict) else {}
+    )
+    position = position if isinstance(position, dict) else {}
+    execution = holding.get("execution_pnl")
+    execution = execution if isinstance(execution, dict) else {}
+    lifecycle = holding.get("position_lifecycle")
+    lifecycle = lifecycle if isinstance(lifecycle, dict) else {}
+    source_quality = holding.get("source_quality")
+    source_quality = source_quality if isinstance(source_quality, dict) else {}
+    candle = holding.get("candle")
+    candle = candle if isinstance(candle, dict) else {}
+    bars = candle.get("bars")
+    bars = bars if isinstance(bars, list) else []
+    remaining_qty = _number(
+        execution.get("remaining_qty")
+        if execution.get("remaining_qty") is not None
+        else (
+            lifecycle.get("memory_qty")
+            if lifecycle.get("memory_qty") is not None
+            else position.get("buy_qty")
+        )
+    )
+    average_entry_price = _number(
+        execution.get("average_entry_price")
+        if execution.get("average_entry_price") is not None
+        else (
+            lifecycle.get("average_entry_price")
+            if lifecycle.get("average_entry_price") is not None
+            else position.get("buy_price")
+        )
+    )
+    executable_sell_price = _number(execution.get("executable_sell_price"))
+    position_observed = (
+        remaining_qty is not None
+        and remaining_qty > 0
+        and average_entry_price is not None
+        and average_entry_price > 0
+        and executable_sell_price is not None
+        and executable_sell_price > 0
+        and source_quality.get("position_valid") is True
+        and source_quality.get("order_consistent") is True
+    )
+    completed_bar_count = int(_number(candle.get("completed_bar_count")) or 0)
+    completed_bars_observed = completed_bar_count > 0 and any(
+        isinstance(bar, dict) and not bool(bar.get("is_forming", False)) for bar in bars
+    )
+    fresh_consistent_core = (
+        position_observed
+        and completed_bars_observed
+        and str(source_quality.get("status") or "") == "fresh_consistent"
+        and str(source_quality.get("candle_status") or "") == "fresh_consistent"
+        and source_quality.get("bbo_fresh") is True
+    )
+    return {
+        "schema": "holding_exact_contract_facts_v1",
+        "position_observed": position_observed,
+        "remaining_qty": remaining_qty,
+        "average_entry_price": average_entry_price,
+        "executable_sell_price": executable_sell_price,
+        "position_valid": source_quality.get("position_valid"),
+        "order_consistent": source_quality.get("order_consistent"),
+        "position_reconciled": source_quality.get("position_reconciled"),
+        "completed_bar_count": completed_bar_count,
+        "completed_bars_observed": completed_bars_observed,
+        "source_quality_status": source_quality.get("status"),
+        "candle_status": source_quality.get("candle_status"),
+        "bbo_fresh": source_quality.get("bbo_fresh"),
+        "fresh_consistent_core": fresh_consistent_core,
+        "trim_available": remaining_qty is not None and remaining_qty >= 2,
+    }
+
+
 def validate_candidate_response(
     response: dict[str, Any],
     *,
@@ -2258,6 +2339,31 @@ def validate_candidate_response(
                     }.intersection(reason_code_set)
                 ):
                     errors.append("entry_ask_wall_wide_spread_misclassified")
+        elif normalized_stage == "holding":
+            holding_facts = _holding_contract_facts(exact_payload)
+            if (
+                holding_facts["position_observed"]
+                and "broker_state_missing" in reason_code_set
+            ):
+                errors.append("holding_broker_state_missing_misclassified")
+            if (
+                holding_facts["completed_bars_observed"]
+                and "completed_bars_missing" in reason_code_set
+            ):
+                errors.append("holding_completed_bars_missing_misclassified")
+            if (
+                holding_facts["fresh_consistent_core"]
+                and edge_state == "INSUFFICIENT_DATA"
+            ):
+                errors.append("holding_sufficient_core_misclassified")
+            if holding_facts["fresh_consistent_core"] and {
+                "source_stale",
+                "source_conflict",
+                "venue_session_mismatch",
+            }.intersection(reason_code_set):
+                errors.append("holding_source_quality_misclassified")
+            if action == "TRIM" and not holding_facts["trim_available"]:
+                errors.append("holding_trim_requires_multiple_shares")
     if normalized_stage not in STAGE_ACTIONS:
         errors.append("stage_unsupported")
     return errors
@@ -2327,6 +2433,10 @@ def _candidate_contract_sha256(candidate: dict[str, Any]) -> str:
     if candidate.get("analysis_schema") is not None:
         contract["analysis_schema"] = candidate.get("analysis_schema")
         contract["analysis_schema_sha256"] = candidate.get("analysis_schema_sha256")
+    if candidate.get("semantic_validator_version") is not None:
+        contract["semantic_validator_version"] = candidate.get(
+            "semantic_validator_version"
+        )
     return _sha256(contract)
 
 
@@ -2535,6 +2645,22 @@ def execute_openai_prompt_v2_candidate(
                 "The spread and top1 ask wall meet the adverse liquidity contract. "
                 "Use liquidity=adverse, adverse_risk=high or blocking, never BUY, "
                 "and include ask_wall_adverse"
+            )
+        if any(error.startswith("holding_") for error in correction_errors):
+            correction_rules.append(
+                "For holding: read position_context and holding_decision_context "
+                "by their exact paths. A positive observed quantity, average entry "
+                "price, executable sell price, position_valid=true, and "
+                "order_consistent=true are sufficient position evidence even when "
+                "position_reconciled=false. Positive completed_bar_count plus a "
+                "non-forming bar proves completed bars. fresh_consistent source, "
+                "candle, and BBO prohibit stale/conflict/venue-mismatch reasons "
+                "unless an explicit current conflict exists. TRIM requires at "
+                "least two remaining shares. For one share, use HOLD when the "
+                "continuation/recovery edge remains intact; use EXIT when NO_EDGE "
+                "or invalidated structure aligns with high/blocking executable "
+                "risk. Do not return INSUFFICIENT_DATA merely because TRIM is "
+                "unavailable"
             )
         if "reason_codes_conflict" in correction_errors:
             correction_rules.append(

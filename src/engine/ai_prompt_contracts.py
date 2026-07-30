@@ -694,8 +694,12 @@ _DECISION_QUALITY_V2_STAGE_INPUT_RULES = {
         "completed context. Optional program/news sources do not block."
     ),
     "holding": (
-        "Require current position, reconciled broker quantity, fresh quote, and "
-        "completed context. Ignore a forming bar when completed bars exist."
+        "Require an observed current position, fresh executable quote, and "
+        "completed context. For holding-score evaluation, positive observed "
+        "quantity and average entry price with position_valid=true and "
+        "order_consistent=true are sufficient position evidence; "
+        "position_reconciled=false alone is uncertainty, not missing data. "
+        "Ignore a forming bar when completed bars exist."
     ),
     "exit": (
         "Require current position, reconciled broker quantity, fresh quote, and "
@@ -775,6 +779,56 @@ Entry edge/risk separation:
    setup has reward/risk below 1.25. An intact pullback edge with
    trigger=recovery_required may remain WAIT while awaiting recovery. NO_EDGE with
    WAIT is invalid.
+""".strip()
+
+DECISION_QUALITY_HOLDING_V2_3_PROMPT_VERSION = "decision_quality_holding_v2_3"
+
+_DECISION_QUALITY_HOLDING_V2_3_RULES = """
+Holding decision rules:
+1. Read the canonical fields by their exact paths. position_context.buy_qty,
+   position_context.buy_price, holding_decision_context.execution_pnl,
+   holding_decision_context.position_lifecycle, and
+   holding_decision_context.order_reconciliation describe the current position.
+   holding_decision_context.candle.completed_bar_count and candle.bars describe
+   completed bars; is_forming=true identifies only the forming bar.
+2. Do not report broker_state_missing when position quantity, average entry price,
+   executable sell price, position_valid=true, and order_consistent=true are
+   present. position_reconciled=false alone is uncertainty and prohibits adding
+   capital; it does not erase the observed position or force INSUFFICIENT_DATA.
+3. Do not report completed_bars_missing when completed_bar_count is positive and
+   at least one candle.bars row has is_forming=false.
+4. When holding_decision_context.source_quality.status=fresh_consistent, the
+   candle/BBO are fresh, and the captured request passed exact_v2 preflight, do not
+   infer venue_session_mismatch merely from an advisory route_conflict_count or a
+   missing optional REST tape. Use a real explicit route/session conflict only.
+5. Build three independent ledgers:
+   a. continuation: completed 1m/3m/5m/15m direction, higher/lower highs and lows,
+      session VWAP position, and trusted signed tape;
+   b. executable risk: estimated_net_executable_pnl_pct, MFE, MAE,
+      drawdown_from_peak, spread cost, depth, and executable best bid;
+   c. lifecycle: held time, partial profit already realized, remaining quantity,
+      order conflict, and minutes to session close.
+6. HOLD requires intact continuation or recovery edge with low/moderate adverse
+   risk. Missing optional tape alone cannot create HOLD or EXIT.
+7. EXIT when continuation is invalidated and executable loss risk is high/blocking,
+   or when NO_EDGE aligns with adverse completed structure and adverse executable
+   risk. Do not wait for one score threshold when the exact risk ledger agrees.
+8. TRIM is for mixed cases where some continuation edge remains but peak giveback,
+   adverse tape/liquidity, or downside asymmetry warrants reducing exposure.
+   TRIM requires remaining_qty>=2. For a one-share position, choose HOLD when the
+   edge remains intact or EXIT when the exit-risk rule is met.
+9. INSUFFICIENT_DATA is allowed only when a required current position,
+   executable quote, completed-bar context, or explicit source-consistency field
+   is truly absent/stale/conflicted. It is not a synonym for mixed evidence.
+10. For EDGE or NO_EDGE return numeric expected_upside_pct and
+    expected_downside_pct. Use executable-price risk, not mark price alone.
+11. Do not copy the captured control action or prior score. Decide from the exact
+    payload, and do not force an action distribution or quota.
+12. The candidate input also contains holding_exact_contract_facts_v1, an
+    independently recomputed pointer ledger derived only from the unchanged exact
+    payload. Use it to locate required position, completed-bar, source-quality,
+    and trim-availability facts. Raw exact_payload remains authoritative if any
+    ledger field conflicts with it.
 """.strip()
 
 
@@ -860,6 +914,16 @@ Return JSON only with this contract:
   }}
 }}
 """.strip()
+
+
+def decision_quality_holding_v2_3_system_prompt() -> str:
+    """Return the offline holding prompt with canonical position semantics."""
+
+    return (
+        decision_quality_v2_system_prompt("holding")
+        + "\n\n"
+        + _DECISION_QUALITY_HOLDING_V2_3_RULES
+    )
 
 
 def decision_quality_v2_detailed_system_prompt(

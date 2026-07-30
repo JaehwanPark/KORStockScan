@@ -14,8 +14,10 @@ from pathlib import Path
 from typing import Any
 
 from src.engine.ai_prompt_contracts import (
+    DECISION_QUALITY_HOLDING_V2_3_PROMPT_VERSION,
     DECISION_QUALITY_V2_PROMPT_VERSION,
     DECISION_QUALITY_V2_RESPONSE_SCHEMA,
+    decision_quality_holding_v2_3_system_prompt,
     decision_quality_v2_system_prompt,
 )
 from src.engine.bedrock_nova_provider import (
@@ -128,7 +130,11 @@ def prepare_stage_requests(
     exclusions["eligible_after_frozen_cohort_limit"] += max(
         0, len(eligible) - len(selected)
     )
-    prompt = decision_quality_v2_system_prompt(normalized_stage)
+    prompt = (
+        decision_quality_holding_v2_3_system_prompt()
+        if normalized_stage == "holding"
+        else decision_quality_v2_system_prompt(normalized_stage)
+    )
     if normalized_stage == "entry_price":
         prompt += """
 
@@ -142,7 +148,11 @@ Entry-price replay extension:
 5. SKIP requires selected_price=null and price_basis=NONE.
 """.strip()
     candidate = {
-        "prompt_version": f"{DECISION_QUALITY_V2_PROMPT_VERSION}_{normalized_stage}",
+        "prompt_version": (
+            DECISION_QUALITY_HOLDING_V2_3_PROMPT_VERSION
+            if normalized_stage == "holding"
+            else f"{DECISION_QUALITY_V2_PROMPT_VERSION}_{normalized_stage}"
+        ),
         "system_prompt": prompt,
         "system_prompt_sha256": quality._sha256(prompt),
         "response_schema": DECISION_QUALITY_V2_RESPONSE_SCHEMA,
@@ -152,43 +162,56 @@ Entry-price replay extension:
         "temperature": control.get("request_temperature"),
         "reasoning_effort": control.get("request_reasoning_effort"),
     }
+    if normalized_stage == "holding":
+        candidate["semantic_validator_version"] = (
+            quality.HOLDING_SEMANTIC_VALIDATOR_VERSION
+        )
     candidate["contract_sha256"] = quality._candidate_contract_sha256(candidate)
     requests: list[dict[str, Any]] = []
     for row in selected:
         trace = row["trace"]
         payload = row["payload"]
         trace_id = str(trace.get("decision_trace_id") or "")
-        requests.append(
-            {
-                "paired_replay_id": (
-                    f"coverage-{quality._sha256((trace_id, trace.get('payload_sha256')))[:24]}"
-                ),
-                "decision_trace_id": trace_id,
-                "decision_ts": trace.get("decision_ts"),
-                "source_date": str(trace.get("decision_ts") or "")[:10],
-                "stage": normalized_stage,
-                "stock_code": trace.get("stock_code"),
-                "effective_venue": trace.get("effective_venue"),
-                "session_bucket": trace.get("session_bucket"),
-                "payload_sha256": trace.get("payload_sha256"),
+        request = {
+            "paired_replay_id": (
+                f"coverage-{quality._sha256((trace_id, trace.get('payload_sha256')))[:24]}"
+            ),
+            "decision_trace_id": trace_id,
+            "decision_ts": trace.get("decision_ts"),
+            "source_date": str(trace.get("decision_ts") or "")[:10],
+            "stage": normalized_stage,
+            "stock_code": trace.get("stock_code"),
+            "effective_venue": trace.get("effective_venue"),
+            "session_bucket": trace.get("session_bucket"),
+            "payload_sha256": trace.get("payload_sha256"),
+            "exact_payload": payload.get("sanitized_user_input"),
+            "control": {
+                "prompt_version": control.get("prompt_version"),
+                "prompt_sha256": control.get("prompt_sha256"),
+                "provider": control.get("provider_actual"),
+                "model": control.get("model"),
+                "temperature": control.get("request_temperature"),
+                "reasoning_effort": control.get("request_reasoning_effort"),
+                "captured_action": trace.get("action"),
+                "captured_score": trace.get("score"),
+                "captured_reason": trace.get("reason"),
+                "captured_selected_price": trace.get("reference_price"),
+                "captured_selected_price_type": trace.get("reference_price_type"),
+            },
+            "candidate": dict(candidate),
+            **CONTRACT,
+        }
+        if normalized_stage == "holding":
+            holding_facts = quality._holding_contract_facts(
+                payload.get("sanitized_user_input")
+            )
+            candidate_input = {
                 "exact_payload": payload.get("sanitized_user_input"),
-                "control": {
-                    "prompt_version": control.get("prompt_version"),
-                    "prompt_sha256": control.get("prompt_sha256"),
-                    "provider": control.get("provider_actual"),
-                    "model": control.get("model"),
-                    "temperature": control.get("request_temperature"),
-                    "reasoning_effort": control.get("request_reasoning_effort"),
-                    "captured_action": trace.get("action"),
-                    "captured_score": trace.get("score"),
-                    "captured_reason": trace.get("reason"),
-                    "captured_selected_price": trace.get("reference_price"),
-                    "captured_selected_price_type": trace.get("reference_price_type"),
-                },
-                "candidate": dict(candidate),
-                **CONTRACT,
+                "holding_exact_contract_facts_v1": holding_facts,
             }
-        )
+            request["candidate_input"] = candidate_input
+            request["candidate_input_sha256"] = quality._sha256(candidate_input)
+        requests.append(request)
     summary = {
         "exact_source_count": exact_source_count,
         "exact_source_excluded_count": sum(
@@ -372,6 +395,30 @@ def build_report(
         "stage": stage,
         "source_dates": dates,
         "requested_max_rows": requested_max_rows,
+        "candidate_prompt_versions": sorted(
+            {
+                str((request.get("candidate") or {}).get("prompt_version") or "")
+                for request in requests
+                if (request.get("candidate") or {}).get("prompt_version")
+            }
+        ),
+        "candidate_prompt_sha256": sorted(
+            {
+                str((request.get("candidate") or {}).get("system_prompt_sha256") or "")
+                for request in requests
+                if (request.get("candidate") or {}).get("system_prompt_sha256")
+            }
+        ),
+        "candidate_semantic_validator_versions": sorted(
+            {
+                str(
+                    (request.get("candidate") or {}).get("semantic_validator_version")
+                    or ""
+                )
+                for request in requests
+                if (request.get("candidate") or {}).get("semantic_validator_version")
+            }
+        ),
         "status": status,
         "source_summary": source_summary,
         "request_count": len(requests),
@@ -441,7 +488,7 @@ def build_report(
             {
                 key: value
                 for key, value in request.items()
-                if key not in {"exact_payload", "candidate"}
+                if key not in {"exact_payload", "candidate", "candidate_input"}
             }
             for request in requests
         ],
