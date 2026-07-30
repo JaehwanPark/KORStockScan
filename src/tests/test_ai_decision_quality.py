@@ -1,3 +1,4 @@
+import gzip
 import sys
 from datetime import datetime
 from types import SimpleNamespace
@@ -6,6 +7,14 @@ from zoneinfo import ZoneInfo
 from src.engine.scalping import ai_decision_quality as quality
 
 KST = ZoneInfo("Asia/Seoul")
+
+
+def test_load_jsonl_reads_verified_gzip_archive(tmp_path):
+    plain_path = tmp_path / "pipeline_events_2026-07-29.jsonl"
+    with gzip.open(f"{plain_path}.gz", "wt", encoding="utf-8") as handle:
+        handle.write('{"stage":"ai_confirmed"}\n')
+
+    assert quality._load_jsonl(plain_path) == [{"stage": "ai_confirmed"}]
 
 
 def _payload():
@@ -1641,6 +1650,227 @@ def test_detailed_replay_preserves_exact_payload_and_adds_analysis_ledger():
     assert "candidate_input" not in unsupported
 
 
+def test_anticipatory_reversal_allows_fresh_wide_spread_offline_probe(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(quality, "DETAILED_PAIRED_REPORT_DIR", tmp_path)
+    exact_payload = {
+        "current": {"price": 10000, "fluctuation_pct": 3.0},
+        "features": {
+            "quote_fresh_for_entry": True,
+            "quote_stale": False,
+            "quote_age_ms": 1000,
+            "quote_depth_present": True,
+            "tick_context_stale": True,
+            "tick_latest_age_ms": 9000,
+            "spread_bp": 100,
+            "top1_bid_notional": 1000000,
+            "top1_ask_notional": 5000000,
+            "same_price_buy_absorption": 1,
+            "buy_pressure_10t": 58,
+            "net_aggressive_delta_10t": 10,
+            "large_sell_print_detected": False,
+            "curr_vs_micro_vwap_bp": -20,
+            "curr_vs_ma5_bp": -10,
+            "price_change_10t_pct": 0.2,
+            "entry_order_flow_status": "mixed",
+        },
+        "entry_candle_context": {
+            "completed_bar_count": 20,
+            "source_quality": {
+                "status": "fresh_consistent",
+                "decision_window": {
+                    "status": "fresh_consistent",
+                    "provider_call_allowed": True,
+                    "completed_bar_count": 20,
+                },
+            },
+            "structure": {
+                "returns_pct": {"1": 0.2, "3": -0.6, "5": -1.0, "10": -2.0},
+                "slopes_pct_per_bar": {"5": -0.2, "10": -0.2},
+                "peak_drawdown_pct": -2.5,
+                "latest_lower_wick_ratio": 0.5,
+                "low_rebound_pct": 0.8,
+                "high_direction": "down",
+                "low_direction": "up_or_flat",
+                "volume_ratio": 0.4,
+                "volume_direction_alignment": "price_volume_divergence",
+                "regime": "range",
+                "alignment": "neutral",
+            },
+        },
+    }
+    analysis = quality.build_anticipatory_reversal_analysis_v1(
+        exact_payload,
+        stage="entry",
+    )
+    assert analysis["source_mode"] == "degraded_but_bounded"
+    assert analysis["spread"]["regime"] == "wide_but_observable"
+    assert analysis["spread"]["wide_spread_erases_alpha_edge"] is False
+    assert analysis["execution_policy"] == "passive_probe_required"
+    assert analysis["eligible_for_counterfactual_probe"] is True
+    assert analysis["execution_cost"]["conservative_execution_cost_pct"] == 0.57
+    assert analysis["learning_contract"]["update_floor_rows"] == 1
+
+    request = quality.prepare_detailed_paired_replay_requests(
+        [
+            {
+                "paired_replay_id": "pair-reversal",
+                "decision_trace_id": "trace-reversal",
+                "stage": "entry",
+                "stock_code": "005930",
+                "effective_venue": "KRX",
+                "session_bucket": "KRX_REGULAR",
+                "payload_sha256": quality._sha256(exact_payload),
+                "exact_payload": exact_payload,
+                "control": {"captured_action": "DROP"},
+                "candidate": {
+                    "provider": "openai",
+                    "model": "gpt-5.4-nano",
+                    "response_schema_sha256": "schema-hash",
+                },
+                **quality.OFFLINE_CONTRACT,
+                "sample_floor": {
+                    "pass": False,
+                    "required_decision_rows": 30,
+                    "required_unique_symbols": 10,
+                },
+            }
+        ],
+        candidate_prompt_version=(
+            quality.DECISION_QUALITY_V2_9_ANTICIPATORY_PROMPT_VERSION
+        ),
+    )[0]
+    assert request["sample_floor"]["pass"] is True
+    assert request["sample_floor"]["promotion_evidence_floor"]["pass"] is False
+    assert request["candidate"]["semantic_validator_version"] == (
+        quality.ANTICIPATORY_SEMANTIC_VALIDATOR_VERSION
+    )
+    assert request["candidate"]["exposure_semantics"] == (
+        "offline_counterfactual_passive_probe_only"
+    )
+    assert request["candidate"]["system_prompt"].isascii()
+
+    response = {
+        "edge_state": "EDGE",
+        "action": "BUY",
+        "expected_upside_pct": 2.5,
+        "expected_downside_pct": -0.8,
+        "confidence": 60,
+        "reason_codes": [
+            "reversal_candidate",
+            "recovery_trigger_confirmed",
+            "liquidity_adverse",
+            "risk_reward_favorable",
+        ],
+        "evidence": {
+            "trend": "mixed",
+            "liquidity": "adverse",
+            "tape": "mixed",
+            "risk": "medium",
+            "uncertainty": "medium",
+            "setup": "reversal",
+            "positive_edge": "moderate",
+            "adverse_risk": "moderate",
+            "trigger": "confirmed",
+        },
+    }
+    assert quality.validate_replay_candidate_response(request, response) == []
+    results = quality.run_paired_replay(
+        [request],
+        control_runner=lambda _: {"action": "DROP"},
+        candidate_runner=lambda _: response,
+    )
+    assert results[0]["status"] == "pass"
+    assert results[0]["supplemental_analysis_confirmed"] is True
+    report = quality.build_paired_replay_report(
+        target_date="2026-07-30",
+        requests=[request],
+        results=results,
+        labels=[
+            {
+                "decision_trace_id": "trace-reversal",
+                "source_quality_status": "pass",
+                "decision_stage": "entry",
+                "horizon_metrics": {
+                    "10m": {
+                        "end_return_pct": 1.0,
+                        "mfe_pct": 1.2,
+                        "mae_pct": -0.2,
+                        "first_hit": "target",
+                    }
+                },
+            }
+        ],
+    )
+    assert report["candidate_source_quality_adjusted_ev_pct"] == 1.0
+    assert abs(report["candidate_execution_cost_adjusted_ev_pct"] - 0.43) < 1e-9
+    assert report["candidate_primary_decision_metric"] == (
+        "candidate_execution_cost_adjusted_ev_pct"
+    )
+    assert report["cumulative_learning"]["decision_count"] == 1
+    assert report["cumulative_learning"]["learning_update_floor"]["pass"] is True
+    assert report["cumulative_learning"]["promotion_evidence_floor"]["pass"] is False
+
+    ineligible_request = {
+        **request,
+        "anticipatory_reversal_analysis": {
+            **request["anticipatory_reversal_analysis"],
+            "eligible_for_counterfactual_probe": False,
+        },
+    }
+    assert "anticipatory_buy_without_eligible_precursors" in (
+        quality.validate_replay_candidate_response(ineligible_request, response)
+    )
+
+
+def test_v2_9_1_semantic_repair_aligns_trigger_reason_without_promoting_buy():
+    request = {
+        "stage": "entry",
+        "exact_payload": {},
+        "candidate": {
+            "semantic_repair_version": quality.ANTICIPATORY_SEMANTIC_REPAIR_VERSION,
+        },
+    }
+    response = {
+        "edge_state": "EDGE",
+        "action": "DROP",
+        "expected_upside_pct": 0.8,
+        "expected_downside_pct": -1.0,
+        "confidence": 60,
+        "reason_codes": [
+            "edge_positive",
+            "recovery_trigger_required",
+            "risk_reward_unfavorable",
+        ],
+        "evidence": {
+            "trend": "mixed",
+            "liquidity": "adverse",
+            "tape": "adverse",
+            "risk": "high",
+            "uncertainty": "medium",
+            "setup": "pullback_recovery",
+            "positive_edge": "moderate",
+            "adverse_risk": "blocking",
+            "trigger": "failed",
+        },
+    }
+
+    repaired, repairs = quality.repair_anticipatory_candidate_response(
+        request, response
+    )
+
+    assert repaired["action"] == "DROP"
+    assert repaired["evidence"]["trigger"] == "failed"
+    assert "recovery_trigger_failed" in repaired["reason_codes"]
+    assert "recovery_trigger_required" not in repaired["reason_codes"]
+    assert "reason_code_evidence_alignment" in repairs
+    assert (
+        quality.validate_candidate_response(repaired, stage="entry", exact_payload={})
+        == []
+    )
+
+
 def test_three_way_comparison_uses_only_common_comparable_rows():
     one_pass = {
         "requests": [{"candidate": {"prompt_version": "decision_quality_v2_6_entry"}}],
@@ -1792,7 +2022,10 @@ def test_paired_replay_uses_same_exact_payload_and_has_no_runtime_authority():
             "sample_count": 1,
             "control_source_quality_adjusted_ev_pct": 0,
             "candidate_source_quality_adjusted_ev_pct": 0,
+            "candidate_execution_cost_adjusted_ev_pct": None,
+            "candidate_primary_decision_ev_pct": 0,
             "source_quality_adjusted_ev_delta_pct": 0,
+            "candidate_primary_decision_ev_delta_pct": 0,
             "missed_upside_reduction_count": 0,
             "new_missed_upside_count": 0,
             "control_adverse_first_exposure_count": 0,
@@ -1803,6 +2036,7 @@ def test_paired_replay_uses_same_exact_payload_and_has_no_runtime_authority():
             "candidate_dominant_action_ratio": 1.0,
             "candidate_quality_checks": {
                 "source_quality_adjusted_ev_improved": False,
+                "primary_decision_ev_improved": False,
                 "candidate_ev_positive": False,
                 "missed_upside_reduced": False,
                 "new_missed_upside_not_increased": True,

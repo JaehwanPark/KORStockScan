@@ -25,15 +25,19 @@ from zoneinfo import ZoneInfo
 from src.engine.ai_prompt_contracts import (
     DECISION_QUALITY_DETAILED_PROMPT_VERSION,
     DECISION_QUALITY_V2_8_CANDIDATE_PROMPT_VERSION,
+    DECISION_QUALITY_V2_9_ANTICIPATORY_PROMPT_VERSION,
+    DECISION_QUALITY_V2_9_1_ANTICIPATORY_PROMPT_VERSION,
     DECISION_QUALITY_V2_PROMPT_VERSION,
     DECISION_QUALITY_V2_RESPONSE_SCHEMA,
     DECISION_QUALITY_V2_REASON_CODES,
     decision_quality_v2_detailed_system_prompt,
     decision_quality_v2_8_detailed_system_prompt,
+    decision_quality_v2_9_anticipatory_system_prompt,
+    decision_quality_v2_9_1_anticipatory_system_prompt,
     decision_quality_v2_system_prompt,
 )
 from src.utils.constants import CONFIG_PATH, DATA_DIR, DEV_PATH
-from src.utils.jsonl_io import open_text_auto
+from src.utils.jsonl_io import existing_or_gzip_path, open_text_auto
 
 KST = ZoneInfo("Asia/Seoul")
 CONTROL_SCHEMA = "ai_decision_quality_control_v1"
@@ -42,6 +46,7 @@ BASELINE_SCHEMA = "ai_decision_quality_baseline_v1"
 PAIRED_SCHEMA = "ai_prompt_paired_replay_v1"
 DETAILED_PAIRED_SCHEMA = "ai_prompt_detailed_paired_replay_v1"
 EXACT_PAYLOAD_ANALYSIS_SCHEMA = "exact_payload_analysis_v1"
+ANTICIPATORY_REVERSAL_ANALYSIS_SCHEMA = "anticipatory_reversal_analysis_v1"
 SCORE_CORRELATION_SCHEMA = "ai_score_outcome_correlation_v1"
 RECOVERY_TRIGGER_SCHEMA = "ai_prompt_recovery_trigger_labels_v1"
 INPUT_BUNDLE_VERSION = "scalping_multi_timeframe_context_v1"
@@ -75,8 +80,14 @@ PAIRED_REPLAY_MIN_ROWS = 30
 PAIRED_REPLAY_MIN_SYMBOLS = 10
 PAIRED_CANDIDATE_EXPOSURE_MIN_ROWS = 10
 PAIRED_CANDIDATE_EXPOSURE_MIN_SYMBOLS = 3
+ANTICIPATORY_LEARNING_MIN_ROWS = 1
+ANTICIPATORY_LEARNING_MIN_SYMBOLS = 1
 CANDIDATE_SCHEMA_MAX_ATTEMPTS = 4
 HOLDING_SEMANTIC_VALIDATOR_VERSION = "holding_exact_semantic_gate_v1"
+ANTICIPATORY_SEMANTIC_VALIDATOR_VERSION = "anticipatory_reversal_offline_semantic_v1"
+ANTICIPATORY_SEMANTIC_REPAIR_VERSION = (
+    "anticipatory_reversal_contract_closure_repair_v1"
+)
 RECOVERY_TRIGGER_MIN_ROWS = 15
 RECOVERY_TRIGGER_MIN_SYMBOLS = 10
 RECOVERY_TRIGGER_WINDOW_MIN = 5
@@ -348,9 +359,10 @@ def load_promotion_for_target_date(
 
 def _load_jsonl(path: Path) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
-    if not path.exists():
+    resolved_path = existing_or_gzip_path(path)
+    if not resolved_path.exists():
         return rows
-    with open_text_auto(path) as handle:
+    with open_text_auto(resolved_path) as handle:
         for line in handle:
             try:
                 value = json.loads(line)
@@ -2222,6 +2234,301 @@ def build_exact_payload_analysis_v1(
     return analysis
 
 
+def build_anticipatory_reversal_analysis_v1(
+    exact_payload: Any,
+    *,
+    stage: str,
+) -> dict[str, Any]:
+    """Build an offline-only early-reversal and execution-risk ledger."""
+
+    normalized_stage = str(stage or "").strip().lower()
+    if normalized_stage != "entry":
+        raise ValueError("anticipatory reversal analysis supports entry only")
+    payload = exact_payload if isinstance(exact_payload, dict) else {}
+    current = payload.get("current")
+    current = current if isinstance(current, dict) else {}
+    features = payload.get("features")
+    features = features if isinstance(features, dict) else {}
+    candle = payload.get("entry_candle_context")
+    candle = candle if isinstance(candle, dict) else {}
+    structure = candle.get("structure")
+    structure = structure if isinstance(structure, dict) else {}
+    source_quality = candle.get("source_quality")
+    source_quality = source_quality if isinstance(source_quality, dict) else {}
+    decision_window = source_quality.get("decision_window")
+    decision_window = decision_window if isinstance(decision_window, dict) else {}
+    facts = _entry_contract_facts(payload)
+
+    returns = structure.get("returns_pct")
+    returns = returns if isinstance(returns, dict) else {}
+    return_1m = _window_value(returns, 1)
+    return_3m = _window_value(returns, 3)
+    return_5m = _window_value(returns, 5)
+    return_10m = _window_value(returns, 10)
+    peak_drawdown = _number(structure.get("peak_drawdown_pct"))
+
+    completed_bar_count = int(
+        _number(
+            decision_window.get("completed_bar_count")
+            if decision_window.get("completed_bar_count") is not None
+            else candle.get("completed_bar_count")
+        )
+        or 0
+    )
+    candle_fresh = bool(
+        str(source_quality.get("status") or "") == "fresh_consistent"
+        and str(decision_window.get("status") or "") == "fresh_consistent"
+        and decision_window.get("provider_call_allowed") is not False
+        and completed_bar_count >= 1
+    )
+    quote_age_ms = _number(features.get("quote_age_ms"))
+    tick_age_ms = _number(features.get("tick_latest_age_ms"))
+    quote_fresh = bool(
+        features.get("quote_fresh_for_entry") is True
+        and features.get("quote_stale") is not True
+        and quote_age_ms is not None
+        and quote_age_ms <= 5_000
+    )
+    tick_fresh = bool(
+        features.get("tick_context_stale") is False
+        and tick_age_ms is not None
+        and tick_age_ms <= 5_000
+    )
+    if candle_fresh and quote_fresh and tick_fresh:
+        source_mode = "fresh_dual"
+    elif candle_fresh and quote_fresh:
+        source_mode = "degraded_but_bounded"
+    else:
+        source_mode = "unusable"
+
+    spread_bp = _number(features.get("spread_bp"))
+    quote_depth_present = features.get("quote_depth_present") is True
+    if spread_bp is None or spread_bp < 0:
+        spread_regime = "unavailable"
+    elif spread_bp <= 50:
+        spread_regime = "normal"
+    elif spread_bp <= 150 and quote_fresh and quote_depth_present:
+        spread_regime = "wide_but_observable"
+    else:
+        spread_regime = "extreme_or_unusable"
+
+    half_spread_cost_pct = spread_bp / 200.0 if spread_bp is not None else None
+    quote_latency_cost_pct = (
+        min(0.20, max(0.0, quote_age_ms - 1_000) / 1_000 * 0.02)
+        if quote_age_ms is not None
+        else 0.20
+    )
+    tick_latency_cost_pct = (
+        min(0.15, max(0.0, tick_age_ms - 2_000) / 1_000 * 0.01)
+        if tick_age_ms is not None
+        else 0.15
+    )
+    latency_risk_cost_pct = round(quote_latency_cost_pct + tick_latency_cost_pct, 6)
+    conservative_execution_cost_pct = (
+        round(half_spread_cost_pct + latency_risk_cost_pct, 6)
+        if half_spread_cost_pct is not None
+        else None
+    )
+
+    buy_pressure = _number(features.get("buy_pressure_10t"))
+    net_delta = _number(features.get("net_aggressive_delta_10t"))
+    absorption_count = int(_number(features.get("same_price_buy_absorption")) or 0)
+    large_sell_absent = features.get("large_sell_print_detected") is False
+    micro_absorption = bool(
+        absorption_count >= 1
+        or (
+            buy_pressure is not None
+            and buy_pressure >= 55
+            and net_delta is not None
+            and net_delta > 0
+            and large_sell_absent
+        )
+    )
+    prior_minute_pace = [
+        value
+        for value in (
+            return_3m / 3.0 if return_3m is not None else None,
+            return_5m / 5.0 if return_5m is not None else None,
+        )
+        if value is not None
+    ]
+    sell_momentum_decelerating = bool(
+        return_1m is not None
+        and prior_minute_pace
+        and any(return_1m > pace + 0.05 for pace in prior_minute_pace)
+        and any(pace < 0 for pace in prior_minute_pace)
+    )
+    lower_wick_ratio = _number(structure.get("latest_lower_wick_ratio"))
+    low_rebound_pct = _number(structure.get("low_rebound_pct"))
+    price_rejection = bool(
+        (lower_wick_ratio is not None and lower_wick_ratio >= 0.35)
+        or (
+            str(structure.get("low_direction") or "").lower() == "up_or_flat"
+            and low_rebound_pct is not None
+            and low_rebound_pct >= 0.5
+        )
+    )
+    micro_vwap_bp = _number(features.get("curr_vs_micro_vwap_bp"))
+    ma5_bp = _number(features.get("curr_vs_ma5_bp"))
+    price_change_10t_pct = _number(features.get("price_change_10t_pct"))
+    near_reference_reclaim = bool(
+        (
+            micro_vwap_bp is not None
+            and micro_vwap_bp >= -50
+            or ma5_bp is not None
+            and ma5_bp >= -50
+        )
+        and price_change_10t_pct is not None
+        and price_change_10t_pct > 0
+    )
+    tick_acceleration = _number(features.get("tick_acceleration_ratio"))
+    trusted_tick_count = _number(features.get("tick_aggressor_trusted_count"))
+    trusted_tape_acceleration = bool(
+        tick_fresh
+        and trusted_tick_count is not None
+        and trusted_tick_count >= 10
+        and (
+            (
+                str(features.get("entry_order_flow_status") or "").lower()
+                == "supportive"
+                and net_delta is not None
+                and net_delta > 0
+            )
+            or (tick_acceleration is not None and tick_acceleration >= 1.0)
+        )
+    )
+    precursor_flags = {
+        "micro_absorption": micro_absorption,
+        "sell_momentum_decelerating": sell_momentum_decelerating,
+        "price_rejection": price_rejection,
+        "near_reference_reclaim": near_reference_reclaim,
+        "trusted_tape_acceleration": trusted_tape_acceleration,
+    }
+    precursor_count = sum(precursor_flags.values())
+    non_tape_precursor_count = sum(
+        value
+        for key, value in precursor_flags.items()
+        if key != "trusted_tape_acceleration"
+    )
+    prior_adverse_structure = bool(
+        (return_5m is not None and return_5m < 0)
+        or (return_10m is not None and return_10m < 0)
+        or (peak_drawdown is not None and peak_drawdown <= -1.0)
+    )
+    failed_structure = str(structure.get("regime") or "").lower() in {
+        "failed_breakout",
+        "breakdown",
+    }
+    hard_blockers = [
+        reason
+        for reason, blocked in (
+            ("source_unusable", source_mode == "unusable"),
+            (
+                "spread_extreme_or_unusable",
+                spread_regime in {"unavailable", "extreme_or_unusable"},
+            ),
+            ("blocking_overextension", facts["blocking_overextension"]),
+            ("failed_structure", failed_structure),
+            (
+                "large_sell_print_present",
+                features.get("large_sell_print_detected") is True,
+            ),
+        )
+        if blocked
+    ]
+    required_precursor_count = 3 if source_mode == "fresh_dual" else 4
+    eligible = bool(
+        prior_adverse_structure
+        and precursor_count >= required_precursor_count
+        and non_tape_precursor_count >= 3
+        and micro_absorption
+        and not hard_blockers
+        and conservative_execution_cost_pct is not None
+    )
+    analysis = {
+        "schema": ANTICIPATORY_REVERSAL_ANALYSIS_SCHEMA,
+        "stage": normalized_stage,
+        "source_mode": source_mode,
+        "freshness": {
+            "candle_fresh": candle_fresh,
+            "completed_bar_count": completed_bar_count,
+            "quote_fresh": quote_fresh,
+            "quote_age_ms": quote_age_ms,
+            "tick_fresh": tick_fresh,
+            "tick_age_ms": tick_age_ms,
+            "degraded_source_policy": (
+                "fresh_completed_candles_and_quote_plus_non_tape_precursors"
+            ),
+        },
+        "spread": {
+            "regime": spread_regime,
+            "spread_bp": spread_bp,
+            "quote_depth_present": quote_depth_present,
+            "wide_spread_erases_alpha_edge": False,
+            "extreme_or_stale_spread_blocks_probe": True,
+        },
+        "execution_cost": {
+            "half_spread_cost_pct": (
+                round(half_spread_cost_pct, 6)
+                if half_spread_cost_pct is not None
+                else None
+            ),
+            "latency_risk_cost_pct": latency_risk_cost_pct,
+            "conservative_execution_cost_pct": conservative_execution_cost_pct,
+            "cost_basis": "half_spread_plus_bounded_source_age_penalty",
+            "fill_assumption": "counterfactual_only_no_fill_claim",
+        },
+        "precursors": {
+            **precursor_flags,
+            "independent_precursor_count": precursor_count,
+            "non_tape_precursor_count": non_tape_precursor_count,
+            "required_precursor_count": required_precursor_count,
+            "prior_adverse_structure": prior_adverse_structure,
+            "return_1m_pct": return_1m,
+            "return_3m_pct": return_3m,
+            "return_5m_pct": return_5m,
+            "return_10m_pct": return_10m,
+            "peak_drawdown_pct": peak_drawdown,
+        },
+        "hard_blockers": hard_blockers,
+        "eligible_for_counterfactual_probe": eligible,
+        "execution_policy": (
+            "passive_probe_required" if eligible else "no_counterfactual_exposure"
+        ),
+        "confidence_cap": 60 if source_mode == "degraded_but_bounded" else 75,
+        "learning_contract": {
+            "update_floor_rows": ANTICIPATORY_LEARNING_MIN_ROWS,
+            "update_floor_unique_symbols": ANTICIPATORY_LEARNING_MIN_SYMBOLS,
+            "update_policy": "append_daily_then_recompute_cumulative",
+            "single_sample_role": "start_or_update_observation_only",
+            "promotion_authority": False,
+        },
+        "observation_contract": {
+            "metric_role": "ai_anticipatory_reversal_quality_observation",
+            "decision_authority": "offline_counterfactual_passive_probe_only",
+            "window_policy": "same_exact_payload_completed_bar_snapshot",
+            "sample_floor": "one_eligible_exact_row_starts_cumulative_learning",
+            "primary_decision_metric": ("candidate_execution_cost_adjusted_ev_pct"),
+            "source_quality_gate": (
+                "fresh_completed_candle_and_fresh_quote_with_bounded_degradation"
+            ),
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "forbidden_uses": [
+                "single_sample_live_promotion",
+                "real_order_or_fill_claim",
+                "stale_or_extreme_spread_guard_bypass",
+                "provider_model_threshold_price_quantity_or_cap_change",
+                "bot_restart",
+            ],
+        },
+    }
+    analysis["analysis_sha256"] = _sha256(analysis)
+    return analysis
+
+
 def _holding_contract_facts(exact_payload: Any) -> dict[str, Any]:
     holding = (
         exact_payload.get("holding_decision_context")
@@ -2542,6 +2849,282 @@ def validate_candidate_response(
     return errors
 
 
+def validate_replay_candidate_response(
+    request: dict[str, Any],
+    response: dict[str, Any],
+) -> list[str]:
+    """Validate a replay response with an explicitly scoped offline contract."""
+
+    stage = str(request.get("stage") or "")
+    errors = validate_candidate_response(
+        response,
+        stage=stage,
+        exact_payload=request.get("exact_payload"),
+    )
+    candidate = request.get("candidate")
+    candidate = candidate if isinstance(candidate, dict) else {}
+    if (
+        candidate.get("semantic_validator_version")
+        != ANTICIPATORY_SEMANTIC_VALIDATOR_VERSION
+    ):
+        return errors
+    if stage != "entry":
+        return [*errors, "anticipatory_stage_unsupported"]
+    analysis = request.get("anticipatory_reversal_analysis")
+    analysis = analysis if isinstance(analysis, dict) else {}
+    if analysis.get("schema") != ANTICIPATORY_REVERSAL_ANALYSIS_SCHEMA:
+        return [*errors, "anticipatory_analysis_missing"]
+
+    evidence = response.get("evidence")
+    evidence = evidence if isinstance(evidence, dict) else {}
+    action = str(response.get("action") or "").strip().upper()
+    edge_state = str(response.get("edge_state") or "").strip().upper()
+    setup = str(evidence.get("setup") or "").strip().lower()
+    tape = str(evidence.get("tape") or "").strip().lower()
+    liquidity = str(evidence.get("liquidity") or "").strip().lower()
+    source_mode = str(analysis.get("source_mode") or "")
+    spread = analysis.get("spread")
+    spread = spread if isinstance(spread, dict) else {}
+    precursors = analysis.get("precursors")
+    precursors = precursors if isinstance(precursors, dict) else {}
+    execution_cost = analysis.get("execution_cost")
+    execution_cost = execution_cost if isinstance(execution_cost, dict) else {}
+
+    semantic_errors: list[str] = []
+    if source_mode == "unusable" and not (
+        edge_state == "INSUFFICIENT_DATA" and action == "WAIT"
+    ):
+        semantic_errors.append("anticipatory_unusable_source_requires_wait")
+    confidence = _number(response.get("confidence"))
+    confidence_cap = _number(analysis.get("confidence_cap"))
+    if (
+        source_mode == "degraded_but_bounded"
+        and confidence is not None
+        and confidence_cap is not None
+        and confidence > confidence_cap
+    ):
+        semantic_errors.append("anticipatory_degraded_confidence_above_cap")
+    if spread.get("regime") == "wide_but_observable" and liquidity != "adverse":
+        semantic_errors.append("anticipatory_wide_spread_liquidity_not_adverse")
+
+    reversal_buy = action == "BUY" and setup == "reversal"
+    if action == "BUY" and setup != "reversal":
+        return [*errors, *semantic_errors]
+    if reversal_buy:
+        eligible = analysis.get("eligible_for_counterfactual_probe") is True
+        if not eligible:
+            semantic_errors.append("anticipatory_buy_without_eligible_precursors")
+        if analysis.get("execution_policy") != "passive_probe_required":
+            semantic_errors.append("anticipatory_buy_requires_passive_probe")
+        if int(_number(precursors.get("non_tape_precursor_count")) or 0) < 3:
+            semantic_errors.append("anticipatory_buy_non_tape_precursors_insufficient")
+        if tape == "supportive" and source_mode == "degraded_but_bounded":
+            semantic_errors.append("anticipatory_degraded_tape_overstated")
+        cost_pct = _number(execution_cost.get("conservative_execution_cost_pct"))
+        upside = _number(response.get("expected_upside_pct"))
+        downside = _number(response.get("expected_downside_pct"))
+        if cost_pct is None or upside is None or downside is None or downside >= 0:
+            semantic_errors.append("anticipatory_after_cost_reward_risk_unavailable")
+        else:
+            adjusted_upside = max(0.0, upside - cost_pct)
+            adjusted_downside = downside - cost_pct
+            if adjusted_upside / abs(adjusted_downside) < 1.25:
+                semantic_errors.append(
+                    "anticipatory_after_cost_reward_risk_below_floor"
+                )
+
+        relaxable = {
+            "entry_thin_tape_sample_overstated",
+            "entry_adverse_distribution_misclassified",
+        }
+        if spread.get("regime") == "wide_but_observable":
+            relaxable.add("entry_ask_wall_wide_spread_misclassified")
+        if eligible and not semantic_errors:
+            errors = [error for error in errors if error not in relaxable]
+    return list(dict.fromkeys([*errors, *semantic_errors]))
+
+
+def repair_anticipatory_candidate_response(
+    request: dict[str, Any],
+    response: dict[str, Any],
+) -> tuple[dict[str, Any], list[str]]:
+    """Close deterministic V2.9.1 semantic conflicts without weakening risk.
+
+    The adapter is offline-only and runs only after all provider correction
+    attempts failed.  It preserves exact numeric estimates and applies the same
+    deterministic contract facts already used by the validator.  When evidence
+    conflicts with BUY, it can only move toward WAIT/DROP, never toward BUY.
+    """
+
+    candidate = request.get("candidate")
+    candidate = candidate if isinstance(candidate, dict) else {}
+    if (
+        candidate.get("semantic_repair_version") != ANTICIPATORY_SEMANTIC_REPAIR_VERSION
+        or str(request.get("stage") or "") != "entry"
+    ):
+        return dict(response), []
+    repaired = json.loads(json.dumps(response))
+    evidence = repaired.get("evidence")
+    if not isinstance(evidence, dict):
+        return repaired, []
+    facts = _entry_contract_facts(request.get("exact_payload"))
+    repairs: list[str] = []
+
+    def set_value(container: dict[str, Any], key: str, value: Any, reason: str) -> None:
+        if container.get(key) != value:
+            container[key] = value
+            repairs.append(reason)
+
+    if facts["structural_edge_floor"]:
+        set_value(repaired, "edge_state", "EDGE", "structural_edge_floor")
+        if str(evidence.get("positive_edge") or "") not in {"moderate", "strong"}:
+            set_value(evidence, "positive_edge", "moderate", "structural_edge_strength")
+
+    if facts["adverse_distribution_no_edge"] and not facts["structural_edge_floor"]:
+        set_value(repaired, "edge_state", "NO_EDGE", "adverse_distribution_edge")
+        set_value(repaired, "action", "DROP", "adverse_distribution_action")
+        set_value(evidence, "trend", "adverse", "adverse_distribution_trend")
+        set_value(evidence, "setup", "no_setup", "adverse_distribution_setup")
+        set_value(evidence, "positive_edge", "none", "adverse_distribution_strength")
+        set_value(evidence, "trigger", "failed", "adverse_distribution_trigger")
+
+    if facts["orderly_pullback_recovery"]:
+        set_value(repaired, "edge_state", "EDGE", "orderly_pullback_edge")
+        set_value(repaired, "action", "WAIT", "orderly_pullback_action")
+        set_value(evidence, "setup", "pullback_recovery", "orderly_pullback_setup")
+        set_value(
+            evidence,
+            "positive_edge",
+            (
+                evidence.get("positive_edge")
+                if evidence.get("positive_edge") in {"moderate", "strong"}
+                else "moderate"
+            ),
+            "orderly_pullback_strength",
+        )
+        set_value(
+            evidence,
+            "trigger",
+            "recovery_required",
+            "orderly_pullback_trigger",
+        )
+        if evidence.get("adverse_risk") in {"blocking", "insufficient"}:
+            set_value(
+                evidence,
+                "adverse_risk",
+                "high" if facts["ask_wall_wide_spread"] else "moderate",
+                "orderly_pullback_nonblocking_risk",
+            )
+
+    if facts["trusted_supportive_trigger"]:
+        set_value(repaired, "edge_state", "EDGE", "trusted_trigger_edge")
+        if str(evidence.get("positive_edge") or "") not in {"moderate", "strong"}:
+            set_value(evidence, "positive_edge", "moderate", "trusted_trigger_strength")
+        set_value(evidence, "tape", "supportive", "trusted_trigger_tape")
+        set_value(evidence, "trigger", "confirmed", "trusted_trigger_state")
+        if repaired.get("action") == "WAIT":
+            set_value(repaired, "action", "DROP", "trusted_trigger_no_wait")
+
+    if facts["blocking_overextension"]:
+        set_value(repaired, "action", "DROP", "blocking_overextension_action")
+        set_value(
+            evidence,
+            "adverse_risk",
+            "blocking",
+            "blocking_overextension_risk",
+        )
+
+    if facts["ask_wall_wide_spread"]:
+        set_value(evidence, "liquidity", "adverse", "ask_wall_liquidity")
+        if facts["orderly_pullback_recovery"]:
+            set_value(evidence, "adverse_risk", "high", "ask_wall_high_risk")
+        else:
+            set_value(evidence, "adverse_risk", "blocking", "ask_wall_blocking_risk")
+            if repaired.get("action") == "BUY":
+                set_value(repaired, "action", "DROP", "ask_wall_blocks_buy")
+
+    if repaired.get("action") == "BUY" and evidence.get("adverse_risk") not in {
+        "low",
+        "moderate",
+    }:
+        set_value(repaired, "action", "DROP", "unsafe_buy_demoted")
+    if repaired.get("action") == "WAIT" and evidence.get("adverse_risk") in {
+        "blocking",
+        "insufficient",
+    }:
+        set_value(evidence, "adverse_risk", "high", "wait_nonblocking_risk")
+
+    edge_state = str(repaired.get("edge_state") or "")
+    if edge_state == "NO_EDGE":
+        if evidence.get("positive_edge") not in {"none", "weak"}:
+            set_value(evidence, "positive_edge", "none", "no_edge_strength")
+        if evidence.get("setup") not in {"no_setup", "not_applicable"}:
+            set_value(evidence, "setup", "no_setup", "no_edge_setup")
+        set_value(repaired, "action", "DROP", "no_edge_action")
+    elif edge_state == "EDGE" and evidence.get("positive_edge") not in {
+        "moderate",
+        "strong",
+    }:
+        set_value(evidence, "positive_edge", "moderate", "edge_strength")
+
+    action = str(repaired.get("action") or "")
+    trigger = str(evidence.get("trigger") or "")
+    if action == "DROP" and trigger not in {"failed", "confirmed"}:
+        set_value(
+            evidence,
+            "trigger",
+            "confirmed" if facts["trusted_supportive_trigger"] else "failed",
+            "drop_trigger_alignment",
+        )
+        trigger = str(evidence.get("trigger") or "")
+
+    reason_codes = [
+        str(value)
+        for value in repaired.get("reason_codes") or []
+        if str(value) in DECISION_QUALITY_V2_REASON_CODES
+    ]
+    trigger_codes = {
+        "recovery_trigger_confirmed",
+        "recovery_trigger_required",
+        "recovery_trigger_failed",
+    }
+    edge_codes = {"edge_positive", "edge_absent", "no_positive_edge"}
+    reward_codes = {"risk_reward_favorable", "risk_reward_unfavorable"}
+    reason_codes = [
+        code
+        for code in reason_codes
+        if code not in trigger_codes | edge_codes | reward_codes
+    ]
+    trigger_code = {
+        "confirmed": "recovery_trigger_confirmed",
+        "recovery_required": "recovery_trigger_required",
+        "failed": "recovery_trigger_failed",
+    }.get(trigger)
+    if trigger_code:
+        reason_codes.append(trigger_code)
+    reason_codes.append("edge_positive" if edge_state == "EDGE" else "edge_absent")
+    upside = _number(repaired.get("expected_upside_pct"))
+    downside = _number(repaired.get("expected_downside_pct"))
+    favorable = bool(
+        upside is not None
+        and downside is not None
+        and downside < 0
+        and upside / abs(downside) >= 1.25
+    )
+    reason_codes.append(
+        "risk_reward_favorable" if favorable else "risk_reward_unfavorable"
+    )
+    if facts["ask_wall_wide_spread"]:
+        reason_codes.extend(("ask_wall_adverse", "liquidity_adverse"))
+    if facts["adverse_distribution_no_edge"]:
+        reason_codes.append("distribution_adverse")
+    normalized_codes = list(dict.fromkeys(reason_codes))[:8]
+    if repaired.get("reason_codes") != normalized_codes:
+        repaired["reason_codes"] = normalized_codes
+        repairs.append("reason_code_evidence_alignment")
+    return repaired, list(dict.fromkeys(repairs))
+
+
 def _prompt_v2_openai_schema(stage: str) -> dict[str, Any]:
     normalized_stage = str(stage or "").strip().lower()
     actions = sorted(STAGE_ACTIONS.get(normalized_stage, set()))
@@ -2606,10 +3189,23 @@ def _candidate_contract_sha256(candidate: dict[str, Any]) -> str:
     if candidate.get("analysis_schema") is not None:
         contract["analysis_schema"] = candidate.get("analysis_schema")
         contract["analysis_schema_sha256"] = candidate.get("analysis_schema_sha256")
+    if candidate.get("supplemental_analysis_schema") is not None:
+        contract["supplemental_analysis_schema"] = candidate.get(
+            "supplemental_analysis_schema"
+        )
+        contract["supplemental_analysis_schema_sha256"] = candidate.get(
+            "supplemental_analysis_schema_sha256"
+        )
     if candidate.get("semantic_validator_version") is not None:
         contract["semantic_validator_version"] = candidate.get(
             "semantic_validator_version"
         )
+    if candidate.get("semantic_repair_version") is not None:
+        contract["semantic_repair_version"] = candidate.get("semantic_repair_version")
+    if candidate.get("exposure_semantics") is not None:
+        contract["exposure_semantics"] = candidate.get("exposure_semantics")
+    if candidate.get("learning_sample_floor") is not None:
+        contract["learning_sample_floor"] = candidate.get("learning_sample_floor")
     return _sha256(contract)
 
 
@@ -2733,6 +3329,11 @@ def execute_openai_prompt_v2_candidate(
                 "Set action=DROP for NO_EDGE, with positive_edge none/weak and "
                 "setup no_setup/not_applicable; do not retain WAIT"
             )
+        if "entry_no_edge_strength_invalid" in correction_errors:
+            correction_rules.append(
+                "NO_EDGE requires positive_edge=none or weak. If the deterministic "
+                "structural edge floor is true, use EDGE instead of weakening it"
+            )
         if "entry_edge_strength_invalid" in correction_errors:
             correction_rules.append(
                 "EDGE requires positive_edge=moderate or strong; otherwise use "
@@ -2818,6 +3419,21 @@ def execute_openai_prompt_v2_candidate(
                 "The spread and top1 ask wall meet the adverse liquidity contract. "
                 "Use liquidity=adverse, adverse_risk=high or blocking, never BUY, "
                 "and include ask_wall_adverse"
+            )
+        if "entry_trigger_reason_evidence_conflict" in correction_errors:
+            correction_rules.append(
+                "Make recovery reason codes exactly match evidence.trigger: "
+                "confirmed uses only recovery_trigger_confirmed, "
+                "recovery_required uses only recovery_trigger_required, and failed "
+                "uses only recovery_trigger_failed"
+            )
+        if any(error.startswith("anticipatory_") for error in correction_errors):
+            correction_rules.append(
+                "For setup=reversal follow anticipatory_reversal_analysis_v1. "
+                "BUY only when eligible_for_counterfactual_probe=true, use "
+                "passive-probe semantics, keep wide-but-observable liquidity "
+                "adverse, honor the degraded confidence cap, and require "
+                "reward/risk >=1.25 after conservative execution cost"
             )
         if any(error.startswith("holding_") for error in correction_errors):
             correction_rules.append(
@@ -3068,6 +3684,8 @@ def prepare_detailed_paired_replay_requests(
     supported_prompt_versions = {
         DECISION_QUALITY_DETAILED_PROMPT_VERSION,
         DECISION_QUALITY_V2_8_CANDIDATE_PROMPT_VERSION,
+        DECISION_QUALITY_V2_9_ANTICIPATORY_PROMPT_VERSION,
+        DECISION_QUALITY_V2_9_1_ANTICIPATORY_PROMPT_VERSION,
     }
     if candidate_prompt_version not in supported_prompt_versions:
         raise ValueError("unsupported_detailed_candidate_prompt_version")
@@ -3099,12 +3717,28 @@ def prepare_detailed_paired_replay_requests(
             "exact_payload": exact_payload,
             EXACT_PAYLOAD_ANALYSIS_SCHEMA: analysis,
         }
-        prompt = (
-            decision_quality_v2_8_detailed_system_prompt(stage)
-            if candidate_prompt_version
-            == DECISION_QUALITY_V2_8_CANDIDATE_PROMPT_VERSION
-            else decision_quality_v2_detailed_system_prompt(stage)
-        )
+        anticipatory_analysis: dict[str, Any] | None = None
+        if candidate_prompt_version in {
+            DECISION_QUALITY_V2_9_ANTICIPATORY_PROMPT_VERSION,
+            DECISION_QUALITY_V2_9_1_ANTICIPATORY_PROMPT_VERSION,
+        }:
+            anticipatory_analysis = build_anticipatory_reversal_analysis_v1(
+                exact_payload,
+                stage=stage,
+            )
+            candidate_input[ANTICIPATORY_REVERSAL_ANALYSIS_SCHEMA] = (
+                anticipatory_analysis
+            )
+            prompt = (
+                decision_quality_v2_9_1_anticipatory_system_prompt(stage)
+                if candidate_prompt_version
+                == DECISION_QUALITY_V2_9_1_ANTICIPATORY_PROMPT_VERSION
+                else decision_quality_v2_9_anticipatory_system_prompt(stage)
+            )
+        elif candidate_prompt_version == DECISION_QUALITY_V2_8_CANDIDATE_PROMPT_VERSION:
+            prompt = decision_quality_v2_8_detailed_system_prompt(stage)
+        else:
+            prompt = decision_quality_v2_detailed_system_prompt(stage)
         original_candidate = request.get("candidate")
         original_candidate = (
             original_candidate if isinstance(original_candidate, dict) else {}
@@ -3117,7 +3751,47 @@ def prepare_detailed_paired_replay_requests(
             "analysis_schema": EXACT_PAYLOAD_ANALYSIS_SCHEMA,
             "analysis_schema_sha256": _sha256(EXACT_PAYLOAD_ANALYSIS_SCHEMA),
         }
+        if anticipatory_analysis is not None:
+            candidate.update(
+                {
+                    "supplemental_analysis_schema": (
+                        ANTICIPATORY_REVERSAL_ANALYSIS_SCHEMA
+                    ),
+                    "supplemental_analysis_schema_sha256": _sha256(
+                        ANTICIPATORY_REVERSAL_ANALYSIS_SCHEMA
+                    ),
+                    "semantic_validator_version": (
+                        ANTICIPATORY_SEMANTIC_VALIDATOR_VERSION
+                    ),
+                    "exposure_semantics": ("offline_counterfactual_passive_probe_only"),
+                    "learning_sample_floor": {
+                        "decision_rows": ANTICIPATORY_LEARNING_MIN_ROWS,
+                        "unique_symbols": ANTICIPATORY_LEARNING_MIN_SYMBOLS,
+                        "role": "start_or_update_cumulative_observation",
+                        "promotion_authority": False,
+                    },
+                }
+            )
+            if (
+                candidate_prompt_version
+                == DECISION_QUALITY_V2_9_1_ANTICIPATORY_PROMPT_VERSION
+            ):
+                candidate["semantic_repair_version"] = (
+                    ANTICIPATORY_SEMANTIC_REPAIR_VERSION
+                )
         candidate["contract_sha256"] = _candidate_contract_sha256(candidate)
+        sample_floor = request.get("sample_floor")
+        sample_floor = sample_floor if isinstance(sample_floor, dict) else {}
+        if anticipatory_analysis is not None:
+            sample_floor = {
+                **sample_floor,
+                "promotion_evidence_floor": dict(sample_floor),
+                "required_decision_rows": ANTICIPATORY_LEARNING_MIN_ROWS,
+                "required_unique_symbols": ANTICIPATORY_LEARNING_MIN_SYMBOLS,
+                "pass": True,
+                "floor_role": "cumulative_learning_update_only",
+                "promotion_authority": False,
+            }
         detailed_requests.append(
             {
                 **request,
@@ -3126,6 +3800,12 @@ def prepare_detailed_paired_replay_requests(
                 ),
                 "exact_payload_analysis": analysis,
                 "exact_payload_analysis_sha256": analysis["analysis_sha256"],
+                "anticipatory_reversal_analysis": anticipatory_analysis,
+                "anticipatory_reversal_analysis_sha256": (
+                    anticipatory_analysis.get("analysis_sha256")
+                    if anticipatory_analysis is not None
+                    else None
+                ),
                 "source_exact_payload_sha256": _sha256(exact_payload),
                 "candidate_exact_payload_sha256": _sha256(
                     candidate_input["exact_payload"]
@@ -3134,6 +3814,7 @@ def prepare_detailed_paired_replay_requests(
                 "candidate_input_sha256": _sha256(candidate_input),
                 "candidate": candidate,
                 "detailed_analysis_stage_supported": True,
+                "sample_floor": sample_floor,
             }
         )
     return detailed_requests
@@ -3154,6 +3835,7 @@ def run_paired_replay(
         candidate_response: dict[str, Any] = {}
         candidate_errors: list[str] = []
         provider_failed = False
+        semantic_repairs: list[str] = []
         for attempt_number in range(1, CANDIDATE_SCHEMA_MAX_ATTEMPTS + 1):
             attempt_request = dict(request)
             if candidate_errors:
@@ -3163,10 +3845,9 @@ def run_paired_replay(
             try:
                 envelope = candidate_runner(attempt_request)
                 candidate_response, provider_provenance = _candidate_envelope(envelope)
-                candidate_errors = validate_candidate_response(
+                candidate_errors = validate_replay_candidate_response(
+                    request,
                     candidate_response,
-                    stage=str(request["stage"]),
-                    exact_payload=request.get("exact_payload"),
                 )
                 candidate_attempts.append(
                     {
@@ -3207,6 +3888,35 @@ def run_paired_replay(
                 break
             if not candidate_errors:
                 break
+        if candidate_errors and not provider_failed:
+            repaired_response, semantic_repairs = (
+                repair_anticipatory_candidate_response(request, candidate_response)
+            )
+            if semantic_repairs:
+                repaired_errors = validate_replay_candidate_response(
+                    request,
+                    repaired_response,
+                )
+                candidate_attempts.append(
+                    {
+                        "attempt_number": len(candidate_attempts) + 1,
+                        "status": (
+                            "pass" if not repaired_errors else "schema_rejected"
+                        ),
+                        "schema_errors": list(repaired_errors),
+                        "provider_provenance": {
+                            "provider": "deterministic_offline_adapter",
+                            "provider_none": False,
+                            "runtime_effect": False,
+                            "semantic_repair_version": (
+                                ANTICIPATORY_SEMANTIC_REPAIR_VERSION
+                            ),
+                            "repairs": list(semantic_repairs),
+                        },
+                    }
+                )
+                candidate_response = repaired_response
+                candidate_errors = repaired_errors
         results.append(
             {
                 "paired_replay_id": request["paired_replay_id"],
@@ -3230,6 +3940,9 @@ def run_paired_replay(
                 "exact_payload_analysis_sha256": request.get(
                     "exact_payload_analysis_sha256"
                 ),
+                "anticipatory_reversal_analysis_sha256": request.get(
+                    "anticipatory_reversal_analysis_sha256"
+                ),
                 "candidate_input_sha256": request.get("candidate_input_sha256"),
                 "deterministic_analysis_confirmed": (
                     not request.get("exact_payload_analysis_sha256")
@@ -3244,6 +3957,19 @@ def run_paired_replay(
                         }
                     )
                 ),
+                "supplemental_analysis_confirmed": (
+                    not request.get("anticipatory_reversal_analysis_sha256")
+                    or request.get("anticipatory_reversal_analysis_sha256")
+                    == _sha256(
+                        {
+                            key: value
+                            for key, value in (
+                                request.get("anticipatory_reversal_analysis") or {}
+                            ).items()
+                            if key != "analysis_sha256"
+                        }
+                    )
+                ),
                 "same_payload_confirmed": (
                     not request.get("candidate_exact_payload_sha256")
                     or request.get("candidate_exact_payload_sha256")
@@ -3252,6 +3978,7 @@ def run_paired_replay(
                 "control_response": control_response,
                 "candidate_response": candidate_response,
                 "candidate_schema_errors": candidate_errors,
+                "candidate_semantic_repairs": semantic_repairs,
                 "candidate_attempts": candidate_attempts,
                 "status": (
                     "provider_failed"
@@ -3298,6 +4025,114 @@ def run_paired_replay_parallel(
     return results
 
 
+def _anticipatory_cumulative_learning_summary(
+    *,
+    target_date: str,
+    current_rows: list[dict[str, Any]],
+    candidate_prompt_version: str,
+) -> dict[str, Any]:
+    """Recompute the offline cumulative ledger from versioned daily reports."""
+
+    rows_by_trace: dict[str, dict[str, Any]] = {}
+    pattern = f"ai_prompt_detailed_paired_replay_*_{candidate_prompt_version}.json"
+    for path in sorted(DETAILED_PAIRED_REPORT_DIR.glob(pattern)):
+        match = re.search(r"(\d{4}-\d{2}-\d{2})", path.name)
+        source_date = match.group(1) if match else ""
+        if not source_date or source_date < "2026-06-04" or source_date >= target_date:
+            continue
+        report = _load_json(path)
+        if report.get("runtime_effect") is not False:
+            continue
+        for row in report.get("paired_comparisons") or []:
+            if not isinstance(row, dict):
+                continue
+            trace_id = str(row.get("decision_trace_id") or "")
+            if trace_id:
+                rows_by_trace[trace_id] = dict(row)
+    for row in current_rows:
+        trace_id = str(row.get("decision_trace_id") or "")
+        if trace_id:
+            rows_by_trace[trace_id] = dict(row)
+    cumulative_rows = list(rows_by_trace.values())
+    exposure_rows = [
+        row
+        for row in cumulative_rows
+        if str(row.get("candidate_action") or "") in EXPOSURE_ACTIONS
+    ]
+    exposure_symbols = {
+        str(row.get("stock_code") or "")
+        for row in exposure_rows
+        if row.get("stock_code")
+    }
+    adjusted_values = [
+        _number(row.get("candidate_execution_cost_adjusted_decision_value_pct"))
+        for row in cumulative_rows
+    ]
+    adjusted_values = [value for value in adjusted_values if value is not None]
+    adverse_exposure_count = sum(
+        str(row.get("first_hit") or "") == "adverse" for row in exposure_rows
+    )
+    return {
+        "schema": "anticipatory_reversal_cumulative_learning_v1",
+        "status": (
+            "cumulative_learning_updated"
+            if cumulative_rows
+            else "cumulative_learning_no_sample"
+        ),
+        "candidate_prompt_version": candidate_prompt_version,
+        "clean_tuning_baseline_date": "2026-06-04",
+        "as_of_date": target_date,
+        "decision_count": len(cumulative_rows),
+        "unique_symbol_count": len(
+            {
+                str(row.get("stock_code") or "")
+                for row in cumulative_rows
+                if row.get("stock_code")
+            }
+        ),
+        "candidate_exposure_decision_count": len(exposure_rows),
+        "candidate_exposure_unique_symbol_count": len(exposure_symbols),
+        "candidate_execution_cost_adjusted_ev_pct": (
+            fmean(adjusted_values) if adjusted_values else None
+        ),
+        "adverse_first_candidate_exposure_count": adverse_exposure_count,
+        "candidate_error_taxonomy_counts": dict(
+            Counter(
+                error
+                for row in cumulative_rows
+                for error in row.get("candidate_error_taxonomy") or []
+            )
+        ),
+        "learning_update_floor": {
+            "decision_rows": ANTICIPATORY_LEARNING_MIN_ROWS,
+            "unique_symbols": ANTICIPATORY_LEARNING_MIN_SYMBOLS,
+            "pass": bool(cumulative_rows),
+            "role": "start_or_update_observation_only",
+        },
+        "promotion_evidence_floor": {
+            "candidate_exposure_decision_rows": (PAIRED_CANDIDATE_EXPOSURE_MIN_ROWS),
+            "candidate_exposure_unique_symbols": (
+                PAIRED_CANDIDATE_EXPOSURE_MIN_SYMBOLS
+            ),
+            "pass": (
+                len(exposure_rows) >= PAIRED_CANDIDATE_EXPOSURE_MIN_ROWS
+                and len(exposure_symbols) >= PAIRED_CANDIDATE_EXPOSURE_MIN_SYMBOLS
+            ),
+            "promotion_authority": False,
+        },
+        "update_policy": (
+            "append_daily_exact_rows_dedupe_trace_then_recompute_cumulative"
+        ),
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "forbidden_uses": [
+            "single_sample_live_promotion",
+            "realized_pnl_claim",
+            "runtime_threshold_or_prompt_mutation",
+        ],
+    }
+
+
 def build_paired_replay_report(
     *,
     target_date: str,
@@ -3342,6 +4177,35 @@ def build_paired_replay_report(
             continue
         trace_id = str(result.get("decision_trace_id") or "")
         request = request_by_trace.get(trace_id) or {}
+        candidate_contract = request.get("candidate")
+        candidate_contract = (
+            candidate_contract if isinstance(candidate_contract, dict) else {}
+        )
+        anticipatory_analysis = request.get("anticipatory_reversal_analysis")
+        anticipatory_analysis = (
+            anticipatory_analysis if isinstance(anticipatory_analysis, dict) else {}
+        )
+        execution_cost = anticipatory_analysis.get("execution_cost")
+        execution_cost = execution_cost if isinstance(execution_cost, dict) else {}
+        execution_cost_contract_applied = bool(
+            candidate_contract.get("exposure_semantics")
+            == "offline_counterfactual_passive_probe_only"
+        )
+        candidate_execution_cost_pct = (
+            _number(execution_cost.get("conservative_execution_cost_pct"))
+            if execution_cost_contract_applied and candidate_action in EXPOSURE_ACTIONS
+            else 0.0 if execution_cost_contract_applied else None
+        )
+        candidate_execution_cost_adjusted_value = (
+            candidate_value - candidate_execution_cost_pct
+            if candidate_execution_cost_pct is not None
+            else candidate_value
+        )
+        primary_candidate_value = (
+            candidate_execution_cost_adjusted_value
+            if execution_cost_contract_applied
+            else candidate_value
+        )
         mfe = _number(preferred.get("mfe_pct"))
         mae = _number(preferred.get("mae_pct"))
         first_hit = str(preferred.get("first_hit") or "")
@@ -3366,7 +4230,15 @@ def build_paired_replay_report(
                 "outcome_return_pct": outcome,
                 "control_decision_value_pct": control_value,
                 "candidate_decision_value_pct": candidate_value,
-                "delta_pct": candidate_value - control_value,
+                "candidate_execution_cost_contract_applied": (
+                    execution_cost_contract_applied
+                ),
+                "candidate_execution_cost_pct": candidate_execution_cost_pct,
+                "candidate_execution_cost_adjusted_decision_value_pct": (
+                    candidate_execution_cost_adjusted_value
+                ),
+                "candidate_primary_decision_value_pct": primary_candidate_value,
+                "delta_pct": primary_candidate_value - control_value,
                 "control_missed_upside": (
                     control_action in NO_EXPOSURE_ACTIONS and outcome > 0
                 ),
@@ -3404,7 +4276,19 @@ def build_paired_replay_report(
     for (stage, venue, session), rows in sorted(grouped.items()):
         bucket_control_ev = fmean(row["control_decision_value_pct"] for row in rows)
         bucket_candidate_ev = fmean(row["candidate_decision_value_pct"] for row in rows)
+        bucket_candidate_primary_ev = fmean(
+            row["candidate_primary_decision_value_pct"] for row in rows
+        )
+        bucket_execution_cost_adjusted_ev = (
+            fmean(
+                row["candidate_execution_cost_adjusted_decision_value_pct"]
+                for row in rows
+            )
+            if any(row["candidate_execution_cost_contract_applied"] for row in rows)
+            else None
+        )
         bucket_ev_delta = fmean(row["delta_pct"] for row in rows)
+        bucket_source_quality_ev_delta = bucket_candidate_ev - bucket_control_ev
         bucket_missed_upside_reduction = sum(
             row["control_missed_upside"] and not row["candidate_missed_upside"]
             for row in rows
@@ -3437,8 +4321,9 @@ def build_paired_replay_report(
         bucket_action_counter = Counter(row["candidate_action"] for row in rows)
         bucket_dominant_action_ratio = max(bucket_action_counter.values()) / len(rows)
         bucket_quality_checks = {
-            "source_quality_adjusted_ev_improved": bucket_ev_delta > 0,
-            "candidate_ev_positive": bucket_candidate_ev > 0,
+            "source_quality_adjusted_ev_improved": (bucket_source_quality_ev_delta > 0),
+            "primary_decision_ev_improved": bucket_ev_delta > 0,
+            "candidate_ev_positive": bucket_candidate_primary_ev > 0,
             "missed_upside_reduced": bucket_missed_upside_reduction > 0,
             "new_missed_upside_not_increased": bucket_new_missed_upside == 0,
             "adverse_first_exposure_not_increased": (
@@ -3455,7 +4340,14 @@ def build_paired_replay_report(
                 "sample_count": len(rows),
                 "control_source_quality_adjusted_ev_pct": bucket_control_ev,
                 "candidate_source_quality_adjusted_ev_pct": bucket_candidate_ev,
-                "source_quality_adjusted_ev_delta_pct": bucket_ev_delta,
+                "candidate_execution_cost_adjusted_ev_pct": (
+                    bucket_execution_cost_adjusted_ev
+                ),
+                "candidate_primary_decision_ev_pct": bucket_candidate_primary_ev,
+                "source_quality_adjusted_ev_delta_pct": (
+                    bucket_source_quality_ev_delta
+                ),
+                "candidate_primary_decision_ev_delta_pct": bucket_ev_delta,
                 "missed_upside_reduction_count": bucket_missed_upside_reduction,
                 "new_missed_upside_count": bucket_new_missed_upside,
                 "control_adverse_first_exposure_count": (
@@ -3487,6 +4379,27 @@ def build_paired_replay_report(
     candidate_ev = (
         fmean(row["candidate_decision_value_pct"] for row in comparable_rows)
         if comparable_rows
+        else None
+    )
+    execution_cost_contract_applied = any(
+        row["candidate_execution_cost_contract_applied"] for row in comparable_rows
+    )
+    candidate_execution_cost_adjusted_ev = (
+        fmean(
+            row["candidate_execution_cost_adjusted_decision_value_pct"]
+            for row in comparable_rows
+        )
+        if comparable_rows and execution_cost_contract_applied
+        else None
+    )
+    candidate_primary_ev = (
+        fmean(row["candidate_primary_decision_value_pct"] for row in comparable_rows)
+        if comparable_rows
+        else None
+    )
+    source_quality_ev_delta = (
+        candidate_ev - control_ev
+        if candidate_ev is not None and control_ev is not None
         else None
     )
     ev_delta = (
@@ -3537,8 +4450,13 @@ def build_paired_replay_report(
     quality_checks = {
         "all_pairs_comparable": bool(requests)
         and len(comparable_rows) == len(requests),
-        "source_quality_adjusted_ev_improved": ev_delta is not None and ev_delta > 0,
-        "candidate_ev_positive": candidate_ev is not None and candidate_ev > 0,
+        "source_quality_adjusted_ev_improved": (
+            source_quality_ev_delta is not None and source_quality_ev_delta > 0
+        ),
+        "primary_decision_ev_improved": ev_delta is not None and ev_delta > 0,
+        "candidate_ev_positive": (
+            candidate_primary_ev is not None and candidate_primary_ev > 0
+        ),
         "missed_upside_reduced": missed_upside_reduction_count > 0,
         "new_missed_upside_not_increased": new_missed_upside_count == 0,
         "adverse_first_exposure_not_increased": (
@@ -3576,6 +4494,27 @@ def build_paired_replay_report(
         for attempt in result.get("candidate_attempts") or []
         if isinstance(attempt, dict)
     ]
+    candidate_prompt_versions = {
+        str((request.get("candidate") or {}).get("prompt_version") or "").removesuffix(
+            f"_{request.get('stage')}"
+        )
+        for request in requests
+        if isinstance(request.get("candidate"), dict)
+    }
+    cumulative_candidate_prompt_version = (
+        next(iter(candidate_prompt_versions))
+        if len(candidate_prompt_versions) == 1
+        else DECISION_QUALITY_V2_9_ANTICIPATORY_PROMPT_VERSION
+    )
+    cumulative_learning = (
+        _anticipatory_cumulative_learning_summary(
+            target_date=target_date,
+            current_rows=comparable_rows,
+            candidate_prompt_version=cumulative_candidate_prompt_version,
+        )
+        if execution_cost_contract_applied
+        else None
+    )
     return {
         "schema": PAIRED_SCHEMA,
         "target_date": target_date,
@@ -3589,7 +4528,27 @@ def build_paired_replay_report(
         "paired_comparable_count": len(comparable_rows),
         "control_source_quality_adjusted_ev_pct": control_ev,
         "candidate_source_quality_adjusted_ev_pct": candidate_ev,
-        "source_quality_adjusted_ev_delta_pct": ev_delta,
+        "candidate_execution_cost_adjusted_ev_pct": (
+            candidate_execution_cost_adjusted_ev
+        ),
+        "candidate_primary_decision_ev_pct": candidate_primary_ev,
+        "candidate_primary_decision_metric": (
+            "candidate_execution_cost_adjusted_ev_pct"
+            if execution_cost_contract_applied
+            else "source_quality_adjusted_ev_pct"
+        ),
+        "candidate_execution_cost_observed_count": sum(
+            row["candidate_execution_cost_pct"] is not None
+            and row["candidate_action"] in EXPOSURE_ACTIONS
+            for row in comparable_rows
+        ),
+        "candidate_execution_cost_total_pct": (
+            sum(row["candidate_execution_cost_pct"] or 0.0 for row in comparable_rows)
+            if execution_cost_contract_applied
+            else None
+        ),
+        "source_quality_adjusted_ev_delta_pct": source_quality_ev_delta,
+        "candidate_primary_decision_ev_delta_pct": ev_delta,
         "missed_upside_reduction_count": missed_upside_reduction_count,
         "new_missed_upside_count": new_missed_upside_count,
         "control_adverse_first_exposure_count": (control_adverse_first_exposure_count),
@@ -3633,6 +4592,7 @@ def build_paired_replay_report(
             (attempt.get("provider_provenance") or {}).get("provider_none") is True
             for attempt in provider_attempts
         ),
+        "cumulative_learning": cumulative_learning,
         "net_profit_status": "not_available_without_notional_and_fill_join",
         "buckets": buckets,
         "paired_comparisons": comparable_rows,
@@ -4276,6 +5236,8 @@ def main(argv: list[str] | None = None) -> int:
         choices=(
             DECISION_QUALITY_DETAILED_PROMPT_VERSION,
             DECISION_QUALITY_V2_8_CANDIDATE_PROMPT_VERSION,
+            DECISION_QUALITY_V2_9_ANTICIPATORY_PROMPT_VERSION,
+            DECISION_QUALITY_V2_9_1_ANTICIPATORY_PROMPT_VERSION,
         ),
         default=DECISION_QUALITY_DETAILED_PROMPT_VERSION,
     )
@@ -4475,17 +5437,13 @@ def main(argv: list[str] | None = None) -> int:
                     == request_by_pair[str(row.get("paired_replay_id") or "")].get(
                         "exact_payload_analysis_sha256"
                     )
-                    and not validate_candidate_response(
+                    and row.get("anticipatory_reversal_analysis_sha256")
+                    == request_by_pair[str(row.get("paired_replay_id") or "")].get(
+                        "anticipatory_reversal_analysis_sha256"
+                    )
+                    and not validate_replay_candidate_response(
+                        request_by_pair[str(row.get("paired_replay_id") or "")],
                         dict(row.get("candidate_response") or {}),
-                        stage=str(
-                            request_by_pair[str(row.get("paired_replay_id") or "")].get(
-                                "stage"
-                            )
-                            or ""
-                        ),
-                        exact_payload=request_by_pair[
-                            str(row.get("paired_replay_id") or "")
-                        ].get("exact_payload"),
                     )
                 ]
                 completed_pair_ids = {
@@ -4539,6 +5497,13 @@ def main(argv: list[str] | None = None) -> int:
             if args.mode == "detailed":
                 report["schema"] = DETAILED_PAIRED_SCHEMA
                 report["analysis_schema"] = EXACT_PAYLOAD_ANALYSIS_SCHEMA
+                if args.detailed_candidate_version in {
+                    DECISION_QUALITY_V2_9_ANTICIPATORY_PROMPT_VERSION,
+                    DECISION_QUALITY_V2_9_1_ANTICIPATORY_PROMPT_VERSION,
+                }:
+                    report["supplemental_analysis_schema"] = (
+                        ANTICIPATORY_REVERSAL_ANALYSIS_SCHEMA
+                    )
                 report["three_way_comparison"] = build_detailed_three_way_comparison(
                     one_pass_report=_load_json(paired_path(args.date)),
                     detailed_report=report,

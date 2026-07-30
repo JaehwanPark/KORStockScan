@@ -1212,6 +1212,61 @@ def test_decision_quality_contract_rejection_is_preserved_in_trace(
     }
 
 
+def test_decision_quality_non_buy_repair_provenance_is_preserved_in_trace(
+    monkeypatch, tmp_path
+):
+    _enable(monkeypatch, tmp_path)
+
+    trace.record_ai_decision_trace(
+        {
+            "ai_decision_trace_id": "decision-quality-repaired-1",
+            "action": "DROP",
+            "score": 11,
+            "provider_called": True,
+            "provider": "openai",
+            "decision_quality_contract_status": "pass",
+            "decision_quality_live_adapter": "decision_quality_v2_7_entry_v2",
+            "decision_quality_contract_errors": [],
+            "decision_quality_model_reason_codes": [
+                "edge_absent",
+                "trigger=insufficient_tape_confirmation",
+            ],
+            "decision_quality_contract_repair_applied": True,
+            "decision_quality_contract_repair_codes": [
+                "non_buy_invalid_reason_codes_removed"
+            ],
+            "decision_quality_contract_original_errors": ["reason_codes_invalid"],
+            "decision_quality_contract_invalid_reason_codes": [
+                "trigger=insufficient_tape_confirmation"
+            ],
+        },
+        prompt_type="scalping_entry",
+        prompt_version="decision_quality_v2_7",
+        result_source="live",
+        provider_called=True,
+    )
+
+    trace_row = _rows(trace._trace_path(trace._date_text()))[0]
+    assert trace_row["decision_quality_contract_status"] == "pass"
+    assert trace_row["decision_quality_live_adapter"] == (
+        "decision_quality_v2_7_entry_v2"
+    )
+    assert trace_row["decision_quality_model_reason_codes"] == [
+        "edge_absent",
+        "trigger=insufficient_tape_confirmation",
+    ]
+    assert trace_row["decision_quality_contract_repair_applied"] is True
+    assert trace_row["decision_quality_contract_repair_codes"] == [
+        "non_buy_invalid_reason_codes_removed"
+    ]
+    assert trace_row["decision_quality_contract_original_errors"] == [
+        "reason_codes_invalid"
+    ]
+    assert trace_row["decision_quality_contract_invalid_reason_codes"] == [
+        "trigger=insufficient_tape_confirmation"
+    ]
+
+
 def test_pending_outcome_is_recovered_without_duplicate_trace_after_write_failure(
     monkeypatch, tmp_path
 ):

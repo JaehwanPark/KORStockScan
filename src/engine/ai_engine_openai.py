@@ -98,6 +98,7 @@ from src.engine.ai_prompt_contracts import (
     REALTIME_ANALYSIS_PROMPT_DUAL,
     SCALPING_OVERNIGHT_DECISION_PROMPT,
     DECISION_QUALITY_DETAILED_PROMPT_VERSION,
+    DECISION_QUALITY_V2_REASON_CODES,
     decision_quality_v2_detailed_system_prompt,
 )
 
@@ -1715,6 +1716,11 @@ class GPTSniperEngine:
         payload = dict(result or {}) if isinstance(result, dict) else {}
         model_action = str(payload.get("action") or "").strip().upper() or None
         model_edge_state = str(payload.get("edge_state") or "").strip().upper() or None
+        model_reason_codes = (
+            [str(code) for code in payload.get("reason_codes") or []]
+            if isinstance(payload.get("reason_codes"), list)
+            else []
+        )
         model_evidence = (
             {str(key): str(value) for key, value in payload.get("evidence", {}).items()}
             if isinstance(payload.get("evidence"), dict)
@@ -1729,6 +1735,7 @@ class GPTSniperEngine:
             "decision_quality_model_expected_downside_pct": payload.get(
                 "expected_downside_pct"
             ),
+            "decision_quality_model_reason_codes": model_reason_codes,
             "decision_quality_model_evidence": model_evidence,
         }
         contract_errors = validate_candidate_response(
@@ -1736,16 +1743,186 @@ class GPTSniperEngine:
             stage="entry",
             exact_payload=exact_payload,
         )
+        repair_fields = {
+            "decision_quality_contract_repair_applied": False,
+            "decision_quality_contract_repair_codes": [],
+            "decision_quality_contract_original_errors": list(contract_errors),
+            "decision_quality_contract_invalid_reason_codes": [],
+        }
+        if contract_errors and model_action != "BUY":
+            repaired = dict(payload)
+            valid_reason_codes = []
+            invalid_reason_codes = []
+            for code in model_reason_codes:
+                if code in DECISION_QUALITY_V2_REASON_CODES:
+                    if code not in valid_reason_codes:
+                        valid_reason_codes.append(code)
+                else:
+                    invalid_reason_codes.append(code)
+            repair_codes = []
+            evidence_for_reason_repair = (
+                repaired.get("evidence")
+                if isinstance(repaired.get("evidence"), dict)
+                else {}
+            )
+            evidence_trigger = (
+                str(evidence_for_reason_repair.get("trigger") or "").strip().lower()
+            )
+            valid_reason_code_set = set(valid_reason_codes)
+            redundant_trigger_reason_requirements = {
+                "trigger=insufficient_tape_confirmation": (
+                    "insufficient",
+                    {
+                        "tape_sample_insufficient",
+                    },
+                ),
+                "trigger=insufficient": (
+                    "insufficient",
+                    {
+                        "insufficient_core_data",
+                        "tape_missing",
+                        "tape_sample_insufficient",
+                    },
+                ),
+                "trigger=confirmed": (
+                    "confirmed",
+                    {
+                        "continuation_supported",
+                        "recovery_trigger_confirmed",
+                        "tape_supportive",
+                    },
+                ),
+                "trigger=recovery_required": (
+                    "recovery_required",
+                    {
+                        "recovery_trigger_required",
+                    },
+                ),
+                "trigger=failed": (
+                    "failed",
+                    {
+                        "distribution_adverse",
+                        "recovery_trigger_failed",
+                        "setup_invalidated",
+                        "tape_adverse",
+                    },
+                ),
+            }
+            invalid_reason_codes_are_redundant = bool(invalid_reason_codes) and all(
+                (
+                    requirement := redundant_trigger_reason_requirements.get(
+                        str(code).strip().lower()
+                    )
+                )
+                is not None
+                and evidence_trigger == requirement[0]
+                and bool(valid_reason_code_set & requirement[1])
+                for code in invalid_reason_codes
+            )
+            if (
+                "reason_codes_invalid" in contract_errors
+                and valid_reason_codes
+                and invalid_reason_codes_are_redundant
+            ):
+                repaired["reason_codes"] = valid_reason_codes
+                repair_codes.append("non_buy_invalid_reason_codes_removed")
+
+            interim_errors = validate_candidate_response(
+                repaired,
+                stage="entry",
+                exact_payload=exact_payload,
+            )
+            deterministic_fact_errors = {
+                "entry_structural_edge_floor_misclassified",
+                "entry_trusted_supportive_trigger_misclassified",
+            }
+            if (
+                str(repaired.get("action") or "").strip().upper() == "DROP"
+                and interim_errors
+                and set(interim_errors).issubset(deterministic_fact_errors)
+            ):
+                evidence = (
+                    dict(repaired.get("evidence") or {})
+                    if isinstance(repaired.get("evidence"), dict)
+                    else {}
+                )
+                adverse_risk = str(evidence.get("adverse_risk") or "").lower()
+                try:
+                    upside = float(repaired.get("expected_upside_pct"))
+                    downside = float(repaired.get("expected_downside_pct"))
+                except (TypeError, ValueError):
+                    upside = None
+                    downside = None
+                unfavorable_reward_risk = bool(
+                    upside is not None
+                    and downside is not None
+                    and downside < 0
+                    and upside / abs(downside) < 1.25
+                )
+                # This repair is deliberately non-BUY and action-preserving.
+                # A deterministic positive-edge ledger may correct the model's
+                # classification only when the existing blocking risk or
+                # unfavorable reward/risk independently keeps DROP valid.
+                if adverse_risk == "blocking" or unfavorable_reward_risk:
+                    repaired["edge_state"] = "EDGE"
+                    evidence["positive_edge"] = "moderate"
+                    repaired_reason_codes = [
+                        code
+                        for code in repaired.get("reason_codes") or []
+                        if code not in {"edge_absent", "no_positive_edge"}
+                    ]
+                    if "edge_positive" not in repaired_reason_codes:
+                        repaired_reason_codes.append("edge_positive")
+                    repaired["reason_codes"] = repaired_reason_codes
+                    if (
+                        "entry_trusted_supportive_trigger_misclassified"
+                        in interim_errors
+                    ):
+                        evidence["tape"] = "supportive"
+                        evidence["trigger"] = "confirmed"
+                    if str(evidence.get("setup") or "").lower() in {
+                        "no_setup",
+                        "not_applicable",
+                    }:
+                        evidence["setup"] = "continuation"
+                    repaired["evidence"] = evidence
+                    repair_codes.append(
+                        "non_buy_deterministic_edge_classification_aligned"
+                    )
+
+            repaired_errors = validate_candidate_response(
+                repaired,
+                stage="entry",
+                exact_payload=exact_payload,
+            )
+            if repair_codes and not repaired_errors:
+                payload = repaired
+                contract_errors = []
+                repair_fields = {
+                    "decision_quality_contract_repair_applied": True,
+                    "decision_quality_contract_repair_codes": repair_codes,
+                    "decision_quality_contract_original_errors": list(
+                        repair_fields["decision_quality_contract_original_errors"]
+                    ),
+                    "decision_quality_contract_invalid_reason_codes": (
+                        invalid_reason_codes
+                    ),
+                }
+            else:
+                repair_fields["decision_quality_contract_invalid_reason_codes"] = (
+                    invalid_reason_codes
+                )
         if contract_errors:
             return {
                 **payload,
                 **model_fields,
+                **repair_fields,
                 "action": "DROP",
                 "score": 0,
                 "reason": "decision_quality_v2_7_semantic_rejected",
                 "decision_quality_contract_status": "semantic_rejected",
                 "decision_quality_contract_errors": contract_errors,
-                "decision_quality_live_adapter": "decision_quality_v2_7_entry_v1",
+                "decision_quality_live_adapter": "decision_quality_v2_7_entry_v2",
                 "decision_quality_response_schema": "decision_quality_v2_7_entry",
                 "decision_quality_score_semantics": (
                     "fail_closed_not_model_quality_score"
@@ -1766,12 +1943,13 @@ class GPTSniperEngine:
         return {
             **payload,
             **model_fields,
+            **repair_fields,
             "action": action,
             "score": score,
             "reason": ",".join(reason_codes[:4])[:120] or "decision_quality_v2_7",
             "decision_quality_contract_status": "pass",
             "decision_quality_contract_errors": [],
-            "decision_quality_live_adapter": "decision_quality_v2_7_entry_v1",
+            "decision_quality_live_adapter": "decision_quality_v2_7_entry_v2",
             "decision_quality_model_confidence": confidence,
             "decision_quality_response_schema": "decision_quality_v2_7_entry",
             "decision_quality_score_semantics": (

@@ -1001,9 +1001,7 @@ class ScannerRuntimeScheduler:
             fields.update(
                 {
                     "scheduler_action": "generation_parked",
-                    "scheduler_reason": str(
-                        reason or "scanner_generation_warm_parked"
-                    ),
+                    "scheduler_reason": str(reason or "scanner_generation_warm_parked"),
                     "scheduler_queue_depth": len(self._work_by_id),
                     "scheduler_in_flight_count": len(self._in_flight),
                 }
@@ -1148,15 +1146,28 @@ class ScannerRuntimeScheduler:
     @staticmethod
     def _precheck_selection_key_locked(
         item: ScannerWorkItem,
-    ) -> tuple[int, float, int, float, str]:
+    ) -> tuple[int, float, float, float, str]:
         # A generation that has never reached its first WS-only precheck owns
         # admission ahead of recurring rechecks.  Deadlines remain EDF within
         # each phase, so one already-observed symbol cannot consume the
         # attach-to-first-precheck budget of newly attached generations.
+        if item.precheck_phase == "initial":
+            return (
+                0,
+                item.deadline_epoch,
+                -item.priority,
+                item.enqueued_epoch,
+                item.work_id,
+            )
+        # Recurring source-recovery work may deliberately carry a lower
+        # priority so it cannot become a cross-symbol head-of-line blocker.
+        # Equal-priority rechecks preserve the existing EDF order, and an
+        # expired request still closes through claim()'s generation-scoped
+        # deadline-expiry path.
         return (
-            0 if item.precheck_phase == "initial" else 1,
-            item.deadline_epoch,
+            1,
             -item.priority,
+            item.deadline_epoch,
             item.enqueued_epoch,
             item.work_id,
         )

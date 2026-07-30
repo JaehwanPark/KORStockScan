@@ -208,11 +208,7 @@ def test_entry_ai_snapshots_use_post_fetch_clocks():
     assert "retry_context_now_ts = time.time()" in retry_source
     assert "now_ts=retry_context_now_ts" in retry_source
 
-    projection_source = inspect.getsource(
-        handlers._run_watching_score_projection_refresh
-    )
-    assert "projection_context_now_ts = time.time()" in projection_source
-    assert "now_ts=projection_context_now_ts" in projection_source
+    assert not hasattr(handlers, "_run_watching_score_projection_refresh")
 
     gatekeeper_clock_idx = source.index("gatekeeper_context_now_ts = time.time()")
     gatekeeper_snapshot_idx = source.index(
@@ -5159,6 +5155,272 @@ def test_scanner_promotion_price_consistency_ignores_boot_restore_price_move():
         == "boot_restore_generation_price_not_initial_attach_evidence"
     )
     assert fields["scanner_promotion_price_boot_restore"] is True
+
+
+def test_scanner_promotion_price_conflict_reanchors_to_fresh_executable_ws_ask():
+    stock = {
+        "scanner_generation_id": "GEN-REANCHOR-WS-1",
+        "scanner_generation_observed_price": 10000,
+        "current_price_observed": 10000,
+        "effective_venue": "KRX",
+        "venue": "KRX",
+        "venue_resolution": "scanner_attach:explicit_krx",
+        "market_session_bucket": "krx_regular",
+    }
+    fields = handlers._scanner_promotion_price_consistency_fields(
+        stock,
+        {
+            "curr": 11000,
+            "best_bid": 10990,
+            "best_ask": 11000,
+            "last_ws_update_ts": 1000.95,
+            "last_realtime_type_ts": {"0B": 1000.95, "0D": 1000.95},
+        },
+        now_ts=1001.0,
+    )
+
+    assert fields["scanner_promotion_price_original_conflict"] is True
+    assert fields["scanner_promotion_price_conflict"] is False
+    assert fields["scanner_promotion_price_consistency_state"] == "reanchored"
+    assert fields["scanner_promotion_reanchor_allowed"] is True
+    assert fields["scanner_promotion_reanchor_price"] == 11000
+    assert fields["scanner_promotion_reanchor_price_type"] == "executable_ask"
+    assert fields["scanner_promotion_reanchor_source"] == "ws_executable_bbo"
+    assert fields["scanner_promotion_reanchor_contract_status"] == "pass"
+    assert fields["scanner_promotion_reanchor_effective_venue"] == "KRX"
+    assert fields["scanner_promotion_reanchor_broker_order_forbidden"] is True
+
+
+def test_scanner_promotion_price_conflict_reanchors_to_fresh_rest_bbo_contract():
+    fields = handlers._scanner_promotion_price_consistency_fields(
+        {
+            "scanner_generation_id": "GEN-REANCHOR-REST-1",
+            "scanner_generation_observed_price": 10000,
+            "current_price_observed": 10000,
+            "effective_venue": "KRX",
+            "venue": "KRX",
+            "venue_resolution": "scanner_attach:explicit_krx",
+            "market_session_bucket": "krx_regular",
+        },
+        {
+            "curr": 11000,
+            "best_bid": 10990,
+            "best_ask": 11000,
+            "last_ws_update_ts": 990.0,
+            "last_realtime_type_ts": {"0B": 990.0},
+            "ws_snapshot_recovery_source": "ka10004_rest_orderbook_enrichment",
+            "market_data_effective_price_source": "ka10004_rest_orderbook",
+            "market_data_freshness_state": "rest_enriched",
+            "market_data_orderbook_state": "rest_enriched",
+            "market_data_effective_quote_age_ms": 100.0,
+            "market_data_effective_age_basis": "bounded_call_completion_receive_ts",
+        },
+        now_ts=1001.0,
+    )
+
+    assert fields["scanner_promotion_price_conflict"] is False
+    assert fields["scanner_promotion_reanchor_allowed"] is True
+    assert fields["scanner_promotion_reanchor_source"] == ("ka10004_rest_orderbook")
+    assert fields["scanner_promotion_reanchor_contract_status"] == "pass"
+    assert fields["scanner_promotion_price_ws_fresh"] is False
+    assert fields["scanner_promotion_price_comparison_source_fresh"] is True
+    assert fields["scanner_promotion_price_effective_curr"] == 11000
+    assert fields["scanner_promotion_price_effective_source"] == (
+        "ka10004_rest_orderbook"
+    )
+
+
+def test_scanner_promotion_price_conflict_blocks_rest_reanchor_for_nxt_venue():
+    fields = handlers._scanner_promotion_price_consistency_fields(
+        {
+            "scanner_generation_id": "GEN-REANCHOR-NXT-REST-1",
+            "scanner_generation_observed_price": 10000,
+            "current_price_observed": 10000,
+            "effective_venue": "NXT",
+            "venue": "NXT",
+            "venue_resolution": "scanner_attach:explicit_nxt",
+            "market_session_bucket": "nxt",
+        },
+        {
+            "curr": 11000,
+            "best_bid": 10990,
+            "best_ask": 11000,
+            "last_ws_update_ts": 990.0,
+            "last_realtime_type_ts": {"0B": 990.0},
+            "ws_snapshot_recovery_source": "ka10004_rest_orderbook_enrichment",
+            "market_data_effective_price_source": "ka10004_rest_orderbook",
+            "market_data_freshness_state": "rest_enriched",
+            "market_data_orderbook_state": "rest_enriched",
+            "market_data_effective_quote_age_ms": 100.0,
+            "market_data_effective_age_basis": "bounded_call_completion_receive_ts",
+        },
+        now_ts=1001.0,
+    )
+
+    assert fields["scanner_promotion_price_conflict"] is True
+    assert fields["scanner_promotion_reanchor_allowed"] is False
+    assert fields["scanner_promotion_reanchor_rest_venue_eligible"] is False
+    assert fields["scanner_promotion_reanchor_contract_status"] == (
+        "blocked_unproven_rest_venue"
+    )
+
+
+def test_scanner_promotion_price_conflict_keeps_block_for_non_executable_bbo():
+    fields = handlers._scanner_promotion_price_consistency_fields(
+        {
+            "scanner_generation_id": "GEN-REANCHOR-BLOCK-1",
+            "scanner_generation_observed_price": 10000,
+            "current_price_observed": 10000,
+            "effective_venue": "KRX",
+            "venue": "KRX",
+            "venue_resolution": "scanner_attach:explicit_krx",
+            "market_session_bucket": "krx_regular",
+        },
+        {
+            "curr": 11000,
+            "best_bid": 10800,
+            "best_ask": 11100,
+            "last_ws_update_ts": 1000.95,
+            "last_realtime_type_ts": {"0B": 1000.95, "0D": 1000.95},
+        },
+        now_ts=1001.0,
+    )
+
+    assert fields["scanner_promotion_price_original_conflict"] is True
+    assert fields["scanner_promotion_price_conflict"] is True
+    assert fields["scanner_promotion_reanchor_allowed"] is False
+    assert fields["scanner_promotion_reanchor_contract_status"] == (
+        "blocked_non_executable_bbo"
+    )
+
+
+def test_scanner_promotion_price_conflict_keeps_block_for_stale_ws_bbo():
+    fields = handlers._scanner_promotion_price_consistency_fields(
+        {
+            "scanner_generation_id": "GEN-REANCHOR-STALE-1",
+            "scanner_generation_observed_price": 10000,
+            "current_price_observed": 10000,
+            "effective_venue": "KRX",
+            "venue": "KRX",
+            "venue_resolution": "scanner_attach:explicit_krx",
+            "market_session_bucket": "krx_regular",
+        },
+        {
+            "curr": 11000,
+            "best_bid": 10990,
+            "best_ask": 11000,
+            "last_ws_update_ts": 1000.95,
+            "last_realtime_type_ts": {"0B": 1000.95, "0D": 995.0},
+        },
+        now_ts=1001.0,
+    )
+
+    assert fields["scanner_promotion_price_conflict"] is True
+    assert fields["scanner_promotion_reanchor_allowed"] is False
+    assert fields["scanner_promotion_reanchor_contract_status"] == (
+        "blocked_stale_or_conflicted_source"
+    )
+    assert fields["scanner_promotion_reanchor_ws_last_0d_age_ms"] == 6000.0
+
+
+def test_scanner_fast_precheck_persists_safe_reanchor_before_heavy_eval(
+    monkeypatch,
+):
+    monkeypatch.setattr(handlers.time, "time", lambda: 1001.0)
+    stock = {
+        "id": 854,
+        "name": "SAFE_REANCHOR",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "scanner_promotion_id": "SCANPROM-000854-1000000",
+        "scanner_promotion_reason": "opening_rotation",
+        "scanner_generation_id": "GEN-REANCHOR-FAST-1",
+        "scanner_generation_observed_price": 10000,
+        "current_price_observed": 10000,
+        "entry_armed_at_epoch": 1000.0,
+        "effective_venue": "KRX",
+        "venue": "KRX",
+        "venue_resolution": "scanner_attach:explicit_krx",
+        "market_session_bucket": "krx_regular",
+    }
+    fields = handlers._scanner_fast_precheck_fields(
+        stock,
+        code="000854",
+        now_ts=1001.0,
+        ws_data={
+            "curr": 11000,
+            "best_bid": 10990,
+            "best_ask": 11000,
+            "last_ws_update_ts": 1000.95,
+            "last_realtime_type_ts": {"0B": 1000.95, "0D": 1000.95},
+            "strength_momentum_history": [{"ts": 1000.95}],
+        },
+    )
+
+    assert fields["fast_precheck_result"] == "eligible_for_heavy_entry_eval"
+    assert fields["scanner_promotion_price_consistency_state"] == "reanchored"
+    assert stock["_scanner_promotion_price_validated_generation_id"] == (
+        "GEN-REANCHOR-FAST-1"
+    )
+    assert stock["_scanner_promotion_reanchor_price"] == 11000
+    assert stock["_scanner_promotion_reanchor_source"] == "ws_executable_bbo"
+
+
+def test_scanner_fast_precheck_reuses_reanchor_as_effective_delta_baseline(
+    monkeypatch,
+):
+    monkeypatch.setattr(handlers.time, "time", lambda: 1002.0)
+    stock = {
+        "id": 855,
+        "name": "SAFE_REANCHOR_REUSE",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "scanner_promotion_id": "SCANPROM-000855-1000000",
+        "scanner_promotion_reason": "opening_rotation",
+        "scanner_generation_id": "GEN-REANCHOR-FAST-2",
+        "scanner_generation_observed_price": 10000,
+        "current_price_observed": 10000,
+        "entry_armed_at_epoch": 1000.0,
+        "effective_venue": "KRX",
+        "venue": "KRX",
+        "venue_resolution": "scanner_attach:explicit_krx",
+        "market_session_bucket": "krx_regular",
+    }
+    first = handlers._scanner_fast_precheck_fields(
+        stock,
+        code="000855",
+        now_ts=1001.0,
+        ws_data={
+            "curr": 11000,
+            "best_bid": 10990,
+            "best_ask": 11000,
+            "last_ws_update_ts": 1000.95,
+            "last_realtime_type_ts": {"0B": 1000.95, "0D": 1000.95},
+            "strength_momentum_history": [{"ts": 1000.95}],
+        },
+    )
+    second = handlers._scanner_fast_precheck_fields(
+        stock,
+        code="000855",
+        now_ts=1002.0,
+        ws_data={
+            "curr": 11100,
+            "best_bid": 11090,
+            "best_ask": 11100,
+            "last_ws_update_ts": 1001.95,
+            "last_realtime_type_ts": {"0B": 1001.95, "0D": 1001.95},
+            "strength_momentum_history": [{"ts": 1001.95}],
+        },
+    )
+
+    assert first["scanner_promotion_effective_anchor_price"] == 11000
+    assert first["fast_precheck_current_vs_attach_delta_pct"] == 0.0
+    assert second["scanner_promotion_reanchor_persisted_reused"] is True
+    assert second["scanner_promotion_effective_anchor_price"] == 11000
+    assert second["scanner_promotion_effective_anchor_source"] == ("ws_executable_bbo")
+    assert second["fast_precheck_current_vs_attach_delta_pct"] == 0.909091
 
 
 def test_scanner_fast_precheck_allows_configured_high_delta_stale_ws_relief(

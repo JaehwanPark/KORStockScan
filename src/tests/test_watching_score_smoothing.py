@@ -1108,7 +1108,7 @@ def test_ai_confirmed_log_fields_preserve_pre_ai_refresh_provenance():
     assert fields["pre_ai_ws_snapshot_refresh_history_count"] == 0
 
 
-def test_report_only_mode_enables_bounded_state_change_refresh(monkeypatch):
+def test_report_only_mode_does_not_enable_state_change_refresh(monkeypatch):
     monkeypatch.setattr(
         handlers,
         "TRADING_RULES",
@@ -1130,8 +1130,7 @@ def test_report_only_mode_enables_bounded_state_change_refresh(monkeypatch):
         last_ai_time=100.0,
         cooldown_sec=90,
     )
-    assert result["allowed"] is True
-    assert "buy_pressure_delta" in result["reason"]
+    assert result == {"allowed": False, "reason": "disabled", "signature": {}}
 
     too_early = handlers._resolve_watching_state_change_refresh(
         stock,
@@ -1140,11 +1139,7 @@ def test_report_only_mode_enables_bounded_state_change_refresh(monkeypatch):
         last_ai_time=100.0,
         cooldown_sec=90,
     )
-    assert too_early == {
-        "allowed": False,
-        "reason": "early_refresh_min_interval",
-        "signature": {},
-    }
+    assert too_early == {"allowed": False, "reason": "disabled", "signature": {}}
 
 
 def test_report_only_ignores_legacy_feature_signature_until_next_normal_ai_call(
@@ -1180,8 +1175,8 @@ def test_report_only_ignores_legacy_feature_signature_until_next_normal_ai_call(
     )
 
     assert result["allowed"] is False
-    assert result["reason"] == "legacy_signature_source_mismatch"
-    assert result["signature"]["signature_source"] == "runtime_context_v2"
+    assert result["reason"] == "disabled"
+    assert result["signature"] == {}
 
 
 def test_watching_refresh_signature_uses_available_feature_axes(monkeypatch):
@@ -1189,7 +1184,7 @@ def test_watching_refresh_signature_uses_available_feature_axes(monkeypatch):
         handlers,
         "TRADING_RULES",
         SimpleNamespace(
-            AI_WATCHING_STATE_CHANGE_REFRESH_ENABLED=False,
+            AI_WATCHING_STATE_CHANGE_REFRESH_ENABLED=True,
             AI_WATCHING_SCORE_SMOOTHING_MODE="report_only",
             AI_WATCHING_STATE_CHANGE_BUY_PRESSURE_DELTA=10.0,
         ),
@@ -1237,7 +1232,7 @@ def test_watching_refresh_does_not_compare_unavailable_feature_axes(monkeypatch)
         handlers,
         "TRADING_RULES",
         SimpleNamespace(
-            AI_WATCHING_STATE_CHANGE_REFRESH_ENABLED=False,
+            AI_WATCHING_STATE_CHANGE_REFRESH_ENABLED=True,
             AI_WATCHING_SCORE_SMOOTHING_MODE="report_only",
             AI_WATCHING_STATE_CHANGE_BUY_PRESSURE_DELTA=10.0,
         ),
@@ -1268,7 +1263,7 @@ def test_watching_refresh_signature_treats_string_false_large_sell_as_false():
     assert signature["large_sell_print_detected"] is False
 
 
-def test_off_mode_preserves_legacy_state_refresh_without_new_min_interval(monkeypatch):
+def test_explicit_state_refresh_enforces_min_interval(monkeypatch):
     monkeypatch.setattr(
         handlers,
         "TRADING_RULES",
@@ -1296,161 +1291,12 @@ def test_off_mode_preserves_legacy_state_refresh_without_new_min_interval(monkey
         last_ai_time=100.0,
         cooldown_sec=90,
     )
-    assert result["allowed"] is True
-
-
-def test_projection_refresh_does_not_mutate_runtime_score_or_last_call(monkeypatch):
-    stock = {
-        "id": 1,
-        "name": "TEST",
-        "rt_ai_prob": 0.81,
-        "last_watching_ai_action": "BUY",
+    assert result == {
+        "allowed": False,
+        "reason": "early_refresh_min_interval",
+        "signature": {},
     }
-    events = []
-    submitted = {}
-
-    class ProjectionEngine:
-        def submit_watching_score_projection(self, **kwargs):
-            submitted.update(kwargs)
-            return object()
-
-    monkeypatch.setattr(handlers, "KIWOOM_TOKEN", "token")
-    monkeypatch.setattr(handlers, "DUAL_PERSONA_ENGINE", ProjectionEngine())
-    monkeypatch.setattr(
-        handlers.kiwoom_utils, "get_tick_history_ka10003", lambda *args, **kwargs: [{}]
-    )
-    monkeypatch.setattr(
-        handlers.kiwoom_utils, "get_minute_candles_ka10080", lambda *args, **kwargs: []
-    )
-    monkeypatch.setattr(
-        handlers,
-        "_extract_buy_recovery_probe_features",
-        lambda *args, **kwargs: {"buy_pressure": 60},
-    )
-    monkeypatch.setattr(
-        handlers,
-        "_log_entry_pipeline",
-        lambda stock, code, stage, **fields: events.append((stage, fields)),
-    )
-
-    executed = handlers._run_watching_score_projection_refresh(
-        stock,
-        "005930",
-        {"orderbook": {"asks": [], "bids": []}, "quote_stale": False},
-        now_ts=130.0,
-        last_ai_time=100.0,
-        cooldown_sec=90,
-        refresh_reason="buy_pressure_delta",
-        current_ai_score=81.0,
-    )
-
-    assert executed is True
-    assert stock["watching_score_projection_inflight"] is True
-    assert events == []
-    submitted["callback"](
-        {
-            **_valid_result(),
-            "action": "WAIT",
-            "score": 55,
-            "reason": "projection",
-        }
-    )
-    assert stock["rt_ai_prob"] == 0.81
-    assert stock["last_watching_ai_action"] == "BUY"
-    assert stock.get("last_watching_ai_score") is None
-    assert stock["watching_score_projection_inflight"] is False
-    assert events[0][0] == "ai_watching_score_projection"
-    assert events[0][1]["runtime_score_preserved"] == "81.0"
-    assert events[0][1]["runtime_effect"] is False
 
 
-def test_projection_refresh_without_projection_engine_does_not_fetch_context(
-    monkeypatch,
-):
-    calls = {"ticks": 0, "candles": 0}
-
-    def _ticks(*args, **kwargs):
-        calls["ticks"] += 1
-        return [{}]
-
-    def _candles(*args, **kwargs):
-        calls["candles"] += 1
-        return []
-
-    monkeypatch.setattr(handlers, "DUAL_PERSONA_ENGINE", None)
-    monkeypatch.setattr(handlers.kiwoom_utils, "get_tick_history_ka10003", _ticks)
-    monkeypatch.setattr(handlers.kiwoom_utils, "get_minute_candles_ka10080", _candles)
-
-    executed = handlers._run_watching_score_projection_refresh(
-        {"id": 1, "name": "TEST"},
-        "005930",
-        {"orderbook": {"asks": [], "bids": []}},
-        now_ts=130.0,
-        last_ai_time=100.0,
-        cooldown_sec=90,
-        refresh_reason="buy_pressure_delta",
-        current_ai_score=81.0,
-    )
-
-    assert executed is False
-    assert calls == {"ticks": 0, "candles": 0}
-
-
-def test_projection_refresh_inflight_does_not_fetch_context(monkeypatch):
-    calls = {"ticks": 0}
-
-    class ProjectionEngine:
-        def submit_watching_score_projection(self, **kwargs):
-            raise AssertionError("inflight projection must not submit another request")
-
-    monkeypatch.setattr(handlers, "DUAL_PERSONA_ENGINE", ProjectionEngine())
-    monkeypatch.setattr(
-        handlers.kiwoom_utils,
-        "get_tick_history_ka10003",
-        lambda *args, **kwargs: calls.__setitem__("ticks", calls["ticks"] + 1) or [{}],
-    )
-
-    executed = handlers._run_watching_score_projection_refresh(
-        {"id": 1, "name": "TEST", "watching_score_projection_inflight": True},
-        "005930",
-        {"orderbook": {"asks": [], "bids": []}},
-        now_ts=130.0,
-        last_ai_time=100.0,
-        cooldown_sec=90,
-        refresh_reason="buy_pressure_delta",
-        current_ai_score=81.0,
-    )
-
-    assert executed is False
-    assert calls["ticks"] == 0
-
-
-def test_projection_refresh_none_submit_clears_inflight(monkeypatch):
-    stock = {"id": 1, "name": "TEST"}
-
-    class ProjectionEngine:
-        def submit_watching_score_projection(self, **kwargs):
-            return None
-
-    monkeypatch.setattr(handlers, "KIWOOM_TOKEN", "token")
-    monkeypatch.setattr(handlers, "DUAL_PERSONA_ENGINE", ProjectionEngine())
-    monkeypatch.setattr(
-        handlers.kiwoom_utils, "get_tick_history_ka10003", lambda *args, **kwargs: [{}]
-    )
-    monkeypatch.setattr(
-        handlers.kiwoom_utils, "get_minute_candles_ka10080", lambda *args, **kwargs: []
-    )
-
-    executed = handlers._run_watching_score_projection_refresh(
-        stock,
-        "005930",
-        {"orderbook": {"asks": [], "bids": []}},
-        now_ts=130.0,
-        last_ai_time=100.0,
-        cooldown_sec=90,
-        refresh_reason="buy_pressure_delta",
-        current_ai_score=81.0,
-    )
-
-    assert executed is False
-    assert stock["watching_score_projection_inflight"] is False
+def test_projection_refresh_helper_is_removed():
+    assert not hasattr(handlers, "_run_watching_score_projection_refresh")

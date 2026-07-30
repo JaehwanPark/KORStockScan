@@ -1511,6 +1511,9 @@ def record_ai_decision_trace(
             "decision_quality_contract_status": _optional(
                 merged, "decision_quality_contract_status"
             ),
+            "decision_quality_live_adapter": _optional(
+                merged, "decision_quality_live_adapter"
+            ),
             "decision_quality_contract_errors": (
                 [
                     str(error)
@@ -1531,6 +1534,14 @@ def record_ai_decision_trace(
             "decision_quality_model_expected_downside_pct": _safe_number(
                 merged.get("decision_quality_model_expected_downside_pct")
             ),
+            "decision_quality_model_reason_codes": (
+                [
+                    str(code)
+                    for code in merged.get("decision_quality_model_reason_codes") or []
+                ]
+                if isinstance(merged.get("decision_quality_model_reason_codes"), list)
+                else []
+            ),
             "decision_quality_model_evidence": (
                 {
                     str(key): str(value)
@@ -1540,6 +1551,45 @@ def record_ai_decision_trace(
                 }
                 if isinstance(merged.get("decision_quality_model_evidence"), dict)
                 else {}
+            ),
+            "decision_quality_contract_repair_applied": bool(
+                merged.get("decision_quality_contract_repair_applied", False)
+            ),
+            "decision_quality_contract_repair_codes": (
+                [
+                    str(code)
+                    for code in merged.get("decision_quality_contract_repair_codes")
+                    or []
+                ]
+                if isinstance(
+                    merged.get("decision_quality_contract_repair_codes"), list
+                )
+                else []
+            ),
+            "decision_quality_contract_original_errors": (
+                [
+                    str(error)
+                    for error in merged.get("decision_quality_contract_original_errors")
+                    or []
+                ]
+                if isinstance(
+                    merged.get("decision_quality_contract_original_errors"), list
+                )
+                else []
+            ),
+            "decision_quality_contract_invalid_reason_codes": (
+                [
+                    str(code)
+                    for code in merged.get(
+                        "decision_quality_contract_invalid_reason_codes"
+                    )
+                    or []
+                ]
+                if isinstance(
+                    merged.get("decision_quality_contract_invalid_reason_codes"),
+                    list,
+                )
+                else []
             ),
             "action": _optional(
                 merged, "action_v2", "action", "action_key", "action_label"

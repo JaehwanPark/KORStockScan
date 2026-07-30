@@ -612,6 +612,10 @@ Return JSON only:
 DECISION_QUALITY_V2_PROMPT_VERSION = "decision_quality_v2_6"
 DECISION_QUALITY_DETAILED_PROMPT_VERSION = "decision_quality_v2_7"
 DECISION_QUALITY_V2_8_CANDIDATE_PROMPT_VERSION = "decision_quality_v2_8"
+DECISION_QUALITY_V2_9_ANTICIPATORY_PROMPT_VERSION = "decision_quality_v2_9_anticipatory"
+DECISION_QUALITY_V2_9_1_ANTICIPATORY_PROMPT_VERSION = (
+    "decision_quality_v2_9_1_anticipatory"
+)
 
 DECISION_QUALITY_V2_RESPONSE_SCHEMA = {
     "edge_state": "EDGE|NO_EDGE|INSUFFICIENT_DATA",
@@ -888,7 +892,9 @@ Rules:
 8. Keep positive_edge and adverse_risk independent. A high adverse risk does not
    prove that structural edge is absent, and structural edge does not prove that
    the immediate trigger is safe.
-9. Return only these canonical reason codes: {reason_codes}.
+9. Return only these canonical reason codes: {reason_codes}. Never invent
+   key=value reason tokens such as trigger=confirmed or trigger=insufficient.
+   Trigger values belong only in evidence.trigger.
 10. Return structured evidence.
 11. Never repeat input arrays, secrets, credentials, or authorization headers.
 
@@ -960,7 +966,12 @@ Detailed-analysis input contract:
 5. Do not turn every adverse micro state into DROP. Preserve structural edge when
    multi-horizon completed returns and slopes support it; separate that edge from
    recovery_required or failed immediate triggers.
-6. {ledger_authority}
+6. Apply exact_payload_analysis_v1.deterministic_contract_facts before choosing
+   edge_state or trigger. structural_edge_floor=true requires EDGE with
+   moderate/strong positive_edge. trusted_supportive_trigger=true requires
+   supportive tape and trigger=confirmed; keep adverse liquidity and reward/risk
+   as independent reasons to return DROP when they are blocking.
+7. {ledger_authority}
 """.strip()
 
 
@@ -1011,4 +1022,79 @@ def decision_quality_v2_8_detailed_system_prompt(stage: str) -> str:
         decision_quality_v2_detailed_system_prompt(normalized)
         + "\n\n"
         + _DECISION_QUALITY_V2_8_ENTRY_RULES
+    )
+
+
+_DECISION_QUALITY_V2_9_ANTICIPATORY_ENTRY_RULES = """
+V2.9 anticipatory-reversal experiment:
+1. This candidate is offline paired replay only. BUY means a counterfactual
+   passive-probe opportunity, never a real order or permission to cross the ask.
+2. Read anticipatory_reversal_analysis_v1 independently from the continuation
+   ledger. Use setup=reversal only when eligible_for_counterfactual_probe=true
+   and at least three independent precursor dimensions agree. Do not invent a
+   reversal from buy pressure or one score alone.
+3. Separate alpha edge from execution cost. A fresh, observable wide spread can
+   coexist with reversal edge. Classify liquidity as adverse and require passive
+   probe execution; subtract conservative_execution_cost_pct before judging
+   reward/risk. Extreme or stale spread remains blocking.
+4. source_mode=degraded_but_bounded is not INSUFFICIENT_DATA by itself when the
+   completed candle window and quote are fresh and multiple non-tape precursors
+   agree. Cap confidence at 60 and do not rely on an absent or stale tape trigger.
+   source_mode=unusable always returns INSUFFICIENT_DATA/WAIT.
+5. For an eligible reversal, trigger=confirmed means only that the bounded
+   precursor bundle is confirmed for this offline passive-probe counterfactual.
+   It does not claim a completed 1m/3m trend reversal or broker-submit freshness.
+6. Use BUY only when expected upside remains at least 1.25 times expected
+   downside after conservative execution cost. Otherwise preserve the reversal
+   observation as WAIT/recovery_required or DROP/failed.
+7. Existing continuation and overextension rules remain in force. Never convert
+   a failed breakout, venue/session conflict, stale quote, source blocker, or
+   extreme spread into a reversal BUY.
+8. The one-row learning floor starts cumulative observation and replay only.
+   It is not live-promotion authority; promotion evidence remains a separate
+   cumulative EV, adverse-tail, and provenance decision.
+""".strip()
+
+
+def decision_quality_v2_9_anticipatory_system_prompt(stage: str) -> str:
+    """Return the offline anticipatory-reversal candidate prompt."""
+
+    normalized = str(stage or "").strip().lower()
+    if normalized != "entry":
+        raise ValueError("decision-quality V2.9 currently supports entry only")
+    return (
+        decision_quality_v2_detailed_system_prompt(normalized)
+        + "\n\n"
+        + _DECISION_QUALITY_V2_9_ANTICIPATORY_ENTRY_RULES
+    )
+
+
+_DECISION_QUALITY_V2_9_1_CONTRACT_CLOSURE_RULES = """
+V2.9.1 contract closure:
+1. Keep reason_codes and evidence.trigger exactly aligned:
+   confirmed -> recovery_trigger_confirmed,
+   recovery_required -> recovery_trigger_required,
+   failed -> recovery_trigger_failed. Never emit a different recovery code.
+2. deterministic_contract_facts have precedence over a free-form synthesis.
+   structural_edge_floor requires EDGE and moderate/strong positive_edge.
+3. orderly_pullback_recovery requires EDGE/WAIT, setup=pullback_recovery,
+   trigger=recovery_required, and adverse_risk=low/moderate/high but not blocking.
+   A wide observable ask wall may be high risk here; do not relabel it blocking.
+4. trusted_supportive_trigger requires EDGE, supportive tape, and
+   trigger=confirmed. If current liquidity makes BUY unsafe, use DROP with
+   blocking adverse risk while retaining the confirmed trigger; never use WAIT.
+5. BUY can use only low/moderate adverse_risk. If the exact risk is high or
+   blocking, preserve that risk and return DROP instead of weakening evidence.
+6. NO_EDGE uses positive_edge=none/weak and setup=no_setup/not_applicable.
+   Do not return NO_EDGE when structural_edge_floor=true.
+""".strip()
+
+
+def decision_quality_v2_9_1_anticipatory_system_prompt(stage: str) -> str:
+    """Return the V2.9.1 offline candidate with closed semantic precedence."""
+
+    return (
+        decision_quality_v2_9_anticipatory_system_prompt(stage)
+        + "\n\n"
+        + _DECISION_QUALITY_V2_9_1_CONTRACT_CLOSURE_RULES
     )

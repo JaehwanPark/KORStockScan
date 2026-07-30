@@ -103,10 +103,6 @@ from src.engine.scalping.opening_rotation import (
     is_watch_candidate as is_opening_rotation_watch_candidate,
     is_watch_source_scope as is_opening_rotation_watch_source_scope,
 )
-from src.engine.scalping.watching_score_smoothing import (
-    evaluate_watching_score,
-    normalize_mode as normalize_watching_score_smoothing_mode,
-)
 from src.engine.scalping.micro_estimator_state import (
     DEFAULT_STORE as DEFAULT_MICRO_ESTIMATOR_STORE,
     MicroEstimatorStore,  # noqa: F401 - compatibility construction surface
@@ -16882,7 +16878,7 @@ def emit_scanner_watching_runtime_skip(
     skip_reason: str,
     now_ts: float | None = None,
     ws_data=None,
-    throttle_sec: int = 30,
+    throttle_sec: int = 60,
     **extra,
 ) -> bool:
     """Log scanner WATCHING skip causes that otherwise hide before downstream gates."""
@@ -17103,6 +17099,21 @@ def _scanner_promotion_price_consistency_fields(
     initial_validation_reused = bool(
         has_generation_lineage and validated_generation_id == generation_id
     )
+    persisted_reanchor_generation_id = str(
+        stock.get("_scanner_promotion_reanchor_generation_id") or ""
+    ).strip()
+    persisted_reanchor_price = _safe_int(
+        stock.get("_scanner_promotion_reanchor_price"), 0
+    )
+    persisted_reanchor_source = str(
+        stock.get("_scanner_promotion_reanchor_source") or ""
+    ).strip()
+    persisted_reanchor_reused = bool(
+        initial_validation_reused
+        and persisted_reanchor_generation_id == generation_id
+        and persisted_reanchor_price > 0
+        and persisted_reanchor_source in {"ws_executable_bbo", "ka10004_rest_orderbook"}
+    )
     ws_price = _safe_int(ws_data.get("curr"), 0)
     quote_age_sec = _get_ws_snapshot_age_sec(ws_data)
     max_age_sec = _rule_float("SCALP_PRE_AI_MAX_WS_AGE_SEC", 3.0)
@@ -17110,7 +17121,12 @@ def _scanner_promotion_price_consistency_fields(
     realtime_type_ts = realtime_type_ts if isinstance(realtime_type_ts, dict) else {}
     last_0b_ts = _safe_float(realtime_type_ts.get("0B"), 0.0)
     last_0b_age_sec = max(0.0, float(now_ts) - last_0b_ts) if last_0b_ts > 0 else None
+    last_0d_ts = _safe_float(realtime_type_ts.get("0D"), 0.0)
+    last_0d_age_sec = max(0.0, float(now_ts) - last_0d_ts) if last_0d_ts > 0 else None
     recovery_source = str(ws_data.get("ws_snapshot_recovery_source") or "").strip()
+    market_data_effective_source = (
+        str(ws_data.get("market_data_effective_price_source") or "").strip().lower()
+    )
     rest_proxy = recovery_source in {
         "ka10001_rest_quote_fallback",
         "ka10004_rest_orderbook",
@@ -17129,15 +17145,117 @@ def _scanner_promotion_price_consistency_fields(
         else None
     )
     max_gap_pct = _scanner_rest_quote_recovery_anchor_gap_max_pct()
-    conflict = bool(
+    best_ask, best_bid = _get_best_levels_from_ws(ws_data)
+    executable_spread_ratio = (
+        (float(best_ask) - float(best_bid)) / float(best_bid)
+        if best_ask > 0 and best_bid > 0 and best_ask >= best_bid
+        else None
+    )
+    executable_spread_max_ratio = _safe_float(
+        os.getenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_SPREAD_RATIO"),
+        _safe_float(
+            getattr(
+                TRADING_RULES,
+                "SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_SPREAD_RATIO",
+                0.015,
+            ),
+            0.015,
+        ),
+    )
+    effective_quote_age_ms = _safe_float(
+        ws_data.get("market_data_effective_quote_age_ms"),
+        None,
+    )
+    effective_age_basis = str(
+        ws_data.get("market_data_effective_age_basis") or ""
+    ).strip()
+    effective_freshness_state = (
+        str(ws_data.get("market_data_freshness_state") or "").strip().lower()
+    )
+    effective_orderbook_state = (
+        str(ws_data.get("market_data_orderbook_state") or "").strip().lower()
+    )
+    executable_source = (
+        "ka10004_rest_orderbook"
+        if (
+            market_data_effective_source == "ka10004_rest_orderbook"
+            or recovery_source.startswith("ka10004_rest_orderbook")
+        )
+        else "ws_executable_bbo"
+    )
+    if executable_source == "ka10004_rest_orderbook":
+        executable_source_fresh = bool(
+            effective_freshness_state == "rest_enriched"
+            and effective_orderbook_state == "rest_enriched"
+            and effective_quote_age_ms is not None
+            and effective_quote_age_ms <= 1500.0
+            and effective_age_basis
+            and not effective_age_basis.startswith("reported_age_no_time_basis")
+        )
+    else:
+        # A fresh trade packet does not prove that the executable BBO is
+        # current. Direct-WS reanchoring therefore requires a fresh 0D
+        # orderbook packet as well as the ordinary price freshness contract.
+        executable_source_fresh = bool(
+            fresh_ws and last_0d_age_sec is not None and last_0d_age_sec <= max_age_sec
+        )
+    anchor_comparison_source_fresh = bool(
+        executable_source_fresh
+        if executable_source == "ka10004_rest_orderbook"
+        else fresh_ws
+    )
+    original_conflict = bool(
         not initial_validation_reused
         and has_generation_lineage
-        and fresh_ws
+        and anchor_comparison_source_fresh
         and promotion_price > 0
         and gap_pct is not None
         and gap_pct > max_gap_pct
     )
-    if conflict:
+    venue_fields = _scanner_runtime_event_venue_fields(stock)
+    canonical_venue = str(venue_fields.get("effective_venue") or "UNKNOWN")
+    rest_venue_eligible = bool(
+        executable_source != "ka10004_rest_orderbook"
+        or canonical_venue in {"KRX", "PREMARKET_KRX_LIKE"}
+    )
+    executable_bbo_valid = bool(
+        best_bid > 0
+        and best_ask >= best_bid
+        and ws_price >= best_bid
+        and ws_price <= best_ask
+        and executable_spread_ratio is not None
+        and executable_spread_ratio <= executable_spread_max_ratio
+    )
+    reanchor_allowed = bool(
+        original_conflict
+        and executable_source_fresh
+        and executable_bbo_valid
+        and canonical_venue in {"KRX", "NXT", "PREMARKET_KRX_LIKE"}
+        and rest_venue_eligible
+        and effective_freshness_state != "conflicted"
+        and effective_orderbook_state != "conflicted"
+    )
+    conflict = bool(original_conflict and not reanchor_allowed)
+    effective_anchor_price = (
+        best_ask
+        if reanchor_allowed
+        else (
+            persisted_reanchor_price if persisted_reanchor_reused else promotion_price
+        )
+    )
+    effective_anchor_source = (
+        executable_source
+        if reanchor_allowed
+        else (
+            persisted_reanchor_source
+            if persisted_reanchor_reused
+            else promotion_price_source
+        )
+    )
+    if reanchor_allowed:
+        state = "reanchored"
+        reason = "scanner_promotion_anchor_rebased_to_fresh_executable_ask"
+    elif conflict:
         state = "conflicted"
         reason = "scanner_promotion_price_conflicts_with_fresh_ws"
     elif initial_validation_reused:
@@ -17149,9 +17267,9 @@ def _scanner_promotion_price_consistency_fields(
     elif not has_generation_lineage:
         state = "not_evaluated"
         reason = "scanner_generation_price_lineage_unavailable"
-    elif not fresh_ws:
+    elif not anchor_comparison_source_fresh:
         state = "not_evaluated"
-        reason = "fresh_ws_price_unavailable"
+        reason = "fresh_effective_price_unavailable"
     elif promotion_price <= 0:
         state = "not_evaluated"
         reason = "scanner_promotion_price_unavailable"
@@ -17162,6 +17280,7 @@ def _scanner_promotion_price_consistency_fields(
         "scanner_promotion_price_consistency_state": state,
         "scanner_promotion_price_consistency_reason": reason,
         "scanner_promotion_price_conflict": conflict,
+        "scanner_promotion_price_original_conflict": original_conflict,
         "scanner_promotion_price": (
             promotion_price
             if promotion_price > 0
@@ -17178,11 +17297,18 @@ def _scanner_promotion_price_consistency_fields(
         "scanner_promotion_price_ws_curr": (
             ws_price if ws_price > 0 else "not_available_ws_curr"
         ),
+        "scanner_promotion_price_effective_curr": (
+            ws_price if ws_price > 0 else "not_available_effective_curr"
+        ),
+        "scanner_promotion_price_effective_source": executable_source,
         "scanner_promotion_price_gap_pct": (
             round(gap_pct, 6) if gap_pct is not None else "not_available_price_gap_pct"
         ),
         "scanner_promotion_price_gap_max_pct": round(max_gap_pct, 6),
         "scanner_promotion_price_ws_fresh": fresh_ws,
+        "scanner_promotion_price_comparison_source_fresh": (
+            anchor_comparison_source_fresh
+        ),
         "scanner_promotion_price_ws_recovery_source": recovery_source or "direct_ws",
         "scanner_promotion_price_ws_age_ms": (
             round(quote_age_sec * 1000.0, 3)
@@ -17194,19 +17320,130 @@ def _scanner_promotion_price_consistency_fields(
             if last_0b_age_sec is not None
             else "not_available_ws_last_0b_age_ms"
         ),
+        "scanner_promotion_reanchor_allowed": reanchor_allowed,
+        "scanner_promotion_reanchor_price": (
+            best_ask if reanchor_allowed else "not_applicable_reanchor_price"
+        ),
+        "scanner_promotion_reanchor_price_type": (
+            "executable_ask" if reanchor_allowed else "not_applicable"
+        ),
+        "scanner_promotion_reanchor_source": executable_source,
+        "scanner_promotion_reanchor_persisted_reused": persisted_reanchor_reused,
+        "scanner_promotion_effective_anchor_price": (
+            effective_anchor_price
+            if effective_anchor_price > 0
+            else "not_available_effective_anchor_price"
+        ),
+        "scanner_promotion_effective_anchor_source": effective_anchor_source,
+        "scanner_promotion_reanchor_best_bid": (
+            best_bid if best_bid > 0 else "not_available_best_bid"
+        ),
+        "scanner_promotion_reanchor_best_ask": (
+            best_ask if best_ask > 0 else "not_available_best_ask"
+        ),
+        "scanner_promotion_reanchor_spread_ratio": (
+            round(executable_spread_ratio, 6)
+            if executable_spread_ratio is not None
+            else "not_available_spread_ratio"
+        ),
+        "scanner_promotion_reanchor_spread_max_ratio": round(
+            executable_spread_max_ratio, 6
+        ),
+        "scanner_promotion_reanchor_source_fresh": executable_source_fresh,
+        "scanner_promotion_reanchor_effective_quote_age_ms": (
+            round(effective_quote_age_ms, 3)
+            if effective_quote_age_ms is not None
+            else (
+                round(quote_age_sec * 1000.0, 3)
+                if quote_age_sec is not None
+                else "not_available_effective_quote_age_ms"
+            )
+        ),
+        "scanner_promotion_reanchor_ws_last_0d_age_ms": (
+            round(last_0d_age_sec * 1000.0, 3)
+            if last_0d_age_sec is not None
+            else "not_available_ws_last_0d_age_ms"
+        ),
+        "scanner_promotion_reanchor_effective_age_basis": (
+            effective_age_basis
+            or (
+                "direct_ws_last_update_or_0b"
+                if executable_source == "ws_executable_bbo"
+                else "missing"
+            )
+        ),
+        "scanner_promotion_reanchor_effective_venue": canonical_venue,
+        "scanner_promotion_reanchor_rest_venue_eligible": rest_venue_eligible,
+        "scanner_promotion_reanchor_venue_resolution": venue_fields.get(
+            "venue_resolution"
+        ),
+        "scanner_promotion_reanchor_contract_status": (
+            "pass"
+            if reanchor_allowed
+            else (
+                "not_required"
+                if not original_conflict
+                else (
+                    "blocked_unknown_or_conflicting_venue"
+                    if canonical_venue == "UNKNOWN"
+                    else (
+                        "blocked_unproven_rest_venue"
+                        if not rest_venue_eligible
+                        else (
+                            "blocked_stale_or_conflicted_source"
+                            if (
+                                not executable_source_fresh
+                                or effective_freshness_state == "conflicted"
+                                or effective_orderbook_state == "conflicted"
+                            )
+                            else "blocked_non_executable_bbo"
+                        )
+                    )
+                )
+            )
+        ),
+        "scanner_promotion_reanchor_metric_role": "source_quality_gate",
+        "scanner_promotion_reanchor_decision_authority": (
+            "scanner_anchor_source_quality_rebaseline_only_no_standalone_buy"
+        ),
+        "scanner_promotion_reanchor_window_policy": (
+            "same_scanner_generation_first_fresh_executable_quote"
+        ),
+        "scanner_promotion_reanchor_sample_floor": (
+            "one_fresh_price_and_executable_bbo_pair"
+        ),
+        "scanner_promotion_reanchor_primary_decision_metric": (
+            "scanner_promotion_price_gap_pct"
+        ),
+        "scanner_promotion_reanchor_source_quality_gate": (
+            "fresh_non_conflicted_venue_proven_executable_bbo_contains_price"
+        ),
+        "scanner_promotion_reanchor_runtime_effect": reanchor_allowed,
+        "scanner_promotion_reanchor_allowed_runtime_apply": reanchor_allowed,
+        "scanner_promotion_reanchor_actual_order_submitted": False,
+        "scanner_promotion_reanchor_broker_order_forbidden": True,
+        "scanner_promotion_reanchor_forbidden_uses": (
+            "standalone_buy,threshold_mutation,provider_route_change,"
+            "order_price_change,quantity_or_cap_change,broker_guard_bypass,"
+            "stale_quote_bypass,hard_safety_bypass,cross_venue_reanchor"
+        ),
         "scanner_promotion_price_metric_role": "source_quality_gate",
         "scanner_promotion_price_decision_authority": (
             "promotion_ws_consistency_only_no_standalone_buy"
         ),
-        "scanner_promotion_price_window_policy": "per_scanner_generation_fresh_ws",
-        "scanner_promotion_price_sample_floor": "one_promotion_and_fresh_ws_pair",
+        "scanner_promotion_price_window_policy": (
+            "per_scanner_generation_fresh_effective_price"
+        ),
+        "scanner_promotion_price_sample_floor": (
+            "one_promotion_and_fresh_effective_price_pair"
+        ),
         "scanner_promotion_price_primary_decision_metric": (
             "scanner_promotion_price_gap_pct"
         ),
         "scanner_promotion_price_source_quality_gate": (
-            "fresh_ws_and_promotion_price_within_existing_anchor_gap"
+            "fresh_ws_anchor_gap_or_venue_proven_executable_bbo_reanchor"
         ),
-        "scanner_promotion_price_runtime_effect": conflict,
+        "scanner_promotion_price_runtime_effect": bool(conflict or reanchor_allowed),
         "scanner_promotion_price_actual_order_submitted": False,
         "scanner_promotion_price_broker_order_forbidden": True,
         "scanner_promotion_price_forbidden_uses": (
@@ -17288,7 +17525,8 @@ def _scanner_fast_precheck_fields_impl(
         now_ts=float(now_ts),
     )
     fast_precheck_attach_anchor_price = _safe_int(
-        promotion_price_fields.get("scanner_promotion_price"), 0
+        promotion_price_fields.get("scanner_promotion_effective_anchor_price"),
+        _safe_int(promotion_price_fields.get("scanner_promotion_price"), 0),
     )
     fast_precheck_current_vs_attach_delta_pct = (
         (float(curr) - float(fast_precheck_attach_anchor_price))
@@ -17854,7 +18092,8 @@ def _scanner_fast_precheck_fields(
         )
         if (
             isinstance(stock, dict)
-            and fields.get("scanner_promotion_price_consistency_state") == "consistent"
+            and fields.get("scanner_promotion_price_consistency_state")
+            in {"consistent", "reanchored"}
             and not fields.get(
                 "scanner_promotion_price_initial_validation_reused", False
             )
@@ -17865,6 +18104,15 @@ def _scanner_fast_precheck_fields(
                     generation_id
                 )
                 stock["_scanner_promotion_price_validated_at"] = float(now_ts)
+                if fields.get("scanner_promotion_reanchor_allowed"):
+                    stock["_scanner_promotion_reanchor_generation_id"] = generation_id
+                    stock["_scanner_promotion_reanchor_price"] = fields.get(
+                        "scanner_promotion_reanchor_price"
+                    )
+                    stock["_scanner_promotion_reanchor_source"] = fields.get(
+                        "scanner_promotion_reanchor_source"
+                    )
+                    stock["_scanner_promotion_reanchor_at"] = float(now_ts)
         return fields
     finally:
         _SCANNER_FAST_PRECHECK_HYDRATION_FORBIDDEN.reset(token)
@@ -24569,9 +24817,7 @@ def evaluate_and_dispatch_fast_scalp_exit(
             "exit_quote_envelope_id": uuid4().hex,
             "exit_quote_envelope_observed_at": float(observed_at),
             "exit_quote_envelope_base_mark_price": _safe_int(mark_price, 0),
-            "exit_quote_envelope_base_best_ask": _safe_int(
-                executable_buy_price, 0
-            ),
+            "exit_quote_envelope_base_best_ask": _safe_int(executable_buy_price, 0),
             "exit_quote_envelope_base_best_bid": int(decision_price),
             "exit_quote_envelope_base_quote_state": quote_state or "-",
             "exit_quote_envelope_base_quote_reason": quote_reason or "-",
@@ -24611,13 +24857,10 @@ def evaluate_and_dispatch_fast_scalp_exit(
             return False
         if exit_quote_envelope.get("exit_quote_envelope_recheck_attempted"):
             recheck_state = str(
-                exit_quote_envelope.get("exit_quote_envelope_recheck_rest_state")
-                or ""
+                exit_quote_envelope.get("exit_quote_envelope_recheck_rest_state") or ""
             ).lower()
             recheck_reuse_allowed = bool(
-                exit_quote_envelope.get(
-                    "exit_quote_envelope_recheck_reuse_allowed"
-                )
+                exit_quote_envelope.get("exit_quote_envelope_recheck_reuse_allowed")
             )
             if recheck_state == "ok" and not recheck_reuse_allowed:
                 _log_holding_pipeline(
@@ -24666,28 +24909,20 @@ def evaluate_and_dispatch_fast_scalp_exit(
                     else rest_snapshot
                 )
                 mark_price = _safe_int(
-                    exit_quote_envelope.get(
-                        "exit_quote_envelope_recheck_mark_price"
-                    ),
+                    exit_quote_envelope.get("exit_quote_envelope_recheck_mark_price"),
                     mark_price,
                 )
                 executable_buy_price = _safe_int(
-                    exit_quote_envelope.get(
-                        "exit_quote_envelope_recheck_best_ask"
-                    ),
+                    exit_quote_envelope.get("exit_quote_envelope_recheck_best_ask"),
                     executable_buy_price,
                 )
                 executable_sell_price = _safe_int(
-                    exit_quote_envelope.get(
-                        "exit_quote_envelope_recheck_best_bid"
-                    ),
+                    exit_quote_envelope.get("exit_quote_envelope_recheck_best_bid"),
                     executable_sell_price,
                 )
                 decision_price = int(executable_sell_price)
                 rest_state = str(
-                    exit_quote_envelope.get(
-                        "exit_quote_envelope_recheck_rest_state"
-                    )
+                    exit_quote_envelope.get("exit_quote_envelope_recheck_rest_state")
                     or rest_state
                 )
                 rest_elapsed_ms = _safe_float(
@@ -24715,10 +24950,7 @@ def evaluate_and_dispatch_fast_scalp_exit(
                 peak_profit = calculate_net_profit_rate(buy_price, peak_price)
                 trailing_worsen = peak_profit - profit_rate
                 trailing_drawdown_pct = (
-                    (
-                        (float(peak_price) - float(decision_price))
-                        / float(peak_price)
-                    )
+                    ((float(peak_price) - float(decision_price)) / float(peak_price))
                     * 100.0
                     if peak_price > 0
                     else 0.0
@@ -24733,9 +24965,7 @@ def evaluate_and_dispatch_fast_scalp_exit(
                         "scalp_fast_exit_quote_envelope_trigger_cleared",
                         metric_role="source_quality_gate",
                         decision_authority="real_scalping_fast_exit_guard",
-                        window_policy=(
-                            "same_trailing_candidate_frozen_quote_envelope"
-                        ),
+                        window_policy=("same_trailing_candidate_frozen_quote_envelope"),
                         sample_floor="not_applicable_runtime_guard",
                         primary_decision_metric="trailing_trigger_revalidated",
                         source_quality_gate=(
@@ -27576,6 +27806,65 @@ def _ofi_ai_smoothing_config() -> OfiSmoothingConfig:
             1, _rule_int("OFI_AI_SMOOTHING_STALE_THRESHOLD_MS", 700)
         ),
     )
+
+
+def _ofi_action_adjustment_contract_fields(
+    *,
+    endpoint: str,
+    raw_action: str,
+    final_action: str,
+) -> dict[str, Any]:
+    normalized_endpoint = str(endpoint or "unknown").strip().lower()
+    raw = str(raw_action or "").strip().upper()
+    final = str(final_action or "").strip().upper()
+    return {
+        "metric_role": "ai_action_postprocessor_outcome_calibration",
+        "decision_authority": (
+            "bounded_runtime_action_postprocessor_with_exact_trace_attribution"
+        ),
+        "window_policy": (
+            "same_exact_snapshot_action_then_same_venue_session_mature_outcome"
+        ),
+        "sample_floor": "one_mature_exact_trace_updates_cumulative_learning",
+        "primary_decision_metric": "source_quality_adjusted_ev_pct",
+        "source_quality_gate": "fresh_usable_ofi_and_exact_trace_snapshot_linked",
+        "runtime_effect": bool(raw and final and raw != final),
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "ofi_action_adjustment_endpoint": normalized_endpoint,
+        "ofi_action_adjustment_policy_version": (
+            "ofi_exact_trace_action_outcome_calibration_v1"
+        ),
+        "forbidden_uses": (
+            "standalone_order_authority|hard_safety_bypass|provider_route_change|"
+            "threshold_price_quantity_cap_change|bot_restart|"
+            "automatic_authority_expansion_from_one_sample"
+        ),
+    }
+
+
+def _holding_flow_exact_correlation_fields(
+    stock: dict,
+    flow_result: dict | None = None,
+) -> dict[str, Any]:
+    result = flow_result if isinstance(flow_result, dict) else {}
+    trace_id = str(
+        result.get("ai_decision_trace_id")
+        or stock.get("holding_flow_last_ai_decision_trace_id")
+        or ""
+    )
+    snapshot_id = str(
+        result.get("ai_input_snapshot_id")
+        or result.get("ai_market_snapshot_id")
+        or result.get("ai_decision_snapshot_id")
+        or stock.get("holding_flow_last_ai_input_snapshot_id")
+        or ""
+    )
+    return {
+        "ai_decision_trace_id": trace_id or "-",
+        "ai_input_snapshot_id": snapshot_id or "-",
+    }
 
 
 def _holding_flow_micro_estimator_ofi_primary_enabled() -> bool:
@@ -37415,10 +37704,17 @@ def _apply_entry_ai_price_canary(
                 confidence=confidence,
                 reason=reason[:160],
                 demotion_path="P1_USE_DEFENSIVE",
-                **openai_transport_fields,
-                **skip_policy_fields,
-                **ofi_log_fields,
-                **micro_log_fields,
+                **_merge_entry_pipeline_field_groups(
+                    openai_transport_fields,
+                    skip_policy_fields,
+                    ofi_log_fields,
+                    micro_log_fields,
+                    _ofi_action_adjustment_contract_fields(
+                        endpoint="entry_price",
+                        raw_action="SKIP",
+                        final_action="USE_DEFENSIVE",
+                    ),
+                ),
             )
             return planned_orders, True
         _mutate_stock_state(
@@ -39491,13 +39787,7 @@ def _build_watching_refresh_signature(ws_data, feature_packet=None) -> dict:
 def _resolve_watching_state_change_refresh(
     stock, ws_data, *, now_ts, last_ai_time, cooldown_sec
 ) -> dict:
-    smoothing_mode = normalize_watching_score_smoothing_mode(
-        _rule("AI_WATCHING_SCORE_SMOOTHING_MODE", "off")
-    )
-    if (
-        not bool(_rule("AI_WATCHING_STATE_CHANGE_REFRESH_ENABLED", False))
-        and smoothing_mode == "off"
-    ):
+    if not bool(_rule("AI_WATCHING_STATE_CHANGE_REFRESH_ENABLED", False)):
         return {"allowed": False, "reason": "disabled", "signature": {}}
     if last_ai_time <= 0:
         return {
@@ -39523,7 +39813,7 @@ def _resolve_watching_state_change_refresh(
             "reason": "already_refreshed_this_cooldown",
             "signature": {},
         }
-    if smoothing_mode != "off" and now_ts - last_ai_time < 20.0:
+    if now_ts - last_ai_time < 20.0:
         return {
             "allowed": False,
             "reason": "early_refresh_min_interval",
@@ -39538,7 +39828,7 @@ def _resolve_watching_state_change_refresh(
             "signature": {},
         }
     current = _build_watching_refresh_signature(ws_data)
-    if smoothing_mode != "off" and previous.get("signature_source") not in {
+    if previous.get("signature_source") and previous.get("signature_source") not in {
         current.get("signature_source"),
         "ws_runtime_context_v1",
     }:
@@ -40802,165 +41092,6 @@ def _log_ai_numeric_consistency_recheck(
     )
 
 
-def _run_watching_score_projection_refresh(
-    stock,
-    code,
-    ws_data,
-    *,
-    now_ts,
-    last_ai_time,
-    cooldown_sec,
-    refresh_reason,
-    current_ai_score,
-) -> bool:
-    """Collect an early Tier 1 observation without changing runtime authority."""
-    try:
-        projection_engine = DUAL_PERSONA_ENGINE
-        if projection_engine is None or not hasattr(
-            projection_engine, "submit_watching_score_projection"
-        ):
-            return False
-        if stock.get("watching_score_projection_inflight"):
-            return False
-        if not ws_data.get("orderbook"):
-            return False
-        _mutate_stock_state(
-            stock, set_fields={"watching_score_projection_inflight": True}
-        )
-        recent_ticks = kiwoom_utils.get_tick_history_ka10003(
-            KIWOOM_TOKEN, code, limit=10
-        )
-        recent_candles, candle_source_meta = fetch_entry_candles_with_meta(
-            KIWOOM_TOKEN,
-            code,
-            ws_data,
-            limit=40,
-            now_ts=now_ts,
-        )
-        if not recent_ticks:
-            _mutate_stock_state(
-                stock, set_fields={"watching_score_projection_inflight": False}
-            )
-            return False
-        _update_ai_quote_freshness_fields(ws_data)
-        ws_data.setdefault("current_ai_score", current_ai_score)
-        ws_data.setdefault(
-            "ai_score_baseline_source", "pre_analyze_target_runtime_score"
-        )
-        projection_context_now_ts = time.time()
-        candle_context = build_entry_candle_context(
-            KIWOOM_TOKEN,
-            code,
-            ws_data,
-            venue=None,
-            session=None,
-            limit=40,
-            model_bar_limit=20,
-            now_ts=projection_context_now_ts,
-            recent_candles=recent_candles,
-            source_meta=candle_source_meta,
-            include_investor_source=True,
-        )
-
-        def _on_projection(result):
-            try:
-                result = dict(result or {})
-                action = str(result.get("action") or "WAIT").upper()
-                raw_score = result.get("score", 50)
-                decision, observations = evaluate_watching_score(
-                    stock.get("watching_score_smoothing_observations") or [],
-                    now_ts=time.time(),
-                    raw_score=raw_score,
-                    action=action,
-                    mode="report_only",
-                    ai_result=result,
-                    previous_applied_score=current_ai_score,
-                    quote_stale=ws_data.get("quote_stale", False),
-                    context_stale=result.get("tick_context_stale", False)
-                    or ws_data.get("context_stale", False),
-                )
-                projection_fields = decision.provenance_fields(
-                    early_refresh_trigger=refresh_reason
-                )
-                _mutate_stock_state(
-                    stock,
-                    set_fields={
-                        "watching_score_smoothing_observations": observations,
-                        "watching_state_change_refresh_last_ai_time": f"{float(last_ai_time):.3f}",
-                        "watching_state_change_refresh_block_until": time.time()
-                        + max(1, int(cooldown_sec)),
-                        "last_watching_projection_state_signature": _build_watching_refresh_signature(
-                            ws_data
-                        ),
-                        "last_watching_projection_at": time.time(),
-                    },
-                )
-                result.update(projection_fields)
-                projection_log_fields = _merge_entry_pipeline_field_groups(
-                    _build_observation_contract_fields("ops_volume_diagnostic"),
-                    {
-                        "action": action,
-                        "ai_score": f"{float(current_ai_score):.1f}",
-                        "runtime_score_preserved": f"{float(current_ai_score):.1f}",
-                        "runtime_action_preserved": str(
-                            stock.get("last_watching_ai_action") or "-"
-                        ).upper(),
-                        "actual_order_submitted": False,
-                        "broker_order_forbidden": True,
-                        "decision_authority": "report_only_no_runtime_effect",
-                        "runtime_effect": False,
-                        "forbidden_uses": "adm_ldm_input|threshold_cycle_input|order_authority|runtime_score_mutation",
-                    },
-                    _build_ai_ops_log_fields(
-                        result,
-                        ai_score_raw=raw_score,
-                        ai_score_after_bonus=current_ai_score,
-                        entry_score_threshold=get_entry_buy_score_threshold(),
-                        big_bite_bonus_applied=False,
-                        ai_cooldown_blocked=False,
-                    ),
-                )
-                _log_entry_pipeline(
-                    stock, code, "ai_watching_score_projection", **projection_log_fields
-                )
-            finally:
-                _mutate_stock_state(
-                    stock, set_fields={"watching_score_projection_inflight": False}
-                )
-
-        projection_future = projection_engine.submit_watching_score_projection(
-            stock_name=stock["name"],
-            stock_code=code,
-            ws_data=dict(ws_data),
-            recent_ticks=list(recent_ticks),
-            recent_candles=list(recent_candles),
-            record_id=stock.get("id"),
-            candle_context=candle_context,
-            callback=_on_projection,
-        )
-        if projection_future is None:
-            _mutate_stock_state(
-                stock, set_fields={"watching_score_projection_inflight": False}
-            )
-            return False
-        return True
-    except Exception as exc:
-        _mutate_stock_state(
-            stock, set_fields={"watching_score_projection_inflight": False}
-        )
-        _log_entry_pipeline(
-            stock,
-            code,
-            "ai_watching_score_projection_failed",
-            error=str(exc),
-            decision_authority="report_only_no_runtime_effect",
-            runtime_effect=False,
-            actual_order_submitted=False,
-            broker_order_forbidden=True,
-        )
-        return False
-
-
 def _build_ai_overlap_log_fields(
     *,
     stock,
@@ -41036,6 +41167,9 @@ def _build_ai_ops_log_fields(
         "ai_decision_trace_schema",
         "ai_decision_trace_id",
         "ai_decision_outcome_label_status",
+        "ai_input_snapshot_id",
+        "ai_market_snapshot_id",
+        "ai_decision_snapshot_id",
         "ai_prompt_sha256",
         "ai_prompt_store_date",
         "ai_input_payload_sha256",
@@ -44224,13 +44358,9 @@ def _evaluate_scalp_trailing_continuation_recheck(
                         rest_elapsed_ms, 3
                     ),
                     "exit_quote_envelope_recheck_quote_age_ms": (
-                        round(rest_age_ms, 3)
-                        if rest_age_ms != float("inf")
-                        else "-"
+                        round(rest_age_ms, 3) if rest_age_ms != float("inf") else "-"
                     ),
-                    "exit_quote_envelope_recheck_quote_conflicted": (
-                        quote_conflicted
-                    ),
+                    "exit_quote_envelope_recheck_quote_conflicted": (quote_conflicted),
                     "exit_quote_envelope_recheck_mark_price": _safe_int(
                         recheck_mark_price, 0
                     ),
@@ -44243,9 +44373,7 @@ def _evaluate_scalp_trailing_continuation_recheck(
                     "exit_quote_envelope_recheck_reuse_allowed": (
                         quote_recovery_eligible
                     ),
-                    "exit_quote_envelope_recheck_block_reason": (
-                        envelope_block_reason
-                    ),
+                    "exit_quote_envelope_recheck_block_reason": (envelope_block_reason),
                     "exit_quote_envelope_recheck_rest_snapshot": rest_snapshot,
                     "exit_quote_envelope_recheck_quote_fields": quote_fields,
                 }
@@ -45003,6 +45131,12 @@ def _evaluate_holding_flow_override(
                     **ofi_smoothing_log_fields(ofi_state, prefix="holding_flow_ofi"),
                     **orderbook_micro_fields,
                     **holding_flow_micro_estimator_fields,
+                    **_holding_flow_exact_correlation_fields(stock),
+                    **_ofi_action_adjustment_contract_fields(
+                        endpoint="holding_flow",
+                        raw_action=last_review_action,
+                        final_action="EXIT",
+                    ),
                 )
                 _log_holding_pipeline(
                     stock,
@@ -45352,6 +45486,15 @@ def _evaluate_holding_flow_override(
             "holding_flow_override_next_review_sec": _safe_int(
                 flow_result.get("next_review_sec"), min_review_sec
             ),
+            "holding_flow_last_ai_decision_trace_id": str(
+                flow_result.get("ai_decision_trace_id") or ""
+            ),
+            "holding_flow_last_ai_input_snapshot_id": str(
+                flow_result.get("ai_input_snapshot_id")
+                or flow_result.get("ai_market_snapshot_id")
+                or flow_result.get("ai_decision_snapshot_id")
+                or ""
+            ),
             "holding_flow_last_context_signature": (
                 dict(holding_context.get("flow_signature") or {})
                 if isinstance(holding_context, dict)
@@ -45391,14 +45534,17 @@ def _evaluate_holding_flow_override(
             curr_price=curr_price,
             now_ts=now_ts,
         )
-        ofi_log_fields = ofi_smoothing_log_fields(ofi_state, prefix="holding_flow_ofi")
-        micro_log_fields = _build_orderbook_micro_log_fields(orderbook_micro)
     elif orderbook_micro is None and _is_swing_orderbook_micro_context_enabled(
         strategy
     ):
         orderbook_micro = _build_live_orderbook_micro_context(
             code, curr_price=curr_price
         )
+    if ofi_state is not None:
+        ofi_log_fields = ofi_smoothing_log_fields(
+            ofi_state, prefix="holding_flow_ofi"
+        )
+    if orderbook_micro is not None:
         micro_log_fields = _build_orderbook_micro_log_fields(orderbook_micro)
     if _is_swing_orderbook_micro_context_enabled(strategy):
         swing_exit_micro_fields = _build_swing_micro_log_fields(
@@ -45417,6 +45563,20 @@ def _evaluate_holding_flow_override(
         key: value
         for key, value in _build_ai_ops_log_fields(flow_result).items()
         if key not in holding_context_log_fields
+        and key
+        not in {
+            "metric_role",
+            "decision_authority",
+            "window_policy",
+            "sample_floor",
+            "primary_decision_metric",
+            "source_quality_gate",
+            "runtime_effect",
+            "allowed_runtime_apply",
+            "actual_order_submitted",
+            "broker_order_forbidden",
+            "forbidden_uses",
+        }
     }
     _log_holding_pipeline(
         stock,
@@ -45533,6 +45693,12 @@ def _evaluate_holding_flow_override(
                     **micro_log_fields_for_smoothing,
                     **holding_flow_micro_estimator_fields,
                     **swing_exit_micro_fields,
+                    **holding_flow_ai_ops_fields,
+                    **_ofi_action_adjustment_contract_fields(
+                        endpoint="holding_flow",
+                        raw_action="EXIT",
+                        final_action="EXIT",
+                    ),
                 )
                 ofi_no_change_logged = True
             else:
@@ -45601,6 +45767,12 @@ def _evaluate_holding_flow_override(
                     **micro_log_fields_for_smoothing,
                     **holding_flow_micro_estimator_fields,
                     **swing_exit_micro_fields,
+                    **holding_flow_ai_ops_fields,
+                    **_ofi_action_adjustment_contract_fields(
+                        endpoint="holding_flow",
+                        raw_action="EXIT",
+                        final_action="HOLD",
+                    ),
                 )
                 _log_holding_pipeline(
                     stock,
@@ -45678,6 +45850,12 @@ def _evaluate_holding_flow_override(
                 **micro_log_fields_for_smoothing,
                 **holding_flow_micro_estimator_fields,
                 **swing_exit_micro_fields,
+                **holding_flow_ai_ops_fields,
+                **_ofi_action_adjustment_contract_fields(
+                    endpoint="holding_flow",
+                    raw_action=flow_action,
+                    final_action="EXIT",
+                ),
             )
             _log_holding_pipeline(
                 stock,
@@ -45706,6 +45884,12 @@ def _evaluate_holding_flow_override(
                 **micro_log_fields_for_smoothing,
                 **holding_flow_micro_estimator_fields,
                 **swing_exit_micro_fields,
+                **holding_flow_ai_ops_fields,
+                **_ofi_action_adjustment_contract_fields(
+                    endpoint="holding_flow",
+                    raw_action=flow_action,
+                    final_action=flow_action,
+                ),
             )
     if flow_action == "EXIT":
         _log_holding_pipeline(
@@ -47289,7 +47473,10 @@ def _opening_rotation_no_pullback_continuation_fields(
         promotion_price_fields if isinstance(promotion_price_fields, dict) else {}
     )
     venue_fields = _scanner_runtime_event_venue_fields(stock)
-    anchor_price = _safe_int(promotion_price_fields.get("scanner_promotion_price"), 0)
+    anchor_price = _safe_int(
+        promotion_price_fields.get("scanner_promotion_effective_anchor_price"),
+        _safe_int(promotion_price_fields.get("scanner_promotion_price"), 0),
+    )
     current_ws_price = _safe_int(
         promotion_price_fields.get("scanner_promotion_price_ws_curr"), 0
     )
@@ -50492,9 +50679,6 @@ def _handle_watching_strategy_branch(
                 is_vip_target = (target_buy_price > 0) and (
                     curr_price <= target_buy_price * 1.015
                 )
-                smoothing_mode = normalize_watching_score_smoothing_mode(
-                    _rule("AI_WATCHING_SCORE_SMOOTHING_MODE", "off")
-                )
                 watching_state_refresh = _resolve_watching_state_change_refresh(
                     stock,
                     ws_data,
@@ -50571,32 +50755,7 @@ def _handle_watching_strategy_branch(
                         f"⏳ [{stock['name']}] 첫 AI 분석을 시작합니다... (기계적 매수 일시 보류)"
                     )
 
-                projection_only_refresh = bool(
-                    ai_engine
-                    and is_vip_target
-                    and smoothing_mode == "report_only"
-                    and watching_state_refresh.get("allowed")
-                    and last_ai_time > 0
-                    and time_elapsed <= config["AI_WATCHING_COOLDOWN"]
-                )
-                if projection_only_refresh:
-                    _run_watching_score_projection_refresh(
-                        stock,
-                        code,
-                        ws_data,
-                        now_ts=now_ts,
-                        last_ai_time=last_ai_time,
-                        cooldown_sec=config["AI_WATCHING_COOLDOWN"],
-                        refresh_reason=str(
-                            watching_state_refresh.get("reason") or "state_change"
-                        ),
-                        current_ai_score=current_ai_score,
-                    )
-
-                runtime_refresh_allowed = bool(
-                    watching_state_refresh.get("allowed")
-                    and smoothing_mode != "report_only"
-                )
+                runtime_refresh_allowed = bool(watching_state_refresh.get("allowed"))
                 runtime_refresh_allowed = bool(
                     runtime_refresh_allowed or early_accel_recheck.get("allowed")
                 )
@@ -50748,35 +50907,30 @@ def _handle_watching_strategy_branch(
 
                             action = ai_decision.get("action", "WAIT")
                             raw_ai_score = ai_decision.get("score", 50)
-                            smoothing_decision, smoothing_observations = (
-                                evaluate_watching_score(
-                                    stock.get("watching_score_smoothing_observations")
-                                    or [],
-                                    now_ts=ai_call_completed_at,
-                                    raw_score=raw_ai_score,
-                                    action=action,
-                                    mode=smoothing_mode,
-                                    ai_result=ai_decision,
-                                    previous_applied_score=current_ai_score,
-                                    quote_stale=ws_data.get("quote_stale", False),
-                                    context_stale=(
-                                        ai_decision.get("tick_context_stale", False)
-                                        or ws_data.get("context_stale", False)
-                                    ),
-                                )
+                            ai_score = max(
+                                0.0, min(100.0, _safe_float(raw_ai_score, 50.0))
                             )
-                            smoothing_fields = smoothing_decision.provenance_fields(
-                                early_refresh_trigger=(
+                            smoothing_fields = {
+                                "ai_score_raw": round(ai_score, 2),
+                                "ai_score_projected": round(ai_score, 2),
+                                "ai_score_smoothing_mode": "retired",
+                                "ai_score_smoothing_applied": False,
+                                "ai_score_smoothing_confidence": (
+                                    "replaced_by_exact_trace_cumulative_calibration"
+                                ),
+                                "ai_action_consistency": 1.0,
+                                "ai_early_refresh_trigger": (
                                     watching_state_refresh.get("reason")
                                     if watching_state_refresh.get("allowed")
                                     else "-"
-                                )
-                            )
-                            ai_score = smoothing_decision.applied_score
-                            smoothing_buy_guard_blocked = bool(
-                                smoothing_mode == "applied"
-                                and smoothing_decision.buy_guard_blocked
-                            )
+                                ),
+                                "ai_score_excluded_reason": "-",
+                                "ai_score_buy_guard_blocked": False,
+                                "ai_score_policy_version": (
+                                    "exact_decision_trace_cumulative_action_outcome_v1"
+                                ),
+                            }
+                            smoothing_buy_guard_blocked = False
                             ai_decision = dict(ai_decision or {})
                             ai_decision.update(smoothing_fields)
                             ai_decision["score"] = ai_score
@@ -50808,7 +50962,6 @@ def _handle_watching_strategy_branch(
                                         ai_decision.get("ai_decision_trace_id") or ""
                                     ),
                                     "last_watching_ai_source_quality_fields": ai_source_quality_fields,
-                                    "watching_score_smoothing_observations": smoothing_observations,
                                 },
                             )
                             feature_probe = _extract_buy_recovery_probe_features(

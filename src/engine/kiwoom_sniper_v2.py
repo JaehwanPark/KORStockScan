@@ -405,6 +405,7 @@ SCANNER_WATCH_EVICTION_AFTER_BUY_WINDOW_MIN_COUNT = 2
 SCANNER_WATCH_EVICTION_AFTER_BUY_WINDOW_MIN_AGE_SEC = 60.0
 SCANNER_WATCH_EVICTION_RISING_TERMINAL_RECHECK_DELAY_SEC = 5.0
 SCANNER_WATCH_EVICTION_RISING_TERMINAL_RECHECK_MAX_ATTEMPTS = 2
+SCANNER_OPENING_ROTATION_SOURCE_GAP_RECHECK_PRIORITY = -1
 SCANNER_FIFO_NEW_PROMOTION_GRACE_SEC = 60.0
 KRX_OPEN_WATCHLIST_RESET_POLICY_VERSION = "krx_open_watchlist_reset_v1"
 SCANNER_WATCH_EVICTION_SOURCE_QUALITY_REASONS = {
@@ -8743,6 +8744,7 @@ def _scanner_scheduler_enqueue_target(
     owner,
     enqueued_epoch,
     deadline_epoch=None,
+    priority=0,
     attempt=1,
     recheck_evidence_key=None,
 ):
@@ -8755,6 +8757,7 @@ def _scanner_scheduler_enqueue_target(
         owner=owner,
         enqueued_epoch=float(enqueued_epoch),
         deadline_epoch=deadline_epoch,
+        priority=priority,
         attempt=attempt,
         recheck_evidence_key=recheck_evidence_key,
     )
@@ -8788,6 +8791,7 @@ def _scanner_scheduler_enqueue_fresh_precheck(
     now_epoch,
     owner,
     evidence_snapshot=None,
+    priority=0,
 ):
     if not _is_scanner_watching_target(target):
         if isinstance(scheduler, ScannerRuntimeScheduler):
@@ -8803,6 +8807,7 @@ def _scanner_scheduler_enqueue_fresh_precheck(
         lane=ScannerLane.FAST_PRECHECK,
         owner=owner,
         enqueued_epoch=float(now_epoch),
+        priority=priority,
         attempt=(_safe_int((target or {}).get("_scanner_scheduler_attempt"), 0) + 1),
         # The scheduler uses this value only to coalesce a rapid retry of the
         # same WATCHING generation.  It has no order, threshold, or freshness
@@ -9026,6 +9031,11 @@ def _scanner_scheduler_reactivate_opening_rotation_source_gap_on_fresh_ws(
         now_epoch=float(now_epoch),
         owner="opening_rotation_source_gap_fresh_0b_recheck",
         evidence_snapshot=ws_data,
+        # This source-gap recovery is bounded observation work, not first-look
+        # admission.  A low recheck priority keeps ordinary fresh-evidence
+        # rechecks ahead of it without changing initial admission or the
+        # source-gap task's bounded deadline-expiry behavior.
+        priority=SCANNER_OPENING_ROTATION_SOURCE_GAP_RECHECK_PRIORITY,
     )
     if decision is None or decision.item is None:
         if async_generation_reactivated:
@@ -9069,6 +9079,9 @@ def _scanner_scheduler_reactivate_opening_rotation_source_gap_on_fresh_ws(
             "scanner_opening_rotation_source_gap_fresh_price": current_price,
             "scanner_opening_rotation_source_gap_fresh_0b_epoch": (
                 f"{last_0b_epoch:.6f}"
+            ),
+            "scanner_opening_rotation_source_gap_recheck_priority": (
+                SCANNER_OPENING_ROTATION_SOURCE_GAP_RECHECK_PRIORITY
             ),
             "scanner_opening_rotation_source_gap_freshness_source": (freshness_source),
             "opening_rotation_source_gap_to_fresh_recheck_sec": round(
@@ -9324,9 +9337,7 @@ def _scanner_scheduler_reactivate_rising_cross_park_on_fresh_ws(
         return False
     if not bool((target or {}).get("_scanner_scheduler_warm_parked")):
         return False
-    warm_reason = str(
-        (target or {}).get("_scanner_scheduler_warm_reason") or ""
-    )
+    warm_reason = str((target or {}).get("_scanner_scheduler_warm_reason") or "")
     if warm_reason not in {
         "precheck_not_eligible_generation_warm_parked",
         "heavy_eval_completed_generation_warm_parked",

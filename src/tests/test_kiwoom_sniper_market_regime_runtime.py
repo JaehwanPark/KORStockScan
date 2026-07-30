@@ -8794,7 +8794,13 @@ def test_scanner_opening_rotation_tick_source_gap_rechecks_once_on_new_0b(
     assert target["_scanner_opening_rotation_source_gap_reactivation_count"] == 1
     next_item = scheduler.next_decision(now_epoch=105.2)
     assert next_item.item.owner == "opening_rotation_source_gap_fresh_0b_recheck"
+    assert next_item.item.priority == (
+        kiwoom_sniper_v2.SCANNER_OPENING_ROTATION_SOURCE_GAP_RECHECK_PRIORITY
+    )
     assert emitted[-1]["stage"] == ("scalping_scanner_scheduler_warm_park_reactivated")
+    assert emitted[-1]["fields"][
+        "scanner_opening_rotation_source_gap_recheck_priority"
+    ] == (kiwoom_sniper_v2.SCANNER_OPENING_ROTATION_SOURCE_GAP_RECHECK_PRIORITY)
     assert emitted[-1]["fields"]["actual_order_submitted"] is False
     assert emitted[-1]["fields"]["broker_order_forbidden"] is True
 
