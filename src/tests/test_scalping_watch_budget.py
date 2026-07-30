@@ -10,6 +10,7 @@ from src.engine.scalping.watch_budget import (
     classify_owner,
     limits,
     owner_allowances,
+    rising_source_reservation,
     slot_type,
 )
 
@@ -116,6 +117,27 @@ def test_watch_budget_limit_down_enabled_is_general1_opening2_limit1_rising12():
             limit_down_enabled=True,
         )[RISING_MISSED]
         == 13
+    )
+
+
+def test_market_gainer_reservation_is_six_inside_rising_guaranteed_budget():
+    assert (
+        rising_source_reservation(
+            16,
+            requested_slots=6,
+            opening_window_active=True,
+            limit_down_enabled=True,
+        )
+        == 6
+    )
+    assert (
+        rising_source_reservation(
+            3,
+            requested_slots=6,
+            opening_window_active=True,
+            limit_down_enabled=True,
+        )
+        == 3
     )
 
 

@@ -1891,25 +1891,40 @@ def get_margin_daily_ka10013_df(token, code, base_dt=None, is_nxt=None):
     return df.sort_index()
 
 
-def get_top_fluctuation_ka10027(token, mrkt_tp="000", trde_qty_cnd=None, limit=50):
+def get_top_fluctuation_ka10027(
+    token,
+    mrkt_tp="000",
+    trde_qty_cnd=None,
+    limit=50,
+    *,
+    stex_tp="3",
+    sort_tp="1",
+    stk_cnd="0",
+    crd_cnd="0",
+    updown_incls="1",
+    pric_cnd="0",
+    trde_prica_cnd="0",
+):
     """
     [ka10027] 전일대비등락률상위요청
     - mrkt_tp: "000"(전체), "001"(코스피), "101"(코스닥)
     - trde_qty_cnd: "0000"(전체조회) 등
+    - stex_tp: "1"(KRX), "2"(NXT), "3"(통합)
+    - 나머지 조건은 키움 ka10027 공식 요청 계약 값을 그대로 전달한다.
     """
     url = get_api_url("/api/dostk/rkinfo")
     payload = {
         "mrkt_tp": mrkt_tp,
-        "sort_tp": "1",
+        "sort_tp": str(sort_tp),
         "trde_qty_cnd": str(
             trde_qty_cnd or os.getenv("KORSTOCKSCAN_KA10027_TRDE_QTY_CND", "0000")
         ),
-        "stk_cnd": "0",
-        "crd_cnd": "0",
-        "updown_incls": "1",
-        "pric_cnd": "0",
-        "trde_prica_cnd": "0",
-        "stex_tp": "3",
+        "stk_cnd": str(stk_cnd),
+        "crd_cnd": str(crd_cnd),
+        "updown_incls": str(updown_incls),
+        "pric_cnd": str(pric_cnd),
+        "trde_prica_cnd": str(trde_prica_cnd),
+        "stex_tp": str(stex_tp),
     }
 
     # 💡 [핵심] 1회성 스캐너 조회 (429 에러 방어 탑재)

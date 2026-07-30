@@ -32,6 +32,39 @@ class _DB:
         return None
 
 
+class _ReusableDB(_DB):
+    def find_reusable_watching_record(self, session, **kwargs):
+        code = str(kwargs.get("stock_code") or "")
+        for record in session.records:
+            if str(getattr(record, "stock_code", "") or "") == code:
+                return record
+        return None
+
+
+class _RollbackFlushSession(_Session):
+    def __enter__(self):
+        self._record_count = len(self.records)
+        self._statuses = [
+            (record, getattr(record, "status", None)) for record in self.records
+        ]
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        if exc_type is not None:
+            del self.records[self._record_count :]
+            for record, status in self._statuses:
+                record.status = status
+        return False
+
+    def flush(self):
+        raise RuntimeError("forced flush failure")
+
+
+class _RollbackFlushDB(_DB):
+    def get_session(self):
+        return _RollbackFlushSession(self.records)
+
+
 class _EventBus:
     def __init__(self, on_publish=None):
         self.events = []
@@ -69,6 +102,16 @@ def test_scanner_sleep_targets_prewarm_boundary_instead_of_coarse_minute():
         )
         == 1.0
     )
+
+
+def test_market_gainer_route_uses_upcoming_nxt_venue_during_prewarm():
+    nxt_prewarm_ts = datetime(2026, 7, 30, 6, 58, tzinfo=timezone.utc).timestamp()
+    outside_supported_session_ts = datetime(
+        2026, 7, 30, 11, 30, tzinfo=timezone.utc
+    ).timestamp()
+
+    assert scalping_scanner._market_gainer_stex_tp(nxt_prewarm_ts) == "2"
+    assert scalping_scanner._market_gainer_stex_tp(outside_supported_session_ts) == ""
 
 
 def test_ranked_prewarm_registers_ws_without_promotion_or_order_authority(
@@ -5473,6 +5516,372 @@ def test_run_scalper_iteration_keeps_ws_payload_and_max_new_codes(monkeypatch):
         "000002",
     ]
     assert len(db.records) == 3
+
+
+def test_market_gainer_source_uses_venue_isolated_ka10027_contract(monkeypatch):
+    captured = {}
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_MARKET_GAINER_ENABLED", "true")
+    monkeypatch.setattr(
+        scalping_scanner,
+        "_market_gainer_stex_tp",
+        lambda now_ts=None: "1",
+    )
+
+    def fetch_market_gainers(*args, **kwargs):
+        captured.update(kwargs)
+        return [
+            {
+                "Code": "005930",
+                "Name": "삼성전자",
+                "Price": 70000,
+                "ChangeRate": 3.2,
+                "Volume": 1000000,
+                "CntrStr": 123.0,
+            }
+        ]
+
+    monkeypatch.setattr(
+        kiwoom_utils, "get_top_fluctuation_ka10027", fetch_market_gainers
+    )
+    for name in (
+        "get_realtime_item_rank_ka00198",
+        "get_price_jump_ka10019",
+        "scan_volume_spike_ka10023",
+        "get_bid_balance_surge_ka10021",
+        "get_high_price_proximity_ka10018",
+        "get_new_high_ka10016",
+        "get_top_open_fluctuation_ka10028",
+        "get_value_top_ka10032",
+        "get_vi_triggered_ka10054",
+    ):
+        monkeypatch.setattr(kiwoom_utils, name, lambda *args, **kwargs: [])
+    monkeypatch.setattr(kiwoom_utils, "is_valid_stock", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        scalping_scanner,
+        "_scanner_real_source_guard_decision",
+        lambda *args, **kwargs: {"blocked": False, "reason": "market_gainer_seed"},
+    )
+    radar = SimpleNamespace(find_supernova_targets=lambda *args, **kwargs: [])
+    db = _DB()
+    event_bus = _EventBus()
+
+    codes, _ = scalping_scanner.run_scalper_iteration(
+        token="TOKEN",
+        radar=radar,
+        db=db,
+        event_bus=event_bus,
+        recent_picks={},
+        reentry_cooldown_sec=1500,
+        max_new_codes=6,
+        open_top_limit=60,
+        supernova_limit=30,
+    )
+
+    assert codes == ["005930"]
+    assert captured == {
+        "mrkt_tp": "000",
+        "trde_qty_cnd": "0010",
+        "limit": 20,
+        "stex_tp": "1",
+        "sort_tp": "1",
+        "stk_cnd": "4",
+        "crd_cnd": "0",
+        "updown_incls": "1",
+        "pric_cnd": "8",
+        "trde_prica_cnd": "10",
+    }
+    payload = _event_payloads(event_bus, "SCALPING_SCANNER_PROMOTED_TARGET")[0]
+    assert payload["source_signature"] == "PREV_CLOSE_GAINER"
+    assert payload["scanner_market_gainer_reserved_slots"] == 6
+    assert payload["scanner_market_gainer_reserved_promotion"] is True
+    assert db.records[0].scanner_watch_budget_owner == "rising_missed"
+
+
+def test_market_gainer_reservation_replaces_only_six_non_holding_rising_slots(
+    monkeypatch,
+):
+    monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE", "16")
+    monkeypatch.setenv("KORSTOCKSCAN_LIMIT_DOWN_WATCH_ENABLED", "false")
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_MARKET_GAINER_RESERVED_SLOTS", "6")
+    monkeypatch.setattr(
+        scalping_scanner, "_scanner_watch_budget_reallocation_enabled", lambda: True
+    )
+    monkeypatch.setattr(kiwoom_utils, "is_valid_stock", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        scalping_scanner,
+        "_scanner_real_source_guard_decision",
+        lambda *args, **kwargs: {"blocked": False, "reason": "market_gainer_seed"},
+    )
+    db = _DB()
+    for index in range(12):
+        db.records.append(
+            SimpleNamespace(
+                stock_code=f"1{index:05d}",
+                status="WATCHING",
+                strategy="SCALPING",
+                position_tag="SCANNER",
+                buy_time=None,
+                buy_qty=0,
+                entry_armed_at_epoch=float(index),
+                scanner_watch_budget_owner="rising_missed",
+                scanner_source_signature="PRICE_JUMP_START",
+            )
+        )
+    for index in range(3):
+        db.records.append(
+            SimpleNamespace(
+                stock_code=f"2{index:05d}",
+                status="WATCHING",
+                strategy="SCALPING",
+                position_tag="SCANNER",
+                buy_time=None,
+                buy_qty=0,
+                entry_armed_at_epoch=float(index),
+                scanner_watch_budget_owner="opening_rotation",
+                scanner_source_signature="OPEN_TOP",
+            )
+        )
+    db.records.append(
+        SimpleNamespace(
+            stock_code="300000",
+            status="WATCHING",
+            strategy="SCALPING",
+            position_tag="SCANNER",
+            buy_time=None,
+            buy_qty=0,
+            entry_armed_at_epoch=0.0,
+            scanner_watch_budget_owner="general_scalping",
+            scanner_source_signature="SUPERNOVA",
+        )
+    )
+    event_bus = _EventBus()
+    targets = [
+        {
+            "Code": f"9{index:05d}",
+            "Name": f"GAINER{index}",
+            "Price": 10000 + index,
+            "FluRate": 5.0 - index * 0.1,
+            "MarketGainerFluRate": 5.0 - index * 0.1,
+            "MarketGainerRank": index + 1,
+            "MarketGainerStExTp": "1",
+            "MarketGainerVenue": "KRX",
+            "Source": "PREV_CLOSE_GAINER",
+            "SourceSet": {"PREV_CLOSE_GAINER"},
+            "ScannerWatchBudgetOwner": "rising_missed",
+        }
+        for index in range(7)
+    ]
+
+    codes, _ = scalping_scanner.promote_candidates(
+        db,
+        event_bus,
+        targets,
+        {},
+        max_new_codes=7,
+        reentry_cooldown_sec=1500,
+        token="TOKEN",
+        now_ts=datetime(2026, 7, 30, 10, 0).timestamp(),
+    )
+
+    active = [record for record in db.records if record.status == "WATCHING"]
+    active_market = [
+        record
+        for record in active
+        if "PREV_CLOSE_GAINER" in str(getattr(record, "scanner_source_signature", ""))
+    ]
+    expired_regular = [
+        record
+        for record in db.records
+        if record.status == "EXPIRED"
+        and getattr(record, "scanner_watch_budget_owner", "") == "rising_missed"
+    ]
+    assert len(codes) == 6
+    assert len(active) == 16
+    assert len(active_market) == 6
+    assert len(expired_regular) == 6
+    assert any(
+        name == "COMMAND_WS_UNREG"
+        and payload["source"] == "scalping_scanner_market_gainer_reserve_replace"
+        for name, payload in event_bus.events
+    )
+
+
+def test_market_gainer_guard_reject_does_not_evict_existing_rising_slot(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE", "1")
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_MARKET_GAINER_RESERVED_SLOTS", "1")
+    monkeypatch.setattr(
+        scalping_scanner, "_scanner_watch_budget_reallocation_enabled", lambda: True
+    )
+    monkeypatch.setattr(
+        scalping_scanner,
+        "_scanner_real_source_guard_decision",
+        lambda *args, **kwargs: {
+            "blocked": True,
+            "reason": "source_quality_blocked",
+        },
+    )
+    db = _DB()
+    existing = SimpleNamespace(
+        stock_code="100000",
+        status="WATCHING",
+        strategy="SCALPING",
+        position_tag="SCANNER",
+        buy_time=None,
+        buy_qty=0,
+        entry_armed_at_epoch=1.0,
+        scanner_watch_budget_owner="rising_missed",
+        scanner_source_signature="PRICE_JUMP_START",
+    )
+    db.records.append(existing)
+    event_bus = _EventBus()
+
+    codes, _ = scalping_scanner.promote_candidates(
+        db,
+        event_bus,
+        [
+            {
+                "Code": "900000",
+                "Name": "BLOCKED_GAINER",
+                "Price": 10000,
+                "FluRate": 4.0,
+                "MarketGainerFluRate": 4.0,
+                "Source": "PREV_CLOSE_GAINER",
+                "SourceSet": {"PREV_CLOSE_GAINER"},
+                "ScannerWatchBudgetOwner": "rising_missed",
+            }
+        ],
+        {},
+        max_new_codes=1,
+        reentry_cooldown_sec=1500,
+        token="TOKEN",
+        now_ts=datetime(2026, 7, 30, 10, 0).timestamp(),
+    )
+
+    assert codes == []
+    assert existing.status == "WATCHING"
+    assert not any(
+        name == "COMMAND_WS_UNREG"
+        and payload["source"] == "scalping_scanner_market_gainer_reserve_replace"
+        for name, payload in event_bus.events
+    )
+
+
+def test_market_gainer_source_upgrade_reuses_active_rising_slot(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE", "1")
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_MARKET_GAINER_RESERVED_SLOTS", "1")
+    monkeypatch.setattr(
+        scalping_scanner, "_scanner_watch_budget_reallocation_enabled", lambda: True
+    )
+    monkeypatch.setattr(kiwoom_utils, "is_valid_stock", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        scalping_scanner,
+        "_scanner_real_source_guard_decision",
+        lambda *args, **kwargs: {"blocked": False, "reason": "market_gainer_seed"},
+    )
+    db = _ReusableDB()
+    existing = SimpleNamespace(
+        stock_code="900000",
+        stock_name="UPGRADE",
+        status="WATCHING",
+        strategy="SCALPING",
+        position_tag="SCANNER",
+        buy_time=None,
+        buy_qty=0,
+        entry_armed_at_epoch=1.0,
+        scanner_watch_budget_owner="rising_missed",
+        scanner_source_signature="PRICE_JUMP_START",
+    )
+    db.records.append(existing)
+    event_bus = _EventBus()
+
+    codes, _ = scalping_scanner.promote_candidates(
+        db,
+        event_bus,
+        [
+            {
+                "Code": "900000",
+                "Name": "UPGRADE",
+                "Price": 10000,
+                "FluRate": 4.0,
+                "MarketGainerFluRate": 4.0,
+                "Source": "PREV_CLOSE_GAINER",
+                "SourceSet": {"PREV_CLOSE_GAINER"},
+                "ScannerWatchBudgetOwner": "rising_missed",
+            }
+        ],
+        {},
+        max_new_codes=1,
+        reentry_cooldown_sec=1500,
+        token="TOKEN",
+        now_ts=datetime(2026, 7, 30, 10, 0).timestamp(),
+    )
+
+    assert codes == ["900000"]
+    assert len(db.records) == 1
+    assert existing.status == "WATCHING"
+    assert existing.scanner_source_signature == "PREV_CLOSE_GAINER"
+    assert not _event_payloads(event_bus, "COMMAND_WS_UNREG")
+    promoted = _event_payloads(event_bus, "SCALPING_SCANNER_PROMOTED_TARGET")[0]
+    assert promoted["scanner_market_gainer_atomic_swap"] is False
+    assert promoted["scanner_market_gainer_replaced_code"] == ""
+
+
+def test_market_gainer_atomic_swap_rolls_back_before_ws_unreg_on_flush_failure(
+    monkeypatch,
+):
+    monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE", "1")
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_MARKET_GAINER_RESERVED_SLOTS", "1")
+    monkeypatch.setattr(
+        scalping_scanner, "_scanner_watch_budget_reallocation_enabled", lambda: True
+    )
+    monkeypatch.setattr(kiwoom_utils, "is_valid_stock", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        scalping_scanner,
+        "_scanner_real_source_guard_decision",
+        lambda *args, **kwargs: {"blocked": False, "reason": "market_gainer_seed"},
+    )
+    db = _RollbackFlushDB()
+    existing = SimpleNamespace(
+        stock_code="100000",
+        status="WATCHING",
+        strategy="SCALPING",
+        position_tag="SCANNER",
+        buy_time=None,
+        buy_qty=0,
+        entry_armed_at_epoch=1.0,
+        scanner_watch_budget_owner="rising_missed",
+        scanner_source_signature="PRICE_JUMP_START",
+    )
+    db.records.append(existing)
+    event_bus = _EventBus()
+
+    codes, _ = scalping_scanner.promote_candidates(
+        db,
+        event_bus,
+        [
+            {
+                "Code": "900000",
+                "Name": "ROLLBACK",
+                "Price": 10000,
+                "FluRate": 4.0,
+                "MarketGainerFluRate": 4.0,
+                "Source": "PREV_CLOSE_GAINER",
+                "SourceSet": {"PREV_CLOSE_GAINER"},
+                "ScannerWatchBudgetOwner": "rising_missed",
+            }
+        ],
+        {},
+        max_new_codes=1,
+        reentry_cooldown_sec=1500,
+        token="TOKEN",
+        now_ts=datetime(2026, 7, 30, 10, 0).timestamp(),
+    )
+
+    assert codes == []
+    assert db.records == [existing]
+    assert existing.status == "WATCHING"
+    assert not _event_payloads(event_bus, "COMMAND_WS_UNREG")
+    assert not _event_payloads(event_bus, "SCALPING_SCANNER_PROMOTED_TARGET")
 
 
 def test_run_scalper_iteration_observes_low_rebound_before_scanner_cap(monkeypatch):

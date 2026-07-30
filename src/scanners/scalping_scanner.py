@@ -22,12 +22,14 @@ from src.core.event_bus import EventBus
 from src.engine.signal_radar import SniperRadar
 from src.engine.scalping.watch_budget import (
     GENERAL_SCALPING,
+    MARKET_GAINER_SOURCE,
     OPENING_ROTATION,
     RISING_MISSED,
     classify_owner as classify_watch_budget_owner,
     limits as watch_budget_limits,
     normalize_owner as normalize_watch_budget_owner,
     policy_version as watch_budget_policy_version,
+    rising_source_reservation,
 )
 from src.engine.scalping.limit_down_watch import LimitDownWatchManager
 from src.engine.scalping.opening_rotation import EntryConfig as OpeningRotationConfig
@@ -47,6 +49,8 @@ LOW_REBOUND_RISING_MISSED_SOURCE = "LOW_REBOUND_RISING_MISSED"
 LOW_REBOUND_RISING_MISSED_SOURCE_FAMILY = "rising_missed_low_rebound_source_v1"
 LOW_REBOUND_RISING_MISSED_ROLE = "rising_missed_low_rebound_candidate"
 LOW_REBOUND_RISING_MISSED_LINEAGE = "low_rebound_from_intraday_low"
+MARKET_GAINER_SOURCE_FAMILY = "ka10027_market_gainer_candidate_v1"
+MARKET_GAINER_SOURCE_ROLE = "market_wide_prev_close_gainer_candidate"
 HIGH_PROXIMITY_CONFIRMATION_SOURCE = "HIGH_PROXIMITY_CONFIRMATION"
 NEW_HIGH_CONFIRMATION_SOURCE = "NEW_HIGH_CONFIRMATION"
 BREAKOUT_CONFIRMATION_SOURCES = {
@@ -55,7 +59,7 @@ BREAKOUT_CONFIRMATION_SOURCES = {
 }
 RANK_CHANGE_SIGN_AUTHORITY_DEFAULT = "raw_unverified_not_decision_input"
 SCANNER_PROMOTION_POLICY_VERSION = (
-    "scanner_priority_v6_20260709_breakout_confirmation_enrichment"
+    "scanner_priority_v7_20260730_market_gainer_reservation"
 )
 SCANNER_UNDER_10000_PRIORITY_PRICE_CEILING = 10000
 SCANNER_UNDER_10000_VOLUME_SURGE_RANK_PCT_DEFAULT = 0.40
@@ -67,6 +71,7 @@ PRIMARY_RISING_START_SOURCES = {
     "PRICE_JUMP_START",
     "VOLUME_SURGE_POSITIVE",
     "BID_IMBALANCE_SURGE",
+    MARKET_GAINER_SOURCE,
 }
 LOW_REBOUND_BASE_SOURCES = {"VOLUME_SURGE_RAW", "VALUE_TOP", "REALTIME_RANK_START"}
 LOW_REBOUND_PREFETCH_EXCLUDED_NAME_KEYWORDS = (
@@ -174,6 +179,49 @@ def _scalping_watching_max_active():
     except (TypeError, ValueError):
         value = 16
     return max(1, min(value, 80))
+
+
+def _market_gainer_source_enabled():
+    return str(
+        os.getenv("KORSTOCKSCAN_SCANNER_MARKET_GAINER_ENABLED", "false")
+    ).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _market_gainer_reserved_slots(max_active):
+    raw_value = os.getenv("KORSTOCKSCAN_SCANNER_MARKET_GAINER_RESERVED_SLOTS", "6")
+    try:
+        requested_slots = int(str(raw_value).strip())
+    except (TypeError, ValueError):
+        requested_slots = 6
+    return rising_source_reservation(
+        max_active,
+        requested_slots=requested_slots,
+        opening_window_active=True,
+    )
+
+
+def _market_gainer_fetch_limit():
+    raw_value = os.getenv("KORSTOCKSCAN_SCANNER_MARKET_GAINER_LIMIT", "20")
+    try:
+        limit = int(str(raw_value).strip())
+    except (TypeError, ValueError):
+        limit = 20
+    return max(6, min(limit, 60))
+
+
+def _market_gainer_stex_tp(now_ts=None):
+    observed_ts = time.time() if now_ts is None else now_ts
+    venue = str(
+        scalping_session_venue_provenance(observed_ts).get("effective_venue") or ""
+    )
+    if venue == "NXT":
+        return "2"
+    if venue in {"KRX", "PREMARKET_KRX_LIKE"}:
+        return "1"
+    prewarm_window = scalping_prewarm_window(observed_ts)
+    if prewarm_window is not None:
+        return "2" if prewarm_window["window_start"].hour >= 16 else "1"
+    return ""
 
 
 def _publish_ranked_prewarm_candidates(
@@ -746,6 +794,241 @@ def _active_scanner_watching_owner_counts(db):
     return counts
 
 
+def _active_scanner_watching_owner_by_code(db, codes):
+    norm_codes = {
+        str(code or "").strip()[:6]
+        for code in (codes or set())
+        if str(code or "").strip()
+    }
+    if not norm_codes:
+        return {}
+    owners = {}
+    try:
+        with db.get_session() as session:
+            if hasattr(session, "query"):
+                records = (
+                    session.query(RecommendationHistory)
+                    .filter(
+                        RecommendationHistory.rec_date == datetime.now().date(),
+                        RecommendationHistory.status == "WATCHING",
+                        RecommendationHistory.strategy == "SCALPING",
+                        RecommendationHistory.position_tag == "SCANNER",
+                        RecommendationHistory.buy_time.is_(None),
+                        func.coalesce(RecommendationHistory.buy_qty, 0) == 0,
+                        RecommendationHistory.stock_code.in_(sorted(norm_codes)),
+                    )
+                    .all()
+                )
+            else:
+                records = list(getattr(session, "records", []))
+        for record in records:
+            code = str(getattr(record, "stock_code", "") or "").strip()[:6]
+            if code not in norm_codes:
+                continue
+            if getattr(record, "status", None) != "WATCHING":
+                continue
+            if getattr(record, "strategy", None) != "SCALPING":
+                continue
+            if getattr(record, "position_tag", None) != "SCANNER":
+                continue
+            if getattr(record, "buy_time", None) is not None:
+                continue
+            if int(getattr(record, "buy_qty", 0) or 0) != 0:
+                continue
+            owners[code] = normalize_watch_budget_owner(
+                getattr(record, "scanner_watch_budget_owner", ""),
+                default=RISING_MISSED,
+            )
+    except Exception as exc:
+        log_error(f"⚠️ [SCALPING 스캐너] active WATCHING code owner 확인 실패: {exc}")
+    return owners
+
+
+def _active_market_gainer_watching_codes(db):
+    codes = set()
+    try:
+        with db.get_session() as session:
+            if hasattr(session, "query"):
+                records = (
+                    session.query(RecommendationHistory)
+                    .filter(
+                        RecommendationHistory.rec_date == datetime.now().date(),
+                        RecommendationHistory.status == "WATCHING",
+                        RecommendationHistory.strategy == "SCALPING",
+                        RecommendationHistory.position_tag == "SCANNER",
+                        RecommendationHistory.buy_time.is_(None),
+                        RecommendationHistory.buy_qty == 0,
+                    )
+                    .all()
+                )
+            else:
+                records = list(getattr(session, "records", []))
+        for record in records:
+            if getattr(record, "status", None) != "WATCHING":
+                continue
+            if getattr(record, "strategy", None) != "SCALPING":
+                continue
+            if getattr(record, "position_tag", None) != "SCANNER":
+                continue
+            if getattr(record, "buy_time", None) is not None:
+                continue
+            if int(getattr(record, "buy_qty", 0) or 0) != 0:
+                continue
+            source_signature = {
+                token.strip().upper()
+                for token in str(getattr(record, "scanner_source_signature", "") or "")
+                .replace("|", ",")
+                .split(",")
+                if token.strip()
+            }
+            if MARKET_GAINER_SOURCE in source_signature:
+                code = str(getattr(record, "stock_code", "") or "").strip()[:6]
+                if code:
+                    codes.add(code)
+    except Exception as exc:
+        log_error(f"⚠️ [SCALPING 스캐너] market-gainer active 확인 실패: {exc}")
+    return codes
+
+
+def _select_non_market_gainer_rising_watching_codes(
+    db, *, max_to_select, protected_codes=None
+):
+    protected_codes = {
+        str(code or "").strip()[:6]
+        for code in (protected_codes or set())
+        if str(code or "").strip()
+    }
+    if int(max_to_select or 0) <= 0:
+        return []
+    selected_codes = []
+    try:
+        with db.get_session() as session:
+            if hasattr(session, "query"):
+                records = (
+                    session.query(RecommendationHistory)
+                    .filter(
+                        RecommendationHistory.rec_date == datetime.now().date(),
+                        RecommendationHistory.status == "WATCHING",
+                        RecommendationHistory.strategy == "SCALPING",
+                        RecommendationHistory.position_tag == "SCANNER",
+                        RecommendationHistory.buy_time.is_(None),
+                        RecommendationHistory.buy_qty == 0,
+                    )
+                    .all()
+                )
+            else:
+                records = list(getattr(session, "records", []))
+            candidates = []
+            for record in records:
+                code = str(getattr(record, "stock_code", "") or "").strip()[:6]
+                if not code or code in protected_codes:
+                    continue
+                if getattr(record, "status", None) != "WATCHING":
+                    continue
+                if getattr(record, "strategy", None) != "SCALPING":
+                    continue
+                if getattr(record, "position_tag", None) != "SCANNER":
+                    continue
+                if getattr(record, "buy_time", None) is not None:
+                    continue
+                if int(getattr(record, "buy_qty", 0) or 0) != 0:
+                    continue
+                owner = normalize_watch_budget_owner(
+                    getattr(record, "scanner_watch_budget_owner", ""),
+                    default=RISING_MISSED,
+                )
+                source_signature = {
+                    token.strip().upper()
+                    for token in str(
+                        getattr(record, "scanner_source_signature", "") or ""
+                    )
+                    .replace("|", ",")
+                    .split(",")
+                    if token.strip()
+                }
+                if owner != RISING_MISSED or MARKET_GAINER_SOURCE in source_signature:
+                    continue
+                armed_ts = _safe_float(
+                    getattr(record, "entry_armed_at_epoch", 0.0), 0.0
+                )
+                candidates.append((armed_ts or 0.0, record))
+            for _armed_ts, record in sorted(candidates, key=lambda item: item[0])[
+                : int(max_to_select)
+            ]:
+                selected_codes.append(
+                    str(getattr(record, "stock_code", "") or "").strip()[:6]
+                )
+    except Exception as exc:
+        log_error(f"⚠️ [SCALPING 스캐너] market-gainer 교체 대상 조회 실패: {exc}")
+        return []
+    return selected_codes
+
+
+def _expire_scanner_watching_code_in_session(session, code):
+    norm_code = str(code or "").strip()[:6]
+    if not norm_code:
+        return False
+    if hasattr(session, "query"):
+        query = session.query(RecommendationHistory).filter(
+            RecommendationHistory.rec_date == datetime.now().date(),
+            RecommendationHistory.stock_code == norm_code,
+            RecommendationHistory.status == "WATCHING",
+            RecommendationHistory.strategy == "SCALPING",
+            RecommendationHistory.position_tag == "SCANNER",
+            RecommendationHistory.buy_time.is_(None),
+            func.coalesce(RecommendationHistory.buy_qty, 0) == 0,
+        )
+        if hasattr(query, "with_for_update"):
+            query = query.with_for_update()
+        record = query.first()
+        if record is None:
+            return False
+        owner = normalize_watch_budget_owner(
+            getattr(record, "scanner_watch_budget_owner", ""),
+            default=RISING_MISSED,
+        )
+        source_signature = {
+            token.strip().upper()
+            for token in str(getattr(record, "scanner_source_signature", "") or "")
+            .replace("|", ",")
+            .split(",")
+            if token.strip()
+        }
+        if owner != RISING_MISSED or MARKET_GAINER_SOURCE in source_signature:
+            return False
+        record.status = "EXPIRED"
+        return True
+    for record in getattr(session, "records", []):
+        if str(getattr(record, "stock_code", "") or "").strip()[:6] != norm_code:
+            continue
+        if getattr(record, "status", None) != "WATCHING":
+            continue
+        if getattr(record, "strategy", None) != "SCALPING":
+            continue
+        if getattr(record, "position_tag", None) != "SCANNER":
+            continue
+        if getattr(record, "buy_time", None) is not None:
+            continue
+        if int(getattr(record, "buy_qty", 0) or 0) != 0:
+            continue
+        owner = normalize_watch_budget_owner(
+            getattr(record, "scanner_watch_budget_owner", ""),
+            default=RISING_MISSED,
+        )
+        source_signature = {
+            token.strip().upper()
+            for token in str(getattr(record, "scanner_source_signature", "") or "")
+            .replace("|", ",")
+            .split(",")
+            if token.strip()
+        }
+        if owner != RISING_MISSED or MARKET_GAINER_SOURCE in source_signature:
+            continue
+        record.status = "EXPIRED"
+        return True
+    return False
+
+
 def _active_scalping_codes(db):
     """Return codes already owned by any active trade/watch lane."""
     try:
@@ -824,18 +1107,19 @@ def _source_priority(source):
         "PRICE_JUMP_START": 1,
         "VOLUME_SURGE_POSITIVE": 2,
         "BID_IMBALANCE_SURGE": 3,
-        "VI_TRIGGERED": 4,
-        NEW_HIGH_CONFIRMATION_SOURCE: 5,
-        HIGH_PROXIMITY_CONFIRMATION_SOURCE: 6,
-        "VI+VALUE": 7,
-        "SUPERNOVA+VALUE": 8,
-        "BOTH": 9,
-        "SUPERNOVA": 10,
-        LOW_REBOUND_RISING_MISSED_SOURCE: 11,
-        "BOTH+VALUE": 12,
-        "OPEN_TOP": 13,
-        "VALUE_TOP": 14,
-    }.get(str(source or "OPEN_TOP"), 14)
+        MARKET_GAINER_SOURCE: 4,
+        "VI_TRIGGERED": 5,
+        NEW_HIGH_CONFIRMATION_SOURCE: 6,
+        HIGH_PROXIMITY_CONFIRMATION_SOURCE: 7,
+        "VI+VALUE": 8,
+        "SUPERNOVA+VALUE": 9,
+        "BOTH": 10,
+        "SUPERNOVA": 11,
+        LOW_REBOUND_RISING_MISSED_SOURCE: 12,
+        "BOTH+VALUE": 13,
+        "OPEN_TOP": 14,
+        "VALUE_TOP": 15,
+    }.get(str(source or "OPEN_TOP"), 15)
 
 
 def _safe_float(value, default=0.0):
@@ -1177,6 +1461,7 @@ def _representative_source(source_set):
         "PRICE_JUMP_START",
         "VOLUME_SURGE_POSITIVE",
         "BID_IMBALANCE_SURGE",
+        MARKET_GAINER_SOURCE,
         NEW_HIGH_CONFIRMATION_SOURCE,
         HIGH_PROXIMITY_CONFIRMATION_SOURCE,
     ):
@@ -1240,6 +1525,11 @@ def _scanner_flu_metric(target):
                 "low_rebound_display_change_rate",
                 LOW_REBOUND_RISING_MISSED_SOURCE,
             )
+
+    if MARKET_GAINER_SOURCE in source_set:
+        rate, has_rate = _scanner_rate_from_field(target, "MarketGainerFluRate")
+        if has_rate:
+            return rate, "ka10027_prev_close_flu_rate", MARKET_GAINER_SOURCE
 
     if "REALTIME_RANK_START" in source_set:
         rate, has_rate = _scanner_rate_from_field(target, "RealtimeRankFluRate")
@@ -1315,6 +1605,8 @@ def _scanner_candidate_role(target):
     source_set = set(_source_signature(target))
     if LOW_REBOUND_RISING_MISSED_SOURCE in source_set:
         return LOW_REBOUND_RISING_MISSED_ROLE
+    if MARKET_GAINER_SOURCE in source_set:
+        return MARKET_GAINER_SOURCE_ROLE
     if bool(getattr(TRADING_RULES, "SCALP_SCANNER_PRIORITY_TIERING_ENABLED", False)):
         if source_set == {"BID_IMBALANCE_SURGE"} and bool(
             getattr(
@@ -1361,6 +1653,7 @@ def _rising_start_score(target):
         "PRICE_JUMP_START": 690.0,
         "VOLUME_SURGE_POSITIVE": 650.0,
         "BID_IMBALANCE_SURGE": 610.0,
+        MARKET_GAINER_SOURCE: 580.0,
         NEW_HIGH_CONFIRMATION_SOURCE: 560.0,
         HIGH_PROXIMITY_CONFIRMATION_SOURCE: 540.0,
         LOW_REBOUND_RISING_MISSED_SOURCE: 520.0,
@@ -1473,7 +1766,12 @@ def _scanner_priority_profile(target, previous=None):
     )
     price_jump_confirmed = price_jump_confirmed or price_jump_breakout_confirmed
 
-    if LOW_REBOUND_RISING_MISSED_SOURCE in source_set:
+    if MARKET_GAINER_SOURCE in source_set:
+        tier = "tier_c_volume_confirmation"
+        reason = acceleration_reason or "market_wide_prev_close_gainer_candidate"
+        base_score = 2400.0
+        demoted_reason = ""
+    elif LOW_REBOUND_RISING_MISSED_SOURCE in source_set:
         tier = "tier_c_volume_confirmation"
         reason = acceleration_reason or "low_rebound_rising_missed_candidate"
         base_score = 1800.0
@@ -1589,6 +1887,11 @@ def _acceleration_reason(target, previous=None):
     previous_sources = set((previous or {}).get("last_source_signature") or [])
     if LOW_REBOUND_RISING_MISSED_SOURCE in source_set:
         return "low_rebound_rising_missed_candidate"
+    if (
+        MARKET_GAINER_SOURCE in source_set
+        and MARKET_GAINER_SOURCE not in previous_sources
+    ):
+        return "new_prev_close_gainer_source"
     for source in (
         "REALTIME_RANK_START",
         "PRICE_JUMP_START",
@@ -1829,6 +2132,24 @@ def _merge_candidate(candidate_pool, raw_target, source):
             or sign_diagnostics["RankChangeSignConsistency"]
         ).strip()
         current["RealtimeRankWindow"] = str(raw_target.get("RealtimeRankWindow") or "")
+    elif source == MARKET_GAINER_SOURCE:
+        current["SourceFamily"] = MARKET_GAINER_SOURCE_FAMILY
+        current["ScannerWatchBudgetOwner"] = RISING_MISSED
+        if raw_target.get("MarketGainerFluRate") not in (None, ""):
+            current["MarketGainerFluRate"] = _safe_float(
+                raw_target.get("MarketGainerFluRate")
+            )
+        elif raw_flu_present:
+            current["MarketGainerFluRate"] = raw_flu_rate
+        current["MarketGainerRank"] = _safe_positive_int(
+            raw_target.get("MarketGainerRank")
+        )
+        current["MarketGainerVolume"] = _safe_positive_int(
+            raw_target.get("MarketGainerVolume", raw_target.get("Volume"))
+        )
+        current["MarketGainerStExTp"] = str(raw_target.get("MarketGainerStExTp") or "")
+        current["MarketGainerVenue"] = str(raw_target.get("MarketGainerVenue") or "")
+        current["PreSig"] = raw_target.get("PreSig", current.get("PreSig", ""))
     elif source == "PRICE_JUMP_START":
         if raw_flu_present:
             current["PriceJumpFluRate"] = raw_flu_rate
@@ -2063,6 +2384,7 @@ def build_candidate_pool(
     value_targets=None,
     vi_targets=None,
     low_rebound_targets=None,
+    market_gainer_targets=None,
 ):
     candidate_pool = {}
     for target in realtime_rank_targets or []:
@@ -2087,6 +2409,8 @@ def build_candidate_pool(
         _merge_candidate(candidate_pool, target, "VI_TRIGGERED")
     for target in low_rebound_targets or []:
         _merge_candidate(candidate_pool, target, LOW_REBOUND_RISING_MISSED_SOURCE)
+    for target in market_gainer_targets or []:
+        _merge_candidate(candidate_pool, target, MARKET_GAINER_SOURCE)
     return candidate_pool
 
 
@@ -2888,6 +3212,34 @@ def _scanner_event_fields(target, source_guard=None):
         or GENERAL_SCALPING,
         "scanner_watch_budget_policy": watch_budget_policy_version(),
         "scanner_watch_budget_owner_source": "scanner_candidate_classification",
+        "scanner_market_gainer_rank": _safe_positive_int(
+            target.get("MarketGainerRank")
+        ),
+        "scanner_market_gainer_flu_rate": (
+            _safe_float(target.get("MarketGainerFluRate"))
+            if MARKET_GAINER_SOURCE in set(_source_signature(target))
+            else ""
+        ),
+        "scanner_market_gainer_stex_tp": target.get("MarketGainerStExTp") or "",
+        "scanner_market_gainer_venue": target.get("MarketGainerVenue") or "",
+        "scanner_market_gainer_reserved_slots": source_guard.get(
+            "scanner_market_gainer_reserved_slots", ""
+        ),
+        "scanner_market_gainer_active_count": source_guard.get(
+            "scanner_market_gainer_active_count", ""
+        ),
+        "scanner_market_gainer_reserved_promotion": source_guard.get(
+            "scanner_market_gainer_reserved_promotion", False
+        ),
+        "scanner_market_gainer_reservation_policy": source_guard.get(
+            "scanner_market_gainer_reservation_policy", ""
+        ),
+        "scanner_market_gainer_atomic_swap": bool(
+            source_guard.get("scanner_market_gainer_atomic_swap")
+        ),
+        "scanner_market_gainer_replaced_code": source_guard.get(
+            "scanner_market_gainer_replaced_code", ""
+        ),
         "scanner_block_reason": (
             source_guard.get("reason") if source_guard.get("blocked") else ""
         ),
@@ -3078,6 +3430,28 @@ def _scanner_runtime_target_payload(
         "scanner_watch_budget_owner_source": fields.get(
             "scanner_watch_budget_owner_source"
         ),
+        "scanner_market_gainer_rank": fields.get("scanner_market_gainer_rank"),
+        "scanner_market_gainer_flu_rate": fields.get("scanner_market_gainer_flu_rate"),
+        "scanner_market_gainer_stex_tp": fields.get("scanner_market_gainer_stex_tp"),
+        "scanner_market_gainer_venue": fields.get("scanner_market_gainer_venue"),
+        "scanner_market_gainer_reserved_slots": fields.get(
+            "scanner_market_gainer_reserved_slots"
+        ),
+        "scanner_market_gainer_active_count": fields.get(
+            "scanner_market_gainer_active_count"
+        ),
+        "scanner_market_gainer_reserved_promotion": bool(
+            fields.get("scanner_market_gainer_reserved_promotion")
+        ),
+        "scanner_market_gainer_reservation_policy": fields.get(
+            "scanner_market_gainer_reservation_policy"
+        ),
+        "scanner_market_gainer_atomic_swap": bool(
+            fields.get("scanner_market_gainer_atomic_swap")
+        ),
+        "scanner_market_gainer_replaced_code": fields.get(
+            "scanner_market_gainer_replaced_code"
+        ),
         "low_rebound_pct": fields.get("low_rebound_pct"),
         "intraday_low_price": fields.get("intraday_low_price"),
         "intraday_high_price": fields.get("intraday_high_price"),
@@ -3175,13 +3549,149 @@ def promote_candidates(
     if watch_budget_enabled:
         ranked_targets = sorted(
             ranked_targets,
-            key=lambda target: owner_priority.get(
-                target.get("ScannerWatchBudgetOwner"), 3
+            key=lambda target: (
+                owner_priority.get(target.get("ScannerWatchBudgetOwner"), 3),
+                (0 if MARKET_GAINER_SOURCE in set(_source_signature(target)) else 1),
             ),
         )
     max_active = _scalping_watching_max_active()
     _expire_after_buy_window_scanner_watching(db, now_ts)
     active_count = _active_scanner_watching_count(db)
+    observation_slots = (
+        limit_down_manager.active_slot_count() if limit_down_manager is not None else 0
+    )
+    promotion_policy = watch_budget_limits(
+        max_active,
+        opening_window_active=True,
+    )
+    owner_promoted_counts = _active_scanner_watching_owner_counts(db)
+    raw_market_gainer_targets = [
+        target
+        for target in ranked_targets
+        if MARKET_GAINER_SOURCE in set(_source_signature(target))
+    ]
+    market_gainer_precheck = {}
+    market_gainer_targets = []
+    for target in raw_market_gainer_targets:
+        code = str(target.get("Code") or "").strip()[:6]
+        pre_filter_reason = _scanner_candidate_pre_filter_reason(target)
+        should_promote = (
+            not pre_filter_reason
+            and not _has_active_non_scanner_scalping_watching_code(db, code)
+            and _should_promote_candidate(
+                target, recent_picks, now_ts, reentry_cooldown_sec
+            )
+        )
+        source_guard = (
+            _scanner_real_source_guard_decision(target, recent_picks, now_ts)
+            if should_promote
+            else {}
+        )
+        valid_stock = bool(
+            should_promote
+            and not source_guard.get("blocked")
+            and kiwoom_utils.is_valid_stock(
+                code,
+                target.get("Name"),
+                token=token,
+                current_price=_safe_float(target.get("Price")),
+            )
+        )
+        identity_decision = (
+            _scanner_candidate_identity_decision(db, target) if valid_stock else {}
+        )
+        replacement_eligible = bool(
+            valid_stock and not identity_decision.get("blocked")
+        )
+        market_gainer_precheck[id(target)] = {
+            "pre_filter_reason": pre_filter_reason,
+            "should_promote": should_promote,
+            "source_guard": source_guard,
+            "valid_stock": valid_stock,
+            "identity_decision": identity_decision,
+        }
+        if replacement_eligible:
+            market_gainer_targets.append(target)
+    market_gainer_reserved_slots = (
+        _market_gainer_reserved_slots(max_active) if market_gainer_targets else 0
+    )
+    active_market_gainer_codes = _active_market_gainer_watching_codes(db)
+    market_gainer_active_count = len(active_market_gainer_codes)
+    market_gainer_shortfall = max(
+        0, market_gainer_reserved_slots - market_gainer_active_count
+    )
+    rising_owner_limit = min(
+        promotion_policy.rising_max_with_borrow,
+        promotion_policy.rising_guaranteed
+        + max(
+            0,
+            promotion_policy.opening_protected
+            - owner_promoted_counts[OPENING_ROTATION],
+        )
+        + max(
+            0,
+            promotion_policy.limit_down_protected - observation_slots,
+        ),
+    )
+    rising_owner_available = max(
+        0, rising_owner_limit - owner_promoted_counts[RISING_MISSED]
+    )
+    active_market_candidate_codes = _active_scanner_watching_codes(
+        db,
+        {str(target.get("Code") or "").strip()[:6] for target in market_gainer_targets},
+    )
+    active_market_candidate_owner_by_code = _active_scanner_watching_owner_by_code(
+        db, active_market_candidate_codes
+    )
+    active_market_source_upgrade_codes = (
+        active_market_candidate_codes - active_market_gainer_codes
+    )
+    active_rising_market_source_upgrade_codes = {
+        code
+        for code in active_market_source_upgrade_codes
+        if active_market_candidate_owner_by_code.get(code) == RISING_MISSED
+    }
+    active_other_market_source_upgrade_codes = (
+        active_market_source_upgrade_codes - active_rising_market_source_upgrade_codes
+    )
+    source_upgrade_capacity = len(active_market_source_upgrade_codes)
+    new_market_candidate_count = max(
+        0, len(market_gainer_targets) - len(active_market_candidate_codes)
+    )
+
+    def market_gainer_replacement_count(*, available_open_slots, owner_available):
+        desired_promotions = min(len(market_gainer_targets), market_gainer_shortfall)
+        no_owner_or_global_slot_needed = min(
+            desired_promotions,
+            len(active_rising_market_source_upgrade_codes),
+        )
+        remaining_desired = max(0, desired_promotions - no_owner_or_global_slot_needed)
+        owner_capacity_targets = min(
+            remaining_desired,
+            len(active_other_market_source_upgrade_codes)
+            + min(new_market_candidate_count, max(0, available_open_slots)),
+        )
+        no_replacement_capacity = no_owner_or_global_slot_needed + min(
+            max(0, owner_available), owner_capacity_targets
+        )
+        return max(0, desired_promotions - no_replacement_capacity)
+
+    market_gainer_replacement_needed = market_gainer_replacement_count(
+        available_open_slots=max(0, max_active - active_count - observation_slots),
+        owner_available=rising_owner_available,
+    )
+    potential_market_gainer_replacement_codes = (
+        _select_non_market_gainer_rising_watching_codes(
+            db,
+            max_to_select=market_gainer_replacement_needed,
+            protected_codes={
+                str(target.get("Code") or "").strip()[:6]
+                for target in market_gainer_targets
+            },
+        )
+        if market_gainer_replacement_needed > 0
+        else []
+    )
     low_rebound_targets = [
         target
         for target in ranked_targets
@@ -3200,11 +3710,6 @@ def promote_candidates(
         0, low_rebound_active_floor - active_low_rebound_count
     )
     if low_rebound_candidates_present and low_rebound_floor_shortfall > 0:
-        observation_slots = (
-            limit_down_manager.active_slot_count()
-            if limit_down_manager is not None
-            else 0
-        )
         open_slots = max(0, max_active - active_count - observation_slots)
         replacement_needed = max(0, low_rebound_floor_shortfall - open_slots)
         replacement_needed = min(
@@ -3216,7 +3721,11 @@ def promote_candidates(
             db,
             now_ts,
             max_to_expire=replacement_needed,
-            protected_codes=protected_low_rebound_codes,
+            protected_codes=(
+                protected_low_rebound_codes
+                | active_market_gainer_codes
+                | set(potential_market_gainer_replacement_codes)
+            ),
         )
         if expired_for_low_rebound:
             active_count = max(0, active_count - len(expired_for_low_rebound))
@@ -3234,15 +3743,26 @@ def promote_candidates(
                 f"codes={','.join(code for code in expired_for_low_rebound if code)} "
                 f"floor={low_rebound_active_floor} active_low_rebound={active_low_rebound_count}"
             )
+    owner_promoted_counts = _active_scanner_watching_owner_counts(db)
     max_new_limit = max(0, int(max_new_codes or 0))
-    observation_slots = (
-        limit_down_manager.active_slot_count() if limit_down_manager is not None else 0
-    )
     open_slots = max(0, max_active - active_count - observation_slots)
+    rising_owner_available = max(
+        0, rising_owner_limit - owner_promoted_counts[RISING_MISSED]
+    )
+    market_gainer_replacement_needed = min(
+        len(potential_market_gainer_replacement_codes),
+        market_gainer_replacement_count(
+            available_open_slots=open_slots,
+            owner_available=rising_owner_available,
+        ),
+    )
+    market_gainer_replacement_codes = list(
+        potential_market_gainer_replacement_codes[:market_gainer_replacement_needed]
+    )
     replacement_probe_slots = 0
     replacement_probe_mode = False
     if (
-        open_slots == 0
+        open_slots + len(market_gainer_replacement_codes) + source_upgrade_capacity == 0
         and watch_budget_enabled
         and any(
             target.get("ScannerWatchBudgetOwner") in {OPENING_ROTATION, RISING_MISSED}
@@ -3254,7 +3774,10 @@ def promote_candidates(
         ranked_targets = ranked_targets[:replacement_probe_slots]
     remaining_slots = min(
         max_new_limit,
-        open_slots + replacement_probe_slots,
+        open_slots
+        + len(market_gainer_replacement_codes)
+        + source_upgrade_capacity
+        + replacement_probe_slots,
     )
     if remaining_slots <= 0:
         print(
@@ -3275,11 +3798,8 @@ def promote_candidates(
     )
     low_rebound_promoted_count = 0
     general_promoted_count = 0
-    owner_promoted_counts = _active_scanner_watching_owner_counts(db)
-    promotion_policy = watch_budget_limits(
-        max_active,
-        opening_window_active=True,
-    )
+    market_gainer_promoted_count = 0
+    open_slot_promotions_remaining = open_slots
 
     for target in ranked_targets:
         code = target["Code"]
@@ -3299,6 +3819,13 @@ def promote_candidates(
         ):
             continue
         watch_owner = target.get("ScannerWatchBudgetOwner") or GENERAL_SCALPING
+        is_market_gainer_target = MARKET_GAINER_SOURCE in set(_source_signature(target))
+        if (
+            is_market_gainer_target
+            and market_gainer_active_count + market_gainer_promoted_count
+            >= market_gainer_reserved_slots
+        ):
+            continue
         if replacement_probe_mode and watch_owner == GENERAL_SCALPING:
             continue
         if watch_owner == GENERAL_SCALPING:
@@ -3321,7 +3848,12 @@ def promote_candidates(
                     promotion_policy.limit_down_protected - observation_slots,
                 ),
             )
-        pre_filter_reason = _scanner_candidate_pre_filter_reason(target)
+        market_gainer_cached = market_gainer_precheck.get(id(target))
+        pre_filter_reason = (
+            market_gainer_cached["pre_filter_reason"]
+            if market_gainer_cached is not None
+            else _scanner_candidate_pre_filter_reason(target)
+        )
         if pre_filter_reason:
             source_guard = {
                 "blocked": True,
@@ -3343,12 +3875,21 @@ def promote_candidates(
             )
             _remember_guard_block(recent_picks, target, now_ts, pre_filter_reason)
             continue
-        if not _should_promote_candidate(
-            target, recent_picks, now_ts, reentry_cooldown_sec
-        ):
+        should_promote = (
+            market_gainer_cached["should_promote"]
+            if market_gainer_cached is not None
+            else _should_promote_candidate(
+                target, recent_picks, now_ts, reentry_cooldown_sec
+            )
+        )
+        if not should_promote:
             continue
 
-        source_guard = _scanner_real_source_guard_decision(target, recent_picks, now_ts)
+        source_guard = (
+            market_gainer_cached["source_guard"]
+            if market_gainer_cached is not None
+            else _scanner_real_source_guard_decision(target, recent_picks, now_ts)
+        )
         if source_guard.get("blocked"):
             _log_scanner_candidate_event(
                 "scalping_scanner_candidate_observed",
@@ -3386,9 +3927,14 @@ def promote_candidates(
             continue
 
         curr_p = float(target.get("Price", 0))
-        if not kiwoom_utils.is_valid_stock(
-            code, target["Name"], token=token, current_price=curr_p
-        ):
+        valid_stock = (
+            market_gainer_cached["valid_stock"]
+            if market_gainer_cached is not None
+            else kiwoom_utils.is_valid_stock(
+                code, target["Name"], token=token, current_price=curr_p
+            )
+        )
+        if not valid_stock:
             source_guard = {
                 "blocked": True,
                 "reason": "invalid_stock_filter",
@@ -3410,7 +3956,11 @@ def promote_candidates(
             _remember_guard_block(recent_picks, target, now_ts, "invalid_stock_filter")
             continue
 
-        identity_decision = _scanner_candidate_identity_decision(db, target)
+        identity_decision = (
+            market_gainer_cached["identity_decision"]
+            if market_gainer_cached is not None
+            else _scanner_candidate_identity_decision(db, target)
+        )
         if identity_decision.get("blocked"):
             source_guard = {
                 **source_guard,
@@ -3452,10 +4002,16 @@ def promote_candidates(
             },
         }
 
+        active_target_owner = active_market_candidate_owner_by_code.get(code)
+        market_gainer_replacement_available = bool(
+            is_market_gainer_target and market_gainer_replacement_codes
+        )
         if (
             watch_budget_enabled
             and not replacement_probe_mode
             and owner_promoted_counts[watch_owner] >= owner_limit
+            and active_target_owner != watch_owner
+            and not market_gainer_replacement_available
         ):
             continue
 
@@ -3479,6 +4035,12 @@ def promote_candidates(
             "scanner_low_rebound_active_floor": low_rebound_active_floor,
             "scanner_low_rebound_active_count": active_low_rebound_count,
             "scanner_low_rebound_floor_shortfall": low_rebound_floor_shortfall,
+            "scanner_market_gainer_reserved_slots": market_gainer_reserved_slots,
+            "scanner_market_gainer_active_count": market_gainer_active_count,
+            "scanner_market_gainer_reserved_promotion": is_market_gainer_target,
+            "scanner_market_gainer_reservation_policy": (
+                "six_within_rising_guaranteed_no_global_cap_expansion"
+            ),
             "scanner_watch_budget_owner": watch_owner,
             "scanner_watch_budget_owner_limit": owner_limit,
             "scanner_watch_budget_total_limit": remaining_slots,
@@ -3486,6 +4048,11 @@ def promote_candidates(
         runtime_target_payload = _scanner_runtime_target_payload(
             target, source_guard, record_id=None, now_ts=now_ts
         )
+        replacement_code_used = ""
+        record_was_active = False
+        record_previous_owner = ""
+        used_open_slot = False
+        capacity_unavailable = False
         try:
             with db.get_session() as session:
                 today_date = datetime.now().date()
@@ -3498,36 +4065,122 @@ def promote_candidates(
                     position_tag="SCANNER",
                 )
 
-                if record:
-                    record.stock_name = target["Name"]
-                    if record.status in ("WATCHING", "COMPLETED", "EXPIRED"):
-                        record.strategy = "SCALPING"
-                        record.buy_price = curr_p
-                        record.entry_armed_at_epoch = now_ts
-                        record.status = "WATCHING"
-                        record.position_tag = "SCANNER"
-                else:
-                    new_record = RecommendationHistory(
-                        rec_date=today_date,
-                        stock_code=code,
-                        stock_name=target["Name"],
-                        buy_price=curr_p,
-                        trade_type="SCALP",
-                        strategy="SCALPING",
-                        status="WATCHING",
-                        position_tag="SCANNER",
-                        entry_armed_at_epoch=now_ts,
+                record_was_active = bool(
+                    record is not None
+                    and getattr(record, "status", None) == "WATCHING"
+                    and getattr(record, "buy_time", None) is None
+                    and int(getattr(record, "buy_qty", 0) or 0) == 0
+                )
+                if record_was_active:
+                    record_previous_owner = normalize_watch_budget_owner(
+                        getattr(record, "scanner_watch_budget_owner", ""),
+                        default=RISING_MISSED,
                     )
-                    session.add(new_record)
-                    record = new_record
+                needs_owner_slot = (
+                    not record_was_active or record_previous_owner != watch_owner
+                )
+                owner_replacement_required = bool(
+                    watch_budget_enabled
+                    and not replacement_probe_mode
+                    and needs_owner_slot
+                    and owner_promoted_counts[watch_owner] >= owner_limit
+                )
+                global_replacement_required = bool(
+                    not replacement_probe_mode
+                    and not record_was_active
+                    and open_slot_promotions_remaining <= 0
+                )
+                replacement_required = (
+                    owner_replacement_required or global_replacement_required
+                )
+                if replacement_required and is_market_gainer_target:
+                    for replacement_code in market_gainer_replacement_codes:
+                        if replacement_code == code:
+                            continue
+                        if _expire_scanner_watching_code_in_session(
+                            session, replacement_code
+                        ):
+                            replacement_code_used = replacement_code
+                            break
+                if replacement_required and not replacement_code_used:
+                    capacity_unavailable = True
 
-                _persist_scanner_promotion_provenance(record, runtime_target_payload)
-                if hasattr(session, "flush"):
-                    session.flush()
-                record_id = getattr(record, "id", None)
+                if not capacity_unavailable:
+                    if (
+                        not record_was_active
+                        and not replacement_code_used
+                        and open_slot_promotions_remaining > 0
+                    ):
+                        used_open_slot = True
+                    source_guard = {
+                        **source_guard,
+                        "scanner_market_gainer_atomic_swap": bool(
+                            replacement_code_used
+                        ),
+                        "scanner_market_gainer_replaced_code": replacement_code_used,
+                    }
+                    runtime_target_payload["scanner_market_gainer_atomic_swap"] = bool(
+                        replacement_code_used
+                    )
+                    runtime_target_payload["scanner_market_gainer_replaced_code"] = (
+                        replacement_code_used
+                    )
+                    if record:
+                        record.stock_name = target["Name"]
+                        if record.status in ("WATCHING", "COMPLETED", "EXPIRED"):
+                            record.strategy = "SCALPING"
+                            record.buy_price = curr_p
+                            record.entry_armed_at_epoch = now_ts
+                            record.status = "WATCHING"
+                            record.position_tag = "SCANNER"
+                    else:
+                        new_record = RecommendationHistory(
+                            rec_date=today_date,
+                            stock_code=code,
+                            stock_name=target["Name"],
+                            buy_price=curr_p,
+                            trade_type="SCALP",
+                            strategy="SCALPING",
+                            status="WATCHING",
+                            position_tag="SCANNER",
+                            entry_armed_at_epoch=now_ts,
+                        )
+                        session.add(new_record)
+                        record = new_record
+
+                    _persist_scanner_promotion_provenance(
+                        record, runtime_target_payload
+                    )
+                    if hasattr(session, "flush"):
+                        session.flush()
+                    record_id = getattr(record, "id", None)
         except Exception as e:
             log_error(f"⚠️ DB 저장 실패 ({code}): {e}")
             continue
+        if capacity_unavailable:
+            log_info(
+                "[SCALPING_SCANNER_MARKET_GAINER_CAPACITY_SKIP] "
+                f"code={code} owner={watch_owner} "
+                "reason=atomic_replacement_unavailable"
+            )
+            continue
+
+        if replacement_code_used:
+            market_gainer_replacement_codes.remove(replacement_code_used)
+            event_bus.publish(
+                "COMMAND_WS_UNREG",
+                {
+                    "codes": [replacement_code_used],
+                    "source": "scalping_scanner_market_gainer_reserve_replace",
+                    "reason": "market_gainer_reserved_slot_atomic_swap",
+                },
+            )
+            log_info(
+                "[SCALPING_SCANNER_MARKET_GAINER_ATOMIC_SWAP] "
+                f"expired={replacement_code_used} promoted={code}"
+            )
+        elif used_open_slot:
+            open_slot_promotions_remaining = max(0, open_slot_promotions_remaining - 1)
 
         if bool(
             getattr(TRADING_RULES, "SCALP_SCANNER_REAL_SOURCE_GUARD_ENABLED", False)
@@ -3547,7 +4200,21 @@ def promote_candidates(
             )
         _remember_pick(recent_picks, target, now_ts)
         new_codes_found.append(code)
-        owner_promoted_counts[watch_owner] += 1
+        if replacement_code_used:
+            owner_promoted_counts[RISING_MISSED] = max(
+                0, owner_promoted_counts[RISING_MISSED] - 1
+            )
+        if record_was_active:
+            if record_previous_owner != watch_owner:
+                owner_promoted_counts[record_previous_owner] = max(
+                    0, owner_promoted_counts[record_previous_owner] - 1
+                )
+                owner_promoted_counts[watch_owner] += 1
+        else:
+            owner_promoted_counts[watch_owner] += 1
+        active_market_candidate_owner_by_code[code] = watch_owner
+        if is_market_gainer_target:
+            market_gainer_promoted_count += 1
         if uses_low_rebound_reserved_slot:
             low_rebound_promoted_count += 1
         else:
@@ -3624,6 +4291,30 @@ def _annotate_source_rank(raw_targets, *, prefix, sort_type):
         item[f"{prefix}SortType"] = sort_type
         annotated.append(item)
     return annotated
+
+
+def _annotate_market_gainer_targets(raw_targets, *, stex_tp):
+    venue = "NXT" if str(stex_tp) == "2" else "KRX"
+    targets = []
+    for index, raw_target in enumerate(raw_targets or [], start=1):
+        target = dict(raw_target or {})
+        flu_rate = _safe_float(target.get("ChangeRate", target.get("FluRate")))
+        if flu_rate <= 0:
+            continue
+        target.update(
+            {
+                "FluRate": flu_rate,
+                "MarketGainerFluRate": flu_rate,
+                "MarketGainerRank": index,
+                "MarketGainerVolume": _safe_positive_int(target.get("Volume")),
+                "MarketGainerStExTp": str(stex_tp),
+                "MarketGainerVenue": venue,
+                "ScannerWatchBudgetOwner": RISING_MISSED,
+                "Source": MARKET_GAINER_SOURCE,
+            }
+        )
+        targets.append(target)
+    return targets
 
 
 def _annotate_volume_surge_rank(raw_targets):
@@ -4133,6 +4824,34 @@ def run_scalper_iteration(
 ):
     if limit_down_manager is not None and not prewarm_only:
         limit_down_manager.reconcile(active_codes=_active_scalping_codes(db))
+    market_gainer_targets = []
+    if _market_gainer_source_enabled():
+        market_gainer_stex_tp = _market_gainer_stex_tp()
+        if market_gainer_stex_tp in {"1", "2"}:
+            market_gainer_targets = _fetch_scan_source(
+                "ka10027 전일대비등락률상위",
+                kiwoom_utils.get_top_fluctuation_ka10027,
+                token,
+                mrkt_tp="000",
+                trde_qty_cnd="0010",
+                limit=_market_gainer_fetch_limit(),
+                stex_tp=market_gainer_stex_tp,
+                sort_tp="1",
+                stk_cnd="4",
+                crd_cnd="0",
+                updown_incls="1",
+                pric_cnd="8",
+                trde_prica_cnd="10",
+            )
+            market_gainer_targets = _annotate_market_gainer_targets(
+                market_gainer_targets,
+                stex_tp=market_gainer_stex_tp,
+            )
+        else:
+            log_info(
+                "[SCALPING_SCANNER_MARKET_GAINER_SKIP] "
+                "reason=unsupported_session_no_venue_route"
+            )
     realtime_rank_targets = _fetch_scan_source(
         "ka00198 실시간종목조회순위(30초)",
         kiwoom_utils.get_realtime_item_rank_ka00198,
@@ -4240,6 +4959,7 @@ def run_scalper_iteration(
         value_targets=value_targets,
         vi_targets=vi_targets,
         low_rebound_targets=low_rebound_targets,
+        market_gainer_targets=market_gainer_targets,
     )
     ranked_targets = rank_candidates(candidate_pool)
     if prewarm_only:

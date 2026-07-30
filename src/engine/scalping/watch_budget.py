@@ -17,6 +17,7 @@ GENERAL_SCALPING = "general_scalping"
 OPENING_ROTATION = "opening_rotation"
 RISING_MISSED = "rising_missed"
 LIMIT_DOWN_ROTATION = "limit_down_rotation"
+MARKET_GAINER_SOURCE = "PREV_CLOSE_GAINER"
 VALID_OWNERS = frozenset({GENERAL_SCALPING, OPENING_ROTATION, RISING_MISSED})
 
 PRIMARY_RISING_SOURCES = frozenset(
@@ -25,6 +26,7 @@ PRIMARY_RISING_SOURCES = frozenset(
         "PRICE_JUMP_START",
         "VOLUME_SURGE_POSITIVE",
         "BID_IMBALANCE_SURGE",
+        MARKET_GAINER_SOURCE,
     }
 )
 RISING_LINEAGE_SOURCES = frozenset({"LOW_REBOUND_RISING_MISSED"})
@@ -183,6 +185,30 @@ def owner_allowances(
             policy.rising_guaranteed + unused_opening + unused_limit_down,
         ),
     }
+
+
+def rising_source_reservation(
+    total: int,
+    *,
+    requested_slots: int,
+    opening_window_active: bool,
+    limit_down_enabled: bool | None = None,
+) -> int:
+    """Clamp a source sub-allocation to the guaranteed rising budget.
+
+    The reservation never expands the global WATCHING cap and never borrows
+    protected general/opening/limit-down capacity.
+    """
+
+    policy = limits(
+        total,
+        opening_window_active=opening_window_active,
+        limit_down_enabled=limit_down_enabled,
+    )
+    return min(
+        policy.rising_guaranteed,
+        max(0, int(requested_slots or 0)),
+    )
 
 
 def slot_type(
