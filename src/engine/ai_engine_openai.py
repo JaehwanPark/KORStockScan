@@ -1727,6 +1727,10 @@ class GPTSniperEngine:
                 "decision_quality_contract_status": "semantic_rejected",
                 "decision_quality_contract_errors": contract_errors,
                 "decision_quality_live_adapter": "decision_quality_v2_7_entry_v1",
+                "decision_quality_response_schema": "decision_quality_v2_7_entry",
+                "decision_quality_score_semantics": (
+                    "fail_closed_not_model_quality_score"
+                ),
             }
 
         action = str(payload.get("action") or "DROP").upper()
@@ -1749,6 +1753,10 @@ class GPTSniperEngine:
             "decision_quality_contract_errors": [],
             "decision_quality_live_adapter": "decision_quality_v2_7_entry_v1",
             "decision_quality_model_confidence": confidence,
+            "decision_quality_response_schema": "decision_quality_v2_7_entry",
+            "decision_quality_score_semantics": (
+                "confidence_clamped_to_legacy_action_band"
+            ),
         }
 
     def _normalize_scalping_action_schema(self, result, *, prompt_type):
@@ -5923,8 +5931,13 @@ class GPTSniperEngine:
                     TRADING_RULES, "OPENAI_ANALYZE_TARGET_HOT_INPUT_ENABLED", True
                 )
             )
-            and not bool(
-                getattr(TRADING_RULES, "OPENAI_ENTRY_SCREEN_V2_INPUT_ENABLED", False)
+            and (
+                decision_quality_v2_7_selected
+                or not bool(
+                    getattr(
+                        TRADING_RULES, "OPENAI_ENTRY_SCREEN_V2_INPUT_ENABLED", False
+                    )
+                )
             )
         )
         is_scalping_entry_call = (
@@ -5940,29 +5953,31 @@ class GPTSniperEngine:
         else:
             input_contract_fields = {
                 "ai_input_schema": (
-                    "entry_screen_v2"
-                    if bool(
-                        getattr(
-                            TRADING_RULES, "OPENAI_ENTRY_SCREEN_V2_INPUT_ENABLED", False
-                        )
-                    )
+                    "decision_quality_v2_7_entry_input"
+                    if decision_quality_v2_7_selected
                     else (
-                        (
-                            "decision_quality_v2_7_entry"
-                            if decision_quality_v2_7_selected
-                            else "entry_screen_hot_v1"
-                        )
-                        if use_hot_entry_input
-                        else (
-                            "entry_screen_compact_v1"
-                            if bool(
-                                getattr(
-                                    TRADING_RULES,
-                                    "OPENAI_SCALPING_COMPACT_INPUT_ENABLED",
-                                    True,
-                                )
+                        "entry_screen_v2"
+                        if bool(
+                            getattr(
+                                TRADING_RULES,
+                                "OPENAI_ENTRY_SCREEN_V2_INPUT_ENABLED",
+                                False,
                             )
-                            else "entry_screen_legacy_text_v1"
+                        )
+                        else (
+                            "entry_screen_hot_v1"
+                            if use_hot_entry_input
+                            else (
+                                "entry_screen_compact_v1"
+                                if bool(
+                                    getattr(
+                                        TRADING_RULES,
+                                        "OPENAI_SCALPING_COMPACT_INPUT_ENABLED",
+                                        True,
+                                    )
+                                )
+                                else "entry_screen_legacy_text_v1"
+                            )
                         )
                     )
                 ),
@@ -5970,11 +5985,15 @@ class GPTSniperEngine:
                     "structured_json"
                     if bool(
                         getattr(
-                            TRADING_RULES, "OPENAI_ENTRY_SCREEN_V2_INPUT_ENABLED", False
+                            TRADING_RULES,
+                            "OPENAI_ENTRY_SCREEN_V2_INPUT_ENABLED",
+                            False,
                         )
                         or use_hot_entry_input
                         or getattr(
-                            TRADING_RULES, "OPENAI_SCALPING_COMPACT_INPUT_ENABLED", True
+                            TRADING_RULES,
+                            "OPENAI_SCALPING_COMPACT_INPUT_ENABLED",
+                            True,
                         )
                     )
                     else "plain_text"
@@ -6019,7 +6038,7 @@ class GPTSniperEngine:
         candle_preflight = ai_input_preflight(candle_context)
         if (
             is_scalping_entry_call
-            and runtime_preflight_required()
+            and (runtime_preflight_required() or decision_quality_v2_7_selected)
             and not bool(candle_preflight.get("allowed", False))
         ):
             return self._annotate_analysis_result(
@@ -6305,31 +6324,31 @@ class GPTSniperEngine:
                 input_contract_fields = self._resolve_ai_input_contract_fields(
                     formatted_data,
                     default_schema=(
-                        "entry_screen_v2"
-                        if bool(
-                            getattr(
-                                TRADING_RULES,
-                                "OPENAI_ENTRY_SCREEN_V2_INPUT_ENABLED",
-                                False,
-                            )
-                        )
+                        "decision_quality_v2_7_entry_input"
+                        if decision_quality_v2_7_selected
                         else (
-                            (
-                                "decision_quality_v2_7_entry"
-                                if decision_quality_v2_7_selected
-                                else "entry_screen_hot_v1"
-                            )
-                            if use_hot_entry_input
-                            else (
-                                "entry_screen_compact_v1"
-                                if bool(
-                                    getattr(
-                                        TRADING_RULES,
-                                        "OPENAI_SCALPING_COMPACT_INPUT_ENABLED",
-                                        True,
-                                    )
+                            "entry_screen_v2"
+                            if bool(
+                                getattr(
+                                    TRADING_RULES,
+                                    "OPENAI_ENTRY_SCREEN_V2_INPUT_ENABLED",
+                                    False,
                                 )
-                                else "entry_screen_legacy_text_v1"
+                            )
+                            else (
+                                "entry_screen_hot_v1"
+                                if use_hot_entry_input
+                                else (
+                                    "entry_screen_compact_v1"
+                                    if bool(
+                                        getattr(
+                                            TRADING_RULES,
+                                            "OPENAI_SCALPING_COMPACT_INPUT_ENABLED",
+                                            True,
+                                        )
+                                    )
+                                    else "entry_screen_legacy_text_v1"
+                                )
                             )
                         )
                     ),

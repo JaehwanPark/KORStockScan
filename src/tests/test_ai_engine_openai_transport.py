@@ -271,6 +271,46 @@ def _sample_candles():
     ]
 
 
+def _allowed_entry_candle_context():
+    return {
+        "schema": "entry_candle_context_v1",
+        "completed_bar_count": 1,
+        "bars": [
+            {
+                "time": "2026-07-30T09:00:00+09:00",
+                "open": 10080,
+                "high": 10120,
+                "low": 10070,
+                "close": 10100,
+                "volume": 1200,
+                "forming": False,
+            }
+        ],
+        "structure": {
+            "returns_pct": {"1": 0.1, "3": 0.2, "5": -0.1, "10": -0.2},
+            "slopes_pct_per_bar": {"1": 0.1, "3": 0.1, "5": -0.1, "10": -0.1},
+            "forming_bar_excluded": True,
+        },
+        "source_quality": {"status": "pass"},
+        "ai_market_snapshot_v1": {
+            "schema": "ai_market_snapshot_v1",
+            "snapshot_id": "aims-v27-test",
+            "stock_code": "005930",
+            "effective_venue": "KRX",
+            "session_bucket": "krx_regular",
+            "ai_input_preflight_v1": {
+                "schema": "ai_input_preflight_v1",
+                "allowed": True,
+                "source_allowed": True,
+                "status": "pass",
+                "blockers": [],
+                "missing_sources": [],
+                "venue_consistent": True,
+            },
+        },
+    }
+
+
 def _entry_price_compaction_sample(idx):
     base = 10000 + (idx % 37) * 120
     best_bid = base - (idx % 3) * 5
@@ -2670,7 +2710,7 @@ def test_analyze_target_operator_promotes_decision_quality_v2_7(monkeypatch):
             openai_module.TRADING_RULES,
             OPENAI_ANALYZE_TARGET_PROMPT_VERSION="decision_quality_v2_7",
             OPENAI_ANALYZE_TARGET_HOT_INPUT_ENABLED=False,
-            OPENAI_ENTRY_SCREEN_V2_INPUT_ENABLED=False,
+            OPENAI_ENTRY_SCREEN_V2_INPUT_ENABLED=True,
         ),
     )
 
@@ -2706,6 +2746,7 @@ def test_analyze_target_operator_promotes_decision_quality_v2_7(monkeypatch):
         _sample_candles(),
         strategy="SCALPING",
         prompt_profile="watching",
+        candle_context=_allowed_entry_candle_context(),
     )
 
     assert captured["prompt"] == decision_quality_v2_detailed_system_prompt(
@@ -2723,7 +2764,11 @@ def test_analyze_target_operator_promotes_decision_quality_v2_7(monkeypatch):
     assert result["score"] == 10
     assert result["decision_quality_contract_status"] == "pass"
     assert result["ai_prompt_version"] == DECISION_QUALITY_DETAILED_PROMPT_VERSION
-    assert result["ai_input_schema"] == "decision_quality_v2_7_entry"
+    assert result["ai_input_schema"] == "decision_quality_v2_7_entry_input"
+    assert (
+        result["decision_quality_score_semantics"]
+        == "confidence_clamped_to_legacy_action_band"
+    )
 
 
 def test_decision_quality_v2_7_semantic_failure_is_fail_closed(monkeypatch):
@@ -2767,15 +2812,56 @@ def test_decision_quality_v2_7_semantic_failure_is_fail_closed(monkeypatch):
         _sample_candles(),
         strategy="SCALPING",
         prompt_profile="watching",
+        candle_context=_allowed_entry_candle_context(),
     )
 
     assert result["action"] == "DROP"
     assert result["score"] == 0
     assert result["decision_quality_contract_status"] == "semantic_rejected"
     assert (
+        result["decision_quality_score_semantics"]
+        == "fail_closed_not_model_quality_score"
+    )
+    assert (
         "entry_buy_reward_risk_below_floor"
         in result["decision_quality_contract_errors"]
     )
+
+
+def test_decision_quality_v2_7_requires_exact_preflight_even_if_global_gate_off(
+    monkeypatch,
+):
+    engine = _build_engine()
+    called = False
+    monkeypatch.setattr(
+        openai_module,
+        "TRADING_RULES",
+        replace(
+            openai_module.TRADING_RULES,
+            OPENAI_ANALYZE_TARGET_PROMPT_VERSION="decision_quality_v2_7",
+        ),
+    )
+
+    def _unexpected_call(*args, **kwargs):
+        nonlocal called
+        called = True
+        return {}
+
+    monkeypatch.setattr(engine, "_call_openai_safe", _unexpected_call)
+    result = engine.analyze_target(
+        "테스트",
+        _sample_ws_data(),
+        _sample_ticks(),
+        _sample_candles(),
+        strategy="SCALPING",
+        prompt_profile="watching",
+    )
+
+    assert called is False
+    assert result["action"] == "DROP"
+    assert result["score"] == 0
+    assert result["ai_result_source"] == "input_preflight_blocked"
+    assert result["ai_prompt_version"] == DECISION_QUALITY_DETAILED_PROMPT_VERSION
 
 
 def test_hot_entry_keeps_observe_only_snapshot_out_of_model_but_in_trace_metadata(
