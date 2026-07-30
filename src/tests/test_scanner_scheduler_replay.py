@@ -247,6 +247,17 @@ def test_replay_separates_attach_source_ready_and_heavy_eval_handoff():
     nxt = source_ready["venues"]["NXT"]
 
     assert source_ready["runtime_effect"] is False
+    assert source_ready["external_wait_excluded_from_internal_root_cause"] is True
+    assert source_ready["internal_latency_anchor"] == (
+        "first_post_attach_entry_realtime"
+    )
+    assert source_ready["external_wait_owner"] == (
+        "external_or_subscription_state_first_post_attach_entry_realtime"
+    )
+    assert (
+        source_ready["external_wait_causal_attribution"]
+        == "not_assigned_without_server_subscription_ack"
+    )
     assert source_ready["valid_generation_count"] == 1
     assert nxt["attach_to_first_entry_realtime_p95_sec"] == 1.0
     assert nxt["first_entry_realtime_to_heavy_eval_p95_sec"] == 7.0

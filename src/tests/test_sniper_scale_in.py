@@ -4770,6 +4770,7 @@ def test_rising_missed_retry_applies_completed_async_result_without_sync_retry(
             AssertionError("completed async result must not make the synchronous retry")
         ),
     )
+    monkeypatch.setattr(state_handlers, "LAST_AI_CALL_TIMES", {"123456": 999.0})
     monkeypatch.setattr(
         state_handlers,
         "_log_entry_pipeline",
@@ -4819,6 +4820,7 @@ def test_rising_missed_retry_applies_completed_async_result_without_sync_retry(
         == 1
     )
     assert entry_logs[-1][0] == "rising_missed_entry_ai_async_result_applied"
+    assert state_handlers.LAST_AI_CALL_TIMES["123456"] == 1001.0
 
 
 def test_rising_missed_async_preflight_block_propagates_exact_blockers(
@@ -4868,6 +4870,7 @@ def test_rising_missed_async_preflight_block_propagates_exact_blockers(
         "_log_entry_pipeline",
         lambda stock, code, stage, **fields: entry_logs.append((stage, fields)),
     )
+    monkeypatch.setattr(state_handlers, "LAST_AI_CALL_TIMES", {"123456": 999.0})
 
     stock = {
         "strategy": "SCALPING",
@@ -4924,9 +4927,83 @@ def test_rising_missed_async_preflight_block_propagates_exact_blockers(
     assert entry_logs[-1][1]["ai_input_preflight_blockers"] == (
         "current_price_stale,krx_integrated_event_venue_unproven,tape_stale"
     )
+    assert entry_logs[-1][0] == "rising_missed_entry_ai_async_result_unusable"
     assert (
-        stock["last_watching_ai_source_quality_fields"]["ai_input_preflight_blockers"]
+        entry_logs[-1][1]["decision_authority"]
+        == "scanner_async_unusable_result_observation_only"
+    )
+    assert (
+        stock["last_watching_ai_attempt_source_quality_fields"][
+            "ai_input_preflight_blockers"
+        ]
         == "current_price_stale,krx_integrated_event_venue_unproven,tape_stale"
+    )
+    assert "last_watching_ai_source_quality_fields" not in stock
+    assert state_handlers.LAST_AI_CALL_TIMES["123456"] == 999.0
+
+
+def test_scanner_entry_realtime_latency_excludes_external_first_trade_wait():
+    fields = state_handlers._scanner_entry_realtime_latency_fields(
+        {
+            "scanner_attach_epoch": 100.0,
+            "scanner_first_entry_realtime_epoch": 210.0,
+            "scanner_first_entry_realtime_type": "strength_history",
+        },
+        observed_epoch=213.5,
+        terminal="ai_dispatch",
+    )
+
+    assert fields["attach_to_first_entry_realtime_sec"] == 110.0
+    assert fields["first_entry_realtime_to_ai_dispatch_sec"] == 3.5
+    assert (
+        fields["scanner_external_wait_excluded_from_post_source_ready_latency"]
+        is True
+    )
+    assert fields["scanner_post_source_ready_latency_comparable"] is True
+    assert (
+        fields["scanner_post_source_ready_latency_anchor"]
+        == "first_post_attach_entry_realtime"
+    )
+    assert fields["scanner_external_wait_owner"] == (
+        "external_or_subscription_state_first_post_attach_entry_realtime"
+    )
+    assert (
+        fields["scanner_external_wait_causal_attribution"]
+        == "not_assigned_without_server_subscription_ack"
+    )
+
+
+def test_scanner_entry_realtime_latency_is_not_comparable_without_first_trade():
+    fields = state_handlers._scanner_entry_realtime_latency_fields(
+        {"scanner_attach_epoch": 100.0},
+        observed_epoch=105.0,
+        terminal="ai_response",
+    )
+
+    assert fields["scanner_post_source_ready_latency_comparable"] is False
+    assert (
+        fields["scanner_post_source_ready_not_comparable_reason"]
+        == "first_post_attach_entry_realtime_missing"
+    )
+    assert fields["first_entry_realtime_to_ai_response_sec"].startswith(
+        "not_available_"
+    )
+
+
+def test_scanner_entry_realtime_latency_rejects_timestamp_reversal():
+    fields = state_handlers._scanner_entry_realtime_latency_fields(
+        {
+            "scanner_attach_epoch": 100.0,
+            "scanner_first_entry_realtime_epoch": 110.0,
+        },
+        observed_epoch=109.0,
+        terminal="ai_dispatch",
+    )
+
+    assert fields["scanner_post_source_ready_latency_comparable"] is False
+    assert (
+        fields["scanner_post_source_ready_not_comparable_reason"]
+        == "ai_dispatch_before_first_entry_realtime"
     )
 
 

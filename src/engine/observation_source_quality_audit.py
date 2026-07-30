@@ -2618,6 +2618,7 @@ def _reviewed_unknown_reason_for_stage_field(
             "pre_submit_entry_ai_authority_guard_block",
             "rising_missed_async_commit_phase",
             "rising_missed_entry_ai_async_result_applied",
+            "rising_missed_entry_ai_async_result_unusable",
             "rising_missed_one_share_entry",
             "rising_missed_tp1_candidate_blocked",
             "rising_missed_tp1_candidate_deferred",

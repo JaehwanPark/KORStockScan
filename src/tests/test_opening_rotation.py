@@ -101,6 +101,80 @@ def test_opening_rotation_upstream_block_records_unknown_day_change(monkeypatch)
     assert fields["broker_order_forbidden"] is True
 
 
+def test_opening_rotation_upstream_block_dedupes_same_state_but_logs_change(
+    monkeypatch,
+):
+    emitted = []
+    stock = {
+        "id": 41,
+        "name": "테스트",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+    }
+    monkeypatch.setattr(
+        handlers,
+        "_log_entry_pipeline",
+        lambda *args, **fields: emitted.append((args[2], fields)),
+    )
+    started_at = datetime(2026, 7, 21, 9, 20).timestamp()
+
+    assert handlers._maybe_log_opening_rotation_upstream_blocked(
+        stock,
+        "005930",
+        skip_reason="scanner_scheduler_generation_warm_parked",
+        now_ts=started_at,
+        ws_data={"fluctuation": 7.98},
+    )
+    assert not handlers._maybe_log_opening_rotation_upstream_blocked(
+        stock,
+        "005930",
+        skip_reason="scanner_scheduler_generation_warm_parked",
+        now_ts=started_at + 30.0,
+        ws_data={"fluctuation": 7.95},
+    )
+    assert handlers._maybe_log_opening_rotation_upstream_blocked(
+        stock,
+        "005930",
+        skip_reason="scanner_queue_rank_deferred",
+        now_ts=started_at + 60.0,
+        ws_data={"fluctuation": 7.95},
+    )
+    assert handlers._maybe_log_opening_rotation_upstream_blocked(
+        stock,
+        "005930",
+        skip_reason="scanner_queue_rank_deferred",
+        now_ts=started_at + 361.0,
+        ws_data={"fluctuation": 7.95},
+    )
+    assert not handlers._maybe_log_opening_rotation_upstream_blocked(
+        stock,
+        "005930",
+        skip_reason="ws_snapshot_missing_or_zero_recovered",
+        now_ts=started_at + 370.0,
+        ws_data={"fluctuation": 7.95},
+    )
+    assert handlers._maybe_log_opening_rotation_upstream_blocked(
+        stock,
+        "005930",
+        skip_reason="scanner_queue_rank_deferred",
+        now_ts=started_at + 371.0,
+        ws_data={"fluctuation": 7.95},
+    )
+
+    assert [stage for stage, _fields in emitted] == [
+        "opening_rotation_1pct_upstream_blocked",
+        "opening_rotation_1pct_upstream_blocked",
+        "opening_rotation_1pct_upstream_blocked",
+        "opening_rotation_1pct_upstream_blocked",
+    ]
+    assert all(fields["runtime_effect"] is False for _stage, fields in emitted)
+    assert all(
+        fields["actual_order_submitted"] is False for _stage, fields in emitted
+    )
+
+
 def test_opening_rotation_upstream_scope_hydrates_scanner_source(monkeypatch):
     stock = {
         "id": 42,

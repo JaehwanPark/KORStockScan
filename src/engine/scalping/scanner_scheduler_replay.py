@@ -530,6 +530,15 @@ def _summarize(
             "window_policy": "canonical_generation_attach_to_first_entry_realtime_to_heavy_eval",
             "sample_floor": "one_canonical_generation_with_source_ready_and_heavy_eval",
             "primary_decision_metric": "first_entry_realtime_to_heavy_eval_p95_sec",
+            "external_wait_metric": "attach_to_first_entry_realtime_sec",
+            "external_wait_owner": (
+                "external_or_subscription_state_first_post_attach_entry_realtime"
+            ),
+            "external_wait_causal_attribution": (
+                "not_assigned_without_server_subscription_ack"
+            ),
+            "external_wait_excluded_from_internal_root_cause": True,
+            "internal_latency_anchor": "first_post_attach_entry_realtime",
             "source_quality_gate": (
                 "canonical_attach_explicit_venue_absolute_first_entry_realtime_and_heavy_eval"
             ),

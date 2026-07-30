@@ -145,6 +145,130 @@ def test_build_report_splits_subscription_stale_from_trade_tick_quiet(tmp_path):
     )
 
 
+def test_build_report_uses_same_day_live_dashboard_snapshot_fallback(
+    tmp_path, monkeypatch
+):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-30.jsonl"
+    threshold_path = tmp_path / "threshold_events_2026-07-30.jsonl"
+    dashboard_path = tmp_path / "latest.json"
+    _write_jsonl(pipeline_path, [])
+    _write_jsonl(threshold_path, [])
+    dashboard_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "kiwoom_ws_dashboard_snapshot_v1",
+                "generated_at": "2026-07-30T12:20:00+09:00",
+                "decision_authority": "source_quality_only",
+                "runtime_effect": False,
+                "stocks": {
+                    "000101": {
+                        "last_realtime_type_ages_ms": {
+                            "0B": 120.0,
+                            "0D": 80.0,
+                        },
+                        "last_0b_age_ms": 120.0,
+                        "last_ws_market_route": "krx_nxt_integrated",
+                        "last_ws_market_suffix": "_AL",
+                    },
+                    "000202": {
+                        "last_realtime_type_ages_ms": {
+                            "0B": 45000.0,
+                            "0D": 100.0,
+                        },
+                        "last_0b_age_ms": 45000.0,
+                        "last_ws_market_route": "krx_regular",
+                        "last_ws_market_suffix": "",
+                    },
+                    "000303": {
+                        "last_realtime_type_ages_ms": {
+                            "0B": 45000.0,
+                            "0D": 41000.0,
+                        },
+                        "last_0b_age_ms": 45000.0,
+                        "last_ws_market_route": "nxt_only",
+                        "last_ws_market_suffix": "_NX",
+                    },
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "DEFAULT_DASHBOARD_SNAPSHOT_PATH", dashboard_path)
+
+    report = mod.build_report(
+        "2026-07-30",
+        pipeline_path=pipeline_path,
+        threshold_path=threshold_path,
+        generated_at="fixed",
+    )
+
+    assert report["subscription_snapshot_path"] == str(dashboard_path)
+    assert report["subscription_snapshot_provenance"] == {
+        "source": "same_day_live_dashboard_snapshot_fallback",
+        "selected": True,
+        "selection_reason": "same_day_schema_match",
+        "schema_version": "kiwoom_ws_dashboard_snapshot_v1",
+        "generated_at": "2026-07-30T12:20:00+09:00",
+        "subscription_state_available": False,
+    }
+    assert report["snapshot_summary"]["row_count"] == 3
+    assert report["snapshot_summary"]["trade_tick_quiet_count"] == 1
+    assert report["snapshot_summary"]["repair_recommended_count"] == 0
+    assert report["snapshot_summary"]["subscription_stale_like_count"] == 0
+    assert report["snapshot_summary"]["observed_stale_like_count"] == 1
+    assert report["snapshot_summary"]["registered_route_counts"] == {}
+    assert report["snapshot_summary"]["observed_market_route_counts"] == {
+        "krx_nxt_integrated": 1,
+        "krx_regular": 1,
+        "nxt_only": 1,
+    }
+    assert report["snapshot_summary"]["observed_market_suffix_counts"] == {
+        "_AL": 1,
+        "KRX": 1,
+        "_NX": 1,
+    }
+    rendered = mod._render_monitor_markdown(report)
+    assert f"- subscription_snapshot_path: `{dashboard_path}`" in rendered
+    assert "same_day_live_dashboard_snapshot_fallback" in rendered
+
+
+def test_build_report_rejects_cross_day_live_dashboard_snapshot_fallback(
+    tmp_path, monkeypatch
+):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-30.jsonl"
+    threshold_path = tmp_path / "threshold_events_2026-07-30.jsonl"
+    dashboard_path = tmp_path / "latest.json"
+    _write_jsonl(pipeline_path, [])
+    _write_jsonl(threshold_path, [])
+    dashboard_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "kiwoom_ws_dashboard_snapshot_v1",
+                "generated_at": "2026-07-29T19:59:59+09:00",
+                "stocks": {"000101": {"last_0b_age_ms": 10.0}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "DEFAULT_DASHBOARD_SNAPSHOT_PATH", dashboard_path)
+
+    report = mod.build_report(
+        "2026-07-30",
+        pipeline_path=pipeline_path,
+        threshold_path=threshold_path,
+        generated_at="fixed",
+    )
+
+    assert report["subscription_snapshot_path"] == str(dashboard_path)
+    assert report["subscription_snapshot_provenance"]["selected"] is False
+    assert (
+        report["subscription_snapshot_provenance"]["selection_reason"]
+        == "default_snapshot_target_date_mismatch"
+    )
+    assert report["snapshot_summary"]["row_count"] == 0
+
+
 def test_build_report_surfaces_provider_none_as_separate_incident(tmp_path):
     pipeline_path = tmp_path / "pipeline_events_2026-07-13.jsonl"
     threshold_path = tmp_path / "threshold_events_2026-07-13.jsonl"

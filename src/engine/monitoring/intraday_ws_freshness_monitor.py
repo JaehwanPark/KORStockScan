@@ -23,6 +23,9 @@ WORKORDER_DOC_DIR = (
 )
 PIPELINE_EVENTS_DIR = DATA_DIR / "pipeline_events"
 THRESHOLD_EVENTS_DIR = DATA_DIR / "threshold_cycle"
+DEFAULT_DASHBOARD_SNAPSHOT_PATH = (
+    DATA_DIR / "runtime" / "kiwoom_ws_snapshot" / "latest.json"
+)
 DEFAULT_STALE_SEC = 30.0
 
 FORBIDDEN_USES = [
@@ -224,13 +227,162 @@ def _counter_rows(
     ]
 
 
-def _snapshot_rows(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+def _snapshot_generated_at(snapshot: dict[str, Any]) -> datetime | None:
+    value = snapshot.get("generated_at")
+    if value:
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except ValueError:
+            parsed = None
+        if parsed is not None:
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=KST)
+            return parsed.astimezone(KST)
+    epoch = _to_float(snapshot.get("generated_at_epoch"))
+    if epoch is None:
+        return None
+    try:
+        return datetime.fromtimestamp(epoch, tz=KST)
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def _resolve_snapshot(
+    requested_path: Path | None,
+    *,
+    target_date: str,
+) -> tuple[Path | None, dict[str, Any], dict[str, Any]]:
+    explicit = requested_path is not None
+    selected_path = requested_path if explicit else DEFAULT_DASHBOARD_SNAPSHOT_PATH
+    payload = _read_json(selected_path)
+    generated_at = _snapshot_generated_at(payload)
+    provenance = {
+        "source": "explicit_subscription_snapshot" if explicit else "none",
+        "selected": False,
+        "selection_reason": "path_missing",
+        "schema_version": str(payload.get("schema_version") or "unknown"),
+        "generated_at": generated_at.isoformat() if generated_at else None,
+        "subscription_state_available": False,
+    }
+    if selected_path is None or not selected_path.exists():
+        return selected_path, {}, provenance
+    if not payload:
+        provenance["selection_reason"] = "invalid_or_empty_json"
+        return selected_path, {}, provenance
+    if explicit:
+        provenance.update(
+            {
+                "selected": True,
+                "selection_reason": "explicit_path",
+                "subscription_state_available": bool(
+                    isinstance(payload.get("rows"), list)
+                    or isinstance(payload.get("symbols"), list)
+                ),
+            }
+        )
+        return selected_path, payload, provenance
+    if str(payload.get("schema_version") or "") != "kiwoom_ws_dashboard_snapshot_v1":
+        provenance["selection_reason"] = "unsupported_default_snapshot_schema"
+        return selected_path, {}, provenance
+    if generated_at is None:
+        provenance["selection_reason"] = "default_snapshot_generated_at_missing"
+        return selected_path, {}, provenance
+    if generated_at.date().isoformat() != target_date:
+        provenance["selection_reason"] = "default_snapshot_target_date_mismatch"
+        return selected_path, {}, provenance
+    provenance.update(
+        {
+            "source": "same_day_live_dashboard_snapshot_fallback",
+            "selected": True,
+            "selection_reason": "same_day_schema_match",
+            "subscription_state_available": False,
+        }
+    )
+    return selected_path, payload, provenance
+
+
+def _dashboard_snapshot_rows(
+    snapshot: dict[str, Any], *, stale_ms: float
+) -> list[dict[str, Any]]:
+    stocks = snapshot.get("stocks")
+    if not isinstance(stocks, dict):
+        return []
+    rows: list[dict[str, Any]] = []
+    for stock_code, raw in stocks.items():
+        if not isinstance(raw, dict):
+            continue
+        ages = _dictish(raw.get("last_realtime_type_ages_ms"))
+        numeric_ages = [
+            age
+            for value in ages.values()
+            if (age := _to_float(value)) is not None
+        ]
+        last_receive_age_ms = min(numeric_ages) if numeric_ages else None
+        age_0b_ms = _to_float(raw.get("last_0b_age_ms"))
+        if age_0b_ms is None:
+            age_0b_ms = _to_float(ages.get("0B"))
+        age_0d_ms = _to_float(ages.get("0D"))
+        non_trade_fresh = any(
+            (age := _to_float(ages.get(realtime_type))) is not None
+            and age < stale_ms
+            for realtime_type in ("0D", "0w", "0F")
+        )
+        if last_receive_age_ms is None:
+            freshness_state = "no_tick"
+        elif last_receive_age_ms >= stale_ms:
+            freshness_state = "stale"
+        else:
+            freshness_state = "fresh"
+        trade_tick_quiet = bool(
+            freshness_state == "fresh"
+            and non_trade_fresh
+            and (age_0b_ms is None or age_0b_ms >= stale_ms)
+        )
+        rows.append(
+            {
+                "stock_code": str(stock_code),
+                "freshness_state": freshness_state,
+                "last_receive_age_sec": (
+                    round(last_receive_age_ms / 1000.0, 3)
+                    if last_receive_age_ms is not None
+                    else None
+                ),
+                "last_0b_age_sec": (
+                    round(age_0b_ms / 1000.0, 3)
+                    if age_0b_ms is not None
+                    else None
+                ),
+                "last_0d_age_sec": (
+                    round(age_0d_ms / 1000.0, 3)
+                    if age_0d_ms is not None
+                    else None
+                ),
+                "last_trade_cum_volume": None,
+                "trade_tick_quiet": trade_tick_quiet,
+                "repair_recommended": False,
+                "repair_reason": "dashboard_snapshot_subscription_state_unavailable",
+                "observed_market_route": str(
+                    raw.get("last_ws_market_route") or "unknown"
+                ),
+                "observed_market_suffix": str(
+                    raw.get("last_ws_market_suffix") or ""
+                ),
+                "snapshot_row_authority": "live_dashboard_observation_only",
+                "subscription_state_available": False,
+            }
+        )
+    return rows
+
+
+def _snapshot_rows(
+    snapshot: dict[str, Any], *, stale_ms: float
+) -> list[dict[str, Any]]:
     rows = snapshot.get("rows")
     if isinstance(rows, list):
         return [row for row in rows if isinstance(row, dict)]
     if isinstance(snapshot.get("symbols"), list):
         return [row for row in snapshot["symbols"] if isinstance(row, dict)]
-    return []
+    return _dashboard_snapshot_rows(snapshot, stale_ms=stale_ms)
 
 
 def _row_provider_none(row: dict[str, Any]) -> bool:
@@ -336,9 +488,13 @@ def _snapshot_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     repair_reasons: Counter = Counter()
     route_counts: Counter = Counter()
     suffix_counts: Counter = Counter()
+    observed_route_counts: Counter = Counter()
+    observed_suffix_counts: Counter = Counter()
     quiet_rows: list[dict[str, Any]] = []
     repair_rows: list[dict[str, Any]] = []
     multi_route_rows: list[dict[str, Any]] = []
+    subscription_stale_like_rows: list[dict[str, Any]] = []
+    observed_stale_like_rows: list[dict[str, Any]] = []
     quota_units = 0
     for row in rows:
         state = str(row.get("freshness_state") or "unknown")
@@ -350,26 +506,42 @@ def _snapshot_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
             route_counts[str(route)] += int(_to_float(count, 0.0) or 0)
         for suffix in _listish(row.get("registered_market_suffixes")):
             suffix_counts[str(suffix) or "KRX"] += 1
+        observed_route = str(row.get("observed_market_route") or "").strip()
+        if observed_route:
+            observed_route_counts[observed_route] += 1
+        observed_suffix = str(row.get("observed_market_suffix") or "").strip()
+        if row.get("observed_market_suffix") is not None:
+            observed_suffix_counts[observed_suffix or "KRX"] += 1
         if _boolish(row.get("multi_route_registered")):
             multi_route_rows.append(row)
         if _boolish(row.get("trade_tick_quiet")):
             quiet_rows.append(row)
         if _boolish(row.get("repair_recommended")):
             repair_rows.append(row)
+        if state in {"stale", "no_tick"}:
+            observed_stale_like_rows.append(row)
+            if row.get("subscription_state_available") is not False:
+                subscription_stale_like_rows.append(row)
     total = len(rows)
-    stale_like = int(states.get("stale", 0) + states.get("no_tick", 0))
+    stale_like = len(subscription_stale_like_rows)
     return {
         "row_count": total,
         "freshness_state_counts": dict(states),
         "repair_reason_counts": dict(repair_reasons),
         "subscription_stale_like_count": stale_like,
         "subscription_stale_like_rate_pct": _rate_pct(stale_like, total),
+        "observed_stale_like_count": len(observed_stale_like_rows),
+        "observed_stale_like_rate_pct": _rate_pct(
+            len(observed_stale_like_rows), total
+        ),
         "trade_tick_quiet_count": len(quiet_rows),
         "trade_tick_quiet_rate_pct": _rate_pct(len(quiet_rows), total),
         "repair_recommended_count": len(repair_rows),
         "registered_item_quota_units": quota_units,
         "registered_route_counts": dict(route_counts),
         "registered_market_suffix_counts": dict(suffix_counts),
+        "observed_market_route_counts": dict(observed_route_counts),
+        "observed_market_suffix_counts": dict(observed_suffix_counts),
         "multi_route_registered_count": len(multi_route_rows),
         "multi_route_registered_rate_pct": _rate_pct(len(multi_route_rows), total),
         "route_repair_policy": "remove_then_reg_required_for_route_transition",
@@ -616,8 +788,12 @@ def build_report(
                 if code:
                     symbol_counts[key][code] += 1
 
-    snapshot_payload = _read_json(subscription_snapshot_path)
-    snapshot_rows = _snapshot_rows(snapshot_payload)
+    (
+        resolved_snapshot_path,
+        snapshot_payload,
+        snapshot_provenance,
+    ) = _resolve_snapshot(subscription_snapshot_path, target_date=target_date)
+    snapshot_rows = _snapshot_rows(snapshot_payload, stale_ms=stale_ms)
     snapshot = _snapshot_summary(snapshot_rows)
 
     total_events = len(event_classes)
@@ -632,8 +808,9 @@ def build_report(
         "source_paths": {name: str(path) for name, path in paths.items()},
         "source_missing": source_missing,
         "subscription_snapshot_path": (
-            str(subscription_snapshot_path) if subscription_snapshot_path else None
+            str(resolved_snapshot_path) if resolved_snapshot_path else None
         ),
+        "subscription_snapshot_provenance": snapshot_provenance,
         "row_count_by_source": dict(row_count_by_source),
         "pipeline_counts": dict(counts),
         "pipeline_event_count": total_events,
@@ -711,6 +888,10 @@ def _render_monitor_markdown(report: dict[str, Any]) -> str:
             f"- pipeline_event_count: `{report.get('pipeline_event_count')}`",
             f"- pipeline_counts: `{report.get('pipeline_counts')}`",
             f"- pipeline_rates: `{report.get('pipeline_rates')}`",
+            "- subscription_snapshot_path: "
+            f"`{report.get('subscription_snapshot_path')}`",
+            "- subscription_snapshot_provenance: "
+            f"`{report.get('subscription_snapshot_provenance')}`",
             f"- snapshot_summary: `{report.get('snapshot_summary')}`",
             f"- source_missing: `{report.get('source_missing')}`",
             "",

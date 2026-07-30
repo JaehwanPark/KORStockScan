@@ -16736,6 +16736,7 @@ _OPENING_ROTATION_UPSTREAM_RECOVERY_MARKERS = {
     "scanner_fast_precheck_subscription_recheck_snapshot_applied",
     "ws_snapshot_missing_or_zero_recovered",
 }
+_OPENING_ROTATION_UPSTREAM_BLOCK_DEDUPE_SEC = 300.0
 
 
 def _maybe_log_opening_rotation_upstream_blocked(
@@ -16747,17 +16748,40 @@ def _maybe_log_opening_rotation_upstream_blocked(
     ws_data: dict | None,
 ) -> bool:
     if skip_reason in _OPENING_ROTATION_UPSTREAM_RECOVERY_MARKERS:
+        stock.pop("_opening_rotation_upstream_block_log_state", None)
         return False
     scope_fields = _opening_rotation_upstream_scope_fields(
         stock, ws_data, now_ts=now_ts
     )
     if not scope_fields["opening_rotation_upstream_source_scope"]:
+        stock.pop("_opening_rotation_upstream_block_log_state", None)
         return False
     if (
         scope_fields["opening_rotation_upstream_exact_candidate_known"]
         and not scope_fields["opening_rotation_upstream_exact_candidate"]
     ):
+        stock.pop("_opening_rotation_upstream_block_log_state", None)
         return False
+    signature = "|".join(
+        (
+            str(skip_reason or "unknown_skip"),
+            str(scope_fields["opening_rotation_upstream_scope_state"]),
+            str(scope_fields["opening_rotation_decision_time_bucket"]),
+        )
+    )
+    dedupe_state = stock.get("_opening_rotation_upstream_block_log_state")
+    if not isinstance(dedupe_state, dict):
+        dedupe_state = {}
+        stock["_opening_rotation_upstream_block_log_state"] = dedupe_state
+    previous_signature = str(dedupe_state.get("signature") or "")
+    previous_logged_at = _safe_float(dedupe_state.get("logged_at"), 0.0)
+    elapsed = float(now_ts) - previous_logged_at
+    if (
+        signature == previous_signature
+        and 0.0 <= elapsed < _OPENING_ROTATION_UPSTREAM_BLOCK_DEDUPE_SEC
+    ):
+        return False
+    dedupe_state.update({"signature": signature, "logged_at": float(now_ts)})
     _log_entry_pipeline(
         stock,
         code,
@@ -48979,6 +49003,88 @@ def _resolve_scanner_async_opening_rotation_context(
     return {"status": "dispatched"}
 
 
+def _scanner_entry_realtime_latency_fields(
+    stock: dict,
+    *,
+    observed_epoch: float,
+    terminal: str,
+) -> dict:
+    """Separate first entry-realtime arrival from post-source-ready latency."""
+
+    terminal_name = str(terminal or "").strip().lower()
+    if terminal_name not in {"ai_dispatch", "ai_response"}:
+        terminal_name = "unknown"
+    first_realtime_epoch = _safe_float(
+        (stock or {}).get("scanner_first_entry_realtime_epoch"),
+        0.0,
+    )
+    attach_epoch = _safe_float((stock or {}).get("scanner_attach_epoch"), 0.0)
+    first_realtime_type = str(
+        (stock or {}).get("scanner_first_entry_realtime_type") or ""
+    ).strip()
+    observed_value = _safe_float(observed_epoch, 0.0)
+    fields = {
+        "scanner_latency_boundary_contract": (
+            "attach_to_first_entry_realtime_external_then_post_source_ready_pipeline"
+        ),
+        "scanner_external_wait_owner": (
+            "external_or_subscription_state_first_post_attach_entry_realtime"
+        ),
+        "scanner_external_wait_causal_attribution": (
+            "not_assigned_without_server_subscription_ack"
+        ),
+        "scanner_external_wait_excluded_from_post_source_ready_latency": True,
+        "scanner_post_source_ready_latency_anchor": (
+            "first_post_attach_entry_realtime"
+        ),
+        "scanner_post_source_ready_latency_terminal": terminal_name,
+    }
+    if first_realtime_epoch <= 0:
+        not_comparable_reason = "first_post_attach_entry_realtime_missing"
+    elif attach_epoch > 0 and first_realtime_epoch < attach_epoch:
+        not_comparable_reason = "first_entry_realtime_before_attach"
+    elif observed_value <= 0:
+        not_comparable_reason = f"{terminal_name}_epoch_missing"
+    elif observed_value < first_realtime_epoch:
+        not_comparable_reason = f"{terminal_name}_before_first_entry_realtime"
+    else:
+        not_comparable_reason = ""
+    if not_comparable_reason:
+        fields.update(
+            {
+                "scanner_post_source_ready_latency_comparable": False,
+                "scanner_post_source_ready_not_comparable_reason": (
+                    not_comparable_reason
+                ),
+                "attach_to_first_entry_realtime_sec": (
+                    "not_available_attach_to_first_entry_realtime_sec"
+                ),
+                f"first_entry_realtime_to_{terminal_name}_sec": (
+                    f"not_available_first_entry_realtime_to_{terminal_name}_sec"
+                ),
+            }
+        )
+        return fields
+    fields.update(
+        {
+            "scanner_post_source_ready_latency_comparable": True,
+            "scanner_post_source_ready_not_comparable_reason": "-",
+            "scanner_first_entry_realtime_epoch": f"{first_realtime_epoch:.6f}",
+            "scanner_first_entry_realtime_type": first_realtime_type or "unknown",
+            "attach_to_first_entry_realtime_sec": (
+                round(max(0.0, first_realtime_epoch - attach_epoch), 6)
+                if attach_epoch > 0
+                else "not_available_attach_to_first_entry_realtime_sec"
+            ),
+            f"first_entry_realtime_to_{terminal_name}_sec": round(
+                observed_value - first_realtime_epoch,
+                6,
+            ),
+        }
+    )
+    return fields
+
+
 def _resolve_scanner_async_entry_ai(
     stock: dict,
     code: str,
@@ -49083,6 +49189,11 @@ def _resolve_scanner_async_entry_ai(
                 )
                 if generation.promotion_epoch > 0
                 else "not_available_promotion_to_ai_response_sec"
+            ),
+            **_scanner_entry_realtime_latency_fields(
+                stock,
+                observed_epoch=result.completed_epoch,
+                terminal="ai_response",
             ),
             scanner_async_ai_snapshot_id=result_snapshot_id,
             scanner_async_ai_decision_trace_id=(
@@ -49277,7 +49388,7 @@ def _resolve_scanner_async_entry_ai(
         decision_authority="scanner_async_preparation_dispatch_only",
         window_policy="per_scanner_generation_action_timestamps",
         sample_floor="one_async_scanner_dispatch",
-        primary_decision_metric="ai_dispatch_wait_sec",
+        primary_decision_metric="first_entry_realtime_to_ai_dispatch_sec",
         source_quality_gate="canonical_generation_venue_and_snapshot_required",
         forbidden_uses=(
             "standalone_buy,broker_submit,threshold_mutation,provider_route_change,"
@@ -49294,6 +49405,11 @@ def _resolve_scanner_async_entry_ai(
             round(max(0.0, submitted_epoch - generation.promotion_epoch), 6)
             if generation.promotion_epoch > 0
             else "not_available_promotion_to_ai_dispatch_sec"
+        ),
+        **_scanner_entry_realtime_latency_fields(
+            stock,
+            observed_epoch=submitted_epoch,
+            terminal="ai_dispatch",
         ),
         scanner_async_recheck_parent_snapshot_id=(
             stock.get("_scanner_async_expired_parent_snapshot_id") or "-"
@@ -60317,6 +60433,9 @@ def _record_scanner_entry_ai_attempt(
         "last_watching_ai_attempt_trusted": trusted,
         "last_watching_ai_attempt_contract_status": contract_status or "unreported",
         "last_watching_ai_attempt_trigger_reason": trigger_reason,
+        "last_watching_ai_attempt_source_quality_fields": dict(
+            source_quality_fields or {}
+        ),
     }
     if not trusted:
         _mutate_stock_state(stock, set_fields=attempt_fields)
@@ -60562,7 +60681,9 @@ def _maybe_retry_rising_missed_entry_ai_not_evaluated(
                 source_quality_fields=source_quality_fields,
                 trigger_reason=f"{async_trigger_reason}_async_v1",
             )
-            if isinstance(LAST_AI_CALL_TIMES, dict):
+            if (provider_called or trusted_attempt) and isinstance(
+                LAST_AI_CALL_TIMES, dict
+            ):
                 LAST_AI_CALL_TIMES[code] = completed_epoch
             retry_success = trusted_attempt
             fields.update(
@@ -60628,9 +60749,17 @@ def _maybe_retry_rising_missed_entry_ai_not_evaluated(
             _log_entry_pipeline(
                 stock,
                 code,
-                "rising_missed_entry_ai_async_result_applied",
+                (
+                    "rising_missed_entry_ai_async_result_applied"
+                    if trusted_attempt
+                    else "rising_missed_entry_ai_async_result_unusable"
+                ),
                 metric_role="runtime_scheduler_latency",
-                decision_authority="scanner_async_result_apply_before_existing_entry_owner",
+                decision_authority=(
+                    "scanner_async_result_apply_before_existing_entry_owner"
+                    if trusted_attempt
+                    else "scanner_async_unusable_result_observation_only"
+                ),
                 window_policy="per_scanner_generation_action_timestamps",
                 sample_floor="one_completed_async_scanner_result",
                 primary_decision_metric="ai_response_sec",
