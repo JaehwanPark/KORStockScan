@@ -34,6 +34,115 @@ def _generation(venue="KRX"):
     )
 
 
+def test_scanner_entry_ai_attempt_preserves_latest_trusted_decision_on_preflight_block():
+    generation = _generation("KRX")
+    stock = {
+        "last_watching_ai_action": "WAIT",
+        "last_watching_ai_score": 63.0,
+        "last_watching_ai_result_source": "live",
+        "last_watching_ai_snapshot_id": "aims-trusted",
+        "last_watching_ai_decision_trace_id": "aidt-trusted",
+    }
+
+    trusted = handlers._record_scanner_entry_ai_attempt(
+        stock,
+        ai_decision={
+            "action": "DROP",
+            "score": 0,
+            "reason": "ai_input_preflight_blocked",
+            "provider_called": False,
+            "parse_ok": False,
+            "ai_decision_snapshot_id": "aims-blocked",
+            "ai_decision_trace_id": "aidt-blocked",
+        },
+        action="DROP",
+        score=0.0,
+        result_source="input_preflight_blocked",
+        completed_epoch=1001.0,
+        generation=generation,
+        decision_price=1005,
+        state_signature={"available_axes": ["quote_freshness"]},
+        source_quality_fields={"ai_result_source": "input_preflight_blocked"},
+        trigger_reason="rising_missed_entry_ai_not_evaluated_async_v1",
+    )
+
+    assert trusted is False
+    assert stock["last_watching_ai_action"] == "WAIT"
+    assert stock["last_watching_ai_score"] == 63.0
+    assert stock["last_watching_ai_snapshot_id"] == "aims-trusted"
+    assert stock["last_watching_ai_attempt_action"] == "DROP"
+    assert stock["last_watching_ai_attempt_result_source"] == (
+        "input_preflight_blocked"
+    )
+    assert stock["last_watching_ai_attempt_snapshot_id"] == "aims-blocked"
+    assert stock["last_watching_ai_attempt_trusted"] is False
+
+
+def test_scanner_entry_ai_attempt_does_not_promote_semantic_reject_live_result():
+    generation = _generation("KRX")
+    stock = {}
+
+    trusted = handlers._record_scanner_entry_ai_attempt(
+        stock,
+        ai_decision={
+            "action": "DROP",
+            "score": 0,
+            "reason": "decision_quality_v2_7_semantic_rejected",
+            "decision_quality_contract_status": "semantic_rejected",
+            "parse_ok": True,
+            "ai_decision_snapshot_id": "aims-rejected",
+            "ai_decision_trace_id": "aidt-rejected",
+        },
+        action="DROP",
+        score=0.0,
+        result_source="live",
+        completed_epoch=1002.0,
+        generation=generation,
+        decision_price=1005,
+        state_signature={"available_axes": ["quote_freshness"]},
+        source_quality_fields={"ai_result_source": "live"},
+        trigger_reason="rising_missed_entry_ai_not_evaluated_async_v1",
+    )
+
+    assert trusted is False
+    assert "last_watching_ai_action" not in stock
+    assert stock["last_watching_ai_attempt_contract_status"] == "semantic_rejected"
+    assert stock["last_watching_ai_attempt_snapshot_id"] == "aims-rejected"
+
+
+def test_scanner_entry_ai_attempt_promotes_trusted_terminal_result():
+    generation = _generation("KRX")
+    stock = {}
+
+    trusted = handlers._record_scanner_entry_ai_attempt(
+        stock,
+        ai_decision={
+            "action": "WAIT",
+            "score": 64,
+            "reason": "positive edge needs confirmation",
+            "decision_quality_contract_status": "pass",
+            "parse_ok": True,
+            "ai_decision_snapshot_id": "aims-pass",
+            "ai_decision_trace_id": "aidt-pass",
+        },
+        action="WAIT",
+        score=64.0,
+        result_source="live",
+        completed_epoch=1003.0,
+        generation=generation,
+        decision_price=1005,
+        state_signature={"available_axes": ["quote_freshness"]},
+        source_quality_fields={"ai_result_source": "live"},
+        trigger_reason="rising_missed_entry_ai_not_evaluated_async_v1",
+    )
+
+    assert trusted is True
+    assert stock["last_watching_ai_action"] == "WAIT"
+    assert stock["last_watching_ai_score"] == 64.0
+    assert stock["last_watching_ai_snapshot_id"] == "aims-pass"
+    assert stock["last_watching_ai_attempt_trusted"] is True
+
+
 def test_expired_ai_response_arms_fresh_snapshot_recheck(monkeypatch):
     monkeypatch.setenv(
         "KORSTOCKSCAN_SCANNER_ASYNC_EXPIRED_RESPONSE_RECHECK_TTL_SEC",

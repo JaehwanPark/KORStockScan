@@ -49067,12 +49067,23 @@ def _resolve_scanner_async_entry_ai(
             stock,
             code,
             "scanner_async_result_commit",
-            **dict(decision.fields),
+            **{
+                **generation.timing_fields(now_epoch=result.completed_epoch),
+                **dict(decision.fields),
+            },
             scanner_async_cache_key=cache_key,
             preparation_wait_sec=round(result.preparation_wait_sec, 6),
             preparation_service_sec=round(result.preparation_service_sec, 6),
             ai_dispatch_wait_sec=round(result.ai_dispatch_wait_sec, 6),
             ai_response_sec=round(result.ai_response_sec, 6),
+            promotion_to_ai_response_sec=(
+                round(
+                    max(0.0, result.completed_epoch - generation.promotion_epoch),
+                    6,
+                )
+                if generation.promotion_epoch > 0
+                else "not_available_promotion_to_ai_response_sec"
+            ),
             scanner_async_ai_snapshot_id=result_snapshot_id,
             scanner_async_ai_decision_trace_id=(
                 result.ai_payload.get("ai_decision_trace_id") or "-"
@@ -49261,6 +49272,7 @@ def _resolve_scanner_async_entry_ai(
         stock,
         code,
         "scanner_async_eval_dispatched",
+        **generation.timing_fields(now_epoch=submitted_epoch),
         metric_role="runtime_scheduler_latency",
         decision_authority="scanner_async_preparation_dispatch_only",
         window_policy="per_scanner_generation_action_timestamps",
@@ -49274,11 +49286,15 @@ def _resolve_scanner_async_entry_ai(
         runtime_effect=False,
         actual_order_submitted=False,
         broker_order_forbidden=True,
-        scanner_generation_id=generation.generation_id,
         scanner_async_cache_key=cache_key,
         scanner_async_dispatch_accepted=submit_decision.accepted,
         scanner_async_dispatch_reason=submit_decision.reason,
         scanner_async_deadline_epoch=round(context.deadline_epoch, 6),
+        promotion_to_ai_dispatch_sec=(
+            round(max(0.0, submitted_epoch - generation.promotion_epoch), 6)
+            if generation.promotion_epoch > 0
+            else "not_available_promotion_to_ai_dispatch_sec"
+        ),
         scanner_async_recheck_parent_snapshot_id=(
             stock.get("_scanner_async_expired_parent_snapshot_id") or "-"
         ),
@@ -60252,6 +60268,82 @@ def _recent_scanner_entry_ai_reuse_fields(
     }
 
 
+def _record_scanner_entry_ai_attempt(
+    stock: dict,
+    *,
+    ai_decision: dict,
+    action: str,
+    score: float,
+    result_source: str,
+    completed_epoch: float,
+    generation: ScannerGeneration,
+    decision_price: int,
+    state_signature: dict,
+    source_quality_fields: dict,
+    trigger_reason: str,
+) -> bool:
+    """Keep failed attempts from erasing the latest trusted entry decision."""
+
+    normalized_action = str(action or "not_evaluated").strip().upper()
+    normalized_source = str(result_source or "").strip().lower()
+    contract_status = (
+        str(ai_decision.get("decision_quality_contract_status") or "").strip().lower()
+    )
+    parse_ok = ai_decision.get("parse_ok")
+    trusted = bool(
+        normalized_source in {"live", "prior_valid"}
+        and normalized_action in {"BUY", "WAIT", "DROP"}
+        and float(score) > 0.0
+        and contract_status not in {"semantic_rejected", "schema_semantic_rejected"}
+        and parse_ok is not False
+    )
+    snapshot_id = (
+        ai_decision.get("ai_decision_snapshot_id")
+        or ai_decision.get("ai_input_snapshot_id")
+        or ai_decision.get("ai_market_snapshot_id")
+        or ""
+    )
+    decision_trace_id = ai_decision.get("ai_decision_trace_id") or ""
+    attempt_fields = {
+        "last_watching_ai_attempt_action": normalized_action,
+        "last_watching_ai_attempt_score": float(score),
+        "last_watching_ai_attempt_reason": str(ai_decision.get("reason") or "")[:240],
+        "last_watching_ai_attempt_completed_at": float(completed_epoch),
+        "last_watching_ai_attempt_result_source": normalized_source or "unknown",
+        "last_watching_ai_attempt_generation_id": generation.generation_id,
+        "last_watching_ai_attempt_decision_price": int(decision_price),
+        "last_watching_ai_attempt_snapshot_id": snapshot_id,
+        "last_watching_ai_attempt_decision_trace_id": decision_trace_id,
+        "last_watching_ai_attempt_trusted": trusted,
+        "last_watching_ai_attempt_contract_status": contract_status or "unreported",
+        "last_watching_ai_attempt_trigger_reason": trigger_reason,
+    }
+    if not trusted:
+        _mutate_stock_state(stock, set_fields=attempt_fields)
+        return False
+
+    _mutate_stock_state(
+        stock,
+        set_fields={
+            **attempt_fields,
+            "last_watching_ai_action": normalized_action,
+            "last_watching_ai_score": float(score),
+            "last_watching_ai_score_raw": float(score),
+            "last_watching_ai_reason": str(ai_decision.get("reason") or "")[:240],
+            "last_watching_ai_confirmed_at": float(completed_epoch),
+            "last_watching_ai_result_source": normalized_source,
+            "last_watching_ai_generation_id": generation.generation_id,
+            "last_watching_ai_decision_price": int(decision_price),
+            "last_watching_ai_state_signature": dict(state_signature or {}),
+            "last_watching_ai_snapshot_id": snapshot_id,
+            "last_watching_ai_decision_trace_id": decision_trace_id,
+            "last_watching_ai_source_quality_fields": dict(source_quality_fields or {}),
+            "last_watching_ai_call_trigger_reason": trigger_reason,
+        },
+    )
+    return True
+
+
 def _maybe_retry_rising_missed_entry_ai_not_evaluated(
     stock,
     code,
@@ -60457,39 +60549,22 @@ def _maybe_retry_rising_missed_entry_ai_not_evaluated(
             )
             source_quality_fields = _build_tick_source_quality_log_fields(ai_decision)
             source_quality_fields["ai_result_source"] = result_source
-            _mutate_stock_state(
+            trusted_attempt = _record_scanner_entry_ai_attempt(
                 stock,
-                set_fields={
-                    "last_watching_ai_action": action,
-                    "last_watching_ai_score": float(score),
-                    "last_watching_ai_score_raw": float(score),
-                    "last_watching_ai_reason": str(ai_decision.get("reason") or "")[
-                        :240
-                    ],
-                    "last_watching_ai_confirmed_at": completed_epoch,
-                    "last_watching_ai_result_source": result_source,
-                    "last_watching_ai_generation_id": (async_generation.generation_id),
-                    "last_watching_ai_decision_price": _safe_int(curr_price, 0),
-                    "last_watching_ai_state_signature": (
-                        _build_watching_refresh_signature(prepared_ws)
-                    ),
-                    "last_watching_ai_snapshot_id": (
-                        ai_decision.get("ai_decision_snapshot_id")
-                        or ai_decision.get("ai_input_snapshot_id")
-                        or ai_decision.get("ai_market_snapshot_id")
-                    ),
-                    "last_watching_ai_decision_trace_id": (
-                        ai_decision.get("ai_decision_trace_id") or ""
-                    ),
-                    "last_watching_ai_source_quality_fields": source_quality_fields,
-                    "last_watching_ai_call_trigger_reason": (
-                        f"{async_trigger_reason}_async_v1"
-                    ),
-                },
+                ai_decision=ai_decision,
+                action=action,
+                score=score,
+                result_source=result_source,
+                completed_epoch=completed_epoch,
+                generation=async_generation,
+                decision_price=_safe_int(curr_price, 0),
+                state_signature=_build_watching_refresh_signature(prepared_ws),
+                source_quality_fields=source_quality_fields,
+                trigger_reason=f"{async_trigger_reason}_async_v1",
             )
             if isinstance(LAST_AI_CALL_TIMES, dict):
                 LAST_AI_CALL_TIMES[code] = completed_epoch
-            retry_success = bool(result_source in {"live", "prior_valid"} and score > 0)
+            retry_success = trusted_attempt
             fields.update(
                 {
                     "rising_missed_entry_ai_retry_attempted": True,
@@ -60512,6 +60587,28 @@ def _maybe_retry_rising_missed_entry_ai_not_evaluated(
                         curr_price, 0
                     ),
                     "rising_missed_entry_ai_retry_async_status": async_status,
+                    "rising_missed_entry_ai_retry_terminal_state": (
+                        "trusted_terminal"
+                        if trusted_attempt
+                        else (
+                            "semantic_rejected"
+                            if str(
+                                ai_decision.get("decision_quality_contract_status")
+                                or ""
+                            ).lower()
+                            == "semantic_rejected"
+                            else result_source or "untrusted_terminal"
+                        )
+                    ),
+                    "rising_missed_entry_ai_retry_snapshot_id": (
+                        ai_decision.get("ai_decision_snapshot_id")
+                        or ai_decision.get("ai_input_snapshot_id")
+                        or ai_decision.get("ai_market_snapshot_id")
+                        or "-"
+                    ),
+                    "rising_missed_entry_ai_retry_decision_trace_id": (
+                        ai_decision.get("ai_decision_trace_id") or "-"
+                    ),
                     "rising_missed_entry_ai_budget_refund_eligible": (
                         budget_refund_eligible
                     ),
