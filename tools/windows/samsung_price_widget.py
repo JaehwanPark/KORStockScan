@@ -75,6 +75,7 @@ class Quote:
     minute_trend: str
     minute_chart: tuple[tuple[str, int], ...]
     market_venue: str
+    market_cohort: str
     market_session: str
 
 
@@ -102,8 +103,11 @@ def parse_quote_payload(payload: object) -> Quote:
     if trend not in {"up", "down", "flat", "unavailable"}:
         raise ValueError("invalid_minute_trend")
     market_venue = str(payload.get("market_venue") or "KRX").strip().upper()
-    if market_venue not in {"KRX", "NXT", "PREMARKET_KRX_LIKE"}:
+    if market_venue not in {"KRX", "NXT"}:
         raise ValueError("invalid_market_venue")
+    market_cohort = str(payload.get("market_cohort") or market_venue).strip().upper()
+    if market_cohort not in {"KRX", "NXT", "PREMARKET_KRX_LIKE"}:
+        raise ValueError("invalid_market_cohort")
     market_session = str(payload.get("market_session") or "unknown").strip()
     raw_chart = payload.get("minute_chart", [])
     if not isinstance(raw_chart, list):
@@ -127,6 +131,7 @@ def parse_quote_payload(payload: object) -> Quote:
         minute_trend=trend,
         minute_chart=tuple(minute_chart),
         market_venue=market_venue,
+        market_cohort=market_cohort,
         market_session=market_session,
     )
 
@@ -282,7 +287,7 @@ class SamsungPriceWidget:
             "KRX": "KRX",
             "NXT": "NXT",
             "PREMARKET_KRX_LIKE": "PRE",
-        }[quote.market_venue]
+        }[quote.market_cohort]
         self.status_label.configure(
             text=(
                 f"갱신 {datetime.now().strftime('%H:%M:%S')} · "

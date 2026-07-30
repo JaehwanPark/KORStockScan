@@ -74,8 +74,9 @@ Tkinter is required; the launcher uses `pyw.exe` so no console window is shown.
 The endpoint uses `ka10001.low_pric` for today's low and `ka10080` with
 `tic_scope: "1"` for the three completed one-minute closes. Both official
 request contracts accept `005930_NX` for NXT, while KRX uses `005930`.
-`08:00~08:50 KST` NXT responses retain the project cohort
-`PREMARKET_KRX_LIKE`; the response exposes `market_venue`, `market_session`,
-and `quote_request_code` for display provenance. The widget endpoint
-deliberately does not implement REST/WebSocket auth, REG/REMOVE, recovery,
-continuation, order, account, or bot lifecycle flows.
+`08:00~08:50 KST` responses retain `market_venue=NXT` for backward
+compatibility and expose the project cohort as
+`market_cohort=PREMARKET_KRX_LIKE`. The response also exposes
+`market_session` and `quote_request_code` for display provenance. The widget
+endpoint deliberately does not implement REST/WebSocket auth, REG/REMOVE,
+recovery, continuation, order, account, or bot lifecycle flows.

@@ -58,11 +58,7 @@ def _quote_route_for_observed_at(observed_at: datetime) -> tuple[str, str, str]:
     )
     clock = normalized.time()
     if _NXT_PREMARKET_START <= clock < _NXT_PREMARKET_END:
-        return (
-            f"{_SAMSUNG_CODE}_NX",
-            "PREMARKET_KRX_LIKE",
-            "krx_like_premarket",
-        )
+        return f"{_SAMSUNG_CODE}_NX", "NXT", "krx_like_premarket"
     if _NXT_AFTERMARKET_START <= clock < _NXT_AFTERMARKET_END:
         return f"{_SAMSUNG_CODE}_NX", "NXT", "nxt_aftermarket"
     return _SAMSUNG_CODE, "KRX", "krx_or_closed"
@@ -246,6 +242,11 @@ def get_samsung_price():
             ),
             "observed_at_kst": observed_at.isoformat(),
             "market_venue": market_venue,
+            "market_cohort": (
+                "PREMARKET_KRX_LIKE"
+                if market_session == "krx_like_premarket"
+                else market_venue
+            ),
             "market_session": market_session,
             "quote_request_code": request_code,
             "source": f"kiwoom_ka10001_{market_venue.lower()}",

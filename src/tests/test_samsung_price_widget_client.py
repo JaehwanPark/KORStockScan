@@ -73,12 +73,14 @@ def test_widget_payload_parser_preserves_premarket_venue():
             "day_low_delta_pct": 1.37,
             "minute_trend": "up",
             "minute_chart": [],
-            "market_venue": "PREMARKET_KRX_LIKE",
+            "market_venue": "NXT",
+            "market_cohort": "PREMARKET_KRX_LIKE",
             "market_session": "krx_like_premarket",
         }
     )
 
-    assert quote.market_venue == "PREMARKET_KRX_LIKE"
+    assert quote.market_venue == "NXT"
+    assert quote.market_cohort == "PREMARKET_KRX_LIKE"
     assert quote.market_session == "krx_like_premarket"
 
 

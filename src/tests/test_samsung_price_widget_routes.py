@@ -202,7 +202,8 @@ def test_samsung_widget_uses_nxt_route_during_premarket(monkeypatch):
     )
 
     assert response.status_code == 200
-    assert response.get_json()["market_venue"] == "PREMARKET_KRX_LIKE"
+    assert response.get_json()["market_venue"] == "NXT"
+    assert response.get_json()["market_cohort"] == "PREMARKET_KRX_LIKE"
     assert response.get_json()["market_session"] == "krx_like_premarket"
     assert response.get_json()["quote_request_code"] == "005930_NX"
     assert [call["json"]["stk_cd"] for call in captured] == [
@@ -217,10 +218,10 @@ def test_quote_route_uses_nxt_only_during_nxt_premarket():
     ) == ("005930", "KRX", "krx_or_closed")
     assert routes._quote_route_for_observed_at(
         datetime(2026, 7, 28, 8, 0, tzinfo=ZoneInfo("Asia/Seoul"))
-    ) == ("005930_NX", "PREMARKET_KRX_LIKE", "krx_like_premarket")
+    ) == ("005930_NX", "NXT", "krx_like_premarket")
     assert routes._quote_route_for_observed_at(
         datetime(2026, 7, 28, 8, 49, 59, tzinfo=ZoneInfo("Asia/Seoul"))
-    ) == ("005930_NX", "PREMARKET_KRX_LIKE", "krx_like_premarket")
+    ) == ("005930_NX", "NXT", "krx_like_premarket")
     assert routes._quote_route_for_observed_at(
         datetime(2026, 7, 28, 8, 50, tzinfo=ZoneInfo("Asia/Seoul"))
     ) == ("005930", "KRX", "krx_or_closed")
