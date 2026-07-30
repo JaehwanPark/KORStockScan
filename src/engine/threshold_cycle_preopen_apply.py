@@ -4243,12 +4243,24 @@ def _split_runtime_policy_audits(
     except ValueError:
         target_day = datetime.now(timezone(timedelta(hours=9))).date()
     audits: list[dict[str, Any]] = []
+    entry_split_daily_contract = _runtime_env_enabled(
+        effective_env.get("KORSTOCKSCAN_ENTRY_SPLIT_DAILY_OPERATOR_CONTRACT_ENABLED")
+    )
     for spec in specs:
         prefix = str(spec["prefix"])
         enabled_key = f"{prefix}ENABLED"
         file_key = f"{prefix}FILE"
         version_key = f"{prefix}VERSION"
-        enabled = _runtime_env_enabled(effective_env.get(enabled_key))
+        standard_enabled = _runtime_env_enabled(effective_env.get(enabled_key))
+        daily_baseline = bool(
+            spec["family"] == "entry_split_order_plan"
+            and entry_split_daily_contract
+            and not standard_enabled
+        )
+        if daily_baseline:
+            file_key = "KORSTOCKSCAN_ENTRY_SPLIT_DAILY_BASELINE_POLICY_FILE"
+            version_key = "KORSTOCKSCAN_ENTRY_SPLIT_DAILY_BASELINE_POLICY_VERSION"
+        enabled = bool(standard_enabled or daily_baseline)
         audit: dict[str, Any] = {
             "family": spec["family"],
             "enabled": enabled,
@@ -4265,11 +4277,19 @@ def _split_runtime_policy_audits(
             audits.append(audit)
             continue
         active_date_key = str(spec.get("active_date_key") or "")
+        if daily_baseline:
+            active_date_key = "KORSTOCKSCAN_ENTRY_SPLIT_DAILY_BASELINE_ACTIVE_DATE"
         if active_date_key and str(effective_env.get(active_date_key) or "").strip():
             audit["active_date_key"] = active_date_key
             audit["active_date"] = effective_env.get(active_date_key)
             audit["required_env_keys"].append(active_date_key)
-            if str(effective_env.get(active_date_key) or "").strip() != target_date:
+            active_date = str(effective_env.get(active_date_key) or "").strip()
+            recurring_date_allowed = bool(
+                spec["family"] == "entry_split_order_plan"
+                and entry_split_daily_contract
+                and active_date.upper() == "DAILY"
+            )
+            if active_date != target_date and not recurring_date_allowed:
                 audit.update(status="fail", reason="policy_inactive_date")
                 audits.append(audit)
                 continue
@@ -4366,6 +4386,16 @@ def _split_runtime_policy_audits(
             audit.update(status="fail", reason="policy_freshness_basis_invalid")
             audits.append(audit)
             continue
+        stale_baseline_operator_authorized = bool(
+            spec["family"] == "entry_split_order_plan"
+            and entry_split_daily_contract
+            and daily_baseline
+            and _runtime_env_enabled(policy.get("baseline_runtime_defaults_enabled"))
+            and not (policy.get("buckets") or {})
+        )
+        if stale and stale_baseline_operator_authorized:
+            audit["stale_policy_operator_authorized"] = True
+            stale = False
         if stale:
             audit.update(status="fail", reason="stale_policy")
         else:
@@ -4660,7 +4690,17 @@ def verify_runtime_env_handoff(
         probe_active_date = str(
             effective_env_overrides.get(probe_first_active_date_key) or ""
         ).strip()
-        if missing_probe_keys or probe_active_date != target_date:
+        recurring_probe_allowed = bool(
+            _runtime_env_enabled(
+                effective_env_overrides.get(
+                    "KORSTOCKSCAN_ENTRY_SPLIT_DAILY_OPERATOR_CONTRACT_ENABLED"
+                )
+            )
+            and probe_active_date.upper() == "DAILY"
+        )
+        if missing_probe_keys or (
+            probe_active_date != target_date and not recurring_probe_allowed
+        ):
             findings.append(
                 {
                     "family": "entry_split_order_plan",
@@ -4675,9 +4715,27 @@ def verify_runtime_env_handoff(
                     "active_date": probe_active_date or None,
                 }
             )
-        if not _runtime_env_enabled(
-            effective_env_overrides.get("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED")
-        ):
+        policy_dependency_enabled = bool(
+            _runtime_env_enabled(
+                effective_env_overrides.get(
+                    "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED"
+                )
+            )
+            or (
+                _runtime_env_enabled(
+                    effective_env_overrides.get(
+                        "KORSTOCKSCAN_ENTRY_SPLIT_DAILY_OPERATOR_CONTRACT_ENABLED"
+                    )
+                )
+                and str(
+                    effective_env_overrides.get(
+                        "KORSTOCKSCAN_ENTRY_SPLIT_DAILY_BASELINE_POLICY_FILE"
+                    )
+                    or ""
+                ).strip()
+            )
+        )
+        if not policy_dependency_enabled:
             findings.append(
                 {
                     "family": "entry_split_order_plan",

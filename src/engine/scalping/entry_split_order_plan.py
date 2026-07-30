@@ -20,7 +20,7 @@ from src.engine.automation.source_quality_clean_baseline import (
 )
 from src.trading.order.tick_utils import clamp_price_to_tick, get_tick_size
 from src.utils.constants import DATA_DIR, PROJECT_ROOT
-from src.utils.jsonl_io import iter_jsonl
+from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl, open_text_auto
 
 SCHEMA_VERSION = "entry_split_order_plan_v1"
 POLICY_SCHEMA_VERSION = "entry_split_order_policy_v1"
@@ -30,6 +30,7 @@ REPORT_DIR = DATA_DIR / "report" / REPORT_TYPE
 POLICY_DIR = DATA_DIR / "threshold_cycle" / "entry_split_order_policy"
 SAMPLE_FLOOR_REAL = 20
 SAMPLE_FLOOR_SIM = 10
+CUMULATIVE_LEARNING_SAMPLE_FLOOR = 1
 SPLIT_VARIANT_OUTCOME_FLOOR_REAL = 20
 POST_SUBMIT_TICK_BAND_FLOOR_REAL = 20
 POST_SUBMIT_LOW_WINDOW_MINUTES = 10
@@ -59,6 +60,69 @@ ALLOWED_PRICE_CANDIDATES = {
 PROBE_RUNTIME_STATE_SCHEMA_VERSION = "entry_split_probe_runtime_state_v1"
 PROBE_RUNTIME_STATE_PATH = PROJECT_ROOT / "tmp" / "entry_split_probe_runtime_state.json"
 PROBE_VARIANT_SUFFIX = "probe1_fill_clamped_bbo"
+DAILY_ACTIVE_DATE_TOKEN = "DAILY"
+CALIBRATION_EVENT_KEYS = frozenset(
+    {
+        "stage",
+        "event",
+        "date",
+        "entry_date",
+        "signal_date",
+        "sell_date",
+        "emitted_at",
+        "timestamp",
+        "created_at",
+        "ts",
+        "record_id",
+        "recommendation_id",
+        "stock_code",
+        "code",
+        "order_id",
+        "bundle_id",
+        "order_bundle_id",
+        "entry_split_order_bundle_id",
+        "actual_order_submitted",
+        "broker_order_submitted",
+        "broker_order_forbidden",
+        "decision_authority",
+        "fill_status",
+        "filled_qty",
+        "late_fill",
+        "late_fill_detected",
+        "spread_bps",
+        "spread_ratio",
+        "buy_pressure_10t",
+        "tick_buy_pressure_10t",
+        "orderbook_micro_state",
+        "micro_state",
+        "latency_state",
+        "quote_stale",
+        "stale_quote_submit_block",
+        "current_price_observed",
+        "current_price",
+        "latest_price",
+        "holding_ws_recovered_curr",
+        "curr_price",
+        "mark_price_at_submit",
+        "submitted_mark_price",
+        "order_price",
+        "submitted_order_price",
+        "resolved_order_price",
+        "price",
+        "submitted_price",
+        "entry_split_order_policy_applied",
+        "entry_split_order_bucket",
+        "entry_split_order_policy_version",
+        "entry_split_order_policy_mode",
+        "entry_split_order_variant_id",
+        "entry_split_order_leg_count",
+        "entry_split_order_price_offsets_ticks",
+        "entry_split_order_qty_weight_min",
+        "entry_split_order_qty_weight_max",
+        "entry_split_order_runtime_default_policy_applied",
+        "entry_split_order_operator_fallback_authorized",
+    }
+)
 # An aborted probe can still be restored on restart to preserve its
 # scale-in-forbidden holding state, so recovery deliberately has a narrower
 # terminal set.  Capacity, however, must release as soon as no order bundle is
@@ -85,7 +149,9 @@ def _probe_runtime_config(*, now: datetime | None = None) -> dict[str, Any]:
     ).strip()
     enabled = _safe_bool(os.environ.get("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ENABLED"))
     return {
-        "enabled": bool(enabled and active_date == _kst_date(now)),
+        "enabled": bool(
+            enabled and active_date.upper() in {_kst_date(now), DAILY_ACTIVE_DATE_TOKEN}
+        ),
         "configured_enabled": enabled,
         "active_date": active_date,
         "probe_qty": max(
@@ -704,6 +770,8 @@ def _source_quality_summary(target_date: str) -> dict[str, Any]:
 
 def _iter_input_events(target_date: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     clean_policy = clean_baseline_policy()
+    source_quality = _source_quality_summary(target_date)
+    hard_blocking_stages = set(source_quality.get("hard_blocking_stages") or [])
     events: list[dict[str, Any]] = []
     excluded_pre_baseline = 0
     source_paths = {
@@ -711,12 +779,50 @@ def _iter_input_events(target_date: str) -> tuple[list[dict[str, Any]], dict[str
         "threshold_events": _threshold_events_path(target_date),
     }
     for source_name, path in source_paths.items():
-        for event in iter_jsonl(path):
+        for event in _iter_entry_split_input_rows(
+            path, hard_blocking_stages=hard_blocking_stages
+        ):
             fields = _event_fields(event)
             event_date = _event_date(fields) or target_date
             if not is_date_allowed(event_date, clean_policy):
                 excluded_pre_baseline += 1
                 continue
+            stage = str(fields.get("stage") or fields.get("event") or "").strip()
+            has_post_submit_price = bool(
+                fields.get("record_id")
+                and fields.get("stock_code")
+                and any(
+                    _safe_int(fields.get(key), 0) > 0
+                    for key in (
+                        "current_price_observed",
+                        "current_price",
+                        "latest_price",
+                        "holding_ws_recovered_curr",
+                        "curr_price",
+                        "mark_price_at_submit",
+                        "submitted_mark_price",
+                    )
+                )
+            )
+            calibration_relevant = bool(
+                stage.startswith("scalp_sim_")
+                or stage in hard_blocking_stages
+                or stage
+                in {
+                    "order_bundle_submitted",
+                    "order_leg_sent",
+                    "order_leg_fail",
+                    "order_bundle_failed",
+                }
+                or has_post_submit_price
+            )
+            if not calibration_relevant:
+                continue
+            fields = {
+                key: value
+                for key, value in fields.items()
+                if key in CALIBRATION_EVENT_KEYS
+            }
             fields["source_name"] = source_name
             fields["source_date"] = event_date
             events.append(fields)
@@ -727,6 +833,113 @@ def _iter_input_events(target_date: str) -> tuple[list[dict[str, Any]], dict[str
         "excluded_pre_baseline_count": excluded_pre_baseline,
         "clean_tuning_baseline": clean_policy,
     }
+
+
+def _iter_entry_split_input_rows(path: Path, *, hard_blocking_stages: set[str]):
+    actual_path = existing_or_gzip_path(path)
+    if not actual_path.exists():
+        return
+    stage_tokens = {
+        "order_bundle_submitted",
+        "order_leg_sent",
+        "order_leg_fail",
+        "order_bundle_failed",
+        *hard_blocking_stages,
+    }
+    price_tokens = (
+        '"current_price_observed"',
+        '"current_price"',
+        '"latest_price"',
+        '"holding_ws_recovered_curr"',
+        '"curr_price"',
+        '"mark_price_at_submit"',
+        '"submitted_mark_price"',
+    )
+    with open_text_auto(actual_path) as handle:
+        for raw_line in handle:
+            if (
+                "scalp_sim_" not in raw_line
+                and not any(token in raw_line for token in stage_tokens)
+                and not any(token in raw_line for token in price_tokens)
+            ):
+                continue
+            try:
+                payload = json.loads(raw_line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(payload, dict):
+                yield payload
+
+
+def _available_calibration_dates(target_date: str) -> list[str]:
+    """Return clean-baseline source dates available through ``target_date``."""
+    clean_policy = clean_baseline_policy()
+    baseline_date = str(clean_policy.get("clean_tuning_baseline_date") or "2026-06-04")
+    dates = {target_date}
+    source_specs = (
+        (DATA_DIR / "pipeline_events", "pipeline_events_"),
+        (DATA_DIR / "threshold_cycle", "threshold_events_"),
+        (DATA_DIR / "post_sell", "post_sell_evaluations_"),
+        (DATA_DIR / "post_sell", "post_sell_candidates_"),
+        (DATA_DIR / "post_sell", "sim_post_sell_evaluations_"),
+    )
+    for directory, prefix in source_specs:
+        for pattern in (f"{prefix}*.jsonl", f"{prefix}*.jsonl.gz"):
+            for path in directory.glob(pattern):
+                name = path.name
+                suffix = ".jsonl.gz" if name.endswith(".jsonl.gz") else ".jsonl"
+                source_date = name[len(prefix) : -len(suffix)]
+                if baseline_date <= source_date <= target_date:
+                    dates.add(source_date)
+    return sorted(
+        source_date
+        for source_date in dates
+        if is_date_allowed(source_date, clean_policy)
+    )
+
+
+def _iter_cumulative_input_events(
+    target_date: str,
+) -> tuple[
+    list[dict[str, Any]],
+    dict[str, Any],
+    dict[str, dict[str, Any]],
+]:
+    events: list[dict[str, Any]] = []
+    source_quality_by_date: dict[str, dict[str, Any]] = {}
+    source_paths_by_date: dict[str, Any] = {}
+    excluded_pre_baseline = 0
+    for source_date in _available_calibration_dates(target_date):
+        source_quality_by_date[source_date] = _source_quality_summary(source_date)
+        if source_date == target_date:
+            daily_events, daily_summary = _iter_input_events(source_date)
+            events.extend(daily_events)
+            source_paths_by_date[source_date] = daily_summary.get("source_paths") or {}
+            excluded_pre_baseline += _safe_int(
+                daily_summary.get("excluded_pre_baseline_count"), 0
+            )
+        else:
+            source_paths_by_date[source_date] = {
+                "pipeline_events": _existing_jsonl_source(
+                    _pipeline_events_path(source_date)
+                ),
+                "threshold_events": _existing_jsonl_source(
+                    _threshold_events_path(source_date)
+                ),
+                "read_mode": "post_sell_outcome_only_for_cumulative_rebuild",
+            }
+    return (
+        events,
+        {
+            "source_paths": source_paths_by_date.get(target_date, {}),
+            "source_paths_by_date": source_paths_by_date,
+            "source_dates": sorted(source_quality_by_date),
+            "source_date_count": len(source_quality_by_date),
+            "excluded_pre_baseline_count": excluded_pre_baseline,
+            "clean_tuning_baseline": clean_baseline_policy(),
+        },
+        source_quality_by_date,
+    )
 
 
 def _existing_jsonl_source(path: Path) -> str | None:
@@ -791,6 +1004,8 @@ def _load_real_post_sell_rows(
         if post_sell_id:
             by_post_sell_id[post_sell_id] = len(merged)
         merged.append(dict(row))
+    for row in merged:
+        row.setdefault("source_date", target_date)
     return merged, {
         "candidate_count": len(candidates),
         "evaluation_count": len(evaluations),
@@ -800,10 +1015,144 @@ def _load_real_post_sell_rows(
     }
 
 
+def _extend_value_map(
+    destination: dict[Any, list[float]], source: dict[Any, list[float]]
+) -> None:
+    for key, values in source.items():
+        destination[key].extend(values)
+
+
+def _merge_count_maps(
+    prior: dict[str, dict[str, Any]],
+    current: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, int]]:
+    merged: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    for source in (prior, current):
+        for bucket, metrics in source.items():
+            if not isinstance(metrics, dict):
+                continue
+            for metric, value in metrics.items():
+                merged[str(bucket)][str(metric)] += _safe_int(value, 0)
+    return {bucket: dict(metrics) for bucket, metrics in merged.items()}
+
+
+def _latest_prior_cumulative_state(target_date: str) -> tuple[dict[str, Any], str]:
+    policy = clean_baseline_policy()
+    baseline_date = str(policy.get("clean_tuning_baseline_date") or "")
+    for path in sorted(
+        REPORT_DIR.glob(f"{REPORT_TYPE}_*.json"),
+        reverse=True,
+    ):
+        source_date = path.stem.removeprefix(f"{REPORT_TYPE}_")
+        if not source_date or source_date >= target_date:
+            continue
+        payload = _load_json(path)
+        state = (
+            payload.get("cumulative_state")
+            if isinstance(payload.get("cumulative_state"), dict)
+            else {}
+        )
+        if (
+            payload.get("schema_version") == SCHEMA_VERSION
+            and state.get("window_policy")
+            == "clean_baseline_cumulative_through_target_date"
+            and str(state.get("through_date") or "") == source_date
+            and str(state.get("clean_tuning_baseline_date") or "") == baseline_date
+        ):
+            source_dates = [
+                str(value) for value in (state.get("source_dates") or []) if str(value)
+            ]
+            if not source_dates or max(source_dates) != source_date:
+                continue
+            try:
+                report_mtime = path.stat().st_mtime
+            except OSError:
+                continue
+            state_is_current = True
+            for state_source_date in source_dates:
+                quality = _source_quality_summary(state_source_date)
+                quality_path = _source_quality_path(state_source_date)
+                if quality.get("tuning_input_allowed") is not True:
+                    state_is_current = False
+                    break
+                try:
+                    if quality_path.stat().st_mtime > report_mtime:
+                        state_is_current = False
+                        break
+                except OSError:
+                    state_is_current = False
+                    break
+            if not state_is_current:
+                continue
+            return state, str(path)
+    return {}, ""
+
+
+def _deserialize_value_map(payload: Any) -> dict[str, list[float]]:
+    result: dict[str, list[float]] = defaultdict(list)
+    if not isinstance(payload, dict):
+        return result
+    for key, values in payload.items():
+        if isinstance(values, list):
+            result[str(key)].extend(
+                float(value) for value in values if _safe_float(value, None) is not None
+            )
+    return result
+
+
+def _deserialize_variant_value_map(
+    payload: Any,
+) -> dict[tuple[str, str], list[float]]:
+    result: dict[tuple[str, str], list[float]] = defaultdict(list)
+    if not isinstance(payload, dict):
+        return result
+    for bucket, variants in payload.items():
+        if not isinstance(variants, dict):
+            continue
+        for variant_id, values in variants.items():
+            if isinstance(values, list):
+                result[(str(bucket), str(variant_id))].extend(
+                    float(value)
+                    for value in values
+                    if _safe_float(value, None) is not None
+                )
+    return result
+
+
+def _serialize_variant_value_map(
+    values: dict[tuple[str, str], list[float]],
+) -> dict[str, dict[str, list[float]]]:
+    payload: dict[str, dict[str, list[float]]] = defaultdict(dict)
+    for (bucket, variant_id), samples in values.items():
+        payload[str(bucket)][str(variant_id)] = [float(value) for value in samples]
+    return {bucket: dict(variants) for bucket, variants in payload.items()}
+
+
+def _source_quality_filtered_events(
+    events: list[dict[str, Any]],
+    source_quality_by_date: dict[str, dict[str, Any]],
+) -> tuple[list[dict[str, Any]], int]:
+    included: list[dict[str, Any]] = []
+    excluded = 0
+    for fields in events:
+        source_date = str(fields.get("source_date") or _event_date(fields) or "")[:10]
+        quality = source_quality_by_date.get(
+            source_date, {"tuning_input_allowed": False}
+        )
+        stage = str(fields.get("stage") or fields.get("event") or "").strip()
+        if quality.get("tuning_input_allowed") is not True or stage in set(
+            quality.get("hard_blocking_stages") or []
+        ):
+            excluded += 1
+            continue
+        included.append(fields)
+    return included, excluded
+
+
 def _enrich_real_post_sell_provenance(
     rows: list[dict[str, Any]], events: list[dict[str, Any]]
 ) -> tuple[list[dict[str, Any]], int]:
-    provenance_by_recommendation: dict[str, dict[str, Any]] = {}
+    provenance_by_recommendation: dict[tuple[str, str], dict[str, Any]] = {}
     for fields in events:
         if (
             str(fields.get("stage") or fields.get("event") or "").strip()
@@ -827,7 +1176,9 @@ def _enrich_real_post_sell_provenance(
             fields.get("recommendation_id") or fields.get("record_id")
         )
         if recommendation_id:
-            provenance_by_recommendation[recommendation_id] = provenance
+            provenance_by_recommendation[
+                (_provenance_date(fields), recommendation_id)
+            ] = provenance
 
     enriched: list[dict[str, Any]] = []
     reconstructed_count = 0
@@ -837,12 +1188,25 @@ def _enrich_real_post_sell_provenance(
             recommendation_id = _identifier(
                 next_row.get("recommendation_id") or next_row.get("record_id")
             )
-            provenance = provenance_by_recommendation.get(recommendation_id)
+            provenance = provenance_by_recommendation.get(
+                (_provenance_date(next_row), recommendation_id)
+            )
             if provenance:
                 next_row.update(provenance)
                 reconstructed_count += 1
         enriched.append(next_row)
     return enriched, reconstructed_count
+
+
+def _provenance_date(fields: dict[str, Any]) -> str:
+    return str(
+        fields.get("source_date")
+        or _event_date(fields)
+        or fields.get("entry_date")
+        or fields.get("signal_date")
+        or fields.get("sell_date")
+        or ""
+    )[:10]
 
 
 def _load_sim_ev_values(target_date: str) -> dict[str, list[float]]:
@@ -1267,7 +1631,11 @@ def _build_post_submit_low_tick_bands(
 
 
 def _is_real_submit_event(fields: dict[str, Any]) -> bool:
-    return _safe_bool(fields.get("actual_order_submitted"))
+    stage = str(fields.get("stage") or fields.get("event") or "").strip()
+    return bool(
+        _safe_bool(fields.get("actual_order_submitted"))
+        and stage in {"order_bundle_submitted", "order_leg_sent"}
+    )
 
 
 def _is_sim_event(fields: dict[str, Any]) -> bool:
@@ -1285,45 +1653,80 @@ def _is_sim_event(fields: dict[str, Any]) -> bool:
 
 
 def _quality_counts(
-    events: list[dict[str, Any]], source_quality: dict[str, Any]
+    events: list[dict[str, Any]],
+    source_quality: dict[str, Any],
+    *,
+    source_quality_by_date: dict[str, dict[str, Any]] | None = None,
 ) -> tuple[dict[str, dict[str, Any]], int]:
-    blocked_stages = set(source_quality.get("hard_blocking_stages") or [])
-    buckets: dict[str, dict[str, Any]] = defaultdict(lambda: defaultdict(int))
+    sample_keys: dict[str, dict[str, set[str]]] = defaultdict(lambda: defaultdict(set))
     excluded_source_quality = 0
-    for fields in events:
+    for event_index, fields in enumerate(events):
         stage = str(fields.get("stage") or fields.get("event") or "").strip()
+        row_source_quality = source_quality
+        source_date = str(fields.get("source_date") or _event_date(fields) or "")[:10]
+        if source_quality_by_date and source_date:
+            row_source_quality = source_quality_by_date.get(
+                source_date, {"tuning_input_allowed": False}
+            )
+        if row_source_quality.get("tuning_input_allowed") is not True:
+            excluded_source_quality += 1
+            continue
+        blocked_stages = set(row_source_quality.get("hard_blocking_stages") or [])
         if stage in blocked_stages:
             excluded_source_quality += 1
             continue
         bucket = _context_bucket(fields)
-        row = buckets[bucket]
+        stable_id = _identifier(
+            fields.get("entry_split_order_bundle_id")
+            or fields.get("order_bundle_id")
+            or fields.get("bundle_id")
+            or fields.get("recommendation_id")
+            or fields.get("record_id")
+            or fields.get("order_id")
+        )
+        stock_code = str(fields.get("stock_code") or fields.get("code") or "").strip()
+        execution_key = (
+            f"{source_date}:{stable_id}:{stock_code}"
+            if stable_id
+            else f"{source_date}:{stage}:row:{event_index}"
+        )
+        row = sample_keys[bucket]
         if _is_real_submit_event(fields):
-            row["real_sample_count"] += 1
+            row["real_sample_count"].add(execution_key)
             if stage == "order_leg_sent" or _safe_bool(
                 fields.get("broker_order_submitted")
             ):
-                row["real_submitted_count"] += 1
+                row["real_submitted_count"].add(execution_key)
             if (
                 str(fields.get("fill_status") or "").upper() == "PARTIAL"
                 or _safe_int(fields.get("filled_qty"), 0) > 0
             ):
-                row["partial_fill_count"] += 1
-            if stage in {"order_leg_fail", "order_bundle_failed"}:
-                row["cancel_or_fail_count"] += 1
+                row["partial_fill_count"].add(execution_key)
             if _safe_bool(fields.get("late_fill")) or _safe_bool(
                 fields.get("late_fill_detected")
             ):
-                row["late_fill_count"] += 1
+                row["late_fill_count"].add(execution_key)
+        if _safe_bool(fields.get("actual_order_submitted")) and stage in {
+            "order_leg_fail",
+            "order_bundle_failed",
+        }:
+            row["cancel_or_fail_count"].add(execution_key)
         if _is_sim_event(fields):
-            row["sim_sample_count"] += 1
+            row["sim_sample_count"].add(execution_key)
             if stage in {
                 "scalp_sim_buy_order_assumed_filled",
                 "scalp_sim_sell_order_assumed_filled",
             }:
-                row["sim_fill_count"] += 1
+                row["sim_fill_count"].add(execution_key)
             if stage in {"scalp_sim_entry_expired", "scalp_sim_entry_unpriced"}:
-                row["cancel_or_fail_count"] += 1
-    return {key: dict(value) for key, value in buckets.items()}, excluded_source_quality
+                row["cancel_or_fail_count"].add(execution_key)
+    return (
+        {
+            bucket: {metric: len(keys) for metric, keys in metrics.items()}
+            for bucket, metrics in sample_keys.items()
+        },
+        excluded_source_quality,
+    )
 
 
 def _pct(count: int, total: int) -> float:
@@ -1353,12 +1756,13 @@ def _build_candidate_grid(
         counts = buckets.get(bucket) or {}
         template = _template_for_bucket(bucket)
         tick_band = post_submit_low_tick_bands.get(bucket) or {}
-        real_count = _safe_int(counts.get("real_sample_count"), 0)
+        event_real_count = _safe_int(counts.get("real_sample_count"), 0)
         sim_count = _safe_int(counts.get("sim_sample_count"), 0)
-        total = max(1, real_count + sim_count)
         real_ev_list = real_ev_values.get(bucket) or []
         sim_ev_list = sim_ev_values.get(bucket) or []
         real_bucket_outcome_count = len(real_ev_list)
+        real_count = max(event_real_count, real_bucket_outcome_count)
+        total = max(1, real_count + sim_count)
         real_bucket_ev = round(mean(real_ev_list), 4) if real_ev_list else None
         sim_ev = round(mean(sim_ev_list), 4) if sim_ev_list else None
         split_variant_id = ""
@@ -1385,6 +1789,48 @@ def _build_candidate_grid(
             )
             if observed_bucket == bucket and observed_values
         ]
+        split_variant_judgment_quality = []
+        for item in observed_split_variants:
+            variant_id = str(item.get("split_variant_id") or "")
+            variant_values = (
+                real_split_variant_ev_values.get((bucket, variant_id)) or []
+            )
+            variant_sample_count = len(variant_values)
+            variant_downside_p10 = (
+                sorted(variant_values)[max(0, int(len(variant_values) * 0.10) - 1)]
+                if variant_values
+                else None
+            )
+            variant_ev = round(mean(variant_values), 4) if variant_values else None
+            split_variant_judgment_quality.append(
+                {
+                    **item,
+                    "learning_sample_floor": CUMULATIVE_LEARNING_SAMPLE_FLOOR,
+                    "learning_updated": (
+                        variant_sample_count >= CUMULATIVE_LEARNING_SAMPLE_FLOOR
+                    ),
+                    "runtime_promotion_sample_floor": (
+                        SPLIT_VARIANT_OUTCOME_FLOOR_REAL
+                    ),
+                    "runtime_promotion_sample_ready": (
+                        variant_sample_count >= SPLIT_VARIANT_OUTCOME_FLOOR_REAL
+                    ),
+                    "downside_p10_profit_rate": (
+                        round(variant_downside_p10, 4)
+                        if variant_downside_p10 is not None
+                        else None
+                    ),
+                    "runtime_evidence_ready": bool(
+                        bucket != "guarded_or_stale"
+                        and variant_sample_count >= SPLIT_VARIANT_OUTCOME_FLOOR_REAL
+                        and variant_ev is not None
+                        and variant_ev > 0
+                        and variant_downside_p10 is not None
+                        and variant_downside_p10 > -2.0
+                    ),
+                    "runtime_promotion_requires_shape_provenance": True,
+                }
+            )
         observed_split_outcome_count = sum(
             _safe_int(item.get("sample_count"), 0) for item in observed_split_variants
         )
@@ -1393,6 +1839,10 @@ def _build_candidate_grid(
             round(mean(split_variant_ev_list), 4) if split_variant_ev_list else None
         )
         primary_ev = split_variant_ev if split_variant_ev is not None else None
+        cumulative_learning_sample_count = observed_split_outcome_count
+        cumulative_learning_updated = (
+            cumulative_learning_sample_count >= CUMULATIVE_LEARNING_SAMPLE_FLOOR
+        )
         notional_ev = primary_ev
         partial_fill_rate = _pct(
             _safe_int(counts.get("partial_fill_count"), 0), max(real_count, 1)
@@ -1488,6 +1938,36 @@ def _build_candidate_grid(
                 "real_split_variant_ev_pct": split_variant_ev,
                 "observed_real_split_outcome_count": observed_split_outcome_count,
                 "observed_real_split_variants": observed_split_variants,
+                "cumulative_judgment_quality": {
+                    "learning_sample_floor": CUMULATIVE_LEARNING_SAMPLE_FLOOR,
+                    "learning_sample_count": cumulative_learning_sample_count,
+                    "learning_updated": cumulative_learning_updated,
+                    "learning_update_policy": (
+                        "one_mature_split_variant_outcome_updates_cumulative_judgment_quality"
+                    ),
+                    "equal_weight_avg_profit_pct": (
+                        round(
+                            mean(
+                                value
+                                for (
+                                    observed_bucket,
+                                    _variant_id,
+                                ), values in real_split_variant_ev_values.items()
+                                if observed_bucket == bucket
+                                for value in values
+                            ),
+                            4,
+                        )
+                        if cumulative_learning_updated
+                        else None
+                    ),
+                    "runtime_promotion_sample_floor": {
+                        "real_submit": SAMPLE_FLOOR_REAL,
+                        "real_split_variant_outcome": SPLIT_VARIANT_OUTCOME_FLOOR_REAL,
+                    },
+                    "split_variant_quality": split_variant_judgment_quality,
+                    "learning_floor_grants_runtime_promotion": False,
+                },
                 "split_variant_id": split_variant_id,
                 "optimization_basis": (
                     "split_variant_outcome"
@@ -1613,19 +2093,121 @@ def _policy_payload(
 def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
     target_date = str(target_date).strip()
     source_quality = _source_quality_summary(target_date)
-    events, load_summary = _iter_input_events(target_date)
-    counts, excluded_source_quality = _quality_counts(events, source_quality)
-    sim_ev_values = _load_sim_ev_values(target_date)
-    real_post_sell_rows, real_post_sell_summary = _load_real_post_sell_rows(target_date)
-    real_post_sell_rows, reconstructed_provenance_count = (
-        _enrich_real_post_sell_provenance(real_post_sell_rows, events)
+    daily_events, daily_load_summary = _iter_input_events(target_date)
+    daily_allowed_events, daily_excluded_source_quality = (
+        _source_quality_filtered_events(daily_events, {target_date: source_quality})
     )
-    real_ev_values = _load_real_ev_values(target_date, real_post_sell_rows)
-    real_split_variant_ev_values = _load_real_split_variant_ev_values(
-        target_date, real_post_sell_rows
+    daily_counts, _ = _quality_counts(
+        daily_allowed_events, {"tuning_input_allowed": True}
     )
+    prior_state, prior_state_path = _latest_prior_cumulative_state(target_date)
+    if prior_state:
+        events = daily_events
+        calibration_events = daily_allowed_events
+        excluded_source_quality = daily_excluded_source_quality
+        counts = _merge_count_maps(prior_state.get("counts") or {}, daily_counts)
+        sim_ev_values = _deserialize_value_map(prior_state.get("sim_ev_values"))
+        real_ev_values = _deserialize_value_map(prior_state.get("real_ev_values"))
+        real_split_variant_ev_values = _deserialize_variant_value_map(
+            prior_state.get("real_split_variant_ev_values")
+        )
+        real_post_sell_summary = {
+            key: _safe_int(value, 0)
+            for key, value in (prior_state.get("real_post_sell_summary") or {}).items()
+        }
+        source_dates = list(prior_state.get("source_dates") or [])
+        reconstructed_provenance_count = _safe_int(
+            prior_state.get("reconstructed_split_provenance_count"), 0
+        )
+        if source_quality.get("tuning_input_allowed") is True:
+            _extend_value_map(sim_ev_values, _load_sim_ev_values(target_date))
+            real_post_sell_rows, source_summary = _load_real_post_sell_rows(target_date)
+            real_post_sell_rows, reconstructed_today = (
+                _enrich_real_post_sell_provenance(
+                    real_post_sell_rows, calibration_events
+                )
+            )
+            reconstructed_provenance_count += reconstructed_today
+            for key, value in source_summary.items():
+                real_post_sell_summary[key] = _safe_int(
+                    real_post_sell_summary.get(key), 0
+                ) + _safe_int(value, 0)
+            _extend_value_map(
+                real_ev_values,
+                _load_real_ev_values(target_date, real_post_sell_rows),
+            )
+            _extend_value_map(
+                real_split_variant_ev_values,
+                _load_real_split_variant_ev_values(target_date, real_post_sell_rows),
+            )
+            if target_date not in source_dates:
+                source_dates.append(target_date)
+        load_summary = {
+            "aggregation_mode": "incremental_from_prior_cumulative_state",
+            "prior_cumulative_state_path": prior_state_path,
+            "source_paths": daily_load_summary.get("source_paths") or {},
+            "source_paths_by_date": {
+                target_date: daily_load_summary.get("source_paths") or {}
+            },
+            "source_dates": sorted(source_dates),
+            "source_date_count": len(set(source_dates)),
+            "excluded_pre_baseline_count": _safe_int(
+                daily_load_summary.get("excluded_pre_baseline_count"), 0
+            ),
+            "clean_tuning_baseline": clean_baseline_policy(),
+        }
+    else:
+        events, load_summary, source_quality_by_date = _iter_cumulative_input_events(
+            target_date
+        )
+        calibration_events, excluded_source_quality = _source_quality_filtered_events(
+            events, source_quality_by_date
+        )
+        counts, _ = _quality_counts(calibration_events, {"tuning_input_allowed": True})
+        sim_ev_values: dict[str, list[float]] = defaultdict(list)
+        real_post_sell_rows: list[dict[str, Any]] = []
+        real_post_sell_summary = {
+            "candidate_count": 0,
+            "evaluation_count": 0,
+            "matched_evaluation_count": 0,
+            "pending_evaluation_count": 0,
+            "merged_count": 0,
+        }
+        included_source_dates: list[str] = []
+        for source_date in load_summary.get("source_dates") or []:
+            source_date_quality = source_quality_by_date.get(source_date) or {}
+            if source_date_quality.get("tuning_input_allowed") is not True:
+                continue
+            included_source_dates.append(source_date)
+            _extend_value_map(sim_ev_values, _load_sim_ev_values(source_date))
+            source_rows, source_summary = _load_real_post_sell_rows(source_date)
+            real_post_sell_rows.extend(source_rows)
+            for key in real_post_sell_summary:
+                real_post_sell_summary[key] += _safe_int(source_summary.get(key), 0)
+        real_post_sell_rows, reconstructed_provenance_count = (
+            _enrich_real_post_sell_provenance(real_post_sell_rows, calibration_events)
+        )
+        real_ev_values = defaultdict(list)
+        real_split_variant_ev_values = defaultdict(list)
+        for source_date in included_source_dates:
+            source_rows = [
+                row
+                for row in real_post_sell_rows
+                if _provenance_date(row) == source_date
+            ]
+            _extend_value_map(
+                real_ev_values, _load_real_ev_values(source_date, source_rows)
+            )
+            _extend_value_map(
+                real_split_variant_ev_values,
+                _load_real_split_variant_ev_values(source_date, source_rows),
+            )
+        load_summary["aggregation_mode"] = "full_clean_baseline_rebuild"
+        load_summary["source_dates"] = included_source_dates
+        load_summary["source_date_count"] = len(included_source_dates)
     post_submit_low_tick_bands = _build_post_submit_low_tick_bands(
-        events, source_quality=source_quality
+        daily_allowed_events,
+        source_quality={"hard_blocking_stages": []},
     )
     candidate_grid = _build_candidate_grid(
         counts,
@@ -1634,6 +2216,14 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
         real_split_variant_ev_values,
         post_submit_low_tick_bands,
     )
+    for item in candidate_grid:
+        bucket = str(item.get("context_bucket") or "")
+        target_counts = daily_counts.get(bucket) or {}
+        item["target_date_contribution"] = {
+            "date": target_date,
+            "real_sample_count": _safe_int(target_counts.get("real_sample_count"), 0),
+            "sim_sample_count": _safe_int(target_counts.get("sim_sample_count"), 0),
+        }
     json_path, md_path = report_paths(target_date)
     policy_json = policy_path(target_date)
     source_quality_allowed = source_quality.get("tuning_input_allowed") is True
@@ -1653,11 +2243,26 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
         "report_type": REPORT_TYPE,
         "runtime_effect": False,
         "actual_order_submitted": False,
+        "execution_contract": {
+            "schedule": "daily_postclose",
+            "wrapper_default_enabled": True,
+            "calibration_window": "clean_baseline_cumulative_through_target_date",
+        },
         "metric_contract": {
             "metric_role": "primary_ev",
             "decision_authority": "next_preopen_bounded_entry_split_policy",
-            "window_policy": "rolling_10d_with_daily_diagnostic",
-            "sample_floor": {"real": SAMPLE_FLOOR_REAL, "sim": SAMPLE_FLOOR_SIM},
+            "window_policy": "clean_baseline_cumulative_with_daily_diagnostic",
+            "sample_floor": {
+                "cumulative_learning": CUMULATIVE_LEARNING_SAMPLE_FLOOR,
+                "runtime_promotion_real": SAMPLE_FLOOR_REAL,
+                "runtime_promotion_sim_diagnostic": SAMPLE_FLOOR_SIM,
+                "runtime_promotion_split_variant_outcome": (
+                    SPLIT_VARIANT_OUTCOME_FLOOR_REAL
+                ),
+            },
+            "learning_update_policy": (
+                "one_mature_split_variant_outcome_updates_cumulative_judgment_quality"
+            ),
             "primary_decision_metric": "source_quality_adjusted_ev_pct",
             "source_quality_gate": "observation_source_quality_audit_hard_block_rows_excluded",
             "policy_modes": {
@@ -1697,10 +2302,37 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
             ],
         },
         "source_quality": source_quality,
+        "cumulative_state": {
+            "window_policy": "clean_baseline_cumulative_through_target_date",
+            "through_date": target_date,
+            "clean_tuning_baseline_date": clean_baseline_policy().get(
+                "clean_tuning_baseline_date"
+            ),
+            "source_dates": load_summary.get("source_dates") or [],
+            "counts": counts,
+            "sim_ev_values": {
+                bucket: list(values) for bucket, values in sim_ev_values.items()
+            },
+            "real_ev_values": {
+                bucket: list(values) for bucket, values in real_ev_values.items()
+            },
+            "real_split_variant_ev_values": _serialize_variant_value_map(
+                real_split_variant_ev_values
+            ),
+            "real_post_sell_summary": real_post_sell_summary,
+            "reconstructed_split_provenance_count": (reconstructed_provenance_count),
+        },
         "input_summary": {
             **load_summary,
             "loaded_event_count": len(events),
+            "included_calibration_event_count": len(calibration_events),
             "excluded_source_quality_event_count": excluded_source_quality,
+            "daily_diagnostic": {
+                **daily_load_summary,
+                "loaded_event_count": len(daily_events),
+                "included_event_count": len(daily_allowed_events),
+                "excluded_source_quality_event_count": (daily_excluded_source_quality),
+            },
             "sim_post_sell_path": (
                 str(_sim_post_sell_path(target_date))
                 if _sim_post_sell_path(target_date).exists()
@@ -1794,25 +2426,43 @@ def _load_policy_from_env(
     *,
     now: datetime | None = None,
 ) -> tuple[dict[str, Any], str]:
-    enabled = (
+    configured_enabled = (
         str(os.environ.get("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED", ""))
         .strip()
         .lower()
     )
-    if enabled not in {"1", "true", "yes", "on"}:
+    enabled = configured_enabled in {"1", "true", "yes", "on"}
+    daily_baseline = bool(
+        not enabled
+        and _safe_bool(
+            os.environ.get("KORSTOCKSCAN_ENTRY_SPLIT_DAILY_OPERATOR_CONTRACT_ENABLED")
+        )
+    )
+    if not enabled and not daily_baseline:
         return {}, "policy_disabled"
     active_date = str(
-        os.environ.get("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ACTIVE_DATE") or ""
+        os.environ.get(
+            (
+                "KORSTOCKSCAN_ENTRY_SPLIT_DAILY_BASELINE_ACTIVE_DATE"
+                if daily_baseline
+                else "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ACTIVE_DATE"
+            )
+        )
+        or ""
     ).strip()
     if active_date:
-        now_date = (
-            (now or datetime.now(timezone(timedelta(hours=9)))).date().isoformat()
-        )
-        if active_date != now_date:
+        now_date = _kst_date(now)
+        if active_date.upper() not in {now_date, DAILY_ACTIVE_DATE_TOKEN}:
             return {}, "policy_inactive_date"
     path_text = str(
         policy_file
-        or os.environ.get("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_FILE")
+        or os.environ.get(
+            (
+                "KORSTOCKSCAN_ENTRY_SPLIT_DAILY_BASELINE_POLICY_FILE"
+                if daily_baseline
+                else "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_FILE"
+            )
+        )
         or ""
     ).strip()
     if not path_text:
@@ -1834,6 +2484,11 @@ def _load_policy_from_env(
             **payload,
             "entry_split_order_operator_fallback_authorized": True,
         }
+    if daily_baseline:
+        payload = {
+            **payload,
+            "entry_split_order_daily_baseline_fallback_applied": True,
+        }
     return payload, "loaded"
 
 
@@ -1849,6 +2504,21 @@ def _policy_is_stale(
     except ValueError:
         return True
     return now_date - policy_date > timedelta(days=max_age_days)
+
+
+def _daily_operator_contract_enabled() -> bool:
+    return _safe_bool(
+        os.environ.get("KORSTOCKSCAN_ENTRY_SPLIT_DAILY_OPERATOR_CONTRACT_ENABLED")
+    )
+
+
+def _stale_baseline_policy_operator_authorized(policy: dict[str, Any]) -> bool:
+    return bool(
+        _daily_operator_contract_enabled()
+        and _safe_bool(policy.get("entry_split_order_daily_baseline_fallback_applied"))
+        and _safe_bool(policy.get("baseline_runtime_defaults_enabled"))
+        and not (policy.get("buckets") or {})
+    )
 
 
 def _max_legs_for_qty(qty: int) -> int:
@@ -2266,9 +2936,21 @@ def apply_entry_split_order_policy(
     if not policy:
         fields["entry_split_order_skip_reason"] = load_status
         return orders, fields
-    if _policy_is_stale(policy, now=now):
+    policy_stale = _policy_is_stale(policy, now=now)
+    daily_operator_contract = _daily_operator_contract_enabled()
+    stale_policy_authorized = _stale_baseline_policy_operator_authorized(policy)
+    if policy_stale and not stale_policy_authorized:
         fields["entry_split_order_skip_reason"] = "stale_policy"
         return orders, fields
+    fields["entry_split_order_daily_operator_contract_enabled"] = (
+        daily_operator_contract
+    )
+    fields["entry_split_order_daily_baseline_fallback_applied"] = _safe_bool(
+        policy.get("entry_split_order_daily_baseline_fallback_applied")
+    )
+    fields["entry_split_order_stale_policy_operator_authorized"] = bool(
+        policy_stale and stale_policy_authorized
+    )
     context_fields = {**stock, **latency_gate}
     bucket = _context_bucket(context_fields)
     bucket_policy = (policy.get("buckets") or {}).get(bucket)

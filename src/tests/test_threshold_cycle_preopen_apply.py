@@ -8471,6 +8471,84 @@ def test_verify_runtime_env_handoff_rejects_post_probe_resolver_without_probe_fi
     assert finding["family"] == "dynamic_entry_price_resolver"
 
 
+def test_entry_split_daily_operator_contract_accepts_recurring_stale_policy(
+    tmp_path,
+):
+    policy_path = tmp_path / "entry_split_policy.json"
+    policy_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "entry_split_order_policy_v1",
+                "policy_version": "entry-split-daily",
+                "source_date": "2026-07-01",
+                "runtime_apply_allowed": True,
+                "baseline_runtime_defaults_enabled": True,
+                "buckets": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    audits = mod._split_runtime_policy_audits(
+        "2026-08-03",
+        {
+            "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED": "false",
+            "KORSTOCKSCAN_ENTRY_SPLIT_DAILY_OPERATOR_CONTRACT_ENABLED": "true",
+            "KORSTOCKSCAN_ENTRY_SPLIT_DAILY_BASELINE_POLICY_FILE": str(policy_path),
+            "KORSTOCKSCAN_ENTRY_SPLIT_DAILY_BASELINE_POLICY_VERSION": (
+                "entry-split-daily"
+            ),
+            "KORSTOCKSCAN_ENTRY_SPLIT_DAILY_BASELINE_ACTIVE_DATE": "DAILY",
+            "KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_ENABLED": "false",
+        },
+    )
+
+    entry_audit = next(
+        audit for audit in audits if audit["family"] == "entry_split_order_plan"
+    )
+    assert entry_audit["status"] == "pass"
+    assert entry_audit["reason"] == "policy_usable"
+    assert entry_audit["stale_policy_operator_authorized"] is True
+
+
+def test_entry_split_daily_contract_does_not_authorize_stale_standard_policy(
+    tmp_path,
+):
+    policy_path = tmp_path / "entry_split_policy.json"
+    policy_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "entry_split_order_policy_v1",
+                "policy_version": "entry-split-standard-stale",
+                "source_date": "2026-07-01",
+                "runtime_apply_allowed": True,
+                "baseline_runtime_defaults_enabled": True,
+                "buckets": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    audits = mod._split_runtime_policy_audits(
+        "2026-08-03",
+        {
+            "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED": "true",
+            "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_FILE": str(policy_path),
+            "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_VERSION": (
+                "entry-split-standard-stale"
+            ),
+            "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ACTIVE_DATE": "2026-08-03",
+            "KORSTOCKSCAN_ENTRY_SPLIT_DAILY_OPERATOR_CONTRACT_ENABLED": "true",
+            "KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_ENABLED": "false",
+        },
+    )
+
+    entry_audit = next(
+        audit for audit in audits if audit["family"] == "entry_split_order_plan"
+    )
+    assert entry_audit["status"] == "fail"
+    assert entry_audit["reason"] == "stale_policy"
+    assert "stale_policy_operator_authorized" not in entry_audit
+
+
 def test_dated_runtime_override_audits_require_current_date_and_dependency():
     target_date = "2026-07-15"
     env = {

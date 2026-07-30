@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timezone, timedelta
 
 from src.engine.scalping import entry_split_order_plan as split_plan
@@ -245,7 +246,8 @@ def test_build_report_suppresses_policy_candidates_when_source_quality_blocked(
     report = split_plan.build_report(target_date, write=True)
 
     assert report["source_quality"]["tuning_input_allowed"] is False
-    assert any(item["candidate_passed"] for item in report["candidate_grid"])
+    assert report["candidate_grid"] == []
+    assert report["input_summary"]["excluded_source_quality_event_count"] == 70
     assert report["recommended_policy"]["candidate_count"] == 0
     assert report["recommended_policy"]["runtime_apply_allowed"] is False
     assert report["recommended_policy"]["baseline_runtime_defaults_enabled"] is False
@@ -406,6 +408,274 @@ def test_build_report_reads_threshold_cycle_events_from_contract_path(
     )
     assert report["input_summary"]["loaded_event_count"] == 1
     assert report["candidate_grid"][0]["real_sample_count"] == 1
+
+
+def test_build_report_updates_cumulative_judgment_from_one_mature_outcome(
+    monkeypatch, tmp_path
+):
+    data_dir = _patch_dirs(monkeypatch, tmp_path)
+    source_date = "2026-07-06"
+    target_date = "2026-07-07"
+    for day in (source_date, target_date):
+        _write_jsonl(
+            data_dir / "pipeline_events" / f"pipeline_events_{day}.jsonl",
+            [
+                {
+                    "date": day,
+                    "stage": "order_bundle_submitted",
+                    "record_id": 100 if day == source_date else 200,
+                    "actual_order_submitted": True,
+                    "broker_order_submitted": True,
+                    "spread_bps": 18,
+                    "buy_pressure_10t": 55,
+                    "entry_split_order_policy_applied": True,
+                    "entry_split_order_policy_mode": ("bounded_equal_split_baseline"),
+                    "entry_split_order_variant_id": ("equal_50_50_offset_0pct_0_3pct"),
+                }
+            ],
+        )
+        source_quality_path = (
+            data_dir
+            / "report"
+            / "observation_source_quality_audit"
+            / f"observation_source_quality_audit_{day}.json"
+        )
+        source_quality_path.parent.mkdir(parents=True, exist_ok=True)
+        source_quality_path.write_text(
+            json.dumps(
+                {
+                    "status": "warning",
+                    "summary": {"tuning_input_allowed": True},
+                }
+            ),
+            encoding="utf-8",
+        )
+    _write_jsonl(
+        data_dir / "post_sell" / f"post_sell_evaluations_{source_date}.jsonl",
+        [
+            {
+                "date": source_date,
+                "recommendation_id": 100,
+                "actual_order_submitted": True,
+                "profit_rate": 1.25,
+                "spread_bps": 18,
+                "buy_pressure_10t": 55,
+                "entry_split_order_variant_id": ("equal_50_50_offset_0pct_0_3pct"),
+            }
+        ],
+    )
+
+    report = split_plan.build_report(target_date, write=False)
+
+    balanced = next(
+        item
+        for item in report["candidate_grid"]
+        if item["context_bucket"] == "balanced_normal"
+    )
+    assert report["execution_contract"] == {
+        "schedule": "daily_postclose",
+        "wrapper_default_enabled": True,
+        "calibration_window": "clean_baseline_cumulative_through_target_date",
+    }
+    assert report["input_summary"]["source_dates"] == [source_date, target_date]
+    assert balanced["real_sample_count"] == 1
+    assert balanced["target_date_contribution"]["real_sample_count"] == 1
+    assert balanced["cumulative_judgment_quality"] == {
+        "learning_sample_floor": 1,
+        "learning_sample_count": 1,
+        "learning_updated": True,
+        "learning_update_policy": (
+            "one_mature_split_variant_outcome_updates_cumulative_judgment_quality"
+        ),
+        "equal_weight_avg_profit_pct": 1.25,
+        "runtime_promotion_sample_floor": {
+            "real_submit": 20,
+            "real_split_variant_outcome": 20,
+        },
+        "split_variant_quality": [
+            {
+                "split_variant_id": "equal_50_50_offset_0pct_0_3pct",
+                "sample_count": 1,
+                "equal_weight_avg_profit_pct": 1.25,
+                "learning_sample_floor": 1,
+                "learning_updated": True,
+                "runtime_promotion_sample_floor": 20,
+                "runtime_promotion_sample_ready": False,
+                "downside_p10_profit_rate": 1.25,
+                "runtime_evidence_ready": False,
+                "runtime_promotion_requires_shape_provenance": True,
+            }
+        ],
+        "learning_floor_grants_runtime_promotion": False,
+    }
+    assert balanced["candidate_passed"] is False
+    assert report["recommended_policy"]["runtime_apply_allowed"] is False
+
+
+def test_quality_counts_deduplicates_submit_lifecycle_and_ignores_propagated_flag():
+    events = [
+        {
+            "source_date": "2026-07-07",
+            "stage": "order_bundle_submitted",
+            "record_id": 123,
+            "stock_code": "005930",
+            "actual_order_submitted": True,
+            "broker_order_submitted": True,
+            "spread_bps": 18,
+            "buy_pressure_10t": 55,
+        },
+        {
+            "source_date": "2026-07-07",
+            "stage": "order_leg_sent",
+            "record_id": 123,
+            "stock_code": "005930",
+            "actual_order_submitted": True,
+            "broker_order_submitted": True,
+            "spread_bps": 18,
+            "buy_pressure_10t": 55,
+        },
+        {
+            "source_date": "2026-07-07",
+            "stage": "sell_completed",
+            "record_id": 123,
+            "stock_code": "005930",
+            "actual_order_submitted": True,
+            "spread_bps": 18,
+            "buy_pressure_10t": 55,
+        },
+    ]
+
+    counts, excluded = split_plan._quality_counts(
+        events, {"tuning_input_allowed": True}
+    )
+
+    assert excluded == 0
+    assert counts["balanced_normal"]["real_sample_count"] == 1
+    assert counts["balanced_normal"]["real_submitted_count"] == 1
+
+
+def test_build_report_uses_prior_cumulative_state_for_daily_increment(
+    monkeypatch, tmp_path
+):
+    data_dir = _patch_dirs(monkeypatch, tmp_path)
+    source_date = "2026-07-06"
+    target_date = "2026-07-07"
+    for day, record_id, profit_rate in (
+        (source_date, 100, 1.0),
+        (target_date, 200, 2.0),
+    ):
+        _write_jsonl(
+            data_dir / "pipeline_events" / f"pipeline_events_{day}.jsonl",
+            [
+                {
+                    "date": day,
+                    "stage": "order_bundle_submitted",
+                    "record_id": record_id,
+                    "actual_order_submitted": True,
+                    "broker_order_submitted": True,
+                    "spread_bps": 18,
+                    "buy_pressure_10t": 55,
+                    "entry_split_order_variant_id": ("equal_50_50_offset_0pct_0_3pct"),
+                }
+            ],
+        )
+        _write_jsonl(
+            data_dir / "post_sell" / f"post_sell_evaluations_{day}.jsonl",
+            [
+                {
+                    "date": day,
+                    "recommendation_id": record_id,
+                    "actual_order_submitted": True,
+                    "profit_rate": profit_rate,
+                    "spread_bps": 18,
+                    "buy_pressure_10t": 55,
+                    "entry_split_order_variant_id": ("equal_50_50_offset_0pct_0_3pct"),
+                }
+            ],
+        )
+        source_quality_path = (
+            data_dir
+            / "report"
+            / "observation_source_quality_audit"
+            / f"observation_source_quality_audit_{day}.json"
+        )
+        source_quality_path.parent.mkdir(parents=True, exist_ok=True)
+        source_quality_path.write_text(
+            json.dumps(
+                {
+                    "status": "warning",
+                    "summary": {"tuning_input_allowed": True},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    split_plan.build_report(source_date, write=True)
+    (data_dir / "pipeline_events" / f"pipeline_events_{source_date}.jsonl").unlink()
+    (data_dir / "post_sell" / f"post_sell_evaluations_{source_date}.jsonl").unlink()
+
+    report = split_plan.build_report(target_date, write=False)
+
+    balanced = next(
+        item
+        for item in report["candidate_grid"]
+        if item["context_bucket"] == "balanced_normal"
+    )
+    assert (
+        report["input_summary"]["aggregation_mode"]
+        == "incremental_from_prior_cumulative_state"
+    )
+    assert report["input_summary"]["source_dates"] == [source_date, target_date]
+    assert report["cumulative_state"]["through_date"] == target_date
+    assert report["cumulative_state"]["clean_tuning_baseline_date"] == "2026-06-04"
+    assert balanced["real_sample_count"] == 2
+    assert balanced["cumulative_judgment_quality"]["learning_sample_count"] == 2
+    assert balanced["cumulative_judgment_quality"]["equal_weight_avg_profit_pct"] == 1.5
+
+
+def test_prior_cumulative_state_is_rejected_after_source_quality_refresh(
+    monkeypatch, tmp_path
+):
+    data_dir = _patch_dirs(monkeypatch, tmp_path)
+    source_date = "2026-07-06"
+    report_path = split_plan.REPORT_DIR / f"entry_split_order_plan_{source_date}.json"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(
+        json.dumps(
+            {
+                "schema_version": split_plan.SCHEMA_VERSION,
+                "cumulative_state": {
+                    "window_policy": ("clean_baseline_cumulative_through_target_date"),
+                    "through_date": source_date,
+                    "clean_tuning_baseline_date": "2026-06-04",
+                    "source_dates": [source_date],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    os.utime(report_path, (1, 1))
+    source_quality_path = (
+        data_dir
+        / "report"
+        / "observation_source_quality_audit"
+        / f"observation_source_quality_audit_{source_date}.json"
+    )
+    source_quality_path.parent.mkdir(parents=True, exist_ok=True)
+    source_quality_path.write_text(
+        json.dumps(
+            {
+                "status": "pass",
+                "summary": {"tuning_input_allowed": True},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    state, state_path = split_plan._latest_prior_cumulative_state("2026-07-07")
+
+    assert state == {}
+    assert state_path == ""
 
 
 def test_build_report_creates_bounded_equal_baseline_without_real_outcome(
@@ -1844,6 +2114,99 @@ def test_allocator_date_bounded_policy_becomes_inactive(monkeypatch, tmp_path):
     assert fields["entry_split_order_policy_applied"] is False
     assert fields["entry_split_order_skip_reason"] == "policy_inactive_date"
     assert orders[0]["qty"] == 4
+
+
+def test_allocator_daily_operator_contract_keeps_probe_first_and_policy_active(
+    monkeypatch, tmp_path
+):
+    policy_file = tmp_path / "entry-policy-daily.json"
+    policy_file.write_text(
+        json.dumps(
+            {
+                "schema_version": "entry_split_order_policy_v1",
+                "policy_version": "daily-operator",
+                "source_date": "2026-07-01",
+                "runtime_apply_allowed": True,
+                "baseline_runtime_defaults_enabled": True,
+                "buckets": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        split_plan, "PROBE_RUNTIME_STATE_PATH", tmp_path / "probe-state.json"
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED", "false")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_ENTRY_SPLIT_DAILY_OPERATOR_CONTRACT_ENABLED", "true"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_ENTRY_SPLIT_DAILY_BASELINE_POLICY_FILE", str(policy_file)
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_DAILY_BASELINE_ACTIVE_DATE", "DAILY")
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ACTIVE_DATE", "DAILY")
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_QTY", "1")
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_MAX_BUNDLES", "5")
+
+    orders, fields = split_plan.apply_entry_split_order_policy(
+        [{"tag": "normal", "qty": 4, "price": 1000}],
+        stock={"code": "005930", "id": 1, "strategy": "SCALPING"},
+        latency_gate={
+            "spread_bps": 18,
+            "buy_pressure_10t": 55,
+            "latency_state": "SAFE",
+            "best_ask": 1000,
+            "best_bid": 999,
+        },
+        now=datetime(2026, 8, 3, 9, 3, tzinfo=timezone(timedelta(hours=9))),
+    )
+
+    assert fields["entry_split_order_policy_applied"] is True
+    assert fields["entry_split_order_probe_first_applied"] is True
+    assert fields["entry_split_order_daily_operator_contract_enabled"] is True
+    assert fields["entry_split_order_daily_baseline_fallback_applied"] is True
+    assert fields["entry_split_order_stale_policy_operator_authorized"] is True
+    assert len(orders) == 1
+    assert orders[0]["qty"] == 1
+
+
+def test_allocator_daily_contract_does_not_authorize_stale_standard_policy(
+    monkeypatch, tmp_path
+):
+    policy_file = tmp_path / "entry-policy-stale-standard.json"
+    policy_file.write_text(
+        json.dumps(
+            {
+                "schema_version": "entry_split_order_policy_v1",
+                "policy_version": "stale-standard",
+                "source_date": "2026-07-01",
+                "runtime_apply_allowed": True,
+                "baseline_runtime_defaults_enabled": True,
+                "buckets": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED", "true")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ACTIVE_DATE", "2026-08-03"
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_FILE", str(policy_file))
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_ENTRY_SPLIT_DAILY_OPERATOR_CONTRACT_ENABLED", "true"
+    )
+
+    orders, fields = split_plan.apply_entry_split_order_policy(
+        [{"tag": "normal", "qty": 4, "price": 1000}],
+        stock={"code": "005930", "id": 1, "strategy": "SCALPING"},
+        latency_gate={"spread_bps": 18, "latency_state": "SAFE"},
+        now=datetime(2026, 8, 3, 9, 3, tzinfo=timezone(timedelta(hours=9))),
+    )
+
+    assert fields["entry_split_order_policy_applied"] is False
+    assert fields["entry_split_order_skip_reason"] == "stale_policy"
+    assert orders == [{"tag": "normal", "qty": 4, "price": 1000}]
 
 
 def test_allocator_requires_date_bounded_operator_fallback_for_denied_policy(
