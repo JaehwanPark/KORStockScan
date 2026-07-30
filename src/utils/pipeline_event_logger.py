@@ -46,6 +46,14 @@ _SUBMIT_STAGE_COMPACT_STREAMS = frozenset(
         "swing_sim_order_bundle_assumed_filled",
     }
 )
+_TEXT_COMPACT_STAGES = _SUBMIT_STAGE_COMPACT_STREAMS | frozenset(
+    {
+        # Complete structured fields remain in the event. Repeating these large
+        # scanner maps in text_payload adds no decision evidence.
+        "scalping_scanner_runtime_target_attach",
+        "scalping_scanner_watching_runtime_skip",
+    }
+)
 _COMPACT_FIELD_PRIORITY = (
     "threshold_family",
     "actual_order_submitted",
@@ -327,7 +335,7 @@ def _project_fields_for_compact_stream(
 
 
 def _project_fields_for_text(stage: str, fields: dict[str, str]) -> dict[str, str]:
-    if stage not in _SUBMIT_STAGE_COMPACT_STREAMS or len(fields) <= 18:
+    if stage not in _TEXT_COMPACT_STAGES or len(fields) <= 18:
         return fields
     selected: dict[str, str] = {}
     if "id" in fields:

@@ -125,6 +125,37 @@ def test_emit_pipeline_event_suppresses_default_text_info_but_keeps_jsonl(
     assert rows[0]["fields"]["reason"] == "below_strength_base"
 
 
+def test_scanner_high_volume_text_payload_is_compact_but_fields_are_lossless(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(logger_mod, "DATA_DIR", tmp_path)
+    _reset_logger_state(monkeypatch)
+    monkeypatch.setattr(
+        logger_mod,
+        "TRADING_RULES",
+        SimpleNamespace(
+            PIPELINE_EVENT_JSONL_ENABLED=True,
+            PIPELINE_EVENT_SCHEMA_VERSION=3,
+            PIPELINE_EVENT_TEXT_INFO_LOG_ENABLED=False,
+            PIPELINE_EVENT_TEXT_INFO_STAGE_ALLOWLIST=(),
+        ),
+    )
+    fields = {"reason": "same_state", "actual_order_submitted": "False"}
+    fields.update({f"diagnostic_{index}": f"value_{index}" for index in range(30)})
+
+    payload = logger_mod.emit_pipeline_event(
+        "ENTRY_PIPELINE",
+        "테스트종목",
+        "123456",
+        "scalping_scanner_watching_runtime_skip",
+        fields=fields,
+    )
+
+    assert payload["fields"] == fields
+    assert "reason=same_state" in payload["text_payload"]
+    assert "diagnostic_29=value_29" not in payload["text_payload"]
+
+
 def test_emit_pipeline_event_allowlist_keeps_operational_text_info(
     monkeypatch, tmp_path
 ):
@@ -420,7 +451,7 @@ def test_emit_pipeline_event_suppress_mode_preserves_lossless_allowlist(
         ),
     )
     monkeypatch.setattr(logger_mod, "log_info", lambda msg, send_telegram=False: None)
-    suppressed = logger_mod.emit_pipeline_event(
+    logger_mod.emit_pipeline_event(
         "ENTRY_PIPELINE",
         "테스트종목",
         "123456",

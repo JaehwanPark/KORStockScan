@@ -330,13 +330,21 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     observation_audit_idx = script.index(
         "src.engine.observation_source_quality_audit", verbosity_idx
     )
+    assert (
+        'src.engine.observation_source_quality_audit --target-date "$TARGET_DATE" --write --print-summary'
+        in script
+    )
     perf_source_idx = script.index("src.engine.codebase_performance_workorder_report")
     watching_smoothing_idx = script.index(
         "src.engine.scalping.watching_score_smoothing"
     )
+    action_outcome_calibration_idx = script.index(
+        "src.engine.scalping.ai_action_outcome_calibration"
+    )
     time_window_idx = script.index(
         "src.engine.automation.time_window_regime_counterfactual"
     )
+    assert watching_smoothing_idx < action_outcome_calibration_idx < time_window_idx
     producer_gap_source_idx = script.index(
         "src.engine.automation.producer_gap_source_bundle"
     )
@@ -428,15 +436,15 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
         in script
     )
     assert (
-        'RUN_TIME_WINDOW_REGIME_COUNTERFACTUAL="${THRESHOLD_CYCLE_RUN_TIME_WINDOW_REGIME_COUNTERFACTUAL:-true}"'
+        'RUN_TIME_WINDOW_REGIME_COUNTERFACTUAL="${THRESHOLD_CYCLE_RUN_TIME_WINDOW_REGIME_COUNTERFACTUAL:-false}"'
         in script
     )
     assert (
-        'RUN_AI_WATCHING_SCORE_SMOOTHING_DIAGNOSTIC="${THRESHOLD_CYCLE_RUN_AI_WATCHING_SCORE_SMOOTHING_DIAGNOSTIC:-true}"'
+        'RUN_AI_WATCHING_SCORE_SMOOTHING_DIAGNOSTIC="${THRESHOLD_CYCLE_RUN_AI_WATCHING_SCORE_SMOOTHING_DIAGNOSTIC:-false}"'
         in script
     )
     assert (
-        'RUN_PRODUCER_GAP_DISCOVERY="${THRESHOLD_CYCLE_RUN_PRODUCER_GAP_DISCOVERY:-true}"'
+        'RUN_PRODUCER_GAP_DISCOVERY="${THRESHOLD_CYCLE_RUN_PRODUCER_GAP_DISCOVERY:-false}"'
         in script
     )
     assert (
@@ -477,11 +485,11 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
         in script
     )
     assert (
-        'RUN_STAGE_HOOK_WORKORDER_DISCOVERY="${THRESHOLD_CYCLE_RUN_STAGE_HOOK_WORKORDER_DISCOVERY:-true}"'
+        'RUN_STAGE_HOOK_WORKORDER_DISCOVERY="${THRESHOLD_CYCLE_RUN_STAGE_HOOK_WORKORDER_DISCOVERY:-false}"'
         in script
     )
     assert (
-        'RUN_STAGE_HOOK_RUNTIME_SCAFFOLD="${THRESHOLD_CYCLE_RUN_STAGE_HOOK_RUNTIME_SCAFFOLD:-true}"'
+        'RUN_STAGE_HOOK_RUNTIME_SCAFFOLD="${THRESHOLD_CYCLE_RUN_STAGE_HOOK_RUNTIME_SCAFFOLD:-false}"'
         in script
     )
     assert (
@@ -701,6 +709,17 @@ def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_st
         '"$PROJECT_DIR/data/report/ai_watching_score_smoothing_diagnostic/ai_watching_score_smoothing_diagnostic_${TARGET_DATE}.json"'
         in script
     )
+    assert (
+        '"$PROJECT_DIR/data/report/ai_decision_action_outcome_calibration/ai_decision_action_outcome_calibration_${TARGET_DATE}.json"'
+        in script
+    )
+    watching_smoothing_idx = script.index(
+        "src.engine.scalping.watching_score_smoothing"
+    )
+    action_outcome_calibration_idx = script.index(
+        "src.engine.scalping.ai_action_outcome_calibration"
+    )
+    assert watching_smoothing_idx < action_outcome_calibration_idx
     assert (
         '"$PROJECT_DIR/data/report/scalp_entry_action_decision_matrix/scalp_entry_action_decision_matrix_${TARGET_DATE}.json"'
         in script
@@ -1073,6 +1092,15 @@ def test_tuning_monitoring_wrapper_skips_pattern_labs_by_default():
         'record_step "gemini_scalping_pattern_lab" "skipped" 0 0 "retired_from_automatic_execution"'
         in script
     )
+    assert (
+        'RUN_VERIFIED_ARCHIVE="${TUNING_MONITORING_RUN_VERIFIED_ARCHIVE:-true}"'
+        in script
+    )
+    parquet_idx = script.index('"build_parquet_pipeline_events"')
+    archive_idx = script.index('"compress_verified_dashboard_sources"')
+    assert parquet_idx < archive_idx
+    assert "src.engine.compress_db_backfilled_files" in script
+    assert '--date "$TARGET_DATE"' in script
 
 
 def test_calibration_wrapper_retries_and_fails_unavailable_ai_correction():

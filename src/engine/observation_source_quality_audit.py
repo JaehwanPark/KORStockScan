@@ -5541,6 +5541,19 @@ def write_report(target_date: str) -> dict[str, Any]:
     return report
 
 
+def _stdout_report_payload(
+    report: dict[str, Any], *, summary_only: bool
+) -> dict[str, Any]:
+    if not summary_only:
+        return report
+    return {
+        "report_type": report.get("report_type"),
+        "target_date": report.get("target_date"),
+        "status": report.get("status"),
+        "summary": report.get("summary"),
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Audit observation source-quality field coverage."
@@ -5549,6 +5562,11 @@ def main() -> int:
     parser.add_argument("--start-date", default=DEFAULT_BACKFILL_START_DATE)
     parser.add_argument("--backfill", action="store_true")
     parser.add_argument("--write", action="store_true")
+    parser.add_argument(
+        "--print-summary",
+        action="store_true",
+        help="Print only report identity and summary instead of the full audit payload.",
+    )
     args = parser.parse_args()
     if args.backfill:
         report = (
@@ -5564,7 +5582,11 @@ def main() -> int:
             if args.write
             else build_observation_source_quality_audit(args.target_date)
         )
-    print(json.dumps(report, ensure_ascii=False, indent=2))
+    stdout_payload = _stdout_report_payload(
+        report,
+        summary_only=args.print_summary,
+    )
+    print(json.dumps(stdout_payload, ensure_ascii=False, indent=2))
     return 0
 
 

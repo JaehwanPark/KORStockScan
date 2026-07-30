@@ -6800,6 +6800,22 @@ def test_observation_source_quality_audit_writes_json_and_markdown(
     assert md_path.exists()
 
 
+def test_stdout_summary_omits_large_stage_contracts():
+    report = {
+        "report_type": "observation_source_quality_audit",
+        "target_date": "2026-07-30",
+        "status": "pass",
+        "summary": {"event_count": 10, "tuning_input_allowed": True},
+        "stage_contracts": {"large": {"rows": list(range(100))}},
+    }
+
+    payload = audit._stdout_report_payload(report, summary_only=True)
+
+    assert payload["summary"]["event_count"] == 10
+    assert "stage_contracts" not in payload
+    assert audit._stdout_report_payload(report, summary_only=False) is report
+
+
 def _write_threshold_events(tmp_path, target_date: str, rows: list[dict]) -> None:
     event_dir = tmp_path / "threshold_cycle"
     event_dir.mkdir(parents=True)

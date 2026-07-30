@@ -14,6 +14,7 @@ STATUS_DIR="${TUNING_MONITORING_STATUS_DIR:-$PROJECT_DIR/data/report/tuning_moni
 STATUS_FILE="${TUNING_MONITORING_STATUS_FILE:-$STATUS_DIR/tuning_monitoring_postclose_${TARGET_DATE}.json}"
 DRY_RUN="${TUNING_MONITORING_DRY_RUN:-0}"
 RUN_PATTERN_LABS="${TUNING_MONITORING_RUN_PATTERN_LABS:-false}"
+RUN_VERIFIED_ARCHIVE="${TUNING_MONITORING_RUN_VERIFIED_ARCHIVE:-true}"
 PATTERN_LAB_START_DATE="${PATTERN_LAB_ANALYSIS_START_DATE:-2026-04-21}"
 REQUIRE_THRESHOLD_POSTCLOSE_DONE="${TUNING_MONITORING_REQUIRE_THRESHOLD_POSTCLOSE_DONE:-true}"
 PREDECESSOR_LOG="${TUNING_MONITORING_PREDECESSOR_LOG:-$PROJECT_DIR/logs/threshold_cycle_postclose_cron.log}"
@@ -265,6 +266,14 @@ main() {
     --dataset system_metric_samples \
     --single-date "$TARGET_DATE"
 
+  if [[ "$RUN_VERIFIED_ARCHIVE" == "1" || "$RUN_VERIFIED_ARCHIVE" == "true" ]]; then
+    run_step "compress_verified_dashboard_sources" env PYTHONPATH=. "$VENV_PY" -m src.engine.compress_db_backfilled_files \
+      --days 0 \
+      --date "$TARGET_DATE"
+  else
+    record_step "compress_verified_dashboard_sources" "skipped" 1 0 "disabled_by_operator"
+  fi
+
   run_step "compare_tuning_shadow_diff" env PYTHONPATH=. "$VENV_PY" -m src.engine.compare_tuning_shadow_diff \
     --start "$START_DATE" \
     --end "$TARGET_DATE"
@@ -281,7 +290,7 @@ main() {
 }
 
 set +e
-flock -w "$LOCK_WAIT_SEC" "$LOCK_FILE" bash -c "$(declare -f validate_int write_status record_step run_step threshold_postclose_terminal_marker wait_for_threshold_postclose_done main); set -euo pipefail; PROJECT_DIR='$PROJECT_DIR' VENV_PY='$VENV_PY' TARGET_DATE='$TARGET_DATE' START_DATE='$START_DATE' STATUS_FILE='$STATUS_FILE' MAX_RETRIES='$MAX_RETRIES' RETRY_DELAY_SEC='$RETRY_DELAY_SEC' DRY_RUN='$DRY_RUN' RUN_PATTERN_LABS='$RUN_PATTERN_LABS' PATTERN_LAB_START_DATE='$PATTERN_LAB_START_DATE' REQUIRE_THRESHOLD_POSTCLOSE_DONE='$REQUIRE_THRESHOLD_POSTCLOSE_DONE' PREDECESSOR_LOG='$PREDECESSOR_LOG' PREDECESSOR_WAIT_SEC='$PREDECESSOR_WAIT_SEC' PREDECESSOR_WAIT_INTERVAL_SEC='$PREDECESSOR_WAIT_INTERVAL_SEC'; main"
+flock -w "$LOCK_WAIT_SEC" "$LOCK_FILE" bash -c "$(declare -f validate_int write_status record_step run_step threshold_postclose_terminal_marker wait_for_threshold_postclose_done main); set -euo pipefail; PROJECT_DIR='$PROJECT_DIR' VENV_PY='$VENV_PY' TARGET_DATE='$TARGET_DATE' START_DATE='$START_DATE' STATUS_FILE='$STATUS_FILE' MAX_RETRIES='$MAX_RETRIES' RETRY_DELAY_SEC='$RETRY_DELAY_SEC' DRY_RUN='$DRY_RUN' RUN_PATTERN_LABS='$RUN_PATTERN_LABS' RUN_VERIFIED_ARCHIVE='$RUN_VERIFIED_ARCHIVE' PATTERN_LAB_START_DATE='$PATTERN_LAB_START_DATE' REQUIRE_THRESHOLD_POSTCLOSE_DONE='$REQUIRE_THRESHOLD_POSTCLOSE_DONE' PREDECESSOR_LOG='$PREDECESSOR_LOG' PREDECESSOR_WAIT_SEC='$PREDECESSOR_WAIT_SEC' PREDECESSOR_WAIT_INTERVAL_SEC='$PREDECESSOR_WAIT_INTERVAL_SEC'; main"
 RUN_STATUS=$?
 set -e
 

@@ -12,12 +12,10 @@ import pytest
 
 import src.engine.build_tuning_monitoring_parquet as parquet_builder
 from src.engine.build_tuning_monitoring_parquet import (
-    list_jsonl_files,
     read_jsonl_lines,
     extract_event_id,
     convert_to_dataframe,
     deduplicate_by_event_id,
-    write_parquet_partition,
     process_single_date,
 )
 
@@ -92,12 +90,6 @@ def test_deduplicate_by_event_id():
 
 def test_write_parquet_partition(tmp_path):
     """Parquet 파티션 쓰기 테스트."""
-    import pandas as pd
-
-    df = pd.DataFrame({"col": [1, 2, 3]})
-    target_date = date(2026, 4, 20)
-    # 임시 analytics 디렉토리 사용
-    analytics_root = tmp_path / "analytics" / "parquet"
     # 모듈의 ANALYTICS_ROOT를 패치할 수 없으므로 테스트 생략
     # 통합 테스트는 별도로 작성
     pass
@@ -177,6 +169,55 @@ def test_process_single_date_removes_stale_partition(monkeypatch, tmp_path):
 
     assert (read, written) == (0, 0)
     assert not stale_dir.exists()
+
+
+def test_process_pipeline_events_streams_chunks_and_deduplicates(monkeypatch, tmp_path):
+    source_dir = tmp_path / "pipeline_events"
+    analytics_root = tmp_path / "analytics" / "parquet"
+    source_dir.mkdir(parents=True)
+    monkeypatch.setitem(parquet_builder.DATASET_PATHS, "pipeline_events", source_dir)
+    monkeypatch.setattr(parquet_builder, "ANALYTICS_ROOT", analytics_root)
+    monkeypatch.setattr(parquet_builder, "_pipeline_chunk_rows", lambda: 3)
+    target_date = date(2026, 7, 24)
+    rows = []
+    for index in range(10):
+        rows.append(
+            {
+                "schema_version": 3,
+                "event_type": "pipeline_event",
+                "pipeline": "ENTRY_PIPELINE",
+                "stage": "candidate_observed",
+                "stock_code": f"{index:06d}",
+                "record_id": index,
+                "emitted_at": f"2026-07-24T09:00:{index:02d}+09:00",
+                "emitted_date": target_date.isoformat(),
+                "text_payload": f"row-{index}",
+                "fields": {"reason": "test", "ai_score": index},
+            }
+        )
+    rows.append(dict(rows[0]))
+    rows.append({**rows[1], "emitted_date": "2026-07-23"})
+    source_path = source_dir / "pipeline_events_2026-07-24.jsonl"
+    source_path.write_text(
+        "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+
+    read, written = process_single_date("pipeline_events", target_date)
+
+    assert (read, written) == (12, 10)
+    out_file = (
+        analytics_root
+        / "pipeline_events"
+        / "date=2026-07-24"
+        / "pipeline_events_20260724.parquet"
+    )
+    parquet_file = parquet_builder.pq.ParquetFile(out_file)
+    assert parquet_file.metadata.num_rows == 10
+    assert parquet_file.metadata.num_row_groups == 4
+    frame = pd.read_parquet(out_file)
+    assert frame["fields_ai_score"].tolist() == [str(index) for index in range(10)]
+    assert not out_file.with_suffix(".parquet.tmp").exists()
 
 
 if __name__ == "__main__":

@@ -20,6 +20,7 @@ import argparse
 import gzip
 import json
 import logging
+import os
 import shutil
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -57,6 +58,7 @@ PIPELINE_FIELD_KEYS = [
     "ai_score",
     "reason",
 ]
+PIPELINE_PARQUET_CHUNK_ROWS = 5000
 
 
 def list_jsonl_files(dataset: str, target_date: date) -> List[Path]:
@@ -227,6 +229,148 @@ def convert_pipeline_event_to_row(event: Dict[str, Any]) -> Dict[str, Any]:
     return row
 
 
+def _pipeline_arrow_schema() -> pa.Schema:
+    fields = [
+        pa.field("schema_version", pa.int64()),
+        pa.field("event_type", pa.large_string()),
+        pa.field("pipeline", pa.large_string()),
+        pa.field("stage", pa.large_string()),
+        pa.field("stock_name", pa.large_string()),
+        pa.field("stock_code", pa.large_string()),
+        pa.field("record_id", pa.float64()),
+        pa.field("emitted_at", pa.large_string()),
+        pa.field("emitted_date", pa.date32()),
+        pa.field("text_payload", pa.large_string()),
+        pa.field("event_id", pa.large_string()),
+        pa.field("fields_json", pa.large_string()),
+    ]
+    fields.extend(
+        pa.field(f"fields_{key}", pa.large_string()) for key in PIPELINE_FIELD_KEYS
+    )
+    return pa.schema(fields)
+
+
+def _pipeline_row_for_arrow(
+    event: Dict[str, Any], *, target_date: date
+) -> Dict[str, Any]:
+    row = convert_pipeline_event_to_row(event)
+    try:
+        row["schema_version"] = int(row.get("schema_version"))
+    except (TypeError, ValueError):
+        row["schema_version"] = None
+    try:
+        row["record_id"] = float(row.get("record_id"))
+    except (TypeError, ValueError):
+        row["record_id"] = None
+    row["emitted_date"] = target_date
+    for key in (
+        "event_type",
+        "pipeline",
+        "stage",
+        "stock_name",
+        "stock_code",
+        "emitted_at",
+        "text_payload",
+        "event_id",
+        "fields_json",
+        *(f"fields_{item}" for item in PIPELINE_FIELD_KEYS),
+    ):
+        value = row.get(key)
+        row[key] = None if value is None else str(value)
+    return row
+
+
+def _pipeline_chunk_rows() -> int:
+    raw = os.getenv(
+        "TUNING_MONITORING_PIPELINE_PARQUET_CHUNK_ROWS",
+        str(PIPELINE_PARQUET_CHUNK_ROWS),
+    )
+    try:
+        return max(100, int(raw))
+    except (TypeError, ValueError):
+        return PIPELINE_PARQUET_CHUNK_ROWS
+
+
+def _write_pipeline_parquet_stream(
+    files: List[Path],
+    *,
+    target_date: date,
+    dedupe: bool,
+) -> Tuple[int, int]:
+    partition_dir = (
+        ANALYTICS_ROOT / "pipeline_events" / f"date={target_date.isoformat()}"
+    )
+    partition_dir.mkdir(parents=True, exist_ok=True)
+    out_file = (
+        partition_dir / f"pipeline_events_{target_date.strftime('%Y%m%d')}.parquet"
+    )
+    tmp_file = out_file.with_suffix(out_file.suffix + ".tmp")
+    tmp_file.unlink(missing_ok=True)
+    schema = _pipeline_arrow_schema()
+    chunk_limit = _pipeline_chunk_rows()
+    chunk: List[Dict[str, Any]] = []
+    seen_event_ids: set[str] = set()
+    total_lines = 0
+    written = 0
+    writer: pq.ParquetWriter | None = None
+
+    def flush_chunk() -> None:
+        nonlocal chunk, writer, written
+        if not chunk:
+            return
+        table = pa.Table.from_pylist(chunk, schema=schema)
+        if writer is None:
+            writer = pq.ParquetWriter(tmp_file, schema, compression="snappy")
+        writer.write_table(table)
+        written += len(chunk)
+        chunk = []
+
+    try:
+        for file_path in tqdm(files, desc=str(target_date)):
+            for event in read_jsonl_lines(file_path):
+                total_lines += 1
+                if not _event_matches_target_date(
+                    event, "pipeline_events", target_date
+                ):
+                    continue
+                event_id = extract_event_id(event)
+                if event_id:
+                    if dedupe and event_id in seen_event_ids:
+                        continue
+                    seen_event_ids.add(event_id)
+                    event["event_id"] = event_id
+                chunk.append(_pipeline_row_for_arrow(event, target_date=target_date))
+                if len(chunk) >= chunk_limit:
+                    flush_chunk()
+        flush_chunk()
+    except Exception:
+        if writer is not None:
+            writer.close()
+            writer = None
+        tmp_file.unlink(missing_ok=True)
+        raise
+    finally:
+        if writer is not None:
+            writer.close()
+
+    if written <= 0:
+        tmp_file.unlink(missing_ok=True)
+        clear_parquet_partition("pipeline_events", target_date)
+        return total_lines, 0
+
+    os.replace(tmp_file, out_file)
+    for stale_file in partition_dir.glob("*.parquet"):
+        if stale_file != out_file:
+            stale_file.unlink()
+    logger.info(
+        "Parquet streaming file written: %s (%d rows, chunk_rows=%d)",
+        out_file,
+        written,
+        chunk_limit,
+    )
+    return total_lines, written
+
+
 def _event_matches_target_date(
     event: Dict[str, Any], dataset: str, target_date: date
 ) -> bool:
@@ -309,9 +453,12 @@ def process_single_date(
         logger.info("%s %s: 처리할 파일 없음", dataset, target_date)
         return 0, 0
     logger.info("%s %s: %d개 파일 처리 시작", dataset, target_date, len(files))
-    # pipeline_events는 fields 원본 payload가 커서 원본 dict를 모두 보관하면 장후 sync가
-    # OOM kill될 수 있다. 읽는 즉시 분석용 축소 row로 변환해 메모리 사용량을 제한한다.
-    pipeline_rows: List[Dict[str, Any]] = []
+    if dataset == "pipeline_events":
+        return _write_pipeline_parquet_stream(
+            files,
+            target_date=target_date,
+            dedupe=dedupe,
+        )
     all_events = []
     total_lines = 0
     for file_path in tqdm(files, desc=str(target_date)):
@@ -323,19 +470,9 @@ def process_single_date(
             event_id = extract_event_id(event)
             if event_id:
                 event["event_id"] = event_id
-            if dataset == "pipeline_events":
-                pipeline_rows.append(convert_pipeline_event_to_row(event))
-            else:
-                all_events.append(event)
+            all_events.append(event)
     logger.info("읽은 총 행: %d", total_lines)
-    if dataset == "pipeline_events":
-        if not pipeline_rows:
-            clear_parquet_partition(dataset, target_date)
-            return total_lines, 0
-        df = pd.DataFrame(pipeline_rows)
-        df["emitted_date"] = pd.to_datetime(df["emitted_date"], errors="coerce").dt.date
-        df = df[df["emitted_date"].notna()]
-    elif not all_events:
+    if not all_events:
         clear_parquet_partition(dataset, target_date)
         return total_lines, 0
     else:
